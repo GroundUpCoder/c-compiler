@@ -8617,6 +8617,7 @@ class CodeGenerator {
       const elemSize = this.sizeOf(expr.type);
       this.emitExpr(expr.array);
       this.emitExpr(expr.index);
+      if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
       if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
       this.body.aop(WT_I32, ALU.OP_ADD);
       return;

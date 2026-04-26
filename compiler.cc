@@ -16791,6 +16791,9 @@ struct CodeGenerator {
       u32 elemSize = sizeOf(es->type);
       emitExpr(es->array);
       emitExpr(es->index);
+      if (getBinaryWasmType(es->index.getType()) == WasmType::I64) {
+        body->aop(WasmType::I32, OP_WRAP_I64);
+      }
       if (elemSize != 1) {
         body->i32Const(static_cast<i32>(elemSize));
         body->aop(WasmType::I32, OP_MUL);
