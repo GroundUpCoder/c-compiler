@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/typedef_redefine_error/main.c.
+tests/unit/core/typedef_redefine_error/main.c:3: error: redefinition of typedef 'myint'

@@ -1,0 +1,5 @@
+argc=3
+argv[0] is set
+argv[1]=hello
+argv[2]=world
+argv is null-terminated

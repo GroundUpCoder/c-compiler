@@ -1,0 +1,13 @@
+getcwd: ok
+chdir: ok
+stat size: 5
+stat isreg: 1
+stat isdir: 0
+stat subdir isdir: 1
+access file_a: 0
+access nofile: -1
+readdir count: 3
+  file_a.txt
+  file_b.txt
+  subdir
+done

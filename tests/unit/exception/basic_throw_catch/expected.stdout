@@ -1,0 +1,3 @@
+before throw
+caught: 42
+done

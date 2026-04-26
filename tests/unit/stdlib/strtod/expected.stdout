@@ -1,0 +1,11 @@
+val=3.14
+consumed=4
+val=42.0
+consumed=3
+val=-100.0
+consumed=4
+val=0.0
+end_is_start=1
+val=0.5
+consumed=2
+atof=2.72

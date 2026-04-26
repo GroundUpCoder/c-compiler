@@ -1,0 +1,24 @@
+=== member ===
+pre-inc member: 11
+post-inc member: 20
+after: x=11 y=21
+after dec: x=10 y=20
+=== arrow ===
+pre-inc arrow: 101
+post-inc arrow: 200
+after: x=101 y=201
+after dec: x=100 y=200
+=== subscript ===
+pre-inc sub: 11
+post-inc sub: 20
+after: 11 21 30 40
+after dec: 11 21 29 39
+=== deref ===
+pre-inc deref: 51
+x=51
+post-dec deref: 51
+x=50
+=== pointer deref inc ===
+*p=1
+*p=2
+*p=3

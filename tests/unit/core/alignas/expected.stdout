@@ -1,0 +1,11 @@
+AlignedStruct size: 16
+AlignedStruct align: 8
+AlignedStruct.x offset: 8
+AlignedStruct2 size: 8
+AlignedStruct2.d offset: 4
+AlignedByType size: 16
+AlignedByType.x offset: 8
+BigAlign size: 8
+BigAlign align: 8
+local aligned: 1
+stdalign works

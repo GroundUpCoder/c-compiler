@@ -1,0 +1,26 @@
+=== Local 2D arrays ===
+arr[0][0] = 1
+arr[0][1] = 2
+arr[0][2] = 3
+arr[1][0] = 4
+arr[1][1] = 5
+arr[1][2] = 6
+p[0] = 1
+p[3] = 4
+p[5] = 6
+=== Local 2D array with initializer ===
+arr[0][0] = 1
+arr[1][2] = 6
+p[0] = 1
+p[5] = 6
+=== Global 2D arrays ===
+garr[0][0] = 1
+garr[0][2] = 3
+garr[1][0] = 4
+garr[1][2] = 6
+garr[0][1] after assignment = 99
+garr2[0][0] = 10
+garr2[1][1] = 20
+garr2[2][0] = 30
+p[0] = 1
+p[5] = 6

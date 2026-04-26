@@ -1,0 +1,50 @@
+=== Day kind ===
+0
+1
+0
+-1
+=== Fall-through ===
+i=0 count=4
+i=1 count=3
+i=2 count=2
+i=3 count=1
+i=4 count=1
+=== Break ===
+zero
+one
+two
+other
+other
+=== Nested switch ===
+(0,0)
+(0,1)
+(0,?)
+(1,0)
+(1,1)
+(1,2)
+(?,0)
+(?,1)
+(?,2)
+=== Expressions ===
+correct
+neg one
+=== Classify ===
+classify(0)=0
+classify(1)=1
+classify(2)=1
+classify(3)=1
+classify(4)=2
+classify(5)=2
+classify(6)=2
+classify(7)=3
+=== Default in middle ===
+zero
+default
+two
+three
+=== No match ===
+reached=0
+=== Factorial ===
+1
+1
+720

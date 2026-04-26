@@ -1,0 +1,6 @@
+=== struct args aliasing ===
+r: 4 6
+=== member nonvariadic ===
+100 400
+=== member variadic ===
+100 400

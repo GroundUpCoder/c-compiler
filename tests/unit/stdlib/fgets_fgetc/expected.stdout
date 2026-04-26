@@ -1,0 +1,8 @@
+fgets1: [line1
+] ret=ok
+fgets2: [line2
+] ret=ok
+fgets3: [abc] ret=ok
+fgets4: ret=null eof=1
+fgetc count: 15
+eof: 1

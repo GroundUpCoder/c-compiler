@@ -1,0 +1,16 @@
+T1 (if true, elif true): first
+T2 (if false, elif true): second
+T3 (if false, elif false): else
+T4 (multi elif, first true): first
+T5 (multi elif, middle true): third
+T6 (multi elif, none true): else
+T7 (elif with expr): two
+T8 (elif with defined): b
+T9 (ifdef then elif): elif
+T10 (ifndef then elif): ifndef
+T11 (undef == undef): equal
+T12 (DOOM pattern): first
+T13 (nested if in elif): nested_if
+T14 (nested elif in inactive): correct
+T15 (elif stops after first match): second
+get_mode(): 2

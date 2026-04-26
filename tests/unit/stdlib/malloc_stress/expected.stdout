@@ -1,0 +1,12 @@
+data integrity: PASS
+interleaved coalesce: PASS
+triple merge: PASS
+realloc grow-by-1: PASS
+multi-object realloc: PASS
+edge sizes: PASS
+checkerboard: PASS
+worst-case fragmentation: PASS
+leak detection: PASS
+small alloc storm: PASS
+calloc cycles: PASS
+ALL TESTS PASSED

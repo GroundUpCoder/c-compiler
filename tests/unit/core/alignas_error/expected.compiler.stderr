@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/alignas_error/alignas_error.c.
+tests/unit/core/alignas_error/alignas_error.c:2: error: _Alignas cannot reduce alignment below natural alignment of type 'int'

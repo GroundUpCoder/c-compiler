@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/static_assert_fail/static_assert_fail.c.
+tests/unit/core/static_assert_fail/static_assert_fail.c:1: error: _Static_assert failed: this should fail

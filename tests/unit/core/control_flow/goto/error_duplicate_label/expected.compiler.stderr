@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/control_flow/goto/error_duplicate_label/error_duplicate_label.c.
+tests/unit/core/control_flow/goto/error_duplicate_label/error_duplicate_label.c:6: error: Duplicate label 'target'

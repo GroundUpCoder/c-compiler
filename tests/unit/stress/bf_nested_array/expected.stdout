@@ -1,0 +1,17 @@
+nested: 1 2 3 4 99
+mod a.x: 15 2 3 4 99
+arr[0]: x=0 y=15
+arr[1]: x=1 y=14
+arr[2]: x=2 y=13
+arr[3]: x=3 y=12
+ptr: x=2 y=13
+ptr mod: x=10 y=13
+arr[2] after ptr mod: x=10 y=13
+oarr[0]: 1 2 3 4 10
+oarr[1]: 5 6 7 8 20
+copy: x=1 y=14
+memcpy: x=3 y=12
+wa[1]: flags=0x22 data=200
+sizeof(Inner)=4
+sizeof(Outer)=12
+sizeof(WithArray)=8

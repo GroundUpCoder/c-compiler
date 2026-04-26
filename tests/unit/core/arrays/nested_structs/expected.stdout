@@ -1,0 +1,25 @@
+Test 1: Nested arrays
+arr[0][0] = 1 (expect 1)
+arr[0][1] = 2 (expect 2)
+arr[1][2] = 6 (expect 6)
+
+Test 2: Array in struct
+s.x = 10 (expect 10)
+s.arr[0] = 100 (expect 100)
+s.arr[1] = 200 (expect 200)
+s.arr[2] = 300 (expect 300)
+s.y = 20 (expect 20)
+
+Test 3: Struct in struct
+o.x = 1 (expect 1)
+o.inner.a = 2 (expect 2)
+o.inner.b = 3 (expect 3)
+o.y = 4 (expect 4)
+
+Test 4: Complex nesting (struct with array of structs with arrays)
+rect.corners[0].coords[0] = 0 (expect 0)
+rect.corners[0].coords[1] = 0 (expect 0)
+rect.corners[1].coords[0] = 10 (expect 10)
+rect.corners[1].coords[1] = 20 (expect 20)
+
+All tests completed!

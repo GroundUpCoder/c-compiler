@@ -1,0 +1,21 @@
+char 127+1 as int: 128
+char 127+1 stored: -128
+uchar 255+1 as int: 256
+uchar 255+1 stored: 0
+short max+1 as int: 32768
+short max+1 stored: -32768
+schar(-1) < uchar(255): 1
+7/2=3
+-7/2=-3
+7/-2=-3
+-7/-2=3
+7%2=1
+-7%2=-1
+7%-2=1
+-7%-2=-1
+uint 0-1: 4294967295
+int -1 as uint: 4294967295
+0x12345678 as short: 22136
+0x12345678 as char: 120
+schar -100 as int: -100
+schar -100 as uint: 4294967196

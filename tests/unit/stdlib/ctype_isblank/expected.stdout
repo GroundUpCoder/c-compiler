@@ -1,0 +1,5 @@
+isblank(' ') = 1
+isblank('\t') = 1
+isblank('\n') = 0
+isblank('a') = 0
+isblank('0') = 0

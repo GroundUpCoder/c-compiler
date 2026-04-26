@@ -1,0 +1,10 @@
+basic alloc: PASS
+write/read: PASS
+free/realloc: PASS
+realloc preserve: PASS
+realloc shrink: PASS
+calloc zeros: PASS
+coalescing: PASS
+inspect_heap: PASS (total=176, free_blocks=1)
+many allocs: PASS
+ALL TESTS PASSED

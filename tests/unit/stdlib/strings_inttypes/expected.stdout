@@ -1,0 +1,16 @@
+strcasecmp equal: 1
+strcasecmp less: 1
+strcasecmp greater: 1
+strcasecmp empty: 1
+strcasecmp shorter: 1
+strncasecmp prefix: 1
+strncasecmp differ: 1
+strncasecmp zero: 1
+PRId32: -100
+PRId64: -200
+PRIu32: 300
+PRIu64: 400
+PRIx32: 12c
+PRIX64: 190
+PRIdMAX: -999
+PRIuMAX: 999

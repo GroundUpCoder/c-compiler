@@ -1,0 +1,14 @@
+post++: ret=5 new=6
+pre++: ret=6 val=6
+post--: ret=5 new=4
+pre--: ret=4 val=4
+15++: 0
+0--: 15
+s7++: -8
+s-8--: 7
+c0++: 1
+c1++: 0
+loop sum=45 final_a=10
+preinc cond: ok
+after a++: a=6 b=-3 c=1
+after b++: a=6 b=-2 c=1

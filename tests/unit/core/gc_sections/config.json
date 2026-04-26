@@ -1,0 +1,3 @@
+{
+  "compilerArgs": ["--gc-sections"]
+}

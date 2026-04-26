@@ -1,0 +1,33 @@
+=== If/else ===
+yes
+a
+b
+two
+=== Nested if ===
+zero
+one
+two
+three
+=== Ternary ===
+10
+20
+zero
+one
+two
+other
+10
+x=1 y=0
+x=0 y=1
+=== Short circuit ===
+x=0
+x=2
+x=0
+x=4
+=== Truthiness ===
+42 is truthy
+-1 is truthy
+0 is falsy
+non-null is truthy
+!0=1
+!1=0
+!42=0

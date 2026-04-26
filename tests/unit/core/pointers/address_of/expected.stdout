@@ -1,0 +1,13 @@
+=== Address of parameters ===
+x inside function after *p = 99: 99 (expected 99)
+n doubled: 100
+=== Address of local scalars ===
+x after *p = 20: 20 (expected 20)
+y after *q += 5: 105 (expected 105)
+a after *pa = *pb: 2 (expected 2)
+=== Address of global scalars ===
+gx initial: 10 (expected 10)
+*p initial: 10 (expected 10)
+gx after *p = 20: 20 (expected 20)
+gy after *q += 5: 105 (expected 105)
+gx after *p = *q: 105 (expected 105)

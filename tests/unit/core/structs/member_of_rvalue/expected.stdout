@@ -1,0 +1,7 @@
+=== member of call ===
+x=10 y=40
+=== multiple members ===
+sum=13
+=== member in cond ===
+true
+false

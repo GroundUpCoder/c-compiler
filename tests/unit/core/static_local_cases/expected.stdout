@@ -1,0 +1,23 @@
+=== multi ===
+10 20
+11 22
+=== array ===
+10 20 30
+11 20 30
+=== mixed ===
+5
+10
+=== same name ===
+1 101
+2 102
+=== string ===
+hello
+Hello
+=== no init ===
+1
+2
+=== nested ===
+1
+2
+=== struct ===
+42 99

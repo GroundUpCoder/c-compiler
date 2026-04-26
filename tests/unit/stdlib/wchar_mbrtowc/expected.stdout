@@ -1,0 +1,11 @@
+ascii len=1 wc=65
+nul len=0
+2byte len=2 wc=233
+3byte len=3 wc=19990
+4byte len=4 wc=128512
+incomplete=4294967294
+wc2mb ascii len=1 byte=66
+wc2mb 2byte len=2 b0=195 b1=169
+wc2mb 3byte len=3 b0=228 b1=184 b2=150
+wc2mb 4byte len=4 b0=240 b1=159 b2=152 b3=128
+wc2mb null=1

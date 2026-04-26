@@ -1,0 +1,10 @@
+=== continue with false condition ===
+x=1
+=== continue skips rest of body ===
+total=102
+=== continue re-checks condition ===
+count=3
+=== nested do-while continue ===
+outer=3 inner_total=12
+=== continue and break in same do-while ===
+sum=9

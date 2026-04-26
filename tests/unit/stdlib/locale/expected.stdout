@@ -1,0 +1,8 @@
+default=C
+set_C=C
+set_empty=C
+set_POSIX=C
+set_fr=1
+decimal_point=.
+thousands_sep_empty=1
+int_frac_digits=127

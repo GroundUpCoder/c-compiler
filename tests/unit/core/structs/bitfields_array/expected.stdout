@@ -1,0 +1,10 @@
+sizeof_Pixel=4
+pixel[0]: r=31 g=63 b=31
+pixel[1]: r=1 g=2 b=3
+pixel[2]: r=0 g=0 b=0
+pixel[3]: r=16 g=32 b=16
+raw[0]=0xffff
+raw[1]=0x1841
+pixel[2]: r=31 g=63 b=31
+stride=4
+arrow: r=10 g=20 b=5

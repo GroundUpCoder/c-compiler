@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/bitfields_llong_error/bitfields_llong_error.c.
+tests/unit/core/structs/bitfields_llong_error/bitfields_llong_error.c:2: error: Bit-fields wider than 32 bits are not supported (use int or unsigned int)

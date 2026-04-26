@@ -1,0 +1,2 @@
+tests/unit/core/array_plus_int/main.c:14: warning: array used in arithmetic expression; decaying to pointer
+tests/unit/core/array_plus_int/main.c:17: warning: array used in arithmetic expression; decaying to pointer

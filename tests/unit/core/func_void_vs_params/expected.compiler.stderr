@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/func_void_vs_params/func_void_vs_params.c.
+tests/unit/core/func_void_vs_params/func_void_vs_params.c:5: error: conflicting types for 'foo' (previously declared as '()int', now defined as '(int)int')

@@ -1,0 +1,6 @@
+full=0xdeadbeef
+full_raw=0xdeadbeef
+almost_max=0x7fffffff
+almost_trunc=0x7fffffff
+full_signed=-1
+full_signed_min=-2147483648

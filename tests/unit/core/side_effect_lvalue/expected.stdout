@@ -1,0 +1,17 @@
+=== SUBSCRIPT with post-increment index ===
+subscript_assign: i=1 (expect 1)
+subscript_compound: i=1 arr[0]=15 (expect i=1 arr[0]=15)
+subscript_predec: i=2 arr[2]=99 (expect i=2 arr[2]=99)
+
+=== DEREF with side-effecting operand ===
+deref_assign: calls=1 (expect 1)
+deref_compound: calls=1 arr[0]=11 (expect calls=1 arr[0]=11)
+
+=== ARROW with side-effecting base ===
+arrow_assign: calls=1 s.x=42 (expect calls=1 s.x=42)
+arrow_compound: calls=1 s.x=15 (expect calls=1 s.x=15)
+
+=== INCREMENT/DECREMENT on complex lvalue ===
+preinc_deref: calls=1 arr[0]=11 (expect calls=1 arr[0]=11)
+postinc_deref: calls=1 arr[0]=11 (expect calls=1 arr[0]=11)
+preinc_arrow: calls=1 s.x=11 (expect calls=1 s.x=11)

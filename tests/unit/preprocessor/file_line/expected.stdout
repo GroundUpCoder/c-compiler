@@ -1,0 +1,5 @@
+File: tests/unit/preprocessor/file_line/main.c
+Line: 7
+Line: 8
+tests/unit/preprocessor/file_line/main.c:9: hello
+tests/unit/preprocessor/file_line/main.c:10: world

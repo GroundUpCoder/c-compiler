@@ -1,0 +1,5 @@
+Got 2 link errors.
+Link error: Undefined symbol 'unused_function' during linking
+  at tests/unit/core/no_undefined/no_undefined.c:3
+Link error: Undefined symbol 'unused_var' during linking
+  at tests/unit/core/no_undefined/no_undefined.c:4

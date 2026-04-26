@@ -1,0 +1,18 @@
+time_nonzero: 1
+time_ptr: 1
+difftime: 10.0
+gmtime_year: 2000
+gmtime_mon: 1
+gmtime_mday: 1
+gmtime_hour: 0
+gmtime_min: 0
+gmtime_sec: 0
+gmtime_wday: 6
+gmtime_yday: 0
+gmtime_isdst: 0
+asctime: Sat Jan  1 00:00:00 2000
+strftime: 2000-01-01 00:00:00
+strftime_names: Saturday January
+strftime_misc: AM 001 6 6
+mktime_roundtrip: 1
+clock_nonneg: 1

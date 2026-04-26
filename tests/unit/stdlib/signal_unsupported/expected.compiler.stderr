@@ -1,0 +1,2 @@
+Got 1 lex errors in tests/unit/stdlib/signal_unsupported/signal_unsupported.c.
+signal.h:2: error: "signal.h is not supported"

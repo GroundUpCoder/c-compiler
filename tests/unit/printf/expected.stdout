@@ -1,0 +1,19 @@
+Hello, World!
+Integer: 42
+Negative: -123
+Unsigned: 4294967295
+Hex: ff, FF
+Octal: 100
+Char: A
+String: test string
+Width: [        42]
+Left:  [42        ]
+Zero:  [0000000042]
+Float: 3.141590
+Sci:   1.234568e+04
+Prec:  3.14
+Multiple: 2 + 3 = 5
+100% done
+Pointer: 0x12205
+sprintf result: Answer: 42
+snprintf result: Hello, Wo (would write 13)

@@ -1,0 +1,8 @@
+g_entry: name='hello' value=42
+g_pairs[0]: a='SW1BRCOM' b='SW2BRCOM' tag=1
+g_pairs[1]: a='SW1BRN1' b='SW2BRN1' tag=2
+g_pairs[2]: a='' b='' tag=0
+offset of a in Pair: 0
+sizeof(struct Pair): 20
+local: name='world' value=99
+mutated: name='World'

@@ -1,0 +1,8 @@
+packed_raw=0xc18d
+a=5 b=17 c=65 d=1
+after_clear_b=0xc105
+full32=0x1234abcd
+lo=0xbeef hi=0xdead
+byte0=0x07 byte1=0x00
+mixed_hdr=0xaaaaaaaa mixed_bf=0x5f
+x=15 y=5

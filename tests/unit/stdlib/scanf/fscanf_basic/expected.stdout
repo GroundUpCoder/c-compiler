@@ -1,0 +1,3 @@
+line1: r=3 a=42 f=3.14 s='hello'
+line2: r=3 a=100 f=2.72 s='world'
+eof: r=-1

@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/bitfields_arrow_addr_error/bitfields_arrow_addr_error.c.
+tests/unit/core/structs/bitfields_arrow_addr_error/bitfields_arrow_addr_error.c:6: error: Cannot take address of bit-field member 'x'

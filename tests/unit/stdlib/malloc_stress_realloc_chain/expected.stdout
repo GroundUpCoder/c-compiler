@@ -1,0 +1,5 @@
+growing realloc chain: PASS
+shrinking realloc chain: PASS
+oscillating realloc: PASS
+realloc with live pointers: PASS
+ALL TESTS PASSED

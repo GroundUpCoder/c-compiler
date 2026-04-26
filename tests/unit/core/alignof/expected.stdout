@@ -1,0 +1,14 @@
+char: 1
+short: 2
+int: 4
+long: 4
+long long: 8
+float: 4
+double: 8
+ptr: 4
+S: 4
+Packed: 1
+WithDouble: 8
+expr: 4
+alignof: 4
+arr size: 4

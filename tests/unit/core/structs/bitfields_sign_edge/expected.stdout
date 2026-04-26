@@ -1,0 +1,20 @@
+a_zero=0
+a_neg1=-1
+a_one=-1
+b_1=1
+b_neg2=-2
+b_neg1=-1
+b_2_wrap=-2
+c_max=127
+c_min=-128
+d_max=32767
+d_min=-32768
+mixed_s=-1 mixed_u=15
+sizeof_Mixed=8
+mixed_raw0=0xf mixed_raw1=0xf
+mixed_s_7=7
+mixed_s_neg8=-8
+allneg_a=-1 b=-1 c=-1 d=-1
+allneg_raw=0x3ffffff
+cmp_val=-5
+cmp_lt0=1

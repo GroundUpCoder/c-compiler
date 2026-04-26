@@ -1,0 +1,13 @@
+sizeof(struct buffer) = 4
+sizeof(struct int_array) = 8
+sizeof(struct ptr_array) = 4
+sizeof(struct point_array) = 4
+char fam: len=5 data=Hello
+int fam: count=5 padding=99 values=10,20,30,40,50
+ptr fam: count=3 items=foo,bar,baz
+nested: name=test buf_len=3 buf_data=ABC
+struct fam: count=3 (0,1) (10,11) (20,21)
+addr arith: data[2]=c *p=c p[1]=d
+after memset: data=XXXXX
+realloc: count=8 values=0,100,200,300,400,500,600,700
+typedef fam: n=3 sum=7.5

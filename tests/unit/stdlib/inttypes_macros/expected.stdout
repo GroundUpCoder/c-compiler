@@ -1,0 +1,10 @@
+i32 = 42
+u64 = 18446744073709551615
+imax = -123
+umax = 456
+u64 hex = ffffffffffffffff
+u64 HEX = FFFFFFFFFFFFFFFF
+imaxabs(-100) = 100
+imaxdiv(17,5) = 3, 2
+strtoimax = -999
+strtoumax = 999

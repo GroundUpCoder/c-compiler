@@ -1,0 +1,11 @@
+global_zero: a=0 b=0 c=0 d=0
+global_partial: a=5 b=10 c=0 d=0
+global_full: a=15 b=15 c=15 d=-8
+local_full: a=3 b=6 c=9 d=-1
+local_partial: a=7 b=0 c=0 d=0
+local_zero: a=0 b=0 c=0 d=0
+memset_zero: a=0 b=0 c=0 d=0
+0xFF: a=15 b=15 c=15 d=-1
+copy: a=15 b=15 c=15 d=-8
+copy_mod: a=0 b=15 c=15 d=-8
+orig: a=15 b=15 c=15 d=-8

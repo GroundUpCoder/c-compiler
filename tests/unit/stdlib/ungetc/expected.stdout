@@ -1,0 +1,9 @@
+test1: c2=i c3=i same=1
+test2: r=-1
+test2: first_char=#
+test3: eof_before=1
+test3: eof_after=0
+test3: c=Z
+test4: buf=Xinclud
+test5: n=3 buf=Yin
+test6: c=#

@@ -1,0 +1,11 @@
+lo=2 hi=1
+whole=0x5555aaaa
+a=1 b=2 c=3 d=4
+word=0x00ff00ff
+x=1: val=1
+y=1: val=2
+z=1: val=4
+xyz=1: val=7
+sizeof(U1)=4
+sizeof(U2)=4
+sizeof(U3)=4

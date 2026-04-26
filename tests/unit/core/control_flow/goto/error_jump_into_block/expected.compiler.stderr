@@ -1,0 +1,1 @@
+tests/unit/core/control_flow/goto/error_jump_into_block/error_jump_into_block.c:3: goto 'inside': target label not in scope (in function 'main') (label may be in a nested block, or a loop label's scope was closed by a forward label)

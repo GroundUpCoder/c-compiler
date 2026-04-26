@@ -1,0 +1,5 @@
+PASS: ternary promotes char/short to int
+PASS: compound assignment truncates to char
+PASS: bitwise AND with promotion
+PASS: shift promotes char to int
+float printf: 1.500000
