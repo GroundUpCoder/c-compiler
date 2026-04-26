@@ -1,0 +1,5 @@
+basic: 110 120 130
+default: 10 20 990
+fallthrough: 1005 1030 1020
+multi: 1111 1002 1113 1100
+after: 101 102 999

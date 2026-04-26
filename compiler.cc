@@ -13777,6 +13777,7 @@ struct CodeGenerator {
   u32 breakTarget = 0;     // Block depth to branch to for break
   u32 continueTarget = 0;  // Block depth to branch to for continue
   std::map<SLabel *, u32> gotoLabelDepths;  // label -> blockDepth when its block was opened
+  std::set<SLabel *> switchLevelLabels;
 
   // Exception handling: maps exception tags to WASM tag indices
   std::map<ExceptionTag *, u32> exceptionToWasmTagIdx;
@@ -14615,6 +14616,7 @@ struct CodeGenerator {
     WasmCode *body;
     u32 &blockDepth;
     std::map<SLabel *, u32> &gotoLabelDepths;
+    std::set<SLabel *> &switchLevelLabels;
     std::vector<SLabel *> forwardLabels;
     std::vector<SLabel *> openLoopLabels;
 
@@ -14623,7 +14625,7 @@ struct CodeGenerator {
       for (auto &subStmt : stmts) {
         if (subStmt.kind != StmtKind::LABEL) continue;
         SLabel *lbl = subStmt.as.labelStmt;
-        if (!lbl->hasGotos) continue;
+        if (!lbl->hasGotos || switchLevelLabels.count(lbl)) continue;
         if (lbl->labelKind == LabelKind::FORWARD || lbl->labelKind == LabelKind::BOTH)
           forwardLabels.push_back(lbl);
       }
@@ -14679,7 +14681,7 @@ struct CodeGenerator {
       case StmtKind::COMPOUND: {
         SCompound *comp = stmt.as.compound;
         pushLocalScope();
-        LabelScope ls{body, blockDepth, gotoLabelDepths, {}, {}};
+        LabelScope ls{body, blockDepth, gotoLabelDepths, switchLevelLabels, {}, {}};
         ls.openForwardBlocks(comp->statements);
         for (auto &subStmt : comp->statements) {
           if (subStmt.kind == StmtKind::LABEL) {
@@ -14988,7 +14990,7 @@ struct CodeGenerator {
         //     <case_last_stmts>
         //   end  <- break jumps here
 
-        LabelScope ls{body, blockDepth, gotoLabelDepths, {}, {}};
+        LabelScope ls{body, blockDepth, gotoLabelDepths, switchLevelLabels, {}, {}};
 
         // Outer break block
         body->block();
@@ -15002,11 +15004,22 @@ struct CodeGenerator {
         std::vector<SwitchFwdLabel> switchFwdLabels;
         for (u32 si = 0; si < sw->body->statements.size(); si++) {
           auto &subStmt = sw->body->statements[si];
-          if (subStmt.kind != StmtKind::LABEL) continue;
-          SLabel *lbl = subStmt.as.labelStmt;
-          if (!lbl->hasGotos) continue;
-          if (lbl->labelKind == LabelKind::FORWARD || lbl->labelKind == LabelKind::BOTH)
-            switchFwdLabels.push_back({lbl, si});
+          if (subStmt.kind == StmtKind::LABEL) {
+            SLabel *lbl = subStmt.as.labelStmt;
+            if (lbl->hasGotos && (lbl->labelKind == LabelKind::FORWARD || lbl->labelKind == LabelKind::BOTH))
+              switchFwdLabels.push_back({lbl, si});
+          }
+          if (subStmt.kind == StmtKind::COMPOUND) {
+            for (auto &cs : subStmt.as.compound->statements) {
+              if (cs.kind != StmtKind::LABEL) continue;
+              SLabel *lbl = cs.as.labelStmt;
+              if (!lbl->hasGotos) continue;
+              if (lbl->labelKind == LabelKind::FORWARD || lbl->labelKind == LabelKind::BOTH) {
+                switchFwdLabels.push_back({lbl, si});
+                switchLevelLabels.insert(lbl);
+              }
+            }
+          }
         }
         u32 numSwitchForwardBlocks = static_cast<u32>(switchFwdLabels.size());
 

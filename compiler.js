@@ -7010,6 +7010,7 @@ class CodeGenerator {
     this.breakTarget = 0;
     this.continueTarget = 0;
     this.gotoLabelDepths = new Map();
+    this.switchLevelLabels = new Set();
     this.exceptionToWasmTagIdx = new Map();
     this.currentFuncDef = null;
     this.vaArgsLocalIdx = 0;
@@ -7911,7 +7912,7 @@ class CodeGenerator {
         // Open forward-label blocks
         const forwardLabels = [];
         for (const s of stmts) {
-          if (s.kind === Types.StmtKind.LABEL && s.hasGotos) {
+          if (s.kind === Types.StmtKind.LABEL && s.hasGotos && !this.switchLevelLabels.has(s)) {
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
               forwardLabels.push(s);
           }
@@ -8103,6 +8104,16 @@ class CodeGenerator {
           if (s.kind === Types.StmtKind.LABEL && s.hasGotos) {
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
               switchFwdLabels.push({ label: s, stmtPos: si });
+          }
+          if (s.kind === Types.StmtKind.COMPOUND) {
+            for (const cs of s.statements) {
+              if (cs.kind === Types.StmtKind.LABEL && cs.hasGotos) {
+                if (cs.labelKind === Types.LabelKind.FORWARD || cs.labelKind === Types.LabelKind.BOTH) {
+                  switchFwdLabels.push({ label: cs, stmtPos: si });
+                  this.switchLevelLabels.add(cs);
+                }
+              }
+            }
           }
         }
         const numCases = sw.cases.length;
