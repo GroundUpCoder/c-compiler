@@ -13,7 +13,7 @@ Usage:
 Categories:
     unit   — compile+run tests from tests/unit/
     extra  — compile+run tests from tests/extra/
-    equiv  — CC vs JS intermediate output comparison (requires --compiler=all)
+    equiv  — CC vs JS equivalence: parse tree + WASM binary (requires --compiler=all)
     lua    — Lua official test suite (build VM, run .lua files)
     all    — all of the above
 
@@ -357,12 +357,13 @@ def first_diff_line(text_a, text_b):
 
 def run_equiv(results, filter_str=None, actions=None):
     if actions is None:
-        actions = ["parse"]
+        actions = ["parse", "wasm"]
 
     cc = get_compiler("cc")
     js = get_compiler("js")
 
-    for test_dir in collect_tests(UNIT_DIR, filter_str):
+    test_dirs = collect_tests(UNIT_DIR, filter_str) + collect_tests(EXTRA_DIR, filter_str)
+    for test_dir in test_dirs:
         rel_dir = os.path.relpath(test_dir, ROOT_DIR)
         c_files = sorted(
             os.path.join(rel_dir, f) for f in os.listdir(test_dir) if f.endswith(".c")
@@ -393,6 +394,45 @@ def run_equiv(results, filter_str=None, actions=None):
 
         for action in actions:
             label = f"equiv:{action}:{rel_dir}"
+
+            if action == "wasm":
+                cc_wasm = None
+                js_wasm = None
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".wasm", delete=False) as f:
+                        cc_wasm = f.name
+                    with tempfile.NamedTemporaryFile(suffix=".wasm", delete=False) as f:
+                        js_wasm = f.name
+                    cc_cmd = [*cc, "-o", cc_wasm] + extra + c_files
+                    js_cmd = [*js, "-o", js_wasm] + extra + c_files
+                    cc_r = subprocess.run(cc_cmd, capture_output=True, text=True, timeout=30, cwd=ROOT_DIR)
+                    js_r = subprocess.run(js_cmd, capture_output=True, text=True, timeout=30, cwd=ROOT_DIR)
+                    if cc_r.returncode != 0:
+                        results.record(label, False, f"CC compile failed:\n{cc_r.stderr[:200]}")
+                    elif js_r.returncode != 0:
+                        results.record(label, False, f"JS compile failed:\n{js_r.stderr[:200]}")
+                    else:
+                        with open(cc_wasm, "rb") as f:
+                            cc_bytes = f.read()
+                        with open(js_wasm, "rb") as f:
+                            js_bytes = f.read()
+                        if cc_bytes == js_bytes:
+                            results.record(label, True)
+                        else:
+                            msg = f"WASM differs: CC={len(cc_bytes)} bytes, JS={len(js_bytes)} bytes"
+                            for i in range(min(len(cc_bytes), len(js_bytes))):
+                                if cc_bytes[i] != js_bytes[i]:
+                                    msg += f", first diff at byte {i} (CC=0x{cc_bytes[i]:02x}, JS=0x{js_bytes[i]:02x})"
+                                    break
+                            results.record(label, False, msg)
+                except subprocess.TimeoutExpired:
+                    results.record(label, False, "timeout")
+                finally:
+                    for p in (cc_wasm, js_wasm):
+                        if p and os.path.exists(p):
+                            os.unlink(p)
+                continue
+
             cc_cmd = [*cc, "-a", action] + extra + c_files
             js_cmd = [*js, "-a", action] + extra + c_files
 
@@ -420,28 +460,29 @@ def run_equiv(results, filter_str=None, actions=None):
 
 LUA_SKIP = {"files.lua", "heavy.lua", "verybig.lua", "big.lua", "memerr.lua", "cstack.lua", "main.lua"}
 
-LUA_SOURCES = [
-    "lapi.c", "lauxlib.c", "lbaselib.c", "lcode.c", "lcorolib.c",
-    "lctype.c", "ldblib.c", "ldebug.c", "ldo.c", "ldump.c",
-    "lfunc.c", "lgc.c", "linit.c", "liolib.c", "llex.c",
-    "lmathlib.c", "lmem.c", "loadlib.c", "lobject.c", "lopcodes.c",
-    "loslib.c", "lparser.c", "lstate.c", "lstring.c", "lstrlib.c",
-    "ltable.c", "ltablib.c", "ltm.c", "lua.c", "lundump.c",
-    "lutf8lib.c", "lvm.c", "lzio.c",
-]
+
+def load_project(project_json_path):
+    """Load a project.json file. Paths are resolved relative to the json file's directory."""
+    with open(project_json_path) as f:
+        proj = json.load(f)
+    proj_dir = os.path.dirname(os.path.abspath(project_json_path))
+    proj["sources"] = [os.path.join(proj_dir, s) for s in proj["sources"]]
+    resolved_args = []
+    for arg in proj.get("compilerArgs", []):
+        if arg.startswith("-I"):
+            resolved_args.append("-I" + os.path.join(proj_dir, arg[2:]))
+        else:
+            resolved_args.append(arg)
+    proj["compilerArgs"] = resolved_args
+    proj["dir"] = proj_dir
+    return proj
 
 
-def build_lua(compiler_cmd):
-    src_dir = os.path.join(LUA_DIR, "src")
-    include_dir = os.path.join(LUA_DIR, "include")
+def build_project(proj, compiler_cmd):
+    """Build a project from its loaded project.json dict. Returns (wasm_path, error_string)."""
     os.makedirs(BUILD_DIR, exist_ok=True)
-    output = os.path.join(BUILD_DIR, f"lua-{compiler_label(compiler_cmd)}.wasm")
-
-    cmd = [
-        *compiler_cmd, "-o", output,
-        f"-I{include_dir}", f"-I{src_dir}", "-DLUA_USE_C89",
-    ] + [os.path.join(src_dir, f) for f in LUA_SOURCES]
-
+    output = os.path.join(BUILD_DIR, f"{proj['name']}-{compiler_label(compiler_cmd)}.wasm")
+    cmd = [*compiler_cmd, "-o", output] + proj["compilerArgs"] + proj["sources"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=ROOT_DIR)
     if r.returncode != 0:
         return None, r.stderr
@@ -453,7 +494,8 @@ def run_lua_tests(compiler_cmd, results, filter_str=None):
         results.record("lua/build", False, f"Lua test dir not found: {LUA_TEST_DIR}")
         return
 
-    wasm, err = build_lua(compiler_cmd)
+    proj = load_project(os.path.join(LUA_DIR, "project.json"))
+    wasm, err = build_project(proj, compiler_cmd)
     if wasm is None:
         results.record("lua/build", False, f"Failed to build lua.wasm:\n{err}")
         return
@@ -512,8 +554,8 @@ def main():
                         help="Only show final summary")
     parser.add_argument("--filter", default=None,
                         help="Only run tests matching this substring")
-    parser.add_argument("--actions", nargs="+", default=["parse"],
-                        help="Actions for equiv tests (default: parse)")
+    parser.add_argument("--actions", nargs="+", default=["parse", "wasm"],
+                        help="Actions for equiv tests (default: parse wasm)")
     args = parser.parse_args()
 
     if args.all:
