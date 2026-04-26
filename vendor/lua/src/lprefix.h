@@ -7,8 +7,6 @@
 #ifndef lprefix_h
 #define lprefix_h
 
-#include "luawasm.h"
-
 
 /*
 ** Allows POSIX/XSI stuff

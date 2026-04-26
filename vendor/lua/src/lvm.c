@@ -1757,13 +1757,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           ci->func.p -= delta;  /* restore 'func' (if vararg) */
           luaD_poscall(L, ci, n);  /* finish caller */
           updatetrap(ci);  /* 'luaD_poscall' can change hooks */
-          /* ret: return from a Lua function */
-          if (ci->callstatus & CIST_FRESH)
-            return;
-          else {
-            ci = ci->previous;
-            goto returning;
-          }
+          goto ret;  /* caller returns after the tail call */
         }
       }
       vmcase(OP_RETURN) {
@@ -1786,13 +1780,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         L->top.p = ra + n;  /* set call for 'luaD_poscall' */
         luaD_poscall(L, ci, n);
         updatetrap(ci);  /* 'luaD_poscall' can change hooks */
-        /* ret: return from a Lua function */
-        if (ci->callstatus & CIST_FRESH)
-          return;
-        else {
-          ci = ci->previous;
-          goto returning;
-        }
+        goto ret;
       }
       vmcase(OP_RETURN0) {
         if (l_unlikely(L->hookmask)) {
@@ -1809,13 +1797,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           for (; l_unlikely(nres > 0); nres--)
             setnilvalue(s2v(L->top.p++));  /* all results are nil */
         }
-        /* ret: return from a Lua function */
-        if (ci->callstatus & CIST_FRESH)
-          return;
-        else {
-          ci = ci->previous;
-          goto returning;
-        }
+        goto ret;
       }
       vmcase(OP_RETURN1) {
         if (l_unlikely(L->hookmask)) {
@@ -1888,7 +1870,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         pc += GETARG_Bx(i);  /* go to end of the loop */
         i = *(pc++);  /* fetch next instruction */
         lua_assert(GET_OPCODE(i) == OP_TFORCALL && ra == RA(i));
-        /* fall through */
+        goto l_tforcall;
       }
       vmcase(OP_TFORCALL) {
        l_tforcall: {
@@ -1907,7 +1889,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         updatestack(ci);  /* stack may have changed */
         i = *(pc++);  /* go to next instruction */
         lua_assert(GET_OPCODE(i) == OP_TFORLOOP && ra == RA(i));
-        /* fall through */
+        goto l_tforloop;
       }}
       vmcase(OP_TFORLOOP) {
        l_tforloop: {
