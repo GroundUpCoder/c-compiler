@@ -1365,7 +1365,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         return 0;
       },
       __sdl_get_queued_audio_size: function (dev) {
-        if (!sharedAudioBuffer) return 0;
+        if (!sharedAudioBuffer) return 0x7FFFFFFF;
         const control = new Int32Array(sharedAudioBuffer.sharedBuffer, 0, 4);
         return Atomics.load(control, 1);
       },
@@ -1673,7 +1673,7 @@ function createAudioReceiver(options) {
       const len = device.batchBytes;
 
       /* Read 'len' bytes from shared ring buffer */
-      const readPos = (writePos - queuedBytes);
+      let readPos = (writePos - queuedBytes);
       readPos = ((readPos % cap) + cap) % cap;
       const chunk = new Uint8Array(len);
       const firstChunk = Math.min(len, cap - readPos);

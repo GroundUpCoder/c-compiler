@@ -13625,6 +13625,305 @@ function parseAllUnits(fs, pp, inputFiles, options) {
 return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUnits };
 })();
 
+// ====================
+// HTML Output
+// ====================
+
+const HtmlOutput = (() => {
+
+function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName }) {
+  const strippedHostJs = hostJsSource.replace(/^#!.*\n/, '');
+  const safeHostJs = strippedHostJs.replace(/<\/script>/gi, '<\\/script>');
+  const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
+  const opfsEntries = opfsFiles.map(f => ({
+    path: f.destPath,
+    data: Buffer.from(f.bytes).toString('base64'),
+  }));
+
+  const workerScript = `
+${strippedHostJs}
+
+var sdlRef = null;
+var wasmInstance = null;
+var decoder = new TextDecoder();
+var stdinResolve = null;
+
+self.onmessage = function(e) {
+  var msg = e.data;
+  if (msg.type === 'run') doRun(msg);
+  else if (msg.type === 'keydown' || msg.type === 'keyup') {
+    if (sdlRef) sdlRef.pushKeyEvent(msg.handle, msg.eventType, msg.scancode, msg.sym);
+  } else if (msg.type === 'quit') {
+    if (sdlRef) sdlRef.pushQuitEvent(1);
+  } else if (msg.type === 'stdin-response') {
+    if (stdinResolve) { var r = stdinResolve; stdinResolve = null; r(msg.data ? new Uint8Array(msg.data) : null); }
+  }
+};
+
+async function doRun(msg) {
+  var opts = {
+    bytes: msg.bytes,
+    args: msg.args && msg.args.length > 0 ? msg.args : undefined,
+    useBrowserFS: true,
+    writeOut: function(buf) {
+      var text = (buf instanceof Uint8Array) ? decoder.decode(buf) : String(buf);
+      self.postMessage({ type: 'stdout', text: text });
+    },
+    writeErr: function(buf) {
+      var text = (buf instanceof Uint8Array) ? decoder.decode(buf) : String(buf);
+      self.postMessage({ type: 'stderr', text: text });
+    },
+    onReady: function(info) { sdlRef = info.sdl; wasmInstance = info.instance; },
+    requestStdin: function(maxBytes) {
+      return new Promise(function(resolve) {
+        stdinResolve = resolve;
+        self.postMessage({ type: 'stdin-request', maxBytes: maxBytes });
+      });
+    },
+  };
+  if (msg.canvas) {
+    opts.getBrowserSDL = msg.canvas;
+    opts.notifyWindow = function(m) { self.postMessage(m); };
+  }
+  if (msg.sharedAudioBuffer) {
+    opts.sharedAudioBuffer = { sharedBuffer: msg.sharedAudioBuffer, bufferSize: msg.audioBufferSize };
+    opts.notifyAudio = function(m) { self.postMessage(m); };
+  }
+  var wasmSettings = getWasmSettings(msg.bytes);
+  var noExitRuntime = wasmSettings.NO_EXIT_RUNTIME === '1';
+  if (noExitRuntime) opts.noExitRuntime = true;
+  try {
+    var exitCode = await runModule(opts);
+    if (noExitRuntime) self.postMessage({ type: 'no-exit-runtime' });
+    else self.postMessage({ type: 'exit', exitCode: exitCode });
+  } catch(err) {
+    self.postMessage({ type: 'error', message: err.message });
+  }
+}
+`;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(programName)}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;color:#0f0;font-family:monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#overlay{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#000;z-index:10;cursor:pointer}
+#overlay span{font-size:28px;color:#fff}
+#canvas-container{flex:1;display:none;align-items:center;justify-content:center;background:#000;min-height:0}
+#canvas{image-rendering:pixelated;object-fit:contain;width:100%;height:100%}
+#output{flex:1;padding:8px;overflow-y:auto;white-space:pre-wrap;font-size:14px;display:none}
+#status{padding:4px 8px;font-size:12px;color:#888;display:none}
+</style>
+</head>
+<body>
+<div id="overlay" tabindex="0"><span>Click to Start</span></div>
+<div id="canvas-container"><canvas id="canvas"></canvas></div>
+<pre id="output"></pre>
+<div id="status"></div>
+<script>${safeHostJs}<\/script>
+<script>
+window.onerror = function(msg, url, line, col, err) {
+  document.getElementById('status').style.display = 'block';
+  document.getElementById('status').textContent = 'JS Error: ' + msg + ' (line ' + line + ')';
+  console.error('[global error]', msg, url, line, col, err);
+};
+window.onunhandledrejection = function(e) {
+  document.getElementById('status').style.display = 'block';
+  document.getElementById('status').textContent = 'Unhandled rejection: ' + (e.reason && e.reason.message || e.reason);
+  console.error('[unhandled rejection]', e.reason);
+};
+(function() {
+  var WASM_BASE64 = ${JSON.stringify(wasmBase64)};
+  var OPFS_FILES = ${JSON.stringify(opfsEntries)};
+  var RUN_ARGS = ${JSON.stringify(runArgs)};
+  var PROGRAM_NAME = ${JSON.stringify(programName)};
+
+  var overlay = document.getElementById('overlay');
+  var canvasContainer = document.getElementById('canvas-container');
+  var canvas = document.getElementById('canvas');
+  var output = document.getElementById('output');
+  var status = document.getElementById('status');
+  var worker = null;
+  var hasSDL = false;
+
+  var sdlNamedKeysyms = {
+    'Enter':13,'Escape':27,'Backspace':8,'Tab':9,' ':32,'Delete':127
+  };
+  var sdlScancodeMap = {
+    'ArrowUp':82,'ArrowDown':81,'ArrowLeft':80,'ArrowRight':79,
+    'ShiftLeft':225,'ShiftRight':229,'ControlLeft':224,'ControlRight':228,
+    'AltLeft':226,'AltRight':230,
+    'F1':58,'F2':59,'F3':60,'F4':61,'F5':62,'F6':63,
+    'F7':64,'F8':65,'F9':66,'F10':67,'F11':68,'F12':69
+  };
+  function sdlKeysym(e) {
+    if (typeof e.key==='string'&&e.key.length===1) return e.key.charCodeAt(0);
+    if (sdlNamedKeysyms[e.key]!==undefined) return sdlNamedKeysyms[e.key];
+    return (sdlScancodeMap[e.code]||0)|0x40000000;
+  }
+  function sdlScancode(e) { return sdlScancodeMap[e.code]||0; }
+
+  function onKeydown(e) {
+    if (!worker||!hasSDL) return;
+    e.preventDefault();
+    worker.postMessage({type:'keydown',handle:1,eventType:0x300,scancode:sdlScancode(e),sym:sdlKeysym(e)});
+  }
+  function onKeyup(e) {
+    if (!worker||!hasSDL) return;
+    e.preventDefault();
+    worker.postMessage({type:'keyup',handle:1,eventType:0x301,scancode:sdlScancode(e),sym:sdlKeysym(e)});
+  }
+
+  function base64ToBytes(b64) {
+    var bin = atob(b64);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  }
+
+  function appendOutput(text, isErr) {
+    if (hasSDL) return;
+    output.style.display = 'block';
+    var span = document.createElement('span');
+    if (isErr) span.style.color = '#f44';
+    span.textContent = text;
+    output.appendChild(span);
+    output.scrollTop = output.scrollHeight;
+  }
+
+  function setStatus(text) {
+    status.style.display = text ? 'block' : 'none';
+    status.textContent = text;
+  }
+
+  async function writeToOPFS(path, data) {
+    var root = await navigator.storage.getDirectory();
+    var parts = path.split('/').filter(Boolean);
+    var dir = root;
+    for (var i = 0; i < parts.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(parts[i], { create: true });
+    }
+    var fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+    var writable = await fh.createWritable();
+    await writable.write(data);
+    await writable.close();
+  }
+
+  async function start() {
+    overlay.style.display = 'none';
+    setStatus('Writing files...');
+
+    var wasmBytes = base64ToBytes(WASM_BASE64);
+
+    for (var i = 0; i < OPFS_FILES.length; i++) {
+      var fileData = base64ToBytes(OPFS_FILES[i].data);
+      await writeToOPFS(OPFS_FILES[i].path, fileData);
+    }
+
+    setStatus('Starting...');
+    var workerSource = ${JSON.stringify(workerScript)};
+    var blob = new Blob([workerSource], { type: 'application/javascript' });
+    var workerUrl = URL.createObjectURL(blob);
+    worker = new Worker(workerUrl);
+
+    var offscreen = canvas.transferControlToOffscreen();
+
+    var sharedAudio = null;
+    var audioReceiver = null;
+    if (typeof SharedArrayBuffer !== 'undefined' && typeof createSharedAudioBuffer === 'function') {
+      sharedAudio = createSharedAudioBuffer();
+      audioReceiver = createAudioReceiver({
+        sharedBuffer: sharedAudio.sharedBuffer,
+        bufferSize: sharedAudio.bufferSize
+      });
+    }
+
+    worker.onmessage = function(e) {
+      var msg = e.data;
+      if (msg.type === 'stdout') {
+        appendOutput(msg.text, false);
+      } else if (msg.type === 'stderr') {
+        appendOutput(msg.text, true);
+      } else if (msg.type === 'exit') {
+        setStatus(msg.exitCode === 0 ? 'Exited.' : 'Exit code: ' + msg.exitCode);
+        cleanup();
+      } else if (msg.type === 'sdl-window') {
+        hasSDL = true;
+        canvasContainer.style.display = 'flex';
+        setStatus('');
+      } else if (msg.type === 'no-exit-runtime') {
+        setStatus('');
+      } else if (msg.type === 'error') {
+        appendOutput('Runtime error: ' + msg.message + '\\n', true);
+        setStatus('');
+        cleanup();
+      } else if (msg.type && msg.type.startsWith('audio-')) {
+        if (audioReceiver) audioReceiver.handleMessage(msg);
+      }
+    };
+
+    worker.onerror = function(e) {
+      appendOutput('Worker error: ' + e.message + '\\n', true);
+      setStatus('');
+      cleanup();
+    };
+
+    function cleanup() {
+      document.removeEventListener('keydown', onKeydown, true);
+      document.removeEventListener('keyup', onKeyup, true);
+      if (audioReceiver) audioReceiver.close();
+      worker = null;
+    }
+
+    document.addEventListener('keydown', onKeydown, true);
+    document.addEventListener('keyup', onKeyup, true);
+
+    var transfer = [wasmBytes.buffer, offscreen];
+    var msg = {
+      type: 'run',
+      bytes: wasmBytes,
+      args: RUN_ARGS,
+      canvas: offscreen
+    };
+    if (sharedAudio) {
+      msg.sharedAudioBuffer = sharedAudio.sharedBuffer;
+      msg.audioBufferSize = sharedAudio.bufferSize;
+    }
+    worker.postMessage(msg, transfer);
+    setStatus('Running...');
+  }
+
+  function safeStart() {
+    start().catch(function(err) {
+      console.error('[main] start() error:', err);
+      setStatus('Error: ' + (err.message || err));
+      document.getElementById('output').style.display = 'block';
+      document.getElementById('output').textContent = 'Fatal: ' + (err.stack || err.message || err);
+    });
+  }
+  overlay.addEventListener('click', safeStart);
+  overlay.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') safeStart();
+  });
+  overlay.focus();
+})();
+</script>
+</body>
+</html>`;
+
+  return Buffer.from(html, 'utf-8');
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+return { generate };
+})();
+
 function main() {
   const fs = require("fs");
   const path = require("path");
@@ -13633,6 +13932,8 @@ function main() {
   let action = "compile";
   let outputFile = "a.wasm";
   const inputFiles = [];
+  const opfsFiles = [];
+  const runArgs = [];
   const warningFlags = { pointerDecay: false, circularDependency: false };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, noUndefined: false, timeReport: false, requireSources: [] };
   const pp = Stdlib.createDefaultPPRegistry();
@@ -13696,6 +13997,24 @@ function main() {
         process.exit(1);
       }
       compilerOptions.requireSources.push(args[++i]);
+    } else if (args[i] === "--opfs-file") {
+      if (i + 1 >= args.length) {
+        process.stderr.write("Error: --opfs-file requires src:dest argument\n");
+        process.exit(1);
+      }
+      const arg = args[++i];
+      const colonIdx = arg.indexOf(":");
+      if (colonIdx < 0) {
+        process.stderr.write("Error: --opfs-file requires src:dest format (e.g. data/file.dat:/file.dat)\n");
+        process.exit(1);
+      }
+      opfsFiles.push({ srcPath: arg.substring(0, colonIdx), destPath: arg.substring(colonIdx + 1) });
+    } else if (args[i] === "--run-arg") {
+      if (i + 1 >= args.length) {
+        process.stderr.write("Error: --run-arg requires an argument\n");
+        process.exit(1);
+      }
+      runArgs.push(args[++i]);
     } else if (args[i].startsWith("-")) {
       // Silently ignore unknown options
     } else {
@@ -13781,7 +14100,19 @@ function main() {
       const wasmBinary = Codegen.generateCode(units, outputFile, { compilerOptions });
       const codegenMs = hrtime() - t0;
       t0 = hrtime();
-      fs.writeFileSync(outputFile, wasmBinary);
+      if (outputFile.endsWith(".html")) {
+        const hostJsPath = path.join(path.dirname(process.argv[1]), "host.js");
+        const hostJsSource = fs.readFileSync(hostJsPath, "utf-8");
+        const resolvedOpfsFiles = opfsFiles.map(f => ({
+          destPath: f.destPath,
+          bytes: fs.readFileSync(f.srcPath),
+        }));
+        const programName = path.basename(outputFile, ".html");
+        const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName });
+        fs.writeFileSync(outputFile, htmlBinary);
+      } else {
+        fs.writeFileSync(outputFile, wasmBinary);
+      }
       const writeMs = hrtime() - t0;
 
       if (compilerOptions.timeReport) {
