@@ -1,0 +1,15 @@
+sig_atomic_t: 42
+volatile sig_atomic_t: 0
+SIGABRT=6
+SIGFPE=8
+SIGILL=4
+SIGINT=2
+SIGSEGV=11
+SIGTERM=15
+SIG_DFL!=SIG_IGN: 1
+SIG_DFL!=SIG_ERR: 1
+SIG_IGN!=SIG_ERR: 1
+signal returns SIG_DFL: 1
+signal returns SIG_DFL again: 1
+raise returns 0: 1
+pragma once works: 1

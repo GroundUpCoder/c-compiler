@@ -10298,7 +10298,21 @@ __import int setjmp(jmp_buf env);
 __import void longjmp(jmp_buf env, int val);
 `,
   "signal.h": `
-#error "signal.h is not supported"
+#pragma once
+__require_source("__signal.c");
+typedef int sig_atomic_t;
+typedef void (*__sighandler_t)(int);
+#define SIG_DFL ((__sighandler_t)0)
+#define SIG_IGN ((__sighandler_t)1)
+#define SIG_ERR ((__sighandler_t)-1)
+#define SIGABRT 6
+#define SIGFPE  8
+#define SIGILL  4
+#define SIGINT  2
+#define SIGSEGV 11
+#define SIGTERM 15
+__sighandler_t signal(int __sig, __sighandler_t __handler);
+int raise(int __sig);
   `,
   "stdalign.h": `
 #pragma once
@@ -11353,6 +11367,11 @@ float emscripten_random(void) {
 int errno;
 void __errno_set(int e) { errno = e; }
 __export __errno_set = __errno_set;
+  `,
+  "__signal.c": `
+#include <signal.h>
+__sighandler_t signal(int __sig, __sighandler_t __handler) { (void)__sig; (void)__handler; return SIG_DFL; }
+int raise(int __sig) { (void)__sig; return 0; }
   `,
   "__locale.c": `
 #include <locale.h>
