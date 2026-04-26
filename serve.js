@@ -3,9 +3,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const dir = process.argv[2] || 'build';
-const port = parseInt(process.argv[3] || '8080', 10);
-const root = path.resolve(dir);
+const arg = process.argv[2] || 'build';
+const preferredPort = parseInt(process.argv[3] || '8080', 10);
+
+const resolved = path.resolve(arg);
+const stat = fs.statSync(resolved, { throwIfNoEntry: false });
+const singleFile = stat && stat.isFile() ? resolved : null;
+const root = singleFile ? path.dirname(resolved) : resolved;
 
 const MIME = {
   '.html': 'text/html',
@@ -17,9 +21,9 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
-  const file = path.join(root, url === '/' ? 'index.html' : url);
+  const file = singleFile && url === '/' ? singleFile : path.join(root, url === '/' ? 'index.html' : url);
   if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
@@ -30,6 +34,22 @@ http.createServer((req, res) => {
     });
     res.end(data);
   });
-}).listen(port, () => {
-  console.log(`Serving ${root} at http://localhost:${port}`);
 });
+
+function tryListen(port) {
+  server.once('error', (err) => {
+    if (err.code === 'EADDRINUSE' && port < preferredPort + 10) {
+      tryListen(port + 1);
+    } else {
+      console.error(err.message);
+      process.exit(1);
+    }
+  });
+  server.listen(port);
+}
+
+server.once('listening', () => {
+  console.log(`Open http://localhost:${server.address().port}`);
+});
+
+tryListen(preferredPort);

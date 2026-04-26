@@ -13631,7 +13631,7 @@ return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUn
 
 const HtmlOutput = (() => {
 
-function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName }) {
+function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, xtermSources }) {
   const strippedHostJs = hostJsSource.replace(/^#!.*\n/, '');
   const safeHostJs = strippedHostJs.replace(/<\/script>/gi, '<\\/script>');
   const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
@@ -13639,6 +13639,9 @@ function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName })
     path: f.destPath,
     data: Buffer.from(f.bytes).toString('base64'),
   }));
+  const hasXterm = !!xtermSources;
+  const safeXtermJs = hasXterm ? xtermSources.xtermJs.replace(/<\/script>/gi, '<\\/script>') : '';
+  const safeXtermFitJs = hasXterm ? xtermSources.xtermFitJs.replace(/<\/script>/gi, '<\\/script>') : '';
 
   const workerScript = `
 ${strippedHostJs}
@@ -13702,11 +13705,15 @@ async function doRun(msg) {
 }
 `;
 
+  const xtermStyleTag = hasXterm ? `<style>${xtermSources.xtermCss}</style>` : '';
+  const xtermScriptTags = hasXterm ? `<script>${safeXtermJs}<\/script>\n<script>${safeXtermFitJs}<\/script>` : '';
+
   const html = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>${escapeHtml(programName)}</title>
+${xtermStyleTag}
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#000;color:#0f0;font-family:monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -13714,15 +13721,34 @@ body{background:#000;color:#0f0;font-family:monospace;height:100vh;display:flex;
 #overlay span{font-size:28px;color:#fff}
 #canvas-container{flex:1;display:none;align-items:center;justify-content:center;background:#000;min-height:0}
 #canvas{image-rendering:pixelated;object-fit:contain;width:100%;height:100%}
+#terminal{flex:1;display:none}
 #output{flex:1;padding:8px;overflow-y:auto;white-space:pre-wrap;font-size:14px;display:none}
+#log-panel{display:none;flex-direction:column;max-height:40vh;border-top:1px solid #333}
+#log-toolbar{display:flex;gap:4px;padding:4px 8px;background:#111;flex-shrink:0}
+#log-toolbar button{background:#222;color:#aaa;border:1px solid #444;padding:2px 8px;font-size:11px;font-family:monospace;cursor:pointer}
+#log-toolbar button.active{color:#fff;border-color:#888}
+#log-toolbar button:hover{background:#333}
+#log-content{flex:1;overflow-y:auto;padding:4px 8px;font-size:12px;white-space:pre-wrap;background:#0a0a0a;min-height:0}
+#log-content .log-out{color:#0f0}
+#log-content .log-err{color:#f44}
 #status{padding:4px 8px;font-size:12px;color:#888;display:none}
 </style>
 </head>
 <body>
 <div id="overlay" tabindex="0"><span>Click to Start</span></div>
 <div id="canvas-container"><canvas id="canvas"></canvas></div>
+<div id="terminal"></div>
 <pre id="output"></pre>
+<div id="log-panel">
+  <div id="log-toolbar">
+    <button id="log-toggle">Console</button>
+    <button id="log-stdout" class="active">stdout</button>
+    <button id="log-stderr" class="active">stderr</button>
+  </div>
+  <div id="log-content"></div>
+</div>
 <div id="status"></div>
+${xtermScriptTags}
 <script>${safeHostJs}<\/script>
 <script>
 window.onerror = function(msg, url, line, col, err) {
@@ -13740,14 +13766,96 @@ window.onunhandledrejection = function(e) {
   var OPFS_FILES = ${JSON.stringify(opfsEntries)};
   var RUN_ARGS = ${JSON.stringify(runArgs)};
   var PROGRAM_NAME = ${JSON.stringify(programName)};
+  var HAS_XTERM = ${hasXterm};
 
   var overlay = document.getElementById('overlay');
   var canvasContainer = document.getElementById('canvas-container');
   var canvas = document.getElementById('canvas');
+  var terminalEl = document.getElementById('terminal');
   var output = document.getElementById('output');
+  var logPanel = document.getElementById('log-panel');
+  var logContent = document.getElementById('log-content');
+  var logToggle = document.getElementById('log-toggle');
+  var logStdoutBtn = document.getElementById('log-stdout');
+  var logStderrBtn = document.getElementById('log-stderr');
   var status = document.getElementById('status');
   var worker = null;
   var hasSDL = false;
+  var term = null;
+  var stdinLine = '';
+  var stdinResolve = null;
+  var logExpanded = false;
+  var showStdout = true;
+  var showStderr = true;
+
+  logToggle.addEventListener('click', function() {
+    logExpanded = !logExpanded;
+    logContent.style.display = logExpanded ? 'block' : 'none';
+    logToggle.textContent = logExpanded ? 'Console \\u25BC' : 'Console \\u25B6';
+  });
+  logStdoutBtn.addEventListener('click', function() {
+    showStdout = !showStdout;
+    logStdoutBtn.classList.toggle('active', showStdout);
+    updateLogVisibility();
+  });
+  logStderrBtn.addEventListener('click', function() {
+    showStderr = !showStderr;
+    logStderrBtn.classList.toggle('active', showStderr);
+    updateLogVisibility();
+  });
+  function updateLogVisibility() {
+    var entries = logContent.children;
+    for (var i = 0; i < entries.length; i++) {
+      var el = entries[i];
+      if (el.classList.contains('log-out')) el.style.display = showStdout ? '' : 'none';
+      else if (el.classList.contains('log-err')) el.style.display = showStderr ? '' : 'none';
+    }
+  }
+
+  var ANSI_GREEN = '\\x1b[32m';
+  var ANSI_RED = '\\x1b[31m';
+  var ANSI_RESET = '\\x1b[0m';
+
+  if (HAS_XTERM && typeof Terminal === 'function') {
+    term = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: "'Menlo', 'Consolas', 'Courier New', monospace",
+      theme: { background: '#0d0d1a', foreground: '#b0f0b0', cursor: '#b0f0b0' },
+    });
+    if (typeof FitAddon === 'function') {
+      var fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(terminalEl);
+      fitAddon.fit();
+      window.addEventListener('resize', function() { fitAddon.fit(); });
+    } else {
+      term.open(terminalEl);
+    }
+    term.onData(function(data) {
+      if (!stdinResolve) return;
+      for (var i = 0; i < data.length; i++) {
+        var ch = data[i];
+        if (ch === '\\r') {
+          term.write('\\r\\n');
+          var line = stdinLine + '\\n';
+          stdinLine = '';
+          var resolve = stdinResolve;
+          stdinResolve = null;
+          var encoder = new TextEncoder();
+          resolve(encoder.encode(line));
+        } else if (ch === '\\x7f' || ch === '\\b') {
+          if (stdinLine.length > 0) {
+            stdinLine = stdinLine.slice(0, -1);
+            term.write('\\b \\b');
+          }
+        } else if (ch >= ' ') {
+          stdinLine += ch;
+          term.write(ch);
+        }
+      }
+    });
+  }
 
   var sdlNamedKeysyms = {
     'Enter':13,'Escape':27,'Backspace':8,'Tab':9,' ':32,'Delete':127
@@ -13784,14 +13892,28 @@ window.onunhandledrejection = function(e) {
     return arr;
   }
 
-  function appendOutput(text, isErr) {
-    if (hasSDL) return;
-    output.style.display = 'block';
-    var span = document.createElement('span');
-    if (isErr) span.style.color = '#f44';
-    span.textContent = text;
-    output.appendChild(span);
-    output.scrollTop = output.scrollHeight;
+  function writeOutput(text, isErr) {
+    if (hasSDL) {
+      var span = document.createElement('span');
+      span.className = isErr ? 'log-err' : 'log-out';
+      span.textContent = text;
+      if (isErr && !showStderr) span.style.display = 'none';
+      if (!isErr && !showStdout) span.style.display = 'none';
+      logContent.appendChild(span);
+      if (logExpanded) logContent.scrollTop = logContent.scrollHeight;
+      return;
+    }
+    if (term) {
+      var escaped = text.replace(/\\n/g, '\\r\\n');
+      term.write((isErr ? ANSI_RED : ANSI_GREEN) + escaped + ANSI_RESET);
+    } else {
+      output.style.display = 'block';
+      var span = document.createElement('span');
+      if (isErr) span.style.color = '#f44';
+      span.textContent = text;
+      output.appendChild(span);
+      output.scrollTop = output.scrollHeight;
+    }
   }
 
   function setStatus(text) {
@@ -13814,6 +13936,7 @@ window.onunhandledrejection = function(e) {
 
   async function start() {
     overlay.style.display = 'none';
+    if (term) { terminalEl.style.display = 'block'; term.focus(); }
     setStatus('Writing files...');
 
     var wasmBytes = base64ToBytes(WASM_BASE64);
@@ -13844,29 +13967,39 @@ window.onunhandledrejection = function(e) {
     worker.onmessage = function(e) {
       var msg = e.data;
       if (msg.type === 'stdout') {
-        appendOutput(msg.text, false);
+        writeOutput(msg.text, false);
       } else if (msg.type === 'stderr') {
-        appendOutput(msg.text, true);
+        writeOutput(msg.text, true);
       } else if (msg.type === 'exit') {
         setStatus(msg.exitCode === 0 ? 'Exited.' : 'Exit code: ' + msg.exitCode);
         cleanup();
       } else if (msg.type === 'sdl-window') {
         hasSDL = true;
+        if (term) terminalEl.style.display = 'none';
         canvasContainer.style.display = 'flex';
+        logPanel.style.display = 'flex';
+        logContent.style.display = 'none';
+        logToggle.textContent = 'Console \\u25B6';
         setStatus('');
       } else if (msg.type === 'no-exit-runtime') {
         setStatus('');
       } else if (msg.type === 'error') {
-        appendOutput('Runtime error: ' + msg.message + '\\n', true);
+        writeOutput('Runtime error: ' + msg.message + '\\n', true);
         setStatus('');
         cleanup();
+      } else if (msg.type === 'stdin-request') {
+        if (term) {
+          stdinResolve = function(data) {
+            worker.postMessage({ type: 'stdin-response', data: data ? Array.from(data) : null });
+          };
+        }
       } else if (msg.type && msg.type.startsWith('audio-')) {
         if (audioReceiver) audioReceiver.handleMessage(msg);
       }
     };
 
     worker.onerror = function(e) {
-      appendOutput('Worker error: ' + e.message + '\\n', true);
+      writeOutput('Worker error: ' + e.message + '\\n', true);
       setStatus('');
       cleanup();
     };
@@ -13936,6 +14069,7 @@ function main() {
   const runArgs = [];
   const warningFlags = { pointerDecay: false, circularDependency: false };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, noUndefined: false, timeReport: false, requireSources: [] };
+  let noXterm = false;
   const pp = Stdlib.createDefaultPPRegistry();
 
   // Set up file reader
@@ -14015,6 +14149,8 @@ function main() {
         process.exit(1);
       }
       runArgs.push(args[++i]);
+    } else if (args[i] === "--no-xterm") {
+      noXterm = true;
     } else if (args[i].startsWith("-")) {
       // Silently ignore unknown options
     } else {
@@ -14108,7 +14244,18 @@ function main() {
           bytes: fs.readFileSync(f.srcPath),
         }));
         const programName = path.basename(outputFile, ".html");
-        const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName });
+        let xtermSources = null;
+        if (!noXterm) {
+          const xtermDir = path.join(path.dirname(process.argv[1]), "vendor", "xterm");
+          try {
+            xtermSources = {
+              xtermJs: fs.readFileSync(path.join(xtermDir, "xterm.js"), "utf-8"),
+              xtermFitJs: fs.readFileSync(path.join(xtermDir, "xterm-addon-fit.js"), "utf-8"),
+              xtermCss: fs.readFileSync(path.join(xtermDir, "xterm.css"), "utf-8"),
+            };
+          } catch (e) {}
+        }
+        const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName, xtermSources });
         fs.writeFileSync(outputFile, htmlBinary);
       } else {
         fs.writeFileSync(outputFile, wasmBinary);
