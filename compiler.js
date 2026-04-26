@@ -9291,6 +9291,7 @@ function generateCode(units, outputFile, options) {
   }
 
   // Register function definitions
+  let foundMain = false;
   for (const unit of units) {
     for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
       const fdef = func.definition || func;
@@ -9299,9 +9300,13 @@ function generateCode(units, outputFile, options) {
       const funcIdx = wmod.addFunctionDefinition(typeId);
       cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
       cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
-      if (fdef.name === "main") wmod.addExport("main", 0x00, funcIdx);
+      if (fdef.name === "main") { foundMain = true; wmod.addExport("main", 0x00, funcIdx); }
       if (fdef.name === "alloca") wmod.addExport("alloca", 0x00, funcIdx);
     }
+  }
+  if (!foundMain) {
+    process.stderr.write("Error: no 'main' function defined\n");
+    process.exit(1);
   }
 
   // Register exception tags

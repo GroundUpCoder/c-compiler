@@ -17032,6 +17032,7 @@ CodeGeneraionResult generateCode(
   }
 
   // Register function definitions
+  bool foundMain = false;
   for (const auto &unit : units) {
     for (DFunc *func : concat<DFunc *>(unit.definedFunctions, unit.staticFunctions)) {
       DFunc *fdef = func->definition;
@@ -17043,12 +17044,17 @@ CodeGeneraionResult generateCode(
 
       // Export 'main' function
       if (fdef->name == intern("main")) {
+        foundMain = true;
         addWasmExport("main", WasmExternKind::FUNC, funcIdx);
       }
       if (fdef->name == intern("alloca")) {
         addWasmExport("alloca", WasmExternKind::FUNC, funcIdx);
       }
     }
+  }
+  if (!foundMain) {
+    std::cerr << "Error: no 'main' function defined\n";
+    exit(1);
   }
 
   // Dump function index map if requested
