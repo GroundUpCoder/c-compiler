@@ -1,0 +1,6 @@
+build/
+*.wasm
+*.o
+a.out
+.DS_Store
+node_modules/
