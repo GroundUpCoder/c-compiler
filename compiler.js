@@ -1,16 +1,12 @@
-"use strict";
+#!/usr/bin/env node
 (() => {
+"use strict";
 
 // ====================
 // Lexer
 // ====================
 
-const {
-  intern, TokenKind, Keyword, Punct, StringPrefix, TokenFlags, Token, LexError, LexResult,
-  lex, unescape, decodeCodepoint, unescapeCodepoint, encodeUtf16LE, encodeUtf32LE,
-  parseHexFloat, postProcess, spliceLines, PPRegistry, preprocess, cloneToken,
-  tokenize, formatToken, encodeUtf8,
-} = (() => {
+const Lexer = (() => {
 
 // String interning - returns the same string reference for equal strings
 const internPool = new Map();
@@ -1871,16 +1867,7 @@ return {
 // Parser — Type System
 // ====================
 
-const {
-  TypeKind, TagKind, StorageClass, AllocClass, LabelKind,
-  ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
-  TypeInfo,
-  TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE,
-  arrayOf, functionType, getOrCreateTagType,
-  computeStructLayout, computeUnionLayout, computeUnaryType,
-  usualArithmeticConversions, truncateConstInt,
-} = (() => {
+const Types = (() => {
 
 const TypeKind = Object.freeze({
   UNKNOWN: "unknown", VOID: "void", BOOL: "_Bool",
@@ -2367,7 +2354,7 @@ return {
 // AST
 // ====================
 
-const { Scope, AST, makeTUnit } = (() => {
+const AST = (() => {
 
 class Scope {
   constructor() { this.stack = [new Map()]; }
@@ -2409,9 +2396,8 @@ class Scope {
 
 let nextDeclId = 1;
 
-const AST = (() => {
-  // --- Base classes ---
-  class Expr {
+// --- Base classes ---
+class Expr {
     constructor(kind, type) {
       this.kind = kind;
       this.type = type;
@@ -2432,10 +2418,10 @@ const AST = (() => {
   // --- Decl subclasses ---
   class DVar extends Decl {
     constructor(loc, name, type, storageClass, initExpr) {
-      super(DeclKind.VAR);
+      super(Types.DeclKind.VAR);
       this.loc = loc; this.name = name; this.type = type;
-      this.storageClass = storageClass || StorageClass.NONE;
-      this.allocClass = AllocClass.REGISTER;
+      this.storageClass = storageClass || Types.StorageClass.NONE;
+      this.allocClass = Types.AllocClass.REGISTER;
       this.initExpr = initExpr || null;
       this.definition = null;
       this.bitWidth = -1; this.bitOffset = 0; this.byteOffset = 0;
@@ -2445,10 +2431,10 @@ const AST = (() => {
   }
   class DFunc extends Decl {
     constructor(loc, name, type, params, storageClass, isInline, body) {
-      super(DeclKind.FUNC);
+      super(Types.DeclKind.FUNC);
       this.loc = loc; this.name = name; this.type = type;
       this.parameters = params || [];
-      this.storageClass = storageClass || StorageClass.NONE;
+      this.storageClass = storageClass || Types.StorageClass.NONE;
       this.isInline = isInline || false;
       this.body = body || null;
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
@@ -2459,7 +2445,7 @@ const AST = (() => {
   }
   class DTag extends Decl {
     constructor(loc, tagKind, name, isComplete, members) {
-      super(DeclKind.TAG);
+      super(Types.DeclKind.TAG);
       this.loc = loc; this.tagKind = tagKind; this.name = name;
       this.isComplete = isComplete || false;
       this.isPacked = false;
@@ -2469,7 +2455,7 @@ const AST = (() => {
   }
   class DEnumConst extends Decl {
     constructor(loc, name, value) {
-      super(DeclKind.ENUM_CONST);
+      super(Types.DeclKind.ENUM_CONST);
       this.loc = loc; this.name = name; this.value = value;
       Object.seal(this);
     }
@@ -2477,139 +2463,126 @@ const AST = (() => {
 
   // --- Expr subclasses ---
   class EInt extends Expr {
-    constructor(type, value) { super(ExprKind.INT, type); this.value = value; Object.seal(this); }
+    constructor(type, value) { super(Types.ExprKind.INT, type); this.value = value; Object.seal(this); }
   }
   class EFloat extends Expr {
-    constructor(type, value) { super(ExprKind.FLOAT, type); this.value = value; Object.seal(this); }
+    constructor(type, value) { super(Types.ExprKind.FLOAT, type); this.value = value; Object.seal(this); }
   }
   class EString extends Expr {
-    constructor(type, value) { super(ExprKind.STRING, type); this.value = value; Object.seal(this); }
+    constructor(type, value) { super(Types.ExprKind.STRING, type); this.value = value; Object.seal(this); }
   }
   class EIdent extends Expr {
-    constructor(type, name, decl) { super(ExprKind.IDENT, type); this.name = name; this.decl = decl; Object.seal(this); }
+    constructor(type, name, decl) { super(Types.ExprKind.IDENT, type); this.name = name; this.decl = decl; Object.seal(this); }
   }
   class EBinary extends Expr {
-    constructor(type, op, left, right) { super(ExprKind.BINARY, type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
+    constructor(type, op, left, right) { super(Types.ExprKind.BINARY, type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
   }
   class EUnary extends Expr {
-    constructor(type, op, operand) { super(ExprKind.UNARY, type); this.op = op; this.operand = operand; Object.seal(this); }
+    constructor(type, op, operand) { super(Types.ExprKind.UNARY, type); this.op = op; this.operand = operand; Object.seal(this); }
   }
   class ETernary extends Expr {
-    constructor(type, condition, thenExpr, elseExpr) { super(ExprKind.TERNARY, type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
+    constructor(type, condition, thenExpr, elseExpr) { super(Types.ExprKind.TERNARY, type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
   }
   class ECall extends Expr {
-    constructor(type, callee, args, funcDecl) { super(ExprKind.CALL, type); this.callee = callee; this.arguments = args; this.funcDecl = funcDecl || null; Object.seal(this); }
+    constructor(type, callee, args, funcDecl) { super(Types.ExprKind.CALL, type); this.callee = callee; this.arguments = args; this.funcDecl = funcDecl || null; Object.seal(this); }
   }
   class ESubscript extends Expr {
-    constructor(type, array, index) { super(ExprKind.SUBSCRIPT, type); this.array = array; this.index = index; Object.seal(this); }
+    constructor(type, array, index) { super(Types.ExprKind.SUBSCRIPT, type); this.array = array; this.index = index; Object.seal(this); }
   }
   class EMember extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(ExprKind.MEMBER, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(type, base, memberName, memberDecl) { super(Types.ExprKind.MEMBER, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
   }
   class EArrow extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(ExprKind.ARROW, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(type, base, memberName, memberDecl) { super(Types.ExprKind.ARROW, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
   }
   class ECast extends Expr {
-    constructor(type, targetType, expr) { super(ExprKind.CAST, type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
+    constructor(type, targetType, expr) { super(Types.ExprKind.CAST, type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
   }
   class ESizeofExpr extends Expr {
-    constructor(type, expr) { super(ExprKind.SIZEOF_EXPR, type); this.expr = expr; Object.seal(this); }
+    constructor(type, expr) { super(Types.ExprKind.SIZEOF_EXPR, type); this.expr = expr; Object.seal(this); }
   }
   class ESizeofType extends Expr {
-    constructor(type, operandType) { super(ExprKind.SIZEOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
+    constructor(type, operandType) { super(Types.ExprKind.SIZEOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
   }
   class EAlignofExpr extends Expr {
-    constructor(type, expr) { super(ExprKind.ALIGNOF_EXPR, type); this.expr = expr; Object.seal(this); }
+    constructor(type, expr) { super(Types.ExprKind.ALIGNOF_EXPR, type); this.expr = expr; Object.seal(this); }
   }
   class EAlignofType extends Expr {
-    constructor(type, operandType) { super(ExprKind.ALIGNOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
+    constructor(type, operandType) { super(Types.ExprKind.ALIGNOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
   }
   class EComma extends Expr {
-    constructor(type, expressions) { super(ExprKind.COMMA, type); this.expressions = expressions; Object.seal(this); }
+    constructor(type, expressions) { super(Types.ExprKind.COMMA, type); this.expressions = expressions; Object.seal(this); }
   }
   class EInitList extends Expr {
     constructor(type, elements, designators, unionMemberIndex) {
-      super(ExprKind.INIT_LIST, type);
+      super(Types.ExprKind.INIT_LIST, type);
       this.elements = elements; this.designators = designators || [];
       this.unionMemberIndex = unionMemberIndex ?? -1;
       Object.seal(this);
     }
   }
   class EIntrinsic extends Expr {
-    constructor(type, ikind, args, argType) { super(ExprKind.INTRINSIC, type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
+    constructor(type, ikind, args, argType) { super(Types.ExprKind.INTRINSIC, type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
   }
   class EWasm extends Expr {
-    constructor(type, args, bytes) { super(ExprKind.WASM, type); this.args = args; this.bytes = bytes; Object.seal(this); }
+    constructor(type, args, bytes) { super(Types.ExprKind.WASM, type); this.args = args; this.bytes = bytes; Object.seal(this); }
   }
   class ECompoundLiteral extends Expr {
-    constructor(type, initList) { super(ExprKind.COMPOUND_LITERAL, type); this.initList = initList; Object.seal(this); }
+    constructor(type, initList) { super(Types.ExprKind.COMPOUND_LITERAL, type); this.initList = initList; Object.seal(this); }
   }
   class EImplicitCast extends Expr {
-    constructor(type, expr) { super(ExprKind.IMPLICIT_CAST, type); this.expr = expr; Object.seal(this); }
+    constructor(type, expr) { super(Types.ExprKind.IMPLICIT_CAST, type); this.expr = expr; Object.seal(this); }
   }
 
   // --- Stmt subclasses ---
   class SExpr extends Stmt {
-    constructor(expr) { super(StmtKind.EXPR); this.expr = expr; Object.seal(this); }
+    constructor(expr) { super(Types.StmtKind.EXPR); this.expr = expr; Object.seal(this); }
   }
   class SDecl extends Stmt {
-    constructor(declarations) { super(StmtKind.DECL); this.declarations = declarations; Object.seal(this); }
+    constructor(declarations) { super(Types.StmtKind.DECL); this.declarations = declarations; Object.seal(this); }
   }
   class SCompound extends Stmt {
-    constructor(statements, labels) { super(StmtKind.COMPOUND); this.statements = statements; this.labels = labels || []; Object.seal(this); }
+    constructor(statements, labels) { super(Types.StmtKind.COMPOUND); this.statements = statements; this.labels = labels || []; Object.seal(this); }
   }
   class SIf extends Stmt {
-    constructor(condition, thenBranch, elseBranch) { super(StmtKind.IF); this.condition = condition; this.thenBranch = thenBranch; this.elseBranch = elseBranch || null; Object.seal(this); }
+    constructor(condition, thenBranch, elseBranch) { super(Types.StmtKind.IF); this.condition = condition; this.thenBranch = thenBranch; this.elseBranch = elseBranch || null; Object.seal(this); }
   }
   class SWhile extends Stmt {
-    constructor(condition, body) { super(StmtKind.WHILE); this.condition = condition; this.body = body; Object.seal(this); }
+    constructor(condition, body) { super(Types.StmtKind.WHILE); this.condition = condition; this.body = body; Object.seal(this); }
   }
   class SDoWhile extends Stmt {
-    constructor(body, condition) { super(StmtKind.DO_WHILE); this.body = body; this.condition = condition; Object.seal(this); }
+    constructor(body, condition) { super(Types.StmtKind.DO_WHILE); this.body = body; this.condition = condition; Object.seal(this); }
   }
   class SFor extends Stmt {
-    constructor(init, condition, increment, body) { super(StmtKind.FOR); this.init = init; this.condition = condition; this.increment = increment; this.body = body; Object.seal(this); }
+    constructor(init, condition, increment, body) { super(Types.StmtKind.FOR); this.init = init; this.condition = condition; this.increment = increment; this.body = body; Object.seal(this); }
   }
   class SBreak extends Stmt {
-    constructor() { super(StmtKind.BREAK); Object.seal(this); }
+    constructor() { super(Types.StmtKind.BREAK); Object.seal(this); }
   }
   class SContinue extends Stmt {
-    constructor() { super(StmtKind.CONTINUE); Object.seal(this); }
+    constructor() { super(Types.StmtKind.CONTINUE); Object.seal(this); }
   }
   class SReturn extends Stmt {
-    constructor(expr) { super(StmtKind.RETURN); this.expr = expr || null; Object.seal(this); }
+    constructor(expr) { super(Types.StmtKind.RETURN); this.expr = expr || null; Object.seal(this); }
   }
   class SSwitch extends Stmt {
-    constructor(expr, cases, body, loc) { super(StmtKind.SWITCH); this.expr = expr; this.cases = cases; this.body = body; this.loc = loc || null; Object.seal(this); }
+    constructor(expr, cases, body, loc) { super(Types.StmtKind.SWITCH); this.expr = expr; this.cases = cases; this.body = body; this.loc = loc || null; Object.seal(this); }
   }
   class SGoto extends Stmt {
-    constructor(label) { super(StmtKind.GOTO); this.label = label; this.target = null; this.loc = null; Object.seal(this); }
+    constructor(label) { super(Types.StmtKind.GOTO); this.label = label; this.target = null; this.loc = null; Object.seal(this); }
   }
   class SLabel extends Stmt {
-    constructor(name, enclosingBlock) { super(StmtKind.LABEL); this.name = name; this.enclosingBlock = enclosingBlock || null; this.labelKind = LabelKind.FORWARD; this.hasGotos = false; Object.seal(this); }
+    constructor(name, enclosingBlock) { super(Types.StmtKind.LABEL); this.name = name; this.enclosingBlock = enclosingBlock || null; this.labelKind = Types.LabelKind.FORWARD; this.hasGotos = false; Object.seal(this); }
   }
   class SEmpty extends Stmt {
-    constructor() { super(StmtKind.EMPTY); Object.seal(this); }
+    constructor() { super(Types.StmtKind.EMPTY); Object.seal(this); }
   }
   class STryCatch extends Stmt {
-    constructor(tryBody, catches) { super(StmtKind.TRY_CATCH); this.tryBody = tryBody; this.catches = catches; Object.seal(this); }
+    constructor(tryBody, catches) { super(Types.StmtKind.TRY_CATCH); this.tryBody = tryBody; this.catches = catches; Object.seal(this); }
   }
   class SThrow extends Stmt {
-    constructor(tag, args) { super(StmtKind.THROW); this.tag = tag; this.args = args; Object.seal(this); }
+    constructor(tag, args) { super(Types.StmtKind.THROW); this.tag = tag; this.args = args; Object.seal(this); }
   }
-
-  return {
-    Expr, Stmt, Decl,
-    DVar, DFunc, DTag, DEnumConst,
-    EInt, EFloat, EString, EIdent, EBinary, EUnary, ETernary, ECall,
-    ESubscript, EMember, EArrow, ECast, ESizeofExpr, ESizeofType,
-    EAlignofExpr, EAlignofType, EComma, EInitList, EIntrinsic, EWasm,
-    ECompoundLiteral, EImplicitCast,
-    SExpr, SDecl, SCompound, SIf, SWhile, SDoWhile, SFor,
-    SBreak, SContinue, SReturn, SSwitch, SGoto, SLabel, SEmpty,
-    STryCatch, SThrow,
-  };
-})();
 
 // TUnit constructor
 class TUnit {
@@ -2635,7 +2608,19 @@ class TUnit {
 }
 function makeTUnit(filename) { return new TUnit(filename); }
 
-return { Scope, AST, makeTUnit };
+return {
+  Scope,
+  Expr, Stmt, Decl,
+  DVar, DFunc, DTag, DEnumConst,
+  EInt, EFloat, EString, EIdent, EBinary, EUnary, ETernary, ECall,
+  ESubscript, EMember, EArrow, ECast, ESizeofExpr, ESizeofType,
+  EAlignofExpr, EAlignofType, EComma, EInitList, EIntrinsic, EWasm,
+  ECompoundLiteral, EImplicitCast,
+  SExpr, SDecl, SCompound, SIf, SWhile, SDoWhile, SFor,
+  SBreak, SContinue, SReturn, SSwitch, SGoto, SLabel, SEmpty,
+  STryCatch, SThrow,
+  makeTUnit,
+};
 })();
 
 // LEB128 encoding utilities (shared between Parser and Wasm)
@@ -2683,13 +2668,7 @@ function lebI64(out, value) {
 // Parser
 // ====================
 
-const {
-  dumpAst, parseTokens, parseSource,
-  filterUnusedDeclarations, gcSectionsPass,
-  linkTranslationUnits,
-  lowerSetjmpLongjmp,
-  annotateImplicitCasts, annotateExpr, annotateStmt,
-} = (() => {
+const Parser = (() => {
 
 class DumpContext {
   constructor() { this.idMap = new Map(); this.nextId = 1; }
@@ -2702,7 +2681,7 @@ class DumpContext {
   }
   formatDeclId(decl) { return this.formatId(decl); }
   formatDeclIdOfDefinition(decl) {
-    if (decl.declKind === DeclKind.FUNC || decl.declKind === DeclKind.VAR) {
+    if (decl.declKind === Types.DeclKind.FUNC || decl.declKind === Types.DeclKind.VAR) {
       return this.formatId(decl.definition);
     }
     return this.formatId(decl);
@@ -2776,16 +2755,16 @@ function dumpExpr(expr, ctx, indent) {
   let ret = ind(indent);
   ret += "Expr: Type=" + expr.type.toString() + " ";
   switch (expr.kind) {
-    case ExprKind.INT:
+    case Types.ExprKind.INT:
       ret += "INT " + expr.value;
       break;
-    case ExprKind.FLOAT:
+    case Types.ExprKind.FLOAT:
       ret += "FLOAT " + formatFloatForDump(expr.value);
       break;
-    case ExprKind.STRING:
+    case Types.ExprKind.STRING:
       ret += "STRING len=" + expr.value.length;
       break;
-    case ExprKind.IDENT: {
+    case Types.ExprKind.IDENT: {
       ret += "IDENT " + expr.name;
       if (expr.decl) {
         const id = ctx.formatDeclId(expr.decl);
@@ -2795,78 +2774,78 @@ function dumpExpr(expr, ctx, indent) {
       }
       break;
     }
-    case ExprKind.BINARY:
-      ret += "BINARY " + BopStr[expr.op];
+    case Types.ExprKind.BINARY:
+      ret += "BINARY " + Types.BopStr[expr.op];
       ret += dumpExpr(expr.left, ctx, indent + 1);
       ret += dumpExpr(expr.right, ctx, indent + 1);
       break;
-    case ExprKind.UNARY:
-      ret += "UNARY " + UopStr[expr.op];
+    case Types.ExprKind.UNARY:
+      ret += "UNARY " + Types.UopStr[expr.op];
       ret += dumpExpr(expr.operand, ctx, indent + 1);
       break;
-    case ExprKind.TERNARY:
+    case Types.ExprKind.TERNARY:
       ret += "TERNARY";
       ret += dumpExpr(expr.condition, ctx, indent + 1);
       ret += dumpExpr(expr.thenExpr, ctx, indent + 1);
       ret += dumpExpr(expr.elseExpr, ctx, indent + 1);
       break;
-    case ExprKind.CALL:
+    case Types.ExprKind.CALL:
       ret += "CALL " + expr.arguments.length + " args";
       ret += dumpExpr(expr.callee, ctx, indent + 1);
       for (const arg of expr.arguments) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case ExprKind.SUBSCRIPT:
+    case Types.ExprKind.SUBSCRIPT:
       ret += "SUBSCRIPT";
       ret += dumpExpr(expr.array, ctx, indent + 1);
       ret += dumpExpr(expr.index, ctx, indent + 1);
       break;
-    case ExprKind.MEMBER:
+    case Types.ExprKind.MEMBER:
       ret += "MEMBER ." + (expr.memberName ?? "(anon)");
       ret += dumpExpr(expr.base, ctx, indent + 1);
       break;
-    case ExprKind.ARROW:
+    case Types.ExprKind.ARROW:
       ret += "ARROW ->" + (expr.memberName ?? "(anon)");
       ret += dumpExpr(expr.base, ctx, indent + 1);
       break;
-    case ExprKind.CAST:
+    case Types.ExprKind.CAST:
       ret += "CAST " + expr.targetType.toString();
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case ExprKind.IMPLICIT_CAST:
+    case Types.ExprKind.IMPLICIT_CAST:
       ret += "IMPLICIT_CAST " + expr.type.toString();
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case ExprKind.SIZEOF_EXPR:
+    case Types.ExprKind.SIZEOF_EXPR:
       ret += "SIZEOF_EXPR";
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case ExprKind.SIZEOF_TYPE:
+    case Types.ExprKind.SIZEOF_TYPE:
       ret += "SIZEOF_TYPE " + expr.operandType.toString();
       break;
-    case ExprKind.ALIGNOF_EXPR:
+    case Types.ExprKind.ALIGNOF_EXPR:
       ret += "ALIGNOF_EXPR";
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case ExprKind.ALIGNOF_TYPE:
+    case Types.ExprKind.ALIGNOF_TYPE:
       ret += "ALIGNOF_TYPE " + expr.operandType.toString();
       break;
-    case ExprKind.COMMA:
+    case Types.ExprKind.COMMA:
       ret += "COMMA " + expr.expressions.length;
       for (const e of expr.expressions) ret += dumpExpr(e, ctx, indent + 1);
       break;
-    case ExprKind.INIT_LIST:
+    case Types.ExprKind.INIT_LIST:
       ret += "INIT_LIST " + expr.elements.length;
       for (const e of expr.elements) ret += dumpExpr(e, ctx, indent + 1);
       break;
-    case ExprKind.INTRINSIC:
+    case Types.ExprKind.INTRINSIC:
       ret += "INTRINSIC " + expr.intrinsicKind;
       for (const arg of expr.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case ExprKind.WASM:
+    case Types.ExprKind.WASM:
       ret += "WASM " + expr.bytes.length + " bytes " + expr.args.length + " args";
       for (const arg of expr.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case ExprKind.COMPOUND_LITERAL:
+    case Types.ExprKind.COMPOUND_LITERAL:
       ret += "COMPOUND_LITERAL";
       ret += dumpExpr(expr.initList, ctx, indent + 1);
       break;
@@ -2878,40 +2857,40 @@ function dumpStmt(stmt, ctx, indent) {
   let ret = ind(indent);
   ret += "Stmt " + stmt.kind + ":";
   switch (stmt.kind) {
-    case StmtKind.EXPR:
+    case Types.StmtKind.EXPR:
       ret += dumpExpr(stmt.expr, ctx, indent + 1);
       break;
-    case StmtKind.RETURN:
+    case Types.StmtKind.RETURN:
       if (stmt.expr) ret += dumpExpr(stmt.expr, ctx, indent + 1);
       else ret += " (no expression)";
       break;
-    case StmtKind.DECL:
+    case Types.StmtKind.DECL:
       for (const d of stmt.declarations) ret += dumpDecl(d, ctx, indent + 1);
       break;
-    case StmtKind.COMPOUND:
+    case Types.StmtKind.COMPOUND:
       ret += " " + stmt.statements.length + " statements";
       for (const s of stmt.statements) ret += dumpStmt(s, ctx, indent + 1);
       break;
-    case StmtKind.GOTO:
+    case Types.StmtKind.GOTO:
       ret += " " + stmt.label;
       break;
-    case StmtKind.LABEL:
+    case Types.StmtKind.LABEL:
       ret += " " + stmt.name;
       break;
-    case StmtKind.IF:
+    case Types.StmtKind.IF:
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       ret += dumpStmt(stmt.thenBranch, ctx, indent + 1);
       if (stmt.elseBranch) ret += dumpStmt(stmt.elseBranch, ctx, indent + 1);
       break;
-    case StmtKind.WHILE:
+    case Types.StmtKind.WHILE:
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case StmtKind.DO_WHILE:
+    case Types.StmtKind.DO_WHILE:
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       break;
-    case StmtKind.FOR:
+    case Types.StmtKind.FOR:
       if (stmt.init) ret += dumpStmt(stmt.init, ctx, indent + 1);
       else ret += ind(indent + 1) + "(no init)";
       if (stmt.condition) ret += dumpExpr(stmt.condition, ctx, indent + 1);
@@ -2920,7 +2899,7 @@ function dumpStmt(stmt, ctx, indent) {
       else ret += ind(indent + 1) + "(no increment)";
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case StmtKind.SWITCH:
+    case Types.StmtKind.SWITCH:
       ret += dumpExpr(stmt.expr, ctx, indent + 1);
       ret += ind(indent + 1) + stmt.cases.length + " cases";
       for (const c of stmt.cases) {
@@ -2930,7 +2909,7 @@ function dumpStmt(stmt, ctx, indent) {
       }
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case StmtKind.TRY_CATCH:
+    case Types.StmtKind.TRY_CATCH:
       ret += dumpStmt(stmt.tryBody, ctx, indent + 1);
       for (const cc of stmt.catches) {
         ret += ind(indent + 1);
@@ -2939,13 +2918,13 @@ function dumpStmt(stmt, ctx, indent) {
         ret += dumpStmt(cc.body, ctx, indent + 2);
       }
       break;
-    case StmtKind.THROW:
+    case Types.StmtKind.THROW:
       ret += " " + stmt.tag.name;
       for (const arg of stmt.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case StmtKind.EMPTY:
-    case StmtKind.BREAK:
-    case StmtKind.CONTINUE:
+    case Types.StmtKind.EMPTY:
+    case Types.StmtKind.BREAK:
+    case Types.StmtKind.CONTINUE:
       break;
   }
   return ret;
@@ -2959,13 +2938,13 @@ function dumpDecl(decl, ctx, indent) {
     ret += " (def=" + defnStr + ")";
   }
   ret += ":";
-  if (decl.declKind === DeclKind.VAR) {
+  if (decl.declKind === Types.DeclKind.VAR) {
     ret += " " + decl.name + " " + decl.type.toString();
-    if (decl.storageClass !== StorageClass.NONE) ret += " (" + decl.storageClass + ")";
+    if (decl.storageClass !== Types.StorageClass.NONE) ret += " (" + decl.storageClass + ")";
     if (decl.initExpr) ret += dumpExpr(decl.initExpr, ctx, indent + 1);
-  } else if (decl.declKind === DeclKind.FUNC) {
+  } else if (decl.declKind === Types.DeclKind.FUNC) {
     ret += " " + decl.name + " " + decl.type.toString();
-    if (decl.storageClass !== StorageClass.NONE) ret += " (" + decl.storageClass + ")";
+    if (decl.storageClass !== Types.StorageClass.NONE) ret += " (" + decl.storageClass + ")";
     ret += ind(indent + 1) + decl.parameters.length + " parameters";
     for (const p of decl.parameters) ret += dumpDecl(p, ctx, indent + 2);
     if (decl.body) ret += dumpStmt(decl.body, ctx, indent + 1);
@@ -3007,10 +2986,10 @@ function filterUnusedDeclarations(unit) {
 
   // Seed non-static definitions
   for (const f of unit.definedFunctions) {
-    if (f.storageClass !== StorageClass.STATIC) activate(f);
+    if (f.storageClass !== Types.StorageClass.STATIC) activate(f);
   }
   for (const v of unit.definedVariables) {
-    if (v.storageClass !== StorageClass.STATIC) activate(v);
+    if (v.storageClass !== Types.StorageClass.STATIC) activate(v);
   }
   // Seed global-scope usages
   for (const d of unit.globalUsedSymbols) activate(d);
@@ -3020,10 +2999,10 @@ function filterUnusedDeclarations(unit) {
   // Fixed-point walk
   while (worklist.length > 0) {
     const d = worklist.pop();
-    if (d.declKind === DeclKind.FUNC) {
+    if (d.declKind === Types.DeclKind.FUNC) {
       if (d.definition && d.definition !== d) activate(d.definition);
       for (const used of d.usedSymbols) activate(used);
-    } else if (d.declKind === DeclKind.VAR) {
+    } else if (d.declKind === Types.DeclKind.VAR) {
       if (d.definition && d.definition !== d) activate(d.definition);
     }
   }
@@ -3059,10 +3038,10 @@ function gcSectionsPass(units) {
 
   while (worklist.length > 0) {
     const d = worklist.pop();
-    if (d.declKind === DeclKind.FUNC) {
+    if (d.declKind === Types.DeclKind.FUNC) {
       if (d.definition && d.definition !== d) activate(d.definition);
       for (const used of d.usedSymbols) activate(used);
-    } else if (d.declKind === DeclKind.VAR) {
+    } else if (d.declKind === Types.DeclKind.VAR) {
       if (d.definition && d.definition !== d) activate(d.definition);
     }
   }
@@ -3095,20 +3074,20 @@ function linkTranslationUnits(units, compilerOptions) {
   function addError(message, locations) { errors.push({ message, locations: locations || [] }); }
 
   function isStatic(decl) {
-    return decl.storageClass === StorageClass.STATIC;
+    return decl.storageClass === Types.StorageClass.STATIC;
   }
 
   function isDefinition(decl) {
-    if (decl.declKind === DeclKind.VAR) {
-      return decl.storageClass !== StorageClass.EXTERN || decl.initExpr != null;
-    } else if (decl.declKind === DeclKind.FUNC) {
+    if (decl.declKind === Types.DeclKind.VAR) {
+      return decl.storageClass !== Types.StorageClass.EXTERN || decl.initExpr != null;
+    } else if (decl.declKind === Types.DeclKind.FUNC) {
       return decl.body != null;
     }
     return false;
   }
 
   function isImportFunction(decl) {
-    return decl.declKind === DeclKind.FUNC && decl.storageClass === StorageClass.IMPORT;
+    return decl.declKind === Types.DeclKind.FUNC && decl.storageClass === Types.StorageClass.IMPORT;
   }
 
   function getDeclType(decl) { return decl.type; }
@@ -3128,13 +3107,13 @@ function linkTranslationUnits(units, compilerOptions) {
 
   function setDefinition(decl, definition) {
     if (decl.declKind !== definition.declKind) return;
-    if (decl.declKind === DeclKind.VAR) {
+    if (decl.declKind === Types.DeclKind.VAR) {
       decl.definition = definition;
       // Propagate allocClass
-      if (decl.allocClass === AllocClass.MEMORY) {
-        definition.allocClass = AllocClass.MEMORY;
+      if (decl.allocClass === Types.AllocClass.MEMORY) {
+        definition.allocClass = Types.AllocClass.MEMORY;
       }
-    } else if (decl.declKind === DeclKind.FUNC) {
+    } else if (decl.declKind === Types.DeclKind.FUNC) {
       decl.definition = definition;
     }
   }
@@ -3155,8 +3134,8 @@ function linkTranslationUnits(units, compilerOptions) {
 
     if (isDefinition(existing)) {
       // Allow duplicate definitions for inline functions
-      if (decl.declKind === DeclKind.FUNC && decl.isInline &&
-          existing.declKind === DeclKind.FUNC && existing.isInline) {
+      if (decl.declKind === Types.DeclKind.FUNC && decl.isInline &&
+          existing.declKind === Types.DeclKind.FUNC && existing.isInline) {
         return;
       }
       addError(`Duplicate definition of symbol '${name}'`);
@@ -3194,8 +3173,8 @@ function linkTranslationUnits(units, compilerOptions) {
         return;
       }
       if (!isDefinition(it) && !isImportFunction(it)) {
-        if (compilerOptions.allowUndefined && it.declKind === DeclKind.FUNC) {
-          it.storageClass = StorageClass.IMPORT;
+        if (compilerOptions.allowUndefined && it.declKind === Types.DeclKind.FUNC) {
+          it.storageClass = Types.StorageClass.IMPORT;
         } else {
           addError(`Undefined symbol '${name}' during linking`, [decl.loc || it.loc]);
           return;
@@ -3228,11 +3207,11 @@ function linkTranslationUnits(units, compilerOptions) {
 function constEvalInt(expr) {
   if (!expr) return null;
   switch (expr.kind) {
-    case ExprKind.INT: return expr.value;  // already BigInt
-    case ExprKind.IDENT:
-      if (expr.decl && expr.decl.declKind === DeclKind.ENUM_CONST) return expr.decl.value;
+    case Types.ExprKind.INT: return expr.value;  // already BigInt
+    case Types.ExprKind.IDENT:
+      if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) return expr.decl.value;
       return null;
-    case ExprKind.BINARY: {
+    case Types.ExprKind.BINARY: {
       const l = constEvalInt(expr.left), r = constEvalInt(expr.right);
       if (l === null || r === null) return null;
       switch (expr.op) {
@@ -3248,11 +3227,11 @@ function constEvalInt(expr) {
         default: return null;
       }
     }
-    case ExprKind.UNARY: {
+    case Types.ExprKind.UNARY: {
       if (expr.op === "OP_ADDR") {
         // Support offsetof pattern: &((type*)0)->member
         const inner = expr.operand;
-        if ((inner.kind === ExprKind.ARROW || inner.kind === ExprKind.MEMBER) && inner.memberDecl) {
+        if ((inner.kind === Types.ExprKind.ARROW || inner.kind === Types.ExprKind.MEMBER) && inner.memberDecl) {
           const base = constEvalInt(inner.base);
           if (base !== null) return base + BigInt(inner.memberDecl.byteOffset);
         }
@@ -3266,22 +3245,22 @@ function constEvalInt(expr) {
         default: return null;
       }
     }
-    case ExprKind.IMPLICIT_CAST: {
+    case Types.ExprKind.IMPLICIT_CAST: {
       return constEvalInt(expr.expr);
     }
-    case ExprKind.TERNARY: {
+    case Types.ExprKind.TERNARY: {
       const c = constEvalInt(expr.condition);
       if (c === null) return null;
       return constEvalInt(c !== 0n ? expr.thenExpr : expr.elseExpr);
     }
-    case ExprKind.CAST: {
+    case Types.ExprKind.CAST: {
       const v = constEvalInt(expr.expr);
       return v;
     }
-    case ExprKind.SIZEOF_EXPR: return BigInt(expr.expr.type.size);
-    case ExprKind.SIZEOF_TYPE: return BigInt(expr.operandType.size);
-    case ExprKind.ALIGNOF_EXPR: return BigInt(expr.expr.type.align);
-    case ExprKind.ALIGNOF_TYPE: return BigInt(expr.operandType.align);
+    case Types.ExprKind.SIZEOF_EXPR: return BigInt(expr.expr.type.size);
+    case Types.ExprKind.SIZEOF_TYPE: return BigInt(expr.operandType.size);
+    case Types.ExprKind.ALIGNOF_EXPR: return BigInt(expr.expr.type.align);
+    case Types.ExprKind.ALIGNOF_TYPE: return BigInt(expr.operandType.align);
     default: return null;
   }
 }
@@ -3294,7 +3273,7 @@ function constEvalInt(expr) {
 function getVarMembers(tag) {
   const result = [];
   for (const m of tag.members) {
-    if (m.declKind !== DeclKind.VAR) continue;
+    if (m.declKind !== Types.DeclKind.VAR) continue;
     if (m.bitWidth >= 0 && !m.name) continue; // skip unnamed bitfields
     result.push(m);
   }
@@ -3305,7 +3284,7 @@ function getVarMembers(tag) {
 // anonymous struct/union members. Returns array of DVar* path, or null.
 function findMemberChain(tag, name) {
   for (const m of tag.members) {
-    if (m.declKind !== DeclKind.VAR) continue;
+    if (m.declKind !== Types.DeclKind.VAR) continue;
     if (m.name === name) return [m];
     // Recurse into anonymous struct/union members
     if (!m.name && m.type.isTag() && m.type.tagDecl) {
@@ -3333,7 +3312,7 @@ function normalizeInitList(initList, containerType) {
       return sz === 0 ? 0x7FFFFFFF : sz;
     }
     if (t.isTag() && t.tagDecl) {
-      if (t.tagDecl.tagKind === TagKind.UNION) return 1;
+      if (t.tagDecl.tagKind === Types.TagKind.UNION) return 1;
       // STRUCT: count VAR members
       return getVarMembers(t.tagDecl).length;
     }
@@ -3344,23 +3323,23 @@ function normalizeInitList(initList, containerType) {
   function childType(t, index, output) {
     if (t.isArray()) return t.baseType;
     if (t.isTag() && t.tagDecl) {
-      if (t.tagDecl.tagKind === TagKind.UNION) {
+      if (t.tagDecl.tagKind === Types.TagKind.UNION) {
         const members = getVarMembers(t.tagDecl);
         const umi = output.unionMemberIndex;
         if (umi >= 0 && umi < members.length) return members[umi].type;
-        return members.length > 0 ? members[0].type : TINT;
+        return members.length > 0 ? members[0].type : Types.TINT;
       }
       // STRUCT
       const members = getVarMembers(t.tagDecl);
       if (index >= 0 && index < members.length) return members[index].type;
     }
-    return TINT;
+    return Types.TINT;
   }
 
   // Create a zero expression for a given type
   function makeZero(t) {
     if (t.isFloatingPoint()) return new AST.EFloat(t, 0.0);
-    return new AST.EInt(TINT, 0n);
+    return new AST.EInt(Types.TINT, 0n);
   }
 
   // Ensure output has a slot at index
@@ -3371,7 +3350,7 @@ function normalizeInitList(initList, containerType) {
   // Ensure output[index] is a sub-EInitList for an aggregate child
   function ensureSubList(list, index, subType) {
     ensureSlot(list, index);
-    if (!list.elements[index] || list.elements[index].kind !== ExprKind.INIT_LIST) {
+    if (!list.elements[index] || list.elements[index].kind !== Types.ExprKind.INIT_LIST) {
       const cc = childCount(subType);
       const elems = [];
       if (cc !== 0x7FFFFFFF && cc > 0) {
@@ -3435,7 +3414,7 @@ function normalizeInitList(initList, containerType) {
           if (!top.type.isTag() || !top.type.tagDecl) break;
           const tag = top.type.tagDecl;
 
-          if (tag.tagKind === TagKind.UNION) {
+          if (tag.tagKind === Types.TagKind.UNION) {
             const members = getVarMembers(tag);
             for (let j = 0; j < members.length; j++) {
               if (members[j].name === step.fieldName) {
@@ -3454,7 +3433,7 @@ function normalizeInitList(initList, containerType) {
                 const members = getVarMembers(currentTag);
                 for (let j = 0; j < members.length; j++) {
                   if (members[j] === member) {
-                    if (currentTag.tagKind === TagKind.UNION) {
+                    if (currentTag.tagKind === Types.TagKind.UNION) {
                       stack[stack.length - 1].output.unionMemberIndex = j;
                       stack[stack.length - 1].index = 0;
                     } else {
@@ -3495,7 +3474,7 @@ function normalizeInitList(initList, containerType) {
       ensureSlot(top.output, top.index);
       const slotType = childType(top.type, top.index, top.output);
 
-      if (src[srcIdx].kind === ExprKind.INIT_LIST) {
+      if (src[srcIdx].kind === Types.ExprKind.INIT_LIST) {
         // Braced sub-init-list: place and recurse
         top.output.elements[top.index] = src[srcIdx];
         normalizeInitList(top.output.elements[top.index], slotType);
@@ -3503,7 +3482,7 @@ function normalizeInitList(initList, containerType) {
         if (top.index + 1 > maxExtent) maxExtent = top.index + 1;
         advanceCursor();
         break;
-      } else if (src[srcIdx].kind === ExprKind.STRING && slotType.isArray()) {
+      } else if (src[srcIdx].kind === Types.ExprKind.STRING && slotType.isArray()) {
         // String literal for char array
         top.output.elements[top.index] = src[srcIdx];
         srcIdx++;
@@ -3537,7 +3516,7 @@ function normalizeInitList(initList, containerType) {
   if (containerType.isArray() && (containerType.arraySize || 0) === 0) {
     const finalSize = Math.max(maxExtent, initList.elements.length);
     const elemType = containerType.baseType;
-    initList.type = arrayOf(elemType, finalSize);
+    initList.type = Types.arrayOf(elemType, finalSize);
     while (initList.elements.length < finalSize) initList.elements.push(null);
   }
 
@@ -3556,13 +3535,13 @@ function normalizeInitList(initList, containerType) {
           } else {
             list.elements[i] = makeZero(elemType);
           }
-        } else if (list.elements[i].kind === ExprKind.INIT_LIST) {
+        } else if (list.elements[i].kind === Types.ExprKind.INIT_LIST) {
           fillZeros(list.elements[i], elemType);
         }
       }
     } else if (type.isTag() && type.tagDecl) {
       const tag = type.tagDecl;
-      if (tag.tagKind === TagKind.STRUCT) {
+      if (tag.tagKind === Types.TagKind.STRUCT) {
         const members = getVarMembers(tag);
         const mc = members.length;
         while (list.elements.length < mc) list.elements.push(null);
@@ -3576,11 +3555,11 @@ function normalizeInitList(initList, containerType) {
             } else {
               list.elements[i] = makeZero(mt);
             }
-          } else if (list.elements[i].kind === ExprKind.INIT_LIST) {
+          } else if (list.elements[i].kind === Types.ExprKind.INIT_LIST) {
             fillZeros(list.elements[i], mt);
           }
         }
-      } else if (tag.tagKind === TagKind.UNION) {
+      } else if (tag.tagKind === Types.TagKind.UNION) {
         // Union: ensure single element exists
         if (list.elements.length === 0 || list.elements[0] === null) {
           if (list.elements.length === 0) list.elements.push(null);
@@ -3596,7 +3575,7 @@ function normalizeInitList(initList, containerType) {
               list.elements[0] = makeZero(mt);
             }
           }
-        } else if (list.elements[0].kind === ExprKind.INIT_LIST) {
+        } else if (list.elements[0].kind === Types.ExprKind.INIT_LIST) {
           const members = getVarMembers(tag);
           const umi = list.unionMemberIndex;
           if (umi >= 0 && umi < members.length) {
@@ -3619,9 +3598,9 @@ class Parser {
     this.errors = errors;
     this.warnings = warnings;
     this.pos = 0;
-    this.typeScope = new Scope();
-    this.tagScope = new Scope();
-    this.varScope = new Scope();
+    this.typeScope = new AST.Scope();
+    this.tagScope = new AST.Scope();
+    this.varScope = new AST.Scope();
     this.anonCounter = 0;
     this.tagTypeCache = new Map();
     this.currentParsingFunc = null;
@@ -3636,8 +3615,8 @@ class Parser {
     this.warningFlags = { pointerDecay: false, circularDependency: false };
   }
 
-  // --- Token helpers ---
-  atEnd() { return this.pos >= this.tokens.length || this.tokens[this.pos].kind === TokenKind.EOS; }
+  // --- Lexer.Token helpers ---
+  atEnd() { return this.pos >= this.tokens.length || this.tokens[this.pos].kind === Lexer.TokenKind.EOS; }
   peek(offset) {
     const i = this.pos + (offset || 0);
     if (i < 0 || i >= this.tokens.length) return this.tokens[this.tokens.length - 1];
@@ -3649,7 +3628,7 @@ class Parser {
   }
   atKind(kind) { return !this.atEnd() && this.peek().kind === kind; }
   atText(text) { return !this.atEnd() && this.peek().text === text; }
-  atKW(kw) { return !this.atEnd() && this.peek().kind === TokenKind.KEYWORD && this.peek().keyword === kw; }
+  atKW(kw) { return !this.atEnd() && this.peek().kind === Lexer.TokenKind.KEYWORD && this.peek().keyword === kw; }
   matchText(text) { if (this.atText(text)) { this.advance(); return true; } return false; }
   matchKW(kw) { if (this.atKW(kw)) { this.advance(); return true; } return false; }
   matchKind(kind) { if (this.atKind(kind)) { this.advance(); return true; } return false; }
@@ -3666,36 +3645,36 @@ class Parser {
     this.error(this.peek(), msg || `Expected ${kind}`);
   }
   error(tok, msg) {
-    const err = new LexError(msg, tok.filename, tok.line);
+    const err = new Lexer.LexError(msg, tok.filename, tok.line);
     throw err;
   }
   recoverableError(tok, msg) {
-    this.errors.push(new LexError(msg, tok.filename, tok.line));
+    this.errors.push(new Lexer.LexError(msg, tok.filename, tok.line));
   }
   warning(tok, msg) {
-    this.warnings.push(new LexError(msg, tok.filename, tok.line));
+    this.warnings.push(new Lexer.LexError(msg, tok.filename, tok.line));
   }
 
   // --- isTypeName ---
   isTypeName() {
     const t = this.peek();
-    if (t.kind === TokenKind.KEYWORD) {
+    if (t.kind === Lexer.TokenKind.KEYWORD) {
       switch (t.keyword) {
-        case Keyword.VOID: case Keyword.BOOL: case Keyword.CHAR:
-        case Keyword.SHORT: case Keyword.INT: case Keyword.LONG:
-        case Keyword.FLOAT: case Keyword.DOUBLE:
-        case Keyword.SIGNED: case Keyword.UNSIGNED:
-        case Keyword.STRUCT: case Keyword.UNION: case Keyword.ENUM:
-        case Keyword.CONST: case Keyword.VOLATILE: case Keyword.RESTRICT:
-        case Keyword.TYPEDEF: case Keyword.STATIC: case Keyword.EXTERN:
-        case Keyword.REGISTER: case Keyword.AUTO:
-        case Keyword.INLINE: case Keyword.NORETURN:
-        case Keyword.ALIGNAS: case Keyword.THREAD_LOCAL:
-        case Keyword.X_IMPORT:
+        case Lexer.Keyword.VOID: case Lexer.Keyword.BOOL: case Lexer.Keyword.CHAR:
+        case Lexer.Keyword.SHORT: case Lexer.Keyword.INT: case Lexer.Keyword.LONG:
+        case Lexer.Keyword.FLOAT: case Lexer.Keyword.DOUBLE:
+        case Lexer.Keyword.SIGNED: case Lexer.Keyword.UNSIGNED:
+        case Lexer.Keyword.STRUCT: case Lexer.Keyword.UNION: case Lexer.Keyword.ENUM:
+        case Lexer.Keyword.CONST: case Lexer.Keyword.VOLATILE: case Lexer.Keyword.RESTRICT:
+        case Lexer.Keyword.TYPEDEF: case Lexer.Keyword.STATIC: case Lexer.Keyword.EXTERN:
+        case Lexer.Keyword.REGISTER: case Lexer.Keyword.AUTO:
+        case Lexer.Keyword.INLINE: case Lexer.Keyword.NORETURN:
+        case Lexer.Keyword.ALIGNAS: case Lexer.Keyword.THREAD_LOCAL:
+        case Lexer.Keyword.X_IMPORT:
           return true;
       }
     }
-    if (t.kind === TokenKind.IDENT && this.typeScope.has(t.text)) return true;
+    if (t.kind === Lexer.TokenKind.IDENT && this.typeScope.has(t.text)) return true;
     return false;
   }
 
@@ -3782,7 +3761,7 @@ class Parser {
 
   parseGCCAttributes() {
     const attrs = { packed: false, aligned: 0, flags: new Set() };
-    while (this.atKW(Keyword.X_ATTRIBUTE)) {
+    while (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
       this.advance();
       this.expect("(");
       this.expect("(");
@@ -3799,7 +3778,7 @@ class Parser {
   // --- parseDeclSpecifiers ---
   parseDeclSpecifiers() {
     let type = null;
-    let storageClass = StorageClass.NONE;
+    let storageClass = Types.StorageClass.NONE;
     let isInline = false;
     let requestedAlignment = 0;
     let isConst = false, isVolatile = false;
@@ -3812,30 +3791,30 @@ class Parser {
       const t = this.peek();
 
       // Storage class specifiers
-      if (this.matchKW(Keyword.TYPEDEF)) { storageClass = StorageClass.TYPEDEF; continue; }
-      if (this.matchKW(Keyword.STATIC)) { storageClass = StorageClass.STATIC; continue; }
-      if (this.matchKW(Keyword.EXTERN)) { storageClass = StorageClass.EXTERN; continue; }
-      if (this.matchKW(Keyword.REGISTER)) { storageClass = StorageClass.REGISTER; continue; }
-      if (this.matchKW(Keyword.AUTO)) { storageClass = StorageClass.AUTO; continue; }
-      if (this.matchKW(Keyword.X_IMPORT)) { storageClass = StorageClass.IMPORT; continue; }
+      if (this.matchKW(Lexer.Keyword.TYPEDEF)) { storageClass = Types.StorageClass.TYPEDEF; continue; }
+      if (this.matchKW(Lexer.Keyword.STATIC)) { storageClass = Types.StorageClass.STATIC; continue; }
+      if (this.matchKW(Lexer.Keyword.EXTERN)) { storageClass = Types.StorageClass.EXTERN; continue; }
+      if (this.matchKW(Lexer.Keyword.REGISTER)) { storageClass = Types.StorageClass.REGISTER; continue; }
+      if (this.matchKW(Lexer.Keyword.AUTO)) { storageClass = Types.StorageClass.AUTO; continue; }
+      if (this.matchKW(Lexer.Keyword.X_IMPORT)) { storageClass = Types.StorageClass.IMPORT; continue; }
 
       // Qualifiers
-      if (this.matchKW(Keyword.CONST)) { isConst = true; continue; }
-      if (this.matchKW(Keyword.VOLATILE)) { isVolatile = true; continue; }
-      if (this.matchKW(Keyword.RESTRICT)) { continue; } // ignore restrict
+      if (this.matchKW(Lexer.Keyword.CONST)) { isConst = true; continue; }
+      if (this.matchKW(Lexer.Keyword.VOLATILE)) { isVolatile = true; continue; }
+      if (this.matchKW(Lexer.Keyword.RESTRICT)) { continue; } // ignore restrict
 
       // Function specifiers
-      if (this.matchKW(Keyword.INLINE)) { isInline = true; continue; }
-      if (this.matchKW(Keyword.NORETURN)) { continue; }
-      if (this.matchKW(Keyword.THREAD_LOCAL)) { continue; }
-      if (this.atKW(Keyword.X_ATTRIBUTE)) {
+      if (this.matchKW(Lexer.Keyword.INLINE)) { isInline = true; continue; }
+      if (this.matchKW(Lexer.Keyword.NORETURN)) { continue; }
+      if (this.matchKW(Lexer.Keyword.THREAD_LOCAL)) { continue; }
+      if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
         const attrs = this.parseGCCAttributes();
         if (attrs.aligned > requestedAlignment) requestedAlignment = attrs.aligned;
         continue;
       }
 
       // _Alignas
-      if (this.matchKW(Keyword.ALIGNAS)) {
+      if (this.matchKW(Lexer.Keyword.ALIGNAS)) {
         const alignTok = this.peek(-1);
         this.expect("(");
         let alignVal;
@@ -3860,12 +3839,12 @@ class Parser {
       }
 
       // _Static_assert
-      if (this.matchKW(Keyword.STATIC_ASSERT)) {
+      if (this.matchKW(Lexer.Keyword.STATIC_ASSERT)) {
         this.expect("(");
         const condExpr = this.parseAssignmentExpression();
         let msg = "";
         if (this.matchText(",")) {
-          const msgTok = this.expectKind(TokenKind.STRING);
+          const msgTok = this.expectKind(Lexer.TokenKind.STRING);
           msg = msgTok.text.replace(/^"(.*)"$/, '$1');
         }
         this.expect(")");
@@ -3876,23 +3855,23 @@ class Parser {
       }
 
       // Type specifiers
-      if (this.matchKW(Keyword.VOID)) { hasVoid = true; continue; }
-      if (this.matchKW(Keyword.BOOL)) { hasBool = true; continue; }
-      if (this.matchKW(Keyword.CHAR)) { hasChar = true; continue; }
-      if (this.matchKW(Keyword.SHORT)) { shortCount++; continue; }
-      if (this.matchKW(Keyword.INT)) { hasInt = true; continue; }
-      if (this.matchKW(Keyword.LONG)) { longCount++; continue; }
-      if (this.matchKW(Keyword.FLOAT)) { hasFloat = true; continue; }
-      if (this.matchKW(Keyword.DOUBLE)) { hasDouble = true; continue; }
-      if (this.matchKW(Keyword.SIGNED)) { isSigned = true; continue; }
-      if (this.matchKW(Keyword.UNSIGNED)) { isUnsigned = true; continue; }
+      if (this.matchKW(Lexer.Keyword.VOID)) { hasVoid = true; continue; }
+      if (this.matchKW(Lexer.Keyword.BOOL)) { hasBool = true; continue; }
+      if (this.matchKW(Lexer.Keyword.CHAR)) { hasChar = true; continue; }
+      if (this.matchKW(Lexer.Keyword.SHORT)) { shortCount++; continue; }
+      if (this.matchKW(Lexer.Keyword.INT)) { hasInt = true; continue; }
+      if (this.matchKW(Lexer.Keyword.LONG)) { longCount++; continue; }
+      if (this.matchKW(Lexer.Keyword.FLOAT)) { hasFloat = true; continue; }
+      if (this.matchKW(Lexer.Keyword.DOUBLE)) { hasDouble = true; continue; }
+      if (this.matchKW(Lexer.Keyword.SIGNED)) { isSigned = true; continue; }
+      if (this.matchKW(Lexer.Keyword.UNSIGNED)) { isUnsigned = true; continue; }
 
       // struct/union/enum
-      if (this.atKW(Keyword.STRUCT) || this.atKW(Keyword.UNION)) {
+      if (this.atKW(Lexer.Keyword.STRUCT) || this.atKW(Lexer.Keyword.UNION)) {
         type = this.parseTagSpecifier();
         continue;
       }
-      if (this.atKW(Keyword.ENUM)) {
+      if (this.atKW(Lexer.Keyword.ENUM)) {
         type = this.parseEnumSpecifier();
         continue;
       }
@@ -3900,14 +3879,14 @@ class Parser {
       // typedef name — only if no base type specifiers already seen
       const hasBase = hasVoid || hasBool || hasChar || hasInt || hasFloat || hasDouble ||
           shortCount > 0 || longCount > 0 || isSigned || isUnsigned;
-      if (t.kind === TokenKind.IDENT && this.typeScope.has(t.text) && type === null && !hasBase) {
+      if (t.kind === Lexer.TokenKind.IDENT && this.typeScope.has(t.text) && type === null && !hasBase) {
         this.advance();
         type = this.typeScope.get(t.text);
         continue;
       }
 
       // __attribute__ can appear after base type too
-      if (this.atKW(Keyword.X_ATTRIBUTE)) {
+      if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
         const attrs = this.parseGCCAttributes();
         if (attrs.aligned > requestedAlignment) requestedAlignment = attrs.aligned;
         continue;
@@ -3920,26 +3899,26 @@ class Parser {
     if (type === null) {
       const hasBase = hasVoid || hasBool || hasChar || hasInt || hasFloat || hasDouble ||
           shortCount > 0 || longCount > 0 || isSigned || isUnsigned;
-      if (hasVoid) type = TVOID;
-      else if (hasBool) type = TBOOL;
-      else if (hasChar) type = isSigned ? TSCHAR : (isUnsigned ? TUCHAR : TCHAR);
-      else if (shortCount > 0) type = isUnsigned ? TUSHORT : TSHORT;
-      else if (hasFloat) type = TFLOAT;
-      else if (hasDouble) type = longCount > 0 ? TLDOUBLE : TDOUBLE;
-      else if (longCount >= 2) type = isUnsigned ? TULLONG : TLLONG;
-      else if (longCount === 1) type = isUnsigned ? TULONG : TLONG;
-      else if (isUnsigned) type = TUINT;
+      if (hasVoid) type = Types.TVOID;
+      else if (hasBool) type = Types.TBOOL;
+      else if (hasChar) type = isSigned ? Types.TSCHAR : (isUnsigned ? Types.TUCHAR : Types.TCHAR);
+      else if (shortCount > 0) type = isUnsigned ? Types.TUSHORT : Types.TSHORT;
+      else if (hasFloat) type = Types.TFLOAT;
+      else if (hasDouble) type = longCount > 0 ? Types.TLDOUBLE : Types.TDOUBLE;
+      else if (longCount >= 2) type = isUnsigned ? Types.TULLONG : Types.TLLONG;
+      else if (longCount === 1) type = isUnsigned ? Types.TULONG : Types.TLONG;
+      else if (isUnsigned) type = Types.TUINT;
       else {
         if (!hasBase && !this._allowImplicitInt) {
           this.error(this.peek(), "type specifier missing (implicit int is not allowed in C99)");
         }
-        type = TINT;
+        type = Types.TINT;
       }
     }
 
     // In C, enum types are compatible with int. Erase enum types to int
     // early so codegen never needs to handle them as a special case.
-    if (type.isEnum()) type = TINT;
+    if (type.isEnum()) type = Types.TINT;
 
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
@@ -3950,22 +3929,22 @@ class Parser {
   // --- Tag specifier (struct/union) ---
   parseTagSpecifier() {
     let tagKind;
-    if (this.matchKW(Keyword.STRUCT)) tagKind = TagKind.STRUCT;
-    else { this.advance(); tagKind = TagKind.UNION; }
+    if (this.matchKW(Lexer.Keyword.STRUCT)) tagKind = Types.TagKind.STRUCT;
+    else { this.advance(); tagKind = Types.TagKind.UNION; }
 
     // Parse optional __attribute__ after struct/union keyword
     const tagAttrs = this.parseGCCAttributes();
 
     let name = null;
 
-    if (this.atKind(TokenKind.IDENT)) {
+    if (this.atKind(Lexer.TokenKind.IDENT)) {
       name = this.advance().text;
     }
 
     if (this.matchText("{")) {
       // Tag body definition
       if (!name) name = "__anon_" + this.anonCounter++;
-      const tagType = getOrCreateTagType(this.tagTypeCache, tagKind, name);
+      const tagType = Types.getOrCreateTagType(this.tagTypeCache, tagKind, name);
       const members = [];
 
       // Create tag decl
@@ -3976,12 +3955,12 @@ class Parser {
       while (!this.atEnd() && !this.atText("}")) {
         if (this.matchText(";")) continue;
         // C11 6.7.2.1p1: _Static_assert is allowed as a struct-declaration
-        if (this.matchKW(Keyword.STATIC_ASSERT)) {
+        if (this.matchKW(Lexer.Keyword.STATIC_ASSERT)) {
           this.expect("(");
           const condExpr = this.parseAssignmentExpression();
           let msg = "";
           if (this.matchText(",")) {
-            const msgTok = this.expectKind(TokenKind.STRING);
+            const msgTok = this.expectKind(Lexer.TokenKind.STRING);
             msg = msgTok.text.replace(/^"(.*)"$/, '$1');
           }
           this.expect(")");
@@ -3997,7 +3976,7 @@ class Parser {
           // Anonymous struct/union member — create unnamed DVar
           if (memType.isTag()) {
             const mVar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
-              null, memType, StorageClass.NONE, null);
+              null, memType, Types.StorageClass.NONE, null);
             members.push(mVar);
           }
           this.advance();
@@ -4016,7 +3995,7 @@ class Parser {
             const widthExpr = this.parseAssignmentExpression();
             const bitW = Number(constEvalInt(widthExpr) ?? 0n);
             const mVar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
-              null, memType, StorageClass.NONE, null);
+              null, memType, Types.StorageClass.NONE, null);
             mVar.bitWidth = bitW;
             members.push(mVar);
             break; // anonymous bit-fields end the declarator list
@@ -4041,7 +4020,7 @@ class Parser {
           }
 
           const mVar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
-            mName, mType, StorageClass.NONE, null);
+            mName, mType, Types.StorageClass.NONE, null);
           mVar.bitWidth = bitWidth;
           if (memSpecs.requestedAlignment > 0) {
             if (bitWidth >= 0) {
@@ -4063,12 +4042,12 @@ class Parser {
       if (tagAttrs.packed || postTagAttrs.packed) tagDecl.isPacked = true;
 
       // Compute layout
-      if (tagKind === TagKind.STRUCT) {
-        const layout = computeStructLayout(members, tagDecl.isPacked);
+      if (tagKind === Types.TagKind.STRUCT) {
+        const layout = Types.computeStructLayout(members, tagDecl.isPacked);
         tagType.size = layout.size;
         tagType.align = layout.align;
-      } else if (tagKind === TagKind.UNION) {
-        const layout = computeUnionLayout(members, tagDecl.isPacked);
+      } else if (tagKind === Types.TagKind.UNION) {
+        const layout = Types.computeUnionLayout(members, tagDecl.isPacked);
         tagType.size = layout.size;
         tagType.align = layout.align;
       }
@@ -4079,11 +4058,11 @@ class Parser {
       // Validate flexible array members (C99)
       {
         let foundFAM = false, famIdx = -1;
-        const varMembers = members.filter(m => m.declKind === DeclKind.VAR);
+        const varMembers = members.filter(m => m.declKind === Types.DeclKind.VAR);
         for (let i = 0; i < varMembers.length; i++) {
           const mv = varMembers[i];
-          if (mv.type.kind === TypeKind.ARRAY && mv.type.arraySize === 0) {
-            if (tagKind === TagKind.UNION) {
+          if (mv.type.kind === Types.TypeKind.ARRAY && mv.type.arraySize === 0) {
+            if (tagKind === Types.TagKind.UNION) {
               this.error(this.peek(), "flexible array member not allowed in a union");
             }
             if (foundFAM) {
@@ -4120,7 +4099,7 @@ class Parser {
     if (!name) this.error(this.peek(), "Expected tag name or '{'");
     let tagType = this.tagScope.get(name);
     if (!tagType) {
-      tagType = getOrCreateTagType(this.tagTypeCache, tagKind, name);
+      tagType = Types.getOrCreateTagType(this.tagTypeCache, tagKind, name);
       this.tagScope.set(name, tagType);
     }
     return tagType;
@@ -4130,20 +4109,20 @@ class Parser {
   parseEnumSpecifier() {
     this.advance(); // consume 'enum'
     let name = null;
-    if (this.atKind(TokenKind.IDENT) && !this.typeScope.has(this.peek().text)) {
+    if (this.atKind(Lexer.TokenKind.IDENT) && !this.typeScope.has(this.peek().text)) {
       name = this.advance().text;
     }
 
     if (this.matchText("{")) {
       if (!name) name = "__anon_" + this.anonCounter++;
-      const tagType = getOrCreateTagType(this.tagTypeCache, TagKind.ENUM, name);
+      const tagType = Types.getOrCreateTagType(this.tagTypeCache, Types.TagKind.ENUM, name);
       tagType.size = 4; tagType.align = 4; tagType.isComplete = true;
       const tagDecl = new AST.DTag({ filename: this.peek().filename, line: this.peek().line },
-        TagKind.ENUM, name, true, []);
+        Types.TagKind.ENUM, name, true, []);
 
       let nextVal = 0n;
       while (!this.atEnd() && !this.atText("}")) {
-        const eName = this.expectKind(TokenKind.IDENT).text;
+        const eName = this.expectKind(Lexer.TokenKind.IDENT).text;
         let val = nextVal;
         if (this.matchText("=")) {
           const valExpr = this.parseAssignmentExpression();
@@ -4165,7 +4144,7 @@ class Parser {
     if (!name) this.error(this.peek(), "Expected enum name or '{'");
     let tagType = this.tagScope.get(name);
     if (!tagType) {
-      tagType = getOrCreateTagType(this.tagTypeCache, TagKind.ENUM, name);
+      tagType = Types.getOrCreateTagType(this.tagTypeCache, Types.TagKind.ENUM, name);
       this.tagScope.set(name, tagType);
     }
     return tagType;
@@ -4193,16 +4172,16 @@ class Parser {
     // This handles things like: int (*fp)(void) where inner = *<base>, outer suffix = (void)
     // We need to replace the deepest base in inner with outerResult
     if (innerType === outerBase) return outerResult;
-    if (innerType.kind === TypeKind.POINTER) {
+    if (innerType.kind === Types.TypeKind.POINTER) {
       const newBase = this.combineDeclaratorTypes(innerType.baseType, outerBase, outerResult);
       const result = newBase.pointer();
       if (innerType.isConst) return result.addConst();
       if (innerType.isVolatile) return result.addVolatile();
       return result;
     }
-    if (innerType.kind === TypeKind.ARRAY) {
+    if (innerType.kind === Types.TypeKind.ARRAY) {
       const newBase = this.combineDeclaratorTypes(innerType.baseType, outerBase, outerResult);
-      return arrayOf(newBase, innerType.arraySize);
+      return Types.arrayOf(newBase, innerType.arraySize);
     }
     return innerType;
   }
@@ -4212,21 +4191,21 @@ class Parser {
   parsePrimaryExpression() {
     const t = this.peek();
 
-    // Integer literal (includes char literals converted by postProcess)
-    if (t.kind === TokenKind.INT) {
+    // Integer literal (includes char literals converted by Lexer.postProcess)
+    if (t.kind === Lexer.TokenKind.INT) {
       this.advance();
-      let type = TINT;
+      let type = Types.TINT;
       const val = t.integer;  // keep as BigInt for full precision
-      // Check for char literal prefixes (postProcess converts CHAR -> INT)
-      if (t.flags.stringPrefix === StringPrefix.PREFIX_u) type = TUSHORT;
-      else if (t.flags.stringPrefix === StringPrefix.PREFIX_U || t.flags.stringPrefix === StringPrefix.PREFIX_L) type = TINT;
+      // Check for char literal prefixes (Lexer.postProcess converts CHAR -> INT)
+      if (t.flags.stringPrefix === Lexer.StringPrefix.PREFIX_u) type = Types.TUSHORT;
+      else if (t.flags.stringPrefix === Lexer.StringPrefix.PREFIX_U || t.flags.stringPrefix === Lexer.StringPrefix.PREFIX_L) type = Types.TINT;
       else {
         // C99 §6.4.4.1: Determine type from suffix, then promote based on value.
-        if (t.flags.isUnsigned && t.flags.isLongLong) type = TULLONG;
-        else if (t.flags.isUnsigned && t.flags.isLong) type = TULONG;
-        else if (t.flags.isUnsigned) type = TUINT;
-        else if (t.flags.isLongLong) type = TLLONG;
-        else if (t.flags.isLong) type = TLONG;
+        if (t.flags.isUnsigned && t.flags.isLongLong) type = Types.TULLONG;
+        else if (t.flags.isUnsigned && t.flags.isLong) type = Types.TULONG;
+        else if (t.flags.isUnsigned) type = Types.TUINT;
+        else if (t.flags.isLongLong) type = Types.TLLONG;
+        else if (t.flags.isLong) type = Types.TLONG;
 
         const isDecimal = t.flags.isDecimal;
         const fitsI32 = val <= 0x7FFFFFFFn;
@@ -4234,48 +4213,48 @@ class Parser {
         const fitsI64 = val <= 0x7FFFFFFFFFFFFFFFn;
 
         if (!t.flags.isUnsigned && !t.flags.isLong && !t.flags.isLongLong) {
-          if (fitsI32) type = TINT;
-          else if (!isDecimal && fitsU32) type = TUINT;
-          else if (fitsI64) type = TLLONG;
-          else type = isDecimal ? TLLONG : TULLONG;
+          if (fitsI32) type = Types.TINT;
+          else if (!isDecimal && fitsU32) type = Types.TUINT;
+          else if (fitsI64) type = Types.TLLONG;
+          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
         } else if (t.flags.isUnsigned && !t.flags.isLong && !t.flags.isLongLong) {
-          if (fitsU32) type = TUINT;
-          else type = TULLONG;
+          if (fitsU32) type = Types.TUINT;
+          else type = Types.TULLONG;
         } else if (!t.flags.isUnsigned && t.flags.isLong && !t.flags.isLongLong) {
-          if (fitsI32) type = TLONG;
-          else if (!isDecimal && fitsU32) type = TULONG;
-          else if (fitsI64) type = TLLONG;
-          else type = isDecimal ? TLLONG : TULLONG;
+          if (fitsI32) type = Types.TLONG;
+          else if (!isDecimal && fitsU32) type = Types.TULONG;
+          else if (fitsI64) type = Types.TLLONG;
+          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
         } else if (t.flags.isUnsigned && t.flags.isLong && !t.flags.isLongLong) {
-          if (fitsU32) type = TULONG;
-          else type = TULLONG;
+          if (fitsU32) type = Types.TULONG;
+          else type = Types.TULLONG;
         } else if (!t.flags.isUnsigned && t.flags.isLongLong) {
-          if (fitsI64) type = TLLONG;
-          else type = isDecimal ? TLLONG : TULLONG;
+          if (fitsI64) type = Types.TLLONG;
+          else type = isDecimal ? Types.TLLONG : Types.TULLONG;
         }
-        // ULL: always TULLONG, already set
+        // ULL: always Types.TULLONG, already set
       }
       return new AST.EInt(type, val);
     }
 
     // Float literal
-    if (t.kind === TokenKind.FLOAT) {
+    if (t.kind === Lexer.TokenKind.FLOAT) {
       this.advance();
-      let type = TDOUBLE;
-      if (t.flags.isFloat) type = TFLOAT;
-      else if (t.flags.isLong) type = TLDOUBLE;
+      let type = Types.TDOUBLE;
+      if (t.flags.isFloat) type = Types.TFLOAT;
+      else if (t.flags.isLong) type = Types.TLDOUBLE;
       return new AST.EFloat(type, t.floating);
     }
 
-    // Note: CHAR tokens are converted to INT by postProcess, handled above
+    // Note: CHAR tokens are converted to INT by Lexer.postProcess, handled above
 
     // String literal (with concatenation)
-    if (t.kind === TokenKind.STRING) {
+    if (t.kind === Lexer.TokenKind.STRING) {
       return this.parseStringLiteral();
     }
 
     // Identifier
-    if (t.kind === TokenKind.IDENT) {
+    if (t.kind === Lexer.TokenKind.IDENT) {
       this.advance();
       const name = t.text;
       // Check __func__ / __FUNCTION__
@@ -4284,34 +4263,34 @@ class Parser {
         const bytes = [];
         for (let i = 0; i < funcName.length; i++) bytes.push(funcName.charCodeAt(i));
         bytes.push(0);
-        return new AST.EString(arrayOf(TCHAR, bytes.length), bytes);
+        return new AST.EString(Types.arrayOf(Types.TCHAR, bytes.length), bytes);
       }
       const decl = this.varScope.get(name);
       if (!decl) {
         // Implicit function declaration: C89 allowed calling undeclared functions.
         // Gated behind --allow-implicit-function-decl / --allow-old-c.
         if (this._allowImplicitFunctionDecl && this.atText("(")) {
-          const ftype = functionType(TINT, [], false);
-          const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], StorageClass.EXTERN, false, null);
+          const ftype = Types.functionType(Types.TINT, [], false);
+          const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], Types.StorageClass.EXTERN, false, null);
           this.varScope.set(name, fdecl);
           if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(fdecl);
           else this.globalUsedSymbols.add(fdecl);
           return new AST.EIdent(ftype, name, fdecl);
         }
         this.recoverableError(t, `Undeclared identifier '${name}'`);
-        return new AST.EIdent(TINT, name, null);
+        return new AST.EIdent(Types.TINT, name, null);
       }
       if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(decl);
       else this.globalUsedSymbols.add(decl);
 
-      if (decl.declKind === DeclKind.VAR) return new AST.EIdent(decl.type, name, decl);
-      if (decl.declKind === DeclKind.FUNC) return new AST.EIdent(decl.type, name, decl);
-      if (decl.declKind === DeclKind.ENUM_CONST) return new AST.EIdent(TINT, name, decl);
-      return new AST.EIdent(TINT, name, decl);
+      if (decl.declKind === Types.DeclKind.VAR) return new AST.EIdent(decl.type, name, decl);
+      if (decl.declKind === Types.DeclKind.FUNC) return new AST.EIdent(decl.type, name, decl);
+      if (decl.declKind === Types.DeclKind.ENUM_CONST) return new AST.EIdent(Types.TINT, name, decl);
+      return new AST.EIdent(Types.TINT, name, decl);
     }
 
     // Parenthesized expression or compound literal
-    if (t.kind === TokenKind.PUNCT && t.text === "(") {
+    if (t.kind === Lexer.TokenKind.PUNCT && t.text === "(") {
       // Check if it's a compound literal: (type){...}
       const saved = this.pos;
       this.advance(); // skip (
@@ -4329,11 +4308,11 @@ class Parser {
           // Compound literal
           const initList = this.parseInitList(castType);
           // Handle string-initialized char array
-          if (castType.kind === TypeKind.ARRAY && castType.arraySize === 0 &&
-              initList.elements.length === 1 && initList.elements[0]?.kind === ExprKind.STRING) {
+          if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0 &&
+              initList.elements.length === 1 && initList.elements[0]?.kind === Types.ExprKind.STRING) {
             castType = initList.elements[0].type;
             initList.type = castType;
-          } else if (castType.kind === TypeKind.ARRAY && castType.arraySize === 0) {
+          } else if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0) {
             normalizeInitList(initList, castType);
             castType = initList.type;
           } else if (castType.isAggregate()) {
@@ -4366,7 +4345,7 @@ class Parser {
     }
 
     // sizeof
-    if (this.atKW(Keyword.SIZEOF)) {
+    if (this.atKW(Lexer.Keyword.SIZEOF)) {
       this.advance();
       if (this.matchText("(")) {
         if (this.isTypeName()) {
@@ -4377,18 +4356,18 @@ class Parser {
             sType = decl.type;
           }
           this.expect(")");
-          return new AST.ESizeofType(TULONG, sType);
+          return new AST.ESizeofType(Types.TULONG, sType);
         }
         const expr = this.parseExpression();
         this.expect(")");
-        return new AST.ESizeofExpr(TULONG, expr);
+        return new AST.ESizeofExpr(Types.TULONG, expr);
       }
       const expr = this.parseUnaryExpression();
-      return new AST.ESizeofExpr(TULONG, expr);
+      return new AST.ESizeofExpr(Types.TULONG, expr);
     }
 
     // _Alignof
-    if (this.atKW(Keyword.ALIGNOF)) {
+    if (this.atKW(Lexer.Keyword.ALIGNOF)) {
       this.advance();
       this.expect("(");
       if (this.isTypeName()) {
@@ -4399,27 +4378,27 @@ class Parser {
           aType = decl.type;
         }
         this.expect(")");
-        if (aType.kind === TypeKind.FUNCTION) {
+        if (aType.kind === Types.TypeKind.FUNCTION) {
           this.error(this.peek(-1), "_Alignof cannot be applied to a function type");
         }
         if (!aType.isComplete) {
           this.error(this.peek(-1), "_Alignof cannot be applied to incomplete type '" + aType.toString() + "'");
         }
-        return new AST.EAlignofType(TULONG, aType);
+        return new AST.EAlignofType(Types.TULONG, aType);
       }
       const expr = this.parseExpression();
       this.expect(")");
-      return new AST.EAlignofExpr(TULONG, expr);
+      return new AST.EAlignofExpr(Types.TULONG, expr);
     }
 
     // __builtin_va_start/va_arg/va_end/va_copy
-    if (this.atKW(Keyword.X_BUILTIN_VA_START)) { return this.parseIntrinsic(IntrinsicKind.VA_START); }
-    if (this.atKW(Keyword.X_BUILTIN_VA_ARG)) { return this.parseVaArg(); }
-    if (this.atKW(Keyword.X_BUILTIN_VA_END)) { return this.parseIntrinsic(IntrinsicKind.VA_END); }
-    if (this.atKW(Keyword.X_BUILTIN_VA_COPY)) { return this.parseIntrinsic(IntrinsicKind.VA_COPY); }
-    if (this.atKW(Keyword.X_BUILTIN_UNREACHABLE)) { return this.parseIntrinsic(IntrinsicKind.UNREACHABLE); }
-    if (this.atKW(Keyword.X_BUILTIN_ABORT)) { return this.parseIntrinsic(IntrinsicKind.UNREACHABLE); }
-    if (this.matchKW(Keyword.X_BUILTIN_EXPECT)) {
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_VA_START)) { return this.parseIntrinsic(Types.IntrinsicKind.VA_START); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_VA_ARG)) { return this.parseVaArg(); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_VA_END)) { return this.parseIntrinsic(Types.IntrinsicKind.VA_END); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_VA_COPY)) { return this.parseIntrinsic(Types.IntrinsicKind.VA_COPY); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_UNREACHABLE)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
+    if (this.atKW(Lexer.Keyword.X_BUILTIN_ABORT)) { return this.parseIntrinsic(Types.IntrinsicKind.UNREACHABLE); }
+    if (this.matchKW(Lexer.Keyword.X_BUILTIN_EXPECT)) {
       this.expect("(");
       const first = this.parseAssignmentExpression();
       this.expect(",");
@@ -4429,40 +4408,40 @@ class Parser {
     }
 
     // __memory_size, __memory_grow
-    if (this.matchKW(Keyword.X_MEMORY_SIZE)) {
+    if (this.matchKW(Lexer.Keyword.X_MEMORY_SIZE)) {
       this.expect("(");
       this.expect(")");
-      return new AST.EIntrinsic(TULONG, IntrinsicKind.MEMORY_SIZE, []);
+      return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_SIZE, []);
     }
-    if (this.matchKW(Keyword.X_MEMORY_GROW)) {
+    if (this.matchKW(Lexer.Keyword.X_MEMORY_GROW)) {
       this.expect("(");
       const arg = this.parseAssignmentExpression();
       this.expect(")");
-      return new AST.EIntrinsic(TULONG, IntrinsicKind.MEMORY_GROW, [arg]);
+      return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_GROW, [arg]);
     }
 
     // __builtin(kind, args...)
-    if (this.matchKW(Keyword.X_BUILTIN)) {
+    if (this.matchKW(Lexer.Keyword.X_BUILTIN)) {
       this.expect("(");
-      const kindTok = this.expectKind(TokenKind.IDENT);
+      const kindTok = this.expectKind(Lexer.TokenKind.IDENT);
       const kindName = kindTok.text;
       const args = [];
       while (this.matchText(",")) args.push(this.parseAssignmentExpression());
       this.expect(")");
-      let ik = IntrinsicKind[kindName.toUpperCase()] || kindName;
+      let ik = Types.IntrinsicKind[kindName.toUpperCase()] || kindName;
       // Map common names
-      if (kindName === "alloca") ik = IntrinsicKind.ALLOCA;
-      else if (kindName === "memory_copy") ik = IntrinsicKind.MEMORY_COPY;
-      else if (kindName === "memory_fill") ik = IntrinsicKind.MEMORY_FILL;
-      else if (kindName === "heap_base") ik = IntrinsicKind.HEAP_BASE;
-      let retType = TVOID;
-      if (ik === IntrinsicKind.ALLOCA) retType = TVOID.pointer();
-      else if (ik === IntrinsicKind.HEAP_BASE || ik === IntrinsicKind.MEMORY_SIZE || ik === IntrinsicKind.MEMORY_GROW) retType = TULONG;
+      if (kindName === "alloca") ik = Types.IntrinsicKind.ALLOCA;
+      else if (kindName === "memory_copy") ik = Types.IntrinsicKind.MEMORY_COPY;
+      else if (kindName === "memory_fill") ik = Types.IntrinsicKind.MEMORY_FILL;
+      else if (kindName === "heap_base") ik = Types.IntrinsicKind.HEAP_BASE;
+      let retType = Types.TVOID;
+      if (ik === Types.IntrinsicKind.ALLOCA) retType = Types.TVOID.pointer();
+      else if (ik === Types.IntrinsicKind.HEAP_BASE || ik === Types.IntrinsicKind.MEMORY_SIZE || ik === Types.IntrinsicKind.MEMORY_GROW) retType = Types.TULONG;
       return new AST.EIntrinsic(retType, ik, args);
     }
 
     // __wasm(type, (args...), instruction, ...)
-    if (this.matchKW(Keyword.X_WASM)) {
+    if (this.matchKW(Lexer.Keyword.X_WASM)) {
       this.expect("(");
       const retSpecs = this.parseDeclSpecifiers();
       let retType = retSpecs.type;
@@ -4481,24 +4460,24 @@ class Parser {
       while (this.matchText(",")) {
         const instrTok = this.advance();
         if (instrTok.text === "op") {
-          while (this.atKind(TokenKind.INT)) {
+          while (this.atKind(Lexer.TokenKind.INT)) {
             bytes.push(Number(this.advance().integer) & 0xff);
           }
         } else if (instrTok.text === "lebU") {
           const numTok = this.advance();
-          if (numTok.kind !== TokenKind.INT) this.error(numTok, "Expected integer after lebU");
+          if (numTok.kind !== Lexer.TokenKind.INT) this.error(numTok, "Expected integer after lebU");
           lebU(bytes, Number(numTok.integer));
         } else if (instrTok.text === "lebI") {
           const negative = this.matchText("-");
           const numTok = this.advance();
-          if (numTok.kind !== TokenKind.INT) this.error(numTok, "Expected integer after lebI");
+          if (numTok.kind !== Lexer.TokenKind.INT) this.error(numTok, "Expected integer after lebI");
           let val = Number(numTok.integer);
           if (negative) val = -val;
           lebI(bytes, val);
         } else if (instrTok.text === "i32") {
           const negative = this.matchText("-");
           const numTok = this.advance();
-          if (numTok.kind !== TokenKind.INT) this.error(numTok, "Expected integer after i32");
+          if (numTok.kind !== Lexer.TokenKind.INT) this.error(numTok, "Expected integer after i32");
           let val = Number(numTok.integer) | 0;
           if (negative) val = -val;
           bytes.push(0x41); // i32.const
@@ -4506,7 +4485,7 @@ class Parser {
         } else if (instrTok.text === "i64") {
           const negative = this.matchText("-");
           const numTok = this.advance();
-          if (numTok.kind !== TokenKind.INT) this.error(numTok, "Expected integer after i64");
+          if (numTok.kind !== Lexer.TokenKind.INT) this.error(numTok, "Expected integer after i64");
           let val = BigInt(numTok.integer);
           if (negative) val = -val;
           bytes.push(0x42); // i64.const
@@ -4515,8 +4494,8 @@ class Parser {
           const negative = this.matchText("-");
           const numTok = this.advance();
           let val;
-          if (numTok.kind === TokenKind.INT) val = Number(numTok.integer);
-          else if (numTok.kind === TokenKind.FLOAT) val = numTok.floating;
+          if (numTok.kind === Lexer.TokenKind.INT) val = Number(numTok.integer);
+          else if (numTok.kind === Lexer.TokenKind.FLOAT) val = numTok.floating;
           else this.error(numTok, "Expected number after f32");
           if (negative) val = -val;
           bytes.push(0x43); // f32.const
@@ -4527,8 +4506,8 @@ class Parser {
           const negative = this.matchText("-");
           const numTok = this.advance();
           let val;
-          if (numTok.kind === TokenKind.INT) val = Number(numTok.integer);
-          else if (numTok.kind === TokenKind.FLOAT) val = numTok.floating;
+          if (numTok.kind === Lexer.TokenKind.INT) val = Number(numTok.integer);
+          else if (numTok.kind === Lexer.TokenKind.FLOAT) val = numTok.floating;
           else this.error(numTok, "Expected number after f64");
           if (negative) val = -val;
           bytes.push(0x44); // f64.const
@@ -4542,13 +4521,13 @@ class Parser {
     }
 
     // _Generic
-    if (this.matchKW(Keyword.GENERIC)) {
+    if (this.matchKW(Lexer.Keyword.GENERIC)) {
       this.expect("(");
       const controlExpr = this.parseAssignmentExpression();
       let result = null;
       let defaultExpr = null;
       while (this.matchText(",")) {
-        if (this.matchKW(Keyword.DEFAULT)) {
+        if (this.matchKW(Lexer.Keyword.DEFAULT)) {
           this.expect(":");
           defaultExpr = this.parseAssignmentExpression();
         } else {
@@ -4567,7 +4546,7 @@ class Parser {
       if (!result && !defaultExpr) {
         this.error(this.peek(-1), "_Generic: no matching type and no 'default' association");
       }
-      return result || defaultExpr || new AST.EInt(TINT, 0n);
+      return result || defaultExpr || new AST.EInt(Types.TINT, 0n);
     }
 
     this.error(t, `Unexpected token in expression: ${t.kind} '${t.text}'`);
@@ -4575,13 +4554,13 @@ class Parser {
 
   parseStringLiteral() {
     // Determine string prefix from first token
-    let prefix = this.peek().flags.stringPrefix || StringPrefix.NONE;
+    let prefix = this.peek().flags.stringPrefix || Lexer.StringPrefix.NONE;
     const codepoints = [];
-    while (this.atKind(TokenKind.STRING)) {
+    while (this.atKind(Lexer.TokenKind.STRING)) {
       const tok = this.advance();
       // Upgrade prefix if any token has a wider prefix
-      if (tok.flags.stringPrefix && tok.flags.stringPrefix !== StringPrefix.NONE) {
-        if (prefix === StringPrefix.NONE || prefix === StringPrefix.PREFIX_u8) prefix = tok.flags.stringPrefix;
+      if (tok.flags.stringPrefix && tok.flags.stringPrefix !== Lexer.StringPrefix.NONE) {
+        if (prefix === Lexer.StringPrefix.NONE || prefix === Lexer.StringPrefix.PREFIX_u8) prefix = tok.flags.stringPrefix;
       }
       const text = tok.text;
       const start = text.startsWith('"') ? 1 : (text.indexOf('"') + 1);
@@ -4589,32 +4568,32 @@ class Parser {
       const inner = text.substring(start, end);
       const pos = { i: 0 };
       while (pos.i < inner.length) {
-        codepoints.push(unescape(inner, pos, inner.length));
+        codepoints.push(Lexer.unescape(inner, pos, inner.length));
       }
     }
-    if (prefix === StringPrefix.PREFIX_u) {
+    if (prefix === Lexer.StringPrefix.PREFIX_u) {
       // UTF-16 string: element type is unsigned short (char16_t)
       const bytes = [];
-      for (const cp of codepoints) encodeUtf16LE(cp, bytes);
+      for (const cp of codepoints) Lexer.encodeUtf16LE(cp, bytes);
       bytes.push(0); bytes.push(0); // null terminator (2 bytes)
       const elemCount = bytes.length / 2;
-      return new AST.EString(arrayOf(TUSHORT, elemCount), bytes);
+      return new AST.EString(Types.arrayOf(Types.TUSHORT, elemCount), bytes);
     }
-    if (prefix === StringPrefix.PREFIX_L) {
+    if (prefix === Lexer.StringPrefix.PREFIX_L) {
       // UTF-32 string: element type is int (wchar_t)
       const bytes = [];
-      for (const cp of codepoints) encodeUtf32LE(cp, bytes);
+      for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
-      return new AST.EString(arrayOf(TINT, elemCount), bytes);
+      return new AST.EString(Types.arrayOf(Types.TINT, elemCount), bytes);
     }
-    if (prefix === StringPrefix.PREFIX_U) {
+    if (prefix === Lexer.StringPrefix.PREFIX_U) {
       // UTF-32 string: element type is unsigned int (char32_t)
       const bytes = [];
-      for (const cp of codepoints) encodeUtf32LE(cp, bytes);
+      for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
-      return new AST.EString(arrayOf(TUINT, elemCount), bytes);
+      return new AST.EString(Types.arrayOf(Types.TUINT, elemCount), bytes);
     }
     // Regular or u8 string: element type is char
     // Codepoints <= 0xFF are raw bytes (from \xNN escapes).
@@ -4622,10 +4601,10 @@ class Parser {
     const bytes = [];
     for (const cp of codepoints) {
       if (cp <= 0xff) bytes.push(cp);
-      else encodeUtf8(cp, bytes);
+      else Lexer.encodeUtf8(cp, bytes);
     }
     bytes.push(0);
-    return new AST.EString(arrayOf(TCHAR, bytes.length), bytes);
+    return new AST.EString(Types.arrayOf(Types.TCHAR, bytes.length), bytes);
   }
 
   parseIntrinsic(ikind) {
@@ -4637,8 +4616,8 @@ class Parser {
       while (this.matchText(",")) args.push(this.parseAssignmentExpression());
     }
     this.expect(")");
-    let retType = TVOID;
-    if (ikind === IntrinsicKind.VA_START || ikind === IntrinsicKind.VA_END || ikind === IntrinsicKind.VA_COPY) retType = TVOID;
+    let retType = Types.TVOID;
+    if (ikind === Types.IntrinsicKind.VA_START || ikind === Types.IntrinsicKind.VA_END || ikind === Types.IntrinsicKind.VA_COPY) retType = Types.TVOID;
     return new AST.EIntrinsic(retType, ikind, args);
   }
 
@@ -4654,7 +4633,7 @@ class Parser {
       argType = d.type;
     }
     this.expect(")");
-    return new AST.EIntrinsic(argType, IntrinsicKind.VA_ARG, [ap], argType);
+    return new AST.EIntrinsic(argType, Types.IntrinsicKind.VA_ARG, [ap], argType);
   }
 
   // Matches CC's parsePostfixExpression (compiler.cc ~line 10495)
@@ -4667,7 +4646,7 @@ class Parser {
     const ut = type.removeQualifiers();
     if (ut.tagDecl && ut.tagDecl.members) {
       for (const m of ut.tagDecl.members) {
-        if (m.declKind !== DeclKind.VAR) continue;
+        if (m.declKind !== Types.DeclKind.VAR) continue;
         if (m.name === name) return [m];
         // Recurse into anonymous struct/union members
         if (!m.name && m.type && m.type.tagDecl && m.type.tagDecl.members) {
@@ -4685,18 +4664,18 @@ class Parser {
       const last = chain[chain.length - 1];
       return { type: last.type, decl: last, chain };
     }
-    return { type: TINT, decl: null, chain: null };
+    return { type: Types.TINT, decl: null, chain: null };
   }
 
   markAddressTaken(expr) {
     if (!expr) return;
-    if (expr.kind === ExprKind.IDENT) {
-      if (expr.decl && expr.decl.declKind === DeclKind.VAR) {
-        expr.decl.allocClass = AllocClass.MEMORY;
+    if (expr.kind === Types.ExprKind.IDENT) {
+      if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+        expr.decl.allocClass = Types.AllocClass.MEMORY;
       }
-    } else if (expr.kind === ExprKind.MEMBER) {
+    } else if (expr.kind === Types.ExprKind.MEMBER) {
       this.markAddressTaken(expr.base);
-    } else if (expr.kind === ExprKind.SUBSCRIPT) {
+    } else if (expr.kind === Types.ExprKind.SUBSCRIPT) {
       if (expr.array.type && expr.array.type.isArray()) {
         this.markAddressTaken(expr.array);
       }
@@ -4705,23 +4684,23 @@ class Parser {
 
   // Matches CC's parseUnaryExpression (compiler.cc ~line 10538)
   parseUnaryExpression() {
-    if (this.matchText("++")) { const e = this.parseUnaryExpression(); return new AST.EUnary(computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e); }
-    if (this.matchText("--")) { const e = this.parseUnaryExpression(); return new AST.EUnary(computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e); }
+    if (this.matchText("++")) { const e = this.parseUnaryExpression(); return new AST.EUnary(Types.computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e); }
+    if (this.matchText("--")) { const e = this.parseUnaryExpression(); return new AST.EUnary(Types.computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e); }
     if (this.matchText("&")) {
       const e = this.parseCastExpression();
-      if ((e.kind === ExprKind.MEMBER || e.kind === ExprKind.ARROW) && e.memberDecl && e.memberDecl.bitWidth >= 0) {
+      if ((e.kind === Types.ExprKind.MEMBER || e.kind === Types.ExprKind.ARROW) && e.memberDecl && e.memberDecl.bitWidth >= 0) {
         this.error(this.peek(-1), `Cannot take address of bit-field member '${e.memberDecl.name}'`);
       }
-      this.markAddressTaken(e); return new AST.EUnary(computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
+      this.markAddressTaken(e); return new AST.EUnary(Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
     }
-    if (this.matchText("*")) { const e = this.parseCastExpression(); return new AST.EUnary(computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e); }
-    if (this.matchText("+")) { const e = this.parseCastExpression(); return new AST.EUnary(computeUnaryType("OP_POS", e.type), "OP_POS", e); }
-    if (this.matchText("-")) { const e = this.parseCastExpression(); return new AST.EUnary(computeUnaryType("OP_NEG", e.type), "OP_NEG", e); }
-    if (this.matchText("~")) { const e = this.parseCastExpression(); return new AST.EUnary(computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e); }
-    if (this.matchText("!")) { const e = this.parseCastExpression(); return new AST.EUnary(computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e); }
+    if (this.matchText("*")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e); }
+    if (this.matchText("+")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_POS", e.type), "OP_POS", e); }
+    if (this.matchText("-")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e); }
+    if (this.matchText("~")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e); }
+    if (this.matchText("!")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e); }
 
-    if (this.atKW(Keyword.SIZEOF)) return this.parsePrimaryExpression(); // handled there
-    if (this.atKW(Keyword.ALIGNOF)) return this.parsePrimaryExpression();
+    if (this.atKW(Lexer.Keyword.SIZEOF)) return this.parsePrimaryExpression(); // handled there
+    if (this.atKW(Lexer.Keyword.ALIGNOF)) return this.parsePrimaryExpression();
 
     return this.parsePostfixExpression();
   }
@@ -4743,11 +4722,11 @@ class Parser {
             // Compound literal: (type){...}
             const initList = this.parseInitList(castType);
             // Handle string-initialized char array
-            if (castType.kind === TypeKind.ARRAY && castType.arraySize === 0 &&
-                initList.elements.length === 1 && initList.elements[0]?.kind === ExprKind.STRING) {
+            if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0 &&
+                initList.elements.length === 1 && initList.elements[0]?.kind === Types.ExprKind.STRING) {
               castType = initList.elements[0].type;
               initList.type = castType;
-            } else if (castType.kind === TypeKind.ARRAY && castType.arraySize === 0) {
+            } else if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0) {
               normalizeInitList(initList, castType);
               castType = initList.type;
             } else if (castType.isAggregate()) {
@@ -4788,17 +4767,17 @@ class Parser {
         }
         this.expect(")");
 
-        let resultType = TINT;
+        let resultType = Types.TINT;
         let calleeType = expr.type;
-        if (calleeType.kind === TypeKind.ARRAY || calleeType.kind === TypeKind.FUNCTION) calleeType = calleeType.decay();
-        if (calleeType.kind === TypeKind.FUNCTION) {
+        if (calleeType.kind === Types.TypeKind.ARRAY || calleeType.kind === Types.TypeKind.FUNCTION) calleeType = calleeType.decay();
+        if (calleeType.kind === Types.TypeKind.FUNCTION) {
           resultType = calleeType.returnType;
-        } else if (calleeType.kind === TypeKind.POINTER && calleeType.baseType.kind === TypeKind.FUNCTION) {
+        } else if (calleeType.kind === Types.TypeKind.POINTER && calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
           resultType = calleeType.baseType.returnType;
         }
 
         let funcDecl = null;
-        if (expr.kind === ExprKind.IDENT && expr.decl && expr.decl.declKind === DeclKind.FUNC) {
+        if (expr.kind === Types.ExprKind.IDENT && expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
           funcDecl = expr.decl;
         }
 
@@ -4810,32 +4789,32 @@ class Parser {
         this.expect("]");
         const baseUt = expr.type.removeQualifiers();
         const idxUt = index.type.removeQualifiers();
-        if (baseUt.isInteger() && (idxUt.kind === TypeKind.POINTER || idxUt.kind === TypeKind.ARRAY)) {
+        if (baseUt.isInteger() && (idxUt.kind === Types.TypeKind.POINTER || idxUt.kind === Types.TypeKind.ARRAY)) {
           this.error(this.peek(-1), "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
         }
-        let elemType = TINT;
-        if (baseUt.kind === TypeKind.ARRAY) elemType = baseUt.baseType;
-        else if (baseUt.kind === TypeKind.POINTER) elemType = baseUt.baseType;
+        let elemType = Types.TINT;
+        if (baseUt.kind === Types.TypeKind.ARRAY) elemType = baseUt.baseType;
+        else if (baseUt.kind === Types.TypeKind.POINTER) elemType = baseUt.baseType;
         expr = new AST.ESubscript(elemType, expr, index);
         continue;
       }
       if (this.matchText(".")) {
-        const name = this.expectKind(TokenKind.IDENT).text;
+        const name = this.expectKind(Lexer.TokenKind.IDENT).text;
         const { chain } = this.lookupMember(expr.type, name);
         if (chain) {
           for (const mVar of chain) {
             expr = new AST.EMember(mVar.type, expr, mVar.name, mVar);
           }
         } else {
-          expr = new AST.EMember(TINT, expr, name, null);
+          expr = new AST.EMember(Types.TINT, expr, name, null);
         }
         continue;
       }
       if (this.matchText("->")) {
-        const name = this.expectKind(TokenKind.IDENT).text;
+        const name = this.expectKind(Lexer.TokenKind.IDENT).text;
         let bt = expr.type.removeQualifiers();
-        if (bt.kind === TypeKind.ARRAY) bt = bt.baseType;
-        else if (bt.kind === TypeKind.POINTER) bt = bt.baseType;
+        if (bt.kind === Types.TypeKind.ARRAY) bt = bt.baseType;
+        else if (bt.kind === Types.TypeKind.POINTER) bt = bt.baseType;
         const { chain } = this.lookupMember(bt, name);
         if (chain) {
           // First element: arrow (dereference pointer)
@@ -4846,7 +4825,7 @@ class Parser {
             expr = new AST.EMember(chain[i].type, expr, chain[i].name, chain[i]);
           }
         } else {
-          expr = new AST.EArrow(TINT, expr, name, null);
+          expr = new AST.EArrow(Types.TINT, expr, name, null);
         }
         continue;
       }
@@ -4903,64 +4882,64 @@ class Parser {
   promoteExprType(e) {
     const t = e.type;
     let bf = null;
-    if (e.kind === ExprKind.MEMBER && e.memberDecl && e.memberDecl.bitWidth >= 0) {
+    if (e.kind === Types.ExprKind.MEMBER && e.memberDecl && e.memberDecl.bitWidth >= 0) {
       bf = e.memberDecl;
-    } else if (e.kind === ExprKind.ARROW && e.memberDecl && e.memberDecl.bitWidth >= 0) {
+    } else if (e.kind === Types.ExprKind.ARROW && e.memberDecl && e.memberDecl.bitWidth >= 0) {
       bf = e.memberDecl;
     }
     if (bf) {
       const bw = bf.bitWidth;
       const uq = t.removeQualifiers();
-      const isSigned = uq === TINT || uq === TLONG || uq === TSHORT || uq === TSCHAR || uq === TCHAR;
+      const isSigned = uq === Types.TINT || uq === Types.TLONG || uq === Types.TSHORT || uq === Types.TSCHAR || uq === Types.TCHAR;
       // If the bitfield fits in a signed int (32-bit), promote to int
-      if (isSigned || bw < 32) return TINT;
-      return TUINT;
+      if (isSigned || bw < 32) return Types.TINT;
+      return Types.TUINT;
     }
     return t;
   }
 
   computeBinaryType(op, leftType, rightType) {
     // Comparison and logical operators return int
-    if (["EQ","NE","LT","GT","LE","GE","LAND","LOR"].includes(op)) return TINT;
+    if (["EQ","NE","LT","GT","LE","GE","LAND","LOR"].includes(op)) return Types.TINT;
     // Assignment operators return left type
     if (op.endsWith("ASSIGN") || op === "ASSIGN") return leftType;
     // Shift operators: result type is the promoted left operand type
     // (C99 6.5.7). Must strip qualifiers before checking for small types.
     if (op === "SHL" || op === "SHR") {
       const uq = leftType.removeQualifiers();
-      if (uq === TCHAR || uq === TSCHAR || uq === TUCHAR ||
-          uq === TSHORT || uq === TUSHORT || uq === TBOOL) {
-        return TINT;
+      if (uq === Types.TCHAR || uq === Types.TSCHAR || uq === Types.TUCHAR ||
+          uq === Types.TSHORT || uq === Types.TUSHORT || uq === Types.TBOOL) {
+        return Types.TINT;
       }
       return uq;
     }
     // Pointer arithmetic
     if (leftType.isPointer() && rightType.isInteger()) return leftType;
     if (rightType.isPointer() && leftType.isInteger() && op === "ADD") return rightType;
-    if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return TLONG;
+    if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return Types.TLONG;
     // Array arithmetic (array decays to pointer)
     if (leftType.isArray() && rightType.isInteger()) return leftType.decay();
     if (rightType.isArray() && leftType.isInteger() && op === "ADD") return rightType.decay();
     if (op === "SUB" && ((leftType.isPointer() && rightType.isArray()) ||
-        (leftType.isArray() && rightType.isPointer()))) return TLONG;
-    return usualArithmeticConversions(leftType, rightType);
+        (leftType.isArray() && rightType.isPointer()))) return Types.TLONG;
+    return Types.usualArithmeticConversions(leftType, rightType);
   }
 
   inferArraySizeFromInit(arrayType, initExpr) {
     const elemSize = arrayType.baseType.size || 1;
-    if (initExpr.kind === ExprKind.STRING) {
-      return arrayOf(arrayType.baseType, initExpr.value.length / elemSize);
+    if (initExpr.kind === Types.ExprKind.STRING) {
+      return Types.arrayOf(arrayType.baseType, initExpr.value.length / elemSize);
     }
-    if (initExpr.kind === ExprKind.INIT_LIST) {
+    if (initExpr.kind === Types.ExprKind.INIT_LIST) {
       // For char/short/int arrays initialized with a single string literal
       const bt = arrayType.baseType.removeQualifiers();
-      if ((bt === TCHAR || bt === TSCHAR || bt === TUCHAR ||
-           bt === TSHORT || bt === TUSHORT || bt === TINT || bt === TUINT) &&
+      if ((bt === Types.TCHAR || bt === Types.TSCHAR || bt === Types.TUCHAR ||
+           bt === Types.TSHORT || bt === Types.TUSHORT || bt === Types.TINT || bt === Types.TUINT) &&
           initExpr.elements.length === 1 &&
-          initExpr.elements[0].kind === ExprKind.STRING) {
-        return arrayOf(arrayType.baseType, initExpr.elements[0].value.length / elemSize);
+          initExpr.elements[0].kind === Types.ExprKind.STRING) {
+        return Types.arrayOf(arrayType.baseType, initExpr.elements[0].value.length / elemSize);
       }
-      return arrayOf(arrayType.baseType, initExpr.elements.length);
+      return Types.arrayOf(arrayType.baseType, initExpr.elements.length);
     }
     return arrayType;
   }
@@ -4970,7 +4949,7 @@ class Parser {
     if (thenType.isPointer() && elseType.isPointer()) return thenType;
     if (thenType.isPointer()) return thenType;
     if (elseType.isPointer()) return elseType;
-    return usualArithmeticConversions(thenType, elseType);
+    return Types.usualArithmeticConversions(thenType, elseType);
   }
 
   parseBinaryExpression(minPrec) {
@@ -4978,7 +4957,7 @@ class Parser {
 
     while (!this.atEnd()) {
       const opTok = this.peek();
-      if (opTok.kind !== TokenKind.PUNCT) break;
+      if (opTok.kind !== Lexer.TokenKind.PUNCT) break;
       const op = opTok.text;
       const prec = this.getBinaryPrecedence(op);
       if (prec === 0 || prec < minPrec) break;
@@ -5037,15 +5016,15 @@ class Parser {
         // Parse designators
         const desig = { steps: [] };
         let inDesig = false;
-        if (this.atText(".") && this.peek(1)?.kind === TokenKind.IDENT &&
-            this.peek(2)?.kind === TokenKind.PUNCT &&
+        if (this.atText(".") && this.peek(1)?.kind === Lexer.TokenKind.IDENT &&
+            this.peek(2)?.kind === Lexer.TokenKind.PUNCT &&
             (this.peek(2)?.text === "=" || this.peek(2)?.text === "." || this.peek(2)?.text === "[")) {
           inDesig = true;
         } else if (this.atText("[")) {
           inDesig = true;
         }
         while (inDesig) {
-          if (this.atText(".") && this.peek(1)?.kind === TokenKind.IDENT) {
+          if (this.atText(".") && this.peek(1)?.kind === Lexer.TokenKind.IDENT) {
             this.advance(); // consume '.'
             const name = this.advance().text; // consume field name
             desig.steps.push({ kind: "FIELD", fieldName: name });
@@ -5067,9 +5046,9 @@ class Parser {
         designators.push(desig);
         if (this.atText("{")) {
           // Nested init list - determine element type for sub-list
-          let elemType = TINT;
-          if (type.kind === TypeKind.ARRAY) elemType = type.baseType;
-          else if (type.kind === TypeKind.TAG && type.tagDecl && type.tagDecl.members) {
+          let elemType = Types.TINT;
+          if (type.kind === Types.TypeKind.ARRAY) elemType = type.baseType;
+          else if (type.kind === Types.TypeKind.TAG && type.tagDecl && type.tagDecl.members) {
             const varMembers = getVarMembers(type.tagDecl);
             if (elements.length < varMembers.length) {
               elemType = varMembers[elements.length].type;
@@ -5095,18 +5074,18 @@ class Parser {
     if (this.atText("{")) return this.parseCompoundStatement();
 
     // if
-    if (this.matchKW(Keyword.IF)) {
+    if (this.matchKW(Lexer.Keyword.IF)) {
       this.expect("(");
       const cond = this.parseExpression();
       this.expect(")");
       const thenBranch = this.parseStatement();
       let elseBranch = null;
-      if (this.matchKW(Keyword.ELSE)) elseBranch = this.parseStatement();
+      if (this.matchKW(Lexer.Keyword.ELSE)) elseBranch = this.parseStatement();
       return new AST.SIf(cond, thenBranch, elseBranch);
     }
 
     // while
-    if (this.matchKW(Keyword.WHILE)) {
+    if (this.matchKW(Lexer.Keyword.WHILE)) {
       this.expect("(");
       const cond = this.parseExpression();
       this.expect(")");
@@ -5114,9 +5093,9 @@ class Parser {
     }
 
     // do-while
-    if (this.matchKW(Keyword.DO)) {
+    if (this.matchKW(Lexer.Keyword.DO)) {
       const body = this.parseStatement();
-      this.expectKW(Keyword.WHILE);
+      this.expectKW(Lexer.Keyword.WHILE);
       this.expect("(");
       const cond = this.parseExpression();
       this.expect(")");
@@ -5125,7 +5104,7 @@ class Parser {
     }
 
     // for
-    if (this.matchKW(Keyword.FOR)) {
+    if (this.matchKW(Lexer.Keyword.FOR)) {
       this.expect("(");
       this.typeScope.push(); this.tagScope.push(); this.varScope.push();
       let init = null, cond = null, incr = null;
@@ -5147,7 +5126,7 @@ class Parser {
     }
 
     // switch
-    if (this.matchKW(Keyword.SWITCH)) {
+    if (this.matchKW(Lexer.Keyword.SWITCH)) {
       const switchTok = this.peek(-1);
       this.expect("(");
       const expr = this.parseExpression();
@@ -5162,7 +5141,7 @@ class Parser {
     }
 
     // case
-    if (this.matchKW(Keyword.CASE)) {
+    if (this.matchKW(Lexer.Keyword.CASE)) {
       const caseExpr = this.parseAssignmentExpression();
       let lo = constEvalInt(caseExpr) ?? 0n;
       let hi = lo;
@@ -5183,7 +5162,7 @@ class Parser {
     }
 
     // default
-    if (this.matchKW(Keyword.DEFAULT)) {
+    if (this.matchKW(Lexer.Keyword.DEFAULT)) {
       this.expect(":");
       if (this._currentCases) {
         const idx = this._currentCompoundStmtCount || 0;
@@ -5193,13 +5172,13 @@ class Parser {
     }
 
     // break
-    if (this.matchKW(Keyword.BREAK)) { this.expect(";"); return new AST.SBreak(); }
+    if (this.matchKW(Lexer.Keyword.BREAK)) { this.expect(";"); return new AST.SBreak(); }
 
     // continue
-    if (this.matchKW(Keyword.CONTINUE)) { this.expect(";"); return new AST.SContinue(); }
+    if (this.matchKW(Lexer.Keyword.CONTINUE)) { this.expect(";"); return new AST.SContinue(); }
 
     // return
-    if (this.matchKW(Keyword.RETURN)) {
+    if (this.matchKW(Lexer.Keyword.RETURN)) {
       if (this.matchText(";")) return new AST.SReturn(null);
       const expr = this.parseExpression();
       this.expect(";");
@@ -5207,8 +5186,8 @@ class Parser {
     }
 
     // goto
-    if (this.matchKW(Keyword.GOTO)) {
-      const tok = this.expectKind(TokenKind.IDENT);
+    if (this.matchKW(Lexer.Keyword.GOTO)) {
+      const tok = this.expectKind(Lexer.TokenKind.IDENT);
       const label = tok.text;
       this.expect(";");
       const sg = new AST.SGoto(label);
@@ -5216,10 +5195,10 @@ class Parser {
       if (this.parsedLabels.has(label)) {
         // Backward goto — label already defined, must be a loop label
         const target = this.parsedLabels.get(label);
-        if (target.hasGotos && target.labelKind === LabelKind.FORWARD) {
-          target.labelKind = LabelKind.BOTH;
+        if (target.hasGotos && target.labelKind === Types.LabelKind.FORWARD) {
+          target.labelKind = Types.LabelKind.BOTH;
         } else {
-          target.labelKind = LabelKind.LOOP;
+          target.labelKind = Types.LabelKind.LOOP;
         }
         target.hasGotos = true;
         sg.target = target;
@@ -5232,7 +5211,7 @@ class Parser {
     }
 
     // label: statement
-    if (this.atKind(TokenKind.IDENT) && this.peek(1)?.text === ":") {
+    if (this.atKind(Lexer.TokenKind.IDENT) && this.peek(1)?.text === ":") {
       const name = this.advance().text;
       this.advance(); // skip :
       if (this.parsedLabels.has(name)) {
@@ -5246,7 +5225,7 @@ class Parser {
       }
       // Resolve pending forward gotos
       if (this.pendingGotos.has(name)) {
-        sl.labelKind = LabelKind.FORWARD;
+        sl.labelKind = Types.LabelKind.FORWARD;
         sl.hasGotos = true;
         for (const sg of this.pendingGotos.get(name)) {
           sg.target = sl;
@@ -5257,24 +5236,24 @@ class Parser {
     }
 
     // __try/__catch
-    if (this.matchKW(Keyword.X_TRY)) {
+    if (this.matchKW(Lexer.Keyword.X_TRY)) {
       const tryBody = this.parseCompoundStatement();
       const catches = [];
-      while (this.matchKW(Keyword.X_CATCH)) {
+      while (this.matchKW(Lexer.Keyword.X_CATCH)) {
         if (this.atText("{")) {
           // catch_all
           const body = this.parseCompoundStatement();
           catches.push({ tag: null, bindings: [], body });
         } else {
           // __catch TagName(binding1, binding2) { ... }
-          const tagName = this.expectKind(TokenKind.IDENT).text;
+          const tagName = this.expectKind(Lexer.TokenKind.IDENT).text;
           const tag = this.findExceptionTag(tagName);
           this.expect("(");
           const bindings = [];
           if (!this.atText(")")) {
-            bindings.push(this.expectKind(TokenKind.IDENT).text);
+            bindings.push(this.expectKind(Lexer.TokenKind.IDENT).text);
             while (this.matchText(",")) {
-              bindings.push(this.expectKind(TokenKind.IDENT).text);
+              bindings.push(this.expectKind(Lexer.TokenKind.IDENT).text);
             }
           }
           this.expect(")");
@@ -5282,9 +5261,9 @@ class Parser {
           this.typeScope.push(); this.tagScope.push(); this.varScope.push();
           const bindingVars = [];
           for (let i = 0; i < bindings.length; i++) {
-            const paramType = (tag && tag.paramTypes && i < tag.paramTypes.length) ? tag.paramTypes[i] : TINT;
+            const paramType = (tag && tag.paramTypes && i < tag.paramTypes.length) ? tag.paramTypes[i] : Types.TINT;
             const bvar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
-              bindings[i], paramType, StorageClass.NONE, null);
+              bindings[i], paramType, Types.StorageClass.NONE, null);
             bvar.definition = bvar;
             this.varScope.set(bindings[i], bvar);
             bindingVars.push(bvar);
@@ -5306,8 +5285,8 @@ class Parser {
     }
 
     // __throw
-    if (this.matchKW(Keyword.X_THROW)) {
-      const tagName = this.expectKind(TokenKind.IDENT).text;
+    if (this.matchKW(Lexer.Keyword.X_THROW)) {
+      const tagName = this.expectKind(Lexer.TokenKind.IDENT).text;
       this.expect("(");
       const args = [];
       if (!this.atText(")")) {
@@ -5321,12 +5300,12 @@ class Parser {
     }
 
     // _Static_assert inside function body
-    if (this.matchKW(Keyword.STATIC_ASSERT)) {
+    if (this.matchKW(Lexer.Keyword.STATIC_ASSERT)) {
       this.expect("(");
       const condExpr = this.parseAssignmentExpression();
       let msg = "";
       if (this.matchText(",")) {
-        const msgTok = this.expectKind(TokenKind.STRING);
+        const msgTok = this.expectKind(Lexer.TokenKind.STRING);
         msg = msgTok.text.replace(/^"(.*)"$/, '$1');
       }
       this.expect(")");
@@ -5393,7 +5372,7 @@ class Parser {
       if (!first) { if (!this.matchText(",")) break; }
       first = false;
 
-      const decl = this.parseDeclarator(baseType, specs.storageClass === StorageClass.TYPEDEF);
+      const decl = this.parseDeclarator(baseType, specs.storageClass === Types.StorageClass.TYPEDEF);
       let type = decl.type;
       const name = decl.name || "__unnamed";
 
@@ -5403,7 +5382,7 @@ class Parser {
         specs.requestedAlignment = localAttrs.aligned;
       }
 
-      if (specs.storageClass === StorageClass.TYPEDEF) {
+      if (specs.storageClass === Types.StorageClass.TYPEDEF) {
         if (specs.requestedAlignment > 0) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a typedef");
         }
@@ -5417,7 +5396,7 @@ class Parser {
       }
 
       // Local extern function declaration (e.g. extern int f(void);)
-      if (type.kind === TypeKind.FUNCTION) {
+      if (type.kind === Types.TypeKind.FUNCTION) {
         if (specs.requestedAlignment > 0) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a function declaration");
         }
@@ -5435,7 +5414,7 @@ class Parser {
       const dvar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
         name, type, specs.storageClass, null);
       if (specs.requestedAlignment > 0) {
-        if (specs.storageClass === StorageClass.REGISTER) {
+        if (specs.storageClass === Types.StorageClass.REGISTER) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a register variable");
         }
         if (specs.requestedAlignment < (type.align || 1)) {
@@ -5444,11 +5423,11 @@ class Parser {
         dvar.requestedAlignment = specs.requestedAlignment;
       }
       // Local non-extern variables are always definitions
-      if (specs.storageClass !== StorageClass.EXTERN) dvar.definition = dvar;
+      if (specs.storageClass !== Types.StorageClass.EXTERN) dvar.definition = dvar;
 
       // Set allocClass
-      if (type.isAggregate()) dvar.allocClass = AllocClass.MEMORY;
-      else if (specs.storageClass === StorageClass.EXTERN) dvar.allocClass = AllocClass.MEMORY;
+      if (type.isAggregate()) dvar.allocClass = Types.AllocClass.MEMORY;
+      else if (specs.storageClass === Types.StorageClass.EXTERN) dvar.allocClass = Types.AllocClass.MEMORY;
 
       // Parse initializer
       if (this.matchText("=")) {
@@ -5458,14 +5437,14 @@ class Parser {
           dvar.initExpr = this.parseAssignmentExpression();
         }
         // Handle string-initialized char array
-        if (type.kind === TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
-            dvar.initExpr.kind === ExprKind.STRING) {
+        if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
+            dvar.initExpr.kind === Types.ExprKind.STRING) {
           type = dvar.initExpr.type;
           dvar.type = type;
         }
         // Normalize init list
-        if (dvar.initExpr && dvar.initExpr.kind === ExprKind.INIT_LIST) {
-          if (type.kind === TypeKind.ARRAY && type.arraySize === 0) {
+        if (dvar.initExpr && dvar.initExpr.kind === Types.ExprKind.INIT_LIST) {
+          if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0) {
             normalizeInitList(dvar.initExpr, type);
             type = dvar.initExpr.type;
             dvar.type = type;
@@ -5479,10 +5458,10 @@ class Parser {
 
       // Divert static/extern locals: treat them as globals for allocation/linking
       if (this.currentParsingFunc) {
-        if (specs.storageClass === StorageClass.STATIC) {
+        if (specs.storageClass === Types.StorageClass.STATIC) {
           this.currentParsingFunc.staticLocals.push(dvar);
           // Don't include in declaration statement
-        } else if (specs.storageClass === StorageClass.EXTERN) {
+        } else if (specs.storageClass === Types.StorageClass.EXTERN) {
           this.currentParsingFunc.externLocals.push(dvar);
         } else {
           declarations.push(dvar);
@@ -5510,7 +5489,7 @@ class Parser {
       if (!first) { if (!this.matchText(",")) break; }
       first = false;
 
-      const decl = this.parseDeclarator(baseType, specs.storageClass === StorageClass.TYPEDEF);
+      const decl = this.parseDeclarator(baseType, specs.storageClass === Types.StorageClass.TYPEDEF);
       let type = decl.type;
       const name = decl.name || "__unnamed";
 
@@ -5520,7 +5499,7 @@ class Parser {
         specs.requestedAlignment = declAttrs.aligned;
       }
 
-      if (specs.storageClass === StorageClass.TYPEDEF) {
+      if (specs.storageClass === Types.StorageClass.TYPEDEF) {
         if (specs.requestedAlignment > 0) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a typedef");
         }
@@ -5533,7 +5512,7 @@ class Parser {
       }
 
       // K&R parameter declarations: parse type declarations between ')' and '{'
-      if (decl._isKnR && type.kind === TypeKind.FUNCTION &&
+      if (decl._isKnR && type.kind === Types.TypeKind.FUNCTION &&
           !this.atText("{") && !this.atText(";") && !this.atText(",")) {
         const knrParamNames = decl._paramNames || [];
         const knrParamTypes = [...(type.paramTypes || [])];
@@ -5547,12 +5526,12 @@ class Parser {
           } while (this.matchText(","));
           this.expect(";");
         }
-        type = functionType(type.returnType, knrParamTypes, type.isVarArg, false);
+        type = Types.functionType(type.returnType, knrParamTypes, type.isVarArg, false);
         decl.type = type;
       }
 
       // Check if this is a function definition
-      if (type.kind === TypeKind.FUNCTION && this.atText("{")) {
+      if (type.kind === Types.TypeKind.FUNCTION && this.atText("{")) {
         if (specs.requestedAlignment > 0) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a function declaration");
         }
@@ -5561,7 +5540,7 @@ class Parser {
 
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
-        if (prev && prev.declKind === DeclKind.FUNC) {
+        if (prev && prev.declKind === Types.DeclKind.FUNC) {
           if (!prev.type.isCompatibleWith(funcDecl.type)) {
             this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prev.type.toString()}', now defined as '${funcDecl.type.toString()}')`);
           }
@@ -5578,9 +5557,9 @@ class Parser {
         if (decl._paramNames) {
           for (let i = 0; i < decl._paramNames.length; i++) {
             const pname = decl._paramNames[i] || ("__param" + i);
-            const ptype = i < paramTypes.length ? paramTypes[i] : TINT;
-            const pvar = new AST.DVar(loc, pname, ptype, StorageClass.AUTO, null);
-            if (ptype.isAggregate()) pvar.allocClass = AllocClass.MEMORY;
+            const ptype = i < paramTypes.length ? paramTypes[i] : Types.TINT;
+            const pvar = new AST.DVar(loc, pname, ptype, Types.StorageClass.AUTO, null);
+            if (ptype.isAggregate()) pvar.allocClass = Types.AllocClass.MEMORY;
             pvar.definition = pvar; // parameters are always definitions
             params.push(pvar);
             this.varScope.set(pname, pvar);
@@ -5588,8 +5567,8 @@ class Parser {
         } else {
           // No param names available (abstract declarator)
           for (let i = 0; i < paramTypes.length; i++) {
-            const pvar = new AST.DVar(loc, "__param" + i, paramTypes[i], StorageClass.AUTO, null);
-            if (paramTypes[i].isAggregate()) pvar.allocClass = AllocClass.MEMORY;
+            const pvar = new AST.DVar(loc, "__param" + i, paramTypes[i], Types.StorageClass.AUTO, null);
+            if (paramTypes[i].isAggregate()) pvar.allocClass = Types.AllocClass.MEMORY;
             pvar.definition = pvar; // parameters are always definitions
             params.push(pvar);
           }
@@ -5613,8 +5592,8 @@ class Parser {
         this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
 
         // Categorize
-        if (specs.storageClass === StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
-        else if (specs.storageClass === StorageClass.STATIC) unit.staticFunctions.push(funcDecl);
+        if (specs.storageClass === Types.StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
+        else if (specs.storageClass === Types.StorageClass.STATIC) unit.staticFunctions.push(funcDecl);
         else unit.definedFunctions.push(funcDecl);
 
         // Move extern locals to unit
@@ -5625,7 +5604,7 @@ class Parser {
       }
 
       // Function declaration (no body)
-      if (type.kind === TypeKind.FUNCTION) {
+      if (type.kind === Types.TypeKind.FUNCTION) {
         if (specs.requestedAlignment > 0) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a function declaration");
         }
@@ -5637,25 +5616,25 @@ class Parser {
         if (decl._paramNames) {
           for (let i = 0; i < decl._paramNames.length; i++) {
             const pname = decl._paramNames[i] || ("__param" + i);
-            const ptype = i < paramTypes.length ? paramTypes[i] : TINT;
-            const pvar = new AST.DVar(loc, pname, ptype, StorageClass.AUTO, null);
-            if (ptype.isAggregate()) pvar.allocClass = AllocClass.MEMORY;
+            const ptype = i < paramTypes.length ? paramTypes[i] : Types.TINT;
+            const pvar = new AST.DVar(loc, pname, ptype, Types.StorageClass.AUTO, null);
+            if (ptype.isAggregate()) pvar.allocClass = Types.AllocClass.MEMORY;
             funcDecl.parameters.push(pvar);
           }
         } else {
           for (let i = 0; i < paramTypes.length; i++) {
-            const pvar = new AST.DVar(loc, "__param" + i, paramTypes[i], StorageClass.AUTO, null);
-            if (paramTypes[i].isAggregate()) pvar.allocClass = AllocClass.MEMORY;
+            const pvar = new AST.DVar(loc, "__param" + i, paramTypes[i], Types.StorageClass.AUTO, null);
+            if (paramTypes[i].isAggregate()) pvar.allocClass = Types.AllocClass.MEMORY;
             funcDecl.parameters.push(pvar);
           }
         }
 
         const prevFunc = this.varScope.get(name);
-        if (prevFunc && prevFunc.declKind === DeclKind.FUNC && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
+        if (prevFunc && prevFunc.declKind === Types.DeclKind.FUNC && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
         }
         this.varScope.replace(name, funcDecl);
-        if (specs.storageClass === StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
+        if (specs.storageClass === Types.StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
         else unit.declaredFunctions.push(funcDecl);
         continue;
       }
@@ -5664,7 +5643,7 @@ class Parser {
       const dvar = new AST.DVar(loc, name, type, specs.storageClass, null);
       // Check for conflicting variable declarations
       const prevVar = this.varScope.get(name);
-      if (prevVar && prevVar.declKind === DeclKind.VAR && !prevVar.type.isCompatibleWith(type)) {
+      if (prevVar && prevVar.declKind === Types.DeclKind.VAR && !prevVar.type.isCompatibleWith(type)) {
         this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevVar.type.toString()}', now declared as '${type.toString()}')`);
       }
       if (specs.requestedAlignment > 0) {
@@ -5673,8 +5652,8 @@ class Parser {
         }
         dvar.requestedAlignment = specs.requestedAlignment;
       }
-      if (type.isAggregate() || type.isArray()) dvar.allocClass = AllocClass.MEMORY;
-      else if (specs.storageClass === StorageClass.EXTERN) dvar.allocClass = AllocClass.MEMORY;
+      if (type.isAggregate() || type.isArray()) dvar.allocClass = Types.AllocClass.MEMORY;
+      else if (specs.storageClass === Types.StorageClass.EXTERN) dvar.allocClass = Types.AllocClass.MEMORY;
 
       if (this.matchText("=")) {
         if (this.atText("{")) {
@@ -5683,14 +5662,14 @@ class Parser {
           dvar.initExpr = this.parseAssignmentExpression();
         }
         // Handle string-initialized char array
-        if (type.kind === TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
-            dvar.initExpr.kind === ExprKind.STRING) {
-          type = arrayOf(type.baseType, dvar.initExpr.type.arraySize);
+        if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
+            dvar.initExpr.kind === Types.ExprKind.STRING) {
+          type = Types.arrayOf(type.baseType, dvar.initExpr.type.arraySize);
           dvar.type = type;
         }
         // Normalize init list
-        if (dvar.initExpr && dvar.initExpr.kind === ExprKind.INIT_LIST) {
-          if (type.kind === TypeKind.ARRAY && type.arraySize === 0) {
+        if (dvar.initExpr && dvar.initExpr.kind === Types.ExprKind.INIT_LIST) {
+          if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0) {
             normalizeInitList(dvar.initExpr, type);
             type = dvar.initExpr.type;
             dvar.type = type;
@@ -5702,12 +5681,12 @@ class Parser {
 
       // Check for previous declaration and update scope
       const prevDecl = this.varScope.get(name);
-      if (prevDecl && prevDecl.declKind === DeclKind.VAR && specs.storageClass !== StorageClass.EXTERN) {
+      if (prevDecl && prevDecl.declKind === Types.DeclKind.VAR && specs.storageClass !== Types.StorageClass.EXTERN) {
         prevDecl.definition = dvar;
       }
       // Use replace to update the scope entry (varScope.set fails if name already exists)
       this.varScope.replace(name, dvar);
-      if (specs.storageClass === StorageClass.EXTERN) unit.externVariables.push(dvar);
+      if (specs.storageClass === Types.StorageClass.EXTERN) unit.externVariables.push(dvar);
       else unit.definedVariables.push(dvar);
     }
     this.expect(";");
@@ -5721,9 +5700,9 @@ class Parser {
       ptrCount++;
       type = type.pointer();
       while (true) {
-        if (this.matchKW(Keyword.CONST)) { type = type.addConst(); continue; }
-        if (this.matchKW(Keyword.VOLATILE)) { type = type.addVolatile(); continue; }
-        if (this.matchKW(Keyword.RESTRICT)) continue;
+        if (this.matchKW(Lexer.Keyword.CONST)) { type = type.addConst(); continue; }
+        if (this.matchKW(Lexer.Keyword.VOLATILE)) { type = type.addVolatile(); continue; }
+        if (this.matchKW(Lexer.Keyword.RESTRICT)) continue;
         break;
       }
     }
@@ -5741,7 +5720,7 @@ class Parser {
       return { type: combined, name: inner.name, _paramNames: inner._paramNames || type._paramNames, _isKnR: inner._isKnR || type._isKnR };
     }
 
-    if (this.atKind(TokenKind.IDENT)) {
+    if (this.atKind(Lexer.TokenKind.IDENT)) {
       name = this.advance().text;
     }
 
@@ -5767,7 +5746,7 @@ class Parser {
           arrayDims.push(size);
         }
         for (let i = arrayDims.length - 1; i >= 0; i--) {
-          type = arrayOf(type, arrayDims[i]);
+          type = Types.arrayOf(type, arrayDims[i]);
         }
         continue;
       }
@@ -5779,16 +5758,16 @@ class Parser {
         let isKnR = false;
         if (this.atText(")")) {
           hasUnspecifiedParams = true; // f() means unspecified params
-        } else if (this.atKW(Keyword.VOID) && this.peek(1)?.text === ")") {
+        } else if (this.atKW(Lexer.Keyword.VOID) && this.peek(1)?.text === ")") {
           this.advance(); // f(void) means zero params
         } else if (this._allowKnRDefinitions &&
-                   this.peek().kind === TokenKind.IDENT && !this.isTypeName() &&
+                   this.peek().kind === Lexer.TokenKind.IDENT && !this.isTypeName() &&
                    (this.peek(1)?.text === "," || this.peek(1)?.text === ")")) {
           // K&R identifier list: f(a, b, c)
           isKnR = true;
-          while (this.peek().kind === TokenKind.IDENT) {
+          while (this.peek().kind === Lexer.TokenKind.IDENT) {
             const pName = this.advance().text;
-            params.push(TINT); // placeholder
+            params.push(Types.TINT); // placeholder
             pNames.push(pName);
             if (!this.matchText(",")) break;
           }
@@ -5806,7 +5785,7 @@ class Parser {
               // Handle pointer prefix
               while (this.matchText("*")) {
                 pType = pType.pointer();
-                while (this.matchKW(Keyword.CONST) || this.matchKW(Keyword.VOLATILE) || this.matchKW(Keyword.RESTRICT)) {}
+                while (this.matchKW(Lexer.Keyword.CONST) || this.matchKW(Lexer.Keyword.VOLATILE) || this.matchKW(Lexer.Keyword.RESTRICT)) {}
               }
               // Handle parenthesized: void (*callback)(...)
               if (this.atText("(") && !this.isStartOfParamList()) {
@@ -5814,7 +5793,7 @@ class Parser {
                 pType = inner.type;
                 pName = inner.name;
               } else {
-                if (this.atKind(TokenKind.IDENT)) pName = this.advance().text;
+                if (this.atKind(Lexer.TokenKind.IDENT)) pName = this.advance().text;
                 // Array suffix on param -> first dim decays to pointer, rest are arrays
                 if (this.atText("[")) {
                   const arrayDims = [];
@@ -5822,9 +5801,9 @@ class Parser {
                   while (this.matchText("[")) {
                     if (firstDim) {
                       // C99: skip 'static' and qualifiers inside first array bracket
-                      this.matchKW(Keyword.STATIC);
-                      while (this.matchKW(Keyword.CONST) || this.matchKW(Keyword.VOLATILE) || this.matchKW(Keyword.RESTRICT)) {}
-                      this.matchKW(Keyword.STATIC);
+                      this.matchKW(Lexer.Keyword.STATIC);
+                      while (this.matchKW(Lexer.Keyword.CONST) || this.matchKW(Lexer.Keyword.VOLATILE) || this.matchKW(Lexer.Keyword.RESTRICT)) {}
+                      this.matchKW(Lexer.Keyword.STATIC);
                     }
                     let arrSize = 0;
                     if (!this.atText("]")) {
@@ -5841,7 +5820,7 @@ class Parser {
                   }
                   // Build type from inner to outer (reverse), then decay first to pointer
                   for (let i = arrayDims.length - 1; i >= 1; i--) {
-                    pType = arrayOf(pType, arrayDims[i]);
+                    pType = Types.arrayOf(pType, arrayDims[i]);
                   }
                   pType = pType.pointer(); // first dim decays to pointer
                 }
@@ -5857,7 +5836,7 @@ class Parser {
             }
         }
         this.expect(")");
-        type = functionType(type, params, isVarArg, hasUnspecifiedParams);
+        type = Types.functionType(type, params, isVarArg, hasUnspecifiedParams);
         paramNames = pNames;
         isKnRResult = isKnR;
         continue;
@@ -5877,11 +5856,11 @@ function parseTokens(tokens, options) {
   const warnings = [];
 
   if (tokens.length === 0) {
-    errors.push(new LexError("No tokens to parse", null, 0));
-    return { translationUnit: makeTUnit(null), errors, warnings };
+    errors.push(new Lexer.LexError("No tokens to parse", null, 0));
+    return { translationUnit: AST.makeTUnit(null), errors, warnings };
   }
 
-  const unit = makeTUnit(tokens[0].filename);
+  const unit = AST.makeTUnit(tokens[0].filename);
   const parser = new Parser(tokens, errors, warnings);
   if (options?.warningFlags) parser.warningFlags = options.warningFlags;
   if (options?.compilerOptions?.allowImplicitInt) parser._allowImplicitInt = true;
@@ -5892,10 +5871,10 @@ function parseTokens(tokens, options) {
   try {
     while (!parser.atEnd()) {
       // __require_source
-      if (parser.atKW(Keyword.X_REQUIRE_SOURCE)) {
+      if (parser.atKW(Lexer.Keyword.X_REQUIRE_SOURCE)) {
         parser.advance();
         parser.expect("(");
-        const tok = parser.expectKind(TokenKind.STRING);
+        const tok = parser.expectKind(Lexer.TokenKind.STRING);
         const filename = tok.text.substring(1, tok.text.length - 1);
         parser.requiredSources.add(filename);
         parser.expect(")");
@@ -5903,7 +5882,7 @@ function parseTokens(tokens, options) {
         continue;
       }
       // __minstack
-      if (parser.atKW(Keyword.X_MINSTACK)) {
+      if (parser.atKW(Lexer.Keyword.X_MINSTACK)) {
         parser.advance();
         parser.expect("(");
         const sizeExpr = parser.parseAssignmentExpression();
@@ -5916,24 +5895,24 @@ function parseTokens(tokens, options) {
         continue;
       }
       // __export
-      if (parser.atKW(Keyword.X_EXPORT)) {
+      if (parser.atKW(Lexer.Keyword.X_EXPORT)) {
         parser.advance();
-        const exportNameTok = parser.expectKind(TokenKind.IDENT);
+        const exportNameTok = parser.expectKind(Lexer.TokenKind.IDENT);
         const exportName = exportNameTok.text;
         parser.expect("=");
-        const funcNameTok = parser.expectKind(TokenKind.IDENT);
+        const funcNameTok = parser.expectKind(Lexer.TokenKind.IDENT);
         const funcName = funcNameTok.text;
         parser.expect(";");
         const decl = parser.varScope.get(funcName);
-        if (decl && decl.declKind === DeclKind.FUNC) {
+        if (decl && decl.declKind === Types.DeclKind.FUNC) {
           parser.exportDirectives.push([exportName, decl]);
         }
         continue;
       }
       // __exception
-      if (parser.atKW(Keyword.X_EXCEPTION)) {
+      if (parser.atKW(Lexer.Keyword.X_EXCEPTION)) {
         parser.advance();
-        const tagName = parser.expectKind(TokenKind.IDENT).text;
+        const tagName = parser.expectKind(Lexer.TokenKind.IDENT).text;
         parser.expect("(");
         const paramTypes = [];
         if (!parser.atText(")")) {
@@ -5941,7 +5920,7 @@ function parseTokens(tokens, options) {
             const pSpecs = parser.parseDeclSpecifiers();
             let pType = pSpecs.type;
             while (parser.matchText("*")) pType = pType.pointer();
-            if (parser.atKind(TokenKind.IDENT)) parser.advance(); // skip param name
+            if (parser.atKind(Lexer.TokenKind.IDENT)) parser.advance(); // skip param name
             paramTypes.push(pType);
             if (!parser.matchText(",")) break;
           }
@@ -5949,7 +5928,7 @@ function parseTokens(tokens, options) {
         parser.expect(")");
         parser.expect(";");
         for (const pt of paramTypes) {
-          if (pt.isTag() && (pt.tagDecl?.tagKind === TagKind.STRUCT || pt.tagDecl?.tagKind === TagKind.UNION)) {
+          if (pt.isTag() && (pt.tagDecl?.tagKind === Types.TagKind.STRUCT || pt.tagDecl?.tagKind === Types.TagKind.UNION)) {
             parser.error(parser.peek(), `struct/union types are not allowed in __exception parameters`);
           }
         }
@@ -5976,10 +5955,10 @@ function parseTokens(tokens, options) {
       parser.parseExternalDeclaration(unit);
     }
   } catch (e) {
-    if (e instanceof LexError) {
+    if (e instanceof Lexer.LexError) {
       errors.push(e);
     } else {
-      errors.push(new LexError(e.message, null, 0));
+      errors.push(new Lexer.LexError(e.message, null, 0));
     }
   }
 
@@ -5992,9 +5971,9 @@ function parseTokens(tokens, options) {
 }
 
 function parseSource(filename, source, ppRegistry) {
-  const result = tokenize(filename, source, ppRegistry);
+  const result = Lexer.tokenize(filename, source, ppRegistry);
   if (result.errors.length > 0) {
-    return { translationUnit: makeTUnit(filename), errors: result.errors, warnings: result.warnings };
+    return { translationUnit: AST.makeTUnit(filename), errors: result.errors, warnings: result.warnings };
   }
   const parseResult = parseTokens(result.tokens);
   parseResult.warnings = [...result.warnings, ...parseResult.warnings];
@@ -6016,7 +5995,7 @@ function wrapImplicitCast(expr, targetType, setter) {
 function annotateExpr(expr) {
   if (!expr) return;
   switch (expr.kind) {
-    case ExprKind.BINARY: {
+    case Types.ExprKind.BINARY: {
       annotateExpr(expr.left);
       annotateExpr(expr.right);
       // Skip assignment ops
@@ -6030,12 +6009,12 @@ function annotateExpr(expr) {
           (leftType.isPointer() || rightType.isPointer() ||
            leftType.isArray() || rightType.isArray())) break;
       const isComparison = ["EQ","NE","LT","GT","LE","GE"].includes(expr.op);
-      const opType = isComparison ? usualArithmeticConversions(leftType, rightType) : expr.type;
+      const opType = isComparison ? Types.usualArithmeticConversions(leftType, rightType) : expr.type;
       wrapImplicitCast(expr.left, opType, (e) => { expr.left = e; });
       wrapImplicitCast(expr.right, opType, (e) => { expr.right = e; });
       break;
     }
-    case ExprKind.CALL: {
+    case Types.ExprKind.CALL: {
       annotateExpr(expr.callee);
       for (const arg of expr.arguments) annotateExpr(arg);
       // Resolve function type
@@ -6053,8 +6032,8 @@ function annotateExpr(expr) {
         // Varargs: default argument promotion (float→double)
         for (let i = paramTypes.length; i < expr.arguments.length; i++) {
           const idx = i;
-          if (expr.arguments[idx].type.removeQualifiers() === TFLOAT) {
-            wrapImplicitCast(expr.arguments[idx], TDOUBLE, (e) => { expr.arguments[idx] = e; });
+          if (expr.arguments[idx].type.removeQualifiers() === Types.TFLOAT) {
+            wrapImplicitCast(expr.arguments[idx], Types.TDOUBLE, (e) => { expr.arguments[idx] = e; });
           }
         }
       } else {
@@ -6065,47 +6044,47 @@ function annotateExpr(expr) {
       }
       break;
     }
-    case ExprKind.TERNARY:
+    case Types.ExprKind.TERNARY:
       annotateExpr(expr.condition);
       annotateExpr(expr.thenExpr);
       annotateExpr(expr.elseExpr);
       wrapImplicitCast(expr.thenExpr, expr.type, (e) => { expr.thenExpr = e; });
       wrapImplicitCast(expr.elseExpr, expr.type, (e) => { expr.elseExpr = e; });
       break;
-    case ExprKind.UNARY:
+    case Types.ExprKind.UNARY:
       annotateExpr(expr.operand);
       break;
-    case ExprKind.SUBSCRIPT:
+    case Types.ExprKind.SUBSCRIPT:
       annotateExpr(expr.array);
       annotateExpr(expr.index);
       break;
-    case ExprKind.MEMBER:
-    case ExprKind.ARROW:
+    case Types.ExprKind.MEMBER:
+    case Types.ExprKind.ARROW:
       annotateExpr(expr.base);
       break;
-    case ExprKind.CAST:
+    case Types.ExprKind.CAST:
       annotateExpr(expr.expr);
       break;
-    case ExprKind.COMMA:
+    case Types.ExprKind.COMMA:
       for (const e of expr.expressions) annotateExpr(e);
       break;
-    case ExprKind.INIT_LIST:
+    case Types.ExprKind.INIT_LIST:
       for (const e of expr.elements) annotateExpr(e);
       break;
-    case ExprKind.INTRINSIC:
+    case Types.ExprKind.INTRINSIC:
       for (const arg of expr.args) annotateExpr(arg);
       break;
-    case ExprKind.WASM:
+    case Types.ExprKind.WASM:
       for (const arg of expr.args) annotateExpr(arg);
       break;
-    case ExprKind.COMPOUND_LITERAL:
+    case Types.ExprKind.COMPOUND_LITERAL:
       if (expr.initList) for (const e of expr.initList.elements) annotateExpr(e);
       break;
-    case ExprKind.SIZEOF_EXPR:
-    case ExprKind.ALIGNOF_EXPR:
+    case Types.ExprKind.SIZEOF_EXPR:
+    case Types.ExprKind.ALIGNOF_EXPR:
       annotateExpr(expr.expr);
       break;
-    case ExprKind.IMPLICIT_CAST:
+    case Types.ExprKind.IMPLICIT_CAST:
       annotateExpr(expr.expr);
       break;
     default:
@@ -6116,56 +6095,56 @@ function annotateExpr(expr) {
 function annotateStmt(stmt, returnType) {
   if (!stmt) return;
   switch (stmt.kind) {
-    case StmtKind.EXPR:
+    case Types.StmtKind.EXPR:
       annotateExpr(stmt.expr);
       break;
-    case StmtKind.RETURN:
+    case Types.StmtKind.RETURN:
       if (stmt.expr) {
         annotateExpr(stmt.expr);
         wrapImplicitCast(stmt.expr, returnType, (e) => { stmt.expr = e; });
       }
       break;
-    case StmtKind.DECL:
+    case Types.StmtKind.DECL:
       for (const decl of stmt.declarations) {
-        if (decl.declKind === DeclKind.VAR && decl.initExpr) {
+        if (decl.declKind === Types.DeclKind.VAR && decl.initExpr) {
           annotateExpr(decl.initExpr);
-          if (!decl.type.isAggregate() && decl.initExpr.kind !== ExprKind.INIT_LIST) {
+          if (!decl.type.isAggregate() && decl.initExpr.kind !== Types.ExprKind.INIT_LIST) {
             wrapImplicitCast(decl.initExpr, decl.type, (e) => { decl.initExpr = e; });
           }
         }
       }
       break;
-    case StmtKind.COMPOUND:
+    case Types.StmtKind.COMPOUND:
       for (const s of stmt.statements) annotateStmt(s, returnType);
       break;
-    case StmtKind.IF:
+    case Types.StmtKind.IF:
       annotateExpr(stmt.condition);
       annotateStmt(stmt.thenBranch, returnType);
       if (stmt.elseBranch) annotateStmt(stmt.elseBranch, returnType);
       break;
-    case StmtKind.WHILE:
+    case Types.StmtKind.WHILE:
       annotateExpr(stmt.condition);
       annotateStmt(stmt.body, returnType);
       break;
-    case StmtKind.DO_WHILE:
+    case Types.StmtKind.DO_WHILE:
       annotateStmt(stmt.body, returnType);
       annotateExpr(stmt.condition);
       break;
-    case StmtKind.FOR:
+    case Types.StmtKind.FOR:
       if (stmt.init) annotateStmt(stmt.init, returnType);
       if (stmt.condition) annotateExpr(stmt.condition);
       if (stmt.increment) annotateExpr(stmt.increment);
       annotateStmt(stmt.body, returnType);
       break;
-    case StmtKind.SWITCH:
+    case Types.StmtKind.SWITCH:
       annotateExpr(stmt.expr);
       if (stmt.body) annotateStmt(stmt.body, returnType);
       break;
-    case StmtKind.TRY_CATCH:
+    case Types.StmtKind.TRY_CATCH:
       annotateStmt(stmt.tryBody, returnType);
       for (const cc of stmt.catches) annotateStmt(cc.body, returnType);
       break;
-    case StmtKind.THROW:
+    case Types.StmtKind.THROW:
       for (let i = 0; i < stmt.args.length; i++) {
         annotateExpr(stmt.args[i]);
         if (stmt.tag && stmt.tag.paramTypes && i < stmt.tag.paramTypes.length) {
@@ -6183,9 +6162,9 @@ function annotateStmt(stmt, returnType) {
 
 // Check if an expression is a call to a named function, return the ECall or null
 function getNamedCall(expr, name) {
-  if (expr.kind !== ExprKind.CALL) return null;
+  if (expr.kind !== Types.ExprKind.CALL) return null;
   const callee = expr.callee;
-  if (callee.kind !== ExprKind.IDENT) return null;
+  if (callee.kind !== Types.ExprKind.IDENT) return null;
   if (callee.name !== name) return null;
   return expr;
 }
@@ -6193,21 +6172,21 @@ function getNamedCall(expr, name) {
 // Detect setjmp patterns in an if-condition.
 // Returns {call, zeroIsTrue} or {call: null}
 function extractSetjmpCall(cond) {
-  if (cond.kind === ExprKind.BINARY) {
+  if (cond.kind === Types.ExprKind.BINARY) {
     if (cond.op === "EQ") {
       let call = getNamedCall(cond.left, "setjmp");
-      if (call && cond.right.kind === ExprKind.INT && cond.right.value === 0n)
+      if (call && cond.right.kind === Types.ExprKind.INT && cond.right.value === 0n)
         return { call, zeroIsTrue: true };
       call = getNamedCall(cond.right, "setjmp");
-      if (call && cond.left.kind === ExprKind.INT && cond.left.value === 0n)
+      if (call && cond.left.kind === Types.ExprKind.INT && cond.left.value === 0n)
         return { call, zeroIsTrue: true };
     }
     if (cond.op === "NE") {
       let call = getNamedCall(cond.left, "setjmp");
-      if (call && cond.right.kind === ExprKind.INT && cond.right.value === 0n)
+      if (call && cond.right.kind === Types.ExprKind.INT && cond.right.value === 0n)
         return { call, zeroIsTrue: false };
       call = getNamedCall(cond.right, "setjmp");
-      if (call && cond.left.kind === ExprKind.INT && cond.left.value === 0n)
+      if (call && cond.left.kind === Types.ExprKind.INT && cond.left.value === 0n)
         return { call, zeroIsTrue: false };
     }
   }
@@ -6215,7 +6194,7 @@ function extractSetjmpCall(cond) {
   const directCall = getNamedCall(cond, "setjmp");
   if (directCall) return { call: directCall, zeroIsTrue: false };
   // Pattern: !setjmp(buf)
-  if (cond.kind === ExprKind.UNARY && cond.op === "OP_LNOT") {
+  if (cond.kind === Types.ExprKind.UNARY && cond.op === "OP_LNOT") {
     const negCall = getNamedCall(cond.operand, "setjmp");
     if (negCall) return { call: negCall, zeroIsTrue: true };
   }
@@ -6224,15 +6203,15 @@ function extractSetjmpCall(cond) {
 
 // Build expression: buf[0]
 function makeBufIdExpr(bufExpr) {
-  return new AST.ESubscript(TINT, bufExpr, new AST.EInt(TINT, 0n));
+  return new AST.ESubscript(Types.TINT, bufExpr, new AST.EInt(Types.TINT, 0n));
 }
 
 // Build: buf[0] = ++counterVar
 function makeSetBufIdStmt(bufExpr, counterVar) {
   const lhs = makeBufIdExpr(bufExpr);
-  const counterRef = new AST.EIdent(TINT, counterVar.name, counterVar);
-  const rhs = new AST.EUnary(TINT, "OP_PRE_INC", counterRef);
-  const assign = new AST.EBinary(TINT, "ASSIGN", lhs, rhs);
+  const counterRef = new AST.EIdent(Types.TINT, counterVar.name, counterVar);
+  const rhs = new AST.EUnary(Types.TINT, "OP_PRE_INC", counterRef);
+  const assign = new AST.EBinary(Types.TINT, "ASSIGN", lhs, rhs);
   return new AST.SExpr(assign);
 }
 
@@ -6243,12 +6222,12 @@ function makeThrowLongJump(tag, idExpr, valExpr) {
 
 // Build catch body: { if (id != buf[0]) rethrow; <userBody> }
 function makeCatchBody(tag, idVar, valVar, bufExpr, userBody) {
-  const idRef = new AST.EIdent(TINT, idVar.name, idVar);
+  const idRef = new AST.EIdent(Types.TINT, idVar.name, idVar);
   const myIdExpr = makeBufIdExpr(bufExpr);
-  const cond = new AST.EBinary(TINT, "NE", idRef, myIdExpr);
+  const cond = new AST.EBinary(Types.TINT, "NE", idRef, myIdExpr);
 
-  const idRef2 = new AST.EIdent(TINT, idVar.name, idVar);
-  const valRef = new AST.EIdent(TINT, valVar.name, valVar);
+  const idRef2 = new AST.EIdent(Types.TINT, idVar.name, idVar);
+  const valRef = new AST.EIdent(Types.TINT, valVar.name, valVar);
   const rethrow = makeThrowLongJump(tag, idRef2, valRef);
 
   const rethrowIf = new AST.SIf(cond, rethrow, null);
@@ -6259,7 +6238,7 @@ function makeCatchBody(tag, idVar, valVar, bufExpr, userBody) {
 // Returns a replacement statement if changed, or the same statement if not.
 function lowerLongjmpInStmt(stmt, tag) {
   switch (stmt.kind) {
-    case StmtKind.EXPR: {
+    case Types.StmtKind.EXPR: {
       const call = getNamedCall(stmt.expr, "longjmp");
       if (call && call.arguments.length === 2) {
         const idExpr = makeBufIdExpr(call.arguments[0]);
@@ -6268,29 +6247,29 @@ function lowerLongjmpInStmt(stmt, tag) {
       }
       return stmt;
     }
-    case StmtKind.COMPOUND:
+    case Types.StmtKind.COMPOUND:
       for (let i = 0; i < stmt.statements.length; i++) {
         stmt.statements[i] = lowerLongjmpInStmt(stmt.statements[i], tag);
       }
       return stmt;
-    case StmtKind.IF:
+    case Types.StmtKind.IF:
       stmt.thenBranch = lowerLongjmpInStmt(stmt.thenBranch, tag);
       if (stmt.elseBranch) stmt.elseBranch = lowerLongjmpInStmt(stmt.elseBranch, tag);
       return stmt;
-    case StmtKind.WHILE:
+    case Types.StmtKind.WHILE:
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case StmtKind.DO_WHILE:
+    case Types.StmtKind.DO_WHILE:
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case StmtKind.FOR:
+    case Types.StmtKind.FOR:
       if (stmt.init) stmt.init = lowerLongjmpInStmt(stmt.init, tag);
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case StmtKind.SWITCH:
+    case Types.StmtKind.SWITCH:
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case StmtKind.TRY_CATCH:
+    case Types.StmtKind.TRY_CATCH:
       stmt.tryBody = lowerLongjmpInStmt(stmt.tryBody, tag);
       for (const cc of stmt.catches) cc.body = lowerLongjmpInStmt(cc.body, tag);
       return stmt;
@@ -6308,35 +6287,35 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
 
     // Recurse into nested compounds first
     switch (stmt.kind) {
-      case StmtKind.COMPOUND:
+      case Types.StmtKind.COMPOUND:
         lowerSetjmpInCompound(stmt, tag, counterVar);
         break;
-      case StmtKind.IF:
+      case Types.StmtKind.IF:
         // Don't recurse into the if we're about to transform — check first
         break;
-      case StmtKind.WHILE:
-        if (stmt.body.kind === StmtKind.COMPOUND)
+      case Types.StmtKind.WHILE:
+        if (stmt.body.kind === Types.StmtKind.COMPOUND)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case StmtKind.DO_WHILE:
-        if (stmt.body.kind === StmtKind.COMPOUND)
+      case Types.StmtKind.DO_WHILE:
+        if (stmt.body.kind === Types.StmtKind.COMPOUND)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case StmtKind.FOR:
-        if (stmt.body.kind === StmtKind.COMPOUND)
+      case Types.StmtKind.FOR:
+        if (stmt.body.kind === Types.StmtKind.COMPOUND)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case StmtKind.SWITCH:
-        if (stmt.body.kind === StmtKind.COMPOUND)
+      case Types.StmtKind.SWITCH:
+        if (stmt.body.kind === Types.StmtKind.COMPOUND)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case StmtKind.LABEL:
+      case Types.StmtKind.LABEL:
         break;
-      case StmtKind.TRY_CATCH:
-        if (stmt.tryBody.kind === StmtKind.COMPOUND)
+      case Types.StmtKind.TRY_CATCH:
+        if (stmt.tryBody.kind === Types.StmtKind.COMPOUND)
           lowerSetjmpInCompound(stmt.tryBody, tag, counterVar);
         for (const cc of stmt.catches)
-          if (cc.body.kind === StmtKind.COMPOUND)
+          if (cc.body.kind === Types.StmtKind.COMPOUND)
             lowerSetjmpInCompound(cc.body, tag, counterVar);
         break;
       default:
@@ -6344,14 +6323,14 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     }
 
     // Now check if this is an if-statement with setjmp in the condition
-    if (stmt.kind !== StmtKind.IF) continue;
+    if (stmt.kind !== Types.StmtKind.IF) continue;
 
     const { call: setjmpCall, zeroIsTrue } = extractSetjmpCall(stmt.condition);
     if (!setjmpCall) {
       // Not a setjmp if — but still recurse into its branches
-      if (stmt.thenBranch.kind === StmtKind.COMPOUND)
+      if (stmt.thenBranch.kind === Types.StmtKind.COMPOUND)
         lowerSetjmpInCompound(stmt.thenBranch, tag, counterVar);
-      if (stmt.elseBranch && stmt.elseBranch.kind === StmtKind.COMPOUND)
+      if (stmt.elseBranch && stmt.elseBranch.kind === Types.StmtKind.COMPOUND)
         lowerSetjmpInCompound(stmt.elseBranch, tag, counterVar);
       continue;
     }
@@ -6360,12 +6339,12 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     const bufExpr = setjmpCall.arguments[0];
 
     // Create catch binding variables
-    const idName = intern("__setjmp_caught_id");
-    const valName = intern("__setjmp_caught_val");
+    const idName = Lexer.intern("__setjmp_caught_id");
+    const valName = Lexer.intern("__setjmp_caught_val");
     const loc = { filename: "", line: 0 };
-    const idVar = new AST.DVar(loc, idName, TINT, StorageClass.NONE, null);
+    const idVar = new AST.DVar(loc, idName, Types.TINT, Types.StorageClass.NONE, null);
     idVar.definition = idVar;
-    const valVar = new AST.DVar(loc, valName, TINT, StorageClass.NONE, null);
+    const valVar = new AST.DVar(loc, valName, Types.TINT, Types.StorageClass.NONE, null);
     valVar.definition = valVar;
 
     // Determine try-body and catch-body based on pattern
@@ -6393,9 +6372,9 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     }
 
     // Recurse into the try body and catch body
-    if (tryBody.kind === StmtKind.COMPOUND)
+    if (tryBody.kind === Types.StmtKind.COMPOUND)
       lowerSetjmpInCompound(tryBody, tag, counterVar);
-    if (catchUserBody.kind === StmtKind.COMPOUND)
+    if (catchUserBody.kind === Types.StmtKind.COMPOUND)
       lowerSetjmpInCompound(catchUserBody, tag, counterVar);
 
     // Build the catch body with rethrow logic
@@ -6436,7 +6415,7 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   if (!hasSetjmp) return;
 
   // Look up __LongJump tag (declared via __exception in setjmp.h, parsed into registry)
-  const tagName = intern("__LongJump");
+  const tagName = Lexer.intern("__LongJump");
   const tag = exceptionTagRegistry.get(tagName);
   if (!tag) throw new Error("__LongJump exception tag not found");
 
@@ -6446,7 +6425,7 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   );
 
   // Look up __setjmp_id_counter (declared extern in setjmp.h, defined in __setjmp.c)
-  const counterName = intern("__setjmp_id_counter");
+  const counterName = Lexer.intern("__setjmp_id_counter");
   let counterVar = null;
   for (const v of unit.externVariables) {
     if (v.name === counterName) { counterVar = v; break; }
@@ -6459,7 +6438,7 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   // Lower all function bodies
   const lowerFunc = (func) => {
     if (!func.body) return;
-    if (func.body.kind === StmtKind.COMPOUND) {
+    if (func.body.kind === Types.StmtKind.COMPOUND) {
       lowerSetjmpInCompound(func.body, tag, counterVar);
     }
     func.body = lowerLongjmpInStmt(func.body, tag);
@@ -6471,7 +6450,7 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
 function annotateImplicitCasts(unit) {
   const annotateFunc = (func) => {
     if (!func.body) return;
-    const retType = func.type.returnType || TINT;
+    const retType = func.type.returnType || Types.TINT;
     annotateStmt(func.body, retType);
   };
   for (const f of unit.definedFunctions) annotateFunc(f);
@@ -6488,10 +6467,3017 @@ return {
 })();
 
 // ====================
-// Main
+// WASM
 // ====================
 
-// Embedded standard library headers
+const Codegen = (() => {
+
+function appendF32(out, value) {
+  const buf = new ArrayBuffer(4);
+  new DataView(buf).setFloat32(0, value, true); // little-endian
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < 4; i++) out.push(bytes[i]);
+}
+
+function appendF64(out, value) {
+  const buf = new ArrayBuffer(8);
+  new DataView(buf).setFloat64(0, value, true); // little-endian
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < 8; i++) out.push(bytes[i]);
+}
+
+// WASM type enums
+const WasmNumType = Object.freeze({ I32: 0x7F, I64: 0x7E, F32: 0x7D, F64: 0x7C });
+
+const WT_I32 = { tag: "num", num: WasmNumType.I32 };
+const WT_I64 = { tag: "num", num: WasmNumType.I64 };
+const WT_F32 = { tag: "num", num: WasmNumType.F32 };
+const WT_F64 = { tag: "num", num: WasmNumType.F64 };
+const WT_EMPTY = { tag: "empty" };
+
+function wtIsNum(wt) { return wt.tag === "num"; }
+function wtIsIntegral(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.I32 || wt.num === WasmNumType.I64); }
+function wtIsFloating(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.F32 || wt.num === WasmNumType.F64); }
+function wtEmit(wt, buf) {
+  if (wt.tag === "empty") buf.push(0x40);
+  else if (wt.tag === "num") buf.push(wt.num);
+}
+function wtEquals(a, b) {
+  if (a.tag !== b.tag) return false;
+  if (a.tag === "empty") return true;
+  if (a.tag === "num") return a.num === b.num;
+  return false;
+}
+
+// Memory opcodes
+const MOP = Object.freeze({
+  I32_LOAD: 0x28, I64_LOAD: 0x29, F32_LOAD: 0x2A, F64_LOAD: 0x2B,
+  I32_LOAD8_S: 0x2C, I32_LOAD8_U: 0x2D, I32_LOAD16_S: 0x2E, I32_LOAD16_U: 0x2F,
+  I64_LOAD8_S: 0x30, I64_LOAD8_U: 0x31, I64_LOAD16_S: 0x32, I64_LOAD16_U: 0x33,
+  I64_LOAD32_S: 0x34, I64_LOAD32_U: 0x35,
+  I32_STORE: 0x36, I64_STORE: 0x37, F32_STORE: 0x38, F64_STORE: 0x39,
+  I32_STORE8: 0x3A, I32_STORE16: 0x3B, I64_STORE8: 0x3C, I64_STORE16: 0x3D, I64_STORE32: 0x3E,
+});
+
+// ALU opcodes
+const ALU = Object.freeze({
+  OP_EQZ: 0, OP_EQ: 1, OP_NE: 2, OP_LT: 3, OP_GT: 4, OP_LE: 5, OP_GE: 6,
+  OP_CLZ: 7, OP_CTZ: 8, OP_POPCNT: 9,
+  OP_ADD: 10, OP_SUB: 11, OP_MUL: 12, OP_DIV: 13, OP_REM: 14,
+  OP_AND: 15, OP_OR: 16, OP_XOR: 17, OP_SHL: 18, OP_SHR_S: 19, OP_SHR_U: 20,
+  OP_ROTL: 21, OP_ROTR: 22,
+  OP_ABS: 23, OP_NEG: 24, OP_CEIL: 25, OP_FLOOR: 26, OP_TRUNC: 27, OP_NEAREST: 28, OP_SQRT: 29,
+  OP_MIN: 30, OP_MAX: 31, OP_COPYSIGN: 32,
+  OP_WRAP_I64: 33, OP_TRUNC_F32: 34, OP_TRUNC_F64: 35,
+  OP_EXTEND_I32: 36, OP_CONVERT_I32: 37, OP_CONVERT_I64: 38,
+  OP_DEMOTE_F64: 39, OP_PROMOTE_F32: 40,
+  OP_REINTERPRET_F32: 41, OP_REINTERPRET_F64: 42, OP_REINTERPRET_I32: 43, OP_REINTERPRET_I64: 44,
+});
+
+function getaop(wt, op, sign) {
+  if (!wtIsNum(wt)) throw new Error("getaop called with non-numeric WasmType");
+  if (sign === undefined) sign = true;
+  const n = wt.num;
+  if (n === WasmNumType.I32) {
+    switch (op) {
+      case ALU.OP_EQZ: return 0x45; case ALU.OP_EQ: return 0x46; case ALU.OP_NE: return 0x47;
+      case ALU.OP_LT: return sign ? 0x48 : 0x49; case ALU.OP_GT: return sign ? 0x4A : 0x4B;
+      case ALU.OP_LE: return sign ? 0x4C : 0x4D; case ALU.OP_GE: return sign ? 0x4E : 0x4F;
+      case ALU.OP_CLZ: return 0x67; case ALU.OP_CTZ: return 0x68; case ALU.OP_POPCNT: return 0x69;
+      case ALU.OP_ADD: return 0x6A; case ALU.OP_SUB: return 0x6B; case ALU.OP_MUL: return 0x6C;
+      case ALU.OP_DIV: return sign ? 0x6D : 0x6E; case ALU.OP_REM: return sign ? 0x6F : 0x70;
+      case ALU.OP_AND: return 0x71; case ALU.OP_OR: return 0x72; case ALU.OP_XOR: return 0x73;
+      case ALU.OP_SHL: return 0x74; case ALU.OP_SHR_S: return 0x75; case ALU.OP_SHR_U: return 0x76;
+      case ALU.OP_ROTL: return 0x77; case ALU.OP_ROTR: return 0x78;
+      case ALU.OP_WRAP_I64: return 0xA7;
+      case ALU.OP_TRUNC_F32: return sign ? 0xA8 : 0xA9;
+      case ALU.OP_TRUNC_F64: return sign ? 0xAA : 0xAB;
+      case ALU.OP_REINTERPRET_F32: return 0xBC;
+    }
+  } else if (n === WasmNumType.I64) {
+    switch (op) {
+      case ALU.OP_EQZ: return 0x50; case ALU.OP_EQ: return 0x51; case ALU.OP_NE: return 0x52;
+      case ALU.OP_LT: return sign ? 0x53 : 0x54; case ALU.OP_GT: return sign ? 0x55 : 0x56;
+      case ALU.OP_LE: return sign ? 0x57 : 0x58; case ALU.OP_GE: return sign ? 0x59 : 0x5A;
+      case ALU.OP_CLZ: return 0x79; case ALU.OP_CTZ: return 0x7A; case ALU.OP_POPCNT: return 0x7B;
+      case ALU.OP_ADD: return 0x7C; case ALU.OP_SUB: return 0x7D; case ALU.OP_MUL: return 0x7E;
+      case ALU.OP_DIV: return sign ? 0x7F : 0x80; case ALU.OP_REM: return sign ? 0x81 : 0x82;
+      case ALU.OP_AND: return 0x83; case ALU.OP_OR: return 0x84; case ALU.OP_XOR: return 0x85;
+      case ALU.OP_SHL: return 0x86; case ALU.OP_SHR_S: return 0x87; case ALU.OP_SHR_U: return 0x88;
+      case ALU.OP_ROTL: return 0x89; case ALU.OP_ROTR: return 0x8A;
+      case ALU.OP_EXTEND_I32: return sign ? 0xAC : 0xAD;
+      case ALU.OP_TRUNC_F32: return sign ? 0xAE : 0xAF;
+      case ALU.OP_TRUNC_F64: return sign ? 0xB0 : 0xB1;
+      case ALU.OP_REINTERPRET_F64: return 0xBD;
+    }
+  } else if (n === WasmNumType.F32) {
+    switch (op) {
+      case ALU.OP_EQ: return 0x5B; case ALU.OP_NE: return 0x5C;
+      case ALU.OP_LT: return 0x5D; case ALU.OP_GT: return 0x5E;
+      case ALU.OP_LE: return 0x5F; case ALU.OP_GE: return 0x60;
+      case ALU.OP_ABS: return 0x8B; case ALU.OP_NEG: return 0x8C;
+      case ALU.OP_CEIL: return 0x8D; case ALU.OP_FLOOR: return 0x8E;
+      case ALU.OP_TRUNC: return 0x8F; case ALU.OP_NEAREST: return 0x90; case ALU.OP_SQRT: return 0x91;
+      case ALU.OP_ADD: return 0x92; case ALU.OP_SUB: return 0x93; case ALU.OP_MUL: return 0x94;
+      case ALU.OP_DIV: return 0x95; case ALU.OP_MIN: return 0x96; case ALU.OP_MAX: return 0x97;
+      case ALU.OP_COPYSIGN: return 0x98;
+      case ALU.OP_CONVERT_I32: return sign ? 0xB2 : 0xB3;
+      case ALU.OP_CONVERT_I64: return sign ? 0xB4 : 0xB5;
+      case ALU.OP_DEMOTE_F64: return 0xB6;
+      case ALU.OP_REINTERPRET_I32: return 0xBE;
+    }
+  } else if (n === WasmNumType.F64) {
+    switch (op) {
+      case ALU.OP_EQ: return 0x61; case ALU.OP_NE: return 0x62;
+      case ALU.OP_LT: return 0x63; case ALU.OP_GT: return 0x64;
+      case ALU.OP_LE: return 0x65; case ALU.OP_GE: return 0x66;
+      case ALU.OP_ABS: return 0x99; case ALU.OP_NEG: return 0x9A;
+      case ALU.OP_CEIL: return 0x9B; case ALU.OP_FLOOR: return 0x9C;
+      case ALU.OP_TRUNC: return 0x9D; case ALU.OP_NEAREST: return 0x9E; case ALU.OP_SQRT: return 0x9F;
+      case ALU.OP_ADD: return 0xA0; case ALU.OP_SUB: return 0xA1; case ALU.OP_MUL: return 0xA2;
+      case ALU.OP_DIV: return 0xA3; case ALU.OP_MIN: return 0xA4; case ALU.OP_MAX: return 0xA5;
+      case ALU.OP_COPYSIGN: return 0xA6;
+      case ALU.OP_CONVERT_I32: return sign ? 0xB7 : 0xB8;
+      case ALU.OP_CONVERT_I64: return sign ? 0xB9 : 0xBA;
+      case ALU.OP_PROMOTE_F32: return 0xBB;
+      case ALU.OP_REINTERPRET_I64: return 0xBF;
+    }
+  }
+  throw new Error(`Invalid type/op combination: num=${n} op=${op}`);
+}
+
+// WasmCode builder - convenience utility for building WASM bytecode
+class WasmCode {
+  constructor(bytes) { this.bytes = bytes; }
+  push(byte) { this.bytes.push(byte); }
+
+  // Control flow (0x00 - 0x11)
+  unreachable() { this.push(0x00); }
+  nop() { this.push(0x01); }
+  block(bt) { this.push(0x02); wtEmit(bt || WT_EMPTY, this.bytes); }
+  loop(bt) { this.push(0x03); wtEmit(bt || WT_EMPTY, this.bytes); }
+  if_(bt) { this.push(0x04); wtEmit(bt, this.bytes); }
+  else_() { this.push(0x05); }
+  end() { this.push(0x0B); }
+  br(labelIdx) { this.push(0x0C); lebU(this.bytes, labelIdx); }
+  brIf(labelIdx) { this.push(0x0D); lebU(this.bytes, labelIdx); }
+  brTable(labels, defaultLabel) {
+    this.push(0x0E);
+    lebU(this.bytes, labels.length);
+    for (const l of labels) lebU(this.bytes, l);
+    lebU(this.bytes, defaultLabel);
+  }
+  ret() { this.push(0x0F); }
+  call(funcIdx) { this.push(0x10); lebU(this.bytes, funcIdx); }
+  callIndirect(typeIdx) { this.push(0x11); lebU(this.bytes, typeIdx); this.push(0x00); }
+
+  // Locals and globals (0x20 - 0x24)
+  localGet(idx) { this.push(0x20); lebU(this.bytes, idx); }
+  localSet(idx) { this.push(0x21); lebU(this.bytes, idx); }
+  localTee(idx) { this.push(0x22); lebU(this.bytes, idx); }
+  globalGet(idx) { this.push(0x23); lebU(this.bytes, idx); }
+  globalSet(idx) { this.push(0x24); lebU(this.bytes, idx); }
+
+  // Memory operations
+  mop(opcode, offset, align) { this.push(opcode); lebU(this.bytes, align); lebU(this.bytes, offset); }
+  memorySize() { this.push(0x3F); this.push(0x00); }
+  memoryGrow() { this.push(0x40); this.push(0x00); }
+  memoryCopy() { this.push(0xFC); lebU(this.bytes, 10); this.push(0x00); this.push(0x00); }
+  memoryFill() { this.push(0xFC); lebU(this.bytes, 11); this.push(0x00); }
+
+  // Numeric constants
+  i32Const(value) { this.push(0x41); lebI(this.bytes, Number(value) | 0); }
+  i64Const(value) {
+    this.push(0x42);
+    if (typeof value === "bigint") lebI64(this.bytes, value);
+    else lebI64(this.bytes, BigInt(value));
+  }
+  f32Const(value) { this.push(0x43); appendF32(this.bytes, value); }
+  f64Const(value) { this.push(0x44); appendF64(this.bytes, value); }
+
+  // ALU operations
+  aop(wt, op, sign) { this.push(getaop(wt, op, sign)); }
+
+  // Exception handling
+  throw_(tagIdx) { this.push(0x08); lebU(this.bytes, tagIdx); }
+  tryTable(blockType, catches) {
+    this.push(0x1F);
+    wtEmit(blockType, this.bytes);
+    lebU(this.bytes, catches.length);
+    for (const [kind, tagIdx, labelIdx] of catches) {
+      this.push(kind);
+      if (kind === 0x00 || kind === 0x01) lebU(this.bytes, tagIdx);
+      lebU(this.bytes, labelIdx);
+    }
+  }
+
+  // Drop
+  drop() { this.push(0x1A); }
+}
+
+// ====================
+// WASM Module State
+// ====================
+
+class WasmModule {
+  constructor() {
+    this.typeDefs = [];         // section 1 (function types)
+    this.funcTypeIndices = new Map(); // WasmFunctionType key -> index
+    this.funcImports = [];      // section 2
+    this.funcDefs = [];         // section 3 & 10
+    this.memories = [];         // section 5
+    this.globals = [];          // section 6
+    this.exports = [];          // section 7
+    this.dataSegments = [];     // section 11
+    this.tags = [];             // section 13
+    this.customSections = [];   // custom sections (section 0)
+  }
+
+  addFunctionTypeId(params, results) {
+    const key = params.map(p => `${p.tag}:${p.num||''}`).join(",") + "->" +
+                results.map(r => `${r.tag}:${r.num||''}`).join(",");
+    if (this.funcTypeIndices.has(key)) return this.funcTypeIndices.get(key);
+    const id = this.typeDefs.length;
+    this.typeDefs.push({ kind: "func", params, results });
+    this.funcTypeIndices.set(key, id);
+    return id;
+  }
+
+  addFunctionImport(moduleName, functionName, typeId) {
+    const id = this.funcImports.length;
+    this.funcImports.push({ moduleName, functionName, typeId });
+    return id;
+  }
+
+  addFunctionDefinition(typeId) {
+    const id = this.funcImports.length + this.funcDefs.length;
+    this.funcDefs.push({ typeId, locals: [], body: [] });
+    return id;
+  }
+
+  addMemory(minPages, maxPages) {
+    const id = this.memories.length;
+    this.memories.push({ minPages, maxPages: maxPages || 0 });
+    return id;
+  }
+
+  addGlobal(type, initExpr, isMutable) {
+    const id = this.globals.length;
+    this.globals.push({ type, initExpr, isMutable });
+    return id;
+  }
+
+  addGlobalI32(value, isMutable) {
+    const initExpr = [];
+    const code = new WasmCode(initExpr);
+    code.i32Const(value);
+    code.end();
+    return this.addGlobal(WT_I32, initExpr, isMutable);
+  }
+
+  addGlobalI64(value, isMutable) {
+    const initExpr = [];
+    const code = new WasmCode(initExpr);
+    code.i64Const(value);
+    code.end();
+    return this.addGlobal(WT_I64, initExpr, isMutable);
+  }
+
+  addGlobalF32(value, isMutable) {
+    const initExpr = [];
+    const code = new WasmCode(initExpr);
+    code.f32Const(value);
+    code.end();
+    return this.addGlobal(WT_F32, initExpr, isMutable);
+  }
+
+  addGlobalF64(value, isMutable) {
+    const initExpr = [];
+    const code = new WasmCode(initExpr);
+    code.f64Const(value);
+    code.end();
+    return this.addGlobal(WT_F64, initExpr, isMutable);
+  }
+
+
+  patchGlobalI32(id, value) {
+    const g = this.globals[id];
+    g.initExpr = [];
+    const code = new WasmCode(g.initExpr);
+    code.i32Const(value);
+    code.end();
+  }
+
+  addExport(name, kind, index) {
+    this.exports.push({ name, kind, index });
+  }
+
+  addTag(funcTypeIdx) {
+    const idx = this.tags.length;
+    this.tags.push({ typeIdx: funcTypeIdx });
+    return idx;
+  }
+
+  addDataSegment(offset, data) {
+    const offsetExpr = [];
+    const code = new WasmCode(offsetExpr);
+    code.i32Const(offset);
+    code.end();
+    this.dataSegments.push({ memoryIndex: 0, offsetExpr, data });
+  }
+
+  // Emit full WASM binary as a Uint8Array
+  emit() {
+    const out = [];
+    // WASM magic + version
+    out.push(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00);
+
+    const emitSection = (id, content) => {
+      out.push(id);
+      lebU(out, content.length);
+      for (const b of content) out.push(b);
+    };
+    const emitString = (buf, str) => {
+      lebU(buf, str.length);
+      for (let i = 0; i < str.length; i++) buf.push(str.charCodeAt(i));
+    };
+
+    let buf;
+
+    // Type section (1)
+    buf = [];
+    lebU(buf, this.typeDefs.length);
+    for (const td of this.typeDefs) {
+      buf.push(0x60);
+      lebU(buf, td.params.length);
+      for (const p of td.params) wtEmit(p, buf);
+      lebU(buf, td.results.length);
+      for (const r of td.results) wtEmit(r, buf);
+    }
+    emitSection(1, buf);
+
+    // Import section (2)
+    buf = [];
+    lebU(buf, this.funcImports.length);
+    for (const imp of this.funcImports) {
+      emitString(buf, imp.moduleName);
+      emitString(buf, imp.functionName);
+      buf.push(0x00); // func import kind
+      lebU(buf, imp.typeId);
+    }
+    emitSection(2, buf);
+
+    // Function section (3)
+    buf = [];
+    lebU(buf, this.funcDefs.length);
+    for (const def of this.funcDefs) lebU(buf, def.typeId);
+    emitSection(3, buf);
+
+    // Table section (4)
+    buf = [];
+    const totalFuncs = this.funcImports.length + this.funcDefs.length;
+    const tableSize = totalFuncs + 1;
+    lebU(buf, 1); buf.push(0x70); buf.push(0x00); lebU(buf, tableSize);
+    emitSection(4, buf);
+
+    // Memory section (5)
+    buf = [];
+    lebU(buf, this.memories.length);
+    for (const mem of this.memories) {
+      const hasMax = mem.maxPages !== 0;
+      buf.push(hasMax ? 0x01 : 0x00);
+      lebU(buf, mem.minPages);
+      if (hasMax) lebU(buf, mem.maxPages);
+    }
+    emitSection(5, buf);
+
+    // Tag section (13) - before globals
+    if (this.tags.length > 0) {
+      buf = [];
+      lebU(buf, this.tags.length);
+      for (const tag of this.tags) { buf.push(0x00); lebU(buf, tag.typeIdx); }
+      emitSection(13, buf);
+    }
+
+    // Global section (6)
+    buf = [];
+    lebU(buf, this.globals.length);
+    for (const g of this.globals) {
+      wtEmit(g.type, buf);
+      buf.push(g.isMutable ? 0x01 : 0x00);
+      for (const b of g.initExpr) buf.push(b);
+    }
+    emitSection(6, buf);
+
+    // Export section (7)
+    buf = [];
+    lebU(buf, this.exports.length);
+    for (const exp of this.exports) {
+      emitString(buf, exp.name);
+      buf.push(exp.kind);
+      lebU(buf, exp.index);
+    }
+    emitSection(7, buf);
+
+    // Element section (9)
+    buf = [];
+    if (totalFuncs > 0) {
+      lebU(buf, 1); lebU(buf, 0);
+      buf.push(0x41); lebI(buf, 1); buf.push(0x0B);
+      lebU(buf, totalFuncs);
+      for (let i = 0; i < totalFuncs; i++) lebU(buf, i);
+    } else {
+      lebU(buf, 0);
+    }
+    emitSection(9, buf);
+
+    // Code section (10)
+    buf = [];
+    lebU(buf, this.funcDefs.length);
+    for (const def of this.funcDefs) {
+      const funcBody = [];
+      lebU(funcBody, def.locals.length);
+      for (const loc of def.locals) {
+        lebU(funcBody, loc.count);
+        wtEmit(loc.type, funcBody);
+      }
+      for (const b of def.body) funcBody.push(b);
+      funcBody.push(0x0B); // end
+      lebU(buf, funcBody.length);
+      for (const b of funcBody) buf.push(b);
+    }
+    emitSection(10, buf);
+
+    // Data section (11)
+    buf = [];
+    lebU(buf, this.dataSegments.length);
+    for (const seg of this.dataSegments) {
+      lebU(buf, seg.memoryIndex);
+      for (const b of seg.offsetExpr) buf.push(b);
+      lebU(buf, seg.data.length);
+      for (const b of seg.data) buf.push(b);
+    }
+    emitSection(11, buf);
+
+    // Custom sections (section 0)
+    for (const sec of this.customSections) {
+      buf = [];
+      const nameBytes = new TextEncoder().encode(sec.name);
+      lebU(buf, nameBytes.length);
+      for (const b of nameBytes) buf.push(b);
+      const contentBytes = new TextEncoder().encode(sec.content);
+      for (const b of contentBytes) buf.push(b);
+      emitSection(0, buf);
+    }
+
+    return new Uint8Array(out);
+  }
+}
+
+// ====================
+// Code Generator
+// ====================
+
+const EXPR_VALUE = "value";
+const EXPR_DROP = "drop";
+
+const LV_REGISTER = "register";
+const LV_MEMORY = "memory";
+const LV_ADDR_LOCAL = "addr_local";
+const LV_ADDR_STATIC = "addr_static";
+const LV_ADDR_FRAME = "addr_frame";
+
+function isStructOrUnion(type) {
+  return type.isAggregate() && !type.isArray();
+}
+
+function cToWasmType(type) {
+  type = type.removeQualifiers();
+  if (type === Types.TFLOAT) return WT_F32;
+  if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
+  if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
+  return WT_I32;
+}
+
+function vaSlotSize(type) {
+  const sz = type.size;
+  return (sz + 7) & ~7;
+}
+
+function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
+  // Variadic functions use a single i32 param (arg block pointer) and no WASM return.
+  if (funcType.isVarArg) {
+    return wmod.addFunctionTypeId([WT_I32], []);
+  }
+  const params = [];
+  const retType = funcType.getReturnType();
+  if (isStructOrUnion(retType)) params.push(WT_I32); // hidden return ptr
+  for (const pt of funcType.getParamTypes()) params.push(cToWasmType(pt));
+  const results = [cToWasmType(retType)];
+  return wmod.addFunctionTypeId(params, results);
+}
+
+class CodeGenerator {
+  constructor(wmod, options) {
+    this.wmod = wmod;
+    this.compilerOptions = options?.compilerOptions || {};
+    this.funcDefToWasmFuncIdx = new Map();
+    this.funcDefToTableIdx = new Map();
+    this.globalVarToWasmGlobalIdx = new Map();
+    this.globalArrayAddrs = new Map();
+    this.fileScopeCompoundLiteralAddrs = new Map();
+    this.stackPages = 1;
+    this.staticDataOffset = 0;
+    this.staticData = [];
+    this.stringLiteralAddrs = new Map();
+    this.stackPointerGlobalIdx = 0;
+    this.heapBaseGlobalIdx = 0;
+    // Per-function state
+    this.body = null;
+    this.localVarToWasmLocalIdx = new Map();
+    this.localArrayOffsets = new Map();
+    this.paramMemoryOffsets = new Map();
+    this.compoundLiteralOffsets = new Map();
+    this.frameSize = 0;
+    this.savedSpLocalIdx = 0;
+    this.currentFuncLocals = null;
+    this.nextLocalIdx = 0;
+    this.freeLocalsByType = new Map();
+    this.localScopeStack = [];
+    this.structRetDeferred = 0;
+    this.callNesting = 0;
+    this.blockDepth = 0;
+    this.breakTarget = 0;
+    this.continueTarget = 0;
+    this.gotoLabelDepths = new Map();
+    this.exceptionToWasmTagIdx = new Map();
+    this.currentFuncDef = null;
+    this.vaArgsLocalIdx = 0;
+    this.hasVaArgs = false;
+    this.argBlockLocalIdx = 0;
+    this.vaRetSlotSize = 0;
+    this.vaParamInfos = [];
+    this.vaStartOffset = 0;
+    this.structRetPtrLocalIdx = 0;
+    this.hasStructReturn = false;
+  }
+
+  // --- Local allocator ---
+  _wtKey(wt) { return `${wt.tag}:${wt.num||''}`; }
+
+  allocLocal(wt) {
+    const key = this._wtKey(wt);
+    const free = this.freeLocalsByType.get(key);
+    if (free && free.length > 0) {
+      const idx = free.pop();
+      if (this.localScopeStack.length > 0) {
+        this.localScopeStack[this.localScopeStack.length - 1].push([key, idx]);
+      }
+      return idx;
+    }
+    const idx = this.nextLocalIdx++;
+    const locals = this.currentFuncLocals;
+    if (locals.length > 0 && this._wtKey(locals[locals.length - 1].type) === key) {
+      locals[locals.length - 1].count++;
+    } else {
+      locals.push({ type: wt, count: 1 });
+    }
+    if (this.localScopeStack.length > 0) {
+      this.localScopeStack[this.localScopeStack.length - 1].push([key, idx]);
+    }
+    return idx;
+  }
+
+  pushLocalScope() { this.localScopeStack.push([]); }
+  popLocalScope() {
+    const scope = this.localScopeStack.pop();
+    for (const [key, idx] of scope) {
+      if (!this.freeLocalsByType.has(key)) this.freeLocalsByType.set(key, []);
+      this.freeLocalsByType.get(key).push(idx);
+    }
+  }
+
+  // --- Size/Align helpers ---
+  sizeOf(type) { return type.size; }
+  alignOf(type) { return type.align; }
+
+  // --- String literal deduplication ---
+  getStringAddress(valueArray) {
+    // valueArray is a Uint8Array or regular array of bytes
+    const key = Array.from(valueArray).join(",");
+    if (this.stringLiteralAddrs.has(key)) return this.stringLiteralAddrs.get(key);
+    const baseAddr = this.stackPages * 65536;
+    const addr = baseAddr + this.staticDataOffset;
+    this.stringLiteralAddrs.set(key, addr);
+    for (const b of valueArray) this.staticData.push(b);
+    this.staticDataOffset += valueArray.length;
+    return addr;
+  }
+
+  // --- Static memory allocation ---
+  allocateStatic(size, align) {
+    if (!align) align = 4;
+    const alignedOffset = (this.staticDataOffset + align - 1) & ~(align - 1);
+    const padding = alignedOffset - this.staticDataOffset;
+    for (let i = 0; i < padding; i++) this.staticData.push(0);
+    this.staticDataOffset = alignedOffset;
+    const baseAddr = this.stackPages * 65536;
+    const addr = baseAddr + this.staticDataOffset;
+    for (let i = 0; i < size; i++) this.staticData.push(0);
+    this.staticDataOffset += size;
+    return addr;
+  }
+
+  computeFAMExtraSize(type, initExpr) {
+    if (!type.isTag() || !initExpr || initExpr.kind !== Types.ExprKind.INIT_LIST) return 0;
+    const tag = type.tagDecl;
+    if (!tag || tag.tagKind !== Types.TagKind.STRUCT) return 0;
+    const members = tag.members.filter(m => m.declKind === Types.DeclKind.VAR);
+    let famMember = null, famIdx = -1;
+    for (let i = 0; i < members.length; i++) {
+      if (members[i].type.isArray() && members[i].type.arraySize === 0) {
+        famMember = members[i];
+        famIdx = i;
+      }
+    }
+    if (!famMember || famIdx < 0 || famIdx >= initExpr.elements.length) return 0;
+    const famElem = initExpr.elements[famIdx];
+    const elemType = famMember.type.baseType;
+    const elemSize = this.sizeOf(elemType);
+    if (famElem.kind === Types.ExprKind.STRING) return famElem.value.length * elemSize;
+    if (famElem.kind === Types.ExprKind.INIT_LIST) return famElem.elements.length * elemSize;
+    return elemSize;
+  }
+
+  computeInitAllocSize(type, initExpr) {
+    return this.sizeOf(type) + this.computeFAMExtraSize(type, initExpr);
+  }
+
+  // --- Frame address ---
+  emitFrameAddr(offset) {
+    this.body.localGet(this.savedSpLocalIdx);
+    const adj = offset - this.frameSize;
+    if (adj !== 0) {
+      this.body.i32Const(adj);
+      this.body.aop(WT_I32, ALU.OP_ADD);
+    }
+  }
+
+  // --- Field offset ---
+  getFieldOffset(tag, field) { return field.byteOffset; }
+
+  // --- Write scalar to static data ---
+  writeConstValueToStatic(offset, type, val) {
+    const ut = type.removeQualifiers();
+    if ((ut === Types.TFLOAT || ut === Types.TDOUBLE) && val.kind === "int") {
+      val = { kind: "float", floatVal: Number(val.intVal) };
+    } else if ((ut === Types.TINT || ut === Types.TUINT || ut === Types.TLONG || ut === Types.TULONG ||
+                ut === Types.TSHORT || ut === Types.TUSHORT || ut === Types.TCHAR || ut === Types.TUCHAR ||
+                ut === Types.TLLONG || ut === Types.TULLONG) && val.kind === "float") {
+      val = { kind: "int", intVal: BigInt(Math.trunc(val.floatVal)) };
+    }
+    const size = this.sizeOf(type);
+    if (val.kind === "int") {
+      let v = val.intVal;
+      for (let b = 0; b < size; b++) {
+        this.staticData[offset + b] = Number(v & 0xFFn);
+        v >>= 8n;
+      }
+    } else if (val.kind === "float") {
+      if (size === 4) {
+        const buf = new ArrayBuffer(4);
+        new DataView(buf).setFloat32(0, val.floatVal, true);
+        const bytes = new Uint8Array(buf);
+        for (let b = 0; b < 4; b++) this.staticData[offset + b] = bytes[b];
+      } else if (size === 8) {
+        const buf = new ArrayBuffer(8);
+        new DataView(buf).setFloat64(0, val.floatVal, true);
+        const bytes = new Uint8Array(buf);
+        for (let b = 0; b < 8; b++) this.staticData[offset + b] = bytes[b];
+      }
+    } else if (val.kind === "addr") {
+      let v = val.addrVal;
+      for (let b = 0; b < size && b < 4; b++) {
+        this.staticData[offset + b] = v & 0xFF;
+        v >>>= 8;
+      }
+    }
+  }
+
+  writeStringLiteralToStatic(strValue, arrayType, offset) {
+    const copySize = this.sizeOf(arrayType);
+    // For incomplete arrays (FAM), copySize is 0; use full string length
+    const len = copySize === 0 ? strValue.length : Math.min(copySize, strValue.length);
+    for (let i = 0; i < len; i++) this.staticData[offset + i] = strValue[i];
+  }
+
+  // Evaluate an expression as an address (returns a number or null)
+  _constEvalAddr(expr) {
+    if (!expr) return null;
+    // Cast from integer to pointer: (type*)intval
+    if (expr.kind === Types.ExprKind.CAST || expr.kind === Types.ExprKind.IMPLICIT_CAST) {
+      const inner = this._constEvalExpr(expr.expr);
+      if (inner && inner.kind === "int") return Number(inner.intVal);
+      if (inner && inner.kind === "addr") return inner.addrVal;
+      return null;
+    }
+    // Arrow: base->member → addr(base) + offset, where base is pointer
+    if (expr.kind === Types.ExprKind.ARROW && expr.memberDecl) {
+      const baseVal = this._constEvalExpr(expr.base);
+      if (baseVal && (baseVal.kind === "addr" || baseVal.kind === "int")) {
+        const baseAddr = baseVal.kind === "addr" ? baseVal.addrVal : Number(baseVal.intVal);
+        return baseAddr + expr.memberDecl.byteOffset;
+      }
+      return null;
+    }
+    // General: try _constEvalExpr and extract address
+    const v = this._constEvalExpr(expr);
+    if (v && v.kind === "addr") return v.addrVal;
+    if (v && v.kind === "int") return Number(v.intVal);
+    return null;
+  }
+
+  // --- ConstEval for codegen ---
+  makeConstEval() {
+    return {
+      evaluate: (expr) => this._constEvalExpr(expr),
+    };
+  }
+
+  _constEvalExpr(expr) {
+    if (!expr) return null;
+    switch (expr.kind) {
+      case Types.ExprKind.INT: return { kind: "int", intVal: expr.value };
+      case Types.ExprKind.FLOAT: return { kind: "float", floatVal: expr.value };
+      case Types.ExprKind.STRING: {
+        const addr = this.getStringAddress(expr.value);
+        return { kind: "addr", addrVal: addr };
+      }
+      case Types.ExprKind.IDENT: {
+        if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+          return { kind: "int", intVal: BigInt(expr.decl.value) };
+        }
+        if (expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
+          const func = expr.decl.definition || expr.decl;
+          const tIdx = this.funcDefToTableIdx.get(func);
+          if (tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
+        }
+        if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+          const varDecl = expr.decl.definition || expr.decl;
+          const addr = this.globalArrayAddrs.get(varDecl);
+          if (addr !== undefined) return { kind: "addr", addrVal: addr };
+        }
+        return null;
+      }
+      case Types.ExprKind.UNARY: {
+        if (expr.op === "OP_ADDR") {
+          const inner = expr.operand;
+          // &var → address
+          if (inner.kind === Types.ExprKind.IDENT && inner.decl) {
+            if (inner.decl.declKind === Types.DeclKind.VAR) {
+              const varDecl = inner.decl.definition || inner.decl;
+              const addr = this.globalArrayAddrs.get(varDecl);
+              if (addr !== undefined) return { kind: "addr", addrVal: addr };
+            }
+            if (inner.decl.declKind === Types.DeclKind.FUNC) {
+              const func = inner.decl.definition || inner.decl;
+              const tIdx = this.funcDefToTableIdx.get(func);
+              if (tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
+            }
+          }
+          // &(base->member) or &(base.member) → base_addr + member offset
+          if ((inner.kind === Types.ExprKind.ARROW || inner.kind === Types.ExprKind.MEMBER) && inner.memberDecl) {
+            const baseAddr = this._constEvalAddr(inner.base);
+            if (baseAddr !== null) {
+              return { kind: "addr", addrVal: baseAddr + inner.memberDecl.byteOffset };
+            }
+          }
+          // &(base[index]) → base_addr + index * elemSize
+          if (inner.kind === Types.ExprKind.SUBSCRIPT) {
+            const baseAddr = this._constEvalAddr(inner.array);
+            const idx = this._constEvalExpr(inner.index);
+            if (baseAddr !== null && idx && idx.kind === "int") {
+              const elemSize = this.sizeOf(inner.type);
+              return { kind: "addr", addrVal: baseAddr + Number(idx.intVal) * elemSize };
+            }
+          }
+          // &(compound_literal) → address of file-scope compound literal
+          if (inner.kind === Types.ExprKind.COMPOUND_LITERAL) {
+            const addr = this.fileScopeCompoundLiteralAddrs.get(inner);
+            if (addr !== undefined) return { kind: "addr", addrVal: addr };
+          }
+          return null;
+        }
+        const v = this._constEvalExpr(expr.operand);
+        if (!v) return null;
+        if (expr.op === "OP_POS") return v;
+        if (expr.op === "OP_NEG") {
+          if (v.kind === "int") return { kind: "int", intVal: -v.intVal };
+          if (v.kind === "float") return { kind: "float", floatVal: -v.floatVal };
+        }
+        if (expr.op === "OP_BNOT") {
+          if (v.kind === "int") return { kind: "int", intVal: ~v.intVal };
+        }
+        if (expr.op === "OP_LNOT") {
+          if (v.kind === "int") return { kind: "int", intVal: v.intVal === 0n ? 1n : 0n };
+          if (v.kind === "float") return { kind: "int", intVal: v.floatVal === 0.0 ? 1n : 0n };
+        }
+        return null;
+      }
+      case Types.ExprKind.BINARY: {
+        // Short-circuit LAND/LOR
+        if (expr.op === "LAND") {
+          const l = this._constEvalExpr(expr.left);
+          if (!l) return null;
+          const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
+          if (lv === null) return null;
+          if (lv === 0n) return { kind: "int", intVal: 0n };
+          const r = this._constEvalExpr(expr.right);
+          if (!r) return null;
+          const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
+          if (rv === null) return null;
+          return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
+        }
+        if (expr.op === "LOR") {
+          const l = this._constEvalExpr(expr.left);
+          if (!l) return null;
+          const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
+          if (lv === null) return null;
+          if (lv !== 0n) return { kind: "int", intVal: 1n };
+          const r = this._constEvalExpr(expr.right);
+          if (!r) return null;
+          const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
+          if (rv === null) return null;
+          return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
+        }
+        const l = this._constEvalExpr(expr.left);
+        const r = this._constEvalExpr(expr.right);
+        if (!l || !r) return null;
+        // Check for address arithmetic first
+        const hasAddr = (l.kind === "addr" || r.kind === "addr");
+        const hasFloat = (l.kind === "float" || r.kind === "float");
+        if (!hasAddr && !hasFloat && l.kind === "int" && r.kind === "int") {
+          const lv = l.intVal, rv = r.intVal;
+          let result;
+          switch (expr.op) {
+            case "ADD": result = lv + rv; break;
+            case "SUB": result = lv - rv; break;
+            case "MUL": result = lv * rv; break;
+            case "DIV": result = rv === 0n ? null : lv / rv; break;
+            case "MOD": result = rv === 0n ? null : lv % rv; break;
+            case "BAND": result = lv & rv; break;
+            case "BOR": result = lv | rv; break;
+            case "BXOR": result = lv ^ rv; break;
+            case "SHL": result = lv << rv; break;
+            case "SHR": result = lv >> rv; break;
+            case "EQ": result = lv === rv ? 1n : 0n; break;
+            case "NE": result = lv !== rv ? 1n : 0n; break;
+            case "LT": result = lv < rv ? 1n : 0n; break;
+            case "GT": result = lv > rv ? 1n : 0n; break;
+            case "LE": result = lv <= rv ? 1n : 0n; break;
+            case "GE": result = lv >= rv ? 1n : 0n; break;
+            default: return null;
+          }
+          if (result === null) return null;
+          return { kind: "int", intVal: result };
+        }
+        if (!hasAddr && hasFloat) {
+          const lv = l.kind === "float" ? l.floatVal : Number(l.intVal);
+          const rv = r.kind === "float" ? r.floatVal : Number(r.intVal);
+          switch (expr.op) {
+            case "ADD": return { kind: "float", floatVal: lv + rv };
+            case "SUB": return { kind: "float", floatVal: lv - rv };
+            case "MUL": return { kind: "float", floatVal: lv * rv };
+            case "DIV": return { kind: "float", floatVal: lv / rv }; // IEEE 754: div by zero = infinity
+            case "EQ": return { kind: "int", intVal: lv === rv ? 1n : 0n };
+            case "NE": return { kind: "int", intVal: lv !== rv ? 1n : 0n };
+            case "LT": return { kind: "int", intVal: lv < rv ? 1n : 0n };
+            case "GT": return { kind: "int", intVal: lv > rv ? 1n : 0n };
+            case "LE": return { kind: "int", intVal: lv <= rv ? 1n : 0n };
+            case "GE": return { kind: "int", intVal: lv >= rv ? 1n : 0n };
+            default: return null;
+          }
+        }
+        if (hasAddr) {
+          // addr + int, addr - int (pointer arithmetic: scale by pointee size)
+          if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
+            const leftType = expr.left.type.removeQualifiers();
+            let elemSize = leftType.kind === Types.TypeKind.POINTER ? this.sizeOf(leftType.baseType)
+                         : leftType.kind === Types.TypeKind.ARRAY ? this.sizeOf(leftType.baseType) : 1;
+            const offset = Number(r.intVal) * elemSize;
+            return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
+          }
+          // int + addr
+          if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
+            const rightType = expr.right.type.removeQualifiers();
+            let elemSize = rightType.kind === Types.TypeKind.POINTER ? this.sizeOf(rightType.baseType)
+                         : rightType.kind === Types.TypeKind.ARRAY ? this.sizeOf(rightType.baseType) : 1;
+            return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
+          }
+          // addr - addr (pointer difference)
+          if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
+            const leftType = expr.left.type.removeQualifiers();
+            let elemSize = leftType.kind === Types.TypeKind.POINTER ? this.sizeOf(leftType.baseType)
+                         : leftType.kind === Types.TypeKind.ARRAY ? this.sizeOf(leftType.baseType) : 1;
+            if (elemSize === 0) return null;
+            return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
+          }
+          // addr comparisons
+          if (l.kind === "addr" && r.kind === "addr") {
+            switch (expr.op) {
+              case "EQ": return { kind: "int", intVal: l.addrVal === r.addrVal ? 1n : 0n };
+              case "NE": return { kind: "int", intVal: l.addrVal !== r.addrVal ? 1n : 0n };
+              case "LT": return { kind: "int", intVal: l.addrVal < r.addrVal ? 1n : 0n };
+              case "GT": return { kind: "int", intVal: l.addrVal > r.addrVal ? 1n : 0n };
+              case "LE": return { kind: "int", intVal: l.addrVal <= r.addrVal ? 1n : 0n };
+              case "GE": return { kind: "int", intVal: l.addrVal >= r.addrVal ? 1n : 0n };
+            }
+          }
+        }
+        return null;
+      }
+      case Types.ExprKind.TERNARY: {
+        const cond = this._constEvalExpr(expr.condition);
+        if (!cond) return null;
+        let cv;
+        if (cond.kind === "int") cv = cond.intVal !== 0n;
+        else if (cond.kind === "float") cv = cond.floatVal !== 0.0;
+        else return null;
+        return this._constEvalExpr(cv ? expr.thenExpr : expr.elseExpr);
+      }
+      case Types.ExprKind.CAST:
+      case Types.ExprKind.IMPLICIT_CAST: {
+        const v = this._constEvalExpr(expr.expr);
+        if (!v) return null;
+        const t = expr.type.removeQualifiers();
+        if ((t === Types.TFLOAT || t === Types.TDOUBLE) && v.kind === "int") {
+          return { kind: "float", floatVal: Number(v.intVal) };
+        }
+        if (t.isInteger() && v.kind === "float") {
+          return { kind: "int", intVal: Types.truncateConstInt(BigInt(Math.trunc(v.floatVal)), t) };
+        }
+        if ((t.isInteger() || t.isPointer()) && v.kind === "int") {
+          return { kind: "int", intVal: Types.truncateConstInt(v.intVal, t) };
+        }
+        return v;
+      }
+      case Types.ExprKind.SIZEOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
+      case Types.ExprKind.SIZEOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.size) };
+      case Types.ExprKind.ALIGNOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
+      case Types.ExprKind.ALIGNOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.align) };
+      case Types.ExprKind.COMPOUND_LITERAL: {
+        // For scalar compound literals like (int){42}, extract the value
+        if (!expr.type.isAggregate() && !expr.type.isArray() && expr.initList &&
+            expr.initList.elements.length > 0) {
+          return this._constEvalExpr(expr.initList.elements[0]);
+        }
+        // For aggregate/array compound literals, return the address
+        const addr = this.fileScopeCompoundLiteralAddrs.get(expr);
+        if (addr !== undefined) return { kind: "addr", addrVal: addr };
+        return null;
+      }
+      default: return null;
+    }
+  }
+
+  // --- Populate init list into static data ---
+  populateInitListStatic(initList, type, baseOffset) {
+    if (type.isArray()) {
+      const elemType = type.baseType;
+      const elemSize = this.sizeOf(elemType);
+      for (let i = 0; i < initList.elements.length; i++) {
+        const elemOffset = baseOffset + i * elemSize;
+        const elem = initList.elements[i];
+        if (elem.kind === Types.ExprKind.INIT_LIST) {
+          this.populateInitListStatic(elem, elemType, elemOffset);
+        } else if (elem.kind === Types.ExprKind.STRING && elemType.isArray()) {
+          this.writeStringLiteralToStatic(elem.value, elemType, elemOffset);
+        } else {
+          const val = this._constEvalExpr(elem);
+          if (val) this.writeConstValueToStatic(elemOffset, elemType, val);
+        }
+      }
+    } else if (type.isTag()) {
+      const tag = type.tagDecl;
+      if (!tag) return;
+      if (tag.tagKind === Types.TagKind.STRUCT) {
+        let elemIdx = 0;
+        for (const member of tag.members) {
+          if (member.declKind !== Types.DeclKind.VAR) continue;
+          if (member.bitWidth >= 0 && !member.name) continue;
+          const fieldOffset = baseOffset + member.byteOffset;
+          if (elemIdx < initList.elements.length) {
+            const elem = initList.elements[elemIdx];
+
+            if (member.bitWidth >= 0) {
+              const val = this._constEvalExpr(elem);
+              if (val) {
+                const bw = member.bitWidth;
+                const bo = member.bitOffset;
+                const unitSize = this.sizeOf(member.type);
+                const mask = (1 << bw) - 1;
+                const bits = (Number(val.intVal) & mask);
+                let unit = 0;
+                for (let b = 0; b < unitSize; b++) unit |= this.staticData[fieldOffset + b] << (b * 8);
+                unit = (unit & ~(mask << bo)) | (bits << bo);
+                for (let b = 0; b < unitSize; b++) this.staticData[fieldOffset + b] = (unit >>> (b * 8)) & 0xFF;
+              }
+            } else if (elem.kind === Types.ExprKind.INIT_LIST) {
+              this.populateInitListStatic(elem, member.type, fieldOffset);
+            } else if (elem.kind === Types.ExprKind.STRING && member.type.isArray()) {
+              this.writeStringLiteralToStatic(elem.value, member.type, fieldOffset);
+            } else {
+              const val = this._constEvalExpr(elem);
+              if (val) this.writeConstValueToStatic(fieldOffset, member.type, val);
+            }
+          }
+          elemIdx++;
+        }
+      } else if (tag.tagKind === Types.TagKind.UNION) {
+
+        if (initList.elements.length > 0 && initList.elements[0] !== null) {
+          const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
+          let varIdx = 0;
+          for (const member of tag.members) {
+            if (member.declKind !== Types.DeclKind.VAR) continue;
+            if (varIdx++ !== targetIdx) continue;
+            const elem = initList.elements[0];
+            if (elem.kind === Types.ExprKind.INIT_LIST) {
+              this.populateInitListStatic(elem, member.type, baseOffset);
+            } else if (elem.kind === Types.ExprKind.STRING && member.type.isArray()) {
+              this.writeStringLiteralToStatic(elem.value, member.type, baseOffset);
+            } else {
+              const val = this._constEvalExpr(elem);
+              if (val) this.writeConstValueToStatic(baseOffset, member.type, val);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  allocateInitListStatic(initList, aggType) {
+    const totalSize = this.sizeOf(aggType);
+    const addr = this.allocateStatic(totalSize, this.alignOf(aggType));
+    const baseOffset = addr - (this.stackPages * 65536);
+    this.populateInitListStatic(initList, aggType, baseOffset);
+    return addr;
+  }
+
+  // --- Runtime init list stores ---
+  emitInitListRuntimeStores(initList, type, baseLocalIdx, baseOffset) {
+    if (type.isArray()) {
+      const elemType = type.baseType;
+      const elemSize = this.sizeOf(elemType);
+      for (let i = 0; i < initList.elements.length; i++) {
+        const elemOffset = baseOffset + i * elemSize;
+        const elem = initList.elements[i];
+        if (elem.kind === Types.ExprKind.INIT_LIST) {
+          this.emitInitListRuntimeStores(elem, elemType, baseLocalIdx, elemOffset);
+        } else {
+          const val = this._constEvalExpr(elem);
+          if (!val) {
+            if (elemType.isAggregate()) {
+              this.body.localGet(baseLocalIdx);
+              if (elemOffset) { this.body.i32Const(elemOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+              this.emitExpr(elem);
+              this.body.i32Const(this.sizeOf(elemType));
+              this.body.memoryCopy();
+            } else {
+              this.body.localGet(baseLocalIdx);
+              if (elemOffset) { this.body.i32Const(elemOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+              this.emitExpr(elem);
+              this.emitConversion(elem.type, elemType);
+              this.emitStore(elemType);
+            }
+          }
+        }
+      }
+    } else if (type.isTag()) {
+      const tag = type.tagDecl;
+      if (!tag) return;
+      if (tag.tagKind === Types.TagKind.STRUCT) {
+        let elemIdx = 0;
+        for (const member of tag.members) {
+          if (member.declKind !== Types.DeclKind.VAR) continue;
+          if (member.bitWidth >= 0 && !member.name) continue;
+          const fieldOffset = baseOffset + member.byteOffset;
+          if (elemIdx < initList.elements.length) {
+            const elem = initList.elements[elemIdx];
+            if (member.bitWidth >= 0) {
+              const val = this._constEvalExpr(elem);
+              if (!val) {
+                this.body.localGet(baseLocalIdx);
+                if (fieldOffset) { this.body.i32Const(fieldOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+                this.emitExpr(elem);
+                this.emitConversion(elem.type, member.type);
+                this.emitBitFieldStore(member);
+              }
+            } else if (elem.kind === Types.ExprKind.INIT_LIST) {
+              this.emitInitListRuntimeStores(elem, member.type, baseLocalIdx, fieldOffset);
+            } else {
+              const val = this._constEvalExpr(elem);
+              if (!val) {
+                if (member.type.isAggregate()) {
+                  this.body.localGet(baseLocalIdx);
+                  if (fieldOffset) { this.body.i32Const(fieldOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+                  this.emitExpr(elem);
+                  this.body.i32Const(this.sizeOf(member.type));
+                  this.body.memoryCopy();
+                } else {
+                  this.body.localGet(baseLocalIdx);
+                  if (fieldOffset) { this.body.i32Const(fieldOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+                  this.emitExpr(elem);
+                  this.emitConversion(elem.type, member.type);
+                  this.emitStore(member.type);
+                }
+              }
+            }
+          }
+          elemIdx++;
+        }
+      } else if (tag.tagKind === Types.TagKind.UNION) {
+        if (initList.elements.length > 0 && initList.elements[0] !== null) {
+          const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
+          let varIdx = 0;
+          for (const member of tag.members) {
+            if (member.declKind !== Types.DeclKind.VAR) continue;
+            if (varIdx++ !== targetIdx) continue;
+            const elem = initList.elements[0];
+            if (elem.kind === Types.ExprKind.INIT_LIST) {
+              this.emitInitListRuntimeStores(elem, member.type, baseLocalIdx, baseOffset);
+            } else {
+              const val = this._constEvalExpr(elem);
+              if (!val) {
+                if (member.type.isAggregate()) {
+                  this.body.localGet(baseLocalIdx);
+                  if (baseOffset) { this.body.i32Const(baseOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+                  this.emitExpr(elem);
+                  this.body.i32Const(this.sizeOf(member.type));
+                  this.body.memoryCopy();
+                } else {
+                  this.body.localGet(baseLocalIdx);
+                  if (baseOffset) { this.body.i32Const(baseOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+                  this.emitExpr(elem);
+                  this.emitConversion(elem.type, member.type);
+                  this.emitStore(member.type);
+                }
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // --- Init to frame slot ---
+  emitStringToFrameSlot(strValue, arrayType, frameOffset) {
+    const arraySize = this.sizeOf(arrayType);
+    const strLen = strValue.length;
+    const copyLen = Math.min(arraySize, strLen);
+    const srcAddr = this.getStringAddress(strValue);
+    this.emitFrameAddr(frameOffset);
+    this.body.i32Const(srcAddr);
+    this.body.i32Const(copyLen);
+    this.body.memoryCopy();
+    if (copyLen < arraySize) {
+      this.emitFrameAddr(frameOffset + copyLen);
+      this.body.i32Const(0);
+      this.body.i32Const(arraySize - copyLen);
+      this.body.memoryFill();
+    }
+  }
+  emitInitToFrameSlot(type, initExpr, frameOffset) {
+    if (type.isArray() && initExpr.kind === Types.ExprKind.STRING) {
+      this.emitStringToFrameSlot(initExpr.value, type, frameOffset);
+      return;
+    }
+    if (type.isAggregate() && initExpr.kind === Types.ExprKind.INIT_LIST) {
+      const il = initExpr;
+      if (type.isArray() && il.elements.length === 1 && il.elements[0].kind === Types.ExprKind.STRING) {
+        this.emitStringToFrameSlot(il.elements[0].value, type, frameOffset);
+        return;
+      }
+      const srcAddr = this.allocateInitListStatic(il, type);
+      this.emitFrameAddr(frameOffset);
+      this.body.i32Const(srcAddr);
+      this.body.i32Const(this.sizeOf(type));
+      this.body.memoryCopy();
+      this.pushLocalScope();
+      const baseAddrLocal = this.allocLocal(WT_I32);
+      this.emitFrameAddr(frameOffset);
+      this.body.localSet(baseAddrLocal);
+      this.emitInitListRuntimeStores(il, type, baseAddrLocal, 0);
+      this.popLocalScope();
+      return;
+    }
+    if (isStructOrUnion(type)) {
+      this.emitFrameAddr(frameOffset);
+      this.emitExpr(initExpr);
+      this.body.i32Const(this.sizeOf(type));
+      this.body.memoryCopy();
+      return;
+    }
+    // Scalar
+    this.emitFrameAddr(frameOffset);
+    this.emitExpr(initExpr);
+    this.emitStore(type);
+  }
+
+  emitCompoundLiteralInit(cl) {
+    const offset = this.compoundLiteralOffsets.get(cl);
+    if (cl.type.isAggregate()) {
+      this.emitInitToFrameSlot(cl.type, cl.initList, offset);
+    } else {
+      const initExpr = (!cl.initList.elements || cl.initList.elements.length === 0)
+        ? new AST.EInt(Types.TINT, 0n) : cl.initList.elements[0];
+      this.emitInitToFrameSlot(cl.type, initExpr, offset);
+    }
+  }
+
+  // --- Assign locals for a function ---
+  assignLocals(funcDef) {
+    const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
+    const defIdx = funcIdx - this.wmod.funcImports.length;
+    this.currentFuncLocals = this.wmod.funcDefs[defIdx].locals;
+    this.currentFuncLocals.length = 0;
+    this.freeLocalsByType.clear();
+    this.localScopeStack = [];
+    this.localVarToWasmLocalIdx.clear();
+
+    let localIdx = 0;
+    this.hasVaArgs = !!funcDef.type.isVarArg;
+    this.vaParamInfos = [];
+    this.vaStartOffset = 0;
+    this.vaRetSlotSize = 0;
+
+    if (this.hasVaArgs) {
+      // New variadic convention: single WASM parameter = arg block pointer.
+      this.argBlockLocalIdx = localIdx++;
+      this.nextLocalIdx = localIdx;
+
+      const retType = funcDef.type.getReturnType();
+      this.vaRetSlotSize = (retType === Types.TVOID) ? 0 : vaSlotSize(retType);
+
+      let paramOffset = this.vaRetSlotSize;
+      for (const param of funcDef.parameters) {
+        const wt = isStructOrUnion(param.type) ? WT_I32 : cToWasmType(param.type);
+        const paramLocalIdx = this.allocLocal(wt);
+        this.localVarToWasmLocalIdx.set(param, paramLocalIdx);
+        const slotSz = vaSlotSize(param.type);
+        this.vaParamInfos.push({ var: param, localIdx: paramLocalIdx, offset: paramOffset });
+        paramOffset += slotSz;
+      }
+      this.vaStartOffset = paramOffset;
+      this.vaArgsLocalIdx = this.allocLocal(WT_I32);
+      this.hasStructReturn = false;
+    } else {
+      this.hasStructReturn = isStructOrUnion(funcDef.type.getReturnType());
+      if (this.hasStructReturn) this.structRetPtrLocalIdx = localIdx++;
+      for (const param of funcDef.parameters) {
+        this.localVarToWasmLocalIdx.set(param, localIdx++);
+      }
+      this.nextLocalIdx = localIdx;
+    }
+
+    // Collect MEMORY vars
+    const memoryVars = [];
+    const addMemoryDecls = (decls) => {
+      for (const decl of decls) {
+        if (decl.declKind === Types.DeclKind.VAR && decl.storageClass !== Types.StorageClass.STATIC) {
+          const def = decl.definition || decl;
+          if (def === decl && def.allocClass === Types.AllocClass.MEMORY) memoryVars.push(decl);
+        }
+      }
+    };
+    const stack = [funcDef.body];
+    while (stack.length > 0) {
+      const stmt = stack.pop();
+      if (!stmt) continue;
+      switch (stmt.kind) {
+        case Types.StmtKind.DECL: addMemoryDecls(stmt.declarations); break;
+        case Types.StmtKind.COMPOUND:
+          for (let i = stmt.statements.length - 1; i >= 0; i--) stack.push(stmt.statements[i]);
+          break;
+        case Types.StmtKind.IF:
+          stack.push(stmt.thenBranch);
+          if (stmt.elseBranch) stack.push(stmt.elseBranch);
+          break;
+        case Types.StmtKind.WHILE: stack.push(stmt.body); break;
+        case Types.StmtKind.DO_WHILE: stack.push(stmt.body); break;
+        case Types.StmtKind.FOR:
+          if (stmt.init && stmt.init.kind === Types.StmtKind.DECL) addMemoryDecls(stmt.init.declarations);
+          stack.push(stmt.body);
+          break;
+        case Types.StmtKind.SWITCH:
+          for (let i = stmt.body.statements.length - 1; i >= 0; i--) stack.push(stmt.body.statements[i]);
+          break;
+        case Types.StmtKind.TRY_CATCH:
+          stack.push(stmt.tryBody);
+          for (const cc of stmt.catches) stack.push(cc.body);
+          break;
+      }
+    }
+
+    // Memory parameters
+    const memoryParams = [];
+    for (const param of funcDef.parameters) {
+      const def = param.definition || param;
+      if (def.allocClass === Types.AllocClass.MEMORY) memoryParams.push(param);
+    }
+
+    // Compute frame layout
+    this.localArrayOffsets.clear();
+    this.paramMemoryOffsets.clear();
+    this.compoundLiteralOffsets.clear();
+    this.frameSize = 0;
+    if (memoryVars.length > 0 || memoryParams.length > 0 ||
+        (funcDef.compoundLiterals && funcDef.compoundLiterals.length > 0)) {
+      this.savedSpLocalIdx = this.allocLocal(WT_I32);
+      let offset = 0;
+      for (const v of memoryVars) {
+        let a = this.alignOf(v.type);
+        if (v.requestedAlignment > 0 && v.requestedAlignment > a) a = v.requestedAlignment;
+        offset = (offset + a - 1) & ~(a - 1);
+        this.localArrayOffsets.set(v, offset);
+        offset += this.sizeOf(v.type);
+      }
+      for (const p of memoryParams) {
+        const a = this.alignOf(p.type);
+        offset = (offset + a - 1) & ~(a - 1);
+        this.paramMemoryOffsets.set(p, offset);
+        offset += this.sizeOf(p.type);
+      }
+      if (funcDef.compoundLiterals) {
+        for (const cl of funcDef.compoundLiterals) {
+          const a = this.alignOf(cl.type);
+          offset = (offset + a - 1) & ~(a - 1);
+          this.compoundLiteralOffsets.set(cl, offset);
+          offset += this.sizeOf(cl.type);
+        }
+      }
+      this.frameSize = (offset + 15) & ~15;
+    }
+  }
+
+  // --- Emit function body ---
+  emitFunctionBody(funcDef) {
+    const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
+    this.assignLocals(funcDef);
+    const defIdx = funcIdx - this.wmod.funcImports.length;
+    const wasmCode = new WasmCode(this.wmod.funcDefs[defIdx].body);
+    this.body = wasmCode;
+    this.currentFuncDef = funcDef;
+    this.structRetDeferred = 0;
+    this.callNesting = 0;
+    this.blockDepth = 0;
+    this.gotoLabelDepths.clear();
+
+    // Variadic function prologue: load fixed params from arg block
+    if (this.hasVaArgs) {
+      for (const pi of this.vaParamInfos) {
+        if (isStructOrUnion(pi.var.type)) {
+          this.body.localGet(this.argBlockLocalIdx);
+          if (pi.offset > 0) { this.body.i32Const(pi.offset); this.body.aop(WT_I32, ALU.OP_ADD); }
+          this.body.localSet(pi.localIdx);
+        } else {
+          this.body.localGet(this.argBlockLocalIdx);
+          if (pi.offset > 0) { this.body.i32Const(pi.offset); this.body.aop(WT_I32, ALU.OP_ADD); }
+          this.emitVaArgLoad(pi.var.type);
+          this.body.localSet(pi.localIdx);
+        }
+      }
+      this.body.localGet(this.argBlockLocalIdx);
+      if (this.vaStartOffset > 0) { this.body.i32Const(this.vaStartOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
+      this.body.localSet(this.vaArgsLocalIdx);
+    }
+
+    // Stack frame prologue
+    if (this.frameSize > 0) {
+      this.body.globalGet(this.stackPointerGlobalIdx);
+      this.body.localSet(this.savedSpLocalIdx);
+      this.body.localGet(this.savedSpLocalIdx);
+      this.body.i32Const(this.frameSize);
+      this.body.aop(WT_I32, ALU.OP_SUB);
+      this.body.globalSet(this.stackPointerGlobalIdx);
+      // Copy MEMORY parameters
+      for (const [paramVar, offset] of this.paramMemoryOffsets) {
+        this.emitFrameAddr(offset);
+        const paramIt = this.localVarToWasmLocalIdx.get(paramVar);
+        if (paramIt !== undefined) {
+          if (isStructOrUnion(paramVar.type)) {
+            this.body.localGet(paramIt);
+            this.body.i32Const(this.sizeOf(paramVar.type));
+            this.body.memoryCopy();
+          } else {
+            this.body.localGet(paramIt);
+            this.emitStore(paramVar.type);
+          }
+        }
+      }
+    }
+
+    this.emitStmt(funcDef.body);
+
+    // Epilogue
+    if (this.frameSize > 0) {
+      this.body.localGet(this.savedSpLocalIdx);
+      this.body.globalSet(this.stackPointerGlobalIdx);
+    }
+    if (this.hasVaArgs) {
+      // Variadic: WASM function returns void
+    } else {
+      const retType = funcDef.type.getReturnType();
+      const wasmRetType = cToWasmType(retType);
+      if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
+      else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
+      else if (wtEquals(wasmRetType, WT_F32)) this.body.f32Const(0.0);
+      else if (wtEquals(wasmRetType, WT_F64)) this.body.f64Const(0.0);
+      else this.body.i32Const(0);
+    }
+    this.body.ret();
+    this.body = null;
+  }
+
+  // --- Statement emission ---
+  emitStmt(stmt) {
+    if (!stmt) return;
+    switch (stmt.kind) {
+      case Types.StmtKind.COMPOUND: {
+        this.pushLocalScope();
+        const stmts = stmt.statements;
+        // Open forward-label blocks
+        const forwardLabels = [];
+        for (const s of stmts) {
+          if (s.kind === Types.StmtKind.LABEL && s.hasGotos) {
+            if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
+              forwardLabels.push(s);
+          }
+        }
+        for (let i = forwardLabels.length - 1; i >= 0; i--) {
+          this.body.block();
+          this.blockDepth++;
+          this.gotoLabelDepths.set(forwardLabels[i], this.blockDepth);
+        }
+        const openLoopLabels = [];
+        for (const s of stmts) {
+          if (s.kind === Types.StmtKind.LABEL) {
+            if (!s.hasGotos) continue;
+            if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH) {
+              for (let j = openLoopLabels.length - 1; j >= 0; j--) {
+                this.blockDepth--;
+                this.body.end();
+                this.gotoLabelDepths.delete(openLoopLabels[j]);
+              }
+              openLoopLabels.length = 0;
+              this.blockDepth--;
+              this.body.end();
+              this.gotoLabelDepths.delete(s);
+            }
+            if (s.labelKind === Types.LabelKind.LOOP || s.labelKind === Types.LabelKind.BOTH) {
+              this.body.loop();
+              this.blockDepth++;
+              this.gotoLabelDepths.set(s, this.blockDepth);
+              openLoopLabels.push(s);
+            }
+          } else {
+            this.emitStmt(s);
+          }
+        }
+        for (let j = openLoopLabels.length - 1; j >= 0; j--) {
+          this.blockDepth--;
+          this.body.end();
+          this.gotoLabelDepths.delete(openLoopLabels[j]);
+        }
+        this.popLocalScope();
+        break;
+      }
+      case Types.StmtKind.EXPR:
+        this.emitExpr(stmt.expr, EXPR_DROP);
+        break;
+      case Types.StmtKind.DECL: {
+        for (const decl of stmt.declarations) {
+          if (decl.declKind === Types.DeclKind.VAR) {
+            if (decl.storageClass !== Types.StorageClass.STATIC && decl.definition === decl &&
+                decl.allocClass === Types.AllocClass.REGISTER) {
+              this.localVarToWasmLocalIdx.set(decl, this.allocLocal(cToWasmType(decl.type)));
+            }
+            if (decl.initExpr) {
+              const lait = this.localArrayOffsets.get(decl);
+              if (lait !== undefined) {
+                this.emitInitToFrameSlot(decl.type, decl.initExpr, lait);
+              } else {
+                const lit = this.localVarToWasmLocalIdx.get(decl);
+                if (lit !== undefined) {
+                  this.emitExpr(decl.initExpr);
+                  this.body.localSet(lit);
+                }
+              }
+            }
+          }
+        }
+        break;
+      }
+      case Types.StmtKind.RETURN: {
+        if (this.hasVaArgs) {
+          const retType = this.currentFuncDef.type.getReturnType();
+          if (stmt.expr && isStructOrUnion(retType)) {
+            this.body.localGet(this.argBlockLocalIdx);
+            this.emitExpr(stmt.expr);
+            this.body.i32Const(this.sizeOf(retType));
+            this.body.memoryCopy();
+          } else if (stmt.expr) {
+            this.body.localGet(this.argBlockLocalIdx);
+            this.emitExpr(stmt.expr);
+            this.emitVaArgStore(retType);
+          }
+        } else if (stmt.expr && this.hasStructReturn) {
+          this.body.localGet(this.structRetPtrLocalIdx);
+          this.emitExpr(stmt.expr);
+          this.body.i32Const(this.sizeOf(this.currentFuncDef.type.getReturnType()));
+          this.body.memoryCopy();
+          this.body.localGet(this.structRetPtrLocalIdx);
+        } else if (stmt.expr) {
+          this.emitExpr(stmt.expr);
+          const retType = this.currentFuncDef.type.getReturnType();
+        } else {
+          if (!this.hasVaArgs) this.body.i32Const(0);
+        }
+        if (this.frameSize > 0) {
+          this.body.localGet(this.savedSpLocalIdx);
+          this.body.globalSet(this.stackPointerGlobalIdx);
+        }
+        this.body.ret();
+        break;
+      }
+      case Types.StmtKind.IF: {
+        this.emitExpr(stmt.condition);
+        this.emitConditionToI32(stmt.condition.type);
+        if (stmt.elseBranch) {
+          this.body.if_(WT_EMPTY); this.blockDepth++;
+          this.emitStmt(stmt.thenBranch);
+          this.body.else_();
+          this.emitStmt(stmt.elseBranch);
+          this.blockDepth--; this.body.end();
+        } else {
+          this.body.if_(WT_EMPTY); this.blockDepth++;
+          this.emitStmt(stmt.thenBranch);
+          this.blockDepth--; this.body.end();
+        }
+        break;
+      }
+      case Types.StmtKind.WHILE: {
+        const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
+        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
+        this.body.loop(); this.blockDepth++; this.continueTarget = this.blockDepth;
+        this.emitExpr(stmt.condition);
+        this.emitConditionToI32(stmt.condition.type);
+        this.body.aop(WT_I32, ALU.OP_EQZ);
+        this.body.brIf(this.blockDepth - this.breakTarget);
+        this.emitStmt(stmt.body);
+        this.body.br(this.blockDepth - this.continueTarget);
+        this.blockDepth--; this.body.end();
+        this.blockDepth--; this.body.end();
+        this.breakTarget = savedBreak; this.continueTarget = savedContinue;
+        break;
+      }
+      case Types.StmtKind.DO_WHILE: {
+        const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
+        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
+        this.body.loop(); this.blockDepth++;
+        const loopDepth = this.blockDepth;
+        this.body.block(); this.blockDepth++; this.continueTarget = this.blockDepth;
+        this.emitStmt(stmt.body);
+        this.blockDepth--; this.body.end();
+        this.emitExpr(stmt.condition);
+        this.emitConditionToI32(stmt.condition.type);
+        this.body.brIf(this.blockDepth - loopDepth);
+        this.blockDepth--; this.body.end();
+        this.blockDepth--; this.body.end();
+        this.breakTarget = savedBreak; this.continueTarget = savedContinue;
+        break;
+      }
+      case Types.StmtKind.FOR: {
+        const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
+        this.pushLocalScope();
+        if (stmt.init) this.emitStmt(stmt.init);
+        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
+        this.body.loop(); this.blockDepth++;
+        const loopTarget = this.blockDepth;
+        if (stmt.condition) {
+          this.emitExpr(stmt.condition);
+          this.emitConditionToI32(stmt.condition.type);
+          this.body.aop(WT_I32, ALU.OP_EQZ);
+          this.body.brIf(this.blockDepth - this.breakTarget);
+        }
+        this.body.block(); this.blockDepth++; this.continueTarget = this.blockDepth;
+        this.emitStmt(stmt.body);
+        this.blockDepth--; this.body.end();
+        if (stmt.increment) this.emitExpr(stmt.increment, EXPR_DROP);
+        this.body.br(this.blockDepth - loopTarget);
+        this.blockDepth--; this.body.end();
+        this.blockDepth--; this.body.end();
+        this.popLocalScope();
+        this.breakTarget = savedBreak; this.continueTarget = savedContinue;
+        break;
+      }
+      case Types.StmtKind.BREAK:
+        this.body.br(this.blockDepth - this.breakTarget);
+        break;
+      case Types.StmtKind.CONTINUE:
+        this.body.br(this.blockDepth - this.continueTarget);
+        break;
+      case Types.StmtKind.SWITCH: {
+        const sw = stmt;
+        const savedBreak = this.breakTarget;
+        let defaultIdx = -1;
+        for (let i = 0; i < sw.cases.length; i++) {
+          if (sw.cases[i].isDefault) { defaultIdx = i; break; }
+        }
+        // Collect forward labels and their statement positions in switch body
+        const switchFwdLabels = [];
+        for (let si = 0; si < sw.body.statements.length; si++) {
+          const s = sw.body.statements[si];
+          if (s.kind === Types.StmtKind.LABEL && s.hasGotos) {
+            if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
+              switchFwdLabels.push({ label: s, stmtPos: si });
+          }
+        }
+        const numCases = sw.cases.length;
+        const numFwdBlocks = switchFwdLabels.length;
+
+        // Compute adjusted br index for each case.
+        // A forward label at stmtPos P is interleaved between cases with
+        // stmtIndex <= P (inner) and cases with stmtIndex > P (outer).
+        const caseBrIdx = new Array(numCases);
+        for (let i = 0; i < numCases; i++) {
+          let adj = 0;
+          for (const fl of switchFwdLabels) {
+            if (fl.stmtPos < sw.cases[i].stmtIndex) adj++;
+          }
+          caseBrIdx[i] = i + adj;
+        }
+
+        // Open break block
+        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
+
+        // Open case blocks and forward label blocks interleaved.
+        // Sort by stmtPos descending (higher pos = outermost).
+        const blockEntries = [];
+        for (let i = 0; i < numCases; i++) {
+          blockEntries.push({ pos: sw.cases[i].stmtIndex, isForward: false, idx: i });
+        }
+        for (let i = 0; i < switchFwdLabels.length; i++) {
+          blockEntries.push({ pos: switchFwdLabels[i].stmtPos, isForward: true, idx: i });
+        }
+        blockEntries.sort((a, b) => {
+          if (a.pos !== b.pos) return b.pos - a.pos;
+          if (a.isForward !== b.isForward) return a.isForward ? -1 : 1;
+          return b.idx - a.idx;
+        });
+        for (const e of blockEntries) {
+          this.body.block(); this.blockDepth++;
+          if (e.isForward) {
+            this.gotoLabelDepths.set(switchFwdLabels[e.idx].label, this.blockDepth);
+          }
+        }
+
+        // Dispatch
+        {
+          this.pushLocalScope();
+          const switchLocal = this.allocLocal(WT_I32);
+          this.emitExpr(sw.expr);
+          this.body.localSet(switchLocal);
+
+          // Count non-default cases and find min/max for density check
+          let nonDefaultCount = 0;
+          let minVal = 0x7FFFFFFF, maxVal = -0x80000000;
+          for (let i = 0; i < numCases; i++) {
+            if (sw.cases[i].isDefault) continue;
+            const v = Number(sw.cases[i].value) | 0;
+            if (nonDefaultCount === 0 || v < minVal) minVal = v;
+            if (nonDefaultCount === 0 || v > maxVal) maxVal = v;
+            nonDefaultCount++;
+          }
+          const range = nonDefaultCount > 0 ? (maxVal - minVal + 1) >>> 0 : 0;
+          const dense = nonDefaultCount >= 4 && range <= 512 &&
+              (nonDefaultCount * 10 / range) >= 4; // density >= 40%
+
+          if (this.compilerOptions.debugSwitch && sw.loc) {
+            process.stderr.write(`${sw.loc.filename}:${sw.loc.line}: switch: ${dense ? "br_table" : "br_if"}\n`);
+          }
+
+          if (dense) {
+            // br_table path: build a jump table
+            const fallbackIdx = defaultIdx >= 0 ? caseBrIdx[defaultIdx] : numCases + numFwdBlocks;
+            const table = new Array(range).fill(fallbackIdx);
+            for (let i = 0; i < numCases; i++) {
+              if (sw.cases[i].isDefault) continue;
+              const v = Number(sw.cases[i].value) | 0;
+              table[(v - minVal) >>> 0] = caseBrIdx[i];
+            }
+            this.body.localGet(switchLocal);
+            this.body.i32Const(minVal);
+            this.body.aop(WT_I32, ALU.OP_SUB);
+            this.body.brTable(table, fallbackIdx);
+          } else {
+            // Linear br_if chain for sparse switches
+            for (let i = 0; i < numCases; i++) {
+              if (sw.cases[i].isDefault) continue;
+              this.body.localGet(switchLocal);
+              this.body.i32Const(sw.cases[i].value);
+              this.body.aop(WT_I32, ALU.OP_EQ);
+              this.body.brIf(caseBrIdx[i]);
+            }
+            if (defaultIdx >= 0) this.body.br(caseBrIdx[defaultIdx]);
+            else this.body.br(numCases + numFwdBlocks);
+          }
+          this.popLocalScope();
+        }
+        // Case bodies
+        const openLoopLabels = [];
+        for (let i = 0; i < numCases; i++) {
+          this.blockDepth--; this.body.end();
+          const startIdx = sw.cases[i].stmtIndex;
+          const endIdx = (i + 1 < numCases) ? sw.cases[i + 1].stmtIndex : sw.body.statements.length;
+          for (let j = startIdx; j < endIdx; j++) {
+            const s = sw.body.statements[j];
+            if (s.kind === Types.StmtKind.LABEL) {
+              if (!s.hasGotos) continue;
+              if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH) {
+                for (let k = openLoopLabels.length - 1; k >= 0; k--) {
+                  this.blockDepth--; this.body.end();
+                  this.gotoLabelDepths.delete(openLoopLabels[k]);
+                }
+                openLoopLabels.length = 0;
+                this.blockDepth--; this.body.end();
+                this.gotoLabelDepths.delete(s);
+              }
+              if (s.labelKind === Types.LabelKind.LOOP || s.labelKind === Types.LabelKind.BOTH) {
+                this.body.loop(); this.blockDepth++;
+                this.gotoLabelDepths.set(s, this.blockDepth);
+                openLoopLabels.push(s);
+              }
+            } else {
+              this.emitStmt(s);
+            }
+          }
+        }
+        for (let k = openLoopLabels.length - 1; k >= 0; k--) {
+          this.blockDepth--; this.body.end();
+          this.gotoLabelDepths.delete(openLoopLabels[k]);
+        }
+        this.blockDepth--; this.body.end();
+        this.breakTarget = savedBreak;
+        break;
+      }
+      case Types.StmtKind.GOTO: {
+        const target = stmt.target;
+        const depth = this.gotoLabelDepths.get(target);
+        if (depth === undefined) {
+          const loc = stmt.loc || {};
+          const funcName = this.currentFuncDef ? this.currentFuncDef.name : "?";
+          process.stderr.write(`${loc.filename || "?"}:${loc.line || 0}: goto '${stmt.label}': target label not in scope (in function '${funcName}') (label may be in a nested block, or a loop label's scope was closed by a forward label)\n`);
+          process.exit(1);
+        }
+        this.body.br(this.blockDepth - depth);
+        break;
+      }
+      case Types.StmtKind.LABEL: break; // handled in COMPOUND
+      case Types.StmtKind.EMPTY: break;
+      case Types.StmtKind.THROW: {
+        const tagIdx = this.exceptionToWasmTagIdx.get(stmt.tag);
+        for (let i = 0; i < stmt.args.length; i++) this.emitExpr(stmt.args[i]);
+        this.body.throw_(tagIdx);
+        this.body.unreachable();
+        break;
+      }
+      case Types.StmtKind.TRY_CATCH: {
+        const tc = stmt;
+        const numCatches = tc.catches.length;
+        const savedSpLocal = this.allocLocal(WT_I32);
+        this.body.globalGet(this.stackPointerGlobalIdx);
+        this.body.localSet(savedSpLocal);
+        this.body.block(); this.blockDepth++;
+        const endDepth = this.blockDepth;
+        const catchBlockDepths = [];
+        for (let i = numCatches - 1; i >= 0; i--) {
+          const cc = tc.catches[i];
+          if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
+          else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0]));
+          else {
+            const results = cc.tag.paramTypes.map(pt => cToWasmType(pt));
+            const typeIdx = this.wmod.addFunctionTypeId([], results);
+            this.body.push(0x02); lebI(this.body.bytes, typeIdx);
+          }
+          this.blockDepth++;
+          catchBlockDepths[i] = this.blockDepth;
+        }
+        const catches = [];
+        for (let i = 0; i < numCatches; i++) {
+          const cc = tc.catches[i];
+          const labelIdx = this.blockDepth - catchBlockDepths[i];
+          if (!cc.tag) catches.push([0x02, 0, labelIdx]);
+          else catches.push([0x00, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
+        }
+        this.body.tryTable(WT_EMPTY, catches);
+        this.blockDepth++;
+        this.emitStmt(tc.tryBody);
+        this.blockDepth--; this.body.end();
+        this.body.br(this.blockDepth - endDepth);
+        for (let i = 0; i < numCatches; i++) {
+          this.blockDepth--; this.body.end();
+          const cc = tc.catches[i];
+          this.pushLocalScope();
+          this.body.localGet(savedSpLocal);
+          this.body.globalSet(this.stackPointerGlobalIdx);
+          if (cc.tag && cc.tag.paramTypes.length > 0) {
+            const bindLocals = [];
+            for (let j = 0; j < cc.bindingVars.length; j++) {
+              const localIdx = this.allocLocal(cToWasmType(cc.tag.paramTypes[j]));
+              this.localVarToWasmLocalIdx.set(cc.bindingVars[j], localIdx);
+              bindLocals.push(localIdx);
+            }
+            for (let j = bindLocals.length - 1; j >= 0; j--) this.body.localSet(bindLocals[j]);
+          }
+          this.emitStmt(cc.body);
+          this.popLocalScope();
+          if (i + 1 < numCatches) this.body.br(this.blockDepth - endDepth);
+        }
+        this.blockDepth--; this.body.end();
+        break;
+      }
+      default:
+        throw new Error(`emitStmt: unhandled statement kind ${stmt.kind}`);
+    }
+  }
+
+  // --- Type helpers ---
+  getBinaryWasmType(type) {
+    type = type.removeQualifiers();
+    if (type === Types.TFLOAT) return WT_F32;
+    if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
+    if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
+    return WT_I32;
+  }
+
+  isUnsignedType(type) { return type.removeQualifiers().isUnsigned(); }
+
+  // --- Load/Store ---
+  emitLoad(type) {
+    type = type.removeQualifiers();
+    if (type === Types.TCHAR || type === Types.TSCHAR) this.body.mop(MOP.I32_LOAD8_S, 0, 0);
+    else if (type === Types.TUCHAR || type === Types.TBOOL) this.body.mop(MOP.I32_LOAD8_U, 0, 0);
+    else if (type === Types.TSHORT) this.body.mop(MOP.I32_LOAD16_S, 0, 1);
+    else if (type === Types.TUSHORT) this.body.mop(MOP.I32_LOAD16_U, 0, 1);
+    else if (type === Types.TINT || type === Types.TUINT || type === Types.TLONG ||
+             type === Types.TULONG || type.isPointer()) this.body.mop(MOP.I32_LOAD, 0, 2);
+    else if (type === Types.TLLONG || type === Types.TULLONG) this.body.mop(MOP.I64_LOAD, 0, 3);
+    else if (type === Types.TFLOAT) this.body.mop(MOP.F32_LOAD, 0, 2);
+    else if (type === Types.TDOUBLE || type === Types.TLDOUBLE) this.body.mop(MOP.F64_LOAD, 0, 3);
+    else throw new Error(`emitLoad: unsupported type: ${type.kind}`);
+  }
+
+  emitStore(type) {
+    type = type.removeQualifiers();
+    if (type === Types.TCHAR || type === Types.TSCHAR || type === Types.TUCHAR || type === Types.TBOOL)
+      this.body.mop(MOP.I32_STORE8, 0, 0);
+    else if (type === Types.TSHORT || type === Types.TUSHORT) this.body.mop(MOP.I32_STORE16, 0, 1);
+    else if (type === Types.TINT || type === Types.TUINT || type === Types.TLONG ||
+             type === Types.TULONG || type.isPointer()) this.body.mop(MOP.I32_STORE, 0, 2);
+    else if (type === Types.TLLONG || type === Types.TULLONG) this.body.mop(MOP.I64_STORE, 0, 3);
+    else if (type === Types.TFLOAT) this.body.mop(MOP.F32_STORE, 0, 2);
+    else if (type === Types.TDOUBLE || type === Types.TLDOUBLE) this.body.mop(MOP.F64_STORE, 0, 3);
+    else throw new Error(`emitStore: unsupported type: ${type.kind}`);
+  }
+
+  // --- Bitfield load/store ---
+  emitBitFieldLoad(field) {
+    const bw = field.bitWidth, bo = field.bitOffset;
+    this.emitLoad(field.type);
+    if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHR_U); }
+    if (bw < 32) { this.body.i32Const((1 << bw) - 1); this.body.aop(WT_I32, ALU.OP_AND); }
+    if (!this.isUnsignedType(field.type) && bw < 32) {
+      const shift = 32 - bw;
+      this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHL);
+      this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHR_S);
+    }
+  }
+
+  emitBitFieldStore(field) {
+    const bw = field.bitWidth, bo = field.bitOffset;
+    if (bw >= 32) { this.emitStore(field.type); return; }
+    const mask = ((1 << bw) - 1) << bo;
+    this.pushLocalScope();
+    const valLocal = this.allocLocal(WT_I32);
+    const addrLocal = this.allocLocal(WT_I32);
+    this.body.localSet(valLocal);
+    this.body.localSet(addrLocal);
+    this.body.localGet(addrLocal);
+    this.emitLoad(field.type);
+    this.body.i32Const(~mask);
+    this.body.aop(WT_I32, ALU.OP_AND);
+    this.body.localGet(valLocal);
+    this.body.i32Const((1 << bw) - 1);
+    this.body.aop(WT_I32, ALU.OP_AND);
+    if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHL); }
+    this.body.aop(WT_I32, ALU.OP_OR);
+    this.body.localSet(valLocal);
+    this.body.localGet(addrLocal);
+    this.body.localGet(valLocal);
+    this.emitStore(field.type);
+    this.popLocalScope();
+  }
+
+  // --- VaArg load/store ---
+  emitVaArgStore(type) {
+    const wt = cToWasmType(type);
+    if (wtEquals(wt, WT_I32)) this.body.mop(MOP.I32_STORE, 0, 2);
+    else if (wtEquals(wt, WT_I64)) this.body.mop(MOP.I64_STORE, 0, 3);
+    else if (wtEquals(wt, WT_F32)) this.body.mop(MOP.F32_STORE, 0, 2);
+    else if (wtEquals(wt, WT_F64)) this.body.mop(MOP.F64_STORE, 0, 3);
+  }
+
+  emitVaArgLoad(type) {
+    type = type.removeQualifiers();
+    if (isStructOrUnion(type)) return; // struct: address IS the value
+    if (type === Types.TCHAR || type === Types.TSCHAR) this.body.mop(MOP.I32_LOAD8_S, 0, 0);
+    else if (type === Types.TUCHAR || type === Types.TBOOL) this.body.mop(MOP.I32_LOAD8_U, 0, 0);
+    else if (type === Types.TSHORT) this.body.mop(MOP.I32_LOAD16_S, 0, 1);
+    else if (type === Types.TUSHORT) this.body.mop(MOP.I32_LOAD16_U, 0, 1);
+    else {
+      const wt = cToWasmType(type);
+      if (wtEquals(wt, WT_I32)) this.body.mop(MOP.I32_LOAD, 0, 2);
+      else if (wtEquals(wt, WT_I64)) this.body.mop(MOP.I64_LOAD, 0, 3);
+      else if (wtEquals(wt, WT_F32)) this.body.mop(MOP.F32_LOAD, 0, 2);
+      else if (wtEquals(wt, WT_F64)) this.body.mop(MOP.F64_LOAD, 0, 3);
+    }
+  }
+
+  // --- Condition/bool helpers ---
+  emitConditionToI32(condType) {
+    const wt = this.getBinaryWasmType(condType);
+    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
+    else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
+  }
+
+  emitBoolNormalize(type) {
+    const wt = this.getBinaryWasmType(type);
+    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
+    else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
+    else { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
+  }
+
+  // Emit narrowing for sub-i32 types (char, short).
+  // WASM locals are always i32, so we must explicitly truncate after
+  // any operation that may leave high bits set.
+  emitSubIntNarrowing(toType) {
+    toType = toType.removeQualifiers();
+    if (toType === Types.TCHAR || toType === Types.TSCHAR) {
+      this.body.i32Const(24); this.body.aop(WT_I32, ALU.OP_SHL);
+      this.body.i32Const(24); this.body.aop(WT_I32, ALU.OP_SHR_S);
+    } else if (toType === Types.TUCHAR) {
+      this.body.i32Const(0xFF); this.body.aop(WT_I32, ALU.OP_AND);
+    } else if (toType === Types.TSHORT) {
+      this.body.i32Const(16); this.body.aop(WT_I32, ALU.OP_SHL);
+      this.body.i32Const(16); this.body.aop(WT_I32, ALU.OP_SHR_S);
+    } else if (toType === Types.TUSHORT) {
+      this.body.i32Const(0xFFFF); this.body.aop(WT_I32, ALU.OP_AND);
+    }
+  }
+
+  // --- Type conversion ---
+  emitConversion(fromType, toType) {
+    const fromWasm = this.getBinaryWasmType(fromType);
+    const toWasm = this.getBinaryWasmType(toType);
+    toType = toType.removeQualifiers();
+    if (toType === Types.TBOOL) {
+      if (wtEquals(fromWasm, WT_I32)) { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
+      else if (wtEquals(fromWasm, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
+      else if (wtEquals(fromWasm, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+      else if (wtEquals(fromWasm, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
+      return;
+    }
+    if (wtEquals(fromWasm, toWasm)) {
+      if (wtEquals(fromWasm, WT_I32)) this.emitSubIntNarrowing(toType);
+      return;
+    }
+    const fromSigned = !this.isUnsignedType(fromType);
+    const toSigned = !this.isUnsignedType(toType);
+    if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_EXTEND_I32, fromSigned);
+    else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_WRAP_I64); this.emitSubIntNarrowing(toType); }
+    else if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_CONVERT_I32, fromSigned);
+    else if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_CONVERT_I32, fromSigned);
+    else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_CONVERT_I64, fromSigned);
+    else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_CONVERT_I64, fromSigned);
+    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_TRUNC_F32, toSigned); this.emitSubIntNarrowing(toType); }
+    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_TRUNC_F32, toSigned);
+    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_TRUNC_F64, toSigned); this.emitSubIntNarrowing(toType); }
+    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_TRUNC_F64, toSigned);
+    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_PROMOTE_F32);
+    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_DEMOTE_F64);
+  }
+
+  // --- LValue ---
+  emitLValue(expr) {
+    if (expr.kind === Types.ExprKind.IDENT && expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+      const varDecl = expr.decl.definition || expr.decl;
+      const lit = this.localVarToWasmLocalIdx.get(varDecl);
+      const git = this.globalVarToWasmGlobalIdx.get(varDecl);
+      if ((lit !== undefined || git !== undefined) && varDecl.allocClass !== Types.AllocClass.MEMORY) {
+        return { kind: LV_REGISTER, type: varDecl.type, regIndex: lit !== undefined ? lit : git, regIsGlobal: git !== undefined };
+      }
+      const gait = this.globalArrayAddrs.get(varDecl);
+      if (gait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_STATIC, addrImmediate: gait };
+      const lait = this.localArrayOffsets.get(varDecl);
+      if (lait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_FRAME, addrImmediate: lait };
+      const pait = this.paramMemoryOffsets.get(varDecl);
+      if (pait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_FRAME, addrImmediate: pait };
+      throw new Error(`emitLValue: variable '${varDecl.name}' not found`);
+    }
+    if (expr.kind === Types.ExprKind.MEMBER) {
+      this.emitAddressOf(expr);
+      const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
+      lv.savedLocal = this.allocLocal(WT_I32);
+      this.body.localSet(lv.savedLocal);
+      return lv;
+    }
+    if (expr.kind === Types.ExprKind.ARROW) {
+      this.emitAddressOf(expr);
+      const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
+      lv.savedLocal = this.allocLocal(WT_I32);
+      this.body.localSet(lv.savedLocal);
+      return lv;
+    }
+    if (expr.kind === Types.ExprKind.SUBSCRIPT) {
+      const elemSize = this.sizeOf(expr.type);
+      this.emitExpr(expr.array);
+      this.emitExpr(expr.index);
+      if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+      if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+      this.body.aop(WT_I32, ALU.OP_ADD);
+      const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
+      lv.savedLocal = this.allocLocal(WT_I32);
+      this.body.localSet(lv.savedLocal);
+      return lv;
+    }
+    if (expr.kind === Types.ExprKind.UNARY && expr.op === "OP_DEREF") {
+      this.emitExpr(expr.operand);
+      const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
+      lv.savedLocal = this.allocLocal(WT_I32);
+      this.body.localSet(lv.savedLocal);
+      return lv;
+    }
+    throw new Error(`emitLValue: unsupported expression kind ${expr.kind}`);
+  }
+
+  lvaluePush(lv) {
+    if (lv.kind === LV_REGISTER) return;
+    if (lv.kind === LV_MEMORY) {
+      if (lv.addrSource === LV_ADDR_LOCAL) this.body.localGet(lv.savedLocal);
+      else if (lv.addrSource === LV_ADDR_STATIC) this.body.i32Const(lv.addrImmediate);
+      else if (lv.addrSource === LV_ADDR_FRAME) this.emitFrameAddr(lv.addrImmediate);
+    }
+  }
+
+  lvalueLoad(lv) {
+    if (lv.kind === LV_REGISTER) {
+      if (lv.regIsGlobal) this.body.globalGet(lv.regIndex);
+      else this.body.localGet(lv.regIndex);
+    } else if (lv.kind === LV_MEMORY) {
+      if (lv.bitField) this.emitBitFieldLoad(lv.bitField);
+      else this.emitLoad(lv.type);
+    }
+  }
+
+  lvalueStore(lv) {
+    if (lv.kind === LV_REGISTER) {
+      if (lv.regIsGlobal) this.body.globalSet(lv.regIndex);
+      else this.body.localSet(lv.regIndex);
+    } else if (lv.kind === LV_MEMORY) {
+      if (lv.bitField) this.emitBitFieldStore(lv.bitField);
+      else this.emitStore(lv.type);
+    }
+  }
+
+  lvaluePushAndLoad(lv) { this.lvaluePush(lv); this.lvalueLoad(lv); }
+
+  // --- Address-of ---
+  emitAddressOf(expr) {
+    if (expr.kind === Types.ExprKind.IDENT) {
+      if (expr.decl.declKind === Types.DeclKind.FUNC) {
+        const func = expr.decl.definition || expr.decl;
+        const tIdx = this.funcDefToTableIdx.get(func);
+        this.body.i32Const(tIdx);
+        return;
+      }
+      if (expr.decl.declKind === Types.DeclKind.VAR) {
+        const varDecl = expr.decl.definition || expr.decl;
+        const gait = this.globalArrayAddrs.get(varDecl);
+        if (gait !== undefined) { this.body.i32Const(gait); return; }
+        const lait = this.localArrayOffsets.get(varDecl);
+        if (lait !== undefined) { this.emitFrameAddr(lait); return; }
+        const pait = this.paramMemoryOffsets.get(varDecl);
+        if (pait !== undefined) { this.emitFrameAddr(pait); return; }
+        throw new Error(`Cannot take address of REGISTER variable '${varDecl.name}'`);
+      }
+    }
+    if (expr.kind === Types.ExprKind.MEMBER) {
+      this.emitAddressOf(expr.base);
+      const tag = expr.base.type.tagDecl;
+      const offset = this.getFieldOffset(tag, expr.memberDecl);
+      if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
+      return;
+    }
+    if (expr.kind === Types.ExprKind.ARROW) {
+      this.emitExpr(expr.base);
+      const ptrType = expr.base.type.decay();
+      const baseType = ptrType.baseType;
+      const tag = baseType.tagDecl;
+      const offset = this.getFieldOffset(tag, expr.memberDecl);
+      if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
+      return;
+    }
+    if (expr.kind === Types.ExprKind.SUBSCRIPT) {
+      const elemSize = this.sizeOf(expr.type);
+      this.emitExpr(expr.array);
+      this.emitExpr(expr.index);
+      if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+      this.body.aop(WT_I32, ALU.OP_ADD);
+      return;
+    }
+    if (expr.kind === Types.ExprKind.UNARY && expr.op === "OP_DEREF") {
+      this.emitExpr(expr.operand);
+      return;
+    }
+    if (expr.kind === Types.ExprKind.COMPOUND_LITERAL) {
+      const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
+      if (fsAddr !== undefined) { this.body.i32Const(fsAddr); }
+      else {
+        this.emitCompoundLiteralInit(expr);
+        this.emitFrameAddr(this.compoundLiteralOffsets.get(expr));
+      }
+      return;
+    }
+    throw new Error(`emitAddressOf: unsupported expression kind ${expr.kind}`);
+  }
+
+  // --- Compound op ---
+  emitCompoundOp(wt, op, isUnsigned) {
+    switch (op) {
+      case "ADD_ASSIGN": this.body.aop(wt, ALU.OP_ADD); break;
+      case "SUB_ASSIGN": this.body.aop(wt, ALU.OP_SUB); break;
+      case "MUL_ASSIGN": this.body.aop(wt, ALU.OP_MUL); break;
+      case "DIV_ASSIGN": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
+      case "MOD_ASSIGN": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
+      case "BAND_ASSIGN": this.body.aop(wt, ALU.OP_AND); break;
+      case "BOR_ASSIGN": this.body.aop(wt, ALU.OP_OR); break;
+      case "BXOR_ASSIGN": this.body.aop(wt, ALU.OP_XOR); break;
+      case "SHL_ASSIGN": this.body.aop(wt, ALU.OP_SHL); break;
+      case "SHR_ASSIGN": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
+    }
+  }
+
+  // --- Assignment ---
+  emitAssignment(expr, ctx) {
+    const lhs = expr.left, rhs = expr.right, op = expr.op;
+    const lhsType = lhs.type;
+    const wantValue = ctx === EXPR_VALUE;
+    this.pushLocalScope();
+    const lv = this.emitLValue(lhs);
+    if (op === "ASSIGN") {
+      if (lv.kind !== LV_REGISTER && isStructOrUnion(lhsType)) {
+        this.lvaluePush(lv); this.emitExpr(rhs);
+        this.body.i32Const(this.sizeOf(lhsType)); this.body.memoryCopy();
+        if (wantValue) this.lvaluePush(lv);
+      } else {
+        this.lvaluePush(lv); this.emitExpr(rhs);
+        this.emitConversion(rhs.type, lhsType);
+        if (wantValue && !lv.bitField) {
+          const vt = this.allocLocal(cToWasmType(lhsType));
+          this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
+        } else {
+          this.lvalueStore(lv);
+          if (wantValue) this.lvaluePushAndLoad(lv);
+        }
+      }
+    } else {
+      const rhsType = rhs.type;
+      let opType = lhsType;
+      if (!lhsType.isPointer()) {
+        opType = Types.usualArithmeticConversions(lhsType, rhsType);
+      }
+      const opWt = this.getBinaryWasmType(opType);
+      const isUnsigned = this.isUnsignedType(opType);
+      this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
+      this.emitConversion(lhsType, opType);
+      this.emitExpr(rhs);
+      this.emitConversion(rhsType, opType);
+      if (lhsType.isPointer() && (op === "ADD_ASSIGN" || op === "SUB_ASSIGN")) {
+        const elemSize = this.sizeOf(lhsType.baseType);
+        if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+      }
+      this.emitCompoundOp(opWt, op, isUnsigned);
+      if (opType !== lhsType) this.emitConversion(opType, lhsType);
+      if (lv.kind === LV_REGISTER && lhsType.isInteger() && lhsType.size < Types.TINT.size) {
+        this.emitConversion(Types.TINT, lhsType);
+      }
+      if (wantValue && !lv.bitField) {
+        const vt = this.allocLocal(this.getBinaryWasmType(lhsType));
+        this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
+      } else {
+        this.lvalueStore(lv);
+        if (wantValue) this.lvaluePushAndLoad(lv);
+      }
+    }
+    this.popLocalScope();
+  }
+
+  // --- Inc/Dec ---
+  emitIncDec(expr, ctx) {
+    const operand = expr.operand;
+    const isIncrement = expr.op === "OP_PRE_INC" || expr.op === "OP_POST_INC";
+    const isPre = expr.op === "OP_PRE_INC" || expr.op === "OP_PRE_DEC";
+    const wantValue = ctx === EXPR_VALUE;
+    const type = operand.type;
+    this.pushLocalScope();
+    const lv = this.emitLValue(operand);
+    const wt = this.getBinaryWasmType(type);
+    const emitDelta = () => {
+      if (type.isPointer()) {
+        const d = this.sizeOf(type.baseType);
+        if (wtEquals(wt, WT_I32)) this.body.i32Const(d); else this.body.i64Const(BigInt(d));
+      } else if (wtEquals(wt, WT_F32)) this.body.f32Const(1.0);
+      else if (wtEquals(wt, WT_F64)) this.body.f64Const(1.0);
+      else if (wtEquals(wt, WT_I64)) this.body.i64Const(1n);
+      else this.body.i32Const(1);
+    };
+    const needsNarrowing = lv.kind === LV_REGISTER && wtEquals(wt, WT_I32) &&
+      type.isInteger() && type.size < Types.TINT.size && !type.isPointer();
+    if (isPre) {
+      this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
+      emitDelta();
+      this.body.aop(wt, isIncrement ? ALU.OP_ADD : ALU.OP_SUB);
+      if (needsNarrowing) this.emitConversion(Types.TINT, type);
+      if (wantValue && !lv.bitField) {
+        const vt = this.allocLocal(wt);
+        this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
+      } else {
+        this.lvalueStore(lv);
+        if (wantValue) this.lvaluePushAndLoad(lv);
+      }
+    } else {
+      this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
+      let oldTemp = 0;
+      if (wantValue) { oldTemp = this.allocLocal(wt); this.body.localTee(oldTemp); }
+      emitDelta();
+      this.body.aop(wt, isIncrement ? ALU.OP_ADD : ALU.OP_SUB);
+      if (needsNarrowing) this.emitConversion(Types.TINT, type);
+      this.lvalueStore(lv);
+      if (wantValue) this.body.localGet(oldTemp);
+    }
+    this.popLocalScope();
+  }
+
+  // --- Expression emission ---
+  emitExpr(expr, ctx) {
+    if (!ctx) ctx = EXPR_VALUE;
+    switch (expr.kind) {
+      case Types.ExprKind.INT: {
+        const type = expr.type;
+        if (type.kind === Types.TypeKind.LLONG || type.kind === Types.TypeKind.ULLONG) {
+          this.body.i64Const(expr.value);
+        } else {
+          this.body.i32Const(Number(BigInt.asIntN(32, expr.value)));
+        }
+        break;
+      }
+      case Types.ExprKind.FLOAT: {
+        if (expr.type.removeQualifiers() === Types.TFLOAT) this.body.f32Const(expr.value);
+        else this.body.f64Const(expr.value);
+        break;
+      }
+      case Types.ExprKind.STRING: {
+        const addr = this.getStringAddress(expr.value);
+        this.body.i32Const(addr);
+        break;
+      }
+      case Types.ExprKind.IDENT: {
+        if (expr.decl.declKind === Types.DeclKind.VAR) {
+          const varDecl = expr.decl.definition || expr.decl;
+          const gait = this.globalArrayAddrs.get(varDecl);
+          if (gait !== undefined) {
+            if (varDecl.type.isArray() || varDecl.type.isAggregate()) this.body.i32Const(gait);
+            else { this.body.i32Const(gait); this.emitLoad(varDecl.type); }
+            break;
+          }
+          const lait = this.localArrayOffsets.get(varDecl);
+          if (lait !== undefined) {
+            this.emitFrameAddr(lait);
+            if (!varDecl.type.isArray() && !varDecl.type.isAggregate()) this.emitLoad(varDecl.type);
+            break;
+          }
+          const pait = this.paramMemoryOffsets.get(varDecl);
+          if (pait !== undefined) {
+            this.emitFrameAddr(pait);
+            if (!varDecl.type.isArray() && !varDecl.type.isAggregate()) this.emitLoad(varDecl.type);
+            break;
+          }
+          const lit = this.localVarToWasmLocalIdx.get(varDecl);
+          if (lit !== undefined) { this.body.localGet(lit); }
+          else {
+            const git = this.globalVarToWasmGlobalIdx.get(varDecl);
+            if (git !== undefined) this.body.globalGet(git);
+            else throw new Error(`emitExpr: variable '${varDecl.name}' not found`);
+          }
+        } else if (expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+          this.body.i32Const(expr.decl.value);
+        } else if (expr.decl.declKind === Types.DeclKind.FUNC) {
+          const func = expr.decl.definition || expr.decl;
+          const tIdx = this.funcDefToTableIdx.get(func);
+          this.body.i32Const(tIdx);
+        }
+        break;
+      }
+      case Types.ExprKind.BINARY: {
+        if (expr.op.endsWith("ASSIGN")) {
+          this.emitAssignment(expr, ctx);
+          return;
+        }
+        const leftType = expr.left.type, rightType = expr.right.type;
+        const isComparison = ["EQ","NE","LT","GT","LE","GE"].includes(expr.op);
+        const wt = this.getBinaryWasmType(isComparison ? leftType : expr.type);
+        const isUnsigned = this.isUnsignedType(leftType);
+        // Pointer arithmetic
+        if (expr.op === "ADD" && (leftType.isPointer() || rightType.isPointer() || leftType.isArray() || rightType.isArray())) {
+          let ptrExpr, intExpr, elemType;
+          if (leftType.isPointer()) { ptrExpr = expr.left; intExpr = expr.right; elemType = leftType.baseType; }
+          else if (leftType.isArray()) { ptrExpr = expr.left; intExpr = expr.right; elemType = leftType.baseType; }
+          else if (rightType.isPointer()) { ptrExpr = expr.right; intExpr = expr.left; elemType = rightType.baseType; }
+          else { ptrExpr = expr.right; intExpr = expr.left; elemType = rightType.baseType; }
+          const elemSize = this.sizeOf(elemType);
+          this.emitExpr(ptrExpr); this.emitExpr(intExpr);
+          if (wtEquals(this.getBinaryWasmType(intExpr.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+          if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+          this.body.aop(WT_I32, ALU.OP_ADD);
+          break;
+        }
+        if (expr.op === "SUB" && (leftType.isPointer() || leftType.isArray())) {
+          const leftElemType = leftType.isArray() ? leftType.baseType : leftType.baseType;
+          this.emitExpr(expr.left); this.emitExpr(expr.right);
+          if (rightType.isPointer() || rightType.isArray()) {
+            this.body.aop(WT_I32, ALU.OP_SUB);
+            const elemSize = this.sizeOf(leftElemType);
+            if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_DIV, true); }
+          } else {
+            if (wtEquals(this.getBinaryWasmType(rightType), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            const elemSize = this.sizeOf(leftElemType);
+            if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+            this.body.aop(WT_I32, ALU.OP_SUB);
+          }
+          break;
+        }
+        // Short-circuit
+        if (expr.op === "LAND") {
+          this.emitExpr(expr.left); this.emitBoolNormalize(leftType);
+          this.body.if_(WT_I32);
+          this.emitExpr(expr.right); this.emitBoolNormalize(rightType);
+          this.body.else_(); this.body.i32Const(0); this.body.end();
+          break;
+        }
+        if (expr.op === "LOR") {
+          this.emitExpr(expr.left); this.emitBoolNormalize(leftType);
+          this.body.if_(WT_I32); this.body.i32Const(1);
+          this.body.else_(); this.emitExpr(expr.right); this.emitBoolNormalize(rightType); this.body.end();
+          break;
+        }
+        this.emitExpr(expr.left); this.emitExpr(expr.right);
+        switch (expr.op) {
+          case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
+          case "SUB": this.body.aop(wt, ALU.OP_SUB); break;
+          case "MUL": this.body.aop(wt, ALU.OP_MUL); break;
+          case "DIV": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
+          case "MOD": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
+          case "EQ": this.body.aop(wt, ALU.OP_EQ); break;
+          case "NE": this.body.aop(wt, ALU.OP_NE); break;
+          case "LT": this.body.aop(wt, ALU.OP_LT, !isUnsigned); break;
+          case "GT": this.body.aop(wt, ALU.OP_GT, !isUnsigned); break;
+          case "LE": this.body.aop(wt, ALU.OP_LE, !isUnsigned); break;
+          case "GE": this.body.aop(wt, ALU.OP_GE, !isUnsigned); break;
+          case "BAND": this.body.aop(wt, ALU.OP_AND); break;
+          case "BOR": this.body.aop(wt, ALU.OP_OR); break;
+          case "BXOR": this.body.aop(wt, ALU.OP_XOR); break;
+          case "SHL": this.body.aop(wt, ALU.OP_SHL); break;
+          case "SHR": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
+        }
+        break;
+      }
+      case Types.ExprKind.UNARY: {
+        const operandType = expr.operand.type;
+        switch (expr.op) {
+          case "OP_NEG": {
+            const wt = this.getBinaryWasmType(operandType);
+            if (wtEquals(wt, WT_F32) || wtEquals(wt, WT_F64)) {
+              this.emitExpr(expr.operand); this.body.aop(wt, ALU.OP_NEG);
+            } else {
+              if (wtEquals(wt, WT_I32)) this.body.i32Const(0); else this.body.i64Const(0n);
+              this.emitExpr(expr.operand); this.body.aop(wt, ALU.OP_SUB);
+            }
+            break;
+          }
+          case "OP_POS": this.emitExpr(expr.operand); break;
+          case "OP_LNOT": {
+            this.emitExpr(expr.operand);
+            const wt = this.getBinaryWasmType(operandType);
+            if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
+            else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_EQ); }
+            else this.body.aop(wt, ALU.OP_EQZ);
+            break;
+          }
+          case "OP_BNOT": {
+            const wt = this.getBinaryWasmType(operandType);
+            this.emitExpr(expr.operand);
+            if (wtEquals(wt, WT_I32)) this.body.i32Const(-1); else this.body.i64Const(-1n);
+            this.body.aop(wt, ALU.OP_XOR);
+            break;
+          }
+          case "OP_PRE_INC": case "OP_PRE_DEC": case "OP_POST_INC": case "OP_POST_DEC":
+            this.emitIncDec(expr, ctx); return;
+          case "OP_DEREF":
+            this.emitExpr(expr.operand);
+            if (!expr.type.isAggregate() && !expr.type.isFunction()) this.emitLoad(expr.type);
+            break;
+          case "OP_ADDR":
+            this.emitAddressOf(expr.operand);
+            break;
+        }
+        break;
+      }
+      case Types.ExprKind.CALL: {
+        const funcDecl = expr.funcDecl;
+        if (funcDecl) {
+          const funcDef = funcDecl.definition || funcDecl;
+          const funcType = funcDef.type;
+          const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
+          if (funcIdx === undefined) throw new Error(`emitExpr: function '${funcDef.name}' not found`);
+          if (funcType.isVarArg) {
+            // Variadic call — new convention: all args + return in arg block
+            const varRetType = funcType.getReturnType();
+            const paramTypes = funcType.getParamTypes();
+            const numFixed = paramTypes.length;
+
+            const varStructRet = isStructOrUnion(varRetType);
+            const retSlotSize = (varRetType === Types.TVOID) ? 0 : vaSlotSize(varRetType);
+
+            // Compute arg block layout
+            let blockSize = retSlotSize;
+            const argOffsets = [];
+            for (let i = 0; i < expr.arguments.length; i++) {
+              argOffsets.push(blockSize);
+              let argType;
+              if (i < numFixed) {
+                argType = paramTypes[i];
+              } else {
+                argType = expr.arguments[i].type.decay();
+                if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
+              }
+              blockSize += vaSlotSize(argType);
+            }
+            blockSize = (blockSize + 7) & ~7;
+
+            this.callNesting++;
+
+            // Allocate arg block
+            this.body.globalGet(this.stackPointerGlobalIdx);
+            this.body.i32Const(blockSize);
+            this.body.aop(WT_I32, ALU.OP_SUB);
+            this.body.globalSet(this.stackPointerGlobalIdx);
+
+            this.pushLocalScope();
+            const argBlockBase = this.allocLocal(WT_I32);
+            this.body.globalGet(this.stackPointerGlobalIdx);
+            this.body.localSet(argBlockBase);
+
+            const deferredAtVaAlloc = this.structRetDeferred;
+
+            // Store each argument
+            for (let i = 0; i < expr.arguments.length; i++) {
+              const arg = expr.arguments[i];
+              const isFixed = i < numFixed;
+              let storeType;
+              if (isFixed) {
+                storeType = paramTypes[i];
+              } else {
+                storeType = arg.type.decay();
+                if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
+              }
+
+              this.body.localGet(argBlockBase);
+              if (argOffsets[i] > 0) { this.body.i32Const(argOffsets[i]); this.body.aop(WT_I32, ALU.OP_ADD); }
+
+              if (isStructOrUnion(storeType)) {
+                this.emitExpr(arg);
+                this.body.i32Const(this.sizeOf(storeType));
+                this.body.memoryCopy();
+              } else {
+                this.emitExpr(arg);
+                this.emitVaArgStore(storeType);
+              }
+
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              const deferredDelta = this.structRetDeferred - deferredAtVaAlloc;
+              if (deferredDelta > 0) { this.body.i32Const(deferredDelta); this.body.aop(WT_I32, ALU.OP_ADD); }
+              this.body.localSet(argBlockBase);
+            }
+
+            // Push arg block pointer and call
+            this.body.localGet(argBlockBase);
+            this.body.call(funcIdx);
+
+            // Load return value from arg block
+            if (varStructRet) {
+              this.body.localGet(argBlockBase);
+              this.structRetDeferred += blockSize;
+            } else if (varRetType !== Types.TVOID) {
+              this.body.localGet(argBlockBase);
+              this.emitVaArgLoad(varRetType);
+              this.body.localGet(argBlockBase);
+              this.body.i32Const(blockSize);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+            } else {
+              this.body.localGet(argBlockBase);
+              this.body.i32Const(blockSize);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.body.i32Const(0);
+            }
+
+            this.popLocalScope();
+
+            this.callNesting--;
+            if (this.callNesting === 0 && this.structRetDeferred > 0) {
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              this.body.i32Const(this.structRetDeferred);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.structRetDeferred = 0;
+            }
+          } else {
+            // Non-variadic direct call
+            const callRetType = funcType.getReturnType();
+            const structRet = isStructOrUnion(callRetType);
+            let structRetAllocSize = 0;
+            this.callNesting++;
+            if (structRet) {
+              const retSize = this.sizeOf(callRetType);
+              structRetAllocSize = (retSize + 15) & ~15;
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              this.body.i32Const(structRetAllocSize);
+              this.body.aop(WT_I32, ALU.OP_SUB);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.body.globalGet(this.stackPointerGlobalIdx);
+            }
+            const callParamTypes = funcType.getParamTypes();
+            for (let i = 0; i < expr.arguments.length; i++) {
+              this.emitExpr(expr.arguments[i]);
+            }
+            this.body.call(funcIdx);
+            if (structRet) this.structRetDeferred += structRetAllocSize;
+            this.callNesting--;
+            if (this.callNesting === 0 && this.structRetDeferred > 0) {
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              this.body.i32Const(this.structRetDeferred);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.structRetDeferred = 0;
+            }
+          }
+        } else {
+          // Indirect call
+          const calleeType = expr.callee.type.decay();
+          const funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
+          const callRetType = funcType.getReturnType();
+          const structRet = isStructOrUnion(callRetType);
+          let structRetAllocSize = 0;
+          this.callNesting++;
+          if (structRet) {
+            const retSize = this.sizeOf(callRetType);
+            structRetAllocSize = (retSize + 15) & ~15;
+            this.body.globalGet(this.stackPointerGlobalIdx);
+            this.body.i32Const(structRetAllocSize);
+            this.body.aop(WT_I32, ALU.OP_SUB);
+            this.body.globalSet(this.stackPointerGlobalIdx);
+            this.body.globalGet(this.stackPointerGlobalIdx);
+          }
+          for (let i = 0; i < expr.arguments.length; i++) this.emitExpr(expr.arguments[i]);
+          this.emitExpr(expr.callee);
+          const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
+          this.body.callIndirect(typeId);
+          if (structRet) this.structRetDeferred += structRetAllocSize;
+          this.callNesting--;
+          if (this.callNesting === 0 && this.structRetDeferred > 0) {
+            this.body.globalGet(this.stackPointerGlobalIdx);
+            this.body.i32Const(this.structRetDeferred);
+            this.body.aop(WT_I32, ALU.OP_ADD);
+            this.body.globalSet(this.stackPointerGlobalIdx);
+            this.structRetDeferred = 0;
+          }
+        }
+        break;
+      }
+      case Types.ExprKind.SUBSCRIPT: {
+        const elemType = expr.type;
+        const elemSize = this.sizeOf(elemType);
+        this.emitExpr(expr.array);
+        this.emitExpr(expr.index);
+        if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+        if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+        this.body.aop(WT_I32, ALU.OP_ADD);
+        if (!elemType.isAggregate()) this.emitLoad(elemType);
+        break;
+      }
+      case Types.ExprKind.MEMBER: {
+        const baseType = expr.base.type.removeQualifiers();
+        this.emitExpr(expr.base);
+        const field = expr.memberDecl;
+        const tag = baseType.tagDecl;
+        const offset = this.getFieldOffset(tag, field);
+        if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
+        if (field.bitWidth >= 0) this.emitBitFieldLoad(field);
+        else if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        break;
+      }
+      case Types.ExprKind.ARROW: {
+        this.emitExpr(expr.base);
+        const field = expr.memberDecl;
+        const ptrType = expr.base.type.decay();
+        const baseType = ptrType.baseType;
+        const tag = baseType.tagDecl;
+        const offset = this.getFieldOffset(tag, field);
+        if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
+        if (field.bitWidth >= 0) this.emitBitFieldLoad(field);
+        else if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        break;
+      }
+      case Types.ExprKind.SIZEOF_EXPR:
+        this.body.i32Const(this.sizeOf(expr.expr.type)); break;
+      case Types.ExprKind.SIZEOF_TYPE:
+        this.body.i32Const(this.sizeOf(expr.operandType)); break;
+      case Types.ExprKind.ALIGNOF_EXPR:
+        this.body.i32Const(this.alignOf(expr.expr.type)); break;
+      case Types.ExprKind.ALIGNOF_TYPE:
+        this.body.i32Const(this.alignOf(expr.operandType)); break;
+      case Types.ExprKind.IMPLICIT_CAST: {
+        if (ctx === EXPR_DROP) { this.emitExpr(expr.expr, EXPR_DROP); return; }
+        this.emitExpr(expr.expr);
+        this.emitConversion(expr.expr.type, expr.type);
+        break;
+      }
+      case Types.ExprKind.CAST: {
+        this.emitExpr(expr.expr);
+        this.emitConversion(expr.expr.type, expr.targetType);
+        break;
+      }
+      case Types.ExprKind.TERNARY: {
+        const resultType = cToWasmType(expr.type);
+        this.emitExpr(expr.condition);
+        this.emitConditionToI32(expr.condition.type);
+        this.body.if_(resultType);
+        this.emitExpr(expr.thenExpr);
+        if (expr.thenExpr.type !== expr.type) this.emitConversion(expr.thenExpr.type, expr.type);
+        this.body.else_();
+        this.emitExpr(expr.elseExpr);
+        if (expr.elseExpr.type !== expr.type) this.emitConversion(expr.elseExpr.type, expr.type);
+        this.body.end();
+        break;
+      }
+      case Types.ExprKind.INTRINSIC: {
+        switch (expr.intrinsicKind) {
+          case Types.IntrinsicKind.VA_START:
+            this.emitAddressOf(expr.args[0]);
+            this.body.localGet(this.vaArgsLocalIdx);
+            this.body.mop(MOP.I32_STORE, 0, 2);
+            this.body.i32Const(0);
+            break;
+          case Types.IntrinsicKind.VA_ARG: {
+            const slotSize = vaSlotSize(expr.argType);
+            this.emitAddressOf(expr.args[0]);
+            this.body.mop(MOP.I32_LOAD, 0, 2);
+            this.pushLocalScope();
+            const vaArgTemp = this.allocLocal(WT_I32);
+            this.body.localTee(vaArgTemp);
+            this.emitAddressOf(expr.args[0]);
+            this.body.localGet(vaArgTemp);
+            this.body.i32Const(slotSize);
+            this.body.aop(WT_I32, ALU.OP_ADD);
+            this.body.mop(MOP.I32_STORE, 0, 2);
+            this.emitVaArgLoad(expr.argType);
+            this.popLocalScope();
+            break;
+          }
+          case Types.IntrinsicKind.VA_END:
+            this.emitExpr(expr.args[0]); this.body.drop();
+            this.body.i32Const(0); break;
+          case Types.IntrinsicKind.VA_COPY:
+            this.emitAddressOf(expr.args[0]);
+            this.emitExpr(expr.args[1]);
+            this.body.mop(MOP.I32_STORE, 0, 2);
+            this.body.i32Const(0);
+            break;
+          case Types.IntrinsicKind.MEMORY_SIZE:
+            this.body.memorySize(); break;
+          case Types.IntrinsicKind.MEMORY_GROW:
+            this.emitExpr(expr.args[0]); this.body.memoryGrow(); break;
+          case Types.IntrinsicKind.MEMORY_COPY:
+            this.emitExpr(expr.args[0]); this.emitExpr(expr.args[1]); this.emitExpr(expr.args[2]);
+            this.body.memoryCopy(); this.body.i32Const(0); break;
+          case Types.IntrinsicKind.MEMORY_FILL:
+            this.emitExpr(expr.args[0]); this.emitExpr(expr.args[1]); this.emitExpr(expr.args[2]);
+            this.body.memoryFill(); this.body.i32Const(0); break;
+          case Types.IntrinsicKind.HEAP_BASE:
+            this.body.globalGet(this.heapBaseGlobalIdx); break;
+          case Types.IntrinsicKind.ALLOCA:
+            this.body.globalGet(this.stackPointerGlobalIdx);
+            this.emitExpr(expr.args[0]);
+            this.body.i32Const(15); this.body.aop(WT_I32, ALU.OP_ADD);
+            this.body.i32Const(-16); this.body.aop(WT_I32, ALU.OP_AND);
+            this.body.aop(WT_I32, ALU.OP_SUB);
+            this.body.globalSet(this.stackPointerGlobalIdx);
+            this.body.globalGet(this.stackPointerGlobalIdx);
+            break;
+          case Types.IntrinsicKind.UNREACHABLE:
+            this.body.unreachable(); break;
+        }
+        break;
+      }
+      case Types.ExprKind.WASM: {
+        for (const arg of expr.args) this.emitExpr(arg);
+        for (const b of expr.bytes) this.body.push(b);
+        break;
+      }
+      case Types.ExprKind.COMMA: {
+        for (let i = 0; i < expr.expressions.length; i++) {
+          const isLast = i + 1 === expr.expressions.length;
+          this.emitExpr(expr.expressions[i], isLast ? ctx : EXPR_DROP);
+        }
+        return;
+      }
+      case Types.ExprKind.COMPOUND_LITERAL: {
+        const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
+        if (fsAddr !== undefined) {
+          this.body.i32Const(fsAddr);
+          if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        } else {
+          this.emitCompoundLiteralInit(expr);
+          this.emitFrameAddr(this.compoundLiteralOffsets.get(expr));
+          if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        }
+        break;
+      }
+      default:
+        throw new Error(`emitExpr: unhandled expression kind ${expr.kind}`);
+    }
+    if (ctx === EXPR_DROP) this.body.drop();
+  }
+}
+
+// ====================
+// generateCode orchestration
+// ====================
+
+function generateCode(units, outputFile, options) {
+  const wmod = new WasmModule();
+  const cg = new CodeGenerator(wmod, options);
+
+  // Apply __minstack directives: take max across all TUs, round up to pages
+  let maxMinStack = 0;
+  for (const unit of units) maxMinStack = Math.max(maxMinStack, unit.minStackBytes || 0);
+  if (maxMinStack > 0) {
+    const minPages = Math.ceil(maxMinStack / 65536);
+    cg.stackPages = Math.max(cg.stackPages, minPages);
+  }
+
+  // Stack pointer global
+  const initialSp = cg.stackPages * 65536;
+  cg.stackPointerGlobalIdx = wmod.addGlobalI32(initialSp, true);
+  cg.heapBaseGlobalIdx = wmod.addGlobalI32(0, false);
+
+  // Register imports
+  for (const unit of units) {
+    for (const func of unit.importedFunctions) {
+      const fdef = func.definition || func;
+      const typeId = getWasmFunctionTypeIdForCFunctionType(wmod, fdef.type);
+      const funcIdx = wmod.addFunctionImport("c.mtots.com", fdef.name, typeId);
+      cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
+      cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
+    }
+  }
+
+  // Register function definitions
+  for (const unit of units) {
+    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+      const fdef = func.definition || func;
+      if (fdef !== func) continue;
+      const typeId = getWasmFunctionTypeIdForCFunctionType(wmod, fdef.type);
+      const funcIdx = wmod.addFunctionDefinition(typeId);
+      cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
+      cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
+      if (fdef.name === "main") wmod.addExport("main", 0x00, funcIdx);
+      if (fdef.name === "alloca") wmod.addExport("alloca", 0x00, funcIdx);
+    }
+  }
+
+  // Register exception tags
+  for (const unit of units) {
+    for (const tag of (unit.exceptionTags || [])) {
+      if (cg.exceptionToWasmTagIdx.has(tag)) continue;
+      const params = tag.paramTypes.map(pt => cToWasmType(pt));
+      const typeId = wmod.addFunctionTypeId(params, []);
+      const tagIdx = wmod.addTag(typeId);
+      cg.exceptionToWasmTagIdx.set(tag, tagIdx);
+    }
+  }
+
+  // Process __export directives
+  for (const unit of units) {
+    for (const [exportName, func] of unit.exportDirectives) {
+      const fdef = func.definition || func;
+      const funcIdx = cg.funcDefToWasmFuncIdx.get(fdef);
+      if (funcIdx !== undefined) wmod.addExport(exportName, 0x00, funcIdx);
+    }
+  }
+
+  // Collect #pragma custom_section directives
+  for (const unit of units) {
+    for (const sec of unit.customSections) {
+      wmod.customSections.push(sec);
+    }
+  }
+
+  // Allocate MEMORY addresses
+  for (const unit of units) {
+    for (const v of [...unit.definedVariables, ...unit.externVariables, ...unit.localExternVariables]) {
+      if (v.storageClass === Types.StorageClass.EXTERN && v.definition !== v) continue;
+      const varDef = v.definition || v;
+      if (varDef.allocClass === Types.AllocClass.MEMORY && !cg.globalArrayAddrs.has(varDef)) {
+        let align = cg.alignOf(varDef.type);
+        if (varDef.requestedAlignment > 0 && varDef.requestedAlignment > align) align = varDef.requestedAlignment;
+        const size = varDef.initExpr ? cg.computeInitAllocSize(varDef.type, varDef.initExpr)
+                                    : cg.sizeOf(varDef.type);
+        const addr = cg.allocateStatic(size, align);
+        cg.globalArrayAddrs.set(varDef, addr);
+      }
+    }
+    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+      const fdef = func.definition;
+      if (!fdef) continue;
+      for (const varDef of (fdef.staticLocals || [])) {
+        if (varDef.allocClass === Types.AllocClass.MEMORY && !cg.globalArrayAddrs.has(varDef)) {
+          let align = cg.alignOf(varDef.type);
+          if (varDef.requestedAlignment > 0 && varDef.requestedAlignment > align) align = varDef.requestedAlignment;
+          const addr = cg.allocateStatic(cg.sizeOf(varDef.type), align);
+          cg.globalArrayAddrs.set(varDef, addr);
+        }
+      }
+    }
+    for (const cl of (unit.fileScopeCompoundLiterals || [])) {
+      const addr = cg.allocateStatic(cg.sizeOf(cl.type), cg.alignOf(cl.type));
+      cg.fileScopeCompoundLiteralAddrs.set(cl, addr);
+    }
+  }
+
+  // Initialize file-scope compound literals
+  for (const unit of units) {
+    for (const cl of (unit.fileScopeCompoundLiterals || [])) {
+      const addr = cg.fileScopeCompoundLiteralAddrs.get(cl);
+      const baseOffset = addr - (cg.stackPages * 65536);
+      if (cl.type.isArray() && cl.initList.elements.length === 1 && cl.initList.elements[0].kind === Types.ExprKind.STRING) {
+        cg.writeStringLiteralToStatic(cl.initList.elements[0].value, cl.type, baseOffset);
+      } else if (cl.type.isAggregate() || cl.type.isArray()) {
+        cg.populateInitListStatic(cl.initList, cl.type, baseOffset);
+      } else {
+        const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.type, 0n) : cl.initList.elements[0];
+        const val = cg._constEvalExpr(initExpr);
+        if (val) cg.writeConstValueToStatic(baseOffset, cl.type, val);
+      }
+    }
+  }
+
+  // Helper: register a global variable (REGISTER or initialize MEMORY)
+  const registerGlobalVar = (varDef) => {
+    if (varDef.allocClass === Types.AllocClass.MEMORY) {
+      const addr = cg.globalArrayAddrs.get(varDef);
+      const baseOffset = addr - (cg.stackPages * 65536);
+      if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.INIT_LIST) {
+        cg.populateInitListStatic(varDef.initExpr, varDef.type, baseOffset);
+      } else if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.COMPOUND_LITERAL && varDef.type.isAggregate()) {
+        cg.populateInitListStatic(varDef.initExpr.initList, varDef.type, baseOffset);
+      } else if (varDef.initExpr && varDef.type.isArray() && varDef.initExpr.kind === Types.ExprKind.STRING) {
+        const str = varDef.initExpr.value;
+        const copySize = cg.sizeOf(varDef.type);
+        const len = Math.min(copySize, str.length);
+        for (let i = 0; i < len; i++) cg.staticData[baseOffset + i] = str[i];
+      } else if (varDef.initExpr && !varDef.type.isAggregate()) {
+        const val = cg._constEvalExpr(varDef.initExpr);
+        if (val) cg.writeConstValueToStatic(baseOffset, varDef.type, val);
+      }
+    } else {
+      const wt = cToWasmType(varDef.type);
+      // Determine initial value
+      let globalIdx;
+      if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.INT) {
+        const val = Types.truncateConstInt(varDef.initExpr.value, varDef.type);
+        if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(Number(val), true);
+        else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(Number(val), true);
+        else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(val, true);
+        else globalIdx = wmod.addGlobalI32(Number(val), true);
+      } else if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.FLOAT) {
+        if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(varDef.initExpr.value, true);
+        else globalIdx = wmod.addGlobalF64(varDef.initExpr.value, true);
+      } else if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.STRING) {
+        const addr = cg.getStringAddress(varDef.initExpr.value);
+        globalIdx = wmod.addGlobalI32(addr, true);
+      } else if (varDef.initExpr) {
+        const val = cg._constEvalExpr(varDef.initExpr);
+        if (val && (val.kind === "int" || val.kind === "float" || val.kind === "addr")) {
+          const numVal = val.kind === "int" ? Number(val.intVal) :
+                         val.kind === "float" ? val.floatVal : val.addrVal;
+          if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(numVal, true);
+          else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(numVal, true);
+          else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(BigInt(Math.trunc(numVal)), true);
+          else globalIdx = wmod.addGlobalI32(numVal | 0, true);
+        } else {
+          // Zero init
+          if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(0n, true);
+          else if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(0.0, true);
+          else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(0.0, true);
+          else globalIdx = wmod.addGlobalI32(0, true);
+        }
+      } else {
+        if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(0n, true);
+        else if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(0.0, true);
+        else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(0.0, true);
+        else globalIdx = wmod.addGlobalI32(0, true);
+      }
+      cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
+    }
+  };
+
+  // Register global variables
+  for (const unit of units) {
+    for (const v of [...unit.definedVariables, ...unit.externVariables, ...unit.localExternVariables]) {
+      if (v.storageClass === Types.StorageClass.EXTERN && v.definition !== v) continue;
+      const varDef = v.definition || v;
+      registerGlobalVar(varDef);
+    }
+  }
+
+  // Register static local variables
+  for (const unit of units) {
+    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+      const fdef = func.definition;
+      if (!fdef) continue;
+      for (const varDef of (fdef.staticLocals || [])) registerGlobalVar(varDef);
+    }
+  }
+
+  // Emit function bodies
+  for (const unit of units) {
+    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+      const fdef = func.definition || func;
+      if (fdef !== func) continue;
+      cg.emitFunctionBody(fdef);
+    }
+  }
+
+  // Finalize memory
+  const staticDataStart = cg.stackPages * 65536;
+  const heapBase = (staticDataStart + cg.staticDataOffset + 7) & ~7;
+  let minPages = Math.ceil(heapBase / 65536);
+  if (minPages < cg.stackPages) minPages = cg.stackPages;
+  const memoryIdx = wmod.addMemory(minPages);
+  wmod.addExport("memory", 0x02, memoryIdx);
+  wmod.addExport("__indirect_function_table", 0x01, 0);
+  if (cg.staticData.length > 0) wmod.addDataSegment(staticDataStart, cg.staticData);
+  wmod.patchGlobalI32(cg.heapBaseGlobalIdx, heapBase);
+  wmod.addExport("__heap_base", 0x03, cg.heapBaseGlobalIdx);
+
+  return wmod.emit();
+}
+
+return { generateCode };
+})();
+// ====================
+// Stdlib
+// ====================
+
+const Stdlib = (() => {
+
 const _stdlibHeaders = {
   "SDL.h": `
 #pragma once
@@ -10471,7 +13457,7 @@ function getStdlibHeaders() { return _stdlibHeaders; }
 function getStdlibSources() { return _stdlibSources; }
 
 function createDefaultPPRegistry() {
-  const pp = new PPRegistry();
+  const pp = new Lexer.PPRegistry();
 
   // Load standard library headers
   const headers = getStdlibHeaders();
@@ -10537,9 +13523,9 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   const processSource = (filename, source) => {
     pp.onceGuards = new Set();
     pp.customSections = [];
-    const filenameInterned = intern(filename);
+    const filenameInterned = Lexer.intern(filename);
     const tLex = hrtime ? hrtime() : 0;
-    const result = tokenize(filenameInterned, source, pp);
+    const result = Lexer.tokenize(filenameInterned, source, pp);
     if (timing) timing.lexMs += hrtime() - tLex;
     if (result.errors.length > 0) {
       writeErr(`Got ${result.errors.length} lex errors in ${filename}.\n`);
@@ -10550,7 +13536,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       return;
     }
     const tParse = hrtime ? hrtime() : 0;
-    const parseResult = parseTokens(result.tokens, { ...options, exceptionTagRegistry });
+    const parseResult = Parser.parseTokens(result.tokens, { ...options, exceptionTagRegistry });
     const unit = parseResult.translationUnit;
     unit.customSections = pp.customSections.slice();
     for (const req of unit.requiredSources) {
@@ -10560,9 +13546,9 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       }
     }
     // Per-TU passes (before linking)
-    lowerSetjmpLongjmp(unit, exceptionTagRegistry);
-    annotateImplicitCasts(unit);
-    if (!options?.compilerOptions?.noUndefined) filterUnusedDeclarations(unit);
+    Parser.lowerSetjmpLongjmp(unit, exceptionTagRegistry);
+    Parser.annotateImplicitCasts(unit);
+    if (!options?.compilerOptions?.noUndefined) Parser.filterUnusedDeclarations(unit);
     if (timing) timing.parseMs += hrtime() - tParse;
     if (parseResult.errors.length > 0) {
       hasErrors = true;
@@ -10600,6 +13586,9 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   return units;
 }
 
+return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUnits };
+})();
+
 function main() {
   const fs = require("fs");
   const path = require("path");
@@ -10610,12 +13599,12 @@ function main() {
   const inputFiles = [];
   const warningFlags = { pointerDecay: false, circularDependency: false };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, noUndefined: false, timeReport: false, requireSources: [] };
-  const pp = createDefaultPPRegistry();
+  const pp = Stdlib.createDefaultPPRegistry();
 
   // Set up file reader
   pp.fileReader = (filePath) => {
     try {
-      return spliceLines(fs.readFileSync(filePath, "utf-8"));
+      return Lexer.spliceLines(fs.readFileSync(filePath, "utf-8"));
     } catch {
       return null;
     }
@@ -10686,8 +13675,8 @@ function main() {
   if (action === "lex") {
     for (const file of inputFiles) {
       const source = fs.readFileSync(file, "utf-8");
-      const filename = intern(file);
-      const result = tokenize(filename, source, pp);
+      const filename = Lexer.intern(file);
+      const result = Lexer.tokenize(filename, source, pp);
       if (result.errors.length > 0) {
         for (const err of result.errors) {
           process.stderr.write(`${err.filename}:${err.line}: error: ${err.message}\n`);
@@ -10695,8 +13684,8 @@ function main() {
         process.exit(1);
       }
       for (const t of result.tokens) {
-        if (t.kind === TokenKind.EOS) continue;
-        process.stdout.write(formatToken(t) + "\n");
+        if (t.kind === Lexer.TokenKind.EOS) continue;
+        process.stdout.write(Lexer.formatToken(t) + "\n");
       }
     }
   } else if (action === "parse" || action === "link" || action === "compile") {
@@ -10705,12 +13694,12 @@ function main() {
       return s * 1000 + ns / 1e6;
     };
     const timing = compilerOptions.timeReport ? { lexMs: 0, parseMs: 0 } : null;
-    const units = parseAllUnits(fs, pp, inputFiles, { warningFlags, compilerOptions, timing });
+    const units = Stdlib.parseAllUnits(fs, pp, inputFiles, { warningFlags, compilerOptions, timing });
 
     if (action === "parse") {
-      process.stdout.write(dumpAst(units));
+      process.stdout.write(Parser.dumpAst(units));
     } else if (action === "link") {
-      const linkResult = linkTranslationUnits(units, compilerOptions);
+      const linkResult = Parser.linkTranslationUnits(units, compilerOptions);
       if (linkResult.errors.length > 0) {
         process.stderr.write(`Got ${linkResult.errors.length} link errors.\n`);
         for (const err of linkResult.errors) {
@@ -10721,10 +13710,10 @@ function main() {
         }
         process.exit(1);
       }
-      process.stdout.write(dumpAst(units));
+      process.stdout.write(Parser.dumpAst(units));
     } else if (action === "compile") {
       let t0 = hrtime();
-      const linkResult = linkTranslationUnits(units, compilerOptions);
+      const linkResult = Parser.linkTranslationUnits(units, compilerOptions);
       const linkMs = hrtime() - t0;
       if (linkResult.errors.length > 0) {
         process.stderr.write(`Got ${linkResult.errors.length} link errors.\n`);
@@ -10742,7 +13731,7 @@ function main() {
         for (const unit of units) {
           const kept = [];
           for (const func of unit.declaredFunctions) {
-            if (func.storageClass === StorageClass.IMPORT) {
+            if (func.storageClass === Types.StorageClass.IMPORT) {
               unit.importedFunctions.push(func);
             } else {
               kept.push(func);
@@ -10751,9 +13740,9 @@ function main() {
           unit.declaredFunctions = kept;
         }
       }
-      if (compilerOptions.gcSections) gcSectionsPass(units);
+      if (compilerOptions.gcSections) Parser.gcSectionsPass(units);
       t0 = hrtime();
-      const wasmBinary = generateCode(units, outputFile, { compilerOptions });
+      const wasmBinary = Codegen.generateCode(units, outputFile, { compilerOptions });
       const codegenMs = hrtime() - t0;
       t0 = hrtime();
       fs.writeFileSync(outputFile, wasmBinary);
@@ -10782,3056 +13771,63 @@ function main() {
   }
 }
 
-// ====================
-// WASM
-// ====================
-
-const { generateCode } = (() => {
-
-function appendF32(out, value) {
-  const buf = new ArrayBuffer(4);
-  new DataView(buf).setFloat32(0, value, true); // little-endian
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < 4; i++) out.push(bytes[i]);
-}
-
-function appendF64(out, value) {
-  const buf = new ArrayBuffer(8);
-  new DataView(buf).setFloat64(0, value, true); // little-endian
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < 8; i++) out.push(bytes[i]);
-}
-
-// WASM type enums
-const WasmNumType = Object.freeze({ I32: 0x7F, I64: 0x7E, F32: 0x7D, F64: 0x7C });
-
-const WT_I32 = { tag: "num", num: WasmNumType.I32 };
-const WT_I64 = { tag: "num", num: WasmNumType.I64 };
-const WT_F32 = { tag: "num", num: WasmNumType.F32 };
-const WT_F64 = { tag: "num", num: WasmNumType.F64 };
-const WT_EMPTY = { tag: "empty" };
-
-function wtIsNum(wt) { return wt.tag === "num"; }
-function wtIsIntegral(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.I32 || wt.num === WasmNumType.I64); }
-function wtIsFloating(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.F32 || wt.num === WasmNumType.F64); }
-function wtEmit(wt, buf) {
-  if (wt.tag === "empty") buf.push(0x40);
-  else if (wt.tag === "num") buf.push(wt.num);
-}
-function wtEquals(a, b) {
-  if (a.tag !== b.tag) return false;
-  if (a.tag === "empty") return true;
-  if (a.tag === "num") return a.num === b.num;
-  return false;
-}
-
-// Memory opcodes
-const MOP = Object.freeze({
-  I32_LOAD: 0x28, I64_LOAD: 0x29, F32_LOAD: 0x2A, F64_LOAD: 0x2B,
-  I32_LOAD8_S: 0x2C, I32_LOAD8_U: 0x2D, I32_LOAD16_S: 0x2E, I32_LOAD16_U: 0x2F,
-  I64_LOAD8_S: 0x30, I64_LOAD8_U: 0x31, I64_LOAD16_S: 0x32, I64_LOAD16_U: 0x33,
-  I64_LOAD32_S: 0x34, I64_LOAD32_U: 0x35,
-  I32_STORE: 0x36, I64_STORE: 0x37, F32_STORE: 0x38, F64_STORE: 0x39,
-  I32_STORE8: 0x3A, I32_STORE16: 0x3B, I64_STORE8: 0x3C, I64_STORE16: 0x3D, I64_STORE32: 0x3E,
-});
-
-// ALU opcodes
-const ALU = Object.freeze({
-  OP_EQZ: 0, OP_EQ: 1, OP_NE: 2, OP_LT: 3, OP_GT: 4, OP_LE: 5, OP_GE: 6,
-  OP_CLZ: 7, OP_CTZ: 8, OP_POPCNT: 9,
-  OP_ADD: 10, OP_SUB: 11, OP_MUL: 12, OP_DIV: 13, OP_REM: 14,
-  OP_AND: 15, OP_OR: 16, OP_XOR: 17, OP_SHL: 18, OP_SHR_S: 19, OP_SHR_U: 20,
-  OP_ROTL: 21, OP_ROTR: 22,
-  OP_ABS: 23, OP_NEG: 24, OP_CEIL: 25, OP_FLOOR: 26, OP_TRUNC: 27, OP_NEAREST: 28, OP_SQRT: 29,
-  OP_MIN: 30, OP_MAX: 31, OP_COPYSIGN: 32,
-  OP_WRAP_I64: 33, OP_TRUNC_F32: 34, OP_TRUNC_F64: 35,
-  OP_EXTEND_I32: 36, OP_CONVERT_I32: 37, OP_CONVERT_I64: 38,
-  OP_DEMOTE_F64: 39, OP_PROMOTE_F32: 40,
-  OP_REINTERPRET_F32: 41, OP_REINTERPRET_F64: 42, OP_REINTERPRET_I32: 43, OP_REINTERPRET_I64: 44,
-});
-
-function getaop(wt, op, sign) {
-  if (!wtIsNum(wt)) throw new Error("getaop called with non-numeric WasmType");
-  if (sign === undefined) sign = true;
-  const n = wt.num;
-  if (n === WasmNumType.I32) {
-    switch (op) {
-      case ALU.OP_EQZ: return 0x45; case ALU.OP_EQ: return 0x46; case ALU.OP_NE: return 0x47;
-      case ALU.OP_LT: return sign ? 0x48 : 0x49; case ALU.OP_GT: return sign ? 0x4A : 0x4B;
-      case ALU.OP_LE: return sign ? 0x4C : 0x4D; case ALU.OP_GE: return sign ? 0x4E : 0x4F;
-      case ALU.OP_CLZ: return 0x67; case ALU.OP_CTZ: return 0x68; case ALU.OP_POPCNT: return 0x69;
-      case ALU.OP_ADD: return 0x6A; case ALU.OP_SUB: return 0x6B; case ALU.OP_MUL: return 0x6C;
-      case ALU.OP_DIV: return sign ? 0x6D : 0x6E; case ALU.OP_REM: return sign ? 0x6F : 0x70;
-      case ALU.OP_AND: return 0x71; case ALU.OP_OR: return 0x72; case ALU.OP_XOR: return 0x73;
-      case ALU.OP_SHL: return 0x74; case ALU.OP_SHR_S: return 0x75; case ALU.OP_SHR_U: return 0x76;
-      case ALU.OP_ROTL: return 0x77; case ALU.OP_ROTR: return 0x78;
-      case ALU.OP_WRAP_I64: return 0xA7;
-      case ALU.OP_TRUNC_F32: return sign ? 0xA8 : 0xA9;
-      case ALU.OP_TRUNC_F64: return sign ? 0xAA : 0xAB;
-      case ALU.OP_REINTERPRET_F32: return 0xBC;
-    }
-  } else if (n === WasmNumType.I64) {
-    switch (op) {
-      case ALU.OP_EQZ: return 0x50; case ALU.OP_EQ: return 0x51; case ALU.OP_NE: return 0x52;
-      case ALU.OP_LT: return sign ? 0x53 : 0x54; case ALU.OP_GT: return sign ? 0x55 : 0x56;
-      case ALU.OP_LE: return sign ? 0x57 : 0x58; case ALU.OP_GE: return sign ? 0x59 : 0x5A;
-      case ALU.OP_CLZ: return 0x79; case ALU.OP_CTZ: return 0x7A; case ALU.OP_POPCNT: return 0x7B;
-      case ALU.OP_ADD: return 0x7C; case ALU.OP_SUB: return 0x7D; case ALU.OP_MUL: return 0x7E;
-      case ALU.OP_DIV: return sign ? 0x7F : 0x80; case ALU.OP_REM: return sign ? 0x81 : 0x82;
-      case ALU.OP_AND: return 0x83; case ALU.OP_OR: return 0x84; case ALU.OP_XOR: return 0x85;
-      case ALU.OP_SHL: return 0x86; case ALU.OP_SHR_S: return 0x87; case ALU.OP_SHR_U: return 0x88;
-      case ALU.OP_ROTL: return 0x89; case ALU.OP_ROTR: return 0x8A;
-      case ALU.OP_EXTEND_I32: return sign ? 0xAC : 0xAD;
-      case ALU.OP_TRUNC_F32: return sign ? 0xAE : 0xAF;
-      case ALU.OP_TRUNC_F64: return sign ? 0xB0 : 0xB1;
-      case ALU.OP_REINTERPRET_F64: return 0xBD;
-    }
-  } else if (n === WasmNumType.F32) {
-    switch (op) {
-      case ALU.OP_EQ: return 0x5B; case ALU.OP_NE: return 0x5C;
-      case ALU.OP_LT: return 0x5D; case ALU.OP_GT: return 0x5E;
-      case ALU.OP_LE: return 0x5F; case ALU.OP_GE: return 0x60;
-      case ALU.OP_ABS: return 0x8B; case ALU.OP_NEG: return 0x8C;
-      case ALU.OP_CEIL: return 0x8D; case ALU.OP_FLOOR: return 0x8E;
-      case ALU.OP_TRUNC: return 0x8F; case ALU.OP_NEAREST: return 0x90; case ALU.OP_SQRT: return 0x91;
-      case ALU.OP_ADD: return 0x92; case ALU.OP_SUB: return 0x93; case ALU.OP_MUL: return 0x94;
-      case ALU.OP_DIV: return 0x95; case ALU.OP_MIN: return 0x96; case ALU.OP_MAX: return 0x97;
-      case ALU.OP_COPYSIGN: return 0x98;
-      case ALU.OP_CONVERT_I32: return sign ? 0xB2 : 0xB3;
-      case ALU.OP_CONVERT_I64: return sign ? 0xB4 : 0xB5;
-      case ALU.OP_DEMOTE_F64: return 0xB6;
-      case ALU.OP_REINTERPRET_I32: return 0xBE;
-    }
-  } else if (n === WasmNumType.F64) {
-    switch (op) {
-      case ALU.OP_EQ: return 0x61; case ALU.OP_NE: return 0x62;
-      case ALU.OP_LT: return 0x63; case ALU.OP_GT: return 0x64;
-      case ALU.OP_LE: return 0x65; case ALU.OP_GE: return 0x66;
-      case ALU.OP_ABS: return 0x99; case ALU.OP_NEG: return 0x9A;
-      case ALU.OP_CEIL: return 0x9B; case ALU.OP_FLOOR: return 0x9C;
-      case ALU.OP_TRUNC: return 0x9D; case ALU.OP_NEAREST: return 0x9E; case ALU.OP_SQRT: return 0x9F;
-      case ALU.OP_ADD: return 0xA0; case ALU.OP_SUB: return 0xA1; case ALU.OP_MUL: return 0xA2;
-      case ALU.OP_DIV: return 0xA3; case ALU.OP_MIN: return 0xA4; case ALU.OP_MAX: return 0xA5;
-      case ALU.OP_COPYSIGN: return 0xA6;
-      case ALU.OP_CONVERT_I32: return sign ? 0xB7 : 0xB8;
-      case ALU.OP_CONVERT_I64: return sign ? 0xB9 : 0xBA;
-      case ALU.OP_PROMOTE_F32: return 0xBB;
-      case ALU.OP_REINTERPRET_I64: return 0xBF;
-    }
-  }
-  throw new Error(`Invalid type/op combination: num=${n} op=${op}`);
-}
-
-// WasmCode builder - convenience utility for building WASM bytecode
-class WasmCode {
-  constructor(bytes) { this.bytes = bytes; }
-  push(byte) { this.bytes.push(byte); }
-
-  // Control flow (0x00 - 0x11)
-  unreachable() { this.push(0x00); }
-  nop() { this.push(0x01); }
-  block(bt) { this.push(0x02); wtEmit(bt || WT_EMPTY, this.bytes); }
-  loop(bt) { this.push(0x03); wtEmit(bt || WT_EMPTY, this.bytes); }
-  if_(bt) { this.push(0x04); wtEmit(bt, this.bytes); }
-  else_() { this.push(0x05); }
-  end() { this.push(0x0B); }
-  br(labelIdx) { this.push(0x0C); lebU(this.bytes, labelIdx); }
-  brIf(labelIdx) { this.push(0x0D); lebU(this.bytes, labelIdx); }
-  brTable(labels, defaultLabel) {
-    this.push(0x0E);
-    lebU(this.bytes, labels.length);
-    for (const l of labels) lebU(this.bytes, l);
-    lebU(this.bytes, defaultLabel);
-  }
-  ret() { this.push(0x0F); }
-  call(funcIdx) { this.push(0x10); lebU(this.bytes, funcIdx); }
-  callIndirect(typeIdx) { this.push(0x11); lebU(this.bytes, typeIdx); this.push(0x00); }
-
-  // Locals and globals (0x20 - 0x24)
-  localGet(idx) { this.push(0x20); lebU(this.bytes, idx); }
-  localSet(idx) { this.push(0x21); lebU(this.bytes, idx); }
-  localTee(idx) { this.push(0x22); lebU(this.bytes, idx); }
-  globalGet(idx) { this.push(0x23); lebU(this.bytes, idx); }
-  globalSet(idx) { this.push(0x24); lebU(this.bytes, idx); }
-
-  // Memory operations
-  mop(opcode, offset, align) { this.push(opcode); lebU(this.bytes, align); lebU(this.bytes, offset); }
-  memorySize() { this.push(0x3F); this.push(0x00); }
-  memoryGrow() { this.push(0x40); this.push(0x00); }
-  memoryCopy() { this.push(0xFC); lebU(this.bytes, 10); this.push(0x00); this.push(0x00); }
-  memoryFill() { this.push(0xFC); lebU(this.bytes, 11); this.push(0x00); }
-
-  // Numeric constants
-  i32Const(value) { this.push(0x41); lebI(this.bytes, Number(value) | 0); }
-  i64Const(value) {
-    this.push(0x42);
-    if (typeof value === "bigint") lebI64(this.bytes, value);
-    else lebI64(this.bytes, BigInt(value));
-  }
-  f32Const(value) { this.push(0x43); appendF32(this.bytes, value); }
-  f64Const(value) { this.push(0x44); appendF64(this.bytes, value); }
-
-  // ALU operations
-  aop(wt, op, sign) { this.push(getaop(wt, op, sign)); }
-
-  // Exception handling
-  throw_(tagIdx) { this.push(0x08); lebU(this.bytes, tagIdx); }
-  tryTable(blockType, catches) {
-    this.push(0x1F);
-    wtEmit(blockType, this.bytes);
-    lebU(this.bytes, catches.length);
-    for (const [kind, tagIdx, labelIdx] of catches) {
-      this.push(kind);
-      if (kind === 0x00 || kind === 0x01) lebU(this.bytes, tagIdx);
-      lebU(this.bytes, labelIdx);
-    }
-  }
-
-  // Drop
-  drop() { this.push(0x1A); }
-}
-
-// ====================
-// WASM Module State
-// ====================
-
-class WasmModule {
-  constructor() {
-    this.typeDefs = [];         // section 1 (function types)
-    this.funcTypeIndices = new Map(); // WasmFunctionType key -> index
-    this.funcImports = [];      // section 2
-    this.funcDefs = [];         // section 3 & 10
-    this.memories = [];         // section 5
-    this.globals = [];          // section 6
-    this.exports = [];          // section 7
-    this.dataSegments = [];     // section 11
-    this.tags = [];             // section 13
-    this.customSections = [];   // custom sections (section 0)
-  }
-
-  addFunctionTypeId(params, results) {
-    const key = params.map(p => `${p.tag}:${p.num||''}`).join(",") + "->" +
-                results.map(r => `${r.tag}:${r.num||''}`).join(",");
-    if (this.funcTypeIndices.has(key)) return this.funcTypeIndices.get(key);
-    const id = this.typeDefs.length;
-    this.typeDefs.push({ kind: "func", params, results });
-    this.funcTypeIndices.set(key, id);
-    return id;
-  }
-
-  addFunctionImport(moduleName, functionName, typeId) {
-    const id = this.funcImports.length;
-    this.funcImports.push({ moduleName, functionName, typeId });
-    return id;
-  }
-
-  addFunctionDefinition(typeId) {
-    const id = this.funcImports.length + this.funcDefs.length;
-    this.funcDefs.push({ typeId, locals: [], body: [] });
-    return id;
-  }
-
-  addMemory(minPages, maxPages) {
-    const id = this.memories.length;
-    this.memories.push({ minPages, maxPages: maxPages || 0 });
-    return id;
-  }
-
-  addGlobal(type, initExpr, isMutable) {
-    const id = this.globals.length;
-    this.globals.push({ type, initExpr, isMutable });
-    return id;
-  }
-
-  addGlobalI32(value, isMutable) {
-    const initExpr = [];
-    const code = new WasmCode(initExpr);
-    code.i32Const(value);
-    code.end();
-    return this.addGlobal(WT_I32, initExpr, isMutable);
-  }
-
-  addGlobalI64(value, isMutable) {
-    const initExpr = [];
-    const code = new WasmCode(initExpr);
-    code.i64Const(value);
-    code.end();
-    return this.addGlobal(WT_I64, initExpr, isMutable);
-  }
-
-  addGlobalF32(value, isMutable) {
-    const initExpr = [];
-    const code = new WasmCode(initExpr);
-    code.f32Const(value);
-    code.end();
-    return this.addGlobal(WT_F32, initExpr, isMutable);
-  }
-
-  addGlobalF64(value, isMutable) {
-    const initExpr = [];
-    const code = new WasmCode(initExpr);
-    code.f64Const(value);
-    code.end();
-    return this.addGlobal(WT_F64, initExpr, isMutable);
-  }
-
-
-  patchGlobalI32(id, value) {
-    const g = this.globals[id];
-    g.initExpr = [];
-    const code = new WasmCode(g.initExpr);
-    code.i32Const(value);
-    code.end();
-  }
-
-  addExport(name, kind, index) {
-    this.exports.push({ name, kind, index });
-  }
-
-  addTag(funcTypeIdx) {
-    const idx = this.tags.length;
-    this.tags.push({ typeIdx: funcTypeIdx });
-    return idx;
-  }
-
-  addDataSegment(offset, data) {
-    const offsetExpr = [];
-    const code = new WasmCode(offsetExpr);
-    code.i32Const(offset);
-    code.end();
-    this.dataSegments.push({ memoryIndex: 0, offsetExpr, data });
-  }
-
-  // Emit full WASM binary as a Uint8Array
-  emit() {
-    const out = [];
-    // WASM magic + version
-    out.push(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00);
-
-    const emitSection = (id, content) => {
-      out.push(id);
-      lebU(out, content.length);
-      for (const b of content) out.push(b);
-    };
-    const emitString = (buf, str) => {
-      lebU(buf, str.length);
-      for (let i = 0; i < str.length; i++) buf.push(str.charCodeAt(i));
-    };
-
-    let buf;
-
-    // Type section (1)
-    buf = [];
-    lebU(buf, this.typeDefs.length);
-    for (const td of this.typeDefs) {
-      buf.push(0x60);
-      lebU(buf, td.params.length);
-      for (const p of td.params) wtEmit(p, buf);
-      lebU(buf, td.results.length);
-      for (const r of td.results) wtEmit(r, buf);
-    }
-    emitSection(1, buf);
-
-    // Import section (2)
-    buf = [];
-    lebU(buf, this.funcImports.length);
-    for (const imp of this.funcImports) {
-      emitString(buf, imp.moduleName);
-      emitString(buf, imp.functionName);
-      buf.push(0x00); // func import kind
-      lebU(buf, imp.typeId);
-    }
-    emitSection(2, buf);
-
-    // Function section (3)
-    buf = [];
-    lebU(buf, this.funcDefs.length);
-    for (const def of this.funcDefs) lebU(buf, def.typeId);
-    emitSection(3, buf);
-
-    // Table section (4)
-    buf = [];
-    const totalFuncs = this.funcImports.length + this.funcDefs.length;
-    const tableSize = totalFuncs + 1;
-    lebU(buf, 1); buf.push(0x70); buf.push(0x00); lebU(buf, tableSize);
-    emitSection(4, buf);
-
-    // Memory section (5)
-    buf = [];
-    lebU(buf, this.memories.length);
-    for (const mem of this.memories) {
-      const hasMax = mem.maxPages !== 0;
-      buf.push(hasMax ? 0x01 : 0x00);
-      lebU(buf, mem.minPages);
-      if (hasMax) lebU(buf, mem.maxPages);
-    }
-    emitSection(5, buf);
-
-    // Tag section (13) - before globals
-    if (this.tags.length > 0) {
-      buf = [];
-      lebU(buf, this.tags.length);
-      for (const tag of this.tags) { buf.push(0x00); lebU(buf, tag.typeIdx); }
-      emitSection(13, buf);
-    }
-
-    // Global section (6)
-    buf = [];
-    lebU(buf, this.globals.length);
-    for (const g of this.globals) {
-      wtEmit(g.type, buf);
-      buf.push(g.isMutable ? 0x01 : 0x00);
-      for (const b of g.initExpr) buf.push(b);
-    }
-    emitSection(6, buf);
-
-    // Export section (7)
-    buf = [];
-    lebU(buf, this.exports.length);
-    for (const exp of this.exports) {
-      emitString(buf, exp.name);
-      buf.push(exp.kind);
-      lebU(buf, exp.index);
-    }
-    emitSection(7, buf);
-
-    // Element section (9)
-    buf = [];
-    if (totalFuncs > 0) {
-      lebU(buf, 1); lebU(buf, 0);
-      buf.push(0x41); lebI(buf, 1); buf.push(0x0B);
-      lebU(buf, totalFuncs);
-      for (let i = 0; i < totalFuncs; i++) lebU(buf, i);
-    } else {
-      lebU(buf, 0);
-    }
-    emitSection(9, buf);
-
-    // Code section (10)
-    buf = [];
-    lebU(buf, this.funcDefs.length);
-    for (const def of this.funcDefs) {
-      const funcBody = [];
-      lebU(funcBody, def.locals.length);
-      for (const loc of def.locals) {
-        lebU(funcBody, loc.count);
-        wtEmit(loc.type, funcBody);
-      }
-      for (const b of def.body) funcBody.push(b);
-      funcBody.push(0x0B); // end
-      lebU(buf, funcBody.length);
-      for (const b of funcBody) buf.push(b);
-    }
-    emitSection(10, buf);
-
-    // Data section (11)
-    buf = [];
-    lebU(buf, this.dataSegments.length);
-    for (const seg of this.dataSegments) {
-      lebU(buf, seg.memoryIndex);
-      for (const b of seg.offsetExpr) buf.push(b);
-      lebU(buf, seg.data.length);
-      for (const b of seg.data) buf.push(b);
-    }
-    emitSection(11, buf);
-
-    // Custom sections (section 0)
-    for (const sec of this.customSections) {
-      buf = [];
-      const nameBytes = new TextEncoder().encode(sec.name);
-      lebU(buf, nameBytes.length);
-      for (const b of nameBytes) buf.push(b);
-      const contentBytes = new TextEncoder().encode(sec.content);
-      for (const b of contentBytes) buf.push(b);
-      emitSection(0, buf);
-    }
-
-    return new Uint8Array(out);
-  }
-}
-
-// ====================
-// Code Generator
-// ====================
-
-const EXPR_VALUE = "value";
-const EXPR_DROP = "drop";
-
-const LV_REGISTER = "register";
-const LV_MEMORY = "memory";
-const LV_ADDR_LOCAL = "addr_local";
-const LV_ADDR_STATIC = "addr_static";
-const LV_ADDR_FRAME = "addr_frame";
-
-function isStructOrUnion(type) {
-  return type.isAggregate() && !type.isArray();
-}
-
-function cToWasmType(type) {
-  type = type.removeQualifiers();
-  if (type === TFLOAT) return WT_F32;
-  if (type === TDOUBLE || type === TLDOUBLE) return WT_F64;
-  if (type === TLLONG || type === TULLONG) return WT_I64;
-  return WT_I32;
-}
-
-function vaSlotSize(type) {
-  const sz = type.size;
-  return (sz + 7) & ~7;
-}
-
-function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
-  // Variadic functions use a single i32 param (arg block pointer) and no WASM return.
-  if (funcType.isVarArg) {
-    return wmod.addFunctionTypeId([WT_I32], []);
-  }
-  const params = [];
-  const retType = funcType.getReturnType();
-  if (isStructOrUnion(retType)) params.push(WT_I32); // hidden return ptr
-  for (const pt of funcType.getParamTypes()) params.push(cToWasmType(pt));
-  const results = [cToWasmType(retType)];
-  return wmod.addFunctionTypeId(params, results);
-}
-
-class CodeGenerator {
-  constructor(wmod, options) {
-    this.wmod = wmod;
-    this.compilerOptions = options?.compilerOptions || {};
-    this.funcDefToWasmFuncIdx = new Map();
-    this.funcDefToTableIdx = new Map();
-    this.globalVarToWasmGlobalIdx = new Map();
-    this.globalArrayAddrs = new Map();
-    this.fileScopeCompoundLiteralAddrs = new Map();
-    this.stackPages = 1;
-    this.staticDataOffset = 0;
-    this.staticData = [];
-    this.stringLiteralAddrs = new Map();
-    this.stackPointerGlobalIdx = 0;
-    this.heapBaseGlobalIdx = 0;
-    // Per-function state
-    this.body = null;
-    this.localVarToWasmLocalIdx = new Map();
-    this.localArrayOffsets = new Map();
-    this.paramMemoryOffsets = new Map();
-    this.compoundLiteralOffsets = new Map();
-    this.frameSize = 0;
-    this.savedSpLocalIdx = 0;
-    this.currentFuncLocals = null;
-    this.nextLocalIdx = 0;
-    this.freeLocalsByType = new Map();
-    this.localScopeStack = [];
-    this.structRetDeferred = 0;
-    this.callNesting = 0;
-    this.blockDepth = 0;
-    this.breakTarget = 0;
-    this.continueTarget = 0;
-    this.gotoLabelDepths = new Map();
-    this.exceptionToWasmTagIdx = new Map();
-    this.currentFuncDef = null;
-    this.vaArgsLocalIdx = 0;
-    this.hasVaArgs = false;
-    this.argBlockLocalIdx = 0;
-    this.vaRetSlotSize = 0;
-    this.vaParamInfos = [];
-    this.vaStartOffset = 0;
-    this.structRetPtrLocalIdx = 0;
-    this.hasStructReturn = false;
-  }
-
-  // --- Local allocator ---
-  _wtKey(wt) { return `${wt.tag}:${wt.num||''}`; }
-
-  allocLocal(wt) {
-    const key = this._wtKey(wt);
-    const free = this.freeLocalsByType.get(key);
-    if (free && free.length > 0) {
-      const idx = free.pop();
-      if (this.localScopeStack.length > 0) {
-        this.localScopeStack[this.localScopeStack.length - 1].push([key, idx]);
-      }
-      return idx;
-    }
-    const idx = this.nextLocalIdx++;
-    const locals = this.currentFuncLocals;
-    if (locals.length > 0 && this._wtKey(locals[locals.length - 1].type) === key) {
-      locals[locals.length - 1].count++;
-    } else {
-      locals.push({ type: wt, count: 1 });
-    }
-    if (this.localScopeStack.length > 0) {
-      this.localScopeStack[this.localScopeStack.length - 1].push([key, idx]);
-    }
-    return idx;
-  }
-
-  pushLocalScope() { this.localScopeStack.push([]); }
-  popLocalScope() {
-    const scope = this.localScopeStack.pop();
-    for (const [key, idx] of scope) {
-      if (!this.freeLocalsByType.has(key)) this.freeLocalsByType.set(key, []);
-      this.freeLocalsByType.get(key).push(idx);
-    }
-  }
-
-  // --- Size/Align helpers ---
-  sizeOf(type) { return type.size; }
-  alignOf(type) { return type.align; }
-
-  // --- String literal deduplication ---
-  getStringAddress(valueArray) {
-    // valueArray is a Uint8Array or regular array of bytes
-    const key = Array.from(valueArray).join(",");
-    if (this.stringLiteralAddrs.has(key)) return this.stringLiteralAddrs.get(key);
-    const baseAddr = this.stackPages * 65536;
-    const addr = baseAddr + this.staticDataOffset;
-    this.stringLiteralAddrs.set(key, addr);
-    for (const b of valueArray) this.staticData.push(b);
-    this.staticDataOffset += valueArray.length;
-    return addr;
-  }
-
-  // --- Static memory allocation ---
-  allocateStatic(size, align) {
-    if (!align) align = 4;
-    const alignedOffset = (this.staticDataOffset + align - 1) & ~(align - 1);
-    const padding = alignedOffset - this.staticDataOffset;
-    for (let i = 0; i < padding; i++) this.staticData.push(0);
-    this.staticDataOffset = alignedOffset;
-    const baseAddr = this.stackPages * 65536;
-    const addr = baseAddr + this.staticDataOffset;
-    for (let i = 0; i < size; i++) this.staticData.push(0);
-    this.staticDataOffset += size;
-    return addr;
-  }
-
-  computeFAMExtraSize(type, initExpr) {
-    if (!type.isTag() || !initExpr || initExpr.kind !== ExprKind.INIT_LIST) return 0;
-    const tag = type.tagDecl;
-    if (!tag || tag.tagKind !== TagKind.STRUCT) return 0;
-    const members = tag.members.filter(m => m.declKind === DeclKind.VAR);
-    let famMember = null, famIdx = -1;
-    for (let i = 0; i < members.length; i++) {
-      if (members[i].type.isArray() && members[i].type.arraySize === 0) {
-        famMember = members[i];
-        famIdx = i;
-      }
-    }
-    if (!famMember || famIdx < 0 || famIdx >= initExpr.elements.length) return 0;
-    const famElem = initExpr.elements[famIdx];
-    const elemType = famMember.type.baseType;
-    const elemSize = this.sizeOf(elemType);
-    if (famElem.kind === ExprKind.STRING) return famElem.value.length * elemSize;
-    if (famElem.kind === ExprKind.INIT_LIST) return famElem.elements.length * elemSize;
-    return elemSize;
-  }
-
-  computeInitAllocSize(type, initExpr) {
-    return this.sizeOf(type) + this.computeFAMExtraSize(type, initExpr);
-  }
-
-  // --- Frame address ---
-  emitFrameAddr(offset) {
-    this.body.localGet(this.savedSpLocalIdx);
-    const adj = offset - this.frameSize;
-    if (adj !== 0) {
-      this.body.i32Const(adj);
-      this.body.aop(WT_I32, ALU.OP_ADD);
-    }
-  }
-
-  // --- Field offset ---
-  getFieldOffset(tag, field) { return field.byteOffset; }
-
-  // --- Write scalar to static data ---
-  writeConstValueToStatic(offset, type, val) {
-    const ut = type.removeQualifiers();
-    if ((ut === TFLOAT || ut === TDOUBLE) && val.kind === "int") {
-      val = { kind: "float", floatVal: Number(val.intVal) };
-    } else if ((ut === TINT || ut === TUINT || ut === TLONG || ut === TULONG ||
-                ut === TSHORT || ut === TUSHORT || ut === TCHAR || ut === TUCHAR ||
-                ut === TLLONG || ut === TULLONG) && val.kind === "float") {
-      val = { kind: "int", intVal: BigInt(Math.trunc(val.floatVal)) };
-    }
-    const size = this.sizeOf(type);
-    if (val.kind === "int") {
-      let v = val.intVal;
-      for (let b = 0; b < size; b++) {
-        this.staticData[offset + b] = Number(v & 0xFFn);
-        v >>= 8n;
-      }
-    } else if (val.kind === "float") {
-      if (size === 4) {
-        const buf = new ArrayBuffer(4);
-        new DataView(buf).setFloat32(0, val.floatVal, true);
-        const bytes = new Uint8Array(buf);
-        for (let b = 0; b < 4; b++) this.staticData[offset + b] = bytes[b];
-      } else if (size === 8) {
-        const buf = new ArrayBuffer(8);
-        new DataView(buf).setFloat64(0, val.floatVal, true);
-        const bytes = new Uint8Array(buf);
-        for (let b = 0; b < 8; b++) this.staticData[offset + b] = bytes[b];
-      }
-    } else if (val.kind === "addr") {
-      let v = val.addrVal;
-      for (let b = 0; b < size && b < 4; b++) {
-        this.staticData[offset + b] = v & 0xFF;
-        v >>>= 8;
-      }
-    }
-  }
-
-  writeStringLiteralToStatic(strValue, arrayType, offset) {
-    const copySize = this.sizeOf(arrayType);
-    // For incomplete arrays (FAM), copySize is 0; use full string length
-    const len = copySize === 0 ? strValue.length : Math.min(copySize, strValue.length);
-    for (let i = 0; i < len; i++) this.staticData[offset + i] = strValue[i];
-  }
-
-  // Evaluate an expression as an address (returns a number or null)
-  _constEvalAddr(expr) {
-    if (!expr) return null;
-    // Cast from integer to pointer: (type*)intval
-    if (expr.kind === ExprKind.CAST || expr.kind === ExprKind.IMPLICIT_CAST) {
-      const inner = this._constEvalExpr(expr.expr);
-      if (inner && inner.kind === "int") return Number(inner.intVal);
-      if (inner && inner.kind === "addr") return inner.addrVal;
-      return null;
-    }
-    // Arrow: base->member → addr(base) + offset, where base is pointer
-    if (expr.kind === ExprKind.ARROW && expr.memberDecl) {
-      const baseVal = this._constEvalExpr(expr.base);
-      if (baseVal && (baseVal.kind === "addr" || baseVal.kind === "int")) {
-        const baseAddr = baseVal.kind === "addr" ? baseVal.addrVal : Number(baseVal.intVal);
-        return baseAddr + expr.memberDecl.byteOffset;
-      }
-      return null;
-    }
-    // General: try _constEvalExpr and extract address
-    const v = this._constEvalExpr(expr);
-    if (v && v.kind === "addr") return v.addrVal;
-    if (v && v.kind === "int") return Number(v.intVal);
-    return null;
-  }
-
-  // --- ConstEval for codegen ---
-  makeConstEval() {
-    return {
-      evaluate: (expr) => this._constEvalExpr(expr),
-    };
-  }
-
-  _constEvalExpr(expr) {
-    if (!expr) return null;
-    switch (expr.kind) {
-      case ExprKind.INT: return { kind: "int", intVal: expr.value };
-      case ExprKind.FLOAT: return { kind: "float", floatVal: expr.value };
-      case ExprKind.STRING: {
-        const addr = this.getStringAddress(expr.value);
-        return { kind: "addr", addrVal: addr };
-      }
-      case ExprKind.IDENT: {
-        if (expr.decl && expr.decl.declKind === DeclKind.ENUM_CONST) {
-          return { kind: "int", intVal: BigInt(expr.decl.value) };
-        }
-        if (expr.decl && expr.decl.declKind === DeclKind.FUNC) {
-          const func = expr.decl.definition || expr.decl;
-          const tIdx = this.funcDefToTableIdx.get(func);
-          if (tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
-        }
-        if (expr.decl && expr.decl.declKind === DeclKind.VAR) {
-          const varDecl = expr.decl.definition || expr.decl;
-          const addr = this.globalArrayAddrs.get(varDecl);
-          if (addr !== undefined) return { kind: "addr", addrVal: addr };
-        }
-        return null;
-      }
-      case ExprKind.UNARY: {
-        if (expr.op === "OP_ADDR") {
-          const inner = expr.operand;
-          // &var → address
-          if (inner.kind === ExprKind.IDENT && inner.decl) {
-            if (inner.decl.declKind === DeclKind.VAR) {
-              const varDecl = inner.decl.definition || inner.decl;
-              const addr = this.globalArrayAddrs.get(varDecl);
-              if (addr !== undefined) return { kind: "addr", addrVal: addr };
-            }
-            if (inner.decl.declKind === DeclKind.FUNC) {
-              const func = inner.decl.definition || inner.decl;
-              const tIdx = this.funcDefToTableIdx.get(func);
-              if (tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
-            }
-          }
-          // &(base->member) or &(base.member) → base_addr + member offset
-          if ((inner.kind === ExprKind.ARROW || inner.kind === ExprKind.MEMBER) && inner.memberDecl) {
-            const baseAddr = this._constEvalAddr(inner.base);
-            if (baseAddr !== null) {
-              return { kind: "addr", addrVal: baseAddr + inner.memberDecl.byteOffset };
-            }
-          }
-          // &(base[index]) → base_addr + index * elemSize
-          if (inner.kind === ExprKind.SUBSCRIPT) {
-            const baseAddr = this._constEvalAddr(inner.array);
-            const idx = this._constEvalExpr(inner.index);
-            if (baseAddr !== null && idx && idx.kind === "int") {
-              const elemSize = this.sizeOf(inner.type);
-              return { kind: "addr", addrVal: baseAddr + Number(idx.intVal) * elemSize };
-            }
-          }
-          // &(compound_literal) → address of file-scope compound literal
-          if (inner.kind === ExprKind.COMPOUND_LITERAL) {
-            const addr = this.fileScopeCompoundLiteralAddrs.get(inner);
-            if (addr !== undefined) return { kind: "addr", addrVal: addr };
-          }
-          return null;
-        }
-        const v = this._constEvalExpr(expr.operand);
-        if (!v) return null;
-        if (expr.op === "OP_POS") return v;
-        if (expr.op === "OP_NEG") {
-          if (v.kind === "int") return { kind: "int", intVal: -v.intVal };
-          if (v.kind === "float") return { kind: "float", floatVal: -v.floatVal };
-        }
-        if (expr.op === "OP_BNOT") {
-          if (v.kind === "int") return { kind: "int", intVal: ~v.intVal };
-        }
-        if (expr.op === "OP_LNOT") {
-          if (v.kind === "int") return { kind: "int", intVal: v.intVal === 0n ? 1n : 0n };
-          if (v.kind === "float") return { kind: "int", intVal: v.floatVal === 0.0 ? 1n : 0n };
-        }
-        return null;
-      }
-      case ExprKind.BINARY: {
-        // Short-circuit LAND/LOR
-        if (expr.op === "LAND") {
-          const l = this._constEvalExpr(expr.left);
-          if (!l) return null;
-          const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (lv === null) return null;
-          if (lv === 0n) return { kind: "int", intVal: 0n };
-          const r = this._constEvalExpr(expr.right);
-          if (!r) return null;
-          const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (rv === null) return null;
-          return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
-        }
-        if (expr.op === "LOR") {
-          const l = this._constEvalExpr(expr.left);
-          if (!l) return null;
-          const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (lv === null) return null;
-          if (lv !== 0n) return { kind: "int", intVal: 1n };
-          const r = this._constEvalExpr(expr.right);
-          if (!r) return null;
-          const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (rv === null) return null;
-          return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
-        }
-        const l = this._constEvalExpr(expr.left);
-        const r = this._constEvalExpr(expr.right);
-        if (!l || !r) return null;
-        // Check for address arithmetic first
-        const hasAddr = (l.kind === "addr" || r.kind === "addr");
-        const hasFloat = (l.kind === "float" || r.kind === "float");
-        if (!hasAddr && !hasFloat && l.kind === "int" && r.kind === "int") {
-          const lv = l.intVal, rv = r.intVal;
-          let result;
-          switch (expr.op) {
-            case "ADD": result = lv + rv; break;
-            case "SUB": result = lv - rv; break;
-            case "MUL": result = lv * rv; break;
-            case "DIV": result = rv === 0n ? null : lv / rv; break;
-            case "MOD": result = rv === 0n ? null : lv % rv; break;
-            case "BAND": result = lv & rv; break;
-            case "BOR": result = lv | rv; break;
-            case "BXOR": result = lv ^ rv; break;
-            case "SHL": result = lv << rv; break;
-            case "SHR": result = lv >> rv; break;
-            case "EQ": result = lv === rv ? 1n : 0n; break;
-            case "NE": result = lv !== rv ? 1n : 0n; break;
-            case "LT": result = lv < rv ? 1n : 0n; break;
-            case "GT": result = lv > rv ? 1n : 0n; break;
-            case "LE": result = lv <= rv ? 1n : 0n; break;
-            case "GE": result = lv >= rv ? 1n : 0n; break;
-            default: return null;
-          }
-          if (result === null) return null;
-          return { kind: "int", intVal: result };
-        }
-        if (!hasAddr && hasFloat) {
-          const lv = l.kind === "float" ? l.floatVal : Number(l.intVal);
-          const rv = r.kind === "float" ? r.floatVal : Number(r.intVal);
-          switch (expr.op) {
-            case "ADD": return { kind: "float", floatVal: lv + rv };
-            case "SUB": return { kind: "float", floatVal: lv - rv };
-            case "MUL": return { kind: "float", floatVal: lv * rv };
-            case "DIV": return { kind: "float", floatVal: lv / rv }; // IEEE 754: div by zero = infinity
-            case "EQ": return { kind: "int", intVal: lv === rv ? 1n : 0n };
-            case "NE": return { kind: "int", intVal: lv !== rv ? 1n : 0n };
-            case "LT": return { kind: "int", intVal: lv < rv ? 1n : 0n };
-            case "GT": return { kind: "int", intVal: lv > rv ? 1n : 0n };
-            case "LE": return { kind: "int", intVal: lv <= rv ? 1n : 0n };
-            case "GE": return { kind: "int", intVal: lv >= rv ? 1n : 0n };
-            default: return null;
-          }
-        }
-        if (hasAddr) {
-          // addr + int, addr - int (pointer arithmetic: scale by pointee size)
-          if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
-            const leftType = expr.left.type.removeQualifiers();
-            let elemSize = leftType.kind === TypeKind.POINTER ? this.sizeOf(leftType.baseType)
-                         : leftType.kind === TypeKind.ARRAY ? this.sizeOf(leftType.baseType) : 1;
-            const offset = Number(r.intVal) * elemSize;
-            return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
-          }
-          // int + addr
-          if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
-            const rightType = expr.right.type.removeQualifiers();
-            let elemSize = rightType.kind === TypeKind.POINTER ? this.sizeOf(rightType.baseType)
-                         : rightType.kind === TypeKind.ARRAY ? this.sizeOf(rightType.baseType) : 1;
-            return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
-          }
-          // addr - addr (pointer difference)
-          if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
-            const leftType = expr.left.type.removeQualifiers();
-            let elemSize = leftType.kind === TypeKind.POINTER ? this.sizeOf(leftType.baseType)
-                         : leftType.kind === TypeKind.ARRAY ? this.sizeOf(leftType.baseType) : 1;
-            if (elemSize === 0) return null;
-            return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
-          }
-          // addr comparisons
-          if (l.kind === "addr" && r.kind === "addr") {
-            switch (expr.op) {
-              case "EQ": return { kind: "int", intVal: l.addrVal === r.addrVal ? 1n : 0n };
-              case "NE": return { kind: "int", intVal: l.addrVal !== r.addrVal ? 1n : 0n };
-              case "LT": return { kind: "int", intVal: l.addrVal < r.addrVal ? 1n : 0n };
-              case "GT": return { kind: "int", intVal: l.addrVal > r.addrVal ? 1n : 0n };
-              case "LE": return { kind: "int", intVal: l.addrVal <= r.addrVal ? 1n : 0n };
-              case "GE": return { kind: "int", intVal: l.addrVal >= r.addrVal ? 1n : 0n };
-            }
-          }
-        }
-        return null;
-      }
-      case ExprKind.TERNARY: {
-        const cond = this._constEvalExpr(expr.condition);
-        if (!cond) return null;
-        let cv;
-        if (cond.kind === "int") cv = cond.intVal !== 0n;
-        else if (cond.kind === "float") cv = cond.floatVal !== 0.0;
-        else return null;
-        return this._constEvalExpr(cv ? expr.thenExpr : expr.elseExpr);
-      }
-      case ExprKind.CAST:
-      case ExprKind.IMPLICIT_CAST: {
-        const v = this._constEvalExpr(expr.expr);
-        if (!v) return null;
-        const t = expr.type.removeQualifiers();
-        if ((t === TFLOAT || t === TDOUBLE) && v.kind === "int") {
-          return { kind: "float", floatVal: Number(v.intVal) };
-        }
-        if (t.isInteger() && v.kind === "float") {
-          return { kind: "int", intVal: truncateConstInt(BigInt(Math.trunc(v.floatVal)), t) };
-        }
-        if ((t.isInteger() || t.isPointer()) && v.kind === "int") {
-          return { kind: "int", intVal: truncateConstInt(v.intVal, t) };
-        }
-        return v;
-      }
-      case ExprKind.SIZEOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
-      case ExprKind.SIZEOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.size) };
-      case ExprKind.ALIGNOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
-      case ExprKind.ALIGNOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.align) };
-      case ExprKind.COMPOUND_LITERAL: {
-        // For scalar compound literals like (int){42}, extract the value
-        if (!expr.type.isAggregate() && !expr.type.isArray() && expr.initList &&
-            expr.initList.elements.length > 0) {
-          return this._constEvalExpr(expr.initList.elements[0]);
-        }
-        // For aggregate/array compound literals, return the address
-        const addr = this.fileScopeCompoundLiteralAddrs.get(expr);
-        if (addr !== undefined) return { kind: "addr", addrVal: addr };
-        return null;
-      }
-      default: return null;
-    }
-  }
-
-  // --- Populate init list into static data ---
-  populateInitListStatic(initList, type, baseOffset) {
-    if (type.isArray()) {
-      const elemType = type.baseType;
-      const elemSize = this.sizeOf(elemType);
-      for (let i = 0; i < initList.elements.length; i++) {
-        const elemOffset = baseOffset + i * elemSize;
-        const elem = initList.elements[i];
-        if (elem.kind === ExprKind.INIT_LIST) {
-          this.populateInitListStatic(elem, elemType, elemOffset);
-        } else if (elem.kind === ExprKind.STRING && elemType.isArray()) {
-          this.writeStringLiteralToStatic(elem.value, elemType, elemOffset);
-        } else {
-          const val = this._constEvalExpr(elem);
-          if (val) this.writeConstValueToStatic(elemOffset, elemType, val);
-        }
-      }
-    } else if (type.isTag()) {
-      const tag = type.tagDecl;
-      if (!tag) return;
-      if (tag.tagKind === TagKind.STRUCT) {
-        let elemIdx = 0;
-        for (const member of tag.members) {
-          if (member.declKind !== DeclKind.VAR) continue;
-          if (member.bitWidth >= 0 && !member.name) continue;
-          const fieldOffset = baseOffset + member.byteOffset;
-          if (elemIdx < initList.elements.length) {
-            const elem = initList.elements[elemIdx];
-
-            if (member.bitWidth >= 0) {
-              const val = this._constEvalExpr(elem);
-              if (val) {
-                const bw = member.bitWidth;
-                const bo = member.bitOffset;
-                const unitSize = this.sizeOf(member.type);
-                const mask = (1 << bw) - 1;
-                const bits = (Number(val.intVal) & mask);
-                let unit = 0;
-                for (let b = 0; b < unitSize; b++) unit |= this.staticData[fieldOffset + b] << (b * 8);
-                unit = (unit & ~(mask << bo)) | (bits << bo);
-                for (let b = 0; b < unitSize; b++) this.staticData[fieldOffset + b] = (unit >>> (b * 8)) & 0xFF;
-              }
-            } else if (elem.kind === ExprKind.INIT_LIST) {
-              this.populateInitListStatic(elem, member.type, fieldOffset);
-            } else if (elem.kind === ExprKind.STRING && member.type.isArray()) {
-              this.writeStringLiteralToStatic(elem.value, member.type, fieldOffset);
-            } else {
-              const val = this._constEvalExpr(elem);
-              if (val) this.writeConstValueToStatic(fieldOffset, member.type, val);
-            }
-          }
-          elemIdx++;
-        }
-      } else if (tag.tagKind === TagKind.UNION) {
-
-        if (initList.elements.length > 0 && initList.elements[0] !== null) {
-          const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
-          let varIdx = 0;
-          for (const member of tag.members) {
-            if (member.declKind !== DeclKind.VAR) continue;
-            if (varIdx++ !== targetIdx) continue;
-            const elem = initList.elements[0];
-            if (elem.kind === ExprKind.INIT_LIST) {
-              this.populateInitListStatic(elem, member.type, baseOffset);
-            } else if (elem.kind === ExprKind.STRING && member.type.isArray()) {
-              this.writeStringLiteralToStatic(elem.value, member.type, baseOffset);
-            } else {
-              const val = this._constEvalExpr(elem);
-              if (val) this.writeConstValueToStatic(baseOffset, member.type, val);
-            }
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  allocateInitListStatic(initList, aggType) {
-    const totalSize = this.sizeOf(aggType);
-    const addr = this.allocateStatic(totalSize, this.alignOf(aggType));
-    const baseOffset = addr - (this.stackPages * 65536);
-    this.populateInitListStatic(initList, aggType, baseOffset);
-    return addr;
-  }
-
-  // --- Runtime init list stores ---
-  emitInitListRuntimeStores(initList, type, baseLocalIdx, baseOffset) {
-    if (type.isArray()) {
-      const elemType = type.baseType;
-      const elemSize = this.sizeOf(elemType);
-      for (let i = 0; i < initList.elements.length; i++) {
-        const elemOffset = baseOffset + i * elemSize;
-        const elem = initList.elements[i];
-        if (elem.kind === ExprKind.INIT_LIST) {
-          this.emitInitListRuntimeStores(elem, elemType, baseLocalIdx, elemOffset);
-        } else {
-          const val = this._constEvalExpr(elem);
-          if (!val) {
-            if (elemType.isAggregate()) {
-              this.body.localGet(baseLocalIdx);
-              if (elemOffset) { this.body.i32Const(elemOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-              this.emitExpr(elem);
-              this.body.i32Const(this.sizeOf(elemType));
-              this.body.memoryCopy();
-            } else {
-              this.body.localGet(baseLocalIdx);
-              if (elemOffset) { this.body.i32Const(elemOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-              this.emitExpr(elem);
-              this.emitConversion(elem.type, elemType);
-              this.emitStore(elemType);
-            }
-          }
-        }
-      }
-    } else if (type.isTag()) {
-      const tag = type.tagDecl;
-      if (!tag) return;
-      if (tag.tagKind === TagKind.STRUCT) {
-        let elemIdx = 0;
-        for (const member of tag.members) {
-          if (member.declKind !== DeclKind.VAR) continue;
-          if (member.bitWidth >= 0 && !member.name) continue;
-          const fieldOffset = baseOffset + member.byteOffset;
-          if (elemIdx < initList.elements.length) {
-            const elem = initList.elements[elemIdx];
-            if (member.bitWidth >= 0) {
-              const val = this._constEvalExpr(elem);
-              if (!val) {
-                this.body.localGet(baseLocalIdx);
-                if (fieldOffset) { this.body.i32Const(fieldOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-                this.emitExpr(elem);
-                this.emitConversion(elem.type, member.type);
-                this.emitBitFieldStore(member);
-              }
-            } else if (elem.kind === ExprKind.INIT_LIST) {
-              this.emitInitListRuntimeStores(elem, member.type, baseLocalIdx, fieldOffset);
-            } else {
-              const val = this._constEvalExpr(elem);
-              if (!val) {
-                if (member.type.isAggregate()) {
-                  this.body.localGet(baseLocalIdx);
-                  if (fieldOffset) { this.body.i32Const(fieldOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-                  this.emitExpr(elem);
-                  this.body.i32Const(this.sizeOf(member.type));
-                  this.body.memoryCopy();
-                } else {
-                  this.body.localGet(baseLocalIdx);
-                  if (fieldOffset) { this.body.i32Const(fieldOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-                  this.emitExpr(elem);
-                  this.emitConversion(elem.type, member.type);
-                  this.emitStore(member.type);
-                }
-              }
-            }
-          }
-          elemIdx++;
-        }
-      } else if (tag.tagKind === TagKind.UNION) {
-        if (initList.elements.length > 0 && initList.elements[0] !== null) {
-          const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
-          let varIdx = 0;
-          for (const member of tag.members) {
-            if (member.declKind !== DeclKind.VAR) continue;
-            if (varIdx++ !== targetIdx) continue;
-            const elem = initList.elements[0];
-            if (elem.kind === ExprKind.INIT_LIST) {
-              this.emitInitListRuntimeStores(elem, member.type, baseLocalIdx, baseOffset);
-            } else {
-              const val = this._constEvalExpr(elem);
-              if (!val) {
-                if (member.type.isAggregate()) {
-                  this.body.localGet(baseLocalIdx);
-                  if (baseOffset) { this.body.i32Const(baseOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-                  this.emitExpr(elem);
-                  this.body.i32Const(this.sizeOf(member.type));
-                  this.body.memoryCopy();
-                } else {
-                  this.body.localGet(baseLocalIdx);
-                  if (baseOffset) { this.body.i32Const(baseOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-                  this.emitExpr(elem);
-                  this.emitConversion(elem.type, member.type);
-                  this.emitStore(member.type);
-                }
-              }
-            }
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // --- Init to frame slot ---
-  emitStringToFrameSlot(strValue, arrayType, frameOffset) {
-    const arraySize = this.sizeOf(arrayType);
-    const strLen = strValue.length;
-    const copyLen = Math.min(arraySize, strLen);
-    const srcAddr = this.getStringAddress(strValue);
-    this.emitFrameAddr(frameOffset);
-    this.body.i32Const(srcAddr);
-    this.body.i32Const(copyLen);
-    this.body.memoryCopy();
-    if (copyLen < arraySize) {
-      this.emitFrameAddr(frameOffset + copyLen);
-      this.body.i32Const(0);
-      this.body.i32Const(arraySize - copyLen);
-      this.body.memoryFill();
-    }
-  }
-  emitInitToFrameSlot(type, initExpr, frameOffset) {
-    if (type.isArray() && initExpr.kind === ExprKind.STRING) {
-      this.emitStringToFrameSlot(initExpr.value, type, frameOffset);
-      return;
-    }
-    if (type.isAggregate() && initExpr.kind === ExprKind.INIT_LIST) {
-      const il = initExpr;
-      if (type.isArray() && il.elements.length === 1 && il.elements[0].kind === ExprKind.STRING) {
-        this.emitStringToFrameSlot(il.elements[0].value, type, frameOffset);
-        return;
-      }
-      const srcAddr = this.allocateInitListStatic(il, type);
-      this.emitFrameAddr(frameOffset);
-      this.body.i32Const(srcAddr);
-      this.body.i32Const(this.sizeOf(type));
-      this.body.memoryCopy();
-      this.pushLocalScope();
-      const baseAddrLocal = this.allocLocal(WT_I32);
-      this.emitFrameAddr(frameOffset);
-      this.body.localSet(baseAddrLocal);
-      this.emitInitListRuntimeStores(il, type, baseAddrLocal, 0);
-      this.popLocalScope();
-      return;
-    }
-    if (isStructOrUnion(type)) {
-      this.emitFrameAddr(frameOffset);
-      this.emitExpr(initExpr);
-      this.body.i32Const(this.sizeOf(type));
-      this.body.memoryCopy();
-      return;
-    }
-    // Scalar
-    this.emitFrameAddr(frameOffset);
-    this.emitExpr(initExpr);
-    this.emitStore(type);
-  }
-
-  emitCompoundLiteralInit(cl) {
-    const offset = this.compoundLiteralOffsets.get(cl);
-    if (cl.type.isAggregate()) {
-      this.emitInitToFrameSlot(cl.type, cl.initList, offset);
-    } else {
-      const initExpr = (!cl.initList.elements || cl.initList.elements.length === 0)
-        ? new AST.EInt(TINT, 0n) : cl.initList.elements[0];
-      this.emitInitToFrameSlot(cl.type, initExpr, offset);
-    }
-  }
-
-  // --- Assign locals for a function ---
-  assignLocals(funcDef) {
-    const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
-    const defIdx = funcIdx - this.wmod.funcImports.length;
-    this.currentFuncLocals = this.wmod.funcDefs[defIdx].locals;
-    this.currentFuncLocals.length = 0;
-    this.freeLocalsByType.clear();
-    this.localScopeStack = [];
-    this.localVarToWasmLocalIdx.clear();
-
-    let localIdx = 0;
-    this.hasVaArgs = !!funcDef.type.isVarArg;
-    this.vaParamInfos = [];
-    this.vaStartOffset = 0;
-    this.vaRetSlotSize = 0;
-
-    if (this.hasVaArgs) {
-      // New variadic convention: single WASM parameter = arg block pointer.
-      this.argBlockLocalIdx = localIdx++;
-      this.nextLocalIdx = localIdx;
-
-      const retType = funcDef.type.getReturnType();
-      this.vaRetSlotSize = (retType === TVOID) ? 0 : vaSlotSize(retType);
-
-      let paramOffset = this.vaRetSlotSize;
-      for (const param of funcDef.parameters) {
-        const wt = isStructOrUnion(param.type) ? WT_I32 : cToWasmType(param.type);
-        const paramLocalIdx = this.allocLocal(wt);
-        this.localVarToWasmLocalIdx.set(param, paramLocalIdx);
-        const slotSz = vaSlotSize(param.type);
-        this.vaParamInfos.push({ var: param, localIdx: paramLocalIdx, offset: paramOffset });
-        paramOffset += slotSz;
-      }
-      this.vaStartOffset = paramOffset;
-      this.vaArgsLocalIdx = this.allocLocal(WT_I32);
-      this.hasStructReturn = false;
-    } else {
-      this.hasStructReturn = isStructOrUnion(funcDef.type.getReturnType());
-      if (this.hasStructReturn) this.structRetPtrLocalIdx = localIdx++;
-      for (const param of funcDef.parameters) {
-        this.localVarToWasmLocalIdx.set(param, localIdx++);
-      }
-      this.nextLocalIdx = localIdx;
-    }
-
-    // Collect MEMORY vars
-    const memoryVars = [];
-    const addMemoryDecls = (decls) => {
-      for (const decl of decls) {
-        if (decl.declKind === DeclKind.VAR && decl.storageClass !== StorageClass.STATIC) {
-          const def = decl.definition || decl;
-          if (def === decl && def.allocClass === AllocClass.MEMORY) memoryVars.push(decl);
-        }
-      }
-    };
-    const stack = [funcDef.body];
-    while (stack.length > 0) {
-      const stmt = stack.pop();
-      if (!stmt) continue;
-      switch (stmt.kind) {
-        case StmtKind.DECL: addMemoryDecls(stmt.declarations); break;
-        case StmtKind.COMPOUND:
-          for (let i = stmt.statements.length - 1; i >= 0; i--) stack.push(stmt.statements[i]);
-          break;
-        case StmtKind.IF:
-          stack.push(stmt.thenBranch);
-          if (stmt.elseBranch) stack.push(stmt.elseBranch);
-          break;
-        case StmtKind.WHILE: stack.push(stmt.body); break;
-        case StmtKind.DO_WHILE: stack.push(stmt.body); break;
-        case StmtKind.FOR:
-          if (stmt.init && stmt.init.kind === StmtKind.DECL) addMemoryDecls(stmt.init.declarations);
-          stack.push(stmt.body);
-          break;
-        case StmtKind.SWITCH:
-          for (let i = stmt.body.statements.length - 1; i >= 0; i--) stack.push(stmt.body.statements[i]);
-          break;
-        case StmtKind.TRY_CATCH:
-          stack.push(stmt.tryBody);
-          for (const cc of stmt.catches) stack.push(cc.body);
-          break;
-      }
-    }
-
-    // Memory parameters
-    const memoryParams = [];
-    for (const param of funcDef.parameters) {
-      const def = param.definition || param;
-      if (def.allocClass === AllocClass.MEMORY) memoryParams.push(param);
-    }
-
-    // Compute frame layout
-    this.localArrayOffsets.clear();
-    this.paramMemoryOffsets.clear();
-    this.compoundLiteralOffsets.clear();
-    this.frameSize = 0;
-    if (memoryVars.length > 0 || memoryParams.length > 0 ||
-        (funcDef.compoundLiterals && funcDef.compoundLiterals.length > 0)) {
-      this.savedSpLocalIdx = this.allocLocal(WT_I32);
-      let offset = 0;
-      for (const v of memoryVars) {
-        let a = this.alignOf(v.type);
-        if (v.requestedAlignment > 0 && v.requestedAlignment > a) a = v.requestedAlignment;
-        offset = (offset + a - 1) & ~(a - 1);
-        this.localArrayOffsets.set(v, offset);
-        offset += this.sizeOf(v.type);
-      }
-      for (const p of memoryParams) {
-        const a = this.alignOf(p.type);
-        offset = (offset + a - 1) & ~(a - 1);
-        this.paramMemoryOffsets.set(p, offset);
-        offset += this.sizeOf(p.type);
-      }
-      if (funcDef.compoundLiterals) {
-        for (const cl of funcDef.compoundLiterals) {
-          const a = this.alignOf(cl.type);
-          offset = (offset + a - 1) & ~(a - 1);
-          this.compoundLiteralOffsets.set(cl, offset);
-          offset += this.sizeOf(cl.type);
-        }
-      }
-      this.frameSize = (offset + 15) & ~15;
-    }
-  }
-
-  // --- Emit function body ---
-  emitFunctionBody(funcDef) {
-    const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
-    this.assignLocals(funcDef);
-    const defIdx = funcIdx - this.wmod.funcImports.length;
-    const wasmCode = new WasmCode(this.wmod.funcDefs[defIdx].body);
-    this.body = wasmCode;
-    this.currentFuncDef = funcDef;
-    this.structRetDeferred = 0;
-    this.callNesting = 0;
-    this.blockDepth = 0;
-    this.gotoLabelDepths.clear();
-
-    // Variadic function prologue: load fixed params from arg block
-    if (this.hasVaArgs) {
-      for (const pi of this.vaParamInfos) {
-        if (isStructOrUnion(pi.var.type)) {
-          this.body.localGet(this.argBlockLocalIdx);
-          if (pi.offset > 0) { this.body.i32Const(pi.offset); this.body.aop(WT_I32, ALU.OP_ADD); }
-          this.body.localSet(pi.localIdx);
-        } else {
-          this.body.localGet(this.argBlockLocalIdx);
-          if (pi.offset > 0) { this.body.i32Const(pi.offset); this.body.aop(WT_I32, ALU.OP_ADD); }
-          this.emitVaArgLoad(pi.var.type);
-          this.body.localSet(pi.localIdx);
-        }
-      }
-      this.body.localGet(this.argBlockLocalIdx);
-      if (this.vaStartOffset > 0) { this.body.i32Const(this.vaStartOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
-      this.body.localSet(this.vaArgsLocalIdx);
-    }
-
-    // Stack frame prologue
-    if (this.frameSize > 0) {
-      this.body.globalGet(this.stackPointerGlobalIdx);
-      this.body.localSet(this.savedSpLocalIdx);
-      this.body.localGet(this.savedSpLocalIdx);
-      this.body.i32Const(this.frameSize);
-      this.body.aop(WT_I32, ALU.OP_SUB);
-      this.body.globalSet(this.stackPointerGlobalIdx);
-      // Copy MEMORY parameters
-      for (const [paramVar, offset] of this.paramMemoryOffsets) {
-        this.emitFrameAddr(offset);
-        const paramIt = this.localVarToWasmLocalIdx.get(paramVar);
-        if (paramIt !== undefined) {
-          if (isStructOrUnion(paramVar.type)) {
-            this.body.localGet(paramIt);
-            this.body.i32Const(this.sizeOf(paramVar.type));
-            this.body.memoryCopy();
-          } else {
-            this.body.localGet(paramIt);
-            this.emitStore(paramVar.type);
-          }
-        }
-      }
-    }
-
-    this.emitStmt(funcDef.body);
-
-    // Epilogue
-    if (this.frameSize > 0) {
-      this.body.localGet(this.savedSpLocalIdx);
-      this.body.globalSet(this.stackPointerGlobalIdx);
-    }
-    if (this.hasVaArgs) {
-      // Variadic: WASM function returns void
-    } else {
-      const retType = funcDef.type.getReturnType();
-      const wasmRetType = cToWasmType(retType);
-      if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
-      else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
-      else if (wtEquals(wasmRetType, WT_F32)) this.body.f32Const(0.0);
-      else if (wtEquals(wasmRetType, WT_F64)) this.body.f64Const(0.0);
-      else this.body.i32Const(0);
-    }
-    this.body.ret();
-    this.body = null;
-  }
-
-  // --- Statement emission ---
-  emitStmt(stmt) {
-    if (!stmt) return;
-    switch (stmt.kind) {
-      case StmtKind.COMPOUND: {
-        this.pushLocalScope();
-        const stmts = stmt.statements;
-        // Open forward-label blocks
-        const forwardLabels = [];
-        for (const s of stmts) {
-          if (s.kind === StmtKind.LABEL && s.hasGotos) {
-            if (s.labelKind === LabelKind.FORWARD || s.labelKind === LabelKind.BOTH)
-              forwardLabels.push(s);
-          }
-        }
-        for (let i = forwardLabels.length - 1; i >= 0; i--) {
-          this.body.block();
-          this.blockDepth++;
-          this.gotoLabelDepths.set(forwardLabels[i], this.blockDepth);
-        }
-        const openLoopLabels = [];
-        for (const s of stmts) {
-          if (s.kind === StmtKind.LABEL) {
-            if (!s.hasGotos) continue;
-            if (s.labelKind === LabelKind.FORWARD || s.labelKind === LabelKind.BOTH) {
-              for (let j = openLoopLabels.length - 1; j >= 0; j--) {
-                this.blockDepth--;
-                this.body.end();
-                this.gotoLabelDepths.delete(openLoopLabels[j]);
-              }
-              openLoopLabels.length = 0;
-              this.blockDepth--;
-              this.body.end();
-              this.gotoLabelDepths.delete(s);
-            }
-            if (s.labelKind === LabelKind.LOOP || s.labelKind === LabelKind.BOTH) {
-              this.body.loop();
-              this.blockDepth++;
-              this.gotoLabelDepths.set(s, this.blockDepth);
-              openLoopLabels.push(s);
-            }
-          } else {
-            this.emitStmt(s);
-          }
-        }
-        for (let j = openLoopLabels.length - 1; j >= 0; j--) {
-          this.blockDepth--;
-          this.body.end();
-          this.gotoLabelDepths.delete(openLoopLabels[j]);
-        }
-        this.popLocalScope();
-        break;
-      }
-      case StmtKind.EXPR:
-        this.emitExpr(stmt.expr, EXPR_DROP);
-        break;
-      case StmtKind.DECL: {
-        for (const decl of stmt.declarations) {
-          if (decl.declKind === DeclKind.VAR) {
-            if (decl.storageClass !== StorageClass.STATIC && decl.definition === decl &&
-                decl.allocClass === AllocClass.REGISTER) {
-              this.localVarToWasmLocalIdx.set(decl, this.allocLocal(cToWasmType(decl.type)));
-            }
-            if (decl.initExpr) {
-              const lait = this.localArrayOffsets.get(decl);
-              if (lait !== undefined) {
-                this.emitInitToFrameSlot(decl.type, decl.initExpr, lait);
-              } else {
-                const lit = this.localVarToWasmLocalIdx.get(decl);
-                if (lit !== undefined) {
-                  this.emitExpr(decl.initExpr);
-                  this.body.localSet(lit);
-                }
-              }
-            }
-          }
-        }
-        break;
-      }
-      case StmtKind.RETURN: {
-        if (this.hasVaArgs) {
-          const retType = this.currentFuncDef.type.getReturnType();
-          if (stmt.expr && isStructOrUnion(retType)) {
-            this.body.localGet(this.argBlockLocalIdx);
-            this.emitExpr(stmt.expr);
-            this.body.i32Const(this.sizeOf(retType));
-            this.body.memoryCopy();
-          } else if (stmt.expr) {
-            this.body.localGet(this.argBlockLocalIdx);
-            this.emitExpr(stmt.expr);
-            this.emitVaArgStore(retType);
-          }
-        } else if (stmt.expr && this.hasStructReturn) {
-          this.body.localGet(this.structRetPtrLocalIdx);
-          this.emitExpr(stmt.expr);
-          this.body.i32Const(this.sizeOf(this.currentFuncDef.type.getReturnType()));
-          this.body.memoryCopy();
-          this.body.localGet(this.structRetPtrLocalIdx);
-        } else if (stmt.expr) {
-          this.emitExpr(stmt.expr);
-          const retType = this.currentFuncDef.type.getReturnType();
-        } else {
-          if (!this.hasVaArgs) this.body.i32Const(0);
-        }
-        if (this.frameSize > 0) {
-          this.body.localGet(this.savedSpLocalIdx);
-          this.body.globalSet(this.stackPointerGlobalIdx);
-        }
-        this.body.ret();
-        break;
-      }
-      case StmtKind.IF: {
-        this.emitExpr(stmt.condition);
-        this.emitConditionToI32(stmt.condition.type);
-        if (stmt.elseBranch) {
-          this.body.if_(WT_EMPTY); this.blockDepth++;
-          this.emitStmt(stmt.thenBranch);
-          this.body.else_();
-          this.emitStmt(stmt.elseBranch);
-          this.blockDepth--; this.body.end();
-        } else {
-          this.body.if_(WT_EMPTY); this.blockDepth++;
-          this.emitStmt(stmt.thenBranch);
-          this.blockDepth--; this.body.end();
-        }
-        break;
-      }
-      case StmtKind.WHILE: {
-        const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
-        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
-        this.body.loop(); this.blockDepth++; this.continueTarget = this.blockDepth;
-        this.emitExpr(stmt.condition);
-        this.emitConditionToI32(stmt.condition.type);
-        this.body.aop(WT_I32, ALU.OP_EQZ);
-        this.body.brIf(this.blockDepth - this.breakTarget);
-        this.emitStmt(stmt.body);
-        this.body.br(this.blockDepth - this.continueTarget);
-        this.blockDepth--; this.body.end();
-        this.blockDepth--; this.body.end();
-        this.breakTarget = savedBreak; this.continueTarget = savedContinue;
-        break;
-      }
-      case StmtKind.DO_WHILE: {
-        const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
-        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
-        this.body.loop(); this.blockDepth++;
-        const loopDepth = this.blockDepth;
-        this.body.block(); this.blockDepth++; this.continueTarget = this.blockDepth;
-        this.emitStmt(stmt.body);
-        this.blockDepth--; this.body.end();
-        this.emitExpr(stmt.condition);
-        this.emitConditionToI32(stmt.condition.type);
-        this.body.brIf(this.blockDepth - loopDepth);
-        this.blockDepth--; this.body.end();
-        this.blockDepth--; this.body.end();
-        this.breakTarget = savedBreak; this.continueTarget = savedContinue;
-        break;
-      }
-      case StmtKind.FOR: {
-        const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
-        this.pushLocalScope();
-        if (stmt.init) this.emitStmt(stmt.init);
-        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
-        this.body.loop(); this.blockDepth++;
-        const loopTarget = this.blockDepth;
-        if (stmt.condition) {
-          this.emitExpr(stmt.condition);
-          this.emitConditionToI32(stmt.condition.type);
-          this.body.aop(WT_I32, ALU.OP_EQZ);
-          this.body.brIf(this.blockDepth - this.breakTarget);
-        }
-        this.body.block(); this.blockDepth++; this.continueTarget = this.blockDepth;
-        this.emitStmt(stmt.body);
-        this.blockDepth--; this.body.end();
-        if (stmt.increment) this.emitExpr(stmt.increment, EXPR_DROP);
-        this.body.br(this.blockDepth - loopTarget);
-        this.blockDepth--; this.body.end();
-        this.blockDepth--; this.body.end();
-        this.popLocalScope();
-        this.breakTarget = savedBreak; this.continueTarget = savedContinue;
-        break;
-      }
-      case StmtKind.BREAK:
-        this.body.br(this.blockDepth - this.breakTarget);
-        break;
-      case StmtKind.CONTINUE:
-        this.body.br(this.blockDepth - this.continueTarget);
-        break;
-      case StmtKind.SWITCH: {
-        const sw = stmt;
-        const savedBreak = this.breakTarget;
-        let defaultIdx = -1;
-        for (let i = 0; i < sw.cases.length; i++) {
-          if (sw.cases[i].isDefault) { defaultIdx = i; break; }
-        }
-        // Collect forward labels and their statement positions in switch body
-        const switchFwdLabels = [];
-        for (let si = 0; si < sw.body.statements.length; si++) {
-          const s = sw.body.statements[si];
-          if (s.kind === StmtKind.LABEL && s.hasGotos) {
-            if (s.labelKind === LabelKind.FORWARD || s.labelKind === LabelKind.BOTH)
-              switchFwdLabels.push({ label: s, stmtPos: si });
-          }
-        }
-        const numCases = sw.cases.length;
-        const numFwdBlocks = switchFwdLabels.length;
-
-        // Compute adjusted br index for each case.
-        // A forward label at stmtPos P is interleaved between cases with
-        // stmtIndex <= P (inner) and cases with stmtIndex > P (outer).
-        const caseBrIdx = new Array(numCases);
-        for (let i = 0; i < numCases; i++) {
-          let adj = 0;
-          for (const fl of switchFwdLabels) {
-            if (fl.stmtPos < sw.cases[i].stmtIndex) adj++;
-          }
-          caseBrIdx[i] = i + adj;
-        }
-
-        // Open break block
-        this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
-
-        // Open case blocks and forward label blocks interleaved.
-        // Sort by stmtPos descending (higher pos = outermost).
-        const blockEntries = [];
-        for (let i = 0; i < numCases; i++) {
-          blockEntries.push({ pos: sw.cases[i].stmtIndex, isForward: false, idx: i });
-        }
-        for (let i = 0; i < switchFwdLabels.length; i++) {
-          blockEntries.push({ pos: switchFwdLabels[i].stmtPos, isForward: true, idx: i });
-        }
-        blockEntries.sort((a, b) => {
-          if (a.pos !== b.pos) return b.pos - a.pos;
-          if (a.isForward !== b.isForward) return a.isForward ? -1 : 1;
-          return b.idx - a.idx;
-        });
-        for (const e of blockEntries) {
-          this.body.block(); this.blockDepth++;
-          if (e.isForward) {
-            this.gotoLabelDepths.set(switchFwdLabels[e.idx].label, this.blockDepth);
-          }
-        }
-
-        // Dispatch
-        {
-          this.pushLocalScope();
-          const switchLocal = this.allocLocal(WT_I32);
-          this.emitExpr(sw.expr);
-          this.body.localSet(switchLocal);
-
-          // Count non-default cases and find min/max for density check
-          let nonDefaultCount = 0;
-          let minVal = 0x7FFFFFFF, maxVal = -0x80000000;
-          for (let i = 0; i < numCases; i++) {
-            if (sw.cases[i].isDefault) continue;
-            const v = Number(sw.cases[i].value) | 0;
-            if (nonDefaultCount === 0 || v < minVal) minVal = v;
-            if (nonDefaultCount === 0 || v > maxVal) maxVal = v;
-            nonDefaultCount++;
-          }
-          const range = nonDefaultCount > 0 ? (maxVal - minVal + 1) >>> 0 : 0;
-          const dense = nonDefaultCount >= 4 && range <= 512 &&
-              (nonDefaultCount * 10 / range) >= 4; // density >= 40%
-
-          if (this.compilerOptions.debugSwitch && sw.loc) {
-            process.stderr.write(`${sw.loc.filename}:${sw.loc.line}: switch: ${dense ? "br_table" : "br_if"}\n`);
-          }
-
-          if (dense) {
-            // br_table path: build a jump table
-            const fallbackIdx = defaultIdx >= 0 ? caseBrIdx[defaultIdx] : numCases + numFwdBlocks;
-            const table = new Array(range).fill(fallbackIdx);
-            for (let i = 0; i < numCases; i++) {
-              if (sw.cases[i].isDefault) continue;
-              const v = Number(sw.cases[i].value) | 0;
-              table[(v - minVal) >>> 0] = caseBrIdx[i];
-            }
-            this.body.localGet(switchLocal);
-            this.body.i32Const(minVal);
-            this.body.aop(WT_I32, ALU.OP_SUB);
-            this.body.brTable(table, fallbackIdx);
-          } else {
-            // Linear br_if chain for sparse switches
-            for (let i = 0; i < numCases; i++) {
-              if (sw.cases[i].isDefault) continue;
-              this.body.localGet(switchLocal);
-              this.body.i32Const(sw.cases[i].value);
-              this.body.aop(WT_I32, ALU.OP_EQ);
-              this.body.brIf(caseBrIdx[i]);
-            }
-            if (defaultIdx >= 0) this.body.br(caseBrIdx[defaultIdx]);
-            else this.body.br(numCases + numFwdBlocks);
-          }
-          this.popLocalScope();
-        }
-        // Case bodies
-        const openLoopLabels = [];
-        for (let i = 0; i < numCases; i++) {
-          this.blockDepth--; this.body.end();
-          const startIdx = sw.cases[i].stmtIndex;
-          const endIdx = (i + 1 < numCases) ? sw.cases[i + 1].stmtIndex : sw.body.statements.length;
-          for (let j = startIdx; j < endIdx; j++) {
-            const s = sw.body.statements[j];
-            if (s.kind === StmtKind.LABEL) {
-              if (!s.hasGotos) continue;
-              if (s.labelKind === LabelKind.FORWARD || s.labelKind === LabelKind.BOTH) {
-                for (let k = openLoopLabels.length - 1; k >= 0; k--) {
-                  this.blockDepth--; this.body.end();
-                  this.gotoLabelDepths.delete(openLoopLabels[k]);
-                }
-                openLoopLabels.length = 0;
-                this.blockDepth--; this.body.end();
-                this.gotoLabelDepths.delete(s);
-              }
-              if (s.labelKind === LabelKind.LOOP || s.labelKind === LabelKind.BOTH) {
-                this.body.loop(); this.blockDepth++;
-                this.gotoLabelDepths.set(s, this.blockDepth);
-                openLoopLabels.push(s);
-              }
-            } else {
-              this.emitStmt(s);
-            }
-          }
-        }
-        for (let k = openLoopLabels.length - 1; k >= 0; k--) {
-          this.blockDepth--; this.body.end();
-          this.gotoLabelDepths.delete(openLoopLabels[k]);
-        }
-        this.blockDepth--; this.body.end();
-        this.breakTarget = savedBreak;
-        break;
-      }
-      case StmtKind.GOTO: {
-        const target = stmt.target;
-        const depth = this.gotoLabelDepths.get(target);
-        if (depth === undefined) {
-          const loc = stmt.loc || {};
-          const funcName = this.currentFuncDef ? this.currentFuncDef.name : "?";
-          process.stderr.write(`${loc.filename || "?"}:${loc.line || 0}: goto '${stmt.label}': target label not in scope (in function '${funcName}') (label may be in a nested block, or a loop label's scope was closed by a forward label)\n`);
-          process.exit(1);
-        }
-        this.body.br(this.blockDepth - depth);
-        break;
-      }
-      case StmtKind.LABEL: break; // handled in COMPOUND
-      case StmtKind.EMPTY: break;
-      case StmtKind.THROW: {
-        const tagIdx = this.exceptionToWasmTagIdx.get(stmt.tag);
-        for (let i = 0; i < stmt.args.length; i++) this.emitExpr(stmt.args[i]);
-        this.body.throw_(tagIdx);
-        this.body.unreachable();
-        break;
-      }
-      case StmtKind.TRY_CATCH: {
-        const tc = stmt;
-        const numCatches = tc.catches.length;
-        const savedSpLocal = this.allocLocal(WT_I32);
-        this.body.globalGet(this.stackPointerGlobalIdx);
-        this.body.localSet(savedSpLocal);
-        this.body.block(); this.blockDepth++;
-        const endDepth = this.blockDepth;
-        const catchBlockDepths = [];
-        for (let i = numCatches - 1; i >= 0; i--) {
-          const cc = tc.catches[i];
-          if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
-          else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0]));
-          else {
-            const results = cc.tag.paramTypes.map(pt => cToWasmType(pt));
-            const typeIdx = this.wmod.addFunctionTypeId([], results);
-            this.body.push(0x02); lebI(this.body.bytes, typeIdx);
-          }
-          this.blockDepth++;
-          catchBlockDepths[i] = this.blockDepth;
-        }
-        const catches = [];
-        for (let i = 0; i < numCatches; i++) {
-          const cc = tc.catches[i];
-          const labelIdx = this.blockDepth - catchBlockDepths[i];
-          if (!cc.tag) catches.push([0x02, 0, labelIdx]);
-          else catches.push([0x00, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
-        }
-        this.body.tryTable(WT_EMPTY, catches);
-        this.blockDepth++;
-        this.emitStmt(tc.tryBody);
-        this.blockDepth--; this.body.end();
-        this.body.br(this.blockDepth - endDepth);
-        for (let i = 0; i < numCatches; i++) {
-          this.blockDepth--; this.body.end();
-          const cc = tc.catches[i];
-          this.pushLocalScope();
-          this.body.localGet(savedSpLocal);
-          this.body.globalSet(this.stackPointerGlobalIdx);
-          if (cc.tag && cc.tag.paramTypes.length > 0) {
-            const bindLocals = [];
-            for (let j = 0; j < cc.bindingVars.length; j++) {
-              const localIdx = this.allocLocal(cToWasmType(cc.tag.paramTypes[j]));
-              this.localVarToWasmLocalIdx.set(cc.bindingVars[j], localIdx);
-              bindLocals.push(localIdx);
-            }
-            for (let j = bindLocals.length - 1; j >= 0; j--) this.body.localSet(bindLocals[j]);
-          }
-          this.emitStmt(cc.body);
-          this.popLocalScope();
-          if (i + 1 < numCatches) this.body.br(this.blockDepth - endDepth);
-        }
-        this.blockDepth--; this.body.end();
-        break;
-      }
-      default:
-        throw new Error(`emitStmt: unhandled statement kind ${stmt.kind}`);
-    }
-  }
-
-  // --- Type helpers ---
-  getBinaryWasmType(type) {
-    type = type.removeQualifiers();
-    if (type === TFLOAT) return WT_F32;
-    if (type === TDOUBLE || type === TLDOUBLE) return WT_F64;
-    if (type === TLLONG || type === TULLONG) return WT_I64;
-    return WT_I32;
-  }
-
-  isUnsignedType(type) { return type.removeQualifiers().isUnsigned(); }
-
-  // --- Load/Store ---
-  emitLoad(type) {
-    type = type.removeQualifiers();
-    if (type === TCHAR || type === TSCHAR) this.body.mop(MOP.I32_LOAD8_S, 0, 0);
-    else if (type === TUCHAR || type === TBOOL) this.body.mop(MOP.I32_LOAD8_U, 0, 0);
-    else if (type === TSHORT) this.body.mop(MOP.I32_LOAD16_S, 0, 1);
-    else if (type === TUSHORT) this.body.mop(MOP.I32_LOAD16_U, 0, 1);
-    else if (type === TINT || type === TUINT || type === TLONG ||
-             type === TULONG || type.isPointer()) this.body.mop(MOP.I32_LOAD, 0, 2);
-    else if (type === TLLONG || type === TULLONG) this.body.mop(MOP.I64_LOAD, 0, 3);
-    else if (type === TFLOAT) this.body.mop(MOP.F32_LOAD, 0, 2);
-    else if (type === TDOUBLE || type === TLDOUBLE) this.body.mop(MOP.F64_LOAD, 0, 3);
-    else throw new Error(`emitLoad: unsupported type: ${type.kind}`);
-  }
-
-  emitStore(type) {
-    type = type.removeQualifiers();
-    if (type === TCHAR || type === TSCHAR || type === TUCHAR || type === TBOOL)
-      this.body.mop(MOP.I32_STORE8, 0, 0);
-    else if (type === TSHORT || type === TUSHORT) this.body.mop(MOP.I32_STORE16, 0, 1);
-    else if (type === TINT || type === TUINT || type === TLONG ||
-             type === TULONG || type.isPointer()) this.body.mop(MOP.I32_STORE, 0, 2);
-    else if (type === TLLONG || type === TULLONG) this.body.mop(MOP.I64_STORE, 0, 3);
-    else if (type === TFLOAT) this.body.mop(MOP.F32_STORE, 0, 2);
-    else if (type === TDOUBLE || type === TLDOUBLE) this.body.mop(MOP.F64_STORE, 0, 3);
-    else throw new Error(`emitStore: unsupported type: ${type.kind}`);
-  }
-
-  // --- Bitfield load/store ---
-  emitBitFieldLoad(field) {
-    const bw = field.bitWidth, bo = field.bitOffset;
-    this.emitLoad(field.type);
-    if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHR_U); }
-    if (bw < 32) { this.body.i32Const((1 << bw) - 1); this.body.aop(WT_I32, ALU.OP_AND); }
-    if (!this.isUnsignedType(field.type) && bw < 32) {
-      const shift = 32 - bw;
-      this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHL);
-      this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHR_S);
-    }
-  }
-
-  emitBitFieldStore(field) {
-    const bw = field.bitWidth, bo = field.bitOffset;
-    if (bw >= 32) { this.emitStore(field.type); return; }
-    const mask = ((1 << bw) - 1) << bo;
-    this.pushLocalScope();
-    const valLocal = this.allocLocal(WT_I32);
-    const addrLocal = this.allocLocal(WT_I32);
-    this.body.localSet(valLocal);
-    this.body.localSet(addrLocal);
-    this.body.localGet(addrLocal);
-    this.emitLoad(field.type);
-    this.body.i32Const(~mask);
-    this.body.aop(WT_I32, ALU.OP_AND);
-    this.body.localGet(valLocal);
-    this.body.i32Const((1 << bw) - 1);
-    this.body.aop(WT_I32, ALU.OP_AND);
-    if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHL); }
-    this.body.aop(WT_I32, ALU.OP_OR);
-    this.body.localSet(valLocal);
-    this.body.localGet(addrLocal);
-    this.body.localGet(valLocal);
-    this.emitStore(field.type);
-    this.popLocalScope();
-  }
-
-  // --- VaArg load/store ---
-  emitVaArgStore(type) {
-    const wt = cToWasmType(type);
-    if (wtEquals(wt, WT_I32)) this.body.mop(MOP.I32_STORE, 0, 2);
-    else if (wtEquals(wt, WT_I64)) this.body.mop(MOP.I64_STORE, 0, 3);
-    else if (wtEquals(wt, WT_F32)) this.body.mop(MOP.F32_STORE, 0, 2);
-    else if (wtEquals(wt, WT_F64)) this.body.mop(MOP.F64_STORE, 0, 3);
-  }
-
-  emitVaArgLoad(type) {
-    type = type.removeQualifiers();
-    if (isStructOrUnion(type)) return; // struct: address IS the value
-    if (type === TCHAR || type === TSCHAR) this.body.mop(MOP.I32_LOAD8_S, 0, 0);
-    else if (type === TUCHAR || type === TBOOL) this.body.mop(MOP.I32_LOAD8_U, 0, 0);
-    else if (type === TSHORT) this.body.mop(MOP.I32_LOAD16_S, 0, 1);
-    else if (type === TUSHORT) this.body.mop(MOP.I32_LOAD16_U, 0, 1);
-    else {
-      const wt = cToWasmType(type);
-      if (wtEquals(wt, WT_I32)) this.body.mop(MOP.I32_LOAD, 0, 2);
-      else if (wtEquals(wt, WT_I64)) this.body.mop(MOP.I64_LOAD, 0, 3);
-      else if (wtEquals(wt, WT_F32)) this.body.mop(MOP.F32_LOAD, 0, 2);
-      else if (wtEquals(wt, WT_F64)) this.body.mop(MOP.F64_LOAD, 0, 3);
-    }
-  }
-
-  // --- Condition/bool helpers ---
-  emitConditionToI32(condType) {
-    const wt = this.getBinaryWasmType(condType);
-    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
-    else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
-    else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
-  }
-
-  emitBoolNormalize(type) {
-    const wt = this.getBinaryWasmType(type);
-    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
-    else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
-    else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
-    else { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
-  }
-
-  // Emit narrowing for sub-i32 types (char, short).
-  // WASM locals are always i32, so we must explicitly truncate after
-  // any operation that may leave high bits set.
-  emitSubIntNarrowing(toType) {
-    toType = toType.removeQualifiers();
-    if (toType === TCHAR || toType === TSCHAR) {
-      this.body.i32Const(24); this.body.aop(WT_I32, ALU.OP_SHL);
-      this.body.i32Const(24); this.body.aop(WT_I32, ALU.OP_SHR_S);
-    } else if (toType === TUCHAR) {
-      this.body.i32Const(0xFF); this.body.aop(WT_I32, ALU.OP_AND);
-    } else if (toType === TSHORT) {
-      this.body.i32Const(16); this.body.aop(WT_I32, ALU.OP_SHL);
-      this.body.i32Const(16); this.body.aop(WT_I32, ALU.OP_SHR_S);
-    } else if (toType === TUSHORT) {
-      this.body.i32Const(0xFFFF); this.body.aop(WT_I32, ALU.OP_AND);
-    }
-  }
-
-  // --- Type conversion ---
-  emitConversion(fromType, toType) {
-    const fromWasm = this.getBinaryWasmType(fromType);
-    const toWasm = this.getBinaryWasmType(toType);
-    toType = toType.removeQualifiers();
-    if (toType === TBOOL) {
-      if (wtEquals(fromWasm, WT_I32)) { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
-      else if (wtEquals(fromWasm, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
-      else if (wtEquals(fromWasm, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
-      else if (wtEquals(fromWasm, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
-      return;
-    }
-    if (wtEquals(fromWasm, toWasm)) {
-      if (wtEquals(fromWasm, WT_I32)) this.emitSubIntNarrowing(toType);
-      return;
-    }
-    const fromSigned = !this.isUnsignedType(fromType);
-    const toSigned = !this.isUnsignedType(toType);
-    if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_EXTEND_I32, fromSigned);
-    else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_WRAP_I64); this.emitSubIntNarrowing(toType); }
-    else if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_CONVERT_I32, fromSigned);
-    else if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_CONVERT_I32, fromSigned);
-    else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_CONVERT_I64, fromSigned);
-    else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_CONVERT_I64, fromSigned);
-    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_TRUNC_F32, toSigned); this.emitSubIntNarrowing(toType); }
-    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_TRUNC_F32, toSigned);
-    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_TRUNC_F64, toSigned); this.emitSubIntNarrowing(toType); }
-    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_TRUNC_F64, toSigned);
-    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_PROMOTE_F32);
-    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_DEMOTE_F64);
-  }
-
-  // --- LValue ---
-  emitLValue(expr) {
-    if (expr.kind === ExprKind.IDENT && expr.decl && expr.decl.declKind === DeclKind.VAR) {
-      const varDecl = expr.decl.definition || expr.decl;
-      const lit = this.localVarToWasmLocalIdx.get(varDecl);
-      const git = this.globalVarToWasmGlobalIdx.get(varDecl);
-      if ((lit !== undefined || git !== undefined) && varDecl.allocClass !== AllocClass.MEMORY) {
-        return { kind: LV_REGISTER, type: varDecl.type, regIndex: lit !== undefined ? lit : git, regIsGlobal: git !== undefined };
-      }
-      const gait = this.globalArrayAddrs.get(varDecl);
-      if (gait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_STATIC, addrImmediate: gait };
-      const lait = this.localArrayOffsets.get(varDecl);
-      if (lait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_FRAME, addrImmediate: lait };
-      const pait = this.paramMemoryOffsets.get(varDecl);
-      if (pait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_FRAME, addrImmediate: pait };
-      throw new Error(`emitLValue: variable '${varDecl.name}' not found`);
-    }
-    if (expr.kind === ExprKind.MEMBER) {
-      this.emitAddressOf(expr);
-      const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
-      lv.savedLocal = this.allocLocal(WT_I32);
-      this.body.localSet(lv.savedLocal);
-      return lv;
-    }
-    if (expr.kind === ExprKind.ARROW) {
-      this.emitAddressOf(expr);
-      const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
-      lv.savedLocal = this.allocLocal(WT_I32);
-      this.body.localSet(lv.savedLocal);
-      return lv;
-    }
-    if (expr.kind === ExprKind.SUBSCRIPT) {
-      const elemSize = this.sizeOf(expr.type);
-      this.emitExpr(expr.array);
-      this.emitExpr(expr.index);
-      if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-      if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
-      this.body.aop(WT_I32, ALU.OP_ADD);
-      const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
-      lv.savedLocal = this.allocLocal(WT_I32);
-      this.body.localSet(lv.savedLocal);
-      return lv;
-    }
-    if (expr.kind === ExprKind.UNARY && expr.op === "OP_DEREF") {
-      this.emitExpr(expr.operand);
-      const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
-      lv.savedLocal = this.allocLocal(WT_I32);
-      this.body.localSet(lv.savedLocal);
-      return lv;
-    }
-    throw new Error(`emitLValue: unsupported expression kind ${expr.kind}`);
-  }
-
-  lvaluePush(lv) {
-    if (lv.kind === LV_REGISTER) return;
-    if (lv.kind === LV_MEMORY) {
-      if (lv.addrSource === LV_ADDR_LOCAL) this.body.localGet(lv.savedLocal);
-      else if (lv.addrSource === LV_ADDR_STATIC) this.body.i32Const(lv.addrImmediate);
-      else if (lv.addrSource === LV_ADDR_FRAME) this.emitFrameAddr(lv.addrImmediate);
-    }
-  }
-
-  lvalueLoad(lv) {
-    if (lv.kind === LV_REGISTER) {
-      if (lv.regIsGlobal) this.body.globalGet(lv.regIndex);
-      else this.body.localGet(lv.regIndex);
-    } else if (lv.kind === LV_MEMORY) {
-      if (lv.bitField) this.emitBitFieldLoad(lv.bitField);
-      else this.emitLoad(lv.type);
-    }
-  }
-
-  lvalueStore(lv) {
-    if (lv.kind === LV_REGISTER) {
-      if (lv.regIsGlobal) this.body.globalSet(lv.regIndex);
-      else this.body.localSet(lv.regIndex);
-    } else if (lv.kind === LV_MEMORY) {
-      if (lv.bitField) this.emitBitFieldStore(lv.bitField);
-      else this.emitStore(lv.type);
-    }
-  }
-
-  lvaluePushAndLoad(lv) { this.lvaluePush(lv); this.lvalueLoad(lv); }
-
-  // --- Address-of ---
-  emitAddressOf(expr) {
-    if (expr.kind === ExprKind.IDENT) {
-      if (expr.decl.declKind === DeclKind.FUNC) {
-        const func = expr.decl.definition || expr.decl;
-        const tIdx = this.funcDefToTableIdx.get(func);
-        this.body.i32Const(tIdx);
-        return;
-      }
-      if (expr.decl.declKind === DeclKind.VAR) {
-        const varDecl = expr.decl.definition || expr.decl;
-        const gait = this.globalArrayAddrs.get(varDecl);
-        if (gait !== undefined) { this.body.i32Const(gait); return; }
-        const lait = this.localArrayOffsets.get(varDecl);
-        if (lait !== undefined) { this.emitFrameAddr(lait); return; }
-        const pait = this.paramMemoryOffsets.get(varDecl);
-        if (pait !== undefined) { this.emitFrameAddr(pait); return; }
-        throw new Error(`Cannot take address of REGISTER variable '${varDecl.name}'`);
-      }
-    }
-    if (expr.kind === ExprKind.MEMBER) {
-      this.emitAddressOf(expr.base);
-      const tag = expr.base.type.tagDecl;
-      const offset = this.getFieldOffset(tag, expr.memberDecl);
-      if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
-      return;
-    }
-    if (expr.kind === ExprKind.ARROW) {
-      this.emitExpr(expr.base);
-      const ptrType = expr.base.type.decay();
-      const baseType = ptrType.baseType;
-      const tag = baseType.tagDecl;
-      const offset = this.getFieldOffset(tag, expr.memberDecl);
-      if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
-      return;
-    }
-    if (expr.kind === ExprKind.SUBSCRIPT) {
-      const elemSize = this.sizeOf(expr.type);
-      this.emitExpr(expr.array);
-      this.emitExpr(expr.index);
-      if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
-      this.body.aop(WT_I32, ALU.OP_ADD);
-      return;
-    }
-    if (expr.kind === ExprKind.UNARY && expr.op === "OP_DEREF") {
-      this.emitExpr(expr.operand);
-      return;
-    }
-    if (expr.kind === ExprKind.COMPOUND_LITERAL) {
-      const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
-      if (fsAddr !== undefined) { this.body.i32Const(fsAddr); }
-      else {
-        this.emitCompoundLiteralInit(expr);
-        this.emitFrameAddr(this.compoundLiteralOffsets.get(expr));
-      }
-      return;
-    }
-    throw new Error(`emitAddressOf: unsupported expression kind ${expr.kind}`);
-  }
-
-  // --- Compound op ---
-  emitCompoundOp(wt, op, isUnsigned) {
-    switch (op) {
-      case "ADD_ASSIGN": this.body.aop(wt, ALU.OP_ADD); break;
-      case "SUB_ASSIGN": this.body.aop(wt, ALU.OP_SUB); break;
-      case "MUL_ASSIGN": this.body.aop(wt, ALU.OP_MUL); break;
-      case "DIV_ASSIGN": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
-      case "MOD_ASSIGN": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
-      case "BAND_ASSIGN": this.body.aop(wt, ALU.OP_AND); break;
-      case "BOR_ASSIGN": this.body.aop(wt, ALU.OP_OR); break;
-      case "BXOR_ASSIGN": this.body.aop(wt, ALU.OP_XOR); break;
-      case "SHL_ASSIGN": this.body.aop(wt, ALU.OP_SHL); break;
-      case "SHR_ASSIGN": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
-    }
-  }
-
-  // --- Assignment ---
-  emitAssignment(expr, ctx) {
-    const lhs = expr.left, rhs = expr.right, op = expr.op;
-    const lhsType = lhs.type;
-    const wantValue = ctx === EXPR_VALUE;
-    this.pushLocalScope();
-    const lv = this.emitLValue(lhs);
-    if (op === "ASSIGN") {
-      if (lv.kind !== LV_REGISTER && isStructOrUnion(lhsType)) {
-        this.lvaluePush(lv); this.emitExpr(rhs);
-        this.body.i32Const(this.sizeOf(lhsType)); this.body.memoryCopy();
-        if (wantValue) this.lvaluePush(lv);
-      } else {
-        this.lvaluePush(lv); this.emitExpr(rhs);
-        this.emitConversion(rhs.type, lhsType);
-        if (wantValue && !lv.bitField) {
-          const vt = this.allocLocal(cToWasmType(lhsType));
-          this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
-        } else {
-          this.lvalueStore(lv);
-          if (wantValue) this.lvaluePushAndLoad(lv);
-        }
-      }
-    } else {
-      const rhsType = rhs.type;
-      let opType = lhsType;
-      if (!lhsType.isPointer()) {
-        opType = usualArithmeticConversions(lhsType, rhsType);
-      }
-      const opWt = this.getBinaryWasmType(opType);
-      const isUnsigned = this.isUnsignedType(opType);
-      this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
-      this.emitConversion(lhsType, opType);
-      this.emitExpr(rhs);
-      this.emitConversion(rhsType, opType);
-      if (lhsType.isPointer() && (op === "ADD_ASSIGN" || op === "SUB_ASSIGN")) {
-        const elemSize = this.sizeOf(lhsType.baseType);
-        if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
-      }
-      this.emitCompoundOp(opWt, op, isUnsigned);
-      if (opType !== lhsType) this.emitConversion(opType, lhsType);
-      if (lv.kind === LV_REGISTER && lhsType.isInteger() && lhsType.size < TINT.size) {
-        this.emitConversion(TINT, lhsType);
-      }
-      if (wantValue && !lv.bitField) {
-        const vt = this.allocLocal(this.getBinaryWasmType(lhsType));
-        this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
-      } else {
-        this.lvalueStore(lv);
-        if (wantValue) this.lvaluePushAndLoad(lv);
-      }
-    }
-    this.popLocalScope();
-  }
-
-  // --- Inc/Dec ---
-  emitIncDec(expr, ctx) {
-    const operand = expr.operand;
-    const isIncrement = expr.op === "OP_PRE_INC" || expr.op === "OP_POST_INC";
-    const isPre = expr.op === "OP_PRE_INC" || expr.op === "OP_PRE_DEC";
-    const wantValue = ctx === EXPR_VALUE;
-    const type = operand.type;
-    this.pushLocalScope();
-    const lv = this.emitLValue(operand);
-    const wt = this.getBinaryWasmType(type);
-    const emitDelta = () => {
-      if (type.isPointer()) {
-        const d = this.sizeOf(type.baseType);
-        if (wtEquals(wt, WT_I32)) this.body.i32Const(d); else this.body.i64Const(BigInt(d));
-      } else if (wtEquals(wt, WT_F32)) this.body.f32Const(1.0);
-      else if (wtEquals(wt, WT_F64)) this.body.f64Const(1.0);
-      else if (wtEquals(wt, WT_I64)) this.body.i64Const(1n);
-      else this.body.i32Const(1);
-    };
-    const needsNarrowing = lv.kind === LV_REGISTER && wtEquals(wt, WT_I32) &&
-      type.isInteger() && type.size < TINT.size && !type.isPointer();
-    if (isPre) {
-      this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
-      emitDelta();
-      this.body.aop(wt, isIncrement ? ALU.OP_ADD : ALU.OP_SUB);
-      if (needsNarrowing) this.emitConversion(TINT, type);
-      if (wantValue && !lv.bitField) {
-        const vt = this.allocLocal(wt);
-        this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
-      } else {
-        this.lvalueStore(lv);
-        if (wantValue) this.lvaluePushAndLoad(lv);
-      }
-    } else {
-      this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
-      let oldTemp = 0;
-      if (wantValue) { oldTemp = this.allocLocal(wt); this.body.localTee(oldTemp); }
-      emitDelta();
-      this.body.aop(wt, isIncrement ? ALU.OP_ADD : ALU.OP_SUB);
-      if (needsNarrowing) this.emitConversion(TINT, type);
-      this.lvalueStore(lv);
-      if (wantValue) this.body.localGet(oldTemp);
-    }
-    this.popLocalScope();
-  }
-
-  // --- Expression emission ---
-  emitExpr(expr, ctx) {
-    if (!ctx) ctx = EXPR_VALUE;
-    switch (expr.kind) {
-      case ExprKind.INT: {
-        const type = expr.type;
-        if (type.kind === TypeKind.LLONG || type.kind === TypeKind.ULLONG) {
-          this.body.i64Const(expr.value);
-        } else {
-          this.body.i32Const(Number(BigInt.asIntN(32, expr.value)));
-        }
-        break;
-      }
-      case ExprKind.FLOAT: {
-        if (expr.type.removeQualifiers() === TFLOAT) this.body.f32Const(expr.value);
-        else this.body.f64Const(expr.value);
-        break;
-      }
-      case ExprKind.STRING: {
-        const addr = this.getStringAddress(expr.value);
-        this.body.i32Const(addr);
-        break;
-      }
-      case ExprKind.IDENT: {
-        if (expr.decl.declKind === DeclKind.VAR) {
-          const varDecl = expr.decl.definition || expr.decl;
-          const gait = this.globalArrayAddrs.get(varDecl);
-          if (gait !== undefined) {
-            if (varDecl.type.isArray() || varDecl.type.isAggregate()) this.body.i32Const(gait);
-            else { this.body.i32Const(gait); this.emitLoad(varDecl.type); }
-            break;
-          }
-          const lait = this.localArrayOffsets.get(varDecl);
-          if (lait !== undefined) {
-            this.emitFrameAddr(lait);
-            if (!varDecl.type.isArray() && !varDecl.type.isAggregate()) this.emitLoad(varDecl.type);
-            break;
-          }
-          const pait = this.paramMemoryOffsets.get(varDecl);
-          if (pait !== undefined) {
-            this.emitFrameAddr(pait);
-            if (!varDecl.type.isArray() && !varDecl.type.isAggregate()) this.emitLoad(varDecl.type);
-            break;
-          }
-          const lit = this.localVarToWasmLocalIdx.get(varDecl);
-          if (lit !== undefined) { this.body.localGet(lit); }
-          else {
-            const git = this.globalVarToWasmGlobalIdx.get(varDecl);
-            if (git !== undefined) this.body.globalGet(git);
-            else throw new Error(`emitExpr: variable '${varDecl.name}' not found`);
-          }
-        } else if (expr.decl.declKind === DeclKind.ENUM_CONST) {
-          this.body.i32Const(expr.decl.value);
-        } else if (expr.decl.declKind === DeclKind.FUNC) {
-          const func = expr.decl.definition || expr.decl;
-          const tIdx = this.funcDefToTableIdx.get(func);
-          this.body.i32Const(tIdx);
-        }
-        break;
-      }
-      case ExprKind.BINARY: {
-        if (expr.op.endsWith("ASSIGN")) {
-          this.emitAssignment(expr, ctx);
-          return;
-        }
-        const leftType = expr.left.type, rightType = expr.right.type;
-        const isComparison = ["EQ","NE","LT","GT","LE","GE"].includes(expr.op);
-        const wt = this.getBinaryWasmType(isComparison ? leftType : expr.type);
-        const isUnsigned = this.isUnsignedType(leftType);
-        // Pointer arithmetic
-        if (expr.op === "ADD" && (leftType.isPointer() || rightType.isPointer() || leftType.isArray() || rightType.isArray())) {
-          let ptrExpr, intExpr, elemType;
-          if (leftType.isPointer()) { ptrExpr = expr.left; intExpr = expr.right; elemType = leftType.baseType; }
-          else if (leftType.isArray()) { ptrExpr = expr.left; intExpr = expr.right; elemType = leftType.baseType; }
-          else if (rightType.isPointer()) { ptrExpr = expr.right; intExpr = expr.left; elemType = rightType.baseType; }
-          else { ptrExpr = expr.right; intExpr = expr.left; elemType = rightType.baseType; }
-          const elemSize = this.sizeOf(elemType);
-          this.emitExpr(ptrExpr); this.emitExpr(intExpr);
-          if (wtEquals(this.getBinaryWasmType(intExpr.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-          if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
-          this.body.aop(WT_I32, ALU.OP_ADD);
-          break;
-        }
-        if (expr.op === "SUB" && (leftType.isPointer() || leftType.isArray())) {
-          const leftElemType = leftType.isArray() ? leftType.baseType : leftType.baseType;
-          this.emitExpr(expr.left); this.emitExpr(expr.right);
-          if (rightType.isPointer() || rightType.isArray()) {
-            this.body.aop(WT_I32, ALU.OP_SUB);
-            const elemSize = this.sizeOf(leftElemType);
-            if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_DIV, true); }
-          } else {
-            if (wtEquals(this.getBinaryWasmType(rightType), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-            const elemSize = this.sizeOf(leftElemType);
-            if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
-            this.body.aop(WT_I32, ALU.OP_SUB);
-          }
-          break;
-        }
-        // Short-circuit
-        if (expr.op === "LAND") {
-          this.emitExpr(expr.left); this.emitBoolNormalize(leftType);
-          this.body.if_(WT_I32);
-          this.emitExpr(expr.right); this.emitBoolNormalize(rightType);
-          this.body.else_(); this.body.i32Const(0); this.body.end();
-          break;
-        }
-        if (expr.op === "LOR") {
-          this.emitExpr(expr.left); this.emitBoolNormalize(leftType);
-          this.body.if_(WT_I32); this.body.i32Const(1);
-          this.body.else_(); this.emitExpr(expr.right); this.emitBoolNormalize(rightType); this.body.end();
-          break;
-        }
-        this.emitExpr(expr.left); this.emitExpr(expr.right);
-        switch (expr.op) {
-          case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
-          case "SUB": this.body.aop(wt, ALU.OP_SUB); break;
-          case "MUL": this.body.aop(wt, ALU.OP_MUL); break;
-          case "DIV": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
-          case "MOD": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
-          case "EQ": this.body.aop(wt, ALU.OP_EQ); break;
-          case "NE": this.body.aop(wt, ALU.OP_NE); break;
-          case "LT": this.body.aop(wt, ALU.OP_LT, !isUnsigned); break;
-          case "GT": this.body.aop(wt, ALU.OP_GT, !isUnsigned); break;
-          case "LE": this.body.aop(wt, ALU.OP_LE, !isUnsigned); break;
-          case "GE": this.body.aop(wt, ALU.OP_GE, !isUnsigned); break;
-          case "BAND": this.body.aop(wt, ALU.OP_AND); break;
-          case "BOR": this.body.aop(wt, ALU.OP_OR); break;
-          case "BXOR": this.body.aop(wt, ALU.OP_XOR); break;
-          case "SHL": this.body.aop(wt, ALU.OP_SHL); break;
-          case "SHR": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
-        }
-        break;
-      }
-      case ExprKind.UNARY: {
-        const operandType = expr.operand.type;
-        switch (expr.op) {
-          case "OP_NEG": {
-            const wt = this.getBinaryWasmType(operandType);
-            if (wtEquals(wt, WT_F32) || wtEquals(wt, WT_F64)) {
-              this.emitExpr(expr.operand); this.body.aop(wt, ALU.OP_NEG);
-            } else {
-              if (wtEquals(wt, WT_I32)) this.body.i32Const(0); else this.body.i64Const(0n);
-              this.emitExpr(expr.operand); this.body.aop(wt, ALU.OP_SUB);
-            }
-            break;
-          }
-          case "OP_POS": this.emitExpr(expr.operand); break;
-          case "OP_LNOT": {
-            this.emitExpr(expr.operand);
-            const wt = this.getBinaryWasmType(operandType);
-            if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
-            else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_EQ); }
-            else this.body.aop(wt, ALU.OP_EQZ);
-            break;
-          }
-          case "OP_BNOT": {
-            const wt = this.getBinaryWasmType(operandType);
-            this.emitExpr(expr.operand);
-            if (wtEquals(wt, WT_I32)) this.body.i32Const(-1); else this.body.i64Const(-1n);
-            this.body.aop(wt, ALU.OP_XOR);
-            break;
-          }
-          case "OP_PRE_INC": case "OP_PRE_DEC": case "OP_POST_INC": case "OP_POST_DEC":
-            this.emitIncDec(expr, ctx); return;
-          case "OP_DEREF":
-            this.emitExpr(expr.operand);
-            if (!expr.type.isAggregate() && !expr.type.isFunction()) this.emitLoad(expr.type);
-            break;
-          case "OP_ADDR":
-            this.emitAddressOf(expr.operand);
-            break;
-        }
-        break;
-      }
-      case ExprKind.CALL: {
-        const funcDecl = expr.funcDecl;
-        if (funcDecl) {
-          const funcDef = funcDecl.definition || funcDecl;
-          const funcType = funcDef.type;
-          const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
-          if (funcIdx === undefined) throw new Error(`emitExpr: function '${funcDef.name}' not found`);
-          if (funcType.isVarArg) {
-            // Variadic call — new convention: all args + return in arg block
-            const varRetType = funcType.getReturnType();
-            const paramTypes = funcType.getParamTypes();
-            const numFixed = paramTypes.length;
-
-            const varStructRet = isStructOrUnion(varRetType);
-            const retSlotSize = (varRetType === TVOID) ? 0 : vaSlotSize(varRetType);
-
-            // Compute arg block layout
-            let blockSize = retSlotSize;
-            const argOffsets = [];
-            for (let i = 0; i < expr.arguments.length; i++) {
-              argOffsets.push(blockSize);
-              let argType;
-              if (i < numFixed) {
-                argType = paramTypes[i];
-              } else {
-                argType = expr.arguments[i].type.decay();
-                if (argType.removeQualifiers() === TFLOAT) argType = TDOUBLE;
-              }
-              blockSize += vaSlotSize(argType);
-            }
-            blockSize = (blockSize + 7) & ~7;
-
-            this.callNesting++;
-
-            // Allocate arg block
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            this.body.i32Const(blockSize);
-            this.body.aop(WT_I32, ALU.OP_SUB);
-            this.body.globalSet(this.stackPointerGlobalIdx);
-
-            this.pushLocalScope();
-            const argBlockBase = this.allocLocal(WT_I32);
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            this.body.localSet(argBlockBase);
-
-            const deferredAtVaAlloc = this.structRetDeferred;
-
-            // Store each argument
-            for (let i = 0; i < expr.arguments.length; i++) {
-              const arg = expr.arguments[i];
-              const isFixed = i < numFixed;
-              let storeType;
-              if (isFixed) {
-                storeType = paramTypes[i];
-              } else {
-                storeType = arg.type.decay();
-                if (storeType.removeQualifiers() === TFLOAT) storeType = TDOUBLE;
-              }
-
-              this.body.localGet(argBlockBase);
-              if (argOffsets[i] > 0) { this.body.i32Const(argOffsets[i]); this.body.aop(WT_I32, ALU.OP_ADD); }
-
-              if (isStructOrUnion(storeType)) {
-                this.emitExpr(arg);
-                this.body.i32Const(this.sizeOf(storeType));
-                this.body.memoryCopy();
-              } else {
-                this.emitExpr(arg);
-                this.emitVaArgStore(storeType);
-              }
-
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              const deferredDelta = this.structRetDeferred - deferredAtVaAlloc;
-              if (deferredDelta > 0) { this.body.i32Const(deferredDelta); this.body.aop(WT_I32, ALU.OP_ADD); }
-              this.body.localSet(argBlockBase);
-            }
-
-            // Push arg block pointer and call
-            this.body.localGet(argBlockBase);
-            this.body.call(funcIdx);
-
-            // Load return value from arg block
-            if (varStructRet) {
-              this.body.localGet(argBlockBase);
-              this.structRetDeferred += blockSize;
-            } else if (varRetType !== TVOID) {
-              this.body.localGet(argBlockBase);
-              this.emitVaArgLoad(varRetType);
-              this.body.localGet(argBlockBase);
-              this.body.i32Const(blockSize);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-            } else {
-              this.body.localGet(argBlockBase);
-              this.body.i32Const(blockSize);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.body.i32Const(0);
-            }
-
-            this.popLocalScope();
-
-            this.callNesting--;
-            if (this.callNesting === 0 && this.structRetDeferred > 0) {
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(this.structRetDeferred);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.structRetDeferred = 0;
-            }
-          } else {
-            // Non-variadic direct call
-            const callRetType = funcType.getReturnType();
-            const structRet = isStructOrUnion(callRetType);
-            let structRetAllocSize = 0;
-            this.callNesting++;
-            if (structRet) {
-              const retSize = this.sizeOf(callRetType);
-              structRetAllocSize = (retSize + 15) & ~15;
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(structRetAllocSize);
-              this.body.aop(WT_I32, ALU.OP_SUB);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.body.globalGet(this.stackPointerGlobalIdx);
-            }
-            const callParamTypes = funcType.getParamTypes();
-            for (let i = 0; i < expr.arguments.length; i++) {
-              this.emitExpr(expr.arguments[i]);
-            }
-            this.body.call(funcIdx);
-            if (structRet) this.structRetDeferred += structRetAllocSize;
-            this.callNesting--;
-            if (this.callNesting === 0 && this.structRetDeferred > 0) {
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              this.body.i32Const(this.structRetDeferred);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              this.structRetDeferred = 0;
-            }
-          }
-        } else {
-          // Indirect call
-          const calleeType = expr.callee.type.decay();
-          const funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
-          const callRetType = funcType.getReturnType();
-          const structRet = isStructOrUnion(callRetType);
-          let structRetAllocSize = 0;
-          this.callNesting++;
-          if (structRet) {
-            const retSize = this.sizeOf(callRetType);
-            structRetAllocSize = (retSize + 15) & ~15;
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            this.body.i32Const(structRetAllocSize);
-            this.body.aop(WT_I32, ALU.OP_SUB);
-            this.body.globalSet(this.stackPointerGlobalIdx);
-            this.body.globalGet(this.stackPointerGlobalIdx);
-          }
-          for (let i = 0; i < expr.arguments.length; i++) this.emitExpr(expr.arguments[i]);
-          this.emitExpr(expr.callee);
-          const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
-          this.body.callIndirect(typeId);
-          if (structRet) this.structRetDeferred += structRetAllocSize;
-          this.callNesting--;
-          if (this.callNesting === 0 && this.structRetDeferred > 0) {
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            this.body.i32Const(this.structRetDeferred);
-            this.body.aop(WT_I32, ALU.OP_ADD);
-            this.body.globalSet(this.stackPointerGlobalIdx);
-            this.structRetDeferred = 0;
-          }
-        }
-        break;
-      }
-      case ExprKind.SUBSCRIPT: {
-        const elemType = expr.type;
-        const elemSize = this.sizeOf(elemType);
-        this.emitExpr(expr.array);
-        this.emitExpr(expr.index);
-        if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-        if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
-        this.body.aop(WT_I32, ALU.OP_ADD);
-        if (!elemType.isAggregate()) this.emitLoad(elemType);
-        break;
-      }
-      case ExprKind.MEMBER: {
-        const baseType = expr.base.type.removeQualifiers();
-        this.emitExpr(expr.base);
-        const field = expr.memberDecl;
-        const tag = baseType.tagDecl;
-        const offset = this.getFieldOffset(tag, field);
-        if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
-        if (field.bitWidth >= 0) this.emitBitFieldLoad(field);
-        else if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
-        break;
-      }
-      case ExprKind.ARROW: {
-        this.emitExpr(expr.base);
-        const field = expr.memberDecl;
-        const ptrType = expr.base.type.decay();
-        const baseType = ptrType.baseType;
-        const tag = baseType.tagDecl;
-        const offset = this.getFieldOffset(tag, field);
-        if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
-        if (field.bitWidth >= 0) this.emitBitFieldLoad(field);
-        else if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
-        break;
-      }
-      case ExprKind.SIZEOF_EXPR:
-        this.body.i32Const(this.sizeOf(expr.expr.type)); break;
-      case ExprKind.SIZEOF_TYPE:
-        this.body.i32Const(this.sizeOf(expr.operandType)); break;
-      case ExprKind.ALIGNOF_EXPR:
-        this.body.i32Const(this.alignOf(expr.expr.type)); break;
-      case ExprKind.ALIGNOF_TYPE:
-        this.body.i32Const(this.alignOf(expr.operandType)); break;
-      case ExprKind.IMPLICIT_CAST: {
-        if (ctx === EXPR_DROP) { this.emitExpr(expr.expr, EXPR_DROP); return; }
-        this.emitExpr(expr.expr);
-        this.emitConversion(expr.expr.type, expr.type);
-        break;
-      }
-      case ExprKind.CAST: {
-        this.emitExpr(expr.expr);
-        this.emitConversion(expr.expr.type, expr.targetType);
-        break;
-      }
-      case ExprKind.TERNARY: {
-        const resultType = cToWasmType(expr.type);
-        this.emitExpr(expr.condition);
-        this.emitConditionToI32(expr.condition.type);
-        this.body.if_(resultType);
-        this.emitExpr(expr.thenExpr);
-        if (expr.thenExpr.type !== expr.type) this.emitConversion(expr.thenExpr.type, expr.type);
-        this.body.else_();
-        this.emitExpr(expr.elseExpr);
-        if (expr.elseExpr.type !== expr.type) this.emitConversion(expr.elseExpr.type, expr.type);
-        this.body.end();
-        break;
-      }
-      case ExprKind.INTRINSIC: {
-        switch (expr.intrinsicKind) {
-          case IntrinsicKind.VA_START:
-            this.emitAddressOf(expr.args[0]);
-            this.body.localGet(this.vaArgsLocalIdx);
-            this.body.mop(MOP.I32_STORE, 0, 2);
-            this.body.i32Const(0);
-            break;
-          case IntrinsicKind.VA_ARG: {
-            const slotSize = vaSlotSize(expr.argType);
-            this.emitAddressOf(expr.args[0]);
-            this.body.mop(MOP.I32_LOAD, 0, 2);
-            this.pushLocalScope();
-            const vaArgTemp = this.allocLocal(WT_I32);
-            this.body.localTee(vaArgTemp);
-            this.emitAddressOf(expr.args[0]);
-            this.body.localGet(vaArgTemp);
-            this.body.i32Const(slotSize);
-            this.body.aop(WT_I32, ALU.OP_ADD);
-            this.body.mop(MOP.I32_STORE, 0, 2);
-            this.emitVaArgLoad(expr.argType);
-            this.popLocalScope();
-            break;
-          }
-          case IntrinsicKind.VA_END:
-            this.emitExpr(expr.args[0]); this.body.drop();
-            this.body.i32Const(0); break;
-          case IntrinsicKind.VA_COPY:
-            this.emitAddressOf(expr.args[0]);
-            this.emitExpr(expr.args[1]);
-            this.body.mop(MOP.I32_STORE, 0, 2);
-            this.body.i32Const(0);
-            break;
-          case IntrinsicKind.MEMORY_SIZE:
-            this.body.memorySize(); break;
-          case IntrinsicKind.MEMORY_GROW:
-            this.emitExpr(expr.args[0]); this.body.memoryGrow(); break;
-          case IntrinsicKind.MEMORY_COPY:
-            this.emitExpr(expr.args[0]); this.emitExpr(expr.args[1]); this.emitExpr(expr.args[2]);
-            this.body.memoryCopy(); this.body.i32Const(0); break;
-          case IntrinsicKind.MEMORY_FILL:
-            this.emitExpr(expr.args[0]); this.emitExpr(expr.args[1]); this.emitExpr(expr.args[2]);
-            this.body.memoryFill(); this.body.i32Const(0); break;
-          case IntrinsicKind.HEAP_BASE:
-            this.body.globalGet(this.heapBaseGlobalIdx); break;
-          case IntrinsicKind.ALLOCA:
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            this.emitExpr(expr.args[0]);
-            this.body.i32Const(15); this.body.aop(WT_I32, ALU.OP_ADD);
-            this.body.i32Const(-16); this.body.aop(WT_I32, ALU.OP_AND);
-            this.body.aop(WT_I32, ALU.OP_SUB);
-            this.body.globalSet(this.stackPointerGlobalIdx);
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            break;
-          case IntrinsicKind.UNREACHABLE:
-            this.body.unreachable(); break;
-        }
-        break;
-      }
-      case ExprKind.WASM: {
-        for (const arg of expr.args) this.emitExpr(arg);
-        for (const b of expr.bytes) this.body.push(b);
-        break;
-      }
-      case ExprKind.COMMA: {
-        for (let i = 0; i < expr.expressions.length; i++) {
-          const isLast = i + 1 === expr.expressions.length;
-          this.emitExpr(expr.expressions[i], isLast ? ctx : EXPR_DROP);
-        }
-        return;
-      }
-      case ExprKind.COMPOUND_LITERAL: {
-        const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
-        if (fsAddr !== undefined) {
-          this.body.i32Const(fsAddr);
-          if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
-        } else {
-          this.emitCompoundLiteralInit(expr);
-          this.emitFrameAddr(this.compoundLiteralOffsets.get(expr));
-          if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
-        }
-        break;
-      }
-      default:
-        throw new Error(`emitExpr: unhandled expression kind ${expr.kind}`);
-    }
-    if (ctx === EXPR_DROP) this.body.drop();
-  }
-}
-
-// ====================
-// generateCode orchestration
-// ====================
-
-function generateCode(units, outputFile, options) {
-  const wmod = new WasmModule();
-  const cg = new CodeGenerator(wmod, options);
-
-  // Apply __minstack directives: take max across all TUs, round up to pages
-  let maxMinStack = 0;
-  for (const unit of units) maxMinStack = Math.max(maxMinStack, unit.minStackBytes || 0);
-  if (maxMinStack > 0) {
-    const minPages = Math.ceil(maxMinStack / 65536);
-    cg.stackPages = Math.max(cg.stackPages, minPages);
-  }
-
-  // Stack pointer global
-  const initialSp = cg.stackPages * 65536;
-  cg.stackPointerGlobalIdx = wmod.addGlobalI32(initialSp, true);
-  cg.heapBaseGlobalIdx = wmod.addGlobalI32(0, false);
-
-  // Register imports
-  for (const unit of units) {
-    for (const func of unit.importedFunctions) {
-      const fdef = func.definition || func;
-      const typeId = getWasmFunctionTypeIdForCFunctionType(wmod, fdef.type);
-      const funcIdx = wmod.addFunctionImport("c.mtots.com", fdef.name, typeId);
-      cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
-      cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
-    }
-  }
-
-  // Register function definitions
-  for (const unit of units) {
-    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
-      const fdef = func.definition || func;
-      if (fdef !== func) continue;
-      const typeId = getWasmFunctionTypeIdForCFunctionType(wmod, fdef.type);
-      const funcIdx = wmod.addFunctionDefinition(typeId);
-      cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
-      cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
-      if (fdef.name === "main") wmod.addExport("main", 0x00, funcIdx);
-      if (fdef.name === "alloca") wmod.addExport("alloca", 0x00, funcIdx);
-    }
-  }
-
-  // Register exception tags
-  for (const unit of units) {
-    for (const tag of (unit.exceptionTags || [])) {
-      if (cg.exceptionToWasmTagIdx.has(tag)) continue;
-      const params = tag.paramTypes.map(pt => cToWasmType(pt));
-      const typeId = wmod.addFunctionTypeId(params, []);
-      const tagIdx = wmod.addTag(typeId);
-      cg.exceptionToWasmTagIdx.set(tag, tagIdx);
-    }
-  }
-
-  // Process __export directives
-  for (const unit of units) {
-    for (const [exportName, func] of unit.exportDirectives) {
-      const fdef = func.definition || func;
-      const funcIdx = cg.funcDefToWasmFuncIdx.get(fdef);
-      if (funcIdx !== undefined) wmod.addExport(exportName, 0x00, funcIdx);
-    }
-  }
-
-  // Collect #pragma custom_section directives
-  for (const unit of units) {
-    for (const sec of unit.customSections) {
-      wmod.customSections.push(sec);
-    }
-  }
-
-  // Allocate MEMORY addresses
-  for (const unit of units) {
-    for (const v of [...unit.definedVariables, ...unit.externVariables, ...unit.localExternVariables]) {
-      if (v.storageClass === StorageClass.EXTERN && v.definition !== v) continue;
-      const varDef = v.definition || v;
-      if (varDef.allocClass === AllocClass.MEMORY && !cg.globalArrayAddrs.has(varDef)) {
-        let align = cg.alignOf(varDef.type);
-        if (varDef.requestedAlignment > 0 && varDef.requestedAlignment > align) align = varDef.requestedAlignment;
-        const size = varDef.initExpr ? cg.computeInitAllocSize(varDef.type, varDef.initExpr)
-                                    : cg.sizeOf(varDef.type);
-        const addr = cg.allocateStatic(size, align);
-        cg.globalArrayAddrs.set(varDef, addr);
-      }
-    }
-    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
-      const fdef = func.definition;
-      if (!fdef) continue;
-      for (const varDef of (fdef.staticLocals || [])) {
-        if (varDef.allocClass === AllocClass.MEMORY && !cg.globalArrayAddrs.has(varDef)) {
-          let align = cg.alignOf(varDef.type);
-          if (varDef.requestedAlignment > 0 && varDef.requestedAlignment > align) align = varDef.requestedAlignment;
-          const addr = cg.allocateStatic(cg.sizeOf(varDef.type), align);
-          cg.globalArrayAddrs.set(varDef, addr);
-        }
-      }
-    }
-    for (const cl of (unit.fileScopeCompoundLiterals || [])) {
-      const addr = cg.allocateStatic(cg.sizeOf(cl.type), cg.alignOf(cl.type));
-      cg.fileScopeCompoundLiteralAddrs.set(cl, addr);
-    }
-  }
-
-  // Initialize file-scope compound literals
-  for (const unit of units) {
-    for (const cl of (unit.fileScopeCompoundLiterals || [])) {
-      const addr = cg.fileScopeCompoundLiteralAddrs.get(cl);
-      const baseOffset = addr - (cg.stackPages * 65536);
-      if (cl.type.isArray() && cl.initList.elements.length === 1 && cl.initList.elements[0].kind === ExprKind.STRING) {
-        cg.writeStringLiteralToStatic(cl.initList.elements[0].value, cl.type, baseOffset);
-      } else if (cl.type.isAggregate() || cl.type.isArray()) {
-        cg.populateInitListStatic(cl.initList, cl.type, baseOffset);
-      } else {
-        const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.type, 0n) : cl.initList.elements[0];
-        const val = cg._constEvalExpr(initExpr);
-        if (val) cg.writeConstValueToStatic(baseOffset, cl.type, val);
-      }
-    }
-  }
-
-  // Helper: register a global variable (REGISTER or initialize MEMORY)
-  const registerGlobalVar = (varDef) => {
-    if (varDef.allocClass === AllocClass.MEMORY) {
-      const addr = cg.globalArrayAddrs.get(varDef);
-      const baseOffset = addr - (cg.stackPages * 65536);
-      if (varDef.initExpr && varDef.initExpr.kind === ExprKind.INIT_LIST) {
-        cg.populateInitListStatic(varDef.initExpr, varDef.type, baseOffset);
-      } else if (varDef.initExpr && varDef.initExpr.kind === ExprKind.COMPOUND_LITERAL && varDef.type.isAggregate()) {
-        cg.populateInitListStatic(varDef.initExpr.initList, varDef.type, baseOffset);
-      } else if (varDef.initExpr && varDef.type.isArray() && varDef.initExpr.kind === ExprKind.STRING) {
-        const str = varDef.initExpr.value;
-        const copySize = cg.sizeOf(varDef.type);
-        const len = Math.min(copySize, str.length);
-        for (let i = 0; i < len; i++) cg.staticData[baseOffset + i] = str[i];
-      } else if (varDef.initExpr && !varDef.type.isAggregate()) {
-        const val = cg._constEvalExpr(varDef.initExpr);
-        if (val) cg.writeConstValueToStatic(baseOffset, varDef.type, val);
-      }
-    } else {
-      const wt = cToWasmType(varDef.type);
-      // Determine initial value
-      let globalIdx;
-      if (varDef.initExpr && varDef.initExpr.kind === ExprKind.INT) {
-        const val = truncateConstInt(varDef.initExpr.value, varDef.type);
-        if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(Number(val), true);
-        else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(Number(val), true);
-        else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(val, true);
-        else globalIdx = wmod.addGlobalI32(Number(val), true);
-      } else if (varDef.initExpr && varDef.initExpr.kind === ExprKind.FLOAT) {
-        if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(varDef.initExpr.value, true);
-        else globalIdx = wmod.addGlobalF64(varDef.initExpr.value, true);
-      } else if (varDef.initExpr && varDef.initExpr.kind === ExprKind.STRING) {
-        const addr = cg.getStringAddress(varDef.initExpr.value);
-        globalIdx = wmod.addGlobalI32(addr, true);
-      } else if (varDef.initExpr) {
-        const val = cg._constEvalExpr(varDef.initExpr);
-        if (val && (val.kind === "int" || val.kind === "float" || val.kind === "addr")) {
-          const numVal = val.kind === "int" ? Number(val.intVal) :
-                         val.kind === "float" ? val.floatVal : val.addrVal;
-          if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(numVal, true);
-          else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(numVal, true);
-          else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(BigInt(Math.trunc(numVal)), true);
-          else globalIdx = wmod.addGlobalI32(numVal | 0, true);
-        } else {
-          // Zero init
-          if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(0n, true);
-          else if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(0.0, true);
-          else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(0.0, true);
-          else globalIdx = wmod.addGlobalI32(0, true);
-        }
-      } else {
-        if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(0n, true);
-        else if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(0.0, true);
-        else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(0.0, true);
-        else globalIdx = wmod.addGlobalI32(0, true);
-      }
-      cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
-    }
-  };
-
-  // Register global variables
-  for (const unit of units) {
-    for (const v of [...unit.definedVariables, ...unit.externVariables, ...unit.localExternVariables]) {
-      if (v.storageClass === StorageClass.EXTERN && v.definition !== v) continue;
-      const varDef = v.definition || v;
-      registerGlobalVar(varDef);
-    }
-  }
-
-  // Register static local variables
-  for (const unit of units) {
-    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
-      const fdef = func.definition;
-      if (!fdef) continue;
-      for (const varDef of (fdef.staticLocals || [])) registerGlobalVar(varDef);
-    }
-  }
-
-  // Emit function bodies
-  for (const unit of units) {
-    for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
-      const fdef = func.definition || func;
-      if (fdef !== func) continue;
-      cg.emitFunctionBody(fdef);
-    }
-  }
-
-  // Finalize memory
-  const staticDataStart = cg.stackPages * 65536;
-  const heapBase = (staticDataStart + cg.staticDataOffset + 7) & ~7;
-  let minPages = Math.ceil(heapBase / 65536);
-  if (minPages < cg.stackPages) minPages = cg.stackPages;
-  const memoryIdx = wmod.addMemory(minPages);
-  wmod.addExport("memory", 0x02, memoryIdx);
-  wmod.addExport("__indirect_function_table", 0x01, 0);
-  if (cg.staticData.length > 0) wmod.addDataSegment(staticDataStart, cg.staticData);
-  wmod.patchGlobalI32(cg.heapBaseGlobalIdx, heapBase);
-  wmod.addExport("__heap_base", 0x03, cg.heapBaseGlobalIdx);
-
-  return wmod.emit();
-}
-
-return { generateCode };
-})();
 
 // ====================
 // Exports
 // ====================
 
 var _exports = {
-  intern,
-  TokenKind,
-  Keyword,
-  StringPrefix,
-  TokenFlags,
-  Token,
-  LexError,
-  LexResult,
-  lex,
-  unescape,
-  decodeCodepoint,
-  unescapeCodepoint,
-  encodeUtf16LE,
-  encodeUtf32LE,
-  parseHexFloat,
-  postProcess,
-  spliceLines,
-  PPRegistry,
-  preprocess,
-  cloneToken,
-  tokenize,
-  createDefaultPPRegistry,
-  formatToken,
-  // Parser exports
-  TypeKind, TagKind, StorageClass, ExprKind, StmtKind, DeclKind,
-  TypeInfo, parseTokens, parseSource, dumpAst,
-  filterUnusedDeclarations,
-  linkTranslationUnits,
-  lowerSetjmpLongjmp,
-  annotateImplicitCasts, annotateExpr, annotateStmt,
-  LabelKind, usualArithmeticConversions,
-  // Compiler pipeline
-  createDefaultPPRegistry,
-  parseAllUnits,
-  generateCode,
-  gcSectionsPass,
-  getStdlibHeaders,
-  getStdlibSources,
+  // Lexer
+  intern: Lexer.intern,
+  TokenKind: Lexer.TokenKind,
+  Keyword: Lexer.Keyword,
+  StringPrefix: Lexer.StringPrefix,
+  TokenFlags: Lexer.TokenFlags,
+  Token: Lexer.Token,
+  LexError: Lexer.LexError,
+  LexResult: Lexer.LexResult,
+  lex: Lexer.lex,
+  unescape: Lexer.unescape,
+  decodeCodepoint: Lexer.decodeCodepoint,
+  unescapeCodepoint: Lexer.unescapeCodepoint,
+  encodeUtf16LE: Lexer.encodeUtf16LE,
+  encodeUtf32LE: Lexer.encodeUtf32LE,
+  parseHexFloat: Lexer.parseHexFloat,
+  postProcess: Lexer.postProcess,
+  spliceLines: Lexer.spliceLines,
+  PPRegistry: Lexer.PPRegistry,
+  preprocess: Lexer.preprocess,
+  cloneToken: Lexer.cloneToken,
+  tokenize: Lexer.tokenize,
+  formatToken: Lexer.formatToken,
+  encodeUtf8: Lexer.encodeUtf8,
+  // Types
+  TypeKind: Types.TypeKind,
+  TagKind: Types.TagKind,
+  StorageClass: Types.StorageClass,
+  ExprKind: Types.ExprKind,
+  StmtKind: Types.StmtKind,
+  DeclKind: Types.DeclKind,
+  TypeInfo: Types.TypeInfo,
+  LabelKind: Types.LabelKind,
+  usualArithmeticConversions: Types.usualArithmeticConversions,
+  // Parser
+  parseTokens: Parser.parseTokens,
+  parseSource: Parser.parseSource,
+  dumpAst: Parser.dumpAst,
+  filterUnusedDeclarations: Parser.filterUnusedDeclarations,
+  linkTranslationUnits: Parser.linkTranslationUnits,
+  lowerSetjmpLongjmp: Parser.lowerSetjmpLongjmp,
+  annotateImplicitCasts: Parser.annotateImplicitCasts,
+  annotateExpr: Parser.annotateExpr,
+  annotateStmt: Parser.annotateStmt,
+  gcSectionsPass: Parser.gcSectionsPass,
+  // Pipeline
+  createDefaultPPRegistry: Stdlib.createDefaultPPRegistry,
+  parseAllUnits: Stdlib.parseAllUnits,
+  generateCode: Codegen.generateCode,
+  getStdlibHeaders: Stdlib.getStdlibHeaders,
+  getStdlibSources: Stdlib.getStdlibSources,
 };
 
 if (typeof module !== 'undefined') {
