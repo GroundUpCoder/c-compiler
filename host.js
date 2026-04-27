@@ -60,10 +60,29 @@ function createFileSystem({ fs, ctx }) {
 
   /* POSIX fd table: entries for fds 0/1/2 (stdin/stdout/stderr) */
   const fdTable = [
-    { nativeFd: 0, position: null },  /* fd 0 = stdin  (not seekable) */
+    { nativeFd: 0, position: null, isStdin: true },  /* fd 0 = stdin  (not seekable) */
     { nativeFd: 1, position: null },  /* fd 1 = stdout (not seekable) */
     { nativeFd: 2, position: null },  /* fd 2 = stderr (not seekable) */
   ];
+  const stdinBuf = [];
+  let stdinEOF = false;
+  let stdinWaiters = [];
+  let stdinListening = false;
+  function ensureStdinListening() {
+    if (stdinListening || typeof process === 'undefined' || !process.stdin) return;
+    stdinListening = true;
+    process.stdin.on('data', (chunk) => {
+      for (let i = 0; i < chunk.length; i++) stdinBuf.push(chunk[i]);
+      for (const w of stdinWaiters) w();
+      stdinWaiters = [];
+    });
+    process.stdin.on('end', () => {
+      stdinEOF = true;
+      for (const w of stdinWaiters) w();
+      stdinWaiters = [];
+    });
+    process.stdin.resume();
+  }
 
   function allocFd(entry) {
     for (let i = 3; i < fdTable.length; i++) {
@@ -100,6 +119,36 @@ function createFileSystem({ fs, ctx }) {
     }
     dirTable.push(entry);
     return dirTable.length - 1;
+  }
+
+  async function readImpl(fd, buf_ptr, count) {
+    if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+    const memory = getMemory();
+    const buf = new Uint8Array(memory.buffer, buf_ptr, count);
+    const entry = fdTable[fd];
+    try {
+      let n;
+      if (entry.isStdin) {
+        ensureStdinListening();
+        if (stdinBuf.length === 0 && !stdinEOF) {
+          await new Promise(resolve => { stdinWaiters.push(resolve); });
+        }
+        n = Math.min(count, stdinBuf.length);
+        for (let i = 0; i < n; i++) buf[i] = stdinBuf[i];
+        stdinBuf.splice(0, n);
+        return n;
+      } else if (entry.position === null) {
+        if (entry.nativeFd === undefined) throw new Error("read: fd " + fd + " has no nativeFd");
+        n = fs.readSync(entry.nativeFd, buf);
+      } else {
+        n = fs.readSync(entry.nativeFd, buf, 0, count, entry.position);
+        entry.position += n;
+      }
+      return n;
+    } catch (e) {
+      setErrno(e);
+      return -1;
+    }
   }
 
   /* Helper to write struct stat fields into WASM memory at buf_ptr.
@@ -155,27 +204,7 @@ function createFileSystem({ fs, ctx }) {
         fdTable[fd] = null;
         return 0;
       },
-      read: function (fd, buf_ptr, count) {
-        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
-        const memory = getMemory();
-        const buf = new Uint8Array(memory.buffer, buf_ptr, count);
-        const entry = fdTable[fd];
-        try {
-          let n;
-          if (entry.position === null) {
-            /* stdin or non-seekable */
-            if (entry.nativeFd === undefined) throw new Error("read: fd " + fd + " has no nativeFd");
-            n = fs.readSync(entry.nativeFd, buf);
-          } else {
-            n = fs.readSync(entry.nativeFd, buf, 0, count, entry.position);
-            entry.position += n;
-          }
-          return n;
-        } catch (e) {
-          setErrno(e);
-          return -1;
-        }
-      },
+      read: function () { /* placeholder — replaced after pipe patching */ },
       write: function (fd, buf_ptr, count) {
         if (fd === 1 || fd === 2) {
           const memory = getMemory();
@@ -491,10 +520,16 @@ function createFileSystem({ fs, ctx }) {
       },
       __tcsetattr: function (fd, actions, iflag, oflag, cflag, lflag) {
         if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        const wasCanon = !!(termiosState.lflag & 0x100);
+        const isCanon = !!(lflag & 0x100);
         termiosState.iflag = iflag;
         termiosState.oflag = oflag;
         termiosState.cflag = cflag;
         termiosState.lflag = lflag;
+        if (typeof process !== 'undefined' && process.stdin && typeof process.stdin.setRawMode === 'function') {
+          if (wasCanon && !isCanon) process.stdin.setRawMode(true);
+          else if (!wasCanon && isCanon) process.stdin.setRawMode(false);
+        }
         return 0;
       },
       __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
@@ -513,22 +548,83 @@ function createFileSystem({ fs, ctx }) {
         await new Promise(resolve => setTimeout(resolve, Math.max(1, ms)));
         return 0;
       }),
-      __select_timeout: new WebAssembly.Suspending(async function (sec, usec) {
-        const ms = sec * 1000 + usec / 1000;
-        if (ms > 0) await new Promise(resolve => setTimeout(resolve, ms));
-        return 0;
+      __select_impl: new WebAssembly.Suspending(async function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_sec, timeout_usec, has_timeout) {
+        ensureStdinListening();
+        const mem = new DataView(getMemory().buffer);
+        const FDS_WORDS = 2;
+        function readBits(ptr) {
+          if (!ptr) return null;
+          const bits = [];
+          for (let i = 0; i < FDS_WORDS; i++) bits.push(mem.getInt32(ptr + i * 4, true));
+          return bits;
+        }
+        function writeBits(ptr, bits) {
+          if (!ptr) return;
+          for (let i = 0; i < FDS_WORDS; i++) mem.setInt32(ptr + i * 4, bits[i], true);
+        }
+        function isBitSet(bits, fd) { return bits && (bits[fd >> 5] & (1 << (fd & 31))) !== 0; }
+        function checkFds() {
+          const rIn = readBits(readfds_ptr), wIn = readBits(writefds_ptr), eIn = readBits(exceptfds_ptr);
+          const rOut = rIn ? [0, 0] : null, wOut = wIn ? [0, 0] : null, eOut = eIn ? [0, 0] : null;
+          let count = 0;
+          for (let fd = 0; fd < nfds && fd < 64; fd++) {
+            if (fd >= fdTable.length || !fdTable[fd]) continue;
+            const entry = fdTable[fd];
+            if (rIn && isBitSet(rIn, fd)) {
+              let ready = false;
+              if (entry.type === 'pipe') {
+                ready = entry.pipe.buffer.length > 0 || entry.pipe.closed.write;
+              } else if (entry.isStdin) {
+                ready = stdinBuf.length > 0 || stdinEOF;
+              } else if (entry.position !== null) {
+                ready = true;
+              }
+              if (ready) { rOut[fd >> 5] |= (1 << (fd & 31)); count++; }
+            }
+            if (wIn && isBitSet(wIn, fd)) {
+              let ready = false;
+              if (entry.type === 'pipe') {
+                ready = !entry.pipe.closed.read;
+              } else {
+                ready = true;
+              }
+              if (ready) { wOut[fd >> 5] |= (1 << (fd & 31)); count++; }
+            }
+          }
+          return { count, rOut, wOut, eOut };
+        }
+        function writeResult(r) {
+          writeBits(readfds_ptr, r.rOut);
+          writeBits(writefds_ptr, r.wOut);
+          writeBits(exceptfds_ptr, r.eOut);
+          return r.count;
+        }
+        const result = checkFds();
+        if (result.count > 0 || (has_timeout && timeout_sec === 0 && timeout_usec === 0)) {
+          return writeResult(result);
+        }
+        const deadline = has_timeout ? Date.now() + timeout_sec * 1000 + timeout_usec / 1000 : Infinity;
+        while (true) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) return writeResult(checkFds());
+          await new Promise(resolve => {
+            const timer = setTimeout(resolve, Math.min(remaining, 50));
+            stdinWaiters.push(() => { clearTimeout(timer); resolve(); });
+          });
+          const r2 = checkFds();
+          if (r2.count > 0) return writeResult(r2);
+        }
       }),
     },
   };
 
   const termiosState = { iflag: 0x100, oflag: 0x1, cflag: 0xB00, lflag: 0x188 };
 
-  /* Patch read/write/close to handle pipe fds */
-  const origRead = result[ENV_KEY].read;
+  /* Patch read/write/close to handle pipe fds and async stdin */
   const origWrite = result[ENV_KEY].write;
   const origClose = result[ENV_KEY].close;
 
-  result[ENV_KEY].read = function (fd, buf_ptr, count) {
+  result[ENV_KEY].read = new WebAssembly.Suspending(async function (fd, buf_ptr, count) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
       const entry = fdTable[fd];
       const pipe = entry.pipe;
@@ -543,8 +639,8 @@ function createFileSystem({ fs, ctx }) {
       pipe.buffer.splice(0, n);
       return n;
     }
-    return origRead(fd, buf_ptr, count);
-  };
+    return readImpl(fd, buf_ptr, count);
+  });
 
   result[ENV_KEY].write = function (fd, buf_ptr, count) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
@@ -582,7 +678,7 @@ function createFileSystem({ fs, ctx }) {
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createBrowserFileSystem({ ctx }) {
-  const { readString, createVaReader, setErrnoName, getMemory, writeOut, writeErr, requestStdin, requestTerminalSize } = ctx;
+  const { readString, createVaReader, setErrnoName, getMemory, writeOut, writeErr, requestStdin, requestTerminalSize, requestStdinReady, requestStdinNotify } = ctx;
   const hasJSPI = typeof WebAssembly.Suspending === 'function';
 
   let cwd = '/';
@@ -1083,10 +1179,86 @@ function createBrowserFileSystem({ ctx }) {
       await new Promise(resolve => setTimeout(resolve, Math.max(1, ms)));
       return 0;
     }),
-    __select_timeout: new WebAssembly.Suspending(async function (sec, usec) {
-      const ms = sec * 1000 + usec / 1000;
-      if (ms > 0) await new Promise(resolve => setTimeout(resolve, ms));
-      return 0;
+    __select_impl: new WebAssembly.Suspending(async function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_sec, timeout_usec, has_timeout) {
+      const mem = new DataView(getMemory().buffer);
+      const FDS_WORDS = 2;
+      function readBits(ptr) {
+        if (!ptr) return null;
+        const bits = [];
+        for (let i = 0; i < FDS_WORDS; i++) bits.push(mem.getInt32(ptr + i * 4, true));
+        return bits;
+      }
+      function writeBits(ptr, bits) {
+        if (!ptr) return;
+        for (let i = 0; i < FDS_WORDS; i++) mem.setInt32(ptr + i * 4, bits[i], true);
+      }
+      function isBitSet(bits, fd) { return bits && (bits[fd >> 5] & (1 << (fd & 31))) !== 0; }
+      async function checkFds() {
+        const rIn = readBits(readfds_ptr), wIn = readBits(writefds_ptr), eIn = readBits(exceptfds_ptr);
+        const rOut = rIn ? [0, 0] : null, wOut = wIn ? [0, 0] : null, eOut = eIn ? [0, 0] : null;
+        let count = 0;
+        let needsStdinCheck = false;
+        for (let fd = 0; fd < nfds && fd < 64; fd++) {
+          if (fd >= fdTable.length || !fdTable[fd]) continue;
+          const entry = fdTable[fd];
+          if (rIn && isBitSet(rIn, fd)) {
+            if (entry.type === 'pipe') {
+              if (entry.pipe.buffer.length > 0 || entry.pipe.closed.write) {
+                rOut[fd >> 5] |= (1 << (fd & 31)); count++;
+              }
+            } else if (entry.position !== null) {
+              rOut[fd >> 5] |= (1 << (fd & 31)); count++;
+            } else {
+              needsStdinCheck = true;
+            }
+          }
+          if (wIn && isBitSet(wIn, fd)) {
+            let ready = entry.type === 'pipe' ? !entry.pipe.closed.read : true;
+            if (ready) { wOut[fd >> 5] |= (1 << (fd & 31)); count++; }
+          }
+        }
+        if (needsStdinCheck && requestStdinReady) {
+          const ready = await requestStdinReady();
+          if (ready) {
+            const rInBits = readBits(readfds_ptr);
+            for (let fd = 0; fd < nfds && fd < 64; fd++) {
+              if (fd >= fdTable.length || !fdTable[fd]) continue;
+              const entry = fdTable[fd];
+              if (rInBits && isBitSet(rInBits, fd) && entry.position === null && entry.type !== 'pipe') {
+                rOut[fd >> 5] |= (1 << (fd & 31)); count++;
+              }
+            }
+          }
+        }
+        return { count, rOut, wOut, eOut };
+      }
+      function writeResult(r) {
+        writeBits(readfds_ptr, r.rOut);
+        writeBits(writefds_ptr, r.wOut);
+        writeBits(exceptfds_ptr, r.eOut);
+        return r.count;
+      }
+      const result = await checkFds();
+      if (result.count > 0 || (has_timeout && timeout_sec === 0 && timeout_usec === 0)) {
+        return writeResult(result);
+      }
+      const stdinWait = requestStdinNotify ? requestStdinNotify() : null;
+      if (has_timeout) {
+        const ms = timeout_sec * 1000 + timeout_usec / 1000;
+        const promises = [new Promise(resolve => setTimeout(resolve, Math.max(1, ms)))];
+        if (stdinWait) promises.push(stdinWait);
+        await Promise.race(promises);
+        return writeResult(await checkFds());
+      }
+      if (stdinWait) {
+        await stdinWait;
+        return writeResult(await checkFds());
+      }
+      for (;;) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const r2 = await checkFds();
+        if (r2.count > 0) return writeResult(r2);
+      }
     }),
   };
 
@@ -1818,6 +1990,8 @@ async function runModule({
   useBrowserFS,
   requestStdin,
   requestTerminalSize,
+  requestStdinReady,
+  requestStdinNotify,
   getSDL,
   sdl: sdlOverride,
   getBrowserSDL,
@@ -2745,6 +2919,8 @@ async function runModule({
     writeErr: writeErr,
     requestStdin: requestStdin,
     requestTerminalSize: requestTerminalSize,
+    requestStdinReady: requestStdinReady,
+    requestStdinNotify: requestStdinNotify,
   };
 
   if (fsModule) {

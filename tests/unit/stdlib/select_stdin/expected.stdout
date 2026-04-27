@@ -1,0 +1,5 @@
+select_before_data: 0
+stdin_set_before: 0
+select_with_data: 1
+stdin_set_after: 1
+read: hello

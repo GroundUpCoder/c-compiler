@@ -34,6 +34,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 # --- Paths ---
@@ -208,6 +209,68 @@ def collect_tests(directory, filter_str=None):
 
 # --- Unit/Extra tests ---
 
+def run_with_events(cmd, events, timeout=30):
+    """Run a command, feeding stdin data at scheduled times.
+
+    events is a list of dicts: [{"at": <seconds>, "stdin": "<data>"}, ...]
+    Returns a subprocess.CompletedProcess-like object.
+    """
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True
+    )
+    sorted_events = sorted(events, key=lambda e: e["at"])
+    start = time.monotonic()
+
+    def feed_events():
+        for ev in sorted_events:
+            delay = ev["at"] - (time.monotonic() - start)
+            if delay > 0:
+                time.sleep(delay)
+            if proc.poll() is not None:
+                break
+            if "stdin" in ev:
+                try:
+                    proc.stdin.write(ev["stdin"])
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    break
+        try:
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    stdout_chunks = []
+    stderr_chunks = []
+
+    def read_stdout():
+        for chunk in iter(proc.stdout.readline, ''):
+            stdout_chunks.append(chunk)
+
+    def read_stderr():
+        for chunk in iter(proc.stderr.readline, ''):
+            stderr_chunks.append(chunk)
+
+    feeder = threading.Thread(target=feed_events, daemon=True)
+    out_reader = threading.Thread(target=read_stdout, daemon=True)
+    err_reader = threading.Thread(target=read_stderr, daemon=True)
+    feeder.start()
+    out_reader.start()
+    err_reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    out_reader.join(timeout=2)
+    err_reader.join(timeout=2)
+    feeder.join(timeout=1)
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, ''.join(stdout_chunks), ''.join(stderr_chunks)
+    )
+
+
 def run_single_test(test_dir, compiler_cmd):
     name = os.path.relpath(test_dir, SCRIPT_DIR)
 
@@ -269,7 +332,11 @@ def run_single_test(test_dir, compiler_cmd):
             return (name, False, "\n".join(compiler_errors))
 
         run_cmd = ["node", "--experimental-wasm-exnref", HOST_JS, wasm_path] + config.get("args", [])
-        run_result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
+        events = config.get("events", [])
+        if events:
+            run_result = run_with_events(run_cmd, events, timeout=30)
+        else:
+            run_result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
 
         errors = []
 

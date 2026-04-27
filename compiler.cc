@@ -1565,14 +1565,16 @@ typedef struct {
 #define FD_CLR(fd, set)   ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] &= ~(1UL << ((fd) % (8 * sizeof(unsigned long)))))
 #define FD_ISSET(fd, set) ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] & (1UL << ((fd) % (8 * sizeof(unsigned long)))))
 
-__import int __select_timeout(long sec, long usec);
+__import int __select_impl(int nfds, int *readfds, int *writefds, int *exceptfds, long timeout_sec, long timeout_usec, int has_timeout);
 
 static inline int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
-  (void)nfds; (void)readfds; (void)writefds; (void)exceptfds;
-  if (timeout) {
-    __select_timeout(timeout->tv_sec, timeout->tv_usec);
-  }
-  return 0;
+  return __select_impl(nfds,
+    readfds ? (int *)readfds->fds_bits : (int *)0,
+    writefds ? (int *)writefds->fds_bits : (int *)0,
+    exceptfds ? (int *)exceptfds->fds_bits : (int *)0,
+    timeout ? timeout->tv_sec : 0,
+    timeout ? timeout->tv_usec : 0,
+    timeout ? 1 : 0);
 }
   )"},
 

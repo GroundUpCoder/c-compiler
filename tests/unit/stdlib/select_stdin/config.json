@@ -1,0 +1,5 @@
+{
+  "events": [
+    {"at": 0.2, "stdin": "hello\n"}
+  ]
+}

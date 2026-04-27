@@ -3,6 +3,7 @@
 #include <string.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <unistd.h>
 
 #define MAX_SNAKE 1000
@@ -235,13 +236,21 @@ int main(void) {
     init_game();
 
     while (!game_over) {
-        int new_dx = dir_x, new_dy = dir_y;
-        poll_key(&new_dx, &new_dy);
-        dir_x = new_dx;
-        dir_y = new_dy;
+        fd_set rfds;
+        struct timeval tv;
+        FD_ZERO(&rfds);
+        FD_SET(STDIN_FILENO, &rfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;
+
+        int ret = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+        if (ret > 0 && FD_ISSET(STDIN_FILENO, &rfds)) {
+            int new_dx = dir_x, new_dy = dir_y;
+            poll_key(&new_dx, &new_dy);
+            dir_x = new_dx;
+            dir_y = new_dy;
+        }
         step();
-        if (game_over) break;
-        usleep(100000);
     }
 
     move_cursor(rows / 2, cols / 2 - 5);
@@ -254,10 +263,12 @@ int main(void) {
     write_str("\033[0m");
 
     move_cursor(rows / 2 + 3, cols / 2 - 10);
-    write_str("Press any key to exit...");
+    write_str("Press q to exit...");
 
     char c;
-    read(STDIN_FILENO, &c, 1);
+    do {
+        read(STDIN_FILENO, &c, 1);
+    } while (c != 'q' && c != 'Q');
 
     show_cursor();
     clear_screen();

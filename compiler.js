@@ -9785,14 +9785,16 @@ typedef struct {
 #define FD_CLR(fd, set)   ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] &= ~(1UL << ((fd) % (8 * sizeof(unsigned long)))))
 #define FD_ISSET(fd, set) ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] & (1UL << ((fd) % (8 * sizeof(unsigned long)))))
 
-__import int __select_timeout(long sec, long usec);
+__import int __select_impl(int nfds, int *readfds, int *writefds, int *exceptfds, long timeout_sec, long timeout_usec, int has_timeout);
 
 static inline int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
-  (void)nfds; (void)readfds; (void)writefds; (void)exceptfds;
-  if (timeout) {
-    __select_timeout(timeout->tv_sec, timeout->tv_usec);
-  }
-  return 0;
+  return __select_impl(nfds,
+    readfds ? (int *)readfds->fds_bits : (int *)0,
+    writefds ? (int *)writefds->fds_bits : (int *)0,
+    exceptfds ? (int *)exceptfds->fds_bits : (int *)0,
+    timeout ? timeout->tv_sec : 0,
+    timeout ? timeout->tv_usec : 0,
+    timeout ? 1 : 0);
 }
   `,
   "byteswap.h": `
@@ -13825,6 +13827,8 @@ var wasmInstance = null;
 var decoder = new TextDecoder();
 var stdinResolve = null;
 var termSizeResolve = null;
+var stdinReadyResolve = null;
+var stdinNotifyResolvers = [];
 
 self.onmessage = function(e) {
   var msg = e.data;
@@ -13837,6 +13841,12 @@ self.onmessage = function(e) {
     if (stdinResolve) { var r = stdinResolve; stdinResolve = null; r(msg.data ? new Uint8Array(msg.data) : null); }
   } else if (msg.type === 'terminal-size') {
     if (termSizeResolve) { var r = termSizeResolve; termSizeResolve = null; r({ rows: msg.rows, cols: msg.cols }); }
+  } else if (msg.type === 'stdin-ready-response') {
+    if (stdinReadyResolve) { var r = stdinReadyResolve; stdinReadyResolve = null; r(msg.ready); }
+  } else if (msg.type === 'stdin-data-available') {
+    var resolvers = stdinNotifyResolvers;
+    stdinNotifyResolvers = [];
+    for (var ri = 0; ri < resolvers.length; ri++) resolvers[ri]();
   }
 };
 
@@ -13864,6 +13874,17 @@ async function doRun(msg) {
       return new Promise(function(resolve) {
         termSizeResolve = resolve;
         self.postMessage({ type: 'terminal-size-request' });
+      });
+    },
+    requestStdinReady: function() {
+      return new Promise(function(resolve) {
+        stdinReadyResolve = resolve;
+        self.postMessage({ type: 'stdin-ready-request' });
+      });
+    },
+    requestStdinNotify: function() {
+      return new Promise(function(resolve) {
+        stdinNotifyResolvers.push(resolve);
       });
     },
   };
@@ -14002,6 +14023,7 @@ window.onunhandledrejection = function(e) {
   var ANSI_RED = '\\x1b[31m';
   var ANSI_RESET = '\\x1b[0m';
 
+  var fitAddon = null;
   if (HAS_XTERM && typeof Terminal === 'function') {
     term = new Terminal({
       cursorBlink: true,
@@ -14010,10 +14032,9 @@ window.onunhandledrejection = function(e) {
       theme: { background: '#0d0d1a', foreground: '#b0f0b0', cursor: '#b0f0b0' },
     });
     if (typeof FitAddon === 'function') {
-      var fitAddon = new FitAddon();
+      fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
       term.open(terminalEl);
-      fitAddon.fit();
       window.addEventListener('resize', function() { fitAddon.fit(); });
     } else {
       term.open(terminalEl);
@@ -14029,6 +14050,7 @@ window.onunhandledrejection = function(e) {
         } else {
           for (var b = 0; b < bytes.length; b++) stdinRawBuffer.push(bytes[b]);
         }
+        if (worker) worker.postMessage({ type: 'stdin-data-available' });
         return;
       }
       if (!stdinResolve) return;
@@ -14146,7 +14168,7 @@ window.onunhandledrejection = function(e) {
 
   async function start() {
     overlay.style.display = 'none';
-    if (term) { terminalEl.style.display = 'block'; term.focus(); }
+    if (term) { term.clear(); terminalEl.style.display = 'block'; if (fitAddon) fitAddon.fit(); term.focus(); }
     setStatus('Writing files...');
 
     var wasmBytes = base64ToBytes(WASM_BASE64);
@@ -14162,6 +14184,12 @@ window.onunhandledrejection = function(e) {
     var workerUrl = URL.createObjectURL(blob);
     worker = new Worker(workerUrl);
 
+    var newCanvas = document.createElement('canvas');
+    newCanvas.id = 'canvas';
+    newCanvas.width = canvas.width;
+    newCanvas.height = canvas.height;
+    canvas.replaceWith(newCanvas);
+    canvas = newCanvas;
     var offscreen = canvas.transferControlToOffscreen();
 
     var sharedAudio = null;
@@ -14220,6 +14248,9 @@ window.onunhandledrejection = function(e) {
         var rows = 24, cols = 80;
         if (term) { rows = term.rows; cols = term.cols; }
         worker.postMessage({ type: 'terminal-size', rows: rows, cols: cols });
+      } else if (msg.type === 'stdin-ready-request') {
+        var ready = stdinRawMode ? stdinRawBuffer.length > 0 : stdinLine.length > 0;
+        worker.postMessage({ type: 'stdin-ready-response', ready: ready });
       } else if (msg.type && msg.type.startsWith('audio-')) {
         if (audioReceiver) audioReceiver.handleMessage(msg);
       }
@@ -14236,6 +14267,13 @@ window.onunhandledrejection = function(e) {
       document.removeEventListener('keyup', onKeyup, true);
       if (audioReceiver) audioReceiver.close();
       worker = null;
+      stdinRawMode = false;
+      stdinRawBuffer = [];
+      opostMode = true;
+      stdinLine = '';
+      hasSDL = false;
+      overlay.style.display = 'flex';
+      overlay.focus();
     }
 
     document.addEventListener('keydown', onKeydown, true);
