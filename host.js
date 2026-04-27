@@ -480,8 +480,48 @@ function createFileSystem({ fs, ctx }) {
         if (fd <= 2) return 1; /* stdin/stdout/stderr are ttys */
         return 0;
       },
+      __tcgetattr: function (fd, iflag_ptr, oflag_ptr, cflag_ptr, lflag_ptr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        const mem = new DataView(getMemory().buffer);
+        mem.setInt32(iflag_ptr, termiosState.iflag, true);
+        mem.setInt32(oflag_ptr, termiosState.oflag, true);
+        mem.setInt32(cflag_ptr, termiosState.cflag, true);
+        mem.setInt32(lflag_ptr, termiosState.lflag, true);
+        return 0;
+      },
+      __tcsetattr: function (fd, actions, iflag, oflag, cflag, lflag) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        termiosState.iflag = iflag;
+        termiosState.oflag = oflag;
+        termiosState.cflag = cflag;
+        termiosState.lflag = lflag;
+        return 0;
+      },
+      __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        const mem = new DataView(getMemory().buffer);
+        mem.setInt32(rows_ptr, process.stdout.rows || 24, true);
+        mem.setInt32(cols_ptr, process.stdout.columns || 80, true);
+        return 0;
+      },
+      usleep: new WebAssembly.Suspending(async function (usec) {
+        await new Promise(resolve => setTimeout(resolve, Math.max(1, usec / 1000)));
+        return 0;
+      }),
+      __nanosleep: new WebAssembly.Suspending(async function (sec, nsec) {
+        const ms = sec * 1000 + nsec / 1e6;
+        await new Promise(resolve => setTimeout(resolve, Math.max(1, ms)));
+        return 0;
+      }),
+      __select_timeout: new WebAssembly.Suspending(async function (sec, usec) {
+        const ms = sec * 1000 + usec / 1000;
+        if (ms > 0) await new Promise(resolve => setTimeout(resolve, ms));
+        return 0;
+      }),
     },
   };
+
+  const termiosState = { iflag: 0x100, oflag: 0x1, cflag: 0xB00, lflag: 0x188 };
 
   /* Patch read/write/close to handle pipe fds */
   const origRead = result[ENV_KEY].read;
@@ -542,7 +582,7 @@ function createFileSystem({ fs, ctx }) {
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createBrowserFileSystem({ ctx }) {
-  const { readString, createVaReader, setErrnoName, getMemory, writeOut, writeErr, requestStdin } = ctx;
+  const { readString, createVaReader, setErrnoName, getMemory, writeOut, writeErr, requestStdin, requestTerminalSize } = ctx;
   const hasJSPI = typeof WebAssembly.Suspending === 'function';
 
   let cwd = '/';
@@ -1008,7 +1048,49 @@ function createBrowserFileSystem({ ctx }) {
       if (fd <= 2) return 1;
       return 0;
     },
+    __tcgetattr: function (fd, iflag_ptr, oflag_ptr, cflag_ptr, lflag_ptr) {
+      if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+      const mem = new DataView(getMemory().buffer);
+      mem.setInt32(iflag_ptr, browserTermiosState.iflag, true);
+      mem.setInt32(oflag_ptr, browserTermiosState.oflag, true);
+      mem.setInt32(cflag_ptr, browserTermiosState.cflag, true);
+      mem.setInt32(lflag_ptr, browserTermiosState.lflag, true);
+      return 0;
+    },
+    __tcsetattr: function (fd, actions, iflag, oflag, cflag, lflag) {
+      if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+      browserTermiosState.iflag = iflag;
+      browserTermiosState.oflag = oflag;
+      browserTermiosState.cflag = cflag;
+      browserTermiosState.lflag = lflag;
+      self.postMessage({ type: 'termios-mode', icanon: !!(lflag & 0x100), echo: !!(lflag & 0x8), opost: !!(oflag & 0x1) });
+      return 0;
+    },
+    __ioctl_tiocgwinsz: new WebAssembly.Suspending(async function (fd, rows_ptr, cols_ptr) {
+      if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+      const size = await requestTerminalSize();
+      const mem = new DataView(getMemory().buffer);
+      mem.setInt32(rows_ptr, size.rows, true);
+      mem.setInt32(cols_ptr, size.cols, true);
+      return 0;
+    }),
+    usleep: new WebAssembly.Suspending(async function (usec) {
+      await new Promise(resolve => setTimeout(resolve, Math.max(1, usec / 1000)));
+      return 0;
+    }),
+    __nanosleep: new WebAssembly.Suspending(async function (sec, nsec) {
+      const ms = sec * 1000 + nsec / 1e6;
+      await new Promise(resolve => setTimeout(resolve, Math.max(1, ms)));
+      return 0;
+    }),
+    __select_timeout: new WebAssembly.Suspending(async function (sec, usec) {
+      const ms = sec * 1000 + usec / 1000;
+      if (ms > 0) await new Promise(resolve => setTimeout(resolve, ms));
+      return 0;
+    }),
   };
+
+  const browserTermiosState = { iflag: 0x100, oflag: 0x1, cflag: 0xB00, lflag: 0x188 };
 
   return { [ENV_KEY]: env };
 }
@@ -1735,6 +1817,7 @@ async function runModule({
   fs: fsModule,
   useBrowserFS,
   requestStdin,
+  requestTerminalSize,
   getSDL,
   sdl: sdlOverride,
   getBrowserSDL,
@@ -2661,6 +2744,7 @@ async function runModule({
     writeOut: writeOut,
     writeErr: writeErr,
     requestStdin: requestStdin,
+    requestTerminalSize: requestTerminalSize,
   };
 
   if (fsModule) {

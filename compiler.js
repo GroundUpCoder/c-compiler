@@ -9772,6 +9772,28 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
   `,
   "sys/select.h": `
 #pragma once
+#include <sys/time.h>
+
+#define FD_SETSIZE 64
+
+typedef struct {
+  unsigned long fds_bits[FD_SETSIZE / (8 * sizeof(unsigned long))];
+} fd_set;
+
+#define FD_ZERO(set)  do { for (int _i = 0; _i < (int)(sizeof((set)->fds_bits)/sizeof((set)->fds_bits[0])); _i++) (set)->fds_bits[_i] = 0; } while(0)
+#define FD_SET(fd, set)   ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] |= (1UL << ((fd) % (8 * sizeof(unsigned long)))))
+#define FD_CLR(fd, set)   ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] &= ~(1UL << ((fd) % (8 * sizeof(unsigned long)))))
+#define FD_ISSET(fd, set) ((set)->fds_bits[(fd) / (8 * sizeof(unsigned long))] & (1UL << ((fd) % (8 * sizeof(unsigned long)))))
+
+__import int __select_timeout(long sec, long usec);
+
+static inline int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
+  (void)nfds; (void)readfds; (void)writefds; (void)exceptfds;
+  if (timeout) {
+    __select_timeout(timeout->tv_sec, timeout->tv_usec);
+  }
+  return 0;
+}
   `,
   "byteswap.h": `
 #pragma once
@@ -10825,6 +10847,11 @@ char *asctime(const struct tm *tm);
 char *ctime(const time_t *timep);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
+__import int __nanosleep(long sec, long nsec);
+static inline int nanosleep(const struct timespec *req, struct timespec *rem) {
+  (void)rem;
+  return __nanosleep(req->tv_sec, req->tv_nsec);
+}
   `,
   "uchar.h": `
 #pragma once
@@ -10862,6 +10889,153 @@ __import int dup(int oldfd);
 __import int dup2(int oldfd, int newfd);
 __import int getpid(void);
 __import int isatty(int fd);
+__import int usleep(unsigned int usec);
+  `,
+  "termios.h": `
+#pragma once
+#include <sys/types.h>
+
+typedef unsigned int tcflag_t;
+typedef unsigned char cc_t;
+typedef unsigned int speed_t;
+
+#define NCCS 20
+
+struct termios {
+  tcflag_t c_iflag;
+  tcflag_t c_oflag;
+  tcflag_t c_cflag;
+  tcflag_t c_lflag;
+  cc_t     c_cc[NCCS];
+  speed_t  c_ispeed;
+  speed_t  c_ospeed;
+};
+
+#define IGNBRK  0x00001
+#define BRKINT  0x00002
+#define IGNPAR  0x00004
+#define PARMRK  0x00008
+#define INPCK   0x00010
+#define ISTRIP  0x00020
+#define INLCR   0x00040
+#define IGNCR   0x00080
+#define ICRNL   0x00100
+#define IXON    0x00200
+#define IXOFF   0x00400
+#define IXANY   0x00800
+#define IMAXBEL 0x02000
+
+#define OPOST   0x00001
+#define ONLCR   0x00002
+#define OCRNL   0x00004
+
+#define CSIZE   0x00300
+#define CS5     0x00000
+#define CS6     0x00100
+#define CS7     0x00200
+#define CS8     0x00300
+#define CSTOPB  0x00400
+#define CREAD   0x00800
+#define PARENB  0x01000
+#define PARODD  0x02000
+#define HUPCL   0x04000
+#define CLOCAL  0x08000
+
+#define ECHOE   0x00002
+#define ECHOK   0x00004
+#define ECHO    0x00008
+#define ECHONL  0x00010
+#define ISIG    0x00080
+#define ICANON  0x00100
+#define IEXTEN  0x00400
+#define TOSTOP  0x00800
+#define NOFLSH  0x80000000
+
+#define VEOF    0
+#define VEOL    1
+#define VERASE  3
+#define VKILL   5
+#define VINTR   8
+#define VQUIT   9
+#define VSUSP   10
+#define VSTART  12
+#define VSTOP   13
+#define VMIN    16
+#define VTIME   17
+
+#define TCSANOW   0
+#define TCSADRAIN 1
+#define TCSAFLUSH 2
+
+#define B0      0
+#define B9600   9600
+#define B19200  19200
+#define B38400  38400
+#define B115200 115200
+
+__import int __tcgetattr(int fd, int *iflag, int *oflag, int *cflag, int *lflag);
+__import int __tcsetattr(int fd, int actions, int iflag, int oflag, int cflag, int lflag);
+
+static inline int tcgetattr(int fd, struct termios *t) {
+  int iflag, oflag, cflag, lflag;
+  int r = __tcgetattr(fd, &iflag, &oflag, &cflag, &lflag);
+  if (r == 0) {
+    t->c_iflag = (tcflag_t)iflag;
+    t->c_oflag = (tcflag_t)oflag;
+    t->c_cflag = (tcflag_t)cflag;
+    t->c_lflag = (tcflag_t)lflag;
+  }
+  return r;
+}
+
+static inline int tcsetattr(int fd, int actions, const struct termios *t) {
+  return __tcsetattr(fd, actions, (int)t->c_iflag, (int)t->c_oflag, (int)t->c_cflag, (int)t->c_lflag);
+}
+
+static inline void cfmakeraw(struct termios *t) {
+  t->c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+  t->c_oflag &= ~OPOST;
+  t->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+  t->c_cflag &= ~(CSIZE | PARENB);
+  t->c_cflag |= CS8;
+  t->c_cc[VMIN] = 1;
+  t->c_cc[VTIME] = 0;
+}
+
+static inline speed_t cfgetispeed(const struct termios *t) { return t->c_ispeed; }
+static inline speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed; }
+static inline int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
+static inline int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
+  `,
+  "sys/ioctl.h": `
+#pragma once
+
+#define TIOCGWINSZ 0x5413
+
+struct winsize {
+  unsigned short ws_row;
+  unsigned short ws_col;
+  unsigned short ws_xpixel;
+  unsigned short ws_ypixel;
+};
+
+__import int __ioctl_tiocgwinsz(int fd, int *rows, int *cols);
+
+static inline int ioctl(int fd, unsigned long request, void *arg) {
+  if (request == TIOCGWINSZ) {
+    struct winsize *ws = (struct winsize *)arg;
+    int rows, cols;
+    int r = __ioctl_tiocgwinsz(fd, &rows, &cols);
+    if (r == 0) {
+      ws->ws_row = (unsigned short)rows;
+      ws->ws_col = (unsigned short)cols;
+      ws->ws_xpixel = 0;
+      ws->ws_ypixel = 0;
+    }
+    return r;
+  }
+  return -1;
+}
   `,
 };
 
@@ -13650,6 +13824,7 @@ var sdlRef = null;
 var wasmInstance = null;
 var decoder = new TextDecoder();
 var stdinResolve = null;
+var termSizeResolve = null;
 
 self.onmessage = function(e) {
   var msg = e.data;
@@ -13660,6 +13835,8 @@ self.onmessage = function(e) {
     if (sdlRef) sdlRef.pushQuitEvent(1);
   } else if (msg.type === 'stdin-response') {
     if (stdinResolve) { var r = stdinResolve; stdinResolve = null; r(msg.data ? new Uint8Array(msg.data) : null); }
+  } else if (msg.type === 'terminal-size') {
+    if (termSizeResolve) { var r = termSizeResolve; termSizeResolve = null; r({ rows: msg.rows, cols: msg.cols }); }
   }
 };
 
@@ -13681,6 +13858,12 @@ async function doRun(msg) {
       return new Promise(function(resolve) {
         stdinResolve = resolve;
         self.postMessage({ type: 'stdin-request', maxBytes: maxBytes });
+      });
+    },
+    requestTerminalSize: function() {
+      return new Promise(function(resolve) {
+        termSizeResolve = resolve;
+        self.postMessage({ type: 'terminal-size-request' });
       });
     },
   };
@@ -13731,7 +13914,7 @@ body{background:#000;color:#0f0;font-family:monospace;height:100vh;display:flex;
 #log-content{flex:1;overflow-y:auto;padding:4px 8px;font-size:12px;white-space:pre-wrap;background:#0a0a0a;min-height:0}
 #log-content .log-out{color:#0f0}
 #log-content .log-err{color:#f44}
-#status{padding:4px 8px;font-size:12px;color:#888;display:none}
+#status{position:fixed;bottom:8px;right:8px;padding:4px 12px;font-size:12px;color:#aaa;background:rgba(0,0,0,0.7);border:1px solid #333;border-radius:4px;display:none;opacity:1;transition:opacity 0.5s ease;pointer-events:none;z-index:20}
 </style>
 </head>
 <body>
@@ -13784,6 +13967,9 @@ window.onunhandledrejection = function(e) {
   var term = null;
   var stdinLine = '';
   var stdinResolve = null;
+  var stdinRawMode = false;
+  var stdinRawBuffer = [];
+  var opostMode = true;
   var logExpanded = false;
   var showStdout = true;
   var showStderr = true;
@@ -13833,6 +14019,18 @@ window.onunhandledrejection = function(e) {
       term.open(terminalEl);
     }
     term.onData(function(data) {
+      if (stdinRawMode) {
+        var encoder = new TextEncoder();
+        var bytes = encoder.encode(data);
+        if (stdinResolve) {
+          var resolve = stdinResolve;
+          stdinResolve = null;
+          resolve(bytes);
+        } else {
+          for (var b = 0; b < bytes.length; b++) stdinRawBuffer.push(bytes[b]);
+        }
+        return;
+      }
       if (!stdinResolve) return;
       for (var i = 0; i < data.length; i++) {
         var ch = data[i];
@@ -13904,8 +14102,12 @@ window.onunhandledrejection = function(e) {
       return;
     }
     if (term) {
-      var escaped = text.replace(/\\n/g, '\\r\\n');
-      term.write((isErr ? ANSI_RED : ANSI_GREEN) + escaped + ANSI_RESET);
+      if (!opostMode) {
+        term.write(text);
+      } else {
+        var escaped = text.replace(/\\n/g, '\\r\\n');
+        term.write((isErr ? ANSI_RED : ANSI_GREEN) + escaped + ANSI_RESET);
+      }
     } else {
       output.style.display = 'block';
       var span = document.createElement('span');
@@ -13916,9 +14118,17 @@ window.onunhandledrejection = function(e) {
     }
   }
 
+  var statusTimer = null;
   function setStatus(text) {
-    status.style.display = text ? 'block' : 'none';
+    if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+    if (!text) { status.style.display = 'none'; return; }
     status.textContent = text;
+    status.style.display = 'block';
+    status.style.opacity = '1';
+    statusTimer = setTimeout(function() {
+      status.style.opacity = '0';
+      statusTimer = setTimeout(function() { status.style.display = 'none'; }, 500);
+    }, 2000);
   }
 
   async function writeToOPFS(path, data) {
@@ -13989,10 +14199,27 @@ window.onunhandledrejection = function(e) {
         cleanup();
       } else if (msg.type === 'stdin-request') {
         if (term) {
-          stdinResolve = function(data) {
-            worker.postMessage({ type: 'stdin-response', data: data ? Array.from(data) : null });
-          };
+          if (stdinRawMode) {
+            if (stdinRawBuffer.length > 0) {
+              var chunk = new Uint8Array(stdinRawBuffer);
+              stdinRawBuffer = [];
+              worker.postMessage({ type: 'stdin-response', data: Array.from(chunk) });
+            } else {
+              worker.postMessage({ type: 'stdin-response', data: null });
+            }
+          } else {
+            stdinResolve = function(data) {
+              worker.postMessage({ type: 'stdin-response', data: data ? Array.from(data) : null });
+            };
+          }
         }
+      } else if (msg.type === 'termios-mode') {
+        stdinRawMode = !msg.icanon;
+        opostMode = msg.opost;
+      } else if (msg.type === 'terminal-size-request') {
+        var rows = 24, cols = 80;
+        if (term) { rows = term.rows; cols = term.cols; }
+        worker.postMessage({ type: 'terminal-size', rows: rows, cols: cols });
       } else if (msg.type && msg.type.startsWith('audio-')) {
         if (audioReceiver) audioReceiver.handleMessage(msg);
       }
