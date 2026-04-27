@@ -5,6 +5,9 @@
   "compilerArgs": [
     "-INuked-OPL3"
   ],
+  "dataFiles": {
+    "data/doom1.wad": "/doom1.wad"
+  },
   "sources": [
     "Nuked-OPL3/opl3.c",
     "src/am_map.c",

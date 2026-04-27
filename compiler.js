@@ -14325,7 +14325,35 @@ return { generate };
 function main() {
   const fs = require("fs");
   const path = require("path");
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  const args = [];
+  for (const arg of rawArgs) {
+    if (!arg.startsWith("-") && arg.endsWith(".json")) {
+      try {
+        const proj = JSON.parse(fs.readFileSync(arg, "utf-8"));
+        const projDir = path.dirname(path.resolve(arg));
+        if (proj.compilerArgs) {
+          for (const ca of proj.compilerArgs) {
+            if (ca.startsWith("-I")) args.push("-I" + path.resolve(projDir, ca.substring(2)));
+            else args.push(ca);
+          }
+        }
+        if (proj.sources) {
+          for (const src of proj.sources) args.push(path.resolve(projDir, src));
+        }
+        if (proj.dataFiles) {
+          for (const [src, dest] of Object.entries(proj.dataFiles)) {
+            args.push("--opfs-file", path.resolve(projDir, src) + ":" + dest);
+          }
+        }
+      } catch (e) {
+        process.stderr.write(`Error reading project file ${arg}: ${e.message}\n`);
+        process.exit(1);
+      }
+    } else {
+      args.push(arg);
+    }
+  }
 
   let action = "compile";
   let outputFile = "a.wasm";

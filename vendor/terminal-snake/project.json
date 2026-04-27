@@ -1,0 +1,7 @@
+{
+  "name": "terminal-snake",
+  "description": "Snake game for terminal with select()-based input",
+  "sources": [
+    "src/snake.c"
+  ]
+}

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bit>
 #include <cstdarg>
 #include <cstddef>
@@ -8,6 +9,7 @@
 #include <ctime>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <functional>
 #include <iostream>
@@ -18757,19 +18759,67 @@ int main(int argc, char *argv[]) {
   ppRegistry.defines[intern("__SIZEOF_SIZE_T__")] = "4";
   ppRegistry.defines[intern("__SIZEOF_PTRDIFF_T__")] = "4";
 
-  // Parse command-line arguments
+  // Expand project.json files into args
+  std::vector<std::string> expandedArgs;
   for (int i = 1; i < argc; ++i) {
     std::string_view arg = argv[i];
+    if (!arg.starts_with("-") && arg.ends_with(".json")) {
+      std::filesystem::path jsonPath(arg);
+      auto projDir = std::filesystem::absolute(jsonPath).parent_path();
+      std::string argStr{arg};
+      std::ifstream f{argStr};
+      if (!f.is_open()) {
+        std::cerr << "Error reading project file " << arg << "\n";
+        return 1;
+      }
+      std::string content{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
+      auto extractStrings = [&](const std::string &key) -> std::vector<std::string> {
+        std::vector<std::string> result;
+        auto pos = content.find("\"" + key + "\"");
+        if (pos == std::string::npos) return result;
+        pos = content.find('[', pos);
+        if (pos == std::string::npos) return result;
+        auto end = content.find(']', pos);
+        if (end == std::string::npos) return result;
+        std::string_view arr(content.data() + pos + 1, end - pos - 1);
+        size_t p = 0;
+        while (p < arr.size()) {
+          auto q1 = arr.find('"', p);
+          if (q1 == std::string_view::npos) break;
+          auto q2 = arr.find('"', q1 + 1);
+          if (q2 == std::string_view::npos) break;
+          result.emplace_back(arr.substr(q1 + 1, q2 - q1 - 1));
+          p = q2 + 1;
+        }
+        return result;
+      };
+      for (auto &ca : extractStrings("compilerArgs")) {
+        if (ca.starts_with("-I"))
+          expandedArgs.push_back("-I" + (projDir / ca.substr(2)).string());
+        else
+          expandedArgs.push_back(std::move(ca));
+      }
+      for (auto &src : extractStrings("sources"))
+        expandedArgs.push_back((projDir / src).string());
+    } else {
+      expandedArgs.emplace_back(arg);
+    }
+  }
+
+  // Parse command-line arguments
+  int argc2 = (int)expandedArgs.size();
+  for (int i = 0; i < argc2; ++i) {
+    std::string_view arg = expandedArgs[i];
 
     if (arg == "-h" || arg == "--help") {
       printUsage(argv[0]);
       return 0;
     } else if (arg == "-a") {
-      if (i + 1 >= argc) {
+      if (i + 1 >= argc2) {
         std::cerr << "Error: -a requires an argument\n";
         return 1;
       }
-      std::string_view actionStr = argv[++i];
+      std::string_view actionStr = expandedArgs[++i];
       if (actionStr == "parse") {
         action = Action::PARSE;
       } else if (actionStr == "link") {
@@ -18792,7 +18842,7 @@ int main(int argc, char *argv[]) {
         return 1;
       }
     } else if (arg == "-o") {
-      if (i + 1 >= argc) {
+      if (i + 1 >= argc2) {
         std::cerr << "Error: -o requires an argument\n";
         return 1;
       }
@@ -18800,7 +18850,7 @@ int main(int argc, char *argv[]) {
         std::cerr << "Error: -o specified multiple times\n";
         return 1;
       }
-      outputFilename = argv[++i];
+      outputFilename = expandedArgs[++i];
       explicitOutputGiven = true;
     } else if (arg.starts_with("-D")) {
       std::string_view def = arg.substr(2);
@@ -18834,11 +18884,11 @@ int main(int argc, char *argv[]) {
         return 1;
       }
     } else if (arg == "--stack-pages") {
-      if (i + 1 >= argc) {
+      if (i + 1 >= argc2) {
         std::cerr << "Error: --stack-pages requires an argument\n";
         return 1;
       }
-      stackPages = std::stoi(argv[++i]);
+      stackPages = std::stoi(expandedArgs[++i]);
     } else if (arg == "--dump-functions") {
       dumpFunctions = true;
     } else if (arg == "--no-undefined") {
@@ -18860,11 +18910,11 @@ int main(int argc, char *argv[]) {
     } else if (arg == "--time-report") {
       compilerOptions.timeReport = true;
     } else if (arg == "--require-source") {
-      if (i + 1 >= argc) {
+      if (i + 1 >= argc2) {
         std::cerr << "Error: --require-source requires an argument\n";
         return 1;
       }
-      compilerOptions.requireSources.push_back(argv[++i]);
+      compilerOptions.requireSources.push_back(expandedArgs[++i]);
     } else if (arg == "--allow-old-c") {
       compilerOptions.allowImplicitInt = true;
       compilerOptions.allowEmptyParams = true;
