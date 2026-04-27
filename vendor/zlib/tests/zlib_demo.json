@@ -1,0 +1,10 @@
+{
+  "name": "zlib-demo",
+  "description": "zlib compress/decompress self-test",
+  "deps": [
+    "../project.json"
+  ],
+  "sources": [
+    "zlib_demo.c"
+  ]
+}

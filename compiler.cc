@@ -18760,47 +18760,80 @@ int main(int argc, char *argv[]) {
   ppRegistry.defines[intern("__SIZEOF_PTRDIFF_T__")] = "4";
 
   // Expand project.json files into args
+  auto extractJsonStrings = [](const std::string &content, const std::string &key) -> std::vector<std::string> {
+    std::vector<std::string> result;
+    auto pos = content.find("\"" + key + "\"");
+    if (pos == std::string::npos) return result;
+    pos = content.find('[', pos);
+    if (pos == std::string::npos) return result;
+    auto end = content.find(']', pos);
+    if (end == std::string::npos) return result;
+    std::string_view arr(content.data() + pos + 1, end - pos - 1);
+    size_t p = 0;
+    while (p < arr.size()) {
+      auto q1 = arr.find('"', p);
+      if (q1 == std::string_view::npos) break;
+      auto q2 = arr.find('"', q1 + 1);
+      if (q2 == std::string_view::npos) break;
+      result.emplace_back(arr.substr(q1 + 1, q2 - q1 - 1));
+      p = q2 + 1;
+    }
+    return result;
+  };
+  auto extractJsonString = [](const std::string &content, const std::string &key) -> std::string {
+    auto pos = content.find("\"" + key + "\"");
+    if (pos == std::string::npos) return "";
+    pos = content.find(':', pos + key.size() + 2);
+    if (pos == std::string::npos) return "";
+    auto q1 = content.find('"', pos + 1);
+    if (q1 == std::string::npos) return "";
+    auto q2 = content.find('"', q1 + 1);
+    if (q2 == std::string::npos) return "";
+    return content.substr(q1 + 1, q2 - q1 - 1);
+  };
+
+  std::function<std::vector<std::string>(const std::string &, bool)> expandProjectJson;
+  expandProjectJson = [&](const std::string &jsonPath, bool isInclude) -> std::vector<std::string> {
+    auto projDir = std::filesystem::absolute(std::filesystem::path(jsonPath)).parent_path();
+    std::ifstream f{jsonPath};
+    if (!f.is_open()) {
+      std::cerr << "Error reading project file " << jsonPath << "\n";
+      std::exit(1);
+    }
+    std::string content{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
+    auto projType = extractJsonString(content, "type");
+    if (projType.empty()) projType = "bin";
+    if (projType != "bin" && projType != "lib") {
+      std::cerr << "Error in " << jsonPath << ": unknown type \"" << projType << "\" (expected \"bin\" or \"lib\")\n";
+      std::exit(1);
+    }
+    if (projType == "lib" && !isInclude) {
+      std::cerr << "Error: " << jsonPath << " is a library project and cannot be compiled directly. It can only be included from another project.json.\n";
+      std::exit(1);
+    }
+    std::vector<std::string> result;
+    for (auto &dep : extractJsonStrings(content, "deps")) {
+      auto depPath = (projDir / dep).string();
+      auto depArgs = expandProjectJson(depPath, true);
+      result.insert(result.end(), depArgs.begin(), depArgs.end());
+    }
+    for (auto &ca : extractJsonStrings(content, "compilerArgs")) {
+      if (ca.starts_with("-I"))
+        result.push_back("-I" + (projDir / ca.substr(2)).string());
+      else
+        result.push_back(std::move(ca));
+    }
+    for (auto &src : extractJsonStrings(content, "sources"))
+      result.push_back((projDir / src).string());
+    return result;
+  };
+
   std::vector<std::string> expandedArgs;
   for (int i = 1; i < argc; ++i) {
     std::string_view arg = argv[i];
     if (!arg.starts_with("-") && arg.ends_with(".json")) {
-      std::filesystem::path jsonPath(arg);
-      auto projDir = std::filesystem::absolute(jsonPath).parent_path();
-      std::string argStr{arg};
-      std::ifstream f{argStr};
-      if (!f.is_open()) {
-        std::cerr << "Error reading project file " << arg << "\n";
-        return 1;
-      }
-      std::string content{std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
-      auto extractStrings = [&](const std::string &key) -> std::vector<std::string> {
-        std::vector<std::string> result;
-        auto pos = content.find("\"" + key + "\"");
-        if (pos == std::string::npos) return result;
-        pos = content.find('[', pos);
-        if (pos == std::string::npos) return result;
-        auto end = content.find(']', pos);
-        if (end == std::string::npos) return result;
-        std::string_view arr(content.data() + pos + 1, end - pos - 1);
-        size_t p = 0;
-        while (p < arr.size()) {
-          auto q1 = arr.find('"', p);
-          if (q1 == std::string_view::npos) break;
-          auto q2 = arr.find('"', q1 + 1);
-          if (q2 == std::string_view::npos) break;
-          result.emplace_back(arr.substr(q1 + 1, q2 - q1 - 1));
-          p = q2 + 1;
-        }
-        return result;
-      };
-      for (auto &ca : extractStrings("compilerArgs")) {
-        if (ca.starts_with("-I"))
-          expandedArgs.push_back("-I" + (projDir / ca.substr(2)).string());
-        else
-          expandedArgs.push_back(std::move(ca));
-      }
-      for (auto &src : extractStrings("sources"))
-        expandedArgs.push_back((projDir / src).string());
+      auto expanded = expandProjectJson(std::string(arg), false);
+      expandedArgs.insert(expandedArgs.end(), expanded.begin(), expanded.end());
     } else {
       expandedArgs.emplace_back(arg);
     }

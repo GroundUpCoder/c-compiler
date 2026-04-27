@@ -1,0 +1,20 @@
+{
+  "type": "lib",
+  "name": "zlib",
+  "description": "zlib compression library",
+  "compilerArgs": [
+    "-Isrc"
+  ],
+  "sources": [
+    "src/adler32.c",
+    "src/compress.c",
+    "src/crc32.c",
+    "src/deflate.c",
+    "src/inflate.c",
+    "src/inftrees.c",
+    "src/inffast.c",
+    "src/trees.c",
+    "src/uncompr.c",
+    "src/zutil.c"
+  ]
+}

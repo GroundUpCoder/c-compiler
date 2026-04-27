@@ -1,0 +1,10 @@
+{
+  "name": "zlib-tool",
+  "description": "Zip/unzip tool built on zlib",
+  "deps": [
+    "../project.json"
+  ],
+  "sources": [
+    "main.c"
+  ]
+}

@@ -54,8 +54,12 @@ VENDOR_DIR = os.path.join(ROOT_DIR, "vendor")
 
 LUA_DIR = os.path.join(VENDOR_DIR, "lua")
 LUA_TEST_DIR = os.path.join(LUA_DIR, "tests")
+ZLIB_DIR = os.path.join(VENDOR_DIR, "zlib")
+ZLIB_TOOL_DIR = os.path.join(ZLIB_DIR, "tool")
+ZLIB_TESTS_DIR = os.path.join(ZLIB_DIR, "tests")
+ZLIB_GOLDEN_DIR = os.path.join(ZLIB_TESTS_DIR, "golden")
 
-ALL_CATEGORIES = ["unit", "extra", "equiv", "lua"]
+ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -523,33 +527,183 @@ def run_equiv(results, filter_str=None, actions=None):
                 results.record(label, False, first_diff_line(cc_out, js_out))
 
 
+# --- Projects ---
+
+
+def discover_projects():
+    """Find all vendor/*/project.json files that are not libraries."""
+    projects = []
+    for entry in sorted(os.listdir(VENDOR_DIR)):
+        pj = os.path.join(VENDOR_DIR, entry, "project.json")
+        if not os.path.isfile(pj):
+            continue
+        with open(pj) as f:
+            proj = json.load(f)
+        if proj.get("type") == "lib":
+            continue
+        projects.append((proj.get("name", entry), pj))
+    return projects
+
+
+def run_projects(compiler_cmd, results, filter_str=None):
+    """Compile-only test for each vendor project."""
+    for name, pj_path in discover_projects():
+        test_name = f"projects/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+        wasm, err = build_project(pj_path, compiler_cmd)
+        if wasm is None:
+            results.record(test_name, False, f"Build failed:\n{err}")
+        else:
+            results.record(test_name, True)
+
+
+def run_projects_equiv(results, filter_str=None):
+    """Build each vendor project with both compilers and compare WASM output."""
+    js_cmd = get_compiler("js")
+    cc_cmd = get_compiler("cc")
+    for name, pj_path in discover_projects():
+        test_name = f"projects/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+        js_wasm, js_err = build_project(pj_path, js_cmd)
+        if js_wasm is None:
+            results.record(test_name, False, f"JS build failed:\n{js_err}")
+            continue
+        cc_wasm, cc_err = build_project(pj_path, cc_cmd)
+        if cc_wasm is None:
+            results.record(test_name, False, f"CC build failed:\n{cc_err}")
+            continue
+        with open(js_wasm, "rb") as f:
+            js_bytes = f.read()
+        with open(cc_wasm, "rb") as f:
+            cc_bytes = f.read()
+        if js_bytes == cc_bytes:
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False,
+                           f"WASM mismatch: JS={len(js_bytes)} bytes, CC={len(cc_bytes)} bytes")
+
+
+# --- Zlib tests ---
+
+ZLIB_DEMO_EXPECTED = """\
+simple: OK
+original: 89 compressed: 83
+streaming: OK
+original: 711 compressed: 104
+adler32: 0x11e60398
+crc32: 0xadaac02e
+"""
+
+ZLIB_GOLDEN_FILES = ["binary.dat", "empty.txt", "hello.txt", "numbers.txt", "repeat.txt"]
+
+
+def run_zlib_tests(compiler_cmd, results, filter_str=None):
+    import shutil
+
+    # --- zlib_demo self-test ---
+    demo_name = "zlib/demo"
+    if not filter_str or filter_str in demo_name:
+        demo_json = os.path.join(ZLIB_TESTS_DIR, "zlib_demo.json")
+        wasm, err = build_project(demo_json, compiler_cmd)
+        if wasm is None:
+            results.record(demo_name, False, f"Build failed:\n{err}")
+        else:
+            r = subprocess.run(
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode != 0:
+                results.record(demo_name, False,
+                               f"Exit code {r.returncode}\nstderr: {r.stderr}")
+            elif r.stdout != ZLIB_DEMO_EXPECTED:
+                results.record(demo_name, False,
+                               f"Output mismatch:\n--- expected ---\n{ZLIB_DEMO_EXPECTED}"
+                               f"--- got ---\n{r.stdout}")
+            else:
+                results.record(demo_name, True)
+
+    # Build zlib-tool (shared by zip and unzip tests)
+    tool_json = os.path.join(ZLIB_TOOL_DIR, "project.json")
+    tool_wasm, tool_err = build_project(tool_json, compiler_cmd)
+
+    # --- golden zip test: zip files and compare to expected.zip ---
+    zip_name = "zlib/zip"
+    if not filter_str or filter_str in zip_name:
+        if tool_wasm is None:
+            results.record(zip_name, False, f"Build failed:\n{tool_err}")
+        else:
+            work = tempfile.mkdtemp(prefix="zlib_zip_")
+            try:
+                zip_path = os.path.join(work, "output.zip")
+                r = subprocess.run(
+                    ["node", "--experimental-wasm-exnref", HOST_JS, tool_wasm,
+                     "create", os.path.abspath(zip_path)] + ZLIB_GOLDEN_FILES,
+                    capture_output=True, text=True, timeout=15, cwd=ZLIB_GOLDEN_DIR,
+                )
+                if r.returncode != 0:
+                    results.record(zip_name, False,
+                                   f"create failed (exit {r.returncode}):\n{r.stderr}")
+                else:
+                    golden_zip = os.path.join(ZLIB_GOLDEN_DIR, "expected.zip")
+                    with open(golden_zip, "rb") as a, open(zip_path, "rb") as b:
+                        if a.read() == b.read():
+                            results.record(zip_name, True)
+                        else:
+                            results.record(zip_name, False,
+                                           f"ZIP not byte-identical to expected.zip")
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
+    # --- golden unzip test: extract expected.zip and compare to source files ---
+    unzip_name = "zlib/unzip"
+    if not filter_str or filter_str in unzip_name:
+        if tool_wasm is None:
+            results.record(unzip_name, False, f"Build failed:\n{tool_err}")
+        else:
+            work = tempfile.mkdtemp(prefix="zlib_unzip_")
+            try:
+                golden_zip = os.path.join(ZLIB_GOLDEN_DIR, "expected.zip")
+                r = subprocess.run(
+                    ["node", "--experimental-wasm-exnref", HOST_JS, tool_wasm,
+                     "extract", os.path.abspath(golden_zip)],
+                    capture_output=True, text=True, timeout=15, cwd=work,
+                )
+                if r.returncode != 0:
+                    results.record(unzip_name, False,
+                                   f"extract failed (exit {r.returncode}):\n{r.stderr}")
+                else:
+                    errors = []
+                    for name in ZLIB_GOLDEN_FILES:
+                        orig = os.path.join(ZLIB_GOLDEN_DIR, name)
+                        extr = os.path.join(work, name)
+                        if not os.path.exists(extr):
+                            errors.append(f"'{name}' not extracted")
+                            continue
+                        with open(orig, "rb") as a, open(extr, "rb") as b:
+                            if a.read() != b.read():
+                                errors.append(f"'{name}' content mismatch")
+                    if errors:
+                        results.record(unzip_name, False, "\n".join(errors))
+                    else:
+                        results.record(unzip_name, True)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+
+
 # --- Lua test suite ---
 
 LUA_SKIP = {"files.lua", "heavy.lua", "verybig.lua", "big.lua", "memerr.lua", "cstack.lua", "main.lua"}
 
 
-def load_project(project_json_path):
-    """Load a project.json file. Paths are resolved relative to the json file's directory."""
+def build_project(project_json_path, compiler_cmd):
+    """Build a project from its project.json file. Returns (wasm_path, error_string)."""
     with open(project_json_path) as f:
         proj = json.load(f)
-    proj_dir = os.path.dirname(os.path.abspath(project_json_path))
-    proj["sources"] = [os.path.join(proj_dir, s) for s in proj["sources"]]
-    resolved_args = []
-    for arg in proj.get("compilerArgs", []):
-        if arg.startswith("-I"):
-            resolved_args.append("-I" + os.path.join(proj_dir, arg[2:]))
-        else:
-            resolved_args.append(arg)
-    proj["compilerArgs"] = resolved_args
-    proj["dir"] = proj_dir
-    return proj
-
-
-def build_project(proj, compiler_cmd):
-    """Build a project from its loaded project.json dict. Returns (wasm_path, error_string)."""
     os.makedirs(BUILD_DIR, exist_ok=True)
     output = os.path.join(BUILD_DIR, f"{proj['name']}-{compiler_label(compiler_cmd)}.wasm")
-    cmd = [*compiler_cmd, "-o", output] + proj["compilerArgs"] + proj["sources"]
+    cmd = [*compiler_cmd, "-o", output, project_json_path]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=ROOT_DIR)
     if r.returncode != 0:
         return None, r.stderr
@@ -561,8 +715,7 @@ def run_lua_tests(compiler_cmd, results, filter_str=None):
         results.record("lua/build", False, f"Lua test dir not found: {LUA_TEST_DIR}")
         return
 
-    proj = load_project(os.path.join(LUA_DIR, "project.json"))
-    wasm, err = build_project(proj, compiler_cmd)
+    wasm, err = build_project(os.path.join(LUA_DIR, "project.json"), compiler_cmd)
     if wasm is None:
         results.record("lua/build", False, f"Failed to build lua.wasm:\n{err}")
         return
@@ -665,6 +818,20 @@ def main():
                 continue
             results.section("equiv")
             run_equiv(results, filter_str=args.filter, actions=args.actions)
+
+        elif cat == "projects":
+            if len(compiler_modes) >= 2:
+                results.section("projects (equiv)")
+                run_projects_equiv(results, filter_str=args.filter)
+            else:
+                for mode in compiler_modes:
+                    results.section(f"projects ({mode})")
+                    run_projects(get_compiler(mode), results, filter_str=args.filter)
+
+        elif cat == "zlib":
+            for mode in compiler_modes:
+                results.section(f"zlib ({mode})")
+                run_zlib_tests(get_compiler(mode), results, filter_str=args.filter)
 
         elif cat == "lua":
             for mode in compiler_modes:
