@@ -1764,8 +1764,9 @@ function createAudioReceiver(options) {
   const control = new Int32Array(sab, 0, 4); /* [writePos, queuedBytes, playing, reserved] */
   const ringData = new Uint8Array(sab, headerSize, bufferSize);
 
-  let devices = {}; /* id -> { ctx, freq, channels, bytesPerSample, isFloat, nextTime, ... } */
+  let devices = {}; /* id -> { ctx, gain, freq, channels, bytesPerSample, isFloat, nextTime, ... } */
   let flushInterval = null;
+  let masterVolume = 0.16;
 
   function handleMessage(msg) {
     if (msg.type === 'audio-open') {
@@ -1776,8 +1777,11 @@ function createAudioReceiver(options) {
       else if (msg.format === 0x8020) { bytesPerSample = 4; }
       else if (msg.format === 0x8008) { bytesPerSample = 1; }
       const batchBytes = Math.floor(0.05 * msg.freq * msg.channels * bytesPerSample);
+      const gain = ctx.createGain();
+      gain.gain.value = masterVolume;
+      gain.connect(ctx.destination);
       devices[msg.id] = {
-        ctx: ctx, freq: msg.freq, channels: msg.channels,
+        ctx: ctx, gain: gain, freq: msg.freq, channels: msg.channels,
         bytesPerSample: bytesPerSample, isFloat: isFloat,
         nextTime: 0, maxInflight: 3, inflight: 0,
         batchBytes: batchBytes,
@@ -1858,7 +1862,7 @@ function createAudioReceiver(options) {
       }
       const source = device.ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(device.ctx.destination);
+      source.connect(device.gain);
       const startTime = Math.max(device.nextTime, device.ctx.currentTime);
       source.start(startTime);
       device.nextTime = startTime + audioBuffer.duration;
@@ -1875,7 +1879,12 @@ function createAudioReceiver(options) {
     devices = {};
   }
 
-  return { handleMessage: handleMessage, close: close };
+  function setVolume(v) {
+    masterVolume = v;
+    for (const id in devices) devices[id].gain.gain.value = v;
+  }
+
+  return { handleMessage: handleMessage, close: close, setVolume: setVolume };
 }
 
 /**

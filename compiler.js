@@ -13900,6 +13900,7 @@ body{background:#000;color:#0f0;font-family:monospace;height:100vh;display:flex;
     <button id="log-toggle">Console</button>
     <button id="log-stdout" class="active">stdout</button>
     <button id="log-stderr" class="active">stderr</button>
+    <label id="volume-label" style="margin-left:auto;display:flex;align-items:center;gap:4px;color:#aaa;font-size:12px">Vol<input id="volume-slider" type="range" min="0" max="100" value="40" style="width:80px;vertical-align:middle"><span id="volume-pct">40%</span></label>
   </div>
   <div id="log-content"></div>
 </div>
@@ -13934,8 +13935,10 @@ window.onunhandledrejection = function(e) {
   var logToggle = document.getElementById('log-toggle');
   var logStdoutBtn = document.getElementById('log-stdout');
   var logStderrBtn = document.getElementById('log-stderr');
+  var volumeSlider = document.getElementById('volume-slider');
   var status = document.getElementById('status');
   var worker = null;
+  var audioReceiver = null;
   var hasSDL = false;
   var term = null;
   var stdinLine = '';
@@ -13961,6 +13964,12 @@ window.onunhandledrejection = function(e) {
     showStderr = !showStderr;
     logStderrBtn.classList.toggle('active', showStderr);
     updateLogVisibility();
+  });
+  var volumePct = document.getElementById('volume-pct');
+  volumeSlider.addEventListener('input', function() {
+    var v = volumeSlider.value / 100;
+    volumePct.textContent = volumeSlider.value + '%';
+    if (audioReceiver) audioReceiver.setVolume(v * v);
   });
   function updateLogVisibility() {
     var entries = logContent.children;
@@ -14145,7 +14154,7 @@ window.onunhandledrejection = function(e) {
     var offscreen = canvas.transferControlToOffscreen();
 
     var sharedAudio = null;
-    var audioReceiver = null;
+    audioReceiver = null;
     if (typeof SharedArrayBuffer !== 'undefined' && typeof createSharedAudioBuffer === 'function') {
       sharedAudio = createSharedAudioBuffer();
       audioReceiver = createAudioReceiver({
