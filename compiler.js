@@ -14368,6 +14368,9 @@ function main() {
         result.push("--opfs-file", path.resolve(projDir, src) + ":" + dest);
       }
     }
+    if (proj.runArgs) {
+      for (const ra of proj.runArgs) result.push("--run-arg", ra);
+    }
     return result;
   }
 

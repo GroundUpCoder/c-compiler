@@ -1,0 +1,8 @@
+{
+  "name": "gameboy",
+  "description": "Game Boy emulator (Peanut-GB)",
+  "sources": [
+    "src/main.c",
+    "src/gbapu.c"
+  ]
+}
