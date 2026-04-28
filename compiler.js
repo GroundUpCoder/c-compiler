@@ -1029,7 +1029,6 @@ class PPRegistry {
     this.includePaths = [];   // string[]
     this.sourceBuffers = new Map(); // Map<string, string> — path -> content cache
     this.onceGuards = new Set();    // Set<string> — files with #pragma once
-    this.customSections = [];       // [{name, content}] — #pragma custom_section
     this.standardHeaders = new Map(); // Map<string, string> — header name -> content
     this.fileReader = null;   // function(path) -> string|null — callback to read files
   }
@@ -1671,27 +1670,6 @@ function preprocess(filename, initialTokens, ppRegistry) {
             if (!state.atEnd && state.peek().atIdent("once")) {
               state.consume();
               ppRegistry.onceGuards.add(state.currentFile);
-            } else if (!state.atEnd && state.peek().atIdent("custom_section")) {
-              state.consume();  // consume 'custom_section'
-              if (!state.atEnd && state.peek().atPunct(Punct.LPAREN)) {
-                state.consume();  // consume '('
-                if (!state.atEnd && state.peek().kind === TokenKind.STRING) {
-                  let nameTxt = state.consume().text;
-                  if (nameTxt.startsWith('"') && nameTxt.endsWith('"'))
-                    nameTxt = nameTxt.slice(1, -1);
-                  const sectionName = "com.mtots.c." + nameTxt;
-                  if (!state.atEnd && state.peek().atPunct(Punct.COMMA)) {
-                    state.consume();  // consume ','
-                    if (!state.atEnd && state.peek().kind === TokenKind.STRING) {
-                      let contentTxt = state.consume().text;
-                      if (contentTxt.startsWith('"') && contentTxt.endsWith('"'))
-                        contentTxt = contentTxt.slice(1, -1);
-                      ppRegistry.customSections.push({ name: sectionName, content: contentTxt });
-                    }
-                  }
-                  if (!state.atEnd && state.peek().atPunct(Punct.RPAREN)) state.consume();
-                }
-              }
             }
             // Other pragmas silently ignored
           }
@@ -2599,7 +2577,6 @@ class TUnit {
     this.requiredSources = new Set();
     this.minStackBytes = 0;
     this.exportDirectives = [];
-    this.customSections = [];
     this.exceptionTags = [];
     this.globalUsedSymbols = new Set();
     this.fileScopeCompoundLiterals = [];
@@ -6690,7 +6667,6 @@ class WasmModule {
     this.exports = [];          // section 7
     this.dataSegments = [];     // section 11
     this.tags = [];             // section 13
-    this.customSections = [];   // custom sections (section 0)
   }
 
   addFunctionTypeId(params, results) {
@@ -6918,17 +6894,6 @@ class WasmModule {
       for (const b of seg.data) buf.push(b);
     }
     emitSection(11, buf);
-
-    // Custom sections (section 0)
-    for (const sec of this.customSections) {
-      buf = [];
-      const nameBytes = new TextEncoder().encode(sec.name);
-      lebU(buf, nameBytes.length);
-      for (const b of nameBytes) buf.push(b);
-      const contentBytes = new TextEncoder().encode(sec.content);
-      for (const b of contentBytes) buf.push(b);
-      emitSection(0, buf);
-    }
 
     return new Uint8Array(out);
   }
@@ -9326,13 +9291,6 @@ function generateCode(units, outputFile, options) {
       const fdef = func.definition || func;
       const funcIdx = cg.funcDefToWasmFuncIdx.get(fdef);
       if (funcIdx !== undefined) wmod.addExport(exportName, 0x00, funcIdx);
-    }
-  }
-
-  // Collect #pragma custom_section directives
-  for (const unit of units) {
-    for (const sec of unit.customSections) {
-      wmod.customSections.push(sec);
     }
   }
 
@@ -13734,7 +13692,6 @@ function parseAllUnits(fs, pp, inputFiles, options) {
 
   const processSource = (filename, source) => {
     pp.onceGuards = new Set();
-    pp.customSections = [];
     const filenameInterned = Lexer.intern(filename);
     const tLex = hrtime ? hrtime() : 0;
     const result = Lexer.tokenize(filenameInterned, source, pp);
@@ -13750,7 +13707,6 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     const tParse = hrtime ? hrtime() : 0;
     const parseResult = Parser.parseTokens(result.tokens, { ...options, exceptionTagRegistry });
     const unit = parseResult.translationUnit;
-    unit.customSections = pp.customSections.slice();
     for (const req of unit.requiredSources) {
       if (!requiredSources.has(req)) {
         requiredSources.add(req);
@@ -13896,13 +13852,9 @@ async function doRun(msg) {
     opts.sharedAudioBuffer = { sharedBuffer: msg.sharedAudioBuffer, bufferSize: msg.audioBufferSize };
     opts.notifyAudio = function(m) { self.postMessage(m); };
   }
-  var wasmSettings = getWasmSettings(msg.bytes);
-  var noExitRuntime = wasmSettings.NO_EXIT_RUNTIME === '1';
-  if (noExitRuntime) opts.noExitRuntime = true;
   try {
     var exitCode = await runModule(opts);
-    if (noExitRuntime) self.postMessage({ type: 'no-exit-runtime' });
-    else self.postMessage({ type: 'exit', exitCode: exitCode });
+    self.postMessage({ type: 'exit', exitCode: exitCode });
   } catch(err) {
     self.postMessage({ type: 'error', message: err.message });
   }
@@ -14219,8 +14171,6 @@ window.onunhandledrejection = function(e) {
         logContent.style.display = 'none';
         logToggle.textContent = 'Console \\u25B6';
         setStatus('');
-      } else if (msg.type === 'no-exit-runtime') {
-        setStatus('');
       } else if (msg.type === 'error') {
         writeOutput('Runtime error: ' + msg.message + '\\n', true);
         setStatus('');
@@ -14363,7 +14313,7 @@ var __wasmBase64 = ${JSON.stringify(wasmBase64)};
 var __wasmBytes = Buffer.from(__wasmBase64, "base64");
 ${dataFileSetup}
 var __args = [${JSON.stringify(programName)}].concat(process.argv.slice(2));
-runModuleAuto({
+runModule({
   bytes: __wasmBytes,
   args: __args,
   fs: __require("fs"),

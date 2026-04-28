@@ -1740,106 +1740,6 @@ function createConsoleReceiver(options) {
   };
 }
 
-/**
- * Read a WASM custom section by name. Returns the content as a string, or null.
- */
-function getWasmCustomSection(bytes, name) {
-  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer || bytes);
-  let offset = 8; /* skip magic + version */
-  while (offset < buf.length) {
-    const id = buf[offset++];
-    let size = 0, shift = 0, byte;
-    do { byte = buf[offset++]; size |= (byte & 0x7f) << shift; shift += 7; } while (byte & 0x80);
-    const sectionEnd = offset + size;
-    if (id === 0) {
-      let nl = 0; shift = 0; let noff = offset;
-      do { byte = buf[noff++]; nl |= (byte & 0x7f) << shift; shift += 7; } while (byte & 0x80);
-      const sectionName = new TextDecoder().decode(buf.subarray(noff, noff + nl));
-      if (sectionName === name) {
-        return new TextDecoder().decode(buf.subarray(noff + nl, sectionEnd));
-      }
-    }
-    offset = sectionEnd;
-  }
-  return null;
-}
-
-/**
- * Read all com.mtots.c.* custom sections from a WASM module.
- * Returns an object like { NO_EXIT_RUNTIME: "1" }.
- */
-function getWasmSettings(bytes) {
-  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer || bytes);
-  const settings = {};
-  const prefix = 'com.mtots.c.';
-  let offset = 8;
-  while (offset < buf.length) {
-    const id = buf[offset++];
-    let size = 0, shift = 0, byte;
-    do { byte = buf[offset++]; size |= (byte & 0x7f) << shift; shift += 7; } while (byte & 0x80);
-    const sectionEnd = offset + size;
-    if (id === 0) {
-      let nl = 0; shift = 0; let noff = offset;
-      do { byte = buf[noff++]; nl |= (byte & 0x7f) << shift; shift += 7; } while (byte & 0x80);
-      const name = new TextDecoder().decode(buf.subarray(noff, noff + nl));
-      if (name.startsWith(prefix)) {
-        settings[name.substring(prefix.length)] = new TextDecoder().decode(buf.subarray(noff + nl, sectionEnd));
-      }
-    }
-    offset = sectionEnd;
-  }
-  return settings;
-}
-
-/**
- * High-level wrapper around runModule that reads WASM custom sections
- * (e.g. NO_EXIT_RUNTIME) and handles the runtime lifecycle accordingly.
- *
- * For NO_EXIT_RUNTIME modules: main() runs, returns, but the runtime stays
- * alive so async callbacks (emscripten_async_call, setTimeout chains) keep
- * firing. On Node.js, stdin is wired up to console_queue_char if exported.
- *
- * @param {object} options - Same as runModule options, plus:
- *   onInstance(instance) - called with the WASM instance after instantiation
- * @returns {Promise<number>} exit code (for normal modules) or never resolves (for NO_EXIT_RUNTIME)
- */
-async function runModuleAuto(options) {
-  const settings = getWasmSettings(options.bytes);
-  const noExit = settings.NO_EXIT_RUNTIME === '1';
-
-  if (noExit) {
-    options.noExitRuntime = true;
-  }
-
-  let inst = null;
-  const origOnReady = options.onReady;
-  options.onReady = function (info) {
-    inst = info.instance;
-    if (origOnReady) origOnReady(info);
-    if (options.onInstance) options.onInstance(inst);
-  };
-
-  let exitCode = await runModule(options);
-
-  if (noExit && inst) {
-    /* Wire up Node.js stdin → console_queue_char if available */
-    if (typeof process !== 'undefined' && process.stdin && inst.exports.console_queue_char) {
-      if (process.stdin.isTTY) {
-        process.stdin.setRawMode(true);
-      }
-      process.stdin.resume();
-      process.stdin.on('data', function (data) {
-        for (let i = 0; i < data.length; i++) {
-          inst.exports.console_queue_char(data[i]);
-        }
-      });
-    }
-    /* Keep alive forever — async callbacks drive the runtime */
-    await new Promise(function () {});
-  }
-
-  return exitCode;
-}
 
 function createSharedAudioBuffer(bufferSize) {
   bufferSize = bufferSize || (4 * 1024 * 1024);
@@ -2000,7 +1900,6 @@ async function runModule({
   notifyWindow,
   sharedConsoleBuffer,
   notifyConsole,
-  noExitRuntime,
   writeOut,
   writeErr,
   onReady,
@@ -3129,16 +3028,10 @@ async function runModule({
         exitCode = instance.exports.main();
       }
     }
-    /* Call exit() to flush stdio and run atexit handlers.
-     * exit() calls fflush(0), __run_atexits(), then __exit() which
-     * throws ExitStatus — caught below.
-     * Skip if noExitRuntime is set (emulator-style apps that run via async callbacks). */
-    if (!noExitRuntime) {
-      if (instance.exports.exit) {
-        instance.exports.exit(exitCode);
-      } else if (instance.exports.__run_atexits) {
-        instance.exports.__run_atexits();
-      }
+    if (instance.exports.exit) {
+      instance.exports.exit(exitCode);
+    } else if (instance.exports.__run_atexits) {
+      instance.exports.__run_atexits();
     }
   } catch (e) {
     if (e instanceof ExitStatus) {
@@ -3202,7 +3095,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const wasmPath = process.argv[2] || 'a.wasm';
   const bytes = fs.readFileSync(wasmPath);
 
-  runModuleAuto({
+  runModule({
     bytes,
     args: process.argv.length > 3 ? process.argv.slice(2) : undefined,
     fs: fs,
@@ -3231,8 +3124,5 @@ if (typeof window !== 'undefined') {
 // Worker global exports
 if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof module === 'undefined') {
   self.runModule = runModule;
-  self.runModuleAuto = runModuleAuto;
-  self.getWasmCustomSection = getWasmCustomSection;
-  self.getWasmSettings = getWasmSettings;
   self.createBrowserSDL = createBrowserSDL;
 }

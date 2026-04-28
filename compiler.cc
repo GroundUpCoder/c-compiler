@@ -5001,7 +5001,6 @@ std::vector<WasmExport> wasmExports;                          // section 7
 std::vector<WasmDataSegment> wasmDataSegments;                // section 11
 std::vector<WasmTag> wasmTags;                                // section 13
 std::map<Symbol, ExceptionTag *> exceptionTags;               // exception tag registry
-std::vector<std::pair<std::string, std::string>> wasmCustomSections;  // custom sections (name, content)
 
 // ====================
 // WASM state modifiers
@@ -5304,13 +5303,6 @@ void emit(Buffer &out) {
     buf.clear();
   }
 
-  // Custom sections (section 0)
-  for (const auto &[name, content] : wasmCustomSections) {
-    Buffer buf;
-    emitString(buf, name);
-    append(buf, Buffer(content.begin(), content.end()));
-    emitSection(out, 0, buf);
-  }
 }
 
 // ====================
@@ -5887,7 +5879,6 @@ struct PPRegistry {
   std::vector<std::string> includePaths;
   std::vector<std::unique_ptr<std::string>> sourceBuffers;
   std::set<Symbol> onceGuards;  // for #pragma once
-  std::vector<std::pair<std::string, std::string>> customSections;  // #pragma custom_section
 
   // Read file contents then cache in sourceBuffers to manage lifetime
   std::string_view loadFile(std::string_view path) {
@@ -6651,31 +6642,6 @@ LexResult preprocess(
                   finalMessage.c_str());
             } else if (!state.atEnd() && state.peek().atIdent("message")) {
               // ... existing pragma message logic ...
-            } else if (!state.atEnd() && state.peek().atIdent("custom_section")) {
-              state.consume();  // consume 'custom_section'
-              if (!state.atEnd() && state.peek().atPunct(Punct::LPAREN)) {
-                state.consume();  // consume '('
-                if (!state.atEnd() && state.peek().kind == TokenKind::STRING) {
-                  std::string_view nameSv = state.consume().text;
-                  // Strip quotes
-                  if (nameSv.size() >= 2 && nameSv.front() == '"' && nameSv.back() == '"') {
-                    nameSv = nameSv.substr(1, nameSv.size() - 2);
-                  }
-                  std::string sectionName = "com.mtots.c." + std::string(nameSv);
-                  if (!state.atEnd() && state.peek().atPunct(Punct::COMMA)) {
-                    state.consume();  // consume ','
-                    if (!state.atEnd() && state.peek().kind == TokenKind::STRING) {
-                      std::string_view contentSv = state.consume().text;
-                      if (contentSv.size() >= 2 && contentSv.front() == '"' && contentSv.back() == '"') {
-                        contentSv = contentSv.substr(1, contentSv.size() - 2);
-                      }
-                      ppRegistry.customSections.push_back({sectionName, std::string(contentSv)});
-                    }
-                  }
-                  // consume closing ')'
-                  if (!state.atEnd() && state.peek().atPunct(Punct::RPAREN)) state.consume();
-                }
-              }
             }
           }
         }
@@ -9286,9 +9252,6 @@ struct TUnit {
 
   // __export directives: (exportName, func)
   std::vector<std::pair<Symbol, DFunc *>> exportDirectives;
-
-  // #pragma custom_section directives: (sectionName, content)
-  std::vector<std::pair<std::string, std::string>> customSections;
 
   // __exception tags declared in this unit
   std::vector<ExceptionTag *> exceptionTags;
@@ -17272,13 +17235,6 @@ CodeGeneraionResult generateCode(
     }
   }
 
-  // Collect #pragma custom_section directives
-  for (const auto &unit : units) {
-    for (const auto &[name, content] : unit.customSections) {
-      wasmCustomSections.push_back({name, content});
-    }
-  }
-
   // Allocate all MEMORY addresses (globals + static locals) before any initializer evaluation,
   // so cross-TU &var in static initializers resolves correctly regardless of TU order.
   for (const auto &unit : units) {
@@ -19099,7 +19055,6 @@ int main(int argc, char *argv[]) {
   auto processSource = [&](Symbol filename, const std::string &source) {
     // Clear per-TU preprocessor state
     ppRegistry.onceGuards.clear();
-    ppRegistry.customSections.clear();
 
     // Lex + preprocess
     auto tLex = now();
@@ -19118,8 +19073,6 @@ int main(int argc, char *argv[]) {
     // Parse tokens
     auto tParse = now();
     auto parseResult = parseTokens(lexResult.tokens);
-    parseResult.translationUnit.customSections = std::move(ppRegistry.customSections);
-
     for (Symbol req : parseResult.translationUnit.requiredSources) {
       if (!requiredSources.count(req)) {
         requiredSources.insert(req);
