@@ -109,8 +109,8 @@ node host.js lua.wasm
 node compiler.js vendor/doom/project.json -o doom.html
 
 # Snake (terminal game)
-node compiler.js vendor/terminal-snake/src/snake.c -o snake.html
-node compiler.js vendor/terminal-snake/src/snake.c -o snake.wasm && node host.js snake.wasm
+node compiler.js vendor/snake/main.c -o snake.html
+node compiler.js vendor/snake/main.c -o snake.wasm && node host.js snake.wasm
 ```
 
 ### Serving HTML output
