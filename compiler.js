@@ -14233,7 +14233,7 @@ window.onunhandledrejection = function(e) {
     var msg = {
       type: 'run',
       bytes: wasmBytes,
-      args: RUN_ARGS,
+      args: [PROGRAM_NAME].concat(RUN_ARGS),
       canvas: offscreen
     };
     if (sharedAudio) {
@@ -14368,7 +14368,12 @@ function main() {
     }
     if (proj.dataFiles) {
       for (const [src, dest] of Object.entries(proj.dataFiles)) {
-        result.push("--opfs-file", path.resolve(projDir, src) + ":" + dest);
+        const resolved = path.resolve(projDir, src);
+        if (!fs.existsSync(resolved)) {
+          process.stderr.write(`Error in ${jsonPath}:\n  Data file not found: ${resolved}\n`);
+          process.exit(1);
+        }
+        result.push("--opfs-file", resolved + ":" + dest);
       }
     }
     if (proj.runArgs) {

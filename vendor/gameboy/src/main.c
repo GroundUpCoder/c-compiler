@@ -381,6 +381,11 @@ static void frame_callback(void) {
 
 /* ── Entry point ─────────────────────────────────────────────────── */
 int main(int argc, char **argv) {
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+    window  = SDL_CreateWindow("Peanut-GB",
+                  0, 0, LCD_WIDTH * SCALE, LCD_HEIGHT * SCALE, 0);
+    surface = SDL_GetWindowSurface(window);
+
     if (argc > 1) {
         FILE *f = fopen(argv[1], "rb");
         if (!f) {
@@ -411,11 +416,6 @@ int main(int argc, char **argv) {
     char title[16];
     gb_get_rom_name(&gb, title);
     printf("ROM: %s\n", title);
-
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
-    window  = SDL_CreateWindow("Peanut-GB",
-                  0, 0, LCD_WIDTH * SCALE, LCD_HEIGHT * SCALE, 0);
-    surface = SDL_GetWindowSurface(window);
 
     /* Audio setup */
     gbapu_init(&apu, AUDIO_RATE);

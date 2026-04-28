@@ -1,13 +1,13 @@
 {
   "name": "pokemon-blue",
-  "description": "Game Boy emulator running Pokemon Blue",
+  "description": "Game Boy emulator running Pokemon Blue (place PokemonBlue.gb in vendor/gameboy/roms/)",
   "deps": [
     "../project.json"
   ],
   "dataFiles": {
-    "../roms/PokemonBlue.gb": "/rom.gb"
+    "../roms/PokemonBlue.gb": "/roms/PokemonBlue.gb"
   },
   "runArgs": [
-    "/rom.gb"
+    "/roms/PokemonBlue.gb"
   ]
 }
