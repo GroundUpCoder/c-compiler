@@ -2,9 +2,7 @@
   "bin": true,
   "name": "doom",
   "description": "DOOM (doomgeneric port)",
-  "compilerArgs": [
-    "-INuked-OPL3"
-  ],
+  "includes": ["Nuked-OPL3"],
   "dataFiles": {
     "data/doom1.wad": "/doom1.wad"
   },

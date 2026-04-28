@@ -2,9 +2,7 @@
   "type": "lib",
   "name": "zlib",
   "description": "zlib compression library",
-  "compilerArgs": [
-    "-Isrc"
-  ],
+  "includes": ["src"],
   "sources": [
     "src/adler32.c",
     "src/compress.c",

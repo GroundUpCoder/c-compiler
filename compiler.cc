@@ -18773,6 +18773,8 @@ int main(int argc, char *argv[]) {
       auto depArgs = expandProjectJson(depPath, true);
       result.insert(result.end(), depArgs.begin(), depArgs.end());
     }
+    for (auto &inc : extractJsonStrings(content, "includes"))
+      result.push_back("-I" + (projDir / inc).string());
     for (auto &ca : extractJsonStrings(content, "compilerArgs")) {
       if (ca.starts_with("-I"))
         result.push_back("-I" + (projDir / ca.substr(2)).string());

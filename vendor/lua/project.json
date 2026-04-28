@@ -2,10 +2,8 @@
   "bin": true,
   "name": "lua",
   "description": "Lua 5.5.0 interpreter",
-  "compilerArgs": [
-    "-Isrc",
-    "-DLUA_USE_C89"
-  ],
+  "includes": ["src"],
+  "compilerArgs": ["-DLUA_USE_C89"],
   "sources": [
     "src/lapi.c",
     "src/lauxlib.c",

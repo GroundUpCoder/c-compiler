@@ -14354,6 +14354,9 @@ function main() {
         result.push(...expandProjectJson(path.resolve(projDir, dep), true));
       }
     }
+    if (proj.includes) {
+      for (const inc of proj.includes) result.push("-I" + path.resolve(projDir, inc));
+    }
     if (proj.compilerArgs) {
       for (const ca of proj.compilerArgs) {
         if (ca.startsWith("-I")) result.push("-I" + path.resolve(projDir, ca.substring(2)));
