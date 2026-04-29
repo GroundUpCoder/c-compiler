@@ -40,6 +40,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .toolbar button.primary:hover { opacity: 0.9; }
 .toolbar .status { font-size: 12px; color: var(--subtext); }
 
+.app { display: flex; flex-direction: column; height: 100vh; }
 .layout { display: flex; flex: 1; overflow: hidden; }
 .layout.stacked { flex-direction: column; }
 .layout.side-by-side { flex-direction: row; }
@@ -48,31 +49,62 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   flex: 1; display: flex; flex-direction: column; overflow: hidden;
   min-width: 0; min-height: 0;
 }
-.pane-header {
-  padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
-  font-size: 12px; font-weight: 600; color: var(--subtext); text-transform: uppercase; letter-spacing: 0.5px;
-  flex-shrink: 0;
-}
 .side-by-side .pane + .pane { border-left: 1px solid var(--border); }
 .stacked .pane + .pane { border-top: 1px solid var(--border); }
 
-.editor-wrap { flex: 1; overflow: hidden; position: relative; }
+/* Tab bar */
+.tab-bar {
+  display: flex; align-items: stretch; background: var(--surface);
+  border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto;
+  min-height: 32px;
+}
+.tab-bar::-webkit-scrollbar { height: 0; }
+.tab {
+  display: flex; align-items: center; gap: 6px; padding: 0 12px;
+  font-size: 12px; color: var(--subtext); cursor: pointer;
+  border-right: 1px solid var(--border); white-space: nowrap; user-select: none;
+  transition: background 0.1s;
+}
+.tab:hover { background: rgba(137, 180, 250, 0.06); }
+.tab.active { color: var(--text); background: var(--overlay); }
+.tab .tab-close {
+  display: none; font-size: 14px; line-height: 1; padding: 0 2px; border-radius: 3px;
+  color: var(--subtext); margin-left: 2px; margin-right: -4px;
+}
+.tab:hover .tab-close, .tab.active .tab-close { display: block; }
+.tab .tab-close:hover { background: rgba(243, 139, 168, 0.2); color: var(--red); }
+.tab.drag-over { box-shadow: inset 2px 0 0 var(--accent); }
+
+.pane > div:last-child {
+  flex: 1; overflow: hidden; display: flex; flex-direction: column;
+}
+.tab-content {
+  flex: 1; overflow: hidden; position: relative; display: none; min-height: 0;
+}
+.tab-content.active { display: flex; flex-direction: column; }
+
+.tab-content .editor-wrap { flex: 1; overflow: hidden; }
 .editor-wrap .cm-editor { height: 100%; }
 .editor-wrap .cm-editor .cm-scroller { overflow: auto; }
 .editor-wrap .cm-editor.cm-focused { outline: none; }
 
-.disasm-wrap { flex: 1; overflow-y: auto; padding: 8px 0; background: var(--overlay); }
-.disasm-wrap::-webkit-scrollbar { width: 8px; }
-.disasm-wrap::-webkit-scrollbar-track { background: transparent; }
-.disasm-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.tab-content .disasm-content { flex: 1; overflow-y: auto; padding: 8px 0; background: var(--overlay); }
+.disasm-content::-webkit-scrollbar { width: 8px; }
+.disasm-content::-webkit-scrollbar-track { background: transparent; }
+.disasm-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-.disasm-empty { padding: 24px; color: var(--subtext); text-align: center; font-size: 13px; }
-.disasm-empty kbd {
+.pane-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--subtext); font-size: 13px; background: var(--overlay);
+}
+.pane-empty kbd {
   padding: 2px 6px; background: var(--surface); border: 1px solid var(--border);
   border-radius: 3px; font-family: inherit; font-size: 12px;
 }
+
 .disasm-error { padding: 12px 16px; color: var(--red); font-size: 13px; white-space: pre-wrap; font-family: monospace; }
 
+/* Module overview: collapsible sections */
 .section-group { margin-bottom: 2px; }
 .section-group summary {
   padding: 6px 12px; cursor: pointer; font-family: monospace; font-size: 13px;
@@ -89,7 +121,25 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .section-group summary .fn-name { color: var(--blue); font-weight: 600; }
 .section-group summary .fn-sig { color: var(--subtext); font-size: 12px; }
 .section-group summary .fn-meta { color: var(--subtext); font-size: 11px; margin-left: auto; }
-.fn-group > .section-group > summary { padding-left: 28px; }
+
+/* Clickable function rows in overview */
+.fn-row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 24px;
+  font-family: monospace; font-size: 13px; cursor: pointer; transition: background 0.1s;
+}
+.fn-row:hover { background: rgba(137, 180, 250, 0.08); }
+.fn-row .fn-name { color: var(--blue); font-weight: 600; }
+.fn-row .fn-sig { color: var(--subtext); font-size: 12px; }
+.fn-row .fn-meta { color: var(--subtext); font-size: 11px; margin-left: auto; }
+
+/* Function detail view */
+.fn-header {
+  padding: 8px 12px; font-family: monospace; font-size: 13px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.fn-header .fn-name { color: var(--blue); font-weight: 600; }
+.fn-header .fn-sig { color: var(--subtext); margin-left: 8px; }
+.fn-header .fn-meta { color: var(--subtext); font-size: 11px; display: block; margin-top: 2px; }
 
 .insn-list { font-family: monospace; font-size: 12px; line-height: 1.6; }
 .insn {
@@ -114,8 +164,6 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .meta-row .kind { color: var(--mauve); }
 .meta-row .name { color: var(--text); }
 
-.app { display: flex; flex-direction: column; height: 100vh; }
-
 .var-list { font-family: monospace; font-size: 12px; line-height: 1.6; padding: 2px 0; }
 .var-row {
   display: flex; padding: 2px 12px; transition: background 0.1s; cursor: default;
@@ -136,6 +184,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   padding: 20px 24px; min-width: 320px; max-width: 420px;
 }
 .settings-panel h2 { font-size: 14px; color: var(--blue); margin-bottom: 12px; }
+.settings-panel h3 { font-size: 12px; color: var(--subtext); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
 .settings-panel label {
   display: flex; align-items: center; gap: 8px; padding: 6px 0;
   font-size: 13px; cursor: pointer; color: var(--text);
@@ -160,29 +209,30 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <span class="status" id="status">Loading...</span>
     <button id="btnCompile" class="primary" disabled>Compile &amp; Disassemble</button>
     <button id="btnSettings" title="Settings">&#x2699;</button>
-    <button id="btnLayout" title="Toggle layout">&#x2B1A;</button>
   </div>
   <div class="layout side-by-side" id="layout">
-    <div class="pane">
-      <div class="pane-header">C Source</div>
-      <div class="editor-wrap" id="editorWrap"></div>
+    <div class="pane" id="paneLeft">
+      <div class="tab-bar" id="tabBarLeft"></div>
+      <div id="contentLeft"></div>
     </div>
-    <div class="pane">
-      <div class="pane-header">Disassembly</div>
-      <div class="disasm-wrap" id="disasmWrap">
-        <div class="disasm-empty">Press <kbd>Compile &amp; Disassemble</kbd> or <kbd>Ctrl+Enter</kbd> to see output</div>
-      </div>
+    <div class="pane" id="paneRight">
+      <div class="tab-bar" id="tabBarRight"></div>
+      <div id="contentRight"></div>
     </div>
   </div>
 </div>
 
 <div class="settings-overlay" id="settingsOverlay">
   <div class="settings-panel">
-    <h2>Compiler Settings</h2>
+    <h2>Settings</h2>
+    <h3>Compiler</h3>
     <label><input type="checkbox" id="optNoReuseLocals"> Disable local slot reuse</label>
     <div class="setting-desc">Each variable gets its own WASM local (no sharing across scopes)</div>
     <label><input type="checkbox" id="optGcSections"> GC unused sections</label>
     <div class="setting-desc">Remove unreferenced functions and data</div>
+    <h3>Layout</h3>
+    <label><input type="radio" name="layout" value="side-by-side" checked> Side by side</label>
+    <label><input type="radio" name="layout" value="stacked"> Stacked</label>
     <div class="btn-row"><button id="btnSettingsClose">Done</button></div>
   </div>
 </div>
@@ -518,7 +568,7 @@ function compileC(source) {
   return C.generateCode(units, 'output.wasm', { compilerOptions: opts });
 }
 
-// Rendering
+// Helpers
 function classifyOp(text) {
   if (/^(block|loop|if|else|end|br|return|unreachable|nop)\b/.test(text)) return 'control';
   if (text.startsWith('call')) return 'call';
@@ -536,19 +586,16 @@ function renderInsn(insn, funcIdx) {
   var rest = parts[2] || '';
   var cls = classifyOp(insn.text);
   var indent = '  '.repeat(insn.depth);
-
   var immHtml = '';
   if (rest) {
     var escaped = rest.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     immHtml = escaped.replace(/&lt;([^&]*)&gt;/g, '<span class="insn-name">&lt;$1&gt;</span>');
   }
-
   var localAttr = '';
   if (op === 'local.get' || op === 'local.set' || op === 'local.tee') {
     var m = rest.match(/^\s*(\d+)/);
     if (m) localAttr = ' data-local="' + funcIdx + ':' + m[1] + '"';
   }
-
   return '<div class="insn"' + localAttr + '>' +
     '<span class="insn-offset">' + insn.offset.toString(16).padStart(6, '0') + '</span>' +
     '<span class="insn-text">' + indent +
@@ -561,12 +608,268 @@ function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function renderJson(json) {
-  var wrap = document.getElementById('disasmWrap');
+// ── Tab system ──
+var panes = {
+  left: { tabs: [], active: null, barEl: document.getElementById('tabBarLeft'), contentEl: document.getElementById('contentLeft') },
+  right: { tabs: [], active: null, barEl: document.getElementById('tabBarRight'), contentEl: document.getElementById('contentRight') },
+};
+var tabIdCounter = 0;
+var lastJson = null;
+
+function createTab(paneId, label, type, data) {
+  var id = 'tab-' + (++tabIdCounter);
+  var contentEl = document.createElement('div');
+  contentEl.className = 'tab-content';
+  contentEl.id = id + '-content';
+  var tab = { id: id, label: label, type: type, data: data, contentEl: contentEl };
+  var pane = panes[paneId];
+  pane.tabs.push(tab);
+  pane.contentEl.appendChild(contentEl);
+  renderTabContent(tab);
+  activateTab(paneId, id);
+  renderTabBar(paneId);
+  return tab;
+}
+
+function findTab(type, dataKey) {
+  for (var side in panes) {
+    for (var i = 0; i < panes[side].tabs.length; i++) {
+      var t = panes[side].tabs[i];
+      if (t.type === type && (!dataKey || t.data && t.data.key === dataKey)) return { paneId: side, tab: t };
+    }
+  }
+  return null;
+}
+
+function removeTab(paneId, tabId) {
+  var pane = panes[paneId];
+  var idx = -1;
+  for (var i = 0; i < pane.tabs.length; i++) {
+    if (pane.tabs[i].id === tabId) { idx = i; break; }
+  }
+  if (idx < 0) return;
+  var tab = pane.tabs[idx];
+  if (tab.type === 'editor' && tab.data && tab.data.editorView) {
+    tab.data.editorParked = true;
+    document.body.appendChild(tab.contentEl);
+    tab.contentEl.style.display = 'none';
+  } else {
+    tab.contentEl.remove();
+  }
+  pane.tabs.splice(idx, 1);
+  if (pane.active === tabId) {
+    var newIdx = Math.min(idx, pane.tabs.length - 1);
+    pane.active = newIdx >= 0 ? pane.tabs[newIdx].id : null;
+  }
+  renderTabBar(paneId);
+  showActiveContent(paneId);
+}
+
+function activateTab(paneId, tabId) {
+  panes[paneId].active = tabId;
+  showActiveContent(paneId);
+  renderTabBar(paneId);
+}
+
+function showActiveContent(paneId) {
+  var pane = panes[paneId];
+  var children = pane.contentEl.children;
+  var hasActive = false;
+  for (var i = 0; i < children.length; i++) {
+    children[i].classList.remove('active');
+  }
+  for (var j = 0; j < pane.tabs.length; j++) {
+    var t = pane.tabs[j];
+    if (t.contentEl.parentNode !== pane.contentEl) {
+      pane.contentEl.appendChild(t.contentEl);
+      t.contentEl.style.display = '';
+      if (t.data) t.data.editorParked = false;
+    }
+    if (t.id === pane.active) {
+      t.contentEl.classList.add('active');
+      hasActive = true;
+      if (t.type === 'editor' && t.data && t.data.editorView) {
+        t.data.editorView.requestMeasure();
+      }
+    }
+  }
+  var emptyEl = pane.contentEl.querySelector('.pane-empty');
+  if (!hasActive && pane.tabs.length === 0) {
+    if (!emptyEl) {
+      emptyEl = document.createElement('div');
+      emptyEl.className = 'pane-empty';
+      emptyEl.textContent = 'Drag a tab here';
+      pane.contentEl.appendChild(emptyEl);
+    }
+    emptyEl.style.display = '';
+  } else if (emptyEl) {
+    emptyEl.style.display = 'none';
+  }
+}
+
+function renderTabBar(paneId) {
+  var pane = panes[paneId];
+  var bar = pane.barEl;
+  bar.innerHTML = '';
+  for (var i = 0; i < pane.tabs.length; i++) {
+    var t = pane.tabs[i];
+    var el = document.createElement('div');
+    el.className = 'tab' + (t.id === pane.active ? ' active' : '');
+    el.setAttribute('data-tab-id', t.id);
+    el.setAttribute('data-pane', paneId);
+    el.draggable = true;
+    el.textContent = t.label;
+    var closeBtn = document.createElement('span');
+    closeBtn.className = 'tab-close';
+    closeBtn.textContent = '×';
+    closeBtn.setAttribute('data-tab-id', t.id);
+    closeBtn.setAttribute('data-pane', paneId);
+    el.appendChild(closeBtn);
+    bar.appendChild(el);
+  }
+}
+
+function moveTab(fromPane, tabId, toPane, insertAt) {
+  var src = panes[fromPane];
+  var dst = panes[toPane];
+  var idx = -1;
+  for (var i = 0; i < src.tabs.length; i++) {
+    if (src.tabs[i].id === tabId) { idx = i; break; }
+  }
+  if (idx < 0) return;
+  var tab = src.tabs.splice(idx, 1)[0];
+  if (insertAt !== undefined && insertAt >= 0) {
+    dst.tabs.splice(insertAt, 0, tab);
+  } else {
+    dst.tabs.push(tab);
+  }
+  if (fromPane !== toPane) {
+    dst.contentEl.appendChild(tab.contentEl);
+    if (tab.data) tab.data.editorParked = false;
+    tab.contentEl.style.display = '';
+  }
+  if (src.active === tabId && fromPane !== toPane) {
+    var newIdx = Math.min(idx, src.tabs.length - 1);
+    src.active = newIdx >= 0 ? src.tabs[newIdx].id : null;
+  }
+  activateTab(toPane, tabId);
+  if (fromPane !== toPane) {
+    renderTabBar(fromPane);
+    showActiveContent(fromPane);
+  }
+}
+
+// Drag and drop
+var dragTabId = null;
+var dragFromPane = null;
+
+document.addEventListener('dragstart', function(e) {
+  var tab = e.target.closest('.tab');
+  if (!tab) return;
+  dragTabId = tab.getAttribute('data-tab-id');
+  dragFromPane = tab.getAttribute('data-pane');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragTabId);
+});
+
+document.addEventListener('dragover', function(e) {
+  var bar = e.target.closest('.tab-bar');
+  if (!bar) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  var tabs = bar.querySelectorAll('.tab');
+  for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('drag-over');
+  var overTab = e.target.closest('.tab');
+  if (overTab) overTab.classList.add('drag-over');
+});
+
+document.addEventListener('dragleave', function(e) {
+  var tab = e.target.closest('.tab');
+  if (tab) tab.classList.remove('drag-over');
+});
+
+document.addEventListener('drop', function(e) {
+  var bar = e.target.closest('.tab-bar');
+  if (!bar || !dragTabId) return;
+  e.preventDefault();
+  var tabs = bar.querySelectorAll('.tab');
+  for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('drag-over');
+  var toPane = bar === panes.left.barEl ? 'left' : 'right';
+  var overTab = e.target.closest('.tab');
+  var insertAt = -1;
+  if (overTab) {
+    var targetId = overTab.getAttribute('data-tab-id');
+    if (targetId === dragTabId) { dragTabId = null; dragFromPane = null; return; }
+    var dstTabs = panes[toPane].tabs;
+    for (var ri = 0; ri < dstTabs.length; ri++) {
+      if (dstTabs[ri].id === targetId) { insertAt = ri; break; }
+    }
+  }
+  moveTab(dragFromPane, dragTabId, toPane, insertAt);
+  dragTabId = null;
+  dragFromPane = null;
+});
+
+document.addEventListener('dragend', function() {
+  document.querySelectorAll('.tab.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+  dragTabId = null;
+  dragFromPane = null;
+});
+
+// Tab bar click handlers
+document.addEventListener('click', function(e) {
+  var closeBtn = e.target.closest('.tab-close');
+  if (closeBtn) {
+    e.stopPropagation();
+    removeTab(closeBtn.getAttribute('data-pane'), closeBtn.getAttribute('data-tab-id'));
+    return;
+  }
+  var tab = e.target.closest('.tab');
+  if (tab) {
+    activateTab(tab.getAttribute('data-pane'), tab.getAttribute('data-tab-id'));
+  }
+});
+
+document.addEventListener('mousedown', function(e) {
+  if (e.button === 1) {
+    var tab = e.target.closest('.tab');
+    if (tab) {
+      e.preventDefault();
+      removeTab(tab.getAttribute('data-pane'), tab.getAttribute('data-tab-id'));
+    }
+  }
+});
+
+// ── Content renderers ──
+
+function renderTabContent(tab) {
+  if (tab.type === 'editor') {
+    tab.contentEl.innerHTML = '<div class="editor-wrap" id="editorWrap"></div>';
+    return;
+  }
+  if (tab.type === 'module') {
+    tab.contentEl.innerHTML = '<div class="disasm-content"></div>';
+    renderModuleOverview(tab);
+    return;
+  }
+  if (tab.type === 'function') {
+    tab.contentEl.innerHTML = '<div class="disasm-content"></div>';
+    renderFunctionDetail(tab);
+    return;
+  }
+  if (tab.type === 'error') {
+    tab.contentEl.innerHTML = '<div class="disasm-content"><div class="disasm-error">' + esc(tab.data.message) + '</div></div>';
+    return;
+  }
+}
+
+function renderModuleOverview(tab) {
+  var json = tab.data.json;
+  var wrap = tab.contentEl.querySelector('.disasm-content');
   var html = '';
 
   html += '<details class="section-group" open><summary>';
-  html += '<span class="fn-name">Module</span>';
+  html += '<span class="fn-name">Sections</span>';
   html += '<span class="fn-meta">version ' + json.version + ', ' + json.sections.length + ' sections</span>';
   html += '</summary><div class="meta-section">';
   for (var si = 0; si < json.sections.length; si++) {
@@ -622,65 +925,122 @@ function renderJson(json) {
 
   if (json.code.length > 0) {
     var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
-    html += '<details class="section-group"><summary>';
+    html += '<details class="section-group" open><summary>';
     html += '<span class="fn-name">Code</span>';
     html += '<span class="fn-meta">' + json.code.length + ' functions, ' + totalInsns + ' instructions</span>';
-    html += '</summary><div class="code-group">';
+    html += '</summary><div class="fn-list">';
     for (var fi = 0; fi < json.code.length; fi++) {
       var fn = json.code[fi];
       var name = fn.name || ('func[' + fn.index + ']');
       var sig = fn.signature || '';
       var nInsns = fn.instructions.length;
-
-      html += '<details class="section-group fn-group">';
-      html += '<summary>';
+      html += '<div class="fn-row" data-fn-index="' + fn.index + '">';
       html += '<span class="fn-name">' + esc(name) + '</span>';
       html += '<span class="fn-sig">' + esc(sig) + '</span>';
-      html += '<span class="fn-meta">' + nInsns + ' insns, ' + fn.body_size + ' bytes';
-      var totalVars = (fn.params ? fn.params.length : 0) + fn.locals.length;
-      if (totalVars > 0) html += ', ' + totalVars + ' variables';
-      html += '</span></summary>';
-      if (totalVars > 0) {
-        html += '<details class="section-group"><summary>';
-        html += '<span class="fn-name">Variables</span>';
-        html += '<span class="fn-meta">';
-        if (fn.params && fn.params.length > 0) html += fn.params.length + ' params';
-        if (fn.params && fn.params.length > 0 && fn.locals.length > 0) html += ', ';
-        if (fn.locals.length > 0) html += fn.locals.length + ' locals';
-        html += '</span></summary><div class="var-list">';
-        if (fn.params) {
-          for (var pi = 0; pi < fn.params.length; pi++) {
-            var p = fn.params[pi];
-            html += '<div class="var-row" data-local="' + fn.index + ':' + p.index + '">';
-            html += '<span class="var-idx">' + p.index + '</span>';
-            html += '<span class="var-type">' + esc(p.type) + '</span>';
-            html += '<span class="var-name">' + (p.name ? esc(p.name) : '') + '</span>';
-            html += '</div>';
-          }
-        }
-        for (var li = 0; li < fn.locals.length; li++) {
-          var l = fn.locals[li];
-          html += '<div class="var-row" data-local="' + fn.index + ':' + l.index + '">';
-          html += '<span class="var-idx">' + l.index + '</span>';
-          html += '<span class="var-type">' + esc(l.type) + '</span>';
-          html += '<span class="var-name">' + (l.name ? esc(l.name) : '') + '</span>';
-          html += '</div>';
-        }
-        html += '</div></details>';
-      }
-      html += '<div class="insn-list">';
-      for (var ii2 = 0; ii2 < fn.instructions.length; ii2++) {
-        html += renderInsn(fn.instructions[ii2], fn.index);
-      }
-      html += '</div></details>';
+      html += '<span class="fn-meta">' + nInsns + ' insns, ' + fn.body_size + ' bytes</span>';
+      html += '</div>';
     }
     html += '</div></details>';
   }
 
   wrap.innerHTML = html;
+
+  wrap.addEventListener('click', function(e) {
+    var row = e.target.closest('.fn-row');
+    if (!row) return;
+    var fnIndex = parseInt(row.getAttribute('data-fn-index'), 10);
+    openFunctionTab(fnIndex);
+  });
 }
 
-// Editor
+function openFunctionTab(fnIndex) {
+  var existing = findTab('function', 'fn-' + fnIndex);
+  if (existing) {
+    activateTab(existing.paneId, existing.tab.id);
+    return;
+  }
+  if (!lastJson) return;
+  var fn = null;
+  for (var i = 0; i < lastJson.code.length; i++) {
+    if (lastJson.code[i].index === fnIndex) { fn = lastJson.code[i]; break; }
+  }
+  if (!fn) return;
+  var name = fn.name || ('func[' + fn.index + ']');
+  var targetPane = 'right';
+  var editorInRight = findTab('editor');
+  if (editorInRight && editorInRight.paneId === 'right') targetPane = 'left';
+  createTab(targetPane, name, 'function', { fn: fn, json: lastJson, key: 'fn-' + fnIndex });
+}
+
+function renderFunctionDetail(tab) {
+  var fn = tab.data.fn;
+  var wrap = tab.contentEl.querySelector('.disasm-content');
+  var name = fn.name || ('func[' + fn.index + ']');
+  var sig = fn.signature || '';
+  var html = '';
+
+  html += '<div class="fn-header">';
+  html += '<span class="fn-name">' + esc(name) + '</span>';
+  html += '<span class="fn-sig">' + esc(sig) + '</span>';
+  html += '<span class="fn-meta">' + fn.instructions.length + ' instructions, ' + fn.body_size + ' bytes</span>';
+  html += '</div>';
+
+  var totalVars = (fn.params ? fn.params.length : 0) + fn.locals.length;
+  if (totalVars > 0) {
+    html += '<details class="section-group" open><summary>';
+    html += '<span class="fn-name">Variables</span>';
+    html += '<span class="fn-meta">';
+    if (fn.params && fn.params.length > 0) html += fn.params.length + ' params';
+    if (fn.params && fn.params.length > 0 && fn.locals.length > 0) html += ', ';
+    if (fn.locals.length > 0) html += fn.locals.length + ' locals';
+    html += '</span></summary><div class="var-list">';
+    if (fn.params) {
+      for (var pi = 0; pi < fn.params.length; pi++) {
+        var p = fn.params[pi];
+        html += '<div class="var-row" data-local="' + fn.index + ':' + p.index + '">';
+        html += '<span class="var-idx">' + p.index + '</span>';
+        html += '<span class="var-type">' + esc(p.type) + '</span>';
+        html += '<span class="var-name">' + (p.name ? esc(p.name) : '') + '</span>';
+        html += '</div>';
+      }
+    }
+    for (var li = 0; li < fn.locals.length; li++) {
+      var l = fn.locals[li];
+      html += '<div class="var-row" data-local="' + fn.index + ':' + l.index + '">';
+      html += '<span class="var-idx">' + l.index + '</span>';
+      html += '<span class="var-type">' + esc(l.type) + '</span>';
+      html += '<span class="var-name">' + (l.name ? esc(l.name) : '') + '</span>';
+      html += '</div>';
+    }
+    html += '</div></details>';
+  }
+
+  html += '<div class="insn-list">';
+  for (var ii = 0; ii < fn.instructions.length; ii++) {
+    html += renderInsn(fn.instructions[ii], fn.index);
+  }
+  html += '</div>';
+
+  wrap.innerHTML = html;
+
+  // Local variable highlight on hover
+  var hlElements = [];
+  wrap.addEventListener('mouseover', function(e) {
+    var el = e.target.closest('[data-local]');
+    if (!el) return;
+    var key = el.getAttribute('data-local');
+    hlElements = wrap.querySelectorAll('[data-local="' + key + '"]');
+    for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.add('hl-local');
+  });
+  wrap.addEventListener('mouseout', function(e) {
+    var el = e.target.closest('[data-local]');
+    if (!el) return;
+    for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.remove('hl-local');
+    hlElements = [];
+  });
+}
+
+// ── Editor setup ──
 var defaultSource = 'int factorial(int n) {\n    if (n <= 1) return 1;\n    return n * factorial(n - 1);\n}\n\nint fibonacci(int n) {\n    int a = 0, b = 1;\n    for (int i = 0; i < n; i++) {\n        int t = a + b;\n        a = b;\n        b = t;\n    }\n    return a;\n}\n\nint main(void) {\n    return factorial(10) + fibonacci(20);\n}\n';
 
 var cmTheme = CM.EditorView.theme({
@@ -724,6 +1084,7 @@ var compileKeymap = CM.keymap.of([{
   run: function() { doCompile(); return true; }
 }]);
 
+var editorTab = createTab('left', 'Source', 'editor', {});
 var editorView = new CM.EditorView({
   doc: defaultSource,
   extensions: [
@@ -749,10 +1110,11 @@ var editorView = new CM.EditorView({
     cmHighlight,
     compileKeymap,
   ],
-  parent: document.getElementById('editorWrap'),
+  parent: editorTab.contentEl.querySelector('.editor-wrap'),
 });
+editorTab.data.editorView = editorView;
 
-// Main
+// ── Main ──
 var diswRunner = null;
 var statusEl = document.getElementById('status');
 
@@ -776,6 +1138,16 @@ async function doCompile() {
   btn.disabled = true;
   statusEl.textContent = 'Compiling...';
 
+  // Close stale module/function/error tabs
+  for (var side in panes) {
+    var toRemove = [];
+    for (var i = 0; i < panes[side].tabs.length; i++) {
+      var t = panes[side].tabs[i];
+      if (t.type === 'module' || t.type === 'function' || t.type === 'error') toRemove.push(t.id);
+    }
+    for (var j = 0; j < toRemove.length; j++) removeTab(side, toRemove[j]);
+  }
+
   try {
     var t0 = performance.now();
     var wasm = compileC(source);
@@ -787,14 +1159,21 @@ async function doCompile() {
     var disasmMs = (performance.now() - t1).toFixed(0);
 
     var json = JSON.parse(jsonStr);
-    renderJson(json);
+    lastJson = json;
+
+    var targetPane = 'right';
+    var editorLocation = findTab('editor');
+    if (editorLocation && editorLocation.paneId === 'right') targetPane = 'left';
+    createTab(targetPane, 'Module', 'module', { json: json });
 
     var totalFns = json.code.length;
     var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
     statusEl.textContent = totalFns + ' functions, ' + totalInsns + ' instructions (' + compileMs + 'ms compile, ' + disasmMs + 'ms disasm)';
   } catch (e) {
-    var wrap = document.getElementById('disasmWrap');
-    wrap.innerHTML = '<div class="disasm-error">' + esc(e.message || String(e)) + '</div>';
+    var targetPane2 = 'right';
+    var editorLocation2 = findTab('editor');
+    if (editorLocation2 && editorLocation2.paneId === 'right') targetPane2 = 'left';
+    createTab(targetPane2, 'Error', 'error', { message: e.message || String(e) });
     statusEl.textContent = 'Error';
     console.error(e);
   } finally {
@@ -802,30 +1181,9 @@ async function doCompile() {
   }
 }
 
-var isStacked = false;
-document.getElementById('btnLayout').addEventListener('click', function() {
-  isStacked = !isStacked;
-  document.getElementById('layout').className = 'layout ' + (isStacked ? 'stacked' : 'side-by-side');
-});
-
 document.getElementById('btnCompile').addEventListener('click', doCompile);
 
-var disasmWrap = document.getElementById('disasmWrap');
-var hlElements = [];
-disasmWrap.addEventListener('mouseover', function(e) {
-  var el = e.target.closest('[data-local]');
-  if (!el) return;
-  var key = el.getAttribute('data-local');
-  hlElements = disasmWrap.querySelectorAll('[data-local="' + key + '"]');
-  for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.add('hl-local');
-});
-disasmWrap.addEventListener('mouseout', function(e) {
-  var el = e.target.closest('[data-local]');
-  if (!el) return;
-  for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.remove('hl-local');
-  hlElements = [];
-});
-
+// Settings
 var settingsOverlay = document.getElementById('settingsOverlay');
 document.getElementById('btnSettings').addEventListener('click', function() {
   settingsOverlay.classList.add('open');
@@ -836,6 +1194,19 @@ document.getElementById('btnSettingsClose').addEventListener('click', function()
 settingsOverlay.addEventListener('click', function(e) {
   if (e.target === settingsOverlay) settingsOverlay.classList.remove('open');
 });
+
+// Layout setting
+var layoutRadios = document.querySelectorAll('input[name="layout"]');
+for (var r = 0; r < layoutRadios.length; r++) {
+  layoutRadios[r].addEventListener('change', function() {
+    document.getElementById('layout').className = 'layout ' + this.value;
+    if (editorView) editorView.requestMeasure();
+  });
+}
+
+// Initialize empty states
+showActiveContent('left');
+showActiveContent('right');
 
 init();
 </script>
