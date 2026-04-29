@@ -5,3 +5,4 @@ a.out
 .DS_Store
 node_modules/
 test-results/
+tools/disasm/index.html

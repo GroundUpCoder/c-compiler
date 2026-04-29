@@ -186,5 +186,6 @@ void print_headers(const WasmModule *mod, const char *filter);
 void print_details(const WasmModule *mod, const char *filter);
 void print_disasm(const WasmModule *mod, const char *filter);
 void print_hexdump(const WasmModule *mod, const char *filter);
+void print_json(const WasmModule *mod);
 
 #endif

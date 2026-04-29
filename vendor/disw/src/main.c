@@ -10,6 +10,7 @@ static void usage(const char *prog) {
     fprintf(stderr, "  -x          Section details\n");
     fprintf(stderr, "  -d          Disassemble code\n");
     fprintf(stderr, "  -s          Hex dump of sections\n");
+    fprintf(stderr, "  -J          JSON output (all sections + disassembly)\n");
     fprintf(stderr, "  -j <name>   Filter by section name\n");
     fprintf(stderr, "  --help      Show this help\n");
     exit(1);
@@ -17,6 +18,7 @@ static void usage(const char *prog) {
 
 int main(int argc, char **argv) {
     int show_headers = 0, show_details = 0, show_disasm = 0, show_hexdump = 0;
+    int show_json = 0;
     const char *section_filter = NULL;
     const char *filename = NULL;
     FILE *f;
@@ -30,6 +32,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-x") == 0) show_details = 1;
         else if (strcmp(argv[i], "-d") == 0) show_disasm = 1;
         else if (strcmp(argv[i], "-s") == 0) show_hexdump = 1;
+        else if (strcmp(argv[i], "-J") == 0) show_json = 1;
         else if (strcmp(argv[i], "-j") == 0) {
             if (++i >= argc) usage(argv[0]);
             section_filter = argv[i];
@@ -43,7 +46,7 @@ int main(int argc, char **argv) {
     }
 
     if (!filename) usage(argv[0]);
-    if (!show_headers && !show_details && !show_disasm && !show_hexdump)
+    if (!show_headers && !show_details && !show_disasm && !show_hexdump && !show_json)
         show_headers = 1;
 
     f = fopen(filename, "rb");
@@ -61,12 +64,16 @@ int main(int argc, char **argv) {
     if (wasm_parse(&mod, data, fsize) != 0)
         return 1;
 
-    printf("\n%s:\tfile format wasm 0x%x\n", filename, mod.version);
+    if (show_json) {
+        print_json(&mod);
+    } else {
+        printf("\n%s:\tfile format wasm 0x%x\n", filename, mod.version);
 
-    if (show_headers) print_headers(&mod, section_filter);
-    if (show_details) print_details(&mod, section_filter);
-    if (show_disasm) print_disasm(&mod, section_filter);
-    if (show_hexdump) print_hexdump(&mod, section_filter);
+        if (show_headers) print_headers(&mod, section_filter);
+        if (show_details) print_details(&mod, section_filter);
+        if (show_disasm) print_disasm(&mod, section_filter);
+        if (show_hexdump) print_hexdump(&mod, section_filter);
+    }
 
     wasm_free(&mod);
     free(data);

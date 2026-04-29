@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WASM Disassembler</title>
+<style>
+:root {
+  --bg: #1e1e2e;
+  --surface: #181825;
+  --overlay: #11111b;
+  --text: #cdd6f4;
+  --subtext: #a6adc8;
+  --blue: #89b4fa;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --yellow: #f9e2af;
+  --mauve: #cba6f7;
+  --teal: #94e2d5;
+  --peach: #fab387;
+  --border: #313244;
+  --accent: #89b4fa;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.toolbar h1 { font-size: 15px; font-weight: 600; color: var(--blue); margin-right: auto; }
+.toolbar button {
+  padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--overlay); color: var(--text); cursor: pointer; font-size: 13px;
+  transition: background 0.15s;
+}
+.toolbar button:hover { background: var(--border); }
+.toolbar button.primary { background: var(--accent); color: var(--overlay); border-color: var(--accent); font-weight: 600; }
+.toolbar button.primary:hover { opacity: 0.9; }
+.toolbar .status { font-size: 12px; color: var(--subtext); }
+
+.layout { display: flex; flex: 1; overflow: hidden; }
+.layout.stacked { flex-direction: column; }
+.layout.side-by-side { flex-direction: row; }
+
+.pane {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  min-width: 0; min-height: 0;
+}
+.pane-header {
+  padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; color: var(--subtext); text-transform: uppercase; letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.side-by-side .pane + .pane { border-left: 1px solid var(--border); }
+.stacked .pane + .pane { border-top: 1px solid var(--border); }
+
+.editor-wrap { flex: 1; overflow: hidden; position: relative; }
+.editor-wrap textarea {
+  width: 100%; height: 100%; resize: none; border: none; outline: none;
+  background: var(--overlay); color: var(--text); padding: 12px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 13px; line-height: 1.5; tab-size: 4;
+}
+
+.disasm-wrap { flex: 1; overflow-y: auto; padding: 8px 0; background: var(--overlay); }
+.disasm-wrap::-webkit-scrollbar { width: 8px; }
+.disasm-wrap::-webkit-scrollbar-track { background: transparent; }
+.disasm-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.disasm-empty { padding: 24px; color: var(--subtext); text-align: center; font-size: 13px; }
+.disasm-empty kbd {
+  padding: 2px 6px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 3px; font-family: inherit; font-size: 12px;
+}
+.disasm-error { padding: 12px 16px; color: var(--red); font-size: 13px; white-space: pre-wrap; font-family: monospace; }
+
+.section-group { margin-bottom: 2px; }
+.section-group summary {
+  padding: 6px 12px; cursor: pointer; font-family: monospace; font-size: 13px;
+  list-style: none; display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  user-select: none; transition: background 0.1s;
+}
+.section-group summary:hover { background: var(--border); }
+.section-group summary::before {
+  content: '\25B6'; font-size: 9px; color: var(--subtext);
+  transition: transform 0.15s; display: inline-block; width: 12px;
+}
+.section-group[open] > summary::before { transform: rotate(90deg); }
+.section-group summary .fn-name { color: var(--blue); font-weight: 600; }
+.section-group summary .fn-sig { color: var(--subtext); font-size: 12px; }
+.section-group summary .fn-meta { color: var(--subtext); font-size: 11px; margin-left: auto; }
+
+.insn-list { font-family: monospace; font-size: 12px; line-height: 1.6; }
+.insn {
+  display: flex; padding: 1px 12px 1px 0; transition: background 0.1s;
+}
+.insn:hover { background: rgba(137, 180, 250, 0.06); }
+.insn-offset { color: var(--subtext); width: 70px; text-align: right; padding-right: 12px; flex-shrink: 0; user-select: none; }
+.insn-text { white-space: pre; }
+.insn-op { color: var(--mauve); }
+.insn-op.control { color: var(--red); }
+.insn-op.memory { color: var(--green); }
+.insn-op.local { color: var(--teal); }
+.insn-op.global { color: var(--yellow); }
+.insn-op.const { color: var(--peach); }
+.insn-op.call { color: var(--blue); font-weight: 600; }
+.insn-imm { color: var(--text); }
+.insn-name { color: var(--subtext); }
+
+.meta-section { padding: 8px 12px; font-family: monospace; font-size: 12px; }
+.meta-section h3 { color: var(--blue); font-size: 12px; margin-bottom: 4px; }
+.meta-row { color: var(--subtext); padding: 1px 0; }
+.meta-row .kind { color: var(--mauve); }
+.meta-row .name { color: var(--text); }
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+@media (max-width: 768px) {
+  .layout.side-by-side { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <h1>WASM Disassembler</h1>
+    <span class="status" id="status">Loading...</span>
+    <button id="btnCompile" class="primary" disabled>Compile &amp; Disassemble</button>
+    <button id="btnLayout" title="Toggle layout">&#x2B1A;</button>
+  </div>
+  <div class="layout side-by-side" id="layout">
+    <div class="pane">
+      <div class="pane-header">C Source</div>
+      <div class="editor-wrap">
+        <textarea id="editor" spellcheck="false">int factorial(int n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+
+int fibonacci(int n) {
+    int a = 0, b = 1;
+    for (int i = 0; i < n; i++) {
+        int t = a + b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
+int main(void) {
+    return factorial(10) + fibonacci(20);
+}
+</textarea>
+      </div>
+    </div>
+    <div class="pane">
+      <div class="pane-header">Disassembly</div>
+      <div class="disasm-wrap" id="disasmWrap">
+        <div class="disasm-empty">Press <kbd>Compile &amp; Disassemble</kbd> or <kbd>Ctrl+Enter</kbd> to see output</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Compiler (injected by build.py) -->
+<script>/* __COMPILER_JS__ */</script>
+
+<script>
+// Embedded disw WASM binary (injected by build.py)
+var DISW_WASM_BASE64 = '__DISW_WASM_BASE64__';
+
+// Minimal WASM host for running disw
+async function createDiswRunner(wasmBytes) {
+  var instance;
+  var utf8Decoder = new TextDecoder('utf-8');
+  var latin1Decoder = new TextDecoder('latin1');
+  var encoder = new TextEncoder();
+  var compiledModule = await WebAssembly.compile(wasmBytes);
+
+  function readString(ptr) {
+    var bytes = new Uint8Array(instance.exports.memory.buffer);
+    var end = ptr;
+    while (bytes[end] !== 0) end++;
+    return utf8Decoder.decode(bytes.subarray(ptr, end));
+  }
+
+  function readLatin1(ptr) {
+    var bytes = new Uint8Array(instance.exports.memory.buffer);
+    var end = ptr;
+    while (bytes[end] !== 0) end++;
+    return latin1Decoder.decode(bytes.subarray(ptr, end));
+  }
+
+  function writeString(ptr, str, maxLen) {
+    var bytes = new Uint8Array(instance.exports.memory.buffer);
+    var writeLen = maxLen !== undefined ? Math.min(str.length, maxLen - 1) : str.length;
+    for (var i = 0; i < writeLen; i++) bytes[ptr + i] = str.charCodeAt(i) & 0xFF;
+    bytes[ptr + writeLen] = 0;
+    return writeLen;
+  }
+
+  function createVaReader(va_args_ptr) {
+    var arg_offset = 0;
+    return function readArg(type) {
+      var view = new DataView(instance.exports.memory.buffer);
+      var ptr = va_args_ptr + arg_offset;
+      arg_offset += 8;
+      switch (type) {
+        case 'i32': return view.getInt32(ptr, true);
+        case 'u32': return view.getUint32(ptr, true);
+        case 'i64': return view.getBigInt64(ptr, true);
+        case 'u64': return view.getBigUint64(ptr, true);
+        case 'f64': return view.getFloat64(ptr, true);
+        case 'ptr': return view.getUint32(ptr, true);
+        default: return view.getInt32(ptr, true);
+      }
+    };
+  }
+
+  function formatString(fmt_ptr, va_args_ptr) {
+    var fmt = readLatin1(fmt_ptr);
+    var output = "";
+    var readArg = createVaReader(va_args_ptr);
+    var i = 0;
+    while (i < fmt.length) {
+      if (fmt[i] !== '%') { output += fmt[i++]; continue; }
+      i++;
+      if (i >= fmt.length) break;
+      var flags = { minus: false, plus: false, space: false, hash: false, zero: false };
+      while (i < fmt.length) {
+        if (fmt[i] === '-') flags.minus = true;
+        else if (fmt[i] === '+') flags.plus = true;
+        else if (fmt[i] === ' ') flags.space = true;
+        else if (fmt[i] === '#') flags.hash = true;
+        else if (fmt[i] === '0') flags.zero = true;
+        else break;
+        i++;
+      }
+      var width = 0;
+      if (fmt[i] === '*') { width = readArg('i32'); i++; }
+      else { while (i < fmt.length && fmt[i] >= '0' && fmt[i] <= '9') { width = width * 10 + (fmt[i].charCodeAt(0) - 48); i++; } }
+      var precision = -1;
+      if (fmt[i] === '.') {
+        i++; precision = 0;
+        if (fmt[i] === '*') { precision = readArg('i32'); i++; }
+        else { while (i < fmt.length && fmt[i] >= '0' && fmt[i] <= '9') { precision = precision * 10 + (fmt[i].charCodeAt(0) - 48); i++; } }
+      }
+      var length = '';
+      if (fmt[i] === 'h') { length = 'h'; i++; if (fmt[i] === 'h') { length = 'hh'; i++; } }
+      else if (fmt[i] === 'l') { length = 'l'; i++; if (fmt[i] === 'l') { length = 'll'; i++; } }
+      else if (fmt[i] === 'z' || fmt[i] === 't' || fmt[i] === 'j') { length = fmt[i++]; }
+      var spec = fmt[i++];
+      var str = '';
+      switch (spec) {
+        case '%': str = '%'; break;
+        case 'd': case 'i': {
+          var val;
+          if (length === 'll' || length === 'j') { val = readArg('i64'); str = val.toString(); }
+          else { val = readArg('i32'); if (length === 'hh') val = (val << 24) >> 24; else if (length === 'h') val = (val << 16) >> 16; str = val.toString(); }
+          if (precision >= 0) { var sign = '', digits = str; if (digits[0] === '-') { sign = '-'; digits = digits.substring(1); } if (precision === 0 && digits === '0') digits = ''; else if (digits.length < precision) digits = '0'.repeat(precision - digits.length) + digits; str = sign + digits; }
+          if (val >= 0 && flags.plus) str = '+' + str;
+          else if (val >= 0 && flags.space) str = ' ' + str;
+          break;
+        }
+        case 'u': {
+          var val;
+          if (length === 'll' || length === 'j') { val = readArg('u64'); str = val.toString(); }
+          else { val = readArg('u32'); if (length === 'hh') val = val & 0xFF; else if (length === 'h') val = val & 0xFFFF; str = val.toString(); }
+          if (precision === 0 && str === '0') str = '';
+          else if (precision >= 0 && str.length < precision) str = '0'.repeat(precision - str.length) + str;
+          break;
+        }
+        case 'x': case 'X': {
+          var val;
+          if (length === 'll' || length === 'j') { val = readArg('u64'); str = val.toString(16); }
+          else { val = readArg('u32'); if (length === 'hh') val = val & 0xFF; else if (length === 'h') val = val & 0xFFFF; str = val.toString(16); }
+          if (precision === 0 && (str === '0' || str === '0n')) str = '';
+          else if (precision >= 0 && str.length < precision) str = '0'.repeat(precision - str.length) + str;
+          if (spec === 'X') str = str.toUpperCase();
+          if (flags.hash && val !== 0n && val !== 0) str = (spec === 'X' ? '0X' : '0x') + str;
+          break;
+        }
+        case 'o': {
+          var val;
+          if (length === 'll' || length === 'j') { val = readArg('u64'); str = val.toString(8); }
+          else { val = readArg('u32'); str = val.toString(8); }
+          if (flags.hash && str[0] !== '0') str = '0' + str;
+          break;
+        }
+        case 'c': str = String.fromCharCode(readArg('i32') & 0xFF); break;
+        case 's': {
+          var ptr = readArg('ptr');
+          str = ptr === 0 ? '(null)' : readLatin1(ptr);
+          if (precision >= 0 && str.length > precision) str = str.substring(0, precision);
+          break;
+        }
+        case 'p': str = '0x' + readArg('ptr').toString(16); break;
+        case 'f': case 'F': {
+          var val = readArg('f64');
+          var prec = precision >= 0 ? precision : 6;
+          if (isNaN(val)) str = spec === 'F' ? 'NAN' : 'nan';
+          else if (!isFinite(val)) str = (val < 0 ? '-' : '') + (spec === 'F' ? 'INF' : 'inf');
+          else str = val.toFixed(prec);
+          if (flags.plus && val >= 0) str = '+' + str;
+          else if (flags.space && val >= 0) str = ' ' + str;
+          break;
+        }
+        case 'e': case 'E': {
+          var val = readArg('f64');
+          var prec = precision >= 0 ? precision : 6;
+          if (isNaN(val)) str = spec === 'E' ? 'NAN' : 'nan';
+          else if (!isFinite(val)) str = (val < 0 ? '-' : '') + (spec === 'E' ? 'INF' : 'inf');
+          else { str = val.toExponential(prec); str = str.replace(/e([+-])(\d)$/, 'e$10$2'); if (spec === 'E') str = str.toUpperCase(); }
+          if (flags.plus && val >= 0) str = '+' + str;
+          break;
+        }
+        case 'g': case 'G': {
+          var val = readArg('f64');
+          var prec = precision >= 0 ? precision : 6;
+          if (prec === 0) prec = 1;
+          if (isNaN(val)) str = spec === 'G' ? 'NAN' : 'nan';
+          else if (!isFinite(val)) str = (val < 0 ? '-' : '') + (spec === 'G' ? 'INF' : 'inf');
+          else { str = val.toPrecision(prec); if (!flags.hash && str.indexOf('.') !== -1 && str.indexOf('e') === -1) str = str.replace(/\.?0+$/, ''); str = str.replace(/e([+-])(\d)$/, 'e$10$2'); if (spec === 'G') str = str.toUpperCase(); }
+          if (flags.plus && val >= 0) str = '+' + str;
+          break;
+        }
+        case 'n': readArg('ptr'); continue;
+        default: str = '%' + spec;
+      }
+      if (width > str.length) {
+        var pad = width - str.length;
+        var isFloat = 'fFeEgGaA'.indexOf(spec) >= 0;
+        var padChar = (flags.zero && !flags.minus && (isFloat || precision < 0)) ? '0' : ' ';
+        if (flags.minus) str = str + ' '.repeat(pad);
+        else if (padChar === '0' && (str[0] === '-' || str[0] === '+' || str[0] === ' ')) str = str[0] + '0'.repeat(pad) + str.substring(1);
+        else if (padChar === '0' && str.startsWith('0x')) str = '0x' + '0'.repeat(pad) + str.substring(2);
+        else str = padChar.repeat(pad) + str;
+      }
+      output += str;
+    }
+    return output;
+  }
+
+  function ExitStatus(code) { this.code = code; }
+
+  var memFiles = {};
+  var fdTable = [null, null, null];
+  var stdoutChunks = [];
+
+  function resetFS(files) {
+    memFiles = {};
+    for (var k in files) memFiles[k] = { data: files[k] };
+    fdTable = [null, { isStdout: true }, { isStderr: true }];
+    stdoutChunks = [];
+  }
+
+  function allocFd(entry) {
+    for (var i = 3; i < fdTable.length; i++) {
+      if (fdTable[i] === null) { fdTable[i] = entry; return i; }
+    }
+    fdTable.push(entry);
+    return fdTable.length - 1;
+  }
+
+  var imports = {
+    c: {
+      vsnprintf: function(buf_ptr, size, fmt_ptr, ap_ptr) {
+        var view = new DataView(instance.exports.memory.buffer);
+        var va_args_ptr = view.getUint32(ap_ptr, true);
+        var str = formatString(fmt_ptr, va_args_ptr);
+        if (size > 0) writeString(buf_ptr, str, size);
+        return str.length;
+      },
+      __vsscanf_impl: function() { return 0; },
+      __open_impl: function(path_ptr, flags, mode) {
+        var path = readString(path_ptr);
+        var file = memFiles[path];
+        if (!file) {
+          if (instance.exports.__errno_set) instance.exports.__errno_set(2);
+          return -1;
+        }
+        return allocFd({ data: file.data, position: 0 });
+      },
+      close: function(fd) {
+        if (fd >= 3 && fd < fdTable.length) fdTable[fd] = null;
+        return 0;
+      },
+      read: function(fd, buf_ptr, count) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) return -1;
+        var entry = fdTable[fd];
+        if (!entry.data) return 0;
+        var mem = new Uint8Array(instance.exports.memory.buffer);
+        var avail = entry.data.length - entry.position;
+        var n = Math.min(count, avail);
+        mem.set(entry.data.subarray(entry.position, entry.position + n), buf_ptr);
+        entry.position += n;
+        return n;
+      },
+      write: function(fd, buf_ptr, count) {
+        var buf = new Uint8Array(instance.exports.memory.buffer).slice(buf_ptr, buf_ptr + count);
+        if (fd === 1) stdoutChunks.push(buf);
+        return count;
+      },
+      lseek: function(fd, offset, whence) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) return -1;
+        var entry = fdTable[fd];
+        if (!entry.data) return -1;
+        if (whence === 0) entry.position = offset;
+        else if (whence === 1) entry.position += offset;
+        else if (whence === 2) entry.position = entry.data.length + offset;
+        return entry.position;
+      },
+      __strtod_impl: function() { return 0; },
+      __exit: function(status) { throw new ExitStatus(status); },
+      __getenv: function() { return 0; },
+      __setenv: function() { return -1; },
+      __unsetenv: function() { return -1; },
+    }
+  };
+
+  return function run(inputWasmBytes) {
+    resetFS({ 'input.wasm': inputWasmBytes });
+    instance = new WebAssembly.Instance(compiledModule, imports);
+
+    var args = ['disw', '-J', 'input.wasm'];
+    var alloca = instance.exports.alloca;
+    var memory = instance.exports.memory;
+
+    var argPtrs = [];
+    for (var a = 0; a < args.length; a++) {
+      var encoded = encoder.encode(args[a]);
+      var ptr = alloca(encoded.length + 1);
+      var bytes = new Uint8Array(memory.buffer);
+      bytes.set(encoded, ptr);
+      bytes[ptr + encoded.length] = 0;
+      argPtrs.push(ptr);
+    }
+    var argvPtr = alloca((args.length + 1) * 4);
+    var view = new DataView(memory.buffer);
+    for (var j = 0; j < args.length; j++) view.setInt32(argvPtr + j * 4, argPtrs[j], true);
+    view.setInt32(argvPtr + args.length * 4, 0, true);
+
+    try {
+      instance.exports.main(args.length, argvPtr);
+    } catch (e) {
+      if (!(e instanceof ExitStatus)) throw e;
+    }
+
+    var totalLen = stdoutChunks.reduce(function(s, c) { return s + c.length; }, 0);
+    var result = new Uint8Array(totalLen);
+    var off = 0;
+    for (var k = 0; k < stdoutChunks.length; k++) { result.set(stdoutChunks[k], off); off += stdoutChunks[k].length; }
+    return utf8Decoder.decode(result);
+  };
+}
+
+// Compiler
+function compileC(source) {
+  var C = self.CompilerJS;
+  var pp = C.createDefaultPPRegistry();
+  var errors = [];
+  var vfs = {
+    readFileSync: function(f) {
+      if (f === 'input.c') return source;
+      throw new Error('File not found: ' + f);
+    }
+  };
+  var units;
+  try {
+    units = C.parseAllUnits(vfs, pp, ['input.c'], {
+      compilerOptions: {},
+      warningFlags: {},
+      writeErr: function(s) { errors.push(s); },
+    });
+  } catch (e) {
+    throw new Error(errors.length > 0 ? errors.join('') : e.message);
+  }
+  var linkResult = C.linkTranslationUnits(units, {});
+  if (linkResult.errors.length > 0) {
+    throw new Error(linkResult.errors.map(function(e) { return e.message; }).join('\n'));
+  }
+  return C.generateCode(units, 'output.wasm', { compilerOptions: { emitNames: true } });
+}
+
+// Rendering
+function classifyOp(text) {
+  if (/^(block|loop|if|else|end|br|return|unreachable|nop)\b/.test(text)) return 'control';
+  if (text.startsWith('call')) return 'call';
+  if (/^[if](32|64)\.(load|store)/.test(text) || text.startsWith('memory.')) return 'memory';
+  if (text.startsWith('local.')) return 'local';
+  if (text.startsWith('global.')) return 'global';
+  if (text.indexOf('.const ') >= 0) return 'const';
+  return '';
+}
+
+function renderInsn(insn) {
+  var parts = insn.text.match(/^(\S+)(.*)/);
+  if (!parts) return '';
+  var op = parts[1];
+  var rest = parts[2] || '';
+  var cls = classifyOp(insn.text);
+  var indent = '  '.repeat(insn.depth);
+
+  var immHtml = '';
+  if (rest) {
+    var escaped = rest.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    immHtml = escaped.replace(/&lt;([^&]*)&gt;/g, '<span class="insn-name">&lt;$1&gt;</span>');
+  }
+
+  return '<div class="insn">' +
+    '<span class="insn-offset">' + insn.offset.toString(16).padStart(6, '0') + '</span>' +
+    '<span class="insn-text">' + indent +
+    '<span class="insn-op ' + cls + '">' + op + '</span>' +
+    '<span class="insn-imm">' + immHtml + '</span>' +
+    '</span></div>';
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderJson(json) {
+  var wrap = document.getElementById('disasmWrap');
+  var html = '';
+
+  html += '<div class="meta-section">';
+  html += '<h3>Module (version ' + json.version + ')</h3>';
+  for (var si = 0; si < json.sections.length; si++) {
+    var s = json.sections[si];
+    html += '<div class="meta-row"><span class="kind">' + s.name + '</span>';
+    html += ' offset=0x' + s.offset.toString(16) + ' size=' + s.size;
+    if (s.count !== undefined) html += ' count=' + s.count;
+    html += '</div>';
+  }
+  html += '</div>';
+
+  if (json.imports.length > 0) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Imports</span>';
+    html += '<span class="fn-meta">' + json.imports.length + ' entries</span>';
+    html += '</summary><div class="meta-section">';
+    for (var ii = 0; ii < json.imports.length; ii++) {
+      var im = json.imports[ii];
+      html += '<div class="meta-row"><span class="kind">' + im.kind + '</span> ';
+      html += '<span class="name">' + esc(im.module) + '.' + esc(im.name) + '</span>';
+      if (im.type_index !== undefined) html += ' sig=' + im.type_index;
+      html += '</div>';
+    }
+    html += '</div></details>';
+  }
+
+  if (json.exports.length > 0) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Exports</span>';
+    html += '<span class="fn-meta">' + json.exports.length + ' entries</span>';
+    html += '</summary><div class="meta-section">';
+    for (var ei = 0; ei < json.exports.length; ei++) {
+      var ex = json.exports[ei];
+      html += '<div class="meta-row"><span class="kind">' + ex.kind + '</span> ';
+      html += '<span class="name">' + esc(ex.name) + '</span> -&gt; [' + ex.index + ']</div>';
+    }
+    html += '</div></details>';
+  }
+
+  if (json.globals.length > 0) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Globals</span>';
+    html += '<span class="fn-meta">' + json.globals.length + ' entries</span>';
+    html += '</summary><div class="meta-section">';
+    for (var gi = 0; gi < json.globals.length; gi++) {
+      var g = json.globals[gi];
+      html += '<div class="meta-row">[' + g.index + '] <span class="kind">' + g.val_type + '</span> ' + (g.mutable ? 'mut' : 'const');
+      if (g.name) html += ' <span class="name">' + esc(g.name) + '</span>';
+      html += '</div>';
+    }
+    html += '</div></details>';
+  }
+
+  if (json.code.length > 0) {
+    var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Code</span>';
+    html += '<span class="fn-meta">' + json.code.length + ' functions, ' + totalInsns + ' instructions</span>';
+    html += '</summary><div class="code-group">';
+    for (var fi = 0; fi < json.code.length; fi++) {
+      var fn = json.code[fi];
+      var name = fn.name || ('func[' + fn.index + ']');
+      var sig = fn.signature || '';
+      var nInsns = fn.instructions.length;
+
+      html += '<details class="section-group fn-group">';
+      html += '<summary>';
+      html += '<span class="fn-name">' + esc(name) + '</span>';
+      html += '<span class="fn-sig">' + esc(sig) + '</span>';
+      html += '<span class="fn-meta">' + nInsns + ' insns, ' + fn.body_size + ' bytes';
+      if (fn.locals.length > 0) html += ', ' + fn.locals.length + ' locals';
+      html += '</span></summary>';
+      html += '<div class="insn-list">';
+      for (var ii2 = 0; ii2 < fn.instructions.length; ii2++) {
+        html += renderInsn(fn.instructions[ii2]);
+      }
+      html += '</div></details>';
+    }
+    html += '</div></details>';
+  }
+
+  wrap.innerHTML = html;
+}
+
+// Main
+var diswRunner = null;
+var statusEl = document.getElementById('status');
+
+async function init() {
+  try {
+    var raw = atob(DISW_WASM_BASE64);
+    var diswBytes = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) diswBytes[i] = raw.charCodeAt(i);
+    diswRunner = await createDiswRunner(diswBytes);
+    document.getElementById('btnCompile').disabled = false;
+    statusEl.textContent = 'Ready';
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    console.error(e);
+  }
+}
+
+async function doCompile() {
+  var btn = document.getElementById('btnCompile');
+  var source = document.getElementById('editor').value;
+  btn.disabled = true;
+  statusEl.textContent = 'Compiling...';
+
+  try {
+    var t0 = performance.now();
+    var wasm = compileC(source);
+    var compileMs = (performance.now() - t0).toFixed(0);
+
+    statusEl.textContent = 'Disassembling...';
+    var t1 = performance.now();
+    var jsonStr = diswRunner(wasm);
+    var disasmMs = (performance.now() - t1).toFixed(0);
+
+    var json = JSON.parse(jsonStr);
+    renderJson(json);
+
+    var totalFns = json.code.length;
+    var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
+    statusEl.textContent = totalFns + ' functions, ' + totalInsns + ' instructions (' + compileMs + 'ms compile, ' + disasmMs + 'ms disasm)';
+  } catch (e) {
+    var wrap = document.getElementById('disasmWrap');
+    wrap.innerHTML = '<div class="disasm-error">' + esc(e.message || String(e)) + '</div>';
+    statusEl.textContent = 'Error';
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+var isStacked = false;
+document.getElementById('btnLayout').addEventListener('click', function() {
+  isStacked = !isStacked;
+  document.getElementById('layout').className = 'layout ' + (isStacked ? 'stacked' : 'side-by-side');
+});
+
+document.getElementById('editor').addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    doCompile();
+  }
+});
+
+document.getElementById('btnCompile').addEventListener('click', doCompile);
+init();
+</script>
+</body>
+</html>

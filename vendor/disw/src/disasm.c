@@ -1,6 +1,26 @@
 #include "wasm.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+
+static char insn_buf[1024];
+static int insn_pos;
+static int use_buf;
+
+static void out_reset(void) { insn_pos = 0; insn_buf[0] = '\0'; }
+
+static void out(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    if (use_buf) {
+        int space = (int)sizeof(insn_buf) - insn_pos;
+        if (space > 0)
+            insn_pos += vsnprintf(insn_buf + insn_pos, space, fmt, ap);
+    } else {
+        vprintf(fmt, ap);
+    }
+    va_end(ap);
+}
 
 static int sec_match(const Section *s, const char *f) {
     if (!f) return 1;
@@ -243,60 +263,60 @@ static void dis_fc(const WasmModule *mod, Reader *r) {
     uint32_t sub = read_leb_u32(r);
     (void)mod;
     switch (sub) {
-    case 0: printf("i32.trunc_sat_f32_s"); break;
-    case 1: printf("i32.trunc_sat_f32_u"); break;
-    case 2: printf("i32.trunc_sat_f64_s"); break;
-    case 3: printf("i32.trunc_sat_f64_u"); break;
-    case 4: printf("i64.trunc_sat_f32_s"); break;
-    case 5: printf("i64.trunc_sat_f32_u"); break;
-    case 6: printf("i64.trunc_sat_f64_s"); break;
-    case 7: printf("i64.trunc_sat_f64_u"); break;
+    case 0: out("i32.trunc_sat_f32_s"); break;
+    case 1: out("i32.trunc_sat_f32_u"); break;
+    case 2: out("i32.trunc_sat_f64_s"); break;
+    case 3: out("i32.trunc_sat_f64_u"); break;
+    case 4: out("i64.trunc_sat_f32_s"); break;
+    case 5: out("i64.trunc_sat_f32_u"); break;
+    case 6: out("i64.trunc_sat_f64_s"); break;
+    case 7: out("i64.trunc_sat_f64_u"); break;
     case 8: {
         uint32_t seg = read_leb_u32(r);
         read_byte(r);
-        printf("memory.init %u", seg);
+        out("memory.init %u", seg);
         break;
     }
-    case 9: printf("data.drop %u", read_leb_u32(r)); break;
-    case 10: read_byte(r); read_byte(r); printf("memory.copy"); break;
-    case 11: read_byte(r); printf("memory.fill"); break;
+    case 9: out("data.drop %u", read_leb_u32(r)); break;
+    case 10: read_byte(r); read_byte(r); out("memory.copy"); break;
+    case 11: read_byte(r); out("memory.fill"); break;
     case 12: {
         uint32_t seg = read_leb_u32(r);
         uint32_t tab = read_leb_u32(r);
-        printf("table.init %u %u", seg, tab);
+        out("table.init %u %u", seg, tab);
         break;
     }
-    case 13: printf("elem.drop %u", read_leb_u32(r)); break;
+    case 13: out("elem.drop %u", read_leb_u32(r)); break;
     case 14: {
         uint32_t dst = read_leb_u32(r);
         uint32_t src = read_leb_u32(r);
-        printf("table.copy %u %u", dst, src);
+        out("table.copy %u %u", dst, src);
         break;
     }
-    case 15: printf("table.grow %u", read_leb_u32(r)); break;
-    case 16: printf("table.size %u", read_leb_u32(r)); break;
-    case 17: printf("table.fill %u", read_leb_u32(r)); break;
-    default: printf("<unknown 0xfc %u>", sub); break;
+    case 15: out("table.grow %u", read_leb_u32(r)); break;
+    case 16: out("table.size %u", read_leb_u32(r)); break;
+    case 17: out("table.fill %u", read_leb_u32(r)); break;
+    default: out("<unknown 0xfc %u>", sub); break;
     }
 }
 
 static void dis_insn(const WasmModule *mod, Reader *r, uint8_t op) {
     const Op *o = &ops[op];
     if (!o->name) {
-        printf("<unknown 0x%02x>", op);
+        out("<unknown 0x%02x>", op);
         return;
     }
-    printf("%s", o->name);
+    out("%s", o->name);
     switch (o->imm) {
     case N: break;
     case BT: {
         int32_t bt = read_leb_i32(r);
         if (bt >= 0)
-            printf(" type[%d]", bt);
+            out(" type[%d]", bt);
         else {
             uint8_t vt = (uint8_t)(bt & 0x7F);
             if (vt != 0x40)
-                printf(" (result %s)", wasm_valtype(vt));
+                out(" (result %s)", wasm_valtype(vt));
         }
         break;
     }
@@ -308,46 +328,46 @@ static void dis_insn(const WasmModule *mod, Reader *r, uint8_t op) {
         else if (op == 0x23 || op == 0x24)
             name = wasm_global_name(mod, idx);
         if (name)
-            printf(" %u <%s>", idx, name);
+            out(" %u <%s>", idx, name);
         else
-            printf(" %u", idx);
+            out(" %u", idx);
         break;
     }
     case BR: {
         uint32_t count = read_leb_u32(r);
         uint32_t i;
         for (i = 0; i <= count; i++)
-            printf(" %u", read_leb_u32(r));
+            out(" %u", read_leb_u32(r));
         break;
     }
     case CI: {
         uint32_t type_idx = read_leb_u32(r);
         uint32_t table_idx = read_leb_u32(r);
-        printf(" type[%u]", type_idx);
+        out(" type[%u]", type_idx);
         if (table_idx != 0)
-            printf(" table[%u]", table_idx);
+            out(" table[%u]", table_idx);
         break;
     }
     case MA: {
         uint32_t align = read_leb_u32(r);
         uint32_t offset = read_leb_u32(r);
         if (align != o->align)
-            printf(" align=%u", 1u << align);
+            out(" align=%u", 1u << align);
         if (offset)
-            printf(" offset=%u", offset);
+            out(" offset=%u", offset);
         break;
     }
-    case I4: printf(" %d", read_leb_i32(r)); break;
-    case I8: printf(" %lld", (long long)read_leb_i64(r)); break;
-    case F4: printf(" %g", (double)read_f32(r)); break;
-    case F8: printf(" %g", read_f64(r)); break;
+    case I4: out(" %d", read_leb_i32(r)); break;
+    case I8: out(" %lld", (long long)read_leb_i64(r)); break;
+    case F4: out(" %g", (double)read_f32(r)); break;
+    case F8: out(" %g", read_f64(r)); break;
     case MB: read_byte(r); break;
-    case RT: printf(" %s", wasm_valtype(read_byte(r))); break;
+    case RT: out(" %s", wasm_valtype(read_byte(r))); break;
     case ST: {
         uint32_t count = read_leb_u32(r);
         uint32_t i;
         for (i = 0; i < count; i++)
-            printf(" %s", wasm_valtype(read_byte(r)));
+            out(" %s", wasm_valtype(read_byte(r)));
         break;
     }
     }
@@ -721,4 +741,276 @@ void print_hexdump(const WasmModule *mod, const char *filter) {
         printf("\nContents of section %s:\n", name);
         hexdump(mod->raw + s->offset, s->offset, s->size);
     }
+}
+
+/* ---- JSON output ---- */
+
+static void json_str(const char *s) {
+    if (!s) { printf("null"); return; }
+    printf("\"");
+    while (*s) {
+        switch (*s) {
+        case '"': printf("\\\""); break;
+        case '\\': printf("\\\\"); break;
+        case '\n': printf("\\n"); break;
+        case '\r': printf("\\r"); break;
+        case '\t': printf("\\t"); break;
+        default:
+            if ((unsigned char)*s < 0x20)
+                printf("\\u%04x", (unsigned char)*s);
+            else
+                printf("%c", *s);
+        }
+        s++;
+    }
+    printf("\"");
+}
+
+static void json_sig(const FuncType *ft) {
+    uint32_t i;
+    printf("\"(");
+    for (i = 0; i < ft->param_count; i++) {
+        if (i) printf(", ");
+        printf("%s", wasm_valtype(ft->params[i]));
+    }
+    printf(") -> ");
+    if (ft->result_count == 0) {
+        printf("nil");
+    } else {
+        for (i = 0; i < ft->result_count; i++) {
+            if (i) printf(", ");
+            printf("%s", wasm_valtype(ft->results[i]));
+        }
+    }
+    printf("\"");
+}
+
+void print_json(const WasmModule *mod) {
+    uint32_t i, j;
+
+    printf("{\"version\":%u", mod->version);
+
+    /* sections */
+    printf(",\"sections\":[");
+    for (i = 0; i < mod->section_count; i++) {
+        const Section *s = &mod->sections[i];
+        const char *name = (s->id == SEC_CUSTOM && s->custom_name) ? s->custom_name : wasm_section_name(s->id);
+        uint32_t count = 0;
+        int has_count = 1;
+        if (i) printf(",");
+        printf("{\"name\":");
+        json_str(name);
+        printf(",\"id\":%u,\"offset\":%u,\"size\":%u", s->id, s->offset, s->size);
+        switch (s->id) {
+        case SEC_TYPE: count = mod->type_count; break;
+        case SEC_IMPORT: count = mod->import_count; break;
+        case SEC_FUNCTION: count = mod->func_count; break;
+        case SEC_TABLE: count = mod->table_count; break;
+        case SEC_MEMORY: count = mod->memory_count; break;
+        case SEC_GLOBAL: count = mod->global_count; break;
+        case SEC_EXPORT: count = mod->export_count; break;
+        case SEC_ELEMENT: count = mod->elem_count; break;
+        case SEC_CODE: count = mod->code_count; break;
+        case SEC_DATA: count = mod->data_count; break;
+        default: has_count = 0; break;
+        }
+        if (has_count) printf(",\"count\":%u", count);
+        printf("}");
+    }
+    printf("]");
+
+    /* types */
+    printf(",\"types\":[");
+    for (i = 0; i < mod->type_count; i++) {
+        const FuncType *ft = &mod->types[i];
+        if (i) printf(",");
+        printf("{\"index\":%u,\"params\":[", i);
+        for (j = 0; j < ft->param_count; j++) {
+            if (j) printf(",");
+            printf("\"%s\"", wasm_valtype(ft->params[j]));
+        }
+        printf("],\"results\":[");
+        for (j = 0; j < ft->result_count; j++) {
+            if (j) printf(",");
+            printf("\"%s\"", wasm_valtype(ft->results[j]));
+        }
+        printf("]}");
+    }
+    printf("]");
+
+    /* imports */
+    printf(",\"imports\":[");
+    for (i = 0; i < mod->import_count; i++) {
+        const Import *im = &mod->imports[i];
+        if (i) printf(",");
+        printf("{\"module\":");
+        json_str(im->module);
+        printf(",\"name\":");
+        json_str(im->name);
+        printf(",\"kind\":\"%s\"", wasm_kind_name(im->kind));
+        switch (im->kind) {
+        case EXT_FUNC:
+            printf(",\"type_index\":%u", im->func_type);
+            break;
+        case EXT_TABLE:
+            printf(",\"elem_type\":\"%s\",\"initial\":%u", wasm_valtype(im->table.elem_type), im->table.initial);
+            if (im->table.has_max) printf(",\"maximum\":%u", im->table.maximum);
+            break;
+        case EXT_MEMORY:
+            printf(",\"initial\":%u", im->memory.initial);
+            if (im->memory.has_max) printf(",\"maximum\":%u", im->memory.maximum);
+            break;
+        case EXT_GLOBAL:
+            printf(",\"val_type\":\"%s\",\"mutable\":%s",
+                   wasm_valtype(im->global.val_type), im->global.mutable_ ? "true" : "false");
+            break;
+        }
+        printf("}");
+    }
+    printf("]");
+
+    /* functions */
+    printf(",\"functions\":[");
+    for (i = 0; i < mod->func_count; i++) {
+        uint32_t fidx = mod->num_func_imports + i;
+        const char *name = wasm_func_name(mod, fidx);
+        if (i) printf(",");
+        printf("{\"index\":%u,\"type_index\":%u", fidx, mod->func_types[i]);
+        if (name) { printf(",\"name\":"); json_str(name); }
+        printf("}");
+    }
+    printf("]");
+
+    /* tables */
+    printf(",\"tables\":[");
+    for (i = 0; i < mod->table_count; i++) {
+        uint32_t tidx = mod->num_table_imports + i;
+        if (i) printf(",");
+        printf("{\"index\":%u,\"elem_type\":\"%s\",\"initial\":%u",
+               tidx, wasm_valtype(mod->tables[i].elem_type), mod->tables[i].initial);
+        if (mod->tables[i].has_max) printf(",\"maximum\":%u", mod->tables[i].maximum);
+        printf("}");
+    }
+    printf("]");
+
+    /* memories */
+    printf(",\"memories\":[");
+    for (i = 0; i < mod->memory_count; i++) {
+        uint32_t midx = mod->num_memory_imports + i;
+        if (i) printf(",");
+        printf("{\"index\":%u,\"initial\":%u", midx, mod->memories[i].initial);
+        if (mod->memories[i].has_max) printf(",\"maximum\":%u", mod->memories[i].maximum);
+        printf("}");
+    }
+    printf("]");
+
+    /* globals */
+    printf(",\"globals\":[");
+    for (i = 0; i < mod->global_count; i++) {
+        uint32_t gidx = mod->num_global_imports + i;
+        const char *gname = wasm_global_name(mod, gidx);
+        if (i) printf(",");
+        printf("{\"index\":%u,\"val_type\":\"%s\",\"mutable\":%s",
+               gidx, wasm_valtype(mod->globals[i].val_type),
+               mod->globals[i].mutable_ ? "true" : "false");
+        if (gname) { printf(",\"name\":"); json_str(gname); }
+        printf("}");
+    }
+    printf("]");
+
+    /* exports */
+    printf(",\"exports\":[");
+    for (i = 0; i < mod->export_count; i++) {
+        const Export *ex = &mod->exports[i];
+        if (i) printf(",");
+        printf("{\"name\":");
+        json_str(ex->name);
+        printf(",\"kind\":\"%s\",\"index\":%u}", wasm_kind_name(ex->kind), ex->index);
+    }
+    printf("]");
+
+    /* start */
+    if (mod->has_start) {
+        const char *sname = wasm_func_name(mod, mod->start_func);
+        printf(",\"start\":{\"func_index\":%u", mod->start_func);
+        if (sname) { printf(",\"name\":"); json_str(sname); }
+        printf("}");
+    } else {
+        printf(",\"start\":null");
+    }
+
+    /* code disassembly */
+    printf(",\"code\":[");
+    use_buf = 1;
+    for (i = 0; i < mod->code_count; i++) {
+        const Code *code = &mod->codes[i];
+        uint32_t func_idx = mod->num_func_imports + i;
+        const char *name = wasm_func_name(mod, func_idx);
+        Reader dr;
+        int depth = 1;
+        int first_insn = 1;
+
+        if (i) printf(",");
+        printf("{\"index\":%u", func_idx);
+        if (name) { printf(",\"name\":"); json_str(name); }
+
+        if (i < mod->func_count) {
+            uint32_t ti = mod->func_types[i];
+            if (ti < mod->type_count) {
+                printf(",\"type_index\":%u,\"signature\":", ti);
+                json_sig(&mod->types[ti]);
+            }
+        }
+
+        printf(",\"offset\":%u,\"body_size\":%u", code->func_offset, code->body_size);
+
+        /* locals */
+        printf(",\"locals\":[");
+        if (code->total_locals > 0) {
+            int first = 1;
+            for (j = 0; j < code->local_decl_count; j++) {
+                uint32_t k;
+                for (k = 0; k < code->locals[j].count; k++) {
+                    if (!first) printf(",");
+                    printf("\"%s\"", wasm_valtype(code->locals[j].type));
+                    first = 0;
+                }
+            }
+        }
+        printf("]");
+
+        /* instructions */
+        printf(",\"instructions\":[");
+        reader_init(&dr, mod->raw + code->body_offset, code->body_size);
+        while (!reader_eof(&dr)) {
+            uint32_t off = code->body_offset + (uint32_t)dr.pos;
+            uint8_t op = read_byte(&dr);
+
+            if (op == 0xFD || op == 0xFE) break;
+
+            if (op == 0x0B || op == 0x05) {
+                if (depth > 1) depth--;
+            }
+
+            out_reset();
+            if (op == 0xFC) {
+                dis_fc(mod, &dr);
+            } else {
+                dis_insn(mod, &dr, op);
+            }
+
+            if (!first_insn) printf(",");
+            printf("{\"offset\":%u,\"depth\":%d,\"text\":", off, depth);
+            json_str(insn_buf);
+            printf("}");
+            first_insn = 0;
+
+            if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05) {
+                depth++;
+            }
+        }
+        printf("]}");
+    }
+    use_buf = 0;
+    printf("]}\n");
 }
