@@ -33,20 +33,23 @@ def main():
 
     # Read inputs
     compiler_js = open(os.path.join(ROOT, "compiler.js")).read()
-    # Strip shebang line — browsers handle it but it's cleaner without
     if compiler_js.startswith("#!"):
         compiler_js = compiler_js[compiler_js.index("\n") + 1:]
+
+    codemirror_js = open(os.path.join(ROOT, "vendor", "codemirror", "codemirror.js")).read()
 
     disw_wasm = open(wasm_path, "rb").read()
     disw_b64 = base64.b64encode(disw_wasm).decode("ascii")
 
     template = open(os.path.join(TOOL_DIR, "page.html")).read()
 
-    # Escape </script> inside compiler.js so it doesn't break the <script> tag
+    # Escape </script> inside embedded JS so it doesn't break <script> tags
     compiler_js = compiler_js.replace("</script>", "<\\/script>")
+    codemirror_js = codemirror_js.replace("</script>", "<\\/script>")
 
     # Inject
-    html = template.replace("/* __COMPILER_JS__ */", compiler_js)
+    html = template.replace("/* __CODEMIRROR_JS__ */", codemirror_js)
+    html = html.replace("/* __COMPILER_JS__ */", compiler_js)
     html = html.replace("'__DISW_WASM_BASE64__'", "'" + disw_b64 + "'")
 
     out_path = os.path.join(TOOL_DIR, "index.html")

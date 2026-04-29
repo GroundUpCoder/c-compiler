@@ -57,12 +57,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .stacked .pane + .pane { border-top: 1px solid var(--border); }
 
 .editor-wrap { flex: 1; overflow: hidden; position: relative; }
-.editor-wrap textarea {
-  width: 100%; height: 100%; resize: none; border: none; outline: none;
-  background: var(--overlay); color: var(--text); padding: 12px;
-  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
-  font-size: 13px; line-height: 1.5; tab-size: 4;
-}
+.editor-wrap .cm-editor { height: 100%; }
+.editor-wrap .cm-editor .cm-scroller { overflow: auto; }
+.editor-wrap .cm-editor.cm-focused { outline: none; }
 
 .disasm-wrap { flex: 1; overflow-y: auto; padding: 8px 0; background: var(--overlay); }
 .disasm-wrap::-webkit-scrollbar { width: 8px; }
@@ -168,27 +165,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div class="layout side-by-side" id="layout">
     <div class="pane">
       <div class="pane-header">C Source</div>
-      <div class="editor-wrap">
-        <textarea id="editor" spellcheck="false">int factorial(int n) {
-    if (n <= 1) return 1;
-    return n * factorial(n - 1);
-}
-
-int fibonacci(int n) {
-    int a = 0, b = 1;
-    for (int i = 0; i < n; i++) {
-        int t = a + b;
-        a = b;
-        b = t;
-    }
-    return a;
-}
-
-int main(void) {
-    return factorial(10) + fibonacci(20);
-}
-</textarea>
-      </div>
+      <div class="editor-wrap" id="editorWrap"></div>
     </div>
     <div class="pane">
       <div class="pane-header">Disassembly</div>
@@ -209,6 +186,9 @@ int main(void) {
     <div class="btn-row"><button id="btnSettingsClose">Done</button></div>
   </div>
 </div>
+
+<!-- CodeMirror editor (injected by build.py) -->
+<script>/* __CODEMIRROR_JS__ */</script>
 
 <!-- Compiler (injected by build.py) -->
 <script>/* __COMPILER_JS__ */</script>
@@ -700,6 +680,78 @@ function renderJson(json) {
   wrap.innerHTML = html;
 }
 
+// Editor
+var defaultSource = 'int factorial(int n) {\n    if (n <= 1) return 1;\n    return n * factorial(n - 1);\n}\n\nint fibonacci(int n) {\n    int a = 0, b = 1;\n    for (int i = 0; i < n; i++) {\n        int t = a + b;\n        a = b;\n        b = t;\n    }\n    return a;\n}\n\nint main(void) {\n    return factorial(10) + fibonacci(20);\n}\n';
+
+var cmTheme = CM.EditorView.theme({
+  '&': { height: '100%', backgroundColor: 'var(--overlay)' },
+  '.cm-content': {
+    fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace",
+    fontSize: '13px', lineHeight: '1.5', padding: '12px 0',
+    caretColor: 'var(--text)',
+  },
+  '.cm-cursor': { borderLeftColor: 'var(--text)' },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'rgba(137, 180, 250, 0.2)' },
+  '.cm-activeLine': { backgroundColor: 'rgba(137, 180, 250, 0.06)' },
+  '.cm-activeLineGutter': { backgroundColor: 'rgba(137, 180, 250, 0.06)' },
+  '.cm-gutters': { backgroundColor: 'var(--overlay)', color: 'var(--subtext)', border: 'none', paddingLeft: '4px' },
+  '.cm-lineNumbers .cm-gutterElement': { fontSize: '12px', minWidth: '3ch', padding: '0 8px 0 0' },
+  '.cm-foldGutter .cm-gutterElement': { padding: '0 4px' },
+}, {dark: true});
+
+var cmHighlight = CM.syntaxHighlighting(CM.HighlightStyle.define([
+  {tag: CM.tags.keyword, color: 'var(--red)'},
+  {tag: CM.tags.typeName, color: 'var(--yellow)'},
+  {tag: CM.tags.definition(CM.tags.variableName), color: 'var(--blue)'},
+  {tag: CM.tags.variableName, color: 'var(--text)'},
+  {tag: CM.tags.function(CM.tags.variableName), color: 'var(--blue)'},
+  {tag: CM.tags.definition(CM.tags.function(CM.tags.variableName)), color: 'var(--blue)'},
+  {tag: CM.tags.operator, color: 'var(--teal)'},
+  {tag: CM.tags.number, color: 'var(--peach)'},
+  {tag: CM.tags.string, color: 'var(--green)'},
+  {tag: CM.tags.character, color: 'var(--green)'},
+  {tag: CM.tags.lineComment, color: 'var(--subtext)', fontStyle: 'italic'},
+  {tag: CM.tags.blockComment, color: 'var(--subtext)', fontStyle: 'italic'},
+  {tag: CM.tags.meta, color: 'var(--mauve)'},
+  {tag: CM.tags.punctuation, color: 'var(--subtext)'},
+  {tag: CM.tags.paren, color: 'var(--text)'},
+  {tag: CM.tags.brace, color: 'var(--text)'},
+  {tag: CM.tags.bracket, color: 'var(--text)'},
+]));
+
+var compileKeymap = CM.keymap.of([{
+  key: 'Mod-Enter',
+  run: function() { doCompile(); return true; }
+}]);
+
+var editorView = new CM.EditorView({
+  doc: defaultSource,
+  extensions: [
+    CM.lineNumbers(),
+    CM.highlightActiveLineGutter(),
+    CM.highlightSpecialChars(),
+    CM.history(),
+    CM.foldGutter(),
+    CM.drawSelection(),
+    CM.indentOnInput(),
+    CM.bracketMatching(),
+    CM.closeBrackets(),
+    CM.highlightActiveLine(),
+    CM.keymap.of([
+      ...CM.closeBracketsKeymap,
+      ...CM.defaultKeymap,
+      ...CM.historyKeymap,
+      ...CM.foldKeymap,
+      CM.indentWithTab,
+    ]),
+    CM.cpp(),
+    cmTheme,
+    cmHighlight,
+    compileKeymap,
+  ],
+  parent: document.getElementById('editorWrap'),
+});
+
 // Main
 var diswRunner = null;
 var statusEl = document.getElementById('status');
@@ -720,7 +772,7 @@ async function init() {
 
 async function doCompile() {
   var btn = document.getElementById('btnCompile');
-  var source = document.getElementById('editor').value;
+  var source = editorView.state.doc.toString();
   btn.disabled = true;
   statusEl.textContent = 'Compiling...';
 
@@ -754,13 +806,6 @@ var isStacked = false;
 document.getElementById('btnLayout').addEventListener('click', function() {
   isStacked = !isStacked;
   document.getElementById('layout').className = 'layout ' + (isStacked ? 'stacked' : 'side-by-side');
-});
-
-document.getElementById('editor').addEventListener('keydown', function(e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault();
-    doCompile();
-  }
 });
 
 document.getElementById('btnCompile').addEventListener('click', doCompile);
