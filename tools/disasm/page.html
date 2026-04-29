@@ -92,6 +92,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .section-group summary .fn-name { color: var(--blue); font-weight: 600; }
 .section-group summary .fn-sig { color: var(--subtext); font-size: 12px; }
 .section-group summary .fn-meta { color: var(--subtext); font-size: 11px; margin-left: auto; }
+.fn-group > .section-group > summary { padding-left: 28px; }
 
 .insn-list { font-family: monospace; font-size: 12px; line-height: 1.6; }
 .insn {
@@ -118,6 +119,38 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 .app { display: flex; flex-direction: column; height: 100vh; }
 
+.var-list { font-family: monospace; font-size: 12px; line-height: 1.6; padding: 2px 0; }
+.var-row {
+  display: flex; padding: 2px 12px; transition: background 0.1s; cursor: default;
+}
+.var-row .var-idx { color: var(--subtext); width: 70px; text-align: right; padding-right: 12px; flex-shrink: 0; }
+.var-row .var-type { color: var(--mauve); width: 40px; }
+.var-row .var-name { color: var(--teal); font-weight: 600; }
+.var-row:hover { background: rgba(137, 180, 250, 0.06); }
+.hl-local { background: rgba(148, 226, 213, 0.12) !important; }
+
+.settings-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100;
+  align-items: center; justify-content: center;
+}
+.settings-overlay.open { display: flex; }
+.settings-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px 24px; min-width: 320px; max-width: 420px;
+}
+.settings-panel h2 { font-size: 14px; color: var(--blue); margin-bottom: 12px; }
+.settings-panel label {
+  display: flex; align-items: center; gap: 8px; padding: 6px 0;
+  font-size: 13px; cursor: pointer; color: var(--text);
+}
+.settings-panel label input { accent-color: var(--accent); }
+.settings-panel .setting-desc { font-size: 11px; color: var(--subtext); margin-left: 24px; margin-bottom: 4px; }
+.settings-panel .btn-row { margin-top: 14px; text-align: right; }
+.settings-panel button {
+  padding: 6px 16px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--accent); color: var(--overlay); cursor: pointer; font-size: 13px; font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .layout.side-by-side { flex-direction: column; }
 }
@@ -129,6 +162,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <h1>WASM Disassembler</h1>
     <span class="status" id="status">Loading...</span>
     <button id="btnCompile" class="primary" disabled>Compile &amp; Disassemble</button>
+    <button id="btnSettings" title="Settings">&#x2699;</button>
     <button id="btnLayout" title="Toggle layout">&#x2B1A;</button>
   </div>
   <div class="layout side-by-side" id="layout">
@@ -162,6 +196,17 @@ int main(void) {
         <div class="disasm-empty">Press <kbd>Compile &amp; Disassemble</kbd> or <kbd>Ctrl+Enter</kbd> to see output</div>
       </div>
     </div>
+  </div>
+</div>
+
+<div class="settings-overlay" id="settingsOverlay">
+  <div class="settings-panel">
+    <h2>Compiler Settings</h2>
+    <label><input type="checkbox" id="optNoReuseLocals"> Disable local slot reuse</label>
+    <div class="setting-desc">Each variable gets its own WASM local (no sharing across scopes)</div>
+    <label><input type="checkbox" id="optGcSections"> GC unused sections</label>
+    <div class="setting-desc">Remove unreferenced functions and data</div>
+    <div class="btn-row"><button id="btnSettingsClose">Done</button></div>
   </div>
 </div>
 
@@ -458,6 +503,13 @@ async function createDiswRunner(wasmBytes) {
 }
 
 // Compiler
+function getCompilerOptions() {
+  var opts = { emitNames: true };
+  if (document.getElementById('optNoReuseLocals').checked) opts.noReuseLocals = true;
+  if (document.getElementById('optGcSections').checked) opts.gcSections = true;
+  return opts;
+}
+
 function compileC(source) {
   var C = self.CompilerJS;
   var pp = C.createDefaultPPRegistry();
@@ -468,10 +520,11 @@ function compileC(source) {
       throw new Error('File not found: ' + f);
     }
   };
+  var opts = getCompilerOptions();
   var units;
   try {
     units = C.parseAllUnits(vfs, pp, ['input.c'], {
-      compilerOptions: {},
+      compilerOptions: opts,
       warningFlags: {},
       writeErr: function(s) { errors.push(s); },
     });
@@ -482,7 +535,7 @@ function compileC(source) {
   if (linkResult.errors.length > 0) {
     throw new Error(linkResult.errors.map(function(e) { return e.message; }).join('\n'));
   }
-  return C.generateCode(units, 'output.wasm', { compilerOptions: { emitNames: true } });
+  return C.generateCode(units, 'output.wasm', { compilerOptions: opts });
 }
 
 // Rendering
@@ -496,7 +549,7 @@ function classifyOp(text) {
   return '';
 }
 
-function renderInsn(insn) {
+function renderInsn(insn, funcIdx) {
   var parts = insn.text.match(/^(\S+)(.*)/);
   if (!parts) return '';
   var op = parts[1];
@@ -510,7 +563,13 @@ function renderInsn(insn) {
     immHtml = escaped.replace(/&lt;([^&]*)&gt;/g, '<span class="insn-name">&lt;$1&gt;</span>');
   }
 
-  return '<div class="insn">' +
+  var localAttr = '';
+  if (op === 'local.get' || op === 'local.set' || op === 'local.tee') {
+    var m = rest.match(/^\s*(\d+)/);
+    if (m) localAttr = ' data-local="' + funcIdx + ':' + m[1] + '"';
+  }
+
+  return '<div class="insn"' + localAttr + '>' +
     '<span class="insn-offset">' + insn.offset.toString(16).padStart(6, '0') + '</span>' +
     '<span class="insn-text">' + indent +
     '<span class="insn-op ' + cls + '">' + op + '</span>' +
@@ -526,8 +585,10 @@ function renderJson(json) {
   var wrap = document.getElementById('disasmWrap');
   var html = '';
 
-  html += '<div class="meta-section">';
-  html += '<h3>Module (version ' + json.version + ')</h3>';
+  html += '<details class="section-group" open><summary>';
+  html += '<span class="fn-name">Module</span>';
+  html += '<span class="fn-meta">version ' + json.version + ', ' + json.sections.length + ' sections</span>';
+  html += '</summary><div class="meta-section">';
   for (var si = 0; si < json.sections.length; si++) {
     var s = json.sections[si];
     html += '<div class="meta-row"><span class="kind">' + s.name + '</span>';
@@ -535,7 +596,7 @@ function renderJson(json) {
     if (s.count !== undefined) html += ' count=' + s.count;
     html += '</div>';
   }
-  html += '</div>';
+  html += '</div></details>';
 
   if (json.imports.length > 0) {
     html += '<details class="section-group"><summary>';
@@ -596,11 +657,40 @@ function renderJson(json) {
       html += '<span class="fn-name">' + esc(name) + '</span>';
       html += '<span class="fn-sig">' + esc(sig) + '</span>';
       html += '<span class="fn-meta">' + nInsns + ' insns, ' + fn.body_size + ' bytes';
-      if (fn.locals.length > 0) html += ', ' + fn.locals.length + ' locals';
+      var totalVars = (fn.params ? fn.params.length : 0) + fn.locals.length;
+      if (totalVars > 0) html += ', ' + totalVars + ' variables';
       html += '</span></summary>';
+      if (totalVars > 0) {
+        html += '<details class="section-group"><summary>';
+        html += '<span class="fn-name">Variables</span>';
+        html += '<span class="fn-meta">';
+        if (fn.params && fn.params.length > 0) html += fn.params.length + ' params';
+        if (fn.params && fn.params.length > 0 && fn.locals.length > 0) html += ', ';
+        if (fn.locals.length > 0) html += fn.locals.length + ' locals';
+        html += '</span></summary><div class="var-list">';
+        if (fn.params) {
+          for (var pi = 0; pi < fn.params.length; pi++) {
+            var p = fn.params[pi];
+            html += '<div class="var-row" data-local="' + fn.index + ':' + p.index + '">';
+            html += '<span class="var-idx">' + p.index + '</span>';
+            html += '<span class="var-type">' + esc(p.type) + '</span>';
+            html += '<span class="var-name">' + (p.name ? esc(p.name) : '') + '</span>';
+            html += '</div>';
+          }
+        }
+        for (var li = 0; li < fn.locals.length; li++) {
+          var l = fn.locals[li];
+          html += '<div class="var-row" data-local="' + fn.index + ':' + l.index + '">';
+          html += '<span class="var-idx">' + l.index + '</span>';
+          html += '<span class="var-type">' + esc(l.type) + '</span>';
+          html += '<span class="var-name">' + (l.name ? esc(l.name) : '') + '</span>';
+          html += '</div>';
+        }
+        html += '</div></details>';
+      }
       html += '<div class="insn-list">';
       for (var ii2 = 0; ii2 < fn.instructions.length; ii2++) {
-        html += renderInsn(fn.instructions[ii2]);
+        html += renderInsn(fn.instructions[ii2], fn.index);
       }
       html += '</div></details>';
     }
@@ -674,6 +764,34 @@ document.getElementById('editor').addEventListener('keydown', function(e) {
 });
 
 document.getElementById('btnCompile').addEventListener('click', doCompile);
+
+var disasmWrap = document.getElementById('disasmWrap');
+var hlElements = [];
+disasmWrap.addEventListener('mouseover', function(e) {
+  var el = e.target.closest('[data-local]');
+  if (!el) return;
+  var key = el.getAttribute('data-local');
+  hlElements = disasmWrap.querySelectorAll('[data-local="' + key + '"]');
+  for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.add('hl-local');
+});
+disasmWrap.addEventListener('mouseout', function(e) {
+  var el = e.target.closest('[data-local]');
+  if (!el) return;
+  for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.remove('hl-local');
+  hlElements = [];
+});
+
+var settingsOverlay = document.getElementById('settingsOverlay');
+document.getElementById('btnSettings').addEventListener('click', function() {
+  settingsOverlay.classList.add('open');
+});
+document.getElementById('btnSettingsClose').addEventListener('click', function() {
+  settingsOverlay.classList.remove('open');
+});
+settingsOverlay.addEventListener('click', function(e) {
+  if (e.target === settingsOverlay) settingsOverlay.classList.remove('open');
+});
+
 init();
 </script>
 </body>

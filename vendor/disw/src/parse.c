@@ -178,6 +178,20 @@ const char *wasm_func_name(const WasmModule *mod, uint32_t idx) {
     return NULL;
 }
 
+const char *wasm_local_name(const WasmModule *mod, uint32_t func_idx, uint32_t local_idx) {
+    uint32_t i, j;
+    for (i = 0; i < mod->names.local_name_count; i++) {
+        if (mod->names.local_names[i].func_index == func_idx) {
+            for (j = 0; j < mod->names.local_names[i].local_count; j++) {
+                if (mod->names.local_names[i].locals[j].index == local_idx)
+                    return mod->names.local_names[i].locals[j].name;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
 const char *wasm_global_name(const WasmModule *mod, uint32_t idx) {
     uint32_t i;
     for (i = 0; i < mod->names.global_name_count; i++)
@@ -393,6 +407,20 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                             mod->names.func_names[j].index = read_leb_u32(&r);
                             mod->names.func_names[j].name = read_name(&r);
                         }
+                    } else if (sub_id == 2) {
+                        uint32_t fn_count = read_leb_u32(&r);
+                        mod->names.local_name_count = fn_count;
+                        mod->names.local_names = calloc(fn_count, sizeof(LocalNameGroup));
+                        for (j = 0; j < fn_count; j++) {
+                            uint32_t k;
+                            mod->names.local_names[j].func_index = read_leb_u32(&r);
+                            mod->names.local_names[j].local_count = read_leb_u32(&r);
+                            mod->names.local_names[j].locals = calloc(mod->names.local_names[j].local_count, sizeof(NameEntry));
+                            for (k = 0; k < mod->names.local_names[j].local_count; k++) {
+                                mod->names.local_names[j].locals[k].index = read_leb_u32(&r);
+                                mod->names.local_names[j].locals[k].name = read_name(&r);
+                            }
+                        }
                     } else if (sub_id == 7) {
                         mod->names.global_name_count = read_leb_u32(&r);
                         mod->names.global_names = calloc(mod->names.global_name_count, sizeof(NameEntry));
@@ -437,6 +465,13 @@ void wasm_free(WasmModule *mod) {
     for (i = 0; i < mod->names.func_name_count; i++)
         free(mod->names.func_names[i].name);
     free(mod->names.func_names);
+    for (i = 0; i < mod->names.local_name_count; i++) {
+        uint32_t k;
+        for (k = 0; k < mod->names.local_names[i].local_count; k++)
+            free(mod->names.local_names[i].locals[k].name);
+        free(mod->names.local_names[i].locals);
+    }
+    free(mod->names.local_names);
     for (i = 0; i < mod->names.global_name_count; i++)
         free(mod->names.global_names[i].name);
     free(mod->names.global_names);

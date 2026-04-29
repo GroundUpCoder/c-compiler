@@ -54,6 +54,18 @@ xdg-open tools/disasm/index.html      # Linux
 2. Press **Compile & Disassemble** or **Ctrl+Enter** (Cmd+Enter on macOS)
 3. Browse the disassembly in the right pane
 
+### Settings
+
+Click the gear icon in the toolbar to open the settings modal:
+
+- **Disable local slot reuse** — each C variable gets its own WASM local
+  index instead of sharing slots across block scopes. Makes the disassembly
+  easier to follow since each local maps to exactly one variable name.
+- **GC unused sections** — remove unreferenced functions and data from the
+  output.
+
+Settings take effect on the next compile.
+
 ### Layout toggle
 
 Click the grid button in the toolbar to switch between **side-by-side** and
@@ -69,8 +81,12 @@ All sections start **collapsed**. Expand what you need:
 - **Exports** — exported symbols and their indices
 - **Globals** — global variables with type, mutability, and names
 - **Code** — all functions grouped together; expand individual functions to see:
-  - Function signature, body size, local count
+  - Parameter listing with types, indices, and names from source
+  - Local variable listing with types, indices, and names (comma-joined
+    when multiple variables share a slot due to block-scope reuse)
   - Full instruction listing with hex offsets, nesting depth, and operands
+  - `local.get`/`local.set`/`local.tee` instructions show the variable
+    name in angle brackets (e.g., `local.get 0 <n>`)
 
 ### Syntax coloring
 
@@ -147,10 +163,11 @@ The disassembler's `-J` flag (added for this tool) produces structured JSON:
     "index": 1,
     "name": "factorial",
     "signature": "(i32) -> i32",
+    "params": [{"type": "i32", "index": 0, "name": "n"}],
     "body_size": 42,
-    "locals": [{"type": "i32", "count": 1}],
+    "locals": [{"type": "i32", "index": 1, "name": "result"}],
     "instructions": [
-      {"offset": 100, "depth": 1, "text": "local.get 0"},
+      {"offset": 100, "depth": 1, "text": "local.get 0 <n>"},
       {"offset": 102, "depth": 1, "text": "i32.const 1"},
       {"offset": 104, "depth": 1, "text": "i32.le_s"}
     ]

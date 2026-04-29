@@ -6669,6 +6669,7 @@ class WasmModule {
     this.tags = [];             // section 13
     this.funcNames = [];        // for name custom section: [{idx, name}]
     this.globalNames = [];      // for name custom section: [{idx, name}]
+    this.localNames = [];       // for name custom section: [{funcIdx, locals: [{idx, name}]}]
   }
 
   addFunctionTypeId(params, results) {
@@ -6898,7 +6899,7 @@ class WasmModule {
     emitSection(11, buf);
 
     // Name custom section (0)
-    if (this.funcNames.length > 0 || this.globalNames.length > 0) {
+    if (this.funcNames.length > 0 || this.globalNames.length > 0 || this.localNames.length > 0) {
       buf = [];
       emitString(buf, "name");
       if (this.funcNames.length > 0) {
@@ -6909,6 +6910,21 @@ class WasmModule {
           emitString(sub, entry.name);
         }
         buf.push(0x01);
+        lebU(buf, sub.length);
+        for (const b of sub) buf.push(b);
+      }
+      if (this.localNames.length > 0) {
+        const sub = [];
+        lebU(sub, this.localNames.length);
+        for (const fn of this.localNames) {
+          lebU(sub, fn.funcIdx);
+          lebU(sub, fn.locals.length);
+          for (const loc of fn.locals) {
+            lebU(sub, loc.idx);
+            emitString(sub, loc.name);
+          }
+        }
+        buf.push(0x02);
         lebU(buf, sub.length);
         for (const b of sub) buf.push(b);
       }
@@ -7017,9 +7033,16 @@ class CodeGenerator {
     this.vaStartOffset = 0;
     this.structRetPtrLocalIdx = 0;
     this.hasStructReturn = false;
+    this.localIdxNames = new Map();
   }
 
   // --- Local allocator ---
+  _trackLocalName(idx, name) {
+    if (!name) return;
+    let s = this.localIdxNames.get(idx);
+    if (!s) { s = new Set(); this.localIdxNames.set(idx, s); }
+    s.add(name);
+  }
   _wtKey(wt) { return `${wt.tag}:${wt.num||''}`; }
 
   allocLocal(wt) {
@@ -7048,6 +7071,7 @@ class CodeGenerator {
   pushLocalScope() { this.localScopeStack.push([]); }
   popLocalScope() {
     const scope = this.localScopeStack.pop();
+    if (this.compilerOptions.noReuseLocals) return;
     for (const [key, idx] of scope) {
       if (!this.freeLocalsByType.has(key)) this.freeLocalsByType.set(key, []);
       this.freeLocalsByType.get(key).push(idx);
@@ -7703,6 +7727,7 @@ class CodeGenerator {
     this.freeLocalsByType.clear();
     this.localScopeStack = [];
     this.localVarToWasmLocalIdx.clear();
+    this.localIdxNames = new Map();
 
     let localIdx = 0;
     this.hasVaArgs = !!funcDef.type.isVarArg;
@@ -7723,6 +7748,7 @@ class CodeGenerator {
         const wt = isStructOrUnion(param.type) ? WT_I32 : cToWasmType(param.type);
         const paramLocalIdx = this.allocLocal(wt);
         this.localVarToWasmLocalIdx.set(param, paramLocalIdx);
+        this._trackLocalName(paramLocalIdx, param.name);
         const slotSz = vaSlotSize(param.type);
         this.vaParamInfos.push({ var: param, localIdx: paramLocalIdx, offset: paramOffset });
         paramOffset += slotSz;
@@ -7734,7 +7760,9 @@ class CodeGenerator {
       this.hasStructReturn = isStructOrUnion(funcDef.type.getReturnType());
       if (this.hasStructReturn) this.structRetPtrLocalIdx = localIdx++;
       for (const param of funcDef.parameters) {
-        this.localVarToWasmLocalIdx.set(param, localIdx++);
+        this.localVarToWasmLocalIdx.set(param, localIdx);
+        this._trackLocalName(localIdx, param.name);
+        localIdx++;
       }
       this.nextLocalIdx = localIdx;
     }
@@ -7896,6 +7924,15 @@ class CodeGenerator {
     }
     this.body.ret();
     this.body = null;
+
+    if (this.compilerOptions.emitNames && this.localIdxNames.size > 0) {
+      const locals = [];
+      for (const [idx, names] of this.localIdxNames) {
+        locals.push({ idx, name: [...names].join(",") });
+      }
+      locals.sort((a, b) => a.idx - b.idx);
+      this.wmod.localNames.push({ funcIdx, locals });
+    }
   }
 
   // --- Statement emission ---
@@ -7959,7 +7996,9 @@ class CodeGenerator {
           if (decl.declKind === Types.DeclKind.VAR) {
             if (decl.storageClass !== Types.StorageClass.STATIC && decl.definition === decl &&
                 decl.allocClass === Types.AllocClass.REGISTER) {
-              this.localVarToWasmLocalIdx.set(decl, this.allocLocal(cToWasmType(decl.type)));
+              const _li = this.allocLocal(cToWasmType(decl.type));
+              this.localVarToWasmLocalIdx.set(decl, _li);
+              this._trackLocalName(_li, decl.name);
             }
             if (decl.initExpr) {
               const lait = this.localArrayOffsets.get(decl);
@@ -8305,6 +8344,7 @@ class CodeGenerator {
             for (let j = 0; j < cc.bindingVars.length; j++) {
               const localIdx = this.allocLocal(cToWasmType(cc.tag.paramTypes[j]));
               this.localVarToWasmLocalIdx.set(cc.bindingVars[j], localIdx);
+              this._trackLocalName(localIdx, cc.bindingVars[j].name);
               bindLocals.push(localIdx);
             }
             for (let j = bindLocals.length - 1; j >= 0; j--) this.body.localSet(bindLocals[j]);
@@ -14486,6 +14526,8 @@ function main() {
       else if (wflag === "no-circular-dependency") warningFlags.circularDependency = false;
     } else if (args[i] === "-g") {
       compilerOptions.emitNames = true;
+    } else if (args[i] === "--no-reuse-locals") {
+      compilerOptions.noReuseLocals = true;
     } else if (args[i] === "--compiler-debug-switch") {
       compilerOptions.debugSwitch = true;
     } else if (args[i] === "--allow-implicit-int") {

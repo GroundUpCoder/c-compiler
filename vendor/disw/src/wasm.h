@@ -108,9 +108,17 @@ typedef struct {
 } NameEntry;
 
 typedef struct {
+    uint32_t func_index;
+    NameEntry *locals;
+    uint32_t local_count;
+} LocalNameGroup;
+
+typedef struct {
     char *module_name;
     NameEntry *func_names;
     uint32_t func_name_count;
+    LocalNameGroup *local_names;
+    uint32_t local_name_count;
     NameEntry *global_names;
     uint32_t global_name_count;
 } NameSection;
@@ -180,6 +188,7 @@ const char *wasm_valtype(uint8_t t);
 const char *wasm_section_name(uint8_t id);
 const char *wasm_kind_name(uint8_t kind);
 const char *wasm_func_name(const WasmModule *mod, uint32_t idx);
+const char *wasm_local_name(const WasmModule *mod, uint32_t func_idx, uint32_t local_idx);
 const char *wasm_global_name(const WasmModule *mod, uint32_t idx);
 
 void print_headers(const WasmModule *mod, const char *filter);

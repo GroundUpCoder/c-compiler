@@ -6,6 +6,8 @@
 static char insn_buf[1024];
 static int insn_pos;
 static int use_buf;
+static const WasmModule *cur_mod;
+static uint32_t cur_func_idx;
 
 static void out_reset(void) { insn_pos = 0; insn_buf[0] = '\0'; }
 
@@ -327,6 +329,8 @@ static void dis_insn(const WasmModule *mod, Reader *r, uint8_t op) {
             name = wasm_func_name(mod, idx);
         else if (op == 0x23 || op == 0x24)
             name = wasm_global_name(mod, idx);
+        else if (op == 0x20 || op == 0x21 || op == 0x22)
+            name = wasm_local_name(cur_mod ? cur_mod : mod, cur_func_idx, idx);
         if (name)
             out(" %u <%s>", idx, name);
         else
@@ -652,9 +656,11 @@ void print_disasm(const WasmModule *mod, const char *filter) {
 
     printf("\nCode Disassembly:\n");
 
+    cur_mod = mod;
     for (i = 0; i < mod->code_count; i++) {
         const Code *code = &mod->codes[i];
         uint32_t func_idx = mod->num_func_imports + i;
+        cur_func_idx = func_idx;
         const char *name = wasm_func_name(mod, func_idx);
         Reader dr;
         int indent = 1;
@@ -942,9 +948,11 @@ void print_json(const WasmModule *mod) {
     /* code disassembly */
     printf(",\"code\":[");
     use_buf = 1;
+    cur_mod = mod;
     for (i = 0; i < mod->code_count; i++) {
         const Code *code = &mod->codes[i];
         uint32_t func_idx = mod->num_func_imports + i;
+        cur_func_idx = func_idx;
         const char *name = wasm_func_name(mod, func_idx);
         Reader dr;
         int depth = 1;
@@ -959,25 +967,46 @@ void print_json(const WasmModule *mod) {
             if (ti < mod->type_count) {
                 printf(",\"type_index\":%u,\"signature\":", ti);
                 json_sig(&mod->types[ti]);
+                printf(",\"params\":[");
+                for (j = 0; j < mod->types[ti].param_count; j++) {
+                    const char *pname = wasm_local_name(mod, func_idx, j);
+                    if (j) printf(",");
+                    printf("{\"type\":\"%s\",\"index\":%u", wasm_valtype(mod->types[ti].params[j]), j);
+                    if (pname) { printf(",\"name\":"); json_str(pname); }
+                    printf("}");
+                }
+                printf("]");
             }
         }
 
         printf(",\"offset\":%u,\"body_size\":%u", code->func_offset, code->body_size);
 
         /* locals */
-        printf(",\"locals\":[");
-        if (code->total_locals > 0) {
-            int first = 1;
-            for (j = 0; j < code->local_decl_count; j++) {
-                uint32_t k;
-                for (k = 0; k < code->locals[j].count; k++) {
-                    if (!first) printf(",");
-                    printf("\"%s\"", wasm_valtype(code->locals[j].type));
-                    first = 0;
+        {
+            uint32_t num_params = 0;
+            if (i < mod->func_count) {
+                uint32_t ti = mod->func_types[i];
+                if (ti < mod->type_count) num_params = mod->types[ti].param_count;
+            }
+            printf(",\"locals\":[");
+            if (code->total_locals > 0) {
+                int first = 1;
+                uint32_t local_seq = 0;
+                for (j = 0; j < code->local_decl_count; j++) {
+                    uint32_t k;
+                    for (k = 0; k < code->locals[j].count; k++) {
+                        const char *lname = wasm_local_name(mod, func_idx, num_params + local_seq);
+                        if (!first) printf(",");
+                        printf("{\"type\":\"%s\",\"index\":%u", wasm_valtype(code->locals[j].type), num_params + local_seq);
+                        if (lname) { printf(",\"name\":"); json_str(lname); }
+                        printf("}");
+                        first = 0;
+                        local_seq++;
+                    }
                 }
             }
+            printf("]");
         }
-        printf("]");
 
         /* instructions */
         printf(",\"instructions\":[");
@@ -1012,5 +1041,6 @@ void print_json(const WasmModule *mod) {
         printf("]}");
     }
     use_buf = 0;
+    cur_mod = NULL;
     printf("]}\n");
 }
