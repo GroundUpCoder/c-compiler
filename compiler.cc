@@ -18715,7 +18715,7 @@ int main(int argc, char *argv[]) {
   ppRegistry.defines[intern("__SIZEOF_SIZE_T__")] = "4";
   ppRegistry.defines[intern("__SIZEOF_PTRDIFF_T__")] = "4";
 
-  // Expand project.json files into args
+  // Expand JSON project files (lib.json / bin.json) into args
   auto extractJsonStrings = [](const std::string &content, const std::string &key) -> std::vector<std::string> {
     std::vector<std::string> result;
     auto pos = content.find("\"" + key + "\"");
@@ -18764,7 +18764,7 @@ int main(int argc, char *argv[]) {
       std::exit(1);
     }
     if (projType == "lib" && !isInclude) {
-      std::cerr << "Error: " << jsonPath << " is a library project and cannot be compiled directly. It can only be included from another project.json.\n";
+      std::cerr << "Error: " << jsonPath << " is a library project and cannot be compiled directly. It can only be included as a dependency from another project.\n";
       std::exit(1);
     }
     std::vector<std::string> result;

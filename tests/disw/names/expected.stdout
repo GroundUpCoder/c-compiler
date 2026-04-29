@@ -14,23 +14,30 @@ Function[2]:
 Memory[1]:
  - memory[0] pages: initial=1
 
+Global[2]:
+ - global[0] i32 mut <__stack_pointer>
+ - global[1] i32 const <__heap_base>
+
 Export[2]:
  - func[0] -> "add"
  - func[1] -> "_start"
 
 Custom "name":
- - size: 37 bytes
+ - size: 70 bytes
  - module: "test_mod"
  - 2 function names
+ - 2 global names
 
 Code Disassembly:
 
-000034 func[0] <my_add> (i32, i32) -> i32:
- 000035:  local.get 0
- 000037:  local.get 1
- 000039:  i32.add
- 00003a:  end
+000043 func[0] <my_add> (i32, i32) -> i32:
+ 000044:  local.get 0
+ 000046:  local.get 1
+ 000048:  i32.add
+ 000049:  end
 
-00003c func[1] <my_start> () -> nil:
- 00003d:  nop
- 00003e:  end
+00004b func[1] <my_start> () -> nil:
+ 00004c:  global.get 0 <__stack_pointer>
+ 00004e:  drop
+ 00004f:  nop
+ 000050:  end

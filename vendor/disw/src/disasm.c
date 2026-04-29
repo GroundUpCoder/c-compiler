@@ -302,15 +302,15 @@ static void dis_insn(const WasmModule *mod, Reader *r, uint8_t op) {
     }
     case IX: {
         uint32_t idx = read_leb_u32(r);
-        if (op == 0x10 || op == 0xD2) {
-            const char *name = wasm_func_name(mod, idx);
-            if (name)
-                printf(" %u <%s>", idx, name);
-            else
-                printf(" %u", idx);
-        } else {
+        const char *name = NULL;
+        if (op == 0x10 || op == 0xD2)
+            name = wasm_func_name(mod, idx);
+        else if (op == 0x23 || op == 0x24)
+            name = wasm_global_name(mod, idx);
+        if (name)
+            printf(" %u <%s>", idx, name);
+        else
             printf(" %u", idx);
-        }
         break;
     }
     case BR: {
@@ -469,9 +469,12 @@ void print_details(const WasmModule *mod, const char *filter) {
             printf("\nGlobal[%u]:\n", mod->global_count);
             for (i = 0; i < mod->global_count; i++) {
                 uint32_t gidx = mod->num_global_imports + i;
-                printf(" - global[%u] %s %s\n", gidx,
+                const char *gname = wasm_global_name(mod, gidx);
+                printf(" - global[%u] %s %s", gidx,
                        wasm_valtype(mod->globals[i].val_type),
                        mod->globals[i].mutable_ ? "mut" : "const");
+                if (gname) printf(" <%s>", gname);
+                printf("\n");
             }
             break;
 
@@ -610,7 +613,10 @@ void print_details(const WasmModule *mod, const char *filter) {
             if (sec->custom_name && strcmp(sec->custom_name, "name") == 0) {
                 if (mod->names.module_name)
                     printf(" - module: \"%s\"\n", mod->names.module_name);
-                printf(" - %u function names\n", mod->names.func_name_count);
+                if (mod->names.func_name_count)
+                    printf(" - %u function names\n", mod->names.func_name_count);
+                if (mod->names.global_name_count)
+                    printf(" - %u global names\n", mod->names.global_name_count);
             }
             break;
         }

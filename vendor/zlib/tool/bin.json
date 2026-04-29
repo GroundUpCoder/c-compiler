@@ -2,7 +2,7 @@
   "name": "zlib-tool",
   "description": "Zip/unzip tool built on zlib",
   "deps": [
-    "../project.json"
+    "../lib.json"
   ],
   "sources": [
     "main.c"

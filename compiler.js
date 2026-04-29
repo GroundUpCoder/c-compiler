@@ -6668,6 +6668,7 @@ class WasmModule {
     this.dataSegments = [];     // section 11
     this.tags = [];             // section 13
     this.funcNames = [];        // for name custom section: [{idx, name}]
+    this.globalNames = [];      // for name custom section: [{idx, name}]
   }
 
   addFunctionTypeId(params, results) {
@@ -6897,19 +6898,31 @@ class WasmModule {
     emitSection(11, buf);
 
     // Name custom section (0)
-    if (this.funcNames.length > 0) {
+    if (this.funcNames.length > 0 || this.globalNames.length > 0) {
       buf = [];
       emitString(buf, "name");
-      // Subsection 1: function names
-      const sub = [];
-      lebU(sub, this.funcNames.length);
-      for (const entry of this.funcNames) {
-        lebU(sub, entry.idx);
-        emitString(sub, entry.name);
+      if (this.funcNames.length > 0) {
+        const sub = [];
+        lebU(sub, this.funcNames.length);
+        for (const entry of this.funcNames) {
+          lebU(sub, entry.idx);
+          emitString(sub, entry.name);
+        }
+        buf.push(0x01);
+        lebU(buf, sub.length);
+        for (const b of sub) buf.push(b);
       }
-      buf.push(0x01);
-      lebU(buf, sub.length);
-      for (const b of sub) buf.push(b);
+      if (this.globalNames.length > 0) {
+        const sub = [];
+        lebU(sub, this.globalNames.length);
+        for (const entry of this.globalNames) {
+          lebU(sub, entry.idx);
+          emitString(sub, entry.name);
+        }
+        buf.push(0x07);
+        lebU(buf, sub.length);
+        for (const b of sub) buf.push(b);
+      }
       emitSection(0, buf);
     }
 
@@ -9261,6 +9274,10 @@ function generateCode(units, outputFile, options) {
   const initialSp = cg.stackPages * 65536;
   cg.stackPointerGlobalIdx = wmod.addGlobalI32(initialSp, true);
   cg.heapBaseGlobalIdx = wmod.addGlobalI32(0, false);
+  if (options.compilerOptions.emitNames) {
+    wmod.globalNames.push({ idx: cg.stackPointerGlobalIdx, name: "__stack_pointer" });
+    wmod.globalNames.push({ idx: cg.heapBaseGlobalIdx, name: "__heap_base" });
+  }
 
   // Register imports
   for (const unit of units) {
@@ -9420,6 +9437,7 @@ function generateCode(units, outputFile, options) {
         else globalIdx = wmod.addGlobalI32(0, true);
       }
       cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
+      if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
     }
   };
 
@@ -14374,7 +14392,7 @@ function main() {
       process.exit(1);
     }
     if (projType === "lib" && !isInclude) {
-      process.stderr.write(`Error: ${jsonPath} is a library project and cannot be compiled directly. It can only be included from another project.json.\n`);
+      process.stderr.write(`Error: ${jsonPath} is a library project and cannot be compiled directly. It can only be included as a dependency from another project.\n`);
       process.exit(1);
     }
     const result = [];

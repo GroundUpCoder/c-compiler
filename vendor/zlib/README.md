@@ -18,11 +18,11 @@ All source files are unmodified from the upstream tag.
 Only the source files (`*.c`, `*.h`) and LICENSE are kept from the upstream
 tarball. Build system files (configure, CMakeLists.txt, Makefiles, Bazel),
 platform directories (win32, amiga, msdos, os400, qnx, watcom), docs, contrib,
-examples, and tests are omitted — our `project.json` handles the build.
+examples, and tests are omitted — our `lib.json` handles the build.
 
 ## What's compiled
 
-Of the 15 `.c` files, 10 are compiled (see `project.json`). The 5 omitted are:
+Of the 15 `.c` files, 10 are compiled (see `lib.json`). The 5 omitted are:
 - `gzclose.c`, `gzlib.c`, `gzread.c`, `gzwrite.c` — gz* file I/O wrappers
   (need POSIX fd operations not relevant to our use case)
 - `infback.c` — specialized streaming inflate API (inflateBack)

@@ -60,6 +60,9 @@ ZLIB_TOOL_DIR = os.path.join(ZLIB_DIR, "tool")
 ZLIB_TESTS_DIR = os.path.join(ZLIB_DIR, "tests")
 ZLIB_GOLDEN_DIR = os.path.join(ZLIB_TESTS_DIR, "golden")
 
+FREETYPE_DIR = os.path.join(VENDOR_DIR, "freetype")
+FREETYPE_DEMO_DIR = os.path.join(FREETYPE_DIR, "demo")
+
 DISW_DIR = os.path.join(VENDOR_DIR, "disw")
 DISW_BIN = os.path.join(BUILD_DIR, "disw-native")
 DISW_SOURCES = [
@@ -67,7 +70,7 @@ DISW_SOURCES = [
 ]
 DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
 
-ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua", "disw"]
+ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua", "freetype", "disw"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -539,16 +542,14 @@ def run_equiv(results, filter_str=None, actions=None):
 
 
 def discover_projects():
-    """Find all vendor/*/project.json files that are not libraries."""
+    """Find all vendor/*/bin.json files (executable projects)."""
     projects = []
     for entry in sorted(os.listdir(VENDOR_DIR)):
-        pj = os.path.join(VENDOR_DIR, entry, "project.json")
+        pj = os.path.join(VENDOR_DIR, entry, "bin.json")
         if not os.path.isfile(pj):
             continue
         with open(pj) as f:
             proj = json.load(f)
-        if proj.get("type") == "lib":
-            continue
         projects.append((proj.get("name", entry), pj))
     return projects
 
@@ -633,7 +634,7 @@ def run_zlib_tests(compiler_cmd, results, filter_str=None):
                 results.record(demo_name, True)
 
     # Build zlib-tool (shared by zip and unzip tests)
-    tool_json = os.path.join(ZLIB_TOOL_DIR, "project.json")
+    tool_json = os.path.join(ZLIB_TOOL_DIR, "bin.json")
     tool_wasm, tool_err = build_project(tool_json, compiler_cmd)
 
     # --- golden zip test: zip files and compare to expected.zip ---
@@ -706,7 +707,7 @@ LUA_SKIP = {"files.lua", "heavy.lua", "verybig.lua", "big.lua", "memerr.lua", "c
 
 
 def build_project(project_json_path, compiler_cmd):
-    """Build a project from its project.json file. Returns (wasm_path, error_string)."""
+    """Build a project from its JSON file. Returns (wasm_path, error_string)."""
     with open(project_json_path) as f:
         proj = json.load(f)
     os.makedirs(BUILD_DIR, exist_ok=True)
@@ -723,7 +724,7 @@ def run_lua_tests(compiler_cmd, results, filter_str=None):
         results.record("lua/build", False, f"Lua test dir not found: {LUA_TEST_DIR}")
         return
 
-    wasm, err = build_project(os.path.join(LUA_DIR, "project.json"), compiler_cmd)
+    wasm, err = build_project(os.path.join(LUA_DIR, "bin.json"), compiler_cmd)
     if wasm is None:
         results.record("lua/build", False, f"Failed to build lua.wasm:\n{err}")
         return
@@ -760,6 +761,46 @@ def run_lua_tests(compiler_cmd, results, filter_str=None):
                 results.record(test_name, False, f"Exit code {r.returncode}\n{msg}".strip())
         except subprocess.TimeoutExpired:
             results.record(test_name, False, "Timed out (15s)")
+
+
+# --- FreeType tests ---
+
+FREETYPE_FONT = os.path.join(FREETYPE_DEMO_DIR, "robotomono.ttf")
+
+
+def run_freetype_tests(compiler_cmd, results, filter_str=None):
+    test_name = "freetype/demo"
+    if filter_str and filter_str not in test_name:
+        return
+
+    demo_json = os.path.join(FREETYPE_DEMO_DIR, "bin.json")
+    wasm, err = build_project(demo_json, compiler_cmd)
+    if wasm is None:
+        results.record(test_name, False, f"Build failed:\n{err}")
+        return
+
+    work = tempfile.mkdtemp(prefix="freetype_")
+    try:
+        bmp_path = os.path.join(work, "output.bmp")
+        r = subprocess.run(
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+             FREETYPE_FONT, "Hello", bmp_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            results.record(test_name, False,
+                           f"Exit code {r.returncode}\nstderr: {r.stderr}")
+        elif not os.path.exists(bmp_path):
+            results.record(test_name, False,
+                           f"BMP not written\nstdout: {r.stdout}")
+        elif "Wrote" in r.stdout and "BMP to" in r.stdout:
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False,
+                           f"Unexpected output:\n{r.stdout}")
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # --- disw (WebAssembly disassembler) tests ---
@@ -933,6 +974,11 @@ def main():
             for mode in compiler_modes:
                 results.section(f"lua ({mode})")
                 run_lua_tests(get_compiler(mode), results, filter_str=args.filter)
+
+        elif cat == "freetype":
+            for mode in compiler_modes:
+                results.section(f"freetype ({mode})")
+                run_freetype_tests(get_compiler(mode), results, filter_str=args.filter)
 
         elif cat == "disw":
             results.section("disw")

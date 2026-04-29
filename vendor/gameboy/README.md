@@ -17,7 +17,7 @@ If no ROM is provided, a built-in test ROM draws a scrolling checkerboard.
 
 Build standalone (uses built-in test ROM):
 
-    node compiler.js vendor/gameboy/project.json -a compile -o gameboy.html
+    node compiler.js vendor/gameboy/bin.json -a compile -o gameboy.html
 
 Build with a ROM:
 

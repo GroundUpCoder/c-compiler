@@ -2,7 +2,7 @@
   "name": "zlib-demo",
   "description": "zlib compress/decompress self-test",
   "deps": [
-    "../project.json"
+    "../lib.json"
   ],
   "sources": [
     "zlib_demo.c"

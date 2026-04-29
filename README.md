@@ -26,32 +26,31 @@ node compiler.js hello.c -o hello.html
 
 ## Project files
 
-Both compilers accept `project.json` files as positional arguments. A project.json expands inline as if its `compilerArgs`, `sources`, and `dataFiles` were passed directly at that position:
+Both compilers accept JSON project files as positional arguments. Each vendor project uses `lib.json` (for libraries) or `bin.json` (for executables). A project file expands inline as if its `compilerArgs`, `sources`, and `dataFiles` were passed directly at that position:
 
 ```bash
 # These are equivalent:
-node compiler.js vendor/doom/project.json -o doom.html
+node compiler.js vendor/doom/bin.json -o doom.html
 node compiler.js -Ivendor/doom/Nuked-OPL3 vendor/doom/src/*.c ... --opfs-file vendor/doom/data/doom1.wad:/doom1.wad -o doom.html
 
 # Project files mix freely with explicit args:
-node compiler.js -DFOO vendor/lua/project.json extra.c -o out.wasm
+node compiler.js -DFOO vendor/lua/bin.json extra.c -o out.wasm
 ```
 
-### project.json format
+### Project file format
 
 ```json
 {
-  "name": "myproject",
+  "type": "lib",
+  "name": "mylib",
   "description": "Optional description",
-  "compilerArgs": ["-Isrc", "-DNDEBUG"],
-  "sources": ["src/main.c", "src/util.c"],
-  "dataFiles": {
-    "data/level.dat": "/level.dat"
-  }
+  "includes": ["src"],
+  "compilerArgs": ["-DNDEBUG"],
+  "sources": ["src/util.c", "src/core.c"]
 }
 ```
 
-All paths are resolved relative to the JSON file's directory. `name` and `description` are purely informational. `dataFiles` maps local files to virtual filesystem paths (used for HTML output via OPFS).
+Libraries (`"type": "lib"`) cannot be compiled directly — they must be referenced via `deps` from a binary project. Binary projects omit `type` or set it to `"bin"`. All paths are resolved relative to the JSON file's directory. `dataFiles` maps local files to virtual filesystem paths (used for HTML output via OPFS).
 
 ## Compiler flags
 
@@ -102,11 +101,15 @@ The compiler is tested against real-world C projects:
 
 ```bash
 # Lua interpreter
-node compiler.js vendor/lua/project.json -o lua.wasm
+node compiler.js vendor/lua/bin.json -o lua.wasm
 node host.js lua.wasm
 
 # DOOM (HTML with embedded WAD)
-node compiler.js vendor/doom/project.json -o doom.html
+node compiler.js vendor/doom/bin.json -o doom.html
+
+# FreeType text rendering demo
+node compiler.js vendor/freetype/demo/bin.json -o freetype-demo.js
+node freetype-demo.js
 
 # Snake (terminal game)
 node compiler.js vendor/snake/main.c -o snake.html

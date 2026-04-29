@@ -210,10 +210,11 @@ class WasmBuilder:
                 c.extend(seg[1])
         self._section(11, c)
 
-    def name_section(self, module_name=None, func_names=None):
+    def name_section(self, module_name=None, func_names=None, global_names=None):
         """Emit a custom 'name' section.
         module_name: optional string
         func_names: optional list of (index, name) pairs
+        global_names: optional list of (index, name) pairs
         """
         payload = []
         if module_name is not None:
@@ -227,6 +228,14 @@ class WasmBuilder:
                 sub.extend(leb_u(idx))
                 sub.extend(encode_string(name))
             payload.append(0x01)
+            payload.extend(leb_u(len(sub)))
+            payload.extend(sub)
+        if global_names is not None:
+            sub = leb_u(len(global_names))
+            for idx, name in global_names:
+                sub.extend(leb_u(idx))
+                sub.extend(encode_string(name))
+            payload.append(0x07)
             payload.extend(leb_u(len(sub)))
             payload.extend(sub)
         name_bytes = encode_string("name")

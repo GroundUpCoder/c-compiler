@@ -178,6 +178,17 @@ const char *wasm_func_name(const WasmModule *mod, uint32_t idx) {
     return NULL;
 }
 
+const char *wasm_global_name(const WasmModule *mod, uint32_t idx) {
+    uint32_t i;
+    for (i = 0; i < mod->names.global_name_count; i++)
+        if (mod->names.global_names[i].index == idx)
+            return mod->names.global_names[i].name;
+    for (i = 0; i < mod->export_count; i++)
+        if (mod->exports[i].kind == EXT_GLOBAL && mod->exports[i].index == idx)
+            return mod->exports[i].name;
+    return NULL;
+}
+
 static void parse_limits(Reader *r, uint32_t *initial, uint32_t *maximum, int *has_max) {
     uint8_t flags = read_byte(r);
     *initial = read_leb_u32(r);
@@ -382,6 +393,13 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                             mod->names.func_names[j].index = read_leb_u32(&r);
                             mod->names.func_names[j].name = read_name(&r);
                         }
+                    } else if (sub_id == 7) {
+                        mod->names.global_name_count = read_leb_u32(&r);
+                        mod->names.global_names = calloc(mod->names.global_name_count, sizeof(NameEntry));
+                        for (j = 0; j < mod->names.global_name_count; j++) {
+                            mod->names.global_names[j].index = read_leb_u32(&r);
+                            mod->names.global_names[j].name = read_name(&r);
+                        }
                     }
                     r.pos = sub_end;
                 }
@@ -419,6 +437,9 @@ void wasm_free(WasmModule *mod) {
     for (i = 0; i < mod->names.func_name_count; i++)
         free(mod->names.func_names[i].name);
     free(mod->names.func_names);
+    for (i = 0; i < mod->names.global_name_count; i++)
+        free(mod->names.global_names[i].name);
+    free(mod->names.global_names);
     for (i = 0; i < mod->section_count; i++)
         free(mod->sections[i].custom_name);
     free(mod->sections);

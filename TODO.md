@@ -14,8 +14,8 @@
 
 ## Vendor projects to add
 
-- **doom** — DOOM (doomgeneric port) + Nuked-OPL3. Large integration test.
-- **zlib** / **zlib-compat** — Compression library.
-- **freetype** — TrueType font rendering.
-- **gameboy** — Gameboy emulator.
+- ~~**doom** — DOOM (doomgeneric port) + Nuked-OPL3. Large integration test.~~
+- ~~**zlib** / **zlib-compat** — Compression library.~~
+- ~~**freetype** — TrueType font rendering.~~
+- ~~**gameboy** — Gameboy emulator.~~
 - **tinyemu** — RISC-V system emulator (boots Linux).
