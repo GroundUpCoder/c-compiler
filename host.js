@@ -1444,6 +1444,15 @@ function createSDL({ getSDL, ctx }) {
           const sym = sdlKeysym(e);
           getExports().__sdl_push_key_event(handle, 0x301, e.scancode || 0, sym);
         });
+        win.on('mouseButtonDown', function (e) {
+          getExports().__sdl_push_mouse_button_event(handle, 0x401, e.button, e.x, e.y);
+        });
+        win.on('mouseButtonUp', function (e) {
+          getExports().__sdl_push_mouse_button_event(handle, 0x402, e.button, e.x, e.y);
+        });
+        win.on('mouseMove', function (e) {
+          getExports().__sdl_push_mouse_motion_event(handle, e.x, e.y);
+        });
         return handle;
       },
       __sdl_destroy_window: function (handle) {
@@ -1658,6 +1667,14 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     pushQuitEvent: function (handle) {
       const fn = getExports().__sdl_push_quit_event;
       if (fn) fn(handle);
+    },
+    pushMouseButtonEvent: function (handle, eventType, button, x, y) {
+      const fn = getExports().__sdl_push_mouse_button_event;
+      if (fn) fn(handle, eventType, button, x, y);
+    },
+    pushMouseMotionEvent: function (handle, x, y) {
+      const fn = getExports().__sdl_push_mouse_motion_event;
+      if (fn) fn(handle, x, y);
     },
   };
 

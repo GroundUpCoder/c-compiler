@@ -94,6 +94,12 @@ this is fine; a real editor would cache rendered glyphs in a texture atlas.
 
 ## Keyboard shortcuts
 
+### Mouse
+
+| Action        | Effect              |
+|---------------|---------------------|
+| Left click    | Place cursor        |
+
 ### Basic editing
 
 | Key           | Action              |
@@ -141,10 +147,6 @@ browser SDL backend yet, so they only work in the native backend.
 - **ASCII only.** SDL keysyms map to ASCII character codes; Unicode input
   would require an `SDL_TEXTINPUT`-style event that the host does not
   currently provide.
-- **No mouse support.** The SDL host does not plumb mouse events to the WASM
-  side. Adding click-to-position would require: mouse event types in the SDL
-  header, event forwarding in `host.js`, and hit-testing rendered glyph
-  positions to map pixel coordinates back to a text buffer offset.
 - **No selection or clipboard.** There is no visual selection, copy/paste, or
   kill ring. Adding selection would pair naturally with mouse support (drag to
   select) and Shift+arrow keys.

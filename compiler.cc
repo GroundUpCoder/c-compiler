@@ -1237,9 +1237,33 @@ typedef struct SDL_KeyboardEvent {
     SDL_Keysym keysym;
 } SDL_KeyboardEvent;
 
+typedef struct SDL_MouseMotionEvent {
+    Uint32 type;
+    Uint32 timestamp;
+    Uint32 windowID;
+    Sint32 x;
+    Sint32 y;
+    Sint32 xrel;
+    Sint32 yrel;
+} SDL_MouseMotionEvent;
+
+typedef struct SDL_MouseButtonEvent {
+    Uint32 type;
+    Uint32 timestamp;
+    Uint32 windowID;
+    Uint8 button;
+    Uint8 state;
+    Uint8 clicks;
+    Uint8 padding1;
+    Sint32 x;
+    Sint32 y;
+} SDL_MouseButtonEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_KeyboardEvent key;
+    SDL_MouseMotionEvent motion;
+    SDL_MouseButtonEvent button;
     Uint8 padding[56];
 } SDL_Event;
 
@@ -1253,8 +1277,14 @@ typedef union SDL_Event {
 #define SDL_QUIT 0x100
 #define SDL_KEYDOWN 0x300
 #define SDL_KEYUP 0x301
+#define SDL_MOUSEMOTION 0x400
+#define SDL_MOUSEBUTTONDOWN 0x401
+#define SDL_MOUSEBUTTONUP 0x402
 #define SDL_PRESSED 1
 #define SDL_RELEASED 0
+#define SDL_BUTTON_LEFT 1
+#define SDL_BUTTON_MIDDLE 2
+#define SDL_BUTTON_RIGHT 3
 
 #define SDLK_BACKSPACE 8
 #define SDLK_TAB 9
@@ -4124,6 +4154,30 @@ void __sdl_push_key_event(int window_id, int type, int scancode, int sym) {
     __sdl_eq_push(e);
 }
 __export __sdl_push_key_event = __sdl_push_key_event;
+
+void __sdl_push_mouse_button_event(int window_id, int type, int button, int x, int y) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = (Uint32)type;
+    e->event.button.windowID = (Uint32)window_id;
+    e->event.button.button = (Uint8)button;
+    e->event.button.state = (type == SDL_MOUSEBUTTONDOWN) ? SDL_PRESSED : SDL_RELEASED;
+    e->event.button.x = x;
+    e->event.button.y = y;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_button_event = __sdl_push_mouse_button_event;
+
+void __sdl_push_mouse_motion_event(int window_id, int x, int y) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_MOUSEMOTION;
+    e->event.motion.windowID = (Uint32)window_id;
+    e->event.motion.x = x;
+    e->event.motion.y = y;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
 
 int SDL_PollEvent(SDL_Event *event) {
     __SDL_EventEntry *e = __sdl_eq_head;

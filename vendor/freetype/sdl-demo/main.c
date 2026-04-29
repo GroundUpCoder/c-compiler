@@ -233,6 +233,38 @@ static int measure_visual_line(int start, int max_width) {
     return i - start;
 }
 
+static int click_to_pos(int click_x, int click_y) {
+    int text_area_x = PAD + 50;
+    int text_area_w = WIN_W - text_area_x - PAD;
+    int text_offset = 0;
+    int y = PAD + ascender - scroll_y;
+
+    while (text_offset < text_len) {
+        int line_chars = measure_visual_line(text_offset, text_area_w);
+        if (line_chars == 0) line_chars = 1;
+        int line_top = y - ascender;
+
+        if (click_y >= line_top && click_y < line_top + line_height) {
+            int is_hard_nl = (text_offset + line_chars <= text_len &&
+                              line_chars > 0 &&
+                              text[text_offset + line_chars - 1] == '\n');
+            int draw_count = is_hard_nl ? line_chars - 1 : line_chars;
+            int x = text_area_x;
+            for (int i = 0; i < draw_count; i++) {
+                int adv = glyph_advance((unsigned char)text[text_offset + i]);
+                if (click_x < x + adv / 2) return text_offset + i;
+                x += adv;
+            }
+            return text_offset + draw_count;
+        }
+
+        text_offset += line_chars;
+        y += line_height;
+    }
+    if (click_y < PAD) return 0;
+    return text_len;
+}
+
 static void render(void) {
     /* Clear background */
     uint32_t *pixels = (uint32_t *)surface->pixels;
@@ -370,6 +402,11 @@ static void handle_events(void) {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) exit(0);
+
+        if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+            cursor_pos = click_to_pos(ev.button.x, ev.button.y);
+            continue;
+        }
 
         int sym = ev.key.keysym.sym;
 

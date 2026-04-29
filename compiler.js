@@ -9571,9 +9571,33 @@ typedef struct SDL_KeyboardEvent {
     SDL_Keysym keysym;
 } SDL_KeyboardEvent;
 
+typedef struct SDL_MouseMotionEvent {
+    Uint32 type;
+    Uint32 timestamp;
+    Uint32 windowID;
+    Sint32 x;
+    Sint32 y;
+    Sint32 xrel;
+    Sint32 yrel;
+} SDL_MouseMotionEvent;
+
+typedef struct SDL_MouseButtonEvent {
+    Uint32 type;
+    Uint32 timestamp;
+    Uint32 windowID;
+    Uint8 button;
+    Uint8 state;
+    Uint8 clicks;
+    Uint8 padding1;
+    Sint32 x;
+    Sint32 y;
+} SDL_MouseButtonEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_KeyboardEvent key;
+    SDL_MouseMotionEvent motion;
+    SDL_MouseButtonEvent button;
     Uint8 padding[56];
 } SDL_Event;
 
@@ -9587,8 +9611,14 @@ typedef union SDL_Event {
 #define SDL_QUIT 0x100
 #define SDL_KEYDOWN 0x300
 #define SDL_KEYUP 0x301
+#define SDL_MOUSEMOTION 0x400
+#define SDL_MOUSEBUTTONDOWN 0x401
+#define SDL_MOUSEBUTTONUP 0x402
 #define SDL_PRESSED 1
 #define SDL_RELEASED 0
+#define SDL_BUTTON_LEFT 1
+#define SDL_BUTTON_MIDDLE 2
+#define SDL_BUTTON_RIGHT 3
 
 #define SDLK_BACKSPACE 8
 #define SDLK_TAB 9
@@ -11193,6 +11223,30 @@ void __sdl_push_key_event(int window_id, int type, int scancode, int sym) {
     __sdl_eq_push(e);
 }
 __export __sdl_push_key_event = __sdl_push_key_event;
+
+void __sdl_push_mouse_button_event(int window_id, int type, int button, int x, int y) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = (Uint32)type;
+    e->event.button.windowID = (Uint32)window_id;
+    e->event.button.button = (Uint8)button;
+    e->event.button.state = (type == SDL_MOUSEBUTTONDOWN) ? SDL_PRESSED : SDL_RELEASED;
+    e->event.button.x = x;
+    e->event.button.y = y;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_button_event = __sdl_push_mouse_button_event;
+
+void __sdl_push_mouse_motion_event(int window_id, int x, int y) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_MOUSEMOTION;
+    e->event.motion.windowID = (Uint32)window_id;
+    e->event.motion.x = x;
+    e->event.motion.y = y;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
 
 int SDL_PollEvent(SDL_Event *event) {
     __SDL_EventEntry *e = __sdl_eq_head;
@@ -13869,6 +13923,10 @@ self.onmessage = function(e) {
   if (msg.type === 'run') doRun(msg);
   else if (msg.type === 'keydown' || msg.type === 'keyup') {
     if (sdlRef) sdlRef.pushKeyEvent(msg.handle, msg.eventType, msg.scancode, msg.sym);
+  } else if (msg.type === 'mousedown' || msg.type === 'mouseup') {
+    if (sdlRef) sdlRef.pushMouseButtonEvent(msg.handle, msg.eventType, msg.button, msg.x, msg.y);
+  } else if (msg.type === 'mousemove') {
+    if (sdlRef) sdlRef.pushMouseMotionEvent(msg.handle, msg.x, msg.y);
   } else if (msg.type === 'quit') {
     if (sdlRef) sdlRef.pushQuitEvent(1);
   } else if (msg.type === 'stdin-response') {
@@ -14018,6 +14076,7 @@ window.onunhandledrejection = function(e) {
   var worker = null;
   var audioReceiver = null;
   var hasSDL = false;
+  var sdlCanvasW = 0, sdlCanvasH = 0;
   var term = null;
   var stdinLine = '';
   var stdinResolve = null;
@@ -14143,6 +14202,34 @@ window.onunhandledrejection = function(e) {
     e.preventDefault();
     worker.postMessage({type:'keyup',handle:1,eventType:0x301,scancode:sdlScancode(e),sym:sdlKeysym(e)});
   }
+  function canvasCoords(e) {
+    var rect = canvas.getBoundingClientRect();
+    var cw = sdlCanvasW || canvas.width || rect.width;
+    var ch = sdlCanvasH || canvas.height || rect.height;
+    var aspect = cw / ch;
+    var rw, rh, ox, oy;
+    if (rect.width / rect.height > aspect) {
+      rh = rect.height; rw = rh * aspect; ox = (rect.width - rw) / 2; oy = 0;
+    } else {
+      rw = rect.width; rh = rw / aspect; ox = 0; oy = (rect.height - rh) / 2;
+    }
+    return {x:Math.round((e.offsetX-ox)*cw/rw), y:Math.round((e.offsetY-oy)*ch/rh)};
+  }
+  function onMousedown(e) {
+    if (!worker||!hasSDL) return;
+    var c=canvasCoords(e);
+    worker.postMessage({type:'mousedown',handle:1,eventType:0x401,button:e.button+1,x:c.x,y:c.y});
+  }
+  function onMouseup(e) {
+    if (!worker||!hasSDL) return;
+    var c=canvasCoords(e);
+    worker.postMessage({type:'mouseup',handle:1,eventType:0x402,button:e.button+1,x:c.x,y:c.y});
+  }
+  function onMousemove(e) {
+    if (!worker||!hasSDL) return;
+    var c=canvasCoords(e);
+    worker.postMessage({type:'mousemove',handle:1,x:c.x,y:c.y});
+  }
 
   function base64ToBytes(b64) {
     var bin = atob(b64);
@@ -14252,6 +14339,8 @@ window.onunhandledrejection = function(e) {
         cleanup();
       } else if (msg.type === 'sdl-window') {
         hasSDL = true;
+        sdlCanvasW = msg.width || 800;
+        sdlCanvasH = msg.height || 600;
         if (term) terminalEl.style.display = 'none';
         canvasContainer.style.display = 'flex';
         logPanel.style.display = 'flex';
@@ -14302,6 +14391,9 @@ window.onunhandledrejection = function(e) {
     function cleanup() {
       document.removeEventListener('keydown', onKeydown, true);
       document.removeEventListener('keyup', onKeyup, true);
+      canvas.removeEventListener('mousedown', onMousedown);
+      canvas.removeEventListener('mouseup', onMouseup);
+      canvas.removeEventListener('mousemove', onMousemove);
       if (audioReceiver) audioReceiver.close();
       worker = null;
       stdinRawMode = false;
@@ -14315,6 +14407,9 @@ window.onunhandledrejection = function(e) {
 
     document.addEventListener('keydown', onKeydown, true);
     document.addEventListener('keyup', onKeyup, true);
+    canvas.addEventListener('mousedown', onMousedown);
+    canvas.addEventListener('mouseup', onMouseup);
+    canvas.addEventListener('mousemove', onMousemove);
 
     var transfer = [wasmBytes.buffer, offscreen];
     var msg = {
