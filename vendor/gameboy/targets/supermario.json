@@ -1,0 +1,13 @@
+{
+  "name": "super-mario-deluxe",
+  "description": "Game Boy emulator running Super Mario Bros. Deluxe (place SuperMarioDeluxe.gbc in vendor/gameboy/roms/)",
+  "deps": [
+    "../bin.json"
+  ],
+  "dataFiles": {
+    "../roms/SuperMarioDeluxe.gbc": "/roms/SuperMarioDeluxe.gbc"
+  },
+  "runArgs": [
+    "/roms/SuperMarioDeluxe.gbc"
+  ]
+}
