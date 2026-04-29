@@ -1,0 +1,17 @@
+{
+  "name": "freetype-sdl-demo",
+  "description": "FreeType + SDL text editor demo",
+  "deps": [
+    "../lib.json"
+  ],
+  "includes": [
+    "../demo",
+    "../include"
+  ],
+  "dataFiles": {
+    "../demo/robotomono.ttf": "/font.ttf"
+  },
+  "sources": [
+    "main.c"
+  ]
+}

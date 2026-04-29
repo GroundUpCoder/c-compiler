@@ -2,11 +2,9 @@
   "type": "lib",
   "name": "freetype",
   "description": "FreeType 2.14.1 TrueType font rendering library",
-  "includes": [
-    "include"
-  ],
   "compilerArgs": [
     "-DFT2_BUILD_LIBRARY",
+    "-DFT_MAKE_OPTION_SINGLE_OBJECT",
     "-DFT_CONFIG_OPTION_NO_ASSEMBLER"
   ],
   "sources": [
