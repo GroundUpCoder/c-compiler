@@ -9593,11 +9593,20 @@ typedef struct SDL_MouseButtonEvent {
     Sint32 y;
 } SDL_MouseButtonEvent;
 
+typedef struct SDL_MouseWheelEvent {
+    Uint32 type;
+    Uint32 timestamp;
+    Uint32 windowID;
+    Sint32 x;
+    Sint32 y;
+} SDL_MouseWheelEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_KeyboardEvent key;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
+    SDL_MouseWheelEvent wheel;
     Uint8 padding[56];
 } SDL_Event;
 
@@ -9614,6 +9623,7 @@ typedef union SDL_Event {
 #define SDL_MOUSEMOTION 0x400
 #define SDL_MOUSEBUTTONDOWN 0x401
 #define SDL_MOUSEBUTTONUP 0x402
+#define SDL_MOUSEWHEEL 0x403
 #define SDL_PRESSED 1
 #define SDL_RELEASED 0
 #define SDL_BUTTON_LEFT 1
@@ -11247,6 +11257,17 @@ void __sdl_push_mouse_motion_event(int window_id, int x, int y) {
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
+
+void __sdl_push_mouse_wheel_event(int window_id, int x, int y) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_MOUSEWHEEL;
+    e->event.wheel.windowID = (Uint32)window_id;
+    e->event.wheel.x = x;
+    e->event.wheel.y = y;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;
 
 int SDL_PollEvent(SDL_Event *event) {
     __SDL_EventEntry *e = __sdl_eq_head;
@@ -13927,6 +13948,8 @@ self.onmessage = function(e) {
     if (sdlRef) sdlRef.pushMouseButtonEvent(msg.handle, msg.eventType, msg.button, msg.x, msg.y);
   } else if (msg.type === 'mousemove') {
     if (sdlRef) sdlRef.pushMouseMotionEvent(msg.handle, msg.x, msg.y);
+  } else if (msg.type === 'wheel') {
+    if (sdlRef) sdlRef.pushMouseWheelEvent(msg.handle, msg.x, msg.y);
   } else if (msg.type === 'quit') {
     if (sdlRef) sdlRef.pushQuitEvent(1);
   } else if (msg.type === 'stdin-response') {
@@ -14230,6 +14253,14 @@ window.onunhandledrejection = function(e) {
     var c=canvasCoords(e);
     worker.postMessage({type:'mousemove',handle:1,x:c.x,y:c.y});
   }
+  function onWheel(e) {
+    if (!worker||!hasSDL) return;
+    e.preventDefault();
+    var dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= 20;
+    else if (e.deltaMode === 2) dy *= 600;
+    worker.postMessage({type:'wheel',handle:1,x:0,y:Math.round(dy)});
+  }
 
   function base64ToBytes(b64) {
     var bin = atob(b64);
@@ -14394,6 +14425,7 @@ window.onunhandledrejection = function(e) {
       canvas.removeEventListener('mousedown', onMousedown);
       canvas.removeEventListener('mouseup', onMouseup);
       canvas.removeEventListener('mousemove', onMousemove);
+      canvas.removeEventListener('wheel', onWheel);
       if (audioReceiver) audioReceiver.close();
       worker = null;
       stdinRawMode = false;
@@ -14410,6 +14442,7 @@ window.onunhandledrejection = function(e) {
     canvas.addEventListener('mousedown', onMousedown);
     canvas.addEventListener('mouseup', onMouseup);
     canvas.addEventListener('mousemove', onMousemove);
+    canvas.addEventListener('wheel', onWheel, {passive:false});
 
     var transfer = [wasmBytes.buffer, offscreen];
     var msg = {

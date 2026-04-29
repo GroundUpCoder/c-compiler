@@ -1259,11 +1259,20 @@ typedef struct SDL_MouseButtonEvent {
     Sint32 y;
 } SDL_MouseButtonEvent;
 
+typedef struct SDL_MouseWheelEvent {
+    Uint32 type;
+    Uint32 timestamp;
+    Uint32 windowID;
+    Sint32 x;
+    Sint32 y;
+} SDL_MouseWheelEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_KeyboardEvent key;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
+    SDL_MouseWheelEvent wheel;
     Uint8 padding[56];
 } SDL_Event;
 
@@ -1280,6 +1289,7 @@ typedef union SDL_Event {
 #define SDL_MOUSEMOTION 0x400
 #define SDL_MOUSEBUTTONDOWN 0x401
 #define SDL_MOUSEBUTTONUP 0x402
+#define SDL_MOUSEWHEEL 0x403
 #define SDL_PRESSED 1
 #define SDL_RELEASED 0
 #define SDL_BUTTON_LEFT 1
@@ -4178,6 +4188,17 @@ void __sdl_push_mouse_motion_event(int window_id, int x, int y) {
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
+
+void __sdl_push_mouse_wheel_event(int window_id, int x, int y) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_MOUSEWHEEL;
+    e->event.wheel.windowID = (Uint32)window_id;
+    e->event.wheel.x = x;
+    e->event.wheel.y = y;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;
 
 int SDL_PollEvent(SDL_Event *event) {
     __SDL_EventEntry *e = __sdl_eq_head;

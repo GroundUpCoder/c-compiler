@@ -96,21 +96,26 @@ this is fine; a real editor would cache rendered glyphs in a texture atlas.
 
 ### Mouse
 
-| Action        | Effect              |
-|---------------|---------------------|
-| Left click    | Place cursor        |
+| Action          | Effect              |
+|-----------------|---------------------|
+| Left click      | Place cursor        |
+| Shift+click     | Extend selection    |
+| Click and drag  | Select text         |
+| Scroll wheel    | Scroll up/down      |
 
 ### Basic editing
 
-| Key           | Action              |
-|---------------|---------------------|
-| Printable     | Insert character    |
-| Enter         | Insert newline      |
-| Backspace     | Delete backward     |
-| Delete        | Delete forward      |
-| Tab           | Insert 4 spaces     |
-| Arrow keys    | Move cursor         |
-| Home / End    | Start / end of line |
+| Key              | Action              |
+|------------------|---------------------|
+| Printable        | Insert character    |
+| Enter            | Insert newline      |
+| Backspace        | Delete backward     |
+| Delete           | Delete forward      |
+| Tab              | Insert 4 spaces     |
+| Arrow keys       | Move cursor         |
+| Shift+Arrow      | Extend selection    |
+| Home / End       | Start / end of line |
+| Shift+Home/End   | Select to start/end |
 
 ### Readline shortcuts (Ctrl)
 
@@ -147,9 +152,8 @@ browser SDL backend yet, so they only work in the native backend.
 - **ASCII only.** SDL keysyms map to ASCII character codes; Unicode input
   would require an `SDL_TEXTINPUT`-style event that the host does not
   currently provide.
-- **No selection or clipboard.** There is no visual selection, copy/paste, or
-  kill ring. Adding selection would pair naturally with mouse support (drag to
-  select) and Shift+arrow keys.
+- **No clipboard.** There is no copy/paste or kill ring. Selection exists but
+  there is no way to copy selected text to the system clipboard.
 - **No undo/redo.** Each edit mutates the buffer directly with no history.
 - **No glyph cache.** Every glyph is re-rasterized every frame. Acceptable
   for a demo, but a real editor would cache bitmaps keyed by glyph index +

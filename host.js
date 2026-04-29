@@ -1453,6 +1453,9 @@ function createSDL({ getSDL, ctx }) {
         win.on('mouseMove', function (e) {
           getExports().__sdl_push_mouse_motion_event(handle, e.x, e.y);
         });
+        win.on('mouseWheel', function (e) {
+          getExports().__sdl_push_mouse_wheel_event(handle, e.dx || 0, e.dy || 0);
+        });
         return handle;
       },
       __sdl_destroy_window: function (handle) {
@@ -1674,6 +1677,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     },
     pushMouseMotionEvent: function (handle, x, y) {
       const fn = getExports().__sdl_push_mouse_motion_event;
+      if (fn) fn(handle, x, y);
+    },
+    pushMouseWheelEvent: function (handle, x, y) {
+      const fn = getExports().__sdl_push_mouse_wheel_event;
       if (fn) fn(handle, x, y);
     },
   };

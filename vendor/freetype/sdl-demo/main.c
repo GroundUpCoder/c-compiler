@@ -13,6 +13,7 @@
 #define PAD        16
 #define MAX_TEXT   8192
 #define CURSOR_BLINK_MS 530
+#define SCROLL_LINES 3
 
 static SDL_Window  *window;
 static SDL_Surface *surface;
@@ -24,6 +25,9 @@ static int  text_len;
 static int  cursor_pos;
 static int  ctrl_held;
 static int  alt_held;
+static int  shift_held;
+static int  sel_anchor;
+static int  mouse_dragging;
 
 static uint32_t pack_rgb(int r, int g, int b) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
@@ -33,16 +37,48 @@ static uint32_t bg_color;
 static uint32_t fg_color;
 static uint32_t cursor_color;
 static uint32_t line_num_color;
+static uint32_t sel_color;
 
 static int line_height;
 static int ascender;
 static int scroll_y;
+static int last_cursor_pos;
+static uint32_t cursor_blink_origin;
+
+static int has_selection(void) {
+    return sel_anchor >= 0 && sel_anchor != cursor_pos;
+}
+
+static int sel_min(void) {
+    return sel_anchor < cursor_pos ? sel_anchor : cursor_pos;
+}
+
+static int sel_max(void) {
+    return sel_anchor > cursor_pos ? sel_anchor : cursor_pos;
+}
+
+static void clear_selection(void) { sel_anchor = -1; }
+
+static void begin_or_keep_selection(void) {
+    if (sel_anchor < 0) sel_anchor = cursor_pos;
+}
+
+static void delete_selection(void) {
+    if (!has_selection()) return;
+    int lo = sel_min(), hi = sel_max();
+    memmove(&text[lo], &text[hi], text_len - hi);
+    text_len -= (hi - lo);
+    text[text_len] = '\0';
+    cursor_pos = lo;
+    sel_anchor = -1;
+}
 
 static int char_is_printable(int sym) {
     return sym >= 32 && sym < 127;
 }
 
 static void insert_char(char ch) {
+    if (has_selection()) delete_selection();
     if (text_len >= MAX_TEXT - 1) return;
     memmove(&text[cursor_pos + 1], &text[cursor_pos], text_len - cursor_pos);
     text[cursor_pos] = ch;
@@ -52,6 +88,7 @@ static void insert_char(char ch) {
 }
 
 static void delete_back(void) {
+    if (has_selection()) { delete_selection(); return; }
     if (cursor_pos <= 0) return;
     memmove(&text[cursor_pos - 1], &text[cursor_pos], text_len - cursor_pos);
     cursor_pos--;
@@ -60,13 +97,13 @@ static void delete_back(void) {
 }
 
 static void delete_forward(void) {
+    if (has_selection()) { delete_selection(); return; }
     if (cursor_pos >= text_len) return;
     memmove(&text[cursor_pos], &text[cursor_pos + 1], text_len - cursor_pos - 1);
     text_len--;
     text[text_len] = '\0';
 }
 
-/* Move cursor to start of current line (visual or newline) */
 static void cursor_home(void) {
     while (cursor_pos > 0 && text[cursor_pos - 1] != '\n')
         cursor_pos--;
@@ -97,6 +134,7 @@ static void word_forward(void) {
 }
 
 static void kill_to_end(void) {
+    if (has_selection()) { delete_selection(); return; }
     int end = cursor_pos;
     while (end < text_len && text[end] != '\n') end++;
     if (end == cursor_pos && end < text_len) end++;
@@ -107,6 +145,7 @@ static void kill_to_end(void) {
 }
 
 static void kill_to_start(void) {
+    if (has_selection()) { delete_selection(); return; }
     int start = cursor_pos;
     while (start > 0 && text[start - 1] != '\n') start--;
     int count = cursor_pos - start;
@@ -117,6 +156,7 @@ static void kill_to_start(void) {
 }
 
 static void kill_word_back(void) {
+    if (has_selection()) { delete_selection(); return; }
     int orig = cursor_pos;
     while (cursor_pos > 0 && !is_word_char(text[cursor_pos - 1]))
         cursor_pos--;
@@ -129,6 +169,7 @@ static void kill_word_back(void) {
 }
 
 static void kill_word_forward(void) {
+    if (has_selection()) { delete_selection(); return; }
     int end = cursor_pos;
     while (end < text_len && !is_word_char(text[end])) end++;
     while (end < text_len && is_word_char(text[end])) end++;
@@ -146,8 +187,6 @@ static void transpose_chars(void) {
     cursor_pos++;
 }
 
-/* Render a single glyph at (px, py) onto the surface.
-   py is the baseline y position. Returns advance in pixels. */
 static int render_glyph(unsigned char ch, int px, int py) {
     FT_UInt gi = FT_Get_Char_Index(face, ch);
     if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT)) return 0;
@@ -194,7 +233,6 @@ static int glyph_advance(unsigned char ch) {
     return face->glyph->advance.x >> 6;
 }
 
-/* Fill a rectangle with a color */
 static void fill_rect(int rx, int ry, int rw, int rh, uint32_t color) {
     uint32_t *pixels = (uint32_t *)surface->pixels;
     int sw = surface->w;
@@ -208,7 +246,6 @@ static void fill_rect(int rx, int ry, int rw, int rh, uint32_t color) {
     }
 }
 
-/* Render a small number for line numbering */
 static void render_small_text(const char *s, int px, int py) {
     uint32_t save_fg = fg_color;
     fg_color = line_num_color;
@@ -217,8 +254,6 @@ static void render_small_text(const char *s, int px, int py) {
     fg_color = save_fg;
 }
 
-/* Measure how many chars fit on one visual line starting at text offset `start`.
-   Returns the number of chars consumed (including the newline if hit). */
 static int measure_visual_line(int start, int max_width) {
     int x = 0;
     int i = start;
@@ -266,7 +301,6 @@ static int click_to_pos(int click_x, int click_y) {
 }
 
 static void render(void) {
-    /* Clear background */
     uint32_t *pixels = (uint32_t *)surface->pixels;
     for (int i = 0; i < surface->w * surface->h; i++)
         pixels[i] = bg_color;
@@ -274,7 +308,9 @@ static void render(void) {
     int text_area_x = PAD + 50;
     int text_area_w = WIN_W - text_area_x - PAD;
 
-    /* Walk through text, building visual lines */
+    int smin = has_selection() ? sel_min() : -1;
+    int smax = has_selection() ? sel_max() : -1;
+
     int line_no = 1;
     int text_offset = 0;
     int y = PAD + ascender - scroll_y;
@@ -304,59 +340,76 @@ static void render(void) {
         int is_hard_newline = (text_offset + line_chars <= text_len &&
                                line_chars > 0 &&
                                text[text_offset + line_chars - 1] == '\n');
+        int is_new_hard_line = (text_offset == 0 ||
+                                (text_offset > 0 && text[text_offset - 1] == '\n'));
+        int visible = (y + line_height > 0 && y - ascender < WIN_H);
 
-        /* Line number (only for hard newlines or first line) */
-        if (y + line_height > 0 && y - ascender < WIN_H) {
-            if (text_offset == 0 || (text_offset > 0 && text[text_offset - 1] == '\n')) {
-                char num_buf[8];
-                int n = line_no;
-                int len = 0;
-                char tmp[8];
-                if (n == 0) { tmp[len++] = '0'; }
-                else { while (n > 0) { tmp[len++] = '0' + n % 10; n /= 10; } }
-                for (int i = 0; i < len; i++) num_buf[i] = tmp[len - 1 - i];
-                num_buf[len] = '\0';
-                int num_x = PAD + 40 - len * glyph_advance('0');
-                render_small_text(num_buf, num_x, y);
-                line_no++;
-            }
-
-            /* Render chars on this visual line */
-            int x = text_area_x;
-            int draw_count = is_hard_newline ? line_chars - 1 : line_chars;
-            for (int i = 0; i < draw_count; i++) {
-                int pos = text_offset + i;
-                if (pos == cursor_pos && !cursor_found) {
-                    cursor_x = x;
-                    cursor_y = y - ascender;
-                    cursor_found = 1;
-                }
-                x += render_glyph((unsigned char)text[pos], x, y);
-            }
-            /* Cursor right after last char of this visual line */
-            if (!cursor_found && cursor_pos == text_offset + draw_count) {
-                if (is_hard_newline) {
-                    cursor_x = x;
-                    cursor_y = y - ascender;
-                    cursor_found = 1;
-                }
-            }
-            last_line_end_x = x;
-            last_line_y = y;
+        if (visible && is_new_hard_line) {
+            char num_buf[8];
+            int n = line_no;
+            int len = 0;
+            char tmp[8];
+            if (n == 0) { tmp[len++] = '0'; }
+            else { while (n > 0) { tmp[len++] = '0' + n % 10; n /= 10; } }
+            for (int i = 0; i < len; i++) num_buf[i] = tmp[len - 1 - i];
+            num_buf[len] = '\0';
+            int num_x = PAD + 40 - len * glyph_advance('0');
+            render_small_text(num_buf, num_x, y);
         }
 
+        int x = text_area_x;
+        int draw_count = is_hard_newline ? line_chars - 1 : line_chars;
+        for (int i = 0; i < draw_count; i++) {
+            int pos = text_offset + i;
+            int adv = glyph_advance((unsigned char)text[pos]);
+
+            if (visible && smin >= 0 && pos >= smin && pos < smax)
+                fill_rect(x, y - ascender, adv, line_height, sel_color);
+
+            if (pos == cursor_pos && !cursor_found) {
+                cursor_x = x;
+                cursor_y = y - ascender;
+                cursor_found = 1;
+            }
+
+            if (visible)
+                x += render_glyph((unsigned char)text[pos], x, y);
+            else
+                x += adv;
+        }
+
+        if (visible && is_hard_newline && smin >= 0) {
+            int nl_pos = text_offset + line_chars - 1;
+            if (nl_pos >= smin && nl_pos < smax)
+                fill_rect(x, y - ascender, glyph_advance(' '), line_height, sel_color);
+        }
+
+        if (!cursor_found && cursor_pos == text_offset + draw_count) {
+            if (is_hard_newline) {
+                cursor_x = x;
+                cursor_y = y - ascender;
+                cursor_found = 1;
+            }
+        }
+        last_line_end_x = x;
+        last_line_y = y;
+
+        if (is_new_hard_line) line_no++;
         text_offset += line_chars;
         y += line_height;
     }
 
-    /* Draw cursor */
-    int blink = ((SDL_GetTicks() / CURSOR_BLINK_MS) % 2 == 0);
+    int cursor_moved = (cursor_pos != last_cursor_pos);
+    if (cursor_moved) {
+        cursor_blink_origin = SDL_GetTicks();
+        last_cursor_pos = cursor_pos;
+    }
+    int blink = (((SDL_GetTicks() - cursor_blink_origin) / CURSOR_BLINK_MS) % 2 == 0);
     if (cursor_found && blink) {
         fill_rect(cursor_x, cursor_y + 2, 2, line_height - 4, cursor_color);
     }
 
-    /* Scroll to keep cursor visible */
-    if (cursor_found) {
+    if (cursor_found && cursor_moved) {
         if (cursor_y < PAD) {
             scroll_y -= (PAD - cursor_y);
             if (scroll_y < 0) scroll_y = 0;
@@ -365,7 +418,6 @@ static void render(void) {
         }
     }
 
-    /* Separator line between line numbers and text */
     fill_rect(text_area_x - 8, 0, 1, WIN_H, line_num_color);
 
     SDL_UpdateWindowSurface(window);
@@ -403,8 +455,35 @@ static void handle_events(void) {
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) exit(0);
 
+        if (ev.type == SDL_MOUSEWHEEL) {
+            scroll_y += ev.wheel.y;
+            if (scroll_y < 0) scroll_y = 0;
+            mouse_dragging = 0;
+            continue;
+        }
+
         if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
-            cursor_pos = click_to_pos(ev.button.x, ev.button.y);
+            int pos = click_to_pos(ev.button.x, ev.button.y);
+            if (shift_held) {
+                begin_or_keep_selection();
+                cursor_pos = pos;
+            } else {
+                cursor_pos = pos;
+                sel_anchor = pos;
+                mouse_dragging = 1;
+            }
+            continue;
+        }
+
+        if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+            mouse_dragging = 0;
+            if (sel_anchor >= 0 && sel_anchor == cursor_pos)
+                clear_selection();
+            continue;
+        }
+
+        if (ev.type == SDL_MOUSEMOTION && mouse_dragging) {
+            cursor_pos = click_to_pos(ev.motion.x, ev.motion.y);
             continue;
         }
 
@@ -413,62 +492,114 @@ static void handle_events(void) {
         if (ev.type == SDL_KEYUP) {
             if (sym == SDLK_LCTRL || sym == SDLK_RCTRL) ctrl_held = 0;
             if (sym == SDLK_LALT || sym == SDLK_RALT) alt_held = 0;
+            if (sym == SDLK_LSHIFT || sym == SDLK_RSHIFT) shift_held = 0;
             continue;
         }
         if (ev.type != SDL_KEYDOWN) continue;
 
         if (sym == SDLK_LCTRL || sym == SDLK_RCTRL) { ctrl_held = 1; continue; }
         if (sym == SDLK_LALT || sym == SDLK_RALT) { alt_held = 1; continue; }
+        if (sym == SDLK_LSHIFT || sym == SDLK_RSHIFT) { shift_held = 1; continue; }
 
-        /* Alt+key shortcuts (readline Meta-) */
         if (alt_held) {
-            if (sym == 'b') word_back();
-            else if (sym == 'f') word_forward();
-            else if (sym == 'd') kill_word_forward();
-            else if (sym == SDLK_BACKSPACE) kill_word_back();
+            if (sym == 'b') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                word_back();
+            } else if (sym == 'f') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                word_forward();
+            } else if (sym == 'd') {
+                kill_word_forward();
+            } else if (sym == SDLK_BACKSPACE) {
+                kill_word_back();
+            }
             continue;
         }
 
-        /* Ctrl+key shortcuts (readline) */
         if (ctrl_held) {
-            if (sym == 'a') cursor_home();         /* C-a: beginning of line */
-            else if (sym == 'e') cursor_end();     /* C-e: end of line */
-            else if (sym == 'b') { if (cursor_pos > 0) cursor_pos--; }  /* C-b: back char */
-            else if (sym == 'f') { if (cursor_pos < text_len) cursor_pos++; } /* C-f: forward char */
-            else if (sym == 'p') move_up();        /* C-p: previous line */
-            else if (sym == 'n') move_down();      /* C-n: next line */
-            else if (sym == 'd') delete_forward(); /* C-d: delete forward */
-            else if (sym == 'h') delete_back();    /* C-h: delete backward */
-            else if (sym == 'k') kill_to_end();    /* C-k: kill to end of line */
-            else if (sym == 'u') kill_to_start();  /* C-u: kill to start of line */
-            else if (sym == 'w') kill_word_back(); /* C-w: kill word backward */
-            else if (sym == 't') transpose_chars(); /* C-t: transpose chars */
+            if (sym == 'a') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                cursor_home();
+            } else if (sym == 'e') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                cursor_end();
+            } else if (sym == 'b') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                if (cursor_pos > 0) cursor_pos--;
+            } else if (sym == 'f') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                if (cursor_pos < text_len) cursor_pos++;
+            } else if (sym == 'p') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                move_up();
+            } else if (sym == 'n') {
+                if (shift_held) begin_or_keep_selection(); else clear_selection();
+                move_down();
+            } else if (sym == 'd') {
+                delete_forward();
+                clear_selection();
+            } else if (sym == 'h') {
+                delete_back();
+                clear_selection();
+            } else if (sym == 'k') {
+                kill_to_end();
+                clear_selection();
+            } else if (sym == 'u') {
+                kill_to_start();
+                clear_selection();
+            } else if (sym == 'w') {
+                kill_word_back();
+                clear_selection();
+            } else if (sym == 't') {
+                transpose_chars();
+                clear_selection();
+            }
             continue;
         }
 
-        /* Regular keys */
         if (sym == SDLK_RETURN) {
             insert_char('\n');
+            clear_selection();
         } else if (sym == SDLK_BACKSPACE) {
             delete_back();
+            clear_selection();
         } else if (sym == SDLK_DELETE) {
             delete_forward();
+            clear_selection();
         } else if (sym == SDLK_LEFT) {
-            if (cursor_pos > 0) cursor_pos--;
+            if (shift_held) {
+                begin_or_keep_selection();
+                if (cursor_pos > 0) cursor_pos--;
+            } else {
+                if (has_selection()) { cursor_pos = sel_min(); clear_selection(); }
+                else if (cursor_pos > 0) cursor_pos--;
+            }
         } else if (sym == SDLK_RIGHT) {
-            if (cursor_pos < text_len) cursor_pos++;
+            if (shift_held) {
+                begin_or_keep_selection();
+                if (cursor_pos < text_len) cursor_pos++;
+            } else {
+                if (has_selection()) { cursor_pos = sel_max(); clear_selection(); }
+                else if (cursor_pos < text_len) cursor_pos++;
+            }
         } else if (sym == SDLK_UP) {
-            move_up();
+            if (shift_held) { begin_or_keep_selection(); move_up(); }
+            else { clear_selection(); move_up(); }
         } else if (sym == SDLK_DOWN) {
-            move_down();
+            if (shift_held) { begin_or_keep_selection(); move_down(); }
+            else { clear_selection(); move_down(); }
         } else if (sym == SDLK_HOME) {
+            if (shift_held) begin_or_keep_selection(); else clear_selection();
             cursor_home();
         } else if (sym == SDLK_END) {
+            if (shift_held) begin_or_keep_selection(); else clear_selection();
             cursor_end();
         } else if (sym == SDLK_TAB) {
             for (int i = 0; i < 4; i++) insert_char(' ');
+            clear_selection();
         } else if (char_is_printable(sym)) {
             insert_char((char)sym);
+            clear_selection();
         }
     }
 }
@@ -496,16 +627,45 @@ int main(int argc, char **argv) {
     if (line_height < FONT_SIZE) line_height = FONT_SIZE + 4;
     ascender = face->size->metrics.ascender >> 6;
 
-    bg_color      = pack_rgb(30, 30, 46);
-    fg_color      = pack_rgb(205, 214, 244);
-    cursor_color  = pack_rgb(245, 224, 220);
+    bg_color       = pack_rgb(30, 30, 46);
+    fg_color       = pack_rgb(205, 214, 244);
+    cursor_color   = pack_rgb(245, 224, 220);
     line_num_color = pack_rgb(88, 91, 112);
+    sel_color      = pack_rgb(69, 71, 99);
+
+    sel_anchor = -1;
 
     const char *welcome =
         "FreeType + SDL text editor demo\n"
         "\n"
         "Type to edit. Arrow keys to move.\n"
-        "Backspace/Delete, Home/End, Tab.\n";
+        "Backspace/Delete, Home/End, Tab.\n"
+        "Shift+arrows to select. Click to place cursor.\n"
+        "Click and drag or shift+click to select with mouse.\n"
+        "\n"
+        "Lorem ipsum dolor sit amet, consectetur adipiscing\n"
+        "elit, sed do eiusmod tempor incididunt ut labore et\n"
+        "dolore magna aliqua. Ut enim ad minim veniam, quis\n"
+        "nostrud exercitation ullamco laboris nisi ut aliquip\n"
+        "ex ea commodo consequat.\n"
+        "\n"
+        "Duis aute irure dolor in reprehenderit in voluptate\n"
+        "velit esse cillum dolore eu fugiat nulla pariatur.\n"
+        "Excepteur sint occaecat cupidatat non proident, sunt\n"
+        "in culpa qui officia deserunt mollit anim id est\n"
+        "laborum.\n"
+        "\n"
+        "Sed ut perspiciatis unde omnis iste natus error sit\n"
+        "voluptatem accusantium doloremque laudantium, totam\n"
+        "rem aperiam, eaque ipsa quae ab illo inventore\n"
+        "veritatis et quasi architecto beatae vitae dicta\n"
+        "sunt explicabo.\n"
+        "\n"
+        "Nemo enim ipsam voluptatem quia voluptas sit\n"
+        "aspernatur aut odit aut fugit, sed quia consequuntur\n"
+        "magni dolores eos qui ratione voluptatem sequi\n"
+        "nesciunt. Neque porro quisquam est, qui dolorem\n"
+        "ipsum quia dolor sit amet.\n";
     text_len = strlen(welcome);
     memcpy(text, welcome, text_len);
     text[text_len] = '\0';
