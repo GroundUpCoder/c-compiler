@@ -6667,6 +6667,7 @@ class WasmModule {
     this.exports = [];          // section 7
     this.dataSegments = [];     // section 11
     this.tags = [];             // section 13
+    this.funcNames = [];        // for name custom section: [{idx, name}]
   }
 
   addFunctionTypeId(params, results) {
@@ -6894,6 +6895,23 @@ class WasmModule {
       for (const b of seg.data) buf.push(b);
     }
     emitSection(11, buf);
+
+    // Name custom section (0)
+    if (this.funcNames.length > 0) {
+      buf = [];
+      emitString(buf, "name");
+      // Subsection 1: function names
+      const sub = [];
+      lebU(sub, this.funcNames.length);
+      for (const entry of this.funcNames) {
+        lebU(sub, entry.idx);
+        emitString(sub, entry.name);
+      }
+      buf.push(0x01);
+      lebU(buf, sub.length);
+      for (const b of sub) buf.push(b);
+      emitSection(0, buf);
+    }
 
     return new Uint8Array(out);
   }
@@ -9252,6 +9270,7 @@ function generateCode(units, outputFile, options) {
       const funcIdx = wmod.addFunctionImport("c", fdef.name, typeId);
       cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
       cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
+      if (options.compilerOptions.emitNames) wmod.funcNames.push({ idx: funcIdx, name: fdef.name });
     }
   }
 
@@ -9265,6 +9284,7 @@ function generateCode(units, outputFile, options) {
       const funcIdx = wmod.addFunctionDefinition(typeId);
       cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
       cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
+      if (options.compilerOptions.emitNames) wmod.funcNames.push({ idx: funcIdx, name: fdef.name });
       if (fdef.name === "main") { foundMain = true; wmod.addExport("main", 0x00, funcIdx); }
       if (fdef.name === "alloca") wmod.addExport("alloca", 0x00, funcIdx);
     }
@@ -14446,6 +14466,8 @@ function main() {
       else if (wflag === "no-pointer-decay") warningFlags.pointerDecay = false;
       else if (wflag === "circular-dependency") warningFlags.circularDependency = true;
       else if (wflag === "no-circular-dependency") warningFlags.circularDependency = false;
+    } else if (args[i] === "-g") {
+      compilerOptions.emitNames = true;
     } else if (args[i] === "--compiler-debug-switch") {
       compilerOptions.debugSwitch = true;
     } else if (args[i] === "--allow-implicit-int") {
