@@ -1,0 +1,21 @@
+
+input.wasm:	file format wasm 0x1
+
+Section Details:
+
+Type[3]:
+ - type[0] (i32) -> nil
+ - type[1] (i32, i32) -> i32
+ - type[2] () -> i32
+
+Import[3]:
+ - func[0] sig=0 <env.print>
+ - memory[0] initial=1 max=10 <- env.mem
+ - global[0] i32 const <- env.base
+
+Function[1]:
+ - func[1] sig=2 <main>
+
+Export[2]:
+ - func[1] -> "main"
+ - memory[0] -> "memory"

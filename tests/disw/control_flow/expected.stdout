@@ -1,0 +1,19 @@
+
+input.wasm:	file format wasm 0x1
+
+Code Disassembly:
+
+000017 func[0] () -> i32:
+ 000018:  block
+ 00001a:    loop
+ 00001c:      i32.const 0
+ 00001e:      br_if 1
+ 000020:    end
+ 000021:  end
+ 000022:  i32.const 1
+ 000024:  if (result i32)
+ 000026:    i32.const 10
+ 000028:  else
+ 000029:    i32.const 20
+ 00002b:  end
+ 00002c:  end

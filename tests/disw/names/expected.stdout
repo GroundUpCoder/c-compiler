@@ -1,0 +1,36 @@
+
+input.wasm:	file format wasm 0x1
+
+Section Details:
+
+Type[2]:
+ - type[0] (i32, i32) -> i32
+ - type[1] () -> nil
+
+Function[2]:
+ - func[0] sig=0 <my_add>
+ - func[1] sig=1 <my_start>
+
+Memory[1]:
+ - memory[0] pages: initial=1
+
+Export[2]:
+ - func[0] -> "add"
+ - func[1] -> "_start"
+
+Custom "name":
+ - size: 37 bytes
+ - module: "test_mod"
+ - 2 function names
+
+Code Disassembly:
+
+000034 func[0] <my_add> (i32, i32) -> i32:
+ 000035:  local.get 0
+ 000037:  local.get 1
+ 000039:  i32.add
+ 00003a:  end
+
+00003c func[1] <my_start> () -> nil:
+ 00003d:  nop
+ 00003e:  end

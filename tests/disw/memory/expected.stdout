@@ -1,0 +1,15 @@
+
+input.wasm:	file format wasm 0x1
+
+Code Disassembly:
+
+00001d func[0] (i32) -> i32:
+ 00001e:  local.get 0
+ 000020:  i32.load offset=8
+ 000023:  local.get 0
+ 000025:  i32.const 42
+ 000027:  i32.store offset=16
+ 00002a:  local.get 0
+ 00002c:  i32.load8_u align=4 offset=4
+ 00002f:  i32.add
+ 000030:  end

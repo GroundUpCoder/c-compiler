@@ -1,0 +1,8 @@
+{
+    "name": "disw",
+    "description": "WebAssembly disassembler CLI",
+    "deps": ["lib.json"],
+    "sources": [
+        "src/main.c"
+    ]
+}

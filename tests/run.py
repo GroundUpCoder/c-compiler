@@ -15,6 +15,7 @@ Categories:
     extra  — compile+run tests from tests/extra/
     equiv  — CC vs JS equivalence: parse tree + WASM binary (requires --compiler=all)
     lua    — Lua official test suite (build VM, run .lua files)
+    disw   — WebAssembly disassembler output tests
     all    — all of the above
 
 Compilers:
@@ -59,7 +60,14 @@ ZLIB_TOOL_DIR = os.path.join(ZLIB_DIR, "tool")
 ZLIB_TESTS_DIR = os.path.join(ZLIB_DIR, "tests")
 ZLIB_GOLDEN_DIR = os.path.join(ZLIB_TESTS_DIR, "golden")
 
-ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua"]
+DISW_DIR = os.path.join(VENDOR_DIR, "disw")
+DISW_BIN = os.path.join(BUILD_DIR, "disw-native")
+DISW_SOURCES = [
+    os.path.join(DISW_DIR, "src", f) for f in ("parse.c", "disasm.c", "main.c", "wasm.h")
+]
+DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
+
+ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua", "disw"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -754,6 +762,94 @@ def run_lua_tests(compiler_cmd, results, filter_str=None):
             results.record(test_name, False, "Timed out (15s)")
 
 
+# --- disw (WebAssembly disassembler) tests ---
+
+def ensure_disw_built():
+    """Build build/disw-native from vendor/disw/src/ if missing or stale."""
+    os.makedirs(BUILD_DIR, exist_ok=True)
+    needs_build = not os.path.exists(DISW_BIN)
+    if not needs_build:
+        bin_mtime = os.path.getmtime(DISW_BIN)
+        for src in DISW_SOURCES:
+            if os.path.exists(src) and os.path.getmtime(src) > bin_mtime:
+                needs_build = True
+                break
+    if needs_build:
+        print("Building disw-native...")
+        r = subprocess.run(
+            ["clang", "-std=c99", "-O0", "-Wall", "-Werror",
+             "-I", os.path.join(DISW_DIR, "src"),
+             os.path.join(DISW_DIR, "src", "parse.c"),
+             os.path.join(DISW_DIR, "src", "disasm.c"),
+             os.path.join(DISW_DIR, "src", "main.c"),
+             "-o", DISW_BIN],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"disw build failed:\n{r.stderr}", file=sys.stderr)
+            return False
+        print("disw build complete.")
+    return True
+
+
+def run_disw_tests(results, filter_str=None):
+    if not ensure_disw_built():
+        results.record("disw/build", False, "Failed to build disw-native")
+        return
+
+    test_dirs = sorted(
+        d for d in os.listdir(DISW_TEST_DIR)
+        if os.path.isdir(os.path.join(DISW_TEST_DIR, d))
+    )
+
+    for name in test_dirs:
+        test_name = f"disw/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+
+        test_path = os.path.join(DISW_TEST_DIR, name)
+        build_py = os.path.join(test_path, "build.py")
+        expected_file = os.path.join(test_path, "expected.stdout")
+        config_file = os.path.join(test_path, "config.json")
+
+        if not os.path.exists(build_py) or not os.path.exists(expected_file):
+            results.skip(test_name)
+            continue
+
+        r = subprocess.run(
+            [sys.executable, build_py],
+            capture_output=True, text=True, timeout=10, cwd=test_path,
+        )
+        if r.returncode != 0:
+            results.record(test_name, False, f"build.py failed:\n{r.stderr}")
+            continue
+
+        flags = ["-h"]
+        if os.path.exists(config_file):
+            with open(config_file) as f:
+                cfg = json.load(f)
+            flags = cfg.get("flags", ["-h"])
+
+        r = subprocess.run(
+            [DISW_BIN] + flags + ["input.wasm"],
+            capture_output=True, text=True, timeout=10, cwd=test_path,
+        )
+        if r.returncode != 0:
+            results.record(test_name, False,
+                           f"disw exited {r.returncode}\nstderr: {r.stderr}")
+            continue
+
+        with open(expected_file) as f:
+            expected = f.read()
+
+        if r.stdout == expected:
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False,
+                           f"Output mismatch:\n--- expected ---\n{expected}"
+                           f"--- got ---\n{r.stdout}")
+
+
 # --- Main ---
 
 def main():
@@ -837,6 +933,10 @@ def main():
             for mode in compiler_modes:
                 results.section(f"lua ({mode})")
                 run_lua_tests(get_compiler(mode), results, filter_str=args.filter)
+
+        elif cat == "disw":
+            results.section("disw")
+            run_disw_tests(results, filter_str=args.filter)
 
     results.print_summary()
     sys.exit(0 if results.success else 1)

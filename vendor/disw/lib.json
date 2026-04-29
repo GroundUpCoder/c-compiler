@@ -1,0 +1,10 @@
+{
+    "type": "lib",
+    "name": "disw",
+    "description": "WebAssembly disassembler library",
+    "includes": ["src"],
+    "sources": [
+        "src/parse.c",
+        "src/disasm.c"
+    ]
+}

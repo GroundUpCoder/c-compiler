@@ -1,0 +1,10 @@
+
+input.wasm:	file format wasm 0x1
+
+Code Disassembly:
+
+000022 func[0] <add> (i32, i32) -> i32:
+ 000023:  local.get 0
+ 000025:  local.get 1
+ 000027:  i32.add
+ 000028:  end
