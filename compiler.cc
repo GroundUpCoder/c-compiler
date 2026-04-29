@@ -17168,7 +17168,7 @@ CodeGeneraionResult generateCode(
     for (DFunc *func : unit.importedFunctions) {
       DFunc *fdef = func->definition;
       WasmFunctionTypeId funcTypeId = getWasmFunctionTypeIdForCFunctionType(fdef->type);
-      u32 funcIdx = addWasmFunctionImport("c.mtots.com", *fdef->name, funcTypeId);
+      u32 funcIdx = addWasmFunctionImport("c", *fdef->name, funcTypeId);
       cg.funcDefToWasmFuncIdx[fdef] = funcIdx;
       cg.funcDefToTableIdx[fdef] = funcIdx + 1;  // table index 0 is reserved (null)
     }

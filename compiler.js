@@ -9249,7 +9249,7 @@ function generateCode(units, outputFile, options) {
     for (const func of unit.importedFunctions) {
       const fdef = func.definition || func;
       const typeId = getWasmFunctionTypeIdForCFunctionType(wmod, fdef.type);
-      const funcIdx = wmod.addFunctionImport("c.mtots.com", fdef.name, typeId);
+      const funcIdx = wmod.addFunctionImport("c", fdef.name, typeId);
       cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
       cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
     }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const ENV_KEY = "c.mtots.com";
+const ENV_KEY = "c";
 
 /**
  * @typedef {object} NodeFS
