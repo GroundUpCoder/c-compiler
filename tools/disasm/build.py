@@ -38,6 +38,8 @@ def main():
 
     codemirror_js = open(os.path.join(ROOT, "vendor", "codemirror", "codemirror.js")).read()
 
+    interpreter_js = open(os.path.join(TOOL_DIR, "interpreter.js")).read()
+
     disw_wasm = open(wasm_path, "rb").read()
     disw_b64 = base64.b64encode(disw_wasm).decode("ascii")
 
@@ -46,10 +48,12 @@ def main():
     # Escape </script> inside embedded JS so it doesn't break <script> tags
     compiler_js = compiler_js.replace("</script>", "<\\/script>")
     codemirror_js = codemirror_js.replace("</script>", "<\\/script>")
+    interpreter_js = interpreter_js.replace("</script>", "<\\/script>")
 
     # Inject
     html = template.replace("/* __CODEMIRROR_JS__ */", codemirror_js)
     html = html.replace("/* __COMPILER_JS__ */", compiler_js)
+    html = html.replace("/* __INTERPRETER_JS__ */", interpreter_js)
     html = html.replace("'__DISW_WASM_BASE64__'", "'" + disw_b64 + "'")
 
     out_path = os.path.join(TOOL_DIR, "index.html")

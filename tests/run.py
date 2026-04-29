@@ -16,6 +16,7 @@ Categories:
     equiv  — CC vs JS equivalence: parse tree + WASM binary (requires --compiler=all)
     lua    — Lua official test suite (build VM, run .lua files)
     disw   — WebAssembly disassembler output tests
+    sourcemap — source map line number accuracy tests
     all    — all of the above
 
 Compilers:
@@ -70,7 +71,9 @@ DISW_SOURCES = [
 ]
 DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
 
-ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua", "freetype", "disw"]
+SOURCEMAP_DIR = os.path.join(SCRIPT_DIR, "sourcemap")
+
+ALL_CATEGORIES = ["unit", "extra", "equiv", "projects", "zlib", "lua", "freetype", "disw", "sourcemap"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -891,6 +894,53 @@ def run_disw_tests(results, filter_str=None):
                            f"--- got ---\n{r.stdout}")
 
 
+# --- sourcemap tests ---
+
+def run_sourcemap_tests(compiler_cmd, results, filter_str=None):
+    test_dirs = sorted(
+        d for d in os.listdir(SOURCEMAP_DIR)
+        if os.path.isdir(os.path.join(SOURCEMAP_DIR, d))
+    )
+
+    for name in test_dirs:
+        test_name = f"sourcemap/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+
+        test_path = os.path.join(SOURCEMAP_DIR, name)
+        verify_js = os.path.join(test_path, "verify.js")
+        c_files = sorted(
+            os.path.join(test_path, f) for f in os.listdir(test_path) if f.endswith(".c")
+        )
+        if not c_files or not os.path.exists(verify_js):
+            results.skip(test_name)
+            continue
+
+        with tempfile.NamedTemporaryFile(suffix=".wasm", delete=False) as tmp:
+            wasm_path = tmp.name
+
+        try:
+            rel_c_files = [os.path.relpath(f, ROOT_DIR) for f in c_files]
+            compile_cmd = [*compiler_cmd, "-g", "-o", wasm_path] + rel_c_files
+            cr = subprocess.run(compile_cmd, capture_output=True, text=True, timeout=30, cwd=ROOT_DIR)
+            if cr.returncode != 0:
+                results.record(test_name, False,
+                               f"Compilation failed (exit {cr.returncode}):\n{cr.stderr}")
+                continue
+
+            vr = subprocess.run(
+                ["node", verify_js, wasm_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if vr.returncode != 0:
+                results.record(test_name, False, vr.stdout.strip() or vr.stderr.strip())
+            else:
+                results.record(test_name, True)
+        finally:
+            if os.path.exists(wasm_path):
+                os.unlink(wasm_path)
+
+
 # --- Main ---
 
 def main():
@@ -983,6 +1033,11 @@ def main():
         elif cat == "disw":
             results.section("disw")
             run_disw_tests(results, filter_str=args.filter)
+
+        elif cat == "sourcemap":
+            for mode in compiler_modes:
+                results.section(f"sourcemap ({mode})")
+                run_sourcemap_tests(get_compiler(mode), results, filter_str=args.filter)
 
     results.print_summary()
     sys.exit(0 if results.success else 1)

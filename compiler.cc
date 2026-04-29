@@ -13937,6 +13937,25 @@ WasmFunctionTypeId getWasmFunctionTypeIdForCFunctionType(Type funcType) {
   return addWasmFunctionTypeId(WasmFunctionType{paramTypes, returnTypes});
 }
 
+static bool alwaysReturns(Stmt stmt) {
+  switch (stmt.kind) {
+    case StmtKind::RETURN:
+    case StmtKind::THROW:
+      return true;
+    case StmtKind::COMPOUND:
+      if (!stmt.as.compound->labels.empty()) return false;
+      for (auto &s : stmt.as.compound->statements)
+        if (alwaysReturns(s)) return true;
+      return false;
+    case StmtKind::IF:
+      return stmt.as.ifStmt->elseBranch
+        && alwaysReturns(stmt.as.ifStmt->thenBranch)
+        && alwaysReturns(stmt.as.ifStmt->elseBranch);
+    default:
+      return false;
+  }
+}
+
 struct CodeGenerator {
   // Maps from C func definitions to Wasm function indices
   std::map<DFunc *, u32> funcDefToWasmFuncIdx;
@@ -14807,24 +14826,27 @@ struct CodeGenerator {
 
     emitStmt(funcDef->body);
 
-    // Emit implicit return for functions that fall through
-    if (frameSize > 0) {
-      body->localGet(savedSpLocalIdx);
-      body->globalSet(stackPointerGlobalIdx);
-    }
-    if (hasVaArgs) {
-      // Variadic: WASM function returns void, nothing to push
+    // Epilogue
+    if (alwaysReturns(funcDef->body)) {
+      body->unreachable();
     } else {
-      // Non-variadic: all functions return a value (void returns i32 with undefined value)
-      Type retType = funcDef->type.getReturnType();
-      WasmType wasmRetType = cToWasmType(retType);
-      if (wasmRetType == WasmType::I32) body->i32Const(0);
-      else if (wasmRetType == WasmType::I64) body->i64Const(0);
-      else if (wasmRetType == WasmType::F32) body->f32Const(0.0f);
-      else if (wasmRetType == WasmType::F64) body->f64Const(0.0);
-      else body->i32Const(0);  // fallback for void/other
+      if (frameSize > 0) {
+        body->localGet(savedSpLocalIdx);
+        body->globalSet(stackPointerGlobalIdx);
+      }
+      if (hasVaArgs) {
+        // Variadic: WASM function returns void, nothing to push
+      } else {
+        Type retType = funcDef->type.getReturnType();
+        WasmType wasmRetType = cToWasmType(retType);
+        if (wasmRetType == WasmType::I32) body->i32Const(0);
+        else if (wasmRetType == WasmType::I64) body->i64Const(0);
+        else if (wasmRetType == WasmType::F32) body->f32Const(0.0f);
+        else if (wasmRetType == WasmType::F64) body->f64Const(0.0);
+        else body->i32Const(0);
+      }
+      body->ret();
     }
-    body->ret();
     body = nullptr;
   }
 

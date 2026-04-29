@@ -41,16 +41,24 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .toolbar .status { font-size: 12px; color: var(--subtext); }
 
 .app { display: flex; flex-direction: column; height: 100vh; }
-.layout { display: flex; flex: 1; overflow: hidden; }
-.layout.stacked { flex-direction: column; }
-.layout.side-by-side { flex-direction: row; }
+.layout { display: grid; flex: 1; overflow: hidden; }
+.layout.side-by-side { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.layout.stacked { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+.layout.three-col { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr; }
+.layout.quad { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.layout.one-two { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.layout.one-two .pane:first-child { grid-row: 1 / -1; }
 
 .pane {
-  flex: 1; display: flex; flex-direction: column; overflow: hidden;
-  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  min-width: 0; min-height: 0; border: 0 solid var(--border);
 }
-.side-by-side .pane + .pane { border-left: 1px solid var(--border); }
-.stacked .pane + .pane { border-top: 1px solid var(--border); }
+.pane + .pane { border-left-width: 1px; }
+.layout.stacked .pane + .pane { border-left-width: 0; border-top-width: 1px; }
+.layout.quad .pane:nth-child(3), .layout.quad .pane:nth-child(4) { border-top-width: 1px; }
+.layout.quad .pane:nth-child(3) { border-left-width: 0; }
+.layout.one-two .pane:nth-child(3) { border-top-width: 1px; border-left-width: 1px; }
+.pane.hidden { display: none; }
 
 /* Tab bar */
 .tab-bar {
@@ -140,6 +148,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .fn-header .fn-name { color: var(--blue); font-weight: 600; }
 .fn-header .fn-sig { color: var(--subtext); margin-left: 8px; }
 .fn-header .fn-meta { color: var(--subtext); font-size: 11px; display: block; margin-top: 2px; }
+.fn-source-link { color: var(--green); font-size: 11px; cursor: pointer; margin-left: 8px; }
+.fn-source-link:hover { text-decoration: underline; }
 
 .insn-list { font-family: monospace; font-size: 12px; line-height: 1.6; }
 .insn {
@@ -147,6 +157,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 .insn:hover { background: rgba(137, 180, 250, 0.06); }
 .insn-offset { color: var(--subtext); width: 70px; text-align: right; padding-right: 12px; flex-shrink: 0; user-select: none; }
+.insn-fold {
+  width: 14px; flex-shrink: 0; text-align: center; cursor: pointer;
+  color: var(--subtext); font-size: 9px; user-select: none; line-height: 1.6;
+  transition: color 0.1s;
+}
+.insn-fold:hover { color: var(--text); }
+.insn-fold::after { content: '\25BC'; }
+.insn-fold.collapsed::after { content: '\25B6'; }
+.insn-nofold { width: 14px; flex-shrink: 0; }
+.fold-body { }
+.fold-body.collapsed { display: none; }
+.fold-ellipsis {
+  display: none; color: var(--subtext); font-style: italic; padding: 1px 0 1px 98px;
+}
+.fold-ellipsis.visible { display: block; }
 .insn-text { white-space: pre; }
 .insn-op { color: var(--mauve); }
 .insn-op.control { color: var(--red); }
@@ -173,6 +198,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .var-row .var-name { color: var(--teal); font-weight: 600; }
 .var-row:hover { background: rgba(137, 180, 250, 0.06); }
 .hl-local { background: rgba(148, 226, 213, 0.12) !important; }
+.hl-global { background: rgba(249, 226, 175, 0.12) !important; }
+.hl-block { background: rgba(243, 139, 168, 0.25) !important; }
+.insn-fn-link { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.insn-fn-link:hover { text-decoration-style: solid; color: var(--blue); }
 
 .settings-overlay {
   display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100;
@@ -197,8 +226,126 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   background: var(--accent); color: var(--overlay); cursor: pointer; font-size: 13px; font-weight: 600;
 }
 
+/* Debug toolbar */
+.debug-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; display: none;
+}
+.debug-bar.active { display: flex; }
+.debug-bar button {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--overlay); color: var(--text); cursor: pointer; font-size: 12px;
+  font-family: system-ui, sans-serif; transition: background 0.15s;
+}
+.debug-bar button:hover { background: var(--border); }
+.debug-bar button:disabled { opacity: 0.4; cursor: default; }
+.debug-bar button.run-btn { background: var(--green); color: var(--overlay); border-color: var(--green); font-weight: 600; }
+.debug-bar button.run-btn:hover { opacity: 0.9; }
+.debug-bar button.run-btn:disabled { opacity: 0.4; }
+.debug-bar button.stop-btn { background: var(--red); color: var(--overlay); border-color: var(--red); font-weight: 600; }
+.debug-bar .debug-status { font-size: 12px; color: var(--subtext); margin-left: auto; font-family: monospace; }
+
+/* Current instruction highlight */
+.insn.current { background: rgba(250, 179, 135, 0.15); }
+.insn.current .insn-offset { color: var(--peach); font-weight: 600; }
+
+/* Breakpoint gutter */
+.insn-offset { cursor: pointer; position: relative; }
+.insn.has-bp .insn-offset::before {
+  content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+}
+
+/* Debug state panel */
+.debug-state { font-family: monospace; font-size: 12px; overflow-y: auto; padding: 8px 0; background: var(--overlay); flex: 1; }
+.debug-section { margin-bottom: 8px; }
+.debug-section-header {
+  padding: 4px 12px; font-size: 11px; color: var(--subtext); text-transform: uppercase;
+  letter-spacing: 0.5px; font-weight: 600; cursor: pointer; user-select: none;
+}
+.debug-section-header:hover { color: var(--text); }
+.debug-section-body { padding: 0 12px; }
+.debug-var {
+  display: flex; gap: 8px; padding: 1px 0; line-height: 1.6;
+}
+.debug-var .dv-name { color: var(--teal); min-width: 80px; }
+.debug-var .dv-type { color: var(--mauve); min-width: 32px; }
+.debug-var .dv-val { color: var(--text); }
+.debug-var .dv-val.changed { color: var(--peach); font-weight: 600; }
+.debug-stack-item { padding: 1px 0; line-height: 1.6; color: var(--text); }
+.debug-callstack-frame {
+  padding: 2px 0; line-height: 1.6; cursor: pointer; color: var(--text);
+}
+.debug-callstack-frame:hover { color: var(--blue); }
+.debug-callstack-frame.selected { background: rgba(137, 180, 250, 0.12); color: var(--blue); }
+.debug-callstack-frame .frame-name { color: var(--blue); font-weight: 600; }
+.debug-stdout {
+  padding: 4px 12px; white-space: pre-wrap; color: var(--text);
+  background: var(--surface); border-radius: 4px; margin: 0 12px;
+  max-height: 120px; overflow-y: auto; font-size: 12px;
+}
+.debug-stdout:empty { display: none; }
+
+/* Tab reopen button */
+.tab-add {
+  display: flex; align-items: center; justify-content: center; width: 28px;
+  font-size: 16px; color: var(--subtext); cursor: pointer; user-select: none;
+  flex-shrink: 0; position: relative;
+}
+.tab-add:hover { color: var(--text); background: rgba(137, 180, 250, 0.06); }
+.tab-add-menu {
+  display: none; position: absolute; top: 100%; right: 0; z-index: 50;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  min-width: 160px; padding: 4px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.tab-add-menu.open { display: block; }
+.tab-add-menu-item {
+  padding: 6px 12px; font-size: 12px; color: var(--text); cursor: pointer;
+  white-space: nowrap;
+}
+.tab-add-menu-item:hover { background: rgba(137, 180, 250, 0.1); }
+.tab-add-menu-item.disabled { color: var(--subtext); opacity: 0.5; cursor: default; }
+
+/* Source link per instruction (right side) */
+.insn-src-link { color: var(--green); font-size: 10px; margin-left: auto; padding: 0 8px; cursor: pointer; opacity: 0.35; white-space: nowrap; transition: opacity 0.15s; }
+.insn:hover .insn-src-link { opacity: 0.7; }
+.insn-src-link:hover { opacity: 1 !important; text-decoration: underline; }
+
+/* Bidirectional hover highlight between source and assembly */
+.insn.source-hover { background: rgba(166, 227, 161, 0.12) !important; }
+.cm-line.asm-hover { background: rgba(166, 227, 161, 0.12) !important; }
+
+/* Follow source/asm toggle in debug bar */
+.follow-toggle { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
+.follow-toggle .follow-label { font-size: 11px; color: var(--subtext); }
+.follow-toggle button { padding: 2px 8px; font-size: 11px; }
+.follow-toggle button.active { background: var(--accent); color: var(--overlay); border-color: var(--accent); font-weight: 600; }
+
+/* Example selector */
+.toolbar select {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--overlay); color: var(--text); font-size: 12px; cursor: pointer;
+}
+.toolbar select:focus { outline: 1px solid var(--accent); }
+
+/* WASM drop overlay */
+.drop-overlay {
+  display: none; position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center;
+}
+.drop-overlay.active { display: flex; }
+.drop-overlay-inner {
+  border: 3px dashed var(--accent); border-radius: 16px; padding: 48px 64px;
+  color: var(--accent); font-size: 18px; font-weight: 600; text-align: center;
+  background: var(--surface); pointer-events: none;
+}
+
 @media (max-width: 768px) {
-  .layout.side-by-side { flex-direction: column; }
+  .layout.side-by-side, .layout.three-col, .layout.quad, .layout.one-two {
+    grid-template-columns: 1fr; grid-template-rows: auto;
+  }
+  .layout.one-two .pane:first-child { grid-row: auto; }
 }
 </style>
 </head>
@@ -206,19 +353,30 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 <div class="app">
   <div class="toolbar">
     <h1>WASM Disassembler</h1>
+    <select id="exampleSelect" title="Load example"></select>
     <span class="status" id="status">Loading...</span>
     <button id="btnCompile" class="primary" disabled>Compile &amp; Disassemble</button>
     <button id="btnSettings" title="Settings">&#x2699;</button>
   </div>
+  <div class="drop-overlay" id="dropOverlay"><div class="drop-overlay-inner">Drop .wasm file to disassemble</div></div>
+  <div class="debug-bar" id="debugBar">
+    <button id="dbgRun" class="run-btn" title="Run (F5)">Run</button>
+    <button id="dbgStep" title="Step (F11)">Step</button>
+    <button id="dbgStepOver" title="Step Over (F10)">Step Over</button>
+    <button id="dbgStepOut" title="Step Out (Shift+F11)">Step Out</button>
+    <button id="dbgReset" class="stop-btn" title="Reset">Reset</button>
+    <span class="follow-toggle">
+      <span class="follow-label">Follow:</span>
+      <button id="dbgFollowAsm" class="active" title="Step focuses assembly">ASM</button>
+      <button id="dbgFollowSrc" title="Step focuses C source">Source</button>
+    </span>
+    <span class="debug-status" id="debugStatus"></span>
+  </div>
   <div class="layout side-by-side" id="layout">
-    <div class="pane" id="paneLeft">
-      <div class="tab-bar" id="tabBarLeft"></div>
-      <div id="contentLeft"></div>
-    </div>
-    <div class="pane" id="paneRight">
-      <div class="tab-bar" id="tabBarRight"></div>
-      <div id="contentRight"></div>
-    </div>
+    <div class="pane" id="pane0"><div class="tab-bar" id="tabBar0"></div><div id="content0"></div></div>
+    <div class="pane" id="pane1"><div class="tab-bar" id="tabBar1"></div><div id="content1"></div></div>
+    <div class="pane" id="pane2"><div class="tab-bar" id="tabBar2"></div><div id="content2"></div></div>
+    <div class="pane" id="pane3"><div class="tab-bar" id="tabBar3"></div><div id="content3"></div></div>
   </div>
 </div>
 
@@ -228,11 +386,16 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <h3>Compiler</h3>
     <label><input type="checkbox" id="optNoReuseLocals"> Disable local slot reuse</label>
     <div class="setting-desc">Each variable gets its own WASM local (no sharing across scopes)</div>
-    <label><input type="checkbox" id="optGcSections"> GC unused sections</label>
+    <label><input type="checkbox" id="optGcSections" checked> GC unused sections</label>
     <div class="setting-desc">Remove unreferenced functions and data</div>
+    <label><input type="checkbox" id="optGcNoExportRoots" checked> Don't root exports</label>
+    <div class="setting-desc">With GC, don't treat __export directives as roots</div>
     <h3>Layout</h3>
-    <label><input type="radio" name="layout" value="side-by-side" checked> Side by side</label>
-    <label><input type="radio" name="layout" value="stacked"> Stacked</label>
+    <label><input type="radio" name="layout" value="side-by-side" data-panes="2" checked> 2 side by side</label>
+    <label><input type="radio" name="layout" value="stacked" data-panes="2"> 2 stacked</label>
+    <label><input type="radio" name="layout" value="three-col" data-panes="3"> 3 side by side</label>
+    <label><input type="radio" name="layout" value="one-two" data-panes="3"> 1 + 2 stacked</label>
+    <label><input type="radio" name="layout" value="quad" data-panes="4"> 2 x 2 grid</label>
     <div class="btn-row"><button id="btnSettingsClose">Done</button></div>
   </div>
 </div>
@@ -242,6 +405,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 <!-- Compiler (injected by build.py) -->
 <script>/* __COMPILER_JS__ */</script>
+
+<!-- Interpreter (injected by build.py) -->
+<script>/* __INTERPRETER_JS__ */</script>
 
 <script>
 // Embedded disw WASM binary (injected by build.py)
@@ -534,9 +700,10 @@ async function createDiswRunner(wasmBytes) {
 
 // Compiler
 function getCompilerOptions() {
-  var opts = { emitNames: true };
+  var opts = { emitNames: true, embedSources: true };
   if (document.getElementById('optNoReuseLocals').checked) opts.noReuseLocals = true;
   if (document.getElementById('optGcSections').checked) opts.gcSections = true;
+  if (document.getElementById('optGcNoExportRoots').checked) opts.gcNoExportRoots = true;
   return opts;
 }
 
@@ -546,14 +713,14 @@ function compileC(source) {
   var errors = [];
   var vfs = {
     readFileSync: function(f) {
-      if (f === 'input.c') return source;
+      if (f === '__main.c') return source;
       throw new Error('File not found: ' + f);
     }
   };
   var opts = getCompilerOptions();
   var units;
   try {
-    units = C.parseAllUnits(vfs, pp, ['input.c'], {
+    units = C.parseAllUnits(vfs, pp, ['__main.c'], {
       compilerOptions: opts,
       warningFlags: {},
       writeErr: function(s) { errors.push(s); },
@@ -565,7 +732,62 @@ function compileC(source) {
   if (linkResult.errors.length > 0) {
     throw new Error(linkResult.errors.map(function(e) { return e.message; }).join('\n'));
   }
-  return C.generateCode(units, 'output.wasm', { compilerOptions: opts });
+  if (opts.gcSections) C.gcSectionsPass(units, opts);
+  return C.generateCode(units, 'output.wasm', { compilerOptions: opts, sourceBuffers: pp.sourceBuffers });
+}
+
+// Parse c.sourcemap and c.sources custom sections from WASM binary
+function parseWasmDebugSections(wasmBytes) {
+  var bytes = wasmBytes instanceof Uint8Array ? wasmBytes : new Uint8Array(wasmBytes);
+  var pos = 8; // skip magic + version
+  var sourceMap = null, embeddedSources = null;
+
+  function readLEB() {
+    var r = 0, s = 0, b;
+    do { b = bytes[pos++]; r |= (b & 0x7F) << s; s += 7; } while (b & 0x80);
+    return r;
+  }
+  function readLEBI() {
+    var r = 0, s = 0, b;
+    do { b = bytes[pos++]; r |= (b & 0x7F) << s; s += 7; } while (b & 0x80);
+    if (s < 32 && (b & 0x40)) r |= (~0 << s);
+    return r;
+  }
+  function readString() {
+    var len = readLEB();
+    var s = '';
+    for (var i = 0; i < len; i++) s += String.fromCharCode(bytes[pos++]);
+    return s;
+  }
+
+  while (pos < bytes.length) {
+    var id = bytes[pos++];
+    var size = readLEB();
+    var end = pos + size;
+    if (id === 0) {
+      var name = readString();
+      if (name === 'c.sourcemap') {
+        var fileCount = readLEB();
+        var files = [];
+        for (var i = 0; i < fileCount; i++) files.push(readString());
+        var entryCount = readLEB();
+        var entries = [];
+        var absOff = 0, absFile = 0, absLine = 0;
+        for (var i = 0; i < entryCount; i++) {
+          if (i === 0) { absOff = readLEB(); absFile = readLEB(); absLine = readLEB(); }
+          else { absOff += readLEB(); absFile += readLEBI(); absLine += readLEBI(); }
+          entries.push({ offset: absOff, file: files[absFile], line: absLine });
+        }
+        sourceMap = { files: files, entries: entries };
+      } else if (name === 'c.sources') {
+        var jsonBytes = bytes.slice(pos, end);
+        var jsonStr = new TextDecoder('utf-8').decode(jsonBytes);
+        embeddedSources = JSON.parse(jsonStr);
+      }
+    }
+    pos = end;
+  }
+  return { sourceMap: sourceMap, embeddedSources: embeddedSources };
 }
 
 // Helpers
@@ -579,7 +801,11 @@ function classifyOp(text) {
   return '';
 }
 
-function renderInsn(insn, funcIdx) {
+function isFoldOp(op) {
+  return op === 'block' || op === 'loop' || op === 'if';
+}
+
+function renderInsn(insn, funcIdx, foldId, blockId) {
   var parts = insn.text.match(/^(\S+)(.*)/);
   if (!parts) return '';
   var op = parts[1];
@@ -596,12 +822,38 @@ function renderInsn(insn, funcIdx) {
     var m = rest.match(/^\s*(\d+)/);
     if (m) localAttr = ' data-local="' + funcIdx + ':' + m[1] + '"';
   }
-  return '<div class="insn"' + localAttr + '>' +
+  var globalAttr = '';
+  if (op === 'global.get' || op === 'global.set') {
+    var m = rest.match(/^\s*(\d+)/);
+    if (m) globalAttr = ' data-global="' + m[1] + '"';
+  }
+  if (cls === 'call' && op === 'call') {
+    var callIdx = rest.match(/^\s*(\d+)/);
+    if (callIdx) {
+      immHtml = immHtml.replace(/<span class="insn-name">/, '<span class="insn-name insn-fn-link" data-fn-index="' + callIdx[1] + '">');
+    }
+  }
+  var srcInfo = sourceLineForOffset(insn.offset);
+  var srcAttr = '';
+  var srcLinkHtml = '';
+  if (srcInfo && lastEmbeddedSources && lastEmbeddedSources[srcInfo.file]) {
+    srcAttr = ' data-src-file="' + esc(srcInfo.file) + '" data-src-line="' + srcInfo.line + '"';
+    srcLinkHtml = '<span class="insn-src-link" data-src-file="' + esc(srcInfo.file) + '" data-src-line="' + srcInfo.line + '">' + esc(srcInfo.file.replace(/^.*\//, '') + ':' + srcInfo.line) + '</span>';
+  }
+  var foldGutter = '';
+  if (foldId !== undefined) {
+    foldGutter = '<span class="insn-fold" data-fold="' + foldId + '"></span>';
+  } else {
+    foldGutter = '<span class="insn-nofold"></span>';
+  }
+  var blockAttr = blockId !== undefined ? ' data-block="' + blockId + '"' : '';
+  return '<div class="insn" data-offset="' + insn.offset + '" data-fn="' + funcIdx + '"' + localAttr + globalAttr + blockAttr + srcAttr + '>' +
     '<span class="insn-offset">' + insn.offset.toString(16).padStart(6, '0') + '</span>' +
+    foldGutter +
     '<span class="insn-text">' + indent +
     '<span class="insn-op ' + cls + '">' + op + '</span>' +
     '<span class="insn-imm">' + immHtml + '</span>' +
-    '</span></div>';
+    '</span>' + srcLinkHtml + '</div>';
 }
 
 function esc(s) {
@@ -609,14 +861,46 @@ function esc(s) {
 }
 
 // ── Tab system ──
-var panes = {
-  left: { tabs: [], active: null, barEl: document.getElementById('tabBarLeft'), contentEl: document.getElementById('contentLeft') },
-  right: { tabs: [], active: null, barEl: document.getElementById('tabBarRight'), contentEl: document.getElementById('contentRight') },
-};
+var paneCount = 2;
+var panes = [];
+for (var _pi = 0; _pi < 4; _pi++) {
+  panes.push({
+    id: _pi,
+    tabs: [],
+    active: null,
+    barEl: document.getElementById('tabBar' + _pi),
+    contentEl: document.getElementById('content' + _pi),
+  });
+}
 var tabIdCounter = 0;
 var lastJson = null;
 
+function targetPane(preferred) {
+  if (preferred < paneCount) return preferred;
+  return paneCount - 1;
+}
+
+function otherPane(avoid) {
+  for (var i = 0; i < paneCount; i++) {
+    if (i !== avoid) return i;
+  }
+  return 0;
+}
+
+function paneForNewTab() {
+  var editorLoc = findTab('editor');
+  var editorPane = editorLoc ? editorLoc.paneId : 0;
+  return otherPane(editorPane);
+}
+
+function updatePaneVisibility() {
+  for (var i = 0; i < 4; i++) {
+    document.getElementById('pane' + i).classList.toggle('hidden', i >= paneCount);
+  }
+}
+
 function createTab(paneId, label, type, data) {
+  paneId = +paneId;
   var id = 'tab-' + (++tabIdCounter);
   var contentEl = document.createElement('div');
   contentEl.className = 'tab-content';
@@ -632,16 +916,17 @@ function createTab(paneId, label, type, data) {
 }
 
 function findTab(type, dataKey) {
-  for (var side in panes) {
-    for (var i = 0; i < panes[side].tabs.length; i++) {
-      var t = panes[side].tabs[i];
-      if (t.type === type && (!dataKey || t.data && t.data.key === dataKey)) return { paneId: side, tab: t };
+  for (var pi = 0; pi < panes.length; pi++) {
+    for (var i = 0; i < panes[pi].tabs.length; i++) {
+      var t = panes[pi].tabs[i];
+      if (t.type === type && (!dataKey || t.data && t.data.key === dataKey)) return { paneId: pi, tab: t };
     }
   }
   return null;
 }
 
 function removeTab(paneId, tabId) {
+  paneId = +paneId;
   var pane = panes[paneId];
   var idx = -1;
   for (var i = 0; i < pane.tabs.length; i++) {
@@ -666,12 +951,14 @@ function removeTab(paneId, tabId) {
 }
 
 function activateTab(paneId, tabId) {
+  paneId = +paneId;
   panes[paneId].active = tabId;
   showActiveContent(paneId);
   renderTabBar(paneId);
 }
 
 function showActiveContent(paneId) {
+  paneId = +paneId;
   var pane = panes[paneId];
   var children = pane.contentEl.children;
   var hasActive = false;
@@ -708,6 +995,7 @@ function showActiveContent(paneId) {
 }
 
 function renderTabBar(paneId) {
+  paneId = +paneId;
   var pane = panes[paneId];
   var bar = pane.barEl;
   bar.innerHTML = '';
@@ -727,9 +1015,15 @@ function renderTabBar(paneId) {
     el.appendChild(closeBtn);
     bar.appendChild(el);
   }
+  var addBtn = document.createElement('div');
+  addBtn.className = 'tab-add';
+  addBtn.setAttribute('data-pane', paneId);
+  addBtn.textContent = '+';
+  bar.appendChild(addBtn);
 }
 
 function moveTab(fromPane, tabId, toPane, insertAt) {
+  fromPane = +fromPane; toPane = +toPane;
   var src = panes[fromPane];
   var dst = panes[toPane];
   var idx = -1;
@@ -794,7 +1088,8 @@ document.addEventListener('drop', function(e) {
   e.preventDefault();
   var tabs = bar.querySelectorAll('.tab');
   for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('drag-over');
-  var toPane = bar === panes.left.barEl ? 'left' : 'right';
+  var toPane = 0;
+  for (var pi = 0; pi < panes.length; pi++) { if (bar === panes[pi].barEl) { toPane = pi; break; } }
   var overTab = e.target.closest('.tab');
   var insertAt = -1;
   if (overTab) {
@@ -840,6 +1135,50 @@ document.addEventListener('mousedown', function(e) {
   }
 });
 
+// Tab reopen menu
+var openMenu = null;
+document.addEventListener('click', function(e) {
+  // Close any open menu first
+  if (openMenu && !e.target.closest('.tab-add')) {
+    openMenu.remove();
+    openMenu = null;
+  }
+  var addBtn = e.target.closest('.tab-add');
+  if (!addBtn) return;
+  if (openMenu) { openMenu.remove(); openMenu = null; return; }
+  var paneId = parseInt(addBtn.getAttribute('data-pane'));
+  var menu = document.createElement('div');
+  menu.className = 'tab-add-menu open';
+  var items = [];
+  if (!findTab('editor')) items.push({ label: 'Source Editor', action: function() { createTab(paneId, 'Source', 'editor', {}); editorTab = findTab('editor').tab; editorTab.contentEl.querySelector('.editor-wrap').appendChild(editorView.dom); editorTab.data.editorView = editorView; editorTab.data.editorParked = false; } });
+  if (lastJson && !findTab('module')) items.push({ label: 'Module Overview', action: function() { createTab(paneId, 'Module', 'module', { json: lastJson }); } });
+  if (dbgInterp && !findTab('debug')) items.push({ label: 'Debug State', action: function() { createTab(paneId, 'Debug', 'debug', { key: 'debug' }); dbgUpdate(); } });
+  if (dbgInterp && !findTab('stdout')) items.push({ label: 'Output', action: function() { createTab(paneId, 'Output', 'stdout', { key: 'stdout' }); dbgUpdate(); } });
+  if (lastEmbeddedSources) {
+    for (var fname in lastEmbeddedSources) {
+      if (!findTab('source', 'src-' + fname)) {
+        (function(f) {
+          items.push({ label: f.replace(/^.*\//, ''), action: function() { openSourceTab(f); } });
+        })(fname);
+      }
+    }
+  }
+  if (items.length === 0) items.push({ label: 'No tabs to reopen', disabled: true });
+  for (var i = 0; i < items.length; i++) {
+    var item = document.createElement('div');
+    item.className = 'tab-add-menu-item' + (items[i].disabled ? ' disabled' : '');
+    item.textContent = items[i].label;
+    if (!items[i].disabled) {
+      (function(action) {
+        item.addEventListener('click', function() { action(); menu.remove(); openMenu = null; });
+      })(items[i].action);
+    }
+    menu.appendChild(item);
+  }
+  addBtn.appendChild(menu);
+  openMenu = menu;
+});
+
 // ── Content renderers ──
 
 function renderTabContent(tab) {
@@ -859,6 +1198,60 @@ function renderTabContent(tab) {
   }
   if (tab.type === 'error') {
     tab.contentEl.innerHTML = '<div class="disasm-content"><div class="disasm-error">' + esc(tab.data.message) + '</div></div>';
+    return;
+  }
+  if (tab.type === 'debug') {
+    tab.contentEl.innerHTML = '<div class="debug-state" id="debugState"></div>';
+    return;
+  }
+  if (tab.type === 'stdout') {
+    tab.contentEl.innerHTML = '<div class="disasm-content"><pre class="stdout-content" style="padding:12px;white-space:pre-wrap;font-family:monospace;font-size:13px;color:var(--text);"></pre></div>';
+    return;
+  }
+  if (tab.type === 'source') {
+    tab.contentEl.innerHTML = '<div class="editor-wrap"></div>';
+    var view = new CM.EditorView({
+      doc: tab.data.source,
+      extensions: [
+        CM.lineNumbers(),
+        CM.highlightActiveLineGutter(),
+        CM.highlightSpecialChars(),
+        CM.foldGutter(),
+        CM.drawSelection(),
+        CM.highlightActiveLine(),
+        CM.keymap.of([...CM.defaultKeymap, ...CM.foldKeymap]),
+        CM.cpp(),
+        cmTheme,
+        cmHighlight,
+        CM.EditorState.readOnly.of(true),
+      ],
+      parent: tab.contentEl.querySelector('.editor-wrap'),
+    });
+    tab.data.editorView = view;
+    // Source → Assembly hover highlighting
+    var hoverLine = -1;
+    view.contentDOM.addEventListener('mousemove', function(e) {
+      var pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null) { clearAsmHoverHighlight(); hoverLine = -1; return; }
+      var line = view.state.doc.lineAt(pos).number;
+      if (line === hoverLine) return;
+      hoverLine = line;
+      highlightAsmForSourceLine(tab.data.filename, line);
+    });
+    view.contentDOM.addEventListener('mouseleave', function() {
+      clearAsmHoverHighlight();
+      hoverLine = -1;
+    });
+    // Click source line → go to assembly
+    view.contentDOM.addEventListener('click', function(e) {
+      if (view.state.selection.main.from !== view.state.selection.main.to) return;
+      var pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null) return;
+      var line = view.state.doc.lineAt(pos).number;
+      if (!sourceReverseMap) return;
+      var offsets = sourceReverseMap[tab.data.filename + '\0' + line];
+      if (offsets && offsets.length > 0) goToAssemblyOffsets(offsets, tab.data.filename, line);
+    });
     return;
   }
 }
@@ -903,7 +1296,9 @@ function renderModuleOverview(tab) {
     html += '</summary><div class="meta-section">';
     for (var ei = 0; ei < json.exports.length; ei++) {
       var ex = json.exports[ei];
-      html += '<div class="meta-row"><span class="kind">' + ex.kind + '</span> ';
+      var exportClickable = ex.kind === 'func';
+      html += '<div class="meta-row' + (exportClickable ? ' fn-row' : '') + '"' + (exportClickable ? ' data-fn-index="' + ex.index + '"' : '') + '>';
+      html += '<span class="kind">' + ex.kind + '</span> ';
       html += '<span class="name">' + esc(ex.name) + '</span> -&gt; [' + ex.index + ']</div>';
     }
     html += '</div></details>';
@@ -966,10 +1361,89 @@ function openFunctionTab(fnIndex) {
   }
   if (!fn) return;
   var name = fn.name || ('func[' + fn.index + ']');
-  var targetPane = 'right';
-  var editorInRight = findTab('editor');
-  if (editorInRight && editorInRight.paneId === 'right') targetPane = 'left';
-  createTab(targetPane, name, 'function', { fn: fn, json: lastJson, key: 'fn-' + fnIndex });
+  createTab(paneForNewTab(), name, 'function', { fn: fn, json: lastJson, key: 'fn-' + fnIndex });
+}
+
+function sourceLineForOffset(offset) {
+  if (!lastSourceMap) return null;
+  var entries = lastSourceMap.entries;
+  var result = null;
+  for (var i = 0; i < entries.length; i++) {
+    if (entries[i].offset > offset) break;
+    result = entries[i];
+  }
+  return result;
+}
+
+function funcIndexForOffset(offset) {
+  if (!lastJson) return -1;
+  for (var i = 0; i < lastJson.code.length; i++) {
+    var fn = lastJson.code[i];
+    var insns = fn.instructions;
+    if (insns.length > 0 && offset >= insns[0].offset && offset <= insns[insns.length - 1].offset) return fn.index;
+  }
+  return -1;
+}
+
+function goToAssemblyOffsets(offsets, file, line) {
+  var firstEl = null;
+  for (var oi = 0; oi < offsets.length; oi++) {
+    var fnIdx = funcIndexForOffset(offsets[oi]);
+    if (fnIdx < 0) continue;
+    openFunctionTab(fnIdx);
+    if (!firstEl) {
+      var fnTab = findTab('function', 'fn-' + fnIdx);
+      if (fnTab) {
+        var insnEl = fnTab.tab.contentEl.querySelector('.insn[data-offset="' + offsets[oi] + '"]');
+        if (insnEl) {
+          var parent = insnEl.parentElement;
+          while (parent && parent !== fnTab.tab.contentEl) {
+            if (parent.classList.contains('fold-body') && parent.classList.contains('collapsed')) {
+              parent.classList.remove('collapsed');
+              var fid = parent.getAttribute('data-fold');
+              var toggle = fnTab.tab.contentEl.querySelector('.insn-fold[data-fold="' + fid + '"]');
+              if (toggle) toggle.classList.remove('collapsed');
+              var ellipsis = fnTab.tab.contentEl.querySelector('.fold-ellipsis[data-fold="' + fid + '"]');
+              if (ellipsis) ellipsis.classList.remove('visible');
+            }
+            parent = parent.parentElement;
+          }
+          firstEl = insnEl;
+        }
+      }
+    }
+  }
+  if (firstEl) firstEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (file && line !== undefined) highlightAsmForSourceLine(file, line);
+}
+
+function openSourceTab(filename, line) {
+  if (!lastEmbeddedSources) return;
+  var source = lastEmbeddedSources[filename];
+  if (!source) return;
+  var label = filename.replace(/^.*\//, '');
+  var existing = findTab('source', 'src-' + filename);
+  if (existing) {
+    activateTab(existing.paneId, existing.tab.id);
+    if (line && existing.tab.data.editorView) {
+      scrollSourceToLine(existing.tab.data.editorView, line);
+    }
+    return;
+  }
+  var editorLocation = findTab('editor');
+  var tp = editorLocation ? editorLocation.paneId : 0;
+  var tab = createTab(tp, label, 'source', { source: source, key: 'src-' + filename, filename: filename });
+  if (line && tab.data.editorView) {
+    setTimeout(function() { scrollSourceToLine(tab.data.editorView, line); }, 50);
+  }
+}
+
+function scrollSourceToLine(view, line) {
+  var lineInfo = view.state.doc.line(Math.min(line, view.state.doc.lines));
+  view.dispatch({
+    selection: { anchor: lineInfo.from },
+    effects: CM.EditorView.scrollIntoView(lineInfo.from, { y: 'center' }),
+  });
 }
 
 function renderFunctionDetail(tab) {
@@ -982,6 +1456,11 @@ function renderFunctionDetail(tab) {
   html += '<div class="fn-header">';
   html += '<span class="fn-name">' + esc(name) + '</span>';
   html += '<span class="fn-sig">' + esc(sig) + '</span>';
+  var fnSrcLoc = fn.instructions.length > 0 ? sourceLineForOffset(fn.instructions[0].offset) : null;
+  if (fnSrcLoc && lastEmbeddedSources && lastEmbeddedSources[fnSrcLoc.file]) {
+    var srcLabel = fnSrcLoc.file.replace(/^.*\//, '') + ':' + fnSrcLoc.line;
+    html += ' <span class="fn-source-link" data-src-file="' + esc(fnSrcLoc.file) + '" data-src-line="' + fnSrcLoc.line + '">' + esc(srcLabel) + '</span>';
+  }
   html += '<span class="fn-meta">' + fn.instructions.length + ' instructions, ' + fn.body_size + ' bytes</span>';
   html += '</div>';
 
@@ -1016,12 +1495,100 @@ function renderFunctionDetail(tab) {
   }
 
   html += '<div class="insn-list">';
-  for (var ii = 0; ii < fn.instructions.length; ii++) {
-    html += renderInsn(fn.instructions[ii], fn.index);
+  var foldCount = 0;
+  var insns = fn.instructions;
+
+  // Pre-compute block IDs: map each block/loop/if/else/end instruction index to a shared block ID
+  var blockIdMap = {};
+  var blockStack = [];
+  var nextBlockId = 0;
+  for (var bi = 0; bi < insns.length; bi++) {
+    var bop = (insns[bi].text.match(/^(\S+)/) || ['',''])[1];
+    if (isFoldOp(bop)) {
+      var bid = nextBlockId++;
+      blockIdMap[bi] = bid;
+      blockStack.push({ depth: insns[bi].depth, id: bid });
+    } else if (bop === 'else') {
+      for (var si2 = blockStack.length - 1; si2 >= 0; si2--) {
+        if (blockStack[si2].depth === insns[bi].depth) { blockIdMap[bi] = blockStack[si2].id; break; }
+      }
+    } else if (bop === 'end') {
+      for (var si3 = blockStack.length - 1; si3 >= 0; si3--) {
+        if (blockStack[si3].depth === insns[bi].depth) { blockIdMap[bi] = blockStack[si3].id; blockStack.splice(si3, 1); break; }
+      }
+    }
+  }
+
+  for (var ii = 0; ii < insns.length; ii++) {
+    var insn = insns[ii];
+    var op = (insn.text.match(/^(\S+)/) || ['',''])[1];
+    var iBlockId = blockIdMap[ii];
+    if (isFoldOp(op)) {
+      var fid = foldCount++;
+      var bodyCount = 0;
+      for (var j = ii + 1; j < insns.length; j++) {
+        var jop = (insns[j].text.match(/^(\S+)/) || ['',''])[1];
+        if (jop === 'end' && insns[j].depth === insn.depth) break;
+        bodyCount++;
+      }
+      html += renderInsn(insn, fn.index, fid, iBlockId);
+      html += '<div class="fold-body" data-fold="' + fid + '">';
+      html += '<div class="fold-ellipsis" data-fold="' + fid + '">' + bodyCount + ' instructions</div>';
+    } else if (op === 'end') {
+      var closedFold = false;
+      if (ii > 0) {
+        for (var k = ii - 1; k >= 0; k--) {
+          var kop = (insns[k].text.match(/^(\S+)/) || ['',''])[1];
+          if (isFoldOp(kop) && insns[k].depth === insn.depth) { closedFold = true; break; }
+          if (kop === 'end' && insns[k].depth === insn.depth) break;
+        }
+      }
+      if (closedFold) html += '</div>';
+      html += renderInsn(insn, fn.index, undefined, iBlockId);
+    } else if (op === 'else') {
+      html += renderInsn(insn, fn.index, undefined, iBlockId);
+    } else {
+      html += renderInsn(insn, fn.index);
+    }
   }
   html += '</div>';
 
   wrap.innerHTML = html;
+
+  // Fold toggle
+  wrap.addEventListener('click', function(e) {
+    var toggle = e.target.closest('.insn-fold');
+    if (!toggle) return;
+    var fid = toggle.getAttribute('data-fold');
+    var body = wrap.querySelector('.fold-body[data-fold="' + fid + '"]');
+    var ellipsis = wrap.querySelector('.fold-ellipsis[data-fold="' + fid + '"]');
+    if (!body) return;
+    var collapsed = !body.classList.contains('collapsed');
+    body.classList.toggle('collapsed', collapsed);
+    toggle.classList.toggle('collapsed', collapsed);
+    if (ellipsis) ellipsis.classList.toggle('visible', collapsed);
+  });
+
+  // Source link click handler (function header + per-instruction links)
+  wrap.addEventListener('click', function(e) {
+    var fnLink = e.target.closest('.insn-fn-link');
+    if (fnLink) { openFunctionTab(parseInt(fnLink.getAttribute('data-fn-index'))); return; }
+    var srcLink = e.target.closest('.fn-source-link') || e.target.closest('.insn-src-link');
+    if (!srcLink) return;
+    openSourceTab(srcLink.getAttribute('data-src-file'), parseInt(srcLink.getAttribute('data-src-line')));
+  });
+
+  // Assembly → Source hover highlighting
+  wrap.addEventListener('mouseover', function(e) {
+    var insn = e.target.closest('.insn[data-src-file]');
+    if (!insn) return;
+    highlightSourceLineHover(insn.getAttribute('data-src-file'), parseInt(insn.getAttribute('data-src-line')));
+  });
+  wrap.addEventListener('mouseout', function(e) {
+    var insn = e.target.closest('.insn[data-src-file]');
+    if (!insn) return;
+    clearSourceHoverHighlight();
+  });
 
   // Local variable highlight on hover
   var hlElements = [];
@@ -1038,10 +1605,230 @@ function renderFunctionDetail(tab) {
     for (var i = 0; i < hlElements.length; i++) hlElements[i].classList.remove('hl-local');
     hlElements = [];
   });
+
+  // Global variable highlight on hover
+  var hlGlobalElements = [];
+  wrap.addEventListener('mouseover', function(e) {
+    var el = e.target.closest('[data-global]');
+    if (!el) return;
+    var key = el.getAttribute('data-global');
+    hlGlobalElements = wrap.querySelectorAll('[data-global="' + key + '"]');
+    for (var i = 0; i < hlGlobalElements.length; i++) hlGlobalElements[i].classList.add('hl-global');
+  });
+  wrap.addEventListener('mouseout', function(e) {
+    var el = e.target.closest('[data-global]');
+    if (!el) return;
+    for (var i = 0; i < hlGlobalElements.length; i++) hlGlobalElements[i].classList.remove('hl-global');
+    hlGlobalElements = [];
+  });
+
+  var hlBlockElements = [];
+  wrap.addEventListener('mouseover', function(e) {
+    var el = e.target.closest('[data-block]');
+    if (!el) return;
+    var key = el.getAttribute('data-block');
+    hlBlockElements = wrap.querySelectorAll('[data-block="' + key + '"]');
+    for (var i = 0; i < hlBlockElements.length; i++) hlBlockElements[i].classList.add('hl-block');
+  });
+  wrap.addEventListener('mouseout', function(e) {
+    var el = e.target.closest('[data-block]');
+    if (!el) return;
+    for (var i = 0; i < hlBlockElements.length; i++) hlBlockElements[i].classList.remove('hl-block');
+    hlBlockElements = [];
+  });
+}
+
+// ── Examples ──
+var examples = [
+  { name: 'Recursion & Loops', source:
+    'int factorial(int n) {\n' +
+    '    if (n <= 1) return 1;\n' +
+    '    return n * factorial(n - 1);\n' +
+    '}\n\n' +
+    'int fibonacci(int n) {\n' +
+    '    int a = 0, b = 1;\n' +
+    '    for (int i = 0; i < n; i++) {\n' +
+    '        int t = a + b;\n' +
+    '        a = b;\n' +
+    '        b = t;\n' +
+    '    }\n' +
+    '    return a;\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    return factorial(10) + fibonacci(20);\n' +
+    '}\n' },
+  { name: 'Strings & Printf', source:
+    '#include <stdio.h>\n' +
+    '#include <string.h>\n\n' +
+    'int count_words(const char *s) {\n' +
+    '    int n = 0, in_word = 0;\n' +
+    '    for (; *s; s++) {\n' +
+    '        if (*s == \' \' || *s == \'\\n\') {\n' +
+    '            in_word = 0;\n' +
+    '        } else if (!in_word) {\n' +
+    '            in_word = 1;\n' +
+    '            n++;\n' +
+    '        }\n' +
+    '    }\n' +
+    '    return n;\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    const char *msg = "hello world from wasm";\n' +
+    '    int len = strlen(msg);\n' +
+    '    int words = count_words(msg);\n' +
+    '    printf("%d chars, %d words\\n", len, words);\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'Globals & Statics', source:
+    '#include <stdio.h>\n\n' +
+    'int call_count = 0;\n\n' +
+    'int next_id(void) {\n' +
+    '    static int id = 100;\n' +
+    '    call_count++;\n' +
+    '    return id++;\n' +
+    '}\n\n' +
+    'int accumulator = 0;\n\n' +
+    'void add(int x) {\n' +
+    '    accumulator += x;\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    for (int i = 0; i < 5; i++)\n' +
+    '        add(next_id());\n' +
+    '    printf("sum=%d calls=%d\\n", accumulator, call_count);\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'Structs & Pointers', source:
+    '#include <stdio.h>\n' +
+    '#include <stdlib.h>\n' +
+    '#include <string.h>\n\n' +
+    'typedef struct {\n' +
+    '    int x, y;\n' +
+    '} Point;\n\n' +
+    'int manhattan(Point *a, Point *b) {\n' +
+    '    int dx = a->x - b->x;\n' +
+    '    int dy = a->y - b->y;\n' +
+    '    if (dx < 0) dx = -dx;\n' +
+    '    if (dy < 0) dy = -dy;\n' +
+    '    return dx + dy;\n' +
+    '}\n\n' +
+    'void swap_points(Point *a, Point *b) {\n' +
+    '    Point tmp;\n' +
+    '    memcpy(&tmp, a, sizeof(Point));\n' +
+    '    memcpy(a, b, sizeof(Point));\n' +
+    '    memcpy(b, &tmp, sizeof(Point));\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    Point p1 = {3, 7}, p2 = {10, 2};\n' +
+    '    printf("dist=%d\\n", manhattan(&p1, &p2));\n' +
+    '    swap_points(&p1, &p2);\n' +
+    '    printf("p1=(%d,%d) p2=(%d,%d)\\n", p1.x, p1.y, p2.x, p2.y);\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'Linked List', source:
+    '#include <stdio.h>\n' +
+    '#include <stdlib.h>\n\n' +
+    'typedef struct Node {\n' +
+    '    int value;\n' +
+    '    struct Node *next;\n' +
+    '} Node;\n\n' +
+    'Node *prepend(Node *list, int val) {\n' +
+    '    Node *n = malloc(sizeof(Node));\n' +
+    '    n->value = val;\n' +
+    '    n->next = list;\n' +
+    '    return n;\n' +
+    '}\n\n' +
+    'int sum(Node *list) {\n' +
+    '    int s = 0;\n' +
+    '    for (Node *p = list; p; p = p->next)\n' +
+    '        s += p->value;\n' +
+    '    return s;\n' +
+    '}\n\n' +
+    'void free_list(Node *list) {\n' +
+    '    while (list) {\n' +
+    '        Node *next = list->next;\n' +
+    '        free(list);\n' +
+    '        list = next;\n' +
+    '    }\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    Node *list = 0;\n' +
+    '    for (int i = 1; i <= 10; i++)\n' +
+    '        list = prepend(list, i * i);\n' +
+    '    printf("sum of squares = %d\\n", sum(list));\n' +
+    '    free_list(list);\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'Function Pointers', source:
+    '#include <stdio.h>\n\n' +
+    'int add(int a, int b) { return a + b; }\n' +
+    'int mul(int a, int b) { return a * b; }\n' +
+    'int sub(int a, int b) { return a - b; }\n\n' +
+    'typedef int (*binop)(int, int);\n\n' +
+    'int apply(binop fn, int x, int y) {\n' +
+    '    return fn(x, y);\n' +
+    '}\n\n' +
+    'int fold(binop fn, int *arr, int n) {\n' +
+    '    int acc = arr[0];\n' +
+    '    for (int i = 1; i < n; i++)\n' +
+    '        acc = fn(acc, arr[i]);\n' +
+    '    return acc;\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    int nums[] = {3, 7, 2, 5};\n' +
+    '    printf("sum=%d\\n", fold(add, nums, 4));\n' +
+    '    printf("product=%d\\n", fold(mul, nums, 4));\n' +
+    '    printf("apply sub(10,3)=%d\\n", apply(sub, 10, 3));\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'Goto & Labels', source:
+    '#include <stdio.h>\n\n' +
+    'int parse_number(const char *s) {\n' +
+    '    int result = 0;\n' +
+    '    int sign = 1;\n' +
+    '    if (*s == \'-\') { sign = -1; s++; }\n' +
+    '    while (*s) {\n' +
+    '        if (*s < \'0\' || *s > \'9\') goto error;\n' +
+    '        result = result * 10 + (*s - \'0\');\n' +
+    '        s++;\n' +
+    '    }\n' +
+    '    return result * sign;\n' +
+    'error:\n' +
+    '    printf("invalid char: %c\\n", *s);\n' +
+    '    return 0;\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    int matrix[3][3] = {\n' +
+    '        {1, 2, 3},\n' +
+    '        {4, 5, 6},\n' +
+    '        {7, 8, 9}\n' +
+    '    };\n' +
+    '    int target = 5;\n' +
+    '    for (int i = 0; i < 3; i++)\n' +
+    '        for (int j = 0; j < 3; j++)\n' +
+    '            if (matrix[i][j] == target)\n' +
+    '                goto found;\n' +
+    '    printf("not found\\n");\n' +
+    '    goto done;\n' +
+    'found:\n' +
+    '    printf("found %d\\n", target);\n' +
+    'done:\n' +
+    '    printf("num=%d\\n", parse_number("42"));\n' +
+    '    printf("num=%d\\n", parse_number("-7"));\n' +
+    '    printf("num=%d\\n", parse_number("12x"));\n' +
+    '    return 0;\n' +
+    '}\n' },
+];
+
+// Populate example selector
+var exampleSelect = document.getElementById('exampleSelect');
+for (var ei = 0; ei < examples.length; ei++) {
+  var opt = document.createElement('option');
+  opt.value = ei;
+  opt.textContent = examples[ei].name;
+  exampleSelect.appendChild(opt);
 }
 
 // ── Editor setup ──
-var defaultSource = 'int factorial(int n) {\n    if (n <= 1) return 1;\n    return n * factorial(n - 1);\n}\n\nint fibonacci(int n) {\n    int a = 0, b = 1;\n    for (int i = 0; i < n; i++) {\n        int t = a + b;\n        a = b;\n        b = t;\n    }\n    return a;\n}\n\nint main(void) {\n    return factorial(10) + fibonacci(20);\n}\n';
 
 var cmTheme = CM.EditorView.theme({
   '&': { height: '100%', backgroundColor: 'var(--overlay)' },
@@ -1084,9 +1871,9 @@ var compileKeymap = CM.keymap.of([{
   run: function() { doCompile(); return true; }
 }]);
 
-var editorTab = createTab('left', 'Source', 'editor', {});
+var editorTab = createTab(0, 'Source', 'editor', {});
 var editorView = new CM.EditorView({
-  doc: defaultSource,
+  doc: examples[0].source,
   extensions: [
     CM.lineNumbers(),
     CM.highlightActiveLineGutter(),
@@ -1116,7 +1903,44 @@ editorTab.data.editorView = editorView;
 
 // ── Main ──
 var diswRunner = null;
+var lastWasm = null;
+var lastSourceMap = null;
+var lastEmbeddedSources = null;
+var sourceReverseMap = null;
 var statusEl = document.getElementById('status');
+
+// Bidirectional hover highlight helpers
+var _hoverSourceEl = null;
+var _hoverAsmEls = [];
+
+function highlightSourceLineHover(file, line) {
+  clearSourceHoverHighlight();
+  var srcTab = findTab('source', 'src-' + file);
+  if (!srcTab || !srcTab.tab.data.editorView) return;
+  var view = srcTab.tab.data.editorView;
+  if (line < 1 || line > view.state.doc.lines) return;
+  var lineInfo = view.state.doc.line(line);
+  var domInfo = view.domAtPos(lineInfo.from);
+  var el = domInfo.node;
+  if (el.nodeType === 3) el = el.parentNode;
+  while (el && !el.classList.contains('cm-line')) el = el.parentNode;
+  if (el) { el.classList.add('asm-hover'); _hoverSourceEl = el; }
+}
+
+function clearSourceHoverHighlight() {
+  if (_hoverSourceEl) { _hoverSourceEl.classList.remove('asm-hover'); _hoverSourceEl = null; }
+}
+
+function highlightAsmForSourceLine(file, line) {
+  clearAsmHoverHighlight();
+  var els = document.querySelectorAll('.insn[data-src-file="' + file.replace(/"/g, '\\"') + '"][data-src-line="' + line + '"]');
+  for (var i = 0; i < els.length; i++) { els[i].classList.add('source-hover'); _hoverAsmEls.push(els[i]); }
+}
+
+function clearAsmHoverHighlight() {
+  for (var i = 0; i < _hoverAsmEls.length; i++) _hoverAsmEls[i].classList.remove('source-hover');
+  _hoverAsmEls = [];
+}
 
 async function init() {
   try {
@@ -1125,6 +1949,8 @@ async function init() {
     for (var i = 0; i < raw.length; i++) diswBytes[i] = raw.charCodeAt(i);
     diswRunner = await createDiswRunner(diswBytes);
     document.getElementById('btnCompile').disabled = false;
+    var dbgBtn = document.getElementById('btnDebug');
+    if (dbgBtn) dbgBtn.disabled = false;
     statusEl.textContent = 'Ready';
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
@@ -1138,42 +1964,23 @@ async function doCompile() {
   btn.disabled = true;
   statusEl.textContent = 'Compiling...';
 
-  // Close stale module/function/error tabs
-  for (var side in panes) {
-    var toRemove = [];
-    for (var i = 0; i < panes[side].tabs.length; i++) {
-      var t = panes[side].tabs[i];
-      if (t.type === 'module' || t.type === 'function' || t.type === 'error') toRemove.push(t.id);
-    }
-    for (var j = 0; j < toRemove.length; j++) removeTab(side, toRemove[j]);
+  // Reset debugger on recompile
+  if (dbgInterp) {
+    dbgInterp = null;
+    dbgPrevLocals = {};
+    document.getElementById('debugBar').classList.remove('active');
   }
+  lastWasm = null;
+
+  closeResultTabs();
 
   try {
     var t0 = performance.now();
     var wasm = compileC(source);
     var compileMs = (performance.now() - t0).toFixed(0);
-
-    statusEl.textContent = 'Disassembling...';
-    var t1 = performance.now();
-    var jsonStr = diswRunner(wasm);
-    var disasmMs = (performance.now() - t1).toFixed(0);
-
-    var json = JSON.parse(jsonStr);
-    lastJson = json;
-
-    var targetPane = 'right';
-    var editorLocation = findTab('editor');
-    if (editorLocation && editorLocation.paneId === 'right') targetPane = 'left';
-    createTab(targetPane, 'Module', 'module', { json: json });
-
-    var totalFns = json.code.length;
-    var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
-    statusEl.textContent = totalFns + ' functions, ' + totalInsns + ' instructions (' + compileMs + 'ms compile, ' + disasmMs + 'ms disasm)';
+    doDisasmWasm(wasm, compileMs + 'ms compile, ');
   } catch (e) {
-    var targetPane2 = 'right';
-    var editorLocation2 = findTab('editor');
-    if (editorLocation2 && editorLocation2.paneId === 'right') targetPane2 = 'left';
-    createTab(targetPane2, 'Error', 'error', { message: e.message || String(e) });
+    createTab(paneForNewTab(), 'Error', 'error', { message: e.message || String(e) });
     statusEl.textContent = 'Error';
     console.error(e);
   } finally {
@@ -1199,16 +2006,516 @@ settingsOverlay.addEventListener('click', function(e) {
 var layoutRadios = document.querySelectorAll('input[name="layout"]');
 for (var r = 0; r < layoutRadios.length; r++) {
   layoutRadios[r].addEventListener('change', function() {
+    var newCount = parseInt(this.getAttribute('data-panes'));
+    if (newCount < paneCount) {
+      for (var pi = newCount; pi < panes.length; pi++) {
+        var ids = panes[pi].tabs.map(function(t) { return t.id; });
+        for (var j = 0; j < ids.length; j++) removeTab(pi, ids[j]);
+      }
+    }
+    paneCount = newCount;
     document.getElementById('layout').className = 'layout ' + this.value;
+    updatePaneVisibility();
     if (editorView) editorView.requestMeasure();
+    for (var pi2 = 0; pi2 < paneCount; pi2++) showActiveContent(pi2);
   });
 }
 
+// Example selector
+exampleSelect.addEventListener('change', function() {
+  var idx = parseInt(this.value);
+  if (idx >= 0 && idx < examples.length) {
+    editorView.dispatch({
+      changes: { from: 0, to: editorView.state.doc.length, insert: examples[idx].source }
+    });
+  }
+});
+
+function closeResultTabs() {
+  for (var pi = 0; pi < panes.length; pi++) {
+    var toRemove = [];
+    for (var i = 0; i < panes[pi].tabs.length; i++) {
+      var t = panes[pi].tabs[i];
+      if (t.type === 'module' || t.type === 'function' || t.type === 'error' || t.type === 'debug' || t.type === 'source' || t.type === 'stdout') toRemove.push(t.id);
+    }
+    for (var j = 0; j < toRemove.length; j++) removeTab(pi, toRemove[j]);
+  }
+}
+
+// Disassemble raw WASM bytes (shared by compile and drop paths)
+function doDisasmWasm(wasm, timingPrefix) {
+  lastWasm = wasm;
+  var dbgSections = parseWasmDebugSections(wasm);
+  lastSourceMap = dbgSections.sourceMap;
+  lastEmbeddedSources = dbgSections.embeddedSources;
+  sourceReverseMap = {};
+  if (lastSourceMap) {
+    for (var si = 0; si < lastSourceMap.entries.length; si++) {
+      var se = lastSourceMap.entries[si];
+      var sk = se.file + '\0' + se.line;
+      if (!sourceReverseMap[sk]) sourceReverseMap[sk] = [];
+      sourceReverseMap[sk].push(se.offset);
+    }
+  }
+
+  statusEl.textContent = 'Disassembling...';
+  var t1 = performance.now();
+  var jsonStr = diswRunner(wasm);
+  var disasmMs = (performance.now() - t1).toFixed(0);
+
+  var json = JSON.parse(jsonStr);
+  lastJson = json;
+
+  createTab(paneForNewTab(), 'Module', 'module', { json: json });
+
+  // Auto-open main source tab if embedded sources exist
+  if (lastEmbeddedSources) {
+    var mainFile = lastEmbeddedSources['__main.c'] ? '__main.c' : null;
+    if (!mainFile) { for (var sf in lastEmbeddedSources) { mainFile = sf; break; } }
+    if (mainFile) {
+      var editorLoc = findTab('editor');
+      var editorPaneId = editorLoc ? editorLoc.paneId : 0;
+      openSourceTab(mainFile);
+      var srcTab = findTab('source', 'src-' + mainFile);
+      if (srcTab) activateTab(srcTab.paneId, srcTab.tab.id);
+      if (editorLoc) activateTab(editorPaneId, editorLoc.tab.id);
+    }
+  }
+
+  var totalFns = json.code.length;
+  var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
+  var srcInfo = lastSourceMap ? ', ' + lastSourceMap.entries.length + ' source mappings' : '';
+  statusEl.textContent = totalFns + ' functions, ' + totalInsns + ' instructions (' + timingPrefix + disasmMs + 'ms disasm' + srcInfo + ')';
+}
+
+// WASM drag-and-drop
+var dropOverlay = document.getElementById('dropOverlay');
+var dragCounter = 0;
+
+document.addEventListener('dragenter', function(e) {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  dragCounter++;
+  dropOverlay.classList.add('active');
+});
+document.addEventListener('dragleave', function(e) {
+  dragCounter--;
+  if (dragCounter <= 0) { dropOverlay.classList.remove('active'); dragCounter = 0; }
+});
+document.addEventListener('dragover', function(e) {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+document.addEventListener('drop', function(e) {
+  dropOverlay.classList.remove('active');
+  dragCounter = 0;
+  if (!e.dataTransfer.files.length) return;
+  var file = e.dataTransfer.files[0];
+  if (!file.name.endsWith('.wasm')) return;
+  e.preventDefault();
+  if (!diswRunner) { statusEl.textContent = 'Not ready yet'; return; }
+  statusEl.textContent = 'Loading ' + file.name + '...';
+
+  // Reset debugger
+  if (dbgInterp) {
+    dbgInterp = null;
+    dbgPrevLocals = {};
+    document.getElementById('debugBar').classList.remove('active');
+  }
+  lastWasm = null;
+
+  closeResultTabs();
+
+  var reader = new FileReader();
+  reader.onload = function() {
+    try {
+      var wasm = new Uint8Array(reader.result);
+      doDisasmWasm(wasm, file.name + ', ');
+    } catch (err) {
+      createTab(paneForNewTab(), 'Error', 'error', { message: err.message || String(err) });
+      statusEl.textContent = 'Error';
+      console.error(err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
 // Initialize empty states
-showActiveContent('left');
-showActiveContent('right');
+updatePaneVisibility();
+for (var _initP = 0; _initP < panes.length; _initP++) showActiveContent(_initP);
 
 init();
+
+// ── Debugger ──
+
+var dbgInterp = null;
+var dbgPrevLocals = {};
+var dbgBreakpoints = {};
+var dbgSelectedFrame = null;
+var dbgFollowSource = false;
+
+document.getElementById('dbgFollowAsm').addEventListener('click', function() {
+  dbgFollowSource = false;
+  this.classList.add('active');
+  document.getElementById('dbgFollowSrc').classList.remove('active');
+});
+document.getElementById('dbgFollowSrc').addEventListener('click', function() {
+  dbgFollowSource = true;
+  this.classList.add('active');
+  document.getElementById('dbgFollowAsm').classList.remove('active');
+});
+
+function dbgCreateInterpreter() {
+  if (!lastWasm) return;
+  dbgPrevLocals = {};
+  dbgInterp = WasmInterpreter.create(lastWasm, {
+    c: {
+      write: function(fd, ptr, len) {
+        var bytes = this.readMemoryBytes(ptr, len);
+        var str = '';
+        for (var i = 0; i < len; i++) str += String.fromCharCode(bytes[i]);
+        this.stdout.push(str);
+        return len;
+      }
+    }
+  });
+  for (var bp in dbgBreakpoints) dbgInterp.setBreakpoint(parseInt(bp));
+  dbgInterp.start('main', []);
+  dbgSelectedFrame = null;
+  document.getElementById('debugBar').classList.add('active');
+  dbgEnsureDebugTab();
+  dbgUpdate();
+}
+
+function dbgEnsureDebugTab() {
+  var existing = findTab('debug');
+  if (!existing) createTab(paneForNewTab(), 'Debug', 'debug', { key: 'debug' });
+  var stdoutTab = findTab('stdout');
+  if (!stdoutTab) createTab(paneForNewTab(), 'Output', 'stdout', { key: 'stdout' });
+}
+
+function dbgUpdate() {
+  if (!dbgInterp) return;
+  var state = dbgInterp.getState();
+  dbgUpdateButtons(state);
+  dbgHighlightInsn(state);
+  dbgRenderState(state);
+  dbgHighlightSourceLine(state);
+  dbgUpdateStdout(state);
+}
+
+function dbgUpdateStdout(state) {
+  var stdoutTab = findTab('stdout');
+  if (!stdoutTab) return;
+  var el = stdoutTab.tab.contentEl.querySelector('.stdout-content');
+  if (el) el.textContent = state.stdout || '';
+}
+
+function dbgHighlightSourceLine(state) {
+  var viewOffset = state.offset;
+  if (dbgSelectedFrame !== null && dbgSelectedFrame < state.callStack.length) {
+    viewOffset = state.callStack[dbgSelectedFrame].offset;
+  }
+  if (viewOffset < 0 || !lastSourceMap || !lastEmbeddedSources) return;
+  var loc = sourceLineForOffset(viewOffset);
+  if (!loc || !lastEmbeddedSources[loc.file]) return;
+  var srcTab = findTab('source', 'src-' + loc.file);
+  if (!srcTab) {
+    if (dbgFollowSource) openSourceTab(loc.file, loc.line);
+  } else {
+    if (srcTab.tab.data.editorView) scrollSourceToLine(srcTab.tab.data.editorView, loc.line);
+    if (dbgFollowSource) activateTab(srcTab.paneId, srcTab.tab.id);
+  }
+}
+
+function dbgUpdateButtons(state) {
+  var running = state.status === 'running' || state.status === 'paused';
+  document.getElementById('dbgStep').disabled = !running;
+  document.getElementById('dbgStepOver').disabled = !running;
+  document.getElementById('dbgStepOut').disabled = !running;
+  document.getElementById('dbgRun').disabled = !running;
+  var statusText = state.status;
+  if (state.status === 'done') statusText = 'done (exit ' + (state.exitCode || 0) + ')';
+  if (state.status === 'trapped') statusText = 'trapped: ' + state.trapMessage;
+  statusText += ' | ' + state.stepCount + ' steps';
+  document.getElementById('debugStatus').textContent = statusText;
+}
+
+function dbgHighlightInsn(state) {
+  document.querySelectorAll('.insn.current').forEach(function(el) { el.classList.remove('current'); });
+
+  var viewFuncIndex = state.funcIndex;
+  var viewOffset = state.offset;
+  if (dbgSelectedFrame !== null && dbgSelectedFrame < state.callStack.length) {
+    var sf = state.callStack[dbgSelectedFrame];
+    viewFuncIndex = sf.funcIndex;
+    viewOffset = sf.offset;
+  }
+
+  if (viewFuncIndex < 0 || viewOffset < 0) return;
+
+  var fnTab = findTab('function', 'fn-' + viewFuncIndex);
+  if (!fnTab && lastJson) {
+    openFunctionTab(viewFuncIndex);
+    fnTab = findTab('function', 'fn-' + viewFuncIndex);
+  }
+  if (!fnTab) return;
+
+  var wrap = fnTab.tab.contentEl;
+  var insnEl = wrap.querySelector('.insn[data-offset="' + viewOffset + '"][data-fn="' + viewFuncIndex + '"]');
+  if (insnEl) {
+    insnEl.classList.add('current');
+    var parent = insnEl.parentElement;
+    while (parent && parent !== wrap) {
+      if (parent.classList.contains('fold-body') && parent.classList.contains('collapsed')) {
+        parent.classList.remove('collapsed');
+        var fid = parent.getAttribute('data-fold');
+        var toggle = wrap.querySelector('.insn-fold[data-fold="' + fid + '"]');
+        if (toggle) toggle.classList.remove('collapsed');
+        var ellipsis = wrap.querySelector('.fold-ellipsis[data-fold="' + fid + '"]');
+        if (ellipsis) ellipsis.classList.remove('visible');
+      }
+      parent = parent.parentElement;
+    }
+    if (!dbgFollowSource) insnEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  if (!dbgFollowSource) activateTab(fnTab.paneId, fnTab.tab.id);
+}
+
+function dbgRenderState(state) {
+  var el = document.getElementById('debugState');
+  if (!el) return;
+  var html = '';
+
+  var topIdx = state.callStack.length - 1;
+  var viewIdx = dbgSelectedFrame !== null ? dbgSelectedFrame : topIdx;
+
+  // Call stack
+  html += '<div class="debug-section">';
+  html += '<div class="debug-section-header">Call Stack (' + state.callStack.length + ')</div>';
+  html += '<div class="debug-section-body">';
+  for (var i = state.callStack.length - 1; i >= 0; i--) {
+    var fr = state.callStack[i];
+    var selected = (i === viewIdx);
+    html += '<div class="debug-callstack-frame' + (selected ? ' selected' : '') + '" data-frame-idx="' + i + '">';
+    html += '<span class="frame-name">' + esc(fr.name) + '</span>';
+    html += ' @ 0x' + fr.offset.toString(16);
+    html += '</div>';
+  }
+  if (state.callStack.length === 0) {
+    html += '<div style="color:var(--subtext);padding:2px 0">' + (state.status === 'done' ? 'returned' : state.status) + '</div>';
+  }
+  html += '</div></div>';
+
+  // Locals — use selected frame's locals if viewing a non-top frame
+  var locals = state.locals;
+  var localsFuncIndex = state.funcIndex;
+  if (dbgSelectedFrame !== null && dbgSelectedFrame !== topIdx && dbgInterp) {
+    locals = dbgInterp.getFrameLocals(dbgSelectedFrame);
+    localsFuncIndex = state.callStack[dbgSelectedFrame].funcIndex;
+  }
+
+  if (locals.length > 0) {
+    html += '<div class="debug-section">';
+    html += '<div class="debug-section-header">Locals (' + locals.length + ')</div>';
+    html += '<div class="debug-section-body">';
+    for (var i = 0; i < locals.length; i++) {
+      var loc = locals[i];
+      var valStr = formatDebugValue(loc.value);
+      var prevKey = localsFuncIndex + ':' + loc.index;
+      var changed = dbgPrevLocals[prevKey] !== undefined && dbgPrevLocals[prevKey] !== valStr;
+      dbgPrevLocals[prevKey] = valStr;
+      html += '<div class="debug-var" data-local="' + localsFuncIndex + ':' + loc.index + '">';
+      html += '<span class="dv-name">' + (loc.name ? esc(loc.name) : loc.isParam ? 'arg' + loc.index : 'local' + loc.index) + '</span>';
+      html += '<span class="dv-type">' + esc(loc.type) + '</span>';
+      html += '<span class="dv-val' + (changed ? ' changed' : '') + '">' + esc(valStr) + '</span>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  // Globals
+  if (state.globals.length > 0) {
+    html += '<div class="debug-section">';
+    html += '<div class="debug-section-header">Globals (' + state.globals.length + ')</div>';
+    html += '<div class="debug-section-body">';
+    for (var i = 0; i < state.globals.length; i++) {
+      var g = state.globals[i];
+      var gValStr = formatDebugValue(g.value);
+      var gPrevKey = 'g:' + g.index;
+      var gChanged = dbgPrevLocals[gPrevKey] !== undefined && dbgPrevLocals[gPrevKey] !== gValStr;
+      dbgPrevLocals[gPrevKey] = gValStr;
+      html += '<div class="debug-var" data-global="' + g.index + '">';
+      html += '<span class="dv-name">' + (g.name ? esc(g.name) : 'global' + g.index) + '</span>';
+      html += '<span class="dv-type">' + esc(g.type) + (g.mutable ? '' : ' const') + '</span>';
+      html += '<span class="dv-val' + (gChanged ? ' changed' : '') + '">' + esc(gValStr) + '</span>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  // Operand stack
+  html += '<div class="debug-section">';
+  html += '<div class="debug-section-header">Stack (' + state.stack.length + ')</div>';
+  html += '<div class="debug-section-body">';
+  for (var i = state.stack.length - 1; i >= 0; i--) {
+    var item = state.stack[i];
+    html += '<div class="debug-stack-item">[' + i + '] ' + esc(formatDebugValue(item.value)) + '</div>';
+  }
+  if (state.stack.length === 0) html += '<div style="color:var(--subtext);padding:2px 0">empty</div>';
+  html += '</div></div>';
+
+  // Stdout
+  html += '<div class="debug-section">';
+  html += '<div class="debug-section-header">Output</div>';
+  html += '<div class="debug-stdout">' + esc(state.stdout) + '</div>';
+  html += '</div>';
+
+  el.innerHTML = html;
+
+  // Clicking a call stack frame selects it for viewing
+  el.querySelectorAll('.debug-callstack-frame').forEach(function(frame) {
+    frame.addEventListener('click', function() {
+      var idx = parseInt(this.getAttribute('data-frame-idx'));
+      if (idx === topIdx) {
+        dbgSelectedFrame = null;
+      } else {
+        dbgSelectedFrame = idx;
+      }
+      dbgUpdate();
+    });
+  });
+
+  // Debug locals/globals → assembly highlight on hover
+  var dbgHlEls = [];
+  el.addEventListener('mouseover', function(e) {
+    var el2 = e.target.closest('[data-local]');
+    if (el2) {
+      var key = el2.getAttribute('data-local');
+      dbgHlEls = document.querySelectorAll('.insn[data-local="' + key + '"]');
+      for (var i = 0; i < dbgHlEls.length; i++) dbgHlEls[i].classList.add('hl-local');
+      return;
+    }
+    var el3 = e.target.closest('[data-global]');
+    if (el3) {
+      var gkey = el3.getAttribute('data-global');
+      dbgHlEls = document.querySelectorAll('.insn[data-global="' + gkey + '"]');
+      for (var i = 0; i < dbgHlEls.length; i++) dbgHlEls[i].classList.add('hl-global');
+    }
+  });
+  el.addEventListener('mouseout', function(e) {
+    var el2 = e.target.closest('[data-local]') || e.target.closest('[data-global]');
+    if (!el2) return;
+    for (var i = 0; i < dbgHlEls.length; i++) {
+      dbgHlEls[i].classList.remove('hl-local');
+      dbgHlEls[i].classList.remove('hl-global');
+    }
+    dbgHlEls = [];
+  });
+}
+
+function formatDebugValue(v) {
+  if (typeof v === 'bigint') return v.toString() + 'n';
+  if (typeof v === 'number') {
+    if (Number.isInteger(v) && v >= -0x80000000 && v <= 0xFFFFFFFF) {
+      if (v < 0) return v.toString() + ' (0x' + (v >>> 0).toString(16) + ')';
+      if (v > 255) return v.toString() + ' (0x' + v.toString(16) + ')';
+    }
+    return v.toString();
+  }
+  return String(v);
+}
+
+// Debug button handlers — reset selected frame on any execution action
+document.getElementById('dbgStep').addEventListener('click', function() {
+  if (dbgInterp) { dbgSelectedFrame = null; dbgInterp.step(); dbgUpdate(); }
+});
+document.getElementById('dbgStepOver').addEventListener('click', function() {
+  if (dbgInterp) { dbgSelectedFrame = null; dbgInterp.stepOver(); dbgUpdate(); }
+});
+document.getElementById('dbgStepOut').addEventListener('click', function() {
+  if (dbgInterp) { dbgSelectedFrame = null; dbgInterp.stepOut(); dbgUpdate(); }
+});
+document.getElementById('dbgRun').addEventListener('click', function() {
+  if (dbgInterp) { dbgSelectedFrame = null; dbgInterp.run(10000000); dbgUpdate(); }
+});
+document.getElementById('dbgReset').addEventListener('click', function() {
+  dbgInterp = null;
+  dbgPrevLocals = {};
+  dbgSelectedFrame = null;
+  document.getElementById('debugBar').classList.remove('active');
+  document.querySelectorAll('.insn.current').forEach(function(el) { el.classList.remove('current'); });
+  var debugTab = findTab('debug');
+  if (debugTab) removeTab(debugTab.paneId, debugTab.tab.id);
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+  if (!dbgInterp || (dbgInterp.getState().status !== 'running' && dbgInterp.getState().status !== 'paused')) return;
+  if (e.key === 'F5') { e.preventDefault(); dbgSelectedFrame = null; dbgInterp.run(10000000); dbgUpdate(); }
+  if (e.key === 'F10') { e.preventDefault(); dbgSelectedFrame = null; dbgInterp.stepOver(); dbgUpdate(); }
+  if (e.key === 'F11' && !e.shiftKey) { e.preventDefault(); dbgSelectedFrame = null; dbgInterp.step(); dbgUpdate(); }
+  if (e.key === 'F11' && e.shiftKey) { e.preventDefault(); dbgSelectedFrame = null; dbgInterp.stepOut(); dbgUpdate(); }
+});
+
+// Breakpoint toggling — click instruction offset
+document.addEventListener('click', function(e) {
+  var offsetEl = e.target.closest('.insn-offset');
+  if (!offsetEl) return;
+  var insnEl = offsetEl.closest('.insn');
+  if (!insnEl) return;
+  var offset = parseInt(insnEl.getAttribute('data-offset'));
+  if (isNaN(offset)) return;
+  insnEl.classList.toggle('has-bp');
+  if (dbgBreakpoints[offset]) {
+    delete dbgBreakpoints[offset];
+    if (dbgInterp) dbgInterp.removeBreakpoint(offset);
+  } else {
+    dbgBreakpoints[offset] = true;
+    if (dbgInterp) dbgInterp.setBreakpoint(offset);
+  }
+});
+
+// Start debugger after compile — add Debug button to toolbar
+var btnDebug = document.createElement('button');
+btnDebug.textContent = 'Debug';
+btnDebug.id = 'btnDebug';
+btnDebug.title = 'Compile & Debug (F6)';
+btnDebug.disabled = true;
+document.querySelector('.toolbar').insertBefore(btnDebug, document.getElementById('btnSettings'));
+
+btnDebug.addEventListener('click', function() {
+  if (!lastWasm) {
+    doCompile().then(function() { if (lastWasm) dbgCreateInterpreter(); });
+  } else {
+    dbgCreateInterpreter();
+  }
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'F6') { e.preventDefault(); btnDebug.click(); }
+});
+
+// Sync breakpoint visuals when a function tab is rendered
+var origRenderFunctionDetail = renderFunctionDetail;
+renderFunctionDetail = function(tab) {
+  origRenderFunctionDetail(tab);
+  var wrap = tab.contentEl;
+  for (var bp in dbgBreakpoints) {
+    var el = wrap.querySelector('.insn[data-offset="' + bp + '"]');
+    if (el) el.classList.add('has-bp');
+  }
+  // If debugger is active, highlight current instruction
+  if (dbgInterp) {
+    var state = dbgInterp.getState();
+    if (state.funcIndex === tab.data.fn.index) {
+      var insnEl = wrap.querySelector('.insn[data-offset="' + state.offset + '"]');
+      if (insnEl) insnEl.classList.add('current');
+    }
+  }
+};
 </script>
 </body>
 </html>

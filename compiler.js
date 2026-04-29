@@ -2384,6 +2384,7 @@ class Expr {
   class Stmt {
     constructor(kind) {
       this.kind = kind;
+      this.loc = null;
     }
   }
   class Decl {
@@ -2608,6 +2609,12 @@ function lebU(out, value) {
     if (value !== 0) byte |= 0x80;
     out.push(byte);
   } while (value !== 0);
+}
+
+function lebSize(value) {
+  var n = 0;
+  do { value >>>= 7; n++; } while (value !== 0);
+  return n;
 }
 
 function lebI(out, value) {
@@ -3000,7 +3007,7 @@ function filterUnusedDeclarations(unit) {
   filter(unit.localDeclaredFunctions);
 }
 
-function gcSectionsPass(units) {
+function gcSectionsPass(units, options) {
   const active = new Set();
   const worklist = [];
   const activate = (d) => { if (d && !active.has(d)) { active.add(d); worklist.push(d); } };
@@ -3009,7 +3016,9 @@ function gcSectionsPass(units) {
     for (const f of unit.definedFunctions) {
       if (f.name === "main" || f.name === "alloca") activate(f);
     }
-    for (const [, func] of unit.exportDirectives) activate(func);
+    if (!(options && options.gcNoExportRoots)) {
+      for (const [, func] of unit.exportDirectives) activate(func);
+    }
     for (const d of unit.globalUsedSymbols) activate(d);
   }
 
@@ -5044,6 +5053,13 @@ class Parser {
   // --- Statement parsing ---
 
   parseStatement() {
+    const tok = this.peek();
+    const stmt = this._parseStatement();
+    if (stmt && !stmt.loc && tok) stmt.loc = { filename: tok.filename, line: tok.line };
+    return stmt;
+  }
+
+  _parseStatement() {
     // Empty statement
     if (this.matchText(";")) return new AST.SEmpty();
 
@@ -6449,6 +6465,23 @@ return {
 
 const Codegen = (() => {
 
+function alwaysReturns(stmt) {
+  switch (stmt.kind) {
+    case Types.StmtKind.RETURN:
+    case Types.StmtKind.THROW:
+      return true;
+    case Types.StmtKind.COMPOUND:
+      if (stmt.labels && stmt.labels.length > 0) return false;
+      return stmt.statements.some(alwaysReturns);
+    case Types.StmtKind.IF:
+      return stmt.elseBranch !== null
+        && alwaysReturns(stmt.thenBranch)
+        && alwaysReturns(stmt.elseBranch);
+    default:
+      return false;
+  }
+}
+
 function appendF32(out, value) {
   const buf = new ArrayBuffer(4);
   new DataView(buf).setFloat32(0, value, true); // little-endian
@@ -6670,6 +6703,9 @@ class WasmModule {
     this.funcNames = [];        // for name custom section: [{idx, name}]
     this.globalNames = [];      // for name custom section: [{idx, name}]
     this.localNames = [];       // for name custom section: [{funcIdx, locals: [{idx, name}]}]
+    this.sourceMapFiles = [];   // for c.sourcemap custom section
+    this.sourceMapEntries = []; // [{funcIdx (def-relative), entries: [{offset, fileIdx, line}]}]
+    this.embeddedSources = null; // for c.sources custom section (-g2)
   }
 
   addFunctionTypeId(params, results) {
@@ -6873,18 +6909,25 @@ class WasmModule {
     // Code section (10)
     buf = [];
     lebU(buf, this.funcDefs.length);
-    for (const def of this.funcDefs) {
+    var funcBodyOffsets = [];
+    for (var fi = 0; fi < this.funcDefs.length; fi++) {
+      const def = this.funcDefs[fi];
       const funcBody = [];
       lebU(funcBody, def.locals.length);
       for (const loc of def.locals) {
         lebU(funcBody, loc.count);
         wtEmit(loc.type, funcBody);
       }
+      var preambleSize = funcBody.length;
       for (const b of def.body) funcBody.push(b);
       funcBody.push(0x0B); // end
+      var sizeFieldStart = buf.length;
       lebU(buf, funcBody.length);
+      var sizeFieldLen = buf.length - sizeFieldStart;
+      funcBodyOffsets.push({ sectionRelOffset: buf.length + preambleSize });
       for (const b of funcBody) buf.push(b);
     }
+    var codeSectionContentStart = out.length + 1 + lebSize(buf.length);
     emitSection(10, buf);
 
     // Data section (11)
@@ -6938,6 +6981,57 @@ class WasmModule {
         buf.push(0x07);
         lebU(buf, sub.length);
         for (const b of sub) buf.push(b);
+      }
+      emitSection(0, buf);
+    }
+
+    // c.sourcemap custom section
+    if (this.sourceMapEntries.length > 0) {
+      buf = [];
+      emitString(buf, "c.sourcemap");
+      // File table
+      lebU(buf, this.sourceMapFiles.length);
+      for (const f of this.sourceMapFiles) emitString(buf, f);
+      // Flatten all entries with absolute offsets
+      var allEntries = [];
+      for (const fse of this.sourceMapEntries) {
+        var baseOffset = codeSectionContentStart + funcBodyOffsets[fse.funcIdx].sectionRelOffset;
+        for (const e of fse.entries) {
+          allEntries.push({ offset: baseOffset + e.offset, fileIdx: e.fileIdx, line: e.line });
+        }
+      }
+      allEntries.sort((a, b) => a.offset - b.offset);
+      // Delta-encoded entries
+      lebU(buf, allEntries.length);
+      var prevOffset = 0, prevFile = 0, prevLine = 0;
+      for (var i = 0; i < allEntries.length; i++) {
+        var e = allEntries[i];
+        if (i === 0) {
+          lebU(buf, e.offset);
+          lebU(buf, e.fileIdx);
+          lebU(buf, e.line);
+        } else {
+          lebU(buf, e.offset - prevOffset);
+          lebI(buf, e.fileIdx - prevFile);
+          lebI(buf, e.line - prevLine);
+        }
+        prevOffset = e.offset;
+        prevFile = e.fileIdx;
+        prevLine = e.line;
+      }
+      emitSection(0, buf);
+    }
+
+    // c.sources custom section (-g2: embed source files)
+    if (this.embeddedSources) {
+      buf = [];
+      emitString(buf, "c.sources");
+      var json = JSON.stringify(this.embeddedSources);
+      for (var i = 0; i < json.length; i++) {
+        var code = json.charCodeAt(i);
+        if (code < 0x80) { buf.push(code); }
+        else if (code < 0x800) { buf.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F)); }
+        else { buf.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }
       }
       emitSection(0, buf);
     }
@@ -7034,9 +7128,27 @@ class CodeGenerator {
     this.structRetPtrLocalIdx = 0;
     this.hasStructReturn = false;
     this.localIdxNames = new Map();
+    // Source map tracking: per-function arrays of {offset, fileIdx, line}
+    this.sourceMapEntries = [];
+    this.sourceMapFiles = [];
+    this.sourceMapFileIndex = new Map();
+    this.currentFuncSourceMap = null;
   }
 
   // --- Local allocator ---
+  _recordSourceLoc(loc) {
+    if (!loc || !this.currentFuncSourceMap || !this.body) return;
+    var fileIdx = this.sourceMapFileIndex.get(loc.filename);
+    if (fileIdx === undefined) {
+      fileIdx = this.sourceMapFiles.length;
+      this.sourceMapFiles.push(loc.filename);
+      this.sourceMapFileIndex.set(loc.filename, fileIdx);
+    }
+    var last = this.currentFuncSourceMap[this.currentFuncSourceMap.length - 1];
+    if (last && last.fileIdx === fileIdx && last.line === loc.line) return;
+    this.currentFuncSourceMap.push({ offset: this.body.bytes.length, fileIdx: fileIdx, line: loc.line });
+  }
+
   _trackLocalName(idx, name) {
     if (!name) return;
     let s = this.localIdxNames.get(idx);
@@ -7855,10 +7967,13 @@ class CodeGenerator {
     const wasmCode = new WasmCode(this.wmod.funcDefs[defIdx].body);
     this.body = wasmCode;
     this.currentFuncDef = funcDef;
+    this.currentFuncSourceMap = this.compilerOptions.emitNames ? [] : null;
     this.structRetDeferred = 0;
     this.callNesting = 0;
     this.blockDepth = 0;
     this.gotoLabelDepths.clear();
+
+    this._recordSourceLoc(funcDef.loc);
 
     // Variadic function prologue: load fixed params from arg block
     if (this.hasVaArgs) {
@@ -7907,22 +8022,31 @@ class CodeGenerator {
     this.emitStmt(funcDef.body);
 
     // Epilogue
-    if (this.frameSize > 0) {
-      this.body.localGet(this.savedSpLocalIdx);
-      this.body.globalSet(this.stackPointerGlobalIdx);
-    }
-    if (this.hasVaArgs) {
-      // Variadic: WASM function returns void
+    this._recordSourceLoc(funcDef.loc);
+    if (alwaysReturns(funcDef.body)) {
+      this.body.unreachable();
     } else {
-      const retType = funcDef.type.getReturnType();
-      const wasmRetType = cToWasmType(retType);
-      if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
-      else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
-      else if (wtEquals(wasmRetType, WT_F32)) this.body.f32Const(0.0);
-      else if (wtEquals(wasmRetType, WT_F64)) this.body.f64Const(0.0);
-      else this.body.i32Const(0);
+      if (this.frameSize > 0) {
+        this.body.localGet(this.savedSpLocalIdx);
+        this.body.globalSet(this.stackPointerGlobalIdx);
+      }
+      if (this.hasVaArgs) {
+        // Variadic: WASM function returns void
+      } else {
+        const retType = funcDef.type.getReturnType();
+        const wasmRetType = cToWasmType(retType);
+        if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
+        else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
+        else if (wtEquals(wasmRetType, WT_F32)) this.body.f32Const(0.0);
+        else if (wtEquals(wasmRetType, WT_F64)) this.body.f64Const(0.0);
+        else this.body.i32Const(0);
+      }
+      this.body.ret();
     }
-    this.body.ret();
+    if (this.currentFuncSourceMap && this.currentFuncSourceMap.length > 0) {
+      this.sourceMapEntries.push({ funcIdx: defIdx, entries: this.currentFuncSourceMap });
+    }
+    this.currentFuncSourceMap = null;
     this.body = null;
 
     if (this.compilerOptions.emitNames && this.localIdxNames.size > 0) {
@@ -7938,6 +8062,7 @@ class CodeGenerator {
   // --- Statement emission ---
   emitStmt(stmt) {
     if (!stmt) return;
+    if (stmt.loc) this._recordSourceLoc(stmt.loc);
     switch (stmt.kind) {
       case Types.StmtKind.COMPOUND: {
         this.pushLocalScope();
@@ -9519,6 +9644,20 @@ function generateCode(units, outputFile, options) {
   if (cg.staticData.length > 0) wmod.addDataSegment(staticDataStart, cg.staticData);
   wmod.patchGlobalI32(cg.heapBaseGlobalIdx, heapBase);
   wmod.addExport("__heap_base", 0x03, cg.heapBaseGlobalIdx);
+
+  // Transfer source map data
+  wmod.sourceMapFiles = cg.sourceMapFiles;
+  wmod.sourceMapEntries = cg.sourceMapEntries;
+
+  // Embed sources for -g2 — only files referenced by the source map
+  if (options.compilerOptions.embedSources && options.sourceBuffers) {
+    var sources = {};
+    for (const f of cg.sourceMapFiles) {
+      var content = options.sourceBuffers.get(f);
+      if (content) sources[f] = content;
+    }
+    wmod.embeddedSources = sources;
+  }
 
   return wmod.emit();
 }
@@ -13886,6 +14025,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
 
   for (const file of inputFiles) {
     const source = fs.readFileSync(file, "utf-8");
+    pp.sourceBuffers.set(file, source);
     processSource(file, source);
   }
 
@@ -13897,6 +14037,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       hasErrors = true;
       continue;
     }
+    pp.sourceBuffers.set(name, source);
     processSource(name, source);
   }
 
@@ -14618,7 +14759,7 @@ function main() {
   const opfsFiles = [];
   const runArgs = [];
   const warningFlags = { pointerDecay: false, circularDependency: false };
-  const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, noUndefined: false, timeReport: false, requireSources: [] };
+  const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [] };
   let noXterm = false;
   const pp = Stdlib.createDefaultPPRegistry();
 
@@ -14652,8 +14793,11 @@ function main() {
       else if (wflag === "no-pointer-decay") warningFlags.pointerDecay = false;
       else if (wflag === "circular-dependency") warningFlags.circularDependency = true;
       else if (wflag === "no-circular-dependency") warningFlags.circularDependency = false;
-    } else if (args[i] === "-g") {
+    } else if (args[i] === "-g" || args[i] === "-g1") {
       compilerOptions.emitNames = true;
+    } else if (args[i] === "-g2") {
+      compilerOptions.emitNames = true;
+      compilerOptions.embedSources = true;
     } else if (args[i] === "--no-reuse-locals") {
       compilerOptions.noReuseLocals = true;
     } else if (args[i] === "--compiler-debug-switch") {
@@ -14677,6 +14821,8 @@ function main() {
       compilerOptions.allowImplicitFunctionDecl = true;
     } else if (args[i] === "--gc-sections") {
       compilerOptions.gcSections = true;
+    } else if (args[i] === "--gc-no-export-roots") {
+      compilerOptions.gcNoExportRoots = true;
     } else if (args[i] === "--no-undefined") {
       compilerOptions.noUndefined = true;
     } else if (args[i] === "--require-source") {
@@ -14785,9 +14931,11 @@ function main() {
           unit.declaredFunctions = kept;
         }
       }
-      if (compilerOptions.gcSections) Parser.gcSectionsPass(units);
+      if (compilerOptions.gcSections) Parser.gcSectionsPass(units, compilerOptions);
       t0 = hrtime();
-      const wasmBinary = Codegen.generateCode(units, outputFile, { compilerOptions });
+      const codegenOpts = { compilerOptions };
+      if (compilerOptions.embedSources) codegenOpts.sourceBuffers = pp.sourceBuffers;
+      const wasmBinary = Codegen.generateCode(units, outputFile, codegenOpts);
       const codegenMs = hrtime() - t0;
       t0 = hrtime();
       if (outputFile.endsWith(".html") || outputFile.endsWith(".js")) {
