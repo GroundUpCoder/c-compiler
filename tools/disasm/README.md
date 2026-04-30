@@ -109,12 +109,18 @@ color next to call targets and other indices.
 
 ```
 tools/disasm/
-├── build.py       Build script — compiles disw + bundles everything
-├── page.html      HTML/CSS/JS template with two placeholders:
-│                    /* __COMPILER_JS__ */      ← compiler.js source
-│                    '__DISW_WASM_BASE64__'     ← disw.wasm as base64
-├── index.html     Generated output (gitignored)
-└── README.md      This file
+├── build.py            Build script — compiles disw + bundles everything
+├── page.html           HTML/CSS/JS template with placeholders:
+│                         /* __CODEMIRROR_JS__ */     ← CodeMirror 6 bundle
+│                         /* __COMPILER_JS__ */       ← compiler.js source
+│                         /* __INTERPRETER_JS__ */    ← interpreter.js source
+│                         '__DISW_WASM_BASE64__'      ← disw.wasm as base64
+├── interpreter.js      WASM interpreter for running compiled programs
+├── index.html          Generated output (gitignored)
+├── package.json        Dev dependencies (Playwright for testing)
+├── test-plus-btn.mjs   Playwright test — tab/'+' button functionality
+├── node_modules/       Installed deps (gitignored)
+└── README.md           This file
 ```
 
 ### How it works
@@ -175,8 +181,42 @@ The disassembler's `-J` flag (added for this tool) produces structured JSON:
 }
 ```
 
+## Testing
+
+Browser tests use [Playwright](https://playwright.dev/) to drive the built
+`index.html` in a headless Chromium instance.
+
+### Setup
+
+```sh
+cd tools/disasm
+pnpm install
+pnpm exec playwright install chromium
+```
+
+### Running tests
+
+Build first, then run:
+
+```sh
+python3 tools/disasm/build.py
+node tools/disasm/test-plus-btn.mjs
+```
+
+The test script compiles the default example, exercises tab creation/closing,
+the '+' button menu, and function row clicks. It prints results to stdout and
+exits non-zero on failure.
+
+### Adding tests
+
+Test scripts are standalone `.mjs` files that import `playwright` directly
+(no test runner framework). Each script launches its own browser, loads
+`index.html` via `file://`, and asserts behavior via `page.evaluate()` and
+Playwright locators.
+
 ## Dependencies
 
 - **Node.js** — required at build time to run `compiler.js`
 - **Python 3** — required at build time for `build.py`
+- **Playwright** — dev dependency for browser testing (`pnpm install` in this dir)
 - **No runtime dependencies** — the generated HTML is fully self-contained

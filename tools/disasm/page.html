@@ -295,11 +295,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 }
 .tab-add:hover { color: var(--text); background: rgba(137, 180, 250, 0.06); }
 .tab-add-menu {
-  display: none; position: absolute; top: 100%; right: 0; z-index: 50;
+  position: fixed; z-index: 50;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
   min-width: 160px; padding: 4px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
-.tab-add-menu.open { display: block; }
 .tab-add-menu-item {
   padding: 6px 12px; font-size: 12px; color: var(--text); cursor: pointer;
   white-space: nowrap;
@@ -1138,8 +1137,7 @@ document.addEventListener('mousedown', function(e) {
 // Tab reopen menu
 var openMenu = null;
 document.addEventListener('click', function(e) {
-  // Close any open menu first
-  if (openMenu && !e.target.closest('.tab-add')) {
+  if (openMenu && !e.target.closest('.tab-add-menu') && !e.target.closest('.tab-add')) {
     openMenu.remove();
     openMenu = null;
   }
@@ -1148,7 +1146,7 @@ document.addEventListener('click', function(e) {
   if (openMenu) { openMenu.remove(); openMenu = null; return; }
   var paneId = parseInt(addBtn.getAttribute('data-pane'));
   var menu = document.createElement('div');
-  menu.className = 'tab-add-menu open';
+  menu.className = 'tab-add-menu';
   var items = [];
   if (!findTab('editor')) items.push({ label: 'Source Editor', action: function() { createTab(paneId, 'Source', 'editor', {}); editorTab = findTab('editor').tab; editorTab.contentEl.querySelector('.editor-wrap').appendChild(editorView.dom); editorTab.data.editorView = editorView; editorTab.data.editorParked = false; } });
   if (lastJson && !findTab('module')) items.push({ label: 'Module Overview', action: function() { createTab(paneId, 'Module', 'module', { json: lastJson }); } });
@@ -1175,7 +1173,10 @@ document.addEventListener('click', function(e) {
     }
     menu.appendChild(item);
   }
-  addBtn.appendChild(menu);
+  var rect = addBtn.getBoundingClientRect();
+  menu.style.top = rect.bottom + 'px';
+  menu.style.left = rect.left + 'px';
+  document.body.appendChild(menu);
   openMenu = menu;
 });
 
@@ -1628,6 +1629,7 @@ function renderFunctionDetail(tab) {
     if (!el) return;
     var key = el.getAttribute('data-block');
     hlBlockElements = wrap.querySelectorAll('[data-block="' + key + '"]');
+    console.log('block hover: key=' + key + ', found=' + hlBlockElements.length + ', texts=' + Array.from(hlBlockElements).map(function(x){return x.querySelector('.insn-op').textContent}).join('+'));
     for (var i = 0; i < hlBlockElements.length; i++) hlBlockElements[i].classList.add('hl-block');
   });
   wrap.addEventListener('mouseout', function(e) {
@@ -1640,6 +1642,49 @@ function renderFunctionDetail(tab) {
 
 // ── Examples ──
 var examples = [
+  { name: 'Hello World', source:
+    '#include <stdio.h>\n\n' +
+    'int main(void) {\n' +
+    '    puts("Hello");\n' +
+    '    puts("World");\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'Goto', source:
+    '#include <stdio.h>\n\n' +
+    'int main(void) {\n' +
+    '    int i = 0;\n' +
+    '    int sum = 0;\n\n' +
+    'loop:\n' +
+    '    if (i >= 10)\n' +
+    '        goto done;\n' +
+    '    sum += i;\n' +
+    '    i++;\n' +
+    '    goto loop;\n\n' +
+    'done:\n' +
+    '    printf("sum = %d\\n", sum);\n' +
+    '    return 0;\n' +
+    '}\n' },
+  { name: 'setjmp / longjmp', source:
+    '#include <stdio.h>\n' +
+    '#include <setjmp.h>\n\n' +
+    'jmp_buf env;\n\n' +
+    'void risky(int depth) {\n' +
+    '    printf("  depth %d\\n", depth);\n' +
+    '    if (depth >= 3)\n' +
+    '        longjmp(env, depth);\n' +
+    '    risky(depth + 1);\n' +
+    '}\n\n' +
+    'int main(void) {\n' +
+    '    int val = setjmp(env);\n' +
+    '    if (val == 0) {\n' +
+    '        printf("normal path\\n");\n' +
+    '        risky(1);\n' +
+    '        printf("unreachable\\n");\n' +
+    '    } else {\n' +
+    '        printf("jumped back from depth %d\\n", val);\n' +
+    '    }\n' +
+    '    return 0;\n' +
+    '}\n' },
   { name: 'Recursion & Loops', source:
     'int factorial(int n) {\n' +
     '    if (n <= 1) return 1;\n' +
@@ -2067,6 +2112,41 @@ function doDisasmWasm(wasm, timingPrefix) {
   lastJson = json;
 
   createTab(paneForNewTab(), 'Module', 'module', { json: json });
+
+  // Replace Source editor tab with __main.c source tab in the same position
+  if (lastEmbeddedSources && lastEmbeddedSources['__main.c']) {
+    var edLoc = findTab('editor');
+    if (edLoc) {
+      var edPane = edLoc.paneId;
+      var edIdx = panes[edPane].tabs.indexOf(edLoc.tab);
+      removeTab(edPane, edLoc.tab.id);
+      openSourceTab('__main.c');
+      var srcTab = findTab('source', 'src-__main.c');
+      if (srcTab && srcTab.paneId !== edPane) {
+        moveTab(srcTab.paneId, srcTab.tab.id, edPane, edIdx);
+      } else if (srcTab) {
+        var curIdx = panes[edPane].tabs.indexOf(srcTab.tab);
+        if (curIdx !== edIdx) {
+          panes[edPane].tabs.splice(curIdx, 1);
+          panes[edPane].tabs.splice(edIdx > curIdx ? edIdx - 1 : edIdx, 0, srcTab.tab);
+          renderTabBar(edPane);
+        }
+      }
+    } else {
+      openSourceTab('__main.c');
+      var srcTab = findTab('source', 'src-__main.c');
+      if (srcTab && srcTab.paneId !== 0) {
+        moveTab(srcTab.paneId, srcTab.tab.id, 0, 0);
+      } else if (srcTab) {
+        var curIdx = panes[0].tabs.indexOf(srcTab.tab);
+        if (curIdx > 0) {
+          panes[0].tabs.splice(curIdx, 1);
+          panes[0].tabs.splice(0, 0, srcTab.tab);
+          renderTabBar(0);
+        }
+      }
+    }
+  } else
 
   // Auto-open main source tab if embedded sources exist
   if (lastEmbeddedSources) {
