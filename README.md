@@ -1,11 +1,12 @@
 # c-compiler
 
-Single-file C-to-WebAssembly compilers. Two implementations:
+Single-file C-to-WebAssembly compiler.
 
-1. **compiler.js** (~14K lines) — JavaScript, runs on Node.js
-2. **compiler.cc** (~19K lines) — C++20
+**compiler.js** (~14K lines) — JavaScript, runs on Node.js.
 
-Both compile C code to WASM and produce identical output. There are two ways to run the compiled programs:
+A frozen C++20 port (**compiler.cc**) is preserved in `old/` along with its own test runner and unit tests. The two compilers produce identical output for all unit tests (verified by equiv tests in `old/`).
+
+There are two ways to run the compiled programs:
 
 ### WASM files (`.wasm`) — run with Node.js
 
@@ -127,17 +128,22 @@ node serve.js [dir] [port]   # defaults: build/, 8080
 ## Tests
 
 ```bash
-python3 tests/run.py                                  # Unit tests, JS compiler (default)
-python3 tests/run.py --all                             # Everything, both compilers
+python3 tests/run.py                                  # Unit tests (default)
+python3 tests/run.py --all                             # Everything
 python3 tests/run.py --types=unit,extra                # Multiple categories
-python3 tests/run.py --types=equiv --compiler=all      # JS vs C++ equivalence
 python3 tests/run.py --types=lua                       # Lua test suite
-python3 tests/run.py --compiler=cc                     # Use C++ compiler
 python3 tests/run.py --filter=struct                   # Filter by name
 ```
 
 Test categories:
 - **unit** — Core C language features and standard library (compile + run, check stdout)
 - **extra** — Additional compile + run tests
-- **equiv** — Verify JS and C++ compilers produce identical output
 - **lua** — Compile the Lua VM and run the official Lua test suite
+
+The frozen C++ compiler snapshot in `old/` has its own test runner with equiv tests:
+
+```bash
+python3 old/tests/run.py                              # Unit tests, JS compiler
+python3 old/tests/run.py --all                         # Unit (both compilers) + equiv + sourcemap
+python3 old/tests/run.py --types=equiv --compiler=all  # JS vs C++ equivalence
+```
