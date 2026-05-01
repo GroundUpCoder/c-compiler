@@ -98,6 +98,8 @@ const Keyword = Object.freeze({
   X_TRY: "__try",
   X_CATCH: "__catch",
   X_THROW: "__throw",
+  X_EXTERNREF: "__externref",
+  X_REFEXTERN: "__refextern",
 });
 
 // Punctuation
@@ -807,6 +809,8 @@ const KEYWORD_MAP = new Map([
   ["__try", Keyword.X_TRY],
   ["__catch", Keyword.X_CATCH],
   ["__throw", Keyword.X_THROW],
+  ["__externref", Keyword.X_EXTERNREF],
+  ["__refextern", Keyword.X_REFEXTERN],
   ["__attribute__", Keyword.X_ATTRIBUTE],
   ["__attribute", Keyword.X_ATTRIBUTE],
 ]);
@@ -1856,7 +1860,7 @@ const TypeKind = Object.freeze({
   LLONG: "long long", ULLONG: "unsigned long long",
   FLOAT: "float", DOUBLE: "double", LDOUBLE: "long double",
   POINTER: "pointer", ARRAY: "array", FUNCTION: "function",
-  TAG: "tag",
+  TAG: "tag", EXTERNREF: "externref", REFEXTERN: "refextern",
 });
 
 const TagKind = Object.freeze({
@@ -2046,6 +2050,7 @@ class TypeInfo {
   isArithmetic() { return this.isInteger() || this.isFloatingPoint(); }
   isScalar() { return this.isArithmetic() || this.kind === TypeKind.POINTER; }
   isPointer() { return this.kind === TypeKind.POINTER; }
+  isRef() { return this.kind === TypeKind.EXTERNREF || this.kind === TypeKind.REFEXTERN; }
   isArray() { return this.kind === TypeKind.ARRAY; }
   isFunction() { return this.kind === TypeKind.FUNCTION; }
   isVoid() { return this.kind === TypeKind.VOID; }
@@ -2122,6 +2127,8 @@ const TULLONG = new TypeInfo(TypeKind.ULLONG, 8, 8, true);
 const TFLOAT = new TypeInfo(TypeKind.FLOAT, 4, 4, true);
 const TDOUBLE = new TypeInfo(TypeKind.DOUBLE, 8, 8, true);
 const TLDOUBLE = new TypeInfo(TypeKind.LDOUBLE, 8, 8, true);
+const TEXTERNREF = new TypeInfo(TypeKind.EXTERNREF, 0, 0, false);
+const TREFEXTERN = new TypeInfo(TypeKind.REFEXTERN, 0, 0, false);
 
 // Type construction caches
 function arrayOf(elemType, size) {
@@ -2321,7 +2328,7 @@ return {
   ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
   TypeInfo,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE,
+  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN,
   arrayOf, functionType, getOrCreateTagType,
   computeStructLayout, computeUnionLayout, computeUnaryType,
   usualArithmeticConversions, truncateConstInt,
@@ -2419,6 +2426,7 @@ class Expr {
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
       this.usedSymbols = new Set(); this.compoundLiterals = [];
       this.definition = null;
+      this.importModule = null; this.importName = null;
       Object.seal(this);
     }
   }
@@ -3657,6 +3665,8 @@ class Parser {
         case Lexer.Keyword.INLINE: case Lexer.Keyword.NORETURN:
         case Lexer.Keyword.ALIGNAS: case Lexer.Keyword.THREAD_LOCAL:
         case Lexer.Keyword.X_IMPORT:
+        case Lexer.Keyword.X_EXTERNREF:
+        case Lexer.Keyword.X_REFEXTERN:
           return true;
       }
     }
@@ -3767,6 +3777,7 @@ class Parser {
     let storageClass = Types.StorageClass.NONE;
     let isInline = false;
     let requestedAlignment = 0;
+    let importModule = null, importName = null;
     let isConst = false, isVolatile = false;
     let isSigned = false, isUnsigned = false;
     let longCount = 0, shortCount = 0;
@@ -3782,7 +3793,22 @@ class Parser {
       if (this.matchKW(Lexer.Keyword.EXTERN)) { storageClass = Types.StorageClass.EXTERN; continue; }
       if (this.matchKW(Lexer.Keyword.REGISTER)) { storageClass = Types.StorageClass.REGISTER; continue; }
       if (this.matchKW(Lexer.Keyword.AUTO)) { storageClass = Types.StorageClass.AUTO; continue; }
-      if (this.matchKW(Lexer.Keyword.X_IMPORT)) { storageClass = Types.StorageClass.IMPORT; continue; }
+      if (this.matchKW(Lexer.Keyword.X_IMPORT)) {
+        storageClass = Types.StorageClass.IMPORT;
+        if (this.atText("(")) {
+          this.advance();
+          const first = this.expectKind(Lexer.TokenKind.STRING);
+          if (this.matchText(",")) {
+            const second = this.expectKind(Lexer.TokenKind.STRING);
+            importModule = first.text.replace(/^"(.*)"$/, '$1');
+            importName = second.text.replace(/^"(.*)"$/, '$1');
+          } else {
+            importModule = first.text.replace(/^"(.*)"$/, '$1');
+          }
+          this.expect(")");
+        }
+        continue;
+      }
 
       // Qualifiers
       if (this.matchKW(Lexer.Keyword.CONST)) { isConst = true; continue; }
@@ -3851,6 +3877,8 @@ class Parser {
       if (this.matchKW(Lexer.Keyword.DOUBLE)) { hasDouble = true; continue; }
       if (this.matchKW(Lexer.Keyword.SIGNED)) { isSigned = true; continue; }
       if (this.matchKW(Lexer.Keyword.UNSIGNED)) { isUnsigned = true; continue; }
+      if (this.matchKW(Lexer.Keyword.X_EXTERNREF)) { type = Types.TEXTERNREF; continue; }
+      if (this.matchKW(Lexer.Keyword.X_REFEXTERN)) { type = Types.TREFEXTERN; continue; }
 
       // struct/union/enum
       if (this.atKW(Lexer.Keyword.STRUCT) || this.atKW(Lexer.Keyword.UNION)) {
@@ -3909,7 +3937,7 @@ class Parser {
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
 
-    return { type, storageClass, isInline, requestedAlignment };
+    return { type, storageClass, isInline, requestedAlignment, importModule, importName };
   }
 
   // --- Tag specifier (struct/union) ---
@@ -3988,6 +4016,9 @@ class Parser {
           }
 
           const { type: mType, name: mName } = this.parseDeclarator(memType);
+          if (mType.removeQualifiers().isRef()) {
+            this.error(this.peek(), `${mType.removeQualifiers().kind} cannot be used as a struct/union member`);
+          }
 
           // Parse __attribute__ after member declarator
           const memAttrs = this.parseGCCAttributes();
@@ -4342,6 +4373,7 @@ class Parser {
             sType = decl.type;
           }
           this.expect(")");
+          if (sType.removeQualifiers().isRef()) this.error(this.peek(-1), `sizeof(${sType.removeQualifiers().kind}) is not allowed`);
           return new AST.ESizeofType(Types.TULONG, sType);
         }
         const expr = this.parseExpression();
@@ -4677,6 +4709,9 @@ class Parser {
       if ((e.kind === Types.ExprKind.MEMBER || e.kind === Types.ExprKind.ARROW) && e.memberDecl && e.memberDecl.bitWidth >= 0) {
         this.error(this.peek(-1), `Cannot take address of bit-field member '${e.memberDecl.name}'`);
       }
+      if (e.type && e.type.removeQualifiers().isRef()) {
+        this.error(this.peek(-1), `Cannot take address of ${e.type.removeQualifiers().kind} variable`);
+      }
       this.markAddressTaken(e); return new AST.EUnary(Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
     }
     if (this.matchText("*")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e); }
@@ -4732,6 +4767,9 @@ class Parser {
             if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
             else this.currentParsingFunc.compoundLiterals.push(cl);
             return this.parsePostfixTail(cl);
+          }
+          if (castType.removeQualifiers().isRef() || (expr.type && expr.type.removeQualifiers().isRef())) {
+            this.error(this.peek(-1), "Cannot cast to or from a reference type");
           }
           return new AST.ECast(castType, castType, expr);
         }
@@ -5395,6 +5433,8 @@ class Parser {
         }
         const funcDecl = new AST.DFunc({ filename: this.peek().filename, line: this.peek().line },
           name, type, [], specs.storageClass, false, null);
+        funcDecl.importModule = specs.importModule;
+        funcDecl.importName = specs.importName;
         this.varScope.set(name, funcDecl);
         if (this.currentParsingFunc) {
           this.currentParsingFunc.usedSymbols.add(funcDecl);
@@ -5530,6 +5570,8 @@ class Parser {
         }
         const funcDecl = new AST.DFunc(loc, name, type,
           [], specs.storageClass, specs.isInline, null);
+        funcDecl.importModule = specs.importModule;
+        funcDecl.importName = specs.importName;
 
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
@@ -5603,6 +5645,8 @@ class Parser {
         }
         const funcDecl = new AST.DFunc(loc, name, type,
           [], specs.storageClass, specs.isInline, null);
+        funcDecl.importModule = specs.importModule;
+        funcDecl.importName = specs.importName;
 
         // Build parameter list
         const paramTypes = type.paramTypes || [];
@@ -6001,6 +6045,7 @@ function annotateExpr(expr) {
       if ((expr.op === "ADD" || expr.op === "SUB") &&
           (leftType.isPointer() || rightType.isPointer() ||
            leftType.isArray() || rightType.isArray())) break;
+      if (leftType.removeQualifiers().isRef() || rightType.removeQualifiers().isRef()) break;
       const isComparison = ["EQ","NE","LT","GT","LE","GE"].includes(expr.op);
       const opType = isComparison ? Types.usualArithmeticConversions(leftType, rightType) : expr.type;
       wrapImplicitCast(expr.left, opType, (e) => { expr.left = e; });
@@ -6503,19 +6548,27 @@ const WT_I32 = { tag: "num", num: WasmNumType.I32 };
 const WT_I64 = { tag: "num", num: WasmNumType.I64 };
 const WT_F32 = { tag: "num", num: WasmNumType.F32 };
 const WT_F64 = { tag: "num", num: WasmNumType.F64 };
+const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F };
+const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F };
 const WT_EMPTY = { tag: "empty" };
 
 function wtIsNum(wt) { return wt.tag === "num"; }
+function wtIsRef(wt) { return wt.tag === "ref"; }
 function wtIsIntegral(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.I32 || wt.num === WasmNumType.I64); }
 function wtIsFloating(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.F32 || wt.num === WasmNumType.F64); }
 function wtEmit(wt, buf) {
   if (wt.tag === "empty") buf.push(0x40);
   else if (wt.tag === "num") buf.push(wt.num);
+  else if (wt.tag === "ref") {
+    if (wt.nullable) buf.push(wt.heap);
+    else { buf.push(0x64); buf.push(wt.heap); }
+  }
 }
 function wtEquals(a, b) {
   if (a.tag !== b.tag) return false;
   if (a.tag === "empty") return true;
   if (a.tag === "num") return a.num === b.num;
+  if (a.tag === "ref") return a.nullable === b.nullable && a.heap === b.heap;
   return false;
 }
 
@@ -6683,6 +6736,10 @@ class WasmCode {
 
   // Drop
   drop() { this.push(0x1A); }
+
+  // Reference types
+  refNull(heapType) { this.push(0xD0); this.push(heapType); }
+  refIsNull() { this.push(0xD1); }
 }
 
 // ====================
@@ -6709,8 +6766,8 @@ class WasmModule {
   }
 
   addFunctionTypeId(params, results) {
-    const key = params.map(p => `${p.tag}:${p.num||''}`).join(",") + "->" +
-                results.map(r => `${r.tag}:${r.num||''}`).join(",");
+    const wtKey = t => t.tag === "ref" ? `ref:${t.nullable?1:0}:${t.heap}` : `${t.tag}:${t.num||''}`;
+    const key = params.map(wtKey).join(",") + "->" + results.map(wtKey).join(",");
     if (this.funcTypeIndices.has(key)) return this.funcTypeIndices.get(key);
     const id = this.typeDefs.length;
     this.typeDefs.push({ kind: "func", params, results });
@@ -6774,6 +6831,14 @@ class WasmModule {
     return this.addGlobal(WT_F64, initExpr, isMutable);
   }
 
+  // Uses nullable WT_EXTERNREF even for __refextern globals — ref.null is the only available initializer
+  addGlobalExternref(isMutable) {
+    const initExpr = [];
+    const code = new WasmCode(initExpr);
+    code.refNull(0x6F);
+    code.end();
+    return this.addGlobal(WT_EXTERNREF, initExpr, isMutable);
+  }
 
   patchGlobalI32(id, value) {
     const g = this.globals[id];
@@ -7059,6 +7124,8 @@ function isStructOrUnion(type) {
 
 function cToWasmType(type) {
   type = type.removeQualifiers();
+  if (type === Types.TEXTERNREF) return WT_EXTERNREF;
+  if (type === Types.TREFEXTERN) return WT_REFEXTERN;
   if (type === Types.TFLOAT) return WT_F32;
   if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
   if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
@@ -8035,7 +8102,9 @@ class CodeGenerator {
       } else {
         const retType = funcDef.type.getReturnType();
         const wasmRetType = cToWasmType(retType);
-        if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
+        if (wtEquals(wasmRetType, WT_REFEXTERN)) this.body.unreachable();
+        else if (wtEquals(wasmRetType, WT_EXTERNREF)) this.body.refNull(0x6F);
+        else if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
         else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
         else if (wtEquals(wasmRetType, WT_F32)) this.body.f32Const(0.0);
         else if (wtEquals(wasmRetType, WT_F64)) this.body.f64Const(0.0);
@@ -8164,7 +8233,12 @@ class CodeGenerator {
           this.emitExpr(stmt.expr);
           const retType = this.currentFuncDef.type.getReturnType();
         } else {
-          if (!this.hasVaArgs) this.body.i32Const(0);
+          if (!this.hasVaArgs) {
+            const retType = this.currentFuncDef.type.getReturnType();
+            if (retType.removeQualifiers() === Types.TREFEXTERN) this.body.unreachable();
+            else if (retType.removeQualifiers() === Types.TEXTERNREF) this.body.refNull(0x6F);
+            else this.body.i32Const(0);
+          }
         }
         if (this.frameSize > 0) {
           this.body.localGet(this.savedSpLocalIdx);
@@ -8489,6 +8563,8 @@ class CodeGenerator {
   // --- Type helpers ---
   getBinaryWasmType(type) {
     type = type.removeQualifiers();
+    if (type === Types.TEXTERNREF) return WT_EXTERNREF;
+    if (type === Types.TREFEXTERN) return WT_REFEXTERN;
     if (type === Types.TFLOAT) return WT_F32;
     if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
     if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
@@ -8591,14 +8667,16 @@ class CodeGenerator {
   // --- Condition/bool helpers ---
   emitConditionToI32(condType) {
     const wt = this.getBinaryWasmType(condType);
-    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    if (wtIsRef(wt)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+    else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
     else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
     else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
   }
 
   emitBoolNormalize(type) {
     const wt = this.getBinaryWasmType(type);
-    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    if (wtIsRef(wt)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+    else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
     else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
     else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
     else { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
@@ -8627,7 +8705,13 @@ class CodeGenerator {
     const fromWasm = this.getBinaryWasmType(fromType);
     const toWasm = this.getBinaryWasmType(toType);
     toType = toType.removeQualifiers();
+    if (toType.isRef() && !wtIsRef(fromWasm)) {
+      this.body.drop();
+      this.body.refNull(0x6F);
+      return;
+    }
     if (toType === Types.TBOOL) {
+      if (wtIsRef(fromWasm)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); return; }
       if (wtEquals(fromWasm, WT_I32)) { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
       else if (wtEquals(fromWasm, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
       else if (wtEquals(fromWasm, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
@@ -9028,6 +9112,20 @@ class CodeGenerator {
           this.body.else_(); this.emitExpr(expr.right); this.emitBoolNormalize(rightType); this.body.end();
           break;
         }
+        if (isComparison && (leftType.removeQualifiers().isRef() || rightType.removeQualifiers().isRef())) {
+          const isNullCompare =
+            (!rightType.removeQualifiers().isRef() && expr.right.kind === Types.ExprKind.INT && expr.right.value === 0n) ||
+            (!leftType.removeQualifiers().isRef() && expr.left.kind === Types.ExprKind.INT && expr.left.value === 0n);
+          if (isNullCompare) {
+            const refExpr = leftType.removeQualifiers().isRef() ? expr.left : expr.right;
+            this.emitExpr(refExpr);
+            this.body.refIsNull();
+            if (expr.op === "NE") { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+          } else {
+            throw new Error("Cannot compare externref values with relational operators");
+          }
+          break;
+        }
         this.emitExpr(expr.left); this.emitExpr(expr.right);
         switch (expr.op) {
           case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
@@ -9066,7 +9164,8 @@ class CodeGenerator {
           case "OP_LNOT": {
             this.emitExpr(expr.operand);
             const wt = this.getBinaryWasmType(operandType);
-            if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
+            if (wtIsRef(wt)) { this.body.refIsNull(); }
+            else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
             else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_EQ); }
             else this.body.aop(wt, ALU.OP_EQZ);
             break;
@@ -9449,7 +9548,9 @@ function generateCode(units, outputFile, options) {
     for (const func of unit.importedFunctions) {
       const fdef = func.definition || func;
       const typeId = getWasmFunctionTypeIdForCFunctionType(wmod, fdef.type);
-      const funcIdx = wmod.addFunctionImport("c", fdef.name, typeId);
+      const mod = fdef.importModule || func.importModule || "c";
+      const nm = fdef.importName || func.importName || fdef.name;
+      const funcIdx = wmod.addFunctionImport(mod, nm, typeId);
       cg.funcDefToWasmFuncIdx.set(fdef, funcIdx);
       cg.funcDefToTableIdx.set(fdef, funcIdx + 1);
       if (options.compilerOptions.emitNames) wmod.funcNames.push({ idx: funcIdx, name: fdef.name });
@@ -9563,6 +9664,10 @@ function generateCode(units, outputFile, options) {
         const val = cg._constEvalExpr(varDef.initExpr);
         if (val) cg.writeConstValueToStatic(baseOffset, varDef.type, val);
       }
+    } else if (varDef.type.removeQualifiers().isRef()) {
+      const globalIdx = wmod.addGlobalExternref(true);
+      cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
+      if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
     } else {
       const wt = cToWasmType(varDef.type);
       // Determine initial value
@@ -11254,10 +11359,84 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
   return -1;
 }
   `,
+  "externref.h": `
+#ifndef _EXTERNREF_H
+#define _EXTERNREF_H
+
+__import("js", "__jsstr")
+__externref __jsstr(const char *s);
+
+__import("js", "__jsstr2")
+__externref __jsstr2(const char *s, int len);
+
+__import("js", "__jsgetattr")
+__externref __jsgetattr(__externref obj, __externref key);
+
+__import("js", "__jslog")
+void __jslog(__externref val);
+
+__import("js", "__jsglobal")
+__externref __jsglobal(void);
+
+#endif
+  `,
+  "guc.h": `
+#ifndef _GUC_H
+#define _GUC_H
+
+#include <externref.h>
+__require_source("__guc.c");
+
+// wasm-js:string builtins (provided natively by the engine)
+__import("wasm:js-string", "length")
+int __wjs_length(__externref s);
+
+__import("wasm:js-string", "charCodeAt")
+int __wjs_charCodeAt(__externref s, int idx);
+
+__import("wasm:js-string", "codePointAt")
+int __wjs_codePointAt(__externref s, int idx);
+
+__import("wasm:js-string", "equals")
+int __wjs_equals(__externref a, __externref b);
+
+__import("wasm:js-string", "compare")
+int __wjs_compare(__externref a, __externref b);
+
+__import("wasm:js-string", "concat")
+__refextern __wjs_concat(__externref a, __externref b);
+
+__import("wasm:js-string", "substring")
+__refextern __wjs_substring(__externref s, int start, int end);
+
+__import("wasm:js-string", "fromCharCode")
+__refextern __wjs_fromCharCode(int code);
+
+__import("wasm:js-string", "fromCodePoint")
+__refextern __wjs_fromCodePoint(int codePoint);
+
+__import("wasm:js-string", "test")
+int __wjs_test(__externref val);
+
+__import("wasm:js-string", "cast")
+__refextern __wjs_cast(__externref val);
+
+__externref __jss(const char *s);
+
+#endif
+  `,
 };
 
 // Embedded standard library sources
 const _stdlibSources = {
+  "__guc.c": `
+#include <string.h>
+#include <guc.h>
+
+__externref __jss(const char *s) {
+    return __jsstr2(s, (int)strlen(s));
+}
+  `,
   "__SDL.c": `
 #include <SDL.h>
 #include <stdlib.h>

@@ -1945,7 +1945,8 @@ async function runModule({
   }
   if (!writeOut) writeOut = function () {};
   if (!writeErr) writeErr = function () {};
-  const module = new WebAssembly.Module(bytes);
+  const compileOptions = { builtins: ['js-string'] };
+  const module = new WebAssembly.Module(bytes, compileOptions);
   const hasJSPI = typeof WebAssembly.Suspending === 'function';
 
   /* Import object providing host functions */
@@ -3016,6 +3017,26 @@ async function runModule({
   imports[ENV_KEY].fs_net_init = function () { return 0; };
   imports[ENV_KEY].fs_net_set_pwd = function () {};
   imports[ENV_KEY].block_device_init_http = function () { return 0; };
+
+  imports["js"] = {
+    __jsstr: function (ptr) {
+      return readString(ptr);
+    },
+    __jsstr2: function (ptr, len) {
+      const memory = instance.exports.memory;
+      const bytes = new Uint8Array(memory.buffer, ptr, len);
+      return new TextDecoder().decode(bytes);
+    },
+    __jsgetattr: function (obj, key) {
+      return obj[key];
+    },
+    __jslog: function (val) {
+      console.log(val);
+    },
+    __jsglobal: function () {
+      return globalThis;
+    },
+  };
 
   const instance = new WebAssembly.Instance(module, imports);
 

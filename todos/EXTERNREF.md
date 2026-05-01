@@ -1,89 +1,93 @@
-# `__externref` — Wasm Reference Types
+# `__externref` & `__refextern` — Wasm Reference Types
 
-## Goal
+## Status: Implemented
 
-Add `__externref` as a built-in type so C code can hold opaque host references (DOM nodes, JS objects, etc.) without encoding them as integers. Uses the Wasm Reference Types proposal, which is standard and shipped in all engines.
+The compiler supports both nullable (`__externref`) and non-nullable (`__refextern`) opaque host references via the Wasm Reference Types proposal.
 
-## What `__externref` is
+## Types
 
-An `externref` is a Wasm value that the host (JS) controls. Wasm code can receive one, pass it around, store it in locals/globals, and hand it back — but cannot inspect, cast, or store it in linear memory. The engine's GC manages liveness.
+| C type | Wasm encoding | Nullable | Use case |
+|--------|---------------|----------|----------|
+| `__externref` | `0x6F` (externref) | yes | General host values, may be null |
+| `__refextern` | `0x64 0x6F` (ref extern) | no | Return types from wasm:js-string builtins |
 
-```c
-__externref canvas;   // global — engine keeps it alive
+Both types share the same constraints — they are opaque references managed by the host GC:
 
-void draw(__externref ctx) {
-    fillRect(ctx, 0, 0, 100, 100);   // pass back to host
-}
-```
-
-## Constraints
-
-These are inherent to the Wasm spec, not design choices:
-
-- Cannot take the address of an `__externref` (`&x` is illegal)
-- Cannot put them in structs, unions, or arrays
-- Cannot `sizeof(__externref)` — it has no size in linear memory
-- Cannot pass through variadic functions (va arg blocks live in memory)
+- Cannot take the address (`&x` is illegal)
+- Cannot put in structs, unions, or arrays
+- Cannot `sizeof()`
 - Cannot cast to/from integer types
 - Can only live in Wasm locals, globals, function params, and return values
 
-## Implementation
+## Null handling
 
-### 1. Wasm type plumbing
+- `__externref x = 0;` emits `ref.null extern`
+- `x == 0` / `x != 0` emits `ref.is_null`
+- `if (x)` / `!x` use `ref.is_null` for boolean conversion
+- `__refextern` globals still use nullable type for initialization (Wasm spec requires `ref.null` as the only constant initializer)
 
-Add `WT_EXTERNREF = { tag: "ref", ref: 0x6F }` alongside existing WT constants. Extend `wtEmit()` to handle `tag: "ref"` — just push the byte. Extend `wtEquals()` for the new tag.
+## `__import("module", "name")`
 
-### 2. C type system
-
-Add `TEXTERNREF` to the `Types` namespace. Add `__externref` to the keyword table. Recognize it as a type specifier in the parser (same paths as `void`, `int`, etc.).
-
-### 3. `cToWasmType()` mapping
-
-```
-TEXTERNREF → WT_EXTERNREF
-```
-
-### 4. Codegen — the main work
-
-Ensure `__externref` variables use `LV_REGISTER` (Wasm local) storage, never `LV_MEMORY` / `LV_ADDR_FRAME` / `LV_ADDR_STATIC`. Emit errors for:
-
-- `&x` where `x` is `__externref`
-- `__externref` as a struct/union field
-- `__externref` in an array type
-- `sizeof(__externref)`
-- Cast expressions involving `__externref`
-- `__externref` in variadic call argument position
-
-Global `__externref` variables map to Wasm globals initialized with `ref.null extern` (`0xD0 0x6F`).
-
-### 5. Null and null-checking
-
-- Assignment of `0` or `(void*)0` (NULL) to `__externref` emits `ref.null extern`
-- Comparison `x == 0` / `x != 0` emits `ref.is_null` (opcode `0xD1`)
-- Could also add `__ref_is_null(x)` builtin if explicit checking is preferred
-
-### 6. Import/export
-
-Already works — `__externref` params and returns in `__import` / `__export` function signatures just need the type to flow through `getWasmFunctionTypeIdForCFunctionType()`.
-
-## Example usage
+Custom import module/name pairs for function declarations:
 
 ```c
-__import("dom", "getElementById")
-__externref getElementById(const char* id);
-
-__import("dom", "setTextContent")
-void setTextContent(__externref el, const char* text);
-
-__export("tick")
-void tick() {
-    __externref el = getElementById("counter");
-    setTextContent(el, "hello");
-}
+__import("wasm:js-string", "length")
+int __wjs_length(__externref s);
 ```
+
+- Two args: `__import("module", "name")` — sets both module and import name
+- One arg: `__import("module")` — sets module name, uses function name as import name
+- No args: `__import` — defaults to module `"c"` with function name
+
+## wasm:js-string builtins
+
+Engine-provided string operations imported from `"wasm:js-string"`. Enabled via `WebAssembly.Module(bytes, { builtins: ['js-string'] })` in host.js.
+
+Bindings declared in `guc.h`:
+
+| Function | Signature |
+|----------|-----------|
+| `__wjs_length` | `int (externref)` |
+| `__wjs_charCodeAt` | `int (externref, int)` |
+| `__wjs_codePointAt` | `int (externref, int)` |
+| `__wjs_equals` | `int (externref, externref)` |
+| `__wjs_compare` | `int (externref, externref)` |
+| `__wjs_concat` | `refextern (externref, externref)` |
+| `__wjs_substring` | `refextern (externref, int, int)` |
+| `__wjs_fromCharCode` | `refextern (int)` |
+| `__wjs_fromCodePoint` | `refextern (int)` |
+| `__wjs_test` | `int (externref)` |
+| `__wjs_cast` | `refextern (externref)` |
+
+Not bound (require Wasm GC array types): `fromCharCodeArray`, `intoCharCodeArray`.
+
+## Embedded library: guc.h / guc.c
+
+`guc.h` declares the wasm:js-string bindings and helper functions. `__guc.c` implements helpers — the compiler's dead code elimination removes unused functions.
+
+```c
+#include <guc.h>
+
+__externref s = __jss("hello world");
+int len = __wjs_length(s);
+```
+
+`__jss(const char *)` — convenience wrapper that calls `strlen` + `__jsstr2`.
+
+## Host-provided imports (module "c")
+
+Declared in `externref.h`:
+
+| Function | Purpose |
+|----------|---------|
+| `__jsstr(const char *)` | C string → JS string (null-terminated) |
+| `__jsstr2(const char *, int)` | C string → JS string (with length) |
+| `__jsglobal()` | Returns `globalThis` |
+| `__jslog(externref)` | `console.log` |
+| `__jsgetattr(externref, externref)` | Property access |
 
 ## Open questions
 
-- **Tables:** The reference types proposal also allows `externref` tables (`table.get`/`table.set`). Worth supporting? This would let C code maintain indexed collections of host refs without globals for each one.
-- **`funcref` as a type?** If we're adding `externref`, `__funcref` is the same amount of work. It would give a type-safe way to represent function references distinct from `i32` table indices.
-- **DOM integration:** This pairs naturally with the DOM rendering TODO — host DOM nodes become `__externref` values instead of integer handles.
+- **Tables:** `externref` tables (`table.get`/`table.set`) would allow indexed collections of host refs. Not yet implemented.
+- **`funcref`:** Same mechanism could support `__funcref` for type-safe function references.
+- **DOM integration:** Host DOM nodes as `__externref` values instead of integer handles.
