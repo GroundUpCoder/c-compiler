@@ -24,7 +24,7 @@ Both types share the same constraints — they are opaque references managed by 
 - `__externref x = 0;` emits `ref.null extern`
 - `x == 0` / `x != 0` emits `ref.is_null`
 - `if (x)` / `!x` use `ref.is_null` for boolean conversion
-- `__refextern` globals still use nullable type for initialization (Wasm spec requires `ref.null` as the only constant initializer)
+- `__refextern` cannot be used for global variables (no valid initializer exists) — use `__externref` for globals
 
 ## `__import("module", "name")`
 

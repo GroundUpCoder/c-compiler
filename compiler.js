@@ -6831,7 +6831,6 @@ class WasmModule {
     return this.addGlobal(WT_F64, initExpr, isMutable);
   }
 
-  // Uses nullable WT_EXTERNREF even for __refextern globals — ref.null is the only available initializer
   addGlobalExternref(isMutable) {
     const initExpr = [];
     const code = new WasmCode(initExpr);
@@ -9665,6 +9664,9 @@ function generateCode(units, outputFile, options) {
         if (val) cg.writeConstValueToStatic(baseOffset, varDef.type, val);
       }
     } else if (varDef.type.removeQualifiers().isRef()) {
+      if (varDef.type.removeQualifiers() === Types.TREFEXTERN) {
+        throw new Error(`Cannot declare global '__refextern' variable '${varDef.name}' — non-nullable refs have no valid initializer. Use '__externref' instead.`);
+      }
       const globalIdx = wmod.addGlobalExternref(true);
       cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
       if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
