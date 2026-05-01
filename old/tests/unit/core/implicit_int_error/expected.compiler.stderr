@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/implicit_int_error/implicit_int_error.c.
+tests/unit/core/implicit_int_error/implicit_int_error.c:2: error: type specifier missing (implicit int is not allowed in C99)

@@ -1,0 +1,5 @@
+test1: 2.500000 (expect 2.500000)
+test2: 1.000000 (expect 1.000000)
+test3: 1.000000 (expect 1.000000)
+test4: 2.500000 (expect 2.500000)
+test5: 1000 (expect 1000)

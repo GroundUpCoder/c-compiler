@@ -1,0 +1,17 @@
+%y: 25
+%I afternoon: 02
+%I midnight: 12 AM
+%I noon: 12 PM
+%I 1am: 01 AM
+%U: 02
+%W: 02
+%U Jan1-Sun: 01
+%W Jan1-Sun: 00
+%U Jan1-Mon: 00
+%W Jan1-Mon: 01
+%x: 01/15/25
+%X: 14:30:45
+%Z: []
+combined: 01/15/25 14:30:45
+%y 2000: 00
+%y 1999: 99

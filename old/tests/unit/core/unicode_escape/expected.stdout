@@ -1,0 +1,9 @@
+cafe len=4
+cafe bytes: 63 61 66 e9
+cjk len=3
+cjk bytes: e4 b8 96
+emoji len=4
+emoji bytes: f0 9f 98 80
+wch=233
+mixed bytes: 61 62 63 f1 78 79 7a
+latin bytes: c4 80

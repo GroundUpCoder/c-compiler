@@ -1,0 +1,14 @@
+=== pre-increment ===
+x=11 *p=11
+=== post-increment ===
+old=10 x=11 *p=11
+=== pre-decrement ===
+x=9 *p=9
+=== post-decrement ===
+old=10 x=9 *p=9
+=== multiple increments ===
+x=13 *p=13
+=== compound assignment ===
+x=15 *p=15
+=== simple assignment ===
+x=42 *p=42

@@ -1,0 +1,100 @@
+=== Basic Arithmetic Macros ===
+8
+6
+42
+5
+2
+=== Single Argument Macros ===
+25
+27
+16
+-7
+15
+20
+=== Expression Arguments (tests proper parenthesization) ===
+25
+24
+10
+=== Nested Macro Calls ===
+6
+10
+26
+16
+12
+=== Ternary/Conditional Macros ===
+20
+30
+10
+15
+5
+0
+10
+1
+0
+1
+0
+0
+1
+=== Logical Macros ===
+1
+0
+0
+1
+1
+0
+1
+0
+=== Bitwise Macros ===
+0
+255
+240
+16
+8
+=== Comparison Macros ===
+1
+0
+1
+1
+1
+1
+1
+=== Deeply Nested Macros ===
+1
+2
+3
+4
+=== Apply Twice Pattern ===
+16
+12
+=== Mixed Object-like and Function-like ===
+15
+100
+=== Zero-argument Macros ===
+0
+1
+42
+1
+=== Multiple Uses of Argument ===
+21
+=== Variables as Arguments ===
+13
+30
+10
+100
+=== Complex Nested Expressions ===
+3
+8
+4
+13
+=== Macros with Array Access ===
+30
+30
+=== Macros with Pointer Dereference ===
+84
+=== Macros in Control Flow ===
+30
+1
+100
+=== Floating Point with Macros ===
+5.500000
+=== All tests passed! ===

@@ -1,0 +1,8 @@
+=== assign to struct param ===
+before: x=1 y=2
+after: x=99 y=100
+=== assign to union param ===
+before: i=42
+after: i=999
+=== assign param from var ===
+p: x=50 y=60

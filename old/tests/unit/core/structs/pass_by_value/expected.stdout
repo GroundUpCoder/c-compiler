@@ -1,0 +1,8 @@
+=== Struct return ===
+a.x = 10
+a.y = 20
+=== Pass by value ===
+(10, 20)
+=== Pass and return ===
+c.x = 40
+c.y = 60

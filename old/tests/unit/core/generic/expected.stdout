@@ -1,0 +1,14 @@
+int
+long
+float
+double
+char *
+other
+42
+30
+4.0
+30
+is-float
+inner-was-float
+sizeof=4
+sizeof=8

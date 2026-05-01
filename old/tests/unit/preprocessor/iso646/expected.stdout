@@ -1,0 +1,9 @@
+and/not ok
+or ok
+not_eq ok
+compl: 0
+xor: 240
+bitor: 255
+or_eq: 3
+and_eq: 2
+xor_eq: 1

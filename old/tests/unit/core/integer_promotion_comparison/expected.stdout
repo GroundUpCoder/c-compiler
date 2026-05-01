@@ -1,0 +1,5 @@
+PASS: uc(255) > i(-1)
+PASS: i(-1) < uc(255)
+PASS: si(-1) > ui(1) when converted to unsigned
+PASS: ui(1) < si(-1) when converted to unsigned
+PASS: sc(-1) < j(0)

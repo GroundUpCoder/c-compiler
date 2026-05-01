@@ -1,0 +1,19 @@
+memchr found: l
+memchr null: 1
+strncat: hello world
+strspn: 3
+strspn none: 0
+strcspn: 5
+strcspn all: 5
+strpbrk: ,
+strpbrk null: 1
+tok: one
+tok: two
+tok: three
+strcoll eq: 0
+strcoll lt: 1
+strcoll gt: 1
+strxfrm: hello len=5
+strxfrm trunc: hel len=11
+strerror: Success
+ALL TESTS PASSED

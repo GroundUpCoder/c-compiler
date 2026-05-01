@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/control_flow/goto/error_undefined_label/error_undefined_label.c.
+tests/unit/core/control_flow/goto/error_undefined_label/error_undefined_label.c:5: error: Undefined label 'nowhere'

@@ -1,0 +1,6 @@
+=== Hello from x01.c ===
+123
+After someFunc:
+248
+Address of struct variable:
+65520

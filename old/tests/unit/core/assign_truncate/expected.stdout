@@ -1,0 +1,4 @@
+g_uc = 0x34
+g_us = 0x5678
+result = 65535
+us via ui = 65535

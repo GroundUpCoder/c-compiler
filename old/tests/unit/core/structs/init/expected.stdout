@@ -1,0 +1,11 @@
+gp: 10 20
+pts[0]: 100 200
+pts[1]: 300 400
+partial: 42 0
+tripartial: 1 2 0
+empty: 0 0
+lp: 5 6
+lpts[0]: 11 22
+lpts[1]: 33 44
+lpartial: 99 0
+lempty: 0 0

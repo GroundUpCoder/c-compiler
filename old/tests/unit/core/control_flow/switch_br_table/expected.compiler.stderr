@@ -1,0 +1,7 @@
+tests/unit/core/control_flow/switch_br_table/switch_br_table.c:5: switch: br_table
+tests/unit/core/control_flow/switch_br_table/switch_br_table.c:16: switch: br_table
+tests/unit/core/control_flow/switch_br_table/switch_br_table.c:28: switch: br_table
+tests/unit/core/control_flow/switch_br_table/switch_br_table.c:39: switch: br_table
+tests/unit/core/control_flow/switch_br_table/switch_br_table.c:49: switch: br_table
+tests/unit/core/control_flow/switch_br_table/switch_br_table.c:59: switch: br_if
+__string.c:180: switch: br_table

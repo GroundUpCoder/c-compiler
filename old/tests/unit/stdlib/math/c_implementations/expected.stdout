@@ -1,0 +1,63 @@
+round(2.3) = 2.000000
+round(2.7) = 3.000000
+round(-2.3) = -2.000000
+round(-2.7) = -3.000000
+round(0.5) = 1.000000
+round(-0.5) = -1.000000
+round(2.5) = 3.000000
+round(-2.5) = -3.000000
+round(0.5-1e-16)==0: 1
+round(-0.5+1e-16)==0: 1
+round(3.0) = 3.000000
+round(0.0) = 0.000000
+roundf(2.5) = 3.000000
+roundf(-2.5) = -3.000000
+fdim(5.0,3.0) = 2.000000
+fdim(3.0,5.0) = 0.000000
+fdim(-3.0,-5.0) = 2.000000
+fdim(5.0,5.0) = 0.000000
+fdimf(5.0,3.0) = 2.000000
+lround(2.5) = 3
+lround(-2.5) = -3
+lrint(2.5) = 2
+lrint(3.5) = 4
+lrint(-0.7) = -1
+nextafter(1,2)>1: 1
+nextafter(1,0)<1: 1
+nextafter(1,1)==1: 1
+nextafter(0,1)>0: 1
+nextafter(0,-1)<0: 1
+nextafter(tiny,-1)==0: 1
+nextafter(ntiny,1)==0: 1
+nextafter(-1,-2)<-1: 1
+nextafter(-1,0)>-1: 1
+nextafterf(1,2)>1: 1
+nextafterf(0,1)>0: 1
+frexp(1.0) = 0.500000 * 2^1
+frexp(3.0) = 0.750000 * 2^2
+frexp(-6.0) = -0.750000 * 2^3
+frexp(0.25) = 0.500000 * 2^-1
+frexp(0.0) = 0.000000 * 2^0
+frexp(subnormal): m=0.500000 exp=-1073
+frexp roundtrip 8.0: 1
+frexp roundtrip 0.1: 1
+frexp roundtrip -100: 1
+ilogb(1.0) = 0
+ilogb(2.0) = 1
+ilogb(3.0) = 1
+ilogb(0.5) = -1
+ilogb(1024.0) = 10
+ilogb(-7.0) = 2
+ilogb(subnormal) = -1074
+logb(1.0) = 0.000000
+logb(2.0) = 1.000000
+logb(0.5) = -1.000000
+logb(1024.0) = 10.000000
+logb(-7.0) = 2.000000
+logb(subnormal) = -1074.000000
+modf(3.75) = 3.000000 + 0.750000
+modf(-3.75) = -3.000000 + -0.750000
+modf(7.0) = 7.000000 + 0.000000
+modf(0.25) = 0.000000 + 0.250000
+modf(0.0) = 0.000000 + 0.000000
+modf roundtrip: 1

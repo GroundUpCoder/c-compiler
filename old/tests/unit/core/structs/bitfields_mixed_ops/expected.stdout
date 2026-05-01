@@ -1,0 +1,13 @@
+sub_assign=7
+mul_assign=10
+and_assign=6
+xor_assign=15
+shr_assign=2
+shl_assign=12
+a=5 b_intact=13
+interleaved a=6 b=7
+arrow_compound=9
+expr_result=10
+cond_a=0 cond_b=1
+assign_ret=12 field=12
+compound_ret=8 field=8

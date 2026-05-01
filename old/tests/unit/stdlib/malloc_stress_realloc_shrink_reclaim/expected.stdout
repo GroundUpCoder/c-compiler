@@ -1,0 +1,5 @@
+NOTE: pool grew after shrink+realloc (4360 -> 8496). Shrink didn't reclaim.
+realloc shrink: PASS
+shrink cycle waste: PASS
+step shrink preserve: PASS
+ALL TESTS PASSED

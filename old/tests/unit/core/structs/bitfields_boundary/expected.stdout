@@ -1,0 +1,17 @@
+sizeof_AtBoundary=4
+ab_raw=0xffffffff
+ab_a=0x7fffffff ab_b=1
+sizeof_Overflow=8
+ov_unit0=0x55555555 ov_unit1=0x3
+ov_a=0x55555555 ov_b=3
+sizeof_ZeroSplit=8
+zs_unit0=0xab zs_unit1=0xcd
+sizeof_ZeroFirst=4
+zf_raw=0x9
+sizeof_MultiAnon=4
+ma_raw=0x203
+ma_a=3 ma_b=2
+pair_after_lo=0xdead1234
+pair_after_hi=0x56781234
+pair_lo=0x1234 pair_hi=0x5678
+final_lo=99 final_hi=693

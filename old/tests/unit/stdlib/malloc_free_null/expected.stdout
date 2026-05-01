@@ -1,0 +1,4 @@
+free(NULL) succeeded
+multiple free(NULL) succeeded
+normal malloc/free succeeded
+ALL TESTS PASSED

@@ -1,0 +1,1 @@
+tests/unit/core/control_flow/goto/error_loop_scope_closed/error_loop_scope_closed.c:9: goto 'loop': target label not in scope (in function 'main') (label may be in a nested block, or a loop label's scope was closed by a forward label)

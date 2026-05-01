@@ -1,0 +1,34 @@
+atoi("42"): 42
+atoi("-7"): -7
+atol("100"): 100
+atoll("123456789012345"): 123456789012345
+atoll("-99"): -99
+strtol("0xFF", 0): 255
+strtol("-2147483648", 10): -2147483648, errno=0
+strtol overflow: 2147483647, errno=34
+strtol underflow: -2147483648, errno=34
+strtoul("4294967295", 10): 4294967295
+strtoul("0777", 0): 511
+strtoul("-1", 10): 4294967295, errno=0
+strtoul overflow: 4294967295, errno=34
+strtoll("0x1A", 0): 26
+strtoll("-100", 10): -100
+strtoll("7FFFFFFFFFFFFFFF", 16): 9223372036854775807
+strtoll overflow: 9223372036854775807, errno=34
+strtoll underflow: -9223372036854775808, errno=34
+strtoull("18446744073709551615", 10): 18446744073709551615
+strtoull("FF", 16): 255
+strtoull("-1", 10): 18446744073709551615, errno=0
+strtoull overflow: 18446744073709551615, errno=34
+endptr: 'abc'
+no digits endptr: '  xyz'
+strtof("3.14"): 3.14
+strtold("2.718"): 2.718
+llabs(-42): 42
+llabs(100): 100
+lldiv(100,7): quot=14 rem=2
+lldiv(-100,3): quot=-33 rem=-1
+imaxabs(-999): 999
+imaxdiv(200,11): quot=18 rem=2
+strtoimax("-1234567890123", 10): -1234567890123
+strtoumax("FFFFFFFF", 16): 4294967295

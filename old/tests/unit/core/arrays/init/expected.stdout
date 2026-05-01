@@ -1,0 +1,33 @@
+=== Basic array init ===
+10
+30
+4
+0
+200
+7
+=== Expressions and partial init ===
+100
+0
+0
+2
+4
+6
+16
+60
+42
+=== Element sizes ===
+72
+105
+33
+0
+100
+400
+65
+67
+2000
+=== Local partial init ===
+1
+2
+0
+0
+0

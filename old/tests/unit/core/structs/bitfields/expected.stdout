@@ -1,0 +1,11 @@
+a=5 b=17 c=1
+a_overflow=7
+x=-3 y=-1
+x=7 y=3
+regular=42 bf1=9 bf2=6 another=100
+sizeof_ZeroWidth=8
+zw_a=5 zw_b=3
+compound_add=5
+compound_or=11
+anon_a=7 anon_b=5
+arrow_a=6 arrow_b=20

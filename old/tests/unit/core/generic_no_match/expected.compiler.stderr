@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/generic_no_match/generic_no_match.c.
+tests/unit/core/generic_no_match/generic_no_match.c:3: error: _Generic: no matching type and no 'default' association

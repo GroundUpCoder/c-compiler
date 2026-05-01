@@ -1,0 +1,7 @@
+addr_of_subscript: 40
+rvalue_subscript: 300
+ptr_add: 500
+ptr_add_assign: 600
+ptr_sub_assign: 600
+hashmod: 30
+PASS

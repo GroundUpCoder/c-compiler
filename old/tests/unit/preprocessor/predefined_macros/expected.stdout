@@ -1,0 +1,8 @@
+__wasm__ defined
+__wasm32__ defined
+__ILP32__ defined
+little endian
+__LITTLE_ENDIAN__ defined
+all __SIZEOF_*__ macros correct
+__STDC__ = 1
+__STDC_VERSION__ = 201112

@@ -1,0 +1,2 @@
+ea->d_name after readdir(db): alpha.txt (expected alpha.txt)
+buffer independent: 1

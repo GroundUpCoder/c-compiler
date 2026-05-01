@@ -1,0 +1,7 @@
+io ok
+str ok
+size_t ok 4
+helper 99
+int32 1
+char_bit 8
+malloc ok

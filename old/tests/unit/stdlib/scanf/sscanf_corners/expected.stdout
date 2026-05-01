@@ -1,0 +1,38 @@
+partial: r=1 a=42 b=-1
+exhaust: r=1 a=42 b=-1
+ws_only: r=-1 a=-1
+c_noskip: r=1 c=' '
+c_width: r=1 c='ABC'
+c_short: r=-1
+sp_c: r=1 c='X'
+s_width: r=1 s='abc'
+scanset: r=1 s='hello'
+neg_set: r=1 s='hello'
+bracket: r=1 s=']]]'
+neg_brk: r=1 s='hello'
+set_w: r=1 s='aaa'
+set_fail: r=0 a=99
+literal: r=1 a=42
+lit_fail: r=0 a=-1
+ws_types: r=2 a=1 b=2
+n_count: r=1 n=5
+n_start: r=1 n=0 a=42
+n_multi: r=2 a=12 n1=2 b=34 n2=5
+supp2: r=1 a=30
+hd: r=1 h=300
+hd_ovf: r=1 h=-25536
+x_bare: r=1 a=255
+x_upper: r=1 a=171
+d_zero: r=1 a=0
+i_zero: r=1 a=0
+d_plus: r=1 a=7
+sci: r=1 d=1500.0
+dotf: r=1 f=0.25
+negf: r=1 d=-5.0
+dw_pair: r=2 a=12 b=345
+no_conv: r=0
+no_conv2: r=0
+pct_fail: r=1 a=100
+set2: r=2 s1='abc' s2='123'
+set_hyp: r=1 s='a-b-c'
+o_neg: r=1 a=-15

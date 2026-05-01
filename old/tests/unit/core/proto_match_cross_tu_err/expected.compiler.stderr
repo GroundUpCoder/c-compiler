@@ -1,0 +1,4 @@
+Got 1 link errors.
+Link error: conflicting types for 'foo' ('(double)double' vs '(int)int')
+  at tests/unit/core/proto_match_cross_tu_err/helper.c:1
+  at tests/unit/core/proto_match_cross_tu_err/main.c:2

@@ -1,0 +1,4 @@
+both_runtime: 10 20
+mixed: 99 10
+head.next->val: 1
+list_sum: 60

@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/fam_not_last/fam_not_last.c.
+tests/unit/core/structs/fam_not_last/fam_not_last.c:5: error: flexible array member must be the last member of a struct

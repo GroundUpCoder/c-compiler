@@ -1,0 +1,11 @@
+wrote 17 bytes
+read 17 bytes: Hello, POSIX fd!
+lseek SET 0 -> 0
+after SET read: Hello
+lseek CUR 2 -> 7
+lseek END 0 -> 17
+direct write ok
+open nonexistent -> -1
+errno = 2 (ENOENT = 2)
+close bad fd -> -1
+errno = 9 (EBADF = 9)

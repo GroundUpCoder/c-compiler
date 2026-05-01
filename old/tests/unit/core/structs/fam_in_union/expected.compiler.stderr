@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/fam_in_union/fam_in_union.c.
+tests/unit/core/structs/fam_in_union/fam_in_union.c:5: error: flexible array member not allowed in a union

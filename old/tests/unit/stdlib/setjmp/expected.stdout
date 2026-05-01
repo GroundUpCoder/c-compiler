@@ -1,0 +1,17 @@
+pattern A: try catch
+pattern B: try catch
+cross-function: about to longjmp with value 42
+caught
+no longjmp: did not fail
+done
+value test: caught longjmp
+nested: inner try inner catch outer continues
+nested outer catch: outer caught
+multi setjmp: both try inner catch after inner outer catch
+deep: deep1 deep2 deep3 caught
+pattern B return: try catch
+ne pattern: try catch
+struct jmpbuf: error=42
+loop: caught 3 times
+chained: inner=42 outer=99
+throw-to-base: base=77

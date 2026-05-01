@@ -1,0 +1,13 @@
+=== Struct in struct ===
+o.x = 1 (expect 1)
+o.inner.a = 2 (expect 2)
+o.inner.b = 3 (expect 3)
+o.y = 4 (expect 4)
+=== Array in struct (simple) ===
+sa.arr[0] = 42
+=== Array in struct (full) ===
+s.x = 10 (expect 10)
+s.arr[0] = 100 (expect 100)
+s.arr[1] = 200 (expect 200)
+s.arr[2] = 300 (expect 300)
+s.y = 20 (expect 20)

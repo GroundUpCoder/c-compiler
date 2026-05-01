@@ -1,0 +1,18 @@
+int: r=2 a=42 b=17
+hex: r=1 a=255
+oct: r=1 a=63
+%i dec: r=1 a=99
+%i hex: r=1 a=26
+%i oct: r=1 a=8
+str: r=1 s='hello'
+float: r=1 f=3.14
+double: r=1 d=2.718
+char: r=1 c='A'
+%n: r=1 a=123 n=3
+%%: r=1 a=100
+width: r=1 a=123
+suppress: r=1 a=20
+neg: r=1 a=-42
+multi: r=3 a=7 s='hello' f=1.5
+empty: r=-1
+unsigned: r=1 u=4000000000

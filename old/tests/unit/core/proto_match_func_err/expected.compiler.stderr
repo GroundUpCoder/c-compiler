@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/proto_match_func_err/proto_match_func_err.c.
+tests/unit/core/proto_match_func_err/proto_match_func_err.c:3: error: conflicting types for 'foo' (previously declared as '(int)int', now declared as '(double)int')

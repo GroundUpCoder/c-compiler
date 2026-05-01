@@ -1,0 +1,9 @@
+copy: x=100 y=200 z=300
+orig_x=999 copy_x=100
+assigned: x=100 y=200 z=300
+after_set_x: x=42 y=200 z=300
+arr[0]: x=1 y=2 z=3
+arr[1]: x=10 y=20 z=30
+arr[2]: x=100 y=200 z=300
+outer: id=42 tail=99
+inner: x=7 y=8 z=9
