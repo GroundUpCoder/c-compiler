@@ -11362,8 +11362,13 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
 }
   `,
   "externref.h": `
-#ifndef _EXTERNREF_H
-#define _EXTERNREF_H
+#include <guc.h>
+  `,
+  "guc.h": `
+#ifndef _GUC_H
+#define _GUC_H
+
+__require_source("__guc.c");
 
 __import("js", "__jsstr")
 __externref __jsstr(const char *s);
@@ -11380,16 +11385,12 @@ void __jslog(__externref val);
 __import("js", "__jsglobal")
 __externref __jsglobal(void);
 
-#endif
-  `,
-  "guc.h": `
-#ifndef _GUC_H
-#define _GUC_H
+__import("js", "__jsstr_utf8len")
+int __jsstr_utf8len(__externref s);
 
-#include <externref.h>
-__require_source("__guc.c");
+__import("js", "__jsstr_read")
+int __jsstr_read(__externref s, char *buf, int maxlen, int *written);
 
-// wasm-js:string builtins (provided natively by the engine)
 __import("wasm:js-string", "length")
 int __wjs_length(__externref s);
 

@@ -47,8 +47,48 @@ void test_wjs_builtins(void) {
     printf("%d\n", __wjs_length(casted));     // 11
 }
 
+void test_jsstr_read(void) {
+    printf("=== __jsstr_read ===\n");
+
+    // Basic read — fits with room for \0
+    __externref s = __jss("hello");
+    char buf[32];
+    int written;
+    int ok = __jsstr_read(s, buf, sizeof(buf), &written);
+    printf("%d\n", ok);       // 1
+    printf("%d\n", written);  // 5
+    printf("%s\n", buf);      // hello
+
+    // Truncation — buffer too small
+    char small[3];
+    ok = __jsstr_read(s, small, sizeof(small), &written);
+    printf("%d\n", ok);       // 0
+    printf("%d\n", written);  // 3
+
+    // UTF-8 multibyte
+    __externref utf8 = __wjs_fromCodePoint(0x00E9); // é = 2 bytes in UTF-8
+    printf("%d\n", __jsstr_utf8len(utf8));           // 2
+    char ubuf[8];
+    ok = __jsstr_read(utf8, ubuf, sizeof(ubuf), &written);
+    printf("%d\n", ok);       // 1
+    printf("%d\n", written);  // 2
+
+    // Exact fit — no room for \0
+    char exact[5];
+    ok = __jsstr_read(s, exact, 5, &written);
+    printf("%d\n", ok);       // 1
+    printf("%d\n", written);  // 5
+
+    // UTF-8 length
+    __externref ascii = __jss("abc");
+    printf("%d\n", __jsstr_utf8len(ascii)); // 3
+    __externref hw = __jss("hello world");
+    printf("%d\n", __jsstr_utf8len(hw));    // 11
+}
+
 int main(void) {
     test_jss();
     test_wjs_builtins();
+    test_jsstr_read();
     return 0;
 }

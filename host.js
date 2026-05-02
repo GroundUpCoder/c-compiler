@@ -3036,6 +3036,17 @@ async function runModule({
     __jsglobal: function () {
       return globalThis;
     },
+    __jsstr_utf8len: function (str) {
+      return new TextEncoder().encode(str).length;
+    },
+    __jsstr_read: function (str, bufPtr, maxlen, writtenPtr) {
+      const memory = instance.exports.memory;
+      const buf = new Uint8Array(memory.buffer, bufPtr, maxlen);
+      const { read, written } = new TextEncoder().encodeInto(str, buf);
+      if (read === str.length && written < maxlen) buf[written] = 0;
+      new DataView(memory.buffer).setInt32(writtenPtr, written, true);
+      return (read === str.length) ? 1 : 0;
+    },
   };
 
   const instance = new WebAssembly.Instance(module, imports);

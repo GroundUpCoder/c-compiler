@@ -74,14 +74,16 @@ int len = __wjs_length(s);
 
 `__jss(const char *)` — convenience wrapper that calls `strlen` + `__jsstr2`.
 
-## Host-provided imports (module "c")
+## Host-provided imports (module "js")
 
-Declared in `externref.h`:
+All declared in `guc.h` (`externref.h` redirects to `guc.h`):
 
 | Function | Purpose |
 |----------|---------|
 | `__jsstr(const char *)` | C string → JS string (null-terminated) |
 | `__jsstr2(const char *, int)` | C string → JS string (with length) |
+| `__jsstr_utf8len(externref)` | UTF-8 byte length of a JS string |
+| `__jsstr_read(externref, char *, int, int *)` | Encode JS string to UTF-8 buffer; returns 1 if complete, 0 if truncated |
 | `__jsglobal()` | Returns `globalThis` |
 | `__jslog(externref)` | `console.log` |
 | `__jsgetattr(externref, externref)` | Property access |
