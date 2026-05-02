@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <externref.h>
+#include <guc.h>
 
 __externref g_ref;
 

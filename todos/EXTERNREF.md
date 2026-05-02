@@ -76,7 +76,7 @@ int len = __wjs_length(s);
 
 ## Host-provided imports (module "js")
 
-All declared in `guc.h` (`externref.h` redirects to `guc.h`):
+All declared in `guc.h`:
 
 | Function | Purpose |
 |----------|---------|

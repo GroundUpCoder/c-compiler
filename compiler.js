@@ -11361,9 +11361,6 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
   return -1;
 }
   `,
-  "externref.h": `
-#include <guc.h>
-  `,
   "guc.h": `
 #ifndef _GUC_H
 #define _GUC_H
