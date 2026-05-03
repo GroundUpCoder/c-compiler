@@ -103,6 +103,17 @@ typedef struct {
 } Code;
 
 typedef struct {
+    uint32_t flags;          /* 0=active mem 0, 1=passive, 2=active+memidx */
+    uint32_t mem_index;      /* only valid when flags == 2 */
+    uint32_t init_offset;    /* offset of init expr in raw bytes (active only) */
+    uint32_t init_size;      /* size of init expr in raw bytes (active only) */
+    int has_const_offset;    /* 1 if init expr was a single i32.const */
+    int32_t const_offset;    /* the constant value, if has_const_offset */
+    uint32_t data_offset;    /* offset of payload bytes in raw */
+    uint32_t data_size;      /* number of payload bytes */
+} DataSegment;
+
+typedef struct {
     uint32_t index;
     char *name;
 } NameEntry;
@@ -161,6 +172,9 @@ typedef struct {
 
     uint32_t elem_count;
     uint32_t data_count;
+
+    DataSegment *data_segments;
+    uint32_t data_segment_count;
 
     Code *codes;
     uint32_t code_count;

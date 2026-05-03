@@ -1275,6 +1275,20 @@ function renderModuleOverview(tab) {
   }
   html += '</div></details>';
 
+  if (json.types && json.types.length > 0) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Types</span>';
+    html += '<span class="fn-meta">' + json.types.length + ' entries</span>';
+    html += '</summary><div class="meta-section">';
+    for (var ti = 0; ti < json.types.length; ti++) {
+      var t = json.types[ti];
+      var sig = '(' + (t.params || []).join(', ') + ') -> ' +
+                ((t.results || []).length === 0 ? 'void' : t.results.join(', '));
+      html += '<div class="meta-row">[' + t.index + '] <span class="kind">' + esc(sig) + '</span></div>';
+    }
+    html += '</div></details>';
+  }
+
   if (json.imports.length > 0) {
     html += '<details class="section-group"><summary>';
     html += '<span class="fn-name">Imports</span>';
@@ -1319,6 +1333,46 @@ function renderModuleOverview(tab) {
     html += '</div></details>';
   }
 
+  if (json.tables && json.tables.length > 0) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Tables</span>';
+    html += '<span class="fn-meta">' + json.tables.length + ' entries</span>';
+    html += '</summary><div class="meta-section">';
+    for (var tbi = 0; tbi < json.tables.length; tbi++) {
+      var tb = json.tables[tbi];
+      html += '<div class="meta-row">[' + tb.index + '] <span class="kind">' + tb.elem_type + '</span> ';
+      html += 'initial=' + tb.initial;
+      if (tb.maximum !== undefined) html += ' max=' + tb.maximum;
+      html += '</div>';
+    }
+    html += '</div></details>';
+  }
+
+  if (json.memories && json.memories.length > 0) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Memories</span>';
+    html += '<span class="fn-meta">' + json.memories.length + ' entries</span>';
+    html += '</summary><div class="meta-section">';
+    for (var mi = 0; mi < json.memories.length; mi++) {
+      var m = json.memories[mi];
+      html += '<div class="meta-row">[' + m.index + '] initial=' + m.initial + ' page' + (m.initial === 1 ? '' : 's');
+      if (m.maximum !== undefined) html += ' max=' + m.maximum;
+      html += '</div>';
+    }
+    html += '</div></details>';
+  }
+
+  if (json.start) {
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Start</span>';
+    html += '<span class="fn-meta">func[' + json.start.func_index + ']' + (json.start.name ? ' ' + json.start.name : '') + '</span>';
+    html += '</summary><div class="meta-section">';
+    html += '<div class="meta-row fn-row" data-fn-index="' + json.start.func_index + '">';
+    html += '<span class="kind">func</span> [' + json.start.func_index + ']';
+    if (json.start.name) html += ' <span class="name">' + esc(json.start.name) + '</span>';
+    html += '</div></div></details>';
+  }
+
   if (json.code.length > 0) {
     var totalInsns = json.code.reduce(function(s, f) { return s + f.instructions.length; }, 0);
     html += '<details class="section-group" open><summary>';
@@ -1334,6 +1388,43 @@ function renderModuleOverview(tab) {
       html += '<span class="fn-name">' + esc(name) + '</span>';
       html += '<span class="fn-sig">' + esc(sig) + '</span>';
       html += '<span class="fn-meta">' + nInsns + ' insns, ' + fn.body_size + ' bytes</span>';
+      html += '</div>';
+    }
+    html += '</div></details>';
+  }
+
+  if (json.data && json.data.length > 0) {
+    var totalDataBytes = json.data.reduce(function(s, d) { return s + d.data_size; }, 0);
+    html += '<details class="section-group"><summary>';
+    html += '<span class="fn-name">Data</span>';
+    html += '<span class="fn-meta">' + json.data.length + ' segments, ' + totalDataBytes + ' bytes</span>';
+    html += '</summary><div class="meta-section">';
+    for (var di = 0; di < json.data.length; di++) {
+      var d = json.data[di];
+      html += '<div class="meta-row">[' + d.index + '] <span class="kind">' + d.mode + '</span>';
+      if (d.mode === 'active') {
+        html += ' mem=' + d.memory;
+        if (d.offset !== undefined) html += ' offset=0x' + (d.offset >>> 0).toString(16);
+      }
+      html += ' size=' + d.data_size;
+      html += ' @0x' + d.data_offset.toString(16);
+      if (d.preview && d.preview.length > 0) {
+        var hex = '';
+        for (var pi = 0; pi < d.preview.length; pi++) {
+          if (pi) hex += ' ';
+          var b = d.preview[pi];
+          hex += (b < 16 ? '0' : '') + b.toString(16);
+        }
+        var ascii = '';
+        for (var ai = 0; ai < d.preview.length; ai++) {
+          var bb = d.preview[ai];
+          ascii += (bb >= 32 && bb < 127) ? String.fromCharCode(bb) : '.';
+        }
+        html += '<div style="margin-left:24px;color:var(--subtext);font-size:11px">';
+        html += esc(hex) + (d.data_size > d.preview.length ? ' …' : '');
+        html += '<br>"' + esc(ascii) + '"' + (d.data_size > d.preview.length ? ' …' : '');
+        html += '</div>';
+      }
       html += '</div>';
     }
     html += '</div></details>';

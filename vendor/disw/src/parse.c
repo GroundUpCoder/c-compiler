@@ -379,9 +379,66 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
             mod->elem_count = read_leb_u32(&r);
             break;
 
-        case SEC_DATA:
+        case SEC_DATA: {
             mod->data_count = read_leb_u32(&r);
+            mod->data_segment_count = mod->data_count;
+            mod->data_segments = mod->data_count ? calloc(mod->data_count, sizeof(DataSegment)) : NULL;
+            for (j = 0; j < mod->data_count; j++) {
+                DataSegment *ds = &mod->data_segments[j];
+                ds->flags = read_leb_u32(&r);
+                if (ds->flags == 0) {
+                    ds->init_offset = (uint32_t)r.pos;
+                    /* Try to recognize i32.const N end (0x41 <leb> 0x0B) */
+                    if (r.pos + 1 < r.size && r.data[r.pos] == 0x41) {
+                        size_t saved = r.pos;
+                        read_byte(&r);
+                        ds->const_offset = read_leb_i32(&r);
+                        if (r.pos < r.size && r.data[r.pos] == 0x0B) {
+                            ds->has_const_offset = 1;
+                            read_byte(&r);
+                        } else {
+                            r.pos = saved;
+                            skip_init_expr(&r);
+                        }
+                    } else {
+                        skip_init_expr(&r);
+                    }
+                    ds->init_size = (uint32_t)r.pos - ds->init_offset;
+                    ds->data_size = read_leb_u32(&r);
+                    ds->data_offset = (uint32_t)r.pos;
+                    reader_skip(&r, ds->data_size);
+                } else if (ds->flags == 1) {
+                    ds->data_size = read_leb_u32(&r);
+                    ds->data_offset = (uint32_t)r.pos;
+                    reader_skip(&r, ds->data_size);
+                } else if (ds->flags == 2) {
+                    ds->mem_index = read_leb_u32(&r);
+                    ds->init_offset = (uint32_t)r.pos;
+                    if (r.pos + 1 < r.size && r.data[r.pos] == 0x41) {
+                        size_t saved = r.pos;
+                        read_byte(&r);
+                        ds->const_offset = read_leb_i32(&r);
+                        if (r.pos < r.size && r.data[r.pos] == 0x0B) {
+                            ds->has_const_offset = 1;
+                            read_byte(&r);
+                        } else {
+                            r.pos = saved;
+                            skip_init_expr(&r);
+                        }
+                    } else {
+                        skip_init_expr(&r);
+                    }
+                    ds->init_size = (uint32_t)r.pos - ds->init_offset;
+                    ds->data_size = read_leb_u32(&r);
+                    ds->data_offset = (uint32_t)r.pos;
+                    reader_skip(&r, ds->data_size);
+                } else {
+                    /* unknown flag — bail on this section */
+                    break;
+                }
+            }
             break;
+        }
 
         case SEC_DATACOUNT:
             mod->data_count = read_leb_u32(&r);
@@ -475,6 +532,7 @@ void wasm_free(WasmModule *mod) {
     for (i = 0; i < mod->names.global_name_count; i++)
         free(mod->names.global_names[i].name);
     free(mod->names.global_names);
+    free(mod->data_segments);
     for (i = 0; i < mod->section_count; i++)
         free(mod->sections[i].custom_name);
     free(mod->sections);

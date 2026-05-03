@@ -1042,5 +1042,28 @@ void print_json(const WasmModule *mod) {
     }
     use_buf = 0;
     cur_mod = NULL;
+    printf("]");
+
+    /* data segments */
+    printf(",\"data\":[");
+    for (i = 0; i < mod->data_segment_count; i++) {
+        const DataSegment *ds = &mod->data_segments[i];
+        const char *mode = ds->flags == 1 ? "passive" : "active";
+        uint32_t preview_len = ds->data_size < 32 ? ds->data_size : 32;
+        uint32_t k;
+        if (i) printf(",");
+        printf("{\"index\":%u,\"mode\":\"%s\"", i, mode);
+        if (ds->flags != 1) {
+            printf(",\"memory\":%u", ds->flags == 2 ? ds->mem_index : 0);
+            if (ds->has_const_offset) printf(",\"offset\":%d", ds->const_offset);
+        }
+        printf(",\"data_offset\":%u,\"data_size\":%u", ds->data_offset, ds->data_size);
+        printf(",\"preview\":[");
+        for (k = 0; k < preview_len; k++) {
+            if (k) printf(",");
+            printf("%u", mod->raw[ds->data_offset + k]);
+        }
+        printf("]}");
+    }
     printf("]}\n");
 }
