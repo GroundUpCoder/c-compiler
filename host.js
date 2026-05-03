@@ -3018,35 +3018,33 @@ async function runModule({
   imports[ENV_KEY].fs_net_set_pwd = function () {};
   imports[ENV_KEY].block_device_init_http = function () { return 0; };
 
-  imports["js"] = {
-    __jsstr: function (ptr) {
-      return readString(ptr);
-    },
-    __jsstr2: function (ptr, len) {
-      const memory = instance.exports.memory;
-      const bytes = new Uint8Array(memory.buffer, ptr, len);
-      return new TextDecoder().decode(bytes);
-    },
-    __jsgetattr: function (obj, key) {
-      return obj[key];
-    },
-    __jslog: function (val) {
-      console.log(val);
-    },
-    __jsglobal: function () {
-      return globalThis;
-    },
-    __jsstr_utf8len: function (str) {
-      return new TextEncoder().encode(str).length;
-    },
-    __jsstr_read: function (str, bufPtr, maxlen, writtenPtr) {
-      const memory = instance.exports.memory;
-      const buf = new Uint8Array(memory.buffer, bufPtr, maxlen);
-      const { read, written } = new TextEncoder().encodeInto(str, buf);
-      if (read === str.length && written < maxlen) buf[written] = 0;
-      new DataView(memory.buffer).setInt32(writtenPtr, written, true);
-      return (read === str.length) ? 1 : 0;
-    },
+  imports[ENV_KEY].__jsstr = function (ptr) {
+    return readString(ptr);
+  };
+  imports[ENV_KEY].__jsstr2 = function (ptr, len) {
+    const memory = instance.exports.memory;
+    const bytes = new Uint8Array(memory.buffer, ptr, len);
+    return new TextDecoder().decode(bytes);
+  };
+  imports[ENV_KEY].__jsgetattr = function (obj, key) {
+    return obj[key];
+  };
+  imports[ENV_KEY].__jslog = function (val) {
+    console.log(val);
+  };
+  imports[ENV_KEY].__jsglobal = function () {
+    return globalThis;
+  };
+  imports[ENV_KEY].__jsstr_utf8len = function (str) {
+    return new TextEncoder().encode(str).length;
+  };
+  imports[ENV_KEY].__jsstr_read = function (str, bufPtr, maxlen, writtenPtr) {
+    const memory = instance.exports.memory;
+    const buf = new Uint8Array(memory.buffer, bufPtr, maxlen);
+    const { read, written } = new TextEncoder().encodeInto(str, buf);
+    if (read === str.length && written < maxlen) buf[written] = 0;
+    new DataView(memory.buffer).setInt32(writtenPtr, written, true);
+    return (read === str.length) ? 1 : 0;
   };
 
   const instance = new WebAssembly.Instance(module, imports);

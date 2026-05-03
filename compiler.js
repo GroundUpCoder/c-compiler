@@ -11367,25 +11367,25 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
 
 __require_source("__guc.c");
 
-__import("js", "__jsstr")
+__import("c", "__jsstr")
 __externref __jsstr(const char *s);
 
-__import("js", "__jsstr2")
+__import("c", "__jsstr2")
 __externref __jsstr2(const char *s, int len);
 
-__import("js", "__jsgetattr")
+__import("c", "__jsgetattr")
 __externref __jsgetattr(__externref obj, __externref key);
 
-__import("js", "__jslog")
+__import("c", "__jslog")
 void __jslog(__externref val);
 
-__import("js", "__jsglobal")
+__import("c", "__jsglobal")
 __externref __jsglobal(void);
 
-__import("js", "__jsstr_utf8len")
+__import("c", "__jsstr_utf8len")
 int __jsstr_utf8len(__externref s);
 
-__import("js", "__jsstr_read")
+__import("c", "__jsstr_read")
 int __jsstr_read(__externref s, char *buf, int maxlen, int *written);
 
 __import("wasm:js-string", "length")
