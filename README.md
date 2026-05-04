@@ -192,14 +192,35 @@ Refs can be used in boolean / null contexts as sugar for the explicit intrinsics
 
 Both forms are valid; pick per IDE-friendliness vs source readability.
 
+### Universal `__eqref` + `__cast`
+
+`__eqref` is the GC-universe supertype of all reference types (struct, array, boxed primitives) — analogous to `void *` for the GC heap. `__cast(TargetType, expr)` is the universal conversion intrinsic that dispatches based on the source/target type combo:
+
+```c
+__eqref store = __cast(__eqref, 42);          // box int — auto-allocs an internal box struct
+int v = __cast(int, store);                   // unbox
+
+__struct Point *p = __new(__struct Point *, 7, 11);
+__eqref ep = __cast(__eqref, p);              // upcast (no-op)
+__struct Point *p2 = __cast(__struct Point *, ep);  // downcast (ref.cast, traps on mismatch)
+
+// Discriminated union
+if (__ref_test(__struct Point *, store)) { ... }
+else if (__ref_test(__struct Color *, store)) { ... }
+```
+
+Supported `__cast(target, source)` combos: prim ↔ prim (numeric), prim ↔ `__eqref` (box/unbox), GC ref ↔ `__eqref` (subtype upcast / ref.cast downcast), GC ref → GC ref (downcast/sidecast), GC ref ↔ externref (extern bridges).
+
+`==` works directly between two `__eqref` values (identity comparison via `ref.eq`).
+
 ### Extern bridge
 
-GC refs cross the JS/Wasm boundary via `__anyref` + the extern conversions:
+GC refs cross the JS/Wasm boundary via `__eqref` + the extern conversions:
 
 | Intrinsic | Description |
 |---|---|
 | `__ref_as_extern(ref)` | GC ref → externref (`extern.convert_any`) |
-| `__ref_as_any(ext)` | externref → anyref (`any.convert_extern`) |
+| `__ref_as_eq(ext)` | externref → eqref (`any.convert_extern` + `ref.cast eq`; traps if not eq-compatible) |
 
 ### Auto + GC
 

@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_cast_unsupported/main.c.
+tests/unit/gc/err_cast_unsupported/main.c:2: error: __cast: no conversion defined from 'int' to 'externref'

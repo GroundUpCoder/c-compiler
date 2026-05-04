@@ -1,0 +1,20 @@
+=== box/unbox ===
+int: 42
+float: 3.14
+double: 3.14
+longlong: 1234567890123
+box identity: 0
+box ints equal: 1
+=== gc ref via anyref ===
+recovered: 7 11
+identity: 1
+=== discriminated union ===
+primitive
+point: (1,2)
+color: (255,128,0)
+primitive
+=== extern bridge ===
+round-trip: 5 10
+identity preserved: 1
+=== numeric ===
+3 5 42

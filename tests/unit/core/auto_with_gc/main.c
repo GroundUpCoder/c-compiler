@@ -51,7 +51,7 @@ int main(void) {
   // anyref / extern bridge with auto
   auto ext = __ref_as_extern(p);
   printf("ext null: %d\n", ext == 0);
-  auto any = __ref_as_any(ext);
+  auto any = __ref_as_eq(ext);
   printf("any is Point: %d\n", __ref_test(__struct Point *, any));
 
   return 0;

@@ -116,9 +116,10 @@ const Keyword = Object.freeze({
   X_REF_CAST: "__ref_cast",
   X_ARRAY_FILL: "__array_fill",
   X_ARRAY_COPY: "__array_copy",
-  X_ANYREF: "__anyref",
+  X_EQREF: "__eqref",
   X_REF_AS_EXTERN: "__ref_as_extern",
-  X_REF_AS_ANY: "__ref_as_any",
+  X_REF_AS_EQ: "__ref_as_eq",
+  X_CAST: "__cast",
 });
 
 // Punctuation
@@ -847,9 +848,10 @@ const KEYWORD_MAP = new Map([
   ["__ref_cast", Keyword.X_REF_CAST],
   ["__array_fill", Keyword.X_ARRAY_FILL],
   ["__array_copy", Keyword.X_ARRAY_COPY],
-  ["__anyref", Keyword.X_ANYREF],
+  ["__eqref", Keyword.X_EQREF],
   ["__ref_as_extern", Keyword.X_REF_AS_EXTERN],
-  ["__ref_as_any", Keyword.X_REF_AS_ANY],
+  ["__ref_as_eq", Keyword.X_REF_AS_EQ],
+  ["__cast", Keyword.X_CAST],
   ["__attribute__", Keyword.X_ATTRIBUTE],
   ["__attribute", Keyword.X_ATTRIBUTE],
 ]);
@@ -1901,7 +1903,7 @@ const TypeKind = Object.freeze({
   POINTER: "pointer", ARRAY: "array", FUNCTION: "function",
   TAG: "tag", EXTERNREF: "externref", REFEXTERN: "refextern",
   GC_STRUCT: "gc_struct", GC_ARRAY: "gc_array",
-  ANYREF: "anyref",
+  EQREF: "eqref",
   AUTO: "auto",  // C23 type-inference sentinel (set during parse, resolved at init)
 });
 
@@ -1955,7 +1957,8 @@ const IntrinsicKind = Object.freeze({
   REF_IS_NULL: "ref_is_null", REF_EQ: "ref_eq", REF_NULL: "ref_null",
   REF_TEST: "ref_test", REF_CAST: "ref_cast", ARRAY_LEN: "array_len", GC_NEW_ARRAY: "gc_new_array",
   ARRAY_FILL: "array_fill", ARRAY_COPY: "array_copy",
-  REF_AS_EXTERN: "ref_as_extern", REF_AS_ANY: "ref_as_any",
+  REF_AS_EXTERN: "ref_as_extern", REF_AS_EQ: "ref_as_eq",
+  CAST: "cast",
 });
 
 const BopStr = Object.freeze({
@@ -2020,8 +2023,8 @@ class TypeInfo {
       out += "__struct " + this.tagName;
     } else if (this.kind === TypeKind.GC_ARRAY) {
       out += "__array(" + this.baseType.toString() + ")";
-    } else if (this.kind === TypeKind.ANYREF) {
-      out += "__anyref";
+    } else if (this.kind === TypeKind.EQREF) {
+      out += "__eqref";
     } else if (this.kind === TypeKind.FUNCTION) {
       out += "(";
       if (this.paramTypes) {
@@ -2042,7 +2045,7 @@ class TypeInfo {
     // form for IDE friendliness (clang accepts `struct Foo *`) without
     // changing the underlying WASM type.
     if (this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
-        this.kind === TypeKind.ANYREF) {
+        this.kind === TypeKind.EQREF) {
       return this;
     }
     if (this._pointer) return this._pointer;
@@ -2120,12 +2123,12 @@ class TypeInfo {
   isRef() {
     return this.kind === TypeKind.EXTERNREF || this.kind === TypeKind.REFEXTERN ||
         this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
-        this.kind === TypeKind.ANYREF;
+        this.kind === TypeKind.EQREF;
   }
   isGCRef() {
-    // GC universe — anyref + concrete GC types. Excludes externref/refextern.
+    // GC universe — eqref + concrete GC types. Excludes externref/refextern.
     return this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
-        this.kind === TypeKind.ANYREF;
+        this.kind === TypeKind.EQREF;
   }
   isGCStruct() { return this.kind === TypeKind.GC_STRUCT; }
   isGCArray() { return this.kind === TypeKind.GC_ARRAY; }
@@ -2229,7 +2232,7 @@ const TDOUBLE = new TypeInfo(TypeKind.DOUBLE, 8, 8, true);
 const TLDOUBLE = new TypeInfo(TypeKind.LDOUBLE, 8, 8, true);
 const TEXTERNREF = new TypeInfo(TypeKind.EXTERNREF, 0, 0, false);
 const TREFEXTERN = new TypeInfo(TypeKind.REFEXTERN, 0, 0, false);
-const TANYREF = new TypeInfo(TypeKind.ANYREF, 0, 0, true);
+const TEQREF = new TypeInfo(TypeKind.EQREF, 0, 0, true);
 const TAUTO = new TypeInfo(TypeKind.AUTO, 0, 0, false);
 
 // Type construction caches
@@ -2446,7 +2449,7 @@ return {
   ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
   TypeInfo,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TANYREF, TAUTO,
+  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
   arrayOf, functionType, getOrCreateTagType,
   getOrCreateGCStructType, gcArrayOf,
   computeStructLayout, computeUnionLayout, computeUnaryType,
@@ -3791,7 +3794,7 @@ class Parser {
         case Lexer.Keyword.X_IMPORT:
         case Lexer.Keyword.X_EXTERNREF:
         case Lexer.Keyword.X_REFEXTERN:
-        case Lexer.Keyword.X_ANYREF:
+        case Lexer.Keyword.X_EQREF:
         case Lexer.Keyword.X_STRUCT_GC:
         case Lexer.Keyword.X_ARRAY_GC:
           return true;
@@ -4020,7 +4023,7 @@ class Parser {
       if (this.matchKW(Lexer.Keyword.UNSIGNED)) { isUnsigned = true; continue; }
       if (this.matchKW(Lexer.Keyword.X_EXTERNREF)) { type = Types.TEXTERNREF; continue; }
       if (this.matchKW(Lexer.Keyword.X_REFEXTERN)) { type = Types.TREFEXTERN; continue; }
-      if (this.matchKW(Lexer.Keyword.X_ANYREF)) { type = Types.TANYREF; continue; }
+      if (this.matchKW(Lexer.Keyword.X_EQREF)) { type = Types.TEQREF; continue; }
 
       // GC struct/array (WASM GC extension)
       if (this.atKW(Lexer.Keyword.X_STRUCT_GC)) {
@@ -4838,7 +4841,7 @@ class Parser {
       const refExpr = this.parseAssignmentExpression();
       this.expect(")");
       const tq = tType.removeQualifiers();
-      if (tq === Types.TANYREF || !tq.isGCRef()) {
+      if (tq === Types.TEQREF || !tq.isGCRef()) {
         this.error(tok, `__ref_test target must be a concrete __struct or __array type, got '${tType.toString()}'`);
       }
       if (!refExpr.type.removeQualifiers().isGCRef()) {
@@ -4862,7 +4865,7 @@ class Parser {
       const refExpr = this.parseAssignmentExpression();
       this.expect(")");
       const tq = tType.removeQualifiers();
-      if (tq === Types.TANYREF || !tq.isGCRef()) {
+      if (tq === Types.TEQREF || !tq.isGCRef()) {
         this.error(tok, `__ref_cast target must be a concrete __struct or __array type, got '${tType.toString()}'`);
       }
       if (!refExpr.type.removeQualifiers().isGCRef()) {
@@ -4922,7 +4925,7 @@ class Parser {
       return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
     }
 
-    // __ref_as_extern(gc_ref) — wrap a GC-universe ref (struct/array/anyref)
+    // __ref_as_extern(gc_ref) — wrap a GC-universe ref (struct/array/eqref)
     // as an externref. Cheap retag (extern.convert_any).
     if (this.matchKW(Lexer.Keyword.X_REF_AS_EXTERN)) {
       const tok = this.peek(-1);
@@ -4930,15 +4933,15 @@ class Parser {
       const arg = this.parseAssignmentExpression();
       this.expect(")");
       if (!arg.type.removeQualifiers().isGCRef()) {
-        this.error(tok, `__ref_as_extern requires a GC-universe ref (__struct/__array/__anyref), got '${arg.type.toString()}'`);
+        this.error(tok, `__ref_as_extern requires a GC-universe ref (__struct/__array/__eqref), got '${arg.type.toString()}'`);
       }
       return new AST.EIntrinsic(Types.TEXTERNREF, Types.IntrinsicKind.REF_AS_EXTERN, [arg]);
     }
 
-    // __ref_as_any(extern_ref) — unwrap an externref to anyref. Cheap retag
-    // (any.convert_extern). Result is __anyref — use __ref_cast(T, ...) to
+    // __ref_as_any(extern_ref) — unwrap an externref to eqref. Cheap retag
+    // (any.convert_extern). Result is __eqref — use __ref_cast(T, ...) to
     // narrow to a specific GC type.
-    if (this.matchKW(Lexer.Keyword.X_REF_AS_ANY)) {
+    if (this.matchKW(Lexer.Keyword.X_REF_AS_EQ)) {
       const tok = this.peek(-1);
       this.expect("(");
       const arg = this.parseAssignmentExpression();
@@ -4947,7 +4950,52 @@ class Parser {
       if (at !== Types.TEXTERNREF && at !== Types.TREFEXTERN) {
         this.error(tok, `__ref_as_any requires an __externref/__refextern, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TANYREF, Types.IntrinsicKind.REF_AS_ANY, [arg]);
+      return new AST.EIntrinsic(Types.TEQREF, Types.IntrinsicKind.REF_AS_EQ, [arg]);
+    }
+
+    // __cast(TargetType, expr) — universal conversion. Dispatch on the
+    // (source, target) type combo at codegen time. Supports:
+    //   - prim ↔ __eqref       (auto-boxes/unboxes via internal box structs)
+    //   - GC ref ↔ __eqref     (subtype upcast / ref.cast downcast)
+    //   - GC ref → GC ref       (ref.cast — same as __ref_cast)
+    //   - GC ref ↔ __externref  (extern bridges)
+    //   - prim → prim           (numeric conversion)
+    //   - same type             (identity)
+    if (this.matchKW(Lexer.Keyword.X_CAST)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      if (!this.isTypeName()) this.error(tok, "__cast requires a target type as first arg");
+      const specs = this.parseDeclSpecifiers();
+      let tType = specs.type;
+      if (this.atText("*") || this.atText("[") || this.atText("(")) {
+        const decl = this.parseDeclarator(tType);
+        tType = decl.type;
+      }
+      this.expect(",");
+      const expr = this.parseAssignmentExpression();
+      this.expect(")");
+      const tq = tType.removeQualifiers();
+      const sq = expr.type.removeQualifiers();
+      // Validate combinations at parse time. The codegen path handles the
+      // mechanics; here we just reject combos that don't have a defined
+      // conversion (e.g. prim ↔ extern, prim → GC struct, etc.).
+      const isPrim = (t) => t.isArithmetic();
+      const isEqref = (t) => t === Types.TEQREF;
+      const isExternref = (t) => t === Types.TEXTERNREF || t === Types.TREFEXTERN;
+      const ok = (sq === tq) ||
+        (isPrim(sq) && isPrim(tq)) ||
+        (isPrim(sq) && isEqref(tq)) ||                        // box
+        (isEqref(sq) && isPrim(tq)) ||                        // unbox
+        (sq.isGCRef() && isEqref(tq)) ||                      // upcast
+        (isEqref(sq) && tq.isGCRef()) ||                      // downcast
+        (sq.isGCRef() && tq.isGCRef()) ||                      // GC sidecast/downcast
+        (sq.isGCRef() && isExternref(tq)) ||                   // GC → extern bridge
+        (isExternref(sq) && tq === Types.TEQREF);             // extern → any bridge
+      if (!ok) {
+        this.error(tok,
+          `__cast: no conversion defined from '${expr.type.toString()}' to '${tType.toString()}'`);
+      }
+      return new AST.EIntrinsic(tq, Types.IntrinsicKind.CAST, [expr], tq);
     }
 
     // __array_copy(dst, dst_off, src, src_off, count) — bulk copy between GC arrays
@@ -7247,7 +7295,7 @@ const WT_F32 = { tag: "num", num: WasmNumType.F32 };
 const WT_F64 = { tag: "num", num: WasmNumType.F64 };
 const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F, heapIsIdx: false };
 const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F, heapIsIdx: false };
-const WT_ANYREF = { tag: "ref", nullable: true, heap: 0x6E, heapIsIdx: false };
+const WT_EQREF = { tag: "ref", nullable: true, heap: 0x6D, heapIsIdx: false };
 const WT_EMPTY = { tag: "empty" };
 
 // GC ref to a defined struct/array type. heap = type index (positive integer).
@@ -7455,6 +7503,8 @@ class WasmCode {
   refEq() { this.push(0xD3); }
   refTestNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x15); lebI(this.bytes, typeIdx); }
   refCastNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x17); lebI(this.bytes, typeIdx); }
+  // ref.cast (ref null eq) — heap type encoded as the abstract `eq` byte (0x6D).
+  refCastNullEq() { this.push(0xFB); lebU(this.bytes, 0x17); this.push(0x6D); }
   // Bridges between WASM's `extern` and `any` heap-type universes. Both are
   // (near-)zero-cost retags — no copy, just a type-system cast.
   anyConvertExtern() { this.push(0xFB); lebU(this.bytes, 0x1A); }
@@ -8039,7 +8089,7 @@ function cToWasmType(type, wmod) {
   type = type.removeQualifiers();
   if (type === Types.TEXTERNREF) return WT_EXTERNREF;
   if (type === Types.TREFEXTERN) return WT_REFEXTERN;
-  if (type === Types.TANYREF) return WT_ANYREF;
+  if (type === Types.TEQREF) return WT_EQREF;
   if (type.kind === Types.TypeKind.GC_STRUCT || type.kind === Types.TypeKind.GC_ARRAY) {
     if (!wmod) throw new Error(`cToWasmType: GC type '${type.toString()}' requires wmod for registration`);
     return WT_GCREF(getOrCreateGCWasmTypeIdx(wmod, type), true);
@@ -8095,6 +8145,38 @@ function isPackedSubI32(t) {
 // Structural dedup happens BEFORE reservation — we compute the structural
 // key from already-registered deps, then check the cache. If hit, no idx
 // is reserved (no zombie typeDefs). If miss, reserve and populate.
+// Compiler-internal box struct registry. For boxing primitives into __eqref,
+// we need a dedicated GC struct type per primitive. We make the field IMMUTABLE
+// so these boxes don't structurally collide with user-defined mutable structs
+// of the same shape (preserving __ref_test discrimination).
+function getOrCreateBoxStructIdx(wmod, primWt) {
+  const fields = [{ wt: primWt, mutable: false, packed: null }];
+  const key = 'S(' + fields.map(gcStorageKey).join(',') + ')';
+  if (wmod.gcStructTypeIndices.has(key)) return wmod.gcStructTypeIndices.get(key);
+  const idx = wmod.reserveGCStructTypeId();
+  wmod.setGCStructFields(idx, fields);
+  wmod.gcStructTypeIndices.set(key, idx);
+  // Debug name based on wasm storage type.
+  const name =
+    primWt === WT_I32 ? '__Box_i32' :
+    primWt === WT_I64 ? '__Box_i64' :
+    primWt === WT_F32 ? '__Box_f32' :
+    primWt === WT_F64 ? '__Box_f64' : '__Box';
+  wmod.typeNames.push({ idx, name });
+  wmod.fieldNames.push({ typeIdx: idx, fields: [{ idx: 0, name: 'v' }] });
+  return idx;
+}
+
+// Map a numeric C type to the wasm storage type used for its box.
+function boxStorageWtFor(type) {
+  type = type.removeQualifiers();
+  if (type === Types.TFLOAT) return WT_F32;
+  if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
+  if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
+  if (type.isInteger()) return WT_I32;
+  return null;
+}
+
 function getOrCreateGCWasmTypeIdx(wmod, type) {
   type = type.removeQualifiers();
   if (type._wasmGCTypeIdx >= 0) return type._wasmGCTypeIdx;
@@ -9627,7 +9709,7 @@ class CodeGenerator {
     type = type.removeQualifiers();
     if (type === Types.TEXTERNREF) return WT_EXTERNREF;
     if (type === Types.TREFEXTERN) return WT_REFEXTERN;
-    if (type === Types.TANYREF) return WT_ANYREF;
+    if (type === Types.TEQREF) return WT_EQREF;
     if (type.kind === Types.TypeKind.GC_STRUCT || type.kind === Types.TypeKind.GC_ARRAY) {
       return WT_GCREF(getOrCreateGCWasmTypeIdx(this.wmod, type), true);
     }
@@ -10686,10 +10768,91 @@ class CodeGenerator {
             this.body.externConvertAny();
             break;
           }
-          case Types.IntrinsicKind.REF_AS_ANY: {
+          case Types.IntrinsicKind.REF_AS_EQ: {
+            // extern → any (cheap) then ref.cast to eq (traps if value isn't
+            // eq-compatible — which it should be for anything that originated
+            // inside this WASM module via __ref_as_extern).
             this.emitExpr(expr.args[0]);
             this.body.anyConvertExtern();
+            this.body.refCastNullEq();
             break;
+          }
+          case Types.IntrinsicKind.CAST: {
+            const target = expr.argType;
+            const srcType = expr.args[0].type;
+            const sq = srcType.removeQualifiers();
+            const tq = target.removeQualifiers();
+            // Identity
+            if (sq === tq) { this.emitExpr(expr.args[0]); break; }
+            const isPrim = (t) => t.isArithmetic();
+            const isEqref = (t) => t === Types.TEQREF;
+            const isExternref = (t) => t === Types.TEXTERNREF || t === Types.TREFEXTERN;
+            // prim → prim: numeric conversion
+            if (isPrim(sq) && isPrim(tq)) {
+              this.emitExpr(expr.args[0]);
+              this.emitConversion(srcType, target);
+              break;
+            }
+            // prim → __eqref: box. Push value, struct.new the box struct,
+            // then implicit upcast to eqref (free at WASM level).
+            if (isPrim(sq) && isEqref(tq)) {
+              const primWt = boxStorageWtFor(sq);
+              if (!primWt) throw new Error(`__cast: unsupported primitive '${sq.toString()}' for eqref boxing`);
+              const boxIdx = getOrCreateBoxStructIdx(this.wmod, primWt);
+              this.emitExpr(expr.args[0]);
+              this.emitConversion(srcType, sq);  // ensure value is in the box-storage shape
+              this.body.structNew(boxIdx);
+              break;
+            }
+            // __eqref → prim: unbox. ref.cast to box, struct.get field 0.
+            if (isEqref(sq) && isPrim(tq)) {
+              const primWt = boxStorageWtFor(tq);
+              if (!primWt) throw new Error(`__cast: unsupported primitive '${tq.toString()}' for eqref unboxing`);
+              const boxIdx = getOrCreateBoxStructIdx(this.wmod, primWt);
+              this.emitExpr(expr.args[0]);
+              this.body.refCastNull(boxIdx);
+              this.body.structGet(boxIdx, 0);
+              // Convert from the wasm-storage type to the precise C target type.
+              if (tq === Types.TFLOAT && primWt === WT_F32) { /* OK */ }
+              else if (tq === Types.TDOUBLE && primWt === WT_F64) { /* OK */ }
+              else if (tq === Types.TLLONG || tq === Types.TULLONG) { /* OK */ }
+              // For sub-i32 ints, the box stores i32 — narrow as needed.
+              else if (tq.isInteger() && primWt === WT_I32) {
+                this.emitConversion(Types.TINT, target);
+              }
+              break;
+            }
+            // GC ref → __eqref: implicit subtype upcast (no opcode needed).
+            if (sq.isGCRef() && isEqref(tq)) { this.emitExpr(expr.args[0]); break; }
+            // __eqref → GC ref: ref.cast.
+            if (isEqref(sq) && tq.isGCRef()) {
+              const idx = getOrCreateGCWasmTypeIdx(this.wmod, tq);
+              this.emitExpr(expr.args[0]);
+              this.body.refCastNull(idx);
+              break;
+            }
+            // GC ref → GC ref: ref.cast (same as __ref_cast).
+            if (sq.isGCRef() && tq.isGCRef()) {
+              const idx = getOrCreateGCWasmTypeIdx(this.wmod, tq);
+              this.emitExpr(expr.args[0]);
+              this.body.refCastNull(idx);
+              break;
+            }
+            // GC ref → externref: extern.convert_any.
+            if (sq.isGCRef() && isExternref(tq)) {
+              this.emitExpr(expr.args[0]);
+              this.body.externConvertAny();
+              break;
+            }
+            // externref → __eqref: any.convert_extern then ref.cast (ref null eq).
+            // The cast traps if the externref value isn't eq-compatible.
+            if (isExternref(sq) && tq === Types.TEQREF) {
+              this.emitExpr(expr.args[0]);
+              this.body.anyConvertExtern();
+              this.body.refCastNullEq();
+              break;
+            }
+            throw new Error(`__cast codegen: unhandled combo '${srcType.toString()}' → '${target.toString()}'`);
           }
           case Types.IntrinsicKind.ARRAY_COPY: {
             // [dst, dstOff, src, srcOff, n] → array.copy dstTypeIdx srcTypeIdx

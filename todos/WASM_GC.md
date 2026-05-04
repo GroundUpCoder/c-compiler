@@ -130,7 +130,44 @@ Packed field types (i8, i16) are supported for both struct fields and array elem
 | `__array_fill(...)` | `array.fill` | Bulk fill |
 | `__array_copy(...)` | `array.copy` | Bulk copy |
 | `__ref_as_extern(ref)` | `extern.convert_any` | Wrap GC ref as externref (for JS) |
-| `__ref_as_any(ext)` | `any.convert_extern` | Unwrap externref to anyref |
+| `__ref_as_eq(ext)` | `any.convert_extern` + `ref.cast eq` | Unwrap externref to eqref (traps if not eq-compatible) |
+
+## `__eqref` and `__cast(T, x)` — universal type + conversion
+
+`__eqref` is the GC-universe supertype for all eq-compatible reference types (`ref null eq`, heap byte 0x6D). It can hold any GC struct, GC array, or boxed primitive. Acts as the "any" type for generic GC code.
+
+We use `eqref` rather than `anyref` because:
+- All concrete GC types we use (struct, array, i31) are in the eq lattice
+- `ref.eq` works directly on eqref operands — `if (eq1 == eq2)` is just identity comparison
+- We lose nothing in practice (current WASM GC has no concrete heap types in `any` but not in `eq`)
+
+The companion intrinsic `__cast(TargetType, expr)` is the universal conversion. It dispatches at codegen based on source/target type combo:
+
+| Source → Target | Mechanism |
+|---|---|
+| Same type | identity (no-op) |
+| prim → prim | Numeric conversion (existing emitConversion) |
+| prim → `__eqref` | Auto-allocate internal box struct (`__Box_i32`/`__Box_i64`/`__Box_f32`/`__Box_f64` — immutable single-field structs to avoid colliding with user types under structural dedup), `struct.new`, implicit upcast to eqref |
+| `__eqref` → prim | `ref.cast` to box struct, `struct.get` field 0 |
+| GC ref → `__eqref` | Implicit subtype upcast (no opcode) |
+| `__eqref` → GC ref | `ref.cast` (traps on mismatch) |
+| GC ref → GC ref | `ref.cast` (downcast / sidecast — same as `__ref_cast`) |
+| GC ref → `__externref` | `extern.convert_any` (cheap retag) |
+| `__externref` → `__eqref` | `any.convert_extern` + `ref.cast eq` |
+
+Discriminated unions become idiomatic:
+
+```c
+__eqref store = ...;
+if (__ref_test(__struct Point *, store)) { ... }
+else if (__ref_test(__struct Color *, store)) { ... }
+// boxed primitives don't have user-visible test types — treat the
+// "doesn't match any user struct" case as the primitive case.
+```
+
+Internal box structs are immutable single-field structs. This intentionally makes them structurally distinct from any user struct (which would be mutable), preserving `__ref_test` discrimination.
+
+Currently NOT supported: `prim ↔ __externref` (would need host calls) and `__eqref → __externref` is fine (auto-promotes via `extern.convert_any`).
 
 ## Boolean / null sugar
 
