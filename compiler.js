@@ -5462,6 +5462,10 @@ class Parser {
       if (type.isAggregate()) dvar.allocClass = Types.AllocClass.MEMORY;
       else if (specs.storageClass === Types.StorageClass.EXTERN) dvar.allocClass = Types.AllocClass.MEMORY;
 
+      // Add to scope before parsing initializer (C11 §6.2.1p7: scope begins
+      // after the declarator, so sizeof(*p) in `T *p = malloc(sizeof(*p))` is valid).
+      this.varScope.set(name, dvar);
+
       // Parse initializer
       if (this.matchText("=")) {
         if (this.atText("{")) {
@@ -5486,8 +5490,6 @@ class Parser {
           }
         }
       }
-
-      this.varScope.set(name, dvar);
 
       // Divert static/extern locals: treat them as globals for allocation/linking
       if (this.currentParsingFunc) {
