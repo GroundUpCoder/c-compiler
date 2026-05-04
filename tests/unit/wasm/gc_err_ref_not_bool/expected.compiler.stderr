@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/wasm/gc_err_ref_not_bool/main.c.
+tests/unit/wasm/gc_err_ref_not_bool/main.c:5: error: '!' on reference type '__struct Foo' is not allowed; use __ref_is_null(...) instead

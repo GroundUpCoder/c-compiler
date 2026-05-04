@@ -1,0 +1,9 @@
+ext null: 0
+recovered: 7 42
+same ref: 1
+any_f is Foo: 1
+any_f is Bar: 0
+any_b is Bar: 1
+any_a is array(int): 1
+arr2 len: 3
+nul null: 1

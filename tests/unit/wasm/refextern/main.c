@@ -4,8 +4,8 @@
 void test_jss(void) {
     printf("=== __jss ===\n");
     __externref s = __jss("hello");
-    printf("%d\n", s != 0); // 1
-    __jslog(s);             // hello
+    printf("%d\n", !__ref_is_null(s)); // 1
+    __jslog(s);                        // hello
 }
 
 void test_wjs_builtins(void) {

@@ -1,0 +1,8 @@
+a auto: 1
+ar auto: 1
+b before: 0
+b after: 1
+arr: 1
+er: 1
+c eq null: 0
+c eq null: 1

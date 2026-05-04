@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "name": "c-compiler",
+      "includePath": [
+        "${workspaceFolder}/**"
+      ],
+      "defines": [
+        "__struct=struct",
+        "__array(T)=T*",
+        "__new(T,...)=(T){0}",
+        "__ref_is_null(R)=((R),0)",
+        "__ref_eq(A,B)=((A),(B),0)"
+      ],
+      "cStandard": "c11",
+      "intelliSenseMode": "${default}"
+    }
+  ],
+  "version": 4
+}

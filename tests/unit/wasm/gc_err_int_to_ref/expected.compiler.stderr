@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/wasm/gc_err_int_to_ref/main.c.
+tests/unit/wasm/gc_err_int_to_ref/main.c:3: error: cannot convert 'int' to reference type '__struct A'; use __ref_null(__struct A) for a null ref, or omit the initializer (refs default to null)

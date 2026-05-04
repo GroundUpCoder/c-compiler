@@ -100,6 +100,22 @@ const Keyword = Object.freeze({
   X_THROW: "__throw",
   X_EXTERNREF: "__externref",
   X_REFEXTERN: "__refextern",
+  X_STRUCT_GC: "__struct",
+  X_ARRAY_GC: "__array",
+  X_NEW: "__new",
+  X_REF_IS_NULL: "__ref_is_null",
+  X_REF_EQ: "__ref_eq",
+  X_REF_NULL: "__ref_null",
+  X_REF_TEST: "__ref_test",
+  X_ARRAY_LEN: "__array_len",
+  X_NEW_ARRAY: "__new_array",
+  X_EXTENDS: "__extends",
+  X_REF_CAST: "__ref_cast",
+  X_ARRAY_FILL: "__array_fill",
+  X_ARRAY_COPY: "__array_copy",
+  X_ANYREF: "__anyref",
+  X_REF_AS_EXTERN: "__ref_as_extern",
+  X_REF_AS_ANY: "__ref_as_any",
 });
 
 // Punctuation
@@ -811,6 +827,22 @@ const KEYWORD_MAP = new Map([
   ["__throw", Keyword.X_THROW],
   ["__externref", Keyword.X_EXTERNREF],
   ["__refextern", Keyword.X_REFEXTERN],
+  ["__struct", Keyword.X_STRUCT_GC],
+  ["__array", Keyword.X_ARRAY_GC],
+  ["__new", Keyword.X_NEW],
+  ["__ref_is_null", Keyword.X_REF_IS_NULL],
+  ["__ref_eq", Keyword.X_REF_EQ],
+  ["__ref_null", Keyword.X_REF_NULL],
+  ["__ref_test", Keyword.X_REF_TEST],
+  ["__array_len", Keyword.X_ARRAY_LEN],
+  ["__new_array", Keyword.X_NEW_ARRAY],
+  ["__extends", Keyword.X_EXTENDS],
+  ["__ref_cast", Keyword.X_REF_CAST],
+  ["__array_fill", Keyword.X_ARRAY_FILL],
+  ["__array_copy", Keyword.X_ARRAY_COPY],
+  ["__anyref", Keyword.X_ANYREF],
+  ["__ref_as_extern", Keyword.X_REF_AS_EXTERN],
+  ["__ref_as_any", Keyword.X_REF_AS_ANY],
   ["__attribute__", Keyword.X_ATTRIBUTE],
   ["__attribute", Keyword.X_ATTRIBUTE],
 ]);
@@ -1861,10 +1893,13 @@ const TypeKind = Object.freeze({
   FLOAT: "float", DOUBLE: "double", LDOUBLE: "long double",
   POINTER: "pointer", ARRAY: "array", FUNCTION: "function",
   TAG: "tag", EXTERNREF: "externref", REFEXTERN: "refextern",
+  GC_STRUCT: "gc_struct", GC_ARRAY: "gc_array",
+  ANYREF: "anyref",
 });
 
 const TagKind = Object.freeze({
   STRUCT: "struct", UNION: "union", ENUM: "enum",
+  GC_STRUCT: "gc_struct",
 });
 
 const StorageClass = Object.freeze({
@@ -1886,6 +1921,7 @@ const ExprKind = Object.freeze({
   WASM: "WASM",
   COMPOUND_LITERAL: "COMPOUND_LITERAL",
   IMPLICIT_CAST: "IMPLICIT_CAST",
+  GC_NEW: "GC_NEW",
 });
 
 const StmtKind = Object.freeze({
@@ -1908,6 +1944,10 @@ const IntrinsicKind = Object.freeze({
   MEMORY_SIZE: "memory_size", MEMORY_GROW: "memory_grow",
   MEMORY_COPY: "memory_copy", MEMORY_FILL: "memory_fill",
   HEAP_BASE: "heap_base", ALLOCA: "alloca", UNREACHABLE: "unreachable",
+  REF_IS_NULL: "ref_is_null", REF_EQ: "ref_eq", REF_NULL: "ref_null",
+  REF_TEST: "ref_test", REF_CAST: "ref_cast", ARRAY_LEN: "array_len", GC_NEW_ARRAY: "gc_new_array",
+  ARRAY_FILL: "array_fill", ARRAY_COPY: "array_copy",
+  REF_AS_EXTERN: "ref_as_extern", REF_AS_ANY: "ref_as_any",
 });
 
 const BopStr = Object.freeze({
@@ -1945,12 +1985,16 @@ class TypeInfo {
     this.tagName = extra?.tagName || null;          // TAG
     this.tagKind = extra?.tagKind || null;          // TAG
     this.tagDecl = extra?.tagDecl || null;          // TAG
+    this.parentType = null;                          // GC_STRUCT inheritance
     // Derived type caches
     this._pointer = null;
     this._constVariant = null;
     this._volatileVariant = null;
     this._arrayCache = null;
     this._funcTypeCache = null;
+    this._gcArrayCache = null;
+    // Codegen-side caches: WASM type indices for GC types
+    this._wasmGCTypeIdx = -1;
     Object.seal(this);
   }
 
@@ -1964,6 +2008,12 @@ class TypeInfo {
       out += "[" + this.arraySize + "]" + this.baseType.toString();
     } else if (this.kind === TypeKind.TAG) {
       out += this.tagKind + " " + this.tagName;
+    } else if (this.kind === TypeKind.GC_STRUCT) {
+      out += "__struct " + this.tagName;
+    } else if (this.kind === TypeKind.GC_ARRAY) {
+      out += "__array(" + this.baseType.toString() + ")";
+    } else if (this.kind === TypeKind.ANYREF) {
+      out += "__anyref";
     } else if (this.kind === TypeKind.FUNCTION) {
       out += "(";
       if (this.paramTypes) {
@@ -2050,7 +2100,18 @@ class TypeInfo {
   isArithmetic() { return this.isInteger() || this.isFloatingPoint(); }
   isScalar() { return this.isArithmetic() || this.kind === TypeKind.POINTER; }
   isPointer() { return this.kind === TypeKind.POINTER; }
-  isRef() { return this.kind === TypeKind.EXTERNREF || this.kind === TypeKind.REFEXTERN; }
+  isRef() {
+    return this.kind === TypeKind.EXTERNREF || this.kind === TypeKind.REFEXTERN ||
+        this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
+        this.kind === TypeKind.ANYREF;
+  }
+  isGCRef() {
+    // GC universe — anyref + concrete GC types. Excludes externref/refextern.
+    return this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
+        this.kind === TypeKind.ANYREF;
+  }
+  isGCStruct() { return this.kind === TypeKind.GC_STRUCT; }
+  isGCArray() { return this.kind === TypeKind.GC_ARRAY; }
   isArray() { return this.kind === TypeKind.ARRAY; }
   isFunction() { return this.kind === TypeKind.FUNCTION; }
   isVoid() { return this.kind === TypeKind.VOID; }
@@ -2074,16 +2135,38 @@ class TypeInfo {
   getReturnType() { return this.returnType; }
   getParamTypes() { return this.paramTypes || []; }
 
-  isCompatibleWith(other) {
+  isCompatibleWith(other, _seen) {
     if (this === other) return true;
     if (this.kind !== other.kind) return false;
     if (this.isConst !== other.isConst || this.isVolatile !== other.isVolatile) return false;
     switch (this.kind) {
       case TypeKind.ARRAY:
-        if (!this.baseType.isCompatibleWith(other.baseType)) return false;
+        if (!this.baseType.isCompatibleWith(other.baseType, _seen)) return false;
         return this.arraySize === 0 || other.arraySize === 0 || this.arraySize === other.arraySize;
       case TypeKind.POINTER:
-        return this.baseType.isCompatibleWith(other.baseType);
+        return this.baseType.isCompatibleWith(other.baseType, _seen);
+      case TypeKind.GC_ARRAY:
+        // GC types are structural — element compatibility is enough.
+        return this.baseType.isCompatibleWith(other.baseType, _seen);
+      case TypeKind.GC_STRUCT: {
+        // GC structs are structural: same number of fields, each pairwise compatible.
+        if (!this.isComplete || !other.isComplete) return false;
+        // Cycle detection for recursive types (Node.next of type Node).
+        // If we're already comparing this pair, optimistically return true —
+        // any difference will surface at a non-recursive field.
+        if (_seen) {
+          for (const [a, b] of _seen) {
+            if ((a === this && b === other) || (a === other && b === this)) return true;
+          }
+        }
+        const seen = _seen ? _seen.concat([[this, other]]) : [[this, other]];
+        const am = this.tagDecl.members, bm = other.tagDecl.members;
+        if (am.length !== bm.length) return false;
+        for (let i = 0; i < am.length; i++) {
+          if (!am[i].type.isCompatibleWith(bm[i].type, seen)) return false;
+        }
+        return true;
+      }
       case TypeKind.TAG:
         if (this.tagKind !== other.tagKind) return false;
         // Compare by tagName (always set) rather than tagDecl.name (null if incomplete)
@@ -2129,6 +2212,7 @@ const TDOUBLE = new TypeInfo(TypeKind.DOUBLE, 8, 8, true);
 const TLDOUBLE = new TypeInfo(TypeKind.LDOUBLE, 8, 8, true);
 const TEXTERNREF = new TypeInfo(TypeKind.EXTERNREF, 0, 0, false);
 const TREFEXTERN = new TypeInfo(TypeKind.REFEXTERN, 0, 0, false);
+const TANYREF = new TypeInfo(TypeKind.ANYREF, 0, 0, true);
 
 // Type construction caches
 function arrayOf(elemType, size) {
@@ -2172,6 +2256,22 @@ function getOrCreateTagType(tagTypeCache, tagKind, name) {
   const align = isEnum ? 4 : 0;
   const t = new TypeInfo(TypeKind.TAG, size, align, false, { tagKind, tagName: name });
   tagTypeCache.set(key, t);
+  return t;
+}
+
+// GC struct type cache: name -> TypeInfo (TypeKind.GC_STRUCT)
+function getOrCreateGCStructType(gcStructTypeCache, name) {
+  if (gcStructTypeCache.has(name)) return gcStructTypeCache.get(name);
+  const t = new TypeInfo(TypeKind.GC_STRUCT, 0, 0, false, { tagKind: TagKind.GC_STRUCT, tagName: name });
+  gcStructTypeCache.set(name, t);
+  return t;
+}
+
+// GC array type cache: keyed by element type identity (stored on element's _gcArrayCache)
+function gcArrayOf(elementType) {
+  if (elementType._gcArrayCache) return elementType._gcArrayCache;
+  const t = new TypeInfo(TypeKind.GC_ARRAY, 0, 0, true, { baseType: elementType });
+  elementType._gcArrayCache = t;
   return t;
 }
 
@@ -2328,8 +2428,9 @@ return {
   ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
   TypeInfo,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN,
+  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TANYREF,
   arrayOf, functionType, getOrCreateTagType,
+  getOrCreateGCStructType, gcArrayOf,
   computeStructLayout, computeUnionLayout, computeUnaryType,
   usualArithmeticConversions, truncateConstInt,
 };
@@ -2520,6 +2621,9 @@ class Expr {
   class EImplicitCast extends Expr {
     constructor(type, expr) { super(Types.ExprKind.IMPLICIT_CAST, type); this.expr = expr; Object.seal(this); }
   }
+  class EGCNew extends Expr {
+    constructor(type, args) { super(Types.ExprKind.GC_NEW, type); this.args = args; Object.seal(this); }
+  }
 
   // --- Stmt subclasses ---
   class SExpr extends Stmt {
@@ -2601,7 +2705,7 @@ return {
   EInt, EFloat, EString, EIdent, EBinary, EUnary, ETernary, ECall,
   ESubscript, EMember, EArrow, ECast, ESizeofExpr, ESizeofType,
   EAlignofExpr, EAlignofType, EComma, EInitList, EIntrinsic, EWasm,
-  ECompoundLiteral, EImplicitCast,
+  ECompoundLiteral, EImplicitCast, EGCNew,
   SExpr, SDecl, SCompound, SIf, SWhile, SDoWhile, SFor,
   SBreak, SContinue, SReturn, SSwitch, SGoto, SLabel, SEmpty,
   STryCatch, SThrow,
@@ -3597,6 +3701,7 @@ class Parser {
     this.varScope = new AST.Scope();
     this.anonCounter = 0;
     this.tagTypeCache = new Map();
+    this.gcStructTypeCache = new Map();
     this.currentParsingFunc = null;
     this.currentCompound = null;
     this.requiredSources = new Set();
@@ -3667,6 +3772,9 @@ class Parser {
         case Lexer.Keyword.X_IMPORT:
         case Lexer.Keyword.X_EXTERNREF:
         case Lexer.Keyword.X_REFEXTERN:
+        case Lexer.Keyword.X_ANYREF:
+        case Lexer.Keyword.X_STRUCT_GC:
+        case Lexer.Keyword.X_ARRAY_GC:
           return true;
       }
     }
@@ -3879,6 +3987,17 @@ class Parser {
       if (this.matchKW(Lexer.Keyword.UNSIGNED)) { isUnsigned = true; continue; }
       if (this.matchKW(Lexer.Keyword.X_EXTERNREF)) { type = Types.TEXTERNREF; continue; }
       if (this.matchKW(Lexer.Keyword.X_REFEXTERN)) { type = Types.TREFEXTERN; continue; }
+      if (this.matchKW(Lexer.Keyword.X_ANYREF)) { type = Types.TANYREF; continue; }
+
+      // GC struct/array (WASM GC extension)
+      if (this.atKW(Lexer.Keyword.X_STRUCT_GC)) {
+        type = this.parseGCStructSpecifier();
+        continue;
+      }
+      if (this.atKW(Lexer.Keyword.X_ARRAY_GC)) {
+        type = this.parseGCArraySpecifier();
+        continue;
+      }
 
       // struct/union/enum
       if (this.atKW(Lexer.Keyword.STRUCT) || this.atKW(Lexer.Keyword.UNION)) {
@@ -4120,6 +4239,118 @@ class Parser {
       this.tagScope.set(name, tagType);
     }
     return tagType;
+  }
+
+  // --- GC struct specifier: __struct [Name] [{ member; member; ... }] ---
+  parseGCStructSpecifier() {
+    this.advance(); // consume '__struct'
+    let name = null;
+    if (this.atKind(Lexer.TokenKind.IDENT)) name = this.advance().text;
+
+    if (this.matchText("{")) {
+      // GC struct definition
+      if (!name) name = "__anon_gc_" + this.anonCounter++;
+      const gcType = Types.getOrCreateGCStructType(this.gcStructTypeCache, name);
+      const members = [];
+      const tagDecl = new AST.DTag({ filename: this.peek().filename, line: this.peek().line },
+        Types.TagKind.GC_STRUCT, name, true, members);
+      // Optional __extends(__struct Parent); — must be the very first body statement.
+      let parentType = null;
+      if (this.atKW(Lexer.Keyword.X_EXTENDS)) {
+        const extTok = this.peek();
+        this.advance();
+        this.expect("(");
+        if (!this.atKW(Lexer.Keyword.X_STRUCT_GC)) {
+          this.error(extTok, "__extends(...) requires a __struct type");
+        }
+        parentType = this.parseGCStructSpecifier();
+        this.expect(")");
+        this.expect(";");
+        if (!parentType.isGCStruct() || !parentType.isComplete) {
+          this.error(extTok, `__extends parent must be a complete __struct, got '${parentType.toString()}'`);
+        }
+      }
+      while (!this.atEnd() && !this.atText("}")) {
+        if (this.matchText(";")) continue;
+        const memSpecs = this.parseDeclSpecifiers();
+        let memBaseType = memSpecs.type;
+        let firstM = true;
+        while (!this.atEnd()) {
+          if (!firstM) { if (!this.matchText(",")) break; }
+          firstM = false;
+          const { type: mType, name: mName } = this.parseDeclarator(memBaseType);
+          if (!mName) this.error(this.peek(), "GC struct members must be named");
+          if (mType.kind === Types.TypeKind.ARRAY) {
+            this.error(this.peek(), "C arrays are not allowed as GC struct members; use __array(T) instead");
+          }
+          if (mType.kind === Types.TypeKind.FUNCTION) {
+            this.error(this.peek(), "function types are not allowed as GC struct members");
+          }
+          const mVar = new AST.DVar({ filename: this.peek().filename, line: this.peek().line },
+            mName, mType, Types.StorageClass.NONE, null);
+          members.push(mVar);
+        }
+        this.expect(";");
+      }
+      this.expect("}");
+      // Validate prefix: child's first N fields must match parent's fields exactly
+      // by name and type (WASM GC subtype rule — fields can't be reordered or
+      // re-typed, only appended).
+      if (parentType) {
+        const parentMembers = parentType.tagDecl.members;
+        if (members.length < parentMembers.length) {
+          this.error(this.peek(-1),
+            `__struct ${name} extends '${parentType.tagName}' but has only ${members.length} fields (parent has ${parentMembers.length})`);
+        }
+        for (let i = 0; i < parentMembers.length; i++) {
+          const p = parentMembers[i], c = members[i];
+          if (p.name !== c.name) {
+            this.error(this.peek(-1),
+              `__struct ${name}: field #${i} must be named '${p.name}' to match parent '${parentType.tagName}', got '${c.name}'`);
+          }
+          if (!p.type.isCompatibleWith(c.type)) {
+            this.error(this.peek(-1),
+              `__struct ${name}: field '${c.name}' must have type '${p.type.toString()}' to match parent '${parentType.tagName}', got '${c.type.toString()}'`);
+          }
+        }
+      }
+      // Assign field indices
+      for (let i = 0; i < members.length; i++) members[i].byteOffset = i;
+      gcType.tagDecl = tagDecl;
+      gcType.isComplete = true;
+      gcType.parentType = parentType;
+      this.tagScope.set(name, gcType);
+      return gcType;
+    }
+
+    // Forward reference
+    if (!name) this.error(this.peek(), "Expected GC struct name or '{'");
+    let gcType = this.tagScope.get(name);
+    if (!gcType || gcType.kind !== Types.TypeKind.GC_STRUCT) {
+      gcType = Types.getOrCreateGCStructType(this.gcStructTypeCache, name);
+      this.tagScope.set(name, gcType);
+    }
+    return gcType;
+  }
+
+  // --- GC array specifier: __array(ElementType) ---
+  parseGCArraySpecifier() {
+    this.advance(); // consume '__array'
+    this.expect("(");
+    const elemSpecs = this.parseDeclSpecifiers();
+    let elemType = elemSpecs.type;
+    if (this.atText("*") || this.atText("[") || this.atText("(")) {
+      const decl = this.parseDeclarator(elemType);
+      elemType = decl.type;
+    }
+    this.expect(")");
+    if (elemType.kind === Types.TypeKind.ARRAY) {
+      this.error(this.peek(), "C arrays are not allowed as __array element type");
+    }
+    if (elemType.kind === Types.TypeKind.FUNCTION) {
+      this.error(this.peek(), "function types are not allowed as __array element type");
+    }
+    return Types.gcArrayOf(elemType);
   }
 
   // --- Enum specifier ---
@@ -4425,6 +4656,40 @@ class Parser {
       return first;
     }
 
+    // __new(type, args...)
+    if (this.matchKW(Lexer.Keyword.X_NEW)) {
+      const newTok = this.peek(-1);
+      this.expect("(");
+      if (!this.isTypeName()) this.error(this.peek(), "__new requires a type as the first argument");
+      const specs = this.parseDeclSpecifiers();
+      let nType = specs.type;
+      if (this.atText("*") || this.atText("[") || this.atText("(")) {
+        const decl = this.parseDeclarator(nType);
+        nType = decl.type;
+      }
+      const nq = nType.removeQualifiers();
+      if (!nq.isGCRef()) {
+        this.error(newTok, `__new requires a GC type (__struct or __array), got '${nType.toString()}'`);
+      }
+      const args = [];
+      while (this.matchText(",")) args.push(this.parseAssignmentExpression());
+      this.expect(")");
+      // Validate arg count
+      if (nq.isGCStruct()) {
+        if (!nq.isComplete) this.error(newTok, `__new of incomplete GC struct '${nq.tagName}'`);
+        const fields = nq.tagDecl.members;
+        if (args.length !== 0 && args.length !== fields.length) {
+          this.error(newTok, `__new(__struct ${nq.tagName}, ...): expected ${fields.length} field args, got ${args.length}`);
+        }
+      } else {
+        // GC_ARRAY: __new(__array(T), length) or __new(__array(T), length, init)
+        if (args.length < 1 || args.length > 2) {
+          this.error(newTok, `__new(__array(...), ...): expected length [, init], got ${args.length} args`);
+        }
+      }
+      return new AST.EGCNew(nq, args);
+    }
+
     // __memory_size, __memory_grow
     if (this.matchKW(Lexer.Keyword.X_MEMORY_SIZE)) {
       this.expect("(");
@@ -4436,6 +4701,205 @@ class Parser {
       const arg = this.parseAssignmentExpression();
       this.expect(")");
       return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_GROW, [arg]);
+    }
+
+    // __ref_is_null(ref)
+    if (this.matchKW(Lexer.Keyword.X_REF_IS_NULL)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const arg = this.parseAssignmentExpression();
+      this.expect(")");
+      if (!arg.type.removeQualifiers().isRef()) {
+        this.error(tok, `__ref_is_null requires a reference type, got '${arg.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_IS_NULL, [arg]);
+    }
+
+    // __ref_eq(ref, ref)
+    if (this.matchKW(Lexer.Keyword.X_REF_EQ)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const a = this.parseAssignmentExpression();
+      this.expect(",");
+      const b = this.parseAssignmentExpression();
+      this.expect(")");
+      const at = a.type.removeQualifiers(), bt = b.type.removeQualifiers();
+      if (!at.isRef() || !bt.isRef()) {
+        this.error(tok, `__ref_eq requires two reference operands, got '${a.type.toString()}' and '${b.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_EQ, [a, b]);
+    }
+
+    // __ref_null(type) — produces a null of the given reference type
+    if (this.matchKW(Lexer.Keyword.X_REF_NULL)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      if (!this.isTypeName()) this.error(tok, "__ref_null requires a reference type");
+      const specs = this.parseDeclSpecifiers();
+      let nType = specs.type;
+      if (this.atText("*") || this.atText("[") || this.atText("(")) {
+        const decl = this.parseDeclarator(nType);
+        nType = decl.type;
+      }
+      this.expect(")");
+      const nq = nType.removeQualifiers();
+      if (!nq.isRef()) {
+        this.error(tok, `__ref_null requires a reference type, got '${nType.toString()}'`);
+      }
+      if (nq === Types.TREFEXTERN) {
+        this.error(tok, `__ref_null(__refextern) is not allowed — non-nullable refs cannot be null; use __externref instead`);
+      }
+      return new AST.EIntrinsic(nq, Types.IntrinsicKind.REF_NULL, [], nq);
+    }
+
+    // __ref_test(target_type, ref) — runtime type test
+    if (this.matchKW(Lexer.Keyword.X_REF_TEST)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      if (!this.isTypeName()) this.error(tok, "__ref_test requires a target reference type");
+      const specs = this.parseDeclSpecifiers();
+      let tType = specs.type;
+      if (this.atText("*") || this.atText("[") || this.atText("(")) {
+        const decl = this.parseDeclarator(tType);
+        tType = decl.type;
+      }
+      this.expect(",");
+      const refExpr = this.parseAssignmentExpression();
+      this.expect(")");
+      const tq = tType.removeQualifiers();
+      if (tq === Types.TANYREF || !tq.isGCRef()) {
+        this.error(tok, `__ref_test target must be a concrete __struct or __array type, got '${tType.toString()}'`);
+      }
+      if (!refExpr.type.removeQualifiers().isGCRef()) {
+        this.error(tok, `__ref_test second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_TEST, [refExpr], tq);
+    }
+
+    // __ref_cast(target_type, ref) — runtime downcast (traps on type mismatch).
+    if (this.matchKW(Lexer.Keyword.X_REF_CAST)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      if (!this.isTypeName()) this.error(tok, "__ref_cast requires a target reference type");
+      const specs = this.parseDeclSpecifiers();
+      let tType = specs.type;
+      if (this.atText("*") || this.atText("[") || this.atText("(")) {
+        const decl = this.parseDeclarator(tType);
+        tType = decl.type;
+      }
+      this.expect(",");
+      const refExpr = this.parseAssignmentExpression();
+      this.expect(")");
+      const tq = tType.removeQualifiers();
+      if (tq === Types.TANYREF || !tq.isGCRef()) {
+        this.error(tok, `__ref_cast target must be a concrete __struct or __array type, got '${tType.toString()}'`);
+      }
+      if (!refExpr.type.removeQualifiers().isGCRef()) {
+        this.error(tok, `__ref_cast second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(tq, Types.IntrinsicKind.REF_CAST, [refExpr], tq);
+    }
+
+    // __array_len(arr) — array length
+    if (this.matchKW(Lexer.Keyword.X_ARRAY_LEN)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const arg = this.parseAssignmentExpression();
+      this.expect(")");
+      if (!arg.type.removeQualifiers().isGCArray()) {
+        this.error(tok, `__array_len requires a __array(...) operand, got '${arg.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.ARRAY_LEN, [arg]);
+    }
+
+    // __new_array(elemType, v1, v2, ...) — array.new_fixed
+    if (this.matchKW(Lexer.Keyword.X_NEW_ARRAY)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      if (!this.isTypeName()) this.error(tok, "__new_array first argument must be the element type");
+      const specs = this.parseDeclSpecifiers();
+      let elemType = specs.type;
+      if (this.atText("*") || this.atText("[") || this.atText("(")) {
+        const decl = this.parseDeclarator(elemType);
+        elemType = decl.type;
+      }
+      const args = [];
+      while (this.matchText(",")) args.push(this.parseAssignmentExpression());
+      this.expect(")");
+      if (elemType.kind === Types.TypeKind.ARRAY || elemType.kind === Types.TypeKind.FUNCTION) {
+        this.error(tok, `__new_array element type must not be a C array or function`);
+      }
+      const arrType = Types.gcArrayOf(elemType);
+      return new AST.EIntrinsic(arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
+    }
+
+    // __array_fill(arr, offset, value, count) — bulk fill of a GC array slice
+    if (this.matchKW(Lexer.Keyword.X_ARRAY_FILL)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const arr = this.parseAssignmentExpression();
+      this.expect(",");
+      const off = this.parseAssignmentExpression();
+      this.expect(",");
+      const val = this.parseAssignmentExpression();
+      this.expect(",");
+      const count = this.parseAssignmentExpression();
+      this.expect(")");
+      if (!arr.type.removeQualifiers().isGCArray()) {
+        this.error(tok, `__array_fill first argument must be a __array(...), got '${arr.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
+    }
+
+    // __ref_as_extern(gc_ref) — wrap a GC-universe ref (struct/array/anyref)
+    // as an externref. Cheap retag (extern.convert_any).
+    if (this.matchKW(Lexer.Keyword.X_REF_AS_EXTERN)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const arg = this.parseAssignmentExpression();
+      this.expect(")");
+      if (!arg.type.removeQualifiers().isGCRef()) {
+        this.error(tok, `__ref_as_extern requires a GC-universe ref (__struct/__array/__anyref), got '${arg.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TEXTERNREF, Types.IntrinsicKind.REF_AS_EXTERN, [arg]);
+    }
+
+    // __ref_as_any(extern_ref) — unwrap an externref to anyref. Cheap retag
+    // (any.convert_extern). Result is __anyref — use __ref_cast(T, ...) to
+    // narrow to a specific GC type.
+    if (this.matchKW(Lexer.Keyword.X_REF_AS_ANY)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const arg = this.parseAssignmentExpression();
+      this.expect(")");
+      const at = arg.type.removeQualifiers();
+      if (at !== Types.TEXTERNREF && at !== Types.TREFEXTERN) {
+        this.error(tok, `__ref_as_any requires an __externref/__refextern, got '${arg.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TANYREF, Types.IntrinsicKind.REF_AS_ANY, [arg]);
+    }
+
+    // __array_copy(dst, dst_off, src, src_off, count) — bulk copy between GC arrays
+    if (this.matchKW(Lexer.Keyword.X_ARRAY_COPY)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      const dst = this.parseAssignmentExpression();
+      this.expect(",");
+      const dstOff = this.parseAssignmentExpression();
+      this.expect(",");
+      const src = this.parseAssignmentExpression();
+      this.expect(",");
+      const srcOff = this.parseAssignmentExpression();
+      this.expect(",");
+      const count = this.parseAssignmentExpression();
+      this.expect(")");
+      if (!dst.type.removeQualifiers().isGCArray()) {
+        this.error(tok, `__array_copy dst must be a __array(...), got '${dst.type.toString()}'`);
+      }
+      if (!src.type.removeQualifiers().isGCArray()) {
+        this.error(tok, `__array_copy src must be a __array(...), got '${src.type.toString()}'`);
+      }
+      return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_COPY, [dst, dstOff, src, srcOff, count]);
     }
 
     // __builtin(kind, args...)
@@ -4660,6 +5124,26 @@ class Parser {
     return this.parsePostfixTail(expr);
   }
 
+  _rejectRefAsCondition(expr, tok, ctxName) {
+    if (expr && expr.type && expr.type.removeQualifiers().isRef()) {
+      this.error(tok, `reference type '${expr.type.toString()}' cannot be used as a ${ctxName} condition; use !__ref_is_null(...) instead`);
+    }
+  }
+
+  // Check that an expression isn't being implicitly converted to a ref type.
+  // We forbid `int 0` / `NULL` → ref because: (a) it leaks to the IDE
+  // (clang sees `struct Foo p = 0` and errors), (b) we have an explicit
+  // `__ref_null(T)` form that's IDE-friendly. Locals/globals get auto-null
+  // without any initializer, so explicit null init is rarely needed anyway.
+  _rejectIntToRef(targetType, expr, tok) {
+    if (!expr || !targetType) return;
+    const t = targetType.removeQualifiers();
+    const s = expr.type.removeQualifiers();
+    if (t.isRef() && !s.isRef()) {
+      this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}'; use __ref_null(${targetType.toString()}) for a null ref, or omit the initializer (refs default to null)`);
+    }
+  }
+
   lookupMemberChain(type, name) {
     const ut = type.removeQualifiers();
     if (ut.tagDecl && ut.tagDecl.members) {
@@ -4718,7 +5202,14 @@ class Parser {
     if (this.matchText("+")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_POS", e.type), "OP_POS", e); }
     if (this.matchText("-")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e); }
     if (this.matchText("~")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e); }
-    if (this.matchText("!")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e); }
+    if (this.matchText("!")) {
+      const tok = this.peek(-1);
+      const e = this.parseCastExpression();
+      if (e.type.removeQualifiers().isRef()) {
+        this.error(tok, `'!' on reference type '${e.type.toString()}' is not allowed; use __ref_is_null(...) instead`);
+      }
+      return new AST.EUnary(Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e);
+    }
 
     if (this.atKW(Lexer.Keyword.SIZEOF)) return this.parsePrimaryExpression(); // handled there
     if (this.atKW(Lexer.Keyword.ALIGNOF)) return this.parsePrimaryExpression();
@@ -4769,7 +5260,7 @@ class Parser {
             return this.parsePostfixTail(cl);
           }
           if (castType.removeQualifiers().isRef() || (expr.type && expr.type.removeQualifiers().isRef())) {
-            this.error(this.peek(-1), "Cannot cast to or from a reference type");
+            this.error(this.peek(-1), "Cannot cast to or from a reference type; use __ref_cast(T, x) for GC ref downcasts");
           }
           return new AST.ECast(castType, castType, expr);
         }
@@ -4783,6 +5274,7 @@ class Parser {
     while (true) {
       if (this.matchText("(")) {
         // Function call
+        const callTok = this.peek(-1);
         const args = [];
         if (!this.atText(")")) {
           do {
@@ -4794,10 +5286,20 @@ class Parser {
         let resultType = Types.TINT;
         let calleeType = expr.type;
         if (calleeType.kind === Types.TypeKind.ARRAY || calleeType.kind === Types.TypeKind.FUNCTION) calleeType = calleeType.decay();
+        let calleeFuncType = null;
         if (calleeType.kind === Types.TypeKind.FUNCTION) {
           resultType = calleeType.returnType;
+          calleeFuncType = calleeType;
         } else if (calleeType.kind === Types.TypeKind.POINTER && calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
           resultType = calleeType.baseType.returnType;
+          calleeFuncType = calleeType.baseType;
+        }
+        // Forbid implicit int→ref on call arguments. Only check declared
+        // params (variadic / unspecified-params functions have no arg types).
+        if (calleeFuncType && !calleeFuncType.hasUnspecifiedParams) {
+          const params = calleeFuncType.getParamTypes();
+          const n = Math.min(args.length, params.length);
+          for (let i = 0; i < n; i++) this._rejectIntToRef(params[i], args[i], callTok);
         }
 
         let funcDecl = null;
@@ -4819,6 +5321,7 @@ class Parser {
         let elemType = Types.TINT;
         if (baseUt.kind === Types.TypeKind.ARRAY) elemType = baseUt.baseType;
         else if (baseUt.kind === Types.TypeKind.POINTER) elemType = baseUt.baseType;
+        else if (baseUt.kind === Types.TypeKind.GC_ARRAY) elemType = baseUt.baseType;
         expr = new AST.ESubscript(elemType, expr, index);
         continue;
       }
@@ -4990,6 +5493,7 @@ class Parser {
 
       // Ternary
       if (op === "?") {
+        this._rejectRefAsCondition(left, opTok, "ternary");
         const thenExpr = this.parseExpression();
         this.expect(":");
         const elseExpr = this.parseBinaryExpression(3);
@@ -5017,6 +5521,23 @@ class Parser {
             (right.type.isArray() && left.type.isInteger())) {
           this.warning(this.peek(-1), "array used in arithmetic expression; decaying to pointer");
         }
+      }
+      // Reject ref operands on comparison/logical ops — they have no defined
+      // semantics; users should use __ref_is_null / __ref_eq instead.
+      const lIsRef = left.type.removeQualifiers().isRef();
+      const rIsRef = right.type.removeQualifiers().isRef();
+      if (lIsRef || rIsRef) {
+        if (bop === "EQ" || bop === "NE") {
+          this.error(opTok, `'${op}' on reference type is not allowed; use __ref_is_null(x) for null tests, __ref_eq(a, b) for identity`);
+        } else if (bop === "LT" || bop === "GT" || bop === "LE" || bop === "GE") {
+          this.error(opTok, `'${op}' on reference type is not allowed`);
+        } else if (bop === "LAND" || bop === "LOR") {
+          this.error(opTok, `'${op}' on reference type is not allowed; use __ref_is_null(...) to convert to a boolean`);
+        }
+      }
+      // Reject implicit int→ref on assignment (use __ref_null(T) instead).
+      if (bop === "ASSIGN" && lIsRef && !rIsRef) {
+        this._rejectIntToRef(left.type, right, opTok);
       }
       // Apply C99 6.3.1.1 integer promotions for bitfield operands
       const resType = this.computeBinaryType(bop, this.promoteExprType(left), this.promoteExprType(right));
@@ -5106,8 +5627,10 @@ class Parser {
 
     // if
     if (this.matchKW(Lexer.Keyword.IF)) {
+      const kwTok = this.peek(-1);
       this.expect("(");
       const cond = this.parseExpression();
+      this._rejectRefAsCondition(cond, kwTok, "if");
       this.expect(")");
       const thenBranch = this.parseStatement();
       let elseBranch = null;
@@ -5117,18 +5640,22 @@ class Parser {
 
     // while
     if (this.matchKW(Lexer.Keyword.WHILE)) {
+      const kwTok = this.peek(-1);
       this.expect("(");
       const cond = this.parseExpression();
+      this._rejectRefAsCondition(cond, kwTok, "while");
       this.expect(")");
       return new AST.SWhile(cond, this.parseStatement());
     }
 
     // do-while
     if (this.matchKW(Lexer.Keyword.DO)) {
+      const kwTok = this.peek(-1);
       const body = this.parseStatement();
       this.expectKW(Lexer.Keyword.WHILE);
       this.expect("(");
       const cond = this.parseExpression();
+      this._rejectRefAsCondition(cond, kwTok, "do-while");
       this.expect(")");
       this.expect(";");
       return new AST.SDoWhile(body, cond);
@@ -5136,6 +5663,7 @@ class Parser {
 
     // for
     if (this.matchKW(Lexer.Keyword.FOR)) {
+      const kwTok = this.peek(-1);
       this.expect("(");
       this.typeScope.push(); this.tagScope.push(); this.varScope.push();
       let init = null, cond = null, incr = null;
@@ -5148,7 +5676,11 @@ class Parser {
           init = new AST.SExpr(e);
         }
       }
-      if (!this.matchText(";")) { cond = this.parseExpression(); this.expect(";"); }
+      if (!this.matchText(";")) {
+        cond = this.parseExpression();
+        this._rejectRefAsCondition(cond, kwTok, "for");
+        this.expect(";");
+      }
       if (!this.atText(")")) incr = this.parseExpression();
       this.expect(")");
       const body = this.parseStatement();
@@ -5161,6 +5693,9 @@ class Parser {
       const switchTok = this.peek(-1);
       this.expect("(");
       const expr = this.parseExpression();
+      if (expr.type.removeQualifiers().isRef()) {
+        this.error(switchTok, `cannot switch on reference type '${expr.type.toString()}'`);
+      }
       this.expect(")");
       // Parse the body collecting case labels
       const cases = [];
@@ -5210,9 +5745,15 @@ class Parser {
 
     // return
     if (this.matchKW(Lexer.Keyword.RETURN)) {
+      const retTok = this.peek(-1);
       if (this.matchText(";")) return new AST.SReturn(null);
       const expr = this.parseExpression();
       this.expect(";");
+      // Forbid implicit int→ref on return (use __ref_null(T) instead).
+      if (this.currentParsingFunc) {
+        const retType = this.currentParsingFunc.type.getReturnType();
+        this._rejectIntToRef(retType, expr, retTok);
+      }
       return new AST.SReturn(expr);
     }
 
@@ -5468,10 +6009,12 @@ class Parser {
 
       // Parse initializer
       if (this.matchText("=")) {
+        const eqTok = this.peek(-1);
         if (this.atText("{")) {
           dvar.initExpr = this.parseInitList(type);
         } else {
           dvar.initExpr = this.parseAssignmentExpression();
+          this._rejectIntToRef(type, dvar.initExpr, eqTok);
         }
         // Handle string-initialized char array
         if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
@@ -5695,10 +6238,12 @@ class Parser {
       else if (specs.storageClass === Types.StorageClass.EXTERN) dvar.allocClass = Types.AllocClass.MEMORY;
 
       if (this.matchText("=")) {
+        const eqTok = this.peek(-1);
         if (this.atText("{")) {
           dvar.initExpr = this.parseInitList(type);
         } else {
           dvar.initExpr = this.parseAssignmentExpression();
+          this._rejectIntToRef(type, dvar.initExpr, eqTok);
         }
         // Handle string-initialized char array
         if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
@@ -6550,9 +7095,15 @@ const WT_I32 = { tag: "num", num: WasmNumType.I32 };
 const WT_I64 = { tag: "num", num: WasmNumType.I64 };
 const WT_F32 = { tag: "num", num: WasmNumType.F32 };
 const WT_F64 = { tag: "num", num: WasmNumType.F64 };
-const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F };
-const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F };
+const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F, heapIsIdx: false };
+const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F, heapIsIdx: false };
+const WT_ANYREF = { tag: "ref", nullable: true, heap: 0x6E, heapIsIdx: false };
 const WT_EMPTY = { tag: "empty" };
+
+// GC ref to a defined struct/array type. heap = type index (positive integer).
+function WT_GCREF(typeIdx, nullable) {
+  return { tag: "ref", nullable: !!nullable, heap: typeIdx, heapIsIdx: true };
+}
 
 function wtIsNum(wt) { return wt.tag === "num"; }
 function wtIsRef(wt) { return wt.tag === "ref"; }
@@ -6562,15 +7113,23 @@ function wtEmit(wt, buf) {
   if (wt.tag === "empty") buf.push(0x40);
   else if (wt.tag === "num") buf.push(wt.num);
   else if (wt.tag === "ref") {
-    if (wt.nullable) buf.push(wt.heap);
-    else { buf.push(0x64); buf.push(wt.heap); }
+    if (wt.heapIsIdx) {
+      // Encoded as ref[null] (typeidx-as-signed-LEB)
+      buf.push(wt.nullable ? 0x63 : 0x64);
+      lebI(buf, wt.heap);
+    } else if (wt.nullable) {
+      buf.push(wt.heap);
+    } else {
+      buf.push(0x64);
+      buf.push(wt.heap);
+    }
   }
 }
 function wtEquals(a, b) {
   if (a.tag !== b.tag) return false;
   if (a.tag === "empty") return true;
   if (a.tag === "num") return a.num === b.num;
-  if (a.tag === "ref") return a.nullable === b.nullable && a.heap === b.heap;
+  if (a.tag === "ref") return a.nullable === b.nullable && a.heap === b.heap && !!a.heapIsIdx === !!b.heapIsIdx;
   return false;
 }
 
@@ -6741,7 +7300,36 @@ class WasmCode {
 
   // Reference types
   refNull(heapType) { this.push(0xD0); this.push(heapType); }
+  refNullIdx(typeIdx) { this.push(0xD0); lebI(this.bytes, typeIdx); }
   refIsNull() { this.push(0xD1); }
+  refEq() { this.push(0xD3); }
+  refTestNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x15); lebI(this.bytes, typeIdx); }
+  refCastNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x17); lebI(this.bytes, typeIdx); }
+  // Bridges between WASM's `extern` and `any` heap-type universes. Both are
+  // (near-)zero-cost retags — no copy, just a type-system cast.
+  anyConvertExtern() { this.push(0xFB); lebU(this.bytes, 0x1A); }
+  externConvertAny() { this.push(0xFB); lebU(this.bytes, 0x1B); }
+
+  // GC opcodes (0xFB ...)
+  structNew(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x00); lebU(this.bytes, typeIdx); }
+  structNewDefault(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x01); lebU(this.bytes, typeIdx); }
+  structGet(typeIdx, fieldIdx) { this.push(0xFB); lebU(this.bytes, 0x02); lebU(this.bytes, typeIdx); lebU(this.bytes, fieldIdx); }
+  structGetS(typeIdx, fieldIdx) { this.push(0xFB); lebU(this.bytes, 0x03); lebU(this.bytes, typeIdx); lebU(this.bytes, fieldIdx); }
+  structGetU(typeIdx, fieldIdx) { this.push(0xFB); lebU(this.bytes, 0x04); lebU(this.bytes, typeIdx); lebU(this.bytes, fieldIdx); }
+  structSet(typeIdx, fieldIdx) { this.push(0xFB); lebU(this.bytes, 0x05); lebU(this.bytes, typeIdx); lebU(this.bytes, fieldIdx); }
+  arrayNew(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x06); lebU(this.bytes, typeIdx); }
+  arrayNewDefault(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x07); lebU(this.bytes, typeIdx); }
+  arrayNewFixed(typeIdx, n) { this.push(0xFB); lebU(this.bytes, 0x08); lebU(this.bytes, typeIdx); lebU(this.bytes, n); }
+  arrayGet(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x0B); lebU(this.bytes, typeIdx); }
+  arrayGetS(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x0C); lebU(this.bytes, typeIdx); }
+  arrayGetU(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x0D); lebU(this.bytes, typeIdx); }
+  arraySet(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x0E); lebU(this.bytes, typeIdx); }
+  arrayLen() { this.push(0xFB); lebU(this.bytes, 0x0F); }
+  arrayFill(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x10); lebU(this.bytes, typeIdx); }
+  arrayCopy(dstTypeIdx, srcTypeIdx) {
+    this.push(0xFB); lebU(this.bytes, 0x11);
+    lebU(this.bytes, dstTypeIdx); lebU(this.bytes, srcTypeIdx);
+  }
 }
 
 // ====================
@@ -6750,8 +7338,10 @@ class WasmCode {
 
 class WasmModule {
   constructor() {
-    this.typeDefs = [];         // section 1 (function types)
+    this.typeDefs = [];         // section 1 (function/struct/array types)
     this.funcTypeIndices = new Map(); // WasmFunctionType key -> index
+    this.gcStructTypeIndices = new Map(); // struct fields key -> index
+    this.gcArrayTypeIndices = new Map();  // array elem key -> index
     this.funcImports = [];      // section 2
     this.funcDefs = [];         // section 3 & 10
     this.memories = [];         // section 5
@@ -6768,7 +7358,7 @@ class WasmModule {
   }
 
   addFunctionTypeId(params, results) {
-    const wtKey = t => t.tag === "ref" ? `ref:${t.nullable?1:0}:${t.heap}` : `${t.tag}:${t.num||''}`;
+    const wtKey = t => t.tag === "ref" ? `ref:${t.nullable?1:0}:${t.heapIsIdx?'i':'h'}:${t.heap}` : `${t.tag}:${t.num||''}`;
     const key = params.map(wtKey).join(",") + "->" + results.map(wtKey).join(",");
     if (this.funcTypeIndices.has(key)) return this.funcTypeIndices.get(key);
     const id = this.typeDefs.length;
@@ -6776,6 +7366,24 @@ class WasmModule {
     this.funcTypeIndices.set(key, id);
     return id;
   }
+
+  reserveGCStructTypeId() {
+    const id = this.typeDefs.length;
+    this.typeDefs.push({ kind: "struct", fields: null });
+    return id;
+  }
+  reserveGCArrayTypeId() {
+    const id = this.typeDefs.length;
+    this.typeDefs.push({ kind: "array", elem: null });
+    return id;
+  }
+
+  // Setters for GC type bodies populated after reservation.
+  setGCStructFields(typeIdx, fields, parentIdx) {
+    this.typeDefs[typeIdx].fields = fields;
+    if (parentIdx !== undefined && parentIdx >= 0) this.typeDefs[typeIdx].parentIdx = parentIdx;
+  }
+  setGCArrayElem(typeIdx, elem) { this.typeDefs[typeIdx].elem = elem; }
 
   addFunctionImport(moduleName, functionName, typeId) {
     const id = this.funcImports.length;
@@ -6885,15 +7493,133 @@ class WasmModule {
 
     let buf;
 
-    // Type section (1)
+    // Type section (1).
+    // Strategy: don't renumber types — eager registration already places
+    // mutually-recursive types at consecutive indices (registration is driven
+    // by reachability: registering type T pre-reserves T's idx, then recurses
+    // into its references; back edges hit the pre-reserved idx, so an SCC's
+    // members end up at consecutive indices). All we do here is GROUP them
+    // into rec groups based on SCC analysis. Singleton non-recursive types
+    // become singleton rec groups (or bare composites for func types).
+    // WASM canonicalizes minimal rec groups by structural shape, so two
+    // singleton structs with identical shapes get unified — this fixes
+    // cross-TU recursive type identity.
     buf = [];
-    lebU(buf, this.typeDefs.length);
-    for (const td of this.typeDefs) {
-      buf.push(0x60);
-      lebU(buf, td.params.length);
-      for (const p of td.params) wtEmit(p, buf);
-      lebU(buf, td.results.length);
-      for (const r of td.results) wtEmit(r, buf);
+    const N = this.typeDefs.length;
+
+    // ---- Phase 1: collect reference edges ----
+    const edgesOut = Array.from({length: N}, () => []);
+    const collectRefs = (td) => {
+      const refs = [];
+      const visitWT = (wt) => {
+        if (wt && wt.tag === "ref" && wt.heapIsIdx) refs.push(wt.heap);
+      };
+      if (td.kind === "func") {
+        for (const p of td.params) visitWT(p);
+        for (const r of td.results) visitWT(r);
+      } else if (td.kind === "struct") {
+        if (td.parentIdx !== undefined) refs.push(td.parentIdx);
+        if (td.fields) for (const f of td.fields) visitWT(f.wt);
+      } else if (td.kind === "array") {
+        if (td.elem) visitWT(td.elem.wt);
+      }
+      return refs;
+    };
+    for (let i = 0; i < N; i++) edgesOut[i] = collectRefs(this.typeDefs[i]);
+
+    // ---- Phase 2: Tarjan SCC (iterative to avoid call-stack blowup) ----
+    const indices = new Int32Array(N).fill(-1);
+    const lowlinks = new Int32Array(N);
+    const onStack = new Uint8Array(N);
+    const sccOf = new Int32Array(N).fill(-1);  // sccOf[v] = SCC id (in discovery order)
+    const stack = [];
+    let nextIdx = 0;
+    let nextSccId = 0;
+    for (let root = 0; root < N; root++) {
+      if (indices[root] !== -1) continue;
+      // Iterative DFS using explicit stack of [v, edgeIdx]
+      const dfsStack = [[root, 0]];
+      indices[root] = nextIdx; lowlinks[root] = nextIdx; nextIdx++;
+      stack.push(root); onStack[root] = 1;
+      while (dfsStack.length) {
+        const frame = dfsStack[dfsStack.length - 1];
+        const u = frame[0];
+        const ei = frame[1];
+        const out = edgesOut[u];
+        if (ei < out.length) {
+          frame[1] = ei + 1;
+          const w = out[ei];
+          if (indices[w] === -1) {
+            indices[w] = nextIdx; lowlinks[w] = nextIdx; nextIdx++;
+            stack.push(w); onStack[w] = 1;
+            dfsStack.push([w, 0]);
+          } else if (onStack[w]) {
+            if (indices[w] < lowlinks[u]) lowlinks[u] = indices[w];
+          }
+        } else {
+          dfsStack.pop();
+          if (lowlinks[u] === indices[u]) {
+            const sccId = nextSccId++;
+            let w;
+            do { w = stack.pop(); onStack[w] = 0; sccOf[w] = sccId; } while (w !== u);
+          }
+          if (dfsStack.length) {
+            const p = dfsStack[dfsStack.length - 1][0];
+            if (lowlinks[u] < lowlinks[p]) lowlinks[p] = lowlinks[u];
+          }
+        }
+      }
+    }
+
+    // ---- Phase 3: walk typeDefs in order, group consecutive same-SCC entries ----
+    // We assert (and rely on) eager registration's invariant: if v and u are
+    // in the same SCC, they are at consecutive indices. So we just scan and
+    // chunk by sccOf changing.
+    const groups = [];  // each: [startIdx, endIdxExclusive]
+    let gi = 0;
+    while (gi < N) {
+      const sid = sccOf[gi];
+      let gj = gi + 1;
+      while (gj < N && sccOf[gj] === sid) gj++;
+      groups.push([gi, gj]);
+      gi = gj;
+    }
+
+    // ---- Phase 4: emit ----
+    const emitStorage = (s, b) => {
+      if (s.packed === "i8") b.push(0x78);
+      else if (s.packed === "i16") b.push(0x77);
+      else wtEmit(s.wt, b);
+      b.push(s.mutable ? 0x01 : 0x00);
+    };
+    const emitOneTypeDef = (td, b) => {
+      if (td.kind === "func") {
+        b.push(0x60);
+        lebU(b, td.params.length);
+        for (const p of td.params) wtEmit(p, b);
+        lebU(b, td.results.length);
+        for (const r of td.results) wtEmit(r, b);
+      } else if (td.kind === "struct") {
+        // Always wrap GC structs in `sub` (open, 0x50) so they can be extended.
+        // Bare composite types are treated as `final` by V8.
+        b.push(0x50);
+        if (td.parentIdx !== undefined) { lebU(b, 1); lebU(b, td.parentIdx); }
+        else lebU(b, 0);
+        b.push(0x5F);
+        lebU(b, td.fields.length);
+        for (const f of td.fields) emitStorage(f, b);
+      } else if (td.kind === "array") {
+        b.push(0x5E);
+        emitStorage(td.elem, b);
+      }
+    };
+    // Each group becomes one rec group (even singletons — being in a rec
+    // group is what enables WASM canonicalization across instances).
+    lebU(buf, groups.length);
+    for (const [start, end] of groups) {
+      buf.push(0x4E);
+      lebU(buf, end - start);
+      for (let k = start; k < end; k++) emitOneTypeDef(this.typeDefs[k], buf);
     }
     emitSection(1, buf);
 
@@ -7115,6 +7841,8 @@ const EXPR_DROP = "drop";
 
 const LV_REGISTER = "register";
 const LV_MEMORY = "memory";
+const LV_GC_STRUCT_FIELD = "gc_struct_field";
+const LV_GC_ARRAY_ELEM = "gc_array_elem";
 const LV_ADDR_LOCAL = "addr_local";
 const LV_ADDR_STATIC = "addr_static";
 const LV_ADDR_FRAME = "addr_frame";
@@ -7123,14 +7851,146 @@ function isStructOrUnion(type) {
   return type.isAggregate() && !type.isArray();
 }
 
-function cToWasmType(type) {
+function cToWasmType(type, wmod) {
   type = type.removeQualifiers();
   if (type === Types.TEXTERNREF) return WT_EXTERNREF;
   if (type === Types.TREFEXTERN) return WT_REFEXTERN;
+  if (type === Types.TANYREF) return WT_ANYREF;
+  if (type.kind === Types.TypeKind.GC_STRUCT || type.kind === Types.TypeKind.GC_ARRAY) {
+    if (!wmod) throw new Error(`cToWasmType: GC type '${type.toString()}' requires wmod for registration`);
+    return WT_GCREF(getOrCreateGCWasmTypeIdx(wmod, type), true);
+  }
   if (type === Types.TFLOAT) return WT_F32;
   if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
   if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
   return WT_I32;
+}
+
+function gcStorageTypeOf(wmod, t) {
+  const ut = t.removeQualifiers();
+  if (ut === Types.TCHAR || ut === Types.TSCHAR || ut === Types.TUCHAR || ut === Types.TBOOL) {
+    return { wt: WT_I32, mutable: true, packed: "i8" };
+  }
+  if (ut === Types.TSHORT || ut === Types.TUSHORT) {
+    return { wt: WT_I32, mutable: true, packed: "i16" };
+  }
+  return { wt: cToWasmType(t, wmod), mutable: true, packed: null };
+}
+
+// Cache key for a single WASM value type (numeric or ref).
+function wtKey(wt) {
+  if (wt.tag === "ref") return `ref:${wt.nullable?1:0}:${wt.heapIsIdx?'i':'h'}:${wt.heap}`;
+  return `${wt.tag}:${wt.num||''}`;
+}
+
+// Cache key for a struct field / array elem storage type. Mutability is always
+// true today; packed encoding distinguishes i8/i16 from i32 (signedness does
+// not affect WASM storage, so it's intentionally not part of the key).
+function gcStorageKey(s) {
+  const tag = s.packed ? s.packed : wtKey(s.wt);
+  return s.mutable ? tag : tag + ":imm";
+}
+
+// Helpers used by codegen to choose struct.get/array.get variants for packed fields.
+function isSignedSubI32(t) {
+  const ut = t.removeQualifiers();
+  return ut === Types.TCHAR || ut === Types.TSCHAR || ut === Types.TSHORT;
+}
+function isPackedSubI32(t) {
+  const ut = t.removeQualifiers();
+  return ut === Types.TCHAR || ut === Types.TSCHAR || ut === Types.TUCHAR ||
+         ut === Types.TBOOL || ut === Types.TSHORT || ut === Types.TUSHORT;
+}
+
+// Register a GC TypeInfo into the WasmModule and return its WASM type index.
+// Deps are registered FIRST (so they get lower indices). Cycles are detected
+// via a per-wmod "in-progress" set: if recursion re-enters a type currently
+// being processed, we pre-reserve a placeholder idx so the cyclic ref has
+// something to point at. SCC members end up at consecutive indices.
+//
+// Structural dedup happens BEFORE reservation — we compute the structural
+// key from already-registered deps, then check the cache. If hit, no idx
+// is reserved (no zombie typeDefs). If miss, reserve and populate.
+function getOrCreateGCWasmTypeIdx(wmod, type) {
+  type = type.removeQualifiers();
+  if (type._wasmGCTypeIdx >= 0) return type._wasmGCTypeIdx;
+
+  if (!wmod._gcInProgress) wmod._gcInProgress = new Set();
+  if (!wmod._gcPendingIdx) wmod._gcPendingIdx = new Map();
+
+  if (wmod._gcInProgress.has(type)) {
+    // Cycle — must reserve a placeholder so the recursive ref resolves.
+    let pending = wmod._gcPendingIdx.get(type);
+    if (pending === undefined) {
+      pending = (type.kind === Types.TypeKind.GC_STRUCT)
+        ? wmod.reserveGCStructTypeId()
+        : wmod.reserveGCArrayTypeId();
+      wmod._gcPendingIdx.set(type, pending);
+    }
+    return pending;
+  }
+
+  wmod._gcInProgress.add(type);
+
+  let idx;
+  if (type.kind === Types.TypeKind.GC_STRUCT) {
+    if (!type.isComplete) {
+      wmod._gcInProgress.delete(type);
+      throw new Error(`Cannot use incomplete GC struct '${type.tagName}'`);
+    }
+    // Register deps (parent + field types) first.
+    const parentIdx = type.parentType ? getOrCreateGCWasmTypeIdx(wmod, type.parentType) : -1;
+    const fields = type.tagDecl.members.map(m => gcStorageTypeOf(wmod, m.type));
+    const key = 'S(' + (parentIdx >= 0 ? `p${parentIdx},` : '') +
+                fields.map(gcStorageKey).join(',') + ')';
+    const pending = wmod._gcPendingIdx.get(type);
+    if (pending !== undefined) {
+      // Cyclic: must use the pre-reserved placeholder. Cache it under the
+      // structural key, but a future identical type with NO cycle won't
+      // dedup against this (its own key would include a different
+      // placeholder idx) — that's fine, WASM rec-group canonicalization
+      // handles the cross-canonical-form unification at instantiation.
+      idx = pending;
+      wmod._gcPendingIdx.delete(type);
+      type._wasmGCTypeIdx = idx;
+      wmod.setGCStructFields(idx, fields, parentIdx);
+      if (!wmod.gcStructTypeIndices.has(key)) wmod.gcStructTypeIndices.set(key, idx);
+    } else if (wmod.gcStructTypeIndices.has(key)) {
+      // Cache hit, no reservation needed — no zombie typeDef.
+      idx = wmod.gcStructTypeIndices.get(key);
+      type._wasmGCTypeIdx = idx;
+    } else {
+      idx = wmod.reserveGCStructTypeId();
+      type._wasmGCTypeIdx = idx;
+      wmod.setGCStructFields(idx, fields, parentIdx);
+      wmod.gcStructTypeIndices.set(key, idx);
+    }
+  } else if (type.kind === Types.TypeKind.GC_ARRAY) {
+    const elem = gcStorageTypeOf(wmod, type.baseType);
+    const key = 'A(' + gcStorageKey(elem) + ')';
+    const pending = wmod._gcPendingIdx.get(type);
+    if (pending !== undefined) {
+      idx = pending;
+      wmod._gcPendingIdx.delete(type);
+      type._wasmGCTypeIdx = idx;
+      wmod.setGCArrayElem(idx, elem);
+      if (!wmod.gcArrayTypeIndices.has(key)) wmod.gcArrayTypeIndices.set(key, idx);
+    } else if (wmod.gcArrayTypeIndices.has(key)) {
+      idx = wmod.gcArrayTypeIndices.get(key);
+      type._wasmGCTypeIdx = idx;
+    } else {
+      idx = wmod.reserveGCArrayTypeId();
+      type._wasmGCTypeIdx = idx;
+      wmod.setGCArrayElem(idx, elem);
+      wmod.gcArrayTypeIndices.set(key, idx);
+    }
+  } else {
+    wmod._gcInProgress.delete(type);
+    throw new Error(`getOrCreateGCWasmTypeIdx: not a GC type: ${type.toString()}`);
+  }
+
+  wmod._gcInProgress.delete(type);
+  return idx;
 }
 
 function vaSlotSize(type) {
@@ -7146,8 +8006,8 @@ function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
   const params = [];
   const retType = funcType.getReturnType();
   if (isStructOrUnion(retType)) params.push(WT_I32); // hidden return ptr
-  for (const pt of funcType.getParamTypes()) params.push(cToWasmType(pt));
-  const results = [cToWasmType(retType)];
+  for (const pt of funcType.getParamTypes()) params.push(cToWasmType(pt, wmod));
+  const results = [cToWasmType(retType, wmod)];
   return wmod.addFunctionTypeId(params, results);
 }
 
@@ -7223,7 +8083,10 @@ class CodeGenerator {
     if (!s) { s = new Set(); this.localIdxNames.set(idx, s); }
     s.add(name);
   }
-  _wtKey(wt) { return `${wt.tag}:${wt.num||''}`; }
+  _wtKey(wt) {
+    if (wt.tag === "ref") return `ref:${wt.nullable?1:0}:${wt.heapIsIdx?'i':'h'}:${wt.heap}`;
+    return `${wt.tag}:${wt.num||''}`;
+  }
 
   allocLocal(wt) {
     const key = this._wtKey(wt);
@@ -7925,7 +8788,7 @@ class CodeGenerator {
 
       let paramOffset = this.vaRetSlotSize;
       for (const param of funcDef.parameters) {
-        const wt = isStructOrUnion(param.type) ? WT_I32 : cToWasmType(param.type);
+        const wt = isStructOrUnion(param.type) ? WT_I32 : cToWasmType(param.type, this.wmod);
         const paramLocalIdx = this.allocLocal(wt);
         this.localVarToWasmLocalIdx.set(param, paramLocalIdx);
         this._trackLocalName(paramLocalIdx, param.name);
@@ -8102,8 +8965,9 @@ class CodeGenerator {
         // Variadic: WASM function returns void
       } else {
         const retType = funcDef.type.getReturnType();
-        const wasmRetType = cToWasmType(retType);
-        if (wtEquals(wasmRetType, WT_REFEXTERN)) this.body.unreachable();
+        const wasmRetType = cToWasmType(retType, this.wmod);
+        if (wtIsRef(wasmRetType) && !wasmRetType.nullable) this.body.unreachable();
+        else if (wtIsRef(wasmRetType) && wasmRetType.heapIsIdx) this.body.refNullIdx(wasmRetType.heap);
         else if (wtEquals(wasmRetType, WT_EXTERNREF)) this.body.refNull(0x6F);
         else if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
         else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
@@ -8191,7 +9055,7 @@ class CodeGenerator {
           if (decl.declKind === Types.DeclKind.VAR) {
             if (decl.storageClass !== Types.StorageClass.STATIC && decl.definition === decl &&
                 decl.allocClass === Types.AllocClass.REGISTER) {
-              const _li = this.allocLocal(cToWasmType(decl.type));
+              const _li = this.allocLocal(cToWasmType(decl.type, this.wmod));
               this.localVarToWasmLocalIdx.set(decl, _li);
               this._trackLocalName(_li, decl.name);
             }
@@ -8512,9 +9376,9 @@ class CodeGenerator {
         for (let i = numCatches - 1; i >= 0; i--) {
           const cc = tc.catches[i];
           if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
-          else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0]));
+          else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0], this.wmod));
           else {
-            const results = cc.tag.paramTypes.map(pt => cToWasmType(pt));
+            const results = cc.tag.paramTypes.map(pt => cToWasmType(pt, this.wmod));
             const typeIdx = this.wmod.addFunctionTypeId([], results);
             this.body.push(0x02); lebI(this.body.bytes, typeIdx);
           }
@@ -8542,7 +9406,7 @@ class CodeGenerator {
           if (cc.tag && cc.tag.paramTypes.length > 0) {
             const bindLocals = [];
             for (let j = 0; j < cc.bindingVars.length; j++) {
-              const localIdx = this.allocLocal(cToWasmType(cc.tag.paramTypes[j]));
+              const localIdx = this.allocLocal(cToWasmType(cc.tag.paramTypes[j], this.wmod));
               this.localVarToWasmLocalIdx.set(cc.bindingVars[j], localIdx);
               this._trackLocalName(localIdx, cc.bindingVars[j].name);
               bindLocals.push(localIdx);
@@ -8566,6 +9430,10 @@ class CodeGenerator {
     type = type.removeQualifiers();
     if (type === Types.TEXTERNREF) return WT_EXTERNREF;
     if (type === Types.TREFEXTERN) return WT_REFEXTERN;
+    if (type === Types.TANYREF) return WT_ANYREF;
+    if (type.kind === Types.TypeKind.GC_STRUCT || type.kind === Types.TypeKind.GC_ARRAY) {
+      return WT_GCREF(getOrCreateGCWasmTypeIdx(this.wmod, type), true);
+    }
     if (type === Types.TFLOAT) return WT_F32;
     if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
     if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
@@ -8666,18 +9534,18 @@ class CodeGenerator {
   }
 
   // --- Condition/bool helpers ---
+  // Refs are rejected as conditions / logical operands at parse time
+  // (use __ref_is_null / __ref_eq instead), so these only see numeric types.
   emitConditionToI32(condType) {
     const wt = this.getBinaryWasmType(condType);
-    if (wtIsRef(wt)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
-    else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
     else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
     else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
   }
 
   emitBoolNormalize(type) {
     const wt = this.getBinaryWasmType(type);
-    if (wtIsRef(wt)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
-    else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
     else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
     else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
     else { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
@@ -8707,12 +9575,15 @@ class CodeGenerator {
     const toWasm = this.getBinaryWasmType(toType);
     toType = toType.removeQualifiers();
     if (toType.isRef() && !wtIsRef(fromWasm)) {
-      this.body.drop();
-      this.body.refNull(0x6F);
-      return;
+      // Implicit int→ref conversion is no longer allowed. Use __ref_null(T)
+      // to spell null for a ref type. (Locals/globals get auto-null without
+      // any initializer, so explicit initialization to null is rarely needed.)
+      throw new Error(
+        `cannot implicitly convert '${fromType.toString()}' to reference type '${toType.toString()}'; ` +
+        `use __ref_null(${toType.toString()}) for a null ref, or omit the initializer (refs default to null)`);
     }
     if (toType === Types.TBOOL) {
-      if (wtIsRef(fromWasm)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); return; }
+      // Refs as bool are rejected at parse time (use __ref_is_null instead).
       if (wtEquals(fromWasm, WT_I32)) { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
       else if (wtEquals(fromWasm, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
       else if (wtEquals(fromWasm, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
@@ -8757,6 +9628,19 @@ class CodeGenerator {
       throw new Error(`emitLValue: variable '${varDecl.name}' not found`);
     }
     if (expr.kind === Types.ExprKind.MEMBER) {
+      const baseT = expr.base.type.removeQualifiers();
+      if (baseT.isGCStruct()) {
+        const refWt = this.getBinaryWasmType(baseT);
+        this.emitExpr(expr.base);
+        const refLocal = this.allocLocal(refWt);
+        this.body.localSet(refLocal);
+        return {
+          kind: LV_GC_STRUCT_FIELD, type: expr.type,
+          gcTypeIdx: getOrCreateGCWasmTypeIdx(this.wmod, baseT),
+          gcFieldIdx: expr.memberDecl.byteOffset,
+          savedRefLocal: refLocal,
+        };
+      }
       this.emitAddressOf(expr);
       const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
@@ -8771,6 +9655,22 @@ class CodeGenerator {
       return lv;
     }
     if (expr.kind === Types.ExprKind.SUBSCRIPT) {
+      const arrT = expr.array.type.removeQualifiers();
+      if (arrT.isGCArray()) {
+        const refWt = this.getBinaryWasmType(arrT);
+        this.emitExpr(expr.array);
+        const refLocal = this.allocLocal(refWt);
+        this.body.localSet(refLocal);
+        this.emitExpr(expr.index);
+        if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+        const idxLocal = this.allocLocal(WT_I32);
+        this.body.localSet(idxLocal);
+        return {
+          kind: LV_GC_ARRAY_ELEM, type: expr.type,
+          gcTypeIdx: getOrCreateGCWasmTypeIdx(this.wmod, arrT),
+          savedRefLocal: refLocal, savedIdxLocal: idxLocal,
+        };
+      }
       const elemSize = this.sizeOf(expr.type);
       this.emitExpr(expr.array);
       this.emitExpr(expr.index);
@@ -8798,6 +9698,11 @@ class CodeGenerator {
       if (lv.addrSource === LV_ADDR_LOCAL) this.body.localGet(lv.savedLocal);
       else if (lv.addrSource === LV_ADDR_STATIC) this.body.i32Const(lv.addrImmediate);
       else if (lv.addrSource === LV_ADDR_FRAME) this.emitFrameAddr(lv.addrImmediate);
+    } else if (lv.kind === LV_GC_STRUCT_FIELD) {
+      this.body.localGet(lv.savedRefLocal);
+    } else if (lv.kind === LV_GC_ARRAY_ELEM) {
+      this.body.localGet(lv.savedRefLocal);
+      this.body.localGet(lv.savedIdxLocal);
     }
   }
 
@@ -8808,6 +9713,16 @@ class CodeGenerator {
     } else if (lv.kind === LV_MEMORY) {
       if (lv.bitField) this.emitBitFieldLoad(lv.bitField);
       else this.emitLoad(lv.type);
+    } else if (lv.kind === LV_GC_STRUCT_FIELD) {
+      if (isPackedSubI32(lv.type)) {
+        if (isSignedSubI32(lv.type)) this.body.structGetS(lv.gcTypeIdx, lv.gcFieldIdx);
+        else this.body.structGetU(lv.gcTypeIdx, lv.gcFieldIdx);
+      } else this.body.structGet(lv.gcTypeIdx, lv.gcFieldIdx);
+    } else if (lv.kind === LV_GC_ARRAY_ELEM) {
+      if (isPackedSubI32(lv.type)) {
+        if (isSignedSubI32(lv.type)) this.body.arrayGetS(lv.gcTypeIdx);
+        else this.body.arrayGetU(lv.gcTypeIdx);
+      } else this.body.arrayGet(lv.gcTypeIdx);
     }
   }
 
@@ -8818,6 +9733,10 @@ class CodeGenerator {
     } else if (lv.kind === LV_MEMORY) {
       if (lv.bitField) this.emitBitFieldStore(lv.bitField);
       else this.emitStore(lv.type);
+    } else if (lv.kind === LV_GC_STRUCT_FIELD) {
+      this.body.structSet(lv.gcTypeIdx, lv.gcFieldIdx);
+    } else if (lv.kind === LV_GC_ARRAY_ELEM) {
+      this.body.arraySet(lv.gcTypeIdx);
     }
   }
 
@@ -8916,7 +9835,7 @@ class CodeGenerator {
         this.lvaluePush(lv); this.emitExpr(rhs);
         this.emitConversion(rhs.type, lhsType);
         if (wantValue && !lv.bitField) {
-          const vt = this.allocLocal(cToWasmType(lhsType));
+          const vt = this.allocLocal(cToWasmType(lhsType, this.wmod));
           this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
         } else {
           this.lvalueStore(lv);
@@ -9113,20 +10032,6 @@ class CodeGenerator {
           this.body.else_(); this.emitExpr(expr.right); this.emitBoolNormalize(rightType); this.body.end();
           break;
         }
-        if (isComparison && (leftType.removeQualifiers().isRef() || rightType.removeQualifiers().isRef())) {
-          const isNullCompare =
-            (!rightType.removeQualifiers().isRef() && expr.right.kind === Types.ExprKind.INT && expr.right.value === 0n) ||
-            (!leftType.removeQualifiers().isRef() && expr.left.kind === Types.ExprKind.INT && expr.left.value === 0n);
-          if (isNullCompare) {
-            const refExpr = leftType.removeQualifiers().isRef() ? expr.left : expr.right;
-            this.emitExpr(refExpr);
-            this.body.refIsNull();
-            if (expr.op === "NE") { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
-          } else {
-            throw new Error("Cannot compare externref values with relational operators");
-          }
-          break;
-        }
         this.emitExpr(expr.left); this.emitExpr(expr.right);
         switch (expr.op) {
           case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
@@ -9165,8 +10070,7 @@ class CodeGenerator {
           case "OP_LNOT": {
             this.emitExpr(expr.operand);
             const wt = this.getBinaryWasmType(operandType);
-            if (wtIsRef(wt)) { this.body.refIsNull(); }
-            else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
+            if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
             else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_EQ); }
             else this.body.aop(wt, ALU.OP_EQZ);
             break;
@@ -9364,6 +10268,18 @@ class CodeGenerator {
         break;
       }
       case Types.ExprKind.SUBSCRIPT: {
+        const arrType = expr.array.type.removeQualifiers();
+        if (arrType.isGCArray()) {
+          const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, arrType);
+          this.emitExpr(expr.array);
+          this.emitExpr(expr.index);
+          if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+          if (isPackedSubI32(arrType.baseType)) {
+            if (isSignedSubI32(arrType.baseType)) this.body.arrayGetS(typeIdx);
+            else this.body.arrayGetU(typeIdx);
+          } else this.body.arrayGet(typeIdx);
+          break;
+        }
         const elemType = expr.type;
         const elemSize = this.sizeOf(elemType);
         this.emitExpr(expr.array);
@@ -9376,6 +10292,15 @@ class CodeGenerator {
       }
       case Types.ExprKind.MEMBER: {
         const baseType = expr.base.type.removeQualifiers();
+        if (baseType.isGCStruct()) {
+          const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, baseType);
+          this.emitExpr(expr.base);
+          if (isPackedSubI32(expr.memberDecl.type)) {
+            if (isSignedSubI32(expr.memberDecl.type)) this.body.structGetS(typeIdx, expr.memberDecl.byteOffset);
+            else this.body.structGetU(typeIdx, expr.memberDecl.byteOffset);
+          } else this.body.structGet(typeIdx, expr.memberDecl.byteOffset);
+          break;
+        }
         this.emitExpr(expr.base);
         const field = expr.memberDecl;
         const tag = baseType.tagDecl;
@@ -9417,7 +10342,7 @@ class CodeGenerator {
         break;
       }
       case Types.ExprKind.TERNARY: {
-        const resultType = cToWasmType(expr.type);
+        const resultType = cToWasmType(expr.type, this.wmod);
         this.emitExpr(expr.condition);
         this.emitConditionToI32(expr.condition.type);
         this.body.if_(resultType);
@@ -9485,6 +10410,86 @@ class CodeGenerator {
             break;
           case Types.IntrinsicKind.UNREACHABLE:
             this.body.unreachable(); break;
+          case Types.IntrinsicKind.REF_IS_NULL:
+            this.emitExpr(expr.args[0]); this.body.refIsNull(); break;
+          case Types.IntrinsicKind.REF_EQ:
+            this.emitExpr(expr.args[0]); this.emitExpr(expr.args[1]); this.body.refEq(); break;
+          case Types.IntrinsicKind.REF_NULL: {
+            const wt = this.getBinaryWasmType(expr.argType);
+            if (wt.heapIsIdx) this.body.refNullIdx(wt.heap);
+            else this.body.refNull(wt.heap);
+            break;
+          }
+          case Types.IntrinsicKind.REF_TEST: {
+            this.emitExpr(expr.args[0]);
+            const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, expr.argType);
+            this.body.refTestNull(typeIdx);
+            break;
+          }
+          case Types.IntrinsicKind.REF_CAST: {
+            this.emitExpr(expr.args[0]);
+            const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, expr.argType);
+            this.body.refCastNull(typeIdx);
+            break;
+          }
+          case Types.IntrinsicKind.ARRAY_LEN: {
+            this.emitExpr(expr.args[0]);
+            this.body.arrayLen();
+            break;
+          }
+          case Types.IntrinsicKind.GC_NEW_ARRAY: {
+            const arrType = expr.type;
+            const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, arrType);
+            for (let i = 0; i < expr.args.length; i++) {
+              this.emitExpr(expr.args[i]);
+              this.emitConversion(expr.args[i].type, expr.argType);
+            }
+            this.body.arrayNewFixed(typeIdx, expr.args.length);
+            break;
+          }
+          case Types.IntrinsicKind.ARRAY_FILL: {
+            // [arr, off, val, n] → array.fill typeIdx
+            const arrType = expr.args[0].type.removeQualifiers();
+            const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, arrType);
+            this.emitExpr(expr.args[0]);
+            this.emitExpr(expr.args[1]);
+            if (wtEquals(this.getBinaryWasmType(expr.args[1].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            this.emitExpr(expr.args[2]);
+            this.emitConversion(expr.args[2].type, arrType.baseType);
+            this.emitExpr(expr.args[3]);
+            if (wtEquals(this.getBinaryWasmType(expr.args[3].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            this.body.arrayFill(typeIdx);
+            this.body.i32Const(0); // expression result (void → i32 0 by convention)
+            break;
+          }
+          case Types.IntrinsicKind.REF_AS_EXTERN: {
+            this.emitExpr(expr.args[0]);
+            this.body.externConvertAny();
+            break;
+          }
+          case Types.IntrinsicKind.REF_AS_ANY: {
+            this.emitExpr(expr.args[0]);
+            this.body.anyConvertExtern();
+            break;
+          }
+          case Types.IntrinsicKind.ARRAY_COPY: {
+            // [dst, dstOff, src, srcOff, n] → array.copy dstTypeIdx srcTypeIdx
+            const dstType = expr.args[0].type.removeQualifiers();
+            const srcType = expr.args[2].type.removeQualifiers();
+            const dstIdx = getOrCreateGCWasmTypeIdx(this.wmod, dstType);
+            const srcIdx = getOrCreateGCWasmTypeIdx(this.wmod, srcType);
+            this.emitExpr(expr.args[0]);
+            this.emitExpr(expr.args[1]);
+            if (wtEquals(this.getBinaryWasmType(expr.args[1].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            this.emitExpr(expr.args[2]);
+            this.emitExpr(expr.args[3]);
+            if (wtEquals(this.getBinaryWasmType(expr.args[3].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            this.emitExpr(expr.args[4]);
+            if (wtEquals(this.getBinaryWasmType(expr.args[4].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            this.body.arrayCopy(dstIdx, srcIdx);
+            this.body.i32Const(0);
+            break;
+          }
         }
         break;
       }
@@ -9509,6 +10514,41 @@ class CodeGenerator {
           this.emitCompoundLiteralInit(expr);
           this.emitFrameAddr(this.compoundLiteralOffsets.get(expr));
           if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        }
+        break;
+      }
+      case Types.ExprKind.GC_NEW: {
+        const t = expr.type;
+        const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, t);
+        if (t.isGCStruct()) {
+          if (expr.args.length === 0) {
+            this.body.structNewDefault(typeIdx);
+          } else {
+            const fields = t.tagDecl.members;
+            for (let i = 0; i < expr.args.length; i++) {
+              this.emitExpr(expr.args[i]);
+              this.emitConversion(expr.args[i].type, fields[i].type);
+            }
+            this.body.structNew(typeIdx);
+          }
+        } else { // GC_ARRAY
+          if (expr.args.length === 1) {
+            this.emitExpr(expr.args[0]);
+            // length must be i32
+            if (wtEquals(this.getBinaryWasmType(expr.args[0].type), WT_I64)) {
+              this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            }
+            this.body.arrayNewDefault(typeIdx);
+          } else {
+            // [init, length]
+            this.emitExpr(expr.args[1]);
+            this.emitConversion(expr.args[1].type, t.baseType);
+            this.emitExpr(expr.args[0]);
+            if (wtEquals(this.getBinaryWasmType(expr.args[0].type), WT_I64)) {
+              this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+            }
+            this.body.arrayNew(typeIdx);
+          }
         }
         break;
       }
@@ -9582,7 +10622,7 @@ function generateCode(units, outputFile, options) {
   for (const unit of units) {
     for (const tag of (unit.exceptionTags || [])) {
       if (cg.exceptionToWasmTagIdx.has(tag)) continue;
-      const params = tag.paramTypes.map(pt => cToWasmType(pt));
+      const params = tag.paramTypes.map(pt => cToWasmType(pt, wmod));
       const typeId = wmod.addFunctionTypeId(params, []);
       const tagIdx = wmod.addTag(typeId);
       cg.exceptionToWasmTagIdx.set(tag, tagIdx);
@@ -9666,14 +10706,26 @@ function generateCode(units, outputFile, options) {
         if (val) cg.writeConstValueToStatic(baseOffset, varDef.type, val);
       }
     } else if (varDef.type.removeQualifiers().isRef()) {
-      if (varDef.type.removeQualifiers() === Types.TREFEXTERN) {
+      const rt = varDef.type.removeQualifiers();
+      if (rt === Types.TREFEXTERN) {
         throw new Error(`Cannot declare global '__refextern' variable '${varDef.name}' — non-nullable refs have no valid initializer. Use '__externref' instead.`);
       }
-      const globalIdx = wmod.addGlobalExternref(true);
-      cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
-      if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
+      if (rt.isGCRef()) {
+        const refWt = cToWasmType(rt, wmod);
+        const initExpr = [];
+        const code = new WasmCode(initExpr);
+        code.refNullIdx(refWt.heap);
+        code.end();
+        const globalIdx = wmod.addGlobal(refWt, initExpr, true);
+        cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
+        if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
+      } else {
+        const globalIdx = wmod.addGlobalExternref(true);
+        cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
+        if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
+      }
     } else {
-      const wt = cToWasmType(varDef.type);
+      const wt = cToWasmType(varDef.type, wmod);
       // Determine initial value
       let globalIdx;
       if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.INT) {

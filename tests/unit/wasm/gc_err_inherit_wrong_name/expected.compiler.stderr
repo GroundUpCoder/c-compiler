@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/wasm/gc_err_inherit_wrong_name/main.c.
+tests/unit/wasm/gc_err_inherit_wrong_name/main.c:2: error: __struct B: field #0 must be named 'x' to match parent 'A', got 'z'

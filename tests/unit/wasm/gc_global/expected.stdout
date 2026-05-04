@@ -1,0 +1,8 @@
+g_foo null: 1
+g_arr null: 1
+g_foo.x = 100
+g_arr len = 3
+g_foo.x after inc x2 = 102
+g_foo null again: 1
+static null: 1
+static.x: 7

@@ -1,0 +1,10 @@
+=== nested struct ===
+1
+(1,2) (3,4)
+=== array of struct ===
+(1,10)
+(2,20)
+(3,30)
+=== array of array ===
+0 1 2 
+10 11 12 

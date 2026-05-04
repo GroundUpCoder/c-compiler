@@ -1,0 +1,12 @@
+d: 7 4
+p: 99 4 100
+animal id=7
+animal id=99
+animal id=7
+dog id=99 paws=4
+aref is Animal: 1
+aref is Dog: 1
+aref is Puppy: 1
+aref2 is Puppy: 0
+downcast d2: 99 4
+downcast p2: 99 4 100

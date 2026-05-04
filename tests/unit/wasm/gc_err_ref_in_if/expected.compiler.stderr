@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/wasm/gc_err_ref_in_if/main.c.
+tests/unit/wasm/gc_err_ref_in_if/main.c:5: error: reference type '__struct Foo' cannot be used as a if condition; use !__ref_is_null(...) instead
