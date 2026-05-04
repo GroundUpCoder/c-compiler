@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_ref_relational/main.c.
+tests/unit/gc/err_ref_relational/main.c:5: error: '<' on reference type is not allowed (only ==, != for identity/null)

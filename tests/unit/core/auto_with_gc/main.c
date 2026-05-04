@@ -8,18 +8,18 @@ __struct Dog {
   int paws;
 };
 
-__struct Point make_point(int a, int b) {
-  return __new(__struct Point, a, b);
+__struct Point *make_point(int a, int b) {
+  return __new(__struct Point *, a, b);
 }
 
 int main(void) {
   // Inferred GC struct ref
-  auto p = __new(__struct Point, 7, 11);
-  printf("%d %d\n", p.x, p.y);
+  auto p = __new(__struct Point *, 7, 11);
+  printf("%d %d\n", p->x, p->y);
 
   // Inferred from function return
   auto p2 = make_point(3, 4);
-  printf("%d %d\n", p2.x, p2.y);
+  printf("%d %d\n", p2->x, p2->y);
 
   // Inferred GC array ref
   auto arr = __new_array(int, 10, 20, 30, 40, 50);
@@ -40,19 +40,19 @@ int main(void) {
   printf("%d\n", fst);
 
   // GC ref with inheritance
-  auto d = __new(__struct Dog, 99, 4);
-  printf("%d %d\n", d.id, d.paws);
+  auto d = __new(__struct Dog *, 99, 4);
+  printf("%d %d\n", d->id, d->paws);
 
   // Cast result via __ref_cast
-  __struct Animal a = d;
-  auto downcast = __ref_cast(__struct Dog, a);
-  printf("%d %d\n", downcast.id, downcast.paws);
+  __struct Animal *a = d;
+  auto downcast = __ref_cast(__struct Dog *, a);
+  printf("%d %d\n", downcast->id, downcast->paws);
 
   // anyref / extern bridge with auto
   auto ext = __ref_as_extern(p);
-  printf("ext null: %d\n", __ref_is_null(ext));
+  printf("ext null: %d\n", ext == 0);
   auto any = __ref_as_any(ext);
-  printf("any is Point: %d\n", __ref_test(__struct Point, any));
+  printf("any is Point: %d\n", __ref_test(__struct Point *, any));
 
   return 0;
 }

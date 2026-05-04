@@ -92,48 +92,81 @@ Terminal and timing primitives use JSPI (WebAssembly JavaScript Promise Integrat
 
 ## WebAssembly GC types
 
-The compiler supports Wasm GC heap-allocated structs and arrays managed by the engine's garbage collector. These live on the GC heap, not in linear memory, and can be passed to/from JavaScript without serialization.
+The compiler supports Wasm GC heap-allocated structs and arrays managed by the engine's garbage collector. These live on the GC heap (not linear memory) and can be passed to/from JavaScript without serialization.
+
+### Preferred syntax
+
+A GC struct **value** is a reference to a heap-allocated object. To match C's pointer idioms (and stay friendly to clang IDE tooling), **always spell GC struct refs with `*`** and access fields with `->`:
+
+```c
+__struct Point { int x; int y; };
+
+__struct Point *p = __new(__struct Point *, 3, 7);
+p->x = 99;
+printf("%d\n", p->x);
+```
+
+For GC arrays, **never** add `*` — arrays don't have a "pointer to" idiom in C, and the compiler rejects `__array(T) *`:
+
+```c
+__array(int) arr = __new(__array(int), 5);    // OK
+arr[0] = 42;
+__array_len(arr);
+```
+
+The same `*` convention applies to type-args of every intrinsic that can take an array — `__new`, `__new_array`, `__ref_test`, `__ref_cast`, `__ref_null`. (Exception: `__extends(__struct Foo)` stays bare because it names a parent class, never an array.) This means the IDE shim for `__new` doesn't need to differentiate struct vs array (both `__struct Foo *` and `__array(int)` cast cleanly from `0`):
+
+| Allocation | Always write |
+|---|---|
+| Struct | `__new(__struct Foo *, args...)` |
+| Array (default-init) | `__new(__array(T), n)` |
+| Array (filled) | `__new(__array(T), n, val)` |
+| Array (literal values) | `__new_array(T, v1, v2, ...)` |
+
+The bare form (`__struct Foo` and `.`) also works — both spellings produce the same WASM type — but the `*`/`->` form is the documented preferred style.
 
 ### `__struct`
 
 ```c
-__struct Point {
-    float x;
-    float y;
+__struct Node {
+    int v;
+    __struct Node *next;       // recursive ref — '*' form
+    __array(int) children;     // array — no '*'
 };
 
-__struct Node __extends(__struct Point) {
-    int tag;
+__struct Animal { int id; };
+__struct Dog {
+    __extends(__struct Animal);
+    int id;       // must repeat parent's fields, in order, same names + types
+    int paws;
 };
 ```
 
-Allocate with `__new`, access fields with `.`:
-
-```c
-Point p = __new(Point, 1.0f, 2.0f);
-float x = p.x;
-p.y = 3.0f;
-```
-
-Structs support single inheritance via `__extends()`. All `__struct` types are open for subtyping.
+Single inheritance via `__extends`. All `__struct` types are emitted as open for subtyping. Structurally identical types unify across translation units; mutually-recursive types share a rec group.
 
 ### `__array(T)`
 
 GC-managed arrays with a fixed element type and runtime length:
 
 ```c
-__array(int) scores = __new(int, 100);  // 100 elements, default-initialized
+__array(int) scores = __new(__array(int), 100);  // 100 zero-initialized
 scores[0] = 42;
 int len = __array_len(scores);
+
+__array(int) vals = __new_array(int, 1, 2, 3, 4, 5);  // literal element list
+__array(int) ones = __new(__array(int), 5, 1);        // 5 elements, all = 1
 ```
 
-Fixed-element initialization:
+When the element type is a GC struct, spell *that* with `*` too:
 
 ```c
-__array(int) vals = __new_array(int, 1, 2, 3, 4, 5);
+__array(__struct Point *) pts = __new_array(__struct Point *,
+    __new(__struct Point *, 1, 2),
+    __new(__struct Point *, 3, 4));
+pts[0]->x;
 ```
 
-Bulk operations: `__array_fill(arr, offset, value, count)` and `__array_copy(dst, dstOff, src, srcOff, count)`.
+Bulk operations: `__array_fill(arr, off, val, n)` and `__array_copy(dst, dstOff, src, srcOff, n)`.
 
 ### Reference intrinsics
 
@@ -141,22 +174,53 @@ Bulk operations: `__array_fill(arr, offset, value, count)` and `__array_copy(dst
 |-----------|-------------|
 | `__ref_is_null(ref)` | Null check (`ref.is_null`) |
 | `__ref_eq(a, b)` | Reference identity (`ref.eq`) |
-| `__ref_null(Type)` | Typed null reference |
-| `__ref_test(Type, ref)` | Downcast type test (`ref.test`) |
-| `__ref_cast(Type, ref)` | Downcast (`ref.cast`, traps on failure) |
+| `__ref_null(__struct Foo *)` | Typed null reference |
+| `__ref_test(__struct Foo *, ref)` | Runtime type test (`ref.test`) |
+| `__ref_cast(__struct Foo *, ref)` | Downcast (`ref.cast`, traps on failure) |
+
+### Boolean / null sugar
+
+Refs can be used in boolean / null contexts as sugar for the explicit intrinsics:
+
+| Sugar | Equivalent |
+|---|---|
+| `if (ref)`, `while (ref)`, `ref ? a : b` | `if (!__ref_is_null(ref))` etc |
+| `!ref` | `__ref_is_null(ref)` |
+| `ref == 0`, `ref == NULL` | `__ref_is_null(ref)` |
+| `ref1 == ref2` | `__ref_eq(ref1, ref2)` (identity) |
+| `__struct Foo *p = NULL;` | `= __ref_null(__struct Foo *)` |
+
+Both forms are valid; pick per IDE-friendliness vs source readability.
 
 ### Extern bridge
 
-GC references can cross the JS/Wasm boundary via `__anyref` and the externref conversions:
+GC refs cross the JS/Wasm boundary via `__anyref` + the extern conversions:
 
 | Intrinsic | Description |
-|-----------|-------------|
+|---|---|
 | `__ref_as_extern(ref)` | GC ref → externref (`extern.convert_any`) |
 | `__ref_as_any(ext)` | externref → anyref (`any.convert_extern`) |
 
+### Auto + GC
+
+C23 `auto` pairs naturally with GC types — the type spelling stays on the right of the `=`:
+
+```c
+auto p = __new(__struct Point *, 7, 11);
+auto arr = __new_array(int, 1, 2, 3);
+for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
+```
+
 ### Constraints
 
-GC references cannot live in linear memory. The same restrictions as `__externref` apply: no `&`, no embedding in C structs/unions, no `sizeof`, no casts to/from integers.
+- No `&` on GC refs (no address)
+- No embedding in C structs/unions
+- No `sizeof` on ref types
+- No casts to/from integers (use `__ref_*` intrinsics)
+- `__array(T) *` is rejected — arrays don't take the `*` sugar
+- `__new(__struct Foo, ...)` works but the preferred form is `__new(__struct Foo *, ...)`
+
+For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
 
 ## Vendored projects
 

@@ -4332,6 +4332,9 @@ class Parser {
           this.error(extTok, "__extends(...) requires a __struct type");
         }
         parentType = this.parseGCStructSpecifier();
+        // Allow trailing `*` (collapses for GC ref types) for IDE-friendly
+        // consistency with the preferred __struct Foo * spelling everywhere.
+        while (this.matchText("*")) { /* collapse */ }
         this.expect(")");
         this.expect(";");
         if (!parentType.isGCStruct() || !parentType.isComplete) {
@@ -6422,6 +6425,12 @@ class Parser {
     let type = baseType;
     let ptrCount = 0;
     while (this.matchText("*")) {
+      const starTok = this.peek(-1);
+      // GC arrays don't take the `*` sugar — there's no C "pointer to array"
+      // idiom to mirror. Reject it explicitly so users use `__array(T)` directly.
+      if (type.kind === Types.TypeKind.GC_ARRAY) {
+        this.error(starTok, `'__array(...)' types do not take a '*' — write '__array(T) name' (the array is already a reference)`);
+      }
       ptrCount++;
       type = type.pointer();
       while (true) {

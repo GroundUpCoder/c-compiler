@@ -7,7 +7,7 @@
       ],
       "defines": [
         "__struct=struct",
-        "__array(T)=T",
+        "__array(T)=T*",
         "__new(T,...)=(T*){0}",
         "__new_array(T,...)=(T*){0}",
         "__ref_is_null(R)=((R)==0)",

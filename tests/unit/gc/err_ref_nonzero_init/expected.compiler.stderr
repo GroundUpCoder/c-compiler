@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_ref_nonzero_init/main.c.
+tests/unit/gc/err_ref_nonzero_init/main.c:3: error: cannot convert 'int' to reference type '__struct A' (only the literal 0 / NULL is allowed; use __ref_null(__struct A) to be explicit)

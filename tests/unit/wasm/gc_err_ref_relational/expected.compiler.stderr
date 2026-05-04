@@ -1,2 +1,0 @@
-Got 1 parse errors in tests/unit/wasm/gc_err_ref_relational/main.c.
-tests/unit/wasm/gc_err_ref_relational/main.c:5: error: '<' on reference type is not allowed (only ==, != for identity/null)

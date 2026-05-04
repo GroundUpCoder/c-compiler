@@ -1,0 +1,4 @@
+Got 1 link errors.
+Link error: conflicting types for 'read_x' ('(__struct Foo)int' vs '(__struct Foo)int')
+  at tests/unit/gc/err_link_mismatch/helper.c:2
+  at tests/unit/gc/err_link_mismatch/main.c:2

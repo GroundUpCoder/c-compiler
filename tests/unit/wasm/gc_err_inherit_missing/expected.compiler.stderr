@@ -1,2 +1,0 @@
-Got 1 parse errors in tests/unit/wasm/gc_err_inherit_missing/main.c.
-tests/unit/wasm/gc_err_inherit_missing/main.c:2: error: __struct B extends 'A' but has only 1 fields (parent has 2)

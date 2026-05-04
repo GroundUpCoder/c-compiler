@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_array_pointer/main.c.
+tests/unit/gc/err_array_pointer/main.c:2: error: '__array(...)' types do not take a '*' — write '__array(T) name' (the array is already a reference)

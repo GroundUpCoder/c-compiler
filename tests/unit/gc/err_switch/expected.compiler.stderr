@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_switch/main.c.
+tests/unit/gc/err_switch/main.c:4: error: cannot switch on reference type '__struct Foo'
