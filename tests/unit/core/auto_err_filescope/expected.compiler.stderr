@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/auto_err_filescope/main.c.
+tests/unit/core/auto_err_filescope/main.c:1: error: 'auto' type inference is only supported at function scope

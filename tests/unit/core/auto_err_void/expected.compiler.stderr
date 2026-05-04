@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/auto_err_void/main.c.
+tests/unit/core/auto_err_void/main.c:2: error: 'auto v' cannot infer type 'void'

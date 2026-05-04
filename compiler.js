@@ -76,6 +76,9 @@ const Keyword = Object.freeze({
   ALIGNOF: "_Alignof",
   ALIGNAS: "_Alignas",
   THREAD_LOCAL: "_Thread_local",
+  // C23
+  TYPEOF: "typeof",
+  TYPEOF_UNQUAL: "typeof_unqual",
   // Extensions
   BOOL: "_Bool",
   X_IMPORT: "__import",
@@ -805,6 +808,10 @@ const KEYWORD_MAP = new Map([
   ["_Alignof", Keyword.ALIGNOF],
   ["_Alignas", Keyword.ALIGNAS],
   ["_Thread_local", Keyword.THREAD_LOCAL],
+  ["typeof", Keyword.TYPEOF],
+  ["typeof_unqual", Keyword.TYPEOF_UNQUAL],
+  ["__typeof", Keyword.TYPEOF],
+  ["__typeof__", Keyword.TYPEOF],
   ["_Bool", Keyword.BOOL],
   ["__import", Keyword.X_IMPORT],
   ["__builtin_va_start", Keyword.X_BUILTIN_VA_START],
@@ -1895,6 +1902,7 @@ const TypeKind = Object.freeze({
   TAG: "tag", EXTERNREF: "externref", REFEXTERN: "refextern",
   GC_STRUCT: "gc_struct", GC_ARRAY: "gc_array",
   ANYREF: "anyref",
+  AUTO: "auto",  // C23 type-inference sentinel (set during parse, resolved at init)
 });
 
 const TagKind = Object.freeze({
@@ -2213,6 +2221,7 @@ const TLDOUBLE = new TypeInfo(TypeKind.LDOUBLE, 8, 8, true);
 const TEXTERNREF = new TypeInfo(TypeKind.EXTERNREF, 0, 0, false);
 const TREFEXTERN = new TypeInfo(TypeKind.REFEXTERN, 0, 0, false);
 const TANYREF = new TypeInfo(TypeKind.ANYREF, 0, 0, true);
+const TAUTO = new TypeInfo(TypeKind.AUTO, 0, 0, false);
 
 // Type construction caches
 function arrayOf(elemType, size) {
@@ -2428,7 +2437,7 @@ return {
   ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
   TypeInfo,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TANYREF,
+  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TANYREF, TAUTO,
   arrayOf, functionType, getOrCreateTagType,
   getOrCreateGCStructType, gcArrayOf,
   computeStructLayout, computeUnionLayout, computeUnaryType,
@@ -3769,6 +3778,7 @@ class Parser {
         case Lexer.Keyword.REGISTER: case Lexer.Keyword.AUTO:
         case Lexer.Keyword.INLINE: case Lexer.Keyword.NORETURN:
         case Lexer.Keyword.ALIGNAS: case Lexer.Keyword.THREAD_LOCAL:
+        case Lexer.Keyword.TYPEOF: case Lexer.Keyword.TYPEOF_UNQUAL:
         case Lexer.Keyword.X_IMPORT:
         case Lexer.Keyword.X_EXTERNREF:
         case Lexer.Keyword.X_REFEXTERN:
@@ -3891,6 +3901,7 @@ class Parser {
     let longCount = 0, shortCount = 0;
     let hasChar = false, hasInt = false, hasFloat = false, hasDouble = false;
     let hasVoid = false, hasBool = false;
+    let sawAuto = false;
 
     while (!this.atEnd()) {
       const t = this.peek();
@@ -3900,7 +3911,18 @@ class Parser {
       if (this.matchKW(Lexer.Keyword.STATIC)) { storageClass = Types.StorageClass.STATIC; continue; }
       if (this.matchKW(Lexer.Keyword.EXTERN)) { storageClass = Types.StorageClass.EXTERN; continue; }
       if (this.matchKW(Lexer.Keyword.REGISTER)) { storageClass = Types.StorageClass.REGISTER; continue; }
-      if (this.matchKW(Lexer.Keyword.AUTO)) { storageClass = Types.StorageClass.AUTO; continue; }
+      if (this.matchKW(Lexer.Keyword.AUTO)) {
+        // C23: `auto` plays double duty as a storage class (legacy meaning,
+        // equivalent to no storage class for locals) AND as a type-inference
+        // specifier when no other type is given. Allowing it to combine with
+        // an existing storage class (e.g. `static auto`) means it acts as
+        // inference only — the prior storage class is preserved. Clang's
+        // C23 mode is stricter here and rejects the combo, but allowing it
+        // is more useful in practice ("static var with inferred type").
+        if (storageClass === Types.StorageClass.NONE) storageClass = Types.StorageClass.AUTO;
+        sawAuto = true;
+        continue;
+      }
       if (this.matchKW(Lexer.Keyword.X_IMPORT)) {
         storageClass = Types.StorageClass.IMPORT;
         if (this.atText("(")) {
@@ -3999,6 +4021,33 @@ class Parser {
         continue;
       }
 
+      // typeof / typeof_unqual / __typeof__ (C23 + GCC). Acts as a type
+      // specifier — yields the type of an expression (without lvalue/decay
+      // conversion) or a type name. typeof_unqual additionally strips
+      // const/volatile from the result.
+      if (this.atKW(Lexer.Keyword.TYPEOF) || this.atKW(Lexer.Keyword.TYPEOF_UNQUAL)) {
+        const isUnqual = this.atKW(Lexer.Keyword.TYPEOF_UNQUAL);
+        const tok = this.peek();
+        this.advance();
+        this.expect("(");
+        let resolved;
+        if (this.isTypeName()) {
+          const specs = this.parseDeclSpecifiers();
+          resolved = specs.type;
+          if (this.atText("*") || this.atText("[") || this.atText("(")) {
+            const decl = this.parseDeclarator(resolved);
+            resolved = decl.type;
+          }
+        } else {
+          const expr = this.parseExpression();
+          resolved = expr.type;
+        }
+        this.expect(")");
+        if (isUnqual) resolved = resolved.removeQualifiers();
+        type = resolved;
+        continue;
+      }
+
       // struct/union/enum
       if (this.atKW(Lexer.Keyword.STRUCT) || this.atKW(Lexer.Keyword.UNION)) {
         type = this.parseTagSpecifier();
@@ -4032,7 +4081,15 @@ class Parser {
     if (type === null) {
       const hasBase = hasVoid || hasBool || hasChar || hasInt || hasFloat || hasDouble ||
           shortCount > 0 || longCount > 0 || isSigned || isUnsigned;
-      if (hasVoid) type = Types.TVOID;
+      // C23: bare `auto` (no other type spec) means type-inference. The actual
+      // type is filled in by the declarator/init handler.
+      if (sawAuto && !hasBase) {
+        type = Types.TAUTO;
+        // `auto` here was consumed as a storage class above; for the inference
+        // role it should be treated as 'auto storage' (the legacy meaning),
+        // which is the default for locals — leave storageClass as AUTO so it
+        // still resolves naturally.
+      } else if (hasVoid) type = Types.TVOID;
       else if (hasBool) type = Types.TBOOL;
       else if (hasChar) type = isSigned ? Types.TSCHAR : (isUnsigned ? Types.TUCHAR : Types.TCHAR);
       else if (shortCount > 0) type = isUnsigned ? Types.TUSHORT : Types.TSHORT;
@@ -5130,6 +5187,35 @@ class Parser {
     }
   }
 
+  // C23 `auto`: validate that the declarator is a plain identifier (no
+  // pointer / array / function modifiers) and that an initializer is present.
+  // Returns the inferred type (post lvalue/decay), or null if validation fails.
+  _resolveAuto(baseType, declType, name, initExpr, declTok) {
+    if (baseType !== Types.TAUTO) return null;
+    // declType may have been "wrapped" by parseDeclarator if user wrote
+    // `auto *x` etc. Detect by checking if declType differs from TAUTO.
+    if (declType !== Types.TAUTO) {
+      this.error(declTok, `'auto' cannot be combined with declarator modifiers (no '*', '[]', or '()' allowed)`);
+      return Types.TINT;
+    }
+    if (!initExpr) {
+      this.error(declTok, `'auto ${name}' requires an initializer`);
+      return Types.TINT;
+    }
+    if (initExpr.kind === Types.ExprKind.INIT_LIST) {
+      this.error(declTok, `'auto ${name}' cannot be initialized from a braced initializer list`);
+      return Types.TINT;
+    }
+    // Apply lvalue conversion (decay arrays/functions to pointers); strip
+    // top-level qualifiers (matches C23 semantics).
+    const initType = initExpr.type.decay().removeQualifiers();
+    if (initType === Types.TVOID) {
+      this.error(declTok, `'auto ${name}' cannot infer type 'void'`);
+      return Types.TINT;
+    }
+    return initType;
+  }
+
   // Check that an expression isn't being implicitly converted to a ref type.
   // We forbid `int 0` / `NULL` → ref because: (a) it leaks to the IDE
   // (clang sees `struct Foo p = 0` and errors), (b) we have an explicit
@@ -5944,6 +6030,7 @@ class Parser {
       if (!first) { if (!this.matchText(",")) break; }
       first = false;
 
+      const declTok = this.peek();
       const decl = this.parseDeclarator(baseType, specs.storageClass === Types.StorageClass.TYPEDEF);
       let type = decl.type;
       const name = decl.name || "__unnamed";
@@ -6011,9 +6098,19 @@ class Parser {
       if (this.matchText("=")) {
         const eqTok = this.peek(-1);
         if (this.atText("{")) {
+          if (baseType === Types.TAUTO) {
+            this.error(declTok, `'auto ${name}' cannot be initialized from a braced initializer list`);
+          }
           dvar.initExpr = this.parseInitList(type);
         } else {
           dvar.initExpr = this.parseAssignmentExpression();
+          // C23 `auto`: infer type from init before applying any other checks.
+          if (baseType === Types.TAUTO) {
+            type = this._resolveAuto(baseType, type, name, dvar.initExpr, declTok);
+            dvar.type = type;
+            // Re-evaluate allocClass: aggregates need MEMORY storage.
+            if (type.isAggregate()) dvar.allocClass = Types.AllocClass.MEMORY;
+          }
           this._rejectIntToRef(type, dvar.initExpr, eqTok);
         }
         // Handle string-initialized char array
@@ -6032,6 +6129,12 @@ class Parser {
             normalizeInitList(dvar.initExpr, type);
           }
         }
+      }
+
+      // Catch `auto x;` (no initializer).
+      if (baseType === Types.TAUTO && dvar.type === Types.TAUTO) {
+        this.error(declTok, `'auto ${name}' requires an initializer`);
+        dvar.type = Types.TINT;
       }
 
       // Divert static/extern locals: treat them as globals for allocation/linking
@@ -6061,6 +6164,10 @@ class Parser {
 
     // Handle bare tag declaration: struct Foo { ... };
     if (this.matchText(";")) return;
+
+    if (baseType === Types.TAUTO) {
+      this.error(this.peek(), "'auto' type inference is only supported at function scope");
+    }
 
     let first = true;
     while (true) {

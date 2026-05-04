@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/auto_err_pointer/main.c.
+tests/unit/core/auto_err_pointer/main.c:3: error: 'auto' cannot be combined with declarator modifiers (no '*', '[]', or '()' allowed)

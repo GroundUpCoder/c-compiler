@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/auto_err_brace/main.c.
+tests/unit/core/auto_err_brace/main.c:2: error: 'auto a' cannot be initialized from a braced initializer list

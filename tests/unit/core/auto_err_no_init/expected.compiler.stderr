@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/auto_err_no_init/main.c.
+tests/unit/core/auto_err_no_init/main.c:2: error: 'auto x' requires an initializer
