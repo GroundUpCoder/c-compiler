@@ -1,0 +1,7 @@
+g_eq null: 1
+g_foo null: 1
+g_eq: 100
+g_foo.x: 42
+first call, set
+subsequent: 7
+subsequent: 7

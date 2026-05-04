@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_global_ref_nonnull_init/main.c.
+tests/unit/gc/err_global_ref_nonnull_init/main.c:3: error: global 'g_eq': reference-typed globals can only be initialized to null/0 (WASM constant init expressions can't allocate); set the value in main() or a startup function

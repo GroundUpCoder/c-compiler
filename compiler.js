@@ -4489,11 +4489,23 @@ class Parser {
     return false;
   }
 
-  combineDeclaratorTypes(innerType, outerBase, outerResult) {
-    // For parenthesized declarators: replace the base in inner with outerResult
-    // This handles things like: int (*fp)(void) where inner = *<base>, outer suffix = (void)
-    // We need to replace the deepest base in inner with outerResult
-    if (innerType === outerBase) return outerResult;
+  combineDeclaratorTypes(innerType, outerBase, outerResult, innerPtrCount) {
+    // For parenthesized declarators: replace the base in inner with outerResult.
+    // Handles things like: int (*fp)(void) where inner = *<base>, outer suffix = (void).
+    // We need to replace the deepest base in inner with outerResult.
+    //
+    // Special case: GC ref types collapse `*` (so inner.type may equal
+    // outerBase even when the user wrote `*`s). innerPtrCount tells us how
+    // many were consumed at the top of the inner declarator — re-apply them
+    // to outerResult so things like `__eqref (*fn)(int)` get the right
+    // pointer-to-function-returning-eqref type rather than just function.
+    if (innerType === outerBase) {
+      let r = outerResult;
+      if (innerPtrCount) {
+        for (let i = 0; i < innerPtrCount; i++) r = r.pointer();
+      }
+      return r;
+    }
     if (innerType.kind === Types.TypeKind.POINTER) {
       const newBase = this.combineDeclaratorTypes(innerType.baseType, outerBase, outerResult);
       const result = newBase.pointer();
@@ -5418,7 +5430,14 @@ class Parser {
             return this.parsePostfixTail(cl);
           }
           if (castType.removeQualifiers().isRef() || (expr.type && expr.type.removeQualifiers().isRef())) {
-            this.error(this.peek(-1), "Cannot cast to or from a reference type; use __ref_cast(T, x) for GC ref downcasts");
+            // Allow `(refT)0` / `(refT)NULL` — typed null pointer constant
+            // is a long-standing C idiom and unambiguous.
+            if (castType.removeQualifiers().isRef() &&
+                !(expr.type && expr.type.removeQualifiers().isRef()) &&
+                this._isNullPointerConstant(expr)) {
+              return new AST.ECast(castType, castType, expr);
+            }
+            this.error(this.peek(-1), "Cannot cast to or from a reference type; use __cast(T, x) (or __ref_cast for GC ref downcast)");
           }
           return new AST.ECast(castType, castType, expr);
         }
@@ -5643,6 +5662,11 @@ class Parser {
 
   computeTernaryType(thenType, elseType) {
     if (thenType === elseType) return thenType;
+    const tIsRef = thenType.removeQualifiers().isRef();
+    const eIsRef = elseType.removeQualifiers().isRef();
+    if (tIsRef && eIsRef) return thenType;
+    if (tIsRef) return thenType;          // (ref ? ref : 0) → ref (null branch)
+    if (eIsRef) return elseType;
     if (thenType.isPointer() && elseType.isPointer()) return thenType;
     if (thenType.isPointer()) return thenType;
     if (elseType.isPointer()) return elseType;
@@ -5713,6 +5737,14 @@ class Parser {
       // allowed as a non-ref source. _rejectIntToRefAssign handles this.
       if (bop === "ASSIGN" && lIsRef && !rIsRef) {
         this._rejectNonZeroToRef(left.type, right, opTok);
+      }
+      // Compound assignment (+=, -=, *=, etc.) has no meaning on ref types.
+      if (lIsRef &&
+          (bop === "ADD_ASSIGN" || bop === "SUB_ASSIGN" || bop === "MUL_ASSIGN" ||
+           bop === "DIV_ASSIGN" || bop === "MOD_ASSIGN" || bop === "SHL_ASSIGN" ||
+           bop === "SHR_ASSIGN" || bop === "AND_ASSIGN" || bop === "XOR_ASSIGN" ||
+           bop === "OR_ASSIGN")) {
+        this.error(opTok, `'${op}' on reference type is not allowed`);
       }
       // Apply C99 6.3.1.1 integer promotions for bitfield operands
       const resType = this.computeBinaryType(bop, this.promoteExprType(left), this.promoteExprType(right));
@@ -6440,6 +6472,15 @@ class Parser {
         } else {
           dvar.initExpr = this.parseAssignmentExpression();
           this._rejectIntToRef(type, dvar.initExpr, eqTok);
+          // File-scope ref-typed globals: WASM constant init expressions
+          // can only emit ref.null. Allocation (e.g. boxing a primitive)
+          // is not allowed at module-init time.
+          if (type.removeQualifiers().isRef() && !this._isNullPointerConstant(dvar.initExpr) &&
+              !dvar.initExpr.type.removeQualifiers().isRef()) {
+            this.error(eqTok,
+              `global '${name}': reference-typed globals can only be initialized to null/0 ` +
+              `(WASM constant init expressions can't allocate); set the value in main() or a startup function`);
+          }
         }
         // Handle string-initialized char array
         if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
@@ -6502,8 +6543,8 @@ class Parser {
       const inner = this.parseDeclarator(type);
       this.expect(")");
       type = this.parseDeclaratorSuffixWithNames(saved);
-      const combined = this.combineDeclaratorTypes(inner.type, saved, type.type);
-      return { type: combined, name: inner.name, _paramNames: inner._paramNames || type._paramNames, _isKnR: inner._isKnR || type._isKnR };
+      const combined = this.combineDeclaratorTypes(inner.type, saved, type.type, inner._ptrCount);
+      return { type: combined, name: inner.name, _paramNames: inner._paramNames || type._paramNames, _isKnR: inner._isKnR || type._isKnR, _ptrCount: ptrCount };
     }
 
     if (this.atKind(Lexer.TokenKind.IDENT)) {
@@ -6511,7 +6552,7 @@ class Parser {
     }
 
     const suffix = this.parseDeclaratorSuffixWithNames(type);
-    return { type: suffix.type, name, _paramNames: suffix._paramNames, _isKnR: suffix._isKnR };
+    return { type: suffix.type, name, _paramNames: suffix._paramNames, _isKnR: suffix._isKnR, _ptrCount: ptrCount };
   }
 
   parseDeclaratorSuffixWithNames(type) {
@@ -10768,7 +10809,7 @@ class CodeGenerator {
             const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, arrType);
             for (let i = 0; i < expr.args.length; i++) {
               this.emitExpr(expr.args[i]);
-              this.emitConversion(expr.args[i].type, expr.argType);
+              this.emitConversion(expr.args[i].type, expr.argType, expr.args[i]);
             }
             this.body.arrayNewFixed(typeIdx, expr.args.length);
             break;
@@ -10781,7 +10822,7 @@ class CodeGenerator {
             this.emitExpr(expr.args[1]);
             if (wtEquals(this.getBinaryWasmType(expr.args[1].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
             this.emitExpr(expr.args[2]);
-            this.emitConversion(expr.args[2].type, arrType.baseType);
+            this.emitConversion(expr.args[2].type, arrType.baseType, expr.args[2]);
             this.emitExpr(expr.args[3]);
             if (wtEquals(this.getBinaryWasmType(expr.args[3].type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
             this.body.arrayFill(typeIdx);
@@ -10934,7 +10975,7 @@ class CodeGenerator {
             const fields = t.tagDecl.members;
             for (let i = 0; i < expr.args.length; i++) {
               this.emitExpr(expr.args[i]);
-              this.emitConversion(expr.args[i].type, fields[i].type);
+              this.emitConversion(expr.args[i].type, fields[i].type, expr.args[i]);
             }
             this.body.structNew(typeIdx);
           }
@@ -10949,7 +10990,7 @@ class CodeGenerator {
           } else {
             // [init, length]
             this.emitExpr(expr.args[1]);
-            this.emitConversion(expr.args[1].type, t.baseType);
+            this.emitConversion(expr.args[1].type, t.baseType, expr.args[1]);
             this.emitExpr(expr.args[0]);
             if (wtEquals(this.getBinaryWasmType(expr.args[0].type), WT_I64)) {
               this.body.aop(WT_I32, ALU.OP_WRAP_I64);
@@ -11117,11 +11158,29 @@ function generateCode(units, outputFile, options) {
       if (rt === Types.TREFEXTERN) {
         throw new Error(`Cannot declare global '__refextern' variable '${varDef.name}' — non-nullable refs have no valid initializer. Use '__externref' instead.`);
       }
+      // WASM globals can only have constant initializers (ref.null is the
+      // only ref-typed constant we support). Reject non-null initializers
+      // for global ref types — user must initialize in main / a startup fn.
+      if (varDef.initExpr) {
+        const isNullConst = (e) =>
+          (e.kind === Types.ExprKind.INT && e.value === 0n) ||
+          (e.kind === Types.ExprKind.IMPLICIT_CAST && isNullConst(e.expr)) ||
+          (e.kind === Types.ExprKind.CAST && isNullConst(e.expr));
+        if (!isNullConst(varDef.initExpr)) {
+          throw new Error(
+            `global '${varDef.name}': reference-typed globals can only be initialized to null/0 ` +
+            `(WASM constant init expressions can't allocate); set the value in main() or a startup function`);
+        }
+      }
       if (rt.isGCRef()) {
         const refWt = cToWasmType(rt, wmod);
         const initExpr = [];
         const code = new WasmCode(initExpr);
-        code.refNullIdx(refWt.heap);
+        // For concrete GC types (struct/array), heap is a type idx — use
+        // the LEB-encoded form. For abstract heap types like __eqref (heap
+        // byte 0x6D), use the single-byte form via refNull.
+        if (refWt.heapIsIdx) code.refNullIdx(refWt.heap);
+        else code.refNull(refWt.heap);
         code.end();
         const globalIdx = wmod.addGlobal(refWt, initExpr, true);
         cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);

@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_ref_compound_assign/main.c.
+tests/unit/gc/err_ref_compound_assign/main.c:3: error: '+=' on reference type is not allowed
