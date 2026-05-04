@@ -43,11 +43,7 @@ int main(void) {
   auto rv = identity(123);
   printf("%d\n", rv);
 
-  // Static auto
-  static auto sv = 42;
-  printf("%d\n", sv);
-
-  // const auto
+  // const auto (qualifier, not storage class — allowed)
   const auto cv = 7;
   printf("%d\n", cv);
 

@@ -1,0 +1,9 @@
+1 2 3 4 5 
+bare.v=1 ptr->v=1
+head->next->v=2
+empty null: 1
+(via !)
+wat->v=1
+len=3 arr[2]=300
+animal id=7
+d->id=7 d->paws=4

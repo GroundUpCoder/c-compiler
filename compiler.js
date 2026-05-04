@@ -2036,6 +2036,15 @@ class TypeInfo {
   }
 
   pointer() {
+    // GC ref types are already "one level of indirection" semantically — the
+    // value IS a reference to a heap object. Allowing `__struct Foo *` (and
+    // `**`, etc.) to collapse to `__struct Foo` lets users write the C-pointer
+    // form for IDE friendliness (clang accepts `struct Foo *`) without
+    // changing the underlying WASM type.
+    if (this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
+        this.kind === TypeKind.ANYREF) {
+      return this;
+    }
     if (this._pointer) return this._pointer;
     const p = new TypeInfo(TypeKind.POINTER, 4, 4, true, { baseType: this });
     this._pointer = p;
@@ -3912,14 +3921,16 @@ class Parser {
       if (this.matchKW(Lexer.Keyword.EXTERN)) { storageClass = Types.StorageClass.EXTERN; continue; }
       if (this.matchKW(Lexer.Keyword.REGISTER)) { storageClass = Types.StorageClass.REGISTER; continue; }
       if (this.matchKW(Lexer.Keyword.AUTO)) {
-        // C23: `auto` plays double duty as a storage class (legacy meaning,
-        // equivalent to no storage class for locals) AND as a type-inference
-        // specifier when no other type is given. Allowing it to combine with
-        // an existing storage class (e.g. `static auto`) means it acts as
-        // inference only — the prior storage class is preserved. Clang's
-        // C23 mode is stricter here and rejects the combo, but allowing it
-        // is more useful in practice ("static var with inferred type").
-        if (storageClass === Types.StorageClass.NONE) storageClass = Types.StorageClass.AUTO;
+        // C23: `auto` is a storage-class specifier (legacy meaning) that may
+        // additionally trigger type inference when no other type spec is
+        // given. Per spec strict reading (matching clang), it's mutually
+        // exclusive with other storage-class specifiers — `static auto x`
+        // is invalid. For `static`-with-inference, write `static int x` etc.
+        if (storageClass !== Types.StorageClass.NONE) {
+          this.error(this.peek(-1),
+            `'auto' cannot be combined with another storage-class specifier`);
+        }
+        storageClass = Types.StorageClass.AUTO;
         sawAuto = true;
         continue;
       }
@@ -5182,9 +5193,8 @@ class Parser {
   }
 
   _rejectRefAsCondition(expr, tok, ctxName) {
-    if (expr && expr.type && expr.type.removeQualifiers().isRef()) {
-      this.error(tok, `reference type '${expr.type.toString()}' cannot be used as a ${ctxName} condition; use !__ref_is_null(...) instead`);
-    }
+    // Refs in boolean context are now allowed as sugar for !__ref_is_null.
+    // Helper retained as a no-op so existing call sites need no edits.
   }
 
   // C23 `auto`: validate that the declarator is a plain identifier (no
@@ -5216,19 +5226,29 @@ class Parser {
     return initType;
   }
 
-  // Check that an expression isn't being implicitly converted to a ref type.
-  // We forbid `int 0` / `NULL` → ref because: (a) it leaks to the IDE
-  // (clang sees `struct Foo p = 0` and errors), (b) we have an explicit
-  // `__ref_null(T)` form that's IDE-friendly. Locals/globals get auto-null
-  // without any initializer, so explicit null init is rarely needed anyway.
-  _rejectIntToRef(targetType, expr, tok) {
+  // Allow null pointer constants (literal 0 / NULL) as the only non-ref
+  // value implicitly convertible to a ref. Anything else errors with a
+  // helpful pointer to __ref_null.
+  _isNullPointerConstant(expr) {
+    if (!expr) return false;
+    if (expr.kind === Types.ExprKind.INT && expr.value === 0n) return true;
+    // Strip implicit casts and re-check (handles things like ((void*)0) which
+    // our preprocessor may surface as a CAST expression around 0).
+    if (expr.kind === Types.ExprKind.IMPLICIT_CAST || expr.kind === Types.ExprKind.CAST) {
+      return this._isNullPointerConstant(expr.expr);
+    }
+    return false;
+  }
+  _rejectNonZeroToRef(targetType, expr, tok) {
     if (!expr || !targetType) return;
     const t = targetType.removeQualifiers();
     const s = expr.type.removeQualifiers();
-    if (t.isRef() && !s.isRef()) {
-      this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}'; use __ref_null(${targetType.toString()}) for a null ref, or omit the initializer (refs default to null)`);
+    if (t.isRef() && !s.isRef() && !this._isNullPointerConstant(expr)) {
+      this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (only the literal 0 / NULL is allowed; use __ref_null(${targetType.toString()}) to be explicit)`);
     }
   }
+  // Backward-compat alias used elsewhere in parser.
+  _rejectIntToRef(targetType, expr, tok) { this._rejectNonZeroToRef(targetType, expr, tok); }
 
   lookupMemberChain(type, name) {
     const ut = type.removeQualifiers();
@@ -5289,11 +5309,8 @@ class Parser {
     if (this.matchText("-")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e); }
     if (this.matchText("~")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e); }
     if (this.matchText("!")) {
-      const tok = this.peek(-1);
       const e = this.parseCastExpression();
-      if (e.type.removeQualifiers().isRef()) {
-        this.error(tok, `'!' on reference type '${e.type.toString()}' is not allowed; use __ref_is_null(...) instead`);
-      }
+      // `!ref` is equivalent to __ref_is_null(ref). Allowed as sugar.
       return new AST.EUnary(Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e);
     }
 
@@ -5426,6 +5443,18 @@ class Parser {
       if (this.matchText("->")) {
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
         let bt = expr.type.removeQualifiers();
+        // GC ref types are already "one indirection" semantically — `p->x` on
+        // a __struct ref is equivalent to `p.x`. Build EMember instead of
+        // EArrow so codegen takes the GC-struct member path.
+        if (bt.kind === Types.TypeKind.GC_STRUCT) {
+          const { chain } = this.lookupMember(bt, name);
+          if (chain) {
+            for (const m of chain) expr = new AST.EMember(m.type, expr, m.name, m);
+          } else {
+            expr = new AST.EMember(Types.TINT, expr, name, null);
+          }
+          continue;
+        }
         if (bt.kind === Types.TypeKind.ARRAY) bt = bt.baseType;
         else if (bt.kind === Types.TypeKind.POINTER) bt = bt.baseType;
         const { chain } = this.lookupMember(bt, name);
@@ -5608,22 +5637,27 @@ class Parser {
           this.warning(this.peek(-1), "array used in arithmetic expression; decaying to pointer");
         }
       }
-      // Reject ref operands on comparison/logical ops — they have no defined
-      // semantics; users should use __ref_is_null / __ref_eq instead.
+      // Refs are allowed in == / != (null compare against literal 0, or
+      // identity between two refs) and in &&/|| (boolean coercion via
+      // ref.is_null). Relational operators have no meaning on refs.
       const lIsRef = left.type.removeQualifiers().isRef();
       const rIsRef = right.type.removeQualifiers().isRef();
       if (lIsRef || rIsRef) {
+        if (bop === "LT" || bop === "GT" || bop === "LE" || bop === "GE") {
+          this.error(opTok, `'${op}' on reference type is not allowed (only ==, != for identity/null)`);
+        }
+        // For ==/!= involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
         if (bop === "EQ" || bop === "NE") {
-          this.error(opTok, `'${op}' on reference type is not allowed; use __ref_is_null(x) for null tests, __ref_eq(a, b) for identity`);
-        } else if (bop === "LT" || bop === "GT" || bop === "LE" || bop === "GE") {
-          this.error(opTok, `'${op}' on reference type is not allowed`);
-        } else if (bop === "LAND" || bop === "LOR") {
-          this.error(opTok, `'${op}' on reference type is not allowed; use __ref_is_null(...) to convert to a boolean`);
+          if (lIsRef !== rIsRef && !this._isNullPointerConstant(lIsRef ? right : left)) {
+            this.error(opTok,
+              `'${op}' between reference and non-reference requires the non-ref operand to be the literal 0 / NULL`);
+          }
         }
       }
-      // Reject implicit int→ref on assignment (use __ref_null(T) instead).
+      // Assignment to ref: only literal 0 (or null pointer constant) is
+      // allowed as a non-ref source. _rejectIntToRefAssign handles this.
       if (bop === "ASSIGN" && lIsRef && !rIsRef) {
-        this._rejectIntToRef(left.type, right, opTok);
+        this._rejectNonZeroToRef(left.type, right, opTok);
       }
       // Apply C99 6.3.1.1 integer promotions for bitfield operands
       const resType = this.computeBinaryType(bop, this.promoteExprType(left), this.promoteExprType(right));
@@ -9641,18 +9675,19 @@ class CodeGenerator {
   }
 
   // --- Condition/bool helpers ---
-  // Refs are rejected as conditions / logical operands at parse time
-  // (use __ref_is_null / __ref_eq instead), so these only see numeric types.
   emitConditionToI32(condType) {
     const wt = this.getBinaryWasmType(condType);
-    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    // Ref → bool: not-null is true. Use ref.is_null then invert.
+    if (wtIsRef(wt)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+    else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
     else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
     else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
   }
 
   emitBoolNormalize(type) {
     const wt = this.getBinaryWasmType(type);
-    if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
+    if (wtIsRef(wt)) { this.body.refIsNull(); this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+    else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_NE); }
     else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_NE); }
     else if (wtEquals(wt, WT_I64)) { this.body.i64Const(0n); this.body.aop(WT_I64, ALU.OP_NE); }
     else { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
@@ -9682,12 +9717,13 @@ class CodeGenerator {
     const toWasm = this.getBinaryWasmType(toType);
     toType = toType.removeQualifiers();
     if (toType.isRef() && !wtIsRef(fromWasm)) {
-      // Implicit int→ref conversion is no longer allowed. Use __ref_null(T)
-      // to spell null for a ref type. (Locals/globals get auto-null without
-      // any initializer, so explicit initialization to null is rarely needed.)
-      throw new Error(
-        `cannot implicitly convert '${fromType.toString()}' to reference type '${toType.toString()}'; ` +
-        `use __ref_null(${toType.toString()}) for a null ref, or omit the initializer (refs default to null)`);
+      // Source is non-ref. Parse-time validation ensures only the literal 0
+      // (or null pointer constant) gets here — drop the value, emit a typed
+      // null of the target ref's heap type.
+      this.body.drop();
+      if (toWasm.heapIsIdx) this.body.refNullIdx(toWasm.heap);
+      else this.body.refNull(toWasm.heap);
+      return;
     }
     if (toType === Types.TBOOL) {
       // Refs as bool are rejected at parse time (use __ref_is_null instead).
@@ -10139,6 +10175,25 @@ class CodeGenerator {
           this.body.else_(); this.emitExpr(expr.right); this.emitBoolNormalize(rightType); this.body.end();
           break;
         }
+        // Refs in == / != : null compare against literal 0, or identity
+        // between two refs (= ref.eq).
+        const lRef = leftType.removeQualifiers().isRef();
+        const rRef = rightType.removeQualifiers().isRef();
+        if (isComparison && (lRef || rRef)) {
+          if (lRef && rRef) {
+            // Identity compare via ref.eq
+            this.emitExpr(expr.left); this.emitExpr(expr.right);
+            this.body.refEq();
+            if (expr.op === "NE") { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+          } else {
+            // Null compare: emit ref.is_null on the ref operand.
+            const refExpr = lRef ? expr.left : expr.right;
+            this.emitExpr(refExpr);
+            this.body.refIsNull();
+            if (expr.op === "NE") { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_EQ); }
+          }
+          break;
+        }
         this.emitExpr(expr.left); this.emitExpr(expr.right);
         switch (expr.op) {
           case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
@@ -10177,7 +10232,8 @@ class CodeGenerator {
           case "OP_LNOT": {
             this.emitExpr(expr.operand);
             const wt = this.getBinaryWasmType(operandType);
-            if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
+            if (wtIsRef(wt)) { this.body.refIsNull(); }
+            else if (wtEquals(wt, WT_F32)) { this.body.f32Const(0.0); this.body.aop(WT_F32, ALU.OP_EQ); }
             else if (wtEquals(wt, WT_F64)) { this.body.f64Const(0.0); this.body.aop(WT_F64, ALU.OP_EQ); }
             else this.body.aop(wt, ALU.OP_EQZ);
             break;

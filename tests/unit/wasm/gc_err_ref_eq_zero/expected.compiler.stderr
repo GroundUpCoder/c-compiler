@@ -1,2 +1,0 @@
-Got 1 parse errors in tests/unit/wasm/gc_err_ref_eq_zero/main.c.
-tests/unit/wasm/gc_err_ref_eq_zero/main.c:5: error: '==' on reference type is not allowed; use __ref_is_null(x) for null tests, __ref_eq(a, b) for identity

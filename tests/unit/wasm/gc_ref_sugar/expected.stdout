@@ -1,0 +1,18 @@
+a null
+b non-null
+!a=1 !b=0
+ternary: 1
+a==0: 1  a!=0: 0
+b==0: 0  b!=0: 1
+0==a: 1  0==b: 0
+a==NULL: 1
+b==c: 1  b==a: 0
+b!=c: 0  b!=a: 1
+after b=0: 1
+after c=NULL: 1
+d null: 1  e null: 1
+for-seen: 1
+p&&!q
+q||p
+intrinsic ok: 1
+intrinsic eq: 1

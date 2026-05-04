@@ -7,10 +7,14 @@
       ],
       "defines": [
         "__struct=struct",
-        "__array(T)=T*",
-        "__new(T,...)=(T){0}",
-        "__ref_is_null(R)=((R),0)",
-        "__ref_eq(A,B)=((A),(B),0)"
+        "__array(T)=T",
+        "__new(T,...)=(T*){0}",
+        "__new_array(T,...)=(T*){0}",
+        "__ref_is_null(R)=((R)==0)",
+        "__ref_eq(A,B)=((A)==(B))",
+        "__ref_test(T,R)=((R),0)",
+        "__ref_cast(T,R)=((R),(T*){0})",
+        "__extends(P)=_Static_assert(sizeof(P)>=0,\"\")"
       ],
       "cStandard": "c23",
       "intelliSenseMode": "${default}"
