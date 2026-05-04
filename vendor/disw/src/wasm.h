@@ -24,6 +24,16 @@
 #define VAL_F64       0x7C
 #define VAL_FUNCREF   0x70
 #define VAL_EXTERNREF 0x6F
+#define VAL_ANYREF    0x6E
+#define VAL_EQREF     0x6D
+#define VAL_I31REF    0x6C
+#define VAL_STRUCTREF 0x6B
+#define VAL_ARRAYREF  0x6A
+#define VAL_NULLFUNCREF   0x73
+#define VAL_NULLEXTERNREF 0x72
+#define VAL_NULLREF       0x71
+#define VAL_REF       0x64
+#define VAL_REFNULL   0x63
 
 #define EXT_FUNC   0
 #define EXT_TABLE  1

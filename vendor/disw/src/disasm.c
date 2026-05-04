@@ -52,7 +52,7 @@ static void print_sig(const FuncType *ft) {
 }
 
 /* Opcode immediate kinds */
-enum { N, BT, IX, BR, CI, MA, I4, I8, F4, F8, MB, RT, ST };
+enum { N, BT, IX, BR, CI, MA, I4, I8, F4, F8, MB, RT, ST, TT };
 
 typedef struct { const char *name; uint8_t imm; uint8_t align; } Op;
 
@@ -64,6 +64,7 @@ static const Op ops[256] = {
     [0x03] = {"loop", BT, 0},
     [0x04] = {"if", BT, 0},
     [0x05] = {"else", N, 0},
+    [0x08] = {"throw", IX, 0},
     [0x0B] = {"end", N, 0},
     [0x0C] = {"br", IX, 0},
     [0x0D] = {"br_if", IX, 0},
@@ -71,6 +72,8 @@ static const Op ops[256] = {
     [0x0F] = {"return", N, 0},
     [0x10] = {"call", IX, 0},
     [0x11] = {"call_indirect", CI, 0},
+    /* exception handling */
+    [0x1F] = {"try_table", TT, 0},
     /* parametric */
     [0x1A] = {"drop", N, 0},
     [0x1B] = {"select", N, 0},
@@ -259,6 +262,7 @@ static const Op ops[256] = {
     [0xD0] = {"ref.null", RT, 0},
     [0xD1] = {"ref.is_null", N, 0},
     [0xD2] = {"ref.func", IX, 0},
+    [0xD3] = {"ref.eq", N, 0},
 };
 
 static void dis_fc(const WasmModule *mod, Reader *r) {
@@ -299,6 +303,70 @@ static void dis_fc(const WasmModule *mod, Reader *r) {
     case 16: out("table.size %u", read_leb_u32(r)); break;
     case 17: out("table.fill %u", read_leb_u32(r)); break;
     default: out("<unknown 0xfc %u>", sub); break;
+    }
+}
+
+static void out_heaptype(int32_t ht) {
+    if (ht >= 0) out(" type[%d]", ht);
+    else out(" %s", wasm_valtype((uint8_t)(ht & 0x7F)));
+}
+
+static void dis_fb(const WasmModule *mod, Reader *r) {
+    uint32_t sub = read_leb_u32(r);
+    (void)mod;
+    switch (sub) {
+    case 0x00: out("struct.new %u", read_leb_u32(r)); break;
+    case 0x01: out("struct.new_default %u", read_leb_u32(r)); break;
+    case 0x02: { uint32_t ti = read_leb_u32(r); out("struct.get %u %u", ti, read_leb_u32(r)); break; }
+    case 0x03: { uint32_t ti = read_leb_u32(r); out("struct.get_s %u %u", ti, read_leb_u32(r)); break; }
+    case 0x04: { uint32_t ti = read_leb_u32(r); out("struct.get_u %u %u", ti, read_leb_u32(r)); break; }
+    case 0x05: { uint32_t ti = read_leb_u32(r); out("struct.set %u %u", ti, read_leb_u32(r)); break; }
+    case 0x06: out("array.new %u", read_leb_u32(r)); break;
+    case 0x07: out("array.new_default %u", read_leb_u32(r)); break;
+    case 0x08: { uint32_t ti = read_leb_u32(r); out("array.new_fixed %u %u", ti, read_leb_u32(r)); break; }
+    case 0x09: { uint32_t ti = read_leb_u32(r); out("array.new_data %u %u", ti, read_leb_u32(r)); break; }
+    case 0x0A: { uint32_t ti = read_leb_u32(r); out("array.new_elem %u %u", ti, read_leb_u32(r)); break; }
+    case 0x0B: out("array.get %u", read_leb_u32(r)); break;
+    case 0x0C: out("array.get_s %u", read_leb_u32(r)); break;
+    case 0x0D: out("array.get_u %u", read_leb_u32(r)); break;
+    case 0x0E: out("array.set %u", read_leb_u32(r)); break;
+    case 0x0F: out("array.len"); break;
+    case 0x10: out("array.fill %u", read_leb_u32(r)); break;
+    case 0x11: { uint32_t d = read_leb_u32(r); out("array.copy %u %u", d, read_leb_u32(r)); break; }
+    case 0x12: out("array.init_data %u %u", read_leb_u32(r), read_leb_u32(r)); break;
+    case 0x13: out("array.init_elem %u %u", read_leb_u32(r), read_leb_u32(r)); break;
+    case 0x14: out("ref.test"); out_heaptype(read_leb_i32(r)); break;
+    case 0x15: out("ref.test null"); out_heaptype(read_leb_i32(r)); break;
+    case 0x16: out("ref.cast"); out_heaptype(read_leb_i32(r)); break;
+    case 0x17: out("ref.cast null"); out_heaptype(read_leb_i32(r)); break;
+    case 0x18: {
+        uint8_t flags = read_byte(r);
+        int32_t ht1 = read_leb_i32(r);
+        int32_t ht2 = read_leb_i32(r);
+        uint32_t label = read_leb_u32(r);
+        out("br_on_cast %u", label);
+        if (flags & 1) out(" null");
+        out_heaptype(ht1);
+        out_heaptype(ht2);
+        break;
+    }
+    case 0x19: {
+        uint8_t flags = read_byte(r);
+        int32_t ht1 = read_leb_i32(r);
+        int32_t ht2 = read_leb_i32(r);
+        uint32_t label = read_leb_u32(r);
+        out("br_on_cast_fail %u", label);
+        if (flags & 1) out(" null");
+        out_heaptype(ht1);
+        out_heaptype(ht2);
+        break;
+    }
+    case 0x1A: out("any.convert_extern"); break;
+    case 0x1B: out("extern.convert_any"); break;
+    case 0x1C: out("ref.i31"); break;
+    case 0x1D: out("i31.get_s"); break;
+    case 0x1E: out("i31.get_u"); break;
+    default: out("<unknown 0xfb %u>", sub); break;
     }
 }
 
@@ -366,12 +434,38 @@ static void dis_insn(const WasmModule *mod, Reader *r, uint8_t op) {
     case F4: out(" %g", (double)read_f32(r)); break;
     case F8: out(" %g", read_f64(r)); break;
     case MB: read_byte(r); break;
-    case RT: out(" %s", wasm_valtype(read_byte(r))); break;
+    case RT: {
+        int32_t ht = read_leb_i32(r);
+        if (ht >= 0) out(" type[%d]", ht);
+        else out(" %s", wasm_valtype((uint8_t)(ht & 0x7F)));
+        break;
+    }
     case ST: {
         uint32_t count = read_leb_u32(r);
         uint32_t i;
         for (i = 0; i < count; i++)
             out(" %s", wasm_valtype(read_byte(r)));
+        break;
+    }
+    case TT: {
+        int32_t bt = read_leb_i32(r);
+        uint32_t count = read_leb_u32(r);
+        uint32_t i;
+        if (bt >= 0) out(" type[%d]", bt);
+        else {
+            uint8_t vt = (uint8_t)(bt & 0x7F);
+            if (vt != 0x40) out(" (result %s)", wasm_valtype(vt));
+        }
+        for (i = 0; i < count; i++) {
+            uint8_t kind = read_byte(r);
+            switch (kind) {
+            case 0: out(" (catch %u", read_leb_u32(r)); out(" %u)", read_leb_u32(r)); break;
+            case 1: out(" (catch_ref %u", read_leb_u32(r)); out(" %u)", read_leb_u32(r)); break;
+            case 2: out(" (catch_all %u)", read_leb_u32(r)); break;
+            case 3: out(" (catch_all_ref %u)", read_leb_u32(r)); break;
+            default: out(" (catch? %u)", kind); break;
+            }
+        }
         break;
     }
     }
@@ -703,12 +797,14 @@ void print_disasm(const WasmModule *mod, const char *filter) {
 
             if (op == 0xFC) {
                 dis_fc(mod, &dr);
+            } else if (op == 0xFB) {
+                dis_fb(mod, &dr);
             } else {
                 dis_insn(mod, &dr, op);
             }
             printf("\n");
 
-            if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05) {
+            if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05 || op == 0x1F) {
                 indent++;
             }
         }
@@ -1024,6 +1120,8 @@ void print_json(const WasmModule *mod) {
             out_reset();
             if (op == 0xFC) {
                 dis_fc(mod, &dr);
+            } else if (op == 0xFB) {
+                dis_fb(mod, &dr);
             } else {
                 dis_insn(mod, &dr, op);
             }
@@ -1034,7 +1132,7 @@ void print_json(const WasmModule *mod) {
             printf("}");
             first_insn = 0;
 
-            if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05) {
+            if (op == 0x02 || op == 0x03 || op == 0x04 || op == 0x05 || op == 0x1F) {
                 depth++;
             }
         }

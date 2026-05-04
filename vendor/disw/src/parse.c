@@ -100,6 +100,19 @@ void reader_skip(Reader *r, uint32_t n) {
     r->pos += n;
 }
 
+static uint8_t read_valtype(Reader *r) {
+    uint8_t b = read_byte(r);
+    if (b == VAL_REF || b == VAL_REFNULL)
+        read_leb_i32(r);
+    return b;
+}
+
+static void skip_storagetype(Reader *r) {
+    uint8_t b = read_byte(r);
+    if (b == VAL_REF || b == VAL_REFNULL)
+        read_leb_i32(r);
+}
+
 void skip_init_expr(Reader *r) {
     while (1) {
         uint8_t op = read_byte(r);
@@ -110,7 +123,7 @@ void skip_init_expr(Reader *r) {
         case 0x43: reader_skip(r, 4); break;
         case 0x44: reader_skip(r, 8); break;
         case 0x23: read_leb_u32(r); break;
-        case 0xD0: read_byte(r); break;
+        case 0xD0: read_leb_i32(r); break;
         case 0xD2: read_leb_u32(r); break;
         default: break;
         }
@@ -125,6 +138,16 @@ const char *wasm_valtype(uint8_t t) {
     case VAL_F64: return "f64";
     case VAL_FUNCREF: return "funcref";
     case VAL_EXTERNREF: return "externref";
+    case VAL_ANYREF: return "anyref";
+    case VAL_EQREF: return "eqref";
+    case VAL_I31REF: return "i31ref";
+    case VAL_STRUCTREF: return "structref";
+    case VAL_ARRAYREF: return "arrayref";
+    case VAL_NULLFUNCREF: return "nullfuncref";
+    case VAL_NULLEXTERNREF: return "nullexternref";
+    case VAL_NULLREF: return "nullref";
+    case VAL_REF: return "ref";
+    case VAL_REFNULL: return "ref null";
     default: return "?";
     }
 }
@@ -256,20 +279,51 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
         r.pos = s->offset;
 
         switch (s->id) {
-        case SEC_TYPE:
-            mod->type_count = read_leb_u32(&r);
-            mod->types = calloc(mod->type_count, sizeof(FuncType));
-            for (j = 0; j < mod->type_count; j++) {
-                FuncType *ft = &mod->types[j];
-                read_byte(&r);
-                ft->param_count = read_leb_u32(&r);
-                ft->params = ft->param_count ? malloc(ft->param_count) : NULL;
-                { uint32_t k; for (k = 0; k < ft->param_count; k++) ft->params[k] = read_byte(&r); }
-                ft->result_count = read_leb_u32(&r);
-                ft->results = ft->result_count ? malloc(ft->result_count) : NULL;
-                { uint32_t k; for (k = 0; k < ft->result_count; k++) ft->results[k] = read_byte(&r); }
+        case SEC_TYPE: {
+            uint32_t entry_count = read_leb_u32(&r);
+            uint32_t cap = entry_count < 16 ? 16 : entry_count;
+            uint32_t tidx = 0;
+            mod->types = calloc(cap, sizeof(FuncType));
+            for (j = 0; j < entry_count; j++) {
+                uint8_t tag = r.data[r.pos];
+                uint32_t rc = 1, ri;
+                if (tag == 0x4E) {
+                    read_byte(&r);
+                    rc = read_leb_u32(&r);
+                }
+                while (tidx + rc > cap) {
+                    cap *= 2;
+                    mod->types = realloc(mod->types, cap * sizeof(FuncType));
+                    memset(mod->types + tidx, 0, (cap - tidx) * sizeof(FuncType));
+                }
+                for (ri = 0; ri < rc; ri++) {
+                    FuncType *ft = &mod->types[tidx++];
+                    uint8_t ct = read_byte(&r);
+                    if (ct == 0x50) {
+                        uint32_t sc = read_leb_u32(&r);
+                        uint32_t si;
+                        for (si = 0; si < sc; si++) read_leb_u32(&r);
+                        ct = read_byte(&r);
+                    }
+                    if (ct == 0x60) {
+                        uint32_t k;
+                        ft->param_count = read_leb_u32(&r);
+                        ft->params = ft->param_count ? malloc(ft->param_count) : NULL;
+                        for (k = 0; k < ft->param_count; k++) ft->params[k] = read_valtype(&r);
+                        ft->result_count = read_leb_u32(&r);
+                        ft->results = ft->result_count ? malloc(ft->result_count) : NULL;
+                        for (k = 0; k < ft->result_count; k++) ft->results[k] = read_valtype(&r);
+                    } else if (ct == 0x5F) {
+                        uint32_t fc = read_leb_u32(&r), k;
+                        for (k = 0; k < fc; k++) { skip_storagetype(&r); read_byte(&r); }
+                    } else if (ct == 0x5E) {
+                        skip_storagetype(&r); read_byte(&r);
+                    }
+                }
             }
+            mod->type_count = tidx;
             break;
+        }
 
         case SEC_IMPORT:
             mod->import_count = read_leb_u32(&r);
@@ -366,7 +420,7 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                 c->total_locals = 0;
                 for (k = 0; k < c->local_decl_count; k++) {
                     c->locals[k].count = read_leb_u32(&r);
-                    c->locals[k].type = read_byte(&r);
+                    c->locals[k].type = read_valtype(&r);
                     c->total_locals += c->locals[k].count;
                 }
                 c->body_offset = (uint32_t)r.pos;

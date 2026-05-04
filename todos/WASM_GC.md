@@ -1,18 +1,16 @@
 # Wasm GC — `__struct` and `__array` types
 
-## Goal
+## Status: Implemented
 
-Support Wasm GC heap-allocated structs and arrays managed by the engine's garbage collector, via `__struct` and `__array` type keywords. This is a much larger effort than `__externref` and needs careful design.
+The compiler supports Wasm GC heap-allocated structs and arrays managed by the engine's garbage collector. This builds on the `__externref` ref-type plumbing (see `EXTERNREF.md`).
 
 ## Why
 
-Wasm GC lets the host engine manage object lifetimes — no manual `malloc`/`free`, no linear-memory allocator, interop with host GC (JS objects can reference GC structs and vice versa without prevent collection). Enables C programs to create objects the JS side can inspect field-by-field, not just opaque blobs.
+Wasm GC lets the host engine manage object lifetimes — no manual `malloc`/`free`, no linear-memory allocator, interop with host GC (JS objects can reference GC structs and vice versa without preventing collection). Enables C programs to create objects the JS side can inspect field-by-field, not just opaque blobs.
 
 ## `__struct`
 
-### Syntax direction
-
-Use a declaration syntax similar to C structs but more restricted:
+Declared with `__struct`, allocated with `__new`, fields accessed with `.`:
 
 ```c
 __struct Point {
@@ -20,114 +18,90 @@ __struct Point {
     float y;
 };
 
-__struct Node {
-    int value;
-    __ref Node next;   // nullable ref to another GC struct
+Point p = __new(Point, 1.0f, 2.0f);
+float x = p.x;
+p.y = 3.0f;
+```
+
+Differences from C structs:
+- Lives on the GC heap, not in linear memory
+- No pointer arithmetic — references are opaque
+- No unions, bitfields, flexible array members, or anonymous inner structs
+- Declarations must be top-level (needed at compile time for the Wasm type section)
+- Fields are mutable by default; `const` fields emit immutable Wasm GC fields
+
+### Subtyping / inheritance
+
+Single inheritance via `__extends()`:
+
+```c
+__struct Node __extends(__struct Point) {
+    int tag;
 };
 ```
 
-Key differences from C structs:
+All `__struct` types are emitted as `sub` (open) so they can be extended. The compiler handles structural subtyping and cross-translation-unit inheritance.
 
-- **No arbitrary nesting in C structs.** A `__struct` cannot be a field inside a regular C `struct`. It lives on the GC heap, not in linear memory.
-- **No pointer arithmetic.** `__ref` is an opaque GC reference, not a linear-memory pointer.
-- **No `union`-style overlapping.** Fields are typed and the engine enforces layout.
-- **No bitfields, flexible array members, or anonymous inner structs.** Keep it clean.
-- **Declarations must be top-level.** No `__struct` inside function bodies or as local type definitions. The Wasm type section needs them all known at compile time.
-- **Field mutability.** Wasm GC struct fields can be mutable or immutable — expose this somehow (default mutable? `const` fields for immutable?).
+## `__array(T)`
 
-### Semantics to figure out
-
-- **`__ref` syntax.** How to spell a reference to a GC struct: `__ref Point`, `__ref Point?` (nullable), `Point*` (overloaded — confusing)?
-- **Subtyping.** Wasm GC has structural subtyping. Do we expose this? Single inheritance via a `__struct Child : Parent` syntax? Or ignore subtyping for now?
-- **Construction.** `__struct_new(Point, {1.0, 2.0})`? A `__new` keyword? Something else?
-- **Field access.** `.` on a `__ref` should emit `struct.get` / `struct.set`. No `->` since there are no pointers involved. Or use `->` since the ref is pointer-like?
-- **Null.** Nullable vs non-nullable refs. Wasm GC distinguishes `(ref null $Point)` from `(ref $Point)`. This matters for safety.
-- **Casting.** `ref.cast`, `ref.test` for downcasting in a type hierarchy. Surface syntax TBD.
-
-## `__array`
-
-GC-managed arrays with a fixed element type and runtime length.
+GC-managed arrays with a fixed element type and runtime length:
 
 ```c
-__array(int) scores = __array_new(int, 100);
-int x = __array_get(scores, 0);
-__array_set(scores, 0, 42);
+__array(int) scores = __new(int, 100);   // 100 default-initialized elements
+scores[0] = 42;
 int len = __array_len(scores);
+
+__array(int) vals = __new_array(int, 1, 2, 3);  // fixed-element init
 ```
 
-### Open questions
+Bulk operations:
+- `__array_fill(arr, offset, value, count)`
+- `__array_copy(dst, dstOff, src, srcOff, count)`
 
-- **Syntax.** `__array(T)` as the type? Or `__gcarray` to avoid confusion with C arrays?
-- **Immutable arrays.** Wasm GC supports them — useful for string-like data.
-- **Multi-dimensional.** `__array(__array(int))` works in Wasm GC — just nested refs. Should be fine.
+Packed field types (i8, i16) are supported for both struct fields and array elements, with sign-extended access variants.
 
-## Wasm binary impact
+## Reference intrinsics
 
-This is the hardest part implementation-wise:
+| Intrinsic | Wasm opcode | Description |
+|-----------|-------------|-------------|
+| `__ref_is_null(ref)` | `ref.is_null` | Null check |
+| `__ref_eq(a, b)` | `ref.eq` | Reference identity |
+| `__ref_null(Type)` | `ref.null` | Typed null reference |
+| `__ref_test(Type, ref)` | `ref.test` | Downcast type test |
+| `__ref_cast(Type, ref)` | `ref.cast` | Downcast (traps on failure) |
+| `__array_len(arr)` | `array.len` | Array length |
+| `__array_fill(...)` | `array.fill` | Bulk fill |
+| `__array_copy(...)` | `array.copy` | Bulk copy |
 
-### Type section overhaul
+## Extern bridge
 
-Wasm GC replaces the function-only type section with a recursive type group. Instead of just `0x60` (func), the type section now contains:
+GC refs cross the JS/Wasm boundary via the `anyref`↔`externref` conversions:
+- `__ref_as_extern(ref)` → `extern.convert_any`
+- `__ref_as_any(ext)` → `any.convert_extern`
 
-- `0x5F` — struct type (field count, then field types + mutability)
-- `0x5E` — array type (element type + mutability)
-- `0x60` — func type (same as today)
-- `0x4E` — rec group wrapper (groups types that can reference each other)
-- `0x50` — sub type (for subtyping/inheritance)
+## Wasm binary encoding
 
-The existing `WasmModule.typeDefs` and binary emission need to generalize from "list of function types" to "list of any composite type."
+### Type section
 
-### New opcodes (~30)
+Uses recursive type groups (`0x4E`) to support mutual references. Each type entry is one of:
+- `0x60` — func type (unchanged from baseline Wasm)
+- `0x50` + `0x5F` — sub type wrapping a struct type (field count + fields with storage type + mutability)
+- `0x5E` — array type (element storage type + mutability)
 
-```
-struct.new, struct.new_default
-struct.get, struct.get_s, struct.get_u, struct.set
-array.new, array.new_default, array.new_fixed, array.new_data, array.new_elem
-array.get, array.get_s, array.get_u, array.set
-array.len, array.fill, array.copy
-ref.null, ref.is_null, ref.eq
-ref.as_non_null, ref.cast, ref.test
-br_on_null, br_on_non_null, br_on_cast, br_on_cast_fail
-extern.internalize, extern.externalize
-```
+Packed field storage types: `0x78` (i8), `0x77` (i16).
 
-### Codegen constraints
+### GC opcodes emitted (0xFB prefix)
 
-Same fundamental constraint as `__externref`: GC references cannot live in linear memory. All the same restrictions apply — no `&`, no embedding in C structs, no va_args. But now there's also field access codegen, construction, and potentially subtype casting.
+Struct: `struct.new` (0x00), `struct.new_default` (0x01), `struct.get` (0x02), `struct.get_s` (0x03), `struct.get_u` (0x04), `struct.set` (0x05).
 
-## Estimated effort
+Array: `array.new` (0x06), `array.new_default` (0x07), `array.new_fixed` (0x08), `array.get` (0x0B), `array.get_s` (0x0C), `array.get_u` (0x0D), `array.set` (0x0E), `array.len` (0x0F), `array.fill` (0x10), `array.copy` (0x11).
 
-- `__externref` should be done first — it establishes the ref-type plumbing that GC builds on.
-- Type section generalization: medium (rework `WasmModule.typeDefs` and binary emission)
-- `__struct` with basic field access: medium-large
-- `__array` with builtins: medium
-- Subtyping/casting: medium, can defer
-- Total: weeks of work, can be phased
+Ref: `ref.test null` (0x15), `ref.cast null` (0x17), `any.convert_extern` (0x1A), `extern.convert_any` (0x1B).
 
-## Phasing
+## Not implemented
 
-### Phase 1: Ref type infra (done via `__externref` TODO)
-
-### Phase 2: `__struct` basics
-- Type section generalization (rec groups, struct type defs)
-- `__struct` declarations → Wasm struct types in type section
-- `__ref` type for GC references
-- `struct.new`, `struct.get`, `struct.set` codegen
-- Null refs, `ref.is_null`
-
-### Phase 3: `__array`
-- Array type defs in type section
-- `__array_new`, `__array_get`, `__array_set`, `__array_len` builtins
-- `array.new`, `array.get`, `array.set`, `array.len` codegen
-
-### Phase 4: Subtyping and casting
-- `__struct Child : Parent` syntax
-- `ref.cast`, `ref.test` codegen
-- `br_on_cast` for efficient type switches
-
-## Open design questions
-
-- **Interaction with `__externref`.** `extern.internalize` / `extern.externalize` convert between `externref` and `anyref`. Do we expose this? It's how you'd pass a GC struct to JS and get it back.
-- **Strings.** Wasm GC is often paired with `stringref` for efficient string interop. Out of scope for now but worth knowing about.
-- **i31ref.** Wasm GC has `i31ref` — a 31-bit integer packed into a ref. Useful for tagged values. Probably not needed for a C compiler.
-- **Memory mixing.** Real programs will use both linear memory (legacy C code, malloc) and GC heap (new __struct code). The boundary needs to be clear — you can't memcpy a GC ref.
+- `br_on_cast` / `br_on_cast_fail` — not needed yet (type switches use `ref.test` + branches)
+- `i31ref` — packed 31-bit integers, not useful for a C compiler
+- `stringref` — separate proposal, out of scope
+- Immutable arrays — supported at the encoding level but not surfaced in the C syntax
+- `funcref` tables of GC types

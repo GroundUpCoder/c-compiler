@@ -2,7 +2,7 @@
 
 Single-file C-to-WebAssembly compiler.
 
-**compiler.js** (~14K lines) — JavaScript, runs on Node.js.
+**compiler.js** (~16K lines) — JavaScript, runs on Node.js.
 
 A frozen C++20 port (**compiler.cc**) is preserved in `old/` along with its own test runner and unit tests. The two compilers produce identical output for all unit tests (verified by equiv tests in `old/`).
 
@@ -89,6 +89,74 @@ The compiler provides a built-in standard library with headers including:
 - **Graphics/Audio**: SDL2 subset (video, events, audio)
 
 Terminal and timing primitives use JSPI (WebAssembly JavaScript Promise Integration) for async operations on both Node.js and browser backends.
+
+## WebAssembly GC types
+
+The compiler supports Wasm GC heap-allocated structs and arrays managed by the engine's garbage collector. These live on the GC heap, not in linear memory, and can be passed to/from JavaScript without serialization.
+
+### `__struct`
+
+```c
+__struct Point {
+    float x;
+    float y;
+};
+
+__struct Node __extends(__struct Point) {
+    int tag;
+};
+```
+
+Allocate with `__new`, access fields with `.`:
+
+```c
+Point p = __new(Point, 1.0f, 2.0f);
+float x = p.x;
+p.y = 3.0f;
+```
+
+Structs support single inheritance via `__extends()`. All `__struct` types are open for subtyping.
+
+### `__array(T)`
+
+GC-managed arrays with a fixed element type and runtime length:
+
+```c
+__array(int) scores = __new(int, 100);  // 100 elements, default-initialized
+scores[0] = 42;
+int len = __array_len(scores);
+```
+
+Fixed-element initialization:
+
+```c
+__array(int) vals = __new_array(int, 1, 2, 3, 4, 5);
+```
+
+Bulk operations: `__array_fill(arr, offset, value, count)` and `__array_copy(dst, dstOff, src, srcOff, count)`.
+
+### Reference intrinsics
+
+| Intrinsic | Description |
+|-----------|-------------|
+| `__ref_is_null(ref)` | Null check (`ref.is_null`) |
+| `__ref_eq(a, b)` | Reference identity (`ref.eq`) |
+| `__ref_null(Type)` | Typed null reference |
+| `__ref_test(Type, ref)` | Downcast type test (`ref.test`) |
+| `__ref_cast(Type, ref)` | Downcast (`ref.cast`, traps on failure) |
+
+### Extern bridge
+
+GC references can cross the JS/Wasm boundary via `__anyref` and the externref conversions:
+
+| Intrinsic | Description |
+|-----------|-------------|
+| `__ref_as_extern(ref)` | GC ref → externref (`extern.convert_any`) |
+| `__ref_as_any(ext)` | externref → anyref (`any.convert_extern`) |
+
+### Constraints
+
+GC references cannot live in linear memory. The same restrictions as `__externref` apply: no `&`, no embedding in C structs/unions, no `sizeof`, no casts to/from integers.
 
 ## Vendored projects
 
