@@ -7501,6 +7501,8 @@ class WasmModule {
     this.tags = [];             // section 13
     this.funcNames = [];        // for name custom section: [{idx, name}]
     this.globalNames = [];      // for name custom section: [{idx, name}]
+    this.typeNames = [];        // for name custom section subsection 4: [{idx, name}]
+    this.fieldNames = [];       // for name custom section subsection 10: [{typeIdx, fields:[{idx, name}]}]
     this.localNames = [];       // for name custom section: [{funcIdx, locals: [{idx, name}]}]
     this.sourceMapFiles = [];   // for c.sourcemap custom section
     this.sourceMapEntries = []; // [{funcIdx (def-relative), entries: [{offset, fileIdx, line}]}]
@@ -7884,7 +7886,8 @@ class WasmModule {
     emitSection(11, buf);
 
     // Name custom section (0)
-    if (this.funcNames.length > 0 || this.globalNames.length > 0 || this.localNames.length > 0) {
+    if (this.funcNames.length > 0 || this.globalNames.length > 0 || this.localNames.length > 0 ||
+        this.typeNames.length > 0 || this.fieldNames.length > 0) {
       buf = [];
       emitString(buf, "name");
       if (this.funcNames.length > 0) {
@@ -7913,6 +7916,20 @@ class WasmModule {
         lebU(buf, sub.length);
         for (const b of sub) buf.push(b);
       }
+      // Subsection 4: type names
+      if (this.typeNames.length > 0) {
+        const sub = [];
+        // Sort by idx so the namemap is in ascending order (some tools require this)
+        const sorted = this.typeNames.slice().sort((a, b) => a.idx - b.idx);
+        lebU(sub, sorted.length);
+        for (const entry of sorted) {
+          lebU(sub, entry.idx);
+          emitString(sub, entry.name);
+        }
+        buf.push(0x04);
+        lebU(buf, sub.length);
+        for (const b of sub) buf.push(b);
+      }
       if (this.globalNames.length > 0) {
         const sub = [];
         lebU(sub, this.globalNames.length);
@@ -7921,6 +7938,23 @@ class WasmModule {
           emitString(sub, entry.name);
         }
         buf.push(0x07);
+        lebU(buf, sub.length);
+        for (const b of sub) buf.push(b);
+      }
+      // Subsection 10: field names (indirect namemap)
+      if (this.fieldNames.length > 0) {
+        const sub = [];
+        const sorted = this.fieldNames.slice().sort((a, b) => a.typeIdx - b.typeIdx);
+        lebU(sub, sorted.length);
+        for (const entry of sorted) {
+          lebU(sub, entry.typeIdx);
+          lebU(sub, entry.fields.length);
+          for (const f of entry.fields) {
+            lebU(sub, f.idx);
+            emitString(sub, f.name);
+          }
+        }
+        buf.push(0x0A);
         lebU(buf, sub.length);
         for (const b of sub) buf.push(b);
       }
@@ -8114,6 +8148,19 @@ function getOrCreateGCWasmTypeIdx(wmod, type) {
       type._wasmGCTypeIdx = idx;
       wmod.setGCStructFields(idx, fields, parentIdx);
       wmod.gcStructTypeIndices.set(key, idx);
+      // Record names for the name custom section. First struct registered with
+      // this shape wins the name (subsequent dedupe-hit registrations don't
+      // override). Anonymous tags (`__anon_gc_*`) are skipped — those are
+      // compiler-internal and don't help debuggers.
+      if (type.tagName && !type.tagName.startsWith('__anon_gc_')) {
+        wmod.typeNames.push({ idx, name: type.tagName });
+        const fieldEntries = [];
+        for (let i = 0; i < type.tagDecl.members.length; i++) {
+          const m = type.tagDecl.members[i];
+          if (m.name) fieldEntries.push({ idx: i, name: m.name });
+        }
+        if (fieldEntries.length > 0) wmod.fieldNames.push({ typeIdx: idx, fields: fieldEntries });
+      }
     }
   } else if (type.kind === Types.TypeKind.GC_ARRAY) {
     const elem = gcStorageTypeOf(wmod, type.baseType);
