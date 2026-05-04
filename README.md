@@ -194,15 +194,28 @@ Both forms are valid; pick per IDE-friendliness vs source readability.
 
 ### Universal `__eqref` + `__cast`
 
-`__eqref` is the GC-universe supertype of all reference types (struct, array, boxed primitives) — analogous to `void *` for the GC heap. `__cast(TargetType, expr)` is the universal conversion intrinsic that dispatches based on the source/target type combo:
+`__eqref` is the GC-universe supertype of all reference types (struct, array, boxed primitives) — analogous to `void *` for the GC heap. `__cast(TargetType, expr)` is the universal conversion intrinsic that dispatches based on the source/target type combo.
+
+**Implicit conversions to `__eqref` work everywhere**, just like `int *p = NULL;` or `void *q = some_ptr;`:
 
 ```c
-__eqref store = __cast(__eqref, 42);          // box int — auto-allocs an internal box struct
-int v = __cast(int, store);                   // unbox
+void describe(__eqref x);
 
-__struct Point *p = __new(__struct Point *, 7, 11);
-__eqref ep = __cast(__eqref, p);              // upcast (no-op)
-__struct Point *p2 = __cast(__struct Point *, ep);  // downcast (ref.cast, traps on mismatch)
+describe(42);                          // implicit box int → __eqref
+describe(3.14);                        // implicit box double → __eqref
+describe(some_struct);                 // implicit upcast (no opcode)
+
+__eqref store = 100;                   // implicit box on init
+__eqref r = some_function();           // implicit box if return type mismatches
+```
+
+The 0/NULL convention is preserved — `__eqref e = 0;` and `__eqref e;` both produce null (not boxed-zero). Use `__cast(__eqref, 0)` if you specifically want a boxed-zero distinct from null.
+
+For unboxing (and for explicit conversions), use `__cast`:
+
+```c
+int v = __cast(int, store);                                // unbox
+__struct Point *p2 = __cast(__struct Point *, store);      // downcast (ref.cast)
 
 // Discriminated union
 if (__ref_test(__struct Point *, store)) { ... }

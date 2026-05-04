@@ -5294,9 +5294,13 @@ class Parser {
     if (!expr || !targetType) return;
     const t = targetType.removeQualifiers();
     const s = expr.type.removeQualifiers();
-    if (t.isRef() && !s.isRef() && !this._isNullPointerConstant(expr)) {
-      this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (only the literal 0 / NULL is allowed; use __ref_null(${targetType.toString()}) to be explicit)`);
-    }
+    if (!t.isRef() || s.isRef()) return;
+    if (this._isNullPointerConstant(expr)) return;
+    // Implicit prim → __eqref boxing is allowed (codegen auto-allocates a
+    // box struct). For other ref types (struct/array/extern), boxing is
+    // ambiguous and the user must use __cast or __ref_null explicitly.
+    if (t === Types.TEQREF && s.isArithmetic()) return;
+    this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (use __cast(${targetType.toString()}, x) for an explicit conversion, or __ref_null for null)`);
   }
   // Backward-compat alias used elsewhere in parser.
   _rejectIntToRef(targetType, expr, tok) { this._rejectNonZeroToRef(targetType, expr, tok); }
@@ -9850,14 +9854,35 @@ class CodeGenerator {
   }
 
   // --- Type conversion ---
-  emitConversion(fromType, toType) {
+  _isNullPointerConstantCG(expr) {
+    if (!expr) return false;
+    if (expr.kind === Types.ExprKind.INT && expr.value === 0n) return true;
+    if (expr.kind === Types.ExprKind.IMPLICIT_CAST || expr.kind === Types.ExprKind.CAST) {
+      return this._isNullPointerConstantCG(expr.expr);
+    }
+    return false;
+  }
+
+  emitConversion(fromType, toType, fromExpr) {
     const fromWasm = this.getBinaryWasmType(fromType);
     const toWasm = this.getBinaryWasmType(toType);
     toType = toType.removeQualifiers();
     if (toType.isRef() && !wtIsRef(fromWasm)) {
-      // Source is non-ref. Parse-time validation ensures only the literal 0
-      // (or null pointer constant) gets here — drop the value, emit a typed
-      // null of the target ref's heap type.
+      // Source is non-ref. Parse-time validation has already gated this:
+      //   - Null pointer constant (literal 0 / NULL) → emit ref.null of target
+      //   - Primitive into __eqref → auto-box (allocate internal box struct)
+      //   - Other combinations would have errored at parse time.
+      // We need the source expression to tell which branch this is.
+      const fq = fromType.removeQualifiers();
+      const isNullConst = fromExpr && this._isNullPointerConstantCG(fromExpr);
+      if (toType === Types.TEQREF && fq.isArithmetic() && !isNullConst) {
+        // Box: value is on stack, struct.new wraps it.
+        const primWt = boxStorageWtFor(fq);
+        const boxIdx = getOrCreateBoxStructIdx(this.wmod, primWt);
+        this.body.structNew(boxIdx);
+        return;
+      }
+      // Otherwise: ref.null of the target ref type.
       this.body.drop();
       if (toWasm.heapIsIdx) this.body.refNullIdx(toWasm.heap);
       else this.body.refNull(toWasm.heap);
@@ -10114,7 +10139,7 @@ class CodeGenerator {
         if (wantValue) this.lvaluePush(lv);
       } else {
         this.lvaluePush(lv); this.emitExpr(rhs);
-        this.emitConversion(rhs.type, lhsType);
+        this.emitConversion(rhs.type, lhsType, rhs);
         if (wantValue && !lv.bitField) {
           const vt = this.allocLocal(cToWasmType(lhsType, this.wmod));
           this.body.localTee(vt); this.lvalueStore(lv); this.body.localGet(vt);
@@ -10634,7 +10659,7 @@ class CodeGenerator {
       case Types.ExprKind.IMPLICIT_CAST: {
         if (ctx === EXPR_DROP) { this.emitExpr(expr.expr, EXPR_DROP); return; }
         this.emitExpr(expr.expr);
-        this.emitConversion(expr.expr.type, expr.type);
+        this.emitConversion(expr.expr.type, expr.type, expr.expr);
         break;
       }
       case Types.ExprKind.CAST: {

@@ -132,7 +132,7 @@ Packed field types (i8, i16) are supported for both struct fields and array elem
 | `__ref_as_extern(ref)` | `extern.convert_any` | Wrap GC ref as externref (for JS) |
 | `__ref_as_eq(ext)` | `any.convert_extern` + `ref.cast eq` | Unwrap externref to eqref (traps if not eq-compatible) |
 
-## `__eqref` and `__cast(T, x)` — universal type + conversion
+## `__eqref` + implicit boxing + `__cast(T, x)` — universal type + conversion
 
 `__eqref` is the GC-universe supertype for all eq-compatible reference types (`ref null eq`, heap byte 0x6D). It can hold any GC struct, GC array, or boxed primitive. Acts as the "any" type for generic GC code.
 
@@ -141,7 +141,19 @@ We use `eqref` rather than `anyref` because:
 - `ref.eq` works directly on eqref operands — `if (eq1 == eq2)` is just identity comparison
 - We lose nothing in practice (current WASM GC has no concrete heap types in `any` but not in `eq`)
 
-The companion intrinsic `__cast(TargetType, expr)` is the universal conversion. It dispatches at codegen based on source/target type combo:
+**Implicit conversions to `__eqref` are allowed** in every context an implicit conversion would happen — variable init/assignment, function call args, return statements:
+
+```c
+void f(__eqref x);
+f(42);            // implicit box int → __eqref
+f(3.14);          // implicit box double → __eqref
+__eqref e = 100;  // implicit box on init
+return n;         // implicit box on return (where return type is __eqref)
+```
+
+The 0/NULL pointer constant convention is preserved: `__eqref e = 0;` and `__eqref e;` both give null. Use `__cast(__eqref, 0)` for a boxed-zero distinct from null.
+
+For unboxing and explicit conversions, use `__cast(TargetType, expr)`. It dispatches at codegen based on source/target type combo:
 
 | Source → Target | Mechanism |
 |---|---|
