@@ -33,12 +33,18 @@ static int sec_match(const Section *s, const char *f) {
     return strcmp(wasm_section_name(s->id), f) == 0;
 }
 
+static void print_valtype(const ValType *v) {
+    printf("%s", wasm_valtype(v->code));
+    if ((v->code == VAL_REF || v->code == VAL_REFNULL) && v->heap_type >= 0)
+        printf(" type[%d]", v->heap_type);
+}
+
 static void print_func_sig(const FuncType *ft) {
     uint32_t i;
     printf("(");
     for (i = 0; i < ft->param_count; i++) {
         if (i) printf(", ");
-        printf("%s", wasm_valtype(ft->params[i]));
+        print_valtype(&ft->params[i]);
     }
     printf(") -> ");
     if (ft->result_count == 0) {
@@ -46,7 +52,7 @@ static void print_func_sig(const FuncType *ft) {
     } else {
         for (i = 0; i < ft->result_count; i++) {
             if (i) printf(", ");
-            printf("%s", wasm_valtype(ft->results[i]));
+            print_valtype(&ft->results[i]);
         }
     }
 }
@@ -918,12 +924,24 @@ static void json_str(const char *s) {
     printf("\"");
 }
 
+static void json_valtype_text(const ValType *v) {
+    printf("%s", wasm_valtype(v->code));
+    if ((v->code == VAL_REF || v->code == VAL_REFNULL) && v->heap_type >= 0)
+        printf(" type[%d]", v->heap_type);
+}
+
+static void json_valtype_string(const ValType *v) {
+    printf("\"");
+    json_valtype_text(v);
+    printf("\"");
+}
+
 static void json_sig(const FuncType *ft) {
     uint32_t i;
     printf("\"(");
     for (i = 0; i < ft->param_count; i++) {
         if (i) printf(", ");
-        printf("%s", wasm_valtype(ft->params[i]));
+        json_valtype_text(&ft->params[i]);
     }
     printf(") -> ");
     if (ft->result_count == 0) {
@@ -931,7 +949,7 @@ static void json_sig(const FuncType *ft) {
     } else {
         for (i = 0; i < ft->result_count; i++) {
             if (i) printf(", ");
-            printf("%s", wasm_valtype(ft->results[i]));
+            json_valtype_text(&ft->results[i]);
         }
     }
     printf("\"");
@@ -992,12 +1010,12 @@ void print_json(const WasmModule *mod) {
             printf(",\"kind\":\"func\",\"params\":[");
             for (j = 0; j < t->func.param_count; j++) {
                 if (j) printf(",");
-                printf("\"%s\"", wasm_valtype(t->func.params[j]));
+                json_valtype_string(&t->func.params[j]);
             }
             printf("],\"results\":[");
             for (j = 0; j < t->func.result_count; j++) {
                 if (j) printf(",");
-                printf("\"%s\"", wasm_valtype(t->func.results[j]));
+                json_valtype_string(&t->func.results[j]);
             }
             printf("]");
             break;
@@ -1151,7 +1169,9 @@ void print_json(const WasmModule *mod) {
                 for (j = 0; j < ft->param_count; j++) {
                     const char *pname = wasm_local_name(mod, func_idx, j);
                     if (j) printf(",");
-                    printf("{\"type\":\"%s\",\"index\":%u", wasm_valtype(ft->params[j]), j);
+                    printf("{\"type\":");
+                    json_valtype_string(&ft->params[j]);
+                    printf(",\"index\":%u", j);
                     if (pname) { printf(",\"name\":"); json_str(pname); }
                     printf("}");
                 }

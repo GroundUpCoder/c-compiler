@@ -55,10 +55,17 @@ typedef struct {
     uint32_t size;
 } Section;
 
+/* A single val_type slot in a function signature. For ref/refnull (0x63/0x64)
+ * the heap_type s33 follow-up byte is captured; -1 sentinel for non-ref slots. */
 typedef struct {
-    uint8_t *params;
+    uint8_t code;
+    int32_t heap_type;
+} ValType;
+
+typedef struct {
+    ValType *params;
     uint32_t param_count;
-    uint8_t *results;
+    ValType *results;
     uint32_t result_count;
 } FuncType;
 

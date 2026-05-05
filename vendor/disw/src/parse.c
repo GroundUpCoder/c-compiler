@@ -100,11 +100,18 @@ void reader_skip(Reader *r, uint32_t n) {
     r->pos += n;
 }
 
-static uint8_t read_valtype(Reader *r) {
-    uint8_t b = read_byte(r);
-    if (b == VAL_REF || b == VAL_REFNULL)
-        read_leb_i32(r);
-    return b;
+static void read_valtype(Reader *r, ValType *out) {
+    out->code = read_byte(r);
+    out->heap_type = -1;
+    if (out->code == VAL_REF || out->code == VAL_REFNULL)
+        out->heap_type = read_leb_i32(r);
+}
+
+/* Locals/globals/etc. that don't carry the heap-type forward yet. */
+static uint8_t read_valtype_byte(Reader *r) {
+    ValType v;
+    read_valtype(r, &v);
+    return v.code;
 }
 
 /* Storage type for struct fields and array elements: a val_type byte followed
@@ -341,11 +348,11 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                         uint32_t k;
                         t->kind = TY_FUNC;
                         t->func.param_count = read_leb_u32(&r);
-                        t->func.params = t->func.param_count ? malloc(t->func.param_count) : NULL;
-                        for (k = 0; k < t->func.param_count; k++) t->func.params[k] = read_valtype(&r);
+                        t->func.params = t->func.param_count ? calloc(t->func.param_count, sizeof(ValType)) : NULL;
+                        for (k = 0; k < t->func.param_count; k++) read_valtype(&r, &t->func.params[k]);
                         t->func.result_count = read_leb_u32(&r);
-                        t->func.results = t->func.result_count ? malloc(t->func.result_count) : NULL;
-                        for (k = 0; k < t->func.result_count; k++) t->func.results[k] = read_valtype(&r);
+                        t->func.results = t->func.result_count ? calloc(t->func.result_count, sizeof(ValType)) : NULL;
+                        for (k = 0; k < t->func.result_count; k++) read_valtype(&r, &t->func.results[k]);
                     } else if (ct == 0x5F) {
                         uint32_t fc = read_leb_u32(&r), k;
                         t->kind = TY_STRUCT;
@@ -460,7 +467,7 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                 c->total_locals = 0;
                 for (k = 0; k < c->local_decl_count; k++) {
                     c->locals[k].count = read_leb_u32(&r);
-                    c->locals[k].type = read_valtype(&r);
+                    c->locals[k].type = read_valtype_byte(&r);
                     c->total_locals += c->locals[k].count;
                 }
                 c->body_offset = (uint32_t)r.pos;
