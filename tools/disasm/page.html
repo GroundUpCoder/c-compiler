@@ -1282,9 +1282,26 @@ function renderModuleOverview(tab) {
     html += '</summary><div class="meta-section">';
     for (var ti = 0; ti < json.types.length; ti++) {
       var t = json.types[ti];
-      var sig = '(' + (t.params || []).join(', ') + ') -> ' +
-                ((t.results || []).length === 0 ? 'void' : t.results.join(', '));
-      html += '<div class="meta-row">[' + t.index + '] <span class="kind">' + esc(sig) + '</span></div>';
+      var body;
+      function fmtStorage(s) {
+        var out = s.type;
+        if (s.heap_type !== undefined) out += ' type[' + s.heap_type + ']';
+        if (s.mutable) out += ' mut';
+        return out;
+      }
+      if (t.kind === 'struct') {
+        var parts = (t.fields || []).map(function (f) { return fmtStorage(f.storage); });
+        body = parts.length ? 'struct { ' + parts.join(', ') + ' }' : 'struct {}';
+      } else if (t.kind === 'array') {
+        body = 'array ' + fmtStorage(t.elem);
+      } else {
+        body = '(' + (t.params || []).join(', ') + ') -> ' +
+               ((t.results || []).length === 0 ? 'void' : t.results.join(', '));
+      }
+      if (t.parent_index !== undefined) body += ' <: type[' + t.parent_index + ']';
+      html += '<div class="meta-row">[' + t.index + '] <span class="kind">' + esc(body) + '</span>';
+      if (t.name) html += ' <span class="name">' + esc(t.name) + '</span>';
+      html += '</div>';
     }
     html += '</div></details>';
   }

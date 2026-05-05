@@ -22,6 +22,8 @@
 #define VAL_I64       0x7E
 #define VAL_F32       0x7D
 #define VAL_F64       0x7C
+#define VAL_I8        0x78    /* packed (struct field / array elem only) */
+#define VAL_I16       0x77    /* packed (struct field / array elem only) */
 #define VAL_FUNCREF   0x70
 #define VAL_EXTERNREF 0x6F
 #define VAL_ANYREF    0x6E
@@ -59,6 +61,36 @@ typedef struct {
     uint8_t *results;
     uint32_t result_count;
 } FuncType;
+
+/* Storage type used for struct fields and array elements.
+ * Same as a regular val_type except may also be packed: 0x78 (i8) or 0x77 (i16).
+ * For ref/refnull (0x63/0x64) the heap_type s33 is captured; -1 otherwise. */
+typedef struct {
+    uint8_t code;
+    int32_t heap_type;
+    int mutable_;
+} StorageType;
+
+typedef struct {
+    StorageType *fields;
+    uint32_t field_count;
+} StructType;
+
+typedef struct {
+    StorageType elem;
+} ArrayType;
+
+typedef enum { TY_FUNC = 0, TY_STRUCT = 1, TY_ARRAY = 2 } TypeKind;
+
+typedef struct {
+    TypeKind kind;
+    int32_t parent_index;   /* -1 if no supertype */
+    union {
+        FuncType func;
+        StructType struct_;
+        ArrayType array;
+    };
+} WasmType;
 
 typedef struct {
     char *module;
@@ -135,6 +167,12 @@ typedef struct {
 } LocalNameGroup;
 
 typedef struct {
+    uint32_t type_index;
+    NameEntry *fields;
+    uint32_t field_count;
+} FieldNameGroup;
+
+typedef struct {
     char *module_name;
     NameEntry *func_names;
     uint32_t func_name_count;
@@ -142,6 +180,10 @@ typedef struct {
     uint32_t local_name_count;
     NameEntry *global_names;
     uint32_t global_name_count;
+    NameEntry *type_names;
+    uint32_t type_name_count;
+    FieldNameGroup *field_name_groups;
+    uint32_t field_name_group_count;
 } NameSection;
 
 typedef struct {
@@ -152,7 +194,7 @@ typedef struct {
     Section *sections;
     uint32_t section_count;
 
-    FuncType *types;
+    WasmType *types;
     uint32_t type_count;
 
     Import *imports;
@@ -214,6 +256,8 @@ const char *wasm_kind_name(uint8_t kind);
 const char *wasm_func_name(const WasmModule *mod, uint32_t idx);
 const char *wasm_local_name(const WasmModule *mod, uint32_t func_idx, uint32_t local_idx);
 const char *wasm_global_name(const WasmModule *mod, uint32_t idx);
+const char *wasm_type_name(const WasmModule *mod, uint32_t idx);
+const char *wasm_field_name(const WasmModule *mod, uint32_t type_idx, uint32_t field_idx);
 
 void print_headers(const WasmModule *mod, const char *filter);
 void print_details(const WasmModule *mod, const char *filter);

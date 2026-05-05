@@ -8408,6 +8408,15 @@ function getOrCreateGCWasmTypeIdx(wmod, type) {
       type._wasmGCTypeIdx = idx;
       wmod.setGCStructFields(idx, fields, parentIdx);
       if (!wmod.gcStructTypeIndices.has(key)) wmod.gcStructTypeIndices.set(key, idx);
+      if (type.tagName && !type.tagName.startsWith('__anon_gc_')) {
+        wmod.typeNames.push({ idx, name: type.tagName });
+        const fieldEntries = [];
+        for (let i = 0; i < type.tagDecl.members.length; i++) {
+          const m = type.tagDecl.members[i];
+          if (m.name) fieldEntries.push({ idx: i, name: m.name });
+        }
+        if (fieldEntries.length > 0) wmod.fieldNames.push({ typeIdx: idx, fields: fieldEntries });
+      }
     } else if (wmod.gcStructTypeIndices.has(key)) {
       // Cache hit, no reservation needed — no zombie typeDef.
       idx = wmod.gcStructTypeIndices.get(key);

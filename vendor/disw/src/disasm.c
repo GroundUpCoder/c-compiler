@@ -33,7 +33,7 @@ static int sec_match(const Section *s, const char *f) {
     return strcmp(wasm_section_name(s->id), f) == 0;
 }
 
-static void print_sig(const FuncType *ft) {
+static void print_func_sig(const FuncType *ft) {
     uint32_t i;
     printf("(");
     for (i = 0; i < ft->param_count; i++) {
@@ -49,6 +49,36 @@ static void print_sig(const FuncType *ft) {
             printf("%s", wasm_valtype(ft->results[i]));
         }
     }
+}
+
+static void print_storagetype(const StorageType *s) {
+    printf("%s", wasm_valtype(s->code));
+    if ((s->code == VAL_REF || s->code == VAL_REFNULL) && s->heap_type >= 0)
+        printf(" type[%d]", s->heap_type);
+    if (s->mutable_) printf(" mut");
+}
+
+static void print_type(const WasmType *t) {
+    uint32_t i;
+    switch (t->kind) {
+    case TY_FUNC:
+        print_func_sig(&t->func);
+        break;
+    case TY_STRUCT:
+        printf("struct {");
+        for (i = 0; i < t->struct_.field_count; i++) {
+            if (i) printf(", ");
+            else printf(" ");
+            print_storagetype(&t->struct_.fields[i]);
+        }
+        printf(t->struct_.field_count ? " }" : "}");
+        break;
+    case TY_ARRAY:
+        printf("array ");
+        print_storagetype(&t->array.elem);
+        break;
+    }
+    if (t->parent_index >= 0) printf(" <: type[%d]", t->parent_index);
 }
 
 /* Opcode immediate kinds */
@@ -307,34 +337,52 @@ static void dis_fc(const WasmModule *mod, Reader *r) {
 }
 
 static void out_heaptype(int32_t ht) {
-    if (ht >= 0) out(" type[%d]", ht);
-    else out(" %s", wasm_valtype((uint8_t)(ht & 0x7F)));
+    if (ht >= 0) {
+        const char *tn = cur_mod ? wasm_type_name(cur_mod, (uint32_t)ht) : NULL;
+        if (tn) out(" type[%d] <%s>", ht, tn);
+        else out(" type[%d]", ht);
+    } else {
+        out(" %s", wasm_valtype((uint8_t)(ht & 0x7F)));
+    }
+}
+
+static void out_typeref(const WasmModule *mod, uint32_t ti) {
+    const char *tn = wasm_type_name(mod, ti);
+    if (tn) out(" %u <%s>", ti, tn);
+    else out(" %u", ti);
+}
+
+static void out_typefield(const WasmModule *mod, uint32_t ti, uint32_t fi) {
+    const char *tn = wasm_type_name(mod, ti);
+    const char *fn = wasm_field_name(mod, ti, fi);
+    if (tn && fn) out(" %u %u <%s.%s>", ti, fi, tn, fn);
+    else if (tn) out(" %u %u <%s>", ti, fi, tn);
+    else out(" %u %u", ti, fi);
 }
 
 static void dis_fb(const WasmModule *mod, Reader *r) {
     uint32_t sub = read_leb_u32(r);
-    (void)mod;
     switch (sub) {
-    case 0x00: out("struct.new %u", read_leb_u32(r)); break;
-    case 0x01: out("struct.new_default %u", read_leb_u32(r)); break;
-    case 0x02: { uint32_t ti = read_leb_u32(r); out("struct.get %u %u", ti, read_leb_u32(r)); break; }
-    case 0x03: { uint32_t ti = read_leb_u32(r); out("struct.get_s %u %u", ti, read_leb_u32(r)); break; }
-    case 0x04: { uint32_t ti = read_leb_u32(r); out("struct.get_u %u %u", ti, read_leb_u32(r)); break; }
-    case 0x05: { uint32_t ti = read_leb_u32(r); out("struct.set %u %u", ti, read_leb_u32(r)); break; }
-    case 0x06: out("array.new %u", read_leb_u32(r)); break;
-    case 0x07: out("array.new_default %u", read_leb_u32(r)); break;
-    case 0x08: { uint32_t ti = read_leb_u32(r); out("array.new_fixed %u %u", ti, read_leb_u32(r)); break; }
-    case 0x09: { uint32_t ti = read_leb_u32(r); out("array.new_data %u %u", ti, read_leb_u32(r)); break; }
-    case 0x0A: { uint32_t ti = read_leb_u32(r); out("array.new_elem %u %u", ti, read_leb_u32(r)); break; }
-    case 0x0B: out("array.get %u", read_leb_u32(r)); break;
-    case 0x0C: out("array.get_s %u", read_leb_u32(r)); break;
-    case 0x0D: out("array.get_u %u", read_leb_u32(r)); break;
-    case 0x0E: out("array.set %u", read_leb_u32(r)); break;
+    case 0x00: out("struct.new"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x01: out("struct.new_default"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x02: { uint32_t ti = read_leb_u32(r); uint32_t fi = read_leb_u32(r); out("struct.get"); out_typefield(mod, ti, fi); break; }
+    case 0x03: { uint32_t ti = read_leb_u32(r); uint32_t fi = read_leb_u32(r); out("struct.get_s"); out_typefield(mod, ti, fi); break; }
+    case 0x04: { uint32_t ti = read_leb_u32(r); uint32_t fi = read_leb_u32(r); out("struct.get_u"); out_typefield(mod, ti, fi); break; }
+    case 0x05: { uint32_t ti = read_leb_u32(r); uint32_t fi = read_leb_u32(r); out("struct.set"); out_typefield(mod, ti, fi); break; }
+    case 0x06: out("array.new"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x07: out("array.new_default"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x08: { uint32_t ti = read_leb_u32(r); uint32_t n = read_leb_u32(r); out("array.new_fixed"); out_typeref(mod, ti); out(" %u", n); break; }
+    case 0x09: { uint32_t ti = read_leb_u32(r); uint32_t di = read_leb_u32(r); out("array.new_data"); out_typeref(mod, ti); out(" %u", di); break; }
+    case 0x0A: { uint32_t ti = read_leb_u32(r); uint32_t ei = read_leb_u32(r); out("array.new_elem"); out_typeref(mod, ti); out(" %u", ei); break; }
+    case 0x0B: out("array.get"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x0C: out("array.get_s"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x0D: out("array.get_u"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x0E: out("array.set"); out_typeref(mod, read_leb_u32(r)); break;
     case 0x0F: out("array.len"); break;
-    case 0x10: out("array.fill %u", read_leb_u32(r)); break;
-    case 0x11: { uint32_t d = read_leb_u32(r); out("array.copy %u %u", d, read_leb_u32(r)); break; }
-    case 0x12: out("array.init_data %u %u", read_leb_u32(r), read_leb_u32(r)); break;
-    case 0x13: out("array.init_elem %u %u", read_leb_u32(r), read_leb_u32(r)); break;
+    case 0x10: out("array.fill"); out_typeref(mod, read_leb_u32(r)); break;
+    case 0x11: { uint32_t d = read_leb_u32(r); uint32_t s = read_leb_u32(r); out("array.copy"); out_typeref(mod, d); out_typeref(mod, s); break; }
+    case 0x12: { uint32_t ti = read_leb_u32(r); uint32_t di = read_leb_u32(r); out("array.init_data"); out_typeref(mod, ti); out(" %u", di); break; }
+    case 0x13: { uint32_t ti = read_leb_u32(r); uint32_t ei = read_leb_u32(r); out("array.init_elem"); out_typeref(mod, ti); out(" %u", ei); break; }
     case 0x14: out("ref.test"); out_heaptype(read_leb_i32(r)); break;
     case 0x15: out("ref.test null"); out_heaptype(read_leb_i32(r)); break;
     case 0x16: out("ref.cast"); out_heaptype(read_leb_i32(r)); break;
@@ -516,8 +564,10 @@ void print_details(const WasmModule *mod, const char *filter) {
         case SEC_TYPE:
             printf("\nType[%u]:\n", mod->type_count);
             for (i = 0; i < mod->type_count; i++) {
+                const char *tn = wasm_type_name(mod, i);
                 printf(" - type[%u] ", i);
-                print_sig(&mod->types[i]);
+                print_type(&mod->types[i]);
+                if (tn) printf(" <%s>", tn);
                 printf("\n");
             }
             break;
@@ -763,9 +813,9 @@ void print_disasm(const WasmModule *mod, const char *filter) {
         if (name) printf(" <%s>", name);
         if (i < mod->func_count) {
             uint32_t ti = mod->func_types[i];
-            if (ti < mod->type_count) {
+            if (ti < mod->type_count && mod->types[ti].kind == TY_FUNC) {
                 printf(" ");
-                print_sig(&mod->types[ti]);
+                print_func_sig(&mod->types[ti].func);
             }
         }
         printf(":\n");
@@ -887,6 +937,13 @@ static void json_sig(const FuncType *ft) {
     printf("\"");
 }
 
+static void json_storagetype(const StorageType *s) {
+    printf("{\"type\":\"%s\"", wasm_valtype(s->code));
+    if ((s->code == VAL_REF || s->code == VAL_REFNULL) && s->heap_type >= 0)
+        printf(",\"heap_type\":%d", s->heap_type);
+    printf(",\"mutable\":%s}", s->mutable_ ? "true" : "false");
+}
+
 void print_json(const WasmModule *mod) {
     uint32_t i, j;
 
@@ -924,19 +981,45 @@ void print_json(const WasmModule *mod) {
     /* types */
     printf(",\"types\":[");
     for (i = 0; i < mod->type_count; i++) {
-        const FuncType *ft = &mod->types[i];
+        const WasmType *t = &mod->types[i];
+        const char *tn = wasm_type_name(mod, i);
         if (i) printf(",");
-        printf("{\"index\":%u,\"params\":[", i);
-        for (j = 0; j < ft->param_count; j++) {
-            if (j) printf(",");
-            printf("\"%s\"", wasm_valtype(ft->params[j]));
+        printf("{\"index\":%u", i);
+        if (tn) { printf(",\"name\":"); json_str(tn); }
+        if (t->parent_index >= 0) printf(",\"parent_index\":%d", t->parent_index);
+        switch (t->kind) {
+        case TY_FUNC:
+            printf(",\"kind\":\"func\",\"params\":[");
+            for (j = 0; j < t->func.param_count; j++) {
+                if (j) printf(",");
+                printf("\"%s\"", wasm_valtype(t->func.params[j]));
+            }
+            printf("],\"results\":[");
+            for (j = 0; j < t->func.result_count; j++) {
+                if (j) printf(",");
+                printf("\"%s\"", wasm_valtype(t->func.results[j]));
+            }
+            printf("]");
+            break;
+        case TY_STRUCT:
+            printf(",\"kind\":\"struct\",\"fields\":[");
+            for (j = 0; j < t->struct_.field_count; j++) {
+                const char *fn = wasm_field_name(mod, i, j);
+                if (j) printf(",");
+                printf("{\"index\":%u", j);
+                if (fn) { printf(",\"name\":"); json_str(fn); }
+                printf(",\"storage\":");
+                json_storagetype(&t->struct_.fields[j]);
+                printf("}");
+            }
+            printf("]");
+            break;
+        case TY_ARRAY:
+            printf(",\"kind\":\"array\",\"elem\":");
+            json_storagetype(&t->array.elem);
+            break;
         }
-        printf("],\"results\":[");
-        for (j = 0; j < ft->result_count; j++) {
-            if (j) printf(",");
-            printf("\"%s\"", wasm_valtype(ft->results[j]));
-        }
-        printf("]}");
+        printf("}");
     }
     printf("]");
 
@@ -1060,14 +1143,15 @@ void print_json(const WasmModule *mod) {
 
         if (i < mod->func_count) {
             uint32_t ti = mod->func_types[i];
-            if (ti < mod->type_count) {
+            if (ti < mod->type_count && mod->types[ti].kind == TY_FUNC) {
+                const FuncType *ft = &mod->types[ti].func;
                 printf(",\"type_index\":%u,\"signature\":", ti);
-                json_sig(&mod->types[ti]);
+                json_sig(ft);
                 printf(",\"params\":[");
-                for (j = 0; j < mod->types[ti].param_count; j++) {
+                for (j = 0; j < ft->param_count; j++) {
                     const char *pname = wasm_local_name(mod, func_idx, j);
                     if (j) printf(",");
-                    printf("{\"type\":\"%s\",\"index\":%u", wasm_valtype(mod->types[ti].params[j]), j);
+                    printf("{\"type\":\"%s\",\"index\":%u", wasm_valtype(ft->params[j]), j);
                     if (pname) { printf(",\"name\":"); json_str(pname); }
                     printf("}");
                 }
@@ -1082,7 +1166,8 @@ void print_json(const WasmModule *mod) {
             uint32_t num_params = 0;
             if (i < mod->func_count) {
                 uint32_t ti = mod->func_types[i];
-                if (ti < mod->type_count) num_params = mod->types[ti].param_count;
+                if (ti < mod->type_count && mod->types[ti].kind == TY_FUNC)
+                    num_params = mod->types[ti].func.param_count;
             }
             printf(",\"locals\":[");
             if (code->total_locals > 0) {

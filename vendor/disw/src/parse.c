@@ -107,10 +107,14 @@ static uint8_t read_valtype(Reader *r) {
     return b;
 }
 
-static void skip_storagetype(Reader *r) {
-    uint8_t b = read_byte(r);
-    if (b == VAL_REF || b == VAL_REFNULL)
-        read_leb_i32(r);
+/* Storage type for struct fields and array elements: a val_type byte followed
+ * by an optional heap-type s33 (for ref/refnull), then a mutability byte. */
+static void read_storagetype(Reader *r, StorageType *out) {
+    out->code = read_byte(r);
+    out->heap_type = -1;
+    if (out->code == VAL_REF || out->code == VAL_REFNULL)
+        out->heap_type = read_leb_i32(r);
+    out->mutable_ = read_byte(r) ? 1 : 0;
 }
 
 void skip_init_expr(Reader *r) {
@@ -136,6 +140,8 @@ const char *wasm_valtype(uint8_t t) {
     case VAL_I64: return "i64";
     case VAL_F32: return "f32";
     case VAL_F64: return "f64";
+    case VAL_I8: return "i8";
+    case VAL_I16: return "i16";
     case VAL_FUNCREF: return "funcref";
     case VAL_EXTERNREF: return "externref";
     case VAL_ANYREF: return "anyref";
@@ -226,6 +232,27 @@ const char *wasm_global_name(const WasmModule *mod, uint32_t idx) {
     return NULL;
 }
 
+const char *wasm_type_name(const WasmModule *mod, uint32_t idx) {
+    uint32_t i;
+    for (i = 0; i < mod->names.type_name_count; i++)
+        if (mod->names.type_names[i].index == idx)
+            return mod->names.type_names[i].name;
+    return NULL;
+}
+
+const char *wasm_field_name(const WasmModule *mod, uint32_t type_idx, uint32_t field_idx) {
+    uint32_t i, j;
+    for (i = 0; i < mod->names.field_name_group_count; i++) {
+        const FieldNameGroup *g = &mod->names.field_name_groups[i];
+        if (g->type_index != type_idx) continue;
+        for (j = 0; j < g->field_count; j++)
+            if (g->fields[j].index == field_idx)
+                return g->fields[j].name;
+        return NULL;
+    }
+    return NULL;
+}
+
 static void parse_limits(Reader *r, uint32_t *initial, uint32_t *maximum, int *has_max) {
     uint8_t flags = read_byte(r);
     *initial = read_leb_u32(r);
@@ -283,7 +310,7 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
             uint32_t entry_count = read_leb_u32(&r);
             uint32_t cap = entry_count < 16 ? 16 : entry_count;
             uint32_t tidx = 0;
-            mod->types = calloc(cap, sizeof(FuncType));
+            mod->types = calloc(cap, sizeof(WasmType));
             for (j = 0; j < entry_count; j++) {
                 uint8_t tag = r.data[r.pos];
                 uint32_t rc = 1, ri;
@@ -293,31 +320,44 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                 }
                 while (tidx + rc > cap) {
                     cap *= 2;
-                    mod->types = realloc(mod->types, cap * sizeof(FuncType));
-                    memset(mod->types + tidx, 0, (cap - tidx) * sizeof(FuncType));
+                    mod->types = realloc(mod->types, cap * sizeof(WasmType));
+                    memset(mod->types + tidx, 0, (cap - tidx) * sizeof(WasmType));
                 }
                 for (ri = 0; ri < rc; ri++) {
-                    FuncType *ft = &mod->types[tidx++];
+                    WasmType *t = &mod->types[tidx++];
                     uint8_t ct = read_byte(&r);
-                    if (ct == 0x50) {
+                    t->parent_index = -1;
+                    /* Sub type prefix (0x50 sub, 0x4F sub final): supertype list, then inner type. */
+                    if (ct == 0x50 || ct == 0x4F) {
                         uint32_t sc = read_leb_u32(&r);
                         uint32_t si;
-                        for (si = 0; si < sc; si++) read_leb_u32(&r);
+                        for (si = 0; si < sc; si++) {
+                            uint32_t pi = read_leb_u32(&r);
+                            if (si == 0) t->parent_index = (int32_t)pi;
+                        }
                         ct = read_byte(&r);
                     }
                     if (ct == 0x60) {
                         uint32_t k;
-                        ft->param_count = read_leb_u32(&r);
-                        ft->params = ft->param_count ? malloc(ft->param_count) : NULL;
-                        for (k = 0; k < ft->param_count; k++) ft->params[k] = read_valtype(&r);
-                        ft->result_count = read_leb_u32(&r);
-                        ft->results = ft->result_count ? malloc(ft->result_count) : NULL;
-                        for (k = 0; k < ft->result_count; k++) ft->results[k] = read_valtype(&r);
+                        t->kind = TY_FUNC;
+                        t->func.param_count = read_leb_u32(&r);
+                        t->func.params = t->func.param_count ? malloc(t->func.param_count) : NULL;
+                        for (k = 0; k < t->func.param_count; k++) t->func.params[k] = read_valtype(&r);
+                        t->func.result_count = read_leb_u32(&r);
+                        t->func.results = t->func.result_count ? malloc(t->func.result_count) : NULL;
+                        for (k = 0; k < t->func.result_count; k++) t->func.results[k] = read_valtype(&r);
                     } else if (ct == 0x5F) {
                         uint32_t fc = read_leb_u32(&r), k;
-                        for (k = 0; k < fc; k++) { skip_storagetype(&r); read_byte(&r); }
+                        t->kind = TY_STRUCT;
+                        t->struct_.field_count = fc;
+                        t->struct_.fields = fc ? calloc(fc, sizeof(StorageType)) : NULL;
+                        for (k = 0; k < fc; k++) read_storagetype(&r, &t->struct_.fields[k]);
                     } else if (ct == 0x5E) {
-                        skip_storagetype(&r); read_byte(&r);
+                        t->kind = TY_ARRAY;
+                        read_storagetype(&r, &t->array.elem);
+                    } else {
+                        /* Unknown — treat as empty func to keep indices aligned. */
+                        t->kind = TY_FUNC;
                     }
                 }
             }
@@ -539,6 +579,28 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
                             mod->names.global_names[j].index = read_leb_u32(&r);
                             mod->names.global_names[j].name = read_name(&r);
                         }
+                    } else if (sub_id == 4) {
+                        mod->names.type_name_count = read_leb_u32(&r);
+                        mod->names.type_names = calloc(mod->names.type_name_count, sizeof(NameEntry));
+                        for (j = 0; j < mod->names.type_name_count; j++) {
+                            mod->names.type_names[j].index = read_leb_u32(&r);
+                            mod->names.type_names[j].name = read_name(&r);
+                        }
+                    } else if (sub_id == 10) {
+                        uint32_t g_count = read_leb_u32(&r);
+                        mod->names.field_name_group_count = g_count;
+                        mod->names.field_name_groups = calloc(g_count, sizeof(FieldNameGroup));
+                        for (j = 0; j < g_count; j++) {
+                            uint32_t k;
+                            FieldNameGroup *g = &mod->names.field_name_groups[j];
+                            g->type_index = read_leb_u32(&r);
+                            g->field_count = read_leb_u32(&r);
+                            g->fields = calloc(g->field_count, sizeof(NameEntry));
+                            for (k = 0; k < g->field_count; k++) {
+                                g->fields[k].index = read_leb_u32(&r);
+                                g->fields[k].name = read_name(&r);
+                            }
+                        }
                     }
                     r.pos = sub_end;
                 }
@@ -553,8 +615,18 @@ int wasm_parse(WasmModule *mod, const uint8_t *data, size_t size) {
 void wasm_free(WasmModule *mod) {
     uint32_t i;
     for (i = 0; i < mod->type_count; i++) {
-        free(mod->types[i].params);
-        free(mod->types[i].results);
+        WasmType *t = &mod->types[i];
+        switch (t->kind) {
+        case TY_FUNC:
+            free(t->func.params);
+            free(t->func.results);
+            break;
+        case TY_STRUCT:
+            free(t->struct_.fields);
+            break;
+        case TY_ARRAY:
+            break;
+        }
     }
     free(mod->types);
     for (i = 0; i < mod->import_count; i++) {
@@ -586,6 +658,16 @@ void wasm_free(WasmModule *mod) {
     for (i = 0; i < mod->names.global_name_count; i++)
         free(mod->names.global_names[i].name);
     free(mod->names.global_names);
+    for (i = 0; i < mod->names.type_name_count; i++)
+        free(mod->names.type_names[i].name);
+    free(mod->names.type_names);
+    for (i = 0; i < mod->names.field_name_group_count; i++) {
+        uint32_t k;
+        for (k = 0; k < mod->names.field_name_groups[i].field_count; k++)
+            free(mod->names.field_name_groups[i].fields[k].name);
+        free(mod->names.field_name_groups[i].fields);
+    }
+    free(mod->names.field_name_groups);
     free(mod->data_segments);
     for (i = 0; i < mod->section_count; i++)
         free(mod->sections[i].custom_name);
