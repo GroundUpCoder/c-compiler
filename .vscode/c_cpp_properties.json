@@ -14,6 +14,7 @@
         "__struct_new(T,...)=((T*){0})",
         "__array_new(T,...)=(__array(T)){0}",
         "__array_of(T,...)=(__array(T)){0}",
+        "__array_len(L)=0",
         "__ref_is_null(R)=((R)==0)",
         "__ref_eq(A,B)=((A)==(B))",
         "__ref_test(T,R)=((R),0)",
