@@ -8207,24 +8207,20 @@ function getOrCreateBoxStructIdx(wmod, primWt) {
   const idx = wmod.reserveGCStructTypeId();
   wmod.setGCStructFields(idx, fields);
   wmod.gcStructTypeIndices.set(key, idx);
-  // Debug name based on wasm storage type.
-  const name =
-    primWt === WT_I32 ? '__Box_i32' :
-    primWt === WT_I64 ? '__Box_i64' :
-    primWt === WT_F32 ? '__Box_f32' :
-    primWt === WT_F64 ? '__Box_f64' : '__Box';
+  const name = primWt === WT_I64 ? '__Box_i64' : primWt === WT_F64 ? '__Box_f64' : '__Box';
   wmod.typeNames.push({ idx, name });
   wmod.fieldNames.push({ typeIdx: idx, fields: [{ idx: 0, name: 'v' }] });
   return idx;
 }
 
 // Map a numeric C type to the wasm storage type used for its box.
+// Only two box types: __Box_i64 (all integers) and __Box_f64 (all floats).
+// This lets cross-width unboxing work within the same category
+// (e.g. box a float, unbox as double).
 function boxStorageWtFor(type) {
   type = type.removeQualifiers();
-  if (type === Types.TFLOAT) return WT_F32;
-  if (type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
-  if (type === Types.TLLONG || type === Types.TULLONG) return WT_I64;
-  if (type.isInteger()) return WT_I32;
+  if (type === Types.TFLOAT || type === Types.TDOUBLE || type === Types.TLDOUBLE) return WT_F64;
+  if (type.isInteger()) return WT_I64;
   return null;
 }
 
@@ -9923,9 +9919,14 @@ class CodeGenerator {
       const fq = fromType.removeQualifiers();
       const isNullConst = fromExpr && this._isNullPointerConstantCG(fromExpr);
       if (toType === Types.TEQREF && fq.isArithmetic() && !isNullConst) {
-        // Box: value is on stack, struct.new wraps it.
+        // Box: widen value to box storage type, then struct.new.
         const primWt = boxStorageWtFor(fq);
         const boxIdx = getOrCreateBoxStructIdx(this.wmod, primWt);
+        const srcWt = this.getBinaryWasmType(fromType);
+        if (!wtEquals(srcWt, primWt)) {
+          if (wtEquals(primWt, WT_I64)) this.body.aop(WT_I64, ALU.OP_EXTEND_I32, !this.isUnsignedType(fromType));
+          else if (wtEquals(primWt, WT_F64)) this.body.aop(WT_F64, ALU.OP_PROMOTE_F32);
+        }
         this.body.structNew(boxIdx);
         return;
       }
@@ -10865,18 +10866,21 @@ class CodeGenerator {
               this.emitConversion(srcType, target);
               break;
             }
-            // prim → __eqref: box. Push value, struct.new the box struct,
-            // then implicit upcast to eqref (free at WASM level).
+            // prim → __eqref: box. Widen to box storage type, struct.new.
             if (isPrim(sq) && isEqref(tq)) {
               const primWt = boxStorageWtFor(sq);
               if (!primWt) throw new Error(`__cast: unsupported primitive '${sq.toString()}' for eqref boxing`);
               const boxIdx = getOrCreateBoxStructIdx(this.wmod, primWt);
               this.emitExpr(expr.args[0]);
-              this.emitConversion(srcType, sq);  // ensure value is in the box-storage shape
+              const srcWt = this.getBinaryWasmType(srcType);
+              if (!wtEquals(srcWt, primWt)) {
+                if (wtEquals(primWt, WT_I64)) this.body.aop(WT_I64, ALU.OP_EXTEND_I32, !this.isUnsignedType(srcType));
+                else if (wtEquals(primWt, WT_F64)) this.body.aop(WT_F64, ALU.OP_PROMOTE_F32);
+              }
               this.body.structNew(boxIdx);
               break;
             }
-            // __eqref → prim: unbox. ref.cast to box, struct.get field 0.
+            // __eqref → prim: unbox. ref.cast to box, struct.get, narrow.
             if (isEqref(sq) && isPrim(tq)) {
               const primWt = boxStorageWtFor(tq);
               if (!primWt) throw new Error(`__cast: unsupported primitive '${tq.toString()}' for eqref unboxing`);
@@ -10884,13 +10888,13 @@ class CodeGenerator {
               this.emitExpr(expr.args[0]);
               this.body.refCastNull(boxIdx);
               this.body.structGet(boxIdx, 0);
-              // Convert from the wasm-storage type to the precise C target type.
-              if (tq === Types.TFLOAT && primWt === WT_F32) { /* OK */ }
-              else if (tq === Types.TDOUBLE && primWt === WT_F64) { /* OK */ }
-              else if (tq === Types.TLLONG || tq === Types.TULLONG) { /* OK */ }
-              // For sub-i32 ints, the box stores i32 — narrow as needed.
-              else if (tq.isInteger() && primWt === WT_I32) {
-                this.emitConversion(Types.TINT, target);
+              // Narrow from box storage type to the precise C target type.
+              if (tq === Types.TDOUBLE || tq === Types.TLDOUBLE) { /* f64 → f64: OK */ }
+              else if (tq === Types.TFLOAT) { this.body.aop(WT_F32, ALU.OP_DEMOTE_F64); }
+              else if (tq === Types.TLLONG || tq === Types.TULLONG) { /* i64 → i64: OK */ }
+              else if (tq.isInteger()) {
+                this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+                this.emitSubIntNarrowing(tq);
               }
               break;
             }
