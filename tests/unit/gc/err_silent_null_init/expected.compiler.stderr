@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_silent_null_init/main.c.
+tests/unit/gc/err_silent_null_init/main.c:6: error: cannot convert 'int' to reference type '__struct Item' (use __cast(__struct Item, x) for an explicit conversion, or __ref_null for null)

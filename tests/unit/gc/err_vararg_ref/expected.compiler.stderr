@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_vararg_ref/main.c.
+tests/unit/gc/err_vararg_ref/main.c:6: error: cannot pass reference type '__struct Foo' as a variadic argument — vararg storage uses linear memory which can't hold GC references

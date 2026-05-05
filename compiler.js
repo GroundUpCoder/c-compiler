@@ -4767,11 +4767,17 @@ class Parser {
         if (args.length !== 0 && args.length !== fields.length) {
           this.error(newTok, `__new(__struct ${nq.tagName}, ...): expected ${fields.length} field args, got ${args.length}`);
         }
+        // Reject implicit non-zero int → non-eqref ref field (silent-null bug).
+        for (let i = 0; i < args.length; i++) {
+          this._rejectNonZeroToRef(fields[i].type, args[i], newTok);
+        }
       } else {
         // GC_ARRAY: __new(__array(T), length) or __new(__array(T), length, init)
         if (args.length < 1 || args.length > 2) {
           this.error(newTok, `__new(__array(...), ...): expected length [, init], got ${args.length} args`);
         }
+        // Reject non-zero int as fill value when element type is a non-eqref ref.
+        if (args.length === 2) this._rejectNonZeroToRef(nq.baseType, args[1], newTok);
       }
       return new AST.EGCNew(nq, args);
     }
@@ -4915,6 +4921,10 @@ class Parser {
       if (elemType.kind === Types.TypeKind.ARRAY || elemType.kind === Types.TypeKind.FUNCTION) {
         this.error(tok, `__new_array element type must not be a C array or function`);
       }
+      // Reject implicit non-zero int → non-eqref ref element (silent-null bug).
+      for (let i = 0; i < args.length; i++) {
+        this._rejectNonZeroToRef(elemType, args[i], tok);
+      }
       const arrType = Types.gcArrayOf(elemType);
       return new AST.EIntrinsic(arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
     }
@@ -4934,6 +4944,8 @@ class Parser {
       if (!arr.type.removeQualifiers().isGCArray()) {
         this.error(tok, `__array_fill first argument must be a __array(...), got '${arr.type.toString()}'`);
       }
+      const elemType = arr.type.removeQualifiers().baseType;
+      this._rejectNonZeroToRef(elemType, val, tok);
       return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
     }
 
@@ -5029,6 +5041,12 @@ class Parser {
       }
       if (!src.type.removeQualifiers().isGCArray()) {
         this.error(tok, `__array_copy src must be a __array(...), got '${src.type.toString()}'`);
+      }
+      const dstElem = dst.type.removeQualifiers().baseType;
+      const srcElem = src.type.removeQualifiers().baseType;
+      if (dstElem.removeQualifiers() !== srcElem.removeQualifiers()) {
+        this.error(tok,
+          `__array_copy element type mismatch: dst is '${dst.type.toString()}', src is '${src.type.toString()}'`);
       }
       return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_COPY, [dst, dstOff, src, srcOff, count]);
     }
@@ -5246,6 +5264,10 @@ class Parser {
       argType = d.type;
     }
     this.expect(")");
+    if (argType.removeQualifiers().isRef()) {
+      this.error(this.peek(-1),
+        `va_arg cannot retrieve a reference type '${argType.toString()}' — vararg storage uses linear memory which can't hold GC references`);
+    }
     return new AST.EIntrinsic(argType, Types.IntrinsicKind.VA_ARG, [ap], argType);
   }
 
@@ -5359,8 +5381,18 @@ class Parser {
 
   // Matches CC's parseUnaryExpression (compiler.cc ~line 10538)
   parseUnaryExpression() {
-    if (this.matchText("++")) { const e = this.parseUnaryExpression(); return new AST.EUnary(Types.computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e); }
-    if (this.matchText("--")) { const e = this.parseUnaryExpression(); return new AST.EUnary(Types.computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e); }
+    if (this.matchText("++")) {
+      const tok = this.peek(-1);
+      const e = this.parseUnaryExpression();
+      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `'++' on reference type is not allowed`);
+      return new AST.EUnary(Types.computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e);
+    }
+    if (this.matchText("--")) {
+      const tok = this.peek(-1);
+      const e = this.parseUnaryExpression();
+      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `'--' on reference type is not allowed`);
+      return new AST.EUnary(Types.computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e);
+    }
     if (this.matchText("&")) {
       const e = this.parseCastExpression();
       if ((e.kind === Types.ExprKind.MEMBER || e.kind === Types.ExprKind.ARROW) && e.memberDecl && e.memberDecl.bitWidth >= 0) {
@@ -5377,10 +5409,32 @@ class Parser {
       }
       this.markAddressTaken(e); return new AST.EUnary(Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
     }
-    if (this.matchText("*")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e); }
-    if (this.matchText("+")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_POS", e.type), "OP_POS", e); }
-    if (this.matchText("-")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e); }
-    if (this.matchText("~")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e); }
+    if (this.matchText("*")) {
+      const tok = this.peek(-1);
+      const e = this.parseCastExpression();
+      if (e.type && e.type.removeQualifiers().isRef()) {
+        this.error(tok, `unary '*' on reference type '${e.type.toString()}' is not allowed (use '->' for fields, or just access the ref directly)`);
+      }
+      return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e);
+    }
+    if (this.matchText("+")) {
+      const tok = this.peek(-1);
+      const e = this.parseCastExpression();
+      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '+' on reference type is not allowed`);
+      return new AST.EUnary(Types.computeUnaryType("OP_POS", e.type), "OP_POS", e);
+    }
+    if (this.matchText("-")) {
+      const tok = this.peek(-1);
+      const e = this.parseCastExpression();
+      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '-' on reference type is not allowed`);
+      return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e);
+    }
+    if (this.matchText("~")) {
+      const tok = this.peek(-1);
+      const e = this.parseCastExpression();
+      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '~' on reference type is not allowed`);
+      return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e);
+    }
     if (this.matchText("!")) {
       const e = this.parseCastExpression();
       // `!ref` is equivalent to __ref_is_null(ref). Allowed as sugar.
@@ -5483,6 +5537,16 @@ class Parser {
           const params = calleeFuncType.getParamTypes();
           const n = Math.min(args.length, params.length);
           for (let i = 0; i < n; i++) this._rejectIntToRef(params[i], args[i], callTok);
+          // Reject ref-typed vararg arguments — vararg storage uses linear
+          // memory which can't hold GC references.
+          if (calleeFuncType.isVarArg) {
+            for (let i = params.length; i < args.length; i++) {
+              if (args[i].type.removeQualifiers().isRef()) {
+                this.error(callTok,
+                  `cannot pass reference type '${args[i].type.toString()}' as a variadic argument — vararg storage uses linear memory which can't hold GC references`);
+              }
+            }
+          }
         }
 
         let funcDecl = null;
@@ -5505,6 +5569,9 @@ class Parser {
         if (baseUt.kind === Types.TypeKind.ARRAY) elemType = baseUt.baseType;
         else if (baseUt.kind === Types.TypeKind.POINTER) elemType = baseUt.baseType;
         else if (baseUt.kind === Types.TypeKind.GC_ARRAY) elemType = baseUt.baseType;
+        else if (baseUt.isRef()) {
+          this.error(this.peek(-1), `subscript '[]' on reference type '${expr.type.toString()}' is not allowed (use __array(T) for indexable GC storage)`);
+        }
         expr = new AST.ESubscript(elemType, expr, index);
         continue;
       }
@@ -5552,10 +5619,12 @@ class Parser {
         continue;
       }
       if (this.matchText("++")) {
+        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(this.peek(-1), `'++' on reference type is not allowed`);
         expr = new AST.EUnary(expr.type, "OP_POST_INC", expr);
         continue;
       }
       if (this.matchText("--")) {
+        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(this.peek(-1), `'--' on reference type is not allowed`);
         expr = new AST.EUnary(expr.type, "OP_POST_DEC", expr);
         continue;
       }
@@ -5731,6 +5800,14 @@ class Parser {
         if (bop === "LT" || bop === "GT" || bop === "LE" || bop === "GE") {
           this.error(opTok, `'${op}' on reference type is not allowed (only ==, != for identity/null)`);
         }
+        // Arithmetic/bitwise/shift/logical-bit ops have no meaning on refs.
+        // Allow only: ASSIGN (the rejection rules below catch bad RHS), ==/!=
+        // (identity/null), and &&/|| (boolean coercion sugar).
+        if (bop === "ADD" || bop === "SUB" || bop === "MUL" || bop === "DIV" ||
+            bop === "MOD" || bop === "SHL" || bop === "SHR" ||
+            bop === "BAND" || bop === "BOR" || bop === "BXOR") {
+          this.error(opTok, `'${op}' on reference type is not allowed`);
+        }
         // For ==/!= involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
         if (bop === "EQ" || bop === "NE") {
           if (lIsRef !== rIsRef && !this._isNullPointerConstant(lIsRef ? right : left)) {
@@ -5748,8 +5825,8 @@ class Parser {
       if (lIsRef &&
           (bop === "ADD_ASSIGN" || bop === "SUB_ASSIGN" || bop === "MUL_ASSIGN" ||
            bop === "DIV_ASSIGN" || bop === "MOD_ASSIGN" || bop === "SHL_ASSIGN" ||
-           bop === "SHR_ASSIGN" || bop === "AND_ASSIGN" || bop === "XOR_ASSIGN" ||
-           bop === "OR_ASSIGN")) {
+           bop === "SHR_ASSIGN" || bop === "BAND_ASSIGN" || bop === "BXOR_ASSIGN" ||
+           bop === "BOR_ASSIGN")) {
         this.error(opTok, `'${op}' on reference type is not allowed`);
       }
       // Apply C99 6.3.1.1 integer promotions for bitfield operands
@@ -6342,6 +6419,32 @@ class Parser {
         decl.type = type;
       }
 
+      // For functions: every GC struct/array referenced in the signature must
+      // be complete. WASM function signatures need a concrete type idx, and
+      // there's no way to encode `(ref null incomplete)`. Recurse through
+      // pointer/array/function types so a typedef like
+      //   typedef __struct Foo *(*Fp)(int); Fp get_fp(void);
+      // also gets caught when Foo is incomplete.
+      if (type.kind === Types.TypeKind.FUNCTION) {
+        const seen = new Set();
+        const checkComplete = (t) => {
+          if (!t || seen.has(t)) return;
+          seen.add(t);
+          const u = t.removeQualifiers();
+          if (u.kind === Types.TypeKind.GC_STRUCT && !u.isComplete) {
+            this.error(this.peek(), `function '${name}' references incomplete GC struct '${u.tagName}' in its signature; define '${u.tagName}' first`);
+          }
+          if (u.kind === Types.TypeKind.POINTER || u.kind === Types.TypeKind.ARRAY) checkComplete(u.baseType);
+          else if (u.kind === Types.TypeKind.GC_ARRAY) checkComplete(u.baseType);
+          else if (u.kind === Types.TypeKind.FUNCTION) {
+            checkComplete(u.returnType);
+            for (const pt of (u.paramTypes || [])) checkComplete(pt);
+          }
+        };
+        checkComplete(type.returnType);
+        for (const pt of (type.paramTypes || [])) checkComplete(pt);
+      }
+
       // Check if this is a function definition
       if (type.kind === Types.TypeKind.FUNCTION && this.atText("{")) {
         if (specs.requestedAlignment > 0) {
@@ -6578,6 +6681,10 @@ class Parser {
           this.expect("]");
           arrayDims.push(size);
         }
+        if (type.removeQualifiers().isRef()) {
+          this.error(this.peek(-1),
+            `cannot have a C array of reference type '${type.toString()}' (refs live on the GC heap, not in linear memory) — use __array(${type.toString()}) instead`);
+        }
         for (let i = arrayDims.length - 1; i >= 0; i--) {
           type = Types.arrayOf(type, arrayDims[i]);
         }
@@ -6629,6 +6736,10 @@ class Parser {
                 if (this.atKind(Lexer.TokenKind.IDENT)) pName = this.advance().text;
                 // Array suffix on param -> first dim decays to pointer, rest are arrays
                 if (this.atText("[")) {
+                  if (pType.removeQualifiers().isRef()) {
+                    this.error(this.peek(),
+                      `cannot have a C array of reference type '${pType.toString()}' (refs live on the GC heap, not in linear memory) — use __array(${pType.toString()}) instead`);
+                  }
                   const arrayDims = [];
                   let firstDim = true;
                   while (this.matchText("[")) {
@@ -7552,6 +7663,7 @@ class WasmCode {
   refNullIdx(typeIdx) { this.push(0xD0); lebI(this.bytes, typeIdx); }
   refIsNull() { this.push(0xD1); }
   refEq() { this.push(0xD3); }
+  refTest(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x14); lebI(this.bytes, typeIdx); }
   refTestNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x15); lebI(this.bytes, typeIdx); }
   refCastNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x17); lebI(this.bytes, typeIdx); }
   // ref.cast (ref null eq) — heap type encoded as the abstract `eq` byte (0x6D).
@@ -9294,7 +9406,7 @@ class CodeGenerator {
         const wasmRetType = cToWasmType(retType, this.wmod);
         if (wtIsRef(wasmRetType) && !wasmRetType.nullable) this.body.unreachable();
         else if (wtIsRef(wasmRetType) && wasmRetType.heapIsIdx) this.body.refNullIdx(wasmRetType.heap);
-        else if (wtEquals(wasmRetType, WT_EXTERNREF)) this.body.refNull(0x6F);
+        else if (wtIsRef(wasmRetType)) this.body.refNull(wasmRetType.heap);
         else if (wtEquals(wasmRetType, WT_I32)) this.body.i32Const(0);
         else if (wtEquals(wasmRetType, WT_I64)) this.body.i64Const(0n);
         else if (wtEquals(wasmRetType, WT_F32)) this.body.f32Const(0.0);

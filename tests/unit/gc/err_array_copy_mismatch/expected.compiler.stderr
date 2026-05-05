@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_array_copy_mismatch/main.c.
+tests/unit/gc/err_array_copy_mismatch/main.c:5: error: __array_copy element type mismatch: dst is '__array(double)', src is '__array(int)'

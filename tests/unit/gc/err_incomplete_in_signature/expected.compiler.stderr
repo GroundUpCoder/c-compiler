@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_incomplete_in_signature/main.c.
+tests/unit/gc/err_incomplete_in_signature/main.c:4: error: function 'make' references incomplete GC struct 'Foo' in its signature; define 'Foo' first

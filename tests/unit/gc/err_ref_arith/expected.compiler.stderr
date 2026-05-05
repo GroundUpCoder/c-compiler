@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_ref_arith/main.c.
+tests/unit/gc/err_ref_arith/main.c:6: error: '+' on reference type is not allowed

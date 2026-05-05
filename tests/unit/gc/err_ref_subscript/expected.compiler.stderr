@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_ref_subscript/main.c.
+tests/unit/gc/err_ref_subscript/main.c:5: error: subscript '[]' on reference type '__struct Foo' is not allowed (use __array(T) for indexable GC storage)

@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_ref_deref/main.c.
+tests/unit/gc/err_ref_deref/main.c:5: error: unary '*' on reference type '__struct Foo' is not allowed (use '->' for fields, or just access the ref directly)

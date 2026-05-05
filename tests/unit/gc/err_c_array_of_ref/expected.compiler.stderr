@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_c_array_of_ref/main.c.
+tests/unit/gc/err_c_array_of_ref/main.c:5: error: cannot have a C array of reference type '__struct Foo' (refs live on the GC heap, not in linear memory) — use __array(__struct Foo) instead
