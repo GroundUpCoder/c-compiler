@@ -3,7 +3,7 @@ __struct Node { int v; __struct Node *next; };
 __struct Node *make_list(int n) {
   __struct Node *head = 0;
   for (int i = n; i >= 1; i--) {
-    __struct Node *nn = __struct_new(Node);
+    __struct Node *nn = __new(__struct Node);
     nn->v = i;
     nn->next = head;
     head = nn;

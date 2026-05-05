@@ -18,8 +18,8 @@ int main(void) {
   __struct Node *l = make_list(5);
   printf("sum: %d\n", list_sum(l));   // 1+2+3+4+5 = 15
 
-  __struct A *a = __struct_new(A);
-  __struct B *b = __struct_new(B);
+  __struct A *a = __new(__struct A);
+  __struct B *b = __new(__struct B);
   a->x = 10; b->y = 99; a->b = b; b->a = a;
   printf("y: %d\n", ab_get_y(a));     // 99
 

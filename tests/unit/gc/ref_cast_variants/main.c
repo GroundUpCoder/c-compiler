@@ -5,7 +5,7 @@
 __struct Foo { int x; };
 
 int main(void) {
-  __struct Foo *p = __struct_new(Foo, 99);
+  __struct Foo *p = __new(__struct Foo, 99);
   __eqref e_real = p;
 
   // Strict cast on a real value: succeeds.

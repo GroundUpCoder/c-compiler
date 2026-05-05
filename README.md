@@ -101,7 +101,7 @@ A GC struct **value** is a reference to a heap-allocated object. To match C's po
 ```c
 __struct Point { int x; int y; };
 
-__struct Point *p = __struct_new(Point, 3, 7);
+__struct Point *p = __new(__struct Point, 3, 7);
 p->x = 99;
 printf("%d\n", p->x);
 ```
@@ -114,11 +114,11 @@ arr[0] = 42;
 __array_len(arr);
 ```
 
-The `*` convention applies to type-arg intrinsics like `__ref_test` / `__ref_test_null`, `__ref_cast` / `__ref_cast_null`, `__ref_null`. (Exception: `__extends(__struct Foo)` stays bare because it names a parent class, never an array.) `__struct_new` takes a bare struct name (no `__struct`, no `*`) since the only valid argument is a struct. The array allocation intrinsics (`__array_new`, `__array_of`) take the bare element type directly, so there is no `*` awkwardness for arrays:
+The `*` convention applies to type-arg intrinsics like `__ref_test` / `__ref_test_null`, `__ref_cast` / `__ref_cast_null`, `__ref_null`. (Exception: `__extends(__struct Foo)` stays bare because it names a parent class, never an array.) `__new` takes `__struct Foo` (no `*`, since the result is always a struct ref). The array allocation intrinsics (`__array_new`, `__array_of`) take the bare element type directly:
 
 | Allocation | Always write |
 |---|---|
-| Struct | `__struct_new(Foo, args...)` |
+| Struct | `__new(__struct Foo, args...)` |
 | Array (default-init) | `__array_new(T, n)` |
 | Array (filled) | `__array_new(T, n, val)` |
 | Array (literal values) | `__array_of(T, v1, v2, ...)` |
@@ -161,8 +161,8 @@ When the element type is a GC struct, spell *that* with `*` too:
 
 ```c
 __array(__struct Point *) pts = __array_of(__struct Point *,
-    __struct_new(Point, 1, 2),
-    __struct_new(Point, 3, 4));
+    __new(__struct Point, 1, 2),
+    __new(__struct Point, 3, 4));
 pts[0]->x;
 ```
 
@@ -242,7 +242,7 @@ GC refs cross the JS/Wasm boundary via `__eqref` + the extern conversions:
 C23 `auto` pairs naturally with GC types — the type spelling stays on the right of the `=`:
 
 ```c
-auto p = __struct_new(Point, 7, 11);
+auto p = __new(__struct Point, 7, 11);
 auto arr = __array_of(int, 1, 2, 3);
 for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
 ```
@@ -254,7 +254,7 @@ for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
 - No `sizeof` on ref types
 - No casts to/from integers (use `__ref_*` intrinsics)
 - `__array(T) *` is rejected — arrays don't take the `*` sugar
-- `__struct_new` takes a bare struct name: `__struct_new(Foo, ...)`
+- `__new` takes `__struct Foo` (no `*`): `__new(__struct Foo, ...)`. `__struct_new` is an alias.
 
 For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
 

@@ -7,7 +7,7 @@ typedef __struct Foo *FooRef;
 typedef __array(int) IntArr;
 typedef __array(__struct Foo *) FooArr;
 
-FooRef make(int a, int b) { return __struct_new(Foo, a, b); }
+FooRef make(int a, int b) { return __new(__struct Foo, a, b); }
 
 int sum_arr(IntArr a) {
   int s = 0;

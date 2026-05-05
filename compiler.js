@@ -106,6 +106,7 @@ const Keyword = Object.freeze({
   X_STRUCT_GC: "__struct",
   X_ARRAY_GC: "__array",
   X_STRUCT_NEW: "__struct_new",
+  X_NEW: "__new",
   X_ARRAY_NEW: "__array_new",
   X_REF_IS_NULL: "__ref_is_null",
   X_REF_EQ: "__ref_eq",
@@ -841,6 +842,7 @@ const KEYWORD_MAP = new Map([
   ["__struct", Keyword.X_STRUCT_GC],
   ["__array", Keyword.X_ARRAY_GC],
   ["__struct_new", Keyword.X_STRUCT_NEW],
+  ["__new", Keyword.X_NEW],
   ["__array_new", Keyword.X_ARRAY_NEW],
   ["__ref_is_null", Keyword.X_REF_IS_NULL],
   ["__ref_eq", Keyword.X_REF_EQ],
@@ -4750,27 +4752,28 @@ class Parser {
       return first;
     }
 
-    // __struct_new(Name, args...) — struct.new / struct.new_default
-    if (this.matchKW(Lexer.Keyword.X_STRUCT_NEW)) {
+    // __struct_new(__struct Foo, args...) — struct.new / struct.new_default
+    // __new(__struct Foo, args...) — alias for __struct_new
+    if (this.matchKW(Lexer.Keyword.X_STRUCT_NEW) || this.matchKW(Lexer.Keyword.X_NEW)) {
       const newTok = this.peek(-1);
+      const callName = newTok.text;
       this.expect("(");
-      const nameTok = this.peek();
-      if (nameTok.kind !== Lexer.TokenKind.IDENT) {
-        this.error(nameTok, `__struct_new requires a __struct name`);
+      if (!this.atKW(Lexer.Keyword.X_STRUCT_GC)) {
+        this.error(this.peek(), `${callName} requires a __struct type`);
       }
-      const name = nameTok.text;
-      this.advance();
-      const nq = this.gcStructTypeCache.get(name);
-      if (!nq || !nq.isGCStruct()) {
-        this.error(nameTok, `__struct_new: '${name}' is not a __struct type`);
+      const nType = this.parseGCStructSpecifier();
+      while (this.matchText("*")) { /* tolerate trailing * */ }
+      const nq = nType.removeQualifiers();
+      if (!nq.isGCStruct()) {
+        this.error(newTok, `${callName} requires a __struct type, got '${nType.toString()}'`);
       }
-      if (!nq.isComplete) this.error(newTok, `__struct_new of incomplete GC struct '${name}'`);
+      if (!nq.isComplete) this.error(newTok, `${callName} of incomplete GC struct '${nq.tagName}'`);
       const args = [];
       while (this.matchText(",")) args.push(this.parseAssignmentExpression());
       this.expect(")");
       const fields = nq.tagDecl.members;
       if (args.length !== 0 && args.length !== fields.length) {
-        this.error(newTok, `__struct_new(${name}, ...): expected ${fields.length} field args, got ${args.length}`);
+        this.error(newTok, `${callName}(__struct ${nq.tagName}, ...): expected ${fields.length} field args, got ${args.length}`);
       }
       // Reject implicit non-zero int → non-eqref ref field (silent-null bug).
       for (let i = 0; i < args.length; i++) {

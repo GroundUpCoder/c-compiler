@@ -39,7 +39,7 @@ static double area(__struct Shape *s) {
 }
 
 static __struct Node *prepend(__struct Node *head, int v) {
-  __struct Node *n = __struct_new(Node, v, head);
+  __struct Node *n = __new(__struct Node, v, head);
   return n;
 }
 
@@ -72,9 +72,9 @@ int main(void) {
 
   // Array of GC struct refs (note: element type uses '*')
   __array(__struct Shape *) shapes = __array_of(__struct Shape *,
-      __struct_new(Circle, 0, 5),
-      __struct_new(Square, 1, 4.0),
-      __struct_new(Circle, 0, 3));
+      __new(__struct Circle, 0, 5),
+      __new(__struct Square, 1, 4.0),
+      __new(__struct Circle, 0, 3));
 
   for (int i = 0; i < __array_len(shapes); i++) {
     printf("shape[%d] area=%.4f\n", i, area(shapes[i]));
@@ -87,9 +87,9 @@ int main(void) {
 
   // __eqref-as-discriminated-union: struct refs and boxed primitives
   __array(__eqref) anys = __array_of(__eqref,
-      __struct_new(Circle, 0, 7),
+      __new(__struct Circle, 0, 7),
       42,
-      __struct_new(Square, 1, 9.0));
+      __new(__struct Square, 1, 9.0));
   for (int i = 0; i < __array_len(anys); i++) describe(anys[i]);
 
   return 0;

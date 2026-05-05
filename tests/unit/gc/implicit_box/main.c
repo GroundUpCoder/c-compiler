@@ -19,7 +19,7 @@ int main(void) {
   // implicit boxing as call argument
   describe(42);                                  // boxes int
   describe(3.14);                                // boxes double
-  describe(__struct_new(Point, 1, 2));       // upcast Point* → __eqref (no box)
+  describe(__new(__struct Point, 1, 2));       // upcast Point* → __eqref (no box)
 
   // implicit boxing on assignment / init
   __eqref e = 100;                               // boxes 100
@@ -53,7 +53,7 @@ int main(void) {
          __cast(double, d));
 
   // GC ref → __eqref (subtype upcast — already worked before, kept here)
-  __struct Point *p = __struct_new(Point, 5, 10);
+  __struct Point *p = __new(__struct Point, 5, 10);
   __eqref ep = p;                                // implicit upcast
   __struct Point *p2 = __cast(__struct Point *, ep);
   printf("identity: %d\n", p == p2);

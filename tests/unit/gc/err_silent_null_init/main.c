@@ -3,6 +3,6 @@
 __struct Item { int n; };
 __struct Bag { __struct Item *item; };
 int main(void) {
-  __struct Bag *b = __struct_new(Bag, 42);
+  __struct Bag *b = __new(__struct Bag, 42);
   return 0;
 }

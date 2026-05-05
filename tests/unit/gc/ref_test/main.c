@@ -5,8 +5,8 @@ __struct B { int x; int y; };
 __struct C { int x; };  // structurally same as A
 
 int main(void) {
-  __struct A *a = __struct_new(A, 1);
-  __struct B *b = __struct_new(B, 2, 3);
+  __struct A *a = __new(__struct A, 1);
+  __struct B *b = __new(__struct B, 2, 3);
 
   printf("a is A: %d\n", __ref_test(__struct A *, a));   // 1
   printf("a is B: %d\n", __ref_test(__struct B *, a));   // 0

@@ -12,7 +12,7 @@ __struct B { int y; __struct A *a; };
 __struct Tree { int v; __struct Tree *left; __struct Tree *right; };
 
 __struct Node *cons(int v, __struct Node *tl) {
-  __struct Node *n = __struct_new(Node);
+  __struct Node *n = __new(__struct Node);
   n->v = v;
   n->next = tl;
   return n;
@@ -39,8 +39,8 @@ void test_linked_list(void) {
 
 void test_mutual(void) {
   printf("=== mutual ===\n");
-  __struct A *a = __struct_new(A);
-  __struct B *b = __struct_new(B);
+  __struct A *a = __new(__struct A);
+  __struct B *b = __new(__struct B);
   a->x = 10; b->y = 20;
   a->b = b; b->a = a;
   printf("%d %d %d %d\n", a->x, a->b->y, b->y, b->a->x);   // 10 20 20 10
@@ -48,11 +48,11 @@ void test_mutual(void) {
 
 void test_tree(void) {
   printf("=== tree ===\n");
-  __struct Tree *t = __struct_new(Tree);
+  __struct Tree *t = __new(__struct Tree);
   t->v = 1;
-  t->left = __struct_new(Tree);  t->left->v = 2;
-  t->right = __struct_new(Tree); t->right->v = 3;
-  t->right->right = __struct_new(Tree); t->right->right->v = 4;
+  t->left = __new(__struct Tree);  t->left->v = 2;
+  t->right = __new(__struct Tree); t->right->v = 3;
+  t->right->right = __new(__struct Tree); t->right->right->v = 4;
   printf("sum=%d\n", tree_sum(t));   // 10
 }
 
