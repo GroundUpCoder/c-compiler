@@ -5,13 +5,13 @@ __struct Row { __array(__struct Pt *) cells; };
 __struct Grid { __array(__struct Row *) rows; };
 
 int main(void) {
-  __struct Grid *g = __struct_new(__struct Grid *);
+  __struct Grid *g = __struct_new(Grid);
   g->rows = __array_new(__struct Row *, 2);
   for (int r = 0; r < __array_len(g->rows); r++) {
-    g->rows[r] = __struct_new(__struct Row *);
+    g->rows[r] = __struct_new(Row);
     g->rows[r]->cells = __array_new(__struct Pt *, 3);
     for (int c = 0; c < __array_len(g->rows[r]->cells); c++) {
-      g->rows[r]->cells[c] = __struct_new(__struct Pt *, r, c);
+      g->rows[r]->cells[c] = __struct_new(Pt, r, c);
     }
   }
   for (int r = 0; r < __array_len(g->rows); r++) {

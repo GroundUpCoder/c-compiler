@@ -21,7 +21,7 @@ int main(void) {
   printf("g_foo null: %d\n", g_foo == 0);
 
   g_eq = 100;                       // boxing now (in main, OK)
-  g_foo = __struct_new(__struct Foo *, 42);
+  g_foo = __struct_new(Foo, 42);
   printf("g_eq: %d\n", __cast(int, g_eq));
   printf("g_foo.x: %d\n", g_foo->x);
 

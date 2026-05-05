@@ -12,5 +12,5 @@ void describe(__struct Animal *a) {
 }
 
 __struct Dog *make_dog(int id, int paws) {
-  return __struct_new(__struct Dog *, id, paws);
+  return __struct_new(Dog, id, paws);
 }

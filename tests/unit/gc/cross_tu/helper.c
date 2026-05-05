@@ -3,7 +3,7 @@
 __struct Point { int x; int y; };
 
 __struct Point *make_point(int a, int b) {
-  return __struct_new(__struct Point *, a, b);
+  return __struct_new(Point, a, b);
 }
 
 int point_sum(__struct Point *p) {

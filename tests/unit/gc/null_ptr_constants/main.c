@@ -16,10 +16,10 @@ int main(void) {
     a[1] == 0 ? "null" : "set",
     a[2] == 0 ? "null" : "set");
 
-  // 2. __struct_new(__struct Box *, 0) — boxing a struct field of type __eqref
+  // 2. __struct_new(Box, 0) — boxing a struct field of type __eqref
   //    should treat 0 as null
   __struct Box { __eqref e; };
-  __struct Box *b = __struct_new(__struct Box *, 0);
+  __struct Box *b = __struct_new(Box, 0);
   printf("b.e=%s\n", b->e == 0 ? "null" : "set");
 
   // 3. C-style cast (refT)0 — typed null
@@ -31,16 +31,16 @@ int main(void) {
 
   // 4. ternary `cond ? refExpr : 0` — the 0 branch is typed null
   int cond = 0;
-  __struct Foo *r = cond ? __struct_new(__struct Foo *, 99) : (__struct Foo *)0;
+  __struct Foo *r = cond ? __struct_new(Foo, 99) : (__struct Foo *)0;
   printf("ternary: %s\n", r == 0 ? "null" : "set");
 
   // 5. ternary `cond ? refExpr : 0` with raw 0 (should also work)
-  __struct Foo *r2 = cond ? __struct_new(__struct Foo *, 99) : 0;
+  __struct Foo *r2 = cond ? __struct_new(Foo, 99) : 0;
   printf("ternary2: %s\n", r2 == 0 ? "null" : "set");
 
   // 6. ternary picking the non-null branch
   cond = 1;
-  __struct Foo *r3 = cond ? __struct_new(__struct Foo *, 7) : 0;
+  __struct Foo *r3 = cond ? __struct_new(Foo, 7) : 0;
   printf("ternary3: %d\n", r3->x);
 
   return 0;

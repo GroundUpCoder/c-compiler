@@ -12,7 +12,7 @@ int main(void) {
   printf("g_foo null: %d\n", g_foo == 0);
   printf("g_arr null: %d\n", g_arr == 0);
 
-  g_foo = __struct_new(__struct Foo *, 100);
+  g_foo = __struct_new(Foo, 100);
   g_arr = __array_of(int, 1, 2, 3);
 
   printf("g_foo.x = %d\n", g_foo->x);
@@ -29,7 +29,7 @@ int main(void) {
   // Static local — also a global internally
   static __struct Foo *s;
   printf("static null: %d\n", !s);
-  if (!s) s = __struct_new(__struct Foo *, 7);
+  if (!s) s = __struct_new(Foo, 7);
   printf("static.x: %d\n", s->x);
 
   return 0;

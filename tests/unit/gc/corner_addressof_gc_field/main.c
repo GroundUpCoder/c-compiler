@@ -5,7 +5,7 @@
 __struct Point { int x; int y; };
 
 int main(void) {
-    __struct Point *p = __struct_new(__struct Point *, 10, 20);
+    __struct Point *p = __struct_new(Point, 10, 20);
     int *px = &p->x;  // BUG: should be rejected, GC fields aren't addressable
     printf("%d\n", *px);
     return 0;

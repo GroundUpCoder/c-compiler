@@ -15,7 +15,7 @@ A GC struct **value** is conceptually a reference to a heap-allocated object. To
 ```c
 __struct Point { int x; int y; };
 
-__struct Point *p = __struct_new(__struct Point *, 3, 7);
+__struct Point *p = __struct_new(Point, 3, 7);
 p->x = 99;
 printf("%d\n", p->x);
 ```
@@ -34,23 +34,23 @@ When an array's element type is a GC struct, spell that with `*` too:
 
 ```c
 __array(__struct Point *) ps = __array_of(__struct Point *,
-    __struct_new(__struct Point *, 1, 2),
-    __struct_new(__struct Point *, 3, 4));
+    __struct_new(Point, 1, 2),
+    __struct_new(Point, 3, 4));
 ps[0]->x;   // works because element type already says `*`
 ```
 
-### `__struct_new()` takes the `*` form
+### `__struct_new()` takes a bare struct name
 
-The type-arg to `__struct_new` should always be in its "ref-spelled" `*` form, matching how GC struct refs are written elsewhere:
+`__struct_new` takes a bare struct name as its first argument — no `__struct` keyword and no `*`. Since the only valid argument is a struct type, the extra qualifiers add nothing:
 
 | Allocation | Always write |
 |---|---|
-| Struct | `__struct_new(__struct Foo *, args...)` |
+| Struct | `__struct_new(Foo, args...)` |
 | Array (default-init) | `__array_new(T, n)` |
 | Array (filled) | `__array_new(T, n, val)` |
 | Array (literal values) | `__array_of(T, v1, v2, ...)` |
 
-The array allocation intrinsics (`__array_new`, `__array_of`) take the bare element type directly, so there is no `*` awkwardness for arrays. The IDE macro shims are straightforward: `#define __struct_new(T, ...) ((T){0})`, `#define __array_new(T, ...) ((__array(T)){0})`, `#define __array_of(T, ...) ((__array(T)){0})`.
+The array allocation intrinsics (`__array_new`, `__array_of`) take the bare element type directly, so there is no `*` awkwardness for arrays. The IDE macro shims are straightforward: `#define __struct_new(T, ...) ((struct T){0})`, `#define __array_new(T, ...) ((__array(T)){0})`, `#define __array_of(T, ...) ((__array(T)){0})`.
 
 The same `*` consistency applies to type-arg intrinsics that can take a struct ref: `__ref_test(__struct Foo *, x)`, `__ref_cast(__struct Foo *, x)`, `__ref_null(__struct Foo *)`. **Exception**: `__extends(__struct Animal)` stays bare — it names a parent class (mirroring C++'s `class Dog : public Animal`), and the parent is always a struct, never an array, so there's no consistency pressure from another form.
 
@@ -214,7 +214,7 @@ Rejected (no meaningful semantics): `ref < other`, `ref >= 0`, etc. Also `__stru
 C23 `auto` pairs naturally with GC types — the type spelling can stay on the right side of the `=`:
 
 ```c
-auto p = __struct_new(__struct Point *, 7, 11);
+auto p = __struct_new(Point, 7, 11);
 p->x;
 
 auto arr = __array_of(int, 1, 2, 3);

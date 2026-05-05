@@ -24,10 +24,10 @@ void dog_info(__struct Dog *d) {
 }
 
 int main(void) {
-  __struct Dog *d = __struct_new(__struct Dog *, 7, 4);
+  __struct Dog *d = __struct_new(Dog, 7, 4);
   printf("d: %d %d\n", d->id, d->paws);    // 7 4
 
-  __struct Puppy *p = __struct_new(__struct Puppy *, 99, 4, 100);
+  __struct Puppy *p = __struct_new(Puppy, 99, 4, 100);
   printf("p: %d %d %d\n", p->id, p->paws, p->cuteness);   // 99 4 100
 
   // Implicit upcast in function call (Dog → Animal)

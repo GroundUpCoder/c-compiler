@@ -10,7 +10,7 @@ int main(void) {
   printf("ar auto: %d\n", ar == 0);   // 1
 
   // __ref_null can re-null an allocated ref
-  __struct Foo *b = __struct_new(__struct Foo *, 7);
+  __struct Foo *b = __struct_new(Foo, 7);
   printf("b before: %d\n", b == 0);   // 0
   b = __ref_null(__struct Foo *);
   printf("b after: %d\n", b == 0);    // 1
@@ -25,7 +25,7 @@ int main(void) {
   printf("er: %d\n", er == 0);        // 1
 
   // __ref_eq via == on two refs
-  __struct Foo *c = __struct_new(__struct Foo *, 1);
+  __struct Foo *c = __struct_new(Foo, 1);
   printf("c eq null: %d\n", c == __ref_null(__struct Foo *));  // 0
   c = __ref_null(__struct Foo *);
   printf("c eq null: %d\n", c == __ref_null(__struct Foo *));  // 1

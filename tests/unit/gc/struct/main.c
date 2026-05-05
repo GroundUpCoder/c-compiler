@@ -3,12 +3,12 @@
 __struct Point { int x; int y; };
 
 __struct Point *make(int a, int b) {
-  return __struct_new(__struct Point *, a, b);
+  return __struct_new(Point, a, b);
 }
 
 void test_default(void) {
   printf("=== default ===\n");
-  __struct Point *p = __struct_new(__struct Point *);
+  __struct Point *p = __struct_new(Point);
   printf("%d %d\n", p->x, p->y);   // 0 0
   p->x = 13;
   p->y = 27;
@@ -17,7 +17,7 @@ void test_default(void) {
 
 void test_explicit(void) {
   printf("=== explicit ===\n");
-  __struct Point *p = __struct_new(__struct Point *, 3, 7);
+  __struct Point *p = __struct_new(Point, 3, 7);
   printf("%d %d\n", p->x, p->y);   // 3 7
 }
 
@@ -29,7 +29,7 @@ void test_function(void) {
 
 void test_assign(void) {
   printf("=== assign ===\n");
-  __struct Point *a = __struct_new(__struct Point *, 1, 2);
+  __struct Point *a = __struct_new(Point, 1, 2);
   __struct Point *b = a;           // ref aliasing
   b->x = 99;
   printf("%d %d\n", a->x, a->y);   // 99 2 (same object)

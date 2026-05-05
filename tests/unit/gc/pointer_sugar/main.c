@@ -12,7 +12,7 @@ __struct Dog {
 };
 
 __struct Node *cons(int v, __struct Node *tl) {
-  auto n = __struct_new(__struct Node *);
+  auto n = __struct_new(Node);
   n->v = v;
   n->next = tl;
   return n;
@@ -59,7 +59,7 @@ int main(void) {
   printf("len=%d arr[2]=%d\n", __array_len(arr), arr[2]);
 
   // Inheritance: pass child via pointer-form to parent-pointer param
-  __struct Dog *d = __struct_new(__struct Dog *, 7, 4);
+  __struct Dog *d = __struct_new(Dog, 7, 4);
   describe(d);
 
   // -> through inheritance chain

@@ -5,10 +5,10 @@ __struct Pair { __struct Point *a; __struct Point *b; };
 
 void test_nested_struct(void) {
   printf("=== nested struct ===\n");
-  __struct Pair *p = __struct_new(__struct Pair *);
+  __struct Pair *p = __struct_new(Pair);
   printf("%d\n", __ref_is_null(p->a));    // 1: default-init nested ref is null
-  p->a = __struct_new(__struct Point *, 1, 2);
-  p->b = __struct_new(__struct Point *, 3, 4);
+  p->a = __struct_new(Point, 1, 2);
+  p->b = __struct_new(Point, 3, 4);
   printf("(%d,%d) (%d,%d)\n", p->a->x, p->a->y, p->b->x, p->b->y);
 }
 
@@ -16,7 +16,7 @@ void test_array_of_struct(void) {
   printf("=== array of struct ===\n");
   __array(__struct Point *) arr = __array_new(__struct Point *, 3);
   for (int i = 0; i < 3; i++) {
-    arr[i] = __struct_new(__struct Point *, i + 1, (i + 1) * 10);
+    arr[i] = __struct_new(Point, i + 1, (i + 1) * 10);
   }
   for (int i = 0; i < 3; i++) {
     printf("(%d,%d)\n", arr[i]->x, arr[i]->y);

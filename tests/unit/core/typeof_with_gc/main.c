@@ -3,10 +3,10 @@
 __struct Point { int x; int y; };
 
 int main(void) {
-  __struct Point *p = __struct_new(__struct Point *, 1, 2);
+  __struct Point *p = __struct_new(Point, 1, 2);
 
   // typeof on a GC ref
-  typeof(p) p2 = __struct_new(__struct Point *, 3, 4);
+  typeof(p) p2 = __struct_new(Point, 3, 4);
   printf("%d %d\n", p2->x, p2->y);
 
   // typeof on a GC array
@@ -23,8 +23,8 @@ int main(void) {
   printf("%d\n", elem);
 
   // typeof in a typedef for a complex GC type
-  typedef typeof(__array_of(__struct Point *, __struct_new(__struct Point *, 5, 6))) PointArr;
-  PointArr pa = __array_of(__struct Point *, __struct_new(__struct Point *, 7, 8));
+  typedef typeof(__array_of(__struct Point *, __struct_new(Point, 5, 6))) PointArr;
+  PointArr pa = __array_of(__struct Point *, __struct_new(Point, 7, 8));
   printf("%d %d\n", pa[0]->x, pa[0]->y);
 
   return 0;

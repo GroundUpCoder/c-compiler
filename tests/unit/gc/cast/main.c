@@ -27,7 +27,7 @@ void test_box_unbox(void) {
 
 void test_gc_ref_via_anyref(void) {
   printf("=== gc ref via anyref ===\n");
-  __struct Point *p = __struct_new(__struct Point *, 7, 11);
+  __struct Point *p = __struct_new(Point, 7, 11);
   __eqref ap = __cast(__eqref, p);          // upcast (no-op)
   __struct Point *p2 = __cast(__struct Point *, ap);  // downcast (ref.cast)
   printf("recovered: %d %d\n", p2->x, p2->y);
@@ -36,8 +36,8 @@ void test_gc_ref_via_anyref(void) {
 
 void test_discriminated_union(void) {
   printf("=== discriminated union ===\n");
-  __struct Point *p = __struct_new(__struct Point *, 1, 2);
-  __struct Color *c = __struct_new(__struct Color *, 255, 128, 0);
+  __struct Point *p = __struct_new(Point, 1, 2);
+  __struct Color *c = __struct_new(Color, 255, 128, 0);
 
   for (int i = 0; i < 4; i++) {
     __eqref store;
@@ -61,7 +61,7 @@ void test_discriminated_union(void) {
 
 void test_extern_bridge(void) {
   printf("=== extern bridge ===\n");
-  __struct Point *p = __struct_new(__struct Point *, 5, 10);
+  __struct Point *p = __struct_new(Point, 5, 10);
 
   // GC → extern → anyref → GC (full round trip)
   __externref e = __cast(__externref, p);

@@ -21,9 +21,9 @@ int main(void) {
   // naturally. Note __array_of's first arg is also the element type, so it
   // gets the '*' too.
   __array(__struct Pt *) ps = __array_of(__struct Pt *,
-    __struct_new(__struct Pt *, 1, 2),
-    __struct_new(__struct Pt *, 3, 4),
-    __struct_new(__struct Pt *, 5, 6));
+    __struct_new(Pt, 1, 2),
+    __struct_new(Pt, 3, 4),
+    __struct_new(Pt, 5, 6));
   for (int i = 0; i < __array_len(ps); i++) printf("(%d,%d) ", ps[i]->x, ps[i]->y);
   printf("\n");
 

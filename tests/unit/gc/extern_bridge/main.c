@@ -4,7 +4,7 @@ __struct Foo { int x; int y; };
 __struct Bar { int v; };
 
 int main(void) {
-  __struct Foo *f = __struct_new(__struct Foo *, 7, 42);
+  __struct Foo *f = __struct_new(Foo, 7, 42);
 
   // Round-trip through externref preserves identity
   __externref ext = __ref_as_extern(f);
@@ -15,7 +15,7 @@ int main(void) {
   printf("same ref: %d\n", f == f2);
 
   // anyref can hold any GC type — discriminate via __ref_test
-  __struct Bar *b = __struct_new(__struct Bar *, 99);
+  __struct Bar *b = __struct_new(Bar, 99);
   __eqref any_f = __ref_as_eq(__ref_as_extern(f));
   __eqref any_b = __ref_as_eq(__ref_as_extern(b));
   printf("any_f is Foo: %d\n", __ref_test(__struct Foo *, any_f));   // 1
