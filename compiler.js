@@ -110,10 +110,12 @@ const Keyword = Object.freeze({
   X_REF_EQ: "__ref_eq",
   X_REF_NULL: "__ref_null",
   X_REF_TEST: "__ref_test",
+  X_REF_TEST_NULL: "__ref_test_null",
   X_ARRAY_LEN: "__array_len",
   X_NEW_ARRAY: "__new_array",
   X_EXTENDS: "__extends",
   X_REF_CAST: "__ref_cast",
+  X_REF_CAST_NULL: "__ref_cast_null",
   X_ARRAY_FILL: "__array_fill",
   X_ARRAY_COPY: "__array_copy",
   X_EQREF: "__eqref",
@@ -842,10 +844,12 @@ const KEYWORD_MAP = new Map([
   ["__ref_eq", Keyword.X_REF_EQ],
   ["__ref_null", Keyword.X_REF_NULL],
   ["__ref_test", Keyword.X_REF_TEST],
+  ["__ref_test_null", Keyword.X_REF_TEST_NULL],
   ["__array_len", Keyword.X_ARRAY_LEN],
   ["__new_array", Keyword.X_NEW_ARRAY],
   ["__extends", Keyword.X_EXTENDS],
   ["__ref_cast", Keyword.X_REF_CAST],
+  ["__ref_cast_null", Keyword.X_REF_CAST_NULL],
   ["__array_fill", Keyword.X_ARRAY_FILL],
   ["__array_copy", Keyword.X_ARRAY_COPY],
   ["__eqref", Keyword.X_EQREF],
@@ -1955,7 +1959,9 @@ const IntrinsicKind = Object.freeze({
   MEMORY_COPY: "memory_copy", MEMORY_FILL: "memory_fill",
   HEAP_BASE: "heap_base", ALLOCA: "alloca", UNREACHABLE: "unreachable",
   REF_IS_NULL: "ref_is_null", REF_EQ: "ref_eq", REF_NULL: "ref_null",
-  REF_TEST: "ref_test", REF_CAST: "ref_cast", ARRAY_LEN: "array_len", GC_NEW_ARRAY: "gc_new_array",
+  REF_TEST: "ref_test", REF_TEST_NULL: "ref_test_null",
+  REF_CAST: "ref_cast", REF_CAST_NULL: "ref_cast_null",
+  ARRAY_LEN: "array_len", GC_NEW_ARRAY: "gc_new_array",
   ARRAY_FILL: "array_fill", ARRAY_COPY: "array_copy",
   REF_AS_EXTERN: "ref_as_extern", REF_AS_EQ: "ref_as_eq",
   CAST: "cast",
@@ -4845,51 +4851,72 @@ class Parser {
     }
 
     // __ref_test(target_type, ref) — runtime type test
-    if (this.matchKW(Lexer.Keyword.X_REF_TEST)) {
-      const tok = this.peek(-1);
-      this.expect("(");
-      if (!this.isTypeName()) this.error(tok, "__ref_test requires a target reference type");
-      const specs = this.parseDeclSpecifiers();
-      let tType = specs.type;
-      if (this.atText("*") || this.atText("[") || this.atText("(")) {
-        const decl = this.parseDeclarator(tType);
-        tType = decl.type;
+    // __ref_test / __ref_test_null — runtime type test.
+    //   __ref_test(T, x)      → false on null (instance-of semantics)
+    //   __ref_test_null(T, x) → true on null (type-lattice semantics, pairs
+    //                           with __ref_cast_null which doesn't trap on null)
+    {
+      const isNullable = this.atKW(Lexer.Keyword.X_REF_TEST_NULL);
+      const isPlain = this.atKW(Lexer.Keyword.X_REF_TEST);
+      if (isNullable || isPlain) {
+        this.advance();
+        const opName = isNullable ? "__ref_test_null" : "__ref_test";
+        const tok = this.peek(-1);
+        this.expect("(");
+        if (!this.isTypeName()) this.error(tok, `${opName} requires a target reference type`);
+        const specs = this.parseDeclSpecifiers();
+        let tType = specs.type;
+        if (this.atText("*") || this.atText("[") || this.atText("(")) {
+          const decl = this.parseDeclarator(tType);
+          tType = decl.type;
+        }
+        this.expect(",");
+        const refExpr = this.parseAssignmentExpression();
+        this.expect(")");
+        const tq = tType.removeQualifiers();
+        if (tq === Types.TEQREF || !tq.isGCRef()) {
+          this.error(tok, `${opName} target must be a concrete __struct or __array type, got '${tType.toString()}'`);
+        }
+        if (!refExpr.type.removeQualifiers().isGCRef()) {
+          this.error(tok, `${opName} second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
+        }
+        const kind = isNullable ? Types.IntrinsicKind.REF_TEST_NULL : Types.IntrinsicKind.REF_TEST;
+        return new AST.EIntrinsic(Types.TINT, kind, [refExpr], tq);
       }
-      this.expect(",");
-      const refExpr = this.parseAssignmentExpression();
-      this.expect(")");
-      const tq = tType.removeQualifiers();
-      if (tq === Types.TEQREF || !tq.isGCRef()) {
-        this.error(tok, `__ref_test target must be a concrete __struct or __array type, got '${tType.toString()}'`);
-      }
-      if (!refExpr.type.removeQualifiers().isGCRef()) {
-        this.error(tok, `__ref_test second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
-      }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_TEST, [refExpr], tq);
     }
 
-    // __ref_cast(target_type, ref) — runtime downcast (traps on type mismatch).
-    if (this.matchKW(Lexer.Keyword.X_REF_CAST)) {
-      const tok = this.peek(-1);
-      this.expect("(");
-      if (!this.isTypeName()) this.error(tok, "__ref_cast requires a target reference type");
-      const specs = this.parseDeclSpecifiers();
-      let tType = specs.type;
-      if (this.atText("*") || this.atText("[") || this.atText("(")) {
-        const decl = this.parseDeclarator(tType);
-        tType = decl.type;
+    // __ref_cast / __ref_cast_null — runtime downcast (traps on type mismatch).
+    //   __ref_cast(T, x)      → traps on null (matches WASM `ref.cast`).
+    //   __ref_cast_null(T, x) → null passes through unchanged
+    //                           (matches WASM `ref.cast null`).
+    {
+      const isNullable = this.atKW(Lexer.Keyword.X_REF_CAST_NULL);
+      const isPlain = this.atKW(Lexer.Keyword.X_REF_CAST);
+      if (isNullable || isPlain) {
+        this.advance();
+        const opName = isNullable ? "__ref_cast_null" : "__ref_cast";
+        const tok = this.peek(-1);
+        this.expect("(");
+        if (!this.isTypeName()) this.error(tok, `${opName} requires a target reference type`);
+        const specs = this.parseDeclSpecifiers();
+        let tType = specs.type;
+        if (this.atText("*") || this.atText("[") || this.atText("(")) {
+          const decl = this.parseDeclarator(tType);
+          tType = decl.type;
+        }
+        this.expect(",");
+        const refExpr = this.parseAssignmentExpression();
+        this.expect(")");
+        const tq = tType.removeQualifiers();
+        if (tq === Types.TEQREF || !tq.isGCRef()) {
+          this.error(tok, `${opName} target must be a concrete __struct or __array type, got '${tType.toString()}'`);
+        }
+        if (!refExpr.type.removeQualifiers().isGCRef()) {
+          this.error(tok, `${opName} second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
+        }
+        const kind = isNullable ? Types.IntrinsicKind.REF_CAST_NULL : Types.IntrinsicKind.REF_CAST;
+        return new AST.EIntrinsic(tq, kind, [refExpr], tq);
       }
-      this.expect(",");
-      const refExpr = this.parseAssignmentExpression();
-      this.expect(")");
-      const tq = tType.removeQualifiers();
-      if (tq === Types.TEQREF || !tq.isGCRef()) {
-        this.error(tok, `__ref_cast target must be a concrete __struct or __array type, got '${tType.toString()}'`);
-      }
-      if (!refExpr.type.removeQualifiers().isGCRef()) {
-        this.error(tok, `__ref_cast second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
-      }
-      return new AST.EIntrinsic(tq, Types.IntrinsicKind.REF_CAST, [refExpr], tq);
     }
 
     // __array_len(arr) — array length
@@ -7665,6 +7692,7 @@ class WasmCode {
   refEq() { this.push(0xD3); }
   refTest(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x14); lebI(this.bytes, typeIdx); }
   refTestNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x15); lebI(this.bytes, typeIdx); }
+  refCast(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x16); lebI(this.bytes, typeIdx); }
   refCastNull(typeIdx) { this.push(0xFB); lebU(this.bytes, 0x17); lebI(this.bytes, typeIdx); }
   // ref.cast (ref null eq) — heap type encoded as the abstract `eq` byte (0x6D).
   refCastNullEq() { this.push(0xFB); lebU(this.bytes, 0x17); this.push(0x6D); }
@@ -10909,10 +10937,22 @@ class CodeGenerator {
           case Types.IntrinsicKind.REF_TEST: {
             this.emitExpr(expr.args[0]);
             const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, expr.argType);
+            this.body.refTest(typeIdx);
+            break;
+          }
+          case Types.IntrinsicKind.REF_TEST_NULL: {
+            this.emitExpr(expr.args[0]);
+            const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, expr.argType);
             this.body.refTestNull(typeIdx);
             break;
           }
           case Types.IntrinsicKind.REF_CAST: {
+            this.emitExpr(expr.args[0]);
+            const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, expr.argType);
+            this.body.refCast(typeIdx);
+            break;
+          }
+          case Types.IntrinsicKind.REF_CAST_NULL: {
             this.emitExpr(expr.args[0]);
             const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, expr.argType);
             this.body.refCastNull(typeIdx);

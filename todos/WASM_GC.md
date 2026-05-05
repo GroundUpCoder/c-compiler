@@ -124,13 +124,23 @@ Packed field types (i8, i16) are supported for both struct fields and array elem
 | `__ref_is_null(ref)` | `ref.is_null` | Null check |
 | `__ref_eq(a, b)` | `ref.eq` | Reference identity |
 | `__ref_null(__struct Foo *)` | `ref.null` | Typed null reference |
-| `__ref_test(__struct Foo *, ref)` | `ref.test` | Runtime type test |
-| `__ref_cast(__struct Foo *, ref)` | `ref.cast` | Downcast (traps on failure) |
+| `__ref_test(__struct Foo *, ref)` | `ref.test` | Type test — false on null (instance-of) |
+| `__ref_test_null(__struct Foo *, ref)` | `ref.test null` | Type-lattice test — true on null |
+| `__ref_cast(__struct Foo *, ref)` | `ref.cast` | Downcast — traps on null or type mismatch |
+| `__ref_cast_null(__struct Foo *, ref)` | `ref.cast null` | Downcast — null passes through, traps only on type mismatch |
 | `__array_len(arr)` | `array.len` | Array length |
 | `__array_fill(...)` | `array.fill` | Bulk fill |
 | `__array_copy(...)` | `array.copy` | Bulk copy |
 | `__ref_as_extern(ref)` | `extern.convert_any` | Wrap GC ref as externref (for JS) |
 | `__ref_as_eq(ext)` | `any.convert_extern` + `ref.cast eq` | Unwrap externref to eqref (traps if not eq-compatible) |
+
+The `_null` suffix mirrors the WASM operator name suffix exactly. Pick the
+strict (`__ref_test` / `__ref_cast`) form by default — it answers the
+"is this an instance of T?" question that most C code wants. Reach for
+the `_null` form when you specifically want to ask "is this in the
+`(ref null T)` lattice?" or want a non-trapping cast on null. For typical
+casting with C-pointer "null casts to null" behavior, prefer `__cast(T, x)`
+instead — it uses the nullable variant under the hood.
 
 ## `__eqref` + implicit boxing + `__cast(T, x)` — universal type + conversion
 
@@ -230,7 +240,7 @@ Packed field storage types: `0x78` (i8), `0x77` (i16).
 |---|---|
 | Struct | `struct.new` (0x00), `struct.new_default` (0x01), `struct.get` (0x02), `struct.get_s` (0x03), `struct.get_u` (0x04), `struct.set` (0x05) |
 | Array | `array.new` (0x06), `array.new_default` (0x07), `array.new_fixed` (0x08), `array.get` (0x0B), `array.get_s` (0x0C), `array.get_u` (0x0D), `array.set` (0x0E), `array.len` (0x0F), `array.fill` (0x10), `array.copy` (0x11) |
-| Ref | `ref.test null` (0x15), `ref.cast null` (0x17), `any.convert_extern` (0x1A), `extern.convert_any` (0x1B) |
+| Ref | `ref.test` (0x14), `ref.test null` (0x15), `ref.cast` (0x16), `ref.cast null` (0x17), `any.convert_extern` (0x1A), `extern.convert_any` (0x1B) |
 
 ## Not implemented
 

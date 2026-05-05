@@ -1,0 +1,3 @@
+strict cast real: 99
+nullable cast real: 99
+nullable cast null: null

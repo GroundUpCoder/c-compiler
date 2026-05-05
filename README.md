@@ -114,7 +114,7 @@ arr[0] = 42;
 __array_len(arr);
 ```
 
-The same `*` convention applies to type-args of every intrinsic that can take an array — `__new`, `__new_array`, `__ref_test`, `__ref_cast`, `__ref_null`. (Exception: `__extends(__struct Foo)` stays bare because it names a parent class, never an array.) This means the IDE shim for `__new` doesn't need to differentiate struct vs array (both `__struct Foo *` and `__array(int)` cast cleanly from `0`):
+The same `*` convention applies to type-args of every intrinsic that can take an array — `__new`, `__new_array`, `__ref_test` / `__ref_test_null`, `__ref_cast` / `__ref_cast_null`, `__ref_null`. (Exception: `__extends(__struct Foo)` stays bare because it names a parent class, never an array.) This means the IDE shim for `__new` doesn't need to differentiate struct vs array (both `__struct Foo *` and `__array(int)` cast cleanly from `0`):
 
 | Allocation | Always write |
 |---|---|
@@ -175,8 +175,10 @@ Bulk operations: `__array_fill(arr, off, val, n)` and `__array_copy(dst, dstOff,
 | `__ref_is_null(ref)` | Null check (`ref.is_null`) |
 | `__ref_eq(a, b)` | Reference identity (`ref.eq`) |
 | `__ref_null(__struct Foo *)` | Typed null reference |
-| `__ref_test(__struct Foo *, ref)` | Runtime type test (`ref.test`) |
-| `__ref_cast(__struct Foo *, ref)` | Downcast (`ref.cast`, traps on failure) |
+| `__ref_test(__struct Foo *, ref)` | Type test, false on null (`ref.test`) |
+| `__ref_test_null(__struct Foo *, ref)` | Type-lattice test, true on null (`ref.test null`) |
+| `__ref_cast(__struct Foo *, ref)` | Downcast, traps on null (`ref.cast`) |
+| `__ref_cast_null(__struct Foo *, ref)` | Downcast, null passes through (`ref.cast null`) |
 
 ### Boolean / null sugar
 
