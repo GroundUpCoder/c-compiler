@@ -5369,6 +5369,12 @@ class Parser {
       if (e.type && e.type.removeQualifiers().isRef()) {
         this.error(this.peek(-1), `Cannot take address of ${e.type.removeQualifiers().kind} variable`);
       }
+      if (e.kind === Types.ExprKind.MEMBER && e.base && e.base.type && e.base.type.removeQualifiers().isGCStruct()) {
+        this.error(this.peek(-1), `cannot take address of GC struct field`);
+      }
+      if (e.kind === Types.ExprKind.SUBSCRIPT && e.array && e.array.type && e.array.type.removeQualifiers().isGCArray()) {
+        this.error(this.peek(-1), `cannot take address of GC array element`);
+      }
       this.markAddressTaken(e); return new AST.EUnary(Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
     }
     if (this.matchText("*")) { const e = this.parseCastExpression(); return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e); }

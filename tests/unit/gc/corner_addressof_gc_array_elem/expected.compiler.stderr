@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/corner_addressof_gc_array_elem/main.c.
+tests/unit/gc/corner_addressof_gc_array_elem/main.c:6: error: cannot take address of GC array element

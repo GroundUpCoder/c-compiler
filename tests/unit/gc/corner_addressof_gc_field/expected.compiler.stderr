@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/corner_addressof_gc_field/main.c.
+tests/unit/gc/corner_addressof_gc_field/main.c:9: error: cannot take address of GC struct field
