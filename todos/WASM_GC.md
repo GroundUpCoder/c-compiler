@@ -50,6 +50,8 @@ ps[0]->x;   // works because element type already says `*`
 | Array (filled) | `__array_new(T, n, val)` |
 | Array (literal values) | `__array_of(T, v1, v2, ...)` |
 
+The first argument to `__new` is parsed as a general type expression, so any type that resolves to a GC struct works — including typedefs (`typedef __struct Foo MyT; __new(MyT, ...)`) and trailing `*` (`__new(__struct Foo *, ...)` is tolerated since `__struct Foo` and `__struct Foo *` are the same WASM type). The error case (e.g. `__new(int, ...)`) is caught after parsing.
+
 IDE macro shims: `#define __new(T, ...) ((T*){0})` (T = `__struct Foo` → `((struct Foo*){0})` with the `__struct=struct` shim), `#define __array_new(T, ...) ((__array(T)){0})`, `#define __array_of(T, ...) ((__array(T)){0})`.
 
 The same `*` consistency applies to type-arg intrinsics that can take a struct ref: `__ref_test(__struct Foo *, x)`, `__ref_cast(__struct Foo *, x)`, `__ref_null(__struct Foo *)`. **Exception**: `__extends(__struct Animal)` stays bare — it names a parent class (mirroring C++'s `class Dog : public Animal`), and the parent is always a struct, never an array, so there's no consistency pressure from another form.

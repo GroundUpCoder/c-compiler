@@ -254,7 +254,7 @@ for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
 - No `sizeof` on ref types
 - No casts to/from integers (use `__ref_*` intrinsics)
 - `__array(T) *` is rejected — arrays don't take the `*` sugar
-- `__new` takes `__struct Foo` (no `*`): `__new(__struct Foo, ...)`. `__struct_new` is an alias.
+- `__new` takes `__struct Foo` (no `*`): `__new(__struct Foo, ...)`. Typedefs of GC structs work too. `__struct_new` is an alias.
 
 For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
 
