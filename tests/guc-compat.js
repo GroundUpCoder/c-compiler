@@ -251,6 +251,112 @@ T('break-only-inner',
   + 'return s; }',
   '', 6);
 
+// ===== Phase B: linear-memory aggregates =====
+T('local-array-write-read',
+  'int main(void) { int a[5]; a[0] = 7; a[1] = 9; return a[0] + a[1]; }',
+  '', 16);
+
+T('local-array-loop',
+  'int main(void) { int a[10]; for (int i = 0; i < 10; i += 1) a[i] = i * i; '
+  + 'int s = 0; for (int i = 0; i < 10; i += 1) s += a[i]; return s % 100; }',
+  '', 85);  // sum of 0..81 = 285, mod 100 = 85
+
+T('addr-of-scalar',
+  'int set5(int *p) { *p = 5; return 0; } '
+  + 'int main(void) { int x = 1; set5(&x); return x; }',
+  '', 5);
+
+T('pointer-deref',
+  'int read(int *p) { return *p; } '
+  + 'int main(void) { int x = 42; return read(&x); }',
+  '', 42);
+
+T('pointer-arith',
+  'int main(void) { int a[3]; a[0] = 1; a[1] = 2; a[2] = 4; '
+  + 'int *p = a; return *(p + 1) + *(p + 2); }',
+  '', 6);
+
+T('struct-basic',
+  'struct P { int x; int y; }; '
+  + 'int main(void) { struct P p; p.x = 3; p.y = 4; return p.x + p.y; }',
+  '', 7);
+
+T('struct-via-pointer',
+  'struct P { int x; int y; }; '
+  + 'int sum(struct P *p) { return p->x + p->y; } '
+  + 'int main(void) { struct P p; p.x = 10; p.y = 32; return sum(&p); }',
+  '', 42);
+
+T('char-array',
+  'int main(void) { char a[4]; a[0] = 65; a[1] = 66; a[2] = 67; a[3] = 0; '
+  + 'return a[0] + a[1] + a[2]; }',
+  '', 198);  // 65+66+67
+
+// ===== Phase C: goto =====
+T('goto-forward',
+  'int main(void) { int x = 0; goto skip; x = 99; skip: return x; }',
+  '', 0);
+
+T('goto-backward',
+  'int main(void) { int n = 0; '
+  + 'loop: n = n + 1; if (n < 5) goto loop; return n; }',
+  '', 5);
+
+T('goto-skip-block',
+  'int main(void) { int s = 0; '
+  + 'for (int i = 0; i < 10; i += 1) { if (i == 3) goto done; s = s + i; } '
+  + 'done: return s; }',
+  '', 3); // 0+1+2 = 3
+
+// ===== Increment/decrement =====
+T('inc-pre',
+  'int main(void) { int x = 5; ++x; return x; }',
+  '', 6);
+
+T('inc-post',
+  'int main(void) { int x = 5; int y = x++; return x + y; }',
+  '', 11);
+
+T('dec-pre',
+  'int main(void) { int x = 5; --x; return x; }',
+  '', 4);
+
+T('dec-post',
+  'int main(void) { int x = 5; int y = x--; return x + y; }',
+  '', 9);
+
+T('inc-in-loop',
+  'int main(void) { int s = 0; for (int i = 0; i < 5; ++i) s += i; return s; }',
+  '', 10);
+
+T('inc-pointer',
+  'int main(void) { int a[3]; a[0] = 1; a[1] = 2; a[2] = 4; '
+  + 'int *p = a; ++p; return *p + *(p + 1); }',
+  '', 6);
+
+// ===== Switch =====
+T('switch-basic',
+  'int f(int x) { switch (x) { case 1: return 10; case 2: return 20; case 3: return 30; default: return -1; } } '
+  + 'int main(void) { return f(2); }',
+  '', 20);
+
+T('switch-default',
+  'int f(int x) { switch (x) { case 1: return 1; default: return 99; } } '
+  + 'int main(void) { return f(42); }',
+  '', 99);
+
+T('switch-break',
+  'int main(void) { int s = 0; '
+  + 'for (int i = 0; i < 5; ++i) switch (i) { case 0: case 2: case 4: s += 1; break; default: s += 10; } '
+  + 'return s; }',
+  '', 23);  // 1 + 10 + 1 + 10 + 1
+
+T('switch-fallthrough',
+  'int main(void) { int x = 1; int s = 0; '
+  + 'switch (x) { case 1: s += 1; case 2: s += 2; case 3: s += 3; break; case 4: s += 4; } '
+  + 'return s; }',
+  '', 6); // 1 falls through 2, then 3, then break: 1+2+3=6
+
 // =========== summary ===========
 
 console.log(`\n${pass}/${pass + fail} passed${skip ? `, ${skip} skipped` : ''}${fail ? `, ${fail} failed` : ''}`);
