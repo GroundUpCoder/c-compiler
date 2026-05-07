@@ -11791,13 +11791,658 @@ function loadGuc() {
   return _GUC;
 }
 
+// Helpful failure for unimplemented frontend cases.
+function nyi(what, loc) {
+  const where = loc && loc.filename ? ` at ${loc.filename}:${loc.line || 0}` : "";
+  throw new Error(`--backend=guc: ${what} not implemented yet${where}`);
+}
+
+class Translator {
+  constructor(GUC, options) {
+    this.GUC = GUC;
+    this.options = options;
+    this.compilerOptions = options.compilerOptions || {};
+
+    // Lookup tables built during pre-pass:
+    //   funcDefToIRFunc: Map<DFunc (definition), IR.Function>
+    //     One entry per function we've emitted into the IR. Used so that
+    //     ECall/funcDecl references resolve to the IR object identity.
+    this.funcDefToIRFunc = new Map();
+
+    // Per-function state, reset by translateFunction.
+    this.cVarToLocal = new Map(); // DVar (param/local) -> IR.LocalVariable
+    this.currentFunc = null;       // DFunc currently being translated
+    this.extraLocals = [];         // IR.LocalVariable[] for non-param locals
+    this.warnings = [];            // strings to print after codegen
+
+    // Map from DFunc (definition) to a placeholder used during in-progress
+    // translation of recursive calls. Currently we just translate eagerly in
+    // declaration order; mutual recursion will need call_indirect or similar.
+    this.translatingNow = new Set();
+  }
+
+  // Convert a C TypeInfo to a guc IR T.* type. Signedness is preserved so
+  // that downstream binary ops pick `_s` vs `_u` opcodes correctly. After
+  // annotateImplicitCasts both operands of a binary op share the same C type,
+  // so they end up with matching IR types here too.
+  cTypeToIR(t) {
+    const { T } = this.GUC;
+    if (!t) return T.I32;
+    const u = t.removeQualifiers ? t.removeQualifiers() : t;
+    switch (u.kind) {
+      case Types.TypeKind.VOID:  return null; // caller handles void specially
+      case Types.TypeKind.BOOL:  return T.I32;
+      case Types.TypeKind.CHAR:
+      case Types.TypeKind.SCHAR: return T.I32;
+      case Types.TypeKind.UCHAR: return T.U32;
+      case Types.TypeKind.SHORT: return T.I32;
+      case Types.TypeKind.USHORT:return T.U32;
+      case Types.TypeKind.INT:   return T.I32;
+      case Types.TypeKind.UINT:  return T.U32;
+      case Types.TypeKind.LONG:  return T.I32;
+      case Types.TypeKind.ULONG: return T.U32;
+      case Types.TypeKind.LLONG: return T.I64;
+      case Types.TypeKind.ULLONG:return T.U64;
+      case Types.TypeKind.FLOAT: return T.F32;
+      case Types.TypeKind.DOUBLE:return T.F64;
+      case Types.TypeKind.POINTER: return T.U32; // pointer arithmetic is unsigned
+      default:
+        nyi(`type ${u.kind}`);
+    }
+  }
+
+  // Build the IR FunctionType for a C function type. `void` returns map to no
+  // result. Currently only supports primitive params and primitive/void return
+  // (no struct return, no varargs).
+  cFuncTypeToIR(cType) {
+    const { T } = this.GUC;
+    if (cType.isVarArg) nyi("varargs");
+    const paramTypes = cType.getParamTypes ? cType.getParamTypes() : (cType.paramTypes || []);
+    const params = paramTypes.map(p => this.cTypeToIR(p));
+    const retC = cType.getReturnType ? cType.getReturnType() : cType.returnType;
+    const irRet = this.cTypeToIR(retC);
+    const results = irRet === null ? [] : [irRet];
+    return T.functionTypeOf(params, results);
+  }
+
+  // Translate a C expression to a guc IR Expression.
+  translateExpr(expr) {
+    const { T, IR } = this.GUC;
+    const loc = expr.loc || Lexer.Loc.generated();
+
+    switch (expr.kind) {
+      case Types.ExprKind.INT: {
+        const irT = this.cTypeToIR(expr.type);
+        const v = typeof expr.value === 'bigint' ? expr.value : BigInt(expr.value);
+        return new IR.Literal(loc, irT, v);
+      }
+      case Types.ExprKind.IMPLICIT_CAST:
+      case Types.ExprKind.CAST: {
+        const fromIR = this.cTypeToIR(expr.expr.type);
+        const toIR = expr.kind === Types.ExprKind.CAST
+          ? this.cTypeToIR(expr.targetType)
+          : this.cTypeToIR(expr.type);
+        const inner = this.translateExpr(expr.expr);
+        return this.emitConversion(loc, fromIR, toIR, inner, expr);
+      }
+      case Types.ExprKind.IDENT: {
+        const local = this.cVarToLocal.get(expr.decl);
+        if (local) return new IR.GetVars(loc, [local]);
+        nyi(`identifier '${expr.name}' (non-local reference)`, loc);
+        break;
+      }
+      case Types.ExprKind.BINARY: {
+        return this.translateBinary(expr, loc);
+      }
+      case Types.ExprKind.UNARY: {
+        return this.translateUnary(expr, loc);
+      }
+      case Types.ExprKind.CALL: {
+        return this.translateCall(expr, loc);
+      }
+      default:
+        nyi(`expr kind ${expr.kind}`, loc);
+    }
+  }
+
+  translateCall(expr, loc) {
+    const { T, IR } = this.GUC;
+    if (!expr.funcDecl) nyi(`indirect call (function pointer)`, loc);
+    const fdef = expr.funcDecl.definition || expr.funcDecl;
+    if (!fdef.body) nyi(`call to imported/undefined function '${fdef.name}'`, loc);
+
+    // Translate callee on demand (handles forward references within a TU).
+    let irFunc = this.funcDefToIRFunc.get(fdef);
+    if (!irFunc) {
+      if (this.translatingNow.has(fdef)) nyi(`recursive call cycle through '${fdef.name}'`, loc);
+      irFunc = this.translateFunction(fdef);
+    }
+    const args = expr.arguments.map(a => this.translateExpr(a));
+    return new IR.FunctionCall(loc, irFunc, args);
+  }
+
+  // Emit a numeric conversion between IR types. For same-type or matching-slot
+  // ints, no-op. For cross-slot (i32 <-> i64, integer <-> float), emit the
+  // proper guc IR.Convert node.
+  emitConversion(loc, fromT, toT, src, expr) {
+    const { T, IR } = this.GUC;
+    if (toT === null) {
+      // void cast: drop
+      if (src.types && src.types.length > 0) return new IR.Drop(loc, src);
+      return src;
+    }
+    if (fromT === toT) return src;
+
+    const fromSlot = fromT.slotType || fromT;
+    const toSlot = toT.slotType || toT;
+    if (fromSlot === toSlot) {
+      // Different signedness or packed/unpacked but same slot -> no opcode.
+      // To make guc happy with type identity, we wrap in an unused conversion?
+      // Actually IR.GetVars/Literal carry the type, so we can't easily change
+      // it. Simplest: re-emit as a "self-cast" via 0+x pattern? Or just trust
+      // that downstream consumers tolerate slot-equal types.
+      //
+      // For now: emit a no-op via local round-trip if the types differ at IR
+      // level. The cleaner fix is for guc to expose a "reinterpret-as" node;
+      // for now use a fresh local of the target type.
+      if (src instanceof IR.Literal) {
+        // Just retype the literal directly (and re-canonicalize the value).
+        if (toT.isIntegralType && toT.isIntegralType()) {
+          let v = src.value;
+          if (typeof v !== 'bigint') v = BigInt(v);
+          // Canonicalize into the target's range.
+          const min = toT.minValue();
+          const max = toT.maxValue();
+          if (v < min || v > max) {
+            const span = max - min + 1n;
+            v = ((v - min) % span + span) % span + min;
+          }
+          return new IR.Literal(loc, toT, v);
+        }
+      }
+      // Fall back: route through a local to retype. Allocate a temp local of
+      // the target type, store, reload.
+      return this._retypeViaLocal(loc, src, toT);
+    }
+
+    // Cross-slot integer conversions.
+    if (fromSlot === T.I32 && toSlot === T.I64) {
+      const op = (fromT.signed === false) ? "i64.extend_i32_u" : "i64.extend_i32_s";
+      return new IR.Convert(loc, op, src);
+    }
+    if (fromSlot === T.I64 && toSlot === T.I32) {
+      return new IR.Convert(loc, "i32.wrap_i64", src);
+    }
+    // Integer <-> float.
+    if ((fromSlot === T.I32 || fromSlot === T.I64) && (toSlot === T.F32 || toSlot === T.F64)) {
+      const fromName = fromSlot === T.I32 ? "i32" : "i64";
+      const toName = toSlot === T.F32 ? "f32" : "f64";
+      const sign = (fromT.signed === false) ? "u" : "s";
+      return new IR.Convert(loc, `${toName}.convert_${fromName}_${sign}`, src);
+    }
+    if ((fromSlot === T.F32 || fromSlot === T.F64) && (toSlot === T.I32 || toSlot === T.I64)) {
+      const fromName = fromSlot === T.F32 ? "f32" : "f64";
+      const toName = toSlot === T.I32 ? "i32" : "i64";
+      const sign = (toT.signed === false) ? "u" : "s";
+      return new IR.Convert(loc, `${toName}.trunc_${fromName}_${sign}`, src);
+    }
+    if (fromSlot === T.F32 && toSlot === T.F64) return new IR.Convert(loc, "f64.promote_f32", src);
+    if (fromSlot === T.F64 && toSlot === T.F32) return new IR.Convert(loc, "f32.demote_f64", src);
+    nyi(`conversion ${fromT} -> ${toT}`, loc);
+  }
+
+  _retypeViaLocal(loc, src, toT) {
+    const { IR } = this.GUC;
+    // Allocate a fresh extra local of toT, set with src, get back. The src and
+    // local must share the same wasm slot type for this to validate.
+    const lv = new IR.LocalVariable(loc, /*mutable*/ true, '_retype', toT);
+    this.extraLocals.push(lv);
+    return new IR.Block(loc, Symbol('retype'), [
+      new IR.SetVars(loc, [lv], [src]),
+      new IR.GetVars(loc, [lv]),
+    ]);
+  }
+
+  // Map a C BopStr key (e.g. "ADD") to a guc IR.BinOp op string.
+  cBopToIR(op) {
+    switch (op) {
+      case "ADD": return "add";
+      case "SUB": return "sub";
+      case "MUL": return "mul";
+      case "DIV": return "div";
+      case "MOD": return "rem";
+      case "BAND": return "and";
+      case "BOR":  return "or";
+      case "BXOR": return "xor";
+      case "SHL":  return "shl";
+      case "SHR":  return "shr";
+      case "EQ":   return "eq";
+      case "NE":   return "ne";
+      case "LT":   return "lt";
+      case "GT":   return "gt";
+      case "LE":   return "le";
+      case "GE":   return "ge";
+      default: return null;
+    }
+  }
+
+  translateBinary(expr, loc) {
+    const { T, IR } = this.GUC;
+    // Assignment family: lvalue := rvalue.
+    if (expr.op === "ASSIGN") return this.translateAssign(expr.left, this.translateExpr(expr.right), loc);
+    if (expr.op.endsWith("_ASSIGN")) {
+      // x op= y  becomes  x = x op y. Stick with the AST shape — the
+      // implicit-cast pass should already have inserted any needed casts.
+      const baseOp = expr.op.slice(0, -"_ASSIGN".length); // e.g. "ADD"
+      const lhsRead = this.translateExpr(expr.left);
+      const rhs = this.translateExpr(expr.right);
+      const newVal = new IR.BinOp(loc, this.cBopToIR(baseOp), lhsRead, rhs);
+      return this.translateAssign(expr.left, newVal, loc);
+    }
+    // Logical short-circuit: && and || lower to IfElse (no IR.BinOp).
+    if (expr.op === "LAND" || expr.op === "LOR") {
+      const lhs = this.toBool(this.translateExpr(expr.left), loc);
+      const rhs = this.toBool(this.translateExpr(expr.right), loc);
+      if (expr.op === "LAND") {
+        // a && b  =>  a ? (b ? 1 : 0) : 0
+        return new IR.IfElse(loc, lhs,
+          [new IR.IfElse(loc, rhs, [this.iconst(loc, 1)], [this.iconst(loc, 0)])],
+          [this.iconst(loc, 0)]);
+      } else {
+        // a || b  =>  a ? 1 : (b ? 1 : 0)
+        return new IR.IfElse(loc, lhs,
+          [this.iconst(loc, 1)],
+          [new IR.IfElse(loc, rhs, [this.iconst(loc, 1)], [this.iconst(loc, 0)])]);
+      }
+    }
+
+    const irOp = this.cBopToIR(expr.op);
+    if (!irOp) nyi(`binary op ${expr.op}`, loc);
+    const lhs = this.translateExpr(expr.left);
+    const rhs = this.translateExpr(expr.right);
+    return new IR.BinOp(loc, irOp, lhs, rhs);
+  }
+
+  translateUnary(expr, loc) {
+    const { T, IR } = this.GUC;
+    const operandIR = this.cTypeToIR(expr.operand.type);
+    switch (expr.op) {
+      case "OP_POS":
+        return this.translateExpr(expr.operand);
+      case "OP_NEG": {
+        const operand = this.translateExpr(expr.operand);
+        if (operandIR === T.F32 || operandIR === T.F64) {
+          return new IR.UnaryOp(loc, "neg", operand);
+        }
+        // Integer negation: 0 - x.
+        const zero = (operandIR === T.I64 || operandIR === T.U64)
+          ? new IR.Literal(loc, operandIR, 0n)
+          : new IR.Literal(loc, operandIR, 0n);
+        return new IR.BinOp(loc, "sub", zero, operand);
+      }
+      case "OP_BNOT": {
+        // ~x = x ^ -1 (in two's complement).
+        const operand = this.translateExpr(expr.operand);
+        const ones = new IR.Literal(loc, operandIR,
+          (operandIR === T.I64 || operandIR === T.U64) ? -1n : -1n);
+        return new IR.BinOp(loc, "xor", operand, ones);
+      }
+      case "OP_LNOT": {
+        // !x = (x == 0). For ints/refs, eqz works for i32/i64 directly;
+        // for floats, compare to 0.
+        const operand = this.translateExpr(expr.operand);
+        if (operandIR === T.F32) return new IR.BinOp(loc, "eq", operand, new IR.Literal(loc, T.F32, 0.0));
+        if (operandIR === T.F64) return new IR.BinOp(loc, "eq", operand, new IR.Literal(loc, T.F64, 0.0));
+        return new IR.UnaryOp(loc, "eqz", operand);
+      }
+      default:
+        nyi(`unary op ${expr.op}`, loc);
+    }
+  }
+
+  // Assign an already-translated rvalue to a C lvalue expression. Returns
+  // an IR expression whose value is the stored value (so it can be used
+  // chained, e.g. `a = b = c`).
+  translateAssign(lhsAst, rhsIR, loc) {
+    const { T, IR } = this.GUC;
+    if (lhsAst.kind === Types.ExprKind.IDENT) {
+      const local = this.cVarToLocal.get(lhsAst.decl);
+      if (!local) nyi(`assign to non-local '${lhsAst.name}'`, loc);
+      // Use TeeVars so the expression value is the assigned value.
+      return new IR.TeeVars(loc, [local], rhsIR);
+    }
+    nyi(`assign to ${lhsAst.kind} lvalue`, loc);
+  }
+
+  // Helpers
+  iconst(loc, n) {
+    const { T, IR } = this.GUC;
+    return new IR.Literal(loc, T.I32, BigInt(n));
+  }
+  toBool(expr, loc) {
+    const { T, IR } = this.GUC;
+    // Already i32? Use eqz-eqz to normalize? Simpler: just !!(x) via i32.eqz; i32.eqz.
+    // Actually for our use here (LAND/LOR conditions), IR.IfElse needs an i32
+    // but doesn't require specifically 0/1 — any non-zero is true. So just
+    // ensure the type is i32-slot.
+    if (expr.types && expr.types.length === 1) {
+      const t = expr.types[0];
+      const slot = t.slotType || t;
+      if (slot === T.I32) return expr;
+      if (slot === T.I64) return new IR.UnaryOp(loc, "eqz", new IR.UnaryOp(loc, "eqz", expr));
+      if (slot === T.F32) return new IR.UnaryOp(loc, "eqz",
+        new IR.BinOp(loc, "eq", expr, new IR.Literal(loc, T.F32, 0.0)));
+      if (slot === T.F64) return new IR.UnaryOp(loc, "eqz",
+        new IR.BinOp(loc, "eq", expr, new IR.Literal(loc, T.F64, 0.0)));
+    }
+    return expr;
+  }
+
+  // Translate a C statement to a guc IR Expression. Statements that produce
+  // a value (e.g. expression-statement) yield an Expression; statements that
+  // diverge or have no value yield a node whose `types` is null/empty.
+  translateStmt(stmt) {
+    const { T, IR } = this.GUC;
+    const loc = stmt.loc || Lexer.Loc.generated();
+
+    switch (stmt.kind) {
+      case Types.StmtKind.RETURN: {
+        if (stmt.expr) {
+          return new IR.Return(loc, [this.translateExpr(stmt.expr)]);
+        }
+        return new IR.Return(loc, []);
+      }
+      case Types.StmtKind.COMPOUND: {
+        const body = stmt.statements.map(s => this.translateStmt(s));
+        return new IR.Block(loc, Symbol('compound'), body);
+      }
+      case Types.StmtKind.EXPR: {
+        // Discard the value if any. Drop wraps a single-typed expression;
+        // for void-typed expressions it's a no-op pass-through.
+        const e = this.translateExpr(stmt.expr);
+        if (e.types && e.types.length > 0) return new IR.Drop(loc, e);
+        return e;
+      }
+      case Types.StmtKind.DECL: {
+        // For now: REGISTER-class scalar locals only. Allocate an extraLocal
+        // for each, emit init expression as a SetVars if present.
+        const stmts = [];
+        for (const decl of stmt.declarations) {
+          if (decl.declKind !== Types.DeclKind.VAR) continue;
+          if (decl.storageClass === Types.StorageClass.STATIC ||
+              decl.storageClass === Types.StorageClass.EXTERN) {
+            nyi(`local ${decl.storageClass} variables`, loc);
+          }
+          if (decl.allocClass !== Types.AllocClass.REGISTER) {
+            nyi(`local with allocClass=${decl.allocClass}`, loc);
+          }
+          const irT = this.cTypeToIR(decl.type);
+          const lv = new IR.LocalVariable(loc, /*mutable*/ true, decl.name, irT);
+          this.extraLocals.push(lv);
+          this.cVarToLocal.set(decl, lv);
+          if (decl.initExpr) {
+            const init = this.translateExpr(decl.initExpr);
+            stmts.push(new IR.SetVars(loc, [lv], [init]));
+          }
+        }
+        if (stmts.length === 0) {
+          // Pure declaration with no init — produces no IR. Use an inert
+          // i32.const 0; Drop-ed wrapper? Actually we need a node that's
+          // valid as a statement. Use an empty Block.
+          return new IR.Block(loc, Symbol('decl'), []);
+        }
+        if (stmts.length === 1) return stmts[0];
+        return new IR.Block(loc, Symbol('decl'), stmts);
+      }
+      case Types.StmtKind.EMPTY: {
+        return new IR.Block(loc, Symbol('empty'), []);
+      }
+      case Types.StmtKind.IF: {
+        const cond = this.toBool(this.translateExpr(stmt.condition), loc);
+        const thenIR = this.translateStmt(stmt.thenBranch);
+        const elseIR = stmt.elseBranch ? this.translateStmt(stmt.elseBranch) : null;
+        // IfElse expects then/else to be arrays of statements. Wrap each.
+        // Drop the result of each branch since these are statements.
+        const wrap = (s) => {
+          if (!s) return [];
+          if (s.types && s.types.length > 0) return [new IR.Drop(loc, s)];
+          return [s];
+        };
+        return new IR.IfElse(loc, cond, wrap(thenIR), wrap(elseIR));
+      }
+      case Types.StmtKind.WHILE: {
+        return this._lowerLoop(loc, /*kind*/ 'while', stmt);
+      }
+      case Types.StmtKind.DO_WHILE: {
+        return this._lowerLoop(loc, 'do_while', stmt);
+      }
+      case Types.StmtKind.FOR: {
+        return this._lowerLoop(loc, 'for', stmt);
+      }
+      case Types.StmtKind.BREAK: {
+        if (!this.breakStack || this.breakStack.length === 0) {
+          throw new Error('break: no enclosing loop');
+        }
+        return new IR.Break(loc, this.breakStack[this.breakStack.length - 1], []);
+      }
+      case Types.StmtKind.CONTINUE: {
+        if (!this.continueStack || this.continueStack.length === 0) {
+          throw new Error('continue: no enclosing loop');
+        }
+        // Continue always Breaks out of the inner continue-target block; the
+        // outer loop_label has an explicit Continue at the end.
+        return new IR.Break(loc, this.continueStack[this.continueStack.length - 1], []);
+      }
+      default:
+        nyi(`stmt kind ${stmt.kind}`, loc);
+    }
+  }
+
+  // Translate the body of a loop with break/continue targets pushed onto
+  // stacks. Returns the translated body as an IR statement.
+  _loopBody(bodyStmt, breakLabel, continueLabel) {
+    if (!this.breakStack) { this.breakStack = []; this.continueStack = []; }
+    this.breakStack.push(breakLabel);
+    this.continueStack.push(continueLabel);
+    try {
+      return this.translateStmt(bodyStmt);
+    } finally {
+      this.breakStack.pop();
+      this.continueStack.pop();
+    }
+  }
+
+  // Unified loop lowering. All three C loop kinds use the same structure:
+  //
+  //   [init]
+  //   Block break_label {
+  //     Block loop_label {           ; has Continue(loop_label) below ⇒ wasm loop
+  //       [if (!cond) Break(break_label)]    ; for while/for (nothing for do/while)
+  //       Block continue_label {     ; user `continue` becomes Break(continue_label)
+  //         body
+  //       }
+  //       [inc]                      ; for `for` only
+  //       [if (cond) Continue(loop_label) else Break(break_label)]  ; for do/while
+  //       [Continue(loop_label)]     ; for while/for
+  //     }
+  //   }
+  //
+  // continue → Break(continue_label) — falls through to inc + Continue(loop_label).
+  // break    → Break(break_label).
+  _lowerLoop(loc, kind, stmt) {
+    const { IR } = this.GUC;
+    const breakLabel = Symbol(`${kind}_break`);
+    const loopLabel = Symbol(`${kind}_loop`);
+    const contLabel = Symbol(`${kind}_continue`);
+
+    // Surrounding init for `for`.
+    const surround = [];
+    if (kind === 'for' && stmt.init) {
+      surround.push(this.translateStmt(stmt.init));
+    }
+
+    const innerStmts = [];
+
+    // Top-of-loop condition check (while, for).
+    if (kind === 'while' || (kind === 'for' && stmt.condition)) {
+      const cond = this.toBool(this.translateExpr(stmt.condition), loc);
+      innerStmts.push(new IR.IfElse(loc,
+        new IR.UnaryOp(loc, "eqz", cond),
+        [new IR.Break(loc, breakLabel, [])],
+        [],
+      ));
+    }
+
+    // Body in continue-target block.
+    const bodyIR = this._loopBody(stmt.body, breakLabel, contLabel);
+    innerStmts.push(new IR.Block(loc, contLabel, [bodyIR]));
+
+    // Increment (for only).
+    if (kind === 'for' && stmt.increment) {
+      const inc = this.translateExpr(stmt.increment);
+      innerStmts.push(inc.types && inc.types.length > 0 ? new IR.Drop(loc, inc) : inc);
+    }
+
+    // Bottom-of-loop condition (do_while), or unconditional Continue (while, for).
+    if (kind === 'do_while') {
+      const cond = this.toBool(this.translateExpr(stmt.condition), loc);
+      innerStmts.push(new IR.IfElse(loc, cond,
+        [new IR.Continue(loc, loopLabel)],
+        [new IR.Break(loc, breakLabel, [])],
+      ));
+    } else {
+      innerStmts.push(new IR.Continue(loc, loopLabel));
+    }
+
+    surround.push(new IR.Block(loc, breakLabel, [
+      new IR.Block(loc, loopLabel, innerStmts),
+    ]));
+
+    if (surround.length === 1) return surround[0];
+    return new IR.Block(loc, Symbol(kind), surround);
+  }
+
+  // Build an IR.Function for a defined C function. May be invoked recursively
+  // when a callee hasn't yet been translated. Stores the result in
+  // funcDefToIRFunc so subsequent callers can reuse it.
+  translateFunction(fdef) {
+    const { T, IR } = this.GUC;
+    const loc = fdef.loc || Lexer.Loc.generated();
+    const irFuncType = this.cFuncTypeToIR(fdef.type);
+
+    // Save outer state so we can recurse for forward calls.
+    const outer = {
+      cVarToLocal: this.cVarToLocal,
+      currentFunc: this.currentFunc,
+      extraLocals: this.extraLocals,
+    };
+    this.cVarToLocal = new Map();
+    this.currentFunc = fdef;
+    this.extraLocals = [];
+    this.translatingNow.add(fdef);
+
+    // Build LocalVariables for parameters, in declared order. Their types must
+    // match irFuncType.params exactly (guc enforces this).
+    const params = [];
+    const paramTypes = irFuncType.params;
+    for (let i = 0; i < (fdef.parameters || []).length; i++) {
+      const p = fdef.parameters[i];
+      const lv = new IR.LocalVariable(loc, /*mutable*/ true, p.name, paramTypes[i]);
+      params.push(lv);
+      this.cVarToLocal.set(p, lv);
+    }
+
+    const exportSpec = (fdef.name === "main") ? new IR.ExportSpec("main") : null;
+
+    let body;
+    let usedLocals;
+    try {
+      body = this.translateStmt(fdef.body);
+      usedLocals = this.extraLocals;
+    } catch (e) {
+      if (/--backend=guc:/.test(e.message)) {
+        // Emit a stub: trap if called. Lets the rest of the program compile.
+        this.warnings.push(`stubbed '${fdef.name}': ${e.message}`);
+        body = new IR.Unreachable(loc);
+        usedLocals = [];
+      } else {
+        throw e;
+      }
+    }
+
+    // Append an implicit Return so that fall-off compiles: C lets a non-void
+    // function fall off (UB except for `main`), and `void` functions always
+    // implicitly fall off. Wrapping in `Block([body, Return(default)])` is
+    // safe in either case — guc.js's Block discards intermediate values, and
+    // the trailing Return makes the whole Block divergent so the function
+    // body validates regardless of fall-through behavior.
+    const results = irFuncType.results;
+    let defaultRet;
+    if (results.length === 0) {
+      defaultRet = new IR.Return(loc, []);
+    } else {
+      const retT = results[0];
+      const slot = retT.slotType || retT;
+      let dv;
+      if (slot === T.I32) dv = new IR.Literal(loc, retT, 0n);
+      else if (slot === T.I64) dv = new IR.Literal(loc, retT, 0n);
+      else if (slot === T.F32) dv = new IR.Literal(loc, retT, 0.0);
+      else if (slot === T.F64) dv = new IR.Literal(loc, retT, 0.0);
+      else { dv = new IR.Unreachable(loc); }
+      defaultRet = (dv instanceof IR.Unreachable) ? dv : new IR.Return(loc, [dv]);
+    }
+    body = new IR.Block(loc, Symbol('fnbody'), [body, defaultRet]);
+
+    // Restore outer state.
+    this.cVarToLocal = outer.cVarToLocal;
+    this.currentFunc = outer.currentFunc;
+    this.extraLocals = outer.extraLocals;
+    this.translatingNow.delete(fdef);
+
+    const irFunc = new IR.Function(
+      loc, null, exportSpec,
+      fdef.name, irFuncType,
+      params,
+      usedLocals,
+      body,
+    );
+    this.funcDefToIRFunc.set(fdef, irFunc);
+    return irFunc;
+  }
+
+  // Top-level: walk all units, build IR.Program.
+  translateUnits(units) {
+    const { IR } = this.GUC;
+
+    // Collect all function definitions; translate each (skipping if already
+    // translated due to a forward call from an earlier function).
+    for (const unit of units) {
+      for (const fdecl of [...unit.definedFunctions, ...unit.staticFunctions]) {
+        const fdef = fdecl.definition || fdecl;
+        if (!fdef.body) continue; // declaration only
+        if (fdef !== fdecl) continue; // only emit at definition site
+        if (this.funcDefToIRFunc.has(fdef)) continue; // already done via forward call
+        this.translateFunction(fdef);
+      }
+    }
+
+    // Emit functions in the order they were translated so that callees come
+    // before callers. (guc.js doesn't actually require a particular order
+    // since it resolves indices, but it makes the output deterministic.)
+    const functions = [...this.funcDefToIRFunc.values()];
+    return new IR.Program(functions, []);
+  }
+}
+
 function generateCode(units, outputFile, options) {
   const GUC = loadGuc();
-  // Stub: scaffolding in place, translation not yet implemented.
-  throw new Error(
-    "--backend=guc: not implemented yet. " +
-    "Run without the flag to use the default backend."
-  );
+  const trans = new Translator(GUC, options);
+  const program = trans.translateUnits(units);
+  const bytes = GUC.CODEGEN.emit(program);
+  for (const w of trans.warnings) {
+    process.stderr.write(`--backend=guc warning: ${w}\n`);
+  }
+  return bytes;
 }
 
 return { generateCode, loadGuc };
