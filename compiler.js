@@ -14942,15 +14942,50 @@ class Translator {
     return true;
   }
 
+  // Lazily build a "pseudo-address" policy for the shared constant
+  // evaluator. The GUC backend doesn't know real addresses at translation
+  // time (those are assigned by codegen's layoutAndSubstitute), but it CAN
+  // give every storage identity a unique numeric tag. That's enough for
+  // arithmetic that produces integer results — pointer subtraction (e.g.
+  // `&arr[7] - &arr[2]`) and pointer comparisons (`&x == &y`) — because
+  // when both operands share a base, the difference is an honest constant
+  // independent of what real address the base ends up at.
+  //
+  // For results whose KIND is still 'addr' (e.g. plain `&x`, or a cast of
+  // an address to an integer slot), the pseudo-number is meaningless and
+  // _evalConstInit returns null so the caller falls back to the deferred-
+  // IR path (initExprs), which knows how to encode the actual address via
+  // IR.MutableBytesAddr / IR.HeapBase / etc.
+  _getStaticInitPolicy() {
+    if (!this.__staticInitPolicy) {
+      // Tag space is reserved well above the typical real-address range
+      // we'd ever produce; nothing here is exposed to runtime, only used
+      // for arithmetic & comparisons among themselves.
+      const tags = new Map();
+      let next = 0x10000000;
+      const tagFor = (key) => {
+        let t = tags.get(key);
+        if (t === undefined) { t = next; tags.set(key, t); next += 0x100; }
+        return t;
+      };
+      this.__staticInitPolicy = {
+        getStringAddr: (v) => tagFor(`s:${Array.from(v).join(',')}`),
+        getGlobalAddr: (vd) => tagFor(vd),
+        getFuncAddr: (fn) => null,  // FuncIndex needs deferred-IR; can't pseudo-tag.
+        getCompoundLitAddr: (e) => tagFor(e),
+      };
+    }
+    return this.__staticInitPolicy;
+  }
+
   // Compile-time evaluate a constant initializer expression. Returns a BigInt
   // (for integer types), number (for floats), or null if not evaluable here.
   //
-  // Uses the shared module-scope `Codegen.constEvalExpr`, which handles the
-  // full C constant-expression grammar (~, !, +, -, all BinOps, ternary,
-  // casts, sizeof, alignof, ENUM_CONST). The NULL_ADDR_POLICY makes
-  // address-bearing expressions (&x, string literals as addresses, etc.)
-  // evaluate to null — those are handled separately by the deferred-IR path
-  // in `_translateStaticInitValue`.
+  // Uses the shared module-scope `Codegen.constEvalExpr`. Address leaves go
+  // through a pseudo-tag policy so address arithmetic that produces an
+  // INTEGER (offsetof, ptrdiff, address comparison) evaluates correctly.
+  // Address-typed results fall through to null, leaving the caller to handle
+  // them via the deferred-IR path (`_translateStaticInitValue`).
   //
   // After evaluation, the result is normalized to the IR slot's
   // representable range. The shared evaluator works in mathematical BigInt
@@ -14959,7 +14994,7 @@ class Translator {
   // the slot's signedness here.
   _evalConstInit(expr, irT) {
     const { T } = this.GUC;
-    const v = Codegen.constEvalExpr(expr, Codegen.NULL_ADDR_POLICY);
+    const v = Codegen.constEvalExpr(expr, this._getStaticInitPolicy());
     if (v === null) return null;
     const slot = irT.slotType || irT;
     const slotIsFloat = (slot === T.F32 || slot === T.F64);
@@ -14971,12 +15006,19 @@ class Translator {
       if (slotIsFloat) return v.floatVal;
       intVal = BigInt(Math.trunc(v.floatVal));
     } else if (v.kind === "addr") {
-      // NULL_ADDR_POLICY can only produce non-zero addresses via &((T*)0)->m
-      // patterns (offsetof) or address arithmetic on a 0 base — the addrVal
-      // is a known compile-time integer offset, so write it as the integer
-      // bytes for an integer slot. For float slots there is no sane meaning.
+      // The result is still an address — the pseudo-tag is meaningless to
+      // anything other than the shared evaluator's address arithmetic. Let
+      // the caller (e.g., _writeStaticInit) handle it via the deferred-IR
+      // path which can encode actual addresses through layoutAndSubstitute.
+      // The exception: an address result whose addrVal is small (under our
+      // pseudo-address base) came from offsetof-style `&((T*)0)->m` and IS
+      // a real compile-time integer offset.
       if (slotIsFloat) return null;
-      intVal = BigInt(v.addrVal);
+      if (v.addrVal < 0x10000000) {
+        intVal = BigInt(v.addrVal);
+      } else {
+        return null;
+      }
     } else {
       return null;
     }
