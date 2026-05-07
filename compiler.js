@@ -11823,12 +11823,12 @@ class Translator {
     this.translatingNow = new Set();
 
     // Memory layout: codegen owns it now via memorySpec.stackPages.
-    // Static data lives below the stack (we still pin it to STACK_END so
-    // existing dataInit/cGlobalToAddr math works); the stack region sits
-    // above static data, and __heap_base resolves to the first byte
-    // after the stack.
+    // Static data sits at memorySpec.staticDataBase (we use 16 to keep
+    // address 0 = NULL distinct), then codegen-managed BytesLiterals +
+    // MutableBytesLiterals, then the stack region (stackPages * 64KB),
+    // then the heap. IR.HeapBase resolves to the first byte after the
+    // stack.
     this.STACK_PAGES = 1;
-    this.STACK_END = this.STACK_PAGES * 65536;
 
     // Imported function decls -> IR.Function. Built lazily as needed.
     this.importedFuncToIR = new Map();

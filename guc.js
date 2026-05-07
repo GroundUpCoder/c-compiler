@@ -701,13 +701,7 @@ const IR = (() => {
         //   after the data section, in array order. The frontend is responsible
         //   for the payload bytes; codegen just frames them with the standard
         //   custom-section header (length-prefixed UTF-8 name + raw payload).
-        // dataInit — Uint8Array | number[], optional. User-supplied initial
-        //   linear-memory contents starting at memorySpec.staticDataBase.
-        //   Placed before any BytesLiterals/MutableBytesLiterals. Frontends
-        //   can also (preferably) use IR.MutableBytesLiteral to declare
-        //   addressable, mutable static blobs without committing to fixed
-        //   absolute addresses up front.
-        constructor(functions, variables, memorySpec, tables, elements, tags, customSections, dataInit) {
+        constructor(functions, variables, memorySpec, tables, elements, tags, customSections) {
             this.functions = functions;
             this.variables = variables;
             this.memorySpec = memorySpec || null;
@@ -715,7 +709,6 @@ const IR = (() => {
             this.elements = elements || [];
             this.tags = tags || [];
             this.customSections = customSections || [];
-            this.dataInit = dataInit ? new Uint8Array(dataInit) : null;
             Object.freeze(this.functions);
             Object.freeze(this.variables);
             Object.freeze(this.tables);
@@ -1734,13 +1727,25 @@ const IR = (() => {
 
     // Alloca: dynamic stack allocation. Bumps the stack pointer down by
     // `align`-rounded `size` bytes and returns the new top-of-stack as an
-    // i32 address. The region is valid until the function returns (the
-    // function-level prologue/epilogue restores SP). LINEAR — has SP
-    // side-effect.
+    // i32 address.
+    //
+    // SCOPE: function-scoped. The region is valid until the enclosing
+    // function returns; the codegen-emitted Return prefix unwinds the
+    // entire frame (including all alloca'd regions) at exit.
+    //
+    // CAVEAT: any IR.RestoreStackToPostPrologue in scope (which the
+    // TryCatch lowering injects at every catch handler entry) will
+    // discard alloca'd regions, since restore semantics is "sp =
+    // saved_sp - frameSize". Mixing manual Alloca with TryCatch in the
+    // same function means: any alloca that occurred before entering the
+    // try body will be released on catch entry. Document for callers;
+    // we don't error on this — it's the explicit design.
     //
     // `size` may be either a number (static — codegen embeds it as an
     // i32.const) or an Expression of single-i32 type (dynamic — codegen
     // computes the size at runtime). In both cases `align` is static.
+    //
+    // LINEAR — has SP side-effect; cannot be substituted/duplicated.
     class Alloca extends Expression {
         constructor(loc, size, align) {
             const sizeIsExpr = size instanceof Expression;
@@ -3765,8 +3770,7 @@ const IR = (() => {
 
         const newFunctions = program.functions.map(lowerFunction);
         return new Program(newFunctions, program.variables, program.memorySpec,
-            program.tables, program.elements, program.tags, program.customSections,
-            program.dataInit);
+            program.tables, program.elements, program.tags, program.customSections);
     }
 
     // lowerTryCatch: IR pass that desugars TryCatch into TryTable + Block
@@ -3869,8 +3873,7 @@ const IR = (() => {
 
         const newFunctions = program.functions.map(lowerFunction);
         return new Program(newFunctions, program.variables, program.memorySpec,
-            program.tables, program.elements, program.tags, program.customSections,
-            program.dataInit);
+            program.tables, program.elements, program.tags, program.customSections);
     }
 
     return {
@@ -4360,7 +4363,6 @@ const OPTIMIZER = (() => {
             newElements,
             program.tags.filter(tagOk),
             program.customSections,
-            program.dataInit,
         );
     }
 
@@ -4607,10 +4609,6 @@ const CODEGEN = (() => {
         if (memorySpec) {
             const byContentKey = new Map(); // content key -> address
             let cursor = staticDataBase;
-            if (program.dataInit && program.dataInit.length > 0) {
-                dataSegments.push({ offset: staticDataBase, bytes: program.dataInit });
-                cursor += program.dataInit.length;
-            }
             for (const func of definedFunctions) {
                 if (!func.body) continue;
                 for (const bl of func.body.bytesLiterals) {
