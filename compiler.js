@@ -13335,7 +13335,11 @@ class Translator {
     const shiftedMask = mask << BigInt(bitOffset);
     const totalBits = containerSize * 8;
     const allOnes = (1n << BigInt(totalBits)) - 1n;
-    const invMask = allOnes ^ shiftedMask; // ~(mask << bitOffset), masked to size
+    // ~(mask << bitOffset) — sign-extended to fit signed container type. The
+    // IR.Literal validates against [minValue, maxValue], so an inverted mask
+    // like 0xFFFFFFF8 has to be expressed as -8 (sign-extended) for I32.
+    const invMaskBits = allOnes ^ shiftedMask;
+    const invMask = normalizeIntForIRSlot(invMaskBits, containerType, T);
 
     const addrLocal = new IR.LocalVariable(loc, true, '_bf_addr', T.I32);
     this.extraLocals.push(addrLocal);
