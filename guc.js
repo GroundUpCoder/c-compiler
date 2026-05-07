@@ -867,12 +867,33 @@ const IR = (() => {
     //       or declarative segment) before ref.func can take its address.
     //       Codegen auto-emits a declarative element segment for these.
     //
+    // Two scalar bubble-up fields are computed eagerly in this base
+    // constructor (no `_compute…` hook required because there's nothing
+    // for subclasses to override):
+    //
+    //   - nodeCount: 1 + Σ children.nodeCount. Used by the optimizer for
+    //     size-bounded inlining decisions. O(1) at the call site.
+    //   - linearity: 'UNRESTRICTED' (safe to duplicate or drop in a
+    //     substitution position) or 'LINEAR' (must be evaluated exactly
+    //     once, in the original eval-order position). A node is
+    //     UNRESTRICTED iff its op is intrinsically pure (no side effects,
+    //     no traps, no allocation identity, deterministic) AND every
+    //     child is UNRESTRICTED. Subclasses pass their op-intrinsic
+    //     linearity as the optional 4th constructor arg; default LINEAR.
+    //
     // After `_finalize()` the instance is frozen; IR nodes are immutable.
     class Expression {
-        constructor(loc, types, children) {
+        constructor(loc, types, children, opLinearity = 'LINEAR') {
             this.loc = loc;
             this.types = types;       // Array<Type> — values left on the wasm stack
             this.children = children; // Array<Expression>
+            let nc = 1, lin = opLinearity;
+            for (const c of children) {
+                nc += c.nodeCount;
+                if (c.linearity !== 'UNRESTRICTED') lin = 'LINEAR';
+            }
+            this.nodeCount = nc;
+            this.linearity = lin;
         }
 
         // Idempotent: safe to call from intermediate constructors as well as
@@ -964,7 +985,7 @@ const IR = (() => {
             } else {
                 assert(false, 'Invalid literal value type');
             }
-            super(loc, [type], []);
+            super(loc, [type], [], 'UNRESTRICTED');
             this.type = type;
             this.value = value;
             // Only finalize if we are the actual class being constructed —
@@ -987,7 +1008,12 @@ const IR = (() => {
 
     class GetVars extends Expression {
         constructor(loc, variables) {
-            super(loc, variables.map(v => v.type), []);
+            // Reads of immutable variables are deterministic + side-effect-
+            // free, so the load is unrestricted-at-substitution. Any mutable
+            // var in the bundle taints the whole get to LINEAR.
+            const opLin = variables.every(v => !v.mutable)
+                ? 'UNRESTRICTED' : 'LINEAR';
+            super(loc, variables.map(v => v.type), [], opLin);
             this.variables = variables; // Array of Variable
             this._finalize();
         }
@@ -1180,7 +1206,7 @@ const IR = (() => {
     // handles the declaration.
     class RefFunc extends Expression {
         constructor(loc, func) {
-            super(loc, [T.refTypeOf(func.type, false)], []);
+            super(loc, [T.refTypeOf(func.type, false)], [], 'UNRESTRICTED');
             this.func = func;
             this._finalize();
         }
@@ -1197,7 +1223,10 @@ const IR = (() => {
     class BinOp extends Expression {
         constructor(loc, op, lhs, rhs) {
             const { resultTypes, errors } = BinOp._validate(op, lhs, rhs);
-            super(loc, resultTypes, [lhs, rhs]);
+            // div/rem trap on zero divisor; everything else is unrestricted.
+            const opLin = (op === 'div' || op === 'rem')
+                ? 'LINEAR' : 'UNRESTRICTED';
+            super(loc, resultTypes, [lhs, rhs], opLin);
             this.op = op;
             this.lhs = lhs;
             this.rhs = rhs;
@@ -1253,7 +1282,7 @@ const IR = (() => {
     class UnaryOp extends Expression {
         constructor(loc, op, operand) {
             const { resultTypes, errors } = UnaryOp._validate(op, operand);
-            super(loc, resultTypes, [operand]);
+            super(loc, resultTypes, [operand], 'UNRESTRICTED');
             this.op = op;
             this.operand = operand;
             for (const msg of errors) reportError(loc, msg);
@@ -1291,10 +1320,21 @@ const IR = (() => {
     // 'i64.extend_i32_s'), making the operand slot and result type explicit.
     // The operand's IR-type may be unsigned (e.g. U32 for an op expecting i32
     // slot) — only the wasm slot has to match.
+    // Trap-on-NaN/out-of-range trunc conversions; everything else (extend,
+    // wrap, demote, promote, reinterpret, convert) is total + deterministic.
+    const _TRAPPING_CONVERTS = new Set([
+        'i32.trunc_f32_s', 'i32.trunc_f32_u',
+        'i32.trunc_f64_s', 'i32.trunc_f64_u',
+        'i64.trunc_f32_s', 'i64.trunc_f32_u',
+        'i64.trunc_f64_s', 'i64.trunc_f64_u',
+    ]);
+
     class Convert extends Expression {
         constructor(loc, op, source) {
             const { resultTypes, errors } = Convert._validate(op, source);
-            super(loc, resultTypes, [source]);
+            const opLin = _TRAPPING_CONVERTS.has(op)
+                ? 'LINEAR' : 'UNRESTRICTED';
+            super(loc, resultTypes, [source], opLin);
             this.op = op;
             this.source = source;
             for (const msg of errors) reportError(loc, msg);
@@ -1418,7 +1458,12 @@ const IR = (() => {
     // MemorySize: returns the current size of the default memory in pages.
     class MemorySize extends Expression {
         constructor(loc) {
-            super(loc, [T.I32], []);
+            // Returns the current memory size in pages — a value that can
+            // change after a memory.grow elsewhere, but within a body that
+            // doesn't grow memory it's effectively constant. UNRESTRICTED
+            // for substitution purposes (the inliner's simple-body
+            // whitelist excludes MemoryGrow).
+            super(loc, [T.I32], [], 'UNRESTRICTED');
             this._finalize();
         }
     }
@@ -1505,7 +1550,8 @@ const IR = (() => {
     // the blob. Codegen deduplicates BytesLiterals by content.
     class BytesLiteral extends Expression {
         constructor(loc, bytes) {
-            super(loc, [T.I32], []);
+            // Resolves to a constant i32 address at codegen time.
+            super(loc, [T.I32], [], 'UNRESTRICTED');
             // We copy the input so the caller's array can't mutate ours, but
             // typed-array views cannot themselves be frozen — by convention,
             // do not mutate `bl.bytes` after construction.
@@ -2128,7 +2174,7 @@ const IR = (() => {
                     resultTypes = [T.refTypeOf(T.HEAP_ANY, nullable)];
                 }
             }
-            super(loc, resultTypes, [ref]);
+            super(loc, resultTypes, [ref], 'UNRESTRICTED');
             this.ref = ref;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
@@ -2158,7 +2204,7 @@ const IR = (() => {
                     resultTypes = [T.refTypeOf(T.HEAP_EXTERN, nullable)];
                 }
             }
-            super(loc, resultTypes, [ref]);
+            super(loc, resultTypes, [ref], 'UNRESTRICTED');
             this.ref = ref;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
@@ -2171,7 +2217,7 @@ const IR = (() => {
     // ref.null heaptype — produces a null reference of the given heap type.
     class RefNull extends Expression {
         constructor(loc, heapType) {
-            super(loc, [T.refTypeOf(heapType, true)], []);
+            super(loc, [T.refTypeOf(heapType, true)], [], 'UNRESTRICTED');
             this.heapType = heapType;
             this._finalize();
         }
@@ -2197,7 +2243,7 @@ const IR = (() => {
                 errors.push('RefIsNull: operand must be a single RefType value');
                 resultTypes = null;
             }
-            super(loc, resultTypes, [ref]);
+            super(loc, resultTypes, [ref], 'UNRESTRICTED');
             this.ref = ref;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
@@ -2258,7 +2304,7 @@ const IR = (() => {
                 const okB = check(refB, 'right');
                 if (!okA || !okB) resultTypes = null;
             }
-            super(loc, resultTypes, [refA, refB]);
+            super(loc, resultTypes, [refA, refB], 'UNRESTRICTED');
             this.refA = refA;
             this.refB = refB;
             for (const msg of errors) reportError(loc, msg);
@@ -2317,7 +2363,7 @@ const IR = (() => {
                 errors.push('RefTest: source must be a single RefType value');
                 resultTypes = null;
             }
-            super(loc, resultTypes, [ref]);
+            super(loc, resultTypes, [ref], 'UNRESTRICTED');
             this.ref = ref;
             this.targetRefType = targetRefType;
             for (const msg of errors) reportError(loc, msg);
@@ -2367,7 +2413,9 @@ const IR = (() => {
     // multi-value source, codegen emits one `drop` per value.
     class Drop extends Expression {
         constructor(loc, source) {
-            super(loc, source.types === null ? null : [], [source]);
+            // Drop itself adds no observable effect — it's a stack-balancing
+            // op. Linearity comes entirely from its child.
+            super(loc, source.types === null ? null : [], [source], 'UNRESTRICTED');
             this.source = source;
             this._finalize();
         }
@@ -2401,7 +2449,11 @@ const IR = (() => {
             } else {
                 resultTypes = [ifTrue.types[0]];
             }
-            super(loc, divergent ? null : resultTypes, [condition, ifTrue, ifFalse]);
+            // Select itself adds no observable effect — but unlike a wasm
+            // `if` it eagerly evaluates both branches before the condition
+            // picks one. So children's linearity bubbles up unchanged.
+            super(loc, divergent ? null : resultTypes,
+                  [condition, ifTrue, ifFalse], 'UNRESTRICTED');
             this.condition = condition;
             this.ifTrue = ifTrue;
             this.ifFalse = ifFalse;
@@ -2597,7 +2649,7 @@ const IR = (() => {
     // our own result type — they target outer blocks.
     class TryTable extends Expression {
         constructor(loc, label, body, catches) {
-            super(loc, [], body);
+            super(loc, [], body, 'UNRESTRICTED');
             this.label = label;
             this.body = body;
             this.catches = catches;
@@ -2729,7 +2781,8 @@ const IR = (() => {
     // the last element's value) when you actually want the multi-value stack.
     class MultiValue extends Expression {
         constructor(loc, exprs) {
-            super(loc, exprs.flatMap(e => e.types), exprs);
+            // Pure sequencing — no own effect. Children determine linearity.
+            super(loc, exprs.flatMap(e => e.types), exprs, 'UNRESTRICTED');
             this.exprs = exprs;
             this._finalize();
         }
@@ -2809,7 +2862,8 @@ const IR = (() => {
     //     (or `[]` for an empty body or a trailing Break/Continue).
     class Block extends Expression {
         constructor(loc, label, body) {
-            super(loc, [], body); // types set after inference
+            // Pure sequencing — body's linearity bubbles up.
+            super(loc, [], body, 'UNRESTRICTED'); // types set after inference
             this.label = label;
             this.body = body; // alias for children, kept for API clarity
 
@@ -2908,7 +2962,7 @@ const IR = (() => {
     // allowed only when resultTypes is empty.
     class IfElse extends Expression {
         constructor(loc, condition, thenBody, elseBody) {
-            super(loc, [], [condition, ...thenBody, ...elseBody]);
+            super(loc, [], [condition, ...thenBody, ...elseBody], 'UNRESTRICTED');
             this.condition = condition;
             this.thenBody = thenBody;
             this.elseBody = elseBody;
@@ -3012,7 +3066,7 @@ const IR = (() => {
     // divergent.
     class TryFinally extends Expression {
         constructor(loc, body, finallyBody) {
-            super(loc, body.types, [body, finallyBody]);
+            super(loc, body.types, [body, finallyBody], 'UNRESTRICTED');
             this.body = body;
             this.finallyBody = finallyBody;
             this._finalize();
@@ -3441,6 +3495,418 @@ const IR = (() => {
     };
 })();
 
+// OPTIMIZER: a unified IR→IR pass that fuses constant folding, inlining, and
+// tree-shaking into a single root-driven traversal.
+//
+// The driver does a depth-first visit starting from a configurable root set
+// (exported funcs by default, optionally a single named entry, or every
+// function). Each visited function:
+//   1. Recursively visits its dependencies (called functions, RefFunc'd
+//      functions, referenced globals, tables, tags) BEFORE transforming its
+//      own body — so by the time we walk the body, every callee is already
+//      in its final post-optimization form.
+//   2. Post-order rewrites the body with a fused fn:
+//        a) constant fold (BinOp/IfElse/RefIsNull on literals);
+//        b) inline at each direct FunctionCall whose callee passes the
+//           heuristic.
+//   3. Caches the final body keyed by Function.
+//
+// Cycles (mutual recursion) are detected via an `inProgress` set: a callee
+// requested while still in progress returns `null`, and the caller's
+// inlining check skips it (correctly leaves the call as a real call).
+//
+// Tree-shaking falls out of the visit set: anything never DFS'd from the
+// roots is unreachable and is filtered out of the resulting Program. Globals
+// / tables / tags / element segments collapse the same way.
+const OPTIMIZER = (() => {
+    // Post-order rewriter. `fn` is called on each node AFTER its children
+    // have been recursively rewritten. Returning `undefined` (or `null`)
+    // means "no change at this level"; returning a new Expression replaces
+    // the node. The replacement is NOT itself recursed into — fn is
+    // expected to produce a node that's already fully folded for its own
+    // shape.
+    function rewrite(node, fn) {
+        const folded = IR.walkIR(node, n =>
+            n === node ? undefined : rewrite(n, fn));
+        const out = fn(folded);
+        return out === undefined || out === null ? folded : out;
+    }
+
+    // Strip redundant single-valued wrappers around a body expression so
+    // simple-body / param-usage analysis sees the actual operation. Each
+    // case is a structurally-transparent wrapper for our purposes:
+    //   - Return([x])           — at the top of a function body, "return x"
+    //                             is exactly "the body produces x" once
+    //                             inlined into a context that takes the
+    //                             value directly.
+    //   - Block([x]) (no labels)— a label-free, single-element Block is
+    //                             the same bytes as just x.
+    //   - MultiValue([x])       — degenerate single-element multi-value.
+    function unwrap(body) {
+        for (;;) {
+            if (body instanceof IR.Return && body.args.length === 1) {
+                body = body.args[0]; continue;
+            }
+            if (body instanceof IR.Block
+                && body.body.length === 1
+                && !body.hasBreak && !body.hasContinue) {
+                body = body.body[0]; continue;
+            }
+            if (body instanceof IR.MultiValue && body.exprs.length === 1) {
+                body = body.exprs[0]; continue;
+            }
+            return body;
+        }
+    }
+
+    // Whitelist of node types that may appear in a body we're willing to
+    // inline. The list is conservative: pure ops + direct calls, excluding
+    // anything with control flow that would need local materialization to
+    // preserve semantics under substitution (Block with breaks, IfElse,
+    // loops, try/catch, etc.).
+    const SIMPLE_BODY_OPS = new Set([
+        IR.Literal, IR.StringLiteral, IR.BytesLiteral,
+        IR.GetVars, IR.MemorySize,
+        IR.BinOp, IR.UnaryOp, IR.Convert, IR.Select, IR.MultiValue,
+        IR.RefNull, IR.RefFunc, IR.RefIsNull, IR.RefAsNonNull,
+        IR.RefEq, IR.RefCast, IR.RefTest,
+        IR.StructGet, IR.StructNew, IR.StructNewDefault,
+        IR.ArrayGet, IR.ArrayLen,
+        IR.ArrayNew, IR.ArrayNewDefault, IR.ArrayNewFixed,
+        IR.AnyConvertExtern, IR.ExternConvertAny,
+        IR.FunctionCall,
+    ]);
+
+    function isSimpleBody(node) {
+        if (!SIMPLE_BODY_OPS.has(node.constructor)) return false;
+        for (const c of node.children) {
+            if (!isSimpleBody(c)) return false;
+        }
+        return true;
+    }
+
+    // Walk the body counting GetVars references to each param and the
+    // pre-order index at which each is first seen. Disqualifies inlining
+    // (returns null) if any param is the target of SetVars/TeeVars in the
+    // body — a self-mutating param can't be substituted away naively.
+    function paramUsage(body, params) {
+        const paramSet = new Set(params);
+        const usage = new Map();
+        for (const p of params) usage.set(p, { count: 0, firstSeen: Infinity });
+        let idx = 0, safe = true;
+        function walk(n) {
+            if (!safe) return;
+            if ((n instanceof IR.SetVars || n instanceof IR.TeeVars)
+                && n.variables.some(v => paramSet.has(v))) {
+                safe = false; return;
+            }
+            if (n instanceof IR.GetVars) {
+                for (const v of n.variables) {
+                    const u = usage.get(v);
+                    if (u) {
+                        u.count++;
+                        if (idx < u.firstSeen) u.firstSeen = idx;
+                    }
+                }
+            }
+            idx++;
+            for (const c of n.children) walk(c);
+        }
+        walk(body);
+        return safe ? usage : null;
+    }
+
+    // Heuristic: should we inline `callee` at this call site with these
+    // args? Conservative version — substitutes args directly into the
+    // callee's body without introducing temp locals. Safe iff:
+    //   - body is small (nodeCount ≤ inlineMaxNodes after unwrapping);
+    //   - body uses only whitelisted ops;
+    //   - no param is mutated in the body;
+    //   - for each LINEAR arg (impure / trapping / has identity), the
+    //     corresponding param is used exactly once, and the usages of
+    //     LINEAR-arg params occur in the same left-to-right order as the
+    //     args (preserving wasm's eval order);
+    //   - UNRESTRICTED args (PURE: Literal/RefNull/etc and immutable
+    //     GetVars) have no usage-pattern restriction.
+    function shouldInline(callee, args, options) {
+        if (!callee.body) return false;
+        if (callee.params.length !== args.length) return false;
+        const max = options.inlineMaxNodes != null ? options.inlineMaxNodes : 12;
+        const stripped = unwrap(callee.body);
+        if (stripped.nodeCount > max) return false;
+        if (!isSimpleBody(stripped)) return false;
+        const usage = paramUsage(stripped, callee.params);
+        if (!usage) return false;
+        let prevFirstSeen = -1;
+        for (let i = 0; i < args.length; i++) {
+            const u = usage.get(callee.params[i]);
+            if (args[i].linearity === 'UNRESTRICTED') continue;
+            if (u.count !== 1) return false;
+            if (u.firstSeen < prevFirstSeen) return false;
+            prevFirstSeen = u.firstSeen;
+        }
+        return true;
+    }
+
+    // Substitute each `GetVars(param[i])` reference in the unwrapped body
+    // with the call site's `args[i]`. Multi-variable GetVars (a single
+    // GetVars naming several variables) is a rare degenerate case — skip
+    // those rather than carve out a special path.
+    function inlineCall(callee, args) {
+        const stripped = unwrap(callee.body);
+        const paramIdx = new Map();
+        callee.params.forEach((p, i) => paramIdx.set(p, i));
+        return IR.walkIR(stripped, n => {
+            if (n instanceof IR.GetVars
+                && n.variables.length === 1
+                && paramIdx.has(n.variables[0])) {
+                return args[paramIdx.get(n.variables[0])];
+            }
+            return undefined;
+        });
+    }
+
+    // Foldable integer binops. Result-bound checking happens in the caller;
+    // here we just produce the mathematical value (or null if the op isn't
+    // foldable in this context).
+    function evalIntBinOp(op, lhs, rhs, operandType) {
+        switch (op) {
+            case 'add': return lhs + rhs;
+            case 'sub': return lhs - rhs;
+            case 'mul': return lhs * rhs;
+            case 'and': return lhs & rhs;
+            case 'or':  return lhs | rhs;
+            case 'xor': return lhs ^ rhs;
+            case 'eq':  return lhs === rhs ? 1n : 0n;
+            case 'ne':  return lhs !== rhs ? 1n : 0n;
+            case 'lt':  return lhs <  rhs ? 1n : 0n;
+            case 'gt':  return lhs >  rhs ? 1n : 0n;
+            case 'le':  return lhs <= rhs ? 1n : 0n;
+            case 'ge':  return lhs >= rhs ? 1n : 0n;
+            // div/rem are LINEAR (zero divisor traps) — never reach here.
+            // shl/shr/rotl/rotr need shift-mod-bitwidth handling — skip
+            // for now to keep this conservative.
+            default: return null;
+        }
+    }
+
+    function tryFold(node) {
+        // BinOp(Lit, Lit) on integer types — fold when result fits.
+        if (node instanceof IR.BinOp
+            && node.lhs instanceof IR.Literal
+            && node.rhs instanceof IR.Literal
+            && typeof node.lhs.value === 'bigint'
+            && typeof node.rhs.value === 'bigint'
+            && node.types && node.types.length === 1) {
+            const operandType = node.lhs.type;
+            const v = evalIntBinOp(node.op, node.lhs.value, node.rhs.value, operandType);
+            if (v !== null) {
+                const resultType = node.types[0];
+                if (v >= resultType.minValue() && v <= resultType.maxValue()) {
+                    return new IR.Literal(node.loc, resultType, v);
+                }
+            }
+        }
+        // IfElse(Lit, then, else) → Block of the live branch. Wrapping in a
+        // Block keeps the result-type contract intact (the live branch is a
+        // sequence; Block is the natural sequence container) and the
+        // OPTIMIZER's later passes / unwrap can collapse it further.
+        if (node instanceof IR.IfElse
+            && node.condition instanceof IR.Literal
+            && typeof node.condition.value === 'bigint') {
+            const branch = node.condition.value !== 0n
+                ? node.thenBody : node.elseBody;
+            return new IR.Block(node.loc, Symbol('folded_if'), branch);
+        }
+        // ref.is_null on a literal ref.null — always 1.
+        if (node instanceof IR.RefIsNull && node.ref instanceof IR.RefNull) {
+            return new IR.Literal(node.loc, T.I32, 1n);
+        }
+        // ref.eq(ref.null, ref.null) — always 1.
+        if (node instanceof IR.RefEq
+            && node.refA instanceof IR.RefNull
+            && node.refB instanceof IR.RefNull) {
+            return new IR.Literal(node.loc, T.I32, 1n);
+        }
+        return undefined;
+    }
+
+    function pickRoots(program, from) {
+        if (from === 'all') return program.functions.filter(f => f.body);
+        if (typeof from === 'object' && from && from.entry) {
+            return program.functions.filter(f => f.name === from.entry);
+        }
+        // 'exports' (default)
+        return program.functions.filter(f => f.exportSpec);
+    }
+
+    function optimize(program, options) {
+        options = options || {};
+        const doFold      = options.fold      !== false;
+        const doInline    = options.inline    !== false;
+        const doTreeShake = options.treeShake !== false;
+        const from        = options.from || 'exports';
+
+        const roots = pickRoots(program, from);
+
+        // ─── Phase 1: process bodies (DFS, callees-before-callers). ───
+        // Reachability is NOT computed here — it has to be computed on the
+        // final bodies after inlining/folding may have removed call sites.
+        const processedBody = new Map();    // Function -> final body or null
+        const inProgress    = new Set();
+
+        function processFunc(fn) {
+            if (processedBody.has(fn)) return processedBody.get(fn);
+            if (inProgress.has(fn)) return null;     // cycle-break
+            if (!fn.body) {
+                processedBody.set(fn, null);          // import: no body
+                return null;
+            }
+            inProgress.add(fn);
+            // DFS into anything this body references so callees are in
+            // their final form when we decide whether to inline them.
+            (function walk(n) {
+                if (n instanceof IR.FunctionCall) processFunc(n.func);
+                else if (n instanceof IR.CallIndirect) {
+                    // Element-segment'd funcs on this table become
+                    // candidates too (their bodies should be optimized in
+                    // case they're reachable in the final program).
+                    for (const seg of program.elements) {
+                        if (seg.table === n.table) {
+                            for (const f of seg.functions) processFunc(f);
+                        }
+                    }
+                }
+                for (const c of n.children) walk(c);
+            })(fn.body);
+            for (const f of fn.body.referencedFunctions) processFunc(f);
+
+            let newBody = fn.body;
+            if (doFold || doInline) {
+                const transform = (n) => {
+                    if (doFold) {
+                        const folded = tryFold(n);
+                        if (folded) return folded;
+                    }
+                    if (doInline && n instanceof IR.FunctionCall) {
+                        const target = processedBody.get(n.func);
+                        if (target && shouldInline(n.func, n.args, options)) {
+                            // Re-rewrite the inlined body: substituting args
+                            // can expose fresh fold opportunities (e.g. an
+                            // arg literal flowing into a BinOp).
+                            return rewrite(inlineCall(n.func, n.args), transform);
+                        }
+                    }
+                    return undefined;
+                };
+                newBody = rewrite(fn.body, transform);
+            }
+
+            processedBody.set(fn, newBody);
+            inProgress.delete(fn);
+            return newBody;
+        }
+
+        for (const r of roots) processFunc(r);
+        // Element segments on tables that are roots-or-exported also need
+        // their funcs processed (they may be hit only via CallIndirect).
+        for (const t of program.tables) if (t.exportSpec) {
+            for (const seg of program.elements) {
+                if (seg.table === t) for (const f of seg.functions) processFunc(f);
+            }
+        }
+        // Globals' initializers can RefFunc / Get other globals.
+        for (const g of program.variables) if (g.exportSpec && g.init) {
+            for (const f of g.init.referencedFunctions) processFunc(f);
+        }
+
+        // ─── Phase 2: reachability on FINAL bodies. ───
+        // After Phase 1 some calls may have been inlined away — so dead
+        // callees that were only called from the inline site are now
+        // genuinely unreferenced.
+        const reachableFns     = new Set();
+        const reachableGlobals = new Set();
+        const reachableTags    = new Set();
+        const reachableTables  = new Set();
+
+        function markRefs(expr) {
+            if (!expr) return;
+            (function walk(n) {
+                if (n instanceof IR.FunctionCall) markFn(n.func);
+                else if (n instanceof IR.CallIndirect) markTable(n.table);
+                else if (n instanceof IR.Throw) reachableTags.add(n.tag);
+                else if (n instanceof IR.GetVars
+                      || n instanceof IR.SetVars
+                      || n instanceof IR.TeeVars) {
+                    for (const v of n.variables) {
+                        if (v instanceof IR.GlobalVariable) markGlobal(v);
+                    }
+                }
+                for (const c of n.children) walk(c);
+            })(expr);
+            for (const f of expr.referencedFunctions) markFn(f);
+        }
+        function markFn(fn) {
+            if (reachableFns.has(fn)) return;
+            reachableFns.add(fn);
+            const body = processedBody.has(fn) ? processedBody.get(fn) : fn.body;
+            if (body) markRefs(body);
+        }
+        function markGlobal(g) {
+            if (reachableGlobals.has(g)) return;
+            reachableGlobals.add(g);
+            if (g.init) markRefs(g.init);
+        }
+        function markTable(t) {
+            if (reachableTables.has(t)) return;
+            reachableTables.add(t);
+            for (const seg of program.elements) {
+                if (seg.table === t) for (const f of seg.functions) markFn(f);
+            }
+        }
+
+        for (const r of roots)              markFn(r);
+        for (const g of program.variables)  if (g.exportSpec) markGlobal(g);
+        for (const t of program.tables)     if (t.exportSpec) markTable(t);
+        for (const t of program.tags)       if (t.exportSpec) reachableTags.add(t);
+
+        // ─── Phase 3: filter the program. ───
+        const fnOk     = doTreeShake ? f => reachableFns.has(f)     : () => true;
+        const globalOk = doTreeShake ? g => reachableGlobals.has(g) : () => true;
+        const tableOk  = doTreeShake ? t => reachableTables.has(t)  : () => true;
+        const tagOk    = doTreeShake ? t => reachableTags.has(t)    : () => true;
+
+        // Functions that weren't visited at all (tree-shake off, or pulled
+        // in by ref-bubbleup but never optimized): leave their bodies alone.
+        const newFns = program.functions.filter(fnOk).map(f => {
+            const body = processedBody.get(f);
+            if (body === undefined || body === f.body) return f;
+            return new IR.Function(f.loc, f.importSpec, f.exportSpec,
+                f.name, f.type, [...f.params], [...f.locals], body);
+        });
+
+        const newElements = program.elements
+            .filter(seg => tableOk(seg.table))
+            .map(seg => {
+                const filtered = seg.functions.filter(fnOk);
+                if (filtered.length === seg.functions.length) return seg;
+                return new IR.ElementSegment(seg.loc, seg.table, seg.offset, filtered);
+            });
+
+        return new IR.Program(
+            newFns,
+            program.variables.filter(globalOk),
+            program.memorySpec,
+            program.tables.filter(tableOk),
+            newElements,
+            program.tags.filter(tagOk),
+            program.customSections,
+        );
+    }
+
+    return { optimize, rewrite, tryFold, shouldInline, inlineCall, unwrap };
+})();
+
 const CODEGEN = (() => {
 
     function encodeLEBU128(value) {
@@ -3506,7 +3972,15 @@ const CODEGEN = (() => {
         return [];
     }
 
-    function emit(program) {
+    function emit(program, options) {
+        // Optional optimization pass. Off by default to keep emit's
+        // observable behavior unchanged for callers that don't opt in.
+        // Pass `{ optimize: true }` for default settings, or
+        // `{ optimize: { from: 'main', inlineMaxNodes: 20 } }` for tuning.
+        if (options && options.optimize) {
+            const optOpts = options.optimize === true ? {} : options.optimize;
+            program = OPTIMIZER.optimize(program, optOpts);
+        }
         // Run IR-level lowering passes first. lowerTryFinally is a no-op
         // (returns the same Program) when no function contains TryFinally.
         program = IR.lowerTryFinally(program);
@@ -4830,6 +5304,7 @@ return {
     TreeBag,
     T,
     IR,
+    OPTIMIZER,
     CODEGEN,
     RUNTIME,
 };

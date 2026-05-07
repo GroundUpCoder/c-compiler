@@ -458,6 +458,44 @@ T('qsort-via-fnptr',
   + 'for (int i = 0; i < 5; ++i) printf("%d ", xs[i]); printf("\\n"); return 0; }',
   '1 2 5 7 9 \n', 0);
 
+// ===== Exceptions =====
+T('exc-throw-catch',
+  '#include <stdio.h>\n'
+  + '__exception MyErr(int);\n'
+  + 'int main(void) { '
+  + '__try { printf("before\\n"); __throw MyErr(42); printf("after\\n"); } '
+  + '__catch MyErr(code) { printf("caught: %d\\n", code); } '
+  + 'printf("done\\n"); return 0; }',
+  'before\ncaught: 42\ndone\n', 0);
+
+T('exc-no-throw',
+  '#include <stdio.h>\n'
+  + '__exception MyErr(int);\n'
+  + 'int main(void) { '
+  + '__try { printf("ok\\n"); } '
+  + '__catch MyErr(code) { printf("caught: %d\\n", code); } '
+  + 'printf("done\\n"); return 0; }',
+  'ok\ndone\n', 0);
+
+T('exc-catch-all',
+  '#include <stdio.h>\n'
+  + '__exception MyErr(int);\n'
+  + 'int main(void) { '
+  + '__try { __throw MyErr(7); } '
+  + '__catch { printf("any\\n"); } '
+  + 'return 0; }',
+  'any\n', 0);
+
+T('exc-multi-catch',
+  '#include <stdio.h>\n'
+  + '__exception A(int); __exception B(int);\n'
+  + 'int main(void) { '
+  + '__try { __throw B(5); } '
+  + '__catch A(x) { printf("A=%d\\n", x); } '
+  + '__catch B(x) { printf("B=%d\\n", x); } '
+  + 'return 0; }',
+  'B=5\n', 0);
+
 // =========== summary ===========
 
 console.log(`\n${pass}/${pass + fail} passed${skip ? `, ${skip} skipped` : ''}${fail ? `, ${fail} failed` : ''}`);

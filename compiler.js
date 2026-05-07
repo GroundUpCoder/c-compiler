@@ -11812,6 +11812,7 @@ class Translator {
     // Per-function state, reset by translateFunction.
     this.cVarToLocal = new Map(); // DVar (param/local) -> IR.LocalVariable
     this.cVarToFrameOffset = new Map(); // DVar (MEMORY-class) -> int byte offset
+    this.compoundLitToFrameOffset = new Map(); // ECompoundLiteral -> offset
     this.frameSize = 0;            // total frame bytes for this function
     this.savedSpLocal = null;      // IR.LocalVariable holding caller's SP
     this.currentFunc = null;       // DFunc currently being translated
@@ -11833,6 +11834,9 @@ class Translator {
 
     // Imported function decls -> IR.Function. Built lazily as needed.
     this.importedFuncToIR = new Map();
+
+    // C exception tag (object with name + paramTypes) -> IR.Tag.
+    this.excTagToIR = new Map();
 
     // C global decl -> IR.GlobalVariable (for REGISTER-class scalar globals).
     this.cGlobalToIR = new Map();
@@ -12146,6 +12150,31 @@ class Translator {
       }
       case Types.ExprKind.ALIGNOF_EXPR: {
         return this.iconst(loc, expr.expr.type.align || 1);
+      }
+      case Types.ExprKind.COMPOUND_LITERAL: {
+        // (struct X){...} — function-scope: frame slot pre-assigned in
+        // _collectMemoryLocals. Initialize the slot on first use, return its
+        // address.
+        const offset = this.compoundLitToFrameOffset.get(expr);
+        if (offset === undefined) nyi(`compound literal without frame slot`, loc);
+        const baseAddrFor = (off) => off === 0
+          ? new IR.GetVars(loc, [this.savedSpLocal])
+          : new IR.BinOp(loc, 'add',
+              new IR.GetVars(loc, [this.savedSpLocal]),
+              this.iconst(loc, off - this.frameSize));
+        const stmts = [];
+        // Zero-fill first to handle partial inits.
+        if (expr.type.size > 0) {
+          stmts.push(new IR.MemoryFill(loc,
+            baseAddrFor(offset), this.iconst(loc, 0), this.iconst(loc, expr.type.size)));
+        }
+        // Populate from initList.
+        if (expr.initList) {
+          this._emitInitListStores(stmts, baseAddrFor, offset, expr.type, expr.initList, loc);
+        }
+        // Yield address.
+        stmts.push(baseAddrFor(offset));
+        return new IR.Block(loc, Symbol('compoundlit'), stmts);
       }
       default:
         nyi(`expr kind ${expr.kind}`, loc);
@@ -12895,6 +12924,11 @@ class Translator {
         // &"literal" — rare but valid (yields the address of the literal).
         return new IR.BytesLiteral(loc, expr.value);
       }
+      case Types.ExprKind.COMPOUND_LITERAL: {
+        // The COMPOUND_LITERAL expression already yields its address; just
+        // translate it.
+        return this.translateExpr(expr);
+      }
       case Types.ExprKind.IMPLICIT_CAST: {
         // Address-of through array-to-pointer decay just unwraps.
         return this._addressOf(expr.expr);
@@ -13184,6 +13218,12 @@ class Translator {
       case Types.StmtKind.SWITCH: {
         return this._lowerSwitch(stmt, loc);
       }
+      case Types.StmtKind.THROW: {
+        return this._lowerThrow(stmt, loc);
+      }
+      case Types.StmtKind.TRY_CATCH: {
+        return this._lowerTryCatch(stmt, loc);
+      }
       case Types.StmtKind.GOTO: {
         if (stmt.invalid) return new IR.Unreachable(loc);
         const sym = this.gotoLabelToSym && this.gotoLabelToSym.get(stmt.target);
@@ -13352,6 +13392,7 @@ class Translator {
     const outer = {
       cVarToLocal: this.cVarToLocal,
       cVarToFrameOffset: this.cVarToFrameOffset,
+      compoundLitToFrameOffset: this.compoundLitToFrameOffset,
       frameSize: this.frameSize,
       savedSpLocal: this.savedSpLocal,
       currentFunc: this.currentFunc,
@@ -13362,6 +13403,7 @@ class Translator {
     };
     this.cVarToLocal = new Map();
     this.cVarToFrameOffset = new Map();
+    this.compoundLitToFrameOffset = new Map();
     this.frameSize = 0;
     this.savedSpLocal = null;
     this.currentFunc = fdef;
@@ -13375,7 +13417,12 @@ class Translator {
     // scalars) and assign each a frame offset.
     this._collectMemoryLocals(fdef);
 
-    const exportSpec = (fdef.name === "main") ? new IR.ExportSpec("main") : null;
+    // The c-compiler host runtime expects `main` (always) and `alloca`
+    // (sometimes — used to allocate argv). Other runtime hooks
+    // (`__run_atexits`, etc.) are auto-handled or optional, and exporting a
+    // stubbed implementation causes traps when the host calls into them.
+    const knownExports = new Set(["main", "alloca"]);
+    const exportSpec = knownExports.has(fdef.name) ? new IR.ExportSpec(fdef.name) : null;
 
     // Variadic definition: wasm signature is `(i32) -> ()`. The single i32
     // is a frame pointer; the C-level fixed params are loaded from frame
@@ -13458,6 +13505,7 @@ class Translator {
     if (stubbed) {
       this.cVarToLocal = outer.cVarToLocal;
       this.cVarToFrameOffset = outer.cVarToFrameOffset;
+      this.compoundLitToFrameOffset = outer.compoundLitToFrameOffset;
       this.frameSize = outer.frameSize;
       this.savedSpLocal = outer.savedSpLocal;
       this.currentFunc = outer.currentFunc;
@@ -13524,6 +13572,7 @@ class Translator {
     // Restore outer state.
     this.cVarToLocal = outer.cVarToLocal;
     this.cVarToFrameOffset = outer.cVarToFrameOffset;
+    this.compoundLitToFrameOffset = outer.compoundLitToFrameOffset;
     this.frameSize = outer.frameSize;
     this.savedSpLocal = outer.savedSpLocal;
     this.currentFunc = outer.currentFunc;
@@ -13542,6 +13591,137 @@ class Translator {
     );
     this.funcDefToIRFunc.set(fdef, irFunc);
     return irFunc;
+  }
+
+  // Resolve a C exception tag object (with .name + .paramTypes) to an
+  // IR.Tag, creating it lazily. The IR.Tag's type has .params matching
+  // the C param types and an empty result list.
+  _resolveExceptionTag(cTag) {
+    const { T, IR } = this.GUC;
+    let irTag = this.excTagToIR.get(cTag);
+    if (irTag) return irTag;
+    const loc = Lexer.Loc.generated();
+    const params = (cTag.paramTypes || []).map(p => this.cTypeToIR(p));
+    const ftype = T.functionTypeOf(params, []);
+    irTag = new IR.Tag(loc, null, null, ftype);
+    this.excTagToIR.set(cTag, irTag);
+    return irTag;
+  }
+
+  _lowerThrow(stmt, loc) {
+    const { IR } = this.GUC;
+    const irTag = this._resolveExceptionTag(stmt.tag);
+    const args = stmt.args.map(a => this.translateExpr(a));
+    return new IR.Throw(loc, irTag, args);
+  }
+
+  // Lower __try / __catch to nested guc Blocks + IR.TryTable.
+  //
+  // Structure for `try { B } catch C0(p0) { H0 } catch C1(p1) { H1 }`:
+  //
+  //   Block(end_label) {
+  //     savedSp = sp;     // so catch handlers can restore
+  //     SetVars(p0_locals, [
+  //       Block(c0_label) {
+  //         SetVars(p1_locals, [
+  //           Block(c1_label) {
+  //             TryTable(_, [B, Break(end_label)], [
+  //               { catch C0, c0_label }, { catch C1, c1_label },
+  //             ])
+  //           }
+  //         ]);
+  //         sp = savedSp;  // c1 fired
+  //         H1;
+  //         Break(end_label);
+  //       }
+  //     ]);
+  //     sp = savedSp;      // c0 fired
+  //     H0;
+  //     Break(end_label);
+  //   }
+  //
+  // - try body falls off via Break(end_label): all wrappers exited, no
+  //   handler runs.
+  // - C0 fires: TryTable jumps to c0_label, payload as Block result. Outer
+  //   SetVars binds p0_locals, then H0 runs.
+  // - C1 fires: TryTable jumps to c1_label, payload as Block result. Inner
+  //   SetVars binds p1_locals, H1 runs (its Break(end_label) bypasses H0).
+  _lowerTryCatch(stmt, loc) {
+    const { T, IR } = this.GUC;
+    const tc = stmt;
+    const endLabel = Symbol('try_end');
+    const sp = this.getStackPointerGlobal();
+
+    // Save SP so catch handlers can roll back any mid-try frame allocations.
+    const savedSpForCatch = new IR.LocalVariable(loc, true, '_try_sp', T.I32);
+    this.extraLocals.push(savedSpForCatch);
+
+    // Resolve catch info up front (so binding locals exist before we
+    // translate catch bodies, which reference them).
+    const catchInfos = [];
+    for (const cc of tc.catches) {
+      const label = Symbol(`catch_${cc.tag ? cc.tag.name : 'all'}`);
+      const bindingLocals = [];
+      let kind, irTag = null;
+      if (!cc.tag) {
+        kind = 'catch_all';
+      } else {
+        kind = 'catch';
+        irTag = this._resolveExceptionTag(cc.tag);
+        for (const bv of (cc.bindingVars || [])) {
+          const lv = new IR.LocalVariable(loc, true, bv.name, this.cTypeToIR(bv.type));
+          this.extraLocals.push(lv);
+          this.cVarToLocal.set(bv, lv);
+          bindingLocals.push(lv);
+        }
+      }
+      catchInfos.push({ cc, label, kind, irTag, bindingLocals });
+    }
+
+    // Build the try body and TryTable.
+    const tryBodyIR = this.translateStmt(tc.tryBody);
+    const tryBody = [
+      tryBodyIR,
+      new IR.Break(loc, endLabel, []),
+    ];
+    const tryCatches = catchInfos.map(ci =>
+      ci.irTag
+        ? { kind: ci.kind, tag: ci.irTag, label: ci.label }
+        : { kind: ci.kind, label: ci.label }
+    );
+    let inner = new IR.TryTable(loc, Symbol('_try_inner'), tryBody, tryCatches);
+
+    // Wrap from innermost outward — for each catch (reversed):
+    //   stmts := [
+    //     <bind>: SetVars(bindings, [Block(label, [inner])])
+    //             OR just Block(label, [inner]) if no bindings,
+    //     SetVars(sp, [GetVars(savedSp)]),  // restore SP
+    //     <translated catch body>,
+    //     Break(end_label),
+    //   ]
+    //   inner := Block(<wrapper>, stmts)
+    for (let i = catchInfos.length - 1; i >= 0; i--) {
+      const ci = catchInfos[i];
+      const stmts = [];
+      if (ci.bindingLocals.length > 0) {
+        stmts.push(new IR.SetVars(loc, ci.bindingLocals,
+          [new IR.Block(loc, ci.label, [inner])]));
+      } else {
+        // catch_all or catch with empty params: Block produces []. Just
+        // include it as a statement.
+        stmts.push(new IR.Block(loc, ci.label, [inner]));
+      }
+      stmts.push(new IR.SetVars(loc, [sp], [new IR.GetVars(loc, [savedSpForCatch])]));
+      stmts.push(this.translateStmt(ci.cc.body));
+      stmts.push(new IR.Break(loc, endLabel, []));
+      inner = new IR.Block(loc, Symbol(`catch${i}_wrap`), stmts);
+    }
+
+    // Outermost: save SP, then run the chain inside Block(end_label).
+    return new IR.Block(loc, endLabel, [
+      new IR.SetVars(loc, [savedSpForCatch], [new IR.GetVars(loc, [sp])]),
+      inner,
+    ]);
   }
 
   // Lower a C switch statement to nested labeled Blocks. We use a br_if
@@ -13783,24 +13963,54 @@ class Translator {
           i++;
           // Continue with remaining forward labels (one fewer to wrap).
           const rest = walk(i, fwdsRemaining.slice(1));
-          // After this label's Block, we run the rest at the same nesting
-          // level. So add rest.body AFTER the Block.
           const sym = this.gotoLabelToSym.get(fwd);
-          // BOTH: also open a loop block.
+          // For BOTH labels, the same label is also a loop target. After
+          // the forward Block closes, wrap rest.body in a Loop-kind Block
+          // so backward gotos to `fwd` resolve too. (We re-use the same
+          // sym so all gotos to this label use it — that's fine because
+          // forward gotos break OUT of the inner Block (closed here), and
+          // backward gotos break INTO this Block (opening below).)
           if (fwd.labelKind === LK.BOTH) {
-            // Build a loop block with the rest of the body inside.
             const loopSym = Symbol(`label_${fwd.name}_loop`);
-            // For BOTH labels: forward gotos break out of the fwd Block,
-            // backward gotos continue the loop Block. We use the same Symbol
-            // for the goto's resolution? Currently we just have one sym per
-            // label. For BOTH this is ambiguous — for now treat as 'fwd'
-            // (only forward gotos; backward gotos use the loop sym we'd
-            // need to also expose). Punt on BOTH for now.
+            this.gotoLabelToSym.set(fwd, loopSym);  // backward gotos use this now
+            this.gotoLabelToKind.set(fwd, 'loop');
+            return {
+              body: [
+                new IR.Block(loc, sym, innerStmts),
+                new IR.Block(loc, loopSym, rest.body),
+              ],
+              nextIdx: rest.nextIdx,
+            };
           }
           return {
             body: [new IR.Block(loc, sym, innerStmts), ...rest.body],
             nextIdx: rest.nextIdx,
           };
+        }
+        if (s.kind === SK.LABEL && s.hasGotos &&
+            (s.labelKind === LK.LOOP || s.labelKind === LK.BOTH)) {
+          // Loop label encountered while a forward block is still open.
+          // Wrap rest of innerStmts in a Loop-kind Block.
+          const loopSym = Symbol(`label_${s.name}_loop`);
+          this.gotoLabelToSym.set(s, loopSym);
+          this.gotoLabelToKind.set(s, 'loop');
+          // Recurse into a sub-walk: collect statements after this label
+          // up until the next forward label or end.
+          const subInner = [];
+          i++;
+          while (i < stmts.length) {
+            const t = stmts[i];
+            if (t.kind === SK.LABEL && t === fwd) break; // outer fwd will handle
+            if (t.kind === SK.LABEL && !t.hasGotos) { i++; continue; }
+            if (t.kind === SK.LABEL) {
+              // Another label — punt; let the outer walk handle it
+              break;
+            }
+            subInner.push(this.translateStmt(t));
+            i++;
+          }
+          innerStmts.push(new IR.Block(loc, loopSym, subInner));
+          continue;
         }
         if (s.kind === SK.LABEL) { i++; continue; }
         innerStmts.push(this.translateStmt(s));
@@ -13860,6 +14070,15 @@ class Translator {
       offset += sz;
     };
     visit(fdef.body);
+
+    // Compound literals (function-scope) get frame slots too.
+    for (const cl of (fdef.compoundLiterals || [])) {
+      const sz = cl.type.size || 0;
+      const align = Math.max(cl.type.align || 1, 1);
+      offset = (offset + align - 1) & ~(align - 1);
+      this.compoundLitToFrameOffset.set(cl, offset);
+      offset += sz;
+    }
 
     // Round frame size up to 16 bytes so our SP stays aligned.
     if (offset > 0) {
@@ -14002,9 +14221,12 @@ class Translator {
       }
     }
 
+    const tags = this.excTagToIR.size > 0
+      ? [...this.excTagToIR.values()]
+      : undefined;
     return new IR.Program(
       functions, variables, memorySpec,
-      tables, elements, undefined, undefined,
+      tables, elements, tags, undefined,
       this.dataInit
     );
   }
@@ -14079,11 +14301,21 @@ class Translator {
       this._writeStaticInitList(buf, offset, u, initExpr);
       return;
     }
+    if (initExpr.kind === Types.ExprKind.COMPOUND_LITERAL) {
+      // (struct X){...} at file scope — recurse into the init list.
+      this._writeStaticInitList(buf, offset, u, initExpr.initList);
+      return;
+    }
     if (u.kind === Types.TypeKind.ARRAY && initExpr.kind === Types.ExprKind.STRING) {
       // String init for char array.
       const bytes = initExpr.value;
       const cap = u.size || bytes.length;
       for (let i = 0; i < Math.min(bytes.length, cap); i++) buf[offset + i] = bytes[i];
+      return;
+    }
+    // Aggregate/array types without an INIT_LIST: nothing else makes sense
+    // beyond zero-init (already handled by buf being all zeros).
+    if (u.kind === Types.TypeKind.ARRAY || u.kind === Types.TypeKind.TAG) {
       return;
     }
     // Scalar: try to compile-time evaluate as a number.
