@@ -14936,7 +14936,7 @@ class Translator {
       return false;
     }
     const init = new IR.Literal(loc, irT, initValue);
-    const isMutable = !(def.type.isConst && def.type.isConst());
+    const isMutable = !def.type.isConst;
     const g = new IR.GlobalVariable(loc, null, null, isMutable, def.name, irT, init);
     this.cGlobalToIR.set(def, g);
     return true;
