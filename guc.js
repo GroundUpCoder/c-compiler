@@ -312,9 +312,20 @@ const T = (() => {
             this.parent = parent;
         }
         toString() {
-            const inner = this.fields.map(f =>
-                `${f.mutable ? 'mut ' : ''}${f.packedKind || f.type}`).join(', ');
-            return `struct{${inner}}`;
+            // Recursive struct types (e.g. linked list with Node.next:
+            // ref Node?) would loop here — RefType.toString includes its
+            // heapType.toString which lands back at us. Use a per-call
+            // recursion guard: if we're already inside a toString for
+            // this struct, return a placeholder.
+            if (StructType._printing.has(this)) return 'struct{…}';
+            StructType._printing.add(this);
+            try {
+                const inner = this.fields.map(f =>
+                    `${f.mutable ? 'mut ' : ''}${f.packedKind || f.type}`).join(', ');
+                return `struct{${inner}}`;
+            } finally {
+                StructType._printing.delete(this);
+            }
         }
         isAssignableTo(other, assumed) {
             if (this === other) return true;
@@ -357,7 +368,13 @@ const T = (() => {
             this.packedKind = packedKind;
         }
         toString() {
-            return `array(${this.mutable ? 'mut ' : ''}${this.packedKind || this.elementType})`;
+            if (ArrayType._printing.has(this)) return 'array(…)';
+            ArrayType._printing.add(this);
+            try {
+                return `array(${this.mutable ? 'mut ' : ''}${this.packedKind || this.elementType})`;
+            } finally {
+                ArrayType._printing.delete(this);
+            }
         }
         isAssignableTo(other, assumed) {
             if (this === other) return true;
@@ -379,6 +396,12 @@ const T = (() => {
     }
 
     // RefType: `(ref null? <heap>)`. heapType is a HeapType, StructType,
+    // Per-class recursion guards used by toString() on cyclic types.
+    // (Defined here, after both classes, so the static set objects exist
+    // before any instance method runs.)
+    StructType._printing = new Set();
+    ArrayType._printing = new Set();
+
     // ArrayType, or FunctionType (for func refs). Two RefTypes are
     // assignable iff the source's nullability is no stricter than the
     // target's (non-null assignable to nullable, not the other way) AND
