@@ -66,20 +66,61 @@ helpers** that need no abstraction:
    accept a `policy` argument with four address-leaf callbacks:
    `getStringAddr`, `getGlobalAddr`, `getFuncAddr`, `getCompoundLitAddr`.
    The default backend supplies a policy that returns concrete numbers
-   (translation-time-known addresses). The GUC backend uses the exported
-   `NULL_ADDR_POLICY` — addresses can't be numbers in the GUC backend
-   (they're deferred IR tokens), so address leaves return null and only
-   the integer / float / sizeof / arithmetic / cast / ternary subset
-   evaluates. Address-bearing static initializers continue to flow
-   through `_translateStaticInitValue` (deferred IR).
+   (translation-time-known addresses). The GUC backend originally used
+   `NULL_ADDR_POLICY` (every address leaf returns null) and later upgraded
+   to a per-Translator pseudo-tag policy: every storage identity gets a
+   unique numeric tag, so address ARITHMETIC that produces an integer
+   (offsetof, ptrdiff, address comparisons) computes correctly while
+   address-typed results fall through to the deferred-IR path.
 3. ✅ Replaced GUC's anemic `_evalConstInit` with a thin wrapper around
-   the shared evaluator. **GUC parity 256 → 263 (+7), 0 regressions.**
+   the shared evaluator.
+
+### Additional fixes layered on Phase A in this branch
+
+- BigInt → IR.Literal range normalization (so `~0U` / inverted bitfield
+  masks fit signed slots).
+- Static locals (collect into `_collectGlobals` like default's
+  `staticLocals` walk).
+- File-scope compound literals (one MutableBytes per literal, integrated
+  with the deferred-IR address path).
+- Bitfield mask sign-extension (re-uses normalize helper).
+- ENUM tag in `_loadOp`/`_storeOp`; ENUM_CONST identifier translates to
+  literal value.
+- Init-list scalar element conversion (e.g. `double a[2] = {42, 23}`
+  no longer fails f64.store validation).
+- Missing `main` error matches default backend's behavior.
+- Boolean `isConst` property access fix.
+- i32-narrow i64 indices in pointer arithmetic (SUBSCRIPT, ADD/SUB,
+  compound assignment).
+
+**GUC parity: 256 → 287 (+31). Default backend: 420/420 (no regression).**
 
 Phase B (later): factor out the static init-list traversal and bitfield
 algorithms.
 
 Phase C (much later): factor numeric conversion / compound-assignment
 decision logic.
+
+### Remaining failures (133 tests) — what's blocking them
+
+- **~20 structs**: full struct ABI (hidden return pointer, copy-on-entry
+  by-value parameters, struct-as-vararg, large struct copies). Per
+  inventory, this is in the "GUC has CLEANER abstraction; do NOT share"
+  bucket — the GUC frontend needs its own implementation built on
+  `IR.MemoryCopy` + StackSlot, NOT the default backend's stream-emitter
+  hidden-pointer pattern. Substantial separate work.
+- **Stack slot lifetime / coloring bugs**: many tests with the pattern
+  `T1 a = {...}; T2 b = {...}; printf(...)` show `a` and `b` aliasing.
+  This is a codegen-side coalescing issue in the GUC `_emitInitListStores`
+  / StackSlot lifetime tracking, not a sharing question.
+- **Compound-assignment integer promotion**: `unsigned char x; x /= y;`
+  needs to promote both to int (signed) before the op. Default backend
+  does this in `emitAssignment` via `usualArithmeticConversions`; GUC
+  picks signedness from the LHS IR type, giving `div_u` instead of
+  `div_s`. Needs an IR-level reinterpret-as-signed mechanism (or a
+  whole compound-assignment lowering).
+- **Goto + switch lowering edge cases**, **scanf / wchar / time stdlib
+  runtime bits**, and various smaller per-test issues.
 
 Each phase is self-contained — committable independently. No phase
 should regress parity.
