@@ -10785,30 +10785,107 @@ class CodeGenerator {
           const calleeType = expr.callee.type.decay();
           const funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
           const callRetType = funcType.getReturnType();
-          const structRet = isStructOrUnion(callRetType);
-          let structRetAllocSize = 0;
-          this.callNesting++;
-          if (structRet) {
-            const retSize = this.sizeOf(callRetType);
-            structRetAllocSize = (retSize + 15) & ~15;
+          const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
+          if (funcType.isVarArg) {
+            // Variadic indirect call: same frame-based ABI as direct vararg calls,
+            // but ending with call_indirect instead of call.
+            const paramTypes = funcType.getParamTypes();
+            const numFixed = paramTypes.length;
+            const varRetType = callRetType;
+            const varStructRet = isStructOrUnion(varRetType);
+            const retSlotSize = (varRetType === Types.TVOID) ? 0 : vaSlotSize(varRetType);
+            let blockSize = retSlotSize;
+            const argOffsets = [];
+            for (let i = 0; i < expr.arguments.length; i++) {
+              argOffsets.push(blockSize);
+              let argType = i < numFixed ? paramTypes[i] : expr.arguments[i].type.decay();
+              if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
+              blockSize += vaSlotSize(argType);
+            }
+            blockSize = (blockSize + 7) & ~7;
+            this.callNesting++;
             this.body.globalGet(this.stackPointerGlobalIdx);
-            this.body.i32Const(structRetAllocSize);
+            this.body.i32Const(blockSize);
             this.body.aop(WT_I32, ALU.OP_SUB);
             this.body.globalSet(this.stackPointerGlobalIdx);
+            this.pushLocalScope();
+            const argBlockBase = this.allocLocal(WT_I32);
             this.body.globalGet(this.stackPointerGlobalIdx);
-          }
-          for (let i = 0; i < expr.arguments.length; i++) this.emitExpr(expr.arguments[i]);
-          this.emitExpr(expr.callee);
-          const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
-          this.body.callIndirect(typeId);
-          if (structRet) this.structRetDeferred += structRetAllocSize;
-          this.callNesting--;
-          if (this.callNesting === 0 && this.structRetDeferred > 0) {
-            this.body.globalGet(this.stackPointerGlobalIdx);
-            this.body.i32Const(this.structRetDeferred);
-            this.body.aop(WT_I32, ALU.OP_ADD);
-            this.body.globalSet(this.stackPointerGlobalIdx);
-            this.structRetDeferred = 0;
+            this.body.localSet(argBlockBase);
+            const deferredAtVaAlloc = this.structRetDeferred;
+            for (let i = 0; i < expr.arguments.length; i++) {
+              let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type.decay();
+              if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
+              this.body.localGet(argBlockBase);
+              if (argOffsets[i] > 0) { this.body.i32Const(argOffsets[i]); this.body.aop(WT_I32, ALU.OP_ADD); }
+              if (isStructOrUnion(storeType)) {
+                this.emitExpr(expr.arguments[i]);
+                this.body.i32Const(this.sizeOf(storeType));
+                this.body.memoryCopy();
+              } else {
+                this.emitExpr(expr.arguments[i]);
+                this.emitVaArgStore(storeType);
+              }
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              const deferredDelta = this.structRetDeferred - deferredAtVaAlloc;
+              if (deferredDelta > 0) { this.body.i32Const(deferredDelta); this.body.aop(WT_I32, ALU.OP_ADD); }
+              this.body.localSet(argBlockBase);
+            }
+            this.body.localGet(argBlockBase);
+            this.emitExpr(expr.callee);
+            this.body.callIndirect(typeId);
+            if (varStructRet) {
+              this.body.localGet(argBlockBase);
+              this.structRetDeferred += blockSize;
+            } else if (varRetType !== Types.TVOID) {
+              this.body.localGet(argBlockBase);
+              this.emitVaArgLoad(varRetType);
+              this.body.localGet(argBlockBase);
+              this.body.i32Const(blockSize);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+            } else {
+              this.body.localGet(argBlockBase);
+              this.body.i32Const(blockSize);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.body.i32Const(0);
+            }
+            this.popLocalScope();
+            this.callNesting--;
+            if (this.callNesting === 0 && this.structRetDeferred > 0) {
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              this.body.i32Const(this.structRetDeferred);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.structRetDeferred = 0;
+            }
+          } else {
+            // Non-vararg indirect call
+            const structRet = isStructOrUnion(callRetType);
+            let structRetAllocSize = 0;
+            this.callNesting++;
+            if (structRet) {
+              const retSize = this.sizeOf(callRetType);
+              structRetAllocSize = (retSize + 15) & ~15;
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              this.body.i32Const(structRetAllocSize);
+              this.body.aop(WT_I32, ALU.OP_SUB);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.body.globalGet(this.stackPointerGlobalIdx);
+            }
+            for (let i = 0; i < expr.arguments.length; i++) this.emitExpr(expr.arguments[i]);
+            this.emitExpr(expr.callee);
+            this.body.callIndirect(typeId);
+            if (structRet) this.structRetDeferred += structRetAllocSize;
+            this.callNesting--;
+            if (this.callNesting === 0 && this.structRetDeferred > 0) {
+              this.body.globalGet(this.stackPointerGlobalIdx);
+              this.body.i32Const(this.structRetDeferred);
+              this.body.aop(WT_I32, ALU.OP_ADD);
+              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.structRetDeferred = 0;
+            }
           }
         }
         break;
