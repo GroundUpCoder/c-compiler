@@ -12126,6 +12126,10 @@ class Translator {
       case Types.TypeKind.FLOAT: return 'f32.load';
       case Types.TypeKind.DOUBLE:
       case Types.TypeKind.LDOUBLE:return 'f64.load';
+      case Types.TypeKind.TAG:
+        // ENUM: int-sized; matches default backend's cTypeToIR mapping.
+        if (u.tagKind === Types.TagKind.ENUM) return 'i32.load';
+        nyi(`load type tag ${u.tagKind}`);
       default: nyi(`load type ${u.kind}`);
     }
   }
@@ -12150,6 +12154,9 @@ class Translator {
       case Types.TypeKind.DOUBLE:
       case Types.TypeKind.LDOUBLE:return 'f64.store';
       case Types.TypeKind.AUTO: return 'i32.store'; // C23 auto fallback
+      case Types.TypeKind.TAG:
+        if (u.tagKind === Types.TagKind.ENUM) return 'i32.store';
+        nyi(`store type tag ${u.tagKind}`);
       default: nyi(`store type ${u.kind}`);
     }
   }
@@ -12179,6 +12186,12 @@ class Translator {
         return this.emitConversion(loc, fromIR, toIR, inner, expr);
       }
       case Types.ExprKind.IDENT: {
+        // Enumeration constants are i32 literals — same as the parser's
+        // EIdent typing of ENUM_CONST decls (Types.TINT). Resolve before
+        // falling through to the variable / function paths.
+        if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+          return new IR.Literal(loc, T.I32, BigInt(expr.decl.value));
+        }
         const local = this.cVarToLocal.get(expr.decl);
         if (local) return new IR.GetVars(loc, [local]);
         // MEMORY-class local: load (for scalars) or address (for arrays/structs).
