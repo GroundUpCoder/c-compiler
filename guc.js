@@ -665,6 +665,7 @@ const OPS = (() => {
 
     return Object.freeze({ BINOPS, UNARYOPS, CONVERSIONS, LOADS, STORES });
 })();
+
 const IR = (() => {
 
     class Program {
@@ -915,6 +916,19 @@ const IR = (() => {
             return new TreeBag(null, ...this.children.map(c => c.referencedFunctions));
         }
 
+        // Re-construct this node with replacement children in the same order
+        // as `this.children`. Used by `walkIR` to rebuild a subtree when any
+        // descendant changes; identity-preserving callers skip this when no
+        // child actually changed. Re-runs the constructor (and thus
+        // `_finalize`), so validation / bubble-up bags are recomputed.
+        // Leaf nodes (children.length === 0) never have this called on them
+        // and don't need to override; every non-leaf subclass must.
+        _withChildren(newChildren) {
+            throw new Error(
+                `${this.constructor.name} must implement _withChildren ` +
+                `(node has ${this.children.length} children)`);
+        }
+
         // Union of `Map<label, TreeBag<X>>` across children, indexed by label.
         static _joinLabelMaps(children, getMap) {
             const out = new Map();
@@ -1012,6 +1026,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren(newChildren) {
+            return new SetVars(this.loc, this.variables, newChildren);
+        }
     }
 
     // TeeVars: assign and leave the values on the stack. Equivalent in
@@ -1052,6 +1069,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren(newChildren) {
+            return new TeeVars(this.loc, this.variables, newChildren[0]);
+        }
     }
 
     class FunctionCall extends Expression {
@@ -1079,6 +1099,9 @@ const IR = (() => {
             this.args = args;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren(newChildren) {
+            return new FunctionCall(this.loc, this.func, newChildren);
         }
     }
 
@@ -1137,6 +1160,11 @@ const IR = (() => {
                 ? new TreeBag(new Set([this.funcType]), inherited)
                 : inherited;
         }
+        _withChildren(newChildren) {
+            const args = newChildren.slice(0, this.args.length);
+            const indexExpr = newChildren[this.args.length];
+            return new CallIndirect(this.loc, this.table, this.funcType, indexExpr, args);
+        }
     }
 
     // RefFunc: produces a (ref <funcType>) for the given function. The
@@ -1170,6 +1198,9 @@ const IR = (() => {
             this.rhs = rhs;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([lhs, rhs]) {
+            return new BinOp(this.loc, this.op, lhs, rhs);
         }
 
         // One pass: returns the result types if valid, plus any user-error
@@ -1223,6 +1254,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([operand]) {
+            return new UnaryOp(this.loc, this.op, operand);
+        }
 
         static _validate(op, operand) {
             // Same null-on-error policy as BinOp — see that comment.
@@ -1260,6 +1294,9 @@ const IR = (() => {
             this.source = source;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([source]) {
+            return new Convert(this.loc, this.op, source);
         }
 
         static _validate(op, source) {
@@ -1317,6 +1354,10 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([addr]) {
+            return new Load(this.loc, this.op, addr,
+                { offset: this.offset, align: this.align });
+        }
     }
 
     // Store: write a value to linear memory. `op` is the wasm op name
@@ -1363,6 +1404,10 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([addr, value]) {
+            return new Store(this.loc, this.op, addr, value,
+                { offset: this.offset, align: this.align });
+        }
     }
 
     // MemorySize: returns the current size of the default memory in pages.
@@ -1390,6 +1435,9 @@ const IR = (() => {
             this.delta = delta;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([delta]) {
+            return new MemoryGrow(this.loc, delta);
         }
     }
 
@@ -1423,6 +1471,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([dst, src, n]) {
+            return new MemoryCopy(this.loc, dst, src, n);
+        }
     }
 
     // MemoryFill: memset on linear memory. Writes `n` copies of the low byte
@@ -1438,6 +1489,9 @@ const IR = (() => {
             this.n = n;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([dst, val, n]) {
+            return new MemoryFill(this.loc, dst, val, n);
         }
     }
 
@@ -1521,6 +1575,9 @@ const IR = (() => {
                 ? new TreeBag(new Set([this.structType]), inherited)
                 : inherited;
         }
+        _withChildren(newChildren) {
+            return new StructNew(this.loc, this.structType, newChildren);
+        }
     }
 
     class StructGet extends Expression {
@@ -1572,6 +1629,9 @@ const IR = (() => {
                 ? new TreeBag(new Set([this.structType]), inherited)
                 : inherited;
         }
+        _withChildren([ref]) {
+            return new StructGet(this.loc, this.structType, this.fieldIdx, ref, this.signed);
+        }
     }
 
     class StructSet extends Expression {
@@ -1621,6 +1681,9 @@ const IR = (() => {
             return this.structType
                 ? new TreeBag(new Set([this.structType]), inherited)
                 : inherited;
+        }
+        _withChildren([ref, value]) {
+            return new StructSet(this.loc, this.structType, this.fieldIdx, ref, value);
         }
     }
 
@@ -1714,6 +1777,9 @@ const IR = (() => {
                 ? new TreeBag(new Set([this.arrayType]), inherited)
                 : inherited;
         }
+        _withChildren([init, length]) {
+            return new ArrayNew(this.loc, this.arrayType, init, length);
+        }
     }
 
     class ArrayNewDefault extends Expression {
@@ -1747,6 +1813,9 @@ const IR = (() => {
             return this.arrayType
                 ? new TreeBag(new Set([this.arrayType]), inherited)
                 : inherited;
+        }
+        _withChildren([length]) {
+            return new ArrayNewDefault(this.loc, this.arrayType, length);
         }
     }
 
@@ -1787,6 +1856,9 @@ const IR = (() => {
             return this.arrayType
                 ? new TreeBag(new Set([this.arrayType]), inherited)
                 : inherited;
+        }
+        _withChildren(newChildren) {
+            return new ArrayNewFixed(this.loc, this.arrayType, newChildren);
         }
     }
 
@@ -1831,6 +1903,9 @@ const IR = (() => {
             return this.arrayType
                 ? new TreeBag(new Set([this.arrayType]), inherited)
                 : inherited;
+        }
+        _withChildren([ref, index]) {
+            return new ArrayGet(this.loc, this.arrayType, ref, index, this.signed);
         }
     }
 
@@ -1879,6 +1954,9 @@ const IR = (() => {
                 ? new TreeBag(new Set([this.arrayType]), inherited)
                 : inherited;
         }
+        _withChildren([ref, index, value]) {
+            return new ArraySet(this.loc, this.arrayType, ref, index, value);
+        }
     }
 
     class ArrayLen extends Expression {
@@ -1895,6 +1973,9 @@ const IR = (() => {
             this.ref = ref;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([ref]) {
+            return new ArrayLen(this.loc, ref);
         }
     }
 
@@ -1960,6 +2041,10 @@ const IR = (() => {
             if (this.srcType instanceof T.ArrayType) set.add(this.srcType);
             return new TreeBag(set, inherited);
         }
+        _withChildren([dst, dstOffset, src, srcOffset, n]) {
+            return new ArrayCopy(this.loc, this.dstType, this.srcType,
+                dst, dstOffset, src, srcOffset, n);
+        }
     }
 
     class ArrayFill extends Expression {
@@ -2012,6 +2097,9 @@ const IR = (() => {
                 ? new TreeBag(new Set([this.arrayType]), inherited)
                 : inherited;
         }
+        _withChildren([ref, offset, val, n]) {
+            return new ArrayFill(this.loc, this.arrayType, ref, offset, val, n);
+        }
     }
 
     // any.convert_extern: takes (ref null? extern), produces (ref null? any).
@@ -2040,6 +2128,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([ref]) {
+            return new AnyConvertExtern(this.loc, ref);
+        }
     }
 
     // extern.convert_any: takes (ref null? any), produces (ref null? extern).
@@ -2066,6 +2157,9 @@ const IR = (() => {
             this.ref = ref;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([ref]) {
+            return new ExternConvertAny(this.loc, ref);
         }
     }
 
@@ -2103,6 +2197,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([ref]) {
+            return new RefIsNull(this.loc, ref);
+        }
     }
 
     // RefAsNonNull: takes (ref null T) and produces (ref T), trapping at
@@ -2122,6 +2219,9 @@ const IR = (() => {
             this.ref = ref;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([ref]) {
+            return new RefAsNonNull(this.loc, ref);
         }
     }
 
@@ -2159,6 +2259,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([refA, refB]) {
+            return new RefEq(this.loc, refA, refB);
+        }
     }
 
     class RefCast extends Expression {
@@ -2191,6 +2294,9 @@ const IR = (() => {
             }
             return inherited;
         }
+        _withChildren([ref]) {
+            return new RefCast(this.loc, ref, this.targetRefType);
+        }
     }
 
     class RefTest extends Expression {
@@ -2221,6 +2327,9 @@ const IR = (() => {
             }
             return inherited;
         }
+        _withChildren([ref]) {
+            return new RefTest(this.loc, ref, this.targetRefType);
+        }
     }
 
     // Return: divergent. Pops args off the stack as the function's return
@@ -2232,6 +2341,9 @@ const IR = (() => {
             super(loc, null, args);
             this.args = args;
             this._finalize();
+        }
+        _withChildren(newChildren) {
+            return new Return(this.loc, newChildren);
         }
     }
 
@@ -2253,6 +2365,9 @@ const IR = (() => {
             super(loc, source.types === null ? null : [], [source]);
             this.source = source;
             this._finalize();
+        }
+        _withChildren([source]) {
+            return new Drop(this.loc, source);
         }
     }
 
@@ -2288,6 +2403,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren([condition, ifTrue, ifFalse]) {
+            return new Select(this.loc, condition, ifTrue, ifFalse);
+        }
     }
 
     class Continue extends Expression {
@@ -2316,6 +2434,10 @@ const IR = (() => {
             this.label = label;
             this.args = args; // Array of Expression
             this._finalize();
+        }
+
+        _withChildren(newChildren) {
+            return new Break(this.loc, this.label, newChildren);
         }
 
         _computeBreakMap() {
@@ -2356,6 +2478,12 @@ const IR = (() => {
             this.args = args;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+
+        _withChildren(newChildren) {
+            const args = newChildren.slice(0, this.args.length);
+            const condition = newChildren[this.args.length];
+            return new BrIf(this.loc, this.label, condition, args);
         }
 
         _computeBreakMap() {
@@ -2404,6 +2532,9 @@ const IR = (() => {
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
+        _withChildren(newChildren) {
+            return new Throw(this.loc, this.tag, newChildren);
+        }
     }
 
     // ThrowRef: divergent. Pops an exnref and rethrows it via wasm's
@@ -2424,6 +2555,9 @@ const IR = (() => {
             this.exn = exn;
             for (const msg of errors) reportError(loc, msg);
             this._finalize();
+        }
+        _withChildren([exn]) {
+            return new ThrowRef(this.loc, exn);
         }
     }
 
@@ -2525,6 +2659,9 @@ const IR = (() => {
             }
             return inherited;
         }
+        _withChildren(newChildren) {
+            return new TryTable(this.loc, this.label, newChildren, this.catches);
+        }
     }
 
     // BrTable: divergent multi-target branch. Pops args + an i32 index,
@@ -2568,6 +2705,12 @@ const IR = (() => {
             return out;
         }
 
+        _withChildren(newChildren) {
+            const args = newChildren.slice(0, this.args.length);
+            const indexExpr = newChildren[this.args.length];
+            return new BrTable(this.loc, indexExpr, this.labels, this.defaultLabel, args);
+        }
+
         // Same shape as Break — see comment there.
         get argsTypes() {
             if (this.args.some(a => a.types === null)) return null;
@@ -2584,6 +2727,9 @@ const IR = (() => {
             super(loc, exprs.flatMap(e => e.types), exprs);
             this.exprs = exprs;
             this._finalize();
+        }
+        _withChildren(newChildren) {
+            return new MultiValue(this.loc, newChildren);
         }
     }
 
@@ -2738,6 +2884,10 @@ const IR = (() => {
             }
             return merged || _EMPTY_TREE_BAG;
         }
+
+        _withChildren(newChildren) {
+            return new Block(this.loc, this.label, newChildren);
+        }
     }
 
     // IfElse: an unlabeled `if [<type>] then else end`. Wasm DOES allow `br`
@@ -2814,6 +2964,31 @@ const IR = (() => {
             }
             return inherited;
         }
+        _withChildren(newChildren) {
+            // Preserve sub-array identity: if a branch's children all
+            // round-tripped unchanged, reuse the original array so callers
+            // can still detect "this branch wasn't touched" via `===`.
+            const condition = newChildren[0];
+            const thenLen = this.thenBody.length;
+            const thenStart = 1, elseStart = 1 + thenLen;
+            let thenChanged = false;
+            for (let i = 0; i < thenLen; i++) {
+                if (newChildren[thenStart + i] !== this.thenBody[i]) {
+                    thenChanged = true; break;
+                }
+            }
+            let elseChanged = false;
+            for (let i = 0; i < this.elseBody.length; i++) {
+                if (newChildren[elseStart + i] !== this.elseBody[i]) {
+                    elseChanged = true; break;
+                }
+            }
+            const thenBody = thenChanged
+                ? newChildren.slice(thenStart, elseStart) : this.thenBody;
+            const elseBody = elseChanged
+                ? newChildren.slice(elseStart) : this.elseBody;
+            return new IfElse(this.loc, condition, thenBody, elseBody);
+        }
     }
 
     // TryFinally: a structured try/finally. The `body` Expression executes;
@@ -2836,6 +3011,9 @@ const IR = (() => {
             this.body = body;
             this.finallyBody = finallyBody;
             this._finalize();
+        }
+        _withChildren([body, finallyBody]) {
+            return new TryFinally(this.loc, body, finallyBody);
         }
     }
 
@@ -2869,286 +3047,17 @@ const IR = (() => {
         const replaced = fn(node);
         if (replaced !== undefined) return replaced;
 
-        // Walk an array of expressions; return the original array if
-        // nothing changed (so parents can detect "no edits in this list").
-        const walkArr = (arr) => {
-            if (arr.length === 0) return arr;
-            let changed = false;
-            const out = new Array(arr.length);
-            for (let i = 0; i < arr.length; i++) {
-                const w = walkIR(arr[i], fn);
-                if (w !== arr[i]) changed = true;
-                out[i] = w;
-            }
-            return changed ? out : arr;
-        };
+        // Leaves (no expression children) round-trip unchanged.
+        if (node.children.length === 0) return node;
 
-        // Leaves: no expression children. Order matters — StringLiteral
-        // extends Literal, so the Literal check covers both.
-        if (node instanceof Literal) return node;
-        if (node instanceof BytesLiteral) return node;
-        if (node instanceof GetVars) return node;
-        if (node instanceof MemorySize) return node;
-        if (node instanceof RefNull) return node;
-        if (node instanceof RefFunc) return node;
-        if (node instanceof Unreachable) return node;
-        if (node instanceof StructNewDefault) return node;
-        if (node instanceof Continue) return node;
-
-        // Single-child expressions.
-        if (node instanceof UnaryOp) {
-            const operand = walkIR(node.operand, fn);
-            return operand === node.operand ? node
-                : new UnaryOp(node.loc, node.op, operand);
+        let changed = false;
+        const newKids = new Array(node.children.length);
+        for (let i = 0; i < node.children.length; i++) {
+            const w = walkIR(node.children[i], fn);
+            if (w !== node.children[i]) changed = true;
+            newKids[i] = w;
         }
-        if (node instanceof Convert) {
-            const source = walkIR(node.source, fn);
-            return source === node.source ? node
-                : new Convert(node.loc, node.op, source);
-        }
-        if (node instanceof Load) {
-            const addr = walkIR(node.addr, fn);
-            return addr === node.addr ? node
-                : new Load(node.loc, node.op, addr,
-                    { offset: node.offset, align: node.align });
-        }
-        if (node instanceof MemoryGrow) {
-            const delta = walkIR(node.delta, fn);
-            return delta === node.delta ? node
-                : new MemoryGrow(node.loc, delta);
-        }
-        if (node instanceof Drop) {
-            const source = walkIR(node.source, fn);
-            return source === node.source ? node : new Drop(node.loc, source);
-        }
-        if (node instanceof ArrayLen) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node : new ArrayLen(node.loc, ref);
-        }
-        if (node instanceof RefIsNull) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node : new RefIsNull(node.loc, ref);
-        }
-        if (node instanceof RefAsNonNull) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node : new RefAsNonNull(node.loc, ref);
-        }
-        if (node instanceof AnyConvertExtern) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node : new AnyConvertExtern(node.loc, ref);
-        }
-        if (node instanceof ExternConvertAny) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node : new ExternConvertAny(node.loc, ref);
-        }
-        if (node instanceof ArrayNewDefault) {
-            const length = walkIR(node.length, fn);
-            return length === node.length ? node
-                : new ArrayNewDefault(node.loc, node.arrayType, length);
-        }
-        if (node instanceof StructGet) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node
-                : new StructGet(node.loc, node.structType, node.fieldIdx, ref, node.signed);
-        }
-        if (node instanceof RefCast) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node
-                : new RefCast(node.loc, ref, node.targetRefType);
-        }
-        if (node instanceof RefTest) {
-            const ref = walkIR(node.ref, fn);
-            return ref === node.ref ? node
-                : new RefTest(node.loc, ref, node.targetRefType);
-        }
-
-        // Two-child.
-        if (node instanceof BinOp) {
-            const lhs = walkIR(node.lhs, fn);
-            const rhs = walkIR(node.rhs, fn);
-            return lhs === node.lhs && rhs === node.rhs ? node
-                : new BinOp(node.loc, node.op, lhs, rhs);
-        }
-        if (node instanceof RefEq) {
-            const refA = walkIR(node.refA, fn);
-            const refB = walkIR(node.refB, fn);
-            return refA === node.refA && refB === node.refB ? node
-                : new RefEq(node.loc, refA, refB);
-        }
-        if (node instanceof Store) {
-            const addr = walkIR(node.addr, fn);
-            const value = walkIR(node.value, fn);
-            return addr === node.addr && value === node.value ? node
-                : new Store(node.loc, node.op, addr, value,
-                    { offset: node.offset, align: node.align });
-        }
-        if (node instanceof ArrayNew) {
-            const init = walkIR(node.init, fn);
-            const length = walkIR(node.length, fn);
-            return init === node.init && length === node.length ? node
-                : new ArrayNew(node.loc, node.arrayType, init, length);
-        }
-        if (node instanceof ArrayGet) {
-            const ref = walkIR(node.ref, fn);
-            const index = walkIR(node.index, fn);
-            return ref === node.ref && index === node.index ? node
-                : new ArrayGet(node.loc, node.arrayType, ref, index, node.signed);
-        }
-
-        // Three-child.
-        if (node instanceof Select) {
-            const c = walkIR(node.condition, fn);
-            const t = walkIR(node.ifTrue, fn);
-            const f = walkIR(node.ifFalse, fn);
-            return c === node.condition && t === node.ifTrue && f === node.ifFalse
-                ? node : new Select(node.loc, c, t, f);
-        }
-        if (node instanceof MemoryCopy) {
-            const dst = walkIR(node.dst, fn);
-            const src = walkIR(node.src, fn);
-            const n = walkIR(node.n, fn);
-            return dst === node.dst && src === node.src && n === node.n
-                ? node : new MemoryCopy(node.loc, dst, src, n);
-        }
-        if (node instanceof MemoryFill) {
-            const dst = walkIR(node.dst, fn);
-            const val = walkIR(node.val, fn);
-            const n = walkIR(node.n, fn);
-            return dst === node.dst && val === node.val && n === node.n
-                ? node : new MemoryFill(node.loc, dst, val, n);
-        }
-        if (node instanceof ArraySet) {
-            const ref = walkIR(node.ref, fn);
-            const index = walkIR(node.index, fn);
-            const value = walkIR(node.value, fn);
-            return ref === node.ref && index === node.index && value === node.value
-                ? node : new ArraySet(node.loc, node.arrayType, ref, index, value);
-        }
-        if (node instanceof StructSet) {
-            const ref = walkIR(node.ref, fn);
-            const value = walkIR(node.value, fn);
-            return ref === node.ref && value === node.value ? node
-                : new StructSet(node.loc, node.structType, node.fieldIdx, ref, value);
-        }
-
-        // Four-child.
-        if (node instanceof ArrayFill) {
-            const ref = walkIR(node.ref, fn);
-            const offset = walkIR(node.offset, fn);
-            const val = walkIR(node.val, fn);
-            const n = walkIR(node.n, fn);
-            return ref === node.ref && offset === node.offset
-                && val === node.val && n === node.n ? node
-                : new ArrayFill(node.loc, node.arrayType, ref, offset, val, n);
-        }
-
-        // Five-child.
-        if (node instanceof ArrayCopy) {
-            const dst = walkIR(node.dst, fn);
-            const dstOffset = walkIR(node.dstOffset, fn);
-            const src = walkIR(node.src, fn);
-            const srcOffset = walkIR(node.srcOffset, fn);
-            const n = walkIR(node.n, fn);
-            return dst === node.dst && dstOffset === node.dstOffset
-                && src === node.src && srcOffset === node.srcOffset && n === node.n
-                ? node : new ArrayCopy(node.loc, node.dstType, node.srcType,
-                    dst, dstOffset, src, srcOffset, n);
-        }
-
-        // Variadic-args expressions.
-        if (node instanceof Return) {
-            const args = walkArr(node.args);
-            return args === node.args ? node : new Return(node.loc, args);
-        }
-        if (node instanceof Throw) {
-            const args = walkArr(node.args);
-            return args === node.args ? node : new Throw(node.loc, node.tag, args);
-        }
-        if (node instanceof ThrowRef) {
-            const exn = walkIR(node.exn, fn);
-            return exn === node.exn ? node : new ThrowRef(node.loc, exn);
-        }
-        if (node instanceof TryFinally) {
-            const body = walkIR(node.body, fn);
-            const finallyBody = walkIR(node.finallyBody, fn);
-            return body === node.body && finallyBody === node.finallyBody ? node
-                : new TryFinally(node.loc, body, finallyBody);
-        }
-        if (node instanceof MultiValue) {
-            const exprs = walkArr(node.exprs);
-            return exprs === node.exprs ? node : new MultiValue(node.loc, exprs);
-        }
-        if (node instanceof StructNew) {
-            const fieldValues = walkArr(node.fieldValues);
-            return fieldValues === node.fieldValues ? node
-                : new StructNew(node.loc, node.structType, fieldValues);
-        }
-        if (node instanceof ArrayNewFixed) {
-            const values = walkArr(node.values);
-            return values === node.values ? node
-                : new ArrayNewFixed(node.loc, node.arrayType, values);
-        }
-        if (node instanceof FunctionCall) {
-            const args = walkArr(node.args);
-            return args === node.args ? node
-                : new FunctionCall(node.loc, node.func, args);
-        }
-
-        // Variadic + extra.
-        if (node instanceof CallIndirect) {
-            const args = walkArr(node.args);
-            const indexExpr = walkIR(node.indexExpr, fn);
-            return args === node.args && indexExpr === node.indexExpr ? node
-                : new CallIndirect(node.loc, node.table, node.funcType, indexExpr, args);
-        }
-        if (node instanceof Break) {
-            const args = walkArr(node.args);
-            return args === node.args ? node : new Break(node.loc, node.label, args);
-        }
-        if (node instanceof BrIf) {
-            const args = walkArr(node.args);
-            const condition = walkIR(node.condition, fn);
-            return args === node.args && condition === node.condition ? node
-                : new BrIf(node.loc, node.label, condition, args);
-        }
-        if (node instanceof BrTable) {
-            const args = walkArr(node.args);
-            const indexExpr = walkIR(node.indexExpr, fn);
-            return args === node.args && indexExpr === node.indexExpr ? node
-                : new BrTable(node.loc, indexExpr, node.labels, node.defaultLabel, args);
-        }
-
-        // Setters.
-        if (node instanceof SetVars) {
-            const values = walkArr(node.values);
-            return values === node.values ? node
-                : new SetVars(node.loc, node.variables, values);
-        }
-        if (node instanceof TeeVars) {
-            const value = walkIR(node.value, fn);
-            return value === node.value ? node
-                : new TeeVars(node.loc, node.variables, value);
-        }
-
-        // Body-bearing.
-        if (node instanceof Block) {
-            const body = walkArr(node.body);
-            return body === node.body ? node : new Block(node.loc, node.label, body);
-        }
-        if (node instanceof IfElse) {
-            const condition = walkIR(node.condition, fn);
-            const thenBody = walkArr(node.thenBody);
-            const elseBody = walkArr(node.elseBody);
-            return condition === node.condition && thenBody === node.thenBody && elseBody === node.elseBody
-                ? node : new IfElse(node.loc, condition, thenBody, elseBody);
-        }
-        if (node instanceof TryTable) {
-            const body = walkArr(node.body);
-            return body === node.body ? node
-                : new TryTable(node.loc, node.label, body, node.catches);
-        }
-
-        throw new Error(`walkIR: unhandled IR node type: ${node.constructor.name}`);
+        return changed ? node._withChildren(newKids) : node;
     }
 
     // ===================================================================
