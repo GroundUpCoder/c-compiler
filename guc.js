@@ -1737,20 +1737,41 @@ const IR = (() => {
     // i32 address. The region is valid until the function returns (the
     // function-level prologue/epilogue restores SP). LINEAR — has SP
     // side-effect.
+    //
+    // `size` may be either a number (static — codegen embeds it as an
+    // i32.const) or an Expression of single-i32 type (dynamic — codegen
+    // computes the size at runtime). In both cases `align` is static.
     class Alloca extends Expression {
         constructor(loc, size, align) {
-            assert(typeof size === 'number' && size >= 0,
-                () => `Alloca: size must be a non-negative number`);
+            const sizeIsExpr = size instanceof Expression;
+            const errors = [];
+            if (!sizeIsExpr) {
+                assert(typeof size === 'number' && size >= 0,
+                    () => `Alloca: size must be a non-negative number or Expression`);
+            } else if (size.types !== null) {
+                if (size.types.length !== 1 ||
+                    (size.types[0].slotType || size.types[0]) !== T.I32) {
+                    errors.push('Alloca: dynamic size must produce a single i32');
+                }
+            }
             assert(typeof align === 'number' && align >= 1 &&
                 (align & (align - 1)) === 0,
                 () => `Alloca: align must be a power of 2`);
-            super(loc, [T.I32], [], 'LINEAR');
+            super(loc, [T.I32], sizeIsExpr ? [size] : [], 'LINEAR');
             this.size = size;
             this.align = align;
+            for (const msg of errors) reportError(loc, msg);
             this._finalize();
         }
 
         _computeContainsAlloca() { return true; }
+
+        _withChildren(newChildren) {
+            // size is the only child when dynamic; nothing to rewire when
+            // static.
+            const newSize = newChildren.length === 0 ? this.size : newChildren[0];
+            return new Alloca(this.loc, newSize, this.align);
+        }
     }
 
     // HeapBase: the i32 address of the start of the heap region (i.e. the
@@ -5114,21 +5135,27 @@ const CODEGEN = (() => {
             } else if (expr instanceof IR.Alloca) {
                 assert(stackPointerIndex >= 0,
                     'Alloca requires memorySpec.stackPages > 0');
-                // sp = (sp - aligned_size); return new sp.
+                // Compute size on the wasm stack — either a constant
+                // (static) or the size-expr's value (dynamic). Then round
+                // up to align, subtract from sp, set sp, return new sp.
                 const align = expr.align;
-                const size = (expr.size + align - 1) & ~(align - 1);
-                // sp -= size; tee sp ; (drop the tee value? no — leave on stack)
-                // We want the value of sp on the stack:
-                //   global.get $sp
-                //   i32.const size
-                //   i32.sub
-                //   global.set $sp
-                //   global.get $sp
-                // Or with tee: i32.const size, sub, then set+get is shorter
-                // as set/get pair. wasm has no global.tee, so:
+                let sizeBytes;
+                if (typeof expr.size === 'number') {
+                    const aligned = (expr.size + align - 1) & ~(align - 1);
+                    sizeBytes = [0x41, ...encodeLEBS128(aligned)];
+                } else {
+                    // Dynamic: compute (size + (align-1)) & ~(align-1).
+                    sizeBytes = [
+                        ...encodeExpression(expr.size),
+                        0x41, ...encodeLEBS128(align - 1),  // i32.const align-1
+                        0x6A,                                // i32.add
+                        0x41, ...encodeLEBS128(~(align - 1)),// i32.const ~(align-1) (signed)
+                        0x71,                                // i32.and
+                    ];
+                }
                 return [
                     0x23, ...encodeLEBU128(stackPointerIndex), // global.get $sp
-                    0x41, ...encodeLEBS128(size),              // i32.const size
+                    ...sizeBytes,
                     0x6B,                                       // i32.sub
                     0x24, ...encodeLEBU128(stackPointerIndex), // global.set $sp
                     0x23, ...encodeLEBU128(stackPointerIndex), // global.get $sp

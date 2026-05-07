@@ -11811,10 +11811,8 @@ class Translator {
 
     // Per-function state, reset by translateFunction.
     this.cVarToLocal = new Map(); // DVar (param/local) -> IR.LocalVariable
-    this.cVarToFrameOffset = new Map(); // DVar (MEMORY-class) -> int byte offset
-    this.compoundLitToFrameOffset = new Map(); // ECompoundLiteral -> offset
-    this.frameSize = 0;            // total frame bytes for this function
-    this.savedSpLocal = null;      // IR.LocalVariable holding caller's SP
+    this.cVarToStackSlot = new Map(); // DVar (MEMORY-class) -> IR.StackSlot
+    this.compoundLitToStackSlot = new Map(); // ECompoundLiteral -> IR.StackSlot
     this.currentFunc = null;       // DFunc currently being translated
     this.extraLocals = [];         // IR.LocalVariable[] for non-param locals
     this.warnings = [];            // strings to print after codegen
@@ -11824,13 +11822,13 @@ class Translator {
     // declaration order; mutual recursion will need call_indirect or similar.
     this.translatingNow = new Set();
 
-    // Memory layout: stack [0 .. STACK_END), then static data, then heap.
-    // Match compiler.js: 1 page = 64 KiB stack.
+    // Memory layout: codegen owns it now via memorySpec.stackPages.
+    // Static data lives below the stack (we still pin it to STACK_END so
+    // existing dataInit/cGlobalToAddr math works); the stack region sits
+    // above static data, and __heap_base resolves to the first byte
+    // after the stack.
     this.STACK_PAGES = 1;
     this.STACK_END = this.STACK_PAGES * 65536;
-
-    // Globals built lazily.
-    this.stackPointerGlobal = null;
 
     // Imported function decls -> IR.Function. Built lazily as needed.
     this.importedFuncToIR = new Map();
@@ -11873,19 +11871,6 @@ class Translator {
       return null;
     }
     return this.translateFunction(fdef);
-  }
-
-  // Lazily create the __stack_pointer global. Mutable i32, init = STACK_END.
-  getStackPointerGlobal() {
-    const { T, IR } = this.GUC;
-    if (!this.stackPointerGlobal) {
-      const loc = Lexer.Loc.generated();
-      this.stackPointerGlobal = new IR.GlobalVariable(
-        loc, null, /*exportSpec*/ null, /*mutable*/ true, '__stack_pointer',
-        T.I32, new IR.Literal(loc, T.I32, BigInt(this.STACK_END)),
-      );
-    }
-    return this.stackPointerGlobal;
   }
 
   // Convert a C TypeInfo to a guc IR T.* type. Signedness is preserved so
@@ -12089,7 +12074,7 @@ class Translator {
         const local = this.cVarToLocal.get(expr.decl);
         if (local) return new IR.GetVars(loc, [local]);
         // MEMORY-class local: load (for scalars) or address (for arrays/structs).
-        if (this.cVarToFrameOffset.has(expr.decl)) {
+        if (this.cVarToStackSlot.has(expr.decl)) {
           const decl = expr.decl;
           const addr = this._frameAddr(loc, decl);
           if (decl.type.isArray && decl.type.isArray()) return addr;
@@ -12268,23 +12253,24 @@ class Translator {
           if (irT === T.F32 || irT === T.F64) return new IR.Literal(loc, irT, 0.0);
           return new IR.Literal(loc, irT, 0n);
         }
-        // Aggregate / array: frame slot pre-assigned in _collectMemoryLocals.
-        const offset = this.compoundLitToFrameOffset.get(expr);
-        if (offset === undefined) nyi(`compound literal without frame slot`, loc);
+        // Aggregate / array: stack slot pre-assigned in _collectMemoryLocals.
+        const slot = this.compoundLitToStackSlot.get(expr);
+        if (!slot) nyi(`compound literal without stack slot`, loc);
+        // baseAddrFor(off) = StackSlotAddr(slot) + off. We emit a fresh
+        // StackSlotAddr each time; codegen-bubbleup dedups the slot.
+        const slotAddr = () => new IR.StackSlotAddr(loc, slot);
         const baseAddrFor = (off) => off === 0
-          ? new IR.GetVars(loc, [this.savedSpLocal])
-          : new IR.BinOp(loc, 'add',
-              new IR.GetVars(loc, [this.savedSpLocal]),
-              this.iconst(loc, off - this.frameSize));
+          ? slotAddr()
+          : new IR.BinOp(loc, 'add', slotAddr(), this.iconst(loc, off));
         const stmts = [];
         if (t.size > 0) {
           stmts.push(new IR.MemoryFill(loc,
-            baseAddrFor(offset), this.iconst(loc, 0), this.iconst(loc, t.size)));
+            baseAddrFor(0), this.iconst(loc, 0), this.iconst(loc, t.size)));
         }
         if (expr.initList) {
-          this._emitInitListStores(stmts, baseAddrFor, offset, t, expr.initList, loc);
+          this._emitInitListStores(stmts, baseAddrFor, 0, t, expr.initList, loc);
         }
-        stmts.push(baseAddrFor(offset));
+        stmts.push(baseAddrFor(0));
         return new IR.Block(loc, Symbol('compoundlit'), stmts);
       }
       default:
@@ -12401,24 +12387,8 @@ class Translator {
         return new IR.Unreachable(loc);
       }
       case IK.ALLOCA: {
-        // sp -= ((n + 15) & ~15); return sp.
-        const sp = this.getStackPointerGlobal();
-        const sizeExpr = this.translateExpr(expr.args[0]);
-        const nLocal = new IR.LocalVariable(loc, true, '_alloca_n', T.I32);
-        this.extraLocals.push(nLocal);
-        // Round up to 16. result = (n + 15) & -16
-        return new IR.Block(loc, Symbol('alloca'), [
-          new IR.SetVars(loc, [nLocal], [
-            new IR.BinOp(loc, 'and',
-              new IR.BinOp(loc, 'add', sizeExpr, this.iconst(loc, 15)),
-              this.iconst(loc, -16)),
-          ]),
-          new IR.SetVars(loc, [sp], [
-            new IR.BinOp(loc, 'sub', new IR.GetVars(loc, [sp]),
-              new IR.GetVars(loc, [nLocal])),
-          ]),
-          new IR.GetVars(loc, [sp]),
-        ]);
+        // Dynamic alloca: codegen-managed, lifetime = function return.
+        return new IR.Alloca(loc, this.translateExpr(expr.args[0]), 16);
       }
       case IK.MEMORY_SIZE: {
         return new IR.MemorySize(loc);
@@ -12439,9 +12409,9 @@ class Translator {
           this.translateExpr(expr.args[2]));
       }
       case IK.HEAP_BASE: {
-        // We don't have a real __heap_base global yet; for now use the
-        // staticDataBase (= start of static area). Better: an actual global.
-        return this.iconst(loc, this.STACK_END);
+        // Codegen resolves this to the first byte after the stack region
+        // (i.e. the actual heap base, not staticDataBase).
+        return new IR.HeapBase(loc);
       }
       // ===== GC intrinsics =====
       case IK.REF_IS_NULL: {
@@ -12683,53 +12653,36 @@ class Translator {
       nyi(`variadic call to undefined '${target.name}'`, loc);
     }
 
-    const sp = this.getStackPointerGlobal();
+    // Per-call StackSlot for the variadic frame. Codegen places it in
+    // the function's frame and assigns an offset; sibling call sites in
+    // disjoint Block scopes can share storage via codegen's coloring.
+    const vaSlot = new IR.StackSlot('_va_frame', blockSize, 8);
     const frameLocal = new IR.LocalVariable(loc, /*mutable*/ true, '_va_frame', T.I32);
     this.extraLocals.push(frameLocal);
     const stmts = [];
 
-    // sp -= blockSize;
-    stmts.push(new IR.SetVars(loc, [sp], [
-      new IR.BinOp(loc, 'sub', new IR.GetVars(loc, [sp]), this.iconst(loc, blockSize)),
-    ]));
-    // frameLocal = sp;
-    stmts.push(new IR.SetVars(loc, [frameLocal], [new IR.GetVars(loc, [sp])]));
+    // frameLocal = &slot
+    stmts.push(new IR.SetVars(loc, [frameLocal],
+      [new IR.StackSlotAddr(loc, vaSlot)]));
 
-    // Translate args first (must happen with current sp before next sp change).
+    // Translate args.
     const argsIR = expr.arguments.map(a => this.translateExpr(a));
 
-    // Store each arg at its offset.
+    // Store each arg at its offset within the frame.
     for (let i = 0; i < expr.arguments.length; i++) {
       const offset = argOffsets[i];
       const storeOp = this._storeOp(argStoreTypes[i]);
-      const addr = new IR.GetVars(loc, [frameLocal]);
-      const value = argsIR[i];
-      // Note: Store has an `offset` immediate, no need to add manually.
-      stmts.push(new IR.Store(loc, storeOp, addr, value, { offset }));
+      stmts.push(new IR.Store(loc, storeOp,
+        new IR.GetVars(loc, [frameLocal]), argsIR[i], { offset }));
     }
 
-    // Call: f(frameLocal). Variadic wasm sig is (i32) -> (), so the result is
-    // a 0-tuple. Wrap in Drop only if Result is non-empty (it isn't here).
+    // Call: f(frameLocal).
     stmts.push(new IR.FunctionCall(loc, irFunc, [new IR.GetVars(loc, [frameLocal])]));
 
-    // Read return value from frame[0] into a local, restore sp, then yield it.
+    // Read return value from frame[0] (variadic ABI return slot).
     if (!isVoidRet) {
-      const retIR = this.cTypeToIR(retType);
-      const retLocal = new IR.LocalVariable(loc, /*mutable*/ true, '_va_ret', retIR);
-      this.extraLocals.push(retLocal);
       const loadOp = this._loadOp(retType);
-      stmts.push(new IR.SetVars(loc, [retLocal], [
-        new IR.Load(loc, loadOp, new IR.GetVars(loc, [frameLocal])),
-      ]));
-      // sp += blockSize;
-      stmts.push(new IR.SetVars(loc, [sp], [
-        new IR.BinOp(loc, 'add', new IR.GetVars(loc, [sp]), this.iconst(loc, blockSize)),
-      ]));
-      stmts.push(new IR.GetVars(loc, [retLocal]));
-    } else {
-      stmts.push(new IR.SetVars(loc, [sp], [
-        new IR.BinOp(loc, 'add', new IR.GetVars(loc, [sp]), this.iconst(loc, blockSize)),
-      ]));
+      stmts.push(new IR.Load(loc, loadOp, new IR.GetVars(loc, [frameLocal])));
     }
 
     return new IR.Block(loc, Symbol('vacall'), stmts);
@@ -13002,7 +12955,7 @@ class Translator {
       if (local) return new IR.TeeVars(loc, [local], rhsIR);
       // MEMORY-class scalar: store at frame address. Yield the stored value
       // by sequencing: tmp = rhs; store(addr, tmp); tmp.
-      if (this.cVarToFrameOffset.has(lhsAst.decl)) {
+      if (this.cVarToStackSlot.has(lhsAst.decl)) {
         return this._storeAndYield(loc, this._frameAddr(loc, lhsAst.decl), lhsAst.decl.type, rhsIR);
       }
       // REGISTER-class global scalar.
@@ -13111,7 +13064,7 @@ class Translator {
     const loc = expr.loc || Lexer.Loc.generated();
     switch (expr.kind) {
       case Types.ExprKind.IDENT: {
-        if (this.cVarToFrameOffset.has(expr.decl)) {
+        if (this.cVarToStackSlot.has(expr.decl)) {
           return this._frameAddr(loc, expr.decl);
         }
         const decl = expr.decl;
@@ -13326,46 +13279,26 @@ class Translator {
 
     switch (stmt.kind) {
       case Types.StmtKind.RETURN: {
+        // Codegen owns SP save/restore — we just emit IR.Return. The
+        // exception: variadic functions have a special return ABI where
+        // the value is written to frame[0] (held in varargsArgBlockLocal)
+        // and the wasm return is value-less.
         const isVarargs = !!this.varargsArgBlockLocal;
-        const sp = this.savedSpLocal ? this.getStackPointerGlobal() : null;
-        const stmts = [];
-
-        if (isVarargs && stmt.expr) {
-          // Variadic: write return value to frame[0], then `return` (no result).
-          const retCType = this.currentFunc.type.getReturnType();
-          stmts.push(new IR.Store(loc, this._storeOp(retCType),
-            new IR.GetVars(loc, [this.varargsArgBlockLocal]),
-            this.translateExpr(stmt.expr)));
-          if (this.savedSpLocal) {
-            stmts.push(new IR.SetVars(loc, [sp], [new IR.GetVars(loc, [this.savedSpLocal])]));
+        if (isVarargs) {
+          if (stmt.expr) {
+            const retCType = this.currentFunc.type.getReturnType();
+            return new IR.Block(loc, Symbol('ret'), [
+              new IR.Store(loc, this._storeOp(retCType),
+                new IR.GetVars(loc, [this.varargsArgBlockLocal]),
+                this.translateExpr(stmt.expr)),
+              new IR.Return(loc, []),
+            ]);
           }
-          stmts.push(new IR.Return(loc, []));
-          return new IR.Block(loc, Symbol('ret'), stmts);
+          return new IR.Return(loc, []);
         }
-
-        // Non-variadic — normal return.
-        if (!this.savedSpLocal) {
-          if (isVarargs) {
-            // Variadic with no expr.
-            return new IR.Return(loc, []);
-          }
-          return stmt.expr
-            ? new IR.Return(loc, [this.translateExpr(stmt.expr)])
-            : new IR.Return(loc, []);
-        }
-        // Have a frame to restore. Sequence: tmp = expr; sp = saved_sp; return tmp.
-        if (stmt.expr) {
-          const irT = this.cTypeToIR(this.currentFunc.type.getReturnType());
-          const tmp = new IR.LocalVariable(loc, /*mutable*/ true, '_ret', irT);
-          this.extraLocals.push(tmp);
-          stmts.push(new IR.SetVars(loc, [tmp], [this.translateExpr(stmt.expr)]));
-          stmts.push(new IR.SetVars(loc, [sp], [new IR.GetVars(loc, [this.savedSpLocal])]));
-          stmts.push(new IR.Return(loc, [new IR.GetVars(loc, [tmp])]));
-        } else {
-          stmts.push(new IR.SetVars(loc, [sp], [new IR.GetVars(loc, [this.savedSpLocal])]));
-          stmts.push(new IR.Return(loc, []));
-        }
-        return new IR.Block(loc, Symbol('ret'), stmts);
+        return stmt.expr
+          ? new IR.Return(loc, [this.translateExpr(stmt.expr)])
+          : new IR.Return(loc, []);
       }
       case Types.StmtKind.COMPOUND: {
         return this._translateCompound(stmt, loc);
@@ -13620,10 +13553,8 @@ class Translator {
     // Save outer state so we can recurse for forward calls.
     const outer = {
       cVarToLocal: this.cVarToLocal,
-      cVarToFrameOffset: this.cVarToFrameOffset,
-      compoundLitToFrameOffset: this.compoundLitToFrameOffset,
-      frameSize: this.frameSize,
-      savedSpLocal: this.savedSpLocal,
+      cVarToStackSlot: this.cVarToStackSlot,
+      compoundLitToStackSlot: this.compoundLitToStackSlot,
       currentFunc: this.currentFunc,
       extraLocals: this.extraLocals,
       varargsArgBlockLocal: this.varargsArgBlockLocal,
@@ -13631,10 +13562,8 @@ class Translator {
       varargsRetSlotSize: this.varargsRetSlotSize,
     };
     this.cVarToLocal = new Map();
-    this.cVarToFrameOffset = new Map();
-    this.compoundLitToFrameOffset = new Map();
-    this.frameSize = 0;
-    this.savedSpLocal = null;
+    this.cVarToStackSlot = new Map();
+    this.compoundLitToStackSlot = new Map();
     this.currentFunc = fdef;
     this.extraLocals = [];
     this.varargsArgBlockLocal = null;
@@ -13733,10 +13662,8 @@ class Translator {
     // Skip them.
     if (stubbed) {
       this.cVarToLocal = outer.cVarToLocal;
-      this.cVarToFrameOffset = outer.cVarToFrameOffset;
-      this.compoundLitToFrameOffset = outer.compoundLitToFrameOffset;
-      this.frameSize = outer.frameSize;
-      this.savedSpLocal = outer.savedSpLocal;
+      this.cVarToStackSlot = outer.cVarToStackSlot;
+      this.compoundLitToStackSlot = outer.compoundLitToStackSlot;
       this.currentFunc = outer.currentFunc;
       this.extraLocals = outer.extraLocals;
       this.varargsArgBlockLocal = outer.varargsArgBlockLocal;
@@ -13778,19 +13705,9 @@ class Translator {
     }
     body = new IR.Block(loc, Symbol('fnbody'), [body, defaultRet]);
 
-    // Wrap the body with frame setup/teardown if this function has any
-    // MEMORY-class locals.
-    if (this.frameSize > 0) {
-      const sp = this.getStackPointerGlobal();
-      const savedSp = this.savedSpLocal;
-      const prologue = [
-        new IR.SetVars(loc, [savedSp], [new IR.GetVars(loc, [sp])]),
-        new IR.SetVars(loc, [sp], [
-          new IR.BinOp(loc, 'sub', new IR.GetVars(loc, [sp]), this.iconst(loc, this.frameSize)),
-        ]),
-      ];
-      body = new IR.Block(loc, Symbol('framed'), [...prologue, body]);
-    }
+    // Frame setup/teardown is now codegen's job — it inspects the
+    // bubble-up frameNodes/unclaimedSlots and emits the prologue +
+    // SP-restore around Returns automatically.
 
     // Prepend the varargs prologue (load fixed params from frame slots, set
     // up vaArgsPtr) before any user code runs.
@@ -13800,10 +13717,8 @@ class Translator {
 
     // Restore outer state.
     this.cVarToLocal = outer.cVarToLocal;
-    this.cVarToFrameOffset = outer.cVarToFrameOffset;
-    this.compoundLitToFrameOffset = outer.compoundLitToFrameOffset;
-    this.frameSize = outer.frameSize;
-    this.savedSpLocal = outer.savedSpLocal;
+    this.cVarToStackSlot = outer.cVarToStackSlot;
+    this.compoundLitToStackSlot = outer.compoundLitToStackSlot;
     this.currentFunc = outer.currentFunc;
     this.extraLocals = outer.extraLocals;
     this.varargsArgBlockLocal = outer.varargsArgBlockLocal;
@@ -13917,11 +13832,10 @@ class Translator {
     const { T, IR } = this.GUC;
     const tc = stmt;
     const endLabel = Symbol('try_end');
-    const sp = this.getStackPointerGlobal();
 
-    // Save SP so catch handlers can roll back any mid-try frame allocations.
-    const savedSpForCatch = new IR.LocalVariable(loc, true, '_try_sp', T.I32);
-    this.extraLocals.push(savedSpForCatch);
+    // SP rollback on catch is now codegen's job at function return —
+    // intra-function leaks from in-flight allocas are bounded by the
+    // function's lifetime.
 
     // Resolve catch info up front (so binding locals exist before we
     // translate catch bodies, which reference them).
@@ -13978,17 +13892,12 @@ class Translator {
         // include it as a statement.
         stmts.push(new IR.Block(loc, ci.label, [inner]));
       }
-      stmts.push(new IR.SetVars(loc, [sp], [new IR.GetVars(loc, [savedSpForCatch])]));
       stmts.push(this.translateStmt(ci.cc.body));
       stmts.push(new IR.Break(loc, endLabel, []));
       inner = new IR.Block(loc, Symbol(`catch${i}_wrap`), stmts);
     }
 
-    // Outermost: save SP, then run the chain inside Block(end_label).
-    return new IR.Block(loc, endLabel, [
-      new IR.SetVars(loc, [savedSpForCatch], [new IR.GetVars(loc, [sp])]),
-      inner,
-    ]);
+    return new IR.Block(loc, endLabel, [inner]);
   }
 
   // Lower a C switch statement to nested labeled Blocks. We use a br_if
@@ -14292,11 +14201,12 @@ class Translator {
   }
 
   // Pre-scan a function body for MEMORY-class variable declarations and
-  // assign each a frame offset. Updates this.cVarToFrameOffset and
-  // this.frameSize. Allocates this.savedSpLocal if frameSize > 0.
+  // create an IR.StackSlot for each. Codegen owns layout (offsets, frame
+  // size, SP-saving prologue, return-restore). We just hand it the bag of
+  // slots via IR.StackSlotAddr references; the slot's ownership scope is
+  // wherever it appears textually in the IR (typically a Block).
   _collectMemoryLocals(fdef) {
-    const { T, IR } = this.GUC;
-    let offset = 0;
+    const { IR } = this.GUC;
     const visit = (stmt) => {
       if (!stmt) return;
       switch (stmt.kind) {
@@ -14331,28 +14241,18 @@ class Translator {
       if (decl.storageClass === Types.StorageClass.STATIC ||
           decl.storageClass === Types.StorageClass.EXTERN) return;
       const sz = decl.type.size || 0;
-      const align = decl.type.align || 1;
-      offset = (offset + align - 1) & ~(align - 1);
-      this.cVarToFrameOffset.set(decl, offset);
-      offset += sz;
+      const align = Math.max(decl.type.align || 1, 1);
+      this.cVarToStackSlot.set(decl, new IR.StackSlot(
+        decl.name || '_anon', sz, align));
     };
     visit(fdef.body);
 
-    // Compound literals (function-scope) get frame slots too.
+    // Compound literals (function-scope) get stack slots too.
     for (const cl of (fdef.compoundLiterals || [])) {
       const sz = cl.type.size || 0;
       const align = Math.max(cl.type.align || 1, 1);
-      offset = (offset + align - 1) & ~(align - 1);
-      this.compoundLitToFrameOffset.set(cl, offset);
-      offset += sz;
-    }
-
-    // Round frame size up to 16 bytes so our SP stays aligned.
-    if (offset > 0) {
-      this.frameSize = (offset + 15) & ~15;
-      this.savedSpLocal = new IR.LocalVariable(
-        Lexer.Loc.generated(), /*mutable*/ true, '_saved_sp', T.I32);
-      this.extraLocals.push(this.savedSpLocal);
+      this.compoundLitToStackSlot.set(cl, new IR.StackSlot(
+        '_compound_lit', sz, align));
     }
   }
 
@@ -14423,19 +14323,13 @@ class Translator {
     nyi(`init list for type ${type.kind}`, loc);
   }
 
-  // Compute the i32 address of a MEMORY-class variable. We use
-  // `savedSp + (offset - frameSize)` so the address is stable through any
-  // SP-modifying operations in the body (e.g. variadic call frame
-  // allocation, alloca). Requires this.savedSpLocal to be set.
+  // Compute the i32 address of a MEMORY-class variable. Emits a fresh
+  // IR.StackSlotAddr; codegen owns offset assignment and frame layout.
   _frameAddr(loc, decl) {
-    const { T, IR } = this.GUC;
-    const off = this.cVarToFrameOffset.get(decl);
-    if (off === undefined) throw new Error(`MEMORY-class var '${decl.name}' has no frame offset`);
-    if (!this.savedSpLocal) throw new Error('frame access without savedSpLocal');
-    const adj = off - this.frameSize;
-    const base = new IR.GetVars(loc, [this.savedSpLocal]);
-    if (adj === 0) return base;
-    return new IR.BinOp(loc, 'add', base, this.iconst(loc, adj));
+    const { IR } = this.GUC;
+    const slot = this.cVarToStackSlot.get(decl);
+    if (!slot) throw new Error(`MEMORY-class var '${decl.name}' has no stack slot`);
+    return new IR.StackSlotAddr(loc, slot);
   }
 
   // Top-level: walk all units, build IR.Program.
@@ -14463,16 +14357,16 @@ class Translator {
     // since it resolves indices, but it makes the output deterministic.)
     const functions = [...this.importedFuncToIR.values(), ...this.funcDefToIRFunc.values()];
     const variables = [];
-    if (this.stackPointerGlobal) variables.push(this.stackPointerGlobal);
     for (const g of this.cGlobalToIR.values()) variables.push(g);
-    // BytesLiterals (string literals, etc.) lay out after the user dataInit
-    // region in guc. We pin staticDataBase = STACK_END so the dataInit blob
-    // (covering MEMORY-class globals) starts there, and BytesLiterals
-    // continue after.
+    // Static data starts at the historical STACK_END. Codegen places it
+    // there, then reserves stackPages of stack above it, then HeapBase
+    // resolves to the first byte after the stack. dataInit (covering
+    // MEMORY-class globals) is laid out at staticDataBase first.
     const memorySpec = {
-      minPages: this.STACK_PAGES + 16, // some heap room
-      exportName: 'memory',
       staticDataBase: this.STACK_END,
+      stackPages: this.STACK_PAGES,
+      minHeapPages: 16, // some initial heap room
+      exportName: 'memory',
     };
 
     // No explicit indirect table — codegen synthesizes one (and exports
