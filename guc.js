@@ -4431,7 +4431,12 @@ const CODEGEN = (() => {
                 if (!func.body) continue;
                 for (const bl of func.body.bytesLiterals) {
                     if (bl instanceof IR.MutableBytesLiteral) {
-                        // Each mutable literal gets its own address.
+                        // Each mutable literal gets its own address — but
+                        // only ONCE. If the same MBL instance is reachable
+                        // from multiple functions (e.g. a static global
+                        // referenced everywhere), share a single address
+                        // and a single data segment.
+                        if (bytesAddrMap.has(bl)) continue;
                         const addr = cursor;
                         dataSegments.push({ offset: addr, bytes: bl.bytes });
                         cursor += bl.bytes.length;
