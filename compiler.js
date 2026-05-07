@@ -14441,7 +14441,12 @@ class Translator {
       }
     }
 
-    // Second pass: MEMORY-class globals. Each becomes one MutableBytes.
+    // Second pass: MEMORY-class globals. Two-phase so that init exprs
+    // referencing &otherGlobal can find the other global's MB identity
+    // already in cGlobalToMb when we build the IR.MutableBytesAddr.
+    //
+    // Phase 2a: allocate every MB identity with empty initExprs.
+    const memGlobals = []; // Array<{def, mb}>
     for (const unit of units) {
       for (const v of unit.definedVariables) {
         const def = v.definition || v;
@@ -14450,78 +14455,194 @@ class Translator {
         if (def.allocClass !== Types.AllocClass.MEMORY) continue;
         if (this.cGlobalToMb.has(def)) continue;
         const sz = def.type.size || 1;
-        const buf = new Uint8Array(sz); // zero-init
-        if (def.initExpr) {
-          this._writeStaticInit(buf, 0, def.type, def.initExpr);
-        }
-        this.cGlobalToMb.set(def, new IR.MutableBytes(def.name, buf));
+        const mb = new IR.MutableBytes(def.name, new Uint8Array(sz), []);
+        this.cGlobalToMb.set(def, mb);
+        memGlobals.push({ def, mb });
+      }
+    }
+    // Phase 2b: populate bytes + initExprs (mutating mb.bytes / mb.initExprs).
+    for (const { def, mb } of memGlobals) {
+      if (def.initExpr) {
+        this._writeStaticInit(mb.bytes, mb.initExprs, 0, def.type, def.initExpr);
       }
     }
   }
 
   // Write a compile-time initializer into the static data buffer.
   // Supports scalar inits (int/float literals, casts, negations) and
-  // EInitList for arrays/structs. Unhandled cases leave bytes zero (with a
-  // warning). Best-effort — non-trivial inits will need future work.
-  _writeStaticInit(buf, offset, cType, initExpr) {
+  // EInitList for arrays/structs.
+  //
+  // For values that aren't statically evaluable into bytes (like
+  // `&otherGlobal`, `&fn`, `__heap_base`), append an entry to
+  // `initExprs` describing what to write at that offset. guc's
+  // layoutAndSubstitute pass evaluates each entry post-layout, when
+  // addresses are known constants. The C99 spec requires every
+  // static-duration initializer to be a constant expression, so any
+  // value we can't statically evaluate AND can't translate to a
+  // constant-foldable IR expression is a user error (caught later by
+  // layoutAndSubstitute's "did not reduce to a constant" check).
+  _writeStaticInit(buf, initExprs, offset, cType, initExpr) {
     const u = cType.removeQualifiers ? cType.removeQualifiers() : cType;
     if (initExpr.kind === Types.ExprKind.INIT_LIST) {
-      this._writeStaticInitList(buf, offset, u, initExpr);
+      this._writeStaticInitList(buf, initExprs, offset, u, initExpr);
       return;
     }
     if (initExpr.kind === Types.ExprKind.COMPOUND_LITERAL) {
-      // (struct X){...} at file scope — recurse into the init list.
-      this._writeStaticInitList(buf, offset, u, initExpr.initList);
+      this._writeStaticInitList(buf, initExprs, offset, u, initExpr.initList);
       return;
     }
     if (u.kind === Types.TypeKind.ARRAY && initExpr.kind === Types.ExprKind.STRING) {
-      // String init for char array.
       const bytes = initExpr.value;
       const cap = u.size || bytes.length;
       for (let i = 0; i < Math.min(bytes.length, cap); i++) buf[offset + i] = bytes[i];
       return;
     }
-    // Aggregate/array types without an INIT_LIST: nothing else makes sense
-    // beyond zero-init (already handled by buf being all zeros).
     if (u.kind === Types.TypeKind.ARRAY || u.kind === Types.TypeKind.TAG) {
       return;
     }
-    // Scalar: try to compile-time evaluate as a number.
+    // Scalar: try to compile-time evaluate as a number first.
     const slotIR = this.cTypeToIR(u);
     if (!slotIR) return;
     const v = this._evalConstInit(initExpr, slotIR);
-    if (v === null) {
-      this.warnings.push(`global init at offset ${offset}: non-constant initializer not supported`);
+    if (v !== null) {
+      this._writeScalarBytes(buf, offset, u, v);
       return;
     }
-    this._writeScalarBytes(buf, offset, u, v);
+    // Couldn't statically evaluate. Try to translate to an IR
+    // Expression that layoutAndSubstitute can fold.
+    const irExpr = this._translateStaticInitValue(u, initExpr);
+    if (irExpr) {
+      const byteWidth = u.size || 4;
+      initExprs.push({ offset, byteWidth, expr: irExpr });
+      return;
+    }
+    this.warnings.push(`global init at offset ${offset}: non-constant initializer not supported`);
   }
 
-  _writeStaticInitList(buf, offset, type, initList) {
+  // Translate a non-constant C init expression into an IR.Expression
+  // that layoutAndSubstitute can fold to a constant. Returns null if
+  // we can't model it (caller falls back to warning).
+  _translateStaticInitValue(cType, initExpr) {
+    const { T, IR } = this.GUC;
+    const loc = initExpr.loc || Lexer.Loc.generated();
+
+    // Strip implicit/explicit casts that don't change the value
+    // (e.g., (int*)&x).
+    let e = initExpr;
+    while (e && (e.kind === Types.ExprKind.IMPLICIT_CAST ||
+                 e.kind === Types.ExprKind.CAST)) {
+      e = e.expr;
+    }
+    if (!e) return null;
+
+    // & ident
+    if (e.kind === Types.ExprKind.UNARY && e.op === 'OP_ADDR_OF') {
+      return this._addressIRForAddrOf(e.operand, loc);
+    }
+    // & expr + N or & expr - N
+    if (e.kind === Types.ExprKind.BINARY &&
+        (e.op === 'OP_ADD' || e.op === 'OP_SUB')) {
+      const lhs = this._tryStaticAddrLike(e.left, loc);
+      const rhs = this._tryStaticAddrLike(e.right, loc);
+      // addr ± constant
+      if (lhs && rhs && rhs.kind === 'const') {
+        return new IR.BinOp(loc,
+          e.op === 'OP_ADD' ? 'add' : 'sub',
+          lhs.expr, rhs.expr);
+      }
+      if (lhs && lhs.kind === 'const' && rhs && e.op === 'OP_ADD') {
+        return new IR.BinOp(loc, 'add', rhs.expr, lhs.expr);
+      }
+    }
+    // __heap_base intrinsic
+    if (e.kind === Types.ExprKind.INTRINSIC &&
+        e.intrinsicKind === Types.IntrinsicKind.HEAP_BASE) {
+      return new IR.HeapBase(loc);
+    }
+    // String literal at non-array context: address of the string.
+    if (e.kind === Types.ExprKind.STRING) {
+      return new IR.BytesLiteral(loc, e.value);
+    }
+    return null;
+  }
+
+  // Tries to interpret an init-expression as either:
+  //   { kind: 'addr', expr: <IR addr-producing Expression> }
+  //   { kind: 'const', expr: <IR.Literal> }
+  // Returns null otherwise.
+  _tryStaticAddrLike(e, fallbackLoc) {
+    const { T, IR } = this.GUC;
+    if (!e) return null;
+    let cur = e;
+    while (cur && (cur.kind === Types.ExprKind.IMPLICIT_CAST ||
+                   cur.kind === Types.ExprKind.CAST)) {
+      cur = cur.expr;
+    }
+    if (!cur) return null;
+    const loc = cur.loc || fallbackLoc;
+    if (cur.kind === Types.ExprKind.UNARY && cur.op === 'OP_ADDR_OF') {
+      const ir = this._addressIRForAddrOf(cur.operand, loc);
+      return ir ? { kind: 'addr', expr: ir } : null;
+    }
+    if (cur.kind === Types.ExprKind.INTRINSIC &&
+        cur.intrinsicKind === Types.IntrinsicKind.HEAP_BASE) {
+      return { kind: 'addr', expr: new IR.HeapBase(loc) };
+    }
+    if (cur.kind === Types.ExprKind.STRING) {
+      return { kind: 'addr', expr: new IR.BytesLiteral(loc, cur.value) };
+    }
+    if (cur.kind === Types.ExprKind.INT) {
+      return { kind: 'const',
+               expr: new IR.Literal(loc, T.U32, BigInt(cur.value)) };
+    }
+    return null;
+  }
+
+  // Build an IR Expression for `&someIdent` at file scope.
+  _addressIRForAddrOf(operand, loc) {
+    const { T, IR } = this.GUC;
+    if (!operand) return null;
+    if (operand.kind === Types.ExprKind.IDENT) {
+      const decl = operand.decl;
+      const def = decl && (decl.definition || decl);
+      if (def) {
+        const mb = this.cGlobalToMb.get(def);
+        if (mb) return new IR.MutableBytesAddr(loc, mb);
+        if (def.declKind === Types.DeclKind.FUNC) {
+          // FuncIndex: works for `&fn` but layoutAndSubstitute doesn't
+          // currently substitute FuncIndex in init exprs (that'd require
+          // also taking ownership of the auto-table). Skip for now —
+          // caller's _evalConstInit / fallback path will warn.
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  _writeStaticInitList(buf, initExprs, offset, type, initList) {
     if (type.kind === Types.TypeKind.ARRAY) {
       const elem = type.baseType;
       const elemSz = elem.size || 1;
       for (let i = 0; i < initList.elements.length; i++) {
-        this._writeStaticInit(buf, offset + i * elemSz, elem, initList.elements[i]);
+        this._writeStaticInit(buf, initExprs, offset + i * elemSz, elem, initList.elements[i]);
       }
       return;
     }
     if (type.kind === Types.TypeKind.TAG && type.tagDecl) {
       const members = type.tagDecl.members || [];
-      // Iterate elements in order; for unions, only the unionMemberIndex.
       if (type.tagKind === Types.TagKind.UNION && initList.unionMemberIndex >= 0) {
         const m = members[initList.unionMemberIndex];
         if (m && initList.elements.length > 0) {
-          this._writeStaticInit(buf, offset + (m.byteOffset || 0), m.type, initList.elements[0]);
+          this._writeStaticInit(buf, initExprs, offset + (m.byteOffset || 0), m.type, initList.elements[0]);
         }
         return;
       }
-      // Struct: walk members + elements together (designators not handled here).
       for (let i = 0; i < initList.elements.length && i < members.length; i++) {
         const m = members[i];
         if (!m) continue;
-        if (m.bitWidth > 0) continue; // bitfield init — skip for now
-        this._writeStaticInit(buf, offset + (m.byteOffset || 0), m.type, initList.elements[i]);
+        if (m.bitWidth > 0) continue;
+        this._writeStaticInit(buf, initExprs, offset + (m.byteOffset || 0), m.type, initList.elements[i]);
       }
       return;
     }

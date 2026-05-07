@@ -725,7 +725,12 @@ const IR = (() => {
         //   after the data section, in array order. The frontend is responsible
         //   for the payload bytes; codegen just frames them with the standard
         //   custom-section header (length-prefixed UTF-8 name + raw payload).
-        constructor(functions, variables, memorySpec, tables, elements, tags, customSections) {
+        // dataSegments — Array<{offset: number, bytes: Uint8Array}>, optional.
+        //   Pre-laid-out active data segments (typically populated by
+        //   layoutAndSubstitute). When non-empty, codegen uses these
+        //   directly and skips its own MutableBytes layout. Frontends
+        //   typically don't pass this; layoutAndSubstitute populates it.
+        constructor(functions, variables, memorySpec, tables, elements, tags, customSections, dataSegments) {
             this.functions = functions;
             this.variables = variables;
             this.memorySpec = memorySpec || null;
@@ -733,6 +738,7 @@ const IR = (() => {
             this.elements = elements || [];
             this.tags = tags || [];
             this.customSections = customSections || [];
+            this.dataSegments = dataSegments || null;
             Object.freeze(this.functions);
             Object.freeze(this.variables);
             Object.freeze(this.tables);
@@ -1716,9 +1722,30 @@ const IR = (() => {
     // reference it via fresh MutableBytesAddr expressions at every use
     // site. Codegen lays each MutableBytes out exactly once.
     class MutableBytes {
-        constructor(name, bytes) {
+        // bytes — Uint8Array | number[]. Baseline initial contents
+        //   (zero-init by default if all you have is a size, just pass
+        //   `new Uint8Array(size)`).
+        // initExprs — optional Array<{offset, byteWidth, expr}>. Each
+        //   entry says: at byte `offset` within this region, write the
+        //   value of `expr` as `byteWidth` bytes (1/2/4/8) in little-
+        //   endian. After layoutAndSubstitute runs, each `expr` MUST
+        //   reduce to an IR.Literal (i.e. it must have been a constant
+        //   expression in C terms). The pass writes the encoded bytes
+        //   over the baseline `bytes`. Use this for initializers that
+        //   reference codegen-time-resolved values like &fname,
+        //   &otherGlobal, or HeapBase.
+        constructor(name, bytes, initExprs) {
             this.name = name || null;
             this.bytes = new Uint8Array(bytes);
+            // initExprs is intentionally NOT frozen so frontends can
+            // populate it post-construction. The chicken-and-egg case:
+            // global A's init references &B, so we need B's identity
+            // to exist before we can build A's initExpr; the cleanest
+            // way is "allocate all identities, then populate". Caller
+            // is on the honor system not to mutate after CODEGEN.emit.
+            this.initExprs = initExprs || [];
+            // Validation runs at emit time (in layoutAndSubstitute),
+            // not here, so post-construction mutation is OK.
             Object.freeze(this);
         }
     }
@@ -3963,6 +3990,262 @@ const IR = (() => {
             program.tables, program.elements, program.tags, program.customSections);
     }
 
+    // layoutAndSubstitute: assigns concrete addresses to surviving
+    // MutableBytes and resolves HeapBase, then walks every IR
+    // Expression replacing MutableBytesAddr / HeapBase with the
+    // corresponding Literal. After the pass the IR's data-layout
+    // dependencies are resolved — codegen consumes Program.dataSegments
+    // directly.
+    //
+    // FuncIndex is intentionally NOT substituted here; the auto-table
+    // and its element segment are still synthesized at codegen time
+    // from `tableReferencedFunctions` bubble-up. (Init exprs that
+    // reference FuncIndex aren't supported by this pass — they'd fail
+    // the constancy check below. Future work.)
+    //
+    // Crucially: also evaluates each MutableBytes' initExprs, which
+    // are arbitrary IR.Expressions of single-i32-or-i64 type. After
+    // substitution + constant-folding, every initExpr MUST be an
+    // IR.Literal — that's the C99 "static-duration objects must be
+    // constant-initialized" guarantee, enforced by guc rather than by
+    // each frontend.
+    //
+    // No-op when program.dataSegments is already set (idempotent).
+    function layoutAndSubstitute(program) {
+        if (program.dataSegments) return program; // already done
+
+        const memorySpec = program.memorySpec;
+        const PAGE = 65536;
+        const align16 = (n) => (n + 15) & ~15;
+        const staticDataBase = (memorySpec && memorySpec.staticDataBase) || 0;
+
+        const definedFunctions = program.functions.filter(f => f.body);
+
+        // Phase 1: discover surviving MutableBytes (transitively via
+        // initExprs). Seed from referencedMutableBytes bubble-up of
+        // function bodies; then iterate over each live MB's initExprs
+        // since they may reference more MBs.
+        const liveMbs = new Set();
+        for (const func of definedFunctions) {
+            for (const mb of func.body.referencedMutableBytes) liveMbs.add(mb);
+        }
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const mb of [...liveMbs]) {
+                for (const ie of mb.initExprs) {
+                    walkIR(ie.expr, n => {
+                        if (n instanceof MutableBytesAddr) {
+                            if (!liveMbs.has(n.mb)) {
+                                liveMbs.add(n.mb);
+                                changed = true;
+                            }
+                        }
+                        return undefined;
+                    });
+                }
+            }
+        }
+
+        // Phase 2: layout. BytesLiterals first (content-deduped), then
+        // MutableBytes by identity.
+        const dataSegments = [];
+        const bytesLitAddr = new Map();
+        const mbAddr = new Map();
+        let cursor = staticDataBase;
+        if (memorySpec) {
+            const byContentKey = new Map();
+            // Collect BytesLiterals from function bodies and from the
+            // initExprs of every live MutableBytes (those bytes literals
+            // aren't in any function body but still need addresses).
+            const allBytesLits = [];
+            for (const func of definedFunctions) {
+                for (const bl of func.body.bytesLiterals) allBytesLits.push(bl);
+            }
+            for (const mb of liveMbs) {
+                for (const ie of mb.initExprs) {
+                    walkIR(ie.expr, n => {
+                        if (n instanceof BytesLiteral) allBytesLits.push(n);
+                        return undefined;
+                    });
+                }
+            }
+            for (const bl of allBytesLits) {
+                const key = Array.from(bl.bytes).join(',');
+                let addr = byContentKey.get(key);
+                if (addr === undefined) {
+                    addr = cursor;
+                    byContentKey.set(key, addr);
+                    dataSegments.push({ offset: addr, bytes: bl.bytes });
+                    cursor += bl.bytes.length;
+                }
+                bytesLitAddr.set(bl, addr);
+            }
+            // MutableBytes — one address per identity, in deterministic
+            // (insertion) order. We keep a placeholder bytes array;
+            // populated after substitution in Phase 4.
+            const mbSegmentIdx = new Map();
+            for (const mb of liveMbs) {
+                const addr = cursor;
+                mbAddr.set(mb, addr);
+                mbSegmentIdx.set(mb, dataSegments.length);
+                dataSegments.push({ offset: addr, bytes: new Uint8Array(mb.bytes) });
+                cursor += mb.bytes.length;
+            }
+            // Compute heap base (first byte after stack region).
+            const stackPages = (memorySpec.stackPages) || 0;
+            const stackStart = align16(cursor);
+            const heapBaseAddr = stackStart + stackPages * PAGE;
+
+            // Phase 3: substitution. Replace MutableBytesAddr +
+            // HeapBase with constant Literals; FuncIndex is left for
+            // codegen's auto-table to handle.
+            const foldDeep = (root) => {
+                const fold = (n) => {
+                    const folded = OPTIMIZER.tryFold(n);
+                    return folded === undefined ? undefined : folded;
+                };
+                let prev = root, cur = walkIR(root, fold);
+                while (cur !== prev) {
+                    prev = cur;
+                    cur = walkIR(cur, fold);
+                }
+                return cur;
+            };
+
+            const subst = (n) => {
+                if (n instanceof MutableBytesAddr) {
+                    const a = mbAddr.get(n.mb);
+                    if (a === undefined) return undefined;
+                    return new Literal(n.loc, T.U32, BigInt(a));
+                }
+                if (n instanceof HeapBase) {
+                    return new Literal(n.loc, T.U32, BigInt(heapBaseAddr));
+                }
+                if (n instanceof BytesLiteral) {
+                    const a = bytesLitAddr.get(n);
+                    if (a === undefined) return undefined;
+                    return new Literal(n.loc, T.U32, BigInt(a));
+                }
+                return undefined;
+            };
+
+            // Substitute in all function bodies. Whenever walkIR
+            // rebuilds a body, we get a new IR.Function instance —
+            // other functions' FunctionCall/RefFunc/FuncIndex still
+            // reference the OLD instance. Do an iterative second pass
+            // that replaces those refs to the new instances.
+            const oldToNew = new Map();
+            let newFunctions = program.functions.map(f => {
+                if (!f.body) return f;
+                const substituted = walkIR(f.body, subst);
+                const folded = foldDeep(substituted);
+                if (folded === f.body) return f;
+                const nf = new Function(f.loc, f.importSpec, f.exportSpec,
+                    f.name, f.type, [...f.params], [...f.locals], folded);
+                oldToNew.set(f, nf);
+                return nf;
+            });
+
+            if (oldToNew.size > 0) {
+                const refSubst = (n) => {
+                    if (n instanceof FunctionCall && oldToNew.has(n.func)) {
+                        return new FunctionCall(n.loc, oldToNew.get(n.func), n.args);
+                    }
+                    if (n instanceof RefFunc && oldToNew.has(n.func)) {
+                        return new RefFunc(n.loc, oldToNew.get(n.func));
+                    }
+                    if (n instanceof FuncIndex && oldToNew.has(n.func)) {
+                        return new FuncIndex(n.loc, oldToNew.get(n.func));
+                    }
+                    return undefined;
+                };
+                let iters = 0, anyChange = true;
+                while (anyChange && iters < 16) {
+                    anyChange = false;
+                    iters++;
+                    for (let i = 0; i < newFunctions.length; i++) {
+                        const f = newFunctions[i];
+                        if (!f.body) continue;
+                        const newBody = walkIR(f.body, refSubst);
+                        if (newBody !== f.body) {
+                            const nf = new Function(f.loc, f.importSpec, f.exportSpec,
+                                f.name, f.type, [...f.params], [...f.locals], newBody);
+                            oldToNew.set(f, nf);
+                            newFunctions[i] = nf;
+                            anyChange = true;
+                        }
+                    }
+                }
+            }
+
+            // Phase 4: evaluate initExprs and write into the data
+            // segment bytes. Each initExpr's expr must reduce to an
+            // IR.Literal after substitute+fold; otherwise error.
+            const writeLE = (buf, off, width, value) => {
+                let v = typeof value === 'bigint' ? value : BigInt(value);
+                // Mask to width.
+                const mask = (1n << BigInt(width * 8)) - 1n;
+                v = v & mask;
+                for (let i = 0; i < width; i++) {
+                    buf[off + i] = Number(v & 0xFFn);
+                    v >>= 8n;
+                }
+            };
+            for (const mb of liveMbs) {
+                if (mb.initExprs.length === 0) continue;
+                const segIdx = mbSegmentIdx.get(mb);
+                const seg = dataSegments[segIdx];
+                const buf = new Uint8Array(seg.bytes); // mutable copy
+                for (const ie of mb.initExprs) {
+                    if (typeof ie.offset !== 'number' || ie.offset < 0) {
+                        throw new Error(
+                            `MutableBytes '${mb.name || '<anon>'}' initExpr.offset ` +
+                            `must be non-negative number; got ${ie.offset}`);
+                    }
+                    if (ie.byteWidth !== 1 && ie.byteWidth !== 2 &&
+                        ie.byteWidth !== 4 && ie.byteWidth !== 8) {
+                        throw new Error(
+                            `MutableBytes '${mb.name || '<anon>'}' initExpr.byteWidth ` +
+                            `must be 1/2/4/8; got ${ie.byteWidth}`);
+                    }
+                    if (!(ie.expr instanceof Expression)) {
+                        throw new Error(
+                            `MutableBytes '${mb.name || '<anon>'}' initExpr.expr ` +
+                            `must be an IR.Expression`);
+                    }
+                    if (ie.offset + ie.byteWidth > mb.bytes.length) {
+                        throw new Error(
+                            `MutableBytes '${mb.name || '<anon>'}' initExpr at ` +
+                            `offset ${ie.offset}+${ie.byteWidth} extends past ` +
+                            `end (${mb.bytes.length})`);
+                    }
+                    const substituted = walkIR(ie.expr, subst);
+                    const folded = foldDeep(substituted);
+                    if (!(folded instanceof Literal)) {
+                        throw new Error(
+                            `MutableBytes '${mb.name || '<anon>'}' initExpr at offset ` +
+                            `${ie.offset} did not reduce to a constant after ` +
+                            `layout+substitute (got ${folded.constructor.name}). ` +
+                            `Static initializers must be constant expressions.`);
+                    }
+                    writeLE(buf, ie.offset, ie.byteWidth, folded.value);
+                }
+                seg.bytes = buf;
+            }
+
+            return new Program(newFunctions, program.variables, program.memorySpec,
+                program.tables, program.elements, program.tags,
+                program.customSections, dataSegments);
+        }
+
+        // No memorySpec: no static data; nothing to lay out. We still
+        // walk to substitute HeapBase / FuncIndex usages (FuncIndex is
+        // handled later by codegen's auto-table; HeapBase requires
+        // memorySpec). Just return as-is.
+        return program;
+    }
+
     return {
         Program,
         ImportSpec,
@@ -4043,6 +4326,7 @@ const IR = (() => {
         cloneIR,
         lowerTryFinally,
         lowerTryCatch,
+        layoutAndSubstitute,
     };
 })();
 
@@ -4536,6 +4820,7 @@ const CODEGEN = (() => {
         // the same Program) when no function contains the relevant node.
         program = IR.lowerTryFinally(program);
         program = IR.lowerTryCatch(program);
+        program = IR.layoutAndSubstitute(program);
 
         const out = [];
 
@@ -4684,53 +4969,21 @@ const CODEGEN = (() => {
             declarativeFuncs.push(f);
         }
 
-        // Lay out static data in linear memory:
-        //   - BytesLiterals: deduped by content (repeated identical blobs
-        //     share a single data segment).
-        //   - MutableBytes (referenced via MutableBytesAddr): one address
-        //     and one data segment per identity, no content-dedup.
-        // All blobs sit in one contiguous static-data region starting at
-        // `staticDataBase`.
+        // Static-data layout has been done by IR.layoutAndSubstitute,
+        // which ran in emit() above. After that pass:
+        //   - program.dataSegments contains all (offset, bytes) entries.
+        //   - All MutableBytesAddr / HeapBase / BytesLiteral nodes in
+        //     the IR have been replaced with Literal constants.
+        // We just consume program.dataSegments here.
         const memorySpec = program.memorySpec;
         const staticDataBase = (memorySpec && memorySpec.staticDataBase) || 0;
-        const dataSegments = [];
-        const bytesAddrMap = new Map();          // BytesLiteral -> address
-        const mutableBytesAddrMap = new Map();   // MutableBytes -> address
+        const dataSegments = program.dataSegments
+            ? [...program.dataSegments]
+            : [];
         let staticDataEnd = staticDataBase;
-        if (memorySpec) {
-            const byContentKey = new Map();
-            let cursor = staticDataBase;
-            // Immutable BytesLiterals first (deduped).
-            for (const func of definedFunctions) {
-                if (!func.body) continue;
-                for (const bl of func.body.bytesLiterals) {
-                    const key = Array.from(bl.bytes).join(',');
-                    let addr = byContentKey.get(key);
-                    if (addr === undefined) {
-                        addr = cursor;
-                        byContentKey.set(key, addr);
-                        dataSegments.push({ offset: addr, bytes: bl.bytes });
-                        cursor += bl.bytes.length;
-                    }
-                    bytesAddrMap.set(bl, addr);
-                }
-            }
-            // MutableBytes — one address per identity. Iterate in
-            // first-encounter order across functions so layouts are
-            // deterministic.
-            const seenMb = new Set();
-            for (const func of definedFunctions) {
-                if (!func.body) continue;
-                for (const mb of func.body.referencedMutableBytes) {
-                    if (seenMb.has(mb)) continue;
-                    seenMb.add(mb);
-                    const addr = cursor;
-                    dataSegments.push({ offset: addr, bytes: mb.bytes });
-                    cursor += mb.bytes.length;
-                    mutableBytesAddrMap.set(mb, addr);
-                }
-            }
-            staticDataEnd = cursor;
+        for (const seg of dataSegments) {
+            const segEnd = seg.offset + seg.bytes.length;
+            if (segEnd > staticDataEnd) staticDataEnd = segEnd;
         }
 
         // Stack region & __stack_pointer:
@@ -5397,18 +5650,18 @@ const CODEGEN = (() => {
                     ...refBytes, 0xFB, sub,
                     ...encodeHeapType(expr.targetRefType.heapType),
                 ];
-            } else if (expr instanceof IR.BytesLiteral) {
-                const addr = bytesAddrMap.get(expr);
-                assert(addr !== undefined,
-                    'BytesLiteral used without a memorySpec on Program');
-                return [0x41, ...encodeLEBS128(addr)]; // i32.const <addr>
-            } else if (expr instanceof IR.MutableBytesAddr) {
-                const addr = mutableBytesAddrMap.get(expr.mb);
-                assert(addr !== undefined,
-                    () => `MutableBytesAddr: '${expr.mb.name || '<anon>'}' not laid out (memorySpec missing?)`);
-                return [0x41, ...encodeLEBS128(addr)]; // i32.const <addr>
-            } else if (expr instanceof IR.HeapBase) {
-                return [0x41, ...encodeLEBS128(heapBaseAddr)]; // i32.const heap_base
+            } else if (expr instanceof IR.BytesLiteral
+                    || expr instanceof IR.MutableBytesAddr
+                    || expr instanceof IR.HeapBase) {
+                // These should have been substituted with Literals by
+                // IR.layoutAndSubstitute. If we see them here, the pass
+                // either didn't run (no memorySpec on Program) or the
+                // node was reachable but not in the layout's live set
+                // (a bug in liveness discovery).
+                throw new Error(
+                    `${expr.constructor.name} reached codegen — ` +
+                    `IR.layoutAndSubstitute should have replaced it. ` +
+                    `Did the Program have a memorySpec?`);
             } else if (expr instanceof IR.RestoreStackToPostPrologue) {
                 // No-op when this function has no frame.
                 if (currentSavedSpIdx < 0) return [];
