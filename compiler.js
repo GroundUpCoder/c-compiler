@@ -13907,30 +13907,38 @@ class CodeGenerator {
         // Dispatch
         {
           this.pushLocalScope();
-          const switchLocal = this.allocLocal(WT_I32);
+          const switchWt = this.getBinaryWasmType(sw.expr.type);
+          const switchLocal = this.allocLocal(switchWt);
           this.emitExpr(sw.expr);
           this.body.localSet(switchLocal);
 
           // Enumerate (value → caseIdx) pairs, expanding any GNU case
           // ranges (`case lo ... hi:`). Each value gets one entry; the
           // density check + br_table treat them as individual values.
-          const valueEntries = []; // [{ value: number, caseIdx: number }]
+          const valueEntries = []; // [{ value: BigInt, caseIdx: number }]
           for (let i = 0; i < numCases; i++) {
             const cn = topLevelCases[i].caseNode;
             if (cn.isDefault) continue;
             for (let v = cn.lo; v <= cn.hi; v++) {
-              valueEntries.push({ value: Number(v) | 0, caseIdx: i });
+              valueEntries.push({ value: v, caseIdx: i });
             }
           }
-          let minVal = 0x7FFFFFFF, maxVal = -0x80000000;
-          for (const ve of valueEntries) {
-            if (ve.value < minVal) minVal = ve.value;
-            if (ve.value > maxVal) maxVal = ve.value;
+
+          let dense = false;
+          let minVal = 0, maxVal = 0, range = 0;
+          if (wtEquals(switchWt, WT_I32)) {
+            let min = 0x7FFFFFFF, max = -0x80000000;
+            for (const ve of valueEntries) {
+              const v = Number(ve.value) | 0;
+              if (v < min) min = v;
+              if (v > max) max = v;
+            }
+            minVal = min; maxVal = max;
+            const nonDefaultCount = valueEntries.length;
+            range = nonDefaultCount > 0 ? (maxVal - minVal + 1) >>> 0 : 0;
+            dense = nonDefaultCount >= 4 && range <= 512 &&
+                (nonDefaultCount * 10 / range) >= 4; // density >= 40%
           }
-          const nonDefaultCount = valueEntries.length;
-          const range = nonDefaultCount > 0 ? (maxVal - minVal + 1) >>> 0 : 0;
-          const dense = nonDefaultCount >= 4 && range <= 512 &&
-              (nonDefaultCount * 10 / range) >= 4; // density >= 40%
 
           if (this.compilerOptions.debugSwitch && sw.loc && this.writeErr) {
             this.writeErr(`${sw.loc.filename}:${sw.loc.line}: switch: ${dense ? "br_table" : "br_if"}\n`);
@@ -13941,7 +13949,7 @@ class CodeGenerator {
             const fallbackIdx = defaultIdx >= 0 ? caseBrIdx[defaultIdx] : numCases + numFwdBlocks;
             const table = new Array(range).fill(fallbackIdx);
             for (const ve of valueEntries) {
-              table[(ve.value - minVal) >>> 0] = caseBrIdx[ve.caseIdx];
+              table[((Number(ve.value) | 0) - minVal) >>> 0] = caseBrIdx[ve.caseIdx];
             }
             this.body.localGet(switchLocal);
             this.body.i32Const(minVal);
@@ -13951,8 +13959,13 @@ class CodeGenerator {
             // Linear br_if chain for sparse switches
             for (const ve of valueEntries) {
               this.body.localGet(switchLocal);
-              this.body.i32Const(BigInt(ve.value));
-              this.body.aop(WT_I32, ALU.OP_EQ);
+              if (wtEquals(switchWt, WT_I32)) {
+                this.body.i32Const(BigInt(Number(ve.value) | 0));
+                this.body.aop(WT_I32, ALU.OP_EQ);
+              } else {
+                this.body.i64Const(ve.value);
+                this.body.aop(WT_I64, ALU.OP_EQ);
+              }
               this.body.brIf(caseBrIdx[ve.caseIdx]);
             }
             if (defaultIdx >= 0) this.body.br(caseBrIdx[defaultIdx]);
