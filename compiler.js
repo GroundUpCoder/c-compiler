@@ -14424,6 +14424,21 @@ class Translator {
   // Emit IR.Store statements that populate a runtime-located buffer from
   // an EInitList. `baseAddrFor(off)` produces an i32 expression for the
   // buffer's address + off. Recurses into nested aggregates.
+  // Emit a scalar element store: translate `e` and convert its IR type to
+  // match the destination C type's IR slot. Without this, e.g. an int
+  // literal initializing a `double a[2] = { 42, 23 };` slot fails IR
+  // validation (f64.store expects an f64 value).
+  _storeScalarElement(stmts, addr, destCType, e, loc) {
+    const { IR } = this.GUC;
+    const v = this.translateExpr(e);
+    const fromIRT = this.cTypeToIR(e.type);
+    const toIRT = this.cTypeToIR(destCType);
+    const conv = (fromIRT === toIRT) ? v
+      : this.emitConversion(loc, fromIRT, toIRT, v,
+          { kind: Types.ExprKind.IMPLICIT_CAST, type: destCType, expr: e });
+    stmts.push(new IR.Store(loc, this._storeOp(destCType), addr, conv));
+  }
+
   _emitInitListStores(stmts, baseAddrFor, baseOff, type, initList, loc) {
     const { IR } = this.GUC;
     if (type.kind === Types.TypeKind.ARRAY) {
@@ -14441,8 +14456,7 @@ class Translator {
           stmts.push(new IR.MemoryCopy(loc, baseAddrFor(off), bl,
             this.iconst(loc, Math.min(e.value.length, cap))));
         } else {
-          const v = this.translateExpr(e);
-          stmts.push(new IR.Store(loc, this._storeOp(elem), baseAddrFor(off), v));
+          this._storeScalarElement(stmts, baseAddrFor(off), elem, e, loc);
         }
       }
       return;
@@ -14459,8 +14473,7 @@ class Translator {
           } else if (m.bitWidth > 0) {
             // skip bitfields for now
           } else {
-            stmts.push(new IR.Store(loc, this._storeOp(m.type), baseAddrFor(off),
-              this.translateExpr(e)));
+            this._storeScalarElement(stmts, baseAddrFor(off), m.type, e, loc);
           }
         }
         return;
@@ -14479,8 +14492,7 @@ class Translator {
           stmts.push(new IR.MemoryCopy(loc, baseAddrFor(off), bl,
             this.iconst(loc, Math.min(e.value.length, cap))));
         } else {
-          stmts.push(new IR.Store(loc, this._storeOp(m.type), baseAddrFor(off),
-            this.translateExpr(e)));
+          this._storeScalarElement(stmts, baseAddrFor(off), m.type, e, loc);
         }
       }
       return;
