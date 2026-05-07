@@ -8719,6 +8719,298 @@ function vaSlotSize(type) {
   return (sz + 7) & ~7;
 }
 
+// ── Shared constant-expression evaluator ────────────────────────────────────
+// Used by both the default backend and the GUC backend. Walks an Expr tree
+// and either returns a value descriptor:
+//   { kind: "int",   intVal: BigInt }
+//   { kind: "float", floatVal: Number }
+//   { kind: "addr",  addrVal: Number }
+// or null when the expression is not a constant.
+//
+// The `policy` argument resolves the four kinds of address LEAVES the C
+// language allows in a constant expression — string literals, global
+// variables, function pointers, and file-scope compound literals — to a
+// numeric address. The default backend supplies concrete addresses
+// (translation-time-known); the GUC backend supplies a null-policy because
+// its addresses are not numbers — they're deferred IR tokens (MutableBytesAddr,
+// FuncIndex) substituted at codegen-time. Returning null from a leaf simply
+// causes that branch to evaluate to null, so the integer / float / sizeof /
+// arithmetic / ternary / cast subset still works for both backends.
+//
+// Policy interface (each method returns a number or null):
+//   getStringAddr(uint8Array)    — address of a string literal
+//   getGlobalAddr(varDecl)       — address of a global variable's storage
+//   getFuncAddr(funcDef)         — funcref-table index of a function
+//   getCompoundLitAddr(expr)     — address of a file-scope compound literal
+const NULL_ADDR_POLICY = {
+  getStringAddr: () => null,
+  getGlobalAddr: () => null,
+  getFuncAddr: () => null,
+  getCompoundLitAddr: () => null,
+};
+
+function constEvalAddr(expr, policy) {
+  if (!expr) return null;
+  // Cast from integer to pointer: (type*)intval
+  if (expr.kind === Types.ExprKind.CAST || expr.kind === Types.ExprKind.IMPLICIT_CAST) {
+    const inner = constEvalExpr(expr.expr, policy);
+    if (inner && inner.kind === "int") return Number(inner.intVal);
+    if (inner && inner.kind === "addr") return inner.addrVal;
+    return null;
+  }
+  // Arrow: base->member → addr(base) + offset, where base is pointer
+  if (expr.kind === Types.ExprKind.ARROW && expr.memberDecl) {
+    const baseVal = constEvalExpr(expr.base, policy);
+    if (baseVal && (baseVal.kind === "addr" || baseVal.kind === "int")) {
+      const baseAddr = baseVal.kind === "addr" ? baseVal.addrVal : Number(baseVal.intVal);
+      return baseAddr + expr.memberDecl.byteOffset;
+    }
+    return null;
+  }
+  // General: try constEvalExpr and extract address
+  const v = constEvalExpr(expr, policy);
+  if (v && v.kind === "addr") return v.addrVal;
+  if (v && v.kind === "int") return Number(v.intVal);
+  return null;
+}
+
+function constEvalExpr(expr, policy) {
+  if (!expr) return null;
+  switch (expr.kind) {
+    case Types.ExprKind.INT: return { kind: "int", intVal: expr.value };
+    case Types.ExprKind.FLOAT: return { kind: "float", floatVal: expr.value };
+    case Types.ExprKind.STRING: {
+      const addr = policy.getStringAddr(expr.value);
+      if (addr === null || addr === undefined) return null;
+      return { kind: "addr", addrVal: addr };
+    }
+    case Types.ExprKind.IDENT: {
+      if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+        return { kind: "int", intVal: BigInt(expr.decl.value) };
+      }
+      if (expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
+        const func = expr.decl.definition || expr.decl;
+        const tIdx = policy.getFuncAddr(func);
+        if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
+      }
+      if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+        const varDecl = expr.decl.definition || expr.decl;
+        const addr = policy.getGlobalAddr(varDecl);
+        if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
+      }
+      return null;
+    }
+    case Types.ExprKind.UNARY: {
+      if (expr.op === "OP_ADDR") {
+        const inner = expr.operand;
+        // &var → address
+        if (inner.kind === Types.ExprKind.IDENT && inner.decl) {
+          if (inner.decl.declKind === Types.DeclKind.VAR) {
+            const varDecl = inner.decl.definition || inner.decl;
+            const addr = policy.getGlobalAddr(varDecl);
+            if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
+          }
+          if (inner.decl.declKind === Types.DeclKind.FUNC) {
+            const func = inner.decl.definition || inner.decl;
+            const tIdx = policy.getFuncAddr(func);
+            if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
+          }
+        }
+        // &(base->member) or &(base.member) → base_addr + member offset
+        if ((inner.kind === Types.ExprKind.ARROW || inner.kind === Types.ExprKind.MEMBER) && inner.memberDecl) {
+          const baseAddr = constEvalAddr(inner.base, policy);
+          if (baseAddr !== null) {
+            return { kind: "addr", addrVal: baseAddr + inner.memberDecl.byteOffset };
+          }
+        }
+        // &(base[index]) → base_addr + index * elemSize
+        if (inner.kind === Types.ExprKind.SUBSCRIPT) {
+          const baseAddr = constEvalAddr(inner.array, policy);
+          const idx = constEvalExpr(inner.index, policy);
+          if (baseAddr !== null && idx && idx.kind === "int") {
+            const elemSize = inner.type.size;
+            return { kind: "addr", addrVal: baseAddr + Number(idx.intVal) * elemSize };
+          }
+        }
+        // &(compound_literal) → address of file-scope compound literal
+        if (inner.kind === Types.ExprKind.COMPOUND_LITERAL) {
+          const addr = policy.getCompoundLitAddr(inner);
+          if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
+        }
+        return null;
+      }
+      const v = constEvalExpr(expr.operand, policy);
+      if (!v) return null;
+      if (expr.op === "OP_POS") return v;
+      if (expr.op === "OP_NEG") {
+        if (v.kind === "int") return { kind: "int", intVal: -v.intVal };
+        if (v.kind === "float") return { kind: "float", floatVal: -v.floatVal };
+      }
+      if (expr.op === "OP_BNOT") {
+        if (v.kind === "int") return { kind: "int", intVal: ~v.intVal };
+      }
+      if (expr.op === "OP_LNOT") {
+        if (v.kind === "int") return { kind: "int", intVal: v.intVal === 0n ? 1n : 0n };
+        if (v.kind === "float") return { kind: "int", intVal: v.floatVal === 0.0 ? 1n : 0n };
+      }
+      return null;
+    }
+    case Types.ExprKind.BINARY: {
+      // Short-circuit LAND/LOR
+      if (expr.op === "LAND") {
+        const l = constEvalExpr(expr.left, policy);
+        if (!l) return null;
+        const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
+        if (lv === null) return null;
+        if (lv === 0n) return { kind: "int", intVal: 0n };
+        const r = constEvalExpr(expr.right, policy);
+        if (!r) return null;
+        const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
+        if (rv === null) return null;
+        return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
+      }
+      if (expr.op === "LOR") {
+        const l = constEvalExpr(expr.left, policy);
+        if (!l) return null;
+        const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
+        if (lv === null) return null;
+        if (lv !== 0n) return { kind: "int", intVal: 1n };
+        const r = constEvalExpr(expr.right, policy);
+        if (!r) return null;
+        const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
+        if (rv === null) return null;
+        return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
+      }
+      const l = constEvalExpr(expr.left, policy);
+      const r = constEvalExpr(expr.right, policy);
+      if (!l || !r) return null;
+      // Check for address arithmetic first
+      const hasAddr = (l.kind === "addr" || r.kind === "addr");
+      const hasFloat = (l.kind === "float" || r.kind === "float");
+      if (!hasAddr && !hasFloat && l.kind === "int" && r.kind === "int") {
+        const lv = l.intVal, rv = r.intVal;
+        let result;
+        switch (expr.op) {
+          case "ADD": result = lv + rv; break;
+          case "SUB": result = lv - rv; break;
+          case "MUL": result = lv * rv; break;
+          case "DIV": result = rv === 0n ? null : lv / rv; break;
+          case "MOD": result = rv === 0n ? null : lv % rv; break;
+          case "BAND": result = lv & rv; break;
+          case "BOR": result = lv | rv; break;
+          case "BXOR": result = lv ^ rv; break;
+          case "SHL": result = lv << rv; break;
+          case "SHR": result = lv >> rv; break;
+          case "EQ": result = lv === rv ? 1n : 0n; break;
+          case "NE": result = lv !== rv ? 1n : 0n; break;
+          case "LT": result = lv < rv ? 1n : 0n; break;
+          case "GT": result = lv > rv ? 1n : 0n; break;
+          case "LE": result = lv <= rv ? 1n : 0n; break;
+          case "GE": result = lv >= rv ? 1n : 0n; break;
+          default: return null;
+        }
+        if (result === null) return null;
+        return { kind: "int", intVal: result };
+      }
+      if (!hasAddr && hasFloat) {
+        const lv = l.kind === "float" ? l.floatVal : Number(l.intVal);
+        const rv = r.kind === "float" ? r.floatVal : Number(r.intVal);
+        switch (expr.op) {
+          case "ADD": return { kind: "float", floatVal: lv + rv };
+          case "SUB": return { kind: "float", floatVal: lv - rv };
+          case "MUL": return { kind: "float", floatVal: lv * rv };
+          case "DIV": return { kind: "float", floatVal: lv / rv }; // IEEE 754: div by zero = infinity
+          case "EQ": return { kind: "int", intVal: lv === rv ? 1n : 0n };
+          case "NE": return { kind: "int", intVal: lv !== rv ? 1n : 0n };
+          case "LT": return { kind: "int", intVal: lv < rv ? 1n : 0n };
+          case "GT": return { kind: "int", intVal: lv > rv ? 1n : 0n };
+          case "LE": return { kind: "int", intVal: lv <= rv ? 1n : 0n };
+          case "GE": return { kind: "int", intVal: lv >= rv ? 1n : 0n };
+          default: return null;
+        }
+      }
+      if (hasAddr) {
+        // addr + int, addr - int (pointer arithmetic: scale by pointee size)
+        if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
+          const leftType = expr.left.type.removeQualifiers();
+          let elemSize = leftType.kind === Types.TypeKind.POINTER ? leftType.baseType.size
+                       : leftType.kind === Types.TypeKind.ARRAY ? leftType.baseType.size : 1;
+          const offset = Number(r.intVal) * elemSize;
+          return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
+        }
+        // int + addr
+        if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
+          const rightType = expr.right.type.removeQualifiers();
+          let elemSize = rightType.kind === Types.TypeKind.POINTER ? rightType.baseType.size
+                       : rightType.kind === Types.TypeKind.ARRAY ? rightType.baseType.size : 1;
+          return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
+        }
+        // addr - addr (pointer difference)
+        if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
+          const leftType = expr.left.type.removeQualifiers();
+          let elemSize = leftType.kind === Types.TypeKind.POINTER ? leftType.baseType.size
+                       : leftType.kind === Types.TypeKind.ARRAY ? leftType.baseType.size : 1;
+          if (elemSize === 0) return null;
+          return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
+        }
+        // addr comparisons
+        if (l.kind === "addr" && r.kind === "addr") {
+          switch (expr.op) {
+            case "EQ": return { kind: "int", intVal: l.addrVal === r.addrVal ? 1n : 0n };
+            case "NE": return { kind: "int", intVal: l.addrVal !== r.addrVal ? 1n : 0n };
+            case "LT": return { kind: "int", intVal: l.addrVal < r.addrVal ? 1n : 0n };
+            case "GT": return { kind: "int", intVal: l.addrVal > r.addrVal ? 1n : 0n };
+            case "LE": return { kind: "int", intVal: l.addrVal <= r.addrVal ? 1n : 0n };
+            case "GE": return { kind: "int", intVal: l.addrVal >= r.addrVal ? 1n : 0n };
+          }
+        }
+      }
+      return null;
+    }
+    case Types.ExprKind.TERNARY: {
+      const cond = constEvalExpr(expr.condition, policy);
+      if (!cond) return null;
+      let cv;
+      if (cond.kind === "int") cv = cond.intVal !== 0n;
+      else if (cond.kind === "float") cv = cond.floatVal !== 0.0;
+      else return null;
+      return constEvalExpr(cv ? expr.thenExpr : expr.elseExpr, policy);
+    }
+    case Types.ExprKind.CAST:
+    case Types.ExprKind.IMPLICIT_CAST: {
+      const v = constEvalExpr(expr.expr, policy);
+      if (!v) return null;
+      const t = expr.type.removeQualifiers();
+      if ((t === Types.TFLOAT || t === Types.TDOUBLE) && v.kind === "int") {
+        return { kind: "float", floatVal: Number(v.intVal) };
+      }
+      if (t.isInteger() && v.kind === "float") {
+        return { kind: "int", intVal: Types.truncateConstInt(BigInt(Math.trunc(v.floatVal)), t) };
+      }
+      if ((t.isInteger() || t.isPointer()) && v.kind === "int") {
+        return { kind: "int", intVal: Types.truncateConstInt(v.intVal, t) };
+      }
+      return v;
+    }
+    case Types.ExprKind.SIZEOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
+    case Types.ExprKind.SIZEOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.size) };
+    case Types.ExprKind.ALIGNOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
+    case Types.ExprKind.ALIGNOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.align) };
+    case Types.ExprKind.COMPOUND_LITERAL: {
+      // For scalar compound literals like (int){42}, extract the value
+      if (!expr.type.isAggregate() && !expr.type.isArray() && expr.initList &&
+          expr.initList.elements.length > 0) {
+        return constEvalExpr(expr.initList.elements[0], policy);
+      }
+      // For aggregate/array compound literals, return the address
+      const addr = policy.getCompoundLitAddr(expr);
+      if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
+      return null;
+    }
+    default: return null;
+  }
+}
+
 function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
   // Variadic functions use a single i32 param (arg block pointer) and no WASM return.
   if (funcType.isVarArg) {
@@ -8954,30 +9246,33 @@ class CodeGenerator {
     for (let i = 0; i < len; i++) this.staticData[offset + i] = strValue[i];
   }
 
+  // Build the address-resolution policy used by the shared module-scope
+  // `constEvalExpr` / `constEvalAddr` evaluators. Caches per-instance so we
+  // don't reallocate the policy object on every constant evaluation.
+  _getConstEvalPolicy() {
+    if (!this.__constEvalPolicy) {
+      this.__constEvalPolicy = {
+        getStringAddr: (v) => this.getStringAddress(v),
+        getGlobalAddr: (vd) => {
+          const a = this.globalArrayAddrs.get(vd);
+          return a !== undefined ? a : null;
+        },
+        getFuncAddr: (fn) => {
+          const a = this.funcDefToTableIdx.get(fn);
+          return a !== undefined ? a : null;
+        },
+        getCompoundLitAddr: (e) => {
+          const a = this.fileScopeCompoundLiteralAddrs.get(e);
+          return a !== undefined ? a : null;
+        },
+      };
+    }
+    return this.__constEvalPolicy;
+  }
+
   // Evaluate an expression as an address (returns a number or null)
   _constEvalAddr(expr) {
-    if (!expr) return null;
-    // Cast from integer to pointer: (type*)intval
-    if (expr.kind === Types.ExprKind.CAST || expr.kind === Types.ExprKind.IMPLICIT_CAST) {
-      const inner = this._constEvalExpr(expr.expr);
-      if (inner && inner.kind === "int") return Number(inner.intVal);
-      if (inner && inner.kind === "addr") return inner.addrVal;
-      return null;
-    }
-    // Arrow: base->member → addr(base) + offset, where base is pointer
-    if (expr.kind === Types.ExprKind.ARROW && expr.memberDecl) {
-      const baseVal = this._constEvalExpr(expr.base);
-      if (baseVal && (baseVal.kind === "addr" || baseVal.kind === "int")) {
-        const baseAddr = baseVal.kind === "addr" ? baseVal.addrVal : Number(baseVal.intVal);
-        return baseAddr + expr.memberDecl.byteOffset;
-      }
-      return null;
-    }
-    // General: try _constEvalExpr and extract address
-    const v = this._constEvalExpr(expr);
-    if (v && v.kind === "addr") return v.addrVal;
-    if (v && v.kind === "int") return Number(v.intVal);
-    return null;
+    return constEvalAddr(expr, this._getConstEvalPolicy());
   }
 
   // --- ConstEval for codegen ---
@@ -8988,239 +9283,7 @@ class CodeGenerator {
   }
 
   _constEvalExpr(expr) {
-    if (!expr) return null;
-    switch (expr.kind) {
-      case Types.ExprKind.INT: return { kind: "int", intVal: expr.value };
-      case Types.ExprKind.FLOAT: return { kind: "float", floatVal: expr.value };
-      case Types.ExprKind.STRING: {
-        const addr = this.getStringAddress(expr.value);
-        return { kind: "addr", addrVal: addr };
-      }
-      case Types.ExprKind.IDENT: {
-        if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
-          return { kind: "int", intVal: BigInt(expr.decl.value) };
-        }
-        if (expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
-          const func = expr.decl.definition || expr.decl;
-          const tIdx = this.funcDefToTableIdx.get(func);
-          if (tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
-        }
-        if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
-          const varDecl = expr.decl.definition || expr.decl;
-          const addr = this.globalArrayAddrs.get(varDecl);
-          if (addr !== undefined) return { kind: "addr", addrVal: addr };
-        }
-        return null;
-      }
-      case Types.ExprKind.UNARY: {
-        if (expr.op === "OP_ADDR") {
-          const inner = expr.operand;
-          // &var → address
-          if (inner.kind === Types.ExprKind.IDENT && inner.decl) {
-            if (inner.decl.declKind === Types.DeclKind.VAR) {
-              const varDecl = inner.decl.definition || inner.decl;
-              const addr = this.globalArrayAddrs.get(varDecl);
-              if (addr !== undefined) return { kind: "addr", addrVal: addr };
-            }
-            if (inner.decl.declKind === Types.DeclKind.FUNC) {
-              const func = inner.decl.definition || inner.decl;
-              const tIdx = this.funcDefToTableIdx.get(func);
-              if (tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
-            }
-          }
-          // &(base->member) or &(base.member) → base_addr + member offset
-          if ((inner.kind === Types.ExprKind.ARROW || inner.kind === Types.ExprKind.MEMBER) && inner.memberDecl) {
-            const baseAddr = this._constEvalAddr(inner.base);
-            if (baseAddr !== null) {
-              return { kind: "addr", addrVal: baseAddr + inner.memberDecl.byteOffset };
-            }
-          }
-          // &(base[index]) → base_addr + index * elemSize
-          if (inner.kind === Types.ExprKind.SUBSCRIPT) {
-            const baseAddr = this._constEvalAddr(inner.array);
-            const idx = this._constEvalExpr(inner.index);
-            if (baseAddr !== null && idx && idx.kind === "int") {
-              const elemSize = this.sizeOf(inner.type);
-              return { kind: "addr", addrVal: baseAddr + Number(idx.intVal) * elemSize };
-            }
-          }
-          // &(compound_literal) → address of file-scope compound literal
-          if (inner.kind === Types.ExprKind.COMPOUND_LITERAL) {
-            const addr = this.fileScopeCompoundLiteralAddrs.get(inner);
-            if (addr !== undefined) return { kind: "addr", addrVal: addr };
-          }
-          return null;
-        }
-        const v = this._constEvalExpr(expr.operand);
-        if (!v) return null;
-        if (expr.op === "OP_POS") return v;
-        if (expr.op === "OP_NEG") {
-          if (v.kind === "int") return { kind: "int", intVal: -v.intVal };
-          if (v.kind === "float") return { kind: "float", floatVal: -v.floatVal };
-        }
-        if (expr.op === "OP_BNOT") {
-          if (v.kind === "int") return { kind: "int", intVal: ~v.intVal };
-        }
-        if (expr.op === "OP_LNOT") {
-          if (v.kind === "int") return { kind: "int", intVal: v.intVal === 0n ? 1n : 0n };
-          if (v.kind === "float") return { kind: "int", intVal: v.floatVal === 0.0 ? 1n : 0n };
-        }
-        return null;
-      }
-      case Types.ExprKind.BINARY: {
-        // Short-circuit LAND/LOR
-        if (expr.op === "LAND") {
-          const l = this._constEvalExpr(expr.left);
-          if (!l) return null;
-          const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (lv === null) return null;
-          if (lv === 0n) return { kind: "int", intVal: 0n };
-          const r = this._constEvalExpr(expr.right);
-          if (!r) return null;
-          const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (rv === null) return null;
-          return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
-        }
-        if (expr.op === "LOR") {
-          const l = this._constEvalExpr(expr.left);
-          if (!l) return null;
-          const lv = l.kind === "int" ? l.intVal : l.kind === "float" ? (l.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (lv === null) return null;
-          if (lv !== 0n) return { kind: "int", intVal: 1n };
-          const r = this._constEvalExpr(expr.right);
-          if (!r) return null;
-          const rv = r.kind === "int" ? r.intVal : r.kind === "float" ? (r.floatVal !== 0.0 ? 1n : 0n) : null;
-          if (rv === null) return null;
-          return { kind: "int", intVal: rv !== 0n ? 1n : 0n };
-        }
-        const l = this._constEvalExpr(expr.left);
-        const r = this._constEvalExpr(expr.right);
-        if (!l || !r) return null;
-        // Check for address arithmetic first
-        const hasAddr = (l.kind === "addr" || r.kind === "addr");
-        const hasFloat = (l.kind === "float" || r.kind === "float");
-        if (!hasAddr && !hasFloat && l.kind === "int" && r.kind === "int") {
-          const lv = l.intVal, rv = r.intVal;
-          let result;
-          switch (expr.op) {
-            case "ADD": result = lv + rv; break;
-            case "SUB": result = lv - rv; break;
-            case "MUL": result = lv * rv; break;
-            case "DIV": result = rv === 0n ? null : lv / rv; break;
-            case "MOD": result = rv === 0n ? null : lv % rv; break;
-            case "BAND": result = lv & rv; break;
-            case "BOR": result = lv | rv; break;
-            case "BXOR": result = lv ^ rv; break;
-            case "SHL": result = lv << rv; break;
-            case "SHR": result = lv >> rv; break;
-            case "EQ": result = lv === rv ? 1n : 0n; break;
-            case "NE": result = lv !== rv ? 1n : 0n; break;
-            case "LT": result = lv < rv ? 1n : 0n; break;
-            case "GT": result = lv > rv ? 1n : 0n; break;
-            case "LE": result = lv <= rv ? 1n : 0n; break;
-            case "GE": result = lv >= rv ? 1n : 0n; break;
-            default: return null;
-          }
-          if (result === null) return null;
-          return { kind: "int", intVal: result };
-        }
-        if (!hasAddr && hasFloat) {
-          const lv = l.kind === "float" ? l.floatVal : Number(l.intVal);
-          const rv = r.kind === "float" ? r.floatVal : Number(r.intVal);
-          switch (expr.op) {
-            case "ADD": return { kind: "float", floatVal: lv + rv };
-            case "SUB": return { kind: "float", floatVal: lv - rv };
-            case "MUL": return { kind: "float", floatVal: lv * rv };
-            case "DIV": return { kind: "float", floatVal: lv / rv }; // IEEE 754: div by zero = infinity
-            case "EQ": return { kind: "int", intVal: lv === rv ? 1n : 0n };
-            case "NE": return { kind: "int", intVal: lv !== rv ? 1n : 0n };
-            case "LT": return { kind: "int", intVal: lv < rv ? 1n : 0n };
-            case "GT": return { kind: "int", intVal: lv > rv ? 1n : 0n };
-            case "LE": return { kind: "int", intVal: lv <= rv ? 1n : 0n };
-            case "GE": return { kind: "int", intVal: lv >= rv ? 1n : 0n };
-            default: return null;
-          }
-        }
-        if (hasAddr) {
-          // addr + int, addr - int (pointer arithmetic: scale by pointee size)
-          if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
-            const leftType = expr.left.type.removeQualifiers();
-            let elemSize = leftType.kind === Types.TypeKind.POINTER ? this.sizeOf(leftType.baseType)
-                         : leftType.kind === Types.TypeKind.ARRAY ? this.sizeOf(leftType.baseType) : 1;
-            const offset = Number(r.intVal) * elemSize;
-            return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
-          }
-          // int + addr
-          if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
-            const rightType = expr.right.type.removeQualifiers();
-            let elemSize = rightType.kind === Types.TypeKind.POINTER ? this.sizeOf(rightType.baseType)
-                         : rightType.kind === Types.TypeKind.ARRAY ? this.sizeOf(rightType.baseType) : 1;
-            return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
-          }
-          // addr - addr (pointer difference)
-          if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
-            const leftType = expr.left.type.removeQualifiers();
-            let elemSize = leftType.kind === Types.TypeKind.POINTER ? this.sizeOf(leftType.baseType)
-                         : leftType.kind === Types.TypeKind.ARRAY ? this.sizeOf(leftType.baseType) : 1;
-            if (elemSize === 0) return null;
-            return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
-          }
-          // addr comparisons
-          if (l.kind === "addr" && r.kind === "addr") {
-            switch (expr.op) {
-              case "EQ": return { kind: "int", intVal: l.addrVal === r.addrVal ? 1n : 0n };
-              case "NE": return { kind: "int", intVal: l.addrVal !== r.addrVal ? 1n : 0n };
-              case "LT": return { kind: "int", intVal: l.addrVal < r.addrVal ? 1n : 0n };
-              case "GT": return { kind: "int", intVal: l.addrVal > r.addrVal ? 1n : 0n };
-              case "LE": return { kind: "int", intVal: l.addrVal <= r.addrVal ? 1n : 0n };
-              case "GE": return { kind: "int", intVal: l.addrVal >= r.addrVal ? 1n : 0n };
-            }
-          }
-        }
-        return null;
-      }
-      case Types.ExprKind.TERNARY: {
-        const cond = this._constEvalExpr(expr.condition);
-        if (!cond) return null;
-        let cv;
-        if (cond.kind === "int") cv = cond.intVal !== 0n;
-        else if (cond.kind === "float") cv = cond.floatVal !== 0.0;
-        else return null;
-        return this._constEvalExpr(cv ? expr.thenExpr : expr.elseExpr);
-      }
-      case Types.ExprKind.CAST:
-      case Types.ExprKind.IMPLICIT_CAST: {
-        const v = this._constEvalExpr(expr.expr);
-        if (!v) return null;
-        const t = expr.type.removeQualifiers();
-        if ((t === Types.TFLOAT || t === Types.TDOUBLE) && v.kind === "int") {
-          return { kind: "float", floatVal: Number(v.intVal) };
-        }
-        if (t.isInteger() && v.kind === "float") {
-          return { kind: "int", intVal: Types.truncateConstInt(BigInt(Math.trunc(v.floatVal)), t) };
-        }
-        if ((t.isInteger() || t.isPointer()) && v.kind === "int") {
-          return { kind: "int", intVal: Types.truncateConstInt(v.intVal, t) };
-        }
-        return v;
-      }
-      case Types.ExprKind.SIZEOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
-      case Types.ExprKind.SIZEOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.size) };
-      case Types.ExprKind.ALIGNOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
-      case Types.ExprKind.ALIGNOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.align) };
-      case Types.ExprKind.COMPOUND_LITERAL: {
-        // For scalar compound literals like (int){42}, extract the value
-        if (!expr.type.isAggregate() && !expr.type.isArray() && expr.initList &&
-            expr.initList.elements.length > 0) {
-          return this._constEvalExpr(expr.initList.elements[0]);
-        }
-        // For aggregate/array compound literals, return the address
-        const addr = this.fileScopeCompoundLiteralAddrs.get(expr);
-        if (addr !== undefined) return { kind: "addr", addrVal: addr };
-        return null;
-      }
-      default: return null;
-    }
+    return constEvalExpr(expr, this._getConstEvalPolicy());
   }
 
   // --- Populate init list into static data ---
@@ -11759,7 +11822,20 @@ function generateCode(units, outputFile, options) {
   return wmod.emit();
 }
 
-return { generateCode };
+return {
+  generateCode,
+  // ── Shared C-frontend helpers ──────────────────────────────────────
+  // These are exported so the GUC backend can use the SAME logic
+  // rather than reimplementing. See todos/SHARING_INVENTORY.md for
+  // the full plan.
+  isStructOrUnion,
+  isPackedSubI32,
+  isSignedSubI32,
+  vaSlotSize,
+  constEvalExpr,
+  constEvalAddr,
+  NULL_ADDR_POLICY,
+};
 })();
 
 // ====================
@@ -11998,10 +12074,10 @@ class Translator {
     return T.functionTypeOf(params, results);
   }
 
-  // vaSlotSize: round to 8 (matches the default backend's varargs ABI).
-  _vaSlotSize(cType) {
-    return ((cType.size || 4) + 7) & ~7;
-  }
+  // (vaSlotSize is shared with the default backend via Codegen export —
+  // this method is the same logic, kept as a wrapper so call sites in
+  // the GUC translator can read uniformly.)
+  _vaSlotSize(cType) { return Codegen.vaSlotSize(cType); }
 
   // Choose the wasm load/store opcode for a non-aggregate C type.
   _loadOp(cType) {
@@ -14714,25 +14790,26 @@ class Translator {
 
   // Compile-time evaluate a constant initializer expression. Returns a BigInt
   // (for integer types), number (for floats), or null if not evaluable here.
+  //
+  // Uses the shared module-scope `Codegen.constEvalExpr`, which handles the
+  // full C constant-expression grammar (~, !, +, -, all BinOps, ternary,
+  // casts, sizeof, alignof, ENUM_CONST). The NULL_ADDR_POLICY makes
+  // address-bearing expressions (&x, string literals as addresses, etc.)
+  // evaluate to null — those are handled separately by the deferred-IR path
+  // in `_translateStaticInitValue`.
   _evalConstInit(expr, irT) {
     const { T } = this.GUC;
-    if (!expr) return null;
-    if (expr.kind === Types.ExprKind.IMPLICIT_CAST || expr.kind === Types.ExprKind.CAST) {
-      return this._evalConstInit(expr.expr, irT);
+    const v = Codegen.constEvalExpr(expr, Codegen.NULL_ADDR_POLICY);
+    if (v === null) return null;
+    const slot = irT.slotType || irT;
+    const slotIsFloat = (slot === T.F32 || slot === T.F64);
+    if (v.kind === "int") {
+      return slotIsFloat ? Number(v.intVal) : v.intVal;
     }
-    if (expr.kind === Types.ExprKind.INT) {
-      const slot = irT.slotType || irT;
-      if (slot === T.F32 || slot === T.F64) return Number(expr.value);
-      return typeof expr.value === 'bigint' ? expr.value : BigInt(expr.value);
+    if (v.kind === "float") {
+      return slotIsFloat ? v.floatVal : BigInt(Math.trunc(v.floatVal));
     }
-    if (expr.kind === Types.ExprKind.FLOAT) {
-      return Number(expr.value);
-    }
-    if (expr.kind === Types.ExprKind.UNARY && expr.op === "OP_NEG") {
-      const inner = this._evalConstInit(expr.operand, irT);
-      if (inner === null) return null;
-      return typeof inner === 'bigint' ? -inner : -inner;
-    }
+    // addr — never produced under NULL_ADDR_POLICY but be defensive.
     return null;
   }
 }
