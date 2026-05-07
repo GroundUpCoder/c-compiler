@@ -4720,6 +4720,11 @@ const CODEGEN = (() => {
         // current function owns a stack frame (or contains alloca). Empty
         // otherwise.
         let currentReturnRestoreBytes = [];
+        // The function's _saved_sp local index (-1 if no frame). The
+        // static frame top is at saved_sp; static slots are addressed as
+        // saved_sp + (offset - frameSize), which is stable across allocas.
+        let currentSavedSpIdx = -1;
+        let currentFrameSize = 0;
         // Stack of {name, kind} entries, one per enclosing wasm scope.
         // 'block' scopes catch `break`s; 'loop' scopes catch `continue`s.
         const labelStack = [];
@@ -5123,13 +5128,19 @@ const CODEGEN = (() => {
                 const off = slotOffsets.get(expr.slot);
                 assert(off !== undefined,
                     () => `StackSlotAddr: slot ${expr.slot.name} not laid out`);
-                // global.get $sp; (i32.const off; i32.add)?
-                if (off === 0) {
-                    return [0x23, ...encodeLEBU128(stackPointerIndex)];
+                // Address relative to the saved-SP local (frame top), not
+                // current SP — the static frame must stay reachable even
+                // after Allocas have moved SP. Effective address:
+                //   saved_sp + (off - frameSize)
+                assert(currentSavedSpIdx >= 0,
+                    'StackSlotAddr in function without a frame');
+                const adj = off - currentFrameSize;
+                if (adj === 0) {
+                    return [0x20, ...encodeLEBU128(currentSavedSpIdx)];
                 }
                 return [
-                    0x23, ...encodeLEBU128(stackPointerIndex),
-                    0x41, ...encodeLEBS128(off),
+                    0x20, ...encodeLEBU128(currentSavedSpIdx),
+                    0x41, ...encodeLEBS128(adj),
                     0x6A, // i32.add
                 ];
             } else if (expr instanceof IR.Alloca) {
@@ -5684,6 +5695,8 @@ const CODEGEN = (() => {
                     extraLocals = [savedSpLocal];
                     const spIdxBytes = encodeLEBU128(stackPointerIndex);
                     const savedIdx = currentLocalIndexMap.get(savedSpLocal);
+                    currentSavedSpIdx = savedIdx;
+                    currentFrameSize = frameSize;
                     const savedIdxBytes = encodeLEBU128(savedIdx);
                     // saved_sp = sp; sp -= frameSize;  (frameSize may be 0
                     // if only alloca uses the stack — in that case prologue
@@ -5727,6 +5740,8 @@ const CODEGEN = (() => {
                 ];
                 currentLocalIndexMap = null;
                 currentReturnRestoreBytes = [];
+                currentSavedSpIdx = -1;
+                currentFrameSize = 0;
                 return [...encodeLEBU128(bodyBytes.length), ...bodyBytes];
             });
             const content = [
