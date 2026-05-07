@@ -303,7 +303,7 @@ def run_single_test(test_dir, compiler_cmd):
         if events:
             run_result = run_with_events(run_cmd, events, timeout=30)
         else:
-            run_result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
+            run_result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30, errors='replace')
 
         errors = []
 

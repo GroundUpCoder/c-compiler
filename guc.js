@@ -694,9 +694,10 @@ const IR = (() => {
     class Program {
         // memorySpec (optional): {
         //   staticDataBase?,  // start address for auto-laid-out static
-        //                     //   data (default 0). All BytesLiterals and
-        //                     //   MutableBytesLiterals are placed starting
-        //                     //   here.
+        //                     //   data (default 0). BytesLiterals and
+        //                     //   MutableBytes regions (referenced via
+        //                     //   IR.MutableBytesAddr) are placed
+        //                     //   starting here.
         //   stackPages?,      // bytes of stack to reserve, in 64KB pages.
         //                     //   When > 0, codegen auto-creates a mutable
         //                     //   `__stack_pointer` global initialized to
@@ -949,6 +950,8 @@ const IR = (() => {
             this.containsAlloca = this._computeContainsAlloca();
             this.hasNullTableCallIndirect =
                 this._computeHasNullTableCallIndirect();
+            this.referencedMutableBytes =
+                this._computeReferencedMutableBytes();
             Object.freeze(this.types);
             Object.freeze(this.children);
             Object.freeze(this);
@@ -1043,6 +1046,15 @@ const IR = (() => {
                 if (c.hasNullTableCallIndirect) return true;
             }
             return false;
+        }
+
+        // referencedMutableBytes: TreeBag<MutableBytes> — every distinct
+        // MutableBytes identity reached via MutableBytesAddr in this
+        // subtree. Codegen iterates the bag at layout time, assigning
+        // each one address + data segment exactly once.
+        _computeReferencedMutableBytes() {
+            return new TreeBag(null,
+                ...this.children.map(c => c.referencedMutableBytes));
         }
 
         // Union of `Map<label, TreeBag<X>>` across children, indexed by label.
@@ -1693,21 +1705,41 @@ const IR = (() => {
         }
     }
 
-    // MutableBytesLiteral: like BytesLiteral but each instance gets its OWN
-    // address (no content-dedup), and the laid-out region is intended to be
-    // mutated at runtime via Store/MemoryFill/MemoryCopy. The address is a
-    // constant i32; codegen places the bytes in an active data segment in
-    // the same static-data region as BytesLiterals.
-    class MutableBytesLiteral extends Expression {
-        constructor(loc, bytes, name) {
-            super(loc, [T.I32], [], 'UNRESTRICTED');
+    // MutableBytes: an identity object for a mutable static byte region.
+    // NOT an Expression — it has no stack-effect by itself. Address it
+    // via IR.MutableBytesAddr(mb). Two MutableBytes instances with the
+    // same content are still distinct globals (no content-dedup, by
+    // contract — that's what makes it "mutable" semantics).
+    //
+    // Frontends typically allocate one per static-storage variable
+    // (e.g. one per C MEMORY-class global) at translate time, then
+    // reference it via fresh MutableBytesAddr expressions at every use
+    // site. Codegen lays each MutableBytes out exactly once.
+    class MutableBytes {
+        constructor(name, bytes) {
+            this.name = name || null;
             this.bytes = new Uint8Array(bytes);
-            this.name = name || null; // optional, for debugging only
+            Object.freeze(this);
+        }
+    }
+
+    // MutableBytesAddr: leaf Expression yielding the i32 address of a
+    // MutableBytes region. Multiple MutableBytesAddr instances pointing
+    // at the same MutableBytes resolve to the same address at codegen
+    // (the layout pass keys on identity, not on the Expression instance).
+    // UNRESTRICTED — pure address constant.
+    class MutableBytesAddr extends Expression {
+        constructor(loc, mb) {
+            assert(mb instanceof MutableBytes,
+                'MutableBytesAddr: mb must be an IR.MutableBytes');
+            super(loc, [T.I32], [], 'UNRESTRICTED');
+            this.mb = mb;
             this._finalize();
         }
 
-        _computeBytesLiterals() {
-            return new TreeBag(new Set([this]), super._computeBytesLiterals());
+        _computeReferencedMutableBytes() {
+            return new TreeBag(new Set([this.mb]),
+                super._computeReferencedMutableBytes());
         }
     }
 
@@ -3962,7 +3994,8 @@ const IR = (() => {
         MemoryCopy,
         MemoryFill,
         BytesLiteral,
-        MutableBytesLiteral,
+        MutableBytes,
+        MutableBytesAddr,
         StackSlot,
         StackSlotAddr,
         Alloca,
@@ -4651,36 +4684,26 @@ const CODEGEN = (() => {
             declarativeFuncs.push(f);
         }
 
-        // Lay out BytesLiterals + MutableBytesLiterals in linear memory.
-        // Immutable BytesLiterals are deduplicated by content (repeated
-        // identical blobs share a single data segment); MutableBytesLiterals
-        // each get a unique address (no dedup, since they're mutated at
-        // runtime). All blobs sit in one contiguous static-data region
-        // starting at `staticDataBase`.
+        // Lay out static data in linear memory:
+        //   - BytesLiterals: deduped by content (repeated identical blobs
+        //     share a single data segment).
+        //   - MutableBytes (referenced via MutableBytesAddr): one address
+        //     and one data segment per identity, no content-dedup.
+        // All blobs sit in one contiguous static-data region starting at
+        // `staticDataBase`.
         const memorySpec = program.memorySpec;
         const staticDataBase = (memorySpec && memorySpec.staticDataBase) || 0;
-        const dataSegments = []; // [{ offset, bytes }]
-        const bytesAddrMap = new Map(); // BytesLiteral|MutableBytesLiteral -> address
+        const dataSegments = [];
+        const bytesAddrMap = new Map();          // BytesLiteral -> address
+        const mutableBytesAddrMap = new Map();   // MutableBytes -> address
         let staticDataEnd = staticDataBase;
         if (memorySpec) {
-            const byContentKey = new Map(); // content key -> address
+            const byContentKey = new Map();
             let cursor = staticDataBase;
+            // Immutable BytesLiterals first (deduped).
             for (const func of definedFunctions) {
                 if (!func.body) continue;
                 for (const bl of func.body.bytesLiterals) {
-                    if (bl instanceof IR.MutableBytesLiteral) {
-                        // Each mutable literal gets its own address — but
-                        // only ONCE. If the same MBL instance is reachable
-                        // from multiple functions (e.g. a static global
-                        // referenced everywhere), share a single address
-                        // and a single data segment.
-                        if (bytesAddrMap.has(bl)) continue;
-                        const addr = cursor;
-                        dataSegments.push({ offset: addr, bytes: bl.bytes });
-                        cursor += bl.bytes.length;
-                        bytesAddrMap.set(bl, addr);
-                        continue;
-                    }
                     const key = Array.from(bl.bytes).join(',');
                     let addr = byContentKey.get(key);
                     if (addr === undefined) {
@@ -4690,6 +4713,21 @@ const CODEGEN = (() => {
                         cursor += bl.bytes.length;
                     }
                     bytesAddrMap.set(bl, addr);
+                }
+            }
+            // MutableBytes — one address per identity. Iterate in
+            // first-encounter order across functions so layouts are
+            // deterministic.
+            const seenMb = new Set();
+            for (const func of definedFunctions) {
+                if (!func.body) continue;
+                for (const mb of func.body.referencedMutableBytes) {
+                    if (seenMb.has(mb)) continue;
+                    seenMb.add(mb);
+                    const addr = cursor;
+                    dataSegments.push({ offset: addr, bytes: mb.bytes });
+                    cursor += mb.bytes.length;
+                    mutableBytesAddrMap.set(mb, addr);
                 }
             }
             staticDataEnd = cursor;
@@ -5359,11 +5397,15 @@ const CODEGEN = (() => {
                     ...refBytes, 0xFB, sub,
                     ...encodeHeapType(expr.targetRefType.heapType),
                 ];
-            } else if (expr instanceof IR.BytesLiteral
-                    || expr instanceof IR.MutableBytesLiteral) {
+            } else if (expr instanceof IR.BytesLiteral) {
                 const addr = bytesAddrMap.get(expr);
                 assert(addr !== undefined,
                     'BytesLiteral used without a memorySpec on Program');
+                return [0x41, ...encodeLEBS128(addr)]; // i32.const <addr>
+            } else if (expr instanceof IR.MutableBytesAddr) {
+                const addr = mutableBytesAddrMap.get(expr.mb);
+                assert(addr !== undefined,
+                    () => `MutableBytesAddr: '${expr.mb.name || '<anon>'}' not laid out (memorySpec missing?)`);
                 return [0x41, ...encodeLEBS128(addr)]; // i32.const <addr>
             } else if (expr instanceof IR.HeapBase) {
                 return [0x41, ...encodeLEBS128(heapBaseAddr)]; // i32.const heap_base

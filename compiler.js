@@ -11825,7 +11825,7 @@ class Translator {
     // Memory layout: codegen owns it now via memorySpec.stackPages.
     // Static data sits at memorySpec.staticDataBase (we use 16 to keep
     // address 0 = NULL distinct), then codegen-managed BytesLiterals +
-    // MutableBytesLiterals, then the stack region (stackPages * 64KB),
+    // MutableBytes regions, then the stack region (stackPages * 64KB),
     // then the heap. IR.HeapBase resolves to the first byte after the
     // stack.
     this.STACK_PAGES = 1;
@@ -11838,11 +11838,10 @@ class Translator {
 
     // C global decl -> IR.GlobalVariable (for REGISTER-class scalar globals).
     this.cGlobalToIR = new Map();
-    // C global decl -> IR.MutableBytesLiteral whose i32 address resolves
-    // (at codegen time) to the global's location in linear memory. Each
-    // global owns its own MBL; the same instance is referenced from every
-    // use site, so the address is shared.
-    this.cGlobalToBlob = new Map();
+    // C global decl -> IR.MutableBytes identity object. Every use of the
+    // global wraps a fresh IR.MutableBytesAddr around this identity;
+    // codegen assigns one address per identity.
+    this.cGlobalToMb = new Map();
 
     // Function pointer support is now handled entirely by IR.FuncIndex +
     // codegen's auto-table synthesis. We just emit FuncIndex(irFunc) at
@@ -12086,13 +12085,13 @@ class Translator {
         const def = decl && (decl.definition || decl);
         const g = def && this.cGlobalToIR.get(def);
         if (g) return new IR.GetVars(loc, [g]);
-        // MEMORY-class global: address comes from the global's
-        // MutableBytesLiteral.
-        const blob = def && this.cGlobalToBlob.get(def);
-        if (blob) {
-          if (decl.type.isArray && decl.type.isArray()) return blob;
-          if (decl.type.isAggregate && decl.type.isAggregate()) return blob;
-          return new IR.Load(loc, this._loadOp(decl.type), blob);
+        // MEMORY-class global: address via MutableBytesAddr.
+        const mb = def && this.cGlobalToMb.get(def);
+        if (mb) {
+          const addr = new IR.MutableBytesAddr(loc, mb);
+          if (decl.type.isArray && decl.type.isArray()) return addr;
+          if (decl.type.isAggregate && decl.type.isAggregate()) return addr;
+          return new IR.Load(loc, this._loadOp(decl.type), addr);
         }
         // Function in expression context: decays to function pointer (table index).
         if (decl && decl.declKind === Types.DeclKind.FUNC) {
@@ -12974,9 +12973,10 @@ class Translator {
       const def = decl && (decl.definition || decl);
       const g = def && this.cGlobalToIR.get(def);
       if (g) return new IR.TeeVars(loc, [g], rhsIR);
-      const blob = def && this.cGlobalToBlob.get(def);
-      if (blob) {
-        return this._storeAndYield(loc, blob, decl.type, rhsIR);
+      const mb = def && this.cGlobalToMb.get(def);
+      if (mb) {
+        return this._storeAndYield(loc,
+          new IR.MutableBytesAddr(loc, mb), decl.type, rhsIR);
       }
       nyi(`assign to '${lhsAst.name}' (non-local)`, loc);
     }
@@ -13080,8 +13080,8 @@ class Translator {
         }
         const decl = expr.decl;
         const def = decl && (decl.definition || decl);
-        const blob = def && this.cGlobalToBlob.get(def);
-        if (blob) return blob;
+        const mb = def && this.cGlobalToMb.get(def);
+        if (mb) return new IR.MutableBytesAddr(loc, mb);
         // Function: take its address = table index.
         if (decl && decl.declKind === Types.DeclKind.FUNC) {
           return this._funcTableIndex(loc, decl);
@@ -14413,9 +14413,10 @@ class Translator {
 
   // Walk all translation units and register their global variables. Scalar
   // REGISTER-class globals become IR.GlobalVariable with a constant init.
-  // Aggregate / address-taken (MEMORY-class) globals each become an
-  // IR.MutableBytesLiteral whose initializer bytes carry the global's
-  // initial value; codegen places them in linear memory.
+  // Aggregate / address-taken (MEMORY-class) globals each get an
+  // IR.MutableBytes identity carrying their initial bytes; uses wrap a
+  // fresh IR.MutableBytesAddr around the identity, and codegen places
+  // them in linear memory once per identity.
   _collectGlobals(units) {
     const { T, IR } = this.GUC;
 
@@ -14425,30 +14426,27 @@ class Translator {
         const def = v.definition || v;
         if (def !== v) continue;
         if (def.storageClass === Types.StorageClass.EXTERN) continue;
-        if (this.cGlobalToIR.has(def) || this.cGlobalToBlob.has(def)) continue;
+        if (this.cGlobalToIR.has(def) || this.cGlobalToMb.has(def)) continue;
         if (def.allocClass === Types.AllocClass.REGISTER) {
           this._defineRegisterGlobal(def);
         }
       }
     }
 
-    // Second pass: MEMORY-class globals. Each becomes its own
-    // MutableBytesLiteral; codegen owns the address.
+    // Second pass: MEMORY-class globals. Each becomes one MutableBytes.
     for (const unit of units) {
       for (const v of unit.definedVariables) {
         const def = v.definition || v;
         if (def !== v) continue;
         if (def.storageClass === Types.StorageClass.EXTERN) continue;
         if (def.allocClass !== Types.AllocClass.MEMORY) continue;
-        if (this.cGlobalToBlob.has(def)) continue;
+        if (this.cGlobalToMb.has(def)) continue;
         const sz = def.type.size || 1;
         const buf = new Uint8Array(sz); // zero-init
         if (def.initExpr) {
           this._writeStaticInit(buf, 0, def.type, def.initExpr);
         }
-        const loc = def.loc || Lexer.Loc.generated();
-        this.cGlobalToBlob.set(def,
-          new IR.MutableBytesLiteral(loc, buf, def.name));
+        this.cGlobalToMb.set(def, new IR.MutableBytes(def.name, buf));
       }
     }
   }
