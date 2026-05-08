@@ -7120,130 +7120,18 @@ function parseSource(filename, source, ppRegistry) {
   return parseResult;
 }
 
-// ====================
-// Implicit Cast Annotation
-// ====================
-
-function wrapImplicitCast(expr, targetType, setter) {
-  targetType = targetType.removeQualifiers();
-  const srcType = expr.type.removeQualifiers();
-  if (srcType === targetType) return;
-  if (targetType.isVoid() || srcType.isVoid()) return;
-  setter(new AST.EImplicitCast(targetType, expr));
-}
-
-// Inline-friendly: returns the (possibly wrapped) expression. Used by the
-// parser to insert implicit casts at construction time, while
-// wrapImplicitCast is kept for the older post-pass annotation walker.
+// Wrap an expression in EImplicitCast at the target type. Returns the
+// (possibly wrapped) expression — pass-through when the source already
+// matches the target after qualifier strip, or when either side is void.
+// Used at the seven C-standard implicit-conversion sites: BinOp operands,
+// Call args, Ternary branches, Return value, Decl init, Throw args, and
+// the setjmp/longjmp lowering helper.
 function maybeImplicitCast(expr, targetType) {
   targetType = targetType.removeQualifiers();
   const srcType = expr.type.removeQualifiers();
   if (srcType === targetType) return expr;
   if (targetType.isVoid() || srcType.isVoid()) return expr;
   return new AST.EImplicitCast(targetType, expr);
-}
-
-function annotateExpr(expr) {
-  if (!expr) return;
-  if (expr instanceof AST.EBinary) {
-    // BinOp implicit casts are inserted inline at parse time by
-    // parseBinaryExpression; just recurse into operands here for any
-    // remaining post-pass work on nested expressions.
-    annotateExpr(expr.left);
-    annotateExpr(expr.right);
-    return;
-  }
-  if (expr instanceof AST.ECall) {
-    // Call argument implicit casts are inserted inline at parse time by
-    // parsePostfixTail; recurse for any remaining post-pass work.
-    annotateExpr(expr.callee);
-    for (const arg of expr.arguments) annotateExpr(arg);
-    return;
-  }
-  if (expr instanceof AST.ETernary) {
-    // Ternary branch implicit casts are inserted inline at parse time;
-    // recurse for any remaining post-pass work.
-    annotateExpr(expr.condition);
-    annotateExpr(expr.thenExpr);
-    annotateExpr(expr.elseExpr);
-    return;
-  }
-  if (expr instanceof AST.EUnary)     { annotateExpr(expr.operand); return; }
-  if (expr instanceof AST.ESubscript) { annotateExpr(expr.array); annotateExpr(expr.index); return; }
-  if (expr instanceof AST.EMember || expr instanceof AST.EArrow) { annotateExpr(expr.base); return; }
-  if (expr instanceof AST.ECast)         { annotateExpr(expr.expr); return; }
-  if (expr instanceof AST.EImplicitCast) { annotateExpr(expr.expr); return; }
-  if (expr instanceof AST.EComma)        { for (const e of expr.expressions) annotateExpr(e); return; }
-  if (expr instanceof AST.EInitList)     { for (const e of expr.elements) annotateExpr(e); return; }
-  if (expr instanceof AST.EIntrinsic)    { for (const arg of expr.args) annotateExpr(arg); return; }
-  if (expr instanceof AST.EWasm)         { for (const arg of expr.args) annotateExpr(arg); return; }
-  if (expr instanceof AST.ECompoundLiteral) {
-    if (expr.initList) for (const e of expr.initList.elements) annotateExpr(e);
-    return;
-  }
-  if (expr instanceof AST.ESizeofExpr || expr instanceof AST.EAlignofExpr) {
-    annotateExpr(expr.expr);
-    return;
-  }
-  // EInt, EFloat, EString, EIdent, ESizeofType, EAlignofType — leaf nodes
-}
-
-function annotateStmt(stmt, returnType) {
-  if (!stmt) return;
-  switch (stmt.constructor) {
-    case AST.SExpr:
-      annotateExpr(stmt.expr);
-      break;
-    case AST.SReturn:
-      // Return-value implicit cast is inserted inline at parse time;
-      // recurse for any remaining post-pass work on the wrapped expr.
-      if (stmt.expr) annotateExpr(stmt.expr);
-      break;
-    case AST.SDecl:
-      // Decl-init implicit casts are inserted inline at parse time;
-      // recurse for any remaining post-pass work on the wrapped exprs.
-      for (const decl of stmt.declarations) {
-        if (decl instanceof AST.DVar && decl.initExpr) annotateExpr(decl.initExpr);
-      }
-      break;
-    case AST.SCompound:
-      for (const s of stmt.statements) annotateStmt(s, returnType);
-      break;
-    case AST.SIf:
-      annotateExpr(stmt.condition);
-      annotateStmt(stmt.thenBranch, returnType);
-      if (stmt.elseBranch) annotateStmt(stmt.elseBranch, returnType);
-      break;
-    case AST.SWhile:
-      annotateExpr(stmt.condition);
-      annotateStmt(stmt.body, returnType);
-      break;
-    case AST.SDoWhile:
-      annotateStmt(stmt.body, returnType);
-      annotateExpr(stmt.condition);
-      break;
-    case AST.SFor:
-      if (stmt.init) annotateStmt(stmt.init, returnType);
-      if (stmt.condition) annotateExpr(stmt.condition);
-      if (stmt.increment) annotateExpr(stmt.increment);
-      annotateStmt(stmt.body, returnType);
-      break;
-    case AST.SSwitch:
-      annotateExpr(stmt.expr);
-      if (stmt.body) annotateStmt(stmt.body, returnType);
-      break;
-    case AST.STryCatch:
-      annotateStmt(stmt.tryBody, returnType);
-      for (const cc of stmt.catches) annotateStmt(cc.body, returnType);
-      break;
-    case AST.SThrow:
-      // Throw-arg implicit casts are inserted inline at parse time and
-      // by the setjmp/longjmp lowering helper; recurse only.
-      for (const arg of stmt.args) annotateExpr(arg);
-      break;
-    default:
-      break;
-  }
 }
 
 // ========== setjmp/longjmp lowering ==========
@@ -7543,22 +7431,11 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   for (const f of unit.staticFunctions) lowerFunc(f);
 }
 
-function annotateImplicitCasts(unit) {
-  const annotateFunc = (func) => {
-    if (!func.body) return;
-    const retType = func.type.returnType || Types.TINT;
-    annotateStmt(func.body, retType);
-  };
-  for (const f of unit.definedFunctions) annotateFunc(f);
-  for (const f of unit.staticFunctions) annotateFunc(f);
-}
-
 return {
   dumpAst, parseTokens, parseSource,
   filterUnusedDeclarations, gcSectionsPass,
   linkTranslationUnits,
   lowerSetjmpLongjmp,
-  annotateImplicitCasts, annotateExpr, annotateStmt,
 };
 })();
 
@@ -16173,10 +16050,10 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       }
     }
     // Per-TU passes (before linking). Goto resolution lives in the codegen
-    // now: out-of-scope diagnostics are emitted by Codegen.generateCode as
-    // it walks the AST, so there's no separate pre-pass.
+    // now (out-of-scope diagnostics are emitted by Codegen.generateCode as
+    // it walks the AST). Implicit-cast insertion happens inline at parse
+    // time at each construction site.
     Parser.lowerSetjmpLongjmp(unit, exceptionTagRegistry);
-    Parser.annotateImplicitCasts(unit);
     if (!options?.compilerOptions?.noUndefined) Parser.filterUnusedDeclarations(unit);
     if (timing) timing.parseMs += hrtime() - tParse;
     if (parseResult.errors.length > 0) {
@@ -17207,9 +17084,6 @@ var _exports = {
   filterUnusedDeclarations: Parser.filterUnusedDeclarations,
   linkTranslationUnits: Parser.linkTranslationUnits,
   lowerSetjmpLongjmp: Parser.lowerSetjmpLongjmp,
-  annotateImplicitCasts: Parser.annotateImplicitCasts,
-  annotateExpr: Parser.annotateExpr,
-  annotateStmt: Parser.annotateStmt,
   gcSectionsPass: Parser.gcSectionsPass,
   // Pipeline
   createDefaultPPRegistry: Stdlib.createDefaultPPRegistry,
