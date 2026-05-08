@@ -12968,10 +12968,13 @@ class Translator {
     // Assignment family: lvalue := rvalue.
     if (expr.op === "ASSIGN") return this.translateAssign(expr.left, this.translateExpr(expr.right), loc);
     if (expr.op.endsWith("_ASSIGN")) {
-      // x op= y  becomes  x = x op y. Stick with the AST shape — the
-      // implicit-cast pass should already have inserted any needed casts.
-      const baseOp = expr.op.slice(0, -"_ASSIGN".length); // e.g. "ADD"
+      // x op= y  ≡  x = (typeof x)((promoted-typeof-x) op (promoted-typeof-y))
+      // C99 §6.5.16.2: usual arithmetic conversions apply, op runs in the
+      // common type, then the result is converted to the type of E1.
+      // The default backend does this in emitAssignment via emitConversion.
+      const baseOp = expr.op.slice(0, -"_ASSIGN".length);
       const lhsType = expr.left.type;
+      const rhsType = expr.right.type;
       const isPtrLhs = (lhsType.isPointer && lhsType.isPointer()) ||
                        (lhsType.isArray && lhsType.isArray());
       const lhsRead = this.translateExpr(expr.left);
@@ -12983,10 +12986,27 @@ class Translator {
         rhs = this._narrowI64ToI32(rhs, loc);
         if (elemSize !== 1) rhs = new IR.BinOp(loc, 'mul', rhs, this.iconst(loc, elemSize));
         newVal = new IR.BinOp(loc, baseOp === "ADD" ? 'add' : 'sub', lhsRead, rhs);
-      } else {
-        newVal = new IR.BinOp(loc, this.cBopToIR(baseOp), lhsRead, rhs);
+        return this.translateAssign(expr.left, newVal, loc);
       }
-      return this.translateAssign(expr.left, newVal, loc);
+      // Arithmetic compound assign: promote both sides to opType.
+      const opType = Types.usualArithmeticConversions(lhsType, rhsType);
+      const lhsIRT = this.cTypeToIR(lhsType);
+      const rhsIRT = this.cTypeToIR(rhsType);
+      const opIRT = this.cTypeToIR(opType);
+      const promotedLhs = this.emitConversion(loc, lhsIRT, opIRT, lhsRead,
+        { kind: Types.ExprKind.IMPLICIT_CAST, type: opType, expr: expr.left });
+      const promotedRhs = this.emitConversion(loc, rhsIRT, opIRT, rhs,
+        { kind: Types.ExprKind.IMPLICIT_CAST, type: opType, expr: expr.right });
+      const opResult = new IR.BinOp(loc, this.cBopToIR(baseOp),
+        promotedLhs, promotedRhs);
+      const slotConverted = this.emitConversion(loc, opIRT, lhsIRT, opResult,
+        { kind: Types.ExprKind.IMPLICIT_CAST, type: lhsType,
+          expr: { type: opType } });
+      // After slot-conversion, narrow types (u8/i8/u16/i16) still hold the
+      // full slot value. Mask/sign-extend to fit the C type's width so the
+      // stored value matches what `(unsigned char)result` would produce.
+      const narrowed = this._truncateToCType(slotConverted, lhsType, loc);
+      return this.translateAssign(expr.left, narrowed, loc);
     }
     // Logical short-circuit: && and || lower to IfElse (no IR.BinOp).
     if (expr.op === "LAND" || expr.op === "LOR") {
@@ -14515,6 +14535,29 @@ class Translator {
       return;
     }
     nyi(`init list for type ${type.kind}`, loc);
+  }
+
+  // Truncate / sign-extend an i32-slot value to fit a narrow C integer type.
+  // Used after compound assignment to enforce the type's actual width
+  // (e.g. `unsigned char` must be masked to 8 bits before store, since the
+  // IR slot is always i32 and the BinOp result was computed at full width).
+  _truncateToCType(value, cType, loc) {
+    const { T, IR } = this.GUC;
+    const u = cType.removeQualifiers ? cType.removeQualifiers() : cType;
+    switch (u.kind) {
+      case Types.TypeKind.UCHAR:
+      case Types.TypeKind.BOOL:
+        return new IR.BinOp(loc, 'and', value, this.iconst(loc, 0xFF));
+      case Types.TypeKind.SCHAR:
+      case Types.TypeKind.CHAR:
+        return new IR.Convert(loc, 'i32.extend8_s', value);
+      case Types.TypeKind.USHORT:
+        return new IR.BinOp(loc, 'and', value, this.iconst(loc, 0xFFFF));
+      case Types.TypeKind.SHORT:
+        return new IR.Convert(loc, 'i32.extend16_s', value);
+      default:
+        return value;
+    }
   }
 
   // Compute the i32 address of a MEMORY-class variable. Emits a fresh
