@@ -2573,6 +2573,15 @@ class Scope {
   hasInCurrentScope(name) {
     return this.stack[this.stack.length - 1].has(name);
   }
+  getInCurrentScope(name) {
+    return this.stack[this.stack.length - 1].get(name);
+  }
+  getLevel(name) {
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      if (this.stack[i].has(name)) return i;
+    }
+    return -1;
+  }
 }
 
 // ====================
@@ -5787,7 +5796,13 @@ class Parser {
           return true;
       }
     }
-    if (t.kind === Lexer.TokenKind.IDENT && this.typeScope.has(t.text)) return true;
+    if (t.kind === Lexer.TokenKind.IDENT) {
+      const typeLevel = this.typeScope.getLevel(t.text);
+      if (typeLevel !== -1) {
+        const varLevel = this.varScope.getLevel(t.text);
+        return typeLevel >= varLevel;
+      }
+    }
     return false;
   }
 
@@ -8030,7 +8045,7 @@ class Parser {
         if (specs.requestedAlignment > 0) {
           this.error(this.peek(-1), "_Alignas cannot be applied to a typedef");
         }
-        const prevType = this.typeScope.get(name);
+        const prevType = this.typeScope.getInCurrentScope(name);
         if (prevType && prevType.removeQualifiers() !== type.removeQualifiers()) {
           this.error(this.peek(), `redefinition of typedef '${name}'`);
         }
