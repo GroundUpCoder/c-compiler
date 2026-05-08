@@ -2832,7 +2832,7 @@ class DumpContext {
   }
   formatDeclId(decl) { return this.formatId(decl); }
   formatDeclIdOfDefinition(decl) {
-    if (decl.declKind === Types.DeclKind.FUNC || decl.declKind === Types.DeclKind.VAR) {
+    if (decl instanceof AST.DFunc || decl instanceof AST.DVar) {
       return this.formatId(decl.definition);
     }
     return this.formatId(decl);
@@ -3089,11 +3089,11 @@ function dumpDecl(decl, ctx, indent) {
     ret += " (def=" + defnStr + ")";
   }
   ret += ":";
-  if (decl.declKind === Types.DeclKind.VAR) {
+  if (decl instanceof AST.DVar) {
     ret += " " + decl.name + " " + decl.type.toString();
     if (decl.storageClass !== Types.StorageClass.NONE) ret += " (" + decl.storageClass + ")";
     if (decl.initExpr) ret += dumpExpr(decl.initExpr, ctx, indent + 1);
-  } else if (decl.declKind === Types.DeclKind.FUNC) {
+  } else if (decl instanceof AST.DFunc) {
     ret += " " + decl.name + " " + decl.type.toString();
     if (decl.storageClass !== Types.StorageClass.NONE) ret += " (" + decl.storageClass + ")";
     ret += ind(indent + 1) + decl.parameters.length + " parameters";
@@ -3150,10 +3150,10 @@ function filterUnusedDeclarations(unit) {
   // Fixed-point walk
   while (worklist.length > 0) {
     const d = worklist.pop();
-    if (d.declKind === Types.DeclKind.FUNC) {
+    if (d instanceof AST.DFunc) {
       if (d.definition && d.definition !== d) activate(d.definition);
       for (const used of d.usedSymbols) activate(used);
-    } else if (d.declKind === Types.DeclKind.VAR) {
+    } else if (d instanceof AST.DVar) {
       if (d.definition && d.definition !== d) activate(d.definition);
     }
   }
@@ -3191,10 +3191,10 @@ function gcSectionsPass(units, options) {
 
   while (worklist.length > 0) {
     const d = worklist.pop();
-    if (d.declKind === Types.DeclKind.FUNC) {
+    if (d instanceof AST.DFunc) {
       if (d.definition && d.definition !== d) activate(d.definition);
       for (const used of d.usedSymbols) activate(used);
-    } else if (d.declKind === Types.DeclKind.VAR) {
+    } else if (d instanceof AST.DVar) {
       if (d.definition && d.definition !== d) activate(d.definition);
     }
   }
@@ -3231,16 +3231,16 @@ function linkTranslationUnits(units, compilerOptions) {
   }
 
   function isDefinition(decl) {
-    if (decl.declKind === Types.DeclKind.VAR) {
+    if (decl instanceof AST.DVar) {
       return decl.storageClass !== Types.StorageClass.EXTERN || decl.initExpr != null;
-    } else if (decl.declKind === Types.DeclKind.FUNC) {
+    } else if (decl instanceof AST.DFunc) {
       return decl.body != null;
     }
     return false;
   }
 
   function isImportFunction(decl) {
-    return decl.declKind === Types.DeclKind.FUNC && decl.storageClass === Types.StorageClass.IMPORT;
+    return decl instanceof AST.DFunc && decl.storageClass === Types.StorageClass.IMPORT;
   }
 
   function getDeclType(decl) { return decl.type; }
@@ -3260,13 +3260,13 @@ function linkTranslationUnits(units, compilerOptions) {
 
   function setDefinition(decl, definition) {
     if (decl.declKind !== definition.declKind) return;
-    if (decl.declKind === Types.DeclKind.VAR) {
+    if (decl instanceof AST.DVar) {
       decl.definition = definition;
       // Propagate allocClass
       if (decl.allocClass === Types.AllocClass.MEMORY) {
         definition.allocClass = Types.AllocClass.MEMORY;
       }
-    } else if (decl.declKind === Types.DeclKind.FUNC) {
+    } else if (decl instanceof AST.DFunc) {
       decl.definition = definition;
     }
   }
@@ -3287,8 +3287,8 @@ function linkTranslationUnits(units, compilerOptions) {
 
     if (isDefinition(existing)) {
       // Allow duplicate definitions for inline functions
-      if (decl.declKind === Types.DeclKind.FUNC && decl.isInline &&
-          existing.declKind === Types.DeclKind.FUNC && existing.isInline) {
+      if (decl instanceof AST.DFunc && decl.isInline &&
+          existing instanceof AST.DFunc && existing.isInline) {
         return;
       }
       addError(`Duplicate definition of symbol '${name}'`);
@@ -3326,7 +3326,7 @@ function linkTranslationUnits(units, compilerOptions) {
         return;
       }
       if (!isDefinition(it) && !isImportFunction(it)) {
-        if (compilerOptions.allowUndefined && it.declKind === Types.DeclKind.FUNC) {
+        if (compilerOptions.allowUndefined && it instanceof AST.DFunc) {
           it.storageClass = Types.StorageClass.IMPORT;
         } else {
           addError(`Undefined symbol '${name}' during linking`, [decl.loc || it.loc]);
@@ -3362,7 +3362,7 @@ function constEvalInt(expr) {
   switch (expr.constructor) {
     case AST.EInt: return expr.value;  // already BigInt
     case AST.EIdent:
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) return expr.decl.value;
+      if (expr.decl && expr.decl instanceof AST.DEnumConst) return expr.decl.value;
       return null;
     case AST.EBinary: {
       const l = constEvalInt(expr.left), r = constEvalInt(expr.right);
@@ -3426,7 +3426,7 @@ function constEvalInt(expr) {
 function getVarMembers(tag) {
   const result = [];
   for (const m of tag.members) {
-    if (m.declKind !== Types.DeclKind.VAR) continue;
+    if (!(m instanceof AST.DVar)) continue;
     if (m.bitWidth >= 0 && !m.name) continue; // skip unnamed bitfields
     result.push(m);
   }
@@ -3437,7 +3437,7 @@ function getVarMembers(tag) {
 // anonymous struct/union members. Returns array of DVar* path, or null.
 function findMemberChain(tag, name) {
   for (const m of tag.members) {
-    if (m.declKind !== Types.DeclKind.VAR) continue;
+    if (!(m instanceof AST.DVar)) continue;
     if (m.name === name) return [m];
     // Recurse into anonymous struct/union members
     if (!m.name && m.type.isTag() && m.type.tagDecl) {
@@ -4299,7 +4299,7 @@ class Parser {
       // Validate flexible array members (C99)
       {
         let foundFAM = false, famIdx = -1;
-        const varMembers = members.filter(m => m.declKind === Types.DeclKind.VAR);
+        const varMembers = members.filter(m => m instanceof AST.DVar);
         for (let i = 0; i < varMembers.length; i++) {
           const mv = varMembers[i];
           if (mv.type.kind === Types.TypeKind.ARRAY && mv.type.arraySize === 0) {
@@ -4651,9 +4651,9 @@ class Parser {
       if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(decl);
       else this.globalUsedSymbols.add(decl);
 
-      if (decl.declKind === Types.DeclKind.VAR) return new AST.EIdent(decl.type, name, decl);
-      if (decl.declKind === Types.DeclKind.FUNC) return new AST.EIdent(decl.type, name, decl);
-      if (decl.declKind === Types.DeclKind.ENUM_CONST) return new AST.EIdent(Types.TINT, name, decl);
+      if (decl instanceof AST.DVar) return new AST.EIdent(decl.type, name, decl);
+      if (decl instanceof AST.DFunc) return new AST.EIdent(decl.type, name, decl);
+      if (decl instanceof AST.DEnumConst) return new AST.EIdent(Types.TINT, name, decl);
       return new AST.EIdent(Types.TINT, name, decl);
     }
 
@@ -5417,7 +5417,7 @@ class Parser {
     const ut = type.removeQualifiers();
     if (ut.tagDecl && ut.tagDecl.members) {
       for (const m of ut.tagDecl.members) {
-        if (m.declKind !== Types.DeclKind.VAR) continue;
+        if (!(m instanceof AST.DVar)) continue;
         if (m.name === name) return [m];
         // Recurse into anonymous struct/union members
         if (!m.name && m.type && m.type.tagDecl && m.type.tagDecl.members) {
@@ -5441,7 +5441,7 @@ class Parser {
   markAddressTaken(expr) {
     if (!expr) return;
     if (expr instanceof AST.EIdent) {
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+      if (expr.decl && expr.decl instanceof AST.DVar) {
         expr.decl.allocClass = Types.AllocClass.MEMORY;
       }
     } else if (expr instanceof AST.EMember) {
@@ -5624,7 +5624,7 @@ class Parser {
         }
 
         let funcDecl = null;
-        if (expr instanceof AST.EIdent && expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
+        if (expr instanceof AST.EIdent && expr.decl && expr.decl instanceof AST.DFunc) {
           funcDecl = expr.decl;
         }
 
@@ -6531,7 +6531,7 @@ class Parser {
 
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
-        if (prev && prev.declKind === Types.DeclKind.FUNC) {
+        if (prev && prev instanceof AST.DFunc) {
           if (!prev.type.isCompatibleWith(funcDecl.type)) {
             this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prev.type.toString()}', now defined as '${funcDecl.type.toString()}')`);
           }
@@ -6623,7 +6623,7 @@ class Parser {
         }
 
         const prevFunc = this.varScope.get(name);
-        if (prevFunc && prevFunc.declKind === Types.DeclKind.FUNC && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
+        if (prevFunc && prevFunc instanceof AST.DFunc && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
         }
         this.varScope.replace(name, funcDecl);
@@ -6636,7 +6636,7 @@ class Parser {
       const dvar = new AST.DVar(loc, name, type, specs.storageClass, null);
       // Check for conflicting variable declarations
       const prevVar = this.varScope.get(name);
-      if (prevVar && prevVar.declKind === Types.DeclKind.VAR && !prevVar.type.isCompatibleWith(type)) {
+      if (prevVar && prevVar instanceof AST.DVar && !prevVar.type.isCompatibleWith(type)) {
         this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevVar.type.toString()}', now declared as '${type.toString()}')`);
       }
       if (specs.requestedAlignment > 0) {
@@ -6685,7 +6685,7 @@ class Parser {
 
       // Check for previous declaration and update scope
       const prevDecl = this.varScope.get(name);
-      if (prevDecl && prevDecl.declKind === Types.DeclKind.VAR && specs.storageClass !== Types.StorageClass.EXTERN) {
+      if (prevDecl && prevDecl instanceof AST.DVar && specs.storageClass !== Types.StorageClass.EXTERN) {
         prevDecl.definition = dvar;
       }
       // Use replace to update the scope entry (varScope.set fails if name already exists)
@@ -6922,7 +6922,7 @@ function parseTokens(tokens, options) {
         const funcName = funcNameTok.text;
         parser.expect(";");
         const decl = parser.varScope.get(funcName);
-        if (decl && decl.declKind === Types.DeclKind.FUNC) {
+        if (decl && decl instanceof AST.DFunc) {
           parser.exportDirectives.push([exportName, decl]);
         }
         continue;
@@ -7104,7 +7104,7 @@ function annotateStmt(stmt, returnType) {
       break;
     case AST.SDecl:
       for (const decl of stmt.declarations) {
-        if (decl.declKind === Types.DeclKind.VAR && decl.initExpr) {
+        if (decl instanceof AST.DVar && decl.initExpr) {
           annotateExpr(decl.initExpr);
           if (!decl.type.isAggregate() && !(decl.initExpr instanceof AST.EInitList)) {
             wrapImplicitCast(decl.initExpr, decl.type, (e) => { decl.initExpr = e; });
@@ -8565,15 +8565,15 @@ function constEvalExpr(expr, policy) {
       return { kind: "addr", addrVal: addr };
     }
     case AST.EIdent: {
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+      if (expr.decl && expr.decl instanceof AST.DEnumConst) {
         return { kind: "int", intVal: BigInt(expr.decl.value) };
       }
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
+      if (expr.decl && expr.decl instanceof AST.DFunc) {
         const func = expr.decl.definition || expr.decl;
         const tIdx = policy.getFuncAddr(func);
         if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
       }
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+      if (expr.decl && expr.decl instanceof AST.DVar) {
         const varDecl = expr.decl.definition || expr.decl;
         const addr = policy.getGlobalAddr(varDecl);
         if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
@@ -8585,12 +8585,12 @@ function constEvalExpr(expr, policy) {
         const inner = expr.operand;
         // &var → address
         if (inner instanceof AST.EIdent && inner.decl) {
-          if (inner.decl.declKind === Types.DeclKind.VAR) {
+          if (inner.decl instanceof AST.DVar) {
             const varDecl = inner.decl.definition || inner.decl;
             const addr = policy.getGlobalAddr(varDecl);
             if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
           }
-          if (inner.decl.declKind === Types.DeclKind.FUNC) {
+          if (inner.decl instanceof AST.DFunc) {
             const func = inner.decl.definition || inner.decl;
             const tIdx = policy.getFuncAddr(func);
             if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
@@ -8954,7 +8954,7 @@ class CodeGenerator {
     if (!type.isTag() || !initExpr || !(initExpr instanceof AST.EInitList)) return 0;
     const tag = type.tagDecl;
     if (!tag || tag.tagKind !== Types.TagKind.STRUCT) return 0;
-    const members = tag.members.filter(m => m.declKind === Types.DeclKind.VAR);
+    const members = tag.members.filter(m => m instanceof AST.DVar);
     let famMember = null, famIdx = -1;
     for (let i = 0; i < members.length; i++) {
       if (members[i].type.isArray() && members[i].type.arraySize === 0) {
@@ -9096,7 +9096,7 @@ class CodeGenerator {
       if (tag.tagKind === Types.TagKind.STRUCT) {
         let elemIdx = 0;
         for (const member of tag.members) {
-          if (member.declKind !== Types.DeclKind.VAR) continue;
+          if (!(member instanceof AST.DVar)) continue;
           if (member.bitWidth >= 0 && !member.name) continue;
           const fieldOffset = baseOffset + member.byteOffset;
           if (elemIdx < initList.elements.length) {
@@ -9132,7 +9132,7 @@ class CodeGenerator {
           const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
           let varIdx = 0;
           for (const member of tag.members) {
-            if (member.declKind !== Types.DeclKind.VAR) continue;
+            if (!(member instanceof AST.DVar)) continue;
             if (varIdx++ !== targetIdx) continue;
             const elem = initList.elements[0];
             if (elem instanceof AST.EInitList) {
@@ -9193,7 +9193,7 @@ class CodeGenerator {
       if (tag.tagKind === Types.TagKind.STRUCT) {
         let elemIdx = 0;
         for (const member of tag.members) {
-          if (member.declKind !== Types.DeclKind.VAR) continue;
+          if (!(member instanceof AST.DVar)) continue;
           if (member.bitWidth >= 0 && !member.name) continue;
           const fieldOffset = baseOffset + member.byteOffset;
           if (elemIdx < initList.elements.length) {
@@ -9235,7 +9235,7 @@ class CodeGenerator {
           const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
           let varIdx = 0;
           for (const member of tag.members) {
-            if (member.declKind !== Types.DeclKind.VAR) continue;
+            if (!(member instanceof AST.DVar)) continue;
             if (varIdx++ !== targetIdx) continue;
             const elem = initList.elements[0];
             if (elem instanceof AST.EInitList) {
@@ -9383,7 +9383,7 @@ class CodeGenerator {
     const memoryVars = [];
     const addMemoryDecls = (decls) => {
       for (const decl of decls) {
-        if (decl.declKind === Types.DeclKind.VAR && decl.storageClass !== Types.StorageClass.STATIC) {
+        if (decl instanceof AST.DVar && decl.storageClass !== Types.StorageClass.STATIC) {
           const def = decl.definition || decl;
           if (def === decl && def.allocClass === Types.AllocClass.MEMORY) memoryVars.push(decl);
         }
@@ -9622,7 +9622,7 @@ class CodeGenerator {
         break;
       case AST.SDecl: {
         for (const decl of stmt.declarations) {
-          if (decl.declKind === Types.DeclKind.VAR) {
+          if (decl instanceof AST.DVar) {
             if (decl.storageClass !== Types.StorageClass.STATIC && decl.definition === decl &&
                 decl.allocClass === Types.AllocClass.REGISTER) {
               const _li = this.allocLocal(cToWasmType(decl.type, this.wmod));
@@ -10224,7 +10224,7 @@ class CodeGenerator {
 
   // --- LValue ---
   emitLValue(expr) {
-    if (expr instanceof AST.EIdent && expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+    if (expr instanceof AST.EIdent && expr.decl && expr.decl instanceof AST.DVar) {
       const varDecl = expr.decl.definition || expr.decl;
       const lit = this.localVarToWasmLocalIdx.get(varDecl);
       const git = this.globalVarToWasmGlobalIdx.get(varDecl);
@@ -10357,13 +10357,13 @@ class CodeGenerator {
   // --- Address-of ---
   emitAddressOf(expr) {
     if (expr instanceof AST.EIdent) {
-      if (expr.decl.declKind === Types.DeclKind.FUNC) {
+      if (expr.decl instanceof AST.DFunc) {
         const func = expr.decl.definition || expr.decl;
         const tIdx = this.funcDefToTableIdx.get(func);
         this.body.i32Const(tIdx);
         return;
       }
-      if (expr.decl.declKind === Types.DeclKind.VAR) {
+      if (expr.decl instanceof AST.DVar) {
         const varDecl = expr.decl.definition || expr.decl;
         const gait = this.globalArrayAddrs.get(varDecl);
         if (gait !== undefined) { this.body.i32Const(gait); return; }
@@ -10556,7 +10556,7 @@ class CodeGenerator {
         break;
       }
       case AST.EIdent: {
-        if (expr.decl.declKind === Types.DeclKind.VAR) {
+        if (expr.decl instanceof AST.DVar) {
           const varDecl = expr.decl.definition || expr.decl;
           const gait = this.globalArrayAddrs.get(varDecl);
           if (gait !== undefined) {
@@ -10583,9 +10583,9 @@ class CodeGenerator {
             if (git !== undefined) this.body.globalGet(git);
             else throw new Error(`emitExpr: variable '${varDecl.name}' not found`);
           }
-        } else if (expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+        } else if (expr.decl instanceof AST.DEnumConst) {
           this.body.i32Const(expr.decl.value);
-        } else if (expr.decl.declKind === Types.DeclKind.FUNC) {
+        } else if (expr.decl instanceof AST.DFunc) {
           const func = expr.decl.definition || expr.decl;
           const tIdx = this.funcDefToTableIdx.get(func);
           this.body.i32Const(tIdx);
