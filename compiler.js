@@ -2658,11 +2658,10 @@ class Expr {
     // a plain identifier resolving to one. For function-pointer expressions,
     // funcDecl is null and the codegen emits an indirect call.
     constructor(callee, args) {
-      let calleeType = callee.type;
-      if (calleeType.kind === Types.TypeKind.ARRAY ||
-          calleeType.kind === Types.TypeKind.FUNCTION) {
-        calleeType = calleeType.decay();
-      }
+      // The parser wraps the callee in EDecay so callee.type is the
+      // decayed pointer-to-function type. Synthesized callers (setjmp/
+      // longjmp lowering) do the same.
+      const calleeType = callee.type;
       let returnType = Types.TINT;
       if (calleeType.kind === Types.TypeKind.POINTER &&
           calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
@@ -5791,8 +5790,11 @@ class Parser {
           }
           continue;
         }
-        if (bt.kind === Types.TypeKind.ARRAY) bt = bt.baseType;
-        else if (bt.kind === Types.TypeKind.POINTER) bt = bt.baseType;
+        // The lhs of `->` is read as a pointer: load lvalue, decay
+        // array-to-pointer. After this, expr.type is a plain pointer.
+        expr = maybeDecay(maybeLoad(expr));
+        bt = expr.type.removeQualifiers();
+        if (bt.kind === Types.TypeKind.POINTER) bt = bt.baseType;
         const { chain } = this.lookupMember(bt, name);
         if (chain) {
           // First element: arrow (dereference pointer)
@@ -5895,15 +5897,11 @@ class Parser {
       }
       return uq;
     }
-    // Pointer arithmetic
+    // Pointer arithmetic. Operands have already been decayed by the
+    // caller (parseBinaryExpression), so array types never reach here.
     if (leftType.isPointer() && rightType.isInteger()) return leftType;
     if (rightType.isPointer() && leftType.isInteger() && op === "ADD") return rightType;
     if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return Types.TLONG;
-    // Array arithmetic (array decays to pointer)
-    if (leftType.isArray() && rightType.isInteger()) return leftType.decay();
-    if (rightType.isArray() && leftType.isInteger() && op === "ADD") return rightType.decay();
-    if (op === "SUB" && ((leftType.isPointer() && rightType.isArray()) ||
-        (leftType.isArray() && rightType.isPointer()))) return Types.TLONG;
     return Types.usualArithmeticConversions(leftType, rightType);
   }
 
@@ -6037,10 +6035,17 @@ class Parser {
         left = maybeLoad(left);
       }
       right = maybeLoad(right);
-      // Decay an array/function rhs of a plain assignment to a pointer-typed
-      // lhs (e.g. `p = arr`). Compound assignments use integer rhs so don't
-      // apply here.
-      if (bop === "ASSIGN" && left.type.isPointer()) {
+      // Decay array/function operands of arithmetic, comparison, and
+      // pointer-target assignments so leftType/rightType below carry the
+      // already-decayed pointer types. ASSIGN/compound-assign's left is
+      // the lvalue target and is never decayed.
+      const isPtrArith = (bop === "ADD" || bop === "SUB") &&
+        (left.type.isPointer() || right.type.isPointer() ||
+         left.type.isArray() || right.type.isArray());
+      if (!isAssignOp) {
+        left = maybeDecay(left);
+        right = maybeDecay(right);
+      } else if (bop === "ASSIGN" && left.type.isPointer()) {
         right = maybeDecay(right);
       }
       // Apply C99 6.3.1.1 integer promotions for bitfield operands
@@ -6053,13 +6058,9 @@ class Parser {
       //   - logical && / || (boolean coercion is per-operand, not common)
       //   - pointer arithmetic ADD/SUB (operand types are deliberately mixed)
       //   - ref-typed operands (== / != on refs is identity, no conversion)
-      if (!(bop === "ASSIGN" || bop.endsWith("_ASSIGN")) &&
-          bop !== "LAND" && bop !== "LOR") {
+      if (!isAssignOp && bop !== "LAND" && bop !== "LOR") {
         const leftType = left.type;
         const rightType = right.type;
-        const isPtrArith = (bop === "ADD" || bop === "SUB") &&
-          (leftType.isPointer() || rightType.isPointer() ||
-           leftType.isArray() || rightType.isArray());
         const involvesRef = leftType.removeQualifiers().isRef() ||
                             rightType.removeQualifiers().isRef();
         if (!isPtrArith && !involvesRef) {
@@ -6071,12 +6072,6 @@ class Parser {
             : resType;
           left = maybeImplicitCast(left, opType);
           right = maybeImplicitCast(right, opType);
-        }
-        // Decay array operands in pointer arithmetic and comparisons so
-        // the AST carries pointer types, not array types.
-        if (isPtrArith) {
-          left = maybeDecay(left);
-          right = maybeDecay(right);
         }
       }
 
@@ -10526,8 +10521,7 @@ class CodeGenerator {
     }
     if (expr instanceof AST.EArrow) {
       this.emitExpr(expr.base);
-      const ptrType = expr.base.type.decay();
-      const baseType = ptrType.baseType;
+      const baseType = expr.base.type.baseType;
       const tag = baseType.tagDecl;
       const offset = this.getFieldOffset(tag, expr.memberDecl);
       if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
@@ -10887,7 +10881,7 @@ class CodeGenerator {
               if (i < numFixed) {
                 argType = paramTypes[i];
               } else {
-                argType = expr.arguments[i].type.decay();
+                argType = expr.arguments[i].type;
                 if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
               }
               blockSize += vaSlotSize(argType);
@@ -10917,7 +10911,7 @@ class CodeGenerator {
               if (isFixed) {
                 storeType = paramTypes[i];
               } else {
-                storeType = arg.type.decay();
+                storeType = arg.type;
                 if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
               }
 
@@ -11003,8 +10997,10 @@ class CodeGenerator {
             }
           }
         } else {
-          // Indirect call
-          const calleeType = expr.callee.type.decay();
+          // Indirect call. expr.callee is already decayed by the parser
+          // (see parsePostfixTail: ECall callee path), so callee.type is
+          // a plain pointer-to-function (or function type itself).
+          const calleeType = expr.callee.type;
           const funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
           const callRetType = funcType.getReturnType();
           const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
@@ -11020,7 +11016,7 @@ class CodeGenerator {
             const argOffsets = [];
             for (let i = 0; i < expr.arguments.length; i++) {
               argOffsets.push(blockSize);
-              let argType = i < numFixed ? paramTypes[i] : expr.arguments[i].type.decay();
+              let argType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
               if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
               blockSize += vaSlotSize(argType);
             }
@@ -11036,7 +11032,7 @@ class CodeGenerator {
             this.body.localSet(argBlockBase);
             const deferredAtVaAlloc = this.structRetDeferred;
             for (let i = 0; i < expr.arguments.length; i++) {
-              let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type.decay();
+              let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
               if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
               this.body.localGet(argBlockBase);
               if (argOffsets[i] > 0) { this.body.i32Const(argOffsets[i]); this.body.aop(WT_I32, ALU.OP_ADD); }
@@ -11155,8 +11151,7 @@ class CodeGenerator {
       case AST.EArrow: {
         this.emitExpr(expr.base);
         const field = expr.memberDecl;
-        const ptrType = expr.base.type.decay();
-        const baseType = ptrType.baseType;
+        const baseType = expr.base.type.baseType;
         const tag = baseType.tagDecl;
         const offset = this.getFieldOffset(tag, field);
         if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
