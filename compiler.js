@@ -5902,10 +5902,14 @@ class Parser {
       // Ternary
       if (op === "?") {
         this._rejectRefAsCondition(left, opTok, "ternary");
-        const thenExpr = this.parseExpression();
+        let thenExpr = this.parseExpression();
         this.expect(":");
-        const elseExpr = this.parseBinaryExpression(3);
-        let resType = this.computeTernaryType(thenExpr.type, elseExpr.type);
+        let elseExpr = this.parseBinaryExpression(3);
+        const resType = this.computeTernaryType(thenExpr.type, elseExpr.type);
+        // Both branches must produce the same type — wrap each in an
+        // implicit cast to resType when needed.
+        thenExpr = maybeImplicitCast(thenExpr, resType);
+        elseExpr = maybeImplicitCast(elseExpr, resType);
         left = new AST.ETernary(resType, left, thenExpr, elseExpr);
         continue;
       }
@@ -7133,11 +7137,11 @@ function annotateExpr(expr) {
     return;
   }
   if (expr instanceof AST.ETernary) {
+    // Ternary branch implicit casts are inserted inline at parse time;
+    // recurse for any remaining post-pass work.
     annotateExpr(expr.condition);
     annotateExpr(expr.thenExpr);
     annotateExpr(expr.elseExpr);
-    wrapImplicitCast(expr.thenExpr, expr.type, (e) => { expr.thenExpr = e; });
-    wrapImplicitCast(expr.elseExpr, expr.type, (e) => { expr.elseExpr = e; });
     return;
   }
   if (expr instanceof AST.EUnary)     { annotateExpr(expr.operand); return; }
