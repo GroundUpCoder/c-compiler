@@ -12805,10 +12805,22 @@ class Translator {
     // Translate args.
     const argsIR = expr.arguments.map(a => this.translateExpr(a));
 
-    // Store each arg at its offset within the frame.
+    // Store each arg at its offset within the frame. For narrow integer
+    // types (char/short/bool), use full-width stores even though the C
+    // type is narrower — printf reads the va slot at int width, so writing
+    // only the low byte/2 bytes leaves garbage in the upper bits. The
+    // default backend does the same in emitVaArgStore.
     for (let i = 0; i < expr.arguments.length; i++) {
       const offset = argOffsets[i];
-      const storeOp = this._storeOp(argStoreTypes[i]);
+      const ut = argStoreTypes[i].removeQualifiers
+        ? argStoreTypes[i].removeQualifiers() : argStoreTypes[i];
+      const isNarrow = ut.kind === Types.TypeKind.UCHAR ||
+                       ut.kind === Types.TypeKind.SCHAR ||
+                       ut.kind === Types.TypeKind.CHAR ||
+                       ut.kind === Types.TypeKind.USHORT ||
+                       ut.kind === Types.TypeKind.SHORT ||
+                       ut.kind === Types.TypeKind.BOOL;
+      const storeOp = isNarrow ? 'i32.store' : this._storeOp(argStoreTypes[i]);
       stmts.push(new IR.Store(loc, storeOp,
         new IR.GetVars(loc, [frameLocal]), argsIR[i], { offset }));
     }
