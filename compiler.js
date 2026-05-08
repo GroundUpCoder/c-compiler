@@ -12899,7 +12899,30 @@ class Translator {
             const span = max - min + 1n;
             v = ((v - min) % span + span) % span + min;
           }
+          // For narrow C types in i32 slot, also mask to the C-type's
+          // bit-width — the IR type's range is i32-wide but the C type is
+          // narrower (e.g. unsigned short = 16 bits).
+          if (toC) {
+            const tu = toC.removeQualifiers ? toC.removeQualifiers() : toC;
+            if (tu.size && tu.size < 4) {
+              const cMask = (1n << BigInt(tu.size * 8)) - 1n;
+              const masked = v & cMask;
+              const isSignedC = tu.kind !== Types.TypeKind.UCHAR &&
+                                tu.kind !== Types.TypeKind.USHORT &&
+                                tu.kind !== Types.TypeKind.BOOL;
+              const signBit = 1n << BigInt(tu.size * 8 - 1);
+              v = (isSignedC && masked >= signBit) ? masked - (1n << BigInt(tu.size * 8)) : masked;
+            }
+          }
           return new IR.Literal(loc, toT, v);
+        }
+      }
+      // For narrow target C types with non-literal sources, mask/sign-extend
+      // to the C type's width so the value-in-slot matches the C type.
+      if (toC) {
+        const tu = toC.removeQualifiers ? toC.removeQualifiers() : toC;
+        if (tu.size && tu.size < 4) {
+          return this._truncateToCType(src, tu, loc);
         }
       }
       // Fall back: route through a local to retype. Allocate a temp local of
@@ -13152,6 +13175,24 @@ class Translator {
       rhsIR = this.emitConversion(loc, rhsIRT, lhsIRT, rhsIR,
         { kind: Types.ExprKind.IMPLICIT_CAST, type: lhsCT,
           expr: { type: lhsCT } });
+    }
+    // For narrow LHS types (u8/i8/u16/i16/bool), the converted i32 still
+    // holds the source's full bit width. Mask / sign-extend to the C type's
+    // actual size so REGISTER-class locals don't keep stale high bits and
+    // narrow-slot stores get the right pattern. (MEMORY-class stores via
+    // store8 / store16 already do this implicitly, but a redundant truncate
+    // is a no-op-shaped value.)
+    if (lhsCT.removeQualifiers && rhsIR && rhsIR.types && rhsIR.types.length === 1) {
+      const u = lhsCT.removeQualifiers();
+      const isNarrow = (k) => k === Types.TypeKind.UCHAR ||
+                              k === Types.TypeKind.SCHAR ||
+                              k === Types.TypeKind.CHAR ||
+                              k === Types.TypeKind.USHORT ||
+                              k === Types.TypeKind.SHORT ||
+                              k === Types.TypeKind.BOOL;
+      if (isNarrow(u.kind)) {
+        rhsIR = this._truncateToCType(rhsIR, u, loc);
+      }
     }
     if (lhsAst.kind === Types.ExprKind.IDENT) {
       const local = this.cVarToLocal.get(lhsAst.decl);
