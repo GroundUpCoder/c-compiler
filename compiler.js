@@ -2919,17 +2919,17 @@ function formatFloatForDump(v) {
 function dumpExpr(expr, ctx, indent) {
   let ret = ind(indent);
   ret += "Expr: Type=" + expr.type.toString() + " ";
-  switch (expr.kind) {
-    case Types.ExprKind.INT:
+  switch (expr.constructor) {
+    case AST.EInt:
       ret += "INT " + expr.value;
       break;
-    case Types.ExprKind.FLOAT:
+    case AST.EFloat:
       ret += "FLOAT " + formatFloatForDump(expr.value);
       break;
-    case Types.ExprKind.STRING:
+    case AST.EString:
       ret += "STRING len=" + expr.value.length;
       break;
-    case Types.ExprKind.IDENT: {
+    case AST.EIdent: {
       ret += "IDENT " + expr.name;
       if (expr.decl) {
         const id = ctx.formatDeclId(expr.decl);
@@ -2939,78 +2939,78 @@ function dumpExpr(expr, ctx, indent) {
       }
       break;
     }
-    case Types.ExprKind.BINARY:
+    case AST.EBinary:
       ret += "BINARY " + Types.BopStr[expr.op];
       ret += dumpExpr(expr.left, ctx, indent + 1);
       ret += dumpExpr(expr.right, ctx, indent + 1);
       break;
-    case Types.ExprKind.UNARY:
+    case AST.EUnary:
       ret += "UNARY " + Types.UopStr[expr.op];
       ret += dumpExpr(expr.operand, ctx, indent + 1);
       break;
-    case Types.ExprKind.TERNARY:
+    case AST.ETernary:
       ret += "TERNARY";
       ret += dumpExpr(expr.condition, ctx, indent + 1);
       ret += dumpExpr(expr.thenExpr, ctx, indent + 1);
       ret += dumpExpr(expr.elseExpr, ctx, indent + 1);
       break;
-    case Types.ExprKind.CALL:
+    case AST.ECall:
       ret += "CALL " + expr.arguments.length + " args";
       ret += dumpExpr(expr.callee, ctx, indent + 1);
       for (const arg of expr.arguments) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.ExprKind.SUBSCRIPT:
+    case AST.ESubscript:
       ret += "SUBSCRIPT";
       ret += dumpExpr(expr.array, ctx, indent + 1);
       ret += dumpExpr(expr.index, ctx, indent + 1);
       break;
-    case Types.ExprKind.MEMBER:
+    case AST.EMember:
       ret += "MEMBER ." + (expr.memberName ?? "(anon)");
       ret += dumpExpr(expr.base, ctx, indent + 1);
       break;
-    case Types.ExprKind.ARROW:
+    case AST.EArrow:
       ret += "ARROW ->" + (expr.memberName ?? "(anon)");
       ret += dumpExpr(expr.base, ctx, indent + 1);
       break;
-    case Types.ExprKind.CAST:
+    case AST.ECast:
       ret += "CAST " + expr.targetType.toString();
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.IMPLICIT_CAST:
+    case AST.EImplicitCast:
       ret += "IMPLICIT_CAST " + expr.type.toString();
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.SIZEOF_EXPR:
+    case AST.ESizeofExpr:
       ret += "SIZEOF_EXPR";
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.SIZEOF_TYPE:
+    case AST.ESizeofType:
       ret += "SIZEOF_TYPE " + expr.operandType.toString();
       break;
-    case Types.ExprKind.ALIGNOF_EXPR:
+    case AST.EAlignofExpr:
       ret += "ALIGNOF_EXPR";
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.ALIGNOF_TYPE:
+    case AST.EAlignofType:
       ret += "ALIGNOF_TYPE " + expr.operandType.toString();
       break;
-    case Types.ExprKind.COMMA:
+    case AST.EComma:
       ret += "COMMA " + expr.expressions.length;
       for (const e of expr.expressions) ret += dumpExpr(e, ctx, indent + 1);
       break;
-    case Types.ExprKind.INIT_LIST:
+    case AST.EInitList:
       ret += "INIT_LIST " + expr.elements.length;
       for (const e of expr.elements) ret += dumpExpr(e, ctx, indent + 1);
       break;
-    case Types.ExprKind.INTRINSIC:
+    case AST.EIntrinsic:
       ret += "INTRINSIC " + expr.intrinsicKind;
       for (const arg of expr.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.ExprKind.WASM:
+    case AST.EWasm:
       ret += "WASM " + expr.bytes.length + " bytes " + expr.args.length + " args";
       for (const arg of expr.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.ExprKind.COMPOUND_LITERAL:
+    case AST.ECompoundLiteral:
       ret += "COMPOUND_LITERAL";
       ret += dumpExpr(expr.initList, ctx, indent + 1);
       break;
@@ -3373,12 +3373,12 @@ function linkTranslationUnits(units, compilerOptions) {
 
 function constEvalInt(expr) {
   if (!expr) return null;
-  switch (expr.kind) {
-    case Types.ExprKind.INT: return expr.value;  // already BigInt
-    case Types.ExprKind.IDENT:
+  switch (expr.constructor) {
+    case AST.EInt: return expr.value;  // already BigInt
+    case AST.EIdent:
       if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) return expr.decl.value;
       return null;
-    case Types.ExprKind.BINARY: {
+    case AST.EBinary: {
       const l = constEvalInt(expr.left), r = constEvalInt(expr.right);
       if (l === null || r === null) return null;
       switch (expr.op) {
@@ -3394,7 +3394,7 @@ function constEvalInt(expr) {
         default: return null;
       }
     }
-    case Types.ExprKind.UNARY: {
+    case AST.EUnary: {
       if (expr.op === "OP_ADDR") {
         // Support offsetof pattern: &((type*)0)->member
         const inner = expr.operand;
@@ -3412,22 +3412,22 @@ function constEvalInt(expr) {
         default: return null;
       }
     }
-    case Types.ExprKind.IMPLICIT_CAST: {
+    case AST.EImplicitCast: {
       return constEvalInt(expr.expr);
     }
-    case Types.ExprKind.TERNARY: {
+    case AST.ETernary: {
       const c = constEvalInt(expr.condition);
       if (c === null) return null;
       return constEvalInt(c !== 0n ? expr.thenExpr : expr.elseExpr);
     }
-    case Types.ExprKind.CAST: {
+    case AST.ECast: {
       const v = constEvalInt(expr.expr);
       return v;
     }
-    case Types.ExprKind.SIZEOF_EXPR: return BigInt(expr.expr.type.size);
-    case Types.ExprKind.SIZEOF_TYPE: return BigInt(expr.operandType.size);
-    case Types.ExprKind.ALIGNOF_EXPR: return BigInt(expr.expr.type.align);
-    case Types.ExprKind.ALIGNOF_TYPE: return BigInt(expr.operandType.align);
+    case AST.ESizeofExpr: return BigInt(expr.expr.type.size);
+    case AST.ESizeofType: return BigInt(expr.operandType.size);
+    case AST.EAlignofExpr: return BigInt(expr.expr.type.align);
+    case AST.EAlignofType: return BigInt(expr.operandType.align);
     default: return null;
   }
 }
