@@ -1967,19 +1967,6 @@ const AllocClass = Object.freeze({ REGISTER: "register", MEMORY: "memory" });
 
 const LabelKind = Object.freeze({ FORWARD: "forward", LOOP: "loop", BOTH: "both" });
 
-const ExprKind = Object.freeze({
-  INT: "INT", FLOAT: "FLOAT", STRING: "STRING", IDENT: "IDENT",
-  BINARY: "BINARY", UNARY: "UNARY", TERNARY: "TERNARY", CALL: "CALL",
-  SUBSCRIPT: "SUBSCRIPT", MEMBER: "MEMBER", ARROW: "ARROW", CAST: "CAST",
-  SIZEOF_EXPR: "SIZEOF_EXPR", SIZEOF_TYPE: "SIZEOF_TYPE",
-  ALIGNOF_EXPR: "ALIGNOF_EXPR", ALIGNOF_TYPE: "ALIGNOF_TYPE",
-  COMMA: "COMMA", INIT_LIST: "INIT_LIST", INTRINSIC: "INTRINSIC",
-  WASM: "WASM",
-  COMPOUND_LITERAL: "COMPOUND_LITERAL",
-  IMPLICIT_CAST: "IMPLICIT_CAST",
-  GC_NEW: "GC_NEW",
-});
-
 const StmtKind = Object.freeze({
   EXPR: "expression-statement", DECL: "declaration-statement",
   COMPOUND: "compound-statement", IF: "if-statement",
@@ -2494,7 +2481,7 @@ function usualArithmeticConversions(a, b) {
 
 return {
   TypeKind, TagKind, StorageClass, AllocClass, LabelKind,
-  ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
+  StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
   TypeInfo,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
   TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
@@ -2553,8 +2540,7 @@ let nextDeclId = 1;
 
 // --- Base classes ---
 class Expr {
-    constructor(kind, type) {
-      this.kind = kind;
+    constructor(type) {
       this.type = type;
     }
   }
@@ -2620,78 +2606,78 @@ class Expr {
 
   // --- Expr subclasses ---
   class EInt extends Expr {
-    constructor(type, value) { super(Types.ExprKind.INT, type); this.value = value; Object.seal(this); }
+    constructor(type, value) { super(type); this.value = value; Object.seal(this); }
   }
   class EFloat extends Expr {
-    constructor(type, value) { super(Types.ExprKind.FLOAT, type); this.value = value; Object.seal(this); }
+    constructor(type, value) { super(type); this.value = value; Object.seal(this); }
   }
   class EString extends Expr {
-    constructor(type, value) { super(Types.ExprKind.STRING, type); this.value = value; Object.seal(this); }
+    constructor(type, value) { super(type); this.value = value; Object.seal(this); }
   }
   class EIdent extends Expr {
-    constructor(type, name, decl) { super(Types.ExprKind.IDENT, type); this.name = name; this.decl = decl; Object.seal(this); }
+    constructor(type, name, decl) { super(type); this.name = name; this.decl = decl; Object.seal(this); }
   }
   class EBinary extends Expr {
-    constructor(type, op, left, right) { super(Types.ExprKind.BINARY, type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
+    constructor(type, op, left, right) { super(type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
   }
   class EUnary extends Expr {
-    constructor(type, op, operand) { super(Types.ExprKind.UNARY, type); this.op = op; this.operand = operand; Object.seal(this); }
+    constructor(type, op, operand) { super(type); this.op = op; this.operand = operand; Object.seal(this); }
   }
   class ETernary extends Expr {
-    constructor(type, condition, thenExpr, elseExpr) { super(Types.ExprKind.TERNARY, type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
+    constructor(type, condition, thenExpr, elseExpr) { super(type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
   }
   class ECall extends Expr {
-    constructor(type, callee, args, funcDecl) { super(Types.ExprKind.CALL, type); this.callee = callee; this.arguments = args; this.funcDecl = funcDecl || null; Object.seal(this); }
+    constructor(type, callee, args, funcDecl) { super(type); this.callee = callee; this.arguments = args; this.funcDecl = funcDecl || null; Object.seal(this); }
   }
   class ESubscript extends Expr {
-    constructor(type, array, index) { super(Types.ExprKind.SUBSCRIPT, type); this.array = array; this.index = index; Object.seal(this); }
+    constructor(type, array, index) { super(type); this.array = array; this.index = index; Object.seal(this); }
   }
   class EMember extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(Types.ExprKind.MEMBER, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(type, base, memberName, memberDecl) { super(type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
   }
   class EArrow extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(Types.ExprKind.ARROW, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(type, base, memberName, memberDecl) { super(type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
   }
   class ECast extends Expr {
-    constructor(type, targetType, expr) { super(Types.ExprKind.CAST, type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
+    constructor(type, targetType, expr) { super(type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
   }
   class ESizeofExpr extends Expr {
-    constructor(type, expr) { super(Types.ExprKind.SIZEOF_EXPR, type); this.expr = expr; Object.seal(this); }
+    constructor(type, expr) { super(type); this.expr = expr; Object.seal(this); }
   }
   class ESizeofType extends Expr {
-    constructor(type, operandType) { super(Types.ExprKind.SIZEOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
+    constructor(type, operandType) { super(type); this.operandType = operandType; Object.seal(this); }
   }
   class EAlignofExpr extends Expr {
-    constructor(type, expr) { super(Types.ExprKind.ALIGNOF_EXPR, type); this.expr = expr; Object.seal(this); }
+    constructor(type, expr) { super(type); this.expr = expr; Object.seal(this); }
   }
   class EAlignofType extends Expr {
-    constructor(type, operandType) { super(Types.ExprKind.ALIGNOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
+    constructor(type, operandType) { super(type); this.operandType = operandType; Object.seal(this); }
   }
   class EComma extends Expr {
-    constructor(type, expressions) { super(Types.ExprKind.COMMA, type); this.expressions = expressions; Object.seal(this); }
+    constructor(type, expressions) { super(type); this.expressions = expressions; Object.seal(this); }
   }
   class EInitList extends Expr {
     constructor(type, elements, designators, unionMemberIndex) {
-      super(Types.ExprKind.INIT_LIST, type);
+      super(type);
       this.elements = elements; this.designators = designators || [];
       this.unionMemberIndex = unionMemberIndex ?? -1;
       Object.seal(this);
     }
   }
   class EIntrinsic extends Expr {
-    constructor(type, ikind, args, argType) { super(Types.ExprKind.INTRINSIC, type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
+    constructor(type, ikind, args, argType) { super(type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
   }
   class EWasm extends Expr {
-    constructor(type, args, bytes) { super(Types.ExprKind.WASM, type); this.args = args; this.bytes = bytes; Object.seal(this); }
+    constructor(type, args, bytes) { super(type); this.args = args; this.bytes = bytes; Object.seal(this); }
   }
   class ECompoundLiteral extends Expr {
-    constructor(type, initList) { super(Types.ExprKind.COMPOUND_LITERAL, type); this.initList = initList; Object.seal(this); }
+    constructor(type, initList) { super(type); this.initList = initList; Object.seal(this); }
   }
   class EImplicitCast extends Expr {
-    constructor(type, expr) { super(Types.ExprKind.IMPLICIT_CAST, type); this.expr = expr; Object.seal(this); }
+    constructor(type, expr) { super(type); this.expr = expr; Object.seal(this); }
   }
   class EGCNew extends Expr {
-    constructor(type, args) { super(Types.ExprKind.GC_NEW, type); this.args = args; Object.seal(this); }
+    constructor(type, args) { super(type); this.args = args; Object.seal(this); }
   }
 
   // --- Stmt subclasses ---
@@ -10315,7 +10301,7 @@ class CodeGenerator {
       this.body.localSet(lv.savedLocal);
       return lv;
     }
-    throw new Error(`emitLValue: unsupported expression kind ${expr.kind}`);
+    throw new Error(`emitLValue: unsupported expression ${expr.constructor.name}`);
   }
 
   lvaluePush(lv) {
@@ -10426,7 +10412,7 @@ class CodeGenerator {
       }
       return;
     }
-    throw new Error(`emitAddressOf: unsupported expression kind ${expr.kind}`);
+    throw new Error(`emitAddressOf: unsupported expression ${expr.constructor.name}`);
   }
 
   // --- Compound op ---
@@ -11372,7 +11358,7 @@ class CodeGenerator {
         break;
       }
       default:
-        throw new Error(`emitExpr: unhandled expression kind ${expr.kind}`);
+        throw new Error(`emitExpr: unhandled expression ${expr.constructor.name}`);
     }
     if (ctx === EXPR_DROP) this.body.drop();
   }
@@ -17113,7 +17099,6 @@ var _exports = {
   TypeKind: Types.TypeKind,
   TagKind: Types.TagKind,
   StorageClass: Types.StorageClass,
-  ExprKind: Types.ExprKind,
   StmtKind: Types.StmtKind,
   DeclKind: Types.DeclKind,
   TypeInfo: Types.TypeInfo,
