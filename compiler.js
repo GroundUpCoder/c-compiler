@@ -2525,7 +2525,11 @@ let nextDeclId = 1;
 
 // --- Base classes ---
 class Expr {
-    constructor(type) {
+    constructor(loc, type) {
+      if (!loc) {
+        throw new Error(`Expr: loc is required (use Lexer.Loc.fromTok / Loc.generated for synthesized nodes)`);
+      }
+      this.loc = loc;
       this.type = type;
     }
   }
@@ -2589,33 +2593,33 @@ class Expr {
 
   // --- Expr subclasses ---
   class EInt extends Expr {
-    constructor(type, value) {
+    constructor(loc, type, value) {
       if (!(type instanceof Types.TypeInfo) || !type.isInteger()) {
         throw new Error(`EInt: type must be integral; got ${type}`);
       }
       if (typeof value !== 'bigint') {
         throw new Error(`EInt: value must be a BigInt; got ${typeof value}`);
       }
-      super(type);
+      super(loc, type);
       this.value = value;
       Object.seal(this);
     }
   }
   class EFloat extends Expr {
-    constructor(type, value) {
+    constructor(loc, type, value) {
       if (!(type instanceof Types.TypeInfo) || !type.isFloatingPoint()) {
         throw new Error(`EFloat: type must be floating-point; got ${type}`);
       }
       if (typeof value !== 'number') {
         throw new Error(`EFloat: value must be a number; got ${typeof value}`);
       }
-      super(type);
+      super(loc, type);
       this.value = value;
       Object.seal(this);
     }
   }
   class EString extends Expr {
-    constructor(type, value) {
+    constructor(loc, type, value) {
       if (!(type instanceof Types.TypeInfo) || !type.isArray()) {
         throw new Error(`EString: type must be an array; got ${type}`);
       }
@@ -2631,22 +2635,22 @@ class Expr {
       if (!Array.isArray(value)) {
         throw new Error(`EString: value must be an Array of byte numbers; got ${value?.constructor?.name ?? typeof value}`);
       }
-      super(type);
+      super(loc, type);
       this.value = value;
       Object.seal(this);
     }
   }
   class EIdent extends Expr {
-    constructor(type, name, decl) { super(type); this.name = name; this.decl = decl; Object.seal(this); }
+    constructor(loc, type, name, decl) { super(loc, type); this.name = name; this.decl = decl; Object.seal(this); }
   }
   class EBinary extends Expr {
-    constructor(type, op, left, right) { super(type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
+    constructor(loc, type, op, left, right) { super(loc, type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
   }
   class EUnary extends Expr {
-    constructor(type, op, operand) { super(type); this.op = op; this.operand = operand; Object.seal(this); }
+    constructor(loc, type, op, operand) { super(loc, type); this.op = op; this.operand = operand; Object.seal(this); }
   }
   class ETernary extends Expr {
-    constructor(type, condition, thenExpr, elseExpr) { super(type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
+    constructor(loc, type, condition, thenExpr, elseExpr) { super(loc, type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
   }
   class ECall extends Expr {
     // The result type is the function's return type (after array/function
@@ -2657,7 +2661,7 @@ class Expr {
     // funcDecl is the DFunc that's directly being called, if the callee is
     // a plain identifier resolving to one. For function-pointer expressions,
     // funcDecl is null and the codegen emits an indirect call.
-    constructor(callee, args) {
+    constructor(loc, callee, args) {
       // The parser wraps the callee in EDecay so callee.type is the
       // decayed pointer-to-function type. Synthesized callers (setjmp/
       // longjmp lowering) do the same.
@@ -2667,7 +2671,7 @@ class Expr {
           calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
         returnType = calleeType.baseType.returnType;
       }
-      super(returnType);
+      super(loc, returnType);
       this.callee = callee;
       this.arguments = args;
       // Look through EDecay so direct calls to a function name still
@@ -2679,65 +2683,65 @@ class Expr {
     }
   }
   class ESubscript extends Expr {
-    constructor(type, array, index) { super(type); this.array = array; this.index = index; Object.seal(this); }
+    constructor(loc, type, array, index) { super(loc, type); this.array = array; this.index = index; Object.seal(this); }
   }
   class EMember extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(loc, type, base, memberName, memberDecl) { super(loc, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
   }
   class EArrow extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(loc, type, base, memberName, memberDecl) { super(loc, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
   }
   class ECast extends Expr {
-    constructor(type, targetType, expr) { super(type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
+    constructor(loc, type, targetType, expr) { super(loc, type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
   }
   class ESizeofExpr extends Expr {
-    constructor(type, expr) { super(type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) { super(loc, type); this.expr = expr; Object.seal(this); }
   }
   class ESizeofType extends Expr {
-    constructor(type, operandType) { super(type); this.operandType = operandType; Object.seal(this); }
+    constructor(loc, type, operandType) { super(loc, type); this.operandType = operandType; Object.seal(this); }
   }
   class EAlignofExpr extends Expr {
-    constructor(type, expr) { super(type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) { super(loc, type); this.expr = expr; Object.seal(this); }
   }
   class EAlignofType extends Expr {
-    constructor(type, operandType) { super(type); this.operandType = operandType; Object.seal(this); }
+    constructor(loc, type, operandType) { super(loc, type); this.operandType = operandType; Object.seal(this); }
   }
   class EComma extends Expr {
-    constructor(type, expressions) { super(type); this.expressions = expressions; Object.seal(this); }
+    constructor(loc, type, expressions) { super(loc, type); this.expressions = expressions; Object.seal(this); }
   }
   class EInitList extends Expr {
-    constructor(type, elements, designators, unionMemberIndex) {
-      super(type);
+    constructor(loc, type, elements, designators, unionMemberIndex) {
+      super(loc, type);
       this.elements = elements; this.designators = designators || [];
       this.unionMemberIndex = unionMemberIndex ?? -1;
       Object.seal(this);
     }
   }
   class EIntrinsic extends Expr {
-    constructor(type, ikind, args, argType) { super(type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
+    constructor(loc, type, ikind, args, argType) { super(loc, type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
   }
   class EWasm extends Expr {
-    constructor(type, args, bytes) { super(type); this.args = args; this.bytes = bytes; Object.seal(this); }
+    constructor(loc, type, args, bytes) { super(loc, type); this.args = args; this.bytes = bytes; Object.seal(this); }
   }
   class ECompoundLiteral extends Expr {
-    constructor(type, initList) { super(type); this.initList = initList; Object.seal(this); }
+    constructor(loc, type, initList) { super(loc, type); this.initList = initList; Object.seal(this); }
   }
   class EImplicitCast extends Expr {
-    constructor(type, expr) { super(type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) { super(loc, type); this.expr = expr; Object.seal(this); }
   }
   // Array→pointer or function→pointer decay. The operand has array or
   // function type; the EDecay node has the corresponding decayed pointer type.
   // Codegen for EDecay just emits the operand (which already produces the
   // base address for arrays / table index for functions).
   class EDecay extends Expr {
-    constructor(type, operand) {
-      super(type);
+    constructor(loc, type, operand) {
+      super(loc, type);
       this.operand = operand;
       Object.seal(this);
     }
   }
   class EGCNew extends Expr {
-    constructor(type, args) { super(type); this.args = args; Object.seal(this); }
+    constructor(loc, type, args) { super(loc, type); this.args = args; Object.seal(this); }
   }
 
   // --- Stmt subclasses ---
@@ -3555,8 +3559,9 @@ function normalizeInitList(initList, containerType) {
 
   // Create a zero expression for a given type
   function makeZero(t) {
-    if (t.isFloatingPoint()) return new AST.EFloat(t, 0.0);
-    return new AST.EInt(Types.TINT, 0n);
+    const loc = Lexer.Loc.generated();
+    if (t.isFloatingPoint()) return new AST.EFloat(loc, t, 0.0);
+    return new AST.EInt(loc, Types.TINT, 0n);
   }
 
   // Ensure output has a slot at index
@@ -3573,7 +3578,7 @@ function normalizeInitList(initList, containerType) {
       if (cc !== 0x7FFFFFFF && cc > 0) {
         for (let i = 0; i < cc; i++) elems.push(null);
       }
-      list.elements[index] = new AST.EInitList(subType, elems);
+      list.elements[index] = new AST.EInitList(Lexer.Loc.generated(), subType, elems);
     }
     return list.elements[index];
   }
@@ -3746,7 +3751,7 @@ function normalizeInitList(initList, containerType) {
       for (let i = 0; i < sz; i++) {
         if (list.elements[i] === null) {
           if (elemType.isAggregate()) {
-            const sub = new AST.EInitList(elemType, []);
+            const sub = new AST.EInitList(Lexer.Loc.generated(), elemType, []);
             list.elements[i] = sub;
             fillZeros(sub, elemType);
           } else {
@@ -3766,7 +3771,7 @@ function normalizeInitList(initList, containerType) {
           const mt = members[i].type;
           if (list.elements[i] === null) {
             if (mt.isAggregate()) {
-              const sub = new AST.EInitList(mt, []);
+              const sub = new AST.EInitList(Lexer.Loc.generated(), mt, []);
               list.elements[i] = sub;
               fillZeros(sub, mt);
             } else {
@@ -3785,7 +3790,7 @@ function normalizeInitList(initList, containerType) {
           if (umi < members.length) {
             const mt = members[umi].type;
             if (mt.isAggregate()) {
-              const sub = new AST.EInitList(mt, []);
+              const sub = new AST.EInitList(Lexer.Loc.generated(), mt, []);
               list.elements[0] = sub;
               fillZeros(sub, mt);
             } else {
@@ -4666,7 +4671,7 @@ class Parser {
         }
         // ULL: always Types.TULLONG, already set
       }
-      return new AST.EInt(type, val);
+      return new AST.EInt(Lexer.Loc.fromTok(t), type, val);
     }
 
     // Float literal
@@ -4675,7 +4680,7 @@ class Parser {
       let type = Types.TDOUBLE;
       if (t.flags.isFloat) type = Types.TFLOAT;
       else if (t.flags.isLong) type = Types.TLDOUBLE;
-      return new AST.EFloat(type, t.floating);
+      return new AST.EFloat(Lexer.Loc.fromTok(t), type, t.floating);
     }
 
     // Note: CHAR tokens are converted to INT by Lexer.postProcess, handled above
@@ -4689,13 +4694,14 @@ class Parser {
     if (t.kind === Lexer.TokenKind.IDENT) {
       this.advance();
       const name = t.text;
+      const loc = Lexer.Loc.fromTok(t);
       // Check __func__ / __FUNCTION__
       if ((name === "__func__" || name === "__FUNCTION__") && this.currentParsingFunc) {
         const funcName = this.currentParsingFunc.name;
         const bytes = [];
         for (let i = 0; i < funcName.length; i++) bytes.push(funcName.charCodeAt(i));
         bytes.push(0);
-        return new AST.EString(Types.arrayOf(Types.TCHAR, bytes.length), bytes);
+        return new AST.EString(loc, Types.arrayOf(Types.TCHAR, bytes.length), bytes);
       }
       const decl = this.varScope.get(name);
       if (!decl) {
@@ -4707,22 +4713,23 @@ class Parser {
           this.varScope.set(name, fdecl);
           if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(fdecl);
           else this.globalUsedSymbols.add(fdecl);
-          return new AST.EIdent(ftype, name, fdecl);
+          return new AST.EIdent(loc, ftype, name, fdecl);
         }
         this.recoverableError(t, `Undeclared identifier '${name}'`);
-        return new AST.EIdent(Types.TINT, name, null);
+        return new AST.EIdent(loc, Types.TINT, name, null);
       }
       if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(decl);
       else this.globalUsedSymbols.add(decl);
 
-      if (decl instanceof AST.DVar) return new AST.EIdent(decl.type, name, decl);
-      if (decl instanceof AST.DFunc) return new AST.EIdent(decl.type, name, decl);
-      if (decl instanceof AST.DEnumConst) return new AST.EIdent(Types.TINT, name, decl);
-      return new AST.EIdent(Types.TINT, name, decl);
+      if (decl instanceof AST.DVar) return new AST.EIdent(loc, decl.type, name, decl);
+      if (decl instanceof AST.DFunc) return new AST.EIdent(loc, decl.type, name, decl);
+      if (decl instanceof AST.DEnumConst) return new AST.EIdent(loc, Types.TINT, name, decl);
+      return new AST.EIdent(loc, Types.TINT, name, decl);
     }
 
     // Parenthesized expression or compound literal
     if (t.kind === Lexer.TokenKind.PUNCT && t.text === "(") {
+      const startLoc = Lexer.Loc.fromTok(t);
       // Check if it's a compound literal: (type){...}
       const saved = this.pos;
       this.advance(); // skip (
@@ -4750,7 +4757,7 @@ class Parser {
           } else if (castType.isAggregate()) {
             normalizeInitList(initList, castType);
           }
-          const cl = new AST.ECompoundLiteral(castType, initList);
+          const cl = new AST.ECompoundLiteral(startLoc, castType, initList);
           if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
           else this.currentParsingFunc.compoundLiterals.push(cl);
           return cl;
@@ -4759,14 +4766,14 @@ class Parser {
         const expr = this.parseCastExpression();
         // GCC extension: cast-to-union — (union_type) expr → compound literal
         if (castType.isUnion()) {
-          const initList = new AST.EInitList(castType, [expr], []);
+          const initList = new AST.EInitList(startLoc, castType, [expr], []);
           normalizeInitList(initList, castType);
-          const cl = new AST.ECompoundLiteral(castType, initList);
+          const cl = new AST.ECompoundLiteral(startLoc, castType, initList);
           if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
           else this.currentParsingFunc.compoundLiterals.push(cl);
           return cl;
         }
-        return new AST.ECast(castType, castType, maybeDecay(expr));
+        return new AST.ECast(startLoc, castType, castType, maybeDecay(expr));
       }
       // Regular parenthesized expression
       this.pos = saved;
@@ -4778,6 +4785,7 @@ class Parser {
 
     // sizeof
     if (this.atKW(Lexer.Keyword.SIZEOF)) {
+      const sizeofLoc = Lexer.Loc.fromTok(t);
       this.advance();
       if (this.matchText("(")) {
         if (this.isTypeName()) {
@@ -4789,18 +4797,19 @@ class Parser {
           }
           this.expect(")");
           if (sType.removeQualifiers().isRef()) this.error(this.peek(-1), `sizeof(${sType.removeQualifiers().kind}) is not allowed`);
-          return new AST.ESizeofType(Types.TULONG, sType);
+          return new AST.ESizeofType(sizeofLoc, Types.TULONG, sType);
         }
         const expr = this.parseExpression();
         this.expect(")");
-        return new AST.ESizeofExpr(Types.TULONG, expr);
+        return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
       }
       const expr = this.parseUnaryExpression();
-      return new AST.ESizeofExpr(Types.TULONG, expr);
+      return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
     }
 
     // _Alignof
     if (this.atKW(Lexer.Keyword.ALIGNOF)) {
+      const alignofLoc = Lexer.Loc.fromTok(t);
       this.advance();
       this.expect("(");
       if (this.isTypeName()) {
@@ -4817,11 +4826,11 @@ class Parser {
         if (!aType.isComplete) {
           this.error(this.peek(-1), "_Alignof cannot be applied to incomplete type '" + aType.toString() + "'");
         }
-        return new AST.EAlignofType(Types.TULONG, aType);
+        return new AST.EAlignofType(alignofLoc, Types.TULONG, aType);
       }
       const expr = this.parseExpression();
       this.expect(")");
-      return new AST.EAlignofExpr(Types.TULONG, expr);
+      return new AST.EAlignofExpr(alignofLoc, Types.TULONG, expr);
     }
 
     // __builtin_va_start/va_arg/va_end/va_copy
@@ -4870,7 +4879,7 @@ class Parser {
       for (let i = 0; i < args.length; i++) {
         this._rejectNonZeroToRef(fields[i].type, args[i], newTok);
       }
-      return new AST.EGCNew(nq, args);
+      return new AST.EGCNew(Lexer.Loc.fromTok(newTok), nq, args);
     }
 
     // __array_new(elemType, length [, init]) — array.new / array.new_default
@@ -4896,20 +4905,22 @@ class Parser {
       }
       // Reject non-zero int as fill value when element type is a non-eqref ref.
       if (args.length === 2) this._rejectNonZeroToRef(elemType, args[1], newTok);
-      return new AST.EGCNew(arrType, args);
+      return new AST.EGCNew(Lexer.Loc.fromTok(newTok), arrType, args);
     }
 
     // __memory_size, __memory_grow
     if (this.matchKW(Lexer.Keyword.X_MEMORY_SIZE)) {
+      const kwLoc = Lexer.Loc.fromTok(this.peek(-1));
       this.expect("(");
       this.expect(")");
-      return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_SIZE, []);
+      return new AST.EIntrinsic(kwLoc, Types.TULONG, Types.IntrinsicKind.MEMORY_SIZE, []);
     }
     if (this.matchKW(Lexer.Keyword.X_MEMORY_GROW)) {
+      const kwLoc = Lexer.Loc.fromTok(this.peek(-1));
       this.expect("(");
       const arg = this.parseAssignmentExpression();
       this.expect(")");
-      return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_GROW, [arg]);
+      return new AST.EIntrinsic(kwLoc, Types.TULONG, Types.IntrinsicKind.MEMORY_GROW, [arg]);
     }
 
     // __ref_is_null(ref)
@@ -4921,7 +4932,7 @@ class Parser {
       if (!arg.type.removeQualifiers().isRef()) {
         this.error(tok, `__ref_is_null requires a reference type, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_IS_NULL, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.REF_IS_NULL, [arg]);
     }
 
     // __ref_eq(ref, ref)
@@ -4936,7 +4947,7 @@ class Parser {
       if (!at.isRef() || !bt.isRef()) {
         this.error(tok, `__ref_eq requires two reference operands, got '${a.type.toString()}' and '${b.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_EQ, [a, b]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.REF_EQ, [a, b]);
     }
 
     // __ref_null(type) — produces a null of the given reference type
@@ -4958,7 +4969,7 @@ class Parser {
       if (nq === Types.TREFEXTERN) {
         this.error(tok, `__ref_null(__refextern) is not allowed — non-nullable refs cannot be null; use __externref instead`);
       }
-      return new AST.EIntrinsic(nq, Types.IntrinsicKind.REF_NULL, [], nq);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), nq, Types.IntrinsicKind.REF_NULL, [], nq);
     }
 
     // __ref_test(target_type, ref) — runtime type test
@@ -4992,7 +5003,7 @@ class Parser {
           this.error(tok, `${opName} second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
         }
         const kind = isNullable ? Types.IntrinsicKind.REF_TEST_NULL : Types.IntrinsicKind.REF_TEST;
-        return new AST.EIntrinsic(Types.TINT, kind, [refExpr], tq);
+        return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, kind, [refExpr], tq);
       }
     }
 
@@ -5026,7 +5037,7 @@ class Parser {
           this.error(tok, `${opName} second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
         }
         const kind = isNullable ? Types.IntrinsicKind.REF_CAST_NULL : Types.IntrinsicKind.REF_CAST;
-        return new AST.EIntrinsic(tq, kind, [refExpr], tq);
+        return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), tq, kind, [refExpr], tq);
       }
     }
 
@@ -5039,7 +5050,7 @@ class Parser {
       if (!arg.type.removeQualifiers().isGCArray()) {
         this.error(tok, `__array_len requires a __array(...) operand, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.ARRAY_LEN, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.ARRAY_LEN, [arg]);
     }
 
     // __array_of(elemType, v1, v2, ...) — array.new_fixed
@@ -5064,7 +5075,7 @@ class Parser {
         this._rejectNonZeroToRef(elemType, args[i], tok);
       }
       const arrType = Types.gcArrayOf(elemType);
-      return new AST.EIntrinsic(arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
     }
 
     // __array_fill(arr, offset, value, count) — bulk fill of a GC array slice
@@ -5084,7 +5095,7 @@ class Parser {
       }
       const elemType = arr.type.removeQualifiers().baseType;
       this._rejectNonZeroToRef(elemType, val, tok);
-      return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
     }
 
     // __ref_as_extern(gc_ref) — wrap a GC-universe ref (struct/array/eqref)
@@ -5097,7 +5108,7 @@ class Parser {
       if (!arg.type.removeQualifiers().isGCRef()) {
         this.error(tok, `__ref_as_extern requires a GC-universe ref (__struct/__array/__eqref), got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TEXTERNREF, Types.IntrinsicKind.REF_AS_EXTERN, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TEXTERNREF, Types.IntrinsicKind.REF_AS_EXTERN, [arg]);
     }
 
     // __ref_as_any(extern_ref) — unwrap an externref to eqref. Cheap retag
@@ -5112,7 +5123,7 @@ class Parser {
       if (at !== Types.TEXTERNREF && at !== Types.TREFEXTERN) {
         this.error(tok, `__ref_as_any requires an __externref/__refextern, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TEQREF, Types.IntrinsicKind.REF_AS_EQ, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TEQREF, Types.IntrinsicKind.REF_AS_EQ, [arg]);
     }
 
     // __cast(TargetType, expr) — universal conversion. Dispatch on the
@@ -5157,7 +5168,7 @@ class Parser {
         this.error(tok,
           `__cast: no conversion defined from '${expr.type.toString()}' to '${tType.toString()}'`);
       }
-      return new AST.EIntrinsic(tq, Types.IntrinsicKind.CAST, [expr], tq);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), tq, Types.IntrinsicKind.CAST, [expr], tq);
     }
 
     // __array_copy(dst, dst_off, src, src_off, count) — bulk copy between GC arrays
@@ -5186,11 +5197,12 @@ class Parser {
         this.error(tok,
           `__array_copy element type mismatch: dst is '${dst.type.toString()}', src is '${src.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_COPY, [dst, dstOff, src, srcOff, count]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TVOID, Types.IntrinsicKind.ARRAY_COPY, [dst, dstOff, src, srcOff, count]);
     }
 
     // __builtin(kind, args...)
     if (this.matchKW(Lexer.Keyword.X_BUILTIN)) {
+      const builtinTok = this.peek(-1);
       this.expect("(");
       const kindTok = this.expectKind(Lexer.TokenKind.IDENT);
       const kindName = kindTok.text;
@@ -5206,11 +5218,12 @@ class Parser {
       let retType = Types.TVOID;
       if (ik === Types.IntrinsicKind.ALLOCA) retType = Types.TVOID.pointer();
       else if (ik === Types.IntrinsicKind.HEAP_BASE || ik === Types.IntrinsicKind.MEMORY_SIZE || ik === Types.IntrinsicKind.MEMORY_GROW) retType = Types.TULONG;
-      return new AST.EIntrinsic(retType, ik, args);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(builtinTok), retType, ik, args);
     }
 
     // __wasm(type, (args...), instruction, ...)
     if (this.matchKW(Lexer.Keyword.X_WASM)) {
+      const wasmTok = this.peek(-1);
       this.expect("(");
       const retSpecs = this.parseDeclSpecifiers();
       let retType = retSpecs.type;
@@ -5286,11 +5299,12 @@ class Parser {
         }
       }
       this.expect(")");
-      return new AST.EWasm(retType, args, bytes);
+      return new AST.EWasm(Lexer.Loc.fromTok(wasmTok), retType, args, bytes);
     }
 
     // _Generic
     if (this.matchKW(Lexer.Keyword.GENERIC)) {
+      const genericTok = this.peek(-1);
       this.expect("(");
       const controlExpr = this.parseAssignmentExpression();
       let result = null;
@@ -5315,7 +5329,7 @@ class Parser {
       if (!result && !defaultExpr) {
         this.error(this.peek(-1), "_Generic: no matching type and no 'default' association");
       }
-      return result || defaultExpr || new AST.EInt(Types.TINT, 0n);
+      return result || defaultExpr || new AST.EInt(Lexer.Loc.fromTok(genericTok), Types.TINT, 0n);
     }
 
     this.error(t, `Unexpected token in expression: ${t.kind} '${t.text}'`);
@@ -5323,7 +5337,9 @@ class Parser {
 
   parseStringLiteral() {
     // Determine string prefix from first token
-    let prefix = this.peek().flags.stringPrefix || Lexer.StringPrefix.NONE;
+    const startTok = this.peek();
+    let prefix = startTok.flags.stringPrefix || Lexer.StringPrefix.NONE;
+    const startLoc = Lexer.Loc.fromTok(startTok);
     const codepoints = [];
     while (this.atKind(Lexer.TokenKind.STRING)) {
       const tok = this.advance();
@@ -5346,7 +5362,7 @@ class Parser {
       for (const cp of codepoints) Lexer.encodeUtf16LE(cp, bytes);
       bytes.push(0); bytes.push(0); // null terminator (2 bytes)
       const elemCount = bytes.length / 2;
-      return new AST.EString(Types.arrayOf(Types.TUSHORT, elemCount), bytes);
+      return new AST.EString(startLoc, Types.arrayOf(Types.TUSHORT, elemCount), bytes);
     }
     if (prefix === Lexer.StringPrefix.PREFIX_L) {
       // UTF-32 string: element type is int (wchar_t)
@@ -5354,7 +5370,7 @@ class Parser {
       for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
-      return new AST.EString(Types.arrayOf(Types.TINT, elemCount), bytes);
+      return new AST.EString(startLoc, Types.arrayOf(Types.TINT, elemCount), bytes);
     }
     if (prefix === Lexer.StringPrefix.PREFIX_U) {
       // UTF-32 string: element type is unsigned int (char32_t)
@@ -5362,7 +5378,7 @@ class Parser {
       for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
-      return new AST.EString(Types.arrayOf(Types.TUINT, elemCount), bytes);
+      return new AST.EString(startLoc, Types.arrayOf(Types.TUINT, elemCount), bytes);
     }
     // Regular or u8 string: element type is char
     // Codepoints <= 0xFF are raw bytes (from \xNN escapes).
@@ -5373,10 +5389,11 @@ class Parser {
       else Lexer.encodeUtf8(cp, bytes);
     }
     bytes.push(0);
-    return new AST.EString(Types.arrayOf(Types.TCHAR, bytes.length), bytes);
+    return new AST.EString(startLoc, Types.arrayOf(Types.TCHAR, bytes.length), bytes);
   }
 
   parseIntrinsic(ikind) {
+    const kwTok = this.peek();
     this.advance();
     this.expect("(");
     const args = [];
@@ -5387,10 +5404,11 @@ class Parser {
     this.expect(")");
     let retType = Types.TVOID;
     if (ikind === Types.IntrinsicKind.VA_START || ikind === Types.IntrinsicKind.VA_END || ikind === Types.IntrinsicKind.VA_COPY) retType = Types.TVOID;
-    return new AST.EIntrinsic(retType, ikind, args);
+    return new AST.EIntrinsic(Lexer.Loc.fromTok(kwTok), retType, ikind, args);
   }
 
   parseVaArg() {
+    const kwTok = this.peek();
     this.advance();
     this.expect("(");
     const ap = this.parseAssignmentExpression();
@@ -5406,7 +5424,7 @@ class Parser {
       this.error(this.peek(-1),
         `va_arg cannot retrieve a reference type '${argType.toString()}' — vararg storage uses linear memory which can't hold GC references`);
     }
-    return new AST.EIntrinsic(argType, Types.IntrinsicKind.VA_ARG, [ap], argType);
+    return new AST.EIntrinsic(Lexer.Loc.fromTok(kwTok), argType, Types.IntrinsicKind.VA_ARG, [ap], argType);
   }
 
   // Matches CC's parsePostfixExpression (compiler.cc ~line 10495)
@@ -5521,17 +5539,21 @@ class Parser {
   parseUnaryExpression() {
     if (this.matchText("++")) {
       const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseUnaryExpression();
       if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `'++' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e);
     }
     if (this.matchText("--")) {
       const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseUnaryExpression();
       if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `'--' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e);
     }
     if (this.matchText("&")) {
+      const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseCastExpression();
       if ((e instanceof AST.EMember || e instanceof AST.EArrow) && e.memberDecl && e.memberDecl.bitWidth >= 0) {
         this.error(this.peek(-1), `Cannot take address of bit-field member '${e.memberDecl.name}'`);
@@ -5545,40 +5567,46 @@ class Parser {
       if (e instanceof AST.ESubscript && e.array && e.array.type && e.array.type.removeQualifiers().isGCArray()) {
         this.error(this.peek(-1), `cannot take address of GC array element`);
       }
-      this.markAddressTaken(e); return new AST.EUnary(Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
+      this.markAddressTaken(e); return new AST.EUnary(loc, Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
     }
     if (this.matchText("*")) {
       const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       let e = this.parseCastExpression();
       if (e.type && e.type.removeQualifiers().isRef()) {
         this.error(tok, `unary '*' on reference type '${e.type.toString()}' is not allowed (use '->' for fields, or just access the ref directly)`);
       }
       // *arr is *(decay(arr)) — array operand decays to pointer first.
       e = maybeDecay(e);
-      return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e);
     }
     if (this.matchText("+")) {
       const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseCastExpression();
       if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '+' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_POS", e.type), "OP_POS", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_POS", e.type), "OP_POS", e);
     }
     if (this.matchText("-")) {
       const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseCastExpression();
       if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '-' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e);
     }
     if (this.matchText("~")) {
       const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseCastExpression();
       if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '~' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e);
     }
     if (this.matchText("!")) {
+      const tok = this.peek(-1);
+      const loc = Lexer.Loc.fromTok(tok);
       const e = this.parseCastExpression();
       // `!ref` is equivalent to __ref_is_null(ref). Allowed as sugar.
-      return new AST.EUnary(Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e);
+      return new AST.EUnary(loc, Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e);
     }
 
     if (this.atKW(Lexer.Keyword.SIZEOF)) return this.parsePrimaryExpression(); // handled there
@@ -5590,6 +5618,7 @@ class Parser {
   parseCastExpression() {
     if (this.atText("(")) {
       // Look ahead: is this a cast or a parenthesized expression?
+      const startTok = this.peek();
       const saved = this.pos;
       this.advance();
       if (this.isTypeName()) {
@@ -5600,6 +5629,7 @@ class Parser {
           castType = d.type;
         }
         if (this.matchText(")")) {
+          const startLoc = Lexer.Loc.fromTok(startTok);
           if (this.atText("{")) {
             // Compound literal: (type){...}
             const initList = this.parseInitList(castType);
@@ -5614,7 +5644,7 @@ class Parser {
             } else if (castType.isAggregate()) {
               normalizeInitList(initList, castType);
             }
-            const cl = new AST.ECompoundLiteral(castType, initList);
+            const cl = new AST.ECompoundLiteral(startLoc, castType, initList);
             if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
             else this.currentParsingFunc.compoundLiterals.push(cl);
             return this.parsePostfixTail(cl);
@@ -5622,9 +5652,9 @@ class Parser {
           const expr = this.parseCastExpression();
           // GCC extension: cast-to-union — (union_type) expr → compound literal
           if (castType.isUnion()) {
-            const initList = new AST.EInitList(castType, [expr], []);
+            const initList = new AST.EInitList(startLoc, castType, [expr], []);
             normalizeInitList(initList, castType);
-            const cl = new AST.ECompoundLiteral(castType, initList);
+            const cl = new AST.ECompoundLiteral(startLoc, castType, initList);
             if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
             else this.currentParsingFunc.compoundLiterals.push(cl);
             return this.parsePostfixTail(cl);
@@ -5635,13 +5665,13 @@ class Parser {
             if (castType.removeQualifiers().isRef() &&
                 !(expr.type && expr.type.removeQualifiers().isRef()) &&
                 this._isNullPointerConstant(expr)) {
-              return new AST.ECast(castType, castType, expr);
+              return new AST.ECast(startLoc, castType, castType, expr);
             }
             this.error(this.peek(-1), "Cannot cast to or from a reference type; use __cast(T, x) (or __ref_cast for GC ref downcast)");
           }
           // Decay array/function operand before the cast — (T*)arr is
           // really (T*)(decay(arr)).
-          return new AST.ECast(castType, castType, maybeDecay(expr));
+          return new AST.ECast(startLoc, castType, castType, maybeDecay(expr));
         }
       }
       this.pos = saved;
@@ -5715,10 +5745,11 @@ class Parser {
           }
         }
 
-        expr = new AST.ECall(expr, args);
+        expr = new AST.ECall(Lexer.Loc.fromTok(callTok), expr, args);
         continue;
       }
       if (this.matchText("[")) {
+        const lbrTok = this.peek(-1);
         const index = this.parseExpression();
         this.expect("]");
         const baseUt = expr.type.removeQualifiers();
@@ -5735,22 +5766,26 @@ class Parser {
         }
         // GC arrays don't decay; keep them as the array operand.
         const arrayOperand = baseUt.kind === Types.TypeKind.GC_ARRAY ? expr : maybeDecay(expr);
-        expr = new AST.ESubscript(elemType, arrayOperand, index);
+        expr = new AST.ESubscript(Lexer.Loc.fromTok(lbrTok), elemType, arrayOperand, index);
         continue;
       }
       if (this.matchText(".")) {
+        const dotTok = this.peek(-1);
+        const dotLoc = Lexer.Loc.fromTok(dotTok);
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
         const { chain } = this.lookupMember(expr.type, name);
         if (chain) {
           for (const mVar of chain) {
-            expr = new AST.EMember(mVar.type, expr, mVar.name, mVar);
+            expr = new AST.EMember(dotLoc, mVar.type, expr, mVar.name, mVar);
           }
         } else {
-          expr = new AST.EMember(Types.TINT, expr, name, null);
+          expr = new AST.EMember(dotLoc, Types.TINT, expr, name, null);
         }
         continue;
       }
       if (this.matchText("->")) {
+        const arrowTok = this.peek(-1);
+        const arrowLoc = Lexer.Loc.fromTok(arrowTok);
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
         let bt = expr.type.removeQualifiers();
         // GC ref types are already "one indirection" semantically — `p->x` on
@@ -5759,9 +5794,9 @@ class Parser {
         if (bt.kind === Types.TypeKind.GC_STRUCT) {
           const { chain } = this.lookupMember(bt, name);
           if (chain) {
-            for (const m of chain) expr = new AST.EMember(m.type, expr, m.name, m);
+            for (const m of chain) expr = new AST.EMember(arrowLoc, m.type, expr, m.name, m);
           } else {
-            expr = new AST.EMember(Types.TINT, expr, name, null);
+            expr = new AST.EMember(arrowLoc, Types.TINT, expr, name, null);
           }
           continue;
         }
@@ -5774,24 +5809,26 @@ class Parser {
         if (chain) {
           // First element: arrow (dereference pointer)
           const first = chain[0];
-          expr = new AST.EArrow(first.type, expr, first.name, first);
+          expr = new AST.EArrow(arrowLoc, first.type, expr, first.name, first);
           // Remaining: member access (traverse anonymous structs)
           for (let i = 1; i < chain.length; i++) {
-            expr = new AST.EMember(chain[i].type, expr, chain[i].name, chain[i]);
+            expr = new AST.EMember(arrowLoc, chain[i].type, expr, chain[i].name, chain[i]);
           }
         } else {
-          expr = new AST.EArrow(Types.TINT, expr, name, null);
+          expr = new AST.EArrow(arrowLoc, Types.TINT, expr, name, null);
         }
         continue;
       }
       if (this.matchText("++")) {
-        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(this.peek(-1), `'++' on reference type is not allowed`);
-        expr = new AST.EUnary(expr.type, "OP_POST_INC", expr);
+        const tok = this.peek(-1);
+        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(tok, `'++' on reference type is not allowed`);
+        expr = new AST.EUnary(Lexer.Loc.fromTok(tok), expr.type, "OP_POST_INC", expr);
         continue;
       }
       if (this.matchText("--")) {
-        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(this.peek(-1), `'--' on reference type is not allowed`);
-        expr = new AST.EUnary(expr.type, "OP_POST_DEC", expr);
+        const tok = this.peek(-1);
+        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(tok, `'--' on reference type is not allowed`);
+        expr = new AST.EUnary(Lexer.Loc.fromTok(tok), expr.type, "OP_POST_DEC", expr);
         continue;
       }
       break;
@@ -5937,7 +5974,7 @@ class Parser {
         // implicit cast to resType when needed.
         thenExpr = maybeImplicitCast(thenExpr, resType);
         elseExpr = maybeImplicitCast(elseExpr, resType);
-        left = new AST.ETernary(resType, left, thenExpr, elseExpr);
+        left = new AST.ETernary(left.loc, resType, left, thenExpr, elseExpr);
         continue;
       }
 
@@ -5948,7 +5985,7 @@ class Parser {
         while (this.matchText(",")) {
           exprs.push(this.parseBinaryExpression(2));
         }
-        left = new AST.EComma(exprs[exprs.length - 1].type, exprs);
+        left = new AST.EComma(left.loc, exprs[exprs.length - 1].type, exprs);
         continue;
       }
 
@@ -6040,7 +6077,7 @@ class Parser {
         }
       }
 
-      left = new AST.EBinary(resType, bop, left, right);
+      left = new AST.EBinary(left.loc, resType, bop, left, right);
     }
     return left;
   }
@@ -6050,6 +6087,7 @@ class Parser {
 
   // --- Init list parsing ---
   parseInitList(type) {
+    const startTok = this.peek();
     this.expect("{");
     const elements = [];
     const designators = [];
@@ -6105,7 +6143,7 @@ class Parser {
       } while (this.matchText(",") && !this.atText("}"));
     }
     this.expect("}");
-    return new AST.EInitList(type, elements, hasDesignators ? designators : null);
+    return new AST.EInitList(Lexer.Loc.fromTok(startTok), type, elements, hasDesignators ? designators : null);
   }
 
   // --- Statement parsing ---
@@ -7176,7 +7214,7 @@ function maybeImplicitCast(expr, targetType) {
   const srcType = expr.type.removeQualifiers();
   if (srcType === targetType) return expr;
   if (targetType.isVoid() || srcType.isVoid()) return expr;
-  return new AST.EImplicitCast(targetType, expr);
+  return new AST.EImplicitCast(expr.loc, targetType, expr);
 }
 
 // Wrap an expression in EDecay if its type is array or function.
@@ -7186,7 +7224,7 @@ function maybeImplicitCast(expr, targetType) {
 // initialization/assignment/return/throw to a pointer-typed target.
 function maybeDecay(expr) {
   const t = expr.type;
-  if (t.isArray() || t.isFunction()) return new AST.EDecay(t.decay(), expr);
+  if (t.isArray() || t.isFunction()) return new AST.EDecay(expr.loc, t.decay(), expr);
   return expr;
 }
 
@@ -7237,15 +7275,17 @@ function extractSetjmpCall(cond) {
 
 // Build expression: buf[0]
 function makeBufIdExpr(bufExpr) {
-  return new AST.ESubscript(Types.TINT, bufExpr, new AST.EInt(Types.TINT, 0n));
+  const loc = bufExpr.loc;
+  return new AST.ESubscript(loc, Types.TINT, bufExpr, new AST.EInt(loc, Types.TINT, 0n));
 }
 
 // Build: buf[0] = ++counterVar
 function makeSetBufIdStmt(bufExpr, counterVar) {
+  const loc = bufExpr.loc;
   const lhs = makeBufIdExpr(bufExpr);
-  const counterRef = new AST.EIdent(Types.TINT, counterVar.name, counterVar);
-  const rhs = new AST.EUnary(Types.TINT, "OP_PRE_INC", counterRef);
-  const assign = new AST.EBinary(Types.TINT, "ASSIGN", lhs, rhs);
+  const counterRef = new AST.EIdent(loc, Types.TINT, counterVar.name, counterVar);
+  const rhs = new AST.EUnary(loc, Types.TINT, "OP_PRE_INC", counterRef);
+  const assign = new AST.EBinary(loc, Types.TINT, "ASSIGN", lhs, rhs);
   return new AST.SExpr(assign);
 }
 
@@ -7264,12 +7304,13 @@ function makeThrowLongJump(tag, idExpr, valExpr) {
 
 // Build catch body: { if (id != buf[0]) rethrow; <userBody> }
 function makeCatchBody(tag, idVar, valVar, bufExpr, userBody) {
-  const idRef = new AST.EIdent(Types.TINT, idVar.name, idVar);
+  const loc = bufExpr.loc;
+  const idRef = new AST.EIdent(loc, Types.TINT, idVar.name, idVar);
   const myIdExpr = makeBufIdExpr(bufExpr);
-  const cond = new AST.EBinary(Types.TINT, "NE", idRef, myIdExpr);
+  const cond = new AST.EBinary(loc, Types.TINT, "NE", idRef, myIdExpr);
 
-  const idRef2 = new AST.EIdent(Types.TINT, idVar.name, idVar);
-  const valRef = new AST.EIdent(Types.TINT, valVar.name, valVar);
+  const idRef2 = new AST.EIdent(loc, Types.TINT, idVar.name, idVar);
+  const valRef = new AST.EIdent(loc, Types.TINT, valVar.name, valVar);
   const rethrow = makeThrowLongJump(tag, idRef2, valRef);
 
   const rethrowIf = new AST.SIf(cond, rethrow, null);
@@ -9362,7 +9403,7 @@ class CodeGenerator {
       this.emitInitToFrameSlot(cl.type, cl.initList, offset);
     } else {
       const initExpr = (!cl.initList.elements || cl.initList.elements.length === 0)
-        ? new AST.EInt(Types.TINT, 0n) : cl.initList.elements[0];
+        ? new AST.EInt(cl.loc, Types.TINT, 0n) : cl.initList.elements[0];
       this.emitInitToFrameSlot(cl.type, initExpr, offset);
     }
   }
@@ -11543,7 +11584,7 @@ function generateCode(units, outputFile, options) {
       } else if (cl.type.isAggregate() || cl.type.isArray()) {
         cg.populateInitListStatic(cl.initList, cl.type, baseOffset);
       } else {
-        const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.type, 0n) : cl.initList.elements[0];
+        const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.loc, cl.type, 0n) : cl.initList.elements[0];
         const val = cg._constEvalExpr(initExpr);
         if (val) cg.writeConstValueToStatic(baseOffset, cl.type, val);
       }
