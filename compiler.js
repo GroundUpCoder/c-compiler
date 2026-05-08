@@ -11912,6 +11912,15 @@ class Translator {
     this.extraLocals = [];         // IR.LocalVariable[] for non-param locals
     this.warnings = [];            // strings to print after codegen
 
+    // Per-statement preamble: stmts to splice in BEFORE the current top-
+    // level statement at the parent COMPOUND scope. Used to avoid wrapping
+    // multi-stmt sequences (e.g. an array DECL's MemoryFill + per-element
+    // Stores) in their own Block — wrapping would let that Block claim
+    // the user StackSlot, and codegen layout would alias it with sibling
+    // FrameNodes (vacalls, etc.). Top-level only — safe at unconditional
+    // contexts where the preamble executes the same way as the stmt itself.
+    this._currentPreamble = [];
+
     // Map from DFunc (definition) to a placeholder used during in-progress
     // translation of recursive calls. Currently we just translate eagerly in
     // declaration order; mutual recursion will need call_indirect or similar.
@@ -13639,9 +13648,17 @@ class Translator {
             }
           }
         }
+        // Don't wrap multi-stmt DECLs in a Block — the Block would claim
+        // the user MEMORY-class StackSlot referenced inside, and codegen
+        // layout would alias it with sibling FrameNodes' offsets. Instead,
+        // splice all but the last stmt into the parent COMPOUND scope via
+        // the preamble; return only the LAST stmt as the DECL's result.
         if (stmts.length === 0) return new IR.Block(loc, Symbol('decl'), []);
         if (stmts.length === 1) return stmts[0];
-        return new IR.Block(loc, Symbol('decl'), stmts);
+        for (let k = 0; k < stmts.length - 1; k++) {
+          this._currentPreamble.push(stmts[k]);
+        }
+        return stmts[stmts.length - 1];
       }
       case Types.StmtKind.EMPTY: {
         return new IR.Block(loc, Symbol('empty'), []);
@@ -13834,6 +13851,7 @@ class Translator {
       varargsArgBlockLocal: this.varargsArgBlockLocal,
       varargsPtrLocal: this.varargsPtrLocal,
       varargsRetSlotSize: this.varargsRetSlotSize,
+      _currentPreamble: this._currentPreamble,
     };
     this.cVarToLocal = new Map();
     this.cVarToStackSlot = new Map();
@@ -13843,6 +13861,7 @@ class Translator {
     this.varargsArgBlockLocal = null;
     this.varargsPtrLocal = null;
     this.varargsRetSlotSize = 0;
+    this._currentPreamble = [];
     this.translatingNow.add(fdef);
 
     // Pre-scan body for MEMORY-class locals (arrays, struct/union, addr-taken
@@ -13943,6 +13962,7 @@ class Translator {
       this.varargsArgBlockLocal = outer.varargsArgBlockLocal;
       this.varargsPtrLocal = outer.varargsPtrLocal;
       this.varargsRetSlotSize = outer.varargsRetSlotSize;
+      this._currentPreamble = outer._currentPreamble;
       this.translatingNow.delete(fdef);
       // Build a param list that matches irFuncType so IR.Function validates.
       const stubParams = irFuncType.params.map((pt, i) =>
@@ -13998,6 +14018,7 @@ class Translator {
     this.varargsArgBlockLocal = outer.varargsArgBlockLocal;
     this.varargsPtrLocal = outer.varargsPtrLocal;
     this.varargsRetSlotSize = outer.varargsRetSlotSize;
+    this._currentPreamble = outer._currentPreamble;
     this.translatingNow.delete(fdef);
 
     const irFunc = new IR.Function(
@@ -14293,7 +14314,7 @@ class Translator {
         for (let j = from; j < nextPos; j++) {
           const s = stmts[j];
           if (s.kind === SK.LABEL) continue; // skip label markers
-          acc.push(this.translateStmt(s));
+          this._pushStmtWithPreamble(acc, s);
         }
       }
       // Anything before the first block-entry's stmtPos? In a well-formed
@@ -14366,7 +14387,7 @@ class Translator {
           // Plain label with no gotos — skip.
           i++;
         } else {
-          out.push(this.translateStmt(s));
+          this._pushStmtWithPreamble(out, s);
           i++;
         }
       }
@@ -14412,14 +14433,14 @@ class Translator {
                 break;
               }
               if (t.kind === SK.LABEL) { i++; continue; }
-              inner.push(this.translateStmt(t));
+              this._pushStmtWithPreamble(inner, t);
               i++;
             }
             out.push(new IR.Block(loc, sym, inner));
             continue;
           }
           if (s.kind === SK.LABEL) { i++; continue; }
-          out.push(this.translateStmt(s));
+          this._pushStmtWithPreamble(out, s);
           i++;
         }
         return { body: out, nextIdx: i };
@@ -14627,6 +14648,22 @@ class Translator {
       return;
     }
     nyi(`init list for type ${type.kind}`, loc);
+  }
+
+  // Translate a C statement and splice any preamble stmts pushed during
+  // the translation into the COMPOUND-level body BEFORE the stmt's IR.
+  // The preamble lets multi-stmt sequences (e.g. an array DECL's
+  // MemoryFill + per-element Stores) get hoisted to the parent scope so
+  // they don't need to wrap in a Block — wrapping causes that Block to
+  // claim the user StackSlot, and codegen layout aliases it with sibling
+  // FrameNodes (vacalls, etc.).
+  _pushStmtWithPreamble(out, stmt) {
+    const start = this._currentPreamble.length;
+    const stmtIR = this.translateStmt(stmt);
+    if (this._currentPreamble.length > start) {
+      out.push(...this._currentPreamble.splice(start));
+    }
+    out.push(stmtIR);
   }
 
   // Truncate / sign-extend an i32-slot value to fit a narrow C integer type.
