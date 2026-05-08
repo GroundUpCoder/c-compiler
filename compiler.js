@@ -12853,7 +12853,27 @@ class Translator {
       if (zero) return new IR.BinOp(loc, 'ne', src, zero);
     }
 
-    if (fromT === toT) return src;
+    if (fromT === toT) {
+      // Same IR type, but the C target type may be narrower than the slot
+      // (e.g. CAST(int -> char): both IR.I32, but char must be 8-bit
+      // sign-extended). Truncate via the target's C type — only meaningful
+      // when the FROM type is wider (otherwise we'd corrupt good data on
+      // chains like char→char that shouldn't change anything).
+      if (toC && fromC) {
+        const tu = toC.removeQualifiers ? toC.removeQualifiers() : toC;
+        const fu = fromC.removeQualifiers ? fromC.removeQualifiers() : fromC;
+        const isNarrow = (k) => k === Types.TypeKind.UCHAR ||
+                                k === Types.TypeKind.SCHAR ||
+                                k === Types.TypeKind.CHAR ||
+                                k === Types.TypeKind.USHORT ||
+                                k === Types.TypeKind.SHORT ||
+                                k === Types.TypeKind.BOOL;
+        if (isNarrow(tu.kind) && tu.size < fu.size) {
+          return this._truncateToCType(src, tu, loc);
+        }
+      }
+      return src;
+    }
 
     const fromSlot = fromT.slotType || fromT;
     const toSlot = toT.slotType || toT;
