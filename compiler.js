@@ -3007,41 +3007,41 @@ function dumpExpr(expr, ctx, indent) {
 function dumpStmt(stmt, ctx, indent) {
   let ret = ind(indent);
   ret += "Stmt " + stmt.kind + ":";
-  switch (stmt.kind) {
-    case Types.StmtKind.EXPR:
+  switch (stmt.constructor) {
+    case AST.SExpr:
       ret += dumpExpr(stmt.expr, ctx, indent + 1);
       break;
-    case Types.StmtKind.RETURN:
+    case AST.SReturn:
       if (stmt.expr) ret += dumpExpr(stmt.expr, ctx, indent + 1);
       else ret += " (no expression)";
       break;
-    case Types.StmtKind.DECL:
+    case AST.SDecl:
       for (const d of stmt.declarations) ret += dumpDecl(d, ctx, indent + 1);
       break;
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound:
       ret += " " + stmt.statements.length + " statements";
       for (const s of stmt.statements) ret += dumpStmt(s, ctx, indent + 1);
       break;
-    case Types.StmtKind.GOTO:
+    case AST.SGoto:
       ret += " " + stmt.label;
       break;
-    case Types.StmtKind.LABEL:
+    case AST.SLabel:
       ret += " " + stmt.name;
       break;
-    case Types.StmtKind.IF:
+    case AST.SIf:
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       ret += dumpStmt(stmt.thenBranch, ctx, indent + 1);
       if (stmt.elseBranch) ret += dumpStmt(stmt.elseBranch, ctx, indent + 1);
       break;
-    case Types.StmtKind.WHILE:
+    case AST.SWhile:
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case Types.StmtKind.DO_WHILE:
+    case AST.SDoWhile:
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       break;
-    case Types.StmtKind.FOR:
+    case AST.SFor:
       if (stmt.init) ret += dumpStmt(stmt.init, ctx, indent + 1);
       else ret += ind(indent + 1) + "(no init)";
       if (stmt.condition) ret += dumpExpr(stmt.condition, ctx, indent + 1);
@@ -3050,7 +3050,7 @@ function dumpStmt(stmt, ctx, indent) {
       else ret += ind(indent + 1) + "(no increment)";
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case Types.StmtKind.SWITCH:
+    case AST.SSwitch:
       ret += dumpExpr(stmt.expr, ctx, indent + 1);
       ret += ind(indent + 1) + stmt.cases.length + " cases";
       for (const c of stmt.cases) {
@@ -3060,7 +3060,7 @@ function dumpStmt(stmt, ctx, indent) {
       }
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case Types.StmtKind.TRY_CATCH:
+    case AST.STryCatch:
       ret += dumpStmt(stmt.tryBody, ctx, indent + 1);
       for (const cc of stmt.catches) {
         ret += ind(indent + 1);
@@ -3069,13 +3069,13 @@ function dumpStmt(stmt, ctx, indent) {
         ret += dumpStmt(cc.body, ctx, indent + 2);
       }
       break;
-    case Types.StmtKind.THROW:
+    case AST.SThrow:
       ret += " " + stmt.tag.name;
       for (const arg of stmt.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.StmtKind.EMPTY:
-    case Types.StmtKind.BREAK:
-    case Types.StmtKind.CONTINUE:
+    case AST.SEmpty:
+    case AST.SBreak:
+    case AST.SContinue:
       break;
   }
   return ret;
@@ -7092,17 +7092,17 @@ function annotateExpr(expr) {
 
 function annotateStmt(stmt, returnType) {
   if (!stmt) return;
-  switch (stmt.kind) {
-    case Types.StmtKind.EXPR:
+  switch (stmt.constructor) {
+    case AST.SExpr:
       annotateExpr(stmt.expr);
       break;
-    case Types.StmtKind.RETURN:
+    case AST.SReturn:
       if (stmt.expr) {
         annotateExpr(stmt.expr);
         wrapImplicitCast(stmt.expr, returnType, (e) => { stmt.expr = e; });
       }
       break;
-    case Types.StmtKind.DECL:
+    case AST.SDecl:
       for (const decl of stmt.declarations) {
         if (decl.declKind === Types.DeclKind.VAR && decl.initExpr) {
           annotateExpr(decl.initExpr);
@@ -7112,37 +7112,37 @@ function annotateStmt(stmt, returnType) {
         }
       }
       break;
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound:
       for (const s of stmt.statements) annotateStmt(s, returnType);
       break;
-    case Types.StmtKind.IF:
+    case AST.SIf:
       annotateExpr(stmt.condition);
       annotateStmt(stmt.thenBranch, returnType);
       if (stmt.elseBranch) annotateStmt(stmt.elseBranch, returnType);
       break;
-    case Types.StmtKind.WHILE:
+    case AST.SWhile:
       annotateExpr(stmt.condition);
       annotateStmt(stmt.body, returnType);
       break;
-    case Types.StmtKind.DO_WHILE:
+    case AST.SDoWhile:
       annotateStmt(stmt.body, returnType);
       annotateExpr(stmt.condition);
       break;
-    case Types.StmtKind.FOR:
+    case AST.SFor:
       if (stmt.init) annotateStmt(stmt.init, returnType);
       if (stmt.condition) annotateExpr(stmt.condition);
       if (stmt.increment) annotateExpr(stmt.increment);
       annotateStmt(stmt.body, returnType);
       break;
-    case Types.StmtKind.SWITCH:
+    case AST.SSwitch:
       annotateExpr(stmt.expr);
       if (stmt.body) annotateStmt(stmt.body, returnType);
       break;
-    case Types.StmtKind.TRY_CATCH:
+    case AST.STryCatch:
       annotateStmt(stmt.tryBody, returnType);
       for (const cc of stmt.catches) annotateStmt(cc.body, returnType);
       break;
-    case Types.StmtKind.THROW:
+    case AST.SThrow:
       for (let i = 0; i < stmt.args.length; i++) {
         annotateExpr(stmt.args[i]);
         if (stmt.tag && stmt.tag.paramTypes && i < stmt.tag.paramTypes.length) {
@@ -7235,8 +7235,8 @@ function makeCatchBody(tag, idVar, valVar, bufExpr, userBody) {
 // Transform longjmp calls in a statement tree into __throw __LongJump(buf[0], val)
 // Returns a replacement statement if changed, or the same statement if not.
 function lowerLongjmpInStmt(stmt, tag) {
-  switch (stmt.kind) {
-    case Types.StmtKind.EXPR: {
+  switch (stmt.constructor) {
+    case AST.SExpr: {
       const call = getNamedCall(stmt.expr, "longjmp");
       if (call && call.arguments.length === 2) {
         const idExpr = makeBufIdExpr(call.arguments[0]);
@@ -7245,29 +7245,29 @@ function lowerLongjmpInStmt(stmt, tag) {
       }
       return stmt;
     }
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound:
       for (let i = 0; i < stmt.statements.length; i++) {
         stmt.statements[i] = lowerLongjmpInStmt(stmt.statements[i], tag);
       }
       return stmt;
-    case Types.StmtKind.IF:
+    case AST.SIf:
       stmt.thenBranch = lowerLongjmpInStmt(stmt.thenBranch, tag);
       if (stmt.elseBranch) stmt.elseBranch = lowerLongjmpInStmt(stmt.elseBranch, tag);
       return stmt;
-    case Types.StmtKind.WHILE:
+    case AST.SWhile:
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case Types.StmtKind.DO_WHILE:
+    case AST.SDoWhile:
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case Types.StmtKind.FOR:
+    case AST.SFor:
       if (stmt.init) stmt.init = lowerLongjmpInStmt(stmt.init, tag);
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case Types.StmtKind.SWITCH:
+    case AST.SSwitch:
       stmt.body = lowerLongjmpInStmt(stmt.body, tag);
       return stmt;
-    case Types.StmtKind.TRY_CATCH:
+    case AST.STryCatch:
       stmt.tryBody = lowerLongjmpInStmt(stmt.tryBody, tag);
       for (const cc of stmt.catches) cc.body = lowerLongjmpInStmt(cc.body, tag);
       return stmt;
@@ -7284,36 +7284,36 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     const stmt = stmts[i];
 
     // Recurse into nested compounds first
-    switch (stmt.kind) {
-      case Types.StmtKind.COMPOUND:
+    switch (stmt.constructor) {
+      case AST.SCompound:
         lowerSetjmpInCompound(stmt, tag, counterVar);
         break;
-      case Types.StmtKind.IF:
+      case AST.SIf:
         // Don't recurse into the if we're about to transform — check first
         break;
-      case Types.StmtKind.WHILE:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SWhile:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.DO_WHILE:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SDoWhile:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.FOR:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SFor:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.SWITCH:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SSwitch:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.LABEL:
+      case AST.SLabel:
         break;
-      case Types.StmtKind.TRY_CATCH:
-        if (stmt.tryBody.kind === Types.StmtKind.COMPOUND)
+      case AST.STryCatch:
+        if (stmt.tryBody instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.tryBody, tag, counterVar);
         for (const cc of stmt.catches)
-          if (cc.body.kind === Types.StmtKind.COMPOUND)
+          if (cc.body instanceof AST.SCompound)
             lowerSetjmpInCompound(cc.body, tag, counterVar);
         break;
       default:
@@ -7321,14 +7321,14 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     }
 
     // Now check if this is an if-statement with setjmp in the condition
-    if (stmt.kind !== Types.StmtKind.IF) continue;
+    if (!(stmt instanceof AST.SIf)) continue;
 
     const { call: setjmpCall, zeroIsTrue } = extractSetjmpCall(stmt.condition);
     if (!setjmpCall) {
       // Not a setjmp if — but still recurse into its branches
-      if (stmt.thenBranch.kind === Types.StmtKind.COMPOUND)
+      if (stmt.thenBranch instanceof AST.SCompound)
         lowerSetjmpInCompound(stmt.thenBranch, tag, counterVar);
-      if (stmt.elseBranch && stmt.elseBranch.kind === Types.StmtKind.COMPOUND)
+      if (stmt.elseBranch && stmt.elseBranch instanceof AST.SCompound)
         lowerSetjmpInCompound(stmt.elseBranch, tag, counterVar);
       continue;
     }
@@ -7370,9 +7370,9 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     }
 
     // Recurse into the try body and catch body
-    if (tryBody.kind === Types.StmtKind.COMPOUND)
+    if (tryBody instanceof AST.SCompound)
       lowerSetjmpInCompound(tryBody, tag, counterVar);
-    if (catchUserBody.kind === Types.StmtKind.COMPOUND)
+    if (catchUserBody instanceof AST.SCompound)
       lowerSetjmpInCompound(catchUserBody, tag, counterVar);
 
     // Build the catch body with rethrow logic
@@ -7436,7 +7436,7 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   // Lower all function bodies
   const lowerFunc = (func) => {
     if (!func.body) return;
-    if (func.body.kind === Types.StmtKind.COMPOUND) {
+    if (func.body instanceof AST.SCompound) {
       lowerSetjmpInCompound(func.body, tag, counterVar);
     }
     func.body = lowerLongjmpInStmt(func.body, tag);
@@ -7471,14 +7471,14 @@ return {
 const Codegen = (() => {
 
 function alwaysReturns(stmt) {
-  switch (stmt.kind) {
-    case Types.StmtKind.RETURN:
-    case Types.StmtKind.THROW:
+  switch (stmt.constructor) {
+    case AST.SReturn:
+    case AST.SThrow:
       return true;
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound:
       if (stmt.labels && stmt.labels.length > 0) return false;
       return stmt.statements.some(alwaysReturns);
-    case Types.StmtKind.IF:
+    case AST.SIf:
       return stmt.elseBranch !== null
         && alwaysReturns(stmt.thenBranch)
         && alwaysReturns(stmt.elseBranch);
@@ -9393,25 +9393,25 @@ class CodeGenerator {
     while (stack.length > 0) {
       const stmt = stack.pop();
       if (!stmt) continue;
-      switch (stmt.kind) {
-        case Types.StmtKind.DECL: addMemoryDecls(stmt.declarations); break;
-        case Types.StmtKind.COMPOUND:
+      switch (stmt.constructor) {
+        case AST.SDecl: addMemoryDecls(stmt.declarations); break;
+        case AST.SCompound:
           for (let i = stmt.statements.length - 1; i >= 0; i--) stack.push(stmt.statements[i]);
           break;
-        case Types.StmtKind.IF:
+        case AST.SIf:
           stack.push(stmt.thenBranch);
           if (stmt.elseBranch) stack.push(stmt.elseBranch);
           break;
-        case Types.StmtKind.WHILE: stack.push(stmt.body); break;
-        case Types.StmtKind.DO_WHILE: stack.push(stmt.body); break;
-        case Types.StmtKind.FOR:
-          if (stmt.init && stmt.init.kind === Types.StmtKind.DECL) addMemoryDecls(stmt.init.declarations);
+        case AST.SWhile: stack.push(stmt.body); break;
+        case AST.SDoWhile: stack.push(stmt.body); break;
+        case AST.SFor:
+          if (stmt.init && stmt.init instanceof AST.SDecl) addMemoryDecls(stmt.init.declarations);
           stack.push(stmt.body);
           break;
-        case Types.StmtKind.SWITCH:
+        case AST.SSwitch:
           for (let i = stmt.body.statements.length - 1; i >= 0; i--) stack.push(stmt.body.statements[i]);
           break;
-        case Types.StmtKind.TRY_CATCH:
+        case AST.STryCatch:
           stack.push(stmt.tryBody);
           for (const cc of stmt.catches) stack.push(cc.body);
           break;
@@ -9566,15 +9566,15 @@ class CodeGenerator {
   emitStmt(stmt) {
     if (!stmt) return;
     if (stmt.loc) this._recordSourceLoc(stmt.loc);
-    switch (stmt.kind) {
-      case Types.StmtKind.COMPOUND: {
+    switch (stmt.constructor) {
+      case AST.SCompound: {
         this.pushLocalScope();
         const stmts = stmt.statements;
         // Open forward-label blocks. Forward labels' scope = from the start
         // of the compound up to the label statement itself.
         const forwardLabels = [];
         for (const s of stmts) {
-          if (s.kind === Types.StmtKind.LABEL && s.hasGotos && !s.isSwitchLevel) {
+          if (s instanceof AST.SLabel && s.hasGotos && !s.isSwitchLevel) {
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
               forwardLabels.push(s);
           }
@@ -9586,7 +9586,7 @@ class CodeGenerator {
         }
         const openLoopLabels = [];
         for (const s of stmts) {
-          if (s.kind === Types.StmtKind.LABEL) {
+          if (s instanceof AST.SLabel) {
             if (!s.hasGotos) continue;
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH) {
               for (let j = openLoopLabels.length - 1; j >= 0; j--) {
@@ -9617,10 +9617,10 @@ class CodeGenerator {
         this.popLocalScope();
         break;
       }
-      case Types.StmtKind.EXPR:
+      case AST.SExpr:
         this.emitExpr(stmt.expr, EXPR_DROP);
         break;
-      case Types.StmtKind.DECL: {
+      case AST.SDecl: {
         for (const decl of stmt.declarations) {
           if (decl.declKind === Types.DeclKind.VAR) {
             if (decl.storageClass !== Types.StorageClass.STATIC && decl.definition === decl &&
@@ -9645,7 +9645,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.StmtKind.RETURN: {
+      case AST.SReturn: {
         if (this.hasVaArgs) {
           const retType = this.currentFuncDef.type.getReturnType();
           if (stmt.expr && isStructOrUnion(retType)) {
@@ -9682,7 +9682,7 @@ class CodeGenerator {
         this.body.ret();
         break;
       }
-      case Types.StmtKind.IF: {
+      case AST.SIf: {
         this.emitExpr(stmt.condition);
         this.emitConditionToI32(stmt.condition.type);
         if (stmt.elseBranch) {
@@ -9698,7 +9698,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.StmtKind.WHILE: {
+      case AST.SWhile: {
         const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
         this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
         this.body.loop(); this.blockDepth++; this.continueTarget = this.blockDepth;
@@ -9713,7 +9713,7 @@ class CodeGenerator {
         this.breakTarget = savedBreak; this.continueTarget = savedContinue;
         break;
       }
-      case Types.StmtKind.DO_WHILE: {
+      case AST.SDoWhile: {
         const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
         this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
         this.body.loop(); this.blockDepth++;
@@ -9729,7 +9729,7 @@ class CodeGenerator {
         this.breakTarget = savedBreak; this.continueTarget = savedContinue;
         break;
       }
-      case Types.StmtKind.FOR: {
+      case AST.SFor: {
         const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
         this.pushLocalScope();
         if (stmt.init) this.emitStmt(stmt.init);
@@ -9753,13 +9753,13 @@ class CodeGenerator {
         this.breakTarget = savedBreak; this.continueTarget = savedContinue;
         break;
       }
-      case Types.StmtKind.BREAK:
+      case AST.SBreak:
         this.body.br(this.blockDepth - this.breakTarget);
         break;
-      case Types.StmtKind.CONTINUE:
+      case AST.SContinue:
         this.body.br(this.blockDepth - this.continueTarget);
         break;
-      case Types.StmtKind.SWITCH: {
+      case AST.SSwitch: {
         const sw = stmt;
         const savedBreak = this.breakTarget;
         let defaultIdx = -1;
@@ -9770,13 +9770,13 @@ class CodeGenerator {
         const switchFwdLabels = [];
         for (let si = 0; si < sw.body.statements.length; si++) {
           const s = sw.body.statements[si];
-          if (s.kind === Types.StmtKind.LABEL && s.hasGotos) {
+          if (s instanceof AST.SLabel && s.hasGotos) {
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
               switchFwdLabels.push({ label: s, stmtPos: si });
           }
-          if (s.kind === Types.StmtKind.COMPOUND) {
+          if (s instanceof AST.SCompound) {
             for (const cs of s.statements) {
-              if (cs.kind === Types.StmtKind.LABEL && cs.hasGotos) {
+              if (cs instanceof AST.SLabel && cs.hasGotos) {
                 if (cs.labelKind === Types.LabelKind.FORWARD || cs.labelKind === Types.LabelKind.BOTH) {
                   switchFwdLabels.push({ label: cs, stmtPos: si });
                   // Mark so the inner COMPOUND emit doesn't open its own
@@ -9887,7 +9887,7 @@ class CodeGenerator {
           const endIdx = (i + 1 < numCases) ? sw.cases[i + 1].stmtIndex : sw.body.statements.length;
           for (let j = startIdx; j < endIdx; j++) {
             const s = sw.body.statements[j];
-            if (s.kind === Types.StmtKind.LABEL) {
+            if (s instanceof AST.SLabel) {
               if (!s.hasGotos) continue;
               if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH) {
                 for (let k = openLoopLabels.length - 1; k >= 0; k--) {
@@ -9920,7 +9920,7 @@ class CodeGenerator {
         this.breakTarget = savedBreak;
         break;
       }
-      case Types.StmtKind.GOTO: {
+      case AST.SGoto: {
         const target = stmt.target;
         const depth = target ? this.gotoLabelDepths.get(target) : undefined;
         if (depth === undefined) {
@@ -9939,16 +9939,16 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.StmtKind.LABEL: break; // handled in COMPOUND
-      case Types.StmtKind.EMPTY: break;
-      case Types.StmtKind.THROW: {
+      case AST.SLabel: break; // handled in COMPOUND
+      case AST.SEmpty: break;
+      case AST.SThrow: {
         const tagIdx = this.exceptionToWasmTagIdx.get(stmt.tag);
         for (let i = 0; i < stmt.args.length; i++) this.emitExpr(stmt.args[i]);
         this.body.throw_(tagIdx);
         this.body.unreachable();
         break;
       }
-      case Types.StmtKind.TRY_CATCH: {
+      case AST.STryCatch: {
         const tc = stmt;
         const numCatches = tc.catches.length;
         const savedSpLocal = this.allocLocal(WT_I32);
