@@ -3957,6 +3957,11 @@ class Parser {
     this.parsedLabels = new Map();
     this.pendingGotos = new Map();
     this.warningFlags = { pointerDecay: false, circularDependency: false };
+    // Bound report callback for AST builder helpers (AST.makeCall etc.)
+    // — they take a (loc, msg) function rather than knowing about tokens.
+    this._report = (loc, msg) => {
+      this.errors.push(new Lexer.LexError(msg, loc.filename, loc.line));
+    };
   }
 
   // --- Lexer.Token helpers ---
@@ -3997,12 +4002,6 @@ class Parser {
   }
   warning(tok, msg) {
     this.warnings.push(new Lexer.LexError(msg, tok.filename, tok.line));
-  }
-  // Report a recoverable error using a Lexer.Loc (rather than a token).
-  // Bridges the AST builders (which carry locs) into the parser's
-  // token-based error machinery.
-  _reportAtLoc(loc, msg) {
-    this.errors.push(new Lexer.LexError(msg, loc.filename, loc.line));
   }
 
   // --- isTypeName ---
@@ -5003,10 +5002,11 @@ class Parser {
         this.error(newTok, `${callName}(__struct ${nq.tagName}, ...): expected ${fields.length} field args, got ${args.length}`);
       }
       // Reject implicit non-zero int → non-eqref ref field (silent-null bug).
+      const newLoc = Lexer.Loc.fromTok(newTok);
       for (let i = 0; i < args.length; i++) {
-        this._rejectNonZeroToRef(fields[i].type, args[i], newTok);
+        AST.rejectNonZeroToRef(fields[i].type, args[i], newLoc, this._report);
       }
-      return new AST.EGCNew(Lexer.Loc.fromTok(newTok), nq, args);
+      return new AST.EGCNew(newLoc, nq, args);
     }
 
     // __array_new(elemType, length [, init]) — array.new / array.new_default
@@ -5031,8 +5031,9 @@ class Parser {
         this.error(newTok, `__array_new(...): expected length [, init], got ${args.length} args`);
       }
       // Reject non-zero int as fill value when element type is a non-eqref ref.
-      if (args.length === 2) this._rejectNonZeroToRef(elemType, args[1], newTok);
-      return new AST.EGCNew(Lexer.Loc.fromTok(newTok), arrType, args);
+      const newLoc = Lexer.Loc.fromTok(newTok);
+      if (args.length === 2) AST.rejectNonZeroToRef(elemType, args[1], newLoc, this._report);
+      return new AST.EGCNew(newLoc, arrType, args);
     }
 
     // __memory_size, __memory_grow
@@ -5198,11 +5199,12 @@ class Parser {
         this.error(tok, `__array_of element type must not be a C array or function`);
       }
       // Reject implicit non-zero int → non-eqref ref element (silent-null bug).
+      const tokLoc = Lexer.Loc.fromTok(tok);
       for (let i = 0; i < args.length; i++) {
-        this._rejectNonZeroToRef(elemType, args[i], tok);
+        AST.rejectNonZeroToRef(elemType, args[i], tokLoc, this._report);
       }
       const arrType = Types.gcArrayOf(elemType);
-      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
+      return new AST.EIntrinsic(tokLoc, arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
     }
 
     // __array_fill(arr, offset, value, count) — bulk fill of a GC array slice
@@ -5221,8 +5223,9 @@ class Parser {
         this.error(tok, `__array_fill first argument must be a __array(...), got '${arr.type.toString()}'`);
       }
       const elemType = arr.type.removeQualifiers().baseType;
-      this._rejectNonZeroToRef(elemType, val, tok);
-      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
+      const tokLoc = Lexer.Loc.fromTok(tok);
+      AST.rejectNonZeroToRef(elemType, val, tokLoc, this._report);
+      return new AST.EIntrinsic(tokLoc, Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
     }
 
     // __ref_as_extern(gc_ref) — wrap a GC-universe ref (struct/array/eqref)
@@ -5594,34 +5597,6 @@ class Parser {
     return initType;
   }
 
-  // Allow null pointer constants (literal 0 / NULL) as the only non-ref
-  // value implicitly convertible to a ref. Anything else errors with a
-  // helpful pointer to __ref_null.
-  _isNullPointerConstant(expr) {
-    if (!expr) return false;
-    if (expr instanceof AST.EInt && expr.value === 0n) return true;
-    // Strip implicit casts and re-check (handles things like ((void*)0) which
-    // our preprocessor may surface as a CAST expression around 0).
-    if (expr instanceof AST.EImplicitCast || expr instanceof AST.ECast) {
-      return this._isNullPointerConstant(expr.expr);
-    }
-    return false;
-  }
-  _rejectNonZeroToRef(targetType, expr, tok) {
-    if (!expr || !targetType) return;
-    const t = targetType.removeQualifiers();
-    const s = expr.type.removeQualifiers();
-    if (!t.isRef() || s.isRef()) return;
-    if (this._isNullPointerConstant(expr)) return;
-    // Implicit prim → __eqref boxing is allowed (codegen auto-allocates a
-    // box struct). For other ref types (struct/array/extern), boxing is
-    // ambiguous and the user must use __cast or __ref_null explicitly.
-    if (t === Types.TEQREF && s.isArithmetic()) return;
-    this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (use __cast(${targetType.toString()}, x) for an explicit conversion, or __ref_null for null)`);
-  }
-  // Backward-compat alias used elsewhere in parser.
-  _rejectIntToRef(targetType, expr, tok) { this._rejectNonZeroToRef(targetType, expr, tok); }
-
   lookupMemberChain(type, name) {
     const ut = type.removeQualifiers();
     if (ut.tagDecl && ut.tagDecl.members) {
@@ -5791,7 +5766,7 @@ class Parser {
             // is a long-standing C idiom and unambiguous.
             if (castType.removeQualifiers().isRef() &&
                 !(expr.type && expr.type.removeQualifiers().isRef()) &&
-                this._isNullPointerConstant(expr)) {
+                AST.isNullPointerConstant(expr)) {
               return new AST.ECast(startLoc, castType, castType, expr);
             }
             this.error(this.peek(-1), "Cannot cast to or from a reference type; use __cast(T, x) (or __ref_cast for GC ref downcast)");
@@ -5818,8 +5793,7 @@ class Parser {
           } while (this.matchText(","));
         }
         this.expect(")");
-        expr = AST.makeCall(Lexer.Loc.fromTok(callTok), expr, args,
-          (loc, msg) => this._reportAtLoc(loc, msg));
+        expr = AST.makeCall(Lexer.Loc.fromTok(callTok), expr, args, this._report);
         continue;
       }
       if (this.matchText("[")) {
@@ -6091,16 +6065,16 @@ class Parser {
         }
         // For ==/!= involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
         if (bop === "EQ" || bop === "NE") {
-          if (lIsRef !== rIsRef && !this._isNullPointerConstant(lIsRef ? right : left)) {
+          if (lIsRef !== rIsRef && !AST.isNullPointerConstant(lIsRef ? right : left)) {
             this.error(opTok,
               `'${op}' between reference and non-reference requires the non-ref operand to be the literal 0 / NULL`);
           }
         }
       }
       // Assignment to ref: only literal 0 (or null pointer constant) is
-      // allowed as a non-ref source. _rejectIntToRefAssign handles this.
+      // allowed as a non-ref source.
       if (bop === "ASSIGN" && lIsRef && !rIsRef) {
-        this._rejectNonZeroToRef(left.type, right, opTok);
+        AST.rejectNonZeroToRef(left.type, right, Lexer.Loc.fromTok(opTok), this._report);
       }
       // Compound assignment (+=, -=, *=, etc.) has no meaning on ref types.
       if (lIsRef &&
@@ -6363,7 +6337,7 @@ class Parser {
       // Forbid implicit int→ref on return (use __ref_null(T) instead).
       if (this.currentParsingFunc) {
         const retType = this.currentParsingFunc.type.getReturnType();
-        this._rejectIntToRef(retType, expr, retTok);
+        AST.rejectNonZeroToRef(retType, expr, Lexer.Loc.fromTok(retTok), this._report);
         // Wrap in implicit cast to the function's return type.
         expr = maybeImplicitCast(expr, retType);
       }
@@ -6651,7 +6625,7 @@ class Parser {
             // Re-evaluate allocClass: aggregates need MEMORY storage.
             if (type.isAggregate()) dvar.allocClass = Types.AllocClass.MEMORY;
           }
-          this._rejectIntToRef(type, dvar.initExpr, eqTok);
+          AST.rejectNonZeroToRef(type, dvar.initExpr, Lexer.Loc.fromTok(eqTok), this._report);
         }
         // Handle string-initialized char array
         if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
@@ -6925,11 +6899,11 @@ class Parser {
           dvar.initExpr = this.parseInitList(type);
         } else {
           dvar.initExpr = this.parseAssignmentExpression();
-          this._rejectIntToRef(type, dvar.initExpr, eqTok);
+          AST.rejectNonZeroToRef(type, dvar.initExpr, Lexer.Loc.fromTok(eqTok), this._report);
           // File-scope ref-typed globals: WASM constant init expressions
           // can only emit ref.null. Allocation (e.g. boxing a primitive)
           // is not allowed at module-init time.
-          if (type.removeQualifiers().isRef() && !this._isNullPointerConstant(dvar.initExpr) &&
+          if (type.removeQualifiers().isRef() && !AST.isNullPointerConstant(dvar.initExpr) &&
               !dvar.initExpr.type.removeQualifiers().isRef()) {
             this.error(eqTok,
               `global '${name}': reference-typed globals can only be initialized to null/0 ` +
