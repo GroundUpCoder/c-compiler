@@ -2856,8 +2856,14 @@ class Expr {
     // A reference to a function (direct or address-take) contributes
     // to the bubble-up bag. Calls go through here too: ECall's callee
     // is an EDecay/EIdent chain whose EIdent adds the DFunc to the bag.
+    // Forward declarations have their `definition` field linked to the
+    // body-bearing DFunc; we surface that so consumers always see the
+    // canonical instance (which is what `unit.{static,defined}Functions`
+    // contains).
     get referencedFunctions() {
-      if (this.decl instanceof DFunc) return new TreeBag([this.decl]);
+      if (this.decl instanceof DFunc) {
+        return new TreeBag([this.decl.definition || this.decl]);
+      }
       return _EMPTY_TREE_BAG;
     }
   }
@@ -4390,17 +4396,37 @@ function optimize(unit) {
       }
     }
   }
+  const enqueueRefs = (bag) => {
+    for (const g of bag) {
+      if (g.body && !optimized.has(g) && worklist.indexOf(g) === -1) worklist.push(g);
+    }
+  };
   while (worklist.length > 0) {
     const f = worklist.shift();
     if (optimized.has(f)) continue;
     optimized.add(f);
     if (!f.body) continue;
     f.body = foldStmt(f.body);
-    // Functions reachable from f's folded body become work too.
-    for (const g of f.body.referencedFunctions) {
-      if (g.body && !optimized.has(g) && worklist.indexOf(g) === -1) worklist.push(g);
+    enqueueRefs(f.body.referencedFunctions);
+    // Static locals are diverted out of the function body (they live in
+    // `staticLocals`), so their initializers don't ride the body's bag.
+    // Walk them explicitly — function-pointer tables in static locals
+    // (e.g. Lua's searcher_C / searcher_Lua dispatch table) are a real
+    // reference path.
+    for (const v of (f.staticLocals || [])) {
+      if (v.initExpr) {
+        const folded = foldExpr(v.initExpr);
+        if (folded !== v.initExpr) v.initExpr = folded;
+        enqueueRefs(v.initExpr.referencedFunctions);
+      }
     }
   }
+  // Tree-shake: drop static functions never reached. Non-static defined
+  // functions stay (could be called cross-TU). The bag-walk above
+  // transitively visited everything reachable from roots (including
+  // function-pointer tables in static globals and static locals), so
+  // anything in `staticFunctions` not in `optimized` is genuinely dead.
+  unit.staticFunctions = unit.staticFunctions.filter(f => optimized.has(f));
   return unit;
 }
 

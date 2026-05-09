@@ -574,6 +574,60 @@ test('INLINER does NOT inline when body has side effects', () => {
 });
 
 // =============================================================================
+// Tree-shake: drop unreached static functions
+// =============================================================================
+
+test('tree-shake drops static function never referenced', () => {
+  const u = compileAndOptimize(
+    'static int dead(void) { return 42; }\n' +
+    'static int live(void) { return 7; }\n' +
+    'int main(void) { return live(); }');
+  const names = u.staticFunctions.map(f => f.name);
+  assert(!names.includes('dead'), `expected 'dead' dropped, got: ${names.join(",")}`);
+});
+test('tree-shake keeps static referenced via global function-pointer table', () => {
+  // Global static array of function pointers. The bag walk on
+  // unit.definedVariables must find the EIdent->DFunc references.
+  const u = compileAndOptimize(
+    'static int a(void) { return 1; }\n' +
+    'static int b(void) { return 2; }\n' +
+    'typedef int (*fp)(void);\n' +
+    'static fp table[] = { a, b };\n' +
+    'int main(void) { return table[0](); }');
+  const names = u.staticFunctions.map(f => f.name);
+  assert(names.includes('a'), `expected 'a' kept, got: ${names.join(",")}`);
+  assert(names.includes('b'), `expected 'b' kept, got: ${names.join(",")}`);
+});
+test('tree-shake keeps static referenced via static-local function-pointer table', () => {
+  // Static local in a function — diverted out of the body, so optimize()
+  // must explicitly walk staticLocals' initExprs. Mirrors Lua's
+  // createsearcherstable / searchers[] pattern.
+  const u = compileAndOptimize(
+    'static int a(void) { return 1; }\n' +
+    'static int b(void) { return 2; }\n' +
+    'typedef int (*fp)(void);\n' +
+    'int main(void) {\n' +
+    '  static const fp searchers[] = { a, b, 0 };\n' +
+    '  return searchers[0]();\n' +
+    '}');
+  const names = u.staticFunctions.map(f => f.name);
+  assert(names.includes('a'), `expected 'a' kept, got: ${names.join(",")}`);
+  assert(names.includes('b'), `expected 'b' kept, got: ${names.join(",")}`);
+});
+test('tree-shake follows forward-declaration to definition', () => {
+  // EIdent of the prototype must surface the linked definition so
+  // optimized.has(...) matches the entry in unit.staticFunctions.
+  const u = compileAndOptimize(
+    'static int target(void);\n' +
+    'typedef int (*fp)(void);\n' +
+    'static fp table[] = { target };\n' +
+    'static int target(void) { return 42; }\n' +
+    'int main(void) { return table[0](); }');
+  const names = u.staticFunctions.map(f => f.name);
+  assert(names.includes('target'), `expected 'target' kept, got: ${names.join(",")}`);
+});
+
+// =============================================================================
 // DExceptionTag class
 // =============================================================================
 
