@@ -2896,6 +2896,171 @@ function rejectNonZeroToRef(targetType, expr, loc) {
     `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (use __cast(${targetType.toString()}, x) for an explicit conversion, or __ref_null for null)`);
 }
 
+// C99 6.3.1.1: integer promotions for bitfield expressions. A bitfield
+// member smaller than int promotes to int (or unsigned int if it can't
+// be represented as int). Non-bitfield expressions promote to themselves.
+function promoteExprType(e) {
+  const t = e.type;
+  let bf = null;
+  if (e instanceof EMember && e.memberDecl && e.memberDecl.bitWidth >= 0) {
+    bf = e.memberDecl;
+  } else if (e instanceof EArrow && e.memberDecl && e.memberDecl.bitWidth >= 0) {
+    bf = e.memberDecl;
+  }
+  if (bf) {
+    const bw = bf.bitWidth;
+    const uq = t.removeQualifiers();
+    const isSigned = uq === Types.TINT || uq === Types.TLONG || uq === Types.TSHORT || uq === Types.TSCHAR || uq === Types.TCHAR;
+    if (isSigned || bw < 32) return Types.TINT;
+    return Types.TUINT;
+  }
+  return t;
+}
+
+// Result type of a binary expression. Operands must be already decayed
+// (so array types never reach here) and bitfield-promoted (so small
+// types are already TINT/TUINT).
+function computeBinaryType(op, leftType, rightType) {
+  // Comparison and logical operators return int.
+  if (["EQ","NE","LT","GT","LE","GE","LAND","LOR"].includes(op)) return Types.TINT;
+  // Assignment operators return left type.
+  if (op.endsWith("ASSIGN") || op === "ASSIGN") return leftType;
+  // Shift operators: result type is the promoted left operand type (C99 6.5.7).
+  if (op === "SHL" || op === "SHR") {
+    const uq = leftType.removeQualifiers();
+    if (uq === Types.TCHAR || uq === Types.TSCHAR || uq === Types.TUCHAR ||
+        uq === Types.TSHORT || uq === Types.TUSHORT || uq === Types.TBOOL) {
+      return Types.TINT;
+    }
+    return uq;
+  }
+  // Pointer arithmetic.
+  if (leftType.isPointer() && rightType.isInteger()) return leftType;
+  if (rightType.isPointer() && leftType.isInteger() && op === "ADD") return rightType;
+  if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return Types.TLONG;
+  return Types.usualArithmeticConversions(leftType, rightType);
+}
+
+// Pretty source text for each AST binary op, for use in diagnostics.
+const BOP_TEXT = {
+  ADD: "+", SUB: "-", MUL: "*", DIV: "/", MOD: "%",
+  EQ: "==", NE: "!=", LT: "<", GT: ">", LE: "<=", GE: ">=",
+  LAND: "&&", LOR: "||", BAND: "&", BOR: "|", BXOR: "^",
+  SHL: "<<", SHR: ">>", ASSIGN: "=",
+  ADD_ASSIGN: "+=", SUB_ASSIGN: "-=", MUL_ASSIGN: "*=",
+  DIV_ASSIGN: "/=", MOD_ASSIGN: "%=", BAND_ASSIGN: "&=",
+  BOR_ASSIGN: "|=", BXOR_ASSIGN: "^=", SHL_ASSIGN: "<<=", SHR_ASSIGN: ">>=",
+};
+
+// Build an EBinary, applying C semantics:
+//   - reject ref-incompatible operators
+//   - reject non-null int → ref on ASSIGN; reject any compound-assign on ref
+//   - decay array/function operands (left only when not an assignment target)
+//   - compute the result type via C99 promotion + usual arithmetic conversions
+//   - insert implicit casts on operands to the common operation type
+//
+// `op` is the AST op string ("ADD", "SUB", "ASSIGN", "ADD_ASSIGN", ...).
+// `loc` is typically the left operand's loc to match how chained binops
+// report (the whole-expression start). Type-error diagnostics use
+// `fatalError` so parsing halts at the first one, matching the parser's
+// historic behavior.
+function makeBinary(loc, op, left, right) {
+  const opText = BOP_TEXT[op] || op;
+  const lIsRef = left.type.removeQualifiers().isRef();
+  const rIsRef = right.type.removeQualifiers().isRef();
+  // Refs: only ==, !=, &&, ||, ASSIGN are allowed.
+  if (lIsRef || rIsRef) {
+    if (op === "LT" || op === "GT" || op === "LE" || op === "GE") {
+      fatalError(loc, `'${opText}' on reference type is not allowed (only ==, != for identity/null)`);
+    }
+    if (op === "ADD" || op === "SUB" || op === "MUL" || op === "DIV" ||
+        op === "MOD" || op === "SHL" || op === "SHR" ||
+        op === "BAND" || op === "BOR" || op === "BXOR") {
+      fatalError(loc, `'${opText}' on reference type is not allowed`);
+    }
+    // == / != involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
+    if (op === "EQ" || op === "NE") {
+      if (lIsRef !== rIsRef && !isNullPointerConstant(lIsRef ? right : left)) {
+        fatalError(loc,
+          `'${opText}' between reference and non-reference requires the non-ref operand to be the literal 0 / NULL`);
+      }
+    }
+  }
+  // ASSIGN to ref: only null-pointer-constant allowed as non-ref source.
+  if (op === "ASSIGN" && lIsRef && !rIsRef) {
+    rejectNonZeroToRef(left.type, right, loc);
+  }
+  // Compound assignment on ref: not allowed.
+  if (lIsRef && op !== "ASSIGN" && op.endsWith("_ASSIGN")) {
+    fatalError(loc, `'${opText}' on reference type is not allowed`);
+  }
+  // Decay array/function operands. ASSIGN/compound's left is the lvalue
+  // target — never decayed. ASSIGN's right decays only if the left is a
+  // pointer (so `p = arr` works).
+  const isAssignOp = op === "ASSIGN" || op.endsWith("_ASSIGN");
+  const isPtrArith = (op === "ADD" || op === "SUB") &&
+    (left.type.isPointer() || right.type.isPointer() ||
+     left.type.isArray() || right.type.isArray());
+  if (!isAssignOp) {
+    left = maybeDecay(left);
+    right = maybeDecay(right);
+  } else if (op === "ASSIGN" && left.type.isPointer()) {
+    right = maybeDecay(right);
+  }
+  // Apply C99 6.3.1.1 integer promotions for bitfield operands.
+  const resType = computeBinaryType(op, promoteExprType(left), promoteExprType(right));
+  // Insert implicit casts on operands to the common op type. Skipped for:
+  //   - assignment ops (handled by lvalue context, not arithmetic)
+  //   - logical && / || (boolean coercion is per-operand, not common)
+  //   - pointer arithmetic (operand types are deliberately mixed)
+  //   - ref operands (== / != on refs is identity, no conversion)
+  if (!isAssignOp && op !== "LAND" && op !== "LOR") {
+    const leftType = left.type;
+    const rightType = right.type;
+    const involvesRef = leftType.removeQualifiers().isRef() ||
+                        rightType.removeQualifiers().isRef();
+    if (!isPtrArith && !involvesRef) {
+      const isComparison = op === "EQ" || op === "NE" || op === "LT" || op === "GT" ||
+                           op === "LE" || op === "GE";
+      const opType = isComparison
+        ? Types.usualArithmeticConversions(leftType, rightType)
+        : resType;
+      left = maybeImplicitCast(left, opType);
+      right = maybeImplicitCast(right, opType);
+    }
+  }
+  return new EBinary(loc, resType, op, left, right);
+}
+
+// Build an ESubscript, applying C semantics:
+//   - reject commutative form `0[arr]` (we choose not to support it)
+//   - reject subscript on a reference type
+//   - decay an array base to a pointer (GC arrays stay — they aren't C arrays)
+//   - infer element type from the base's pointer/array element
+//
+// Diagnostics flow through the active `withDiag` sink. Always returns an
+// ESubscript (best-effort even on errors).
+function makeSubscript(loc, base, index) {
+  const baseUt = base.type.removeQualifiers();
+  const idxUt = index.type.removeQualifiers();
+  if (baseUt.isInteger() &&
+      (idxUt.kind === Types.TypeKind.POINTER || idxUt.kind === Types.TypeKind.ARRAY)) {
+    reportError(loc, "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
+  }
+  let elemType = Types.TINT;
+  if (baseUt.kind === Types.TypeKind.ARRAY ||
+      baseUt.kind === Types.TypeKind.POINTER ||
+      baseUt.kind === Types.TypeKind.GC_ARRAY) {
+    elemType = baseUt.baseType;
+  } else if (baseUt.isRef()) {
+    reportError(loc,
+      `subscript '[]' on reference type '${base.type.toString()}' is not allowed (use __array(T) for indexable GC storage)`);
+  }
+  // GC arrays don't decay; keep them as the array operand.
+  const arrayOperand = baseUt.kind === Types.TypeKind.GC_ARRAY ? base : maybeDecay(base);
+  return new ESubscript(loc, elemType, arrayOperand, index);
+}
+
 // Build an ECall, applying C semantics:
 //   - decay callee (function name → function pointer; array → ptr)
 //   - decay each argument
@@ -2988,7 +3153,8 @@ return {
   makeTUnit,
   // C-semantics-aware builders
   maybeImplicitCast, maybeDecay, isNullPointerConstant, rejectNonZeroToRef,
-  makeCall,
+  promoteExprType, computeBinaryType,
+  makeCall, makeSubscript, makeBinary,
 };
 })();
 
@@ -5830,21 +5996,7 @@ class Parser {
         const lbrTok = this.peek(-1);
         const index = this.parseExpression();
         this.expect("]");
-        const baseUt = expr.type.removeQualifiers();
-        const idxUt = index.type.removeQualifiers();
-        if (baseUt.isInteger() && (idxUt.kind === Types.TypeKind.POINTER || idxUt.kind === Types.TypeKind.ARRAY)) {
-          this.error(this.peek(-1), "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
-        }
-        let elemType = Types.TINT;
-        if (baseUt.kind === Types.TypeKind.ARRAY) elemType = baseUt.baseType;
-        else if (baseUt.kind === Types.TypeKind.POINTER) elemType = baseUt.baseType;
-        else if (baseUt.kind === Types.TypeKind.GC_ARRAY) elemType = baseUt.baseType;
-        else if (baseUt.isRef()) {
-          this.error(this.peek(-1), `subscript '[]' on reference type '${expr.type.toString()}' is not allowed (use __array(T) for indexable GC storage)`);
-        }
-        // GC arrays don't decay; keep them as the array operand.
-        const arrayOperand = baseUt.kind === Types.TypeKind.GC_ARRAY ? expr : maybeDecay(expr);
-        expr = new AST.ESubscript(Lexer.Loc.fromTok(lbrTok), elemType, arrayOperand, index);
+        expr = AST.makeSubscript(Lexer.Loc.fromTok(lbrTok), expr, index);
         continue;
       }
       if (this.matchText(".")) {
@@ -5951,47 +6103,6 @@ class Parser {
   }
 
   // C99 6.3.1.1: integer promotions for bitfield expressions
-  promoteExprType(e) {
-    const t = e.type;
-    let bf = null;
-    if (e instanceof AST.EMember && e.memberDecl && e.memberDecl.bitWidth >= 0) {
-      bf = e.memberDecl;
-    } else if (e instanceof AST.EArrow && e.memberDecl && e.memberDecl.bitWidth >= 0) {
-      bf = e.memberDecl;
-    }
-    if (bf) {
-      const bw = bf.bitWidth;
-      const uq = t.removeQualifiers();
-      const isSigned = uq === Types.TINT || uq === Types.TLONG || uq === Types.TSHORT || uq === Types.TSCHAR || uq === Types.TCHAR;
-      // If the bitfield fits in a signed int (32-bit), promote to int
-      if (isSigned || bw < 32) return Types.TINT;
-      return Types.TUINT;
-    }
-    return t;
-  }
-
-  computeBinaryType(op, leftType, rightType) {
-    // Comparison and logical operators return int
-    if (["EQ","NE","LT","GT","LE","GE","LAND","LOR"].includes(op)) return Types.TINT;
-    // Assignment operators return left type
-    if (op.endsWith("ASSIGN") || op === "ASSIGN") return leftType;
-    // Shift operators: result type is the promoted left operand type
-    // (C99 6.5.7). Must strip qualifiers before checking for small types.
-    if (op === "SHL" || op === "SHR") {
-      const uq = leftType.removeQualifiers();
-      if (uq === Types.TCHAR || uq === Types.TSCHAR || uq === Types.TUCHAR ||
-          uq === Types.TSHORT || uq === Types.TUSHORT || uq === Types.TBOOL) {
-        return Types.TINT;
-      }
-      return uq;
-    }
-    // Pointer arithmetic. Operands have already been decayed by the
-    // caller (parseBinaryExpression), so array types never reach here.
-    if (leftType.isPointer() && rightType.isInteger()) return leftType;
-    if (rightType.isPointer() && leftType.isInteger() && op === "ADD") return rightType;
-    if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return Types.TLONG;
-    return Types.usualArithmeticConversions(leftType, rightType);
-  }
 
   inferArraySizeFromInit(arrayType, initExpr) {
     const elemSize = arrayType.baseType.size || 1;
@@ -6068,94 +6179,16 @@ class Parser {
       }
 
       const nextMinPrec = this.isRightAssociative(op) ? prec : prec + 1;
-      let right = this.parseBinaryExpression(nextMinPrec);
+      const right = this.parseBinaryExpression(nextMinPrec);
       const bop = this.textToBop(op);
+      // Parser-side warning for array-decay arithmetic (gated by --pedantic).
       if (this.warningFlags.pointerDecay && (bop === "ADD" || bop === "SUB")) {
         if ((left.type.isArray() && right.type.isInteger()) ||
             (right.type.isArray() && left.type.isInteger())) {
           this.warning(this.peek(-1), "array used in arithmetic expression; decaying to pointer");
         }
       }
-      // Refs are allowed in == / != (null compare against literal 0, or
-      // identity between two refs) and in &&/|| (boolean coercion via
-      // ref.is_null). Relational operators have no meaning on refs.
-      const lIsRef = left.type.removeQualifiers().isRef();
-      const rIsRef = right.type.removeQualifiers().isRef();
-      if (lIsRef || rIsRef) {
-        if (bop === "LT" || bop === "GT" || bop === "LE" || bop === "GE") {
-          this.error(opTok, `'${op}' on reference type is not allowed (only ==, != for identity/null)`);
-        }
-        // Arithmetic/bitwise/shift/logical-bit ops have no meaning on refs.
-        // Allow only: ASSIGN (the rejection rules below catch bad RHS), ==/!=
-        // (identity/null), and &&/|| (boolean coercion sugar).
-        if (bop === "ADD" || bop === "SUB" || bop === "MUL" || bop === "DIV" ||
-            bop === "MOD" || bop === "SHL" || bop === "SHR" ||
-            bop === "BAND" || bop === "BOR" || bop === "BXOR") {
-          this.error(opTok, `'${op}' on reference type is not allowed`);
-        }
-        // For ==/!= involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
-        if (bop === "EQ" || bop === "NE") {
-          if (lIsRef !== rIsRef && !AST.isNullPointerConstant(lIsRef ? right : left)) {
-            this.error(opTok,
-              `'${op}' between reference and non-reference requires the non-ref operand to be the literal 0 / NULL`);
-          }
-        }
-      }
-      // Assignment to ref: only literal 0 (or null pointer constant) is
-      // allowed as a non-ref source.
-      if (bop === "ASSIGN" && lIsRef && !rIsRef) {
-        AST.rejectNonZeroToRef(left.type, right, Lexer.Loc.fromTok(opTok));
-      }
-      // Compound assignment (+=, -=, *=, etc.) has no meaning on ref types.
-      if (lIsRef &&
-          (bop === "ADD_ASSIGN" || bop === "SUB_ASSIGN" || bop === "MUL_ASSIGN" ||
-           bop === "DIV_ASSIGN" || bop === "MOD_ASSIGN" || bop === "SHL_ASSIGN" ||
-           bop === "SHR_ASSIGN" || bop === "BAND_ASSIGN" || bop === "BXOR_ASSIGN" ||
-           bop === "BOR_ASSIGN")) {
-        this.error(opTok, `'${op}' on reference type is not allowed`);
-      }
-      // Decay array/function operands of arithmetic, comparison, and
-      // pointer-target assignments so leftType/rightType below carry the
-      // already-decayed pointer types. ASSIGN/compound-assign's left is
-      // the lvalue target and is never decayed.
-      const isAssignOp = bop === "ASSIGN" || bop.endsWith("_ASSIGN");
-      const isPtrArith = (bop === "ADD" || bop === "SUB") &&
-        (left.type.isPointer() || right.type.isPointer() ||
-         left.type.isArray() || right.type.isArray());
-      if (!isAssignOp) {
-        left = maybeDecay(left);
-        right = maybeDecay(right);
-      } else if (bop === "ASSIGN" && left.type.isPointer()) {
-        right = maybeDecay(right);
-      }
-      // Apply C99 6.3.1.1 integer promotions for bitfield operands
-      const resType = this.computeBinaryType(bop, this.promoteExprType(left), this.promoteExprType(right));
-
-      // Insert implicit casts on operands. Mirrors what the older
-      // annotateExpr post-pass did for EBinary: wrap each operand to the
-      // common operation type. Skipped for:
-      //   - assignment ops (handled by lvalue context, not arithmetic)
-      //   - logical && / || (boolean coercion is per-operand, not common)
-      //   - pointer arithmetic ADD/SUB (operand types are deliberately mixed)
-      //   - ref-typed operands (== / != on refs is identity, no conversion)
-      if (!isAssignOp && bop !== "LAND" && bop !== "LOR") {
-        const leftType = left.type;
-        const rightType = right.type;
-        const involvesRef = leftType.removeQualifiers().isRef() ||
-                            rightType.removeQualifiers().isRef();
-        if (!isPtrArith && !involvesRef) {
-          const isComparison = bop === "EQ" || bop === "NE" ||
-                               bop === "LT" || bop === "GT" ||
-                               bop === "LE" || bop === "GE";
-          const opType = isComparison
-            ? Types.usualArithmeticConversions(leftType, rightType)
-            : resType;
-          left = maybeImplicitCast(left, opType);
-          right = maybeImplicitCast(right, opType);
-        }
-      }
-
-      left = new AST.EBinary(left.loc, resType, bop, left, right);
+      left = AST.makeBinary(left.loc, bop, left, right);
     }
     return left;
   }
@@ -7335,7 +7368,7 @@ function extractSetjmpCall(cond) {
 // Build expression: buf[0]
 function makeBufIdExpr(bufExpr) {
   const loc = bufExpr.loc;
-  return new AST.ESubscript(loc, Types.TINT, bufExpr, new AST.EInt(loc, Types.TINT, 0n));
+  return AST.makeSubscript(loc, bufExpr, new AST.EInt(loc, Types.TINT, 0n));
 }
 
 // Build: buf[0] = ++counterVar
