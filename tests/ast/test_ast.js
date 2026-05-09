@@ -573,6 +573,74 @@ test('INLINER does NOT inline when body has side effects', () => {
   assert(ret.expr instanceof AST.ECall, 'side-effecting body should not inline');
 });
 
+// --- Bail-out cases: each documents a tryInline guard ---
+
+test('INLINER bails when an argument is LINEAR (side-effecting)', () => {
+  // Inlining substitutes each parameter with the corresponding arg expr.
+  // If an arg has side effects (here: ++counter), substituting it could
+  // duplicate or eliminate the side effect. Bail.
+  const u = compileAndOptimize(
+    'static int counter;\n' +
+    'static int twice(int n) { return n + n; }\n' +
+    'int main(void) { return twice(++counter); }');
+  const ret = u.definedFunctions[0].body.statements[0];
+  assert(ret.expr instanceof AST.ECall,
+    'call with LINEAR arg should not inline');
+});
+test('INLINER bails when the body has multiple statements', () => {
+  // singleReturnBody only matches `return EXPR;` or `{ return EXPR; }`.
+  // Anything else (a real local, a side effect, a branch) bails.
+  const u = compileAndOptimize(
+    'static int two_stmt(int x) { int t = x + 1; return t * 2; }\n' +
+    'int main(void) { return two_stmt(5); }');
+  const ret = u.definedFunctions[0].body.statements[0];
+  assert(ret.expr instanceof AST.ECall,
+    'multi-statement body should not inline');
+});
+test('INLINER bails on indirect (function-pointer) calls', () => {
+  // Indirect call: callee is `fp` (a variable), not a known function.
+  // ECall.funcDecl is null, so tryInline has nothing to inline against.
+  const u = compileAndOptimize(
+    'static int square(int n) { return n * n; }\n' +
+    'int main(void) {\n' +
+    '  int (*fp)(int) = square;\n' +
+    '  return fp(7);\n' +
+    '}');
+  const stmts = u.definedFunctions[0].body.statements;
+  // Last stmt is `return fp(7);` — should still be a call.
+  const ret = stmts[stmts.length - 1];
+  assert(ret.expr instanceof AST.ECall,
+    'indirect call should not inline');
+});
+test('INLINER bails when an argument is AFFINE (address-take)', () => {
+  // &x has identity (the address is observable), so it's AFFINE, not
+  // UNRESTRICTED. The inliner refuses to substitute it as a param.
+  const u = compileAndOptimize(
+    'static int g;\n' +
+    'static int deref(int *p) { return *p; }\n' +
+    'int main(void) { return deref(&g); }');
+  const ret = u.definedFunctions[0].body.statements[0];
+  assert(ret.expr instanceof AST.ECall,
+    'call with AFFINE arg should not inline');
+});
+test('INLINER diamond worklist: A→D, B→D, main→A and main→B (no inlining)', () => {
+  // Diamond reachability test for the optimize() worklist. None of these
+  // are inlineable (D is multi-statement; A and B contain calls, which
+  // are LINEAR, making their return expr LINEAR too). The walk should
+  // visit each function exactly once and keep all four — exercising the
+  // liveFuncs dedup so D isn't enqueued twice and isn't dropped.
+  const u = compileAndOptimize(
+    'static int d(int x) { int t = x + 1; return t * 7; }\n' +
+    'static int a(int n) { return d(n) + 1; }\n' +
+    'static int b(int n) { return d(n) + 2; }\n' +
+    'int main(int argc, char **argv) { return a(argc) + b(argc + 1); }');
+  const names = u.staticFunctions.map(f => f.name);
+  for (const want of ['a', 'b', 'd']) {
+    assert(names.includes(want),
+      `${want} should be kept by diamond walk; got: ${names.join(",")}`);
+  }
+});
+
 // =============================================================================
 // Tree-shake: drop unreached static functions
 // =============================================================================
