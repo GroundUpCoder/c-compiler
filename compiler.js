@@ -2753,7 +2753,7 @@ class Expr {
       this.isInline = isInline || false;
       this.body = body || null;
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
-      this.usedSymbols = new Set(); this.compoundLiterals = [];
+      this.compoundLiterals = [];
       this.definition = null;
       this.importModule = null; this.importName = null;
       Object.seal(this);
@@ -3787,7 +3787,6 @@ class TUnit {
     this.minStackBytes = 0;
     this.exportDirectives = [];
     this.exceptionTags = [];
-    this.globalUsedSymbols = new Set();
     this.fileScopeCompoundLiterals = [];
     Object.seal(this);
   }
@@ -4451,15 +4450,19 @@ function optimize(unit, options) {
   // Tree-shake. The bag-walk above transitively visited everything
   // reachable from roots; anything not in `live*` is genuinely dead.
   // - static funcs / vars: drop if unreached (TU-internal, safe).
-  // - extern vars / declared funcs: drop if unreached UNLESS the user
-  //   asked for --no-undefined, in which case the linker should be
-  //   allowed to complain about every dangling reference for visibility.
+  // - imported / extern / declared decls: also drop if unreached UNLESS
+  //   --no-undefined, in which case the linker should be allowed to
+  //   complain about every dangling reference for visibility. (Defined
+  //   non-static decls are seeded as roots, so they're never filtered.)
   unit.staticFunctions = unit.staticFunctions.filter(f => liveFuncs.has(f));
   unit.definedVariables = unit.definedVariables.filter(
     v => v.storageClass !== Types.StorageClass.STATIC || liveVars.has(v));
   if (!options?.noUndefined) {
+    unit.importedFunctions = unit.importedFunctions.filter(f => liveFuncs.has(f));
     unit.externVariables = unit.externVariables.filter(v => liveVars.has(v));
     unit.declaredFunctions = unit.declaredFunctions.filter(f => liveFuncs.has(f));
+    unit.localExternVariables = unit.localExternVariables.filter(v => liveVars.has(v));
+    unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter(f => liveFuncs.has(f));
   }
   return unit;
 }
@@ -4829,93 +4832,70 @@ function dumpAst(units) {
   return out;
 }
 
-// ====================
-// Parser — filterUnusedDeclarations
-// ====================
-
-function filterUnusedDeclarations(unit) {
-  const active = new Set();
-  const worklist = [];
-  const activate = (d) => { if (d && !active.has(d)) { active.add(d); worklist.push(d); } };
-
-  // Seed non-static definitions
-  for (const f of unit.definedFunctions) {
-    if (f.storageClass !== Types.StorageClass.STATIC) activate(f);
-  }
-  for (const v of unit.definedVariables) {
-    if (v.storageClass !== Types.StorageClass.STATIC) activate(v);
-  }
-  // Seed global-scope usages
-  for (const d of unit.globalUsedSymbols) activate(d);
-  // Seed export directives
-  for (const [, func] of unit.exportDirectives) activate(func);
-
-  // Fixed-point walk
-  while (worklist.length > 0) {
-    const d = worklist.pop();
-    if (d instanceof AST.DFunc) {
-      if (d.definition && d.definition !== d) activate(d.definition);
-      for (const used of d.usedSymbols) activate(used);
-    } else if (d instanceof AST.DVar) {
-      if (d.definition && d.definition !== d) activate(d.definition);
-    }
-  }
-
-  // Filter all lists
-  const filter = (arr) => {
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (!active.has(arr[i])) arr.splice(i, 1);
-    }
-  };
-  filter(unit.importedFunctions);
-  filter(unit.definedFunctions);
-  filter(unit.staticFunctions);
-  filter(unit.declaredFunctions);
-  filter(unit.definedVariables);
-  filter(unit.externVariables);
-  filter(unit.localExternVariables);
-  filter(unit.localDeclaredFunctions);
-}
-
+// Whole-program tree-shake. Walks the AST bag (referencedFunctions /
+// referencedVariables) from cross-TU roots: `main`, `alloca`, exports.
+// Any decl not reached from those roots — including non-static defined
+// functions / globals — gets dropped. This is more aggressive than
+// INLINER.optimize's per-TU pass, which has to assume non-static decls
+// might be called from another TU.
 function gcSectionsPass(units, options) {
-  const active = new Set();
-  const worklist = [];
-  const activate = (d) => { if (d && !active.has(d)) { active.add(d); worklist.push(d); } };
+  const liveFuncs = new Set();
+  const liveVars = new Set();
+  const funcQ = [];
+  const varQ = [];
+  const enqueueFunc = (f) => {
+    if (!f || liveFuncs.has(f)) return;
+    liveFuncs.add(f);
+    funcQ.push(f);
+  };
+  const enqueueVar = (v) => {
+    if (!v || liveVars.has(v)) return;
+    liveVars.add(v);
+    varQ.push(v);
+  };
+  const visitRefs = (node) => {
+    for (const f of node.referencedFunctions) enqueueFunc(f);
+    for (const v of node.referencedVariables) enqueueVar(v);
+  };
 
+  // Seed cross-TU roots.
   for (const unit of units) {
     for (const f of unit.definedFunctions) {
-      if (f.name === "main" || f.name === "alloca") activate(f);
+      if (f.name === "main" || f.name === "alloca") enqueueFunc(f);
     }
     if (!(options && options.gcNoExportRoots)) {
-      for (const [, func] of unit.exportDirectives) activate(func);
-    }
-    for (const d of unit.globalUsedSymbols) activate(d);
-  }
-
-  while (worklist.length > 0) {
-    const d = worklist.pop();
-    if (d instanceof AST.DFunc) {
-      if (d.definition && d.definition !== d) activate(d.definition);
-      for (const used of d.usedSymbols) activate(used);
-    } else if (d instanceof AST.DVar) {
-      if (d.definition && d.definition !== d) activate(d.definition);
+      for (const [, func] of unit.exportDirectives) enqueueFunc(func);
     }
   }
 
-  const filter = (arr) => {
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (!active.has(arr[i])) arr.splice(i, 1);
+  // Drain. The bag follows decl.definition || decl, so cross-TU
+  // references resolve naturally to the body-bearing instance after
+  // the linker has run setDefinition.
+  while (funcQ.length > 0 || varQ.length > 0) {
+    while (funcQ.length > 0) {
+      const f = funcQ.shift();
+      if (f.body) visitRefs(f.body);
+      for (const v of (f.staticLocals || [])) {
+        if (v.initExpr) visitRefs(v.initExpr);
+      }
     }
-  };
+    while (varQ.length > 0) {
+      const v = varQ.shift();
+      if (v.initExpr) visitRefs(v.initExpr);
+    }
+  }
+
+  const keepF = (f) => liveFuncs.has(f);
+  const keepV = (v) => liveVars.has(v);
   for (const unit of units) {
-    filter(unit.importedFunctions);
-    filter(unit.definedFunctions);
-    filter(unit.staticFunctions);
-    filter(unit.declaredFunctions);
-    filter(unit.definedVariables);
-    filter(unit.externVariables);
-    filter(unit.localExternVariables);
-    filter(unit.localDeclaredFunctions);
+    unit.importedFunctions = unit.importedFunctions.filter(keepF);
+    unit.definedFunctions = unit.definedFunctions.filter(keepF);
+    unit.staticFunctions = unit.staticFunctions.filter(keepF);
+    unit.declaredFunctions = unit.declaredFunctions.filter(keepF);
+    unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter(keepF);
+    unit.definedVariables = unit.definedVariables.filter(keepV);
+    unit.externVariables = unit.externVariables.filter(keepV);
+    unit.localExternVariables = unit.localExternVariables.filter(keepV);
   }
 }
 
@@ -5418,7 +5398,6 @@ class Parser {
     this.requiredSources = new Set();
     this.exportDirectives = [];
     this.parsedExceptionTags = [];
-    this.globalUsedSymbols = new Set();
     this.fileScopeCompoundLiterals = [];
     this.parsedLabels = new Map();
     this.pendingGotos = new Map();
@@ -6294,12 +6273,7 @@ class Parser {
         const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], Types.StorageClass.EXTERN, false, null);
         this.varScope.set(name, fdecl);
       }
-      const ident = AST.makeIdent(loc, name, this.varScope);
-      if (ident.decl) {
-        if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(ident.decl);
-        else this.globalUsedSymbols.add(ident.decl);
-      }
-      return ident;
+      return AST.makeIdent(loc, name, this.varScope);
     }
 
     // Parenthesized expression or compound literal
@@ -7749,7 +7723,6 @@ class Parser {
         funcDecl.importName = specs.importName;
         this.varScope.set(name, funcDecl);
         if (this.currentParsingFunc) {
-          this.currentParsingFunc.usedSymbols.add(funcDecl);
           this.currentParsingFunc.externLocalFuncs.push(funcDecl);
         }
         // Don't include in declaration statement (diverted like C++ does)
@@ -8406,7 +8379,6 @@ function parseTokens(tokens, options) {
 
   unit.requiredSources = parser.requiredSources;
   unit.exportDirectives = parser.exportDirectives;
-  unit.globalUsedSymbols = parser.globalUsedSymbols;
   unit.fileScopeCompoundLiterals = parser.fileScopeCompoundLiterals;
 
   return { translationUnit: unit, errors: sink.errors, warnings: sink.warnings };
@@ -8737,9 +8709,6 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   }
   if (!counterVar) throw new Error("__setjmp_id_counter not found in externVariables");
 
-  // Mark counterVar as used so filterUnusedDeclarations doesn't remove it
-  unit.globalUsedSymbols.add(counterVar);
-
   // Lower all function bodies
   const lowerFunc = (func) => {
     if (!func.body) return;
@@ -8754,7 +8723,7 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
 
 return {
   dumpAst, parseTokens, parseSource,
-  filterUnusedDeclarations, gcSectionsPass,
+  gcSectionsPass,
   linkTranslationUnits,
   lowerSetjmpLongjmp,
 };
@@ -17400,7 +17369,6 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     // it walks the AST). Implicit-cast insertion happens inline at parse
     // time at each construction site.
     Parser.lowerSetjmpLongjmp(unit, exceptionTagRegistry);
-    if (!options?.compilerOptions?.noUndefined) Parser.filterUnusedDeclarations(unit);
     INLINER.optimize(unit, { noUndefined: !!options?.compilerOptions?.noUndefined });
     if (timing) timing.parseMs += hrtime() - tParse;
     if (parseResult.errors.length > 0) {
@@ -18437,7 +18405,6 @@ var _exports = {
   parseTokens: Parser.parseTokens,
   parseSource: Parser.parseSource,
   dumpAst: Parser.dumpAst,
-  filterUnusedDeclarations: Parser.filterUnusedDeclarations,
   linkTranslationUnits: Parser.linkTranslationUnits,
   lowerSetjmpLongjmp: Parser.lowerSetjmpLongjmp,
   gcSectionsPass: Parser.gcSectionsPass,
