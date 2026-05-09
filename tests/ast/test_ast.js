@@ -869,6 +869,84 @@ test('TAC: literal 1 does NOT flow into pointer type', () => {
   const one = new AST.EInt(LOC, Types.TINT, 1n);
   assert(!TAC(Types.TINT, intPtr, one), 'literal 1 → int* rejected');
 });
+// =============================================================================
+// typesAreOperandCompatible: per-op operand legality (C99 6.5.5–6.5.10)
+// =============================================================================
+
+const TOC = AST.typesAreOperandCompatible;
+
+test('TOC: arithmetic ops accept arithmetic operands', () => {
+  assert(TOC('ADD', Types.TINT, Types.TINT));
+  assert(TOC('MUL', Types.TINT, Types.TDOUBLE));
+  assert(TOC('DIV', Types.TFLOAT, Types.TLONG));
+});
+test('TOC: bitwise ops require integer operands', () => {
+  assert(TOC('BAND', Types.TINT, Types.TINT));
+  assert(TOC('BOR',  Types.TLONG, Types.TUINT));
+  assert(!TOC('BAND', Types.TINT, Types.TFLOAT), 'int & float rejected');
+  assert(!TOC('BOR',  Types.TFLOAT, Types.TFLOAT), 'float | float rejected');
+});
+test('TOC: shift ops require integer operands', () => {
+  assert(TOC('SHL', Types.TINT, Types.TINT));
+  assert(!TOC('SHL', Types.TINT, Types.TFLOAT), 'int << float rejected');
+  assert(!TOC('SHR', Types.TFLOAT, Types.TINT), 'float >> int rejected');
+});
+test('TOC: MOD requires integer operands (% on float is illegal)', () => {
+  assert(TOC('MOD', Types.TINT, Types.TINT));
+  assert(!TOC('MOD', Types.TFLOAT, Types.TINT));
+  assert(!TOC('MOD', Types.TINT, Types.TDOUBLE));
+});
+test('TOC: ADD allows pointer + integer (and reverse)', () => {
+  const ip = Types.TINT.pointer();
+  assert(TOC('ADD', ip, Types.TINT));
+  assert(TOC('ADD', Types.TINT, ip));
+  assert(!TOC('ADD', ip, ip), 'ptr + ptr rejected');
+});
+test('TOC: SUB allows ptr-int and ptr-ptr (compatible bases)', () => {
+  const ip = Types.TINT.pointer();
+  const fp = Types.TFLOAT.pointer();
+  assert(TOC('SUB', ip, Types.TINT));
+  assert(TOC('SUB', ip, ip));
+  assert(!TOC('SUB', ip, fp), 'int* - float* rejected (base mismatch)');
+  assert(!TOC('SUB', Types.TINT, ip), 'int - ptr rejected');
+});
+test('TOC: comparisons accept arith pairs and pointer pairs', () => {
+  const ip = Types.TINT.pointer();
+  const fp = Types.TFLOAT.pointer();
+  assert(TOC('LT', Types.TINT, Types.TINT));
+  assert(TOC('LT', ip, ip));
+  assert(TOC('LT', ip, fp), 'pointer comparison across base types accepted (NPC etc.)');
+  assert(!TOC('LT', ip, Types.TINT), 'ptr < int rejected (LT is strict)');
+});
+test('TOC: EQ/NE tolerate ptr+int (NPC handled at cast site)', () => {
+  const ip = Types.TINT.pointer();
+  assert(TOC('EQ', ip, Types.TINT));
+  assert(TOC('NE', Types.TINT, ip));
+});
+test('TOC: logical && / || require scalar operands', () => {
+  assert(TOC('LAND', Types.TINT, Types.TINT));
+  assert(TOC('LAND', Types.TINT.pointer(), Types.TFLOAT));
+  // struct isn't scalar
+  // (we can't construct a struct here easily without a tag; skip)
+});
+test('TOC: divergent absorbs', () => {
+  assert(TOC('BAND', Types.TDIVERGENT, Types.TFLOAT));
+  assert(TOC('MOD',  Types.TDOUBLE, Types.TDIVERGENT));
+});
+test('TOC: refs are tolerated (caller does ref-specific dispatch)', () => {
+  assert(TOC('ADD', Types.TEXTERNREF, Types.TINT));
+  assert(TOC('EQ',  Types.TEXTERNREF, Types.TEXTERNREF));
+});
+test('TOC: compound assigns defer to underlying op', () => {
+  assert(TOC('ADD_ASSIGN', Types.TINT, Types.TINT));
+  assert(!TOC('BAND_ASSIGN', Types.TINT, Types.TFLOAT), 'int &= float rejected');
+  assert(!TOC('SHL_ASSIGN',  Types.TFLOAT, Types.TINT), 'float <<= int rejected');
+});
+test('TOC: ASSIGN is tolerated here (handled by typesAreAssignmentCompatible)', () => {
+  // ASSIGN has its own predicate; this one returns true to defer.
+  assert(TOC('ASSIGN', Types.TINT, Types.TFLOAT));
+});
+
 test('TAC: dropping const at the immediate pointee is rejected', () => {
   // const char *const * → const char ** : strict C99 rejects (the
   // immediate pointee const is being dropped). Other compilers warn

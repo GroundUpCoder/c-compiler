@@ -3449,6 +3449,74 @@ function typesAreAssignmentCompatible(srcType, targetType, expr) {
   return false;
 }
 
+// True if `leftType` and `rightType` are a legal operand pair for the
+// given binary op. Catches operator-illegal combinations the C standard
+// forbids regardless of any implicit conversion (e.g. bitwise ops on
+// floats, struct + struct, ptr + ptr). Called from `makeBinary` BEFORE
+// the cast/conversion logic — if it fails we report and skip the rest
+// to avoid downstream "incompatible types" cascades.
+//
+// Compound assigns (X_ASSIGN) defer to the underlying op's rules.
+// Ref operands are tolerated here — the caller's ref-specific block
+// handles them with its own per-op messages.
+function typesAreOperandCompatible(op, leftType, rightType) {
+  const meta = AST.BinOp[op];
+  if (!meta) return true;
+  const l = leftType.removeQualifiers();
+  const r = rightType.removeQualifiers();
+  // Divergent absorbs (parser error recovery).
+  if (l.isDivergent() || r.isDivergent()) return true;
+  // Refs: defer to the ref-specific handling already in makeBinary.
+  if (l.isRef() || r.isRef()) return true;
+  // ASSIGN: assignment-compatibility is the relevant rule, checked
+  // separately at the call site via typesAreAssignmentCompatible.
+  if (op === "ASSIGN") return true;
+  // Compound assigns: evaluate as the underlying arithmetic/bitwise op.
+  if (meta.isAssign) {
+    return typesAreOperandCompatible(op.replace("_ASSIGN", ""), leftType, rightType);
+  }
+  // Bitwise / shift: integer operands only.
+  if (meta.isBitwise || meta.isShift) {
+    return l.isInteger() && r.isInteger();
+  }
+  // Logical && / ||: scalar (testable as bool).
+  if (meta.isLogical) return l.isScalar() && r.isScalar();
+  // MUL / DIV: both arithmetic. MOD: integer-only (% on float is
+  // disallowed; fmod is a function).
+  if (op === "MUL" || op === "DIV") return l.isArithmetic() && r.isArithmetic();
+  if (op === "MOD") return l.isInteger() && r.isInteger();
+  // ADD: both arithmetic, or one pointer/array and one integer.
+  if (op === "ADD") {
+    if (l.isArithmetic() && r.isArithmetic()) return true;
+    if ((l.isPointer() || l.isArray()) && r.isInteger()) return true;
+    if ((r.isPointer() || r.isArray()) && l.isInteger()) return true;
+    return false;
+  }
+  // SUB: both arithmetic, or pointer-int, or pointer-pointer (same base).
+  if (op === "SUB") {
+    if (l.isArithmetic() && r.isArithmetic()) return true;
+    if ((l.isPointer() || l.isArray()) && r.isInteger()) return true;
+    if ((l.isPointer() || l.isArray()) && (r.isPointer() || r.isArray())) {
+      return l.baseType.removeQualifiers().isCompatibleWith(r.baseType.removeQualifiers());
+    }
+    return false;
+  }
+  // Comparisons.
+  if (meta.isCompare) {
+    if (l.isArithmetic() && r.isArithmetic()) return true;
+    if (l.isPointer() && r.isPointer()) return true;
+    // EQ/NE: pointer + integer is allowed only via NPC; that case is
+    // handled by typesAreAssignmentCompatible at the cast site. We
+    // tolerate it here so the assignment-compat path can give the
+    // canonical NPC message without cascading.
+    if (op === "EQ" || op === "NE") {
+      if ((l.isPointer() && r.isInteger()) || (r.isPointer() && l.isInteger())) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 // Wrap an expression in EImplicitCast at the target type. Pass-through
 // when the source already matches the target after qualifier strip,
 // or when either side is void / divergent. Validates assignment
@@ -3619,6 +3687,16 @@ function makeBinary(loc, op, left, right) {
     right = maybeDecay(right);
   } else if (op === "ASSIGN" && left.type.isPointer()) {
     right = maybeDecay(right);
+  }
+  // Operand-compat: catch operator-illegal type combinations BEFORE
+  // the cast/conversion logic. `int & float`, `struct + struct`,
+  // `int << ptr`, etc. — none of these are fixable by an implicit
+  // cast; reporting here gives a clean message and prevents downstream
+  // cascades. Refs and ASSIGN have their own specific handling above.
+  if (!typesAreOperandCompatible(op, left.type, right.type)) {
+    reportError(loc,
+      `invalid operands to binary '${opText}': '${left.type.toString()}' and '${right.type.toString()}'`);
+    return new EBinary(loc, Types.TDIVERGENT, op, left, right);
   }
   // ASSIGN: validate RHS is assignment-compatible with LHS. EImplicitCast
   // isn't inserted on ASSIGN (codegen does the conversion), but we still
@@ -3966,7 +4044,7 @@ return {
   STryCatch, SThrow,
   makeTUnit,
   // C-semantics-aware builders
-  maybeImplicitCast, typesAreAssignmentCompatible,
+  maybeImplicitCast, typesAreAssignmentCompatible, typesAreOperandCompatible,
   maybeDecay, isNullPointerConstant, rejectNonZeroToRef,
   pointerArithElemType,
   promoteExprType, computeBinaryType, markAddressTaken,
