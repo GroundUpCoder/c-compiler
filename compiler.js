@@ -2672,7 +2672,7 @@ class Expr {
     }
     // Bubble-up bags are computed on demand from current children.
     // The getter form (rather than a precomputed field) tolerates the
-    // seal-only escapees (EInitList, ECompoundLiteral) whose `children`
+    // seal-only escapees (EInitList, SLabel, SGoto) whose `children`
     // arrays are mutated by post-construction passes — the bag stays
     // consistent with whatever `children` currently looks like.
     // EIdent of a DFunc / DVar overrides to add itself.
