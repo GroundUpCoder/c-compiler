@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/return_value_in_void_err/return_value_in_void_err.c.
+tests/unit/core/return_value_in_void_err/return_value_in_void_err.c:3: error: void function should not return a value

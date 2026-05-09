@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/member_dot_on_int_err/member_dot_on_int_err.c.
+tests/unit/core/member_dot_on_int_err/member_dot_on_int_err.c:4: error: left operand of '.' must have struct or union type, got 'int'

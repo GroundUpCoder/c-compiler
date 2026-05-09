@@ -3833,6 +3833,20 @@ function makeUnary(loc, op, operand) {
 // retType may be null (e.g., void function — caller passes null and the
 // expr is just attached as-is). expr may also be null for `return;`.
 function makeReturn(loc, expr, retType) {
+  // C99 §6.8.6.4: a `return` with no value in a non-void function and
+  // a `return EXPR;` in a void function are both constraint violations.
+  // (We tolerate `retType === null` callers, e.g. legacy/synthesized
+  // sites — they explicitly opt out by passing null.)
+  if (retType !== null) {
+    const rt = retType.removeQualifiers();
+    if (!expr && !rt.isVoid()) {
+      reportError(loc,
+        `non-void function returns no value (return type is '${retType.toString()}')`);
+    } else if (expr && rt.isVoid()) {
+      reportError(loc,
+        `void function should not return a value`);
+    }
+  }
   if (!expr) return new SReturn(loc, null);
   expr = maybeDecay(expr);
   if (retType) {
@@ -3894,6 +3908,15 @@ function _placeholderDVar(loc, name) {
 // DVar (divergent-typed) so the parse can continue. After this returns,
 // EMember always has a non-null memberDecl.
 function makeMember(loc, base, name) {
+  // The `.` operator requires struct/union (or our GC struct) on the
+  // left. Without this gate, `int x; x.foo` would crash later in
+  // lookupMemberChain or in codegen.
+  const bt = base.type.removeQualifiers();
+  if (!bt.isStruct() && !bt.isUnion() && !bt.isGCStruct() && !bt.isDivergent()) {
+    reportError(loc,
+      `left operand of '.' must have struct or union type, got '${base.type.toString()}'`);
+    return new EMember(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+  }
   const chain = lookupMemberChain(base.type, name);
   if (!chain) {
     reportError(loc, `'${base.type.toString()}' has no member named '${name}'`);
@@ -3917,7 +3940,25 @@ function makeArrow(loc, base, name) {
   }
   base = maybeDecay(base);
   bt = base.type.removeQualifiers();
-  if (bt.kind === Types.TypeKind.POINTER) bt = bt.baseType;
+  // `->` requires a pointer-to-struct/union on the left. Without this
+  // gate, `struct S s; s->a` would find a member in the (non-pointer)
+  // struct type and silently build an EArrow with a non-pointer base
+  // — codegen later crashes dereferencing tagDecl on something that
+  // isn't a tag.
+  if (bt.kind !== Types.TypeKind.POINTER && !bt.isDivergent()) {
+    reportError(loc,
+      `left operand of '->' must be a pointer to struct or union, got '${base.type.toString()}'`);
+    return new EArrow(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+  }
+  if (bt.kind === Types.TypeKind.POINTER) {
+    const pointee = bt.baseType.removeQualifiers();
+    if (!pointee.isStruct() && !pointee.isUnion() && !pointee.isDivergent()) {
+      reportError(loc,
+        `left operand of '->' must point to struct or union, got pointer to '${bt.baseType.toString()}'`);
+      return new EArrow(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+    }
+    bt = bt.baseType;
+  }
   const chain = lookupMemberChain(bt, name);
   if (!chain) {
     reportError(loc, `'${base.type.toString()}' has no member named '${name}'`);
@@ -4012,6 +4053,14 @@ function makeCall(loc, callee, args) {
   if (calleeType.kind === Types.TypeKind.POINTER &&
       calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
     funcType = calleeType.baseType;
+  } else if (!calleeType.isDivergent()) {
+    // The callee must be a function or pointer-to-function (after
+    // decay). Without this gate, `int x; x();` would build an ECall
+    // with a non-function callee — codegen later crashes computing
+    // the function-pointer call shape.
+    reportError(loc,
+      `called object is not a function or function pointer; got '${callee.type.toString()}'`);
+    return new ECall(loc, callee, args);
   }
   // Decay all arguments first; pointer-typed params and varargs alike
   // receive pointer values, never arrays.
@@ -7753,10 +7802,10 @@ class Parser {
 
     // return
     if (this.matchKW(Lexer.Keyword.RETURN)) {
-      if (this.matchText(";")) return AST.makeReturn(loc, null, null);
+      const retType = this.currentParsingFunc?.type.getReturnType() || null;
+      if (this.matchText(";")) return AST.makeReturn(loc, null, retType);
       const expr = this.parseExpression();
       this.expect(";");
-      const retType = this.currentParsingFunc?.type.getReturnType() || null;
       return AST.makeReturn(loc, expr, retType);
     }
 
