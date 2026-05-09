@@ -1,6 +1,8 @@
 # c-compiler
 
-Single-file C-to-WebAssembly compiler.
+C-to-WebAssembly compiler in one file.
+
+I occasionally post videos about this project at [youtube.com/@groundupcoder](https://www.youtube.com/@groundupcoder) — design decisions, problems I've hit, and parts of the implementation I find interesting. This repo isn't structured as a tutorial; it's the actual code I'm writing as I go.
 
 **compiler.js** — JavaScript, runs on Node.js and browser.
 
@@ -315,3 +317,11 @@ python3 old/tests/run.py                              # Unit tests, JS compiler
 python3 old/tests/run.py --all                         # Unit (both compilers) + equiv + sourcemap
 python3 old/tests/run.py --types=equiv --compiler=all  # JS vs C++ equivalence
 ```
+
+## License
+
+Apache License, Version 2.0 — see [LICENSE](LICENSE).
+
+## Contributing
+
+Bug reports as issues are very welcome. For pull requests, please open an issue first to discuss. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
