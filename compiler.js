@@ -2696,6 +2696,20 @@ class Expr {
       Object.seal(this);
     }
   }
+  // Exception tag declaration. `paramTypes` lists the types of the
+  // arguments a `__throw <name>(...)` site supplies and that a
+  // `__catch <name>(...)` binding receives. `definition` is the
+  // canonical (cross-TU-unified) tag — same chain pattern as DVar/DFunc.
+  // Used by SThrow.tag and STryCatch's catch clauses.
+  class DExceptionTag extends Decl {
+    constructor(loc, name, paramTypes) {
+      super();
+      this.loc = loc; this.name = name;
+      this.paramTypes = paramTypes;
+      this.definition = null;
+      Object.seal(this);
+    }
+  }
   class DEnumConst extends Decl {
     constructor(loc, name, value) {
       super();
@@ -3599,7 +3613,7 @@ function makeTUnit(filename) { return new TUnit(filename); }
 return {
   Scope,
   Expr, Stmt, Decl,
-  DVar, DFunc, DTag, DEnumConst,
+  DVar, DFunc, DTag, DExceptionTag, DEnumConst,
   EInt, EFloat, EString, EIdent, EBinary, EUnary, ETernary, ECall,
   ESubscript, EMember, EArrow, ECast, ESizeofExpr, ESizeofType,
   EAlignofExpr, EAlignofType, EComma, EInitList, EIntrinsic, EWasm,
@@ -7375,9 +7389,10 @@ class Parser {
       if (!tag) {
         // Recovery: synthesize a placeholder tag with divergent param
         // types so SThrow has the uniform tag shape downstream code
-        // expects (name, paramTypes, definition).
+        // expects.
         this.recoverableError(throwTok, `Unknown exception tag '${tagName}'`);
-        tag = { name: tagName, paramTypes: args.map(() => Types.TDIVERGENT), definition: null };
+        tag = new AST.DExceptionTag(Lexer.Loc.fromTok(throwTok), tagName,
+          args.map(() => Types.TDIVERGENT));
         tag.definition = tag;
       }
       // Insert implicit casts on args matching the tag's parameter types.
@@ -8135,7 +8150,7 @@ function parseTokens(tokens, options) {
               `Conflicting types for __exception tag '${tagName}'`);
           }
         } else {
-          tag = { name: tagName, paramTypes, definition: null };
+          tag = new AST.DExceptionTag(Lexer.Loc.fromTok(parser.peek(-1)), tagName, paramTypes);
           tag.definition = tag;
           if (registry) registry.set(tagName, tag);
         }
