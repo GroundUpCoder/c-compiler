@@ -2563,6 +2563,34 @@ class Scope {
 
 let nextDeclId = 1;
 
+// Linearity (substructural typing, à la guc.js):
+//   LINEAR        — must be evaluated in source order (side effects, traps,
+//                   memory reads/writes, control flow). Cannot be discarded
+//                   without losing observable behavior.
+//   AFFINE        — has identity (allocation, address-take). Can be discarded
+//                   if unused, but cannot be duplicated/reordered.
+//   UNRESTRICTED  — pure, deterministic, no identity. Can be discarded,
+//                   duplicated, or reordered freely.
+// Optimizers consult this to decide whether a transform is safe.
+const Linearity = Object.freeze({
+  LINEAR: 'LINEAR', AFFINE: 'AFFINE', UNRESTRICTED: 'UNRESTRICTED',
+});
+const _LINEARITY_RANK = { UNRESTRICTED: 0, AFFINE: 1, LINEAR: 2 };
+function _rankToLinearity(r) {
+  return r === 2 ? 'LINEAR' : r === 1 ? 'AFFINE' : 'UNRESTRICTED';
+}
+// Join an op's intrinsic linearity with the linearity of children. The
+// result is the strictest of (opLinearity, child1.linearity, ...) — a
+// node is UNRESTRICTED iff its op is pure AND every child is too.
+function joinLinearity(opLinearity, ...children) {
+  let rank = _LINEARITY_RANK[opLinearity];
+  for (const c of children) {
+    const r = _LINEARITY_RANK[c.linearity];
+    if (r > rank) rank = r;
+  }
+  return _rankToLinearity(rank);
+}
+
 // --- Base classes ---
 class Expr {
     constructor(loc, type) {
@@ -2635,6 +2663,13 @@ class Expr {
   }
 
   // --- Expr subclasses ---
+  // Linearity assignment recipe:
+  //   pure literals (EInt/EFloat/EString) and type-only operators
+  //     (sizeof/_Alignof/E[Implicit]Cast/EDecay) → UNRESTRICTED
+  //   side-effecting / control-flow / memory-accessing → LINEAR
+  //   identity-bearing allocations (EGCNew/ECompoundLiteral) → AFFINE
+  //   bubble-from-children for ops where the op itself is pure but a
+  //     child might not be (EBinary non-assign, EUnary non-side-effect, etc.)
   class EInt extends Expr {
     constructor(loc, type, value) {
       if (!(type instanceof Types.TypeInfo) || !type.isInteger()) {
@@ -2645,7 +2680,8 @@ class Expr {
       }
       super(loc, type);
       this.value = value;
-      Object.seal(this);
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
     }
   }
   class EFloat extends Expr {
@@ -2658,7 +2694,8 @@ class Expr {
       }
       super(loc, type);
       this.value = value;
-      Object.seal(this);
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
     }
   }
   class EString extends Expr {
@@ -2680,20 +2717,53 @@ class Expr {
       }
       super(loc, type);
       this.value = value;
-      Object.seal(this);
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
     }
   }
   class EIdent extends Expr {
-    constructor(loc, type, name, decl) { super(loc, type); this.name = name; this.decl = decl; Object.seal(this); }
+    constructor(loc, type, name, decl) {
+      super(loc, type); this.name = name; this.decl = decl;
+      // EnumConst / DFunc references are pure constants. DVar references
+      // are memory loads — LINEAR (a non-volatile read is reorderable in
+      // some windows, but we don't track those windows here).
+      const isPureRef = decl && (decl instanceof DEnumConst || decl instanceof DFunc);
+      this.linearity = isPureRef ? Linearity.UNRESTRICTED : Linearity.LINEAR;
+      Object.freeze(this);
+    }
   }
   class EBinary extends Expr {
-    constructor(loc, type, op, left, right) { super(loc, type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
+    constructor(loc, type, op, left, right) {
+      super(loc, type); this.op = op; this.left = left; this.right = right;
+      const isAssignOp = op === "ASSIGN" || op.endsWith("_ASSIGN");
+      this.linearity = joinLinearity(
+        isAssignOp ? Linearity.LINEAR : Linearity.UNRESTRICTED, left, right);
+      Object.freeze(this);
+    }
   }
   class EUnary extends Expr {
-    constructor(loc, type, op, operand) { super(loc, type); this.op = op; this.operand = operand; Object.seal(this); }
+    constructor(loc, type, op, operand) {
+      super(loc, type); this.op = op; this.operand = operand;
+      // Inc/dec mutate; deref reads memory; address-take has identity.
+      let opLin;
+      if (op === "OP_PRE_INC"  || op === "OP_POST_INC" ||
+          op === "OP_PRE_DEC"  || op === "OP_POST_DEC" ||
+          op === "OP_DEREF") opLin = Linearity.LINEAR;
+      else if (op === "OP_ADDR") opLin = Linearity.AFFINE;
+      else opLin = Linearity.UNRESTRICTED;  // OP_POS / OP_NEG / OP_BNOT / OP_LNOT
+      this.linearity = joinLinearity(opLin, operand);
+      Object.freeze(this);
+    }
   }
   class ETernary extends Expr {
-    constructor(loc, type, condition, thenExpr, elseExpr) { super(loc, type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
+    constructor(loc, type, condition, thenExpr, elseExpr) {
+      super(loc, type);
+      this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr;
+      // Control flow: only one branch evaluates, so we can't simply
+      // bubble both. Treat as LINEAR.
+      this.linearity = Linearity.LINEAR;
+      Object.freeze(this);
+    }
   }
   class ECall extends Expr {
     // The result type is the function's return type (after array/function
@@ -2722,55 +2792,122 @@ class Expr {
       const inner = callee instanceof EDecay ? callee.operand : callee;
       this.funcDecl = (inner instanceof EIdent && inner.decl instanceof DFunc)
         ? inner.decl : null;
-      Object.seal(this);
+      this.linearity = Linearity.LINEAR;  // function calls are always sequenced
+      Object.freeze(this);
     }
   }
   class ESubscript extends Expr {
-    constructor(loc, type, array, index) { super(loc, type); this.array = array; this.index = index; Object.seal(this); }
+    constructor(loc, type, array, index) {
+      super(loc, type); this.array = array; this.index = index;
+      this.linearity = Linearity.LINEAR;  // memory access
+      Object.freeze(this);
+    }
   }
   class EMember extends Expr {
-    constructor(loc, type, base, memberName, memberDecl) { super(loc, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(loc, type, base, memberName, memberDecl) {
+      super(loc, type); this.base = base; this.memberName = memberName;
+      this.memberDecl = memberDecl || null;
+      this.linearity = Linearity.LINEAR;  // memory access
+      Object.freeze(this);
+    }
   }
   class EArrow extends Expr {
-    constructor(loc, type, base, memberName, memberDecl) { super(loc, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(loc, type, base, memberName, memberDecl) {
+      super(loc, type); this.base = base; this.memberName = memberName;
+      this.memberDecl = memberDecl || null;
+      this.linearity = Linearity.LINEAR;  // memory access via pointer
+      Object.freeze(this);
+    }
   }
   class ECast extends Expr {
-    constructor(loc, type, targetType, expr) { super(loc, type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
+    constructor(loc, type, targetType, expr) {
+      super(loc, type); this.targetType = targetType; this.expr = expr;
+      this.linearity = joinLinearity(Linearity.UNRESTRICTED, expr);
+      Object.freeze(this);
+    }
   }
   class ESizeofExpr extends Expr {
-    constructor(loc, type, expr) { super(loc, type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) {
+      super(loc, type); this.expr = expr;
+      // Operand is not evaluated — its linearity doesn't propagate.
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
+    }
   }
   class ESizeofType extends Expr {
-    constructor(loc, type, operandType) { super(loc, type); this.operandType = operandType; Object.seal(this); }
+    constructor(loc, type, operandType) {
+      super(loc, type); this.operandType = operandType;
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
+    }
   }
   class EAlignofExpr extends Expr {
-    constructor(loc, type, expr) { super(loc, type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) {
+      super(loc, type); this.expr = expr;
+      // Operand not evaluated.
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
+    }
   }
   class EAlignofType extends Expr {
-    constructor(loc, type, operandType) { super(loc, type); this.operandType = operandType; Object.seal(this); }
+    constructor(loc, type, operandType) {
+      super(loc, type); this.operandType = operandType;
+      this.linearity = Linearity.UNRESTRICTED;
+      Object.freeze(this);
+    }
   }
   class EComma extends Expr {
-    constructor(loc, type, expressions) { super(loc, type); this.expressions = expressions; Object.seal(this); }
+    constructor(loc, type, expressions) {
+      super(loc, type); this.expressions = expressions;
+      // Sequencing — each subexpression evaluates in order.
+      this.linearity = Linearity.LINEAR;
+      Object.freeze(this);
+    }
   }
+  // EInitList is seal-only (not frozen) because normalizeInitList rewrites
+  // its `elements` and `designators` arrays in place after construction.
   class EInitList extends Expr {
     constructor(loc, type, elements, designators, unionMemberIndex) {
       super(loc, type);
       this.elements = elements; this.designators = designators || [];
       this.unionMemberIndex = unionMemberIndex ?? -1;
+      this.linearity = joinLinearity(Linearity.UNRESTRICTED, ...elements.filter(e => e));
       Object.seal(this);
     }
   }
   class EIntrinsic extends Expr {
-    constructor(loc, type, ikind, args, argType) { super(loc, type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
+    constructor(loc, type, ikind, args, argType) {
+      super(loc, type); this.intrinsicKind = ikind; this.args = args;
+      this.argType = argType || null;
+      // Most intrinsics are calls (memory ops, va_arg, etc.).
+      this.linearity = Linearity.LINEAR;
+      Object.freeze(this);
+    }
   }
   class EWasm extends Expr {
-    constructor(loc, type, args, bytes) { super(loc, type); this.args = args; this.bytes = bytes; Object.seal(this); }
+    constructor(loc, type, args, bytes) {
+      super(loc, type); this.args = args; this.bytes = bytes;
+      this.linearity = Linearity.LINEAR;
+      Object.freeze(this);
+    }
   }
+  // ECompoundLiteral is seal-only (not frozen) because the optimizer
+  // mutates `initList` in place to fold nested constants — replacing the
+  // node would invalidate the parser/codegen identity-keyed tracking lists.
   class ECompoundLiteral extends Expr {
-    constructor(loc, type, initList) { super(loc, type); this.initList = initList; Object.seal(this); }
+    constructor(loc, type, initList) {
+      super(loc, type); this.initList = initList;
+      // Allocation has identity (the storage's address is observable).
+      this.linearity = Linearity.AFFINE;
+      Object.seal(this);
+    }
   }
   class EImplicitCast extends Expr {
-    constructor(loc, type, expr) { super(loc, type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) {
+      super(loc, type); this.expr = expr;
+      this.linearity = joinLinearity(Linearity.UNRESTRICTED, expr);
+      Object.freeze(this);
+    }
   }
   // Array→pointer or function→pointer decay. The operand has array or
   // function type; the EDecay node has the corresponding decayed pointer type.
@@ -2780,47 +2917,58 @@ class Expr {
     constructor(loc, type, operand) {
       super(loc, type);
       this.operand = operand;
-      Object.seal(this);
+      this.linearity = joinLinearity(Linearity.UNRESTRICTED, operand);
+      Object.freeze(this);
     }
   }
   class EGCNew extends Expr {
-    constructor(loc, type, args) { super(loc, type); this.args = args; Object.seal(this); }
+    constructor(loc, type, args) {
+      super(loc, type); this.args = args;
+      // GC allocation produces a fresh ref with identity.
+      this.linearity = Linearity.AFFINE;
+      Object.freeze(this);
+    }
   }
 
   // --- Stmt subclasses ---
+  // Most are frozen at construction. SLabel / SGoto stay seal-only because
+  // their fields get filled in during the parser's goto-resolution pass.
   class SExpr extends Stmt {
-    constructor(loc, expr) { super(loc); this.expr = expr; Object.seal(this); }
+    constructor(loc, expr) { super(loc); this.expr = expr; Object.freeze(this); }
   }
   class SDecl extends Stmt {
-    constructor(loc, declarations) { super(loc); this.declarations = declarations; Object.seal(this); }
+    constructor(loc, declarations) { super(loc); this.declarations = declarations; Object.freeze(this); }
   }
   class SCompound extends Stmt {
-    constructor(loc, statements, labels) { super(loc); this.statements = statements; this.labels = labels || []; Object.seal(this); }
+    constructor(loc, statements, labels) { super(loc); this.statements = statements; this.labels = labels || []; Object.freeze(this); }
   }
   class SIf extends Stmt {
-    constructor(loc, condition, thenBranch, elseBranch) { super(loc); this.condition = condition; this.thenBranch = thenBranch; this.elseBranch = elseBranch || null; Object.seal(this); }
+    constructor(loc, condition, thenBranch, elseBranch) { super(loc); this.condition = condition; this.thenBranch = thenBranch; this.elseBranch = elseBranch || null; Object.freeze(this); }
   }
   class SWhile extends Stmt {
-    constructor(loc, condition, body) { super(loc); this.condition = condition; this.body = body; Object.seal(this); }
+    constructor(loc, condition, body) { super(loc); this.condition = condition; this.body = body; Object.freeze(this); }
   }
   class SDoWhile extends Stmt {
-    constructor(loc, body, condition) { super(loc); this.body = body; this.condition = condition; Object.seal(this); }
+    constructor(loc, body, condition) { super(loc); this.body = body; this.condition = condition; Object.freeze(this); }
   }
   class SFor extends Stmt {
-    constructor(loc, init, condition, increment, body) { super(loc); this.init = init; this.condition = condition; this.increment = increment; this.body = body; Object.seal(this); }
+    constructor(loc, init, condition, increment, body) { super(loc); this.init = init; this.condition = condition; this.increment = increment; this.body = body; Object.freeze(this); }
   }
   class SBreak extends Stmt {
-    constructor(loc) { super(loc); Object.seal(this); }
+    constructor(loc) { super(loc); Object.freeze(this); }
   }
   class SContinue extends Stmt {
-    constructor(loc) { super(loc); Object.seal(this); }
+    constructor(loc) { super(loc); Object.freeze(this); }
   }
   class SReturn extends Stmt {
-    constructor(loc, expr) { super(loc); this.expr = expr || null; Object.seal(this); }
+    constructor(loc, expr) { super(loc); this.expr = expr || null; Object.freeze(this); }
   }
   class SSwitch extends Stmt {
-    constructor(loc, expr, cases, body) { super(loc); this.expr = expr; this.cases = cases; this.body = body; Object.seal(this); }
+    constructor(loc, expr, cases, body) { super(loc); this.expr = expr; this.cases = cases; this.body = body; Object.freeze(this); }
   }
+  // SGoto and SLabel are seal-only (not frozen) because the parser
+  // backfills `target` (when a forward goto's label is later defined)
+  // and updates `labelKind` / `hasGotos` as gotos are resolved.
   class SGoto extends Stmt {
     constructor(loc, label) { super(loc); this.label = label; this.target = null; Object.seal(this); }
   }
@@ -2828,13 +2976,13 @@ class Expr {
     constructor(loc, name, enclosingBlock) { super(loc); this.name = name; this.enclosingBlock = enclosingBlock || null; this.labelKind = Types.LabelKind.FORWARD; this.hasGotos = false; this.isSwitchLevel = false; Object.seal(this); }
   }
   class SEmpty extends Stmt {
-    constructor(loc) { super(loc); Object.seal(this); }
+    constructor(loc) { super(loc); Object.freeze(this); }
   }
   class STryCatch extends Stmt {
-    constructor(loc, tryBody, catches) { super(loc); this.tryBody = tryBody; this.catches = catches; Object.seal(this); }
+    constructor(loc, tryBody, catches) { super(loc); this.tryBody = tryBody; this.catches = catches; Object.freeze(this); }
   }
   class SThrow extends Stmt {
-    constructor(loc, tag, args) { super(loc); this.tag = tag; this.args = args; Object.seal(this); }
+    constructor(loc, tag, args) { super(loc); this.tag = tag; this.args = args; Object.freeze(this); }
   }
 
 // ---------- AST builders that apply C semantics ----------
@@ -3262,6 +3410,8 @@ return {
   maybeImplicitCast, maybeDecay, isNullPointerConstant, rejectNonZeroToRef,
   promoteExprType, computeBinaryType, markAddressTaken,
   makeCall, makeSubscript, makeBinary, makeUnary, makeReturn, makeCast,
+  // Linearity tagging for optimizer correctness checks
+  Linearity, joinLinearity,
 };
 })();
 
@@ -7873,32 +8023,54 @@ function lowerLongjmpInStmt(stmt, tag) {
       }
       return stmt;
     }
-    case AST.SCompound:
+    case AST.SCompound: {
+      // SCompound.statements is a mutable array — write through it
+      // (frozen `this` doesn't lock array contents).
       for (let i = 0; i < stmt.statements.length; i++) {
         stmt.statements[i] = lowerLongjmpInStmt(stmt.statements[i], tag);
       }
       return stmt;
-    case AST.SIf:
-      stmt.thenBranch = lowerLongjmpInStmt(stmt.thenBranch, tag);
-      if (stmt.elseBranch) stmt.elseBranch = lowerLongjmpInStmt(stmt.elseBranch, tag);
-      return stmt;
-    case AST.SWhile:
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case AST.SDoWhile:
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case AST.SFor:
-      if (stmt.init) stmt.init = lowerLongjmpInStmt(stmt.init, tag);
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case AST.SSwitch:
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case AST.STryCatch:
-      stmt.tryBody = lowerLongjmpInStmt(stmt.tryBody, tag);
-      for (const cc of stmt.catches) cc.body = lowerLongjmpInStmt(cc.body, tag);
-      return stmt;
+    }
+    case AST.SIf: {
+      const newThen = lowerLongjmpInStmt(stmt.thenBranch, tag);
+      const newElse = stmt.elseBranch ? lowerLongjmpInStmt(stmt.elseBranch, tag) : null;
+      return (newThen === stmt.thenBranch && newElse === stmt.elseBranch)
+        ? stmt
+        : new AST.SIf(stmt.loc, stmt.condition, newThen, newElse);
+    }
+    case AST.SWhile: {
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return newBody === stmt.body ? stmt
+        : new AST.SWhile(stmt.loc, stmt.condition, newBody);
+    }
+    case AST.SDoWhile: {
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return newBody === stmt.body ? stmt
+        : new AST.SDoWhile(stmt.loc, newBody, stmt.condition);
+    }
+    case AST.SFor: {
+      const newInit = stmt.init ? lowerLongjmpInStmt(stmt.init, tag) : null;
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return (newInit === stmt.init && newBody === stmt.body) ? stmt
+        : new AST.SFor(stmt.loc, newInit, stmt.condition, stmt.increment, newBody);
+    }
+    case AST.SSwitch: {
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return newBody === stmt.body ? stmt
+        : new AST.SSwitch(stmt.loc, stmt.expr, stmt.cases, newBody);
+    }
+    case AST.STryCatch: {
+      const newTry = lowerLongjmpInStmt(stmt.tryBody, tag);
+      let catchesChanged = false;
+      const newCatches = stmt.catches.map(cc => {
+        const newBody = lowerLongjmpInStmt(cc.body, tag);
+        if (newBody === cc.body) return cc;
+        catchesChanged = true;
+        return { ...cc, body: newBody };
+      });
+      return (newTry === stmt.tryBody && !catchesChanged) ? stmt
+        : new AST.STryCatch(stmt.loc, newTry, newCatches);
+    }
     default:
       return stmt;
   }
