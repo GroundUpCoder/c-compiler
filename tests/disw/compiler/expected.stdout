@@ -11,8 +11,8 @@ Sections:
     Global start=0x00000036 end=0x00000045 (size=0x0000000f) count: 2
     Export start=0x00000047 end=0x0000008b (size=0x00000044) count: 5
    Element start=0x0000008d end=0x00000096 (size=0x00000009) count: 1
-      Code start=0x00000098 end=0x000000c2 (size=0x0000002a) count: 3
-      Data start=0x000000c4 end=0x000000c5 (size=0x00000001) count: 0
+      Code start=0x00000098 end=0x000000be (size=0x00000026) count: 3
+      Data start=0x000000c0 end=0x000000c1 (size=0x00000001) count: 0
 
 Code Disassembly:
 
@@ -25,23 +25,21 @@ Code Disassembly:
  0000a2:  end
 
 0000a4 func[1] <main> () -> i32:
- 0000a5:  i32.const 1
- 0000a7:  i32.const 2
- 0000a9:  call 0
- 0000ab:  return
- 0000ac:  unreachable
- 0000ad:  end
+ 0000a5:  i32.const 3
+ 0000a7:  return
+ 0000a8:  unreachable
+ 0000a9:  end
 
-0000af func[2] <alloca> (i32) -> i32:
- 0000b0:  global.get 0
- 0000b2:  local.get 0
- 0000b4:  i32.const 15
- 0000b6:  i32.add
- 0000b7:  i32.const -16
- 0000b9:  i32.and
- 0000ba:  i32.sub
- 0000bb:  global.set 0
- 0000bd:  global.get 0
- 0000bf:  return
- 0000c0:  unreachable
- 0000c1:  end
+0000ab func[2] <alloca> (i32) -> i32:
+ 0000ac:  global.get 0
+ 0000ae:  local.get 0
+ 0000b0:  i32.const 15
+ 0000b2:  i32.add
+ 0000b3:  i32.const -16
+ 0000b5:  i32.and
+ 0000b6:  i32.sub
+ 0000b7:  global.set 0
+ 0000b9:  global.get 0
+ 0000bb:  return
+ 0000bc:  unreachable
+ 0000bd:  end

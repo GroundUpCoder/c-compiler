@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/call_non_function_err/call_non_function_err.c.
+tests/unit/core/call_non_function_err/call_non_function_err.c:5: error: called object is not a function or function pointer; got 'int'

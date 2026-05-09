@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/return_no_value_in_nonvoid_err/return_no_value_in_nonvoid_err.c.
+tests/unit/core/return_no_value_in_nonvoid_err/return_no_value_in_nonvoid_err.c:3: error: non-void function returns no value (return type is 'int')

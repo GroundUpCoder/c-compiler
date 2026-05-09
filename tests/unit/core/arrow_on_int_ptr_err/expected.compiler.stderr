@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/arrow_on_int_ptr_err/arrow_on_int_ptr_err.c.
+tests/unit/core/arrow_on_int_ptr_err/arrow_on_int_ptr_err.c:5: error: left operand of '->' must point to struct or union, got pointer to 'int'

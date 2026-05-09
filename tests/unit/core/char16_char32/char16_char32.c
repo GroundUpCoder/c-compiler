@@ -39,8 +39,8 @@ int main(void) {
     printf("U\"AB\"[1]=%d\n", (int)s32[1]);  // 66 = 'B'
     printf("U\"AB\"[2]=%d\n", (int)s32[2]);  // 0 = null terminator
 
-    // === L"..." string literals ===
-    const unsigned int *wstr = L"OK";
+    // === L"..." string literals (wchar_t = int) ===
+    const int *wstr = L"OK";
     printf("L\"OK\"[0]=%d\n", (int)wstr[0]);  // 79 = 'O'
     printf("L\"OK\"[1]=%d\n", (int)wstr[1]);  // 75 = 'K'
     printf("L\"OK\"[2]=%d\n", (int)wstr[2]);  // 0 = null terminator

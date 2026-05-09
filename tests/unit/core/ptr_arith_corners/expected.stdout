@@ -1,0 +1,29 @@
+char rvalue subscript: d
+char lvalue subscript: Z
+char &subscript: f
+char += int: Z
+char -= int: b
+char p+i: e
+char p-i: e
+char p1-p2: 7
+int rvalue: 30
+int lvalue: 999
+int &subscript: 50
+int += int: 30
+int -= int: 20
+int p1-p2: 5
+struct subscript: 9 12
+struct &subscript: 13
+struct += int: 9
+struct -= int: 5
+struct p1-p2: 4
+int[i64]: 30
+int + i64: 30
+int += i64: 40
+int -= i64: 10
+int - i64: 30
+int[u64]: 20
+i + p: 30
+struct[i64]: 9
+int p - i64: 40
+PASS

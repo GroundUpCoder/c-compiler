@@ -58,8 +58,9 @@ DISW_SOURCES = [
 DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
 
 SOURCEMAP_DIR = os.path.join(SCRIPT_DIR, "sourcemap")
+AST_DIR = os.path.join(SCRIPT_DIR, "ast")
 
-ALL_CATEGORIES = ["unit", "extra", "projects", "zlib", "lua", "freetype", "disw", "sourcemap"]
+ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "disw", "sourcemap"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -734,6 +735,38 @@ def run_sourcemap_tests(results, filter_str=None):
                 os.unlink(wasm_path)
 
 
+# --- ast (JS-level unit tests for AST node invariants) ---
+
+def run_ast_tests(results, filter_str=None):
+    """Run tests/ast/*.js — JS-level unit tests for AST internals.
+
+    Each .js file is invoked with `node`. The script's exit code is the
+    pass/fail signal; its stdout is parsed for individual case failures
+    when verbose output is requested.
+    """
+    if not os.path.isdir(AST_DIR):
+        return
+    test_files = sorted(
+        f for f in os.listdir(AST_DIR) if f.endswith(".js")
+    )
+    for fname in test_files:
+        test_name = f"ast/{fname[:-3]}"  # strip .js
+        if filter_str and filter_str not in test_name:
+            continue
+        path = os.path.join(AST_DIR, fname)
+        r = subprocess.run(
+            ["node", path],
+            capture_output=True, text=True, timeout=30, cwd=ROOT_DIR,
+        )
+        if r.returncode == 0:
+            results.record(test_name, True)
+        else:
+            # Surface the test runner's own output so failures point at
+            # individual cases.
+            msg = r.stdout.strip() or r.stderr.strip()
+            results.record(test_name, False, msg)
+
+
 # --- Main ---
 
 def main():
@@ -775,7 +808,11 @@ def main():
     results = Results(verbosity)
 
     for cat in categories:
-        if cat in ("unit", "extra"):
+        if cat == "ast":
+            results.section("ast")
+            run_ast_tests(results, filter_str=args.filter)
+
+        elif cat in ("unit", "extra"):
             test_base = UNIT_DIR if cat == "unit" else EXTRA_DIR
             results.section(cat)
             run_unit_or_extra(test_base, COMPILER_CMD, results, filter_str=args.filter)

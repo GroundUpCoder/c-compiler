@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/arrow_on_struct_err/arrow_on_struct_err.c.
+tests/unit/core/arrow_on_struct_err/arrow_on_struct_err.c:8: error: left operand of '->' must be a pointer to struct or union, got 'struct S'

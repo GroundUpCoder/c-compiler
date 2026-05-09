@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/subscript_ptr_idx_err/subscript_ptr_idx_err.c.
+tests/unit/core/subscript_ptr_idx_err/subscript_ptr_idx_err.c:8: error: array subscript must be of integer type, got '*int'

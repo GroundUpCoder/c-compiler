@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/cond_struct_err/cond_struct_err.c.
+tests/unit/core/cond_struct_err/cond_struct_err.c:7: error: controlling expression of 'if' must be scalar, got 'struct S'

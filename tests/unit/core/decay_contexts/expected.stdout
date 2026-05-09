@@ -1,0 +1,25 @@
+subscript: 3
+p+i: 4
+i+p: 3
+p-arr: 5
+p-i: 5
+*arr: 1
+arr == &arr[0]: 1
+q == arr: 1
+ternary: 2
+ternary2: 20
+cast: 1
+init: 1
+assign: 5
+arg: 15
+(&fn)(args): 15
+(*fn)(args): 15
+fn-arg: 15
+global-init: 10 40
+sizeof(arr): 20
+sizeof(arr)/sizeof(arr[0]): 5
+(*pa)[3]: 4
+buf: world sz=6
+g_str: hello
+multidim: 3 4
+PASS

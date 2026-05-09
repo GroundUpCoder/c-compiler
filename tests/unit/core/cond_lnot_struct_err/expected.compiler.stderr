@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/cond_lnot_struct_err/cond_lnot_struct_err.c.
+tests/unit/core/cond_lnot_struct_err/cond_lnot_struct_err.c:6: error: unary '!' requires a scalar operand, got 'struct S'

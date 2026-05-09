@@ -1951,6 +1951,14 @@ const TypeKind = Object.freeze({
   GC_STRUCT: "gc_struct", GC_ARRAY: "gc_array",
   EQREF: "eqref",
   AUTO: "auto",  // C23 type-inference sentinel (set during parse, resolved at init)
+  // The bottom type for error recovery. After a parser diagnostic
+  // (undeclared identifier, missing struct field, unknown exception
+  // tag, etc.) we synthesize a placeholder decl typed DIVERGENT so the
+  // parse can continue without nulls leaking downstream. DIVERGENT
+  // absorbs in arithmetic/conversion contexts so further operations on
+  // it stay well-typed. Codegen never sees it — `hasErrors` halts the
+  // pipeline before then.
+  DIVERGENT: "divergent",
 });
 
 const TagKind = Object.freeze({
@@ -1966,34 +1974,6 @@ const StorageClass = Object.freeze({
 const AllocClass = Object.freeze({ REGISTER: "register", MEMORY: "memory" });
 
 const LabelKind = Object.freeze({ FORWARD: "forward", LOOP: "loop", BOTH: "both" });
-
-const ExprKind = Object.freeze({
-  INT: "INT", FLOAT: "FLOAT", STRING: "STRING", IDENT: "IDENT",
-  BINARY: "BINARY", UNARY: "UNARY", TERNARY: "TERNARY", CALL: "CALL",
-  SUBSCRIPT: "SUBSCRIPT", MEMBER: "MEMBER", ARROW: "ARROW", CAST: "CAST",
-  SIZEOF_EXPR: "SIZEOF_EXPR", SIZEOF_TYPE: "SIZEOF_TYPE",
-  ALIGNOF_EXPR: "ALIGNOF_EXPR", ALIGNOF_TYPE: "ALIGNOF_TYPE",
-  COMMA: "COMMA", INIT_LIST: "INIT_LIST", INTRINSIC: "INTRINSIC",
-  WASM: "WASM",
-  COMPOUND_LITERAL: "COMPOUND_LITERAL",
-  IMPLICIT_CAST: "IMPLICIT_CAST",
-  GC_NEW: "GC_NEW",
-});
-
-const StmtKind = Object.freeze({
-  EXPR: "expression-statement", DECL: "declaration-statement",
-  COMPOUND: "compound-statement", IF: "if-statement",
-  WHILE: "while-statement", DO_WHILE: "do-while-statement",
-  FOR: "for-statement", BREAK: "break-statement",
-  CONTINUE: "continue-statement", RETURN: "return-statement",
-  SWITCH: "switch-statement", GOTO: "goto-statement",
-  LABEL: "label-statement", EMPTY: "empty-statement",
-  TRY_CATCH: "try-catch-statement", THROW: "throw-statement",
-});
-
-const DeclKind = Object.freeze({
-  VAR: "variable", FUNC: "function", TAG: "tag", ENUM_CONST: "enum-constant",
-});
 
 const IntrinsicKind = Object.freeze({
   VA_START: "va_start", VA_ARG: "va_arg", VA_END: "va_end", VA_COPY: "va_copy",
@@ -2183,6 +2163,10 @@ class TypeInfo {
   isArray() { return this.kind === TypeKind.ARRAY; }
   isFunction() { return this.kind === TypeKind.FUNCTION; }
   isVoid() { return this.kind === TypeKind.VOID; }
+  // The bottom-type marker used during error recovery. Operations that
+  // join types (usual-arithmetic, computeBinaryType, maybeImplicitCast)
+  // treat any divergent operand as absorbing — the result is divergent.
+  isDivergent() { return this.kind === TypeKind.DIVERGENT; }
   isTag() { return this.kind === TypeKind.TAG; }
   isStruct() { return this.kind === TypeKind.TAG && this.tagKind === TagKind.STRUCT; }
   isUnion() { return this.kind === TypeKind.TAG && this.tagKind === TagKind.UNION; }
@@ -2263,6 +2247,8 @@ class TypeInfo {
 // Primitive type singletons
 const TUNKNOWN = new TypeInfo(TypeKind.UNKNOWN, 0, 0, false);
 const TVOID = new TypeInfo(TypeKind.VOID, 0, 0, false);
+// Divergent: bottom type for error recovery (see TypeKind.DIVERGENT).
+const TDIVERGENT = new TypeInfo(TypeKind.DIVERGENT, 0, 0, false);
 const TBOOL = new TypeInfo(TypeKind.BOOL, 1, 1, true);
 const TCHAR = new TypeInfo(TypeKind.CHAR, 1, 1, true);
 const TSCHAR = new TypeInfo(TypeKind.SCHAR, 1, 1, true);
@@ -2457,6 +2443,9 @@ function usualArithmeticConversions(a, b) {
   // C99 6.3.1.8: strip qualifiers so 'const double' matches TDOUBLE etc.
   a = a.removeQualifiers();
   b = b.removeQualifiers();
+  // Divergent absorbs — the result of mixing in a recovery type stays
+  // divergent so further operations don't blow up either.
+  if (a.isDivergent() || b.isDivergent()) return TDIVERGENT;
   if (a.isFloatingPoint() || b.isFloatingPoint()) {
     if (a === TLDOUBLE || b === TLDOUBLE) return TLDOUBLE;
     if (a === TDOUBLE || b === TDOUBLE) return TDOUBLE;
@@ -2494,16 +2483,57 @@ function usualArithmeticConversions(a, b) {
 
 return {
   TypeKind, TagKind, StorageClass, AllocClass, LabelKind,
-  ExprKind, StmtKind, DeclKind, IntrinsicKind, BopStr, UopStr,
+  IntrinsicKind, BopStr, UopStr,
   TypeInfo,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
   TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
+  TDIVERGENT,
   arrayOf, functionType, getOrCreateTagType,
   getOrCreateGCStructType, gcArrayOf,
   computeStructLayout, computeUnionLayout, computeUnaryType,
   usualArithmeticConversions, truncateConstInt,
 };
 })();
+
+// ====================
+// Diagnostics pool
+// ====================
+//
+// Shared error/warning sink. Set by `withDiag(sink, fn)` for the duration
+// of `fn()`, after which `_currentDiag` is restored. Anywhere downstream
+// — parser, AST builders, codegen — can call `reportError`/`reportWarning`
+// without threading a context through.
+//
+// `fatalError` reports and throws `FatalDiag`. The caller's `withDiag`
+// scope catches it and the error is already in the sink.
+
+let _currentDiag = null;
+
+class FatalDiag {}
+
+function withDiag(sink, fn) {
+  const saved = _currentDiag;
+  _currentDiag = sink;
+  try { return fn(); } finally { _currentDiag = saved; }
+}
+
+function reportError(loc, msg) {
+  if (!_currentDiag) throw new Error(`reportError("${msg}") called outside withDiag scope`);
+  _currentDiag.errors.push(new Lexer.LexError(msg, loc.filename, loc.line));
+}
+
+function reportWarning(loc, msg) {
+  if (!_currentDiag) throw new Error(`reportWarning("${msg}") called outside withDiag scope`);
+  _currentDiag.warnings.push(new Lexer.LexError(msg, loc.filename, loc.line));
+}
+
+// Reports the error and throws FatalDiag. The active `withDiag` scope
+// catches it; downstream parsing of the current translation unit halts
+// but the error is preserved in the sink.
+function fatalError(loc, msg) {
+  reportError(loc, msg);
+  throw new FatalDiag();
+}
 
 // ====================
 // AST
@@ -2551,22 +2581,159 @@ class Scope {
 
 let nextDeclId = 1;
 
+// TreeBag: a tree-shaped read-only set/multiset. Each node owns an
+// array of items (not a Set — guc.js uses Set, but the user prefers
+// arrays for insertion-order traversal and lower constant overhead),
+// and references its children's bags. Items are NEVER copied into
+// ancestors: iteration / `has` walk the children tree on demand, so
+// memory stays O(N) regardless of depth.
+//
+// Used as a structural-share container for bubble-up metadata on Expr
+// and Stmt. A node's `referencedFunctions` (or any future bag) is
+// computed once at construction as `new TreeBag(ownItems, ...children
+// .map(c => c.bag))` — no eager union, no rebuild on subtree change.
+//
+// Suitable for one-shot iteration / membership tests. If a caller
+// queries the same bag many times, snapshot the iteration result.
+class TreeBag {
+  constructor(own, ...children) {
+    this._own = (own && own.length > 0) ? own.slice() : null;
+    this._children = children.filter(c => c.size > 0);
+    let n = this._own ? this._own.length : 0;
+    for (const c of this._children) n += c.size;
+    this.size = n;
+    Object.freeze(this._children);
+    Object.freeze(this);
+  }
+  *[Symbol.iterator]() {
+    if (this._own) yield* this._own;
+    for (const child of this._children) yield* child;
+  }
+  has(value) {
+    if (this._own && this._own.includes(value)) return true;
+    for (const child of this._children) if (child.has(value)) return true;
+    return false;
+  }
+  forEach(fn) { for (const item of this) fn(item); }
+}
+const _EMPTY_TREE_BAG = new TreeBag(null);
+
+// Linearity (substructural typing, à la guc.js):
+//   LINEAR        — must be evaluated in source order (side effects, traps,
+//                   memory reads/writes, control flow). Cannot be discarded
+//                   without losing observable behavior.
+//   AFFINE        — has identity (allocation, address-take). Can be discarded
+//                   if unused, but cannot be duplicated/reordered.
+//   UNRESTRICTED  — pure, deterministic, no identity. Can be discarded,
+//                   duplicated, or reordered freely.
+// Optimizers consult this to decide whether a transform is safe.
+const Linearity = Object.freeze({
+  LINEAR: 'LINEAR', AFFINE: 'AFFINE', UNRESTRICTED: 'UNRESTRICTED',
+});
+const _LINEARITY_RANK = { UNRESTRICTED: 0, AFFINE: 1, LINEAR: 2 };
+function _rankToLinearity(r) {
+  return r === 2 ? 'LINEAR' : r === 1 ? 'AFFINE' : 'UNRESTRICTED';
+}
+// Join an op's intrinsic linearity with the linearity of children. The
+// result is the strictest of (opLinearity, child1.linearity, ...) — a
+// node is UNRESTRICTED iff its op is pure AND every child is too.
+// Tolerates null/undefined children (some construction phases use partial
+// child lists, e.g. EInitList during normalizeInitList).
+function joinLinearity(opLinearity, ...children) {
+  let rank = _LINEARITY_RANK[opLinearity];
+  for (const c of children) {
+    if (!c) continue;
+    const r = _LINEARITY_RANK[c.linearity];
+    if (r > rank) rank = r;
+  }
+  return _rankToLinearity(rank);
+}
+
 // --- Base classes ---
+// The base Expr constructor takes a `children` array (in evaluation
+// order) and an `opLinearity` (the intrinsic linearity of this op,
+// before child contributions). The base computes `this.linearity` by
+// joining opLinearity with the children's linearities — subclasses
+// just declare what kind of op they are; bubble-up is automatic.
+//
+// Children are walkable via `this.children` (used by walkExpr / generic
+// rewriters). Subclasses additionally store named field aliases (`left`,
+// `right`, `operand`, `base`, `index`, etc.) for ergonomic access from
+// codegen and other consumers — these alias the same expression objects.
 class Expr {
-    constructor(kind, type) {
-      this.kind = kind;
+    constructor(loc, type, children, opLinearity) {
+      if (!loc) {
+        throw new Error(`Expr: loc is required (use Lexer.Loc.fromTok / Loc.generated for synthesized nodes)`);
+      }
+      this.loc = loc;
       this.type = type;
+      this.children = children;
+      this.linearity = joinLinearity(opLinearity, ...children);
+    }
+    // Bubble-up bags are computed on demand from current children.
+    // The getter form (rather than a precomputed field) tolerates the
+    // seal-only escapees (EInitList, SLabel, SGoto) whose `children`
+    // arrays are mutated by post-construction passes — the bag stays
+    // consistent with whatever `children` currently looks like.
+    // EIdent of a DFunc / DVar overrides to add itself.
+    get referencedFunctions() {
+      return new TreeBag(null,
+        ...this.children.filter(c => c).map(c => c.referencedFunctions));
+    }
+    get referencedVariables() {
+      return new TreeBag(null,
+        ...this.children.filter(c => c).map(c => c.referencedVariables));
+    }
+    get referencedCompoundLiterals() {
+      return new TreeBag(null,
+        ...this.children.filter(c => c).map(c => c.referencedCompoundLiterals));
+    }
+    // Rebuild this node with replaced children, in the same order as
+    // `this.children`. Leaf subclasses (no children) inherit this
+    // identity-return; non-leaf subclasses must override.
+    _withChildren(newChildren) {
+      if (newChildren.length === 0) return this;
+      throw new Error(
+        `${this.constructor.name} must implement _withChildren ` +
+        `(node has ${this.children.length} children)`);
     }
   }
+  // Stmt parallels Expr: takes a `children` array (mixed Expr and Stmt
+  // subtrees in evaluation/control order), exposes generic traversal,
+  // and bubbles up `referencedFunctions` from children. Subclasses
+  // additionally store named field aliases (`condition`, `body`, etc.)
+  // for ergonomic access — same pattern as Expr.
   class Stmt {
-    constructor(kind) {
-      this.kind = kind;
-      this.loc = null;
+    constructor(loc, children = []) {
+      if (!loc) {
+        throw new Error(`Stmt: loc is required (use Lexer.Loc.fromTok / Loc.generated for synthesized nodes)`);
+      }
+      this.loc = loc;
+      this.children = children;
+    }
+    // Bubble-up bag, computed on demand. See Expr.referencedFunctions
+    // for rationale (handles parser-mutated children arrays cleanly).
+    get referencedFunctions() {
+      return new TreeBag(null,
+        ...this.children.filter(c => c).map(c => c.referencedFunctions));
+    }
+    get referencedVariables() {
+      return new TreeBag(null,
+        ...this.children.filter(c => c).map(c => c.referencedVariables));
+    }
+    get referencedCompoundLiterals() {
+      return new TreeBag(null,
+        ...this.children.filter(c => c).map(c => c.referencedCompoundLiterals));
+    }
+    _withChildren(newChildren) {
+      if (newChildren.length === 0) return this;
+      throw new Error(
+        `${this.constructor.name} must implement _withChildren ` +
+        `(node has ${this.children.length} children)`);
     }
   }
   class Decl {
-    constructor(declKind) {
-      this.declKind = declKind;
+    constructor() {
       this.id = nextDeclId++;
     }
   }
@@ -2574,7 +2741,7 @@ class Expr {
   // --- Decl subclasses ---
   class DVar extends Decl {
     constructor(loc, name, type, storageClass, initExpr) {
-      super(Types.DeclKind.VAR);
+      super();
       this.loc = loc; this.name = name; this.type = type;
       this.storageClass = storageClass || Types.StorageClass.NONE;
       this.allocClass = Types.AllocClass.REGISTER;
@@ -2587,14 +2754,13 @@ class Expr {
   }
   class DFunc extends Decl {
     constructor(loc, name, type, params, storageClass, isInline, body) {
-      super(Types.DeclKind.FUNC);
+      super();
       this.loc = loc; this.name = name; this.type = type;
       this.parameters = params || [];
       this.storageClass = storageClass || Types.StorageClass.NONE;
       this.isInline = isInline || false;
       this.body = body || null;
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
-      this.usedSymbols = new Set(); this.compoundLiterals = [];
       this.definition = null;
       this.importModule = null; this.importName = null;
       Object.seal(this);
@@ -2602,7 +2768,7 @@ class Expr {
   }
   class DTag extends Decl {
     constructor(loc, tagKind, name, isComplete, members) {
-      super(Types.DeclKind.TAG);
+      super();
       this.loc = loc; this.tagKind = tagKind; this.name = name;
       this.isComplete = isComplete || false;
       this.isPacked = false;
@@ -2610,139 +2776,1324 @@ class Expr {
       Object.seal(this);
     }
   }
+  // Exception tag declaration. `paramTypes` lists the types of the
+  // arguments a `__throw <name>(...)` site supplies and that a
+  // `__catch <name>(...)` binding receives. `definition` is the
+  // canonical (cross-TU-unified) tag — same chain pattern as DVar/DFunc.
+  // Used by SThrow.tag and STryCatch's catch clauses.
+  class DExceptionTag extends Decl {
+    constructor(loc, name, paramTypes) {
+      super();
+      this.loc = loc; this.name = name;
+      this.paramTypes = paramTypes;
+      this.definition = null;
+      Object.seal(this);
+    }
+  }
   class DEnumConst extends Decl {
     constructor(loc, name, value) {
-      super(Types.DeclKind.ENUM_CONST);
+      super();
       this.loc = loc; this.name = name; this.value = value;
       Object.seal(this);
     }
   }
 
   // --- Expr subclasses ---
+  // Linearity assignment recipe:
+  //   pure literals (EInt/EFloat/EString) and type-only operators
+  //     (sizeof/_Alignof/E[Implicit]Cast/EDecay) → UNRESTRICTED
+  //   side-effecting / control-flow / memory-accessing → LINEAR
+  //   identity-bearing allocations (EGCNew/ECompoundLiteral) → AFFINE
+  //   bubble-from-children for ops where the op itself is pure but a
+  //     child might not be (EBinary non-assign, EUnary non-side-effect, etc.)
   class EInt extends Expr {
-    constructor(type, value) { super(Types.ExprKind.INT, type); this.value = value; Object.seal(this); }
+    constructor(loc, type, value) {
+      if (!(type instanceof Types.TypeInfo) || !type.isInteger()) {
+        throw new Error(`EInt: type must be integral; got ${type}`);
+      }
+      if (typeof value !== 'bigint') {
+        throw new Error(`EInt: value must be a BigInt; got ${typeof value}`);
+      }
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.value = value;
+      Object.freeze(this);
+    }
   }
   class EFloat extends Expr {
-    constructor(type, value) { super(Types.ExprKind.FLOAT, type); this.value = value; Object.seal(this); }
+    constructor(loc, type, value) {
+      if (!(type instanceof Types.TypeInfo) || !type.isFloatingPoint()) {
+        throw new Error(`EFloat: type must be floating-point; got ${type}`);
+      }
+      if (typeof value !== 'number') {
+        throw new Error(`EFloat: value must be a number; got ${typeof value}`);
+      }
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.value = value;
+      Object.freeze(this);
+    }
   }
   class EString extends Expr {
-    constructor(type, value) { super(Types.ExprKind.STRING, type); this.value = value; Object.seal(this); }
+    constructor(loc, type, value) {
+      if (!(type instanceof Types.TypeInfo) || !type.isArray()) {
+        throw new Error(`EString: type must be an array; got ${type}`);
+      }
+      const elemKind = type.baseType?.kind;
+      const validElem =
+        elemKind === Types.TypeKind.CHAR || elemKind === Types.TypeKind.SCHAR ||
+        elemKind === Types.TypeKind.UCHAR || elemKind === Types.TypeKind.SHORT ||
+        elemKind === Types.TypeKind.USHORT || elemKind === Types.TypeKind.INT ||
+        elemKind === Types.TypeKind.UINT;
+      if (!validElem) {
+        throw new Error(`EString: element type must be a character/integer kind suitable for a string literal; got ${type.baseType}`);
+      }
+      if (!Array.isArray(value)) {
+        throw new Error(`EString: value must be an Array of byte numbers; got ${value?.constructor?.name ?? typeof value}`);
+      }
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.value = value;
+      Object.freeze(this);
+    }
   }
+  // Variable / function / enum constant reference. Pure UNRESTRICTED at
+  // this AST level: the load itself has no side effects, and reading a
+  // named decl twice in adjacent positions yields the same value (we
+  // don't model volatile, signal handlers, or threads). `decl` is
+  // required (use makeIdent for name-based lookup) — get the source
+  // identifier via `this.decl.name`.
   class EIdent extends Expr {
-    constructor(type, name, decl) { super(Types.ExprKind.IDENT, type); this.name = name; this.decl = decl; Object.seal(this); }
+    constructor(loc, type, decl) {
+      if (!decl) throw new Error(`EIdent: decl is required (use makeIdent for name-based lookup)`);
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.decl = decl;
+      Object.freeze(this);
+    }
+    get name() { return this.decl.name; }
+    // A reference to a function (direct or address-take) contributes
+    // to the bubble-up bag. Calls go through here too: ECall's callee
+    // is an EDecay/EIdent chain whose EIdent adds the DFunc to the bag.
+    // Forward declarations have their `definition` field linked to the
+    // body-bearing DFunc; we surface that so consumers always see the
+    // canonical instance (which is what `unit.{static,defined}Functions`
+    // contains).
+    get referencedFunctions() {
+      if (this.decl instanceof DFunc) {
+        return new TreeBag([this.decl.definition || this.decl]);
+      }
+      return _EMPTY_TREE_BAG;
+    }
+    get referencedVariables() {
+      if (this.decl instanceof DVar) {
+        return new TreeBag([this.decl.definition || this.decl]);
+      }
+      return _EMPTY_TREE_BAG;
+    }
   }
+  // BinOp / UnOp: single source of truth for op metadata. EBinary /
+  // EUnary look up linearity here at construction time and reject
+  // unknown op names (catches typos like "ASSING" or stray refactor
+  // residue). Other code consults these for diagnostic text and
+  // category checks (isAssign, isCompare, etc.) instead of scattering
+  // `op === "..."` chains. The flags are fixed properties of the op
+  // itself — assignment-ness etc. don't depend on operands.
+  const BinOp = Object.freeze({
+    ADD:         { text: "+",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    SUB:         { text: "-",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    MUL:         { text: "*",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    DIV:         { text: "/",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    MOD:         { text: "%",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    EQ:          { text: "==",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: true,  isLogical: false, isShift: false, isBitwise: false },
+    NE:          { text: "!=",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: true,  isLogical: false, isShift: false, isBitwise: false },
+    LT:          { text: "<",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: true,  isLogical: false, isShift: false, isBitwise: false },
+    GT:          { text: ">",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: true,  isLogical: false, isShift: false, isBitwise: false },
+    LE:          { text: "<=",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: true,  isLogical: false, isShift: false, isBitwise: false },
+    GE:          { text: ">=",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: true,  isLogical: false, isShift: false, isBitwise: false },
+    LAND:        { text: "&&",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: true,  isShift: false, isBitwise: false },
+    LOR:         { text: "||",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: true,  isShift: false, isBitwise: false },
+    BAND:        { text: "&",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: true },
+    BOR:         { text: "|",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: true },
+    BXOR:        { text: "^",   linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: false, isBitwise: true },
+    SHL:         { text: "<<",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: true,  isBitwise: false },
+    SHR:         { text: ">>",  linearity: Linearity.UNRESTRICTED, isAssign: false, isCompare: false, isLogical: false, isShift: true,  isBitwise: false },
+    ASSIGN:      { text: "=",   linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    ADD_ASSIGN:  { text: "+=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    SUB_ASSIGN:  { text: "-=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    MUL_ASSIGN:  { text: "*=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    DIV_ASSIGN:  { text: "/=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    MOD_ASSIGN:  { text: "%=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: false },
+    BAND_ASSIGN: { text: "&=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: true },
+    BOR_ASSIGN:  { text: "|=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: true },
+    BXOR_ASSIGN: { text: "^=",  linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: false, isBitwise: true },
+    SHL_ASSIGN:  { text: "<<=", linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: true,  isBitwise: false },
+    SHR_ASSIGN:  { text: ">>=", linearity: Linearity.LINEAR,       isAssign: true,  isCompare: false, isLogical: false, isShift: true,  isBitwise: false },
+  });
+  const UnOp = Object.freeze({
+    OP_PRE_INC:  { text: "++",  linearity: Linearity.LINEAR,       isIncDec: true,  isAddr: false, isDeref: false },
+    OP_PRE_DEC:  { text: "--",  linearity: Linearity.LINEAR,       isIncDec: true,  isAddr: false, isDeref: false },
+    OP_POST_INC: { text: "++",  linearity: Linearity.LINEAR,       isIncDec: true,  isAddr: false, isDeref: false },
+    OP_POST_DEC: { text: "--",  linearity: Linearity.LINEAR,       isIncDec: true,  isAddr: false, isDeref: false },
+    // Address-take produces identity (the address is observable).
+    OP_ADDR:     { text: "&",   linearity: Linearity.AFFINE,       isIncDec: false, isAddr: true,  isDeref: false },
+    // Memory read; treated as pure at this level (no volatile model).
+    OP_DEREF:    { text: "*",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: true },
+    OP_POS:      { text: "+",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: false },
+    OP_NEG:      { text: "-",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: false },
+    OP_BNOT:     { text: "~",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: false },
+    OP_LNOT:     { text: "!",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: false },
+  });
+
   class EBinary extends Expr {
-    constructor(type, op, left, right) { super(Types.ExprKind.BINARY, type); this.op = op; this.left = left; this.right = right; Object.seal(this); }
+    constructor(loc, type, op, left, right) {
+      const meta = BinOp[op];
+      if (!meta) throw new Error(`EBinary: unknown op '${op}' (typo? known: ${Object.keys(BinOp).join(", ")})`);
+      super(loc, type, [left, right], meta.linearity);
+      this.op = op; this.left = left; this.right = right;
+      Object.freeze(this);
+    }
+    _withChildren([left, right]) { return new EBinary(this.loc, this.type, this.op, left, right); }
   }
   class EUnary extends Expr {
-    constructor(type, op, operand) { super(Types.ExprKind.UNARY, type); this.op = op; this.operand = operand; Object.seal(this); }
+    constructor(loc, type, op, operand) {
+      const meta = UnOp[op];
+      if (!meta) throw new Error(`EUnary: unknown op '${op}' (typo? known: ${Object.keys(UnOp).join(", ")})`);
+      super(loc, type, [operand], meta.linearity);
+      this.op = op; this.operand = operand;
+      Object.freeze(this);
+    }
+    _withChildren([operand]) { return new EUnary(this.loc, this.type, this.op, operand); }
   }
   class ETernary extends Expr {
-    constructor(type, condition, thenExpr, elseExpr) { super(Types.ExprKind.TERNARY, type); this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr; Object.seal(this); }
+    constructor(loc, type, condition, thenExpr, elseExpr) {
+      // Control flow: only one branch evaluates. Conservative LINEAR.
+      super(loc, type, [condition, thenExpr, elseExpr], Linearity.LINEAR);
+      this.condition = condition; this.thenExpr = thenExpr; this.elseExpr = elseExpr;
+      Object.freeze(this);
+    }
+    _withChildren([condition, thenExpr, elseExpr]) {
+      return new ETernary(this.loc, this.type, condition, thenExpr, elseExpr);
+    }
   }
   class ECall extends Expr {
-    constructor(type, callee, args, funcDecl) { super(Types.ExprKind.CALL, type); this.callee = callee; this.arguments = args; this.funcDecl = funcDecl || null; Object.seal(this); }
+    // The result type is the function's return type (after array/function
+    // decay on the callee). For "this isn't actually callable" cases the
+    // parser also accepts (no separate diagnostic today), fall back to int —
+    // some downstream pass will report the real diagnostic.
+    //
+    // funcDecl is the DFunc that's directly being called, if the callee is
+    // a plain identifier resolving to one. For function-pointer expressions,
+    // funcDecl is null and the codegen emits an indirect call.
+    constructor(loc, callee, args) {
+      // The parser wraps the callee in EDecay so callee.type is the
+      // decayed pointer-to-function type. Synthesized callers (setjmp/
+      // longjmp lowering) do the same.
+      const calleeType = callee.type;
+      let returnType = Types.TINT;
+      if (calleeType.kind === Types.TypeKind.POINTER &&
+          calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
+        returnType = calleeType.baseType.returnType;
+      }
+      super(loc, returnType, [callee, ...args], Linearity.LINEAR);
+      this.callee = callee;
+      this.arguments = args;
+      // Look through EDecay so direct calls to a function name still
+      // resolve to a DFunc decl (vs. an indirect call through a pointer).
+      const inner = callee instanceof EDecay ? callee.operand : callee;
+      this.funcDecl = (inner instanceof EIdent && inner.decl instanceof DFunc)
+        ? inner.decl : null;
+      Object.freeze(this);
+    }
+    _withChildren([callee, ...args]) { return new ECall(this.loc, callee, args); }
   }
   class ESubscript extends Expr {
-    constructor(type, array, index) { super(Types.ExprKind.SUBSCRIPT, type); this.array = array; this.index = index; Object.seal(this); }
+    constructor(loc, type, array, index) {
+      // Pure indexed read at this level — no side effect, deterministic.
+      super(loc, type, [array, index], Linearity.UNRESTRICTED);
+      this.array = array; this.index = index;
+      Object.freeze(this);
+    }
+    _withChildren([array, index]) { return new ESubscript(this.loc, this.type, array, index); }
   }
   class EMember extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(Types.ExprKind.MEMBER, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(loc, type, base, memberDecl) {
+      if (!memberDecl) throw new Error(`EMember: memberDecl is required (use makeMember to look up by name)`);
+      // Pure field read.
+      super(loc, type, [base], Linearity.UNRESTRICTED);
+      this.base = base;
+      this.memberDecl = memberDecl;
+      Object.freeze(this);
+    }
+    _withChildren([base]) { return new EMember(this.loc, this.type, base, this.memberDecl); }
   }
   class EArrow extends Expr {
-    constructor(type, base, memberName, memberDecl) { super(Types.ExprKind.ARROW, type); this.base = base; this.memberName = memberName; this.memberDecl = memberDecl || null; Object.seal(this); }
+    constructor(loc, type, base, memberDecl) {
+      if (!memberDecl) throw new Error(`EArrow: memberDecl is required (use makeArrow to look up by name)`);
+      // Pure indirect field read.
+      super(loc, type, [base], Linearity.UNRESTRICTED);
+      this.base = base;
+      this.memberDecl = memberDecl;
+      Object.freeze(this);
+    }
+    _withChildren([base]) { return new EArrow(this.loc, this.type, base, this.memberDecl); }
   }
   class ECast extends Expr {
-    constructor(type, targetType, expr) { super(Types.ExprKind.CAST, type); this.targetType = targetType; this.expr = expr; Object.seal(this); }
+    constructor(loc, type, targetType, expr) {
+      super(loc, type, [expr], Linearity.UNRESTRICTED);
+      this.targetType = targetType; this.expr = expr;
+      Object.freeze(this);
+    }
+    _withChildren([expr]) { return new ECast(this.loc, this.type, this.targetType, expr); }
   }
+  // sizeof / _Alignof don't evaluate their expression operand — children
+  // is empty so its linearity doesn't propagate.
   class ESizeofExpr extends Expr {
-    constructor(type, expr) { super(Types.ExprKind.SIZEOF_EXPR, type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) {
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.expr = expr;
+      Object.freeze(this);
+    }
   }
   class ESizeofType extends Expr {
-    constructor(type, operandType) { super(Types.ExprKind.SIZEOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
+    constructor(loc, type, operandType) {
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.operandType = operandType;
+      Object.freeze(this);
+    }
   }
   class EAlignofExpr extends Expr {
-    constructor(type, expr) { super(Types.ExprKind.ALIGNOF_EXPR, type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) {
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.expr = expr;
+      Object.freeze(this);
+    }
   }
   class EAlignofType extends Expr {
-    constructor(type, operandType) { super(Types.ExprKind.ALIGNOF_TYPE, type); this.operandType = operandType; Object.seal(this); }
+    constructor(loc, type, operandType) {
+      super(loc, type, [], Linearity.UNRESTRICTED);
+      this.operandType = operandType;
+      Object.freeze(this);
+    }
   }
   class EComma extends Expr {
-    constructor(type, expressions) { super(Types.ExprKind.COMMA, type); this.expressions = expressions; Object.seal(this); }
+    constructor(loc, type, expressions) {
+      // Sequencing — each subexpression evaluates in order.
+      super(loc, type, expressions, Linearity.LINEAR);
+      this.expressions = expressions;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) { return new EComma(this.loc, this.type, newChildren); }
   }
+  // EInitList stays seal-only because normalizeInitList still mutates
+  // `unionMemberIndex` in place when designators select a non-default
+  // union member during the stack-based traversal. The `.type` mutation
+  // was lifted out (normalize returns a fresh EInitList for that), but
+  // `unionMemberIndex` writes happen through `top.output` references
+  // mid-traversal and would require restructuring the whole walk to
+  // remove. Acceptable trade-off — the refactor is bounded but not
+  // earned today.
   class EInitList extends Expr {
-    constructor(type, elements, designators, unionMemberIndex) {
-      super(Types.ExprKind.INIT_LIST, type);
-      this.elements = elements; this.designators = designators || [];
+    constructor(loc, type, elements, designators, unionMemberIndex) {
+      super(loc, type, elements, Linearity.UNRESTRICTED);
+      this.elements = elements;  // same ref as this.children
+      this.designators = designators || [];
       this.unionMemberIndex = unionMemberIndex ?? -1;
       Object.seal(this);
     }
+    _withChildren(newChildren) {
+      return new EInitList(this.loc, this.type, newChildren, this.designators, this.unionMemberIndex);
+    }
   }
   class EIntrinsic extends Expr {
-    constructor(type, ikind, args, argType) { super(Types.ExprKind.INTRINSIC, type); this.intrinsicKind = ikind; this.args = args; this.argType = argType || null; Object.seal(this); }
+    constructor(loc, type, ikind, args, argType) {
+      // Most intrinsics are calls (memory ops, va_arg, etc.).
+      super(loc, type, args, Linearity.LINEAR);
+      this.intrinsicKind = ikind; this.args = args;
+      this.argType = argType || null;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) {
+      return new EIntrinsic(this.loc, this.type, this.intrinsicKind, newChildren, this.argType);
+    }
   }
   class EWasm extends Expr {
-    constructor(type, args, bytes) { super(Types.ExprKind.WASM, type); this.args = args; this.bytes = bytes; Object.seal(this); }
+    constructor(loc, type, args, bytes) {
+      super(loc, type, args, Linearity.LINEAR);
+      this.args = args; this.bytes = bytes;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) {
+      return new EWasm(this.loc, this.type, newChildren, this.bytes);
+    }
   }
+  // ECompoundLiteral represents `(T){...}` — an aggregate-typed
+  // allocation with observable identity (its storage address is taken).
+  // Bubbles itself up via `referencedCompoundLiterals` so codegen can
+  // discover all live compound literals from the AST shape rather than
+  // a parser-side list — that lets INLINER replace nodes via
+  // `_withChildren` without breaking layout (the bag picks up whatever
+  // node is current at codegen time).
   class ECompoundLiteral extends Expr {
-    constructor(type, initList) { super(Types.ExprKind.COMPOUND_LITERAL, type); this.initList = initList; Object.seal(this); }
+    constructor(loc, type, initList) {
+      // Allocation has identity (the storage's address is observable).
+      super(loc, type, [initList], Linearity.AFFINE);
+      this.initList = initList;
+      Object.freeze(this);
+    }
+    _withChildren([initList]) { return new ECompoundLiteral(this.loc, this.type, initList); }
+    get referencedCompoundLiterals() {
+      return new TreeBag([this], this.initList.referencedCompoundLiterals);
+    }
   }
   class EImplicitCast extends Expr {
-    constructor(type, expr) { super(Types.ExprKind.IMPLICIT_CAST, type); this.expr = expr; Object.seal(this); }
+    constructor(loc, type, expr) {
+      super(loc, type, [expr], Linearity.UNRESTRICTED);
+      this.expr = expr;
+      Object.freeze(this);
+    }
+    _withChildren([expr]) { return new EImplicitCast(this.loc, this.type, expr); }
+  }
+  // Array→pointer or function→pointer decay. The operand has array or
+  // function type; the EDecay node has the corresponding decayed pointer type.
+  // Codegen for EDecay just emits the operand (which already produces the
+  // base address for arrays / table index for functions).
+  class EDecay extends Expr {
+    constructor(loc, type, operand) {
+      super(loc, type, [operand], Linearity.UNRESTRICTED);
+      this.operand = operand;
+      Object.freeze(this);
+    }
+    _withChildren([operand]) { return new EDecay(this.loc, this.type, operand); }
   }
   class EGCNew extends Expr {
-    constructor(type, args) { super(Types.ExprKind.GC_NEW, type); this.args = args; Object.seal(this); }
+    constructor(loc, type, args) {
+      // GC allocation produces a fresh ref with identity.
+      super(loc, type, args, Linearity.AFFINE);
+      this.args = args;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) { return new EGCNew(this.loc, this.type, newChildren); }
   }
 
   // --- Stmt subclasses ---
+  // Most are frozen at construction. SLabel / SGoto stay seal-only because
+  // their fields get filled in during the parser's goto-resolution pass.
   class SExpr extends Stmt {
-    constructor(expr) { super(Types.StmtKind.EXPR); this.expr = expr; Object.seal(this); }
+    constructor(loc, expr) { super(loc, [expr]); this.expr = expr; Object.freeze(this); }
+    _withChildren([expr]) { return new SExpr(this.loc, expr); }
   }
+  // SDecl bubble-up needs to reach into each DVar's initExpr — the
+  // declarations array isn't structurally `children` (DVars aren't
+  // Expr/Stmt) but their initializers can reference functions.
   class SDecl extends Stmt {
-    constructor(declarations) { super(Types.StmtKind.DECL); this.declarations = declarations; Object.seal(this); }
+    constructor(loc, declarations) {
+      const initExprs = [];
+      for (const d of declarations) {
+        if (d instanceof DVar && d.initExpr) initExprs.push(d.initExpr);
+      }
+      super(loc, initExprs);
+      this.declarations = declarations;
+      Object.freeze(this);
+    }
+    _withChildren(_) { return this; /* DVars are mutated in place; children mirror initExprs */ }
   }
   class SCompound extends Stmt {
-    constructor(statements, labels) { super(Types.StmtKind.COMPOUND); this.statements = statements; this.labels = labels || []; Object.seal(this); }
+    constructor(loc, statements, labels) {
+      super(loc, statements);
+      this.statements = statements;
+      this.labels = labels || [];
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) { return new SCompound(this.loc, newChildren, this.labels); }
   }
   class SIf extends Stmt {
-    constructor(condition, thenBranch, elseBranch) { super(Types.StmtKind.IF); this.condition = condition; this.thenBranch = thenBranch; this.elseBranch = elseBranch || null; Object.seal(this); }
+    constructor(loc, condition, thenBranch, elseBranch) {
+      const kids = [condition, thenBranch];
+      if (elseBranch) kids.push(elseBranch);
+      super(loc, kids);
+      this.condition = condition;
+      this.thenBranch = thenBranch;
+      this.elseBranch = elseBranch || null;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) {
+      const [cond, then_, else_] = newChildren;
+      return new SIf(this.loc, cond, then_, else_ || null);
+    }
   }
   class SWhile extends Stmt {
-    constructor(condition, body) { super(Types.StmtKind.WHILE); this.condition = condition; this.body = body; Object.seal(this); }
+    constructor(loc, condition, body) {
+      super(loc, [condition, body]);
+      this.condition = condition; this.body = body;
+      Object.freeze(this);
+    }
+    _withChildren([cond, body]) { return new SWhile(this.loc, cond, body); }
   }
   class SDoWhile extends Stmt {
-    constructor(body, condition) { super(Types.StmtKind.DO_WHILE); this.body = body; this.condition = condition; Object.seal(this); }
+    constructor(loc, body, condition) {
+      super(loc, [body, condition]);
+      this.body = body; this.condition = condition;
+      Object.freeze(this);
+    }
+    _withChildren([body, cond]) { return new SDoWhile(this.loc, body, cond); }
   }
   class SFor extends Stmt {
-    constructor(init, condition, increment, body) { super(Types.StmtKind.FOR); this.init = init; this.condition = condition; this.increment = increment; this.body = body; Object.seal(this); }
+    constructor(loc, init, condition, increment, body) {
+      const kids = [];
+      if (init) kids.push(init);
+      if (condition) kids.push(condition);
+      if (increment) kids.push(increment);
+      kids.push(body);
+      super(loc, kids);
+      this.init = init || null;
+      this.condition = condition || null;
+      this.increment = increment || null;
+      this.body = body;
+      Object.freeze(this);
+    }
+    // Reconstruct from named slots — the children array's shape varies
+    // (3, 4, or 5 slots depending on which optional clauses were present).
+    _withChildren(_) {
+      throw new Error(`SFor._withChildren: rebuild via the named-arg constructor instead`);
+    }
   }
   class SBreak extends Stmt {
-    constructor() { super(Types.StmtKind.BREAK); Object.seal(this); }
+    constructor(loc) { super(loc); Object.freeze(this); }
   }
   class SContinue extends Stmt {
-    constructor() { super(Types.StmtKind.CONTINUE); Object.seal(this); }
+    constructor(loc) { super(loc); Object.freeze(this); }
   }
   class SReturn extends Stmt {
-    constructor(expr) { super(Types.StmtKind.RETURN); this.expr = expr || null; Object.seal(this); }
+    constructor(loc, expr) {
+      super(loc, expr ? [expr] : []);
+      this.expr = expr || null;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) {
+      return new SReturn(this.loc, newChildren.length > 0 ? newChildren[0] : null);
+    }
   }
   class SSwitch extends Stmt {
-    constructor(expr, cases, body, loc) { super(Types.StmtKind.SWITCH); this.expr = expr; this.cases = cases; this.body = body; this.loc = loc || null; Object.seal(this); }
+    constructor(loc, expr, cases, body) {
+      super(loc, [expr, body]);
+      this.expr = expr; this.cases = cases; this.body = body;
+      Object.freeze(this);
+    }
+    _withChildren([expr, body]) { return new SSwitch(this.loc, expr, this.cases, body); }
   }
+  // SGoto and SLabel are seal-only (not frozen) because the parser
+  // backfills `target` (when a forward goto's label is later defined)
+  // and updates `labelKind` / `hasGotos` as gotos are resolved.
   class SGoto extends Stmt {
-    constructor(label) { super(Types.StmtKind.GOTO); this.label = label; this.target = null; this.loc = null; Object.seal(this); }
+    constructor(loc, label) { super(loc); this.label = label; this.target = null; Object.seal(this); }
   }
   class SLabel extends Stmt {
-    constructor(name, enclosingBlock) { super(Types.StmtKind.LABEL); this.name = name; this.enclosingBlock = enclosingBlock || null; this.labelKind = Types.LabelKind.FORWARD; this.hasGotos = false; this.isSwitchLevel = false; Object.seal(this); }
+    constructor(loc, name, enclosingBlock) { super(loc); this.name = name; this.enclosingBlock = enclosingBlock || null; this.labelKind = Types.LabelKind.FORWARD; this.hasGotos = false; this.isSwitchLevel = false; Object.seal(this); }
   }
   class SEmpty extends Stmt {
-    constructor() { super(Types.StmtKind.EMPTY); Object.seal(this); }
+    constructor(loc) { super(loc); Object.freeze(this); }
   }
+  // STryCatch's catches are { tag, bindings, body } objects — body is a
+  // Stmt and bubbles, so include each catch body in children.
   class STryCatch extends Stmt {
-    constructor(tryBody, catches) { super(Types.StmtKind.TRY_CATCH); this.tryBody = tryBody; this.catches = catches; Object.seal(this); }
+    constructor(loc, tryBody, catches) {
+      const kids = [tryBody, ...catches.map(c => c.body)];
+      super(loc, kids);
+      this.tryBody = tryBody; this.catches = catches;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) {
+      const newTry = newChildren[0];
+      const newCatches = this.catches.map((c, i) => ({ ...c, body: newChildren[i + 1] }));
+      return new STryCatch(this.loc, newTry, newCatches);
+    }
   }
   class SThrow extends Stmt {
-    constructor(tag, args) { super(Types.StmtKind.THROW); this.tag = tag; this.args = args; Object.seal(this); }
+    constructor(loc, tag, args) {
+      super(loc, args);
+      this.tag = tag; this.args = args;
+      Object.freeze(this);
+    }
+    _withChildren(newChildren) { return new SThrow(this.loc, this.tag, newChildren); }
   }
+
+// ---------- AST traversal / rewrite ----------
+//
+// walkExpr(expr, visit) walks the tree pre-order. The visitor returns:
+//   - undefined  → keep recursing into children
+//   - some node  → replace this subtree with the returned node (children
+//                  of the replacement are NOT visited automatically;
+//                  the visitor can call walkExpr on the replacement
+//                  recursively if it wants that)
+// If any child changed during recursion, the parent is rebuilt via
+// `_withChildren(newChildren)`. Identity-preserving on no-change paths,
+// so allocation stays O(changed).
+
+function walkExpr(expr, visit) {
+  if (!expr) return expr;
+  const replaced = visit(expr);
+  if (replaced !== undefined) return replaced;
+  const kids = expr.children;
+  if (!kids || kids.length === 0) return expr;
+  let changed = false;
+  const newKids = new Array(kids.length);
+  for (let i = 0; i < kids.length; i++) {
+    const w = walkExpr(kids[i], visit);
+    if (w !== kids[i]) changed = true;
+    newKids[i] = w;
+  }
+  return changed ? expr._withChildren(newKids) : expr;
+}
+
+// Substitute parameter references in an expression. `paramMap` maps
+// DVar instances (the function's parameter decls) to expression
+// replacements (the call's argument expressions). Used by the inliner
+// to rewrite a function body for substitution at a call site.
+function substituteParams(expr, paramMap) {
+  return walkExpr(expr, node => {
+    if (node instanceof EIdent && node.decl && paramMap.has(node.decl)) {
+      return paramMap.get(node.decl);
+    }
+    return undefined;
+  });
+}
+
+// ---------- AST builders that apply C semantics ----------
+//
+// These take "raw" inputs (the things the parser literally has at hand:
+// callee + args, op + operands, etc.) and return a node with the
+// C-standard conversions already inserted: array/function decay,
+// implicit casts to the target type, default-argument promotions, etc.
+//
+// Constructors stay dumb (no implicit insertions). The make* helpers are
+// the canonical place to build correct nodes — useful for the parser, AST
+// rewriters, and any future pass that synthesizes calls/binops/etc.
+//
+// Diagnostics: callers pass a `report(loc, msg)` callback. The helpers
+// don't throw — they report and proceed with the best-effort node, so
+// callers can decide whether errors are fatal or recoverable.
+
+// True if `srcType` flows into `targetType` under C99 §6.5.16.1
+// (simple-assignment compatibility — the "as if by assignment" rules
+// the spec invokes for function args, return values, and init exprs).
+//
+// Covers:
+//   - same type (post qualifier strip)
+//   - both arithmetic (numeric promotion / narrowing)
+//   - target _Bool + source pointer
+//   - both pointers, with compatible bases OR either is void*
+//   - target pointer + source null-pointer constant
+//   - both struct/union of compatible types
+//   - ref-target rules (same ref, NPC → ref, arithmetic → __eqref boxing)
+//   - divergent absorbs (error recovery)
+//
+// `expr` is consulted only for the null-pointer-constant cases; pass
+// it when the source expression is available, otherwise null.
+function typesAreAssignmentCompatible(srcType, targetType, expr) {
+  const s = srcType.removeQualifiers();
+  const t = targetType.removeQualifiers();
+  if (s === t) return true;
+  // Divergent (parser error recovery) absorbs — don't cascade complaints.
+  if (s.isDivergent() || t.isDivergent()) return true;
+  // Voids: assignment to void shouldn't happen at well-formed sites,
+  // but tolerate so we don't double-error after a real error elsewhere.
+  if (s.isVoid() || t.isVoid()) return true;
+  // TAUTO is the C23 placeholder type; auto-resolution should have
+  // replaced it before we reach a flow site, but `const auto` slips
+  // past one branch of the resolver — tolerate it here so the user
+  // sees the actual auto-related error rather than a confusing cast
+  // error on the placeholder.
+  if (s === Types.TAUTO || t === Types.TAUTO) return true;
+  // C99 6.5.16.1: arithmetic types convert freely under assignment.
+  if (s.isArithmetic() && t.isArithmetic()) return true;
+  // _Bool ← any pointer (truthiness).
+  if (t === Types.TBOOL && s.isPointer()) return true;
+  // Pointers ↔ pointers (C99 6.5.16.1): the target's pointee must carry
+  // every qualifier the source's pointee has (you can ADD const, not
+  // drop it), and unqualified pointee types must match structurally.
+  if (s.isPointer() && t.isPointer()) {
+    const sBase = s.baseType, tBase = t.baseType;
+    if (sBase.isVoid() || tBase.isVoid()) return true;
+    if (sBase.isConst && !tBase.isConst) return false;
+    if (sBase.isVolatile && !tBase.isVolatile) return false;
+    if (sBase.removeQualifiers().isCompatibleWith(tBase.removeQualifiers())) return true;
+    return false;
+  }
+  // Pointer target ← null pointer constant (literal 0, casts of 0).
+  if (t.isPointer() && expr && isNullPointerConstant(expr)) return true;
+  // Struct/union ← compatible struct/union.
+  if ((s.isStruct() || s.isUnion()) && (t.isStruct() || t.isUnion())) {
+    return s.isCompatibleWith(t);
+  }
+  // Ref-target rules. (rejectNonZeroToRef enforces a subset; we mirror
+  // it here so the predicate is the single gate.)
+  if (t.isRef()) {
+    if (s.isRef()) {
+      if (s.isCompatibleWith(t)) return true;
+      // refextern (non-nullable) widens to externref (nullable). Going
+      // the other direction would erase the nullability invariant.
+      if (s === Types.TREFEXTERN && t === Types.TEXTERNREF) return true;
+      // GC struct inheritance: a Dog ref flows into an Animal ref if
+      // Animal is an ancestor in the parentType chain.
+      if (s.isGCStruct() && t.isGCStruct()) {
+        for (let p = s.parentType; p; p = p.parentType) {
+          if (p === t) return true;
+        }
+      }
+      // Any GC ref widens to __eqref (top of the GC lattice).
+      if (t === Types.TEQREF && (s.isGCStruct() || s.isGCArray())) return true;
+      return false;
+    }
+    if (expr && isNullPointerConstant(expr)) return true;
+    if (t === Types.TEQREF && s.isArithmetic()) return true;
+    return false;
+  }
+  // Anything left: ref → non-ref, mismatched aggregates, etc. — reject.
+  return false;
+}
+
+// True if `t` is legal in a "controlling expression" position
+// (C99 §6.8.4.1, §6.8.5.1-3, §6.5.15.2, §6.5.3.3 — `if` / `while` /
+// `do-while` / `for` / `?:` / `!`). Standard C requires scalar; we
+// extend with refs (compiler extension: `if (gc_ref)` is sugar for
+// `__ref_is_null` semantics, just as we already allow `!gc_ref`).
+function isBoolContextType(t) {
+  const u = t.removeQualifiers();
+  return u.isDivergent() || u.isScalar() || u.isRef();
+}
+
+// True if `leftType` and `rightType` are a legal operand pair for the
+// given binary op. Catches operator-illegal combinations the C standard
+// forbids regardless of any implicit conversion (e.g. bitwise ops on
+// floats, struct + struct, ptr + ptr). Called from `makeBinary` BEFORE
+// the cast/conversion logic — if it fails we report and skip the rest
+// to avoid downstream "incompatible types" cascades.
+//
+// Compound assigns (X_ASSIGN) defer to the underlying op's rules.
+// Ref operands are tolerated here — the caller's ref-specific block
+// handles them with its own per-op messages.
+function typesAreOperandCompatible(op, leftType, rightType) {
+  const meta = AST.BinOp[op];
+  if (!meta) return true;
+  const l = leftType.removeQualifiers();
+  const r = rightType.removeQualifiers();
+  // Divergent absorbs (parser error recovery).
+  if (l.isDivergent() || r.isDivergent()) return true;
+  // Refs: defer to the ref-specific handling already in makeBinary.
+  if (l.isRef() || r.isRef()) return true;
+  // ASSIGN: assignment-compatibility is the relevant rule, checked
+  // separately at the call site via typesAreAssignmentCompatible.
+  if (op === "ASSIGN") return true;
+  // Compound assigns: evaluate as the underlying arithmetic/bitwise op.
+  if (meta.isAssign) {
+    return typesAreOperandCompatible(op.replace("_ASSIGN", ""), leftType, rightType);
+  }
+  // Bitwise / shift: integer operands only.
+  if (meta.isBitwise || meta.isShift) {
+    return l.isInteger() && r.isInteger();
+  }
+  // Logical && / ||: scalar (testable as bool).
+  if (meta.isLogical) return l.isScalar() && r.isScalar();
+  // MUL / DIV: both arithmetic. MOD: integer-only (% on float is
+  // disallowed; fmod is a function).
+  if (op === "MUL" || op === "DIV") return l.isArithmetic() && r.isArithmetic();
+  if (op === "MOD") return l.isInteger() && r.isInteger();
+  // ADD: both arithmetic, or one pointer/array and one integer.
+  if (op === "ADD") {
+    if (l.isArithmetic() && r.isArithmetic()) return true;
+    if ((l.isPointer() || l.isArray()) && r.isInteger()) return true;
+    if ((r.isPointer() || r.isArray()) && l.isInteger()) return true;
+    return false;
+  }
+  // SUB: both arithmetic, or pointer-int, or pointer-pointer (same base).
+  if (op === "SUB") {
+    if (l.isArithmetic() && r.isArithmetic()) return true;
+    if ((l.isPointer() || l.isArray()) && r.isInteger()) return true;
+    if ((l.isPointer() || l.isArray()) && (r.isPointer() || r.isArray())) {
+      return l.baseType.removeQualifiers().isCompatibleWith(r.baseType.removeQualifiers());
+    }
+    return false;
+  }
+  // Comparisons.
+  if (meta.isCompare) {
+    if (l.isArithmetic() && r.isArithmetic()) return true;
+    if (l.isPointer() && r.isPointer()) return true;
+    // EQ/NE: pointer + integer is allowed only via NPC; that case is
+    // handled by typesAreAssignmentCompatible at the cast site. We
+    // tolerate it here so the assignment-compat path can give the
+    // canonical NPC message without cascading.
+    if (op === "EQ" || op === "NE") {
+      if ((l.isPointer() && r.isInteger()) || (r.isPointer() && l.isInteger())) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+// Wrap an expression in EImplicitCast at the target type. Pass-through
+// when the source already matches the target after qualifier strip,
+// or when either side is void / divergent. Validates assignment
+// compatibility — `reportError` (not fatal) on mismatch and pass the
+// expression through unwrapped, so cascading damage is bounded.
+function maybeImplicitCast(expr, targetType) {
+  targetType = targetType.removeQualifiers();
+  const srcType = expr.type.removeQualifiers();
+  if (srcType === targetType) return expr;
+  if (targetType.isVoid() || srcType.isVoid()) return expr;
+  // Divergent (recovery from a parser error) absorbs — don't wrap.
+  if (srcType.isDivergent() || targetType.isDivergent()) return expr;
+  if (!typesAreAssignmentCompatible(srcType, targetType, expr)) {
+    // Specialize the message for non-ref → ref (the old rejectNonZeroToRef
+    // case) — the user almost certainly wants either __cast or __ref_null.
+    if (targetType.isRef() && !srcType.isRef()) {
+      reportError(expr.loc,
+        `cannot convert '${srcType.toString()}' to reference type '${targetType.toString()}' (use __cast(${targetType.toString()}, x) for an explicit conversion, or __ref_null for null)`);
+    } else {
+      reportError(expr.loc,
+        `incompatible types: cannot implicitly convert '${srcType.toString()}' to '${targetType.toString()}'`);
+    }
+    return expr;
+  }
+  return new EImplicitCast(expr.loc, targetType, expr);
+}
+
+// Wrap an expression in EDecay if its type is array or function.
+// Pass-through otherwise.
+function maybeDecay(expr) {
+  const t = expr.type;
+  if (t.isArray() || t.isFunction()) return new EDecay(expr.loc, t.decay(), expr);
+  return expr;
+}
+
+// True if `expr` is a null pointer constant (literal 0, possibly wrapped
+// in casts to void* / similar).
+function isNullPointerConstant(expr) {
+  if (!expr) return false;
+  if (expr instanceof EInt && expr.value === 0n) return true;
+  if (expr instanceof EImplicitCast || expr instanceof ECast) {
+    return isNullPointerConstant(expr.expr);
+  }
+  return false;
+}
+
+// Reject a non-zero non-ref source flowing into a ref target. Allowed:
+// null pointer constant, prim → __eqref auto-box. Anything else needs an
+// explicit __cast.
+function rejectNonZeroToRef(targetType, expr, loc) {
+  if (!expr || !targetType) return;
+  const t = targetType.removeQualifiers();
+  const s = expr.type.removeQualifiers();
+  if (!t.isRef() || s.isRef()) return;
+  if (isNullPointerConstant(expr)) return;
+  if (t === Types.TEQREF && s.isArithmetic()) return;
+  reportError(loc,
+    `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (use __cast(${targetType.toString()}, x) for an explicit conversion, or __ref_null for null)`);
+}
+
+// Pointer arithmetic: given the operand types of a binary `+`/`-`,
+// return the pointee element type if one side is a pointer/array (the
+// other being an integer), or null if it's not pointer arithmetic.
+// Used by both constEval and codegen to consistently identify the
+// pointee whose size scales the integer operand.
+function pointerArithElemType(leftType, rightType) {
+  const l = leftType.removeQualifiers();
+  const r = rightType.removeQualifiers();
+  if (l.isPointer() || l.isArray()) return l.baseType;
+  if (r.isPointer() || r.isArray()) return r.baseType;
+  return null;
+}
+
+// C99 6.3.1.1: integer promotions for bitfield expressions. A bitfield
+// member smaller than int promotes to int (or unsigned int if it can't
+// be represented as int). Non-bitfield expressions promote to themselves.
+function promoteExprType(e) {
+  const t = e.type;
+  let bf = null;
+  if ((e instanceof EMember || e instanceof EArrow) && e.memberDecl.bitWidth >= 0) {
+    bf = e.memberDecl;
+  }
+  if (bf) {
+    const bw = bf.bitWidth;
+    const uq = t.removeQualifiers();
+    const isSigned = uq === Types.TINT || uq === Types.TLONG || uq === Types.TSHORT || uq === Types.TSCHAR || uq === Types.TCHAR;
+    if (isSigned || bw < 32) return Types.TINT;
+    return Types.TUINT;
+  }
+  return t;
+}
+
+// Result type of a binary expression. Operands must be already decayed
+// (so array types never reach here) and bitfield-promoted (so small
+// types are already TINT/TUINT).
+function computeBinaryType(op, leftType, rightType) {
+  // Divergent absorbs — propagate so further ops on it stay sound.
+  if (leftType.isDivergent() || rightType.isDivergent()) return Types.TDIVERGENT;
+  const meta = AST.BinOp[op];
+  // Comparison and logical operators return int.
+  if (meta.isCompare || meta.isLogical) return Types.TINT;
+  // Assignment operators return left type.
+  if (meta.isAssign) return leftType;
+  // Shift operators: result type is the promoted left operand type (C99 6.5.7).
+  if (meta.isShift) {
+    const uq = leftType.removeQualifiers();
+    if (uq === Types.TCHAR || uq === Types.TSCHAR || uq === Types.TUCHAR ||
+        uq === Types.TSHORT || uq === Types.TUSHORT || uq === Types.TBOOL) {
+      return Types.TINT;
+    }
+    return uq;
+  }
+  // Pointer arithmetic.
+  if (leftType.isPointer() && rightType.isInteger()) return leftType;
+  if (rightType.isPointer() && leftType.isInteger() && op === "ADD") return rightType;
+  if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return Types.TLONG;
+  return Types.usualArithmeticConversions(leftType, rightType);
+}
+
+// Build an EBinary, applying C semantics:
+//   - reject ref-incompatible operators
+//   - reject non-null int → ref on ASSIGN; reject any compound-assign on ref
+//   - decay array/function operands (left only when not an assignment target)
+//   - compute the result type via C99 promotion + usual arithmetic conversions
+//   - insert implicit casts on operands to the common operation type
+//
+// `op` is the AST op string ("ADD", "SUB", "ASSIGN", "ADD_ASSIGN", ...).
+// `loc` is typically the left operand's loc to match how chained binops
+// report (the whole-expression start). Type-error diagnostics use
+// `fatalError` so parsing halts at the first one, matching the parser's
+// historic behavior.
+function makeBinary(loc, op, left, right) {
+  const meta = AST.BinOp[op];
+  if (!meta) throw new Error(`makeBinary: unknown op '${op}'`);
+  const opText = meta.text;
+  const lIsRef = left.type.removeQualifiers().isRef();
+  const rIsRef = right.type.removeQualifiers().isRef();
+  // Refs: only ==, !=, &&, ||, ASSIGN are allowed.
+  if (lIsRef || rIsRef) {
+    if (op === "LT" || op === "GT" || op === "LE" || op === "GE") {
+      fatalError(loc, `'${opText}' on reference type is not allowed (only ==, != for identity/null)`);
+    }
+    // Arithmetic / shift / bitwise on refs is meaningless.
+    if (op === "ADD" || op === "SUB" || op === "MUL" || op === "DIV" ||
+        op === "MOD" || meta.isShift || meta.isBitwise) {
+      fatalError(loc, `'${opText}' on reference type is not allowed`);
+    }
+    // == / != involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
+    if (meta.isCompare && (op === "EQ" || op === "NE")) {
+      if (lIsRef !== rIsRef && !isNullPointerConstant(lIsRef ? right : left)) {
+        fatalError(loc,
+          `'${opText}' between reference and non-reference requires the non-ref operand to be the literal 0 / NULL`);
+      }
+    }
+  }
+  // Compound assignment on ref: not allowed.
+  if (lIsRef && meta.isAssign && op !== "ASSIGN") {
+    fatalError(loc, `'${opText}' on reference type is not allowed`);
+  }
+  // Decay array/function operands. ASSIGN/compound's left is the lvalue
+  // target — never decayed. ASSIGN's right decays only if the left is a
+  // pointer (so `p = arr` works).
+  const isPtrArith = (op === "ADD" || op === "SUB") &&
+    (left.type.isPointer() || right.type.isPointer() ||
+     left.type.isArray() || right.type.isArray());
+  if (!meta.isAssign) {
+    left = maybeDecay(left);
+    right = maybeDecay(right);
+  } else if (op === "ASSIGN" && left.type.isPointer()) {
+    right = maybeDecay(right);
+  }
+  // Operand-compat: catch operator-illegal type combinations BEFORE
+  // the cast/conversion logic. `int & float`, `struct + struct`,
+  // `int << ptr`, etc. — none of these are fixable by an implicit
+  // cast; reporting here gives a clean message and prevents downstream
+  // cascades. Refs and ASSIGN have their own specific handling above.
+  if (!typesAreOperandCompatible(op, left.type, right.type)) {
+    reportError(loc,
+      `invalid operands to binary '${opText}': '${left.type.toString()}' and '${right.type.toString()}'`);
+    return new EBinary(loc, Types.TDIVERGENT, op, left, right);
+  }
+  // ASSIGN: validate RHS is assignment-compatible with LHS. EImplicitCast
+  // isn't inserted on ASSIGN (codegen does the conversion), but we still
+  // need to enforce the rules — otherwise `ref = 5` etc. silently miscompiles.
+  if (op === "ASSIGN" &&
+      !typesAreAssignmentCompatible(right.type, left.type, right)) {
+    if (left.type.removeQualifiers().isRef() && !right.type.removeQualifiers().isRef()) {
+      reportError(loc,
+        `cannot convert '${right.type.toString()}' to reference type '${left.type.toString()}' (use __cast(${left.type.toString()}, x) for an explicit conversion, or __ref_null for null)`);
+    } else {
+      reportError(loc,
+        `incompatible types in assignment: cannot convert '${right.type.toString()}' to '${left.type.toString()}'`);
+    }
+  }
+  // Apply C99 6.3.1.1 integer promotions for bitfield operands.
+  const resType = computeBinaryType(op, promoteExprType(left), promoteExprType(right));
+  // Insert implicit casts on operands to the common op type. Skipped for:
+  //   - assignment ops (handled by lvalue context, not arithmetic)
+  //   - logical && / || (boolean coercion is per-operand, not common)
+  //   - pointer arithmetic (operand types are deliberately mixed)
+  //   - pointer comparisons (no implicit qualifier-stripping on pointee)
+  //   - ref operands (== / != on refs is identity, no conversion)
+  if (!meta.isAssign && !meta.isLogical) {
+    const leftType = left.type;
+    const rightType = right.type;
+    const involvesRef = leftType.removeQualifiers().isRef() ||
+                        rightType.removeQualifiers().isRef();
+    const involvesPtr = leftType.isPointer() || rightType.isPointer();
+    if (!isPtrArith && !involvesRef && !(meta.isCompare && involvesPtr)) {
+      const opType = meta.isCompare
+        ? Types.usualArithmeticConversions(leftType, rightType)
+        : resType;
+      left = maybeImplicitCast(left, opType);
+      right = maybeImplicitCast(right, opType);
+    }
+  }
+  return new EBinary(loc, resType, op, left, right);
+}
+
+// Mark `expr` as having its address taken — promotes the underlying
+// DVar from REGISTER to MEMORY allocation. Walks through EMember and
+// (for array elements) ESubscript to find the root storage.
+function markAddressTaken(expr) {
+  if (!expr) return;
+  if (expr instanceof EIdent) {
+    if (expr.decl && expr.decl instanceof DVar) {
+      expr.decl.allocClass = Types.AllocClass.MEMORY;
+    }
+  } else if (expr instanceof EMember) {
+    markAddressTaken(expr.base);
+  } else if (expr instanceof ESubscript) {
+    if (expr.array.type && expr.array.type.isArray()) {
+      markAddressTaken(expr.array);
+    }
+  }
+}
+
+// Build an EUnary, applying C semantics. Dispatches on `op`:
+//   OP_PRE_INC / OP_PRE_DEC / OP_POST_INC / OP_POST_DEC: reject ref operand
+//   OP_ADDR: reject bitfield-member, ref, GC struct field, GC array elem;
+//            mark the underlying decl as memory-allocated
+//   OP_DEREF: reject ref operand; decay array/function operand
+//   OP_POS / OP_NEG / OP_BNOT: reject ref operand
+//   OP_LNOT: ref allowed (boolean coercion sugar = __ref_is_null)
+function makeUnary(loc, op, operand) {
+  const isRef = operand.type && operand.type.removeQualifiers().isRef();
+  switch (op) {
+    case "OP_PRE_INC": case "OP_POST_INC":
+      if (isRef) fatalError(loc, `'++' on reference type is not allowed`);
+      break;
+    case "OP_PRE_DEC": case "OP_POST_DEC":
+      if (isRef) fatalError(loc, `'--' on reference type is not allowed`);
+      break;
+    case "OP_ADDR":
+      if ((operand instanceof EMember || operand instanceof EArrow) &&
+          operand.memberDecl.bitWidth >= 0) {
+        fatalError(loc, `Cannot take address of bit-field member '${operand.memberDecl.name}'`);
+      }
+      if (isRef) {
+        fatalError(loc, `Cannot take address of ${operand.type.removeQualifiers().kind} variable`);
+      }
+      if (operand instanceof EMember && operand.base && operand.base.type &&
+          operand.base.type.removeQualifiers().isGCStruct()) {
+        fatalError(loc, `cannot take address of GC struct field`);
+      }
+      if (operand instanceof ESubscript && operand.array && operand.array.type &&
+          operand.array.type.removeQualifiers().isGCArray()) {
+        fatalError(loc, `cannot take address of GC array element`);
+      }
+      markAddressTaken(operand);
+      break;
+    case "OP_DEREF":
+      if (isRef) {
+        fatalError(loc, `unary '*' on reference type '${operand.type.toString()}' is not allowed (use '->' for fields, or just access the ref directly)`);
+      }
+      operand = maybeDecay(operand);
+      break;
+    case "OP_POS":
+      if (isRef) fatalError(loc, `unary '+' on reference type is not allowed`);
+      break;
+    case "OP_NEG":
+      if (isRef) fatalError(loc, `unary '-' on reference type is not allowed`);
+      break;
+    case "OP_BNOT":
+      if (isRef) fatalError(loc, `unary '~' on reference type is not allowed`);
+      break;
+    case "OP_LNOT":
+      // Operand must be testable as bool — same rule as if/while/etc.
+      // Refs are allowed (sugar for __ref_is_null); structs/unions/
+      // void/arrays are not.
+      if (!isBoolContextType(operand.type)) {
+        reportError(loc,
+          `unary '!' requires a scalar operand, got '${operand.type.toString()}'`);
+      }
+      break;
+  }
+  return new EUnary(loc, Types.computeUnaryType(op, operand.type), op, operand);
+}
+
+// Build an SReturn, applying C semantics:
+//   - decay array/function expression
+//   - reject non-null int → ref when return type is a ref
+//   - implicit-cast to the function's return type
+// retType may be null (e.g., void function — caller passes null and the
+// expr is just attached as-is). expr may also be null for `return;`.
+function makeReturn(loc, expr, retType) {
+  // C99 §6.8.6.4: a `return` with no value in a non-void function and
+  // a `return EXPR;` in a void function are both constraint violations.
+  // (We tolerate `retType === null` callers, e.g. legacy/synthesized
+  // sites — they explicitly opt out by passing null.)
+  if (retType !== null) {
+    const rt = retType.removeQualifiers();
+    if (!expr && !rt.isVoid()) {
+      reportError(loc,
+        `non-void function returns no value (return type is '${retType.toString()}')`);
+    } else if (expr && rt.isVoid()) {
+      reportError(loc,
+        `void function should not return a value`);
+    }
+  }
+  if (!expr) return new SReturn(loc, null);
+  expr = maybeDecay(expr);
+  if (retType) {
+    expr = maybeImplicitCast(expr, retType);
+  }
+  return new SReturn(loc, expr);
+}
+
+// Build an ECast (explicit cast `(T)expr`), applying C semantics:
+//   - decay array/function operand
+//   - reject ref↔non-ref except (refT)0 / (refT)NULL
+function makeCast(loc, targetType, expr) {
+  expr = maybeDecay(expr);
+  const tIsRef = targetType.removeQualifiers().isRef();
+  const sIsRef = expr.type && expr.type.removeQualifiers().isRef();
+  if (tIsRef || sIsRef) {
+    if (tIsRef && !sIsRef && isNullPointerConstant(expr)) {
+      // (refT)0 / (refT)NULL — typed null pointer constant.
+      return new ECast(loc, targetType, targetType, expr);
+    }
+    fatalError(loc, "Cannot cast to or from a reference type; use __cast(T, x) (or __ref_cast for GC ref downcast)");
+  }
+  return new ECast(loc, targetType, targetType, expr);
+}
+
+// Resolve a member-name lookup against a struct/union type. Returns
+// the chain of DVar field decls leading to the target (length 1 for a
+// direct field, length >1 when traversing anonymous nested structs),
+// or null if the name doesn't resolve. Pure — depends only on the type
+// and its tagDecl.members.
+function lookupMemberChain(type, name) {
+  const ut = type.removeQualifiers();
+  if (ut.tagDecl && ut.tagDecl.members) {
+    for (const m of ut.tagDecl.members) {
+      if (!(m instanceof DVar)) continue;
+      if (m.name === name) return [m];
+      // Recurse into anonymous nested struct/union members.
+      if (!m.name && m.type && m.type.tagDecl && m.type.tagDecl.members) {
+        const sub = lookupMemberChain(m.type, name);
+        if (sub) return [m, ...sub];
+      }
+    }
+  }
+  return null;
+}
+
+// Synthesize a placeholder DVar for error recovery. Used by makeIdent /
+// makeMember / makeArrow when the name doesn't resolve — we report the
+// diagnostic, then return a placeholder so downstream construction can
+// continue without nulls. The placeholder's type is divergent so any
+// operations on it stay well-typed.
+function _placeholderDVar(loc, name) {
+  return new DVar(loc, name, Types.TDIVERGENT, Types.StorageClass.NONE, null);
+}
+
+// Build a member-access expression `base.name`. Looks up the field
+// (handling anonymous-nested chains). On miss, reports a recoverable
+// diagnostic and constructs the EMember with a synthesized placeholder
+// DVar (divergent-typed) so the parse can continue. After this returns,
+// EMember always has a non-null memberDecl.
+function makeMember(loc, base, name) {
+  // The `.` operator requires struct/union (or our GC struct) on the
+  // left. Without this gate, `int x; x.foo` would crash later in
+  // lookupMemberChain or in codegen.
+  const bt = base.type.removeQualifiers();
+  if (!bt.isStruct() && !bt.isUnion() && !bt.isGCStruct() && !bt.isDivergent()) {
+    reportError(loc,
+      `left operand of '.' must have struct or union type, got '${base.type.toString()}'`);
+    return new EMember(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+  }
+  const chain = lookupMemberChain(base.type, name);
+  if (!chain) {
+    reportError(loc, `'${base.type.toString()}' has no member named '${name}'`);
+    return new EMember(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+  }
+  let result = base;
+  for (const m of chain) {
+    result = new EMember(loc, m.type, result, m);
+  }
+  return result;
+}
+
+// Build a pointer-arrow expression `base->name`. For GC struct refs
+// (one-indirection by design), this is equivalent to `.` and builds an
+// EMember chain. For other pointer-to-struct types, decay the base if
+// needed and build EArrow + EMember chain.
+function makeArrow(loc, base, name) {
+  let bt = base.type.removeQualifiers();
+  if (bt.kind === Types.TypeKind.GC_STRUCT) {
+    return makeMember(loc, base, name);
+  }
+  base = maybeDecay(base);
+  bt = base.type.removeQualifiers();
+  // `->` requires a pointer-to-struct/union on the left. Without this
+  // gate, `struct S s; s->a` would find a member in the (non-pointer)
+  // struct type and silently build an EArrow with a non-pointer base
+  // — codegen later crashes dereferencing tagDecl on something that
+  // isn't a tag.
+  if (bt.kind !== Types.TypeKind.POINTER && !bt.isDivergent()) {
+    reportError(loc,
+      `left operand of '->' must be a pointer to struct or union, got '${base.type.toString()}'`);
+    return new EArrow(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+  }
+  if (bt.kind === Types.TypeKind.POINTER) {
+    const pointee = bt.baseType.removeQualifiers();
+    if (!pointee.isStruct() && !pointee.isUnion() && !pointee.isDivergent()) {
+      reportError(loc,
+        `left operand of '->' must point to struct or union, got pointer to '${bt.baseType.toString()}'`);
+      return new EArrow(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+    }
+    bt = bt.baseType;
+  }
+  const chain = lookupMemberChain(bt, name);
+  if (!chain) {
+    reportError(loc, `'${base.type.toString()}' has no member named '${name}'`);
+    return new EArrow(loc, Types.TDIVERGENT, base, _placeholderDVar(loc, name));
+  }
+  const first = chain[0];
+  let result = new EArrow(loc, first.type, base, first);
+  for (let i = 1; i < chain.length; i++) {
+    result = new EMember(loc, chain[i].type, result, chain[i]);
+  }
+  return result;
+}
+
+// Build an EIdent from a name resolved through a scope. On miss, reports
+// a recoverable diagnostic and synthesizes a placeholder DVar so
+// EIdent.decl is always non-null.
+//
+// `scope` is anything with `.get(name)` returning a DVar / DFunc /
+// DEnumConst / null — typically the parser's varScope.
+function makeIdent(loc, name, scope) {
+  const decl = scope.get(name);
+  if (decl instanceof DVar)       return new EIdent(loc, decl.type, decl);
+  if (decl instanceof DFunc)      return new EIdent(loc, decl.type, decl);
+  if (decl instanceof DEnumConst) return new EIdent(loc, Types.TINT, decl);
+  reportError(loc, `Undeclared identifier '${name}'`);
+  return new EIdent(loc, Types.TDIVERGENT, _placeholderDVar(loc, name));
+}
+
+// Build an ESubscript, applying C semantics:
+//   - reject commutative form `0[arr]` (we choose not to support it)
+//   - reject subscript on a reference type
+//   - decay an array base to a pointer (GC arrays stay — they aren't C arrays)
+//   - infer element type from the base's pointer/array element
+//
+// Diagnostics flow through the active `withDiag` sink. Always returns an
+// ESubscript (best-effort even on errors).
+function makeSubscript(loc, base, index) {
+  const baseUt = base.type.removeQualifiers();
+  const idxUt = index.type.removeQualifiers();
+  // Reverse-order subscript (`5[arr]`) — rejected as our compiler
+  // doesn't support C99's commutative form.
+  if (baseUt.isInteger() &&
+      (idxUt.kind === Types.TypeKind.POINTER || idxUt.kind === Types.TypeKind.ARRAY)) {
+    reportError(loc, "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
+  }
+  // Base must be pointer / array / GC-array. Without this check
+  // codegen would emit `base_addr + idx*sizeof(elem)` against a
+  // non-pointer base value (e.g. a struct's wasm representation),
+  // producing a wild memory read.
+  const baseIsIndexable =
+    baseUt.kind === Types.TypeKind.ARRAY ||
+    baseUt.kind === Types.TypeKind.POINTER ||
+    baseUt.kind === Types.TypeKind.GC_ARRAY;
+  // Refs that aren't GC arrays (e.g. eqref, GC structs, externref) —
+  // give the helpful `__array(T)` hint. GC_ARRAY is handled as
+  // indexable above; isRef() also matches it, so the order matters.
+  if (!baseIsIndexable && baseUt.isRef()) {
+    reportError(loc,
+      `subscript '[]' on reference type '${base.type.toString()}' is not allowed (use __array(T) for indexable GC storage)`);
+  } else if (!baseIsIndexable && !baseUt.isDivergent()) {
+    reportError(loc,
+      `subscripted value is not an array, pointer, or vector — got '${base.type.toString()}'`);
+  }
+  // Index must be integer. Otherwise codegen multiplies a non-int
+  // (e.g. another pointer's bit-value) by sizeof(elem) and adds it to
+  // base — silent wild memory access.
+  if (!idxUt.isInteger() && !idxUt.isDivergent()) {
+    reportError(loc,
+      `array subscript must be of integer type, got '${index.type.toString()}'`);
+  }
+  let elemType = Types.TINT;
+  if (baseIsIndexable) elemType = baseUt.baseType;
+  // GC arrays don't decay; keep them as the array operand.
+  const arrayOperand = baseUt.kind === Types.TypeKind.GC_ARRAY ? base : maybeDecay(base);
+  return new ESubscript(loc, elemType, arrayOperand, index);
+}
+
+// Build an ECall, applying C semantics:
+//   - decay callee (function name → function pointer; array → ptr)
+//   - decay each argument
+//   - reject ref-conversion errors on declared params
+//   - reject ref-typed varargs
+//   - implicit-cast each fixed arg to its parameter type
+//   - default-argument promotion (float → double) on varargs
+//
+// Diagnostics flow through the active `withDiag` sink — no callback
+// threading. Always returns an ECall (best-effort even on errors).
+function makeCall(loc, callee, args) {
+  callee = maybeDecay(callee);
+  const calleeType = callee.type;
+  let funcType = null;
+  if (calleeType.kind === Types.TypeKind.POINTER &&
+      calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
+    funcType = calleeType.baseType;
+  } else if (!calleeType.isDivergent()) {
+    // The callee must be a function or pointer-to-function (after
+    // decay). Without this gate, `int x; x();` would build an ECall
+    // with a non-function callee — codegen later crashes computing
+    // the function-pointer call shape.
+    reportError(loc,
+      `called object is not a function or function pointer; got '${callee.type.toString()}'`);
+    return new ECall(loc, callee, args);
+  }
+  // Decay all arguments first; pointer-typed params and varargs alike
+  // receive pointer values, never arrays.
+  for (let i = 0; i < args.length; i++) args[i] = maybeDecay(args[i]);
+  if (funcType) {
+    const paramTypes = funcType.getParamTypes();
+    const numFixed = paramTypes.length;
+    // Validation: only meaningful when the prototype declared its params.
+    if (!funcType.hasUnspecifiedParams) {
+      if (funcType.isVarArg) {
+        for (let i = numFixed; i < args.length; i++) {
+          if (args[i].type.removeQualifiers().isRef()) {
+            reportError(loc,
+              `cannot pass reference type '${args[i].type.toString()}' as a variadic argument — vararg storage uses linear memory which can't hold GC references`);
+          }
+        }
+      }
+    }
+    // Implicit casts on fixed arguments.
+    for (let i = 0; i < args.length && i < numFixed; i++) {
+      args[i] = maybeImplicitCast(args[i], paramTypes[i]);
+    }
+    // Default-argument promotion (C99 6.5.2.2/6) for varargs: float → double.
+    if (funcType.isVarArg) {
+      for (let i = numFixed; i < args.length; i++) {
+        if (args[i].type.removeQualifiers() === Types.TFLOAT) {
+          args[i] = maybeImplicitCast(args[i], Types.TDOUBLE);
+        }
+      }
+    }
+  }
+  return new ECall(loc, callee, args);
+}
 
 // TUnit constructor
 class TUnit {
@@ -2760,8 +4111,6 @@ class TUnit {
     this.minStackBytes = 0;
     this.exportDirectives = [];
     this.exceptionTags = [];
-    this.globalUsedSymbols = new Set();
-    this.fileScopeCompoundLiterals = [];
     Object.seal(this);
   }
 }
@@ -2770,16 +4119,678 @@ function makeTUnit(filename) { return new TUnit(filename); }
 return {
   Scope,
   Expr, Stmt, Decl,
-  DVar, DFunc, DTag, DEnumConst,
+  DVar, DFunc, DTag, DExceptionTag, DEnumConst,
   EInt, EFloat, EString, EIdent, EBinary, EUnary, ETernary, ECall,
   ESubscript, EMember, EArrow, ECast, ESizeofExpr, ESizeofType,
   EAlignofExpr, EAlignofType, EComma, EInitList, EIntrinsic, EWasm,
-  ECompoundLiteral, EImplicitCast, EGCNew,
+  ECompoundLiteral, EImplicitCast, EDecay, EGCNew,
   SExpr, SDecl, SCompound, SIf, SWhile, SDoWhile, SFor,
   SBreak, SContinue, SReturn, SSwitch, SGoto, SLabel, SEmpty,
   STryCatch, SThrow,
   makeTUnit,
+  // C-semantics-aware builders
+  maybeImplicitCast, typesAreAssignmentCompatible, typesAreOperandCompatible,
+  isBoolContextType,
+  maybeDecay, isNullPointerConstant, rejectNonZeroToRef,
+  pointerArithElemType,
+  promoteExprType, computeBinaryType, markAddressTaken,
+  makeCall, makeSubscript, makeBinary, makeUnary, makeReturn, makeCast,
+  makeMember, makeArrow, makeIdent, lookupMemberChain,
+  // Linearity tagging for optimizer correctness checks
+  Linearity, joinLinearity,
+  // Op metadata registries (text, linearity, classification flags)
+  BinOp, UnOp,
+  // Generic traversal / substitution for AST→AST passes
+  walkExpr, substituteParams,
+  // Bubble-up metadata container
+  TreeBag,
 };
+})();
+
+// ====================
+// constEvalInt — pure integer constant evaluator
+// ====================
+// Returns BigInt or null. Handles literals, enum constants, arithmetic
+// on integer constants, sizeof/_Alignof, casts/implicit casts, and a
+// narrow address-arithmetic pattern (&((T*)0)->m → byteOffset) that
+// supports offsetof().
+
+function constEvalInt(expr) {
+  if (!expr) return null;
+  switch (expr.constructor) {
+    case AST.EInt: return expr.value;  // already BigInt
+    case AST.EIdent:
+      if (expr.decl && expr.decl instanceof AST.DEnumConst) return expr.decl.value;
+      return null;
+    case AST.EBinary: {
+      const l = constEvalInt(expr.left), r = constEvalInt(expr.right);
+      if (l === null || r === null) return null;
+      switch (expr.op) {
+        case "ADD": return l + r; case "SUB": return l - r;
+        case "MUL": return l * r; case "DIV": return r === 0n ? null : l / r;
+        case "MOD": return r === 0n ? null : l % r;
+        case "BAND": return l & r; case "BOR": return l | r; case "BXOR": return l ^ r;
+        case "SHL": return l << r; case "SHR": return l >> r;
+        case "EQ": return l === r ? 1n : 0n; case "NE": return l !== r ? 1n : 0n;
+        case "LT": return l < r ? 1n : 0n; case "GT": return l > r ? 1n : 0n;
+        case "LE": return l <= r ? 1n : 0n; case "GE": return l >= r ? 1n : 0n;
+        case "LAND": return (l && r) ? 1n : 0n; case "LOR": return (l || r) ? 1n : 0n;
+        default: return null;
+      }
+    }
+    case AST.EUnary: {
+      if (expr.op === "OP_ADDR") {
+        // Support offsetof pattern: &((type*)0)->member
+        const inner = expr.operand;
+        if (inner instanceof AST.EArrow || inner instanceof AST.EMember) {
+          const base = constEvalInt(inner.base);
+          if (base !== null) return base + BigInt(inner.memberDecl.byteOffset);
+        }
+        return null;
+      }
+      const v = constEvalInt(expr.operand);
+      if (v === null) return null;
+      switch (expr.op) {
+        case "OP_POS": return v; case "OP_NEG": return -v;
+        case "OP_LNOT": return v === 0n ? 1n : 0n; case "OP_BNOT": return ~v;
+        default: return null;
+      }
+    }
+    case AST.EImplicitCast: {
+      return constEvalInt(expr.expr);
+    }
+    case AST.ETernary: {
+      const c = constEvalInt(expr.condition);
+      if (c === null) return null;
+      return constEvalInt(c !== 0n ? expr.thenExpr : expr.elseExpr);
+    }
+    case AST.ECast: {
+      const v = constEvalInt(expr.expr);
+      return v;
+    }
+    case AST.ESizeofExpr: return BigInt(expr.expr.type.size);
+    case AST.ESizeofType: return BigInt(expr.operandType.size);
+    case AST.EAlignofExpr: return BigInt(expr.expr.type.align);
+    case AST.EAlignofType: return BigInt(expr.operandType.align);
+    default: return null;
+  }
+}
+
+// ====================
+// INLINER — AST→AST optimization pass
+// ====================
+//
+// One pass that walks each function body bottom-up and folds constant
+// subexpressions (and dead branches under constant conditions). Named
+// INLINER because it's the home for inlining + tree-shaking too once
+// those land — the three optimizations want to feed each other. For
+// now: constant folding only.
+//
+// Strategy:
+//   - Bottom-up post-order: fold children, then try to fold the node.
+//   - On replacement, return a fresh AST node (preserve the original
+//     node's loc and type). Constructors are dumb, so we can build
+//     directly without surprise wrapping; type-changing rewrites would
+//     route through make* helpers, but folding never changes types.
+//   - On no change, return the original node identity. Callers compare
+//     by `===` to skip rebuilds, which keeps AST allocation O(changed).
+//   - Side-effecting ops (ASSIGN, ++/--, function calls, dereferences,
+//     intrinsics, etc.) are walked into but never folded as a whole.
+//   - DFunc.body and DVar.initExpr are mutated in place (sealed but
+//     writable), matching how the rest of the codebase already handles
+//     post-construction updates.
+
+const INLINER = (() => {
+
+// True if `op` is the AST tag for an op with no value-producing side
+// effect of its own — folding the operands and rewriting to a literal
+// is OK iff this is true AND the operands are themselves pure.
+function isPureBinop(op) {
+  return !AST.BinOp[op].isAssign;
+}
+
+// Evaluate a pure integer binary op on BigInt operands. Returns the
+// result as a BigInt, or null if not foldable (e.g. div by zero, shift
+// out of range). Caller is responsible for truncating to the result type.
+function evalIntBinop(op, l, r) {
+  switch (op) {
+    case "ADD": return l + r;
+    case "SUB": return l - r;
+    case "MUL": return l * r;
+    case "DIV": return r === 0n ? null : l / r;       // BigInt / truncates toward zero (matches C)
+    case "MOD": return r === 0n ? null : l % r;
+    case "BAND": return l & r;
+    case "BOR":  return l | r;
+    case "BXOR": return l ^ r;
+    case "SHL":  return r < 0n || r >= 64n ? null : l << r;
+    case "SHR":  return r < 0n || r >= 64n ? null : l >> r;
+    case "EQ": return l === r ? 1n : 0n;
+    case "NE": return l !== r ? 1n : 0n;
+    case "LT": return l <  r ? 1n : 0n;
+    case "GT": return l >  r ? 1n : 0n;
+    case "LE": return l <= r ? 1n : 0n;
+    case "GE": return l >= r ? 1n : 0n;
+    case "LAND": return (l !== 0n && r !== 0n) ? 1n : 0n;
+    case "LOR":  return (l !== 0n || r !== 0n) ? 1n : 0n;
+    default: return null;
+  }
+}
+
+function evalIntUnop(op, v) {
+  switch (op) {
+    case "OP_POS":  return v;
+    case "OP_NEG":  return -v;
+    case "OP_BNOT": return ~v;
+    case "OP_LNOT": return v === 0n ? 1n : 0n;
+    default: return null;
+  }
+}
+
+// Fold an expression. Bottom-up: fold children first.
+function foldExpr(expr) {
+  if (!expr) return expr;
+  switch (expr.constructor) {
+    // True leaves — nothing inside to fold.
+    case AST.EInt:
+    case AST.EFloat:
+    case AST.EString:
+    case AST.EIdent:
+    case AST.ESizeofType:
+    case AST.EAlignofType:
+      return expr;
+
+    // sizeof(expr) / _Alignof(expr) don't evaluate their operand at
+    // runtime — leave the inner expression alone so we don't create
+    // surprising side-effect changes.
+    case AST.ESizeofExpr:
+    case AST.EAlignofExpr:
+      return expr;
+
+    case AST.EUnary: {
+      const op = expr.op;
+      const operand = foldExpr(expr.operand);
+      // Skip side-effecting / addressing ops; only rebuild if the operand changed.
+      if (op === "OP_PRE_INC"  || op === "OP_PRE_DEC" ||
+          op === "OP_POST_INC" || op === "OP_POST_DEC" ||
+          op === "OP_ADDR"     || op === "OP_DEREF") {
+        return operand === expr.operand ? expr
+          : new AST.EUnary(expr.loc, expr.type, op, operand);
+      }
+      const v = constEvalInt(operand);
+      if (v !== null && expr.type.isInteger()) {
+        const r = evalIntUnop(op, v);
+        if (r !== null) {
+          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r, expr.type));
+        }
+      }
+      return operand === expr.operand ? expr
+        : new AST.EUnary(expr.loc, expr.type, op, operand);
+    }
+
+    case AST.EBinary: {
+      const left = foldExpr(expr.left);
+      const right = foldExpr(expr.right);
+      const op = expr.op;
+      if (!isPureBinop(op)) {
+        return (left === expr.left && right === expr.right) ? expr
+          : new AST.EBinary(expr.loc, expr.type, op, left, right);
+      }
+      const lv = constEvalInt(left);
+      // Short-circuit: 0 && x → 0 (drops x, even if x has side effects, per C99).
+      if (op === "LAND" && lv === 0n) return new AST.EInt(expr.loc, expr.type, 0n);
+      // 1 || x → 1 (same, drops x).
+      if (op === "LOR"  && lv !== null && lv !== 0n) return new AST.EInt(expr.loc, expr.type, 1n);
+      const rv = constEvalInt(right);
+      if (lv !== null && rv !== null && expr.type.isInteger()) {
+        const r = evalIntBinop(op, lv, rv);
+        if (r !== null) {
+          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r, expr.type));
+        }
+      }
+      return (left === expr.left && right === expr.right) ? expr
+        : new AST.EBinary(expr.loc, expr.type, op, left, right);
+    }
+
+    case AST.ETernary: {
+      const cond = foldExpr(expr.condition);
+      const cv = constEvalInt(cond);
+      if (cv !== null) {
+        // Pick the live branch; fold and return it directly (its type
+        // matches expr.type by the parser's ternary type computation,
+        // possibly via an EImplicitCast wrapper).
+        return foldExpr(cv !== 0n ? expr.thenExpr : expr.elseExpr);
+      }
+      const thenE = foldExpr(expr.thenExpr);
+      const elseE = foldExpr(expr.elseExpr);
+      return (cond === expr.condition && thenE === expr.thenExpr && elseE === expr.elseExpr) ? expr
+        : new AST.ETernary(expr.loc, expr.type, cond, thenE, elseE);
+    }
+
+    case AST.ECall: {
+      const callee = foldExpr(expr.callee);
+      let changed = callee !== expr.callee;
+      const newArgs = expr.arguments.map(a => {
+        const folded = foldExpr(a);
+        if (folded !== a) changed = true;
+        return folded;
+      });
+      const call = changed ? new AST.ECall(expr.loc, callee, newArgs) : expr;
+      // No manual liveness bookkeeping here — the call's children (the
+      // EDecay/EIdent on the callee) bubble the DFunc into the
+      // referencedFunctions bag automatically. Try inlining; on success,
+      // recurse-fold so cascades like square(5) → 25 collapse in one pass.
+      const inlined = tryInline(call);
+      return inlined !== null ? foldExpr(inlined) : call;
+    }
+
+    case AST.ESubscript: {
+      const arr = foldExpr(expr.array);
+      const idx = foldExpr(expr.index);
+      return (arr === expr.array && idx === expr.index) ? expr
+        : new AST.ESubscript(expr.loc, expr.type, arr, idx);
+    }
+
+    case AST.EMember: {
+      const base = foldExpr(expr.base);
+      return base === expr.base ? expr
+        : new AST.EMember(expr.loc, expr.type, base, expr.memberDecl);
+    }
+
+    case AST.EArrow: {
+      const base = foldExpr(expr.base);
+      return base === expr.base ? expr
+        : new AST.EArrow(expr.loc, expr.type, base, expr.memberDecl);
+    }
+
+    case AST.ECast: {
+      const inner = foldExpr(expr.expr);
+      const v = constEvalInt(inner);
+      if (v !== null && expr.targetType.isInteger()) {
+        return new AST.EInt(expr.loc, expr.targetType, Types.truncateConstInt(v, expr.targetType));
+      }
+      return inner === expr.expr ? expr
+        : new AST.ECast(expr.loc, expr.type, expr.targetType, inner);
+    }
+
+    case AST.EImplicitCast: {
+      const inner = foldExpr(expr.expr);
+      const v = constEvalInt(inner);
+      if (v !== null && expr.type.isInteger()) {
+        return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(v, expr.type));
+      }
+      return inner === expr.expr ? expr
+        : new AST.EImplicitCast(expr.loc, expr.type, inner);
+    }
+
+    case AST.EDecay: {
+      const inner = foldExpr(expr.operand);
+      return inner === expr.operand ? expr
+        : new AST.EDecay(expr.loc, expr.type, inner);
+    }
+
+    case AST.EComma: {
+      let changed = false;
+      const newExprs = expr.expressions.map(e => {
+        const folded = foldExpr(e);
+        if (folded !== e) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.EComma(expr.loc, expr.type, newExprs)
+        : expr;
+    }
+
+    case AST.EInitList: {
+      let changed = false;
+      const newElems = expr.elements.map(e => {
+        const folded = foldExpr(e);
+        if (folded !== e) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.EInitList(expr.loc, expr.type, newElems, expr.designators, expr.unionMemberIndex)
+        : expr;
+    }
+
+    case AST.EIntrinsic: {
+      let changed = false;
+      const newArgs = expr.args.map(a => {
+        const folded = foldExpr(a);
+        if (folded !== a) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.EIntrinsic(expr.loc, expr.type, expr.intrinsicKind, newArgs, expr.argType)
+        : expr;
+    }
+
+    case AST.EWasm: {
+      let changed = false;
+      const newArgs = expr.args.map(a => {
+        const folded = foldExpr(a);
+        if (folded !== a) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.EWasm(expr.loc, expr.type, newArgs, expr.bytes)
+        : expr;
+    }
+
+    case AST.EGCNew: {
+      let changed = false;
+      const newArgs = expr.args.map(a => {
+        const folded = foldExpr(a);
+        if (folded !== a) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.EGCNew(expr.loc, expr.type, newArgs)
+        : expr;
+    }
+
+    case AST.ECompoundLiteral: {
+      // ECompoundLiteral is frozen — fold the init list and rebuild via
+      // _withChildren. Codegen finds the current node via the bag.
+      const folded = foldExpr(expr.initList);
+      return folded === expr.initList ? expr : expr._withChildren([folded]);
+    }
+
+    default:
+      return expr;
+  }
+}
+
+// Fold a statement bottom-up. Eliminates dead branches when conditions
+// are constant. Returns a (possibly new) statement; callers compare by
+// `===` to skip rebuilds.
+function foldStmt(stmt) {
+  if (!stmt) return stmt;
+  switch (stmt.constructor) {
+    case AST.SEmpty:
+    case AST.SBreak:
+    case AST.SContinue:
+    case AST.SLabel:
+    case AST.SGoto:
+      return stmt;
+
+    case AST.SExpr: {
+      const e = foldExpr(stmt.expr);
+      return e === stmt.expr ? stmt : new AST.SExpr(stmt.loc, e);
+    }
+
+    case AST.SDecl: {
+      // Mutate each DVar's initExpr in place. DVars are sealed-but-writable.
+      for (const d of stmt.declarations) {
+        if (d instanceof AST.DVar && d.initExpr) {
+          const folded = foldExpr(d.initExpr);
+          if (folded !== d.initExpr) d.initExpr = folded;
+        }
+      }
+      return stmt;
+    }
+
+    case AST.SCompound: {
+      let changed = false;
+      const newStmts = stmt.statements.map(s => {
+        const folded = foldStmt(s);
+        if (folded !== s) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.SCompound(stmt.loc, newStmts, stmt.labels)
+        : stmt;
+    }
+
+    case AST.SIf: {
+      const cond = foldExpr(stmt.condition);
+      const cv = constEvalInt(cond);
+      // Dead-branch elimination when the condition is a known constant.
+      if (cv === 0n) return stmt.elseBranch ? foldStmt(stmt.elseBranch) : new AST.SEmpty(stmt.loc);
+      if (cv !== null && cv !== 0n) return foldStmt(stmt.thenBranch);
+      const thenB = foldStmt(stmt.thenBranch);
+      const elseB = foldStmt(stmt.elseBranch);
+      return (cond === stmt.condition && thenB === stmt.thenBranch && elseB === stmt.elseBranch)
+        ? stmt
+        : new AST.SIf(stmt.loc, cond, thenB, elseB);
+    }
+
+    case AST.SWhile: {
+      const cond = foldExpr(stmt.condition);
+      const body = foldStmt(stmt.body);
+      // while (0) — body never runs. Replace with empty.
+      if (constEvalInt(cond) === 0n) return new AST.SEmpty(stmt.loc);
+      return (cond === stmt.condition && body === stmt.body)
+        ? stmt
+        : new AST.SWhile(stmt.loc, cond, body);
+    }
+
+    case AST.SDoWhile: {
+      const body = foldStmt(stmt.body);
+      const cond = foldExpr(stmt.condition);
+      return (body === stmt.body && cond === stmt.condition)
+        ? stmt
+        : new AST.SDoWhile(stmt.loc, body, cond);
+    }
+
+    case AST.SFor: {
+      const init = stmt.init ? foldStmt(stmt.init) : null;
+      const cond = stmt.condition ? foldExpr(stmt.condition) : null;
+      const incr = stmt.increment ? foldExpr(stmt.increment) : null;
+      const body = foldStmt(stmt.body);
+      return (init === stmt.init && cond === stmt.condition &&
+              incr === stmt.increment && body === stmt.body)
+        ? stmt
+        : new AST.SFor(stmt.loc, init, cond, incr, body);
+    }
+
+    case AST.SReturn: {
+      if (!stmt.expr) return stmt;
+      const e = foldExpr(stmt.expr);
+      return e === stmt.expr ? stmt : new AST.SReturn(stmt.loc, e);
+    }
+
+    case AST.SSwitch: {
+      const e = foldExpr(stmt.expr);
+      const body = foldStmt(stmt.body);
+      return (e === stmt.expr && body === stmt.body)
+        ? stmt
+        : new AST.SSwitch(stmt.loc, e, stmt.cases, body);
+    }
+
+    case AST.STryCatch: {
+      const tryB = foldStmt(stmt.tryBody);
+      let changed = tryB !== stmt.tryBody;
+      const newCatches = stmt.catches.map(c => {
+        const newBody = foldStmt(c.body);
+        if (newBody === c.body) return c;
+        changed = true;
+        return { ...c, body: newBody };
+      });
+      return changed
+        ? new AST.STryCatch(stmt.loc, tryB, newCatches)
+        : stmt;
+    }
+
+    case AST.SThrow: {
+      let changed = false;
+      const newArgs = stmt.args.map(a => {
+        const folded = foldExpr(a);
+        if (folded !== a) changed = true;
+        return folded;
+      });
+      return changed
+        ? new AST.SThrow(stmt.loc, stmt.tag, newArgs)
+        : stmt;
+    }
+
+    default:
+      return stmt;
+  }
+}
+
+// ---------- Inlining ----------
+//
+// _inliningStack is the set of functions currently being inlined.
+// While we're substituting body B for a call to F, we push F. Any
+// recursive call to F encountered while folding B is left as a real
+// call (because tryInline bails when the callee is on the stack).
+// After we're done with F's body, we pop. This gives us natural
+// recursion detection without a separate call-graph pass.
+//
+// Liveness no longer needs separate state — the AST itself bubbles up
+// `referencedFunctions` via TreeBag, so once a function's body has been
+// folded we can read its bag to see what it transitively references.
+const _inliningStack = new Set();
+
+// Predicate: is this body a single `return EXPR;`? Returns the return
+// expression, or null if the body is anything more complex.
+function singleReturnBody(body) {
+  if (!body) return null;
+  if (body instanceof AST.SReturn) return body.expr || null;
+  if (body instanceof AST.SCompound &&
+      body.statements.length === 1 &&
+      body.statements[0] instanceof AST.SReturn) {
+    return body.statements[0].expr || null;
+  }
+  return null;
+}
+
+// Try to inline a call. Returns the substituted expression on success,
+// or null if the call should stay as a call. Conservative criteria:
+//   - direct call (funcDecl set), with a body
+//   - body is a single `return EXPR;`
+//   - return EXPR is UNRESTRICTED (no side effects, deterministic)
+//   - argument count matches parameter count
+//   - all arguments are UNRESTRICTED (safe to substitute multiple times)
+//   - callee is not currently being inlined (recursion detected via stack)
+function tryInline(callExpr) {
+  const decl = callExpr.funcDecl;
+  if (!decl) return null;
+  if (_inliningStack.has(decl)) return null;
+  const def = decl.definition || decl;
+  if (!def.body) return null;
+  const returnExpr = singleReturnBody(def.body);
+  if (!returnExpr) return null;
+  if (returnExpr.linearity !== AST.Linearity.UNRESTRICTED) return null;
+  const params = def.parameters || [];
+  if (callExpr.arguments.length !== params.length) return null;
+  for (const arg of callExpr.arguments) {
+    if (arg.linearity !== AST.Linearity.UNRESTRICTED) return null;
+  }
+  const paramMap = new Map();
+  for (let i = 0; i < params.length; i++) {
+    paramMap.set(params[i], callExpr.arguments[i]);
+  }
+  // Push self onto the stack while substituting & re-folding the body,
+  // so a recursive call to `decl` inside the body sees its callee as
+  // already-being-inlined and bails.
+  _inliningStack.add(decl);
+  try {
+    return AST.substituteParams(returnExpr, paramMap);
+  } finally {
+    _inliningStack.delete(decl);
+  }
+}
+
+// Optimize a translation unit. Walk from "root" functions (entry points
+// + exported + extern + address-taken) and fold their bodies; ECall
+// folding records every reached callee as live and tries to inline.
+// Anything never reached gets dropped from the unit at the end —
+// inlining and tree-shaking fall out of the same walk.
+function isRootFunction(f, unit) {
+  // Anything not defined here can't be a root we own.
+  if (!f.body) return false;
+  // `main` is the conventional program entry.
+  if (f.name === "main") return true;
+  // Anything explicitly exported is a root.
+  for (const [, decl] of unit.exportDirectives) if (decl === f) return true;
+  // Extern-linkage functions might be called from another TU.
+  if (f.storageClass === Types.StorageClass.EXTERN ||
+      f.storageClass === Types.StorageClass.NONE) return true;
+  return false;
+}
+
+function optimize(unit, options) {
+  _inliningStack.clear();
+  // Unified worklist for both functions and globals. We walk from real
+  // roots (extern-linkage symbols, exports, main) and accumulate every
+  // function / variable reachable from them via the AST bag. Anything
+  // unreached at the end is dead and gets tree-shaken.
+  const liveFuncs = new Set();
+  const liveVars = new Set();
+  const funcQ = [];
+  const varQ = [];
+  const enqueueFunc = (f) => {
+    if (!f || liveFuncs.has(f)) return;
+    liveFuncs.add(f);
+    funcQ.push(f);
+  };
+  const enqueueVar = (v) => {
+    if (!v || liveVars.has(v)) return;
+    liveVars.add(v);
+    varQ.push(v);
+  };
+  const visitRefs = (node) => {
+    for (const f of node.referencedFunctions) enqueueFunc(f);
+    for (const v of node.referencedVariables) enqueueVar(v);
+  };
+  // Seed: extern-linkage / exported / main funcs + non-static globals.
+  for (const f of unit.definedFunctions) {
+    if (isRootFunction(f, unit)) enqueueFunc(f);
+  }
+  for (const v of unit.definedVariables) {
+    if (v.storageClass !== Types.StorageClass.STATIC) enqueueVar(v);
+  }
+  // Drain to fixed point. We process funcs and vars together; either
+  // queue might add to the other.
+  while (funcQ.length > 0 || varQ.length > 0) {
+    while (funcQ.length > 0) {
+      const f = funcQ.shift();
+      if (!f.body) continue;
+      f.body = foldStmt(f.body);
+      visitRefs(f.body);
+      // Static locals are diverted out of the function body (they live
+      // in `staticLocals`), so their initializers don't ride the body's
+      // bag. Walk them explicitly — function-pointer tables in static
+      // locals (e.g. Lua's searcher_C / searcher_Lua dispatch table)
+      // are a real reference path.
+      for (const v of (f.staticLocals || [])) {
+        if (v.initExpr) {
+          const folded = foldExpr(v.initExpr);
+          if (folded !== v.initExpr) v.initExpr = folded;
+          visitRefs(v.initExpr);
+        }
+      }
+    }
+    while (varQ.length > 0) {
+      const v = varQ.shift();
+      if (!v.initExpr) continue;
+      const folded = foldExpr(v.initExpr);
+      if (folded !== v.initExpr) v.initExpr = folded;
+      visitRefs(v.initExpr);
+    }
+  }
+  // Tree-shake. The bag-walk above transitively visited everything
+  // reachable from roots; anything not in `live*` is genuinely dead.
+  // - static funcs / vars: drop if unreached (TU-internal, safe).
+  // - imported / extern / declared decls: also drop if unreached UNLESS
+  //   --no-undefined, in which case the linker should be allowed to
+  //   complain about every dangling reference for visibility. (Defined
+  //   non-static decls are seeded as roots, so they're never filtered.)
+  unit.staticFunctions = unit.staticFunctions.filter(f => liveFuncs.has(f));
+  unit.definedVariables = unit.definedVariables.filter(
+    v => v.storageClass !== Types.StorageClass.STATIC || liveVars.has(v));
+  if (!options?.noUndefined) {
+    unit.importedFunctions = unit.importedFunctions.filter(f => liveFuncs.has(f));
+    unit.externVariables = unit.externVariables.filter(v => liveVars.has(v));
+    unit.declaredFunctions = unit.declaredFunctions.filter(f => liveFuncs.has(f));
+    unit.localExternVariables = unit.localExternVariables.filter(v => liveVars.has(v));
+    unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter(f => liveFuncs.has(f));
+  }
+  return unit;
+}
+
+return { optimize, foldExpr, foldStmt, tryInline };
 })();
 
 // LEB128 encoding utilities (shared between Parser and Wasm)
@@ -2846,7 +4857,7 @@ class DumpContext {
   }
   formatDeclId(decl) { return this.formatId(decl); }
   formatDeclIdOfDefinition(decl) {
-    if (decl.declKind === Types.DeclKind.FUNC || decl.declKind === Types.DeclKind.VAR) {
+    if (decl instanceof AST.DFunc || decl instanceof AST.DVar) {
       return this.formatId(decl.definition);
     }
     return this.formatId(decl);
@@ -2919,17 +4930,17 @@ function formatFloatForDump(v) {
 function dumpExpr(expr, ctx, indent) {
   let ret = ind(indent);
   ret += "Expr: Type=" + expr.type.toString() + " ";
-  switch (expr.kind) {
-    case Types.ExprKind.INT:
+  switch (expr.constructor) {
+    case AST.EInt:
       ret += "INT " + expr.value;
       break;
-    case Types.ExprKind.FLOAT:
+    case AST.EFloat:
       ret += "FLOAT " + formatFloatForDump(expr.value);
       break;
-    case Types.ExprKind.STRING:
+    case AST.EString:
       ret += "STRING len=" + expr.value.length;
       break;
-    case Types.ExprKind.IDENT: {
+    case AST.EIdent: {
       ret += "IDENT " + expr.name;
       if (expr.decl) {
         const id = ctx.formatDeclId(expr.decl);
@@ -2939,78 +4950,82 @@ function dumpExpr(expr, ctx, indent) {
       }
       break;
     }
-    case Types.ExprKind.BINARY:
+    case AST.EBinary:
       ret += "BINARY " + Types.BopStr[expr.op];
       ret += dumpExpr(expr.left, ctx, indent + 1);
       ret += dumpExpr(expr.right, ctx, indent + 1);
       break;
-    case Types.ExprKind.UNARY:
+    case AST.EUnary:
       ret += "UNARY " + Types.UopStr[expr.op];
       ret += dumpExpr(expr.operand, ctx, indent + 1);
       break;
-    case Types.ExprKind.TERNARY:
+    case AST.ETernary:
       ret += "TERNARY";
       ret += dumpExpr(expr.condition, ctx, indent + 1);
       ret += dumpExpr(expr.thenExpr, ctx, indent + 1);
       ret += dumpExpr(expr.elseExpr, ctx, indent + 1);
       break;
-    case Types.ExprKind.CALL:
+    case AST.ECall:
       ret += "CALL " + expr.arguments.length + " args";
       ret += dumpExpr(expr.callee, ctx, indent + 1);
       for (const arg of expr.arguments) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.ExprKind.SUBSCRIPT:
+    case AST.ESubscript:
       ret += "SUBSCRIPT";
       ret += dumpExpr(expr.array, ctx, indent + 1);
       ret += dumpExpr(expr.index, ctx, indent + 1);
       break;
-    case Types.ExprKind.MEMBER:
-      ret += "MEMBER ." + (expr.memberName ?? "(anon)");
+    case AST.EMember:
+      ret += "MEMBER ." + (expr.memberDecl.name ?? "(anon)");
       ret += dumpExpr(expr.base, ctx, indent + 1);
       break;
-    case Types.ExprKind.ARROW:
-      ret += "ARROW ->" + (expr.memberName ?? "(anon)");
+    case AST.EArrow:
+      ret += "ARROW ->" + (expr.memberDecl.name ?? "(anon)");
       ret += dumpExpr(expr.base, ctx, indent + 1);
       break;
-    case Types.ExprKind.CAST:
+    case AST.ECast:
       ret += "CAST " + expr.targetType.toString();
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.IMPLICIT_CAST:
+    case AST.EImplicitCast:
       ret += "IMPLICIT_CAST " + expr.type.toString();
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.SIZEOF_EXPR:
+    case AST.EDecay:
+      ret += "DECAY " + expr.type.toString();
+      ret += dumpExpr(expr.operand, ctx, indent + 1);
+      break;
+    case AST.ESizeofExpr:
       ret += "SIZEOF_EXPR";
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.SIZEOF_TYPE:
+    case AST.ESizeofType:
       ret += "SIZEOF_TYPE " + expr.operandType.toString();
       break;
-    case Types.ExprKind.ALIGNOF_EXPR:
+    case AST.EAlignofExpr:
       ret += "ALIGNOF_EXPR";
       ret += dumpExpr(expr.expr, ctx, indent + 1);
       break;
-    case Types.ExprKind.ALIGNOF_TYPE:
+    case AST.EAlignofType:
       ret += "ALIGNOF_TYPE " + expr.operandType.toString();
       break;
-    case Types.ExprKind.COMMA:
+    case AST.EComma:
       ret += "COMMA " + expr.expressions.length;
       for (const e of expr.expressions) ret += dumpExpr(e, ctx, indent + 1);
       break;
-    case Types.ExprKind.INIT_LIST:
+    case AST.EInitList:
       ret += "INIT_LIST " + expr.elements.length;
       for (const e of expr.elements) ret += dumpExpr(e, ctx, indent + 1);
       break;
-    case Types.ExprKind.INTRINSIC:
+    case AST.EIntrinsic:
       ret += "INTRINSIC " + expr.intrinsicKind;
       for (const arg of expr.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.ExprKind.WASM:
+    case AST.EWasm:
       ret += "WASM " + expr.bytes.length + " bytes " + expr.args.length + " args";
       for (const arg of expr.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.ExprKind.COMPOUND_LITERAL:
+    case AST.ECompoundLiteral:
       ret += "COMPOUND_LITERAL";
       ret += dumpExpr(expr.initList, ctx, indent + 1);
       break;
@@ -3020,42 +5035,42 @@ function dumpExpr(expr, ctx, indent) {
 
 function dumpStmt(stmt, ctx, indent) {
   let ret = ind(indent);
-  ret += "Stmt " + stmt.kind + ":";
-  switch (stmt.kind) {
-    case Types.StmtKind.EXPR:
+  ret += "Stmt " + stmt.constructor.name + ":";
+  switch (stmt.constructor) {
+    case AST.SExpr:
       ret += dumpExpr(stmt.expr, ctx, indent + 1);
       break;
-    case Types.StmtKind.RETURN:
+    case AST.SReturn:
       if (stmt.expr) ret += dumpExpr(stmt.expr, ctx, indent + 1);
       else ret += " (no expression)";
       break;
-    case Types.StmtKind.DECL:
+    case AST.SDecl:
       for (const d of stmt.declarations) ret += dumpDecl(d, ctx, indent + 1);
       break;
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound:
       ret += " " + stmt.statements.length + " statements";
       for (const s of stmt.statements) ret += dumpStmt(s, ctx, indent + 1);
       break;
-    case Types.StmtKind.GOTO:
+    case AST.SGoto:
       ret += " " + stmt.label;
       break;
-    case Types.StmtKind.LABEL:
+    case AST.SLabel:
       ret += " " + stmt.name;
       break;
-    case Types.StmtKind.IF:
+    case AST.SIf:
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       ret += dumpStmt(stmt.thenBranch, ctx, indent + 1);
       if (stmt.elseBranch) ret += dumpStmt(stmt.elseBranch, ctx, indent + 1);
       break;
-    case Types.StmtKind.WHILE:
+    case AST.SWhile:
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case Types.StmtKind.DO_WHILE:
+    case AST.SDoWhile:
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       ret += dumpExpr(stmt.condition, ctx, indent + 1);
       break;
-    case Types.StmtKind.FOR:
+    case AST.SFor:
       if (stmt.init) ret += dumpStmt(stmt.init, ctx, indent + 1);
       else ret += ind(indent + 1) + "(no init)";
       if (stmt.condition) ret += dumpExpr(stmt.condition, ctx, indent + 1);
@@ -3064,7 +5079,7 @@ function dumpStmt(stmt, ctx, indent) {
       else ret += ind(indent + 1) + "(no increment)";
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case Types.StmtKind.SWITCH:
+    case AST.SSwitch:
       ret += dumpExpr(stmt.expr, ctx, indent + 1);
       ret += ind(indent + 1) + stmt.cases.length + " cases";
       for (const c of stmt.cases) {
@@ -3074,7 +5089,7 @@ function dumpStmt(stmt, ctx, indent) {
       }
       ret += dumpStmt(stmt.body, ctx, indent + 1);
       break;
-    case Types.StmtKind.TRY_CATCH:
+    case AST.STryCatch:
       ret += dumpStmt(stmt.tryBody, ctx, indent + 1);
       for (const cc of stmt.catches) {
         ret += ind(indent + 1);
@@ -3083,13 +5098,13 @@ function dumpStmt(stmt, ctx, indent) {
         ret += dumpStmt(cc.body, ctx, indent + 2);
       }
       break;
-    case Types.StmtKind.THROW:
+    case AST.SThrow:
       ret += " " + stmt.tag.name;
       for (const arg of stmt.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
-    case Types.StmtKind.EMPTY:
-    case Types.StmtKind.BREAK:
-    case Types.StmtKind.CONTINUE:
+    case AST.SEmpty:
+    case AST.SBreak:
+    case AST.SContinue:
       break;
   }
   return ret;
@@ -3097,17 +5112,17 @@ function dumpStmt(stmt, ctx, indent) {
 
 function dumpDecl(decl, ctx, indent) {
   let ret = ind(indent);
-  ret += "Decl " + decl.declKind + " " + ctx.formatDeclId(decl);
+  ret += "Decl " + decl.constructor.name + " " + ctx.formatDeclId(decl);
   const defnStr = ctx.formatDeclIdOfDefinition(decl);
   if (defnStr !== ctx.formatDeclId(decl)) {
     ret += " (def=" + defnStr + ")";
   }
   ret += ":";
-  if (decl.declKind === Types.DeclKind.VAR) {
+  if (decl instanceof AST.DVar) {
     ret += " " + decl.name + " " + decl.type.toString();
     if (decl.storageClass !== Types.StorageClass.NONE) ret += " (" + decl.storageClass + ")";
     if (decl.initExpr) ret += dumpExpr(decl.initExpr, ctx, indent + 1);
-  } else if (decl.declKind === Types.DeclKind.FUNC) {
+  } else if (decl instanceof AST.DFunc) {
     ret += " " + decl.name + " " + decl.type.toString();
     if (decl.storageClass !== Types.StorageClass.NONE) ret += " (" + decl.storageClass + ")";
     ret += ind(indent + 1) + decl.parameters.length + " parameters";
@@ -3140,93 +5155,70 @@ function dumpAst(units) {
   return out;
 }
 
-// ====================
-// Parser — filterUnusedDeclarations
-// ====================
-
-function filterUnusedDeclarations(unit) {
-  const active = new Set();
-  const worklist = [];
-  const activate = (d) => { if (d && !active.has(d)) { active.add(d); worklist.push(d); } };
-
-  // Seed non-static definitions
-  for (const f of unit.definedFunctions) {
-    if (f.storageClass !== Types.StorageClass.STATIC) activate(f);
-  }
-  for (const v of unit.definedVariables) {
-    if (v.storageClass !== Types.StorageClass.STATIC) activate(v);
-  }
-  // Seed global-scope usages
-  for (const d of unit.globalUsedSymbols) activate(d);
-  // Seed export directives
-  for (const [, func] of unit.exportDirectives) activate(func);
-
-  // Fixed-point walk
-  while (worklist.length > 0) {
-    const d = worklist.pop();
-    if (d.declKind === Types.DeclKind.FUNC) {
-      if (d.definition && d.definition !== d) activate(d.definition);
-      for (const used of d.usedSymbols) activate(used);
-    } else if (d.declKind === Types.DeclKind.VAR) {
-      if (d.definition && d.definition !== d) activate(d.definition);
-    }
-  }
-
-  // Filter all lists
-  const filter = (arr) => {
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (!active.has(arr[i])) arr.splice(i, 1);
-    }
-  };
-  filter(unit.importedFunctions);
-  filter(unit.definedFunctions);
-  filter(unit.staticFunctions);
-  filter(unit.declaredFunctions);
-  filter(unit.definedVariables);
-  filter(unit.externVariables);
-  filter(unit.localExternVariables);
-  filter(unit.localDeclaredFunctions);
-}
-
+// Whole-program tree-shake. Walks the AST bag (referencedFunctions /
+// referencedVariables) from cross-TU roots: `main`, `alloca`, exports.
+// Any decl not reached from those roots — including non-static defined
+// functions / globals — gets dropped. This is more aggressive than
+// INLINER.optimize's per-TU pass, which has to assume non-static decls
+// might be called from another TU.
 function gcSectionsPass(units, options) {
-  const active = new Set();
-  const worklist = [];
-  const activate = (d) => { if (d && !active.has(d)) { active.add(d); worklist.push(d); } };
+  const liveFuncs = new Set();
+  const liveVars = new Set();
+  const funcQ = [];
+  const varQ = [];
+  const enqueueFunc = (f) => {
+    if (!f || liveFuncs.has(f)) return;
+    liveFuncs.add(f);
+    funcQ.push(f);
+  };
+  const enqueueVar = (v) => {
+    if (!v || liveVars.has(v)) return;
+    liveVars.add(v);
+    varQ.push(v);
+  };
+  const visitRefs = (node) => {
+    for (const f of node.referencedFunctions) enqueueFunc(f);
+    for (const v of node.referencedVariables) enqueueVar(v);
+  };
 
+  // Seed cross-TU roots.
   for (const unit of units) {
     for (const f of unit.definedFunctions) {
-      if (f.name === "main" || f.name === "alloca") activate(f);
+      if (f.name === "main" || f.name === "alloca") enqueueFunc(f);
     }
     if (!(options && options.gcNoExportRoots)) {
-      for (const [, func] of unit.exportDirectives) activate(func);
-    }
-    for (const d of unit.globalUsedSymbols) activate(d);
-  }
-
-  while (worklist.length > 0) {
-    const d = worklist.pop();
-    if (d.declKind === Types.DeclKind.FUNC) {
-      if (d.definition && d.definition !== d) activate(d.definition);
-      for (const used of d.usedSymbols) activate(used);
-    } else if (d.declKind === Types.DeclKind.VAR) {
-      if (d.definition && d.definition !== d) activate(d.definition);
+      for (const [, func] of unit.exportDirectives) enqueueFunc(func);
     }
   }
 
-  const filter = (arr) => {
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (!active.has(arr[i])) arr.splice(i, 1);
+  // Drain. The bag follows decl.definition || decl, so cross-TU
+  // references resolve naturally to the body-bearing instance after
+  // the linker has run setDefinition.
+  while (funcQ.length > 0 || varQ.length > 0) {
+    while (funcQ.length > 0) {
+      const f = funcQ.shift();
+      if (f.body) visitRefs(f.body);
+      for (const v of (f.staticLocals || [])) {
+        if (v.initExpr) visitRefs(v.initExpr);
+      }
     }
-  };
+    while (varQ.length > 0) {
+      const v = varQ.shift();
+      if (v.initExpr) visitRefs(v.initExpr);
+    }
+  }
+
+  const keepF = (f) => liveFuncs.has(f);
+  const keepV = (v) => liveVars.has(v);
   for (const unit of units) {
-    filter(unit.importedFunctions);
-    filter(unit.definedFunctions);
-    filter(unit.staticFunctions);
-    filter(unit.declaredFunctions);
-    filter(unit.definedVariables);
-    filter(unit.externVariables);
-    filter(unit.localExternVariables);
-    filter(unit.localDeclaredFunctions);
+    unit.importedFunctions = unit.importedFunctions.filter(keepF);
+    unit.definedFunctions = unit.definedFunctions.filter(keepF);
+    unit.staticFunctions = unit.staticFunctions.filter(keepF);
+    unit.declaredFunctions = unit.declaredFunctions.filter(keepF);
+    unit.localDeclaredFunctions = unit.localDeclaredFunctions.filter(keepF);
+    unit.definedVariables = unit.definedVariables.filter(keepV);
+    unit.externVariables = unit.externVariables.filter(keepV);
+    unit.localExternVariables = unit.localExternVariables.filter(keepV);
   }
 }
 
@@ -3245,16 +5237,16 @@ function linkTranslationUnits(units, compilerOptions) {
   }
 
   function isDefinition(decl) {
-    if (decl.declKind === Types.DeclKind.VAR) {
+    if (decl instanceof AST.DVar) {
       return decl.storageClass !== Types.StorageClass.EXTERN || decl.initExpr != null;
-    } else if (decl.declKind === Types.DeclKind.FUNC) {
+    } else if (decl instanceof AST.DFunc) {
       return decl.body != null;
     }
     return false;
   }
 
   function isImportFunction(decl) {
-    return decl.declKind === Types.DeclKind.FUNC && decl.storageClass === Types.StorageClass.IMPORT;
+    return decl instanceof AST.DFunc && decl.storageClass === Types.StorageClass.IMPORT;
   }
 
   function getDeclType(decl) { return decl.type; }
@@ -3262,7 +5254,7 @@ function linkTranslationUnits(units, compilerOptions) {
 
   function checkCompatibility(a, b) {
     const locs = [a.loc, b.loc].filter(l => l?.filename);
-    if (a.declKind !== b.declKind) {
+    if (a.constructor !== b.constructor) {
       addError(`declaration and definition kinds do not match for symbol '${getName(a)}'`, locs);
       return;
     }
@@ -3273,14 +5265,14 @@ function linkTranslationUnits(units, compilerOptions) {
   }
 
   function setDefinition(decl, definition) {
-    if (decl.declKind !== definition.declKind) return;
-    if (decl.declKind === Types.DeclKind.VAR) {
+    if (decl.constructor !== definition.constructor) return;
+    if (decl instanceof AST.DVar) {
       decl.definition = definition;
       // Propagate allocClass
       if (decl.allocClass === Types.AllocClass.MEMORY) {
         definition.allocClass = Types.AllocClass.MEMORY;
       }
-    } else if (decl.declKind === Types.DeclKind.FUNC) {
+    } else if (decl instanceof AST.DFunc) {
       decl.definition = definition;
     }
   }
@@ -3301,8 +5293,8 @@ function linkTranslationUnits(units, compilerOptions) {
 
     if (isDefinition(existing)) {
       // Allow duplicate definitions for inline functions
-      if (decl.declKind === Types.DeclKind.FUNC && decl.isInline &&
-          existing.declKind === Types.DeclKind.FUNC && existing.isInline) {
+      if (decl instanceof AST.DFunc && decl.isInline &&
+          existing instanceof AST.DFunc && existing.isInline) {
         return;
       }
       addError(`Duplicate definition of symbol '${name}'`);
@@ -3340,7 +5332,7 @@ function linkTranslationUnits(units, compilerOptions) {
         return;
       }
       if (!isDefinition(it) && !isImportFunction(it)) {
-        if (compilerOptions.allowUndefined && it.declKind === Types.DeclKind.FUNC) {
+        if (compilerOptions.allowUndefined && it instanceof AST.DFunc) {
           it.storageClass = Types.StorageClass.IMPORT;
         } else {
           addError(`Undefined symbol '${name}' during linking`, [decl.loc || it.loc]);
@@ -3367,70 +5359,6 @@ function linkTranslationUnits(units, compilerOptions) {
   return { errors };
 }
 
-// ====================
-// Parser — ConstEval (simplified for parse-time)
-// ====================
-
-function constEvalInt(expr) {
-  if (!expr) return null;
-  switch (expr.kind) {
-    case Types.ExprKind.INT: return expr.value;  // already BigInt
-    case Types.ExprKind.IDENT:
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) return expr.decl.value;
-      return null;
-    case Types.ExprKind.BINARY: {
-      const l = constEvalInt(expr.left), r = constEvalInt(expr.right);
-      if (l === null || r === null) return null;
-      switch (expr.op) {
-        case "ADD": return l + r; case "SUB": return l - r;
-        case "MUL": return l * r; case "DIV": return r === 0n ? null : l / r;
-        case "MOD": return r === 0n ? null : l % r;
-        case "BAND": return l & r; case "BOR": return l | r; case "BXOR": return l ^ r;
-        case "SHL": return l << r; case "SHR": return l >> r;
-        case "EQ": return l === r ? 1n : 0n; case "NE": return l !== r ? 1n : 0n;
-        case "LT": return l < r ? 1n : 0n; case "GT": return l > r ? 1n : 0n;
-        case "LE": return l <= r ? 1n : 0n; case "GE": return l >= r ? 1n : 0n;
-        case "LAND": return (l && r) ? 1n : 0n; case "LOR": return (l || r) ? 1n : 0n;
-        default: return null;
-      }
-    }
-    case Types.ExprKind.UNARY: {
-      if (expr.op === "OP_ADDR") {
-        // Support offsetof pattern: &((type*)0)->member
-        const inner = expr.operand;
-        if ((inner.kind === Types.ExprKind.ARROW || inner.kind === Types.ExprKind.MEMBER) && inner.memberDecl) {
-          const base = constEvalInt(inner.base);
-          if (base !== null) return base + BigInt(inner.memberDecl.byteOffset);
-        }
-        return null;
-      }
-      const v = constEvalInt(expr.operand);
-      if (v === null) return null;
-      switch (expr.op) {
-        case "OP_POS": return v; case "OP_NEG": return -v;
-        case "OP_LNOT": return v === 0n ? 1n : 0n; case "OP_BNOT": return ~v;
-        default: return null;
-      }
-    }
-    case Types.ExprKind.IMPLICIT_CAST: {
-      return constEvalInt(expr.expr);
-    }
-    case Types.ExprKind.TERNARY: {
-      const c = constEvalInt(expr.condition);
-      if (c === null) return null;
-      return constEvalInt(c !== 0n ? expr.thenExpr : expr.elseExpr);
-    }
-    case Types.ExprKind.CAST: {
-      const v = constEvalInt(expr.expr);
-      return v;
-    }
-    case Types.ExprKind.SIZEOF_EXPR: return BigInt(expr.expr.type.size);
-    case Types.ExprKind.SIZEOF_TYPE: return BigInt(expr.operandType.size);
-    case Types.ExprKind.ALIGNOF_EXPR: return BigInt(expr.expr.type.align);
-    case Types.ExprKind.ALIGNOF_TYPE: return BigInt(expr.operandType.align);
-    default: return null;
-  }
-}
 
 // ====================
 // Init list normalization helpers
@@ -3440,7 +5368,7 @@ function constEvalInt(expr) {
 function getVarMembers(tag) {
   const result = [];
   for (const m of tag.members) {
-    if (m.declKind !== Types.DeclKind.VAR) continue;
+    if (!(m instanceof AST.DVar)) continue;
     if (m.bitWidth >= 0 && !m.name) continue; // skip unnamed bitfields
     result.push(m);
   }
@@ -3451,7 +5379,7 @@ function getVarMembers(tag) {
 // anonymous struct/union members. Returns array of DVar* path, or null.
 function findMemberChain(tag, name) {
   for (const m of tag.members) {
-    if (m.declKind !== Types.DeclKind.VAR) continue;
+    if (!(m instanceof AST.DVar)) continue;
     if (m.name === name) return [m];
     // Recurse into anonymous struct/union members
     if (!m.name && m.type.isTag() && m.type.tagDecl) {
@@ -3462,15 +5390,25 @@ function findMemberChain(tag, name) {
   return null;
 }
 
-// Normalize an init list: resolve designators, brace elision, zero-fill
+// Normalize an init list: resolve designators, brace elision, zero-fill.
+// Returns the (possibly new) init list — for unsized arrays the type
+// changes to the inferred size, so a fresh EInitList is built at the
+// end. Otherwise returns the original (mutated in place: elements and
+// designators arrays are rewritten through the existing references —
+// safe because Object.freeze on EInitList is shallow).
 function normalizeInitList(initList, containerType) {
-  initList.type = containerType;
-
-  // Save source elements and designators, then clear for output
-  const src = initList.elements;
-  const desigs = initList.designators;
-  initList.elements = [];
-  initList.designators = [];
+  // Snapshot source, then clear in place. Mutating array lengths/
+  // contents rather than reassigning the references keeps
+  // initList.children aliasing initList.elements for walkers. Frozen
+  // EInitList allows array-content mutation since freeze is shallow.
+  const src = initList.elements.slice();
+  const desigs = initList.designators.slice();
+  initList.elements.length = 0;
+  initList.designators.length = 0;
+  // Effective type: starts as containerType; may be refined for unsized
+  // arrays once we know the actual extent. Tracked locally rather than
+  // mutated on initList so we can build a fresh EInitList at the end.
+  let effectiveType = containerType;
 
   // Child count for an aggregate type
   function childCount(t) {
@@ -3505,8 +5443,9 @@ function normalizeInitList(initList, containerType) {
 
   // Create a zero expression for a given type
   function makeZero(t) {
-    if (t.isFloatingPoint()) return new AST.EFloat(t, 0.0);
-    return new AST.EInt(Types.TINT, 0n);
+    const loc = Lexer.Loc.generated();
+    if (t.isFloatingPoint()) return new AST.EFloat(loc, t, 0.0);
+    return new AST.EInt(loc, Types.TINT, 0n);
   }
 
   // Ensure output has a slot at index
@@ -3517,13 +5456,13 @@ function normalizeInitList(initList, containerType) {
   // Ensure output[index] is a sub-EInitList for an aggregate child
   function ensureSubList(list, index, subType) {
     ensureSlot(list, index);
-    if (!list.elements[index] || list.elements[index].kind !== Types.ExprKind.INIT_LIST) {
+    if (!list.elements[index] || !(list.elements[index] instanceof AST.EInitList)) {
       const cc = childCount(subType);
       const elems = [];
       if (cc !== 0x7FFFFFFF && cc > 0) {
         for (let i = 0; i < cc; i++) elems.push(null);
       }
-      list.elements[index] = new AST.EInitList(subType, elems);
+      list.elements[index] = new AST.EInitList(Lexer.Loc.generated(), subType, elems);
     }
     return list.elements[index];
   }
@@ -3549,10 +5488,9 @@ function normalizeInitList(initList, containerType) {
     stack.push({ type: slotType, index: 0, count: cc, output: sub });
   }
 
-  // Initialize root level
+  // Initialize root level — `length = 0` was already done above; pad with nulls.
   const rootCount = childCount(containerType);
   if (rootCount !== 0x7FFFFFFF && rootCount > 0) {
-    initList.elements = [];
     for (let i = 0; i < rootCount; i++) initList.elements.push(null);
   }
   stack.push({ type: containerType, index: 0, count: rootCount, output: initList });
@@ -3641,15 +5579,15 @@ function normalizeInitList(initList, containerType) {
       ensureSlot(top.output, top.index);
       const slotType = childType(top.type, top.index, top.output);
 
-      if (src[srcIdx].kind === Types.ExprKind.INIT_LIST) {
+      if (src[srcIdx] instanceof AST.EInitList) {
         // Braced sub-init-list: place and recurse
         top.output.elements[top.index] = src[srcIdx];
-        normalizeInitList(top.output.elements[top.index], slotType);
+        top.output.elements[top.index] = normalizeInitList(top.output.elements[top.index], slotType);
         srcIdx++;
         if (top.index + 1 > maxExtent) maxExtent = top.index + 1;
         advanceCursor();
         break;
-      } else if (src[srcIdx].kind === Types.ExprKind.STRING && slotType.isArray()) {
+      } else if (src[srcIdx] instanceof AST.EString && slotType.isArray()) {
         // String literal for char array
         top.output.elements[top.index] = src[srcIdx];
         srcIdx++;
@@ -3679,11 +5617,11 @@ function normalizeInitList(initList, containerType) {
     }
   }
 
-  // For unsized arrays, finalize type based on actual extent
+  // For unsized arrays, finalize type based on actual extent.
   if (containerType.isArray() && (containerType.arraySize || 0) === 0) {
     const finalSize = Math.max(maxExtent, initList.elements.length);
     const elemType = containerType.baseType;
-    initList.type = Types.arrayOf(elemType, finalSize);
+    effectiveType = Types.arrayOf(elemType, finalSize);
     while (initList.elements.length < finalSize) initList.elements.push(null);
   }
 
@@ -3696,13 +5634,13 @@ function normalizeInitList(initList, containerType) {
       for (let i = 0; i < sz; i++) {
         if (list.elements[i] === null) {
           if (elemType.isAggregate()) {
-            const sub = new AST.EInitList(elemType, []);
+            const sub = new AST.EInitList(Lexer.Loc.generated(), elemType, []);
             list.elements[i] = sub;
             fillZeros(sub, elemType);
           } else {
             list.elements[i] = makeZero(elemType);
           }
-        } else if (list.elements[i].kind === Types.ExprKind.INIT_LIST) {
+        } else if (list.elements[i] instanceof AST.EInitList) {
           fillZeros(list.elements[i], elemType);
         }
       }
@@ -3716,13 +5654,13 @@ function normalizeInitList(initList, containerType) {
           const mt = members[i].type;
           if (list.elements[i] === null) {
             if (mt.isAggregate()) {
-              const sub = new AST.EInitList(mt, []);
+              const sub = new AST.EInitList(Lexer.Loc.generated(), mt, []);
               list.elements[i] = sub;
               fillZeros(sub, mt);
             } else {
               list.elements[i] = makeZero(mt);
             }
-          } else if (list.elements[i].kind === Types.ExprKind.INIT_LIST) {
+          } else if (list.elements[i] instanceof AST.EInitList) {
             fillZeros(list.elements[i], mt);
           }
         }
@@ -3735,14 +5673,14 @@ function normalizeInitList(initList, containerType) {
           if (umi < members.length) {
             const mt = members[umi].type;
             if (mt.isAggregate()) {
-              const sub = new AST.EInitList(mt, []);
+              const sub = new AST.EInitList(Lexer.Loc.generated(), mt, []);
               list.elements[0] = sub;
               fillZeros(sub, mt);
             } else {
               list.elements[0] = makeZero(mt);
             }
           }
-        } else if (list.elements[0].kind === Types.ExprKind.INIT_LIST) {
+        } else if (list.elements[0] instanceof AST.EInitList) {
           const members = getVarMembers(tag);
           const umi = list.unionMemberIndex;
           if (umi >= 0 && umi < members.length) {
@@ -3752,7 +5690,14 @@ function normalizeInitList(initList, containerType) {
       }
     }
   }
-  fillZeros(initList, initList.type);
+  fillZeros(initList, effectiveType);
+  // If the type was refined (unsized → sized array), build a new
+  // EInitList sharing the now-mutated elements/designators arrays.
+  if (effectiveType !== initList.type) {
+    return new AST.EInitList(initList.loc, effectiveType,
+      initList.elements, initList.designators, initList.unionMemberIndex);
+  }
+  return initList;
 }
 
 // ====================
@@ -3776,8 +5721,6 @@ class Parser {
     this.requiredSources = new Set();
     this.exportDirectives = [];
     this.parsedExceptionTags = [];
-    this.globalUsedSymbols = new Set();
-    this.fileScopeCompoundLiterals = [];
     this.parsedLabels = new Map();
     this.pendingGotos = new Map();
     this.warningFlags = { pointerDecay: false, circularDependency: false };
@@ -3812,16 +5755,12 @@ class Parser {
     if (this.atKind(kind)) return this.advance();
     this.error(this.peek(), msg || `Expected ${kind}`);
   }
-  error(tok, msg) {
-    const err = new Lexer.LexError(msg, tok.filename, tok.line);
-    throw err;
-  }
-  recoverableError(tok, msg) {
-    this.errors.push(new Lexer.LexError(msg, tok.filename, tok.line));
-  }
-  warning(tok, msg) {
-    this.warnings.push(new Lexer.LexError(msg, tok.filename, tok.line));
-  }
+  // Token-flavored shorthands that delegate to the module-level diag pool.
+  // New code should prefer reportError / reportWarning / fatalError on a
+  // Loc directly; these stay because the parser has many existing callers.
+  error(tok, msg) { fatalError(Lexer.Loc.fromTok(tok), msg); }
+  recoverableError(tok, msg) { reportError(Lexer.Loc.fromTok(tok), msg); }
+  warning(tok, msg) { reportWarning(Lexer.Loc.fromTok(tok), msg); }
 
   // --- isTypeName ---
   isTypeName() {
@@ -4313,7 +6252,7 @@ class Parser {
       // Validate flexible array members (C99)
       {
         let foundFAM = false, famIdx = -1;
-        const varMembers = members.filter(m => m.declKind === Types.DeclKind.VAR);
+        const varMembers = members.filter(m => m instanceof AST.DVar);
         for (let i = 0; i < varMembers.length; i++) {
           const mv = varMembers[i];
           if (mv.type.kind === Types.TypeKind.ARRAY && mv.type.arraySize === 0) {
@@ -4616,7 +6555,7 @@ class Parser {
         }
         // ULL: always Types.TULLONG, already set
       }
-      return new AST.EInt(type, val);
+      return new AST.EInt(Lexer.Loc.fromTok(t), type, val);
     }
 
     // Float literal
@@ -4625,7 +6564,7 @@ class Parser {
       let type = Types.TDOUBLE;
       if (t.flags.isFloat) type = Types.TFLOAT;
       else if (t.flags.isLong) type = Types.TLDOUBLE;
-      return new AST.EFloat(type, t.floating);
+      return new AST.EFloat(Lexer.Loc.fromTok(t), type, t.floating);
     }
 
     // Note: CHAR tokens are converted to INT by Lexer.postProcess, handled above
@@ -4639,40 +6578,29 @@ class Parser {
     if (t.kind === Lexer.TokenKind.IDENT) {
       this.advance();
       const name = t.text;
+      const loc = Lexer.Loc.fromTok(t);
       // Check __func__ / __FUNCTION__
       if ((name === "__func__" || name === "__FUNCTION__") && this.currentParsingFunc) {
         const funcName = this.currentParsingFunc.name;
         const bytes = [];
         for (let i = 0; i < funcName.length; i++) bytes.push(funcName.charCodeAt(i));
         bytes.push(0);
-        return new AST.EString(Types.arrayOf(Types.TCHAR, bytes.length), bytes);
+        return new AST.EString(loc, Types.arrayOf(Types.TCHAR, bytes.length), bytes);
       }
-      const decl = this.varScope.get(name);
-      if (!decl) {
-        // Implicit function declaration: C89 allowed calling undeclared functions.
-        // Gated behind --allow-implicit-function-decl / --allow-old-c.
-        if (this._allowImplicitFunctionDecl && this.atText("(")) {
-          const ftype = Types.functionType(Types.TINT, [], false);
-          const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], Types.StorageClass.EXTERN, false, null);
-          this.varScope.set(name, fdecl);
-          if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(fdecl);
-          else this.globalUsedSymbols.add(fdecl);
-          return new AST.EIdent(ftype, name, fdecl);
-        }
-        this.recoverableError(t, `Undeclared identifier '${name}'`);
-        return new AST.EIdent(Types.TINT, name, null);
+      // Implicit function declaration: C89 allowed calling undeclared functions.
+      // Gated behind --allow-implicit-function-decl / --allow-old-c. We
+      // create the decl ourselves here so makeIdent's lookup succeeds.
+      if (!this.varScope.get(name) && this._allowImplicitFunctionDecl && this.atText("(")) {
+        const ftype = Types.functionType(Types.TINT, [], false);
+        const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], Types.StorageClass.EXTERN, false, null);
+        this.varScope.set(name, fdecl);
       }
-      if (this.currentParsingFunc) this.currentParsingFunc.usedSymbols.add(decl);
-      else this.globalUsedSymbols.add(decl);
-
-      if (decl.declKind === Types.DeclKind.VAR) return new AST.EIdent(decl.type, name, decl);
-      if (decl.declKind === Types.DeclKind.FUNC) return new AST.EIdent(decl.type, name, decl);
-      if (decl.declKind === Types.DeclKind.ENUM_CONST) return new AST.EIdent(Types.TINT, name, decl);
-      return new AST.EIdent(Types.TINT, name, decl);
+      return AST.makeIdent(loc, name, this.varScope);
     }
 
     // Parenthesized expression or compound literal
     if (t.kind === Lexer.TokenKind.PUNCT && t.text === "(") {
+      const startLoc = Lexer.Loc.fromTok(t);
       // Check if it's a compound literal: (type){...}
       const saved = this.pos;
       this.advance(); // skip (
@@ -4688,35 +6616,30 @@ class Parser {
         this.expect(")");
         if (this.atText("{")) {
           // Compound literal
-          const initList = this.parseInitList(castType);
-          // Handle string-initialized char array
+          let initList = this.parseInitList(castType);
+          // Handle string-initialized char array (e.g., `(char[]){"hi"}`).
           if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0 &&
-              initList.elements.length === 1 && initList.elements[0]?.kind === Types.ExprKind.STRING) {
+              initList.elements.length === 1 && initList.elements[0] instanceof AST.EString) {
             castType = initList.elements[0].type;
-            initList.type = castType;
+            initList = new AST.EInitList(initList.loc, castType,
+              initList.elements, initList.designators, initList.unionMemberIndex);
           } else if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0) {
-            normalizeInitList(initList, castType);
+            initList = normalizeInitList(initList, castType);
             castType = initList.type;
           } else if (castType.isAggregate()) {
-            normalizeInitList(initList, castType);
+            initList = normalizeInitList(initList, castType);
           }
-          const cl = new AST.ECompoundLiteral(castType, initList);
-          if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
-          else this.currentParsingFunc.compoundLiterals.push(cl);
-          return cl;
+          return new AST.ECompoundLiteral(startLoc, castType, initList);
         }
         // Cast expression
         const expr = this.parseCastExpression();
         // GCC extension: cast-to-union — (union_type) expr → compound literal
         if (castType.isUnion()) {
-          const initList = new AST.EInitList(castType, [expr], []);
-          normalizeInitList(initList, castType);
-          const cl = new AST.ECompoundLiteral(castType, initList);
-          if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
-          else this.currentParsingFunc.compoundLiterals.push(cl);
-          return cl;
+          let initList = new AST.EInitList(startLoc, castType, [expr], []);
+          initList = normalizeInitList(initList, castType);
+          return new AST.ECompoundLiteral(startLoc, castType, initList);
         }
-        return new AST.ECast(castType, castType, expr);
+        return AST.makeCast(startLoc, castType, expr);
       }
       // Regular parenthesized expression
       this.pos = saved;
@@ -4728,6 +6651,7 @@ class Parser {
 
     // sizeof
     if (this.atKW(Lexer.Keyword.SIZEOF)) {
+      const sizeofLoc = Lexer.Loc.fromTok(t);
       this.advance();
       if (this.matchText("(")) {
         if (this.isTypeName()) {
@@ -4739,18 +6663,19 @@ class Parser {
           }
           this.expect(")");
           if (sType.removeQualifiers().isRef()) this.error(this.peek(-1), `sizeof(${sType.removeQualifiers().kind}) is not allowed`);
-          return new AST.ESizeofType(Types.TULONG, sType);
+          return new AST.ESizeofType(sizeofLoc, Types.TULONG, sType);
         }
         const expr = this.parseExpression();
         this.expect(")");
-        return new AST.ESizeofExpr(Types.TULONG, expr);
+        return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
       }
       const expr = this.parseUnaryExpression();
-      return new AST.ESizeofExpr(Types.TULONG, expr);
+      return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
     }
 
     // _Alignof
     if (this.atKW(Lexer.Keyword.ALIGNOF)) {
+      const alignofLoc = Lexer.Loc.fromTok(t);
       this.advance();
       this.expect("(");
       if (this.isTypeName()) {
@@ -4767,11 +6692,11 @@ class Parser {
         if (!aType.isComplete) {
           this.error(this.peek(-1), "_Alignof cannot be applied to incomplete type '" + aType.toString() + "'");
         }
-        return new AST.EAlignofType(Types.TULONG, aType);
+        return new AST.EAlignofType(alignofLoc, Types.TULONG, aType);
       }
       const expr = this.parseExpression();
       this.expect(")");
-      return new AST.EAlignofExpr(Types.TULONG, expr);
+      return new AST.EAlignofExpr(alignofLoc, Types.TULONG, expr);
     }
 
     // __builtin_va_start/va_arg/va_end/va_copy
@@ -4817,10 +6742,11 @@ class Parser {
         this.error(newTok, `${callName}(__struct ${nq.tagName}, ...): expected ${fields.length} field args, got ${args.length}`);
       }
       // Reject implicit non-zero int → non-eqref ref field (silent-null bug).
+      const newLoc = Lexer.Loc.fromTok(newTok);
       for (let i = 0; i < args.length; i++) {
-        this._rejectNonZeroToRef(fields[i].type, args[i], newTok);
+        AST.rejectNonZeroToRef(fields[i].type, args[i], newLoc);
       }
-      return new AST.EGCNew(nq, args);
+      return new AST.EGCNew(newLoc, nq, args);
     }
 
     // __array_new(elemType, length [, init]) — array.new / array.new_default
@@ -4845,21 +6771,24 @@ class Parser {
         this.error(newTok, `__array_new(...): expected length [, init], got ${args.length} args`);
       }
       // Reject non-zero int as fill value when element type is a non-eqref ref.
-      if (args.length === 2) this._rejectNonZeroToRef(elemType, args[1], newTok);
-      return new AST.EGCNew(arrType, args);
+      const newLoc = Lexer.Loc.fromTok(newTok);
+      if (args.length === 2) AST.rejectNonZeroToRef(elemType, args[1], newLoc);
+      return new AST.EGCNew(newLoc, arrType, args);
     }
 
     // __memory_size, __memory_grow
     if (this.matchKW(Lexer.Keyword.X_MEMORY_SIZE)) {
+      const kwLoc = Lexer.Loc.fromTok(this.peek(-1));
       this.expect("(");
       this.expect(")");
-      return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_SIZE, []);
+      return new AST.EIntrinsic(kwLoc, Types.TULONG, Types.IntrinsicKind.MEMORY_SIZE, []);
     }
     if (this.matchKW(Lexer.Keyword.X_MEMORY_GROW)) {
+      const kwLoc = Lexer.Loc.fromTok(this.peek(-1));
       this.expect("(");
       const arg = this.parseAssignmentExpression();
       this.expect(")");
-      return new AST.EIntrinsic(Types.TULONG, Types.IntrinsicKind.MEMORY_GROW, [arg]);
+      return new AST.EIntrinsic(kwLoc, Types.TULONG, Types.IntrinsicKind.MEMORY_GROW, [arg]);
     }
 
     // __ref_is_null(ref)
@@ -4871,7 +6800,7 @@ class Parser {
       if (!arg.type.removeQualifiers().isRef()) {
         this.error(tok, `__ref_is_null requires a reference type, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_IS_NULL, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.REF_IS_NULL, [arg]);
     }
 
     // __ref_eq(ref, ref)
@@ -4886,7 +6815,7 @@ class Parser {
       if (!at.isRef() || !bt.isRef()) {
         this.error(tok, `__ref_eq requires two reference operands, got '${a.type.toString()}' and '${b.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.REF_EQ, [a, b]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.REF_EQ, [a, b]);
     }
 
     // __ref_null(type) — produces a null of the given reference type
@@ -4908,7 +6837,7 @@ class Parser {
       if (nq === Types.TREFEXTERN) {
         this.error(tok, `__ref_null(__refextern) is not allowed — non-nullable refs cannot be null; use __externref instead`);
       }
-      return new AST.EIntrinsic(nq, Types.IntrinsicKind.REF_NULL, [], nq);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), nq, Types.IntrinsicKind.REF_NULL, [], nq);
     }
 
     // __ref_test(target_type, ref) — runtime type test
@@ -4942,7 +6871,7 @@ class Parser {
           this.error(tok, `${opName} second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
         }
         const kind = isNullable ? Types.IntrinsicKind.REF_TEST_NULL : Types.IntrinsicKind.REF_TEST;
-        return new AST.EIntrinsic(Types.TINT, kind, [refExpr], tq);
+        return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, kind, [refExpr], tq);
       }
     }
 
@@ -4976,7 +6905,7 @@ class Parser {
           this.error(tok, `${opName} second argument must be a GC-universe ref, got '${refExpr.type.toString()}'`);
         }
         const kind = isNullable ? Types.IntrinsicKind.REF_CAST_NULL : Types.IntrinsicKind.REF_CAST;
-        return new AST.EIntrinsic(tq, kind, [refExpr], tq);
+        return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), tq, kind, [refExpr], tq);
       }
     }
 
@@ -4989,7 +6918,7 @@ class Parser {
       if (!arg.type.removeQualifiers().isGCArray()) {
         this.error(tok, `__array_len requires a __array(...) operand, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TINT, Types.IntrinsicKind.ARRAY_LEN, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.ARRAY_LEN, [arg]);
     }
 
     // __array_of(elemType, v1, v2, ...) — array.new_fixed
@@ -5010,11 +6939,12 @@ class Parser {
         this.error(tok, `__array_of element type must not be a C array or function`);
       }
       // Reject implicit non-zero int → non-eqref ref element (silent-null bug).
+      const tokLoc = Lexer.Loc.fromTok(tok);
       for (let i = 0; i < args.length; i++) {
-        this._rejectNonZeroToRef(elemType, args[i], tok);
+        AST.rejectNonZeroToRef(elemType, args[i], tokLoc);
       }
       const arrType = Types.gcArrayOf(elemType);
-      return new AST.EIntrinsic(arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
+      return new AST.EIntrinsic(tokLoc, arrType, Types.IntrinsicKind.GC_NEW_ARRAY, args, elemType);
     }
 
     // __array_fill(arr, offset, value, count) — bulk fill of a GC array slice
@@ -5033,8 +6963,9 @@ class Parser {
         this.error(tok, `__array_fill first argument must be a __array(...), got '${arr.type.toString()}'`);
       }
       const elemType = arr.type.removeQualifiers().baseType;
-      this._rejectNonZeroToRef(elemType, val, tok);
-      return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
+      const tokLoc = Lexer.Loc.fromTok(tok);
+      AST.rejectNonZeroToRef(elemType, val, tokLoc);
+      return new AST.EIntrinsic(tokLoc, Types.TVOID, Types.IntrinsicKind.ARRAY_FILL, [arr, off, val, count]);
     }
 
     // __ref_as_extern(gc_ref) — wrap a GC-universe ref (struct/array/eqref)
@@ -5047,7 +6978,7 @@ class Parser {
       if (!arg.type.removeQualifiers().isGCRef()) {
         this.error(tok, `__ref_as_extern requires a GC-universe ref (__struct/__array/__eqref), got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TEXTERNREF, Types.IntrinsicKind.REF_AS_EXTERN, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TEXTERNREF, Types.IntrinsicKind.REF_AS_EXTERN, [arg]);
     }
 
     // __ref_as_any(extern_ref) — unwrap an externref to eqref. Cheap retag
@@ -5062,7 +6993,7 @@ class Parser {
       if (at !== Types.TEXTERNREF && at !== Types.TREFEXTERN) {
         this.error(tok, `__ref_as_any requires an __externref/__refextern, got '${arg.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TEQREF, Types.IntrinsicKind.REF_AS_EQ, [arg]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TEQREF, Types.IntrinsicKind.REF_AS_EQ, [arg]);
     }
 
     // __cast(TargetType, expr) — universal conversion. Dispatch on the
@@ -5107,7 +7038,7 @@ class Parser {
         this.error(tok,
           `__cast: no conversion defined from '${expr.type.toString()}' to '${tType.toString()}'`);
       }
-      return new AST.EIntrinsic(tq, Types.IntrinsicKind.CAST, [expr], tq);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), tq, Types.IntrinsicKind.CAST, [expr], tq);
     }
 
     // __array_copy(dst, dst_off, src, src_off, count) — bulk copy between GC arrays
@@ -5136,11 +7067,12 @@ class Parser {
         this.error(tok,
           `__array_copy element type mismatch: dst is '${dst.type.toString()}', src is '${src.type.toString()}'`);
       }
-      return new AST.EIntrinsic(Types.TVOID, Types.IntrinsicKind.ARRAY_COPY, [dst, dstOff, src, srcOff, count]);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TVOID, Types.IntrinsicKind.ARRAY_COPY, [dst, dstOff, src, srcOff, count]);
     }
 
     // __builtin(kind, args...)
     if (this.matchKW(Lexer.Keyword.X_BUILTIN)) {
+      const builtinTok = this.peek(-1);
       this.expect("(");
       const kindTok = this.expectKind(Lexer.TokenKind.IDENT);
       const kindName = kindTok.text;
@@ -5156,11 +7088,12 @@ class Parser {
       let retType = Types.TVOID;
       if (ik === Types.IntrinsicKind.ALLOCA) retType = Types.TVOID.pointer();
       else if (ik === Types.IntrinsicKind.HEAP_BASE || ik === Types.IntrinsicKind.MEMORY_SIZE || ik === Types.IntrinsicKind.MEMORY_GROW) retType = Types.TULONG;
-      return new AST.EIntrinsic(retType, ik, args);
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(builtinTok), retType, ik, args);
     }
 
     // __wasm(type, (args...), instruction, ...)
     if (this.matchKW(Lexer.Keyword.X_WASM)) {
+      const wasmTok = this.peek(-1);
       this.expect("(");
       const retSpecs = this.parseDeclSpecifiers();
       let retType = retSpecs.type;
@@ -5236,11 +7169,12 @@ class Parser {
         }
       }
       this.expect(")");
-      return new AST.EWasm(retType, args, bytes);
+      return new AST.EWasm(Lexer.Loc.fromTok(wasmTok), retType, args, bytes);
     }
 
     // _Generic
     if (this.matchKW(Lexer.Keyword.GENERIC)) {
+      const genericTok = this.peek(-1);
       this.expect("(");
       const controlExpr = this.parseAssignmentExpression();
       let result = null;
@@ -5265,7 +7199,7 @@ class Parser {
       if (!result && !defaultExpr) {
         this.error(this.peek(-1), "_Generic: no matching type and no 'default' association");
       }
-      return result || defaultExpr || new AST.EInt(Types.TINT, 0n);
+      return result || defaultExpr || new AST.EInt(Lexer.Loc.fromTok(genericTok), Types.TINT, 0n);
     }
 
     this.error(t, `Unexpected token in expression: ${t.kind} '${t.text}'`);
@@ -5273,7 +7207,9 @@ class Parser {
 
   parseStringLiteral() {
     // Determine string prefix from first token
-    let prefix = this.peek().flags.stringPrefix || Lexer.StringPrefix.NONE;
+    const startTok = this.peek();
+    let prefix = startTok.flags.stringPrefix || Lexer.StringPrefix.NONE;
+    const startLoc = Lexer.Loc.fromTok(startTok);
     const codepoints = [];
     while (this.atKind(Lexer.TokenKind.STRING)) {
       const tok = this.advance();
@@ -5296,7 +7232,7 @@ class Parser {
       for (const cp of codepoints) Lexer.encodeUtf16LE(cp, bytes);
       bytes.push(0); bytes.push(0); // null terminator (2 bytes)
       const elemCount = bytes.length / 2;
-      return new AST.EString(Types.arrayOf(Types.TUSHORT, elemCount), bytes);
+      return new AST.EString(startLoc, Types.arrayOf(Types.TUSHORT, elemCount), bytes);
     }
     if (prefix === Lexer.StringPrefix.PREFIX_L) {
       // UTF-32 string: element type is int (wchar_t)
@@ -5304,7 +7240,7 @@ class Parser {
       for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
-      return new AST.EString(Types.arrayOf(Types.TINT, elemCount), bytes);
+      return new AST.EString(startLoc, Types.arrayOf(Types.TINT, elemCount), bytes);
     }
     if (prefix === Lexer.StringPrefix.PREFIX_U) {
       // UTF-32 string: element type is unsigned int (char32_t)
@@ -5312,7 +7248,7 @@ class Parser {
       for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
-      return new AST.EString(Types.arrayOf(Types.TUINT, elemCount), bytes);
+      return new AST.EString(startLoc, Types.arrayOf(Types.TUINT, elemCount), bytes);
     }
     // Regular or u8 string: element type is char
     // Codepoints <= 0xFF are raw bytes (from \xNN escapes).
@@ -5323,10 +7259,11 @@ class Parser {
       else Lexer.encodeUtf8(cp, bytes);
     }
     bytes.push(0);
-    return new AST.EString(Types.arrayOf(Types.TCHAR, bytes.length), bytes);
+    return new AST.EString(startLoc, Types.arrayOf(Types.TCHAR, bytes.length), bytes);
   }
 
   parseIntrinsic(ikind) {
+    const kwTok = this.peek();
     this.advance();
     this.expect("(");
     const args = [];
@@ -5337,10 +7274,11 @@ class Parser {
     this.expect(")");
     let retType = Types.TVOID;
     if (ikind === Types.IntrinsicKind.VA_START || ikind === Types.IntrinsicKind.VA_END || ikind === Types.IntrinsicKind.VA_COPY) retType = Types.TVOID;
-    return new AST.EIntrinsic(retType, ikind, args);
+    return new AST.EIntrinsic(Lexer.Loc.fromTok(kwTok), retType, ikind, args);
   }
 
   parseVaArg() {
+    const kwTok = this.peek();
     this.advance();
     this.expect("(");
     const ap = this.parseAssignmentExpression();
@@ -5356,7 +7294,7 @@ class Parser {
       this.error(this.peek(-1),
         `va_arg cannot retrieve a reference type '${argType.toString()}' — vararg storage uses linear memory which can't hold GC references`);
     }
-    return new AST.EIntrinsic(argType, Types.IntrinsicKind.VA_ARG, [ap], argType);
+    return new AST.EIntrinsic(Lexer.Loc.fromTok(kwTok), argType, Types.IntrinsicKind.VA_ARG, [ap], argType);
   }
 
   // Matches CC's parsePostfixExpression (compiler.cc ~line 10495)
@@ -5365,9 +7303,14 @@ class Parser {
     return this.parsePostfixTail(expr);
   }
 
-  _rejectRefAsCondition(expr, tok, ctxName) {
-    // Refs in boolean context are now allowed as sugar for !__ref_is_null.
-    // Helper retained as a no-op so existing call sites need no edits.
+  _validateCond(expr, tok, ctxName) {
+    // Controlling expressions (if/while/for/do/?:) must be scalar.
+    // We extend C with refs (sugar for !__ref_is_null), but reject
+    // structs / unions / arrays / void.
+    if (!AST.isBoolContextType(expr.type)) {
+      this.error(tok,
+        `controlling expression of '${ctxName}' must be scalar, got '${expr.type.toString()}'`);
+    }
   }
 
   // C23 `auto`: validate that the declarator is a plain identifier (no
@@ -5385,7 +7328,7 @@ class Parser {
       this.error(declTok, `'auto ${name}' requires an initializer`);
       return Types.TINT;
     }
-    if (initExpr.kind === Types.ExprKind.INIT_LIST) {
+    if (initExpr instanceof AST.EInitList) {
       this.error(declTok, `'auto ${name}' cannot be initialized from a braced initializer list`);
       return Types.TINT;
     }
@@ -5399,134 +7342,28 @@ class Parser {
     return initType;
   }
 
-  // Allow null pointer constants (literal 0 / NULL) as the only non-ref
-  // value implicitly convertible to a ref. Anything else errors with a
-  // helpful pointer to __ref_null.
-  _isNullPointerConstant(expr) {
-    if (!expr) return false;
-    if (expr.kind === Types.ExprKind.INT && expr.value === 0n) return true;
-    // Strip implicit casts and re-check (handles things like ((void*)0) which
-    // our preprocessor may surface as a CAST expression around 0).
-    if (expr.kind === Types.ExprKind.IMPLICIT_CAST || expr.kind === Types.ExprKind.CAST) {
-      return this._isNullPointerConstant(expr.expr);
-    }
-    return false;
-  }
-  _rejectNonZeroToRef(targetType, expr, tok) {
-    if (!expr || !targetType) return;
-    const t = targetType.removeQualifiers();
-    const s = expr.type.removeQualifiers();
-    if (!t.isRef() || s.isRef()) return;
-    if (this._isNullPointerConstant(expr)) return;
-    // Implicit prim → __eqref boxing is allowed (codegen auto-allocates a
-    // box struct). For other ref types (struct/array/extern), boxing is
-    // ambiguous and the user must use __cast or __ref_null explicitly.
-    if (t === Types.TEQREF && s.isArithmetic()) return;
-    this.error(tok, `cannot convert '${expr.type.toString()}' to reference type '${targetType.toString()}' (use __cast(${targetType.toString()}, x) for an explicit conversion, or __ref_null for null)`);
-  }
-  // Backward-compat alias used elsewhere in parser.
-  _rejectIntToRef(targetType, expr, tok) { this._rejectNonZeroToRef(targetType, expr, tok); }
-
-  lookupMemberChain(type, name) {
-    const ut = type.removeQualifiers();
-    if (ut.tagDecl && ut.tagDecl.members) {
-      for (const m of ut.tagDecl.members) {
-        if (m.declKind !== Types.DeclKind.VAR) continue;
-        if (m.name === name) return [m];
-        // Recurse into anonymous struct/union members
-        if (!m.name && m.type && m.type.tagDecl && m.type.tagDecl.members) {
-          const sub = this.lookupMemberChain(m.type, name);
-          if (sub) return [m, ...sub];
-        }
-      }
-    }
-    return null;
-  }
-
-  lookupMember(type, name) {
-    const chain = this.lookupMemberChain(type, name);
-    if (chain && chain.length > 0) {
-      const last = chain[chain.length - 1];
-      return { type: last.type, decl: last, chain };
-    }
-    return { type: Types.TINT, decl: null, chain: null };
-  }
-
-  markAddressTaken(expr) {
-    if (!expr) return;
-    if (expr.kind === Types.ExprKind.IDENT) {
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
-        expr.decl.allocClass = Types.AllocClass.MEMORY;
-      }
-    } else if (expr.kind === Types.ExprKind.MEMBER) {
-      this.markAddressTaken(expr.base);
-    } else if (expr.kind === Types.ExprKind.SUBSCRIPT) {
-      if (expr.array.type && expr.array.type.isArray()) {
-        this.markAddressTaken(expr.array);
-      }
-    }
-  }
-
   // Matches CC's parseUnaryExpression (compiler.cc ~line 10538)
   parseUnaryExpression() {
-    if (this.matchText("++")) {
-      const tok = this.peek(-1);
-      const e = this.parseUnaryExpression();
-      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `'++' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_PRE_INC", e.type), "OP_PRE_INC", e);
-    }
-    if (this.matchText("--")) {
-      const tok = this.peek(-1);
-      const e = this.parseUnaryExpression();
-      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `'--' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_PRE_DEC", e.type), "OP_PRE_DEC", e);
+    const PREFIX_OPS = {
+      "++": "OP_PRE_INC", "--": "OP_PRE_DEC",
+      "+": "OP_POS", "-": "OP_NEG", "~": "OP_BNOT", "!": "OP_LNOT",
+    };
+    for (const [text, op] of Object.entries(PREFIX_OPS)) {
+      if (this.matchText(text)) {
+        const loc = Lexer.Loc.fromTok(this.peek(-1));
+        // ++/-- recurse into parseUnaryExpression; everything else into parseCastExpression.
+        const e = (op === "OP_PRE_INC" || op === "OP_PRE_DEC")
+          ? this.parseUnaryExpression() : this.parseCastExpression();
+        return AST.makeUnary(loc, op, e);
+      }
     }
     if (this.matchText("&")) {
-      const e = this.parseCastExpression();
-      if ((e.kind === Types.ExprKind.MEMBER || e.kind === Types.ExprKind.ARROW) && e.memberDecl && e.memberDecl.bitWidth >= 0) {
-        this.error(this.peek(-1), `Cannot take address of bit-field member '${e.memberDecl.name}'`);
-      }
-      if (e.type && e.type.removeQualifiers().isRef()) {
-        this.error(this.peek(-1), `Cannot take address of ${e.type.removeQualifiers().kind} variable`);
-      }
-      if (e.kind === Types.ExprKind.MEMBER && e.base && e.base.type && e.base.type.removeQualifiers().isGCStruct()) {
-        this.error(this.peek(-1), `cannot take address of GC struct field`);
-      }
-      if (e.kind === Types.ExprKind.SUBSCRIPT && e.array && e.array.type && e.array.type.removeQualifiers().isGCArray()) {
-        this.error(this.peek(-1), `cannot take address of GC array element`);
-      }
-      this.markAddressTaken(e); return new AST.EUnary(Types.computeUnaryType("OP_ADDR", e.type), "OP_ADDR", e);
+      const loc = Lexer.Loc.fromTok(this.peek(-1));
+      return AST.makeUnary(loc, "OP_ADDR", this.parseCastExpression());
     }
     if (this.matchText("*")) {
-      const tok = this.peek(-1);
-      const e = this.parseCastExpression();
-      if (e.type && e.type.removeQualifiers().isRef()) {
-        this.error(tok, `unary '*' on reference type '${e.type.toString()}' is not allowed (use '->' for fields, or just access the ref directly)`);
-      }
-      return new AST.EUnary(Types.computeUnaryType("OP_DEREF", e.type), "OP_DEREF", e);
-    }
-    if (this.matchText("+")) {
-      const tok = this.peek(-1);
-      const e = this.parseCastExpression();
-      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '+' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_POS", e.type), "OP_POS", e);
-    }
-    if (this.matchText("-")) {
-      const tok = this.peek(-1);
-      const e = this.parseCastExpression();
-      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '-' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_NEG", e.type), "OP_NEG", e);
-    }
-    if (this.matchText("~")) {
-      const tok = this.peek(-1);
-      const e = this.parseCastExpression();
-      if (e.type && e.type.removeQualifiers().isRef()) this.error(tok, `unary '~' on reference type is not allowed`);
-      return new AST.EUnary(Types.computeUnaryType("OP_BNOT", e.type), "OP_BNOT", e);
-    }
-    if (this.matchText("!")) {
-      const e = this.parseCastExpression();
-      // `!ref` is equivalent to __ref_is_null(ref). Allowed as sugar.
-      return new AST.EUnary(Types.computeUnaryType("OP_LNOT", e.type), "OP_LNOT", e);
+      const loc = Lexer.Loc.fromTok(this.peek(-1));
+      return AST.makeUnary(loc, "OP_DEREF", this.parseCastExpression());
     }
 
     if (this.atKW(Lexer.Keyword.SIZEOF)) return this.parsePrimaryExpression(); // handled there
@@ -5538,6 +7375,7 @@ class Parser {
   parseCastExpression() {
     if (this.atText("(")) {
       // Look ahead: is this a cast or a parenthesized expression?
+      const startTok = this.peek();
       const saved = this.pos;
       this.advance();
       if (this.isTypeName()) {
@@ -5548,46 +7386,31 @@ class Parser {
           castType = d.type;
         }
         if (this.matchText(")")) {
+          const startLoc = Lexer.Loc.fromTok(startTok);
           if (this.atText("{")) {
             // Compound literal: (type){...}
-            const initList = this.parseInitList(castType);
-            // Handle string-initialized char array
+            let initList = this.parseInitList(castType);
             if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0 &&
-                initList.elements.length === 1 && initList.elements[0]?.kind === Types.ExprKind.STRING) {
+                initList.elements.length === 1 && initList.elements[0] instanceof AST.EString) {
               castType = initList.elements[0].type;
-              initList.type = castType;
+              initList = new AST.EInitList(initList.loc, castType,
+                initList.elements, initList.designators, initList.unionMemberIndex);
             } else if (castType.kind === Types.TypeKind.ARRAY && castType.arraySize === 0) {
-              normalizeInitList(initList, castType);
+              initList = normalizeInitList(initList, castType);
               castType = initList.type;
             } else if (castType.isAggregate()) {
-              normalizeInitList(initList, castType);
+              initList = normalizeInitList(initList, castType);
             }
-            const cl = new AST.ECompoundLiteral(castType, initList);
-            if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
-            else this.currentParsingFunc.compoundLiterals.push(cl);
-            return this.parsePostfixTail(cl);
+            return this.parsePostfixTail(new AST.ECompoundLiteral(startLoc, castType, initList));
           }
           const expr = this.parseCastExpression();
           // GCC extension: cast-to-union — (union_type) expr → compound literal
           if (castType.isUnion()) {
-            const initList = new AST.EInitList(castType, [expr], []);
-            normalizeInitList(initList, castType);
-            const cl = new AST.ECompoundLiteral(castType, initList);
-            if (!this.currentParsingFunc) this.fileScopeCompoundLiterals.push(cl);
-            else this.currentParsingFunc.compoundLiterals.push(cl);
-            return this.parsePostfixTail(cl);
+            let initList = new AST.EInitList(startLoc, castType, [expr], []);
+            initList = normalizeInitList(initList, castType);
+            return this.parsePostfixTail(new AST.ECompoundLiteral(startLoc, castType, initList));
           }
-          if (castType.removeQualifiers().isRef() || (expr.type && expr.type.removeQualifiers().isRef())) {
-            // Allow `(refT)0` / `(refT)NULL` — typed null pointer constant
-            // is a long-standing C idiom and unambiguous.
-            if (castType.removeQualifiers().isRef() &&
-                !(expr.type && expr.type.removeQualifiers().isRef()) &&
-                this._isNullPointerConstant(expr)) {
-              return new AST.ECast(castType, castType, expr);
-            }
-            this.error(this.peek(-1), "Cannot cast to or from a reference type; use __cast(T, x) (or __ref_cast for GC ref downcast)");
-          }
-          return new AST.ECast(castType, castType, expr);
+          return AST.makeCast(startLoc, castType, expr);
         }
       }
       this.pos = saved;
@@ -5607,113 +7430,34 @@ class Parser {
           } while (this.matchText(","));
         }
         this.expect(")");
-
-        let resultType = Types.TINT;
-        let calleeType = expr.type;
-        if (calleeType.kind === Types.TypeKind.ARRAY || calleeType.kind === Types.TypeKind.FUNCTION) calleeType = calleeType.decay();
-        let calleeFuncType = null;
-        if (calleeType.kind === Types.TypeKind.FUNCTION) {
-          resultType = calleeType.returnType;
-          calleeFuncType = calleeType;
-        } else if (calleeType.kind === Types.TypeKind.POINTER && calleeType.baseType.kind === Types.TypeKind.FUNCTION) {
-          resultType = calleeType.baseType.returnType;
-          calleeFuncType = calleeType.baseType;
-        }
-        // Forbid implicit int→ref on call arguments. Only check declared
-        // params (variadic / unspecified-params functions have no arg types).
-        if (calleeFuncType && !calleeFuncType.hasUnspecifiedParams) {
-          const params = calleeFuncType.getParamTypes();
-          const n = Math.min(args.length, params.length);
-          for (let i = 0; i < n; i++) this._rejectIntToRef(params[i], args[i], callTok);
-          // Reject ref-typed vararg arguments — vararg storage uses linear
-          // memory which can't hold GC references.
-          if (calleeFuncType.isVarArg) {
-            for (let i = params.length; i < args.length; i++) {
-              if (args[i].type.removeQualifiers().isRef()) {
-                this.error(callTok,
-                  `cannot pass reference type '${args[i].type.toString()}' as a variadic argument — vararg storage uses linear memory which can't hold GC references`);
-              }
-            }
-          }
-        }
-
-        let funcDecl = null;
-        if (expr.kind === Types.ExprKind.IDENT && expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
-          funcDecl = expr.decl;
-        }
-
-        expr = new AST.ECall(resultType, expr, args, funcDecl);
+        expr = AST.makeCall(Lexer.Loc.fromTok(callTok), expr, args);
         continue;
       }
       if (this.matchText("[")) {
+        const lbrTok = this.peek(-1);
         const index = this.parseExpression();
         this.expect("]");
-        const baseUt = expr.type.removeQualifiers();
-        const idxUt = index.type.removeQualifiers();
-        if (baseUt.isInteger() && (idxUt.kind === Types.TypeKind.POINTER || idxUt.kind === Types.TypeKind.ARRAY)) {
-          this.error(this.peek(-1), "Commutative subscript (e.g. 0[arr]) is not supported; write arr[0] instead");
-        }
-        let elemType = Types.TINT;
-        if (baseUt.kind === Types.TypeKind.ARRAY) elemType = baseUt.baseType;
-        else if (baseUt.kind === Types.TypeKind.POINTER) elemType = baseUt.baseType;
-        else if (baseUt.kind === Types.TypeKind.GC_ARRAY) elemType = baseUt.baseType;
-        else if (baseUt.isRef()) {
-          this.error(this.peek(-1), `subscript '[]' on reference type '${expr.type.toString()}' is not allowed (use __array(T) for indexable GC storage)`);
-        }
-        expr = new AST.ESubscript(elemType, expr, index);
+        expr = AST.makeSubscript(Lexer.Loc.fromTok(lbrTok), expr, index);
         continue;
       }
       if (this.matchText(".")) {
+        const dotLoc = Lexer.Loc.fromTok(this.peek(-1));
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
-        const { chain } = this.lookupMember(expr.type, name);
-        if (chain) {
-          for (const mVar of chain) {
-            expr = new AST.EMember(mVar.type, expr, mVar.name, mVar);
-          }
-        } else {
-          expr = new AST.EMember(Types.TINT, expr, name, null);
-        }
+        expr = AST.makeMember(dotLoc, expr, name);
         continue;
       }
       if (this.matchText("->")) {
+        const arrowLoc = Lexer.Loc.fromTok(this.peek(-1));
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
-        let bt = expr.type.removeQualifiers();
-        // GC ref types are already "one indirection" semantically — `p->x` on
-        // a __struct ref is equivalent to `p.x`. Build EMember instead of
-        // EArrow so codegen takes the GC-struct member path.
-        if (bt.kind === Types.TypeKind.GC_STRUCT) {
-          const { chain } = this.lookupMember(bt, name);
-          if (chain) {
-            for (const m of chain) expr = new AST.EMember(m.type, expr, m.name, m);
-          } else {
-            expr = new AST.EMember(Types.TINT, expr, name, null);
-          }
-          continue;
-        }
-        if (bt.kind === Types.TypeKind.ARRAY) bt = bt.baseType;
-        else if (bt.kind === Types.TypeKind.POINTER) bt = bt.baseType;
-        const { chain } = this.lookupMember(bt, name);
-        if (chain) {
-          // First element: arrow (dereference pointer)
-          const first = chain[0];
-          expr = new AST.EArrow(first.type, expr, first.name, first);
-          // Remaining: member access (traverse anonymous structs)
-          for (let i = 1; i < chain.length; i++) {
-            expr = new AST.EMember(chain[i].type, expr, chain[i].name, chain[i]);
-          }
-        } else {
-          expr = new AST.EArrow(Types.TINT, expr, name, null);
-        }
+        expr = AST.makeArrow(arrowLoc, expr, name);
         continue;
       }
       if (this.matchText("++")) {
-        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(this.peek(-1), `'++' on reference type is not allowed`);
-        expr = new AST.EUnary(expr.type, "OP_POST_INC", expr);
+        expr = AST.makeUnary(Lexer.Loc.fromTok(this.peek(-1)), "OP_POST_INC", expr);
         continue;
       }
       if (this.matchText("--")) {
-        if (expr.type && expr.type.removeQualifiers().isRef()) this.error(this.peek(-1), `'--' on reference type is not allowed`);
-        expr = new AST.EUnary(expr.type, "OP_POST_DEC", expr);
+        expr = AST.makeUnary(Lexer.Loc.fromTok(this.peek(-1)), "OP_POST_DEC", expr);
         continue;
       }
       break;
@@ -5758,64 +7502,19 @@ class Parser {
   }
 
   // C99 6.3.1.1: integer promotions for bitfield expressions
-  promoteExprType(e) {
-    const t = e.type;
-    let bf = null;
-    if (e.kind === Types.ExprKind.MEMBER && e.memberDecl && e.memberDecl.bitWidth >= 0) {
-      bf = e.memberDecl;
-    } else if (e.kind === Types.ExprKind.ARROW && e.memberDecl && e.memberDecl.bitWidth >= 0) {
-      bf = e.memberDecl;
-    }
-    if (bf) {
-      const bw = bf.bitWidth;
-      const uq = t.removeQualifiers();
-      const isSigned = uq === Types.TINT || uq === Types.TLONG || uq === Types.TSHORT || uq === Types.TSCHAR || uq === Types.TCHAR;
-      // If the bitfield fits in a signed int (32-bit), promote to int
-      if (isSigned || bw < 32) return Types.TINT;
-      return Types.TUINT;
-    }
-    return t;
-  }
-
-  computeBinaryType(op, leftType, rightType) {
-    // Comparison and logical operators return int
-    if (["EQ","NE","LT","GT","LE","GE","LAND","LOR"].includes(op)) return Types.TINT;
-    // Assignment operators return left type
-    if (op.endsWith("ASSIGN") || op === "ASSIGN") return leftType;
-    // Shift operators: result type is the promoted left operand type
-    // (C99 6.5.7). Must strip qualifiers before checking for small types.
-    if (op === "SHL" || op === "SHR") {
-      const uq = leftType.removeQualifiers();
-      if (uq === Types.TCHAR || uq === Types.TSCHAR || uq === Types.TUCHAR ||
-          uq === Types.TSHORT || uq === Types.TUSHORT || uq === Types.TBOOL) {
-        return Types.TINT;
-      }
-      return uq;
-    }
-    // Pointer arithmetic
-    if (leftType.isPointer() && rightType.isInteger()) return leftType;
-    if (rightType.isPointer() && leftType.isInteger() && op === "ADD") return rightType;
-    if (leftType.isPointer() && rightType.isPointer() && op === "SUB") return Types.TLONG;
-    // Array arithmetic (array decays to pointer)
-    if (leftType.isArray() && rightType.isInteger()) return leftType.decay();
-    if (rightType.isArray() && leftType.isInteger() && op === "ADD") return rightType.decay();
-    if (op === "SUB" && ((leftType.isPointer() && rightType.isArray()) ||
-        (leftType.isArray() && rightType.isPointer()))) return Types.TLONG;
-    return Types.usualArithmeticConversions(leftType, rightType);
-  }
 
   inferArraySizeFromInit(arrayType, initExpr) {
     const elemSize = arrayType.baseType.size || 1;
-    if (initExpr.kind === Types.ExprKind.STRING) {
+    if (initExpr instanceof AST.EString) {
       return Types.arrayOf(arrayType.baseType, initExpr.value.length / elemSize);
     }
-    if (initExpr.kind === Types.ExprKind.INIT_LIST) {
+    if (initExpr instanceof AST.EInitList) {
       // For char/short/int arrays initialized with a single string literal
       const bt = arrayType.baseType.removeQualifiers();
       if ((bt === Types.TCHAR || bt === Types.TSCHAR || bt === Types.TUCHAR ||
            bt === Types.TSHORT || bt === Types.TUSHORT || bt === Types.TINT || bt === Types.TUINT) &&
           initExpr.elements.length === 1 &&
-          initExpr.elements[0].kind === Types.ExprKind.STRING) {
+          initExpr.elements[0] instanceof AST.EString) {
         return Types.arrayOf(arrayType.baseType, initExpr.elements[0].value.length / elemSize);
       }
       return Types.arrayOf(arrayType.baseType, initExpr.elements.length);
@@ -5830,7 +7529,19 @@ class Parser {
     if (tIsRef && eIsRef) return thenType;
     if (tIsRef) return thenType;          // (ref ? ref : 0) → ref (null branch)
     if (eIsRef) return elseType;
-    if (thenType.isPointer() && elseType.isPointer()) return thenType;
+    if (thenType.isPointer() && elseType.isPointer()) {
+      // C99 6.5.15.6: result is a pointer to a type with the union of
+      // qualifiers from both operands. Picking either side as-is can
+      // drop const/volatile and silently miscompile (e.g. lua's ternary
+      // `(line == 0) ? "main" : pushfstring(...)`).
+      const tBase = thenType.baseType, eBase = elseType.baseType;
+      const wantConst = tBase.isConst || eBase.isConst;
+      const wantVolatile = tBase.isVolatile || eBase.isVolatile;
+      let base = tBase.removeQualifiers();
+      if (wantConst) base = base.addConst();
+      if (wantVolatile) base = base.toggleVolatile();
+      return base.pointer();
+    }
     if (thenType.isPointer()) return thenType;
     if (elseType.isPointer()) return elseType;
     return Types.usualArithmeticConversions(thenType, elseType);
@@ -5850,12 +7561,20 @@ class Parser {
 
       // Ternary
       if (op === "?") {
-        this._rejectRefAsCondition(left, opTok, "ternary");
-        const thenExpr = this.parseExpression();
+        this._validateCond(left, opTok, "ternary");
+        let thenExpr = this.parseExpression();
         this.expect(":");
-        const elseExpr = this.parseBinaryExpression(3);
-        let resType = this.computeTernaryType(thenExpr.type, elseExpr.type);
-        left = new AST.ETernary(resType, left, thenExpr, elseExpr);
+        let elseExpr = this.parseBinaryExpression(3);
+        // Decay array/function-typed branches; ternary results are
+        // always pointer-typed (or scalar/aggregate).
+        thenExpr = maybeDecay(thenExpr);
+        elseExpr = maybeDecay(elseExpr);
+        const resType = this.computeTernaryType(thenExpr.type, elseExpr.type);
+        // Both branches must produce the same type — wrap each in an
+        // implicit cast to resType when needed.
+        thenExpr = maybeImplicitCast(thenExpr, resType);
+        elseExpr = maybeImplicitCast(elseExpr, resType);
+        left = new AST.ETernary(left.loc, resType, left, thenExpr, elseExpr);
         continue;
       }
 
@@ -5866,60 +7585,21 @@ class Parser {
         while (this.matchText(",")) {
           exprs.push(this.parseBinaryExpression(2));
         }
-        left = new AST.EComma(exprs[exprs.length - 1].type, exprs);
+        left = new AST.EComma(left.loc, exprs[exprs.length - 1].type, exprs);
         continue;
       }
 
       const nextMinPrec = this.isRightAssociative(op) ? prec : prec + 1;
       const right = this.parseBinaryExpression(nextMinPrec);
       const bop = this.textToBop(op);
+      // Parser-side warning for array-decay arithmetic (gated by --pedantic).
       if (this.warningFlags.pointerDecay && (bop === "ADD" || bop === "SUB")) {
         if ((left.type.isArray() && right.type.isInteger()) ||
             (right.type.isArray() && left.type.isInteger())) {
           this.warning(this.peek(-1), "array used in arithmetic expression; decaying to pointer");
         }
       }
-      // Refs are allowed in == / != (null compare against literal 0, or
-      // identity between two refs) and in &&/|| (boolean coercion via
-      // ref.is_null). Relational operators have no meaning on refs.
-      const lIsRef = left.type.removeQualifiers().isRef();
-      const rIsRef = right.type.removeQualifiers().isRef();
-      if (lIsRef || rIsRef) {
-        if (bop === "LT" || bop === "GT" || bop === "LE" || bop === "GE") {
-          this.error(opTok, `'${op}' on reference type is not allowed (only ==, != for identity/null)`);
-        }
-        // Arithmetic/bitwise/shift/logical-bit ops have no meaning on refs.
-        // Allow only: ASSIGN (the rejection rules below catch bad RHS), ==/!=
-        // (identity/null), and &&/|| (boolean coercion sugar).
-        if (bop === "ADD" || bop === "SUB" || bop === "MUL" || bop === "DIV" ||
-            bop === "MOD" || bop === "SHL" || bop === "SHR" ||
-            bop === "BAND" || bop === "BOR" || bop === "BXOR") {
-          this.error(opTok, `'${op}' on reference type is not allowed`);
-        }
-        // For ==/!= involving refs: must be ref-vs-ref OR ref-vs-(null pointer constant).
-        if (bop === "EQ" || bop === "NE") {
-          if (lIsRef !== rIsRef && !this._isNullPointerConstant(lIsRef ? right : left)) {
-            this.error(opTok,
-              `'${op}' between reference and non-reference requires the non-ref operand to be the literal 0 / NULL`);
-          }
-        }
-      }
-      // Assignment to ref: only literal 0 (or null pointer constant) is
-      // allowed as a non-ref source. _rejectIntToRefAssign handles this.
-      if (bop === "ASSIGN" && lIsRef && !rIsRef) {
-        this._rejectNonZeroToRef(left.type, right, opTok);
-      }
-      // Compound assignment (+=, -=, *=, etc.) has no meaning on ref types.
-      if (lIsRef &&
-          (bop === "ADD_ASSIGN" || bop === "SUB_ASSIGN" || bop === "MUL_ASSIGN" ||
-           bop === "DIV_ASSIGN" || bop === "MOD_ASSIGN" || bop === "SHL_ASSIGN" ||
-           bop === "SHR_ASSIGN" || bop === "BAND_ASSIGN" || bop === "BXOR_ASSIGN" ||
-           bop === "BOR_ASSIGN")) {
-        this.error(opTok, `'${op}' on reference type is not allowed`);
-      }
-      // Apply C99 6.3.1.1 integer promotions for bitfield operands
-      const resType = this.computeBinaryType(bop, this.promoteExprType(left), this.promoteExprType(right));
-      left = new AST.EBinary(resType, bop, left, right);
+      left = AST.makeBinary(left.loc, bop, left, right);
     }
     return left;
   }
@@ -5929,6 +7609,7 @@ class Parser {
 
   // --- Init list parsing ---
   parseInitList(type) {
+    const startTok = this.peek();
     this.expect("{");
     const elements = [];
     const designators = [];
@@ -5984,21 +7665,18 @@ class Parser {
       } while (this.matchText(",") && !this.atText("}"));
     }
     this.expect("}");
-    return new AST.EInitList(type, elements, hasDesignators ? designators : null);
+    return new AST.EInitList(Lexer.Loc.fromTok(startTok), type, elements, hasDesignators ? designators : null);
   }
 
   // --- Statement parsing ---
 
   parseStatement() {
-    const tok = this.peek();
-    const stmt = this._parseStatement();
-    if (stmt && !stmt.loc && tok) stmt.loc = Lexer.Loc.fromTok(tok);
-    return stmt;
+    return this._parseStatement(Lexer.Loc.fromTok(this.peek()));
   }
 
-  _parseStatement() {
+  _parseStatement(loc) {
     // Empty statement
-    if (this.matchText(";")) return new AST.SEmpty();
+    if (this.matchText(";")) return new AST.SEmpty(loc);
 
     // Compound statement
     if (this.atText("{")) return this.parseCompoundStatement();
@@ -6008,12 +7686,12 @@ class Parser {
       const kwTok = this.peek(-1);
       this.expect("(");
       const cond = this.parseExpression();
-      this._rejectRefAsCondition(cond, kwTok, "if");
+      this._validateCond(cond, kwTok, "if");
       this.expect(")");
       const thenBranch = this.parseStatement();
       let elseBranch = null;
       if (this.matchKW(Lexer.Keyword.ELSE)) elseBranch = this.parseStatement();
-      return new AST.SIf(cond, thenBranch, elseBranch);
+      return new AST.SIf(loc, cond, thenBranch, elseBranch);
     }
 
     // while
@@ -6021,9 +7699,9 @@ class Parser {
       const kwTok = this.peek(-1);
       this.expect("(");
       const cond = this.parseExpression();
-      this._rejectRefAsCondition(cond, kwTok, "while");
+      this._validateCond(cond, kwTok, "while");
       this.expect(")");
-      return new AST.SWhile(cond, this.parseStatement());
+      return new AST.SWhile(loc, cond, this.parseStatement());
     }
 
     // do-while
@@ -6033,10 +7711,10 @@ class Parser {
       this.expectKW(Lexer.Keyword.WHILE);
       this.expect("(");
       const cond = this.parseExpression();
-      this._rejectRefAsCondition(cond, kwTok, "do-while");
+      this._validateCond(cond, kwTok, "do-while");
       this.expect(")");
       this.expect(";");
-      return new AST.SDoWhile(body, cond);
+      return new AST.SDoWhile(loc, body, cond);
     }
 
     // for
@@ -6049,21 +7727,22 @@ class Parser {
         if (this.isTypeName()) {
           init = this.parseDeclarationStatement();
         } else {
+          const eTok = this.peek();
           const e = this.parseExpression();
           this.expect(";");
-          init = new AST.SExpr(e);
+          init = new AST.SExpr(Lexer.Loc.fromTok(eTok), e);
         }
       }
       if (!this.matchText(";")) {
         cond = this.parseExpression();
-        this._rejectRefAsCondition(cond, kwTok, "for");
+        this._validateCond(cond, kwTok, "for");
         this.expect(";");
       }
       if (!this.atText(")")) incr = this.parseExpression();
       this.expect(")");
       const body = this.parseStatement();
       this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
-      return new AST.SFor(init, cond, incr, body);
+      return new AST.SFor(loc, init, cond, incr, body);
     }
 
     // switch
@@ -6081,7 +7760,7 @@ class Parser {
       this._currentCases = cases;
       const body = this.parseStatement();
       this._currentCases = savedCases;
-      return new AST.SSwitch(expr, cases, body, { filename: switchTok.filename, line: switchTok.line });
+      return new AST.SSwitch(loc, expr, cases, body);
     }
 
     // case
@@ -6116,23 +7795,18 @@ class Parser {
     }
 
     // break
-    if (this.matchKW(Lexer.Keyword.BREAK)) { this.expect(";"); return new AST.SBreak(); }
+    if (this.matchKW(Lexer.Keyword.BREAK)) { this.expect(";"); return new AST.SBreak(loc); }
 
     // continue
-    if (this.matchKW(Lexer.Keyword.CONTINUE)) { this.expect(";"); return new AST.SContinue(); }
+    if (this.matchKW(Lexer.Keyword.CONTINUE)) { this.expect(";"); return new AST.SContinue(loc); }
 
     // return
     if (this.matchKW(Lexer.Keyword.RETURN)) {
-      const retTok = this.peek(-1);
-      if (this.matchText(";")) return new AST.SReturn(null);
+      const retType = this.currentParsingFunc?.type.getReturnType() || null;
+      if (this.matchText(";")) return AST.makeReturn(loc, null, retType);
       const expr = this.parseExpression();
       this.expect(";");
-      // Forbid implicit int→ref on return (use __ref_null(T) instead).
-      if (this.currentParsingFunc) {
-        const retType = this.currentParsingFunc.type.getReturnType();
-        this._rejectIntToRef(retType, expr, retTok);
-      }
-      return new AST.SReturn(expr);
+      return AST.makeReturn(loc, expr, retType);
     }
 
     // goto
@@ -6140,8 +7814,7 @@ class Parser {
       const tok = this.expectKind(Lexer.TokenKind.IDENT);
       const label = tok.text;
       this.expect(";");
-      const sg = new AST.SGoto(label);
-      sg.loc = Lexer.Loc.fromTok(tok);
+      const sg = new AST.SGoto(Lexer.Loc.fromTok(tok), label);
       if (this.parsedLabels.has(label)) {
         // Backward goto — label already defined, must be a loop label
         const target = this.parsedLabels.get(label);
@@ -6162,12 +7835,13 @@ class Parser {
 
     // label: statement
     if (this.atKind(Lexer.TokenKind.IDENT) && this.peek(1)?.text === ":") {
+      const labelTok = this.peek();
       const name = this.advance().text;
       this.advance(); // skip :
       if (this.parsedLabels.has(name)) {
         this.error(this.peek(-2), `Duplicate label '${name}'`);
       }
-      const sl = new AST.SLabel(name, this.currentCompound);
+      const sl = new AST.SLabel(Lexer.Loc.fromTok(labelTok), name, this.currentCompound);
       this.parsedLabels.set(name, sl);
       if (this.currentCompound) {
         if (!this.currentCompound.labels) this.currentCompound.labels = [];
@@ -6231,11 +7905,12 @@ class Parser {
           this.error(this.peek(), "catch-all (__catch without type) must be the last catch clause");
         }
       }
-      return new AST.STryCatch(tryBody, catches);
+      return new AST.STryCatch(loc, tryBody, catches);
     }
 
     // __throw
     if (this.matchKW(Lexer.Keyword.X_THROW)) {
+      const throwTok = this.peek(-1);
       const tagName = this.expectKind(Lexer.TokenKind.IDENT).text;
       this.expect("(");
       const args = [];
@@ -6245,8 +7920,23 @@ class Parser {
       }
       this.expect(")");
       this.expect(";");
-      const tag = this.findExceptionTag(tagName);
-      return new AST.SThrow(tag || { name: tagName }, args);
+      // Decay array/function-typed throw args; tag params are pointer types.
+      for (let i = 0; i < args.length; i++) args[i] = maybeDecay(args[i]);
+      let tag = this.findExceptionTag(tagName);
+      if (!tag) {
+        // Recovery: synthesize a placeholder tag with divergent param
+        // types so SThrow has the uniform tag shape downstream code
+        // expects.
+        this.recoverableError(throwTok, `Unknown exception tag '${tagName}'`);
+        tag = new AST.DExceptionTag(Lexer.Loc.fromTok(throwTok), tagName,
+          args.map(() => Types.TDIVERGENT));
+        tag.definition = tag;
+      }
+      // Insert implicit casts on args matching the tag's parameter types.
+      for (let i = 0; i < args.length && i < tag.paramTypes.length; i++) {
+        args[i] = maybeImplicitCast(args[i], tag.paramTypes[i]);
+      }
+      return new AST.SThrow(loc, tag, args);
     }
 
     // _Static_assert inside function body
@@ -6262,7 +7952,7 @@ class Parser {
       this.expect(";");
       const val = constEvalInt(condExpr);
       if (val === 0n) this.recoverableError(this.peek(-1) || this.peek(), `_Static_assert failed: ${msg}`);
-      return new AST.SCompound([]);
+      return new AST.SCompound(loc, []);
     }
 
     // Declaration statement
@@ -6273,7 +7963,7 @@ class Parser {
     // Expression statement
     const expr = this.parseExpression();
     this.expect(";");
-    return new AST.SExpr(expr);
+    return new AST.SExpr(loc, expr);
   }
 
   findExceptionTag(name) {
@@ -6284,12 +7974,13 @@ class Parser {
   }
 
   parseCompoundStatement() {
+    const startTok = this.peek();
     this.expect("{");
     this.typeScope.push(); this.tagScope.push(); this.varScope.push();
     const statements = [];
     const savedCount = this._currentCompoundStmtCount;
     this._currentCompoundStmtCount = 0;
-    const compound = new AST.SCompound(statements);
+    const compound = new AST.SCompound(Lexer.Loc.fromTok(startTok), statements);
     const savedCompound = this.currentCompound;
     this.currentCompound = compound;
 
@@ -6308,13 +7999,15 @@ class Parser {
   }
 
   parseDeclarationStatement() {
+    const startTok = this.peek();
+    const startLoc = Lexer.Loc.fromTok(startTok);
     const declarations = [];
     const specs = this.parseDeclSpecifiers();
     let baseType = specs.type;
 
     if (this.matchText(";")) {
       // Anonymous struct/union/enum declaration
-      return new AST.SDecl(declarations);
+      return new AST.SDecl(startLoc, declarations);
     }
 
     let first = true;
@@ -6342,7 +8035,7 @@ class Parser {
           this.error(this.peek(), `redefinition of typedef '${name}'`);
         }
         this.typeScope.set(name, type);
-        if (this.matchText(";")) return new AST.SDecl(declarations);
+        if (this.matchText(";")) return new AST.SDecl(startLoc, declarations);
         continue;
       }
 
@@ -6357,7 +8050,6 @@ class Parser {
         funcDecl.importName = specs.importName;
         this.varScope.set(name, funcDecl);
         if (this.currentParsingFunc) {
-          this.currentParsingFunc.usedSymbols.add(funcDecl);
           this.currentParsingFunc.externLocalFuncs.push(funcDecl);
         }
         // Don't include in declaration statement (diverted like C++ does)
@@ -6403,23 +8095,31 @@ class Parser {
             // Re-evaluate allocClass: aggregates need MEMORY storage.
             if (type.isAggregate()) dvar.allocClass = Types.AllocClass.MEMORY;
           }
-          this._rejectIntToRef(type, dvar.initExpr, eqTok);
         }
         // Handle string-initialized char array
         if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
-            dvar.initExpr.kind === Types.ExprKind.STRING) {
+            dvar.initExpr instanceof AST.EString) {
           type = dvar.initExpr.type;
           dvar.type = type;
         }
         // Normalize init list
-        if (dvar.initExpr && dvar.initExpr.kind === Types.ExprKind.INIT_LIST) {
+        if (dvar.initExpr && dvar.initExpr instanceof AST.EInitList) {
           if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0) {
-            normalizeInitList(dvar.initExpr, type);
+            dvar.initExpr = normalizeInitList(dvar.initExpr, type);
             type = dvar.initExpr.type;
             dvar.type = type;
           } else if (type.isAggregate()) {
-            normalizeInitList(dvar.initExpr, type);
+            dvar.initExpr = normalizeInitList(dvar.initExpr, type);
           }
+        }
+        // Insert an implicit cast for scalar inits whose source type
+        // doesn't match the declared type. Aggregate / EInitList inits
+        // handle conversion per-element via normalizeInitList.
+        if (dvar.initExpr && !type.isAggregate() &&
+            !(dvar.initExpr instanceof AST.EInitList)) {
+          // Initializing a pointer from an array/function decays first.
+          if (type.isPointer()) dvar.initExpr = maybeDecay(dvar.initExpr);
+          dvar.initExpr = maybeImplicitCast(dvar.initExpr, type);
         }
       }
 
@@ -6444,7 +8144,7 @@ class Parser {
       }
     }
     this.expect(";");
-    return new AST.SDecl(declarations);
+    return new AST.SDecl(startLoc, declarations);
   }
 
   // --- External declaration parsing ---
@@ -6545,7 +8245,7 @@ class Parser {
 
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
-        if (prev && prev.declKind === Types.DeclKind.FUNC) {
+        if (prev && prev instanceof AST.DFunc) {
           if (!prev.type.isCompatibleWith(funcDecl.type)) {
             this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prev.type.toString()}', now defined as '${funcDecl.type.toString()}')`);
           }
@@ -6637,7 +8337,7 @@ class Parser {
         }
 
         const prevFunc = this.varScope.get(name);
-        if (prevFunc && prevFunc.declKind === Types.DeclKind.FUNC && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
+        if (prevFunc && prevFunc instanceof AST.DFunc && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
         }
         this.varScope.replace(name, funcDecl);
@@ -6650,7 +8350,7 @@ class Parser {
       const dvar = new AST.DVar(loc, name, type, specs.storageClass, null);
       // Check for conflicting variable declarations
       const prevVar = this.varScope.get(name);
-      if (prevVar && prevVar.declKind === Types.DeclKind.VAR && !prevVar.type.isCompatibleWith(type)) {
+      if (prevVar && prevVar instanceof AST.DVar && !prevVar.type.isCompatibleWith(type)) {
         this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevVar.type.toString()}', now declared as '${type.toString()}')`);
       }
       if (specs.requestedAlignment > 0) {
@@ -6668,11 +8368,10 @@ class Parser {
           dvar.initExpr = this.parseInitList(type);
         } else {
           dvar.initExpr = this.parseAssignmentExpression();
-          this._rejectIntToRef(type, dvar.initExpr, eqTok);
           // File-scope ref-typed globals: WASM constant init expressions
           // can only emit ref.null. Allocation (e.g. boxing a primitive)
           // is not allowed at module-init time.
-          if (type.removeQualifiers().isRef() && !this._isNullPointerConstant(dvar.initExpr) &&
+          if (type.removeQualifiers().isRef() && !AST.isNullPointerConstant(dvar.initExpr) &&
               !dvar.initExpr.type.removeQualifiers().isRef()) {
             this.error(eqTok,
               `global '${name}': reference-typed globals can only be initialized to null/0 ` +
@@ -6681,25 +8380,34 @@ class Parser {
         }
         // Handle string-initialized char array
         if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0 && dvar.initExpr &&
-            dvar.initExpr.kind === Types.ExprKind.STRING) {
+            dvar.initExpr instanceof AST.EString) {
           type = Types.arrayOf(type.baseType, dvar.initExpr.type.arraySize);
           dvar.type = type;
         }
         // Normalize init list
-        if (dvar.initExpr && dvar.initExpr.kind === Types.ExprKind.INIT_LIST) {
+        if (dvar.initExpr && dvar.initExpr instanceof AST.EInitList) {
           if (type.kind === Types.TypeKind.ARRAY && type.arraySize === 0) {
-            normalizeInitList(dvar.initExpr, type);
+            dvar.initExpr = normalizeInitList(dvar.initExpr, type);
             type = dvar.initExpr.type;
             dvar.type = type;
           } else if (type.isAggregate()) {
-            normalizeInitList(dvar.initExpr, type);
+            dvar.initExpr = normalizeInitList(dvar.initExpr, type);
           }
+        }
+        // Insert an implicit cast for scalar inits whose source type
+        // doesn't match the declared type. Aggregate / EInitList inits
+        // handle conversion per-element via normalizeInitList.
+        if (dvar.initExpr && !type.isAggregate() &&
+            !(dvar.initExpr instanceof AST.EInitList)) {
+          // Initializing a pointer from an array/function decays first.
+          if (type.isPointer()) dvar.initExpr = maybeDecay(dvar.initExpr);
+          dvar.initExpr = maybeImplicitCast(dvar.initExpr, type);
         }
       }
 
       // Check for previous declaration and update scope
       const prevDecl = this.varScope.get(name);
-      if (prevDecl && prevDecl.declKind === Types.DeclKind.VAR && specs.storageClass !== Types.StorageClass.EXTERN) {
+      if (prevDecl && prevDecl instanceof AST.DVar && specs.storageClass !== Types.StorageClass.EXTERN) {
         prevDecl.definition = dvar;
       }
       // Use replace to update the scope entry (varScope.set fails if name already exists)
@@ -6810,10 +8518,16 @@ class Parser {
               }
               // Parse parameter declarator
               let pName = null;
-              // Handle pointer prefix
+              // Handle pointer prefix. Qualifiers after `*` apply to the
+              // pointer itself: `T *const` is a const pointer to T.
               while (this.matchText("*")) {
                 pType = pType.pointer();
-                while (this.matchKW(Lexer.Keyword.CONST) || this.matchKW(Lexer.Keyword.VOLATILE) || this.matchKW(Lexer.Keyword.RESTRICT)) {}
+                while (true) {
+                  if (this.matchKW(Lexer.Keyword.CONST)) pType = pType.addConst();
+                  else if (this.matchKW(Lexer.Keyword.VOLATILE)) pType = pType.toggleVolatile();
+                  else if (this.matchKW(Lexer.Keyword.RESTRICT)) { /* restrict is a hint; we don't model it */ }
+                  else break;
+                }
               }
               // Handle parenthesized: void (*callback)(...)
               if (this.atText("(") && !this.isStartOfParamList()) {
@@ -6884,22 +8598,22 @@ class Parser {
 // ====================
 
 function parseTokens(tokens, options) {
-  const errors = [];
-  const warnings = [];
+  const sink = { errors: [], warnings: [] };
 
   if (tokens.length === 0) {
-    errors.push(new Lexer.LexError("No tokens to parse", null, 0));
-    return { translationUnit: AST.makeTUnit(null), errors, warnings };
+    sink.errors.push(new Lexer.LexError("No tokens to parse", null, 0));
+    return { translationUnit: AST.makeTUnit(null), errors: sink.errors, warnings: sink.warnings };
   }
 
   const unit = AST.makeTUnit(tokens[0].filename);
-  const parser = new Parser(tokens, errors, warnings);
+  const parser = new Parser(tokens, sink.errors, sink.warnings);
   if (options?.warningFlags) parser.warningFlags = options.warningFlags;
   if (options?.compilerOptions?.allowImplicitInt) parser._allowImplicitInt = true;
   if (options?.compilerOptions?.allowKnRDefinitions) parser._allowKnRDefinitions = true;
   if (options?.compilerOptions?.allowImplicitFunctionDecl) parser._allowImplicitFunctionDecl = true;
   if (options?.exceptionTagRegistry) parser._exceptionTagRegistry = options.exceptionTagRegistry;
 
+  withDiag(sink, () => {
   try {
     while (!parser.atEnd()) {
       // __require_source
@@ -6936,7 +8650,7 @@ function parseTokens(tokens, options) {
         const funcName = funcNameTok.text;
         parser.expect(";");
         const decl = parser.varScope.get(funcName);
-        if (decl && decl.declKind === Types.DeclKind.FUNC) {
+        if (decl && decl instanceof AST.DFunc) {
           parser.exportDirectives.push([exportName, decl]);
         }
         continue;
@@ -6976,7 +8690,7 @@ function parseTokens(tokens, options) {
               `Conflicting types for __exception tag '${tagName}'`);
           }
         } else {
-          tag = { name: tagName, paramTypes, definition: null };
+          tag = new AST.DExceptionTag(Lexer.Loc.fromTok(parser.peek(-1)), tagName, paramTypes);
           tag.definition = tag;
           if (registry) registry.set(tagName, tag);
         }
@@ -6987,19 +8701,17 @@ function parseTokens(tokens, options) {
       parser.parseExternalDeclaration(unit);
     }
   } catch (e) {
-    if (e instanceof Lexer.LexError) {
-      errors.push(e);
-    } else {
-      errors.push(new Lexer.LexError(e.message, null, 0));
-    }
+    // FatalDiag: error is already in the sink, just stop parsing.
+    if (e instanceof FatalDiag) return;
+    // Programming bug: surface as a generic diagnostic.
+    sink.errors.push(new Lexer.LexError(e.message, null, 0));
   }
+  });
 
   unit.requiredSources = parser.requiredSources;
   unit.exportDirectives = parser.exportDirectives;
-  unit.globalUsedSymbols = parser.globalUsedSymbols;
-  unit.fileScopeCompoundLiterals = parser.fileScopeCompoundLiterals;
 
-  return { translationUnit: unit, errors, warnings };
+  return { translationUnit: unit, errors: sink.errors, warnings: sink.warnings };
 }
 
 function parseSource(filename, source, ppRegistry) {
@@ -7012,192 +8724,20 @@ function parseSource(filename, source, ppRegistry) {
   return parseResult;
 }
 
-// ====================
-// Implicit Cast Annotation
-// ====================
-
-function wrapImplicitCast(expr, targetType, setter) {
-  targetType = targetType.removeQualifiers();
-  const srcType = expr.type.removeQualifiers();
-  if (srcType === targetType) return;
-  if (targetType.isVoid() || srcType.isVoid()) return;
-  setter(new AST.EImplicitCast(targetType, expr));
-}
-
-function annotateExpr(expr) {
-  if (!expr) return;
-  switch (expr.kind) {
-    case Types.ExprKind.BINARY: {
-      annotateExpr(expr.left);
-      annotateExpr(expr.right);
-      // Skip assignment ops
-      if (expr.op === "ASSIGN" || expr.op.endsWith("_ASSIGN")) break;
-      // Skip logical ops
-      if (expr.op === "LAND" || expr.op === "LOR") break;
-      const leftType = expr.left.type;
-      const rightType = expr.right.type;
-      // Skip pointer/array arithmetic
-      if ((expr.op === "ADD" || expr.op === "SUB") &&
-          (leftType.isPointer() || rightType.isPointer() ||
-           leftType.isArray() || rightType.isArray())) break;
-      if (leftType.removeQualifiers().isRef() || rightType.removeQualifiers().isRef()) break;
-      const isComparison = ["EQ","NE","LT","GT","LE","GE"].includes(expr.op);
-      const opType = isComparison ? Types.usualArithmeticConversions(leftType, rightType) : expr.type;
-      wrapImplicitCast(expr.left, opType, (e) => { expr.left = e; });
-      wrapImplicitCast(expr.right, opType, (e) => { expr.right = e; });
-      break;
-    }
-    case Types.ExprKind.CALL: {
-      annotateExpr(expr.callee);
-      for (const arg of expr.arguments) annotateExpr(arg);
-      // Resolve function type
-      let calleeType = expr.callee.type;
-      if (calleeType.isArray() || calleeType.isFunction()) calleeType = calleeType.decay();
-      if (calleeType.isPointer()) calleeType = calleeType.baseType;
-      if (!calleeType || !calleeType.isFunction()) break;
-      const paramTypes = calleeType.getParamTypes();
-      if (calleeType.isVarArg) {
-        // Fixed params
-        for (let i = 0; i < paramTypes.length && i < expr.arguments.length; i++) {
-          const idx = i;
-          wrapImplicitCast(expr.arguments[idx], paramTypes[idx], (e) => { expr.arguments[idx] = e; });
-        }
-        // Varargs: default argument promotion (float→double)
-        for (let i = paramTypes.length; i < expr.arguments.length; i++) {
-          const idx = i;
-          if (expr.arguments[idx].type.removeQualifiers() === Types.TFLOAT) {
-            wrapImplicitCast(expr.arguments[idx], Types.TDOUBLE, (e) => { expr.arguments[idx] = e; });
-          }
-        }
-      } else {
-        for (let i = 0; i < expr.arguments.length && i < paramTypes.length; i++) {
-          const idx = i;
-          wrapImplicitCast(expr.arguments[idx], paramTypes[idx], (e) => { expr.arguments[idx] = e; });
-        }
-      }
-      break;
-    }
-    case Types.ExprKind.TERNARY:
-      annotateExpr(expr.condition);
-      annotateExpr(expr.thenExpr);
-      annotateExpr(expr.elseExpr);
-      wrapImplicitCast(expr.thenExpr, expr.type, (e) => { expr.thenExpr = e; });
-      wrapImplicitCast(expr.elseExpr, expr.type, (e) => { expr.elseExpr = e; });
-      break;
-    case Types.ExprKind.UNARY:
-      annotateExpr(expr.operand);
-      break;
-    case Types.ExprKind.SUBSCRIPT:
-      annotateExpr(expr.array);
-      annotateExpr(expr.index);
-      break;
-    case Types.ExprKind.MEMBER:
-    case Types.ExprKind.ARROW:
-      annotateExpr(expr.base);
-      break;
-    case Types.ExprKind.CAST:
-      annotateExpr(expr.expr);
-      break;
-    case Types.ExprKind.COMMA:
-      for (const e of expr.expressions) annotateExpr(e);
-      break;
-    case Types.ExprKind.INIT_LIST:
-      for (const e of expr.elements) annotateExpr(e);
-      break;
-    case Types.ExprKind.INTRINSIC:
-      for (const arg of expr.args) annotateExpr(arg);
-      break;
-    case Types.ExprKind.WASM:
-      for (const arg of expr.args) annotateExpr(arg);
-      break;
-    case Types.ExprKind.COMPOUND_LITERAL:
-      if (expr.initList) for (const e of expr.initList.elements) annotateExpr(e);
-      break;
-    case Types.ExprKind.SIZEOF_EXPR:
-    case Types.ExprKind.ALIGNOF_EXPR:
-      annotateExpr(expr.expr);
-      break;
-    case Types.ExprKind.IMPLICIT_CAST:
-      annotateExpr(expr.expr);
-      break;
-    default:
-      break; // INT, FLOAT, STRING, IDENT, SIZEOF_TYPE, ALIGNOF_TYPE — leaf nodes
-  }
-}
-
-function annotateStmt(stmt, returnType) {
-  if (!stmt) return;
-  switch (stmt.kind) {
-    case Types.StmtKind.EXPR:
-      annotateExpr(stmt.expr);
-      break;
-    case Types.StmtKind.RETURN:
-      if (stmt.expr) {
-        annotateExpr(stmt.expr);
-        wrapImplicitCast(stmt.expr, returnType, (e) => { stmt.expr = e; });
-      }
-      break;
-    case Types.StmtKind.DECL:
-      for (const decl of stmt.declarations) {
-        if (decl.declKind === Types.DeclKind.VAR && decl.initExpr) {
-          annotateExpr(decl.initExpr);
-          if (!decl.type.isAggregate() && decl.initExpr.kind !== Types.ExprKind.INIT_LIST) {
-            wrapImplicitCast(decl.initExpr, decl.type, (e) => { decl.initExpr = e; });
-          }
-        }
-      }
-      break;
-    case Types.StmtKind.COMPOUND:
-      for (const s of stmt.statements) annotateStmt(s, returnType);
-      break;
-    case Types.StmtKind.IF:
-      annotateExpr(stmt.condition);
-      annotateStmt(stmt.thenBranch, returnType);
-      if (stmt.elseBranch) annotateStmt(stmt.elseBranch, returnType);
-      break;
-    case Types.StmtKind.WHILE:
-      annotateExpr(stmt.condition);
-      annotateStmt(stmt.body, returnType);
-      break;
-    case Types.StmtKind.DO_WHILE:
-      annotateStmt(stmt.body, returnType);
-      annotateExpr(stmt.condition);
-      break;
-    case Types.StmtKind.FOR:
-      if (stmt.init) annotateStmt(stmt.init, returnType);
-      if (stmt.condition) annotateExpr(stmt.condition);
-      if (stmt.increment) annotateExpr(stmt.increment);
-      annotateStmt(stmt.body, returnType);
-      break;
-    case Types.StmtKind.SWITCH:
-      annotateExpr(stmt.expr);
-      if (stmt.body) annotateStmt(stmt.body, returnType);
-      break;
-    case Types.StmtKind.TRY_CATCH:
-      annotateStmt(stmt.tryBody, returnType);
-      for (const cc of stmt.catches) annotateStmt(cc.body, returnType);
-      break;
-    case Types.StmtKind.THROW:
-      for (let i = 0; i < stmt.args.length; i++) {
-        annotateExpr(stmt.args[i]);
-        if (stmt.tag && stmt.tag.paramTypes && i < stmt.tag.paramTypes.length) {
-          const idx = i;
-          wrapImplicitCast(stmt.args[idx], stmt.tag.paramTypes[idx], (e) => { stmt.args[idx] = e; });
-        }
-      }
-      break;
-    default:
-      break;
-  }
-}
+// Module-scope shorthand for the IIFE-internal builders that get called
+// from many parser sites — saves typing AST.maybeDecay(...) everywhere.
+const maybeImplicitCast = AST.maybeImplicitCast;
+const maybeDecay = AST.maybeDecay;
 
 // ========== setjmp/longjmp lowering ==========
 
 // Check if an expression is a call to a named function, return the ECall or null
 function getNamedCall(expr, name) {
-  if (expr.kind !== Types.ExprKind.CALL) return null;
-  const callee = expr.callee;
-  if (callee.kind !== Types.ExprKind.IDENT) return null;
+  if (!(expr instanceof AST.ECall)) return null;
+  // Look through the function-decay wrapper around a direct callee.
+  let callee = expr.callee;
+  if (callee instanceof AST.EDecay) callee = callee.operand;
+  if (!(callee instanceof AST.EIdent)) return null;
   if (callee.name !== name) return null;
   return expr;
 }
@@ -7205,21 +8745,21 @@ function getNamedCall(expr, name) {
 // Detect setjmp patterns in an if-condition.
 // Returns {call, zeroIsTrue} or {call: null}
 function extractSetjmpCall(cond) {
-  if (cond.kind === Types.ExprKind.BINARY) {
+  if (cond instanceof AST.EBinary) {
     if (cond.op === "EQ") {
       let call = getNamedCall(cond.left, "setjmp");
-      if (call && cond.right.kind === Types.ExprKind.INT && cond.right.value === 0n)
+      if (call && cond.right instanceof AST.EInt && cond.right.value === 0n)
         return { call, zeroIsTrue: true };
       call = getNamedCall(cond.right, "setjmp");
-      if (call && cond.left.kind === Types.ExprKind.INT && cond.left.value === 0n)
+      if (call && cond.left instanceof AST.EInt && cond.left.value === 0n)
         return { call, zeroIsTrue: true };
     }
     if (cond.op === "NE") {
       let call = getNamedCall(cond.left, "setjmp");
-      if (call && cond.right.kind === Types.ExprKind.INT && cond.right.value === 0n)
+      if (call && cond.right instanceof AST.EInt && cond.right.value === 0n)
         return { call, zeroIsTrue: false };
       call = getNamedCall(cond.right, "setjmp");
-      if (call && cond.left.kind === Types.ExprKind.INT && cond.left.value === 0n)
+      if (call && cond.left instanceof AST.EInt && cond.left.value === 0n)
         return { call, zeroIsTrue: false };
     }
   }
@@ -7227,7 +8767,7 @@ function extractSetjmpCall(cond) {
   const directCall = getNamedCall(cond, "setjmp");
   if (directCall) return { call: directCall, zeroIsTrue: false };
   // Pattern: !setjmp(buf)
-  if (cond.kind === Types.ExprKind.UNARY && cond.op === "OP_LNOT") {
+  if (cond instanceof AST.EUnary && cond.op === "OP_LNOT") {
     const negCall = getNamedCall(cond.operand, "setjmp");
     if (negCall) return { call: negCall, zeroIsTrue: true };
   }
@@ -7236,42 +8776,53 @@ function extractSetjmpCall(cond) {
 
 // Build expression: buf[0]
 function makeBufIdExpr(bufExpr) {
-  return new AST.ESubscript(Types.TINT, bufExpr, new AST.EInt(Types.TINT, 0n));
+  const loc = bufExpr.loc;
+  return AST.makeSubscript(loc, bufExpr, new AST.EInt(loc, Types.TINT, 0n));
 }
 
 // Build: buf[0] = ++counterVar
 function makeSetBufIdStmt(bufExpr, counterVar) {
+  const loc = bufExpr.loc;
   const lhs = makeBufIdExpr(bufExpr);
-  const counterRef = new AST.EIdent(Types.TINT, counterVar.name, counterVar);
-  const rhs = new AST.EUnary(Types.TINT, "OP_PRE_INC", counterRef);
-  const assign = new AST.EBinary(Types.TINT, "ASSIGN", lhs, rhs);
-  return new AST.SExpr(assign);
+  const counterRef = new AST.EIdent(loc, Types.TINT, counterVar);
+  const rhs = new AST.EUnary(loc, Types.TINT, "OP_PRE_INC", counterRef);
+  const assign = new AST.EBinary(loc, Types.TINT, "ASSIGN", lhs, rhs);
+  return new AST.SExpr(loc, assign);
 }
 
 // Build: __throw tag(idExpr, valExpr)
 function makeThrowLongJump(tag, idExpr, valExpr) {
-  return new AST.SThrow(tag, [idExpr, valExpr]);
+  // tag.paramTypes are [int, int]; idExpr / valExpr are already int in
+  // practice but maybeImplicitCast is a no-op when types match anyway.
+  const args = [idExpr, valExpr];
+  if (tag && tag.paramTypes) {
+    for (let i = 0; i < args.length && i < tag.paramTypes.length; i++) {
+      args[i] = maybeImplicitCast(args[i], tag.paramTypes[i]);
+    }
+  }
+  return new AST.SThrow(idExpr.loc, tag, args);
 }
 
 // Build catch body: { if (id != buf[0]) rethrow; <userBody> }
 function makeCatchBody(tag, idVar, valVar, bufExpr, userBody) {
-  const idRef = new AST.EIdent(Types.TINT, idVar.name, idVar);
+  const loc = bufExpr.loc;
+  const idRef = new AST.EIdent(loc, Types.TINT, idVar);
   const myIdExpr = makeBufIdExpr(bufExpr);
-  const cond = new AST.EBinary(Types.TINT, "NE", idRef, myIdExpr);
+  const cond = new AST.EBinary(loc, Types.TINT, "NE", idRef, myIdExpr);
 
-  const idRef2 = new AST.EIdent(Types.TINT, idVar.name, idVar);
-  const valRef = new AST.EIdent(Types.TINT, valVar.name, valVar);
+  const idRef2 = new AST.EIdent(loc, Types.TINT, idVar);
+  const valRef = new AST.EIdent(loc, Types.TINT, valVar);
   const rethrow = makeThrowLongJump(tag, idRef2, valRef);
 
-  const rethrowIf = new AST.SIf(cond, rethrow, null);
-  return new AST.SCompound([rethrowIf, userBody]);
+  const rethrowIf = new AST.SIf(loc, cond, rethrow, null);
+  return new AST.SCompound(loc, [rethrowIf, userBody]);
 }
 
 // Transform longjmp calls in a statement tree into __throw __LongJump(buf[0], val)
 // Returns a replacement statement if changed, or the same statement if not.
 function lowerLongjmpInStmt(stmt, tag) {
-  switch (stmt.kind) {
-    case Types.StmtKind.EXPR: {
+  switch (stmt.constructor) {
+    case AST.SExpr: {
       const call = getNamedCall(stmt.expr, "longjmp");
       if (call && call.arguments.length === 2) {
         const idExpr = makeBufIdExpr(call.arguments[0]);
@@ -7280,32 +8831,54 @@ function lowerLongjmpInStmt(stmt, tag) {
       }
       return stmt;
     }
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound: {
+      // SCompound.statements is a mutable array — write through it
+      // (frozen `this` doesn't lock array contents).
       for (let i = 0; i < stmt.statements.length; i++) {
         stmt.statements[i] = lowerLongjmpInStmt(stmt.statements[i], tag);
       }
       return stmt;
-    case Types.StmtKind.IF:
-      stmt.thenBranch = lowerLongjmpInStmt(stmt.thenBranch, tag);
-      if (stmt.elseBranch) stmt.elseBranch = lowerLongjmpInStmt(stmt.elseBranch, tag);
-      return stmt;
-    case Types.StmtKind.WHILE:
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case Types.StmtKind.DO_WHILE:
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case Types.StmtKind.FOR:
-      if (stmt.init) stmt.init = lowerLongjmpInStmt(stmt.init, tag);
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case Types.StmtKind.SWITCH:
-      stmt.body = lowerLongjmpInStmt(stmt.body, tag);
-      return stmt;
-    case Types.StmtKind.TRY_CATCH:
-      stmt.tryBody = lowerLongjmpInStmt(stmt.tryBody, tag);
-      for (const cc of stmt.catches) cc.body = lowerLongjmpInStmt(cc.body, tag);
-      return stmt;
+    }
+    case AST.SIf: {
+      const newThen = lowerLongjmpInStmt(stmt.thenBranch, tag);
+      const newElse = stmt.elseBranch ? lowerLongjmpInStmt(stmt.elseBranch, tag) : null;
+      return (newThen === stmt.thenBranch && newElse === stmt.elseBranch)
+        ? stmt
+        : new AST.SIf(stmt.loc, stmt.condition, newThen, newElse);
+    }
+    case AST.SWhile: {
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return newBody === stmt.body ? stmt
+        : new AST.SWhile(stmt.loc, stmt.condition, newBody);
+    }
+    case AST.SDoWhile: {
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return newBody === stmt.body ? stmt
+        : new AST.SDoWhile(stmt.loc, newBody, stmt.condition);
+    }
+    case AST.SFor: {
+      const newInit = stmt.init ? lowerLongjmpInStmt(stmt.init, tag) : null;
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return (newInit === stmt.init && newBody === stmt.body) ? stmt
+        : new AST.SFor(stmt.loc, newInit, stmt.condition, stmt.increment, newBody);
+    }
+    case AST.SSwitch: {
+      const newBody = lowerLongjmpInStmt(stmt.body, tag);
+      return newBody === stmt.body ? stmt
+        : new AST.SSwitch(stmt.loc, stmt.expr, stmt.cases, newBody);
+    }
+    case AST.STryCatch: {
+      const newTry = lowerLongjmpInStmt(stmt.tryBody, tag);
+      let catchesChanged = false;
+      const newCatches = stmt.catches.map(cc => {
+        const newBody = lowerLongjmpInStmt(cc.body, tag);
+        if (newBody === cc.body) return cc;
+        catchesChanged = true;
+        return { ...cc, body: newBody };
+      });
+      return (newTry === stmt.tryBody && !catchesChanged) ? stmt
+        : new AST.STryCatch(stmt.loc, newTry, newCatches);
+    }
     default:
       return stmt;
   }
@@ -7319,36 +8892,36 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     const stmt = stmts[i];
 
     // Recurse into nested compounds first
-    switch (stmt.kind) {
-      case Types.StmtKind.COMPOUND:
+    switch (stmt.constructor) {
+      case AST.SCompound:
         lowerSetjmpInCompound(stmt, tag, counterVar);
         break;
-      case Types.StmtKind.IF:
+      case AST.SIf:
         // Don't recurse into the if we're about to transform — check first
         break;
-      case Types.StmtKind.WHILE:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SWhile:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.DO_WHILE:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SDoWhile:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.FOR:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SFor:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.SWITCH:
-        if (stmt.body.kind === Types.StmtKind.COMPOUND)
+      case AST.SSwitch:
+        if (stmt.body instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.body, tag, counterVar);
         break;
-      case Types.StmtKind.LABEL:
+      case AST.SLabel:
         break;
-      case Types.StmtKind.TRY_CATCH:
-        if (stmt.tryBody.kind === Types.StmtKind.COMPOUND)
+      case AST.STryCatch:
+        if (stmt.tryBody instanceof AST.SCompound)
           lowerSetjmpInCompound(stmt.tryBody, tag, counterVar);
         for (const cc of stmt.catches)
-          if (cc.body.kind === Types.StmtKind.COMPOUND)
+          if (cc.body instanceof AST.SCompound)
             lowerSetjmpInCompound(cc.body, tag, counterVar);
         break;
       default:
@@ -7356,14 +8929,14 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     }
 
     // Now check if this is an if-statement with setjmp in the condition
-    if (stmt.kind !== Types.StmtKind.IF) continue;
+    if (!(stmt instanceof AST.SIf)) continue;
 
     const { call: setjmpCall, zeroIsTrue } = extractSetjmpCall(stmt.condition);
     if (!setjmpCall) {
       // Not a setjmp if — but still recurse into its branches
-      if (stmt.thenBranch.kind === Types.StmtKind.COMPOUND)
+      if (stmt.thenBranch instanceof AST.SCompound)
         lowerSetjmpInCompound(stmt.thenBranch, tag, counterVar);
-      if (stmt.elseBranch && stmt.elseBranch.kind === Types.StmtKind.COMPOUND)
+      if (stmt.elseBranch && stmt.elseBranch instanceof AST.SCompound)
         lowerSetjmpInCompound(stmt.elseBranch, tag, counterVar);
       continue;
     }
@@ -7383,10 +8956,11 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // Determine try-body and catch-body based on pattern
     let tryBody, catchUserBody;
 
+    const stmtLoc = stmt.loc;
     if (zeroIsTrue) {
       // Pattern A: if (setjmp(buf) == 0) { Y } else { X }
       tryBody = stmt.thenBranch;
-      catchUserBody = stmt.elseBranch || new AST.SEmpty();
+      catchUserBody = stmt.elseBranch || new AST.SEmpty(stmtLoc);
     } else {
       // Pattern B: if (setjmp(buf)) { X }  <remaining stmts>
       catchUserBody = stmt.thenBranch;
@@ -7397,17 +8971,17 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
         // Gather remaining statements from the compound as the try body
         const remaining = stmts.splice(i + 1);
         if (remaining.length === 0) {
-          tryBody = new AST.SEmpty();
+          tryBody = new AST.SEmpty(stmtLoc);
         } else {
-          tryBody = new AST.SCompound(remaining);
+          tryBody = new AST.SCompound(stmtLoc, remaining);
         }
       }
     }
 
     // Recurse into the try body and catch body
-    if (tryBody.kind === Types.StmtKind.COMPOUND)
+    if (tryBody instanceof AST.SCompound)
       lowerSetjmpInCompound(tryBody, tag, counterVar);
-    if (catchUserBody.kind === Types.StmtKind.COMPOUND)
+    if (catchUserBody instanceof AST.SCompound)
       lowerSetjmpInCompound(catchUserBody, tag, counterVar);
 
     // Build the catch body with rethrow logic
@@ -7422,7 +8996,7 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     };
 
     // Build the STryCatch
-    const tryCatch = new AST.STryCatch(tryBody, [cc]);
+    const tryCatch = new AST.STryCatch(stmtLoc, tryBody, [cc]);
 
     // Build: buf[0] = ++__setjmp_id_counter; try { ... } catch { ... }
     const setBufStmt = makeSetBufIdStmt(bufExpr, counterVar);
@@ -7465,13 +9039,10 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   }
   if (!counterVar) throw new Error("__setjmp_id_counter not found in externVariables");
 
-  // Mark counterVar as used so filterUnusedDeclarations doesn't remove it
-  unit.globalUsedSymbols.add(counterVar);
-
   // Lower all function bodies
   const lowerFunc = (func) => {
     if (!func.body) return;
-    if (func.body.kind === Types.StmtKind.COMPOUND) {
+    if (func.body instanceof AST.SCompound) {
       lowerSetjmpInCompound(func.body, tag, counterVar);
     }
     func.body = lowerLongjmpInStmt(func.body, tag);
@@ -7480,22 +9051,11 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   for (const f of unit.staticFunctions) lowerFunc(f);
 }
 
-function annotateImplicitCasts(unit) {
-  const annotateFunc = (func) => {
-    if (!func.body) return;
-    const retType = func.type.returnType || Types.TINT;
-    annotateStmt(func.body, retType);
-  };
-  for (const f of unit.definedFunctions) annotateFunc(f);
-  for (const f of unit.staticFunctions) annotateFunc(f);
-}
-
 return {
   dumpAst, parseTokens, parseSource,
-  filterUnusedDeclarations, gcSectionsPass,
+  gcSectionsPass,
   linkTranslationUnits,
   lowerSetjmpLongjmp,
-  annotateImplicitCasts, annotateExpr, annotateStmt,
 };
 })();
 
@@ -7506,14 +9066,14 @@ return {
 const Codegen = (() => {
 
 function alwaysReturns(stmt) {
-  switch (stmt.kind) {
-    case Types.StmtKind.RETURN:
-    case Types.StmtKind.THROW:
+  switch (stmt.constructor) {
+    case AST.SReturn:
+    case AST.SThrow:
       return true;
-    case Types.StmtKind.COMPOUND:
+    case AST.SCompound:
       if (stmt.labels && stmt.labels.length > 0) return false;
       return stmt.statements.some(alwaysReturns);
-    case Types.StmtKind.IF:
+    case AST.SIf:
       return stmt.elseBranch !== null
         && alwaysReturns(stmt.thenBranch)
         && alwaysReturns(stmt.elseBranch);
@@ -8566,15 +10126,18 @@ const NULL_ADDR_POLICY = {
 
 function constEvalAddr(expr, policy) {
   if (!expr) return null;
+  // Decay wraps an array/function lvalue with the decayed pointer type;
+  // its address-of value is the operand's base address.
+  if (expr instanceof AST.EDecay) return constEvalAddr(expr.operand, policy);
   // Cast from integer to pointer: (type*)intval
-  if (expr.kind === Types.ExprKind.CAST || expr.kind === Types.ExprKind.IMPLICIT_CAST) {
+  if (expr instanceof AST.ECast || expr instanceof AST.EImplicitCast) {
     const inner = constEvalExpr(expr.expr, policy);
     if (inner && inner.kind === "int") return Number(inner.intVal);
     if (inner && inner.kind === "addr") return inner.addrVal;
     return null;
   }
   // Arrow: base->member → addr(base) + offset, where base is pointer
-  if (expr.kind === Types.ExprKind.ARROW && expr.memberDecl) {
+  if (expr instanceof AST.EArrow) {
     const baseVal = constEvalExpr(expr.base, policy);
     if (baseVal && (baseVal.kind === "addr" || baseVal.kind === "int")) {
       const baseAddr = baseVal.kind === "addr" ? baseVal.addrVal : Number(baseVal.intVal);
@@ -8591,55 +10154,55 @@ function constEvalAddr(expr, policy) {
 
 function constEvalExpr(expr, policy) {
   if (!expr) return null;
-  switch (expr.kind) {
-    case Types.ExprKind.INT: return { kind: "int", intVal: expr.value };
-    case Types.ExprKind.FLOAT: return { kind: "float", floatVal: expr.value };
-    case Types.ExprKind.STRING: {
+  switch (expr.constructor) {
+    case AST.EInt: return { kind: "int", intVal: expr.value };
+    case AST.EFloat: return { kind: "float", floatVal: expr.value };
+    case AST.EString: {
       const addr = policy.getStringAddr(expr.value);
       if (addr === null || addr === undefined) return null;
       return { kind: "addr", addrVal: addr };
     }
-    case Types.ExprKind.IDENT: {
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+    case AST.EIdent: {
+      if (expr.decl && expr.decl instanceof AST.DEnumConst) {
         return { kind: "int", intVal: BigInt(expr.decl.value) };
       }
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.FUNC) {
+      if (expr.decl && expr.decl instanceof AST.DFunc) {
         const func = expr.decl.definition || expr.decl;
         const tIdx = policy.getFuncAddr(func);
         if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
       }
-      if (expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+      if (expr.decl && expr.decl instanceof AST.DVar) {
         const varDecl = expr.decl.definition || expr.decl;
         const addr = policy.getGlobalAddr(varDecl);
         if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
       }
       return null;
     }
-    case Types.ExprKind.UNARY: {
+    case AST.EUnary: {
       if (expr.op === "OP_ADDR") {
         const inner = expr.operand;
         // &var → address
-        if (inner.kind === Types.ExprKind.IDENT && inner.decl) {
-          if (inner.decl.declKind === Types.DeclKind.VAR) {
+        if (inner instanceof AST.EIdent && inner.decl) {
+          if (inner.decl instanceof AST.DVar) {
             const varDecl = inner.decl.definition || inner.decl;
             const addr = policy.getGlobalAddr(varDecl);
             if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
           }
-          if (inner.decl.declKind === Types.DeclKind.FUNC) {
+          if (inner.decl instanceof AST.DFunc) {
             const func = inner.decl.definition || inner.decl;
             const tIdx = policy.getFuncAddr(func);
             if (tIdx !== null && tIdx !== undefined) return { kind: "addr", addrVal: tIdx };
           }
         }
         // &(base->member) or &(base.member) → base_addr + member offset
-        if ((inner.kind === Types.ExprKind.ARROW || inner.kind === Types.ExprKind.MEMBER) && inner.memberDecl) {
+        if (inner instanceof AST.EArrow || inner instanceof AST.EMember) {
           const baseAddr = constEvalAddr(inner.base, policy);
           if (baseAddr !== null) {
             return { kind: "addr", addrVal: baseAddr + inner.memberDecl.byteOffset };
           }
         }
         // &(base[index]) → base_addr + index * elemSize
-        if (inner.kind === Types.ExprKind.SUBSCRIPT) {
+        if (inner instanceof AST.ESubscript) {
           const baseAddr = constEvalAddr(inner.array, policy);
           const idx = constEvalExpr(inner.index, policy);
           if (baseAddr !== null && idx && idx.kind === "int") {
@@ -8648,7 +10211,7 @@ function constEvalExpr(expr, policy) {
           }
         }
         // &(compound_literal) → address of file-scope compound literal
-        if (inner.kind === Types.ExprKind.COMPOUND_LITERAL) {
+        if (inner instanceof AST.ECompoundLiteral) {
           const addr = policy.getCompoundLitAddr(inner);
           if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
         }
@@ -8670,7 +10233,7 @@ function constEvalExpr(expr, policy) {
       }
       return null;
     }
-    case Types.ExprKind.BINARY: {
+    case AST.EBinary: {
       // Short-circuit LAND/LOR
       if (expr.op === "LAND") {
         const l = constEvalExpr(expr.left, policy);
@@ -8747,24 +10310,21 @@ function constEvalExpr(expr, policy) {
       if (hasAddr) {
         // addr + int, addr - int (pointer arithmetic: scale by pointee size)
         if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
-          const leftType = expr.left.type.removeQualifiers();
-          let elemSize = leftType.kind === Types.TypeKind.POINTER ? leftType.baseType.size
-                       : leftType.kind === Types.TypeKind.ARRAY ? leftType.baseType.size : 1;
+          const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
+          const elemSize = elemType ? elemType.size : 1;
           const offset = Number(r.intVal) * elemSize;
           return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
         }
         // int + addr
         if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
-          const rightType = expr.right.type.removeQualifiers();
-          let elemSize = rightType.kind === Types.TypeKind.POINTER ? rightType.baseType.size
-                       : rightType.kind === Types.TypeKind.ARRAY ? rightType.baseType.size : 1;
+          const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
+          const elemSize = elemType ? elemType.size : 1;
           return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
         }
         // addr - addr (pointer difference)
         if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
-          const leftType = expr.left.type.removeQualifiers();
-          let elemSize = leftType.kind === Types.TypeKind.POINTER ? leftType.baseType.size
-                       : leftType.kind === Types.TypeKind.ARRAY ? leftType.baseType.size : 1;
+          const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
+          const elemSize = elemType ? elemType.size : 1;
           if (elemSize === 0) return null;
           return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
         }
@@ -8782,7 +10342,7 @@ function constEvalExpr(expr, policy) {
       }
       return null;
     }
-    case Types.ExprKind.TERNARY: {
+    case AST.ETernary: {
       const cond = constEvalExpr(expr.condition, policy);
       if (!cond) return null;
       let cv;
@@ -8791,8 +10351,8 @@ function constEvalExpr(expr, policy) {
       else return null;
       return constEvalExpr(cv ? expr.thenExpr : expr.elseExpr, policy);
     }
-    case Types.ExprKind.CAST:
-    case Types.ExprKind.IMPLICIT_CAST: {
+    case AST.ECast:
+    case AST.EImplicitCast: {
       const v = constEvalExpr(expr.expr, policy);
       if (!v) return null;
       const t = expr.type.removeQualifiers();
@@ -8807,11 +10367,11 @@ function constEvalExpr(expr, policy) {
       }
       return v;
     }
-    case Types.ExprKind.SIZEOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
-    case Types.ExprKind.SIZEOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.size) };
-    case Types.ExprKind.ALIGNOF_EXPR: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
-    case Types.ExprKind.ALIGNOF_TYPE: return { kind: "int", intVal: BigInt(expr.operandType.align) };
-    case Types.ExprKind.COMPOUND_LITERAL: {
+    case AST.ESizeofExpr: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
+    case AST.ESizeofType: return { kind: "int", intVal: BigInt(expr.operandType.size) };
+    case AST.EAlignofExpr: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
+    case AST.EAlignofType: return { kind: "int", intVal: BigInt(expr.operandType.align) };
+    case AST.ECompoundLiteral: {
       // For scalar compound literals like (int){42}, extract the value
       if (!expr.type.isAggregate() && !expr.type.isArray() && expr.initList &&
           expr.initList.elements.length > 0) {
@@ -8822,6 +10382,7 @@ function constEvalExpr(expr, policy) {
       if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
       return null;
     }
+    case AST.EDecay: return constEvalExpr(expr.operand, policy);
     default: return null;
   }
 }
@@ -8986,10 +10547,10 @@ class CodeGenerator {
   }
 
   computeFAMExtraSize(type, initExpr) {
-    if (!type.isTag() || !initExpr || initExpr.kind !== Types.ExprKind.INIT_LIST) return 0;
+    if (!type.isTag() || !initExpr || !(initExpr instanceof AST.EInitList)) return 0;
     const tag = type.tagDecl;
     if (!tag || tag.tagKind !== Types.TagKind.STRUCT) return 0;
-    const members = tag.members.filter(m => m.declKind === Types.DeclKind.VAR);
+    const members = tag.members.filter(m => m instanceof AST.DVar);
     let famMember = null, famIdx = -1;
     for (let i = 0; i < members.length; i++) {
       if (members[i].type.isArray() && members[i].type.arraySize === 0) {
@@ -9001,8 +10562,8 @@ class CodeGenerator {
     const famElem = initExpr.elements[famIdx];
     const elemType = famMember.type.baseType;
     const elemSize = this.sizeOf(elemType);
-    if (famElem.kind === Types.ExprKind.STRING) return famElem.value.length * elemSize;
-    if (famElem.kind === Types.ExprKind.INIT_LIST) return famElem.elements.length * elemSize;
+    if (famElem instanceof AST.EString) return famElem.value.length * elemSize;
+    if (famElem instanceof AST.EInitList) return famElem.elements.length * elemSize;
     return elemSize;
   }
 
@@ -9116,9 +10677,9 @@ class CodeGenerator {
       for (let i = 0; i < initList.elements.length; i++) {
         const elemOffset = baseOffset + i * elemSize;
         const elem = initList.elements[i];
-        if (elem.kind === Types.ExprKind.INIT_LIST) {
+        if (elem instanceof AST.EInitList) {
           this.populateInitListStatic(elem, elemType, elemOffset);
-        } else if (elem.kind === Types.ExprKind.STRING && elemType.isArray()) {
+        } else if (elem instanceof AST.EString && elemType.isArray()) {
           this.writeStringLiteralToStatic(elem.value, elemType, elemOffset);
         } else {
           const val = this._constEvalExpr(elem);
@@ -9131,7 +10692,7 @@ class CodeGenerator {
       if (tag.tagKind === Types.TagKind.STRUCT) {
         let elemIdx = 0;
         for (const member of tag.members) {
-          if (member.declKind !== Types.DeclKind.VAR) continue;
+          if (!(member instanceof AST.DVar)) continue;
           if (member.bitWidth >= 0 && !member.name) continue;
           const fieldOffset = baseOffset + member.byteOffset;
           if (elemIdx < initList.elements.length) {
@@ -9150,9 +10711,9 @@ class CodeGenerator {
                 unit = (unit & ~(mask << bo)) | (bits << bo);
                 for (let b = 0; b < unitSize; b++) this.staticData[fieldOffset + b] = (unit >>> (b * 8)) & 0xFF;
               }
-            } else if (elem.kind === Types.ExprKind.INIT_LIST) {
+            } else if (elem instanceof AST.EInitList) {
               this.populateInitListStatic(elem, member.type, fieldOffset);
-            } else if (elem.kind === Types.ExprKind.STRING && member.type.isArray()) {
+            } else if (elem instanceof AST.EString && member.type.isArray()) {
               this.writeStringLiteralToStatic(elem.value, member.type, fieldOffset);
             } else {
               const val = this._constEvalExpr(elem);
@@ -9167,12 +10728,12 @@ class CodeGenerator {
           const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
           let varIdx = 0;
           for (const member of tag.members) {
-            if (member.declKind !== Types.DeclKind.VAR) continue;
+            if (!(member instanceof AST.DVar)) continue;
             if (varIdx++ !== targetIdx) continue;
             const elem = initList.elements[0];
-            if (elem.kind === Types.ExprKind.INIT_LIST) {
+            if (elem instanceof AST.EInitList) {
               this.populateInitListStatic(elem, member.type, baseOffset);
-            } else if (elem.kind === Types.ExprKind.STRING && member.type.isArray()) {
+            } else if (elem instanceof AST.EString && member.type.isArray()) {
               this.writeStringLiteralToStatic(elem.value, member.type, baseOffset);
             } else {
               const val = this._constEvalExpr(elem);
@@ -9201,7 +10762,7 @@ class CodeGenerator {
       for (let i = 0; i < initList.elements.length; i++) {
         const elemOffset = baseOffset + i * elemSize;
         const elem = initList.elements[i];
-        if (elem.kind === Types.ExprKind.INIT_LIST) {
+        if (elem instanceof AST.EInitList) {
           this.emitInitListRuntimeStores(elem, elemType, baseLocalIdx, elemOffset);
         } else {
           const val = this._constEvalExpr(elem);
@@ -9228,7 +10789,7 @@ class CodeGenerator {
       if (tag.tagKind === Types.TagKind.STRUCT) {
         let elemIdx = 0;
         for (const member of tag.members) {
-          if (member.declKind !== Types.DeclKind.VAR) continue;
+          if (!(member instanceof AST.DVar)) continue;
           if (member.bitWidth >= 0 && !member.name) continue;
           const fieldOffset = baseOffset + member.byteOffset;
           if (elemIdx < initList.elements.length) {
@@ -9242,7 +10803,7 @@ class CodeGenerator {
                 this.emitConversion(elem.type, member.type);
                 this.emitBitFieldStore(member);
               }
-            } else if (elem.kind === Types.ExprKind.INIT_LIST) {
+            } else if (elem instanceof AST.EInitList) {
               this.emitInitListRuntimeStores(elem, member.type, baseLocalIdx, fieldOffset);
             } else {
               const val = this._constEvalExpr(elem);
@@ -9270,10 +10831,10 @@ class CodeGenerator {
           const targetIdx = initList.unionMemberIndex >= 0 ? initList.unionMemberIndex : 0;
           let varIdx = 0;
           for (const member of tag.members) {
-            if (member.declKind !== Types.DeclKind.VAR) continue;
+            if (!(member instanceof AST.DVar)) continue;
             if (varIdx++ !== targetIdx) continue;
             const elem = initList.elements[0];
-            if (elem.kind === Types.ExprKind.INIT_LIST) {
+            if (elem instanceof AST.EInitList) {
               this.emitInitListRuntimeStores(elem, member.type, baseLocalIdx, baseOffset);
             } else {
               const val = this._constEvalExpr(elem);
@@ -9318,13 +10879,13 @@ class CodeGenerator {
     }
   }
   emitInitToFrameSlot(type, initExpr, frameOffset) {
-    if (type.isArray() && initExpr.kind === Types.ExprKind.STRING) {
+    if (type.isArray() && initExpr instanceof AST.EString) {
       this.emitStringToFrameSlot(initExpr.value, type, frameOffset);
       return;
     }
-    if (type.isAggregate() && initExpr.kind === Types.ExprKind.INIT_LIST) {
+    if (type.isAggregate() && initExpr instanceof AST.EInitList) {
       const il = initExpr;
-      if (type.isArray() && il.elements.length === 1 && il.elements[0].kind === Types.ExprKind.STRING) {
+      if (type.isArray() && il.elements.length === 1 && il.elements[0] instanceof AST.EString) {
         this.emitStringToFrameSlot(il.elements[0].value, type, frameOffset);
         return;
       }
@@ -9360,7 +10921,7 @@ class CodeGenerator {
       this.emitInitToFrameSlot(cl.type, cl.initList, offset);
     } else {
       const initExpr = (!cl.initList.elements || cl.initList.elements.length === 0)
-        ? new AST.EInt(Types.TINT, 0n) : cl.initList.elements[0];
+        ? new AST.EInt(cl.loc, Types.TINT, 0n) : cl.initList.elements[0];
       this.emitInitToFrameSlot(cl.type, initExpr, offset);
     }
   }
@@ -9418,7 +10979,7 @@ class CodeGenerator {
     const memoryVars = [];
     const addMemoryDecls = (decls) => {
       for (const decl of decls) {
-        if (decl.declKind === Types.DeclKind.VAR && decl.storageClass !== Types.StorageClass.STATIC) {
+        if (decl instanceof AST.DVar && decl.storageClass !== Types.StorageClass.STATIC) {
           const def = decl.definition || decl;
           if (def === decl && def.allocClass === Types.AllocClass.MEMORY) memoryVars.push(decl);
         }
@@ -9428,25 +10989,25 @@ class CodeGenerator {
     while (stack.length > 0) {
       const stmt = stack.pop();
       if (!stmt) continue;
-      switch (stmt.kind) {
-        case Types.StmtKind.DECL: addMemoryDecls(stmt.declarations); break;
-        case Types.StmtKind.COMPOUND:
+      switch (stmt.constructor) {
+        case AST.SDecl: addMemoryDecls(stmt.declarations); break;
+        case AST.SCompound:
           for (let i = stmt.statements.length - 1; i >= 0; i--) stack.push(stmt.statements[i]);
           break;
-        case Types.StmtKind.IF:
+        case AST.SIf:
           stack.push(stmt.thenBranch);
           if (stmt.elseBranch) stack.push(stmt.elseBranch);
           break;
-        case Types.StmtKind.WHILE: stack.push(stmt.body); break;
-        case Types.StmtKind.DO_WHILE: stack.push(stmt.body); break;
-        case Types.StmtKind.FOR:
-          if (stmt.init && stmt.init.kind === Types.StmtKind.DECL) addMemoryDecls(stmt.init.declarations);
+        case AST.SWhile: stack.push(stmt.body); break;
+        case AST.SDoWhile: stack.push(stmt.body); break;
+        case AST.SFor:
+          if (stmt.init && stmt.init instanceof AST.SDecl) addMemoryDecls(stmt.init.declarations);
           stack.push(stmt.body);
           break;
-        case Types.StmtKind.SWITCH:
+        case AST.SSwitch:
           for (let i = stmt.body.statements.length - 1; i >= 0; i--) stack.push(stmt.body.statements[i]);
           break;
-        case Types.StmtKind.TRY_CATCH:
+        case AST.STryCatch:
           stack.push(stmt.tryBody);
           for (const cc of stmt.catches) stack.push(cc.body);
           break;
@@ -9465,8 +11026,17 @@ class CodeGenerator {
     this.paramMemoryOffsets.clear();
     this.compoundLiteralOffsets.clear();
     this.frameSize = 0;
-    if (memoryVars.length > 0 || memoryParams.length > 0 ||
-        (funcDef.compoundLiterals && funcDef.compoundLiterals.length > 0)) {
+    // Eager peek: do we have any frame-scope compound literals?
+    let hasFrameCompoundLiterals = false;
+    if (funcDef.body) {
+      for (const cl of funcDef.body.referencedCompoundLiterals) {
+        if (!this.fileScopeCompoundLiteralAddrs.has(cl)) {
+          hasFrameCompoundLiterals = true;
+          break;
+        }
+      }
+    }
+    if (memoryVars.length > 0 || memoryParams.length > 0 || hasFrameCompoundLiterals) {
       this.savedSpLocalIdx = this.allocLocal(WT_I32);
       let offset = 0;
       for (const v of memoryVars) {
@@ -9482,8 +11052,13 @@ class CodeGenerator {
         this.paramMemoryOffsets.set(p, offset);
         offset += this.sizeOf(p.type);
       }
-      if (funcDef.compoundLiterals) {
-        for (const cl of funcDef.compoundLiterals) {
+      // Frame-scope compound literals: walk the body's bag. Anything
+      // already allocated as a file-scope (static-storage) literal is
+      // skipped — its address is global, not frame-relative.
+      if (funcDef.body) {
+        for (const cl of funcDef.body.referencedCompoundLiterals) {
+          if (this.fileScopeCompoundLiteralAddrs.has(cl)) continue;
+          if (this.compoundLiteralOffsets.has(cl)) continue;
           const a = this.alignOf(cl.type);
           offset = (offset + a - 1) & ~(a - 1);
           this.compoundLiteralOffsets.set(cl, offset);
@@ -9601,15 +11176,15 @@ class CodeGenerator {
   emitStmt(stmt) {
     if (!stmt) return;
     if (stmt.loc) this._recordSourceLoc(stmt.loc);
-    switch (stmt.kind) {
-      case Types.StmtKind.COMPOUND: {
+    switch (stmt.constructor) {
+      case AST.SCompound: {
         this.pushLocalScope();
         const stmts = stmt.statements;
         // Open forward-label blocks. Forward labels' scope = from the start
         // of the compound up to the label statement itself.
         const forwardLabels = [];
         for (const s of stmts) {
-          if (s.kind === Types.StmtKind.LABEL && s.hasGotos && !s.isSwitchLevel) {
+          if (s instanceof AST.SLabel && s.hasGotos && !s.isSwitchLevel) {
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
               forwardLabels.push(s);
           }
@@ -9621,7 +11196,7 @@ class CodeGenerator {
         }
         const openLoopLabels = [];
         for (const s of stmts) {
-          if (s.kind === Types.StmtKind.LABEL) {
+          if (s instanceof AST.SLabel) {
             if (!s.hasGotos) continue;
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH) {
               for (let j = openLoopLabels.length - 1; j >= 0; j--) {
@@ -9652,12 +11227,12 @@ class CodeGenerator {
         this.popLocalScope();
         break;
       }
-      case Types.StmtKind.EXPR:
+      case AST.SExpr:
         this.emitExpr(stmt.expr, EXPR_DROP);
         break;
-      case Types.StmtKind.DECL: {
+      case AST.SDecl: {
         for (const decl of stmt.declarations) {
-          if (decl.declKind === Types.DeclKind.VAR) {
+          if (decl instanceof AST.DVar) {
             if (decl.storageClass !== Types.StorageClass.STATIC && decl.definition === decl &&
                 decl.allocClass === Types.AllocClass.REGISTER) {
               const _li = this.allocLocal(cToWasmType(decl.type, this.wmod));
@@ -9680,7 +11255,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.StmtKind.RETURN: {
+      case AST.SReturn: {
         if (this.hasVaArgs) {
           const retType = this.currentFuncDef.type.getReturnType();
           if (stmt.expr && isStructOrUnion(retType)) {
@@ -9717,7 +11292,7 @@ class CodeGenerator {
         this.body.ret();
         break;
       }
-      case Types.StmtKind.IF: {
+      case AST.SIf: {
         this.emitExpr(stmt.condition);
         this.emitConditionToI32(stmt.condition.type);
         if (stmt.elseBranch) {
@@ -9733,7 +11308,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.StmtKind.WHILE: {
+      case AST.SWhile: {
         const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
         this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
         this.body.loop(); this.blockDepth++; this.continueTarget = this.blockDepth;
@@ -9748,7 +11323,7 @@ class CodeGenerator {
         this.breakTarget = savedBreak; this.continueTarget = savedContinue;
         break;
       }
-      case Types.StmtKind.DO_WHILE: {
+      case AST.SDoWhile: {
         const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
         this.body.block(); this.blockDepth++; this.breakTarget = this.blockDepth;
         this.body.loop(); this.blockDepth++;
@@ -9764,7 +11339,7 @@ class CodeGenerator {
         this.breakTarget = savedBreak; this.continueTarget = savedContinue;
         break;
       }
-      case Types.StmtKind.FOR: {
+      case AST.SFor: {
         const savedBreak = this.breakTarget, savedContinue = this.continueTarget;
         this.pushLocalScope();
         if (stmt.init) this.emitStmt(stmt.init);
@@ -9788,13 +11363,13 @@ class CodeGenerator {
         this.breakTarget = savedBreak; this.continueTarget = savedContinue;
         break;
       }
-      case Types.StmtKind.BREAK:
+      case AST.SBreak:
         this.body.br(this.blockDepth - this.breakTarget);
         break;
-      case Types.StmtKind.CONTINUE:
+      case AST.SContinue:
         this.body.br(this.blockDepth - this.continueTarget);
         break;
-      case Types.StmtKind.SWITCH: {
+      case AST.SSwitch: {
         const sw = stmt;
         const savedBreak = this.breakTarget;
         let defaultIdx = -1;
@@ -9805,13 +11380,13 @@ class CodeGenerator {
         const switchFwdLabels = [];
         for (let si = 0; si < sw.body.statements.length; si++) {
           const s = sw.body.statements[si];
-          if (s.kind === Types.StmtKind.LABEL && s.hasGotos) {
+          if (s instanceof AST.SLabel && s.hasGotos) {
             if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH)
               switchFwdLabels.push({ label: s, stmtPos: si });
           }
-          if (s.kind === Types.StmtKind.COMPOUND) {
+          if (s instanceof AST.SCompound) {
             for (const cs of s.statements) {
-              if (cs.kind === Types.StmtKind.LABEL && cs.hasGotos) {
+              if (cs instanceof AST.SLabel && cs.hasGotos) {
                 if (cs.labelKind === Types.LabelKind.FORWARD || cs.labelKind === Types.LabelKind.BOTH) {
                   switchFwdLabels.push({ label: cs, stmtPos: si });
                   // Mark so the inner COMPOUND emit doesn't open its own
@@ -9922,7 +11497,7 @@ class CodeGenerator {
           const endIdx = (i + 1 < numCases) ? sw.cases[i + 1].stmtIndex : sw.body.statements.length;
           for (let j = startIdx; j < endIdx; j++) {
             const s = sw.body.statements[j];
-            if (s.kind === Types.StmtKind.LABEL) {
+            if (s instanceof AST.SLabel) {
               if (!s.hasGotos) continue;
               if (s.labelKind === Types.LabelKind.FORWARD || s.labelKind === Types.LabelKind.BOTH) {
                 for (let k = openLoopLabels.length - 1; k >= 0; k--) {
@@ -9955,7 +11530,7 @@ class CodeGenerator {
         this.breakTarget = savedBreak;
         break;
       }
-      case Types.StmtKind.GOTO: {
+      case AST.SGoto: {
         const target = stmt.target;
         const depth = target ? this.gotoLabelDepths.get(target) : undefined;
         if (depth === undefined) {
@@ -9974,16 +11549,16 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.StmtKind.LABEL: break; // handled in COMPOUND
-      case Types.StmtKind.EMPTY: break;
-      case Types.StmtKind.THROW: {
+      case AST.SLabel: break; // handled in COMPOUND
+      case AST.SEmpty: break;
+      case AST.SThrow: {
         const tagIdx = this.exceptionToWasmTagIdx.get(stmt.tag);
         for (let i = 0; i < stmt.args.length; i++) this.emitExpr(stmt.args[i]);
         this.body.throw_(tagIdx);
         this.body.unreachable();
         break;
       }
-      case Types.StmtKind.TRY_CATCH: {
+      case AST.STryCatch: {
         const tc = stmt;
         const numCatches = tc.catches.length;
         const savedSpLocal = this.allocLocal(WT_I32);
@@ -10040,7 +11615,7 @@ class CodeGenerator {
         break;
       }
       default:
-        throw new Error(`emitStmt: unhandled statement kind ${stmt.kind}`);
+        throw new Error(`emitStmt: unhandled statement ${stmt.constructor.name}`);
     }
   }
 
@@ -10061,7 +11636,44 @@ class CodeGenerator {
 
   isUnsignedType(type) { return type.removeQualifiers().isUnsigned(); }
 
+  // --- Pointer scaling helpers ---
+  // Multiply the i32 value already on top of the stack by sizeof(elemType).
+  emitScaleByElemSize(elemType) {
+    const elemSize = this.sizeOf(elemType);
+    if (elemSize !== 1) {
+      this.body.i32Const(elemSize);
+      this.body.aop(WT_I32, ALU.OP_MUL);
+    }
+  }
+  // Divide the i32 value already on top of the stack by sizeof(elemType) (signed).
+  emitDivByElemSize(elemType) {
+    const elemSize = this.sizeOf(elemType);
+    if (elemSize !== 1) {
+      this.body.i32Const(elemSize);
+      this.body.aop(WT_I32, ALU.OP_DIV, true);
+    }
+  }
+  // Emit an integer expression as a byte offset for pointer arithmetic:
+  // emit, narrow i64→i32 if needed, then scale by sizeof(elemType).
+  emitPointerOffset(intExpr, elemType) {
+    this.emitExpr(intExpr);
+    if (wtEquals(this.getBinaryWasmType(intExpr.type), WT_I64)) {
+      this.body.aop(WT_I32, ALU.OP_WRAP_I64);
+    }
+    this.emitScaleByElemSize(elemType);
+  }
+
   // --- Load/Store ---
+  // After an address has been pushed for an lvalue, emit a load iff
+  // the value should be materialized (i.e. it's a scalar). Aggregates
+  // (struct/union/array) propagate as addresses — loading them here
+  // would be wrong; callers consume the address. Functions are also
+  // address-only at the wasm level (the call sequence reads the table
+  // index directly). Centralizes the rule that was repeated across
+  // EIdent / ESubscript / EMember / EArrow / OP_DEREF emit cases.
+  emitLoadIfScalar(type) {
+    if (!type.isAggregate() && !type.isFunction()) this.emitLoad(type);
+  }
   emitLoad(type) {
     type = type.removeQualifiers();
     if (type === Types.TCHAR || type === Types.TSCHAR) this.body.mop(MOP.I32_LOAD8_S, 0, 0);
@@ -10192,8 +11804,8 @@ class CodeGenerator {
   // --- Type conversion ---
   _isNullPointerConstantCG(expr) {
     if (!expr) return false;
-    if (expr.kind === Types.ExprKind.INT && expr.value === 0n) return true;
-    if (expr.kind === Types.ExprKind.IMPLICIT_CAST || expr.kind === Types.ExprKind.CAST) {
+    if (expr instanceof AST.EInt && expr.value === 0n) return true;
+    if (expr instanceof AST.EImplicitCast || expr instanceof AST.ECast) {
       return this._isNullPointerConstantCG(expr.expr);
     }
     return false;
@@ -10259,7 +11871,7 @@ class CodeGenerator {
 
   // --- LValue ---
   emitLValue(expr) {
-    if (expr.kind === Types.ExprKind.IDENT && expr.decl && expr.decl.declKind === Types.DeclKind.VAR) {
+    if (expr instanceof AST.EIdent && expr.decl && expr.decl instanceof AST.DVar) {
       const varDecl = expr.decl.definition || expr.decl;
       const lit = this.localVarToWasmLocalIdx.get(varDecl);
       const git = this.globalVarToWasmGlobalIdx.get(varDecl);
@@ -10274,7 +11886,7 @@ class CodeGenerator {
       if (pait !== undefined) return { kind: LV_MEMORY, type: varDecl.type, addrSource: LV_ADDR_FRAME, addrImmediate: pait };
       throw new Error(`emitLValue: variable '${varDecl.name}' not found`);
     }
-    if (expr.kind === Types.ExprKind.MEMBER) {
+    if (expr instanceof AST.EMember) {
       const baseT = expr.base.type.removeQualifiers();
       if (baseT.isGCStruct()) {
         const refWt = this.getBinaryWasmType(baseT);
@@ -10289,19 +11901,19 @@ class CodeGenerator {
         };
       }
       this.emitAddressOf(expr);
-      const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
+      const lv = { kind: LV_MEMORY, type: expr.type, bitField: expr.memberDecl.bitWidth >= 0 ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
       this.body.localSet(lv.savedLocal);
       return lv;
     }
-    if (expr.kind === Types.ExprKind.ARROW) {
+    if (expr instanceof AST.EArrow) {
       this.emitAddressOf(expr);
-      const lv = { kind: LV_MEMORY, type: expr.type, bitField: (expr.memberDecl && expr.memberDecl.bitWidth >= 0) ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
+      const lv = { kind: LV_MEMORY, type: expr.type, bitField: expr.memberDecl.bitWidth >= 0 ? expr.memberDecl : null, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
       this.body.localSet(lv.savedLocal);
       return lv;
     }
-    if (expr.kind === Types.ExprKind.SUBSCRIPT) {
+    if (expr instanceof AST.ESubscript) {
       const arrT = expr.array.type.removeQualifiers();
       if (arrT.isGCArray()) {
         const refWt = this.getBinaryWasmType(arrT);
@@ -10318,25 +11930,22 @@ class CodeGenerator {
           savedRefLocal: refLocal, savedIdxLocal: idxLocal,
         };
       }
-      const elemSize = this.sizeOf(expr.type);
       this.emitExpr(expr.array);
-      this.emitExpr(expr.index);
-      if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-      if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+      this.emitPointerOffset(expr.index, expr.type);
       this.body.aop(WT_I32, ALU.OP_ADD);
       const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
       this.body.localSet(lv.savedLocal);
       return lv;
     }
-    if (expr.kind === Types.ExprKind.UNARY && expr.op === "OP_DEREF") {
+    if (expr instanceof AST.EUnary && expr.op === "OP_DEREF") {
       this.emitExpr(expr.operand);
       const lv = { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_LOCAL };
       lv.savedLocal = this.allocLocal(WT_I32);
       this.body.localSet(lv.savedLocal);
       return lv;
     }
-    throw new Error(`emitLValue: unsupported expression kind ${expr.kind}`);
+    throw new Error(`emitLValue: unsupported expression ${expr.constructor.name}`);
   }
 
   lvaluePush(lv) {
@@ -10391,14 +12000,14 @@ class CodeGenerator {
 
   // --- Address-of ---
   emitAddressOf(expr) {
-    if (expr.kind === Types.ExprKind.IDENT) {
-      if (expr.decl.declKind === Types.DeclKind.FUNC) {
+    if (expr instanceof AST.EIdent) {
+      if (expr.decl instanceof AST.DFunc) {
         const func = expr.decl.definition || expr.decl;
         const tIdx = this.funcDefToTableIdx.get(func);
         this.body.i32Const(tIdx);
         return;
       }
-      if (expr.decl.declKind === Types.DeclKind.VAR) {
+      if (expr.decl instanceof AST.DVar) {
         const varDecl = expr.decl.definition || expr.decl;
         const gait = this.globalArrayAddrs.get(varDecl);
         if (gait !== undefined) { this.body.i32Const(gait); return; }
@@ -10409,36 +12018,32 @@ class CodeGenerator {
         throw new Error(`Cannot take address of REGISTER variable '${varDecl.name}'`);
       }
     }
-    if (expr.kind === Types.ExprKind.MEMBER) {
+    if (expr instanceof AST.EMember) {
       this.emitAddressOf(expr.base);
       const tag = expr.base.type.tagDecl;
       const offset = this.getFieldOffset(tag, expr.memberDecl);
       if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
       return;
     }
-    if (expr.kind === Types.ExprKind.ARROW) {
+    if (expr instanceof AST.EArrow) {
       this.emitExpr(expr.base);
-      const ptrType = expr.base.type.decay();
-      const baseType = ptrType.baseType;
+      const baseType = expr.base.type.baseType;
       const tag = baseType.tagDecl;
       const offset = this.getFieldOffset(tag, expr.memberDecl);
       if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
       return;
     }
-    if (expr.kind === Types.ExprKind.SUBSCRIPT) {
-      const elemSize = this.sizeOf(expr.type);
+    if (expr instanceof AST.ESubscript) {
       this.emitExpr(expr.array);
-      this.emitExpr(expr.index);
-      if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-      if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+      this.emitPointerOffset(expr.index, expr.type);
       this.body.aop(WT_I32, ALU.OP_ADD);
       return;
     }
-    if (expr.kind === Types.ExprKind.UNARY && expr.op === "OP_DEREF") {
+    if (expr instanceof AST.EUnary && expr.op === "OP_DEREF") {
       this.emitExpr(expr.operand);
       return;
     }
-    if (expr.kind === Types.ExprKind.COMPOUND_LITERAL) {
+    if (expr instanceof AST.ECompoundLiteral) {
       const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
       if (fsAddr !== undefined) { this.body.i32Const(fsAddr); }
       else {
@@ -10447,7 +12052,7 @@ class CodeGenerator {
       }
       return;
     }
-    throw new Error(`emitAddressOf: unsupported expression kind ${expr.kind}`);
+    throw new Error(`emitAddressOf: unsupported expression ${expr.constructor.name}`);
   }
 
   // --- Compound op ---
@@ -10502,8 +12107,7 @@ class CodeGenerator {
       this.emitExpr(rhs);
       this.emitConversion(rhsType, opType);
       if (lhsType.isPointer() && (op === "ADD_ASSIGN" || op === "SUB_ASSIGN")) {
-        const elemSize = this.sizeOf(lhsType.baseType);
-        if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+        this.emitScaleByElemSize(lhsType.baseType);
       }
       this.emitCompoundOp(opWt, op, isUnsigned);
       if (opType !== lhsType) this.emitConversion(opType, lhsType);
@@ -10570,8 +12174,8 @@ class CodeGenerator {
   // --- Expression emission ---
   emitExpr(expr, ctx) {
     if (!ctx) ctx = EXPR_VALUE;
-    switch (expr.kind) {
-      case Types.ExprKind.INT: {
+    switch (expr.constructor) {
+      case AST.EInt: {
         const type = expr.type;
         if (type.kind === Types.TypeKind.LLONG || type.kind === Types.TypeKind.ULLONG) {
           this.body.i64Const(expr.value);
@@ -10580,35 +12184,35 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.ExprKind.FLOAT: {
+      case AST.EFloat: {
         if (expr.type.removeQualifiers() === Types.TFLOAT) this.body.f32Const(expr.value);
         else this.body.f64Const(expr.value);
         break;
       }
-      case Types.ExprKind.STRING: {
+      case AST.EString: {
         const addr = this.getStringAddress(expr.value);
         this.body.i32Const(addr);
         break;
       }
-      case Types.ExprKind.IDENT: {
-        if (expr.decl.declKind === Types.DeclKind.VAR) {
+      case AST.EIdent: {
+        if (expr.decl instanceof AST.DVar) {
           const varDecl = expr.decl.definition || expr.decl;
           const gait = this.globalArrayAddrs.get(varDecl);
           if (gait !== undefined) {
-            if (varDecl.type.isArray() || varDecl.type.isAggregate()) this.body.i32Const(gait);
-            else { this.body.i32Const(gait); this.emitLoad(varDecl.type); }
+            this.body.i32Const(gait);
+            this.emitLoadIfScalar(varDecl.type);
             break;
           }
           const lait = this.localArrayOffsets.get(varDecl);
           if (lait !== undefined) {
             this.emitFrameAddr(lait);
-            if (!varDecl.type.isArray() && !varDecl.type.isAggregate()) this.emitLoad(varDecl.type);
+            this.emitLoadIfScalar(varDecl.type);
             break;
           }
           const pait = this.paramMemoryOffsets.get(varDecl);
           if (pait !== undefined) {
             this.emitFrameAddr(pait);
-            if (!varDecl.type.isArray() && !varDecl.type.isAggregate()) this.emitLoad(varDecl.type);
+            this.emitLoadIfScalar(varDecl.type);
             break;
           }
           const lit = this.localVarToWasmLocalIdx.get(varDecl);
@@ -10618,49 +12222,45 @@ class CodeGenerator {
             if (git !== undefined) this.body.globalGet(git);
             else throw new Error(`emitExpr: variable '${varDecl.name}' not found`);
           }
-        } else if (expr.decl.declKind === Types.DeclKind.ENUM_CONST) {
+        } else if (expr.decl instanceof AST.DEnumConst) {
           this.body.i32Const(expr.decl.value);
-        } else if (expr.decl.declKind === Types.DeclKind.FUNC) {
+        } else if (expr.decl instanceof AST.DFunc) {
           const func = expr.decl.definition || expr.decl;
           const tIdx = this.funcDefToTableIdx.get(func);
           this.body.i32Const(tIdx);
         }
         break;
       }
-      case Types.ExprKind.BINARY: {
-        if (expr.op.endsWith("ASSIGN")) {
+      case AST.EBinary: {
+        const meta = AST.BinOp[expr.op];
+        if (meta.isAssign) {
           this.emitAssignment(expr, ctx);
           return;
         }
         const leftType = expr.left.type, rightType = expr.right.type;
-        const isComparison = ["EQ","NE","LT","GT","LE","GE"].includes(expr.op);
+        const isComparison = meta.isCompare;
         const wt = this.getBinaryWasmType(isComparison ? leftType : expr.type);
         const isUnsigned = this.isUnsignedType(leftType);
-        // Pointer arithmetic
-        if (expr.op === "ADD" && (leftType.isPointer() || rightType.isPointer() || leftType.isArray() || rightType.isArray())) {
-          let ptrExpr, intExpr, elemType;
-          if (leftType.isPointer()) { ptrExpr = expr.left; intExpr = expr.right; elemType = leftType.baseType; }
-          else if (leftType.isArray()) { ptrExpr = expr.left; intExpr = expr.right; elemType = leftType.baseType; }
-          else if (rightType.isPointer()) { ptrExpr = expr.right; intExpr = expr.left; elemType = rightType.baseType; }
-          else { ptrExpr = expr.right; intExpr = expr.left; elemType = rightType.baseType; }
-          const elemSize = this.sizeOf(elemType);
-          this.emitExpr(ptrExpr); this.emitExpr(intExpr);
-          if (wtEquals(this.getBinaryWasmType(intExpr.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-          if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+        // Pointer arithmetic — element type is whichever side is a
+        // pointer/array (only one side for ADD; left side for SUB).
+        const elemType = AST.pointerArithElemType(leftType, rightType);
+        if (expr.op === "ADD" && elemType) {
+          const leftIsPtr = leftType.isPointer() || leftType.isArray();
+          const ptrExpr = leftIsPtr ? expr.left : expr.right;
+          const intExpr = leftIsPtr ? expr.right : expr.left;
+          this.emitExpr(ptrExpr);
+          this.emitPointerOffset(intExpr, elemType);
           this.body.aop(WT_I32, ALU.OP_ADD);
           break;
         }
-        if (expr.op === "SUB" && (leftType.isPointer() || leftType.isArray())) {
-          const leftElemType = leftType.isArray() ? leftType.baseType : leftType.baseType;
-          this.emitExpr(expr.left); this.emitExpr(expr.right);
+        if (expr.op === "SUB" && elemType) {
           if (rightType.isPointer() || rightType.isArray()) {
+            this.emitExpr(expr.left); this.emitExpr(expr.right);
             this.body.aop(WT_I32, ALU.OP_SUB);
-            const elemSize = this.sizeOf(leftElemType);
-            if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_DIV, true); }
+            this.emitDivByElemSize(elemType);
           } else {
-            if (wtEquals(this.getBinaryWasmType(rightType), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-            const elemSize = this.sizeOf(leftElemType);
-            if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+            this.emitExpr(expr.left);
+            this.emitPointerOffset(expr.right, elemType);
             this.body.aop(WT_I32, ALU.OP_SUB);
           }
           break;
@@ -10719,7 +12319,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.ExprKind.UNARY: {
+      case AST.EUnary: {
         const operandType = expr.operand.type;
         switch (expr.op) {
           case "OP_NEG": {
@@ -10753,7 +12353,7 @@ class CodeGenerator {
             this.emitIncDec(expr, ctx); return;
           case "OP_DEREF":
             this.emitExpr(expr.operand);
-            if (!expr.type.isAggregate() && !expr.type.isFunction()) this.emitLoad(expr.type);
+            this.emitLoadIfScalar(expr.type);
             break;
           case "OP_ADDR":
             this.emitAddressOf(expr.operand);
@@ -10761,7 +12361,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.ExprKind.CALL: {
+      case AST.ECall: {
         const funcDecl = expr.funcDecl;
         if (funcDecl) {
           const funcDef = funcDecl.definition || funcDecl;
@@ -10786,7 +12386,7 @@ class CodeGenerator {
               if (i < numFixed) {
                 argType = paramTypes[i];
               } else {
-                argType = expr.arguments[i].type.decay();
+                argType = expr.arguments[i].type;
                 if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
               }
               blockSize += vaSlotSize(argType);
@@ -10816,7 +12416,7 @@ class CodeGenerator {
               if (isFixed) {
                 storeType = paramTypes[i];
               } else {
-                storeType = arg.type.decay();
+                storeType = arg.type;
                 if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
               }
 
@@ -10902,8 +12502,10 @@ class CodeGenerator {
             }
           }
         } else {
-          // Indirect call
-          const calleeType = expr.callee.type.decay();
+          // Indirect call. expr.callee is already decayed by the parser
+          // (see parsePostfixTail: ECall callee path), so callee.type is
+          // a plain pointer-to-function (or function type itself).
+          const calleeType = expr.callee.type;
           const funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
           const callRetType = funcType.getReturnType();
           const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
@@ -10919,7 +12521,7 @@ class CodeGenerator {
             const argOffsets = [];
             for (let i = 0; i < expr.arguments.length; i++) {
               argOffsets.push(blockSize);
-              let argType = i < numFixed ? paramTypes[i] : expr.arguments[i].type.decay();
+              let argType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
               if (argType.removeQualifiers() === Types.TFLOAT) argType = Types.TDOUBLE;
               blockSize += vaSlotSize(argType);
             }
@@ -10935,7 +12537,7 @@ class CodeGenerator {
             this.body.localSet(argBlockBase);
             const deferredAtVaAlloc = this.structRetDeferred;
             for (let i = 0; i < expr.arguments.length; i++) {
-              let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type.decay();
+              let storeType = i < numFixed ? paramTypes[i] : expr.arguments[i].type;
               if (storeType.removeQualifiers() === Types.TFLOAT) storeType = Types.TDOUBLE;
               this.body.localGet(argBlockBase);
               if (argOffsets[i] > 0) { this.body.i32Const(argOffsets[i]); this.body.aop(WT_I32, ALU.OP_ADD); }
@@ -11011,7 +12613,7 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.ExprKind.SUBSCRIPT: {
+      case AST.ESubscript: {
         const arrType = expr.array.type.removeQualifiers();
         if (arrType.isGCArray()) {
           const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, arrType);
@@ -11025,16 +12627,13 @@ class CodeGenerator {
           break;
         }
         const elemType = expr.type;
-        const elemSize = this.sizeOf(elemType);
         this.emitExpr(expr.array);
-        this.emitExpr(expr.index);
-        if (wtEquals(this.getBinaryWasmType(expr.index.type), WT_I64)) this.body.aop(WT_I32, ALU.OP_WRAP_I64);
-        if (elemSize !== 1) { this.body.i32Const(elemSize); this.body.aop(WT_I32, ALU.OP_MUL); }
+        this.emitPointerOffset(expr.index, elemType);
         this.body.aop(WT_I32, ALU.OP_ADD);
-        if (!elemType.isAggregate()) this.emitLoad(elemType);
+        this.emitLoadIfScalar(elemType);
         break;
       }
-      case Types.ExprKind.MEMBER: {
+      case AST.EMember: {
         const baseType = expr.base.type.removeQualifiers();
         if (baseType.isGCStruct()) {
           const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, baseType);
@@ -11051,41 +12650,47 @@ class CodeGenerator {
         const offset = this.getFieldOffset(tag, field);
         if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
         if (field.bitWidth >= 0) this.emitBitFieldLoad(field);
-        else if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        else this.emitLoadIfScalar(expr.type);
         break;
       }
-      case Types.ExprKind.ARROW: {
+      case AST.EArrow: {
         this.emitExpr(expr.base);
         const field = expr.memberDecl;
-        const ptrType = expr.base.type.decay();
-        const baseType = ptrType.baseType;
+        const baseType = expr.base.type.baseType;
         const tag = baseType.tagDecl;
         const offset = this.getFieldOffset(tag, field);
         if (offset) { this.body.i32Const(offset); this.body.aop(WT_I32, ALU.OP_ADD); }
         if (field.bitWidth >= 0) this.emitBitFieldLoad(field);
-        else if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
+        else this.emitLoadIfScalar(expr.type);
         break;
       }
-      case Types.ExprKind.SIZEOF_EXPR:
+      case AST.ESizeofExpr:
         this.body.i32Const(this.sizeOf(expr.expr.type)); break;
-      case Types.ExprKind.SIZEOF_TYPE:
+      case AST.ESizeofType:
         this.body.i32Const(this.sizeOf(expr.operandType)); break;
-      case Types.ExprKind.ALIGNOF_EXPR:
+      case AST.EAlignofExpr:
         this.body.i32Const(this.alignOf(expr.expr.type)); break;
-      case Types.ExprKind.ALIGNOF_TYPE:
+      case AST.EAlignofType:
         this.body.i32Const(this.alignOf(expr.operandType)); break;
-      case Types.ExprKind.IMPLICIT_CAST: {
+      case AST.EImplicitCast: {
         if (ctx === EXPR_DROP) { this.emitExpr(expr.expr, EXPR_DROP); return; }
         this.emitExpr(expr.expr);
         this.emitConversion(expr.expr.type, expr.type, expr.expr);
         break;
       }
-      case Types.ExprKind.CAST: {
+      case AST.EDecay: {
+        // Operand has array or function type; emitting it produces the
+        // base address (for arrays) or table index (for functions), which
+        // is exactly the decayed pointer value.
+        this.emitExpr(expr.operand, ctx);
+        break;
+      }
+      case AST.ECast: {
         this.emitExpr(expr.expr);
         this.emitConversion(expr.expr.type, expr.targetType);
         break;
       }
-      case Types.ExprKind.TERNARY: {
+      case AST.ETernary: {
         const resultType = cToWasmType(expr.type, this.wmod);
         this.emitExpr(expr.condition);
         this.emitConditionToI32(expr.condition.type);
@@ -11098,7 +12703,7 @@ class CodeGenerator {
         this.body.end();
         break;
       }
-      case Types.ExprKind.INTRINSIC: {
+      case AST.EIntrinsic: {
         switch (expr.intrinsicKind) {
           case Types.IntrinsicKind.VA_START:
             this.emitAddressOf(expr.args[0]);
@@ -11333,31 +12938,30 @@ class CodeGenerator {
         }
         break;
       }
-      case Types.ExprKind.WASM: {
+      case AST.EWasm: {
         for (const arg of expr.args) this.emitExpr(arg);
         for (const b of expr.bytes) this.body.push(b);
         break;
       }
-      case Types.ExprKind.COMMA: {
+      case AST.EComma: {
         for (let i = 0; i < expr.expressions.length; i++) {
           const isLast = i + 1 === expr.expressions.length;
           this.emitExpr(expr.expressions[i], isLast ? ctx : EXPR_DROP);
         }
         return;
       }
-      case Types.ExprKind.COMPOUND_LITERAL: {
+      case AST.ECompoundLiteral: {
         const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
         if (fsAddr !== undefined) {
           this.body.i32Const(fsAddr);
-          if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
         } else {
           this.emitCompoundLiteralInit(expr);
           this.emitFrameAddr(this.compoundLiteralOffsets.get(expr));
-          if (!expr.type.isArray() && !expr.type.isAggregate()) this.emitLoad(expr.type);
         }
+        this.emitLoadIfScalar(expr.type);
         break;
       }
-      case Types.ExprKind.GC_NEW: {
+      case AST.EGCNew: {
         const t = expr.type;
         const typeIdx = getOrCreateGCWasmTypeIdx(this.wmod, t);
         if (t.isGCStruct()) {
@@ -11393,7 +12997,7 @@ class CodeGenerator {
         break;
       }
       default:
-        throw new Error(`emitExpr: unhandled expression kind ${expr.kind}`);
+        throw new Error(`emitExpr: unhandled expression ${expr.constructor.name}`);
     }
     if (ctx === EXPR_DROP) this.body.drop();
   }
@@ -11402,6 +13006,24 @@ class CodeGenerator {
 // ====================
 // generateCode orchestration
 // ====================
+
+// Walk a unit's globals to collect every ECompoundLiteral reachable
+// from a static-storage init context (regular globals + static locals).
+// These get static addresses; their counterparts inside function bodies
+// (frame-scope) are collected separately per-function. The bag does
+// the recursion — we just enumerate the entry points.
+function collectFileScopeCompoundLiterals(unit) {
+  const out = new Set();
+  const collect = (expr) => {
+    if (!expr) return;
+    for (const cl of expr.referencedCompoundLiterals) out.add(cl);
+  };
+  for (const v of unit.definedVariables) collect(v.initExpr);
+  for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+    for (const v of (func.staticLocals || [])) collect(v.initExpr);
+  }
+  return out;
+}
 
 function generateCode(units, outputFile, options) {
   const wmod = new WasmModule();
@@ -11504,7 +13126,12 @@ function generateCode(units, outputFile, options) {
         }
       }
     }
-    for (const cl of (unit.fileScopeCompoundLiterals || [])) {
+    // File-scope compound literals: discover via the bag from every
+    // global init expression (regular globals + static locals, whose
+    // initExprs are evaluated as constant expressions at file scope).
+    const fileScopeCLs = collectFileScopeCompoundLiterals(unit);
+    for (const cl of fileScopeCLs) {
+      if (cg.fileScopeCompoundLiteralAddrs.has(cl)) continue;
       const addr = cg.allocateStatic(cg.sizeOf(cl.type), cg.alignOf(cl.type));
       cg.fileScopeCompoundLiteralAddrs.set(cl, addr);
     }
@@ -11512,15 +13139,16 @@ function generateCode(units, outputFile, options) {
 
   // Initialize file-scope compound literals
   for (const unit of units) {
-    for (const cl of (unit.fileScopeCompoundLiterals || [])) {
+    for (const cl of collectFileScopeCompoundLiterals(unit)) {
       const addr = cg.fileScopeCompoundLiteralAddrs.get(cl);
+      if (addr === undefined) continue; // already initialized in another TU pass
       const baseOffset = addr - (cg.stackPages * 65536);
-      if (cl.type.isArray() && cl.initList.elements.length === 1 && cl.initList.elements[0].kind === Types.ExprKind.STRING) {
+      if (cl.type.isArray() && cl.initList.elements.length === 1 && cl.initList.elements[0] instanceof AST.EString) {
         cg.writeStringLiteralToStatic(cl.initList.elements[0].value, cl.type, baseOffset);
       } else if (cl.type.isAggregate() || cl.type.isArray()) {
         cg.populateInitListStatic(cl.initList, cl.type, baseOffset);
       } else {
-        const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.type, 0n) : cl.initList.elements[0];
+        const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.loc, cl.type, 0n) : cl.initList.elements[0];
         const val = cg._constEvalExpr(initExpr);
         if (val) cg.writeConstValueToStatic(baseOffset, cl.type, val);
       }
@@ -11532,11 +13160,11 @@ function generateCode(units, outputFile, options) {
     if (varDef.allocClass === Types.AllocClass.MEMORY) {
       const addr = cg.globalArrayAddrs.get(varDef);
       const baseOffset = addr - (cg.stackPages * 65536);
-      if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.INIT_LIST) {
+      if (varDef.initExpr && varDef.initExpr instanceof AST.EInitList) {
         cg.populateInitListStatic(varDef.initExpr, varDef.type, baseOffset);
-      } else if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.COMPOUND_LITERAL && varDef.type.isAggregate()) {
+      } else if (varDef.initExpr && varDef.initExpr instanceof AST.ECompoundLiteral && varDef.type.isAggregate()) {
         cg.populateInitListStatic(varDef.initExpr.initList, varDef.type, baseOffset);
-      } else if (varDef.initExpr && varDef.type.isArray() && varDef.initExpr.kind === Types.ExprKind.STRING) {
+      } else if (varDef.initExpr && varDef.type.isArray() && varDef.initExpr instanceof AST.EString) {
         const str = varDef.initExpr.value;
         const copySize = cg.sizeOf(varDef.type);
         const len = Math.min(copySize, str.length);
@@ -11555,9 +13183,9 @@ function generateCode(units, outputFile, options) {
       // for global ref types — user must initialize in main / a startup fn.
       if (varDef.initExpr) {
         const isNullConst = (e) =>
-          (e.kind === Types.ExprKind.INT && e.value === 0n) ||
-          (e.kind === Types.ExprKind.IMPLICIT_CAST && isNullConst(e.expr)) ||
-          (e.kind === Types.ExprKind.CAST && isNullConst(e.expr));
+          (e instanceof AST.EInt && e.value === 0n) ||
+          (e instanceof AST.EImplicitCast && isNullConst(e.expr)) ||
+          (e instanceof AST.ECast && isNullConst(e.expr));
         if (!isNullConst(varDef.initExpr)) {
           throw new Error(
             `global '${varDef.name}': reference-typed globals can only be initialized to null/0 ` +
@@ -11586,16 +13214,16 @@ function generateCode(units, outputFile, options) {
       const wt = cToWasmType(varDef.type, wmod);
       // Determine initial value
       let globalIdx;
-      if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.INT) {
+      if (varDef.initExpr && varDef.initExpr instanceof AST.EInt) {
         const val = Types.truncateConstInt(varDef.initExpr.value, varDef.type);
         if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(Number(val), true);
         else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(Number(val), true);
         else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(val, true);
         else globalIdx = wmod.addGlobalI32(Number(val), true);
-      } else if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.FLOAT) {
+      } else if (varDef.initExpr && varDef.initExpr instanceof AST.EFloat) {
         if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(varDef.initExpr.value, true);
         else globalIdx = wmod.addGlobalF64(varDef.initExpr.value, true);
-      } else if (varDef.initExpr && varDef.initExpr.kind === Types.ExprKind.STRING) {
+      } else if (varDef.initExpr && varDef.initExpr instanceof AST.EString) {
         const addr = cg.getStringAddress(varDef.initExpr.value);
         globalIdx = wmod.addGlobalI32(addr, true);
       } else if (varDef.initExpr) {
@@ -16110,11 +17738,11 @@ function parseAllUnits(fs, pp, inputFiles, options) {
       }
     }
     // Per-TU passes (before linking). Goto resolution lives in the codegen
-    // now: out-of-scope diagnostics are emitted by Codegen.generateCode as
-    // it walks the AST, so there's no separate pre-pass.
+    // now (out-of-scope diagnostics are emitted by Codegen.generateCode as
+    // it walks the AST). Implicit-cast insertion happens inline at parse
+    // time at each construction site.
     Parser.lowerSetjmpLongjmp(unit, exceptionTagRegistry);
-    Parser.annotateImplicitCasts(unit);
-    if (!options?.compilerOptions?.noUndefined) Parser.filterUnusedDeclarations(unit);
+    INLINER.optimize(unit, { noUndefined: !!options?.compilerOptions?.noUndefined });
     if (timing) timing.parseMs += hrtime() - tParse;
     if (parseResult.errors.length > 0) {
       hasErrors = true;
@@ -17134,22 +18762,24 @@ var _exports = {
   TypeKind: Types.TypeKind,
   TagKind: Types.TagKind,
   StorageClass: Types.StorageClass,
-  ExprKind: Types.ExprKind,
-  StmtKind: Types.StmtKind,
-  DeclKind: Types.DeclKind,
   TypeInfo: Types.TypeInfo,
   LabelKind: Types.LabelKind,
   usualArithmeticConversions: Types.usualArithmeticConversions,
+  Types,
+  // AST module — exposed so AST-level unit tests can build raw nodes
+  // and exercise make-helpers, walkers, bubble-up, diag pool, etc.
+  AST,
+  // Diag pool primitives — used by make-helpers and tested directly.
+  withDiag, reportError, reportWarning, fatalError, FatalDiag,
+  // Optimizer — exposed so unit tests can fold a constructed AST and
+  // assert specific transformations.
+  INLINER,
   // Parser
   parseTokens: Parser.parseTokens,
   parseSource: Parser.parseSource,
   dumpAst: Parser.dumpAst,
-  filterUnusedDeclarations: Parser.filterUnusedDeclarations,
   linkTranslationUnits: Parser.linkTranslationUnits,
   lowerSetjmpLongjmp: Parser.lowerSetjmpLongjmp,
-  annotateImplicitCasts: Parser.annotateImplicitCasts,
-  annotateExpr: Parser.annotateExpr,
-  annotateStmt: Parser.annotateStmt,
   gcSectionsPass: Parser.gcSectionsPass,
   // Pipeline
   createDefaultPPRegistry: Stdlib.createDefaultPPRegistry,
