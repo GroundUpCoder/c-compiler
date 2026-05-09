@@ -18364,6 +18364,15 @@ var _exports = {
   TypeInfo: Types.TypeInfo,
   LabelKind: Types.LabelKind,
   usualArithmeticConversions: Types.usualArithmeticConversions,
+  Types,
+  // AST module — exposed so AST-level unit tests can build raw nodes
+  // and exercise make-helpers, walkers, bubble-up, diag pool, etc.
+  AST,
+  // Diag pool primitives — used by make-helpers and tested directly.
+  withDiag, reportError, reportWarning, fatalError, FatalDiag,
+  // Optimizer — exposed so unit tests can fold a constructed AST and
+  // assert specific transformations.
+  INLINER,
   // Parser
   parseTokens: Parser.parseTokens,
   parseSource: Parser.parseSource,
