@@ -2005,142 +2005,50 @@ const UopStr = Object.freeze({
   OP_POST_INC: "post++", OP_POST_DEC: "post--",
 });
 
-// Type system with caching (identity comparison by reference)
+// Type system: an abstract base + per-kind subclasses.
+//
+// Identity comparison by reference. The factory functions below ensure
+// canonical instances (one PointerType per pointee, one ArrayType per
+// (elem, size), etc.), so `t1 === t2` is meaningful for structural equality.
+//
+// `kind` is kept as a string discriminator (parallel to the JS class) so
+// that existing `t.kind === TypeKind.X` checks throughout the codebase keep
+// working alongside the more precise `t instanceof XType` form.
 class TypeInfo {
-  constructor(kind, size, align, isComplete, extra) {
+  constructor(kind, size, align, isComplete) {
     this.kind = kind;
     this.size = size;
     this.align = align;
     this.isComplete = isComplete;
     this.isConst = false;
     this.isVolatile = false;
-    // Kind-specific data
-    this.baseType = extra?.baseType || null;       // POINTER, ARRAY
-    this.arraySize = extra?.arraySize || 0;        // ARRAY
-    this.returnType = extra?.returnType || null;    // FUNCTION
-    this.paramTypes = extra?.paramTypes || null;    // FUNCTION
-    this.isVarArg = extra?.isVarArg || false;      // FUNCTION
-    this.hasUnspecifiedParams = extra?.hasUnspecifiedParams || false; // FUNCTION: f() vs f(void)
-    this.tagName = extra?.tagName || null;          // TAG
-    this.tagKind = extra?.tagKind || null;          // TAG
-    this.tagDecl = extra?.tagDecl || null;          // TAG
-    this.parentType = null;                          // GC_STRUCT inheritance
-    // Derived type caches
+    // Cache slots that can hang on any type:
+    //   _pointer        — `T *` for this T
+    //   _constVariant   — `const T` (or its non-const sibling)
+    //   _volatileVariant — `volatile T` (or its non-volatile sibling)
+    //   _arrayCache     — Map<size, ArrayType> for arrays of this element type
+    //   _funcTypeCache  — nested Map for function types with this return type
+    //   _gcArrayCache   — single GCArrayType for this element type
     this._pointer = null;
     this._constVariant = null;
     this._volatileVariant = null;
     this._arrayCache = null;
     this._funcTypeCache = null;
     this._gcArrayCache = null;
-    // Codegen-side caches: WASM type indices for GC types
-    this._wasmGCTypeIdx = -1;
-    Object.seal(this);
   }
 
-  toString() {
-    let out = "";
-    if (this.isConst) out += "const ";
-    if (this.isVolatile) out += "volatile ";
-    if (this.kind === TypeKind.POINTER) {
-      out += "*" + this.baseType.toString();
-    } else if (this.kind === TypeKind.ARRAY) {
-      out += "[" + this.arraySize + "]" + this.baseType.toString();
-    } else if (this.kind === TypeKind.TAG) {
-      out += this.tagKind + " " + this.tagName;
-    } else if (this.kind === TypeKind.GC_STRUCT_HEAP) {
-      out += "__struct " + this.tagName;
-    } else if (this.kind === TypeKind.GC_STRUCT) {
-      out += "__struct " + this.tagName + " *";
-    } else if (this.kind === TypeKind.GC_ARRAY) {
-      out += "__array(" + this.baseType.toString() + ")";
-    } else if (this.kind === TypeKind.EQREF) {
-      out += "__eqref";
-    } else if (this.kind === TypeKind.FUNCTION) {
-      out += "(";
-      if (this.paramTypes) {
-        out += this.paramTypes.map(p => p.toString()).join(", ");
-        if (this.isVarArg) out += ", ...";
-      }
-      out += ")" + this.returnType.toString();
-    } else {
-      out += this.kind; // primitive kinds are their own string
-    }
-    return out;
-  }
+  // ------------- Field accessors --------------------------------------
+  // Most kind-specific data (baseType, arraySize, returnType, paramTypes,
+  // tagName, tagDecl, ...) lives only on the subclass that uses it. Generic
+  // code typically guards with a kind/instanceof check before reading. The
+  // getters below are intentionally not defined on the base — accessing them
+  // on a type that doesn't carry the field returns `undefined`, which the
+  // existing `?.` / `||` patterns at call sites handle gracefully.
+  getBaseType()   { return this.baseType; }
+  getReturnType() { return this.returnType; }
+  getParamTypes() { return this.paramTypes || []; }
 
-  pointer() {
-    // `__array(T)` and `__eqref` collapse on `*` (treated as ref-only spellings).
-    if (this.kind === TypeKind.GC_ARRAY || this.kind === TypeKind.EQREF) {
-      return this;
-    }
-    // `__struct Foo` (heap) becomes `__struct Foo *` (ref) on first `*`.
-    // The ref form carries `baseType = heap`. tagDecl/isComplete are also
-    // mirrored on ref so member-access and codegen completeness checks work
-    // uniformly. parentType lives canonically on the heap; inheritance
-    // checks normalize via gcHeap(). See parseGCStructSpecifier for the sync
-    // when struct is defined after a forward-ref ref form is created.
-    if (this.kind === TypeKind.GC_STRUCT_HEAP) {
-      if (this._pointer) return this._pointer;
-      const ref = new TypeInfo(TypeKind.GC_STRUCT, 0, 0, this.isComplete, {
-        baseType: this, tagKind: this.tagKind, tagName: this.tagName, tagDecl: this.tagDecl,
-      });
-      this._pointer = ref;
-      return ref;
-    }
-    // Applying `*` to a GC struct ref form is rejected (no `(ref ref T)`).
-    // Caller is the parser, which will catch and report; return null sentinel.
-    if (this.kind === TypeKind.GC_STRUCT) {
-      return null;
-    }
-    if (this._pointer) return this._pointer;
-    const p = new TypeInfo(TypeKind.POINTER, 4, 4, true, { baseType: this });
-    this._pointer = p;
-    return p;
-  }
-
-  toggleConst() {
-    if (this._constVariant) return this._constVariant;
-    const c = new TypeInfo(this.kind, this.size, this.align, this.isComplete, {
-      baseType: this.baseType, arraySize: this.arraySize,
-      returnType: this.returnType, paramTypes: this.paramTypes, isVarArg: this.isVarArg,
-      hasUnspecifiedParams: this.hasUnspecifiedParams,
-      tagName: this.tagName, tagKind: this.tagKind, tagDecl: this.tagDecl,
-    });
-    c.isConst = !this.isConst;
-    c.isVolatile = this.isVolatile;
-    c._constVariant = this;
-    this._constVariant = c;
-    // Cross-link volatile variants
-    c._volatileVariant = this._volatileVariant?._constVariant || null;
-    return c;
-  }
-
-  addConst() { return this.isConst ? this : this.toggleConst(); }
-  removeConst() { return this.isConst ? this.toggleConst() : this; }
-
-  toggleVolatile() {
-    if (this._volatileVariant) return this._volatileVariant;
-    const v = new TypeInfo(this.kind, this.size, this.align, this.isComplete, {
-      baseType: this.baseType, arraySize: this.arraySize,
-      returnType: this.returnType, paramTypes: this.paramTypes, isVarArg: this.isVarArg,
-      hasUnspecifiedParams: this.hasUnspecifiedParams,
-      tagName: this.tagName, tagKind: this.tagKind, tagDecl: this.tagDecl,
-    });
-    v.isVolatile = !this.isVolatile;
-    v.isConst = this.isConst;
-    v._volatileVariant = this;
-    this._volatileVariant = v;
-    return v;
-  }
-
-  addVolatile() { return this.isVolatile ? this : this.toggleVolatile(); }
-
-  decay() {
-    if (this.kind === TypeKind.ARRAY) return this.baseType.pointer();
-    if (this.kind === TypeKind.FUNCTION) return this.pointer();
-    return this;
-  }
-
+  // ------------- Predicates ---------------------------------------------
   isInteger() {
     switch (this.kind) {
       case TypeKind.BOOL: case TypeKind.CHAR: case TypeKind.SCHAR: case TypeKind.UCHAR:
@@ -2150,59 +2058,71 @@ class TypeInfo {
       default: return false;
     }
   }
-
   isUnsigned() {
     return this.kind === TypeKind.BOOL || this.kind === TypeKind.UCHAR ||
         this.kind === TypeKind.USHORT || this.kind === TypeKind.UINT ||
         this.kind === TypeKind.ULONG || this.kind === TypeKind.ULLONG;
   }
-
   isFloatingPoint() {
     return this.kind === TypeKind.FLOAT || this.kind === TypeKind.DOUBLE || this.kind === TypeKind.LDOUBLE;
   }
-
   isArithmetic() { return this.isInteger() || this.isFloatingPoint(); }
-  isScalar() { return this.isArithmetic() || this.kind === TypeKind.POINTER; }
-  isPointer() { return this.kind === TypeKind.POINTER; }
-  isRef() {
-    return this.kind === TypeKind.EXTERNREF || this.kind === TypeKind.REFEXTERN ||
-        this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
-        this.kind === TypeKind.EQREF;
+  isScalar()     { return this.isArithmetic() || this.isPointer(); }
+  isPointer()    { return false; }
+  isArray()      { return false; }
+  isFunction()   { return false; }
+  isVoid()       { return this.kind === TypeKind.VOID; }
+  isDivergent()  { return this.kind === TypeKind.DIVERGENT; }
+  isTag()        { return false; }
+  isStruct()     { return false; }
+  isUnion()      { return false; }
+  isEnum()       { return false; }
+  isAggregate()  { return false; }
+  isRef()        { return false; }
+  isGCRef()      { return false; }
+  isGCStruct()       { return false; }
+  isGCStructHeap()   { return false; }
+  isGCStructRefOrHeap() { return this.isGCStruct() || this.isGCStructHeap(); }
+  isGCArray()    { return false; }
+  // Normalize a GC struct (heap or ref) to its heap form. Returns null for
+  // non-GC-struct types. Refs delegate metadata (tagDecl, parentType,
+  // isComplete) to their heap, so most ref-form code never needs this.
+  gcHeap()       { return null; }
+  // True for any concrete GC type that has a wasm type index — heap form
+  // structs, ref form structs (which share the heap's index), and GC arrays.
+  // Codegen uses this at entry points (cToWasmType / getBinaryWasmType) to
+  // dispatch to `getOrCreateGCWasmTypeIdx`.
+  isWasmGCType() { return false; }
+
+  // ------------- Qualifiers ---------------------------------------------
+  // Per-subclass clone — used by toggleConst/toggleVolatile to construct a
+  // sibling with flipped qualifier. Each subclass implements this so the
+  // sibling carries the right kind-specific fields.
+  _cloneForQualifier() { throw new Error(`${this.constructor.name}._cloneForQualifier not implemented`); }
+
+  toggleConst() {
+    if (this._constVariant) return this._constVariant;
+    const c = this._cloneForQualifier();
+    c.isConst = !this.isConst;
+    c.isVolatile = this.isVolatile;
+    c._constVariant = this;
+    this._constVariant = c;
+    c._volatileVariant = this._volatileVariant?._constVariant || null;
+    return c;
   }
-  isGCRef() {
-    // GC universe — eqref + concrete GC types (ref forms). Excludes externref/refextern
-    // and heap forms (heap forms are not values).
-    return this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_ARRAY ||
-        this.kind === TypeKind.EQREF;
+  addConst()    { return this.isConst ? this : this.toggleConst(); }
+  removeConst() { return this.isConst ? this.toggleConst() : this; }
+
+  toggleVolatile() {
+    if (this._volatileVariant) return this._volatileVariant;
+    const v = this._cloneForQualifier();
+    v.isVolatile = !this.isVolatile;
+    v.isConst = this.isConst;
+    v._volatileVariant = this;
+    this._volatileVariant = v;
+    return v;
   }
-  isGCStruct() { return this.kind === TypeKind.GC_STRUCT; }
-  isGCStructHeap() { return this.kind === TypeKind.GC_STRUCT_HEAP; }
-  isGCStructRefOrHeap() {
-    return this.kind === TypeKind.GC_STRUCT || this.kind === TypeKind.GC_STRUCT_HEAP;
-  }
-  // Normalize a GC struct type (heap or ref) to its heap form. tagDecl,
-  // parentType, isComplete live on the heap; refs delegate via baseType.
-  gcHeap() {
-    if (this.kind === TypeKind.GC_STRUCT_HEAP) return this;
-    if (this.kind === TypeKind.GC_STRUCT) return this.baseType;
-    return null;
-  }
-  isGCArray() { return this.kind === TypeKind.GC_ARRAY; }
-  isArray() { return this.kind === TypeKind.ARRAY; }
-  isFunction() { return this.kind === TypeKind.FUNCTION; }
-  isVoid() { return this.kind === TypeKind.VOID; }
-  // The bottom-type marker used during error recovery. Operations that
-  // join types (usual-arithmetic, computeBinaryType, maybeImplicitCast)
-  // treat any divergent operand as absorbing — the result is divergent.
-  isDivergent() { return this.kind === TypeKind.DIVERGENT; }
-  isTag() { return this.kind === TypeKind.TAG; }
-  isStruct() { return this.kind === TypeKind.TAG && this.tagKind === TagKind.STRUCT; }
-  isUnion() { return this.kind === TypeKind.TAG && this.tagKind === TagKind.UNION; }
-  isEnum() { return this.kind === TypeKind.TAG && this.tagKind === TagKind.ENUM; }
-  isAggregate() {
-    return this.kind === TypeKind.ARRAY ||
-      (this.kind === TypeKind.TAG && (this.tagKind === TagKind.STRUCT || this.tagKind === TagKind.UNION));
-  }
+  addVolatile() { return this.isVolatile ? this : this.toggleVolatile(); }
 
   removeQualifiers() {
     let t = this;
@@ -2211,106 +2131,312 @@ class TypeInfo {
     return t;
   }
 
-  getBaseType() { return this.baseType; }
-  getReturnType() { return this.returnType; }
-  getParamTypes() { return this.paramTypes || []; }
+  // ------------- Conversions / construction -----------------------------
+  // Standard `T → T*`. ArrayType.decay() produces `T*` from `T[]`,
+  // FunctionType.decay() produces `Fn*`. Others return self.
+  decay() { return this; }
 
+  // `T → T*`. Default builds a PointerType. GC kinds override.
+  pointer() {
+    if (this._pointer) return this._pointer;
+    const p = new PointerType(this);
+    this._pointer = p;
+    return p;
+  }
+
+  // ------------- Pretty-printing / structural compare -------------------
+  toString() {
+    let out = "";
+    if (this.isConst) out += "const ";
+    if (this.isVolatile) out += "volatile ";
+    out += this._toString();
+    return out;
+  }
+  // Subclass override: kind-specific spelling without qualifiers.
+  // Default falls back to the kind discriminator (sufficient for primitives).
+  _toString() { return this.kind; }
+
+  // Top-level structural equality. Common shape: same kind, same qualifiers,
+  // then per-subclass `_eqStructure`. Identity (===) short-circuits since
+  // factories canonicalize.
   isCompatibleWith(other, _seen) {
     if (this === other) return true;
-    if (this.kind !== other.kind) return false;
+    if (!other || this.kind !== other.kind) return false;
     if (this.isConst !== other.isConst || this.isVolatile !== other.isVolatile) return false;
-    switch (this.kind) {
-      case TypeKind.ARRAY:
-        if (!this.baseType.isCompatibleWith(other.baseType, _seen)) return false;
-        return this.arraySize === 0 || other.arraySize === 0 || this.arraySize === other.arraySize;
-      case TypeKind.POINTER:
-        return this.baseType.isCompatibleWith(other.baseType, _seen);
-      case TypeKind.GC_ARRAY:
-        // GC types are structural — element compatibility is enough.
-        return this.baseType.isCompatibleWith(other.baseType, _seen);
-      case TypeKind.GC_STRUCT:
-        // Ref form: structurally compatible iff the underlying heap types match.
-        return this.baseType.isCompatibleWith(other.baseType, _seen);
-      case TypeKind.GC_STRUCT_HEAP: {
-        // GC structs are structural: same number of fields, each pairwise compatible.
-        if (!this.isComplete || !other.isComplete) return false;
-        // Cycle detection for recursive types (Node.next of type Node).
-        // If we're already comparing this pair, optimistically return true —
-        // any difference will surface at a non-recursive field.
-        if (_seen) {
-          for (const [a, b] of _seen) {
-            if ((a === this && b === other) || (a === other && b === this)) return true;
-          }
-        }
-        const seen = _seen ? _seen.concat([[this, other]]) : [[this, other]];
-        const am = this.tagDecl.members, bm = other.tagDecl.members;
-        if (am.length !== bm.length) return false;
-        for (let i = 0; i < am.length; i++) {
-          if (!am[i].type.isCompatibleWith(bm[i].type, seen)) return false;
-        }
-        return true;
-      }
-      case TypeKind.TAG:
-        if (this.tagKind !== other.tagKind) return false;
-        // Compare by tagName (always set) rather than tagDecl.name (null if incomplete)
-        if (this.tagName === other.tagName) return true;
-        // Anonymous tags get different names across TUs
-        return this.tagName?.startsWith("__anon_") && other.tagName?.startsWith("__anon_");
-      case TypeKind.FUNCTION: {
-        if (!this.returnType.isCompatibleWith(other.returnType)) return false;
-        const params = this.paramTypes || [];
-        const otherParams = other.paramTypes || [];
-        // f() has unspecified params, compatible with any signature
-        if (this.hasUnspecifiedParams || other.hasUnspecifiedParams) return true;
-        if (this.isVarArg !== other.isVarArg) return false;
-        if (params.length !== otherParams.length) return false;
-        for (let i = 0; i < params.length; i++) {
-          if (!params[i].isCompatibleWith(otherParams[i])) return false;
-        }
-        return true;
-      }
-      default:
-        return false; // primitives would have matched with === above
-    }
+    return this._eqStructure(other, _seen);
+  }
+  // Subclass override: structural comparison given matching kind+qualifiers.
+  // Default true — primitives are equal by kind alone.
+  _eqStructure(_other, _seen) { return true; }
+}
+
+// Most primitive numeric types (BOOL/CHAR/INT/FLOAT/...) and the special
+// non-numeric singletons (VOID/AUTO/DIVERGENT/UNKNOWN). All have fixed
+// size+align and no kind-specific fields.
+class PrimitiveType extends TypeInfo {
+  constructor(kind, size, align, isComplete = true) {
+    super(kind, size, align, isComplete);
+    Object.seal(this);
+  }
+  _cloneForQualifier() {
+    return new PrimitiveType(this.kind, this.size, this.align, this.isComplete);
   }
 }
 
-// Primitive type singletons
-const TUNKNOWN = new TypeInfo(TypeKind.UNKNOWN, 0, 0, false);
-const TVOID = new TypeInfo(TypeKind.VOID, 0, 0, false);
+// `T *` — a C pointer to T. Always 4 bytes (wasm32).
+class PointerType extends TypeInfo {
+  constructor(baseType) {
+    super(TypeKind.POINTER, 4, 4, true);
+    this.baseType = baseType;
+    Object.seal(this);
+  }
+  isPointer() { return true; }
+  _toString() { return "*" + this.baseType.toString(); }
+  _eqStructure(other, seen) { return this.baseType.isCompatibleWith(other.baseType, seen); }
+  _cloneForQualifier() { return new PointerType(this.baseType); }
+}
+
+// `T[N]` — a C array of N elements of T (linear memory). N=0 marks an
+// incomplete array (e.g., `extern int a[];`).
+class ArrayType extends TypeInfo {
+  constructor(baseType, size) {
+    super(TypeKind.ARRAY, baseType.size * size, baseType.align, size > 0);
+    this.baseType = baseType;
+    this.arraySize = size;
+    Object.seal(this);
+  }
+  isArray() { return true; }
+  isAggregate() { return true; }
+  decay() { return this.baseType.pointer(); }
+  _toString() { return "[" + this.arraySize + "]" + this.baseType.toString(); }
+  _eqStructure(other, seen) {
+    if (!this.baseType.isCompatibleWith(other.baseType, seen)) return false;
+    return this.arraySize === 0 || other.arraySize === 0 || this.arraySize === other.arraySize;
+  }
+  _cloneForQualifier() { return new ArrayType(this.baseType, this.arraySize); }
+}
+
+// Function type `R(P0, P1, ...)` (with optional `...` and "unspecified
+// params" for the `f()` form vs `f(void)`).
+class FunctionType extends TypeInfo {
+  constructor(returnType, paramTypes, isVarArg, hasUnspecifiedParams) {
+    super(TypeKind.FUNCTION, 0, 0, true);
+    this.returnType = returnType;
+    this.paramTypes = paramTypes;
+    this.isVarArg = !!isVarArg;
+    this.hasUnspecifiedParams = !!hasUnspecifiedParams;
+    Object.seal(this);
+  }
+  isFunction() { return true; }
+  decay() { return this.pointer(); }
+  _toString() {
+    let out = "(";
+    if (this.paramTypes) {
+      out += this.paramTypes.map(p => p.toString()).join(", ");
+      if (this.isVarArg) out += ", ...";
+    }
+    return out + ")" + this.returnType.toString();
+  }
+  _eqStructure(other, seen) {
+    if (!this.returnType.isCompatibleWith(other.returnType, seen)) return false;
+    const a = this.paramTypes || [], b = other.paramTypes || [];
+    if (this.hasUnspecifiedParams || other.hasUnspecifiedParams) return true;
+    if (this.isVarArg !== other.isVarArg) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!a[i].isCompatibleWith(b[i], seen)) return false;
+    }
+    return true;
+  }
+  _cloneForQualifier() {
+    return new FunctionType(this.returnType, this.paramTypes, this.isVarArg, this.hasUnspecifiedParams);
+  }
+}
+
+// Linear-memory aggregates: `struct`, `union`, `enum`. `tagDecl` is the
+// AST.DTag with members (filled in once the body is parsed).
+class TagType extends TypeInfo {
+  constructor(tagKind, tagName, size, align) {
+    super(TypeKind.TAG, size, align, false);
+    this.tagKind = tagKind;
+    this.tagName = tagName;
+    this.tagDecl = null;
+    Object.seal(this);
+  }
+  isTag()    { return true; }
+  isStruct() { return this.tagKind === TagKind.STRUCT; }
+  isUnion()  { return this.tagKind === TagKind.UNION; }
+  isEnum()   { return this.tagKind === TagKind.ENUM; }
+  isAggregate() { return this.isStruct() || this.isUnion(); }
+  _toString() { return this.tagKind + " " + this.tagName; }
+  _eqStructure(other, _seen) {
+    if (this.tagKind !== other.tagKind) return false;
+    if (this.tagName === other.tagName) return true;
+    return this.tagName?.startsWith("__anon_") && other.tagName?.startsWith("__anon_");
+  }
+  _cloneForQualifier() {
+    const c = new TagType(this.tagKind, this.tagName, this.size, this.align);
+    c.isComplete = this.isComplete;
+    c.tagDecl = this.tagDecl;
+    return c;
+  }
+}
+
+// `__struct Foo` — the named heap-allocated GC struct *type entity*. NOT a
+// value type. Carries `tagDecl` (members), `parentType` (single inheritance
+// link), and lazily produces its ref form via `pointer()`.
+class GCStructHeapType extends TypeInfo {
+  constructor(tagName) {
+    super(TypeKind.GC_STRUCT_HEAP, 0, 0, false);
+    this.tagKind = TagKind.GC_STRUCT;
+    this.tagName = tagName;
+    this.tagDecl = null;       // set when struct definition is parsed
+    this.parentType = null;    // GCStructHeapType | null
+    this._wasmGCTypeIdx = -1;  // codegen cache
+    Object.seal(this);
+  }
+  isGCStructHeap() { return true; }
+  isWasmGCType()   { return true; }
+  gcHeap() { return this; }
+  // First `*` converts heap → ref form. The ref shares the heap as its
+  // `baseType`, and looks up tagDecl/parentType/isComplete via that link.
+  pointer() {
+    if (this._pointer) return this._pointer;
+    const ref = new GCStructRefType(this);
+    this._pointer = ref;
+    return ref;
+  }
+  _toString() { return "__struct " + this.tagName; }
+  _eqStructure(other, _seen) {
+    if (!this.isComplete || !other.isComplete) return false;
+    if (_seen) {
+      for (const [a, b] of _seen) {
+        if ((a === this && b === other) || (a === other && b === this)) return true;
+      }
+    }
+    const seen = _seen ? _seen.concat([[this, other]]) : [[this, other]];
+    const am = this.tagDecl.members, bm = other.tagDecl.members;
+    if (am.length !== bm.length) return false;
+    for (let i = 0; i < am.length; i++) {
+      if (!am[i].type.isCompatibleWith(bm[i].type, seen)) return false;
+    }
+    return true;
+  }
+  _cloneForQualifier() {
+    const c = new GCStructHeapType(this.tagName);
+    c.tagDecl = this.tagDecl;
+    c.parentType = this.parentType;
+    c.isComplete = this.isComplete;
+    return c;
+  }
+}
+
+// `__struct Foo *` — a value-typed GC reference. Holds only a back-link to
+// its heap; tagDecl / parentType / isComplete are read through getters so
+// they always reflect the current heap state (no sync required when a
+// forward-declared struct gets defined later).
+class GCStructRefType extends TypeInfo {
+  constructor(heap) {
+    super(TypeKind.GC_STRUCT, 0, 0, heap.isComplete);
+    this._heap = heap;
+    Object.seal(this);
+  }
+  get baseType()   { return this._heap; }   // legacy alias for codegen
+  get tagName()    { return this._heap.tagName; }
+  get tagKind()    { return this._heap.tagKind; }
+  get tagDecl()    { return this._heap.tagDecl; }
+  get parentType() { return this._heap.parentType; }
+  // ref form's completeness mirrors heap (heap may transition false → true
+  // after a forward-declared struct gets defined).
+  get isComplete() { return this._heap.isComplete; }
+  set isComplete(_v) { /* derived from heap; ignore writes */ }
+  isRef()      { return true; }
+  isGCRef()    { return true; }
+  isGCStruct() { return true; }
+  isWasmGCType() { return true; }
+  gcHeap()     { return this._heap; }
+  // `*` on a ref form is rejected at the parser; we return null as a
+  // sentinel for any callers that didn't add the explicit guard.
+  pointer() { return null; }
+  _toString() { return "__struct " + this._heap.tagName + " *"; }
+  // Two refs are compatible iff their heaps are. Recurses via baseType.
+  _eqStructure(other, seen) { return this._heap.isCompatibleWith(other._heap, seen); }
+  _cloneForQualifier() { return new GCStructRefType(this._heap); }
+}
+
+// `__array(T)` — a GC-managed array with element type T. Self-referential
+// `*` is rejected (arrays don't take the pointer-form sugar — they're
+// already references by design).
+class GCArrayType extends TypeInfo {
+  constructor(elementType) {
+    super(TypeKind.GC_ARRAY, 0, 0, true);
+    this.baseType = elementType;
+    this._wasmGCTypeIdx = -1;
+    Object.seal(this);
+  }
+  isRef()     { return true; }
+  isGCRef()   { return true; }
+  isGCArray() { return true; }
+  isWasmGCType() { return true; }
+  pointer()   { return this; }   // collapse — `__array(T) *` is rejected at parser
+  _toString() { return "__array(" + this.baseType.toString() + ")"; }
+  _eqStructure(other, seen) { return this.baseType.isCompatibleWith(other.baseType, seen); }
+  _cloneForQualifier() { return new GCArrayType(this.baseType); }
+}
+
+// `__externref` (nullable) and `__refextern` (non-nullable) — opaque host
+// references. Singletons.
+class ExternRefType extends TypeInfo {
+  constructor() { super(TypeKind.EXTERNREF, 0, 0, false); Object.seal(this); }
+  isRef() { return true; }
+  _cloneForQualifier() { return new ExternRefType(); }
+}
+class RefExternType extends TypeInfo {
+  constructor() { super(TypeKind.REFEXTERN, 0, 0, false); Object.seal(this); }
+  isRef() { return true; }
+  _cloneForQualifier() { return new RefExternType(); }
+}
+
+// `__eqref` — the GC-universe top type (eq lattice). Singleton.
+class EqRefType extends TypeInfo {
+  constructor() { super(TypeKind.EQREF, 0, 0, true); Object.seal(this); }
+  isRef()   { return true; }
+  isGCRef() { return true; }
+  pointer() { return this; }   // collapse — `__eqref *` is meaningless
+  _toString() { return "__eqref"; }
+  _cloneForQualifier() { return new EqRefType(); }
+}
+
+// Primitive type singletons. All sealed via PrimitiveType's constructor.
+const TUNKNOWN = new PrimitiveType(TypeKind.UNKNOWN, 0, 0, false);
+const TVOID = new PrimitiveType(TypeKind.VOID, 0, 0, false);
 // Divergent: bottom type for error recovery (see TypeKind.DIVERGENT).
-const TDIVERGENT = new TypeInfo(TypeKind.DIVERGENT, 0, 0, false);
-const TBOOL = new TypeInfo(TypeKind.BOOL, 1, 1, true);
-const TCHAR = new TypeInfo(TypeKind.CHAR, 1, 1, true);
-const TSCHAR = new TypeInfo(TypeKind.SCHAR, 1, 1, true);
-const TUCHAR = new TypeInfo(TypeKind.UCHAR, 1, 1, true);
-const TSHORT = new TypeInfo(TypeKind.SHORT, 2, 2, true);
-const TUSHORT = new TypeInfo(TypeKind.USHORT, 2, 2, true);
-const TINT = new TypeInfo(TypeKind.INT, 4, 4, true);
-const TUINT = new TypeInfo(TypeKind.UINT, 4, 4, true);
-const TLONG = new TypeInfo(TypeKind.LONG, 4, 4, true);
-const TULONG = new TypeInfo(TypeKind.ULONG, 4, 4, true);
-const TLLONG = new TypeInfo(TypeKind.LLONG, 8, 8, true);
-const TULLONG = new TypeInfo(TypeKind.ULLONG, 8, 8, true);
-const TFLOAT = new TypeInfo(TypeKind.FLOAT, 4, 4, true);
-const TDOUBLE = new TypeInfo(TypeKind.DOUBLE, 8, 8, true);
-const TLDOUBLE = new TypeInfo(TypeKind.LDOUBLE, 8, 8, true);
-const TEXTERNREF = new TypeInfo(TypeKind.EXTERNREF, 0, 0, false);
-const TREFEXTERN = new TypeInfo(TypeKind.REFEXTERN, 0, 0, false);
-const TEQREF = new TypeInfo(TypeKind.EQREF, 0, 0, true);
-const TAUTO = new TypeInfo(TypeKind.AUTO, 0, 0, false);
+const TDIVERGENT = new PrimitiveType(TypeKind.DIVERGENT, 0, 0, false);
+const TBOOL = new PrimitiveType(TypeKind.BOOL, 1, 1);
+const TCHAR = new PrimitiveType(TypeKind.CHAR, 1, 1);
+const TSCHAR = new PrimitiveType(TypeKind.SCHAR, 1, 1);
+const TUCHAR = new PrimitiveType(TypeKind.UCHAR, 1, 1);
+const TSHORT = new PrimitiveType(TypeKind.SHORT, 2, 2);
+const TUSHORT = new PrimitiveType(TypeKind.USHORT, 2, 2);
+const TINT = new PrimitiveType(TypeKind.INT, 4, 4);
+const TUINT = new PrimitiveType(TypeKind.UINT, 4, 4);
+const TLONG = new PrimitiveType(TypeKind.LONG, 4, 4);
+const TULONG = new PrimitiveType(TypeKind.ULONG, 4, 4);
+const TLLONG = new PrimitiveType(TypeKind.LLONG, 8, 8);
+const TULLONG = new PrimitiveType(TypeKind.ULLONG, 8, 8);
+const TFLOAT = new PrimitiveType(TypeKind.FLOAT, 4, 4);
+const TDOUBLE = new PrimitiveType(TypeKind.DOUBLE, 8, 8);
+const TLDOUBLE = new PrimitiveType(TypeKind.LDOUBLE, 8, 8);
+const TEXTERNREF = new ExternRefType();
+const TREFEXTERN = new RefExternType();
+const TEQREF = new EqRefType();
+const TAUTO = new PrimitiveType(TypeKind.AUTO, 0, 0, false);
 
 // Type construction caches
 function arrayOf(elemType, size) {
-  const key = `${elemType.kind}:${size}`;
-  // Simple key isn't sufficient for complex types, use a different approach
-  // We use a two-level map: elemType -> (size -> TypeInfo)
   if (!elemType._arrayCache) elemType._arrayCache = new Map();
   if (elemType._arrayCache.has(size)) return elemType._arrayCache.get(size);
-  const elemSize = elemType.size;
-  const t = new TypeInfo(TypeKind.ARRAY, elemSize * size, elemType.align, size > 0, {
-    baseType: elemType, arraySize: size,
-  });
+  const t = new ArrayType(elemType, size);
   elemType._arrayCache.set(size, t);
   return t;
 }
@@ -2326,21 +2452,19 @@ function functionType(retType, paramTypes, isVarArg, hasUnspecifiedParams = fals
   }
   const key = (isVarArg ? 1 : 0) | (hasUnspecifiedParams ? 2 : 0);
   if (map.has(key)) return map.get(key);
-  const t = new TypeInfo(TypeKind.FUNCTION, 0, 0, true, {
-    returnType: retType, paramTypes, isVarArg, hasUnspecifiedParams,
-  });
+  const t = new FunctionType(retType, paramTypes, isVarArg, hasUnspecifiedParams);
   map.set(key, t);
   return t;
 }
 
-// Tag type cache: tagKind+name -> TypeInfo
+// Tag type cache: tagKind+name -> TagType
 function getOrCreateTagType(tagTypeCache, tagKind, name) {
   const key = tagKind + ":" + name;
   if (tagTypeCache.has(key)) return tagTypeCache.get(key);
   const isEnum = tagKind === TagKind.ENUM;
   const size = isEnum ? 4 : 0;
   const align = isEnum ? 4 : 0;
-  const t = new TypeInfo(TypeKind.TAG, size, align, false, { tagKind, tagName: name });
+  const t = new TagType(tagKind, name, size, align);
   tagTypeCache.set(key, t);
   return t;
 }
@@ -2371,14 +2495,14 @@ function validateNoHeapInValueType(type, errorFn) {
   walk(type);
 }
 
-// GC struct type cache: name -> TypeInfo (TypeKind.GC_STRUCT_HEAP)
+// GC struct type cache: name -> GCStructHeapType.
 // Returns the heap form. The ref form (`__struct Foo *`) is created lazily via
 // `.pointer()`. Heap forms appear only in heap-type positions (struct
-// definitions, intrinsic type-args). Values (vars, fields, params) use the ref
-// form.
+// definitions, intrinsic type-args). Values (vars, fields, params) use the
+// ref form.
 function getOrCreateGCStructType(gcStructTypeCache, name) {
   if (gcStructTypeCache.has(name)) return gcStructTypeCache.get(name);
-  const t = new TypeInfo(TypeKind.GC_STRUCT_HEAP, 0, 0, false, { tagKind: TagKind.GC_STRUCT, tagName: name });
+  const t = new GCStructHeapType(name);
   gcStructTypeCache.set(name, t);
   return t;
 }
@@ -2386,7 +2510,7 @@ function getOrCreateGCStructType(gcStructTypeCache, name) {
 // GC array type cache: keyed by element type identity (stored on element's _gcArrayCache)
 function gcArrayOf(elementType) {
   if (elementType._gcArrayCache) return elementType._gcArrayCache;
-  const t = new TypeInfo(TypeKind.GC_ARRAY, 0, 0, true, { baseType: elementType });
+  const t = new GCArrayType(elementType);
   elementType._gcArrayCache = t;
   return t;
 }
@@ -2546,6 +2670,9 @@ return {
   TypeKind, TagKind, StorageClass, AllocClass, LabelKind,
   IntrinsicKind, BopStr, UopStr,
   TypeInfo,
+  PrimitiveType, PointerType, ArrayType, FunctionType, TagType,
+  GCStructHeapType, GCStructRefType, GCArrayType,
+  ExternRefType, RefExternType, EqRefType,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
   TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
   TDIVERGENT,
@@ -4023,7 +4150,7 @@ function makeMember(loc, base, name) {
 // needed and build EArrow + EMember chain.
 function makeArrow(loc, base, name) {
   let bt = base.type.removeQualifiers();
-  if (bt.kind === Types.TypeKind.GC_STRUCT) {
+  if (bt.isGCStruct()) {
     const chain = lookupMemberChain(bt, name);
     if (!chain) {
       reportError(loc, `'${base.type.toString()}' has no member named '${name}'`);
@@ -6484,14 +6611,9 @@ class Parser {
       gcType.tagDecl = tagDecl;
       gcType.isComplete = true;
       gcType.parentType = parentType;
-      // Sync the ref form (`__struct Foo *`) if it was already created during
-      // a forward reference. tagDecl/isComplete must be visible on both forms
-      // so codegen and completeness checks work uniformly. parentType lives
-      // canonically on the heap; inheritance checks normalize via gcHeap().
-      if (gcType._pointer) {
-        gcType._pointer.tagDecl = tagDecl;
-        gcType._pointer.isComplete = true;
-      }
+      // The ref form (`__struct Foo *`), if previously created during a
+      // forward reference, reads tagDecl/isComplete through getters that
+      // delegate to the heap — no sync needed.
       this.tagScope.set(name, gcType);
       return gcType;
     }
@@ -6499,7 +6621,7 @@ class Parser {
     // Forward reference
     if (!name) this.error(this.peek(), "Expected GC struct name or '{'");
     let gcType = this.tagScope.get(name);
-    if (!gcType || gcType.kind !== Types.TypeKind.GC_STRUCT_HEAP) {
+    if (!gcType || !gcType.isGCStructHeap()) {
       gcType = Types.getOrCreateGCStructType(this.gcStructTypeCache, name);
       this.tagScope.set(name, gcType);
     }
@@ -7232,7 +7354,7 @@ class Parser {
       const retSpecs = this.parseDeclSpecifiers();
       let retType = retSpecs.type;
       while (this.matchText("*")) {
-        if (retType.kind === Types.TypeKind.GC_STRUCT) {
+        if (retType.isGCStruct()) {
           this.error(this.peek(-1), `'${retType.toString()}' is already a reference; '__struct Foo **' is not allowed`);
           break;
         }
@@ -8366,7 +8488,7 @@ class Parser {
           if (!t || seen.has(t)) return;
           seen.add(t);
           const u = t.removeQualifiers();
-          if (u.kind === Types.TypeKind.GC_STRUCT && !u.isComplete) {
+          if (u.isGCStruct() && !u.isComplete) {
             this.error(this.peek(), `function '${name}' references incomplete GC struct '${u.tagName}' in its signature; define '${u.tagName}' first`);
           }
           if (u.kind === Types.TypeKind.POINTER || u.kind === Types.TypeKind.ARRAY) checkComplete(u.baseType);
@@ -8577,7 +8699,7 @@ class Parser {
         this.error(starTok, `'__array(...)' types do not take a '*' — write '__array(T) name' (the array is already a reference)`);
       }
       // Double-`*` on a GC struct (`__struct Foo **`) — wasm has no `(ref ref T)`.
-      if (type.kind === Types.TypeKind.GC_STRUCT) {
+      if (type.isGCStruct()) {
         this.error(starTok, `'${type.toString()}' is already a reference; '__struct Foo **' is not allowed`);
         break;
       }
@@ -8677,7 +8799,7 @@ class Parser {
                 if (pType.kind === Types.TypeKind.GC_ARRAY) {
                   this.error(starTok, `'__array(...)' types do not take a '*' — write '__array(T) name' (the array is already a reference)`);
                 }
-                if (pType.kind === Types.TypeKind.GC_STRUCT) {
+                if (pType.isGCStruct()) {
                   this.error(starTok, `'${pType.toString()}' is already a reference; '__struct Foo **' is not allowed`);
                   break;
                 }
@@ -8826,7 +8948,7 @@ function parseTokens(tokens, options) {
             const pSpecs = parser.parseDeclSpecifiers();
             let pType = pSpecs.type;
             while (parser.matchText("*")) {
-              if (pType.kind === Types.TypeKind.GC_STRUCT) {
+              if (pType.isGCStruct()) {
                 parser.error(parser.peek(-1), `'${pType.toString()}' is already a reference; '__struct Foo **' is not allowed`);
                 break;
               }
@@ -10068,8 +10190,7 @@ function cToWasmType(type, wmod) {
   if (type === Types.TEXTERNREF) return WT_EXTERNREF;
   if (type === Types.TREFEXTERN) return WT_REFEXTERN;
   if (type === Types.TEQREF) return WT_EQREF;
-  if (type.kind === Types.TypeKind.GC_STRUCT || type.kind === Types.TypeKind.GC_STRUCT_HEAP ||
-      type.kind === Types.TypeKind.GC_ARRAY) {
+  if (type.isWasmGCType()) {
     if (!wmod) throw new Error(`cToWasmType: GC type '${type.toString()}' requires wmod for registration`);
     return WT_GCREF(getOrCreateGCWasmTypeIdx(wmod, type), true);
   }
@@ -10155,7 +10276,7 @@ function boxStorageWtFor(type) {
 function getOrCreateGCWasmTypeIdx(wmod, type) {
   type = type.removeQualifiers();
   // Normalize struct ref form to heap form — wasm type idx lives on the heap.
-  if (type.kind === Types.TypeKind.GC_STRUCT) type = type.baseType;
+  if (type.isGCStruct()) type = type.baseType;
   if (type._wasmGCTypeIdx >= 0) return type._wasmGCTypeIdx;
 
   if (!wmod._gcInProgress) wmod._gcInProgress = new Set();
@@ -10165,7 +10286,7 @@ function getOrCreateGCWasmTypeIdx(wmod, type) {
     // Cycle — must reserve a placeholder so the recursive ref resolves.
     let pending = wmod._gcPendingIdx.get(type);
     if (pending === undefined) {
-      pending = (type.kind === Types.TypeKind.GC_STRUCT_HEAP)
+      pending = type.isGCStructHeap()
         ? wmod.reserveGCStructTypeId()
         : wmod.reserveGCArrayTypeId();
       wmod._gcPendingIdx.set(type, pending);
@@ -10176,7 +10297,7 @@ function getOrCreateGCWasmTypeIdx(wmod, type) {
   wmod._gcInProgress.add(type);
 
   let idx;
-  if (type.kind === Types.TypeKind.GC_STRUCT_HEAP) {
+  if (type.isGCStructHeap()) {
     if (!type.isComplete) {
       wmod._gcInProgress.delete(type);
       throw new Error(`Cannot use incomplete GC struct '${type.tagName}'`);
@@ -11794,8 +11915,7 @@ class CodeGenerator {
     if (type === Types.TEXTERNREF) return WT_EXTERNREF;
     if (type === Types.TREFEXTERN) return WT_REFEXTERN;
     if (type === Types.TEQREF) return WT_EQREF;
-    if (type.kind === Types.TypeKind.GC_STRUCT || type.kind === Types.TypeKind.GC_STRUCT_HEAP ||
-        type.kind === Types.TypeKind.GC_ARRAY) {
+    if (type.isWasmGCType()) {
       return WT_GCREF(getOrCreateGCWasmTypeIdx(this.wmod, type), true);
     }
     if (type === Types.TFLOAT) return WT_F32;
