@@ -2679,8 +2679,10 @@ function truncateConstInt(v, type) {
   if (type === TUSHORT) return BigInt.asUintN(16, v);
   if (type === TINT || type === TLONG) return BigInt.asIntN(32, v);
   if (type === TUINT || type === TULONG) return BigInt.asUintN(32, v);
+  if (type === TLLONG) return BigInt.asIntN(64, v);
+  if (type === TULLONG) return BigInt.asUintN(64, v);
   if (type === TBOOL) return v !== 0n ? 1n : 0n;
-  return v;  // long long, pointer: no truncation needed
+  return v;  // pointer: no truncation needed
 }
 
 function usualArithmeticConversions(a, b) {
@@ -5764,7 +5766,9 @@ function lebI(out, value) {
 
 function lebI64(out, value) {
   // value is a BigInt for i64 - ensure signed 64-bit range
-  if (value > 0x7FFFFFFFFFFFFFFFn) value = value - 0x10000000000000000n;
+  if (value > 0x7FFFFFFFFFFFFFFFn || value < -0x8000000000000000n) {
+    value = BigInt.asIntN(64, value);
+  }
   let more = true;
   while (more) {
     let byte = Number(value & 0x7Fn);

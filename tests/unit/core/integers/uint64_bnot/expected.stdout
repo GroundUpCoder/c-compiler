@@ -1,0 +1,6 @@
+sign_mask: 8000000000000000
+~sign_mask: 7fffffffffffffff
+~0ULL: ffffffffffffffff
+~1ULL: fffffffffffffffe
+not_sign < sign_mask: 1
+not_sign + 1 == sign_mask: 1
