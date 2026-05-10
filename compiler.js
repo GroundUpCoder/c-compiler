@@ -5024,6 +5024,12 @@ function optimize(unit, options) {
   for (const f of unit.definedFunctions) {
     if (isRootFunction(f, unit)) enqueueFunc(f);
   }
+  // Export-directive targets are roots regardless of whether they're
+  // called from anywhere in this TU. They may be a non-defining
+  // declaration whose definition lives in another TU; without this seed
+  // the tree-shake would drop the decl from `declaredFunctions` and the
+  // linker would have nothing left to set `.definition` on.
+  for (const [, decl] of unit.exportDirectives) enqueueFunc(decl);
   for (const v of unit.definedVariables) {
     if (v.storageClass !== Types.StorageClass.STATIC) enqueueVar(v);
   }

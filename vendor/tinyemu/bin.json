@@ -1,0 +1,41 @@
+{
+  "bin": true,
+  "name": "tinyemu",
+  "description": "TinyEMU RISC-V 32-bit, headless, file-backed disk image",
+  "compilerArgs": [
+    "-DEMSCRIPTEN",
+    "-D_FILE_OFFSET_BITS=64",
+    "-D_LARGEFILE_SOURCE",
+    "-DCONFIG_VERSION=\"1.0\"",
+    "-DMAX_XLEN=32",
+    "-DCONFIG_RISCV_MAX_XLEN=32",
+    "--allow-undefined"
+  ],
+  "includes": ["."],
+  "sources": [
+    "jsemu.c",
+    "softfp.c",
+    "virtio.c",
+    "fs.c",
+    "fs_utils.c",
+    "simplefb.c",
+    "pci.c",
+    "json.c",
+    "iomem.c",
+    "cutils.c",
+    "aes.c",
+    "sha256.c",
+    "riscv_cpu.c",
+    "riscv_machine.c",
+    "machine.c",
+    "block_file.c",
+    "tinyemu_main.c"
+  ],
+  "dataFiles": {
+    "disk/bbl32.bin": "bbl32.bin",
+    "disk/kernel-riscv32.bin": "kernel-riscv32.bin",
+    "disk/root-riscv32.bin": "root-riscv32.bin",
+    "disk/root-riscv32.cfg": "root-riscv32.cfg"
+  },
+  "runArgs": ["root-riscv32.cfg"]
+}

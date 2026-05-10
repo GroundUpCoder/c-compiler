@@ -3091,6 +3091,29 @@ async function runModule({
         exitCode = instance.exports.main();
       }
     }
+    /* NO_EXIT_RUNTIME: if the program defined and exported
+     * __no_exit_runtime, it has registered async work (timers,
+     * indirect-call dispatch, etc.) that must keep running after main
+     * returns. Skip exit()/atexits (those tear down stdio + abort),
+     * wire stdin → console_queue_char if present, then await forever
+     * so the outer harness doesn't call process.exit. The process
+     * exits naturally when nothing is left to do, or when the program
+     * explicitly calls exit() from inside its async callbacks. */
+    if (instance.exports.__no_exit_runtime) {
+      const cqc = instance.exports.console_queue_char;
+      if (cqc && typeof process !== 'undefined' && process.stdin) {
+        try {
+          if (process.stdin.isTTY && process.stdin.setRawMode) {
+            process.stdin.setRawMode(true);
+          }
+          process.stdin.resume();
+          process.stdin.on('data', (chunk) => {
+            for (const byte of chunk) cqc(byte);
+          });
+        } catch (_) { /* ignore stdin attach failures */ }
+      }
+      await new Promise(() => { /* await indefinitely */ });
+    }
     if (instance.exports.exit) {
       instance.exports.exit(exitCode);
     } else if (instance.exports.__run_atexits) {

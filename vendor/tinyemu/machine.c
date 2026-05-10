@@ -446,19 +446,16 @@ char *get_file_path(const char *base_filename, const char *filename)
 }
 
 
-#ifdef EMSCRIPTEN
-static int load_file(uint8_t **pbuf, const char *filename)
-{
-    abort();
-}
-#else
-/* return -1 if error. */
+/* Local patch: Bellard's upstream gates this on `#ifdef EMSCRIPTEN` with an
+ * abort() body, because his Emscripten port uses async wget for ALL file
+ * loading. Our headless wasm port has working synchronous fopen (the host
+ * provides JS-backed file I/O), so we use the sync version unconditionally. */
 static int load_file(uint8_t **pbuf, const char *filename)
 {
     FILE *f;
     int size;
     uint8_t *buf;
-    
+
     f = fopen(filename, "rb");
     if (!f) {
         perror(filename);
@@ -476,7 +473,6 @@ static int load_file(uint8_t **pbuf, const char *filename)
     *pbuf = buf;
     return size;
 }
-#endif
 
 #ifdef CONFIG_FS_NET
 static void config_load_file_cb(void *opaque, int err, void *data, size_t size)
