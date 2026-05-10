@@ -1,0 +1,1 @@
+tests/unit/core/control_flow/goto/both_label_unsafe_no_return/main.c:16: error: goto 'sink': target label not in scope (in function 'classify') (label may be in a nested block, or a loop label's scope was closed by a forward label)

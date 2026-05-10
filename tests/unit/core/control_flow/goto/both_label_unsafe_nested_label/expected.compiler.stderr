@@ -1,0 +1,1 @@
+tests/unit/core/control_flow/goto/both_label_unsafe_nested_label/main.c:19: error: goto 'outer': target label not in scope (in function 'f') (label may be in a nested block, or a loop label's scope was closed by a forward label)

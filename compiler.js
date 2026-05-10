@@ -5524,14 +5524,210 @@ function normalize(funcDecl, sink) {
   funcDecl.body = body;
 }
 
-// Optimize all functions with bodies in a translation unit. This includes
-// both extern-linkage `definedFunctions` and `static` functions.
-function optimize(unit) {
-  for (const fn of unit.definedFunctions || []) normalize(fn);
-  for (const fn of unit.staticFunctions || []) normalize(fn);
+// ---------------------------------------------------------------------
+// Backward-goto inlining
+//
+// A label that's both a forward-goto target AND a backward-goto target
+// (`labelKind === BOTH`) gets a wasm `loop` block opened at its position
+// to receive backward branches. If a SUBSEQUENT forward label appears in
+// the same compound, the codegen has to close the loop (wasm structured
+// blocks can't outlive an outer block that ends earlier) — and any
+// later backward goto to the original label fails to codegen.
+//
+// virtio.c's `virtio_9p_recv_request` hits this exact pattern:
+//
+//     ... many `goto error;` (forward) ...
+//     return 0;
+//   error:                                  // BOTH (forward + backward)
+//     virtio_9p_send_error(...); return 0;
+//   protocol_error:                         // FORWARD — closes error's loop
+//   fid_not_found:
+//     err = -P9_EPROTO;
+//     goto error;                           // <-- error's loop is gone, fails
+//
+// Fix: at the AST level, REPLACE each backward goto with a copy of the
+// labeled-tail's statements. The label retains forward-only gotos, no
+// loop is needed, and the wasm structure cleanly nests.
+//
+// Safety conditions for inlining (all must hold):
+//   - The body terminates (last stmt is `return`) so we don't fall through
+//     past the inlined region into surrounding code.
+//   - The body contains no nested labels, gotos, declarations, breaks, or
+//     continues. (Labels would be duplicated across inline sites; gotos
+//     could target stale positions; decls could clash with the goto-site's
+//     scope; break/continue could re-target a different enclosing loop.)
+//   - The body is non-empty.
+
+// Compute the label's body slice: statements in `compound.statements`
+// after position `labelIndex`, up to (but not including) the next SLabel
+// or end of compound. Returns null if the slice contains anything that
+// makes inlining unsafe.
+function bodySliceFor(compound, labelIndex) {
+  const stmts = compound.statements;
+  let endIdx = labelIndex + 1;
+  while (endIdx < stmts.length && !(stmts[endIdx] instanceof AST.SLabel)) endIdx++;
+  return stmts.slice(labelIndex + 1, endIdx);
 }
 
-return { normalize, optimize, collectTraces, classifyPair };
+// True if `stmts` is safe to splice in place of a backward goto.
+function isInlineSafe(stmts) {
+  if (stmts.length === 0) return false;
+
+  // Walk to detect any disqualifying construct.
+  function disqualifies(s) {
+    if (s instanceof AST.SLabel || s instanceof AST.SGoto) return true;
+    if (s instanceof AST.SDecl) return true;
+    if (s instanceof AST.SBreak || s instanceof AST.SContinue) return true;
+    if (s instanceof AST.SCompound) return s.statements.some(disqualifies);
+    if (s instanceof AST.SIf) {
+      return disqualifies(s.thenBranch) || (s.elseBranch && disqualifies(s.elseBranch));
+    }
+    if (s instanceof AST.SWhile || s instanceof AST.SDoWhile) return disqualifies(s.body);
+    if (s instanceof AST.SFor) {
+      return (s.init && disqualifies(s.init)) || disqualifies(s.body);
+    }
+    if (s instanceof AST.SSwitch) return disqualifies(s.body);
+    if (s instanceof AST.STryCatch) {
+      return disqualifies(s.tryBody) || s.catches.some(c => disqualifies(c.body));
+    }
+    return false;
+  }
+  if (stmts.some(disqualifies)) return false;
+
+  // Must terminate. Conservative: last stmt is SReturn. Could later
+  // extend to nested SIf where both branches terminate, calls to
+  // `_Noreturn` functions, etc.
+  const last = stmts[stmts.length - 1];
+  if (last instanceof AST.SReturn) return true;
+
+  return false;
+}
+
+// Walk a function body and assign each SLabel and SGoto a linear "source
+// position" (an integer that respects pre-order traversal). Two nodes
+// where pos(a) < pos(b) means `a` appears textually before `b`.
+function collectLabelGotoPositions(body) {
+  const labelInfo = new Map();   // SLabel → { compound, indexInCompound, position, bodySlice }
+  const gotoInfo = new Map();    // SGoto → { compound, indexInCompound, position }
+  let pos = 0;
+
+  function walk(node) {
+    if (!node) return;
+    if (node instanceof AST.SCompound) {
+      for (let i = 0; i < node.statements.length; i++) {
+        const s = node.statements[i];
+        if (s instanceof AST.SLabel) {
+          const slice = bodySliceFor(node, i);
+          labelInfo.set(s, { compound: node, indexInCompound: i, position: pos++, bodySlice: slice });
+        } else if (s instanceof AST.SGoto) {
+          gotoInfo.set(s, { compound: node, indexInCompound: i, position: pos++ });
+        } else {
+          pos++;
+          walk(s);
+        }
+      }
+    } else if (node instanceof AST.SIf) {
+      walk(node.thenBranch);
+      walk(node.elseBranch);
+    } else if (node instanceof AST.SWhile || node instanceof AST.SDoWhile) {
+      walk(node.body);
+    } else if (node instanceof AST.SFor) {
+      walk(node.init);
+      walk(node.body);
+    } else if (node instanceof AST.SSwitch) {
+      walk(node.body);
+    } else if (node instanceof AST.STryCatch) {
+      walk(node.tryBody);
+      for (const cc of node.catches) walk(cc.body);
+    }
+    // else: leaf
+  }
+  walk(body);
+  return { labelInfo, gotoInfo };
+}
+
+// Run the backward-goto inlining pass on a function body. Iterates: each
+// round inlines one backward goto, then re-walks to find more. Bounded
+// by the goto count.
+function inlineBackwardGotos(funcDecl) {
+  if (!funcDecl.body) return;
+  let body = funcDecl.body;
+
+  for (let iter = 0; iter < 1024; iter++) {
+    const { labelInfo, gotoInfo } = collectLabelGotoPositions(body);
+
+    let didTransform = false;
+    for (const [label, lInfo] of labelInfo) {
+      // Only relevant for labels with at least one backward goto. The
+      // parser sets BOTH when forward + backward both exist; LOOP for
+      // backward-only. We only want to inline backward gotos to BOTH
+      // labels — pure LOOP labels are fine for the codegen as-is.
+      if (label.labelKind !== Types.LabelKind.BOTH) continue;
+      if (!isInlineSafe(lInfo.bodySlice)) continue;
+
+      // Find a backward goto to this label.
+      let targetGoto = null;
+      let targetGotoInfo = null;
+      for (const [g, gI] of gotoInfo) {
+        if (g.target === label && gI.position > lInfo.position) {
+          targetGoto = g;
+          targetGotoInfo = gI;
+          break;
+        }
+      }
+      if (!targetGoto) continue;
+
+      // Replace the goto with the body slice. The slice's statements are
+      // shared (not deep-cloned); since the safety check guarantees no
+      // labels/gotos/decls inside, sharing is fine. (Multiple inline
+      // sites referencing the same EXpr nodes is OK — the codegen reads
+      // them, doesn't mutate.)
+      const compound = targetGotoInfo.compound;
+      const idx = targetGotoInfo.indexInCompound;
+      const newStmts = [
+        ...compound.statements.slice(0, idx),
+        ...lInfo.bodySlice,
+        ...compound.statements.slice(idx + 1),
+      ];
+      const newCompound = new AST.SCompound(compound.loc, newStmts, compound.labels);
+      body = rebuildAlongPath(body, compound, newCompound);
+
+      // If this was the last backward goto to the label, demote labelKind
+      // from BOTH back to FORWARD so the codegen treats it as a pure
+      // forward target (no loop block).
+      let backwardCount = 0;
+      for (const [g, gI] of gotoInfo) {
+        if (g === targetGoto) continue;
+        if (g.target === label && gI.position > lInfo.position) backwardCount++;
+      }
+      if (backwardCount === 0) label.labelKind = Types.LabelKind.FORWARD;
+
+      didTransform = true;
+      break;
+    }
+    if (!didTransform) break;
+  }
+
+  funcDecl.body = body;
+}
+
+// Optimize all functions with bodies in a translation unit. Runs the
+// cross-block hoist pass and the backward-goto inlining pass. Both can
+// reduce the goto graph; running them in this order means hoist sees the
+// original structure (which is what its safety conditions assume), and
+// inlining cleans up any remaining BOTH-label trouble after.
+function optimize(unit) {
+  for (const fn of unit.definedFunctions || []) {
+    normalize(fn);
+    inlineBackwardGotos(fn);
+  }
+  for (const fn of unit.staticFunctions || []) {
+    normalize(fn);
+    inlineBackwardGotos(fn);
+  }
+}
+
+return { normalize, inlineBackwardGotos, optimize, collectTraces, classifyPair };
 
 })();
 
@@ -8598,11 +8794,18 @@ class Parser {
       this.expect(";");
       const sg = new AST.SGoto(Lexer.Loc.fromTok(tok), label);
       if (this.parsedLabels.has(label)) {
-        // Backward goto — label already defined, must be a loop label
+        // Backward goto — label already defined.
         const target = this.parsedLabels.get(label);
+        // Promote labelKind based on what's already there:
+        //   FORWARD (with prior forward gotos)         → BOTH
+        //   BOTH    (already had both kinds)           → BOTH (stays)
+        //   FORWARD (constructor default, no prior gotos) → LOOP
+        //   LOOP    (already had only backward gotos)  → LOOP (stays)
+        // The hasGotos check distinguishes "FORWARD because forward gotos
+        // were resolved" from "FORWARD because that's just the default."
         if (target.hasGotos && target.labelKind === Types.LabelKind.FORWARD) {
           target.labelKind = Types.LabelKind.BOTH;
-        } else {
+        } else if (target.labelKind !== Types.LabelKind.BOTH) {
           target.labelKind = Types.LabelKind.LOOP;
         }
         target.hasGotos = true;
