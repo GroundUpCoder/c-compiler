@@ -4100,8 +4100,12 @@ function makeUnary(loc, op, operand) {
 // retType may be null (e.g., void function — caller passes null and the
 // expr is just attached as-is). expr may also be null for `return;`.
 function makeReturn(loc, expr, retType) {
-  // C99 §6.8.6.4: a `return` with no value in a non-void function and
-  // a `return EXPR;` in a void function are both constraint violations.
+  // C99 §6.8.6.4: a `return` with no value in a non-void function is a
+  // constraint violation. C23 §6.8.6.4 relaxed the void case: `return EXPR;`
+  // in a void function is now legal IFF EXPR's type is also void (i.e.,
+  // `return void_func();` to forward through). Accept the C23 form for
+  // GCC/clang compatibility — both have accepted this as an extension for
+  // decades and real-world C code (including tinyemu) relies on it.
   // (We tolerate `retType === null` callers, e.g. legacy/synthesized
   // sites — they explicitly opt out by passing null.)
   if (retType !== null) {
@@ -4109,7 +4113,7 @@ function makeReturn(loc, expr, retType) {
     if (!expr && !rt.isVoid()) {
       reportError(loc,
         `non-void function returns no value (return type is '${retType.toString()}')`);
-    } else if (expr && rt.isVoid()) {
+    } else if (expr && rt.isVoid() && !expr.type.removeQualifiers().isVoid()) {
       reportError(loc,
         `void function should not return a value`);
     }
