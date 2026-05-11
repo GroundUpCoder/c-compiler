@@ -6193,6 +6193,18 @@ function linkTranslationUnits(units, compilerOptions) {
     return false;
   }
 
+  /* A "tentative definition" (C11 6.9.2 §2): a file-scope variable
+   * declared without an initializer and without `extern`. Multiple
+   * tentative definitions of the same identifier in the same scope are
+   * merged into one object — only one becomes the real definition, and
+   * the others are absorbed. If any later declaration has an
+   * initializer, it wins. */
+  function isTentativeDefinition(decl) {
+    return decl instanceof AST.DVar
+        && decl.storageClass !== Types.StorageClass.EXTERN
+        && decl.initExpr == null;
+  }
+
   function isImportFunction(decl) {
     return decl instanceof AST.DFunc && decl.storageClass === Types.StorageClass.IMPORT;
   }
@@ -6244,6 +6256,19 @@ function linkTranslationUnits(units, compilerOptions) {
       if (decl instanceof AST.DFunc && decl.isInline &&
           existing instanceof AST.DFunc && existing.isInline) {
         return;
+      }
+      // C11 6.9.2: tentative definitions merge. Two tentatives → same
+      // object; a later definition with an initializer supersedes any
+      // prior tentative.
+      if (isTentativeDefinition(existing) && isTentativeDefinition(decl)) {
+        return;  // collapse second tentative into the first
+      }
+      if (isTentativeDefinition(existing) && decl instanceof AST.DVar && decl.initExpr != null) {
+        scope.set(name, decl);  // initializer wins
+        return;
+      }
+      if (isTentativeDefinition(decl) && existing instanceof AST.DVar && existing.initExpr != null) {
+        return;  // existing initializer wins
       }
       addError(`Duplicate definition of symbol '${name}'`);
       return;
@@ -9149,6 +9174,12 @@ class Parser {
 
   parseExternalDeclaration(unit) {
     const loc = Lexer.Loc.fromTok(this.peek());
+    // Empty declaration: a bare `;` at file scope. C2x makes this
+    // standard; GCC and clang accept it in C99/C11 as an extension. We
+    // accept it silently so projects that use `MACRO;` where MACRO
+    // expands to empty (e.g. SQLite's SQLITE_EXTENSION_INIT1 inside the
+    // amalgamated shell.c) compile cleanly.
+    if (this.matchText(";")) return;
     const specs = this.parseDeclSpecifiers();
     let baseType = specs.type;
 
@@ -9341,6 +9372,19 @@ class Parser {
         const prevFunc = this.varScope.get(name);
         if (prevFunc && prevFunc instanceof AST.DFunc && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
+        }
+        // Plain re-declaration of an existing import: keep the original
+        // import decl in scope. Otherwise the new EXTERN would shadow
+        // it, all callers would bind to the new node, and the per-TU
+        // tree-shake would drop the import as unreached (it isn't —
+        // the callers just point at its replacement). Example: SQLite's
+        // shell.c writes `extern int isatty(int);` after <unistd.h>
+        // already provided `__import int isatty(int);`.
+        if (prevFunc && prevFunc instanceof AST.DFunc &&
+            prevFunc.storageClass === Types.StorageClass.IMPORT &&
+            specs.storageClass !== Types.StorageClass.IMPORT &&
+            specs.storageClass !== Types.StorageClass.STATIC) {
+          continue;  // drop redundant re-declaration, keep import binding
         }
         this.varScope.replace(name, funcDecl);
         if (specs.storageClass === Types.StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
@@ -14664,6 +14708,10 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
   }
   return 0;
 }
+static inline int utimes(const char *path, const struct timeval times[2]) {
+  (void)path; (void)times;
+  return 0;  /* no-op: succeed silently (no underlying mtime API) */
+}
   `,
   "sys/file.h": `
 #pragma once
@@ -14793,10 +14841,13 @@ extern int errno;
 #define ENOSYS  38
 #define ENOTEMPTY 39
 #define EWOULDBLOCK EAGAIN
+#define ENOLCK    37
+#define ETIMEDOUT 110
   `,
   "fcntl.h": `
 #pragma once
 #include <unistd.h>
+#include <sys/types.h>
 #define O_RDONLY  0
 #define O_WRONLY  1
 #define O_RDWR    2
@@ -14804,8 +14855,41 @@ extern int errno;
 #define O_EXCL    0x80
 #define O_TRUNC   0x200
 #define O_APPEND  0x400
+#define O_NONBLOCK 0x800
+#define O_NOFOLLOW 0x20000
+#define O_CLOEXEC  0x80000
+
+#define F_DUPFD    0
+#define F_GETFD    1
+#define F_SETFD    2
+#define F_GETFL    3
+#define F_SETFL    4
+#define F_GETLK    5
+#define F_SETLK    6
+#define F_SETLKW   7
+#define FD_CLOEXEC 1
+
+#define F_RDLCK  0
+#define F_WRLCK  1
+#define F_UNLCK  2
+
+struct flock {
+  short l_type;
+  short l_whence;
+  off_t l_start;
+  off_t l_len;
+  pid_t l_pid;
+};
+
 __import int __open_impl(const char *path, int flags, int mode);
 int open(const char *path, int flags, ...);
+static inline int fcntl(int fd, int cmd, ...) {
+  (void)fd; (void)cmd;
+  /* No-op locking: SQLite uses fcntl() for advisory file locking which
+   * doesn't apply in our single-threaded wasm runtime. Return success
+   * so SQLite believes it acquired/released locks. */
+  return 0;
+}
   `,
   "fenv.h": `
 #pragma once
@@ -15663,9 +15747,17 @@ int flsll(long long x);
 #define S_IFDIR  0040000
 #define S_IFREG  0100000
 #define S_IFLNK  0120000
+#define S_IFCHR  0020000
+#define S_IFBLK  0060000
+#define S_IFIFO  0010000
+#define S_IFSOCK 0140000
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
+#define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
+#define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+#define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
 struct stat {
   unsigned long st_dev;
@@ -15676,6 +15768,10 @@ struct stat {
   long          st_atime;
   long          st_mtime;
   long          st_ctime;
+  unsigned int  st_uid;
+  unsigned int  st_gid;
+  long          st_blksize;
+  long          st_blocks;
 };
 
 __import int mkdir(const char *path, int mode);
@@ -15689,6 +15785,12 @@ typedef long ssize_t;
 typedef long off_t;
 typedef unsigned long size_t;
 typedef int mode_t;
+typedef int pid_t;
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+typedef unsigned long dev_t;
+typedef unsigned long ino_t;
+typedef long time_t;
   `,
   "tgmath.h": `
 #pragma once
@@ -15830,6 +15932,14 @@ __import int dup2(int oldfd, int newfd);
 __import int getpid(void);
 __import int isatty(int fd);
 __import int usleep(unsigned int usec);
+__import int ftruncate(int fd, long length);
+__import long readlink(const char *path, char *buf, long bufsize);
+__import int fsync(int fd);
+__import int fdatasync(int fd);
+__import unsigned int sleep(unsigned int seconds);
+__import int symlink(const char *target, const char *linkpath);
+__import int chmod(const char *path, int mode);
+__import char *realpath(const char *path, char *resolved);
   `,
   "termios.h": `
 #pragma once

@@ -19,6 +19,7 @@
 - ~~**freetype** — TrueType font rendering.~~
 - ~~**gameboy** — Gameboy emulator.~~
 - ~~**tinyemu** — RISC-V system emulator (boots Linux to BusyBox shell with interactive stdin). See `vendor/tinyemu/README.md`.~~
+- **sqlite** — vendored 3.53.1 amalgamation. Compiles + links, but `sqlite3VdbeExec` blocks codegen. See "SQLite follow-ups" below.
 
 ## TinyEMU follow-ups
 
@@ -50,6 +51,39 @@ push it further:
   `fs_net_init`, `block_device_init_http`, `fb_refresh`,
   `net_recv_packet`, the SDL paths. Wiring any of them would unlock
   richer demos.
+
+## SQLite follow-ups
+
+SQLite 3.53.1 is vendored under `vendor/sqlite/`. The build clears
+parse + link, but codegen fails on 218 "target label not in scope"
+diagnostics, all inside `sqlite3VdbeExec` — SQLite's VDBE bytecode
+dispatch interpreter. The pattern: shared cleanup labels
+(`jump_to_p2`, `check_for_interrupt`, `abort_due_to_error`, etc.) sit
+outside a giant `switch` over opcodes, and most case bodies `goto`
+into one of those labels. Their author explicitly chose this
+unstructured form for performance — see the comment block above
+`check_for_interrupt`.
+
+What's needed: `GOTO_NORMALIZER` doesn't unwind enough nested compound
+scopes inside switch cases to reach an outside-the-switch label. The
+"hoist to LCA of all gotos" approach lands the labels at the function
+body where they already are; the real problem is each goto needs to
+escape its case-compound (and possibly intervening braces) without
+violating switch semantics.
+
+Possible approaches:
+- Per-case `goto` rewriting: replace each `goto L` inside a case body
+  with `<flag = X>; break;` followed by post-switch dispatch on the
+  flag. Mechanical but invasive — would need to track which labels are
+  reached by which paths.
+- Extend `GOTO_NORMALIZER` to fall through nested compounds when the
+  target is at function scope and the path doesn't cross loops/switches
+  whose semantics it'd violate. Subtle but contained.
+- Replace `sqlite3VdbeExec`'s dispatch with a precompiled jump-table
+  form. Heavy surgery; would diverge from upstream.
+
+No path is small. Putting SQLite on hold until we decide whether to
+push on goto handling.
 
 ## Regression-test gaps
 
