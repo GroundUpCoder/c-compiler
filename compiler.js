@@ -6386,10 +6386,10 @@ function synthesizeWrapper(funcDef, hoistedDecls, segments) {
   return new AST.SCompound(loc, declStmts);
 }
 
-function lower(funcDef, debugLog) {
+function lower(funcDef, dumpSegments) {
   const { decls, rewrittenBody } = hoistDeclarations(funcDef);
   const segments = buildSegments(rewrittenBody);
-  if (debugLog) {
+  if (dumpSegments) {
     for (const s of segments) {
       const t = s.term;
       let td = '?';
@@ -6400,7 +6400,7 @@ function lower(funcDef, debugLog) {
         else if (t.kind === 'switch') td = 'sw[' + t.cases.map(c => c.value+'→'+c.target).join(',') + '] def→' + t.defaultTarget;
         else td = t.kind;
       }
-      debugLog(`  seg ${s.id}: ${s.stmts.length} stmts → ${td}\n`);
+      dumpSegments(`  seg ${s.id}: ${s.stmts.length} stmts → ${td}\n`);
     }
   }
   const newBody = synthesizeWrapper(funcDef, decls, segments);
@@ -6411,13 +6411,14 @@ function optimize(unit, options) {
   if (!unit) return;
   if (options && options.disable) return;
   const debugLog = options && options.debugLog;
+  const dumpSegments = options && options.dumpSegments;
   const allFns = [...unit.definedFunctions, ...unit.staticFunctions];
   for (const fn of allFns) {
     if (needsLowering(fn)) {
       if (debugLog) {
         debugLog(`[irreducible] lowering '${fn.name}'\n`);
       }
-      lower(fn, debugLog);
+      lower(fn, dumpSegments);
     }
   }
 }
@@ -15116,6 +15117,7 @@ function generateCode(units, outputFile, options) {
   // emit succeeds pay no extra cost beyond two length-snapshots.
   const noLowering = !!options?.compilerOptions?.noIrreducibleLowering;
   const verbose = !!options?.compilerOptions?.verbose;
+  const dumpIrredSegments = !!options?.compilerOptions?.dumpIrredSegments;
   const loweredFnNames = [];
   for (const unit of units) {
     for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
@@ -15148,7 +15150,7 @@ function generateCode(units, outputFile, options) {
         if (verbose) {
           writeErr(`[irreducible] lowering '${fdef.name}' (retry after structured emit failed)\n`);
         }
-        IRREDUCIBLE_LOWERING.lower(fdef, verbose ? writeErr : null);
+        IRREDUCIBLE_LOWERING.lower(fdef, dumpIrredSegments ? writeErr : null);
         cg.emitFunctionBody(fdef);
         loweredFnNames.push(fdef.name);
       }
@@ -20824,6 +20826,8 @@ function main() {
       compilerOptions.noIrreducibleLowering = true;
     } else if (args[i] === "-v" || args[i] === "--verbose") {
       compilerOptions.verbose = true;
+    } else if (args[i] === "--dump-irred-segments") {
+      compilerOptions.dumpIrredSegments = true;
     } else if (args[i] === "--no-undefined") {
       compilerOptions.noUndefined = true;
     } else if (args[i] === "--require-source") {
