@@ -67,6 +67,7 @@ Libraries (`"type": "lib"`) cannot be compiled directly — they must be referen
 | `--run-arg <arg>` | Pass argument to program's `argv` |
 | `--gc-sections` | Remove unused code sections |
 | `--no-undefined` | Error on undefined symbols |
+| `--no-irreducible-lowering` | Disable the loop-switch fallback for functions with cross-block gotos (the structured codegen will then surface a "target label not in scope" diagnostic). On by default. |
 | `--require-source <file>` | Require a source file to be present |
 | `--allow-old-c` | Enable all legacy C compatibility flags |
 | `--allow-implicit-int` | Allow implicit int in declarations |

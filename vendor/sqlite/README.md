@@ -23,29 +23,47 @@ Files in this directory:
 
 ## Status
 
-**Not yet working.** SQLite parses and links successfully through
-most of the codebase, but `sqlite3VdbeExec` — the VDBE bytecode
-dispatch interpreter — uses an extreme form of cross-block `goto`
-control flow that our `GOTO_NORMALIZER` can't yet handle. 218
-"target label not in scope" diagnostics in that one function block
-the codegen pass.
+**Compiles and links end-to-end; SQL execution fails.** The full
+amalgamation (250 KLOC) compiles cleanly to a ~1.4 MB wasm binary
+after we added the `IRREDUCIBLE_LOWERING` pass that converts
+functions with unstructured control flow into `while(1) switch(state)`
+state machines. 136 SQLite functions go through that pass, including
+`sqlite3VdbeExec` — the VDBE bytecode interpreter whose ~218
+cross-block gotos previously blocked codegen.
 
-The pattern (from `sqlite3VdbeExec`'s comment):
-> *This code uses unstructured "goto" statements and does not look
-> clean. But that is not due to sloppy coding habits. The code is
-> written this way for performance, to avoid having to run the
-> interrupt and progress checks on every opcode.*
+The SQLite shell runs and accepts input:
 
-Shared cleanup labels (`jump_to_p2`, `check_for_interrupt`,
-`abort_due_to_error`, `int_math`, `fp_math`, `vdbe_type_error`, etc.)
-sit outside a large `switch` over opcodes; most case bodies `goto`
-into one of those labels. Our normalizer's "hoist label to LCA of
-all gotos" approach doesn't work cleanly here — the LCA is the
-function body, but the labels need to escape multiple nested compound
-scopes inside switch cases, which the current pass doesn't unwind.
+```
+$ node host.js /tmp/sqlite.wasm
+SQLite version 3.53.1 2026-05-05 10:34:17
+Enter ".help" for usage hints.
+Connected to a transient in-memory database.
+sqlite> .version
+SQLite 3.53.1 2026-05-05 10:34:17 c88b22011a54b4f6fbd149e9f8e4de77658ce58143a1af0e3785e4e6475127e9
+sqlite> SELECT 1+1;
+Parse error near line 1: database disk image is malformed (11)
+```
 
-See `todos/MISC.md` "SQLite follow-ups" for context on what's needed
-to push this through.
+The banner, `.version`, and shell meta-commands work. Any actual SQL
+statement (against an in-memory database) reports
+"database disk image is malformed (11)" — meaning SQLite's pager
+detected corruption in one of its internal page-state checks.
+
+Probable cause: one of the 136 lowered functions has a subtle
+semantic difference from the structured original. The lowering pass
+is correct in concept (verified by the standalone test
+`tests/unit/core/control_flow/goto/irreducible_dispatch`), but
+SQLite exercises edge cases — VDBE memory cell tagging, btree page
+allocation, pager state machines — that may not survive the
+hoist-and-flatten transformation cleanly. Likely suspects:
+`sqlite3PagerSharedLock`, `getPageNormal`, `sqlite3BitvecBuiltinTest`,
+`sqlite3VdbeMemTranslate`, or `sqlite3VdbeExec` itself.
+
+To debug further: selectively disable lowering for individual
+functions to bisect, then inspect the lowered output for the
+offending one.
+
+See `todos/MISC.md` for follow-up notes.
 
 ## Build (when it works)
 

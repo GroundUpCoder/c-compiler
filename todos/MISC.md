@@ -54,36 +54,44 @@ push it further:
 
 ## SQLite follow-ups
 
-SQLite 3.53.1 is vendored under `vendor/sqlite/`. The build clears
-parse + link, but codegen fails on 218 "target label not in scope"
-diagnostics, all inside `sqlite3VdbeExec` — SQLite's VDBE bytecode
-dispatch interpreter. The pattern: shared cleanup labels
-(`jump_to_p2`, `check_for_interrupt`, `abort_due_to_error`, etc.) sit
-outside a giant `switch` over opcodes, and most case bodies `goto`
-into one of those labels. Their author explicitly chose this
-unstructured form for performance — see the comment block above
-`check_for_interrupt`.
+SQLite 3.53.1 (vendor/sqlite/) now **compiles end-to-end** thanks to
+the `IRREDUCIBLE_LOWERING` pass — 136 functions get rewritten to
+`while(1) switch(state)` state machines, including `sqlite3VdbeExec`.
+The 1.4 MB wasm validates and the SQLite shell starts up:
 
-What's needed: `GOTO_NORMALIZER` doesn't unwind enough nested compound
-scopes inside switch cases to reach an outside-the-switch label. The
-"hoist to LCA of all gotos" approach lands the labels at the function
-body where they already are; the real problem is each goto needs to
-escape its case-compound (and possibly intervening braces) without
-violating switch semantics.
+```
+$ node host.js /tmp/sqlite.wasm
+SQLite version 3.53.1 ...
+Enter ".help" for usage hints.
+Connected to a transient in-memory database.
+sqlite>
+```
 
-Possible approaches:
-- Per-case `goto` rewriting: replace each `goto L` inside a case body
-  with `<flag = X>; break;` followed by post-switch dispatch on the
-  flag. Mechanical but invasive — would need to track which labels are
-  reached by which paths.
-- Extend `GOTO_NORMALIZER` to fall through nested compounds when the
-  target is at function scope and the path doesn't cross loops/switches
-  whose semantics it'd violate. Subtle but contained.
-- Replace `sqlite3VdbeExec`'s dispatch with a precompiled jump-table
-  form. Heavy surgery; would diverge from upstream.
+`.version` and shell meta-commands work. But any SQL statement —
+even `SELECT 1;` against an in-memory database — reports
+"database disk image is malformed (11)". SQLite's pager state checks
+detect internal corruption. The lowering passes its synthetic
+regression test (irreducible_dispatch) and all 480 existing tests,
+but SQLite has many lowered functions that exercise edge cases:
+suspect candidates include `sqlite3PagerSharedLock`, `getPageNormal`,
+`sqlite3VdbeMemTranslate`, or `sqlite3VdbeExec` itself.
 
-No path is small. Putting SQLite on hold until we decide whether to
-push on goto handling.
+Debugging path: selectively skip lowering for individual functions
+(would need to drop back to structured-only and rely on
+`--allow-undefined` for the gotos to be unresolvable — won't link)
+OR write a minimal repro that exercises one lowered function in
+isolation. Looking at the structured output of the lowered functions
+(dump as C source) would also help spot semantic divergences.
+
+### Lowering pass scope refinement
+
+The pass currently triggers on any function that has at least one
+resolved goto. That's conservatively broad — many functions with
+simple structured gotos (like a single `goto cleanup` at the bottom)
+get the wrapper unnecessarily. Making detection precise — matching
+the codegen's structured-block reachability rules — would skip those.
+The work is a faithful port of the codegen's `gotoLabelDepths`
+tracking, isolated from emission.
 
 ## Regression-test gaps
 

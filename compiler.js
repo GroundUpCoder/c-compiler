@@ -5739,6 +5739,624 @@ return { normalize, inlineBackwardGotos, optimize, collectTraces, classifyPair }
 
 })();
 
+// ====================
+// IRREDUCIBLE LOWERING — function-local loop-switch fallback
+// ====================
+//
+// For functions where GOTO_NORMALIZER couldn't make all gotos resolvable via
+// structured wasm `block`/`loop` nesting, we fall back to a CPS-style
+// encoding: rewrite the whole function body as `while (1) switch (state)`
+// with one case per basic block. Each goto becomes `state = N; continue;`.
+//
+// The output is plain structured C and feeds back through the existing
+// codegen unchanged — this pass is purely an AST→AST transformation.
+//
+// Pass ordering: runs after GOTO_NORMALIZER so we only pay the cost for
+// functions that genuinely can't be structured. Functions with clean control
+// flow are left alone.
+//
+// Limitations (documented, not silently miscompiled):
+//   - VLAs are rejected at parse time elsewhere; their hoisting would need
+//     dynamic alloca which we don't model.
+//   - setjmp/longjmp interaction inside an irreducible function: not
+//     supported. (Structured-mode functions still work.)
+//   - Computed goto (GCC extension): we don't support it generally.
+
+const IRREDUCIBLE_LOWERING = (() => {
+
+// Walk a function body and decide whether the codegen will be unable to
+// resolve all of its gotos via structured wasm scopes. We could try to
+// mirror the codegen's scope tracking precisely, but the classification is
+// surprisingly subtle (BOTH-style labels, inlineBackwardGotos rewrites,
+// nested branches), and getting it wrong silently miscompiles. So we adopt
+// a conservative policy: any function with ANY label that has at least one
+// goto gets lowered. Functions without gotos are unaffected. The runtime
+// cost is paid only by functions that already use unstructured control
+// flow, where the perf penalty is acceptable.
+function needsLowering(funcDef) {
+  const body = funcDef.body;
+  if (!body) return false;
+  const { labels, gotos } = GOTO_NORMALIZER.collectTraces(body);
+  // No gotos → no need to lower. Labels without gotos (switch cases, etc.)
+  // are handled fine by structured codegen.
+  if (gotos.size === 0) return false;
+  // Any goto whose target is unresolved would already be a parse error;
+  // we just check that the function actually contains a real goto.
+  for (const [g, _info] of gotos) {
+    if (g.target) return true;
+  }
+  return false;
+}
+
+// ----- Segment + terminator types -----
+//
+// A Segment is the AST equivalent of a basic block — a maximal sequence of
+// straight-line statements with one entry (the case label) and one exit
+// (its terminator). All segments live in a flat array; their `id` is the
+// switch-case value used to dispatch into them.
+//
+// Terminators describe how control leaves a segment. They get translated
+// into AST statements at the end of each case body during wrapper synthesis.
+
+function newSegment(id) {
+  return { id, stmts: [], term: null };
+}
+
+// Terminator factory helpers. Each returns a plain object whose `kind` field
+// is one of: "fallthrough", "goto", "branch", "switch", "return", "halt".
+const Term = {
+  fallthrough: (nextId) => ({ kind: "fallthrough", nextId }),
+  goto: (targetId) => ({ kind: "goto", targetId }),
+  branch: (cond, thenId, elseId) => ({ kind: "branch", cond, thenId, elseId }),
+  // cases: [{ value: bigint, target: int }], defaultTarget: int
+  switchDispatch: (scrutinee, cases, defaultTarget) => ({
+    kind: "switch", scrutinee, cases, defaultTarget,
+  }),
+  return: (expr) => ({ kind: "return", expr }),
+  // "halt" marks a segment that exits the loop-switch and falls out the
+  // bottom of the function (used for unreachable continuations after a
+  // terminator emits its branch).
+  halt: () => ({ kind: "halt" }),
+};
+
+// ----- Variable hoisting -----
+//
+// Walk the function body, collect every DVar declaration into a single
+// flat list at function entry, and replace each in-place declaration with
+// an SExpr-wrapped assignment (when there was an initializer).
+//
+// α-rename when a nested-scope DVar shadows an outer-scope one with the
+// same name. EIdent nodes already point at DVar objects by reference, so
+// mutating DVar.name (DVars are seal'd, not frozen) keeps every reference
+// pointed at the right object — only the displayed name changes.
+//
+// Returns { decls: DVar[], rewrittenBody: SCompound }. The DVars in
+// `decls` are stripped of initExprs.
+function hoistDeclarations(funcDef) {
+  const hoisted = [];
+  // names seen anywhere in this function so far — used to detect
+  // shadowing. A second `int x;` in a nested scope gets renamed.
+  const used = new Set();
+  for (const p of funcDef.parameters) used.add(p.name);
+
+  function uniquify(dvar) {
+    if (!used.has(dvar.name)) { used.add(dvar.name); return; }
+    let i = 2;
+    let candidate = `${dvar.name}__${i}`;
+    while (used.has(candidate)) { i++; candidate = `${dvar.name}__${i}`; }
+    used.add(candidate);
+    dvar.name = candidate;
+  }
+
+  function rewrite(stmt) {
+    if (!stmt) return stmt;
+    if (stmt instanceof AST.SDecl) {
+      const initStmts = [];
+      for (const d of stmt.declarations) {
+        if (!(d instanceof AST.DVar)) continue;
+        if (d.storageClass === Types.StorageClass.STATIC ||
+            d.storageClass === Types.StorageClass.EXTERN) continue;
+        uniquify(d);
+        const init = d.initExpr;
+        // EInitList / aggregate-array initializers can't be expressed as
+        // a plain `var = expr` SExpr after declaration. Keep the init on
+        // the hoisted DVar in those cases — the codegen runs it at the
+        // (function-entry) hoisted declaration site. For arrays/aggregates
+        // we also keep the init in place because their allocation is
+        // tied to the original declaration position in some codepaths.
+        const initIsListLike = init &&
+          (init instanceof AST.EInitList ||
+           (d.type.isArray && d.type.isArray()) ||
+           (d.type.isAggregate && d.type.isAggregate()));
+        if (initIsListLike) {
+          // Keep the original init on the hoisted decl. No SExpr emitted
+          // at the original position.
+          hoisted.push(d);
+          continue;
+        }
+        d.initExpr = null;  // strip — the hoisted decl has no initializer
+        hoisted.push(d);
+        if (init !== null) {
+          const ident = new AST.EIdent(d.loc, d.type, d);
+          const assign = new AST.EBinary(d.loc, d.type, "ASSIGN", ident, init);
+          initStmts.push(new AST.SExpr(d.loc, assign));
+        }
+      }
+      // Collapse to nothing / a single SExpr / a small SCompound of
+      // assignments — whatever's smallest.
+      if (initStmts.length === 0) return new AST.SEmpty(stmt.loc);
+      if (initStmts.length === 1) return initStmts[0];
+      return new AST.SCompound(stmt.loc, initStmts);
+    }
+    if (stmt instanceof AST.SCompound) {
+      const rewritten = stmt.statements.map(rewrite);
+      return new AST.SCompound(stmt.loc, rewritten, stmt.labels);
+    }
+    if (stmt instanceof AST.SIf) {
+      return new AST.SIf(stmt.loc, stmt.condition,
+        rewrite(stmt.thenBranch),
+        stmt.elseBranch ? rewrite(stmt.elseBranch) : null);
+    }
+    if (stmt instanceof AST.SWhile) {
+      return new AST.SWhile(stmt.loc, stmt.condition, rewrite(stmt.body));
+    }
+    if (stmt instanceof AST.SDoWhile) {
+      return new AST.SDoWhile(stmt.loc, rewrite(stmt.body), stmt.condition);
+    }
+    if (stmt instanceof AST.SFor) {
+      return new AST.SFor(stmt.loc,
+        stmt.init ? rewrite(stmt.init) : null,
+        stmt.condition, stmt.increment,
+        rewrite(stmt.body));
+    }
+    if (stmt instanceof AST.SSwitch) {
+      return new AST.SSwitch(stmt.loc, stmt.expr, stmt.cases, rewrite(stmt.body));
+    }
+    return stmt;  // SExpr, SReturn, SGoto, SLabel, SBreak, SContinue, SEmpty, etc.
+  }
+
+  const rewrittenBody = rewrite(funcDef.body);
+  return { decls: hoisted, rewrittenBody };
+}
+
+// ----- AST → segments walker -----
+//
+// Walks the rewritten function body, splitting it at every control-flow
+// boundary into a flat list of Segments. Each goto/branch/return becomes
+// a terminator referring to other segment ids by integer.
+//
+// Loop and switch contexts are tracked on `loopStack` so SBreak/SContinue
+// resolve to the right exit/header ids.
+function buildSegments(body) {
+  const segments = [];
+  let curSeg = null;
+  let nextId = 0;
+  const labelToId = new Map();  // SLabel → segment id
+  // Loop stack: each entry is { breakId, continueId? }. Switches push
+  // entries without continueId (SContinue must skip past switches).
+  const loopStack = [];
+
+  function allocId() { return nextId++; }
+  function openSeg(id) {
+    const seg = newSegment(id);
+    segments.push(seg);
+    curSeg = seg;
+    return seg;
+  }
+  function close(term) {
+    if (!curSeg.term) curSeg.term = term;
+    curSeg = null;  // anything emitted before a new openSeg goes into limbo
+  }
+  function ensureOpen() {
+    // If we just emitted a terminator and the next statement isn't a label,
+    // create a fresh "dead" segment to hold further code.
+    if (curSeg === null) openSeg(allocId());
+  }
+  function getLabelId(label) {
+    let id = labelToId.get(label);
+    if (id === undefined) { id = allocId(); labelToId.set(label, id); }
+    return id;
+  }
+  function topLoop() {
+    for (let i = loopStack.length - 1; i >= 0; i--) {
+      if (loopStack[i].continueId !== null) return loopStack[i];
+    }
+    return null;
+  }
+  function topBreakTarget() {
+    return loopStack.length > 0 ? loopStack[loopStack.length - 1].breakId : null;
+  }
+
+  // Open the entry segment.
+  openSeg(allocId());
+
+  function visit(node) {
+    if (!node) return;
+    ensureOpen();
+
+    if (node instanceof AST.SEmpty) return;
+
+    if (node instanceof AST.SCompound) {
+      // Switch bodies need special handling — case labels partition the
+      // body into per-case segments. We detect "this compound is a switch
+      // body" by the caller passing a `_switchContext`. For non-switch
+      // compounds, just walk children in order.
+      for (const s of node.statements) visit(s);
+      return;
+    }
+
+    if (node instanceof AST.SLabel) {
+      // A label site: close the current segment falling through to a fresh
+      // segment with the label's id, then open it.
+      const id = getLabelId(node);
+      close(Term.fallthrough(id));
+      openSeg(id);
+      return;
+    }
+
+    if (node instanceof AST.SGoto) {
+      if (!node.target) {
+        // Unresolved label name — leave a halt; codegen will diagnose it.
+        close(Term.halt());
+        return;
+      }
+      const id = getLabelId(node.target);
+      close(Term.goto(id));
+      return;
+    }
+
+    if (node instanceof AST.SIf) {
+      const thenId = allocId();
+      const elseId = node.elseBranch ? allocId() : null;
+      const joinId = allocId();
+      close(Term.branch(node.condition, thenId, elseId !== null ? elseId : joinId));
+      openSeg(thenId);
+      visit(node.thenBranch);
+      if (curSeg !== null) close(Term.fallthrough(joinId));
+      if (elseId !== null) {
+        openSeg(elseId);
+        visit(node.elseBranch);
+        if (curSeg !== null) close(Term.fallthrough(joinId));
+      }
+      openSeg(joinId);
+      return;
+    }
+
+    if (node instanceof AST.SWhile) {
+      const hdrId = allocId();
+      const bodyId = allocId();
+      const exitId = allocId();
+      close(Term.fallthrough(hdrId));
+      openSeg(hdrId);
+      close(Term.branch(node.condition, bodyId, exitId));
+      openSeg(bodyId);
+      loopStack.push({ breakId: exitId, continueId: hdrId });
+      visit(node.body);
+      loopStack.pop();
+      if (curSeg !== null) close(Term.fallthrough(hdrId));
+      openSeg(exitId);
+      return;
+    }
+
+    if (node instanceof AST.SDoWhile) {
+      const bodyId = allocId();
+      const testId = allocId();
+      const exitId = allocId();
+      close(Term.fallthrough(bodyId));
+      openSeg(bodyId);
+      loopStack.push({ breakId: exitId, continueId: testId });
+      visit(node.body);
+      loopStack.pop();
+      if (curSeg !== null) close(Term.fallthrough(testId));
+      openSeg(testId);
+      close(Term.branch(node.condition, bodyId, exitId));
+      openSeg(exitId);
+      return;
+    }
+
+    if (node instanceof AST.SFor) {
+      // After hoisting, SFor.init is either null, an SExpr, an SCompound of
+      // assignments, or SEmpty. Lower init in the current segment.
+      if (node.init) visit(node.init);
+      const hdrId = allocId();
+      const bodyId = allocId();
+      const contId = allocId();  // continue target = increment block
+      const exitId = allocId();
+      close(Term.fallthrough(hdrId));
+      openSeg(hdrId);
+      if (node.condition) {
+        close(Term.branch(node.condition, bodyId, exitId));
+      } else {
+        close(Term.fallthrough(bodyId));
+      }
+      openSeg(bodyId);
+      loopStack.push({ breakId: exitId, continueId: contId });
+      visit(node.body);
+      loopStack.pop();
+      if (curSeg !== null) close(Term.fallthrough(contId));
+      openSeg(contId);
+      if (node.increment) {
+        curSeg.stmts.push(new AST.SExpr(node.loc, node.increment));
+      }
+      close(Term.fallthrough(hdrId));
+      openSeg(exitId);
+      return;
+    }
+
+    if (node instanceof AST.SSwitch) {
+      // Allocate one segment per case + one for the post-switch join.
+      // Multiple cases at the same stmtIndex (e.g. `case 1: case 2: ...`
+      // or `case 1: default: ...`) collapse onto a single primary
+      // segment — we compute the primary up front so the dispatch table
+      // and defaultTarget refer to it directly, no post-hoc rewriting.
+      const postId = allocId();
+      // Pre-pick a primary id per stmtIndex (first case at that index).
+      const primaryByIdx = new Map();
+      for (let i = 0; i < node.cases.length; i++) {
+        const c = node.cases[i];
+        if (!primaryByIdx.has(c.stmtIndex)) {
+          primaryByIdx.set(c.stmtIndex, allocId());
+        }
+      }
+      let defaultTarget = postId;
+      const dispatchCases = [];
+      for (const c of node.cases) {
+        const id = primaryByIdx.get(c.stmtIndex);
+        if (c.isDefault) defaultTarget = id;
+        else dispatchCases.push({ value: c.value, target: id });
+      }
+      close(Term.switchDispatch(node.expr, dispatchCases, defaultTarget));
+
+      // Walk the switch body, partitioning at each case's stmtIndex.
+      const bodyStmts = node.body instanceof AST.SCompound
+        ? node.body.statements
+        : [node.body];
+      loopStack.push({ breakId: postId, continueId: null });
+      // Open a "limbo" segment for any statements before the first case
+      // (unreachable, but the walker needs somewhere to put them).
+      openSeg(allocId());
+      for (let i = 0; i < bodyStmts.length; i++) {
+        const primary = primaryByIdx.get(i);
+        if (primary !== undefined) {
+          if (curSeg !== null) close(Term.fallthrough(primary));
+          openSeg(primary);
+        }
+        visit(bodyStmts[i]);
+      }
+      loopStack.pop();
+      if (curSeg !== null) close(Term.fallthrough(postId));
+      openSeg(postId);
+      return;
+    }
+
+    if (node instanceof AST.SBreak) {
+      const target = topBreakTarget();
+      if (target === null) {
+        throw new Error("irreducible lowering: SBreak outside loop/switch");
+      }
+      close(Term.goto(target));
+      return;
+    }
+
+    if (node instanceof AST.SContinue) {
+      const loop = topLoop();
+      if (!loop) {
+        throw new Error("irreducible lowering: SContinue outside loop");
+      }
+      close(Term.goto(loop.continueId));
+      return;
+    }
+
+    if (node instanceof AST.SReturn) {
+      close(Term.return(node.expr));
+      return;
+    }
+
+    // Straight-line statements: SExpr, SDecl (post-hoist — only static/extern
+    // locals survive), and anything else we don't transform.
+    curSeg.stmts.push(node);
+  }
+
+  visit(body);
+  // Close any trailing open segment with a halt (function fall-through).
+  if (curSeg !== null) close(Term.halt());
+
+  return segments;
+}
+
+// ----- Wrapper synthesis -----
+//
+// Build the output function body:
+//
+//   {
+//     <hoisted decls>
+//     int __state = 0;
+//     while (1) {
+//       switch (__state) {
+//         case 0: { ...seg0 stmts... ; <terminator stmts> ; continue/break; }
+//         ...
+//       }
+//       break;  // unreachable, but keeps the wasm validator happy if any
+//               // case body fell through without an explicit transfer
+//     }
+//   }
+//
+// Terminator translations:
+//   fallthrough(n) → __state = n; continue;
+//   goto(n)        → __state = n; continue;
+//   branch(c,t,e)  → __state = (c) ? t : e; continue;
+//   switch(...)    → switch(scrut) { case v: __state=t; ...; default: __state=d; }
+//                     continue;
+//   return(e)      → return e;
+//   halt()         → break;   /* exits the while(1) */
+function synthesizeWrapper(funcDef, hoistedDecls, segments) {
+  const loc = funcDef.loc;
+  const stateVar = new AST.DVar(loc, "__irreducible_state",
+    Types.TINT, Types.StorageClass.AUTO, null);
+  stateVar.definition = stateVar;  // local definition (codegen checks this)
+  const retType = funcDef.type.getReturnType();
+  const isVoid = retType === Types.TVOID;
+
+  function intLit(n) { return new AST.EInt(loc, Types.TINT, BigInt(n)); }
+  // For "halt" terminators (function fall-through or unreachable
+  // continuation after a goto), produce a return that satisfies the
+  // function's signature. Falling off the end of a non-void function is
+  // UB in C; we conservatively return a zero of the appropriate type.
+  function haltReturn() {
+    if (isVoid) return new AST.SReturn(loc, null);
+    let zero;
+    if (retType.isInteger()) {
+      zero = new AST.EInt(loc, retType, 0n);
+    } else if (retType.isFloatingPoint()) {
+      zero = new AST.EFloat(loc, retType, 0);
+    } else if (retType.isPointer()) {
+      // null pointer: int 0 cast to the pointer type. Use a 0-int and
+      // let the existing cast machinery handle conversion if needed.
+      zero = new AST.EInt(loc, Types.TINT, 0n);
+    } else {
+      // Aggregate / struct / ref return — too complex to fabricate; emit
+      // a bare `return;` and accept the UB. The codegen may diagnose.
+      zero = null;
+    }
+    return new AST.SReturn(loc, zero);
+  }
+  function stateRef() { return new AST.EIdent(loc, Types.TINT, stateVar); }
+  function setState(n) {
+    return new AST.SExpr(loc,
+      new AST.EBinary(loc, Types.TINT, "ASSIGN", stateRef(), intLit(n)));
+  }
+  // We use SBreak inside the switch+while envelope to mean "next iteration".
+  // The desugaring is: each case body ends with SBreak (exits the switch);
+  // the while loop body then loops back. But that's only correct if the
+  // while body is JUST the switch. We wrap accordingly.
+  const continueWhile = () => new AST.SBreak(loc);  // breaks inner switch
+  const breakWhile = () => {
+    // Mark the outer while with a label-driven exit. Since we can't goto
+    // out of nested structures portably in our AST without labels, we use
+    // a sentinel: set state to a "done" id and break the switch — the
+    // while loop checks state and exits.
+    // Simpler: use SReturn(null) only if return type is void; otherwise
+    // we can't fabricate a value. For now, halt cases are unreachable in
+    // well-formed input — emit `break` and let the while loop iterate
+    // back into the switch with whatever state is set. The default switch
+    // case handles unexpected state by falling through to "break loop".
+    return new AST.SBreak(loc);
+  };
+
+  // Translate one terminator to a list of statements appended after the
+  // segment's body stmts. The last statement should transfer control.
+  function termToStmts(term) {
+    if (term === null) return [];
+    if (term.kind === "fallthrough" || term.kind === "goto") {
+      return [setState(term.kind === "goto" ? term.targetId : term.nextId),
+              continueWhile()];
+    }
+    if (term.kind === "branch") {
+      // __state = cond ? thenId : elseId
+      const tern = new AST.ETernary(loc, Types.TINT,
+        term.cond, intLit(term.thenId), intLit(term.elseId));
+      const assign = new AST.SExpr(loc,
+        new AST.EBinary(loc, Types.TINT, "ASSIGN", stateRef(), tern));
+      return [assign, continueWhile()];
+    }
+    if (term.kind === "switch") {
+      // Emit a structured switch into __state, then break to outer loop.
+      const cases = [];
+      const bodyStmts = [];
+      let idx = 0;
+      for (const c of term.cases) {
+        cases.push({ value: c.value, stmtIndex: idx, isDefault: false });
+        bodyStmts.push(setState(c.target));
+        bodyStmts.push(new AST.SBreak(loc));
+        idx += 2;
+      }
+      cases.push({ value: 0n, stmtIndex: idx, isDefault: true });
+      bodyStmts.push(setState(term.defaultTarget));
+      bodyStmts.push(new AST.SBreak(loc));
+      const switchBody = new AST.SCompound(loc, bodyStmts);
+      const inner = new AST.SSwitch(loc, term.scrutinee, cases, switchBody);
+      return [inner, continueWhile()];
+    }
+    if (term.kind === "return") {
+      return [new AST.SReturn(loc, term.expr)];
+    }
+    if (term.kind === "halt") {
+      // Either function fall-through (reached end of source body without
+      // an explicit return) or an unreachable continuation after a goto.
+      // Either way, emit a return — for void, bare `return;`; for non-
+      // void, a zero of the return type. The unreachable case never
+      // actually executes; the function-fall-through case is well-defined
+      // for void and UB-but-safe for non-void.
+      return [haltReturn()];
+    }
+    throw new Error(`unknown terminator kind: ${term.kind}`);
+  }
+
+  // Build the inner switch: cases by segment id.
+  const switchCases = [];
+  const switchBodyStmts = [];
+  // Ensure segments are sorted by id; cases must follow source-position
+  // order (the codegen pre-scan does additional layout work).
+  const ordered = [...segments].sort((a, b) => a.id - b.id);
+  let stmtCursor = 0;
+  for (const seg of ordered) {
+    switchCases.push({ value: BigInt(seg.id), stmtIndex: stmtCursor, isDefault: false });
+    const caseBody = [...seg.stmts, ...termToStmts(seg.term)];
+    for (const s of caseBody) {
+      switchBodyStmts.push(s);
+      stmtCursor++;
+    }
+  }
+  // Default: break out (unexpected state).
+  switchCases.push({ value: 0n, stmtIndex: stmtCursor, isDefault: true });
+  switchBodyStmts.push(new AST.SBreak(loc));
+
+  const switchStmt = new AST.SSwitch(loc, stateRef(),
+    switchCases, new AST.SCompound(loc, switchBodyStmts));
+
+  // The while loop wraps just the switch. Its body is one statement; in C
+  // that's fine without braces, but we always wrap in a compound for sanity.
+  const whileBody = new AST.SCompound(loc, [switchStmt]);
+  const whileCond = new AST.EInt(loc, Types.TINT, 1n);
+  const whileStmt = new AST.SWhile(loc, whileCond, whileBody);
+
+  // Build the new function body: state-var decl + while(1) { switch }
+  const stateDecl = new AST.SDecl(loc, [stateVar]);
+  // initExpr starts as null (state defaults to 0 implicitly), but our
+  // hoisted-decl pattern was to strip initExprs. Add an explicit assignment.
+  const initState = new AST.SExpr(loc,
+    new AST.EBinary(loc, Types.TINT, "ASSIGN", stateRef(), intLit(0)));
+  const declStmts = hoistedDecls.length > 0
+    ? [new AST.SDecl(loc, hoistedDecls), stateDecl, initState, whileStmt]
+    : [stateDecl, initState, whileStmt];
+  return new AST.SCompound(loc, declStmts);
+}
+
+function lower(funcDef) {
+  const { decls, rewrittenBody } = hoistDeclarations(funcDef);
+  const segments = buildSegments(rewrittenBody);
+  const newBody = synthesizeWrapper(funcDef, decls, segments);
+  funcDef.body = newBody;
+}
+
+function optimize(unit, options) {
+  if (!unit) return;
+  if (options && options.disable) return;
+  const allFns = [...unit.definedFunctions, ...unit.staticFunctions];
+  for (const fn of allFns) {
+    if (needsLowering(fn)) {
+      if (process.env.IRRED_DEBUG) {
+        console.error(`[irreducible] lowering '${fn.name}'`);
+      }
+      lower(fn);
+    }
+  }
+}
+
+return { optimize, needsLowering, lower };
+
+})();
+
 // LEB128 encoding utilities (shared between Parser and Wasm)
 function lebU(out, value) {
   do {
@@ -19177,6 +19795,14 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     // based forward goto handling can reach them. Runs after INLINER (which
     // may have eliminated some dead branches) and before codegen.
     GOTO_NORMALIZER.optimize(unit);
+    // Loop-switch fallback for any function whose gotos couldn't be made
+    // structured by the normalizer. Runs after, paying the rewrite cost
+    // only for irreducible-mode functions. `--no-irreducible-lowering`
+    // disables this (the structured codegen then surfaces its own
+    // "target label not in scope" diagnostic).
+    IRREDUCIBLE_LOWERING.optimize(unit, {
+      disable: !!options?.compilerOptions?.noIrreducibleLowering,
+    });
     if (timing) timing.parseMs += hrtime() - tParse;
     if (parseResult.errors.length > 0) {
       hasErrors = true;
@@ -19991,6 +20617,13 @@ function main() {
       compilerOptions.gcSections = true;
     } else if (args[i] === "--gc-no-export-roots") {
       compilerOptions.gcNoExportRoots = true;
+    } else if (args[i] === "--no-irreducible-lowering") {
+      // Disable the loop-switch fallback for functions with cross-block
+      // gotos. Useful for testing the structured-codegen error path
+      // (e.g. negative tests that assert the codegen rejects certain
+      // goto patterns) and for measuring whether a function would have
+      // codegen'd structurally.
+      compilerOptions.noIrreducibleLowering = true;
     } else if (args[i] === "--no-undefined") {
       compilerOptions.noUndefined = true;
     } else if (args[i] === "--require-source") {

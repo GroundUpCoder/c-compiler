@@ -268,6 +268,64 @@ function createFileSystem({ fs, ctx }) {
         }
         return 0;
       },
+      ftruncate: function (fd, length) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        try {
+          fs.ftruncateSync(fdTable[fd].nativeFd, length);
+          return 0;
+        } catch (e) { setErrno(e); return -1; }
+      },
+      readlink: function (path_ptr, buf_ptr, bufsize) {
+        const path = readString(path_ptr);
+        try {
+          const target = fs.readlinkSync(path);
+          const memory = getMemory();
+          const buf = new Uint8Array(memory.buffer, buf_ptr, bufsize);
+          const enc = new TextEncoder().encode(target);
+          const n = Math.min(enc.length, bufsize);
+          for (let i = 0; i < n; i++) buf[i] = enc[i];
+          return n;
+        } catch (e) { setErrno(e); return -1; }
+      },
+      fsync: function (fd) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        try { fs.fsyncSync(fdTable[fd].nativeFd); return 0; }
+        catch (e) { setErrno(e); return -1; }
+      },
+      fdatasync: function (fd) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        try { fs.fdatasyncSync(fdTable[fd].nativeFd); return 0; }
+        catch (e) { setErrno(e); return -1; }
+      },
+      sleep: function (seconds) { /* no-op — would block, we're async only */ return 0; },
+      symlink: function (target_ptr, link_ptr) {
+        try {
+          fs.symlinkSync(readString(target_ptr), readString(link_ptr));
+          return 0;
+        } catch (e) { setErrno(e); return -1; }
+      },
+      chmod: function (path_ptr, mode) {
+        try { fs.chmodSync(readString(path_ptr), mode); return 0; }
+        catch (e) { setErrno(e); return -1; }
+      },
+      realpath: function (path_ptr, resolved_ptr) {
+        try {
+          const r = fs.realpathSync(readString(path_ptr));
+          if (resolved_ptr === 0) {
+            // Caller passed NULL → glibc-style, allocate via alloca-equivalent.
+            // We can't return a heap pointer easily; for SQLite's usage, the
+            // caller always passes a buffer (PATH_MAX). NULL is unsupported.
+            setErrnoName('EINVAL');
+            return 0;
+          }
+          const enc = new TextEncoder().encode(r);
+          const memory = getMemory();
+          const buf = new Uint8Array(memory.buffer, resolved_ptr, enc.length + 1);
+          for (let i = 0; i < enc.length; i++) buf[i] = enc[i];
+          buf[enc.length] = 0;
+          return resolved_ptr;
+        } catch (e) { setErrno(e); return 0; }
+      },
       remove: function (path_ptr) {
         const path = readString(path_ptr);
         try {
@@ -3183,7 +3241,9 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
 
   runModule({
     bytes,
-    args: process.argv.length > 3 ? process.argv.slice(2) : undefined,
+    // Always pass at least argv[0] — the wasm path. Many programs (SQLite,
+    // anything POSIX-y) assert `argc >= 1` at entry.
+    args: process.argv.slice(2),
     fs: fs,
     getSDL: function () { return require('@kmamal/sdl'); },
   }).then(function (exitCode) {
