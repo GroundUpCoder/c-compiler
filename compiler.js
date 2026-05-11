@@ -11094,13 +11094,29 @@ class WasmCode {
   if_(bt) { this.push(0x04); wtEmit(bt, this.bytes); }
   else_() { this.push(0x05); }
   end() { this.push(0x0B); }
-  br(labelIdx) { this.push(0x0C); lebU(this.bytes, labelIdx); }
-  brIf(labelIdx) { this.push(0x0D); lebU(this.bytes, labelIdx); }
+  br(labelIdx) { this._checkBrDepth(labelIdx, "br"); this.push(0x0C); lebU(this.bytes, labelIdx); }
+  brIf(labelIdx) { this._checkBrDepth(labelIdx, "brIf"); this.push(0x0D); lebU(this.bytes, labelIdx); }
   brTable(labels, defaultLabel) {
+    for (const l of labels) this._checkBrDepth(l, "brTable entry");
+    this._checkBrDepth(defaultLabel, "brTable default");
     this.push(0x0E);
     lebU(this.bytes, labels.length);
     for (const l of labels) lebU(this.bytes, l);
     lebU(this.bytes, defaultLabel);
+  }
+  // Catch internal codegen bugs that would emit a `br` with an out-of-range
+  // depth — the wasm validator would reject the module at instantiation
+  // time with a cryptic "invalid branch depth: <huge number>" message
+  // (negative deltas LEB-encode to ~0xFFFFFFFD). Failing here points
+  // directly at the offending emit site instead, so stale entries in
+  // gotoLabelDepths / breakTarget / continueTarget surface as a clear
+  // diagnostic rather than silent miscompilation.
+  _checkBrDepth(d, opName) {
+    if (typeof d !== "number" || !Number.isInteger(d) || d < 0 || d > 0xFFFFFF) {
+      throw new Error(
+        `internal codegen error: ${opName} depth ${d} is out of range ` +
+        `(likely a stale entry in gotoLabelDepths / breakTarget / continueTarget)`);
+    }
   }
   ret() { this.push(0x0F); }
   call(funcIdx) { this.push(0x10); lebU(this.bytes, funcIdx); }
