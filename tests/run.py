@@ -361,6 +361,83 @@ def run_unit_or_extra(test_base, compiler_cmd, results, filter_str=None, label_p
         results.record(name, ok, msg)
 
 
+# --- Unit tests (delegated to node) ---
+
+RUN_UNIT_JS = os.path.join(SCRIPT_DIR, "run-unit.js")
+
+
+def run_unit_node(results, filter_str=None):
+    """Run the `unit` category via tests/run-unit.js in JSONL mode.
+
+    The node runner compiles and executes each test in-process across a
+    worker_threads pool — an order-of-magnitude faster than spawning a
+    fresh `node` per test. We stream its JSONL output into the existing
+    Results object so verbose/quiet/summary behavior is unchanged.
+    """
+    cmd = ["node", "--experimental-wasm-exnref", RUN_UNIT_JS, "--jsonl"]
+    if filter_str:
+        cmd.append(f"--filter={filter_str}")
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1, cwd=ROOT_DIR,
+    )
+    stderr_chunks = []
+
+    def drain_stderr():
+        for line in iter(proc.stderr.readline, ''):
+            stderr_chunks.append(line)
+
+    err_reader = threading.Thread(target=drain_stderr, daemon=True)
+    err_reader.start()
+
+    # Tests the JS runner can't handle in-process (chdir, timed stdin) are
+    # emitted as `status: skip, fallback: true`. We collect them here and
+    # rerun via the subprocess-based path below — the JS runner still
+    # handles the bulk of the work, and these fall back gracefully.
+    fallback_names = []
+
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            # Unexpected non-JSON output — surface to stderr and keep going.
+            sys.stderr.write(f"run-unit.js: {line}\n")
+            continue
+        name = obj.get("name", "")
+        status = obj.get("status")
+        if status == "pass":
+            results.record(name, True)
+        elif status == "fail":
+            results.record(name, False, obj.get("msg", ""))
+        elif status == "skip":
+            if obj.get("fallback"):
+                fallback_names.append(name)
+            else:
+                results.skip(name)
+
+    proc.wait()
+    err_reader.join(timeout=2)
+    if proc.returncode not in (0, 1):
+        results.record(
+            "unit/<runner>", False,
+            f"run-unit.js exited {proc.returncode}\n{''.join(stderr_chunks)}",
+        )
+
+    # Rerun fallback tests in-process here. `name` is relative to SCRIPT_DIR
+    # (matching run_single_test's naming convention).
+    for name in fallback_names:
+        test_dir = os.path.join(SCRIPT_DIR, name)
+        result = run_single_test(test_dir, COMPILER_CMD)
+        if result is None:
+            results.skip(name)
+            continue
+        result_name, ok, msg = result
+        results.record(result_name, ok, msg)
+
+
 
 # --- Projects ---
 
@@ -812,10 +889,13 @@ def main():
             results.section("ast")
             run_ast_tests(results, filter_str=args.filter)
 
-        elif cat in ("unit", "extra"):
-            test_base = UNIT_DIR if cat == "unit" else EXTRA_DIR
-            results.section(cat)
-            run_unit_or_extra(test_base, COMPILER_CMD, results, filter_str=args.filter)
+        elif cat == "unit":
+            results.section("unit")
+            run_unit_node(results, filter_str=args.filter)
+
+        elif cat == "extra":
+            results.section("extra")
+            run_unit_or_extra(EXTRA_DIR, COMPILER_CMD, results, filter_str=args.filter)
 
         elif cat == "projects":
             results.section("projects")

@@ -160,13 +160,18 @@ function workerMain() {
   }
 
   async function runOne(td) {
+    // Skips tagged `fallback: true` are things the in-process runner
+    // can't handle, but a subprocess-based runner (tests/run.py's
+    // run_single_test) can — the orchestrator can pick them back up.
     if (td.config.events) {
-      return { name: td.name, status: 'skip', msg: 'stdin events not supported in PoC' };
+      return { name: td.name, status: 'skip', fallback: true,
+               msg: 'stdin events need subprocess scheduling' };
     }
     // process.chdir() isn't allowed in worker_threads, so any test that
     // exercises chdir cannot run in-process.
     if (WORKER_CHDIR_INCOMPATIBLE.has(td.name)) {
-      return { name: td.name, status: 'skip', msg: 'uses chdir (worker_thread limitation)' };
+      return { name: td.name, status: 'skip', fallback: true,
+               msg: 'uses chdir (worker_thread limitation)' };
     }
 
     // ---- Compile ----
@@ -338,18 +343,23 @@ function workerMain() {
 // ---------- Main ----------
 
 function parseArgs(argv) {
-  const opts = { verbose: false, quiet: false, filter: null, jobs: os.cpus().length };
+  const opts = { verbose: false, quiet: false, jsonl: false, filter: null, jobs: os.cpus().length };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-v' || a === '--verbose') opts.verbose = true;
     else if (a === '-q' || a === '--quiet') opts.quiet = true;
+    else if (a === '--jsonl') opts.jsonl = true;
     else if (a === '--filter') opts.filter = argv[++i];
     else if (a.startsWith('--filter=')) opts.filter = a.substring('--filter='.length);
     else if (a === '-j') opts.jobs = parseInt(argv[++i], 10);
     else if (a.startsWith('-j')) opts.jobs = parseInt(a.substring(2), 10);
     else if (a === '-h' || a === '--help') {
       process.stdout.write(
-        'Usage: node tests/run.js [-v] [--filter=<substr>] [-j N]\n'
+        'Usage: node tests/run-unit.js [-v] [--jsonl] [--filter=<substr>] [-j N]\n' +
+        '\n' +
+        '  --jsonl   Emit one JSON line per test result to stdout. Suppresses\n' +
+        '            human-readable banners and the trailing summary. Intended\n' +
+        '            for consumption by other tools (e.g. tests/run.py).\n'
       );
       process.exit(0);
     }
@@ -364,7 +374,7 @@ async function mainMain() {
   const start = Date.now();
   const testDirs = collectTests(UNIT_DIR, opts.filter);
   const descriptors = testDirs.map(buildTestDescriptor).filter(t => t.cFiles.length);
-  if (!opts.quiet) {
+  if (!opts.jsonl && !opts.quiet) {
     process.stdout.write(`--- unit (${descriptors.length} tests, ${opts.jobs} workers) ---\n`);
   }
 
@@ -372,6 +382,30 @@ async function mainMain() {
   let nextIdx = 0;
   let passed = 0, failed = 0, skipped = 0;
   const failures = [];
+
+  function reportJsonl(result) {
+    // One self-delimited JSON object per line — easy to stream-parse from
+    // Python, robust against embedded newlines in `msg`.
+    process.stdout.write(JSON.stringify(result) + '\n');
+  }
+
+  function reportHuman(result) {
+    if (result.status === 'pass') {
+      if (opts.verbose) process.stdout.write(`  PASS  ${result.name}\n`);
+      else if (!opts.quiet) process.stdout.write('.');
+    } else if (result.status === 'skip') {
+      if (opts.verbose) process.stdout.write(`  SKIP  ${result.name}${result.msg ? ' — ' + result.msg : ''}\n`);
+    } else {
+      if (opts.verbose) {
+        process.stdout.write(`  FAIL  ${result.name}\n`);
+        for (const line of (result.msg || '').split('\n')) {
+          process.stdout.write(`        ${line}\n`);
+        }
+      } else if (!opts.quiet) {
+        process.stdout.write('F');
+      }
+    }
+  }
 
   async function spawnWorker() {
     const w = new Worker(__filename);
@@ -382,25 +416,13 @@ async function mainMain() {
         w.postMessage(td);
       }
       w.on('message', (result) => {
-        if (result.status === 'pass') {
-          passed++;
-          if (opts.verbose) process.stdout.write(`  PASS  ${result.name}\n`);
-          else if (!opts.quiet) process.stdout.write('.');
-        } else if (result.status === 'skip') {
-          skipped++;
-          if (opts.verbose) process.stdout.write(`  SKIP  ${result.name}${result.msg ? ' — ' + result.msg : ''}\n`);
-        } else {
-          failed++;
-          failures.push(result);
-          if (opts.verbose) {
-            process.stdout.write(`  FAIL  ${result.name}\n`);
-            for (const line of (result.msg || '').split('\n')) {
-              process.stdout.write(`        ${line}\n`);
-            }
-          } else if (!opts.quiet) {
-            process.stdout.write('F');
-          }
-        }
+        if (result.status === 'pass') passed++;
+        else if (result.status === 'skip') skipped++;
+        else { failed++; failures.push(result); }
+
+        if (opts.jsonl) reportJsonl(result);
+        else reportHuman(result);
+
         takeNext();
       });
       w.on('error', rejectDone);
@@ -413,19 +435,21 @@ async function mainMain() {
 
   await Promise.all(Array.from({ length: Math.min(opts.jobs, queue.length || 1) }, spawnWorker));
 
-  const elapsed = (Date.now() - start) / 1000;
-  if (!opts.quiet && !opts.verbose) process.stdout.write('\n');
-  if (!opts.verbose) {
-    for (const f of failures) {
-      process.stdout.write(`\n  FAIL  ${f.name}\n`);
-      for (const line of (f.msg || '').split('\n')) {
-        process.stdout.write(`        ${line}\n`);
+  if (!opts.jsonl) {
+    const elapsed = (Date.now() - start) / 1000;
+    if (!opts.quiet && !opts.verbose) process.stdout.write('\n');
+    if (!opts.verbose) {
+      for (const f of failures) {
+        process.stdout.write(`\n  FAIL  ${f.name}\n`);
+        for (const line of (f.msg || '').split('\n')) {
+          process.stdout.write(`        ${line}\n`);
+        }
       }
     }
+    const parts = [`${passed} passed`, `${failed} failed`];
+    if (skipped) parts.push(`${skipped} skipped`);
+    process.stdout.write(`\n${parts.join(', ')}  (${elapsed.toFixed(1)}s)\n`);
   }
-  const parts = [`${passed} passed`, `${failed} failed`];
-  if (skipped) parts.push(`${skipped} skipped`);
-  process.stdout.write(`\n${parts.join(', ')}  (${elapsed.toFixed(1)}s)\n`);
   process.exit(failed === 0 ? 0 : 1);
 }
 
