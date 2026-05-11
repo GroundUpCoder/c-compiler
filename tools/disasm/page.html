@@ -389,6 +389,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="setting-desc">Remove unreferenced functions and data</div>
     <label><input type="checkbox" id="optGcNoExportRoots" checked> Don't root exports</label>
     <div class="setting-desc">With GC, don't treat __export directives as roots</div>
+    <label><input type="checkbox" id="optNoFold"> Disable constant folding</label>
+    <div class="setting-desc">Skip the INLINER pass (constant folding / dead branch elimination)</div>
+    <label><input type="checkbox" id="optNoGotoNormalize"> Disable goto normalization</label>
+    <div class="setting-desc">Skip the GOTO_NORMALIZER pass (cross-block label hoisting)</div>
     <h3>Layout</h3>
     <label><input type="radio" name="layout" value="side-by-side" data-panes="2" checked> 2 side by side</label>
     <label><input type="radio" name="layout" value="stacked" data-panes="2"> 2 stacked</label>
@@ -703,6 +707,8 @@ function getCompilerOptions() {
   if (document.getElementById('optNoReuseLocals').checked) opts.noReuseLocals = true;
   if (document.getElementById('optGcSections').checked) opts.gcSections = true;
   if (document.getElementById('optGcNoExportRoots').checked) opts.gcNoExportRoots = true;
+  if (document.getElementById('optNoFold').checked) opts.noFold = true;
+  if (document.getElementById('optNoGotoNormalize').checked) opts.noGotoNormalize = true;
   return opts;
 }
 
@@ -712,14 +718,14 @@ function compileC(source) {
   var errors = [];
   var vfs = {
     readFileSync: function(f) {
-      if (f === '__main.c') return source;
+      if (f === 'main.c') return source;
       throw new Error('File not found: ' + f);
     }
   };
   var opts = getCompilerOptions();
   var units;
   try {
-    units = C.parseAllUnits(vfs, pp, ['__main.c'], {
+    units = C.parseAllUnits(vfs, pp, ['main.c'], {
       compilerOptions: opts,
       warningFlags: {},
       writeErr: function(s) { errors.push(s); },
@@ -732,7 +738,8 @@ function compileC(source) {
     throw new Error(linkResult.errors.map(function(e) { return e.message; }).join('\n'));
   }
   if (opts.gcSections) C.gcSectionsPass(units, opts);
-  return C.generateCode(units, 'output.wasm', { compilerOptions: opts, sourceBuffers: pp.sourceBuffers });
+  var wasm = C.generateCode(units, 'output.wasm', { compilerOptions: opts, sourceBuffers: pp.sourceBuffers });
+  return { wasm: wasm, units: units };
 }
 
 // Parse c.sourcemap and c.sources custom sections from WASM binary
@@ -1152,6 +1159,7 @@ document.addEventListener('click', function(e) {
   if (lastJson && !findTab('module')) items.push({ label: 'Module Overview', action: function() { createTab(paneId, 'Module', 'module', { json: lastJson }); } });
   if (dbgInterp && !findTab('debug')) items.push({ label: 'Debug State', action: function() { createTab(paneId, 'Debug', 'debug', { key: 'debug' }); dbgUpdate(); } });
   if (dbgInterp && !findTab('stdout')) items.push({ label: 'Output', action: function() { createTab(paneId, 'Output', 'stdout', { key: 'stdout' }); dbgUpdate(); } });
+  if (lastPrintedC && !findTab('printed')) items.push({ label: 'Printed C', action: function() { createTab(paneId, 'Printed C', 'printed', { source: lastPrintedC, key: 'printed' }); } });
   if (lastEmbeddedSources) {
     for (var fname in lastEmbeddedSources) {
       if (!findTab('source', 'src-' + fname)) {
@@ -1253,6 +1261,28 @@ function renderTabContent(tab) {
       var offsets = sourceReverseMap[tab.data.filename + '\0' + line];
       if (offsets && offsets.length > 0) goToAssemblyOffsets(offsets, tab.data.filename, line);
     });
+    return;
+  }
+  if (tab.type === 'printed') {
+    tab.contentEl.innerHTML = '<div class="editor-wrap"></div>';
+    var pview = new CM.EditorView({
+      doc: tab.data.source,
+      extensions: [
+        CM.lineNumbers(),
+        CM.highlightActiveLineGutter(),
+        CM.highlightSpecialChars(),
+        CM.foldGutter(),
+        CM.drawSelection(),
+        CM.highlightActiveLine(),
+        CM.keymap.of([...CM.defaultKeymap, ...CM.foldKeymap]),
+        CM.cpp(),
+        cmTheme,
+        cmHighlight,
+        CM.EditorState.readOnly.of(true),
+      ],
+      parent: tab.contentEl.querySelector('.editor-wrap'),
+    });
+    tab.data.editorView = pview;
     return;
   }
 }
@@ -2059,6 +2089,7 @@ var diswRunner = null;
 var lastWasm = null;
 var lastSourceMap = null;
 var lastEmbeddedSources = null;
+var lastPrintedC = null;
 var sourceReverseMap = null;
 var statusEl = document.getElementById('status');
 
@@ -2124,14 +2155,16 @@ async function doCompile() {
     document.getElementById('debugBar').classList.remove('active');
   }
   lastWasm = null;
+  lastPrintedC = null;
 
   closeResultTabs();
 
   try {
     var t0 = performance.now();
-    var wasm = compileC(source);
+    var result = compileC(source);
     var compileMs = (performance.now() - t0).toFixed(0);
-    doDisasmWasm(wasm, compileMs + 'ms compile, ');
+    lastPrintedC = self.CompilerJS.printC(result.units);
+    doDisasmWasm(result.wasm, compileMs + 'ms compile, ');
   } catch (e) {
     createTab(paneForNewTab(), 'Error', 'error', { message: e.message || String(e) });
     statusEl.textContent = 'Error';
@@ -2189,7 +2222,7 @@ function closeResultTabs() {
     var toRemove = [];
     for (var i = 0; i < panes[pi].tabs.length; i++) {
       var t = panes[pi].tabs[i];
-      if (t.type === 'module' || t.type === 'function' || t.type === 'error' || t.type === 'debug' || t.type === 'source' || t.type === 'stdout') toRemove.push(t.id);
+      if (t.type === 'module' || t.type === 'function' || t.type === 'error' || t.type === 'debug' || t.type === 'source' || t.type === 'stdout' || t.type === 'printed') toRemove.push(t.id);
     }
     for (var j = 0; j < toRemove.length; j++) removeTab(pi, toRemove[j]);
   }
@@ -2221,15 +2254,15 @@ function doDisasmWasm(wasm, timingPrefix) {
 
   createTab(paneForNewTab(), 'Module', 'module', { json: json });
 
-  // Replace Source editor tab with __main.c source tab in the same position
-  if (lastEmbeddedSources && lastEmbeddedSources['__main.c']) {
+  // Replace Source editor tab with main.c source tab in the same position
+  if (lastEmbeddedSources && lastEmbeddedSources['main.c']) {
     var edLoc = findTab('editor');
     if (edLoc) {
       var edPane = edLoc.paneId;
       var edIdx = panes[edPane].tabs.indexOf(edLoc.tab);
       removeTab(edPane, edLoc.tab.id);
-      openSourceTab('__main.c');
-      var srcTab = findTab('source', 'src-__main.c');
+      openSourceTab('main.c');
+      var srcTab = findTab('source', 'src-main.c');
       if (srcTab && srcTab.paneId !== edPane) {
         moveTab(srcTab.paneId, srcTab.tab.id, edPane, edIdx);
       } else if (srcTab) {
@@ -2241,8 +2274,8 @@ function doDisasmWasm(wasm, timingPrefix) {
         }
       }
     } else {
-      openSourceTab('__main.c');
-      var srcTab = findTab('source', 'src-__main.c');
+      openSourceTab('main.c');
+      var srcTab = findTab('source', 'src-main.c');
       if (srcTab && srcTab.paneId !== 0) {
         moveTab(srcTab.paneId, srcTab.tab.id, 0, 0);
       } else if (srcTab) {
@@ -2258,7 +2291,7 @@ function doDisasmWasm(wasm, timingPrefix) {
 
   // Auto-open main source tab if embedded sources exist
   if (lastEmbeddedSources) {
-    var mainFile = lastEmbeddedSources['__main.c'] ? '__main.c' : null;
+    var mainFile = lastEmbeddedSources['main.c'] ? 'main.c' : null;
     if (!mainFile) { for (var sf in lastEmbeddedSources) { mainFile = sf; break; } }
     if (mainFile) {
       var editorLoc = findTab('editor');
@@ -2312,6 +2345,7 @@ document.addEventListener('drop', function(e) {
     document.getElementById('debugBar').classList.remove('active');
   }
   lastWasm = null;
+  lastPrintedC = null;
 
   closeResultTabs();
 
