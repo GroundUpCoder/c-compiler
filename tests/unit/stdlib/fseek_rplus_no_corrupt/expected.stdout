@@ -1,0 +1,10 @@
+region1: 0x01 (want 0x01)
+region7: 0x07 (want 0x07)
+on-disk region1: 0x01
+on-disk region2: 0x02
+on-disk region3: 0x03
+on-disk region4: 0x04
+on-disk region5: 0x05
+on-disk region6: 0x06
+on-disk region7: 0x07
+on-disk region8: 0x08

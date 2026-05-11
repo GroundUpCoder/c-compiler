@@ -15458,6 +15458,10 @@ __require_source("__stdio.c");
 #define __F_APPEND 4
 #define __F_EOF   8
 #define __F_ERR   16
+/* The buffer currently holds data from fread/buffered input.
+ * Used to keep fflush from treating a partially-consumed read buffer
+ * as pending write data in an r+ / w+ stream. */
+#define __F_RBUF  32
 
 typedef struct FILE {
   int fd;
@@ -17552,7 +17556,7 @@ int fflush(FILE *stream) {
     }
     return 0;
   }
-  if ((stream->flags & __F_WRITE) && stream->buf_pos > 0) {
+  if ((stream->flags & __F_WRITE) && !(stream->flags & __F_RBUF) && stream->buf_pos > 0) {
     return __flush_buf(stream);
   }
   return 0;
@@ -17633,6 +17637,7 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
         }
         stream->buf_len = r;
         stream->buf_pos = 0;
+        stream->flags |= __F_RBUF;
       }
     }
   }
@@ -17798,7 +17803,7 @@ int fseek(FILE *stream, long offset, int whence) {
   stream->ungetc_char = EOF;
   long r = lseek(stream->fd, offset, whence);
   if (r < 0) return -1;
-  stream->flags &= ~__F_EOF;
+  stream->flags &= ~(__F_EOF | __F_RBUF);
   return 0;
 }
 
