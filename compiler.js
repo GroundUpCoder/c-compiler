@@ -303,7 +303,7 @@ function hexVal(c) {
 // Raw lexer (phase 1)
 // ====================
 
-function lex(filename, source) {
+function lex(filename, source, lineOffsets) {
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
   const bytes = textEncoder.encode(source);
@@ -318,6 +318,11 @@ function lex(filename, source) {
   let lastTokenWasNewline = true;
   let bol = true,
     space = false;
+  // lineOffsets, if provided, maps a spliced-byte-offset to "how many
+  // extra original-source lines were swallowed by `\<NL>` splices up to
+  // that point". We add this to savedLine when emitting each token so
+  // diagnostics report the line in the un-spliced source.
+  const _lineOffsets = lineOffsets || null;
 
   function decodeText(start, end) {
     return textDecoder.decode(bytes.subarray(start, end));
@@ -453,9 +458,10 @@ function lex(filename, source) {
   function advanceLine() { ++line; lineStart = i; }
 
   function addToken(kind, textOverride) {
+    const adjLine = _lineOffsets ? savedLine + lineOffsetAt(_lineOffsets, j) : savedLine;
     const tok = new Token(
       filename,
-      savedLine,
+      adjLine,
       savedColumn,
       kind,
       textOverride !== undefined ? textOverride : decodeText(j, i)
@@ -1097,17 +1103,43 @@ function postProcess(lexResult) {
 
 // Translation phase 2: splice lines by removing backslash-newline sequences.
 // Must be applied before lexing (matches C++ readFile() behavior).
+//
+// Returns { spliced, lineOffsets }. `lineOffsets` is a sorted array of
+// pairs `[splicedOffset, extraLines]` recording how many original lines
+// were swallowed BEFORE that point in the spliced output. The lexer
+// adds `extraLines` to each token's line number so diagnostics still
+// point at the original source line. For sources with no splices,
+// `lineOffsets` is `null` (zero-overhead fast path).
 function spliceLines(source) {
-  if (source.indexOf("\\\n") === -1) return source;
-  let result = "";
+  if (source.indexOf("\\\n") === -1) return { spliced: source, lineOffsets: null };
+  let spliced = "";
+  const lineOffsets = [];
+  let skipped = 0;
   for (let i = 0; i < source.length; i++) {
     if (source[i] === "\\" && i + 1 < source.length && source[i + 1] === "\n") {
       i++; // skip both '\' and '\n'
+      skipped++;
+      lineOffsets.push([spliced.length, skipped]);
     } else {
-      result += source[i];
+      spliced += source[i];
     }
   }
-  return result;
+  return { spliced, lineOffsets };
+}
+
+// Look up the line-number offset that applies at `splicedOffset` in a
+// previously-spliced source. Binary searches a sorted `lineOffsets`
+// array of `[splicedOffset, extraLines]` pairs. Returns 0 if the table
+// is null/empty or the offset precedes any splice.
+function lineOffsetAt(lineOffsets, splicedOffset) {
+  if (!lineOffsets || lineOffsets.length === 0) return 0;
+  let lo = 0, hi = lineOffsets.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (lineOffsets[mid][0] <= splicedOffset) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo === 0 ? 0 : lineOffsets[lo - 1][1];
 }
 
 // ====================
@@ -1538,7 +1570,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
       const content = ppRegistry.loadFile(fullPath);
       if (content !== null) {
         const resolved = intern(fullPath);
-        return { lexResult: lex(resolved, spliceLines(content)), resolvedFile: resolved };
+        const { spliced, lineOffsets } = spliceLines(content);
+        return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
       }
     }
 
@@ -1881,8 +1914,8 @@ function cloneToken(t) {
 
 // Convenience: splice + lex + preprocess + post-process
 function tokenize(filename, source, ppRegistry) {
-  const spliced = spliceLines(source);
-  const lexResult = lex(filename, spliced);
+  const { spliced, lineOffsets } = spliceLines(source);
+  const lexResult = lex(filename, spliced, lineOffsets);
   if (lexResult.errors.length > 0) return lexResult;
   if (ppRegistry) {
     const ppResult = preprocess(filename, lexResult.tokens, ppRegistry);
@@ -13174,9 +13207,26 @@ class CodeGenerator {
           }
           this.popLocalScope();
         }
-        // Case bodies
-        const openLoopLabels = [];
+        // Case bodies. `openLoopLabels` is the set of BOTH/LOOP labels
+        // currently bound to wasm `loop` blocks. Critically, these are
+        // *per-case*: a BOTH label that lives in case N's body is in
+        // scope only during case N. Before transitioning to case N+1
+        // we must close the loop blocks and delete the labels from
+        // `gotoLabelDepths`, otherwise the next case would inherit
+        // stale depth entries (the next case's leading `end()` would
+        // drop blockDepth below the registered depth, and a `goto L`
+        // would either land on the wrong target or trigger the
+        // depth>blockDepth defensive check).
+        let openLoopLabels = [];
         for (let i = 0; i < numCases; i++) {
+          // Cleanup any per-case loop labels left from the previous
+          // iteration's body before closing this iteration's case
+          // dispatch block.
+          for (let k = openLoopLabels.length - 1; k >= 0; k--) {
+            this.gotoLabelDepths.delete(openLoopLabels[k]);
+            this.blockDepth--; this.body.end();
+          }
+          openLoopLabels.length = 0;
           this.blockDepth--; this.body.end();
           const startIdx = sw.cases[i].stmtIndex;
           const endIdx = (i + 1 < numCases) ? sw.cases[i + 1].stmtIndex : sw.body.statements.length;
@@ -20601,10 +20651,11 @@ function main() {
   let noXterm = false;
   const pp = Stdlib.createDefaultPPRegistry();
 
-  // Set up file reader
+  // Set up file reader. Returns raw source — splicing happens at lex
+  // time so the lexer can track per-token line-offset adjustments.
   pp.fileReader = (filePath) => {
     try {
-      return Lexer.spliceLines(fs.readFileSync(filePath, "utf-8"));
+      return fs.readFileSync(filePath, "utf-8");
     } catch {
       return null;
     }
