@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/arity_vararg_too_few/main.c.
+tests/unit/core/arity_vararg_too_few/main.c:2: error: too few arguments to function call (expected at least 1, got 0)

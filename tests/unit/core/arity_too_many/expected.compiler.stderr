@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/arity_too_many/main.c.
+tests/unit/core/arity_too_many/main.c:2: error: too many arguments to function call (expected 1, got 3)

@@ -4416,12 +4416,19 @@ function makeCall(loc, callee, args) {
     // Validation: only meaningful when the prototype declared its params.
     if (!funcType.hasUnspecifiedParams) {
       if (funcType.isVarArg) {
+        if (args.length < numFixed) {
+          reportError(loc,
+            `too few arguments to function call (expected at least ${numFixed}, got ${args.length})`);
+        }
         for (let i = numFixed; i < args.length; i++) {
           if (args[i].type.removeQualifiers().isRef()) {
             reportError(loc,
               `cannot pass reference type '${args[i].type.toString()}' as a variadic argument — vararg storage uses linear memory which can't hold GC references`);
           }
         }
+      } else if (args.length !== numFixed) {
+        reportError(loc,
+          `${args.length < numFixed ? 'too few' : 'too many'} arguments to function call (expected ${numFixed}, got ${args.length})`);
       }
     }
     // Implicit casts on fixed arguments.
@@ -15911,7 +15918,36 @@ function generateCode(units, outputFile, options) {
     wmod.embeddedSources = sources;
   }
 
-  return wmod.emit();
+  const bytes = wmod.emit();
+
+  // Backstop: ask the WASM engine whether we produced legal bytecode.
+  // This is a LAST-RESORT diagnostic, not the primary one. It exists
+  // because invalid WASM produced by a codegen bug is *much* nicer to
+  // hit at compile time than at instantiation time on the user's machine.
+  //
+  // It is NOT a substitute for frontend / codegen checks:
+  //   - The error points at a byte offset in the emitted module, not at
+  //     C source. ("local.set[0] expected i32, found i64 @+160") That's
+  //     near-useless to a user of the compiler.
+  //   - Every error this catches should be considered a missing check
+  //     somewhere upstream. Fix the upstream gap; don't lean on this.
+  //
+  // Skip entirely if WebAssembly isn't available (older runtimes, sandboxes).
+  // Disabled with `--no-wasm-validate` if it ever becomes a hot-path concern.
+  if (!options.compilerOptions.noWasmValidate &&
+      typeof WebAssembly !== 'undefined' &&
+      typeof WebAssembly.validate === 'function' &&
+      !WebAssembly.validate(bytes)) {
+    let detail = '(no detail available)';
+    try { new WebAssembly.Module(bytes); }
+    catch (e) { detail = e.message; }
+    writeErr(
+      `internal compiler error: emitted invalid WebAssembly: ${detail}\n` +
+      `This is a codegen bug — please report. Frontend / codegen checks ` +
+      `should catch this class of issue; the WASM validator is only a backstop.\n`);
+    fatalExit(1);
+  }
+  return bytes;
 }
 
 return {
