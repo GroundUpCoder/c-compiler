@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/case_duplicate/main.c.
+tests/unit/core/case_duplicate/main.c:5: error: duplicate case label value 1

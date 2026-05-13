@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/case_non_constant/main.c.
+tests/unit/core/case_non_constant/main.c:5: error: case label must be an integer constant expression

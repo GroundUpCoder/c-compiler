@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/default_duplicate/main.c.
+tests/unit/core/default_duplicate/main.c:5: error: duplicate 'default' label in switch

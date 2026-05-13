@@ -10119,17 +10119,24 @@ class Parser {
       const switchTok = this.peek(-1);
       this.expect("(");
       const expr = this.parseExpression();
-      if (expr.type.removeQualifiers().isRef()) {
+      const exprType = expr.type.removeQualifiers();
+      if (exprType.isRef()) {
         this.error(switchTok, `cannot switch on reference type '${expr.type.toString()}'`);
+      } else if (!exprType.isInteger()) {
+        this.error(switchTok, `switch expression must have integer type, got '${expr.type.toString()}'`);
       }
       this.expect(")");
       // Body parses with `_inSwitch = true` so `case`/`default` labels
       // are accepted (they are SCase nodes in the body's statement list).
-      // Nested switches save/restore the flag.
+      // `_switchSeen` tracks case values + default within the enclosing
+      // switch so we can diagnose duplicates. Nested switches save/restore.
       const savedInSwitch = this._inSwitch;
+      const savedSeen = this._switchSeen;
       this._inSwitch = true;
+      this._switchSeen = { values: new Map(), hasDefault: false };
       const body = this.parseStatement();
       this._inSwitch = savedInSwitch;
+      this._switchSeen = savedSeen;
       return new AST.SSwitch(loc, expr, body);
     }
 
@@ -10140,17 +10147,43 @@ class Parser {
     if (this.matchKW(Lexer.Keyword.CASE)) {
       const caseTok = this.peek(-1);
       const caseExpr = this.parseAssignmentExpression();
-      let lo = constEvalInt(caseExpr) ?? 0n;
+      const loVal = constEvalInt(caseExpr);
+      if (loVal === null) {
+        this.error(caseTok, "case label must be an integer constant expression");
+      }
+      let lo = loVal ?? 0n;
       let hi = lo;
       // GNU case range extension: case low ... high:
       if (this.atText("...")) {
         this.advance();
         const highExpr = this.parseAssignmentExpression();
-        hi = constEvalInt(highExpr) ?? 0n;
+        const hiVal = constEvalInt(highExpr);
+        if (hiVal === null) {
+          this.error(caseTok, "case range upper bound must be an integer constant expression");
+        }
+        hi = hiVal ?? lo;
+        if (hi < lo) {
+          this.error(caseTok, `case range is empty (${lo} > ${hi})`);
+        }
       }
       this.expect(":");
       if (!this._inSwitch) {
         this.error(caseTok, "'case' label not within a switch statement");
+      } else if (loVal !== null) {
+        // Duplicate-case detection. For ranges we enumerate up to a cap
+        // so we don't blow memory on `case 0 ... 0xFFFFFFFFFFFFFFFF:`;
+        // beyond the cap we skip the check (codegen still works).
+        const span = hi - lo;
+        if (span <= 1024n) {
+          for (let v = lo; v <= hi; v++) {
+            const key = String(v);
+            if (this._switchSeen.values.has(key)) {
+              this.error(caseTok, `duplicate case label value ${v}`);
+              break;
+            }
+            this._switchSeen.values.set(key, caseTok);
+          }
+        }
       }
       return new AST.SCase(loc, lo, hi, false);
     }
@@ -10161,6 +10194,11 @@ class Parser {
       this.expect(":");
       if (!this._inSwitch) {
         this.error(defTok, "'default' label not within a switch statement");
+      } else {
+        if (this._switchSeen.hasDefault) {
+          this.error(defTok, "duplicate 'default' label in switch");
+        }
+        this._switchSeen.hasDefault = true;
       }
       return new AST.SCase(loc, 0n, 0n, true);
     }

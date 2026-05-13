@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/switch_non_integer/main.c.
+tests/unit/core/switch_non_integer/main.c:3: error: switch expression must have integer type, got 'float'
