@@ -2836,11 +2836,11 @@ function promote(item) {
 function unary(op, a) {
   a = promote(a);
   switch (op) {
-    case "~": return new Item(~a.value, a.type);
-    case "-": return new Item(-a.value, a.type);
-    case "+": return a;
-    case "!": return new Item(a.value === 0n ? 1n : 0n, TINT);
-    default: return a;
+    case "~": case "OP_BNOT": return new Item(~a.value, a.type);
+    case "-": case "OP_NEG": return new Item(-a.value, a.type);
+    case "+": case "OP_POS": return a;
+    case "!": case "OP_LNOT": return new Item(a.value === 0n ? 1n : 0n, TINT);
+    default: return null;
   }
 }
 
@@ -2850,29 +2850,29 @@ function binary(op, a, b) {
   const lv = truncateConstInt(a.value, rt);
   const rv = truncateConstInt(b.value, rt);
   switch (op) {
-    case "+": return new Item(lv + rv, rt);
-    case "-": return new Item(lv - rv, rt);
-    case "*": return new Item(lv * rv, rt);
-    case "/": return new Item(rv !== 0n ? lv / rv : 0n, rt);
-    case "%": return new Item(rv !== 0n ? lv % rv : 0n, rt);
-    case "&": return new Item(lv & rv, rt);
-    case "|": return new Item(lv | rv, rt);
-    case "^": return new Item(lv ^ rv, rt);
-    case "<<": return new Item(lv << rv, rt);
-    case ">>": return new Item(isUnsigned(rt) ? lv >> rv : lv >> rv, rt);
-    case "==": return new Item(lv === rv ? 1n : 0n, TINT);
-    case "!=": return new Item(lv !== rv ? 1n : 0n, TINT);
-    case "<": return new Item(lv < rv ? 1n : 0n, TINT);
-    case ">": return new Item(lv > rv ? 1n : 0n, TINT);
-    case "<=": return new Item(lv <= rv ? 1n : 0n, TINT);
-    case ">=": return new Item(lv >= rv ? 1n : 0n, TINT);
-    case "&&": return new Item((lv !== 0n && rv !== 0n) ? 1n : 0n, TINT);
-    case "||": return new Item((lv !== 0n || rv !== 0n) ? 1n : 0n, TINT);
-    default: return new Item(0n, TINT);
+    case "+": case "ADD": return new Item(lv + rv, rt);
+    case "-": case "SUB": return new Item(lv - rv, rt);
+    case "*": case "MUL": return new Item(lv * rv, rt);
+    case "/": case "DIV": return rv !== 0n ? new Item(lv / rv, rt) : null;
+    case "%": case "MOD": return rv !== 0n ? new Item(lv % rv, rt) : null;
+    case "&": case "BAND": return new Item(lv & rv, rt);
+    case "|": case "BOR": return new Item(lv | rv, rt);
+    case "^": case "BXOR": return new Item(lv ^ rv, rt);
+    case "<<": case "SHL": return new Item(lv << rv, rt);
+    case ">>": case "SHR": return new Item(lv >> rv, rt);
+    case "==": case "EQ": return new Item(lv === rv ? 1n : 0n, TINT);
+    case "!=": case "NE": return new Item(lv !== rv ? 1n : 0n, TINT);
+    case "<": case "LT": return new Item(lv < rv ? 1n : 0n, TINT);
+    case ">": case "GT": return new Item(lv > rv ? 1n : 0n, TINT);
+    case "<=": case "LE": return new Item(lv <= rv ? 1n : 0n, TINT);
+    case ">=": case "GE": return new Item(lv >= rv ? 1n : 0n, TINT);
+    case "&&": case "LAND": return new Item((lv !== 0n && rv !== 0n) ? 1n : 0n, TINT);
+    case "||": case "LOR": return new Item((lv !== 0n || rv !== 0n) ? 1n : 0n, TINT);
+    default: return null;
   }
 }
 
-return { Item, itemFromPPNumber, unary, binary, isUnsigned, SIGNED: TLLONG, UNSIGNED: TULLONG };
+return { Item, itemFromPPNumber, unary, binary, isUnsigned, promote, SIGNED: TLLONG, UNSIGNED: TULLONG };
 })();
 
 // ====================
@@ -4598,72 +4598,64 @@ return {
 })();
 
 // ====================
-// constEvalInt — pure integer constant evaluator
+// constEvalItem / constEvalInt — typed integer constant evaluator
 // ====================
-// Returns BigInt or null. Handles literals, enum constants, arithmetic
-// on integer constants, sizeof/_Alignof, casts/implicit casts, and a
-// narrow address-arithmetic pattern (&((T*)0)->m → byteOffset) that
-// supports offsetof().
+// constEvalItem returns ConstEval.Item (value + type) or null.
+// constEvalInt is a thin wrapper returning BigInt or null for callers
+// that don't need the type.
 
-function constEvalInt(expr) {
+function constEvalItem(expr) {
   if (!expr) return null;
   switch (expr.constructor) {
-    case AST.EInt: return expr.value;  // already BigInt
+    case AST.EInt: return new ConstEval.Item(expr.value, expr.type);
     case AST.EIdent:
-      if (expr.decl && expr.decl instanceof AST.DEnumConst) return expr.decl.value;
+      if (expr.decl && expr.decl instanceof AST.DEnumConst)
+        return new ConstEval.Item(expr.decl.value, expr.type);
       return null;
     case AST.EBinary: {
-      const l = constEvalInt(expr.left), r = constEvalInt(expr.right);
+      const l = constEvalItem(expr.left), r = constEvalItem(expr.right);
       if (l === null || r === null) return null;
-      switch (expr.op) {
-        case "ADD": return l + r; case "SUB": return l - r;
-        case "MUL": return l * r; case "DIV": return r === 0n ? null : l / r;
-        case "MOD": return r === 0n ? null : l % r;
-        case "BAND": return l & r; case "BOR": return l | r; case "BXOR": return l ^ r;
-        case "SHL": return l << r; case "SHR": return l >> r;
-        case "EQ": return l === r ? 1n : 0n; case "NE": return l !== r ? 1n : 0n;
-        case "LT": return l < r ? 1n : 0n; case "GT": return l > r ? 1n : 0n;
-        case "LE": return l <= r ? 1n : 0n; case "GE": return l >= r ? 1n : 0n;
-        case "LAND": return (l && r) ? 1n : 0n; case "LOR": return (l || r) ? 1n : 0n;
-        default: return null;
-      }
+      return ConstEval.binary(expr.op, l, r);
     }
     case AST.EUnary: {
       if (expr.op === "OP_ADDR") {
-        // Support offsetof pattern: &((type*)0)->member
         const inner = expr.operand;
         if (inner instanceof AST.EArrow || inner instanceof AST.EMember) {
-          const base = constEvalInt(inner.base);
-          if (base !== null) return base + BigInt(inner.memberDecl.byteOffset);
+          const base = constEvalItem(inner.base);
+          if (base !== null) return new ConstEval.Item(base.value + BigInt(inner.memberDecl.byteOffset), expr.type);
         }
         return null;
       }
-      const v = constEvalInt(expr.operand);
-      if (v === null) return null;
-      switch (expr.op) {
-        case "OP_POS": return v; case "OP_NEG": return -v;
-        case "OP_LNOT": return v === 0n ? 1n : 0n; case "OP_BNOT": return ~v;
-        default: return null;
-      }
+      const a = constEvalItem(expr.operand);
+      if (a === null) return null;
+      return ConstEval.unary(expr.op, a);
     }
     case AST.EImplicitCast: {
-      return constEvalInt(expr.expr);
+      const inner = constEvalItem(expr.expr);
+      if (inner === null) return null;
+      return new ConstEval.Item(inner.value, expr.type);
     }
     case AST.ETernary: {
-      const c = constEvalInt(expr.condition);
+      const c = constEvalItem(expr.condition);
       if (c === null) return null;
-      return constEvalInt(c !== 0n ? expr.thenExpr : expr.elseExpr);
+      return constEvalItem(c.value !== 0n ? expr.thenExpr : expr.elseExpr);
     }
     case AST.ECast: {
-      const v = constEvalInt(expr.expr);
-      return v;
+      const inner = constEvalItem(expr.expr);
+      if (inner === null) return null;
+      return new ConstEval.Item(inner.value, expr.type);
     }
-    case AST.ESizeofExpr: return BigInt(expr.expr.type.size);
-    case AST.ESizeofType: return BigInt(expr.operandType.size);
-    case AST.EAlignofExpr: return BigInt(expr.expr.type.align);
-    case AST.EAlignofType: return BigInt(expr.operandType.align);
+    case AST.ESizeofExpr: return new ConstEval.Item(BigInt(expr.expr.type.size), Types.TUINT);
+    case AST.ESizeofType: return new ConstEval.Item(BigInt(expr.operandType.size), Types.TUINT);
+    case AST.EAlignofExpr: return new ConstEval.Item(BigInt(expr.expr.type.align), Types.TUINT);
+    case AST.EAlignofType: return new ConstEval.Item(BigInt(expr.operandType.align), Types.TUINT);
     default: return null;
   }
+}
+
+function constEvalInt(expr) {
+  const item = constEvalItem(expr);
+  return item !== null ? item.value : null;
 }
 
 // ====================
@@ -4702,40 +4694,6 @@ function isPureBinop(op) {
 // Evaluate a pure integer binary op on BigInt operands. Returns the
 // result as a BigInt, or null if not foldable (e.g. div by zero, shift
 // out of range). Caller is responsible for truncating to the result type.
-function evalIntBinop(op, l, r) {
-  switch (op) {
-    case "ADD": return l + r;
-    case "SUB": return l - r;
-    case "MUL": return l * r;
-    case "DIV": return r === 0n ? null : l / r;       // BigInt / truncates toward zero (matches C)
-    case "MOD": return r === 0n ? null : l % r;
-    case "BAND": return l & r;
-    case "BOR":  return l | r;
-    case "BXOR": return l ^ r;
-    case "SHL":  return r < 0n || r >= 64n ? null : l << r;
-    case "SHR":  return r < 0n || r >= 64n ? null : l >> r;
-    case "EQ": return l === r ? 1n : 0n;
-    case "NE": return l !== r ? 1n : 0n;
-    case "LT": return l <  r ? 1n : 0n;
-    case "GT": return l >  r ? 1n : 0n;
-    case "LE": return l <= r ? 1n : 0n;
-    case "GE": return l >= r ? 1n : 0n;
-    case "LAND": return (l !== 0n && r !== 0n) ? 1n : 0n;
-    case "LOR":  return (l !== 0n || r !== 0n) ? 1n : 0n;
-    default: return null;
-  }
-}
-
-function evalIntUnop(op, v) {
-  switch (op) {
-    case "OP_POS":  return v;
-    case "OP_NEG":  return -v;
-    case "OP_BNOT": return ~v;
-    case "OP_LNOT": return v === 0n ? 1n : 0n;
-    default: return null;
-  }
-}
-
 // Fold an expression. Bottom-up: fold children first.
 function foldExpr(expr) {
   if (!expr) return expr;
@@ -4766,11 +4724,11 @@ function foldExpr(expr) {
         return operand === expr.operand ? expr
           : new AST.EUnary(expr.loc, expr.type, op, operand);
       }
-      const v = constEvalInt(operand);
-      if (v !== null && expr.type.isInteger()) {
-        const r = evalIntUnop(op, v);
+      const a = constEvalItem(operand);
+      if (a !== null && expr.type.isInteger()) {
+        const r = ConstEval.unary(op, a);
         if (r !== null) {
-          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r, expr.type));
+          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r.value, expr.type));
         }
       }
       return operand === expr.operand ? expr
@@ -4785,16 +4743,14 @@ function foldExpr(expr) {
         return (left === expr.left && right === expr.right) ? expr
           : new AST.EBinary(expr.loc, expr.type, op, left, right);
       }
-      const lv = constEvalInt(left);
-      // Short-circuit: 0 && x → 0 (drops x, even if x has side effects, per C99).
-      if (op === "LAND" && lv === 0n) return new AST.EInt(expr.loc, expr.type, 0n);
-      // 1 || x → 1 (same, drops x).
-      if (op === "LOR"  && lv !== null && lv !== 0n) return new AST.EInt(expr.loc, expr.type, 1n);
-      const rv = constEvalInt(right);
-      if (lv !== null && rv !== null && expr.type.isInteger()) {
-        const r = evalIntBinop(op, lv, rv);
+      const li = constEvalItem(left);
+      if (op === "LAND" && li !== null && li.value === 0n) return new AST.EInt(expr.loc, expr.type, 0n);
+      if (op === "LOR"  && li !== null && li.value !== 0n) return new AST.EInt(expr.loc, expr.type, 1n);
+      const ri = constEvalItem(right);
+      if (li !== null && ri !== null && expr.type.isInteger()) {
+        const r = ConstEval.binary(op, li, ri);
         if (r !== null) {
-          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r, expr.type));
+          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r.value, expr.type));
         }
       }
       return (left === expr.left && right === expr.right) ? expr
@@ -4854,9 +4810,9 @@ function foldExpr(expr) {
 
     case AST.ECast: {
       const inner = foldExpr(expr.expr);
-      const v = constEvalInt(inner);
-      if (v !== null && expr.targetType.isInteger()) {
-        return new AST.EInt(expr.loc, expr.targetType, Types.truncateConstInt(v, expr.targetType));
+      const a = constEvalItem(inner);
+      if (a !== null && expr.targetType.isInteger()) {
+        return new AST.EInt(expr.loc, expr.targetType, Types.truncateConstInt(a.value, expr.targetType));
       }
       return inner === expr.expr ? expr
         : new AST.ECast(expr.loc, expr.type, expr.targetType, inner);
@@ -4864,9 +4820,9 @@ function foldExpr(expr) {
 
     case AST.EImplicitCast: {
       const inner = foldExpr(expr.expr);
-      const v = constEvalInt(inner);
-      if (v !== null && expr.type.isInteger()) {
-        return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(v, expr.type));
+      const a = constEvalItem(inner);
+      if (a !== null && expr.type.isInteger()) {
+        return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(a.value, expr.type));
       }
       return inner === expr.expr ? expr
         : new AST.EImplicitCast(expr.loc, expr.type, inner);
