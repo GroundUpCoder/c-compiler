@@ -1,0 +1,4 @@
+~0U > 0xffffU: 1
+~0U < 0: 0
+0xFFFFFFFFU > 0: 1
+1U - 2U > 0: 1

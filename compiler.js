@@ -1454,6 +1454,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
   // --- 3. PRATT-STYLE EXPRESSION EVALUATOR ---
   function evaluateExpression(line) {
+    const ZERO = new ConstEval.Item(0n, ConstEval.SIGNED);
     let pos = 0;
     function peek() { return pos < line.length ? line[pos] : null; }
     function consume() { return line[pos++]; }
@@ -1474,41 +1475,51 @@ function preprocess(filename, initialTokens, ppRegistry) {
       return 0;
     }
 
+    const punctToOp = (p) => {
+      if (p.atPunct(Punct.PLUS)) return "+"; if (p.atPunct(Punct.MINUS)) return "-";
+      if (p.atPunct(Punct.STAR)) return "*"; if (p.atPunct(Punct.SLASH)) return "/";
+      if (p.atPunct(Punct.PCT)) return "%"; if (p.atPunct(Punct.AMP)) return "&";
+      if (p.atPunct(Punct.PIPE)) return "|"; if (p.atPunct(Punct.CARET)) return "^";
+      if (p.atPunct(Punct.LSHIFT)) return "<<"; if (p.atPunct(Punct.RSHIFT)) return ">>";
+      if (p.atPunct(Punct.EQEQ)) return "=="; if (p.atPunct(Punct.NE)) return "!=";
+      if (p.atPunct(Punct.LT)) return "<"; if (p.atPunct(Punct.GT)) return ">";
+      if (p.atPunct(Punct.LE)) return "<="; if (p.atPunct(Punct.GE)) return ">=";
+      if (p.atPunct(Punct.AMPAMP)) return "&&"; if (p.atPunct(Punct.PIPEPIPE)) return "||";
+      return null;
+    };
+
     function parseBinary(minPrec) {
       const t = consume();
-      if (!t) return 0n;
+      if (!t) return ZERO;
 
-      let left = 0n;
+      let left;
       if (t.kind === TokenKind.PP_NUMBER) {
-        try {
-          left = BigInt(parseInt(t.text, 0));
-        } catch {
-          left = 0n;
-        }
+        left = ConstEval.itemFromPPNumber(t.text);
       } else if (t.atPunct(Punct.BANG)) {
-        left = parseBinary(12) === 0n ? 1n : 0n;
+        left = ConstEval.unary("!", parseBinary(12));
       } else if (t.atPunct(Punct.MINUS)) {
-        left = -parseBinary(12);
+        left = ConstEval.unary("-", parseBinary(12));
       } else if (t.atPunct(Punct.PLUS)) {
-        left = parseBinary(12);
+        left = ConstEval.unary("+", parseBinary(12));
       } else if (t.atPunct(Punct.TILDE)) {
-        left = ~parseBinary(12);
+        left = ConstEval.unary("~", parseBinary(12));
       } else if (t.atPunct(Punct.LPAREN)) {
         left = parseBinary(0);
         const next = peek();
         if (next && next.atPunct(Punct.RPAREN)) consume();
       } else if (t.kind === TokenKind.CHAR) {
-        // Character constant in #if — parse value (C99 §6.10.1)
         let s = 0;
         if (t.text[s] === "L" || t.text[s] === "U" || t.text[s] === "u") s++;
-        s++; // skip opening '
-        const e = t.text.length - 1; // before closing '
-        const pos = { i: s };
-        left = s < e ? BigInt(unescape(t.text, pos, e)) : 0n;
+        s++;
+        const e = t.text.length - 1;
+        const p = { i: s };
+        left = new ConstEval.Item(s < e ? BigInt(unescape(t.text, p, e)) : 0n, ConstEval.SIGNED);
       } else if (t.kind === TokenKind.IDENT) {
-        left = 0n; // Standard: remaining idents after expansion are 0
+        left = ZERO;
       } else if (t.kind === TokenKind.INT) {
-        left = t.integer;
+        left = new ConstEval.Item(t.integer, t.flags.isUnsigned ? ConstEval.UNSIGNED : ConstEval.SIGNED);
+      } else {
+        left = ZERO;
       }
 
       while (true) {
@@ -1522,35 +1533,17 @@ function preprocess(filename, initialTokens, ppRegistry) {
           const next = peek();
           if (next && next.atPunct(Punct.COLON)) consume();
           const elseVal = parseBinary(prec);
-          left = left !== 0n ? thenVal : elseVal;
+          left = left.value !== 0n ? thenVal : elseVal;
           continue;
         }
 
         const right = parseBinary(prec);
-
-        if (op.atPunct(Punct.PIPEPIPE)) left = (left !== 0n || right !== 0n) ? 1n : 0n;
-        else if (op.atPunct(Punct.AMPAMP)) left = (left !== 0n && right !== 0n) ? 1n : 0n;
-        else if (op.atPunct(Punct.PIPE)) left = left | right;
-        else if (op.atPunct(Punct.CARET)) left = left ^ right;
-        else if (op.atPunct(Punct.AMP)) left = left & right;
-        else if (op.atPunct(Punct.EQEQ)) left = left === right ? 1n : 0n;
-        else if (op.atPunct(Punct.NE)) left = left !== right ? 1n : 0n;
-        else if (op.atPunct(Punct.LT)) left = left < right ? 1n : 0n;
-        else if (op.atPunct(Punct.GT)) left = left > right ? 1n : 0n;
-        else if (op.atPunct(Punct.LE)) left = left <= right ? 1n : 0n;
-        else if (op.atPunct(Punct.GE)) left = left >= right ? 1n : 0n;
-        else if (op.atPunct(Punct.LSHIFT)) left = left << right;
-        else if (op.atPunct(Punct.RSHIFT)) left = left >> right;
-        else if (op.atPunct(Punct.PLUS)) left = left + right;
-        else if (op.atPunct(Punct.MINUS)) left = left - right;
-        else if (op.atPunct(Punct.STAR)) left = left * right;
-        else if (op.atPunct(Punct.SLASH)) left = right !== 0n ? left / right : 0n;
-        else if (op.atPunct(Punct.PCT)) left = right !== 0n ? left % right : 0n;
+        left = ConstEval.binary(punctToOp(op), left, right);
       }
       return left;
     }
 
-    return parseBinary(0);
+    return parseBinary(0).value;
   }
 
   // --- 4. INCLUDE RESOLUTION ---
@@ -2775,6 +2768,111 @@ return {
   computeStructLayout, computeUnionLayout, computeUnaryType,
   usualArithmeticConversions, truncateConstInt,
 };
+})();
+
+// ====================
+// ConstEval — typed integer constant arithmetic
+// ====================
+// Wraps a BigInt value + C type so that signedness and width are preserved
+// through arithmetic, comparisons, and bitwise ops. Used by the preprocessor
+// (#if expressions operate at intmax_t/uintmax_t per C99 §6.10.1) and
+// available for constEvalInt / inliner migration later.
+const ConstEval = (() => {
+const { TINT, TUINT, TLLONG, TULLONG, truncateConstInt, usualArithmeticConversions } = Types;
+
+class Item {
+  constructor(value, type) {
+    this.value = truncateConstInt(value, type);
+    this.type = type;
+  }
+}
+
+function isUnsigned(type) {
+  return type === TUINT || type === Types.TULONG || type === TULLONG
+      || type === Types.TUCHAR || type === Types.TUSHORT;
+}
+
+function itemFromPPNumber(text) {
+  let unsigned = false;
+  let longlong = false;
+  let end = text.length;
+  for (let i = text.length - 1; i > 0; --i) {
+    const c = text[i];
+    if (c === "u" || c === "U") { unsigned = true; end = i; }
+    else if (c === "l" || c === "L") { if (i > 1 && (text[i-1] === "l" || text[i-1] === "L")) { longlong = true; end = --i; } else { end = i; } }
+    else break;
+  }
+  const numText = text.substring(0, end);
+  let value;
+  try {
+    if (numText.length >= 2 && numText[0] === "0" && (numText[1] === "x" || numText[1] === "X"))
+      value = BigInt(numText);
+    else if (numText.length >= 2 && numText[0] === "0" && /^[0-7]+$/.test(numText))
+      value = BigInt("0o" + numText);
+    else
+      value = BigInt(numText);
+  } catch { value = 0n; }
+  let type;
+  if (unsigned && longlong) type = TULLONG;
+  else if (unsigned) type = TUINT;
+  else if (longlong) type = TLLONG;
+  else type = TINT;
+  if (!unsigned && isUnsigned(type) === false) {
+    const truncated = truncateConstInt(value, type);
+    if (truncated < 0n && value >= 0n) {
+      type = (type === TLLONG) ? TULLONG : TUINT;
+    }
+  }
+  return new Item(value, type);
+}
+
+function promote(item) {
+  if (item.type === Types.TCHAR || item.type === Types.TSCHAR || item.type === Types.TUCHAR
+      || item.type === Types.TSHORT || item.type === Types.TUSHORT || item.type === Types.TBOOL)
+    return new Item(item.value, TINT);
+  return item;
+}
+
+function unary(op, a) {
+  a = promote(a);
+  switch (op) {
+    case "~": return new Item(~a.value, a.type);
+    case "-": return new Item(-a.value, a.type);
+    case "+": return a;
+    case "!": return new Item(a.value === 0n ? 1n : 0n, TINT);
+    default: return a;
+  }
+}
+
+function binary(op, a, b) {
+  a = promote(a); b = promote(b);
+  const rt = usualArithmeticConversions(a.type, b.type);
+  const lv = truncateConstInt(a.value, rt);
+  const rv = truncateConstInt(b.value, rt);
+  switch (op) {
+    case "+": return new Item(lv + rv, rt);
+    case "-": return new Item(lv - rv, rt);
+    case "*": return new Item(lv * rv, rt);
+    case "/": return new Item(rv !== 0n ? lv / rv : 0n, rt);
+    case "%": return new Item(rv !== 0n ? lv % rv : 0n, rt);
+    case "&": return new Item(lv & rv, rt);
+    case "|": return new Item(lv | rv, rt);
+    case "^": return new Item(lv ^ rv, rt);
+    case "<<": return new Item(lv << rv, rt);
+    case ">>": return new Item(isUnsigned(rt) ? lv >> rv : lv >> rv, rt);
+    case "==": return new Item(lv === rv ? 1n : 0n, TINT);
+    case "!=": return new Item(lv !== rv ? 1n : 0n, TINT);
+    case "<": return new Item(lv < rv ? 1n : 0n, TINT);
+    case ">": return new Item(lv > rv ? 1n : 0n, TINT);
+    case "<=": return new Item(lv <= rv ? 1n : 0n, TINT);
+    case ">=": return new Item(lv >= rv ? 1n : 0n, TINT);
+    case "&&": return new Item((lv !== 0n && rv !== 0n) ? 1n : 0n, TINT);
+    case "||": return new Item((lv !== 0n || rv !== 0n) ? 1n : 0n, TINT);
+    default: return new Item(0n, TINT);
+  }
+}
+
+return { Item, itemFromPPNumber, unary, binary, isUnsigned, SIGNED: TLLONG, UNSIGNED: TULLONG };
 })();
 
 // ====================

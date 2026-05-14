@@ -1,0 +1,24 @@
+{
+  "type": "lib",
+  "name": "libpng",
+  "description": "libpng 1.6.58 — PNG reference library",
+  "includes": ["."],
+  "deps": ["../zlib/lib.json"],
+  "sources": [
+    "png.c",
+    "pngerror.c",
+    "pngget.c",
+    "pngmem.c",
+    "pngpread.c",
+    "pngread.c",
+    "pngrio.c",
+    "pngrtran.c",
+    "pngrutil.c",
+    "pngset.c",
+    "pngtrans.c",
+    "pngwio.c",
+    "pngwrite.c",
+    "pngwtran.c",
+    "pngwutil.c"
+  ]
+}
