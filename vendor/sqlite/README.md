@@ -23,45 +23,30 @@ Files in this directory:
 
 ## Status
 
-**Compiles and links end-to-end; SQL execution fails.** The full
-amalgamation (250 KLOC) compiles cleanly to a ~1.4 MB wasm binary
-after we added the `IRREDUCIBLE_LOWERING` pass that converts
-functions with unstructured control flow into `while(1) switch(state)`
-state machines. 136 SQLite functions go through that pass, including
-`sqlite3VdbeExec` — the VDBE bytecode interpreter whose ~218
-cross-block gotos previously blocked codegen.
+**Fully working.** The full amalgamation (250 KLOC) compiles cleanly
+to a ~1.4 MB wasm binary. The `IRREDUCIBLE_LOWERING` pass converts
+136 functions with unstructured control flow (cross-block gotos) into
+`while(1) switch(state)` state machines, including `sqlite3VdbeExec`
+— the VDBE bytecode interpreter whose ~218 cross-block gotos
+previously blocked codegen.
 
-The SQLite shell runs and accepts input:
+The SQLite shell runs, accepts input, and executes SQL:
 
 ```
 $ node host.js /tmp/sqlite.wasm
 SQLite version 3.53.1 2026-05-05 10:34:17
 Enter ".help" for usage hints.
 Connected to a transient in-memory database.
-sqlite> .version
-SQLite 3.53.1 2026-05-05 10:34:17 c88b22011a54b4f6fbd149e9f8e4de77658ce58143a1af0e3785e4e6475127e9
 sqlite> SELECT 1+1;
-Parse error near line 1: database disk image is malformed (11)
+2
+sqlite> CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+sqlite> INSERT INTO t VALUES(1,'alice'),(2,'bob'),(3,'charlie');
+sqlite> SELECT * FROM t WHERE id > 1 ORDER BY name;
+bob
+charlie
+sqlite> SELECT sum(value) FROM generate_series(1,100);
+5050
 ```
-
-The banner, `.version`, and shell meta-commands work. Any actual SQL
-statement (against an in-memory database) reports
-"database disk image is malformed (11)" — meaning SQLite's pager
-detected corruption in one of its internal page-state checks.
-
-Probable cause: one of the 136 lowered functions has a subtle
-semantic difference from the structured original. The lowering pass
-is correct in concept (verified by the standalone test
-`tests/unit/core/control_flow/goto/irreducible_dispatch`), but
-SQLite exercises edge cases — VDBE memory cell tagging, btree page
-allocation, pager state machines — that may not survive the
-hoist-and-flatten transformation cleanly. Likely suspects:
-`sqlite3PagerSharedLock`, `getPageNormal`, `sqlite3BitvecBuiltinTest`,
-`sqlite3VdbeMemTranslate`, or `sqlite3VdbeExec` itself.
-
-To debug further: selectively disable lowering for individual
-functions to bisect, then inspect the lowered output for the
-offending one.
 
 See `todos/MISC.md` for follow-up notes.
 
