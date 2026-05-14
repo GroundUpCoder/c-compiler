@@ -22,11 +22,13 @@ static unsigned char *read_png_file(const char *path, int *out_w, int *out_h) {
     int color_type = png_get_color_type(png, info);
     int bit_depth = png_get_bit_depth(png, info);
     if (color_type == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(png);
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(png);
     if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) png_set_expand_gray_1_2_4_to_8(png);
     if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
         png_set_gray_to_rgb(png);
     if (bit_depth == 16) png_set_strip_16(png);
-    if (color_type & PNG_COLOR_MASK_ALPHA) png_set_strip_alpha(png);
+    if (color_type & PNG_COLOR_MASK_ALPHA || png_get_valid(png, info, PNG_INFO_tRNS))
+        png_set_strip_alpha(png);
     png_read_update_info(png, info);
     unsigned char *pixels = (unsigned char *)malloc(w * h * 3);
     for (int y = 0; y < h; y++)
