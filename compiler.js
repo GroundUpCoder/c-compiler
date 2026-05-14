@@ -1149,6 +1149,7 @@ function lineOffsetAt(lineOffsets, splicedOffset) {
 class PPRegistry {
   constructor() {
     this.defines = new Map(); // Map<string, string|null> — name -> value (null = defined but no value)
+    this.prelude = "";        // Preprocessor source processed before every translation unit
     this.includePaths = [];   // string[]
     this.sourceBuffers = new Map(); // Map<string, string> — path -> content cache
     this.onceGuards = new Set();    // Set<string> — files with #pragma once
@@ -1183,6 +1184,13 @@ function preprocess(filename, initialTokens, ppRegistry) {
       }
     }
     macros.set(name, m);
+  }
+
+  // --- 1b. PROCESS PRELUDE ---
+  if (ppRegistry.prelude) {
+    const preludeLex = lex("<prelude>", ppRegistry.prelude);
+    const preludeTokens = preludeLex.tokens.filter(t => t.kind !== TokenKind.EOS);
+    initialTokens = [...preludeTokens, ...initialTokens];
   }
 
   function isActive() {
@@ -16163,11 +16171,6 @@ void __run_atexits(void);
 #include <stddef.h>
 __require_source("__malloc.c");
 
-#define __builtin_clz(x) __wasm(int, (x), op 0x67)
-#define __builtin_ctz(x) __wasm(int, (x), op 0x68)
-#define __builtin_clzll(x) ((int)__wasm(long long, (x), op 0x79))
-#define __builtin_ctzll(x) ((int)__wasm(long long, (x), op 0x7a))
-
 void *malloc(size_t size);
 void free(void *ptr);
 void *calloc(size_t count, size_t size);
@@ -20695,6 +20698,16 @@ function createDefaultPPRegistry() {
   for (const [k, v] of Object.entries(defs)) {
     pp.defines.set(k, v);
   }
+
+  pp.prelude = [
+    "#define __builtin_clz(x) __wasm(int, (x), op 0x67)",
+    "#define __builtin_ctz(x) __wasm(int, (x), op 0x68)",
+    "#define __builtin_clzl(x) __builtin_clz(x)",
+    "#define __builtin_ctzl(x) __builtin_ctz(x)",
+    "#define __builtin_clzll(x) ((int)__wasm(long long, (x), op 0x79))",
+    "#define __builtin_ctzll(x) ((int)__wasm(long long, (x), op 0x7a))",
+  ].join("\n") + "\n";
+
   return pp;
 }
 
