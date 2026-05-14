@@ -1,7 +1,7 @@
 {
   "bin": true,
   "name": "libpng-test",
-  "description": "libpng version check",
+  "description": "libpng golden PNG decode tests",
   "deps": ["lib.json"],
   "sources": ["test_main.c"]
 }
