@@ -5831,30 +5831,6 @@ return { normalize, inlineBackwardGotos, optimize, collectTraces, classifyPair }
 
 const IRREDUCIBLE_LOWERING = (() => {
 
-// Walk a function body and decide whether the codegen will be unable to
-// resolve all of its gotos via structured wasm scopes. We could try to
-// mirror the codegen's scope tracking precisely, but the classification is
-// surprisingly subtle (BOTH-style labels, inlineBackwardGotos rewrites,
-// nested branches), and getting it wrong silently miscompiles. So we adopt
-// a conservative policy: any function with ANY label that has at least one
-// goto gets lowered. Functions without gotos are unaffected. The runtime
-// cost is paid only by functions that already use unstructured control
-// flow, where the perf penalty is acceptable.
-function needsLowering(funcDef) {
-  const body = funcDef.body;
-  if (!body) return false;
-  const { labels, gotos } = GOTO_NORMALIZER.collectTraces(body);
-  // No gotos → no need to lower. Labels without gotos (switch cases, etc.)
-  // are handled fine by structured codegen.
-  if (gotos.size === 0) return false;
-  // Any goto whose target is unresolved would already be a parse error;
-  // we just check that the function actually contains a real goto.
-  for (const [g, _info] of gotos) {
-    if (g.target) return true;
-  }
-  return false;
-}
-
 // ----- Segment + terminator types -----
 //
 // A Segment is the AST equivalent of a basic block — a maximal sequence of
@@ -6414,23 +6390,7 @@ function lower(funcDef, dumpSegments) {
   funcDef.body = newBody;
 }
 
-function optimize(unit, options) {
-  if (!unit) return;
-  if (options && options.disable) return;
-  const debugLog = options && options.debugLog;
-  const dumpSegments = options && options.dumpSegments;
-  const allFns = [...unit.definedFunctions, ...unit.staticFunctions];
-  for (const fn of allFns) {
-    if (needsLowering(fn)) {
-      if (debugLog) {
-        debugLog(`[irreducible] lowering '${fn.name}'\n`);
-      }
-      lower(fn, dumpSegments);
-    }
-  }
-}
-
-return { optimize, needsLowering, lower };
+return { lower };
 
 })();
 
@@ -20745,11 +20705,11 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     if (!options?.compilerOptions?.noGotoNormalize) {
       GOTO_NORMALIZER.optimize(unit);
     }
-    // IRREDUCIBLE_LOWERING isn't a per-unit pass — it's invoked
-    // on-demand at codegen time, only for functions whose structured
-    // emit failed. The default path is structured codegen for everyone
-    // (faster, smaller wasm); we only pay the rewrite + retry cost for
-    // functions that genuinely can't be expressed structurally.
+    // IRREDUCIBLE_LOWERING is invoked on-demand at codegen time, only for
+    // functions whose structured emit failed (see the retry block in the
+    // wasm emitter driver). The default path is structured codegen for
+    // every function; we only pay the rewrite + retry cost for functions
+    // that genuinely can't be expressed structurally.
     if (timing) timing.parseMs += hrtime() - tParse;
     if (parseResult.errors.length > 0) {
       hasErrors = true;
