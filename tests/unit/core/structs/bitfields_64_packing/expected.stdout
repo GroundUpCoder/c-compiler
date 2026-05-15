@@ -1,0 +1,7 @@
+sizeof_A=8
+sizeof_B=16
+sizeof_C=8
+A: lo=deadbeef mid=abcd hi=1234
+B: a=ffffffffff b=3fffffff
+after_b_a_change: a=123456789a b=3fffffff
+C: x=1 y=2 z=3

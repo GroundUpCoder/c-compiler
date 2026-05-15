@@ -1,0 +1,7 @@
+sizeof_U=8 sizeof_S=8
+u.x = 0xdeadbeefcafebabe
+u.x_max = 0xffffffffffffffff
+u.x_zero = 0x0
+s.y_neg = -1
+s.y_max = 9223372036854775807
+s.y_min = -9223372036854775808

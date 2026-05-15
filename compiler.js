@@ -8992,8 +8992,13 @@ class Parser {
           if (this.matchText(":")) {
             const widthExpr = this.parseAssignmentExpression();
             bitWidth = Number(constEvalInt(widthExpr) ?? 0n);
-            if (mType.size > 4) {
-              this.error(this.peek(-1), "Bit-fields wider than 32 bits are not supported (use int or unsigned int)");
+            if (!mType.isInteger || !mType.isInteger()) {
+              this.error(this.peek(-1), "Bit-field must have integer type");
+            } else if (mType.size > 8) {
+              this.error(this.peek(-1), "Bit-field storage type must be at most 8 bytes");
+            }
+            if (bitWidth > mType.size * 8) {
+              this.error(this.peek(-1), `Bit-field width ${bitWidth} exceeds storage type's ${mType.size * 8} bits`);
             }
           }
 
@@ -14730,39 +14735,88 @@ class CodeGenerator {
   // --- Bitfield load/store ---
   emitBitFieldLoad(field) {
     const bw = field.bitWidth, bo = field.bitOffset;
+    const isUnsigned = this.isUnsignedType(field.type);
+    // i32 path covers 1/2/4-byte storage; i64 path covers 8-byte storage.
+    const use64 = field.type.size === 8;
     this.emitLoad(field.type);
-    if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHR_U); }
-    if (bw < 32) { this.body.i32Const((1 << bw) - 1); this.body.aop(WT_I32, ALU.OP_AND); }
-    if (!this.isUnsignedType(field.type) && bw < 32) {
-      const shift = 32 - bw;
-      this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHL);
-      this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHR_S);
+    if (!use64) {
+      if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHR_U); }
+      if (bw < 32) { this.body.i32Const((1 << bw) - 1); this.body.aop(WT_I32, ALU.OP_AND); }
+      if (!isUnsigned && bw < 32) {
+        const shift = 32 - bw;
+        this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHL);
+        this.body.i32Const(shift); this.body.aop(WT_I32, ALU.OP_SHR_S);
+      }
+    } else {
+      // 64-bit storage unit.
+      if (bo !== 0) { this.body.i64Const(BigInt(bo)); this.body.aop(WT_I64, ALU.OP_SHR_U); }
+      if (bw < 64) {
+        const mask = (1n << BigInt(bw)) - 1n;
+        this.body.i64Const(mask); this.body.aop(WT_I64, ALU.OP_AND);
+      }
+      if (!isUnsigned && bw < 64) {
+        const shift = BigInt(64 - bw);
+        this.body.i64Const(shift); this.body.aop(WT_I64, ALU.OP_SHL);
+        this.body.i64Const(shift); this.body.aop(WT_I64, ALU.OP_SHR_S);
+      }
     }
   }
 
   emitBitFieldStore(field) {
     const bw = field.bitWidth, bo = field.bitOffset;
-    if (bw >= 32) { this.emitStore(field.type); return; }
-    const mask = ((1 << bw) - 1) << bo;
-    this.pushLocalScope();
-    const valLocal = this.allocLocal(WT_I32);
-    const addrLocal = this.allocLocal(WT_I32);
-    this.body.localSet(valLocal);
-    this.body.localSet(addrLocal);
-    this.body.localGet(addrLocal);
-    this.emitLoad(field.type);
-    this.body.i32Const(~mask);
-    this.body.aop(WT_I32, ALU.OP_AND);
-    this.body.localGet(valLocal);
-    this.body.i32Const((1 << bw) - 1);
-    this.body.aop(WT_I32, ALU.OP_AND);
-    if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHL); }
-    this.body.aop(WT_I32, ALU.OP_OR);
-    this.body.localSet(valLocal);
-    this.body.localGet(addrLocal);
-    this.body.localGet(valLocal);
-    this.emitStore(field.type);
-    this.popLocalScope();
+    const unitBits = field.type.size * 8;  // 8, 16, 32, or 64
+    const use64 = field.type.size === 8;
+    // Full-width store: no read-modify-write needed.
+    if (bw >= unitBits) { this.emitStore(field.type); return; }
+
+    if (!use64) {
+      const mask = ((1 << bw) - 1) << bo;
+      this.pushLocalScope();
+      const valLocal = this.allocLocal(WT_I32);
+      const addrLocal = this.allocLocal(WT_I32);
+      this.body.localSet(valLocal);
+      this.body.localSet(addrLocal);
+      this.body.localGet(addrLocal);
+      this.emitLoad(field.type);
+      this.body.i32Const(~mask);
+      this.body.aop(WT_I32, ALU.OP_AND);
+      this.body.localGet(valLocal);
+      this.body.i32Const((1 << bw) - 1);
+      this.body.aop(WT_I32, ALU.OP_AND);
+      if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHL); }
+      this.body.aop(WT_I32, ALU.OP_OR);
+      this.body.localSet(valLocal);
+      this.body.localGet(addrLocal);
+      this.body.localGet(valLocal);
+      this.emitStore(field.type);
+      this.popLocalScope();
+    } else {
+      // 64-bit storage unit. Same shape as the i32 path but with i64 ops
+      // and BigInt-encoded mask constants. The mask must use BigInt
+      // throughout: JS bitwise ops on `Number` truncate to 32 bits.
+      const widthMask = (1n << BigInt(bw)) - 1n;
+      const mask = widthMask << BigInt(bo);
+      const notMask = (~mask) & 0xFFFFFFFFFFFFFFFFn;  // clamp to 64 bits
+      this.pushLocalScope();
+      const valLocal = this.allocLocal(WT_I64);
+      const addrLocal = this.allocLocal(WT_I32);
+      this.body.localSet(valLocal);
+      this.body.localSet(addrLocal);
+      this.body.localGet(addrLocal);
+      this.emitLoad(field.type);
+      this.body.i64Const(notMask);
+      this.body.aop(WT_I64, ALU.OP_AND);
+      this.body.localGet(valLocal);
+      this.body.i64Const(widthMask);
+      this.body.aop(WT_I64, ALU.OP_AND);
+      if (bo !== 0) { this.body.i64Const(BigInt(bo)); this.body.aop(WT_I64, ALU.OP_SHL); }
+      this.body.aop(WT_I64, ALU.OP_OR);
+      this.body.localSet(valLocal);
+      this.body.localGet(addrLocal);
+      this.body.localGet(valLocal);
+      this.emitStore(field.type);
+      this.popLocalScope();
+    }
   }
 
   // --- VaArg load/store ---

@@ -1,0 +1,7 @@
+after_add: a=0x1000000064 b=0
+after_or: a=0xffffffffff
+after_and: a=0xf0f0f0f0f
+after_shl: a=0x800000000
+after_shr: a=0xffffffff
+after_mul: a=300 b=77
+after_increments: b=7

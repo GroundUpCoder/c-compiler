@@ -1,0 +1,4 @@
+u33_trunc=0x1ffffffff
+u52_trunc=0xfffffffffffff
+s33_trunc=-1
+s33_sign=-4294967296

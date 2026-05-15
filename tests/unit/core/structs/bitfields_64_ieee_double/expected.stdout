@@ -1,0 +1,10 @@
+sizeof_union=8
+zero sgn=0 exp=0 frc=0x0 i=0x0
+one sgn=0 exp=1023 frc=0x0 i=0x3ff0000000000000
+neg_one sgn=1 exp=1023 frc=0x0 i=0xbff0000000000000
+two sgn=0 exp=1024 frc=0x0 i=0x4000000000000000
+half sgn=0 exp=1022 frc=0x0 i=0x3fe0000000000000
+four sgn=0 exp=1025 frc=0x0 i=0x4010000000000000
+hand-set i=0xc004000000000000
+flipped i=0xbff0000000000000
+to_inf i=0x7ff0000000000000
