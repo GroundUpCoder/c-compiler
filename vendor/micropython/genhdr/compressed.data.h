@@ -65,6 +65,7 @@ MP_MATCH_COMPRESSED("join expects a list of str/bytes objects consistent with se
 MP_MATCH_COMPRESSED("keyword argument(s) not implemented - use normal args instead", "\377\211\374\203implemented\344\325normal\313instead")
 MP_MATCH_COMPRESSED("local variable referenced before assignment", "\377local variable referenced before\212")
 MP_MATCH_COMPRESSED("long int not supported in this build", "\377\316\234\203\205\251this build")
+MP_MATCH_COMPRESSED("malformed f-string", "malformed f-string")
 MP_MATCH_COMPRESSED("math domain error", "math domain error")
 MP_MATCH_COMPRESSED("memory allocation failed, heap is locked", "\377memory\366failed, heap\303locked")
 MP_MATCH_COMPRESSED("module not found", "\377\277\203\250")
@@ -117,12 +118,12 @@ MP_MATCH_COMPRESSED("unsupported type for operator", "\377unsupported\237\224ope
 MP_MATCH_COMPRESSED("wrong number of arguments", "\377\232\223\227\257")
 MP_MATCH_COMPRESSED("wrong number of values to unpack", "\377\232\223\227\300\213unpack")
 MP_MATCH_COMPRESSED("zero step", "\377\240\320")
-// Total input length:      3327
-// Total compressed length: 1505
+// Total input length:      3346
+// Total compressed length: 1525
 // Total data length:       1098
-// Predicted saving:        724
+// Predicted saving:        723
 
-// gzip length:             2031
-// Percentage of gzip:      128.2%
-// zlib length:             2019
-// Percentage of zlib:      128.9%
+// gzip length:             2044
+// Percentage of gzip:      128.3%
+// zlib length:             2032
+// Percentage of zlib:      129.1%

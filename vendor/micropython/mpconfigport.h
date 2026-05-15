@@ -26,6 +26,7 @@
 #define MICROPY_PY_BUILTINS_NEXT2         (1)
 #define MICROPY_COMP_RETURN_IF_EXPR       (1)
 #define MICROPY_COMP_MODULE_CONST         (1)
+#define MICROPY_PY_FSTRINGS               (1)
 
 // You can disable the built-in MicroPython compiler by setting the following
 // config option to 0.  If you do this then you won't get a REPL prompt, but you
