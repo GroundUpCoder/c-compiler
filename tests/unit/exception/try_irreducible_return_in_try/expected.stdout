@@ -1,0 +1,3 @@
+noop:   r=70 ev=12224
+return: r=50 ev=123
+throw:  r=60 ev=125

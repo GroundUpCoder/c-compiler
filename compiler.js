@@ -3170,11 +3170,6 @@ class Expr {
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
       this.definition = null;
       this.importModule = null; this.importName = null;
-      // Populated by IRREDUCIBLE_LOWERING when it detects a structurally
-      // unsupported pattern (e.g. native try/catch in a function that
-      // also needs irreducible lowering). The codegen driver pushes
-      // these onto gotoErrors so they surface like any other diagnostic.
-      this.irreducibleErrors = null;
       Object.seal(this);
     }
   }
@@ -5438,9 +5433,12 @@ function checkHoistSafe(labelInfo, hoistTarget, body, switchBodies) {
   // itself. (The post-label stmts move with the tail.)
 
   // Condition 3: the path from labelCompound up to lcaCompound must NOT
-  // cross a loop or switch body. Hoisting a label out of a loop body
-  // changes the loop's iteration semantics; out of a switch changes case
-  // dispatch + break semantics.
+  // cross a loop, switch, or try/catch body. Hoisting a label out of a
+  // loop body changes the loop's iteration semantics; out of a switch
+  // changes case dispatch + break semantics; out of a try-body would
+  // move statements outside the protection of the corresponding catch
+  // (and out of a catch-body would similarly change which throws are
+  // re-caught).
   const trace = labelInfo.trace;
   const lcaIdx = trace.indexOf(hoistTarget.lcaCompound);
   for (let i = lcaIdx + 1; i < trace.length; i++) {
@@ -5450,6 +5448,9 @@ function checkHoistSafe(labelInfo, hoistTarget, body, switchBodies) {
     }
     if (node instanceof AST.SSwitch) {
       return { ok: false, reason: `cannot hoist label '${labelInfo.label?.name || '?'}' out of a switch body` };
+    }
+    if (node instanceof AST.STryCatch) {
+      return { ok: false, reason: `cannot hoist label '${labelInfo.label?.name || '?'}' out of a try/catch body` };
     }
   }
 
@@ -5936,13 +5937,6 @@ const Term = {
   // terminator emits its branch).
   halt: () => ({ kind: "halt" }),
 };
-
-// Diagnostic object shape used by setjmp-aware irreducible lowering.
-// Mirrors the shape codegen's gotoErrors use so the driver can route both
-// through the same surfaceing path.
-function makeErr(loc, message) {
-  return { message, filename: (loc && loc.filename) || '?', line: (loc && loc.line) || 0 };
-}
 
 // ----- Variable hoisting -----
 //
@@ -6686,7 +6680,6 @@ function lower(funcDef, dumpSegments) {
     regionStack: [],      // segmentizer-time stack of active region ids
     segmentHandlerIds: new Map(),  // segmentId → innermost regionId (-1 if none)
     tags: new Map(),      // distinct tags appearing in any catch (by name)
-    errors: [],           // loud-fail diagnostics
   };
 
   const { decls, rewrittenBody } = hoistDeclarations(funcDef);
@@ -6705,13 +6698,6 @@ function lower(funcDef, dumpSegments) {
       }
       dumpSegments(`  seg ${s.id}: ${s.stmts.length} stmts → ${td}\n`);
     }
-  }
-
-  // Bubble loud-fail diagnostics. We attach them to funcDef so the caller
-  // (the codegen driver) can surface them as compilation errors.
-  if (tryCtx.errors.length > 0) {
-    funcDef.irreducibleErrors = tryCtx.errors;
-    return;  // skip wrapper synthesis — emit will fail and surface errors
   }
 
   const newBody = synthesizeWrapper(funcDef, decls, segments, tryCtx);
@@ -16331,15 +16317,6 @@ function generateCode(units, outputFile, options) {
           writeErr(`[irreducible] lowering '${fdef.name}' (retry after structured emit failed)\n`);
         }
         IRREDUCIBLE_LOWERING.lower(fdef, dumpIrredSegments ? writeErr : null);
-        // The lowering pass may have detected structurally unsupported
-        // constructs (e.g. native try/catch in a function that also needs
-        // irreducible lowering); surface those alongside ordinary goto
-        // errors and skip the re-emit (fdef.body is in an inconsistent
-        // state when lowering bailed out).
-        if (fdef.irreducibleErrors && fdef.irreducibleErrors.length > 0) {
-          for (const e of fdef.irreducibleErrors) cg.gotoErrors.push(e);
-          continue;
-        }
         cg.emitFunctionBody(fdef);
         loweredFnNames.push(fdef.name);
       }
