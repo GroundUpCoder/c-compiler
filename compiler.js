@@ -3170,6 +3170,11 @@ class Expr {
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
       this.definition = null;
       this.importModule = null; this.importName = null;
+      // Populated by IRREDUCIBLE_LOWERING when it detects a structurally
+      // unsupported pattern (e.g. native try/catch in a function that
+      // also needs irreducible lowering). The codegen driver pushes
+      // these onto gotoErrors so they surface like any other diagnostic.
+      this.irreducibleErrors = null;
       Object.seal(this);
     }
   }
@@ -5922,11 +5927,68 @@ const Term = {
     kind: "switch", scrutinee, cases, defaultTarget,
   }),
   return: (expr) => ({ kind: "return", expr }),
+  // SThrow as a terminator — emitted by the segmentizer when it rewrites
+  // a longjmp(buf, val) call. The thrown exception is caught by the
+  // physical try/catch that the wrapper synthesizes around the switch.
+  throw: (sthrow) => ({ kind: "throw", sthrow }),
   // "halt" marks a segment that exits the loop-switch and falls out the
   // bottom of the function (used for unreachable continuations after a
   // terminator emits its branch).
   halt: () => ({ kind: "halt" }),
 };
+
+// Diagnostic object shape used by setjmp-aware irreducible lowering.
+// Mirrors the shape codegen's gotoErrors use so the driver can route both
+// through the same surfaceing path.
+function makeErr(loc, message) {
+  return { message, filename: (loc && loc.filename) || '?', line: (loc && loc.line) || 0 };
+}
+
+// Recognize the STryCatch that Parser.lowerSetjmpLongjmp emits. The
+// expected shape is:
+//   try { <tryBody> }
+//   catch __LongJump (id, val) {
+//     if (id != buf[0]) throw __LongJump(id, val);
+//     <userBody>
+//   }
+// Returns { tag, bufExpr, userBody } on a match, or { error } describing
+// what didn't match. Used by the segmentizer to extract just `userBody`
+// for in-switch segmentization while the catch dispatcher (built by
+// wrapper synthesis) handles the id-check and rethrow.
+function tryRecognizeSetjmpTryCatch(node) {
+  if (node.catches.length !== 1) {
+    return { error: `try/catch with ${node.catches.length} catch clauses isn't supported in an irreducible-lowered function` };
+  }
+  const cc = node.catches[0];
+  if (!cc.tag || cc.tag.name !== Lexer.intern("__LongJump")) {
+    return { error: `native try/catch isn't supported in an irreducible-lowered function` };
+  }
+  const cbody = cc.body;
+  if (!(cbody instanceof AST.SCompound) || cbody.statements.length < 1) {
+    return { error: `__LongJump catch body has unexpected shape` };
+  }
+  const first = cbody.statements[0];
+  if (!(first instanceof AST.SIf)
+      || !(first.condition instanceof AST.EBinary)
+      || first.condition.op !== "NE"
+      || !(first.condition.right instanceof AST.ESubscript)) {
+    return { error: `__LongJump catch body's rethrow-if-mismatch SIf has unexpected shape` };
+  }
+  const bufExpr = first.condition.right.array;
+  const rest = cbody.statements.slice(1);
+  const userBody = rest.length === 1
+    ? rest[0]
+    : new AST.SCompound(cbody.loc, rest);
+  return { tag: cc.tag, bufExpr, userBody };
+}
+
+// `buf[0]` lvalue access — used by the catch dispatcher (synthesizer) to
+// check whether a thrown LongJump's id matches a setjmp's current id.
+// `buf` has type `int[1]` (= `jmp_buf`), so buf[0] is int.
+function makeBufIdExprIrr(bufExpr) {
+  const loc = bufExpr.loc;
+  return AST.makeSubscript(loc, bufExpr, new AST.EInt(loc, Types.TINT, 0n));
+}
 
 // ----- Variable hoisting -----
 //
@@ -6022,6 +6084,14 @@ function hoistDeclarations(funcDef) {
       const newBody = rewrite(stmt.body);
       return new AST.SSwitch(stmt.loc, stmt.expr, newBody);
     }
+    if (stmt instanceof AST.STryCatch) {
+      // Recurse into try-body and each catch body so SDecls inside are
+      // also hoisted. (The segmentizer pattern-matches setjmp-derived
+      // STryCatch and lifts both bodies out into the shared switch.)
+      const newTry = rewrite(stmt.tryBody);
+      const newCatches = stmt.catches.map(c => ({ ...c, body: rewrite(c.body) }));
+      return new AST.STryCatch(stmt.loc, newTry, newCatches);
+    }
     return stmt;  // SExpr, SReturn, SGoto, SLabel, SBreak, SContinue, SEmpty, etc.
   }
 
@@ -6037,7 +6107,7 @@ function hoistDeclarations(funcDef) {
 //
 // Loop and switch contexts are tracked on `loopStack` so SBreak/SContinue
 // resolve to the right exit/header ids.
-function buildSegments(body) {
+function buildSegments(body, setjmpCtx) {
   const segments = [];
   let curSeg = null;
   let nextId = 0;
@@ -6263,6 +6333,53 @@ function buildSegments(body) {
       return;
     }
 
+    // STryCatch produced by Parser.lowerSetjmpLongjmp: hoist its
+    // try-body and (user portion of) catch-body into segments in the
+    // shared switch, and record the region so wrapper synthesis can
+    // build a dispatcher in the physical try/catch that wraps the
+    // switch. Native (source-level) try/catch isn't supported in
+    // irreducible-lowered functions — surface a real diagnostic.
+    if (node instanceof AST.STryCatch) {
+      const region = tryRecognizeSetjmpTryCatch(node);
+      if (region.error) {
+        setjmpCtx.errors.push(makeErr(node.loc, region.error));
+        curSeg.stmts.push(node);  // leave as-is so codegen can report further issues
+        return;
+      }
+      // Remember the tag — all regions in this function share it.
+      if (!setjmpCtx.tag) setjmpCtx.tag = region.tag;
+
+      const tryId = allocId();
+      const handlerEntryId = allocId();
+      const joinId = allocId();
+      setjmpCtx.regions.push({ bufExpr: region.bufExpr, handlerEntryId });
+
+      // The `buf[0] = ++counter` SExpr setjmp lowering put before this
+      // STryCatch was already pushed into the current segment by an
+      // earlier visit(). Close the current segment falling through to
+      // the try entry.
+      close(Term.fallthrough(tryId));
+
+      openSeg(tryId);
+      visit(node.tryBody);
+      if (curSeg !== null) close(Term.fallthrough(joinId));
+
+      openSeg(handlerEntryId);
+      visit(region.userBody);
+      if (curSeg !== null) close(Term.fallthrough(joinId));
+
+      openSeg(joinId);
+      return;
+    }
+
+    // SThrow as a terminator: closes the current segment. The thrown
+    // exception is caught by the physical try/catch the wrapper
+    // synthesizes around the switch (when any setjmp region exists).
+    if (node instanceof AST.SThrow) {
+      close(Term.throw(node));
+      return;
+    }
+
     // Straight-line statements: SExpr, SDecl (post-hoist — only static/extern
     // locals survive), and anything else we don't transform.
     curSeg.stmts.push(node);
@@ -6300,7 +6417,7 @@ function buildSegments(body) {
 //                     continue;
 //   return(e)      → return e;
 //   halt()         → break;   /* exits the while(1) */
-function synthesizeWrapper(funcDef, hoistedDecls, segments) {
+function synthesizeWrapper(funcDef, hoistedDecls, segments, setjmpCtx) {
   const loc = funcDef.loc;
   const stateVar = new AST.DVar(loc, "__irreducible_state",
     Types.TINT, Types.StorageClass.AUTO, null);
@@ -6388,6 +6505,11 @@ function synthesizeWrapper(funcDef, hoistedDecls, segments) {
     if (term.kind === "return") {
       return [new AST.SReturn(loc, term.expr)];
     }
+    if (term.kind === "throw") {
+      // The throw itself transfers control to the catch on the physical
+      // try/catch wrapping the whole switch; no continuation needed.
+      return [term.sthrow];
+    }
     if (term.kind === "halt") {
       // Either function fall-through (reached end of source body without
       // an explicit return) or an unreachable continuation after a goto.
@@ -6417,9 +6539,53 @@ function synthesizeWrapper(funcDef, hoistedDecls, segments) {
   const switchStmt = new AST.SSwitch(loc, stateRef(),
     new AST.SCompound(loc, switchBodyStmts));
 
-  // The while loop wraps just the switch. Its body is one statement; in C
-  // that's fine without braces, but we always wrap in a compound for sanity.
-  const whileBody = new AST.SCompound(loc, [switchStmt]);
+  // If the function used setjmp/longjmp, wrap the switch in a try/catch
+  // for __LongJump. The catch dispatcher routes each LongJump to the
+  // setjmp-region's handler entry segment based on the buf id it carries.
+  // (Single-handler functions skip the buf check — there's only one
+  // possible target.)
+  let switchOrTry = switchStmt;
+  if (setjmpCtx && setjmpCtx.regions.length > 0) {
+    const tag = setjmpCtx.tag;
+    // Catch bindings: int id, int val.
+    const idName = Lexer.intern("__irreducible_caught_id");
+    const valName = Lexer.intern("__irreducible_caught_val");
+    const idVar = new AST.DVar(loc, idName, Types.TINT, Types.StorageClass.NONE, null);
+    idVar.definition = idVar;
+    const valVar = new AST.DVar(loc, valName, Types.TINT, Types.StorageClass.NONE, null);
+    valVar.definition = valVar;
+
+    // Build the catch body as an if/else chain:
+    //   if (id == buf1[0])      state = handler1;
+    //   else if (id == buf2[0]) state = handler2;
+    //   ...
+    //   else throw __LongJump(id, val);
+    // After the catch falls off the end, the while loop iterates and
+    // re-enters the switch at the new state.
+    const rethrow = new AST.SThrow(loc, tag,
+      [new AST.EIdent(loc, Types.TINT, idVar),
+       new AST.EIdent(loc, Types.TINT, valVar)]);
+    let chain = rethrow;
+    for (let i = setjmpCtx.regions.length - 1; i >= 0; i--) {
+      const region = setjmpCtx.regions[i];
+      const idRef = new AST.EIdent(loc, Types.TINT, idVar);
+      const myId = makeBufIdExprIrr(region.bufExpr);
+      const matchCond = new AST.EBinary(loc, Types.TINT, "EQ", idRef, myId);
+      chain = new AST.SIf(loc, matchCond, setState(region.handlerEntryId), chain);
+    }
+    const catchBody = new AST.SCompound(loc, [chain]);
+
+    const catchClause = {
+      tag,
+      bindings: [idName, valName],
+      bindingVars: [idVar, valVar],
+      body: catchBody,
+    };
+    switchOrTry = new AST.STryCatch(loc, switchStmt, [catchClause]);
+  }
+
+  // The while loop wraps just the switch (or the try/catch around it).
+  const whileBody = new AST.SCompound(loc, [switchOrTry]);
   const whileCond = new AST.EInt(loc, Types.TINT, 1n);
   const whileStmt = new AST.SWhile(loc, whileCond, whileBody);
 
@@ -6436,8 +6602,20 @@ function synthesizeWrapper(funcDef, hoistedDecls, segments) {
 }
 
 function lower(funcDef, dumpSegments) {
+  // The segmentizer recognizes the STryCatch shape that
+  // Parser.lowerSetjmpLongjmp emits and segmentizes its try/catch
+  // contents inline (hoisted out of one segment into the global
+  // while-switch). The catch dispatcher to that shape is added during
+  // wrapper synthesis. We populate setjmpCtx as we encounter setjmp-
+  // shaped STryCatch nodes — its `regions` list drives the dispatcher.
+  const setjmpCtx = {
+    tag: null,             // first __LongJump tag we see (all share it)
+    regions: [],           // [{ bufExpr, handlerEntryId, idVar, valVar }]
+    errors: [],            // [{ message, filename, line }]
+  };
+
   const { decls, rewrittenBody } = hoistDeclarations(funcDef);
-  const segments = buildSegments(rewrittenBody);
+  const segments = buildSegments(rewrittenBody, setjmpCtx);
   if (dumpSegments) {
     for (const s of segments) {
       const t = s.term;
@@ -6447,12 +6625,21 @@ function lower(funcDef, dumpSegments) {
         else if (t.kind === 'goto') td = 'goto→' + t.targetId;
         else if (t.kind === 'branch') td = 'branch→' + t.thenId + '/' + t.elseId;
         else if (t.kind === 'switch') td = 'sw[' + t.cases.map(c => c.value+'→'+c.target).join(',') + '] def→' + t.defaultTarget;
+        else if (t.kind === 'throw') td = 'throw';
         else td = t.kind;
       }
       dumpSegments(`  seg ${s.id}: ${s.stmts.length} stmts → ${td}\n`);
     }
   }
-  const newBody = synthesizeWrapper(funcDef, decls, segments);
+
+  // Bubble loud-fail diagnostics. We attach them to funcDef so the caller
+  // (the codegen driver) can surface them as compilation errors.
+  if (setjmpCtx && setjmpCtx.errors.length > 0) {
+    funcDef.irreducibleErrors = setjmpCtx.errors;
+    return;  // skip wrapper synthesis — emit will fail and surface errors
+  }
+
+  const newBody = synthesizeWrapper(funcDef, decls, segments, setjmpCtx);
   funcDef.body = newBody;
 }
 
@@ -11695,7 +11882,11 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   }
   if (!counterVar) throw new Error("__setjmp_id_counter not found in externVariables");
 
-  // Lower all function bodies
+  // Lower all function bodies. The irreducible lowering, if it later
+  // fires on a setjmp-using function, recognizes the STryCatch shape we
+  // emit here and segmentizes the try/catch contents inline — that way
+  // gotos between the try and catch regions cross cleanly via state
+  // transitions in the lifted while-switch.
   const lowerFunc = (func) => {
     if (!func.body) return;
     if (func.body instanceof AST.SCompound) {
@@ -16065,6 +16256,15 @@ function generateCode(units, outputFile, options) {
           writeErr(`[irreducible] lowering '${fdef.name}' (retry after structured emit failed)\n`);
         }
         IRREDUCIBLE_LOWERING.lower(fdef, dumpIrredSegments ? writeErr : null);
+        // The lowering pass may have detected structurally unsupported
+        // constructs (e.g. native try/catch in a function that also needs
+        // irreducible lowering); surface those alongside ordinary goto
+        // errors and skip the re-emit (fdef.body is in an inconsistent
+        // state when lowering bailed out).
+        if (fdef.irreducibleErrors && fdef.irreducibleErrors.length > 0) {
+          for (const e of fdef.irreducibleErrors) cg.gotoErrors.push(e);
+          continue;
+        }
         cg.emitFunctionBody(fdef);
         loweredFnNames.push(fdef.name);
       }
