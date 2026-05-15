@@ -1,5 +1,8 @@
 42
+bad: invalid syntax for integer
 caught: uh oh
 caught: outer wrapping inner
 cleanup
 result: 1
+cleanup2
+propagated: k

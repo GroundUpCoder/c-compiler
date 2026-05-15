@@ -11634,46 +11634,56 @@ const maybeDecay = AST.maybeDecay;
 // ========== setjmp/longjmp lowering ==========
 
 // Check if an expression is a call to a named function, return the ECall or null
-function getNamedCall(expr, name) {
-  if (expr instanceof AST.EComma) {
-    return getNamedCall(expr.expressions[expr.expressions.length - 1], name);
+// Find a direct call to `name` in `expr`. If `expr` is a comma expression,
+// looks through to the last sub-expression and (on a match) collects the
+// LEADING sub-expressions into `prefix` — they're side-effecting and must
+// be evaluated before the call site is rewritten. Used to preserve calls
+// like `nlr_push_tail(...)` in `nlr_push`'s expansion:
+//   #define nlr_push(buf) (nlr_push_tail(buf), setjmp((buf)->jmpbuf))
+// where setjmp lowering otherwise would silently drop nlr_push_tail.
+//
+// Returns { call, prefix } on match (prefix may be empty), or null.
+function getNamedCallWithPrefix(expr, name) {
+  const prefix = [];
+  while (expr instanceof AST.EComma) {
+    for (let i = 0; i < expr.expressions.length - 1; i++) prefix.push(expr.expressions[i]);
+    expr = expr.expressions[expr.expressions.length - 1];
   }
   if (!(expr instanceof AST.ECall)) return null;
   let callee = expr.callee;
   if (callee instanceof AST.EDecay) callee = callee.operand;
   if (!(callee instanceof AST.EIdent)) return null;
   if (callee.name !== name) return null;
-  return expr;
+  return { call: expr, prefix };
+}
+
+function getNamedCall(expr, name) {
+  const r = getNamedCallWithPrefix(expr, name);
+  return r ? r.call : null;
 }
 
 // Detect setjmp patterns in an if-condition.
-// Returns {call, zeroIsTrue} or {call: null}
+// Returns {call, zeroIsTrue, prefix} on match (prefix = side-effecting
+// expressions to evaluate before the rewritten setjmp), or {call: null}.
 function extractSetjmpCall(cond) {
   if (cond instanceof AST.EBinary) {
-    if (cond.op === "EQ") {
-      let call = getNamedCall(cond.left, "setjmp");
-      if (call && cond.right instanceof AST.EInt && cond.right.value === 0n)
-        return { call, zeroIsTrue: true };
-      call = getNamedCall(cond.right, "setjmp");
-      if (call && cond.left instanceof AST.EInt && cond.left.value === 0n)
-        return { call, zeroIsTrue: true };
-    }
-    if (cond.op === "NE") {
-      let call = getNamedCall(cond.left, "setjmp");
-      if (call && cond.right instanceof AST.EInt && cond.right.value === 0n)
-        return { call, zeroIsTrue: false };
-      call = getNamedCall(cond.right, "setjmp");
-      if (call && cond.left instanceof AST.EInt && cond.left.value === 0n)
-        return { call, zeroIsTrue: false };
+    if (cond.op === "EQ" || cond.op === "NE") {
+      const zeroIsTrue = cond.op === "EQ";
+      let r = getNamedCallWithPrefix(cond.left, "setjmp");
+      if (r && cond.right instanceof AST.EInt && cond.right.value === 0n)
+        return { call: r.call, zeroIsTrue, prefix: r.prefix };
+      r = getNamedCallWithPrefix(cond.right, "setjmp");
+      if (r && cond.left instanceof AST.EInt && cond.left.value === 0n)
+        return { call: r.call, zeroIsTrue, prefix: r.prefix };
     }
   }
   // Pattern: setjmp(buf) used directly as condition (truthy = longjmp fired)
-  const directCall = getNamedCall(cond, "setjmp");
-  if (directCall) return { call: directCall, zeroIsTrue: false };
+  const direct = getNamedCallWithPrefix(cond, "setjmp");
+  if (direct) return { call: direct.call, zeroIsTrue: false, prefix: direct.prefix };
   // Pattern: !setjmp(buf)
   if (cond instanceof AST.EUnary && cond.op === "OP_LNOT") {
-    const negCall = getNamedCall(cond.operand, "setjmp");
-    if (negCall) return { call: negCall, zeroIsTrue: true };
+    const neg = getNamedCallWithPrefix(cond.operand, "setjmp");
+    if (neg) return { call: neg.call, zeroIsTrue: true, prefix: neg.prefix };
   }
   return { call: null, zeroIsTrue: false };
 }
@@ -11835,7 +11845,7 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // Now check if this is an if-statement with setjmp in the condition
     if (!(stmt instanceof AST.SIf)) continue;
 
-    const { call: setjmpCall, zeroIsTrue } = extractSetjmpCall(stmt.condition);
+    const { call: setjmpCall, zeroIsTrue, prefix: setjmpPrefix } = extractSetjmpCall(stmt.condition);
     if (!setjmpCall) {
       // Not a setjmp if — but still recurse into its branches
       if (stmt.thenBranch instanceof AST.SCompound)
@@ -11905,8 +11915,23 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // Build: buf[0] = ++__setjmp_id_counter; try { ... } catch { ... }
     const setBufStmt = makeSetBufIdStmt(bufExpr, counterVar);
 
-    // Replace the if-statement with setBuf + tryCatch
+    // If the setjmp call was inside a comma expression, evaluate the
+    // leading operands as SExpr statements first. The canonical case:
+    //
+    //   if ((nlr_push_tail(buf), setjmp(buf->jmpbuf)) == 0) { … }
+    //
+    // expanded from `nlr_push(buf)`. Without this, nlr_push_tail (which
+    // pushes onto the thread-local nlr stack) would be silently dropped
+    // and the next nlr_jump would target the wrong (stale) buf, ending
+    // up in nlr_jump_fail's `while(1)`.
+    const prefixStmts = (setjmpPrefix || []).map(e => new AST.SExpr(e.loc, e));
+
+    // Replace the if-statement with [...prefix, setBuf, tryCatch]
     stmts[i] = setBufStmt;
+    if (prefixStmts.length > 0) {
+      stmts.splice(i, 0, ...prefixStmts);
+      i += prefixStmts.length;
+    }
     stmts.splice(i + 1, 0, tryCatch);
 
     // Skip the tryCatch we just inserted
