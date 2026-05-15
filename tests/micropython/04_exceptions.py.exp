@@ -1,0 +1,5 @@
+42
+caught: uh oh
+caught: outer wrapping inner
+cleanup
+result: 1

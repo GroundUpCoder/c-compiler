@@ -68,7 +68,10 @@ SQLITE_TEST_DIR = os.path.join(SCRIPT_DIR, "sqlite")
 LIBPNG_DIR = os.path.join(VENDOR_DIR, "libpng")
 LIBPNG_TESTDATA = os.path.join(LIBPNG_DIR, "testdata")
 
-ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "sqlite", "disw", "sourcemap"]
+MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
+MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
+
+ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "sqlite", "disw", "sourcemap"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -763,6 +766,65 @@ def run_libpng_tests(results, filter_str=None):
 # compare stdout/stderr instead. Set `config.json: { "expectExitCode": 0 }`
 # to add an exit-code assertion.
 
+# --- MicroPython tests ---
+#
+# Builds vendor/micropython/test_bin.json once (a test variant of the
+# minimal port that reads the entire script from stdin and execs it via
+# do_str() — no REPL). Each test under tests/micropython/<name>/ is a
+# script.py + expected.stdout pair: we feed the script through stdin and
+# compare stdout.
+
+def run_micropython_tests(results, filter_str=None):
+    if not os.path.isdir(MICROPYTHON_TEST_DIR):
+        results.record("micropython/build", False, f"Test dir not found: {MICROPYTHON_TEST_DIR}")
+        return
+
+    test_bin = os.path.join(MICROPYTHON_DIR, "test_bin.json")
+    if not os.path.exists(test_bin):
+        results.record("micropython/build", False, f"Not found: {test_bin}")
+        return
+
+    # MicroPython is ~100 .c files; give the build a generous timeout.
+    wasm, err = build_project(test_bin, timeout=600)
+    if wasm is None:
+        results.record("micropython/build", False, f"Failed to build micropython-test.wasm:\n{err}")
+        return
+
+    files = sorted(f for f in os.listdir(MICROPYTHON_TEST_DIR) if f.endswith(".py"))
+    for f in files:
+        test_name = f"micropython/{f}"
+        if filter_str and filter_str not in test_name:
+            continue
+        script_path = os.path.join(MICROPYTHON_TEST_DIR, f)
+        expected_path = script_path + ".exp"
+        if not os.path.exists(expected_path):
+            results.record(test_name, False, f"Missing expected output: {expected_path}")
+            continue
+        with open(script_path, "rb") as sf:
+            script_bytes = sf.read()
+        try:
+            r = subprocess.run(
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                input=script_bytes,
+                capture_output=True, timeout=30
+            )
+            actual = r.stdout.decode("utf-8", errors="replace") if isinstance(r.stdout, bytes) else r.stdout
+            # MicroPython's print emits \r\n; normalize before comparing.
+            actual = actual.replace("\r\n", "\n")
+            with open(expected_path) as ef:
+                expected = ef.read()
+            if actual == expected:
+                results.record(test_name, True)
+            else:
+                stderr = r.stderr.decode("utf-8", errors="replace") if isinstance(r.stderr, bytes) else r.stderr
+                msg = f"stdout mismatch:\n--- expected ---\n{expected}--- actual ---\n{actual}"
+                if stderr:
+                    msg += f"--- stderr ---\n{stderr.split(chr(10))[0]}"
+                results.record(test_name, False, msg.strip())
+        except subprocess.TimeoutExpired:
+            results.record(test_name, False, "Timed out (30s)")
+
+
 def run_sqlite_tests(results, filter_str=None):
     if not os.path.isdir(SQLITE_TEST_DIR):
         results.record("sqlite/build", False, f"Test dir not found: {SQLITE_TEST_DIR}")
@@ -1096,6 +1158,10 @@ def main():
         elif cat == "libpng":
             results.section("libpng")
             run_libpng_tests(results, filter_str=args.filter)
+
+        elif cat == "micropython":
+            results.section("micropython")
+            run_micropython_tests(results, filter_str=args.filter)
 
         elif cat == "sqlite":
             results.section("sqlite")
