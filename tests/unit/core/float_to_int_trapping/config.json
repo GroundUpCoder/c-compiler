@@ -1,0 +1,3 @@
+{
+  "compilerArgs": ["--trapping-float-conversions"]
+}

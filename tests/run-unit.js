@@ -154,6 +154,7 @@ function workerMain() {
       else if (a === '--gc-no-export-roots') compilerOptions.gcNoExportRoots = true;
       else if (a === '--no-undefined') compilerOptions.noUndefined = true;
       else if (a === '--no-irreducible-lowering') compilerOptions.noIrreducibleLowering = true;
+      else if (a === '--trapping-float-conversions') compilerOptions.trappingFloatConversions = true;
       else if (a === '--require-source') compilerOptions.requireSources.push(args[++i]);
       // silently ignore other unknown -* args (matches main())
     }

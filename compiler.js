@@ -12231,6 +12231,27 @@ class WasmCode {
   memoryCopy() { this.push(0xFC); lebU(this.bytes, 10); this.push(0x00); this.push(0x00); }
   memoryFill() { this.push(0xFC); lebU(this.bytes, 11); this.push(0x00); }
 
+  // Non-trapping float→int conversion (WASM 2.0 §5.4.5). NaN→0,
+  // out-of-range saturates to IMIN/IMAX. Encoded as the 0xFC misc
+  // prefix + LEB128 subop 0..7.
+  //   subop 0: i32.trunc_sat_f32_s
+  //   subop 1: i32.trunc_sat_f32_u
+  //   subop 2: i32.trunc_sat_f64_s
+  //   subop 3: i32.trunc_sat_f64_u
+  //   subop 4: i64.trunc_sat_f32_s
+  //   subop 5: i64.trunc_sat_f32_u
+  //   subop 6: i64.trunc_sat_f64_s
+  //   subop 7: i64.trunc_sat_f64_u
+  truncSat(dstWt, srcWt, sign) {
+    let subop;
+    if (wtEquals(dstWt, WT_I32) && wtEquals(srcWt, WT_F32)) subop = sign ? 0 : 1;
+    else if (wtEquals(dstWt, WT_I32) && wtEquals(srcWt, WT_F64)) subop = sign ? 2 : 3;
+    else if (wtEquals(dstWt, WT_I64) && wtEquals(srcWt, WT_F32)) subop = sign ? 4 : 5;
+    else if (wtEquals(dstWt, WT_I64) && wtEquals(srcWt, WT_F64)) subop = sign ? 6 : 7;
+    else throw new Error("truncSat: unsupported src/dst pair");
+    this.push(0xFC); lebU(this.bytes, subop);
+  }
+
   // Numeric constants
   i32Const(value) { this.push(0x41); lebI(this.bytes, Number(value) | 0); }
   i64Const(value) {
@@ -14863,6 +14884,22 @@ class CodeGenerator {
     else { this.body.i32Const(0); this.body.aop(WT_I32, ALU.OP_NE); }
   }
 
+  // Emit float→int conversion. Defaults to saturating semantics
+  // (WASM 2.0 trunc_sat: NaN→0, overflow→clamped INT_MIN/MAX), which
+  // matches what most C runtimes do in practice and avoids surprise
+  // traps from `(int)1e16` etc. With --trapping-float-conversions
+  // (compilerOptions.trappingFloatConversions), revert to the WASM 1.0
+  // trapping trunc that crashes on out-of-range — useful when you want
+  // C99 §6.3.1.4 UB-as-crash for fuzzing/diagnostics.
+  _emitFloatToInt(dstWt, srcWt, sign) {
+    if (this.compilerOptions.trappingFloatConversions) {
+      const aluOp = wtEquals(srcWt, WT_F32) ? ALU.OP_TRUNC_F32 : ALU.OP_TRUNC_F64;
+      this.body.aop(dstWt, aluOp, sign);
+    } else {
+      this.body.truncSat(dstWt, srcWt, sign);
+    }
+  }
+
   // Emit narrowing for sub-i32 types (char, short).
   // WASM locals are always i32, so we must explicitly truncate after
   // any operation that may leave high bits set.
@@ -14941,10 +14978,10 @@ class CodeGenerator {
     else if (wtEquals(fromWasm, WT_I32) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_CONVERT_I32, fromSigned);
     else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_CONVERT_I64, fromSigned);
     else if (wtEquals(fromWasm, WT_I64) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_CONVERT_I64, fromSigned);
-    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_TRUNC_F32, toSigned); this.emitSubIntNarrowing(toType); }
-    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_TRUNC_F32, toSigned);
-    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I32)) { this.body.aop(WT_I32, ALU.OP_TRUNC_F64, toSigned); this.emitSubIntNarrowing(toType); }
-    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I64)) this.body.aop(WT_I64, ALU.OP_TRUNC_F64, toSigned);
+    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I32)) { this._emitFloatToInt(WT_I32, WT_F32, toSigned); this.emitSubIntNarrowing(toType); }
+    else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_I64)) this._emitFloatToInt(WT_I64, WT_F32, toSigned);
+    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I32)) { this._emitFloatToInt(WT_I32, WT_F64, toSigned); this.emitSubIntNarrowing(toType); }
+    else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_I64)) this._emitFloatToInt(WT_I64, WT_F64, toSigned);
     else if (wtEquals(fromWasm, WT_F32) && wtEquals(toWasm, WT_F64)) this.body.aop(WT_F64, ALU.OP_PROMOTE_F32);
     else if (wtEquals(fromWasm, WT_F64) && wtEquals(toWasm, WT_F32)) this.body.aop(WT_F32, ALU.OP_DEMOTE_F64);
   }
@@ -22223,6 +22260,8 @@ function main() {
       compilerOptions.printStdlib = true;
     } else if (args[i] === "--no-irreducible-lowering") {
       compilerOptions.noIrreducibleLowering = true;
+    } else if (args[i] === "--trapping-float-conversions") {
+      compilerOptions.trappingFloatConversions = true;
     } else if (args[i] === "-v" || args[i] === "--verbose") {
       compilerOptions.verbose = true;
     } else if (args[i] === "--dump-irred-segments") {
