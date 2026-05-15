@@ -13722,6 +13722,7 @@ class CodeGenerator {
       for (let i = 0; i < initList.elements.length; i++) {
         const elemOffset = baseOffset + i * elemSize;
         const elem = initList.elements[i];
+        if (elem === null) continue;  // sparse slot — zero-initialized by EInitList's bzero
         if (elem instanceof AST.EInitList) {
           this.emitInitListRuntimeStores(elem, elemType, baseLocalIdx, elemOffset);
         } else {
@@ -13754,6 +13755,7 @@ class CodeGenerator {
           const fieldOffset = baseOffset + member.byteOffset;
           if (elemIdx < initList.elements.length) {
             const elem = initList.elements[elemIdx];
+            if (elem === null) { elemIdx++; continue; }  // sparse slot — zero-init
             if (member.bitWidth >= 0) {
               const val = this._constEvalExpr(elem);
               if (!val) {

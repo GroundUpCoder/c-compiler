@@ -2,9 +2,6 @@
 
 // options to control how MicroPython is built
 
-// MINIMUM. Higher levels (CORE/BASIC/EXTRA/FULL) currently trigger
-// runtime memory access errors in MicroPython that we haven't debugged
-// — could be a codegen issue in our compiler or a config interaction.
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
 // Selectively enable common features beyond MINIMUM.
@@ -21,7 +18,7 @@
 #define MICROPY_PY_BUILTINS_BYTES_HEX     (1)
 #define MICROPY_PY_BUILTINS_RANGE_BINOP   (1)
 #define MICROPY_PY_BUILTINS_RANGE_ATTRS   (1)
-// #define MICROPY_PY_DESCRIPTORS            (1) -- triggers compiler codegen bug
+#define MICROPY_PY_DESCRIPTORS            (1)
 #define MICROPY_PY_DELATTR_SETATTR        (1)
 #define MICROPY_PY_GENERATOR_PEND_THROW   (1)
 #define MICROPY_PY_ASSIGN_EXPR            (1)
