@@ -8,7 +8,7 @@ I occasionally post videos about this project at [youtube.com/@groundupcoder](ht
 
 A frozen C++20 port (**compiler.cc**) is preserved in `old/` along with its own test runner and unit tests. The two compilers produce identical output for all unit tests (verified by equiv tests in `old/`).
 
-There are two ways to run the compiled programs:
+There are three ways to run the compiled programs:
 
 ### WASM files (`.wasm`) — run with Node.js
 
@@ -17,6 +17,15 @@ Compile to a `.wasm` file and run it with **host.js**, the WASM runtime that pro
 ```bash
 node compiler.js hello.c -o hello.wasm
 node host.js hello.wasm
+```
+
+### JS files (`.js`) — run directly with Node.js
+
+Compile to a self-contained `.js` file with the WASM binary and runtime embedded. The result is a standalone Node.js script (with a `#!/usr/bin/env node` shebang) — no separate `host.js` needed:
+
+```bash
+node compiler.js hello.c -o hello.js
+node hello.js
 ```
 
 ### HTML files (`.html`) — run in a browser
@@ -59,7 +68,7 @@ Libraries (`"type": "lib"`) cannot be compiled directly — they must be referen
 
 | Flag | Description |
 |------|-------------|
-| `-o <file>` | Output file (`.wasm` or `.html`) |
+| `-o <file>` | Output file (`.wasm`, `.js`, or `.html`) |
 | `-D<name>[=val]` | Define preprocessor macro |
 | `-I<path>` | Add include search path |
 | `-a <action>` | Stop at stage: `lex`, `parse`, `link`, `compile` |
