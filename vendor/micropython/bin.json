@@ -110,7 +110,6 @@
     "py/vm.c",
     "py/vstr.c",
     "py/warning.c",
-    "shared/libc/printf.c",
     "shared/readline/readline.c",
     "shared/runtime/pyexec.c",
     "shared/runtime/stdout_helpers.c",

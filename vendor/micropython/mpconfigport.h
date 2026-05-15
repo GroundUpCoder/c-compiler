@@ -42,10 +42,16 @@ typedef long mp_off_t;
 #define MICROPY_HEAP_SIZE      (25600) // heap size 25 kilobytes
 #endif
 
+#ifdef __wasm__
+#define MICROPY_MIN_USE_STDOUT (1)
+#define MICROPY_HEAP_SIZE      (262144) // heap size 256 kilobytes
+#endif
+
 #ifdef __thumb__
 #define MICROPY_MIN_USE_CORTEX_CPU (1)
 #define MICROPY_MIN_USE_STM32_MCU (1)
 #define MICROPY_HEAP_SIZE      (2048) // heap size 2 kilobytes
 #endif
 
+#define MP_WEAK
 #define MP_STATE_PORT MP_STATE_VM
