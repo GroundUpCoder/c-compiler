@@ -3808,6 +3808,10 @@ function substituteParams(expr, paramMap) {
 //
 // `expr` is consulted only for the null-pointer-constant cases; pass
 // it when the source expression is available, otherwise null.
+function isCharType(t) {
+  return t === Types.TCHAR || t === Types.TSCHAR || t === Types.TUCHAR;
+}
+
 function typesAreAssignmentCompatible(srcType, targetType, expr) {
   const s = srcType.removeQualifiers();
   const t = targetType.removeQualifiers();
@@ -3835,7 +3839,9 @@ function typesAreAssignmentCompatible(srcType, targetType, expr) {
     if (sBase.isVoid() || tBase.isVoid()) return true;
     if (sBase.isConst && !tBase.isConst) return false;
     if (sBase.isVolatile && !tBase.isVolatile) return false;
-    if (sBase.removeQualifiers().isCompatibleWith(tBase.removeQualifiers())) return true;
+    const su = sBase.removeQualifiers(), tu = tBase.removeQualifiers();
+    if (su.isCompatibleWith(tu)) return true;
+    if (isCharType(su) && isCharType(tu)) return true;
     return false;
   }
   // Pointer target ← null pointer constant (literal 0, casts of 0).
@@ -4248,9 +4254,7 @@ function makeUnary(loc, op, operand) {
       if (isRef) fatalError(loc, `unary '~' on reference type is not allowed`);
       break;
     case "OP_LNOT":
-      // Operand must be testable as bool — same rule as if/while/etc.
-      // Refs are allowed (sugar for __ref_is_null); structs/unions/
-      // void/arrays are not.
+      operand = maybeDecay(operand);
       if (!isBoolContextType(operand.type)) {
         reportError(loc,
           `unary '!' requires a scalar operand, got '${operand.type.toString()}'`);
@@ -6452,7 +6456,174 @@ function lower(funcDef, dumpSegments) {
   funcDef.body = newBody;
 }
 
-return { lower };
+// ----- JSON export (for the disasm tool's CFG view) -----
+//
+// Produce a plain-old-data object describing one function's segments and
+// their terminators, with short C-like snippets for each statement and
+// expression. This is purely for visualization — the snippet text is a
+// best-effort rendering, not a faithful pretty-print.
+//
+// IMPORTANT: this destructively rewrites the funcDef AST (DVars get
+// alpha-renamed, initExprs stripped) the same way `lower()` does, since
+// it reuses hoistDeclarations + buildSegments. Don't call this on a
+// function you intend to compile afterward.
+function fmtType(t) {
+  if (!t) return '?';
+  if (t.name) return t.name;
+  if (typeof t.toString === 'function') {
+    const s = t.toString();
+    return s.length > 32 ? s.slice(0, 29) + '…' : s;
+  }
+  return '?';
+}
+
+const BINOP_TEXT = {
+  ADD: '+', SUB: '-', MUL: '*', DIV: '/', MOD: '%',
+  EQ: '==', NE: '!=', LT: '<', LE: '<=', GT: '>', GE: '>=',
+  LAND: '&&', LOR: '||',
+  BAND: '&', BOR: '|', BXOR: '^', SHL: '<<', SHR: '>>',
+  ASSIGN: '=',
+  ADD_ASSIGN: '+=', SUB_ASSIGN: '-=', MUL_ASSIGN: '*=',
+  DIV_ASSIGN: '/=', MOD_ASSIGN: '%=',
+  BAND_ASSIGN: '&=', BOR_ASSIGN: '|=', BXOR_ASSIGN: '^=',
+  SHL_ASSIGN: '<<=', SHR_ASSIGN: '>>=',
+};
+const UNOP_TEXT = {
+  OP_NEG: '-', OP_POS: '+', OP_LNOT: '!', OP_BNOT: '~',
+  OP_ADDR: '&', OP_DEREF: '*',
+  OP_PRE_INC: '++', OP_PRE_DEC: '--',
+  OP_POST_INC: '++', OP_POST_DEC: '--',
+};
+
+function fmtExpr(e) {
+  if (!e) return '';
+  if (e instanceof AST.EImplicitCast) return fmtExpr(e.expr);
+  if (e instanceof AST.EDecay) return fmtExpr(e.operand);
+  if (e instanceof AST.EInt) {
+    const tn = e.type && e.type.name;
+    if (tn === 'long long' || tn === 'unsigned long long') return String(e.value) + 'LL';
+    return String(e.value);
+  }
+  if (e instanceof AST.EFloat) return String(e.value);
+  if (e instanceof AST.EString) {
+    const s = String(e.value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    return '"' + (s.length > 40 ? s.slice(0, 37) + '…' : s) + '"';
+  }
+  if (e instanceof AST.EIdent) {
+    return (e.decl && e.decl.name) || '?';
+  }
+  if (e instanceof AST.EBinary) {
+    const op = BINOP_TEXT[e.op] || e.op;
+    return fmtExpr(e.left) + ' ' + op + ' ' + fmtExpr(e.right);
+  }
+  if (e instanceof AST.EUnary) {
+    const op = UNOP_TEXT[e.op] || e.op;
+    if (e.op === 'OP_POST_INC' || e.op === 'OP_POST_DEC') return fmtExpr(e.operand) + op;
+    return op + fmtExpr(e.operand);
+  }
+  if (e instanceof AST.ETernary) {
+    return fmtExpr(e.condition) + ' ? ' + fmtExpr(e.thenExpr) + ' : ' + fmtExpr(e.elseExpr);
+  }
+  if (e instanceof AST.ECall) {
+    const args = (e.arguments || []).map(fmtExpr).join(', ');
+    return fmtExpr(e.callee) + '(' + args + ')';
+  }
+  if (e instanceof AST.ESubscript) return fmtExpr(e.array) + '[' + fmtExpr(e.index) + ']';
+  if (e instanceof AST.EMember) {
+    return fmtExpr(e.base) + '.' + (e.memberDecl && e.memberDecl.name || '?');
+  }
+  if (e instanceof AST.EArrow) {
+    return fmtExpr(e.base) + '->' + (e.memberDecl && e.memberDecl.name || '?');
+  }
+  if (e instanceof AST.ECast) return '(' + fmtType(e.targetType) + ')' + fmtExpr(e.expr);
+  if (e instanceof AST.EComma) {
+    return (e.expressions || []).map(fmtExpr).join(', ');
+  }
+  if (e instanceof AST.ESizeofExpr) return 'sizeof(' + fmtExpr(e.expr) + ')';
+  if (e instanceof AST.ESizeofType) return 'sizeof(' + fmtType(e.operandType) + ')';
+  // Fallback for less-common nodes
+  return '<' + e.constructor.name + '>';
+}
+
+function fmtStmt(s) {
+  if (!s) return '';
+  if (s instanceof AST.SExpr) return fmtExpr(s.expr) + ';';
+  if (s instanceof AST.SEmpty) return ';';
+  if (s instanceof AST.SDecl) {
+    const parts = [];
+    for (const d of s.declarations) {
+      const tname = fmtType(d.type);
+      if (d.storageClass === Types.StorageClass.STATIC) {
+        parts.push('static ' + tname + ' ' + d.name);
+      } else if (d.storageClass === Types.StorageClass.EXTERN) {
+        parts.push('extern ' + tname + ' ' + d.name);
+      } else {
+        parts.push(tname + ' ' + d.name);
+      }
+    }
+    return parts.join('; ') + ';';
+  }
+  return '<' + s.constructor.name + '>';
+}
+
+function locOf(node) {
+  if (!node || !node.loc) return null;
+  return { file: node.loc.filename || '?', line: node.loc.line || 0 };
+}
+
+function funcToCfgJson(funcDef) {
+  const { decls, rewrittenBody } = hoistDeclarations(funcDef);
+  const segments = buildSegments(rewrittenBody);
+
+  const segJson = segments.map(seg => {
+    const stmts = seg.stmts.map(st => ({
+      text: fmtStmt(st),
+      loc: locOf(st),
+    }));
+    const t = seg.term;
+    let term;
+    if (!t) {
+      term = { kind: 'none' };
+    } else if (t.kind === 'fallthrough') {
+      term = { kind: 'fallthrough', next: t.nextId };
+    } else if (t.kind === 'goto') {
+      term = { kind: 'goto', target: t.targetId };
+    } else if (t.kind === 'branch') {
+      term = { kind: 'branch', cond: fmtExpr(t.cond), thenId: t.thenId, elseId: t.elseId };
+    } else if (t.kind === 'switch') {
+      term = {
+        kind: 'switch',
+        scrutinee: fmtExpr(t.scrutinee),
+        cases: t.cases.map(c => ({ value: String(c.value), target: c.target })),
+        defaultTarget: t.defaultTarget,
+      };
+    } else if (t.kind === 'return') {
+      term = { kind: 'return', expr: t.expr ? fmtExpr(t.expr) : null };
+    } else {
+      term = { kind: t.kind };
+    }
+    return { id: seg.id, stmts, terminator: term };
+  });
+
+  const params = (funcDef.parameters || []).map(p => ({
+    name: p.name,
+    type: fmtType(p.type),
+  }));
+  const hoistedDecls = decls.map(d => ({
+    name: d.name,
+    type: fmtType(d.type),
+  }));
+
+  return {
+    name: funcDef.name,
+    loc: locOf(funcDef),
+    params,
+    hoistedDecls,
+    segments: segJson,
+  };
+}
+
+return { lower, hoistDeclarations, buildSegments, funcToCfgJson };
 
 })();
 
@@ -11216,8 +11387,10 @@ const maybeDecay = AST.maybeDecay;
 
 // Check if an expression is a call to a named function, return the ECall or null
 function getNamedCall(expr, name) {
+  if (expr instanceof AST.EComma) {
+    return getNamedCall(expr.expressions[expr.expressions.length - 1], name);
+  }
   if (!(expr instanceof AST.ECall)) return null;
-  // Look through the function-decay wrapper around a direct callee.
   let callee = expr.callee;
   if (callee instanceof AST.EDecay) callee = callee.operand;
   if (!(callee instanceof AST.EIdent)) return null;
@@ -21640,7 +21813,7 @@ function main() {
   }
 
   if (!inputFiles.length && action === "compile") {
-    process.stderr.write("Usage: node compiler.js [-a <lex|parse|link|compile>] [-o output.wasm|.html|.js] [-Dname[=val]] [-Ipath] <files...>\n");
+    process.stderr.write("Usage: node compiler.js [-a <lex|parse|link|cfg|print|compile>] [-o output.wasm|.html|.js] [-Dname[=val]] [-Ipath] <files...>\n");
     process.exit(1);
   }
 
@@ -21660,7 +21833,7 @@ function main() {
         process.stdout.write(Lexer.formatToken(t) + "\n");
       }
     }
-  } else if (action === "parse" || action === "print" || action === "link" || action === "compile") {
+  } else if (action === "parse" || action === "print" || action === "link" || action === "compile" || action === "cfg") {
     const hrtime = () => {
       const [s, ns] = process.hrtime();
       return s * 1000 + ns / 1e6;
@@ -21672,6 +21845,40 @@ function main() {
       process.stdout.write(Parser.dumpAst(units));
     } else if (action === "print") {
       process.stdout.write(Parser.printC(units, { showStdlib: compilerOptions.printStdlib }).text);
+    } else if (action === "cfg") {
+      // Build per-function control-flow graphs (segments + terminators)
+      // via the IRREDUCIBLE_LOWERING pass and dump them as JSON. Useful
+      // for visualization in the disasm tool. Runs link first so that
+      // function bodies are stitched together (so EIdent.decl refs are
+      // resolved to canonical DFunc / DVar instances).
+      const linkResult = Parser.linkTranslationUnits(units, compilerOptions);
+      if (linkResult.errors.length > 0) {
+        process.stderr.write(`Got ${linkResult.errors.length} link errors.\n`);
+        for (const err of linkResult.errors) {
+          process.stderr.write(`Link error: ${err.message}\n`);
+          if (err.locations) for (const loc of err.locations) {
+            if (loc?.filename) process.stderr.write(`  at ${loc.filename}:${loc.line}\n`);
+          }
+        }
+        process.exit(1);
+      }
+      const fns = [];
+      for (const unit of units) {
+        for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+          const fdef = func.definition || func;
+          if (fdef !== func) continue;
+          if (!fdef.body) continue;
+          try {
+            fns.push(IRREDUCIBLE_LOWERING.funcToCfgJson(fdef));
+          } catch (e) {
+            fns.push({ name: fdef.name, error: String(e && e.message || e) });
+          }
+        }
+      }
+      // BigInt isn't JSON-serializable by default; we already stringified
+      // case values inside funcToCfgJson, but be defensive.
+      process.stdout.write(JSON.stringify({ functions: fns }, (k, v) =>
+        typeof v === 'bigint' ? String(v) : v, 2) + '\n');
     } else if (action === "link") {
       const linkResult = Parser.linkTranslationUnits(units, compilerOptions);
       if (linkResult.errors.length > 0) {
@@ -21822,6 +22029,10 @@ var _exports = {
   // Optimizer — exposed so unit tests can fold a constructed AST and
   // assert specific transformations.
   INLINER,
+  // Loop-switch lowering pass — exposed so the disasm tool can build a
+  // CFG (basic-block decomposition) view of every function without
+  // having to re-implement the segment walker.
+  IRREDUCIBLE_LOWERING,
   // Parser
   parseTokens: Parser.parseTokens,
   parseSource: Parser.parseSource,
