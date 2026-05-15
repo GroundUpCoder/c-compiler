@@ -50,11 +50,7 @@
 #define MICROPY_MODULE_FROZEN_MPY         (1)
 #define MICROPY_ENABLE_EXTERNAL_IMPORT    (1)
 
-// Float (32-bit) + math builtins. Without this, `10/3` raises TypeError
-// because true-divide for ints requires a float result. We use single-
-// precision (not double) because the compiler can't yet handle the
-// 52-bit fraction bit-field in the mp_float_union_t for doubles.
-#define MICROPY_FLOAT_IMPL                (MICROPY_FLOAT_IMPL_FLOAT)
+#define MICROPY_FLOAT_IMPL                (MICROPY_FLOAT_IMPL_DOUBLE)
 #define MICROPY_PY_MATH                   (1)
 
 // Disable features the minimal port doesn't supply objects for.
