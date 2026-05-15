@@ -88,6 +88,31 @@ All sections start **collapsed**. Expand what you need:
   - `local.get`/`local.set`/`local.tee` instructions show the variable
     name in angle brackets (e.g., `local.get 0 <n>`)
 
+### Control-Flow Graph
+
+Click **+** in any pane and pick **Control-Flow Graph** to open a CFG view.
+The CFG is built by running the compiler's `IRREDUCIBLE_LOWERING` pass —
+the same loop-switch lowering used for irreducible gotos — on every
+function and dumping its basic-block decomposition:
+
+- Each box is one segment (basic block). The entry segment is outlined
+  in green.
+- Each box's body lists the straight-line C statements; the footer shows
+  the terminator (`if`, `switch`, `return`, `halt`).
+- Edges are color-coded: green = true / fallthrough-on-true, red = false,
+  orange = switch case, purple-dashed = back-edge (loop).
+- The function dropdown at the top switches between functions; the file:line
+  link in each box header opens the source tab at that location.
+
+The same data is available from the CLI:
+
+```sh
+node compiler.js -a cfg main.c
+```
+
+This prints a JSON object with one entry per function describing its
+segments, terminators, and per-statement source locations.
+
 ### Syntax coloring
 
 Instructions are color-coded by category:

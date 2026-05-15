@@ -346,6 +346,70 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   }
   .layout.one-two .pane:first-child { grid-row: auto; }
 }
+
+/* CFG view */
+.cfg-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  font-family: monospace; font-size: 12px;
+}
+.cfg-toolbar label { color: var(--subtext); }
+.cfg-toolbar select {
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--overlay); color: var(--text); font-size: 12px; cursor: pointer;
+  font-family: monospace;
+}
+.cfg-toolbar .cfg-info { color: var(--subtext); margin-left: auto; }
+.cfg-canvas {
+  flex: 1; overflow: auto; background: var(--overlay); position: relative;
+  font-family: monospace;
+}
+.cfg-canvas::-webkit-scrollbar { width: 8px; height: 8px; }
+.cfg-canvas::-webkit-scrollbar-track { background: transparent; }
+.cfg-canvas::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.cfg-stage {
+  position: relative; transform-origin: 0 0;
+}
+.cfg-edges { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+.cfg-edges path { fill: none; stroke: var(--subtext); stroke-width: 1.5; }
+.cfg-edges path.cfg-edge-true  { stroke: var(--green); }
+.cfg-edges path.cfg-edge-false { stroke: var(--red); }
+.cfg-edges path.cfg-edge-back  { stroke: var(--mauve); stroke-dasharray: 4 3; }
+.cfg-edges path.cfg-edge-switch { stroke: var(--peach); }
+.cfg-edges text.cfg-edge-label {
+  fill: var(--subtext); font-size: 10px; font-family: monospace;
+  paint-order: stroke; stroke: var(--overlay); stroke-width: 3;
+}
+.cfg-edges marker path { fill: var(--subtext); stroke: none; }
+.cfg-node {
+  position: absolute; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  font-size: 11px; color: var(--text); display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.cfg-node.entry { border-color: var(--green); }
+.cfg-node-header {
+  padding: 3px 8px; background: var(--overlay); color: var(--blue);
+  font-weight: 600; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cfg-node-header .cfg-node-id { color: var(--blue); }
+.cfg-node-header .cfg-node-loc { color: var(--subtext); font-size: 10px; font-weight: normal; cursor: pointer; }
+.cfg-node-header .cfg-node-loc:hover { color: var(--green); text-decoration: underline; }
+.cfg-node-body { padding: 4px 8px; line-height: 1.4; }
+.cfg-node-stmt { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.cfg-node-stmt.empty { color: var(--subtext); font-style: italic; }
+.cfg-node-term {
+  padding: 3px 8px; background: var(--overlay); border-top: 1px solid var(--border);
+  font-size: 10px; color: var(--subtext);
+}
+.cfg-node-term .cfg-term-kind { color: var(--mauve); font-weight: 600; }
+.cfg-node-term .cfg-term-expr { color: var(--text); }
+.cfg-node-term.term-return { background: rgba(243, 139, 168, 0.10); }
+.cfg-node-term.term-halt { background: rgba(243, 139, 168, 0.20); }
+.cfg-empty {
+  padding: 24px; color: var(--subtext); font-size: 13px; text-align: center;
+}
 </style>
 </head>
 <body>
@@ -740,6 +804,46 @@ function compileC(source) {
   if (opts.gcSections) C.gcSectionsPass(units, opts);
   var wasm = C.generateCode(units, 'output.wasm', { compilerOptions: opts, sourceBuffers: pp.sourceBuffers });
   return { wasm: wasm, units: units };
+}
+
+// Build a control-flow graph for every function via IRREDUCIBLE_LOWERING.
+// Parses + links the source from scratch (the funcToCfgJson call is
+// destructive — it hoists and renames DVars) so that the compile pipeline
+// above keeps working on an untouched copy.
+function computeCfg(source) {
+  var C = self.CompilerJS;
+  if (!C.IRREDUCIBLE_LOWERING || !C.IRREDUCIBLE_LOWERING.funcToCfgJson) return null;
+  var pp = C.createDefaultPPRegistry();
+  var vfs = {
+    readFileSync: function(f) {
+      if (f === 'main.c') return source;
+      throw new Error('File not found: ' + f);
+    }
+  };
+  var units = C.parseAllUnits(vfs, pp, ['main.c'], {
+    compilerOptions: {},
+    warningFlags: {},
+    writeErr: function() {},
+  });
+  var linkResult = C.linkTranslationUnits(units, {});
+  if (linkResult.errors.length > 0) return null;
+  var fns = [];
+  for (var ui = 0; ui < units.length; ui++) {
+    var unit = units[ui];
+    var all = (unit.definedFunctions || []).concat(unit.staticFunctions || []);
+    for (var fi = 0; fi < all.length; fi++) {
+      var func = all[fi];
+      var fdef = func.definition || func;
+      if (fdef !== func) continue;
+      if (!fdef.body) continue;
+      try {
+        fns.push(C.IRREDUCIBLE_LOWERING.funcToCfgJson(fdef));
+      } catch (e) {
+        fns.push({ name: fdef.name, error: String(e && e.message || e), segments: [] });
+      }
+    }
+  }
+  return { functions: fns };
 }
 
 // Parse c.sourcemap and c.sources custom sections from WASM binary
@@ -1160,6 +1264,7 @@ document.addEventListener('click', function(e) {
   if (dbgInterp && !findTab('debug')) items.push({ label: 'Debug State', action: function() { createTab(paneId, 'Debug', 'debug', { key: 'debug' }); dbgUpdate(); } });
   if (dbgInterp && !findTab('stdout')) items.push({ label: 'Output', action: function() { createTab(paneId, 'Output', 'stdout', { key: 'stdout' }); dbgUpdate(); } });
   if (lastPrintedC && !findTab('printed')) items.push({ label: 'Printed C', action: function() { createTab(paneId, 'Printed C', 'printed', { source: lastPrintedC, key: 'printed' }); } });
+  if (lastCfg && lastCfg.functions.length > 0 && !findTab('cfg')) items.push({ label: 'Control-Flow Graph', action: function() { createTab(paneId, 'CFG', 'cfg', { key: 'cfg', cfg: lastCfg, selectedIdx: 0 }); } });
   if (lastEmbeddedSources) {
     for (var fname in lastEmbeddedSources) {
       if (!findTab('source', 'src-' + fname)) {
@@ -1203,6 +1308,10 @@ function renderTabContent(tab) {
   if (tab.type === 'function') {
     tab.contentEl.innerHTML = '<div class="disasm-content"></div>';
     renderFunctionDetail(tab);
+    return;
+  }
+  if (tab.type === 'cfg') {
+    renderCfgTab(tab);
     return;
   }
   if (tab.type === 'error') {
@@ -1805,6 +1914,341 @@ function renderFunctionDetail(tab) {
   });
 }
 
+// ── CFG view ──
+//
+// Renders the IRREDUCIBLE_LOWERING segments (basic blocks + terminators)
+// for one function. Layout is BFS-by-levels from the entry segment; edges
+// that go "backwards" (to a same-or-earlier level) are flagged and routed
+// around the right side as dashed lines.
+
+function renderCfgTab(tab) {
+  var cfg = tab.data.cfg;
+  tab.contentEl.innerHTML = ''
+    + '<div class="cfg-toolbar">'
+    +   '<label>Function:</label>'
+    +   '<select class="cfg-fn-select"></select>'
+    +   '<span class="cfg-info"></span>'
+    + '</div>'
+    + '<div class="cfg-canvas"><div class="cfg-stage"></div></div>';
+  var select = tab.contentEl.querySelector('.cfg-fn-select');
+  var info = tab.contentEl.querySelector('.cfg-info');
+  var stage = tab.contentEl.querySelector('.cfg-stage');
+  if (!cfg || !cfg.functions || cfg.functions.length === 0) {
+    stage.innerHTML = '<div class="cfg-empty">No CFG available. Compile first.</div>';
+    return;
+  }
+  for (var i = 0; i < cfg.functions.length; i++) {
+    var opt = document.createElement('option');
+    opt.value = i;
+    var nSeg = (cfg.functions[i].segments || []).length;
+    opt.textContent = cfg.functions[i].name + ' (' + nSeg + ' bb' + (nSeg === 1 ? '' : 's') + ')';
+    select.appendChild(opt);
+  }
+  select.value = String(tab.data.selectedIdx || 0);
+
+  function show() {
+    var idx = parseInt(select.value, 10) || 0;
+    tab.data.selectedIdx = idx;
+    var fn = cfg.functions[idx];
+    var nParams = (fn.params || []).length;
+    var nLocals = (fn.hoistedDecls || []).length;
+    info.textContent = nParams + ' param' + (nParams === 1 ? '' : 's') + ', '
+                     + nLocals + ' hoisted local' + (nLocals === 1 ? '' : 's');
+    renderCfgGraph(stage, fn);
+  }
+  select.addEventListener('change', show);
+  show();
+}
+
+function renderCfgGraph(stage, fn) {
+  stage.innerHTML = '';
+  if (!fn || fn.error) {
+    stage.innerHTML = '<div class="cfg-empty">' + (fn && fn.error ? 'Error: ' + esc(fn.error) : 'No function selected.') + '</div>';
+    return;
+  }
+  var segs = fn.segments || [];
+  if (segs.length === 0) {
+    stage.innerHTML = '<div class="cfg-empty">Function has no segments (forward decl?).</div>';
+    return;
+  }
+
+  // ─ edge extraction ─
+  var edges = [];
+  for (var i = 0; i < segs.length; i++) {
+    var s = segs[i];
+    var t = s.terminator;
+    if (!t) continue;
+    if (t.kind === 'fallthrough') {
+      edges.push({ from: s.id, to: t.next, label: '', cls: '' });
+    } else if (t.kind === 'goto') {
+      edges.push({ from: s.id, to: t.target, label: 'goto', cls: '' });
+    } else if (t.kind === 'branch') {
+      edges.push({ from: s.id, to: t.thenId, label: 'T', cls: 'cfg-edge-true' });
+      edges.push({ from: s.id, to: t.elseId, label: 'F', cls: 'cfg-edge-false' });
+    } else if (t.kind === 'switch') {
+      var byTarget = {};
+      for (var ci = 0; ci < t.cases.length; ci++) {
+        var c = t.cases[ci];
+        if (!byTarget[c.target]) byTarget[c.target] = [];
+        byTarget[c.target].push(c.value);
+      }
+      for (var tgt in byTarget) {
+        var vals = byTarget[tgt];
+        var lbl = vals.length > 3 ? vals.slice(0, 2).join(',') + '+' + (vals.length - 2) : vals.join(',');
+        edges.push({ from: s.id, to: +tgt, label: lbl, cls: 'cfg-edge-switch' });
+      }
+      edges.push({ from: s.id, to: t.defaultTarget, label: 'def', cls: 'cfg-edge-switch' });
+    }
+    // return / halt: no outgoing edges
+  }
+
+  // ─ levels (BFS from entry, smallest id) ─
+  var entry = segs[0].id;
+  for (var i = 0; i < segs.length; i++) if (segs[i].id < entry) entry = segs[i].id;
+  var level = {};
+  level[entry] = 0;
+  var queue = [entry];
+  while (queue.length) {
+    var u = queue.shift();
+    var ul = level[u];
+    for (var ei = 0; ei < edges.length; ei++) {
+      var e = edges[ei];
+      if (e.from === u && !(e.to in level)) {
+        level[e.to] = ul + 1;
+        queue.push(e.to);
+      }
+    }
+  }
+  var maxL = 0;
+  for (var k in level) if (level[k] > maxL) maxL = level[k];
+  for (var i = 0; i < segs.length; i++) {
+    if (!(segs[i].id in level)) { level[segs[i].id] = ++maxL; }
+  }
+  // back-edge if it doesn't advance to a deeper level
+  for (var ei = 0; ei < edges.length; ei++) {
+    var e = edges[ei];
+    if (level[e.to] <= level[e.from]) e.back = true;
+  }
+
+  // ─ build node DOM (for measurement) ─
+  var nodeEls = {};
+  for (var i = 0; i < segs.length; i++) {
+    var s = segs[i];
+    var div = document.createElement('div');
+    div.className = 'cfg-node' + (s.id === entry ? ' entry' : '');
+    div.setAttribute('data-seg', s.id);
+    var loc = (s.stmts && s.stmts.length > 0) ? s.stmts[0].loc : null;
+    var hdr = '<div class="cfg-node-header"><span class="cfg-node-id">BB ' + s.id + '</span>';
+    if (loc) {
+      hdr += '<span class="cfg-node-loc" data-src-file="' + esc(loc.file) + '" data-src-line="' + loc.line + '">'
+           + esc(loc.file.replace(/^.*\//, '')) + ':' + loc.line + '</span>';
+    }
+    hdr += '</div>';
+    var body = '<div class="cfg-node-body">';
+    if (!s.stmts || s.stmts.length === 0) {
+      body += '<div class="cfg-node-stmt empty">(no stmts)</div>';
+    } else {
+      for (var si = 0; si < s.stmts.length; si++) {
+        var txt = s.stmts[si].text || '';
+        if (txt.length > 50) txt = txt.slice(0, 47) + '...';
+        body += '<div class="cfg-node-stmt">' + esc(txt) + '</div>';
+      }
+    }
+    body += '</div>';
+    var t = s.terminator || { kind: 'none' };
+    var termHtml = '';
+    if (t.kind === 'branch') {
+      termHtml = '<div class="cfg-node-term"><span class="cfg-term-kind">if</span> <span class="cfg-term-expr">' + esc(t.cond) + '</span></div>';
+    } else if (t.kind === 'switch') {
+      termHtml = '<div class="cfg-node-term"><span class="cfg-term-kind">switch</span> (<span class="cfg-term-expr">' + esc(t.scrutinee) + '</span>)</div>';
+    } else if (t.kind === 'return') {
+      var rexpr = t.expr ? ' <span class="cfg-term-expr">' + esc(t.expr) + '</span>' : '';
+      termHtml = '<div class="cfg-node-term term-return"><span class="cfg-term-kind">return</span>' + rexpr + '</div>';
+    } else if (t.kind === 'halt') {
+      termHtml = '<div class="cfg-node-term term-halt"><span class="cfg-term-kind">halt</span></div>';
+    }
+    div.innerHTML = hdr + body + termHtml;
+    nodeEls[s.id] = div;
+  }
+
+  // ─ measure ─
+  var BOX_W = 240, GAP_X = 40, GAP_Y = 40;
+  // Pre-create the SVG so it lands underneath the boxes in DOM order.
+  var svgNs = 'http://www.w3.org/2000/svg';
+  var svg = document.createElementNS(svgNs, 'svg');
+  svg.setAttribute('class', 'cfg-edges');
+  stage.appendChild(svg);
+  for (var sid in nodeEls) {
+    var el = nodeEls[sid];
+    el.style.width = BOX_W + 'px';
+    el.style.position = 'absolute';
+    el.style.left = '-9999px';
+    el.style.top = '0';
+    stage.appendChild(el);
+  }
+  // Force a measurement pass
+  var sizes = {};
+  for (var sid in nodeEls) sizes[sid] = { w: BOX_W, h: nodeEls[sid].offsetHeight };
+
+  // ─ group by level ─
+  var byLevel = {};
+  for (var sid in level) {
+    var l = level[sid];
+    if (!byLevel[l]) byLevel[l] = [];
+    byLevel[l].push(+sid);
+  }
+  for (var l in byLevel) byLevel[l].sort(function(a, b) { return a - b; });
+  var maxLevel = 0;
+  for (var l in byLevel) if (+l > maxLevel) maxLevel = +l;
+
+  // ─ row heights and Y positions ─
+  var rowH = {};
+  for (var l = 0; l <= maxLevel; l++) {
+    var maxH = 60;
+    var row = byLevel[l] || [];
+    for (var i = 0; i < row.length; i++) maxH = Math.max(maxH, sizes[row[i]].h);
+    rowH[l] = maxH;
+  }
+  var levelY = {};
+  var y = GAP_Y;
+  for (var l = 0; l <= maxLevel; l++) {
+    levelY[l] = y;
+    y += rowH[l] + GAP_Y;
+  }
+  var totalH = y;
+
+  var maxCount = 0;
+  for (var l in byLevel) if (byLevel[l].length > maxCount) maxCount = byLevel[l].length;
+  var totalW = Math.max(maxCount * BOX_W + (maxCount - 1) * GAP_X + 80, 600);
+
+  // ─ place nodes ─
+  var positions = {};
+  for (var l = 0; l <= maxLevel; l++) {
+    var row = byLevel[l] || [];
+    var rowW = row.length * BOX_W + Math.max(0, row.length - 1) * GAP_X;
+    var startX = (totalW - rowW) / 2;
+    for (var i = 0; i < row.length; i++) {
+      var sid = row[i];
+      var px = startX + i * (BOX_W + GAP_X);
+      var py = levelY[l] + (rowH[l] - sizes[sid].h) / 2;
+      positions[sid] = { x: px, y: py, w: BOX_W, h: sizes[sid].h };
+      nodeEls[sid].style.left = px + 'px';
+      nodeEls[sid].style.top = py + 'px';
+    }
+  }
+
+  stage.style.width = totalW + 'px';
+  stage.style.height = totalH + 'px';
+
+  // ─ SVG edges ─
+  svg.setAttribute('width', totalW);
+  svg.setAttribute('height', totalH);
+  var defs = document.createElementNS(svgNs, 'defs');
+  function arrowMarker(id, color) {
+    var m = document.createElementNS(svgNs, 'marker');
+    m.setAttribute('id', id);
+    m.setAttribute('viewBox', '0 0 8 8');
+    m.setAttribute('refX', '7');
+    m.setAttribute('refY', '4');
+    m.setAttribute('markerWidth', '7');
+    m.setAttribute('markerHeight', '7');
+    m.setAttribute('orient', 'auto');
+    var p = document.createElementNS(svgNs, 'path');
+    p.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
+    p.setAttribute('fill', color);
+    m.appendChild(p);
+    return m;
+  }
+  defs.appendChild(arrowMarker('cfg-arr-default', '#a6adc8'));
+  defs.appendChild(arrowMarker('cfg-arr-true',    '#a6e3a1'));
+  defs.appendChild(arrowMarker('cfg-arr-false',   '#f38ba8'));
+  defs.appendChild(arrowMarker('cfg-arr-switch',  '#fab387'));
+  defs.appendChild(arrowMarker('cfg-arr-back',    '#cba6f7'));
+  svg.appendChild(defs);
+
+  function markerFor(e) {
+    if (e.back) return 'url(#cfg-arr-back)';
+    if (e.cls === 'cfg-edge-true')   return 'url(#cfg-arr-true)';
+    if (e.cls === 'cfg-edge-false')  return 'url(#cfg-arr-false)';
+    if (e.cls === 'cfg-edge-switch') return 'url(#cfg-arr-switch)';
+    return 'url(#cfg-arr-default)';
+  }
+
+  // Track edges that share the same source side so we can offset them
+  var sourceCountByNode = {};  // sid → number of out-edges drawn so far
+  var outEdgeCount = {};       // sid → total out-edges
+  for (var ei = 0; ei < edges.length; ei++) outEdgeCount[edges[ei].from] = (outEdgeCount[edges[ei].from] || 0) + 1;
+
+  for (var ei = 0; ei < edges.length; ei++) {
+    var e = edges[ei];
+    var src = positions[e.from], dst = positions[e.to];
+    if (!src || !dst) continue;
+    var idx = sourceCountByNode[e.from] = (sourceCountByNode[e.from] || 0);
+    sourceCountByNode[e.from] = idx + 1;
+    var total = outEdgeCount[e.from];
+    // Spread multi-out edges across the bottom of the source box
+    var offsetX = total > 1 ? (idx - (total - 1) / 2) * (src.w / (total + 1)) : 0;
+
+    var x1, y1, x2, y2, c1x, c1y, c2x, c2y;
+    if (e.back) {
+      // Loop back: route around the right side
+      x1 = src.x + src.w;
+      y1 = src.y + src.h / 2;
+      x2 = dst.x + dst.w;
+      y2 = dst.y + dst.h / 2;
+      var bulge = Math.max(40, Math.abs(y2 - y1) * 0.4);
+      c1x = x1 + bulge; c1y = y1;
+      c2x = x2 + bulge; c2y = y2;
+    } else {
+      x1 = src.x + src.w / 2 + offsetX;
+      y1 = src.y + src.h;
+      x2 = dst.x + dst.w / 2;
+      y2 = dst.y;
+      var mid = (y1 + y2) / 2;
+      c1x = x1; c1y = mid;
+      c2x = x2; c2y = mid;
+    }
+    var path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('d', 'M ' + x1 + ' ' + y1 + ' C ' + c1x + ' ' + c1y + ', ' + c2x + ' ' + c2y + ', ' + x2 + ' ' + y2);
+    if (e.back) path.classList.add('cfg-edge-back');
+    if (e.cls) path.classList.add(e.cls);
+    path.setAttribute('marker-end', markerFor(e));
+    svg.appendChild(path);
+
+    if (e.label) {
+      var text = document.createElementNS(svgNs, 'text');
+      text.setAttribute('class', 'cfg-edge-label');
+      var lx, ly;
+      if (e.back) {
+        lx = Math.max(c1x, c2x) - 4;
+        ly = (y1 + y2) / 2;
+      } else {
+        // Place label slightly above the midpoint
+        lx = (x1 + x2) / 2 + 6;
+        ly = (y1 + y2) / 2 - 2;
+      }
+      text.setAttribute('x', lx);
+      text.setAttribute('y', ly);
+      text.setAttribute('text-anchor', 'start');
+      text.textContent = e.label;
+      svg.appendChild(text);
+    }
+  }
+
+  // ─ click handler: source loc links open the source tab ─
+  stage.addEventListener('click', function(ev) {
+    var loc = ev.target.closest('.cfg-node-loc');
+    if (!loc) return;
+    var file = loc.getAttribute('data-src-file');
+    var line = parseInt(loc.getAttribute('data-src-line'), 10);
+    if (file && lastEmbeddedSources && lastEmbeddedSources[file]) {
+      openSourceTab(file, line);
+    } else if (editorView && line) {
+      scrollSourceToLine(editorView, line);
+    }
+  });
+}
+
 // ── Examples ──
 var examples = [
   { name: 'Hello World', source:
@@ -2120,6 +2564,7 @@ var lastPrintedC = null;
 var lastPrintedCLineMap = null;
 var printedCReverseMap = null;
 var sourceReverseMap = null;
+var lastCfg = null;  // { functions: [{name, segments, ...}] } from IRREDUCIBLE_LOWERING.funcToCfgJson
 var statusEl = document.getElementById('status');
 
 // Bidirectional hover highlight helpers
@@ -2211,6 +2656,7 @@ async function doCompile() {
   lastPrintedC = null;
   lastPrintedCLineMap = null;
   printedCReverseMap = null;
+  lastCfg = null;
 
   closeResultTabs();
 
@@ -2228,6 +2674,15 @@ async function doCompile() {
       var rk = lm.file + '\0' + lm.line;
       if (!printedCReverseMap[rk]) printedCReverseMap[rk] = [];
       printedCReverseMap[rk].push(li);
+    }
+    // Compute CFG snapshots for every function. Done in a separate parse
+    // so the destructive AST rewrites (hoist + segment build) don't
+    // corrupt anything the codegen pass already used.
+    try {
+      lastCfg = computeCfg(source);
+    } catch (cfgErr) {
+      console.warn('CFG computation failed:', cfgErr);
+      lastCfg = null;
     }
     doDisasmWasm(result.wasm, compileMs + 'ms compile, ');
   } catch (e) {
@@ -2287,7 +2742,7 @@ function closeResultTabs() {
     var toRemove = [];
     for (var i = 0; i < panes[pi].tabs.length; i++) {
       var t = panes[pi].tabs[i];
-      if (t.type === 'module' || t.type === 'function' || t.type === 'error' || t.type === 'debug' || t.type === 'source' || t.type === 'stdout' || t.type === 'printed') toRemove.push(t.id);
+      if (t.type === 'module' || t.type === 'function' || t.type === 'error' || t.type === 'debug' || t.type === 'source' || t.type === 'stdout' || t.type === 'printed' || t.type === 'cfg') toRemove.push(t.id);
     }
     for (var j = 0; j < toRemove.length; j++) removeTab(pi, toRemove[j]);
   }
