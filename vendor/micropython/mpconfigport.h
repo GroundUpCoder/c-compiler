@@ -35,6 +35,9 @@
 #define MICROPY_PY_BUILTINS_STR_COUNT     (1)
 #define MICROPY_PY_BUILTINS_STR_PARTITION (1)
 #define MICROPY_PY_BUILTINS_STR_SPLITLINES (1)
+#define MICROPY_PY_BUILTINS_BYTEARRAY     (1)
+#define MICROPY_PY_COLLECTIONS_DEQUE      (1)
+#define MICROPY_PY_BUILTINS_MEMORYVIEW    (1)
 
 // You can disable the built-in MicroPython compiler by setting the following
 // config option to 0.  If you do this then you won't get a REPL prompt, but you

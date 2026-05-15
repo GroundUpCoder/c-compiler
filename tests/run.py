@@ -846,7 +846,6 @@ MICROPYTHON_UPSTREAM_SKIP = {
     "intbig",        # requires MICROPY_LONGINT_IMPL_MPZ
     "complex",       # requires MICROPY_PY_BUILTINS_COMPLEX
     "tstring",       # Python 3.13 t-strings, not enabled
-    "memoryview",    # MICROPY_PY_BUILTINS_MEMORYVIEW
     "/struct_",      # `struct` module not enabled in minimal port
     "/sys_",         # most sys_* tests need MICROPY_PY_SYS_*
     "/io_",          # MICROPY_PY_IO disabled
