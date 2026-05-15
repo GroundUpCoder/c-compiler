@@ -2,7 +2,9 @@
 
 // options to control how MicroPython is built
 
-// Use the minimal starting configuration (disables all optional features).
+// MINIMUM. Higher levels (CORE/BASIC/EXTRA/FULL) currently trigger
+// runtime memory access errors in MicroPython that we haven't debugged
+// — could be a codegen issue in our compiler or a config interaction.
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
 // You can disable the built-in MicroPython compiler by setting the following
@@ -15,6 +17,19 @@
 #define MICROPY_HELPER_REPL               (1)
 #define MICROPY_MODULE_FROZEN_MPY         (1)
 #define MICROPY_ENABLE_EXTERNAL_IMPORT    (1)
+
+// Float (32-bit) + math builtins. Without this, `10/3` raises TypeError
+// because true-divide for ints requires a float result. We use single-
+// precision (not double) because the compiler can't yet handle the
+// 52-bit fraction bit-field in the mp_float_union_t for doubles.
+#define MICROPY_FLOAT_IMPL                (MICROPY_FLOAT_IMPL_FLOAT)
+#define MICROPY_PY_MATH                   (1)
+
+// Disable features the minimal port doesn't supply objects for.
+#define MICROPY_PY_BUILTINS_OPEN          (0)
+#define MICROPY_PY_IO                     (0)
+#define MICROPY_PY_SYS_STDFILES           (0)
+#define MICROPY_PY_UCTYPES                (0)
 
 #define MICROPY_ALLOC_PATH_MAX            (256)
 

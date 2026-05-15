@@ -70,8 +70,9 @@ LIBPNG_TESTDATA = os.path.join(LIBPNG_DIR, "testdata")
 
 MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
+MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "sqlite", "disw", "sourcemap"]
+ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -825,6 +826,108 @@ def run_micropython_tests(results, filter_str=None):
             results.record(test_name, False, "Timed out (30s)")
 
 
+# --- MicroPython upstream tests ---
+#
+# Runs scripts from vendor/micropython/tests/{basics,float}/. For each .py:
+#   - If a .py.exp file exists, use it as the expected output.
+#   - Otherwise, run the .py through CPython3 and use that as expected.
+#   - Compare against our compiled MicroPython's stdout (\r\n normalized).
+# A skip list covers tests that exercise features the minimal port can't
+# handle (large ints, complex numbers, async, etc.) — they'd fail for
+# reasons unrelated to our compiler.
+
+# Tests we expect to fail and don't want noise about. Add patterns
+# (substring match against the relative path under tests/) as we
+# triage. Tests that fail with NameError/ImportError for unsupported
+# stdlib modules also go here.
+MICROPYTHON_UPSTREAM_SKIP = set()
+
+
+def run_micropython_upstream_tests(results, filter_str=None):
+    if not os.path.isdir(MICROPYTHON_UPSTREAM_TEST_DIR):
+        results.record("micropython-upstream/build", False,
+                       f"Test dir not found: {MICROPYTHON_UPSTREAM_TEST_DIR}")
+        return
+
+    test_bin = os.path.join(MICROPYTHON_DIR, "test_bin.json")
+    wasm, err = build_project(test_bin, timeout=600)
+    if wasm is None:
+        results.record("micropython-upstream/build", False,
+                       f"Failed to build micropython-test.wasm:\n{err}")
+        return
+
+    # Gather tests from the curated subdirs.
+    subdirs = ["basics", "float"]
+    files = []
+    for sub in subdirs:
+        d = os.path.join(MICROPYTHON_UPSTREAM_TEST_DIR, sub)
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".py"):
+                files.append(os.path.join(sub, f))
+
+    for rel in files:
+        test_name = f"micropython-upstream/{rel}"
+        if filter_str and filter_str not in test_name:
+            continue
+        if any(skip in test_name for skip in MICROPYTHON_UPSTREAM_SKIP):
+            results.skip(test_name)
+            continue
+
+        script_path = os.path.join(MICROPYTHON_UPSTREAM_TEST_DIR, rel)
+        exp_path = script_path + ".exp"
+
+        # Compute expected output: prefer .exp file, else run CPython.
+        if os.path.exists(exp_path):
+            try:
+                with open(exp_path) as ef:
+                    expected = ef.read()
+            except OSError as e:
+                results.record(test_name, False, f"Couldn't read {exp_path}: {e}")
+                continue
+        else:
+            try:
+                with open(script_path, "rb") as sf:
+                    script_bytes = sf.read()
+                cpy = subprocess.run(["python3", "-"], input=script_bytes,
+                                     capture_output=True, timeout=10)
+                if cpy.returncode != 0:
+                    # CPython rejected the script — usually means the test
+                    # uses MicroPython-specific syntax or relies on an
+                    # exception in CPython. Skip rather than failing noisily.
+                    results.skip(test_name)
+                    continue
+                expected = cpy.stdout.decode("utf-8", errors="replace")
+            except subprocess.TimeoutExpired:
+                results.record(test_name, False, "CPython baseline timed out")
+                continue
+            except FileNotFoundError:
+                results.record(test_name, False,
+                               "python3 not found (needed to compute expected output)")
+                return
+
+        # Run through our MicroPython.
+        try:
+            with open(script_path, "rb") as sf:
+                script_bytes = sf.read()
+            r = subprocess.run(
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                input=script_bytes, capture_output=True, timeout=15
+            )
+            actual = r.stdout.decode("utf-8", errors="replace") if isinstance(r.stdout, bytes) else r.stdout
+            actual = actual.replace("\r\n", "\n")
+            if actual == expected:
+                results.record(test_name, True)
+            else:
+                # Truncate long diffs to keep the report readable.
+                trunc = lambda s: s if len(s) < 400 else s[:400] + "...[truncated]"
+                msg = f"stdout mismatch:\n--- expected ---\n{trunc(expected)}--- actual ---\n{trunc(actual)}"
+                results.record(test_name, False, msg.strip())
+        except subprocess.TimeoutExpired:
+            results.record(test_name, False, "Timed out (15s)")
+
+
 def run_sqlite_tests(results, filter_str=None):
     if not os.path.isdir(SQLITE_TEST_DIR):
         results.record("sqlite/build", False, f"Test dir not found: {SQLITE_TEST_DIR}")
@@ -1162,6 +1265,10 @@ def main():
         elif cat == "micropython":
             results.section("micropython")
             run_micropython_tests(results, filter_str=args.filter)
+
+        elif cat == "micropython-upstream":
+            results.section("micropython-upstream")
+            run_micropython_upstream_tests(results, filter_str=args.filter)
 
         elif cat == "sqlite":
             results.section("sqlite")

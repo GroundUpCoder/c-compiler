@@ -2817,6 +2817,39 @@ async function runModule({
       cbrt: Math.cbrt,
       hypot: Math.hypot,
       fmod: function (x, y) { return x % y; },
+      // erf/erfc/tgamma/lgamma — JS Math doesn't provide these, so use
+      // basic series approximations. Accurate enough for the float
+      // precision MicroPython runs at.
+      erf: function (x) {
+        // Abramowitz & Stegun 7.1.26 approximation, max error ~1.5e-7.
+        const t = 1 / (1 + 0.3275911 * Math.abs(x));
+        const y = 1 - (((((1.061405429*t - 1.453152027)*t + 1.421413741)*t - 0.284496736)*t + 0.254829592)*t)
+                      * Math.exp(-x*x);
+        return x < 0 ? -y : y;
+      },
+      erfc: function (x) {
+        const t = 1 / (1 + 0.3275911 * Math.abs(x));
+        const y = (((((1.061405429*t - 1.453152027)*t + 1.421413741)*t - 0.284496736)*t + 0.254829592)*t)
+                  * Math.exp(-x*x);
+        return x < 0 ? 2 - y : y;
+      },
+      // Stirling's approximation via lgamma for tgamma. Good for |x| > 0.
+      lgamma: function (x) {
+        // Lanczos approximation, g=7, n=9.
+        const g = 7;
+        const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+                   771.32342877765313, -176.61502916214059, 12.507343278686905,
+                   -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+        if (x < 0.5) {
+          return Math.log(Math.PI / Math.sin(Math.PI * x)) - this.lgamma(1 - x);
+        }
+        x -= 1;
+        let a = c[0];
+        const t = x + g + 0.5;
+        for (let i = 1; i < 9; i++) a += c[i] / (x + i);
+        return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+      },
+      tgamma: function (x) { return Math.exp(this.lgamma(x)); },
       __strtod_impl: function (nptr, endptr, bound) {
         const str = readStringBounded(nptr, bound);
         let i = 0;

@@ -16874,6 +16874,16 @@ extern int errno;
 #define EWOULDBLOCK EAGAIN
 #define ENOLCK    37
 #define ETIMEDOUT 110
+#define EOPNOTSUPP   95
+#define EADDRINUSE   98
+#define ECONNABORTED 103
+#define ECONNRESET   104
+#define ENOBUFS      105
+#define ENOTCONN     107
+#define ECONNREFUSED 111
+#define EHOSTUNREACH 113
+#define EALREADY    114
+#define EINPROGRESS 115
   `,
   "fcntl.h": `
 #pragma once
@@ -17377,6 +17387,43 @@ int ilogb(double x);
 double logb(double x);
 double modf(double x, double *iptr);
 float modff(float x, float *iptr);
+
+// C99 §7.12.11.2: nan/nanf return a quiet NaN. We ignore the tag arg
+// and just return NAN — sufficient for "nan" string parsing.
+double nan(const char *tag);
+float nanf(const char *tag);
+
+// C99 special functions (host-imported).
+__import double erf(double x);
+__import double erfc(double x);
+__import double tgamma(double x);
+__import double lgamma(double x);
+float erff(float x);
+float erfcf(float x);
+float tgammaf(float x);
+float lgammaf(float x);
+
+// C99 classification macros. We provide function-style impls; users
+// invoke as isnan(x), isinf(x), etc. (the standard prescribes macros
+// but functions are accepted in any real compiler).
+int __isnand(double x);
+int __isinfd(double x);
+int __isfinited(double x);
+int __isnormald(double x);
+int __signbitd(double x);
+int __isnanf(float x);
+int __isinff(float x);
+int __isfinitef(float x);
+int __isnormalf(float x);
+int __signbitf(float x);
+#define isnan(x)    _Generic((x), float: __isnanf,    default: __isnand)(x)
+#define isinf(x)    _Generic((x), float: __isinff,    default: __isinfd)(x)
+#define isfinite(x) _Generic((x), float: __isfinitef, default: __isfinited)(x)
+#define isnormal(x) _Generic((x), float: __isnormalf, default: __isnormald)(x)
+#define signbit(x)  _Generic((x), float: __signbitf,  default: __signbitd)(x)
+
+// frexpf: float version of frexp.
+float frexpf(float x, int *exp);
   `,
   "setjmp.h": `
 #pragma once
@@ -19650,6 +19697,76 @@ float modff(float x, float *iptr) {
   *iptr = truncf(x);
   return x - *iptr;
 }
+
+double nan(const char *tag) { (void)tag; return NAN; }
+float nanf(const char *tag) { (void)tag; return NAN; }
+
+// IEEE 754 classification via bit inspection. The standard isnan/isinf
+// etc. macros need underlying functions; we provide both float and
+// double variants.
+int __isnand(double x) {
+  long long bits = __wasm(long long, (x), op 0xBD);
+  long long exp = (bits >> 52) & 0x7FFL;
+  long long frac = bits & 0xFFFFFFFFFFFFFL;
+  return exp == 0x7FF && frac != 0;
+}
+int __isinfd(double x) {
+  long long bits = __wasm(long long, (x), op 0xBD);
+  long long exp = (bits >> 52) & 0x7FFL;
+  long long frac = bits & 0xFFFFFFFFFFFFFL;
+  return exp == 0x7FF && frac == 0;
+}
+int __isfinited(double x) {
+  long long bits = __wasm(long long, (x), op 0xBD);
+  long long exp = (bits >> 52) & 0x7FFL;
+  return exp != 0x7FF;
+}
+int __isnormald(double x) {
+  long long bits = __wasm(long long, (x), op 0xBD);
+  long long exp = (bits >> 52) & 0x7FFL;
+  return exp != 0 && exp != 0x7FF;
+}
+int __signbitd(double x) {
+  long long bits = __wasm(long long, (x), op 0xBD);
+  return (int)((bits >> 63) & 1L);
+}
+int __isnanf(float x) {
+  int bits = __wasm(int, (x), op 0xBC);
+  int exp = (bits >> 23) & 0xFF;
+  int frac = bits & 0x7FFFFF;
+  return exp == 0xFF && frac != 0;
+}
+int __isinff(float x) {
+  int bits = __wasm(int, (x), op 0xBC);
+  int exp = (bits >> 23) & 0xFF;
+  int frac = bits & 0x7FFFFF;
+  return exp == 0xFF && frac == 0;
+}
+int __isfinitef(float x) {
+  int bits = __wasm(int, (x), op 0xBC);
+  int exp = (bits >> 23) & 0xFF;
+  return exp != 0xFF;
+}
+int __isnormalf(float x) {
+  int bits = __wasm(int, (x), op 0xBC);
+  int exp = (bits >> 23) & 0xFF;
+  return exp != 0 && exp != 0xFF;
+}
+int __signbitf(float x) {
+  int bits = __wasm(int, (x), op 0xBC);
+  return (bits >> 31) & 1;
+}
+
+float frexpf(float x, int *exp) {
+  double d = (double)x;
+  double r = frexp(d, exp);
+  return (float)r;
+}
+
+float erff(float x)    { return (float)erf((double)x); }
+float erfcf(float x)   { return (float)erfc((double)x); }
+float tgammaf(float x) { return (float)tgamma((double)x); }
+float lgammaf(float x) { return (float)lgamma((double)x); }
   `,
   "__stdio.c": `
 #include <stdio.h>
