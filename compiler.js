@@ -5951,6 +5951,10 @@ function makeErr(loc, message) {
 //     if (id != buf[0]) throw __LongJump(id, val);
 //     <userBody>
 //   }
+// where `id` and the SThrow's first argument refer to the catch's id
+// binding var (and similarly for val) — those identity checks rule out
+// hand-written try/catch that just happens to be structurally similar.
+//
 // Returns { tag, bufExpr, userBody } on a match, or { error } describing
 // what didn't match. Used by the segmentizer to extract just `userBody`
 // for in-switch segmentization while the catch dispatcher (built by
@@ -5963,18 +5967,42 @@ function tryRecognizeSetjmpTryCatch(node) {
   if (!cc.tag || cc.tag.name !== Lexer.intern("__LongJump")) {
     return { error: `native try/catch isn't supported in an irreducible-lowered function` };
   }
+  if (!cc.bindingVars || cc.bindingVars.length !== 2) {
+    return { error: `__LongJump catch expected 2 bindings, got ${cc.bindingVars ? cc.bindingVars.length : 0}` };
+  }
+  const idVar = cc.bindingVars[0];
+  const valVar = cc.bindingVars[1];
   const cbody = cc.body;
   if (!(cbody instanceof AST.SCompound) || cbody.statements.length < 1) {
     return { error: `__LongJump catch body has unexpected shape` };
   }
   const first = cbody.statements[0];
+  // Expect: SIf(EBinary(NE, EIdent(idVar), ESubscript(bufExpr, 0)), SThrow(...), null)
   if (!(first instanceof AST.SIf)
       || !(first.condition instanceof AST.EBinary)
-      || first.condition.op !== "NE"
-      || !(first.condition.right instanceof AST.ESubscript)) {
+      || first.condition.op !== "NE") {
     return { error: `__LongJump catch body's rethrow-if-mismatch SIf has unexpected shape` };
   }
-  const bufExpr = first.condition.right.array;
+  const lhs = first.condition.left;
+  const rhs = first.condition.right;
+  if (!(lhs instanceof AST.EIdent) || lhs.decl !== idVar) {
+    return { error: `__LongJump catch rethrow check's LHS isn't the id binding` };
+  }
+  if (!(rhs instanceof AST.ESubscript)) {
+    return { error: `__LongJump catch rethrow check's RHS isn't a buf subscript` };
+  }
+  // Sanity-check the SThrow rethrows id/val from the catch bindings (so
+  // we know this catch is the setjmp-shaped "rethrow on mismatch" form
+  // and not a hand-written try/catch with a coincidentally similar SIf).
+  const rethrow = first.thenBranch;
+  if (!(rethrow instanceof AST.SThrow)
+      || rethrow.tag !== cc.tag
+      || rethrow.args.length !== 2
+      || !(rethrow.args[0] instanceof AST.EIdent) || rethrow.args[0].decl !== idVar
+      || !(rethrow.args[1] instanceof AST.EIdent) || rethrow.args[1].decl !== valVar) {
+    return { error: `__LongJump catch rethrow SThrow doesn't carry the catch's bindings` };
+  }
+  const bufExpr = rhs.array;
   const rest = cbody.statements.slice(1);
   const userBody = rest.length === 1
     ? rest[0]
