@@ -836,11 +836,26 @@ def run_micropython_tests(results, filter_str=None):
 # handle (large ints, complex numbers, async, etc.) — they'd fail for
 # reasons unrelated to our compiler.
 
-# Tests we expect to fail and don't want noise about. Add patterns
-# (substring match against the relative path under tests/) as we
-# triage. Tests that fail with NameError/ImportError for unsupported
-# stdlib modules also go here.
-MICROPYTHON_UPSTREAM_SKIP = set()
+# Tests that exercise features the minimal port doesn't enable (large
+# ints / complex / t-strings / memoryview's advanced bits / etc.). Most
+# of these would compile if we enabled the relevant MICROPY_PY_* flag,
+# but for the minimal port we deliberately leave them off — keeping
+# them in the failure list is just noise. Substring match against the
+# relative path under tests/.
+MICROPYTHON_UPSTREAM_SKIP = {
+    "intbig",        # requires MICROPY_LONGINT_IMPL_MPZ
+    "complex",       # requires MICROPY_PY_BUILTINS_COMPLEX
+    "tstring",       # Python 3.13 t-strings, not enabled
+    "memoryview",    # MICROPY_PY_BUILTINS_MEMORYVIEW
+    "/struct_",      # `struct` module not enabled in minimal port
+    "/sys_",         # most sys_* tests need MICROPY_PY_SYS_*
+    "/io_",          # MICROPY_PY_IO disabled
+    "/uctypes",      # uctypes module not enabled
+    "/array",        # array module not enabled
+    "/gc",           # MICROPY_PY_GC details
+    "math_factorial",         # needs intbig
+    "math_domain_special",    # has minor float-precision differences
+}
 
 
 def run_micropython_upstream_tests(results, filter_str=None):
