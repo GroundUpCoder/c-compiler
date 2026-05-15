@@ -7,6 +7,29 @@
 // — could be a codegen issue in our compiler or a config interaction.
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
+// Selectively enable common features beyond MINIMUM.
+#define MICROPY_PY_BUILTINS_SET           (1)
+#define MICROPY_PY_BUILTINS_SLICE         (1)
+#define MICROPY_PY_BUILTINS_MIN_MAX       (1)
+#define MICROPY_PY_BUILTINS_ENUMERATE     (1)
+#define MICROPY_PY_BUILTINS_FILTER        (1)
+#define MICROPY_PY_BUILTINS_MAP           (1)
+#define MICROPY_PY_BUILTINS_REVERSED      (1)
+#define MICROPY_PY_BUILTINS_FROZENSET     (1)
+#define MICROPY_PY_BUILTINS_PROPERTY      (1)
+#define MICROPY_PY_BUILTINS_ROUND_INT     (1)
+#define MICROPY_PY_BUILTINS_BYTES_HEX     (1)
+#define MICROPY_PY_BUILTINS_RANGE_BINOP   (1)
+#define MICROPY_PY_BUILTINS_RANGE_ATTRS   (1)
+// #define MICROPY_PY_DESCRIPTORS            (1) -- triggers compiler codegen bug
+#define MICROPY_PY_DELATTR_SETATTR        (1)
+#define MICROPY_PY_GENERATOR_PEND_THROW   (1)
+#define MICROPY_PY_ASSIGN_EXPR            (1)
+#define MICROPY_CPYTHON_COMPAT            (1)
+#define MICROPY_PY_BUILTINS_NEXT2         (1)
+#define MICROPY_COMP_RETURN_IF_EXPR       (1)
+#define MICROPY_COMP_MODULE_CONST         (1)
+
 // You can disable the built-in MicroPython compiler by setting the following
 // config option to 0.  If you do this then you won't get a REPL prompt, but you
 // will still be able to execute pre-compiled scripts, compiled with mpy-cross.
