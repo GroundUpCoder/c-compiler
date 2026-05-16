@@ -9212,7 +9212,10 @@ class Parser {
   parseEnumSpecifier() {
     this.advance(); // consume 'enum'
     let name = null;
-    if (this.atKind(Lexer.TokenKind.IDENT) && !this.typeScope.has(this.peek().text)) {
+    // Tag names live in the tag namespace, distinct from typedef names
+    // (C99 6.2.3). A `typedef enum X X;` forward declaration must not
+    // prevent us from later defining `enum X { ... }`.
+    if (this.atKind(Lexer.TokenKind.IDENT)) {
       name = this.advance().text;
     }
 
