@@ -21910,6 +21910,16 @@ window.onunhandledrejection = function(e) {
       dir = await dir.getDirectoryHandle(parts[i], { create: true });
     }
     var fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+    // Skip the write if the file is already present with the right
+    // size. Two reasons: (1) avoid re-writing big assets like pak0.pak
+    // on every page reload, and (2) avoid 'createWritable' lock
+    // conflicts when a previous run's worker still has a sync access
+    // handle open on this file (OPFS treats writable and sync handle
+    // as mutually exclusive).
+    try {
+      var existing = await fh.getFile();
+      if (existing.size === data.length) return;
+    } catch (e) { /* fall through to write */ }
     var writable = await fh.createWritable();
     await writable.write(data);
     await writable.close();
