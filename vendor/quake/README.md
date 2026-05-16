@@ -20,7 +20,17 @@ compiler or libc work.
 ## Layout
 
 - `src/` — Quake C sources + headers, copied from WinQuake/
-- `gnu.txt` — id's GPL-2.0 license text (copied verbatim)
+- `data/id1/pak0.pak` — shareware game data (id Software, redistributable)
+- `data/SHAREWARE-LICENSE.txt` — id's end-user license for the shareware data
+- `data/LICENSE-INFO.txt` — id's license info notice
+- `data/PROVENANCE.md` — where the data came from, SHA-256, license quote
+- `gnu.txt` — id's GPL-2.0 license text (covers the engine source only)
+
+The engine source (`src/`) and the data (`data/`) are under **different
+licenses**. The source is GPL-2.0 (covered by `gnu.txt`); the data is
+id Software's proprietary shareware content, freely redistributable
+under the terms in `data/SHAREWARE-LICENSE.txt`. See `data/PROVENANCE.md`
+for the full license quote.
 
 ## Excluded from upstream
 
