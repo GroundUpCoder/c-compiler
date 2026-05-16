@@ -275,7 +275,7 @@ For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
 
 The compiler is tested against real-world C projects:
 
-- **QuickJS 2025-09-13** — Fabrice Bellard's small JavaScript engine. The full engine + libc + REPL entry point (`qjs.c`) compiles to a 737 KB wasm and runs JavaScript end-to-end. Including the bootstrap step: **`compiler.js` itself loads and runs inside QuickJS-on-our-wasm.** See `vendor/quickjs/README.md` and the [Self-hosting](#self-hosting-bootstrap) section below.
+- **QuickJS 2025-09-13** — Fabrice Bellard's small JavaScript engine. The full engine + libc + REPL entry point (`qjs.c`) compiles to a 737 KB wasm and runs JavaScript end-to-end. Including the self-host loop: **`compiler.js` runs inside that QuickJS wasm and produces bit-identical wasm output compared to a native build.** See `vendor/quickjs/README.md`, the [Self-hosting](#self-hosting-bootstrap) section below, and [`demos/self-host/`](demos/self-host/).
 - **Lua 5.5.0** — Full interpreter, compiles and passes the official test suite
 - **DOOM** — doomgeneric port with Nuked-OPL3 music synthesis, runs in the browser
 - **Snake** — Terminal-based snake game using termios raw mode, ANSI escape codes, and `select()` for input handling
@@ -319,13 +319,19 @@ QuickJS is the path to running `compiler.js` on its own output. The pipeline tod
 1. **Stage 1 — C to wasm.** Our compiler builds QuickJS (~64 KLOC of C) into a 737 KB wasm.
 2. **Stage 2 — JS engine alive.** That wasm runs JavaScript: `qjs -e '1+1'` → `2`. Recursion, classes, regex, JSON, all working.
 3. **Stage 3 — Load self.** `compiler.js` itself (~870 KB of JS) loads and executes inside QuickJS-on-our-wasm, exposing `globalThis.CompilerJS`.
+4. **Stage 4 — Compile from inside.** `compiler.js` running inside QuickJS-on-wasm reads C source via `std.loadFile`, drives the full lex → parse → link → codegen pipeline, and writes a wasm file via `std.open(..., "wb").write(...)`. **The output is bit-identical to a native build of the same C source** (verified with `cmp`). See [`demos/self-host/`](demos/self-host/).
 
 ```bash
 scripts/quickjs-bootstrap.sh
 # → builds qjs.wasm, runs smoke test, loads compiler.js inside qjs.wasm
+
+node host.js /tmp/qjs.wasm --std demos/self-host/selfhost.js
+# → compiles demos/self-host/hello.c inside qjs.wasm
+node host.js /tmp/selfhost-demo/hello-rebuilt.wasm
+# → "Hello from a wasm built INSIDE wasm!" (exit 42)
 ```
 
-Equivalent manual commands:
+Equivalent stage-1–3 manual commands:
 
 ```bash
 node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json
@@ -351,7 +357,7 @@ Plus two new compiler flags introduced along the way: `--allow-zero-length-array
 
 - Fix the local-reuse bug → drop `--no-reuse-locals`.
 - Build `qjsc.c` (QuickJS's AOT compiler) on our wasm and feed `repl.js` through it → real interactive REPL.
-- Stage 4: call `globalThis.CompilerJS.compile(c_source)` inside the wasm-hosted QuickJS, write the resulting wasm bytes out, run them. Full self-host loop.
+- Compile QuickJS *itself* through stage 4 (~64 KLOC of C inside the wasm sandbox) — heavier memory/time test of the same pipeline.
 
 ## Tests
 

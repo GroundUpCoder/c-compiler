@@ -30,13 +30,21 @@ Recursion, arrow functions, `Array.map`, regex with capture groups,
 JSON, ES6 classes — all working.
 
 **Bootstrap loop**: `compiler.js` itself (~870 KB of JS) loads and runs
-inside QuickJS-on-our-wasm:
+inside QuickJS-on-our-wasm, **and that running-inside-wasm compiler
+produces bit-identical wasm output** compared to a native Node build of
+the same C source:
 
 ```
-$ node host.js /tmp/qjs.wasm --std -e \
-    "std.evalScript(std.loadFile('compiler.js')); console.log('PASS');"
-PASS
+$ node host.js /tmp/qjs.wasm --std demos/self-host/selfhost.js
+[selfhost] generated 25175 bytes of wasm
+[selfhost] wrote /tmp/selfhost-demo/hello-rebuilt.wasm
+
+$ cmp /tmp/selfhost-demo/hello-rebuilt.wasm /tmp/hello-native.wasm
+$ echo $?    # (no output)
+0            # files are byte-for-byte identical
 ```
+
+The full recipe is in [`demos/self-host/`](../../demos/self-host/).
 
 Currently this needs `--no-reuse-locals` (added to `bin.json`) to work
 around a wasm-local-slot reuse bug in our compiler — see
