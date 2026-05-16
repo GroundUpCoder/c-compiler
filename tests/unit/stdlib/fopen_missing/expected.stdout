@@ -1,0 +1,5 @@
+ok: missing file returns NULL
+ok: missing parent dir returns NULL
+ok: tight loop all return NULL
+ok: all read-mode strings handle missing
+PASS

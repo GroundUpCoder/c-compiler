@@ -10,9 +10,12 @@ to compile under our C-to-WASM compiler.
 ## Status
 
 Compiles cleanly (~1.3 MB of WASM, 67 .c files, with `--allow-old-c`).
-At runtime: `Host_Init` runs, `COM_InitFilesystem` is reached, fopen
-crashes because no game data is mounted. Genuine "needs `id1/pak0.pak`
-and a platform layer" work remains, not compiler work.
+At runtime: `Host_Init` completes, the engine correctly detects no
+game data, prints "Playing shareware version", then exits via
+`Sys_Error: W_LoadWadFile: couldn't load gfx.wad`. From here on, every
+remaining failure is **runtime plumbing** (mount `id1/pak0.pak`,
+write a real `sys_wasm.c`/`vid_wasm.c`, framebuffer→canvas), not
+compiler or libc work.
 
 ## Layout
 
@@ -78,7 +81,7 @@ The bodies never read the parameter.
 
 ### `sys_null.c`
 
-Two changes:
+Three changes:
 
 1. Added `qboolean isDedicated;`. `quakedef.h:324` declares it
    `extern`, and every real platform driver (`sys_linux.c`, `sys_win.c`,
@@ -88,6 +91,13 @@ Two changes:
    an unreachable `return 0;` at the end. The `void main` form is
    non-standard (C89/C99 §5.1.2.2.1 requires `int`); gcc accepts it
    with `-Wmain-return-type` warning, our compiler is stricter.
+3. Added `__minstack(2 * 1024 * 1024);` directive. `COM_LoadPackFile`
+   puts a `dpackfile_t info[2048]` (128 KB) on the stack, and several
+   other Quake functions allocate similarly chunky locals. Our default
+   WASM stack is one 64 KB page; without this, the local array
+   silently underflows into linear-memory zero and the next libc call
+   (typically `fopen`) traps with "memory access out of bounds." 2 MB
+   is generous headroom that mirrors a modern Unix default stack.
 
 ### `quakedef.h`
 

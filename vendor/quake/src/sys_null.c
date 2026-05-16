@@ -28,6 +28,16 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // in this port.
 qboolean isDedicated;
 
+// PATCH: Quake's COM_LoadPackFile puts a `dpackfile_t info[2048]` on the
+// stack — 128 KB. Our default WASM stack is 64 KB (one page), which
+// silently underflows into linear-memory zero and gets diagnosed as a
+// "memory access out of bounds" in the next libc call. id's code was
+// fine on a 1996 OS with multi-MB default stacks; ask for 2 MB here.
+// (Other Quake functions use chunky locals too — Hunk_Check, lump
+// loaders, etc. — so 2 MB is conservative headroom, not just for the
+// one offender.)
+__minstack(2 * 1024 * 1024);
+
 /*
 ===============================================================================
 
