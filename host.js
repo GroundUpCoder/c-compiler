@@ -748,6 +748,13 @@ function createBrowserFileSystem({ ctx }) {
     { position: null }, /* fd 2 = stderr */
   ];
 
+  /* Per-path syncAccessHandle cache. POSIX allows opening the same
+     path multiple times; OPFS forbids creating a second sync handle
+     while the first is open. We share the underlying handle across
+     fds and refcount it; each fd has its own position so this is
+     safe. See __open_impl / close for the lifecycle. */
+  const openSyncHandles = new Map();
+
   function allocFd(entry) {
     for (let i = 3; i < fdTable.length; i++) {
       if (fdTable[i] === null) { fdTable[i] = entry; return i; }
@@ -863,11 +870,29 @@ function createBrowserFileSystem({ ctx }) {
           if (exists) { setErrnoName('EEXIST'); return -1; }
         }
         const fileHandle = await info.parent.getFileHandle(info.name, { create: create });
-        const syncHandle = await fileHandle.createSyncAccessHandle();
-        if (trunc) syncHandle.truncate(0);
-        const position = append ? syncHandle.getSize() : 0;
 
-        return allocFd({ syncHandle: syncHandle, position: position, path: path });
+        // OPFS rejects createSyncAccessHandle() on a file that already
+        // has an open handle. Real POSIX is happy to open the same
+        // path multiple times with independent fd positions, and code
+        // ports rely on that (e.g. Quake's COM_FindFile fopens pak0.pak
+        // a second time to read demos out of it while the original pak
+        // handle is still open). We bridge by refcounting: the first
+        // open creates the syncAccessHandle; subsequent opens of the
+        // same resolved path share it. Each fd still tracks its own
+        // position, and the underlying read/write calls pass {at: pos}
+        // explicitly, so shared use is safe.
+        const resolved = resolvePath(path);
+        let shared = openSyncHandles.get(resolved);
+        if (!shared) {
+          const syncHandle = await fileHandle.createSyncAccessHandle();
+          shared = { syncHandle: syncHandle, refCount: 0 };
+          openSyncHandles.set(resolved, shared);
+        }
+        shared.refCount++;
+        if (trunc) shared.syncHandle.truncate(0);
+        const position = append ? shared.syncHandle.getSize() : 0;
+
+        return allocFd({ shared: shared, position: position, path: resolved });
       } catch (e) {
         setErrnoName('ENOENT');
         return -1;
@@ -882,9 +907,15 @@ function createBrowserFileSystem({ ctx }) {
         fdTable[fd] = null;
         return 0;
       }
-      if (entry.syncHandle) {
-        entry.syncHandle.flush();
-        entry.syncHandle.close();
+      // Drop one reference; only really close the syncHandle when no
+      // other fd is still using the file (see __open_impl note above).
+      if (entry.shared) {
+        entry.shared.refCount--;
+        if (entry.shared.refCount === 0) {
+          entry.shared.syncHandle.flush();
+          entry.shared.syncHandle.close();
+          openSyncHandles.delete(entry.path);
+        }
       }
       fdTable[fd] = null;
       return 0;
@@ -915,7 +946,7 @@ function createBrowserFileSystem({ ctx }) {
         return n;
       }
       const buf = new Uint8Array(count);
-      const n = entry.syncHandle.read(buf, { at: entry.position });
+      const n = entry.shared.syncHandle.read(buf, { at: entry.position });
       if (n <= 0) return 0;
       const memory = getMemory();
       const dest = new Uint8Array(memory.buffer, buf_ptr, n);
@@ -942,7 +973,7 @@ function createBrowserFileSystem({ ctx }) {
       }
       const memory = getMemory();
       const src = new Uint8Array(memory.buffer, buf_ptr, count);
-      const n = entry.syncHandle.write(src, { at: entry.position });
+      const n = entry.shared.syncHandle.write(src, { at: entry.position });
       entry.position += n;
       return n;
     },
@@ -955,7 +986,7 @@ function createBrowserFileSystem({ ctx }) {
       switch (whence) {
         case 0: newPos = offset; break;
         case 1: newPos = entry.position + offset; break;
-        case 2: newPos = entry.syncHandle.getSize() + offset; break;
+        case 2: newPos = entry.shared.syncHandle.getSize() + offset; break;
         default: setErrnoName('EINVAL'); return -1;
       }
       if (newPos < 0) { setErrnoName('EINVAL'); return -1; }
