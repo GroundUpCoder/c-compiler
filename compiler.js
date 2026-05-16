@@ -22846,6 +22846,12 @@ if (typeof module !== 'undefined') {
 if (typeof self !== 'undefined' && typeof module === 'undefined') {
   self.CompilerJS = _exports;
 }
+// Self-host path: QuickJS (and other module-free / self-free hosts) — expose
+// on globalThis so `std.evalScript(loadFile("compiler.js"))` makes the API
+// reachable.
+if (typeof globalThis !== 'undefined' && typeof module === 'undefined' && typeof self === 'undefined') {
+  globalThis.CompilerJS = _exports;
+}
 
 if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
   main();
