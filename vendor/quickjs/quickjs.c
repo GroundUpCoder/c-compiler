@@ -28,6 +28,7 @@
 #include <inttypes.h>
 #include <string.h>
 #include <assert.h>
+#include <alloca.h>
 #include <sys/time.h>
 #include <time.h>
 #include <fenv.h>
