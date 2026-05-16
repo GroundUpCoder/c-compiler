@@ -14,6 +14,6 @@ Sci:   1.234568e+04
 Prec:  3.14
 Multiple: 2 + 3 = 5
 100% done
-Pointer: 0x12205
+Pointer: 0x12209
 sprintf result: Answer: 42
 snprintf result: Hello, Wo (would write 13)

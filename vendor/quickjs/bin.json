@@ -1,7 +1,7 @@
 {
-  "type": "lib",
-  "name": "quickjs",
-  "description": "QuickJS 2025-09-13 engine library (no REPL, no quickjs-libc)",
+  "bin": true,
+  "name": "qjs",
+  "description": "QuickJS 2025-09-13 — JS engine + libc + REPL entry point",
   "includes": ["."],
   "compilerArgs": [
     "-D_GNU_SOURCE",
@@ -14,6 +14,9 @@
     "dtoa.c",
     "libregexp.c",
     "libunicode.c",
-    "quickjs.c"
+    "quickjs.c",
+    "quickjs-libc.c",
+    "qjs.c",
+    "repl_stub.c"
   ]
 }

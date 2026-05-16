@@ -65,7 +65,9 @@ typedef sig_t sighandler_t;
 #endif
 
 /* enable the os.Worker API. It relies on POSIX threads */
-#define USE_WORKER
+/* Patched out for wasm: no host threads available; os.Worker would
+   need the wasm-threads proposal + JS-side worker spawning. */
+/* #define USE_WORKER */
 
 #ifdef USE_WORKER
 #include <pthread.h>

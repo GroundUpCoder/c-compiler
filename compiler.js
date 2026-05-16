@@ -16867,6 +16867,7 @@ static inline int utimes(const char *path, const struct timeval times[2]) {
   (void)path; (void)times;
   return 0;  /* no-op: succeed silently (no underlying mtime API) */
 }
+#include <sys/select.h>  // glibc-style: fd_set / FD_* live here under _GNU_SOURCE
   `,
   "sys/file.h": `
 #pragma once
@@ -16938,6 +16939,19 @@ typedef struct __DIR DIR;
 DIR *opendir(const char *name);
 int closedir(DIR *dirp);
 struct dirent *readdir(DIR *dirp);
+  `,
+  "dlfcn.h": `
+#pragma once
+// Stub: dynamic loading (.so / .dylib plugins) is meaningless in wasm.
+// dlopen always reports failure; callers should fall back gracefully.
+#define RTLD_LAZY   0x0001
+#define RTLD_NOW    0x0002
+#define RTLD_GLOBAL 0x0100
+#define RTLD_LOCAL  0x0000
+static inline void *dlopen(const char *file, int mode) { (void)file; (void)mode; return 0; }
+static inline int   dlclose(void *handle)              { (void)handle; return 0; }
+static inline void *dlsym(void *handle, const char *name) { (void)handle; (void)name; return 0; }
+static inline char *dlerror(void)                      { return "dlopen not supported in wasm"; }
   `,
   "emscripten.h": `
 #pragma once
@@ -17563,6 +17577,8 @@ __import void longjmp(jmp_buf env, int val);
 __require_source("__signal.c");
 typedef int sig_atomic_t;
 typedef void (*__sighandler_t)(int);
+typedef __sighandler_t sighandler_t;
+typedef __sighandler_t sig_t;
 #define SIG_DFL ((__sighandler_t)0)
 #define SIG_IGN ((__sighandler_t)1)
 #define SIG_ERR ((__sighandler_t)-1)
@@ -17572,6 +17588,29 @@ typedef void (*__sighandler_t)(int);
 #define SIGINT  2
 #define SIGSEGV 11
 #define SIGTERM 15
+#define SIGHUP  1
+#define SIGQUIT 3
+#define SIGTRAP 5
+#define SIGKILL 9
+#define SIGBUS  7
+#define SIGSYS  31
+#define SIGPIPE 13
+#define SIGALRM 14
+#define SIGURG  23
+#define SIGSTOP 19
+#define SIGTSTP 20
+#define SIGCONT 18
+#define SIGCHLD 17
+#define SIGTTIN 21
+#define SIGTTOU 22
+#define SIGUSR1 10
+#define SIGUSR2 12
+#define SIGIO   29
+#define SIGPROF 27
+#define SIGWINCH 28
+#define SIGVTALRM 26
+#define SIGXCPU 24
+#define SIGXFSZ 25
 __sighandler_t signal(int __sig, __sighandler_t __handler);
 int raise(int __sig);
   `,
@@ -17782,6 +17821,8 @@ int vsprintf(char *buf, const char *fmt, va_list ap);
 int putchar(int c);
 int puts(const char *s);
 FILE *fopen(const char *path, const char *mode);
+FILE *fdopen(int fd, const char *mode);
+int fileno(FILE *stream);
 int fclose(FILE *stream);
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
@@ -17953,6 +17994,9 @@ int flsll(long long x);
 #define S_IFBLK  0060000
 #define S_IFIFO  0010000
 #define S_IFSOCK 0140000
+#define S_ISUID  04000
+#define S_ISGID  02000
+#define S_ISVTX  01000
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
@@ -17961,15 +18005,22 @@ int flsll(long long x);
 #define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
+struct timespec;  // forward; defined in <time.h>
 struct stat {
   unsigned long st_dev;
   unsigned long st_ino;
   unsigned long st_mode;
   unsigned long st_nlink;
   unsigned long st_size;
+  unsigned long st_rdev;
   long          st_atime;
   long          st_mtime;
   long          st_ctime;
+  // POSIX 2008 nanosecond fields. We don't actually fill them, but
+  // their presence lets quickjs-libc.c's compile-time member checks pass.
+  struct timespec { long tv_sec; long tv_nsec; } st_atim;
+  struct timespec st_mtim;
+  struct timespec st_ctim;
   unsigned int  st_uid;
   unsigned int  st_gid;
   long          st_blksize;
@@ -18142,6 +18193,16 @@ __import unsigned int sleep(unsigned int seconds);
 __import int symlink(const char *target, const char *linkpath);
 __import int chmod(const char *path, int mode);
 __import char *realpath(const char *path, char *resolved);
+extern char **environ;
+// POSIX process management. No wasm host equivalent — all stubs fail.
+#define _SC_OPEN_MAX 4
+static inline int   fork(void)              { return -1; }
+static inline int   execve(const char *p, char *const a[], char *const e[]) { (void)p; (void)a; (void)e; return -1; }
+static inline void  _exit(int s)            { (void)s; for (;;) {} }
+static inline long  sysconf(int name)       { (void)name; return -1; }
+static inline int   setuid(unsigned uid)    { (void)uid; return -1; }
+static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
+static inline int   kill(int pid, int sig)  { (void)pid; (void)sig; return -1; }
   `,
   "termios.h": `
 #pragma once
@@ -18288,6 +18349,27 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
   }
   return -1;
 }
+  `,
+  "sys/wait.h": `
+#pragma once
+#include <sys/types.h>
+// Stub: child-process control isn't available in our wasm runtime.
+// waitpid always reports "no child" (returns -1 with errno = ECHILD).
+#define WNOHANG    0x01
+#define WUNTRACED  0x02
+#define WCONTINUED 0x08
+#define WIFEXITED(status)    (((status) & 0x7f) == 0)
+#define WEXITSTATUS(status)  (((status) >> 8) & 0xff)
+#define WIFSIGNALED(status)  (((status) & 0x7f) != 0 && ((status) & 0x7f) != 0x7f)
+#define WTERMSIG(status)     ((status) & 0x7f)
+#define WIFSTOPPED(status)   (((status) & 0xff) == 0x7f)
+#define WSTOPSIG(status)     WEXITSTATUS(status)
+static inline pid_t waitpid(pid_t pid, int *status, int options) {
+  (void)pid; (void)options;
+  if (status) *status = 0;
+  return -1;
+}
+static inline pid_t wait(int *status) { return waitpid(-1, status, 0); }
   `,
   "guc.h": `
 #ifndef _GUC_H
@@ -20163,6 +20245,39 @@ FILE *fopen(const char *path, const char *mode) {
   }
   return f;
 }
+
+FILE *fdopen(int fd, const char *mode) {
+  int fflags = 0;
+  if (mode[0] == 'r') {
+    fflags = (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) ? (__F_READ | __F_WRITE) : __F_READ;
+  } else if (mode[0] == 'w') {
+    fflags = (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) ? (__F_READ | __F_WRITE) : __F_WRITE;
+  } else if (mode[0] == 'a') {
+    fflags = (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) ? (__F_READ | __F_WRITE | __F_APPEND) : (__F_WRITE | __F_APPEND);
+  } else {
+    return 0;
+  }
+  FILE *f = (FILE *)malloc(sizeof(FILE));
+  char *buf = (char *)malloc(BUFSIZ);
+  f->fd = fd;
+  f->flags = fflags;
+  f->buf_mode = _IOFBF;
+  f->buf = buf;
+  f->buf_size = BUFSIZ;
+  f->buf_pos = 0;
+  f->buf_len = 0;
+  f->ungetc_char = EOF;
+  if (__num_open_files < 64) {
+    __open_files[__num_open_files++] = f;
+  }
+  return f;
+}
+
+int fileno(FILE *stream) { return stream ? stream->fd : -1; }
+
+// POSIX environ — empty by default. Host can populate via __set_environ().
+static char *__environ_empty[] = { 0 };
+char **environ = __environ_empty;
 
 int fclose(FILE *stream) {
   fflush(stream);

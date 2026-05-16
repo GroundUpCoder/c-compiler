@@ -9,9 +9,31 @@ Upstream sources from https://bellard.org/quickjs/quickjs-2025-09-13-2.tar.xz
 
 ## Status
 
-**Engine library compiles end-to-end** to a ~696 KB wasm with no source
-changes beyond two `#include <alloca.h>` lines. The REPL (qjs.c +
-quickjs-libc.c) is not yet wired up.
+**The full QuickJS engine + libc + REPL entry point compiles and runs
+on our compiler.** 737 KB wasm. Direct eval works:
+
+```
+$ node host.js /tmp/qjs.wasm -e 'console.log(1 + 1)'
+2
+$ node host.js /tmp/qjs.wasm -e '
+  const fib = n => n < 2 ? n : fib(n-1) + fib(n-2);
+  console.log("fib(15) =", fib(15));
+  console.log("regex:", /\bhello\s+(\w+)/.exec("hello world!")[1]);
+  console.log("json:", JSON.stringify({a: [1,2], b: "x"}));
+'
+fib(15) = 610
+regex: world
+json: {"a":[1,2],"b":"x"}
+```
+
+Recursion, arrow functions, `Array.map`, regex with capture groups,
+JSON, ES6 classes — all working.
+
+The **interactive REPL** (`node host.js /tmp/qjs.wasm` with no `-e`)
+needs the precompiled `qjsc_repl[]` bytecode produced by the AOT
+compiler `qjsc.c`. We ship an empty `repl_stub.c` so things link; a
+follow-up will build `qjsc.c` separately and use it to generate the
+real REPL bytecode from `repl.js`.
 
 | File | LOC | Status |
 |---|---:|---|
@@ -20,17 +42,16 @@ quickjs-libc.c) is not yet wired up.
 | `libregexp.c`     |  3 280 | ✅ (patched: added `<alloca.h>`) |
 | `libunicode.c`    |  2 123 | ✅ |
 | `quickjs.c`       | 56 029 | ✅ (patched: added `<alloca.h>`) |
-| `quickjs-libc.c`  |  4 342 | ⏳ needs pthread/dlfcn/sys-wait stub headers |
-| `qjs.c`           |    551 | ⏳ depends on quickjs-libc.h |
+| `quickjs-libc.c`  |  4 342 | ✅ (patched: `USE_WORKER` disabled) |
+| `qjs.c`           |    551 | ✅ |
+| `repl_stub.c`     |     12 | ✅ (our shim — placeholder for `qjsc -e repl.js` output) |
 
-## Build (engine library)
+## Build
 
 ```bash
-node compiler.js -o /tmp/qjs-engine.wasm vendor/quickjs/bin.json
+node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json
+node host.js /tmp/qjs.wasm -e '1+1'
 ```
-
-This produces a wasm library. The intended consumer is a `qjs` REPL
-build that adds `qjs.c` + a wired-up `quickjs-libc.c` (see "Next" below).
 
 ## Build flags
 
@@ -43,24 +64,45 @@ build that adds `qjs.c` + a wired-up `quickjs-libc.c` (see "Next" below).
 
 ## Patches applied to upstream
 
-Minimal, listed verbatim:
+Minimal:
 
 - **`quickjs.c`** — add `#include <alloca.h>` (after `<assert.h>`).
   QuickJS calls `alloca()` directly, relying on glibc's `<stdlib.h>` to
-  pull it in transitively. Our `<stdlib.h>` doesn't; explicit include
-  is portable and aligns with `<alloca.h>`'s own purpose.
+  pull it in transitively.
 - **`libregexp.c`** — same `#include <alloca.h>` fix.
+- **`quickjs-libc.c`** — comment out `#define USE_WORKER` at line 68.
+  `os.Worker` would need real OS threads (the wasm-threads proposal +
+  JS-side worker spawning); not in scope.
+
+## Local files (not upstream)
+
+- **`repl_stub.c`** — provides empty `qjsc_repl[]` and `qjsc_repl_size`
+  so `qjs.c` links. The interactive REPL won't work until we generate
+  the real bytecode by running `qjsc` over `repl.js`. Direct eval
+  (`qjs -e '...'`) bypasses the bytecode load and works fully.
 
 ## Compiler / stdlib gaps closed along the way
 
 - **`parser`: enum tag names live in their own namespace** — `typedef enum
   X X;` no longer prevents a later `enum X { ... }` definition. Surfaced
   by `quickjs.c:231` / `:1044`. Tag/typedef namespaces are distinct per
-  C99 §6.2.3; the parser was treating any prior typedef of the same name
-  as a reason to refuse the IDENT as a tag.
+  C99 §6.2.3.
 - **`parser`: `--allow-zero-length-arrays` flag** — gates the legacy GCC
   extension (multiple `arr[0]` per struct, allowed in unions, not
   necessarily last). C99-strict behavior is still the default.
+- **Stub headers added**: `<dlfcn.h>` (always-fails `dlopen`/`dlsym`),
+  `<sys/wait.h>` (always-fails `waitpid`).
+- **`<sys/time.h>`** now transitively includes `<sys/select.h>`
+  (matching glibc's behavior under `_GNU_SOURCE`).
+- **`<sys/stat.h>`** gained `st_rdev`, POSIX 2008 nanosecond fields
+  (`st_atim` / `st_mtim` / `st_ctim`), and `S_ISUID` / `S_ISGID` / `S_ISVTX`.
+- **`<signal.h>`** gained `sighandler_t` / `sig_t` typedefs and the
+  full POSIX signal-number set (`SIGHUP`, `SIGPIPE`, `SIGCHLD`, etc.).
+- **`<unistd.h>`** gained `extern char **environ;` and stub bodies for
+  `fork`, `execve`, `_exit`, `sysconf`, `setuid`, `setgid`, `kill`
+  (all fail at runtime — POSIX process management isn't reachable in
+  our wasm host).
+- **`<stdio.h>`** gained `fdopen` / `fileno` declarations + bodies.
 
 ## Files
 
@@ -74,20 +116,16 @@ Minimal, listed verbatim:
 | `cutils.c` (~633 LOC) | Misc string/buffer helpers |
 | `qjs.c` (~551 LOC) | The `qjs` REPL entry point |
 | `repl.js` | REPL JS implementation (bundled at runtime) |
+| `repl_stub.c` | Empty `qjsc_repl[]` stub — replace once `qjsc` is buildable |
 
 `qjsc.c` (ahead-of-time bytecode compiler) and `run-test262.c`
-(conformance harness) are intentionally excluded — neither is needed
-for the interactive REPL.
+(conformance harness) are intentionally excluded.
 
 ## Next
 
-Getting to the `qjs >` REPL requires bringing in `quickjs-libc.c` and
-`qjs.c`. Open work:
+To get the interactive REPL working:
 
-1. Patch out or guard the unconditional `#define USE_WORKER` in
-   `quickjs-libc.c:69` — gates `<pthread.h>` and `<stdatomic.h>` includes.
-2. Either patch the unconditional `<dlfcn.h>`, `<termios.h>`,
-   `<sys/ioctl.h>`, `<sys/wait.h>` includes, or provide stub headers.
-3. `qjs.c` uses `malloc_usable_size` without an `EMSCRIPTEN` branch —
-   add the branch (one-line upstream patch) or add the symbol to our
-   stdlib.
+1. Build `qjsc.c` separately (similar header gaps to overcome — it's a
+   small tool, shouldn't need much).
+2. Run `qjsc -c -m -o repl.c repl.js` to produce the real bytecode.
+3. Drop `repl_stub.c` from `bin.json` and add the generated `repl.c`.
