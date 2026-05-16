@@ -194,6 +194,23 @@ in the libc.
 
 ## Building
 
+The repo ships a `bin.json` describing all sources, includes, compiler
+flags, and data files. Easiest:
+
+```sh
+# Self-contained playable HTML (~27 MB: wasm + pak0.pak base64-inlined)
+node compiler.js -o /tmp/quake.html vendor/quake/bin.json
+
+# Bare wasm — needs ./id1/pak0.pak available in cwd at run time
+node compiler.js -o /tmp/quake.wasm vendor/quake/bin.json
+```
+
+Open `quake.html` in any modern browser (Chrome 121+, Firefox 130+).
+The wasm runs in a Web Worker with OPFS-backed file I/O; pak0.pak is
+written to OPFS on first boot.
+
+The lower-level form (no bin.json) is equivalent:
+
 ```sh
 cd vendor/quake/src
 node ../../../compiler.js --allow-old-c -I. -o /tmp/quake.wasm *.c
