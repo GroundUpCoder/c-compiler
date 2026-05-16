@@ -10,12 +10,35 @@ to compile under our C-to-WASM compiler.
 ## Status
 
 Compiles cleanly (~1.3 MB of WASM, 67 .c files, with `--allow-old-c`).
-At runtime: `Host_Init` completes, the engine correctly detects no
-game data, prints "Playing shareware version", then exits via
-`Sys_Error: W_LoadWadFile: couldn't load gfx.wad`. From here on, every
-remaining failure is **runtime plumbing** (mount `id1/pak0.pak`,
-write a real `sys_wasm.c`/`vid_wasm.c`, framebuffer→canvas), not
-compiler or libc work.
+With `data/id1/pak0.pak` mounted, the engine **fully boots and plays
+the attract-mode demos**:
+
+```
+$ cd vendor/quake/data
+$ node --experimental-wasm-exnref ../../../host.js /tmp/quake.wasm
+Host_Init
+Added packfile ./id1/pak0.pak (339 files)
+Playing shareware version.
+Console initialized.
+8.0 megabyte heap
+========Quake Initialized=========
+execing quake.rc / default.cfg
+3 demo(s) in loop
+Playing demo from demo1.dem.
+the Necropolis
+You got the shells
+You got the Rocket Launcher
+...
+```
+
+Three real game maps load (E1M3 Necropolis, E1M4 Grisly Grotto,
+E1M6 Door to Chthon), 89 models, item pickups simulate correctly,
+demo playback runs the player AI. Headless — the software renderer
+is writing to `vid_buffer[]` in `vid_null.c`, which is never flushed
+to a display. From here, what's left is **runtime plumbing**:
+write a real `vid_sdl.c`/`sys_sdl.c`/`in_sdl.c` against host.js's
+existing `__sdl_*` surface, and add a Playwright runner to actually
+see pixels in a browser.
 
 ## Layout
 
