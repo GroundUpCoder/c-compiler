@@ -136,6 +136,24 @@ wheel → `K_MWHEELUP`/`K_MWHEELDOWN`. The mouse-look cvars
 (`sensitivity`, `m_pitch`, `m_yaw`, etc.) are defined and registered in
 upstream's `cl_main.c`; we just extern them.
 
+### `snd_sdl.c`
+
+SDL queue-based audio driver. Replaces upstream's `snd_linux.c` (which
+mmap'd `/dev/dsp`) / `snd_win.c` (DirectSound) / `snd_dos.c` (Sound
+Blaster). Opens an `SDL_AudioDevice` at 22050 Hz / 16-bit / stereo,
+fills the standard Quake `dma_t` interface (`shm->buffer`,
+`samplepos`, `samples`, etc.), and `SNDDMA_Submit` ships newly-mixed
+chunks through `SDL_QueueAudio`. `SNDDMA_GetDMAPos` computes the play
+cursor from `(totalQueued - stillQueued)` via
+`SDL_GetQueuedAudioSize`. The upstream sound core
+(`snd_dma.c` / `snd_mem.c` / `snd_mix.c`) handles all the mixing on
+top — those files are byte-identical to id's release.
+
+### `data/id1/autoexec.cfg`
+
+Modern WASD + mouselook bindings (id's 1996 defaults were keyboard
+turning + arrows). Runs after `id1/default.cfg` so overrides win.
+
 ## Changed files
 
 ### `chase.c`
