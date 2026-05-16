@@ -1,151 +1,153 @@
-# QuickJS Self-Host Bootstrap — open codegen bug
+# QuickJS Self-Host Bootstrap — local-reuse codegen bug
 
-**Status (2026-05-17):** QuickJS compiles + runs JS on our wasm. Recursion,
-classes, regex, JSON — everything works for direct eval. The one remaining
-hurdle to "compiler.js compiles itself through our QuickJS" is a single
-**codegen bug in our compiler** that miscompiles part of QuickJS's bytecode
-emitter for large/complex JS functions.
-
-## Reproduction
+**Status (2026-05-17):** Self-host loop is **open** with `--no-reuse-locals`
+as a workaround. The full pipeline:
 
 ```bash
 node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json
 node host.js /tmp/qjs.wasm --std -e \
-  "try { std.evalScript(std.loadFile('compiler.js')); console.log('PASS'); }
-   catch (e) { console.log('FAIL:', e.message); }"
-# → FAIL: stack underflow (op=36, pc=2052)
+  "std.evalScript(std.loadFile('compiler.js')); console.log('PASS');"
+# → PASS — compiler.js loads + runs inside QuickJS-on-our-wasm
 ```
 
-Native clang build of the **exact same patched sources** runs compiler.js
-successfully:
+The remaining task is to **fix the underlying local-reuse codegen bug**
+so we don't need the `--no-reuse-locals` flag.
 
-```bash
-cd vendor/quickjs && clang -O2 -D_GNU_SOURCE -DEMSCRIPTEN \
-  -DCONFIG_VERSION='"2025-09-13"' -Wno-everything *.c -lm -o /tmp/qjs-native
-/tmp/qjs-native --std -e \
-  "try { std.evalScript(std.loadFile('compiler.js')); console.log('PASS'); }
-   catch (e) { console.log('FAIL:', e.message); }"
-# → PASS
+## The bug
+
+Our compiler's wasm-local slot allocator gives **the same slot** to two
+distinct C variables in different scopes when their live ranges shouldn't
+permit it. Concretely, in QuickJS's `js_parse_postfix_expr`
+(`vendor/quickjs/quickjs.c` line 25513):
+
+```c
+} else if (s->token.val == '(' && accept_lparen) {
+    int opcode, arg_count, drop_count;     // outer block — `opcode` allocated here
+    ...
+    switch(opcode = get_prev_opcode(fd)) {
+    ...
+    case OP_scope_get_var: {
+        JSAtom name;
+        int scope;                          // INNER block scope
+        name = get_u32(...);
+        scope = get_u16(...);               // ← after this, opcode == scope (!!)
+        if (name == JS_ATOM_eval && ...) {
+            opcode = OP_eval;
+        }
+        ...
+    }
+    break;
+    ...
+    }
+    // ... later code reads opcode, expects it to be unchanged ...
+}
 ```
 
-So **the QuickJS source is fine; our compiler miscompiles it.** Native
-QuickJS is built with the same patches in `vendor/quickjs/` (alloca.h
-includes, USE_WORKER disabled).
+**Probe data** (`PROBES:` line at stack-underflow time, after instrumenting
+the various assignment sites):
 
-## The smoking gun
+```
+classify=593 cl_eq=0 in_if=0 gpo50=0
+eval_emit=9 eval_opc=50 pre_emit=1898 pre50=9 after_sw1=1543 after_sw1_50=9
 
-After enabling `#define DUMP_BYTECODE (3)` in quickjs.c and diffing the
-pass-2 bytecode dump from both builds of the inner `visit` function inside
-compiler.js's `buildSegments`:
-
-| Op | Native | Ours |
-|---|---:|---:|
-| `call`        | 80 | 77 |
-| `call_method` | 45 | 46 |
-| `eval`        | 0  | 2  |
-
-**Our build emits `OP_eval` (op 50) instead of `OP_call` for two specific
-source lines:**
-
-```js
-// compiler.js:6291
-const target = topBreakTarget();
-// our bytecode: eval 0,27   (should be: call 0)
-
-// compiler.js:6292
-close(Term.goto(target));
-// our bytecode: eval 1,27   (should be: call_method 1)
+case_scope_get_var:
+  before_name=0/593 after_name=0/593 after_scope=9/593 (opcode==50 count / total)
+  scope == opcode after assignment: 593 / 593   ← they alias 100% of the time
+  scope == 50 after read: 9                     ← in 9 cases, the read value is 50
 ```
 
-`OP_eval` has different stack effects from `OP_call`, so the verifier
-(`compute_stack_size`) later detects a stack-tracking mismatch when it
-scans the bytecode and rejects the function. The reported "op=36" is
-`call_method` further down the bytecode — it's where things finally
-collapse, not where the bug is.
+So:
+- For all 593 invocations of `case OP_scope_get_var`, the locals `scope`
+  and `opcode` share the same storage.
+- 9 of those reads return value 50 (OP_eval), so opcode is silently
+  changed to 50.
+- The outer code then dispatches based on `opcode==OP_eval` and emits
+  `OP_eval` bytecode instead of `OP_call`. The 5-byte `OP_eval` op
+  mis-frames subsequent bytecode → verifier hits a stack underflow at
+  a downstream `OP_call_method`.
 
-## Where to dig
+**Address-of test confirms**: adding `(unsigned)(uintptr_t)&opcode`
+forces opcode onto the memory frame instead of a wasm-local. With the
+address taken, the bug **disappears** — clean evidence that the issue
+is wasm-local slot allocation.
 
-The emitter logic that chooses between OP_call / OP_call_method / OP_eval
-lives in `js_parse_postfix_expr` (quickjs.c:25513). The relevant section:
+## Where to look in the compiler
 
-- **Line 25820:** `switch(opcode = get_prev_opcode(fd))` — looks at what
-  opcode was just emitted for the callee, dispatches.
-- **Line 25874:** `case OP_scope_get_var:` — reads the atom name; sets
-  `opcode = OP_eval` (line 25889) iff `name == JS_ATOM_eval &&
-  call_type == FUNC_CALL_NORMAL && !has_optional_chain`.
-- **Line 26069 (label `emit_func_call:`):** `switch(opcode)` — emits the
-  actual call op. `case OP_eval:` emits OP_eval.
+- **`allocLocal`** (`compiler.js:13480`) — pops from `freeLocalsByType`
+  for reuse. Reuse is gated on `noReuseLocals` flag (which when set,
+  fixes the bug, confirming this is the area).
+- **`pushLocalScope` / `popLocalScope`** (`compiler.js:13503-13513`) —
+  free locals back to the pool on scope exit.
+- **`hoistDeclarations`** (`compiler.js:5954`) — flattens all DVars to
+  function entry, with name-uniquification. After hoisting, the block
+  structure that originally separated `opcode` and `scope` may be lost,
+  causing the allocator to think they're independent.
+- **`SDecl` case in `emitStmt`** (`compiler.js:14252-14274`) — where
+  DVars trigger `allocLocal`. After hoisting, SDecls are replaced with
+  SExpr-only statements, so the DVars' allocs happen via some other
+  path (probably the per-function-entry decls list passed to
+  `synthesizeWrapper` at `compiler.js:6703`).
 
-When I added a probe at line 25880 (the eq check), it **never fired for
-`topBreakTarget` / `close`** — name was never `JS_ATOM_eval`. So line
-25889 never sets `opcode = OP_eval`.
+The most likely culprit: hoistDeclarations flattens the lexical scoping,
+and the function-entry allocation walks the flattened list without
+respecting original block live-ranges. Then any time the original outer
+variable's value needs to persist across a hoisted inner allocation,
+the slot is reused incorrectly.
 
-**So where does opcode come from?** Most likely from the first switch's
-expression itself: `opcode = get_prev_opcode(fd)`. If `get_prev_opcode`
-returns OP_eval directly (because the previous emitted byte is 50, the
-OP_eval value), the first switch falls through (no matching case for
-OP_eval), opcode retains the value 50, and the second switch's
-`case OP_eval:` fires.
+## Minimal repro — not yet captured
 
-The chain: once OP_eval is emitted once spuriously, the next function
-call sees it as `prev_opcode`, and the chain repeats. So we need to find
-**the first OP_eval emission** — the first time `get_prev_opcode` or
-some other path produces 50 incorrectly.
+I tried a small switch/inner-scope test that didn't trigger the bug.
+The repro needs:
+- A function with many block-scope variables
+- Variables with the same wasm-type (int)
+- An outer variable whose value must persist past inner block exit
+- Sufficient complexity to exercise the regalloc edge case
+
+Probably needs to look more like the real js_parse_postfix_expr (deep
+nesting, recursion, many branches). Worth synthesizing a real repro
+before fixing.
 
 ## What's been ruled out
 
-- **Macro-handling** — our preprocessor accepts redef silently, identical
-  to gcc/clang behavior. Not the cause.
-- **Reserved-word property names** — renaming `Term.return`/`Term.throw`
-  to `Term.ret`/`Term.thr` in compiler.js still triggers the bug with
-  identical pc.
-- **Function size threshold** — the bug only fires for `visit`. Removing
-  either the SReturn or SThrow branch makes visit pass; removing both,
-  passes. Suggests an emitter-state-dependent issue, not a per-construct
-  one.
-- **Compiler.js parser fixes** — already landed (enum tag namespace fix,
-  zero-length-array flag). Those got us past parse; the codegen bug is
-  separate.
+- **Macro / preprocessor issues** — none.
+- **Switch codegen bug** — `case OP_eval` matches correctly given
+  `opcode == 50`. Standalone switch test passes.
+- **The `OP_eval` classification check itself** — the if-body at
+  `quickjs.c:25892` never executes (probe in_if=0). The bug is upstream:
+  `opcode` already equals 50 before that check.
+- **A QuickJS bug** — native clang build of identical sources runs
+  compiler.js fine.
 
-## Probe sites attempted
+## Reproduction recipe
 
-- `compute_stack_size` at line 34516 (stack-underflow site) — useful for
-  function name + pc (gave us `func=visit op=36 pc=2052`).
-- `js_parse_postfix_expr` line 25880 — confirmed the eval-name branch
-  never fires.
-- `emit_func_call:` label (line 26065) — initial probe showed huge garbage
-  values; a cleaner re-probe showed sensible values but the `fprintf`
-  output got tangled with other JS-execution output. Need a smaller
-  side-channel.
-
-## Suggested next probe
-
-Instrument **both** clang-built and our-built QuickJS with the **same**
-minimal fprintf at `emit_func_call:`:
-
-```c
-fprintf(stderr, "FUNC_CALL opcode=%d prev_byte=%d bc_size=%d\n",
-        opcode,
-        fd->last_opcode_pos >= 0 ? fd->byte_code.buf[fd->last_opcode_pos] : -1,
-        (int)fd->byte_code.size);
+```bash
+# Build our QuickJS without the workaround:
+( cd vendor/quickjs &&
+  python3 -c "import json; b=json.load(open('bin.json')); \
+              b['compilerArgs'] = [a for a in b['compilerArgs'] if a!='--no-reuse-locals']; \
+              json.dump(b, open('bin.json','w'), indent=2)" )
+node compiler.js -o /tmp/qjs-buggy.wasm vendor/quickjs/bin.json
+node host.js /tmp/qjs-buggy.wasm --std -e \
+  "std.evalScript(std.loadFile('compiler.js'))"
+# → InternalError: stack underflow (op=36, pc=2052)
 ```
 
-Diff the outputs, find the first line that disagrees. That tells us
-which exact function call diverges, then we can look at the
-**immediately preceding bytecode emission** and ask why our build
-produced a different opcode there.
+Re-add `--no-reuse-locals` and it passes.
 
-## Once the divergent C construct is found
+## Once fixed
 
-Reduce to a minimal C test case (a hundred lines, no QuickJS
-dependencies), add to `tests/unit/...`, fix the codegen, watch the
-whole compiler.js-on-QuickJS-on-our-compiler pipeline come alive.
+Drop `--no-reuse-locals` from `vendor/quickjs/bin.json`. Verify the
+full self-host:
 
-Self-host through a JS engine is one bug away.
+```bash
+node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json
+node host.js /tmp/qjs.wasm --std -e '
+  std.evalScript(std.loadFile("compiler.js"));
+  const wasm_bytes = globalThis.CompilerJS.compile("int main(){return 42;}");
+  std.open("/tmp/out.wasm","wb").write(wasm_bytes,0,wasm_bytes.length);
+'
+node host.js /tmp/out.wasm
+# → exit code 42
+```
 
-## Useful files
-
-- `vendor/quickjs/bin.json` — build config with our patches + `--allow-zero-length-arrays`
-- `/tmp/qjs.wasm` — our build (build via `node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json`)
-- `/tmp/qjs-native` — reference clang build (build via the `clang -O2 ...` invocation above)
-- `/tmp/qjs-bisect/` — bisect artifacts from when we narrowed the trigger to `visit`
+That's the bootstrap.

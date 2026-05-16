@@ -1,13 +1,16 @@
 {
   "bin": true,
   "name": "qjs",
-  "description": "QuickJS 2025-09-13 — JS engine + libc + REPL entry point",
-  "includes": ["."],
+  "description": "QuickJS 2025-09-13 \u2014 JS engine + libc + REPL entry point",
+  "includes": [
+    "."
+  ],
   "compilerArgs": [
     "-D_GNU_SOURCE",
     "-DEMSCRIPTEN",
     "-DCONFIG_VERSION=\"2025-09-13\"",
-    "--allow-zero-length-arrays"
+    "--allow-zero-length-arrays",
+    "--no-reuse-locals"
   ],
   "sources": [
     "cutils.c",

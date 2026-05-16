@@ -9,8 +9,8 @@ Upstream sources from https://bellard.org/quickjs/quickjs-2025-09-13-2.tar.xz
 
 ## Status
 
-**The full QuickJS engine + libc + REPL entry point compiles and runs
-on our compiler.** 737 KB wasm. Direct eval works:
+**Full QuickJS — engine + libc + REPL entry point — compiles, runs, and
+evaluates large JS programs.** 737 KB wasm. Direct eval works:
 
 ```
 $ node host.js /tmp/qjs.wasm -e 'console.log(1 + 1)'
@@ -28,6 +28,20 @@ json: {"a":[1,2],"b":"x"}
 
 Recursion, arrow functions, `Array.map`, regex with capture groups,
 JSON, ES6 classes — all working.
+
+**Bootstrap loop**: `compiler.js` itself (~870 KB of JS) loads and runs
+inside QuickJS-on-our-wasm:
+
+```
+$ node host.js /tmp/qjs.wasm --std -e \
+    "std.evalScript(std.loadFile('compiler.js')); console.log('PASS');"
+PASS
+```
+
+Currently this needs `--no-reuse-locals` (added to `bin.json`) to work
+around a wasm-local-slot reuse bug in our compiler — see
+[todos/QUICKJS-SELF-HOST.md](../../todos/QUICKJS-SELF-HOST.md) for the
+exact bug and how to find it. Once that's fixed, drop the flag.
 
 The **interactive REPL** (`node host.js /tmp/qjs.wasm` with no `-e`)
 needs the precompiled `qjsc_repl[]` bytecode produced by the AOT
