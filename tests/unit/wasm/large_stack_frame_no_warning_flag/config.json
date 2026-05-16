@@ -1,0 +1,3 @@
+{
+  "compilerArgs": ["-Wno-large-stack-frame"]
+}

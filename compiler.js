@@ -13388,6 +13388,7 @@ class CodeGenerator {
   constructor(wmod, options) {
     this.wmod = wmod;
     this.compilerOptions = options?.compilerOptions || {};
+    this.warningFlags = options?.warningFlags || {};
     this.writeErr = options?.writeErr
       || (typeof process !== 'undefined' && process.stderr ? (s) => process.stderr.write(s) : (s) => console.error(s));
     this.funcDefToWasmFuncIdx = new Map();
@@ -14054,6 +14055,28 @@ class CodeGenerator {
         }
       }
       this.frameSize = (offset + 15) & ~15;
+    }
+
+    // Warn when a single function's stack frame is at or above the
+    // effective WASM stack size — calling it once is guaranteed to
+    // underflow the stack pointer into linear-memory zero, which
+    // silently corrupts memory and surfaces as a confusing trap in
+    // whatever libc call happens next (we burned an hour finding this
+    // in the Quake port). Off only via -Wno-large-stack-frame.
+    if (this.warningFlags.largeStackFrame && this.frameSize > 0) {
+      const stackBytes = this.stackPages * 65536;
+      if (this.frameSize >= stackBytes) {
+        const loc = funcDef.loc || {};
+        const fname = loc.filename || "<unknown>";
+        const line = loc.line || 0;
+        this.writeErr(
+          `${fname}:${line}: warning: function '${funcDef.name}' has a ` +
+          `${this.frameSize}-byte stack frame, ` +
+          `which meets or exceeds the ${stackBytes}-byte WASM stack — ` +
+          `calling it will trap. Consider __minstack(N); at file scope, ` +
+          `or move large locals to the heap [-Wlarge-stack-frame]\n`
+        );
+      }
     }
   }
 
@@ -22186,7 +22209,7 @@ function main() {
   const inputFiles = [];
   const opfsFiles = [];
   const runArgs = [];
-  const warningFlags = { pointerDecay: false, circularDependency: false };
+  const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
   let noXterm = false;
   const pp = Stdlib.createDefaultPPRegistry();
@@ -22222,6 +22245,8 @@ function main() {
       else if (wflag === "no-pointer-decay") warningFlags.pointerDecay = false;
       else if (wflag === "circular-dependency") warningFlags.circularDependency = true;
       else if (wflag === "no-circular-dependency") warningFlags.circularDependency = false;
+      else if (wflag === "large-stack-frame") warningFlags.largeStackFrame = true;
+      else if (wflag === "no-large-stack-frame") warningFlags.largeStackFrame = false;
     } else if (args[i] === "-g" || args[i] === "-g1") {
       compilerOptions.emitNames = true;
     } else if (args[i] === "-g2") {
@@ -22412,7 +22437,7 @@ function main() {
       }
       if (compilerOptions.gcSections) Parser.gcSectionsPass(units, compilerOptions);
       t0 = hrtime();
-      const codegenOpts = { compilerOptions };
+      const codegenOpts = { compilerOptions, warningFlags };
       if (compilerOptions.embedSources) codegenOpts.sourceBuffers = pp.sourceBuffers;
       const wasmBinary = Codegen.generateCode(units, outputFile, codegenOpts);
       const codegenMs = hrtime() - t0;

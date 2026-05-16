@@ -137,6 +137,8 @@ function workerMain() {
         else if (w === 'no-pointer-decay') warningFlags.pointerDecay = false;
         else if (w === 'circular-dependency') warningFlags.circularDependency = true;
         else if (w === 'no-circular-dependency') warningFlags.circularDependency = false;
+        else if (w === 'large-stack-frame') warningFlags.largeStackFrame = true;
+        else if (w === 'no-large-stack-frame') warningFlags.largeStackFrame = false;
       } else if (a === '--no-reuse-locals') compilerOptions.noReuseLocals = true;
       else if (a === '--compiler-debug-switch') compilerOptions.debugSwitch = true;
       else if (a === '--allow-implicit-int') compilerOptions.allowImplicitInt = true;
@@ -196,7 +198,7 @@ function workerMain() {
       allowUndefined: false, gcSections: false, gcNoExportRoots: false,
       noUndefined: false, requireSources: [], backend: 'default',
     };
-    const warningFlags = { pointerDecay: false, circularDependency: false };
+    const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
     configureCompilerArgs(td.config.compilerArgs || [], pp, compilerOptions, warningFlags);
 
     // Use relative paths matching python runner (errors report paths the same way)
@@ -231,7 +233,7 @@ function workerMain() {
           }
         }
         if (compilerOptions.gcSections) compiler.gcSectionsPass(units, compilerOptions);
-        wasmBinary = compiler.generateCode(units, 'test.wasm', { compilerOptions });
+        wasmBinary = compiler.generateCode(units, 'test.wasm', { compilerOptions, warningFlags, writeErr: writeCompilerErr });
       }
     } catch (e) {
       if (e instanceof ExitOverride) {

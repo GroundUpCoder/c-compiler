@@ -1,0 +1,1 @@
+tests/unit/wasm/large_stack_frame_warning/large_stack_frame_warning.c:11: warning: function 'big_buffer_function' has a 70000-byte stack frame, which meets or exceeds the 65536-byte WASM stack — calling it will trap. Consider __minstack(N); at file scope, or move large locals to the heap [-Wlarge-stack-frame]
