@@ -105,16 +105,14 @@ int SNDDMA_GetDMAPos (void)
 
 /*
  * Submit pulls "new mix" out of the engine's ring buffer and pushes
- * it into SDL_QueueAudio. Quake exposes paintedtime (mono samples mixed
- * total since start) and soundtime (mono samples played total). We
- * already track samples played via sdl_bytes_played; we know "new
- * stuff was mixed since last submit" is the slice between sdl_bytes_total
- * (in bytes-mixed terms — equivalent to paintedtime) and what
- * paintedtime says it just mixed up to.
+ * it into SDL_QueueAudio.
  *
- * Simpler: every Submit, look at how far paintedtime advanced past
- * what we've already queued, copy that many bytes from shm->buffer
- * (with ring-buffer wraparound), queue them, and bump sdl_bytes_total.
+ * paintedtime is in STEREO FRAMES (snd_mix.c line 116: lpos = lpaintedtime
+ * & ((shm->samples>>1) - 1) — masks against samples/2, which for stereo
+ * is the frame count; the buffer cursor then advances 4 bytes per
+ * paintedtime tick). To convert frames → bytes we need
+ * (bytes_per_sample × channels). An earlier version of this file
+ * used (bytes_per_sample) only and was queuing half the audio.
  */
 extern int paintedtime;  // declared in snd_dma.c
 
@@ -122,8 +120,8 @@ void SNDDMA_Submit (void)
 {
 	if (!sdl_audio_inited) return;
 
-	int bytes_per_sample = SAMPLE_BITS / 8;
-	int paintedtime_bytes = paintedtime * bytes_per_sample;
+	int bytes_per_frame = (SAMPLE_BITS / 8) * CHANNELS;
+	int paintedtime_bytes = paintedtime * bytes_per_frame;
 	int need = paintedtime_bytes - sdl_bytes_total;
 	if (need <= 0) return;
 
