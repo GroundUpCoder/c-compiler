@@ -1,0 +1,17 @@
+{
+  "bin": false,
+  "name": "qjs",
+  "description": "QuickJS 2025-09-13 JavaScript engine + REPL",
+  "includes": ["."],
+  "compilerArgs": [
+    "-D_GNU_SOURCE",
+    "-DEMSCRIPTEN",
+    "-DCONFIG_VERSION=\"2025-09-13\""
+  ],
+  "sources": [
+    "cutils.c",
+    "dtoa.c",
+    "libunicode.c",
+    "quickjs.c"
+  ]
+}
