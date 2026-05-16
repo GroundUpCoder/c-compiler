@@ -5,7 +5,8 @@
   "includes": ["src"],
   "compilerArgs": ["--allow-old-c"],
   "dataFiles": {
-    "data/id1/pak0.pak": "/id1/pak0.pak"
+    "data/id1/pak0.pak": "/id1/pak0.pak",
+    "data/id1/autoexec.cfg": "/id1/autoexec.cfg"
   },
   "sources": [
     "src/cd_null.c",

@@ -21516,6 +21516,19 @@ function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, x
     path: f.destPath,
     data: Buffer.from(f.bytes).toString('base64'),
   }));
+  // Stable content hash for the wasm + every OPFS asset. Embedded in
+  // the page so the runtime can decide whether the OPFS-mounted copies
+  // need to be (re)written: matches → skip the (potentially large)
+  // writes; differs → rewrite everything and update the marker.
+  // SHA-256 is overkill but free; only happens at bundle time.
+  const crypto = require('crypto');
+  const bundleHasher = crypto.createHash('sha256');
+  bundleHasher.update(wasmBinary);
+  for (const f of opfsFiles) {
+    bundleHasher.update(f.destPath);
+    bundleHasher.update(f.bytes);
+  }
+  const bundleHash = bundleHasher.digest('hex');
   const hasXterm = !!xtermSources;
   const safeXtermJs = hasXterm ? xtermSources.xtermJs.replace(/<\/script>/gi, '<\\/script>') : '';
   const safeXtermFitJs = hasXterm ? xtermSources.xtermFitJs.replace(/<\/script>/gi, '<\\/script>') : '';
@@ -21672,6 +21685,7 @@ window.onunhandledrejection = function(e) {
 (function() {
   var WASM_BASE64 = ${JSON.stringify(wasmBase64)};
   var OPFS_FILES = ${JSON.stringify(opfsEntries)};
+  var BUNDLE_HASH = ${JSON.stringify(bundleHash)};
   var RUN_ARGS = ${JSON.stringify(runArgs)};
   var PROGRAM_NAME = ${JSON.stringify(programName)};
   var HAS_XTERM = ${hasXterm};
@@ -21902,45 +21916,108 @@ window.onunhandledrejection = function(e) {
     }, 2000);
   }
 
-  async function writeToOPFS(path, data) {
+  // Get the OPFS file handle for a path, creating parent directories
+  // as needed. Returns the FileSystemFileHandle.
+  async function getOPFSHandle(path, create) {
     var root = await navigator.storage.getDirectory();
     var parts = path.split('/').filter(Boolean);
     var dir = root;
     for (var i = 0; i < parts.length - 1; i++) {
-      dir = await dir.getDirectoryHandle(parts[i], { create: true });
+      dir = await dir.getDirectoryHandle(parts[i], { create: create });
     }
-    var fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
-    // Skip the write if the file is already present with the right
-    // size. Two reasons: (1) avoid re-writing big assets like pak0.pak
-    // on every page reload, and (2) avoid 'createWritable' lock
-    // conflicts when a previous run's worker still has a sync access
-    // handle open on this file (OPFS treats writable and sync handle
-    // as mutually exclusive).
+    return await dir.getFileHandle(parts[parts.length - 1], { create: create });
+  }
+
+  // The bundle-hash marker lives at OPFS:/__bundle_hash. If its
+  // contents match BUNDLE_HASH (computed at build time from the wasm
+  // + every OPFS_FILES asset), we trust that all the OPFS-mounted
+  // files are current and skip rewriting them. Otherwise we rewrite
+  // every file and update the marker. This avoids re-writing big
+  // assets like Quake's 18 MB pak0.pak on every page reload, while
+  // still correctly rewriting if you rebuild with different content.
+  async function readBundleHash() {
     try {
-      var existing = await fh.getFile();
-      if (existing.size === data.length) return;
-    } catch (e) { /* fall through to write */ }
-    var writable = await fh.createWritable();
-    await writable.write(data);
-    await writable.close();
+      var fh = await getOPFSHandle('/__bundle_hash', false);
+      var f = await fh.getFile();
+      return await f.text();
+    } catch (e) { return null; }
+  }
+  async function writeBundleHash(hash) {
+    var fh = await getOPFSHandle('/__bundle_hash', true);
+    // Retry once after a short delay: a previous worker's sync-access
+    // handle on this file (rare since it's our own marker) could still
+    // be lingering immediately after page reload.
+    var lastErr;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        var w = await fh.createWritable();
+        await w.write(hash);
+        await w.close();
+        return;
+      } catch (e) {
+        lastErr = e;
+        await new Promise(function (r) { setTimeout(r, 150 * (attempt + 1)); });
+      }
+    }
+    throw lastErr;
+  }
+
+  async function writeOPFSFile(path, data) {
+    var fh = await getOPFSHandle(path, true);
+    // Same retry pattern: if the previous run's worker still holds a
+    // sync access handle on this file, createWritable will throw
+    // 'modifications are not allowed.' The worker.terminate() on
+    // beforeunload should release it promptly, but Chromium sometimes
+    // takes a beat.
+    var lastErr;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        var writable = await fh.createWritable();
+        await writable.write(data);
+        await writable.close();
+        return;
+      } catch (e) {
+        lastErr = e;
+        await new Promise(function (r) { setTimeout(r, 200 * (attempt + 1)); });
+      }
+    }
+    throw lastErr;
   }
 
   async function start() {
     overlay.style.display = 'none';
     if (term) { term.clear(); terminalEl.style.display = 'block'; if (fitAddon) fitAddon.fit(); term.focus(); }
-    setStatus('Writing files...');
 
     var wasmBytes = base64ToBytes(WASM_BASE64);
 
-    for (var i = 0; i < OPFS_FILES.length; i++) {
-      var fileData = base64ToBytes(OPFS_FILES[i].data);
-      await writeToOPFS(OPFS_FILES[i].path, fileData);
+    // Bundle-hash check: if every OPFS asset is already at the right
+    // version, skip writing them. (On first load, or on rebuild, the
+    // marker won't match and we write everything.)
+    var storedHash = await readBundleHash();
+    if (storedHash === BUNDLE_HASH && OPFS_FILES.length > 0) {
+      setStatus('Assets up to date (skip ' + OPFS_FILES.length + ' files)');
+    } else {
+      setStatus('Writing ' + OPFS_FILES.length + ' files...');
+      for (var i = 0; i < OPFS_FILES.length; i++) {
+        var fileData = base64ToBytes(OPFS_FILES[i].data);
+        await writeOPFSFile(OPFS_FILES[i].path, fileData);
+      }
+      await writeBundleHash(BUNDLE_HASH);
     }
 
     setStatus('Starting...');
     var workerSource = ${JSON.stringify(workerScript)};
     var blob = new Blob([workerSource], { type: 'application/javascript' });
     var workerUrl = URL.createObjectURL(blob);
+
+    // Synchronously terminate the worker on page unload so its
+    // OPFS sync-access handles release immediately. Without this,
+    // Chromium can hold the locks for a moment after the worker is
+    // killed implicitly, causing the next page load's writes to
+    // collide ('modifications are not allowed.') — see writeOPFSFile.
+    window.addEventListener('beforeunload', function () {
+      if (worker) { try { worker.terminate(); } catch (e) {} worker = null; }
+    });
     worker = new Worker(workerUrl);
 
     var newCanvas = document.createElement('canvas');
