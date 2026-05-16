@@ -80,8 +80,61 @@ A first commit imported a curated subset; everything not listed in
 
 ## Modifications from upstream
 
-All edits are tagged `// PATCH:` in the source so they're easy to grep.
-Five files differ from the byte-for-byte upstream import.
+All in-place edits are tagged `// PATCH:` in the source so they're
+easy to grep. Files fall into three buckets:
+
+- **Added** (new files for this port, written from scratch):
+  `vid_sdl.c`, `sys_sdl.c`, `in_sdl.c` — see "Added files" below.
+- **Changed** (upstream files with `// PATCH:` edits):
+  `chase.c`, `net.h`, `net_main.c`, `quakedef.h` — see "Changed files".
+- **Removed** (upstream files dropped or superseded):
+  `sys_null.c`, `vid_null.c`, `in_null.c` (replaced by the SDL versions
+  above); the various other upstream platform variants were never
+  imported in the first place (see "Excluded from upstream" earlier).
+
+## Added files
+
+### `vid_sdl.c`
+
+SDL video driver. Creates a 320×200 SDL window, keeps a 256-entry RGBA
+LUT in sync with Quake's palette via `VID_SetPalette`/`VID_ShiftPalette`,
+and `VID_Update` translates the 8-bit `vid_buffer[]` framebuffer
+through the LUT into the window's RGBA32 surface, then calls
+`SDL_UpdateWindowSurface` to flush. CSS scales the canvas for display;
+the bitmap stays native resolution. Stubs `D_BeginDirectRect` /
+`D_EndDirectRect` (the pause/disk icons).
+
+### `sys_sdl.c`
+
+SDL-based system driver. Three concerns:
+
+1. **Time**: `Sys_FloatTime` returns seconds since the first call, via
+   `SDL_GetTicks` deltas (replaces the upstream synthetic +0.1s
+   stepping).
+2. **Main loop**: `main()` calls `Host_Init` then hands control to
+   `emscripten_set_main_loop(host_frame_tick, 0, 1)` — which our libc
+   routes to `__sdl_set_animation_frame_func`, so the browser drives
+   frames via `requestAnimationFrame` and `host_frame_tick` computes
+   the dt and calls `Host_Frame`.
+3. **File I/O**: the `Sys_File*` block is the same code that was in
+   `sys_null.c` (libc-backed fopen/fread/fwrite/fseek). This works
+   directly against Node's real `fs` and against the OPFS-mounted
+   filesystem in the browser.
+
+Also defines `qboolean isDedicated` and applies `__minstack(2 MB)` so
+`COM_LoadPackFile`'s 128 KB stack frame fits.
+
+### `in_sdl.c`
+
+SDL-based input driver. `Sys_SendKeyEvents` drains the SDL event queue
+via `SDL_PollEvent`, translates keysyms to Quake's `K_*` codes via
+`sdlk_to_quakekey`, and dispatches: keyboard → `Key_Event`, mouse motion
+→ accumulated delta consumed by `IN_Move`, mouse buttons → `K_MOUSE1`/2/3,
+wheel → `K_MWHEELUP`/`K_MWHEELDOWN`. The mouse-look cvars
+(`sensitivity`, `m_pitch`, `m_yaw`, etc.) are defined and registered in
+upstream's `cl_main.c`; we just extern them.
+
+## Changed files
 
 ### `chase.c`
 
@@ -112,25 +165,14 @@ To match the new `net.h` pointer type, both `Slist_Send` and
 `Slist_Poll` now take `void *unused` (forward decls and definitions).
 The bodies never read the parameter.
 
-### `sys_null.c`
+### `sys_null.c` *(removed; superseded by added `sys_sdl.c`)*
 
-Three changes:
-
-1. Added `qboolean isDedicated;`. `quakedef.h:324` declares it
-   `extern`, and every real platform driver (`sys_linux.c`, `sys_win.c`,
-   etc.) provides the definition — the null driver upstream is
-   incomplete and won't link without it.
-2. Changed `void main(int, char **)` to `int main(int, char **)` with
-   an unreachable `return 0;` at the end. The `void main` form is
-   non-standard (C89/C99 §5.1.2.2.1 requires `int`); gcc accepts it
-   with `-Wmain-return-type` warning, our compiler is stricter.
-3. Added `__minstack(2 * 1024 * 1024);` directive. `COM_LoadPackFile`
-   puts a `dpackfile_t info[2048]` (128 KB) on the stack, and several
-   other Quake functions allocate similarly chunky locals. Our default
-   WASM stack is one 64 KB page; without this, the local array
-   silently underflows into linear-memory zero and the next libc call
-   (typically `fopen`) traps with "memory access out of bounds." 2 MB
-   is generous headroom that mirrors a modern Unix default stack.
+Replaced wholesale by `sys_sdl.c` (see below). The earlier port iterations
+kept `sys_null.c` with three patches (adding `qboolean isDedicated`,
+changing `void main` → `int main`, adding `__minstack(2 MB)`); those
+fixes are now folded into the new file's main entry point and its
+`isDedicated` definition, with a more thorough `Sys_FloatTime` based
+on `SDL_GetTicks` instead of synthetic 0.1s steps.
 
 ### `quakedef.h`
 
