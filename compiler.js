@@ -21942,46 +21942,73 @@ window.onunhandledrejection = function(e) {
       return await f.text();
     } catch (e) { return null; }
   }
-  async function writeBundleHash(hash) {
-    var fh = await getOPFSHandle('/__bundle_hash', true);
-    // Retry once after a short delay: a previous worker's sync-access
-    // handle on this file (rare since it's our own marker) could still
-    // be lingering immediately after page reload.
-    var lastErr;
-    for (var attempt = 0; attempt < 3; attempt++) {
-      try {
-        var w = await fh.createWritable();
-        await w.write(hash);
-        await w.close();
-        return;
-      } catch (e) {
-        lastErr = e;
-        await new Promise(function (r) { setTimeout(r, 150 * (attempt + 1)); });
+  // Recover from the 'modifications are not allowed' lock state by
+  // unlinking the file outright (which also forces OPFS to drop any
+  // lingering handles on it) before recreating it. removeEntry can
+  // also throw the same error if a handle is still held — we treat
+  // a hard failure here as a sign that the caller should surface a
+  // 'clear site data and retry' message.
+  async function tryUnlinkOPFS(path) {
+    var root = await navigator.storage.getDirectory();
+    var parts = path.split('/').filter(Boolean);
+    var dir = root;
+    try {
+      for (var i = 0; i < parts.length - 1; i++) {
+        dir = await dir.getDirectoryHandle(parts[i]);
       }
-    }
-    throw lastErr;
+      await dir.removeEntry(parts[parts.length - 1]);
+      return true;
+    } catch (e) { return false; }
   }
 
-  async function writeOPFSFile(path, data) {
-    var fh = await getOPFSHandle(path, true);
-    // Same retry pattern: if the previous run's worker still holds a
-    // sync access handle on this file, createWritable will throw
-    // 'modifications are not allowed.' The worker.terminate() on
-    // beforeunload should release it promptly, but Chromium sometimes
-    // takes a beat.
+  // Try to write to an OPFS file with progressive recovery:
+  //   - First attempt: just createWritable.
+  //   - If it fails (lock conflict), wait + retry several times.
+  //     Chromium can take a few seconds to release locks held by a
+  //     previous tab's worker that was implicitly terminated.
+  //   - Halfway through, try unlinking the file too — that sometimes
+  //     wakes Chromium's GC up. If unlink succeeds, recreate.
+  //   - Final fallback: throw the original error so the caller can
+  //     show a recovery affordance.
+  async function writeWithRetry(path, data) {
     var lastErr;
-    for (var attempt = 0; attempt < 3; attempt++) {
+    // 12 attempts × accelerating waits ≈ up to 10 seconds total, which
+    // is the worst-case Chrome lock cleanup time observed in practice.
+    for (var attempt = 0; attempt < 12; attempt++) {
       try {
+        var fh = await getOPFSHandle(path, true);
         var writable = await fh.createWritable();
         await writable.write(data);
         await writable.close();
         return;
       } catch (e) {
         lastErr = e;
-        await new Promise(function (r) { setTimeout(r, 200 * (attempt + 1)); });
+        if (attempt === 5) {
+          // Mid-retry: try unlinking. Sometimes works when the
+          // FileSystemFileHandle is stuck.
+          await tryUnlinkOPFS(path);
+        }
+        await new Promise(function (r) { setTimeout(r, 300 + 200 * attempt); });
       }
     }
     throw lastErr;
+  }
+
+  async function writeBundleHash(hash) {
+    var enc = new TextEncoder();
+    await writeWithRetry('/__bundle_hash', enc.encode(hash));
+  }
+
+  async function writeOPFSFile(path, data) {
+    await writeWithRetry(path, data);
+  }
+
+  // Wipe every OPFS file we know about. Surfaced via the recovery
+  // button shown when start() can't get past a stuck lock state.
+  async function clearOPFSState() {
+    var paths = ['/__bundle_hash'];
+    for (var i = 0; i < OPFS_FILES.length; i++) paths.push(OPFS_FILES[i].path);
+    for (var j = 0; j < paths.length; j++) await tryUnlinkOPFS(paths[j]);
   }
 
   async function start() {
@@ -21998,11 +22025,39 @@ window.onunhandledrejection = function(e) {
       setStatus('Assets up to date (skip ' + OPFS_FILES.length + ' files)');
     } else {
       setStatus('Writing ' + OPFS_FILES.length + ' files...');
-      for (var i = 0; i < OPFS_FILES.length; i++) {
-        var fileData = base64ToBytes(OPFS_FILES[i].data);
-        await writeOPFSFile(OPFS_FILES[i].path, fileData);
+      try {
+        for (var i = 0; i < OPFS_FILES.length; i++) {
+          var fileData = base64ToBytes(OPFS_FILES[i].data);
+          await writeOPFSFile(OPFS_FILES[i].path, fileData);
+        }
+        await writeBundleHash(BUNDLE_HASH);
+      } catch (e) {
+        if (/modifications are not allowed/i.test(e && e.message)) {
+          // Most likely cause: another tab of this page is still open
+          // and its worker is holding sync-access handles on these
+          // files. OPFS keeps the lock as long as any handle in any
+          // tab references it. Surface a clear path forward — the
+          // user can either close the other tab or wipe OPFS state.
+          status.style.display = 'block';
+          status.innerHTML =
+            "OPFS write blocked: a previous run still has the data " +
+            "files locked. Close any other open tabs of this page, " +
+            "then reload. If the problem persists, click " +
+            "<button id='__opfs_reset'>Reset OPFS &amp; Reload</button> " +
+            "to wipe the cached data files.";
+          var btn = document.getElementById('__opfs_reset');
+          if (btn) {
+            btn.addEventListener('click', async function () {
+              btn.disabled = true;
+              btn.textContent = 'Wiping…';
+              try { await clearOPFSState(); } catch (ignore) {}
+              location.reload();
+            });
+          }
+          return;
+        }
+        throw e;
       }
-      await writeBundleHash(BUNDLE_HASH);
     }
 
     setStatus('Starting...');
