@@ -1,0 +1,4 @@
+sizeof=8
+s8: len=5 wide=0 data=hello
+s16: len=3 wide=1 data=41,42,43
+alias: str8==str16? 1

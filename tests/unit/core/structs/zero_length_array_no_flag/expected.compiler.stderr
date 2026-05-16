@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/zero_length_array_no_flag/zero_length_array_no_flag.c.
+tests/unit/core/structs/zero_length_array_no_flag/zero_length_array_no_flag.c:8: error: flexible array member not allowed in a union

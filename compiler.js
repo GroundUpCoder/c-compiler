@@ -9038,8 +9038,12 @@ class Parser {
       tagType.tagDecl = tagDecl;
       tagDecl.members = members;
 
-      // Validate flexible array members (C99)
-      {
+      // Validate flexible array members (C99). With
+      // --allow-zero-length-arrays, the legacy GCC zero-length-array
+      // extension is permitted: multiple `arr[0]` members, in unions,
+      // and not necessarily last. Their sizeof is 0 so the struct/
+      // union layout still works.
+      if (!this._allowZeroLengthArrays) {
         let foundFAM = false, famIdx = -1;
         const varMembers = members.filter(m => m instanceof AST.DVar);
         for (let i = 0; i < varMembers.length; i++) {
@@ -11515,6 +11519,7 @@ function parseTokens(tokens, options) {
   if (options?.compilerOptions?.allowImplicitInt) parser._allowImplicitInt = true;
   if (options?.compilerOptions?.allowKnRDefinitions) parser._allowKnRDefinitions = true;
   if (options?.compilerOptions?.allowImplicitFunctionDecl) parser._allowImplicitFunctionDecl = true;
+  if (options?.compilerOptions?.allowZeroLengthArrays) parser._allowZeroLengthArrays = true;
   if (options?.exceptionTagRegistry) parser._exceptionTagRegistry = options.exceptionTagRegistry;
 
   withDiag(sink, () => {
@@ -22365,7 +22370,7 @@ function main() {
   const opfsFiles = [];
   const runArgs = [];
   const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
-  const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
+  const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
   let noXterm = false;
   const pp = Stdlib.createDefaultPPRegistry();
 
@@ -22421,6 +22426,8 @@ function main() {
       compilerOptions.allowImplicitFunctionDecl = true;
     } else if (args[i] === "--allow-undefined") {
       compilerOptions.allowUndefined = true;
+    } else if (args[i] === "--allow-zero-length-arrays") {
+      compilerOptions.allowZeroLengthArrays = true;
     } else if (args[i] === "--time-report") {
       compilerOptions.timeReport = true;
     } else if (args[i] === "--allow-old-c") {
