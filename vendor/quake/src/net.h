@@ -314,7 +314,13 @@ typedef struct _PollProcedure
 {
 	struct _PollProcedure	*next;
 	double					nextTime;
-	void					(*procedure)();
+	// PATCH: tightened from `(*procedure)()` (K&R "unspecified params")
+	// to `(*procedure)(void *)`. Upstream calls `pp->procedure(pp->arg)`
+	// (one arg) but defines the actual procedures with `(void)` (zero
+	// args) — UB-via-laxity that worked on 1996 x86 caller-cleanup ABI.
+	// WASM call_indirect is type-strict; this signature matches the
+	// call site so the indirect call types out cleanly.
+	void					(*procedure)(void *);
 	void					*arg;
 } PollProcedure;
 

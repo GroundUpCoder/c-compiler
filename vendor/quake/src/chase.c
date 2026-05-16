@@ -21,6 +21,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
+// PATCH: SV_RecursiveHullCheck is defined in world.c but never declared
+// in any upstream header. gcc accepts the call below via implicit int-
+// return prototype; our compiler requires a real declaration so the
+// argument types match the float-taking definition. (gl_test.c has the
+// same issue but is excluded from the software build.)
+qboolean SV_RecursiveHullCheck (hull_t *hull, int num, float p1f, float p2f, vec3_t p1, vec3_t p2, trace_t *trace);
+
 cvar_t	chase_back = {"chase_back", "100"};
 cvar_t	chase_up = {"chase_up", "16"};
 cvar_t	chase_right = {"chase_right", "0"};

@@ -45,6 +45,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <stdlib.h>
 #include <setjmp.h>
 
+// PATCH: our libc deliberately doesn't implement vsprintf — it's
+// unbounded and unsafe. Quake uses it in ~12 places with fixed-size
+// stack buffers (commonly 1024 bytes) where the author asserted by
+// hand that the output fits. Redirect every vsprintf to vsnprintf with
+// a large bound: in practice equivalent to upstream behavior (the
+// callsites' buffers are always large enough for the format strings
+// they use), but at least won't smash the stack on a hostile input.
+#define vsprintf(buf, fmt, ap) vsnprintf((buf), 0x7FFFFFFF, (fmt), (ap))
+
 #if defined(_WIN32) && !defined(WINDED)
 
 #if defined(_M_IX86)

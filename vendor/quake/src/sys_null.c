@@ -22,6 +22,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "errno.h"
 
+// PATCH: every real sys_*.c defines this global (declared extern in
+// quakedef.h:324); the null driver in upstream forgot. Define it here
+// so the engine links — server-only "dedicated" mode is never enabled
+// in this port.
+qboolean isDedicated;
+
 /*
 ===============================================================================
 
@@ -208,7 +214,10 @@ void Sys_LowFPPrecision (void)
 
 //=============================================================================
 
-void main (int argc, char **argv)
+// PATCH: changed `void main` (non-standard, accepted by gcc with warning)
+// to `int main`, and added an unreachable `return 0;` so the function
+// types out cleanly. The body's infinite loop never lets us return.
+int main (int argc, char **argv)
 {
 	static quakeparms_t    parms;
 
@@ -227,6 +236,7 @@ void main (int argc, char **argv)
 	{
 		Host_Frame (0.1);
 	}
+	return 0;
 }
 
 
