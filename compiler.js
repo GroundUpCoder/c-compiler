@@ -21664,6 +21664,7 @@ body{background:#000;color:#0f0;font-family:monospace;height:100vh;display:flex;
     <button id="log-toggle">Console</button>
     <button id="log-stdout" class="active">stdout</button>
     <button id="log-stderr" class="active">stderr</button>
+    <button id="reset-opfs" title="Wipe OPFS-mounted data files and reload. Use this when the page hangs after &quot;Writing files...&quot; — usually means another tab holds a stale sync-access-handle lock that Chrome&apos;s &quot;Clear site data&quot; doesn&apos;t reset.">Reset data</button>
     <label id="volume-label" style="margin-left:auto;display:flex;align-items:center;gap:4px;color:#aaa;font-size:12px">Vol<input id="volume-slider" type="range" min="0" max="100" value="40" style="width:80px;vertical-align:middle"><span id="volume-pct">40%</span></label>
   </div>
   <div id="log-content"></div>
@@ -21700,6 +21701,7 @@ window.onunhandledrejection = function(e) {
   var logToggle = document.getElementById('log-toggle');
   var logStdoutBtn = document.getElementById('log-stdout');
   var logStderrBtn = document.getElementById('log-stderr');
+  var resetOpfsBtn = document.getElementById('reset-opfs');
   var volumeSlider = document.getElementById('volume-slider');
   var status = document.getElementById('status');
   var worker = null;
@@ -21730,6 +21732,14 @@ window.onunhandledrejection = function(e) {
     showStderr = !showStderr;
     logStderrBtn.classList.toggle('active', showStderr);
     updateLogVisibility();
+  });
+  resetOpfsBtn.addEventListener('click', async function() {
+    if (!confirm('Reset OPFS-mounted data files and reload?\\n\\nUse this if the page hangs after "Writing files..." (usually means another tab holds a stale lock).')) return;
+    resetOpfsBtn.disabled = true;
+    resetOpfsBtn.textContent = 'Wiping...';
+    if (worker) { try { worker.terminate(); } catch (e) {} worker = null; }
+    try { await clearOPFSState(); } catch (e) {}
+    location.reload();
   });
   var volumePct = document.getElementById('volume-pct');
   volumeSlider.addEventListener('input', function() {
