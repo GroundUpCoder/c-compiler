@@ -1,0 +1,7 @@
+node_modules/
+www/quake.wasm
+www/pak0.pak
+www/host.js
+package-lock.json
+pnpm-lock.yaml
+last-screenshot.png

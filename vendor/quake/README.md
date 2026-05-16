@@ -35,10 +35,12 @@ Three real game maps load (E1M3 Necropolis, E1M4 Grisly Grotto,
 E1M6 Door to Chthon), 89 models, item pickups simulate correctly,
 demo playback runs the player AI. Headless — the software renderer
 is writing to `vid_buffer[]` in `vid_null.c`, which is never flushed
-to a display. From here, what's left is **runtime plumbing**:
-write a real `vid_sdl.c`/`sys_sdl.c`/`in_sdl.c` against host.js's
-existing `__sdl_*` surface, and add a Playwright runner to actually
-see pixels in a browser.
+to a display. The platform layer (`vid_sdl.c` / `sys_sdl.c` / `in_sdl.c`) is now in
+place, and `tests/browser/` contains a Playwright runner that boots
+the engine in headless Chromium and screenshots the canvas. After
+~3 seconds of real time, the test sees 252,428 of 256,000 pixels as
+non-black (98.6%) — the classic Quake 1.09 boot console renders
+correctly. See `tests/browser/README.md` for how to run it.
 
 ## Layout
 

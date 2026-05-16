@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Quake (WASM)</title>
+<style>
+  body {
+    margin: 0; background: #111; color: #ccc;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  #stage {
+    /* Quake renders 320×200 natively. CSS scales 2× for visibility;
+       image-rendering: pixelated keeps it crisp. The wasm only ever
+       writes 320×200, so there's no software-blit cost. */
+    width: 640px; height: 400px;
+    image-rendering: pixelated;
+    background: #000;
+  }
+  #status { padding: 0.5em; font-size: 13px; }
+  #log {
+    max-width: 640px; width: 100%; height: 18em;
+    overflow: auto;
+    padding: 0.5em; margin-top: 0.5em;
+    background: #000; border: 1px solid #333;
+    font-size: 12px; line-height: 1.4;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="320" height="200"></canvas>
+<div id="status">Booting…</div>
+<pre id="log"></pre>
+
+<script>
+// The wasm runs in a Worker because OPFS's createSyncAccessHandle (the
+// sync I/O API our libc's fopen/fread/fseek rely on) is worker-only.
+// We transfer an OffscreenCanvas to the worker so it can render into
+// the visible canvas via SDL_UpdateWindowSurface.
+const canvas = document.getElementById('stage');
+const status = document.getElementById('status');
+const logEl  = document.getElementById('log');
+
+const logBuf = [];
+function appendLog(s) {
+  logBuf.push(s);
+  logEl.textContent = logBuf.join('');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Playwright synchronization: window.quakeBoot resolves when the
+// worker reports the wasm reached its main()'s "Host_Init" print.
+let bootResolve;
+window.quakeBoot = new Promise(r => { bootResolve = r; });
+
+const offscreen = canvas.transferControlToOffscreen();
+const worker    = new Worker('./quake-worker.js');
+
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === 'stdout' || m.type === 'stderr') {
+    appendLog(m.text);
+    if (bootResolve && /Host_Init/.test(m.text)) {
+      bootResolve(); bootResolve = null;
+    }
+  } else if (m.type === 'status') {
+    status.textContent = m.text;
+  } else if (m.type === 'exit') {
+    status.textContent = `Exited with code ${m.code}`;
+    if (bootResolve) { bootResolve(); bootResolve = null; }
+  } else if (m.type === 'error') {
+    status.textContent = 'Worker error: ' + m.message;
+    appendLog('\n[worker error] ' + m.message + '\n' + (m.stack || ''));
+    if (bootResolve) { bootResolve(); bootResolve = null; }
+  }
+};
+
+worker.onerror = (e) => {
+  status.textContent = 'Worker error: ' + e.message;
+  appendLog('\n[worker onerror] ' + e.message + '\n');
+  if (bootResolve) { bootResolve(); bootResolve = null; }
+};
+
+worker.postMessage({ type: 'start', canvas: offscreen }, [offscreen]);
+</script>
+</body>
+</html>
