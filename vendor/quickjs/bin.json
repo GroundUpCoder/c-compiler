@@ -9,8 +9,7 @@
     "-D_GNU_SOURCE",
     "-DEMSCRIPTEN",
     "-DCONFIG_VERSION=\"2025-09-13\"",
-    "--allow-zero-length-arrays",
-    "--no-reuse-locals"
+    "--allow-zero-length-arrays"
   ],
   "sources": [
     "cutils.c",

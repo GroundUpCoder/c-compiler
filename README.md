@@ -341,21 +341,16 @@ node host.js /tmp/qjs.wasm --std -e \
 # → OK
 ```
 
-### Caveat — `--no-reuse-locals` workaround
-
-`vendor/quickjs/bin.json` currently passes `--no-reuse-locals`, which disables the compiler's wasm-local slot reuse. Without it, a codegen bug aliases two distinct C variables (`opcode` and `scope` in QuickJS's `js_parse_postfix_expr`) to the same wasm-local, which silently corrupts `opcode` during JS bytecode emission inside QuickJS. The full trace and reproduction is in [`todos/QUICKJS-SELF-HOST.md`](todos/QUICKJS-SELF-HOST.md). The workaround makes generated wasm slightly larger but is otherwise transparent — every other vendored project still builds with reuse enabled (the default).
-
 ### Patches to upstream
 
 QuickJS sources in `vendor/quickjs/` are upstream verbatim with three small patches:
 - `quickjs.c` and `libregexp.c` — added `#include <alloca.h>` (QuickJS calls `alloca()` directly relying on glibc's transitive include via `<stdlib.h>`).
 - `quickjs-libc.c` — commented out `#define USE_WORKER` (the `os.Worker` API needs real OS threads).
 
-Plus two new compiler flags introduced along the way: `--allow-zero-length-arrays` (for the GCC legacy `arr[0]` extension QuickJS leans on for `JSString`'s type-aliased trailing buffer) and the existing `--no-reuse-locals` (the workaround above).
+Plus one new compiler flag introduced along the way: `--allow-zero-length-arrays` (for the GCC legacy `arr[0]` extension QuickJS leans on for `JSString`'s type-aliased trailing buffer).
 
 ### What's left
 
-- Fix the local-reuse bug → drop `--no-reuse-locals`.
 - Build `qjsc.c` (QuickJS's AOT compiler) on our wasm and feed `repl.js` through it → real interactive REPL.
 - Compile QuickJS *itself* through stage 4 (~64 KLOC of C inside the wasm sandbox) — heavier memory/time test of the same pipeline.
 

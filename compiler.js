@@ -5261,6 +5261,12 @@ return { optimize, foldExpr, foldStmt, tryInline };
 
 const GOTO_NORMALIZER = (() => {
 
+// DVars whose declaring compound was split by `applyHoist` — uses are now
+// in a sibling/ancestor compound that no longer shares the declaring scope.
+// Codegen treats these as function-scope (slot live for the whole function)
+// so block-scope-based slot reuse doesn't free them while still in use.
+const HOIST_PROMOTED_DVARS = new WeakSet();
+
 // Walk a function body, collecting per-label and per-goto location traces.
 // Each trace is the chain of ancestor nodes from the function body (root)
 // down to the SLabel/SGoto, in outer→inner order. SCompound nodes act as
@@ -5517,6 +5523,20 @@ function applyHoist(body, labelInfo, hoistTarget) {
   const lcaCompound = hoistTarget.lcaCompound;
   const anchorIndex = hoistTarget.anchorIndex;
   const labelStmt = labelCompound.statements[labelIdx];
+
+  // Hoist splits labelCompound: pre-label statements stay in place, the
+  // tail (label + everything after) moves to lcaCompound. Any DVars
+  // declared by SDecls in the pre-label region may be referenced from the
+  // hoisted tail — but the tail no longer shares scope with them. Mark
+  // those DVars as function-scope so codegen's block-scope slot reuse
+  // doesn't free them while the (now far-away) uses are still live.
+  for (const s of labelCompound.statements.slice(0, labelIdx)) {
+    if (s instanceof AST.SDecl) {
+      for (const d of s.declarations) {
+        if (d instanceof AST.DVar) HOIST_PROMOTED_DVARS.add(d);
+      }
+    }
+  }
 
   // Tail = label + everything after in labelCompound
   const tail = labelCompound.statements.slice(labelIdx);
@@ -5874,7 +5894,7 @@ function optimize(unit) {
   }
 }
 
-return { normalize, inlineBackwardGotos, optimize, collectTraces, classifyPair };
+return { normalize, inlineBackwardGotos, optimize, collectTraces, classifyPair, HOIST_PROMOTED_DVARS };
 
 })();
 
@@ -14257,6 +14277,20 @@ class CodeGenerator {
               const _li = this.allocLocal(cToWasmType(decl.type, this.wmod));
               this.localVarToWasmLocalIdx.set(decl, _li);
               this._trackLocalName(_li, decl.name);
+              // If GOTO_NORMALIZER's hoist transform separated this DVar's
+              // declaring compound from compounds containing its uses, its
+              // wasm-local slot must NOT be freed at the declaring compound's
+              // popLocalScope — the uses outlast that scope. Untrack here so
+              // the slot stays "live" for the rest of the function.
+              if (GOTO_NORMALIZER.HOIST_PROMOTED_DVARS.has(decl)) {
+                const stack = this.localScopeStack;
+                if (stack.length > 0) {
+                  const top = stack[stack.length - 1];
+                  for (let i = top.length - 1; i >= 0; i--) {
+                    if (top[i][1] === _li) { top.splice(i, 1); break; }
+                  }
+                }
+              }
             }
             if (decl.initExpr) {
               const lait = this.localArrayOffsets.get(decl);

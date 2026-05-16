@@ -46,10 +46,11 @@ $ echo $?    # (no output)
 
 The full recipe is in [`demos/self-host/`](../../demos/self-host/).
 
-Currently this needs `--no-reuse-locals` (added to `bin.json`) to work
-around a wasm-local-slot reuse bug in our compiler — see
-[todos/QUICKJS-SELF-HOST.md](../../todos/QUICKJS-SELF-HOST.md) for the
-exact bug and how to find it. Once that's fixed, drop the flag.
+No workarounds — `bin.json` uses the compiler's normal flags. The
+`--no-reuse-locals` workaround that earlier was required has been
+dropped now that the underlying GOTO_NORMALIZER hoist + local-reuse bug
+is fixed (regression test:
+`tests/unit/core/control_flow/goto/hoist_preserves_decl_lifetime/`).
 
 The **interactive REPL** (`node host.js /tmp/qjs.wasm` with no `-e`)
 needs the precompiled `qjsc_repl[]` bytecode produced by the AOT
