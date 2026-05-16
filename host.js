@@ -1581,6 +1581,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         const queuedBytes = Atomics.load(control, 1);
         if (queuedBytes + len > cap) return 0; /* buffer full */
         const memory = getMemory();
+        // Defend against the wasm passing a bad (dataPtr, len) pair —
+        // drop the chunk rather than crash the worker.
+        if (dataPtr < 0 || len < 0 ||
+            (dataPtr >>> 0) + (len >>> 0) > memory.buffer.byteLength) {
+          return 0;
+        }
         const src = new Uint8Array(memory.buffer, dataPtr, len);
         const writePos = Atomics.load(control, 0) % cap;
         const firstChunk = Math.min(len, cap - writePos);
@@ -1762,7 +1768,15 @@ function createAudioReceiver(options) {
       if (msg.format === 0x8120) { bytesPerSample = 4; isFloat = true; }
       else if (msg.format === 0x8020) { bytesPerSample = 4; }
       else if (msg.format === 0x8008) { bytesPerSample = 1; }
-      const batchBytes = Math.floor(0.05 * msg.freq * msg.channels * bytesPerSample);
+      // Round batchBytes DOWN to a whole-frame boundary. A "frame" is
+      // (channels * bytesPerSample) bytes — one sample per channel.
+      // Without this, batchBytes can land mid-frame (e.g. 22050 Hz
+      // stereo S16 gives 4410 bytes for 50 ms but a frame is 4 bytes,
+      // so 4410 / 4 = 1102.5 → the per-sample decode loop ran 1103
+      // iterations and read 2 bytes past the chunk's end. The
+      // per-sample loop below now also floors `samples` defensively.
+      const frameBytes = msg.channels * bytesPerSample;
+      const batchBytes = Math.floor(0.05 * msg.freq) * frameBytes;
       const gain = ctx.createGain();
       gain.gain.value = masterVolume;
       gain.connect(ctx.destination);
@@ -1828,7 +1842,9 @@ function createAudioReceiver(options) {
       Atomics.sub(control, 1, len); /* decrement queuedBytes */
 
       /* Decode PCM into Web Audio buffer */
-      const samples = len / (device.bytesPerSample * device.channels);
+      // Floor defensively — even with batchBytes aligned to a frame,
+      // a downstream caller could legitimately Queue a partial frame.
+      const samples = Math.floor(len / (device.bytesPerSample * device.channels));
       const audioBuffer = device.ctx.createBuffer(device.channels, samples, device.freq);
       const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
       for (let ch = 0; ch < device.channels; ch++) {

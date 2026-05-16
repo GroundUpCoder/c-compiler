@@ -5,3 +5,4 @@ www/host.js
 package-lock.json
 pnpm-lock.yaml
 last-screenshot.png
+test-bundle.mjs
