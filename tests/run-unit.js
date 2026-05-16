@@ -288,11 +288,6 @@ function workerMain() {
         bytes: wasmBinary,
         args: [fakeArgv0, ...(td.config.args || [])],
         fs,
-        // Lazily try to load @kmamal/sdl on demand. Not used by most unit
-        // tests, but wiring the getSDL function makes the SDL imports
-        // (__sdl_set_animation_frame_func etc.) link successfully even
-        // when the test doesn't actually call SDL.
-        getSDL: () => { try { return require('@kmamal/sdl'); } catch { return {}; } },
         writeOut: (b) => stdoutBuf.push(toBuf(b)),
         writeErr: (b) => stderrBuf.push(toBuf(b)),
       });

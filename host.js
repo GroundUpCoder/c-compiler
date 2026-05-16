@@ -32,7 +32,6 @@ const ENV_KEY = "c";
  * @typedef {object} RunModuleOptions
  * @property {Uint8Array | ArrayBuffer} bytes - The WASM module bytes.
  * @property {string[]} [args] - Command-line arguments for the C program's argv.
- * @property {function(): SDLLib} [getSDL] - Lazy getter for the SDL library (require on demand).
  */
 
 /**
@@ -1435,168 +1434,42 @@ function createBrowserPosix({ ctx }) {
   };
 }
 
+
 /**
- * Create SDL WASM imports backed by a lazy-loaded SDL library.
- * @param {object} options
- * @param {function(): SDLLib} options.getSDL - Lazy getter for the SDL library.
- * @param {RuntimeContext} options.ctx - Runtime helpers shared with the host.
- * @returns {Object} Object with WASM imports keyed by ENV_KEY and a getter for the
- *   animation frame callback pointer.
+ * Create no-op SDL imports so a wasm module that imports __sdl_* can
+ * instantiate in environments that have no display (Node, headless
+ * runners). Every function returns a safe sentinel: 0 (failure-like),
+ * an unused handle, or void. SDL_Init returns 0 (success) so programs
+ * that bail out on init failure still run; everything else is inert.
+ * Used by run-unit.js and the Node CLI entry point.
+ * @returns {{[k:string]: object}}
  */
-function createSDL({ getSDL, ctx }) {
-  const { readString, getMemory, getExports } = ctx;
-
-  /* Resource tables — handles are 1-based indices into these arrays.
-     The C side receives opaque integer handles cast to void pointers. */
-  const sdlWindows = [];     /* { native, width, height } */
-  const sdlAudioDevices = []; /* @kmamal/sdl AudioPlaybackInstance */
+function createNullSDL() {
   let animationFrameFunc = null;
-
-  /* Convert @kmamal/sdl key event to SDL2 SDLK_* keysym integer.
-     SDL2 rule: printable keys use their ASCII code; non-printable keys
-     use scancode | 0x40000000 (the SDLK_SCANCODE_MASK).
-     Some named keys (return, escape, etc.) have ASCII keysyms in SDL2. */
-  const sdlNamedKeysyms = {
-    'return': 13, 'escape': 27, 'backspace': 8, 'tab': 9, 'space': 32,
-    'delete': 127,
-  };
-  function sdlKeysym(e) {
-    const key = e.key;
-    const sc = e.scancode || 0;
-    if (typeof key === 'string' && key.length === 1) {
-      return key.charCodeAt(0);
-    }
-    if (typeof key === 'string' && sdlNamedKeysyms[key] !== undefined) {
-      return sdlNamedKeysyms[key];
-    }
-    return sc | 0x40000000;
-  }
-
   return {
-    [ENV_KEY]: {
-      /* ---- Init / Quit ---- */
-      __sdl_init: function (flags) {
-        getSDL();
-        return 0;
-      },
-      __sdl_quit: function () {
-        animationFrameFunc = null;
-      },
-
-      /* ---- Window management ---- */
-      __sdl_create_window: function (title_ptr, x, y, w, h, flags) {
-        const sdl = getSDL();
-        const title = readString(title_ptr);
-        const win = sdl.video.createWindow({ title: title, width: w, height: h });
-        sdlWindows.push({ native: win, width: w, height: h });
-        const handle = sdlWindows.length; /* 1-based handle, also used as window ID */
-        win.on('close', function () {
-          getExports().__sdl_push_quit_event(handle);
-          animationFrameFunc = null;
-        });
-        win.on('keyDown', function (e) {
-          const sym = sdlKeysym(e);
-          getExports().__sdl_push_key_event(handle, 0x300, e.scancode || 0, sym);
-        });
-        win.on('keyUp', function (e) {
-          const sym = sdlKeysym(e);
-          getExports().__sdl_push_key_event(handle, 0x301, e.scancode || 0, sym);
-        });
-        win.on('mouseButtonDown', function (e) {
-          getExports().__sdl_push_mouse_button_event(handle, 0x401, e.button, e.x, e.y);
-        });
-        win.on('mouseButtonUp', function (e) {
-          getExports().__sdl_push_mouse_button_event(handle, 0x402, e.button, e.x, e.y);
-        });
-        win.on('mouseMove', function (e) {
-          getExports().__sdl_push_mouse_motion_event(handle, e.x, e.y);
-        });
-        win.on('mouseWheel', function (e) {
-          getExports().__sdl_push_mouse_wheel_event(handle, e.dx || 0, e.dy || 0);
-        });
-        return handle;
-      },
-      __sdl_destroy_window: function (handle) {
-        if (handle > 0 && sdlWindows[handle - 1]) {
-          sdlWindows[handle - 1].native.destroy();
-          sdlWindows[handle - 1] = null;
-        }
-      },
-      __sdl_set_window_title: function (handle, title_ptr) {
-        const w = sdlWindows[handle - 1];
-        if (w) w.native.setTitle(readString(title_ptr));
-      },
-
-      /* ---- Window surface ---- */
-      __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
-        const winInfo = sdlWindows[handle - 1];
-        if (!winInfo) return -1;
-        const memory = getMemory();
-        const buf = Buffer.from(new Uint8Array(memory.buffer, pixelsPtr, pitch * h));
-        winInfo.native.render(w, h, pitch, 'rgba32', buf);
-        return 0;
-      },
-
-      /* ---- Audio ---- */
-      __sdl_open_audio_device: function (freq, format, channels) {
-        const sdl = getSDL();
-        const fmtMap = { 0x8008: 's8', 0x8010: 's16', 0x8020: 's32', 0x8120: 'f32' };
-        const fmtStr = fmtMap[format];
-        if (!fmtStr) return 0;
-        const device = sdl.audio.openDevice({ type: 'playback' }, {
-          frequency: freq,
-          format: fmtStr,
-          channels: channels,
-        });
-        sdlAudioDevices.push(device);
-        return sdlAudioDevices.length; /* 1-based handle */
-      },
-      __sdl_queue_audio: function (dev, dataPtr, len) {
-        const device = sdlAudioDevices[dev - 1];
-        if (!device) return -1;
-        const memory = getMemory();
-        const buf = Buffer.from(new Uint8Array(memory.buffer, dataPtr, len));
-        device.enqueue(buf);
-        return 0;
-      },
-      __sdl_get_queued_audio_size: function (dev) {
-        const device = sdlAudioDevices[dev - 1];
-        if (!device) return 0;
-        return device.queued;
-      },
-      __sdl_clear_queued_audio: function (dev) {
-        const device = sdlAudioDevices[dev - 1];
-        if (device) device.clearQueue();
-      },
-      __sdl_pause_audio_device: function (dev, pause_on) {
-        const device = sdlAudioDevices[dev - 1];
-        if (!device) return;
-        if (pause_on) { device.pause(); } else { device.play(); }
-      },
-      __sdl_close_audio_device: function (dev) {
-        const device = sdlAudioDevices[dev - 1];
-        if (device) {
-          device.close();
-          sdlAudioDevices[dev - 1] = null;
-        }
-      },
-
-      /* ---- Timing ---- */
-      __sdl_delay: (typeof WebAssembly.Suspending === 'function')
-        ? new WebAssembly.Suspending(async function (ms) {
-          await new Promise(function (r) { setTimeout(r, ms); });
-        })
-        : function (ms) { /* no-op without JSPI */ },
-      __sdl_get_ticks: function () {
-        return Math.floor(performance.now());
-      },
-
-      /* ---- Animation frame callback ---- */
-      __sdl_set_animation_frame_func: function (callbackPtr) {
-        animationFrameFunc = callbackPtr;
-      },
-    },
     getAnimationFrameFunc: function () { return animationFrameFunc; },
+    [ENV_KEY]: {
+      __sdl_init: function () { return 0; },
+      __sdl_quit: function () { animationFrameFunc = null; },
+      __sdl_create_window: function () { return 1; },
+      __sdl_destroy_window: function () {},
+      __sdl_set_window_title: function () {},
+      __sdl_update_window_surface: function () { return 0; },
+      __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
+      __sdl_push_key_event: function () {},
+      __sdl_push_mouse_button_event: function () {},
+      __sdl_push_mouse_motion_event: function () {},
+      __sdl_push_mouse_wheel_event: function () {},
+      __sdl_push_quit_event: function () {},
+      __sdl_open_audio_device: function () { return 1; },
+      __sdl_queue_audio: function () { return 0; },
+      __sdl_get_queued_audio_size: function () { return 0; },
+      __sdl_clear_queued_audio: function () {},
+      __sdl_pause_audio_device: function () {},
+      __sdl_close_audio_device: function () {},
+      __sdl_get_ticks: function () { return Date.now() & 0xffffffff; },
+      __sdl_delay: function () {},
+    },
   };
 }
 
@@ -1983,7 +1856,6 @@ async function runModule({
   requestTerminalSize,
   requestStdinReady,
   requestStdinNotify,
-  getSDL,
   sdl: sdlOverride,
   getBrowserSDL,
   sharedAudioBuffer,
@@ -2960,15 +2832,13 @@ async function runModule({
   }
 
   let sdl = sdlOverride || null;
-  if (!sdl && getSDL) {
-    sdl = createSDL({ getSDL: getSDL, ctx: ctx });
-  }
   if (!sdl && getBrowserSDL) {
     sdl = createBrowserSDL({ canvas: getBrowserSDL, ctx: ctx, sharedAudioBuffer: sharedAudioBuffer, notifyAudio: notifyAudio, notifyWindow: notifyWindow });
   }
-  if (sdl) {
-    Object.assign(imports[ENV_KEY], sdl[ENV_KEY]);
-  }
+  // No canvas, no override → null stubs so __sdl_* imports still resolve
+  // (Node CLI, headless tests). Browser host always sets getBrowserSDL.
+  if (!sdl) sdl = createNullSDL();
+  Object.assign(imports[ENV_KEY], sdl[ENV_KEY]);
 
   /* ---- Emulator console/display/networking imports ---- */
   /* These are used by TinyEMU and similar emulators. They are no-ops
@@ -3043,23 +2913,9 @@ async function runModule({
             height: canvas.height,
           };
         }
-      } else if (getSDL) {
-        /* Node.js: use @kmamal/sdl */
-        const _sdl = (typeof getSDL === 'function') ? getSDL() : getSDL;
-        const win = _sdl.video.createWindow({
-          title: 'TinyEMU',
-          width: displayWidth,
-          height: y + h,
-        });
-        emuDisplay = {
-          type: 'sdl',
-          sdl: _sdl,
-          window: win,
-          buffer: Buffer.alloc(displayWidth * (y + h) * 4),
-          width: displayWidth,
-          height: y + h,
-        };
       }
+      /* Node has no display target — caller must hook into TinyEMU's
+       * refresh callback themselves if they want headless capture. */
     }
 
     if (!emuDisplay) return;
@@ -3084,22 +2940,6 @@ async function runModule({
         }
       }
       emuDisplay.ctx.putImageData(emuDisplay.image, 0, 0, x, y, w, h);
-    } else if (emuDisplay.type === 'sdl') {
-      const buf = emuDisplay.buffer;
-      for (let row = 0; row < h; row++) {
-        let srcOff = dataPtr + row * stride;
-        let dstOff = ((y + row) * emuDisplay.width + x) * 4;
-        for (let col = 0; col < w; col++) {
-          buf[dstOff]     = src[srcOff + 2]; /* R */
-          buf[dstOff + 1] = src[srcOff + 1]; /* G */
-          buf[dstOff + 2] = src[srcOff];     /* B */
-          buf[dstOff + 3] = 255;             /* A */
-          srcOff += 4;
-          dstOff += 4;
-        }
-      }
-      emuDisplay.window.render(emuDisplay.width, emuDisplay.height,
-        emuDisplay.width * 4, 'rgba32', buf);
     }
   };
 
@@ -3278,7 +3118,6 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
     // anything POSIX-y) assert `argc >= 1` at entry.
     args: process.argv.slice(2),
     fs: fs,
-    getSDL: function () { return require('@kmamal/sdl'); },
   }).then(function (exitCode) {
     process.exit(exitCode);
   }).catch(function (e) {
