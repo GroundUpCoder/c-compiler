@@ -802,7 +802,17 @@ function compileC(source) {
     throw new Error(linkResult.errors.map(function(e) { return e.message; }).join('\n'));
   }
   if (opts.gcSections) C.gcSectionsPass(units, opts);
-  var wasm = C.generateCode(units, 'output.wasm', { compilerOptions: opts, sourceBuffers: pp.sourceBuffers });
+  var codegenErrors = [];
+  var wasm;
+  try {
+    wasm = C.generateCode(units, 'output.wasm', {
+      compilerOptions: opts,
+      sourceBuffers: pp.sourceBuffers,
+      writeErr: function(s) { codegenErrors.push(s); },
+    });
+  } catch (e) {
+    throw new Error(codegenErrors.length > 0 ? codegenErrors.join('') : e.message);
+  }
   return { wasm: wasm, units: units };
 }
 
