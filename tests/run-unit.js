@@ -146,6 +146,7 @@ function workerMain() {
       else if (a === '--allow-knr-definitions') compilerOptions.allowKnRDefinitions = true;
       else if (a === '--allow-implicit-function-decl') compilerOptions.allowImplicitFunctionDecl = true;
       else if (a === '--allow-undefined') compilerOptions.allowUndefined = true;
+      else if (a === '--allow-zero-length-arrays') compilerOptions.allowZeroLengthArrays = true;
       else if (a === '--allow-old-c') {
         compilerOptions.allowImplicitInt = true;
         compilerOptions.allowEmptyParams = true;

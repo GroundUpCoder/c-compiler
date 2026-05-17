@@ -1,0 +1,4 @@
+sizeof=4
+header=cafe
+bytes via words: 11 22 33 44
+alias addrs: 1
