@@ -1,0 +1,13 @@
+{
+  "name": "cfg-test",
+  "version": "1.0.0",
+  "description": "Smoke tests for the cfg visualizer (drives index.html headlessly)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node c0-cfg-smoke.mjs && node c1-cfg-smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  }
+}

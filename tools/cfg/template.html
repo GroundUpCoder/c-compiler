@@ -1822,6 +1822,402 @@
     return out;
   }
 
+  // ─────────────────────────── c1 (TAC) CFG renderers ───────────────────────────
+  //
+  // Bespoke renderers for c1. Kept separate from c0 on purpose: c0 reads
+  // b.statements (AST.Assign[]) and AST expression trees on terminators;
+  // c1 reads b.instructions (TAC) and bare AST.Variable VRegs on
+  // terminator cond/value. Changes here must not affect c0.
+
+  function instrText(inst) {
+    const cls = inst.constructor && inst.constructor.name;
+    if (cls === 'Const') {
+      return `${inst.dest.name} = ${inst.value}`;
+    }
+    if (cls === 'BinaryOp') {
+      return `${inst.dest.name} = ${inst.lhs.name} ${inst.op} ${inst.rhs.name}`;
+    }
+    if (cls === 'UnaryOp') {
+      return `${inst.dest.name} = ${inst.op}${inst.operand.name}`;
+    }
+    if (cls === 'Copy') {
+      return `${inst.dest.name} = ${inst.src.name}`;
+    }
+    if (cls === 'Call') {
+      const args = inst.args.map(a => a.name).join(', ');
+      return `${inst.dest.name} = call ${inst.callee.name}(${args})`;
+    }
+    return cls + '(...)';
+  }
+
+  function termSummaryC1(term) {
+    if (!term) return { kind: '?', expr: '' };
+    const cls = term.constructor && term.constructor.name;
+    if (cls === 'Br')          return { kind: 'br', expr: term.target.name };
+    if (cls === 'BrIf')        return { kind: 'br_if', expr:
+      `${term.cond.name} → ${term.trueTarget.name} / ${term.falseTarget.name}` };
+    if (cls === 'Return')      return { kind: 'return', expr: term.value ? term.value.name : '' };
+    if (cls === 'Unreachable') return { kind: 'unreachable', expr: '' };
+    return { kind: cls.toLowerCase(), expr: '' };
+  }
+
+  function renderCfgBlockC1(fn, b) {
+    const isEntry = (b === fn.entry);
+    const div = el('div', { class: 'cfg-block' + (isEntry ? ' entry' : '') });
+    const header = el('div', { class: 'header' });
+    header.appendChild(document.createTextNode(b.name));
+    header.appendChild(document.createTextNode(':'));
+    if (isEntry) header.appendChild(el('span', { class: 'mute' }, '  ← entry'));
+    div.appendChild(header);
+    for (const inst of b.instructions) {
+      div.appendChild(el('div', { class: 'inst' }, instrText(inst)));
+    }
+    if (b.terminator) {
+      const t = termSummaryC1(b.terminator);
+      div.appendChild(el('div', { class: 'term' },
+        '↳ ' + t.kind + (t.expr ? '  ' + t.expr : '')));
+    }
+    return div;
+  }
+
+  function renderFnCfgTextC1(fn) {
+    const box = el('div');
+    for (const b of fn.blocks) box.appendChild(renderCfgBlockC1(fn, b));
+    return box;
+  }
+
+  function renderFnCfgGraphC1(fn) {
+    const blocks = fn.blocks;
+
+    // Edge extraction — identical edge shape to c0 (Br / BrIf).
+    const edges = [];
+    for (const b of blocks) {
+      const term = b.terminator;
+      if (!term) continue;
+      const cls = term.constructor && term.constructor.name;
+      if (cls === 'Br') {
+        edges.push({ from: b.id, to: term.target.id, label: '', kind: 'goto' });
+      } else if (cls === 'BrIf') {
+        edges.push({ from: b.id, to: term.trueTarget.id,  label: 'T', kind: 'true' });
+        edges.push({ from: b.id, to: term.falseTarget.id, label: 'F', kind: 'false' });
+      }
+    }
+
+    // BFS levels from entry; orphans appended.
+    const entryId = fn.entry.id;
+    const level = { [entryId]: 0 };
+    const bfs = [entryId];
+    while (bfs.length) {
+      const u = bfs.shift();
+      for (const e of edges) {
+        if (e.from === u && !(e.to in level)) {
+          level[e.to] = level[u] + 1;
+          bfs.push(e.to);
+        }
+      }
+    }
+    let maxL = 0;
+    for (const k of Object.keys(level)) maxL = Math.max(maxL, level[+k]);
+    for (const b of blocks) if (!(b.id in level)) level[b.id] = ++maxL;
+    for (const e of edges) e.back = level[e.to] <= level[e.from];
+
+    const stage = el('div', { class: 'cfg-stage' });
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'cfg-edges');
+    stage.appendChild(svg);
+
+    const nodeEls = new Map();
+    for (const b of blocks) {
+      const isEntry = (b === fn.entry);
+      const div = el('div', { class: 'cfg-node' + (isEntry ? ' entry' : '') });
+      const hdr = el('div', { class: 'cfg-node-header' });
+      hdr.appendChild(document.createTextNode(b.name));
+      div.appendChild(hdr);
+      const body = el('div', { class: 'cfg-node-body' });
+      if (b.instructions.length === 0) {
+        body.appendChild(el('div', { class: 'cfg-node-stmt empty' }, '(no instructions)'));
+      } else {
+        for (const inst of b.instructions) {
+          let txt = instrText(inst);
+          if (txt.length > 38) txt = txt.slice(0, 35) + '…';
+          body.appendChild(el('div', { class: 'cfg-node-stmt' }, txt));
+        }
+      }
+      div.appendChild(body);
+      const tsum = termSummaryC1(b.terminator);
+      const tdiv = el('div', { class: 'cfg-node-term term-' + tsum.kind });
+      tdiv.appendChild(el('span', { class: 'cfg-term-kind' }, tsum.kind));
+      if (tsum.expr) {
+        let exprTxt = tsum.expr;
+        if (exprTxt.length > 32) exprTxt = exprTxt.slice(0, 29) + '…';
+        tdiv.appendChild(document.createTextNode(' '));
+        tdiv.appendChild(el('span', { class: 'cfg-term-expr' }, exprTxt));
+      }
+      div.appendChild(tdiv);
+      nodeEls.set(b.id, div);
+    }
+
+    const BOX_W = 240, GAP_X = 40, GAP_Y = 60;
+    const HEADER_H = 26, FOOTER_H = 24, LINE_H = 18, BODY_PAD = 10;
+    function estHeight(b) {
+      const bodyLines = Math.max(1, b.instructions.length);
+      return HEADER_H + BODY_PAD + bodyLines * LINE_H + FOOTER_H;
+    }
+    for (const [id, divEl] of nodeEls) {
+      divEl.style.width = BOX_W + 'px';
+      stage.appendChild(divEl);
+    }
+    const sizes = new Map();
+    for (const b of blocks) sizes.set(b.id, { w: BOX_W, h: estHeight(b) });
+
+    const byLevel = {};
+    for (const id of Object.keys(level)) {
+      const l = level[+id];
+      if (!byLevel[l]) byLevel[l] = [];
+      byLevel[l].push(+id);
+    }
+    for (const l of Object.keys(byLevel)) byLevel[l].sort((a, b) => a - b);
+    let maxLevel = 0;
+    for (const l of Object.keys(byLevel)) maxLevel = Math.max(maxLevel, +l);
+
+    const rowH = [];
+    for (let l = 0; l <= maxLevel; l++) {
+      let h = 60;
+      for (const id of (byLevel[l] || [])) h = Math.max(h, sizes.get(id).h);
+      rowH[l] = h;
+    }
+    const levelY = [];
+    let yCursor = GAP_Y;
+    for (let l = 0; l <= maxLevel; l++) {
+      levelY[l] = yCursor;
+      yCursor += rowH[l] + GAP_Y;
+    }
+    const totalH = yCursor;
+
+    let maxCount = 0;
+    for (const l of Object.keys(byLevel)) maxCount = Math.max(maxCount, byLevel[l].length);
+    const totalW = Math.max(maxCount * BOX_W + Math.max(0, maxCount - 1) * GAP_X + 80, 480);
+
+    const positions = new Map();
+    for (let l = 0; l <= maxLevel; l++) {
+      const row = byLevel[l] || [];
+      const rowW = row.length * BOX_W + Math.max(0, row.length - 1) * GAP_X;
+      const startX = (totalW - rowW) / 2;
+      for (let i = 0; i < row.length; i++) {
+        const id = row[i];
+        const px = startX + i * (BOX_W + GAP_X);
+        const py = levelY[l] + (rowH[l] - sizes.get(id).h) / 2;
+        positions.set(id, { x: px, y: py, w: BOX_W, h: sizes.get(id).h });
+        const divEl = nodeEls.get(id);
+        divEl.style.left = px + 'px';
+        divEl.style.top = py + 'px';
+      }
+    }
+
+    stage.style.width = totalW + 'px';
+    stage.style.height = totalH + 'px';
+
+    svg.setAttribute('width', totalW);
+    svg.setAttribute('height', totalH);
+    const defs = document.createElementNS(svgNs, 'defs');
+    function mkArrow(id, color) {
+      const m = document.createElementNS(svgNs, 'marker');
+      m.setAttribute('id', id);
+      m.setAttribute('viewBox', '0 0 8 8');
+      m.setAttribute('refX', '7');
+      m.setAttribute('refY', '4');
+      m.setAttribute('markerWidth', '7');
+      m.setAttribute('markerHeight', '7');
+      m.setAttribute('orient', 'auto');
+      const p = document.createElementNS(svgNs, 'path');
+      p.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
+      p.setAttribute('fill', color);
+      m.appendChild(p);
+      defs.appendChild(m);
+    }
+    mkArrow('cfg-arr-default-c1', '#6b7280');
+    mkArrow('cfg-arr-true-c1',    '#16a34a');
+    mkArrow('cfg-arr-false-c1',   '#dc2626');
+    mkArrow('cfg-arr-back-c1',    '#9333ea');
+    svg.appendChild(defs);
+
+    function markerFor(e) {
+      if (e.back) return 'url(#cfg-arr-back-c1)';
+      if (e.kind === 'true')  return 'url(#cfg-arr-true-c1)';
+      if (e.kind === 'false') return 'url(#cfg-arr-false-c1)';
+      return 'url(#cfg-arr-default-c1)';
+    }
+
+    const outCount = {};
+    for (const e of edges) outCount[e.from] = (outCount[e.from] || 0) + 1;
+
+    function refreshEdges() {
+      svg.querySelectorAll(':scope > path, :scope > text').forEach(n => n.remove());
+      const outIdx = {};
+      for (const e of edges) {
+        const src = positions.get(e.from);
+        const dst = positions.get(e.to);
+        if (!src || !dst) continue;
+        const idx = (outIdx[e.from] = (outIdx[e.from] || 0));
+        outIdx[e.from] = idx + 1;
+        const total = outCount[e.from];
+        const offsetX = total > 1 ? (idx - (total - 1) / 2) * (src.w / (total + 1)) : 0;
+
+        let x1, y1, x2, y2, c1x, c1y, c2x, c2y;
+        if (e.back) {
+          x1 = src.x + src.w;
+          y1 = src.y + src.h / 2;
+          x2 = dst.x + dst.w;
+          y2 = dst.y + dst.h / 2;
+          const bulge = Math.max(40, Math.abs(y2 - y1) * 0.4);
+          c1x = x1 + bulge; c1y = y1;
+          c2x = x2 + bulge; c2y = y2;
+        } else {
+          x1 = src.x + src.w / 2 + offsetX;
+          y1 = src.y + src.h;
+          x2 = dst.x + dst.w / 2;
+          y2 = dst.y;
+          const mid = (y1 + y2) / 2;
+          c1x = x1; c1y = mid;
+          c2x = x2; c2y = mid;
+        }
+        const path = document.createElementNS(svgNs, 'path');
+        path.setAttribute('d', `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`);
+        if (e.back) path.classList.add('cfg-edge-back');
+        else path.classList.add('cfg-edge-' + e.kind);
+        path.setAttribute('marker-end', markerFor(e));
+        svg.appendChild(path);
+
+        if (e.label) {
+          const text = document.createElementNS(svgNs, 'text');
+          text.setAttribute('class', 'cfg-edge-label');
+          let lx, ly;
+          if (e.back) { lx = Math.max(c1x, c2x) - 4; ly = (y1 + y2) / 2; }
+          else        { lx = (x1 + x2) / 2 + 6;       ly = (y1 + y2) / 2 - 2; }
+          text.setAttribute('x', lx);
+          text.setAttribute('y', ly);
+          text.textContent = e.label;
+          svg.appendChild(text);
+        }
+      }
+    }
+    refreshEdges();
+
+    for (const [id, divEl] of nodeEls) {
+      divEl.style.cursor = 'grab';
+      divEl.addEventListener('mousedown', (ev) => {
+        if (window.getSelection && String(window.getSelection())) return;
+        ev.preventDefault();
+        divEl.style.cursor = 'grabbing';
+        const pos = positions.get(id);
+        const startMouseX = ev.clientX;
+        const startMouseY = ev.clientY;
+        const startPosX = pos.x;
+        const startPosY = pos.y;
+        function onMove(ev2) {
+          const nx = Math.max(0, startPosX + (ev2.clientX - startMouseX));
+          const ny = Math.max(0, startPosY + (ev2.clientY - startMouseY));
+          pos.x = nx;
+          pos.y = ny;
+          divEl.style.left = nx + 'px';
+          divEl.style.top  = ny + 'px';
+          refreshEdges();
+        }
+        function onUp() {
+          divEl.style.cursor = 'grab';
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+        }
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+    }
+
+    const canvas = el('div', { class: 'cfg-canvas' });
+    canvas.appendChild(stage);
+    const legend = el('div', { class: 'mute',
+      style: { fontSize: '11px', marginTop: '6px', display: 'flex', gap: '14px', flexWrap: 'wrap' } },
+      el('span', {}, '🟩 entry'),
+      el('span', { style: { color: '#16a34a' } }, '→ T (true)'),
+      el('span', { style: { color: '#dc2626' } }, '→ F (false)'),
+      el('span', { style: { color: '#6b7280' } }, '→ unconditional'),
+      el('span', { style: { color: '#9333ea' } }, '⤴ back-edge'),
+      el('span', { class: 'mute' }, '· drag any block to reposition'),
+    );
+    const out = el('div');
+    out.appendChild(canvas);
+    out.appendChild(legend);
+    return out;
+  }
+
+  function renderCfgC1(panel, trace) {
+    panel.appendChild(el('div', { class: 'hint' },
+      'c1\'s CFG: each basic block holds a sequence of ',
+      el('strong', {}, 'three-address-code instructions'),
+      ' (Const, BinaryOp, UnaryOp, Copy, Call) plus a terminator. Every ' +
+      'intermediate value gets a name — a virtual register, e.g. `t3`. ' +
+      '`&&`, `||`, `?:` are lowered to block-level control flow during ' +
+      'CFG.fromAST — they don\'t exist as TAC instructions; instead an ' +
+      'expression that contained them becomes a small CFG.'));
+
+    panel.appendChild(el('h2', { class: 'section-title' }, 'Every c1 TAC type'));
+    panel.appendChild(makeCatalog([
+      { cat: 'instruction', name: 'Const',     desc: '`{ dest, value }`. Loads a literal into dest VReg.' },
+      { cat: 'instruction', name: 'BinaryOp',  desc: '`{ dest, op, lhs, rhs }`. lhs/rhs are VRegs; op is `+`, `-`, `*`, `/`, `%`, or a comparison.' },
+      { cat: 'instruction', name: 'UnaryOp',   desc: '`{ dest, op, operand }`. op is `-` (float negate) or `!`. Integer negate is lowered to `0 - x`.' },
+      { cat: 'instruction', name: 'Copy',      desc: '`{ dest, src }`. VReg → VReg copy.' },
+      { cat: 'instruction', name: 'Call',      desc: '`{ dest, callee, args }`. dest is always present; unused call result stays dead.' },
+      { cat: 'terminator',  divider: true, name: 'Br',          desc: '`{ target }`. Unconditional jump.' },
+      { cat: 'terminator',  name: 'BrIf',        desc: '`{ cond, trueTarget, falseTarget }`. cond is a VReg (NOT an AST expression).' },
+      { cat: 'terminator',  name: 'Return',      desc: '`{ value }`. value is a VReg.' },
+      { cat: 'terminator',  name: 'Unreachable', desc: 'Trap-now sentinel.' },
+    ]));
+
+    panel.appendChild(el('h2', { class: 'section-title' }, 'CFG for the current source'));
+    panel.appendChild(el('div', { class: 'hint muted' },
+      'Entry blocks are highlighted green. Switch to Graph view for a ' +
+      'level-ordered layout with bezier edges (green = true, red = false, ' +
+      'dashed purple = back-edge).'));
+
+    if (!trace || !trace.mod) {
+      panel.appendChild(el('div', { class: 'mute mono' },
+        '(CFG.fromAST failed: ' + (trace?.modError?.message || 'unknown') + ')'));
+      return;
+    }
+
+    const toggle = el('div', { class: 'toggle-group' },
+      el('button', { 'data-view': 'text', class: 'active' }, 'Text'),
+      el('button', { 'data-view': 'graph' }, 'Graph'));
+    panel.appendChild(toggle);
+    const container = el('div');
+    panel.appendChild(container);
+
+    function render(view) {
+      clear(container);
+      for (const fn of trace.mod.functions) {
+        const group = el('div', { class: 'fn-group' });
+        group.appendChild(el('h3', {}, fn.name,
+          el('span', { class: 'sub' },
+            ' (' + fn.params.map(p => p.type).join(', ') + ') → ' + fn.returnType)));
+        if (view === 'text') {
+          group.appendChild(renderFnCfgTextC1(fn));
+        } else {
+          group.appendChild(renderFnCfgGraphC1(fn));
+        }
+        container.appendChild(group);
+      }
+    }
+    toggle.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        render(btn.dataset.view);
+      });
+    });
+    render('text');
+  }
+
   // ── Locals ──
   function renderLocals(panel, trace) {
     panel.appendChild(el('div', { class: 'hint' },
@@ -2129,13 +2525,13 @@
       'Indentation tracks block/loop/if nesting.'));
     const d = renderModuleSummary(panel, trace);
     // Map each disasm function to its body bytes + locals types.
-    for (let i = 0; i < d.functions.length; i++) {
-      const fnD = d.functions[i];
+    for (let i = 0; i < d.funcs.length; i++) {
+      const fnD = d.funcs[i];
       const astFn = trace.ast.functions[i];
       panel.appendChild(renderFnDisasm({
         name: astFn ? astFn.name : ('fn[' + i + ']'),
         body: fnD.body,
-        extraTypes: fnD.locals.flatMap(g => Array(g.count).fill(DISASM.valueTypeToString(g.type))),
+        extraTypes: fnD.localGroups.flatMap(g => Array(g.count).fill(DISASM.valueTypeToString(g.type))),
         paramTypes: astFn ? astFn.parameters.map(p => p.type) : [],
       }));
     }
@@ -2593,6 +2989,12 @@
       if (def.static) continue;
       const panel = tabs.get(def.id).panel;
       clear(panel);
+      // c1: only the cfg tab is wired up so far; everything else still TBD.
+      if (BACKEND === 'c1') {
+        if (def.id === 'cfg') renderCfgC1(panel, trace);
+        else renderTbd(panel, def);
+        continue;
+      }
       if (BACKEND !== 'c0') { renderTbd(panel, def); continue; }
       if (def.render) def.render(panel, trace);
     }
@@ -2641,11 +3043,9 @@
   function recompile() {
     refreshSourceHighlight();
     syncSourceScroll();
-    // TBD backends (c1/c2): skip compileWithTrace entirely — the renderers
-    // are c0-specific and would either crash or produce nonsense on the
-    // c1/c2 IR shape. renderAll detects BACKEND !== 'c0' and shows a TBD
-    // placeholder in each dynamic tab.
-    if (BACKEND !== 'c0') {
+    // c2 still TBD: skip compileWithTrace entirely. c0 + c1 are both
+    // wired to renderers below; renderAll dispatches per backend.
+    if (BACKEND !== 'c0' && BACKEND !== 'c1') {
       errorsEl.classList.add('hidden');
       clear(errorsEl);
       renderAll(null);
@@ -2682,7 +3082,7 @@
   // they're labeled TBD and render placeholder content when selected.
   const LABELS = {
     c0: 'c0 (statement-CFG)',
-    c1: 'c1 (TAC — TBD)',
+    c1: 'c1 (TAC)',
     c2: 'c2 (SSA — TBD)',
   };
   for (const k of BACKENDS_AVAILABLE) {
