@@ -1997,13 +1997,18 @@
 
     let maxCount = 0;
     for (const l of Object.keys(byLevel)) maxCount = Math.max(maxCount, byLevel[l].length);
-    const totalW = Math.max(maxCount * BOX_W + Math.max(0, maxCount - 1) * GAP_X + 80, 480);
+    // Reserve right padding for back-edge bezier bulges (which extend
+    // outside the rightmost node column). Without this, SVG paints with
+    // overflow:hidden and back-edges get clipped on the right.
+    const BACK_EDGE_PAD = 220;
+    const layoutW = Math.max(maxCount * BOX_W + Math.max(0, maxCount - 1) * GAP_X + 80, 480);
+    const totalW = layoutW + BACK_EDGE_PAD;
 
     const positions = new Map();
     for (let l = 0; l <= maxLevel; l++) {
       const row = byLevel[l] || [];
       const rowW = row.length * BOX_W + Math.max(0, row.length - 1) * GAP_X;
-      const startX = (totalW - rowW) / 2;
+      const startX = (layoutW - rowW) / 2;
       for (let i = 0; i < row.length; i++) {
         const id = row[i];
         const px = startX + i * (BOX_W + GAP_X);
