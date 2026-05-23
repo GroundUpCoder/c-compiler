@@ -22604,6 +22604,10 @@ function main() {
       compilerOptions.dumpIrredSegments = true;
     } else if (args[i] === "--no-undefined") {
       compilerOptions.noUndefined = true;
+    } else if (args[i] === "--no-wasm-validate") {
+      compilerOptions.noWasmValidate = true;
+    } else if (args[i] === "--no-version-check") {
+      compilerOptions.noVersionCheck = true;
     } else if (args[i] === "--require-source") {
       if (i + 1 >= args.length) {
         process.stderr.write("Error: --require-source requires an argument\n");
@@ -22640,6 +22644,34 @@ function main() {
   if (!inputFiles.length && action === "compile") {
     process.stderr.write("Usage: node compiler.js [-a <lex|parse|link|cfg|print|compile>] [-o output.wasm|.html|.js] [-Dname[=val]] [-Ipath] <files...>\n");
     process.exit(1);
+  }
+
+  // Node.js runtime check. The compiler emits modules that use WASM GC types
+  // and host.js needs WebAssembly.Suspending (JSPI). Older Nodes fail in two
+  // different ways: <22 trips the codegen validator (no GC support), and
+  // 22-24 can compile but host.js can't run the result. See
+  // docs/NODE_VERSIONS.md for the full matrix. Suppressed by both
+  // --no-version-check and --no-wasm-validate (the latter implies the former
+  // because it signals "I'm cross-compiling, I know what I'm doing").
+  if (!compilerOptions.noVersionCheck && !compilerOptions.noWasmValidate &&
+      typeof process !== 'undefined' && process.versions && process.versions.node &&
+      typeof WebAssembly !== 'undefined' &&
+      typeof WebAssembly.Suspending !== 'function') {
+    const nodeVer = process.versions.node;
+    const major = parseInt(nodeVer.split('.')[0], 10) || 0;
+    if (major < 22) {
+      process.stderr.write(
+        `warning: Node.js ${nodeVer} lacks WASM GC support; codegen will likely abort at the validation step.\n` +
+        `         The compiler can still emit a valid .wasm file — pass --no-wasm-validate to bypass validation ` +
+        `(and run the output on Node 24+ with --experimental-wasm-jspi, or Node 25+).\n` +
+        `         Suppress this warning with --no-version-check. See docs/NODE_VERSIONS.md.\n`);
+    } else {
+      process.stderr.write(
+        `warning: Node.js ${nodeVer} does not expose WebAssembly.Suspending. ` +
+        `Compile will succeed, but host.js cannot run the output here.\n` +
+        `         Use Node 24 with --experimental-wasm-jspi, or Node 25+. ` +
+        `Suppress with --no-version-check. See docs/NODE_VERSIONS.md.\n`);
+    }
   }
 
   if (action === "lex") {

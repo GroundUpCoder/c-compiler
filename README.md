@@ -8,6 +8,10 @@ I occasionally post videos about this project at [youtube.com/@groundupcoder](ht
 
 A frozen C++20 port (**compiler.cc**) is preserved in `old/` along with its own test runner and unit tests. The two compilers produce identical output for all unit tests (verified by equiv tests in `old/`).
 
+### Node.js version
+
+Requires **Node.js 24** with `--experimental-wasm-jspi`, or **Node.js 25+** (no flag needed). Older versions can still produce valid `.wasm` bytes (codegen is version-independent), but can't run them locally because their V8 lacks WASM GC and/or `WebAssembly.Suspending`. See [docs/NODE_VERSIONS.md](docs/NODE_VERSIONS.md) for the full compatibility matrix.
+
 There are three ways to run the compiled programs:
 
 ### WASM files (`.wasm`) — run with Node.js
@@ -76,6 +80,8 @@ Libraries (`"type": "lib"`) cannot be compiled directly — they must be referen
 | `--run-arg <arg>` | Pass argument to program's `argv` |
 | `--gc-sections` | Remove unused code sections |
 | `--no-undefined` | Error on undefined symbols |
+| `--no-wasm-validate` | Skip the codegen-time `WebAssembly.validate()` backstop. Lets older Node versions emit `.wasm` for cross-compile. Implies `--no-version-check`. |
+| `--no-version-check` | Suppress the Node.js runtime-support warning at startup. |
 | `--no-irreducible-lowering` | Disable the loop-switch fallback for functions with cross-block gotos (the structured codegen will then surface a "target label not in scope" diagnostic). On by default. |
 | `-v` / `--verbose` | Print warnings to stderr — currently lists which functions required loop-switch lowering. |
 | `--require-source <file>` | Require a source file to be present |
