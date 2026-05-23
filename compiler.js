@@ -16465,6 +16465,7 @@ function generateCode(units, outputFile, options) {
   // loop-switch lowering on it, and re-emit. Functions whose structured
   // emit succeeds pay no extra cost beyond two length-snapshots.
   const noLowering = !!options?.compilerOptions?.noIrreducibleLowering;
+  const forceLowering = !!options?.compilerOptions?.forceIrreducibleLowering;
   const verbose = !!options?.compilerOptions?.verbose;
   const dumpIrredSegments = !!options?.compilerOptions?.dumpIrredSegments;
   const loweredFnNames = [];
@@ -16474,6 +16475,21 @@ function generateCode(units, outputFile, options) {
       if (fdef !== func) continue;
       const defIdx = cg.funcDefToWasmFuncIdx.get(fdef) - wmod.funcImports.length;
       const wd = wmod.funcDefs[defIdx];
+
+      if (forceLowering) {
+        // --force-dispatch-loop: skip the optimistic structured-first
+        // path; lower every function into a loop-switch state machine
+        // up front. Used for benchmarking dispatch-loop vs structured
+        // codegen on the same source.
+        if (verbose) {
+          writeErr(`[irreducible] lowering '${fdef.name}' (forced)\n`);
+        }
+        IRREDUCIBLE_LOWERING.lower(fdef, dumpIrredSegments ? writeErr : null);
+        cg.emitFunctionBody(fdef);
+        loweredFnNames.push(fdef.name);
+        continue;
+      }
+
       // Snapshot the small handful of arrays the emitter appends to.
       // Per-function CodeGenerator state (locals, frame layout, scope
       // maps) is cleared at the start of every emitFunctionBody, so it
@@ -21609,7 +21625,8 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     if (!options?.compilerOptions?.noFold) {
       INLINER.optimize(unit, { noUndefined: !!options?.compilerOptions?.noUndefined });
     }
-    if (!options?.compilerOptions?.noGotoNormalize) {
+    if (!options?.compilerOptions?.noGotoNormalize &&
+        !options?.compilerOptions?.forceIrreducibleLowering) {
       GOTO_NORMALIZER.optimize(unit);
     }
     // IRREDUCIBLE_LOWERING is invoked on-demand at codegen time, only for
@@ -22596,6 +22613,8 @@ function main() {
       compilerOptions.printStdlib = true;
     } else if (args[i] === "--no-irreducible-lowering") {
       compilerOptions.noIrreducibleLowering = true;
+    } else if (args[i] === "--force-dispatch-loop") {
+      compilerOptions.forceIrreducibleLowering = true;
     } else if (args[i] === "--trapping-float-conversions") {
       compilerOptions.trappingFloatConversions = true;
     } else if (args[i] === "-v" || args[i] === "--verbose") {
