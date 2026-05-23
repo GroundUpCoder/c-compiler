@@ -2445,10 +2445,11 @@
   const BACKENDS_AVAILABLE = window.BACKENDS_AVAILABLE || ['c0'];
   let BACKEND = BACKENDS_AVAILABLE[0];
   function activeCompiler() {
-    if (BACKEND === 'c0') return window.C0;
-    if (BACKEND === 'c1') return window.C1;
-    if (BACKEND === 'c2') return window.C2;
-    return window.C0;
+    // Each backend exposes itself as window.CN (uppercase, hyphens
+    // stripped) — see build.py's BACKEND_FILES. Lookup by mangling
+    // the BACKEND key so new backends (c2-ext, c3a, …) just work.
+    const ident = BACKEND.toUpperCase().replace(/-/g, '');
+    return window[ident] || window.C0;
   }
 
   // ──────────── pane state + apply ────────────
@@ -2798,6 +2799,7 @@
     c0: 'c0 (statement-CFG)',
     c1: 'c1 (TAC)',
     c2: 'c2 (SSA)',
+    'c2-ext': 'c2-ext (SSA + SCC cleanup)',
   };
   for (const k of BACKENDS_AVAILABLE) {
     backendSelect.appendChild(el('option', { value: k }, LABELS[k] || k));

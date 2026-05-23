@@ -27,6 +27,7 @@ BACKEND_FILES = [
     ("c0", "C0", "c0.js"),
     ("c1", "C1", "c1.js"),
     ("c2", "C2", "c2.js"),
+    ("c2-ext", "C2EXT", "c2-ext.js"),
 ]
 
 # Snippet name (referenced by template.html via makePhaseSourceBlock)
@@ -49,6 +50,7 @@ SNIPPET_MAP = {
     # placeholders. When wired, fill in each phase → declaration mapping.
     "c1": {},
     "c2": {},
+    "c2-ext": {},
 }
 
 
