@@ -472,6 +472,17 @@
     color: var(--fg-mute);
     font-style: italic;
   }
+  .cfg-node-stmt.cfg-node-phi {
+    color: #6f3bb6;
+    font-style: italic;
+    background: #f3eafe;
+    border-left: 2px solid #b48ead;
+    padding-left: 6px;
+  }
+  .cfg-block .inst.phi {
+    color: #6f3bb6;
+    font-style: italic;
+  }
   .cfg-node-term {
     padding: 4px 10px;
     border-top: 1px solid var(--border);
@@ -1094,6 +1105,7 @@
   function printExpr(e, parentPrec = 0) {
     if (!e) return '⊥';
     const cls = e.constructor && e.constructor.name;
+    if (cls === 'Value') return e.name;        // c2 SSA Value — has a .name
     if (cls === 'Literal') {
       if (e.type === 'i64') return e.value.toString() + 'L';
       if (e.type === 'f32') return Number(e.value).toString() + 'f';
@@ -1113,6 +1125,19 @@
       return p < parentPrec ? `(${s})` : s;
     }
     return cls || '?';
+  }
+
+  // Render a literal value using c2.js's display conventions (i64 → suffix L,
+  // f64 → ensure decimal point, etc.). Shared between c1's Const lifted form
+  // and c2's CFG.Const instruction rendering.
+  function formatLiteralValue(type, value) {
+    if (type === 'i64') return value.toString() + 'L';
+    if (type === 'f32') return Number(value).toString() + 'f';
+    if (type === 'f64') {
+      const s = Number(value).toString();
+      return s.includes('.') || s.includes('e') ? s : s + '.0';
+    }
+    return String(value);
   }
 
   // ──────────── renderers ────────────
@@ -1412,32 +1437,108 @@
   // ── CFG (text view) ──
   function stmtText(st) {
     const cls = st.constructor && st.constructor.name;
+    // c0 AST.Assign embedded in basic blocks.
     if (cls === 'Assign') {
       return `${st.variable.name} = ${printExpr(st.value)}`;
     }
+    // c1 TAC instructions and c2 SSA instructions. Both have a `dest` that
+    // is either an AST.Variable (c1) or a CFG.Value (c2) — printExpr handles
+    // both via the cls dispatch above.
+    if (cls === 'Const')    return `${st.dest.name} = ${formatLiteralValue(st.dest.type, st.value)}`;
+    if (cls === 'BinaryOp') return `${st.dest.name} = ${printExpr(st.lhs)} ${st.op} ${printExpr(st.rhs)}`;
+    if (cls === 'UnaryOp')  return `${st.dest.name} = ${st.op}${printExpr(st.operand)}`;
+    if (cls === 'Call')     return `${st.dest.name} = call ${st.callee.name}(${st.args.map(a => printExpr(a)).join(', ')})`;
+    if (cls === 'Copy')     return `${st.dest.name} = ${printExpr(st.src)}`;   // c1 only — c2 has no Copy
     return cls + '(...)';
+  }
+
+  // Format an outgoing-edge args list for c2 terminators. Returns '' for
+  // no args (c1 Br/BrIf carry no args) or '(a, b, c)' for c2.
+  function formatBranchArgs(args) {
+    if (!args || args.length === 0) return '';
+    return '(' + args.map(a => (a && a.name) ? a.name : '?').join(', ') + ')';
   }
 
   function termSummary(term) {
     if (!term) return { kind: '?', expr: '' };
     const cls = term.constructor && term.constructor.name;
-    if (cls === 'Br')          return { kind: 'br', expr: term.target.name };
-    if (cls === 'BrIf')        return { kind: 'br_if', expr:
-      `${printExpr(term.cond)} → ${term.trueTarget.name} / ${term.falseTarget.name}` };
+    if (cls === 'Br') {
+      return { kind: 'br', expr: term.target.name + formatBranchArgs(term.args) };
+    }
+    if (cls === 'BrIf') {
+      const tStr = term.trueTarget.name + formatBranchArgs(term.trueArgs);
+      const fStr = term.falseTarget.name + formatBranchArgs(term.falseArgs);
+      return { kind: 'br_if', expr: `${printExpr(term.cond)} → ${tStr} / ${fStr}` };
+    }
     if (cls === 'Return')      return { kind: 'return', expr: printExpr(term.value) };
     if (cls === 'Unreachable') return { kind: 'unreachable', expr: '' };
     return { kind: cls.toLowerCase(), expr: '' };
+  }
+
+  // Resolve a basic block's instruction list across compiler versions.
+  // c0 uses `b.statements` (AST nodes); c1 and c2 use `b.instructions`
+  // (TAC/SSA instruction nodes). Returns whichever exists, falling back to [].
+  function blockInsts(b) {
+    if (Array.isArray(b.instructions)) return b.instructions;
+    if (Array.isArray(b.statements)) return b.statements;
+    return [];
+  }
+
+  // Format a block's header name with its block params if any (c2 only).
+  // c0/c1 blocks have no params; the header is just the name.
+  function blockHeaderName(b) {
+    if (b.params && b.params.length > 0) {
+      return b.name + '(' + b.params.map(p => p.name).join(', ') + ')';
+    }
+    return b.name;
+  }
+
+  // c2 block params are c2's encoding of phi nodes. For pedagogical
+  // visualization, materialize each one as a synthetic phi line:
+  //     x = phi(pred1 → arg1, pred2 → arg2, ...)
+  // where each pred's arg is read from its terminator's args list at the
+  // param's index. Used as an extra body line in renderCfgBlock /
+  // renderFnCfgGraph so viewers can SEE the phi semantics the IR encodes.
+  // Returns an array of phi-line strings, one per block param. Empty for
+  // c0/c1 blocks (no params).
+  function blockPhiLines(b) {
+    if (!b.params || b.params.length === 0) return [];
+    if (!b.predecessors || b.predecessors.length === 0) return [];
+    const lines = [];
+    for (let k = 0; k < b.params.length; k++) {
+      const param = b.params[k];
+      const operands = [];
+      for (const pred of b.predecessors) {
+        const term = pred.terminator;
+        if (!term) { operands.push({ pred: pred.name, arg: '?' }); continue; }
+        const tcls = term.constructor && term.constructor.name;
+        let arg = null;
+        if (tcls === 'Br') {
+          arg = term.args ? term.args[k] : null;
+        } else if (tcls === 'BrIf') {
+          if (term.trueTarget === b) arg = term.trueArgs ? term.trueArgs[k] : null;
+          else if (term.falseTarget === b) arg = term.falseArgs ? term.falseArgs[k] : null;
+        }
+        operands.push({ pred: pred.name, arg: (arg && arg.name) ? arg.name : '?' });
+      }
+      const argsStr = operands.map(o => `${o.pred}→${o.arg}`).join(', ');
+      lines.push(`${param.name} = phi(${argsStr})`);
+    }
+    return lines;
   }
 
   function renderCfgBlock(fn, b) {
     const isEntry = (b === fn.entry);
     const div = el('div', { class: 'cfg-block' + (isEntry ? ' entry' : '') });
     const header = el('div', { class: 'header' });
-    header.appendChild(document.createTextNode(b.name));
+    header.appendChild(document.createTextNode(blockHeaderName(b)));
     header.appendChild(document.createTextNode(':'));
     if (isEntry) header.appendChild(el('span', { class: 'mute' }, '  ← entry'));
     div.appendChild(header);
-    for (const st of b.statements) {
+    for (const phi of blockPhiLines(b)) {
+      div.appendChild(el('div', { class: 'inst phi' }, phi));
+    }
+    for (const st of blockInsts(b)) {
       div.appendChild(el('div', { class: 'inst' }, stmtText(st)));
     }
     if (b.terminator) {
@@ -1602,12 +1703,25 @@
       const div = el('div', { class: 'cfg-node' + (isEntry ? ' entry' : '') });
       const hdr = el('div', { class: 'cfg-node-header' });
       hdr.appendChild(document.createTextNode(b.name));
+      // c2 SSA: render block parameters next to the block name.
+      if (b.params && b.params.length > 0) {
+        const paramStr = '(' + b.params.map(p => p.name).join(', ') + ')';
+        hdr.appendChild(el('span', { class: 'cfg-node-params' }, paramStr));
+      }
       div.appendChild(hdr);
       const body = el('div', { class: 'cfg-node-body' });
-      if (b.statements.length === 0) {
+      // c2 phi visualization: synthetic phi-equivalent line per block param.
+      const phiLines = blockPhiLines(b);
+      for (const phi of phiLines) {
+        let txt = phi;
+        if (txt.length > 42) txt = txt.slice(0, 39) + '…';
+        body.appendChild(el('div', { class: 'cfg-node-stmt cfg-node-phi' }, txt));
+      }
+      const insts = blockInsts(b);
+      if (insts.length === 0 && phiLines.length === 0) {
         body.appendChild(el('div', { class: 'cfg-node-stmt empty' }, '(no statements)'));
       } else {
-        for (const st of b.statements) {
+        for (const st of insts) {
           let txt = stmtText(st);
           if (txt.length > 38) txt = txt.slice(0, 35) + '…';
           body.appendChild(el('div', { class: 'cfg-node-stmt' }, txt));
@@ -1631,7 +1745,11 @@
     const BOX_W = 240, GAP_X = 40, GAP_Y = 60;
     const HEADER_H = 26, FOOTER_H = 24, LINE_H = 18, BODY_PAD = 10;
     function estHeight(b) {
-      const bodyLines = Math.max(1, b.statements.length);
+      // Count synthetic phi lines + real instructions; if both are zero,
+      // we still show '(no statements)' which takes one line.
+      const phiCount = blockPhiLines(b).length;
+      const instCount = blockInsts(b).length;
+      const bodyLines = Math.max(1, phiCount + instCount);
       return HEADER_H + BODY_PAD + bodyLines * LINE_H + FOOTER_H;
     }
     for (const [id, divEl] of nodeEls) {
@@ -1820,407 +1938,6 @@
     out.appendChild(canvas);
     out.appendChild(legend);
     return out;
-  }
-
-  // ─────────────────────────── c1 (TAC) CFG renderers ───────────────────────────
-  //
-  // Bespoke renderers for c1. Kept separate from c0 on purpose: c0 reads
-  // b.statements (AST.Assign[]) and AST expression trees on terminators;
-  // c1 reads b.instructions (TAC) and bare AST.Variable VRegs on
-  // terminator cond/value. Changes here must not affect c0.
-
-  function instrText(inst) {
-    const cls = inst.constructor && inst.constructor.name;
-    if (cls === 'Const') {
-      return `${inst.dest.name} = ${inst.value}`;
-    }
-    if (cls === 'BinaryOp') {
-      return `${inst.dest.name} = ${inst.lhs.name} ${inst.op} ${inst.rhs.name}`;
-    }
-    if (cls === 'UnaryOp') {
-      return `${inst.dest.name} = ${inst.op}${inst.operand.name}`;
-    }
-    if (cls === 'Copy') {
-      return `${inst.dest.name} = ${inst.src.name}`;
-    }
-    if (cls === 'Call') {
-      const args = inst.args.map(a => a.name).join(', ');
-      return `${inst.dest.name} = call ${inst.callee.name}(${args})`;
-    }
-    return cls + '(...)';
-  }
-
-  function termSummaryC1(term) {
-    if (!term) return { kind: '?', expr: '' };
-    const cls = term.constructor && term.constructor.name;
-    if (cls === 'Br')          return { kind: 'br', expr: term.target.name };
-    if (cls === 'BrIf')        return { kind: 'br_if', expr:
-      `${term.cond.name} → ${term.trueTarget.name} / ${term.falseTarget.name}` };
-    if (cls === 'Return')      return { kind: 'return', expr: term.value ? term.value.name : '' };
-    if (cls === 'Unreachable') return { kind: 'unreachable', expr: '' };
-    return { kind: cls.toLowerCase(), expr: '' };
-  }
-
-  function renderCfgBlockC1(fn, b) {
-    const isEntry = (b === fn.entry);
-    const div = el('div', { class: 'cfg-block' + (isEntry ? ' entry' : '') });
-    const header = el('div', { class: 'header' });
-    header.appendChild(document.createTextNode(b.name));
-    header.appendChild(document.createTextNode(':'));
-    if (isEntry) header.appendChild(el('span', { class: 'mute' }, '  ← entry'));
-    div.appendChild(header);
-    for (const inst of b.instructions) {
-      div.appendChild(el('div', { class: 'inst' }, instrText(inst)));
-    }
-    if (b.terminator) {
-      const t = termSummaryC1(b.terminator);
-      div.appendChild(el('div', { class: 'term' },
-        '↳ ' + t.kind + (t.expr ? '  ' + t.expr : '')));
-    }
-    return div;
-  }
-
-  function renderFnCfgTextC1(fn) {
-    const box = el('div');
-    for (const b of fn.blocks) box.appendChild(renderCfgBlockC1(fn, b));
-    return box;
-  }
-
-  function renderFnCfgGraphC1(fn) {
-    const blocks = fn.blocks;
-
-    // Edge extraction — identical edge shape to c0 (Br / BrIf).
-    const edges = [];
-    for (const b of blocks) {
-      const term = b.terminator;
-      if (!term) continue;
-      const cls = term.constructor && term.constructor.name;
-      if (cls === 'Br') {
-        edges.push({ from: b.id, to: term.target.id, label: '', kind: 'goto' });
-      } else if (cls === 'BrIf') {
-        edges.push({ from: b.id, to: term.trueTarget.id,  label: 'T', kind: 'true' });
-        edges.push({ from: b.id, to: term.falseTarget.id, label: 'F', kind: 'false' });
-      }
-    }
-
-    // BFS levels from entry; orphans appended.
-    const entryId = fn.entry.id;
-    const level = { [entryId]: 0 };
-    const bfs = [entryId];
-    while (bfs.length) {
-      const u = bfs.shift();
-      for (const e of edges) {
-        if (e.from === u && !(e.to in level)) {
-          level[e.to] = level[u] + 1;
-          bfs.push(e.to);
-        }
-      }
-    }
-    let maxL = 0;
-    for (const k of Object.keys(level)) maxL = Math.max(maxL, level[+k]);
-    for (const b of blocks) if (!(b.id in level)) level[b.id] = ++maxL;
-    for (const e of edges) e.back = level[e.to] <= level[e.from];
-
-    const stage = el('div', { class: 'cfg-stage' });
-    const svgNs = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNs, 'svg');
-    svg.setAttribute('class', 'cfg-edges');
-    stage.appendChild(svg);
-
-    const nodeEls = new Map();
-    for (const b of blocks) {
-      const isEntry = (b === fn.entry);
-      const div = el('div', { class: 'cfg-node' + (isEntry ? ' entry' : '') });
-      const hdr = el('div', { class: 'cfg-node-header' });
-      hdr.appendChild(document.createTextNode(b.name));
-      div.appendChild(hdr);
-      const body = el('div', { class: 'cfg-node-body' });
-      if (b.instructions.length === 0) {
-        body.appendChild(el('div', { class: 'cfg-node-stmt empty' }, '(no instructions)'));
-      } else {
-        for (const inst of b.instructions) {
-          let txt = instrText(inst);
-          if (txt.length > 38) txt = txt.slice(0, 35) + '…';
-          body.appendChild(el('div', { class: 'cfg-node-stmt' }, txt));
-        }
-      }
-      div.appendChild(body);
-      const tsum = termSummaryC1(b.terminator);
-      const tdiv = el('div', { class: 'cfg-node-term term-' + tsum.kind });
-      tdiv.appendChild(el('span', { class: 'cfg-term-kind' }, tsum.kind));
-      if (tsum.expr) {
-        let exprTxt = tsum.expr;
-        if (exprTxt.length > 32) exprTxt = exprTxt.slice(0, 29) + '…';
-        tdiv.appendChild(document.createTextNode(' '));
-        tdiv.appendChild(el('span', { class: 'cfg-term-expr' }, exprTxt));
-      }
-      div.appendChild(tdiv);
-      nodeEls.set(b.id, div);
-    }
-
-    const BOX_W = 240, GAP_X = 40, GAP_Y = 60;
-    const HEADER_H = 26, FOOTER_H = 24, LINE_H = 18, BODY_PAD = 10;
-    function estHeight(b) {
-      const bodyLines = Math.max(1, b.instructions.length);
-      return HEADER_H + BODY_PAD + bodyLines * LINE_H + FOOTER_H;
-    }
-    for (const [id, divEl] of nodeEls) {
-      divEl.style.width = BOX_W + 'px';
-      stage.appendChild(divEl);
-    }
-    const sizes = new Map();
-    for (const b of blocks) sizes.set(b.id, { w: BOX_W, h: estHeight(b) });
-
-    const byLevel = {};
-    for (const id of Object.keys(level)) {
-      const l = level[+id];
-      if (!byLevel[l]) byLevel[l] = [];
-      byLevel[l].push(+id);
-    }
-    for (const l of Object.keys(byLevel)) byLevel[l].sort((a, b) => a - b);
-    let maxLevel = 0;
-    for (const l of Object.keys(byLevel)) maxLevel = Math.max(maxLevel, +l);
-
-    const rowH = [];
-    for (let l = 0; l <= maxLevel; l++) {
-      let h = 60;
-      for (const id of (byLevel[l] || [])) h = Math.max(h, sizes.get(id).h);
-      rowH[l] = h;
-    }
-    const levelY = [];
-    let yCursor = GAP_Y;
-    for (let l = 0; l <= maxLevel; l++) {
-      levelY[l] = yCursor;
-      yCursor += rowH[l] + GAP_Y;
-    }
-    const totalH = yCursor;
-
-    let maxCount = 0;
-    for (const l of Object.keys(byLevel)) maxCount = Math.max(maxCount, byLevel[l].length);
-    // Reserve right padding for back-edge bezier bulges (which extend
-    // outside the rightmost node column). Without this, SVG paints with
-    // overflow:hidden and back-edges get clipped on the right.
-    const BACK_EDGE_PAD = 220;
-    const layoutW = Math.max(maxCount * BOX_W + Math.max(0, maxCount - 1) * GAP_X + 80, 480);
-    const totalW = layoutW + BACK_EDGE_PAD;
-
-    const positions = new Map();
-    for (let l = 0; l <= maxLevel; l++) {
-      const row = byLevel[l] || [];
-      const rowW = row.length * BOX_W + Math.max(0, row.length - 1) * GAP_X;
-      const startX = (layoutW - rowW) / 2;
-      for (let i = 0; i < row.length; i++) {
-        const id = row[i];
-        const px = startX + i * (BOX_W + GAP_X);
-        const py = levelY[l] + (rowH[l] - sizes.get(id).h) / 2;
-        positions.set(id, { x: px, y: py, w: BOX_W, h: sizes.get(id).h });
-        const divEl = nodeEls.get(id);
-        divEl.style.left = px + 'px';
-        divEl.style.top = py + 'px';
-      }
-    }
-
-    stage.style.width = totalW + 'px';
-    stage.style.height = totalH + 'px';
-
-    svg.setAttribute('width', totalW);
-    svg.setAttribute('height', totalH);
-    const defs = document.createElementNS(svgNs, 'defs');
-    function mkArrow(id, color) {
-      const m = document.createElementNS(svgNs, 'marker');
-      m.setAttribute('id', id);
-      m.setAttribute('viewBox', '0 0 8 8');
-      m.setAttribute('refX', '7');
-      m.setAttribute('refY', '4');
-      m.setAttribute('markerWidth', '7');
-      m.setAttribute('markerHeight', '7');
-      m.setAttribute('orient', 'auto');
-      const p = document.createElementNS(svgNs, 'path');
-      p.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
-      p.setAttribute('fill', color);
-      m.appendChild(p);
-      defs.appendChild(m);
-    }
-    mkArrow('cfg-arr-default-c1', '#6b7280');
-    mkArrow('cfg-arr-true-c1',    '#16a34a');
-    mkArrow('cfg-arr-false-c1',   '#dc2626');
-    mkArrow('cfg-arr-back-c1',    '#9333ea');
-    svg.appendChild(defs);
-
-    function markerFor(e) {
-      if (e.back) return 'url(#cfg-arr-back-c1)';
-      if (e.kind === 'true')  return 'url(#cfg-arr-true-c1)';
-      if (e.kind === 'false') return 'url(#cfg-arr-false-c1)';
-      return 'url(#cfg-arr-default-c1)';
-    }
-
-    const outCount = {};
-    for (const e of edges) outCount[e.from] = (outCount[e.from] || 0) + 1;
-
-    function refreshEdges() {
-      svg.querySelectorAll(':scope > path, :scope > text').forEach(n => n.remove());
-      const outIdx = {};
-      for (const e of edges) {
-        const src = positions.get(e.from);
-        const dst = positions.get(e.to);
-        if (!src || !dst) continue;
-        const idx = (outIdx[e.from] = (outIdx[e.from] || 0));
-        outIdx[e.from] = idx + 1;
-        const total = outCount[e.from];
-        const offsetX = total > 1 ? (idx - (total - 1) / 2) * (src.w / (total + 1)) : 0;
-
-        let x1, y1, x2, y2, c1x, c1y, c2x, c2y;
-        if (e.back) {
-          x1 = src.x + src.w;
-          y1 = src.y + src.h / 2;
-          x2 = dst.x + dst.w;
-          y2 = dst.y + dst.h / 2;
-          const bulge = Math.max(40, Math.abs(y2 - y1) * 0.4);
-          c1x = x1 + bulge; c1y = y1;
-          c2x = x2 + bulge; c2y = y2;
-        } else {
-          x1 = src.x + src.w / 2 + offsetX;
-          y1 = src.y + src.h;
-          x2 = dst.x + dst.w / 2;
-          y2 = dst.y;
-          const mid = (y1 + y2) / 2;
-          c1x = x1; c1y = mid;
-          c2x = x2; c2y = mid;
-        }
-        const path = document.createElementNS(svgNs, 'path');
-        path.setAttribute('d', `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`);
-        if (e.back) path.classList.add('cfg-edge-back');
-        else path.classList.add('cfg-edge-' + e.kind);
-        path.setAttribute('marker-end', markerFor(e));
-        svg.appendChild(path);
-
-        if (e.label) {
-          const text = document.createElementNS(svgNs, 'text');
-          text.setAttribute('class', 'cfg-edge-label');
-          let lx, ly;
-          if (e.back) { lx = Math.max(c1x, c2x) - 4; ly = (y1 + y2) / 2; }
-          else        { lx = (x1 + x2) / 2 + 6;       ly = (y1 + y2) / 2 - 2; }
-          text.setAttribute('x', lx);
-          text.setAttribute('y', ly);
-          text.textContent = e.label;
-          svg.appendChild(text);
-        }
-      }
-    }
-    refreshEdges();
-
-    for (const [id, divEl] of nodeEls) {
-      divEl.style.cursor = 'grab';
-      divEl.addEventListener('mousedown', (ev) => {
-        if (window.getSelection && String(window.getSelection())) return;
-        ev.preventDefault();
-        divEl.style.cursor = 'grabbing';
-        const pos = positions.get(id);
-        const startMouseX = ev.clientX;
-        const startMouseY = ev.clientY;
-        const startPosX = pos.x;
-        const startPosY = pos.y;
-        function onMove(ev2) {
-          const nx = Math.max(0, startPosX + (ev2.clientX - startMouseX));
-          const ny = Math.max(0, startPosY + (ev2.clientY - startMouseY));
-          pos.x = nx;
-          pos.y = ny;
-          divEl.style.left = nx + 'px';
-          divEl.style.top  = ny + 'px';
-          refreshEdges();
-        }
-        function onUp() {
-          divEl.style.cursor = 'grab';
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
-        }
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
-      });
-    }
-
-    const canvas = el('div', { class: 'cfg-canvas' });
-    canvas.appendChild(stage);
-    const legend = el('div', { class: 'mute',
-      style: { fontSize: '11px', marginTop: '6px', display: 'flex', gap: '14px', flexWrap: 'wrap' } },
-      el('span', {}, '🟩 entry'),
-      el('span', { style: { color: '#16a34a' } }, '→ T (true)'),
-      el('span', { style: { color: '#dc2626' } }, '→ F (false)'),
-      el('span', { style: { color: '#6b7280' } }, '→ unconditional'),
-      el('span', { style: { color: '#9333ea' } }, '⤴ back-edge'),
-      el('span', { class: 'mute' }, '· drag any block to reposition'),
-    );
-    const out = el('div');
-    out.appendChild(canvas);
-    out.appendChild(legend);
-    return out;
-  }
-
-  function renderCfgC1(panel, trace) {
-    panel.appendChild(el('div', { class: 'hint' },
-      'c1\'s CFG: each basic block holds a sequence of ',
-      el('strong', {}, 'three-address-code instructions'),
-      ' (Const, BinaryOp, UnaryOp, Copy, Call) plus a terminator. Every ' +
-      'intermediate value gets a name — a virtual register, e.g. `t3`. ' +
-      '`&&`, `||`, `?:` are lowered to block-level control flow during ' +
-      'CFG.fromAST — they don\'t exist as TAC instructions; instead an ' +
-      'expression that contained them becomes a small CFG.'));
-
-    panel.appendChild(el('h2', { class: 'section-title' }, 'Every c1 TAC type'));
-    panel.appendChild(makeCatalog([
-      { cat: 'instruction', name: 'Const',     desc: '`{ dest, value }`. Loads a literal into dest VReg.' },
-      { cat: 'instruction', name: 'BinaryOp',  desc: '`{ dest, op, lhs, rhs }`. lhs/rhs are VRegs; op is `+`, `-`, `*`, `/`, `%`, or a comparison.' },
-      { cat: 'instruction', name: 'UnaryOp',   desc: '`{ dest, op, operand }`. op is `-` (float negate) or `!`. Integer negate is lowered to `0 - x`.' },
-      { cat: 'instruction', name: 'Copy',      desc: '`{ dest, src }`. VReg → VReg copy.' },
-      { cat: 'instruction', name: 'Call',      desc: '`{ dest, callee, args }`. dest is always present; unused call result stays dead.' },
-      { cat: 'terminator',  divider: true, name: 'Br',          desc: '`{ target }`. Unconditional jump.' },
-      { cat: 'terminator',  name: 'BrIf',        desc: '`{ cond, trueTarget, falseTarget }`. cond is a VReg (NOT an AST expression).' },
-      { cat: 'terminator',  name: 'Return',      desc: '`{ value }`. value is a VReg.' },
-      { cat: 'terminator',  name: 'Unreachable', desc: 'Trap-now sentinel.' },
-    ]));
-
-    panel.appendChild(el('h2', { class: 'section-title' }, 'CFG for the current source'));
-    panel.appendChild(el('div', { class: 'hint muted' },
-      'Entry blocks are highlighted green. Switch to Graph view for a ' +
-      'level-ordered layout with bezier edges (green = true, red = false, ' +
-      'dashed purple = back-edge).'));
-
-    if (!trace || !trace.mod) {
-      panel.appendChild(el('div', { class: 'mute mono' },
-        '(CFG.fromAST failed: ' + (trace?.modError?.message || 'unknown') + ')'));
-      return;
-    }
-
-    const toggle = el('div', { class: 'toggle-group' },
-      el('button', { 'data-view': 'text', class: 'active' }, 'Text'),
-      el('button', { 'data-view': 'graph' }, 'Graph'));
-    panel.appendChild(toggle);
-    const container = el('div');
-    panel.appendChild(container);
-
-    function render(view) {
-      clear(container);
-      for (const fn of trace.mod.functions) {
-        const group = el('div', { class: 'fn-group' });
-        group.appendChild(el('h3', {}, fn.name,
-          el('span', { class: 'sub' },
-            ' (' + fn.params.map(p => p.type).join(', ') + ') → ' + fn.returnType)));
-        if (view === 'text') {
-          group.appendChild(renderFnCfgTextC1(fn));
-        } else {
-          group.appendChild(renderFnCfgGraphC1(fn));
-        }
-        container.appendChild(group);
-      }
-    }
-    toggle.querySelectorAll('button').forEach(btn => {
-      btn.addEventListener('click', () => {
-        toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        render(btn.dataset.view);
-      });
-    });
-    render('text');
   }
 
   // ── Locals ──
@@ -2989,18 +2706,18 @@
       el('span', { class: 'mono' }, `./${BACKEND}.js`),
       ' from Node. Switch the Backend selector back to c0 to use the visualizer.'));
   }
+  // Tabs that work across all backends (c0, c1, c2) — their render functions
+  // are polymorphic over `b.statements` vs `b.instructions`, `b.params`, etc.
+  // Other tabs (Tokens, AST, Locals, wasm) stay c0-only for now and show a
+  // TBD placeholder under c1/c2.
+  const POLY_TABS = new Set(['cfg', 'lifted']);
+
   function renderAll(trace) {
     for (const def of TAB_DEFS) {
       if (def.static) continue;
       const panel = tabs.get(def.id).panel;
       clear(panel);
-      // c1: only the cfg tab is wired up so far; everything else still TBD.
-      if (BACKEND === 'c1') {
-        if (def.id === 'cfg') renderCfgC1(panel, trace);
-        else renderTbd(panel, def);
-        continue;
-      }
-      if (BACKEND !== 'c0') { renderTbd(panel, def); continue; }
+      if (BACKEND !== 'c0' && !POLY_TABS.has(def.id)) { renderTbd(panel, def); continue; }
       if (def.render) def.render(panel, trace);
     }
   }
@@ -3048,14 +2765,6 @@
   function recompile() {
     refreshSourceHighlight();
     syncSourceScroll();
-    // c2 still TBD: skip compileWithTrace entirely. c0 + c1 are both
-    // wired to renderers below; renderAll dispatches per backend.
-    if (BACKEND !== 'c0' && BACKEND !== 'c1') {
-      errorsEl.classList.add('hidden');
-      clear(errorsEl);
-      renderAll(null);
-      return;
-    }
     let trace;
     try {
       trace = activeCompiler().CODEGEN.compileWithTrace(sourceEl.value, '<editor>');
@@ -3082,13 +2791,13 @@
   const backendSelect = document.getElementById('backend-select');
   // Repopulate from BACKENDS_AVAILABLE (build.py controls this).
   clear(backendSelect);
-  // Note: c1 is TAC (not SSA — that's c2); c2 uses the universal dispatcher,
-  // not a structurizer. The visualizer hasn't been wired for c1/c2 yet, so
-  // they're labeled TBD and render placeholder content when selected.
+  // The CFG and Lifted tabs are polymorphic across c0/c1/c2. Other
+  // tabs (Tokens, AST, Locals, wasm) still show TBD placeholders for
+  // c1/c2 — those renderers haven't been generalized yet.
   const LABELS = {
     c0: 'c0 (statement-CFG)',
     c1: 'c1 (TAC)',
-    c2: 'c2 (SSA — TBD)',
+    c2: 'c2 (SSA)',
   };
   for (const k of BACKENDS_AVAILABLE) {
     backendSelect.appendChild(el('option', { value: k }, LABELS[k] || k));

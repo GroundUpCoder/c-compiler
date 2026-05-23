@@ -99,6 +99,34 @@ t('TYPE.of basics', () => {
   eq(TYPE.of(new AST.Unary(null, '!', L32)), 'i32');
 });
 
+// ─── type aliases ───
+t('type aliases: int/long/float/double map to i32/i64/f32/f64', () => {
+  // Sanity at the token layer: alias and canonical produce identical tokens.
+  const aliased = PARSER.tokenize('int x; long y; float a; double b;');
+  const canonical = PARSER.tokenize('i32 x; i64 y; f32 a; f64 b;');
+  eq(aliased.length, canonical.length);
+  for (let k = 0; k < aliased.length; k++) {
+    eq(aliased[k].type, canonical[k].type, `tok ${k}`);
+    eq(aliased[k].value, canonical[k].value, `tok ${k} value`);
+  }
+});
+t('type aliases: compile and run a program written with C-style types', () => {
+  const bytes = direct(`
+    int sq(int x) { return x * x; }
+    long mul64(long a, long b) { return a * b; }
+    double avg(double a, double b) { return (a + b) / 2.0; }
+  `);
+  const m = new WebAssembly.Instance(new WebAssembly.Module(bytes));
+  eq(m.exports.sq(7), 49);
+  eq(m.exports.mul64(123n, 456n), 56088n);
+  eq(m.exports.avg(3.0, 5.0), 4.0);
+});
+t('type aliases: pretty-printer emits canonical names', () => {
+  // The AST never sees `int`; printSource thus emits `i32`.
+  const src = AST.printSource(PARSER.parse('int sq(int x) { return x * x; }'));
+  if (!/i32 sq\(i32 x\)/.test(src)) throw new Error('expected canonical i32 in: ' + src);
+});
+
 // ─── parser ───
 t('parser handles structured sum', () => {
   const prog = PARSER.parse(SUM_STRUCTURED);
@@ -212,6 +240,58 @@ t('lifted: unary ! and float neg', () => {
   eq(m.exports.isZero(0), 1);
   eq(m.exports.isZero(5), 0);
   eq(m.exports.negf(3.5), -3.5);
+});
+
+// ─── do-while ───
+const SUM_DOWHILE = `
+  i32 sum(i32 n) {
+    i32 total = 0;
+    i32 i = 0;
+    if (n == 0) { return 0; }
+    do {
+      total = total + i;
+      i = i + 1;
+    } while (i < n);
+    return total;
+  }
+`;
+t('do-while: direct emit sums correctly', () => {
+  const bytes = direct(SUM_DOWHILE);
+  for (const [n, want] of [[0, 0], [1, 0], [2, 1], [10, 45], [100, 4950]]) {
+    eq(run(bytes, 'sum', n), want, `sum(${n})`);
+  }
+});
+t('do-while: body always runs at least once', () => {
+  // While with cond=0 wouldn't execute the body; do-while must.
+  const bytes = direct(`
+    i32 once(i32 x) {
+      i32 c = 0;
+      do { c = c + 1; } while (0);
+      return c;
+    }
+  `);
+  eq(run(bytes, 'once', 99), 1);
+});
+t('do-while: break exits before tail cond', () => {
+  const bytes = direct(`
+    i32 firstHit(i32 n) {
+      i32 i = 0;
+      do {
+        if (i == n) { break; }
+        i = i + 1;
+      } while (1);
+      return i;
+    }
+  `);
+  eq(run(bytes, 'firstHit', 7), 7);
+  eq(run(bytes, 'firstHit', 0), 0);
+});
+t('do-while: round-trips through CFG', () => {
+  eq(run(roundTrip(SUM_DOWHILE), 'sum', 10), 45);
+});
+t('do-while: pretty-prints with trailing semicolon', () => {
+  const src = AST.printSource(PARSER.parse(SUM_DOWHILE));
+  if (!/} while \(i < n\);/.test(src)) throw new Error('do-while not pretty-printed: ' + src);
 });
 
 // ─── idempotency: repeated round-trips ───

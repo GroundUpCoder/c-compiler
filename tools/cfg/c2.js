@@ -59,6 +59,28 @@ const AST = (() => {
     }
   }
 
+  // PARALLEL_ASSIGN((a, b, ...), (e0, e1, ...));
+  //
+  // Parallel-copy semantics: every rvalue expression is evaluated first,
+  // then the resulting values are bound to the lvalue variables. Reads
+  // observe pre-assignment state of all variables (so swaps like
+  // PARALLEL_ASSIGN((a, b), (b, a)) work without temps in source).
+  //
+  // Constraints: lvalues are bare AST.Variable identifiers (no array
+  // index, no field access); arities must match; element types must match
+  // pairwise; lvalues must already be declared (does not declare).
+  //
+  // intoAST also emits this for SSA destruction — block-param assigns on
+  // each predecessor edge become a single ParallelAssign, removing the
+  // need for hazard analysis and destruction temps.
+  class ParallelAssign {
+    constructor(loc, lvalues, rvalues) {
+      this.loc = loc;
+      this.lvalues = lvalues; // Variable[]
+      this.rvalues = rvalues; // Expression[]
+    }
+  }
+
   // Supported binops:
   //   +, -, *, /, % (integer and float)
   //   ==, !=, <, <=, >, >= (integer and float comparisons)
@@ -260,6 +282,10 @@ const AST = (() => {
         lines.push(`${pad}${st.variable.type} ${st.variable.name}${st.initializer ? ' = ' + printExpr(st.initializer) : ''};`);
       } else if (st instanceof Assign) {
         lines.push(`${pad}${st.variable.name} = ${printExpr(st.value)};`);
+      } else if (st instanceof ParallelAssign) {
+        const lhs = st.lvalues.map((v) => v.name).join(', ');
+        const rhs = st.rvalues.map((e) => printExpr(e)).join(', ');
+        lines.push(`${pad}PARALLEL_ASSIGN((${lhs}), (${rhs}));`);
       } else if (st instanceof ExpressionStatement) {
         lines.push(`${pad}${printExpr(st.expr)};`);
       } else if (st instanceof If) {
@@ -312,7 +338,7 @@ const AST = (() => {
   return {
     Program, Function, Block,
     Literal, Variable,
-    Declare, Assign, ExpressionStatement,
+    Declare, Assign, ParallelAssign, ExpressionStatement,
     Binary, Unary, Ternary, Call,
     Switch, Case, If, While, DoWhile, Break,
     Label, Goto, Return,
@@ -327,6 +353,7 @@ const PARSER = (() => {
       'i32', 'i64', 'f32', 'f64',
       'while', 'do', 'break', 'switch', 'case', 'default',
       'if', 'else', 'goto', 'return',
+      'PARALLEL_ASSIGN',
     ]);
     // Source-level type aliases: `int x;` lexes identically to `i32 x;`.
     // The alias is folded away at tokenize time, so the AST/CFG/codegen
@@ -484,6 +511,45 @@ const PARSER = (() => {
         const tgt = expect('ID');
         expect(';');
         return new AST.Goto(loc(t), tgt.value);
+      }
+      // PARALLEL_ASSIGN((id, id, ...), (expr, expr, ...));
+      // Reads all rvalues before writing any lvalue. lvalues are bare
+      // identifiers of already-declared variables. Arities must match.
+      // Zero-arity (PARALLEL_ASSIGN((), ())) is permitted as a no-op.
+      if (at('PARALLEL_ASSIGN')) {
+        const t = advance();
+        expect('(');
+        expect('(');
+        const lvalues = [];
+        if (!at(')')) {
+          do {
+            const id = expect('ID');
+            const v = scope[id.value];
+            if (!v) throw new Error(`Undefined variable ${id.value} at line ${id.line}:${id.col}`);
+            lvalues.push(v);
+          } while (eat(','));
+        }
+        expect(')');
+        expect(',');
+        expect('(');
+        const rvalues = [];
+        if (!at(')')) {
+          do { rvalues.push(parseExpression()); } while (eat(','));
+        }
+        expect(')');
+        expect(')');
+        expect(';');
+        if (lvalues.length !== rvalues.length) {
+          throw new Error(`PARALLEL_ASSIGN arity mismatch: ${lvalues.length} lvalues vs ${rvalues.length} rvalues at line ${t.line}:${t.col}`);
+        }
+        for (let i = 0; i < lvalues.length; i++) {
+          const lt = lvalues[i].type;
+          const rt = AST.TYPE.of(rvalues[i]);
+          if (lt !== rt) {
+            throw new Error(`PARALLEL_ASSIGN type mismatch at position ${i}: ${lvalues[i].name} is ${lt} but rvalue is ${rt} at line ${t.line}:${t.col}`);
+          }
+        }
+        return new AST.ParallelAssign(loc(t), lvalues, rvalues);
       }
       // Assign: ID = expr ;
       if (peek()?.type === 'ID' && peek(1)?.type === '=') {
@@ -772,24 +838,44 @@ const PARSER = (() => {
 
 const CFG = (() => {
 
-  // ────── Three-Address Code (TAC) CFG ──────
+  // ────── Static Single Assignment (SSA) CFG ──────
   //
-  // Every operation is a one-line instruction that names its destination
-  // and operands by reference to AST.Variables ("virtual registers"). VRegs
-  // are mutable — any instruction may reassign any VReg. The CFG.Function's
-  // `locals` list holds both source-declared variables and synthetic temps
-  // produced by lowering (e.g. __t0, __t1, ...).
+  // Every operation produces a Value. A Value is defined exactly once —
+  // either by an instruction's `dest`, by a basic block parameter, or by
+  // a function parameter. Source-level mutability (`x = x + 1`) is encoded
+  // by allocating a fresh Value at each definition site; control-flow joins
+  // reconcile multiple incoming Values via *block parameters* (the
+  // Cranelift / MLIR / SwiftIR alternative to phi nodes — a target's
+  // params describe the values it expects from each predecessor, and each
+  // predecessor's terminator carries a matching list of args).
   //
-  // Branches reference VRegs by identity rather than carrying expression
-  // trees: BrIf.cond is a VReg holding an i32, Return.value is a VReg
-  // holding the function's return type.
+  // SSA construction follows Braun et al. 2013, "Simple and Efficient
+  // Construction of SSA Form" — `readVariable` / `writeVariable` track
+  // the "current Value of source-var X at the end of block B", and the
+  // *sealed-block* trick handles forward references (back edges in loops,
+  // forward gotos) without needing a separate dominator computation.
+  //
+  // No Copy instruction: SSA needs no explicit move. The c1 cases that
+  // used Copy — `&&` / `||` short-circuit dests, `?:` arms, source-level
+  // `x = y` — are subsumed by block parameters and by re-binding the
+  // source variable's currentDef without emitting any instruction.
+
+  // ────── Values ──────
+
+  class Value {
+    constructor(type, name) {
+      this.type = type;        // 'i32' | 'i64' | 'f32' | 'f64'
+      this.name = name;        // string — for display & destruction
+      this.id = -1;            // assigned by the owning Function
+    }
+  }
 
   // ────── Instructions ──────
 
   class Instruction {
     constructor(loc, dest) {
       this.loc = loc;
-      this.dest = dest;                  // AST.Variable (the target VReg)
+      this.dest = dest;                  // Value
     }
   }
 
@@ -802,53 +888,44 @@ const CFG = (() => {
   }
 
   // dest = lhs <op> rhs       (op: '+' '-' '*' '/' '%' '==' '!=' '<' '<=' '>' '>=')
-  // Note: '&&' and '||' never appear here — they're lowered to control flow
-  // during AST → CFG.
+  // '&&' / '||' never appear here — they lower to control flow plus a
+  // block parameter at the join.
   class BinaryOp extends Instruction {
     constructor(loc, dest, op, lhs, rhs) {
       super(loc, dest);
       this.op = op;
-      this.lhs = lhs;                    // AST.Variable
-      this.rhs = rhs;                    // AST.Variable
+      this.lhs = lhs;                    // Value
+      this.rhs = rhs;                    // Value
     }
   }
 
   // dest = <op> operand       (op: '-' (float negate) or '!' (eqz))
-  // Integer '-' is lowered to '0 - x' BinaryOp.
+  // Integer '-' is lowered to `0 - x` BinaryOp.
   class UnaryOp extends Instruction {
     constructor(loc, dest, op, operand) {
       super(loc, dest);
       this.op = op;
-      this.operand = operand;            // AST.Variable
+      this.operand = operand;            // Value
     }
   }
 
-  // dest = src                (plain copy / move between VRegs)
-  class Copy extends Instruction {
-    constructor(loc, dest, src) {
-      super(loc, dest);
-      this.src = src;                    // AST.Variable
-    }
-  }
-
-  // dest = call <callee>(args...)
-  // dest is always present (this language has no void functions), even
-  // when the source-level call was an ExpressionStatement and the result
-  // is unused — the temp just stays dead. `callee` is a direct CFG.Function
-  // reference; the cross-layer linkage (AST.Function ↔ CFG.Function) lives
-  // inside the lower / lift passes.
+  // dest = call <callee>(args...). `callee` is a direct CFG.Function
+  // reference. dest is always present (no void functions), even when the
+  // source-level call was an ExpressionStatement — the dest just goes unused.
   class Call extends Instruction {
     constructor(loc, dest, callee, args) {
       super(loc, dest);
       this.callee = callee;              // CFG.Function
-      this.args = args;                  // AST.Variable[]
+      this.args = args;                  // Value[]
     }
   }
 
   // ────── Terminators ──────
   //
-  // No expression trees here: cond / value reference VRegs (AST.Variables)
-  // that were written by instructions in the same or a predecessor block.
+  // Branch terminators carry an args list per outgoing edge — one Value
+  // per parameter of the target block. (Block parameters are c2's
+  // alternative to phi nodes.) cond / value reference Values; never
+  // expression trees.
 
   class Terminator {
     constructor(loc) { this.loc = loc; }
@@ -856,23 +933,26 @@ const CFG = (() => {
   }
 
   class Br extends Terminator {
-    constructor(loc, target) {
+    constructor(loc, target, args = []) {
       if (!(target instanceof BasicBlock)) throw new Error('Br: target must be a BasicBlock');
       super(loc);
       this.target = target;
+      this.args = args;                  // Value[] — one per target.params
     }
     get successors() { return [this.target]; }
   }
 
   class BrIf extends Terminator {
-    constructor(loc, cond, trueTarget, falseTarget) {
+    constructor(loc, cond, trueTarget, falseTarget, trueArgs = [], falseArgs = []) {
       if (!(trueTarget instanceof BasicBlock) || !(falseTarget instanceof BasicBlock)) {
         throw new Error('BrIf: targets must be BasicBlocks');
       }
       super(loc);
-      this.cond = cond;                  // AST.Variable (i32)
+      this.cond = cond;                  // Value (i32)
       this.trueTarget = trueTarget;
       this.falseTarget = falseTarget;
+      this.trueArgs = trueArgs;          // Value[] — one per trueTarget.params
+      this.falseArgs = falseArgs;        // Value[] — one per falseTarget.params
     }
     get successors() { return [this.trueTarget, this.falseTarget]; }
   }
@@ -880,7 +960,7 @@ const CFG = (() => {
   class Return extends Terminator {
     constructor(loc, value) {
       super(loc);
-      this.value = value;                // AST.Variable
+      this.value = value;                // Value
     }
   }
 
@@ -894,8 +974,15 @@ const CFG = (() => {
     constructor(name) {
       this.name = name;
       this.id = -1;
+      this.params = [];                  // Value[] — block parameters
       this.instructions = [];            // Instruction[]
       this.terminator = null;
+      this.predecessors = [];            // BasicBlock[] — maintained by terminate()
+      this.sealed = false;               // Braun: true once all preds are known
+      // SSA construction state (private; consulted only during fromAST):
+      this._fn = null;                   // back-pointer set by createBlock
+      this._currentDef = new Map();      // AST.Variable → Value (end-of-block)
+      this._incompletePhis = new Map();  // AST.Variable → Value (param awaiting operands)
     }
     append(ins) {
       if (this.terminator) throw new Error(`Block '${this.name}' already terminated`);
@@ -905,45 +992,73 @@ const CFG = (() => {
     terminate(t) {
       if (this.terminator) throw new Error(`Block '${this.name}' already terminated`);
       this.terminator = t;
+      // Maintain predecessors on successors. A BrIf with the same true / false
+      // target intentionally adds two entries (one per edge).
+      for (const succ of t.successors) succ.predecessors.push(this);
     }
   }
 
   class Function {
     constructor(name, params, returnType, exportName = null) {
       this.name = name;
-      this.params = params;              // AST.Variable[] — function parameters
+      this.params = params;              // AST.Variable[] (source-level params)
       this.returnType = returnType;
       this.exportName = exportName;
-      // `locals` holds both source-declared variables AND synthetic temps
-      // produced during lowering, in stable order. wasm encoding only cares
-      // about the order, not the source / temp distinction.
-      this.locals = [];                  // AST.Variable[]
-      this.entry = new BasicBlock('entry');
-      this.entry.id = 0;
-      this.blocks = [this.entry];
-      this._names = new Set(params.map((p) => p.name));
-      this._tempCounter = 0;
+      this.blocks = [];
+      this._valueCounter = 0;
+      // _takenNames starts empty; param Values get minted first and claim
+      // the source names cleanly. Later Values for reassigned source vars
+      // get suffixed (e.g. `x_1`, `x_2`).
+      this._takenNames = new Set();
+      this.entry = this.createBlock('entry');
+      // Mint one Value per source param, binding it in entry._currentDef.
+      // The entry block has no other predecessors — sealed at birth.
+      // Params use newParamValue so they claim the bare source-var name
+      // ('n', 'a', etc.) — matching how the function signature reads.
+      this.paramValues = params.map((p) => {
+        const v = this.newParamValue(p.type, p.name);
+        this.entry._currentDef.set(p, v);
+        return v;
+      });
+      this.entry.sealed = true;
     }
-    hasName(name) { return this._names.has(name); }
-    addLocal(v) {
-      if (this._names.has(v.name)) throw new Error('duplicate local: ' + v.name);
-      this._names.add(v.name);
-      this.locals.push(v);
+    newValue(type, hint = null) {
+      // Pick a unique name. When a hint is provided, ALWAYS suffix
+      // with a counter — never claim the bare hint name. Source
+      // variable names like 'x' produce 'x_1', 'x_2', etc. across
+      // multiple definitions, keeping every SSA Value visually
+      // distinct from the source-var it represents.
+      //
+      // Bare source-var names are reserved for the function parameter
+      // Values, which use newParamValue() instead. That makes the
+      // lifted function signature stay 'i32 f(i32 n)' while internal
+      // SSA Values for assignments / phis read as 'n_1', 'n_2', etc.
+      let name;
+      const base = hint ?? '__v';
+      let k = 1;
+      do { name = `${base}_${k++}`; } while (this._takenNames.has(name));
+      this._takenNames.add(name);
+      const v = new Value(type, name);
+      v.id = this._valueCounter++;
       return v;
     }
-    newTemp(type, loc = null) {
-      // Skip names that round-trip lifting may already have introduced
-      // (e.g. an earlier lift's `__t0` is now a regular local on relower).
-      let name;
-      do { name = `__t${this._tempCounter++}`; } while (this._names.has(name));
-      const v = new AST.Variable(loc, type, name);
-      this._names.add(name);
-      this.locals.push(v);
+    newParamValue(type, name) {
+      // Params claim the bare source-var name directly. Distinct path
+      // from newValue (which always-suffixes) so the function
+      // parameter Value stays callable as `n`, `a`, `b` etc. in the
+      // IR — matching how the function signature reads.
+      if (this._takenNames.has(name)) {
+        throw new Error(`newParamValue: name '${name}' already taken`);
+      }
+      this._takenNames.add(name);
+      const v = new Value(type, name);
+      v.id = this._valueCounter++;
       return v;
     }
     createBlock(name) {
       const b = new BasicBlock(name);
       b.id = this.blocks.length;
+      b._fn = this;
       this.blocks.push(b);
       return b;
     }
@@ -954,19 +1069,200 @@ const CFG = (() => {
   }
 
   function fromAST(program) {
-    // Lower AST.Program => CFG.Module (TAC).
+    // Lower AST.Program => CFG.Module (SSA).
     //
-    // Expressions get flattened to three-address ops with a fresh temp per
-    // intermediate. emitExpr returns the AST.Variable holding the result.
-    // Short-circuit ops (&&, ||) and ternary (?:) introduce control flow
-    // by opening fresh blocks and threading the result through a shared
-    // destination var.
+    // Expressions become Const / BinaryOp / UnaryOp / Call instructions
+    // whose `dest` is a fresh Value. Source-level variable reads route
+    // through readVariable (Braun's algorithm); writes via writeVariable.
+    // Short-circuit (`&&` / `||`) and ternary (`?:`) merge their two
+    // paths via a manually-constructed block parameter on the exit
+    // block.
     //
-    // Two-pass: (1) mint a CFG.Function for every AST.Function so any call,
-    // including one to a not-yet-walked function, can resolve its callee.
-    // (2) walk each body, emitting instructions into the pre-created CFG.
-    // Cross-layer linkage (AST.Function → CFG.Function) lives in cfgByAst
-    // for the duration of this call.
+    // Two-pass: (1) pre-mint a CFG.Function per AST.Function (so any Call
+    // resolves, including forward refs). (2) lower each body. Cross-layer
+    // linkage AST.Function → CFG.Function lives in cfgByAst.
+
+    // ────── Braun SSA construction primitives ──────
+
+    function writeVariable(astVar, block, value) {
+      block._currentDef.set(astVar, value);
+    }
+
+    function readVariable(astVar, block) {
+      if (block._currentDef.has(astVar)) return block._currentDef.get(astVar);
+      return readVariableRecursive(astVar, block);
+    }
+
+    function readVariableRecursive(astVar, block) {
+      let val;
+      if (!block.sealed) {
+        // Forward reference: predecessor set isn't final yet (e.g. loop
+        // header pending back edge, or a label awaiting forward goto).
+        // Create a block param now; fill operands on sealBlock.
+        val = createBlockParam(block, astVar);
+        block._incompletePhis.set(astVar, val);
+      } else if (block.predecessors.length === 0) {
+        throw new Error(`SSA: '${astVar.name}' read before any definition`);
+      } else if (block.predecessors.length === 1) {
+        val = readVariable(astVar, block.predecessors[0]);
+      } else {
+        // Multi-pred join: introduce a block param. Bind it before resolving
+        // operands so any cycle through this block terminates.
+        val = createBlockParam(block, astVar);
+        writeVariable(astVar, block, val);
+        fillBlockParamOperands(astVar, block, val);
+      }
+      writeVariable(astVar, block, val);
+      return val;
+    }
+
+    function createBlockParam(block, astVar) {
+      const v = block._fn.newValue(astVar.type, astVar.name);
+      block.params.push(v);
+      return v;
+    }
+
+    // For each predecessor of `block`, find that pred's current Value for
+    // `astVar` and assign it to the matching args slot on the pred's
+    // terminator. Index-based (not push) so recursive readVariable cannot
+    // interleave param creations into the args list in the wrong order.
+    // JS sparse arrays let us set args[k] even when args.length < k —
+    // intermediate slots are filled by other params' fill calls.
+    function fillBlockParamOperands(astVar, block, paramValue) {
+      const k = block.params.indexOf(paramValue);
+      if (k < 0) throw new Error(`fillBlockParamOperands: paramValue not in block.params`);
+      for (const pred of block.predecessors) {
+        const arg = readVariable(astVar, pred);
+        const term = pred.terminator;
+        if (term instanceof Br) {
+          term.args[k] = arg;
+        } else if (term instanceof BrIf) {
+          if (term.trueTarget === block) term.trueArgs[k] = arg;
+          if (term.falseTarget === block) term.falseArgs[k] = arg;
+        } else {
+          throw new Error(`fillBlockParamOperands: predecessor of '${block.name}' has non-branching terminator`);
+        }
+      }
+    }
+
+    function sealBlock(block) {
+      if (block.sealed) return;
+      for (const [astVar, val] of block._incompletePhis) {
+        fillBlockParamOperands(astVar, block, val);
+      }
+      block._incompletePhis.clear();
+      block.sealed = true;
+    }
+
+    // ────── Trivial-phi removal (Braun §3.2) ──────
+    //
+    // After construction, a phi is "trivial" if its only non-self-referencing
+    // operands across all predecessor edges reduce to a single Value V. Such
+    // a phi is semantically equivalent to V and can be replaced. Common
+    // sources of trivial phis: variables that aren't reassigned across a
+    // join (eager phi creation at unsealed blocks left a phi whose operands
+    // all happen to be the same upstream Value), and back-edge self-feeds
+    // from variables unchanged within a loop body.
+    //
+    // The cleanup is a worklist: removing one phi can make another trivial
+    // (its operand list changes). Loop to fixpoint. For reducible CFGs,
+    // Braun proves this yields minimal SSA.
+
+    function argAtSlot(pred, target, k) {
+      const t = pred.terminator;
+      if (t instanceof Br) return t.args[k];
+      if (t instanceof BrIf) {
+        if (t.trueTarget === target) return t.trueArgs[k];
+        if (t.falseTarget === target) return t.falseArgs[k];
+      }
+      throw new Error('argAtSlot: pred has no branching terminator targeting block');
+    }
+
+    function removeArgAtSlot(pred, target, k) {
+      const t = pred.terminator;
+      if (t instanceof Br) t.args.splice(k, 1);
+      else if (t instanceof BrIf) {
+        // A BrIf with the same true/false target intentionally keeps two
+        // matching slots — one in each args list — and the predecessors
+        // list is also doubled. Shrink whichever list(s) correspond to the
+        // current edge in this iteration.
+        if (t.trueTarget === target) t.trueArgs.splice(k, 1);
+        if (t.falseTarget === target) t.falseArgs.splice(k, 1);
+      }
+    }
+
+    // Walk the function substituting every reference to `oldV` with `newV`.
+    // Returns the list of {block, value} phis whose args contained oldV —
+    // these are candidates for re-checking on the worklist.
+    function replaceAllUses(cfgFn, oldV, newV) {
+      const usersToRecheck = [];
+      const recordPhiUse = (target, slotIdx) => {
+        if (slotIdx < target.params.length) {
+          usersToRecheck.push({ block: target, value: target.params[slotIdx] });
+        }
+      };
+      for (const block of cfgFn.blocks) {
+        for (const ins of block.instructions) {
+          if (ins instanceof BinaryOp) {
+            if (ins.lhs === oldV) ins.lhs = newV;
+            if (ins.rhs === oldV) ins.rhs = newV;
+          } else if (ins instanceof UnaryOp) {
+            if (ins.operand === oldV) ins.operand = newV;
+          } else if (ins instanceof Call) {
+            for (let i = 0; i < ins.args.length; i++) {
+              if (ins.args[i] === oldV) ins.args[i] = newV;
+            }
+          }
+          // Const: no operands.
+        }
+        const t = block.terminator;
+        if (t instanceof Br) {
+          for (let i = 0; i < t.args.length; i++) {
+            if (t.args[i] === oldV) { t.args[i] = newV; recordPhiUse(t.target, i); }
+          }
+        } else if (t instanceof BrIf) {
+          if (t.cond === oldV) t.cond = newV;
+          for (let i = 0; i < t.trueArgs.length; i++) {
+            if (t.trueArgs[i] === oldV) { t.trueArgs[i] = newV; recordPhiUse(t.trueTarget, i); }
+          }
+          for (let i = 0; i < t.falseArgs.length; i++) {
+            if (t.falseArgs[i] === oldV) { t.falseArgs[i] = newV; recordPhiUse(t.falseTarget, i); }
+          }
+        } else if (t instanceof Return) {
+          if (t.value === oldV) t.value = newV;
+        }
+        // Unreachable: no operands.
+      }
+      return usersToRecheck;
+    }
+
+    function trimTrivialPhis(cfgFn) {
+      const worklist = [];
+      for (const b of cfgFn.blocks) {
+        for (const p of b.params) worklist.push({ block: b, value: p });
+      }
+      while (worklist.length > 0) {
+        const { block, value } = worklist.pop();
+        const k = block.params.indexOf(value);
+        if (k < 0) continue;                       // already removed
+        // Collect non-self-ref operands; "trivial" iff at most one unique value.
+        let canonical = null;
+        let nonTrivial = false;
+        for (const pred of block.predecessors) {
+          const arg = argAtSlot(pred, block, k);
+          if (arg === value) continue;             // self-ref, skip
+          if (canonical === null) canonical = arg;
+          else if (canonical !== arg) { nonTrivial = true; break; }
+        }
+        if (nonTrivial) continue;
+        if (canonical === null) continue;          // all operands self-refs (unreachable); leave for now
+        // Trivial: collapse. Replace uses, then shrink params and pred args.
+        const usersToRecheck = replaceAllUses(cfgFn, value, canonical);
+        block.params.splice(k, 1);
+        for (const pred of block.predecessors) removeArgAtSlot(pred, block, k);
+        worklist.push(...usersToRecheck);
+      }
+    }
 
     // Pass 1: pre-create CFG.Functions.
     const cfgByAst = new Map();
@@ -978,16 +1274,18 @@ const CFG = (() => {
     const lowerFunction = (astFn) => {
       const cfgFn = cfgByAst.get(astFn);
 
-      // Pre-scan: register declared locals (source order) via cfgFn.addLocal
-      // (which checks duplicates), and pre-create BasicBlocks for labels
-      // and case markers.
+      // Pre-scan for labels and Case markers. Source-level locals don't get
+      // registered here — in SSA they aren't standalone storage; each
+      // definition site produces a fresh Value tracked through
+      // writeVariable. Label and Case blocks get pre-created so forward
+      // jumps (gotos / dispatch BrIfs) can resolve; they stay unsealed
+      // until their predecessor set is finalized (labels at function-end,
+      // case blocks at switch-end).
       const labelBlocks = new Map();
       const caseBlocks = new Map();         // AST.Case node → BasicBlock
       const scan = (n) => {
         if (!n) return;
-        if (n instanceof AST.Declare) {
-          cfgFn.addLocal(n.variable);
-        } else if (n instanceof AST.Label) {
+        if (n instanceof AST.Label) {
           if (labelBlocks.has(n.name)) throw new Error('duplicate label: ' + n.name);
           labelBlocks.set(n.name, cfgFn.createBlock('lbl_' + n.name));
         } else if (n instanceof AST.Case) {
@@ -1007,143 +1305,163 @@ const CFG = (() => {
       };
       scan(astFn.body);
 
-      // Lazy switch scratch.
-      let swScratch = null;
-      const ensureSwitchScratch = () => {
-        if (swScratch) return swScratch;
-        let nm = '__sw_scratch';
-        for (let k = 1; cfgFn.hasName(nm); k++) nm = `__sw_scratch_${k}`;
-        swScratch = new AST.Variable(null, 'i32', nm);
-        cfgFn.addLocal(swScratch);
-        return swScratch;
-      };
-
       let current = cfgFn.entry;
       const breakStack = [];                 // exit BasicBlock of innermost loop/switch
       const append = (s) => { if (current) current.append(s); };
       const terminate = (t) => { if (current) { current.terminate(t); current = null; } };
+      // Resume current at `block` unless `block` ended up with no predecessors
+      // (e.g. join after both branches Returned) — in which case drop into
+      // dead-code mode so subsequent stmts get dropped instead of erroring.
+      const useOrDrop = (block) => {
+        sealBlock(block);
+        current = block.predecessors.length > 0 ? block : null;
+      };
 
-      // Emit AST expression `e`, returning the AST.Variable that holds its
-      // value. Side effect: appends instructions (and may open new blocks
-      // for short-circuit / ternary).
-      const emitExpr = (e) => {
+      // --- Value-emitting helpers ---
+      // The `hint` parameter on each emit helper threads through to
+      // newValue's name policy. Used so an assignment's outermost
+      // result Value can carry the assigned-to source-var's name:
+      // `x = 1` produces a Value named `x_1` instead of `__v_2`.
+      // Sub-expressions don't carry hints — they stay `__v_N`.
+      const emitConst = (type, value, loc, hint = null) => {
+        const dest = cfgFn.newValue(type, hint);
+        append(new CFG.Const(loc, dest, value));
+        return dest;
+      };
+      const emitBinop = (op, lhs, rhs, type, loc, hint = null) => {
+        const dest = cfgFn.newValue(type, hint);
+        append(new CFG.BinaryOp(loc, dest, op, lhs, rhs));
+        return dest;
+      };
+      const emitUnop = (op, operand, type, loc, hint = null) => {
+        const dest = cfgFn.newValue(type, hint);
+        append(new CFG.UnaryOp(loc, dest, op, operand));
+        return dest;
+      };
+      const emitCallIns = (callee, args, type, loc, hint = null) => {
+        const dest = cfgFn.newValue(type, hint);
+        append(new CFG.Call(loc, dest, callee, args));
+        return dest;
+      };
+
+      // emitExpr returns the Value holding the expression's result.
+      // `hint` is the source-var name (if any) the result is being
+      // assigned to. Forwarded ONLY to the outermost instruction's
+      // dest. Sub-expression recursion calls drop the hint so
+      // operands keep generic __v_N names — only the assignment's
+      // top-level Value carries the source-var-themed name.
+      const emitExpr = (e, hint = null) => {
         if (e instanceof AST.Literal) {
-          const t = cfgFn.newTemp(e.type, e.loc);
-          append(new CFG.Const(e.loc, t, e.value));
-          return t;
+          return emitConst(e.type, e.value, e.loc, hint);
         }
         if (e instanceof AST.Variable) {
-          return e;                          // source variables ARE VRegs
+          // Source-level variable read: route through Braun's algorithm.
+          if (!current) throw new Error('emitExpr: read in unreachable position');
+          return readVariable(e, current);
         }
         if (e instanceof AST.Binary && (e.op === '&&' || e.op === '||')) {
-          return emitShortCircuit(e);
+          return emitShortCircuit(e, hint);
         }
         if (e instanceof AST.Binary) {
           const lhs = emitExpr(e.left);
           const rhs = emitExpr(e.right);
-          const t = cfgFn.newTemp(AST.TYPE.of(e), e.loc);
-          append(new CFG.BinaryOp(e.loc, t, e.op, lhs, rhs));
-          return t;
+          return emitBinop(e.op, lhs, rhs, AST.TYPE.of(e), e.loc, hint);
         }
         if (e instanceof AST.Unary) {
           const opTy = AST.TYPE.of(e.operand);
           if (e.op === '-' && (opTy === 'i32' || opTy === 'i64')) {
             // 0 - x for integer negation (wasm has no integer neg).
-            const zero = cfgFn.newTemp(opTy, e.loc);
-            append(new CFG.Const(e.loc, zero, opTy === 'i64' ? 0n : 0));
+            const zeroV = emitConst(opTy, opTy === 'i64' ? 0n : 0, e.loc);
             const x = emitExpr(e.operand);
-            const t = cfgFn.newTemp(opTy, e.loc);
-            append(new CFG.BinaryOp(e.loc, t, '-', zero, x));
-            return t;
+            return emitBinop('-', zeroV, x, opTy, e.loc, hint);
           }
           const operand = emitExpr(e.operand);
-          const t = cfgFn.newTemp(AST.TYPE.of(e), e.loc);
-          append(new CFG.UnaryOp(e.loc, t, e.op, operand));
-          return t;
+          return emitUnop(e.op, operand, AST.TYPE.of(e), e.loc, hint);
         }
         if (e instanceof AST.Ternary) {
-          return emitTernary(e);
+          return emitTernary(e, hint);
         }
         if (e instanceof AST.Call) {
-          // Evaluate each arg into a VReg (in source order), then emit the
-          // Call instruction. AST.Call.callee is an AST.Function; we route
-          // it through cfgByAst to get the matching CFG.Function.
-          const argVRegs = e.args.map((a) => emitExpr(a));
-          const dest = cfgFn.newTemp(e.callee.returnType, e.loc);
+          const argVals = e.args.map((a) => emitExpr(a));
           const calleeCfg = cfgByAst.get(e.callee);
           if (!calleeCfg) throw new Error(`fromAST: no CFG.Function for '${e.callee.name}'`);
-          append(new CFG.Call(e.loc, dest, calleeCfg, argVRegs));
-          return dest;
+          return emitCallIns(calleeCfg, argVals, e.callee.returnType, e.loc, hint);
         }
         throw new Error('emitExpr: ' + e.constructor.name);
       };
 
-      // a && b   →   dest = 0; if (a) { if (b) dest = 1; }
-      // a || b   →   dest = 1; if (a) {} else { if (b) {} else dest = 0; }
-      // Both produce a normalized i32 (0 or 1).
-      const emitShortCircuit = (e) => {
-        const dest = cfgFn.newTemp('i32', e.loc);
-        const seedB = cfgFn.createBlock(e.op === '&&' ? 'and_seed' : 'or_seed');
-        const checkRhsB = cfgFn.createBlock(e.op === '&&' ? 'and_rhs' : 'or_rhs');
-        const flipB = cfgFn.createBlock(e.op === '&&' ? 'and_set1' : 'or_set0');
+      // a && b in SSA:
+      //   cur:   a_v = eval a; skip = const 0;
+      //          brIf a_v → rhsB(), exitB(skip)
+      //   rhsB:  b_v = eval b; bNorm = b_v != 0;
+      //          br exitB(bNorm)
+      //   exitB(result): ...
+      // a || b is symmetric: skip = const 1; brIf a_v → exitB(skip), rhsB().
+      // The exit block's single param `result` is the value of the
+      // short-circuit expression.
+      const emitShortCircuit = (e, hint = null) => {
+        const rhsB = cfgFn.createBlock(e.op === '&&' ? 'and_rhs' : 'or_rhs');
+        rhsB.sealed = true;                       // single pred (cur)
         const exitB = cfgFn.createBlock(e.op === '&&' ? 'and_exit' : 'or_exit');
-        // Initialize dest with the "skip" value.
-        terminate(new CFG.Br(e.loc, seedB));
-        current = seedB;
-        const seedT = cfgFn.newTemp('i32', e.loc);
-        append(new CFG.Const(e.loc, seedT, e.op === '&&' ? 0 : 1));
-        append(new CFG.Copy(e.loc, dest, seedT));
-        // Test lhs.
+
+        // Pre-declare exitB's result param so each predecessor's BrIf/Br
+        // can carry its arg matching params[0]. If the surrounding
+        // assignment passed a source-var hint, prefer it over the
+        // synthetic 'and_result' / 'or_result' name.
+        const resultV = cfgFn.newValue('i32', hint || (e.op === '&&' ? 'and_result' : 'or_result'));
+        exitB.params.push(resultV);
+
         const lhs = emitExpr(e.left);
+        const skipV = emitConst('i32', e.op === '&&' ? 0 : 1, e.loc);
+
         if (e.op === '&&') {
-          terminate(new CFG.BrIf(e.loc, lhs, checkRhsB, exitB));
+          terminate(new CFG.BrIf(e.loc, lhs, rhsB, exitB, [], [skipV]));
         } else {
-          terminate(new CFG.BrIf(e.loc, lhs, exitB, checkRhsB));
+          terminate(new CFG.BrIf(e.loc, lhs, exitB, rhsB, [skipV], []));
         }
-        // Test rhs.
-        current = checkRhsB;
+
+        current = rhsB;
         const rhs = emitExpr(e.right);
-        if (e.op === '&&') {
-          terminate(new CFG.BrIf(e.loc, rhs, flipB, exitB));
-        } else {
-          terminate(new CFG.BrIf(e.loc, rhs, exitB, flipB));
-        }
-        // Both operands agreed → flip dest to the "other" value.
-        current = flipB;
-        const flipT = cfgFn.newTemp('i32', e.loc);
-        append(new CFG.Const(e.loc, flipT, e.op === '&&' ? 1 : 0));
-        append(new CFG.Copy(e.loc, dest, flipT));
-        terminate(new CFG.Br(e.loc, exitB));
+        // Normalize rhs to canonical 0 or 1 via `rhs != 0`.
+        const rhsZero = emitConst('i32', 0, e.loc);
+        const rhsNorm = emitBinop('!=', rhs, rhsZero, 'i32', e.loc);
+        terminate(new CFG.Br(e.loc, exitB, [rhsNorm]));
+
+        sealBlock(exitB);
         current = exitB;
-        return dest;
+        return resultV;
       };
 
-      // c ? t : e   →   if (c) dest = t; else dest = e;
-      const emitTernary = (e) => {
+      // c ? t : e in SSA:
+      //   cur:   c_v = eval c; brIf c_v → thenB, elseB
+      //   thenB: t_v = eval t; br exitB(t_v)
+      //   elseB: e_v = eval e; br exitB(e_v)
+      //   exitB(result): ...
+      const emitTernary = (e, hint = null) => {
         const ty = AST.TYPE.of(e.thenExpr);
-        const dest = cfgFn.newTemp(ty, e.loc);
         const thenB = cfgFn.createBlock('tern_then');
+        thenB.sealed = true;
         const elseB = cfgFn.createBlock('tern_else');
+        elseB.sealed = true;
         const exitB = cfgFn.createBlock('tern_exit');
+        // Same logic as emitShortCircuit: pick the hint if provided.
+        const resultV = cfgFn.newValue(ty, hint || 'tern_result');
+        exitB.params.push(resultV);
+
         const cond = emitExpr(e.cond);
         terminate(new CFG.BrIf(e.loc, cond, thenB, elseB));
+
         current = thenB;
         const thenV = emitExpr(e.thenExpr);
-        append(new CFG.Copy(e.loc, dest, thenV));
-        terminate(new CFG.Br(e.loc, exitB));
+        terminate(new CFG.Br(e.loc, exitB, [thenV]));
+
         current = elseB;
         const elseV = emitExpr(e.elseExpr);
-        append(new CFG.Copy(e.loc, dest, elseV));
-        terminate(new CFG.Br(e.loc, exitB));
-        current = exitB;
-        return dest;
-      };
+        terminate(new CFG.Br(e.loc, exitB, [elseV]));
 
-      // Emit an AST.Assign as TAC: evaluate RHS to a VReg, then Copy into LHS
-      // (unless the RHS already wrote to the LHS during emission).
-      const emitAssign = (target, expr, loc) => {
-        const src = emitExpr(expr);
-        if (src !== target) append(new CFG.Copy(loc, target, src));
+        sealBlock(exitB);
+        current = exitB;
+        return resultV;
       };
 
       const emitStmt = (st) => {
@@ -1154,13 +1472,13 @@ const CFG = (() => {
         if (st instanceof AST.Label) {
           const target = labelBlocks.get(st.name);
           if (current) terminate(new CFG.Br(st.loc, target));
-          current = target;
+          current = target;                      // label stays unsealed
           return;
         }
         if (st instanceof AST.Case) {
           const target = caseBlocks.get(st);
           if (current) terminate(new CFG.Br(st.loc, target));
-          current = target;
+          current = target;                      // case block stays unsealed until switch end
           return;
         }
         if (st instanceof AST.Block) {
@@ -1169,18 +1487,51 @@ const CFG = (() => {
         }
         if (!current) return;
         if (st instanceof AST.Declare) {
-          if (st.initializer) emitAssign(st.variable, st.initializer, st.loc);
+          // Bind the declared variable in the current block. With an explicit
+          // initializer, use that. Without one, match wasm's zero-init
+          // semantics for locals (c1 relied on this implicitly; here it
+          // also avoids spurious "read before definition" errors on lifted
+          // dispatcher code where assigns live in a separate switch case
+          // from the declaration).
+          //
+          // Pass the source-var name as a hint so the emitted Value's
+          // name reflects the assigned-to variable (e.g. `x = 0` → `x_1`
+          // instead of `__v_N`).
+          let v;
+          if (st.initializer) {
+            v = emitExpr(st.initializer, st.variable.name);
+          } else {
+            const ty = st.variable.type;
+            v = emitConst(ty, ty === 'i64' ? 0n : 0, st.loc, st.variable.name);
+          }
+          writeVariable(st.variable, current, v);
         } else if (st instanceof AST.Assign) {
-          emitAssign(st.variable, st.value, st.loc);
+          // Pass source-var name as hint — Value gets named x_N for x = ...
+          const v = emitExpr(st.value, st.variable.name);
+          writeVariable(st.variable, current, v);
+        } else if (st instanceof AST.ParallelAssign) {
+          // Parallel-copy semantics: evaluate every rvalue to a Value first
+          // (all reads happen in source order), then bind each lvalue. Since
+          // writeVariable only mutates currentDef (never affects expression
+          // evaluation), the read-then-write phase ordering preserves the
+          // parallel-assignment guarantee without temps.
+          //
+          // Each rvalue's outermost Value carries its target lvalue's
+          // source-var name as a hint.
+          const vs = st.rvalues.map((e, i) => emitExpr(e, st.lvalues[i].name));
+          for (let i = 0; i < st.lvalues.length; i++) {
+            writeVariable(st.lvalues[i], current, vs[i]);
+          }
         } else if (st instanceof AST.ExpressionStatement) {
-          // The Call instruction is still emitted; its dest VReg just stays
-          // unused. That's intentional — calls are impure, so we never DCE
-          // them, but we also can't propagate the value anywhere.
+          // Result is discarded; the Call instruction is still emitted
+          // (calls are impure). The dest Value just stays unused.
           emitExpr(st.expr);
         } else if (st instanceof AST.If) {
           const cond = emitExpr(st.cond);
           const thenB = cfgFn.createBlock('then');
+          thenB.sealed = true;
           const elseB = st.elseBlock ? cfgFn.createBlock('else') : null;
+          if (elseB) elseB.sealed = true;
           const joinB = cfgFn.createBlock('endif');
           terminate(new CFG.BrIf(st.loc, cond, thenB, elseB ?? joinB));
           current = thenB;
@@ -1191,24 +1542,28 @@ const CFG = (() => {
             emitStmt(st.elseBlock);
             if (current) terminate(new CFG.Br(st.loc, joinB));
           }
-          current = joinB;
+          useOrDrop(joinB);
         } else if (st instanceof AST.While) {
           const headerB = cfgFn.createBlock('while_head');
           const bodyB = cfgFn.createBlock('while_body');
           const exitB = cfgFn.createBlock('while_exit');
           terminate(new CFG.Br(st.loc, headerB));
+          // headerB stays unsealed until the back edge is in place.
           current = headerB;
           const cond = emitExpr(st.cond);
           terminate(new CFG.BrIf(st.loc, cond, bodyB, exitB));
+          sealBlock(bodyB);                       // sole pred = headerB
           current = bodyB;
           breakStack.push(exitB);
           emitStmt(st.body);
           breakStack.pop();
           if (current) terminate(new CFG.Br(st.loc, headerB));
-          current = exitB;
+          sealBlock(headerB);                     // back edge now resolved
+          useOrDrop(exitB);
         } else if (st instanceof AST.DoWhile) {
-          // Body first, condition at the tail; on true loop back to body,
-          // on false fall to exit. No header block — body block is loop entry.
+          // Body block doubles as loop entry; it has two preds (entry Br
+          // from above + back edge from tail BrIf), so it stays unsealed
+          // until body emission completes.
           const bodyB = cfgFn.createBlock('do_body');
           const exitB = cfgFn.createBlock('do_exit');
           terminate(new CFG.Br(st.loc, bodyB));
@@ -1220,18 +1575,23 @@ const CFG = (() => {
             const cond = emitExpr(st.cond);
             terminate(new CFG.BrIf(st.loc, cond, bodyB, exitB));
           }
-          current = exitB;
+          sealBlock(bodyB);                       // back edge resolved (or body exited via return)
+          useOrDrop(exitB);
         } else if (st instanceof AST.Switch) {
-          // Stash the value into a scratch local (avoids re-evaluation, and
-          // stays correct if the value has side effects), then a BrIf chain
-          // compares the scratch against each non-default case marker's
-          // literal and falls through to a Br targeting the default marker
-          // (or the exit, if no default).
+          // Block-bodied switch. Case markers in the body act like Labels —
+          // each was pre-created as a BasicBlock in `caseBlocks`. The
+          // dispatch is a BrIf chain comparing the switch value (evaluated
+          // once into an SSA Value) against each non-default case marker's
+          // literal, falling through to the default marker's block (or the
+          // exit, if no default). Body emission walks the body as a normal
+          // Block; Case markers reactivate `current` and add fallthrough
+          // Brs, so cases are naturally connected.
           //
-          // Case markers themselves are handled by AST.Case above — they
-          // act like labels. The dispatch only references them; body
-          // emission walks the body as a normal Block, so fallthrough
-          // between adjacent cases is free.
+          // Case target blocks (and the default block) stay unsealed until
+          // body emission completes, because their predecessor set isn't
+          // known until then: dispatch BrIf + fallthrough Br from the prior
+          // case region + any branches from nested control flow within the
+          // body all contribute predecessors.
           const cases = [];                // {value, block}
           let defaultBlock = null;
           const collect = (n) => {
@@ -1259,17 +1619,21 @@ const CFG = (() => {
           collect(st.body);
 
           const exitB = cfgFn.createBlock('sw_exit');
-          const scratch = ensureSwitchScratch();
-          emitAssign(scratch, st.value, st.loc);
+          // Evaluate the switch value once into a Value; the dominators of
+          // every dispatch / case block include the block this Value is
+          // defined in, so direct reuse across the dispatch chain is safe.
+          const scratchV = emitExpr(st.value);
           for (let i = 0; i < cases.length; i++) {
-            const caseLit = cfgFn.newTemp('i32', st.loc);
-            append(new CFG.Const(st.loc, caseLit, cases[i].value));
-            const cond = cfgFn.newTemp('i32', st.loc);
-            append(new CFG.BinaryOp(st.loc, cond, '==', scratch, caseLit));
+            const caseLit = emitConst('i32', cases[i].value, st.loc);
+            const cond = emitBinop('==', scratchV, caseLit, 'i32', st.loc);
             const fallthrough = (i < cases.length - 1)
               ? cfgFn.createBlock(`sw_disp_${i + 1}`)
               : (defaultBlock ?? exitB);
             terminate(new CFG.BrIf(st.loc, cond, cases[i].block, fallthrough));
+            // Intermediate dispatch blocks have exactly one predecessor
+            // (the prior BrIf), so seal immediately. Case targets and the
+            // default block get sealed after body emission below.
+            if (i < cases.length - 1) sealBlock(fallthrough);
             current = fallthrough;
           }
           if (cases.length === 0) {
@@ -1283,7 +1647,10 @@ const CFG = (() => {
           emitStmt(st.body);
           breakStack.pop();
           if (current) terminate(new CFG.Br(st.loc, exitB));
-          current = exitB;
+          // All predecessors of case / default blocks are now in place.
+          for (const c of cases) sealBlock(c.block);
+          if (defaultBlock) sealBlock(defaultBlock);
+          useOrDrop(exitB);
         } else if (st instanceof AST.Break) {
           if (!breakStack.length) throw new Error('Break outside loop/switch');
           terminate(new CFG.Br(st.loc, breakStack[breakStack.length - 1]));
@@ -1299,7 +1666,19 @@ const CFG = (() => {
 
       emitStmt(astFn.body);
       if (current) terminate(new CFG.Unreachable(null));
+      // Any unterminated blocks (orphans) become Unreachable. Any unsealed
+      // blocks (mostly forward labels with no incoming goto) get sealed —
+      // their incomplete phis just won't have operands, which is fine
+      // since those blocks are dead and never executed.
       for (const b of cfgFn.blocks) if (!b.terminator) b.terminate(new CFG.Unreachable(null));
+      for (const b of cfgFn.blocks) sealBlock(b);
+
+      // Final cleanup: remove trivial phis (single non-self operand → collapse).
+      // Per Braun §3.2 — required for the construction to produce minimal SSA
+      // on reducible CFGs. Without this, eagerly-created phis at unsealed
+      // blocks and self-feeding loop-header phis stay in the IR as no-ops.
+      trimTrivialPhis(cfgFn);
+
       return cfgFn;
     };
 
@@ -1309,17 +1688,24 @@ const CFG = (() => {
   }
 
   function intoAST(module) {
-    // Lift CFG.Module => AST.Program (while-switch dispatcher form).
+    // Lift CFG.Module => AST.Program (while-switch dispatcher form), with
+    // SSA destruction folded in along the way.
     //
-    // Each TAC instruction becomes an AST.Assign whose RHS reconstructs the
-    // instruction's operation as an expression tree (just one node deep).
-    // Block terminators become state-update + break (for Br/BrIf), return
-    // (for Return), or a default return (for Unreachable).
+    // Each Value in the function becomes an AST.Variable in the lifted
+    // source. Function-param Values map directly back to the source
+    // AST.Variables (so the function signature stays stable across
+    // round-trips). All other Values become declared locals.
     //
-    // Two-pass: (1) mint a fresh AST.Function (with null body) for every
-    // CFG.Function so cross-function references exist; (2) fill in each body.
-    // CFG.Call.callee (a CFG.Function) is resolved against astByCfg so the
-    // lifted AST.Call.callee points at the matching new AST.Function.
+    // SSA destruction: at each predecessor edge to a block B with N
+    // params, we emit 2N copies — first into N per-block temps, then
+    // from temps into the actual param Values. The temps protect against
+    // parallel-copy cycles (e.g. back-edge swaps) without us having to
+    // analyze them. Wasteful when the cycle hazard isn't present, but
+    // simple and correct; an optimizer pass (c3) is the natural place
+    // to clean this up.
+    //
+    // Two-pass: (1) mint a fresh AST.Function per CFG.Function so
+    // cross-function references exist; (2) fill in each body.
     const zero = (t) => new AST.Literal(null, t, t === 'i64' ? 0n : 0);
 
     // Pass 1: pre-create AST.Functions keyed by their source CFG.Function.
@@ -1329,54 +1715,111 @@ const CFG = (() => {
         new AST.Function(null, cfgFn.returnType, cfgFn.name, cfgFn.params, null));
     }
 
-    // Turn a TAC instruction into an AST.Assign(dest, <one-node expr>).
-    const liftInstruction = (ins) => {
-      let rhs;
-      if (ins instanceof CFG.Const) {
-        rhs = new AST.Literal(ins.loc, ins.dest.type, ins.value);
-      } else if (ins instanceof CFG.BinaryOp) {
-        rhs = new AST.Binary(ins.loc, ins.op, ins.lhs, ins.rhs);
-      } else if (ins instanceof CFG.UnaryOp) {
-        rhs = new AST.Unary(ins.loc, ins.op, ins.operand);
-      } else if (ins instanceof CFG.Copy) {
-        rhs = ins.src;                             // bare variable reference
-      } else if (ins instanceof CFG.Call) {
-        // ins.callee is a CFG.Function; route through astByCfg to get the
-        // freshly minted AST.Function in the output program.
-        const calleeFn = astByCfg.get(ins.callee);
-        if (!calleeFn) throw new Error(`liftInstruction: unknown callee '${ins.callee.name}'`);
-        rhs = new AST.Call(ins.loc, calleeFn, ins.args);
-      } else throw new Error('liftInstruction: ' + ins.constructor.name);
-      return new AST.Assign(ins.loc, ins.dest, rhs);
-    };
-
     const buildBody = (cfgFn) => {
-      // Pick a __state name that doesn't collide with any existing param
-      // or local — keeps repeated lift/lower round-trips stable.
-      const taken = new Set();
-      for (const p of cfgFn.params) taken.add(p.name);
-      for (const l of cfgFn.locals) taken.add(l.name);
-      let stateName = '__state';
-      for (let k = 1; taken.has(stateName); k++) stateName = `__state_${k}`;
+      // valueToAstVar: every Value in this function maps to one AST.Variable
+      // in the lifted source. Function-param Values pre-map to the source
+      // AST.Variables; everything else gets a fresh local.
+      const valueToAstVar = new Map();
+      const taken = new Set(cfgFn.params.map((p) => p.name));
+      const newLocals = [];                       // accumulated as Values get mapped
+
+      const reserveName = (hint) => {
+        const base = hint || '__v';
+        if (!taken.has(base)) { taken.add(base); return base; }
+        let k = 1;
+        let name;
+        do { name = `${base}_${k++}`; } while (taken.has(name));
+        taken.add(name);
+        return name;
+      };
+
+      // Function-param Values → source AST.Variables (kept identical so
+      // the lifted function signature matches the original).
+      cfgFn.paramValues.forEach((v, i) => {
+        valueToAstVar.set(v, cfgFn.params[i]);
+      });
+
+      const makeVar = (v) => {
+        if (valueToAstVar.has(v)) return valueToAstVar.get(v);
+        const name = reserveName(v.name);
+        const av = new AST.Variable(null, v.type, name);
+        valueToAstVar.set(v, av);
+        newLocals.push(av);
+        return av;
+      };
+
+      // Pre-walk: realize an AST.Variable for every Value that's a def
+      // site (block param or instruction dest). Operand-only Values are
+      // reachable through their defs.
+      for (const block of cfgFn.blocks) {
+        for (const p of block.params) makeVar(p);
+        for (const ins of block.instructions) makeVar(ins.dest);
+      }
+
+      // __state state variable; pick a name that doesn't collide with
+      // existing param or local names. Declared separately (with initializer).
+      const stateName = reserveName('__state');
       const stateVar = new AST.Variable(null, 'i32', stateName);
       const setState = (loc, id) =>
         new AST.Assign(loc, stateVar, new AST.Literal(null, 'i32', id));
+
+      // Parallel-copy expansion at an outgoing edge to `block` with `args`.
+      // One AST.ParallelAssign per multi-param edge — the parallel-copy
+      // semantics handle swap hazards intrinsically (all rvalues evaluated
+      // before any lvalue binding), so no temp routing or hazard analysis
+      // is needed here. Codegen lowers ParallelAssign via the wasm value
+      // stack (push all rhs, then set lvalues in reverse), which is also
+      // hazard-free.
+      const destructEdge = (block, args, loc) => {
+        if (block.params.length === 0) return [];
+        const lvalues = block.params.map(makeVar);
+        const rvalues = args.map(makeVar);
+        return [new AST.ParallelAssign(loc, lvalues, rvalues)];
+      };
+
+      // Turn a CFG instruction into a single AST.Assign(destVar, <expr>).
+      const liftInstruction = (ins) => {
+        const destVar = makeVar(ins.dest);
+        let rhs;
+        if (ins instanceof CFG.Const) {
+          rhs = new AST.Literal(ins.loc, destVar.type, ins.value);
+        } else if (ins instanceof CFG.BinaryOp) {
+          rhs = new AST.Binary(ins.loc, ins.op, makeVar(ins.lhs), makeVar(ins.rhs));
+        } else if (ins instanceof CFG.UnaryOp) {
+          rhs = new AST.Unary(ins.loc, ins.op, makeVar(ins.operand));
+        } else if (ins instanceof CFG.Call) {
+          const calleeFn = astByCfg.get(ins.callee);
+          if (!calleeFn) throw new Error(`liftInstruction: unknown callee '${ins.callee.name}'`);
+          rhs = new AST.Call(ins.loc, calleeFn, ins.args.map((a) => makeVar(a)));
+        } else throw new Error('liftInstruction: ' + ins.constructor.name);
+        return new AST.Assign(ins.loc, destVar, rhs);
+      };
 
       const liftBlock = (block) => {
         const stmts = block.instructions.map(liftInstruction);
         const term = block.terminator;
         if (term instanceof CFG.Br) {
+          stmts.push(...destructEdge(term.target, term.args, term.loc));
           stmts.push(setState(term.loc, term.target.id));
           stmts.push(new AST.Break(term.loc));
         } else if (term instanceof CFG.BrIf) {
-          stmts.push(new AST.If(term.loc, term.cond,
-            new AST.Block(null, [setState(term.loc, term.trueTarget.id)]),
-            new AST.Block(null, [setState(term.loc, term.falseTarget.id)]),
+          const trueStmts = [
+            ...destructEdge(term.trueTarget, term.trueArgs, term.loc),
+            setState(term.loc, term.trueTarget.id),
+          ];
+          const falseStmts = [
+            ...destructEdge(term.falseTarget, term.falseArgs, term.loc),
+            setState(term.loc, term.falseTarget.id),
+          ];
+          stmts.push(new AST.If(term.loc, makeVar(term.cond),
+            new AST.Block(null, trueStmts),
+            new AST.Block(null, falseStmts),
           ));
           stmts.push(new AST.Break(term.loc));
         } else if (term instanceof CFG.Return) {
-          stmts.push(new AST.Return(term.loc, term.value));
+          stmts.push(new AST.Return(term.loc, makeVar(term.value)));
         } else if (term instanceof CFG.Unreachable) {
+          // Dead block — emit a default return so the case body is well-typed.
           stmts.push(new AST.Return(null, zero(cfgFn.returnType)));
         } else throw new Error('liftBlock: terminator ' + term?.constructor?.name);
         return new AST.Block(null, stmts);
@@ -1390,7 +1833,7 @@ const CFG = (() => {
         switchBody.push(new AST.Case(null, b.id));
         switchBody.push(...liftBlock(b).statements);
       }
-      const decls = cfgFn.locals.map((v) => new AST.Declare(null, v, null));
+      const decls = newLocals.map((v) => new AST.Declare(null, v, null));
       const stateDecl = new AST.Declare(null, stateVar,
         new AST.Literal(null, 'i32', cfgFn.entry.id));
       const dispatcher = new AST.While(null,
@@ -1409,7 +1852,8 @@ const CFG = (() => {
   }
 
   return {
-    Instruction, Const, BinaryOp, UnaryOp, Copy, Call,
+    Value,
+    Instruction, Const, BinaryOp, UnaryOp, Call,
     Terminator, Br, BrIf, Return, Unreachable,
     BasicBlock, Function, Module,
     fromAST, intoAST,
@@ -1616,6 +2060,14 @@ const CODEGEN = (() => {
           if (st.initializer) { emitExpr(st.initializer); out.push(0x21, ...u(locals.get(st.variable.name))); }
         } else if (st instanceof AST.Assign) {
           emitExpr(st.value); out.push(0x21, ...u(locals.get(st.variable.name)));
+        } else if (st instanceof AST.ParallelAssign) {
+          // Push every rvalue onto the wasm value stack (reads happen
+          // before any writes), then pop into lvalues in REVERSE order so
+          // the LIFO stack delivers them correctly.
+          for (const e of st.rvalues) emitExpr(e);
+          for (let i = st.lvalues.length - 1; i >= 0; i--) {
+            out.push(0x21, ...u(locals.get(st.lvalues[i].name)));   // local.set
+          }
         } else if (st instanceof AST.ExpressionStatement) {
           // Evaluate for side effects; discard the produced value.
           emitExpr(st.expr); out.push(0x1A);       // drop
