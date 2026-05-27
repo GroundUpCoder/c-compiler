@@ -865,6 +865,32 @@
     default: return -1;
   }
 }`,
+    // Duff's device, transposed to a no-memory-op surface: instead of
+    // unrolling a memcpy, we unroll "acc = acc + i; i = i + 1;" — i.e.
+    // sum(1..n) in chunks of 8. The structural trick is identical:
+    // case labels live INSIDE the do-while body, so the switch dispatch
+    // jumps STRAIGHT INTO the middle of the loop on the first iteration,
+    // then every subsequent iteration runs the full 8-step body. c0
+    // handles this natively because AST.Case markers act like labels —
+    // see the comment above parseSwitch in c0.js.
+    "duff's device (no memory ops)": `i32 unroll(i32 n) {
+  i32 acc = 0;
+  i32 i = 1;
+  i32 q = (n + 7) / 8;
+  switch (n % 8) {
+    case 0: do { acc = acc + i; i = i + 1;
+    case 7:      acc = acc + i; i = i + 1;
+    case 6:      acc = acc + i; i = i + 1;
+    case 5:      acc = acc + i; i = i + 1;
+    case 4:      acc = acc + i; i = i + 1;
+    case 3:      acc = acc + i; i = i + 1;
+    case 2:      acc = acc + i; i = i + 1;
+    case 1:      acc = acc + i; i = i + 1;
+            q = q - 1;
+            } while (q > 0);
+  }
+  return acc;
+}`,
     // Irreducible CFG: the loop body {A, B} has TWO entries — A is
     // reached by fall-through (when x ≤ 0), B by the initial goto
     // (when x > 0). A structurizer can't express this without
@@ -1518,6 +1544,18 @@
         } else if (tcls === 'BrIf') {
           if (term.trueTarget === b) arg = term.trueArgs ? term.trueArgs[k] : null;
           else if (term.falseTarget === b) arg = term.falseArgs ? term.falseArgs[k] : null;
+        } else if (tcls === 'BrTable') {
+          // BrTable routes to b via one of targets[i] or defaultTarget.
+          // Take args from the first matching slot (well-formed tables agree
+          // across duplicate targets, so any match is canonical).
+          let slot = null;
+          if (term.targets) {
+            for (let i = 0; i < term.targets.length; i++) {
+              if (term.targets[i] === b) { slot = term.targetArgs[i]; break; }
+            }
+          }
+          if (!slot && term.defaultTarget === b) slot = term.defaultArgs;
+          arg = slot ? slot[k] : null;
         }
         operands.push({ pred: pred.name, arg: (arg && arg.name) ? arg.name : '?' });
       }
@@ -1670,6 +1708,14 @@
       } else if (cls === 'BrIf') {
         edges.push({ from: b.id, to: term.trueTarget.id,  label: 'T', kind: 'true' });
         edges.push({ from: b.id, to: term.falseTarget.id, label: 'F', kind: 'false' });
+      } else if (cls === 'BrTable') {
+        // Multi-way dispatch (e.g. inserted by c3a's irreducible-to-reducible
+        // pass). One edge per table entry labeled with its index; one default
+        // edge labeled 'D'.
+        for (let i = 0; i < term.targets.length; i++) {
+          edges.push({ from: b.id, to: term.targets[i].id, label: String(i), kind: 'goto' });
+        }
+        edges.push({ from: b.id, to: term.defaultTarget.id, label: 'D', kind: 'goto' });
       }
     }
 
@@ -1689,7 +1735,23 @@
     let maxL = 0;
     for (const k of Object.keys(level)) maxL = Math.max(maxL, level[+k]);
     for (const b of blocks) if (!(b.id in level)) level[b.id] = ++maxL;
-    for (const e of edges) e.back = level[e.to] <= level[e.from];
+    // Back-edge classification: honest dominator-based definition if the
+    // current backend exports computeDominators, fall back to the BFS-
+    // level heuristic for older backends (c0/c1 don't have dominators).
+    // Real definition: u → v is a back-edge iff v dominates u.
+    if (typeof CFG !== 'undefined' && CFG.computeDominators) {
+      const idom = CFG.computeDominators(fn);
+      const blockById = new Map(blocks.map((b) => [b.id, b]));
+      for (const e of edges) {
+        const from = blockById.get(e.from);
+        const to = blockById.get(e.to);
+        e.back = (from && to && idom.has(from) && idom.has(to))
+          ? CFG.dominates(to, from, idom)
+          : level[e.to] <= level[e.from];
+      }
+    } else {
+      for (const e of edges) e.back = level[e.to] <= level[e.from];
+    }
 
     const stage = el('div', { class: 'cfg-stage' });
     const svgNs = 'http://www.w3.org/2000/svg';
@@ -2800,6 +2862,7 @@
     c1: 'c1 (TAC)',
     c2: 'c2 (SSA)',
     'c2-ext': 'c2-ext (SSA + SCC cleanup)',
+    c3a: 'c3a (reducing the irreducible)',
   };
   for (const k of BACKENDS_AVAILABLE) {
     backendSelect.appendChild(el('option', { value: k }, LABELS[k] || k));
