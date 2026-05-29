@@ -73,15 +73,18 @@ sqlite> SELECT sum(value) FROM generate_series(1,100);
 See `vendor/sqlite/README.md` for the full sample session. The earlier
 "database disk image is malformed (11)" pager bug is resolved.
 
-### Lowering pass scope refinement
+### Lowering pass scope (resolved)
 
-The pass currently triggers on any function that has at least one
-resolved goto. That's conservatively broad — many functions with
-simple structured gotos (like a single `goto cleanup` at the bottom)
-get the wrapper unnecessarily. Making detection precise — matching
-the codegen's structured-block reachability rules — would skip those.
-The work is a faithful port of the codegen's `gotoLabelDepths`
-tracking, isolated from emission.
+The pass is now triggered precisely: codegen tries structured emit
+first, and only on functions where structured emit actually produces
+"goto target not in scope" errors does the driver roll back the
+appended wasm bytes/locals/source-map entries, run
+`IRREDUCIBLE_LOWERING.lower(fdef)`, and re-emit. Implemented in
+`compiler.js:16462-16529`. Functions with a single `goto cleanup`
+pattern (or any other structured goto) sail through structured codegen
+and pay zero lowering cost. `--force-dispatch-loop` opts in to
+unconditional lowering for benchmarking; `--no-irreducible-lowering`
+disables the fallback entirely.
 
 ## Regression-test gaps
 
