@@ -54,34 +54,24 @@ push it further:
 
 ## SQLite follow-ups
 
-SQLite 3.53.1 (vendor/sqlite/) now **compiles end-to-end** thanks to
-the `IRREDUCIBLE_LOWERING` pass — 136 functions get rewritten to
-`while(1) switch(state)` state machines, including `sqlite3VdbeExec`.
-The 1.4 MB wasm validates and the SQLite shell starts up:
+SQLite 3.53.1 (vendor/sqlite/) is **fully working** end-to-end via the
+`IRREDUCIBLE_LOWERING` pass — 136 functions including `sqlite3VdbeExec`
+get rewritten to `while(1) switch(state)` state machines. The 1.4 MB
+wasm validates, the shell starts, and SQL executes correctly:
 
 ```
 $ node host.js /tmp/sqlite.wasm
-SQLite version 3.53.1 ...
-Enter ".help" for usage hints.
-Connected to a transient in-memory database.
-sqlite>
+sqlite> CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+sqlite> INSERT INTO t VALUES(1,'alice'),(2,'bob'),(3,'charlie');
+sqlite> SELECT * FROM t WHERE id > 1 ORDER BY name;
+bob
+charlie
+sqlite> SELECT sum(value) FROM generate_series(1,100);
+5050
 ```
 
-`.version` and shell meta-commands work. But any SQL statement —
-even `SELECT 1;` against an in-memory database — reports
-"database disk image is malformed (11)". SQLite's pager state checks
-detect internal corruption. The lowering passes its synthetic
-regression test (irreducible_dispatch) and all 480 existing tests,
-but SQLite has many lowered functions that exercise edge cases:
-suspect candidates include `sqlite3PagerSharedLock`, `getPageNormal`,
-`sqlite3VdbeMemTranslate`, or `sqlite3VdbeExec` itself.
-
-Debugging path: selectively skip lowering for individual functions
-(would need to drop back to structured-only and rely on
-`--allow-undefined` for the gotos to be unresolvable — won't link)
-OR write a minimal repro that exercises one lowered function in
-isolation. Looking at the structured output of the lowered functions
-(dump as C source) would also help spot semantic divergences.
+See `vendor/sqlite/README.md` for the full sample session. The earlier
+"database disk image is malformed (11)" pager bug is resolved.
 
 ### Lowering pass scope refinement
 
