@@ -19,7 +19,7 @@
 - ~~**freetype** — TrueType font rendering.~~
 - ~~**gameboy** — Gameboy emulator.~~
 - ~~**tinyemu** — RISC-V system emulator (boots Linux to BusyBox shell with interactive stdin). See `vendor/tinyemu/README.md`.~~
-- **sqlite** — vendored 3.53.1 amalgamation. Compiles + links, but `sqlite3VdbeExec` blocks codegen. See "SQLite follow-ups" below.
+- ~~**sqlite** — vendored 3.53.1 amalgamation. Full SQL execution working end-to-end via `IRREDUCIBLE_LOWERING`. See "SQLite follow-ups" below for one remaining precision-not-correctness item.~~
 
 ## TinyEMU follow-ups
 
