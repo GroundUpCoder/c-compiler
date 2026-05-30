@@ -332,7 +332,7 @@ t('lifted: unary ! and float neg', () => {
 // rejoin). Output size grows superlinearly per round-trip. The tests below
 // only verify *semantic* preservation across a single iteration, which is
 // the meaningful claim for c2. Idempotent round-trip would require a real
-// relooper (the planned c3+ work — see SSA.md).
+// stackifier (the planned c3+ work — see SSA.md).
 
 t('round-trip preserves goto semantics', () => {
   const prog = liftToAST(lowerToCFG(PARSER.parse(SUM_GOTO)));
