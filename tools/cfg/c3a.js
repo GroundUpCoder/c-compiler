@@ -187,6 +187,16 @@ const AST = (() => {
     }
   }
 
+  // `continue;` jumps to where the innermost enclosing loop's cond is
+  // evaluated. For While, that's the header (cond test). For DoWhile, that's
+  // the cond block following the body (see fromAST's 3-block layout). c3a
+  // doesn't have labeled continue — just bare `continue;`.
+  class Continue {
+    constructor(loc) {
+      this.loc = loc;
+    }
+  }
+
   // Just a marker: `name:` in source. Goto targets resolve by walking the
   // enclosing block. A later lifting pass turns flat labels + gotos into
   // structured control flow before CODEGEN.emit.
@@ -313,6 +323,8 @@ const AST = (() => {
         lines.push(`${pad}${tag}:`);
       } else if (st instanceof Break) {
         lines.push(`${pad}break;`);
+      } else if (st instanceof Continue) {
+        lines.push(`${pad}continue;`);
       } else if (st instanceof Return) {
         lines.push(`${pad}return ${printExpr(st.value)};`);
       } else if (st instanceof Label) {
@@ -340,7 +352,7 @@ const AST = (() => {
     Literal, Variable,
     Declare, Assign, ParallelAssign, ExpressionStatement,
     Binary, Unary, Ternary, Call,
-    Switch, Case, If, While, DoWhile, Break,
+    Switch, Case, If, While, DoWhile, Break, Continue,
     Label, Goto, Return,
     TYPE, printSource,
   };
@@ -351,7 +363,7 @@ const PARSER = (() => {
   function tokenize(source) {
     const KEYWORDS = new Set([
       'i32', 'i64', 'f32', 'f64',
-      'while', 'do', 'break', 'switch', 'case', 'default',
+      'while', 'do', 'break', 'continue', 'switch', 'case', 'default',
       'if', 'else', 'goto', 'return',
       'PARALLEL_ASSIGN',
     ]);
@@ -499,6 +511,10 @@ const PARSER = (() => {
       if (at('break')) {
         const t = advance(); expect(';');
         return new AST.Break(loc(t));
+      }
+      if (at('continue')) {
+        const t = advance(); expect(';');
+        return new AST.Continue(loc(t));
       }
       if (at('return')) {
         const t = advance();
@@ -1203,7 +1219,26 @@ const CFG = (() => {
         val = createBlockParam(block, astVar);
         block._incompletePhis.set(astVar, val);
       } else if (block.predecessors.length === 0) {
-        throw new Error(`SSA: '${astVar.name}' read before any definition`);
+        // 0-pred sealed block — the block is structurally a predecessor of
+        // someone (we emitted a Br to one of its successors) but has no
+        // incoming edge from any live program path. This happens when goto
+        // bypasses a structural construct's entry machinery (case dispatch,
+        // labeled-block wrapper), leaving the entry block reachable only
+        // from no one but still referenced by inner phis via the structural
+        // back-edges.
+        //
+        // Semantics: the value of any variable here is unobservable at
+        // runtime — control never flows through this block, so whatever
+        // value we synthesize is never read. We return a tagged "undef"
+        // Value. Codegen materializes it as a typed zero constant (chosen
+        // for cheapness; any value works because the path is dead).
+        //
+        // This is the standard production-compiler answer (LLVM undef /
+        // poison); extends Braun's 2013 algorithm — which assumes all
+        // predecessor edges are live — to tolerate the dead-pred case
+        // that arises from arbitrary goto.
+        val = block._fn.newValue(astVar.type, astVar.name + '$undef');
+        val.isUndef = true;
       } else if (block.predecessors.length === 1) {
         val = readVariable(astVar, block.predecessors[0]);
       } else {
@@ -1502,6 +1537,7 @@ const CFG = (() => {
 
       let current = cfgFn.entry;
       const breakStack = [];                 // exit BasicBlock of innermost loop/switch
+      const continueStack = [];              // cond-eval BasicBlock of innermost loop (where `continue` jumps)
       const append = (s) => { if (current) current.append(s); };
       const terminate = (t) => { if (current) { current.terminate(t); current = null; } };
       // Resume current at `block` unless `block` ended up with no predecessors
@@ -1680,7 +1716,16 @@ const CFG = (() => {
           st.statements.forEach(emitStmt);
           return;
         }
-        if (!current) return;
+        // Structural constructs (If/While/DoWhile/Switch) always emit even
+        // when current is null — their bodies may contain labels that are
+        // reachable via goto from elsewhere. The handlers' own terminate()
+        // calls are no-ops when current is null, so the CFG only gains
+        // structure that's connected to live entries (via labels or back
+        // edges). Leaf statements (below) still bail in dead code.
+        const isStructural =
+          st instanceof AST.If || st instanceof AST.While ||
+          st instanceof AST.DoWhile || st instanceof AST.Switch;
+        if (!current && !isStructural) return;
         if (st instanceof AST.Declare) {
           // Bind the declared variable in the current block. With an explicit
           // initializer, use that. Without one, match wasm's zero-init
@@ -1722,13 +1767,18 @@ const CFG = (() => {
           // (calls are impure). The dest Value just stays unused.
           emitExpr(st.expr);
         } else if (st instanceof AST.If) {
-          const cond = emitExpr(st.cond);
           const thenB = cfgFn.createBlock('then');
           thenB.sealed = true;
           const elseB = st.elseBlock ? cfgFn.createBlock('else') : null;
           if (elseB) elseB.sealed = true;
           const joinB = cfgFn.createBlock('endif');
-          terminate(new CFG.BrIf(st.loc, cond, thenB, elseB ?? joinB));
+          // Emit the cond + BrIf only with a live entry. In dead-code mode,
+          // both arms still get their bodies emitted so labels inside can
+          // be reached via goto. thenB/elseB stay 0-pred sealed blocks.
+          if (current) {
+            const cond = emitExpr(st.cond);
+            terminate(new CFG.BrIf(st.loc, cond, thenB, elseB ?? joinB));
+          }
           current = thenB;
           emitStmt(st.thenBlock);
           if (current) terminate(new CFG.Br(st.loc, joinB));
@@ -1742,35 +1792,53 @@ const CFG = (() => {
           const headerB = cfgFn.createBlock('while_head');
           const bodyB = cfgFn.createBlock('while_body');
           const exitB = cfgFn.createBlock('while_exit');
-          terminate(new CFG.Br(st.loc, headerB));
-          // headerB stays unsealed until the back edge is in place.
+          // Entry Br only when current is alive. headerB still always emits
+          // cond + BrIf so the loop machinery exists; in dead-entry mode
+          // headerB's only pred is the back edge from the body (which the
+          // label inside ends with). emitExpr(cond) reads via Braun's
+          // incomplete-phi protocol — the unsealed headerB defers phi
+          // resolution until sealBlock(headerB) walks the real preds.
+          if (current) terminate(new CFG.Br(st.loc, headerB));
           current = headerB;
           const cond = emitExpr(st.cond);
           terminate(new CFG.BrIf(st.loc, cond, bodyB, exitB));
           sealBlock(bodyB);                       // sole pred = headerB
           current = bodyB;
           breakStack.push(exitB);
+          continueStack.push(headerB);
           emitStmt(st.body);
+          continueStack.pop();
           breakStack.pop();
           if (current) terminate(new CFG.Br(st.loc, headerB));
-          sealBlock(headerB);                     // back edge now resolved
+          sealBlock(headerB);
           useOrDrop(exitB);
         } else if (st instanceof AST.DoWhile) {
-          // Body block doubles as loop entry; it has two preds (entry Br
-          // from above + back edge from tail BrIf), so it stays unsealed
-          // until body emission completes.
+          // 3-block layout: body → continueB(cond eval) → exit. The separate
+          // continueB is the target of `continue;` inside the body, so
+          // continue correctly re-evaluates cond before looping (C semantics).
+          // bodyB has two preds: entry Br + back edge from continueB's BrIf.
+          // continueB has multiple preds: fall-through from bodyB + every
+          // `continue;` inside body.
+          //
+          // Entry Br conditional on current alive (so goto into body works);
+          // continueB's cond eval emits regardless — its phis resolve when
+          // sealed via the actual preds (label-fed back edges, etc.).
           const bodyB = cfgFn.createBlock('do_body');
+          const continueB = cfgFn.createBlock('do_cont');
           const exitB = cfgFn.createBlock('do_exit');
-          terminate(new CFG.Br(st.loc, bodyB));
+          if (current) terminate(new CFG.Br(st.loc, bodyB));
           current = bodyB;
           breakStack.push(exitB);
+          continueStack.push(continueB);
           emitStmt(st.body);
+          continueStack.pop();
           breakStack.pop();
-          if (current) {
-            const cond = emitExpr(st.cond);
-            terminate(new CFG.BrIf(st.loc, cond, bodyB, exitB));
-          }
-          sealBlock(bodyB);                       // back edge resolved (or body exited via return)
+          if (current) terminate(new CFG.Br(st.loc, continueB));
+          sealBlock(continueB);                   // all preds (body + continues) now in place
+          current = continueB;
+          const cond = emitExpr(st.cond);
+          terminate(new CFG.BrIf(st.loc, cond, bodyB, exitB));
+          sealBlock(bodyB);                       // back edge from continueB resolved
           useOrDrop(exitB);
         } else if (st instanceof AST.Switch) {
           // Block-bodied switch. Case markers in the body act like Labels —
@@ -1814,25 +1882,26 @@ const CFG = (() => {
           collect(st.body);
 
           const exitB = cfgFn.createBlock('sw_exit');
-          // Evaluate the switch value once into a Value; the dominators of
-          // every dispatch / case block include the block this Value is
-          // defined in, so direct reuse across the dispatch chain is safe.
-          const scratchV = emitExpr(st.value);
-          for (let i = 0; i < cases.length; i++) {
-            const caseLit = emitConst('i32', cases[i].value, st.loc);
-            const cond = emitBinop('==', scratchV, caseLit, 'i32', st.loc);
-            const fallthrough = (i < cases.length - 1)
-              ? cfgFn.createBlock(`sw_disp_${i + 1}`)
-              : (defaultBlock ?? exitB);
-            terminate(new CFG.BrIf(st.loc, cond, cases[i].block, fallthrough));
-            // Intermediate dispatch blocks have exactly one predecessor
-            // (the prior BrIf), so seal immediately. Case targets and the
-            // default block get sealed after body emission below.
-            if (i < cases.length - 1) sealBlock(fallthrough);
-            current = fallthrough;
-          }
-          if (cases.length === 0) {
-            terminate(new CFG.Br(st.loc, defaultBlock ?? exitB));
+          // Emit the dispatch chain only when we have a live entry. With
+          // current === null (e.g. switch reached only via goto into a case
+          // body), the dispatch is dead and emitExpr(st.value) would error
+          // on the variable read. Case markers inside the body still
+          // activate via the AST.Case handler regardless.
+          if (current) {
+            const scratchV = emitExpr(st.value);
+            for (let i = 0; i < cases.length; i++) {
+              const caseLit = emitConst('i32', cases[i].value, st.loc);
+              const cond = emitBinop('==', scratchV, caseLit, 'i32', st.loc);
+              const fallthrough = (i < cases.length - 1)
+                ? cfgFn.createBlock(`sw_disp_${i + 1}`)
+                : (defaultBlock ?? exitB);
+              terminate(new CFG.BrIf(st.loc, cond, cases[i].block, fallthrough));
+              if (i < cases.length - 1) sealBlock(fallthrough);
+              current = fallthrough;
+            }
+            if (cases.length === 0) {
+              terminate(new CFG.Br(st.loc, defaultBlock ?? exitB));
+            }
           }
           // Body is emitted with `current = null` (statements before the
           // first Case marker are unreachable, per C semantics). Case
@@ -1849,6 +1918,9 @@ const CFG = (() => {
         } else if (st instanceof AST.Break) {
           if (!breakStack.length) throw new Error('Break outside loop/switch');
           terminate(new CFG.Br(st.loc, breakStack[breakStack.length - 1]));
+        } else if (st instanceof AST.Continue) {
+          if (!continueStack.length) throw new Error('Continue outside loop');
+          terminate(new CFG.Br(st.loc, continueStack[continueStack.length - 1]));
         } else if (st instanceof AST.Return) {
           const v = emitExpr(st.value);
           terminate(new CFG.Return(st.loc, v));
@@ -2550,8 +2622,13 @@ const CODEGEN = (() => {
       const switchScratch = layout.locals.find((r) => r.origin === 'switch scratch')?.idx ?? -1;
 
       // Wasm label scope stack — used to resolve br depths by name.
-      const scopes = [];             // [{ name, breakable }]
-      const push = (name, breakable = false) => scopes.push({ name, breakable });
+      // `breakable: true` marks scopes targetable by `break;` (loops + switch).
+      // `continuable: true` marks scopes targetable by `continue;` (loops only,
+      // and specifically the cond-eval scope — see DoWhile's emit which adds
+      // an extra `block` around the body so `continue` jumps to cond eval).
+      const scopes = [];             // [{ name, breakable, continuable }]
+      const push = (name, breakable = false, continuable = false) =>
+        scopes.push({ name, breakable, continuable });
       const pop = () => scopes.pop();
       const depth = (name) => {
         for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].name === name) return scopes.length - 1 - i;
@@ -2560,6 +2637,10 @@ const CODEGEN = (() => {
       const breakTarget = () => {
         for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].breakable) return scopes[i].name;
         throw new Error('Break outside loop/switch');
+      };
+      const continueTarget = () => {
+        for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].continuable) return scopes[i].name;
+        throw new Error('Continue outside loop');
       };
       let gen = 0;
       const sym = (p) => `${p}_${gen++}`;
@@ -2653,8 +2734,11 @@ const CODEGEN = (() => {
           out.push(0x0B); pop();
         } else if (st instanceof AST.While) {
           const exit = sym('w_exit'), cont = sym('w_cont');
-          out.push(0x02, 0x40); push(exit, true);   // outer block (break target)
-          out.push(0x03, 0x40); push(cont);          // loop (continue target)
+          // For while: continue → re-test cond. The wasm `loop` scope IS where
+          // cond is tested (br_if exit at the top), so `continuable: true` on
+          // the loop scope is correct.
+          out.push(0x02, 0x40); push(exit, true);
+          out.push(0x03, 0x40); push(cont, false, true);
           emitExpr(st.cond); out.push(0x45);         // !cond
           out.push(0x0D, ...u(depth(exit)));         // br_if exit
           emitStmt(st.body);
@@ -2662,12 +2746,18 @@ const CODEGEN = (() => {
           out.push(0x0B); pop();                     // end loop
           out.push(0x0B); pop();                     // end block
         } else if (st instanceof AST.DoWhile) {
-          const exit = sym('dw_exit'), cont = sym('dw_cont');
-          out.push(0x02, 0x40); push(exit, true);   // outer block (break target)
-          out.push(0x03, 0x40); push(cont);          // loop (continue target = body start)
+          // 3-scope form: block(exit) wraps loop(loop) wraps block(cont).
+          // `continue;` → br $cont, lands AT cond eval (br_if loop or fall
+          // through to exit). Without this inner block, `br $loop` would
+          // re-enter body without re-testing cond — wrong C semantics.
+          const exit = sym('dw_exit'), loop = sym('dw_loop'), cont = sym('dw_cont');
+          out.push(0x02, 0x40); push(exit, true);
+          out.push(0x03, 0x40); push(loop);
+          out.push(0x02, 0x40); push(cont, false, true);
           emitStmt(st.body);
+          out.push(0x0B); pop();                     // end cont block (continue lands here)
           emitExpr(st.cond);
-          out.push(0x0D, ...u(depth(cont)));         // br_if cont (loop while true)
+          out.push(0x0D, ...u(depth(loop)));         // br_if loop (re-enter body if cond true)
           out.push(0x0B); pop();                     // end loop
           out.push(0x0B); pop();                     // end block
         } else if (st instanceof AST.Switch) {
@@ -2743,6 +2833,8 @@ const CODEGEN = (() => {
           throw new Error('emit: stray AST.Case marker outside switch body — lift through CFG');
         } else if (st instanceof AST.Break) {
           out.push(0x0C, ...u(depth(breakTarget())));
+        } else if (st instanceof AST.Continue) {
+          out.push(0x0C, ...u(depth(continueTarget())));
         } else if (st instanceof AST.Return) {
           emitExpr(st.value); out.push(0x0F);
         } else if (st instanceof AST.Label || st instanceof AST.Goto) {

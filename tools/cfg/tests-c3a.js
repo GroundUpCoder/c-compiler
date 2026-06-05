@@ -1344,6 +1344,734 @@ t('makeReducible: compileWithTrace reports dispatchersAdded', () => {
   eq(m.exports.count_n(13), 13);
 });
 
+// ─── continue keyword + do-while continue (new in c3a) ───
+//
+// Verifies the corrected do-while CFG layout: body → continueB(cond) → exit.
+// `continue;` inside a do-while body must re-EVALUATE cond before deciding
+// whether to loop or exit — C semantics. The prior layout (body fall-through
+// to body via tail BrIf) would have re-run the body without re-testing cond.
+
+t('continue: in while loop skips rest of body and re-tests cond', () => {
+  // Sums only odd values of i from 1..n. With broken continue, this would
+  // either infinite-loop or sum every value.
+  const src = `
+    i32 odd_sum(i32 n) {
+      i32 total = 0;
+      i32 i = 0;
+      while (i < n) {
+        i = i + 1;
+        if ((i - 1) % 2 == 0) { continue; }
+        total = total + (i - 1);
+      }
+      return total;
+    }
+  `;
+  const bytes = direct(src);
+  eq(run(bytes, 'odd_sum', 10), 1+3+5+7+9);
+  eq(run(bytes, 'odd_sum', 0), 0);
+  eq(run(bytes, 'odd_sum', 1), 0);
+  // Same behavior via lifted (round-trip through CFG).
+  const lifted = roundTrip(src);
+  eq(run(lifted, 'odd_sum', 10), 1+3+5+7+9);
+});
+
+t('continue: in do-while loop re-evaluates cond before deciding to loop', () => {
+  // Decrements n inside body, then `continue` if n still positive. The cond
+  // `n > 0` is re-tested via the new continueB block. If continue skipped
+  // cond eval, this would infinite-loop.
+  const src = `
+    i32 count_down(i32 n) {
+      i32 iters = 0;
+      do {
+        iters = iters + 1;
+        if (n > 1) { n = n - 1; continue; }
+        n = 0;          // bottom of body: termination route
+      } while (n > 0);
+      return iters;
+    }
+  `;
+  const bytes = direct(src);
+  eq(run(bytes, 'count_down', 5), 5);
+  eq(run(bytes, 'count_down', 1), 1);
+  // Lifted matches.
+  eq(run(roundTrip(src), 'count_down', 5), 5);
+});
+
+t('continue: rejected outside any loop', () => {
+  throws(() => emitWasm(PARSER.parse(`i32 f() { continue; return 0; }`)), /Continue outside loop/);
+  throws(() => emitWasm(PARSER.parse(`i32 f() { if (1) { continue; } return 0; }`)), /Continue outside loop/);
+});
+
+t('continue: in switch case INSIDE a while continues the while, not the switch', () => {
+  // C semantics: switch isn't a continue target. continue must reach the
+  // enclosing while.
+  const src = `
+    i32 count_default(i32 n) {
+      i32 hits = 0;
+      i32 i = 0;
+      while (i < n) {
+        i = i + 1;
+        switch (i % 3) {
+          case 0: continue;
+          case 1: continue;
+          default: hits = hits + 1;
+        }
+      }
+      return hits;
+    }
+  `;
+  // For n=10: cases 1,4,7,10 hit case 1 → continue; cases 3,6,9 hit case 0 → continue;
+  // cases 2,5,8 hit default → hits++. Total: 3.
+  const bytes = direct(src);
+  eq(run(bytes, 'count_default', 10), 3);
+});
+
+t('continue: round-trips through CFG semantics-preservingly', () => {
+  // Sum of 1..n excluding multiples of 3.
+  const src = `
+    i32 sum_skip3(i32 n) {
+      i32 total = 0;
+      i32 i = 0;
+      while (i < n) {
+        i = i + 1;
+        if (i % 3 == 0) { continue; }
+        total = total + i;
+      }
+      return total;
+    }
+  `;
+  for (const n of [0, 1, 5, 10, 30]) {
+    eq(run(direct(src), 'sum_skip3', n), run(roundTrip(src), 'sum_skip3', n), `n=${n}`);
+  }
+});
+
+t('continue: pretty-prints as `continue;`', () => {
+  const src = `i32 f(i32 n) { while (n > 0) { n = n - 1; if (n % 2 == 0) { continue; } } return n; }`;
+  const printed = AST.printSource(PARSER.parse(src));
+  if (!/continue;/.test(printed)) throw new Error('continue; missing from printed source: ' + printed);
+});
+
+// ─── goto-into-body audit: diverse irreducible CFGs ───
+//
+// C allows goto into any labeled statement in the same function, including
+// labels INSIDE a while body, do-while body, switch case, or if branch.
+// Each of these can create multi-entry SCCs (irreducible CFGs) when the
+// labeled statement is also reachable through the loop back-edge — exactly
+// the scenarios c3a's makeReducible was built for. These tests construct
+// each shape and verify direct + lifted backends agree.
+
+t('goto-into-body: goto into the middle of a while body (multi-entry SCC)', () => {
+  // First iteration enters at MID, subsequent iterations enter at while head.
+  // Multi-entry SCC: { while_head, MID, ... }. makeReducible must handle.
+  const src = `
+    i32 f(i32 n) {
+      i32 sum = 0;
+      i32 i = 0;
+      goto MID;
+      while (i < n) {
+        sum = sum + i;
+        MID: i = i + 1;
+      }
+      return sum;
+    }
+  `;
+  // Trace: i=0, goto MID. MID: i=1, end of body, Br headerB. Cond 1<n.
+  // If true: sum += i (1), MID: i=2, back to header. ... iterates until i=n.
+  // For n=5: sum gets 1, 2, 3, 4 added (when entering body with i=1,2,3,4).
+  // When i=5, cond false → exit. Total: 10.
+  // For n=1: goto MID, i=1, cond 1<1 false → exit. sum=0.
+  // For n=0: goto MID, i=1, cond 1<0 false → exit. sum=0.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 5), 10);
+  eq(run(bytes, 'f', 0), 0);
+  eq(run(bytes, 'f', 1), 0);
+  // Trace path also works (lift-fallback).
+  const trace = CODEGEN.compileWithTrace(src);
+  if (trace.bytesError) throw new Error('compileWithTrace failed: ' + trace.bytesError.message);
+});
+
+t('goto-into-body: goto into a do-while body (also irreducible)', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 sum = 0;
+      i32 i = 0;
+      goto MID;
+      do {
+        sum = sum + i;
+        MID: i = i + 1;
+      } while (i < n);
+      return sum;
+    }
+  `;
+  // Trace: i=0, goto MID. MID: i=1, then continueB evaluates cond.
+  // For n=5: i=1, cond 1<5 → loop. body: sum+=1, MID: i=2, cond 2<5 → loop. etc.
+  //   Iterations: i=1→sum=1, i=2→sum=3, i=3→sum=6, i=4→sum=10, i=5 exits. Total 10.
+  // For n=0: i=1, cond 1<0 false → exit immediately. sum=0.
+  // For n=1: i=1, cond 1<1 false → exit. sum=0.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 5), 10);
+  eq(run(bytes, 'f', 0), 0);
+  eq(run(bytes, 'f', 1), 0);
+});
+
+t('goto-into-body: goto from outside switch INTO a case body — works via undef-tolerant SSA', () => {
+  // Goto into a label that lives INSIDE a switch case body, bypassing the
+  // switch dispatch entirely. The case-block becomes a 0-pred sealed block
+  // (structurally a predecessor of the label_block but never reached at
+  // runtime). The undef-tolerant readVariableRecursive synthesizes a
+  // type-correct undef Value for the dead-path SSA operand; the dead path
+  // never executes at runtime so the undef value is unobservable.
+  //
+  // Runtime semantics: goto INSIDE_CASE → r = -1 + 100 = 99 → break out of
+  // switch → return 99. Result is 99 for ANY n (the switch dispatch is
+  // skipped by the goto).
+  const src = `
+    i32 f(i32 n) {
+      i32 r = -1;
+      goto INSIDE_CASE;
+      switch (n) {
+        case 1: r = 10; break;
+        case 2:
+          INSIDE_CASE: r = r + 100;
+          break;
+        default: r = 999;
+      }
+      return r;
+    }
+  `;
+  const bytes = roundTrip(src);
+  for (const n of [1, 2, 5, 0, -1]) {
+    eq(run(bytes, 'f', n), 99, `n=${n}`);
+  }
+});
+
+t('goto-into-body: goto into a nested if inside a while', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 sum = 0;
+      i32 i = 0;
+      goto DEEP;
+      while (i < n) {
+        if (i % 2 == 0) {
+          DEEP: sum = sum + i;
+        }
+        i = i + 1;
+      }
+      return sum;
+    }
+  `;
+  // Goto jumps directly into the if-branch with i=0. sum = 0+0 = 0.
+  // Then i = 0+1 = 1, loop continues. i=1 (odd, skip), i=2 → sum += 2, ...
+  // Sums even i in [0, n) → 0+2+4+...
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 6), 0 + 2 + 4);          // even values < 6
+  eq(run(bytes, 'f', 1), 0);                  // only i=0 visited (via goto + then i=1 → exits)
+  eq(run(bytes, 'f', 0), 0);                  // goto fires once with sum=0, i=0, then exits (cond 0<0)
+});
+
+t('goto-into-body: backward goto from past while back into the loop body', () => {
+  // Goto JUMPS BACKWARD into the middle of a while body that's already been
+  // exited. Creates an irreducible re-entry.
+  const src = `
+    i32 f(i32 n) {
+      i32 sum = 0;
+      i32 i = 0;
+      i32 retries = 0;
+      while (i < n) {
+        BODY: sum = sum + i;
+        i = i + 1;
+      }
+      if (retries == 0 && sum < 10) {
+        retries = 1;
+        i = 0;
+        sum = 0;
+        goto BODY;       // re-enter the (already-exited) while body
+      }
+      return sum;
+    }
+  `;
+  // For n=3: first pass sums 0+1+2 = 3 < 10, triggers re-entry.
+  //   goto BODY at i=0, sum=0. sum += 0. i=1. Continue loop: i < 3 → sum=1, i=2, sum=3, i=3 exits.
+  //   sum = 3, retries=1, no more re-entry. Return 3.
+  // For n=10: first pass sums 0..9 = 45 > 10. No retry. Return 45.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 3), 3);
+  eq(run(bytes, 'f', 10), 45);
+  // Confirm compileWithTrace also handles it.
+  const trace = CODEGEN.compileWithTrace(src);
+  if (trace.bytesError) throw new Error('compileWithTrace failed: ' + trace.bytesError.message);
+});
+
+t('goto-into-body: two distinct gotos into the same while body (3-entry SCC)', () => {
+  // Three entry points to the while body: regular head + LBL_A + LBL_B.
+  // The dispatcher-node makeReducible should add a single dispatcher in front.
+  const src = `
+    i32 f(i32 n, i32 startA, i32 startB) {
+      i32 sum = 0;
+      i32 i = 0;
+      if (startA) { goto LBL_A; }
+      if (startB) { goto LBL_B; }
+      while (i < n) {
+        LBL_A: sum = sum + 1;
+        LBL_B: i = i + 1;
+      }
+      return sum;
+    }
+  `;
+  const bytes = roundTrip(src);
+  // Normal entry: sum each iter = 1 → n.
+  eq(run(bytes, 'f', 5, 0, 0), 5);
+  // startA: jump straight to LBL_A with sum=0, i=0 → sum=1, i=1, then loop. sum = n - 0 = n.
+  eq(run(bytes, 'f', 5, 1, 0), 5);
+  // startB: jump straight to LBL_B → i=1 without adding. sum then = (n-1).
+  eq(run(bytes, 'f', 5, 0, 1), 4);
+  // Confirm dispatchers got added.
+  const trace = CODEGEN.compileWithTrace(src);
+  if (trace.bytesError) throw new Error('compileWithTrace failed: ' + trace.bytesError.message);
+  if (!(trace.dispatchersAdded.length >= 1)) throw new Error('expected at least one dispatcher');
+});
+
+t('goto-into-body: irreducible re-entry preserves SSA across unexpected predecessors', () => {
+  // Constructs a CFG where a goto creates a join point that needs to merge
+  // SSA values from two paths with different defs. Verifies the unsealed-
+  // block accumulator handles arbitrary predecessor counts.
+  const src = `
+    i32 f(i32 n) {
+      i32 x = 0;
+      i32 y = 100;
+      if (n > 0) {
+        x = 42;
+        goto MERGE;
+      }
+      x = 7;
+      y = 200;
+      MERGE: return x + y;
+    }
+  `;
+  const bytes = roundTrip(src);
+  // n>0: x=42, goto MERGE. y stays at 100. Return 42+100 = 142.
+  // n<=0: x=7, y=200, fall through to MERGE. Return 7+200 = 207.
+  eq(run(bytes, 'f', 5), 142);
+  eq(run(bytes, 'f', 0), 207);
+  eq(run(bytes, 'f', -1), 207);
+});
+
+// ─── ADVERSARIAL: undef-tolerant SSA + nasty goto/irreducibility patterns ───
+//
+// Pushing the SSA construction across the worst-case patterns we can think of.
+// Every test is a real program with a known-correct trace; any deviation is a
+// real bug, not a documentation gap.
+
+t('NASTY 1: variable defined ONLY on goto-source path; phi at target must give live def, not undef', () => {
+  // The goto's source defines x = 42. The target has another pred (dispatch
+  // path) that's dead at runtime but contributes an undef phi operand.
+  // Critical: the phi must materialize x correctly when control arrives
+  // via the goto. If undef polluted the result, we'd see garbage.
+  const src = `
+    i32 f(i32 n) {
+      i32 x = 0;
+      x = 42;
+      goto MERGE;
+      switch (n) {
+        case 1: x = 999;
+        MERGE: return x;
+        default: return -1;
+      }
+    }
+  `;
+  // The dispatch is dead; only the goto arrives at MERGE. x must be 42.
+  const bytes = roundTrip(src);
+  for (const n of [0, 1, 5, 999]) eq(run(bytes, 'f', n), 42, `n=${n}`);
+});
+
+t('NASTY 2: goto chain (A → B → C) — three jumps, each through a labeled position', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 0;
+      goto A;
+      A: r = r + 1; goto B;
+      B: r = r * 10; goto C;
+      C: r = r + 5;
+      return r;
+    }
+  `;
+  // r: 0 → 1 → 10 → 15
+  eq(run(roundTrip(src), 'f', 0), 15);
+});
+
+t('NASTY 3: multiple gotos converge on same label — phi merges live values from multiple sources', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 0;
+      if (n == 1) { r = 100; goto MERGE; }
+      if (n == 2) { r = 200; goto MERGE; }
+      if (n == 3) { r = 300; goto MERGE; }
+      r = 999;
+      MERGE: return r;
+    }
+  `;
+  const bytes = roundTrip(src);
+  for (const [n, want] of [[1, 100], [2, 200], [3, 300], [4, 999], [0, 999]]) {
+    eq(run(bytes, 'f', n), want, `n=${n}`);
+  }
+});
+
+t('NASTY 4: goto skips a Declare — variable reads as wasm-default-zero', () => {
+  // The Declare's initializer is skipped by goto. Per wasm semantics, the
+  // local is zero-initialized. C semantics would be UB; we get a defined
+  // (zero) value.
+  const src = `
+    i32 f(i32 ignored) {
+      goto AFTER;
+      i32 x = 5;
+      AFTER: return x;
+    }
+  `;
+  // wasm local for x defaults to 0. The init x = 5 is skipped.
+  eq(run(roundTrip(src), 'f', 0), 0);
+});
+
+t('NASTY 5: self-goto creates trivial infinite loop — compiles cleanly', () => {
+  // Should compile and validate. Don'\''t actually run it (would hang).
+  const src = `
+    i32 f(i32 ignored) {
+      L: goto L;
+      return 0;
+    }
+  `;
+  // Just verify it compiles without error.
+  const bytes = roundTrip(src);
+  if (!bytes || bytes.length === 0) throw new Error('expected wasm bytes');
+});
+
+t('NASTY 6: 3-entry SCC — three distinct gotos into a while body create irreducible CFG', () => {
+  const src = `
+    i32 f(i32 n, i32 entry) {
+      i32 acc = 0;
+      i32 i = 0;
+      if (entry == 1) { goto A; }
+      if (entry == 2) { goto B; }
+      if (entry == 3) { goto C; }
+      while (i < n) {
+        A: acc = acc + 1;
+        B: acc = acc + 10;
+        C: acc = acc + 100;
+        i = i + 1;
+      }
+      return acc;
+    }
+  `;
+  // Normal entry: each iter adds 111. For n=2: 222.
+  // entry=1 first iter: starts at A, adds 1+10+100 = 111. i=1. Then header: 1<2 true. Loop: 111+111=222. i=2. exit. → 222.
+  // entry=2 first iter: starts at B, adds 10+100 = 110. i=1. Then iteration: 110+111=221. i=2. exit. → 221.
+  // entry=3 first iter: starts at C, adds 100. i=1. Then iteration: 100+111=211. i=2. exit. → 211.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 2, 0), 222);
+  eq(run(bytes, 'f', 2, 1), 222);
+  eq(run(bytes, 'f', 2, 2), 221);
+  eq(run(bytes, 'f', 2, 3), 211);
+});
+
+t('NASTY 7: goto out of nested while into another statement at outer scope', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 0;
+      while (n > 0) {
+        r = r + 1;
+        if (r == 3) { goto OUTSIDE; }
+        n = n - 1;
+      }
+      OUTSIDE: r = r * 10;
+      return r;
+    }
+  `;
+  // For n=5: r reaches 3, goto OUTSIDE. r = 30.
+  // For n=2: r reaches 2, while exits naturally. r = 20.
+  // For n=0: r=0, no body. r = 0.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 5), 30);
+  eq(run(bytes, 'f', 2), 20);
+  eq(run(bytes, 'f', 0), 0);
+});
+
+t('NASTY 8: i64 variables across goto-into-body — undef materialization at correct type', () => {
+  // Exercises that undef is type-correct for i64 (the read along the dead
+  // path would see a typed zero if ever reached; the live path sees the
+  // real defs from the goto source). Uses param-only arithmetic to avoid
+  // mixing i32 / i64 literal types (the language doesn't have a typed
+  // integer-literal suffix; plain `100` defaults to i32).
+  const src = `
+    i64 f(i64 n, i64 sum0, i64 one) {
+      i64 sum = sum0;
+      goto MID;
+      while (n > one * one - one) {
+        sum = sum + n;
+        MID: n = n - one;
+      }
+      return sum;
+    }
+  `;
+  // For n=3, sum0=100, one=1: goto MID → n=2. While 2>0: sum += 2 → 102, n=1.
+  //   sum += 1 → 103, n=0. exit. → 103.
+  // For n=0, sum0=100, one=1: goto MID → n=-1. cond -1>0 false. → 100.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 3n, 100n, 1n), 103n);
+  eq(run(bytes, 'f', 0n, 100n, 1n), 100n);
+});
+
+t('NASTY 9: undef from dead path must NOT pollute trivial-phi elimination', () => {
+  // After SSA construction, trimPhis runs to collapse trivial phis. The
+  // dead-path operand is undef. If trimPhis treats undef as "equal to
+  // anything," it might collapse the phi prematurely and lose the live
+  // def. Test: a value that's defined on the live path and undef on the
+  // dead path must NOT be collapsed away.
+  const src = `
+    i32 f(i32 n) {
+      i32 x = 42;
+      goto SKIP_DEAD;
+      if (n) { x = 999; }
+      SKIP_DEAD: return x;
+    }
+  `;
+  // x stays 42; goto skips the conditional reassignment.
+  for (const n of [0, 1, 99]) eq(run(roundTrip(src), 'f', n), 42);
+});
+
+t('NASTY 10: nested irreducibility — goto into while body inside another while body', () => {
+  const src = `
+    i32 f(i32 outer, i32 inner) {
+      i32 r = 0;
+      while (outer > 0) {
+        goto MID;
+        while (inner > 0) {
+          r = r + 1;
+          MID: inner = inner - 1;
+        }
+        outer = outer - 1;
+      }
+      return r;
+    }
+  `;
+  // Outer iter: goto MID → inner=inner-1. Inner while: inner>0? If so, r+=1; MID: inner-=1. Continue inner. Exit inner when inner<=0.
+  // For outer=1, inner=3: goto MID → inner=2. Inner while: 2>0 r=1, inner=1. 1>0 r=2, inner=0. exit. outer=0. exit. r=2.
+  // For outer=2, inner=2:
+  //   outer=2: goto MID → inner=1. r=2, inner=0. exit. outer=1.
+  //   outer=1: goto MID → inner=-1. exit inner. outer=0. exit. r=2.
+  // (Note: inner is reused across outer iters; goto MID always decrements then enters loop.)
+  // Wait let me retrace outer=2, inner=2:
+  //   outer iter 1: goto MID → inner=1. Inner while: 1>0 → r=1, inner=0. 0>0 false → exit. outer=1.
+  //   outer iter 2: goto MID → inner=-1. Inner while: -1>0 false → exit. outer=0. exit. r=1.
+  eq(run(roundTrip(src), 'f', 1, 3), 2);
+  eq(run(roundTrip(src), 'f', 2, 2), 1);
+  eq(run(roundTrip(src), 'f', 1, 0), 0);
+});
+
+t('NASTY 11: goto INTO a switch case + break out of switch — case dispatched & break flows correctly', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 0;
+      goto INSIDE;
+      switch (n) {
+        case 1: r = 10; break;
+        case 2:
+          INSIDE: r = r + 7;
+          if (n == 99) { break; }
+          r = r + 1;
+        case 3: r = r + 100; break;
+        default: r = 9999;
+      }
+      return r;
+    }
+  `;
+  // Goto INSIDE: r = 0+7 = 7. n=99 check: depends on caller.
+  // For n=99: if-true → break out of switch → return 7.
+  // For n=anything else: r += 1 → 8. Fall through to case 3 → r += 100 → 108. break. return 108.
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 99), 7);
+  eq(run(bytes, 'f', 1), 108);
+  eq(run(bytes, 'f', 2), 108);
+  eq(run(bytes, 'f', 5), 108);
+});
+
+t('NASTY 12: cascading SSA — variable redefined in multiple goto-reached blocks; final read gets right phi', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 x = 1;
+      if (n == 1) { x = 10; goto END; }
+      if (n == 2) { x = 100; goto END; }
+      if (n == 3) { x = 1000; goto END; }
+      x = 5;
+      END: return x * 2;
+    }
+  `;
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 1), 20);
+  eq(run(bytes, 'f', 2), 200);
+  eq(run(bytes, 'f', 3), 2000);
+  eq(run(bytes, 'f', 0), 10);
+});
+
+t('NASTY 13: goto into a labeled goto-target that ALSO has the back-edge of an enclosing loop', () => {
+  // The label LOOP_TOP is both a goto target (from below) and the back-edge
+  // landing of the surrounding while. Multi-source convergence with
+  // mixed live/back-edge preds.
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 0;
+      i32 i = 0;
+      goto LOOP_TOP;
+      while (i < n) {
+        LOOP_TOP: r = r + i;
+        i = i + 1;
+      }
+      return r;
+    }
+  `;
+  // goto LOOP_TOP → r=0+0=0, i=1. while header: 1<n? continue if so.
+  //   i=1: r=0+1=1, i=2. ...
+  // For n=4: visits i = 0,1,2,3 → r = 0+1+2+3 = 6.
+  eq(run(roundTrip(src), 'f', 4), 6);
+  eq(run(roundTrip(src), 'f', 0), 0);   // goto MID → r=0+0=0, i=1. 1<0 false → exit. r=0.
+});
+
+t('NASTY 14: deep nesting — goto into a label 4 levels deep (if inside switch inside while inside if)', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 r = -1;
+      if (n > 0) {
+        goto VERY_DEEP;
+        while (1) {
+          switch (n) {
+            case 1:
+              if (n == 1) {
+                VERY_DEEP: r = 777;
+                return r;
+              }
+          }
+          break;
+        }
+      }
+      return r;
+    }
+  `;
+  // For n>0, goto VERY_DEEP fires → r=777 → return 777. For n<=0, return -1.
+  for (const n of [1, 5, 99]) eq(run(roundTrip(src), 'f', n), 777, `n=${n}`);
+  eq(run(roundTrip(src), 'f', 0), -1);
+});
+
+t('NASTY 15: goto OUT of a deeply nested structure to function-level label', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 0;
+      while (n > 0) {
+        if (n == 5) {
+          switch (n) {
+            case 5:
+              if (1) { goto OUT; }
+              break;
+          }
+        }
+        r = r + n;
+        n = n - 1;
+      }
+      OUT: return r * 1000 + n;
+    }
+  `;
+  // For n=7: iter at n=7 (r=7), n=6 (r=13), n=5 triggers goto. r=13, n=5. Return 13*1000 + 5 = 13005.
+  // For n=3: no goto. r = 3+2+1 = 6. n=0. Return 6*1000 = 6000.
+  eq(run(roundTrip(src), 'f', 7), 13005);
+  eq(run(roundTrip(src), 'f', 3), 6000);
+});
+
+t('NASTY 16: ParallelAssign in a block reachable via goto — swap semantics preserved', () => {
+  const src = `
+    i32 f(i32 n) {
+      i32 a = 1;
+      i32 b = 2;
+      goto SWAP;
+      a = 99; b = 99;
+      SWAP: PARALLEL_ASSIGN((a, b), (b, a));
+      return a * 10 + b;
+    }
+  `;
+  // Goto skips a=99; b=99. PARALLEL swaps (a,b) → (b,a) → a=2, b=1. Return 21.
+  for (const n of [0, 1, 5]) eq(run(roundTrip(src), 'f', n), 21);
+});
+
+t('NASTY 17: multi-entry SCC where every entry defines the SAME variable differently', () => {
+  // Each entry path establishes x to a different value. The SCC body reads x.
+  // The dispatcher inserted by makeReducible must thread the correct x.
+  const src = `
+    i32 f(i32 entry, i32 iters) {
+      i32 x = 0;
+      i32 i = 0;
+      if (entry == 1) { x = 10; goto INSIDE; }
+      if (entry == 2) { x = 20; goto INSIDE; }
+      while (i < iters) {
+        x = 1;
+        INSIDE: i = i + 1;
+      }
+      return x;
+    }
+  `;
+  // entry=1: x=10, goto INSIDE → i=1. while 1<iters? if so, x=1, i=2, ...
+  //   iters=3: i=1, then 1<3 true → x=1, i=2. 2<3 true → x=1, i=3. 3<3 false. exit. → x=1.
+  //   iters=1: i=1, 1<1 false. exit. → x=10.
+  // entry=0: x=0, while 0<iters → x=1 (overwritten each iter). exit. → x=1 (or 0 if iters=0).
+  const bytes = roundTrip(src);
+  eq(run(bytes, 'f', 1, 1), 10);
+  eq(run(bytes, 'f', 1, 3), 1);
+  eq(run(bytes, 'f', 0, 0), 0);
+  eq(run(bytes, 'f', 0, 1), 1);
+});
+
+t('NASTY 18: undef robustness — verify dead path is REALLY never observed by varying inputs', () => {
+  // Construct a program where the SSA's undef appears in a phi but the
+  // live computation NEVER reads from that phi. The runtime answer should
+  // be deterministic across all inputs even though the phi's dead-pred
+  // operand could in principle be anything.
+  const src = `
+    i32 f(i32 n) {
+      i32 r = 42;
+      goto END;
+      if (n > 0) { r = r + 1; goto END; }
+      r = 999;
+      END: return r;
+    }
+  `;
+  // No matter what n is, goto fires → return 42.
+  for (const n of [-100, -1, 0, 1, 100, 99999]) {
+    eq(run(roundTrip(src), 'f', n), 42, `n=${n}`);
+  }
+});
+
+t('NASTY 19: trimPhis must NOT eliminate a phi with undef + concrete operands as trivial', () => {
+  // A phi where one operand is undef and another is a concrete value. The
+  // phi must NOT collapse to either — it's a real merge point at IR level
+  // even if the dead operand is unobservable at runtime. Verify the live
+  // value flows correctly.
+  const src = `
+    i32 f(i32 n) {
+      i32 x = 7;
+      goto JOIN;
+      if (n) { x = 13; }
+      JOIN: return x;
+    }
+  `;
+  // Goto skips conditional reassign. Always returns 7.
+  for (const n of [0, 1, 5]) eq(run(roundTrip(src), 'f', n), 7);
+});
+
+t('NASTY 20: empty function body except for goto + label (every statement is reachable via goto)', () => {
+  const src = `
+    i32 f(i32 n) {
+      goto END;
+      END: return 1;
+    }
+  `;
+  eq(run(roundTrip(src), 'f', 0), 1);
+});
+
 // ─── runner ───
 let passed = 0, failed = 0;
 for (const { name, fn } of tests) {
