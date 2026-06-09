@@ -420,6 +420,7 @@
   .cfg-edges path.cfg-edge-true   { stroke: #16a34a; }
   .cfg-edges path.cfg-edge-false  { stroke: #dc2626; }
   .cfg-edges path.cfg-edge-back   { stroke: #9333ea; stroke-dasharray: 4 3; }
+  .cfg-edges path.cfg-edge-dom    { stroke: #6b7280; stroke-width: 1.8px; }
   .cfg-edges text.cfg-edge-label {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 11px;
@@ -2002,6 +2003,309 @@
     return out;
   }
 
+  // ── Dom Tree ──
+  // Pure tree layout (each block has exactly one idom parent). Reuses the
+  // .cfg-stage / .cfg-edges / .cfg-node CSS so any theme override applied to
+  // the CFG view (e.g. the slide pipeline's dark-mode injection) covers this
+  // view too.
+  function renderFnDomTreeGraph(fn, idom) {
+    const blocks = fn.blocks;
+
+    // children[parentId] = [child block, ...]
+    const children = new Map(blocks.map((b) => [b.id, []]));
+    for (const b of blocks) {
+      if (b === fn.entry) continue;
+      const p = idom.get(b);
+      if (!p || p === b) continue;
+      const arr = children.get(p.id);
+      if (arr) arr.push(b);
+    }
+    for (const arr of children.values()) arr.sort((a, b) => a.id - b.id);
+
+    const BOX_W = 240, GAP_X = 40, GAP_Y = 60;
+    const HEADER_H = 26, FOOTER_H = 24, LINE_H = 18, BODY_PAD = 10;
+    function estHeight(b) {
+      const phiCount = blockPhiLines(b).length;
+      const instCount = blockInsts(b).length;
+      const bodyLines = Math.max(1, phiCount + instCount);
+      return HEADER_H + BODY_PAD + bodyLines * LINE_H + FOOTER_H;
+    }
+
+    // Subtree-slot widths (leaf slots = 1 per leaf).
+    const slots = new Map();
+    function computeSlots(b) {
+      const kids = children.get(b.id) || [];
+      if (kids.length === 0) { slots.set(b.id, 1); return 1; }
+      let s = 0;
+      for (const k of kids) s += computeSlots(k);
+      slots.set(b.id, s);
+      return s;
+    }
+    computeSlots(fn.entry);
+
+    // Depth from root via BFS.
+    const depth = new Map([[fn.entry.id, 0]]);
+    {
+      const q = [fn.entry];
+      while (q.length) {
+        const u = q.shift();
+        for (const k of (children.get(u.id) || [])) {
+          if (!depth.has(k.id)) {
+            depth.set(k.id, depth.get(u.id) + 1);
+            q.push(k);
+          }
+        }
+      }
+    }
+    let maxDepth = 0;
+    for (const d of depth.values()) maxDepth = Math.max(maxDepth, d);
+
+    // Row heights + Y cursors.
+    const rowH = new Array(maxDepth + 1).fill(60);
+    for (const b of blocks) {
+      const d = depth.get(b.id);
+      if (d === undefined) continue;
+      rowH[d] = Math.max(rowH[d], estHeight(b));
+    }
+    const rowY = new Array(maxDepth + 1);
+    let yCur = GAP_Y;
+    for (let d = 0; d <= maxDepth; d++) {
+      rowY[d] = yCur;
+      yCur += rowH[d] + GAP_Y;
+    }
+
+    // Recursive placement.
+    const positions = new Map();
+    function placeSubtree(b, slotStart) {
+      const s = slots.get(b.id);
+      const centerSlot = slotStart + (s - 1) / 2;
+      const x = GAP_X + centerSlot * (BOX_W + GAP_X);
+      const d = depth.get(b.id);
+      const y = rowY[d] + (rowH[d] - estHeight(b)) / 2;
+      positions.set(b.id, { x, y, w: BOX_W, h: estHeight(b) });
+      let cursor = slotStart;
+      for (const k of (children.get(b.id) || [])) {
+        placeSubtree(k, cursor);
+        cursor += slots.get(k.id);
+      }
+    }
+    placeSubtree(fn.entry, 0);
+
+    // Trailing orphan row for any blocks not in idom (e.g. unreachable).
+    let orphanX = GAP_X;
+    for (const b of blocks) {
+      if (positions.has(b.id)) continue;
+      positions.set(b.id, { x: orphanX, y: yCur, w: BOX_W, h: estHeight(b) });
+      orphanX += BOX_W + GAP_X;
+    }
+    let totalH = orphanX > GAP_X ? yCur + 120 : yCur;
+    let totalW = 0;
+    for (const p of positions.values()) totalW = Math.max(totalW, p.x + p.w);
+    totalW += GAP_X;
+
+    const stage = el('div', { class: 'cfg-stage' });
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'cfg-edges');
+    stage.appendChild(svg);
+
+    for (const b of blocks) {
+      const isEntry = (b === fn.entry);
+      const div = el('div', { class: 'cfg-node' + (isEntry ? ' entry' : '') });
+      const hdr = el('div', { class: 'cfg-node-header' });
+      hdr.appendChild(document.createTextNode(b.name));
+      if (b.params && b.params.length > 0) {
+        const paramStr = '(' + b.params.map((p) => p.name).join(', ') + ')';
+        hdr.appendChild(el('span', { class: 'cfg-node-params' }, paramStr));
+      }
+      div.appendChild(hdr);
+      const body = el('div', { class: 'cfg-node-body' });
+      const phiLines = blockPhiLines(b);
+      for (const phi of phiLines) {
+        let txt = phi;
+        if (txt.length > 42) txt = txt.slice(0, 39) + '…';
+        body.appendChild(el('div', { class: 'cfg-node-stmt cfg-node-phi' }, txt));
+      }
+      const insts = blockInsts(b);
+      if (insts.length === 0 && phiLines.length === 0) {
+        body.appendChild(el('div', { class: 'cfg-node-stmt empty' }, '(no statements)'));
+      } else {
+        for (const st of insts) {
+          let txt = stmtText(st);
+          if (txt.length > 38) txt = txt.slice(0, 35) + '…';
+          body.appendChild(el('div', { class: 'cfg-node-stmt' }, txt));
+        }
+      }
+      div.appendChild(body);
+      const tsum = termSummary(b.terminator);
+      const tdiv = el('div', { class: 'cfg-node-term term-' + tsum.kind });
+      tdiv.appendChild(el('span', { class: 'cfg-term-kind' }, tsum.kind));
+      if (tsum.expr) {
+        let exprTxt = tsum.expr;
+        if (exprTxt.length > 32) exprTxt = exprTxt.slice(0, 29) + '…';
+        tdiv.appendChild(document.createTextNode(' '));
+        tdiv.appendChild(el('span', { class: 'cfg-term-expr' }, exprTxt));
+      }
+      div.appendChild(tdiv);
+      const pos = positions.get(b.id);
+      div.style.width = BOX_W + 'px';
+      div.style.left = pos.x + 'px';
+      div.style.top = pos.y + 'px';
+      stage.appendChild(div);
+    }
+
+    stage.style.width = totalW + 'px';
+    stage.style.height = totalH + 'px';
+    svg.setAttribute('width', totalW);
+    svg.setAttribute('height', totalH);
+
+    const defs = document.createElementNS(svgNs, 'defs');
+    const m = document.createElementNS(svgNs, 'marker');
+    m.setAttribute('id', 'dom-arr');
+    m.setAttribute('viewBox', '0 0 8 8');
+    m.setAttribute('refX', '7'); m.setAttribute('refY', '4');
+    m.setAttribute('markerWidth', '7'); m.setAttribute('markerHeight', '7');
+    m.setAttribute('orient', 'auto');
+    const arr = document.createElementNS(svgNs, 'path');
+    arr.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
+    arr.setAttribute('fill', '#6b7280');
+    m.appendChild(arr);
+    defs.appendChild(m);
+    svg.appendChild(defs);
+
+    for (const b of blocks) {
+      if (b === fn.entry) continue;
+      const parent = idom.get(b);
+      if (!parent || parent === b) continue;
+      const src = positions.get(parent.id);
+      const dst = positions.get(b.id);
+      if (!src || !dst) continue;
+      const x1 = src.x + src.w / 2;
+      const y1 = src.y + src.h;
+      const x2 = dst.x + dst.w / 2;
+      const y2 = dst.y;
+      const mid = (y1 + y2) / 2;
+      const path = document.createElementNS(svgNs, 'path');
+      path.setAttribute('d', `M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`);
+      path.setAttribute('class', 'cfg-edge-dom');
+      path.setAttribute('marker-end', 'url(#dom-arr)');
+      svg.appendChild(path);
+    }
+
+    const canvas = el('div', { class: 'cfg-canvas' });
+    canvas.appendChild(stage);
+    const legend = el('div', { class: 'mute',
+      style: { fontSize: '11px', marginTop: '6px', display: 'flex', gap: '14px', flexWrap: 'wrap' } },
+      el('span', {}, '🟩 entry (root — dominates itself by convention)'),
+      el('span', {}, '↓ parent = immediate dominator'));
+    const out = el('div');
+    out.appendChild(canvas);
+    out.appendChild(legend);
+    return out;
+  }
+
+  function renderIdomTable(fn, idom) {
+    const wrap = el('div', { class: 'idom-summary', style: { marginTop: '14px' } });
+    wrap.appendChild(el('h4', { style: { margin: '0 0 6px 0', fontSize: '12px',
+                                          color: 'var(--fg-mute)', textTransform: 'uppercase',
+                                          letterSpacing: '0.5px' } }, 'idom map'));
+    const depth = new Map([[fn.entry.id, 0]]);
+    const q = [fn.entry];
+    while (q.length) {
+      const u = q.shift();
+      for (const b of fn.blocks) {
+        if (idom.get(b) === u && b !== u && !depth.has(b.id)) {
+          depth.set(b.id, depth.get(u.id) + 1);
+          q.push(b);
+        }
+      }
+    }
+    const tbl = el('table', { class: 'kv' });
+    tbl.appendChild(el('tr', {},
+      el('th', {}, 'block'),
+      el('th', {}, 'idom'),
+      el('th', {}, 'depth')));
+    for (const b of fn.blocks) {
+      const p = idom.get(b);
+      const isRoot = (b === fn.entry);
+      const idomLabel = isRoot ? b.name + ' (self · sentinel)' : (p ? p.name : '— (unreachable)');
+      tbl.appendChild(el('tr', {},
+        el('td', { class: 'mono kw' }, b.name),
+        el('td', { class: 'mono' + (isRoot ? ' mute' : '') }, idomLabel),
+        el('td', { class: 'mute' }, depth.has(b.id) ? String(depth.get(b.id)) : '—')));
+    }
+    wrap.appendChild(tbl);
+    return wrap;
+  }
+
+  function renderDomTree(panel, trace) {
+    panel.appendChild(el('div', { class: 'hint' },
+      'The ', el('strong', {}, 'dominator tree'), ' makes the back-edge definition ' +
+      'precise. A block ', el('em', {}, 'a'), ' dominates ', el('em', {}, 'b'),
+      ' iff every path from entry to ', el('em', {}, 'b'), ' passes through ', el('em', {}, 'a'),
+      '. Each non-entry block\'s immediate dominator (idom) is its closest such ' +
+      'ancestor; this parent relationship forms a tree rooted at entry.'));
+
+    panel.appendChild(el('div', { class: 'callout' },
+      el('strong', {}, 'Defined only on reducible CFGs. '),
+      'c3a\'s irreducible-to-reducible dispatcher pass runs first; every CFG that ' +
+      'reaches this view already has a well-defined dom tree.'));
+
+    panel.appendChild(el('h2', { class: 'section-title' }, 'What c3a uses dom trees for'));
+    panel.appendChild(makeCatalog([
+      { cat: 'safety',   name: 'DCE def-must-dominate-use',
+        desc: 'Dead-code elimination only deletes definitions whose every use is dominated by them — otherwise replacing the use with the def would read an uninitialized slot.' },
+      { cat: 'analysis', name: 'Back-edge classification',
+        desc: '`u → v` is a back-edge iff `v` dominates `u`. CFG.graph view uses this to color back-edges purple. Foundation for natural-loop discovery.' },
+      { cat: 'future',   name: 'Stackifier block placement',
+        desc: 'A future stackifier opens each merge-point\'s wasm `block` at its idom — minimizes nesting depth versus naïve earliest-predecessor placement.' },
+    ]));
+
+    panel.appendChild(el('h2', { class: 'section-title' }, 'Algorithm — Cooper-Harvey-Kennedy (2001)'));
+    panel.appendChild(el('div', { class: 'hint' },
+      'Iterative fixed-point over reverse-postorder. Each pass tightens every ' +
+      'non-root block\'s idom to the LCA of its already-processed predecessors\' ' +
+      'idoms (LCA walks both up the idom chain by lower RPO index until they ' +
+      'meet). Converges in 2-3 passes on real CFGs. ~50 LOC.'));
+
+    panel.appendChild(el('h2', { class: 'section-title' }, 'Source reference'));
+    const src = makePhaseSourceBlock('c3a-dom-tree',
+      'Derivation: CFG.computeDominators / CFG.dominates');
+    if (src) panel.appendChild(src);
+
+    panel.appendChild(el('h2', { class: 'section-title' }, 'Dom trees for the current source'));
+
+    if (!trace || !trace.mod) {
+      panel.appendChild(el('div', { class: 'mute mono' },
+        '(CFG.fromAST failed or no source compiled)'));
+      return;
+    }
+    const compiler = activeCompiler();
+    if (!compiler.CFG || !compiler.CFG.computeDominators) {
+      panel.appendChild(el('div', { class: 'mute mono' },
+        '(backend does not export CFG.computeDominators)'));
+      return;
+    }
+
+    for (const fn of trace.mod.functions) {
+      const group = el('div', { class: 'fn-group' });
+      group.appendChild(el('h3', {}, fn.name,
+        el('span', { class: 'sub' },
+          ' (' + fn.params.map((p) => p.type).join(', ') + ') → ' + fn.returnType)));
+      let idom;
+      try { idom = compiler.CFG.computeDominators(fn); }
+      catch (e) {
+        group.appendChild(el('div', { class: 'mute mono' },
+          '(computeDominators threw: ' + e.message + ')'));
+        panel.appendChild(group);
+        continue;
+      }
+      group.appendChild(renderFnDomTreeGraph(fn, idom));
+      group.appendChild(renderIdomTable(fn, idom));
+      panel.appendChild(group);
+    }
+  }
+
   // ── Locals ──
   function renderLocals(panel, trace) {
     panel.appendChild(el('div', { class: 'hint' },
@@ -2472,6 +2776,7 @@
     { id: 'tokens',      label: 'Tokens',        render: renderTokens },
     { id: 'ast',         label: 'AST',           render: renderAst },
     { id: 'cfg',         label: 'CFG',           render: renderCfg },
+    { id: 'domtree',     label: 'Dom Tree',      render: renderDomTree, backends: ['c3a'] },
     { id: 'lifted',      label: 'Lifted',        render: renderLifted },
     { id: 'locals',      label: 'Locals',        render: renderLocals },
     { id: 'asm',         label: 'wasm',          render: renderAsm },
@@ -2547,8 +2852,21 @@
       return;
     }
     pane.classList.remove('empty');
-    if (!state.tabIds.includes(state.active)) state.active = state.tabIds[0];
-    for (const tabId of state.tabIds) {
+    // Filter to tabs whose backends-gate (if any) allows the current BACKEND.
+    // `state.tabIds` preserves the user's intended layout; hidden tabs aren't
+    // forgotten — they reappear when the matching backend is selected.
+    const visibleTabIds = state.tabIds.filter((id) => {
+      const def = tabs.get(id)?.def;
+      return !def?.backends || def.backends.includes(BACKEND);
+    });
+    if (visibleTabIds.length === 0) {
+      pane.classList.add('empty');
+      panelBox.appendChild(el('div', { class: 'empty-pane-hint' },
+        'No tabs available for backend "' + BACKEND + '".'));
+      return;
+    }
+    if (!visibleTabIds.includes(state.active)) state.active = visibleTabIds[0];
+    for (const tabId of visibleTabIds) {
       const t = tabs.get(tabId);
       tabBar.appendChild(t.button);
       panelBox.appendChild(t.panel);
@@ -2780,7 +3098,10 @@
       if (def.static) continue;
       const panel = tabs.get(def.id).panel;
       clear(panel);
-      if (BACKEND !== 'c0' && !POLY_TABS.has(def.id)) { renderTbd(panel, def); continue; }
+      // Backend-gated tab: render only when the current backend is in its list.
+      // Skip silently (button is hidden too — see applyPane filter).
+      if (def.backends && !def.backends.includes(BACKEND)) continue;
+      if (BACKEND !== 'c0' && !POLY_TABS.has(def.id) && !def.backends) { renderTbd(panel, def); continue; }
       if (def.render) def.render(panel, trace);
     }
   }
@@ -2872,6 +3193,9 @@
     const pipelinePanel = tabs.get('pipeline').panel;
     clear(pipelinePanel);
     renderPipeline(pipelinePanel, null);
+    // Re-apply panes so backend-gated tabs (e.g. domtree on c3a) show/hide.
+    applyPane('paneA');
+    applyPane('paneB');
     recompile();
     saveLayout();
   });

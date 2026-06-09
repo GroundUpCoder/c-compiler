@@ -29,6 +29,7 @@ BACKEND_FILES = [
     ("c2", "C2", "c2.js"),
     ("c2-ext", "C2EXT", "c2-ext.js"),
     ("c3a", "C3A", "c3a.js"),
+    ("c3b", "C3B", "c3b.js"),
 ]
 
 # Snippet name (referenced by template.html via makePhaseSourceBlock)
