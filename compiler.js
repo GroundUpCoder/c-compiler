@@ -5498,11 +5498,30 @@ function checkHoistSafe(labelInfo, hoistTarget, body, switchBodies) {
     }
   }
 
-  // Condition 4: the path from labelCompound up to (and through) the
-  // anchor statement must consist of constructs whose fall-through naturally
-  // exits to the position right after the anchor. This holds for SIf
-  // branches (any branch falls out to right after the if) and SCompound
-  // nesting; loops/switches are already ruled out.
+  // Condition 4: fall-through from the hoisted tail must reach the position
+  // right after the anchor without skipping any statements. SIf branches
+  // exit right after the if, so they're fine — but an intermediate SCompound
+  // with statements AFTER the node on the label's path is not: those
+  // trailing statements run on every original path (both goto-driven label
+  // fall-through and natural execution), and the hoist would jump straight
+  // past them to the relocated tail. (Found via tcc's parse_number: the
+  // `float_frac_parse:` label sits in nested ifs with `*q = '\0'; ...`
+  // trailing in an intermediate block; the hoist silently dropped them.)
+  // Bail — the irreducible-lowering fallback handles the general case.
+  for (let i = lcaIdx + 1; i < trace.length - 1; i++) {
+    const node = trace[i];
+    if (node === labelInfo.compound) break; // own compound: tail moves with the label
+    if (!(node instanceof AST.SCompound)) continue;
+    const child = trace[i + 1];
+    let stmtIdx = node.statements.indexOf(child);
+    if (stmtIdx < 0) {
+      // child is wrapped by a control-flow node that IS in statements
+      stmtIdx = node.statements.findIndex(s => containsNode(s, child));
+    }
+    if (stmtIdx >= 0 && stmtIdx !== node.statements.length - 1) {
+      return { ok: false, reason: `cannot hoist label '${labelInfo.label?.name || '?'}' past trailing statements in an intermediate block` };
+    }
+  }
 
   return { ok: true };
 }
