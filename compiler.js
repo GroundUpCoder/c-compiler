@@ -11442,8 +11442,16 @@ class Parser {
         while (this.matchText("[")) {
           let size = 0;
           if (!this.atText("]")) {
+            const sizeTok = this.peek();
             const sizeExpr = this.parseAssignmentExpression();
-            size = Number(constEvalInt(sizeExpr) ?? 0n);
+            const sz = constEvalInt(sizeExpr);
+            if (sz == null) {
+              // A size expression that isn't an integer constant would make
+              // this a VLA. We define __STDC_NO_VLA__ — reject it instead of
+              // silently compiling with size 0 (sizeof 0, row stride 0).
+              this.error(sizeTok, "variable-length arrays are not supported");
+            }
+            size = Number(sz);
           }
           this.expect("]");
           arrayDims.push(size);
@@ -11532,8 +11540,16 @@ class Parser {
                     }
                     let arrSize = 0;
                     if (!this.atText("]")) {
+                      const sizeTok = this.peek();
                       const se = this.parseAssignmentExpression();
-                      arrSize = Number(constEvalInt(se) ?? 0n);
+                      const sz = constEvalInt(se);
+                      // The first dimension decays to a pointer, so its size
+                      // never matters — but a non-constant inner dimension
+                      // would make this a VLA with a silent stride of 0.
+                      if (sz == null && !firstDim) {
+                        this.error(sizeTok, "variable-length arrays are not supported");
+                      }
+                      arrSize = Number(sz ?? 0n); // null only when firstDim (decays)
                     }
                     this.expect("]");
                     if (firstDim) {
