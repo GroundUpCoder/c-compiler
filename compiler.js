@@ -3026,7 +3026,10 @@ let nextDeclId = 1;
 // Suitable for one-shot iteration / membership tests. If a caller
 // queries the same bag many times, snapshot the iteration result.
 class TreeBag {
-  constructor(own, ...children) {
+  // `children` is a plain array — NOT a rest parameter. Spreading tens of
+  // thousands of children as arguments (huge initializer lists) overflows
+  // the engine's argument limit with a RangeError.
+  constructor(own, children = []) {
     this._own = (own && own.length > 0) ? own.slice() : null;
     this._children = children.filter(c => c.size > 0);
     let n = this._own ? this._own.length : 0;
@@ -3069,7 +3072,7 @@ function _rankToLinearity(r) {
 // node is UNRESTRICTED iff its op is pure AND every child is too.
 // Tolerates null/undefined children (some construction phases use partial
 // child lists, e.g. EInitList during normalizeInitList).
-function joinLinearity(opLinearity, ...children) {
+function joinLinearity(opLinearity, children) {
   let rank = _LINEARITY_RANK[opLinearity];
   for (const c of children) {
     if (!c) continue;
@@ -3098,7 +3101,7 @@ class Expr {
       this.loc = loc;
       this.type = type;
       this.children = children;
-      this.linearity = joinLinearity(opLinearity, ...children);
+      this.linearity = joinLinearity(opLinearity, children);
     }
     // Bubble-up bags are computed on demand from current children.
     // The getter form (rather than a precomputed field) tolerates the
@@ -3108,15 +3111,15 @@ class Expr {
     // EIdent of a DFunc / DVar overrides to add itself.
     get referencedFunctions() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.referencedFunctions));
+        this.children.filter(c => c).map(c => c.referencedFunctions));
     }
     get referencedVariables() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.referencedVariables));
+        this.children.filter(c => c).map(c => c.referencedVariables));
     }
     get referencedCompoundLiterals() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.referencedCompoundLiterals));
+        this.children.filter(c => c).map(c => c.referencedCompoundLiterals));
     }
     // Case labels can't appear inside expressions — empty by definition.
     get caseBag() { return _EMPTY_TREE_BAG; }
@@ -3147,15 +3150,15 @@ class Expr {
     // for rationale (handles parser-mutated children arrays cleanly).
     get referencedFunctions() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.referencedFunctions));
+        this.children.filter(c => c).map(c => c.referencedFunctions));
     }
     get referencedVariables() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.referencedVariables));
+        this.children.filter(c => c).map(c => c.referencedVariables));
     }
     get referencedCompoundLiterals() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.referencedCompoundLiterals));
+        this.children.filter(c => c).map(c => c.referencedCompoundLiterals));
     }
     // Case labels visible from this subtree. Bubbles up through all
     // intermediate Stmts; SSwitch overrides to return empty (its inner
@@ -3163,7 +3166,7 @@ class Expr {
     // empty via Expr.caseBag — case labels can't appear inside expressions.
     get caseBag() {
       return new TreeBag(null,
-        ...this.children.filter(c => c).map(c => c.caseBag));
+        this.children.filter(c => c).map(c => c.caseBag));
     }
     _withChildren(newChildren) {
       if (newChildren.length === 0) return this;
@@ -3576,7 +3579,7 @@ class Expr {
     }
     _withChildren([initList]) { return new ECompoundLiteral(this.loc, this.type, initList); }
     get referencedCompoundLiterals() {
-      return new TreeBag([this], this.initList.referencedCompoundLiterals);
+      return new TreeBag([this], [this.initList.referencedCompoundLiterals]);
     }
   }
   class EImplicitCast extends Expr {

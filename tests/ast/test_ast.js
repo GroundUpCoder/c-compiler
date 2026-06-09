@@ -360,7 +360,7 @@ test('TreeBag union from children (no copy)', () => {
   const a = {}, b = {};
   const left = new AST.TreeBag([a]);
   const right = new AST.TreeBag([b]);
-  const parent = new AST.TreeBag(null, left, right);
+  const parent = new AST.TreeBag(null, [left, right]);
   assertEq(parent.size, 2);
   assert(parent.has(a));
   assert(parent.has(b));
@@ -368,7 +368,7 @@ test('TreeBag union from children (no copy)', () => {
 test('TreeBag iteration walks tree on demand', () => {
   const a = {}, b = {}, c = {};
   const inner = new AST.TreeBag([a, b]);
-  const outer = new AST.TreeBag([c], inner);
+  const outer = new AST.TreeBag([c], [inner]);
   const seen = [...outer];
   // Order: own first, then children.
   assertEq(seen.length, 3);
