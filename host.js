@@ -1926,10 +1926,20 @@ async function runModule({
   writeErr,
   onReady,
 }) {
+  /* Die quietly on EPIPE (e.g. `prog | head`) like a native program killed
+     by SIGPIPE (128+13), instead of crashing with an unhandled stream
+     'error' event. Only installed for the default writers — callers that
+     pass their own writeOut/writeErr handle their own errors. */
+  function exitOnEpipe(e) {
+    if (e && e.code === 'EPIPE') process.exit(141);
+    throw e;
+  }
   if (!writeOut && typeof process !== 'undefined' && process.stdout) {
+    process.stdout.on('error', exitOnEpipe);
     writeOut = function (buf) { process.stdout.write(buf); };
   }
   if (!writeErr && typeof process !== 'undefined' && process.stderr) {
+    process.stderr.on('error', exitOnEpipe);
     writeErr = function (buf) { process.stderr.write(buf); };
   }
   if (!writeOut) writeOut = function () {};
@@ -2689,6 +2699,36 @@ async function runModule({
 
   function ExitStatus(code) { this.code = code; }
 
+  /* log(Γ(x)) for x >= 0.5 — Lanczos approximation, g=7, n=9. Hoisted out
+     of the import object because wasm invokes imports with `this`
+     undefined, so sibling-method calls via `this.lgamma` would throw. */
+  function lgammaCore(x) {
+    const g = 7;
+    const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+               771.32342877765313, -176.61502916214059, 12.507343278686905,
+               -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+    x -= 1;
+    let a = c[0];
+    const t = x + g + 0.5;
+    for (let i = 1; i < 9; i++) a += c[i] / (x + i);
+    return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+  }
+  function lgammaImpl(x) {
+    if (x < 0.5) {
+      /* Reflection: Γ(x)Γ(1−x) = π/sin(πx). lgamma is log|Γ(x)|, so take
+         the magnitude — sin(πx) is negative for some x < 0. */
+      return Math.log(Math.abs(Math.PI / Math.sin(Math.PI * x))) - lgammaImpl(1 - x);
+    }
+    return lgammaCore(x);
+  }
+  function tgammaImpl(x) {
+    if (x < 0.5) {
+      /* Sign-aware reflection: Γ(x) = π / (sin(πx) · Γ(1−x)). */
+      return Math.PI / (Math.sin(Math.PI * x) * tgammaImpl(1 - x));
+    }
+    return Math.exp(lgammaCore(x));
+  }
+
   const imports = {
     [ENV_KEY]: {
       __exit: function (status) {
@@ -2764,23 +2804,8 @@ async function runModule({
                   * Math.exp(-x*x);
         return x < 0 ? 2 - y : y;
       },
-      // Stirling's approximation via lgamma for tgamma. Good for |x| > 0.
-      lgamma: function (x) {
-        // Lanczos approximation, g=7, n=9.
-        const g = 7;
-        const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
-                   771.32342877765313, -176.61502916214059, 12.507343278686905,
-                   -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
-        if (x < 0.5) {
-          return Math.log(Math.PI / Math.sin(Math.PI * x)) - this.lgamma(1 - x);
-        }
-        x -= 1;
-        let a = c[0];
-        const t = x + g + 0.5;
-        for (let i = 1; i < 9; i++) a += c[i] / (x + i);
-        return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
-      },
-      tgamma: function (x) { return Math.exp(this.lgamma(x)); },
+      lgamma: lgammaImpl,
+      tgamma: tgammaImpl,
       __strtod_impl: function (nptr, endptr, bound) {
         const str = readStringBounded(nptr, bound);
         let i = 0;
