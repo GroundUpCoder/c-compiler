@@ -1998,6 +1998,46 @@ async function runModule({
     return latin1Decoder.decode(bytes.subarray(ptr, end));
   }
 
+  /* Read a bounded byte string as Latin-1. Use for scanf input, where
+   * arbitrary (non-UTF-8) bytes must round-trip exactly. */
+  function readLatin1Bounded(ptr, endPtr) {
+    const memory = instance.exports.memory;
+    const bytes = new Uint8Array(memory.buffer);
+    return latin1Decoder.decode(bytes.subarray(ptr, endPtr));
+  }
+
+  /* Match a C99 strtod-style floating constant at the start of `rest`.
+   * Handles decimal, hex floats (0x1.8p1), and inf/infinity/nan forms.
+   * Returns { value, length, special } or null. `special` marks inf/nan
+   * literals (so callers don't flag ERANGE on them). Shared by strtod
+   * and scanf %f. */
+  function matchFloatToken(rest) {
+    let m = rest.match(/^[+-]?inf(inity)?/i);
+    if (m) {
+      return { value: m[0][0] === '-' ? -Infinity : Infinity, length: m[0].length, special: true };
+    }
+    m = rest.match(/^[+-]?nan(\([0-9a-zA-Z_]*\))?/i);
+    if (m) {
+      return { value: NaN, length: m[0].length, special: true };
+    }
+    m = rest.match(/^([+-]?)0[xX]([0-9a-fA-F]+\.?[0-9a-fA-F]*|\.[0-9a-fA-F]+)([pP][+-]?\d+)?/);
+    if (m) {
+      const sign = m[1] === '-' ? -1 : 1;
+      const [ip, fp = ''] = m[2].split('.');
+      let v = 0;
+      for (const c of ip) v = v * 16 + parseInt(c, 16);
+      let scale = 1 / 16;
+      for (const c of fp) { v += parseInt(c, 16) * scale; scale /= 16; }
+      const exp = m[3] ? parseInt(m[3].substring(1), 10) : 0;
+      return { value: sign * v * Math.pow(2, exp), length: m[0].length, special: false };
+    }
+    m = rest.match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
+    if (m) {
+      return { value: parseFloat(m[0]), length: m[0].length, special: false };
+    }
+    return null;
+  }
+
   /* Create a varargs reader closure for the given va_args pointer */
   function createVaReader(va_args_ptr) {
     let arg_offset = 0;
@@ -2333,7 +2373,7 @@ async function runModule({
           /* Store number of characters written so far */
           const ptr = readArg('ptr');
           if (onN) {
-            onN(ptr, output.length);
+            onN(ptr, output.length, length);
           }
           continue;
         }
@@ -2379,10 +2419,15 @@ async function runModule({
   }
 
   /* Default %n handler: writes to WASM memory */
-  function defaultOnN(ptr, count) {
+  function defaultOnN(ptr, count, length) {
     const memory = instance.exports.memory;
     const view = new DataView(memory.buffer);
-    view.setInt32(ptr, count, true);
+    /* %n stores through the declared width — %hhn/%hn must not clobber
+       the bytes beyond it. */
+    if (length === 'hh') view.setInt8(ptr, count);
+    else if (length === 'h') view.setInt16(ptr, count, true);
+    else if (length === 'll') view.setBigInt64(ptr, BigInt(count), true);
+    else view.setInt32(ptr, count, true);
   }
 
   /* Helper to write a parsed scanf value to a WASM memory pointer */
@@ -2413,10 +2458,11 @@ async function runModule({
         break;
       }
       case 'string': {
-        const encoder = new TextEncoder();
-        const encoded = encoder.encode(String(value));
-        for (let si = 0; si < encoded.length; si++) bytes[ptr + si] = encoded[si];
-        bytes[ptr + encoded.length] = 0;
+        /* The input was decoded as Latin-1 (byte == char code); write it
+           back the same way so arbitrary bytes round-trip exactly. */
+        const s = String(value);
+        for (let si = 0; si < s.length; si++) bytes[ptr + si] = s.charCodeAt(si) & 0xff;
+        bytes[ptr + s.length] = 0;
         break;
       }
       case 'n':
@@ -2610,15 +2656,14 @@ async function runModule({
           break;
         }
         case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A': {
-          /* Float - use same regex pattern as __strtod_impl */
-          const start = si;
+          /* Float — same matcher as __strtod_impl (incl. hex/inf/nan) */
           const rest = width > 0 ? str.substring(si, si + width) : str.substring(si);
-          const m = rest.match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
+          const m = matchFloatToken(rest);
           if (!m) return { matched: matched, consumed: si };
-          si += m[0].length;
+          si += m.length;
           if (!suppress) {
             const ptr = readArg('ptr');
-            writeToPtr(ptr, 'float', parseFloat(m[0]), length);
+            writeToPtr(ptr, 'float', m.value, length);
             matched++;
           }
           break;
@@ -2779,7 +2824,9 @@ async function runModule({
       __vsscanf_impl: function (str_ptr, str_len, fmt_ptr, consumed_ptr, ap_ptr) {
         const memory = instance.exports.memory;
         const view = new DataView(memory.buffer);
-        const str = readStringBounded(str_ptr, str_ptr + str_len);
+        /* Latin-1: scanf input is bytes, not UTF-8 — 0xE9 must stay 0xE9,
+           not become U+FFFD. */
+        const str = readLatin1Bounded(str_ptr, str_ptr + str_len);
         const va_args_ptr = view.getUint32(ap_ptr, true);
         const result = scanString(str, fmt_ptr, va_args_ptr);
         view.setInt32(consumed_ptr, result.consumed, true);
@@ -2830,13 +2877,12 @@ async function runModule({
         const str = readStringBounded(nptr, bound);
         let i = 0;
         while (i < str.length && " \t\n\r\f\v".indexOf(str[i]) >= 0) i++;
-        const rest = str.substring(i);
-        const m = rest.match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
+        const m = matchFloatToken(str.substring(i));
         let val = 0.0, consumed = 0;
         if (m) {
-          val = parseFloat(m[0]);
-          consumed = i + m[0].length;
-          if (!isFinite(val)) setErrnoName('ERANGE');
+          val = m.value;
+          consumed = i + m.length;
+          if (!isFinite(val) && !m.special) setErrnoName('ERANGE');
         }
         if (endptr) {
           const memory = instance.exports.memory;

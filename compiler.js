@@ -20891,18 +20891,18 @@ double strtod(const char *nptr, char **endptr) {
   while (*s == ' ' || *s == '\\t' || *s == '\\n' ||
          *s == '\\r' || *s == '\\f' || *s == '\\v')
     s++;
+  /* The bound only limits how much memory the host may read — it must
+     cover at least the full token (decimal, hex float, inf/infinity,
+     nan(...)), and may overshoot: the host's anchored matcher computes
+     the exact consumed length itself. Scan the span of plausible
+     float-token characters. */
   const char *bound = s;
   if (*bound == '+' || *bound == '-') bound++;
-  while (*bound >= '0' && *bound <= '9') bound++;
-  if (*bound == '.') { bound++; while (*bound >= '0' && *bound <= '9') bound++; }
-  if (*bound == 'e' || *bound == 'E') {
-    const char *e = bound + 1;
-    if (*e == '+' || *e == '-') e++;
-    if (*e >= '0' && *e <= '9') {
-      bound = e;
-      while (*bound >= '0' && *bound <= '9') bound++;
-    }
-  }
+  while ((*bound >= '0' && *bound <= '9') ||
+         ((*bound | 32) >= 'a' && (*bound | 32) <= 'z') ||
+         *bound == '.' || *bound == '+' || *bound == '-' ||
+         *bound == '(' || *bound == ')' || *bound == '_')
+    bound++;
   return __strtod_impl(nptr, endptr, bound);
 }
 
