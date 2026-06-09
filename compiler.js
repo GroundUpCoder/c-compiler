@@ -10895,22 +10895,28 @@ class Parser {
     const compound = new AST.SCompound(Lexer.Loc.fromTok(startTok), statements);
     const savedCompound = this.currentCompound;
     this.currentCompound = compound;
-    while (!this.atEnd() && !this.atText("}")) {
-      const stmt = this.parseStatement();
-      // Flatten a [SLabel, body] label group into sibling markers in this
-      // compound, re-homing the label here. Keeps the in-compound label model
-      // (marker + following statements) byte-for-byte unchanged.
+    // Flatten a [SLabel, body] label group into sibling markers in this
+    // compound, re-homing the label here. Recurses so chained labels
+    // (`l1: l2: s;`) and nested groups also flatten fully — leaving the
+    // in-compound label model (marker + following statements) byte-for-byte
+    // identical to what direct parsing produced before label groups existed.
+    const flattenInto = (stmt) => {
       if (stmt instanceof AST.SCompound && stmt.isLabelGroup) {
         for (const child of stmt.statements) {
           if (child instanceof AST.SLabel) {
             child.enclosingBlock = compound;
             compound.labels.push(child);
+            statements.push(child);
+          } else {
+            flattenInto(child);
           }
-          statements.push(child);
         }
       } else {
         statements.push(stmt);
       }
+    };
+    while (!this.atEnd() && !this.atText("}")) {
+      flattenInto(this.parseStatement());
     }
     this.currentCompound = savedCompound;
     this.expect("}");
