@@ -185,6 +185,7 @@ function createFileSystem({ fs, ctx }) {
         }
         const entry = { nativeFd: fd, position: 0 };
         if (flags & 0x400) { /* O_APPEND */
+          entry.append = true;
           try {
             const stat = fs.fstatSync(fd);
             entry.position = stat.size;
@@ -220,8 +221,17 @@ function createFileSystem({ fs, ctx }) {
         const buf = new Uint8Array(memory.buffer, buf_ptr, count);
         const entry = fdTable[fd];
         try {
-          const n = fs.writeSync(entry.nativeFd, buf, 0, count, entry.position);
-          if (entry.position !== null) entry.position += n;
+          let n;
+          if (entry.append) {
+            /* O_APPEND: every write lands at current EOF, regardless of any
+               seek. The fd was opened with O_APPEND, so an unpositioned
+               write lets the kernel append; resync our position to EOF. */
+            n = fs.writeSync(entry.nativeFd, buf, 0, count);
+            try { entry.position = fs.fstatSync(entry.nativeFd).size; } catch (e) { }
+          } else {
+            n = fs.writeSync(entry.nativeFd, buf, 0, count, entry.position);
+            if (entry.position !== null) entry.position += n;
+          }
           return n;
         } catch (e) {
           setErrno(e);
@@ -892,7 +902,7 @@ function createBrowserFileSystem({ ctx }) {
         if (trunc) shared.syncHandle.truncate(0);
         const position = append ? shared.syncHandle.getSize() : 0;
 
-        return allocFd({ shared: shared, position: position, path: resolved });
+        return allocFd({ shared: shared, position: position, path: resolved, append: append });
       } catch (e) {
         setErrnoName('ENOENT');
         return -1;
@@ -973,8 +983,10 @@ function createBrowserFileSystem({ ctx }) {
       }
       const memory = getMemory();
       const src = new Uint8Array(memory.buffer, buf_ptr, count);
-      const n = entry.shared.syncHandle.write(src, { at: entry.position });
-      entry.position += n;
+      /* O_APPEND: every write lands at current EOF, regardless of any seek. */
+      const at = entry.append ? entry.shared.syncHandle.getSize() : entry.position;
+      const n = entry.shared.syncHandle.write(src, { at: at });
+      entry.position = at + n;
       return n;
     },
 
