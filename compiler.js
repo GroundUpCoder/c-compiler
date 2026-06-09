@@ -12137,12 +12137,37 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
   // emit here and segmentizes the try/catch contents inline — that way
   // gotos between the try and catch regions cross cleanly via state
   // transitions in the lifted while-switch.
+  // Any setjmp call surviving the lowering sits in a position the
+  // pattern-matcher doesn't recognize (e.g. `int r = setjmp(buf) + 1;`).
+  // setjmp was just removed from importedFunctions, so codegen would die
+  // with a raw "function 'setjmp' not found" JS error — report a proper
+  // diagnostic instead.
+  const findResidualSetjmp = (node) => {
+    if (!node) return null;
+    if (node instanceof AST.ECall) {
+      let callee = node.callee;
+      if (callee instanceof AST.EDecay) callee = callee.operand;
+      if (callee instanceof AST.EIdent && callee.name === "setjmp") return node;
+    }
+    for (const c of (node.children || [])) {
+      const r = findResidualSetjmp(c);
+      if (r) return r;
+    }
+    return null;
+  };
+
   const lowerFunc = (func) => {
     if (!func.body) return;
     if (func.body instanceof AST.SCompound) {
       lowerSetjmpInCompound(func.body, tag, counterVar);
     }
     func.body = lowerLongjmpInStmt(func.body, tag);
+    const residual = findResidualSetjmp(func.body);
+    if (residual) {
+      fatalError(residual.loc,
+        "unsupported use of setjmp — only forms like 'if (setjmp(buf))', " +
+        "'if (!setjmp(buf))', or 'if (setjmp(buf) == 0)' are supported");
+    }
   };
   for (const f of unit.definedFunctions) lowerFunc(f);
   for (const f of unit.staticFunctions) lowerFunc(f);
@@ -21781,7 +21806,14 @@ function parseAllUnits(fs, pp, inputFiles, options) {
     // now (out-of-scope diagnostics are emitted by Codegen.generateCode as
     // it walks the AST). Implicit-cast insertion happens inline at parse
     // time at each construction site.
-    Parser.lowerSetjmpLongjmp(unit, exceptionTagRegistry);
+    // The lowering can emit diagnostics (residual setjmp in unsupported
+    // positions) — run it against the same sink as the parse so they're
+    // reported through the normal parse-error flow below.
+    try {
+      withDiag(parseResult, () => Parser.lowerSetjmpLongjmp(unit, exceptionTagRegistry));
+    } catch (e) {
+      if (!(e instanceof FatalDiag)) throw e;
+    }
     if (!options?.compilerOptions?.noFold) {
       INLINER.optimize(unit, { noUndefined: !!options?.compilerOptions?.noUndefined });
     }
