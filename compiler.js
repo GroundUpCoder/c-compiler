@@ -15686,12 +15686,20 @@ class CodeGenerator {
               this.body.i32Const(blockSize);
               this.body.aop(WT_I32, ALU.OP_ADD);
               this.body.globalSet(this.stackPointerGlobalIdx);
+              // SP = argBlockBase + blockSize also reclaimed any struct-return
+              // temps deferred while evaluating the arguments (argBlockBase was
+              // recomputed upward by deferredDelta after each store) — drop them
+              // from the counter so the callNesting==0 fixup doesn't restore
+              // them a second time and leak SP upward.
+              this.structRetDeferred = deferredAtVaAlloc;
             } else {
               this.body.localGet(argBlockBase);
               this.body.i32Const(blockSize);
               this.body.aop(WT_I32, ALU.OP_ADD);
               this.body.globalSet(this.stackPointerGlobalIdx);
               this.body.i32Const(0);
+              // See scalar-return branch above.
+              this.structRetDeferred = deferredAtVaAlloc;
             }
 
             this.popLocalScope();
@@ -15800,12 +15808,18 @@ class CodeGenerator {
               this.body.i32Const(blockSize);
               this.body.aop(WT_I32, ALU.OP_ADD);
               this.body.globalSet(this.stackPointerGlobalIdx);
+              // SP = argBlockBase + blockSize also reclaimed any struct-return
+              // temps deferred while evaluating the arguments — see the direct
+              // variadic call path.
+              this.structRetDeferred = deferredAtVaAlloc;
             } else {
               this.body.localGet(argBlockBase);
               this.body.i32Const(blockSize);
               this.body.aop(WT_I32, ALU.OP_ADD);
               this.body.globalSet(this.stackPointerGlobalIdx);
               this.body.i32Const(0);
+              // See scalar-return branch above.
+              this.structRetDeferred = deferredAtVaAlloc;
             }
             this.popLocalScope();
             this.callNesting--;
