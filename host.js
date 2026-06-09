@@ -195,8 +195,16 @@ function createFileSystem({ fs, ctx }) {
       },
       close: function (fd) {
         if (fd < 3 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        const entry = fdTable[fd];
+        /* dup'd fds alias one entry; only close the native fd with the
+           last alias. */
+        if (entry.refs && entry.refs > 1) {
+          entry.refs--;
+          fdTable[fd] = null;
+          return 0;
+        }
         try {
-          fs.closeSync(fdTable[fd].nativeFd);
+          fs.closeSync(entry.nativeFd);
         } catch (e) {
           setErrno(e);
           return -1;
@@ -306,7 +314,10 @@ function createFileSystem({ fs, ctx }) {
         try { fs.fdatasyncSync(fdTable[fd].nativeFd); return 0; }
         catch (e) { setErrno(e); return -1; }
       },
-      sleep: function (seconds) { /* no-op — would block, we're async only */ return 0; },
+      sleep: new WebAssembly.Suspending(async function (seconds) {
+        await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+        return 0;
+      }),
       symlink: function (target_ptr, link_ptr) {
         try {
           fs.symlinkSync(readString(target_ptr), readString(link_ptr));
@@ -540,14 +551,11 @@ function createFileSystem({ fs, ctx }) {
         if (entry.type === 'pipe') {
           return allocFd({ type: 'pipe', pipe: entry.pipe, pipeEnd: entry.pipeEnd, position: null });
         }
-        /* For regular file fds, dup the native fd and share the position */
-        try {
-          const newNativeFd = fs.openSync('/dev/fd/' + entry.nativeFd, entry.position !== null ? 'r+' : 'r');
-          return allocFd({ nativeFd: newNativeFd, position: entry.position });
-        } catch (e) {
-          /* Fallback: share the same native fd (not ideal but functional) */
-          return allocFd({ nativeFd: entry.nativeFd, position: entry.position });
-        }
+        /* POSIX: dup'd fds share one open file description — including the
+           file offset. Alias the same entry object and refcount it so the
+           native fd is only closed when the last alias closes. */
+        entry.refs = (entry.refs || 1) + 1;
+        return allocFd(entry);
       },
       dup2: function (oldfd, newfd) {
         if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
@@ -557,7 +565,8 @@ function createFileSystem({ fs, ctx }) {
         if (newfd < fdTable.length && fdTable[newfd]) {
           const entry = fdTable[newfd];
           if (entry.nativeFd !== undefined && newfd >= 3) {
-            try { fs.closeSync(entry.nativeFd); } catch (e) { }
+            if (entry.refs && entry.refs > 1) entry.refs--;
+            else try { fs.closeSync(entry.nativeFd); } catch (e) { }
           }
           fdTable[newfd] = null;
         }
@@ -567,13 +576,21 @@ function createFileSystem({ fs, ctx }) {
         if (src.type === 'pipe') {
           fdTable[newfd] = { type: 'pipe', pipe: src.pipe, pipeEnd: src.pipeEnd, position: null };
         } else {
-          fdTable[newfd] = { nativeFd: src.nativeFd, position: src.position };
+          /* Same shared-description semantics as dup. */
+          src.refs = (src.refs || 1) + 1;
+          fdTable[newfd] = src;
         }
         return newfd;
       },
       isatty: function (fd) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return 0; }
-        if (fd <= 2) return 1; /* stdin/stdout/stderr are ttys */
+        if (fd <= 2) {
+          /* Report the real TTY-ness of the underlying stream — piped or
+             redirected std fds are not ttys. */
+          const stream = fd === 0 ? process.stdin : fd === 1 ? process.stdout : process.stderr;
+          if (stream && stream.isTTY) return 1;
+        }
+        setErrnoName('ENOTTY');
         return 0;
       },
       __tcgetattr: function (fd, iflag_ptr, oflag_ptr, cflag_ptr, lflag_ptr) {
@@ -1223,7 +1240,9 @@ function createBrowserFileSystem({ ctx }) {
       if (entry.type === 'pipe') {
         return allocFd({ type: 'pipe', pipe: entry.pipe, pipeEnd: entry.pipeEnd, position: null });
       }
-      return allocFd({ fileHandle: entry.fileHandle, buffer: entry.buffer, position: entry.position, dirty: entry.dirty, path: entry.path });
+      /* POSIX: dup'd fds share one open file description (offset) —
+         alias the same entry object. */
+      return allocFd(entry);
     },
     dup2: function (oldfd, newfd) {
       if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
@@ -1235,7 +1254,8 @@ function createBrowserFileSystem({ ctx }) {
       if (src.type === 'pipe') {
         fdTable[newfd] = { type: 'pipe', pipe: src.pipe, pipeEnd: src.pipeEnd, position: null };
       } else {
-        fdTable[newfd] = { fileHandle: src.fileHandle, buffer: src.buffer, position: src.position, dirty: src.dirty, path: src.path };
+        /* Same shared-description semantics as dup. */
+        fdTable[newfd] = src;
       }
       return newfd;
     },
