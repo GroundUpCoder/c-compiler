@@ -11324,6 +11324,20 @@ class Parser {
       const prevDecl = this.varScope.get(name);
       if (prevDecl && prevDecl instanceof AST.DVar && specs.storageClass !== Types.StorageClass.EXTERN) {
         prevDecl.definition = dvar;
+        // Propagate address-taken (MEMORY) allocation forward to the new
+        // definition. `&prevDecl` (e.g. via OP_ADDR) promotes the earlier
+        // DVar to MEMORY, but a later tentative re-declaration becomes the
+        // definition that codegen allocates; without this it would stay
+        // REGISTER and `emitAddressOf` would fail ("Cannot take address of
+        // REGISTER variable"). The extern-declaration-then-definition case
+        // is handled separately by setDefinition in linkTranslationUnits, so
+        // restrict to non-extern earlier declarations (the tentative-def /
+        // static case, e.g. TCC's `define_stack`) to avoid needlessly
+        // forcing extern-forward-declared scalars into linear memory.
+        if (prevDecl.allocClass === Types.AllocClass.MEMORY &&
+            prevDecl.storageClass !== Types.StorageClass.EXTERN) {
+          dvar.allocClass = Types.AllocClass.MEMORY;
+        }
       }
       // Use replace to update the scope entry (varScope.set fails if name already exists)
       this.varScope.replace(name, dvar);
