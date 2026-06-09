@@ -4,21 +4,17 @@ Upstream sources from the Tiny C Compiler 0.9.27 release
 (https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27.tar.bz2),
 Fabrice Bellard et al., LGPL (see `COPYING`).
 
-This is a **work in progress**, not a finished port. Status:
+Status: **functional.** TCC compiled to wasm by compiler.js runs and compiles C:
 
-- **Builds:** `node compiler.js vendor/tcc/bin.json -o /tmp/tcc.wasm` produces a
-  ~320 KB wasm with no errors.
-- **Runs:** the wasm executes — TCC's own preprocessor runs — but it is **not yet a
-  functioning compiler**. Running it currently fails while processing TCC's
-  predefined macros:
+- **Builds:** `node compiler.js vendor/tcc/bin.json -o /tmp/tcc.wasm` → ~320 KB wasm.
+- **Runs:** `node host.js /tmp/tcc.wasm -v` → `tcc version 0.9.27 (i386 Linux)`.
+- **Compiles:** `node host.js /tmp/tcc.wasm -c hello.c -o hello.o` produces a valid
+  `ELF 32-bit LSB relocatable, Intel 80386` object file. A C compiler running
+  inside wasm, itself built by this repo's C compiler.
 
-  ```
-  <define>: error: '##' cannot appear at either end of macro
-  ```
-
-  Under investigation. Likely a build-configuration mismatch (predefs / include
-  setup) between this `bin.json` and how the native `./configure && make` build
-  configures TCC — not yet confirmed to be a compiler.js codegen issue.
+Two compiler.js codegen bugs surfaced by this port were found, reduced, tested,
+and fixed (see "Dependency on compiler.js fixes" below) — finding such bugs is a
+primary reason for the port.
 
 ## Build configuration
 
@@ -35,15 +31,22 @@ One patch, guarded so the native build is unaffected:
   multi-target dispatcher `tcc_tool_cross`, which a directly-invoked cross-compiler
   never reaches, so a failing stub is sufficient to compile and link.
 
-## Dependency on a compiler.js fix
+## Dependency on compiler.js fixes
 
-Building this requires the parser fix in commit `a9dc1e5` ("propagate MEMORY alloc
-class to tentative re-declarations"). Without it, TCC's `define_stack`
-(declared in `tcc.h`, `&`-used in `tccpp.c`, re-declared in `tccgen.c`) triggers
-"Cannot take address of REGISTER variable".
+This port found two compiler.js bugs; both are fixed with regression tests:
+
+1. **`a9dc1e5`** — "propagate MEMORY alloc class to tentative re-declarations".
+   Without it, TCC's `define_stack` (declared in `tcc.h`, `&`-used in `tccpp.c`,
+   re-declared in `tccgen.c`) triggered "Cannot take address of REGISTER
+   variable" at *build* time. Test: `tests/unit/core/addr_taken_redeclared_global`.
+2. **`ad647cb`** — "keep a labeled statement's body attached to its label".
+   `if (3 == spc) bad_twosharp: tcc_error(...)` in `parse_define` was misparsed so
+   the `tcc_error` ran unconditionally, breaking TCC's macro predefs at *runtime*
+   (`'##' cannot appear at either end of macro`). Test:
+   `tests/unit/core/if_labeled_body`.
 
 ## TODO
 
-- Resolve the predefined-macro `##` runtime error.
-- Wire up runtime include/lib paths so the wasm tcc can actually compile a `.c`.
-- Smoke test: compile a hello-world to an i386 ELF inside the wasm.
+- Wire up the full runtime include/lib paths (`-c` works; richer programs need
+  TCC's bundled headers under a known prefix).
+- Try building larger programs and running the produced objects.
