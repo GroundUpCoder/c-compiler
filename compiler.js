@@ -20146,6 +20146,7 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
     write(2, "fwrite: stream is not writable\\n", 31);
     __wasm(void, (), op 0);
   }
+  if (size == 0 || nmemb == 0) return 0;
   size_t total = size * nmemb;
   const char *src = (const char *)ptr;
 
@@ -20180,6 +20181,7 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     write(2, "fread: stream is not readable\\n", 30);
     __wasm(void, (), op 0);
   }
+  if (size == 0 || nmemb == 0) return 0;
   size_t total = size * nmemb;
   char *dst = (char *)ptr;
   size_t got = 0;
@@ -20410,6 +20412,16 @@ int fclose(FILE *stream) {
 
 int fseek(FILE *stream, long offset, int whence) {
   fflush(stream);
+  if (whence == SEEK_CUR) {
+    /* The fd position sits at the end of any read-ahead; the stream's
+       logical position is buf_len - buf_pos bytes (plus a pending
+       ungetc) behind it. Relative seeks are relative to the logical
+       position. */
+    if (stream->flags & __F_RBUF) {
+      offset -= (long)(stream->buf_len - stream->buf_pos);
+    }
+    if (stream->ungetc_char != EOF) offset--;
+  }
   stream->buf_pos = 0;
   stream->buf_len = 0;
   stream->ungetc_char = EOF;
@@ -20422,13 +20434,16 @@ int fseek(FILE *stream, long offset, int whence) {
 long ftell(FILE *stream) {
   long pos = lseek(stream->fd, 0, SEEK_CUR);
   if (pos < 0) return -1;
-  if (stream->flags & __F_READ) {
+  if (stream->flags & __F_RBUF) {
+    /* Buffer holds read-ahead: logical position is behind the fd. */
     pos -= (stream->buf_len - stream->buf_pos);
-    if (stream->ungetc_char != EOF) pos--;
-  }
-  if (stream->flags & __F_WRITE) {
+  } else if (stream->flags & __F_WRITE) {
+    /* Buffer holds unflushed output: logical position is ahead of
+       the fd. On update streams (r+/w+/a+) both flags are set, so
+       __F_RBUF must decide which way buf_pos counts. */
     pos += stream->buf_pos;
   }
+  if ((stream->flags & __F_READ) && stream->ungetc_char != EOF) pos--;
   return pos;
 }
 
