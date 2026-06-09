@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/stdlib/setjmp_unsupported_diag/main.c.
+tests/unit/stdlib/setjmp_unsupported_diag/main.c:6: error: unsupported use of setjmp — only forms like 'if (setjmp(buf))', 'if (!setjmp(buf))', or 'if (setjmp(buf) == 0)' are supported

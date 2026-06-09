@@ -172,6 +172,13 @@ function workerMain() {
       return { name: td.name, status: 'skip', fallback: true,
                msg: 'stdin events need subprocess scheduling' };
     }
+    // Tests that assert on real process-level stdio (e.g. isatty on piped
+    // std fds) can't run in-process — the worker shares the parent's
+    // streams, which may or may not be a TTY.
+    if (td.config.subprocess) {
+      return { name: td.name, status: 'skip', fallback: true,
+               msg: 'requires subprocess stdio' };
+    }
     // process.chdir() isn't allowed in worker_threads, so any test that
     // exercises chdir cannot run in-process.
     if (WORKER_CHDIR_INCOMPATIBLE.has(td.name)) {
