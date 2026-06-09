@@ -1363,6 +1363,27 @@ function preprocess(filename, initialTokens, ppRegistry) {
             for (let ri = 0; ri < m.replacement.length; ++ri) {
               const repTok = m.replacement[ri];
 
+              // GNU extension: `, ## __VA_ARGS__` (also with a named variadic
+              // param) deletes the comma when the variadic args are empty.
+              // With non-empty args no actual paste happens — the comma and
+              // the fully-expanded args are emitted as-is. Without this
+              // special case the generic paste pass would merge `,` with the
+              // first arg token and drop the rest of the lexed result.
+              if (m.isVariadic && repTok.atPunct(Punct.COMMA) &&
+                  ri + 2 < m.replacement.length &&
+                  m.replacement[ri + 1].atPunct(Punct.HASH_HASH) &&
+                  m.replacement[ri + 2].kind === TokenKind.IDENT &&
+                  (m.replacement[ri + 2].text === "__VA_ARGS__" ||
+                   (m.variadicName && m.replacement[ri + 2].text === m.variadicName))) {
+                const vaTokens = paramMap.get(m.replacement[ri + 2].text);
+                if (vaTokens.length > 0) {
+                  substituted.push(repTok);
+                  substituted.push(...vaTokens);
+                }
+                ri += 2; // consume `,` ## param
+                continue;
+              }
+
               // Handle # stringification operator
               if (repTok.atPunct(Punct.HASH) && ri + 1 < m.replacement.length &&
                   m.replacement[ri + 1].kind === TokenKind.IDENT &&
