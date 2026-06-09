@@ -3599,10 +3599,15 @@ class Expr {
     _withChildren(_) { return this; /* DVars are mutated in place; children mirror initExprs */ }
   }
   class SCompound extends Stmt {
-    constructor(loc, statements, labels) {
+    constructor(loc, statements, labels, isLabelGroup) {
       super(loc, statements);
       this.statements = statements;
       this.labels = labels || [];
+      // Transient parse-time marker: a 2-element [SLabel, body] group produced
+      // for a labeled statement, so it can be flattened back into sibling
+      // markers when it sits directly inside a compound (see
+      // parseCompoundStatement). Never set after parsing.
+      this.isLabelGroup = !!isLabelGroup;
       Object.freeze(this);
     }
     _withChildren(newChildren) { return new SCompound(this.loc, newChildren, this.labels); }
@@ -10730,19 +10735,26 @@ class Parser {
     }
 
     // label: statement
+    //
+    // A labeled statement is `label : statement` — the label owns the
+    // following statement. SLabel is only a position-marker, so we parse the
+    // body here and return a [SLabel, body] "label group" compound. When the
+    // group sits directly in a compound it is flattened back into sibling
+    // markers (parseCompoundStatement), leaving the common case unchanged;
+    // when it is the bare body of an `if`/`while`/`for`/`else` it stays a
+    // compound so the body cannot detach from its guard (the bug:
+    //   if (c) lbl: s;   was parsed as   if (c) lbl: ; ... s;   making s
+    // unconditional). Reduced from TCC's parse_define.
     if (this.atKind(Lexer.TokenKind.IDENT) && this.peek(1)?.text === ":") {
       const labelTok = this.peek();
+      const labelLoc = Lexer.Loc.fromTok(labelTok);
       const name = this.advance().text;
       this.advance(); // skip :
       if (this.parsedLabels.has(name)) {
         this.error(this.peek(-2), `Duplicate label '${name}'`);
       }
-      const sl = new AST.SLabel(Lexer.Loc.fromTok(labelTok), name, this.currentCompound);
+      const sl = new AST.SLabel(labelLoc, name, null);
       this.parsedLabels.set(name, sl);
-      if (this.currentCompound) {
-        if (!this.currentCompound.labels) this.currentCompound.labels = [];
-        this.currentCompound.labels.push(sl);
-      }
       // Resolve pending forward gotos
       if (this.pendingGotos.has(name)) {
         sl.labelKind = Types.LabelKind.FORWARD;
@@ -10752,7 +10764,13 @@ class Parser {
         }
         this.pendingGotos.delete(name);
       }
-      return sl;
+      // A label at the very end of a compound (`lbl: }`) has no following
+      // statement — accepted as `lbl: ;` (GNU extension). Don't try to parse a
+      // statement off the closing brace.
+      const body = this.atText("}") ? new AST.SEmpty(labelLoc) : this.parseStatement();
+      const group = new AST.SCompound(labelLoc, [sl, body], [sl], /*isLabelGroup*/ true);
+      sl.enclosingBlock = group;
+      return group;
     }
 
     // __try/__catch
@@ -10879,7 +10897,20 @@ class Parser {
     this.currentCompound = compound;
     while (!this.atEnd() && !this.atText("}")) {
       const stmt = this.parseStatement();
-      statements.push(stmt);
+      // Flatten a [SLabel, body] label group into sibling markers in this
+      // compound, re-homing the label here. Keeps the in-compound label model
+      // (marker + following statements) byte-for-byte unchanged.
+      if (stmt instanceof AST.SCompound && stmt.isLabelGroup) {
+        for (const child of stmt.statements) {
+          if (child instanceof AST.SLabel) {
+            child.enclosingBlock = compound;
+            compound.labels.push(child);
+          }
+          statements.push(child);
+        }
+      } else {
+        statements.push(stmt);
+      }
     }
     this.currentCompound = savedCompound;
     this.expect("}");
