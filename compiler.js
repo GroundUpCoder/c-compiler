@@ -1090,9 +1090,16 @@ function postProcess(lexResult) {
         t.flags.stringPrefix === StringPrefix.PREFIX_U;
 
       const pos = { i: start };
-      const codepoint = isWideChar
+      let codepoint = isWideChar
         ? unescapeCodepoint(text, pos, end)
         : unescape(text, pos, end);
+      // char is signed on this target, so a narrow character constant in
+      // 0x80..0xFF (e.g. '\xff', '\200') has the value of the signed char
+      // it denotes: (char)0xFF == -1. Without this, `c == '\xff'` can
+      // never be true for a char c.
+      if (!isWideChar && codepoint >= 0x80 && codepoint <= 0xff) {
+        codepoint -= 0x100;
+      }
       t.kind = TokenKind.INT;
       t.integer = BigInt(codepoint);
     }
@@ -1517,11 +1524,16 @@ function preprocess(filename, initialTokens, ppRegistry) {
         if (next && next.atPunct(Punct.RPAREN)) consume();
       } else if (t.kind === TokenKind.CHAR) {
         let s = 0;
-        if (t.text[s] === "L" || t.text[s] === "U" || t.text[s] === "u") s++;
+        const isWide = t.text[s] === "L" || t.text[s] === "U" || t.text[s] === "u";
+        if (isWide) s++;
         s++;
         const e = t.text.length - 1;
         const p = { i: s };
-        left = new ConstEval.Item(s < e ? BigInt(unescape(t.text, p, e)) : 0n, ConstEval.SIGNED);
+        let v = s < e ? unescape(t.text, p, e) : 0;
+        // Match the CHAR→INT token resolution: narrow char constants are
+        // signed-char values, so 0x80..0xFF sign-extends.
+        if (!isWide && v >= 0x80 && v <= 0xff) v -= 0x100;
+        left = new ConstEval.Item(BigInt(v), ConstEval.SIGNED);
       } else if (t.kind === TokenKind.IDENT) {
         left = ZERO;
       } else if (t.kind === TokenKind.INT) {
@@ -10077,13 +10089,22 @@ class Parser {
       const inner = text.substring(start, end);
       const pos = { i: 0 };
       while (pos.i < inner.length) {
-        codepoints.push(Lexer.unescape(inner, pos, inner.length));
+        // Hex (\xNN) and octal (\012) escapes denote raw byte values; raw
+        // source characters, \u/\U universal character names, and simple
+        // escapes (\n etc.) denote characters. The distinction matters for
+        // narrow strings: a literal é (U+00E9) must encode as UTF-8 bytes
+        // C3 A9, while \xe9 must stay the single byte E9.
+        const isEscape = inner[pos.i] === "\\";
+        const escKind = isEscape ? inner[pos.i + 1] : null;
+        const cp = Lexer.unescape(inner, pos, inner.length);
+        const isByte = isEscape && (escKind === "x" || (escKind >= "0" && escKind <= "7"));
+        codepoints.push({ cp, isByte });
       }
     }
     if (prefix === Lexer.StringPrefix.PREFIX_u) {
       // UTF-16 string: element type is unsigned short (char16_t)
       const bytes = [];
-      for (const cp of codepoints) Lexer.encodeUtf16LE(cp, bytes);
+      for (const { cp } of codepoints) Lexer.encodeUtf16LE(cp, bytes);
       bytes.push(0); bytes.push(0); // null terminator (2 bytes)
       const elemCount = bytes.length / 2;
       return new AST.EString(startLoc, Types.arrayOf(Types.TUSHORT, elemCount), bytes);
@@ -10091,7 +10112,7 @@ class Parser {
     if (prefix === Lexer.StringPrefix.PREFIX_L) {
       // UTF-32 string: element type is int (wchar_t)
       const bytes = [];
-      for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
+      for (const { cp } of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
       return new AST.EString(startLoc, Types.arrayOf(Types.TINT, elemCount), bytes);
@@ -10099,17 +10120,17 @@ class Parser {
     if (prefix === Lexer.StringPrefix.PREFIX_U) {
       // UTF-32 string: element type is unsigned int (char32_t)
       const bytes = [];
-      for (const cp of codepoints) Lexer.encodeUtf32LE(cp, bytes);
+      for (const { cp } of codepoints) Lexer.encodeUtf32LE(cp, bytes);
       bytes.push(0); bytes.push(0); bytes.push(0); bytes.push(0); // null terminator (4 bytes)
       const elemCount = bytes.length / 4;
       return new AST.EString(startLoc, Types.arrayOf(Types.TUINT, elemCount), bytes);
     }
-    // Regular or u8 string: element type is char
-    // Codepoints <= 0xFF are raw bytes (from \xNN escapes).
-    // Codepoints > 0xFF (literal Unicode or \uNNNN) are encoded as UTF-8.
+    // Regular or u8 string: element type is char.
+    // Byte escapes pass through verbatim; characters are UTF-8 encoded.
     const bytes = [];
-    for (const cp of codepoints) {
-      if (cp <= 0xff) bytes.push(cp);
+    for (const { cp, isByte } of codepoints) {
+      if (isByte) bytes.push(cp & 0xff);
+      else if (cp <= 0x7f) bytes.push(cp);
       else Lexer.encodeUtf8(cp, bytes);
     }
     bytes.push(0);

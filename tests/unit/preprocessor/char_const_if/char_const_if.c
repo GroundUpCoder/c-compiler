@@ -21,9 +21,10 @@
 #error '\t' should be 9
 #endif
 
-/* Octal escape */
-#if '\377' != 255
-#error '\377' should be 255
+/* Octal escape: char is signed on this target, so '\377' == (char)0xFF
+   == -1, both at runtime and in #if (matching gcc/clang). */
+#if '\377' != -1
+#error '\377' should be -1
 #endif
 
 #if '\100' != 64

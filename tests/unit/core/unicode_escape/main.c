@@ -2,7 +2,7 @@
 #include <string.h>
 
 int main() {
-  /* \u with non-ASCII BMP: e-acute (U+00E9) -> raw byte 0xE9 (fits in byte) */
+  /* \u with non-ASCII BMP: e-acute (U+00E9) -> UTF-8: 0xC3 0xA9 */
   const char *cafe = "caf\u00E9";
   printf("cafe len=%d\n", (int)strlen(cafe));
   printf("cafe bytes:");
