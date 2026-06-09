@@ -22583,7 +22583,7 @@ ${hostBody}
 var __wasmBase64 = ${JSON.stringify(wasmBase64)};
 var __wasmBytes = Buffer.from(__wasmBase64, "base64");
 ${dataFileSetup}
-var __args = [${JSON.stringify(programName)}].concat(process.argv.slice(2));
+var __args = [${JSON.stringify(programName)}].concat(${JSON.stringify(runArgs)}).concat(process.argv.slice(2));
 runModule({
   bytes: __wasmBytes,
   args: __args,
