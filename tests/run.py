@@ -16,6 +16,8 @@ Categories:
     libpng — libpng golden PNG decode tests (RGB, RGBA, gray, palette, gradient)
     sqlite — SQLite integration tests (build sqlite.wasm, run .sql scripts)
     disw   — WebAssembly disassembler output tests
+    tcc    — differential tests: wasm-built tcc vs clang-built tcc must emit
+             byte-identical i386 ELF objects for the same inputs
     sourcemap — source map line number accuracy tests
     all    — all of the above
 """
@@ -62,6 +64,10 @@ DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
 SOURCEMAP_DIR = os.path.join(SCRIPT_DIR, "sourcemap")
 AST_DIR = os.path.join(SCRIPT_DIR, "ast")
 
+TCC_DIR = os.path.join(VENDOR_DIR, "tcc")
+TCC_NATIVE_BIN = os.path.join(BUILD_DIR, "tcc-native")
+TCC_TEST_DIR = os.path.join(SCRIPT_DIR, "tcc")
+
 SQLITE_DIR = os.path.join(VENDOR_DIR, "sqlite")
 SQLITE_TEST_DIR = os.path.join(SCRIPT_DIR, "sqlite")
 
@@ -72,7 +78,7 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap"]
+ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -1124,6 +1130,131 @@ def run_disw_tests(results, filter_str=None):
                            f"--- got ---\n{r.stdout}")
 
 
+# --- tcc (Tiny C Compiler, differential vs native build) ---
+#
+# Builds vendor/tcc twice: to wasm via compiler.js, and natively via clang.
+# Each test case compiles the same input.c with both and requires the
+# produced i386 ELF object files to be byte-identical — the native build
+# acts as the oracle, so no binary goldens live in the repo. This is a
+# deep integration test: any compiler.js miscompilation of tcc's own code
+# shows up as divergent (or failing) tcc output.
+
+def ensure_tcc_native_built():
+    """Build build/tcc-native from vendor/tcc with clang if missing/stale."""
+    os.makedirs(BUILD_DIR, exist_ok=True)
+    sources = [
+        os.path.join(TCC_DIR, f) for f in os.listdir(TCC_DIR)
+        if f.endswith((".c", ".h"))
+    ]
+    needs_build = not os.path.exists(TCC_NATIVE_BIN)
+    if not needs_build:
+        bin_mtime = os.path.getmtime(TCC_NATIVE_BIN)
+        needs_build = any(os.path.getmtime(s) > bin_mtime for s in sources)
+    if needs_build:
+        print("Building tcc-native...")
+        # Mirror bin.json's defines, minus TCC_WASM_BUILD (the execvp stub
+        # would conflict with the host libc's declaration).
+        r = subprocess.run(
+            ["clang", "-O1", "-w",
+             "-DONE_SOURCE=1", "-DTCC_TARGET_I386", "-DCONFIG_TCC_PREDEFS=1",
+             '-DCONFIG_TCC_CROSSPREFIX="i386-"', '-DCONFIG_TCCDIR="/tcc"',
+             '-DCONFIG_TCC_SYSINCLUDEPATHS="/tcc/include"',
+             '-DCONFIG_TCC_LIBPATHS="/tcc/lib"',
+             '-DCONFIG_TRIPLET="i386-unknown-elf"',
+             "-I", TCC_DIR, os.path.join(TCC_DIR, "tcc.c"),
+             "-o", TCC_NATIVE_BIN],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"tcc-native build failed:\n{r.stderr}", file=sys.stderr)
+            return False
+        print("tcc-native build complete.")
+    return True
+
+
+def run_tcc_tests(results, filter_str=None):
+    if not os.path.isdir(TCC_TEST_DIR):
+        results.record("tcc/setup", False, f"Test dir not found: {TCC_TEST_DIR}")
+        return
+    if not ensure_tcc_native_built():
+        results.record("tcc/build-native", False, "Failed to build tcc-native")
+        return
+    wasm, err = build_project(os.path.join(TCC_DIR, "bin.json"), timeout=300)
+    if wasm is None:
+        results.record("tcc/build-wasm", False, f"Failed to build tcc wasm:\n{err}")
+        return
+
+    os.makedirs(TEST_TMPDIR, exist_ok=True)
+
+    def run_wasm_tcc(args, timeout=30):
+        return subprocess.run(
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm] + args,
+            capture_output=True, text=True, timeout=timeout, cwd=ROOT_DIR)
+
+    def run_native_tcc(args, timeout=30):
+        return subprocess.run(
+            [TCC_NATIVE_BIN] + args,
+            capture_output=True, text=True, timeout=timeout, cwd=ROOT_DIR)
+
+    # Version banner: both builds must agree.
+    if not filter_str or filter_str in "tcc/version":
+        rw = run_wasm_tcc(["-v"])
+        rn = run_native_tcc(["-v"])
+        if rw.stdout == rn.stdout and rw.returncode == 0:
+            results.record("tcc/version", True)
+        else:
+            results.record("tcc/version", False,
+                           f"-v mismatch:\n--- native ---\n{rn.stdout}--- wasm ---\n{rw.stdout}")
+
+    test_dirs = sorted(
+        d for d in os.listdir(TCC_TEST_DIR)
+        if os.path.isdir(os.path.join(TCC_TEST_DIR, d))
+    )
+    for name in test_dirs:
+        test_name = f"tcc/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+        test_path = os.path.join(TCC_TEST_DIR, name)
+        input_c = os.path.join(test_path, "input.c")
+        if not os.path.exists(input_c):
+            results.skip(test_name)
+            continue
+
+        flags = []
+        config_file = os.path.join(test_path, "config.json")
+        if os.path.exists(config_file):
+            with open(config_file) as f:
+                cfg = json.load(f)
+            # Paths in flags are relative to the repo root (both compilers
+            # run with cwd=ROOT_DIR).
+            flags = cfg.get("flags", [])
+
+        out_wasm = os.path.join(TEST_TMPDIR, f"tcc_{name}.wasm.o")
+        out_native = os.path.join(TEST_TMPDIR, f"tcc_{name}.native.o")
+        rn = run_native_tcc(flags + ["-c", input_c, "-o", out_native])
+        if rn.returncode != 0:
+            results.record(test_name, False, f"native tcc failed:\n{rn.stderr}")
+            continue
+        rw = run_wasm_tcc(flags + ["-c", input_c, "-o", out_wasm])
+        if rw.returncode != 0:
+            results.record(test_name, False,
+                           f"wasm tcc exited {rw.returncode}:\n{rw.stdout}{rw.stderr}")
+            continue
+
+        with open(out_native, "rb") as f:
+            expected = f.read()
+        with open(out_wasm, "rb") as f:
+            got = f.read()
+        if expected == got:
+            results.record(test_name, True)
+        else:
+            diff_at = next((i for i, (a, b) in enumerate(zip(expected, got)) if a != b),
+                           min(len(expected), len(got)))
+            results.record(test_name, False,
+                           f"object files differ: native {len(expected)}B vs wasm {len(got)}B, "
+                           f"first difference at byte {diff_at}")
+
+
 # --- sourcemap tests ---
 
 def run_sourcemap_tests(results, filter_str=None):
@@ -1291,6 +1422,10 @@ def main():
         elif cat == "disw":
             results.section("disw")
             run_disw_tests(results, filter_str=args.filter)
+
+        elif cat == "tcc":
+            results.section("tcc")
+            run_tcc_tests(results, filter_str=args.filter)
 
         elif cat == "sourcemap":
             results.section("sourcemap")

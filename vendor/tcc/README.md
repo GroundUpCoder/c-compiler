@@ -33,7 +33,7 @@ One patch, guarded so the native build is unaffected:
 
 ## Dependency on compiler.js fixes
 
-This port found two compiler.js bugs; both are fixed with regression tests:
+This port found three compiler.js bugs; all fixed with regression tests:
 
 1. **`a9dc1e5`** — "propagate MEMORY alloc class to tentative re-declarations".
    Without it, TCC's `define_stack` (declared in `tcc.h`, `&`-used in `tccpp.c`,
@@ -44,6 +44,19 @@ This port found two compiler.js bugs; both are fixed with regression tests:
    the `tcc_error` ran unconditionally, breaking TCC's macro predefs at *runtime*
    (`'##' cannot appear at either end of macro`). Test:
    `tests/unit/core/if_labeled_body`.
+3. **`689d51a`** — "goto-normalizer: don't hoist labels past trailing statements
+   in intermediate blocks". `parse_number`'s `float_frac_parse:` label sits in
+   nested ifs with buffer-finalization statements trailing in an intermediate
+   block; the hoist silently skipped them, so every float constant and every
+   braced initializer failed to compile under wasm-tcc. Test:
+   `tests/unit/core/goto_hoist_intermediate_tail`.
+
+## Tests
+
+`python3 tests/run.py --types=tcc` builds tcc twice — to wasm via compiler.js
+and natively via clang (`build/tcc-native`) — compiles the inputs under
+`tests/tcc/*/input.c` with both, and requires byte-identical i386 ELF output.
+The native build is the oracle, so no binary goldens are checked in.
 
 ## TODO
 
