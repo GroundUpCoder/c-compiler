@@ -13431,6 +13431,27 @@ function constEvalAddr(expr, policy) {
     }
     return null;
   }
+  // Member lvalue: base.member → addr(base) + offset. Needed for nested
+  // chains like &g.inner.field — the OP_ADDR case peels one member and
+  // recurses here with the inner EMember as the base; without this the
+  // chain fell through to constEvalExpr (which has no EMember case) and
+  // the initializer silently became 0 (found via micropython's
+  // MP_STATE_VM(...) ROM tables: &mp_state_ctx.vm.mp_sys_argv_obj).
+  if (expr instanceof AST.EMember) {
+    const baseAddr = constEvalAddr(expr.base, policy);
+    if (baseAddr !== null) return baseAddr + expr.memberDecl.byteOffset;
+    return null;
+  }
+  // Subscript lvalue: base[idx] → addr(base) + idx * elemSize, for
+  // chains like &g.arr[2].field.
+  if (expr instanceof AST.ESubscript) {
+    const baseAddr = constEvalAddr(expr.array, policy);
+    const idx = constEvalExpr(expr.index, policy);
+    if (baseAddr !== null && idx && idx.kind === "int") {
+      return baseAddr + Number(idx.intVal) * expr.type.size;
+    }
+    return null;
+  }
   // General: try constEvalExpr and extract address
   const v = constEvalExpr(expr, policy);
   if (v && v.kind === "addr") return v.addrVal;
