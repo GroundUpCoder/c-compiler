@@ -2935,7 +2935,12 @@ async function runModule({
       log2: Math.log2,
       log10: Math.log10,
       log1p: Math.log1p,
-      pow: Math.pow,
+      pow: function (x, y) {
+        /* C99 F.9.4.4: pow(x, ±0) and pow(+1, y) are 1.0 even when the
+           other operand is NaN; JS Math.pow returns NaN for those. */
+        if (y === 0 || x === 1) return 1;
+        return Math.pow(x, y);
+      },
       cbrt: Math.cbrt,
       hypot: Math.hypot,
       fmod: function (x, y) { return x % y; },
