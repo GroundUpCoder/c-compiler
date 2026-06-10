@@ -16516,6 +16516,54 @@ function collectFileScopeCompoundLiterals(unit) {
   return out;
 }
 
+// --gc-spill-locals: force scalar pointer/integer locals into the
+// linear-memory shadow stack instead of wasm locals. Conservative
+// garbage collectors (micropython's gc, Boehm-style) find roots by
+// scanning the C stack — wasm locals live outside linear memory and are
+// invisible to any scan, so a heap pointer held only in a wasm local
+// across a collection gets swept as garbage (found via micropython's
+// string_format2: a vstr buffer was collected while still referenced
+// from a local). Spilling named locals closes the main hole; values on
+// the wasm OPERAND stack between nested calls remain a narrow residual
+// window.
+function spillScalarLocals(units) {
+  const spill = (d) => {
+    if (!(d instanceof AST.DVar)) return;
+    if (d.storageClass === Types.StorageClass.STATIC ||
+        d.storageClass === Types.StorageClass.EXTERN) return;
+    const t = d.type.removeQualifiers();
+    // GC reference types cannot live in linear memory; floats carry no
+    // pointer bits worth scanning.
+    if (t.isRef && t.isRef()) return;
+    if (t.isPointer() || t.isInteger()) d.allocClass = Types.AllocClass.MEMORY;
+  };
+  const walk = (node) => {
+    if (!node) return;
+    if (node instanceof AST.SDecl) {
+      for (const d of node.declarations) spill(d);
+    }
+    if (node.children) for (const c of node.children) walk(c);
+  };
+  // A function that allocates with the ALLOCA intrinsic must not get a
+  // frame: the frame epilogue restores SP, which would free the alloca'd
+  // block before the caller sees it (alloca() relies on returning with
+  // the SP bump intact; the CALLER's epilogue is what frees it).
+  const usesAlloca = (node) => {
+    if (!node) return false;
+    if (node instanceof AST.EIntrinsic && node.intrinsicKind === Types.IntrinsicKind.ALLOCA) return true;
+    if (node.children) for (const c of node.children) if (usesAlloca(c)) return true;
+    return false;
+  };
+  for (const unit of units) {
+    for (const f of [...unit.definedFunctions, ...unit.staticFunctions]) {
+      if (!f.body) continue;
+      if (usesAlloca(f.body)) continue;
+      for (const p of f.parameters) spill(p);
+      walk(f.body);
+    }
+  }
+}
+
 function generateCode(units, outputFile, options) {
   const writeErr = options && options.writeErr
     ? options.writeErr
@@ -16523,6 +16571,9 @@ function generateCode(units, outputFile, options) {
   const fatalExit = options && options.fatalExit
     ? options.fatalExit
     : (typeof process !== 'undefined' && process.exit ? (code) => process.exit(code) : (code) => { throw new Error(`Fatal error (exit code ${code})`); });
+  if (options && options.compilerOptions && options.compilerOptions.gcSpillLocals) {
+    spillScalarLocals(units);
+  }
   const wmod = new WasmModule();
   const cg = new CodeGenerator(wmod, options);
 
@@ -22954,6 +23005,8 @@ function main() {
       compilerOptions.gcSections = true;
     } else if (args[i] === "--gc-no-export-roots") {
       compilerOptions.gcNoExportRoots = true;
+    } else if (args[i] === "--gc-spill-locals") {
+      compilerOptions.gcSpillLocals = true;
     } else if (args[i] === "--no-fold") {
       compilerOptions.noFold = true;
     } else if (args[i] === "--no-goto-normalize") {
