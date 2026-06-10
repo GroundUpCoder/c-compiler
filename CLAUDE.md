@@ -20,3 +20,10 @@ Planned work and design docs live in the `todos/` folder. Each file covers a dis
 - **Libraries**: `zlib`, `libpng`, `freetype`
 - **Frontend infra (JS, not C)**: `xterm` (terminal widget), `codemirror` (editor widget)
 - **Project-specific tools**: `disw` (WASM disassembler), `hello` (minimal smoke test)
+
+## Toolchain
+
+- **cmake**: always use the uv-managed install at `~/.local/bin/cmake`
+  (`uv tool install cmake`). Do NOT use `/Applications/CMake.app` (shadows
+  it on PATH) or any package-manager cmake. Invoke by full path:
+  `~/.local/bin/cmake`.
