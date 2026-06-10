@@ -1351,17 +1351,37 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
             }
 
-            // Helper: check if position ri is adjacent to ## in replacement list
-            function isAdjacentToPaste(ri) {
-              if (ri > 0 && m.replacement[ri - 1].atPunct(Punct.HASH_HASH)) return true;
-              if (ri + 1 < m.replacement.length && m.replacement[ri + 1].atPunct(Punct.HASH_HASH)) return true;
+            // Helper: check if position ri is adjacent to ## in a replacement list
+            function isAdjacentToPaste(repl, ri) {
+              if (ri > 0 && repl[ri - 1].atPunct(Punct.HASH_HASH)) return true;
+              if (ri + 1 < repl.length && repl[ri + 1].atPunct(Punct.HASH_HASH)) return true;
               return false;
             }
 
-            // Substitute parameters in replacement list
-            const substituted = [];
-            for (let ri = 0; ri < m.replacement.length; ++ri) {
-              const repTok = m.replacement[ri];
+            // Substitute parameters in a replacement token list. Recurses for
+            // __VA_OPT__ content (which may itself reference parameters).
+            function substituteTokens(repl) {
+              const out = [];
+              for (let ri = 0; ri < repl.length; ++ri) {
+              const repTok = repl[ri];
+
+              // C23 __VA_OPT__(content): expands content iff the variadic
+              // arguments are non-empty.
+              if (m.isVariadic && repTok.kind === TokenKind.IDENT &&
+                  repTok.text === "__VA_OPT__" &&
+                  ri + 1 < repl.length && repl[ri + 1].atPunct(Punct.LPAREN)) {
+                let depth = 0, j = ri + 1;
+                for (; j < repl.length; j++) {
+                  if (repl[j].atPunct(Punct.LPAREN)) depth++;
+                  else if (repl[j].atPunct(Punct.RPAREN)) { depth--; if (depth === 0) break; }
+                }
+                const content = repl.slice(ri + 2, j);
+                if (paramMap.get("__VA_ARGS__").length > 0) {
+                  out.push(...substituteTokens(content));
+                }
+                ri = j; // skip past ')'
+                continue;
+              }
 
               // GNU extension: `, ## __VA_ARGS__` (also with a named variadic
               // param) deletes the comma when the variadic args are empty.
@@ -1370,26 +1390,26 @@ function preprocess(filename, initialTokens, ppRegistry) {
               // special case the generic paste pass would merge `,` with the
               // first arg token and drop the rest of the lexed result.
               if (m.isVariadic && repTok.atPunct(Punct.COMMA) &&
-                  ri + 2 < m.replacement.length &&
-                  m.replacement[ri + 1].atPunct(Punct.HASH_HASH) &&
-                  m.replacement[ri + 2].kind === TokenKind.IDENT &&
-                  (m.replacement[ri + 2].text === "__VA_ARGS__" ||
-                   (m.variadicName && m.replacement[ri + 2].text === m.variadicName))) {
-                const vaTokens = paramMap.get(m.replacement[ri + 2].text);
+                  ri + 2 < repl.length &&
+                  repl[ri + 1].atPunct(Punct.HASH_HASH) &&
+                  repl[ri + 2].kind === TokenKind.IDENT &&
+                  (repl[ri + 2].text === "__VA_ARGS__" ||
+                   (m.variadicName && repl[ri + 2].text === m.variadicName))) {
+                const vaTokens = paramMap.get(repl[ri + 2].text);
                 if (vaTokens.length > 0) {
-                  substituted.push(repTok);
-                  substituted.push(...vaTokens);
+                  out.push(repTok);
+                  out.push(...vaTokens);
                 }
                 ri += 2; // consume `,` ## param
                 continue;
               }
 
               // Handle # stringification operator
-              if (repTok.atPunct(Punct.HASH) && ri + 1 < m.replacement.length &&
-                  m.replacement[ri + 1].kind === TokenKind.IDENT &&
-                  rawParamMap.has(m.replacement[ri + 1].text)) {
+              if (repTok.atPunct(Punct.HASH) && ri + 1 < repl.length &&
+                  repl[ri + 1].kind === TokenKind.IDENT &&
+                  rawParamMap.has(repl[ri + 1].text)) {
                 ri++;
-                const rawTokens = rawParamMap.get(m.replacement[ri].text);
+                const rawTokens = rawParamMap.get(repl[ri].text);
                 let str = '"';
                 for (let ai = 0; ai < rawTokens.length; ++ai) {
                   if (ai > 0 && rawTokens[ai].flags.hasSpace) str += ' ';
@@ -1402,26 +1422,29 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 const strTok = cloneToken(repTok);
                 strTok.kind = TokenKind.STRING;
                 strTok.text = intern(str);
-                substituted.push(strTok);
+                out.push(strTok);
                 continue;
               }
 
               if (repTok.kind === TokenKind.IDENT && paramMap.has(repTok.text)) {
-                const adjPaste = isAdjacentToPaste(ri);
+                const adjPaste = isAdjacentToPaste(repl, ri);
                 const map = adjPaste ? rawParamMap : paramMap;
                 const argTokens = map.get(repTok.text);
                 if (argTokens.length === 0 && adjPaste) {
                   const pm = cloneToken(repTok);
                   pm.kind = TokenKind.PLACEMARKER;
                   pm.text = "";
-                  substituted.push(pm);
+                  out.push(pm);
                 } else {
-                  substituted.push(...argTokens);
+                  out.push(...argTokens);
                 }
               } else {
-                substituted.push(repTok);
+                out.push(repTok);
               }
+              }
+              return out;
             }
+            const substituted = substituteTokens(m.replacement);
 
             // Token pasting (##) pass
             for (let si = 0; si < substituted.length;) {
