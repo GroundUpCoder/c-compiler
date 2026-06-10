@@ -22,6 +22,10 @@
 #define SCRIPT_MAX 65536
 static char script[SCRIPT_MAX + 1];
 
+// Spilled-locals builds (--gc-spill-locals) have much larger frames;
+// the default single 64KB stack page overflows inside the VM.
+__minstack(1048576);
+
 static char *stack_top;
 static char heap[MICROPY_HEAP_SIZE];
 

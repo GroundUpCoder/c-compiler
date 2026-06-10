@@ -2,7 +2,10 @@
   "bin": true,
   "name": "micropython-test",
   "description": "MicroPython 1.28.0 built with a stdin-driven test main (no REPL)",
-  "includes": [".", "genhdr"],
+  "includes": [
+    ".",
+    "genhdr"
+  ],
   "sources": [
     "py/argcheck.c",
     "py/asmbase.c",
@@ -116,5 +119,8 @@
     "test_main.c",
     "uart_core.c",
     "_frozen_mpy.c"
+  ],
+  "compilerArgs": [
+    "--gc-spill-locals"
   ]
 }
