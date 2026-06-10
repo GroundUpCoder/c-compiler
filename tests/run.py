@@ -18,6 +18,7 @@ Categories:
     disw   — WebAssembly disassembler output tests
     tcc    — differential tests: wasm-built tcc vs clang-built tcc must emit
              byte-identical i386 ELF objects for the same inputs
+    libc   — musl libc-test functional suite (self-checking conformance)
     sourcemap — source map line number accuracy tests
     all    — all of the above
 """
@@ -64,6 +65,8 @@ DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
 SOURCEMAP_DIR = os.path.join(SCRIPT_DIR, "sourcemap")
 AST_DIR = os.path.join(SCRIPT_DIR, "ast")
 
+LIBC_TEST_DIR = os.path.join(VENDOR_DIR, "libc-test")
+
 TCC_DIR = os.path.join(VENDOR_DIR, "tcc")
 TCC_NATIVE_BIN = os.path.join(BUILD_DIR, "tcc-native")
 TCC_TEST_DIR = os.path.join(SCRIPT_DIR, "tcc")
@@ -78,7 +81,7 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc"]
+ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -1259,6 +1262,96 @@ def run_tcc_tests(results, filter_str=None):
                            f"first difference at byte {diff_at}")
 
 
+# --- libc (musl libc-test functional suite) ---
+#
+# Self-checking conformance tests: t_error() prints a diagnostic and sets
+# t_status; main returns it. Pass = exit 0 with empty output. See
+# vendor/libc-test/README.md.
+
+LIBC_TEST_SKIP = {
+    # No process model on this target
+    "vfork": "no fork/exec", "popen": "no fork/exec", "spawn": "no fork/exec",
+    "fcntl": "needs fork + fd inheritance",
+    "stat": "needs uids (geteuid)",
+    "env": "host-backed environ; no clearenv/putenv",
+    "time": "no tzset/putenv timezone control",
+    # No threads / TLS / dynamic linking
+    "pthread_cancel-points": "no threads", "pthread_cancel": "no threads",
+    "pthread_cond": "no threads", "pthread_mutex": "no threads",
+    "pthread_mutex_pi": "no threads", "pthread_robust": "no threads",
+    "pthread_tsd": "no threads", "sem_init": "no threads",
+    "sem_open": "no named semaphores",
+    "tls_align": "no TLS", "tls_align_dlopen": "no TLS/dlopen",
+    "tls_align_dso": "no TLS", "tls_init": "no TLS",
+    "tls_init_dlopen": "no TLS/dlopen", "tls_init_dso": "no TLS",
+    "tls_local_exec": "no TLS",
+    "dlopen": "no dynamic linking", "dlopen_dso": "no dynamic linking",
+    # No SysV IPC / sockets
+    "ipc_msg": "no SysV IPC", "ipc_sem": "no SysV IPC", "ipc_shm": "no SysV IPC",
+    "socket": "no sockets", "inet_pton": "no networking",
+    # Library features not implemented (TODO candidates)
+    "basename": "TODO: libgen.h", "dirname": "TODO: libgen.h",
+    "fnmatch": "TODO: fnmatch()",
+    "search_hsearch": "TODO: search.h", "search_insque": "TODO: search.h",
+    "search_lsearch": "TODO: search.h", "search_tsearch": "TODO: search.h",
+    "random": "TODO: random()/srandom()/initstate()",
+    "strptime": "TODO: strptime()",
+    "setjmp": "TODO: sigsetjmp/siglongjmp aliases",
+    "fdopen": "TODO: mkstemp()",
+    "memstream": "TODO: open_memstream()",
+    "wcstol": "TODO: wcstol() family",
+    "fwscanf": "TODO: wide scanf",
+    "strftime": "TODO: width modifiers on %F, ISO %g/%G, %s (epoch)",
+    "sscanf_long": "needs setrlimit",
+    # Locale machinery
+    "clocale_mbfuncs": "no langinfo/locale beyond C",
+    "mbc": "no langinfo/locale beyond C",
+    "swprintf": "no langinfo/locale beyond C",
+    "iconv_open": "no iconv",
+    "mntent": "no /etc/mtab",
+    "utime": "TODO: utimensat()",
+    "crypt": "no crypt()",
+    "tgmath": "complex numbers not supported (__STDC_NO_COMPLEX__)",
+}
+
+
+def run_libc_tests(results, filter_str=None):
+    func_dir = os.path.join(LIBC_TEST_DIR, "src", "functional")
+    common_dir = os.path.join(LIBC_TEST_DIR, "src", "common")
+    if not os.path.isdir(func_dir):
+        results.record("libc/setup", False, f"Not found: {func_dir}")
+        return
+    os.makedirs(TEST_TMPDIR, exist_ok=True)
+    support = [os.path.join(common_dir, "print.c"), os.path.join(common_dir, "rand.c")]
+
+    for fname in sorted(os.listdir(func_dir)):
+        if not fname.endswith(".c"):
+            continue
+        name = fname[:-2]
+        test_name = f"libc/{name}"
+        if filter_str and filter_str not in test_name:
+            continue
+        if name in LIBC_TEST_SKIP:
+            results.skip(test_name)
+            continue
+        wasm = os.path.join(TEST_TMPDIR, f"libc_{name}.wasm")
+        r = subprocess.run(
+            [*COMPILER_CMD, os.path.join(func_dir, fname), *support,
+             f"-I{common_dir}", "-o", wasm],
+            capture_output=True, text=True, timeout=120, cwd=ROOT_DIR)
+        if r.returncode != 0:
+            results.record(test_name, False, f"compile failed:\n{r.stderr[:800]}")
+            continue
+        r = subprocess.run(
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+            capture_output=True, text=True, timeout=60, cwd=ROOT_DIR)
+        if r.returncode == 0 and r.stdout.strip() == "":
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False,
+                           f"exit {r.returncode}\n{r.stdout[:800]}{r.stderr[:300]}")
+
+
 # --- sourcemap tests ---
 
 def run_sourcemap_tests(results, filter_str=None):
@@ -1430,6 +1523,10 @@ def main():
         elif cat == "tcc":
             results.section("tcc")
             run_tcc_tests(results, filter_str=args.filter)
+
+        elif cat == "libc":
+            results.section("libc")
+            run_libc_tests(results, filter_str=args.filter)
 
         elif cat == "sourcemap":
             results.section("sourcemap")
