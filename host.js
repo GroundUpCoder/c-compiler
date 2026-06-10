@@ -2937,8 +2937,10 @@ async function runModule({
       log1p: Math.log1p,
       pow: function (x, y) {
         /* C99 F.9.4.4: pow(x, ±0) and pow(+1, y) are 1.0 even when the
-           other operand is NaN; JS Math.pow returns NaN for those. */
+           other operand is NaN, and pow(-1, ±inf) is 1.0; JS Math.pow
+           returns NaN for all of those. */
         if (y === 0 || x === 1) return 1;
+        if (x === -1 && (y === Infinity || y === -Infinity)) return 1;
         return Math.pow(x, y);
       },
       cbrt: Math.cbrt,

@@ -7,6 +7,7 @@ int main(void) {
   printf("%g %g %g\n", pow(1.0, NAN), pow(NAN, 0.0), pow(1.0, INFINITY));
   printf("%g %g %g\n", pow(INFINITY, 0.0), pow(-NAN, 0.0), pow(1.0, -INFINITY));
   printf("%g %g\n", pow(2.0, 10.0), pow(-3.0, 2.0));
+  printf("%g %g\n", pow(-1.0, INFINITY), pow(-1.0, -INFINITY));
   printf("%d %d\n", isnan(pow(NAN, 1.0)) ? 1 : 0, isnan(pow(2.0, NAN)) ? 1 : 0);
   return 0;
 }
