@@ -25,3 +25,11 @@ extern const struct _mp_obj_module_t mp_module_sys;
 // MICROPY_REGISTERED_MODULES
 
 #define MICROPY_HAVE_REGISTERED_EXTENSIBLE_MODULES  0
+
+// Hand-extended (the upstream generator makemoduledefs.py also scans for
+// MP_REGISTER_MODULE_DELEGATION; this snapshot predates enabling
+// MICROPY_PY_SYS_PATH/ARGV which need sys's attr delegation):
+extern void mp_module_sys_attr(mp_obj_t self_in, qstr attr, mp_obj_t *dest);
+#define MICROPY_MODULE_DELEGATIONS \
+    { MP_ROM_PTR(&mp_module_sys), mp_module_sys_attr }, \
+// MICROPY_MODULE_DELEGATIONS

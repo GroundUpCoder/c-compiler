@@ -36,6 +36,16 @@
 #define MICROPY_PY_BUILTINS_STR_OP_MODULO (1)
 #define MICROPY_LONGINT_IMPL              (MICROPY_LONGINT_IMPL_MPZ)
 #define MICROPY_MULTIPLE_INHERITANCE      (1)
+#define MICROPY_PY_ATTRTUPLE              (1)
+#define MICROPY_PY_BUILTINS_POW3          (1)
+#define MICROPY_PY_BUILTINS_STR_CENTER    (1)
+#define MICROPY_PY_ALL_SPECIAL_METHODS    (1)
+#define MICROPY_PY_REVERSE_SPECIAL_METHODS (1)
+#define MICROPY_CAN_OVERRIDE_BUILTINS     (1)
+#define MICROPY_PY_BUILTINS_NOTIMPLEMENTED (1)
+#define MICROPY_PY_SYS_MAXSIZE            (1)
+#define MICROPY_BUILTIN_METHOD_CHECK_SELF_ARG (1)
+#define MICROPY_WARNINGS                  (1)
 #define MICROPY_PY_BUILTINS_STR_PARTITION (1)
 #define MICROPY_PY_BUILTINS_STR_SPLITLINES (1)
 #define MICROPY_PY_BUILTINS_BYTEARRAY     (1)
@@ -70,8 +80,8 @@
 // Disable all optional sys module features.
 #define MICROPY_PY_SYS_MODULES            (0)
 #define MICROPY_PY_SYS_EXIT               (0)
-#define MICROPY_PY_SYS_PATH               (0)
-#define MICROPY_PY_SYS_ARGV               (0)
+#define MICROPY_PY_SYS_PATH               (1)
+#define MICROPY_PY_SYS_ARGV               (1)
 
 // type definitions for the specific machine
 
