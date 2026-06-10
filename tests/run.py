@@ -849,16 +849,15 @@ def run_micropython_tests(results, filter_str=None):
 # them in the failure list is just noise. Substring match against the
 # relative path under tests/.
 MICROPYTHON_UPSTREAM_SKIP = {
-    "intbig",        # requires MICROPY_LONGINT_IMPL_MPZ
     "complex",       # requires MICROPY_PY_BUILTINS_COMPLEX
     "tstring",       # Python 3.13 t-strings, not enabled
     "/struct_",      # `struct` module not enabled in minimal port
+    "float2int_",    # imports `struct` to probe float width (module not built)
     "/sys_",         # most sys_* tests need MICROPY_PY_SYS_*
     "/io_",          # MICROPY_PY_IO disabled
     "/uctypes",      # uctypes module not enabled
     "/array",        # array module not enabled
     "/gc",           # MICROPY_PY_GC details
-    "math_factorial",         # needs intbig
     "math_domain_special",    # has minor float-precision differences
 }
 
