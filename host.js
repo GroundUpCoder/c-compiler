@@ -2038,6 +2038,75 @@ async function runModule({
     return null;
   }
 
+  /* --- Exact decimal float formatting (printf %f/%e/%g) ---
+   *
+   * JS toFixed/toExponential/toPrecision round ties away from zero and
+   * drop the sign of -0; C printf rounds the EXACT binary value with
+   * ties-to-even. A double is m·2^e, so its decimal expansion is finite
+   * and exactly computable with BigInt (2^-k scales to 5^k/10^k); we
+   * round that expansion at the requested digit. */
+
+  /* |val| = int / 10^frac, exactly. Finite val only. */
+  function floatExactDecimal(val) {
+    const buf = new ArrayBuffer(8);
+    new Float64Array(buf)[0] = val;
+    const bits = new DataView(buf).getBigUint64(0, true);
+    const expBits = Number((bits >> 52n) & 0x7ffn);
+    let mant = bits & 0xfffffffffffffn;
+    let e2;
+    if (expBits === 0) { e2 = -1074; /* denormal */ }
+    else { mant |= 0x10000000000000n; e2 = expBits - 1075; }
+    if (e2 >= 0) return { int: mant << BigInt(e2), frac: 0 };
+    return { int: mant * 5n ** BigInt(-e2), frac: -e2 };
+  }
+
+  /* round(I / 10^(frac-p)) with ties-to-even — i.e. I/10^frac rounded to
+   * p fractional digits, returned scaled by 10^p. */
+  function roundDecimalHalfEven(I, frac, p) {
+    if (frac <= p) return I * 10n ** BigInt(p - frac);
+    const pow = 10n ** BigInt(frac - p);
+    let q = I / pow;
+    const r = I % pow;
+    const half = pow / 2n;
+    if (r > half || (r === half && (q & 1n) === 1n)) q += 1n;
+    return q;
+  }
+
+  /* %f body for |val| with `prec` fractional digits (no sign). */
+  function fmtFixedExact(val, prec) {
+    const { int: I, frac } = floatExactDecimal(val);
+    const q = roundDecimalHalfEven(I, frac, prec).toString();
+    if (prec === 0) return q;
+    const s = q.padStart(prec + 1, '0');
+    return s.slice(0, -prec) + '.' + s.slice(-prec);
+  }
+
+  /* %e body for |val|: mantissa with `prec` fractional digits + decimal
+   * exponent. Returns { mant, exp }. */
+  function fmtExpExact(val, prec) {
+    const { int: I, frac } = floatExactDecimal(val);
+    if (I === 0n) {
+      return { mant: prec > 0 ? '0.' + '0'.repeat(prec) : '0', exp: 0 };
+    }
+    let s = I.toString();
+    let E = (s.length - 1) - frac;
+    const need = prec + 1; /* significant digits */
+    if (s.length > need) {
+      let qs = roundDecimalHalfEven(I, s.length, need).toString();
+      if (qs.length > need) { E += qs.length - need; qs = qs.slice(0, need); }
+      s = qs;
+    } else if (s.length < need) {
+      s = s + '0'.repeat(need - s.length);
+    }
+    return { mant: prec > 0 ? s[0] + '.' + s.slice(1) : s[0], exp: E };
+  }
+
+  /* Render a decimal exponent C-style: at least two digits, always signed. */
+  function fmtExponent(E) {
+    const a = Math.abs(E).toString().padStart(2, '0');
+    return (E < 0 ? '-' : '+') + a;
+  }
+
   /* Create a varargs reader closure for the given va_args pointer */
   function createVaReader(va_args_ptr) {
     let arg_offset = 0;
@@ -2134,6 +2203,10 @@ async function runModule({
         if (fmt[i] === 'l') { length = 'll'; i++; }
       } else if (fmt[i] === 'z' || fmt[i] === 't' || fmt[i] === 'j') {
         length = fmt[i++];
+      } else if (fmt[i] === 'L') {
+        /* long double — f64 on this target, same va slot as double */
+        length = 'L';
+        i++;
       }
 
       /* Parse specifier */
@@ -2261,19 +2334,14 @@ async function runModule({
           if (special) {
             str = special;
           } else {
-            str = val.toFixed(prec);
-            /* toFixed returns scientific notation for |val| >= 1e21; fix it */
-            if (str.indexOf('e') !== -1 || str.indexOf('E') !== -1) {
-              const neg = val < 0;
-              const abs = neg ? -val : val;
-              const intStr = BigInt(Math.floor(abs)).toString();
-              str = (neg ? '-' : '') + intStr;
-              if (prec > 0) str += '.' + '0'.repeat(prec);
-            }
+            const neg = val < 0 || (val === 0 && 1 / val === -Infinity);
+            str = (neg ? '-' : '') + fmtFixedExact(val, prec);
           }
           if (flags.hash && str.indexOf('.') === -1) str += '.';
-          if (flags.plus && val >= 0) str = '+' + str;
-          else if (flags.space && val >= 0) str = ' ' + str;
+          if (str[0] !== '-') {
+            if (flags.plus) str = '+' + str;
+            else if (flags.space) str = ' ' + str;
+          }
           break;
         }
         case 'e':
@@ -2284,16 +2352,18 @@ async function runModule({
           if (special) {
             str = special;
           } else {
-            str = val.toExponential(prec);
-            /* C requires at least 2 exponent digits */
-            str = str.replace(/e([+-])(\d)$/, 'e$10$2');
+            const neg = val < 0 || (val === 0 && 1 / val === -Infinity);
+            const { mant, exp } = fmtExpExact(val, prec);
+            str = (neg ? '-' : '') + mant + 'e' + fmtExponent(exp);
             if (spec === 'E') str = str.toUpperCase();
           }
           if (flags.hash && str.indexOf('.') === -1) {
             str = str.replace(/([eE])/, '.$1');
           }
-          if (flags.plus && val >= 0) str = '+' + str;
-          else if (flags.space && val >= 0) str = ' ' + str;
+          if (str[0] !== '-') {
+            if (flags.plus) str = '+' + str;
+            else if (flags.space) str = ' ' + str;
+          }
           break;
         }
         case 'g':
@@ -2305,19 +2375,27 @@ async function runModule({
           if (special) {
             str = special;
           } else {
-            const neg = (1 / val === -Infinity); /* detect -0 */
-            str = val.toPrecision(prec);
-            /* Remove trailing zeros after decimal point (unless # flag) */
-            if (!flags.hash && str.indexOf('.') !== -1 && str.indexOf('e') === -1) {
-              str = str.replace(/\.?0+$/, '');
+            const neg = val < 0 || (val === 0 && 1 / val === -Infinity);
+            /* C99 7.19.6.1: with exponent X of the value rounded to
+               `prec` significant digits, use %e style iff X < -4 or
+               X >= prec; otherwise %f style with prec-1-X fractional
+               digits. Trailing zeros are stripped unless # is given. */
+            const { mant, exp } = fmtExpExact(val, prec - 1);
+            if (exp < -4 || exp >= prec) {
+              let m = mant;
+              if (!flags.hash && m.indexOf('.') !== -1) m = m.replace(/\.?0+$/, '');
+              str = m + 'e' + fmtExponent(exp);
+            } else {
+              str = fmtFixedExact(val, Math.max(0, prec - 1 - exp));
+              if (!flags.hash && str.indexOf('.') !== -1) str = str.replace(/\.?0+$/, '');
             }
-            /* C requires at least 2 exponent digits */
-            str = str.replace(/e([+-])(\d)$/, 'e$10$2');
-            if (neg && str[0] !== '-') str = '-' + str;
+            str = (neg ? '-' : '') + str;
             if (spec === 'G') str = str.toUpperCase();
           }
-          if (flags.plus && val >= 0) str = '+' + str;
-          else if (flags.space && val >= 0) str = ' ' + str;
+          if (str[0] !== '-') {
+            if (flags.plus) str = '+' + str;
+            else if (flags.space) str = ' ' + str;
+          }
           break;
         }
         case 'a':
