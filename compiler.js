@@ -17708,6 +17708,8 @@ uintmax_t strtoumax(const char *nptr, char **endptr, int base);
 #define LONG_MIN (-2147483647L - 1L)
 #define LONG_MAX 2147483647L
 #define ULONG_MAX 4294967295UL
+/* POSIX: maximum value of an object of type ssize_t */
+#define SSIZE_MAX 2147483647L
 #define LLONG_MIN (-9223372036854775807LL - 1LL)
 #define LLONG_MAX 9223372036854775807LL
 #define ULLONG_MAX 18446744073709551615ULL
