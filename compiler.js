@@ -18380,7 +18380,7 @@ struct timespec {
 };
 
 typedef int clockid_t;
-#define CLOCKS_PER_SEC 1000
+#define CLOCKS_PER_SEC 1000000
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
 
@@ -18933,9 +18933,11 @@ int __setjmp_id_counter;
   "__assert.c": `
 #include <stdio.h>
 
+#include <stdlib.h>
+
 void __assert_fail(const char *expr, const char *file, int line) {
-  printf("Assertion failed: %s, file %s, line %d\\n", expr, file, line);
-  __wasm(void, (), op 0);
+  fprintf(stderr, "Assertion failed: %s, file %s, line %d\\n", expr, file, line);
+  abort();
 }
   `,
   "__atexit.c": `
@@ -20281,8 +20283,11 @@ int fflush(FILE *stream) {
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
   if (!(stream->flags & __F_WRITE)) {
-    write(2, "fwrite: stream is not writable\\n", 31);
-    __wasm(void, (), op 0);
+    /* C11 7.21: wrong-direction access fails with the error indicator
+       set — it must not kill the process. */
+    stream->flags |= __F_ERR;
+    errno = EBADF;
+    return 0;
   }
   if (size == 0 || nmemb == 0) return 0;
   size_t total = size * nmemb;
@@ -20316,8 +20321,9 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
   if (!(stream->flags & __F_READ)) {
-    write(2, "fread: stream is not readable\\n", 30);
-    __wasm(void, (), op 0);
+    stream->flags |= __F_ERR;
+    errno = EBADF;
+    return 0;
   }
   if (size == 0 || nmemb == 0) return 0;
   size_t total = size * nmemb;
@@ -20641,8 +20647,9 @@ int sscanf(const char *s, const char *fmt, ...) {
 
 int vfscanf(FILE *stream, const char *fmt, va_list ap) {
   if (!(stream->flags & __F_READ)) {
-    write(2, "vfscanf: stream is not readable\\n", 32);
-    __wasm(void, (), op 0);
+    stream->flags |= __F_ERR;
+    errno = EBADF;
+    return EOF;
   }
 
   /* Handle ungetc char: push it back into the buffer */
@@ -20878,10 +20885,13 @@ static unsigned long long __strtou_core(
   *neg = 0;
   if (*s == '-') { *neg = 1; s++; }
   else if (*s == '+') { s++; }
-  if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+  if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') &&
+      __digit_value(s[2], 16) >= 0) {
     base = 16; s += 2;
   } else if (base == 0 && s[0] == '0') {
-    base = 8; s++;
+    /* Octal — leave the '0' for the digit loop so the any-flag and
+       endptr are right for a plain "0" (and "0x" without hex digits). */
+    base = 8;
   } else if (base == 0) {
     base = 10;
   }
@@ -21082,7 +21092,9 @@ __export exit = exit;
 
 
 void abort(void) {
-  __builtin_abort();
+  /* No signals here — exit with 128+SIGABRT like a shell reports an
+     aborted native process. Bypasses atexit handlers per C11. */
+  __exit(134);
 }
 
 div_t div(int numer, int denom) {
@@ -21453,7 +21465,8 @@ time_t time(time_t *t) {
 }
 
 clock_t clock(void) {
-  return __clock();
+  /* __clock() is milliseconds; CLOCKS_PER_SEC is 1000000 (POSIX/XSI). */
+  return __clock() * 1000;
 }
 
 double difftime(time_t t1, time_t t0) {
