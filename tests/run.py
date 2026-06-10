@@ -937,6 +937,11 @@ def run_micropython_upstream_tests(results, filter_str=None):
             )
             actual = r.stdout.decode("utf-8", errors="replace") if isinstance(r.stdout, bytes) else r.stdout
             actual = actual.replace("\r\n", "\n")
+            # Upstream convention (run-tests.py): a test that prints exactly
+            # "SKIP" is declaring a needed feature absent in this build.
+            if actual == "SKIP\n":
+                results.skip(test_name)
+                continue
             if actual == expected:
                 results.record(test_name, True)
             else:

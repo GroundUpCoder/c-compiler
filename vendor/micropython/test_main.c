@@ -37,7 +37,14 @@ static void do_str(const char *src, mp_parse_input_kind_t input_kind) {
         mp_call_function_0(module_fun);
         nlr_pop();
     } else {
-        mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+        mp_obj_t exc = (mp_obj_t)nlr.ret_val;
+        if (mp_obj_is_subclass_fast(MP_OBJ_FROM_PTR(mp_obj_get_type(exc)),
+                                    MP_OBJ_FROM_PTR(&mp_type_SystemExit))) {
+            // SystemExit is a clean exit, not an error — upstream prints
+            // no traceback for it (tests use `raise SystemExit` to skip).
+            return;
+        }
+        mp_obj_print_exception(&mp_plat_print, exc);
     }
 }
 

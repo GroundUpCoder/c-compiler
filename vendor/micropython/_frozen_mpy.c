@@ -4,9 +4,11 @@
 #include "py/emitglue.h"
 #include "py/nativeglue.h"
 
-#if MICROPY_LONGINT_IMPL != 0
-#error "incompatible MICROPY_LONGINT_IMPL"
-#endif
+// Local patch: the original guard demanded MICROPY_LONGINT_IMPL == 0
+// (the value at freeze time). The longint impl only affects how frozen
+// big-int CONSTANTS are encoded, and this module (frozentest.py) freezes
+// none — no mp_obj_int_t/mpz_dig data below — so any impl is compatible.
+// Regenerate with mpy-tool if big ints are ever frozen.
 
 #if MICROPY_PY_BUILTINS_FLOAT
 typedef struct _mp_obj_float_t {
