@@ -20237,11 +20237,14 @@ double logb(double x) {
 
 double modf(double x, double *iptr) {
   *iptr = trunc(x);
-  return x - *iptr;
+  /* C99 F.10.3.12: the fractional part carries the sign of x, including
+     for a zero fraction: modf(-100.0) is (-0.0, -100.0). Plain x - *iptr
+     gives +0.0. */
+  return copysign(x - *iptr, x);
 }
 float modff(float x, float *iptr) {
   *iptr = truncf(x);
-  return x - *iptr;
+  return copysignf(x - *iptr, x);
 }
 
 double nan(const char *tag) { (void)tag; return NAN; }
