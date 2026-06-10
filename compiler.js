@@ -4029,7 +4029,13 @@ function typesAreOperandCompatible(op, leftType, rightType) {
 // expression through unwrapped, so cascading damage is bounded.
 function maybeImplicitCast(expr, targetType) {
   targetType = targetType.removeQualifiers();
-  const srcType = expr.type.removeQualifiers();
+  let srcType = expr.type.removeQualifiers();
+  // Arrays decay in boolean contexts: _Bool b = arr; is the decayed
+  // pointer's truth value.
+  if (targetType === Types.TBOOL && (srcType.isArray() || srcType.isFunction())) {
+    expr = maybeDecay(expr);
+    srcType = expr.type.removeQualifiers();
+  }
   if (srcType === targetType) return expr;
   if (targetType.isVoid() || srcType.isVoid()) return expr;
   // Divergent (recovery from a parser error) absorbs — don't wrap.
@@ -10256,12 +10262,15 @@ class Parser {
 
   _validateCond(expr, tok, ctxName) {
     // Controlling expressions (if/while/for/do/?:) must be scalar.
-    // We extend C with refs (sugar for !__ref_is_null), but reject
-    // structs / unions / arrays / void.
+    // Arrays and functions decay to pointers first (if (arr) is the
+    // decayed pointer's truth value). We extend C with refs (sugar for
+    // !__ref_is_null), but reject structs / unions / void.
+    if (expr.type.isArray() || expr.type.isFunction()) expr = maybeDecay(expr);
     if (!AST.isBoolContextType(expr.type)) {
       this.error(tok,
         `controlling expression of '${ctxName}' must be scalar, got '${expr.type.toString()}'`);
     }
+    return expr;
   }
 
   // C23 `auto`: validate that the declarator is a plain identifier (no
@@ -10512,7 +10521,7 @@ class Parser {
 
       // Ternary
       if (op === "?") {
-        this._validateCond(left, opTok, "ternary");
+        left = this._validateCond(left, opTok, "ternary");
         let thenExpr = this.parseExpression();
         this.expect(":");
         let elseExpr = this.parseBinaryExpression(3);
@@ -10636,8 +10645,8 @@ class Parser {
     if (this.matchKW(Lexer.Keyword.IF)) {
       const kwTok = this.peek(-1);
       this.expect("(");
-      const cond = this.parseExpression();
-      this._validateCond(cond, kwTok, "if");
+      let cond = this.parseExpression();
+      cond = this._validateCond(cond, kwTok, "if");
       this.expect(")");
       const thenBranch = this.parseStatement();
       let elseBranch = null;
@@ -10649,8 +10658,8 @@ class Parser {
     if (this.matchKW(Lexer.Keyword.WHILE)) {
       const kwTok = this.peek(-1);
       this.expect("(");
-      const cond = this.parseExpression();
-      this._validateCond(cond, kwTok, "while");
+      let cond = this.parseExpression();
+      cond = this._validateCond(cond, kwTok, "while");
       this.expect(")");
       return new AST.SWhile(loc, cond, this.parseStatement());
     }
@@ -10661,8 +10670,8 @@ class Parser {
       const body = this.parseStatement();
       this.expectKW(Lexer.Keyword.WHILE);
       this.expect("(");
-      const cond = this.parseExpression();
-      this._validateCond(cond, kwTok, "do-while");
+      let cond = this.parseExpression();
+      cond = this._validateCond(cond, kwTok, "do-while");
       this.expect(")");
       this.expect(";");
       return new AST.SDoWhile(loc, body, cond);
@@ -10686,7 +10695,7 @@ class Parser {
       }
       if (!this.matchText(";")) {
         cond = this.parseExpression();
-        this._validateCond(cond, kwTok, "for");
+        cond = this._validateCond(cond, kwTok, "for");
         this.expect(";");
       }
       if (!this.atText(")")) incr = this.parseExpression();
