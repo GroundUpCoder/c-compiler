@@ -9385,6 +9385,15 @@ class Parser {
       const newBase = this.combineDeclaratorTypes(innerType.baseType, outerBase, outerResult);
       return Types.arrayOf(newBase, innerType.arraySize);
     }
+    if (innerType.isFunction()) {
+      // Function declarator returning a derived type, e.g.
+      // int (*pick(int))(int) — inner is fn(int) -> <hole>, where the
+      // hole (the return type) recombines with the outer suffix to
+      // become pointer-to-fn(int)->int. Without this case the inner
+      // function type passed through unchanged and pick "returned" int*.
+      const newRet = this.combineDeclaratorTypes(innerType.returnType, outerBase, outerResult);
+      return Types.functionType(newRet, innerType.paramTypes, innerType.isVarArg, innerType.hasUnspecifiedParams);
+    }
     return innerType;
   }
 
