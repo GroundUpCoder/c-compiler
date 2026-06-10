@@ -1,0 +1,14 @@
+base37: 0 1 0
+scanf-i: 1 18 -1
+scanf-f: 0
+hex: 1
+denorm: 1
+strtof: 1
+strlcpy: 11 hello w
+strlcat: 10 abcdefg
+memmem: 1
+tmpfile: zap
+vfscanf-ftell: 6 8 8
+c: Sun Jan  3 13:23:45 2016
+e:  3|20|020|+20
+Y: +10009

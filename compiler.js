@@ -17416,6 +17416,7 @@ extern int errno;
 #define EPIPE   32
 #define EDOM    33
 #define ERANGE  34
+#define EOVERFLOW 75
 #define ENAMETOOLONG 36
 #define ENOSYS  38
 #define ENOTEMPTY 39
@@ -17782,6 +17783,8 @@ uintmax_t strtoumax(const char *nptr, char **endptr, int base);
 #define ULONG_MAX 4294967295UL
 /* POSIX: maximum value of an object of type ssize_t */
 #define SSIZE_MAX 2147483647L
+/* POSIX: maximum length of a pathname, including the terminating NUL */
+#define PATH_MAX 4096
 #define LLONG_MIN (-9223372036854775807LL - 1LL)
 #define LLONG_MAX 9223372036854775807LL
 #define ULLONG_MAX 18446744073709551615ULL
@@ -18357,6 +18360,9 @@ char *strcat(char *dest, const char *src);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 char *strstr(const char *haystack, const char *needle);
+size_t strlcpy(char *dst, const char *src, size_t size);
+size_t strlcat(char *dst, const char *src, size_t size);
+void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
 void *memchr(const void *s, int c, size_t n);
 char *strncat(char *dest, const char *src, size_t n);
 size_t strspn(const char *s, const char *accept);
@@ -18570,6 +18576,8 @@ typedef uint_least32_t char32_t;
   `,
   "unistd.h": `
 #pragma once
+/* POSIX requires unistd.h to define size_t (and ssize_t/off_t). */
+typedef unsigned long size_t;
 typedef long ssize_t;
 typedef long off_t;
 #define STDIN_FILENO  0
@@ -20716,6 +20724,26 @@ int fclose(FILE *stream) {
   return r;
 }
 
+static int __tmpfile_counter;
+__import long __time_now(void);
+
+FILE *tmpfile(void) {
+  /* Generate a unique path, open it, and unlink immediately: the open
+     fd keeps working (POSIX) while the name disappears. The time()
+     component avoids collisions between concurrent processes. */
+  for (int tries = 0; tries < 100; tries++) {
+    char name[80];
+    snprintf(name, sizeof name, "/tmp/__wasm_tmpfile_%ld_%d",
+             __time_now(), __tmpfile_counter++);
+    FILE *f = fopen(name, "w+b");
+    if (f) {
+      remove(name);
+      return f;
+    }
+  }
+  return 0;
+}
+
 int fseek(FILE *stream, long offset, int whence) {
   fflush(stream);
   if (whence == SEEK_CUR) {
@@ -20840,6 +20868,7 @@ int vfscanf(FILE *stream, const char *fmt, va_list ap) {
     }
     stream->buf_pos = 0;
     stream->buf_len = r;
+    stream->flags |= __F_RBUF; /* buffer now holds read-ahead (ftell) */
   }
 
   /* Shift data to buffer start for accumulation */
@@ -20879,6 +20908,7 @@ int vfscanf(FILE *stream, const char *fmt, va_list ap) {
       return result;
     }
     stream->buf_len += got;
+    stream->flags |= __F_RBUF;
     /* Loop back and retry with more data */
   }
 }
@@ -21004,7 +21034,7 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
   return stream;
 }
 
-FILE *tmpfile(void) { return 0; }
+
 char *tmpnam(char *s) { (void)s; return 0; }
 FILE *popen(const char *command, const char *type) {
   (void)command; (void)type; return 0;
@@ -21041,6 +21071,14 @@ static unsigned long long __strtou_core(
     const char *nptr, const char **endp, int base,
     int *neg, int *any, int *overflow) {
   const char *s = nptr;
+  /* C99 7.20.1.4: base must be 0 or 2..36; otherwise EINVAL, value 0,
+     endptr = nptr. */
+  if (base != 0 && (base < 2 || base > 36)) {
+    errno = EINVAL;
+    *endp = nptr;
+    *neg = 0; *any = 0; *overflow = 0;
+    return 0;
+  }
   while (*s == ' ' || *s == '\\t' || *s == '\\n' ||
          *s == '\\r' || *s == '\\f' || *s == '\\v')
     s++;
@@ -21139,8 +21177,23 @@ double strtod(const char *nptr, char **endptr) {
   return __strtod_impl(nptr, endptr, bound);
 }
 
+__import float __strtof_impl(const char *nptr, char **endptr, const char *bound);
+
 float strtof(const char *nptr, char **endptr) {
-  return (float)strtod(nptr, endptr);
+  /* Must round ONCE from the decimal to float; going through strtod
+     (double) can double-round at the float boundary. */
+  const char *t = nptr;
+  while (*t == ' ' || *t == '\\t' || *t == '\\n' ||
+         *t == '\\r' || *t == '\\f' || *t == '\\v')
+    t++;
+  const char *bound = t;
+  if (*bound == '+' || *bound == '-') bound++;
+  while ((*bound >= '0' && *bound <= '9') ||
+         ((*bound | 32) >= 'a' && (*bound | 32) <= 'z') ||
+         *bound == '.' || *bound == '+' || *bound == '-' ||
+         *bound == '(' || *bound == ')' || *bound == '_')
+    bound++;
+  return __strtof_impl(nptr, endptr, bound);
 }
 
 long double strtold(const char *nptr, char **endptr) {
@@ -21435,6 +21488,34 @@ char *strrchr(const char *s, int c) {
   }
   if (c == 0) return (char *)s;
   return (char *)last;
+}
+
+size_t strlcpy(char *dst, const char *src, size_t size) {
+  size_t len = strlen(src);
+  if (size > 0) {
+    size_t n = len < size - 1 ? len : size - 1;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+  }
+  return len;
+}
+
+size_t strlcat(char *dst, const char *src, size_t size) {
+  size_t dlen = 0;
+  while (dlen < size && dst[dlen]) dlen++;
+  if (dlen == size) return size + strlen(src);
+  return dlen + strlcpy(dst + dlen, src, size - dlen);
+}
+
+void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen) {
+  if (needlelen == 0) return (void *)haystack;
+  if (needlelen > haystacklen) return 0;
+  const char *h = (const char *)haystack;
+  const char *n = (const char *)needle;
+  for (size_t i = 0; i + needlelen <= haystacklen; i++) {
+    if (h[i] == n[0] && memcmp(h + i, n, needlelen) == 0) return (void *)(h + i);
+  }
+  return 0;
 }
 
 char *strstr(const char *haystack, const char *needle) {
@@ -21822,8 +21903,34 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       continue;
     }
     fmt++; /* skip % */
+    /* C23/musl: optional '+' or '0' flag and field width before C/F/G/Y */
+    int __fmt_plus = 0;
+    int __fmt_width = -1;
+    if (*fmt == '+' || *fmt == '0') {
+      const char *probe = fmt + (*fmt == '+' || *fmt == '0' ? 1 : 0);
+      if (*probe >= '0' && *probe <= '9') {
+        __fmt_plus = (*fmt == '+');
+        fmt++;
+        __fmt_width = 0;
+        while (*fmt >= '0' && *fmt <= '9') {
+          __fmt_width = __fmt_width * 10 + (*fmt - '0');
+          fmt++;
+        }
+      }
+    }
     switch (*fmt) {
-    case 'Y': __ap_int(s, max, &pos, tp->tm_year + 1900, 4); break;
+    case 'C': { /* century; C23 allows %[+0][width]C */
+      int cval = (tp->tm_year + 1900) / 100;
+      int w = __fmt_width >= 0 ? __fmt_width : 2;
+      if (__fmt_plus && cval >= 0) { __ap_str(s, max, &pos, "+"); if (w > 0) w--; }
+      __ap_int(s, max, &pos, cval, w);
+      break;
+    }
+    case 'Y':
+      /* musl prints a '+' for years beyond 4 digits */
+      if (tp->tm_year + 1900 > 9999) __ap_str(s, max, &pos, "+");
+      __ap_int(s, max, &pos, tp->tm_year + 1900, 4);
+      break;
     case 'm': __ap_int(s, max, &pos, tp->tm_mon + 1, 2); break;
     case 'd': __ap_int(s, max, &pos, tp->tm_mday, 2); break;
     case 'H': __ap_int(s, max, &pos, tp->tm_hour, 2); break;
@@ -21833,12 +21940,18 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
     case 'A': __ap_str(s, max, &pos, __wday_full[tp->tm_wday]); break;
     case 'b': __ap_str(s, max, &pos, __mon_abbr[tp->tm_mon]); break;
     case 'B': __ap_str(s, max, &pos, __mon_full[tp->tm_mon]); break;
+    case 'e': /* day of month, space-padded */
+      if (tp->tm_mday < 10) __ap_str(s, max, &pos, " ");
+      __ap_int(s, max, &pos, tp->tm_mday, tp->tm_mday < 10 ? 1 : 2);
+      break;
     case 'c':
       __ap_str(s, max, &pos, __wday_abbr[tp->tm_wday]);
       __ap_str(s, max, &pos, " ");
       __ap_str(s, max, &pos, __mon_abbr[tp->tm_mon]);
       __ap_str(s, max, &pos, " ");
-      __ap_int(s, max, &pos, tp->tm_mday, 2);
+      /* C/POSIX %c: day is space-padded (as by %e), not zero-padded */
+      if (tp->tm_mday < 10) __ap_str(s, max, &pos, " ");
+      __ap_int(s, max, &pos, tp->tm_mday, tp->tm_mday < 10 ? 1 : 2);
       __ap_str(s, max, &pos, " ");
       __ap_int(s, max, &pos, tp->tm_hour, 2);
       __ap_str(s, max, &pos, ":");
@@ -21846,6 +21959,7 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       __ap_str(s, max, &pos, ":");
       __ap_int(s, max, &pos, tp->tm_sec, 2);
       __ap_str(s, max, &pos, " ");
+      if (tp->tm_year + 1900 > 9999) __ap_str(s, max, &pos, "+");
       __ap_int(s, max, &pos, tp->tm_year + 1900, 4);
       break;
     case 'I': {
