@@ -2012,12 +2012,90 @@ async function runModule({
     return latin1Decoder.decode(bytes.subarray(ptr, endPtr));
   }
 
+  /* Correctly-rounded construction of a float from an exact value
+   * M * 2^e2 (M a positive BigInt), rounded to `mantBits` of precision
+   * (53 for double, 24 for float) with round-half-even, denormal
+   * handling, and overflow to Infinity. `sticky` indicates the exact
+   * value had additional nonzero bits below M (e.g. a nonzero division
+   * remainder). */
+  function roundBinaryExact(M, e2, mantBits, minExp, sticky) {
+    if (M === 0n) return 0;
+    const bitlen = (x) => x.toString(2).length;
+    const emax = mantBits === 53 ? 1023 : 127;
+    const lsbMin = minExp - (mantBits - 1); // double: -1074, float: -149
+    // Result is R * 2^lsb with R < 2^mantBits and lsb >= lsbMin.
+    const lead = bitlen(M) - 1 + e2;        // exponent of M's leading bit
+    let lsb = lead - mantBits + 1;
+    if (lsb < lsbMin) lsb = lsbMin;         // denormal clamp
+    const drop = lsb - e2;                  // low bits of M to discard
+    let R;
+    if (drop <= 0) {
+      R = M << BigInt(-drop);
+      // exact; sticky only from the caller (division remainder)
+      if (sticky) { /* value sits strictly between representables only
+                       when bits were dropped; with none dropped the
+                       sticky can't flip rounding of an exact R */ }
+    } else {
+      const rem = M & ((1n << BigInt(drop)) - 1n);
+      R = M >> BigInt(drop);
+      const half = 1n << BigInt(drop - 1);
+      const roundUp = rem > half ||
+        (rem === half && (sticky || (R & 1n) === 1n));
+      if (roundUp) R += 1n;
+      if (bitlen(R) > mantBits) { R >>= 1n; lsb += 1; } // carry overflow
+    }
+    if (R === 0n) return 0;                  // rounded down to zero
+    const el = bitlen(R) - 1 + lsb;          // exponent of leading bit
+    if (el > emax) return Infinity;
+    if (mantBits === 53) {
+      const dv = new DataView(new ArrayBuffer(8));
+      if (el < minExp) {
+        // denormal: raw significand = R shifted to lsb 2^-1074
+        dv.setBigUint64(0, R << BigInt(lsb - lsbMin), false);
+      } else {
+        // normal: pad R to exactly 53 bits, drop the implicit leading 1
+        const Rn = R << BigInt(mantBits - bitlen(R));
+        dv.setBigUint64(0, (BigInt(el + 1023) << 52n) | (Rn & ((1n << 52n) - 1n)), false);
+      }
+      return dv.getFloat64(0, false);
+    } else {
+      const dv = new DataView(new ArrayBuffer(4));
+      if (el < minExp) {
+        dv.setUint32(0, Number(R << BigInt(lsb - lsbMin)), false);
+      } else {
+        const Rn = R << BigInt(mantBits - bitlen(R));
+        dv.setUint32(0, ((el + 127) << 23) | Number(Rn & ((1n << 23n) - 1n)), false);
+      }
+      return dv.getFloat32(0, false);
+    }
+  }
+
+  /* Exact decimal D * 10^e10 -> correctly-rounded binary float. */
+  function decimalToBinary(D, e10, mantBits, minExp) {
+    if (D === 0n) return 0;
+    if (e10 >= 0) {
+      return roundBinaryExact(D * 10n ** BigInt(e10), 0, mantBits, minExp, false);
+    }
+    // D / 10^-e10: scale the numerator up so the quotient carries the
+    // full target precision plus guard bits, then divide exactly.
+    const den = 10n ** BigInt(-e10);
+    const guard = mantBits + 3 + den.toString(2).length;
+    let shift = guard + den.toString(2).length - D.toString(2).length;
+    if (shift < 0) shift = 0;
+    const num = D << BigInt(shift);
+    const q = num / den;
+    const sticky = num % den !== 0n;
+    return roundBinaryExact(q, -shift, mantBits, minExp, sticky);
+  }
+
   /* Match a C99 strtod-style floating constant at the start of `rest`.
-   * Handles decimal, hex floats (0x1.8p1), and inf/infinity/nan forms.
-   * Returns { value, length, special } or null. `special` marks inf/nan
-   * literals (so callers don't flag ERANGE on them). Shared by strtod
-   * and scanf %f. */
-  function matchFloatToken(rest) {
+   * Handles decimal, hex floats (0x1.8p1), and inf/infinity/nan forms,
+   * with correct single rounding to the target precision (mantBits:
+   * 53 = double, 24 = float). Returns { value, length, special } or
+   * null. Shared by strtod/strtof and scanf %f. */
+  function matchFloatToken(rest, mantBits) {
+    if (mantBits === undefined) mantBits = 53;
+    const minExp = mantBits === 53 ? -1022 : -126;
     let m = rest.match(/^[+-]?inf(inity)?/i);
     if (m) {
       return { value: m[0][0] === '-' ? -Infinity : Infinity, length: m[0].length, special: true };
@@ -2030,16 +2108,20 @@ async function runModule({
     if (m) {
       const sign = m[1] === '-' ? -1 : 1;
       const [ip, fp = ''] = m[2].split('.');
-      let v = 0;
-      for (const c of ip) v = v * 16 + parseInt(c, 16);
-      let scale = 1 / 16;
-      for (const c of fp) { v += parseInt(c, 16) * scale; scale /= 16; }
-      const exp = m[3] ? parseInt(m[3].substring(1), 10) : 0;
-      return { value: sign * v * Math.pow(2, exp), length: m[0].length, special: false };
+      let M = 0n;
+      for (const c of ip + fp) M = M * 16n + BigInt(parseInt(c, 16));
+      const exp = (m[3] ? parseInt(m[3].substring(1), 10) : 0) - 4 * fp.length;
+      const v = roundBinaryExact(M, exp, mantBits, minExp, false);
+      return { value: sign * v, length: m[0].length, special: false };
     }
-    m = rest.match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
+    m = rest.match(/^([+-]?)(\d+)\.?(\d*)([eE]([+-]?\d+))?/);
+    if (!m) m = rest.match(/^([+-]?)()\.(\d+)([eE]([+-]?\d+))?/);
     if (m) {
-      return { value: parseFloat(m[0]), length: m[0].length, special: false };
+      const sign = m[1] === '-' ? -1 : 1;
+      const D = BigInt((m[2] || '0') + m[3]);
+      const e10 = (m[5] ? parseInt(m[5], 10) : 0) - m[3].length;
+      const v = decimalToBinary(D, e10, mantBits, minExp);
+      return { value: sign * v, length: m[0].length, special: false };
     }
     return null;
   }
@@ -2693,6 +2775,14 @@ async function runModule({
           if (str[si] === '0') {
             if (si + 1 < str.length && (str[si + 1] === 'x' || str[si + 1] === 'X') && (si + 1 - start) < maxChars) {
               base = 16; si += 2;
+              /* scanf semantics (unlike strtol): the input item is the
+                 longest prefix of a matching sequence — once "0x" is
+                 consumed, a missing hex digit (absent or width-cut) makes
+                 the whole item invalid: matching failure, no backtrack to
+                 the plain "0". */
+              const hexOk = si < str.length && (si - start) < maxChars &&
+                            '0123456789abcdefABCDEF'.indexOf(str[si]) >= 0;
+              if (!hexOk) return { matched: matched, consumed: si };
             } else {
               base = 8;
             }
@@ -2712,9 +2802,16 @@ async function runModule({
           const start = si;
           if (si < str.length && (str[si] === '+' || str[si] === '-')) si++;
           /* Skip optional 0x prefix */
-          if (si + 1 < str.length && str[si] === '0' && (str[si + 1] === 'x' || str[si + 1] === 'X') && (si + 2 - start) <= maxChars) si += 2;
-          if (si >= str.length) { si = start; return { matched: matched || -1, consumed: si }; }
-          if ('0123456789abcdefABCDEF'.indexOf(str[si]) < 0) { si = start; return { matched: matched, consumed: si }; }
+          const sawPrefix = si + 1 < str.length && str[si] === '0' &&
+            (str[si + 1] === 'x' || str[si + 1] === 'X') && (si + 2 - start) <= maxChars;
+          if (sawPrefix) si += 2;
+          /* A consumed "0x" with no hex digit is an invalid item: matching
+             failure with the item left CONSUMED (C99 7.19.6.2) — the
+             stream stays at the failure point, no backtrack. */
+          if (si >= str.length || '0123456789abcdefABCDEF'.indexOf(str[si]) < 0) {
+            if (!sawPrefix) si = start;
+            return { matched: matched, consumed: si };
+          }
           while (si < str.length && '0123456789abcdefABCDEF'.indexOf(str[si]) >= 0 && (si - start) < maxChars) si++;
           extracted = str.substring(start, si);
           if (!suppress) {
@@ -2740,10 +2837,27 @@ async function runModule({
           break;
         }
         case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A': {
-          /* Float — same matcher as __strtod_impl (incl. hex/inf/nan) */
+          /* Float — same matcher as __strtod_impl (incl. hex/inf/nan),
+             rounded once to the target width (%f is float, %lf double) */
           const rest = width > 0 ? str.substring(si, si + width) : str.substring(si);
-          const m = matchFloatToken(rest);
+          const m = matchFloatToken(rest, length === 'l' || length === 'L' ? 53 : 24);
           if (!m) return { matched: matched, consumed: si };
+          /* scanf semantics: the input item is the longest prefix of a
+             matching sequence. A dangling exponent introducer ("10e",
+             "0x1p", "10e+") extends the item and makes it invalid —
+             matching failure, and per C99 7.19.6.2 the item stays
+             CONSUMED (the stream is left at the failure point; only a
+             one-character pushback is guaranteed). */
+          if (!m.special) {
+            const nxt = rest[m.length];
+            const isHex = /^[+-]?0[xX]/.test(rest);
+            if (nxt && (isHex ? (nxt === 'p' || nxt === 'P') : (nxt === 'e' || nxt === 'E'))) {
+              let itemLen = m.length + 1;
+              const sgn = rest[itemLen];
+              if (sgn === '+' || sgn === '-') itemLen++;
+              return { matched: matched, consumed: si + itemLen };
+            }
+          }
           si += m.length;
           if (!suppress) {
             const ptr = readArg('ptr');
@@ -2964,6 +3078,24 @@ async function runModule({
       },
       lgamma: lgammaImpl,
       tgamma: tgammaImpl,
+      __strtof_impl: function (nptr, endptr, bound) {
+        const str = readStringBounded(nptr, bound);
+        let i = 0;
+        while (i < str.length && " \t\n\r\f\v".indexOf(str[i]) >= 0) i++;
+        const m = matchFloatToken(str.substring(i), 24);
+        let val = 0.0, consumed = 0;
+        if (m) {
+          val = m.value;
+          consumed = i + m.length;
+          if (!isFinite(val) && !m.special) setErrnoName('ERANGE');
+        }
+        if (endptr) {
+          const memory = instance.exports.memory;
+          const view = new DataView(memory.buffer);
+          view.setUint32(endptr, nptr + consumed, true);
+        }
+        return val;
+      },
       __strtod_impl: function (nptr, endptr, bound) {
         const str = readStringBounded(nptr, bound);
         let i = 0;
