@@ -1,0 +1,4 @@
+read-stream: -1 0 ferror=1
+still-readable: a
+write-stream: -1 0 ferror=1
+content: abc
