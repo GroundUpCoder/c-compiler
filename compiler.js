@@ -1467,6 +1467,10 @@ function preprocess(filename, initialTokens, ppRegistry) {
                     newTok.filename = left.filename;
                     newTok.line = left.line;
                     newTok.column = left.column;
+                    // Stringization spacing (C99 6.10.3.3p4): the pasted
+                    // token stands where `left` stood, so it keeps left's
+                    // leading-space flag rather than the lexer's default.
+                    newTok.flags.hasSpace = left.flags.hasSpace;
                     substituted[si - 1] = newTok;
                     substituted.splice(si, 2);
                   } else {
