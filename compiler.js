@@ -6081,6 +6081,69 @@ function hoistDeclarations(funcDef) {
     dvar.name = candidate;
   }
 
+  // Emit per-leaf assignment statements that reproduce an aggregate
+  // initializer at its ORIGINAL position. Used when the initializer
+  // reads variables or calls functions: keeping it on the hoisted decl
+  // would evaluate it at function entry, before the values it reads
+  // exist (found via micropython's float divmod — `mp_obj_t tuple[2] =
+  // {a0, a1}` in an irreducible function read a0/a1 as zeros).
+  // normalizeInitList has already resolved designators, brace elision,
+  // and zero-fill, so init lists here are fully positional.
+  function emitAggregateInitAssigns(target, init, out) {
+    if (init instanceof AST.EInitList) {
+      const t = target.type.removeQualifiers();
+      if (t.isArray()) {
+        for (let i = 0; i < init.elements.length; i++) {
+          const el = init.elements[i];
+          if (!el) continue;
+          const idx = new AST.EInt(el.loc, Types.TINT, BigInt(i));
+          emitAggregateInitAssigns(AST.makeSubscript(el.loc, target, idx), el, out);
+        }
+        return;
+      }
+      if (t.isTag() && t.tagDecl) {
+        const members = [];
+        for (const m of t.tagDecl.members) {
+          if (!(m instanceof AST.DVar)) continue;
+          if (m.bitWidth >= 0 && !m.name) continue; // unnamed bitfields
+          members.push(m);
+        }
+        if (t.tagDecl.tagKind === Types.TagKind.UNION) {
+          const mi = init.unionMemberIndex >= 0 ? init.unionMemberIndex : 0;
+          const m = members[mi];
+          const el = init.elements[0];
+          if (m && el) emitAggregateInitAssigns(new AST.EMember(el.loc, m.type, target, m), el, out);
+          return;
+        }
+        for (let i = 0; i < init.elements.length && i < members.length; i++) {
+          const el = init.elements[i];
+          if (!el) continue;
+          emitAggregateInitAssigns(new AST.EMember(el.loc, members[i].type, target, members[i]), el, out);
+        }
+        return;
+      }
+    }
+    if (init instanceof AST.EString && target.type.removeQualifiers().isArray()) {
+      // char-array member initialized from a string literal inside an
+      // otherwise non-constant list: per-element stores (the literal's
+      // bytes include the NUL; remaining elements zero-fill).
+      const arrType = target.type.removeQualifiers();
+      const n = arrType.arraySize || 0;
+      for (let i = 0; i < n; i++) {
+        const b = i < init.value.length ? init.value[i] : 0;
+        const idx = new AST.EInt(init.loc, Types.TINT, BigInt(i));
+        const lhs = AST.makeSubscript(init.loc, target, idx);
+        const rhs = new AST.EInt(init.loc, Types.TINT, BigInt(b));
+        out.push(new AST.SExpr(init.loc, new AST.EBinary(init.loc, lhs.type, "ASSIGN", lhs, rhs)));
+      }
+      return;
+    }
+    // Scalar leaf (or whole-aggregate copy, e.g. `S a = b;` — struct
+    // assignment is supported by codegen).
+    out.push(new AST.SExpr(init.loc,
+      new AST.EBinary(init.loc, target.type, "ASSIGN", target, init)));
+  }
+
   function rewrite(stmt) {
     if (!stmt) return stmt;
     if (stmt instanceof AST.SDecl) {
@@ -6092,19 +6155,28 @@ function hoistDeclarations(funcDef) {
         uniquify(d);
         const init = d.initExpr;
         // EInitList / aggregate-array initializers can't be expressed as
-        // a plain `var = expr` SExpr after declaration. Keep the init on
-        // the hoisted DVar in those cases — the codegen runs it at the
-        // (function-entry) hoisted declaration site. For arrays/aggregates
-        // we also keep the init in place because their allocation is
-        // tied to the original declaration position in some codepaths.
+        // a plain `var = expr` SExpr after declaration.
         const initIsListLike = init &&
           (init instanceof AST.EInitList ||
            (d.type.isArray && d.type.isArray()) ||
            (d.type.isAggregate && d.type.isAggregate()));
         if (initIsListLike) {
-          // Keep the original init on the hoisted decl. No SExpr emitted
-          // at the original position.
+          // Keep the init on the hoisted DVar (codegen runs it at the
+          // function-entry hoisted site) ONLY when entry-time evaluation
+          // is indistinguishable from in-place evaluation: nothing it
+          // reads can change between entry and the original position.
+          const entrySafe = init.referencedVariables.size === 0 &&
+                            init.referencedFunctions.size === 0;
+          if (entrySafe) {
+            hoisted.push(d);
+            continue;
+          }
+          // Otherwise: hoist the bare decl and reproduce the initializer
+          // with per-leaf assignments at the original position.
+          d.initExpr = null;
           hoisted.push(d);
+          const target = new AST.EIdent(d.loc, d.type, d);
+          emitAggregateInitAssigns(target, init, initStmts);
           continue;
         }
         d.initExpr = null;  // strip — the hoisted decl has no initializer
