@@ -2684,11 +2684,12 @@ function computeStructLayout(members, isPacked = false) {
         continue;
       }
 
-      // Bit-fields share a storage unit only if they have the same primitive
-      // type (including signedness — `int : 4` and `unsigned : 4` go in
-      // separate units). Identity comparison on removeQualifiers handles that:
-      // each integer flavor is a unique singleton.
-      if (inBitField && m.type.removeQualifiers() === bfUnitType.removeQualifiers() &&
+      // Bit-fields share a storage unit when their declared types have the
+      // same size and the bits fit. Signedness does NOT split the unit —
+      // every major ABI (and clang/gcc) packs `int a:3; unsigned b:3`
+      // into one unit; sign extension is applied per-member at access
+      // time from bitWidth + the member's own type.
+      if (inBitField && mSize === bfUnitSize &&
           bfBitsUsed + bw <= unitBits) {
         // Fits in current storage unit
         m.bitOffset = bfBitsUsed;

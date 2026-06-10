@@ -10,8 +10,8 @@ c_min=-128
 d_max=32767
 d_min=-32768
 mixed_s=-1 mixed_u=15
-sizeof_Mixed=8
-mixed_raw0=0xf mixed_raw1=0xf
+sizeof_Mixed=4
+mixed_raw0=0xff
 mixed_s_7=7
 mixed_s_neg8=-8
 allneg_a=-1 b=-1 c=-1 d=-1

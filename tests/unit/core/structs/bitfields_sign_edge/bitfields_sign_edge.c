@@ -8,10 +8,11 @@ struct S1 {
   int d : 16;  /* range: -32768 to 32767 */
 };
 
-/* Mixed signed and unsigned: different base types go to separate units */
+/* Mixed signed and unsigned: same-size base types share a unit
+   (matching clang/gcc and every major ABI) */
 struct Mixed {
-  int      s : 4;    /* signed, in unit 0 */
-  unsigned u : 4;    /* unsigned, in unit 1 (different type) */
+  int      s : 4;    /* bits 0-3 of unit 0 */
+  unsigned u : 4;    /* bits 4-7 of unit 0 */
 };
 
 /* Sign extension edge: store -1 in various widths */
@@ -59,19 +60,19 @@ int main() {
   s.d = -32768;
   printf("d_min=%d\n", s.d);
 
-  /* Mixed signed/unsigned: separate storage units (int vs unsigned) */
+  /* Mixed signed/unsigned: same-size types share one storage unit */
   struct Mixed m;
   unsigned int *mraw = (unsigned int *)&m;
-  mraw[0] = 0; mraw[1] = 0;
+  mraw[0] = 0;
   m.s = -1;
   m.u = 15;
   printf("mixed_s=%d mixed_u=%u\n", m.s, m.u);
   printf("sizeof_Mixed=%d\n", (int)sizeof(struct Mixed));
-  /* s is in unit0, u is in unit1 */
-  printf("mixed_raw0=0x%x mixed_raw1=0x%x\n", mraw[0], mraw[1]);
+  /* s in bits 0-3, u in bits 4-7 of the same unit */
+  printf("mixed_raw0=0x%x\n", mraw[0]);
 
   /* Read signed field values */
-  mraw[0] = 0; mraw[1] = 0;
+  mraw[0] = 0;
   m.s = 7;   /* max positive for 4-bit signed */
   printf("mixed_s_7=%d\n", m.s);
   m.s = -8;  /* min negative for 4-bit signed */
