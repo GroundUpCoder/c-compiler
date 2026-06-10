@@ -194,7 +194,13 @@ function createFileSystem({ fs, ctx }) {
         return allocFd(entry);
       },
       close: function (fd) {
-        if (fd < 3 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        if (fd < 3) {
+          /* POSIX allows closing std fds. Drop the table entry (further
+             use is EBADF) without closing the host process's streams. */
+          fdTable[fd] = null;
+          return 0;
+        }
         const entry = fdTable[fd];
         /* dup'd fds alias one entry; only close the native fd with the
            last alias. */
@@ -624,7 +630,7 @@ function createFileSystem({ fs, ctx }) {
         return 0;
       },
       usleep: new WebAssembly.Suspending(async function (usec) {
-        await new Promise(resolve => setTimeout(resolve, Math.max(1, usec / 1000)));
+        await new Promise(resolve => setTimeout(resolve, usec / 1000));
         return 0;
       }),
       __nanosleep: new WebAssembly.Suspending(async function (sec, nsec) {
@@ -1291,7 +1297,7 @@ function createBrowserFileSystem({ ctx }) {
       return 0;
     }),
     usleep: new WebAssembly.Suspending(async function (usec) {
-      await new Promise(resolve => setTimeout(resolve, Math.max(1, usec / 1000)));
+      await new Promise(resolve => setTimeout(resolve, usec / 1000));
       return 0;
     }),
     __nanosleep: new WebAssembly.Suspending(async function (sec, nsec) {
