@@ -3911,6 +3911,12 @@ function typesAreAssignmentCompatible(srcType, targetType, expr) {
     const su = sBase.removeQualifiers(), tu = tBase.removeQualifiers();
     if (su.isCompatibleWith(tu)) return true;
     if (isCharType(su) && isCharType(tu)) return true;
+    // Pointers to same-size integer types of different signedness
+    // (long long * <- unsigned long long *). Strictly a constraint
+    // violation, but gcc and clang accept it (with a default-off
+    // warning) and real code — and Csmith output — relies on it. The
+    // representation is identical either way.
+    if (su.isInteger() && tu.isInteger() && su.size === tu.size) return true;
     return false;
   }
   // Pointer target ← null pointer constant (literal 0, casts of 0).
