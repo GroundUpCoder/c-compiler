@@ -19,6 +19,8 @@ Categories:
     tcc    — differential tests: wasm-built tcc vs clang-built tcc must emit
              byte-identical i386 ELF objects for the same inputs
     libc   — musl libc-test functional suite (self-checking conformance)
+    fuzz   — Csmith differential corpus (checksums vs clang-native; live
+             generation too when a csmith binary is available)
     sourcemap — source map line number accuracy tests
     all    — all of the above
 """
@@ -66,6 +68,7 @@ SOURCEMAP_DIR = os.path.join(SCRIPT_DIR, "sourcemap")
 AST_DIR = os.path.join(SCRIPT_DIR, "ast")
 
 LIBC_TEST_DIR = os.path.join(VENDOR_DIR, "libc-test")
+CSMITH_CORPUS_DIR = os.path.join(VENDOR_DIR, "csmith-corpus")
 
 TCC_DIR = os.path.join(VENDOR_DIR, "tcc")
 TCC_NATIVE_BIN = os.path.join(BUILD_DIR, "tcc-native")
@@ -81,7 +84,7 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc"]
+ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -1352,6 +1355,110 @@ def run_libc_tests(results, filter_str=None):
                            f"exit {r.returncode}\n{r.stdout[:800]}{r.stderr[:300]}")
 
 
+# --- fuzz (Csmith differential corpus) ---
+#
+# Tier 1 (no extra deps): compile each vendored Csmith program with
+# compiler.js and compare its checksum against the clang-native value
+# recorded in manifest.json. Csmith output is UB-free by construction,
+# so any mismatch is a guaranteed miscompile.
+# Tier 2 (optional): if a csmith generator binary is found, also
+# generate a few fresh seeds and differential-test them against clang.
+
+CSMITH_GEN_FLAGS = ["--max-funcs", "4", "--max-block-depth", "3",
+                    "--max-array-dim", "2", "--max-array-len-per-dim", "4",
+                    "--max-struct-fields", "6", "--max-expr-complexity", "8",
+                    "--no-packed-struct"]
+CSMITH_LIVE_SEEDS = 5  # fresh seeds per run when the generator is available
+
+
+def find_csmith():
+    import shutil
+    cand = os.path.join(os.path.expanduser("~"), "git", "csmith", "build", "src", "csmith")
+    if os.path.exists(cand):
+        return cand
+    return shutil.which("csmith")
+
+
+def run_fuzz_tests(results, filter_str=None):
+    corpus_dir = os.path.join(CSMITH_CORPUS_DIR, "corpus")
+    runtime_dir = os.path.join(CSMITH_CORPUS_DIR, "runtime")
+    manifest_path = os.path.join(CSMITH_CORPUS_DIR, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        results.record("fuzz/setup", False, f"Not found: {manifest_path}")
+        return
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    os.makedirs(TEST_TMPDIR, exist_ok=True)
+
+    def compile_and_run(src, tag):
+        wasm = os.path.join(TEST_TMPDIR, f"fuzz_{tag}.wasm")
+        r = subprocess.run(
+            [*COMPILER_CMD, src, f"-I{runtime_dir}", "-o", wasm],
+            capture_output=True, text=True, timeout=300, cwd=ROOT_DIR)
+        if r.returncode != 0:
+            return None, f"compile failed:\n{r.stderr[:600]}"
+        try:
+            r = subprocess.run(
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                capture_output=True, text=True, timeout=60, cwd=ROOT_DIR)
+        except subprocess.TimeoutExpired:
+            return None, "run timeout"
+        if r.returncode != 0:
+            return None, f"exit {r.returncode}: {r.stderr[:300]}"
+        return r.stdout.strip(), None
+
+    for fname, expected in sorted(manifest.items()):
+        test_name = f"fuzz/{fname[:-2]}"
+        if filter_str and filter_str not in test_name:
+            continue
+        got, err = compile_and_run(os.path.join(corpus_dir, fname), fname[:-2])
+        if err:
+            results.record(test_name, False, err)
+        elif got == expected:
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False,
+                           f"checksum mismatch (MISCOMPILE): expected {expected!r}, got {got!r}")
+
+    # Tier 2: live generation, differential against clang
+    gen = find_csmith()
+    if not gen:
+        return
+    if filter_str and "live" not in filter_str and filter_str not in "fuzz/live":
+        return
+    import random
+    for _ in range(CSMITH_LIVE_SEEDS):
+        seed = random.randint(1, 2**31)
+        test_name = f"fuzz/live-{seed}"
+        src = os.path.join(TEST_TMPDIR, f"fuzz_live_{seed}.c")
+        try:
+            subprocess.run([gen, "--seed", str(seed), *CSMITH_GEN_FLAGS, "-o", src],
+                           check=True, timeout=60)
+            nat = os.path.join(TEST_TMPDIR, f"fuzz_live_{seed}_n")
+            r = subprocess.run(["clang", "-w", f"-I{runtime_dir}", src, "-o", nat],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                results.skip(test_name)
+                continue
+            n = subprocess.run([nat], capture_output=True, text=True, timeout=10)
+            if n.returncode != 0:
+                results.skip(test_name)  # native itself slow/odd: not our problem
+                continue
+        except subprocess.TimeoutExpired:
+            results.skip(test_name)
+            continue
+        got, err = compile_and_run(src, f"live_{seed}")
+        if err:
+            results.record(test_name, False, f"seed {seed}: {err}")
+        elif got == n.stdout.strip():
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False,
+                           f"seed {seed}: checksum mismatch (MISCOMPILE): "
+                           f"native {n.stdout.strip()!r}, wasm {got!r} — "
+                           f"reproduce: csmith --seed {seed} {' '.join(CSMITH_GEN_FLAGS)}")
+
+
 # --- sourcemap tests ---
 
 def run_sourcemap_tests(results, filter_str=None):
@@ -1527,6 +1634,10 @@ def main():
         elif cat == "libc":
             results.section("libc")
             run_libc_tests(results, filter_str=args.filter)
+
+        elif cat == "fuzz":
+            results.section("fuzz")
+            run_fuzz_tests(results, filter_str=args.filter)
 
         elif cat == "sourcemap":
             results.section("sourcemap")
