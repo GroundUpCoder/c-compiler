@@ -1767,154 +1767,136 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
   }
   for (const b of opBytes) bytes.push(b);
 
-  // ModR/M byte
-  if (enc.modrm) {
-    let modrm = 0;
+  // ═══════════════════════════════════════════════════════════════════
+  // ModR/M + SIB + displacement encoding
+  // ═══════════════════════════════════════════════════════════════════
 
-    // Build reg field (bits 5-3)
-    // Note: r1, r2 in modrm rules are 1-indexed operand references
+  // 16-bit addressing mode: rm field from (base, index) pair
+  function encodeMem16(b, idx, disp, regCode) {
+    let rm, mod = 0;
+    const bn = b ? b.name : null;
+    const in_ = idx ? idx.name : null;
+
+    if (!bn && !in_) {
+      // Direct address: mod=00, rm=110(6), disp16 follows
+      return { modrm: ((regCode & 7) << 3) | 0x06,
+               sib: null,
+               dispBytes: [disp & 0xFF, (disp >>> 8) & 0xFF] };
+    }
+
+    // Lookup rm from (base, index) pair
+    const rm16 = { 'BX_SI':0, 'BX_DI':1, 'BP_SI':2, 'BP_DI':3,
+                   '_SI':4, '_DI':5, 'BP_':6, 'BX_':7 };
+    const key = (bn || '') + '_' + (in_ || '');
+    rm = rm16[key] !== undefined ? rm16[key] : 6;
+
+    // mod field from displacement
+    const d = to32(disp || 0);
+    if (d !== 0) mod = (d >= -128 && d <= 127) ? 1 : 2;
+    // [BP] without displacement: mod=00 is illegal (rm=110=direct address).
+    // Force mod=1 with disp8=0.
+    if (bn === 'BP' && !in_ && mod === 0) mod = 1;
+
+    const dispBytes = [];
+    if (mod === 1) dispBytes.push(d & 0xFF);
+    else if (mod === 2) dispBytes.push(d & 0xFF, (d >>> 8) & 0xFF);
+
+    return { modrm: (mod << 6) | ((regCode & 7) << 3) | rm,
+             sib: null, dispBytes };
+  }
+
+  // 32-bit addressing mode
+  function encodeMem32(b, idx, scale, disp, regCode) {
+    let rm, mod = 0, sib = null;
+    const d = to32(disp || 0);
+    if (d !== 0) mod = (d >= -128 && d <= 127) ? 1 : 2;
+
+    if (!b && !idx) {
+      // Direct address: mod=00, rm=101(5), disp32
+      return { modrm: ((regCode & 7) << 3) | 0x05, sib: null,
+               dispBytes: [d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF] };
+    }
+
+    if (b && !idx) {
+      // Base-only
+      if (b.code === 4) {
+        // ESP requires SIB (no direct rm encoding for ESP base-only)
+        rm = 4; sib = (0 << 6) | (4 << 3) | 4;
+      } else {
+        rm = b.code;
+        // [EBP] with mod=00 → rm=101 means disp32, not EBP base.
+        if (b.code === 5 && mod === 0) mod = 1;
+      }
+    } else {
+      // Has index (and optionally base): SIB required
+      rm = 4;
+      const sc = scale || 1;
+      const scBits = sc === 2 ? 1 : sc === 4 ? 2 : sc === 8 ? 3 : 0;
+      const idxCode = idx ? (idx.code & 7) : 4;
+      const baseCode = b ? (b.code & 7) : 5;
+      sib = (scBits << 6) | (idxCode << 3) | baseCode;
+      if (!b) mod = 0; // no base: disp32 follows
+    }
+
+    const dispBytes = [];
+    if (mod === 1) dispBytes.push(d & 0xFF);
+    else if (mod === 2) dispBytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
+    else if (mod === 0 && rm === 4 && sib !== null && (sib & 7) === 5)
+      dispBytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
+
+    return { modrm: (mod << 6) | ((regCode & 7) << 3) | rm, sib, dispBytes };
+  }
+
+  // ── Build ModR/M byte ──
+  if (enc.modrm) {
+    let modrm = 0, sib = null, dispBytes = [];
+
+    // reg field (bits 5-3). r1/r2 are 1-indexed operand references.
+    let regCode = enc.modrmReg !== undefined ? (enc.modrmReg & 7) : 0;
     if (enc.modrm.includes('reg=')) {
       const m = enc.modrm.match(/reg=r(\d)/);
       if (m) {
-        const opIdx = parseInt(m[1]) - 1; // convert to 0-indexed
+        const opIdx = parseInt(m[1]) - 1;
         const op = ops[opIdx];
-        if (op && op.kind === 'reg') {
-          modrm |= ((op.code || 0) & 0x07) << 3;
-        }
+        if (op && op.kind === 'reg') regCode = (op.code || 0) & 7;
       }
-    } else if (enc.modrmReg !== undefined) {
-      modrm |= (enc.modrmReg & 0x07) << 3;
     }
 
-    // Build rm field (bits 2-0) and mod field (bits 7-6)
+    // rm field (bits 2-0)
     if (enc.modrm.includes('rm=')) {
       const m = enc.modrm.match(/rm=r(\d)/);
       if (m) {
-        const opIdx = parseInt(m[1]) - 1; // convert to 0-indexed
+        const opIdx = parseInt(m[1]) - 1;
         const op = ops[opIdx];
         if (op && op.kind === 'reg') {
-          modrm |= 0xC0; // mod = 11 (register-direct)
-          modrm |= (op.code || 0) & 0x07;
+          // Register-direct: mod=11, reg from regCode, rm from register code
+          modrm = 0xC0 | ((regCode & 7) << 3) | ((op.code || 0) & 7);
         } else if (op && op.kind === 'mem') {
-          // Encode memory operand ModR/M + SIB + displacement
-          const mem = op;
-          const addrSize = defaultSize; // 16 or 32
-
-          // Emit segment override prefix before opcode (handled earlier in prefix section?)
-          // Actually, segment overrides for memory references go here, before ModR/M.
-          // We'll handle seg prefix separately.
-
-          if (addrSize === 16) {
-            // 16-bit addressing mode
-            const b = mem.base;
-            const idx = mem.index;
-            if (!b && !idx) {
-              // Direct address: mod=00, rm=110, disp16 follows
-              modrm |= 0x06;
-            } else if (b && b.name === 'BX' && idx && idx.name === 'SI') {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x00;
-            } else if (b && b.name === 'BX' && idx && idx.name === 'DI') {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x01;
-            } else if (b && b.name === 'BP' && idx && idx.name === 'SI') {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x02;
-            } else if (b && b.name === 'BP' && idx && idx.name === 'DI') {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x03;
-            } else if (idx && idx.name === 'SI' && !b) {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x04;
-            } else if (idx && idx.name === 'DI' && !b) {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x05;
-            } else if (b && b.name === 'BP' && !idx) {
-              // [BP] always needs at least disp8
-              modrm |= (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) | 0x06;
-            } else if (b && b.name === 'BX' && !idx) {
-              modrm |= (mem.disp ? (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80) : 0x00) | 0x07;
-            } else {
-              modrm |= 0x06; // fallback: direct address
-            }
-          } else {
-            // 32-bit addressing mode
-            const b = mem.base;
-            const idx = mem.index;
-            if (!b && !idx) {
-              // Direct address: mod=00, rm=101, disp32 follows
-              modrm |= 0x05;
-            } else if (b && !idx) {
-              // Base-only: no SIB unless base is ESP
-              if (b.code === 4) {
-                // ESP requires SIB byte
-                modrm |= 0x04; // rm=100 → SIB follows
-                // SIB: scale=0, index=4 (no index), base=ESP(4)
-                enc._sib = (0 << 6) | (4 << 3) | 4;
-              } else {
-                modrm |= 0x00 | b.code;
-              }
-              // Determine mod from displacement
-              if (mem.disp) {
-                modrm |= (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80);
-              } else {
-                // [EBP] with no disp → mod=01, disp8=0 (mod=00,rm=101 means disp32-only)
-                if (b.code === 5) modrm |= 0x40;
-              }
-            } else {
-              // Has index (and possibly base)
-              modrm |= 0x04; // rm=100 → SIB follows
-              const s = mem.scale || 1;
-              const scaleBits = s === 2 ? 1 : s === 4 ? 2 : s === 8 ? 3 : 0;
-              const idxCode = idx ? idx.code : 4; // 4 = no index
-              const baseCode = b ? b.code : 5; // 5 = no base, disp32
-              enc._sib = (scaleBits << 6) | ((idxCode & 7) << 3) | (baseCode & 7);
-              // If no base: mod=00 (disp32 follows)
-              if (!b) {
-                modrm |= 0x00; // mod=00 (disp32)
-              } else if (mem.disp) {
-                modrm |= (mem.disp >= -128 && mem.disp <= 127 ? 0x40 : 0x80);
-              }
-            }
-          }
+          const dp = to32(op.disp || 0);
+          const r = defaultSize === 16
+            ? encodeMem16(op.base, op.index, dp, regCode)
+            : encodeMem32(op.base, op.index, op.scale, dp, regCode);
+          modrm = r.modrm; sib = r.sib; dispBytes = r.dispBytes;
         } else if (op && op.kind === 'imm') {
-          // Direct address in ModR/M: mod=00, rm=101 → disp32 follows
-          modrm |= 0x05; // mod=00, rm=101
+          // Direct address (moffs-like)
+          const v = to32(op.value || 0);
+          if (defaultSize === 16) {
+            modrm = ((regCode & 7) << 3) | 0x06;
+            dispBytes = [v & 0xFF, (v >>> 8) & 0xFF];
+          } else {
+            modrm = ((regCode & 7) << 3) | 0x05;
+            dispBytes = [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+          }
         }
       }
+    } else {
+      modrm = (regCode & 7) << 3;
     }
 
     bytes.push(modrm & 0xFF);
-
-  // SIB byte (set during ModR/M memory encoding)
-  if (enc._sib !== undefined) bytes.push(enc._sib & 0xFF);
-
-  // Displacement for memory operands
-  const memForDisp = ops.find(o => o.kind === "mem");
-  if (memForDisp) {
-    const modrmByte = bytes[bytes.length - (enc._sib !== undefined ? 2 : 1)];
-    const mod = (modrmByte >> 6) & 3;
-    const rm = modrmByte & 7;
-    const sibByte = enc._sib !== undefined ? bytes[bytes.length - 1] : null;
-    const d = to32(memForDisp.disp || 0);
-    if (mod === 1) {
-      bytes.push(d & 0xFF);
-    } else if (mod === 2) {
-      bytes.push(d & 0xFF, (d >>> 8) & 0xFF);
-    } else if (mod === 0 && rm === 6) {
-      // 16-bit direct address
-      bytes.push(d & 0xFF, (d >>> 8) & 0xFF);
-    } else if (mod === 0 && rm === 5) {
-      // 32-bit direct address
-      bytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
-    } else if (mod === 0 && rm === 4 && sibByte !== null && (sibByte & 0x07) === 5) {
-      // SIB with base=101 and mod=00 → disp32 follows
-      bytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
-    }
+    if (sib !== null) bytes.push(sib & 0xFF);
+    for (const b of dispBytes) bytes.push(b);
   }
-
-  // Clean up temporary SIB field
-  delete enc._sib;
-  }
-
-  // SIB byte (TODO: when memory addressing is implemented)
-
-  // Displacement (TODO: when memory addressing is implemented)
-  // For moffs forms (A0-A3), displacement is just the address
 
   // Immediate and relative displacements
   for (let i = 0; i < enc.ops.length; i++) {
