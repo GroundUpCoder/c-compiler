@@ -1086,7 +1086,7 @@ INSN_TABLE.set('STI', [{ op:[0xFB], ops:[], modrm:null }]);
 
 // ── CLD / STD ──
 INSN_TABLE.set('CLD', [{ op:[0xFC], ops:[], modrm:null }]);
-// STD not yet added — add on demand
+INSN_TABLE.set('STD', [{ op:[0xFD], ops:[], modrm:null }]);
 
 // ── PUSH / POP ──
 INSN_TABLE.set('PUSH', [
@@ -1656,15 +1656,15 @@ function matchOperands(ops, encOps, defaultSize) {
         break;
       case OK.RM8:
         if (op.kind === 'reg' && op.bits === 8 && !op.seg && !op.cr && !op.dr) break;
-        if (op.kind === 'mem') break;
+        if (op.kind === 'mem' && (!op.size || op.size === 'BYTE')) break;
         return false;
       case OK.RM16:
         if (op.kind === 'reg' && op.bits === 16 && !op.seg && !op.cr && !op.dr) break;
-        if (op.kind === 'mem') break;
+        if (op.kind === 'mem' && (!op.size || op.size === 'WORD')) break;
         return false;
       case OK.RM32:
         if (op.kind === 'reg' && op.bits === 32 && !op.seg && !op.cr && !op.dr) break;
-        if (op.kind === 'mem') break;
+        if (op.kind === 'mem' && (!op.size || op.size === 'DWORD')) break;
         return false;
       case OK.IMM8:
         if (op.kind === 'imm' || op.kind === 'str') break;
@@ -1792,7 +1792,8 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
     rm = rm16[key] !== undefined ? rm16[key] : 6;
 
     // mod field from displacement
-    const d = to32(disp || 0);
+    // Use signed value for range check (to32 would make negatives unsigned)
+    const d = disp || 0;
     if (d !== 0) mod = (d >= -128 && d <= 127) ? 1 : 2;
     // [BP] without displacement: mod=00 is illegal (rm=110=direct address).
     // Force mod=1 with disp8=0.
@@ -1809,13 +1810,15 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
   // 32-bit addressing mode
   function encodeMem32(b, idx, scale, disp, regCode) {
     let rm, mod = 0, sib = null;
-    const d = to32(disp || 0);
-    if (d !== 0) mod = (d >= -128 && d <= 127) ? 1 : 2;
+    // Use signed value for range check
+    const dRaw = disp || 0;
+    if (dRaw !== 0) mod = (dRaw >= -128 && dRaw <= 127) ? 1 : 2;
 
     if (!b && !idx) {
       // Direct address: mod=00, rm=101(5), disp32
+      const du = to32(dRaw);
       return { modrm: ((regCode & 7) << 3) | 0x05, sib: null,
-               dispBytes: [d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF] };
+               dispBytes: [du & 0xFF, (du >>> 8) & 0xFF, (du >>> 16) & 0xFF, (du >>> 24) & 0xFF] };
     }
 
     // NASM optimization: [idx*2] → [idx + idx*1] to avoid disp32
@@ -1826,7 +1829,7 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
 
     // [EBP] or SIB.base=5 with mod=00 means "no base, disp32".
     // Force mod=1 with disp8=0 when EBP is actually the base with no disp.
-    if (b && b.code === 5 && mod === 0 && d === 0) mod = 1;
+    if (b && b.code === 5 && mod === 0 && dRaw === 0) mod = 1;
 
     if (b && !idx) {
       // Base-only
@@ -1847,11 +1850,12 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
       if (!b) mod = 0; // no base: disp32 follows
     }
 
+    const du = to32(dRaw);
     const dispBytes = [];
-    if (mod === 1) dispBytes.push(d & 0xFF);
-    else if (mod === 2) dispBytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
+    if (mod === 1) dispBytes.push(du & 0xFF);
+    else if (mod === 2) dispBytes.push(du & 0xFF, (du >>> 8) & 0xFF, (du >>> 16) & 0xFF, (du >>> 24) & 0xFF);
     else if (mod === 0 && rm === 4 && sib !== null && (sib & 7) === 5)
-      dispBytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
+      dispBytes.push(du & 0xFF, (du >>> 8) & 0xFF, (du >>> 16) & 0xFF, (du >>> 24) & 0xFF);
 
     return { modrm: (mod << 6) | ((regCode & 7) << 3) | rm, sib, dispBytes };
   }

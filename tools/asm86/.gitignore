@@ -1,2 +1,4 @@
 *.out.bin
 test/.fuzz_tmp/
+test/.analyze_tmp/
+test/.iso_tmp/
