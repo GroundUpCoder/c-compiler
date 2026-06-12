@@ -807,7 +807,12 @@ function parse(tokens, filename) {
         i = expr.next;
         return { kind: 'imm', value: expr.value, size: sizeTok.value.toUpperCase(), tokenStart: szStartIdx, tokenEnd: expr.next };
       }
-      // Just a size prefix followed by expression
+      // Size prefix followed by memory reference or expression
+      if (peek() && peek().type === TOKEN.PUNCT && peek().value === '[') {
+        const mem = readMemRef();
+        mem.size = sizeTok.value.toUpperCase();
+        return mem;
+      }
       const szStartIdx2 = i;
       const expr2 = parseExpr(tokens, i, { here: 0, sectionStart: 0, labels: new Map() });
       i = expr2.next;
@@ -896,20 +901,31 @@ function parse(tokens, filename) {
       // Register
       if (pt.type === TOKEN.ID && ALL_REGS.has(pt.value.toUpperCase())) {
         const reg = ALL_REGS.get(pt.value.toUpperCase());
-        // Skip segment registers (should have been caught above)
         if (reg.seg) { p++; continue; }
-        // Check for '* scale' after a potential index register (32-bit mode only)
+        // Check for '* scale' — this makes it an index register
         let sc = 1;
         if (p + 2 < parts.length && parts[p + 1].type === TOKEN.PUNCT && parts[p + 1].value === '*' &&
             parts[p + 2].type === TOKEN.NUM) {
           sc = parts[p + 2].value;
-          p += 2;
+          p += 2; // skip * and scale value
         }
-        if (!base) {
+        // Classify register as base or index
+        // 16-bit: SI/DI are always index, BX/BP are always base
+        // 32-bit: any reg can be base or index; scale forces index
+        const isIdx16 = (reg.name === 'SI' || reg.name === 'DI') && reg.bits === 16;
+        const isBase16 = (reg.name === 'BX' || reg.name === 'BP') && reg.bits === 16;
+        if (sc !== 1 || isIdx16) {
+          // This is an index register (scale or 16-bit SI/DI)
+          if (!index) {
+            index = { name: reg.name, bits: reg.bits, code: reg.code };
+            scale = sc;
+          } else if (!base && !isBase16) {
+            base = { name: reg.name, bits: reg.bits, code: reg.code };
+          }
+        } else if (!base) {
           base = { name: reg.name, bits: reg.bits, code: reg.code };
         } else if (!index) {
           index = { name: reg.name, bits: reg.bits, code: reg.code };
-          scale = sc;
         }
         p++;
         continue;
@@ -1017,12 +1033,12 @@ INSN_TABLE.set('MOV', [
   { op:[0x89], ops:[OK.RM16, OK.R16], modrm:'reg=r2,rm=r1' },
   // mov r/m32, r32
   { op:[0x89], ops:[OK.RM32, OK.R32], modrm:'reg=r2,rm=r1' },
-  // mov r8, r/m8
-  { op:[0x8A], ops:[OK.R8, OK.RM8], modrm:'reg=r2,rm=r1' },
+  // mov r8, r/m8  — reg=r1(dest register), rm=r2(source r/m)
+  { op:[0x8A], ops:[OK.R8, OK.RM8], modrm:'reg=r1,rm=r2' },
   // mov r16, r/m16
-  { op:[0x8B], ops:[OK.R16, OK.RM16], modrm:'reg=r2,rm=r1' },
+  { op:[0x8B], ops:[OK.R16, OK.RM16], modrm:'reg=r1,rm=r2' },
   // mov r32, r/m32
-  { op:[0x8B], ops:[OK.R32, OK.RM32], modrm:'reg=r2,rm=r1' },
+  { op:[0x8B], ops:[OK.R32, OK.RM32], modrm:'reg=r1,rm=r2' },
   // mov r/m16, Sreg  — ModR/M reg = Sreg(op2), rm = r/m16(op1)
   { op:[0x8C], ops:[OK.RM16, OK.SREG], modrm:'reg=r2,rm=r1' },
   // mov Sreg, r/m16  — ModR/M reg = Sreg(op1), rm = r/m16(op2)
@@ -1175,12 +1191,12 @@ function addAluMnemonic(name, opExt) {
     { op:[0x01 + opExt * 8], ops:[OK.RM16, OK.R16], modrm:'reg=r2,rm=r1' },
     // r/m32, r32
     { op:[0x01 + opExt * 8], ops:[OK.RM32, OK.R32], modrm:'reg=r2,rm=r1' },
-    // r8, r/m8
-    { op:[0x02 + opExt * 8], ops:[OK.R8, OK.RM8], modrm:'reg=r2,rm=r1' },
+    // r8, r/m8  — reg=r1(dest register), rm=r2(source r/m)
+    { op:[0x02 + opExt * 8], ops:[OK.R8, OK.RM8], modrm:'reg=r1,rm=r2' },
     // r16, r/m16
-    { op:[0x03 + opExt * 8], ops:[OK.R16, OK.RM16], modrm:'reg=r2,rm=r1' },
+    { op:[0x03 + opExt * 8], ops:[OK.R16, OK.RM16], modrm:'reg=r1,rm=r2' },
     // r32, r/m32
-    { op:[0x03 + opExt * 8], ops:[OK.R32, OK.RM32], modrm:'reg=r2,rm=r1' },
+    { op:[0x03 + opExt * 8], ops:[OK.R32, OK.RM32], modrm:'reg=r1,rm=r2' },
     // al, imm8
     { op:[0x04 + opExt * 8], ops:[OK.AL, OK.IMM8], modrm:null },
     // ax/eax, imm16/32
@@ -1259,16 +1275,24 @@ INSN_TABLE.set('TEST', [
 
 // ── INC / DEC (FE/FF group) ──
 INSN_TABLE.set('INC', [
+  // Short form: 0x40+reg for all 16-bit registers (BITS 16) or 32-bit (BITS 32)
+  { op:[0x40], ops:[OK.R16], modrm:null, opReg:true },
+  { op:[0x40], ops:[OK.R32], modrm:null, opReg:true },
+  // Long form for r/m8
   { op:[0xFE], ops:[OK.RM8], modrm:'rm=r1', modrmReg:0 },
+  // Long form for r/m16, r/m32 (when short form doesn't apply)
   { op:[0xFF], ops:[OK.RM16], modrm:'rm=r1', modrmReg:0 },
   { op:[0xFF], ops:[OK.RM32], modrm:'rm=r1', modrmReg:0 },
-  { op:[0x40], ops:[OK.AX], modrm:null, opReg:true }, // INC AX/EAX (0x40+reg)
 ]);
 INSN_TABLE.set('DEC', [
+  // Short form: 0x48+reg for all 16-bit registers (BITS 16) or 32-bit (BITS 32)
+  { op:[0x48], ops:[OK.R16], modrm:null, opReg:true },
+  { op:[0x48], ops:[OK.R32], modrm:null, opReg:true },
+  // Long form for r/m8
   { op:[0xFE], ops:[OK.RM8], modrm:'rm=r1', modrmReg:1 },
+  // Long form for r/m16, r/m32
   { op:[0xFF], ops:[OK.RM16], modrm:'rm=r1', modrmReg:1 },
   { op:[0xFF], ops:[OK.RM32], modrm:'rm=r1', modrmReg:1 },
-  { op:[0x48], ops:[OK.AX], modrm:null, opReg:true }, // DEC AX/EAX (0x48+reg)
 ]);
 
 // ── NOT / NEG ──
@@ -1862,9 +1886,10 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
   // Displacement for memory operands
   const memForDisp = ops.find(o => o.kind === "mem");
   if (memForDisp) {
-    const rmByte = bytes[bytes.length - 1]; // last byte pushed (ModR/M or SIB)
-    const mod = (rmByte >> 6) & 3;
-    const rm = rmByte & 7;
+    const modrmByte = bytes[bytes.length - (enc._sib !== undefined ? 2 : 1)];
+    const mod = (modrmByte >> 6) & 3;
+    const rm = modrmByte & 7;
+    const sibByte = enc._sib !== undefined ? bytes[bytes.length - 1] : null;
     const d = to32(memForDisp.disp || 0);
     if (mod === 1) {
       bytes.push(d & 0xFF);
@@ -1875,6 +1900,9 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
       bytes.push(d & 0xFF, (d >>> 8) & 0xFF);
     } else if (mod === 0 && rm === 5) {
       // 32-bit direct address
+      bytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
+    } else if (mod === 0 && rm === 4 && sibByte !== null && (sibByte & 0x07) === 5) {
+      // SIB with base=101 and mod=00 → disp32 follows
       bytes.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF);
     }
   }
