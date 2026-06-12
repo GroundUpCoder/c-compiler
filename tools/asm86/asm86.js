@@ -342,8 +342,14 @@ const BINARY_OPS = new Set(['|', '^', '&', '<<', '>>', '+', '-', '*', '/', '//',
 // Wrapping parseInt for 32-bit unsigned — all assembly values are 32-bit in flat binary.
 // Actually NASM uses 64-bit internally for expression evaluation,
 // but for flat binary output the final value is truncated to 32-bit.
-// We'll use 64-bit (BigInt-ish via Number — JS Number has 53-bit integer precision,
-// which is enough for 32-bit assembly math).
+// Convert to unsigned 32-bit. USE SPARINGLY — only at byte emission sites where
+// unsigned interpretation is explicitly needed. DO NOT use for range checks,
+// comparisons, or value storage. Those must use raw Numbers (which preserve sign).
+//
+// In practice, JS bitwise ops (&, >>>, <<) already coerce to 32-bit, so to32()
+// is rarely necessary. It exists as an explicit marker for "unsigned interpretation."
+//
+// For signed 32-bit clamping, use `v | 0` or `v >> 0`.
 function to32(n) { return n >>> 0; }
 
 // Parse an expression from a token array, starting at index `start`.
@@ -390,18 +396,22 @@ function parseBinary(tokens, i, ctx, minPrec) {
     i = right.next;
 
     switch (op) {
-      case '|': left.value = to32(left.value | right.value); break;
-      case '^': left.value = to32(left.value ^ right.value); break;
-      case '&': left.value = to32(left.value & right.value); break;
-      case '<<': left.value = to32(left.value << right.value); break;
-      case '>>': left.value = to32(left.value >> right.value); break; // unsigned shift
-      case '+': left.value = to32(left.value + right.value); break;
-      case '-': left.value = to32(left.value - right.value); break;
-      case '*': left.value = to32(left.value * right.value); break;
-      case '/': left.value = to32(right.value ? Math.floor(left.value / right.value) : 0); break;
-      case '//': left.value = to32(right.value ? Math.floor(left.value / right.value) : 0); break;
-      case '%': left.value = to32(right.value ? left.value % right.value : 0); break;
-      case '%%': left.value = to32(right.value ? ((left.value % right.value) + right.value) % right.value : 0); break;
+      // Bitwise ops: JS already produces 32-bit signed ints. The result is the
+      // raw two's-complement value — no to32() conversion needed.
+      case '|': left.value = left.value | right.value; break;
+      case '^': left.value = left.value ^ right.value; break;
+      case '&': left.value = left.value & right.value; break;
+      case '<<': left.value = left.value << right.value; break;
+      case '>>': left.value = left.value >> right.value; break;
+      // Arithmetic ops: JS produces floating-point. Clamp to signed 32-bit
+      // (v | 0) so the value stays interpretable as both signed and unsigned.
+      case '+': left.value = (left.value + right.value) | 0; break;
+      case '-': left.value = (left.value - right.value) | 0; break;
+      case '*': left.value = (left.value * right.value) | 0; break;
+      case '/': left.value = Math.floor(right.value ? left.value / right.value : 0) | 0; break;
+      case '//': left.value = Math.floor(right.value ? left.value / right.value : 0) | 0; break;
+      case '%': left.value = (right.value ? left.value % right.value : 0) | 0; break;
+      case '%%': left.value = (right.value ? ((left.value % right.value) + right.value) % right.value : 0) | 0; break;
     }
   }
 
@@ -417,8 +427,9 @@ function parseUnary(tokens, i, ctx) {
     const operand = parseUnary(tokens, i, ctx);
     switch (op) {
       case '+': return { value: operand.value, next: operand.next };
-      case '-': return { value: to32(-operand.value), next: operand.next };
-      case '~': return { value: to32(~operand.value), next: operand.next };
+      // - and ~ already produce signed 32-bit values in JS. No to32().
+      case '-': return { value: -operand.value, next: operand.next };
+      case '~': return { value: ~operand.value, next: operand.next };
       case 'SEG': return { value: 0, next: operand.next }; // SEG returns 0 in flat binary
     }
   }
@@ -430,25 +441,23 @@ function parsePrimary(tokens, i, ctx) {
   if (!t) return { value: 0, next: i };
 
   if (t.type === TOKEN.NUM) {
-    return { value: to32(t.value), next: i + 1 };
+    return { value: t.value, next: i + 1 };
   }
 
   if (t.type === TOKEN.STR) {
-    // String in expression context: first character's byte value,
-    // or multi-byte for DW/DD/DQ (handled at the directive level)
     return { value: t.value.length > 0 ? t.value.charCodeAt(0) : 0, next: i + 1 };
   }
 
   if (t.type === TOKEN.ID) {
     if (t.value === '$') {
-      return { value: to32(ctx.here || 0), next: i + 1 };
+      return { value: ctx.here || 0, next: i + 1 };
     }
     if (t.value === '$$') {
-      return { value: to32(ctx.sectionStart || 0), next: i + 1 };
+      return { value: ctx.sectionStart || 0, next: i + 1 };
     }
     // Label reference — look up in labels
     if (ctx.labels && ctx.labels.has(t.value)) {
-      return { value: to32(ctx.labels.get(t.value)), next: i + 1 };
+      return { value: ctx.labels.get(t.value), next: i + 1 };
     }
     // Undefined label (forward reference) — return 0 for now, will be fixed in multi-pass
     // Actually, for labels that end with ':', we want to skip those (they're definitions)
@@ -936,7 +945,7 @@ function parse(tokens, filename) {
       dispTokenStart = p; // store index into parts for re-evaluation
       dispTokenEnd = p + 1;
       if (pt.type === TOKEN.NUM) {
-        dispVal += sign * to32(pt.value);
+        dispVal += sign * pt.value;
       } else if (pt.type === TOKEN.ID) {
         // Label reference — store for later re-evaluation
         // We'll re-evaluate via the parts tokens during assembly
@@ -1379,6 +1388,7 @@ function argValue(arg) { return (typeof arg === 'object' && arg !== null) ? (arg
 // Re-evaluate an expression from its stored token range, using current assembly context
 function reparseExpr(tokens, tokenStart, tokenEnd, ctx) {
   if (tokenStart === undefined || tokenEnd === undefined) return 0;
+  // parseExpr now returns raw signed/unsigned values — no to32() needed
   return parseExpr(tokens, tokenStart, ctx).value;
 }
 
@@ -1410,17 +1420,10 @@ function assemble(statements, tokens, opts) {
       }
     }
 
-    function emitByte(b) { buf.push(b & 0xFF); }
-    function emitWord(w) { buf.push(w & 0xFF, (w >>> 8) & 0xFF); }
-    function emitDword(d) { buf.push(d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF); }
-
     function evalExpr(exprTokens, ctx) {
-      // If exprTokens is a pre-parsed expression node, use its value
-      // Otherwise parse from scratch with the given context
-      if (typeof exprTokens === 'number') return to32(exprTokens);
-      // Re-parse for each pass since label values change
-      // TODO: store raw tokens for re-evaluation
-      return to32(0);
+      // Dead code — kept as reference. Replaced by reparseExpr + token ranges.
+      if (typeof exprTokens === 'number') return exprTokens;
+      return 0;
     }
 
     for (const stmt of statements) {
@@ -1431,10 +1434,10 @@ function assemble(statements, tokens, opts) {
         continue;
       }
 
-      // EQU — only on first pass (constant)
+      // EQU — only on first pass (constant). Store raw value (no to32).
       if (stmt.type === 'directive' && stmt.dir === 'EQU') {
         if (pass === 0 && stmt.label) {
-          equValues.set(stmt.label, to32(argValue(stmt.args[0])));
+          equValues.set(stmt.label, argValue(stmt.args[0]));
         }
         continue;
       }
@@ -1445,10 +1448,9 @@ function assemble(statements, tokens, opts) {
         continue;
       }
 
-      // ORG — set origin. In flat binary, ORG does NOT emit padding;
-      // it just changes the logical address counter.
+      // ORG — set origin. In flat binary, ORG does NOT emit padding.
       if (stmt.type === 'directive' && stmt.dir === 'ORG') {
-        const newOrg = to32(argValue(stmt.args[0]));
+        const newOrg = argValue(stmt.args[0]);
         here = newOrg;
         if (!sectionStart) sectionStart = newOrg;
         continue;
@@ -1457,7 +1459,7 @@ function assemble(statements, tokens, opts) {
       // ALIGN — pads with 0x90 (NOP) in code sections, 0x00 in data sections.
       // For flat binary with no explicit SECTION, the default is code section.
       if (stmt.type === 'directive' && stmt.dir === 'ALIGN') {
-        const align = argValue(stmt.args[0]);
+        const align = (argValue(stmt.args[0]) | 0);
         const fill = 0x90; // code section default (NASM uses NOP fill)
         while (here % align !== 0) { buf.push(fill); here++; }
         continue;
@@ -1477,22 +1479,22 @@ function assemble(statements, tokens, opts) {
               // Handle simple directives inline
               if (bodyStmt.dir === 'DB') {
                 for (const arg of (bodyStmt.args || [])) {
-                  const val = (arg.kind === 'expr') ? to32(reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues})) : to32(argValue(arg));
+                  const val = (arg.kind === 'expr') ? reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues}) : argValue(arg);
                   buf.push(val & 0xFF); here++;
                 }
               } else if (bodyStmt.dir === 'DW') {
                 for (const arg of (bodyStmt.args || [])) {
-                  const val = (arg.kind === 'expr') ? to32(reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues})) : to32(argValue(arg));
+                  const val = (arg.kind === 'expr') ? reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues}) : argValue(arg);
                   buf.push(val & 0xFF, (val >>> 8) & 0xFF); here += 2;
                 }
               } else if (bodyStmt.dir === 'DD') {
                 for (const arg of (bodyStmt.args || [])) {
-                  const val = (arg.kind === 'expr') ? to32(reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues})) : to32(argValue(arg));
+                  const val = (arg.kind === 'expr') ? reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues}) : argValue(arg);
                   buf.push(val & 0xFF, (val >>> 8) & 0xFF, (val >>> 16) & 0xFF, (val >>> 24) & 0xFF); here += 4;
                 }
               } else if (bodyStmt.dir === 'DQ') {
                 for (const arg of (bodyStmt.args || [])) {
-                  const val = (arg.kind === 'expr') ? to32(reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues})) : to32(argValue(arg));
+                  const val = (arg.kind === 'expr') ? reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues}) : argValue(arg);
                   for (let b = 0; b < 8; b++) { buf.push((val >>> (b * 8)) & 0xFF); here++; }
                 }
               }
@@ -1515,10 +1517,10 @@ function assemble(statements, tokens, opts) {
                 here++;
               }
             } else if (arg.kind === 'expr') {
-              // Re-evaluate expression with current assembly context
+              // Re-evaluate expression — raw value (no to32)
               const val = (arg.tokenStart !== undefined)
-                ? to32(reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues}))
-                : to32(arg.value || 0);
+                ? reparseExpr(tokens, arg.tokenStart, arg.tokenEnd, {here, sectionStart, labels, equValues})
+                : (arg.value || 0);
               // For DQ/DT with raw text, use BigInt for full 64-bit precision
               const rawText = arg.text || '';
               if (esize >= 8 && rawText && typeof BigInt !== 'undefined') {
@@ -1547,7 +1549,7 @@ function assemble(statements, tokens, opts) {
         if (dir === 'RESB' || dir === 'RESW' || dir === 'RESD' || dir === 'RESQ') {
           const resSizes = { RESB:1, RESW:2, RESD:4, RESQ:8 };
           const esize = resSizes[dir];
-          const count = to32(argValue(args[0]) || 0) * esize;
+          const count = (argValue(args[0]) || 0) * esize;
           for (let b = 0; b < count; b++) { buf.push(0); here++; }
           continue;
         }
@@ -1566,12 +1568,12 @@ function assemble(statements, tokens, opts) {
         // Re-evaluate operands once (shared by all encoding candidates)
         const resolvedOps = stmt.ops.map(op => {
           if (op.kind === 'farptr') {
-            // Re-evaluate far pointer segment and offset
+            // Re-evaluate far pointer segment and offset — raw values (no to32)
             const seg = op.segTokenStart !== undefined
-              ? to32(reparseExpr(tokens, op.segTokenStart, op.segTokenEnd, {here, sectionStart, labels, equValues}))
+              ? reparseExpr(tokens, op.segTokenStart, op.segTokenEnd, {here, sectionStart, labels, equValues})
               : op.seg;
             const off = op.offTokenStart !== undefined
-              ? to32(reparseExpr(tokens, op.offTokenStart, op.offTokenEnd, {here, sectionStart, labels, equValues}))
+              ? reparseExpr(tokens, op.offTokenStart, op.offTokenEnd, {here, sectionStart, labels, equValues})
               : op.off;
             return { ...op, seg, off };
           }
@@ -1580,13 +1582,14 @@ function assemble(statements, tokens, opts) {
             let disp = op.disp || 0;
             if (op.parts.length === 1 && op.parts[0].type === TOKEN.ID) {
               const name = op.parts[0].value;
-              if (labels.has(name)) disp = to32(labels.get(name));
-              else if (equValues.has(name)) disp = to32(equValues.get(name));
+              if (labels.has(name)) disp = labels.get(name);
+              else if (equValues.has(name)) disp = equValues.get(name);
             }
             return { ...op, disp };
           }
           if (op.tokenStart !== undefined) {
-            const val = to32(reparseExpr(tokens, op.tokenStart, op.tokenEnd, {here, sectionStart, labels, equValues}));
+            // reparseExpr returns raw value (signed or unsigned depending on context) — no to32()
+            const val = reparseExpr(tokens, op.tokenStart, op.tokenEnd, {here, sectionStart, labels, equValues});
             return { ...op, value: val };
           }
           return op;
