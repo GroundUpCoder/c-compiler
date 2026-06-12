@@ -1710,7 +1710,8 @@ function matchOperands(ops, encOps, defaultSize) {
         if (op.kind === 'imm') break;
         return false;
       case OK.MEM:
-        if (op.kind === 'mem') break;
+        // Moffs forms (A0-A3) only match direct-address memory (no base/index regs)
+        if (op.kind === 'mem' && !op.base && !op.index) break;
         return false;
       case OK.ONE:
         if (op.kind === 'imm' && op.value === 1) break;
