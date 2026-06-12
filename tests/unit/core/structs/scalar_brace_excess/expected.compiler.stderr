@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/scalar_brace_excess/scalar_brace_excess.c.
+tests/unit/core/structs/scalar_brace_excess/scalar_brace_excess.c:2: error: excess elements in scalar initializer

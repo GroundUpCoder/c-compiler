@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/structs/scalar_brace_empty/scalar_brace_empty.c.
+tests/unit/core/structs/scalar_brace_empty/scalar_brace_empty.c:2: error: empty brace initializer for scalar
