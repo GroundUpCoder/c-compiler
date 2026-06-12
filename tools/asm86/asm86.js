@@ -1818,6 +1818,16 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
                dispBytes: [d & 0xFF, (d >>> 8) & 0xFF, (d >>> 16) & 0xFF, (d >>> 24) & 0xFF] };
     }
 
+    // NASM optimization: [idx*2] → [idx + idx*1] to avoid disp32
+    if (!b && idx && scale === 2) {
+      b = idx; // duplicate index as base
+      scale = 1;
+    }
+
+    // [EBP] or SIB.base=5 with mod=00 means "no base, disp32".
+    // Force mod=1 with disp8=0 when EBP is actually the base with no disp.
+    if (b && b.code === 5 && mod === 0 && d === 0) mod = 1;
+
     if (b && !idx) {
       // Base-only
       if (b.code === 4) {
@@ -1825,8 +1835,6 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
         rm = 4; sib = (0 << 6) | (4 << 3) | 4;
       } else {
         rm = b.code;
-        // [EBP] with mod=00 → rm=101 means disp32, not EBP base.
-        if (b.code === 5 && mod === 0) mod = 1;
       }
     } else {
       // Has index (and optionally base): SIB required
@@ -1897,6 +1905,17 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
     bytes.push(modrm & 0xFF);
     if (sib !== null) bytes.push(sib & 0xFF);
     for (const b of dispBytes) bytes.push(b);
+  } else {
+    // No ModR/M — check for moffs/direct-address memory operand (A0-A3 forms)
+    const memOpMoffs = ops.find(o => o.kind === 'mem' && !o.base && !o.index);
+    if (memOpMoffs) {
+      const addr = to32(memOpMoffs.disp || 0);
+      if (defaultSize === 16) {
+        bytes.push(addr & 0xFF, (addr >>> 8) & 0xFF);
+      } else {
+        bytes.push(addr & 0xFF, (addr >>> 8) & 0xFF, (addr >>> 16) & 0xFF, (addr >>> 24) & 0xFF);
+      }
+    }
   }
 
   // Immediate and relative displacements

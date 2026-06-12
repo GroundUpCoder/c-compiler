@@ -1,1 +1,2 @@
 *.out.bin
+test/.fuzz_tmp/
