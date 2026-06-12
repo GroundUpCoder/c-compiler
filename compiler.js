@@ -14220,6 +14220,14 @@ class CodeGenerator {
       this.popLocalScope();
       return;
     }
+    // C99 §6.7.8p11: a scalar may be brace-initialized (e.g. `int x = {0}`).
+    // The parser produces an EInitList even for a scalar; unwrap it to the
+    // single element so the scalar emit path receives a plain expression.
+    if (initExpr instanceof AST.EInitList && !type.isAggregate()) {
+      if (initExpr.elements.length === 1) {
+        initExpr = initExpr.elements[0];
+      }
+    }
     if (isStructOrUnion(type)) {
       this.emitFrameAddr(frameOffset);
       this.emitExpr(initExpr);
@@ -16493,8 +16501,24 @@ class CodeGenerator {
         }
         break;
       }
-      default:
-        throw new Error(`emitExpr: unhandled expression ${expr.constructor.name}`);
+      case AST.EInitList: {
+        // C99 §6.7.8p11: a scalar may be brace-initialized.  The parser
+        // produces an EInitList even for scalar {expr} and the init
+        // may reach emitExpr via the scalar-local code path in emitStmt.
+        // Unwrap to the single element.
+        if (expr.elements.length === 1) {
+          this.emitExpr(expr.elements[0]);
+        } else {
+          const fname = this.currentFuncDef ? (this.currentFuncDef.name || '<anonymous>') : '<unknown>';
+          throw new Error(`emitExpr: EInitList with ${expr.elements.length} elements in expression context (function ${fname})`);
+        }
+        break;
+      }
+      default: {
+        const fname = this.currentFuncDef ? (this.currentFuncDef.name || '<anonymous>') : '<unknown>';
+        const floc = this.currentFuncDef ? (this.currentFuncDef.loc ? this.currentFuncDef.loc.file + ':' + this.currentFuncDef.loc.line : '') : '';
+        throw new Error(`emitExpr: unhandled expression ${expr.constructor.name} in function ${fname} (${floc})`);
+      }
     }
     if (ctx === EXPR_DROP) this.body.drop();
   }
