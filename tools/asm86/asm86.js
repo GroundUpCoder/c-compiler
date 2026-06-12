@@ -1885,7 +1885,7 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
           // Register-direct: mod=11, reg from regCode, rm from register code
           modrm = 0xC0 | ((regCode & 7) << 3) | ((op.code || 0) & 7);
         } else if (op && op.kind === 'mem') {
-          const dp = to32(op.disp || 0);
+          const dp = op.disp || 0; // signed value — encodeMem* handles to32 internally
           const r = defaultSize === 16
             ? encodeMem16(op.base, op.index, dp, regCode)
             : encodeMem32(op.base, op.index, op.scale, dp, regCode);
@@ -1931,9 +1931,9 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
       // 8-bit signed relative displacement
       const target = to32(op.value);
       const instrLen = bytes.length + 1; // +1 for the disp8 byte itself
-      const disp = to32(target - (here + instrLen));
+      const disp = (target - (here + instrLen)) | 0; // signed 32-bit
       // Must fit in signed 8-bit [-128, 127]
-      if ((disp + 128) & ~0xFF) return { error: 'rel8 overflow' };
+      if (disp < -128 || disp > 127) return { error: 'rel8 overflow' };
       bytes.push(disp & 0xFF);
     } else if (ek === OK.REL1632) {
       // 16-bit or 32-bit signed relative displacement
@@ -1948,9 +1948,11 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
       }
     } else if (ek === OK.IMM8) {
       const v = to32(op.value);
-      // For sign-extended imm8 forms (opcode 0x83), value must fit in signed byte
+      // For sign-extended imm8 forms (opcode 0x83), value must fit in signed byte.
+      // Use signed 32-bit interpretation: (v | 0) converts to signed int.
       if (enc.op[0] === 0x83) {
-        if ((v + 128) & ~0xFF) return { error: 'imm8 sign-extended overflow' };
+        const sv = v | 0;
+        if (sv < -128 || sv > 127) return { error: 'imm8 sign-extended overflow' };
       }
       bytes.push(v & 0xFF);
     } else if (ek === OK.IMM16) {
