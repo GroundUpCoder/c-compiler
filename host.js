@@ -1938,6 +1938,7 @@ async function runModule({
   fs: fsModule,
   useBrowserFS,
   blockFsImports,
+  blockFsFactory,
   requestStdin,
   requestTerminalSize,
   requestStdinReady,
@@ -3205,6 +3206,11 @@ async function runModule({
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   } else if (blockFsImports) {
     Object.assign(imports[ENV_KEY], blockFsImports[ENV_KEY]);
+    const posix = createBrowserPosix({ ctx: ctx });
+    Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
+  } else if (blockFsFactory) {
+    const fileSystem = blockFsFactory(ctx);
+    Object.assign(imports[ENV_KEY], fileSystem[ENV_KEY]);
     const posix = createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   }
