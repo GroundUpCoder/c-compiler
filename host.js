@@ -2321,8 +2321,13 @@ var BLOCK_FS = (function () {
       if (!this._inodes.grow(this._inodes.capacity() * 2)) {
         return this._setErr('ENOSPC');
       }
+      // Inode table moved — update superblock pointer
+      this._s.setUint32(SB_INODE_TBL_EXTENT, this._inodes.extent());
+      this._s.setUint32(SB_INODE_TBL_CAP, this._inodes.capacity());
     }
     this._nextInode++;
+    // Persist nextInodeId to superblock so reloads don't reuse inodes
+    this._s.setUint32(SB_NEXT_INODE_ID, this._nextInode);
     var now = this._now();
     var ino = {
       extentOffset: 0, extentCapacity: 0, dataSize: 0,
@@ -2567,8 +2572,9 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.write = function (fd, buf, count) {
     if (fd === 1 || fd === 2) return count; // stdout/stderr handled externally
 
-    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd]) {
       return this._setErr('EBADF');
+    }
     var entry = this._fdTable[fd];
 
     if (entry.type === 'pipe') {
@@ -3452,13 +3458,23 @@ var BLOCK_FS = (function () {
         return this.readlink(readString(path_ptr), buf, bufsize);
       }),
       fcntl: wrap(function (fd, cmd) {
-        // Only F_DUPFD (cmd == 0) is supported
+        // F_DUPFD (cmd == 0)
         if (cmd === 0) {
           var arg = arguments[2] || 0;
           return this.fcntl_dupfd(fd, arg);
         }
-        setErrnoName('ENOSYS');
-        return -1;
+        // F_GETFL (cmd == 3) — return file access mode
+        if (cmd === 3) {
+          // Return O_RDWR if the fd has an inode, O_RDONLY for stdin
+          if (fd <= 2) return 0; // O_RDONLY
+          var entry = self._fdTable[fd];
+          if (entry && entry.inoId !== undefined) return 2; // O_RDWR
+          return 0;
+        }
+        // For all other fcntl commands (file locking, etc.), return
+        // success rather than ENOSYS.  SQLite treats ENOSYS as a disk
+        // I/O error.
+        return 0;
       }),
       fsync: wrap(function (fd) { return 0; }),
     };
