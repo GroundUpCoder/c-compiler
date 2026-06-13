@@ -2931,6 +2931,190 @@ var BLOCK_FS = (function () {
     return 0;
   };
 
+  // ftruncate(fd, size) — truncate or extend an open file.
+  BlockFS.prototype.ftruncate = function (fd, size) {
+    if (size < 0) return this._setErr('EINVAL');
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+    if (entry.inoId === undefined) return this._setErr('EBADF');
+
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+
+    if (size > ino.extentCapacity) {
+      if (this._growExtent(ino, size) === null) return this._setErr('ENOSPC');
+    } else if (size < ino.dataSize && size > 0 &&
+               size < ino.extentCapacity / 4) {
+      // Shrink extent if significantly smaller than capacity
+      var newExt = this._alloc.realloc(ino.extentOffset, Math.max(size, 256));
+      if (newExt) { ino.extentOffset = newExt; ino.extentCapacity = Math.max(size, 256); }
+    }
+
+    // Zero-fill if extending
+    if (size > ino.dataSize && ino.extentOffset) {
+      var zeroLen = size - ino.dataSize;
+      var zeroes = new Uint8Array(zeroLen);
+      this._s.setBytes(ino.extentOffset + ino.dataSize, zeroes);
+    }
+
+    ino.dataSize = size;
+    ino.mtime = this._now();
+    this._inodes.write(entry.inoId, ino);
+
+    // Clamp fd position if past new EOF
+    if (entry.position > size) entry.position = size;
+
+    return 0;
+  };
+
+  // chmod(path, mode) — change file mode bits.
+  BlockFS.prototype.chmod = function (path, mode) {
+    var w = this._walkPath(this._resolvePath(path));
+    if (!w) return this._setErr('ENOENT');
+    w.ino.mode = (w.ino.mode & S_IFMT) | (mode & 0o7777);
+    w.ino.ctime = this._now();
+    this._inodes.write(w.inoId, w.ino);
+    return 0;
+  };
+
+  // fchmod(fd, mode) — change mode on an open file.
+  BlockFS.prototype.fchmod = function (fd, mode) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+    if (entry.inoId === undefined) return this._setErr('EBADF');
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+    ino.mode = (ino.mode & S_IFMT) | (mode & 0o7777);
+    ino.ctime = this._now();
+    this._inodes.write(entry.inoId, ino);
+    return 0;
+  };
+
+  // utime(path, [atime, mtime]) — set file timestamps.
+  BlockFS.prototype.utime = function (path, atime, mtime) {
+    var w = this._walkPath(this._resolvePath(path));
+    if (!w) return this._setErr('ENOENT');
+    w.ino.mtime = mtime !== undefined ? mtime : this._now();
+    w.ino.ctime = atime !== undefined ? atime : this._now();
+    this._inodes.write(w.inoId, w.ino);
+    return 0;
+  };
+
+  // link(oldPath, newPath) — create a hard link.
+  BlockFS.prototype.link = function (oldPath, newPath) {
+    var oldW = this._walkPath(this._resolvePath(oldPath));
+    if (!oldW) return this._setErr('ENOENT');
+    if ((oldW.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EPERM');
+
+    var newResolved = this._resolvePath(newPath);
+    if (this._walkPath(newResolved)) return this._setErr('EEXIST');
+
+    var parentPath = newResolved.substring(0, newResolved.lastIndexOf('/')) || '/';
+    var fileName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
+    var pw = this._walkPath(parentPath);
+    if (!pw) return this._setErr('ENOENT');
+    if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+    var entSize = DIR_ENT_HEADER + encodeStr(fileName).length;
+    if (!pw.ino.extentOffset ||
+        pw.ino.dataSize + entSize > pw.ino.extentCapacity) {
+      if (this._growExtent(pw.ino,
+          (pw.ino.dataSize || 0) + Math.max(entSize, 256)) === null)
+        return this._setErr('ENOSPC');
+    }
+    dirInsert(this._s, pw.ino.extentOffset,
+      pw.ino.dataSize || 0, oldW.inoId, fileName);
+    pw.ino.dataSize = (pw.ino.dataSize || 0) + entSize;
+    pw.ino.mtime = this._now();
+    this._inodes.write(pw.inoId, pw.ino);
+
+    oldW.ino.nlink++;
+    this._inodes.write(oldW.inoId, oldW.ino);
+    return 0;
+  };
+
+  // symlink(target, linkPath) — create a symbolic link.
+  // Stores the target path as the symlink inode's data.
+  BlockFS.prototype.symlink = function (target, linkPath) {
+    var linkResolved = this._resolvePath(linkPath);
+    if (this._walkPath(linkResolved)) return this._setErr('EEXIST');
+
+    var parentPath = linkResolved.substring(0, linkResolved.lastIndexOf('/')) || '/';
+    var linkName = linkResolved.substring(linkResolved.lastIndexOf('/') + 1);
+    var pw = this._walkPath(parentPath);
+    if (!pw) return this._setErr('ENOENT');
+    if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+    var inoId = this._allocInode(S_IFREG | 0o777);
+    if (inoId === null) return -1;
+
+    var targetBytes = encodeStr(target);
+    var ino = this._inodes.read(inoId);
+    if (this._growExtent(ino, targetBytes.length) === null) {
+      this._freeInode(inoId); return this._setErr('ENOSPC');
+    }
+    this._s.setBytes(ino.extentOffset, targetBytes);
+    ino.dataSize = targetBytes.length;
+    ino.nlink = 1;
+    this._inodes.write(inoId, ino);
+
+    var entSize = DIR_ENT_HEADER + encodeStr(linkName).length;
+    if (!pw.ino.extentOffset ||
+        pw.ino.dataSize + entSize > pw.ino.extentCapacity) {
+      if (this._growExtent(pw.ino,
+          (pw.ino.dataSize || 0) + Math.max(entSize, 256)) === null) {
+        this._freeInode(inoId); return this._setErr('ENOSPC');
+      }
+    }
+    dirInsert(this._s, pw.ino.extentOffset,
+      pw.ino.dataSize || 0, inoId, linkName);
+    pw.ino.dataSize = (pw.ino.dataSize || 0) + entSize;
+    pw.ino.mtime = this._now();
+    this._inodes.write(pw.inoId, pw.ino);
+    return 0;
+  };
+
+  // readlink(path, buf, bufsize) — read symlink target into buf.
+  BlockFS.prototype.readlink = function (path, buf, bufsize) {
+    var w = this._walkPath(this._resolvePath(path));
+    if (!w) return this._setErr('ENOENT');
+    if (!w.ino.extentOffset || w.ino.dataSize === 0) return 0;
+    var n = Math.min(w.ino.dataSize, bufsize);
+    var data = this._s.getBytes(w.ino.extentOffset, n);
+    for (var i = 0; i < n; i++) buf[i] = data[i];
+    return n;
+  };
+
+  // fcntl F_DUPFD — duplicate fd, allocating >= minfd.
+  BlockFS.prototype.fcntl_dupfd = function (oldfd, minfd) {
+    if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
+      return this._setErr('EBADF');
+    if (minfd < 0) minfd = 0;
+    var entry = this._fdTable[oldfd];
+
+    while (this._fdTable.length <= minfd) this._fdTable.push(null);
+    var newfd = -1;
+    for (var i = minfd; i < this._fdTable.length; i++) {
+      if (this._fdTable[i] === null) { newfd = i; break; }
+    }
+    if (newfd < 0) {
+      this._fdTable.push(null);
+      newfd = this._fdTable.length - 1;
+    }
+
+    if (entry.type === 'pipe') {
+      this._fdTable[newfd] = {
+        type: 'pipe', pipe: entry.pipe,
+        pipeEnd: entry.pipeEnd, position: null
+      };
+    } else {
+      this._fdTable[newfd] = entry;
+    }
+    return newfd;
+  };
+
   // =================================================================
   // WASM import adapter
   // =================================================================
@@ -3209,6 +3393,37 @@ var BLOCK_FS = (function () {
         mem.setInt32(cols_ptr, 80, true);
         return 0;
       },
+
+      // ---- additional POSIX ops ----
+      ftruncate: wrap(function (fd, size) { return this.ftruncate(fd, size); }),
+      chmod: wrap(function (path_ptr, mode) {
+        return this.chmod(readString(path_ptr), mode);
+      }),
+      fchmod: wrap(function (fd, mode) { return this.fchmod(fd, mode); }),
+      utime: wrap(function (path_ptr, atime, mtime) {
+        return this.utime(readString(path_ptr), atime, mtime);
+      }),
+      link: wrap(function (old_ptr, new_ptr) {
+        return this.link(readString(old_ptr), readString(new_ptr));
+      }),
+      symlink: wrap(function (target_ptr, link_ptr) {
+        return this.symlink(readString(target_ptr), readString(link_ptr));
+      }),
+      readlink: wrap(function (path_ptr, buf_ptr, bufsize) {
+        var memory = getMemory();
+        var buf = new Uint8Array(memory.buffer, buf_ptr, bufsize);
+        return this.readlink(readString(path_ptr), buf, bufsize);
+      }),
+      fcntl: wrap(function (fd, cmd) {
+        // Only F_DUPFD (cmd == 0) is supported
+        if (cmd === 0) {
+          var arg = arguments[2] || 0;
+          return this.fcntl_dupfd(fd, arg);
+        }
+        setErrnoName('ENOSYS');
+        return -1;
+      }),
+      fsync: wrap(function (fd) { return 0; }),
     };
   };
 

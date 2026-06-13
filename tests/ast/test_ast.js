@@ -836,10 +836,10 @@ test('TAC: pointer can NOT DROP const at the pointee', () => {
   const constCharPtr = Types.TCHAR.addConst().pointer();
   assert(!TAC(constCharPtr, charPtr), 'const char* → char* (dropping const) rejected');
 });
-test('TAC: pointer-to-int → pointer-to-unsigned-int is rejected', () => {
+test('TAC: pointer-to-int → pointer-to-unsigned-int is compatible (same size)', () => {
   const ip = Types.TINT.pointer();
   const up = Types.TUINT.pointer();
-  assert(!TAC(ip, up), 'int* → unsigned int* rejected (incompatible base)');
+  assert(TAC(ip, up), 'int* → unsigned int* compatible (same-size integer base)');
 });
 test('TAC: _Bool ← pointer is compatible', () => {
   const intPtr = Types.TINT.pointer();

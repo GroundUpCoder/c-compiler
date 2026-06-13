@@ -866,6 +866,10 @@ MICROPYTHON_UPSTREAM_SKIP = {
     "/array",        # array module not enabled
     "/gc",           # MICROPY_PY_GC details
     "math_domain_special",    # has minor float-precision differences
+    "import_star_nonmodule",  # needs MICROPY_PY_SYS_MODULES + BASIC_FEATURES
+    "builtin_compile",        # needs MICROPY_PY_FUNCTION_ATTRS (QSTR regeneration)
+    "memoryview_gc",          # needs MICROPY_PY_GC (QSTR regeneration, not caught by /gc)
+    "float_format_ints",      # needs MICROPY_PY_ARRAY (QSTR regeneration, not caught by /array)
 }
 
 

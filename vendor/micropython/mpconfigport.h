@@ -52,6 +52,10 @@
 #define MICROPY_PY_COLLECTIONS_DEQUE      (1)
 #define MICROPY_PY_BUILTINS_MEMORYVIEW    (1)
 
+// Enable features that don't need QSTR pool regeneration.
+#define MICROPY_PY_STR_BYTES_CMP_WARN    (1)
+#define MICROPY_FULL_CHECKS              (1)
+
 // You can disable the built-in MicroPython compiler by setting the following
 // config option to 0.  If you do this then you won't get a REPL prompt, but you
 // will still be able to execute pre-compiled scripts, compiled with mpy-cross.
