@@ -22302,6 +22302,65 @@ async function doRun(msg) {
       // BLOCK_FS.init returns a Promise<BlockFS>.  The dispatch expects
       // blockFsFactory to return Promise<{ [ENV_KEY]: env }>.
       return BLOCK_FS.init('__blockfs').then(function(fs) {
+        // Write any preloaded OPFS files into the block FS image.
+        // On subsequent loads the bundle-hash check inside the block FS
+        // skips rewriting identical assets.
+        var opfsFiles = msg.opfsFiles;
+        if (opfsFiles && opfsFiles.length > 0) {
+          var bundleHash = msg.bundleHash || '';
+          var needWrite = true;
+
+          // Check stored bundle hash
+          try {
+            var hashFd = fs.open('/__bundle_hash', 0, 0);
+            if (hashFd >= 0) {
+              var hashBuf = new Uint8Array(64);
+              var hashLen = fs.read(hashFd, hashBuf, 64);
+              fs.close(hashFd);
+              if (hashLen > 0) {
+                var storedHash = decoder.decode(hashBuf.subarray(0, hashLen));
+                if (storedHash === bundleHash) needWrite = false;
+              }
+            }
+          } catch (e) {}
+
+          if (needWrite) {
+            // Remove all previously preloaded files (brute force: unlink
+            // whatever we're about to write; the bundle hash changed).
+            for (var fi = 0; fi < opfsFiles.length; fi++) {
+              try { fs.unlink(opfsFiles[fi].path); } catch (e) {}
+            }
+
+            for (var fj = 0; fj < opfsFiles.length; fj++) {
+              var fpath = opfsFiles[fj].path;
+              var fdata = opfsFiles[fj].data;
+
+              // Ensure parent directories exist
+              var parts = fpath.split('/');
+              var dir = '';
+              for (var pi = 0; pi < parts.length - 1; pi++) {
+                if (parts[pi] === '') continue;
+                dir += '/' + parts[pi];
+                try { fs.mkdir(dir, 0o755); } catch (e) {}
+              }
+
+              var fd = fs.open(fpath, 0x40 | 0x200, 0o644); // O_CREAT | O_TRUNC
+              if (fd >= 0) {
+                fs.write(fd, fdata, fdata.length);
+                fs.close(fd);
+              }
+            }
+
+            // Write new bundle hash
+            var hashData = new TextEncoder().encode(bundleHash);
+            var hfd = fs.open('/__bundle_hash', 0x40 | 0x200, 0o644);
+            if (hfd >= 0) {
+              fs.write(hfd, hashData, hashData.length);
+              fs.close(hfd);
+            }
+          }
+        }
+
         return { c: fs.toWasmEnv(ctx) };
       });
     } : undefined,
@@ -22761,43 +22820,62 @@ window.onunhandledrejection = function(e) {
     // Bundle-hash check: if every OPFS asset is already at the right
     // version, skip writing them. (On first load, or on rebuild, the
     // marker won't match and we write everything.)
-    var storedHash = await readBundleHash();
-    if (storedHash === BUNDLE_HASH && OPFS_FILES.length > 0) {
-      setStatus('Assets up to date (skip ' + OPFS_FILES.length + ' files)');
-    } else {
-      setStatus('Writing ' + OPFS_FILES.length + ' files...');
-      try {
-        for (var i = 0; i < OPFS_FILES.length; i++) {
-          var fileData = base64ToBytes(OPFS_FILES[i].data);
-          await writeOPFSFile(OPFS_FILES[i].path, fileData);
-        }
-        await writeBundleHash(BUNDLE_HASH);
-      } catch (e) {
-        if (/modifications are not allowed/i.test(e && e.message)) {
-          // Most likely cause: another tab of this page is still open
-          // and its worker is holding sync-access handles on these
-          // files. OPFS keeps the lock as long as any handle in any
-          // tab references it. Surface a clear path forward — the
-          // user can either close the other tab or wipe OPFS state.
-          status.style.display = 'block';
-          status.innerHTML =
-            "OPFS write blocked: a previous run still has the data " +
-            "files locked. Close any other open tabs of this page, " +
-            "then reload. If the problem persists, click " +
-            "<button id='__opfs_reset'>Reset OPFS &amp; Reload</button> " +
-            "to wipe the cached data files.";
-          var btn = document.getElementById('__opfs_reset');
-          if (btn) {
-            btn.addEventListener('click', async function () {
-              btn.disabled = true;
-              btn.textContent = 'Wiping…';
-              try { await clearOPFSState(); } catch (ignore) {}
-              location.reload();
-            });
+    //
+    // When USE_BLOCK_FS is true, we DON'T write files into OPFS here.
+    // Instead we transfer the raw file data to the worker via
+    // postMessage; the worker writes them into the block FS image
+    // after BLOCK_FS.init().  The bundle-hash check happens in the
+    // worker (against /__bundle_hash inside the block FS).
+    var opfsFileBuffers = null;
+    if (!USE_BLOCK_FS) {
+      var storedHash = await readBundleHash();
+      if (storedHash === BUNDLE_HASH && OPFS_FILES.length > 0) {
+        setStatus('Assets up to date (skip ' + OPFS_FILES.length + ' files)');
+      } else {
+        setStatus('Writing ' + OPFS_FILES.length + ' files...');
+        try {
+          for (var i = 0; i < OPFS_FILES.length; i++) {
+            var fileData = base64ToBytes(OPFS_FILES[i].data);
+            await writeOPFSFile(OPFS_FILES[i].path, fileData);
           }
-          return;
+          await writeBundleHash(BUNDLE_HASH);
+        } catch (e) {
+          if (/modifications are not allowed/i.test(e && e.message)) {
+            // Most likely cause: another tab of this page is still open
+            // and its worker is holding sync-access handles on these
+            // files. OPFS keeps the lock as long as any handle in any
+            // tab references it. Surface a clear path forward — the
+            // user can either close the other tab or wipe OPFS state.
+            status.style.display = 'block';
+            status.innerHTML =
+              "OPFS write blocked: a previous run still has the data " +
+              "files locked. Close any other open tabs of this page, " +
+              "then reload. If the problem persists, click " +
+              "<button id='__opfs_reset'>Reset OPFS &amp; Reload</button> " +
+              "to wipe the cached data files.";
+            var btn = document.getElementById('__opfs_reset');
+            if (btn) {
+              btn.addEventListener('click', async function () {
+                btn.disabled = true;
+                btn.textContent = 'Wiping…';
+                try { await clearOPFSState(); } catch (ignore) {}
+                location.reload();
+              });
+            }
+            return;
+          }
+          throw e;
         }
-        throw e;
+      }
+    } else {
+      // Block FS path: decode files into buffers for transfer to worker
+      if (OPFS_FILES.length > 0) {
+        setStatus('Preparing ' + OPFS_FILES.length + ' files for transfer...');
+        opfsFileBuffers = [];
+        for (var fi = 0; fi < OPFS_FILES.length; fi++) {
+          var buf = base64ToBytes(OPFS_FILES[fi].data);
+          opfsFileBuffers.push({ path: OPFS_FILES[fi].path, data: buf });
+        }
       }
     }
 
@@ -22930,6 +23008,14 @@ window.onunhandledrejection = function(e) {
     if (sharedAudio) {
       msg.sharedAudioBuffer = sharedAudio.sharedBuffer;
       msg.audioBufferSize = sharedAudio.bufferSize;
+    }
+    if (opfsFileBuffers) {
+      msg.opfsFiles = opfsFileBuffers;
+      msg.bundleHash = BUNDLE_HASH;
+      // Transfer each file's ArrayBuffer to the worker (zero-copy)
+      for (var fi = 0; fi < opfsFileBuffers.length; fi++) {
+        transfer.push(opfsFileBuffers[fi].data.buffer);
+      }
     }
     worker.postMessage(msg, transfer);
     setStatus('Running...');

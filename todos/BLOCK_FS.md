@@ -208,6 +208,13 @@ independent of filesystem backend choice.
 
 ## Still to do
 
+- [x] **opfsFiles preloading** — `--opfs-file src:dst` files are now
+  transferred to the worker via `postMessage` (zero-copy) and written into
+  the block FS image after `BLOCK_FS.init()`.  A `/__bundle_hash` file
+  inside the block FS tracks the bundle version so subsequent page loads
+  skip rewriting identical assets.  (Node.js CLI path doesn't support
+  opfsFiles — browser-only.)
+
 ### Immediate
 
 - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
