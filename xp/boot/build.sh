@@ -1,6 +1,8 @@
 #!/bin/sh
 # Build bootable floppy image: stage-1 boot sector + stage-2 C kernel.
-# Uses asm86.js (NASM-compatible, byte-identical output) and TCC.
+# Both tools come from this repo, no external compiler needed:
+#   - asm86.js  (NASM-compatible, byte-identical output) assembles the boot sector
+#   - tcc.wasm  (TCC built by compiler.js, run via host.js) compiles the kernel
 set -e
 
 # Find c-compiler repo root (3 levels up from xp/boot/).
@@ -8,19 +10,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 ASM86="node $ROOT_DIR/tools/asm86/asm86.js"
-TCC="$ROOT_DIR/build/tcc-native"
+TCC_WASM="$ROOT_DIR/build/tcc.wasm"
+TCC="node $ROOT_DIR/host.js $TCC_WASM"
 
-# --- Ensure native TCC is built ---
-if [ ! -x "$TCC" ]; then
-    echo "Building tcc-native..."
-    cd "$ROOT_DIR"
-    clang -O2 -g0 \
-        -DCONFIG_TCC_CROSSPREFIX=\"i386-\" -DCONFIG_TCCDIR=\"/tcc\" \
-        -DCONFIG_TCC_SYSINCLUDEPATHS=\"/tcc/include\" \
-        -DCONFIG_TCC_LIBPATHS=\"/tcc/lib\" \
-        -I vendor/tcc vendor/tcc/tcc.c \
-        -o build/tcc-native
-    echo "tcc-native build complete."
+# --- Ensure compiler.js-built TCC (wasm) is available ---
+# No clang: compiler.js (this repo's C99->wasm compiler) builds TCC itself,
+# and host.js runs it with real-filesystem access.  Output is byte-identical
+# to a native (clang-built) tcc for this kernel.
+if [ ! -f "$TCC_WASM" ]; then
+    echo "Building tcc.wasm with compiler.js..."
+    mkdir -p "$ROOT_DIR/build"
+    node "$ROOT_DIR/compiler.js" "$ROOT_DIR/vendor/tcc/bin.json" -o "$TCC_WASM"
+    echo "tcc.wasm build complete."
 fi
 
 cd "$SCRIPT_DIR"

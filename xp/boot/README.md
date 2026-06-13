@@ -33,16 +33,19 @@ I/O for palette registers, raw writes to video memory.
 ./build.sh
 ```
 
-The build uses two tools, both from this repo — no external binaries needed:
+The build uses two tools, both from this repo — **no external compiler needed**:
 
 - **asm86.js** (`tools/asm86/asm86.js`) — assembles `boot.asm` to a 512-byte
   boot sector.  Produces byte-for-byte identical output to NASM 2.16.03.
-- **TCC** (`build/tcc-native`) — compiles the C kernel to raw x86 binary.
-  Built from `vendor/tcc/` with clang.  The compiler.js-built WASM TCC produces
-  byte-identical output and can be used interchangeably.
+- **TCC** (`build/tcc.wasm`) — compiles the C kernel to raw x86 binary.  TCC is
+  itself built by `compiler.js` (this repo's C99 → wasm compiler) from
+  `vendor/tcc/`, then run via `host.js`, which gives the wasm program real
+  filesystem access.  No clang in the loop.
 
-Both replacements are verified — `cmp` reports zero differences against their
-reference implementations for this exact code.
+Both tools are verified — `cmp` reports zero differences against their
+reference implementations (NASM for the boot sector, a clang-built native TCC
+for the kernel) for this exact code.  `build.sh` builds `tcc.wasm` on first run
+and caches it under `build/`.
 
 ## Deploy
 
