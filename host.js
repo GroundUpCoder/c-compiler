@@ -2553,8 +2553,12 @@ var BLOCK_FS = (function () {
       return n;
     }
     if (entry.position === null) {
-      // stdin — no data available (same as O_NONBLOCK)
-      return 0;
+      // stdin — read from the host-supplied buffer
+      if (this._stdinBuffer.length === 0) return 0;
+      var n = Math.min(count, this._stdinBuffer.length);
+      for (var i = 0; i < n; i++) buf[i] = this._stdinBuffer[i];
+      this._stdinBuffer.splice(0, n);
+      return n;
     }
     if (entry.inoId === undefined) return this._setErr('EBADF');
 
@@ -3260,6 +3264,13 @@ var BLOCK_FS = (function () {
     };
   };
 
+  // setStdin(data) — feed stdin bytes for the WASM program to consume
+  // from fd 0.  data is an array of byte values.  Call before runModule.
+  BlockFS.prototype.setStdin = function (data) {
+    for (var i = 0; i < data.length; i++) this._stdinBuffer.push(data[i]);
+    this._stdinEOF = true;
+  };
+
   BlockFS.prototype.toWasmEnv = function (ctx) {
     var readString = ctx.readString;
     var setErrnoName = ctx.setErrnoName;
@@ -3398,6 +3409,11 @@ var BLOCK_FS = (function () {
         return nfd;
       }),
       isatty: function (fd) {
+        // When running in Node, report the real TTY status for fd 0
+        // so programs (Lua, etc.) can detect batch vs interactive mode.
+        if (fd === 0 && typeof process !== 'undefined' && process.stdin) {
+          return process.stdin.isTTY ? 1 : 0;
+        }
         return self.isatty(fd);
       },
       __tcgetattr: function (fd, iflag_ptr, oflag_ptr, cflag_ptr, lflag_ptr) {
@@ -5722,6 +5738,30 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
     } catch (e) {
       process.stderr.write('BlockFS init failed: ' + e.message + '\n');
       process.exit(1);
+    }
+
+    // Create /tmp so programs that expect it (SQLite, Lua, etc.) work.
+    blockFS.mkdir('/tmp', 0o777);
+
+    // Read stdin synchronously and feed it to BlockFS.  When stdin is
+    // a pipe (e.g. `echo "..." | node host.js ... --block-fs`), readSync
+    // on fd 0 returns the data.  When it's a TTY, skip — the program
+    // will get an empty stdin, which is correct for interactive use.
+    if (!process.stdin.isTTY) {
+      try {
+        var stdinChunks = [];
+        var stdinBuf = Buffer.alloc(65536);
+        while (true) {
+          var nr = fs.readSync(0, stdinBuf, 0, stdinBuf.length);
+          if (nr === 0) break;
+          for (var si = 0; si < nr; si++) stdinChunks.push(stdinBuf[si]);
+        }
+      } catch (e) {
+        // fd 0 might be closed or a TTY after all — fine.
+      }
+      if (stdinChunks.length > 0) {
+        blockFS.setStdin(stdinChunks);
+      }
     }
 
     runModule({
