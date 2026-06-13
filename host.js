@@ -1481,8 +1481,8 @@ var BLOCK_FS = (function () {
   var FREE_BIT = 1, PREV_FREE_BIT = 2, FLAG_BITS = 3;
   var BLOCK_OVERHEAD = 8, MIN_BLOCK_SIZE = 16, BLOCK_ALIGN = 8;
   var SL_LOG2 = 4, SL_COUNT = 16;
-  var FL_SHIFT = 4, FL_MAX = 30;
-  var FL_COUNT = FL_MAX - FL_SHIFT + 1; // 27
+  var FL_SHIFT = 4, FL_MAX = 32;
+  var FL_COUNT = FL_MAX - FL_SHIFT + 1; // 29
   var FREE_BLOCK_OVERHEAD = BLOCK_OVERHEAD + 8; // 16: header + free list ptrs
 
   // =================================================================
@@ -1589,7 +1589,7 @@ var BLOCK_FS = (function () {
   };
 
   TLSFAllocator.prototype._blockSize = function (block) {
-    return this._s.getUint32(block) & ~FLAG_BITS;
+    return (this._s.getUint32(block) & ~FLAG_BITS) >>> 0;
   };
   TLSFAllocator.prototype._blockSetSize = function (block, size) {
     var flags = this._s.getUint32(block) & FLAG_BITS;
@@ -1805,9 +1805,15 @@ var BLOCK_FS = (function () {
     var lastBlock = this._readMeta32(META_LAST_BLOCK);
 
     var newEnd = poolEnd + needed;
+    // Pool metadata uses uint32 — cap at 4 GiB to prevent wrap
+    if (newEnd > 0xFFFF0000) return 0;
     // Ensure the store is large enough
     if (newEnd > this._s.size()) {
-      this._s.resize(newEnd + 65536); // grow by 64KB extra headroom
+      try {
+        this._s.resize(newEnd + 65536);
+      } catch (e) {
+        return 0;
+      }
     }
 
     var block = poolEnd;
@@ -1824,7 +1830,11 @@ var BLOCK_FS = (function () {
 
     // Re-check store size after rounding
     if (newEnd > this._s.size()) {
-      this._s.resize(newEnd);
+      try {
+        this._s.resize(newEnd);
+      } catch (e) {
+        return 0; // resize failed (disk full or store cap)
+      }
     }
 
     this._s.setUint32(block, blockSz | FREE_BIT);
@@ -1854,7 +1864,7 @@ var BLOCK_FS = (function () {
 
   TLSFAllocator.prototype.malloc = function (size) {
     if (size === 0) return 0;
-    if (size > 0x40000000) return 0;
+    if (size > 0xFFFFFF00) return 0;
 
     var adjusted = this._adjustRequest(size);
 
@@ -1923,7 +1933,7 @@ var BLOCK_FS = (function () {
   };
 
   TLSFAllocator.prototype.calloc = function (count, size) {
-    if (size !== 0 && count > 0x40000000 / size) return 0;
+    if (size !== 0 && count > 0xFFFFFF00 / size) return 0;
     var total = count * size;
     var ptr = this.malloc(total);
     if (ptr) {
@@ -2224,6 +2234,8 @@ var BLOCK_FS = (function () {
 
     this._lastError = '';
     this._cwd = '/';
+    this._stdinBuffer = [];
+    this._stdinEOF = false;
     this._fdTable = [
       { position: null }, // 0 = stdin
       { position: null }, // 1 = stdout
@@ -2362,8 +2374,14 @@ var BLOCK_FS = (function () {
       return ext;
     }
     if (neededSize <= ino.extentCapacity) return ino.extentOffset;
-    // Grow: double or meet needed, whichever is larger
-    var newCap = Math.max(ino.extentCapacity * 2, neededSize);
+    // Grow: double below 256 MiB, then linear +256 MiB to avoid
+    // massive reallocs that would blow past the 4 GiB pool ceiling.
+    var newCap;
+    if (ino.extentCapacity >= 256 * 1024 * 1024) {
+      newCap = Math.max(ino.extentCapacity + 256 * 1024 * 1024, neededSize);
+    } else {
+      newCap = Math.max(ino.extentCapacity * 2, neededSize);
+    }
     var newExt = this._alloc.realloc(ino.extentOffset, newCap);
     if (!newExt) return this._setErr('ENOSPC');
     ino.extentOffset = newExt;
@@ -5328,12 +5346,16 @@ async function runModule({
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   } else if (blockFsImports) {
     Object.assign(imports[ENV_KEY], blockFsImports[ENV_KEY]);
-    const posix = createBrowserPosix({ ctx: ctx });
+    const posix = typeof process !== "undefined"
+      ? createPosix({ ctx: ctx })
+      : createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   } else if (blockFsFactory) {
     const fileSystem = await blockFsFactory(ctx);
     Object.assign(imports[ENV_KEY], fileSystem[ENV_KEY]);
-    const posix = createBrowserPosix({ ctx: ctx });
+    const posix = typeof process !== "undefined"
+      ? createPosix({ ctx: ctx })
+      : createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   }
 

@@ -19789,8 +19789,8 @@ static long pool_end;
 static long last_block;
 static int  initialized;
 
-static long block_size(long block) {
-  return *(long *)block & ~FLAG_BITS;
+static unsigned long block_size(long block) {
+  return (unsigned long)(*(long *)block & ~FLAG_BITS);
 }
 
 static int block_is_free(long block) {
