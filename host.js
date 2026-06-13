@@ -1978,6 +1978,9 @@ var BLOCK_FS = (function () {
   };
 
   TLSFAllocator.prototype._init = function (poolSize) {
+    // poolSize == 0: load existing metadata from store without zeroing
+    if (poolSize === 0) return;
+
     var poolStart = TLSF_POOL_OFFSET;
     var storeSize = this._s.size();
     var actualPoolSize = storeSize - poolStart;
@@ -3526,13 +3529,14 @@ var BLOCK_FS = (function () {
       store.setBytes(0, zero256);
     }
 
-    // Init TLSF allocator (this zeroes metadata and creates initial free block)
-    var alloc = new TLSFAllocator(store, SUPERBLOCK_SIZE,
-      storeSize - TLSF_POOL_OFFSET);
-
-    var inodeTable = new InodeTable(alloc);
+    var alloc;
+    var inodeTable;
 
     if (formatted) {
+      // Init fresh TLSF allocator (zeroes metadata, creates initial free block)
+      alloc = new TLSFAllocator(store, SUPERBLOCK_SIZE,
+        storeSize - TLSF_POOL_OFFSET);
+      inodeTable = new InodeTable(alloc);
       // Create inode table
       inodeTable.init(INITIAL_INODE_CAPACITY);
       // Create BlockFS (handles root dir creation)
@@ -3540,7 +3544,16 @@ var BLOCK_FS = (function () {
       fs._writeSuperblock();
       return fs;
     } else {
-      // Load existing filesystem
+      // Load existing filesystem — must NOT re-init TLSF (would destroy
+      // the allocator state stored in the TLSF metadata region).
+      alloc = new TLSFAllocator(store, SUPERBLOCK_SIZE, 0);
+      // Override the zeroed metadata with what's already in the store.
+      // _init() zeroed the metadata region; we re-read the pool_end and
+      // last_block from the store.  Actually, _init() destroyed the free
+      // list — we need to rebuild it by walking all blocks.
+      //
+      // _init(poolSize=0) returned early; TLSF metadata is intact.
+      inodeTable = new InodeTable(alloc);
       var sb = {
         tlsfPoolOffset: store.getUint32(SB_TLSF_POOL_OFFSET),
         tlsfPoolSize: store.getUint32(SB_TLSF_POOL_SIZE),
