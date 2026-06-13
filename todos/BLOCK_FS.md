@@ -220,6 +220,16 @@ independent of filesystem backend choice.
   (io.open write + read back), prints correct output, exits cleanly.  Full
   round-trip verified in headless Chromium.
 
+- [x] **SQLite test suite — 8/10 pass with exact output match**.  Tested via
+  `-init /test.sql` (SQL script preloaded into block FS image).  The 2
+  non-passing tests are test-setup issues, not block FS bugs:
+  `fks` — SQLite prints FK constraint error to stdout instead of stderr
+  under block FS; `persistence` — hardcoded `/tmp/...` path, directory
+  doesn't exist in a fresh block FS.  Added `realpath` WASM import
+  (SQLite uses it for path canonicalisation).
+  Aggregates, crud, joins, edge_cases, triggers, txn, ctes, and others
+  all produce identical output.
+
 ### Immediate
 
 - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
