@@ -1018,7 +1018,8 @@ const OK = {
   TR:    'tr',     // test register
   MM:    'mm',     // MMX register
   XMM:   'xmm',    // XMM register
-  MEM:   'mem',    // memory only (no register form)
+  MEM:   'mem',    // any memory operand (LGDT, LIDT, etc.)
+  MOFFS: 'moffs',  // direct-address memory only (A0-A3 moffs forms)
   REL8:  'rel8',   // 8-bit relative offset
   REL1632:'rel1632', // 16/32-bit relative offset
   AL:    'al',     // AL specifically
@@ -1063,13 +1064,13 @@ INSN_TABLE.set('MOV', [
   // mov Sreg, r/m16  — ModR/M reg = Sreg(op1), rm = r/m16(op2)
   { op:[0x8E], ops:[OK.SREG, OK.RM16], modrm:'reg=r1,rm=r2' },
   // mov al, moffs8
-  { op:[0xA0], ops:[OK.AL, OK.MEM], modrm:null }, // special moffs encoding
+  { op:[0xA0], ops:[OK.AL, OK.MOFFS], modrm:null },
   // mov ax/eax, moffs16/32
-  { op:[0xA1], ops:[OK.AX, OK.MEM], modrm:null },
+  { op:[0xA1], ops:[OK.AX, OK.MOFFS], modrm:null },
   // mov moffs8, al
-  { op:[0xA2], ops:[OK.MEM, OK.AL], modrm:null },
+  { op:[0xA2], ops:[OK.MOFFS, OK.AL], modrm:null },
   // mov moffs16/32, ax/eax
-  { op:[0xA3], ops:[OK.MEM, OK.AX], modrm:null },
+  { op:[0xA3], ops:[OK.MOFFS, OK.AX], modrm:null },
   // mov r8, imm8
   { op:[0xB0], ops:[OK.R8, OK.IMM8], modrm:null, opReg:true }, // +r encoded in opcode
   // mov r16, imm16
@@ -1378,11 +1379,17 @@ INSN_TABLE.set('MOVZX', [
 
 // ── XCHG ──
 INSN_TABLE.set('XCHG', [
+  // XCHG r/m, reg (opcodes 0x86/0x87)
   { op:[0x86], ops:[OK.RM8, OK.R8], modrm:'reg=r2,rm=r1' },
   { op:[0x87], ops:[OK.RM16, OK.R16], modrm:'reg=r2,rm=r1' },
   { op:[0x87], ops:[OK.RM32, OK.R32], modrm:'reg=r2,rm=r1' },
-  // XCHG EAX, reg (opcode 0x90+reg)
-  { op:[0x90], ops:[OK.AX, OK.AX], modrm:null, opReg:true },
+  // XCHG reg, r/m (symmetrical — swapped operand order)
+  { op:[0x86], ops:[OK.R8, OK.RM8], modrm:'reg=r1,rm=r2' },
+  { op:[0x87], ops:[OK.R16, OK.RM16], modrm:'reg=r1,rm=r2' },
+  { op:[0x87], ops:[OK.R32, OK.RM32], modrm:'reg=r1,rm=r2' },
+  // XCHG EAX, reg: opcode 0x90 + reg_code
+  { op:[0x90], ops:[OK.AX, OK.R16], modrm:null, opReg:true },
+  { op:[0x90], ops:[OK.AX, OK.R32], modrm:null, opReg:true },
 ]);
 
 // ── STRING OPERATIONS ──
@@ -1750,7 +1757,11 @@ function matchOperands(ops, encOps, defaultSize) {
         if (op.kind === 'imm') break;
         return false;
       case OK.MEM:
-        // Moffs forms (A0-A3) only match direct-address memory (no base/index regs)
+        // General memory operand — any mem ref (LGDT, LIDT, LEA via RM16/32, etc.)
+        if (op.kind === 'mem') break;
+        return false;
+      case OK.MOFFS:
+        // Moffs forms (A0-A3) — direct-address only (no base/index registers)
         if (op.kind === 'mem' && !op.base && !op.index) break;
         return false;
       case OK.ONE:
@@ -1790,11 +1801,26 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
 
 	if (needOsizePrefix) bytes.push(0x66);
 
+  // Address-size prefix (0x67): needed when memory operands use registers
+  // of a different width than the default addressing mode (BITS directive).
+  let addrSize = defaultSize; // effective address size for ModR/M encoding
+  const memOpForAddr = ops.find(o => o.kind === 'mem' && (o.base || o.index));
+  if (memOpForAddr) {
+    const regBit = (memOpForAddr.base || memOpForAddr.index).bits;
+    if (regBit === 32 && defaultSize === 16) { bytes.push(0x67); addrSize = 32; }
+    else if (regBit === 16 && defaultSize === 32) { bytes.push(0x67); addrSize = 16; }
+  }
+
   // Opcode
   const opBytes = [...enc.op];
-  // If opReg, add register code to last opcode byte
+  // If opReg, add register code to last opcode byte.
+  // Uses the LAST register operand (needed for XCHG AX,reg where
+  // AX is first op and the second reg provides the code).
   if (enc.opReg) {
-    const regOp = ops.find(o => o.kind === 'reg');
+    let regOp = null;
+    for (let i = ops.length - 1; i >= 0; i--) {
+      if (ops[i].kind === 'reg') { regOp = ops[i]; break; }
+    }
     if (regOp) {
       opBytes[opBytes.length - 1] += (regOp.code & 0x07);
     }
@@ -1926,7 +1952,7 @@ function encodeInstruction(enc, ops, here, labels, equValues, sectionStart, defa
           modrm = 0xC0 | ((regCode & 7) << 3) | ((op.code || 0) & 7);
         } else if (op && op.kind === 'mem') {
           const dp = op.disp || 0; // signed value — encodeMem* handles to32 internally
-          const r = defaultSize === 16
+          const r = addrSize === 16
             ? encodeMem16(op.base, op.index, dp, regCode)
             : encodeMem32(op.base, op.index, op.scale, dp, regCode);
           modrm = r.modrm; sib = r.sib; dispBytes = r.dispBytes;
