@@ -2955,6 +2955,94 @@ var BLOCK_FS = (function () {
   //   getcwd, chdir, access, rmdir, unlink, pipe, dup, dup2, isatty,
   //   __tcgetattr, __tcsetattr, usleep, __nanosleep, __select_impl,
   //   __ioctl_tiocgwinsz
+  // Return diagnostic snapshot of the filesystem.  For tests / debugging.
+  BlockFS.prototype.inspect = function () {
+    var sb = this._readSuperblock();
+    var alloc = this._alloc;
+    var poolStart, poolEnd;
+    try { poolEnd = alloc._readMeta32(META_POOL_END); } catch (e) { poolEnd = 0; }
+    try { poolStart = alloc._readMeta32(META_POOL_START); } catch (e) { poolStart = TLSF_POOL_OFFSET; }
+
+    // Count inodes
+    var inodeCount = 0;
+    for (var i = 1; i < this._nextInode; i++) {
+      var ino = this._inodes.read(i);
+      if (ino && ino.mode !== 0) inodeCount++;
+    }
+
+    // Walk all TLSF blocks and verify consistency
+    var block = poolStart;
+    var usedBlocks = 0, freeBlocks = 0, totalUsed = 0, totalFree = 0;
+    var largestFree = 0;
+    var integrityErrors = [];
+    while (block < poolEnd) {
+      var sz = alloc._blockSize(block);
+      if (sz === 0 || block + sz > poolEnd) {
+        integrityErrors.push('bad block size ' + sz + ' at offset ' + block);
+        break;
+      }
+      if (alloc._blockIsFree(block)) {
+        freeBlocks++;
+        totalFree += sz - BLOCK_OVERHEAD;
+        if (sz > largestFree) largestFree = sz;
+      } else {
+        usedBlocks++;
+        totalUsed += sz - BLOCK_OVERHEAD;
+      }
+      block += sz;
+    }
+
+    // Verify free list integrity
+    var flMap = alloc._readMeta32(META_FL_BITMAP);
+    var freeListCount = 0;
+    for (var fl = 0; fl < FL_COUNT; fl++) {
+      if (!(flMap & (1 << fl))) continue;
+      var slMap = alloc._readMeta32(META_SL_BITMAP + fl * 4);
+      for (var sl = 0; sl < SL_COUNT; sl++) {
+        if (!(slMap & (1 << sl))) continue;
+        var head = alloc._readMeta32(META_FREE_HEADS + (fl * SL_COUNT + sl) * 4);
+        var cur = head;
+        var visited = {};
+        while (cur) {
+          if (visited[cur]) {
+            integrityErrors.push('free list cycle at ' + cur);
+            break;
+          }
+          visited[cur] = true;
+          if (!alloc._blockIsFree(cur)) {
+            integrityErrors.push('non-free block ' + cur + ' in free list');
+          }
+          freeListCount++;
+          cur = alloc._blockGetNextFree(cur);
+        }
+      }
+    }
+    if (freeListCount !== freeBlocks) {
+      integrityErrors.push('free list count ' + freeListCount +
+        ' != free blocks ' + freeBlocks);
+    }
+
+    return {
+      superblock: sb,
+      poolStart: poolStart,
+      poolEnd: poolEnd,
+      poolSize: poolEnd - poolStart,
+      storeSize: this._s.size(),
+      inodeTableCapacity: this._inodes.capacity(),
+      nextInode: this._nextInode,
+      inodeCount: inodeCount,
+      fdTableSize: this._fdTable.length,
+      cwd: this._cwd,
+      blocks: { used: usedBlocks, free: freeBlocks },
+      bytes: { used: totalUsed, free: totalFree, largestFree: largestFree },
+      integrityErrors: integrityErrors,
+      alloc: {
+        totalFreeBytes: alloc.totalFreeBytes(),
+        freeBlockCount: alloc.freeBlockCount(),
+      },
+    };
+  };
+
   BlockFS.prototype.toWasmEnv = function (ctx) {
     var readString = ctx.readString;
     var setErrnoName = ctx.setErrnoName;

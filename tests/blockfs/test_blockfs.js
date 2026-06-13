@@ -816,6 +816,167 @@ test('create/delete cycle (200 iterations)', function () {
 });
 
 // ---------------------------------------------------------------
+// Large files (test dynamic pool growth + extent realloc)
+// ---------------------------------------------------------------
+
+test('100MB file: write, inspect, read back, verify', function () {
+  var store = new MemoryByteStore(4 * 1024 * 1024); // start tiny, force growth
+  var fs = BLOCK_FS.create(store);
+  var initialSize = store.size();
+
+  var O_CREAT = 0x40, O_TRUNC = 0x200, O_RDWR = 0x2;
+  var fd = fs.open('/huge.bin', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+  assert(fd >= 3);
+
+  // Write 100MB in 1MB chunks with a per-chunk marker
+  var chunkSize = 1024 * 1024; // 1MB
+  var chunks = 100;
+  var chunk = new Uint8Array(chunkSize);
+
+  for (var i = 0; i < chunks; i++) {
+    // First 4 bytes of each chunk: chunk index
+    chunk[0] = (i >>> 24) & 0xFF;
+    chunk[1] = (i >>> 16) & 0xFF;
+    chunk[2] = (i >>> 8) & 0xFF;
+    chunk[3] = i & 0xFF;
+    // Fill rest with a simple pattern
+    for (var j = 4; j < chunkSize; j++) chunk[j] = (i ^ j) & 0xFF;
+
+    var nw = fs.write(fd, chunk, chunkSize);
+    assertEq(nw, chunkSize, 'write chunk ' + i);
+  }
+
+  // Inspect filesystem state
+  var info = fs.inspect();
+  assertEq(info.integrityErrors.length, 0, 'integrity: ' + JSON.stringify(info.integrityErrors));
+  assert(info.poolSize > initialSize, 'pool should have grown from ' + initialSize + ' to ' + info.poolSize);
+  assert(info.bytes.used >= 100 * 1024 * 1024, 'at least 100MB used, got ' + info.bytes.used);
+  console.log('    pool grew from ' + (initialSize / 1024 / 1024).toFixed(1) + 'MB to ' + (info.poolSize / 1024 / 1024).toFixed(1) + 'MB, ' + info.blocks.used + ' used blocks, ' + info.blocks.free + ' free blocks');
+
+  // Verify every 10th chunk at random offsets within each chunk
+  fs.lseek(fd, 0, 0);
+  for (var k = 0; k < chunks; k += 10) {
+    fs.lseek(fd, k * chunkSize, 0);
+    var marker = new Uint8Array(4);
+    fs.read(fd, marker, 4);
+    var chunkIdx = (marker[0] << 24) | (marker[1] << 16) | (marker[2] << 8) | marker[3];
+    assertEq(chunkIdx, k, 'chunk ' + k + ' marker');
+
+    // Spot check a byte mid-chunk
+    fs.lseek(fd, k * chunkSize + 1000, 0);
+    var b = new Uint8Array(1);
+    fs.read(fd, b, 1);
+    assertEq(b[0], (k ^ 1000) & 0xFF, 'chunk ' + k + ' byte 1000');
+  }
+
+  // Verify first and last bytes
+  fs.lseek(fd, 0, 0);
+  var fb = new Uint8Array(1);
+  fs.read(fd, fb, 1);
+  assertEq(fb[0], (0 >>> 24) & 0xFF, 'first byte');
+
+  fs.lseek(fd, chunks * chunkSize - 1, 0);
+  var lb = new Uint8Array(1);
+  fs.read(fd, lb, 1);
+  assertEq(lb[0], ((chunks - 1) ^ (chunkSize - 1)) & 0xFF, 'last byte');
+
+  var st = fs.stat('/huge.bin');
+  assertEq(st.size, chunks * chunkSize, 'stat size');
+
+  fs.close(fd);
+
+  // Inspect after close — should still be consistent
+  var info2 = fs.inspect();
+  assertEq(info2.integrityErrors.length, 0, 'post-close integrity');
+});
+
+test('3 x 32MB files: interleaved writes, verify all', function () {
+  var store = new MemoryByteStore(4 * 1024 * 1024);
+  var fs = BLOCK_FS.create(store);
+
+  var O_CREAT = 0x40, O_TRUNC = 0x200, O_RDWR = 0x2;
+  var fdA = fs.open('/A.bin', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+  var fdB = fs.open('/B.bin', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+  var fdC = fs.open('/C.bin', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+
+  var chunkSize = 1024 * 1024; // 1MB
+  var chunksPerFile = 32;
+  var chunk = new Uint8Array(chunkSize);
+
+  // Write interleaved: write chunk i to each file in sequence
+  for (var i = 0; i < chunksPerFile; i++) {
+    for (var j = 0; j < chunkSize; j++) chunk[j] = (i ^ j) & 0xFF;
+
+    // Stamp each file's chunk with a unique prefix
+    chunk[0] = 0xAA; chunk[1] = i & 0xFF;
+    var nw = fs.write(fdA, chunk, chunkSize);
+    assertEq(nw, chunkSize, 'A chunk ' + i);
+
+    chunk[0] = 0xBB; chunk[1] = i & 0xFF;
+    nw = fs.write(fdB, chunk, chunkSize);
+    assertEq(nw, chunkSize, 'B chunk ' + i);
+
+    chunk[0] = 0xCC; chunk[1] = i & 0xFF;
+    nw = fs.write(fdC, chunk, chunkSize);
+    assertEq(nw, chunkSize, 'C chunk ' + i);
+  }
+
+  // Verify each file at sampled chunks
+  function verifyFile(fd, prefix, fileName) {
+    for (var k = 0; k < chunksPerFile; k += 8) {
+      fs.lseek(fd, k * chunkSize, 0);
+      var hdr = new Uint8Array(2);
+      fs.read(fd, hdr, 2);
+      assertEq(hdr[0], prefix, fileName + ' chunk ' + k + ' prefix byte 0');
+      assertEq(hdr[1], k & 0xFF, fileName + ' chunk ' + k + ' prefix byte 1');
+    }
+
+    var st = fs.fstat(fd);
+    assertEq(st.size, chunksPerFile * chunkSize, fileName + ' size');
+  }
+
+  verifyFile(fdA, 0xAA, 'A');
+  verifyFile(fdB, 0xBB, 'B');
+  verifyFile(fdC, 0xCC, 'C');
+
+  var info = fs.inspect();
+  assertEq(info.integrityErrors.length, 0, 'integrity after 3x32MB');
+  assert(info.bytes.used >= 3 * 32 * 1024 * 1024, 'at least 96MB used');
+  console.log('    3x32MB: pool=' + (info.poolSize / 1024 / 1024).toFixed(1) + 'MB, used=' + (info.bytes.used / 1024 / 1024).toFixed(1) + 'MB, free=' + (info.bytes.free / 1024 / 1024).toFixed(1) + 'MB, largestFree=' + (info.bytes.largestFree / 1024 / 1024).toFixed(1) + 'MB');
+
+  fs.close(fdA); fs.close(fdB); fs.close(fdC);
+});
+
+test('delete 100MB file, verify space reclaimed', function () {
+  var store = new MemoryByteStore(4 * 1024 * 1024);
+  var fs = BLOCK_FS.create(store);
+
+  var O_CREAT = 0x40, O_TRUNC = 0x200, O_RDWR = 0x2;
+  var fd = fs.open('/reclaim.bin', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+
+  var chunkSize = 1024 * 1024;
+  var chunk = new Uint8Array(chunkSize);
+  for (var i = 0; i < 80; i++) {
+    var nw = fs.write(fd, chunk, chunkSize);
+    assertEq(nw, chunkSize, 'write chunk ' + i);
+  }
+  fs.close(fd);
+
+  var before = fs.inspect();
+  var usedBefore = before.bytes.used;
+
+  // Delete the file — space should be reclaimed
+  var ret = fs.unlink('/reclaim.bin');
+  assertEq(ret, 0, 'unlink');
+
+  var after = fs.inspect();
+  assertEq(after.integrityErrors.length, 0, 'integrity after delete');
+  assert(after.bytes.free > before.bytes.free, 'free space should increase after delete');
+  // The entire 80MB extent should be freed
+  console.log('    before delete: used=' + (usedBefore / 1024 / 1024).toFixed(1) + 'MB after: used=' + (after.bytes.used / 1024 / 1024).toFixed(1) + 'MB free=' + (after.bytes.free / 1024 / 1024).toFixed(1) + 'MB');
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- BlockFS Tests ---');
 console.log('Passed: ' + passed);
