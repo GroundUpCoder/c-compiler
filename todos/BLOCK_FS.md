@@ -215,6 +215,11 @@ independent of filesystem backend choice.
   skip rewriting identical assets.  (Node.js CLI path doesn't support
   opfsFiles — browser-only.)
 
+- [x] **Lua 5.5 verified** — compiled with `--block-fs --opfs-file test.lua
+  --run-arg /test.lua`.  Lua opens the preloaded script, performs file I/O
+  (io.open write + read back), prints correct output, exits cleanly.  Full
+  round-trip verified in headless Chromium.
+
 ### Immediate
 
 - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
