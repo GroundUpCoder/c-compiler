@@ -560,7 +560,7 @@ function parse(tokens, filename) {
     // [BITS N] — bracket directive syntax
     if (t.type === TOKEN.PUNCT && t.value === '[') {
       const next = peek(1);
-      if (next && next.type === TOKEN.ID && (next.value.toUpperCase() === 'BITS' || next.value.toUpperCase() === 'ORG')) {
+      if (next && next.type === TOKEN.ID && (next.value.toUpperCase() === 'BITS' || next.value.toUpperCase() === 'ORG' || next.value.toUpperCase() === 'USE16' || next.value.toUpperCase() === 'USE32')) {
         consume(); // '['
         const dirTok = consume(); // BITS or ORG
         const dir = dirTok.value.toUpperCase();
@@ -576,8 +576,18 @@ function parse(tokens, filename) {
       }
     }
 
-    // BITS directive
-    if (t.type === TOKEN.ID && t.value.toUpperCase() === 'BITS') {
+    // BITS / USE16 / USE32 directive
+    if (t.type === TOKEN.ID && (t.value.toUpperCase() === 'BITS' || t.value.toUpperCase() === 'USE16' || t.value.toUpperCase() === 'USE32')) {
+      if (t.value.toUpperCase() === 'USE16') {
+        consume();
+        statements.push({ type: 'directive', dir: 'BITS', args: [{value: 16}] });
+        skipToEOL(); continue;
+      }
+      if (t.value.toUpperCase() === 'USE32') {
+        consume();
+        statements.push({ type: 'directive', dir: 'BITS', args: [{value: 32}] });
+        skipToEOL(); continue;
+      }
       consume();
       const bitsTokenStart = i;
       const bitsExpr = parseExpr(tokens, i, { here: 0, sectionStart: 0, labels: new Map() });
@@ -1374,6 +1384,33 @@ INSN_TABLE.set('XCHG', [
   // XCHG EAX, reg (opcode 0x90+reg)
   { op:[0x90], ops:[OK.AX, OK.AX], modrm:null, opReg:true },
 ]);
+
+// ── STRING OPERATIONS ──
+INSN_TABLE.set('LODSB', [{ op:[0xAC], ops:[], modrm:null }]);
+INSN_TABLE.set('LODSW', [{ op:[0xAD], ops:[], modrm:null }]);
+INSN_TABLE.set('LODSD', [{ op:[0xAD], ops:[], modrm:null }]); // 0xAD with REX or 0x66
+INSN_TABLE.set('STOSB', [{ op:[0xAA], ops:[], modrm:null }]);
+INSN_TABLE.set('STOSW', [{ op:[0xAB], ops:[], modrm:null }]);
+INSN_TABLE.set('STOSD', [{ op:[0xAB], ops:[], modrm:null }]);
+INSN_TABLE.set('MOVSB', [{ op:[0xA4], ops:[], modrm:null }]);
+INSN_TABLE.set('MOVSW', [{ op:[0xA5], ops:[], modrm:null }]);
+INSN_TABLE.set('MOVSD', [{ op:[0xA5], ops:[], modrm:null }]);
+INSN_TABLE.set('SCASB', [{ op:[0xAE], ops:[], modrm:null }]);
+INSN_TABLE.set('SCASW', [{ op:[0xAF], ops:[], modrm:null }]);
+INSN_TABLE.set('SCASD', [{ op:[0xAF], ops:[], modrm:null }]);
+INSN_TABLE.set('CMPSB', [{ op:[0xA6], ops:[], modrm:null }]);
+INSN_TABLE.set('CMPSW', [{ op:[0xA7], ops:[], modrm:null }]);
+INSN_TABLE.set('CMPSD', [{ op:[0xA7], ops:[], modrm:null }]);
+
+// ── IRET ──
+INSN_TABLE.set('IRET', [{ op:[0xCF], ops:[], modrm:null }]);
+INSN_TABLE.set('IRETD', [{ op:[0xCF], ops:[], modrm:null }]);
+
+// ── PUSHA / POPA ──
+INSN_TABLE.set('PUSHA', [{ op:[0x60], ops:[], modrm:null }]);
+INSN_TABLE.set('POPA', [{ op:[0x61], ops:[], modrm:null }]);
+INSN_TABLE.set('PUSHAD', [{ op:[0x60], ops:[], modrm:null }]);
+INSN_TABLE.set('POPAD', [{ op:[0x61], ops:[], modrm:null }]);
 
 // ── JC (already in JCC_TABLE above) ──
 
