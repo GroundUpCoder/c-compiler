@@ -3419,6 +3419,19 @@ var BLOCK_FS = (function () {
       },
 
       // ---- additional POSIX ops ----
+      realpath: wrap(function (path_ptr, resolved_ptr) {
+        var path = readString(path_ptr);
+        var resolved = this._resolvePath(path);
+        var encoded = encodeStr(resolved);
+        if (resolved_ptr) {
+          var memory = getMemory();
+          var bytes = new Uint8Array(memory.buffer);
+          for (var ri = 0; ri < encoded.length; ri++)
+            bytes[resolved_ptr + ri] = encoded[ri];
+          bytes[resolved_ptr + encoded.length] = 0;
+        }
+        return resolved_ptr;
+      }),
       ftruncate: wrap(function (fd, size) { return this.ftruncate(fd, size); }),
       chmod: wrap(function (path_ptr, mode) {
         return this.chmod(readString(path_ptr), mode);

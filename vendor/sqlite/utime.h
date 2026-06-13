@@ -11,8 +11,8 @@ struct utimbuf {
   time_t modtime;
 };
 
-static inline int utime(const char *path, const struct utimbuf *times) {
-  (void)path; (void)times;
+static inline int utime(const char *path, long atime, long mtime) {
+  (void)path; (void)atime; (void)mtime;
   return 0;  /* no-op: succeed silently */
 }
 #endif
