@@ -116,6 +116,7 @@ function workerMain() {
 
   const compiler = require(path.join(ROOT, 'compiler.js'));
   const runModule = require(path.join(ROOT, 'host.js'));
+  const BLOCK_FS = runModule.BLOCK_FS;
 
   function configureCompilerArgs(args, pp, compilerOptions, warningFlags) {
     for (let i = 0; i < args.length; i++) {
@@ -294,13 +295,22 @@ function workerMain() {
       // placeholder to match the python tempfile path the test was written
       // against: `<os.tmpdir()>/tmpXXXXXXXX.wasm`.
       const fakeArgv0 = `${os.tmpdir()}/tmpXXXXXXXX.wasm`;
-      runExitCode = await runModule({
+      var runOpts = {
         bytes: wasmBinary,
         args: [fakeArgv0, ...(td.config.args || [])],
-        fs,
         writeOut: (b) => stdoutBuf.push(toBuf(b)),
         writeErr: (b) => stderrBuf.push(toBuf(b)),
-      });
+      };
+      if (td.config.blockFs) {
+        var blockStore = new BLOCK_FS.MemoryByteStore(64 * 1024 * 1024);
+        var blockFS = BLOCK_FS.create(blockStore);
+        runOpts.blockFsFactory = async function (ctx) {
+          return { c: blockFS.toWasmEnv(ctx) };
+        };
+      } else {
+        runOpts.fs = fs;
+      }
+      runExitCode = await runModule(runOpts);
     } catch (e) {
       // Wasm trap (RuntimeError: unreachable) or other host-side throw.
       // Node would exit non-zero with the stack on stderr — mirror that

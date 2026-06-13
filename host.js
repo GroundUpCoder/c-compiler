@@ -1393,6 +1393,1825 @@ function createBrowserFileSystem({ ctx }) {
   return { [ENV_KEY]: env };
 }
 
+// =========================================================================
+// BLOCK_FS — synchronous block filesystem backed by a single OPFS file
+// =========================================================================
+//
+// All filesystem operations are synchronous after init(). The filesystem
+// stores everything inside one OPFS file using a single
+// FileSystemSyncAccessHandle — no JSPI needed.  This is the iOS / Safari
+// path where WebAssembly.Suspending is not available.
+//
+// Allocator: TLSF (Two-Level Segregated Fit), ported from the WASM malloc
+// implementation in compiler.js.  O(1) alloc / free, good fragmentation
+// behaviour, bounded metadata.
+//
+// Layout inside the backing store:
+//   Offset 0:       Superblock (256 B)
+//   Offset 256:     TLSF metadata (2048 B: bitmaps + free-list heads)
+//   Offset 2304:    TLSF managed pool
+//                     Inode table extent (first TLSF allocation, growable)
+//                     Root dir extent
+//                     File / directory extents ...
+//
+// Each file / directory is a single contiguous extent allocated via TLSF.
+// The inode stores (extent_offset, extent_capacity, data_size).  File
+// growth that exceeds extent_capacity triggers a TLSF realloc which may
+// move the extent.
+//
+// Inode format (32 bytes):
+//   [ 0: 4] extent_offset   uint32   TLSF ptr to data extent, 0 = none
+//   [ 4: 8] extent_capacity uint32   allocated size of data extent
+//   [ 8:12] data_size       uint32   logical file size
+//   [12:14] mode            uint16   S_IFREG|0644 or S_IFDIR|0755
+//   [14:16] nlink           uint16   directory-entry refcount
+//   [16:20] mtime           uint32   epoch seconds
+//   [20:24] ctime           uint32   epoch seconds
+//   [24:26] uid             uint16
+//   [26:28] gid             uint16
+//   [28:32] reserved        uint32   (alignment padding)
+//
+// Directory entry format (variable-length, stored in dir extent):
+//   [ 0: 4] inode_id        uint32
+//   [ 4: 6] name_len        uint16
+//   [ 6:6+N] name           uint8[N]   (sorted by name for binary search)
+//
+// Exports (attached to self / module.exports for testing):
+//   BLOCK_FS.init(opfsName)     → Promise<BlockFS>  (production)
+//   BLOCK_FS.create(byteStore)  → BlockFS            (tests, sync)
+//   BLOCK_FS.MemoryByteStore                          (test constructor)
+//   BLOCK_FS.TLSFAllocator                            (test constructor)
+
+var BLOCK_FS = (function () {
+  'use strict';
+
+  // -------------------------------------------------------------------
+  // Constants
+  // -------------------------------------------------------------------
+  var SUPERBLOCK_SIZE = 256;
+  var TLSF_META_SIZE = 2048;
+  var TLSF_POOL_OFFSET = SUPERBLOCK_SIZE + TLSF_META_SIZE; // 2304
+
+  var INODE_SIZE = 32;
+  var INITIAL_INODE_CAPACITY = 64;
+
+  var MAGIC = 0x424C4B46; // "BLKF"
+  var VERSION = 3;
+
+  var S_IFMT = 0o170000;
+  var S_IFDIR = 0o040000;
+  var S_IFREG = 0o100000;
+  var DEFAULT_DIR_MODE = 0o40755;
+  var DEFAULT_FILE_MODE = 0o100644;
+
+  // ---- Superblock field offsets ----
+  var SB_MAGIC = 0, SB_VERSION = 4, SB_FLAGS = 8;
+  var SB_TLSF_POOL_OFFSET = 12, SB_TLSF_POOL_SIZE = 16;
+  var SB_INODE_TBL_EXTENT = 20, SB_INODE_TBL_CAP = 24;
+  var SB_NEXT_INODE_ID = 28, SB_ROOT_INODE = 32;
+  var SB_RESERVED = 36;
+
+  // ---- Inode field offsets ----
+  var INO_EXTENT_OFFSET = 0, INO_EXTENT_CAP = 4, INO_DATA_SIZE = 8;
+  var INO_MODE = 12, INO_NLINK = 14;
+  var INO_MTIME = 16, INO_CTIME = 20;
+  var INO_UID = 24, INO_GID = 26;
+
+  // ---- TLSF constants (matching compiler.js WASM malloc) ----
+  var FREE_BIT = 1, PREV_FREE_BIT = 2, FLAG_BITS = 3;
+  var BLOCK_OVERHEAD = 8, MIN_BLOCK_SIZE = 16, BLOCK_ALIGN = 8;
+  var SL_LOG2 = 4, SL_COUNT = 16;
+  var FL_SHIFT = 4, FL_MAX = 30;
+  var FL_COUNT = FL_MAX - FL_SHIFT + 1; // 27
+  var FREE_BLOCK_OVERHEAD = BLOCK_OVERHEAD + 8; // 16: header + free list ptrs
+
+  // =================================================================
+  // ByteStore — random-access byte-addressable backing store
+  // =================================================================
+
+  // For tests: backed by an ArrayBuffer.
+  function MemoryByteStore(initialSize) {
+    initialSize = initialSize || 65536;
+    var buf = new ArrayBuffer(initialSize);
+    this._u8 = new Uint8Array(buf);
+    this._dv = new DataView(buf);
+  }
+  MemoryByteStore.prototype.getUint32 = function (off) {
+    return this._dv.getUint32(off, true);
+  };
+  MemoryByteStore.prototype.setUint32 = function (off, val) {
+    this._dv.setUint32(off, val, true);
+  };
+  MemoryByteStore.prototype.getBytes = function (off, len) {
+    return this._u8.slice(off, off + len);
+  };
+  MemoryByteStore.prototype.setBytes = function (off, data) {
+    this._u8.set(data, off);
+  };
+  MemoryByteStore.prototype.size = function () {
+    return this._u8.byteLength;
+  };
+  MemoryByteStore.prototype.resize = function (newSize) {
+    if (newSize <= this._u8.byteLength) return;
+    var old = this._u8;
+    var buf = new ArrayBuffer(newSize);
+    this._u8 = new Uint8Array(buf);
+    this._dv = new DataView(buf);
+    this._u8.set(old);
+  };
+
+  // For production: backed by a FileSystemSyncAccessHandle.
+  function SyncAccessHandleStore(handle) {
+    this._h = handle;
+    this._tmp4 = new Uint8Array(4);
+    this._tmpDV = new DataView(this._tmp4.buffer);
+  }
+  SyncAccessHandleStore.prototype.getUint32 = function (off) {
+    this._h.read(this._tmp4, { at: off });
+    return this._tmpDV.getUint32(0, true);
+  };
+  SyncAccessHandleStore.prototype.setUint32 = function (off, val) {
+    this._tmpDV.setUint32(0, val, true);
+    this._h.write(this._tmp4, { at: off });
+  };
+  SyncAccessHandleStore.prototype.getBytes = function (off, len) {
+    var buf = new Uint8Array(len);
+    if (len > 0) this._h.read(buf, { at: off });
+    return buf;
+  };
+  SyncAccessHandleStore.prototype.setBytes = function (off, data) {
+    if (data.length > 0) this._h.write(data, { at: off });
+  };
+  SyncAccessHandleStore.prototype.size = function () {
+    return this._h.getSize();
+  };
+  SyncAccessHandleStore.prototype.resize = function (newSize) {
+    this._h.truncate(newSize);
+  };
+
+  // =================================================================
+  // TLSFAllocator — O(1) segregated-fit allocator
+  // =================================================================
+  //
+  // Block header (8 bytes for used blocks, 16 bytes for free blocks):
+  //   [0:4]  size_and_flags  uint32  bits[31:3]=block_size/8, bit0=FREE, bit1=PREV_FREE
+  //   [4:8]  prev_phys       uint32  previous physical block offset (for coalescing)
+  //   Free blocks additionally store at payload offset:
+  //     [8:12]  next_free    uint32  (free-list next)
+  //     [12:16] prev_free    uint32  (free-list prev)
+  //
+  // Metadata region (inside the store, at metaOffset):
+  //   [0:4]    fl_bitmap
+  //   [4:112]  sl_bitmap[FL_COUNT]
+  //   [112:1840] free_heads[FL_COUNT * SL_COUNT]
+  //   [1840:1844] pool_start
+  //   [1844:1848] pool_end (allocated pool end, may grow)
+  //   [1848:1852] last_block
+
+  var META_FL_BITMAP = 0;
+  var META_SL_BITMAP = 4;
+  var META_FREE_HEADS = META_SL_BITMAP + FL_COUNT * 4; // 112
+  var META_POOL_START = META_FREE_HEADS + FL_COUNT * SL_COUNT * 4; // 1840
+  var META_POOL_END = META_POOL_START + 4; // 1844
+  var META_LAST_BLOCK = META_POOL_END + 4; // 1848
+
+  function TLSFAllocator(store, metaOffset, poolSize) {
+    this._s = store;
+    this._meta = metaOffset;
+    this._init(poolSize);
+  }
+
+  TLSFAllocator.prototype._readMeta32 = function (off) {
+    return this._s.getUint32(this._meta + off);
+  };
+  TLSFAllocator.prototype._writeMeta32 = function (off, val) {
+    this._s.setUint32(this._meta + off, val);
+  };
+
+  TLSFAllocator.prototype._blockSize = function (block) {
+    return this._s.getUint32(block) & ~FLAG_BITS;
+  };
+  TLSFAllocator.prototype._blockSetSize = function (block, size) {
+    var flags = this._s.getUint32(block) & FLAG_BITS;
+    this._s.setUint32(block, (size & ~FLAG_BITS) | flags);
+  };
+  TLSFAllocator.prototype._blockIsFree = function (block) {
+    return (this._s.getUint32(block) & FREE_BIT) !== 0;
+  };
+  TLSFAllocator.prototype._blockPrevIsFree = function (block) {
+    return (this._s.getUint32(block) & PREV_FREE_BIT) !== 0;
+  };
+  TLSFAllocator.prototype._blockPrevPhys = function (block) {
+    return this._s.getUint32(block + 4);
+  };
+  TLSFAllocator.prototype._blockSetPrevPhys = function (block, prev) {
+    this._s.setUint32(block + 4, prev);
+  };
+  TLSFAllocator.prototype._blockNextPhys = function (block) {
+    return block + this._blockSize(block);
+  };
+  TLSFAllocator.prototype._blockGetNextFree = function (block) {
+    return this._s.getUint32(block + 8);
+  };
+  TLSFAllocator.prototype._blockSetNextFree = function (block, nf) {
+    this._s.setUint32(block + 8, nf);
+  };
+  TLSFAllocator.prototype._blockGetPrevFree = function (block) {
+    return this._s.getUint32(block + 12);
+  };
+  TLSFAllocator.prototype._blockSetPrevFree = function (block, pf) {
+    this._s.setUint32(block + 12, pf);
+  };
+
+  TLSFAllocator.prototype._clz32 = function (x) {
+    return Math.clz32(x);
+  };
+  TLSFAllocator.prototype._ctz32 = function (x) {
+    if (x === 0) return 32;
+    return 31 - Math.clz32(x & -x);
+  };
+
+  // mapping_insert: floor mapping (used for insert)
+  TLSFAllocator.prototype._mappingInsert = function (size, out) {
+    if (size < (1 << (FL_SHIFT + 1))) {
+      out[0] = 0;
+      out[1] = ((size - MIN_BLOCK_SIZE) >>> 3) & (SL_COUNT - 1);
+    } else {
+      var t = 31 - this._clz32(size);
+      out[1] = ((size >>> (t - SL_LOG2)) & (SL_COUNT - 1));
+      out[0] = t - FL_SHIFT;
+    }
+  };
+
+  // mapping_search: ceiling mapping (used for search — rounds up)
+  TLSFAllocator.prototype._mappingSearch = function (size, out) {
+    var sz = size;
+    // SEARCH_ROUND = size + 2^(floor(log2(size)) - SL_LOG2) - 1
+    if (sz >= (1 << (FL_SHIFT + 1))) {
+      var t = 31 - this._clz32(sz);
+      sz = (sz + (1 << (t - SL_LOG2)) - 1) >>> 0;
+    }
+    // Fall through to mapping_insert
+    this._mappingInsert(sz, out);
+  };
+
+  TLSFAllocator.prototype._insertFreeBlock = function (block) {
+    var flsl = [0, 0];
+    var sz = this._blockSize(block);
+    this._mappingInsert(sz, flsl);
+    var fl = flsl[0], sl = flsl[1];
+
+    var head = this._readMeta32(META_FREE_HEADS + (fl * SL_COUNT + sl) * 4);
+    this._blockSetNextFree(block, head);
+    this._blockSetPrevFree(block, 0);
+    if (head) this._blockSetPrevFree(head, block);
+    this._writeMeta32(META_FREE_HEADS + (fl * SL_COUNT + sl) * 4, block);
+
+    this._writeMeta32(META_FL_BITMAP,
+      this._readMeta32(META_FL_BITMAP) | (1 << fl));
+    var slMap = this._readMeta32(META_SL_BITMAP + fl * 4);
+    this._writeMeta32(META_SL_BITMAP + fl * 4, slMap | (1 << sl));
+  };
+
+  TLSFAllocator.prototype._removeFreeBlock = function (block) {
+    var flsl = [0, 0];
+    var sz = this._blockSize(block);
+    this._mappingInsert(sz, flsl);
+    var fl = flsl[0], sl = flsl[1];
+
+    var nf = this._blockGetNextFree(block);
+    var pf = this._blockGetPrevFree(block);
+
+    // Sanity: verify list integrity (like the C code does)
+    if (nf && this._blockGetPrevFree(nf) !== block) {
+      throw new Error('TLSF: corrupted free list (next->prev != cur)');
+    }
+    if (pf && this._blockGetNextFree(pf) !== block) {
+      throw new Error('TLSF: corrupted free list (prev->next != cur)');
+    }
+
+    if (nf) this._blockSetPrevFree(nf, pf);
+    if (pf) this._blockSetNextFree(pf, nf);
+    else {
+      this._writeMeta32(META_FREE_HEADS + (fl * SL_COUNT + sl) * 4, nf);
+      if (!nf) {
+        var slMap = this._readMeta32(META_SL_BITMAP + fl * 4);
+        slMap = (slMap & ~(1 << sl)) >>> 0;
+        this._writeMeta32(META_SL_BITMAP + fl * 4, slMap);
+        if (!slMap) {
+          var flMap = this._readMeta32(META_FL_BITMAP);
+          this._writeMeta32(META_FL_BITMAP,
+            (flMap & ~(1 << fl)) >>> 0);
+        }
+      }
+    }
+  };
+
+  TLSFAllocator.prototype._findSuitableBlock = function (flsl) {
+    var fl = flsl[0], sl = flsl[1];
+    var slMap = this._readMeta32(META_SL_BITMAP + fl * 4);
+    slMap = (slMap & (~0 << sl)) >>> 0;
+    if (!slMap) {
+      var flMap = this._readMeta32(META_FL_BITMAP);
+      flMap = (flMap & (~0 << (fl + 1))) >>> 0;
+      if (!flMap) return 0;
+      fl = this._ctz32(flMap);
+      slMap = this._readMeta32(META_SL_BITMAP + fl * 4);
+    }
+    sl = this._ctz32(slMap);
+    flsl[0] = fl; flsl[1] = sl;
+    return this._readMeta32(META_FREE_HEADS + (fl * SL_COUNT + sl) * 4);
+  };
+
+  TLSFAllocator.prototype._mergePrev = function (block) {
+    if (this._blockPrevIsFree(block)) {
+      var prev = this._blockPrevPhys(block);
+      this._removeFreeBlock(prev);
+      var newSize = this._blockSize(prev) + this._blockSize(block);
+      var flags = this._s.getUint32(prev) & FLAG_BITS;
+      this._s.setUint32(prev, flags | newSize);
+      // Update prev_phys of next physical block
+      var next = this._blockNextPhys(prev);
+      var poolEnd = this._readMeta32(META_POOL_END);
+      if (next < poolEnd) this._blockSetPrevPhys(next, prev);
+      if (block === this._readMeta32(META_LAST_BLOCK))
+        this._writeMeta32(META_LAST_BLOCK, prev);
+      block = prev;
+    }
+    return block;
+  };
+
+  TLSFAllocator.prototype._mergeNext = function (block) {
+    var next = this._blockNextPhys(block);
+    var poolEnd = this._readMeta32(META_POOL_END);
+    if (next < poolEnd && this._blockIsFree(next)) {
+      this._removeFreeBlock(next);
+      var newSize = this._blockSize(block) + this._blockSize(next);
+      var flags = this._s.getUint32(block) & FLAG_BITS;
+      this._s.setUint32(block, flags | newSize);
+      // Update prev_phys of block after next
+      var after = this._blockNextPhys(block);
+      if (after < poolEnd) this._blockSetPrevPhys(after, block);
+      if (next === this._readMeta32(META_LAST_BLOCK))
+        this._writeMeta32(META_LAST_BLOCK, block);
+    }
+    return block;
+  };
+
+  TLSFAllocator.prototype._splitBlock = function (block, needed) {
+    var remainderSize = this._blockSize(block) - needed;
+    if (remainderSize >= MIN_BLOCK_SIZE) {
+      // Resize current block
+      var flags = this._s.getUint32(block) & FLAG_BITS;
+      this._s.setUint32(block, flags | needed);
+      // Create remainder block
+      var rem = block + needed;
+      this._s.setUint32(rem, remainderSize | FREE_BIT);
+      this._blockSetPrevPhys(rem, block);
+      // Update next block's prev_phys
+      var next = rem + remainderSize;
+      var poolEnd = this._readMeta32(META_POOL_END);
+      if (next < poolEnd) this._blockSetPrevPhys(next, rem);
+      if (block === this._readMeta32(META_LAST_BLOCK))
+        this._writeMeta32(META_LAST_BLOCK, rem);
+      this._insertFreeBlock(rem);
+      // Set PREV_FREE on successor
+      next = this._blockNextPhys(block);
+      if (next < poolEnd) {
+        this._s.setUint32(next, this._s.getUint32(next) | PREV_FREE_BIT);
+      }
+    }
+  };
+
+  TLSFAllocator.prototype._blockMarkUsed = function (block) {
+    this._s.setUint32(block, this._s.getUint32(block) & ~FREE_BIT);
+    var next = this._blockNextPhys(block);
+    var poolEnd = this._readMeta32(META_POOL_END);
+    if (next < poolEnd)
+      this._s.setUint32(next, this._s.getUint32(next) & ~PREV_FREE_BIT);
+  };
+
+  TLSFAllocator.prototype._blockMarkFree = function (block) {
+    this._s.setUint32(block, this._s.getUint32(block) | FREE_BIT);
+    var next = this._blockNextPhys(block);
+    var poolEnd = this._readMeta32(META_POOL_END);
+    if (next < poolEnd)
+      this._s.setUint32(next, this._s.getUint32(next) | PREV_FREE_BIT);
+  };
+
+  TLSFAllocator.prototype._growPool = function (needed) {
+    var poolStart = this._readMeta32(META_POOL_START);
+    var poolEnd = this._readMeta32(META_POOL_END);
+    var lastBlock = this._readMeta32(META_LAST_BLOCK);
+
+    var newEnd = poolEnd + needed;
+    // Ensure the store is large enough
+    if (newEnd > this._s.size()) {
+      this._s.resize(newEnd + 65536); // grow by 64KB extra headroom
+    }
+
+    var block = poolEnd;
+    var blockSz = newEnd - poolEnd;
+
+    // Round up so mapping_search can find this block
+    if (blockSz >= (1 << (FL_SHIFT + 1))) {
+      var t = 31 - this._clz32(blockSz);
+      blockSz = (blockSz + (1 << (t - SL_LOG2)) - 1) >>> 0;
+    }
+    // Round up to alignment
+    blockSz = (blockSz + BLOCK_ALIGN - 1) & ~(BLOCK_ALIGN - 1);
+    newEnd = poolEnd + blockSz;
+
+    // Re-check store size after rounding
+    if (newEnd > this._s.size()) {
+      this._s.resize(newEnd);
+    }
+
+    this._s.setUint32(block, blockSz | FREE_BIT);
+    this._blockSetPrevPhys(block, lastBlock);
+    this._writeMeta32(META_POOL_END, newEnd);
+
+    // If last block is free, merge
+    if (lastBlock && this._blockIsFree(lastBlock)) {
+      // Set PREV_FREE bit so merge_prev works
+      this._s.setUint32(block, this._s.getUint32(block) | PREV_FREE_BIT);
+      this._writeMeta32(META_LAST_BLOCK, block);
+      block = this._mergePrev(block);
+    } else {
+      this._writeMeta32(META_LAST_BLOCK, block);
+    }
+
+    this._insertFreeBlock(block);
+    return 1;
+  };
+
+  TLSFAllocator.prototype._adjustRequest = function (size) {
+    var adj = size + BLOCK_OVERHEAD;
+    if (adj < MIN_BLOCK_SIZE) adj = MIN_BLOCK_SIZE;
+    adj = (adj + BLOCK_ALIGN - 1) & ~(BLOCK_ALIGN - 1);
+    return adj >>> 0;
+  };
+
+  TLSFAllocator.prototype.malloc = function (size) {
+    if (size === 0) return 0;
+    if (size > 0x40000000) return 0;
+
+    var adjusted = this._adjustRequest(size);
+
+    var flsl = [0, 0];
+    this._mappingSearch(adjusted, flsl);
+    if (flsl[0] >= FL_COUNT) {
+      // Too large even for search — grow directly
+      if (!this._growPool(adjusted)) return 0;
+      this._mappingSearch(adjusted, flsl);
+    }
+
+    var block = this._findSuitableBlock(flsl);
+    if (!block) {
+      if (!this._growPool(adjusted)) return 0;
+      this._mappingSearch(adjusted, flsl);
+      block = this._findSuitableBlock(flsl);
+      if (!block) return 0;
+    }
+
+    this._removeFreeBlock(block);
+    this._splitBlock(block, adjusted);
+    this._blockMarkUsed(block);
+
+    return block + BLOCK_OVERHEAD; // return payload pointer
+  };
+
+  TLSFAllocator.prototype.free = function (ptr) {
+    if (!ptr) return;
+
+    var block = ptr - BLOCK_OVERHEAD;
+    var poolStart = this._readMeta32(META_POOL_START);
+    var poolEnd = this._readMeta32(META_POOL_END);
+
+    // Bounds check
+    if (block < poolStart || block >= poolEnd) {
+      throw new Error('TLSF: free() on pointer outside pool');
+    }
+    // Double-free check
+    if (this._blockIsFree(block)) {
+      throw new Error('TLSF: double free detected');
+    }
+
+    this._blockMarkFree(block);
+    block = this._mergePrev(block);
+    block = this._mergeNext(block);
+    this._insertFreeBlock(block);
+  };
+
+  TLSFAllocator.prototype.realloc = function (ptr, newSize) {
+    if (!ptr) return this.malloc(newSize);
+    if (newSize === 0) { this.free(ptr); return 0; }
+
+    var block = ptr - BLOCK_OVERHEAD;
+    var oldPayload = this._blockSize(block) - BLOCK_OVERHEAD;
+
+    // If new size fits in current block, keep it
+    if (newSize <= oldPayload) return ptr;
+
+    // Allocate new, copy, free old
+    var newPtr = this.malloc(newSize);
+    if (!newPtr) return 0;
+    var src = this._s.getBytes(ptr, oldPayload);
+    this._s.setBytes(newPtr, src);
+    this.free(ptr);
+    return newPtr;
+  };
+
+  TLSFAllocator.prototype.calloc = function (count, size) {
+    if (size !== 0 && count > 0x40000000 / size) return 0;
+    var total = count * size;
+    var ptr = this.malloc(total);
+    if (ptr) {
+      var zeroes = new Uint8Array(total);
+      this._s.setBytes(ptr, zeroes);
+    }
+    return ptr;
+  };
+
+  // ---- Test / debug ----
+  TLSFAllocator.prototype.blockSize = function (ptr) {
+    return this._blockSize(ptr - BLOCK_OVERHEAD) - BLOCK_OVERHEAD;
+  };
+  TLSFAllocator.prototype.blockIsFree = function (ptr) {
+    return this._blockIsFree(ptr - BLOCK_OVERHEAD);
+  };
+  TLSFAllocator.prototype.metadataSize = function () {
+    return TLSF_META_SIZE;
+  };
+  TLSFAllocator.prototype.freeBlockCount = function () {
+    var count = 0;
+    var poolStart = this._readMeta32(META_POOL_START);
+    var poolEnd = this._readMeta32(META_POOL_END);
+    var block = poolStart;
+    while (block < poolEnd) {
+      if (this._blockIsFree(block)) count++;
+      block = this._blockNextPhys(block);
+    }
+    return count;
+  };
+  TLSFAllocator.prototype.totalFreeBytes = function () {
+    var total = 0;
+    var poolStart = this._readMeta32(META_POOL_START);
+    var poolEnd = this._readMeta32(META_POOL_END);
+    var block = poolStart;
+    while (block < poolEnd) {
+      if (this._blockIsFree(block))
+        total += this._blockSize(block) - BLOCK_OVERHEAD;
+      block = this._blockNextPhys(block);
+    }
+    return total;
+  };
+
+  TLSFAllocator.prototype._init = function (poolSize) {
+    var poolStart = TLSF_POOL_OFFSET;
+    var storeSize = this._s.size();
+    var actualPoolSize = storeSize - poolStart;
+    if (actualPoolSize < poolSize) {
+      this._s.resize(poolStart + poolSize);
+      actualPoolSize = poolSize;
+    }
+
+    // Zero metadata
+    for (var i = 0; i < TLSF_META_SIZE; i += 4) {
+      this._writeMeta32(i, 0);
+    }
+    this._writeMeta32(META_POOL_START, poolStart);
+    this._writeMeta32(META_POOL_END, poolStart + actualPoolSize);
+    this._writeMeta32(META_LAST_BLOCK, 0);
+
+    // Create initial free block
+    var block = poolStart;
+    this._s.setUint32(block, actualPoolSize | FREE_BIT);
+    this._blockSetPrevPhys(block, 0);
+    this._writeMeta32(META_LAST_BLOCK, block);
+
+    // Update next block's prev_phys (none — at the end)
+    // prev_block set to PREV_FREE_BIT for the first block's successor
+    // (no successor since this is the only block; poolEnd marks boundary)
+
+    this._insertFreeBlock(block);
+  };
+
+  // =================================================================
+  // InodeTable — flat array of inodes, stored in a TLSF extent
+  // =================================================================
+
+  function InodeTable(alloc) {
+    this._alloc = alloc;
+    this._store = alloc._s; // direct store access for efficiency
+    this._extent = 0;
+    this._capacity = 0;
+  }
+
+  InodeTable.prototype.init = function (initialCapacity) {
+    initialCapacity = initialCapacity || INITIAL_INODE_CAPACITY;
+    var byteSize = initialCapacity * INODE_SIZE;
+    this._extent = this._alloc.malloc(byteSize);
+    if (!this._extent) throw new Error('InodeTable: initial alloc failed');
+    this._capacity = initialCapacity;
+    // Zero the table
+    var zeroes = new Uint8Array(byteSize);
+    this._store.setBytes(this._extent, zeroes);
+    return this._extent;
+  };
+
+  InodeTable.prototype.load = function (extent, capacity) {
+    this._extent = extent;
+    this._capacity = capacity;
+  };
+
+  InodeTable.prototype.capacity = function () { return this._capacity; };
+  InodeTable.prototype.extent = function () { return this._extent; };
+
+  InodeTable.prototype.read = function (inoId) {
+    if (inoId >= this._capacity) return null;
+    var off = this._extent + inoId * INODE_SIZE;
+    // Read fields individually
+    return {
+      extentOffset: this._store.getUint32(off + INO_EXTENT_OFFSET),
+      extentCapacity: this._store.getUint32(off + INO_EXTENT_CAP),
+      dataSize: this._store.getUint32(off + INO_DATA_SIZE),
+      mode: this._store.getUint32(off + INO_MODE) & 0xFFFF, // read as uint32, mask
+      nlink: this._store.getUint32(off + INO_MODE) >>> 16,
+      mtime: this._store.getUint32(off + INO_MTIME),
+      ctime: this._store.getUint32(off + INO_CTIME),
+      uid: this._store.getUint32(off + INO_UID) & 0xFFFF,
+      gid: this._store.getUint32(off + INO_UID) >>> 16
+    };
+  };
+
+  InodeTable.prototype.write = function (inoId, ino) {
+    if (inoId >= this._capacity) return false;
+    var off = this._extent + inoId * INODE_SIZE;
+    this._store.setUint32(off + INO_EXTENT_OFFSET, ino.extentOffset);
+    this._store.setUint32(off + INO_EXTENT_CAP, ino.extentCapacity);
+    this._store.setUint32(off + INO_DATA_SIZE, ino.dataSize);
+    this._store.setUint32(off + INO_MODE,
+      (ino.mode & 0xFFFF) | ((ino.nlink & 0xFFFF) << 16));
+    this._store.setUint32(off + INO_MTIME, ino.mtime);
+    this._store.setUint32(off + INO_CTIME, ino.ctime);
+    this._store.setUint32(off + INO_UID,
+      (ino.uid & 0xFFFF) | ((ino.gid & 0xFFFF) << 16));
+    return true;
+  };
+
+  InodeTable.prototype.grow = function (newCapacity) {
+    var byteSize = newCapacity * INODE_SIZE;
+    var newExtent = this._alloc.malloc(byteSize);
+    if (!newExtent) return false;
+    // Copy old table
+    var oldBytes = this._store.getBytes(this._extent,
+      this._capacity * INODE_SIZE);
+    this._store.setBytes(newExtent, oldBytes);
+    // Zero new portion
+    var zeroes = new Uint8Array(
+      (newCapacity - this._capacity) * INODE_SIZE);
+    this._store.setBytes(newExtent + this._capacity * INODE_SIZE, zeroes);
+    // Free old extent
+    this._alloc.free(this._extent);
+    this._extent = newExtent;
+    this._capacity = newCapacity;
+    return true;
+  };
+
+  // =================================================================
+  // Directory helpers — operate on a directory inode's data extent
+  // =================================================================
+
+  // Directory entry wire format:
+  //   [0:4] inode_id  uint32
+  //   [4:6] name_len  uint16
+  //   [6:6+N] name    uint8[N]
+  // Entries are sorted by name (strcmp order) in the data extent.
+
+  var DIR_ENT_HEADER = 6;
+
+  var _encoder = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
+  var _decoder = (typeof TextDecoder !== 'undefined') ? new TextDecoder() : null;
+
+  function encodeStr(s) {
+    return _encoder.encode(s);
+  }
+  function decodeStr(buf) {
+    return _decoder.decode(buf);
+  }
+
+  // Read a directory entry at `offset` within the dir extent.
+  // Returns { inodeId, nameLen, name } or null.
+  function readDirEnt(store, extentBase, offset, extentSize) {
+    if (offset + DIR_ENT_HEADER > extentSize) return null;
+    var inoId = store.getUint32(extentBase + offset);
+    var nameLen = store.getUint32(extentBase + offset + 4) & 0xFFFF;
+    if (offset + DIR_ENT_HEADER + nameLen > extentSize) return null;
+    var nameBytes = store.getBytes(extentBase + offset + 6, nameLen);
+    return { inodeId: inoId, nameLen: nameLen, name: decodeStr(nameBytes) };
+  }
+
+  // Scan the directory for an entry with the given name.
+  // Returns { inodeId, offset: offset within extent of this entry } or null.
+  function dirLookup(store, extentBase, extentSize, name) {
+    // Binary search — entries are sorted by name.
+    // Directory entries are variable-length, so we use a two-pass approach:
+    // first collect entry offsets, then binary search.
+    var offsets = [];
+    var pos = 0;
+    while (pos < extentSize) {
+      var ent = readDirEnt(store, extentBase, pos, extentSize);
+      if (!ent) break;
+      if (ent.inodeId !== 0) offsets.push(pos); // skip deleted entries
+      pos += DIR_ENT_HEADER + ent.nameLen;
+    }
+
+    var lo = 0, hi = offsets.length - 1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >>> 1;
+      var e = readDirEnt(store, extentBase, offsets[mid], extentSize);
+      if (!e) break;
+      if (e.name === name) return { inodeId: e.inodeId, offset: offsets[mid] };
+      if (e.name < name) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return null;
+  }
+
+  // Find the insertion point for `name` in sorted order.
+  // Returns the byte offset where the entry should be inserted.
+  function dirFindInsertPos(store, extentBase, extentSize, name) {
+    var target = 0;
+    var pos = 0;
+    while (pos < extentSize) {
+      var ent = readDirEnt(store, extentBase, pos, extentSize);
+      if (!ent) break;
+      if (ent.inodeId !== 0 && ent.name >= name) break;
+      target = pos + DIR_ENT_HEADER + ent.nameLen;
+      pos += DIR_ENT_HEADER + ent.nameLen;
+    }
+    return target;
+  }
+
+  // Write a directory entry at `offset` within the dir extent.
+  function dirWriteEnt(store, extentBase, offset, inodeId, name) {
+    var nameBytes = encodeStr(name);
+    store.setUint32(extentBase + offset, inodeId);
+    store.setUint32(extentBase + offset + 4, nameBytes.length);
+    store.setBytes(extentBase + offset + 6, nameBytes);
+  }
+
+  // Insert a directory entry, maintaining sort order.
+  // Returns true on success. The caller must ensure the extent has room.
+  function dirInsert(store, extentBase, extentSize, inodeId, name) {
+    var nameBytes = encodeStr(name);
+    var entSize = DIR_ENT_HEADER + nameBytes.length;
+    var insertPos = dirFindInsertPos(store, extentBase, extentSize, name);
+
+    // Shift data after insertPos to make room
+    if (insertPos < extentSize) {
+      var tail = store.getBytes(extentBase + insertPos,
+        extentSize - insertPos);
+      store.setBytes(extentBase + insertPos + entSize, tail);
+    }
+    dirWriteEnt(store, extentBase, insertPos, inodeId, name);
+    return insertPos;
+  }
+
+  // Remove a directory entry by name. Returns the old inodeId or 0.
+  function dirRemove(store, extentBase, extentSize, name) {
+    var found = dirLookup(store, extentBase, extentSize, name);
+    if (!found) return 0;
+    // Read the entry to get its full size
+    var ent = readDirEnt(store, extentBase, found.offset, extentSize);
+    if (!ent) return 0;
+    var entSize = DIR_ENT_HEADER + ent.nameLen;
+    // Shift subsequent data back
+    var tailStart = found.offset + entSize;
+    if (tailStart < extentSize) {
+      var tail = store.getBytes(extentBase + tailStart,
+        extentSize - tailStart);
+      store.setBytes(extentBase + found.offset, tail);
+    }
+    return found.inodeId;
+  }
+
+  // List all non-deleted entries in a directory.
+  function dirList(store, extentBase, extentSize) {
+    var result = [];
+    var pos = 0;
+    while (pos < extentSize) {
+      var ent = readDirEnt(store, extentBase, pos, extentSize);
+      if (!ent) break;
+      if (ent.inodeId !== 0) result.push({ name: ent.name, inodeId: ent.inodeId });
+      pos += DIR_ENT_HEADER + ent.nameLen;
+    }
+    return result;
+  }
+
+  // =================================================================
+  // BlockFS — the filesystem proper
+  // =================================================================
+
+  function BlockFS(store, alloc, inodeTable, rootIno, sbFormat) {
+    this._s = store;           // ByteStore
+    this._alloc = alloc;       // TLSFAllocator
+    this._inodes = inodeTable; // InodeTable
+    this._rootIno = rootIno;   // root inode ID (always 1)
+    this._nextInode = sbFormat ? 2 : null; // next free inode ID
+    this._sbFormat = sbFormat; // true if freshly formatted
+
+    this._lastError = '';
+    this._cwd = '/';
+    this._fdTable = [
+      { position: null }, // 0 = stdin
+      { position: null }, // 1 = stdout
+      { position: null }, // 2 = stderr
+    ];
+    this._dirTable = [];
+
+    // If freshly formatted, create the root directory
+    if (sbFormat) {
+      this._createRootDir();
+    }
+  }
+
+  BlockFS.prototype._now = function () {
+    // Date.now() is fine here — this is sync code in a worker.
+    return Math.floor(Date.now() / 1000);
+  };
+
+  BlockFS.prototype._setErr = function (name) {
+    this._lastError = name;
+    return null;
+  };
+
+  BlockFS.prototype._readSuperblock = function () {
+    return {
+      magic: this._s.getUint32(SB_MAGIC),
+      version: this._s.getUint32(SB_VERSION),
+      flags: this._s.getUint32(SB_FLAGS),
+      tlsfPoolOffset: this._s.getUint32(SB_TLSF_POOL_OFFSET),
+      tlsfPoolSize: this._s.getUint32(SB_TLSF_POOL_SIZE),
+      inodeTblExtent: this._s.getUint32(SB_INODE_TBL_EXTENT),
+      inodeTblCap: this._s.getUint32(SB_INODE_TBL_CAP),
+      nextInodeId: this._s.getUint32(SB_NEXT_INODE_ID),
+      rootInode: this._s.getUint32(SB_ROOT_INODE)
+    };
+  };
+
+  BlockFS.prototype._writeSuperblock = function () {
+    this._s.setUint32(SB_MAGIC, MAGIC);
+    this._s.setUint32(SB_VERSION, VERSION);
+    this._s.setUint32(SB_FLAGS, 0);
+    this._s.setUint32(SB_TLSF_POOL_OFFSET, TLSF_POOL_OFFSET);
+    // tlsfPoolSize is computed from alloc state
+    var poolStart, poolEnd;
+    try { poolEnd = this._alloc._readMeta32(META_POOL_END); } catch (e) { poolEnd = 0; }
+    this._s.setUint32(SB_TLSF_POOL_SIZE, poolEnd - TLSF_POOL_OFFSET);
+    this._s.setUint32(SB_INODE_TBL_EXTENT, this._inodes.extent());
+    this._s.setUint32(SB_INODE_TBL_CAP, this._inodes.capacity());
+    this._s.setUint32(SB_NEXT_INODE_ID, this._nextInode);
+    this._s.setUint32(SB_ROOT_INODE, this._rootIno);
+  };
+
+  BlockFS.prototype._createRootDir = function () {
+    // Root inode (inode 1)
+    var rootIno = {
+      extentOffset: 0, extentCapacity: 0, dataSize: 0,
+      mode: DEFAULT_DIR_MODE, nlink: 1,
+      mtime: this._now(), ctime: this._now(),
+      uid: 0, gid: 0
+    };
+    // Allocate a small initial extent for the root directory
+    var rootExtent = this._alloc.malloc(256);
+    if (!rootExtent) throw new Error('BlockFS: root dir alloc failed');
+    rootIno.extentOffset = rootExtent;
+    rootIno.extentCapacity = 256;
+    rootIno.dataSize = 0;
+
+    this._inodes.write(1, rootIno);
+    this._nextInode = 2;
+  };
+
+  // Allocate a new inode with initial state.
+  BlockFS.prototype._allocInode = function (mode) {
+    var inoId = this._nextInode;
+    if (inoId >= this._inodes.capacity()) {
+      // Grow inode table
+      if (!this._inodes.grow(this._inodes.capacity() * 2)) {
+        return this._setErr('ENOSPC');
+      }
+    }
+    this._nextInode++;
+    var now = this._now();
+    var ino = {
+      extentOffset: 0, extentCapacity: 0, dataSize: 0,
+      mode: mode, nlink: 0,
+      mtime: now, ctime: now,
+      uid: 0, gid: 0
+    };
+    this._inodes.write(inoId, ino);
+    return inoId;
+  };
+
+  // Free an inode and its data extent.
+  BlockFS.prototype._freeInode = function (inoId) {
+    var ino = this._inodes.read(inoId);
+    if (!ino) return;
+    if (ino.extentOffset) this._alloc.free(ino.extentOffset);
+    // Zero the inode slot
+    this._inodes.write(inoId, {
+      extentOffset: 0, extentCapacity: 0, dataSize: 0,
+      mode: 0, nlink: 0, mtime: 0, ctime: 0, uid: 0, gid: 0
+    });
+  };
+
+  // Get the inode for a path. Returns { inoId, ino } or null.
+  BlockFS.prototype._walkPath = function (path) {
+    var resolved = this._resolvePath(path);
+    if (resolved === '/') {
+      var ri = this._inodes.read(this._rootIno);
+      return ri ? { inoId: this._rootIno, ino: ri } : null;
+    }
+    var parts = resolved.split('/').filter(function (p) { return p; });
+    var inoId = this._rootIno;
+    for (var i = 0; i < parts.length; i++) {
+      var dirIno = this._inodes.read(inoId);
+      if (!dirIno || (dirIno.mode & S_IFMT) !== S_IFDIR) return null;
+      if (!dirIno.extentOffset) return null;
+      var found = dirLookup(this._s, dirIno.extentOffset,
+        dirIno.dataSize, parts[i]);
+      if (!found) return null;
+      inoId = found.inodeId;
+    }
+    var ino = this._inodes.read(inoId);
+    return ino ? { inoId: inoId, ino: ino } : null;
+  };
+
+  // Allocate or grow a data extent for an inode.
+  BlockFS.prototype._growExtent = function (ino, neededSize) {
+    if (!ino.extentOffset) {
+      // First allocation
+      var allocSize = Math.max(neededSize, 256);
+      var ext = this._alloc.malloc(allocSize);
+      if (!ext) return this._setErr('ENOSPC');
+      ino.extentOffset = ext;
+      ino.extentCapacity = allocSize;
+      return ext;
+    }
+    if (neededSize <= ino.extentCapacity) return ino.extentOffset;
+    // Grow: double or meet needed, whichever is larger
+    var newCap = Math.max(ino.extentCapacity * 2, neededSize);
+    var newExt = this._alloc.realloc(ino.extentOffset, newCap);
+    if (!newExt) return this._setErr('ENOSPC');
+    ino.extentOffset = newExt;
+    ino.extentCapacity = newCap;
+    return newExt;
+  };
+
+  // Shrink extent if significantly larger than needed.
+  BlockFS.prototype._shrinkExtent = function (ino) {
+    if (!ino.extentOffset) return;
+    // Only shrink if less than 25% utilized and at least 1KB
+    if (ino.dataSize < ino.extentCapacity / 4 &&
+        ino.extentCapacity > 1024) {
+      var newCap = Math.max(ino.dataSize, 256);
+      var newExt = this._alloc.realloc(ino.extentOffset, newCap);
+      if (newExt) {
+        ino.extentOffset = newExt;
+        ino.extentCapacity = newCap;
+      }
+      // If realloc fails, keep old extent — it's fine
+    }
+  };
+
+  BlockFS.prototype._resolvePath = function (path) {
+    if (path.length > 0 && path[0] !== '/') {
+      path = this._cwd + (this._cwd.endsWith('/') ? '' : '/') + path;
+    }
+    var parts = path.split('/');
+    var resolved = [];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '' || parts[i] === '.') continue;
+      if (parts[i] === '..') { resolved.pop(); continue; }
+      resolved.push(parts[i]);
+    }
+    return '/' + resolved.join('/');
+  };
+
+  // ---- FD table ----
+  BlockFS.prototype._allocFd = function (entry) {
+    for (var i = 3; i < this._fdTable.length; i++) {
+      if (this._fdTable[i] === null) {
+        this._fdTable[i] = entry; return i;
+      }
+    }
+    this._fdTable.push(entry);
+    return this._fdTable.length - 1;
+  };
+
+  // ---- Dir handle table ----
+  BlockFS.prototype._allocDirHandle = function (entry) {
+    for (var i = 0; i < this._dirTable.length; i++) {
+      if (this._dirTable[i] === null) {
+        this._dirTable[i] = entry; return i;
+      }
+    }
+    this._dirTable.push(entry);
+    return this._dirTable.length - 1;
+  };
+
+  // ---- Public API ----
+
+  BlockFS.prototype.open = function (path, flags, mode) {
+    var create = !!(flags & 0x40);
+    var trunc = !!(flags & 0x200);
+    var append = !!(flags & 0x400);
+    var excl = !!(flags & 0x80);
+
+    var resolved = this._resolvePath(path);
+    var w = this._walkPath(resolved);
+
+    if (w) {
+      // Exists
+      if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EISDIR');
+      if (excl && create) return this._setErr('EEXIST');
+      if (trunc) {
+        if (w.ino.extentOffset) {
+          this._alloc.free(w.ino.extentOffset);
+        }
+        w.ino.extentOffset = 0;
+        w.ino.extentCapacity = 0;
+        w.ino.dataSize = 0;
+        w.ino.mtime = this._now();
+        this._inodes.write(w.inoId, w.ino);
+      }
+    } else {
+      // Doesn't exist
+      if (!create) return this._setErr('ENOENT');
+
+      // Verify parent is a directory
+      var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      var pw = this._walkPath(parentPath);
+      if (!pw) return this._setErr('ENOENT');
+      if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+      var fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
+      var inoId = this._allocInode(DEFAULT_FILE_MODE);
+      if (inoId === null) return -1; // errno already set
+
+      // Write inode
+      var newIno = this._inodes.read(inoId);
+
+      // Add entry to parent directory
+      if (!pw.ino.extentOffset) {
+        var pe = this._growExtent(pw.ino, 256);
+        if (pe === null) { this._freeInode(inoId); return -1; }
+      }
+      var entSize = DIR_ENT_HEADER + encodeStr(fileName).length;
+      if (pw.ino.dataSize + entSize > pw.ino.extentCapacity) {
+        if (this._growExtent(pw.ino, pw.ino.dataSize + entSize) === null) {
+          this._freeInode(inoId); return -1;
+        }
+      }
+      dirInsert(this._s, pw.ino.extentOffset, pw.ino.dataSize, inoId, fileName);
+      pw.ino.dataSize += entSize;
+      pw.ino.mtime = this._now();
+      pw.ino.nlink++;
+      this._inodes.write(pw.inoId, pw.ino);
+
+      newIno.nlink = 1;
+      this._inodes.write(inoId, newIno);
+      w = { inoId: inoId, ino: newIno };
+    }
+
+    var position = append ? w.ino.dataSize : 0;
+    var fd = this._allocFd({
+      inoId: w.inoId, position: position, append: append, path: resolved
+    });
+    return fd;
+  };
+
+  BlockFS.prototype.close = function (fd) {
+    if (fd < 3 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+    if (entry.type === 'pipe') {
+      entry.pipe.closed[entry.pipeEnd] = true;
+      this._fdTable[fd] = null;
+      return 0;
+    }
+    this._fdTable[fd] = null;
+    return 0;
+  };
+
+  BlockFS.prototype.read = function (fd, buf, count) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+
+    if (entry.type === 'pipe') {
+      var pipe = entry.pipe;
+      if (pipe.buffer.length === 0) return 0;
+      var n = Math.min(count, pipe.buffer.length);
+      for (var i = 0; i < n; i++) buf[i] = pipe.buffer[i];
+      pipe.buffer.splice(0, n);
+      return n;
+    }
+    if (entry.position === null) {
+      // stdin — no data available (same as O_NONBLOCK)
+      return 0;
+    }
+    if (entry.inoId === undefined) return this._setErr('EBADF');
+
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+    if (!ino.extentOffset || entry.position >= ino.dataSize) return 0;
+
+    var available = ino.dataSize - entry.position;
+    var n = Math.min(count, available);
+    if (n <= 0) return 0;
+
+    var data = this._s.getBytes(ino.extentOffset + entry.position, n);
+    for (var j = 0; j < n; j++) buf[j] = data[j];
+    entry.position += n;
+    return n;
+  };
+
+  BlockFS.prototype.write = function (fd, buf, count) {
+    if (fd === 1 || fd === 2) return count; // stdout/stderr handled externally
+
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+
+    if (entry.type === 'pipe') {
+      if (entry.pipe.closed.read) return this._setErr('EPIPE');
+      for (var pi = 0; pi < count; pi++) entry.pipe.buffer.push(buf[pi]);
+      return count;
+    }
+    if (entry.inoId === undefined) return this._setErr('EBADF');
+
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+
+    var writePos = entry.append ? ino.dataSize : entry.position;
+    var newEnd = writePos + count;
+
+    if (newEnd > ino.extentCapacity) {
+      if (this._growExtent(ino, newEnd) === null) return this._setErr('ENOSPC');
+      // _growExtent updated ino in-place — use the modified object directly.
+      // No re-read from table: the table still has the old extent values;
+      // we persist the update below via _inodes.write().
+    }
+
+    this._s.setBytes(ino.extentOffset + writePos, buf.subarray(0, count));
+
+    if (newEnd > ino.dataSize) ino.dataSize = newEnd;
+    ino.mtime = this._now();
+    this._inodes.write(entry.inoId, ino);
+
+    entry.position = newEnd;
+    return count;
+  };
+
+  BlockFS.prototype.lseek = function (fd, offset, whence) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+    if (entry.position === null) return this._setErr('ESPIPE');
+    if (entry.inoId === undefined) return this._setErr('EBADF');
+
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+
+    var newPos;
+    switch (whence) {
+      case 0: newPos = offset; break;
+      case 1: newPos = entry.position + offset; break;
+      case 2: newPos = ino.dataSize + offset; break;
+      default: return this._setErr('EINVAL');
+    }
+    if (newPos < 0) return this._setErr('EINVAL');
+    entry.position = newPos;
+    return newPos;
+  };
+
+  BlockFS.prototype.mkdir = function (path, mode) {
+    var resolved = this._resolvePath(path);
+    if (this._walkPath(resolved)) return this._setErr('EEXIST');
+
+    var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    var dirName = resolved.substring(resolved.lastIndexOf('/') + 1);
+    var pw = this._walkPath(parentPath);
+    if (!pw) return this._setErr('ENOENT');
+    if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+    var inoId = this._allocInode(DEFAULT_DIR_MODE);
+    if (inoId === null) return -1;
+
+    // Allocate initial directory extent
+    var dirExt = this._alloc.malloc(256);
+    if (!dirExt) { this._freeInode(inoId); return this._setErr('ENOSPC'); }
+
+    var ino = this._inodes.read(inoId);
+    ino.extentOffset = dirExt;
+    ino.extentCapacity = 256;
+    ino.dataSize = 0;
+    ino.nlink = 1;
+    this._inodes.write(inoId, ino);
+
+    // Add entry to parent
+    var entSize = DIR_ENT_HEADER + encodeStr(dirName).length;
+    if (!pw.ino.extentOffset ||
+        pw.ino.dataSize + entSize > pw.ino.extentCapacity) {
+      if (this._growExtent(pw.ino,
+          (pw.ino.dataSize || 0) + Math.max(entSize, 256)) === null) {
+        this._freeInode(inoId); return this._setErr('ENOSPC');
+      }
+    }
+    dirInsert(this._s, pw.ino.extentOffset,
+      pw.ino.dataSize || 0, inoId, dirName);
+    pw.ino.dataSize = (pw.ino.dataSize || 0) + entSize;
+    pw.ino.mtime = this._now();
+    pw.ino.nlink++;
+    this._inodes.write(pw.inoId, pw.ino);
+
+    return 0;
+  };
+
+  BlockFS.prototype.rmdir = function (path) {
+    var resolved = this._resolvePath(path);
+    var w = this._walkPath(resolved);
+    if (!w) return this._setErr('ENOENT');
+    if ((w.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+    // Check if directory is empty
+    if (w.ino.extentOffset && w.ino.dataSize > 0) {
+      var entries = dirList(this._s, w.ino.extentOffset, w.ino.dataSize);
+      if (entries.length > 0) return this._setErr('ENOTEMPTY');
+    }
+
+    var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    var dirName = resolved.substring(resolved.lastIndexOf('/') + 1);
+    var pw = this._walkPath(parentPath);
+    if (!pw) return this._setErr('ENOENT');
+
+    dirRemove(this._s, pw.ino.extentOffset, pw.ino.dataSize, dirName);
+    // Note: we don't shrink the parent directory extent — dirRemove shifts
+    // data to fill the gap, but dataSize still needs adjustment.
+    pw.ino.dataSize -= DIR_ENT_HEADER + encodeStr(dirName).length;
+    pw.ino.mtime = this._now();
+    pw.ino.nlink--;
+    this._inodes.write(pw.inoId, pw.ino);
+
+    this._freeInode(w.inoId);
+    return 0;
+  };
+
+  BlockFS.prototype.unlink = function (path) {
+    var resolved = this._resolvePath(path);
+    var w = this._walkPath(resolved);
+    if (!w) return this._setErr('ENOENT');
+    if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EPERM');
+
+    var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    var fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
+    var pw = this._walkPath(parentPath);
+    if (!pw) return this._setErr('ENOENT');
+
+    dirRemove(this._s, pw.ino.extentOffset, pw.ino.dataSize, fileName);
+    pw.ino.dataSize -= DIR_ENT_HEADER + encodeStr(fileName).length;
+    pw.ino.mtime = this._now();
+    pw.ino.nlink--;
+    this._inodes.write(pw.inoId, pw.ino);
+
+    this._freeInode(w.inoId);
+    return 0;
+  };
+
+  BlockFS.prototype.remove = BlockFS.prototype.unlink; // alias
+
+  BlockFS.prototype.rename = function (oldPath, newPath) {
+    var oldResolved = this._resolvePath(oldPath);
+    var newResolved = this._resolvePath(newPath);
+    if (oldResolved === newResolved) return 0;
+
+    var oldW = this._walkPath(oldResolved);
+    if (!oldW) return this._setErr('ENOENT');
+
+    // Remove old directory entry
+    var oldParentPath = oldResolved.substring(0, oldResolved.lastIndexOf('/')) || '/';
+    var oldName = oldResolved.substring(oldResolved.lastIndexOf('/') + 1);
+    var oldPW = this._walkPath(oldParentPath);
+    if (!oldPW) return this._setErr('ENOENT');
+
+    dirRemove(this._s, oldPW.ino.extentOffset, oldPW.ino.dataSize, oldName);
+    oldPW.ino.dataSize -= DIR_ENT_HEADER + encodeStr(oldName).length;
+    oldPW.ino.mtime = this._now();
+    oldPW.ino.nlink--;
+    this._inodes.write(oldPW.inoId, oldPW.ino);
+
+    // If target exists, remove it first
+    var newW = this._walkPath(newResolved);
+    if (newW) {
+      if ((newW.ino.mode & S_IFMT) === S_IFDIR) {
+        if (newW.ino.extentOffset && newW.ino.dataSize > 0) {
+          var ent = dirList(this._s, newW.ino.extentOffset,
+            newW.ino.dataSize);
+          if (ent.length > 0) {
+            // Restore old entry
+            dirInsert(this._s, oldPW.ino.extentOffset,
+              oldPW.ino.dataSize, oldW.inoId, oldName);
+            oldPW.ino.dataSize += DIR_ENT_HEADER + encodeStr(oldName).length;
+            oldPW.ino.nlink++;
+            this._inodes.write(oldPW.inoId, oldPW.ino);
+            return this._setErr('ENOTEMPTY');
+          }
+        }
+      }
+      // Remove new entry from its parent
+      var newParentPath = newResolved.substring(0,
+        newResolved.lastIndexOf('/')) || '/';
+      var newName = newResolved.substring(
+        newResolved.lastIndexOf('/') + 1);
+      var newPW = this._walkPath(newParentPath);
+      if (newPW) {
+        dirRemove(this._s, newPW.ino.extentOffset,
+          newPW.ino.dataSize, newName);
+        newPW.ino.dataSize -= DIR_ENT_HEADER + encodeStr(newName).length;
+        newPW.ino.nlink--;
+        this._inodes.write(newPW.inoId, newPW.ino);
+      }
+      this._freeInode(newW.inoId);
+    }
+
+    // Add new entry pointing to old inode
+    var newParentPath = newResolved.substring(0,
+      newResolved.lastIndexOf('/')) || '/';
+    var newName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
+    var newPW = this._walkPath(newParentPath);
+    if (!newPW) {
+      // Try to restore old entry
+      dirInsert(this._s, oldPW.ino.extentOffset,
+        oldPW.ino.dataSize, oldW.inoId, oldName);
+      oldPW.ino.dataSize += DIR_ENT_HEADER + encodeStr(oldName).length;
+      oldPW.ino.nlink++;
+      this._inodes.write(oldPW.inoId, oldPW.ino);
+      return this._setErr('ENOENT');
+    }
+    if ((newPW.ino.mode & S_IFMT) !== S_IFDIR) {
+      return this._setErr('ENOTDIR');
+    }
+
+    var entSize = DIR_ENT_HEADER + encodeStr(newName).length;
+    if (!newPW.ino.extentOffset ||
+        newPW.ino.dataSize + entSize > newPW.ino.extentCapacity) {
+      if (this._growExtent(newPW.ino,
+          (newPW.ino.dataSize || 0) + Math.max(entSize, 256)) === null) {
+        // Restore old entry
+        dirInsert(this._s, oldPW.ino.extentOffset,
+          oldPW.ino.dataSize, oldW.inoId, oldName);
+        oldPW.ino.dataSize += DIR_ENT_HEADER + encodeStr(oldName).length;
+        oldPW.ino.nlink++;
+        this._inodes.write(oldPW.inoId, oldPW.ino);
+        return this._setErr('ENOSPC');
+      }
+    }
+    dirInsert(this._s, newPW.ino.extentOffset,
+      newPW.ino.dataSize || 0, oldW.inoId, newName);
+    newPW.ino.dataSize = (newPW.ino.dataSize || 0) + entSize;
+    newPW.ino.mtime = this._now();
+    newPW.ino.nlink++;
+    this._inodes.write(newPW.inoId, newPW.ino);
+    return 0;
+  };
+
+  BlockFS.prototype.stat = function (path) {
+    var w = this._walkPath(this._resolvePath(path));
+    if (!w) return this._setErr('ENOENT');
+    return {
+      ino: w.inoId, mode: w.ino.mode, size: w.ino.dataSize,
+      mtime: w.ino.mtime, ctime: w.ino.ctime
+    };
+  };
+
+  BlockFS.prototype.lstat = function (path) {
+    return this.stat(path); // no symlinks
+  };
+
+  BlockFS.prototype.fstat = function (fd) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+    if (entry.inoId === undefined) {
+      // stdin/stdout/stderr — return S_IFCHR
+      return { ino: 0, mode: 0o020600, size: 0, mtime: 0, ctime: 0 };
+    }
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+    return {
+      ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
+      mtime: ino.mtime, ctime: ino.ctime
+    };
+  };
+
+  BlockFS.prototype.opendir = function (path) {
+    var w = this._walkPath(this._resolvePath(path));
+    if (!w) return this._setErr('ENOENT');
+    if ((w.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    return this._allocDirHandle({
+      inoId: w.inoId, pos: 0, dotState: 0
+    });
+  };
+
+  BlockFS.prototype.readdir = function (handle) {
+    if (handle < 0 || handle >= this._dirTable.length ||
+        !this._dirTable[handle]) return this._setErr('EBADF');
+    var dirEntry = this._dirTable[handle];
+
+    // Synthesize "." and ".."
+    if (dirEntry.dotState < 2) {
+      var dotName = dirEntry.dotState === 0 ? '.' : '..';
+      dirEntry.dotState++;
+      return {
+        ino: 0, type: 4, name: dotName // DT_DIR
+      };
+    }
+
+    var ino = this._inodes.read(dirEntry.inoId);
+    if (!ino || !ino.extentOffset) return null;
+
+    var entries = dirList(this._s, ino.extentOffset, ino.dataSize);
+    if (dirEntry.pos >= entries.length) return null; // end of directory
+
+    var ent = entries[dirEntry.pos];
+    dirEntry.pos++;
+    var entIno = this._inodes.read(ent.inodeId);
+    var dtype = entIno && (entIno.mode & S_IFMT) === S_IFDIR ? 4 : 8;
+    return { ino: ent.inodeId, type: dtype, name: ent.name };
+  };
+
+  BlockFS.prototype.closedir = function (handle) {
+    if (handle < 0 || handle >= this._dirTable.length ||
+        !this._dirTable[handle]) return this._setErr('EBADF');
+    this._dirTable[handle] = null;
+    return 0;
+  };
+
+  BlockFS.prototype.getcwd = function () {
+    return this._cwd;
+  };
+
+  BlockFS.prototype.chdir = function (path) {
+    var resolved = this._resolvePath(path);
+    var w = this._walkPath(resolved);
+    if (!w) return this._setErr('ENOENT');
+    if ((w.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    this._cwd = resolved;
+    return 0;
+  };
+
+  BlockFS.prototype.access = function (path, mode) {
+    var w = this._walkPath(this._resolvePath(path));
+    if (!w) return this._setErr('ENOENT');
+    return 0;
+  };
+
+  BlockFS.prototype.pipe = function () {
+    var pipe = { buffer: [], closed: { read: false, write: false } };
+    var readFd = this._allocFd({
+      type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null
+    });
+    var writeFd = this._allocFd({
+      type: 'pipe', pipe: pipe, pipeEnd: 'write', position: null
+    });
+    return [readFd, writeFd];
+  };
+
+  BlockFS.prototype.dup = function (oldfd) {
+    if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[oldfd];
+    if (entry.type === 'pipe') {
+      return this._allocFd({
+        type: 'pipe', pipe: entry.pipe,
+        pipeEnd: entry.pipeEnd, position: null
+      });
+    }
+    return this._allocFd(entry);
+  };
+
+  BlockFS.prototype.dup2 = function (oldfd, newfd) {
+    if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
+      return this._setErr('EBADF');
+    if (newfd < 0) return this._setErr('EBADF');
+    if (oldfd === newfd) return newfd;
+    if (newfd < this._fdTable.length && this._fdTable[newfd] !== null) {
+      this._fdTable[newfd] = null;
+    }
+    while (this._fdTable.length <= newfd) this._fdTable.push(null);
+    var src = this._fdTable[oldfd];
+    if (src.type === 'pipe') {
+      this._fdTable[newfd] = {
+        type: 'pipe', pipe: src.pipe,
+        pipeEnd: src.pipeEnd, position: null
+      };
+    } else {
+      this._fdTable[newfd] = src;
+    }
+    return newfd;
+  };
+
+  BlockFS.prototype.isatty = function (fd) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd]) return 0;
+    if (fd <= 2) return 1;
+    return 0;
+  };
+
+  // =================================================================
+  // WASM import adapter
+  // =================================================================
+
+  // Write a stat buffer into WASM memory (matches struct stat layout).
+  function writeStatBuf(memory, bufPtr, st) {
+    var view = new DataView(memory.buffer);
+    view.setUint32(bufPtr + 0, 0, true);   // st_dev
+    view.setUint32(bufPtr + 4, st.ino, true);  // st_ino
+    view.setUint32(bufPtr + 8, st.mode, true); // st_mode
+    view.setUint32(bufPtr + 12, 1, true);      // st_nlink
+    view.setUint32(bufPtr + 16, st.size, true); // st_size
+    view.setInt32(bufPtr + 20, st.mtime, true); // st_atime
+    view.setInt32(bufPtr + 24, st.mtime, true); // st_mtime
+    view.setInt32(bufPtr + 28, st.mtime, true); // st_ctime
+  }
+
+  // Adapt a BlockFS instance to the WASM `env` import object.
+  // matches the interface expected by wasm-ld / compiler.js:
+  //   __open_impl, close, read, write, lseek, mkdir, remove, rename,
+  //   __opendir, __readdir, __closedir, stat, lstat, fstat,
+  //   getcwd, chdir, access, rmdir, unlink, pipe, dup, dup2, isatty,
+  //   __tcgetattr, __tcsetattr, usleep, __nanosleep, __select_impl,
+  //   __ioctl_tiocgwinsz
+  BlockFS.prototype.toWasmEnv = function (ctx) {
+    var readString = ctx.readString;
+    var setErrnoName = ctx.setErrnoName;
+    var getMemory = ctx.getMemory;
+    var writeOut = ctx.writeOut;
+    var writeErr = ctx.writeErr;
+    var self = this;
+
+    function wrap(fn) {
+      return function () {
+        var result = fn.apply(self, arguments);
+        if (result === null || result < 0) {
+          setErrnoName(self._lastError || 'EIO');
+          return -1;
+        }
+        return result;
+      };
+    }
+
+    return {
+      __open_impl: wrap(function (path_ptr, flags, mode) {
+        var path = readString(path_ptr);
+        return this.open(path, flags, mode);
+      }),
+      close: wrap(function (fd) { return this.close(fd); }),
+      read: wrap(function (fd, buf_ptr, count) {
+        var memory = getMemory();
+        var buf = new Uint8Array(memory.buffer, buf_ptr, count);
+        return this.read(fd, buf, count);
+      }),
+      write: wrap(function (fd, buf_ptr, count) {
+        if (fd === 1 || fd === 2) {
+          var memory = getMemory();
+          var buf = new Uint8Array(memory.buffer, buf_ptr, count);
+          if (fd === 1) writeOut(buf);
+          else writeErr(buf);
+          return count;
+        }
+        var memory = getMemory();
+        var buf = new Uint8Array(memory.buffer, buf_ptr, count);
+        return this.write(fd, buf, count);
+      }),
+      lseek: wrap(function (fd, offset, whence) {
+        return this.lseek(fd, offset, whence);
+      }),
+      mkdir: wrap(function (path_ptr, mode) {
+        return this.mkdir(readString(path_ptr), mode);
+      }),
+      remove: wrap(function (path_ptr) {
+        return this.unlink(readString(path_ptr));
+      }),
+      rename: wrap(function (old_ptr, new_ptr) {
+        return this.rename(readString(old_ptr), readString(new_ptr));
+      }),
+      __opendir: wrap(function (path_ptr) {
+        return this.opendir(readString(path_ptr));
+      }),
+      __readdir: wrap(function (handle, dirent_ptr) {
+        var ent = this.readdir(handle);
+        if (ent === null || ent < 0) {
+          if (ent === null) return -1; // EOF, not an error
+          return -1;
+        }
+        var memory = getMemory();
+        var view = new DataView(memory.buffer);
+        var bytes = new Uint8Array(memory.buffer);
+        view.setInt32(dirent_ptr + 0, ent.ino, true);
+        view.setInt32(dirent_ptr + 4, ent.type, true);
+        var nameBytes = encodeStr(ent.name);
+        var nameLen = Math.min(nameBytes.length, 255);
+        for (var bi = 0; bi < nameLen; bi++)
+          bytes[dirent_ptr + 8 + bi] = nameBytes[bi];
+        bytes[dirent_ptr + 8 + nameLen] = 0;
+        return 0;
+      }),
+      __closedir: wrap(function (handle) {
+        return this.closedir(handle);
+      }),
+      stat: wrap(function (path_ptr, buf_ptr) {
+        var st = this.stat(readString(path_ptr));
+        if (st === null) return -1;
+        writeStatBuf(getMemory(), buf_ptr, st);
+        return 0;
+      }),
+      lstat: wrap(function (path_ptr, buf_ptr) {
+        var st = this.lstat(readString(path_ptr));
+        if (st === null) return -1;
+        writeStatBuf(getMemory(), buf_ptr, st);
+        return 0;
+      }),
+      fstat: wrap(function (fd, buf_ptr) {
+        var st = this.fstat(fd);
+        if (st === null) return -1;
+        writeStatBuf(getMemory(), buf_ptr, st);
+        return 0;
+      }),
+      getcwd: wrap(function (buf_ptr, size) {
+        var cwd = this.getcwd();
+        var encoded = encodeStr(cwd);
+        if (encoded.length + 1 > size) { setErrnoName('ERANGE'); return 0; }
+        var memory = getMemory();
+        var bytes = new Uint8Array(memory.buffer);
+        for (var ci = 0; ci < encoded.length; ci++)
+          bytes[buf_ptr + ci] = encoded[ci];
+        bytes[buf_ptr + encoded.length] = 0;
+        return buf_ptr;
+      }),
+      chdir: wrap(function (path_ptr) {
+        return this.chdir(readString(path_ptr));
+      }),
+      access: wrap(function (path_ptr, mode) {
+        return this.access(readString(path_ptr), mode);
+      }),
+      rmdir: wrap(function (path_ptr) {
+        return this.rmdir(readString(path_ptr));
+      }),
+      unlink: wrap(function (path_ptr) {
+        return this.unlink(readString(path_ptr));
+      }),
+      pipe: wrap(function (pipefd_ptr) {
+        var fds = this.pipe();
+        if (fds === null) return -1;
+        var view = new DataView(getMemory().buffer);
+        view.setInt32(pipefd_ptr, fds[0], true);
+        view.setInt32(pipefd_ptr + 4, fds[1], true);
+        return 0;
+      }),
+      dup: wrap(function (oldfd) {
+        var nfd = this.dup(oldfd);
+        if (nfd === null) return -1;
+        return nfd;
+      }),
+      dup2: wrap(function (oldfd, newfd) {
+        var nfd = this.dup2(oldfd, newfd);
+        if (nfd === null) return -1;
+        return nfd;
+      }),
+      isatty: function (fd) {
+        return self.isatty(fd);
+      },
+      __tcgetattr: function (fd, iflag_ptr, oflag_ptr, cflag_ptr, lflag_ptr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        var mem = new DataView(getMemory().buffer);
+        mem.setInt32(iflag_ptr, 0x100, true);
+        mem.setInt32(oflag_ptr, 0x1, true);
+        mem.setInt32(cflag_ptr, 0xB00, true);
+        mem.setInt32(lflag_ptr, 0x188, true);
+        return 0;
+      },
+      __tcsetattr: function (fd, actions, iflag, oflag, cflag, lflag) {
+        // no-op in block FS context — terminal handled by the page
+        return 0;
+      },
+      usleep: function (usec) { setErrnoName('ENOSYS'); return -1; },
+      __nanosleep: function (sec, nsec) { setErrnoName('ENOSYS'); return -1; },
+      __select_impl: function (nfds, readfds_ptr, writefds_ptr,
+                                exceptfds_ptr, timeout_sec, timeout_usec,
+                                has_timeout) {
+        setErrnoName('ENOSYS'); return -1;
+      },
+      __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
+        var mem = new DataView(getMemory().buffer);
+        mem.setInt32(rows_ptr, 24, true);
+        mem.setInt32(cols_ptr, 80, true);
+        return 0;
+      },
+    };
+  };
+
+  // =================================================================
+  // Factory functions
+  // =================================================================
+
+  // Production init: async, backed by OPFS.
+  // After this returns, the returned BlockFS is fully synchronous.
+  BlockFS.init = async function (opfsName) {
+    opfsName = opfsName || '__blockfs';
+    var root = await navigator.storage.getDirectory();
+    var fileHandle;
+    try {
+      fileHandle = await root.getFileHandle(opfsName, { create: false });
+    } catch (e) {
+      fileHandle = await root.getFileHandle(opfsName, { create: true });
+    }
+    var syncHandle = await fileHandle.createSyncAccessHandle();
+    var store = new SyncAccessHandleStore(syncHandle);
+    return BlockFS.create(store);
+  };
+
+  // Test init: sync, backed by any ByteStore.
+  BlockFS.create = function (store) {
+    var storeSize = store.size();
+    var formatted = false;
+
+    // Check if store needs formatting
+    if (storeSize < SUPERBLOCK_SIZE) {
+      store.resize(TLSF_POOL_OFFSET + 65536);
+      storeSize = store.size();
+      formatted = true;
+    } else {
+      var magic = store.getUint32(SB_MAGIC);
+      if (magic !== MAGIC) formatted = true;
+    }
+
+    if (formatted) {
+      // Ensure minimum size
+      if (storeSize < TLSF_POOL_OFFSET + 65536) {
+        store.resize(TLSF_POOL_OFFSET + 65536);
+        storeSize = store.size();
+      }
+      // Zero the superblock area
+      var zero256 = new Uint8Array(SUPERBLOCK_SIZE);
+      store.setBytes(0, zero256);
+    }
+
+    // Init TLSF allocator (this zeroes metadata and creates initial free block)
+    var alloc = new TLSFAllocator(store, SUPERBLOCK_SIZE,
+      storeSize - TLSF_POOL_OFFSET);
+
+    var inodeTable = new InodeTable(alloc);
+
+    if (formatted) {
+      // Create inode table
+      inodeTable.init(INITIAL_INODE_CAPACITY);
+      // Create BlockFS (handles root dir creation)
+      var fs = new BlockFS(store, alloc, inodeTable, 1, true);
+      fs._writeSuperblock();
+      return fs;
+    } else {
+      // Load existing filesystem
+      var sb = {
+        tlsfPoolOffset: store.getUint32(SB_TLSF_POOL_OFFSET),
+        tlsfPoolSize: store.getUint32(SB_TLSF_POOL_SIZE),
+        inodeTblExtent: store.getUint32(SB_INODE_TBL_EXTENT),
+        inodeTblCap: store.getUint32(SB_INODE_TBL_CAP),
+        nextInodeId: store.getUint32(SB_NEXT_INODE_ID),
+        rootInode: store.getUint32(SB_ROOT_INODE)
+      };
+      inodeTable.load(sb.inodeTblExtent, sb.inodeTblCap);
+      var fs = new BlockFS(store, alloc, inodeTable, sb.rootInode, false);
+      fs._nextInode = sb.nextInodeId;
+      return fs;
+    }
+  };
+
+  // =================================================================
+  // Module exports
+  // =================================================================
+
+  return {
+    init: BlockFS.init,
+    create: BlockFS.create,
+    MemoryByteStore: MemoryByteStore,
+    TLSFAllocator: TLSFAllocator,
+  };
+})();
+
 /**
  * Create POSIX WASM imports backed by Node.js APIs.
  * Provides: getenv, setenv, unsetenv, getpid, isatty, system.
@@ -3209,7 +5028,7 @@ async function runModule({
     const posix = createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   } else if (blockFsFactory) {
-    const fileSystem = blockFsFactory(ctx);
+    const fileSystem = await blockFsFactory(ctx);
     Object.assign(imports[ENV_KEY], fileSystem[ENV_KEY]);
     const posix = createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
@@ -3496,23 +5315,90 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const wasmPath = process.argv[2] || 'a.wasm';
   const bytes = fs.readFileSync(wasmPath);
 
-  runModule({
-    bytes,
-    // Always pass at least argv[0] — the wasm path. Many programs (SQLite,
-    // anything POSIX-y) assert `argc >= 1` at entry.
-    args: process.argv.slice(2),
-    fs: fs,
-  }).then(function (exitCode) {
-    process.exit(exitCode);
-  }).catch(function (e) {
-    process.stderr.write('Fatal: ' + e.message + '\n');
-    if (e.stack) process.stderr.write(e.stack + '\n');
-    process.exit(1);
-  });
+  // --block-fs: use the synchronous block filesystem instead of the
+  // real Node.js filesystem.  Pass --block-fs=<path> to back it with a
+  // real file; bare --block-fs uses an ephemeral in-memory store.
+  var useBlockFS = false;
+  var blockFSPath = null;
+  var args = process.argv.slice(2);
+  for (var ai = 0; ai < args.length; ai++) {
+    if (args[ai] === '--block-fs') { useBlockFS = true; args.splice(ai, 1); ai--; }
+    else if (args[ai].startsWith('--block-fs=')) {
+      useBlockFS = true; blockFSPath = args[ai].substring('--block-fs='.length);
+      args.splice(ai, 1); ai--;
+    }
+  }
+
+  if (useBlockFS) {
+    var store;
+    if (blockFSPath) {
+      // File-backed store: read the whole file into memory, then
+      // flush back on exit.  For large files we'd want mmap-style
+      // paging, but this is fine for tests.
+      var fileBuf = new Uint8Array(0);
+      try { fileBuf = fs.readFileSync(blockFSPath); } catch (e) {}
+      // MemoryByteStore needs an ArrayBuffer — copy in
+      // Start with 1MB initial store; TLSF grows via _growPool as needed.
+      var store = new BLOCK_FS.MemoryByteStore(Math.max(fileBuf.length, 1024 * 1024));
+      if (fileBuf.length > 0) store.setBytes(0, fileBuf);
+    } else {
+      var store = new BLOCK_FS.MemoryByteStore(1024 * 1024);
+    }
+    try {
+      var blockFS = BLOCK_FS.create(store);
+    } catch (e) {
+      process.stderr.write('BlockFS init failed: ' + e.message + '\n');
+      process.exit(1);
+    }
+
+    runModule({
+      bytes: bytes,
+      args: args,
+      blockFsFactory: async function (ctx) {
+        return { c: blockFS.toWasmEnv(ctx) };
+      },
+      fs: undefined,
+      useBrowserFS: undefined,
+    }).then(function (exitCode) {
+      // If file-backed, flush to disk
+      if (blockFSPath) {
+        try {
+          var size = store.size();
+          // Find the smallest non-zero region to write (avoid writing
+          // the whole 64MB if only a small portion is used)
+          var data = store.getBytes(0, size);
+          fs.writeFileSync(blockFSPath, data);
+        } catch (e) {
+          process.stderr.write('BlockFS flush failed: ' + e.message + '\n');
+        }
+      }
+      process.exit(exitCode);
+    }).catch(function (e) {
+      process.stderr.write('Fatal: ' + e.message + '\n');
+      if (e.stack) process.stderr.write(e.stack + '\n');
+      process.exit(1);
+    });
+  } else {
+    runModule({
+      bytes,
+      // Always pass at least argv[0] — the wasm path. Many programs (SQLite,
+      // anything POSIX-y) assert `argc >= 1` at entry.
+      args: args,
+      fs: fs,
+    }).then(function (exitCode) {
+      process.exit(exitCode);
+    }).catch(function (e) {
+      process.stderr.write('Fatal: ' + e.message + '\n');
+      if (e.stack) process.stderr.write(e.stack + '\n');
+      process.exit(1);
+    });
+  }
 
 } else if (typeof module !== 'undefined') {
   // We are being imported (Node or bundler)
   module.exports = runModule;
+  // Test exports: BLOCK_FS components
+  module.exports.BLOCK_FS = BLOCK_FS;
 }
 
 // Browser global exports
@@ -3527,4 +5413,5 @@ if (typeof window !== 'undefined') {
 if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof module === 'undefined') {
   self.runModule = runModule;
   self.createBrowserSDL = createBrowserSDL;
+  self.BLOCK_FS = BLOCK_FS;
 }
