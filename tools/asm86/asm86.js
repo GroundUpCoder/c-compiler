@@ -1216,20 +1216,20 @@ function addAluMnemonic(name, opExt) {
     { op:[0x03 + opExt * 8], ops:[OK.R16, OK.RM16], modrm:'reg=r1,rm=r2' },
     // r32, r/m32
     { op:[0x03 + opExt * 8], ops:[OK.R32, OK.RM32], modrm:'reg=r1,rm=r2' },
+    // r/mN, immN — full-width forms (only match when imm doesn't fit in 8-bit)
+    { op:[0x81], ops:[OK.RM16, OK.IMM16], modrm:'rm=r1', modrmReg:opExt },
+    { op:[0x81], ops:[OK.RM32, OK.IMM32], modrm:'rm=r1', modrmReg:opExt },
+    // r/m8, imm8
+    { op:[0x80], ops:[OK.RM8, OK.IMM8], modrm:'rm=r1', modrmReg:opExt },
+    // r/m16/32, imm8 sign-extended — before accumulator forms for NASM tie-breaking
+    { op:[0x83], ops:[OK.RM16, OK.IMM8], modrm:'rm=r1', modrmReg:opExt },
+    { op:[0x83], ops:[OK.RM32, OK.IMM8], modrm:'rm=r1', modrmReg:opExt },
+    // Accumulator-specific forms (after r/m forms — 0x83 wins ties)
     // al, imm8
     { op:[0x04 + opExt * 8], ops:[OK.AL, OK.IMM8], modrm:null },
     // ax/eax, imm16/32
     { op:[0x05 + opExt * 8], ops:[OK.AX, OK.IMM16], modrm:null },
     { op:[0x05 + opExt * 8], ops:[OK.AX, OK.IMM32], modrm:null },
-    // r/mN, immN — full-width forms must come before sign-extended imm8 forms
-    { op:[0x81], ops:[OK.RM16, OK.IMM16], modrm:'rm=r1', modrmReg:opExt },
-    { op:[0x81], ops:[OK.RM32, OK.IMM32], modrm:'rm=r1', modrmReg:opExt },
-    // r/m8, imm8
-    { op:[0x80], ops:[OK.RM8, OK.IMM8], modrm:'rm=r1', modrmReg:opExt },
-    // r/m16, imm8 (sign-extended)
-    { op:[0x83], ops:[OK.RM16, OK.IMM8], modrm:'rm=r1', modrmReg:opExt },
-    // r/m32, imm8 (sign-extended)
-    { op:[0x83], ops:[OK.RM32, OK.IMM8], modrm:'rm=r1', modrmReg:opExt },
   ]);
 }
 
