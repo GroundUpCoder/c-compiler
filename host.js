@@ -1394,6 +1394,1104 @@ function createBrowserFileSystem({ ctx }) {
 }
 
 /**
+ * Block filesystem backed by a single OPFS file via one
+ * createSyncAccessHandle(). All file data is stored as blocks inside
+ * one file — no JSPI needed. This is the iOS/Safari path.
+ *
+ * Layout (block = BLOCK_SIZE bytes):
+ *   Block 0:               Superblock
+ *   Blocks 1–INODE_TABLE_BLOCKS:  Inode table (64-byte inodes)
+ *   Block BITMAP_BLOCK:    Free-block bitmap (1 bit per data block)
+ *   Blocks DATA_START+:    Data blocks
+ *
+ * Inode (64 bytes):
+ *   [ 0: 2] mode      [ 2: 4] uid        [ 4: 8] size
+ *   [ 8:12] mtime     [12:16] ctime
+ *   [16:48] direct[8] (8 × uint32 block pointers)
+ *   [48:52] indirect   (single-indirect block pointer)
+ *   [52:64] reserved
+ *
+ * @async — must be awaited before passing to runModule as blockFsFactory.
+ * @param {{ ctx: object }} options
+ * @returns {Promise<{ [ENV_KEY]: object }>}
+ */
+async function createBlockFileSystem({ ctx }) {
+  const { readString, setErrnoName, getMemory } = ctx;
+
+  const BLOCK_SIZE = 4096;
+  const INODE_SIZE = 64;
+  const INODES_PER_BLOCK = Math.floor(BLOCK_SIZE / INODE_SIZE);       // 64
+  const INODE_TABLE_BLOCKS = 8;                                        // 512 inodes
+  const INODE_TABLE_START = 1;
+  const BITMAP_BLOCK = INODE_TABLE_START + INODE_TABLE_BLOCKS;         // 9
+  const DATA_START = BITMAP_BLOCK + 1;                                 // 10
+  const DIRECT_COUNT = 8;
+  const INDIRECT_COUNT = Math.floor(BLOCK_SIZE / 4);                   // 1024
+  const MAX_FILE_BLOCKS = DIRECT_COUNT + INDIRECT_COUNT;               // 1032
+  const MAX_FILE_SIZE = MAX_FILE_BLOCKS * BLOCK_SIZE;                  // ~4 MB
+
+  const MAGIC = 0x424C4B46;  // "BLKF"
+  const VERSION = 1;
+  const INITIAL_BLOCKS = 256;  // 1 MB
+
+  /* ---- Superblock offsets ---- */
+  const SB_MAGIC = 0, SB_VERSION = 4, SB_BLOCK_SIZE = 8;
+  const SB_TOTAL_BLOCKS = 12, SB_FREE_BLOCKS = 16;
+  const SB_NEXT_INODE = 20, SB_FLAGS = 24;
+
+  /* ---- Inode offsets ---- */
+  const INO_MODE = 0, INO_UID = 2, INO_SIZE = 4;
+  const INO_MTIME = 8, INO_CTIME = 12;
+  const INO_DIRECT = 16, INO_INDIRECT = 48;
+
+  /* ---- Mode bits ---- */
+  const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000;
+  const DEFAULT_DIR_MODE = 0o40755, DEFAULT_FILE_MODE = 0o100644;
+
+  let totalBlocks = INITIAL_BLOCKS;
+  let freeBlockCount = INITIAL_BLOCKS - DATA_START;
+  let nextInode = 2; // inode 1 = root
+
+  /* ---- OPFS init ---- */
+  const root = await navigator.storage.getDirectory();
+  let fileHandle, syncHandle;
+  try {
+    fileHandle = await root.getFileHandle('__blockfs', { create: false });
+  } catch (e) {
+    fileHandle = await root.getFileHandle('__blockfs', { create: true });
+  }
+  syncHandle = await fileHandle.createSyncAccessHandle();
+
+  const superblock = new Uint8Array(BLOCK_SIZE);
+  const sbView = new DataView(superblock.buffer);
+  let formatted = false;
+
+  if (syncHandle.getSize() === 0) {
+    formatted = true;
+    syncHandle.truncate(INITIAL_BLOCKS * BLOCK_SIZE);
+
+    /* Superblock */
+    sbView.setUint32(SB_MAGIC, MAGIC, true);
+    sbView.setUint32(SB_VERSION, VERSION, true);
+    sbView.setUint32(SB_BLOCK_SIZE, BLOCK_SIZE, true);
+    sbView.setUint32(SB_TOTAL_BLOCKS, INITIAL_BLOCKS, true);
+    sbView.setUint32(SB_FREE_BLOCKS, freeBlockCount, true);
+    sbView.setUint32(SB_NEXT_INODE, nextInode, true);
+    sbView.setUint32(SB_FLAGS, 0, true);
+    syncHandle.write(superblock, { at: 0 });
+
+    /* Zero inode table */
+    const zeroBlock = new Uint8Array(BLOCK_SIZE);
+    for (let b = INODE_TABLE_START; b < BITMAP_BLOCK; b++) {
+      syncHandle.write(zeroBlock, { at: b * BLOCK_SIZE });
+    }
+
+    /* Zero bitmap (all free) */
+    syncHandle.write(zeroBlock, { at: BITMAP_BLOCK * BLOCK_SIZE });
+
+    /* Mark metadata blocks as used in bitmap */
+    const bitmap = new Uint8Array(BLOCK_SIZE);
+    for (let b = 0; b < DATA_START; b++) {
+      bitmap[b >> 3] |= (1 << (b & 7));
+    }
+    syncHandle.write(bitmap, { at: BITMAP_BLOCK * BLOCK_SIZE });
+
+    /* Root inode (inode 1) */
+    const inodeBuf = new Uint8Array(INODE_SIZE);
+    const inoView = new DataView(inodeBuf.buffer);
+    inoView.setUint16(INO_MODE, DEFAULT_DIR_MODE, true);
+    inoView.setUint16(INO_UID, 0, true);
+    inoView.setUint32(INO_SIZE, 0, true);
+    const now = Math.floor(Date.now() / 1000);
+    inoView.setUint32(INO_MTIME, now, true);
+    inoView.setUint32(INO_CTIME, now, true);
+    inoView.setUint32(INO_DIRECT, 0, true);
+    inoView.setUint32(INO_INDIRECT, 0, true);
+    const inodeTableOffset = INODE_TABLE_START * BLOCK_SIZE + 1 * INODE_SIZE;
+    syncHandle.write(inodeBuf, { at: inodeTableOffset });
+  } else {
+    /* Read superblock */
+    syncHandle.read(superblock, { at: 0 });
+    const magic = sbView.getUint32(SB_MAGIC, true);
+    if (magic !== MAGIC) throw new Error('Block filesystem corrupt: bad magic');
+    totalBlocks = sbView.getUint32(SB_TOTAL_BLOCKS, true);
+    freeBlockCount = sbView.getUint32(SB_FREE_BLOCKS, true);
+    nextInode = sbView.getUint32(SB_NEXT_INODE, true);
+  }
+
+  /* ---- Block-level helpers ---- */
+  function readBlock(blockNum) {
+    const buf = new Uint8Array(BLOCK_SIZE);
+    syncHandle.read(buf, { at: blockNum * BLOCK_SIZE });
+    return buf;
+  }
+  function writeBlock(blockNum, buf) {
+    syncHandle.write(buf, { at: blockNum * BLOCK_SIZE });
+  }
+  function readInode(inodeNum) {
+    const buf = new Uint8Array(INODE_SIZE);
+    const offset = INODE_TABLE_START * BLOCK_SIZE + inodeNum * INODE_SIZE;
+    syncHandle.read(buf, { at: offset });
+    return buf;
+  }
+  function writeInode(inodeNum, buf) {
+    const offset = INODE_TABLE_START * BLOCK_SIZE + inodeNum * INODE_SIZE;
+    syncHandle.write(buf, { at: offset });
+  }
+  function readSuperblock() {
+    syncHandle.read(superblock, { at: 0 });
+  }
+  function writeSuperblock() {
+    syncHandle.write(superblock, { at: 0 });
+  }
+
+  function updateTime(inodeBuf) {
+    const now = Math.floor(Date.now() / 1000);
+    new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE)
+      .setUint32(INO_MTIME, now, true);
+  }
+
+  /* Allocate a free data block. Returns block number or 0 on ENOSPC. */
+  function allocDataBlock() {
+    readSuperblock();
+    if (freeBlockCount <= 0) {
+      /* Grow the filesystem */
+      const oldTotal = totalBlocks;
+      const growBy = Math.max(64, Math.floor(oldTotal / 4)); // 25% growth, min 64 blocks
+      const newTotal = oldTotal + growBy;
+      syncHandle.truncate(newTotal * BLOCK_SIZE);
+      totalBlocks = newTotal;
+      /* Extend bitmap — zero the new portion */
+      const oldBitmapEnd = BITMAP_BLOCK * BLOCK_SIZE + Math.ceil(oldTotal / 8);
+      const newBitmapEnd = BITMAP_BLOCK * BLOCK_SIZE + Math.ceil(newTotal / 8);
+      const zeroPad = new Uint8Array(newBitmapEnd - oldBitmapEnd);
+      if (zeroPad.length > 0) {
+        syncHandle.write(zeroPad, { at: oldBitmapEnd });
+      }
+      freeBlockCount += growBy;
+    }
+    /* Scan bitmap for a free block */
+    const bitmap = readBlock(BITMAP_BLOCK);
+    for (let b = DATA_START; b < totalBlocks; b++) {
+      const byteIdx = b >> 3;
+      const bitIdx = b & 7;
+      if (!(bitmap[byteIdx] & (1 << bitIdx))) {
+        bitmap[byteIdx] |= (1 << bitIdx);
+        writeBlock(BITMAP_BLOCK, bitmap);
+        freeBlockCount--;
+        sbView.setUint32(SB_FREE_BLOCKS, freeBlockCount, true);
+        sbView.setUint32(SB_TOTAL_BLOCKS, totalBlocks, true);
+        writeSuperblock();
+        return b;
+      }
+    }
+    setErrnoName('ENOSPC');
+    return 0;
+  }
+
+  function freeDataBlock(blockNum) {
+    if (blockNum < DATA_START || blockNum >= totalBlocks) return;
+    const bitmap = readBlock(BITMAP_BLOCK);
+    bitmap[blockNum >> 3] &= ~(1 << (blockNum & 7));
+    writeBlock(BITMAP_BLOCK, bitmap);
+    freeBlockCount++;
+    readSuperblock();
+    sbView.setUint32(SB_FREE_BLOCKS, freeBlockCount, true);
+    writeSuperblock();
+  }
+
+  function allocInode() {
+    const ino = nextInode;
+    if (ino >= INODE_TABLE_BLOCKS * INODES_PER_BLOCK) {
+      setErrnoName('ENOSPC');
+      return 0;
+    }
+    nextInode++;
+    readSuperblock();
+    sbView.setUint32(SB_NEXT_INODE, nextInode, true);
+    writeSuperblock();
+    return ino;
+  }
+
+  function freeInode(inodeNum) {
+    const inodeBuf = new Uint8Array(INODE_SIZE);
+    writeInode(inodeNum, inodeBuf); // zero it
+    /* We don't reclaim inode numbers — that's fine for 512 slots */
+  }
+
+  /* Free all data blocks belonging to an inode. Does NOT free the inode itself. */
+  function freeInodeBlocks(inodeBuf) {
+    const view = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+    /* Direct blocks */
+    for (let i = 0; i < DIRECT_COUNT; i++) {
+      const blk = view.getUint32(INO_DIRECT + i * 4, true);
+      if (blk) freeDataBlock(blk);
+    }
+    /* Indirect block */
+    const indirect = view.getUint32(INO_INDIRECT, true);
+    if (indirect) {
+      const indirBlock = readBlock(indirect);
+      const indirView = new DataView(indirBlock.buffer);
+      for (let i = 0; i < INDIRECT_COUNT; i++) {
+        const blk = indirView.getUint32(i * 4, true);
+        if (blk) freeDataBlock(blk);
+      }
+      freeDataBlock(indirect);
+    }
+  }
+
+  /* Get the block number for a logical file block index.
+     Allocates blocks as needed if alloc=true. */
+  function getBlockPtr(inodeBuf, logicalBlock, alloc) {
+    const view = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+    if (logicalBlock < DIRECT_COUNT) {
+      let blk = view.getUint32(INO_DIRECT + logicalBlock * 4, true);
+      if (!blk && alloc) {
+        blk = allocDataBlock();
+        if (!blk) return 0;
+        view.setUint32(INO_DIRECT + logicalBlock * 4, blk, true);
+      }
+      return blk;
+    }
+    logicalBlock -= DIRECT_COUNT;
+    if (logicalBlock >= INDIRECT_COUNT) return 0; // beyond max
+    let indirect = view.getUint32(INO_INDIRECT, true);
+    if (!indirect) {
+      if (!alloc) return 0;
+      indirect = allocDataBlock();
+      if (!indirect) return 0;
+      view.setUint32(INO_INDIRECT, indirect, true);
+      /* Zero the new indirect block */
+      writeBlock(indirect, new Uint8Array(BLOCK_SIZE));
+    }
+    const indirBlock = readBlock(indirect);
+    const indirView = new DataView(indirBlock.buffer);
+    let blk = indirView.getUint32(logicalBlock * 4, true);
+    if (!blk && alloc) {
+      blk = allocDataBlock();
+      if (!blk) return 0;
+      indirView.setUint32(logicalBlock * 4, blk, true);
+      writeBlock(indirect, indirBlock);
+    }
+    return blk;
+  }
+
+  /* ---- Path resolution ---- */
+  let cwd = '/';
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  function resolvePath(path) {
+    if (path.charAt(0) !== '/') {
+      path = cwd + (cwd.endsWith('/') ? '' : '/') + path;
+    }
+    const parts = path.split('/');
+    const resolved = [];
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i] === '' || parts[i] === '.') continue;
+      if (parts[i] === '..') { resolved.pop(); continue; }
+      resolved.push(parts[i]);
+    }
+    return '/' + resolved.join('/');
+  }
+
+  /* Look up a name in a directory inode. Returns inode number or 0. */
+  function dirLookup(dirInodeBuf, name) {
+    const view = new DataView(dirInodeBuf.buffer, dirInodeBuf.byteOffset, INODE_SIZE);
+    const size = view.getUint32(INO_SIZE, true);
+    const nameBytes = encoder.encode(name);
+    let pos = 0;
+    while (pos < size) {
+      const logicalBlock = Math.floor(pos / BLOCK_SIZE);
+      const blockOffset = pos % BLOCK_SIZE;
+      const blkNum = getBlockPtr(dirInodeBuf, logicalBlock, false);
+      if (!blkNum) break;
+      const block = readBlock(blkNum);
+      const dv = new DataView(block.buffer, block.byteOffset, BLOCK_SIZE);
+      /* Need at least 6 bytes for header */
+      if (blockOffset + 6 > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      const entIno = dv.getUint32(blockOffset, true);
+      const entNameLen = dv.getUint16(blockOffset + 4, true);
+      if (blockOffset + 6 + entNameLen > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      if (entIno === 0) { pos += 6 + entNameLen; continue; } // deleted entry
+      const entName = decoder.decode(block.subarray(blockOffset + 6, blockOffset + 6 + entNameLen));
+      if (entNameLen === nameBytes.length && entName === name) {
+        return entIno;
+      }
+      pos += 6 + entNameLen;
+    }
+    return 0;
+  }
+
+  /* Walk a path and return the inode number + inode buffer.
+     Returns { ino, buf } or null on not found. */
+  function walkPath(path) {
+    const resolved = resolvePath(path);
+    if (resolved === '/') {
+      return { ino: 1, buf: readInode(1) };
+    }
+    const parts = resolved.split('/').filter(function (p) { return p.length > 0; });
+    let ino = 1;
+    let inodeBuf = readInode(1);
+    for (let i = 0; i < parts.length; i++) {
+      ino = dirLookup(inodeBuf, parts[i]);
+      if (!ino) return null;
+      inodeBuf = readInode(ino);
+    }
+    return { ino: ino, buf: inodeBuf };
+  }
+
+  /* Add a directory entry. Returns false on failure. */
+  function dirAddEntry(dirIno, dirInodeBuf, name, entIno) {
+    const view = new DataView(dirInodeBuf.buffer, dirInodeBuf.byteOffset, INODE_SIZE);
+    const nameBytes = encoder.encode(name);
+    const entSize = 6 + nameBytes.length;
+    const oldSize = view.getUint32(INO_SIZE, true);
+
+    /* Find existing entry with same name and overwrite, or find a
+       deleted entry (inode == 0) that fits, or append. */
+    let pos = 0;
+    while (pos < oldSize) {
+      const logicalBlock = Math.floor(pos / BLOCK_SIZE);
+      const blockOffset = pos % BLOCK_SIZE;
+      const blkNum = getBlockPtr(dirInodeBuf, logicalBlock, false);
+      if (!blkNum) break;
+      const block = readBlock(blkNum);
+      const dv = new DataView(block.buffer, block.byteOffset, BLOCK_SIZE);
+      if (blockOffset + 6 > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      const exIno = dv.getUint32(blockOffset, true);
+      const exNameLen = dv.getUint16(blockOffset + 4, true);
+      if (blockOffset + 6 + exNameLen > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      /* Overwrite if same name */
+      const exName = decoder.decode(block.subarray(blockOffset + 6, blockOffset + 6 + exNameLen));
+      if (exName === name) {
+        dv.setUint32(blockOffset, entIno, true);
+        dv.setUint16(blockOffset + 4, nameBytes.length, true);
+        if (nameBytes.length !== exNameLen) {
+          /* Size changed — this is complex. For now, require same size
+             or the old entry must be the last one. */
+          if (pos + 6 + exNameLen === oldSize) {
+            view.setUint32(INO_SIZE, pos + entSize, true);
+          }
+          /* Fall through to rewrite entry */
+        }
+        const nameStart = blockOffset + 6;
+        for (let j = 0; j < nameBytes.length; j++) block[nameStart + j] = nameBytes[j];
+        writeBlock(blkNum, block);
+        return true;
+      }
+      if (exIno === 0 && exNameLen >= nameBytes.length) {
+        /* Reuse deleted entry slot */
+        dv.setUint32(blockOffset, entIno, true);
+        dv.setUint16(blockOffset + 4, nameBytes.length, true);
+        const nameStart = blockOffset + 6;
+        for (let j = 0; j < nameBytes.length; j++) block[nameStart + j] = nameBytes[j];
+        writeBlock(blkNum, block);
+        return true;
+      }
+      pos += 6 + exNameLen;
+    }
+
+    /* Append new entry at pos */
+    const newSize = pos + entSize;
+    const logicalBlock = Math.floor(pos / BLOCK_SIZE);
+    const blockOffset = pos % BLOCK_SIZE;
+
+    /* Ensure the target block exists */
+    let blkNum = getBlockPtr(dirInodeBuf, logicalBlock, true);
+    if (!blkNum) return false;
+    const block = readBlock(blkNum);
+    const dv = new DataView(block.buffer, block.byteOffset, BLOCK_SIZE);
+
+    if (blockOffset + entSize > BLOCK_SIZE) {
+      /* Entry spans block boundary — write to next block */
+      blkNum = getBlockPtr(dirInodeBuf, logicalBlock + 1, true);
+      if (!blkNum) return false;
+      const block2 = readBlock(blkNum);
+      const dv2 = new DataView(block2.buffer, block2.byteOffset, BLOCK_SIZE);
+      dv2.setUint32(0, entIno, true);
+      dv2.setUint16(4, nameBytes.length, true);
+      for (let j = 0; j < nameBytes.length; j++) block2[6 + j] = nameBytes[j];
+      writeBlock(blkNum, block2);
+    } else {
+      dv.setUint32(blockOffset, entIno, true);
+      dv.setUint16(blockOffset + 4, nameBytes.length, true);
+      for (let j = 0; j < nameBytes.length; j++) block[blockOffset + 6 + j] = nameBytes[j];
+      writeBlock(blkNum, block);
+    }
+
+    view.setUint32(INO_SIZE, newSize, true);
+    return true;
+  }
+
+  /* Remove a directory entry by name. Returns false if not found. */
+  function dirRemoveEntry(dirIno, dirInodeBuf, name) {
+    const view = new DataView(dirInodeBuf.buffer, dirInodeBuf.byteOffset, INODE_SIZE);
+    const size = view.getUint32(INO_SIZE, true);
+    const nameBytes = encoder.encode(name);
+    let pos = 0;
+    while (pos < size) {
+      const logicalBlock = Math.floor(pos / BLOCK_SIZE);
+      const blockOffset = pos % BLOCK_SIZE;
+      const blkNum = getBlockPtr(dirInodeBuf, logicalBlock, false);
+      if (!blkNum) break;
+      const block = readBlock(blkNum);
+      const dv = new DataView(block.buffer, block.byteOffset, BLOCK_SIZE);
+      if (blockOffset + 6 > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      const entIno = dv.getUint32(blockOffset, true);
+      const entNameLen = dv.getUint16(blockOffset + 4, true);
+      if (blockOffset + 6 + entNameLen > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      const entName = decoder.decode(block.subarray(blockOffset + 6, blockOffset + 6 + entNameLen));
+      if (entIno !== 0 && entName === name) {
+        /* Mark as deleted by setting inode to 0 */
+        dv.setUint32(blockOffset, 0, true);
+        writeBlock(blkNum, block);
+        return entIno;
+      }
+      pos += 6 + entNameLen;
+    }
+    return 0;
+  }
+
+  /* Check if a directory is empty (only . and .. entries or truly empty) */
+  function dirIsEmpty(dirInodeBuf) {
+    const view = new DataView(dirInodeBuf.buffer, dirInodeBuf.byteOffset, INODE_SIZE);
+    const size = view.getUint32(INO_SIZE, true);
+    /* Our dirs don't store . and .. explicitly, so just check if any
+       non-deleted entries exist. */
+    let pos = 0;
+    while (pos < size) {
+      const logicalBlock = Math.floor(pos / BLOCK_SIZE);
+      const blockOffset = pos % BLOCK_SIZE;
+      const blkNum = getBlockPtr(dirInodeBuf, logicalBlock, false);
+      if (!blkNum) return true;
+      const block = readBlock(blkNum);
+      const dv = new DataView(block.buffer, block.byteOffset, BLOCK_SIZE);
+      if (blockOffset + 6 > BLOCK_SIZE) { pos = (logicalBlock + 1) * BLOCK_SIZE; continue; }
+      const entIno = dv.getUint32(blockOffset, true);
+      const entNameLen = dv.getUint16(blockOffset + 4, true);
+      if (entIno !== 0) return false; // found a live entry
+      pos += 6 + entNameLen;
+    }
+    return true;
+  }
+
+  /* ---- fd / dir handle tables ---- */
+  const fdTable = [
+    { position: null }, /* 0 = stdin */
+    { position: null }, /* 1 = stdout */
+    { position: null }, /* 2 = stderr */
+  ];
+  function allocFd(entry) {
+    for (let i = 3; i < fdTable.length; i++) {
+      if (fdTable[i] === null) { fdTable[i] = entry; return i; }
+    }
+    fdTable.push(entry);
+    return fdTable.length - 1;
+  }
+
+  const dirTable = [];
+  function allocDirHandle(entry) {
+    for (let i = 0; i < dirTable.length; i++) {
+      if (dirTable[i] === null) { dirTable[i] = entry; return i; }
+    }
+    dirTable.push(entry);
+    return dirTable.length - 1;
+  }
+
+  /* ---- stat helper ---- */
+  function writeStatBuf(bufPtr, inodeBuf, ino) {
+    const memory = getMemory();
+    const view = new DataView(memory.buffer);
+    const inoView = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+    const mode = inoView.getUint16(INO_MODE, true);
+    const size = inoView.getUint32(INO_SIZE, true);
+    const mtime = inoView.getUint32(INO_MTIME, true);
+    view.setUint32(bufPtr + 0, 0, true);                /* st_dev */
+    view.setUint32(bufPtr + 4, ino, true);              /* st_ino */
+    view.setUint32(bufPtr + 8, mode, true);             /* st_mode */
+    view.setUint32(bufPtr + 12, 1, true);               /* st_nlink */
+    view.setUint32(bufPtr + 16, size, true);            /* st_size */
+    view.setInt32(bufPtr + 20, mtime, true);            /* st_atime */
+    view.setInt32(bufPtr + 24, mtime, true);            /* st_mtime */
+    view.setInt32(bufPtr + 28, mtime, true);            /* st_ctime */
+  }
+
+  /* ---- WASM imports ---- */
+  const env = {
+    __open_impl: function (path_ptr, flags, mode) {
+      const path = readString(path_ptr);
+      const create = !!(flags & 0x40);
+      const trunc = !!(flags & 0x200);
+      const append = !!(flags & 0x400);
+      const excl = !!(flags & 0x80);
+
+      const resolved = resolvePath(path);
+      let w = walkPath(resolved);
+      const parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      const fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
+
+      if (w) {
+        /* Exists */
+        const m = new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE);
+        const modeVal = m.getUint16(INO_MODE, true);
+        if ((modeVal & S_IFMT) === S_IFDIR) { setErrnoName('EISDIR'); return -1; }
+        if (excl && create) { setErrnoName('EEXIST'); return -1; }
+        if (trunc) {
+          freeInodeBlocks(w.buf);
+          m.setUint32(INO_SIZE, 0, true);
+          for (let i = 0; i < DIRECT_COUNT; i++) m.setUint32(INO_DIRECT + i * 4, 0, true);
+          m.setUint32(INO_INDIRECT, 0, true);
+          updateTime(w.buf);
+          writeInode(w.ino, w.buf);
+        }
+      } else {
+        /* Doesn't exist */
+        if (!create) { setErrnoName('ENOENT'); return -1; }
+        /* Walk parent to verify it exists and is a directory */
+        const pw = walkPath(parentPath);
+        if (!pw) { setErrnoName('ENOENT'); return -1; }
+        const pm = new DataView(pw.buf.buffer, pw.buf.byteOffset, INODE_SIZE);
+        if ((pm.getUint16(INO_MODE, true) & S_IFMT) !== S_IFDIR) { setErrnoName('ENOTDIR'); return -1; }
+
+        /* Create new file inode */
+        const ino = allocInode();
+        if (!ino) return -1;
+        const inodeBuf = new Uint8Array(INODE_SIZE);
+        const inoView = new DataView(inodeBuf.buffer);
+        inoView.setUint16(INO_MODE, DEFAULT_FILE_MODE, true);
+        inoView.setUint16(INO_UID, 0, true);
+        inoView.setUint32(INO_SIZE, 0, true);
+        const now = Math.floor(Date.now() / 1000);
+        inoView.setUint32(INO_MTIME, now, true);
+        inoView.setUint32(INO_CTIME, now, true);
+        writeInode(ino, inodeBuf);
+
+        /* Add entry to parent directory */
+        if (!dirAddEntry(pw.ino, pw.buf, fileName, ino)) {
+          freeInode(ino);
+          setErrnoName('ENOSPC');
+          return -1;
+        }
+        updateTime(pw.buf);
+        writeInode(pw.ino, pw.buf);
+
+        w = { ino: ino, buf: inodeBuf };
+      }
+
+      const position = append ? new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE).getUint32(INO_SIZE, true) : 0;
+      return allocFd({ ino: w.ino, position: position, append: append, path: resolved });
+    },
+
+    close: function (fd) {
+      if (fd < 3 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+      const entry = fdTable[fd];
+      if (entry.type === 'pipe') {
+        entry.pipe.closed[entry.pipeEnd] = true;
+        fdTable[fd] = null;
+        return 0;
+      }
+      fdTable[fd] = null;
+      return 0;
+    },
+
+    read: function (fd, buf_ptr, count) {
+      if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+      const entry = fdTable[fd];
+      if (entry.type === 'pipe') {
+        const pipe = entry.pipe;
+        if (pipe.buffer.length === 0) return 0;
+        const n = Math.min(count, pipe.buffer.length);
+        const memory = getMemory();
+        const dest = new Uint8Array(memory.buffer, buf_ptr, n);
+        for (let i = 0; i < n; i++) dest[i] = pipe.buffer[i];
+        pipe.buffer.splice(0, n);
+        return n;
+      }
+      if (entry.position === null) {
+        /* stdin — handled by requestStdin in the async path; block FS
+           treats it as no data available (same as O_NONBLOCK). */
+        return 0;
+      }
+      if (!entry.ino) { setErrnoName('EBADF'); return -1; }
+      const inodeBuf = readInode(entry.ino);
+      const inoView = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+      const fileSize = inoView.getUint32(INO_SIZE, true);
+      if (entry.position >= fileSize) return 0;
+      count = Math.min(count, fileSize - entry.position);
+      let remaining = count;
+      const memory = getMemory();
+      const dest = new Uint8Array(memory.buffer, buf_ptr, remaining);
+      let destOffset = 0;
+      while (remaining > 0) {
+        const logicalBlock = Math.floor(entry.position / BLOCK_SIZE);
+        const blockOffset = entry.position % BLOCK_SIZE;
+        const blkNum = getBlockPtr(inodeBuf, logicalBlock, false);
+        if (!blkNum) break;
+        const block = readBlock(blkNum);
+        const n = Math.min(remaining, BLOCK_SIZE - blockOffset);
+        dest.set(block.subarray(blockOffset, blockOffset + n), destOffset);
+        destOffset += n;
+        entry.position += n;
+        remaining -= n;
+      }
+      return count - remaining;
+    },
+
+    write: function (fd, buf_ptr, count) {
+      if (fd === 1 || fd === 2) {
+        const memory = getMemory();
+        const buf = new Uint8Array(memory.buffer, buf_ptr, count);
+        if (fd === 1) {
+          ctx.writeOut(buf);
+        } else {
+          ctx.writeErr(buf);
+        }
+        return count;
+      }
+      if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+      const entry = fdTable[fd];
+      if (entry.type === 'pipe') {
+        if (entry.pipe.closed.read) { setErrnoName('EPIPE'); return -1; }
+        const memory = getMemory();
+        const src = new Uint8Array(memory.buffer, buf_ptr, count);
+        for (let i = 0; i < count; i++) entry.pipe.buffer.push(src[i]);
+        return count;
+      }
+      if (!entry.ino) { setErrnoName('EBADF'); return -1; }
+      const inodeBuf = readInode(entry.ino);
+      const inoView = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+      const append = entry.append;
+      const writePos = append ? inoView.getUint32(INO_SIZE, true) : entry.position;
+      let remaining = count;
+      const memory = getMemory();
+      const src = new Uint8Array(memory.buffer, buf_ptr, count);
+      let srcOffset = 0;
+      while (remaining > 0) {
+        const logicalBlock = Math.floor(writePos / BLOCK_SIZE);
+        const blockOffset = writePos % BLOCK_SIZE;
+        if (logicalBlock >= MAX_FILE_BLOCKS) { setErrnoName('EFBIG'); break; }
+        let blkNum = getBlockPtr(inodeBuf, logicalBlock, true);
+        if (!blkNum) { setErrnoName('ENOSPC'); break; }
+        const block = readBlock(blkNum);
+        const n = Math.min(remaining, BLOCK_SIZE - blockOffset);
+        block.set(src.subarray(srcOffset, srcOffset + n), blockOffset);
+        writeBlock(blkNum, block);
+        srcOffset += n;
+        remaining -= n;
+      }
+      const bytesWritten = count - remaining;
+      const newEnd = writePos + bytesWritten;
+      if (newEnd > inoView.getUint32(INO_SIZE, true)) {
+        inoView.setUint32(INO_SIZE, newEnd, true);
+      }
+      updateTime(inodeBuf);
+      writeInode(entry.ino, inodeBuf);
+      entry.position = newEnd;
+      return bytesWritten;
+    },
+
+    lseek: function (fd, offset, whence) {
+      if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+      const entry = fdTable[fd];
+      if (entry.position === null) { setErrnoName('ESPIPE'); return -1; }
+      if (!entry.ino) { setErrnoName('EBADF'); return -1; }
+      const inodeBuf = readInode(entry.ino);
+      const inoView = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+      const fileSize = inoView.getUint32(INO_SIZE, true);
+      let newPos;
+      switch (whence) {
+        case 0: newPos = offset; break;
+        case 1: newPos = entry.position + offset; break;
+        case 2: newPos = fileSize + offset; break;
+        default: setErrnoName('EINVAL'); return -1;
+      }
+      if (newPos < 0) { setErrnoName('EINVAL'); return -1; }
+      entry.position = newPos;
+      return newPos;
+    },
+
+    mkdir: function (path_ptr, mode) {
+      const path = readString(path_ptr);
+      const resolved = resolvePath(path);
+      if (walkPath(resolved)) { setErrnoName('EEXIST'); return -1; }
+      const parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      const dirName = resolved.substring(resolved.lastIndexOf('/') + 1);
+      const pw = walkPath(parentPath);
+      if (!pw) { setErrnoName('ENOENT'); return -1; }
+      const pm = new DataView(pw.buf.buffer, pw.buf.byteOffset, INODE_SIZE);
+      if ((pm.getUint16(INO_MODE, true) & S_IFMT) !== S_IFDIR) { setErrnoName('ENOTDIR'); return -1; }
+
+      const ino = allocInode();
+      if (!ino) return -1;
+      const inodeBuf = new Uint8Array(INODE_SIZE);
+      const inoView = new DataView(inodeBuf.buffer);
+      inoView.setUint16(INO_MODE, DEFAULT_DIR_MODE, true);
+      inoView.setUint16(INO_UID, 0, true);
+      inoView.setUint32(INO_SIZE, 0, true);
+      const now = Math.floor(Date.now() / 1000);
+      inoView.setUint32(INO_MTIME, now, true);
+      inoView.setUint32(INO_CTIME, now, true);
+      writeInode(ino, inodeBuf);
+
+      if (!dirAddEntry(pw.ino, pw.buf, dirName, ino)) {
+        freeInode(ino);
+        setErrnoName('ENOSPC');
+        return -1;
+      }
+      updateTime(pw.buf);
+      writeInode(pw.ino, pw.buf);
+      return 0;
+    },
+
+    remove: function (path_ptr) {
+      /* unlink() — remove a file */
+      const path = readString(path_ptr);
+      const resolved = resolvePath(path);
+      const w = walkPath(resolved);
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      const mode = new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+      if ((mode & S_IFMT) === S_IFDIR) { setErrnoName('EPERM'); return -1; }
+
+      const parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      const fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
+      const pw = walkPath(parentPath);
+      if (!pw) { setErrnoName('ENOENT'); return -1; }
+
+      dirRemoveEntry(pw.ino, pw.buf, fileName);
+      updateTime(pw.buf);
+      writeInode(pw.ino, pw.buf);
+
+      freeInodeBlocks(w.buf);
+      freeInode(w.ino);
+      return 0;
+    },
+
+    rename: function (oldpath_ptr, newpath_ptr) {
+      const oldpath = readString(oldpath_ptr);
+      const newpath = readString(newpath_ptr);
+      const oldResolved = resolvePath(oldpath);
+      const newResolved = resolvePath(newpath);
+
+      /* Same path — no-op */
+      if (oldResolved === newResolved) return 0;
+
+      /* Find source */
+      const oldW = walkPath(oldResolved);
+      if (!oldW) { setErrnoName('ENOENT'); return -1; }
+
+      /* Remove old dir entry */
+      const oldParentPath = oldResolved.substring(0, oldResolved.lastIndexOf('/')) || '/';
+      const oldName = oldResolved.substring(oldResolved.lastIndexOf('/') + 1);
+      const oldPW = walkPath(oldParentPath);
+      if (!oldPW) { setErrnoName('ENOENT'); return -1; }
+      dirRemoveEntry(oldPW.ino, oldPW.buf, oldName);
+      updateTime(oldPW.buf);
+      writeInode(oldPW.ino, oldPW.buf);
+
+      /* Check if target exists (remove it first) */
+      const newW = walkPath(newResolved);
+      if (newW) {
+        const nm = new DataView(newW.buf.buffer, newW.buf.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+        if ((nm & S_IFMT) === S_IFDIR) {
+          if (!dirIsEmpty(newW.buf)) { setErrnoName('ENOTEMPTY'); return -1; }
+        }
+        freeInodeBlocks(newW.buf);
+        freeInode(newW.ino);
+        const newParentPath = newResolved.substring(0, newResolved.lastIndexOf('/')) || '/';
+        const newName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
+        const newPW = walkPath(newParentPath);
+        if (newPW) {
+          dirRemoveEntry(newPW.ino, newPW.buf, newName);
+          updateTime(newPW.buf);
+          writeInode(newPW.ino, newPW.buf);
+        }
+      }
+
+      /* Add new entry pointing to old inode */
+      const newParentPath = newResolved.substring(0, newResolved.lastIndexOf('/')) || '/';
+      const newName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
+      const newPW2 = walkPath(newParentPath);
+      if (!newPW2) {
+        /* Restore old entry? For now just fail. */
+        setErrnoName('ENOENT');
+        return -1;
+      }
+      const nm2 = new DataView(newPW2.buf.buffer, newPW2.buf.byteOffset, INODE_SIZE);
+      if ((nm2.getUint16(INO_MODE, true) & S_IFMT) !== S_IFDIR) { setErrnoName('ENOTDIR'); return -1; }
+
+      if (!dirAddEntry(newPW2.ino, newPW2.buf, newName, oldW.ino)) {
+        setErrnoName('ENOSPC');
+        return -1;
+      }
+      updateTime(newPW2.buf);
+      writeInode(newPW2.ino, newPW2.buf);
+      return 0;
+    },
+
+    __opendir: function (path_ptr) {
+      const path = readString(path_ptr);
+      const resolved = resolvePath(path);
+      const w = walkPath(resolved);
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      const m = new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+      if ((m & S_IFMT) !== S_IFDIR) { setErrnoName('ENOTDIR'); return -1; }
+      return allocDirHandle({ ino: w.ino, pos: 0, dotState: 0 });
+    },
+
+    __readdir: function (handle, dirent_ptr) {
+      if (handle < 0 || handle >= dirTable.length || !dirTable[handle]) {
+        setErrnoName('EBADF'); return -1;
+      }
+      const memory = getMemory();
+      const view = new DataView(memory.buffer);
+      const bytes = new Uint8Array(memory.buffer);
+      const dirEntry = dirTable[handle];
+
+      /* Synthesize "." and ".." */
+      if (dirEntry.dotState < 2) {
+        const dotName = dirEntry.dotState === 0 ? '.' : '..';
+        dirEntry.dotState++;
+        view.setInt32(dirent_ptr + 0, 0, true);  /* d_ino */
+        view.setInt32(dirent_ptr + 4, 4, true);  /* DT_DIR */
+        const enc = encoder.encode(dotName);
+        for (let i = 0; i < enc.length; i++) bytes[dirent_ptr + 8 + i] = enc[i];
+        bytes[dirent_ptr + 8 + enc.length] = 0;
+        return 0;
+      }
+
+      const inodeBuf = readInode(dirEntry.ino);
+      const inoView = new DataView(inodeBuf.buffer, inodeBuf.byteOffset, INODE_SIZE);
+      const size = inoView.getUint32(INO_SIZE, true);
+
+      /* Skip past deleted entries and find the next live one */
+      while (dirEntry.pos < size) {
+        const logicalBlock = Math.floor(dirEntry.pos / BLOCK_SIZE);
+        const blockOffset = dirEntry.pos % BLOCK_SIZE;
+        const blkNum = getBlockPtr(inodeBuf, logicalBlock, false);
+        if (!blkNum) { dirEntry.pos = size; break; }
+        const block = readBlock(blkNum);
+        const dv = new DataView(block.buffer, block.byteOffset, BLOCK_SIZE);
+        if (blockOffset + 6 > BLOCK_SIZE) {
+          dirEntry.pos = (logicalBlock + 1) * BLOCK_SIZE;
+          continue;
+        }
+        const entIno = dv.getUint32(blockOffset, true);
+        const entNameLen = dv.getUint16(blockOffset + 4, true);
+        if (blockOffset + 6 + entNameLen > BLOCK_SIZE) {
+          dirEntry.pos = (logicalBlock + 1) * BLOCK_SIZE;
+          continue;
+        }
+        dirEntry.pos += 6 + entNameLen;
+        if (entIno === 0) continue; // deleted
+
+        /* Determine type from inode */
+        const entInode = readInode(entIno);
+        const entMode = new DataView(entInode.buffer, entInode.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+        const dtype = (entMode & S_IFMT) === S_IFDIR ? 4 : 8;
+
+        view.setInt32(dirent_ptr + 0, entIno, true);
+        view.setInt32(dirent_ptr + 4, dtype, true);
+        const nameBytes = encoder.encode(decoder.decode(block.subarray(blockOffset + 6, blockOffset + 6 + entNameLen)));
+        const nameLen = Math.min(nameBytes.length, 255);
+        for (let i = 0; i < nameLen; i++) bytes[dirent_ptr + 8 + i] = nameBytes[i];
+        bytes[dirent_ptr + 8 + nameLen] = 0;
+        return 0;
+      }
+      return -1; // end of directory
+    },
+
+    __closedir: function (handle) {
+      if (handle < 0 || handle >= dirTable.length || !dirTable[handle]) {
+        setErrnoName('EBADF'); return -1;
+      }
+      dirTable[handle] = null;
+      return 0;
+    },
+
+    stat: function (path_ptr, buf_ptr) {
+      const path = readString(path_ptr);
+      const w = walkPath(resolvePath(path));
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      writeStatBuf(buf_ptr, w.buf, w.ino);
+      return 0;
+    },
+
+    lstat: function (path_ptr, buf_ptr) {
+      /* No symlinks — same as stat */
+      const path = readString(path_ptr);
+      const w = walkPath(resolvePath(path));
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      writeStatBuf(buf_ptr, w.buf, w.ino);
+      return 0;
+    },
+
+    fstat: function (fd, buf_ptr) {
+      if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+      const entry = fdTable[fd];
+      if (!entry.ino) {
+        /* stdin/stdout/stderr */
+        const mem = new DataView(getMemory().buffer);
+        mem.setUint32(buf_ptr + 8, 0o020600, true); /* S_IFCHR | 0600 */
+        return 0;
+      }
+      const inodeBuf = readInode(entry.ino);
+      writeStatBuf(buf_ptr, inodeBuf, entry.ino);
+      return 0;
+    },
+
+    getcwd: function (buf_ptr, size) {
+      const encoded = encoder.encode(cwd);
+      if (encoded.length + 1 > size) { setErrnoName('ERANGE'); return 0; }
+      const memory = getMemory();
+      const bytes = new Uint8Array(memory.buffer);
+      for (let i = 0; i < encoded.length; i++) bytes[buf_ptr + i] = encoded[i];
+      bytes[buf_ptr + encoded.length] = 0;
+      return buf_ptr;
+    },
+
+    chdir: function (path_ptr) {
+      const path = readString(path_ptr);
+      const resolved = resolvePath(path);
+      const w = walkPath(resolved);
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      const m = new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+      if ((m & S_IFMT) !== S_IFDIR) { setErrnoName('ENOTDIR'); return -1; }
+      cwd = resolved;
+      return 0;
+    },
+
+    access: function (path_ptr, mode) {
+      const path = readString(path_ptr);
+      const w = walkPath(resolvePath(path));
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      return 0;
+    },
+
+    rmdir: function (path_ptr) {
+      const path = readString(path_ptr);
+      const resolved = resolvePath(path);
+      const w = walkPath(resolved);
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      const m = new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+      if ((m & S_IFMT) !== S_IFDIR) { setErrnoName('ENOTDIR'); return -1; }
+      if (!dirIsEmpty(w.buf)) { setErrnoName('ENOTEMPTY'); return -1; }
+
+      const parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      const dirName = resolved.substring(resolved.lastIndexOf('/') + 1);
+      const pw = walkPath(parentPath);
+      if (!pw) { setErrnoName('ENOENT'); return -1; }
+
+      dirRemoveEntry(pw.ino, pw.buf, dirName);
+      updateTime(pw.buf);
+      writeInode(pw.ino, pw.buf);
+
+      freeInodeBlocks(w.buf);
+      freeInode(w.ino);
+      return 0;
+    },
+
+    unlink: function (path_ptr) {
+      /* Same as remove — remove a file (not dir) */
+      const path = readString(path_ptr);
+      const resolved = resolvePath(path);
+      const w = walkPath(resolved);
+      if (!w) { setErrnoName('ENOENT'); return -1; }
+      const m = new DataView(w.buf.buffer, w.buf.byteOffset, INODE_SIZE).getUint16(INO_MODE, true);
+      if ((m & S_IFMT) === S_IFDIR) { setErrnoName('EPERM'); return -1; }
+
+      const parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      const fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
+      const pw = walkPath(parentPath);
+      if (!pw) { setErrnoName('ENOENT'); return -1; }
+
+      dirRemoveEntry(pw.ino, pw.buf, fileName);
+      updateTime(pw.buf);
+      writeInode(pw.ino, pw.buf);
+
+      freeInodeBlocks(w.buf);
+      freeInode(w.ino);
+      return 0;
+    },
+
+    pipe: function (pipefd_ptr) {
+      const pipe = { buffer: [], closed: { read: false, write: false } };
+      const readFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null });
+      const writeFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'write', position: null });
+      const memory = getMemory();
+      const view = new DataView(memory.buffer);
+      view.setInt32(pipefd_ptr, readFd, true);
+      view.setInt32(pipefd_ptr + 4, writeFd, true);
+      return 0;
+    },
+
+    dup: function (oldfd) {
+      if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
+      const entry = fdTable[oldfd];
+      if (entry.type === 'pipe') {
+        return allocFd({ type: 'pipe', pipe: entry.pipe, pipeEnd: entry.pipeEnd, position: null });
+      }
+      return allocFd(entry);
+    },
+
+    dup2: function (oldfd, newfd) {
+      if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
+      if (newfd < 0) { setErrnoName('EBADF'); return -1; }
+      if (oldfd === newfd) return newfd;
+      if (newfd < fdTable.length && fdTable[newfd]) fdTable[newfd] = null;
+      while (fdTable.length <= newfd) fdTable.push(null);
+      const src = fdTable[oldfd];
+      if (src.type === 'pipe') {
+        fdTable[newfd] = { type: 'pipe', pipe: src.pipe, pipeEnd: src.pipeEnd, position: null };
+      } else {
+        fdTable[newfd] = src;
+      }
+      return newfd;
+    },
+
+    isatty: function (fd) {
+      if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return 0; }
+      if (fd <= 2) return 1;
+      return 0;
+    },
+
+    __tcgetattr: function (fd, iflag_ptr, oflag_ptr, cflag_ptr, lflag_ptr) {
+      if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+      const mem = new DataView(getMemory().buffer);
+      mem.setInt32(iflag_ptr, 0x100, true);
+      mem.setInt32(oflag_ptr, 0x1, true);
+      mem.setInt32(cflag_ptr, 0xB00, true);
+      mem.setInt32(lflag_ptr, 0x188, true);
+      return 0;
+    },
+
+    __tcsetattr: function (fd, actions, iflag, oflag, cflag, lflag) {
+      /* no-op in block FS context — terminal is handled by the page */
+      return 0;
+    },
+
+    /* Stubs for JSPI-dependent syscalls. Without JSPI these can't
+       yield, so we return ENOSYS. Same behavior as the browser FS
+       fallback path. */
+    usleep: function (usec) { setErrnoName('ENOSYS'); return -1; },
+    __nanosleep: function (sec, nsec) { setErrnoName('ENOSYS'); return -1; },
+    __select_impl: function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_sec, timeout_usec, has_timeout) {
+      setErrnoName('ENOSYS'); return -1;
+    },
+    __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
+      /* Return a default 80×24 terminal size so programs that query
+         it don't crash, even without JSPI to request the real size. */
+      const mem = new DataView(getMemory().buffer);
+      mem.setInt32(rows_ptr, 24, true);
+      mem.setInt32(cols_ptr, 80, true);
+      return 0;
+    },
+  };
+
+  return { [ENV_KEY]: env };
+}
+
+/**
  * Create POSIX WASM imports backed by Node.js APIs.
  * Provides: getenv, setenv, unsetenv, getpid, isatty, system.
  * @param {object} options
@@ -3209,7 +4307,7 @@ async function runModule({
     const posix = createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   } else if (blockFsFactory) {
-    const fileSystem = blockFsFactory(ctx);
+    const fileSystem = await blockFsFactory(ctx);
     Object.assign(imports[ENV_KEY], fileSystem[ENV_KEY]);
     const posix = createBrowserPosix({ ctx: ctx });
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
