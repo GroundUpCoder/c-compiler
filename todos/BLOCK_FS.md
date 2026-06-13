@@ -220,20 +220,14 @@ independent of filesystem backend choice.
   (io.open write + read back), prints correct output, exits cleanly.  Full
   round-trip verified in headless Chromium.
 
-- [x] **SQLite test suite — 8/10 pass with exact output match**.  Tested via
-  `-init /test.sql` (SQL script preloaded into block FS image).  The 2
-  non-passing tests fall into two categories:
-  `fks` — actually passes when stdout/stderr are compared separately.
-  The FK constraint error correctly goes to stderr (fd 2); earlier
-  test script incorrectly merged stdout+stderr with `2>&1`.
-  `persistence` — uses file-based database (`/tmp/...`). `sqlite3_open_v2`
-  fails to create the database file through block FS, SQLite falls back
-  to in-memory, and subsequent operations fail with SQLITE_IOERR.  Root
-  cause is NOT basic read/write (those work in isolation) — likely
-  something in SQLite's VFS layer (journal creation? `fstat`? `fsync`?
-  `fcntl` locking?) that's not wired up correctly for file-based DBs.
-  Aggregates, crud, joins, edge_cases, triggers, txn, ctes, and others
-  all produce identical output.
+- [x] **SQLite test suite — 10/10 pass with exact output match**.  Tested via
+  `-init /test.sql` (SQL script preloaded into block FS image).  All ten
+  tests (aggregates, crud, joins, edge_cases, triggers, txn, ctes, fks,
+  persistence, and more) produce byte-identical output.  Three bugs found
+  and fixed during investigation:
+  1. Inode collision: superblock nextInodeId wasn't persisted after allocs
+  2. TLSF metadata zeroed on reload (poolSize=0 no-op path added)
+  3. fcntl returned ENOSYS for non-F_DUPFD commands (now returns 0)
 
 ### Immediate
 
