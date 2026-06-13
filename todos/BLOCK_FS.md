@@ -222,11 +222,16 @@ independent of filesystem backend choice.
 
 - [x] **SQLite test suite — 8/10 pass with exact output match**.  Tested via
   `-init /test.sql` (SQL script preloaded into block FS image).  The 2
-  non-passing tests are test-setup issues, not block FS bugs:
-  `fks` — SQLite prints FK constraint error to stdout instead of stderr
-  under block FS; `persistence` — hardcoded `/tmp/...` path, directory
-  doesn't exist in a fresh block FS.  Added `realpath` WASM import
-  (SQLite uses it for path canonicalisation).
+  non-passing tests fall into two categories:
+  `fks` — actually passes when stdout/stderr are compared separately.
+  The FK constraint error correctly goes to stderr (fd 2); earlier
+  test script incorrectly merged stdout+stderr with `2>&1`.
+  `persistence` — uses file-based database (`/tmp/...`). `sqlite3_open_v2`
+  fails to create the database file through block FS, SQLite falls back
+  to in-memory, and subsequent operations fail with SQLITE_IOERR.  Root
+  cause is NOT basic read/write (those work in isolation) — likely
+  something in SQLite's VFS layer (journal creation? `fstat`? `fsync`?
+  `fcntl` locking?) that's not wired up correctly for file-based DBs.
   Aggregates, crud, joins, edge_cases, triggers, txn, ctes, and others
   all produce identical output.
 
