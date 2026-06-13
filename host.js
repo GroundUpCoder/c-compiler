@@ -2168,7 +2168,13 @@ var BLOCK_FS = (function () {
   function dirWriteEnt(store, extentBase, offset, inodeId, name) {
     var nameBytes = encodeStr(name);
     store.setUint32(extentBase + offset, inodeId);
-    store.setUint32(extentBase + offset + 4, nameBytes.length);
+    // Write nameLen as 2 bytes at offset+4.  We cannot use setUint32 here
+    // because it writes 4 bytes and would corrupt byte offset+6 which may
+    // already hold data from a shifted entry (see dirInsert).
+    var lenBuf = new Uint8Array(2);
+    lenBuf[0] = nameBytes.length & 0xFF;
+    lenBuf[1] = (nameBytes.length >> 8) & 0xFF;
+    store.setBytes(extentBase + offset + 4, lenBuf);
     store.setBytes(extentBase + offset + 6, nameBytes);
   }
 

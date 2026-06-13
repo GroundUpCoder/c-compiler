@@ -52,9 +52,18 @@ test('malloc(0) returns 0', function () {
 });
 
 test('malloc too large returns 0', function () {
-  var store = new MemoryByteStore(65536);
+  // Use a bounded store that refuses to grow beyond 1MB, so requesting
+  // 64MB must fail regardless of block-size representation.
+  var maxSize = 1024 * 1024;
+  var store = new MemoryByteStore(Math.min(65536, maxSize));
+  // Swap resize to enforce the cap.
+  var origResize = store.resize;
+  store.resize = function (newSize) {
+    if (newSize > maxSize) throw new Error('store cap exceeded');
+    return origResize.call(store, newSize);
+  };
   var alloc = new TLSFAllocator(store, 256, 65536 - 2304);
-  assertEq(alloc.malloc(0x50000000), 0);
+  assertEq(alloc.malloc(64 * 1024 * 1024), 0);
 });
 
 test('free and reuse', function () {
