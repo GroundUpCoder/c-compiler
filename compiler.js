@@ -22227,7 +22227,7 @@ return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUn
 
 const HtmlOutput = (() => {
 
-function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, xtermSources, useBlockFS }) {
+function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, xtermSources }) {
   const strippedHostJs = hostJsSource.replace(/^#!.*\n/, '');
   const safeHostJs = strippedHostJs.replace(/<\/script>/gi, '<\\/script>');
   const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
@@ -22293,8 +22293,7 @@ async function doRun(msg) {
   var opts = {
     bytes: msg.bytes,
     args: msg.args && msg.args.length > 0 ? msg.args : undefined,
-    useBrowserFS: msg.useBlockFS ? undefined : true,
-    blockFsFactory: msg.useBlockFS ? createBlockFileSystem : undefined,
+    useBrowserFS: true,
     writeOut: function(buf) {
       var text = (buf instanceof Uint8Array) ? decoder.decode(buf) : String(buf);
       self.postMessage({ type: 'stdout', text: text });
@@ -22409,7 +22408,6 @@ window.onunhandledrejection = function(e) {
   var BUNDLE_HASH = ${JSON.stringify(bundleHash)};
   var RUN_ARGS = ${JSON.stringify(runArgs)};
   var PROGRAM_NAME = ${JSON.stringify(programName)};
-  var USE_BLOCK_FS = ${useBlockFS ? 'true' : 'false'};
   var HAS_XTERM = ${hasXterm};
 
   var overlay = document.getElementById('overlay');
@@ -22914,8 +22912,7 @@ window.onunhandledrejection = function(e) {
       type: 'run',
       bytes: wasmBytes,
       args: [PROGRAM_NAME].concat(RUN_ARGS),
-      canvas: offscreen,
-      useBlockFS: USE_BLOCK_FS
+      canvas: offscreen
     };
     if (sharedAudio) {
       msg.sharedAudioBuffer = sharedAudio.sharedBuffer;
@@ -23086,7 +23083,6 @@ function main() {
   const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
   let noXterm = false;
-  let useBlockFS = false;
   const pp = Stdlib.createDefaultPPRegistry();
 
   // Set up file reader. Returns raw source — splicing happens at lex
@@ -23204,8 +23200,6 @@ function main() {
       runArgs.push(args[++i]);
     } else if (args[i] === "--no-xterm") {
       noXterm = true;
-    } else if (args[i] === "--block-fs") {
-      useBlockFS = true;
     } else if (args[i].startsWith("-")) {
       // Silently ignore unknown options
     } else {
@@ -23377,7 +23371,7 @@ function main() {
               };
             } catch (e) {}
           }
-          const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName, xtermSources, useBlockFS });
+          const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName, xtermSources });
           fs.writeFileSync(outputFile, htmlBinary);
         } else {
           const programName = path.basename(outputFile, ".js");
