@@ -66,6 +66,7 @@ DISW_TEST_DIR = os.path.join(SCRIPT_DIR, "disw")
 
 SOURCEMAP_DIR = os.path.join(SCRIPT_DIR, "sourcemap")
 AST_DIR = os.path.join(SCRIPT_DIR, "ast")
+BLOCKFS_DIR = os.path.join(SCRIPT_DIR, "blockfs")
 
 LIBC_TEST_DIR = os.path.join(VENDOR_DIR, "libc-test")
 CSMITH_CORPUS_DIR = os.path.join(VENDOR_DIR, "csmith-corpus")
@@ -84,7 +85,7 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz"]
+ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -1538,6 +1539,41 @@ def run_ast_tests(results, filter_str=None):
             results.record(test_name, False, msg)
 
 
+# --- blockfs (JS-level unit tests for the BLOCK_FS filesystem) ---
+
+def run_blockfs_tests(results, filter_str=None):
+    """Run tests/blockfs/*.js — JS-level tests for the BLOCK_FS allocator,
+    filesystem, and C end-to-end integration.
+
+    Each .js file is invoked with `node`. The script's exit code is the
+    pass/fail signal.
+    """
+    if not os.path.isdir(BLOCKFS_DIR):
+        return
+    test_files = sorted(
+        f for f in os.listdir(BLOCKFS_DIR) if f.endswith(".js")
+    )
+    for fname in test_files:
+        test_name = f"blockfs/{fname[:-3]}"  # strip .js
+        if filter_str and filter_str not in test_name:
+            continue
+        path = os.path.join(BLOCKFS_DIR, fname)
+        r = subprocess.run(
+            ["node", path],
+            capture_output=True, text=True, timeout=120, cwd=ROOT_DIR,
+        )
+        if r.returncode == 0:
+            results.record(test_name, True)
+        else:
+            # Surface the test runner's own output for failure details.
+            msg = r.stdout.strip() or r.stderr.strip()
+            # Keep only the last few lines — FAIL lines and summary.
+            lines = msg.split('\n')
+            fail_lines = [l for l in lines if 'FAIL' in l or 'Passed:' in l or 'Failed:' in l]
+            summary = '\n'.join(fail_lines[-10:]) if fail_lines else (lines[-10:] if len(lines) > 10 else lines)
+            results.record(test_name, False, '\n'.join(summary) if isinstance(summary, list) else summary)
+
+
 # --- Main ---
 
 def main():
@@ -1582,6 +1618,10 @@ def main():
         if cat == "ast":
             results.section("ast")
             run_ast_tests(results, filter_str=args.filter)
+
+        elif cat == "blockfs":
+            results.section("blockfs")
+            run_blockfs_tests(results, filter_str=args.filter)
 
         elif cat == "unit":
             results.section("unit")
