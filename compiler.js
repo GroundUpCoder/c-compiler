@@ -18360,6 +18360,8 @@ void abort(void);
 char *getenv(const char *name);
 int setenv(const char *name, const char *value, int overwrite);
 int unsetenv(const char *name);
+int putenv(char *string);
+int clearenv(void);
 int system(const char *command);
 
 #define MB_CUR_MAX 1
@@ -20741,10 +20743,6 @@ FILE *fdopen(int fd, const char *mode) {
 
 int fileno(FILE *stream) { return stream ? stream->fd : -1; }
 
-// POSIX environ — empty by default. Host can populate via __set_environ().
-static char *__environ_empty[] = { 0 };
-char **environ = __environ_empty;
-
 int fclose(FILE *stream) {
   fflush(stream);
   int r = close(stream->fd);
@@ -21368,25 +21366,156 @@ lldiv_t lldiv(long long numer, long long denom) {
   return r;
 }
 
-__import int __getenv(const char *name, char *buf, int buf_size);
-__import int __setenv(const char *name, const char *value, int overwrite);
-__import int __unsetenv(const char *name);
+/* POSIX environment — environ is the source of truth: getenv() walks it,
+   setenv/unsetenv/putenv/clearenv mutate it. Empty by default; the host
+   populates it via __set_environ() (see below). The initial block the host
+   installs lives in wasm stack memory and is NOT heap-owned, so the first
+   mutation deep-copies it to the heap (tracked by __environ_owned). From then
+   on every entry is malloc'd, which makes free() uniformly safe across all the
+   mutators. (The public extern char **environ is declared in the headers.) */
+static char *__environ_empty[] = { 0 };
+char **environ = __environ_empty;
 
-static char __getenv_buf[4096];
+/* Forward decls — these string helpers are defined later in this unit. */
+size_t strlen(const char *s);
+char *strcpy(char *dest, const char *src);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strchr(const char *s, int c);
+char *strdup(const char *s);
+
+static int __environ_owned = 0;
+
+static int __environ_count(void) {
+  int n = 0;
+  while (environ[n]) n++;
+  return n;
+}
+
+static void __environ_take_ownership(void) {
+  if (__environ_owned) return;
+  int n = __environ_count();
+  char **heap = malloc((n + 1) * sizeof(char *));
+  for (int i = 0; i < n; i++) heap[i] = strdup(environ[i]);
+  heap[n] = 0;
+  environ = heap;
+  __environ_owned = 1;
+}
+
+/* Allocate a heap "name=value" string. */
+static char *__environ_entry(const char *name, const char *value) {
+  size_t nlen = strlen(name);
+  char *e = malloc(nlen + 1 + strlen(value) + 1);
+  if (!e) return 0;
+  strcpy(e, name);
+  e[nlen] = '=';
+  strcpy(e + nlen + 1, value);
+  return e;
+}
+
+/* Index of the variable named "name" (nlen bytes), or -1 if absent. */
+static int __environ_find(const char *name, size_t nlen) {
+  for (int i = 0; environ[i]; i++) {
+    if (strncmp(environ[i], name, nlen) == 0 && environ[i][nlen] == '=')
+      return i;
+  }
+  return -1;
+}
 
 char *getenv(const char *name) {
-  int len = __getenv(name, __getenv_buf, sizeof(__getenv_buf));
-  if (len < 0) return 0;
-  return __getenv_buf;
+  if (!name || !*name) return 0;
+  size_t nlen = strlen(name);
+  int i = __environ_find(name, nlen);
+  return i < 0 ? 0 : environ[i] + nlen + 1;
 }
 
 int setenv(const char *name, const char *value, int overwrite) {
-  return __setenv(name, value, overwrite);
+  if (!name || !*name || strchr(name, '=')) { errno = EINVAL; return -1; }
+  __environ_take_ownership();
+  size_t nlen = strlen(name);
+  int i = __environ_find(name, nlen);
+  if (i >= 0) {
+    if (!overwrite) return 0;
+    char *e = __environ_entry(name, value);
+    if (!e) { errno = ENOMEM; return -1; }
+    free(environ[i]);
+    environ[i] = e;
+    return 0;
+  }
+  int n = __environ_count();
+  char **ne = realloc(environ, (n + 2) * sizeof(char *));
+  if (!ne) { errno = ENOMEM; return -1; }
+  environ = ne;
+  char *e = __environ_entry(name, value);
+  if (!e) { errno = ENOMEM; return -1; }
+  environ[n] = e;
+  environ[n + 1] = 0;
+  return 0;
 }
 
 int unsetenv(const char *name) {
-  return __unsetenv(name);
+  if (!name || !*name || strchr(name, '=')) { errno = EINVAL; return -1; }
+  __environ_take_ownership();
+  size_t nlen = strlen(name);
+  int i;
+  while ((i = __environ_find(name, nlen)) >= 0) {
+    free(environ[i]);
+    int j = i;
+    do { environ[j] = environ[j + 1]; j++; } while (environ[j - 1]);
+  }
+  return 0;
 }
+
+/* putenv: POSIX places the caller's string directly into environ. We strdup it
+   instead so every environ entry stays uniformly heap-owned (free()-safe in the
+   other mutators); the only visible deviation is that later edits to the
+   caller's buffer don't propagate — acceptable here. A string lacking '='
+   removes that variable. */
+int putenv(char *string) {
+  char *eq = strchr(string, '=');
+  if (!eq) return unsetenv(string);
+  __environ_take_ownership();
+  size_t nlen = eq - string;
+  char *e = strdup(string);
+  if (!e) { errno = ENOMEM; return -1; }
+  int i = __environ_find(string, nlen);
+  if (i >= 0) {
+    free(environ[i]);
+    environ[i] = e;
+    return 0;
+  }
+  int n = __environ_count();
+  char **ne = realloc(environ, (n + 2) * sizeof(char *));
+  if (!ne) { free(e); errno = ENOMEM; return -1; }
+  environ = ne;
+  environ[n] = e;
+  environ[n + 1] = 0;
+  return 0;
+}
+
+int clearenv(void) {
+  if (__environ_owned) {
+    for (int i = 0; environ[i]; i++) free(environ[i]);
+    free(environ);
+  }
+  char **e = malloc(sizeof(char *));
+  if (!e) { errno = ENOMEM; return -1; }
+  e[0] = 0;
+  environ = e;
+  __environ_owned = 1;
+  return 0;
+}
+
+/* Host boundary. __set_environ installs the initial environment (a
+   NULL-terminated char** block built in wasm memory by host.js); __get_environ
+   hands the live pointer back so JS can walk it (e.g. to inherit it into a
+   spawned child). */
+void __set_environ(char **envp) {
+  environ = envp ? envp : __environ_empty;
+  __environ_owned = 0;
+}
+char **__get_environ(void) { return environ; }
+__export __set_environ = __set_environ;
+__export __get_environ = __get_environ;
 
 int system(const char *command) {
   if (!command) return 0;  /* no command processor available */

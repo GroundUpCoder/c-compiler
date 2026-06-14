@@ -1284,7 +1284,6 @@ LIBC_TEST_SKIP = {
     "vfork": "no fork/exec", "popen": "no fork/exec", "spawn": "no fork/exec",
     "fcntl": "needs fork + fd inheritance",
     "stat": "needs uids (geteuid)",
-    "env": "host-backed environ; no clearenv/putenv",
     "time": "no tzset/putenv timezone control",
     # No threads / TLS / dynamic linking
     "pthread_cancel-points": "no threads", "pthread_cancel": "no threads",

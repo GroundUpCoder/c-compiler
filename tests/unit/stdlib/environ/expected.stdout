@@ -1,0 +1,10 @@
+home0=(null)
+home1=/root
+home2=/root
+home3=/root2
+count=2
+path=/bin
+path2=/usr/bin
+home4=(null)
+badname r=-1 einval=1
+cleared user=(null) empty=1

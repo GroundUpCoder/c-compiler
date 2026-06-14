@@ -3688,44 +3688,17 @@ var BLOCK_FS = (function () {
 
 /**
  * Create POSIX WASM imports backed by Node.js APIs.
- * Provides: getenv, setenv, unsetenv, getpid, isatty, system.
+ * Environment variables are NOT handled here — `environ` lives in wasm memory
+ * (the libc owns it), seeded by the host via instance.exports.__set_environ
+ * after instantiation. This provides only getpid.
  * @param {object} options
  * @param {RuntimeContext} options.ctx - Runtime helpers shared with the host.
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createPosix({ ctx }) {
-  const { readString, setErrnoName, getMemory } = ctx;
-  const encoder = new TextEncoder();
   const pid = process.pid;
-
   return {
     [ENV_KEY]: {
-      __getenv: function (name_ptr, buf_ptr, buf_size) {
-        const name = readString(name_ptr);
-        const val = process.env[name];
-        if (val === undefined) return -1;
-        const encoded = encoder.encode(val);
-        if (encoded.length + 1 > buf_size) { setErrnoName('ERANGE'); return -1; }
-        const memory = getMemory();
-        const bytes = new Uint8Array(memory.buffer);
-        bytes.set(encoded, buf_ptr);
-        bytes[buf_ptr + encoded.length] = 0;
-        return encoded.length;
-      },
-      __setenv: function (name_ptr, value_ptr, overwrite) {
-        const name = readString(name_ptr);
-        if (!name || name.indexOf('=') >= 0) { setErrnoName('EINVAL'); return -1; }
-        if (!overwrite && process.env[name] !== undefined) return 0;
-        const value = readString(value_ptr);
-        process.env[name] = value;
-        return 0;
-      },
-      __unsetenv: function (name_ptr) {
-        const name = readString(name_ptr);
-        if (!name || name.indexOf('=') >= 0) { setErrnoName('EINVAL'); return -1; }
-        delete process.env[name];
-        return 0;
-      },
       getpid: function () { return pid; },
     },
   };
@@ -3733,64 +3706,16 @@ function createPosix({ ctx }) {
 
 /**
  * Create POSIX WASM imports for the browser environment.
- * Environment variables are backed by an in-memory Map (optionally persisted to localStorage).
+ * Environment variables are NOT handled here (see createPosix) — they live in
+ * wasm memory and are seeded via __set_environ. This provides only getpid.
  * @param {object} options
  * @param {RuntimeContext} options.ctx - Runtime helpers shared with the host.
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createBrowserPosix({ ctx }) {
-  const { readString, setErrnoName, getMemory } = ctx;
-  const encoder = new TextEncoder();
-  const envVars = new Map();
   const nextPid = 1;
-
-  /* Load persisted env vars from localStorage */
-  try {
-    const stored = localStorage.getItem('__posix_env');
-    if (stored) {
-      const obj = JSON.parse(stored);
-      for (const k in obj) envVars.set(k, obj[k]);
-    }
-  } catch (e) { /* localStorage not available */ }
-
-  function persistEnv() {
-    try {
-      const obj = {};
-      envVars.forEach(function (v, k) { obj[k] = v; });
-      localStorage.setItem('__posix_env', JSON.stringify(obj));
-    } catch (e) { /* best effort */ }
-  }
-
   return {
     [ENV_KEY]: {
-      __getenv: function (name_ptr, buf_ptr, buf_size) {
-        const name = readString(name_ptr);
-        const val = envVars.get(name);
-        if (val === undefined) return -1;
-        const encoded = encoder.encode(val);
-        if (encoded.length + 1 > buf_size) { setErrnoName('ERANGE'); return -1; }
-        const memory = getMemory();
-        const bytes = new Uint8Array(memory.buffer);
-        bytes.set(encoded, buf_ptr);
-        bytes[buf_ptr + encoded.length] = 0;
-        return encoded.length;
-      },
-      __setenv: function (name_ptr, value_ptr, overwrite) {
-        const name = readString(name_ptr);
-        if (!name || name.indexOf('=') >= 0) { setErrnoName('EINVAL'); return -1; }
-        if (!overwrite && envVars.has(name)) return 0;
-        const value = readString(value_ptr);
-        envVars.set(name, value);
-        persistEnv();
-        return 0;
-      },
-      __unsetenv: function (name_ptr) {
-        const name = readString(name_ptr);
-        if (!name || name.indexOf('=') >= 0) { setErrnoName('EINVAL'); return -1; }
-        envVars.delete(name);
-        persistEnv();
-        return 0;
-      },
       getpid: function () { return nextPid; },
     },
   };
@@ -4228,6 +4153,7 @@ function createAudioReceiver(options) {
 async function runModule({
   bytes,
   args,
+  env,
   fs: fsModule,
   useBrowserFS,
   blockFsImports,
@@ -5665,6 +5591,35 @@ async function runModule({
 
   let exitCode;
   try {
+    // Seed the process environment: build a NULL-terminated char** block in
+    // wasm memory (same shape as argv) and hand it to the libc via
+    // __set_environ — the libc owns `environ` from here on. The same pointer is
+    // passed to main() as the optional third (envp) argument; a program with a
+    // 2-arg main simply ignores it. Skipped when no env is supplied or the
+    // module predates __set_environ (environ then stays empty, as before).
+    let envpPtr = 0;
+    if (env && instance.exports.__set_environ && instance.exports.alloca) {
+      const allocaE = instance.exports.alloca;
+      const memoryE = instance.exports.memory;
+      const encoderE = new TextEncoder();
+      const envPtrs = [];
+      for (const k of Object.keys(env)) {
+        const encoded = encoderE.encode(k + '=' + env[k]);
+        const ptr = allocaE(encoded.length + 1);
+        const bytesE = new Uint8Array(memoryE.buffer);
+        bytesE.set(encoded, ptr);
+        bytesE[ptr + encoded.length] = 0;
+        envPtrs.push(ptr);
+      }
+      envpPtr = allocaE((envPtrs.length + 1) * 4);
+      const viewE = new DataView(memoryE.buffer);
+      for (let i = 0; i < envPtrs.length; i++) {
+        viewE.setInt32(envpPtr + i * 4, envPtrs[i], true);
+      }
+      viewE.setInt32(envpPtr + envPtrs.length * 4, 0, true);
+      instance.exports.__set_environ(envpPtr);
+    }
+
     if (args && args.length > 0) {
       // Set up argc/argv via alloca
       const argc = args.length;
@@ -5692,9 +5647,9 @@ async function runModule({
       view.setInt32(argvPtr + argc * 4, 0, true);
 
       if (hasJSPI) {
-        exitCode = await WebAssembly.promising(instance.exports.main)(argc, argvPtr);
+        exitCode = await WebAssembly.promising(instance.exports.main)(argc, argvPtr, envpPtr);
       } else {
-        exitCode = instance.exports.main(argc, argvPtr);
+        exitCode = instance.exports.main(argc, argvPtr, envpPtr);
       }
     } else {
       if (hasJSPI) {
@@ -5856,6 +5811,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
     runModule({
       bytes: bytes,
       args: args,
+      env: process.env,
       blockFsFactory: async function (ctx) {
         return { c: blockFS.toWasmEnv(ctx) };
       },
@@ -5886,6 +5842,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       // Always pass at least argv[0] — the wasm path. Many programs (SQLite,
       // anything POSIX-y) assert `argc >= 1` at entry.
       args: args,
+      env: process.env,
       fs: fs,
     }).then(function (exitCode) {
       process.exit(exitCode);
