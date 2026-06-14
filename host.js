@@ -2831,7 +2831,8 @@ var BLOCK_FS = (function () {
     if (!w) return this._setErr('ENOENT');
     return {
       ino: w.inoId, mode: w.ino.mode, size: w.ino.dataSize,
-      mtime: w.ino.mtime, ctime: w.ino.ctime
+      mtime: w.ino.mtime, ctime: w.ino.ctime,
+      nlink: w.ino.nlink, uid: w.ino.uid, gid: w.ino.gid
     };
   };
 
@@ -2845,13 +2846,60 @@ var BLOCK_FS = (function () {
     var entry = this._fdTable[fd];
     if (entry.inoId === undefined) {
       // stdin/stdout/stderr — return S_IFCHR
-      return { ino: 0, mode: 0o020600, size: 0, mtime: 0, ctime: 0 };
+      return { ino: 0, mode: 0o020600, size: 0, mtime: 0, ctime: 0,
+               nlink: 1, uid: 0, gid: 0 };
     }
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
     return {
       ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
-      mtime: ino.mtime, ctime: ino.ctime
+      mtime: ino.mtime, ctime: ino.ctime,
+      nlink: ino.nlink, uid: ino.uid, gid: ino.gid
+    };
+  };
+
+  // statfs() — filesystem-level capacity, the basis for `df`.
+  //
+  // Bytes are authoritative: `totalBytes` is the usable data region (the TLSF
+  // pool), `freeBytes` the allocator's own free total. Single-user, no quotas,
+  // so "free" and "available" are the same number. `blockSize` (4 KiB) plus the
+  // *Blocks fields are a conventional df-style presentation derived from the
+  // byte figures — BlockFS is a byte allocator, not block-structured, so the
+  // bytes are the truth and the blocks are rounded-down views of them.
+  // `storeSize` is the whole image (pool + superblock + TLSF meta + inode
+  // table); it's >= totalBytes because not all of the image is file-data space.
+  BlockFS.prototype.statfs = function () {
+    var BSIZE = 4096;
+    var alloc = this._alloc;
+    var poolStart, poolEnd;
+    try { poolStart = alloc._readMeta32(META_POOL_START); } catch (e) { poolStart = TLSF_POOL_OFFSET; }
+    try { poolEnd = alloc._readMeta32(META_POOL_END); } catch (e) { poolEnd = poolStart; }
+    var totalBytes = poolEnd - poolStart;
+    var freeBytes = alloc.totalFreeBytes();
+    if (freeBytes > totalBytes) freeBytes = totalBytes;
+    var usedBytes = totalBytes - freeBytes;
+
+    // Inodes: capacity is the table size; count the live (mode != 0) entries.
+    var totalInodes = this._inodes.capacity();
+    var usedInodes = 0;
+    for (var i = 1; i < this._nextInode; i++) {
+      var ino = this._inodes.read(i);
+      if (ino && ino.mode !== 0) usedInodes++;
+    }
+
+    return {
+      blockSize: BSIZE,
+      totalBytes: totalBytes,
+      freeBytes: freeBytes,
+      usedBytes: usedBytes,
+      totalBlocks: Math.floor(totalBytes / BSIZE),
+      freeBlocks: Math.floor(freeBytes / BSIZE),
+      usedBlocks: Math.floor(usedBytes / BSIZE),
+      totalInodes: totalInodes,
+      usedInodes: usedInodes,
+      freeInodes: totalInodes - usedInodes,
+      storeSize: this._s.size(),
+      nameMax: 255
     };
   };
 

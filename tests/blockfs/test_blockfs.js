@@ -977,6 +977,116 @@ test('delete 100MB file, verify space reclaimed', function () {
 });
 
 // ---------------------------------------------------------------
+// stat/fstat metadata exposure (uid, gid, nlink)
+// ---------------------------------------------------------------
+
+var O_CREAT = 0x40, O_TRUNC = 0x200, O_RDWR = 0x2, O_WRONLY = 1;
+var S_IFMT = 0o170000, S_IFREG = 0o100000, S_IFDIR = 0o040000;
+
+test('stat exposes uid/gid/nlink', function () {
+  var r = makeFS();
+  var fd = r.fs.open('/meta.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  assert(fd >= 3, 'open');
+  r.fs.close(fd);
+
+  var st = r.fs.stat('/meta.txt');
+  assert(st, 'stat should succeed');
+  assertEq(st.uid, 0, 'uid');
+  assertEq(st.gid, 0, 'gid');
+  assertEq(st.nlink, 1, 'nlink');
+  assertEq(st.mode & S_IFMT, S_IFREG, 'is regular file');
+  assertEq(st.mode & 0o777, 0o644, 'mode bits');
+});
+
+test('fstat exposes uid/gid/nlink', function () {
+  var r = makeFS();
+  var fd = r.fs.open('/f.txt', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+  assert(fd >= 3, 'open');
+  var st = r.fs.fstat(fd);
+  assertEq(st.uid, 0, 'uid');
+  assertEq(st.gid, 0, 'gid');
+  assertEq(st.nlink, 1, 'nlink');
+  // open() ignores its mode arg and creates 0o644 (DEFAULT_FILE_MODE).
+  assertEq(st.mode & 0o777, 0o644, 'create mode bits');
+  // fchmod must flow through to a subsequent fstat on the same fd.
+  assertEq(r.fs.fchmod(fd, 0o600), 0, 'fchmod');
+  assertEq(r.fs.fstat(fd).mode & 0o777, 0o600, 'mode after fchmod');
+  r.fs.close(fd);
+});
+
+test('chmod updates mode but preserves uid/gid/nlink', function () {
+  var r = makeFS();
+  var fd = r.fs.open('/c.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+  assertEq(r.fs.chmod('/c.txt', 0o600), 0, 'chmod');
+  var st = r.fs.stat('/c.txt');
+  assertEq(st.mode & 0o777, 0o600, 'mode after chmod');
+  assertEq(st.uid, 0, 'uid preserved');
+  assertEq(st.gid, 0, 'gid preserved');
+  assertEq(st.nlink, 1, 'nlink preserved');
+});
+
+test('directory stat exposes metadata', function () {
+  var r = makeFS();
+  assertEq(r.fs.mkdir('/d', 0o755), 0, 'mkdir');
+  var st = r.fs.stat('/d');
+  assertEq(st.mode & S_IFMT, S_IFDIR, 'is directory');
+  assert(st.nlink >= 1, 'nlink >= 1');
+  assertEq(st.uid, 0, 'uid');
+  assertEq(st.gid, 0, 'gid');
+});
+
+// ---------------------------------------------------------------
+// statfs() — the basis for `df`
+// ---------------------------------------------------------------
+
+test('statfs reports coherent capacity', function () {
+  var r = makeFS();
+  var sf = r.fs.statfs();
+  assert(sf.totalBytes > 0, 'totalBytes > 0');
+  assert(sf.freeBytes > 0, 'freeBytes > 0');
+  assert(sf.freeBytes <= sf.totalBytes, 'free <= total');
+  assertEq(sf.usedBytes, sf.totalBytes - sf.freeBytes, 'used = total - free');
+  assertEq(sf.blockSize, 4096, 'blockSize');
+  assertEq(sf.totalBlocks, Math.floor(sf.totalBytes / 4096), 'totalBlocks');
+  assertEq(sf.freeBlocks, Math.floor(sf.freeBytes / 4096), 'freeBlocks');
+  assertEq(sf.nameMax, 255, 'nameMax');
+  assert(sf.storeSize >= sf.totalBytes, 'storeSize >= totalBytes');
+  assert(sf.totalInodes >= 1, 'totalInodes >= 1');
+});
+
+test('statfs free space tracks writes and deletes', function () {
+  var r = makeFS();
+  var free0 = r.fs.statfs().freeBytes;
+
+  var fd = r.fs.open('/big.bin', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  var chunk = new Uint8Array(100 * 1024); // 100 KB
+  var nw = r.fs.write(fd, chunk, chunk.length);
+  assertEq(nw, chunk.length, 'write 100KB');
+  r.fs.close(fd);
+
+  var sf1 = r.fs.statfs();
+  assert(sf1.freeBytes < free0, 'free decreased after write: ' + sf1.freeBytes + ' !< ' + free0);
+  assert(sf1.usedBytes > 0, 'used > 0');
+
+  assertEq(r.fs.unlink('/big.bin'), 0, 'unlink');
+  var sf2 = r.fs.statfs();
+  assert(sf2.freeBytes > sf1.freeBytes, 'free increased after delete');
+});
+
+test('statfs inode counts track files', function () {
+  var r = makeFS();
+  var used0 = r.fs.statfs().usedInodes;
+  for (var i = 0; i < 3; i++) {
+    var fd = r.fs.open('/file' + i, O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+    r.fs.close(fd);
+  }
+  var sf = r.fs.statfs();
+  assertEq(sf.usedInodes, used0 + 3, 'usedInodes += 3');
+  assertEq(sf.freeInodes, sf.totalInodes - sf.usedInodes, 'freeInodes = total - used');
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- BlockFS Tests ---');
 console.log('Passed: ' + passed);
