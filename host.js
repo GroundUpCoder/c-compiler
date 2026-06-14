@@ -2024,33 +2024,37 @@ var BLOCK_FS = (function () {
   function InodeTable(alloc) {
     this._alloc = alloc;
     this._store = alloc._s; // direct store access for efficiency
-    this._extent = 0;
-    this._capacity = 0;
+    // No cached extent/capacity: the superblock (SB_INODE_TBL_EXTENT/CAP) is the
+    // single source of truth, read THROUGH the store on every access. This keeps
+    // multiple live BlockFS instances over one store coherent (e.g. a concurrent
+    // headless runner + the workspace owner) — a stale cache would otherwise read
+    // inodes at the wrong offset after the table grows/relocates.
   }
 
   InodeTable.prototype.init = function (initialCapacity) {
     initialCapacity = initialCapacity || INITIAL_INODE_CAPACITY;
     var byteSize = initialCapacity * INODE_SIZE;
-    this._extent = this._alloc.malloc(byteSize);
-    if (!this._extent) throw new Error('InodeTable: initial alloc failed');
-    this._capacity = initialCapacity;
+    var extent = this._alloc.malloc(byteSize);
+    if (!extent) throw new Error('InodeTable: initial alloc failed');
+    this._store.setUint32(SB_INODE_TBL_EXTENT, extent);
+    this._store.setUint32(SB_INODE_TBL_CAP, initialCapacity);
     // Zero the table
     var zeroes = new Uint8Array(byteSize);
-    this._store.setBytes(this._extent, zeroes);
-    return this._extent;
+    this._store.setBytes(extent, zeroes);
+    return extent;
   };
 
   InodeTable.prototype.load = function (extent, capacity) {
-    this._extent = extent;
-    this._capacity = capacity;
+    // No-op: the superblock is the source of truth (read-through). Retained for
+    // the mount call site.
   };
 
-  InodeTable.prototype.capacity = function () { return this._capacity; };
-  InodeTable.prototype.extent = function () { return this._extent; };
+  InodeTable.prototype.capacity = function () { return this._store.getUint32(SB_INODE_TBL_CAP); };
+  InodeTable.prototype.extent = function () { return this._store.getUint32(SB_INODE_TBL_EXTENT); };
 
   InodeTable.prototype.read = function (inoId) {
-    if (inoId >= this._capacity) return null;
-    var off = this._extent + inoId * INODE_SIZE;
+    if (inoId >= this.capacity()) return null;
+    var off = this.extent() + inoId * INODE_SIZE;
     // Read fields individually
     return {
       extentOffset: this._store.getUint32(off + INO_EXTENT_OFFSET),
@@ -2066,8 +2070,8 @@ var BLOCK_FS = (function () {
   };
 
   InodeTable.prototype.write = function (inoId, ino) {
-    if (inoId >= this._capacity) return false;
-    var off = this._extent + inoId * INODE_SIZE;
+    if (inoId >= this.capacity()) return false;
+    var off = this.extent() + inoId * INODE_SIZE;
     this._store.setUint32(off + INO_EXTENT_OFFSET, ino.extentOffset);
     this._store.setUint32(off + INO_EXTENT_CAP, ino.extentCapacity);
     this._store.setUint32(off + INO_DATA_SIZE, ino.dataSize);
@@ -2081,21 +2085,22 @@ var BLOCK_FS = (function () {
   };
 
   InodeTable.prototype.grow = function (newCapacity) {
+    var oldExtent = this.extent();
+    var oldCapacity = this.capacity();
     var byteSize = newCapacity * INODE_SIZE;
     var newExtent = this._alloc.malloc(byteSize);
     if (!newExtent) return false;
     // Copy old table
-    var oldBytes = this._store.getBytes(this._extent,
-      this._capacity * INODE_SIZE);
+    var oldBytes = this._store.getBytes(oldExtent, oldCapacity * INODE_SIZE);
     this._store.setBytes(newExtent, oldBytes);
     // Zero new portion
-    var zeroes = new Uint8Array(
-      (newCapacity - this._capacity) * INODE_SIZE);
-    this._store.setBytes(newExtent + this._capacity * INODE_SIZE, zeroes);
+    var zeroes = new Uint8Array((newCapacity - oldCapacity) * INODE_SIZE);
+    this._store.setBytes(newExtent + oldCapacity * INODE_SIZE, zeroes);
     // Free old extent
-    this._alloc.free(this._extent);
-    this._extent = newExtent;
-    this._capacity = newCapacity;
+    this._alloc.free(oldExtent);
+    // Persist new location/size to the superblock (the source of truth).
+    this._store.setUint32(SB_INODE_TBL_EXTENT, newExtent);
+    this._store.setUint32(SB_INODE_TBL_CAP, newCapacity);
     return true;
   };
 
@@ -2245,7 +2250,9 @@ var BLOCK_FS = (function () {
     this._alloc = alloc;       // TLSFAllocator
     this._inodes = inodeTable; // InodeTable
     this._rootIno = rootIno;   // root inode ID (always 1)
-    this._nextInode = sbFormat ? 2 : null; // next free inode ID
+    // next free inode ID lives in the superblock (SB_NEXT_INODE_ID), read
+    // THROUGH the store so concurrent live instances don't both hand out the
+    // same id. _createRootDir() seeds it to 2 on a fresh format.
     this._sbFormat = sbFormat; // true if freshly formatted
 
     this._lastError = '';
@@ -2300,7 +2307,7 @@ var BLOCK_FS = (function () {
     this._s.setUint32(SB_TLSF_POOL_SIZE, poolEnd - TLSF_POOL_OFFSET);
     this._s.setUint32(SB_INODE_TBL_EXTENT, this._inodes.extent());
     this._s.setUint32(SB_INODE_TBL_CAP, this._inodes.capacity());
-    this._s.setUint32(SB_NEXT_INODE_ID, this._nextInode);
+    // SB_NEXT_INODE_ID is owned/persisted live by _createRootDir/_allocInode.
     this._s.setUint32(SB_ROOT_INODE, this._rootIno);
   };
 
@@ -2321,24 +2328,21 @@ var BLOCK_FS = (function () {
     rootIno.dataSize = 0;
 
     this._inodes.write(1, rootIno);
-    this._nextInode = 2;
+    this._s.setUint32(SB_NEXT_INODE_ID, 2);
   };
 
   // Allocate a new inode with initial state.
   BlockFS.prototype._allocInode = function (mode) {
-    var inoId = this._nextInode;
+    var inoId = this._s.getUint32(SB_NEXT_INODE_ID);
     if (inoId >= this._inodes.capacity()) {
-      // Grow inode table
+      // Grow inode table (grow() persists the new extent/cap to the superblock)
       if (!this._inodes.grow(this._inodes.capacity() * 2)) {
         return this._setErr('ENOSPC');
       }
-      // Inode table moved — update superblock pointer
-      this._s.setUint32(SB_INODE_TBL_EXTENT, this._inodes.extent());
-      this._s.setUint32(SB_INODE_TBL_CAP, this._inodes.capacity());
     }
-    this._nextInode++;
-    // Persist nextInodeId to superblock so reloads don't reuse inodes
-    this._s.setUint32(SB_NEXT_INODE_ID, this._nextInode);
+    // Persist nextInodeId to the superblock (read-through) so reloads and other
+    // live instances never reuse an inode id.
+    this._s.setUint32(SB_NEXT_INODE_ID, inoId + 1);
     var now = this._now();
     var ino = {
       extentOffset: 0, extentCapacity: 0, dataSize: 0,
@@ -2914,7 +2918,8 @@ var BLOCK_FS = (function () {
     // Inodes: capacity is the table size; count the live (mode != 0) entries.
     var totalInodes = this._inodes.capacity();
     var usedInodes = 0;
-    for (var i = 1; i < this._nextInode; i++) {
+    var nextInodeId = this._s.getUint32(SB_NEXT_INODE_ID);
+    for (var i = 1; i < nextInodeId; i++) {
       var ino = this._inodes.read(i);
       if (ino && ino.mode !== 0) usedInodes++;
     }
@@ -3269,7 +3274,8 @@ var BLOCK_FS = (function () {
 
     // Count inodes
     var inodeCount = 0;
-    for (var i = 1; i < this._nextInode; i++) {
+    var nextInodeId = this._s.getUint32(SB_NEXT_INODE_ID);
+    for (var i = 1; i < nextInodeId; i++) {
       var ino = this._inodes.read(i);
       if (ino && ino.mode !== 0) inodeCount++;
     }
@@ -3333,7 +3339,7 @@ var BLOCK_FS = (function () {
       poolSize: poolEnd - poolStart,
       storeSize: this._s.size(),
       inodeTableCapacity: this._inodes.capacity(),
-      nextInode: this._nextInode,
+      nextInode: this._s.getUint32(SB_NEXT_INODE_ID),
       inodeCount: inodeCount,
       fdTableSize: this._fdTable.length,
       cwd: this._cwd,
@@ -3663,7 +3669,7 @@ var BLOCK_FS = (function () {
       };
       inodeTable.load(sb.inodeTblExtent, sb.inodeTblCap);
       var fs = new BlockFS(store, alloc, inodeTable, sb.rootInode, false);
-      fs._nextInode = sb.nextInodeId;
+      // _nextInode is read THROUGH the superblock (SB_NEXT_INODE_ID); nothing to cache.
       return fs;
     }
   };
