@@ -2626,7 +2626,9 @@ var BLOCK_FS = (function () {
     this._s.setBytes(ino.extentOffset + writePos, buf.subarray(0, count));
 
     if (newEnd > ino.dataSize) ino.dataSize = newEnd;
-    ino.mtime = this._now();
+    var wnow = this._now();
+    ino.mtime = wnow;
+    ino.ctime = wnow; // a write changes the inode (size/mtime) → ctime too
     this._inodes.write(entry.inoId, ino);
 
     entry.position = newEnd;
@@ -2744,7 +2746,16 @@ var BLOCK_FS = (function () {
     pw.ino.nlink--;
     this._inodes.write(pw.inoId, pw.ino);
 
-    this._freeInode(w.inoId);
+    // Drop one reference to the file; only reclaim the inode (and its data
+    // extent) when the last hard link is gone. Previously the inode was freed
+    // unconditionally, which dangled any remaining hard links.
+    w.ino.nlink--;
+    if (w.ino.nlink <= 0) {
+      this._freeInode(w.inoId);
+    } else {
+      w.ino.ctime = this._now(); // link-count change updates ctime
+      this._inodes.write(w.inoId, w.ino);
+    }
     return 0;
   };
 
@@ -3134,9 +3145,12 @@ var BLOCK_FS = (function () {
       pw.ino.dataSize || 0, oldW.inoId, fileName);
     pw.ino.dataSize = (pw.ino.dataSize || 0) + entSize;
     pw.ino.mtime = this._now();
+    pw.ino.nlink++; // new dir entry — keep the parent's entry count consistent
+                    // with open()/mkdir() (and balanced by unlink()).
     this._inodes.write(pw.inoId, pw.ino);
 
     oldW.ino.nlink++;
+    oldW.ino.ctime = this._now(); // link-count change updates ctime
     this._inodes.write(oldW.inoId, oldW.ino);
     return 0;
   };

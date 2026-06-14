@@ -1175,6 +1175,90 @@ test('zeroed legacy bytes read as atime/btime 0 (old-image compat)', function ()
 });
 
 // ---------------------------------------------------------------
+// Hard links (regression: unlink must respect the file's link count)
+// ---------------------------------------------------------------
+
+test('hard link shares inode and survives unlink of the original', function () {
+  var r = makeFS();
+  var fd = r.fs.open('/orig', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.write(fd, encode('hello'), 5);
+  r.fs.close(fd);
+
+  assertEq(r.fs.link('/orig', '/hard'), 0, 'link');
+  var so = r.fs.stat('/orig'), sh = r.fs.stat('/hard');
+  assertEq(so.ino, sh.ino, 'same inode');
+  assertEq(so.nlink, 2, 'nlink == 2 after link (orig)');
+  assertEq(sh.nlink, 2, 'nlink == 2 after link (hard)');
+
+  // Remove the original — the hard link must remain fully usable.
+  assertEq(r.fs.unlink('/orig'), 0, 'unlink orig');
+  assertEq(r.fs.stat('/orig'), null, 'orig gone');
+  var sh2 = r.fs.stat('/hard');
+  assert(sh2, 'hard still exists');
+  assertEq(sh2.nlink, 1, 'nlink back to 1 after one unlink');
+
+  var rfd = r.fs.open('/hard', 0, 0);
+  var buf = new Uint8Array(5);
+  assertEq(r.fs.read(rfd, buf, 5), 5, 'read hard');
+  r.fs.close(rfd);
+  assertEq(decode(buf), 'hello', 'content intact via hard link');
+
+  assertEq(r.fs.unlink('/hard'), 0, 'unlink hard (last link)');
+  assertEq(r.fs.stat('/hard'), null, 'hard gone');
+});
+
+test('single-link file: unlink frees the inode and reclaims space', function () {
+  var r = makeFS();
+  var fd = r.fs.open('/solo', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  var chunk = new Uint8Array(50 * 1024);
+  r.fs.write(fd, chunk, chunk.length);
+  r.fs.close(fd);
+  var free0 = r.fs.statfs().freeBytes;
+  assertEq(r.fs.stat('/solo').nlink, 1, 'nlink 1');
+  assertEq(r.fs.unlink('/solo'), 0, 'unlink');
+  assertEq(r.fs.stat('/solo'), null, 'gone');
+  assert(r.fs.statfs().freeBytes > free0, 'space reclaimed');
+});
+
+test('link/unlink update ctime (link count change)', function () {
+  var r = makeFS();
+  var t = 1000;
+  r.fs._now = function () { return t; };
+  var fd = r.fs.open('/lc', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+  assertEq(r.fs.stat('/lc').ctime, 1000, 'ctime at creation');
+
+  t = 2000;
+  assertEq(r.fs.link('/lc', '/lc2'), 0, 'link');
+  assertEq(r.fs.stat('/lc').ctime, 2000, 'ctime bumped by link');
+
+  t = 3000;
+  assertEq(r.fs.unlink('/lc2'), 0, 'unlink one link');
+  assertEq(r.fs.stat('/lc').ctime, 3000, 'ctime bumped by unlink of a link');
+});
+
+// ---------------------------------------------------------------
+// write() updates ctime as well as mtime
+// ---------------------------------------------------------------
+
+test('write bumps both mtime and ctime, not btime', function () {
+  var r = makeFS();
+  var t = 1000;
+  r.fs._now = function () { return t; };
+  var fd = r.fs.open('/wc.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+
+  t = 2000;
+  fd = r.fs.open('/wc.txt', O_WRONLY, 0o644);
+  r.fs.write(fd, encode('data'), 4);
+  r.fs.close(fd);
+  var st = r.fs.stat('/wc.txt');
+  assertEq(st.mtime, 2000, 'mtime advanced');
+  assertEq(st.ctime, 2000, 'ctime advanced (write changes the inode)');
+  assertEq(st.btime, 1000, 'btime unchanged');
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- BlockFS Tests ---');
 console.log('Passed: ' + passed);
