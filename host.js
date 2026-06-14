@@ -1425,11 +1425,16 @@ function createBrowserFileSystem({ ctx }) {
 //   [ 8:12] data_size       uint32   logical file size
 //   [12:14] mode            uint16   S_IFREG|0644 or S_IFDIR|0755
 //   [14:16] nlink           uint16   directory-entry refcount
-//   [16:20] mtime           uint32   epoch seconds
-//   [20:24] ctime           uint32   epoch seconds
-//   [24:26] uid             uint16
-//   [26:28] gid             uint16
-//   [28:32] reserved        uint32   (alignment padding)
+//   [16:20] mtime           uint32   epoch seconds (data last modified)
+//   [20:24] ctime           uint32   epoch seconds (inode last changed)
+//   [24:28] btime           uint32   epoch seconds (creation; 0 = unknown)
+//   [28:32] atime           uint32   epoch seconds (access, relatime; 0 = unknown)
+//
+// btime+atime occupy what were the uid/gid (24:28) and reserved (28:32) bytes.
+// BlockFS is single-user (root only, uid/gid always 0), so ownership is fixed
+// at 0 and those 8 bytes carry timestamps instead — no inode growth, no format
+// migration. Pre-existing images have these bytes zeroed, so old files read as
+// atime/btime = 0 ("unknown"), which is the correct sentinel.
 //
 // Directory entry format (variable-length, stored in dir extent):
 //   [ 0: 4] inode_id        uint32
@@ -1475,7 +1480,9 @@ var BLOCK_FS = (function () {
   var INO_EXTENT_OFFSET = 0, INO_EXTENT_CAP = 4, INO_DATA_SIZE = 8;
   var INO_MODE = 12, INO_NLINK = 14;
   var INO_MTIME = 16, INO_CTIME = 20;
-  var INO_UID = 24, INO_GID = 26;
+  // btime/atime reuse the former uid/gid (24) + reserved (28) bytes — see the
+  // inode-format note above. Single-user, so uid/gid are not stored at all.
+  var INO_BTIME = 24, INO_ATIME = 28;
 
   // ---- TLSF constants (matching compiler.js WASM malloc) ----
   var FREE_BIT = 1, PREV_FREE_BIT = 2, FLAG_BITS = 3;
@@ -2053,8 +2060,8 @@ var BLOCK_FS = (function () {
       nlink: this._store.getUint32(off + INO_MODE) >>> 16,
       mtime: this._store.getUint32(off + INO_MTIME),
       ctime: this._store.getUint32(off + INO_CTIME),
-      uid: this._store.getUint32(off + INO_UID) & 0xFFFF,
-      gid: this._store.getUint32(off + INO_UID) >>> 16
+      btime: this._store.getUint32(off + INO_BTIME),
+      atime: this._store.getUint32(off + INO_ATIME)
     };
   };
 
@@ -2068,8 +2075,8 @@ var BLOCK_FS = (function () {
       (ino.mode & 0xFFFF) | ((ino.nlink & 0xFFFF) << 16));
     this._store.setUint32(off + INO_MTIME, ino.mtime);
     this._store.setUint32(off + INO_CTIME, ino.ctime);
-    this._store.setUint32(off + INO_UID,
-      (ino.uid & 0xFFFF) | ((ino.gid & 0xFFFF) << 16));
+    this._store.setUint32(off + INO_BTIME, ino.btime || 0);
+    this._store.setUint32(off + INO_ATIME, ino.atime || 0);
     return true;
   };
 
@@ -2299,11 +2306,12 @@ var BLOCK_FS = (function () {
 
   BlockFS.prototype._createRootDir = function () {
     // Root inode (inode 1)
+    var rootNow = this._now();
     var rootIno = {
       extentOffset: 0, extentCapacity: 0, dataSize: 0,
       mode: DEFAULT_DIR_MODE, nlink: 1,
-      mtime: this._now(), ctime: this._now(),
-      uid: 0, gid: 0
+      mtime: rootNow, ctime: rootNow,
+      btime: rootNow, atime: rootNow
     };
     // Allocate a small initial extent for the root directory
     var rootExtent = this._alloc.malloc(256);
@@ -2336,7 +2344,7 @@ var BLOCK_FS = (function () {
       extentOffset: 0, extentCapacity: 0, dataSize: 0,
       mode: mode, nlink: 0,
       mtime: now, ctime: now,
-      uid: 0, gid: 0
+      btime: now, atime: now
     };
     this._inodes.write(inoId, ino);
     return inoId;
@@ -2350,7 +2358,7 @@ var BLOCK_FS = (function () {
     // Zero the inode slot
     this._inodes.write(inoId, {
       extentOffset: 0, extentCapacity: 0, dataSize: 0,
-      mode: 0, nlink: 0, mtime: 0, ctime: 0, uid: 0, gid: 0
+      mode: 0, nlink: 0, mtime: 0, ctime: 0, btime: 0, atime: 0
     });
   };
 
@@ -2573,6 +2581,17 @@ var BLOCK_FS = (function () {
     var data = this._s.getBytes(ino.extentOffset + entry.position, n);
     for (var j = 0; j < n; j++) buf[j] = data[j];
     entry.position += n;
+
+    // relatime: bump atime only when it predates the last data/metadata change
+    // (and only if a whole second has actually elapsed, to avoid same-second
+    // write thrash on the single OPFS handle). Mirrors Linux's default mount.
+    if (ino.atime <= ino.mtime || ino.atime <= ino.ctime) {
+      var t = this._now();
+      if (t > ino.atime) {
+        ino.atime = t;
+        this._inodes.write(entry.inoId, ino);
+      }
+    }
     return n;
   };
 
@@ -2832,7 +2851,8 @@ var BLOCK_FS = (function () {
     return {
       ino: w.inoId, mode: w.ino.mode, size: w.ino.dataSize,
       mtime: w.ino.mtime, ctime: w.ino.ctime,
-      nlink: w.ino.nlink, uid: w.ino.uid, gid: w.ino.gid
+      atime: w.ino.atime, btime: w.ino.btime,
+      nlink: w.ino.nlink, uid: 0, gid: 0
     };
   };
 
@@ -2847,14 +2867,15 @@ var BLOCK_FS = (function () {
     if (entry.inoId === undefined) {
       // stdin/stdout/stderr — return S_IFCHR
       return { ino: 0, mode: 0o020600, size: 0, mtime: 0, ctime: 0,
-               nlink: 1, uid: 0, gid: 0 };
+               atime: 0, btime: 0, nlink: 1, uid: 0, gid: 0 };
     }
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
     return {
       ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
       mtime: ino.mtime, ctime: ino.ctime,
-      nlink: ino.nlink, uid: ino.uid, gid: ino.gid
+      atime: ino.atime, btime: ino.btime,
+      nlink: ino.nlink, uid: 0, gid: 0
     };
   };
 

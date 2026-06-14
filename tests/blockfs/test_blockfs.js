@@ -1087,6 +1087,94 @@ test('statfs inode counts track files', function () {
 });
 
 // ---------------------------------------------------------------
+// atime / btime (stored in the reclaimed uid/gid + reserved bytes)
+// ---------------------------------------------------------------
+
+test('new file stamps btime/atime/mtime/ctime at creation', function () {
+  var r = makeFS();
+  r.fs._now = function () { return 1000; };
+  var fd = r.fs.open('/n.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+  var st = r.fs.stat('/n.txt');
+  assertEq(st.btime, 1000, 'btime');
+  assertEq(st.atime, 1000, 'atime');
+  assertEq(st.mtime, 1000, 'mtime');
+  assertEq(st.ctime, 1000, 'ctime');
+  assertEq(st.uid, 0, 'uid constant 0');
+  assertEq(st.gid, 0, 'gid constant 0');
+});
+
+test('btime is frozen across writes while mtime advances', function () {
+  var r = makeFS();
+  var t = 1000;
+  r.fs._now = function () { return t; };
+  var fd = r.fs.open('/b.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+  assertEq(r.fs.stat('/b.txt').btime, 1000, 'btime at creation');
+
+  t = 2000;
+  fd = r.fs.open('/b.txt', O_WRONLY, 0o644);
+  r.fs.write(fd, encode('hello'), 5);
+  r.fs.close(fd);
+  var st = r.fs.stat('/b.txt');
+  assertEq(st.btime, 1000, 'btime unchanged after write');
+  assertEq(st.mtime, 2000, 'mtime advanced after write');
+});
+
+test('atime bumps on read then stays put (relatime)', function () {
+  var r = makeFS();
+  var t = 1000;
+  r.fs._now = function () { return t; };
+  var fd = r.fs.open('/a.txt', O_CREAT | O_TRUNC | O_RDWR, 0o644);
+  r.fs.write(fd, encode('data'), 4);
+  r.fs.close(fd);
+
+  // First read after the write: atime (1000) <= mtime (1000), so it bumps.
+  t = 1500;
+  fd = r.fs.open('/a.txt', 0, 0); // O_RDONLY
+  var buf = new Uint8Array(4);
+  assertEq(r.fs.read(fd, buf, 4), 4, 'read');
+  r.fs.close(fd);
+  assertEq(r.fs.stat('/a.txt').atime, 1500, 'atime bumped to read time');
+
+  // Second read later: atime (1500) now exceeds mtime/ctime → no rewrite.
+  t = 2000;
+  fd = r.fs.open('/a.txt', 0, 0); // O_RDONLY
+  r.fs.read(fd, buf, 4);
+  r.fs.close(fd);
+  assertEq(r.fs.stat('/a.txt').atime, 1500, 'atime not bumped again (relatime)');
+});
+
+test('chmod bumps ctime, not btime or mtime', function () {
+  var r = makeFS();
+  var t = 1000;
+  r.fs._now = function () { return t; };
+  var fd = r.fs.open('/c2.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+  t = 3000;
+  assertEq(r.fs.chmod('/c2.txt', 0o600), 0, 'chmod');
+  var st = r.fs.stat('/c2.txt');
+  assertEq(st.btime, 1000, 'btime unchanged by chmod');
+  assertEq(st.mtime, 1000, 'mtime unchanged by chmod');
+  assertEq(st.ctime, 3000, 'ctime bumped by chmod');
+});
+
+test('zeroed legacy bytes read as atime/btime 0 (old-image compat)', function () {
+  var r = makeFS();
+  var fd = r.fs.open('/legacy', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  r.fs.close(fd);
+  // Pre-atime/btime images had these bytes as uid/gid/reserved == 0.
+  var inoId = r.fs.stat('/legacy').ino;
+  var ino = r.fs._inodes.read(inoId);
+  ino.btime = 0; ino.atime = 0;
+  r.fs._inodes.write(inoId, ino);
+  var st = r.fs.stat('/legacy');
+  assertEq(st.btime, 0, 'btime 0 = unknown');
+  assertEq(st.atime, 0, 'atime 0 = unknown');
+  assertEq(st.mode & S_IFMT, S_IFREG, 'rest of inode intact');
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- BlockFS Tests ---');
 console.log('Passed: ' + passed);
