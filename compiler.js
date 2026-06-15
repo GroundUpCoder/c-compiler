@@ -17313,7 +17313,11 @@ struct timeval {
   long tv_usec;
 };
 __import int __gettimeofday(long *sec, long *usec);
-__import int access(const char *path, int mode);  /* for utimes() existence check; also in <unistd.h> */
+/* Host primitives that actually set a file's access/modification times
+   (whole seconds). Faithful on the Node and BlockFS backends; the OPFS
+   backend has no timestamp API and treats them as existence-checked no-ops. */
+__import int __utime(const char *path, long atime, long mtime);
+__import int __futime(int fd, long atime, long mtime);
 static inline int gettimeofday(struct timeval *tv, void *tz) {
   (void)tz;
   if (tv) {
@@ -17321,15 +17325,22 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
   }
   return 0;
 }
+/* utimes()/futimes(): set access+modification times. A NULL \`times\` means
+   "now". POSIX timeval is microsecond-resolution, but this environment's
+   filesystems store whole-second times, so the sub-second part is truncated
+   (POSIX permits coarser filesystem granularity). Errors (e.g. ENOENT for a
+   missing path) come back through errno from the host. */
 static inline int utimes(const char *path, const struct timeval times[2]) {
-  (void)times;
-  /* There is no host API to set mtime, so this can't actually update times.
-     But POSIX requires utimes() to fail with ENOENT for a missing path, and
-     callers rely on that to probe existence (e.g. libgit2's odb "freshen"
-     treats touch-success as "object already present" and skips the write).
-     So report existence faithfully: succeed (no-op) only if the file exists. */
-  if (access(path, 0 /* F_OK */) != 0) return -1;  /* errno set by access() */
-  return 0;
+  long a, m;
+  if (times == 0) { struct timeval now; gettimeofday(&now, 0); a = m = now.tv_sec; }
+  else { a = times[0].tv_sec; m = times[1].tv_sec; }
+  return __utime(path, a, m);
+}
+static inline int futimes(int fd, const struct timeval times[2]) {
+  long a, m;
+  if (times == 0) { struct timeval now; gettimeofday(&now, 0); a = m = now.tv_sec; }
+  else { a = times[0].tv_sec; m = times[1].tv_sec; }
+  return __futime(fd, a, m);
 }
 #include <sys/select.h>  // glibc-style: fd_set / FD_* live here under _GNU_SOURCE
   `,
@@ -18505,6 +18516,61 @@ __import int mkdir(const char *path, int mode);
 __import int stat(const char *path, struct stat *buf);
 __import int lstat(const char *path, struct stat *buf);
 __import int fstat(int fd, struct stat *buf);
+
+#include <sys/time.h>   /* __utime / __futime / gettimeofday */
+
+#define UTIME_NOW  ((1l << 30) - 1l)
+#define UTIME_OMIT ((1l << 30) - 2l)
+
+/* utimensat()/futimens(): POSIX 2008 nanosecond-resolution time setting.
+   tv_nsec may be UTIME_NOW (use current time) or UTIME_OMIT (leave that one
+   unchanged). We honor both — UTIME_OMIT reads the current value via stat()/
+   fstat() and writes it back. Sub-second precision is truncated to whole
+   seconds (the filesystems here are second-granularity). dirfd is treated as
+   AT_FDCWD; AT_SYMLINK_NOFOLLOW is moot (no symlinks). */
+static inline int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags) {
+  long a, m;
+  struct timeval now; gettimeofday(&now, 0);
+  (void)dirfd; (void)flags;
+  if (times == 0) { a = m = now.tv_sec; }
+  else {
+    a = (times[0].tv_nsec == UTIME_NOW) ? now.tv_sec : times[0].tv_sec;
+    m = (times[1].tv_nsec == UTIME_NOW) ? now.tv_sec : times[1].tv_sec;
+    if (times[0].tv_nsec == UTIME_OMIT || times[1].tv_nsec == UTIME_OMIT) {
+      struct stat st;
+      if (stat(path, &st) != 0) return -1;
+      if (times[0].tv_nsec == UTIME_OMIT) a = st.st_atime;
+      if (times[1].tv_nsec == UTIME_OMIT) m = st.st_mtime;
+    }
+  }
+  return __utime(path, a, m);
+}
+static inline int futimens(int fd, const struct timespec times[2]) {
+  long a, m;
+  struct timeval now; gettimeofday(&now, 0);
+  if (times == 0) { a = m = now.tv_sec; }
+  else {
+    a = (times[0].tv_nsec == UTIME_NOW) ? now.tv_sec : times[0].tv_sec;
+    m = (times[1].tv_nsec == UTIME_NOW) ? now.tv_sec : times[1].tv_sec;
+    if (times[0].tv_nsec == UTIME_OMIT || times[1].tv_nsec == UTIME_OMIT) {
+      struct stat st;
+      if (fstat(fd, &st) != 0) return -1;
+      if (times[0].tv_nsec == UTIME_OMIT) a = st.st_atime;
+      if (times[1].tv_nsec == UTIME_OMIT) m = st.st_mtime;
+    }
+  }
+  return __futime(fd, a, m);
+}
+  `,
+  "utime.h": `
+#pragma once
+#include <sys/time.h>   /* __utime + gettimeofday */
+struct utimbuf { long actime; long modtime; };
+/* Legacy POSIX utime(). A NULL times argument means "now". */
+static inline int utime(const char *path, const struct utimbuf *times) {
+  if (times == 0) { struct timeval now; gettimeofday(&now, 0); return __utime(path, now.tv_sec, now.tv_sec); }
+  return __utime(path, times->actime, times->modtime);
+}
   `,
   "sys/types.h": `
 #pragma once
@@ -18668,7 +18734,6 @@ __import int fdatasync(int fd);
 __import int chmod(const char *path, int mode);
 __import int fchmod(int fd, int mode);
 __import int link(const char *oldpath, const char *newpath);
-__import int utime(const char *path, long atime, long mtime);
 __import unsigned int sleep(unsigned int seconds);
 __import int symlink(const char *target, const char *linkpath);
 __import int chmod(const char *path, int mode);

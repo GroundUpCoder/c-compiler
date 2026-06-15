@@ -151,7 +151,11 @@ function createFileSystem({ fs, ctx }) {
   }
 
   /* Helper to write struct stat fields into WASM memory at buf_ptr.
-     Layout: st_dev(4) st_ino(4) st_mode(4) st_nlink(4) st_size(4) st_atime(4) st_mtime(4) st_ctime(4) */
+     Must match the libc `struct stat` layout (compiler.js, <sys/stat.h>):
+     st_dev(0) st_ino(4) st_mode(8) st_nlink(12) st_size(16) st_rdev(20)
+     st_atime(24) st_mtime(28) st_ctime(32). The st_rdev slot is easy to
+     forget — omitting it shifts every time field by one and makes st_mtime
+     read back the ctime. */
   function writeStatBuf(buf_ptr, st) {
     const memory = getMemory();
     const view = new DataView(memory.buffer);
@@ -165,9 +169,10 @@ function createFileSystem({ fs, ctx }) {
     view.setUint32(buf_ptr + 8, mode, true);                           /* st_mode */
     view.setUint32(buf_ptr + 12, st.nlink || 1, true);                 /* st_nlink */
     view.setUint32(buf_ptr + 16, st.size || 0, true);                  /* st_size */
-    view.setInt32(buf_ptr + 20, Math.floor((st.atimeMs || 0) / 1000), true);  /* st_atime */
-    view.setInt32(buf_ptr + 24, Math.floor((st.mtimeMs || 0) / 1000), true);  /* st_mtime */
-    view.setInt32(buf_ptr + 28, Math.floor((st.ctimeMs || 0) / 1000), true);  /* st_ctime */
+    view.setUint32(buf_ptr + 20, 0, true);                             /* st_rdev */
+    view.setInt32(buf_ptr + 24, Math.floor((st.atimeMs || 0) / 1000), true);  /* st_atime */
+    view.setInt32(buf_ptr + 28, Math.floor((st.mtimeMs || 0) / 1000), true);  /* st_mtime */
+    view.setInt32(buf_ptr + 32, Math.floor((st.ctimeMs || 0) / 1000), true);  /* st_ctime */
   }
 
   const result = {
@@ -332,6 +337,11 @@ function createFileSystem({ fs, ctx }) {
       },
       chmod: function (path_ptr, mode) {
         try { fs.chmodSync(readString(path_ptr), mode); return 0; }
+        catch (e) { setErrno(e); return -1; }
+      },
+      fchmod: function (fd, mode) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        try { fs.fchmodSync(fdTable[fd].nativeFd, mode); return 0; }
         catch (e) { setErrno(e); return -1; }
       },
       realpath: function (path_ptr, resolved_ptr) {
@@ -513,6 +523,28 @@ function createFileSystem({ fs, ctx }) {
         const path = readString(path_ptr);
         try {
           fs.accessSync(path, mode);
+          return 0;
+        } catch (e) {
+          setErrno(e);
+          return -1;
+        }
+      },
+      /* set atime/mtime (seconds) by path; backs utimes()/utime()/utimensat() */
+      __utime: function (path_ptr, atime, mtime) {
+        const path = readString(path_ptr);
+        try {
+          fs.utimesSync(path, atime, mtime);
+          return 0;
+        } catch (e) {
+          setErrno(e);
+          return -1;
+        }
+      },
+      /* set atime/mtime (seconds) by fd; backs futimes()/futimens() */
+      __futime: function (fd, atime, mtime) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        try {
+          fs.futimesSync(fdTable[fd].nativeFd, atime, mtime);
           return 0;
         } catch (e) {
           setErrno(e);
@@ -868,14 +900,18 @@ function createBrowserFileSystem({ ctx }) {
     const memory = getMemory();
     const view = new DataView(memory.buffer);
     const now = Math.floor(Date.now() / 1000);
+    /* Layout must match the libc `struct stat` (see <sys/stat.h>): the
+       st_rdev slot at offset 20 sits before the time fields. OPFS does not
+       persist timestamps, so the times are reported as "now". */
     view.setUint32(buf_ptr + 0, 0, true);                          /* st_dev */
     view.setUint32(buf_ptr + 4, 0, true);                          /* st_ino */
     view.setUint32(buf_ptr + 8, isDir ? 0o040755 : 0o100644, true); /* st_mode */
     view.setUint32(buf_ptr + 12, 1, true);                         /* st_nlink */
     view.setUint32(buf_ptr + 16, size, true);                      /* st_size */
-    view.setInt32(buf_ptr + 20, now, true);                        /* st_atime */
-    view.setInt32(buf_ptr + 24, now, true);                        /* st_mtime */
-    view.setInt32(buf_ptr + 28, now, true);                        /* st_ctime */
+    view.setUint32(buf_ptr + 20, 0, true);                         /* st_rdev */
+    view.setInt32(buf_ptr + 24, now, true);                        /* st_atime */
+    view.setInt32(buf_ptr + 28, now, true);                        /* st_mtime */
+    view.setInt32(buf_ptr + 32, now, true);                        /* st_ctime */
   }
 
   function wrapAsync(fn) {
@@ -1204,6 +1240,18 @@ function createBrowserFileSystem({ ctx }) {
       if (!h) { setErrnoName('ENOENT'); return -1; }
       return 0;
     }),
+
+    /* OPFS exposes no API to set (or store) file timestamps, and its stat
+       reports the current time. So these can only honor the existence/error
+       contract: succeed as a no-op for a path/fd that exists, fail otherwise.
+       The times themselves are not persisted on this backend. */
+    __utime: wrapAsync(async function (path_ptr, atime, mtime) {
+      const path = readString(path_ptr);
+      const h = await getHandle(path);
+      if (!h) { setErrnoName('ENOENT'); return -1; }
+      return 0;
+    }),
+    __futime: function (fd, atime, mtime) { return 0; },
 
     rmdir: wrapAsync(async function (path_ptr) {
       const path = readString(path_ptr);
@@ -3114,13 +3162,30 @@ var BLOCK_FS = (function () {
     return 0;
   };
 
-  // utime(path, [atime, mtime]) — set file timestamps.
+  // utime(path, atime, mtime) — set access/modification times (seconds).
+  // Setting times is a metadata change, so ctime is bumped to now.
   BlockFS.prototype.utime = function (path, atime, mtime) {
     var w = this._walkPath(this._resolvePath(path));
     if (!w) return this._setErr('ENOENT');
+    w.ino.atime = atime !== undefined ? atime : this._now();
     w.ino.mtime = mtime !== undefined ? mtime : this._now();
-    w.ino.ctime = atime !== undefined ? atime : this._now();
+    w.ino.ctime = this._now();
     this._inodes.write(w.inoId, w.ino);
+    return 0;
+  };
+
+  // futime(fd, atime, mtime) — like utime() but on an open fd.
+  BlockFS.prototype.futime = function (fd, atime, mtime) {
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
+      return this._setErr('EBADF');
+    var entry = this._fdTable[fd];
+    if (entry.inoId === undefined) return this._setErr('EINVAL'); /* std stream */
+    var ino = this._inodes.read(entry.inoId);
+    if (!ino) return this._setErr('EBADF');
+    ino.atime = atime !== undefined ? atime : this._now();
+    ino.mtime = mtime !== undefined ? mtime : this._now();
+    ino.ctime = this._now();
+    this._inodes.write(entry.inoId, ino);
     return 0;
   };
 
@@ -3247,14 +3312,18 @@ var BLOCK_FS = (function () {
   // Write a stat buffer into WASM memory (matches struct stat layout).
   function writeStatBuf(memory, bufPtr, st) {
     var view = new DataView(memory.buffer);
-    view.setUint32(bufPtr + 0, 0, true);   // st_dev
-    view.setUint32(bufPtr + 4, st.ino, true);  // st_ino
-    view.setUint32(bufPtr + 8, st.mode, true); // st_mode
-    view.setUint32(bufPtr + 12, 1, true);      // st_nlink
-    view.setUint32(bufPtr + 16, st.size, true); // st_size
-    view.setInt32(bufPtr + 20, st.mtime, true); // st_atime
-    view.setInt32(bufPtr + 24, st.mtime, true); // st_mtime
-    view.setInt32(bufPtr + 28, st.mtime, true); // st_ctime
+    /* Layout must match the libc `struct stat` (see <sys/stat.h>): st_rdev
+       occupies offset 20, so the time fields start at 24. Report the real
+       per-inode atime/mtime/ctime and link count that BlockFS tracks. */
+    view.setUint32(bufPtr + 0, 0, true);              // st_dev
+    view.setUint32(bufPtr + 4, st.ino, true);         // st_ino
+    view.setUint32(bufPtr + 8, st.mode, true);        // st_mode
+    view.setUint32(bufPtr + 12, st.nlink || 1, true); // st_nlink
+    view.setUint32(bufPtr + 16, st.size, true);       // st_size
+    view.setUint32(bufPtr + 20, 0, true);             // st_rdev
+    view.setInt32(bufPtr + 24, st.atime, true);       // st_atime
+    view.setInt32(bufPtr + 28, st.mtime, true);       // st_mtime
+    view.setInt32(bufPtr + 32, st.ctime, true);       // st_ctime
   }
 
   // Adapt a BlockFS instance to the WASM `env` import object.
@@ -3551,8 +3620,11 @@ var BLOCK_FS = (function () {
         return this.chmod(readString(path_ptr), mode);
       }),
       fchmod: wrap(function (fd, mode) { return this.fchmod(fd, mode); }),
-      utime: wrap(function (path_ptr, atime, mtime) {
+      __utime: wrap(function (path_ptr, atime, mtime) {
         return this.utime(readString(path_ptr), atime, mtime);
+      }),
+      __futime: wrap(function (fd, atime, mtime) {
+        return this.futime(fd, atime, mtime);
       }),
       link: wrap(function (old_ptr, new_ptr) {
         return this.link(readString(old_ptr), readString(new_ptr));

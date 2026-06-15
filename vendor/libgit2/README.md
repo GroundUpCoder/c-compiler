@@ -29,12 +29,16 @@ Two things were needed to get here beyond the incomplete-type fix below:
   stack underflows the moment one is entered (every file write goes through
   `lock_file`). The `-Wlarge-stack-frame` warnings for those functions are
   expected and harmless with the larger stack.
-- **A `utimes()` libc fix** (in `compiler.js`). The bundled libc's `utimes()`
-  was a no-op returning 0 even for a missing path; libgit2's ODB "freshen" uses
-  `utimes`/`touch` to decide whether an object already exists, so it concluded
-  every object was present and **silently skipped every write** (create returned
-  the right OID but nothing hit disk). `utimes()` now reports existence via
-  `access()` (still a no-op for the actual mtime — no host API for that).
+- **A `utimes()` libc fix** (in `compiler.js` + `host.js`). The bundled libc's
+  `utimes()` was a no-op returning 0 even for a missing path; libgit2's ODB
+  "freshen" uses `utimes`/`touch` to decide whether an object already exists, so
+  it concluded every object was present and **silently skipped every write**
+  (create returned the right OID but nothing hit disk). `utimes()` (and
+  `futimes`/`utime`/`utimensat`/`futimens`) now actually set the file's
+  atime/mtime through a host primitive wired into all three FS backends, and
+  honor POSIX errors (ENOENT for a missing path). A companion fix corrected the
+  host `struct stat` layout (a missing `st_rdev` slot had shifted `st_mtime`),
+  so the times read back correctly.
 
 ### The bug (fixed) — incomplete-type struct member
 
