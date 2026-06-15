@@ -17313,6 +17313,7 @@ struct timeval {
   long tv_usec;
 };
 __import int __gettimeofday(long *sec, long *usec);
+__import int access(const char *path, int mode);  /* for utimes() existence check; also in <unistd.h> */
 static inline int gettimeofday(struct timeval *tv, void *tz) {
   (void)tz;
   if (tv) {
@@ -17321,8 +17322,14 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
   return 0;
 }
 static inline int utimes(const char *path, const struct timeval times[2]) {
-  (void)path; (void)times;
-  return 0;  /* no-op: succeed silently (no underlying mtime API) */
+  (void)times;
+  /* There is no host API to set mtime, so this can't actually update times.
+     But POSIX requires utimes() to fail with ENOENT for a missing path, and
+     callers rely on that to probe existence (e.g. libgit2's odb "freshen"
+     treats touch-success as "object already present" and skips the write).
+     So report existence faithfully: succeed (no-op) only if the file exists. */
+  if (access(path, 0 /* F_OK */) != 0) return -1;  /* errno set by access() */
+  return 0;
 }
 #include <sys/select.h>  // glibc-style: fd_set / FD_* live here under _GNU_SOURCE
   `,
