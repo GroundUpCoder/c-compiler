@@ -3456,6 +3456,47 @@ var BLOCK_FS = (function () {
     this._stdinEOF = true;
   };
 
+  // -----------------------------------------------------------------------
+  // Synchronous sleep primitive for the no-JSPI block-FS path.
+  //
+  // Atomics.wait() parks the calling agent on a SharedArrayBuffer cell until
+  // it is notified or a timeout elapses. We point it at a cell that is always
+  // 0 and is never notified, so it can ONLY wake by timing out — a precise,
+  // blocking, JSPI-free sleep. This is what lets usleep/nanosleep and
+  // select-with-timeout actually suspend on Safari/iOS, where
+  // WebAssembly.Suspending (used by the full-OPFS/Node backends) is absent.
+  //
+  // Constraints: Atomics.wait needs a SharedArrayBuffer (→ cross-origin
+  // isolation in the browser) and may only block off a Window's main thread
+  // (it throws there). Block-FS always runs in a worker, so this holds in
+  // practice; Node permits it on the main thread too. When the primitive is
+  // unavailable we fall back to ENOSYS — never a busy-wait.
+  var _sleepCell = null;
+  var _canBlock = (function () {
+    if (typeof SharedArrayBuffer === 'undefined' ||
+        typeof Atomics === 'undefined' || typeof Atomics.wait !== 'function') {
+      return false;
+    }
+    try {
+      _sleepCell = new Int32Array(new SharedArrayBuffer(4));
+      // Probe: expected (1) !== actual (0) ⇒ returns 'not-equal' immediately
+      // without blocking; on a thread that cannot block this throws instead.
+      Atomics.wait(_sleepCell, 0, 1, 0);
+      return true;
+    } catch (e) {
+      _sleepCell = null;
+      return false;
+    }
+  })();
+
+  // Block the calling thread for `ms` milliseconds. `ms` may be fractional but
+  // is honoured at millisecond granularity (matching the JSPI setTimeout path).
+  // No-op when blocking is unavailable or the duration is non-positive.
+  function blockingSleepMs(ms) {
+    if (!_canBlock || !(ms > 0)) return;
+    Atomics.wait(_sleepCell, 0, 0, ms); // cell stays 0 → can only time out
+  }
+
   BlockFS.prototype.toWasmEnv = function (ctx) {
     var readString = ctx.readString;
     var setErrnoName = ctx.setErrnoName;
@@ -3614,11 +3655,86 @@ var BLOCK_FS = (function () {
         // no-op in block FS context — terminal handled by the page
         return 0;
       },
-      usleep: function (usec) { setErrnoName('ENOSYS'); return -1; },
-      __nanosleep: function (sec, nsec) { setErrnoName('ENOSYS'); return -1; },
+      sleep: function (seconds) {
+        // Returns seconds left unslept (0 here — never interrupted). When
+        // blocking is unavailable nothing is slept, so report the full amount.
+        if (!_canBlock) return seconds;
+        blockingSleepMs(seconds * 1000);
+        return 0;
+      },
+      usleep: function (usec) {
+        if (!_canBlock) { setErrnoName('ENOSYS'); return -1; }
+        blockingSleepMs(usec / 1000);
+        return 0;
+      },
+      __nanosleep: function (sec, nsec) {
+        if (!_canBlock) { setErrnoName('ENOSYS'); return -1; }
+        blockingSleepMs(sec * 1000 + nsec / 1e6);
+        return 0;
+      },
+      // select(): synchronous readiness scan + Atomics-backed timeout. Block-FS
+      // is fully synchronous, so a read never blocks (regular files and stdin
+      // return data or EOF immediately; pipes return buffered data or EOF) and
+      // a write is always accepted. The only thing worth waiting on is the
+      // timeout, which reuses the sleep primitive above.
       __select_impl: function (nfds, readfds_ptr, writefds_ptr,
                                 exceptfds_ptr, timeout_sec, timeout_usec,
                                 has_timeout) {
+        var mem = new DataView(getMemory().buffer);
+        var FDS_WORDS = 2; // up to 64 fds, matching the other select backends
+        function readBits(ptr) {
+          if (!ptr) return null;
+          var bits = [];
+          for (var i = 0; i < FDS_WORDS; i++) bits.push(mem.getInt32(ptr + i * 4, true));
+          return bits;
+        }
+        function writeBits(ptr, bits) {
+          if (!ptr || !bits) return;
+          for (var i = 0; i < FDS_WORDS; i++) mem.setInt32(ptr + i * 4, bits[i], true);
+        }
+        function isBitSet(bits, fd) { return bits && (bits[fd >> 5] & (1 << (fd & 31))) !== 0; }
+        function scan() {
+          var rIn = readBits(readfds_ptr), wIn = readBits(writefds_ptr), eIn = readBits(exceptfds_ptr);
+          var rOut = rIn ? [0, 0] : null, wOut = wIn ? [0, 0] : null, eOut = eIn ? [0, 0] : null;
+          var count = 0;
+          var tbl = self._fdTable;
+          for (var fd = 0; fd < nfds && fd < 64; fd++) {
+            var entry = (fd >= 0 && fd < tbl.length) ? tbl[fd] : null;
+            if (!entry) continue;
+            if (rIn && isBitSet(rIn, fd)) {
+              var rready = (entry.type === 'pipe')
+                ? (entry.pipe.buffer.length > 0 || entry.pipe.closed.write)
+                : true; // stdin (sync buffer/EOF) and regular files never block
+              if (rready) { rOut[fd >> 5] |= (1 << (fd & 31)); count++; }
+            }
+            if (wIn && isBitSet(wIn, fd)) {
+              var wready = (entry.type === 'pipe') ? !entry.pipe.closed.read : true;
+              if (wready) { wOut[fd >> 5] |= (1 << (fd & 31)); count++; }
+            }
+            // exceptfds: block-FS surfaces no exceptional conditions → never set.
+          }
+          return { count: count, rOut: rOut, wOut: wOut, eOut: eOut };
+        }
+        function commit(r) {
+          writeBits(readfds_ptr, r.rOut);
+          writeBits(writefds_ptr, r.wOut);
+          writeBits(exceptfds_ptr, r.eOut);
+          return r.count;
+        }
+        var r = scan();
+        if (r.count > 0) return commit(r);
+        if (has_timeout) {
+          // Nothing ready; wait out the timeout, then re-scan. State can't
+          // change in this synchronous model, but re-scanning keeps the
+          // zero-timeout poll and the general path identical.
+          blockingSleepMs(timeout_sec * 1000 + timeout_usec / 1000);
+          return commit(scan());
+        }
+        // No fds ready and no timeout: POSIX says block until one is. Nothing
+        // can change state synchronously, so this is an unsatisfiable wait —
+        // park indefinitely to honour the contract, or fail if we can't block
+        // (never busy-spin).
+        if (_canBlock) { for (;;) Atomics.wait(_sleepCell, 0, 0); }
         setErrnoName('ENOSYS'); return -1;
       },
       __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {

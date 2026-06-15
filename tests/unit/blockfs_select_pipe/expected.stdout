@@ -1,0 +1,4 @@
+empty_pipe: 0
+full_pipe: 1
+pipe_set: 1
+read: test

@@ -118,7 +118,7 @@ Adding this to any test's `config.json` makes `tests/run-unit.js` pass
 `blockFsFactory` instead of `fs` to `runModule`.  The WASM binary is
 identical regardless of backend — only the import providers differ.
 
-## Exported WASM imports (32 total)
+## Exported WASM imports (33 total)
 
 File I/O: `__open_impl`, `close`, `read`, `write`, `lseek`, `ftruncate`
 Directory: `mkdir`, `rmdir`, `unlink`, `remove`, `rename`, `__opendir`,
@@ -127,24 +127,46 @@ Metadata: `stat`, `lstat`, `fstat`, `access`, `chmod`, `fchmod`, `utime`
 Process: `getcwd`, `chdir`, `pipe`, `dup`, `dup2`, `isatty`, `fcntl` (F_DUPFD)
 Links: `link`, `symlink`, `readlink`
 Terminal: `__tcgetattr`, `__tcsetattr`, `__ioctl_tiocgwinsz` (fake 80×24)
-Stubs: `usleep` (ENOSYS), `__nanosleep` (ENOSYS), `__select_impl` (ENOSYS),
-  `fsync` (no-op)
+Timing & select: `sleep`, `usleep`, `__nanosleep`, and `__select_impl`'s
+  timeout block the worker via `Atomics.wait` (see "Synchronous blocking"
+  below); they degrade to ENOSYS only when `SharedArrayBuffer` /
+  off-main-thread blocking is unavailable.
+Stubs: `fsync` (no-op)
 
 ## JSPI independence
 
 Every BlockFS method is synchronous after `BLOCK_FS.init()` (the one async
-call).  JSPI-dependent syscalls (`usleep`, `__nanosleep`, `__select_impl` on
-stdin, `__ioctl_tiocgwinsz`) return ENOSYS or fake data — identical to the
-browser FS fallback path when JSPI is unavailable.  These syscalls are
-independent of filesystem backend choice.
+call).  `__ioctl_tiocgwinsz` still returns a fake 80×24, but the timing
+syscalls no longer need JSPI — see below.
+
+## Synchronous blocking (`sleep` / `select`)
+
+`sleep`, `usleep`, `__nanosleep`, and `select`'s timeout suspend the calling
+thread with `Atomics.wait` on a private `SharedArrayBuffer` cell that is never
+notified, so the wait can only end by timing out — a precise, JSPI-free sleep.
+This is the same primitive Emscripten uses for `nanosleep` / futexes in its
+pthreads (worker) builds.
+
+`select` layers a synchronous readiness scan on top: regular files and stdin
+are always readable (block-FS reads never block — they return data or EOF), a
+write is always accepted, and a pipe is readable iff its buffer is non-empty or
+its write end is closed.  Only the timeout actually waits, reusing the sleep
+primitive.
+
+`Atomics.wait` requires a `SharedArrayBuffer` (cross-origin isolation in the
+browser) and may only block off a Window's main thread — both hold because
+block-FS always runs in a worker (Node permits it on the main thread too).
+When the primitive is genuinely unavailable, the timing syscalls fall back to
+ENOSYS rather than busy-waiting.  (`sleep` was also previously *missing* from
+the env — a latent `LinkError` for any program calling it; it is now provided.)
 
 ## Block FS vs createBrowserFileSystem (full OPFS)
 
 | | Browser FS (multi-file OPFS) | Block FS (single-file) |
 |---|---|---|
 | Works on Safari / iOS | No (needs JSPI) | **Yes** |
-| `sleep()` / `usleep()` | Works (JSPI) | ENOSYS |
-| `select()` on stdin | Works (JSPI) | ENOSYS |
+| `sleep()` / `usleep()` / `nanosleep()` | Works (JSPI) | **Works** (`Atomics.wait`) |
+| `select()` timeout + fd readiness | Works (JSPI) | **Works** (`Atomics.wait` + sync scan) |
 | Real terminal size | Works (JSPI) | Fake 80×24 |
 | `rename()` | Copy + delete (O(n) data copy) | **O(1)** — moves dirent pointer |
 | Hard links / symlinks | **Impossible** (no OPFS link API) | **Supported** |
@@ -187,9 +209,17 @@ independent of filesystem backend choice.
 | `blockfs_empty_dir` | readdir on empty dir (only . and ..), rmdir succeeds |
 | `blockfs_rename_overwrite` | rename A over B, verify content replaced + old gone |
 | `blockfs_rmdir_nonempty` | rmdir non-empty → ENOTEMPTY, cleanup, rmdir succeeds |
+| `blockfs_sleep` | `sleep(1)` suspends ≥ 900 ms (routes through nanosleep) |
+| `blockfs_usleep` | `usleep(50ms)` suspends 40–500 ms, returns 0 |
+| `blockfs_nanosleep` | `nanosleep(50ms)` suspends 40–500 ms, returns 0 |
+| `blockfs_usleep_zero` | 20×`usleep(0)` stays under 100 ms (no millisecond clamp) |
+| `blockfs_select_timeout` | `select` with empty sets honours a 50 ms timeout |
+| `blockfs_select_pipe` | empty pipe times out; buffered pipe is readable immediately |
+| `blockfs_select_file` | a regular file is both read- and write-ready |
+| `blockfs_select_stdin_eof` | stdin with no input is readable (EOF), read → 0 |
 
-**Totals**: 89 dedicated tests + 575 existing unit test regression suite
-= 664 passing tests.  All run via `python3 tests/run.py --types=all`.
+**Totals**: 97 dedicated tests + 575 existing unit test regression suite
+= 672 passing tests.  All run via `python3 tests/run.py --types=all`.
 
 ### Test gaps — not yet covered
 
@@ -234,10 +264,12 @@ independent of filesystem backend choice.
 - [ ] **C-level unit tests for the 10 untested WASM imports** listed above.
   Each is ~10 lines of C + `{"blockFs": true}` in config.json.
 
-- [ ] **`select()` partial implementation**: the current stub returns ENOSYS
-  for everything.  Could check regular files (always ready), pipes (check
-  buffer), and only fail when stdin is in the fd set.  This would make
-  `select()` useful for programs that don't need keyboard input.
+- [x] **`select()` implemented**: synchronous readiness scan (regular files,
+  stdin, pipes) plus an `Atomics.wait` timeout; `sleep`/`usleep`/`nanosleep`
+  block the same way.  See "Synchronous blocking" above.  A future refinement
+  could wake `select` early on *live* stdin via a notified SAB cell, but
+  block-FS stdin is currently synchronous (pre-buffered), so it is always
+  reported ready.
 
 ### Medium-term
 
