@@ -1,0 +1,6 @@
+name=root
+uid=0 gid=0
+dir=/root shell=/bin/sh
+byname=root
+unknown_uid=(null)
+unknown_name=(null)

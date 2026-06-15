@@ -18748,6 +18748,43 @@ static inline long  sysconf(int name)       { (void)name; return -1; }
 static inline int   setuid(unsigned uid)    { (void)uid; return -1; }
 static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
 static inline int   kill(int pid, int sig)  { (void)pid; (void)sig; return -1; }
+/* Single root user: real and effective user/group IDs are all 0 (root).
+   These never fail (POSIX getuid/getgid have no error return). */
+static inline unsigned getuid(void)         { return 0; }
+static inline unsigned geteuid(void)        { return 0; }
+static inline unsigned getgid(void)         { return 0; }
+static inline unsigned getegid(void)        { return 0; }
+  `,
+  "pwd.h": `
+#pragma once
+#include <sys/types.h>
+#include <stddef.h>
+
+/* Single-root-user password database. getpwuid/getpwnam return a static
+   "root" entry (uid/gid 0, home /root, shell /bin/sh); anything else is NULL. */
+struct passwd {
+  char  *pw_name;
+  char  *pw_passwd;
+  uid_t  pw_uid;
+  gid_t  pw_gid;
+  char  *pw_gecos;
+  char  *pw_dir;
+  char  *pw_shell;
+};
+
+static inline struct passwd *getpwuid(uid_t uid) {
+  static struct passwd root = { "root", "x", 0, 0, "root", "/root", "/bin/sh" };
+  return uid == 0 ? &root : NULL;
+}
+
+static inline struct passwd *getpwnam(const char *name) {
+  static struct passwd root = { "root", "x", 0, 0, "root", "/root", "/bin/sh" };
+  if (!name) return NULL;
+  /* tiny strcmp(name, "root") — avoids a <string.h> dependency in this header */
+  const char *r = "root";
+  while (*name && *name == *r) { name++; r++; }
+  return (*name == 0 && *r == 0) ? &root : NULL;
+}
   `,
   "termios.h": `
 #pragma once
