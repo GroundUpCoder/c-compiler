@@ -9,6 +9,14 @@
 
 #include <stdbool.h>
 
+/* libgit2's file-I/O helpers (lock_file, write_file_stream, cp_by_fd, ...) put
+   a 64 KB GIT_BUFSIZE_FILEIO buffer on the stack. The default WASM shadow stack
+   is one 64 KB page, so entering any of them underflows the stack pointer and
+   traps. Force at least a 1 MB shadow stack for every libgit2 build. This TU is
+   compiled into all libgit2 executable targets, and the linker takes the max
+   __minstack across TUs, so anchoring it here covers the whole library. */
+__minstack(1048576);
+
 /* Forward-declare the structs we need for correct pointer types.
    These match the typedefs in git2.h — the c-compiler resolves
    `struct git_stream **` to the same type as `git_stream **`. */

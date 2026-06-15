@@ -12,13 +12,29 @@ submodule), matching the other vendored deps (lua/doom/zlib/sqlite).
 ## Status (2026-06-15)
 
 - **Builds:** ✅ `node compiler.js vendor/libgit2/bin.json -o /tmp/libgit2.wasm`
-  → exit 0, ~1.8 MB wasm. A handful of `-Wlarge-stack-frame` warnings remain
-  (functions with ≥64 KB frames — `write_file_stream`, `git_filter_list_stream_file`,
-  `id_from_fd`, `lock_file`, `cp_by_fd` — that would trap *if called*; not on the
-  smoke-test path, but they block full functionality later).
-- **Runs:** ✅ `node host.js /tmp/libgit2.wasm` (smoke test =
-  `git_index_open()`) prints `git_index_open -> 0` and exits cleanly. The
-  former `free: double free detected` crash is gone.
+  → exit 0, ~1.8 MB wasm.
+- **Runs:** ✅ the `git_index_open()` smoke test prints `git_index_open -> 0`.
+- **Real git workflows work:** ✅ `feature_probe.c` exercises a full
+  init → config → blob → tree → commit → revparse → revwalk → status flow.
+  Every step succeeds and the **resulting repo passes real `git fsck` / `git log`
+  / `git cat-file`** — libgit2-on-WASM produces byte-valid git repositories.
+  (`node compiler.js vendor/libgit2/feature_probe.json -o /tmp/probe.wasm &&
+  node host.js /tmp/probe.wasm`.)
+
+Two things were needed to get here beyond the incomplete-type fix below:
+
+- **1 MB shadow stack** (`__minstack(1048576)` in `missing_stubs.c`). libgit2's
+  file-I/O helpers (`lock_file`, `write_file_stream`, `cp_by_fd`, …) put a 64 KB
+  `GIT_BUFSIZE_FILEIO` buffer on the stack; the default 1-page (64 KB) WASM
+  stack underflows the moment one is entered (every file write goes through
+  `lock_file`). The `-Wlarge-stack-frame` warnings for those functions are
+  expected and harmless with the larger stack.
+- **A `utimes()` libc fix** (in `compiler.js`). The bundled libc's `utimes()`
+  was a no-op returning 0 even for a missing path; libgit2's ODB "freshen" uses
+  `utimes`/`touch` to decide whether an object already exists, so it concluded
+  every object was present and **silently skipped every write** (create returned
+  the right OID but nothing hit disk). `utimes()` now reports existence via
+  `access()` (still a no-op for the actual mtime — no host API for that).
 
 ### The bug (fixed) — incomplete-type struct member
 
