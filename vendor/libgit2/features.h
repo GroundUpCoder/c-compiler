@@ -5,8 +5,15 @@
 /* No threading — use the single-threaded TLS fallback */
 #undef GIT_THREADS
 
-/* SHA1: use bundled collision-detecting SHA1 */
-#define GIT_SHA1_COLLISIONDETECT 1
+/* SHA1: use bundled collision-detecting SHA1 (the "builtin" backend).
+ * The code (hash/sha.h, libgit2.c) gates inclusion of the completing
+ * header collisiondetect.h on GIT_SHA1_BUILTIN — matching upstream
+ * cmake/SelectHashes.cmake, which sets GIT_SHA1_BUILTIN for USE_SHA1=builtin.
+ * Defining the unread GIT_SHA1_COLLISIONDETECT instead left
+ * git_hash_sha1_ctx forward-declared (incomplete) in every TU that includes
+ * hash.h but not collisiondetect.h, under-sizing git_hash_ctx (120 vs ~2408
+ * bytes) and corrupting the caller's stack during hashing. */
+#define GIT_SHA1_BUILTIN 1
 
 /* SHA256: use builtin */
 #define GIT_SHA256_BUILTIN 1

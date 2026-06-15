@@ -2,7 +2,8 @@
 
 libgit2 vendored as a compile-and-run target for the c-compiler. Its real
 purpose is to **stress the compiler** on a large, real-world C codebase — and it
-currently does its job: it surfaces a c-compiler **codegen bug** (see Status).
+did its job: it surfaced a real c-compiler **codegen bug**, now fixed (see
+Status / History).
 
 Upstream: **libgit2 @ `44c05e5`** (core only — the networking *transports* are
 stubbed, not used by the smoke test). Copied in as real files (no symlinks, no
@@ -11,31 +12,42 @@ submodule), matching the other vendored deps (lua/doom/zlib/sqlite).
 ## Status (2026-06-15)
 
 - **Builds:** ✅ `node compiler.js vendor/libgit2/bin.json -o /tmp/libgit2.wasm`
-  → exit 0, ~1.74 MB wasm. A handful of `-Wlarge-stack-frame` warnings remain
+  → exit 0, ~1.8 MB wasm. A handful of `-Wlarge-stack-frame` warnings remain
   (functions with ≥64 KB frames — `write_file_stream`, `git_filter_list_stream_file`,
   `id_from_fd`, `lock_file`, `cp_by_fd` — that would trap *if called*; not on the
   smoke-test path, but they block full functionality later).
-- **Runs:** ❌ **blocked on a c-compiler codegen bug.** `node host.js
-  /tmp/libgit2.wasm` (smoke test = `git_index_open()`) crashes with
-  `free: double free detected` → `unreachable`.
+- **Runs:** ✅ `node host.js /tmp/libgit2.wasm` (smoke test =
+  `git_index_open()`) prints `git_index_open -> 0` and exits cleanly. The
+  former `free: double free detected` crash is gone.
 
-### The bug (for whoever picks this up)
+### The bug (fixed) — incomplete-type struct member
 
-`parse_index()` is miscompiled: its stack-frame layout is wrong under the full
-libgit2 build context, so a stack-local `git_str buffer` gets its `.ptr` field
-clobbered from a valid heap pointer to garbage. After `parse_index()` returns,
-`git_str_dispose()` calls `free()` on that corrupted pointer; the allocator
-detects the bad address and traps. It is a **compiler bug, not a libgit2 bug**.
+The crash was a **compiler codegen bug, not a libgit2 bug**, with a libgit2
+**misconfiguration** as the trigger:
 
-Isolation attempts live in `repros/` (see below) but none is yet a minimal
-green/red reproducer — the crash so far only reproduces in the full build.
+1. **Compiler bug:** the compiler silently accepted a `struct`/`union` member of
+   *incomplete* type (a constraint violation — clang/gcc reject it with "field
+   has incomplete type"), sizing the member as 0 and so under-sizing the whole
+   aggregate. Fixed in `compiler.js`: such a member is now a compile error.
+   Regression test: `tests/unit/core/struct_incomplete_member/`.
+2. **libgit2 trigger:** `hash/sha.h` only `#include`s the completing header
+   `collisiondetect.h` under `#if defined(GIT_SHA1_BUILTIN)`, but the vendored
+   feature config defined the *unread* macro `GIT_SHA1_COLLISIONDETECT` instead.
+   So in every TU that included `hash.h` (but not `collisiondetect.h` directly),
+   `git_hash_sha1_ctx` stayed forward-declared — incomplete. `git_hash_ctx` (a
+   union over it) was then sized **120 bytes instead of ~2408**. At runtime
+   `git_hash_buf`'s stack-local `ctx` overflowed during SHA1 hashing, clobbering
+   the caller's `git_str buffer.ptr` (→ `0x5`); `git_str_dispose`→`free()` then
+   trapped. Fixed by defining `GIT_SHA1_BUILTIN` (the macro the code actually
+   checks; upstream `cmake/SelectHashes.cmake` sets it for the builtin/
+   collisiondetect backend) in `features.h`, `git2_features.h`, and `lib.json`.
 
 ## Build / run
 
 ```bash
 # from the c-compiler repo root
 node compiler.js vendor/libgit2/bin.json -o /tmp/libgit2.wasm   # build
-node host.js /tmp/libgit2.wasm                                  # run (crashes — see Status)
+node host.js /tmp/libgit2.wasm                                  # → git_index_open -> 0
 ```
 
 - `bin.json` — the smoke-test **executable** target (`test_main.c` + the libgit2
@@ -65,18 +77,17 @@ tree is self-contained and portable.
 ### Upstream source (copied from libgit2 @ 44c05e5)
 `include/`, `src/{util,libgit2}/`, `deps/{pcre2,xdiff,reftable,zlib,llhttp,ntlmclient}/`.
 
-### `repros/` — codegen-bug isolation attempts (not wired into the test runner)
-- `pool_corruption.c` — exercises the pool-allocator patterns `parse_index` uses,
-  in isolation. Intentionally does **not** reproduce the full crash (per its header).
-- `ptr_size_bug.c` — 32-bit (WASM) `sizeof(void*)`/`long` vs 64-bit struct-layout
-  assumptions in libgit2's pool allocator.
-- `stack_corruption.c` — a reduced `parse_index` shape (static fn, `goto done`,
-  macros) — the closest to the actual trigger.
-
-These were loose `.c` files in `tests/unit/core/`, which **breaks the test
-runner** (a directory can't have both `.c` files and subdirectories). They live
-here until the bug is minimized; once there's a clean reproducer, move it into
-its own `tests/unit/core/<name>/` with an `expected.stdout`.
+### `repros/` — historical isolation attempts (superseded; not wired into the runner)
+These were early guesses at the crash, written before the root cause was known.
+None of them reproduced it, because the actual bug had nothing to do with the
+pool allocator or `parse_index`'s shape — it was an incomplete-type struct
+member mis-sized by the compiler (see "The bug" above). The real regression test
+now lives in `tests/unit/core/struct_incomplete_member/`. Kept here only as a
+record of the hunt:
+- `pool_corruption.c` — exercised the pool-allocator patterns `parse_index` uses.
+  Does **not** reproduce the crash (correctly — wrong theory).
+- `ptr_size_bug.c` — 32-bit (WASM) vs 64-bit struct-layout assumptions. A red herring.
+- `stack_corruption.c` — a reduced `parse_index` shape. Also doesn't reproduce.
 
 ## What is deliberately NOT vendored (generated / build-system files)
 
@@ -104,14 +115,13 @@ Originally wired with absolute symlinks (`src`/`include`/`deps` →
 `/Users/jku/git/libgit2`) plus absolute include paths — a dev shortcut during the
 bug hunt that only built on one machine. De-symlinked to real files with
 relative paths in `b6b0205`; generated/build-system files pruned and the README
-added afterward.
+added afterward. The `git_index_open` crash was then root-caused to the
+incomplete-type-member compiler bug (and the `GIT_SHA1_BUILTIN` misconfig) and
+fixed — both build and smoke-test run now pass.
 
-## Next steps (for a dedicated thread)
+## Next steps
 
-1. **Minimize the `parse_index` codegen bug** into a standalone reproducer
-   (start from `repros/stack_corruption.c`); then inspect the compiler's
-   stack-frame layout / codegen for that function.
-2. Fix it, then chase the `-Wlarge-stack-frame` functions (move big locals to the
-   heap or `__minstack`).
-3. Once the smoke test runs clean, add a `libgit2` category to `tests/run.py`
-   (like `lua`/`sqlite`) and promote a `repros/` file to a real unit test.
+1. Chase the remaining `-Wlarge-stack-frame` functions (move big locals to the
+   heap or use `__minstack`) before exercising paths that call them.
+2. Add a `libgit2` category to `tests/run.py` (like `lua`/`sqlite`) so the
+   `git_index_open` smoke test runs in CI, then broaden coverage beyond it.

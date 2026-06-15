@@ -9173,6 +9173,22 @@ class Parser {
           }
           Types.validateNoHeapInValueType(mType, msg => this.error(this.peek(), msg));
 
+          // A struct/union member must have complete type (C11 6.7.2.1p3); the
+          // only exception (the trailing flexible array member) is an
+          // incomplete *array* and is validated separately below. Reject a
+          // member whose type — possibly nested in arrays — is an incomplete
+          // struct/union. Silently accepting it sizes the member as 0, which
+          // under-allocates the aggregate; a TU that later sees the full
+          // definition then writes past the storage and corrupts memory.
+          {
+            let elem = mType.removeQualifiers();
+            while (elem.isArray()) elem = elem.baseType.removeQualifiers();
+            if (elem.isAggregate() && !elem.isArray() && !elem.isComplete) {
+              this.error(this.peek(),
+                `field '${mName || ""}' has incomplete type '${elem.toString()}'`);
+            }
+          }
+
           // Parse __attribute__ after member declarator
           const memAttrs = this.parseGCCAttributes();
           if (memAttrs.aligned > 0 && memSpecs.requestedAlignment < memAttrs.aligned) {

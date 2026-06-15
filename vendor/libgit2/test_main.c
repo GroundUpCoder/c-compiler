@@ -1,13 +1,13 @@
-/* Reproduction: git_index_open crashes due to stack corruption in parse_index.
+/* Smoke test: git_index_open() on a minimal index file.
 
-   The c-compiler miscompiles parse_index() in a way that corrupts the
-   caller's stack-local git_str buffer.ptr field. After parse_index
-   returns, git_str_dispose passes the corrupted pointer to free(),
-   which detects an out-of-bounds address.
-
-   The bug is in the compiler's stack frame layout for parse_index
-   when embedded in the full libgit2 build context. It corrupts
-   buffer.ptr from a valid heap pointer to a garbage value (0x5). */
+   This used to crash with "free: double free detected": SHA1 hashing
+   overflowed an under-sized git_hash_ctx and corrupted the caller's
+   git_str buffer.ptr, which git_str_dispose then free()'d. Root cause was a
+   compiler bug (a struct/union member of incomplete type was silently sized
+   as 0) plus a libgit2 misconfig (GIT_SHA1_COLLISIONDETECT defined instead of
+   the GIT_SHA1_BUILTIN the code checks, leaving git_hash_sha1_ctx incomplete
+   in hash.c). Both are fixed; this now prints "git_index_open -> 0" and the
+   "done" line below. See README.md. */
 
 #include <stdio.h>
 #include <git2.h>
@@ -21,6 +21,6 @@ int main(void) {
     if (e == 0) git_index_free(idx);
 
     git_libgit2_shutdown();
-    printf("done (should not reach here - crash expected above)\n");
+    printf("done\n");
     return 0;
 }

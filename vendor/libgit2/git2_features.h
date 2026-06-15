@@ -10,8 +10,11 @@
 /* No threading — use the single-threaded TLS fallback */
 #undef GIT_THREADS
 
-/* SHA1: use bundled collision-detecting SHA1 */
-#define GIT_SHA1_COLLISIONDETECT 1
+/* SHA1: use bundled collision-detecting SHA1 (the "builtin" backend).
+ * Must be GIT_SHA1_BUILTIN — that is the macro hash/sha.h and libgit2.c
+ * actually check to pull in collisiondetect.h and complete
+ * git_hash_sha1_ctx. See features.h for the full rationale. */
+#define GIT_SHA1_BUILTIN 1
 
 /* SHA256: use builtin */
 #define GIT_SHA256_BUILTIN 1

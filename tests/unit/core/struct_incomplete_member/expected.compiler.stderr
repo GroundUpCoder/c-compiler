@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/core/struct_incomplete_member/struct_incomplete_member.c.
+tests/unit/core/struct_incomplete_member/struct_incomplete_member.c:18: error: field 'big' has incomplete type 'struct inner'

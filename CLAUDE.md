@@ -17,7 +17,7 @@ Planned work and design docs live in the `todos/` folder. Each file covers a dis
 - **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux)
-- **Libraries**: `zlib`, `libpng`, `freetype`
+- **Libraries**: `zlib`, `libpng`, `freetype`, `libgit2` (@44c05e5, core only; builds + `git_index_open` smoke test runs — used as a large-codebase stress test, see `vendor/libgit2/README.md`)
 - **Frontend infra (JS, not C)**: `xterm` (terminal widget), `codemirror` (editor widget)
 - **Project-specific tools**: `disw` (WASM disassembler), `hello` (minimal smoke test)
 
