@@ -168,11 +168,24 @@ function createFileSystem({ fs, ctx }) {
     mode |= (st.mode & 0o7777);
     view.setUint32(buf_ptr + 8, mode, true);                           /* st_mode */
     view.setUint32(buf_ptr + 12, st.nlink || 1, true);                 /* st_nlink */
-    view.setUint32(buf_ptr + 16, st.size || 0, true);                  /* st_size */
+    const size = st.size || 0;
+    const at = Math.floor((st.atimeMs || 0) / 1000);
+    const mt = Math.floor((st.mtimeMs || 0) / 1000);
+    const ct = Math.floor((st.ctimeMs || 0) / 1000);
+    view.setUint32(buf_ptr + 16, size, true);                          /* st_size */
     view.setUint32(buf_ptr + 20, 0, true);                             /* st_rdev */
-    view.setInt32(buf_ptr + 24, Math.floor((st.atimeMs || 0) / 1000), true);  /* st_atime */
-    view.setInt32(buf_ptr + 28, Math.floor((st.mtimeMs || 0) / 1000), true);  /* st_mtime */
-    view.setInt32(buf_ptr + 32, Math.floor((st.ctimeMs || 0) / 1000), true);  /* st_ctime */
+    view.setInt32(buf_ptr + 24, at, true);                             /* st_atime */
+    view.setInt32(buf_ptr + 28, mt, true);                             /* st_mtime */
+    view.setInt32(buf_ptr + 32, ct, true);                             /* st_ctime */
+    /* POSIX-2008 nanosecond timespecs mirror the scalar seconds; we are
+       second-granularity, so tv_nsec is 0. */
+    view.setInt32(buf_ptr + 36, at, true); view.setInt32(buf_ptr + 40, 0, true);  /* st_atim */
+    view.setInt32(buf_ptr + 44, mt, true); view.setInt32(buf_ptr + 48, 0, true);  /* st_mtim */
+    view.setInt32(buf_ptr + 52, ct, true); view.setInt32(buf_ptr + 56, 0, true);  /* st_ctim */
+    view.setUint32(buf_ptr + 60, 0, true);                             /* st_uid (single-user) */
+    view.setUint32(buf_ptr + 64, 0, true);                             /* st_gid */
+    view.setInt32(buf_ptr + 68, 4096, true);                           /* st_blksize */
+    view.setInt32(buf_ptr + 72, Math.ceil(size / 512), true);          /* st_blocks (512B units) */
   }
 
   const result = {
@@ -912,6 +925,13 @@ function createBrowserFileSystem({ ctx }) {
     view.setInt32(buf_ptr + 24, now, true);                        /* st_atime */
     view.setInt32(buf_ptr + 28, now, true);                        /* st_mtime */
     view.setInt32(buf_ptr + 32, now, true);                        /* st_ctime */
+    view.setInt32(buf_ptr + 36, now, true); view.setInt32(buf_ptr + 40, 0, true);  /* st_atim */
+    view.setInt32(buf_ptr + 44, now, true); view.setInt32(buf_ptr + 48, 0, true);  /* st_mtim */
+    view.setInt32(buf_ptr + 52, now, true); view.setInt32(buf_ptr + 56, 0, true);  /* st_ctim */
+    view.setUint32(buf_ptr + 60, 0, true);                         /* st_uid (single-user) */
+    view.setUint32(buf_ptr + 64, 0, true);                         /* st_gid */
+    view.setInt32(buf_ptr + 68, 4096, true);                       /* st_blksize */
+    view.setInt32(buf_ptr + 72, Math.ceil(size / 512), true);      /* st_blocks (512B units) */
   }
 
   function wrapAsync(fn) {
@@ -3324,6 +3344,13 @@ var BLOCK_FS = (function () {
     view.setInt32(bufPtr + 24, st.atime, true);       // st_atime
     view.setInt32(bufPtr + 28, st.mtime, true);       // st_mtime
     view.setInt32(bufPtr + 32, st.ctime, true);       // st_ctime
+    view.setInt32(bufPtr + 36, st.atime, true); view.setInt32(bufPtr + 40, 0, true);  // st_atim
+    view.setInt32(bufPtr + 44, st.mtime, true); view.setInt32(bufPtr + 48, 0, true);  // st_mtim
+    view.setInt32(bufPtr + 52, st.ctime, true); view.setInt32(bufPtr + 56, 0, true);  // st_ctim
+    view.setUint32(bufPtr + 60, 0, true);             // st_uid (single-user)
+    view.setUint32(bufPtr + 64, 0, true);             // st_gid
+    view.setInt32(bufPtr + 68, 4096, true);           // st_blksize
+    view.setInt32(bufPtr + 72, Math.ceil((st.size || 0) / 512), true); // st_blocks (512B units)
   }
 
   // Adapt a BlockFS instance to the WASM `env` import object.

@@ -18501,8 +18501,8 @@ struct stat {
   long          st_atime;
   long          st_mtime;
   long          st_ctime;
-  // POSIX 2008 nanosecond fields. We don't actually fill them, but
-  // their presence lets quickjs-libc.c's compile-time member checks pass.
+  // POSIX 2008 nanosecond fields. The host fills tv_sec to match the scalar
+  // st_*time above; tv_nsec is 0 (this environment is second-granularity).
   struct timespec { long tv_sec; long tv_nsec; } st_atim;
   struct timespec st_mtim;
   struct timespec st_ctim;

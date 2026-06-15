@@ -1,0 +1,8 @@
+size=1000
+mtime=1700000000
+mtim.tv_sec=1700000000
+mtim.tv_nsec=0
+atim.tv_sec=1000000000
+uid=0 gid=0
+blksize=4096
+blocks=2
