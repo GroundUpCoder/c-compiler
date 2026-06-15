@@ -17,8 +17,5 @@ int main() {
   someFunc(&f);
   printf("%s\n", "After someFunc:");
   printf("%d\n", f.x);  // 248
-
-  printf("%s\n", "Address of struct variable:");
-  printf("%d\n", &f);
   return 0;
 }
