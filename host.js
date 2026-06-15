@@ -2327,6 +2327,12 @@ var BLOCK_FS = (function () {
     this._cwd = '/';
     this._stdinBuffer = [];
     this._stdinEOF = false;
+    // Optional live-stdin SAB ring (main-thread producer → this worker
+    // consumer). Null unless wired by setStdinSab()/toWasmEnv(). See the
+    // "Live interactive stdin" block below for the layout.
+    this._stdinSab = null;
+    this._stdinCtrl = null;
+    this._stdinRing = null;
     this._fdTable = [
       { position: null }, // 0 = stdin
       { position: null }, // 1 = stdout
@@ -2633,12 +2639,17 @@ var BLOCK_FS = (function () {
       return n;
     }
     if (entry.position === null) {
-      // stdin — read from the host-supplied buffer
-      if (this._stdinBuffer.length === 0) return 0;
-      var n = Math.min(count, this._stdinBuffer.length);
-      for (var i = 0; i < n; i++) buf[i] = this._stdinBuffer[i];
-      this._stdinBuffer.splice(0, n);
-      return n;
+      // stdin — drain any pre-buffered bytes first (Node CLI setStdin path),
+      // then block on the live-stdin sab ring if one is wired (interactive
+      // page), else return 0 (EOF) as before.
+      if (this._stdinBuffer.length > 0) {
+        var n = Math.min(count, this._stdinBuffer.length);
+        for (var i = 0; i < n; i++) buf[i] = this._stdinBuffer[i];
+        this._stdinBuffer.splice(0, n);
+        return n;
+      }
+      if (this._stdinSab) return this._readStdinSab(buf, count);
+      return 0;
     }
     if (entry.inoId === undefined) return this._setErr('EBADF');
 
@@ -3457,6 +3468,75 @@ var BLOCK_FS = (function () {
   };
 
   // -----------------------------------------------------------------------
+  // Live interactive stdin (no-JSPI path) — SharedArrayBuffer ring.
+  //
+  // The INPUT mirror of the console OUTPUT sab (createSharedConsoleBuffer):
+  // the page (main thread) is the producer, this worker is the consumer.
+  // read(0)/select() park on the SEQ futex via Atomics.wait until the page
+  // pushes keystrokes (or signals EOF), then drain bytes synchronously — no
+  // JSPI, so it works on Safari/iOS. Without a sab wired (Node CLI, headless
+  // runs) stdin keeps its old pre-buffered/EOF behaviour.
+  //
+  // Layout: SharedArrayBuffer(32 + ringSize)
+  //   control = Int32Array(sab, 0, 8):
+  //     [0] SEQ      producer bumps on EVERY push or EOF — the wait cell
+  //     [1] AVAIL    bytes available to read
+  //     [2] WRITEPOS producer ring cursor (mod ringSize)
+  //     [3] READPOS  consumer ring cursor (mod ringSize)
+  //     [4] EOF      1 once the producer closes input (Ctrl-D / program end)
+  //     [5] COLS     terminal columns (producer-set; default 80)
+  //     [6] ROWS     terminal rows    (producer-set; default 24)
+  //     [7] TERMIOS  consumer-set bitfield: bit0=icanon bit1=echo bit2=opost
+  //   ring = Uint8Array(sab, 32, ringSize)
+  //
+  // The consumer snapshots SEQ before checking AVAIL/EOF and waits on SEQ —
+  // because EOF doesn't change AVAIL, a plain wait on AVAIL would miss an
+  // EOF-only wakeup (lost-wakeup). Any producer change bumps SEQ, so a wait
+  // that races the change returns 'not-equal' at once.
+  var SI_SEQ = 0, SI_AVAIL = 1, SI_WRITEPOS = 2, SI_READPOS = 3,
+      SI_EOF = 4, SI_COLS = 5, SI_ROWS = 6, SI_TERMIOS = 7;
+  var SI_HDR_BYTES = 32; // 8 * Int32
+
+  // Wire (or clear, with null) the live-stdin sab. Called from toWasmEnv via
+  // ctx.stdinSab; also a direct test seam.
+  BlockFS.prototype.setStdinSab = function (sab) {
+    if (!sab) { this._stdinSab = null; this._stdinCtrl = null; this._stdinRing = null; return; }
+    this._stdinSab = sab;
+    this._stdinCtrl = new Int32Array(sab, 0, 8);
+    this._stdinRing = new Uint8Array(sab, SI_HDR_BYTES, sab.byteLength - SI_HDR_BYTES);
+  };
+
+  // True when the live-stdin sab has bytes ready or has hit EOF (EOF makes a
+  // read return 0, which POSIX select reports as readable). Used by select().
+  BlockFS.prototype._stdinSabReady = function () {
+    var ctrl = this._stdinCtrl;
+    return Atomics.load(ctrl, SI_AVAIL) > 0 || Atomics.load(ctrl, SI_EOF) !== 0;
+  };
+
+  // Blocking stdin read from the sab ring. Returns bytes read (>0, possibly a
+  // partial read like a TTY) or 0 at EOF. Parks the worker on the SEQ futex
+  // until the producer pushes input. Never busy-spins: if off-main-thread
+  // blocking is unavailable it degrades to a non-blocking drain (then EOF).
+  BlockFS.prototype._readStdinSab = function (buf, count) {
+    var ctrl = this._stdinCtrl, ring = this._stdinRing, size = ring.length;
+    for (;;) {
+      var seq = Atomics.load(ctrl, SI_SEQ);
+      var avail = Atomics.load(ctrl, SI_AVAIL);
+      if (avail > 0) {
+        var n = Math.min(count, avail);
+        var rp = Atomics.load(ctrl, SI_READPOS);
+        for (var i = 0; i < n; i++) buf[i] = ring[(rp + i) % size];
+        Atomics.store(ctrl, SI_READPOS, (rp + n) % size);
+        Atomics.sub(ctrl, SI_AVAIL, n);
+        return n;
+      }
+      if (Atomics.load(ctrl, SI_EOF)) return 0; // EOF
+      if (!_canBlock) return 0; // can't park → behave as EOF, never spin
+      Atomics.wait(ctrl, SI_SEQ, seq); // wake on next producer push/EOF
+    }
+  };
+
+  // -----------------------------------------------------------------------
   // Synchronous sleep primitive for the no-JSPI block-FS path.
   //
   // Atomics.wait() parks the calling agent on a SharedArrayBuffer cell until
@@ -3504,6 +3584,10 @@ var BLOCK_FS = (function () {
     var writeOut = ctx.writeOut;
     var writeErr = ctx.writeErr;
     var self = this;
+
+    // Wire the optional live-stdin sab (interactive page). Absent → stdin
+    // stays pre-buffered/EOF and select reports it always-ready (old path).
+    if (ctx.stdinSab) self.setStdinSab(ctx.stdinSab);
 
     function wrap(fn) {
       return function () {
@@ -3652,7 +3736,16 @@ var BLOCK_FS = (function () {
         return 0;
       },
       __tcsetattr: function (fd, actions, iflag, oflag, cflag, lflag) {
-        // no-op in block FS context — terminal handled by the page
+        // Terminal is handled by the page. With a live-stdin sab wired, publish
+        // the raw/echo/opost mode to its TERMIOS control word so the page can
+        // switch line-discipline (e.g. stop local echo in raw mode) without a
+        // postMessage relay. Mirrors full-OPFS's 'termios-mode' message.
+        if (self._stdinSab) {
+          var mode = ((lflag & 0x100) ? 1 : 0)   // icanon → bit0
+                   | ((lflag & 0x8) ? 2 : 0)      // echo   → bit1
+                   | ((oflag & 0x1) ? 4 : 0);     // opost  → bit2
+          Atomics.store(self._stdinCtrl, SI_TERMIOS, mode);
+        }
         return 0;
       },
       sleep: function (seconds) {
@@ -3672,11 +3765,14 @@ var BLOCK_FS = (function () {
         blockingSleepMs(sec * 1000 + nsec / 1e6);
         return 0;
       },
-      // select(): synchronous readiness scan + Atomics-backed timeout. Block-FS
-      // is fully synchronous, so a read never blocks (regular files and stdin
-      // return data or EOF immediately; pipes return buffered data or EOF) and
-      // a write is always accepted. The only thing worth waiting on is the
-      // timeout, which reuses the sleep primitive above.
+      // select(): synchronous readiness scan + Atomics-backed wait. Block-FS is
+      // synchronous, so regular files and pipes can only change state from
+      // within this program — the one asynchronous input is the live-stdin sab,
+      // written by the page from another thread. Stdin readiness comes from the
+      // sab (bytes or EOF); when stdin is requested but not ready we park on its
+      // SEQ futex (honouring the timeout) and re-scan on wake. With no sab,
+      // stdin is always-ready and the only thing to wait on is the timeout —
+      // identical to before.
       __select_impl: function (nfds, readfds_ptr, writefds_ptr,
                                 exceptfds_ptr, timeout_sec, timeout_usec,
                                 has_timeout) {
@@ -3693,18 +3789,27 @@ var BLOCK_FS = (function () {
           for (var i = 0; i < FDS_WORDS; i++) mem.setInt32(ptr + i * 4, bits[i], true);
         }
         function isBitSet(bits, fd) { return bits && (bits[fd >> 5] & (1 << (fd & 31))) !== 0; }
+        var hasSab = !!self._stdinSab;
         function scan() {
           var rIn = readBits(readfds_ptr), wIn = readBits(writefds_ptr), eIn = readBits(exceptfds_ptr);
           var rOut = rIn ? [0, 0] : null, wOut = wIn ? [0, 0] : null, eOut = eIn ? [0, 0] : null;
-          var count = 0;
+          var count = 0, stdinPending = false;
           var tbl = self._fdTable;
           for (var fd = 0; fd < nfds && fd < 64; fd++) {
             var entry = (fd >= 0 && fd < tbl.length) ? tbl[fd] : null;
             if (!entry) continue;
             if (rIn && isBitSet(rIn, fd)) {
-              var rready = (entry.type === 'pipe')
-                ? (entry.pipe.buffer.length > 0 || entry.pipe.closed.write)
-                : true; // stdin (sync buffer/EOF) and regular files never block
+              var rready;
+              if (entry.type === 'pipe') {
+                rready = entry.pipe.buffer.length > 0 || entry.pipe.closed.write;
+              } else if (entry.position === null) {
+                // stdin: with a live sab, ready only when it has bytes or EOF;
+                // without one, always ready (pre-buffer/EOF, old behaviour).
+                rready = hasSab ? self._stdinSabReady() : true;
+                if (!rready) stdinPending = true;
+              } else {
+                rready = true; // regular files never block
+              }
               if (rready) { rOut[fd >> 5] |= (1 << (fd & 31)); count++; }
             }
             if (wIn && isBitSet(wIn, fd)) {
@@ -3713,7 +3818,7 @@ var BLOCK_FS = (function () {
             }
             // exceptfds: block-FS surfaces no exceptional conditions → never set.
           }
-          return { count: count, rOut: rOut, wOut: wOut, eOut: eOut };
+          return { count: count, rOut: rOut, wOut: wOut, eOut: eOut, stdinPending: stdinPending };
         }
         function commit(r) {
           writeBits(readfds_ptr, r.rOut);
@@ -3723,24 +3828,52 @@ var BLOCK_FS = (function () {
         }
         var r = scan();
         if (r.count > 0) return commit(r);
+        // A live stdin sab is the only thing that can become ready from another
+        // thread. If a stdin fd was requested but isn't ready, park on its SEQ
+        // futex; any producer push/EOF bumps SEQ (so no lost-wakeup) and we
+        // re-scan on wake.
+        if (r.stdinPending && _canBlock) {
+          var ctrl = self._stdinCtrl;
+          if (has_timeout) {
+            var ms = timeout_sec * 1000 + timeout_usec / 1000;
+            if (ms > 0) {
+              var seq = Atomics.load(ctrl, SI_SEQ);
+              if (!self._stdinSabReady()) Atomics.wait(ctrl, SI_SEQ, seq, ms);
+            }
+            return commit(scan());
+          }
+          for (;;) {
+            var seq2 = Atomics.load(ctrl, SI_SEQ);
+            if (self._stdinSabReady()) break;
+            Atomics.wait(ctrl, SI_SEQ, seq2);
+          }
+          return commit(scan());
+        }
         if (has_timeout) {
-          // Nothing ready; wait out the timeout, then re-scan. State can't
-          // change in this synchronous model, but re-scanning keeps the
-          // zero-timeout poll and the general path identical.
+          // Nothing async to wait on; sleep out the timeout, then re-scan.
           blockingSleepMs(timeout_sec * 1000 + timeout_usec / 1000);
           return commit(scan());
         }
-        // No fds ready and no timeout: POSIX says block until one is. Nothing
-        // can change state synchronously, so this is an unsatisfiable wait —
+        // No fds ready and no timeout: POSIX says block until one is. With no
+        // stdin sab nothing can change state, so this is an unsatisfiable wait —
         // park indefinitely to honour the contract, or fail if we can't block
         // (never busy-spin).
         if (_canBlock) { for (;;) Atomics.wait(_sleepCell, 0, 0); }
         setErrnoName('ENOSYS'); return -1;
       },
       __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
+        // Read the real terminal size from the live-stdin sab when wired (the
+        // page keeps COLS/ROWS current); otherwise fall back to 80x24.
+        var rows = 24, cols = 80;
+        if (self._stdinSab) {
+          var c = Atomics.load(self._stdinCtrl, SI_COLS);
+          var r = Atomics.load(self._stdinCtrl, SI_ROWS);
+          if (c > 0) cols = c;
+          if (r > 0) rows = r;
+        }
         var mem = new DataView(getMemory().buffer);
-        mem.setInt32(rows_ptr, 24, true);
-        mem.setInt32(cols_ptr, 80, true);
+        mem.setInt32(rows_ptr, rows, true);
+        mem.setInt32(cols_ptr, cols, true);
         return 0;
       },
 
@@ -4373,6 +4506,7 @@ async function runModule({
   useBrowserFS,
   blockFsImports,
   blockFsFactory,
+  stdinSab,
   requestStdin,
   requestTerminalSize,
   requestStdinReady,
@@ -5622,6 +5756,9 @@ async function runModule({
     getIndirectFunctionTable: function () { return instance.exports.__indirect_function_table; },
     writeOut: writeOut,
     writeErr: writeErr,
+    // Optional live-stdin SharedArrayBuffer ring (no-JSPI block-FS path); read
+    // by BlockFS.toWasmEnv. Undefined → stdin stays pre-buffered/EOF.
+    stdinSab: stdinSab,
     requestStdin: requestStdin,
     requestTerminalSize: requestTerminalSize,
     requestStdinReady: requestStdinReady,
