@@ -1300,7 +1300,6 @@ LIBC_TEST_SKIP = {
     "ipc_msg": "no SysV IPC", "ipc_sem": "no SysV IPC", "ipc_shm": "no SysV IPC",
     "socket": "no sockets", "inet_pton": "no networking",
     # Library features not implemented (TODO candidates)
-    "basename": "TODO: libgen.h", "dirname": "TODO: libgen.h",
     "fnmatch": "TODO: fnmatch()",
     "search_hsearch": "TODO: search.h", "search_insque": "TODO: search.h",
     "search_lsearch": "TODO: search.h", "search_tsearch": "TODO: search.h",

@@ -1,0 +1,8 @@
+sizeof_time_t: 8
+y2100_year: 2100
+y2100_mon: 1
+y2100_mday: 1
+y2100_wday: 5
+y2200_year: 2200
+roundtrip_2100: 1
+roundtrip_2200: 1

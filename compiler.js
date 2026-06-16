@@ -17309,15 +17309,15 @@ size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
 #pragma once
 #include <time.h>
 struct timeval {
-  long tv_sec;
+  time_t tv_sec;   /* 64-bit (matches struct stat's st_*tim); range past 2038 */
   long tv_usec;
 };
-__import int __gettimeofday(long *sec, long *usec);
+__import int __gettimeofday(long long *sec, long *usec);
 /* Host primitives that actually set a file's access/modification times
    (whole seconds). Faithful on the Node and BlockFS backends; the OPFS
    backend has no timestamp API and treats them as existence-checked no-ops. */
-__import int __utime(const char *path, long atime, long mtime);
-__import int __futime(int fd, long atime, long mtime);
+__import int __utime(const char *path, long long atime, long long mtime);
+__import int __futime(int fd, long long atime, long long mtime);
 static inline int gettimeofday(struct timeval *tv, void *tz) {
   (void)tz;
   if (tv) {
@@ -17331,13 +17331,13 @@ static inline int gettimeofday(struct timeval *tv, void *tz) {
    (POSIX permits coarser filesystem granularity). Errors (e.g. ENOENT for a
    missing path) come back through errno from the host. */
 static inline int utimes(const char *path, const struct timeval times[2]) {
-  long a, m;
+  time_t a, m;
   if (times == 0) { struct timeval now; gettimeofday(&now, 0); a = m = now.tv_sec; }
   else { a = times[0].tv_sec; m = times[1].tv_sec; }
   return __utime(path, a, m);
 }
 static inline int futimes(int fd, const struct timeval times[2]) {
-  long a, m;
+  time_t a, m;
   if (times == 0) { struct timeval now; gettimeofday(&now, 0); a = m = now.tv_sec; }
   else { a = times[0].tv_sec; m = times[1].tv_sec; }
   return __futime(fd, a, m);
@@ -18950,7 +18950,7 @@ __import int fstat(int fd, struct stat *buf);
    seconds (the filesystems here are second-granularity). dirfd is treated as
    AT_FDCWD; AT_SYMLINK_NOFOLLOW is moot (no symlinks). */
 static inline int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags) {
-  long a, m;
+  time_t a, m;
   struct timeval now; gettimeofday(&now, 0);
   (void)dirfd; (void)flags;
   if (times == 0) { a = m = now.tv_sec; }
@@ -18967,7 +18967,7 @@ static inline int utimensat(int dirfd, const char *path, const struct timespec t
   return __utime(path, a, m);
 }
 static inline int futimens(int fd, const struct timespec times[2]) {
-  long a, m;
+  time_t a, m;
   struct timeval now; gettimeofday(&now, 0);
   if (times == 0) { a = m = now.tv_sec; }
   else {
@@ -18986,7 +18986,7 @@ static inline int futimens(int fd, const struct timespec times[2]) {
   "utime.h": `
 #pragma once
 #include <sys/time.h>   /* __utime + gettimeofday */
-struct utimbuf { long actime; long modtime; };
+struct utimbuf { time_t actime; time_t modtime; };
 /* Legacy POSIX utime(). A NULL times argument means "now". */
 static inline int utime(const char *path, const struct utimbuf *times) {
   if (times == 0) { struct timeval now; gettimeofday(&now, 0); return __utime(path, now.tv_sec, now.tv_sec); }
@@ -19004,7 +19004,7 @@ typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 typedef unsigned long dev_t;
 typedef unsigned long ino_t;
-typedef long time_t;
+typedef long long time_t;
   `,
   "tgmath.h": `
 #pragma once
@@ -19066,7 +19066,7 @@ typedef long time_t;
 __require_source("__time.c");
 #include <stddef.h>
 
-typedef long time_t;
+typedef long long time_t;
 typedef long clock_t;
 
 struct tm {
@@ -21304,7 +21304,7 @@ int fclose(FILE *stream) {
 }
 
 static int __tmpfile_counter;
-__import long __time_now(void);
+__import long long __time_now(void);
 
 FILE *tmpfile(void) {
   /* Generate a unique path, open it, and unlink immediately: the open
@@ -21313,7 +21313,7 @@ FILE *tmpfile(void) {
   for (int tries = 0; tries < 100; tries++) {
     char name[80];
     snprintf(name, sizeof name, "/tmp/__wasm_tmpfile_%ld_%d",
-             __time_now(), __tmpfile_counter++);
+             (long)__time_now(), __tmpfile_counter++);
     FILE *f = fopen(name, "w+b");
     if (f) {
       remove(name);
@@ -22407,9 +22407,9 @@ int flsll(long long x) { return x ? 64 - (int)__wasm(long long, (x), op 0x79) : 
 #include <time.h>
 #include <stdio.h>
 
-__import long __time_now(void);
+__import long long __time_now(void);
 __import long __clock(void);
-__import long __timezone_offset(long t);
+__import long __timezone_offset(long long t);
 
 time_t time(time_t *t) {
   time_t now = __time_now();
@@ -22442,9 +22442,9 @@ static int __days_in_year(int y) {
 
 static struct tm __gmtime_buf;
 
-static void __secs_to_tm(long t, struct tm *res) {
-  long days = t / 86400;
-  long rem = t % 86400;
+static void __secs_to_tm(time_t t, struct tm *res) {
+  time_t days = t / 86400;
+  long rem = (long)(t % 86400);
   if (rem < 0) { rem += 86400; days--; }
 
   res->tm_hour = (int)(rem / 3600);
@@ -22492,7 +22492,7 @@ static struct tm __localtime_buf;
 
 struct tm *localtime(const time_t *timep) {
   long offset = __timezone_offset(*timep);
-  long local = *timep + offset;
+  time_t local = *timep + offset;
   __secs_to_tm(local, &__localtime_buf);
   __localtime_buf.tm_isdst = -1;
   __localtime_buf.tm_gmtoff = offset;
@@ -22501,7 +22501,7 @@ struct tm *localtime(const time_t *timep) {
 
 struct tm *localtime_r(const time_t *timep, struct tm *result) {
   long offset = __timezone_offset(*timep);
-  long local = *timep + offset;
+  time_t local = *timep + offset;
   __secs_to_tm(local, result);
   result->tm_isdst = -1;
   result->tm_gmtoff = offset;
@@ -22518,7 +22518,7 @@ time_t mktime(struct tm *tp) {
   tp->tm_year = y - 1900;
 
   /* Days from epoch to start of year */
-  long days = 0;
+  time_t days = 0;
   if (y >= 1970) {
     for (int i = 1970; i < y; i++) days += __days_in_year(i);
   } else {
@@ -22530,7 +22530,7 @@ time_t mktime(struct tm *tp) {
   for (int i = 0; i < m; i++) days += __days_in_month(i, leap);
   days += tp->tm_mday - 1;
 
-  long secs = days * 86400L + tp->tm_hour * 3600L + tp->tm_min * 60L + tp->tm_sec;
+  time_t secs = days * 86400LL + tp->tm_hour * 3600LL + tp->tm_min * 60LL + tp->tm_sec;
 
   /* Adjust for local timezone */
   long offset = __timezone_offset(secs);

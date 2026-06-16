@@ -554,11 +554,12 @@ function createFileSystem({ fs, ctx }) {
           return -1;
         }
       },
-      /* set atime/mtime (seconds) by path; backs utimes()/utime()/utimensat() */
+      /* set atime/mtime (seconds) by path; backs utimes()/utime()/utimensat().
+         atime/mtime arrive as i64 BigInts (time_t) — Number() for the fs API. */
       __utime: function (path_ptr, atime, mtime) {
         const path = readString(path_ptr);
         try {
-          fs.utimesSync(path, atime, mtime);
+          fs.utimesSync(path, Number(atime), Number(mtime));
           return 0;
         } catch (e) {
           setErrno(e);
@@ -569,7 +570,7 @@ function createFileSystem({ fs, ctx }) {
       __futime: function (fd, atime, mtime) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
         try {
-          fs.futimesSync(fdTable[fd].nativeFd, atime, mtime);
+          fs.futimesSync(fdTable[fd].nativeFd, Number(atime), Number(mtime));
           return 0;
         } catch (e) {
           setErrno(e);
@@ -4384,11 +4385,13 @@ var BLOCK_FS = (function () {
         return this.chmod(readString(path_ptr), mode);
       }),
       fchmod: wrap(function (fd, mode) { return this.fchmod(fd, mode); }),
+      // atime/mtime arrive as i64 BigInts (time_t); Number() them before the
+      // FS scales by timeScale (BigInt * Number would throw).
       __utime: wrap(function (path_ptr, atime, mtime) {
-        return this.utime(readString(path_ptr), atime, mtime);
+        return this.utime(readString(path_ptr), Number(atime), Number(mtime));
       }),
       __futime: wrap(function (fd, atime, mtime) {
-        return this.futime(fd, atime, mtime);
+        return this.futime(fd, Number(atime), Number(mtime));
       }),
       link: wrap(function (old_ptr, new_ptr) {
         return this.link(readString(old_ptr), readString(new_ptr));
@@ -6316,21 +6319,26 @@ async function runModule({
         }
         return val;
       },
+      // time_t is 64-bit: __time_now returns i64 (BigInt across the boundary),
+      // so seconds-since-epoch never truncates at 2038.
       __time_now: function () {
-        return Math.floor(Date.now() / 1000);
+        return BigInt(Math.floor(Date.now() / 1000));
       },
       __clock: function () {
         return Math.floor(performance.now());
       },
+      // t arrives as an i64 BigInt (time_t); Number() it for the Date ctor.
       __timezone_offset: function (t) {
-        return new Date(t * 1000).getTimezoneOffset() * -60;
+        return new Date(Number(t) * 1000).getTimezoneOffset() * -60;
       },
       /* POSIX time */
       __gettimeofday: function (secPtr, usecPtr) {
         const now = Date.now();
         const memory = instance.exports.memory;
         const view = new DataView(memory.buffer);
-        view.setInt32(secPtr, Math.floor(now / 1000), true);
+        // tv_sec is a 64-bit time_t — write all 8 bytes or the high word is
+        // garbage; tv_usec stays 32-bit.
+        view.setBigInt64(secPtr, BigInt(Math.floor(now / 1000)), true);
         view.setInt32(usecPtr, (now % 1000) * 1000, true);
         return 0;
       },
