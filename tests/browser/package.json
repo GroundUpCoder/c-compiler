@@ -7,6 +7,9 @@
   "scripts": {
     "build:quake": "node build-quake.mjs",
     "test:quake": "node quake-renders.mjs",
+    "build:doom": "node build-doom.mjs",
+    "test:doom": "node doom-renders.mjs doom.html shot-blockfs.png && node doom-renders.mjs doom-old.html shot-opfs.png",
+    "doom": "pnpm run build:doom && pnpm run test:doom",
     "test": "pnpm run build:quake && pnpm run test:quake"
   },
   "packageManager": "pnpm@10.33.0",

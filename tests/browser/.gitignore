@@ -2,7 +2,11 @@ node_modules/
 www/quake.wasm
 www/pak0.pak
 www/host.js
+www/doom.html
+www/doom-old.html
 package-lock.json
 pnpm-lock.yaml
 last-screenshot.png
+shot-*.png
+fail-*.png
 test-bundle.mjs
