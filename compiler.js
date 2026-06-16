@@ -18695,7 +18695,9 @@ typedef struct FILE {
   int ungetc_char;
 } FILE;
 
-typedef long fpos_t;
+/* 64-bit, opaque file position (LFS): fgetpos/fsetpos can address files past
+   2 GiB even though the standard fseek/ftell stay long-bounded. */
+typedef long long fpos_t;
 
 extern FILE __stdin_file;
 extern FILE __stdout_file;
@@ -21365,15 +21367,32 @@ void rewind(FILE *stream) {
   stream->flags &= ~__F_ERR;
 }
 
+/* fgetpos/fsetpos carry a full 64-bit off_t (unlike ftell/fseek's long), so
+   they work on files larger than 2 GiB. The position is computed at off_t
+   width by mirroring ftell's buffer-adjustment logic, and restored with a
+   64-bit lseek (mirroring fseek's SEEK_SET path). */
 int fgetpos(FILE *stream, fpos_t *pos) {
-  long p = ftell(stream);
+  off_t p = lseek(stream->fd, 0, SEEK_CUR);
   if (p < 0) return -1;
+  if (stream->flags & __F_RBUF) {
+    p -= (stream->buf_len - stream->buf_pos);
+  } else if (stream->flags & __F_WRITE) {
+    p += stream->buf_pos;
+  }
+  if ((stream->flags & __F_READ) && stream->ungetc_char != EOF) p--;
   *pos = p;
   return 0;
 }
 
 int fsetpos(FILE *stream, const fpos_t *pos) {
-  return fseek(stream, *pos, SEEK_SET);
+  fflush(stream);
+  stream->buf_pos = 0;
+  stream->buf_len = 0;
+  stream->ungetc_char = EOF;
+  off_t r = lseek(stream->fd, *pos, SEEK_SET);
+  if (r < 0) return -1;
+  stream->flags &= ~(__F_EOF | __F_RBUF);
+  return 0;
 }
 
 int feof(FILE *stream) {
