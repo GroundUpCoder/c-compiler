@@ -3128,7 +3128,9 @@ var BLOCK_FS = (function () {
     // relatime: bump atime only when it predates the last data/metadata change
     // (and only if a whole second has actually elapsed, to avoid same-second
     // write thrash on the single OPFS handle). Mirrors Linux's default mount.
-    if (ino.atime <= ino.mtime || ino.atime <= ino.ctime) {
+    // Suppressed on a read-only mount (this._readonly) so the migration source is
+    // never written — it stays the byte-for-byte rollback.
+    if (!this._readonly && (ino.atime <= ino.mtime || ino.atime <= ino.ctime)) {
       var t = this._now();
       if (t > ino.atime) {
         ino.atime = t;
@@ -4520,6 +4522,67 @@ var BLOCK_FS = (function () {
     return new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4);
   };
 
+  // Migration is "complete" iff bit 0 of the v4 superblock flags is set. A
+  // half-written v4 image (crash mid-copy) won't have it, so a caller knows to
+  // discard + retry rather than mount a partial filesystem.
+  var SB_MIGRATED_BIT = 1;
+  BlockFS.isMigrationComplete = function (store) {
+    if (store.size() < SUPERBLOCK_SIZE) return false;
+    if (store.getUint32(SB_MAGIC) !== MAGIC || store.getUint32(SB_VERSION) !== 4) return false;
+    return (store.getUint32(SB_FLAGS) & SB_MIGRATED_BIT) !== 0;
+  };
+
+  // Non-destructive migrate-forward: read the v3 image, write a fresh v4 image.
+  // v3store is only ever READ (never mutated) — it's the rollback. The whole tree
+  // is copied via the high-level API (mkdir/write/symlink/link), preserving mode,
+  // mtime/atime, and hardlinks (same src inode -> link to the first copy). On
+  // success the v4 superblock's completion bit is set. Returns the mounted v4 fs.
+  BlockFS.migrateV3toV4 = function (v3store, v4store) {
+    var src = BlockFS.create(v3store);    // v3, read-source only
+    src._readonly = true;                 // never write the source (atime etc.)
+    var dst = BlockFS.createV4(v4store);  // fresh v4
+    var inoMap = {};                      // src inodeId -> first dst path (hardlinks)
+
+    function walk(srcDir, dstDir) {
+      var h = src.opendir(srcDir);
+      if (h === null) throw new Error('migrate: opendir ' + srcDir);
+      var ent;
+      while ((ent = src.readdir(h)) !== null) {
+        if (ent.name === '.' || ent.name === '..') continue;
+        var sp = srcDir === '/' ? '/' + ent.name : srcDir + '/' + ent.name;
+        var dp = dstDir === '/' ? '/' + ent.name : dstDir + '/' + ent.name;
+        var st = src.stat(sp);
+        var type = st.mode & S_IFMT, perm = st.mode & 0o7777;
+        if (type !== S_IFDIR && inoMap[st.ino] !== undefined) {
+          dst.link(inoMap[st.ino], dp); // hardlink: same inode already copied
+          continue;
+        }
+        if (type === S_IFDIR) {
+          dst.mkdir(dp, perm);
+          walk(sp, dp);
+          dst.chmod(dp, perm);
+          dst.utime(dp, st.atime, st.mtime); // restore dir times after populating
+        } else {
+          // Regular file (symlinks are stored as regular files whose content is
+          // the target, so a byte copy migrates them correctly too).
+          var data = new Uint8Array(st.size);
+          if (st.size > 0) { var fr = src.open(sp, 0, 0); src.read(fr, data, st.size); src.close(fr); }
+          var fw = dst.open(dp, 0x40 | 0x200 | 1, perm); // O_CREAT|O_TRUNC|O_WRONLY
+          if (st.size > 0) dst.write(fw, data, st.size);
+          dst.close(fw);
+          dst.chmod(dp, perm);
+          dst.utime(dp, st.atime, st.mtime);
+          inoMap[st.ino] = dp;
+        }
+      }
+      src.closedir(h);
+    }
+
+    walk('/', '/');
+    v4store.setUint32(SB_FLAGS, v4store.getUint32(SB_FLAGS) | SB_MIGRATED_BIT);
+    return dst;
+  };
+
   // =================================================================
   // Module exports
   // =================================================================
@@ -4528,6 +4591,8 @@ var BLOCK_FS = (function () {
     init: BlockFS.init,
     create: BlockFS.create,
     createV4: BlockFS.createV4,
+    migrateV3toV4: BlockFS.migrateV3toV4,
+    isMigrationComplete: BlockFS.isMigrationComplete,
     MemoryByteStore: MemoryByteStore,
     TLSFAllocator: TLSFAllocator,
     TLSF64Allocator: TLSF64Allocator,
