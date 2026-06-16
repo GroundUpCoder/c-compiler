@@ -5,5 +5,5 @@ size 20
 isreg 1
 mtime_ok 1
 mtim_sec_eq 1
-nsec 0
+nsec_ok 1
 blksize 4096

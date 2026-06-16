@@ -279,70 +279,60 @@ function workerMain() {
     }
 
     // ---- Run ----
-    const stdoutBuf = [];
-    const stderrBuf = [];
-    let runExitCode;
-    // Host import shims (e.g. __jslog) write via console.log/console.error
-    // which routes to process.stdout/stderr — not the writeOut/writeErr hooks.
-    // Capture both routes into the same buffers.
-    captureStdout = stdoutBuf;
-    captureStderr = stderrBuf;
-    try {
-      // Python runner invokes `node host.js <wasm_path> <args...>`, and host.js
-      // forwards `process.argv.slice(2)` as the wasm `argv` — so argv[0] is the
-      // wasm path. A few tests (e.g. core/pointers/arithmetic) print stack
-      // addresses that depend on argv[0]'s length via alloca, so we shape our
-      // placeholder to match the python tempfile path the test was written
-      // against: `<os.tmpdir()>/tmpXXXXXXXX.wasm`.
-      const fakeArgv0 = `${os.tmpdir()}/tmpXXXXXXXX.wasm`;
-      var runOpts = {
-        bytes: wasmBinary,
-        args: [fakeArgv0, ...(td.config.args || [])],
-        writeOut: (b) => stdoutBuf.push(toBuf(b)),
-        writeErr: (b) => stderrBuf.push(toBuf(b)),
-      };
-      if (td.config.blockFs) {
-        var blockStore = new BLOCK_FS.MemoryByteStore(64 * 1024 * 1024);
-        var blockFS = BLOCK_FS.create(blockStore);
-        runOpts.blockFsFactory = async function (ctx) {
-          return { c: blockFS.toWasmEnv(ctx) };
-        };
-      } else {
-        runOpts.fs = fs;
-      }
-      runExitCode = await runModule(runOpts);
-    } catch (e) {
-      // Wasm trap (RuntimeError: unreachable) or other host-side throw.
-      // Node would exit non-zero with the stack on stderr — mirror that
-      // so tests asserting a non-zero exitcode still pass.
-      stderrBuf.push(toBuf(`${e.stack || e.message}\n`));
-      runExitCode = 1;
-    }
-    captureStdout = null; captureStderr = null;
-    if (runExitCode == null) runExitCode = 0;
-
-    const runStdout = flush(stdoutBuf);
-    const runStderr = flush(stderrBuf);
+    // Block-FS tests run against BOTH v4 (the live format the app uses) and v3
+    // (legacy), verifying identical functional behavior on each. Non-block-FS
+    // tests run once against the Node fs. argv[0] is shaped to match the python
+    // tempfile path some tests were written against (alloca/stack-address output).
+    const fakeArgv0 = `${os.tmpdir()}/tmpXXXXXXXX.wasm`;
+    const mounts = td.config.blockFs
+      ? [['v4', (s) => BLOCK_FS.createV4(s)], ['v3', (s) => BLOCK_FS.create(s)]]
+      : [[null, null]];
     const runErrors = [];
-    if (runExitCode !== td.expected.exitcode) {
-      let msg = `Exit code: got ${runExitCode}, expected ${td.expected.exitcode}`;
-      if (td.expected.exitcode === 0 && runExitCode !== 0) {
-        if (runStdout) msg += `\n--- stdout ---\n${runStdout}`;
-        if (runStderr) msg += `\n--- stderr ---\n${runStderr}`;
+    for (const [fmtLabel, mountFn] of mounts) {
+      const stdoutBuf = [];
+      const stderrBuf = [];
+      let runExitCode;
+      captureStdout = stdoutBuf;
+      captureStderr = stderrBuf;
+      try {
+        const runOpts = {
+          bytes: wasmBinary,
+          args: [fakeArgv0, ...(td.config.args || [])],
+          writeOut: (b) => stdoutBuf.push(toBuf(b)),
+          writeErr: (b) => stderrBuf.push(toBuf(b)),
+        };
+        if (mountFn) {
+          const blockStore = new BLOCK_FS.MemoryByteStore(64 * 1024 * 1024);
+          const blockFS = mountFn(blockStore);
+          runOpts.blockFsFactory = async function (ctx) { return { c: blockFS.toWasmEnv(ctx) }; };
+        } else {
+          runOpts.fs = fs;
+        }
+        runExitCode = await runModule(runOpts);
+      } catch (e) {
+        stderrBuf.push(toBuf(`${e.stack || e.message}\n`));
+        runExitCode = 1;
       }
-      runErrors.push(msg);
-    }
-    if (td.expected.stdout != null && runStdout !== td.expected.stdout) {
-      runErrors.push(
-        `Stdout mismatch:\n--- expected ---\n${td.expected.stdout}` +
-        `--- got ---\n${runStdout}`
-      );
-    }
-    if (td.expected.stderr != null && runStderr !== td.expected.stderr) {
-      runErrors.push(
-        `Stderr mismatch:\n--- expected ---\n${td.expected.stderr}` +
-        `--- got ---\n${runStderr}`
-      );
+      captureStdout = null; captureStderr = null;
+      if (runExitCode == null) runExitCode = 0;
+
+      const runStdout = flush(stdoutBuf);
+      const runStderr = flush(stderrBuf);
+      const tag = fmtLabel ? `[${fmtLabel}] ` : '';
+      if (runExitCode !== td.expected.exitcode) {
+        let msg = `${tag}Exit code: got ${runExitCode}, expected ${td.expected.exitcode}`;
+        if (td.expected.exitcode === 0 && runExitCode !== 0) {
+          if (runStdout) msg += `\n--- stdout ---\n${runStdout}`;
+          if (runStderr) msg += `\n--- stderr ---\n${runStderr}`;
+        }
+        runErrors.push(msg);
+      }
+      if (td.expected.stdout != null && runStdout !== td.expected.stdout) {
+        runErrors.push(`${tag}Stdout mismatch:\n--- expected ---\n${td.expected.stdout}--- got ---\n${runStdout}`);
+      }
+      if (td.expected.stderr != null && runStderr !== td.expected.stderr) {
+        runErrors.push(`${tag}Stderr mismatch:\n--- expected ---\n${td.expected.stderr}--- got ---\n${runStderr}`);
+      }
     }
     return { name: td.name, status: runErrors.length ? 'fail' : 'pass', msg: runErrors.join('\n') };
   }

@@ -28,7 +28,9 @@ int main(void) {
   printf("isreg %d\n", S_ISREG(st.st_mode) ? 1 : 0);
   printf("mtime_ok %d\n", st.st_mtime > 0 ? 1 : 0);
   printf("mtim_sec_eq %d\n", (st.st_mtim.tv_sec == st.st_mtime) ? 1 : 0);
-  printf("nsec %ld\n", (long)st.st_mtim.tv_nsec);
+  /* nsec is 0 on v3 (second-granularity) and may be nonzero on v4 (ms); either
+     way it must be a valid nanosecond fraction. */
+  printf("nsec_ok %d\n", (st.st_mtim.tv_nsec >= 0 && st.st_mtim.tv_nsec < 1000000000L) ? 1 : 0);
   printf("blksize %ld\n", (long)st.st_blksize);
   return 0;
 }
