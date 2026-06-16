@@ -1,0 +1,5 @@
+byid: root gid=0
+byid_nonroot=1
+byname: root
+byname_missing=1
+mem_empty=1

@@ -1,0 +1,4 @@
+/bin/sh
+/dev/null
+/tmp/
+/usr/bin:/bin

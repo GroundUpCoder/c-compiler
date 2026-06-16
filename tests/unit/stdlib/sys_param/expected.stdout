@@ -1,0 +1,4 @@
+min=3 max=7
+nbby=8 maxpath=4096
+howmany=3 roundup=12
+p2_8=1 p2_6=0

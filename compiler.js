@@ -17656,6 +17656,155 @@ static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
   return count;
 }
   `,
+  "malloc.h": `
+#pragma once
+/* glibc places the malloc family in <malloc.h> too; forward to <stdlib.h>. */
+#include <stdlib.h>
+#define M_TRIM_THRESHOLD    -1
+#define M_TOP_PAD           -2
+#define M_MMAP_THRESHOLD    -3
+#define M_MMAP_MAX          -4
+#define M_CHECK_ACTION      -5
+#define M_PERTURB           -6
+#define M_ARENA_TEST        -7
+#define M_ARENA_MAX         -8
+/* This allocator exposes no tuning or usage introspection: mallopt() accepts
+   any option (returns success), malloc_trim() frees nothing, and
+   malloc_usable_size() reports 0 (the real slack isn't tracked). */
+static inline int mallopt(int param, int value) { (void)param; (void)value; return 1; }
+static inline int malloc_trim(unsigned long pad) { (void)pad; return 0; }
+static inline unsigned long malloc_usable_size(void *ptr) { (void)ptr; return 0; }
+  `,
+  "sys/sysmacros.h": `
+#pragma once
+/* Classic 16-bit major/minor device-number encoding (device numbers are
+   cosmetic in this runtime — there are no real devices). */
+#define major(dev)       ((int)(((unsigned long)(dev) >> 8) & 0xff))
+#define minor(dev)       ((int)((unsigned long)(dev) & 0xff))
+#define makedev(ma, mi)  ((unsigned long)(((ma) << 8) | ((mi) & 0xff)))
+  `,
+  "paths.h": `
+#pragma once
+#define _PATH_BSHELL    "/bin/sh"
+#define _PATH_CONSOLE   "/dev/console"
+#define _PATH_DEFPATH   "/usr/bin:/bin"
+#define _PATH_STDPATH   "/usr/bin:/bin:/usr/sbin:/sbin"
+#define _PATH_DEV       "/dev/"
+#define _PATH_DEVNULL   "/dev/null"
+#define _PATH_TTY       "/dev/tty"
+#define _PATH_TMP       "/tmp/"
+#define _PATH_VARTMP    "/var/tmp/"
+#define _PATH_VARRUN    "/var/run/"
+#define _PATH_PASSWD    "/etc/passwd"
+#define _PATH_GROUP     "/etc/group"
+#define _PATH_SHADOW    "/etc/shadow"
+#define _PATH_SHELLS    "/etc/shells"
+#define _PATH_WTMP      "/var/log/wtmp"
+#define _PATH_UTMP      "/var/run/utmp"
+#define _PATH_LASTLOG   "/var/log/lastlog"
+#define _PATH_MAILDIR   "/var/mail"
+  `,
+  "sys/param.h": `
+#pragma once
+#include <limits.h>
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+#ifndef MAXPATHLEN
+#define MAXPATHLEN 4096
+#endif
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+#define NBBY 8
+#define MAXSYMLINKS 20
+#define howmany(x, y)  (((x) + ((y) - 1)) / (y))
+#define roundup(x, y)  ((((x) + ((y) - 1)) / (y)) * (y))
+#define powerof2(x)    ((((x) - 1) & (x)) == 0)
+  `,
+  "sys/times.h": `
+#pragma once
+#include <sys/types.h>
+#include <time.h>
+struct tms {
+  clock_t tms_utime;
+  clock_t tms_stime;
+  clock_t tms_cutime;
+  clock_t tms_cstime;
+};
+/* No per-process CPU accounting: report all elapsed time as user time of the
+   single process (children are always 0), consistent with clock(). */
+static inline clock_t times(struct tms *buf) {
+  clock_t c = clock();
+  if (buf) { buf->tms_utime = c; buf->tms_stime = 0; buf->tms_cutime = 0; buf->tms_cstime = 0; }
+  return c;
+}
+  `,
+  "grp.h": `
+#pragma once
+#include <sys/types.h>
+#include <stddef.h>
+/* Single-root group database, mirroring <pwd.h>'s single-root passwd: the only
+   group is "root" (gid 0); everything else is NULL. */
+struct group {
+  char  *gr_name;
+  char  *gr_passwd;
+  gid_t  gr_gid;
+  char **gr_mem;
+};
+static inline struct group *getgrgid(gid_t gid) {
+  static char *mem[] = { 0 };
+  static struct group root = { "root", "x", 0, mem };
+  return gid == 0 ? &root : NULL;
+}
+static inline struct group *getgrnam(const char *name) {
+  static char *mem[] = { 0 };
+  static struct group root = { "root", "x", 0, mem };
+  if (name == 0) return NULL;
+  const char *r = "root";
+  while (*name && *name == *r) { name++; r++; }
+  return (*name == 0 && *r == 0) ? &root : NULL;
+}
+  `,
+  "sys/statfs.h": `
+#pragma once
+#include <sys/types.h>
+typedef struct { int val[2]; } __fsid_t;
+struct statfs {
+  long               f_type;
+  long               f_bsize;
+  unsigned long long f_blocks;
+  unsigned long long f_bfree;
+  unsigned long long f_bavail;
+  unsigned long long f_files;
+  unsigned long long f_ffree;
+  __fsid_t           f_fsid;
+  long               f_namelen;
+  long               f_frsize;
+  long               f_flags;
+  long               f_spare[4];
+};
+/* Nominal values only (see <sys/statvfs.h>): a fixed 4 GiB volume; real
+   BlockFS geometry would need a host import. */
+static inline int statfs(const char *path, struct statfs *buf) {
+  (void)path;
+  if (buf == 0) return -1;
+  buf->f_type = 0; buf->f_bsize = 4096; buf->f_frsize = 4096;
+  buf->f_blocks = 1048576; buf->f_bfree = 1048576; buf->f_bavail = 1048576;
+  buf->f_files = 65536; buf->f_ffree = 65536;
+  buf->f_fsid.val[0] = 0; buf->f_fsid.val[1] = 0;
+  buf->f_namelen = 255; buf->f_flags = 0;
+  buf->f_spare[0] = buf->f_spare[1] = buf->f_spare[2] = buf->f_spare[3] = 0;
+  return 0;
+}
+static inline int fstatfs(int fd, struct statfs *buf) {
+  (void)fd;
+  return statfs((const char *)0, buf);
+}
+  `,
   "dirent.h": `
 #pragma once
 #include <sys/types.h>

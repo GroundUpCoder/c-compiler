@@ -1,0 +1,3 @@
+r=0 bsize=4096 frsize=4096 namelen=255
+blocks=1048576 bfree=1048576
+fr=0 null=-1

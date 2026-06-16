@@ -1,0 +1,3 @@
+nonneg=1
+utime_eq_ret=1
+stime=0 cutime=0 cstime=0

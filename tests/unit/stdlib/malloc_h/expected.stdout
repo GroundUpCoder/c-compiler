@@ -1,0 +1,4 @@
+via malloc.h
+mallopt=1
+trim=0
+usable=0
