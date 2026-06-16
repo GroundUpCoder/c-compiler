@@ -2592,35 +2592,53 @@ var BLOCK_FS = (function () {
   InodeTable128.prototype.load = function () {}; // superblock is the source of truth
   InodeTable128.prototype.capacity = function () { return this._store.getUint32(SB4_INODE_CAP); };
   InodeTable128.prototype.extent = function () { return this._g64(SB4_INODE_EXTENT); };
+  // Read/write the whole 128-byte inode in ONE store op. The store may be a
+  // SyncAccessHandle where each getUint32/setUint32 is a separate (slow) OPFS
+  // syscall — reading the 10+ fields individually cost ~10 syscalls per inode
+  // access, and inodes are touched constantly (walk, lookup, free). A single
+  // getBytes/setBytes over a local DataView keeps the exact byte layout while
+  // collapsing that to one syscall.
+  function _dv64(dv, off) {
+    return dv.getUint32(off, true) + dv.getUint32(off + 4, true) * 0x100000000;
+  }
+  function _dvSet64(dv, off, v) {
+    dv.setUint32(off, v >>> 0, true);
+    dv.setUint32(off + 4, Math.floor(v / 0x100000000), true);
+  }
   InodeTable128.prototype.read = function (inoId) {
     if (inoId >= this.capacity()) return null;
     var off = this.extent() + inoId * INODE_SIZE_V4;
-    var modeWord = this._store.getUint32(off + I4_MODE);
+    var buf = this._store.getBytes(off, INODE_SIZE_V4);
+    var dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    var modeWord = dv.getUint32(I4_MODE, true);
     return {
       mode: modeWord & 0xFFFF,
       nlink: (modeWord >>> 16) & 0xFFFF,
-      extentOffset: this._g64(off + I4_EXTENT_OFF),
-      extentCapacity: this._g64(off + I4_EXTENT_CAP),
-      dataSize: this._g64(off + I4_DATA_SIZE),
-      mtime: this._g64(off + I4_MTIME),
-      ctime: this._g64(off + I4_CTIME),
-      atime: this._g64(off + I4_ATIME),
-      btime: this._g64(off + I4_BTIME),
-      rdev: this._store.getUint32(off + I4_RDEV)
+      extentOffset: _dv64(dv, I4_EXTENT_OFF),
+      extentCapacity: _dv64(dv, I4_EXTENT_CAP),
+      dataSize: _dv64(dv, I4_DATA_SIZE),
+      mtime: _dv64(dv, I4_MTIME),
+      ctime: _dv64(dv, I4_CTIME),
+      atime: _dv64(dv, I4_ATIME),
+      btime: _dv64(dv, I4_BTIME),
+      rdev: dv.getUint32(I4_RDEV, true)
     };
   };
   InodeTable128.prototype.write = function (inoId, ino) {
     if (inoId >= this.capacity()) return false;
     var off = this.extent() + inoId * INODE_SIZE_V4;
-    this._store.setUint32(off + I4_MODE, (ino.mode & 0xFFFF) | ((ino.nlink & 0xFFFF) << 16));
-    this._s64(off + I4_EXTENT_OFF, ino.extentOffset);
-    this._s64(off + I4_EXTENT_CAP, ino.extentCapacity);
-    this._s64(off + I4_DATA_SIZE, ino.dataSize);
-    this._s64(off + I4_MTIME, ino.mtime);
-    this._s64(off + I4_CTIME, ino.ctime);
-    this._s64(off + I4_ATIME, ino.atime);
-    this._s64(off + I4_BTIME, ino.btime || 0);
-    this._store.setUint32(off + I4_RDEV, ino.rdev || 0);
+    var buf = new Uint8Array(INODE_SIZE_V4);
+    var dv = new DataView(buf.buffer);
+    dv.setUint32(I4_MODE, (ino.mode & 0xFFFF) | ((ino.nlink & 0xFFFF) << 16), true);
+    _dvSet64(dv, I4_EXTENT_OFF, ino.extentOffset);
+    _dvSet64(dv, I4_EXTENT_CAP, ino.extentCapacity);
+    _dvSet64(dv, I4_DATA_SIZE, ino.dataSize);
+    _dvSet64(dv, I4_MTIME, ino.mtime);
+    _dvSet64(dv, I4_CTIME, ino.ctime);
+    _dvSet64(dv, I4_ATIME, ino.atime);
+    _dvSet64(dv, I4_BTIME, ino.btime || 0);
+    dv.setUint32(I4_RDEV, ino.rdev || 0, true);
+    this._store.setBytes(off, buf);
     return true;
   };
   InodeTable128.prototype.grow = function (newCapacity) {
@@ -2669,14 +2687,25 @@ var BLOCK_FS = (function () {
     return _decoder.decode(buf);
   }
 
-  // Read a directory entry at `offset` within the dir extent.
-  // Returns { inodeId, nameLen, name } or null.
-  function readDirEnt(store, extentBase, offset, extentSize) {
+  // Read the whole used portion of a directory extent in ONE store op. Over a
+  // SyncAccessHandle each field read is an OPFS syscall, so the old per-field
+  // readDirEnt made every scan O(N) syscalls and a full directory walk O(N^2).
+  // Reading the extent once and parsing entries from the local buffer collapses
+  // each scan to a single syscall. Returns { buf, dv } (dv little-endian over buf).
+  function readDirExtent(store, extentBase, extentSize) {
+    var buf = store.getBytes(extentBase, extentSize);
+    return { buf: buf, dv: new DataView(buf.buffer, buf.byteOffset, buf.byteLength) };
+  }
+
+  // Parse a directory entry at `offset` from an already-read extent buffer.
+  function parseDirEnt(buf, dv, offset, extentSize) {
     if (offset + DIR_ENT_HEADER > extentSize) return null;
-    var inoId = store.getUint32(extentBase + offset);
-    var nameLen = store.getUint32(extentBase + offset + 4) & 0xFFFF;
+    var inoId = dv.getUint32(offset, true);
+    // nameLen is a 2-byte field; read exactly 2 bytes so the read stays within
+    // the (extent-sized) buffer even when only the 6-byte header remains.
+    var nameLen = dv.getUint16(offset + 4, true);
     if (offset + DIR_ENT_HEADER + nameLen > extentSize) return null;
-    var nameBytes = store.getBytes(extentBase + offset + 6, nameLen);
+    var nameBytes = buf.subarray(offset + 6, offset + 6 + nameLen);
     return { inodeId: inoId, nameLen: nameLen, name: decodeStr(nameBytes) };
   }
 
@@ -2685,11 +2714,13 @@ var BLOCK_FS = (function () {
   function dirLookup(store, extentBase, extentSize, name) {
     // Binary search — entries are sorted by name.
     // Directory entries are variable-length, so we use a two-pass approach:
-    // first collect entry offsets, then binary search.
+    // first collect entry offsets, then binary search. The whole extent is read
+    // once up front so the scan is a single syscall, not one per entry.
+    var ext = readDirExtent(store, extentBase, extentSize);
     var offsets = [];
     var pos = 0;
     while (pos < extentSize) {
-      var ent = readDirEnt(store, extentBase, pos, extentSize);
+      var ent = parseDirEnt(ext.buf, ext.dv, pos, extentSize);
       if (!ent) break;
       if (ent.inodeId !== 0) offsets.push(pos); // skip deleted entries
       pos += DIR_ENT_HEADER + ent.nameLen;
@@ -2698,7 +2729,7 @@ var BLOCK_FS = (function () {
     var lo = 0, hi = offsets.length - 1;
     while (lo <= hi) {
       var mid = (lo + hi) >>> 1;
-      var e = readDirEnt(store, extentBase, offsets[mid], extentSize);
+      var e = parseDirEnt(ext.buf, ext.dv, offsets[mid], extentSize);
       if (!e) break;
       if (e.name === name) return { inodeId: e.inodeId, offset: offsets[mid] };
       if (e.name < name) lo = mid + 1;
@@ -2710,10 +2741,11 @@ var BLOCK_FS = (function () {
   // Find the insertion point for `name` in sorted order.
   // Returns the byte offset where the entry should be inserted.
   function dirFindInsertPos(store, extentBase, extentSize, name) {
+    var ext = readDirExtent(store, extentBase, extentSize);
     var target = 0;
     var pos = 0;
     while (pos < extentSize) {
-      var ent = readDirEnt(store, extentBase, pos, extentSize);
+      var ent = parseDirEnt(ext.buf, ext.dv, pos, extentSize);
       if (!ent) break;
       if (ent.inodeId !== 0 && ent.name >= name) break;
       target = pos + DIR_ENT_HEADER + ent.nameLen;
@@ -2758,25 +2790,26 @@ var BLOCK_FS = (function () {
     var found = dirLookup(store, extentBase, extentSize, name);
     if (!found) return 0;
     // Read the entry to get its full size
-    var ent = readDirEnt(store, extentBase, found.offset, extentSize);
+    var ext = readDirExtent(store, extentBase, extentSize);
+    var ent = parseDirEnt(ext.buf, ext.dv, found.offset, extentSize);
     if (!ent) return 0;
     var entSize = DIR_ENT_HEADER + ent.nameLen;
-    // Shift subsequent data back
+    // Shift subsequent data back (reuse the buffer we already read).
     var tailStart = found.offset + entSize;
     if (tailStart < extentSize) {
-      var tail = store.getBytes(extentBase + tailStart,
-        extentSize - tailStart);
-      store.setBytes(extentBase + found.offset, tail);
+      store.setBytes(extentBase + found.offset,
+        ext.buf.subarray(tailStart, extentSize));
     }
     return found.inodeId;
   }
 
   // List all non-deleted entries in a directory.
   function dirList(store, extentBase, extentSize) {
+    var ext = readDirExtent(store, extentBase, extentSize);
     var result = [];
     var pos = 0;
     while (pos < extentSize) {
-      var ent = readDirEnt(store, extentBase, pos, extentSize);
+      var ent = parseDirEnt(ext.buf, ext.dv, pos, extentSize);
       if (!ent) break;
       if (ent.inodeId !== 0) result.push({ name: ent.name, inodeId: ent.inodeId });
       pos += DIR_ENT_HEADER + ent.nameLen;
@@ -3627,10 +3660,17 @@ var BLOCK_FS = (function () {
       };
     }
 
-    var ino = this._inodes.read(dirEntry.inoId);
-    if (!ino || !ino.extentOffset) return null;
-
-    var entries = dirList(this._s, ino.extentOffset, ino.dataSize);
+    // Snapshot the directory listing once (cached on the handle), not on every
+    // readdir call: dirList scans the whole extent, so recomputing it per entry
+    // makes a full enumeration O(N^2) — pathological over a SyncAccessHandle
+    // where each field read is an OPFS syscall. POSIX already leaves concurrent
+    // add/remove during iteration unspecified, so a per-open snapshot is fine.
+    var entries = dirEntry.entries;
+    if (!entries) {
+      var ino = this._inodes.read(dirEntry.inoId);
+      if (!ino || !ino.extentOffset) return null;
+      entries = dirEntry.entries = dirList(this._s, ino.extentOffset, ino.dataSize);
+    }
     if (dirEntry.pos >= entries.length) return null; // end of directory
 
     var ent = entries[dirEntry.pos];
