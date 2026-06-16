@@ -5254,6 +5254,7 @@ async function runModule({
   requestStdinNotify,
   sdl: sdlOverride,
   getBrowserSDL,
+  onSdl,
   sharedAudioBuffer,
   notifyAudio,
   notifyWindow,
@@ -6544,6 +6545,14 @@ async function runModule({
   // (Node CLI, headless tests). Browser host always sets getBrowserSDL.
   if (!sdl) sdl = createNullSDL();
   Object.assign(imports[ENV_KEY], sdl[ENV_KEY]);
+  // Expose the live SDL object to the host so an embedder can push input events
+  // into it (sdl.pushKeyEvent / pushMouseButtonEvent / …). Used when the canvas
+  // and event source live on the main thread but the run executes in a (possibly
+  // nested) worker, so the embedder can't reach createBrowserSDL's return value
+  // any other way. The push methods call wasm exports, so they only work once
+  // the instance exists — the embedder invokes them later (during the frame
+  // loop), not at import-build time.
+  if (typeof onSdl === 'function') onSdl(sdl);
 
   /* ---- Emulator console/display/networking imports ---- */
   /* These are used by TinyEMU and similar emulators. They are no-ops
