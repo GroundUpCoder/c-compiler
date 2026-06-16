@@ -1,6 +1,6 @@
 /* Large-file (>4 GiB) end-to-end exercise for BLOCK_FS v4 + the 64-bit ABI.
  *
- * Driven by tests/blockfs/large_file.js (a standalone harness, NOT part of the
+ * Driven by tests/manual/large_file.js (a standalone harness, NOT part of the
  * default suite — it allocates multi-GiB buffers and takes a while). It proves
  * the whole 64-bit chain works on a single file past the 2^32 boundary:
  *   - off_t / lseek across the wasm<->host i64 boundary at offsets > 4 GiB

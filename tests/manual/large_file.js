@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Standalone >4 GiB BLOCK_FS v4 large-file exercise. NOT part of the default
-// suite (run.js) — it allocates multi-GiB buffers and takes tens of seconds.
+// Standalone >4 GiB BLOCK_FS v4 large-file exercise. Lives under tests/manual/
+// (not tests/blockfs/) so neither run.js's explicit list nor run.py's *.js glob
+// picks it up — it allocates multi-GiB buffers and takes tens of seconds.
 //
 // Run it explicitly:
-//   node tests/blockfs/large_file.js               # ~4.06 GiB file (default)
-//   LARGE_FILE_BYTES=5368709120 node tests/blockfs/large_file.js   # 5 GiB
+//   node tests/manual/large_file.js               # ~4.06 GiB file (default)
+//   LARGE_FILE_BYTES=5368709120 node tests/manual/large_file.js   # 5 GiB
 //
-// It compiles tests/blockfs/large_file.c with the real compiler, runs it
+// It compiles tests/manual/large_file.c with the real compiler, runs it
 // against a pre-sized v4 MemoryByteStore, asserts the program's self-verifying
 // output, then fsck's the resulting image and re-mounts it to confirm the
 // 64-bit size survives a fresh mount (read-through coherence).
@@ -20,7 +21,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const compiler = require(path.join(ROOT, 'compiler.js'));
 const runModule = require(path.join(ROOT, 'host.js'));
 const BLOCK_FS = runModule.BLOCK_FS;
-const { assertFsck } = require('./fsck_v4.js');
+const { assertFsck } = require('../blockfs/fsck_v4.js');
 
 const GiB = 1024 * 1024 * 1024;
 const DEFAULT_BYTES = 4 * GiB + 64 * 1024 * 1024; // just over the 2^32 boundary
