@@ -1545,9 +1545,21 @@ var BLOCK_FS = (function () {
 
   var S_IFMT = 0o170000;
   var S_IFDIR = 0o040000;
+  var S_IFCHR = 0o020000;
   var S_IFREG = 0o100000;
   var DEFAULT_DIR_MODE = 0o40755;
   var DEFAULT_FILE_MODE = 0o100644;
+
+  // /dev character devices (v4 only — they live in the inode's dedicated rdev
+  // field). Device numbers use the traditional 16-bit makedev (major<<8|minor),
+  // matching <sys/sysmacros.h> in the bundled libc, with Linux's mem-device
+  // minors so major()/minor() in programs report the familiar numbers.
+  function makedev(ma, mi) { return ((ma & 0xfff) << 8) | (mi & 0xff); }
+  var DEV_NULL = makedev(1, 3);
+  var DEV_ZERO = makedev(1, 5);
+  var DEV_FULL = makedev(1, 7);
+  var DEV_RANDOM = makedev(1, 8);
+  var DEV_URANDOM = makedev(1, 9);
 
   // ---- Superblock field offsets ----
   var SB_MAGIC = 0, SB_VERSION = 4, SB_FLAGS = 8;
@@ -3026,6 +3038,15 @@ var BLOCK_FS = (function () {
       // Exists
       if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EISDIR');
       if (excl && create) return this._setErr('EEXIST');
+      if ((w.ino.mode & S_IFMT) === S_IFCHR) {
+        // Character device: no data extent, O_TRUNC is a no-op. I/O is
+        // dispatched by device number, not by reading/writing the (absent)
+        // extent. Keep inoId so fstat() returns the S_IFCHR inode + rdev.
+        return this._allocFd({
+          type: 'dev', dev: w.ino.rdev || 0,
+          inoId: w.inoId, position: 0, path: resolved
+        });
+      }
       if (trunc) {
         if (w.ino.extentOffset) {
           this._alloc.free(w.ino.extentOffset);
@@ -3108,6 +3129,7 @@ var BLOCK_FS = (function () {
       pipe.buffer.splice(0, n);
       return n;
     }
+    if (entry.type === 'dev') return this._readDev(entry, buf, count);
     if (entry.position === null) {
       // stdin — drain any pre-buffered bytes first (Node CLI setStdin path),
       // then block on the live-stdin sab ring if one is wired (interactive
@@ -3163,6 +3185,7 @@ var BLOCK_FS = (function () {
       for (var pi = 0; pi < count; pi++) entry.pipe.buffer.push(buf[pi]);
       return count;
     }
+    if (entry.type === 'dev') return this._writeDev(entry, buf, count);
     if (entry.inoId === undefined) return this._setErr('EBADF');
 
     var ino = this._inodes.read(entry.inoId);
@@ -3253,6 +3276,86 @@ var BLOCK_FS = (function () {
     this._inodes.write(pw.inoId, pw.ino);
 
     return 0;
+  };
+
+  // mknod(path, mode, dev) — create a node. Used for /dev character devices:
+  // like the open()-create path but with no data extent; the device number
+  // lives in the inode's rdev field. v4 only (v3 inodes have no rdev field).
+  BlockFS.prototype.mknod = function (path, mode, dev) {
+    var resolved = this._resolvePath(path);
+    if (this._walkPath(resolved)) return this._setErr('EEXIST');
+    var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    var pw = this._walkPath(parentPath);
+    if (!pw) return this._setErr('ENOENT');
+    if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+    var name = resolved.substring(resolved.lastIndexOf('/') + 1);
+    var inoId = this._allocInode(mode);
+    if (inoId === null) return -1;
+    var ino = this._inodes.read(inoId);
+    ino.nlink = 1;
+    ino.rdev = dev >>> 0;
+    this._inodes.write(inoId, ino);
+
+    // Insert the dirent in the parent (grow its extent as needed).
+    var entSize = DIR_ENT_HEADER + encodeStr(name).length;
+    if (!pw.ino.extentOffset ||
+        pw.ino.dataSize + entSize > pw.ino.extentCapacity) {
+      if (this._growExtent(pw.ino,
+          (pw.ino.dataSize || 0) + Math.max(entSize, 256)) === null) {
+        this._freeInode(inoId); return this._setErr('ENOSPC');
+      }
+    }
+    dirInsert(this._s, pw.ino.extentOffset, pw.ino.dataSize || 0, inoId, name);
+    pw.ino.dataSize = (pw.ino.dataSize || 0) + entSize;
+    pw.ino.mtime = this._now();
+    pw.ino.nlink++;
+    this._inodes.write(pw.inoId, pw.ino);
+    return 0;
+  };
+
+  // Character-device reads, keyed by device number (set up by mknod / open).
+  BlockFS.prototype._readDev = function (entry, buf, count) {
+    switch (entry.dev) {
+      case DEV_NULL: return 0;                 // always at EOF
+      case DEV_ZERO:
+      case DEV_FULL:                           // reads as zeros; only writes differ
+        for (var i = 0; i < count; i++) buf[i] = 0;
+        return count;
+      case DEV_RANDOM:
+      case DEV_URANDOM: {
+        // crypto.getRandomValues fills at most 65536 bytes per call.
+        var off = 0;
+        while (off < count) {
+          var n = Math.min(65536, count - off);
+          globalThis.crypto.getRandomValues(buf.subarray(off, off + n));
+          off += n;
+        }
+        return count;
+      }
+      default: return 0;
+    }
+  };
+
+  // Character-device writes: /dev/full fails with ENOSPC; the rest discard.
+  BlockFS.prototype._writeDev = function (entry, buf, count) {
+    if (entry.dev === DEV_FULL) return this._setErr('ENOSPC');
+    return count;
+  };
+
+  // Idempotently create /dev and its character-device nodes — self-healing,
+  // like the app's /root and /tmp. Called on every v4 mount; a no-op once they
+  // exist, and skipped on a read-only mount.
+  BlockFS.prototype.ensureDevNodes = function () {
+    if (this._readonly) return;
+    if (!this.stat('/dev')) this.mkdir('/dev', 0o755);
+    var nodes = [
+      ['/dev/null', DEV_NULL], ['/dev/zero', DEV_ZERO], ['/dev/full', DEV_FULL],
+      ['/dev/random', DEV_RANDOM], ['/dev/urandom', DEV_URANDOM]
+    ];
+    for (var i = 0; i < nodes.length; i++) {
+      if (!this.stat(nodes[i][0])) this.mknod(nodes[i][0], S_IFCHR | 0o666, nodes[i][1]);
+    }
   };
 
   BlockFS.prototype.rmdir = function (path) {
@@ -4583,11 +4686,14 @@ var BLOCK_FS = (function () {
       inodeTable.init(INITIAL_INODE_CAPACITY);
       fs = new BlockFS(store, alloc, inodeTable, 1, true, FMT_V4);
       fs._writeSuperblock();
+      fs.ensureDevNodes();
       return fs;
     }
     alloc = new TLSF64Allocator(store, SUPERBLOCK_SIZE, 0); // load existing metadata
     inodeTable = new InodeTable128(alloc);
-    return new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4);
+    fs = new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4);
+    fs.ensureDevNodes(); // self-heal /dev on every v4 mount (idempotent)
+    return fs;
   };
 
   // Migration is "complete" iff bit 0 of the v4 superblock flags is set. A

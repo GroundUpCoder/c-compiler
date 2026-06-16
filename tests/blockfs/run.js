@@ -10,6 +10,7 @@ var tests = [
   ['test_tlsf.js', []],
   ['test_tlsf64.js', []],
   ['test_v4.js', []],
+  ['test_dev.js', []],
   ['test_migrate.js', []],
   ['test_openworkspace.js', []],
   ['test_fsck_v4.js', []],
