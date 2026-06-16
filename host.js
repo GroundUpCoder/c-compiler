@@ -1636,6 +1636,16 @@ var BLOCK_FS = (function () {
     this._h.truncate(newSize);
   };
 
+  // Wraps a store so every write throws — used to mount the legacy v3 image as a
+  // strictly read-only "view" (the toggle), so it can never be mutated.
+  function ReadOnlyStore(inner) { this._i = inner; }
+  ReadOnlyStore.prototype.getUint32 = function (o) { return this._i.getUint32(o); };
+  ReadOnlyStore.prototype.getBytes = function (o, l) { return this._i.getBytes(o, l); };
+  ReadOnlyStore.prototype.size = function () { return this._i.size(); };
+  ReadOnlyStore.prototype.setUint32 = function () { throw new Error('EROFS: read-only filesystem'); };
+  ReadOnlyStore.prototype.setBytes = function () { throw new Error('EROFS: read-only filesystem'); };
+  ReadOnlyStore.prototype.resize = function () { throw new Error('EROFS: read-only filesystem'); };
+
   // =================================================================
   // TLSFAllocator — O(1) segregated-fit allocator
   // =================================================================
@@ -4427,6 +4437,54 @@ var BLOCK_FS = (function () {
     return BlockFS.create(store);
   };
 
+  // Production v4 workspace mount + migration lifecycle, OPFS-backed. Returns
+  // { fs, mode, handles }. Modes: 'v4' (mounted an existing complete v4 image),
+  // 'migrated' (migrated the legacy v3 image forward — v3 file kept as rollback),
+  // 'fresh' (no prior data), 'legacy-readonly' (the toggle: the old v3 image,
+  // strictly read-only), 'no-legacy' (toggle requested but no v3 image exists).
+  // The v3 image is NEVER written. Caller keeps `handles` open for the session.
+  BlockFS.openWorkspace = async function (opts) {
+    opts = opts || {};
+    var v4name = opts.v4Name || 'workspace.v4.img';
+    var v3name = opts.v3Name || 'workspace.img';
+    var root = await navigator.storage.getDirectory();
+    async function open(name, create) {
+      var fh;
+      try { fh = await root.getFileHandle(name, { create: false }); }
+      catch (e) { if (!create) return null; fh = await root.getFileHandle(name, { create: true }); }
+      var h = await fh.createSyncAccessHandle();
+      return { handle: h, store: new SyncAccessHandleStore(h) };
+    }
+    function isV3(store) {
+      return store.size() >= SUPERBLOCK_SIZE &&
+        store.getUint32(SB_MAGIC) === MAGIC && store.getUint32(SB_VERSION) === 3;
+    }
+
+    // Toggle: mount the legacy v3 image strictly read-only (no migration, no write).
+    if (opts.viewLegacy) {
+      var leg = await open(v3name, false);
+      if (!leg || !isV3(leg.store)) { if (leg) leg.handle.close(); return { fs: null, mode: 'no-legacy', handles: [] }; }
+      var rfs = BlockFS.create(new ReadOnlyStore(leg.store));
+      rfs._readonly = true;
+      return { fs: rfs, mode: 'legacy-readonly', handles: [leg.handle] };
+    }
+
+    var v4 = await open(v4name, true);
+    if (BlockFS.isMigrationComplete(v4.store)) {
+      return { fs: BlockFS.createV4(v4.store), mode: 'v4', handles: [v4.handle] };
+    }
+    // v4 absent/incomplete: migrate forward from a legacy v3 image if present.
+    var legacy = await open(v3name, false);
+    if (legacy && isV3(legacy.store)) {
+      v4.handle.truncate(0);                       // discard any partial v4, clean retry
+      BlockFS.migrateV3toV4(legacy.store, v4.store); // legacy is read-only inside migrate
+      legacy.handle.close();                       // release v3 handle; file kept as rollback
+      return { fs: BlockFS.createV4(v4.store), mode: 'migrated', handles: [v4.handle] };
+    }
+    if (legacy) legacy.handle.close();
+    return { fs: BlockFS.createV4(v4.store), mode: 'fresh', handles: [v4.handle] };
+  };
+
   // Test init: sync, backed by any ByteStore.
   BlockFS.create = function (store) {
     var storeSize = store.size();
@@ -4589,11 +4647,13 @@ var BLOCK_FS = (function () {
 
   return {
     init: BlockFS.init,
+    openWorkspace: BlockFS.openWorkspace,
     create: BlockFS.create,
     createV4: BlockFS.createV4,
     migrateV3toV4: BlockFS.migrateV3toV4,
     isMigrationComplete: BlockFS.isMigrationComplete,
     MemoryByteStore: MemoryByteStore,
+    ReadOnlyStore: ReadOnlyStore,
     TLSFAllocator: TLSFAllocator,
     TLSF64Allocator: TLSF64Allocator,
   };
