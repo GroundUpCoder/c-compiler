@@ -194,11 +194,10 @@ function createFileSystem({ fs, ctx }) {
     view.setBigInt64(buf_ptr + 48, BigInt(at), true);                  /* st_atime */
     view.setBigInt64(buf_ptr + 56, BigInt(mt), true);                  /* st_mtime */
     view.setBigInt64(buf_ptr + 64, BigInt(ct), true);                  /* st_ctime */
-    /* POSIX-2008 nanosecond timespecs mirror the scalar seconds; second-
-       granularity storage, so tv_nsec is 0. */
-    view.setBigInt64(buf_ptr + 72, BigInt(at), true); view.setInt32(buf_ptr + 80, 0, true);   /* st_atim */
-    view.setBigInt64(buf_ptr + 88, BigInt(mt), true); view.setInt32(buf_ptr + 96, 0, true);   /* st_mtim */
-    view.setBigInt64(buf_ptr + 104, BigInt(ct), true); view.setInt32(buf_ptr + 112, 0, true); /* st_ctim */
+    /* POSIX-2008 nanosecond timespecs: sub-second part from the Node ms times. */
+    view.setBigInt64(buf_ptr + 72, BigInt(at), true); view.setInt32(buf_ptr + 80, ((st.atimeMs || 0) % 1000) * 1e6, true);   /* st_atim */
+    view.setBigInt64(buf_ptr + 88, BigInt(mt), true); view.setInt32(buf_ptr + 96, ((st.mtimeMs || 0) % 1000) * 1e6, true);   /* st_mtim */
+    view.setBigInt64(buf_ptr + 104, BigInt(ct), true); view.setInt32(buf_ptr + 112, ((st.ctimeMs || 0) % 1000) * 1e6, true); /* st_ctim */
   }
 
   const result = {
@@ -3414,12 +3413,18 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.stat = function (path) {
     var w = this._walkPath(this._resolvePath(path));
     if (!w) return this._setErr('ENOENT');
-    var sc = this._fmt.timeScale; // native unit (sec v3 / ms v4) -> seconds
+    // Native unit -> whole seconds + sub-second nanoseconds. v3 stores seconds
+    // (nsec always 0); v4 stores ms (nsec = ms-remainder * 1e6), which is what
+    // lets build tools distinguish writes within the same second.
+    var sc = this._fmt.timeScale, ns = 1e9 / sc;
+    var i = w.ino;
     return {
-      ino: w.inoId, mode: w.ino.mode, size: w.ino.dataSize,
-      mtime: Math.floor(w.ino.mtime / sc), ctime: Math.floor(w.ino.ctime / sc),
-      atime: Math.floor(w.ino.atime / sc), btime: Math.floor(w.ino.btime / sc),
-      nlink: w.ino.nlink, rdev: w.ino.rdev || 0, uid: 0, gid: 0
+      ino: w.inoId, mode: i.mode, size: i.dataSize,
+      mtime: Math.floor(i.mtime / sc), ctime: Math.floor(i.ctime / sc),
+      atime: Math.floor(i.atime / sc), btime: Math.floor(i.btime / sc),
+      mtimeNsec: (i.mtime % sc) * ns, ctimeNsec: (i.ctime % sc) * ns,
+      atimeNsec: (i.atime % sc) * ns, btimeNsec: (i.btime % sc) * ns,
+      nlink: i.nlink, rdev: i.rdev || 0, uid: 0, gid: 0
     };
   };
 
@@ -3438,11 +3443,13 @@ var BLOCK_FS = (function () {
     }
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
-    var sc = this._fmt.timeScale;
+    var sc = this._fmt.timeScale, ns = 1e9 / sc;
     return {
       ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
       mtime: Math.floor(ino.mtime / sc), ctime: Math.floor(ino.ctime / sc),
       atime: Math.floor(ino.atime / sc), btime: Math.floor(ino.btime / sc),
+      mtimeNsec: (ino.mtime % sc) * ns, ctimeNsec: (ino.ctime % sc) * ns,
+      atimeNsec: (ino.atime % sc) * ns, btimeNsec: (ino.btime % sc) * ns,
       nlink: ino.nlink, rdev: ino.rdev || 0, uid: 0, gid: 0
     };
   };
@@ -3835,9 +3842,9 @@ var BLOCK_FS = (function () {
     view.setBigInt64(bufPtr + 48, BigInt(st.atime), true);   // st_atime
     view.setBigInt64(bufPtr + 56, BigInt(st.mtime), true);   // st_mtime
     view.setBigInt64(bufPtr + 64, BigInt(st.ctime), true);   // st_ctime
-    view.setBigInt64(bufPtr + 72, BigInt(st.atime), true); view.setInt32(bufPtr + 80, 0, true);   // st_atim
-    view.setBigInt64(bufPtr + 88, BigInt(st.mtime), true); view.setInt32(bufPtr + 96, 0, true);   // st_mtim
-    view.setBigInt64(bufPtr + 104, BigInt(st.ctime), true); view.setInt32(bufPtr + 112, 0, true); // st_ctim
+    view.setBigInt64(bufPtr + 72, BigInt(st.atime), true); view.setInt32(bufPtr + 80, (st.atimeNsec || 0) | 0, true);   // st_atim
+    view.setBigInt64(bufPtr + 88, BigInt(st.mtime), true); view.setInt32(bufPtr + 96, (st.mtimeNsec || 0) | 0, true);   // st_mtim
+    view.setBigInt64(bufPtr + 104, BigInt(st.ctime), true); view.setInt32(bufPtr + 112, (st.ctimeNsec || 0) | 0, true); // st_ctim
   }
 
   // Adapt a BlockFS instance to the WASM `env` import object.

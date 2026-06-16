@@ -11,6 +11,7 @@ const hostSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'host.js'), 'ut
   .replace(/^#![^\n]*\n/, '');
 const BLOCK_FS = new Function(`${hostSrc}\nreturn BLOCK_FS;`)();
 const { create, createV4, migrateV3toV4, isMigrationComplete, MemoryByteStore } = BLOCK_FS;
+const { fsck: fsckV4 } = require('./fsck_v4.js');
 
 const O_RDONLY = 0, O_WRONLY = 1, O_CREAT = 0x40, O_TRUNC = 0x200, S_IFDIR = 0o040000;
 let passed = 0, failed = 0;
@@ -70,6 +71,9 @@ ok(isMigrationComplete(v4store), 'completion marker is set');
 
 const after = Buffer.from(v3store.getBytes(0, v3store.size()));
 ok(before.equals(after), 'v3 store is byte-for-byte unchanged (non-destructive)');
+
+// the migrated image is structurally sound per the INDEPENDENT v4 checker
+{ const p = fsckV4(v4store); ok(p.length === 0, 'migrated v4 image is fsck-clean: ' + p.join('; ')); }
 
 // ---- Verify v4 via a FRESH mount (also proves persistence) ----
 const v4 = createV4(v4store);

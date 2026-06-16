@@ -71,6 +71,13 @@ const statSec = bfs.stat('/hello.txt').mtime;
 ok(statSec > 1700000000 && statSec < 1900000000, `stat() presents seconds: ${statSec}`);
 eq(Math.floor(ino.mtime / 1000), statSec, 'ms storage / seconds presentation are consistent');
 
+// sub-second precision: stat exposes nsec so sec + nsec reconstruct the stored ms
+{
+  const st = bfs.stat('/hello.txt');
+  ok(st.mtimeNsec >= 0 && st.mtimeNsec < 1e9, `nsec in range: ${st.mtimeNsec}`);
+  eq(st.mtime * 1000 + Math.round(st.mtimeNsec / 1e6), ino.mtime, 'sec + nsec reconstruct the stored ms');
+}
+
 // ---- 6. ftruncate + 64-bit size field plumbing ----
 {
   const fd = bfs.open('/trunc.bin', O_CREAT | O_WRONLY, 0o644);
