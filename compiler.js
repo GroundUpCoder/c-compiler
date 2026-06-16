@@ -1287,7 +1287,34 @@ function preprocess(filename, initialTokens, ppRegistry) {
             c.column = t.column;
             return c;
           });
-          const replacement = expand(relocated, nextHideset);
+          let replacement = expand(relocated, nextHideset);
+          // Object-like macro whose expansion ends in a function-like macro
+          // name: if the tokens that follow in the current stream supply its
+          // argument list, apply it. Needed when the call site is itself inside
+          // another macro expansion, so the top-level rescanTrailingMacros never
+          // sees the `name(args)` pairing — e.g. `#define h g` (object-like)
+          // where g(a,b) is function-like and `h(2,3)` appears in another
+          // macro's replacement list.
+          while (replacement.length > 0) {
+            const last = replacement[replacement.length - 1];
+            if (last.kind !== TokenKind.IDENT || !macros.has(last.text) ||
+                !macros.get(last.text).isFunctionLike || hideset.has(last.text))
+              break;
+            let k = i + 1;
+            while (k < tokens.length && tokens[k].kind === TokenKind.NEWLINE) k++;
+            if (k >= tokens.length || !tokens[k].atPunct(Punct.LPAREN)) break;
+            const call = [last, tokens[k]];
+            let depth = 1, k2 = k + 1;
+            while (k2 < tokens.length && depth > 0) {
+              const tt = tokens[k2];
+              if (tt.atPunct(Punct.LPAREN)) depth++;
+              else if (tt.atPunct(Punct.RPAREN)) depth--;
+              call.push(tt);
+              k2++;
+            }
+            i = k2 - 1;
+            replacement = [...replacement.slice(0, -1), ...expand(call, new Set(hideset))];
+          }
           expanded.push(...replacement);
         } else {
           // Function-style macro: need to check for '(' and collect arguments
@@ -8366,6 +8393,29 @@ function findMemberChain(tag, name) {
 // designators arrays are rewritten through the existing references —
 // safe because Object.freeze on EInitList is shallow).
 function normalizeInitList(initList, containerType) {
+  // C11 6.7.9p14: a char array may be initialized by a string literal that is
+  // optionally enclosed in braces — `char a[] = { "hi" }`. Keep the string as
+  // the sole element and adopt the (string-sized) array type; the per-element
+  // cursor logic below would otherwise treat the string as a single scalar
+  // element and produce a size-1 array. Codegen's init-list paths already
+  // handle EInitList{ char[N], [EString] } — the same shape the `(char[]){"hi"}`
+  // compound-literal path produces.
+  if (containerType.isArray() &&
+      initList.elements.length === 1 &&
+      initList.elements[0] instanceof AST.EString &&
+      initList.elements[0].type && initList.elements[0].type.isArray()) {
+    const abt = containerType.baseType.removeQualifiers();
+    const sbt = initList.elements[0].type.baseType.removeQualifiers();
+    // A string can only initialize an array whose element is a matching-width
+    // character/integer type (char[] from "..", wchar[] from L"..").
+    if (!abt.isAggregate() && !abt.isPointer() && !abt.isArray() &&
+        abt.size === sbt.size) {
+      const arrType = (containerType.arraySize || 0) === 0
+        ? initList.elements[0].type : containerType;
+      return new AST.EInitList(initList.loc, arrType, initList.elements.slice(),
+                               initList.designators.slice(), initList.unionMemberIndex);
+    }
+  }
   // Snapshot source, then clear in place. Mutating array lengths/
   // contents rather than reassigning the references keeps
   // initList.children aliasing initList.elements for walkers. Frozen
@@ -14028,6 +14078,17 @@ class CodeGenerator {
     if (type.isArray()) {
       const elemType = type.baseType;
       const elemSize = this.sizeOf(elemType);
+      // A char array initialized by a (optionally brace-wrapped) string literal
+      // arrives as a single EString element whose element type is scalar (not an
+      // array). Write the string across the whole array rather than treating it
+      // as element 0. (`elemType.isArray()` below handles arrays-of-char-arrays
+      // like `char m[][6] = {"ab","cd"}`, a different case.)
+      if (initList.elements.length === 1 &&
+          initList.elements[0] instanceof AST.EString &&
+          !elemType.isArray() && !elemType.isAggregate()) {
+        this.writeStringLiteralToStatic(initList.elements[0].value, type, baseOffset);
+        return;
+      }
       for (let i = 0; i < initList.elements.length; i++) {
         const elemOffset = baseOffset + i * elemSize;
         const elem = initList.elements[i];

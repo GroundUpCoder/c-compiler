@@ -1,0 +1,6 @@
+G=hello sz=6
+ST=foobar sz=7
+NUL=x c2=y sz=4
+SIZED=hi sz=8 last=0
+S=world sz=6
+A=auto sz=5
