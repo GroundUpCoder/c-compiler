@@ -8,6 +8,7 @@ var path = require('path');
 var long = process.argv.indexOf('--long') >= 0;
 var tests = [
   ['test_tlsf.js', []],
+  ['test_tlsf64.js', []],
   ['test_blockfs.js', []],
   ['test_stdin_sab.js', []],
   ['test_e2e.js', []],

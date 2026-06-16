@@ -2098,6 +2098,353 @@ var BLOCK_FS = (function () {
   };
 
   // =================================================================
+  // TLSF64Allocator — 64-bit copy of TLSFAllocator (BLOCK_FS v4)
+  // =================================================================
+  //
+  // Same O(1) segregated-fit algorithm as TLSFAllocator, widened to 64-bit
+  // offsets/sizes so the pool can exceed 4 GiB. The v3 allocator + ByteStores are
+  // untouched (v3 stays frozen). Design notes:
+  //   - Offsets/sizes are plain JS numbers (exact to 2^53 ≈ 9 PB, far beyond any
+  //     real image), persisted as lo/hi uint32 pairs via _get64/_set64. No BigInt.
+  //   - JS bitwise ops are 32-bit, so the size_and_flags word is ARITHMETIC:
+  //     word = size + flags (size is 8-aligned so its low 2 bits are free for the
+  //     FREE|PREV_FREE flags); size = word - (word % 4), flags = word % 4. Bitwise
+  //     is still used on the small flag value and on the 32-bit free-list bitmaps.
+  //   - FL_MAX64 = 35 → FL_COUNT64 = 32, so fl_bitmap fits one 32-bit word; the
+  //     top size-class absorbs everything larger (coarser fit only for >32 GiB
+  //     blocks). Shifts at the fl=31 boundary use a guarded maskGE().
+  //
+  // Block header (16 bytes used, 32 bytes free):
+  //   [0:8]   size_and_flags  u64
+  //   [8:16]  prev_phys       u64
+  //   Free blocks add: [16:24] next_free u64, [24:32] prev_free u64
+  // Metadata (at metaOffset): fl_bitmap u32; sl_bitmap[FL_COUNT64] u32 each;
+  //   free_heads[FL_COUNT64*SL_COUNT] u64 each; pool_start/pool_end/last_block u64.
+
+  var BLOCK_OVERHEAD64 = 16, MIN_BLOCK_SIZE64 = 32;
+  var FL_MAX64 = 35, FL_COUNT64 = FL_MAX64 - FL_SHIFT + 1; // 32
+  var TLSF_META_SIZE64 = 8192;
+  var TLSF_POOL_OFFSET64 = SUPERBLOCK_SIZE + TLSF_META_SIZE64; // 8448
+
+  var M64_FL_BITMAP = 0;
+  var M64_SL_BITMAP = 4;
+  var M64_FREE_HEADS = M64_SL_BITMAP + FL_COUNT64 * 4;             // 132
+  var M64_POOL_START = M64_FREE_HEADS + FL_COUNT64 * SL_COUNT * 8; // 4228
+  var M64_POOL_END = M64_POOL_START + 8;                          // 4236
+  var M64_LAST_BLOCK = M64_POOL_END + 8;                          // 4244
+
+  function _maskGE(n) { return n >= 32 ? 0 : ((~0 << n) >>> 0); } // bits [n..31]
+
+  function TLSF64Allocator(store, metaOffset, poolSize) {
+    this._s = store;
+    this._meta = metaOffset;
+    this._init(poolSize);
+  }
+
+  TLSF64Allocator.prototype._get64 = function (off) {
+    return this._s.getUint32(off) + this._s.getUint32(off + 4) * 0x100000000;
+  };
+  TLSF64Allocator.prototype._set64 = function (off, v) {
+    this._s.setUint32(off, v >>> 0);
+    this._s.setUint32(off + 4, Math.floor(v / 0x100000000));
+  };
+  TLSF64Allocator.prototype._readMeta32 = function (off) { return this._s.getUint32(this._meta + off); };
+  TLSF64Allocator.prototype._writeMeta32 = function (off, val) { this._s.setUint32(this._meta + off, val); };
+  TLSF64Allocator.prototype._readMeta64 = function (off) { return this._get64(this._meta + off); };
+  TLSF64Allocator.prototype._writeMeta64 = function (off, val) { this._set64(this._meta + off, val); };
+  TLSF64Allocator.prototype._freeHead = function (fl, sl) { return this._readMeta64(M64_FREE_HEADS + (fl * SL_COUNT + sl) * 8); };
+  TLSF64Allocator.prototype._setFreeHead = function (fl, sl, v) { this._writeMeta64(M64_FREE_HEADS + (fl * SL_COUNT + sl) * 8, v); };
+
+  // size_and_flags is arithmetic: word = size + flags.
+  TLSF64Allocator.prototype._getFlags = function (block) { return this._get64(block) % 4; };
+  TLSF64Allocator.prototype._setFlags = function (block, flags) {
+    var w = this._get64(block);
+    this._set64(block, (w - (w % 4)) + (flags & FLAG_BITS));
+  };
+  TLSF64Allocator.prototype._blockSize = function (block) {
+    var w = this._get64(block);
+    return w - (w % 4);
+  };
+  TLSF64Allocator.prototype._blockSetSize = function (block, size) {
+    this._set64(block, size + (this._get64(block) % 4));
+  };
+  TLSF64Allocator.prototype._blockIsFree = function (block) { return (this._getFlags(block) & FREE_BIT) !== 0; };
+  TLSF64Allocator.prototype._blockPrevIsFree = function (block) { return (this._getFlags(block) & PREV_FREE_BIT) !== 0; };
+  TLSF64Allocator.prototype._blockPrevPhys = function (block) { return this._get64(block + 8); };
+  TLSF64Allocator.prototype._blockSetPrevPhys = function (block, prev) { this._set64(block + 8, prev); };
+  TLSF64Allocator.prototype._blockNextPhys = function (block) { return block + this._blockSize(block); };
+  TLSF64Allocator.prototype._blockGetNextFree = function (block) { return this._get64(block + 16); };
+  TLSF64Allocator.prototype._blockSetNextFree = function (block, nf) { this._set64(block + 16, nf); };
+  TLSF64Allocator.prototype._blockGetPrevFree = function (block) { return this._get64(block + 24); };
+  TLSF64Allocator.prototype._blockSetPrevFree = function (block, pf) { this._set64(block + 24, pf); };
+
+  TLSF64Allocator.prototype._ctz32 = function (x) {
+    if (x === 0) return 32;
+    return 31 - Math.clz32(x & -x);
+  };
+  // floor(log2(x)) for 1 <= x < 2^53.
+  TLSF64Allocator.prototype._fls = function (x) {
+    if (x >= 0x100000000) return 32 + (31 - Math.clz32(Math.floor(x / 0x100000000)));
+    return 31 - Math.clz32(x);
+  };
+
+  TLSF64Allocator.prototype._mappingInsert = function (size, out) {
+    if (size < (1 << (FL_SHIFT + 1))) {
+      out[0] = 0;
+      out[1] = Math.floor((size - MIN_BLOCK_SIZE64) / 8) & (SL_COUNT - 1);
+    } else {
+      var t = this._fls(size);
+      var fl = t - FL_SHIFT;
+      var sl = Math.floor(size / Math.pow(2, t - SL_LOG2)) & (SL_COUNT - 1);
+      if (fl >= FL_COUNT64) { fl = FL_COUNT64 - 1; sl = SL_COUNT - 1; } // top class absorbs the rest
+      out[0] = fl; out[1] = sl;
+    }
+  };
+
+  TLSF64Allocator.prototype._mappingSearch = function (size, out) {
+    var sz = size;
+    if (sz >= (1 << (FL_SHIFT + 1))) {
+      var t = this._fls(sz);
+      sz = sz + Math.pow(2, t - SL_LOG2) - 1; // round up (arithmetic — may exceed 2^32)
+    }
+    this._mappingInsert(sz, out);
+  };
+
+  TLSF64Allocator.prototype._insertFreeBlock = function (block) {
+    var flsl = [0, 0];
+    this._mappingInsert(this._blockSize(block), flsl);
+    var fl = flsl[0], sl = flsl[1];
+    var head = this._freeHead(fl, sl);
+    this._blockSetNextFree(block, head);
+    this._blockSetPrevFree(block, 0);
+    if (head) this._blockSetPrevFree(head, block);
+    this._setFreeHead(fl, sl, block);
+    this._writeMeta32(M64_FL_BITMAP, this._readMeta32(M64_FL_BITMAP) | (1 << fl));
+    this._writeMeta32(M64_SL_BITMAP + fl * 4, this._readMeta32(M64_SL_BITMAP + fl * 4) | (1 << sl));
+  };
+
+  TLSF64Allocator.prototype._removeFreeBlock = function (block) {
+    var flsl = [0, 0];
+    this._mappingInsert(this._blockSize(block), flsl);
+    var fl = flsl[0], sl = flsl[1];
+    var nf = this._blockGetNextFree(block);
+    var pf = this._blockGetPrevFree(block);
+    if (nf && this._blockGetPrevFree(nf) !== block) throw new Error('TLSF64: corrupted free list (next->prev != cur)');
+    if (pf && this._blockGetNextFree(pf) !== block) throw new Error('TLSF64: corrupted free list (prev->next != cur)');
+    if (nf) this._blockSetPrevFree(nf, pf);
+    if (pf) this._blockSetNextFree(pf, nf);
+    else {
+      this._setFreeHead(fl, sl, nf);
+      if (!nf) {
+        var slMap = (this._readMeta32(M64_SL_BITMAP + fl * 4) & ~(1 << sl)) >>> 0;
+        this._writeMeta32(M64_SL_BITMAP + fl * 4, slMap);
+        if (!slMap) this._writeMeta32(M64_FL_BITMAP, (this._readMeta32(M64_FL_BITMAP) & ~(1 << fl)) >>> 0);
+      }
+    }
+  };
+
+  TLSF64Allocator.prototype._findSuitableBlock = function (flsl) {
+    var fl = flsl[0], sl = flsl[1];
+    var slMap = (this._readMeta32(M64_SL_BITMAP + fl * 4) & _maskGE(sl)) >>> 0;
+    if (!slMap) {
+      var flMap = (this._readMeta32(M64_FL_BITMAP) & _maskGE(fl + 1)) >>> 0;
+      if (!flMap) return 0;
+      fl = this._ctz32(flMap);
+      slMap = this._readMeta32(M64_SL_BITMAP + fl * 4);
+    }
+    sl = this._ctz32(slMap);
+    flsl[0] = fl; flsl[1] = sl;
+    return this._freeHead(fl, sl);
+  };
+
+  TLSF64Allocator.prototype._mergePrev = function (block) {
+    if (this._blockPrevIsFree(block)) {
+      var prev = this._blockPrevPhys(block);
+      this._removeFreeBlock(prev);
+      var newSize = this._blockSize(prev) + this._blockSize(block);
+      this._set64(prev, newSize + this._getFlags(prev));
+      var next = this._blockNextPhys(prev);
+      var poolEnd = this._readMeta64(M64_POOL_END);
+      if (next < poolEnd) this._blockSetPrevPhys(next, prev);
+      if (block === this._readMeta64(M64_LAST_BLOCK)) this._writeMeta64(M64_LAST_BLOCK, prev);
+      block = prev;
+    }
+    return block;
+  };
+
+  TLSF64Allocator.prototype._mergeNext = function (block) {
+    var next = this._blockNextPhys(block);
+    var poolEnd = this._readMeta64(M64_POOL_END);
+    if (next < poolEnd && this._blockIsFree(next)) {
+      this._removeFreeBlock(next);
+      var newSize = this._blockSize(block) + this._blockSize(next);
+      this._set64(block, newSize + this._getFlags(block));
+      var after = this._blockNextPhys(block);
+      if (after < poolEnd) this._blockSetPrevPhys(after, block);
+      if (next === this._readMeta64(M64_LAST_BLOCK)) this._writeMeta64(M64_LAST_BLOCK, block);
+    }
+    return block;
+  };
+
+  TLSF64Allocator.prototype._splitBlock = function (block, needed) {
+    var remainderSize = this._blockSize(block) - needed;
+    if (remainderSize >= MIN_BLOCK_SIZE64) {
+      this._set64(block, needed + this._getFlags(block));
+      var rem = block + needed;
+      this._set64(rem, remainderSize + FREE_BIT);
+      this._blockSetPrevPhys(rem, block);
+      var next = rem + remainderSize;
+      var poolEnd = this._readMeta64(M64_POOL_END);
+      if (next < poolEnd) this._blockSetPrevPhys(next, rem);
+      if (block === this._readMeta64(M64_LAST_BLOCK)) this._writeMeta64(M64_LAST_BLOCK, rem);
+      this._insertFreeBlock(rem);
+      next = this._blockNextPhys(block);
+      if (next < poolEnd) this._setFlags(next, this._getFlags(next) | PREV_FREE_BIT);
+    }
+  };
+
+  TLSF64Allocator.prototype._blockMarkUsed = function (block) {
+    this._setFlags(block, this._getFlags(block) & ~FREE_BIT);
+    var next = this._blockNextPhys(block);
+    if (next < this._readMeta64(M64_POOL_END)) this._setFlags(next, this._getFlags(next) & ~PREV_FREE_BIT);
+  };
+  TLSF64Allocator.prototype._blockMarkFree = function (block) {
+    this._setFlags(block, this._getFlags(block) | FREE_BIT);
+    var next = this._blockNextPhys(block);
+    if (next < this._readMeta64(M64_POOL_END)) this._setFlags(next, this._getFlags(next) | PREV_FREE_BIT);
+  };
+
+  TLSF64Allocator.prototype._growPool = function (needed) {
+    var poolEnd = this._readMeta64(M64_POOL_END);
+    var lastBlock = this._readMeta64(M64_LAST_BLOCK);
+    var newEnd = poolEnd + needed;
+    if (newEnd > 0x1FFFFFFFFFFFFF) return 0; // stay well under 2^53
+    if (newEnd > this._s.size()) {
+      try { this._s.resize(newEnd + 65536); } catch (e) { return 0; }
+    }
+    var block = poolEnd;
+    var blockSz = newEnd - poolEnd;
+    if (blockSz >= (1 << (FL_SHIFT + 1))) {
+      var t = this._fls(blockSz);
+      blockSz = blockSz + Math.pow(2, t - SL_LOG2) - 1;
+    }
+    blockSz = blockSz + (BLOCK_ALIGN - 1); blockSz = blockSz - (blockSz % BLOCK_ALIGN);
+    newEnd = poolEnd + blockSz;
+    if (newEnd > this._s.size()) {
+      try { this._s.resize(newEnd); } catch (e) { return 0; }
+    }
+    this._set64(block, blockSz + FREE_BIT);
+    this._blockSetPrevPhys(block, lastBlock);
+    this._writeMeta64(M64_POOL_END, newEnd);
+    if (lastBlock && this._blockIsFree(lastBlock)) {
+      this._setFlags(block, this._getFlags(block) | PREV_FREE_BIT);
+      this._writeMeta64(M64_LAST_BLOCK, block);
+      block = this._mergePrev(block);
+    } else {
+      this._writeMeta64(M64_LAST_BLOCK, block);
+    }
+    this._insertFreeBlock(block);
+    return 1;
+  };
+
+  TLSF64Allocator.prototype._adjustRequest = function (size) {
+    var adj = size + BLOCK_OVERHEAD64;
+    if (adj < MIN_BLOCK_SIZE64) adj = MIN_BLOCK_SIZE64;
+    adj = adj + (BLOCK_ALIGN - 1);
+    return adj - (adj % BLOCK_ALIGN);
+  };
+
+  TLSF64Allocator.prototype.malloc = function (size) {
+    if (size === 0) return 0;
+    if (size > 0xFFFFFFFFFFFF) return 0; // ~2^48 single-allocation cap
+    var adjusted = this._adjustRequest(size);
+    var flsl = [0, 0];
+    this._mappingSearch(adjusted, flsl);
+    if (flsl[0] >= FL_COUNT64) {
+      if (!this._growPool(adjusted)) return 0;
+      this._mappingSearch(adjusted, flsl);
+    }
+    var block = this._findSuitableBlock(flsl);
+    if (!block) {
+      if (!this._growPool(adjusted)) return 0;
+      this._mappingSearch(adjusted, flsl);
+      block = this._findSuitableBlock(flsl);
+      if (!block) return 0;
+    }
+    this._removeFreeBlock(block);
+    this._splitBlock(block, adjusted);
+    this._blockMarkUsed(block);
+    return block + BLOCK_OVERHEAD64;
+  };
+
+  TLSF64Allocator.prototype.free = function (ptr) {
+    if (!ptr) return;
+    var block = ptr - BLOCK_OVERHEAD64;
+    var poolStart = this._readMeta64(M64_POOL_START);
+    var poolEnd = this._readMeta64(M64_POOL_END);
+    if (block < poolStart || block >= poolEnd) throw new Error('TLSF64: free() on pointer outside pool');
+    if (this._blockIsFree(block)) throw new Error('TLSF64: double free detected');
+    this._blockMarkFree(block);
+    block = this._mergePrev(block);
+    block = this._mergeNext(block);
+    this._insertFreeBlock(block);
+  };
+
+  TLSF64Allocator.prototype.realloc = function (ptr, newSize) {
+    if (!ptr) return this.malloc(newSize);
+    if (newSize === 0) { this.free(ptr); return 0; }
+    var block = ptr - BLOCK_OVERHEAD64;
+    var oldPayload = this._blockSize(block) - BLOCK_OVERHEAD64;
+    if (newSize <= oldPayload) return ptr;
+    var newPtr = this.malloc(newSize);
+    if (!newPtr) return 0;
+    this._s.setBytes(newPtr, this._s.getBytes(ptr, oldPayload));
+    this.free(ptr);
+    return newPtr;
+  };
+
+  TLSF64Allocator.prototype.calloc = function (count, size) {
+    if (size !== 0 && count > 0xFFFFFFFFFFFF / size) return 0;
+    var total = count * size;
+    var ptr = this.malloc(total);
+    if (ptr) this._s.setBytes(ptr, new Uint8Array(total));
+    return ptr;
+  };
+
+  // ---- Test / debug (mirror TLSFAllocator) ----
+  TLSF64Allocator.prototype.blockSize = function (ptr) { return this._blockSize(ptr - BLOCK_OVERHEAD64) - BLOCK_OVERHEAD64; };
+  TLSF64Allocator.prototype.blockIsFree = function (ptr) { return this._blockIsFree(ptr - BLOCK_OVERHEAD64); };
+  TLSF64Allocator.prototype.metadataSize = function () { return TLSF_META_SIZE64; };
+  TLSF64Allocator.prototype.freeBlockCount = function () {
+    var count = 0, poolEnd = this._readMeta64(M64_POOL_END), block = this._readMeta64(M64_POOL_START);
+    while (block < poolEnd) { if (this._blockIsFree(block)) count++; block = this._blockNextPhys(block); }
+    return count;
+  };
+  TLSF64Allocator.prototype.totalFreeBytes = function () {
+    var total = 0, poolEnd = this._readMeta64(M64_POOL_END), block = this._readMeta64(M64_POOL_START);
+    while (block < poolEnd) { if (this._blockIsFree(block)) total += this._blockSize(block) - BLOCK_OVERHEAD64; block = this._blockNextPhys(block); }
+    return total;
+  };
+
+  TLSF64Allocator.prototype._init = function (poolSize) {
+    if (poolSize === 0) return; // load existing metadata without zeroing
+    var poolStart = TLSF_POOL_OFFSET64;
+    var storeSize = this._s.size();
+    var actualPoolSize = storeSize - poolStart;
+    if (actualPoolSize < poolSize) { this._s.resize(poolStart + poolSize); actualPoolSize = poolSize; }
+    actualPoolSize = actualPoolSize - (actualPoolSize % BLOCK_ALIGN);
+    for (var i = 0; i < TLSF_META_SIZE64; i += 4) this._writeMeta32(i, 0);
+    this._writeMeta64(M64_POOL_START, poolStart);
+    this._writeMeta64(M64_POOL_END, poolStart + actualPoolSize);
+    this._writeMeta64(M64_LAST_BLOCK, 0);
+    var block = poolStart;
+    this._set64(block, actualPoolSize + FREE_BIT);
+    this._blockSetPrevPhys(block, 0);
+    this._writeMeta64(M64_LAST_BLOCK, block);
+    this._insertFreeBlock(block);
+  };
+
+  // =================================================================
   // InodeTable — flat array of inodes, stored in a TLSF extent
   // =================================================================
 
@@ -4048,6 +4395,7 @@ var BLOCK_FS = (function () {
     create: BlockFS.create,
     MemoryByteStore: MemoryByteStore,
     TLSFAllocator: TLSFAllocator,
+    TLSF64Allocator: TLSF64Allocator,
   };
 })();
 
