@@ -151,41 +151,42 @@ function createFileSystem({ fs, ctx }) {
   }
 
   /* Helper to write struct stat fields into WASM memory at buf_ptr.
-     Must match the libc `struct stat` layout (compiler.js, <sys/stat.h>):
-     st_dev(0) st_ino(4) st_mode(8) st_nlink(12) st_size(16) st_rdev(20)
-     st_atime(24) st_mtime(28) st_ctime(32). The st_rdev slot is easy to
-     forget — omitting it shifts every time field by one and makes st_mtime
-     read back the ctime. */
+     Must match the 64-bit libc `struct stat` layout (compiler.js, <sys/stat.h>),
+     verified by tests/unit/stdlib/stat_layout. 120 bytes; st_size/st_blocks and
+     all timestamps are i64 (setBigInt64). 32-bit fields first, then 8-aligned:
+     dev(0) ino(4) mode(8) nlink(12) rdev(16) uid(20) gid(24) blksize(28)
+     size(32) blocks(40) atime(48) mtime(56) ctime(64)
+     atim.sec(72) atim.nsec(80) mtim.sec(88) mtim.nsec(96) ctim.sec(104) ctim.nsec(112) */
   function writeStatBuf(buf_ptr, st) {
     const memory = getMemory();
     const view = new DataView(memory.buffer);
-    view.setUint32(buf_ptr + 0, 0, true);                              /* st_dev */
-    view.setUint32(buf_ptr + 4, st.ino || 0, true);                    /* st_ino */
     let mode = 0;
     if (st.isFile()) mode = 0o100000;
     else if (st.isDirectory()) mode = 0o040000;
     else if (st.isSymbolicLink()) mode = 0o120000;
     mode |= (st.mode & 0o7777);
-    view.setUint32(buf_ptr + 8, mode, true);                           /* st_mode */
-    view.setUint32(buf_ptr + 12, st.nlink || 1, true);                 /* st_nlink */
     const size = st.size || 0;
     const at = Math.floor((st.atimeMs || 0) / 1000);
     const mt = Math.floor((st.mtimeMs || 0) / 1000);
     const ct = Math.floor((st.ctimeMs || 0) / 1000);
-    view.setUint32(buf_ptr + 16, size, true);                          /* st_size */
-    view.setUint32(buf_ptr + 20, 0, true);                             /* st_rdev */
-    view.setInt32(buf_ptr + 24, at, true);                             /* st_atime */
-    view.setInt32(buf_ptr + 28, mt, true);                             /* st_mtime */
-    view.setInt32(buf_ptr + 32, ct, true);                             /* st_ctime */
-    /* POSIX-2008 nanosecond timespecs mirror the scalar seconds; we are
-       second-granularity, so tv_nsec is 0. */
-    view.setInt32(buf_ptr + 36, at, true); view.setInt32(buf_ptr + 40, 0, true);  /* st_atim */
-    view.setInt32(buf_ptr + 44, mt, true); view.setInt32(buf_ptr + 48, 0, true);  /* st_mtim */
-    view.setInt32(buf_ptr + 52, ct, true); view.setInt32(buf_ptr + 56, 0, true);  /* st_ctim */
-    view.setUint32(buf_ptr + 60, 0, true);                             /* st_uid (single-user) */
-    view.setUint32(buf_ptr + 64, 0, true);                             /* st_gid */
-    view.setInt32(buf_ptr + 68, 4096, true);                           /* st_blksize */
-    view.setInt32(buf_ptr + 72, Math.ceil(size / 512), true);          /* st_blocks (512B units) */
+    view.setUint32(buf_ptr + 0, 0, true);                              /* st_dev */
+    view.setUint32(buf_ptr + 4, st.ino || 0, true);                    /* st_ino */
+    view.setUint32(buf_ptr + 8, mode, true);                           /* st_mode */
+    view.setUint32(buf_ptr + 12, st.nlink || 1, true);                 /* st_nlink */
+    view.setUint32(buf_ptr + 16, 0, true);                             /* st_rdev */
+    view.setUint32(buf_ptr + 20, 0, true);                             /* st_uid (single-user) */
+    view.setUint32(buf_ptr + 24, 0, true);                             /* st_gid */
+    view.setInt32(buf_ptr + 28, 4096, true);                           /* st_blksize */
+    view.setBigInt64(buf_ptr + 32, BigInt(size), true);                /* st_size */
+    view.setBigInt64(buf_ptr + 40, BigInt(Math.ceil(size / 512)), true); /* st_blocks (512B) */
+    view.setBigInt64(buf_ptr + 48, BigInt(at), true);                  /* st_atime */
+    view.setBigInt64(buf_ptr + 56, BigInt(mt), true);                  /* st_mtime */
+    view.setBigInt64(buf_ptr + 64, BigInt(ct), true);                  /* st_ctime */
+    /* POSIX-2008 nanosecond timespecs mirror the scalar seconds; second-
+       granularity storage, so tv_nsec is 0. */
+    view.setBigInt64(buf_ptr + 72, BigInt(at), true); view.setInt32(buf_ptr + 80, 0, true);   /* st_atim */
+    view.setBigInt64(buf_ptr + 88, BigInt(mt), true); view.setInt32(buf_ptr + 96, 0, true);   /* st_mtim */
+    view.setBigInt64(buf_ptr + 104, BigInt(ct), true); view.setInt32(buf_ptr + 112, 0, true); /* st_ctim */
   }
 
   const result = {
@@ -913,25 +914,24 @@ function createBrowserFileSystem({ ctx }) {
     const memory = getMemory();
     const view = new DataView(memory.buffer);
     const now = Math.floor(Date.now() / 1000);
-    /* Layout must match the libc `struct stat` (see <sys/stat.h>): the
-       st_rdev slot at offset 20 sits before the time fields. OPFS does not
-       persist timestamps, so the times are reported as "now". */
+    /* 64-bit struct stat layout (see <sys/stat.h> / writeStatBuf in the Node
+       backend). OPFS does not persist timestamps, so the times are "now". */
     view.setUint32(buf_ptr + 0, 0, true);                          /* st_dev */
     view.setUint32(buf_ptr + 4, 0, true);                          /* st_ino */
     view.setUint32(buf_ptr + 8, isDir ? 0o040755 : 0o100644, true); /* st_mode */
     view.setUint32(buf_ptr + 12, 1, true);                         /* st_nlink */
-    view.setUint32(buf_ptr + 16, size, true);                      /* st_size */
-    view.setUint32(buf_ptr + 20, 0, true);                         /* st_rdev */
-    view.setInt32(buf_ptr + 24, now, true);                        /* st_atime */
-    view.setInt32(buf_ptr + 28, now, true);                        /* st_mtime */
-    view.setInt32(buf_ptr + 32, now, true);                        /* st_ctime */
-    view.setInt32(buf_ptr + 36, now, true); view.setInt32(buf_ptr + 40, 0, true);  /* st_atim */
-    view.setInt32(buf_ptr + 44, now, true); view.setInt32(buf_ptr + 48, 0, true);  /* st_mtim */
-    view.setInt32(buf_ptr + 52, now, true); view.setInt32(buf_ptr + 56, 0, true);  /* st_ctim */
-    view.setUint32(buf_ptr + 60, 0, true);                         /* st_uid (single-user) */
-    view.setUint32(buf_ptr + 64, 0, true);                         /* st_gid */
-    view.setInt32(buf_ptr + 68, 4096, true);                       /* st_blksize */
-    view.setInt32(buf_ptr + 72, Math.ceil(size / 512), true);      /* st_blocks (512B units) */
+    view.setUint32(buf_ptr + 16, 0, true);                         /* st_rdev */
+    view.setUint32(buf_ptr + 20, 0, true);                         /* st_uid (single-user) */
+    view.setUint32(buf_ptr + 24, 0, true);                         /* st_gid */
+    view.setInt32(buf_ptr + 28, 4096, true);                       /* st_blksize */
+    view.setBigInt64(buf_ptr + 32, BigInt(size), true);            /* st_size */
+    view.setBigInt64(buf_ptr + 40, BigInt(Math.ceil(size / 512)), true); /* st_blocks */
+    view.setBigInt64(buf_ptr + 48, BigInt(now), true);             /* st_atime */
+    view.setBigInt64(buf_ptr + 56, BigInt(now), true);             /* st_mtime */
+    view.setBigInt64(buf_ptr + 64, BigInt(now), true);             /* st_ctime */
+    view.setBigInt64(buf_ptr + 72, BigInt(now), true); view.setInt32(buf_ptr + 80, 0, true);  /* st_atim */
+    view.setBigInt64(buf_ptr + 88, BigInt(now), true); view.setInt32(buf_ptr + 96, 0, true);  /* st_mtim */
+    view.setBigInt64(buf_ptr + 104, BigInt(now), true); view.setInt32(buf_ptr + 112, 0, true);/* st_ctim */
   }
 
   function wrapAsync(fn) {
@@ -3340,28 +3340,28 @@ var BLOCK_FS = (function () {
   // WASM import adapter
   // =================================================================
 
-  // Write a stat buffer into WASM memory (matches struct stat layout).
+  // Write a stat buffer into WASM memory. Matches the 64-bit struct stat layout
+  // (see <sys/stat.h> / writeStatBuf in the Node backend, verified by
+  // tests/unit/stdlib/stat_layout): 120 bytes, i64 size/blocks/times.
   function writeStatBuf(memory, bufPtr, st) {
     var view = new DataView(memory.buffer);
-    /* Layout must match the libc `struct stat` (see <sys/stat.h>): st_rdev
-       occupies offset 20, so the time fields start at 24. Report the real
-       per-inode atime/mtime/ctime and link count that BlockFS tracks. */
+    var size = st.size || 0;
     view.setUint32(bufPtr + 0, 0, true);              // st_dev
     view.setUint32(bufPtr + 4, st.ino, true);         // st_ino
     view.setUint32(bufPtr + 8, st.mode, true);        // st_mode
     view.setUint32(bufPtr + 12, st.nlink || 1, true); // st_nlink
-    view.setUint32(bufPtr + 16, st.size, true);       // st_size
-    view.setUint32(bufPtr + 20, 0, true);             // st_rdev
-    view.setInt32(bufPtr + 24, st.atime, true);       // st_atime
-    view.setInt32(bufPtr + 28, st.mtime, true);       // st_mtime
-    view.setInt32(bufPtr + 32, st.ctime, true);       // st_ctime
-    view.setInt32(bufPtr + 36, st.atime, true); view.setInt32(bufPtr + 40, 0, true);  // st_atim
-    view.setInt32(bufPtr + 44, st.mtime, true); view.setInt32(bufPtr + 48, 0, true);  // st_mtim
-    view.setInt32(bufPtr + 52, st.ctime, true); view.setInt32(bufPtr + 56, 0, true);  // st_ctim
-    view.setUint32(bufPtr + 60, 0, true);             // st_uid (single-user)
-    view.setUint32(bufPtr + 64, 0, true);             // st_gid
-    view.setInt32(bufPtr + 68, 4096, true);           // st_blksize
-    view.setInt32(bufPtr + 72, Math.ceil((st.size || 0) / 512), true); // st_blocks (512B units)
+    view.setUint32(bufPtr + 16, st.rdev || 0, true);  // st_rdev
+    view.setUint32(bufPtr + 20, 0, true);             // st_uid (single-user)
+    view.setUint32(bufPtr + 24, 0, true);             // st_gid
+    view.setInt32(bufPtr + 28, 4096, true);           // st_blksize
+    view.setBigInt64(bufPtr + 32, BigInt(size), true);                  // st_size
+    view.setBigInt64(bufPtr + 40, BigInt(Math.ceil(size / 512)), true); // st_blocks (512B)
+    view.setBigInt64(bufPtr + 48, BigInt(st.atime), true);   // st_atime
+    view.setBigInt64(bufPtr + 56, BigInt(st.mtime), true);   // st_mtime
+    view.setBigInt64(bufPtr + 64, BigInt(st.ctime), true);   // st_ctime
+    view.setBigInt64(bufPtr + 72, BigInt(st.atime), true); view.setInt32(bufPtr + 80, 0, true);   // st_atim
+    view.setBigInt64(bufPtr + 88, BigInt(st.mtime), true); view.setInt32(bufPtr + 96, 0, true);   // st_mtim
+    view.setBigInt64(bufPtr + 104, BigInt(st.ctime), true); view.setInt32(bufPtr + 112, 0, true); // st_ctim
   }
 
   // Adapt a BlockFS instance to the WASM `env` import object.

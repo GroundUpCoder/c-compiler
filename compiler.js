@@ -18491,25 +18491,30 @@ int flsll(long long x);
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
 struct timespec;  // forward; defined in <time.h>
+// 64-bit ABI: st_size, st_blocks and all timestamps are 64-bit so files can
+// exceed 4 GiB and times can exceed 2038/2106. Fields are grouped 32-bit-first
+// then 8-byte-aligned 64-bit, so there's no internal padding before the wide
+// fields. The host's writeStatBuf MUST match this layout byte-for-byte (the
+// offsets are pinned by the stdlib/stat_layout test). Under v3 storage these
+// fields still carry 32-bit-range values (zero/sign-extended); v4 storage fills
+// the full range. tv_nsec is 0 while storage is second-granularity.
 struct stat {
   unsigned long st_dev;
   unsigned long st_ino;
   unsigned long st_mode;
   unsigned long st_nlink;
-  unsigned long st_size;
   unsigned long st_rdev;
-  long          st_atime;
-  long          st_mtime;
-  long          st_ctime;
-  // POSIX 2008 nanosecond fields. The host fills tv_sec to match the scalar
-  // st_*time above; tv_nsec is 0 (this environment is second-granularity).
-  struct timespec { long tv_sec; long tv_nsec; } st_atim;
-  struct timespec st_mtim;
-  struct timespec st_ctim;
   unsigned int  st_uid;
   unsigned int  st_gid;
   long          st_blksize;
-  long          st_blocks;
+  long long     st_size;
+  long long     st_blocks;
+  long long     st_atime;
+  long long     st_mtime;
+  long long     st_ctime;
+  struct timespec { long long tv_sec; long tv_nsec; } st_atim;
+  struct timespec st_mtim;
+  struct timespec st_ctim;
 };
 
 __import int mkdir(const char *path, int mode);
@@ -18662,8 +18667,8 @@ struct tm {
 };
 
 struct timespec {
-  long tv_sec;
-  long tv_nsec;
+  long long tv_sec;   // 64-bit (matches struct stat's st_*tim); range past 2038
+  long      tv_nsec;
 };
 
 typedef int clockid_t;

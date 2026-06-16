@@ -1,0 +1,9 @@
+sizeof 120
+off size=32 blocks=40 atime=48 mtime=56 ctime=64
+off mtim.sec=88 mtim.nsec=96
+size 20
+isreg 1
+mtime_ok 1
+mtim_sec_eq 1
+nsec 0
+blksize 4096
