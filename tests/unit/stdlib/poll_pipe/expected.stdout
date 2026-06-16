@@ -1,0 +1,5 @@
+empty=0
+wr n=1 out=1
+rd_before n=0 in=0
+rd_after n=1 in=1
+negfd n=0 rev=0

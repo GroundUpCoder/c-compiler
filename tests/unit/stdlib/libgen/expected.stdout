@@ -1,0 +1,9 @@
+[/usr/lib] base=lib dir=/usr
+[/usr/] base=usr dir=/
+[usr] base=usr dir=.
+[/] base=/ dir=/
+[..] base=.. dir=.
+[.] base=. dir=.
+[] base=. dir=.
+[/foo/bar/baz.txt] base=baz.txt dir=/foo/bar
+[foo/bar/] base=bar dir=foo

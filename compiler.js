@@ -17389,6 +17389,273 @@ static inline unsigned long long bswap_64(unsigned long long x) {
          ((x << 40) & 0xFF000000000000ULL) | ((x << 56) & 0xFF00000000000000ULL);
 }
   `,
+  "endian.h": `
+#pragma once
+#include <stdint.h>
+#include <byteswap.h>
+/* wasm is always little-endian. */
+#define __LITTLE_ENDIAN 1234
+#define __BIG_ENDIAN    4321
+#define __PDP_ENDIAN    3412
+#define __BYTE_ORDER    __LITTLE_ENDIAN
+#define __FLOAT_WORD_ORDER __BYTE_ORDER
+/* BSD-style unprefixed aliases (glibc exposes these under _GNU_SOURCE/_BSD_SOURCE). */
+#define LITTLE_ENDIAN __LITTLE_ENDIAN
+#define BIG_ENDIAN    __BIG_ENDIAN
+#define PDP_ENDIAN    __PDP_ENDIAN
+#define BYTE_ORDER    __BYTE_ORDER
+static inline uint16_t htole16(uint16_t x) { return x; }
+static inline uint16_t le16toh(uint16_t x) { return x; }
+static inline uint32_t htole32(uint32_t x) { return x; }
+static inline uint32_t le32toh(uint32_t x) { return x; }
+static inline uint64_t htole64(uint64_t x) { return x; }
+static inline uint64_t le64toh(uint64_t x) { return x; }
+static inline uint16_t htobe16(uint16_t x) { return bswap_16(x); }
+static inline uint16_t be16toh(uint16_t x) { return bswap_16(x); }
+static inline uint32_t htobe32(uint32_t x) { return bswap_32(x); }
+static inline uint32_t be32toh(uint32_t x) { return bswap_32(x); }
+static inline uint64_t htobe64(uint64_t x) { return bswap_64(x); }
+static inline uint64_t be64toh(uint64_t x) { return bswap_64(x); }
+  `,
+  "libgen.h": `
+#pragma once
+/* POSIX basename()/dirname(). Both may modify the input buffer and return a
+   pointer into it (or a pointer to a static string for the "." / "/" cases).
+   Like glibc's <libgen.h> variants, the static-string returns are shared, so
+   these are not thread-safe and the result of one call may be clobbered by the
+   next on the "." / "/" paths. */
+static inline char *__libgen_last_slash(char *s) {
+  char *last = 0;
+  for (char *p = s; *p; p++) if (*p == '/') last = p;
+  return last;
+}
+static inline char *basename(char *path) {
+  static char dot[] = ".";
+  static char root[] = "/";
+  if (path == 0 || path[0] == 0) return dot;
+  char *end = path;
+  while (*end) end++;
+  while (end > path && end[-1] == '/') *--end = 0;   /* strip trailing slashes */
+  if (end == path) return root;                       /* path was all slashes */
+  char *slash = __libgen_last_slash(path);
+  return slash ? slash + 1 : path;
+}
+static inline char *dirname(char *path) {
+  static char dot[] = ".";
+  static char root[] = "/";
+  if (path == 0 || path[0] == 0) return dot;
+  char *end = path;
+  while (*end) end++;
+  while (end > path && end[-1] == '/') *--end = 0;   /* strip trailing slashes */
+  if (end == path) return root;                       /* path was all slashes */
+  char *slash = __libgen_last_slash(path);
+  if (slash == 0) return dot;                         /* no directory component */
+  while (slash > path && slash[-1] == '/') slash--;   /* strip dir's trailing slashes */
+  if (slash == path) return root;                     /* directory is the root */
+  *slash = 0;
+  return path;
+}
+  `,
+  "sys/utsname.h": `
+#pragma once
+#include <string.h>
+struct utsname {
+  char sysname[65];
+  char nodename[65];
+  char release[65];
+  char version[65];
+  char machine[65];
+};
+/* Fixed identity for the wasm runtime (no real kernel to query). */
+static inline int uname(struct utsname *buf) {
+  if (buf == 0) return -1;
+  strcpy(buf->sysname,  "wasm");
+  strcpy(buf->nodename, "localhost");
+  strcpy(buf->release,  "1.0.0");
+  strcpy(buf->version,  "c-compiler");
+  strcpy(buf->machine,  "wasm32");
+  return 0;
+}
+  `,
+  "sys/resource.h": `
+#pragma once
+#include <sys/types.h>
+#include <sys/time.h>
+typedef unsigned long long rlim_t;
+#define RLIM_INFINITY  (~0ULL)
+#define RLIM_SAVED_MAX RLIM_INFINITY
+#define RLIM_SAVED_CUR RLIM_INFINITY
+#define RLIMIT_CPU     0
+#define RLIMIT_FSIZE   1
+#define RLIMIT_DATA    2
+#define RLIMIT_STACK   3
+#define RLIMIT_CORE    4
+#define RLIMIT_RSS     5
+#define RLIMIT_NPROC   6
+#define RLIMIT_NOFILE  7
+#define RLIMIT_MEMLOCK 8
+#define RLIMIT_AS      9
+#define RLIM_NLIMITS   10
+struct rlimit { rlim_t rlim_cur; rlim_t rlim_max; };
+/* No resource limits are enforced in this runtime: report "unlimited" and
+   accept any setrlimit as a no-op. */
+static inline int getrlimit(int resource, struct rlimit *rlim) {
+  (void)resource;
+  if (rlim) { rlim->rlim_cur = RLIM_INFINITY; rlim->rlim_max = RLIM_INFINITY; }
+  return 0;
+}
+static inline int setrlimit(int resource, const struct rlimit *rlim) {
+  (void)resource; (void)rlim;
+  return 0;
+}
+#define RUSAGE_SELF     0
+#define RUSAGE_CHILDREN (-1)
+struct rusage {
+  struct timeval ru_utime;
+  struct timeval ru_stime;
+  long ru_maxrss; long ru_ixrss; long ru_idrss; long ru_isrss;
+  long ru_minflt; long ru_majflt; long ru_nswap;
+  long ru_inblock; long ru_oublock;
+  long ru_msgsnd; long ru_msgrcv; long ru_nsignals;
+  long ru_nvcsw; long ru_nivcsw;
+};
+/* Resource usage isn't tracked: zero everything. */
+static inline int getrusage(int who, struct rusage *usage) {
+  (void)who;
+  if (usage) { char *p = (char *)usage; for (unsigned long i = 0; i < sizeof(*usage); i++) p[i] = 0; }
+  return 0;
+}
+  `,
+  "sys/statvfs.h": `
+#pragma once
+#include <sys/types.h>
+typedef unsigned long long fsblkcnt_t;
+typedef unsigned long long fsfilcnt_t;
+struct statvfs {
+  unsigned long f_bsize;
+  unsigned long f_frsize;
+  fsblkcnt_t    f_blocks;
+  fsblkcnt_t    f_bfree;
+  fsblkcnt_t    f_bavail;
+  fsfilcnt_t    f_files;
+  fsfilcnt_t    f_ffree;
+  fsfilcnt_t    f_favail;
+  unsigned long f_fsid;
+  unsigned long f_flag;
+  unsigned long f_namemax;
+};
+#define ST_RDONLY 1
+#define ST_NOSUID 2
+/* Nominal values only — this runtime exposes no real filesystem geometry to C
+   (callers like df() see a fixed 4 GiB volume). A BlockFS-backed statvfs that
+   reports real free/used blocks is a TODO (needs a host import). */
+static inline int statvfs(const char *path, struct statvfs *buf) {
+  (void)path;
+  if (buf == 0) return -1;
+  buf->f_bsize = 4096; buf->f_frsize = 4096;
+  buf->f_blocks = 1048576; buf->f_bfree = 1048576; buf->f_bavail = 1048576;
+  buf->f_files = 65536; buf->f_ffree = 65536; buf->f_favail = 65536;
+  buf->f_fsid = 0; buf->f_flag = 0; buf->f_namemax = 255;
+  return 0;
+}
+static inline int fstatvfs(int fd, struct statvfs *buf) {
+  (void)fd;
+  return statvfs((const char *)0, buf);
+}
+  `,
+  "sys/mman.h": `
+#pragma once
+#include <stddef.h>
+#include <stdlib.h>
+#include <errno.h>
+#define PROT_NONE  0x0
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+#define MAP_SHARED    0x01
+#define MAP_PRIVATE   0x02
+#define MAP_FIXED     0x10
+#define MAP_ANONYMOUS 0x20
+#define MAP_ANON      MAP_ANONYMOUS
+#define MAP_FAILED    ((void *)-1)
+#define MS_ASYNC      1
+#define MS_SYNC       4
+#define MS_INVALIDATE 2
+/* Anonymous private mappings only, backed by calloc(). File-backed mmap
+   (fd >= 0 without MAP_ANONYMOUS) is unsupported and fails with ENODEV.
+   munmap() frees the whole region returned by mmap(); partial unmap is not
+   supported. mprotect()/msync() are accepted no-ops. */
+static inline void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) {
+  (void)addr; (void)prot; (void)offset;
+  if (!(flags & MAP_ANONYMOUS) && fd >= 0) { errno = ENODEV; return MAP_FAILED; }
+  if (length == 0) { errno = EINVAL; return MAP_FAILED; }
+  void *p = calloc(1, length);
+  if (p == 0) { errno = ENOMEM; return MAP_FAILED; }
+  return p;
+}
+static inline int munmap(void *addr, size_t length) {
+  (void)length;
+  if (addr && addr != MAP_FAILED) free(addr);
+  return 0;
+}
+static inline int mprotect(void *addr, size_t len, int prot) { (void)addr; (void)len; (void)prot; return 0; }
+static inline int msync(void *addr, size_t len, int flags) { (void)addr; (void)len; (void)flags; return 0; }
+  `,
+  "poll.h": `
+#pragma once
+#include <sys/select.h>
+typedef unsigned long nfds_t;
+struct pollfd {
+  int   fd;
+  short events;
+  short revents;
+};
+#define POLLIN     0x001
+#define POLLPRI    0x002
+#define POLLOUT    0x004
+#define POLLERR    0x008
+#define POLLHUP    0x010
+#define POLLNVAL   0x020
+#define POLLRDNORM 0x040
+#define POLLRDBAND 0x080
+#define POLLWRNORM POLLOUT
+#define POLLWRBAND 0x100
+/* poll() implemented over select(). Limitations inherited from select():
+   fds must be < FD_SETSIZE (64); POLLPRI maps to the exceptfds set (which this
+   runtime never reports, so POLLPRI/POLLERR/POLLHUP never fire); end-of-stream
+   shows up as POLLIN (readable), not POLLHUP. */
+static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+  fd_set rfds, wfds, efds;
+  FD_ZERO(&rfds); FD_ZERO(&wfds); FD_ZERO(&efds);
+  int maxfd = -1;
+  for (nfds_t i = 0; i < nfds; i++) {
+    fds[i].revents = 0;
+    int fd = fds[i].fd;
+    if (fd < 0) continue;
+    if (fds[i].events & (POLLIN | POLLRDNORM)) FD_SET(fd, &rfds);
+    if (fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND)) FD_SET(fd, &wfds);
+    if (fds[i].events & POLLPRI) FD_SET(fd, &efds);
+    if (fd > maxfd) maxfd = fd;
+  }
+  struct timeval tv;
+  struct timeval *ptv = 0;
+  if (timeout >= 0) { tv.tv_sec = timeout / 1000; tv.tv_usec = (long)(timeout % 1000) * 1000; ptv = &tv; }
+  int r = select(maxfd + 1, &rfds, &wfds, &efds, ptv);
+  if (r < 0) return -1;
+  int count = 0;
+  for (nfds_t i = 0; i < nfds; i++) {
+    int fd = fds[i].fd;
+    if (fd < 0) continue;
+    short re = 0;
+    if (FD_ISSET(fd, &rfds)) re |= (short)(fds[i].events & (POLLIN | POLLRDNORM));
+    if (FD_ISSET(fd, &wfds)) re |= (short)(fds[i].events & (POLLOUT | POLLWRNORM | POLLWRBAND));
+    if (FD_ISSET(fd, &efds)) re |= POLLPRI;
+    fds[i].revents = re;
+    if (re) count++;
+  }
+  return count;
+}
+  `,
   "dirent.h": `
 #pragma once
 #include <sys/types.h>

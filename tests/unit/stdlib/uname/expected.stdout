@@ -1,0 +1,3 @@
+r=0
+sys=wasm node=localhost rel=1.0.0 ver=c-compiler mach=wasm32
+null=-1

@@ -1,0 +1,7 @@
+ok=1
+zeroed=1
+rw=hello mmap
+munmap=0
+filebacked_failed=1
+zerolen_failed=1
+mprotect=0 msync=0
