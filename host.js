@@ -2532,6 +2532,100 @@ var BLOCK_FS = (function () {
   };
 
   // =================================================================
+  // InodeTable128 — v4 inode table: 128-byte inodes, 64-bit fields, ms times
+  // =================================================================
+  //
+  // Parallel to InodeTable (v3 32-byte). Same read-through design (the v4
+  // superblock is the source of truth for extent/capacity). Inode layout:
+  //   [0:2] mode u16  [2:4] nlink u16  [4:8] flags u32
+  //   [8:16] extent_offset u64  [16:24] extent_capacity u64  [24:32] data_size u64
+  //   [32:40] mtime  [40:48] ctime  [48:56] atime  [56:64] btime   (i64 ms each)
+  //   [64:68] rdev u32 (reserved for /dev)  [68:128] reserved (uid/gid/gen/…)
+  // v4 superblock: 64-bit inode-table extent at 16; capacity at 24; next-inode-id
+  // (28) and root (32) share v3's offsets, so _allocInode/_createRootDir are
+  // format-agnostic.
+
+  var INODE_SIZE_V4 = 128;
+  var I4_MODE = 0, I4_EXTENT_OFF = 8, I4_EXTENT_CAP = 16, I4_DATA_SIZE = 24;
+  var I4_MTIME = 32, I4_CTIME = 40, I4_ATIME = 48, I4_BTIME = 56, I4_RDEV = 64;
+  var SB4_INODE_EXTENT = 16, SB4_INODE_CAP = 24; // 64-bit extent / 32-bit cap
+
+  function InodeTable128(alloc) { this._alloc = alloc; this._store = alloc._s; }
+  InodeTable128.prototype._g64 = function (off) {
+    return this._store.getUint32(off) + this._store.getUint32(off + 4) * 0x100000000;
+  };
+  InodeTable128.prototype._s64 = function (off, v) {
+    this._store.setUint32(off, v >>> 0);
+    this._store.setUint32(off + 4, Math.floor(v / 0x100000000));
+  };
+  InodeTable128.prototype.init = function (initialCapacity) {
+    initialCapacity = initialCapacity || INITIAL_INODE_CAPACITY;
+    var extent = this._alloc.malloc(initialCapacity * INODE_SIZE_V4);
+    if (!extent) throw new Error('InodeTable128: initial alloc failed');
+    this._s64(SB4_INODE_EXTENT, extent);
+    this._store.setUint32(SB4_INODE_CAP, initialCapacity);
+    this._store.setBytes(extent, new Uint8Array(initialCapacity * INODE_SIZE_V4));
+    return extent;
+  };
+  InodeTable128.prototype.load = function () {}; // superblock is the source of truth
+  InodeTable128.prototype.capacity = function () { return this._store.getUint32(SB4_INODE_CAP); };
+  InodeTable128.prototype.extent = function () { return this._g64(SB4_INODE_EXTENT); };
+  InodeTable128.prototype.read = function (inoId) {
+    if (inoId >= this.capacity()) return null;
+    var off = this.extent() + inoId * INODE_SIZE_V4;
+    var modeWord = this._store.getUint32(off + I4_MODE);
+    return {
+      mode: modeWord & 0xFFFF,
+      nlink: (modeWord >>> 16) & 0xFFFF,
+      extentOffset: this._g64(off + I4_EXTENT_OFF),
+      extentCapacity: this._g64(off + I4_EXTENT_CAP),
+      dataSize: this._g64(off + I4_DATA_SIZE),
+      mtime: this._g64(off + I4_MTIME),
+      ctime: this._g64(off + I4_CTIME),
+      atime: this._g64(off + I4_ATIME),
+      btime: this._g64(off + I4_BTIME),
+      rdev: this._store.getUint32(off + I4_RDEV)
+    };
+  };
+  InodeTable128.prototype.write = function (inoId, ino) {
+    if (inoId >= this.capacity()) return false;
+    var off = this.extent() + inoId * INODE_SIZE_V4;
+    this._store.setUint32(off + I4_MODE, (ino.mode & 0xFFFF) | ((ino.nlink & 0xFFFF) << 16));
+    this._s64(off + I4_EXTENT_OFF, ino.extentOffset);
+    this._s64(off + I4_EXTENT_CAP, ino.extentCapacity);
+    this._s64(off + I4_DATA_SIZE, ino.dataSize);
+    this._s64(off + I4_MTIME, ino.mtime);
+    this._s64(off + I4_CTIME, ino.ctime);
+    this._s64(off + I4_ATIME, ino.atime);
+    this._s64(off + I4_BTIME, ino.btime || 0);
+    this._store.setUint32(off + I4_RDEV, ino.rdev || 0);
+    return true;
+  };
+  InodeTable128.prototype.grow = function (newCapacity) {
+    var oldExtent = this.extent(), oldCapacity = this.capacity();
+    var newExtent = this._alloc.malloc(newCapacity * INODE_SIZE_V4);
+    if (!newExtent) return false;
+    this._store.setBytes(newExtent, this._store.getBytes(oldExtent, oldCapacity * INODE_SIZE_V4));
+    this._store.setBytes(newExtent + oldCapacity * INODE_SIZE_V4,
+      new Uint8Array((newCapacity - oldCapacity) * INODE_SIZE_V4));
+    this._alloc.free(oldExtent);
+    this._s64(SB4_INODE_EXTENT, newExtent);
+    this._store.setUint32(SB4_INODE_CAP, newCapacity);
+    return true;
+  };
+
+  // ---- Format descriptors: pin the per-version pieces BlockFS varies on ----
+  // v3 reproduces the original behavior exactly (so v3 stays byte-identical).
+  var FMT_V3 = {
+    version: 3, timeScale: 1, poolOffset: TLSF_POOL_OFFSET,
+    poolEnd: function (a) { return a._readMeta32(META_POOL_END); }
+  };
+  var FMT_V4 = {
+    version: 4, timeScale: 1000, poolOffset: TLSF_POOL_OFFSET64,
+    poolEnd: function (a) { return a._readMeta64(M64_POOL_END); }
+  };
+
+  // =================================================================
   // Directory helpers — operate on a directory inode's data extent
   // =================================================================
 
@@ -2672,10 +2766,11 @@ var BLOCK_FS = (function () {
   // BlockFS — the filesystem proper
   // =================================================================
 
-  function BlockFS(store, alloc, inodeTable, rootIno, sbFormat) {
+  function BlockFS(store, alloc, inodeTable, rootIno, sbFormat, fmt) {
     this._s = store;           // ByteStore
-    this._alloc = alloc;       // TLSFAllocator
-    this._inodes = inodeTable; // InodeTable
+    this._alloc = alloc;       // TLSFAllocator / TLSF64Allocator
+    this._inodes = inodeTable; // InodeTable / InodeTable128
+    this._fmt = fmt || FMT_V3; // version-specific bits (FMT_V3 = original behavior)
     this._rootIno = rootIno;   // root inode ID (always 1)
     // next free inode ID lives in the superblock (SB_NEXT_INODE_ID), read
     // THROUGH the store so concurrent live instances don't both hand out the
@@ -2706,8 +2801,9 @@ var BLOCK_FS = (function () {
   }
 
   BlockFS.prototype._now = function () {
-    // Date.now() is fine here — this is sync code in a worker.
-    return Math.floor(Date.now() / 1000);
+    // Date.now() is fine here — this is sync code in a worker. Returns the inode's
+    // native storage unit: seconds (v3) or milliseconds (v4, timeScale 1000).
+    return this._fmt.timeScale === 1 ? Math.floor(Date.now() / 1000) : Date.now();
   };
 
   BlockFS.prototype._setErr = function (name) {
@@ -2731,16 +2827,21 @@ var BLOCK_FS = (function () {
 
   BlockFS.prototype._writeSuperblock = function () {
     this._s.setUint32(SB_MAGIC, MAGIC);
-    this._s.setUint32(SB_VERSION, VERSION);
+    this._s.setUint32(SB_VERSION, this._fmt.version);
     this._s.setUint32(SB_FLAGS, 0);
-    this._s.setUint32(SB_TLSF_POOL_OFFSET, TLSF_POOL_OFFSET);
-    // tlsfPoolSize is computed from alloc state
-    var poolStart, poolEnd;
-    try { poolEnd = this._alloc._readMeta32(META_POOL_END); } catch (e) { poolEnd = 0; }
-    this._s.setUint32(SB_TLSF_POOL_SIZE, poolEnd - TLSF_POOL_OFFSET);
-    this._s.setUint32(SB_INODE_TBL_EXTENT, this._inodes.extent());
-    this._s.setUint32(SB_INODE_TBL_CAP, this._inodes.capacity());
-    // SB_NEXT_INODE_ID is owned/persisted live by _createRootDir/_allocInode.
+    if (this._fmt.version === 3) {
+      // v3 layout (unchanged): 32-bit pool + inode-table fields.
+      this._s.setUint32(SB_TLSF_POOL_OFFSET, TLSF_POOL_OFFSET);
+      var poolEnd = 0;
+      try { poolEnd = this._alloc._readMeta32(META_POOL_END); } catch (e) { poolEnd = 0; }
+      this._s.setUint32(SB_TLSF_POOL_SIZE, poolEnd - TLSF_POOL_OFFSET);
+      this._s.setUint32(SB_INODE_TBL_EXTENT, this._inodes.extent());
+      this._s.setUint32(SB_INODE_TBL_CAP, this._inodes.capacity());
+    }
+    // v4: the inode-table extent/cap are 64-bit and owned by InodeTable128
+    // (SB4_*); the pool metadata lives in the TLSF64 meta region. Magic/version/
+    // flags/root are the only superblock fields written here.
+    // SB_NEXT_INODE_ID (28) and SB_ROOT_INODE (32) share offsets across formats.
     this._s.setUint32(SB_ROOT_INODE, this._rootIno);
   };
 
@@ -3301,11 +3402,12 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.stat = function (path) {
     var w = this._walkPath(this._resolvePath(path));
     if (!w) return this._setErr('ENOENT');
+    var sc = this._fmt.timeScale; // native unit (sec v3 / ms v4) -> seconds
     return {
       ino: w.inoId, mode: w.ino.mode, size: w.ino.dataSize,
-      mtime: w.ino.mtime, ctime: w.ino.ctime,
-      atime: w.ino.atime, btime: w.ino.btime,
-      nlink: w.ino.nlink, uid: 0, gid: 0
+      mtime: Math.floor(w.ino.mtime / sc), ctime: Math.floor(w.ino.ctime / sc),
+      atime: Math.floor(w.ino.atime / sc), btime: Math.floor(w.ino.btime / sc),
+      nlink: w.ino.nlink, rdev: w.ino.rdev || 0, uid: 0, gid: 0
     };
   };
 
@@ -3324,11 +3426,12 @@ var BLOCK_FS = (function () {
     }
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
+    var sc = this._fmt.timeScale;
     return {
       ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
-      mtime: ino.mtime, ctime: ino.ctime,
-      atime: ino.atime, btime: ino.btime,
-      nlink: ino.nlink, uid: 0, gid: 0
+      mtime: Math.floor(ino.mtime / sc), ctime: Math.floor(ino.ctime / sc),
+      atime: Math.floor(ino.atime / sc), btime: Math.floor(ino.btime / sc),
+      nlink: ino.nlink, rdev: ino.rdev || 0, uid: 0, gid: 0
     };
   };
 
@@ -3557,8 +3660,9 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.utime = function (path, atime, mtime) {
     var w = this._walkPath(this._resolvePath(path));
     if (!w) return this._setErr('ENOENT');
-    w.ino.atime = atime !== undefined ? atime : this._now();
-    w.ino.mtime = mtime !== undefined ? mtime : this._now();
+    var sc = this._fmt.timeScale; // seconds (ABI) -> native unit
+    w.ino.atime = atime !== undefined ? atime * sc : this._now();
+    w.ino.mtime = mtime !== undefined ? mtime * sc : this._now();
     w.ino.ctime = this._now();
     this._inodes.write(w.inoId, w.ino);
     return 0;
@@ -3572,8 +3676,9 @@ var BLOCK_FS = (function () {
     if (entry.inoId === undefined) return this._setErr('EINVAL'); /* std stream */
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
-    ino.atime = atime !== undefined ? atime : this._now();
-    ino.mtime = mtime !== undefined ? mtime : this._now();
+    var sc = this._fmt.timeScale; // seconds (ABI) -> native unit
+    ino.atime = atime !== undefined ? atime * sc : this._now();
+    ino.mtime = mtime !== undefined ? mtime * sc : this._now();
     ino.ctime = this._now();
     this._inodes.write(entry.inoId, ino);
     return 0;
@@ -4386,6 +4491,35 @@ var BLOCK_FS = (function () {
     }
   };
 
+  // Mount/format a v4 image (128-byte inodes, TLSF64, ms timestamps). Parallel to
+  // create(); v3 stays the default. Formats a fresh store, or loads an existing
+  // v4 one (magic + version 4). Used by the migration and the v4 worker path.
+  BlockFS.createV4 = function (store) {
+    var storeSize = store.size();
+    var formatted = false;
+    if (storeSize < SUPERBLOCK_SIZE) {
+      store.resize(TLSF_POOL_OFFSET64 + 65536); storeSize = store.size(); formatted = true;
+    } else if (store.getUint32(SB_MAGIC) !== MAGIC || store.getUint32(SB_VERSION) !== 4) {
+      formatted = true;
+    }
+    if (formatted) {
+      if (storeSize < TLSF_POOL_OFFSET64 + 65536) { store.resize(TLSF_POOL_OFFSET64 + 65536); storeSize = store.size(); }
+      store.setBytes(0, new Uint8Array(SUPERBLOCK_SIZE));
+    }
+    var alloc, inodeTable, fs;
+    if (formatted) {
+      alloc = new TLSF64Allocator(store, SUPERBLOCK_SIZE, storeSize - TLSF_POOL_OFFSET64);
+      inodeTable = new InodeTable128(alloc);
+      inodeTable.init(INITIAL_INODE_CAPACITY);
+      fs = new BlockFS(store, alloc, inodeTable, 1, true, FMT_V4);
+      fs._writeSuperblock();
+      return fs;
+    }
+    alloc = new TLSF64Allocator(store, SUPERBLOCK_SIZE, 0); // load existing metadata
+    inodeTable = new InodeTable128(alloc);
+    return new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4);
+  };
+
   // =================================================================
   // Module exports
   // =================================================================
@@ -4393,6 +4527,7 @@ var BLOCK_FS = (function () {
   return {
     init: BlockFS.init,
     create: BlockFS.create,
+    createV4: BlockFS.createV4,
     MemoryByteStore: MemoryByteStore,
     TLSFAllocator: TLSFAllocator,
     TLSF64Allocator: TLSF64Allocator,
