@@ -18580,7 +18580,7 @@ static inline int utime(const char *path, const struct utimbuf *times) {
   "sys/types.h": `
 #pragma once
 typedef long ssize_t;
-typedef long off_t;
+typedef long long off_t;
 typedef unsigned long size_t;
 typedef int mode_t;
 typedef int pid_t;
@@ -18706,7 +18706,7 @@ typedef uint_least32_t char32_t;
 /* POSIX requires unistd.h to define size_t (and ssize_t/off_t). */
 typedef unsigned long size_t;
 typedef long ssize_t;
-typedef long off_t;
+typedef long long off_t;
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
@@ -18720,7 +18720,7 @@ typedef long off_t;
 __import int close(int fd);
 __import long read(int fd, void *buf, long count);
 __import long write(int fd, const void *buf, long count);
-__import long lseek(int fd, long offset, int whence);
+__import long long lseek(int fd, long long offset, int whence);
 __import char *getcwd(char *buf, long size);
 __import int chdir(const char *path);
 __import int access(const char *path, int mode);
@@ -18732,7 +18732,7 @@ __import int dup2(int oldfd, int newfd);
 __import int getpid(void);
 __import int isatty(int fd);
 __import int usleep(unsigned int usec);
-__import int ftruncate(int fd, long length);
+__import int ftruncate(int fd, long long length);
 __import long readlink(const char *path, char *buf, long bufsize);
 __import int fsync(int fd);
 __import int fdatasync(int fd);

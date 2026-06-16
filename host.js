@@ -2,6 +2,18 @@
 
 const ENV_KEY = "c";
 
+// 64-bit lseek marshalling. With off_t widened to `long long`, the lseek import
+// crosses the wasm boundary as i64: its offset argument arrives as a BigInt and
+// its result MUST be returned as a BigInt (a plain number throws at the boundary).
+// This wraps a number-returning lseek impl — converting the BigInt offset to a
+// Number on the way in (file positions are < 2^53, so lossless) and the numeric
+// result (newPos, or -1 on error) to a BigInt on the way out.
+function wrapLseekI64(impl) {
+  return function (fd, offset, whence) {
+    return BigInt(impl.call(this, fd, Number(offset), whence));
+  };
+}
+
 /**
  * @typedef {object} NodeFS
  * @property {function(string, number, number): number} openSync
@@ -271,7 +283,7 @@ function createFileSystem({ fs, ctx }) {
           return -1;
         }
       },
-      lseek: function (fd, offset, whence) {
+      lseek: wrapLseekI64(function (fd, offset, whence) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
         const entry = fdTable[fd];
         if (entry.position === null) { setErrnoName('ESPIPE'); return -1; }
@@ -299,7 +311,7 @@ function createFileSystem({ fs, ctx }) {
         if (newPos < 0) { setErrnoName('EINVAL'); return -1; }
         entry.position = newPos;
         return newPos;
-      },
+      }),
       mkdir: function (path_ptr, mode) {
         const path = readString(path_ptr);
         try {
@@ -313,7 +325,7 @@ function createFileSystem({ fs, ctx }) {
       ftruncate: function (fd, length) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
         try {
-          fs.ftruncateSync(fdTable[fd].nativeFd, length);
+          fs.ftruncateSync(fdTable[fd].nativeFd, Number(length));
           return 0;
         } catch (e) { setErrno(e); return -1; }
       },
@@ -1069,7 +1081,7 @@ function createBrowserFileSystem({ ctx }) {
       return n;
     },
 
-    lseek: function (fd, offset, whence) {
+    lseek: wrapLseekI64(function (fd, offset, whence) {
       if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
       const entry = fdTable[fd];
       if (entry.position === null) { setErrnoName('ESPIPE'); return -1; }
@@ -1083,7 +1095,7 @@ function createBrowserFileSystem({ ctx }) {
       if (newPos < 0) { setErrnoName('EINVAL'); return -1; }
       entry.position = newPos;
       return newPos;
-    },
+    }),
 
     mkdir: wrapAsync(async function (path_ptr, mode) {
       const path = readString(path_ptr);
@@ -3623,9 +3635,14 @@ var BLOCK_FS = (function () {
         var buf = new Uint8Array(memory.buffer, buf_ptr, count);
         return this.write(fd, buf, count);
       }),
-      lseek: wrap(function (fd, offset, whence) {
-        return this.lseek(fd, offset, whence);
-      }),
+      // 64-bit lseek: offset arrives as BigInt, result returns as BigInt. The
+      // prototype returns null on error, so map that to -1n + errno (the generic
+      // wrap()'s number -1 would throw at the i64 boundary).
+      lseek: function (fd, offset, whence) {
+        var r = self.lseek(fd, Number(offset), whence);
+        if (r === null) { setErrnoName(self._lastError || 'EIO'); return -1n; }
+        return BigInt(r);
+      },
       mkdir: wrap(function (path_ptr, mode) {
         return this.mkdir(readString(path_ptr), mode);
       }),
@@ -3891,7 +3908,7 @@ var BLOCK_FS = (function () {
         }
         return resolved_ptr;
       }),
-      ftruncate: wrap(function (fd, size) { return this.ftruncate(fd, size); }),
+      ftruncate: wrap(function (fd, size) { return this.ftruncate(fd, Number(size)); }),
       chmod: wrap(function (path_ptr, mode) {
         return this.chmod(readString(path_ptr), mode);
       }),
