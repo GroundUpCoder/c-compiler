@@ -148,13 +148,109 @@ function fsck(a) {
   eq(a._getFlags(2000), 3, 'flags preserved');
 }
 
-// ---- 6. Model-based fuzzer with sentinel bytes (the real net) ----
-function fuzz(seed, ops) {
-  const rand = rng(seed);
+// ---- 6. realloc: grow (preserves data), shrink (in-place), null, zero ----
+{
+  const store = new MemoryByteStore(1 << 20);
+  const a = new TLSF64Allocator(store, 256, (1 << 20) - POOL_OFFSET);
+  let p = a.malloc(50);
+  store.setBytes(p, new Uint8Array(50).fill(0x5a));
+  const big = a.malloc(64); // wedge a neighbor so grow must move + copy
+  ok(big, 'neighbor alloc');
+  const q = a.realloc(p, 200);
+  ok(q, 'realloc grow succeeds');
+  const got = store.getBytes(q, 50);
+  ok([...got].every(b => b === 0x5a), 'realloc grow preserves the old 50 bytes');
+  const r = a.realloc(q, 20); // shrink — fits, returns same ptr
+  eq(r, q, 'realloc shrink keeps the pointer in place');
+  eq(a.realloc(0, 30) !== 0, true, 'realloc(NULL) acts as malloc');
+  eq(a.realloc(r, 0), 0, 'realloc(ptr,0) frees and returns 0');
+  eq(fsck(a).length, 0, 'fsck clean after realloc churn: ' + fsck(a).join('; '));
+}
+
+// ---- 7. calloc zeroes; overflow guarded ----
+{
   const store = new MemoryByteStore(1 << 18);
   const a = new TLSF64Allocator(store, 256, (1 << 18) - POOL_OFFSET);
+  // dirty the arena first, then calloc must hand back zeros
+  const dirty = a.malloc(80); store.setBytes(dirty, new Uint8Array(80).fill(0xff)); a.free(dirty);
+  const p = a.calloc(10, 8);
+  ok(p, 'calloc succeeds');
+  ok([...store.getBytes(p, 80)].every(b => b === 0), 'calloc returns zeroed memory');
+  eq(a.calloc(0x100000000, 0x100000000), 0, 'calloc overflow guarded');
+}
+
+// ---- 8. Coalesce in BOTH directions (free a block between two free blocks) ----
+{
+  const store = new MemoryByteStore(1 << 18);
+  const a = new TLSF64Allocator(store, 256, (1 << 18) - POOL_OFFSET);
+  const A = a.malloc(500), B = a.malloc(500), C = a.malloc(500), guard = a.malloc(16);
+  ok(A && B && C && guard, 'four allocs');
+  const before = a.freeBlockCount();
+  a.free(A); a.free(C);      // two separate holes around B
+  a.free(B);                 // must merge with prev (A) AND next (C) → one hole
+  eq(fsck(a).length, 0, 'fsck clean after both-direction coalesce');
+  const merged = a.malloc(1400); // only fits if A+B+C coalesced into one block
+  ok(merged, 'large alloc fits the coalesced hole');
+  ok(a.freeBlockCount() <= before + 1, 'no free-block leak from coalescing');
+}
+
+// ---- 9. Exact/near-exact fit: remainder < MIN_BLOCK_SIZE leaves no split ----
+{
+  const store = new MemoryByteStore(1 << 18);
+  const a = new TLSF64Allocator(store, 256, (1 << 18) - POOL_OFFSET);
+  const hole = a.malloc(48); a.malloc(16); a.free(hole); // a 64-byte free hole (48+16 overhead)
+  const p = a.malloc(40);  // adjusted 56; remainder 64-56=8 < 32 → no split, takes whole block
+  ok(p, 'near-exact alloc into the hole');
+  ok(a.blockSize(p) >= 40, 'block satisfies the request');
+  eq(fsck(a).length, 0, 'fsck clean after no-split path');
+}
+
+// ---- 10. Graceful OOM: malloc returns 0 (no throw) when growth is capped ----
+{
+  const store = new MemoryByteStore(1 << 15);
+  const cap = 1 << 16;
+  const realResize = store.resize.bind(store);
+  store.resize = (n) => { if (n > cap) throw new Error('capped'); return realResize(n); };
+  const a = new TLSF64Allocator(store, 256, (1 << 15) - POOL_OFFSET);
+  let got0 = false;
+  for (let i = 0; i < 1000; i++) { if (a.malloc(500) === 0) { got0 = true; break; } }
+  ok(got0, 'malloc returns 0 when the store cannot grow');
+  eq(fsck(a).length, 0, 'fsck clean after hitting OOM');
+}
+
+// ---- 11. Load/re-mount + cross-instance coherence (BlockFS relies on this) ----
+{
+  const store = new MemoryByteStore(1 << 18);
+  const a1 = new TLSF64Allocator(store, 256, (1 << 18) - POOL_OFFSET);
+  const p = a1.malloc(100);
+  store.setBytes(p, new Uint8Array(100).fill(0xab));
+  const a2 = new TLSF64Allocator(store, 256, 0); // poolSize 0 = load existing metadata
+  eq(a2.freeBlockCount(), a1.freeBlockCount(), 'second instance loads the same free state');
+  ok([...store.getBytes(p, 100)].every(b => b === 0xab), 'data visible across instances');
+  a2.free(p);                       // free via instance 2...
+  const p2 = a1.malloc(80);         // ...instance 1 immediately reuses the hole (read-through)
+  ok(p2, 'instance 1 allocates into the hole freed by instance 2');
+  eq(fsck(a1).length, 0, 'fsck clean across instances (a1): ' + fsck(a1).join('; '));
+  eq(fsck(a2).length, 0, 'fsck clean across instances (a2)');
+}
+
+// ---- 12. Mapping clamps huge sizes to the top size class ----
+{
+  const a = new TLSF64Allocator(new MemoryByteStore(1 << 15), 256, (1 << 15) - POOL_OFFSET);
+  const out = [0, 0];
+  a._mappingInsert(0x800000000, out); eq(out[0], 31, '32 GiB maps to top fl class');
+  a._mappingInsert(0x10000000000, out); eq(out[0], 31, '1 TiB maps to top fl class');
+  a._mappingInsert(9007199254740000, out); eq(out[0], 31, 'near-2^53 maps to top class');
+}
+
+// ---- 13. Model-based fuzzer: alloc/free/realloc churn with sentinel bytes ----
+function fuzz(seed, ops, reloadEvery) {
+  const rand = rng(seed);
+  const store = new MemoryByteStore(1 << 18);
+  let a = new TLSF64Allocator(store, 256, (1 << 18) - POOL_OFFSET);
   const live = new Map(); // ptr -> { size, tag }
   let tagSeq = 1;
+  const fill = (ptr, size) => { const tag = tagSeq++ & 0xff; store.setBytes(ptr, new Uint8Array(size).fill(tag)); return tag; };
   const verifyAll = () => {
     for (const [ptr, info] of live) {
       const bytes = store.getBytes(ptr, info.size);
@@ -164,21 +260,27 @@ function fuzz(seed, ops) {
     }
     return null;
   };
+  const randSize = () => rand() < 0.1 ? 1 + Math.floor(rand() * 6000) : 1 + Math.floor(rand() * 400);
   for (let i = 0; i < ops; i++) {
-    const doAlloc = live.size === 0 || rand() < 0.55;
-    if (doAlloc) {
-      const size = 1 + Math.floor(rand() * 800);
+    const keys = [...live.keys()];
+    const roll = rand();
+    if (live.size === 0 || roll < 0.5) {            // alloc
+      const size = randSize();
       const ptr = a.malloc(size);
-      if (ptr === 0) continue; // out of space is allowed
-      const tag = tagSeq++ & 0xff;
-      store.setBytes(ptr, new Uint8Array(size).fill(tag));
-      live.set(ptr, { size, tag });
-    } else {
-      const keys = [...live.keys()];
+      if (ptr !== 0) live.set(ptr, { size, tag: fill(ptr, size) });
+    } else if (roll < 0.8) {                          // free
       const ptr = keys[Math.floor(rand() * keys.length)];
-      a.free(ptr);
+      a.free(ptr); live.delete(ptr);
+    } else {                                          // realloc
+      const ptr = keys[Math.floor(rand() * keys.length)];
+      const size = randSize();
+      const np = a.realloc(ptr, size);
       live.delete(ptr);
+      if (np !== 0) live.set(np, { size, tag: fill(np, size) });
     }
+    // Periodically re-mount a fresh allocator over the same store (read-through
+    // coherence: a fresh instance must continue from persisted metadata).
+    if (reloadEvery && i % reloadEvery === reloadEvery - 1) a = new TLSF64Allocator(store, 256, 0);
     const problems = fsck(a);
     if (problems.length) return `seed ${seed} op ${i}: fsck: ${problems.join('; ')}`;
     const corrupt = verifyAll();
@@ -189,8 +291,11 @@ function fuzz(seed, ops) {
 
 {
   let fuzzFail = null;
-  for (let seed = 1; seed <= 12 && !fuzzFail; seed++) fuzzFail = fuzz(seed, 1500);
-  ok(!fuzzFail, 'fuzzer (12 seeds x 1500 ops): ' + (fuzzFail || 'clean'));
+  for (let seed = 1; seed <= 16 && !fuzzFail; seed++) fuzzFail = fuzz(seed, 2500, 0);
+  ok(!fuzzFail, 'fuzzer (16 seeds x 2500 ops, alloc/free/realloc): ' + (fuzzFail || 'clean'));
+  let reloadFail = null;
+  for (let seed = 101; seed <= 106 && !reloadFail; seed++) reloadFail = fuzz(seed, 1500, 37);
+  ok(!reloadFail, 'fuzzer with periodic re-mount (coherence): ' + (reloadFail || 'clean'));
 }
 
 console.log(`\nTLSF64: ${passed} passed, ${failed} failed`);
