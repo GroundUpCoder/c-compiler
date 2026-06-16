@@ -23857,7 +23857,12 @@ function main() {
   const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
   let noXterm = false;
-  let useBlockFS = false;
+  // Default filesystem backend for emitted .html pages: the synchronous
+  // single-file BLOCK_FS image. It runs on every engine (Chrome, Firefox,
+  // Safari/iOS) because it needs no JSPI, and gives O(1) rename + hard
+  // links/symlinks. Pass --browser-fs to opt back into the legacy broad-tree
+  // OPFS backend (async, JSPI-only — Chrome/Firefox, not Safari).
+  let useBlockFS = true;
   const pp = Stdlib.createDefaultPPRegistry();
 
   // Set up file reader. Returns raw source — splicing happens at lex
@@ -23976,7 +23981,11 @@ function main() {
     } else if (args[i] === "--no-xterm") {
       noXterm = true;
     } else if (args[i] === "--block-fs") {
+      // Now the default; kept for explicitness / backward compatibility.
       useBlockFS = true;
+    } else if (args[i] === "--browser-fs" || args[i] === "--no-block-fs") {
+      // Opt back into the legacy broad-tree OPFS backend (async, JSPI-only).
+      useBlockFS = false;
     } else if (args[i].startsWith("-")) {
       // Silently ignore unknown options
     } else {

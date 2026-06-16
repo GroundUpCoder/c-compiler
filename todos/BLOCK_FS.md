@@ -1,8 +1,17 @@
 # BLOCK_FS — synchronous POSIX filesystem backed by a single OPFS file
 
-**Status**: implemented, tested, shipping behind `--block-fs` flag.  Not yet
-battle-tested with vendor apps (Quake, Doom, Lua, SQLite, etc.) in the
-browser.
+**Status**: implemented, tested, and the **default** filesystem backend for
+emitted `.html` pages (since the 2026-06 default flip — pass `--browser-fs` to
+opt back into the legacy broad-tree OPFS backend).  Verified in the browser with
+Lua 5.5 and SQLite (10/10 of its test suite); Quake/Doom-class apps still want a
+dedicated pass.
+
+The on-disk format has two revisions: **v3** (the original, 32-byte inodes,
+uint32 offsets) and **v4** (128-byte inodes, 64-bit offsets/TLSF64, sub-second
+ms timestamps).  `BLOCK_FS.createV4(store)` / `BLOCK_FS.openWorkspace(...)` mount
+v4 and migrate a legacy v3 image forward non-destructively; `BLOCK_FS.create()`
+and `BLOCK_FS.init('__blockfs')` (the ephemeral per-page image emitted pages use)
+still mount v3.  Unless noted, the descriptions below cover both.
 
 ## Motivation
 
@@ -59,7 +68,7 @@ Offset 2304:    TLSF managed pool
                   ├─ File / directory extents ...
 ```
 
-### Inode (32 bytes)
+### Inode — v3 (32 bytes)
 
 ```
 [ 0: 4] extent_offset   uint32   TLSF ptr to data extent
@@ -74,6 +83,14 @@ Offset 2304:    TLSF managed pool
 [28:32] reserved        uint32
 ```
 
+### Inode — v4 (128 bytes)
+
+v4 widens the extent pointer, capacity, and file size to **64-bit** (lifting the
+v3 4 GB cap), stores timestamps with **millisecond** precision, and reserves the
+remaining bytes for future growth.  The TLSF allocator is the 64-bit `TLSF64`
+variant.  v4 is mounted by `createV4` / `openWorkspace`; `migrateV3toV4` rewrites
+a v3 image into v4 (the v3 file is kept untouched as a rollback).
+
 ### Directory entry (variable-length, sorted by name)
 
 ```
@@ -84,9 +101,10 @@ Offset 2304:    TLSF managed pool
 
 ### Limits
 
-- uint32 offsets throughout → individual files and total filesystem capped
-  at ~4 GB.  Consistent with WASM's 32-bit address space.  Upgrade to
-  uint64 / BigInt would lift this.
+- **v3** uses uint32 offsets throughout → individual files and total filesystem
+  capped at ~4 GB.  **v4 lifts this** with 64-bit offsets/sizes (TLSF64); the
+  practical ceiling is store space and WASM's 32-bit address space for a single
+  in-memory buffer.
 - 512 inodes with the default 8-block inode table; table auto-grows (2×
   realloc) so the practical limit is store space.
 - No file permissions enforcement — mode bits stored and returned but not
@@ -95,14 +113,15 @@ Offset 2304:    TLSF managed pool
 ## Wiring
 
 ```
---block-fs CLI flag
-  → compiler.js main() sets useBlockFS = true
+useBlockFS defaults to true in compiler.js main() (--browser-fs sets it false)
   → HtmlOutput.generate() injects USE_BLOCK_FS into the HTML page
   → page sends msg.useBlockFS to the worker
   → worker's doRun() calls BLOCK_FS.init('__blockfs')
   → blockFsFactory(ctx) returns { c: blockFS.toWasmEnv(ctx) }
   → runModule dispatch (blockFsFactory branch) assembles imports
 ```
+With `--browser-fs` the page instead sets `useBrowserFS: true` and dispatch
+builds the async `createBrowserFileSystem` (JSPI) imports — the pre-flip default.
 
 Node.js CLI path:
 ```
@@ -126,7 +145,9 @@ Directory: `mkdir`, `rmdir`, `unlink`, `remove`, `rename`, `__opendir`,
 Metadata: `stat`, `lstat`, `fstat`, `access`, `chmod`, `fchmod`, `utime`
 Process: `getcwd`, `chdir`, `pipe`, `dup`, `dup2`, `isatty`, `fcntl` (F_DUPFD)
 Links: `link`, `symlink`, `readlink`
-Terminal: `__tcgetattr`, `__tcsetattr`, `__ioctl_tiocgwinsz` (fake 80×24)
+Terminal: `__tcgetattr`, `__tcsetattr`, `__ioctl_tiocgwinsz` (real terminal
+  size via the stdin SAB when an interactive terminal is wired; falls back to
+  80×24 for headless runs with no SAB)
 Timing & select: `sleep`, `usleep`, `__nanosleep`, and `__select_impl`'s
   timeout block the worker via `Atomics.wait` (see "Synchronous blocking"
   below); they degrade to ENOSYS only when `SharedArrayBuffer` /
@@ -164,15 +185,16 @@ the env — a latent `LinkError` for any program calling it; it is now provided.
 
 | | Browser FS (multi-file OPFS) | Block FS (single-file) |
 |---|---|---|
+| Default backend for emitted pages | opt-in (`--browser-fs`) | **Yes** (since 2026-06) |
 | Works on Safari / iOS | No (needs JSPI) | **Yes** |
 | `sleep()` / `usleep()` / `nanosleep()` | Works (JSPI) | **Works** (`Atomics.wait`) |
 | `select()` timeout + fd readiness | Works (JSPI) | **Works** (`Atomics.wait` + sync scan) |
-| Real terminal size | Works (JSPI) | Fake 80×24 |
+| Real terminal size | Works (JSPI) | **Works** via stdin SAB (interactive); 80×24 headless |
 | `rename()` | Copy + delete (O(n) data copy) | **O(1)** — moves dirent pointer |
 | Hard links / symlinks | **Impossible** (no OPFS link API) | **Supported** |
-| File size limit | Browser-dependent, >4 GB | 4 GB (uint32, fixable) |
+| File size limit | Browser-dependent, >4 GB | v3: 4 GB; **v4: 64-bit** (lifted) |
 | Filesystem inspectability | DevTools OPFS viewer | inspect() or download single file |
-| Proven | Quake, Doom, Lua, SQLite, … | **New** |
+| Proven | Quake, Doom, Lua, SQLite, … | Lua 5.5, SQLite (10/10); Quake/Doom pending |
 
 ## Test coverage
 
@@ -292,9 +314,10 @@ the env — a latent `LinkError` for any program calling it; it is now provided.
 
 ### Future
 
-- [ ] **64-bit offsets**: upgrade superblock, TLSF metadata, inode pointers,
-  and directory entries to uint64 / BigInt.  Lifts the 4 GB filesystem
-  limit.
+- [x] **64-bit offsets** (done — v4): superblock, TLSF metadata (TLSF64),
+  inode pointers, and sizes widened to 64-bit.  Lifts the v3 4 GB filesystem
+  limit.  `createV4` / `openWorkspace` mount v4; `migrateV3toV4` upgrades a
+  legacy image forward.
 
 - [ ] **Journal / crash safety**: single OPFS file with syncHandle provides
   some consistency, but power loss mid-operation can corrupt the
