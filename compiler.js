@@ -21437,6 +21437,8 @@ float lgammaf(float x) { return (float)lgamma((double)x); }
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <spawn.h>      // popen() spawns /bin/sh
+#include <sys/wait.h>   // pclose() reaps the child
 
 static char __stdin_buf[BUFSIZ];
 static char __stdout_buf[BUFSIZ];
@@ -22079,16 +22081,51 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
 
 
 char *tmpnam(char *s) { (void)s; return 0; }
-/* popen/pclose: DEFERRED. The implementation is posix_spawn("/bin/sh","-c",cmd)
-   with a pipe wired to the child's stdio via file_actions — but that needs both
-   /bin/sh on the image (the dash port) AND the owner to APPLY file_actions (fd
-   portability), neither of which exists yet, so it can't stream. Kept as stubs
-   until those land (then it's a small posix_spawn + fdopen + FILE->pid table for
-   pclose). Stub now so the libc footprint — and %p layout — is unchanged. */
+
+/* popen/pclose: spawn /bin/sh -c command with one stdio end wired to a pipe via
+   posix_spawn file_actions; pclose reaps the child (FILE->pid map below). Needs
+   /bin/sh on the image — seeded by the runtime at mount. */
+static struct { FILE *fp; pid_t pid; } __popen_tab[16];
+
 FILE *popen(const char *command, const char *type) {
-  (void)command; (void)type; return 0;
+  if (!command || !type) return 0;
+  int reading = (type[0] == 'r');
+  int fds[2];
+  if (pipe(fds) < 0) return 0;
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  if (reading) {                                    /* parent reads fds[0] */
+    posix_spawn_file_actions_adddup2(&fa, fds[1], 1);    /* child stdout -> pipe */
+    posix_spawn_file_actions_addclose(&fa, fds[0]);
+  } else {                                          /* parent writes fds[1] */
+    posix_spawn_file_actions_adddup2(&fa, fds[0], 0);    /* child stdin <- pipe */
+    posix_spawn_file_actions_addclose(&fa, fds[1]);
+  }
+  char *argv[4];
+  argv[0] = "sh"; argv[1] = "-c"; argv[2] = (char *)command; argv[3] = 0;
+  pid_t pid;
+  int e = posix_spawn(&pid, "/bin/sh", &fa, 0, argv, environ);
+  posix_spawn_file_actions_destroy(&fa);
+  if (e != 0) { close(fds[0]); close(fds[1]); errno = e; return 0; }
+  FILE *fp;
+  if (reading) { close(fds[1]); fp = fdopen(fds[0], "r"); }
+  else         { close(fds[0]); fp = fdopen(fds[1], "w"); }
+  if (!fp) return 0;
+  for (int i = 0; i < 16; i++)
+    if (!__popen_tab[i].fp) { __popen_tab[i].fp = fp; __popen_tab[i].pid = pid; break; }
+  return fp;
 }
-int pclose(FILE *stream) { (void)stream; return -1; }
+int pclose(FILE *stream) {
+  if (!stream) return -1;
+  pid_t pid = -1;
+  for (int i = 0; i < 16; i++)
+    if (__popen_tab[i].fp == stream) { pid = __popen_tab[i].pid; __popen_tab[i].fp = 0; break; }
+  fclose(stream);
+  if (pid < 0) return -1;
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) return -1;
+  return status;
+}
   `,
   "__stdlib.c": `
 #include <stdlib.h>
