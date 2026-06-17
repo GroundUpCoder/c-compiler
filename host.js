@@ -4366,13 +4366,18 @@ function createSpawn(ctx, hooks) {
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return 0;
       },
+      // Mirror a signal-disposition change to the kernel so kill() applies the
+      // right action (terminate only when the target left the signal at DFL).
+      __on_sigdisp: function (sig, kind) { if (hooks.sigdisp) hooks.sigdisp(sig, kind); },
     },
   };
 }
 
 function createNullSpawn(ctx) {
   const enosys = function () { ctx.setErrnoName('ENOSYS'); return -1; };
-  return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys } };
+  // __on_sigdisp is a no-op without a kernel — dispositions are still recorded
+  // libc-side for raise()/abort(); there's just no owner to mirror to.
+  return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys, __on_sigdisp: function () {} } };
 }
 
 function createNullSDL() {

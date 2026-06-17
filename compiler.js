@@ -18589,8 +18589,55 @@ typedef __sighandler_t sig_t;
 #define SIGVTALRM 26
 #define SIGXCPU 24
 #define SIGXFSZ 25
+#define NSIG 32
+
+/* sigprocmask 'how' */
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
+/* sa_flags */
+#define SA_NOCLDSTOP 0x00000001
+#define SA_NOCLDWAIT 0x00000002
+#define SA_SIGINFO   0x00000004
+#define SA_ONSTACK   0x08000000
+#define SA_RESTART   0x10000000
+#define SA_NODEFER   0x40000000
+#define SA_RESETHAND 0x80000000
+
+typedef unsigned long long sigset_t;
+
+union sigval { int sival_int; void *sival_ptr; };
+typedef struct {
+  int si_signo, si_code, si_errno, si_pid, si_uid, si_status;
+  void *si_addr;
+  union sigval si_value;
+} siginfo_t;
+
+struct sigaction {
+  __sighandler_t sa_handler;
+  void (*sa_sigaction)(int, siginfo_t *, void *);
+  sigset_t sa_mask;
+  int sa_flags;
+  void (*sa_restorer)(void);
+};
+
 __sighandler_t signal(int __sig, __sighandler_t __handler);
 int raise(int __sig);
+int sigaction(int __sig, const struct sigaction *__act, struct sigaction *__old);
+int sigemptyset(sigset_t *__set);
+int sigfillset(sigset_t *__set);
+int sigaddset(sigset_t *__set, int __sig);
+int sigdelset(sigset_t *__set, int __sig);
+int sigismember(const sigset_t *__set, int __sig);
+int sigprocmask(int __how, const sigset_t *__set, sigset_t *__old);
+int sigpending(sigset_t *__set);
+int pause(void);
+int sigsuspend(const sigset_t *__mask);
+
+/* Notify the runtime of a disposition change (kind: 0=DFL 1=IGN 2=HANDLER) so
+   the process kernel's kill() applies the right action. Host-provided. */
+__import void __on_sigdisp(int __sig, int __kind);
   `,
   "stdalign.h": `
 #pragma once
@@ -20513,8 +20560,134 @@ int getopt_long_only(int argc, char *const argv[], const char *optstring,
   `,
   "__signal.c": `
 #include <signal.h>
-__sighandler_t signal(int __sig, __sighandler_t __handler) { (void)__sig; (void)__handler; return SIG_DFL; }
-int raise(int __sig) { (void)__sig; return 0; }
+#include <errno.h>
+#include <stddef.h>
+#include <unistd.h>   /* getpid */
+__import void __exit(int status);
+
+/* Per-process disposition state (the libc owns it — sigaction set it here). No
+   async delivery exists (a running wasm instance can't be preempted), so:
+   handlers are RECORDED and fire on raise()/abort() (synchronous self-delivery)
+   and, once Phase 2 lands, at syscall boundaries; the runtime is told the
+   disposition KIND via __on_sigdisp so kill() applies the right action. */
+static __sighandler_t __sig_h[NSIG];                       /* SIG_DFL = 0 */
+static void (*__sig_a[NSIG])(int, siginfo_t *, void *);    /* SA_SIGINFO action */
+static int __sig_fl[NSIG];
+static sigset_t __sig_blocked;
+static sigset_t __sig_pending;
+
+static int __sig_ok(int s) { return s > 0 && s < NSIG; }
+static int __sig_uncatchable(int s) { return s == SIGKILL || s == SIGSTOP; }
+
+/* Default action: 0=terminate 1=ignore 2=stop 3=continue. (if-chains, not a
+   switch, so this doesn't perturb the compiler's br_table-strategy golden when
+   __signal.c links into every stdlib-using program via abort.) */
+static int __sig_default_action(int s) {
+  if (s == SIGCHLD || s == SIGURG || s == SIGWINCH) return 1;
+  if (s == SIGCONT) return 3;
+  if (s == SIGSTOP || s == SIGTSTP || s == SIGTTIN || s == SIGTTOU) return 2;
+  return 0;
+}
+
+/* Disposition kind for the runtime mirror: 0=DFL 1=IGN 2=HANDLER. */
+static int __sig_kind(int s) {
+  if (__sig_a[s]) return 2;
+  if (__sig_h[s] == SIG_DFL) return 0;
+  if (__sig_h[s] == SIG_IGN) return 1;
+  return 2;
+}
+
+int sigemptyset(sigset_t *set) { if (set) *set = 0; return 0; }
+int sigfillset(sigset_t *set) { if (set) *set = ~(sigset_t)0; return 0; }
+int sigaddset(sigset_t *set, int sig) {
+  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
+  if (set) *set |= (sigset_t)1 << (sig - 1);
+  return 0;
+}
+int sigdelset(sigset_t *set, int sig) {
+  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
+  if (set) *set &= ~((sigset_t)1 << (sig - 1));
+  return 0;
+}
+int sigismember(const sigset_t *set, int sig) {
+  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
+  return set ? (int)((*set >> (sig - 1)) & 1) : 0;
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+  if (oldset) *oldset = __sig_blocked;
+  if (set) {
+    if (how == SIG_BLOCK) __sig_blocked |= *set;
+    else if (how == SIG_UNBLOCK) __sig_blocked &= ~*set;
+    else if (how == SIG_SETMASK) __sig_blocked = *set;
+    else { errno = EINVAL; return -1; }
+    /* SIGKILL/SIGSTOP can never be blocked. */
+    __sig_blocked &= ~(((sigset_t)1 << (SIGKILL - 1)) | ((sigset_t)1 << (SIGSTOP - 1)));
+  }
+  return 0;
+}
+
+int sigpending(sigset_t *set) { if (set) *set = __sig_pending; return 0; }
+
+__sighandler_t signal(int sig, __sighandler_t handler) {
+  if (!__sig_ok(sig) || __sig_uncatchable(sig)) { errno = EINVAL; return SIG_ERR; }
+  __sighandler_t old = __sig_a[sig] ? (__sighandler_t)0 : __sig_h[sig];
+  __sig_h[sig] = handler;
+  __sig_a[sig] = NULL;
+  __sig_fl[sig] = 0;
+  __on_sigdisp(sig, __sig_kind(sig));
+  return old;
+}
+
+int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
+  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
+  if (oldact) {
+    oldact->sa_handler = __sig_h[sig];
+    oldact->sa_sigaction = __sig_a[sig];
+    oldact->sa_mask = 0;
+    oldact->sa_flags = __sig_fl[sig];
+    oldact->sa_restorer = NULL;
+  }
+  if (act) {
+    if (__sig_uncatchable(sig)) { errno = EINVAL; return -1; }
+    __sig_fl[sig] = act->sa_flags;
+    if (act->sa_flags & SA_SIGINFO) { __sig_a[sig] = act->sa_sigaction; __sig_h[sig] = SIG_DFL; }
+    else { __sig_h[sig] = act->sa_handler; __sig_a[sig] = NULL; }
+    __on_sigdisp(sig, __sig_kind(sig));
+  }
+  return 0;
+}
+
+/* raise(): synchronous self-delivery (kill(getpid(), sig) on a single thread).
+   The handler runs right here; a default-terminate disposition exits. */
+int raise(int sig) {
+  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
+  if (__sig_a[sig]) {
+    siginfo_t info; info.si_signo = sig; info.si_code = 0; info.si_errno = 0;
+    info.si_pid = getpid(); info.si_uid = 0; info.si_status = 0; info.si_addr = NULL;
+    info.si_value.sival_int = 0;
+    void (*a)(int, siginfo_t *, void *) = __sig_a[sig];
+    if (__sig_fl[sig] & SA_RESETHAND) { __sig_a[sig] = NULL; __on_sigdisp(sig, 0); }
+    a(sig, &info, NULL);
+    return 0;
+  }
+  __sighandler_t h = __sig_h[sig];
+  if (h == SIG_IGN) return 0;
+  if (h == SIG_DFL) {
+    int act = __sig_default_action(sig);
+    if (act != 0) return 0;             /* ignore / stop / continue → no-op here */
+    __exit(128 + sig);                  /* terminate (raise of an unhandled fatal signal) */
+  }
+  if (__sig_fl[sig] & SA_RESETHAND) { __sig_h[sig] = SIG_DFL; __on_sigdisp(sig, 0); }
+  h(sig);
+  return 0;
+}
+
+/* No deliverable async signal exists yet (Phase 2), so a bare pause()/sigsuspend()
+   would wait forever. Report EINTR-less ENOSYS rather than hang, so callers can
+   degrade. (Phase 2 makes these block until a real delivery wakes them.) */
+int pause(void) { errno = ENOSYS; return -1; }
+int sigsuspend(const sigset_t *mask) { (void)mask; errno = ENOSYS; return -1; }
   `,
   "__locale.c": `
 #include <locale.h>
@@ -21902,6 +22075,7 @@ int pclose(FILE *stream) { (void)stream; return -1; }
 #include <__atexit.h>
 #include <spawn.h>      // system() spawns /bin/sh
 #include <sys/wait.h>   // waitpid()
+#include <signal.h>     // abort() raises SIGABRT
 __import double __strtod_impl(const char *nptr, char **endptr, const char *bound);
 
 int abs(int n) { return n < 0 ? -n : n; }
@@ -22162,8 +22336,10 @@ __export exit = exit;
 
 
 void abort(void) {
-  /* No signals here — exit with 128+SIGABRT like a shell reports an
-     aborted native process. Bypasses atexit handlers per C11. */
+  /* C11/POSIX: raise SIGABRT. If a handler is installed it runs (synchronous
+     self-delivery); abort then terminates regardless (134 = 128+SIGABRT),
+     bypassing atexit handlers. */
+  raise(SIGABRT);
   __exit(134);
 }
 
