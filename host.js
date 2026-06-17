@@ -4369,6 +4369,40 @@ function createSpawn(ctx, hooks) {
       // Mirror a signal-disposition change to the kernel so kill() applies the
       // right action (terminate only when the target left the signal at DFL).
       __on_sigdisp: function (sig, kind) { if (hooks.sigdisp) hooks.sigdisp(sig, kind); },
+      // Run the host's in-browser compiler (no wasm image to exec). Reads cwd +
+      // NULL-terminated argv from memory, calls the kernel's compile hook
+      // (synchronous from C — the worker parks on the SAB), and packs the result
+      // into the caller's buffer: i32 exitCode, i32 outLen, i32 errLen, then the
+      // stdout and stderr bytes. The program (/bin/cc) writes those to its own
+      // fd1/fd2, so the output flows through normal fd inheritance.
+      __compile: function (cwdPtr, argvPtr, bufPtr, cap) {
+        if (!hooks.compile) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const cwd = cwdPtr ? ctx.readString(cwdPtr) : '/';
+        const argv = [];
+        {
+          const mem = new DataView(ctx.getMemory().buffer);
+          for (let i = 0; ; i++) {
+            const s = mem.getUint32(argvPtr + i * 4, true);
+            if (s === 0) break;
+            argv.push(ctx.readString(s));
+          }
+        }
+        const r = hooks.compile(argv, cwd);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        const enc = new TextEncoder();
+        const out = enc.encode(r.stdout || '');
+        const err = enc.encode(r.stderr || '');
+        const total = 12 + out.length + err.length;
+        if (total > cap) { ctx.setErrnoName('ENOMEM'); return -1; }
+        const dv = new DataView(ctx.getMemory().buffer);
+        dv.setInt32(bufPtr, r.exitCode | 0, true);
+        dv.setInt32(bufPtr + 4, out.length, true);
+        dv.setInt32(bufPtr + 8, err.length, true);
+        const m = new Uint8Array(ctx.getMemory().buffer);
+        m.set(out, bufPtr + 12);
+        m.set(err, bufPtr + 12 + out.length);
+        return total;
+      },
     },
   };
 }
@@ -4377,7 +4411,7 @@ function createNullSpawn(ctx) {
   const enosys = function () { ctx.setErrnoName('ENOSYS'); return -1; };
   // __on_sigdisp is a no-op without a kernel — dispositions are still recorded
   // libc-side for raise()/abort(); there's just no owner to mirror to.
-  return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys, __on_sigdisp: function () {} } };
+  return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys, __on_sigdisp: function () {}, __compile: enosys } };
 }
 
 function createNullSDL() {

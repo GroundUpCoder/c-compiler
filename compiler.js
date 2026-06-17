@@ -19319,6 +19319,12 @@ struct __spawn_spec {
 __import int __spawn(const struct __spawn_spec *spec);        /* -> pid | -1+errno */
 __import int __spawn_wait(int pid, int *status, int options); /* -> pid | -1+errno */
 __import int __spawn_kill(int pid, int sig);                  /* -> 0   | -1+errno */
+/* Run the host's in-browser C compiler (it has no wasm image to exec). Packs the
+   result into buf as: int exitCode, int outLen, int errLen, then outLen stdout
+   bytes, then errLen stderr bytes. Returns total bytes written, or -1+errno
+   (ENOMEM if buf is too small, ENOSYS without a host kernel). Used by /bin/cc so
+   'cc' is a normal command a real shell can spawn. */
+__import int __compile(const char *cwd, char *const *argv, char *buf, int cap);
 
 // POSIX process management. No wasm host equivalent — all stubs fail.
 #define _SC_OPEN_MAX 4
