@@ -19280,7 +19280,7 @@ static inline void  _exit(int s)            { (void)s; for (;;) {} }
 static inline long  sysconf(int name)       { (void)name; return -1; }
 static inline int   setuid(unsigned uid)    { (void)uid; return -1; }
 static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
-static inline int   kill(int pid, int sig)  { (void)pid; (void)sig; return -1; }
+static inline int   kill(int pid, int sig)  { return __spawn_kill(pid, sig); }
 /* Single root user: real and effective user/group IDs are all 0 (root).
    These never fail (POSIX getuid/getgid have no error return). */
 static inline unsigned getuid(void)         { return 0; }
@@ -19497,8 +19497,7 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
   "sys/wait.h": `
 #pragma once
 #include <sys/types.h>
-// Stub: child-process control isn't available in our wasm runtime.
-// waitpid always reports "no child" (returns -1 with errno = ECHILD).
+#include <unistd.h>   // __spawn_wait (the owner-brokered process model)
 #define WNOHANG    0x01
 #define WUNTRACED  0x02
 #define WCONTINUED 0x08
@@ -19508,13 +19507,88 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
 #define WTERMSIG(status)     ((status) & 0x7f)
 #define WIFSTOPPED(status)   (((status) & 0xff) == 0x7f)
 #define WSTOPSIG(status)     WEXITSTATUS(status)
+// Reap a spawned child via the process kernel. waitpid(-1, ...) (any child) is
+// not yet supported by the owner — pass a specific pid (it returns -1/ECHILD
+// otherwise). status is POSIX-encoded: WEXITSTATUS(status) == child's exit code.
 static inline pid_t waitpid(pid_t pid, int *status, int options) {
-  (void)pid; (void)options;
-  if (status) *status = 0;
-  return -1;
+  return __spawn_wait(pid, status, options);
 }
 static inline pid_t wait(int *status) { return waitpid(-1, status, 0); }
   `,
+  "spawn.h": `
+#pragma once
+#include <sys/types.h>
+#include <unistd.h>   // struct __spawn_spec / __fd_action / __spawn
+#include <errno.h>
+
+// posix_spawn over the owner-brokered process model. file_actions/attr marshal
+// 1:1 into __spawn_spec (file_actions ARE the spec's actions); posix_spawn
+// returns an errno value (0 = success), not -1. NOTE: file_actions (fd redirects)
+// require the owner to apply them at spawn time — landing with fd portability;
+// until then a child gets default fds.
+typedef struct {
+  struct __fd_action __acts[32];  // 32 redirections is plenty for a shell line
+  int __n;
+} posix_spawn_file_actions_t;
+
+typedef struct {
+  unsigned __flags;
+  int __pgrp;
+} posix_spawnattr_t;
+
+#define POSIX_SPAWN_SETPGROUP 0x02
+
+static inline int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa) { fa->__n = 0; return 0; }
+static inline int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa) { (void)fa; return 0; }
+static inline int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int fd, int newfd) {
+  if (fa->__n >= 32) return EINVAL;
+  struct __fd_action *a = &fa->__acts[fa->__n++];
+  a->op = 0; a->fd = newfd; a->arg = fd; a->path = 0; a->mode = 0;  // DUP2: fd -> newfd
+  return 0;
+}
+static inline int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *fa, int fd, const char *path, int oflag, unsigned mode) {
+  if (fa->__n >= 32) return EINVAL;
+  struct __fd_action *a = &fa->__acts[fa->__n++];
+  a->op = 1; a->fd = fd; a->arg = oflag; a->path = path; a->mode = (int)mode;  // OPEN at fd
+  return 0;
+}
+static inline int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *fa, int fd) {
+  if (fa->__n >= 32) return EINVAL;
+  struct __fd_action *a = &fa->__acts[fa->__n++];
+  a->op = 2; a->fd = fd; a->arg = 0; a->path = 0; a->mode = 0;  // CLOSE fd
+  return 0;
+}
+static inline int posix_spawnattr_init(posix_spawnattr_t *a) { a->__flags = 0; a->__pgrp = 0; return 0; }
+static inline int posix_spawnattr_destroy(posix_spawnattr_t *a) { (void)a; return 0; }
+static inline int posix_spawnattr_setflags(posix_spawnattr_t *a, short f) { a->__flags = (unsigned)(unsigned short)f; return 0; }
+static inline int posix_spawnattr_getflags(const posix_spawnattr_t *a, short *f) { if (f) *f = (short)a->__flags; return 0; }
+static inline int posix_spawnattr_setpgroup(posix_spawnattr_t *a, int pg) { a->__pgrp = pg; return 0; }
+static inline int posix_spawnattr_getpgroup(const posix_spawnattr_t *a, int *pg) { if (pg) *pg = a->__pgrp; return 0; }
+
+static inline int posix_spawn(pid_t *pid, const char *path,
+    const posix_spawn_file_actions_t *fa, const posix_spawnattr_t *attr,
+    char *const argv[], char *const envp[]) {
+  struct __spawn_spec spec;
+  spec.path = path;
+  spec.argv = argv;
+  spec.envp = envp;          // NULL => inherit
+  spec.cwd = 0;              // inherit the parent's cwd
+  spec.actions = fa ? fa->__acts : (const struct __fd_action *)0;
+  spec.n_actions = fa ? fa->__n : 0;
+  spec.flags = (attr && (attr->__flags & POSIX_SPAWN_SETPGROUP)) ? 1u : 0u;
+  spec.pgid = attr ? attr->__pgrp : 0;
+  int r = __spawn(&spec);
+  if (r < 0) return errno ? errno : ENOSYS;   // posix_spawn returns errno, not -1
+  if (pid) *pid = r;
+  return 0;
+}
+// No PATH search yet — treat 'file' as a path. (PATH resolution: a later step.)
+static inline int posix_spawnp(pid_t *pid, const char *file,
+    const posix_spawn_file_actions_t *fa, const posix_spawnattr_t *attr,
+    char *const argv[], char *const envp[]) {
+  return posix_spawn(pid, file, fa, attr, argv, envp);
+}
+`,
   "guc.h": `
 #ifndef _GUC_H
 #define _GUC_H
@@ -21808,6 +21882,12 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
 
 
 char *tmpnam(char *s) { (void)s; return 0; }
+/* popen/pclose: DEFERRED. The implementation is posix_spawn("/bin/sh","-c",cmd)
+   with a pipe wired to the child's stdio via file_actions — but that needs both
+   /bin/sh on the image (the dash port) AND the owner to APPLY file_actions (fd
+   portability), neither of which exists yet, so it can't stream. Kept as stubs
+   until those land (then it's a small posix_spawn + fdopen + FILE->pid table for
+   pclose). Stub now so the libc footprint — and %p layout — is unchanged. */
 FILE *popen(const char *command, const char *type) {
   (void)command; (void)type; return 0;
 }
@@ -21819,6 +21899,8 @@ int pclose(FILE *stream) { (void)stream; return -1; }
 #include <errno.h>
 #include <inttypes.h>
 #include <__atexit.h>
+#include <spawn.h>      // system() spawns /bin/sh
+#include <sys/wait.h>   // waitpid()
 __import double __strtod_impl(const char *nptr, char **endptr, const char *bound);
 
 int abs(int n) { return n < 0 ? -n : n; }
@@ -22257,8 +22339,19 @@ __export __set_environ = __set_environ;
 __export __get_environ = __get_environ;
 
 int system(const char *command) {
-  if (!command) return 0;  /* no command processor available */
-  return -1;
+  /* posix_spawn("/bin/sh","-c",command) + waitpid. NOTE: needs /bin/sh on the
+     image (the dash port) to actually run a command — until then __spawn finds
+     no such program and this returns -1. A NULL command asks "is a shell
+     available?": yes, once /bin/sh exists. */
+  if (!command) return 1;
+  char *argv[4];
+  argv[0] = "sh"; argv[1] = "-c"; argv[2] = (char *)command; argv[3] = 0;
+  pid_t pid;
+  int e = posix_spawn(&pid, "/bin/sh", 0, 0, argv, 0);
+  if (e != 0) { errno = e; return -1; }
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) return -1;
+  return status;
 }
 
 int mblen(const char *s, size_t n) {
