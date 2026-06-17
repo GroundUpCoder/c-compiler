@@ -4240,10 +4240,13 @@ var BLOCK_FS = (function () {
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createPosix({ ctx }) {
-  const pid = process.pid;
+  const pid = (ctx && ctx.pid != null) ? ctx.pid : process.pid;
+  const ppid = (ctx && ctx.ppid != null) ? ctx.ppid
+    : (typeof process.ppid === 'number' ? process.ppid : 0);
   return {
     [ENV_KEY]: {
       getpid: function () { return pid; },
+      getppid: function () { return ppid; },
     },
   };
 }
@@ -4257,10 +4260,15 @@ function createPosix({ ctx }) {
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
 function createBrowserPosix({ ctx }) {
-  const nextPid = 1;
+  // The runtime-minted pid for THIS process (the owner kernel passes it per run);
+  // ppid is its spawner (0 for a top-level run). Fallback 1/0 keeps single-run
+  // callers that don't thread ids working.
+  const pid = (ctx && ctx.pid != null) ? ctx.pid : 1;
+  const ppid = (ctx && ctx.ppid != null) ? ctx.ppid : 0;
   return {
     [ENV_KEY]: {
-      getpid: function () { return nextPid; },
+      getpid: function () { return pid; },
+      getppid: function () { return ppid; },
     },
   };
 }
@@ -4805,6 +4813,10 @@ async function runModule({
   // kernel). Absent → createNullSpawn (ENOSYS), so modules linking __spawn still
   // instantiate without a runtime that can create processes.
   spawnHooks,
+  // The runtime-minted pid/ppid this process reports via getpid()/getppid().
+  // Absent → falls back to process.pid (Node) / 1 (browser).
+  pid,
+  ppid,
   sharedAudioBuffer,
   notifyAudio,
   notifyWindow,
@@ -6060,6 +6072,10 @@ async function runModule({
     requestTerminalSize: requestTerminalSize,
     requestStdinReady: requestStdinReady,
     requestStdinNotify: requestStdinNotify,
+    // Runtime-minted process ids for getpid()/getppid() (createPosix /
+    // createBrowserPosix). Undefined → host default.
+    pid: pid,
+    ppid: ppid,
   };
 
   if (fsModule) {

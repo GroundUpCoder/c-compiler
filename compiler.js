@@ -19233,6 +19233,7 @@ __import int pipe(int pipefd[2]);
 __import int dup(int oldfd);
 __import int dup2(int oldfd, int newfd);
 __import int getpid(void);
+__import int getppid(void);
 __import int isatty(int fd);
 __import int usleep(unsigned int usec);
 __import int ftruncate(int fd, long long length);
