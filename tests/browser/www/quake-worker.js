@@ -1,15 +1,19 @@
 // Worker bootstrap for the browser Quake test. The wasm runs here, not
-// on the main thread, because OPFS's sync access handle API (which
-// our libc's fopen/fread/fseek/fwrite all use) is worker-only.
+// on the main thread, because the block FS's sync access handle API
+// (which our libc's fopen/fread/fseek/fwrite all use) is worker-only.
 //
 // Flow:
 //   1. Main thread sends us its OffscreenCanvas via postMessage.
-//   2. We fetch pak0.pak and write it to OPFS at /id1/pak0.pak.
-//   3. We fetch quake.wasm and hand it to runModule with the
-//      OffscreenCanvas as the SDL canvas. runModule's createBrowserSDL
-//      treats it like a regular HTMLCanvasElement (same getContext('2d')
-//      API).
+//   2. We fetch pak0.pak into memory.
+//   3. We fetch quake.wasm and hand it to runModule with a blockFsFactory
+//      that opens a BLOCK_FS image (one OPFS file), writes pak0.pak into
+//      it at /id1/pak0.pak, and returns the wasm FS env. The same
+//      OffscreenCanvas is passed as the SDL canvas; runModule's
+//      createBrowserSDL treats it like a regular HTMLCanvasElement.
 //   4. stdout/stderr from the wasm flow back to main via postMessage.
+//
+// This uses the BLOCK_FS backend (single OPFS file), the same one the
+// compiler-emitted pages default to — NOT the legacy full-OPFS tree.
 
 importScripts('./host.js');
 
@@ -26,28 +30,15 @@ self.onmessage = async (e) => {
   }
 };
 
-async function mountPak() {
+async function fetchPak() {
   self.postMessage({ type: 'status', text: 'Fetching pak0.pak…' });
   const resp = await fetch('./pak0.pak');
   if (!resp.ok) throw new Error('fetch pak0.pak: ' + resp.status);
-  const buf = new Uint8Array(await resp.arrayBuffer());
-
-  self.postMessage({ type: 'status', text: 'Writing pak0.pak to OPFS…' });
-  const root = await navigator.storage.getDirectory();
-  const id1  = await root.getDirectoryHandle('id1', { create: true });
-  const fh   = await id1.getFileHandle('pak0.pak', { create: true });
-  // createSyncAccessHandle IS available here (worker context) — use it
-  // for the write so it matches what the wasm will use to read.
-  const sah  = await fh.createSyncAccessHandle();
-  sah.truncate(0);
-  sah.write(buf, { at: 0 });
-  sah.flush();
-  sah.close();
-  self.postMessage({ type: 'stdout', text: `[worker] mounted /id1/pak0.pak (${buf.byteLength} bytes)\n` });
+  return new Uint8Array(await resp.arrayBuffer());
 }
 
 async function bootQuake() {
-  await mountPak();
+  const pak = await fetchPak();
 
   self.postMessage({ type: 'status', text: 'Fetching quake.wasm…' });
   const r = await fetch('./quake.wasm');
@@ -59,7 +50,24 @@ async function bootQuake() {
   const exitCode = await self.runModule({
     bytes,
     args: ['quake.wasm'],
-    useBrowserFS: true,
+    // BLOCK_FS backend: a single OPFS file holds the whole FS image.
+    // BLOCK_FS.init returns a Promise<BlockFS>; the dispatch expects
+    // blockFsFactory to return Promise<{ [ENV_KEY]: env }>.
+    blockFsFactory: function (ctx) {
+      return self.BLOCK_FS.init('quake-blockfs').then(function (fs) {
+        // Mount pak0.pak at /id1/pak0.pak inside the block image. We
+        // rewrite it every boot (O_TRUNC) — the test always wants a
+        // known-good copy and an 18 MB write is cheap against a sync
+        // access handle.
+        try { fs.mkdir('/id1', 0o755); } catch (e) {}
+        const fd = fs.open('/id1/pak0.pak', 0x40 | 0x200, 0o644); // O_CREAT | O_TRUNC
+        if (fd === null || fd < 0) throw new Error('block FS: could not open /id1/pak0.pak for write');
+        fs.write(fd, pak, pak.length);
+        fs.close(fd);
+        self.postMessage({ type: 'stdout', text: `[worker] mounted /id1/pak0.pak into BLOCK_FS (${pak.byteLength} bytes)\n` });
+        return { c: fs.toWasmEnv(ctx) };
+      });
+    },
     getBrowserSDL: mainCanvas,
     writeOut: (b) => self.postMessage({ type: 'stdout', text: dec.decode(b, { stream: true }) }),
     writeErr: (b) => self.postMessage({ type: 'stderr', text: dec.decode(b, { stream: true }) }),

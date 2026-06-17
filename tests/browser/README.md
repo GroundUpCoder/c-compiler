@@ -12,7 +12,8 @@ validation; CI integration can come later.
 | `package.json` | Playwright dep + run scripts |
 | `build-quake.mjs` | Compiles `vendor/quake/src/*.c` into `www/quake.wasm`, copies pak0.pak and host.js |
 | `server.mjs` | Minimal Node static server with COOP/COEP headers (required for OPFS + SharedArrayBuffer) |
-| `www/quake.html` | Page with `<canvas>`, mounts pak0.pak in OPFS, boots quake.wasm |
+| `www/quake.html` | Page with `<canvas>`; spawns the worker that boots quake.wasm |
+| `www/quake-worker.js` | Worker: mounts pak0.pak into a BLOCK_FS image (single OPFS file), boots quake.wasm |
 | `quake-renders.mjs` | The actual test: open page → wait for Host_Init → wait 3 s → screenshot canvas → assert it has color |
 | `build-doom.mjs` | Compiles `vendor/doom/bin.json` into two **self-contained** emitted pages: `www/doom.html` (default backend, BLOCK_FS) and `www/doom-old.html` (`--browser-fs`, legacy full-OPFS). doom1.wad is bundled via the project's `dataFiles`. |
 | `doom-renders.mjs` | Opens an emitted Doom page, clicks the "Click to Start" overlay, waits for the canvas to render, screenshots `#canvas`, asserts ≥10% non-black. Takes `<page.html> [out.png]` so it drives both backends. |
@@ -22,10 +23,11 @@ Build artifacts under `www/` (`quake.wasm`, `pak0.pak`, `host.js`,
 
 ## Doom: BLOCK_FS vs full OPFS
 
-Unlike the Quake test (a hand-written page + worker that hardcodes
-`useBrowserFS: true`), the Doom test drives the **compiler-emitted `.html`
-page**, so it exercises the emitted-page filesystem-backend default. As of
-2026-06 that default is **BLOCK_FS** (`--browser-fs` opts back into full OPFS).
+Both tests now use the **BLOCK_FS** backend (single OPFS file). The Quake
+worker mounts pak0.pak into a block image directly; the Doom test drives the
+**compiler-emitted `.html` page**, whose filesystem-backend default is also
+BLOCK_FS. The `doom-old.html` page is still built with `--browser-fs` so the
+legacy full-OPFS backend stays exercised until it's removed.
 
 ```sh
 pnpm run doom          # build both pages + screenshot both backends
