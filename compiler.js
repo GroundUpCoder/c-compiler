@@ -19247,6 +19247,31 @@ __import int symlink(const char *target, const char *linkpath);
 __import int chmod(const char *path, int mode);
 __import char *realpath(const char *path, char *resolved);
 extern char **environ;
+
+/* ---- Owner-brokered process model (posix_spawn, NOT fork) ----
+   Three low-level host imports the runtime brokers through its process kernel.
+   The familiar POSIX surface (posix_spawn family, system, popen, waitpid, kill)
+   is C built on top of these (see <spawn.h>/<sys/wait.h>). The host reads the
+   spec struct straight from wasm memory at spawn time — fds are declarative
+   (file_actions), because a child is a separate instance and cannot inherit fds
+   by memory copy. */
+struct __fd_action {            /* op: 0=DUP2 1=OPEN 2=CLOSE */
+    int op; int fd; int arg; const char *path; int mode;
+};
+struct __spawn_spec {
+    const char *path;           /* program image (a .wasm) */
+    char *const *argv;          /* NULL-terminated */
+    char *const *envp;          /* NULL => inherit (host walks __get_environ) */
+    const char *cwd;            /* NULL => inherit */
+    const struct __fd_action *actions;
+    int n_actions;
+    unsigned flags;             /* bit0 = SETPGID */
+    int pgid;
+};
+__import int __spawn(const struct __spawn_spec *spec);        /* -> pid | -1+errno */
+__import int __spawn_wait(int pid, int *status, int options); /* -> pid | -1+errno */
+__import int __spawn_kill(int pid, int sig);                  /* -> 0   | -1+errno */
+
 // POSIX process management. No wasm host equivalent — all stubs fail.
 #define _SC_OPEN_MAX 4
 static inline int   fork(void)              { return -1; }

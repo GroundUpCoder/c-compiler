@@ -4275,6 +4275,98 @@ function createBrowserPosix({ ctx }) {
  * Used by run-unit.js and the Node CLI entry point.
  * @returns {{[k:string]: object}}
  */
+// ---- Process model: posix_spawn host imports (mirrors the SDL seam) ----
+//
+// Three imports back the C posix_spawn/system/popen/waitpid/kill family. The
+// runtime that can actually create processes (the c/ app's owner worker) passes
+// `spawnHooks` into runModule; without it, createNullSpawn makes the imports
+// resolve to ENOSYS so any module that links __spawn still instantiates (the
+// createNullSDL discipline).
+//
+// Field offsets (wasm32, all i32): __fd_action {op@0,fd@4,arg@8,path@12,mode@16}
+// = 20 bytes; __spawn_spec {path@0,argv@4,envp@8,cwd@12,actions@16,n_actions@20,
+// flags@24,pgid@28} = 32 bytes.
+function readSpawnSpec(ctx, p) {
+  // Read the whole struct in one synchronous burst — never hold a DataView
+  // across anything that could grow/detach memory.
+  const dv = new DataView(ctx.getMemory().buffer);
+  const i32 = (off) => dv.getInt32(p + off, true);
+  const u32 = (off) => dv.getUint32(p + off, true);
+  const readStr = (ptr) => (ptr ? ctx.readString(ptr) : null);
+
+  const path = readStr(u32(0));
+  if (path === null) throw new Error('spawn: null path');
+
+  // argv / envp: NULL-terminated i32 arrays of char* (null envp => inherit).
+  function readStrVec(ptr) {
+    if (!ptr) return null;
+    const out = [];
+    const mem = new DataView(ctx.getMemory().buffer);
+    for (let i = 0; ; i++) {
+      const s = mem.getUint32(ptr + i * 4, true);
+      if (s === 0) break;
+      out.push(ctx.readString(s));
+    }
+    return out;
+  }
+  const argv = readStrVec(u32(4)) || [];
+  const envp = readStrVec(u32(8)); // null => inherit (resolved by the hook)
+  const cwd = readStr(u32(12));
+
+  // file_actions: n × 20 bytes.
+  const actionsPtr = u32(16);
+  const nActions = i32(20);
+  const actions = [];
+  for (let k = 0; k < nActions; k++) {
+    const base = actionsPtr + k * 20;
+    actions.push({
+      op: dv.getInt32(base + 0, true),
+      fd: dv.getInt32(base + 4, true),
+      arg: dv.getInt32(base + 8, true),
+      path: readStr(dv.getUint32(base + 12, true)),
+      mode: dv.getInt32(base + 16, true),
+    });
+  }
+  return { path, argv, envp, cwd, actions, flags: u32(24), pgid: i32(28) };
+}
+
+// hooks: { spawn(spec)->{pid}|{errno}, wait(pid,options)->{pid,status}|{errno},
+//          kill(pid,sig)->{}|{errno} }. spawn/wait block the worker thread
+// (return synchronously to C) — in the run worker that's a park on Atomics.wait
+// over the block-RPC SAB, so posix_spawn's synchronous contract is JSPI-free.
+function createSpawn(ctx, hooks) {
+  return {
+    [ENV_KEY]: {
+      __spawn: function (p) {
+        let spec;
+        try { spec = readSpawnSpec(ctx, p); }
+        catch (e) { ctx.setErrnoName('EFAULT'); return -1; }
+        const r = hooks.spawn(spec);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        return r.pid;
+      },
+      __spawn_wait: function (pid, statusPtr, options) {
+        const r = hooks.wait(pid, options);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        if (statusPtr) {
+          new DataView(ctx.getMemory().buffer).setInt32(statusPtr, r.status | 0, true);
+        }
+        return r.pid;
+      },
+      __spawn_kill: function (pid, sig) {
+        const r = hooks.kill(pid, sig);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        return 0;
+      },
+    },
+  };
+}
+
+function createNullSpawn(ctx) {
+  const enosys = function () { ctx.setErrnoName('ENOSYS'); return -1; };
+  return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys } };
+}
+
 function createNullSDL() {
   let animationFrameFunc = null;
   return {
@@ -4709,6 +4801,10 @@ async function runModule({
   sdl: sdlOverride,
   getBrowserSDL,
   onSdl,
+  // Process model: { spawn, wait, kill } hooks (the c/ owner worker's process
+  // kernel). Absent → createNullSpawn (ENOSYS), so modules linking __spawn still
+  // instantiate without a runtime that can create processes.
+  spawnHooks,
   sharedAudioBuffer,
   notifyAudio,
   notifyWindow,
@@ -6002,6 +6098,12 @@ async function runModule({
   // the instance exists — the embedder invokes them later (during the frame
   // loop), not at import-build time.
   if (typeof onSdl === 'function') onSdl(sdl);
+
+  /* ---- Process model: __spawn / __spawn_wait / __spawn_kill ----
+     Real hooks when the embedder can create processes; ENOSYS stubs otherwise
+     (so the imports always resolve). */
+  const spawnImports = spawnHooks ? createSpawn(ctx, spawnHooks) : createNullSpawn(ctx);
+  Object.assign(imports[ENV_KEY], spawnImports[ENV_KEY]);
 
   /* ---- Emulator console/display/networking imports ---- */
   /* These are used by TinyEMU and similar emulators. They are no-ops
