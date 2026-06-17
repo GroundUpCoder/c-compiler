@@ -1,10 +1,9 @@
 // Build script for the browser Doom test: compile vendor/doom/bin.json into
-// two self-contained .html pages under tests/browser/www/ —
-//   doom.html      compiled with the default backend (BLOCK_FS)
-//   doom-old.html  compiled with --browser-fs (the legacy full-OPFS backend)
-// so doom-renders.mjs can screenshot both and confirm each renders.
+// a self-contained .html page under tests/browser/www/ —
+//   doom.html      compiled with the BLOCK_FS backend (the only browser backend)
+// so doom-renders.mjs can screenshot it and confirm it renders.
 //
-// The doom1.wad data file is bundled into each page automatically via the
+// The doom1.wad data file is bundled into the page automatically via the
 // project's `dataFiles` entry in bin.json.
 //
 // Run via `pnpm run build:doom` (or directly: `node build-doom.mjs`).
@@ -31,5 +30,4 @@ function compile(outName, extraArgs) {
   console.log(`[build] OK — ${outName} = ${fs.statSync(out).size} bytes`);
 }
 
-compile('doom.html', []);                 // default backend: BLOCK_FS
-compile('doom-old.html', ['--browser-fs']); // legacy full-OPFS backend
+compile('doom.html', []);                 // BLOCK_FS backend

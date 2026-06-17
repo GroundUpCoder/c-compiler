@@ -3,11 +3,10 @@
 // <canvas> and assert it isn't all-black (a wasm crash mid-init leaves black).
 //
 // Usage: node doom-renders.mjs <page.html> [screenshot.png]
-//   e.g. node doom-renders.mjs doom.html shot-blockfs.png      (new BLOCK_FS)
-//        node doom-renders.mjs doom-old.html shot-opfs.png     (old full OPFS)
+//   e.g. node doom-renders.mjs doom.html shot-blockfs.png      (BLOCK_FS)
 //
-// This exercises the *emitted-page* filesystem backend: doom.html was compiled
-// with the default (BLOCK_FS), doom-old.html with --browser-fs (full OPFS).
+// This exercises the *emitted-page* filesystem backend: doom.html is compiled
+// with BLOCK_FS, the only browser filesystem backend.
 import { chromium } from 'playwright';
 import { spawn }    from 'node:child_process';
 import { fileURLToPath } from 'node:url';

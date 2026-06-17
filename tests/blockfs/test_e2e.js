@@ -81,7 +81,6 @@ function compileAndRun(cSource, opts) {
     writeOut: function (buf) { stdoutParts.push(buf instanceof Uint8Array ? new TextDecoder().decode(buf) : String(buf)); },
     writeErr: function (buf) { stderrParts.push(buf instanceof Uint8Array ? new TextDecoder().decode(buf) : String(buf)); },
     fs: undefined,
-    useBrowserFS: undefined,
   }).then(function (exitCode) {
     try { fs.rmSync(tmpDir, { recursive: true }); } catch (e) {}
     return {

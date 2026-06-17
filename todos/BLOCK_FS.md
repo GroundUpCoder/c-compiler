@@ -1,10 +1,10 @@
 # BLOCK_FS — synchronous POSIX filesystem backed by a single OPFS file
 
-**Status**: implemented, tested, and the **default** filesystem backend for
-emitted `.html` pages (since the 2026-06 default flip — pass `--browser-fs` to
-opt back into the legacy broad-tree OPFS backend).  Verified in the browser with
-Lua 5.5 and SQLite (10/10 of its test suite); Quake/Doom-class apps still want a
-dedicated pass.
+**Status**: implemented, tested, and the **only** browser filesystem backend
+for emitted `.html` pages (the legacy broad-tree full-OPFS backend was removed
+in 2026-06; `--browser-fs`/`--no-block-fs` now warn and emit a BLOCK_FS page).
+Verified in the browser with Lua 5.5 and SQLite (10/10 of its test suite), and
+with Quake and Doom (both render in headless Chromium via the browser tests).
 
 The on-disk format has two revisions: **v3** (the original, 32-byte inodes,
 uint32 offsets) and **v4** (128-byte inodes, 64-bit offsets/TLSF64, sub-second
@@ -54,7 +54,7 @@ BlockFS
 
 toWasmEnv(ctx)
   — Adapts BlockFS to the WASM import interface expected by wasm-ld /
-    compiler.js.  Identical signature to createBrowserFileSystem.
+    compiler.js (the same `{ [ENV_KEY]: env }` shape every backend returns).
 ```
 
 ### On-disk layout
@@ -113,15 +113,11 @@ a v3 image into v4 (the v3 file is kept untouched as a rollback).
 ## Wiring
 
 ```
-useBlockFS defaults to true in compiler.js main() (--browser-fs sets it false)
-  → HtmlOutput.generate() injects USE_BLOCK_FS into the HTML page
-  → page sends msg.useBlockFS to the worker
+HtmlOutput.generate() emits a page whose worker always uses BLOCK_FS
   → worker's doRun() calls BLOCK_FS.init('__blockfs')
   → blockFsFactory(ctx) returns { c: blockFS.toWasmEnv(ctx) }
   → runModule dispatch (blockFsFactory branch) assembles imports
 ```
-With `--browser-fs` the page instead sets `useBrowserFS: true` and dispatch
-builds the async `createBrowserFileSystem` (JSPI) imports — the pre-flip default.
 
 Node.js CLI path:
 ```
@@ -181,11 +177,15 @@ When the primitive is genuinely unavailable, the timing syscalls fall back to
 ENOSYS rather than busy-waiting.  (`sleep` was also previously *missing* from
 the env — a latent `LinkError` for any program calling it; it is now provided.)
 
-## Block FS vs createBrowserFileSystem (full OPFS)
+## Block FS vs the removed full-OPFS backend
 
-| | Browser FS (multi-file OPFS) | Block FS (single-file) |
+The legacy multi-file full-OPFS backend (`createBrowserFileSystem`) was removed
+in 2026-06; Block FS is now the only browser backend. This table records why it
+won, for posterity.
+
+| | Browser FS (multi-file OPFS, removed) | Block FS (single-file) |
 |---|---|---|
-| Default backend for emitted pages | opt-in (`--browser-fs`) | **Yes** (since 2026-06) |
+| Backend for emitted pages | removed (was opt-in `--browser-fs`) | **only browser backend** |
 | Works on Safari / iOS | No (needs JSPI) | **Yes** |
 | `sleep()` / `usleep()` / `nanosleep()` | Works (JSPI) | **Works** (`Atomics.wait`) |
 | `select()` timeout + fd readiness | Works (JSPI) | **Works** (`Atomics.wait` + sync scan) |

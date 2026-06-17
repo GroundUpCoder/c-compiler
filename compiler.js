@@ -23143,7 +23143,7 @@ return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUn
 
 const HtmlOutput = (() => {
 
-function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, xtermSources, useBlockFS }) {
+function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, xtermSources }) {
   const strippedHostJs = hostJsSource.replace(/^#!.*\n/, '');
   const safeHostJs = strippedHostJs.replace(/<\/script>/gi, '<\\/script>');
   const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
@@ -23209,8 +23209,7 @@ async function doRun(msg) {
   var opts = {
     bytes: msg.bytes,
     args: msg.args && msg.args.length > 0 ? msg.args : undefined,
-    useBrowserFS: msg.useBlockFS ? undefined : true,
-    blockFsFactory: msg.useBlockFS ? function(ctx) {
+    blockFsFactory: function(ctx) {
       // BLOCK_FS.init returns a Promise<BlockFS>.  The dispatch expects
       // blockFsFactory to return Promise<{ [ENV_KEY]: env }>.
       return BLOCK_FS.init('__blockfs').then(function(fs) {
@@ -23275,7 +23274,7 @@ async function doRun(msg) {
 
         return { c: fs.toWasmEnv(ctx) };
       });
-    } : undefined,
+    },
     writeOut: function(buf) {
       var text = (buf instanceof Uint8Array) ? decoder.decode(buf) : String(buf);
       self.postMessage({ type: 'stdout', text: text });
@@ -23390,7 +23389,6 @@ window.onunhandledrejection = function(e) {
   var BUNDLE_HASH = ${JSON.stringify(bundleHash)};
   var RUN_ARGS = ${JSON.stringify(runArgs)};
   var PROGRAM_NAME = ${JSON.stringify(programName)};
-  var USE_BLOCK_FS = ${useBlockFS ? 'true' : 'false'};
   var HAS_XTERM = ${hasXterm};
 
   var overlay = document.getElementById('overlay');
@@ -23436,7 +23434,7 @@ window.onunhandledrejection = function(e) {
     updateLogVisibility();
   });
   resetOpfsBtn.addEventListener('click', async function() {
-    if (!confirm('Reset OPFS-mounted data files and reload?\\n\\nUse this if the page hangs after "Writing files..." (usually means another tab holds a stale lock).')) return;
+    if (!confirm('Reset the workspace image and reload?\\n\\nUse this if the page hangs on startup (usually means another tab holds a stale lock on the BLOCK_FS image).')) return;
     resetOpfsBtn.disabled = true;
     resetOpfsBtn.textContent = 'Wiping...';
     if (worker) { try { worker.terminate(); } catch (e) {} worker = null; }
@@ -23628,38 +23626,9 @@ window.onunhandledrejection = function(e) {
     }, 2000);
   }
 
-  // Get the OPFS file handle for a path, creating parent directories
-  // as needed. Returns the FileSystemFileHandle.
-  async function getOPFSHandle(path, create) {
-    var root = await navigator.storage.getDirectory();
-    var parts = path.split('/').filter(Boolean);
-    var dir = root;
-    for (var i = 0; i < parts.length - 1; i++) {
-      dir = await dir.getDirectoryHandle(parts[i], { create: create });
-    }
-    return await dir.getFileHandle(parts[parts.length - 1], { create: create });
-  }
-
-  // The bundle-hash marker lives at OPFS:/__bundle_hash. If its
-  // contents match BUNDLE_HASH (computed at build time from the wasm
-  // + every OPFS_FILES asset), we trust that all the OPFS-mounted
-  // files are current and skip rewriting them. Otherwise we rewrite
-  // every file and update the marker. This avoids re-writing big
-  // assets like Quake's 18 MB pak0.pak on every page reload, while
-  // still correctly rewriting if you rebuild with different content.
-  async function readBundleHash() {
-    try {
-      var fh = await getOPFSHandle('/__bundle_hash', false);
-      var f = await fh.getFile();
-      return await f.text();
-    } catch (e) { return null; }
-  }
-  // Recover from the 'modifications are not allowed' lock state by
-  // unlinking the file outright (which also forces OPFS to drop any
-  // lingering handles on it) before recreating it. removeEntry can
-  // also throw the same error if a handle is still held — we treat
-  // a hard failure here as a sign that the caller should surface a
-  // 'clear site data and retry' message.
+  // Unlink an OPFS entry by path, swallowing failures (e.g. a lingering
+  // sync-access handle still holds the file). Used by the reset
+  // affordance below.
   async function tryUnlinkOPFS(path) {
     var root = await navigator.storage.getDirectory();
     var parts = path.split('/').filter(Boolean);
@@ -23673,52 +23642,13 @@ window.onunhandledrejection = function(e) {
     } catch (e) { return false; }
   }
 
-  // Try to write to an OPFS file with progressive recovery:
-  //   - First attempt: just createWritable.
-  //   - If it fails (lock conflict), wait + retry several times.
-  //     Chromium can take a few seconds to release locks held by a
-  //     previous tab's worker that was implicitly terminated.
-  //   - Halfway through, try unlinking the file too — that sometimes
-  //     wakes Chromium's GC up. If unlink succeeds, recreate.
-  //   - Final fallback: throw the original error so the caller can
-  //     show a recovery affordance.
-  async function writeWithRetry(path, data) {
-    var lastErr;
-    // 12 attempts × accelerating waits ≈ up to 10 seconds total, which
-    // is the worst-case Chrome lock cleanup time observed in practice.
-    for (var attempt = 0; attempt < 12; attempt++) {
-      try {
-        var fh = await getOPFSHandle(path, true);
-        var writable = await fh.createWritable();
-        await writable.write(data);
-        await writable.close();
-        return;
-      } catch (e) {
-        lastErr = e;
-        if (attempt === 5) {
-          // Mid-retry: try unlinking. Sometimes works when the
-          // FileSystemFileHandle is stuck.
-          await tryUnlinkOPFS(path);
-        }
-        await new Promise(function (r) { setTimeout(r, 300 + 200 * attempt); });
-      }
-    }
-    throw lastErr;
-  }
-
-  async function writeBundleHash(hash) {
-    var enc = new TextEncoder();
-    await writeWithRetry('/__bundle_hash', enc.encode(hash));
-  }
-
-  async function writeOPFSFile(path, data) {
-    await writeWithRetry(path, data);
-  }
-
-  // Wipe every OPFS file we know about. Surfaced via the recovery
-  // button shown when start() can't get past a stuck lock state.
+  // Wipe the BLOCK_FS image so the next load starts from a clean
+  // workspace. Surfaced via the recovery button shown if a run gets
+  // stuck on a lingering OPFS sync-access lock. Also unlinks the legacy
+  // full-OPFS marker/asset paths so pages upgraded from the old backend
+  // don't leave orphans behind.
   async function clearOPFSState() {
-    var paths = ['/__bundle_hash'];
+    var paths = ['/__blockfs', '/__bundle_hash'];
     for (var i = 0; i < OPFS_FILES.length; i++) paths.push(OPFS_FILES[i].path);
     for (var j = 0; j < paths.length; j++) await tryUnlinkOPFS(paths[j]);
   }
@@ -23729,65 +23659,18 @@ window.onunhandledrejection = function(e) {
 
     var wasmBytes = base64ToBytes(WASM_BASE64);
 
-    // Bundle-hash check: if every OPFS asset is already at the right
-    // version, skip writing them. (On first load, or on rebuild, the
-    // marker won't match and we write everything.)
-    //
-    // When USE_BLOCK_FS is true, we DON'T write files into OPFS here.
-    // Instead we transfer the raw file data to the worker via
-    // postMessage; the worker writes them into the block FS image
-    // after BLOCK_FS.init().  The bundle-hash check happens in the
-    // worker (against /__bundle_hash inside the block FS).
+    // Block FS path: we DON'T write files into OPFS here. Instead we
+    // decode the bundled data files into buffers and transfer them to
+    // the worker via postMessage; the worker writes them into the block
+    // FS image after BLOCK_FS.init(). The bundle-hash check happens in
+    // the worker (against /__bundle_hash inside the block FS).
     var opfsFileBuffers = null;
-    if (!USE_BLOCK_FS) {
-      var storedHash = await readBundleHash();
-      if (storedHash === BUNDLE_HASH && OPFS_FILES.length > 0) {
-        setStatus('Assets up to date (skip ' + OPFS_FILES.length + ' files)');
-      } else {
-        setStatus('Writing ' + OPFS_FILES.length + ' files...');
-        try {
-          for (var i = 0; i < OPFS_FILES.length; i++) {
-            var fileData = base64ToBytes(OPFS_FILES[i].data);
-            await writeOPFSFile(OPFS_FILES[i].path, fileData);
-          }
-          await writeBundleHash(BUNDLE_HASH);
-        } catch (e) {
-          if (/modifications are not allowed/i.test(e && e.message)) {
-            // Most likely cause: another tab of this page is still open
-            // and its worker is holding sync-access handles on these
-            // files. OPFS keeps the lock as long as any handle in any
-            // tab references it. Surface a clear path forward — the
-            // user can either close the other tab or wipe OPFS state.
-            status.style.display = 'block';
-            status.innerHTML =
-              "OPFS write blocked: a previous run still has the data " +
-              "files locked. Close any other open tabs of this page, " +
-              "then reload. If the problem persists, click " +
-              "<button id='__opfs_reset'>Reset OPFS &amp; Reload</button> " +
-              "to wipe the cached data files.";
-            var btn = document.getElementById('__opfs_reset');
-            if (btn) {
-              btn.addEventListener('click', async function () {
-                btn.disabled = true;
-                btn.textContent = 'Wiping…';
-                try { await clearOPFSState(); } catch (ignore) {}
-                location.reload();
-              });
-            }
-            return;
-          }
-          throw e;
-        }
-      }
-    } else {
-      // Block FS path: decode files into buffers for transfer to worker
-      if (OPFS_FILES.length > 0) {
-        setStatus('Preparing ' + OPFS_FILES.length + ' files for transfer...');
-        opfsFileBuffers = [];
-        for (var fi = 0; fi < OPFS_FILES.length; fi++) {
-          var buf = base64ToBytes(OPFS_FILES[fi].data);
-          opfsFileBuffers.push({ path: OPFS_FILES[fi].path, data: buf });
-        }
+    if (OPFS_FILES.length > 0) {
+      setStatus('Preparing ' + OPFS_FILES.length + ' files for transfer...');
+      opfsFileBuffers = [];
+      for (var fi = 0; fi < OPFS_FILES.length; fi++) {
+        var buf = base64ToBytes(OPFS_FILES[fi].data);
+        opfsFileBuffers.push({ path: OPFS_FILES[fi].path, data: buf });
       }
     }
 
@@ -23796,11 +23679,11 @@ window.onunhandledrejection = function(e) {
     var blob = new Blob([workerSource], { type: 'application/javascript' });
     var workerUrl = URL.createObjectURL(blob);
 
-    // Synchronously terminate the worker on page unload so its
-    // OPFS sync-access handles release immediately. Without this,
-    // Chromium can hold the locks for a moment after the worker is
-    // killed implicitly, causing the next page load's writes to
-    // collide ('modifications are not allowed.') — see writeOPFSFile.
+    // Synchronously terminate the worker on page unload so its OPFS
+    // sync-access handle on the BLOCK_FS image releases immediately.
+    // Without this, Chromium can hold the lock for a moment after the
+    // worker is killed implicitly, causing the next page load to collide
+    // ('modifications are not allowed.') when it reopens the image.
     window.addEventListener('beforeunload', function () {
       if (worker) { try { worker.terminate(); } catch (e) {} worker = null; }
     });
@@ -23914,8 +23797,7 @@ window.onunhandledrejection = function(e) {
       type: 'run',
       bytes: wasmBytes,
       args: [PROGRAM_NAME].concat(RUN_ARGS),
-      canvas: offscreen,
-      useBlockFS: USE_BLOCK_FS
+      canvas: offscreen
     };
     if (sharedAudio) {
       msg.sharedAudioBuffer = sharedAudio.sharedBuffer;
@@ -24094,12 +23976,11 @@ function main() {
   const warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
   const compilerOptions = { debugSwitch: false, allowImplicitInt: false, allowEmptyParams: false, allowKnRDefinitions: false, allowImplicitFunctionDecl: false, allowUndefined: false, allowZeroLengthArrays: false, gcSections: false, gcNoExportRoots: false, noUndefined: false, timeReport: false, requireSources: [], backend: "default" };
   let noXterm = false;
-  // Default filesystem backend for emitted .html pages: the synchronous
-  // single-file BLOCK_FS image. It runs on every engine (Chrome, Firefox,
-  // Safari/iOS) because it needs no JSPI, and gives O(1) rename + hard
-  // links/symlinks. Pass --browser-fs to opt back into the legacy broad-tree
-  // OPFS backend (async, JSPI-only — Chrome/Firefox, not Safari).
-  let useBlockFS = true;
+  // Emitted .html pages always use the synchronous single-file BLOCK_FS
+  // image. It runs on every engine (Chrome, Firefox, Safari/iOS) because
+  // it needs no JSPI, and gives O(1) rename + hard links/symlinks. It is
+  // the only browser filesystem backend; the legacy broad-tree full-OPFS
+  // backend has been removed.
   const pp = Stdlib.createDefaultPPRegistry();
 
   // Set up file reader. Returns raw source — splicing happens at lex
@@ -24218,11 +24099,13 @@ function main() {
     } else if (args[i] === "--no-xterm") {
       noXterm = true;
     } else if (args[i] === "--block-fs") {
-      // Now the default; kept for explicitness / backward compatibility.
-      useBlockFS = true;
+      // BLOCK_FS is now the only browser backend; accepted as a no-op for
+      // backward compatibility with build scripts that still pass it.
     } else if (args[i] === "--browser-fs" || args[i] === "--no-block-fs") {
-      // Opt back into the legacy broad-tree OPFS backend (async, JSPI-only).
-      useBlockFS = false;
+      // The legacy full-OPFS backend was removed. Accept the flag but warn,
+      // so old build scripts get a clear signal instead of silent behavior
+      // change — emitted pages always use BLOCK_FS now.
+      console.error("warning: --browser-fs/--no-block-fs is no longer supported; the legacy full-OPFS backend was removed. Emitting a BLOCK_FS page.");
     } else if (args[i].startsWith("-")) {
       // Silently ignore unknown options
     } else {
@@ -24394,7 +24277,7 @@ function main() {
               };
             } catch (e) {}
           }
-          const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName, xtermSources, useBlockFS });
+          const htmlBinary = HtmlOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName, xtermSources });
           fs.writeFileSync(outputFile, htmlBinary);
         } else {
           const programName = path.basename(outputFile, ".js");
