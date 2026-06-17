@@ -2185,6 +2185,14 @@ var BLOCK_FS = (function () {
     this._stdinSab = null;
     this._stdinCtrl = null;
     this._stdinRing = null;
+    // Optional owner-brokered pipe transport (the embedder injects it via
+    // toWasmEnv ctx). When set, pipe() and the pipe paths of read/write/close/
+    // dup/dup2 delegate to the OWNER so the two ends of one pipe can live in
+    // different BlockFS instances (different workers) — the spawn-pipeline case.
+    // Null → the in-memory pipe fallback (single instance: Node CLI, emitted
+    // pages). The broker is { pipeCreate, pipeRead, pipeWrite, pipeClose,
+    // pipeRef }; ends are 0=read, 1=write.
+    this._pipeBroker = null;
     this._fdTable = [
       { position: null }, // 0 = stdin
       { position: null }, // 1 = stdout
@@ -2480,14 +2488,24 @@ var BLOCK_FS = (function () {
   };
 
   BlockFS.prototype.close = function (fd) {
-    if (fd < 3 || fd >= this._fdTable.length || !this._fdTable[fd])
+    if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
     if (entry.type === 'pipe') {
-      entry.pipe.closed[entry.pipeEnd] = true;
+      // A pipe end on ANY fd (incl. 0/1/2 after dup2 — the pipeline case) must
+      // release its ref so the peer sees EOF/EPIPE.
+      if (entry.pipeId !== undefined && this._pipeBroker) {
+        this._pipeBroker.pipeClose(entry.pipeId, entry.pipeEnd === 'write' ? 1 : 0);
+      } else {
+        entry.pipe.closed[entry.pipeEnd] = true;
+      }
       this._fdTable[fd] = null;
       return 0;
     }
+    // Closing a never-redirected stdin/stdout/stderr is a no-op that keeps the
+    // slot for the console path (the prior behavior). A real (file/dev) entry on
+    // any fd, including a redirected 0/1/2, is closed normally.
+    if (fd < 3 && entry.type === undefined && entry.inoId === undefined) return 0;
     this._fdTable[fd] = null;
     return 0;
   };
@@ -2498,6 +2516,13 @@ var BLOCK_FS = (function () {
     var entry = this._fdTable[fd];
 
     if (entry.type === 'pipe') {
+      if (entry.pipeId !== undefined && this._pipeBroker) {
+        // Owner-brokered: may BLOCK (the broker parks this worker on Atomics.wait
+        // until a writer in another instance delivers). 0-length = EOF.
+        var got = this._pipeBroker.pipeRead(entry.pipeId, count);
+        for (var pk = 0; pk < got.length; pk++) buf[pk] = got[pk];
+        return got.length;
+      }
       var pipe = entry.pipe;
       if (pipe.buffer.length === 0) return 0;
       var n = Math.min(count, pipe.buffer.length);
@@ -2549,14 +2574,26 @@ var BLOCK_FS = (function () {
   };
 
   BlockFS.prototype.write = function (fd, buf, count) {
-    if (fd === 1 || fd === 2) return count; // stdout/stderr handled externally
-
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd]) {
+      // Default stdout/stderr with no real entry → swallow (handled externally).
+      if (fd === 1 || fd === 2) return count;
       return this._setErr('EBADF');
     }
     var entry = this._fdTable[fd];
 
+    // Default (non-redirected) stdout/stderr go to the console (handled
+    // externally). A dup2'd pipe/file/dev entry on fd 1/2 falls through so the
+    // redirection actually takes effect.
+    if ((fd === 1 || fd === 2) && entry.type === undefined && entry.inoId === undefined) {
+      return count;
+    }
+
     if (entry.type === 'pipe') {
+      if (entry.pipeId !== undefined && this._pipeBroker) {
+        var w = this._pipeBroker.pipeWrite(entry.pipeId, buf.subarray(0, count));
+        if (w < 0) return this._setErr('EPIPE');
+        return w;
+      }
       if (entry.pipe.closed.read) return this._setErr('EPIPE');
       for (var pi = 0; pi < count; pi++) entry.pipe.buffer.push(buf[pi]);
       return count;
@@ -3050,6 +3087,14 @@ var BLOCK_FS = (function () {
   };
 
   BlockFS.prototype.pipe = function () {
+    if (this._pipeBroker) {
+      // Owner-brokered: the pipe object lives in the owner; both ends start in
+      // THIS instance (ref-counted there) and may be dup2'd / inherited.
+      var id = this._pipeBroker.pipeCreate();
+      var rFd = this._allocFd({ type: 'pipe', pipeId: id, pipeEnd: 'read', position: null });
+      var wFd = this._allocFd({ type: 'pipe', pipeId: id, pipeEnd: 'write', position: null });
+      return [rFd, wFd];
+    }
     var pipe = { buffer: [], closed: { read: false, write: false } };
     var readFd = this._allocFd({
       type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null
@@ -3065,6 +3110,12 @@ var BLOCK_FS = (function () {
       return this._setErr('EBADF');
     var entry = this._fdTable[oldfd];
     if (entry.type === 'pipe') {
+      if (entry.pipeId !== undefined && this._pipeBroker) {
+        this._pipeBroker.pipeRef(entry.pipeId, entry.pipeEnd === 'write' ? 1 : 0);
+        return this._allocFd({
+          type: 'pipe', pipeId: entry.pipeId, pipeEnd: entry.pipeEnd, position: null
+        });
+      }
       return this._allocFd({
         type: 'pipe', pipe: entry.pipe,
         pipeEnd: entry.pipeEnd, position: null
@@ -3079,15 +3130,27 @@ var BLOCK_FS = (function () {
     if (newfd < 0) return this._setErr('EBADF');
     if (oldfd === newfd) return newfd;
     if (newfd < this._fdTable.length && this._fdTable[newfd] !== null) {
+      // Closing newfd releases a broker-pipe ref it may have held.
+      var prev = this._fdTable[newfd];
+      if (prev.type === 'pipe' && prev.pipeId !== undefined && this._pipeBroker) {
+        this._pipeBroker.pipeClose(prev.pipeId, prev.pipeEnd === 'write' ? 1 : 0);
+      }
       this._fdTable[newfd] = null;
     }
     while (this._fdTable.length <= newfd) this._fdTable.push(null);
     var src = this._fdTable[oldfd];
     if (src.type === 'pipe') {
-      this._fdTable[newfd] = {
-        type: 'pipe', pipe: src.pipe,
-        pipeEnd: src.pipeEnd, position: null
-      };
+      if (src.pipeId !== undefined && this._pipeBroker) {
+        this._pipeBroker.pipeRef(src.pipeId, src.pipeEnd === 'write' ? 1 : 0);
+        this._fdTable[newfd] = {
+          type: 'pipe', pipeId: src.pipeId, pipeEnd: src.pipeEnd, position: null
+        };
+      } else {
+        this._fdTable[newfd] = {
+          type: 'pipe', pipe: src.pipe,
+          pipeEnd: src.pipeEnd, position: null
+        };
+      }
     } else {
       this._fdTable[newfd] = src;
     }
@@ -3559,6 +3622,11 @@ var BLOCK_FS = (function () {
     // stays pre-buffered/EOF and select reports it always-ready (old path).
     if (ctx.stdinSab) self.setStdinSab(ctx.stdinSab);
 
+    // Wire the optional owner-brokered pipe transport (the embedder's runtime).
+    // Absent → in-memory pipes (single instance). With it, pipe ends can cross
+    // instances (the spawn-pipeline case).
+    if (ctx.pipeBroker) self._pipeBroker = ctx.pipeBroker;
+
     function wrap(fn) {
       return function () {
         var result = fn.apply(self, arguments);
@@ -3582,15 +3650,19 @@ var BLOCK_FS = (function () {
         return this.read(fd, buf, count);
       }),
       write: wrap(function (fd, buf_ptr, count) {
-        if (fd === 1 || fd === 2) {
-          var memory = getMemory();
-          var buf = new Uint8Array(memory.buffer, buf_ptr, count);
-          if (fd === 1) writeOut(buf);
-          else writeErr(buf);
-          return count;
-        }
         var memory = getMemory();
         var buf = new Uint8Array(memory.buffer, buf_ptr, count);
+        if (fd === 1 || fd === 2) {
+          // Default (non-redirected) stdout/stderr go to the console. A dup2'd
+          // pipe/file/dev entry on fd 1/2 falls through to BlockFS.write so the
+          // redirection takes effect (the pipeline / `>` cases).
+          var e = self._fdTable[fd];
+          if (!e || (e.type === undefined && e.inoId === undefined)) {
+            if (fd === 1) writeOut(buf);
+            else writeErr(buf);
+            return count;
+          }
+        }
         return this.write(fd, buf, count);
       }),
       // 64-bit lseek: offset arrives as BigInt, result returns as BigInt. The
