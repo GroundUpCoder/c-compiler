@@ -1663,10 +1663,15 @@ function preprocess(filename, initialTokens, ppRegistry) {
       }
     }
 
-    // Fallback to standard library headers
+    // Fallback to standard library headers. Splice line continuations like the
+    // real-file path: inline core headers (template literals) already had their
+    // backslash-newlines elided by JS, so splicing is a no-op for them, but
+    // headers loaded from libc-ext.js (via JSON.parse) keep real backslash-
+    // newline continuations (e.g. multi-line macros) that must be joined.
     if (ppRegistry.standardHeaders.has(target)) {
       const resolved = intern(target);
-      return { lexResult: lex(resolved, ppRegistry.standardHeaders.get(target)), resolvedFile: resolved };
+      const { spliced, lineOffsets } = spliceLines(ppRegistry.standardHeaders.get(target));
+      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
     }
 
     return null;
@@ -1837,8 +1842,13 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
               const includeRes = resolveAndLex(rawPath, state.currentFile);
               if (!includeRes) {
-                result.errors.push(new LexError("Could not find include file: " + rawPath,
-                    state.currentFile, dir.line));
+                let msg = "Could not find include file: " + rawPath;
+                if (ppRegistry.extProvidedHeaders &&
+                    ppRegistry.extProvidedHeaders.indexOf(rawPath) >= 0 &&
+                    !ppRegistry.standardHeaders.has(rawPath)) {
+                  msg += " (provided by the optional libc-ext.js, which is not present)";
+                }
+                result.errors.push(new LexError(msg, state.currentFile, dir.line));
               } else if (ppRegistry.onceGuards.has(includeRes.resolvedFile)) {
                 // #pragma once: skip
               } else {
@@ -17332,6 +17342,11 @@ int iswupper(wint_t c);
 int iswxdigit(wint_t c);
 wint_t towlower(wint_t c);
 wint_t towupper(wint_t c);
+/* Character-class lookup/test (C95). wctype(name) maps a POSIX class name
+   ("alpha", "digit", "space", ...) to an opaque handle; iswctype(c, handle)
+   tests c against it. Used by POSIX regex bracket classes ([[:alpha:]]). */
+wctype_t wctype(const char *name);
+int iswctype(wint_t c, wctype_t type);
   `,
   "wchar.h": `
 #pragma once
@@ -18327,6 +18342,12 @@ uintmax_t strtoumax(const char *nptr, char **endptr, int base);
 #define SSIZE_MAX 2147483647L
 /* POSIX: maximum length of a pathname, including the terminating NUL */
 #define PATH_MAX 4096
+/* POSIX: maximum length of a filename (excluding NUL) */
+#define NAME_MAX 255
+/* POSIX <regex.h> limits: max repetitions in an interval, and longest
+   character-class name. */
+#define RE_DUP_MAX 255
+#define CHARCLASS_NAME_MAX 14
 #define LLONG_MIN (-9223372036854775807LL - 1LL)
 #define LLONG_MAX 9223372036854775807LL
 #define ULLONG_MAX 18446744073709551615ULL
@@ -18898,12 +18919,15 @@ void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 int memcmp(const void *s1, const void *s2, size_t n);
 size_t strlen(const char *s);
+size_t strnlen(const char *s, size_t maxlen);
 char *strcpy(char *dest, const char *src);
 char *strncpy(char *dest, const char *src, size_t n);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
 char *strcat(char *dest, const char *src);
 char *strchr(const char *s, int c);
+char *strchrnul(const char *s, int c);
+#define __strchrnul strchrnul
 char *strrchr(const char *s, int c);
 char *strstr(const char *haystack, const char *needle);
 size_t strlcpy(char *dst, const char *src, size_t size);
@@ -19268,6 +19292,35 @@ static inline struct passwd *getpwnam(const char *name) {
   const char *r = "root";
   while (*name && *name == *r) { name++; r++; }
   return (*name == 0 && *r == 0) ? &root : NULL;
+}
+
+/* Reentrant variants (used by e.g. glob's ~ expansion). On a match the
+   caller's struct + buffer are filled with the root entry and *result points
+   at pwd; on no match *result is NULL and the return is 0; ERANGE if buf is
+   too small. */
+static inline int __pwd_fill_root(struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
+  const char *fields[5] = { "root", "x", "root", "/root", "/bin/sh" };
+  size_t need = 0;
+  for (int i = 0; i < 5; i++) { const char *s = fields[i]; while (*s) { s++; need++; } need++; }
+  if (buflen < need) { *result = (struct passwd *)0; return 34; /* ERANGE */ }
+  char *p = buf; char *dst[5];
+  for (int i = 0; i < 5; i++) { const char *s = fields[i]; dst[i] = p; while (*s) { *p++ = *s++; } *p++ = 0; }
+  pwd->pw_name = dst[0]; pwd->pw_passwd = dst[1];
+  pwd->pw_uid = 0; pwd->pw_gid = 0;
+  pwd->pw_gecos = dst[2]; pwd->pw_dir = dst[3]; pwd->pw_shell = dst[4];
+  *result = pwd;
+  return 0;
+}
+static inline int getpwnam_r(const char *name, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
+  if (!name) { *result = (struct passwd *)0; return 0; }
+  const char *n = name; const char *r = "root";
+  while (*n && *n == *r) { n++; r++; }
+  if (*n != 0 || *r != 0) { *result = (struct passwd *)0; return 0; }
+  return __pwd_fill_root(pwd, buf, buflen, result);
+}
+static inline int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
+  if (uid != 0) { *result = (struct passwd *)0; return 0; }
+  return __pwd_fill_root(pwd, buf, buflen, result);
 }
   `,
   "termios.h": `
@@ -19813,6 +19866,41 @@ int iswxdigit(unsigned int c) {
 }
 unsigned int towlower(unsigned int c) { return iswupper(c) ? c + ('a' - 'A') : c; }
 unsigned int towupper(unsigned int c) { return iswlower(c) ? c + ('A' - 'a') : c; }
+
+/* --- wctype()/iswctype(): POSIX character-class lookup + test (C95) ---
+   wctype(name) returns a 1-based class id (0 = unknown); iswctype dispatches
+   to the matching isw* predicate. Used by POSIX regex [[:class:]] handling. */
+typedef int wctype_t;
+static int __wctype_streq(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return *a == 0 && *b == 0;
+}
+wctype_t wctype(const char *name) {
+  static const char *names[] = {
+    "alnum", "alpha", "blank", "cntrl", "digit", "graph",
+    "lower", "print", "punct", "space", "upper", "xdigit", 0
+  };
+  if (name == 0) return 0;
+  for (int i = 0; names[i]; i++) if (__wctype_streq(name, names[i])) return i + 1;
+  return 0;
+}
+int iswctype(unsigned int c, wctype_t type) {
+  switch (type) {
+    case 1:  return iswalnum(c);
+    case 2:  return iswalpha(c);
+    case 3:  return iswblank(c);
+    case 4:  return iswcntrl(c);
+    case 5:  return iswdigit(c);
+    case 6:  return iswgraph(c);
+    case 7:  return iswlower(c);
+    case 8:  return iswprint(c);
+    case 9:  return iswpunct(c);
+    case 10: return iswspace(c);
+    case 11: return iswupper(c);
+    case 12: return iswxdigit(c);
+  }
+  return 0;
+}
 
 /* --- wchar string functions --- */
 size_t wcslen(const wchar_t *s) {
@@ -22227,6 +22315,20 @@ size_t strlen(const char *s) {
   return len;
 }
 
+size_t strnlen(const char *s, size_t maxlen) {
+  size_t len = 0;
+  while (len < maxlen && s[len]) len++;
+  return len;
+}
+
+/* Like strchr, but returns a pointer to the terminating NUL (not NULL) when c
+   is not found. GNU extension; musl's glob/fnmatch use it as __strchrnul. */
+char *strchrnul(const char *s, int c) {
+  char ch = (char)c;
+  while (*s && *s != ch) s++;
+  return (char *)s;
+}
+
 char *strcpy(char *dest, const char *src) {
   size_t i = 0;
   while (src[i]) { dest[i] = src[i]; i++; }
@@ -22813,6 +22915,53 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
 function getStdlibHeaders() { return _stdlibHeaders; }
 function getStdlibSources() { return _stdlibSources; }
 
+// --- Optional extension library (libc-ext.js) ---------------------------
+// compiler.js is self-contained for the ISO C (C89/99/11) standard library
+// plus a few handwritten goodies. POSIX / 3rd-party pieces that are too big
+// to inline (the TRE regex engine, fnmatch, glob) live in an OPTIONAL sibling
+// file `libc-ext.js`, a JSON-parseable `const EXT_LIB_MAP = { name: text }`
+// mapping header/source names to their contents. The compiler is FULLY
+// functional without that file; when present, its headers and sources are
+// merged into the stdlib lookup. EXT_PROVIDED_HEADERS lists what it is
+// expected to supply, used only to make "not loaded" diagnostics helpful.
+const EXT_PROVIDED_HEADERS = ["regex.h", "fnmatch.h", "glob.h"];
+let _extLibMap = undefined;
+function getExtLibMap() {
+  if (_extLibMap !== undefined) return _extLibMap;
+  _extLibMap = {};
+  // Locate libc-ext.js next to compiler.js. __dirname works when compiler.js
+  // is run or required under Node; the browser shim (new Function(...)) has no
+  // __dirname, so fall back to argv[1]'s directory — where the app mounts the
+  // vendored compiler.js and its siblings (host.js, libc-ext.js). The read is
+  // OPTIONAL: absence is fine; only a present-but-broken file is reported.
+  if (typeof require === "undefined") return _extLibMap;
+  let dir = null;
+  if (typeof __dirname !== "undefined") dir = __dirname;
+  else if (typeof process !== "undefined" && process.argv && process.argv[1]) {
+    try { dir = require("path").dirname(process.argv[1]); } catch (e) { dir = null; }
+  }
+  if (dir === null) return _extLibMap;
+  let fs, path;
+  try { fs = require("fs"); path = require("path"); } catch (e) { return _extLibMap; }
+  const file = path.join(dir, "libc-ext.js");
+  let present = false;
+  try { present = fs.existsSync(file); } catch (e) { present = false; }
+  if (!present) return _extLibMap;
+  try {
+    const text = fs.readFileSync(file, "utf-8");
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end < start) throw new Error("EXT_LIB_MAP object literal not found");
+    _extLibMap = JSON.parse(text.slice(start, end + 1));
+  } catch (e) {
+    const msg = "warning: libc-ext.js present but could not be loaded: " + (e && e.message) + "\\n";
+    if (typeof process !== "undefined" && process.stderr) process.stderr.write(msg);
+    else if (typeof console !== "undefined") console.error(msg);
+    _extLibMap = {};
+  }
+  return _extLibMap;
+}
+
 function createDefaultPPRegistry() {
   const pp = new Lexer.PPRegistry();
 
@@ -22821,6 +22970,14 @@ function createDefaultPPRegistry() {
   for (const [name, content] of Object.entries(headers)) {
     pp.standardHeaders.set(name, content);
   }
+  // Merge optional extension headers (libc-ext.js), if present. Source files
+  // (.c) in the map are resolved separately at __require_source time.
+  for (const [name, content] of Object.entries(getExtLibMap())) {
+    if (name.endsWith(".h")) pp.standardHeaders.set(name, content);
+  }
+  // Manifest of headers the optional libc-ext.js supplies — lets a missing
+  // <regex.h>/<glob.h>/<fnmatch.h> report that the extension isn't present.
+  pp.extProvidedHeaders = EXT_PROVIDED_HEADERS;
 
   // Predefined macros (matching C++ compiler)
   const defs = {
@@ -22960,7 +23117,7 @@ function parseAllUnits(fs, pp, inputFiles, options) {
 
   while (pendingRequiredSources.length > 0) {
     const name = pendingRequiredSources.shift();
-    const source = stdlibSources[name];
+    const source = stdlibSources[name] || getExtLibMap()[name];
     if (!source) {
       writeErr(`Unknown stdlib source: ${name}\n`);
       hasErrors = true;

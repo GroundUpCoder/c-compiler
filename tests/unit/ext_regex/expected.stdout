@@ -1,0 +1,6 @@
+compile=0
+match=0 grp=[1,4]
+nomatch=1 (NOMATCH=1)
+class_hit=0 class_miss=1
+icase=0
+err=8 msg=Missing ')'

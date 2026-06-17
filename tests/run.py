@@ -85,7 +85,7 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz"]
+ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "ext", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -1546,6 +1546,25 @@ def run_ast_tests(results, filter_str=None):
 
 # --- blockfs (JS-level unit tests for the BLOCK_FS filesystem) ---
 
+def run_ext_tests(results, filter_str=None):
+    """Run tests/ext/run.js — verifies the optional libc-ext.js contract:
+    the compiler works without it (graceful), and picks up regex/fnmatch/glob
+    with it. The script's exit code is the pass/fail signal."""
+    test_name = "ext/optional-libc-ext"
+    if filter_str and filter_str not in test_name:
+        return
+    script = os.path.join(SCRIPT_DIR, "ext", "run.js")
+    if not os.path.isfile(script):
+        return
+    r = subprocess.run(["node", script], capture_output=True, text=True,
+                       timeout=120, cwd=ROOT_DIR)
+    if r.returncode == 0:
+        results.record(test_name, True)
+    else:
+        msg = (r.stdout.strip() or r.stderr.strip())
+        results.record(test_name, False, msg)
+
+
 def run_blockfs_tests(results, filter_str=None):
     """Run tests/blockfs/*.js — JS-level tests for the BLOCK_FS allocator,
     filesystem, and C end-to-end integration.
@@ -1635,6 +1654,10 @@ def main():
         elif cat == "extra":
             results.section("extra")
             run_unit_or_extra(EXTRA_DIR, COMPILER_CMD, results, filter_str=args.filter)
+
+        elif cat == "ext":
+            results.section("ext")
+            run_ext_tests(results, filter_str=args.filter)
 
         elif cat == "projects":
             results.section("projects")

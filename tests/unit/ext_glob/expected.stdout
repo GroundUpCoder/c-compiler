@@ -1,0 +1,4 @@
+r=0 n=2
+  ext_glob_aa.txt
+  ext_glob_bb.txt
+nomatch=3 (GLOB_NOMATCH=3)
