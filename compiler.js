@@ -19568,6 +19568,8 @@ static inline pid_t wait(int *status) { return waitpid(-1, status, 0); }
 #include <sys/types.h>
 #include <unistd.h>   // struct __spawn_spec / __fd_action / __spawn
 #include <errno.h>
+#include <stdlib.h>   // getenv (posix_spawnp PATH search)
+#include <string.h>   // strchr/strlen/memcpy/strcpy
 
 // posix_spawn over the owner-brokered process model. file_actions/attr marshal
 // 1:1 into __spawn_spec (file_actions ARE the spec's actions); posix_spawn
@@ -19630,11 +19632,32 @@ static inline int posix_spawn(pid_t *pid, const char *path,
   if (pid) *pid = r;
   return 0;
 }
-// No PATH search yet — treat 'file' as a path. (PATH resolution: a later step.)
+/* posix_spawnp: like execvp, resolve 'file' against $PATH unless it contains a
+   slash. If nothing is found we still spawn 'file' so the child surfaces the
+   exec failure as exit 127 (POSIX) rather than failing the spawn. */
 static inline int posix_spawnp(pid_t *pid, const char *file,
     const posix_spawn_file_actions_t *fa, const posix_spawnattr_t *attr,
     char *const argv[], char *const envp[]) {
-  return posix_spawn(pid, file, fa, attr, argv, envp);
+  if (!file || !*file) { errno = ENOENT; return ENOENT; }
+  if (strchr(file, '/')) return posix_spawn(pid, file, fa, attr, argv, envp);
+  const char *path = getenv("PATH");
+  if (!path || !*path) path = "/bin:/usr/bin";
+  char cand[1024];
+  unsigned long flen = strlen(file);
+  while (*path) {
+    const char *colon = strchr(path, ':');
+    unsigned long dlen = colon ? (unsigned long)(colon - path) : strlen(path);
+    if (dlen + 1 + flen + 1 <= sizeof(cand)) {
+      unsigned long k = 0;
+      if (dlen == 0) { cand[k++] = '.'; } else { memcpy(cand, path, dlen); k = dlen; }
+      cand[k++] = '/';
+      strcpy(&cand[k], file);   /* &cand[k], not cand+k: avoid array-in-arithmetic warning */
+      if (access(cand, 0 /* F_OK */) == 0) return posix_spawn(pid, cand, fa, attr, argv, envp);
+    }
+    if (!colon) break;
+    path = colon + 1;
+  }
+  return posix_spawn(pid, file, fa, attr, argv, envp);  /* unfound → child exits 127 */
 }
 `,
   "guc.h": `
