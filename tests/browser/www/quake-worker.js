@@ -23,6 +23,19 @@ self.onmessage = async (e) => {
   const m = e.data;
   if (m.type !== 'start') return;
   mainCanvas = m.canvas;
+  // Display-independent frame capture: convertToBlob reads the OffscreenCanvas
+  // BACKING STORE (not the composited window), so we can extract what Safari
+  // actually rendered even though safaridriver can't screenshot the canvas.
+  // Fires in the event-loop gaps between the SDL frame callbacks.
+  setInterval(async () => {
+    if (!mainCanvas) return;
+    try {
+      const blob = await mainCanvas.convertToBlob();
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      self.postMessage({ type: 'frame', png: btoa(bin) });
+    } catch (e) { /* canvas not ready yet */ }
+  }, 1500);
   try {
     await bootQuake();
   } catch (err) {

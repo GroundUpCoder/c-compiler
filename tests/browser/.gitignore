@@ -10,4 +10,9 @@ pnpm-lock.yaml
 last-screenshot.png
 shot-*.png
 fail-*.png
+oc-*.png
+*-safari.png
+*-chromium.png
+*-extracted.png
+www/doom-debug.html
 test-bundle.mjs

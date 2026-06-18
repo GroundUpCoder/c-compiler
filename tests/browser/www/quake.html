@@ -59,6 +59,7 @@ const worker    = new Worker('./quake-worker.js');
 
 worker.onmessage = (e) => {
   const m = e.data;
+  if (m.type === 'frame') { window.__quakeFrame = m.png; window.__quakeFrames = (window.__quakeFrames||0)+1; return; }
   if (m.type === 'stdout' || m.type === 'stderr') {
     appendLog(m.text);
     if (bootResolve && /Host_Init/.test(m.text)) {

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>oc-probe</title>
+<style>body{margin:0;background:#222}canvas{display:block;margin:8px}</style></head>
+<body>
+<!-- LEFT: drawn on the MAIN THREAD (red). RIGHT: transferred to a Worker and
+     drawn there via putImageData (green) — exactly what host.js's SDL backend
+     does. Screenshot tells us which path Safari composites/captures. -->
+<canvas id="main" width="300" height="120"></canvas>
+<canvas id="worker" width="300" height="120"></canvas>
+<div id="r" style="color:#ccc;font-family:monospace;padding:8px">probing…</div>
+<script>
+// Main-thread draw (red) via putImageData — baseline.
+(function(){
+  const ctx = document.getElementById('main').getContext('2d');
+  const img = ctx.createImageData(300,120);
+  for (let i=0;i<img.data.length;i+=4){img.data[i]=220;img.data[i+1]=20;img.data[i+2]=20;img.data[i+3]=255;}
+  ctx.putImageData(img,0,0);
+  const p = ctx.getImageData(150,60,1,1).data;   // read back — did the draw take?
+  window.__mainPixel = [p[0],p[1],p[2],p[3]];
+})();
+// Worker draw (green) into a transferred OffscreenCanvas via putImageData.
+const off = document.getElementById('worker').transferControlToOffscreen();
+const code = `onmessage = (e) => {
+  const cv = e.data; const ctx = cv.getContext('2d');
+  function frame(){
+    const img = ctx.createImageData(cv.width, cv.height);
+    for (let i=0;i<img.data.length;i+=4){img.data[i]=20;img.data[i+1]=200;img.data[i+2]=20;img.data[i+3]=255;}
+    ctx.putImageData(img,0,0);
+    const p = ctx.getImageData(150,60,1,1).data;   // read back from the OffscreenCanvas
+    self.__drew = (self.__drew||0)+1;
+    postMessage({drew:self.__drew, px:[p[0],p[1],p[2],p[3]]});
+    // Display-independent extraction: convertToBlob reads the BACKING STORE,
+    // not the composited window — works even with the screen asleep / uncaptured.
+    if (self.__drew === 3) {
+      cv.convertToBlob().then(async (blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let bin=''; for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+        postMessage({ png: btoa(bin) });
+      });
+    }
+    setTimeout(frame, 200);
+  }
+  frame();
+};`;
+const w = new Worker(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));
+let frames = 0;
+w.onmessage = (e) => { if (e.data.png) { window.__workerPng = e.data.png; return; } frames = e.data.drew; window.__workerPixel = e.data.px; document.getElementById('r').textContent = 'worker frames drawn: ' + frames; window.__workerFrames = frames; };
+w.onerror = (e) => { document.getElementById('r').textContent = 'worker error: ' + e.message; window.__workerErr = e.message; };
+w.postMessage(off, [off]);
+</script>
+</body></html>

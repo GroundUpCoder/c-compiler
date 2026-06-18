@@ -11,10 +11,17 @@
     "test:doom": "node doom-renders.mjs doom.html shot-blockfs.png",
     "doom": "pnpm run build:doom && pnpm run test:doom",
     "test:input": "node sdl-input-check.mjs",
-    "test": "pnpm run build:quake && pnpm run test:quake"
+    "test": "pnpm run build:quake && pnpm run test:quake",
+    "probe:oc": "node oc-probe-run.mjs chromium oc-chromium.png",
+    "probe:oc-safari": "caffeinate -u -t 2; caffeinate -du node oc-probe-run.mjs safari oc-safari.png",
+    "test:safari-doom": "caffeinate -u -t 2; caffeinate -du node safari-renders.mjs doom shot-doom-safari.png",
+    "test:safari-quake": "caffeinate -u -t 2; caffeinate -du node safari-renders.mjs quake shot-quake-safari.png",
+    "extract:quake-safari": "caffeinate -u -t 2; caffeinate -du node quake-extract.mjs",
+    "debug:doom-safari": "caffeinate -u -t 2; caffeinate -du node doom-debug.mjs"
   },
   "packageManager": "pnpm@10.33.0",
   "devDependencies": {
-    "playwright": "^1.59.1"
+    "playwright": "^1.59.1",
+    "selenium-webdriver": "^4.45.0"
   }
 }
