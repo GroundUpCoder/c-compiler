@@ -4414,6 +4414,30 @@ function createNullSpawn(ctx) {
   return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys, __on_sigdisp: function () {}, __compile: enosys } };
 }
 
+// A blocking SDL loop (while(running){ poll; render; SDL_Delay; }) can't be
+// honoured in this runtime, on ANY engine. The app runs every program through
+// the synchronous, no-JSPI block-FS model (one runtime to maintain until iOS
+// ships JSPI), and such a loop fundamentally cannot yield to the browser without
+// JSPI: the window never repaints and input never arrives — it just hangs. So
+// rather than a silent no-op (an unexplained freeze) the no-JSPI SDL_Delay paths
+// throw this — UNIFORMLY, including on JSPI-capable Chrome/Android, so there is
+// one behaviour to reason about everywhere. (Callers gate on whether a main-loop
+// callback was registered, so the valid callback model — which DOES delay
+// harmlessly — keeps working; only a true blocking loop reaches here.) The throw
+// unwinds out of main() and the run pipeline surfaces it (shell stderr →
+// Term/agent tool result, and the graphical sheet's on-screen debug overlay).
+function sdlDelayUnsupported() {
+  throw new Error(
+    'SDL_Delay() is not supported in this runtime (no JSPI). A blocking SDL ' +
+    'loop cannot yield to the browser, so the window never updates and input ' +
+    'never arrives. Restructure to the callback model: move your per-frame work ' +
+    'into a function and register it with emscripten_set_main_loop(frame, 0, 1) ' +
+    '(or __setAnimationFrameFunc(frame)), then return from main(). The host ' +
+    'drives that via requestAnimationFrame — no JSPI, works on every engine ' +
+    'including Safari/iOS.'
+  );
+}
+
 function createNullSDL() {
   let animationFrameFunc = null;
   return {
@@ -4438,7 +4462,10 @@ function createNullSDL() {
       __sdl_pause_audio_device: function () {},
       __sdl_close_audio_device: function () {},
       __sdl_get_ticks: function () { return Date.now() & 0xffffffff; },
-      __sdl_delay: function () {},
+      // No-op once a main-loop callback is registered (callback model — rAF
+      // already paces frames, e.g. DOOM's DG_SleepMs); throw only for a blocking
+      // loop that never registered one (the case that hangs without JSPI).
+      __sdl_delay: function () { if (!animationFrameFunc) sdlDelayUnsupported(); },
     },
   };
 }
@@ -4555,11 +4582,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (notifyAudio) notifyAudio({ type: 'audio-close', id: dev });
       },
 
-      __sdl_delay: (typeof WebAssembly.Suspending === 'function')
-        ? new WebAssembly.Suspending(async function (ms) {
-          await new Promise(function (r) { setTimeout(r, ms); });
-        })
-        : function (ms) { /* no-op without JSPI */ },
+      // No JSPI branch — uniform with the headless null-SDL path. No-op once a
+      // main-loop callback is registered (callback model — rAF paces frames);
+      // throw only for a blocking loop that never registered one. The error
+      // surfaces in the graphical sheet's on-screen debug overlay.
+      __sdl_delay: function () { if (!animationFrameFunc) sdlDelayUnsupported(); },
       __sdl_get_ticks: function () { return Math.floor(performance.now()); },
       __sdl_set_animation_frame_func: function (callbackPtr) {
         animationFrameFunc = callbackPtr;
