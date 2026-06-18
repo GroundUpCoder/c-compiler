@@ -8421,7 +8421,8 @@ function normalizeInitList(initList, containerType) {
     if (!abt.isAggregate() && !abt.isPointer() && !abt.isArray() &&
         abt.size === sbt.size) {
       const arrType = (containerType.arraySize || 0) === 0
-        ? initList.elements[0].type : containerType;
+        ? Types.arrayOf(containerType.baseType, initList.elements[0].type.arraySize)
+        : containerType;
       return new AST.EInitList(initList.loc, arrType, initList.elements.slice(),
                                initList.designators.slice(), initList.unionMemberIndex);
     }
