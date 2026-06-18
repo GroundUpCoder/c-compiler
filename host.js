@@ -4751,6 +4751,51 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // 6 verts (2 triangles); SDL_RenderGeometry contributes its index-resolved
   // triangle soup. Flush packs them all into one vertex buffer (NDC-transforming
   // x,y) and draws one range per entry (so each entry keeps its own texture).
+  // GPU→CPU readback for the SDL_Renderer path. The renderer draws straight to
+  // the canvas with NO CPU framebuffer, so getLastFrame() (the real-Safari
+  // surface readback + the in-app camera capture) would be empty for renderer
+  // programs — only the software blitter retained a CPU copy. After each present
+  // we copy the canvas texture into a mappable buffer and async-fill
+  // blit.lastFrame (shared: a program uses the blitter OR the renderer, never
+  // both). One readback in flight at a time (busy guard); the buffer is reused.
+  const rb = { buf: null, bufSize: 0, busy: false, pending: null };
+  function rdrEncodeReadback(enc, dev, tex, W, H) {
+    if (rb.busy) return false;                            // prior map still in flight
+    const bytesPerRow = Math.ceil((W * 4) / 256) * 256;  // WebGPU 256B row alignment
+    const size = bytesPerRow * H;
+    if (!rb.buf || rb.bufSize !== size) {
+      if (rb.buf) rb.buf.destroy();
+      rb.buf = dev.createBuffer({ size: size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      rb.bufSize = size;
+    }
+    enc.copyTextureToBuffer({ texture: tex }, { buffer: rb.buf, bytesPerRow: bytesPerRow, rowsPerImage: H }, { width: W, height: H });
+    rb.pending = { W: W, H: H, bytesPerRow: bytesPerRow };
+    return true;
+  }
+  function rdrStartReadbackMap() {
+    if (!rb.pending || rb.busy) return;
+    const p = rb.pending; rb.pending = null; rb.busy = true;
+    // getPreferredCanvasFormat() is usually bgra8unorm; getLastFrame() consumers
+    // want RGBA, so swap B/R when the canvas is a bgra* format.
+    const swap = !!(cgpu.format && cgpu.format.indexOf('bgra') === 0);
+    rb.buf.mapAsync(GPUMapMode.READ).then(function () {
+      const padded = new Uint8Array(rb.buf.getMappedRange());
+      const W = p.W, H = p.H, bpr = p.bytesPerRow, pitch = W * 4;
+      const out = new Uint8Array(pitch * H);
+      for (let y = 0; y < H; y++) {
+        const srow = y * bpr, drow = y * pitch;
+        for (let x = 0; x < W; x++) {
+          const si = srow + x * 4, di = drow + x * 4;
+          if (swap) { out[di] = padded[si + 2]; out[di + 1] = padded[si + 1]; out[di + 2] = padded[si]; out[di + 3] = padded[si + 3]; }
+          else { out[di] = padded[si]; out[di + 1] = padded[si + 1]; out[di + 2] = padded[si + 2]; out[di + 3] = padded[si + 3]; }
+        }
+      }
+      blit.lastFrame = { width: W, height: H, pitch: pitch, pixels: out };
+      rb.buf.unmap();
+      rb.busy = false;
+    }).catch(function (e) { console.error('SDL/WebGPU readback failed', e && e.message); rb.busy = false; });
+  }
+
   function rdrFlush(rd) {
     const dev = cgpu.device;
     const W = canvas.width || 1, H = canvas.height || 1;
@@ -4773,8 +4818,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     const vbuf = dev.createBuffer({ size: Math.max(32, data.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     if (data.byteLength) dev.queue.writeBuffer(vbuf, 0, data);
     const enc = dev.createCommandEncoder();
-    const view = cgpu.context.getCurrentTexture().createView();
-    const pass = enc.beginRenderPass({ colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
+    const curTex = cgpu.context.getCurrentTexture();
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: curTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
     pass.setPipeline(rdrPipeline);
     pass.setVertexBuffer(0, vbuf);
     let first = 0;
@@ -4784,8 +4829,13 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       first += e.n;
     }
     pass.end();
+    // Snapshot the just-rendered canvas into blit.lastFrame (same encoder, so the
+    // copy is ordered after the draw) for getLastFrame() — the renderer has no
+    // CPU framebuffer of its own.
+    const didReadback = rdrEncodeReadback(enc, dev, curTex, W, H);
     dev.queue.submit([enc.finish()]);
     vbuf.destroy();
+    if (didReadback) rdrStartReadbackMap();
     rd.batch = [];
   }
 
