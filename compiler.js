@@ -17133,6 +17133,17 @@ typedef struct SDL_FRect {
     float x, y, w, h;
 } SDL_FRect;
 
+typedef struct SDL_FPoint { float x, y; } SDL_FPoint;
+typedef struct SDL_FColor { float r, g, b, a; } SDL_FColor;
+
+/* SDL_RenderGeometry vertex: position (render pixels), color (0..1 floats), and
+   normalized (0..1) tex coords. */
+typedef struct SDL_Vertex {
+    SDL_FPoint position;
+    SDL_FColor color;
+    SDL_FPoint tex_coord;
+} SDL_Vertex;
+
 /* SDL_Renderer (2D accelerated). The host renders batched quads on WebGPU; the
    pixel format is informational only (textures are RGBA bytes in memory). */
 typedef struct SDL_Renderer SDL_Renderer;
@@ -17359,6 +17370,7 @@ bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect);
 bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect);
 bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2);
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y);
+bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Vertex *vertices, int num_vertices, const int *indices, int num_indices);
 void SDL_RenderPresent(SDL_Renderer *renderer);
   `,
   "webgpu.h": `
@@ -20281,6 +20293,7 @@ __import void __sdl_set_texture_alpha_mod(int t, double a);
 __import void __sdl_set_draw_color(int r, double rr, double gg, double bb, double aa);
 __import void __sdl_render_clear(int r);
 __import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3, double sx, double sy, double sw, double sh);
+__import void __sdl_render_geometry(int r, int texH, const float *verts, int vertCount);
 __import void __sdl_render_present(int r);
 
 bool SDL_Init(SDL_InitFlags flags) {
@@ -20625,6 +20638,28 @@ bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float 
 
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
     __sdl_quad_rect(renderer->handle, 0, x, y, 1, 1, 0, 0, 1, 1);
+    return 1;
+}
+
+bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
+                        const SDL_Vertex *vertices, int num_vertices,
+                        const int *indices, int num_indices) {
+    int n = indices ? num_indices : num_vertices;
+    if (n <= 0 || !vertices) return 1;
+    /* Resolve indices into a flat triangle soup of [x,y,u,v,r,g,b,a] per vertex
+       (host stays struct-ignorant — it just reads floats). */
+    float *buf = (float *)malloc((size_t)n * 8 * sizeof(float));
+    if (!buf) return 0;
+    for (int i = 0; i < n; i++) {
+        const SDL_Vertex *v = &vertices[indices ? indices[i] : i];
+        float *o = buf + (size_t)i * 8;
+        o[0] = v->position.x;  o[1] = v->position.y;
+        o[2] = v->tex_coord.x; o[3] = v->tex_coord.y;
+        o[4] = v->color.r;     o[5] = v->color.g;
+        o[6] = v->color.b;     o[7] = v->color.a;
+    }
+    __sdl_render_geometry(renderer->handle, texture ? texture->__handle : 0, buf, n);
+    free(buf);
     return 1;
 }
 

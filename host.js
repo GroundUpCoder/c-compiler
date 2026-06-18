@@ -4501,6 +4501,7 @@ function createNullSDL() {
       __sdl_set_draw_color: function () {},
       __sdl_render_clear: function () {},
       __sdl_render_quad: function () {},
+      __sdl_render_geometry: function () {},
       __sdl_render_present: function () {},
       __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
       __sdl_push_key_event: function () {},
@@ -4745,34 +4746,42 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     return t.bindGroup;
   }
 
+  // Each batch entry is a triangle list: { texH, verts:Float32Array, n } where
+  // verts is n vertices of [x, y (pixel coords), u, v, r, g, b, a]. A quad is
+  // 6 verts (2 triangles); SDL_RenderGeometry contributes its index-resolved
+  // triangle soup. Flush packs them all into one vertex buffer (NDC-transforming
+  // x,y) and draws one range per entry (so each entry keeps its own texture).
   function rdrFlush(rd) {
     const dev = cgpu.device;
     const W = canvas.width || 1, H = canvas.height || 1;
-    const quads = rd.batch;
-    const verts = new Float32Array(quads.length * 6 * 8);
-    const groups = new Array(quads.length);
-    let vi = 0;
-    const tri = [0, 1, 2, 0, 2, 3];   // TL,TR,BR,BL → two triangles
-    for (let qi = 0; qi < quads.length; qi++) {
-      const q = quads[qi];
-      groups[qi] = q.texH ? texBindGroup(sdlTextures[q.texH - 1]) : rdrWhiteBind;
-      for (const k of tri) {
-        verts[vi++] = (q.cx[k] / W) * 2 - 1;       // NDC x
-        verts[vi++] = 1 - (q.cy[k] / H) * 2;       // NDC y (flip)
-        verts[vi++] = q.u[k]; verts[vi++] = q.v[k];
-        verts[vi++] = q.col[0]; verts[vi++] = q.col[1]; verts[vi++] = q.col[2]; verts[vi++] = q.col[3];
+    const entries = rd.batch;
+    let total = 0;
+    for (const e of entries) total += e.n;
+    const data = new Float32Array(total * 8);
+    let off = 0;
+    for (const e of entries) {
+      const v = e.verts;
+      for (let i = 0; i < e.n; i++) {
+        const s = i * 8, d = off * 8;
+        data[d] = (v[s] / W) * 2 - 1;          // NDC x
+        data[d + 1] = 1 - (v[s + 1] / H) * 2;  // NDC y (flip)
+        data[d + 2] = v[s + 2]; data[d + 3] = v[s + 3];                       // uv
+        data[d + 4] = v[s + 4]; data[d + 5] = v[s + 5]; data[d + 6] = v[s + 6]; data[d + 7] = v[s + 7]; // rgba
+        off++;
       }
     }
-    const vbuf = dev.createBuffer({ size: Math.max(32, verts.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-    if (verts.byteLength) dev.queue.writeBuffer(vbuf, 0, verts);
+    const vbuf = dev.createBuffer({ size: Math.max(32, data.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    if (data.byteLength) dev.queue.writeBuffer(vbuf, 0, data);
     const enc = dev.createCommandEncoder();
     const view = cgpu.context.getCurrentTexture().createView();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
     pass.setPipeline(rdrPipeline);
     pass.setVertexBuffer(0, vbuf);
-    for (let qi = 0; qi < quads.length; qi++) {
-      pass.setBindGroup(0, groups[qi]);
-      pass.draw(6, 1, qi * 6, 0);
+    let first = 0;
+    for (const e of entries) {
+      pass.setBindGroup(0, e.texH ? texBindGroup(sdlTextures[e.texH - 1]) : rdrWhiteBind);
+      pass.draw(e.n, 1, first, 0);
+      first += e.n;
     }
     pass.end();
     dev.queue.submit([enc.finish()]);
@@ -4857,19 +4866,33 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
-        let col, u, v;
+        let cr, cg, cb, ca, u0, u1, v0, v1;
         if (texH) {
           const tx = sdlTextures[texH - 1];
           if (!tx) return;
-          col = [tx.colorR, tx.colorG, tx.colorB, tx.alpha];
+          cr = tx.colorR; cg = tx.colorG; cb = tx.colorB; ca = tx.alpha;
           const tw = tx.w || 1, th = tx.h || 1;
-          const u0 = sx / tw, u1 = (sx + sw) / tw, v0 = sy / th, v1 = (sy + sh) / th;
-          u = [u0, u1, u1, u0]; v = [v0, v0, v1, v1];
+          u0 = sx / tw; u1 = (sx + sw) / tw; v0 = sy / th; v1 = (sy + sh) / th;
         } else {
-          col = rd.drawColor.slice();
-          u = [0, 0, 0, 0]; v = [0, 0, 0, 0];
+          const c = rd.drawColor; cr = c[0]; cg = c[1]; cb = c[2]; ca = c[3];
+          u0 = 0; u1 = 0; v0 = 0; v1 = 0;
         }
-        rd.batch.push({ cx: [x0, x1, x2, x3], cy: [y0, y1, y2, y3], u: u, v: v, col: col, texH: texH });
+        // TL,TR,BR,BL → two triangles (TL,TR,BR) + (TL,BR,BL)
+        rd.batch.push({
+          texH: texH, n: 6,
+          verts: new Float32Array([
+            x0, y0, u0, v0, cr, cg, cb, ca,  x1, y1, u1, v0, cr, cg, cb, ca,  x2, y2, u1, v1, cr, cg, cb, ca,
+            x0, y0, u0, v0, cr, cg, cb, ca,  x2, y2, u1, v1, cr, cg, cb, ca,  x3, y3, u0, v1, cr, cg, cb, ca,
+          ]),
+        });
+      },
+      // SDL_RenderGeometry: C resolves indices into a flat triangle soup of
+      // [x, y, u, v, r, g, b, a] per vertex (vertCount = a multiple of 3); we
+      // just copy it in as one batch entry. texH 0 = solid (white tex × color).
+      __sdl_render_geometry: function (r, texH, vertsPtr, vertCount) {
+        const rd = sdlRenderers[r - 1]; if (!rd || vertCount <= 0) return;
+        const verts = new Float32Array(getMemory().buffer, vertsPtr, vertCount * 8).slice();
+        rd.batch.push({ texH: texH, n: vertCount, verts: verts });
       },
       __sdl_render_present: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
