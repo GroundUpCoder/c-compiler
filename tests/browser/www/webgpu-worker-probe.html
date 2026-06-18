@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebGPU worker probe</title>
+<body>
+<pre id="out">starting</pre>
+<canvas id="c" width="200" height="200"></canvas>
+<script>
+// Isolates the platform question: does Safari expose WebGPU IN A WORKER, get an
+// adapter/device there, and render to a transferred OffscreenCanvas? Reports the
+// result as DOM TEXT in #out (Selenium reads text, sidestepping the known black
+// canvas-screenshot/readback limitation on Safari).
+const out = document.getElementById('out');
+const log = (m) => { out.textContent += '\n' + m; };
+log('main navigator.gpu=' + (typeof navigator.gpu));
+const canvas = document.getElementById('c');
+const off = canvas.transferControlToOffscreen();
+const workerSrc = `
+self.onmessage = async (e) => {
+  const r = { gpu: typeof navigator.gpu };
+  try {
+    if (!navigator.gpu) { postMessage(Object.assign(r, { stage: 'NO_GPU_IN_WORKER' })); return; }
+    const adapter = await navigator.gpu.requestAdapter();
+    r.adapter = !!adapter;
+    if (!adapter) { postMessage(Object.assign(r, { stage: 'NO_ADAPTER' })); return; }
+    const device = await adapter.requestDevice();
+    r.device = !!device;
+    const ctx = e.data.canvas.getContext('webgpu');
+    r.ctx = !!ctx;
+    const fmt = navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({ device: device, format: fmt, alphaMode: 'opaque' });
+    const enc = device.createCommandEncoder();
+    const view = ctx.getCurrentTexture().createView();
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 1, g: 0.2, b: 0.8, a: 1 } }] });
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    r.rendered = true;
+    postMessage(Object.assign(r, { stage: 'DONE' }));
+  } catch (err) { postMessage(Object.assign(r, { stage: 'ERROR', error: String(err) })); }
+};
+`;
+const w = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'application/javascript' })));
+w.onmessage = (e) => {
+  log('RESULT ' + JSON.stringify(e.data));
+  setTimeout(() => {
+    try {
+      const s = document.createElement('canvas'); s.width = canvas.width; s.height = canvas.height;
+      const cx = s.getContext('2d'); cx.drawImage(canvas, 0, 0);
+      const d = cx.getImageData(100, 100, 1, 1).data;
+      log('READBACK ' + d[0] + ',' + d[1] + ',' + d[2]);
+    } catch (err) { log('READBACK_ERR ' + err); }
+  }, 400);
+};
+w.onerror = (e) => log('WORKER_ERR ' + (e.message || e.filename || 'unknown'));
+w.postMessage({ canvas: off }, [off]);
+</script>
+</body>
