@@ -4491,6 +4491,17 @@ function createNullSDL() {
       __sdl_destroy_window: function () {},
       __sdl_set_window_title: function () {},
       __sdl_update_window_surface: function () { return 0; },
+      __sdl_create_renderer: function () { return 1; },
+      __sdl_destroy_renderer: function () {},
+      __sdl_create_texture: function () { return 1; },
+      __sdl_destroy_texture: function () {},
+      __sdl_update_texture: function () {},
+      __sdl_set_texture_color_mod: function () {},
+      __sdl_set_texture_alpha_mod: function () {},
+      __sdl_set_draw_color: function () {},
+      __sdl_render_clear: function () {},
+      __sdl_render_quad: function () {},
+      __sdl_render_present: function () {},
       __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
       __sdl_push_key_event: function () {},
       __sdl_push_mouse_button_event: function () {},
@@ -4532,6 +4543,61 @@ struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 }
 `;
 
+// SDL_Renderer shader: textured quads with per-vertex color (positions are
+// already in NDC; color modulates the sampled texel — a 1×1 white texture turns
+// it into a solid fill). Alpha-blended.
+const RENDER_WGSL = `
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f };
+@vertex fn vs(@location(0) pos: vec2f, @location(1) uv: vec2f, @location(2) color: vec4f) -> VO {
+  var o: VO;
+  o.pos = vec4f(pos, 0.0, 1.0);
+  o.uv = uv;
+  o.color = color;
+  return o;
+}
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@fragment fn fs(v: VO) -> @location(0) vec4f {
+  return textureSample(tex, samp, v.uv) * v.color;
+}
+`;
+
+// Shared lazy WebGPU context for a canvas: adapter/device acquisition, preferred
+// format, and a single configure() (RENDER_ATTACHMENT|COPY_SRC so the canvas is
+// snapshot-able). The SDL software blitter AND SDL_Renderer build on this; a
+// program uses one or the other, and whichever runs first triggers acquisition.
+// Acquisition is async (no JSPI) — callers register whenReady() work and
+// drop/buffer frames until the device arrives.
+function createCanvasGPU(canvas) {
+  const gpu = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
+  const cg = { gpu: gpu, context: null, device: null, format: null, ready: false, started: false, waiters: [] };
+  cg.ensure = function () {
+    if (cg.started) return;
+    cg.started = true;
+    if (!gpu) { console.error('SDL/WebGPU: navigator.gpu missing'); return; }
+    try { cg.context = canvas.getContext('webgpu'); }
+    catch (e) { console.error('SDL/WebGPU: getContext(webgpu) failed', e); return; }
+    if (!cg.context) { console.error('SDL/WebGPU: no webgpu canvas context'); return; }
+    gpu.requestAdapter().then(function (ad) {
+      if (!ad) throw new Error('no WebGPU adapter');
+      return ad.requestDevice();
+    }).then(function (dev) {
+      cg.device = dev;
+      try { dev.addEventListener('uncapturederror', function (ev) { console.error('SDL WebGPU error:', ev.error && ev.error.message); }); } catch (e) {}
+      cg.format = gpu.getPreferredCanvasFormat();
+      cg.context.configure({
+        device: dev, format: cg.format, alphaMode: 'opaque',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+      cg.ready = true;
+      const ws = cg.waiters; cg.waiters = [];
+      for (const fn of ws) { try { fn(); } catch (e) { console.error(e); } }
+    }).catch(function (e) { console.error('SDL/WebGPU: device init failed', e); });
+  };
+  cg.whenReady = function (cb) { if (cg.ready) cb(); else { cg.waiters.push(cb); cg.ensure(); } };
+  return cg;
+}
+
 /**
  * Create SDL WASM imports backed by WebGPU (video) and the Web Audio API.
  * SDL_UpdateWindowSurface presents the CPU pixel buffer by uploading it to a
@@ -4549,101 +4615,169 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   const sdlAudioDevices = [];
   let animationFrameFunc = null;
 
-  // --- WebGPU software-surface blitter ---------------------------------------
-  // Replaces Canvas2D putImageData. Device acquisition is async (no JSPI): the
-  // latest frame is buffered until the device is ready, then flushed; later
-  // frames present synchronously. Init is lazy (first SDL_UpdateWindowSurface)
-  // so a program that instead drives WebGPU directly (SDL_GetWGPUSurface) owns
-  // the canvas context itself and the blitter never touches it.
-  const _gpu = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
+  // Shared canvas WebGPU context — both the software blitter and SDL_Renderer
+  // build on it (a program uses one or the other; first use triggers the async
+  // device acquisition).
+  const cgpu = createCanvasGPU(canvas);
+
+  // --- WebGPU software-surface blitter (SDL_UpdateWindowSurface) -------------
+  // Uploads the CPU framebuffer to a texture and draws a fullscreen quad
+  // (replacing Canvas2D putImageData). Lazy on first present; buffers the latest
+  // frame until the shared device is ready, then presents synchronously.
   const blit = {
-    context: null, device: null, format: null, pipeline: null, sampler: null,
-    bindGroup: null, tex: null, texW: 0, texH: 0,
-    ready: false, started: false, pending: null,
-    // Last presented CPU framebuffer (RGBA). Exposed via getLastFrame() for
-    // deterministic surface readback (the netguc surface probe + camera PNG
-    // capture) — reading the WebGPU canvas back with convertToBlob is racy
-    // against the rAF present cycle (the current texture only exists briefly).
+    pipeline: null, sampler: null, bindGroup: null, tex: null, texW: 0, texH: 0,
+    ready: false, pending: null,
+    // Last presented CPU framebuffer (RGBA), exposed via getLastFrame() for
+    // deterministic surface readback (netguc's surface probe + camera capture) —
+    // reading the WebGPU canvas back is racy against the rAF present cycle.
     lastFrame: null,
   };
-
-  function blitInit() {
-    if (blit.started) return;
-    blit.started = true;
-    if (!_gpu) { console.error('SDL present: WebGPU unavailable (navigator.gpu missing)'); return; }
-    try { blit.context = canvas.getContext('webgpu'); }
-    catch (e) { console.error('SDL present: getContext(webgpu) failed', e); return; }
-    if (!blit.context) { console.error('SDL present: no webgpu canvas context'); return; }
-    _gpu.requestAdapter().then(function (ad) {
-      if (!ad) throw new Error('no WebGPU adapter');
-      return ad.requestDevice();
-    }).then(function (dev) {
-      blit.device = dev;
-      try { dev.addEventListener('uncapturederror', function (ev) { console.error('SDL WebGPU error:', ev.error && ev.error.message); }); } catch (e) {}
-      blit.format = _gpu.getPreferredCanvasFormat();
-      // COPY_SRC so the presented frame is readable back (worker-side
-      // convertToBlob / drawImage: the surface probe + camera PNG capture in
-      // netguc's run worker). Without it Chrome throws NotReadableError
-      // "Readback of the source image has failed."
-      blit.context.configure({
-        device: dev, format: blit.format, alphaMode: 'opaque',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      });
+  function blitEnsure() {
+    if (blit.pipeline) return;
+    cgpu.whenReady(function () {
+      if (blit.pipeline) return;
+      const dev = cgpu.device;
       blit.sampler = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
       const shader = dev.createShaderModule({ code: BLIT_WGSL });
       blit.pipeline = dev.createRenderPipeline({
         layout: 'auto',
         vertex: { module: shader, entryPoint: 'vs' },
-        fragment: { module: shader, entryPoint: 'fs', targets: [{ format: blit.format }] },
+        fragment: { module: shader, entryPoint: 'fs', targets: [{ format: cgpu.format }] },
         primitive: { topology: 'triangle-list' },
       });
       blit.ready = true;
       if (blit.pending) { const p = blit.pending; blit.pending = null; blitPresent(p.ptr, p.w, p.h, p.pitch); }
-    }).catch(function (e) { console.error('SDL present: WebGPU init failed', e); });
+    });
   }
-
   function blitPresent(ptr, w, h, pitch) {
-    if (!blit.ready) { blit.pending = { ptr: ptr, w: w, h: h, pitch: pitch }; blitInit(); return; }
+    if (!blit.ready) { blit.pending = { ptr: ptr, w: w, h: h, pitch: pitch }; blitEnsure(); return; }
+    const dev = cgpu.device;
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
     if (!blit.tex || blit.texW !== w || blit.texH !== h) {
       if (blit.tex) blit.tex.destroy();
-      blit.tex = blit.device.createTexture({
-        size: { width: w, height: h },
-        format: 'rgba8unorm',
+      blit.tex = dev.createTexture({
+        size: { width: w, height: h }, format: 'rgba8unorm',
         usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
       });
       blit.texW = w; blit.texH = h;
-      blit.bindGroup = blit.device.createBindGroup({
+      blit.bindGroup = dev.createBindGroup({
         layout: blit.pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: blit.sampler },
-          { binding: 1, resource: blit.tex.createView() },
-        ],
+        entries: [{ binding: 0, resource: blit.sampler }, { binding: 1, resource: blit.tex.createView() }],
       });
     }
-    // .slice() copies out of (possibly Shared)ArrayBuffer-backed wasm memory into
-    // a plain buffer writeTexture always accepts. queue.writeTexture has no
-    // 256-byte bytesPerRow constraint (unlike copyBufferToTexture), so an
-    // arbitrary pitch is fine.
+    // .slice() copies out of (possibly Shared)ArrayBuffer-backed wasm memory; no
+    // 256-byte bytesPerRow constraint on queue.writeTexture, so pitch is fine.
     const frameBytes = new Uint8Array(getMemory().buffer, ptr, pitch * h).slice();
     blit.lastFrame = { width: w, height: h, pitch: pitch, pixels: frameBytes };
-    blit.device.queue.writeTexture(
-      { texture: blit.tex },
-      frameBytes,
-      { offset: 0, bytesPerRow: pitch, rowsPerImage: h },
-      { width: w, height: h }
-    );
-    const enc = blit.device.createCommandEncoder();
-    const view = blit.context.getCurrentTexture().createView();
+    dev.queue.writeTexture({ texture: blit.tex }, frameBytes, { offset: 0, bytesPerRow: pitch, rowsPerImage: h }, { width: w, height: h });
+    const enc = dev.createCommandEncoder();
+    const view = cgpu.context.getCurrentTexture().createView();
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
     });
-    pass.setPipeline(blit.pipeline);
-    pass.setBindGroup(0, blit.bindGroup);
-    pass.draw(3, 1, 0, 0);
+    pass.setPipeline(blit.pipeline); pass.setBindGroup(0, blit.bindGroup); pass.draw(3, 1, 0, 0); pass.end();
+    dev.queue.submit([enc.finish()]);
+  }
+
+  // --- SDL_Renderer (batched 2D quads on WebGPU) ----------------------------
+  // One render pass per SDL_RenderPresent: every quad drawn since RenderClear is
+  // packed into one vertex buffer and drawn into the canvas. Solid fills use a
+  // 1×1 white texture modulated by the per-vertex color. Pipeline is lazy on
+  // first CreateRenderer; texture GPU resources materialize at present time
+  // (device is ready then), so CreateTexture/UpdateTexture work before the async
+  // device arrives. Early presents (pre-device) drop their frame (rAF re-draws).
+  const sdlRenderers = [];   // 1-based handles
+  const sdlTextures = [];     // 1-based handles (shared across renderers)
+  let rdrPipeline = null, rdrSampler = null, rdrWhiteView = null, rdrWhiteBind = null;
+
+  function rdrEnsure() {
+    if (rdrPipeline) return;
+    cgpu.whenReady(function () {
+      if (rdrPipeline) return;
+      const dev = cgpu.device;
+      rdrSampler = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+      const shader = dev.createShaderModule({ code: RENDER_WGSL });
+      rdrPipeline = dev.createRenderPipeline({
+        layout: 'auto',
+        vertex: {
+          module: shader, entryPoint: 'vs',
+          buffers: [{
+            arrayStride: 32,
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' },
+              { shaderLocation: 1, offset: 8, format: 'float32x2' },
+              { shaderLocation: 2, offset: 16, format: 'float32x4' },
+            ],
+          }],
+        },
+        fragment: {
+          module: shader, entryPoint: 'fs',
+          targets: [{
+            format: cgpu.format,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+      const white = dev.createTexture({ size: { width: 1, height: 1 }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
+      dev.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, { width: 1, height: 1 });
+      rdrWhiteView = white.createView();
+      rdrWhiteBind = dev.createBindGroup({ layout: rdrPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: rdrWhiteView }] });
+    });
+  }
+
+  // Materialize + upload a texture's GPU resources (called at present time).
+  function texBindGroup(t) {
+    const dev = cgpu.device;
+    if (!t.view) {
+      t.gpuTex = dev.createTexture({ size: { width: t.w, height: t.h }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
+      t.view = t.gpuTex.createView();
+      t.bindGroup = dev.createBindGroup({ layout: rdrPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: t.view }] });
+    }
+    if (t.dirty && t.cpuPixels) {
+      dev.queue.writeTexture({ texture: t.gpuTex }, t.cpuPixels, { offset: 0, bytesPerRow: t.pitch, rowsPerImage: t.h }, { width: t.w, height: t.h });
+      t.dirty = false;
+    }
+    return t.bindGroup;
+  }
+
+  function rdrFlush(rd) {
+    const dev = cgpu.device;
+    const W = canvas.width || 1, H = canvas.height || 1;
+    const quads = rd.batch;
+    const verts = new Float32Array(quads.length * 6 * 8);
+    const groups = new Array(quads.length);
+    let vi = 0;
+    const tri = [0, 1, 2, 0, 2, 3];   // TL,TR,BR,BL → two triangles
+    for (let qi = 0; qi < quads.length; qi++) {
+      const q = quads[qi];
+      groups[qi] = q.texH ? texBindGroup(sdlTextures[q.texH - 1]) : rdrWhiteBind;
+      for (const k of tri) {
+        verts[vi++] = (q.cx[k] / W) * 2 - 1;       // NDC x
+        verts[vi++] = 1 - (q.cy[k] / H) * 2;       // NDC y (flip)
+        verts[vi++] = q.u[k]; verts[vi++] = q.v[k];
+        verts[vi++] = q.col[0]; verts[vi++] = q.col[1]; verts[vi++] = q.col[2]; verts[vi++] = q.col[3];
+      }
+    }
+    const vbuf = dev.createBuffer({ size: Math.max(32, verts.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    if (verts.byteLength) dev.queue.writeBuffer(vbuf, 0, verts);
+    const enc = dev.createCommandEncoder();
+    const view = cgpu.context.getCurrentTexture().createView();
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
+    pass.setPipeline(rdrPipeline);
+    pass.setVertexBuffer(0, vbuf);
+    for (let qi = 0; qi < quads.length; qi++) {
+      pass.setBindGroup(0, groups[qi]);
+      pass.draw(6, 1, qi * 6, 0);
+    }
     pass.end();
-    blit.device.queue.submit([enc.finish()]);
+    dev.queue.submit([enc.finish()]);
+    vbuf.destroy();
+    rd.batch = [];
   }
 
   return {
@@ -4675,6 +4809,72 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (!winInfo) return -1;
         blitPresent(pixelsPtr, w, h, pitch);
         return 0;
+      },
+
+      /* ---- SDL_Renderer (2D accelerated, batched on WebGPU) ----
+         Colors arrive as 0..1 floats (C does the /255). The single draw
+         primitive __sdl_render_quad takes 4 dst corners (TL,TR,BR,BL in pixels)
+         + a src rect (texture pixels); the C layer composes fill/copy/line/rect
+         from it. texH 0 = the 1×1 white texture (solid fill). */
+      __sdl_create_renderer: function (window) {
+        rdrEnsure();
+        sdlRenderers.push({ drawColor: [1, 1, 1, 1], clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [] });
+        return sdlRenderers.length;
+      },
+      __sdl_destroy_renderer: function (r) {
+        if (r > 0 && sdlRenderers[r - 1]) sdlRenderers[r - 1] = null;
+      },
+      __sdl_create_texture: function (r, access, w, h) {
+        sdlTextures.push({
+          w: w, h: h, access: access, cpuPixels: null, pitch: w * 4,
+          gpuTex: null, view: null, bindGroup: null, dirty: false,
+          colorR: 1, colorG: 1, colorB: 1, alpha: 1,
+        });
+        return sdlTextures.length;
+      },
+      __sdl_destroy_texture: function (t) {
+        const tx = sdlTextures[t - 1];
+        if (tx) { if (tx.gpuTex) { try { tx.gpuTex.destroy(); } catch (e) {} } sdlTextures[t - 1] = null; }
+      },
+      __sdl_update_texture: function (t, pixelsPtr, pitch, w, h) {
+        const tx = sdlTextures[t - 1];
+        if (!tx) return;
+        tx.cpuPixels = new Uint8Array(getMemory().buffer, pixelsPtr, pitch * h).slice();
+        tx.pitch = pitch; tx.dirty = true;
+      },
+      __sdl_set_texture_color_mod: function (t, rr, gg, bb) {
+        const tx = sdlTextures[t - 1]; if (tx) { tx.colorR = rr; tx.colorG = gg; tx.colorB = bb; }
+      },
+      __sdl_set_texture_alpha_mod: function (t, a) {
+        const tx = sdlTextures[t - 1]; if (tx) tx.alpha = a;
+      },
+      __sdl_set_draw_color: function (r, rr, gg, bb, aa) {
+        const rd = sdlRenderers[r - 1]; if (rd) rd.drawColor = [rr, gg, bb, aa];
+      },
+      __sdl_render_clear: function (r) {
+        const rd = sdlRenderers[r - 1]; if (!rd) return;
+        const c = rd.drawColor; rd.clear = { r: c[0], g: c[1], b: c[2], a: c[3] }; rd.batch = [];
+      },
+      __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
+        const rd = sdlRenderers[r - 1]; if (!rd) return;
+        let col, u, v;
+        if (texH) {
+          const tx = sdlTextures[texH - 1];
+          if (!tx) return;
+          col = [tx.colorR, tx.colorG, tx.colorB, tx.alpha];
+          const tw = tx.w || 1, th = tx.h || 1;
+          const u0 = sx / tw, u1 = (sx + sw) / tw, v0 = sy / th, v1 = (sy + sh) / th;
+          u = [u0, u1, u1, u0]; v = [v0, v0, v1, v1];
+        } else {
+          col = rd.drawColor.slice();
+          u = [0, 0, 0, 0]; v = [0, 0, 0, 0];
+        }
+        rd.batch.push({ cx: [x0, x1, x2, x3], cy: [y0, y1, y2, y3], u: u, v: v, col: col, texH: texH });
+      },
+      __sdl_render_present: function (r) {
+        const rd = sdlRenderers[r - 1]; if (!rd) return;
+        if (!rdrPipeline) { rdrEnsure(); rd.batch = []; return; }   // drop pre-device frames
+        rdrFlush(rd);
       },
 
       /* ---- Audio ---- */

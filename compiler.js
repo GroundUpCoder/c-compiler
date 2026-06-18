@@ -17133,6 +17133,39 @@ typedef struct SDL_FRect {
     float x, y, w, h;
 } SDL_FRect;
 
+/* SDL_Renderer (2D accelerated). The host renders batched quads on WebGPU; the
+   pixel format is informational only (textures are RGBA bytes in memory). */
+typedef struct SDL_Renderer SDL_Renderer;
+
+typedef Uint32 SDL_PixelFormat;
+/* Byte-order RGBA (memory is R,G,B,A). The host treats every texture as RGBA
+   bytes, so the exact value is informational. */
+#define SDL_PIXELFORMAT_RGBA32   0x16462004u
+#define SDL_PIXELFORMAT_RGBA8888 0x16462004u
+#define SDL_PIXELFORMAT_ABGR8888 0x16762004u
+
+typedef enum SDL_TextureAccess {
+    SDL_TEXTUREACCESS_STATIC = 0,
+    SDL_TEXTUREACCESS_STREAMING = 1,
+    SDL_TEXTUREACCESS_TARGET = 2
+} SDL_TextureAccess;
+
+typedef enum SDL_BlendMode {
+    SDL_BLENDMODE_NONE = 0,
+    SDL_BLENDMODE_BLEND = 1,
+    SDL_BLENDMODE_ADD = 2,
+    SDL_BLENDMODE_MOD = 4
+} SDL_BlendMode;
+
+/* SDL3 SDL_Texture exposes format/w/h as public fields (programs read tex->w/h);
+   the host handle is an internal trailer. */
+typedef struct SDL_Texture {
+    SDL_PixelFormat format;
+    int w;
+    int h;
+    int __handle;
+} SDL_Texture;
+
 /* SDL3 flattened the keyboard event: scancode/key live directly on the event
    (no SDL_Keysym sub-struct), timestamps are Uint64, and state is a bool down. */
 typedef struct SDL_KeyboardEvent {
@@ -17307,6 +17340,26 @@ bool SDL_ClearAudioStream(SDL_AudioStream *stream);
 bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream);
 bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream);
 void SDL_DestroyAudioStream(SDL_AudioStream *stream);
+
+/* ---- SDL_Renderer (2D accelerated) ---- */
+SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name);
+void SDL_DestroyRenderer(SDL_Renderer *renderer);
+SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, SDL_TextureAccess access, int w, int h);
+SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *surface);
+void SDL_DestroyTexture(SDL_Texture *texture);
+bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
+bool SDL_SetTextureColorMod(SDL_Texture *texture, Uint8 r, Uint8 g, Uint8 b);
+bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha);
+bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode);
+bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
+bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode);
+bool SDL_RenderClear(SDL_Renderer *renderer);
+bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_FRect *srcrect, const SDL_FRect *dstrect);
+bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect);
+bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect);
+bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2);
+bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y);
+void SDL_RenderPresent(SDL_Renderer *renderer);
   `,
   "webgpu.h": `
 #pragma once
@@ -20185,6 +20238,7 @@ __externref __jss(const char *s) {
 #include <SDL.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Opaque to user code (only the forward declaration is in SDL.h).
    'handle' is a 1-based index into the host's sdlWindows array.
@@ -20214,6 +20268,20 @@ __import int __sdl_get_queued_audio_size(int dev);
 __import void __sdl_clear_queued_audio(int dev);
 __import void __sdl_pause_audio_device(int dev, int pause_on);
 __import void __sdl_close_audio_device(int dev);
+
+/* SDL_Renderer primitives. Colors are 0..1 floats; the single draw primitive
+   takes 4 dst corners (TL,TR,BR,BL in pixels) + a src rect (texture pixels). */
+__import int  __sdl_create_renderer(int window);
+__import void __sdl_destroy_renderer(int r);
+__import int  __sdl_create_texture(int r, int access, int w, int h);
+__import void __sdl_destroy_texture(int t);
+__import void __sdl_update_texture(int t, const void *pixels, int pitch, int w, int h);
+__import void __sdl_set_texture_color_mod(int t, double r, double g, double b);
+__import void __sdl_set_texture_alpha_mod(int t, double a);
+__import void __sdl_set_draw_color(int r, double rr, double gg, double bb, double aa);
+__import void __sdl_render_clear(int r);
+__import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3, double sx, double sy, double sw, double sh);
+__import void __sdl_render_present(int r);
 
 bool SDL_Init(SDL_InitFlags flags) {
     return __sdl_init((int)flags) == 0;
@@ -20420,6 +20488,148 @@ Uint64 SDL_GetTicks(void) {
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     __sdl_set_window_title(window->handle, title);
     return 1;
+}
+
+/* ---- SDL_Renderer (2D accelerated) ----
+   Opaque to user code; carries the host renderer handle. SDL_Texture is a
+   complete type (SDL.h) so programs can read tex->w/h; __handle is the host id.
+   Every draw flattens to __sdl_render_quad (4 dst corners + src rect). */
+struct SDL_Renderer {
+    int handle;
+};
+
+SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
+    (void)name;
+    int h = __sdl_create_renderer(window ? window->handle : 0);
+    if (h <= 0) return 0;
+    SDL_Renderer *r = (SDL_Renderer *)malloc(sizeof(SDL_Renderer));
+    r->handle = h;
+    return r;
+}
+
+void SDL_DestroyRenderer(SDL_Renderer *renderer) {
+    if (!renderer) return;
+    __sdl_destroy_renderer(renderer->handle);
+    free(renderer);
+}
+
+SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, SDL_TextureAccess access, int w, int h) {
+    int th = __sdl_create_texture(renderer->handle, (int)access, w, h);
+    if (th <= 0) return 0;
+    SDL_Texture *t = (SDL_Texture *)malloc(sizeof(SDL_Texture));
+    t->format = format;
+    t->w = w;
+    t->h = h;
+    t->__handle = th;
+    return t;
+}
+
+SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *surface) {
+    SDL_Texture *t = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
+                                       SDL_TEXTUREACCESS_STATIC, surface->w, surface->h);
+    if (!t) return 0;
+    __sdl_update_texture(t->__handle, surface->pixels, surface->pitch, surface->w, surface->h);
+    return t;
+}
+
+void SDL_DestroyTexture(SDL_Texture *texture) {
+    if (!texture) return;
+    __sdl_destroy_texture(texture->__handle);
+    free(texture);
+}
+
+bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
+    (void)rect; /* v1: full-texture update */
+    __sdl_update_texture(texture->__handle, pixels, pitch, texture->w, texture->h);
+    return 1;
+}
+
+bool SDL_SetTextureColorMod(SDL_Texture *texture, Uint8 r, Uint8 g, Uint8 b) {
+    __sdl_set_texture_color_mod(texture->__handle, r / 255.0, g / 255.0, b / 255.0);
+    return 1;
+}
+
+bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha) {
+    __sdl_set_texture_alpha_mod(texture->__handle, alpha / 255.0);
+    return 1;
+}
+
+bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode) {
+    (void)texture; (void)blendMode; /* v1: always alpha-blended */
+    return 1;
+}
+
+bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
+    __sdl_set_draw_color(renderer->handle, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
+    return 1;
+}
+
+bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode) {
+    (void)renderer; (void)blendMode;
+    return 1;
+}
+
+bool SDL_RenderClear(SDL_Renderer *renderer) {
+    __sdl_render_clear(renderer->handle);
+    return 1;
+}
+
+/* Axis-aligned quad helper from a dst rect (x,y,w,h) + src rect. */
+static void __sdl_quad_rect(int r, int texH, float dx, float dy, float dw, float dh,
+                            float sx, float sy, float sw, float sh) {
+    __sdl_render_quad(r, texH, dx, dy, dx + dw, dy, dx + dw, dy + dh, dx, dy + dh,
+                      sx, sy, sw, sh);
+}
+
+bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
+                       const SDL_FRect *srcrect, const SDL_FRect *dstrect) {
+    float sx = 0, sy = 0, sw = (float)texture->w, sh = (float)texture->h;
+    if (srcrect) { sx = srcrect->x; sy = srcrect->y; sw = srcrect->w; sh = srcrect->h; }
+    float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
+    if (dstrect) { dx = dstrect->x; dy = dstrect->y; dw = dstrect->w; dh = dstrect->h; }
+    __sdl_quad_rect(renderer->handle, texture->__handle, dx, dy, dw, dh, sx, sy, sw, sh);
+    return 1;
+}
+
+bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    float dx = 0, dy = 0, dw = 0, dh = 0;
+    if (rect) { dx = rect->x; dy = rect->y; dw = rect->w; dh = rect->h; }
+    __sdl_quad_rect(renderer->handle, 0, dx, dy, dw, dh, 0, 0, 1, 1);
+    return 1;
+}
+
+bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    if (!rect) return 1;
+    float x = rect->x, y = rect->y, w = rect->w, h = rect->h;
+    __sdl_quad_rect(renderer->handle, 0, x, y, w, 1, 0, 0, 1, 1);          /* top */
+    __sdl_quad_rect(renderer->handle, 0, x, y + h - 1, w, 1, 0, 0, 1, 1);  /* bottom */
+    __sdl_quad_rect(renderer->handle, 0, x, y, 1, h, 0, 0, 1, 1);          /* left */
+    __sdl_quad_rect(renderer->handle, 0, x + w - 1, y, 1, h, 0, 0, 1, 1);  /* right */
+    return 1;
+}
+
+bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2) {
+    float ddx = x2 - x1, ddy = y2 - y1;
+    float len = (float)sqrt(ddx * ddx + ddy * ddy);
+    if (len < 0.0001f) {
+        __sdl_quad_rect(renderer->handle, 0, x1, y1, 1, 1, 0, 0, 1, 1);
+        return 1;
+    }
+    /* a 1px-thick quad along the line (perpendicular half-width 0.5) */
+    float nx = -ddy / len * 0.5f, ny = ddx / len * 0.5f;
+    __sdl_render_quad(renderer->handle, 0,
+                      x1 + nx, y1 + ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, x1 - nx, y1 - ny,
+                      0, 0, 1, 1);
+    return 1;
+}
+
+bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
+    __sdl_quad_rect(renderer->handle, 0, x, y, 1, 1, 0, 0, 1, 1);
+    return 1;
+}
+
+void SDL_RenderPresent(SDL_Renderer *renderer) {
+    __sdl_render_present(renderer->handle);
 }
 
 void __setAnimationFrameFunc(void (*callback)(void)) {
