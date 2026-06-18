@@ -27,15 +27,9 @@ if (r.status !== 0) { console.error('[webgpu] compile failed'); process.exit(1);
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-async function launch() {
-  // System Chrome (new headless) exposes WebGPU; Playwright's bundled Chromium
-  // does not. Fall back to headed bundled Chromium if chrome isn't installed.
-  try { return await chromium.launch({ channel: 'chrome' }); }
-  catch (e) { console.warn('[webgpu] chrome channel unavailable, trying headed chromium'); }
-  return await chromium.launch({ headless: false });
-}
-
-const browser = await launch();
+// Bundled Chromium DOES have WebGPU; default headless just surfaces no GPU
+// adapter. These flags give it one (Vulkan backend). No system-Chrome dependency.
+const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 const page = await (await browser.newContext({ viewport: { width: 700, height: 560 } })).newPage();
 const log = [];
 page.on('console', m => log.push(`[${m.type()}] ${m.text()}`));

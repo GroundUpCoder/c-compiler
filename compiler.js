@@ -17686,6 +17686,21 @@ void wgpuCommandBufferRelease(WGPUCommandBuffer v);
 void wgpuSetMainLoopCallback(void (*callback)(void));
 
   `,
+  "sdl3webgpu.h": `
+#pragma once
+/* SDL3 + WebGPU bridge (the eliemichel/sdl3webgpu precedent). Get a WGPUSurface
+   for an SDL window. On this web backend the SDL window and the WebGPU surface
+   are the SAME canvas, so this just creates the surface from it — but the call
+   shape matches native sdl3webgpu so its examples port unchanged. Requires the
+   SDL window NOT to have presented via SDL_UpdateWindowSurface (a canvas yields
+   one context type for its lifetime): use either the software path OR WebGPU. */
+#include <SDL.h>
+#include <webgpu.h>
+__require_source("__sdl3webgpu.c");
+
+WGPUSurface SDL_GetWGPUSurface(WGPUInstance instance, SDL_Window *window);
+
+  `,
   "__atexit.h": `
 #pragma once
 __require_source("__atexit.c");
@@ -20599,6 +20614,16 @@ void wgpuCommandBufferRelease(WGPUCommandBuffer v) { __wgpu_release((int)v); }
 
 void wgpuSetMainLoopCallback(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
+}
+  `,
+  "__sdl3webgpu.c": `
+#include <sdl3webgpu.h>
+
+WGPUSurface SDL_GetWGPUSurface(WGPUInstance instance, SDL_Window *window) {
+    /* One shared canvas on the web backend: the SDL window's canvas IS the
+       WebGPU surface's canvas, so the surface comes straight from it. */
+    (void)window;
+    return wgpuInstanceCreateSurface(instance, NULL);
 }
   `,
   "__alloca.c": `

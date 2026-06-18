@@ -55,7 +55,7 @@ for (const f of ['quake.wasm', 'pak0.pak', 'host.js']) {
 }
 
 const server  = startServer();
-const browser = await chromium.launch();
+const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 const context = await browser.newContext({
   // Cross-origin isolation must be enabled in the browser too for the
   // page to use SharedArrayBuffer / sync OPFS.
@@ -80,48 +80,53 @@ try {
   console.log('[test] waiting for Host_Init…');
   await page.waitForFunction(() => window.quakeBoot, {}, { timeout: 30_000 });
   await page.evaluate(() => window.quakeBoot);
-  console.log('[test] Host_Init reached. Letting it render some frames…');
+  console.log('[test] Host_Init reached. Polling for a rendered frame…');
 
-  // Give the engine ~3 seconds of real time to run demos and update
-  // the canvas. The browser's rAF will be firing at the page's natural
-  // rate (headless: 60 Hz approx).
-  await page.waitForTimeout(3000);
-
-  // Sample the canvas. We need a screenshot to read pixels because the
-  // canvas was transferred to an OffscreenCanvas in the worker, so
-  // getImageData on the main-thread <canvas> sees a black placeholder.
-  // Screenshot of the canvas region captures what's actually visible.
+  // Quake loads an 18.7MB pak through BlockFS in a worker, so the first frame
+  // can take a while. Poll the canvas via main-thread drawImage (which DOES
+  // capture the worker's transferred OffscreenCanvas rendered by the WebGPU
+  // blitter — proven by the WebGPU tests) until it's substantially non-black,
+  // up to ~90s.
   const shotPath = path.join(__dirname, 'last-screenshot.png');
-  const canvasBox = await page.locator('#stage').boundingBox();
-  await page.screenshot({ path: shotPath, clip: canvasBox });
-  console.log('[test] canvas screenshot saved to', shotPath);
-
-  // Decode the PNG and run the same not-all-black check on it. The PNG
-  // is whatever the canvas CSS size is (640×400, 2× scaled). We don't
-  // bother with the PNG header — just look at the file's chunk data
-  // via a tiny PNG IDAT inflater? Overkill. Instead, re-load the PNG
-  // back into the page via a temporary <img>+canvas and read pixels.
-  const stats = await page.evaluate(async (b64) => {
-    const img = new Image();
-    const blob = await fetch('data:image/png;base64,' + b64).then(r => r.blob());
-    img.src = URL.createObjectURL(blob);
-    await img.decode();
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth; c.height = img.naturalHeight;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const data = ctx.getImageData(0, 0, c.width, c.height).data;
-    let nonBlack = 0, opaque = 0, total = 0;
-    const sample = new Set();
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
-      total++;
-      if (a === 255) opaque++;
-      if (r !== 0 || g !== 0 || b !== 0) nonBlack++;
-      if (sample.size < 16) sample.add(`${r},${g},${b}`);
+  let stats = { w: 0, h: 0, total: 0, opaque: 0, nonBlack: 0, distinct: [] };
+  for (let i = 0; i < 45; i++) {
+    await page.waitForTimeout(2000);
+    stats = await page.evaluate(() => {
+      const c = document.querySelector('canvas');
+      if (!c || !c.width) return { w: 0, h: 0, total: 0, opaque: 0, nonBlack: 0, distinct: [] };
+      const s = document.createElement('canvas');
+      s.width = c.width; s.height = c.height;
+      const ctx = s.getContext('2d');
+      ctx.drawImage(c, 0, 0);
+      const data = ctx.getImageData(0, 0, c.width, c.height).data;
+      let nonBlack = 0, opaque = 0, total = 0;
+      const sample = new Set();
+      for (let j = 0; j < data.length; j += 4) {
+        const r = data[j], g = data[j+1], b = data[j+2], a = data[j+3];
+        total++;
+        if (a === 255) opaque++;
+        if (r !== 0 || g !== 0 || b !== 0) nonBlack++;
+        if (sample.size < 16) sample.add(`${r},${g},${b}`);
+      }
+      return { w: c.width, h: c.height, total, opaque, nonBlack, distinct: [...sample] };
+    });
+    if (stats.total > 0 && stats.nonBlack > stats.total * 0.10) {
+      console.log(`[test] frame rendered after ~${(i + 1) * 2}s`);
+      break;
     }
-    return { w: c.width, h: c.height, total, opaque, nonBlack, distinct: [...sample] };
-  }, fs.readFileSync(shotPath).toString('base64'));
+  }
+  // page.screenshot captures the COMPOSITED page, which comes out black for a
+  // worker-rendered WebGPU canvas in headless. Capture the actual canvas content
+  // via the same drawImage path the readback uses (toDataURL of the 2D copy).
+  const dataUrl = await page.evaluate(() => {
+    const c = document.querySelector('canvas');
+    const s = document.createElement('canvas');
+    s.width = c.width; s.height = c.height;
+    s.getContext('2d').drawImage(c, 0, 0);
+    return s.toDataURL('image/png');
+  });
+  fs.writeFileSync(shotPath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+  console.log('[test] canvas frame saved to', shotPath);
 
   console.log('[test] canvas pixel stats:', JSON.stringify(stats, null, 2));
 

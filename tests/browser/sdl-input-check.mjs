@@ -23,7 +23,9 @@ const r = spawnSync('node', [path.join(ROOT, 'compiler.js'),
 if (r.status !== 0) { console.error('[check] compile failed'); process.exit(1); }
 
 const server = spawn('node', [path.join(__dirname, 'server.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
-const browser = await chromium.launch();
+// SDL now presents via WebGPU; bundled headless Chromium needs these flags to
+// surface a GPU adapter (the API is present by default, but no adapter).
+const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 const page = await (await browser.newContext({ viewport: { width: 640, height: 480 } })).newPage();
 const log = [];
 page.on('console', m => log.push(`[${m.type()}] ${m.text()}`));

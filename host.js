@@ -4512,8 +4512,31 @@ function createNullSDL() {
   };
 }
 
+// Fullscreen-quad shader for the SDL software-surface blitter: a single
+// covering triangle, sampling the uploaded CPU framebuffer texture. UV is
+// derived from clip position with Y flipped (texture row 0 is the top).
+const BLIT_WGSL = `
+@group(0) @binding(0) var samp: sampler;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  let xy = p[i];
+  var o: VO;
+  o.pos = vec4f(xy, 0.0, 1.0);
+  o.uv = xy * vec2f(0.5, -0.5) + vec2f(0.5, 0.5);
+  return o;
+}
+@fragment fn fs(v: VO) -> @location(0) vec4f {
+  return textureSample(tex, samp, v.uv);
+}
+`;
+
 /**
- * Create SDL WASM imports backed by HTML5 Canvas and Web Audio API.
+ * Create SDL WASM imports backed by WebGPU (video) and the Web Audio API.
+ * SDL_UpdateWindowSurface presents the CPU pixel buffer by uploading it to a
+ * texture and drawing a fullscreen quad — so the canvas only ever uses the
+ * 'webgpu' context (no Canvas2D), which keeps the SDL_GetWGPUSurface path open.
  * @param {object} options
  * @param {HTMLCanvasElement} options.canvas - The canvas element for rendering.
  * @param {RuntimeContext} options.ctx - Runtime helpers shared with the host.
@@ -4526,16 +4549,101 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   const sdlAudioDevices = [];
   let animationFrameFunc = null;
 
+  // --- WebGPU software-surface blitter ---------------------------------------
+  // Replaces Canvas2D putImageData. Device acquisition is async (no JSPI): the
+  // latest frame is buffered until the device is ready, then flushed; later
+  // frames present synchronously. Init is lazy (first SDL_UpdateWindowSurface)
+  // so a program that instead drives WebGPU directly (SDL_GetWGPUSurface) owns
+  // the canvas context itself and the blitter never touches it.
+  const _gpu = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
+  const blit = {
+    context: null, device: null, format: null, pipeline: null, sampler: null,
+    bindGroup: null, tex: null, texW: 0, texH: 0,
+    ready: false, started: false, pending: null,
+  };
+
+  function blitInit() {
+    if (blit.started) return;
+    blit.started = true;
+    if (!_gpu) { console.error('SDL present: WebGPU unavailable (navigator.gpu missing)'); return; }
+    try { blit.context = canvas.getContext('webgpu'); }
+    catch (e) { console.error('SDL present: getContext(webgpu) failed', e); return; }
+    if (!blit.context) { console.error('SDL present: no webgpu canvas context'); return; }
+    _gpu.requestAdapter().then(function (ad) {
+      if (!ad) throw new Error('no WebGPU adapter');
+      return ad.requestDevice();
+    }).then(function (dev) {
+      blit.device = dev;
+      try { dev.addEventListener('uncapturederror', function (ev) { console.error('SDL WebGPU error:', ev.error && ev.error.message); }); } catch (e) {}
+      blit.format = _gpu.getPreferredCanvasFormat();
+      blit.context.configure({ device: dev, format: blit.format, alphaMode: 'opaque' });
+      blit.sampler = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+      const shader = dev.createShaderModule({ code: BLIT_WGSL });
+      blit.pipeline = dev.createRenderPipeline({
+        layout: 'auto',
+        vertex: { module: shader, entryPoint: 'vs' },
+        fragment: { module: shader, entryPoint: 'fs', targets: [{ format: blit.format }] },
+        primitive: { topology: 'triangle-list' },
+      });
+      blit.ready = true;
+      if (blit.pending) { const p = blit.pending; blit.pending = null; blitPresent(p.ptr, p.w, p.h, p.pitch); }
+    }).catch(function (e) { console.error('SDL present: WebGPU init failed', e); });
+  }
+
+  function blitPresent(ptr, w, h, pitch) {
+    if (!blit.ready) { blit.pending = { ptr: ptr, w: w, h: h, pitch: pitch }; blitInit(); return; }
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    if (!blit.tex || blit.texW !== w || blit.texH !== h) {
+      if (blit.tex) blit.tex.destroy();
+      blit.tex = blit.device.createTexture({
+        size: { width: w, height: h },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      blit.texW = w; blit.texH = h;
+      blit.bindGroup = blit.device.createBindGroup({
+        layout: blit.pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: blit.sampler },
+          { binding: 1, resource: blit.tex.createView() },
+        ],
+      });
+    }
+    // .slice() copies out of (possibly Shared)ArrayBuffer-backed wasm memory into
+    // a plain buffer writeTexture always accepts. queue.writeTexture has no
+    // 256-byte bytesPerRow constraint (unlike copyBufferToTexture), so an
+    // arbitrary pitch is fine.
+    blit.device.queue.writeTexture(
+      { texture: blit.tex },
+      new Uint8Array(getMemory().buffer, ptr, pitch * h).slice(),
+      { offset: 0, bytesPerRow: pitch, rowsPerImage: h },
+      { width: w, height: h }
+    );
+    const enc = blit.device.createCommandEncoder();
+    const view = blit.context.getCurrentTexture().createView();
+    const pass = enc.beginRenderPass({
+      colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+    });
+    pass.setPipeline(blit.pipeline);
+    pass.setBindGroup(0, blit.bindGroup);
+    pass.draw(3, 1, 0, 0);
+    pass.end();
+    blit.device.queue.submit([enc.finish()]);
+  }
+
   return {
     [ENV_KEY]: {
       __sdl_init: function (flags) { return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
 
       __sdl_create_window: function (title_ptr, x, y, w, h, flags) {
+        // No context acquired here — a canvas yields only ONE context type for
+        // its lifetime, so we defer to the first present (WebGPU blitter) or to
+        // the program's own wgpu* calls (SDL_GetWGPUSurface).
         canvas.width = w;
         canvas.height = h;
-        const canvasCtx = canvas.getContext('2d');
-        sdlWindows.push({ canvas: canvas, ctx2d: canvasCtx, width: w, height: h });
+        sdlWindows.push({ width: w, height: h });
         const handle = sdlWindows.length;
         if (notifyWindow) notifyWindow({ type: 'sdl-window', width: w, height: h });
         return handle;
@@ -4551,18 +4659,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
         const winInfo = sdlWindows[handle - 1];
         if (!winInfo) return -1;
-        const memory = getMemory();
-        const src = new Uint8Array(memory.buffer, pixelsPtr, pitch * h);
-        const imageData = winInfo.ctx2d.createImageData(w, h);
-        /* pitch may differ from w*4 if there's padding; copy row by row */
-        const rowBytes = w * 4;
-        for (let row = 0; row < h; row++) {
-          imageData.data.set(
-            src.subarray(row * pitch, row * pitch + rowBytes),
-            row * rowBytes
-          );
-        }
-        winInfo.ctx2d.putImageData(imageData, 0, 0);
+        blitPresent(pixelsPtr, w, h, pitch);
         return 0;
       },
 

@@ -42,7 +42,9 @@ if (!fs.existsSync(path.join(__dirname, 'www', PAGE))) {
 }
 
 const server  = startServer();
-const browser = await chromium.launch();
+// SDL presents via WebGPU now; bundled headless Chromium needs these flags to
+// surface a GPU adapter.
+const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 const context = await browser.newContext({ viewport: { width: 800, height: 600 } });
 const page = await context.newPage();
 
