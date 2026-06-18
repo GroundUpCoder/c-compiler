@@ -17097,6 +17097,10 @@ const _stdlibHeaders = {
    them. Legacy SDL2 source must be updated (see vendor/{doom,quake,...}). */
 __require_source("__SDL.c");
 
+/* Real SDL.h pulls in <stddef.h> (via SDL_stdinc.h) so NULL/size_t are
+   available to any program that only #includes <SDL.h> — match that. */
+#include <stddef.h>
+
 /* SDL3 uses C bool. Provide the type WITHOUT pulling in <stdbool.h>'s
    true/false macros, which would collide with code that defines its own
    (e.g. doomgeneric's 'typedef enum { false, true } boolean'). */
