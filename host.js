@@ -4560,6 +4560,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     context: null, device: null, format: null, pipeline: null, sampler: null,
     bindGroup: null, tex: null, texW: 0, texH: 0,
     ready: false, started: false, pending: null,
+    // Last presented CPU framebuffer (RGBA). Exposed via getLastFrame() for
+    // deterministic surface readback (the netguc surface probe + camera PNG
+    // capture) — reading the WebGPU canvas back with convertToBlob is racy
+    // against the rAF present cycle (the current texture only exists briefly).
+    lastFrame: null,
   };
 
   function blitInit() {
@@ -4576,7 +4581,14 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       blit.device = dev;
       try { dev.addEventListener('uncapturederror', function (ev) { console.error('SDL WebGPU error:', ev.error && ev.error.message); }); } catch (e) {}
       blit.format = _gpu.getPreferredCanvasFormat();
-      blit.context.configure({ device: dev, format: blit.format, alphaMode: 'opaque' });
+      // COPY_SRC so the presented frame is readable back (worker-side
+      // convertToBlob / drawImage: the surface probe + camera PNG capture in
+      // netguc's run worker). Without it Chrome throws NotReadableError
+      // "Readback of the source image has failed."
+      blit.context.configure({
+        device: dev, format: blit.format, alphaMode: 'opaque',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
       blit.sampler = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
       const shader = dev.createShaderModule({ code: BLIT_WGSL });
       blit.pipeline = dev.createRenderPipeline({
@@ -4614,9 +4626,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     // a plain buffer writeTexture always accepts. queue.writeTexture has no
     // 256-byte bytesPerRow constraint (unlike copyBufferToTexture), so an
     // arbitrary pitch is fine.
+    const frameBytes = new Uint8Array(getMemory().buffer, ptr, pitch * h).slice();
+    blit.lastFrame = { width: w, height: h, pitch: pitch, pixels: frameBytes };
     blit.device.queue.writeTexture(
       { texture: blit.tex },
-      new Uint8Array(getMemory().buffer, ptr, pitch * h).slice(),
+      frameBytes,
       { offset: 0, bytesPerRow: pitch, rowsPerImage: h },
       { width: w, height: h }
     );
@@ -4732,6 +4746,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
     },
     getAnimationFrameFunc: function () { return animationFrameFunc; },
+    // Last presented SDL framebuffer (RGBA) for deterministic readback, or null
+    // if nothing has been blitted yet. { width, height, pitch, pixels }.
+    getLastFrame: function () { return blit.lastFrame; },
     requestAnimationFrame: typeof requestAnimationFrame === 'function'
       ? function (cb) { requestAnimationFrame(cb); }
       : null,
@@ -4894,7 +4911,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
          * the surface size. Honor the requested width/height by sizing the
          * (Offscreen)canvas, mirroring __sdl_create_window. */
         if (canvas && width > 0 && height > 0) { canvas.width = width; canvas.height = height; }
-        s.gpuCtx.configure({ device: d, format: fmt, usage: usage >>> 0, alphaMode: WGPU_ALPHA[alphaMode] || 'opaque' });
+        // OR in COPY_SRC so the canvas is always read-back-able (snapshots,
+        // the netguc surface probe + camera capture); harmless if unused.
+        s.gpuCtx.configure({ device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: WGPU_ALPHA[alphaMode] || 'opaque' });
         /* Reveal the canvas in the emitted page (reuses the SDL window path). */
         if (notifyWindow) notifyWindow({ type: 'sdl-window', width: width, height: height });
       },
