@@ -152,31 +152,31 @@ void Sys_SendKeyEvents (void)
 	{
 		switch (ev.type)
 		{
-		case SDL_QUIT:
+		case SDL_EVENT_QUIT:
 			Sys_Quit ();
 			break;
 
-		case SDL_KEYDOWN:
-		case SDL_KEYUP:
+		case SDL_EVENT_KEY_DOWN:
+		case SDL_EVENT_KEY_UP:
 		{
-			int qk = sdlk_to_quakekey (ev.key.keysym.sym);
+			int qk = sdlk_to_quakekey (ev.key.key);
 			if (qk)
-				Key_Event (qk, ev.type == SDL_KEYDOWN);
+				Key_Event (qk, ev.type == SDL_EVENT_KEY_DOWN);
 			break;
 		}
 
-		case SDL_MOUSEMOTION:
+		case SDL_EVENT_MOUSE_MOTION:
 			mouse_dx += ev.motion.xrel;
 			mouse_dy += ev.motion.yrel;
 			break;
 
-		case SDL_MOUSEBUTTONDOWN:
-		case SDL_MOUSEBUTTONUP:
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
 		{
 			int idx = ev.button.button - SDL_BUTTON_LEFT;
 			if (idx >= 0 && idx < 3)
 			{
-				if (ev.type == SDL_MOUSEBUTTONDOWN)
+				if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
 					mouse_buttons |=  (1 << idx);
 				else
 					mouse_buttons &= ~(1 << idx);
@@ -184,7 +184,7 @@ void Sys_SendKeyEvents (void)
 			break;
 		}
 
-		case SDL_MOUSEWHEEL:
+		case SDL_EVENT_MOUSE_WHEEL:
 			if (ev.wheel.y > 0) { Key_Event (K_MWHEELUP,   true);  Key_Event (K_MWHEELUP,   false); }
 			if (ev.wheel.y < 0) { Key_Event (K_MWHEELDOWN, true);  Key_Event (K_MWHEELDOWN, false); }
 			break;

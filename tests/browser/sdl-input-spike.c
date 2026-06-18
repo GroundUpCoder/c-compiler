@@ -20,7 +20,7 @@ static uint32_t rgb(int r, int g, int b) {
 static void frame_cb(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_KEYDOWN) got_key = 1;
+        if (e.type == SDL_EVENT_KEY_DOWN) got_key = 1;
     }
     uint32_t color = got_key ? rgb(230, 40, 40) : rgb(30, 60, 180);
     uint32_t *px = (uint32_t *)surf->pixels;
@@ -30,7 +30,7 @@ static void frame_cb(void) {
 
 int main(void) {
     SDL_Init(SDL_INIT_VIDEO);
-    win  = SDL_CreateWindow("sdl-input-spike", 0, 0, W, H, 0);
+    win  = SDL_CreateWindow("sdl-input-spike", W, H, 0);
     surf = SDL_GetWindowSurface(win);
     __setAnimationFrameFunc(frame_cb);
     return 0;

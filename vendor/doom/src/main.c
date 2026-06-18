@@ -128,20 +128,20 @@ static void handleKeyInput()
   SDL_Event e;
   while (SDL_PollEvent(&e))
   {
-    if (e.type == SDL_QUIT)
+    if (e.type == SDL_EVENT_QUIT)
     {
       puts("Quit requested");
       atexit(SDL_Quit);
       exit(1);
     }
 
-    if (e.type == SDL_KEYDOWN)
+    if (e.type == SDL_EVENT_KEY_DOWN)
     {
-      addKeyToQueue(1, e.key.keysym.sym);
+      addKeyToQueue(1, e.key.key);
     }
-    else if (e.type == SDL_KEYUP)
+    else if (e.type == SDL_EVENT_KEY_UP)
     {
-      addKeyToQueue(0, e.key.keysym.sym);
+      addKeyToQueue(0, e.key.key);
     }
   }
 }
@@ -150,11 +150,9 @@ static void handleKeyInput()
 void DG_Init()
 {
   window = SDL_CreateWindow("DOOM",
-                            SDL_WINDOWPOS_UNDEFINED,
-                            SDL_WINDOWPOS_UNDEFINED,
                             DOOMGENERIC_RESX * WINDOW_SCALE,
                             DOOMGENERIC_RESY * WINDOW_SCALE,
-                            SDL_WINDOW_SHOWN
+                            0
                             );
 
   surface = SDL_GetWindowSurface(window);
@@ -193,7 +191,7 @@ void DG_SleepMs(uint32_t ms)
 
 uint32_t DG_GetTicksMs()
 {
-  return SDL_GetTicks();
+  return (uint32_t)SDL_GetTicks();
 }
 
 int DG_GetKey(int* pressed, unsigned char* doomKey)

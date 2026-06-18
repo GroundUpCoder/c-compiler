@@ -159,7 +159,7 @@ double Sys_FloatTime (void)
 {
 	static int initialized = 0;
 	static unsigned int t0;
-	unsigned int now = SDL_GetTicks();
+	unsigned int now = (unsigned int)SDL_GetTicks();
 	if (!initialized) { t0 = now; initialized = 1; }
 	return (double)(now - t0) / 1000.0;
 }

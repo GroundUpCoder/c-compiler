@@ -17088,12 +17088,33 @@ const Stdlib = (() => {
 const _stdlibHeaders = {
   "SDL.h": `
 #pragma once
+/* SDL3 subset (video + events + audio) for this compiler's web backend.
+   The functional surface matches the old SDL2 subset; the spelling is SDL3:
+   flat keyboard event (scancode/key, no nested keysym), float mouse coords,
+   4-arg SDL_CreateWindow, SDL_AudioStream push API, bool returns, Uint64 ticks.
+   host.js's primitive __sdl_* imports are unchanged — __SDL.c maps SDL3 onto
+   them. Legacy SDL2 source must be updated (see vendor/{doom,quake,...}). */
 __require_source("__SDL.c");
 
+/* SDL3 uses C bool. Provide the type WITHOUT pulling in <stdbool.h>'s
+   true/false macros, which would collide with code that defines its own
+   (e.g. doomgeneric's 'typedef enum { false, true } boolean'). */
+#ifndef __cplusplus
+typedef _Bool bool;
+#endif
+
+typedef unsigned long long Uint64;
 typedef unsigned int Uint32;
 typedef unsigned short Uint16;
 typedef unsigned char Uint8;
 typedef int Sint32;
+
+typedef Uint32 SDL_WindowID;
+typedef Uint32 SDL_KeyboardID;
+typedef Uint32 SDL_MouseID;
+typedef Uint32 SDL_Scancode;
+typedef Uint32 SDL_Keycode;
+typedef Uint16 SDL_Keymod;
 
 typedef struct SDL_Surface {
     int w, h;
@@ -17107,52 +17128,64 @@ typedef struct SDL_Rect {
     int x, y, w, h;
 } SDL_Rect;
 
-typedef struct SDL_Keysym {
-    int scancode;
-    int sym;
-    Uint16 mod;
-    Uint32 unused;
-} SDL_Keysym;
+typedef struct SDL_FRect {
+    float x, y, w, h;
+} SDL_FRect;
 
+/* SDL3 flattened the keyboard event: scancode/key live directly on the event
+   (no SDL_Keysym sub-struct), timestamps are Uint64, and state is a bool down. */
 typedef struct SDL_KeyboardEvent {
     Uint32 type;
-    Uint32 timestamp;
-    Uint32 windowID;
-    Uint8 state;
-    Uint8 repeat;
-    Uint8 padding2;
-    Uint8 padding3;
-    SDL_Keysym keysym;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    SDL_KeyboardID which;
+    SDL_Scancode scancode;
+    SDL_Keycode key;
+    SDL_Keymod mod;
+    Uint16 raw;
+    bool down;
+    bool repeat;
 } SDL_KeyboardEvent;
 
 typedef struct SDL_MouseMotionEvent {
     Uint32 type;
-    Uint32 timestamp;
-    Uint32 windowID;
-    Sint32 x;
-    Sint32 y;
-    Sint32 xrel;
-    Sint32 yrel;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    SDL_MouseID which;
+    Uint32 state;
+    float x;
+    float y;
+    float xrel;
+    float yrel;
 } SDL_MouseMotionEvent;
 
 typedef struct SDL_MouseButtonEvent {
     Uint32 type;
-    Uint32 timestamp;
-    Uint32 windowID;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    SDL_MouseID which;
     Uint8 button;
-    Uint8 state;
+    bool down;
     Uint8 clicks;
-    Uint8 padding1;
-    Sint32 x;
-    Sint32 y;
+    Uint8 padding;
+    float x;
+    float y;
 } SDL_MouseButtonEvent;
 
 typedef struct SDL_MouseWheelEvent {
     Uint32 type;
-    Uint32 timestamp;
-    Uint32 windowID;
-    Sint32 x;
-    Sint32 y;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    SDL_MouseID which;
+    float x;
+    float y;
+    Uint32 direction;
+    float mouse_x;
+    float mouse_y;
 } SDL_MouseWheelEvent;
 
 typedef union SDL_Event {
@@ -17161,25 +17194,27 @@ typedef union SDL_Event {
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
     SDL_MouseWheelEvent wheel;
-    Uint8 padding[56];
+    Uint8 padding[128];
 } SDL_Event;
 
-#define SDL_INIT_VIDEO 0x00000020
-#define SDL_INIT_AUDIO 0x00000010
+typedef Uint32 SDL_InitFlags;
+typedef Uint64 SDL_WindowFlags;
+#define SDL_INIT_VIDEO 0x00000020u
+#define SDL_INIT_AUDIO 0x00000010u
+#define SDL_WINDOW_FULLSCREEN 0x0000000000000001ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
-#define SDL_PIXELFORMAT_RGBA32 376840196
-#define SDL_WINDOW_SHOWN 0x00000004
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
-#define SDL_PIXELFORMAT_RGB888 370546692
-#define SDL_QUIT 0x100
-#define SDL_KEYDOWN 0x300
-#define SDL_KEYUP 0x301
-#define SDL_MOUSEMOTION 0x400
-#define SDL_MOUSEBUTTONDOWN 0x401
-#define SDL_MOUSEBUTTONUP 0x402
-#define SDL_MOUSEWHEEL 0x403
-#define SDL_PRESSED 1
-#define SDL_RELEASED 0
+#define SDL_PIXELFORMAT_RGBA32 376840196
+#define SDL_PIXELFORMAT_XRGB8888 370546692
+
+/* SDL3 event types (SDL_EVENT_*). Values are unchanged from SDL2. */
+#define SDL_EVENT_QUIT 0x100
+#define SDL_EVENT_KEY_DOWN 0x300
+#define SDL_EVENT_KEY_UP 0x301
+#define SDL_EVENT_MOUSE_MOTION 0x400
+#define SDL_EVENT_MOUSE_BUTTON_DOWN 0x401
+#define SDL_EVENT_MOUSE_BUTTON_UP 0x402
+#define SDL_EVENT_MOUSE_WHEEL 0x403
 #define SDL_BUTTON_LEFT 1
 #define SDL_BUTTON_MIDDLE 2
 #define SDL_BUTTON_RIGHT 3
@@ -17226,41 +17261,51 @@ typedef union SDL_Event {
 #define SDLK_RSHIFT 1073742053
 #define SDLK_RALT 1073742054
 
-/* Audio format constants */
-#define AUDIO_S8 0x8008
-#define AUDIO_S16 0x8010
-#define AUDIO_S32 0x8020
-#define AUDIO_F32 0x8120
+/* SDL3 audio format constants (SDL_AUDIO_*). Values are unchanged from SDL2. */
+typedef int SDL_AudioFormat;
+#define SDL_AUDIO_S8 0x8008
+#define SDL_AUDIO_S16 0x8010
+#define SDL_AUDIO_S32 0x8020
+#define SDL_AUDIO_F32 0x8120
 
 typedef Uint32 SDL_AudioDeviceID;
+#define SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK 0xFFFFFFFFu
 
+/* SDL3 reordered SDL_AudioSpec to {format, channels, freq} and dropped the
+   SDL2 callback/samples/silence/size fields. */
 typedef struct SDL_AudioSpec {
+    SDL_AudioFormat format;
+    int channels;
     int freq;
-    int format;
-    Uint8 channels;
 } SDL_AudioSpec;
 
-int SDL_Init(Uint32 flags);
-SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint32 flags);
-Uint32 SDL_GetWindowID(SDL_Window *window);
+typedef struct SDL_AudioStream SDL_AudioStream;
+typedef void (*SDL_AudioStreamCallback)(void *userdata, SDL_AudioStream *stream,
+                                        int additional_amount, int total_amount);
+
+bool SDL_Init(SDL_InitFlags flags);
+SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags);
+SDL_WindowID SDL_GetWindowID(SDL_Window *window);
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
-int SDL_UpdateWindowSurface(SDL_Window *window);
-int SDL_PollEvent(SDL_Event *event);
+bool SDL_UpdateWindowSurface(SDL_Window *window);
+bool SDL_PollEvent(SDL_Event *event);
 void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
-Uint32 SDL_GetTicks(void);
-void SDL_SetWindowTitle(SDL_Window *window, const char *title);
+Uint64 SDL_GetTicks(void);
+bool SDL_SetWindowTitle(SDL_Window *window, const char *title);
 void __setAnimationFrameFunc(void (*callback)(void));
 
-SDL_AudioDeviceID SDL_OpenAudioDevice(const char *device, int iscapture,
-                                      const SDL_AudioSpec *desired,
-                                      SDL_AudioSpec *obtained, int allowed_changes);
-int SDL_QueueAudio(SDL_AudioDeviceID dev, const void *data, Uint32 len);
-Uint32 SDL_GetQueuedAudioSize(SDL_AudioDeviceID dev);
-void SDL_ClearQueuedAudio(SDL_AudioDeviceID dev);
-void SDL_PauseAudioDevice(SDL_AudioDeviceID dev, int pause_on);
-void SDL_CloseAudioDevice(SDL_AudioDeviceID dev);
+SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
+                                           const SDL_AudioSpec *spec,
+                                           SDL_AudioStreamCallback callback,
+                                           void *userdata);
+bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len);
+int SDL_GetAudioStreamQueued(SDL_AudioStream *stream);
+bool SDL_ClearAudioStream(SDL_AudioStream *stream);
+bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream);
+bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream);
+void SDL_DestroyAudioStream(SDL_AudioStream *stream);
   `,
   "__atexit.h": `
 #pragma once
@@ -19776,12 +19821,13 @@ __import void __sdl_clear_queued_audio(int dev);
 __import void __sdl_pause_audio_device(int dev, int pause_on);
 __import void __sdl_close_audio_device(int dev);
 
-int SDL_Init(Uint32 flags) {
-    return __sdl_init((int)flags);
+bool SDL_Init(SDL_InitFlags flags) {
+    return __sdl_init((int)flags) == 0;
 }
 
-SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint32 flags) {
-    int handle = __sdl_create_window(title, x, y, w, h, (int)flags);
+SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags) {
+    /* SDL3 dropped the x,y args; the host centers the window, so pass 0,0. */
+    int handle = __sdl_create_window(title, 0, 0, w, h, (int)flags);
     int pitch = w * 4;
     SDL_Window *win = (SDL_Window *)malloc(sizeof(SDL_Window));
     win->handle = handle;
@@ -19793,17 +19839,17 @@ SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint
     return win;
 }
 
-Uint32 SDL_GetWindowID(SDL_Window *window) {
-    return (Uint32)window->handle;
+SDL_WindowID SDL_GetWindowID(SDL_Window *window) {
+    return (SDL_WindowID)window->handle;
 }
 
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window) {
     return &window->surface;
 }
 
-int SDL_UpdateWindowSurface(SDL_Window *window) {
+bool SDL_UpdateWindowSurface(SDL_Window *window) {
     SDL_Surface *s = &window->surface;
-    return __sdl_update_window_surface(window->handle, s->pixels, s->w, s->h, s->pitch);
+    return __sdl_update_window_surface(window->handle, s->pixels, s->w, s->h, s->pitch) == 0;
 }
 
 /* ---- Event queue (freelist-based linked list) ---- */
@@ -19837,10 +19883,14 @@ static void __sdl_eq_push(__SDL_EventEntry *e) {
     __sdl_eq_tail = e;
 }
 
+/* The host's __sdl_push_* imports pass primitives unchanged across the SDL3
+   rename; only the SDL_Event fields they're stored into changed shape (flat
+   key event with scancode/key + bool down; float mouse coords). The event
+   type codes are the SDL_EVENT_* values, identical to the old SDL2 codes. */
 void __sdl_push_quit_event(int window_id) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
-    e->event.type = SDL_QUIT;
+    e->event.type = SDL_EVENT_QUIT;
     __sdl_eq_push(e);
 }
 __export __sdl_push_quit_event = __sdl_push_quit_event;
@@ -19849,10 +19899,10 @@ void __sdl_push_key_event(int window_id, int type, int scancode, int sym) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
     e->event.type = (Uint32)type;
-    e->event.key.windowID = (Uint32)window_id;
-    e->event.key.state = (type == SDL_KEYDOWN) ? SDL_PRESSED : SDL_RELEASED;
-    e->event.key.keysym.scancode = scancode;
-    e->event.key.keysym.sym = sym;
+    e->event.key.windowID = (SDL_WindowID)window_id;
+    e->event.key.down = (type == SDL_EVENT_KEY_DOWN);
+    e->event.key.scancode = (SDL_Scancode)scancode;
+    e->event.key.key = (SDL_Keycode)sym;
     __sdl_eq_push(e);
 }
 __export __sdl_push_key_event = __sdl_push_key_event;
@@ -19861,11 +19911,11 @@ void __sdl_push_mouse_button_event(int window_id, int type, int button, int x, i
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
     e->event.type = (Uint32)type;
-    e->event.button.windowID = (Uint32)window_id;
+    e->event.button.windowID = (SDL_WindowID)window_id;
     e->event.button.button = (Uint8)button;
-    e->event.button.state = (type == SDL_MOUSEBUTTONDOWN) ? SDL_PRESSED : SDL_RELEASED;
-    e->event.button.x = x;
-    e->event.button.y = y;
+    e->event.button.down = (type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+    e->event.button.x = (float)x;
+    e->event.button.y = (float)y;
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_button_event = __sdl_push_mouse_button_event;
@@ -19873,10 +19923,10 @@ __export __sdl_push_mouse_button_event = __sdl_push_mouse_button_event;
 void __sdl_push_mouse_motion_event(int window_id, int x, int y) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
-    e->event.type = SDL_MOUSEMOTION;
-    e->event.motion.windowID = (Uint32)window_id;
-    e->event.motion.x = x;
-    e->event.motion.y = y;
+    e->event.type = SDL_EVENT_MOUSE_MOTION;
+    e->event.motion.windowID = (SDL_WindowID)window_id;
+    e->event.motion.x = (float)x;
+    e->event.motion.y = (float)y;
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
@@ -19884,15 +19934,15 @@ __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
 void __sdl_push_mouse_wheel_event(int window_id, int x, int y) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
-    e->event.type = SDL_MOUSEWHEEL;
-    e->event.wheel.windowID = (Uint32)window_id;
-    e->event.wheel.x = x;
-    e->event.wheel.y = y;
+    e->event.type = SDL_EVENT_MOUSE_WHEEL;
+    e->event.wheel.windowID = (SDL_WindowID)window_id;
+    e->event.wheel.x = (float)x;
+    e->event.wheel.y = (float)y;
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;
 
-int SDL_PollEvent(SDL_Event *event) {
+bool SDL_PollEvent(SDL_Event *event) {
     __SDL_EventEntry *e = __sdl_eq_head;
     if (!e) return 0;
     __sdl_eq_head = e->next;
@@ -19903,39 +19953,56 @@ int SDL_PollEvent(SDL_Event *event) {
     return 1;
 }
 
-/* ---- Audio ---- */
+/* ---- Audio ----
+   SDL3 replaced the SDL2 device + queue API with SDL_AudioStream. We keep the
+   host's primitive __sdl_* audio imports (one device == one ring) and model a
+   stream as a thin wrapper over a device id. Push-only: the optional stream
+   callback is ignored (NULL is the idiomatic SDL3 push path). SDL3 streams
+   start paused, so callers must SDL_ResumeAudioStreamDevice to hear output —
+   same as the old SDL_PauseAudioDevice(dev, 0). */
+struct SDL_AudioStream {
+    int dev;
+};
 
-SDL_AudioDeviceID SDL_OpenAudioDevice(const char *device, int iscapture,
-                                      const SDL_AudioSpec *desired,
-                                      SDL_AudioSpec *obtained, int allowed_changes) {
-    int dev = __sdl_open_audio_device(desired->freq, desired->format, (int)desired->channels);
+SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
+                                           const SDL_AudioSpec *spec,
+                                           SDL_AudioStreamCallback callback,
+                                           void *userdata) {
+    (void)devid; (void)callback; (void)userdata;
+    int dev = __sdl_open_audio_device(spec->freq, spec->format, spec->channels);
     if (dev <= 0) return 0;
-    if (obtained) {
-        obtained->freq = desired->freq;
-        obtained->format = desired->format;
-        obtained->channels = desired->channels;
-    }
-    return (SDL_AudioDeviceID)dev;
+    SDL_AudioStream *s = (SDL_AudioStream *)malloc(sizeof(SDL_AudioStream));
+    s->dev = dev;
+    return s;
 }
 
-int SDL_QueueAudio(SDL_AudioDeviceID dev, const void *data, Uint32 len) {
-    return __sdl_queue_audio((int)dev, data, (int)len);
+bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
+    return __sdl_queue_audio(stream->dev, buf, len) == 0;
 }
 
-Uint32 SDL_GetQueuedAudioSize(SDL_AudioDeviceID dev) {
-    return (Uint32)__sdl_get_queued_audio_size((int)dev);
+int SDL_GetAudioStreamQueued(SDL_AudioStream *stream) {
+    return __sdl_get_queued_audio_size(stream->dev);
 }
 
-void SDL_ClearQueuedAudio(SDL_AudioDeviceID dev) {
-    __sdl_clear_queued_audio((int)dev);
+bool SDL_ClearAudioStream(SDL_AudioStream *stream) {
+    __sdl_clear_queued_audio(stream->dev);
+    return 1;
 }
 
-void SDL_PauseAudioDevice(SDL_AudioDeviceID dev, int pause_on) {
-    __sdl_pause_audio_device((int)dev, pause_on);
+bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream) {
+    __sdl_pause_audio_device(stream->dev, 0);
+    return 1;
 }
 
-void SDL_CloseAudioDevice(SDL_AudioDeviceID dev) {
-    __sdl_close_audio_device((int)dev);
+bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream) {
+    __sdl_pause_audio_device(stream->dev, 1);
+    return 1;
+}
+
+void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
+    if (!stream) return;
+    __sdl_close_audio_device(stream->dev);
+    free(stream);
 }
 
 void SDL_DestroyWindow(SDL_Window *window) {
@@ -19952,12 +20019,13 @@ void SDL_Delay(Uint32 ms) {
     __sdl_delay((int)ms);
 }
 
-Uint32 SDL_GetTicks(void) {
-    return (Uint32)__sdl_get_ticks();
+Uint64 SDL_GetTicks(void) {
+    return (Uint64)(Uint32)__sdl_get_ticks();
 }
 
-void SDL_SetWindowTitle(SDL_Window *window, const char *title) {
+bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     __sdl_set_window_title(window->handle, title);
+    return 1;
 }
 
 void __setAnimationFrameFunc(void (*callback)(void)) {

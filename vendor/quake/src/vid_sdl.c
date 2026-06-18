@@ -82,9 +82,8 @@ void VID_Init (unsigned char *palette)
 	// SDL is idempotent on its own init flags, so just call it.
 	SDL_Init(SDL_INIT_VIDEO);
 	sdl_window = SDL_CreateWindow("Quake",
-		SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 		BASEWIDTH, BASEHEIGHT,
-		SDL_WINDOW_SHOWN);
+		0);
 	if (sdl_window)
 		sdl_surface = SDL_GetWindowSurface(sdl_window);
 

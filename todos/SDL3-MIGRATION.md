@@ -105,11 +105,30 @@ exists; keyboard/mouse unchanged).
   canvas non-black, audio ring advances, keypress flips blue→red).
 - Commit c-compiler (main) + c/ (main), push both.
 
-## Phase 1 — minimal SDL2 → SDL3 rename (same functional surface)
+## Phase 1 — minimal SDL2 → SDL3 rename (same functional surface) — DONE
 
 Rename SDL2-isms to SDL3 spelling; **no new capabilities** (no renderer/texture,
-no AudioStream resampling, no touch, no multi-window). Keep the vendored demos
-working via an **SDL2-compat shim header** rather than porting them.
+no AudioStream resampling, no touch, no multi-window).
+
+**Decision (revised at implementation time):** `SDL.h` becomes native **SDL3**
+(SDL3 is the default interface), and the vendored demos are **ported** to SDL3
+rather than kept on an SDL2-compat shim. Why the change from the original
+compat-shim plan: SDL3 *flattened* the keyboard event (`event.key.keysym.sym` →
+`event.key.key`), so a pure-header SDL2 compat can't transparently serve both
+layouts — a real compat needs a dual-layout `__SDL.c` (#ifdef), which is *more*
+code than porting the demos' small, concentrated SDL surface. Porting gives one
+clean SDL3 surface with no perpetual dual-impl burden. A `SDL2/SDL.h` compat
+header can still be added later (additive) if legacy SDL2 source needs to build.
+
+**host.js is UNCHANGED**: its `__sdl_*` imports are primitive-level, so the SDL3
+audio-stream API, float coords, bool returns, and Uint64 ticks are all absorbed
+in `__SDL.c`. The `SDL_WEB` bridge is also unchanged (event-type *values* are
+identical SDL2↔SDL3; it passes scancode/sym/x/y as before).
+
+Implementation notes:
+- `bool` isn't a native keyword here and `<stdbool.h>`'s `true`/`false` macros
+  collide with doomgeneric's `enum { false, true } boolean`. So `SDL.h` does
+  `typedef _Bool bool;` (type only, no macros) and `__SDL.c` uses `1`/`0`.
 
 ### What actually changes (not pure sed)
 - **Event type values are stable** (SDL_EVENT_QUIT 0x100, KEY_DOWN/UP 0x300/1,

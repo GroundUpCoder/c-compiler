@@ -35,7 +35,7 @@
 // 22050 Hz, plenty for the engine's 100 ms mix budget.
 #define RING_MONO        16384
 
-static int           sdl_audio_dev;
+static SDL_AudioStream *sdl_audio_dev;
 static qboolean      sdl_audio_inited;
 static unsigned char sdl_buffer[RING_MONO * (SAMPLE_BITS / 8) * CHANNELS];
 static int           sdl_bytes_total;   // total bytes ever queued
@@ -45,12 +45,12 @@ qboolean SNDDMA_Init (void)
 {
 	SDL_AudioSpec want;
 	want.freq     = SAMPLE_RATE;
-	want.format   = AUDIO_S16;
+	want.format   = SDL_AUDIO_S16;
 	want.channels = CHANNELS;
 
-	sdl_audio_dev = SDL_OpenAudioDevice (NULL, 0, &want, NULL, 0);
-	if (sdl_audio_dev == 0) {
-		Con_Printf ("SNDDMA_Init: SDL_OpenAudioDevice failed\n");
+	sdl_audio_dev = SDL_OpenAudioDeviceStream (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &want, NULL, NULL);
+	if (sdl_audio_dev == NULL) {
+		Con_Printf ("SNDDMA_Init: SDL_OpenAudioDeviceStream failed\n");
 		return false;
 	}
 
@@ -72,7 +72,7 @@ qboolean SNDDMA_Init (void)
 	sdl_bytes_played = 0;
 	sdl_audio_inited = true;
 
-	SDL_PauseAudioDevice (sdl_audio_dev, 0);  // start playback
+	SDL_ResumeAudioStreamDevice (sdl_audio_dev);  // start playback
 	Con_Printf ("SNDDMA_Init: SDL audio device opened (%d Hz, %d-bit, %d ch)\n",
 		SAMPLE_RATE, SAMPLE_BITS, CHANNELS);
 	return true;
@@ -94,7 +94,7 @@ int SNDDMA_GetDMAPos (void)
 {
 	if (!sdl_audio_inited) return 0;
 
-	int still_queued  = (int)SDL_GetQueuedAudioSize (sdl_audio_dev);
+	int still_queued  = (int)SDL_GetAudioStreamQueued (sdl_audio_dev);
 	int bytes_played  = sdl_bytes_total - still_queued;
 	int bytes_per_sample = SAMPLE_BITS / 8;
 	int samples_played   = bytes_played / bytes_per_sample;
@@ -128,11 +128,11 @@ void SNDDMA_Submit (void)
 	int buflen = (int)sizeof(sdl_buffer);
 	int start  = sdl_bytes_total % buflen;
 	if (start + need <= buflen) {
-		SDL_QueueAudio (sdl_audio_dev, sdl_buffer + start, need);
+		SDL_PutAudioStreamData (sdl_audio_dev, sdl_buffer + start, need);
 	} else {
 		int first = buflen - start;
-		SDL_QueueAudio (sdl_audio_dev, sdl_buffer + start, first);
-		SDL_QueueAudio (sdl_audio_dev, sdl_buffer, need - first);
+		SDL_PutAudioStreamData (sdl_audio_dev, sdl_buffer + start, first);
+		SDL_PutAudioStreamData (sdl_audio_dev, sdl_buffer, need - first);
 	}
 	sdl_bytes_total = paintedtime_bytes;
 }
@@ -140,8 +140,8 @@ void SNDDMA_Submit (void)
 void SNDDMA_Shutdown (void)
 {
 	if (!sdl_audio_inited) return;
-	SDL_PauseAudioDevice (sdl_audio_dev, 1);
-	SDL_CloseAudioDevice (sdl_audio_dev);
+	SDL_PauseAudioStreamDevice (sdl_audio_dev);
+	SDL_DestroyAudioStream (sdl_audio_dev);
 	sdl_audio_inited = false;
 	shm = NULL;
 }

@@ -401,10 +401,10 @@ static void render(void) {
 
     int cursor_moved = (cursor_pos != last_cursor_pos);
     if (cursor_moved) {
-        cursor_blink_origin = SDL_GetTicks();
+        cursor_blink_origin = (uint32_t)SDL_GetTicks();
         last_cursor_pos = cursor_pos;
     }
-    int blink = (((SDL_GetTicks() - cursor_blink_origin) / CURSOR_BLINK_MS) % 2 == 0);
+    int blink = ((((uint32_t)SDL_GetTicks() - cursor_blink_origin) / CURSOR_BLINK_MS) % 2 == 0);
     if (cursor_found && blink) {
         fill_rect(cursor_x, cursor_y + 2, 2, line_height - 4, cursor_color);
     }
@@ -453,17 +453,17 @@ static void move_down(void) {
 static void handle_events(void) {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
-        if (ev.type == SDL_QUIT) exit(0);
+        if (ev.type == SDL_EVENT_QUIT) exit(0);
 
-        if (ev.type == SDL_MOUSEWHEEL) {
-            scroll_y += ev.wheel.y;
+        if (ev.type == SDL_EVENT_MOUSE_WHEEL) {
+            scroll_y += (int)ev.wheel.y;
             if (scroll_y < 0) scroll_y = 0;
             mouse_dragging = 0;
             continue;
         }
 
-        if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
-            int pos = click_to_pos(ev.button.x, ev.button.y);
+        if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == SDL_BUTTON_LEFT) {
+            int pos = click_to_pos((int)ev.button.x, (int)ev.button.y);
             if (shift_held) {
                 begin_or_keep_selection();
                 cursor_pos = pos;
@@ -475,27 +475,27 @@ static void handle_events(void) {
             continue;
         }
 
-        if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+        if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == SDL_BUTTON_LEFT) {
             mouse_dragging = 0;
             if (sel_anchor >= 0 && sel_anchor == cursor_pos)
                 clear_selection();
             continue;
         }
 
-        if (ev.type == SDL_MOUSEMOTION && mouse_dragging) {
-            cursor_pos = click_to_pos(ev.motion.x, ev.motion.y);
+        if (ev.type == SDL_EVENT_MOUSE_MOTION && mouse_dragging) {
+            cursor_pos = click_to_pos((int)ev.motion.x, (int)ev.motion.y);
             continue;
         }
 
-        int sym = ev.key.keysym.sym;
+        int sym = ev.key.key;
 
-        if (ev.type == SDL_KEYUP) {
+        if (ev.type == SDL_EVENT_KEY_UP) {
             if (sym == SDLK_LCTRL || sym == SDLK_RCTRL) ctrl_held = 0;
             if (sym == SDLK_LALT || sym == SDLK_RALT) alt_held = 0;
             if (sym == SDLK_LSHIFT || sym == SDLK_RSHIFT) shift_held = 0;
             continue;
         }
-        if (ev.type != SDL_KEYDOWN) continue;
+        if (ev.type != SDL_EVENT_KEY_DOWN) continue;
 
         if (sym == SDLK_LCTRL || sym == SDLK_RCTRL) { ctrl_held = 1; continue; }
         if (sym == SDLK_LALT || sym == SDLK_RALT) { alt_held = 1; continue; }
@@ -672,7 +672,7 @@ int main(int argc, char **argv) {
     cursor_pos = text_len;
 
     SDL_Init(SDL_INIT_VIDEO);
-    window = SDL_CreateWindow("FreeType Editor", 0, 0, WIN_W, WIN_H, 0);
+    window = SDL_CreateWindow("FreeType Editor", WIN_W, WIN_H, 0);
     surface = SDL_GetWindowSurface(window);
 
     printf("FreeType SDL editor ready (%dx%d, font size %d)\n", WIN_W, WIN_H, FONT_SIZE);

@@ -41,7 +41,7 @@ typedef int32_t   int_fast32_t;
 
 /* ── Audio ──────────────────────────────────────────────────────── */
 static gbapu_t apu;
-static SDL_AudioDeviceID audio_dev;
+static SDL_AudioStream *audio_dev;
 
 #define AUDIO_RATE       44100
 #define AUDIO_BUF_FRAMES 735   /* ~1 GB frame at 44100/59.73 */
@@ -298,13 +298,13 @@ static void build_test_rom(void) {
 static void handle_input(void) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_QUIT) {
+        if (event.type == SDL_EVENT_QUIT) {
             exit(0);
         }
-        if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
-            int pressed = (event.type == SDL_KEYDOWN);
+        if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
+            int pressed = (event.type == SDL_EVENT_KEY_DOWN);
             uint8_t mask = 0;
-            switch (event.key.keysym.sym) {
+            switch (event.key.key) {
             case SDLK_RIGHT:  mask = JOYPAD_RIGHT;  break;
             case SDLK_LEFT:   mask = JOYPAD_LEFT;   break;
             case SDLK_UP:     mask = JOYPAD_UP;     break;
@@ -356,10 +356,10 @@ static void frame_callback(void) {
 
     /* Feed audio queue */
     if (audio_dev) {
-        while ((int)SDL_GetQueuedAudioSize(audio_dev) < AUDIO_QUEUE_TARGET) {
+        while ((int)SDL_GetAudioStreamQueued(audio_dev) < AUDIO_QUEUE_TARGET) {
             int16_t audio_buf[AUDIO_BUF_FRAMES * 2];
             gbapu_generate(&apu, audio_buf, AUDIO_BUF_FRAMES);
-            SDL_QueueAudio(audio_dev, audio_buf, sizeof(audio_buf));
+            SDL_PutAudioStreamData(audio_dev, audio_buf, sizeof(audio_buf));
         }
     }
 
@@ -383,7 +383,7 @@ static void frame_callback(void) {
 int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     window  = SDL_CreateWindow("Peanut-GB",
-                  0, 0, LCD_WIDTH * SCALE, LCD_HEIGHT * SCALE, 0);
+                  LCD_WIDTH * SCALE, LCD_HEIGHT * SCALE, 0);
     surface = SDL_GetWindowSurface(window);
 
     if (argc > 1) {
@@ -423,11 +423,11 @@ int main(int argc, char **argv) {
         SDL_AudioSpec want;
         memset(&want, 0, sizeof(want));
         want.freq = AUDIO_RATE;
-        want.format = AUDIO_S16;
+        want.format = SDL_AUDIO_S16;
         want.channels = 2;
-        audio_dev = SDL_OpenAudioDevice(0, 0, &want, 0, 0);
+        audio_dev = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &want, 0, 0);
         if (audio_dev)
-            SDL_PauseAudioDevice(audio_dev, 0);
+            SDL_ResumeAudioStreamDevice(audio_dev);
     }
 
     __setAnimationFrameFunc(frame_callback);

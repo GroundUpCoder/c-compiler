@@ -43,7 +43,7 @@ typedef struct {
 } mix_channel_t;
 
 static mix_channel_t mix_channels[NUM_CHANNELS];
-static SDL_AudioDeviceID audio_dev;
+static SDL_AudioStream *audio_stream;
 static boolean sound_initialized = 0;
 
 // Load and resample a DMX sound lump
@@ -120,28 +120,28 @@ static cached_sound_t *CacheSFX(sfxinfo_t *sfxinfo)
 
 static boolean SND_Init(boolean use_sfx_prefix)
 {
-    audio_dev = SDL_OpenAudioDevice(NULL, 0,
-        &(SDL_AudioSpec){ .freq = MIX_RATE, .format = AUDIO_S16, .channels = MIX_CHANNELS },
-        NULL, 0);
+    audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+        &(SDL_AudioSpec){ .freq = MIX_RATE, .format = SDL_AUDIO_S16, .channels = MIX_CHANNELS },
+        NULL, NULL);
 
-    if (audio_dev == 0)
+    if (audio_stream == NULL)
     {
         printf("DG_sound: failed to open audio device\n");
         return false;
     }
 
     memset(mix_channels, 0, sizeof(mix_channels));
-    SDL_PauseAudioDevice(audio_dev, 0);
+    SDL_ResumeAudioStreamDevice(audio_stream);
     sound_initialized = true;
     return true;
 }
 
 static void SND_Shutdown(void)
 {
-    if (audio_dev != 0)
+    if (audio_stream != NULL)
     {
-        SDL_CloseAudioDevice(audio_dev);
-        audio_dev = 0;
+        SDL_DestroyAudioStream(audio_stream);
+        audio_stream = NULL;
     }
     sound_initialized = false;
 }
@@ -586,7 +586,7 @@ static void SND_Update(void)
         return;
 
     // Feed audio queue to stay near QUEUE_TARGET
-    while ((int)SDL_GetQueuedAudioSize(audio_dev) < QUEUE_TARGET)
+    while ((int)SDL_GetAudioStreamQueued(audio_stream) < QUEUE_TARGET)
     {
         int i;
         int ch;
@@ -632,7 +632,7 @@ static void SND_Update(void)
             buf[i * 2 + 1] = (short)right;
         }
 
-        SDL_QueueAudio(audio_dev, buf, sizeof(buf));
+        SDL_PutAudioStreamData(audio_stream, buf, sizeof(buf));
     }
 }
 
