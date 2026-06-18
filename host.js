@@ -4621,6 +4621,246 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
 
 }
 
+/* ==========================================================================
+ * WebGPU — expose the browser's WebGPU JS API to compiled C (webgpu.h).
+ *
+ * Mirrors createBrowserSDL: returns ENV_KEY-keyed __wgpu_* imports. The host
+ * keeps a handle table (int <-> live JS WebGPU object) and receives only
+ * PRIMITIVES — __webgpu.c flattens descriptor structs C-side (the compiler's
+ * layout is authoritative). Async (requestAdapter/requestDevice) is callback
+ * based with NO JSPI: the JS Promise resolves, then we invoke the C trampoline
+ * export (__wgpu_call_*_cb) which rebuilds the by-value WGPUStringView and calls
+ * the user's callback through its table index. Frames run on the shared SDL rAF
+ * loop (wgpuSetMainLoopCallback -> __sdl_set_animation_frame_func). The canvas
+ * is the SAME OffscreenCanvas the SDL backend gets. See todos/WEBGPU.md.
+ * ========================================================================== */
+
+/* Enum int <-> WebGPU JS string maps. Values mirror webgpu.h exactly. */
+const WGPU_FORMAT_TO_STR = {
+  0: undefined, 18: 'rgba8unorm', 19: 'rgba8unorm-srgb',
+  23: 'bgra8unorm', 24: 'bgra8unorm-srgb',
+};
+const WGPU_STR_TO_FORMAT = {
+  'rgba8unorm': 18, 'rgba8unorm-srgb': 19, 'bgra8unorm': 23, 'bgra8unorm-srgb': 24,
+};
+const WGPU_LOADOP = { 1: 'clear', 2: 'load' };
+const WGPU_STOREOP = { 1: 'store', 2: 'discard' };
+const WGPU_TOPO = { 0: 'point-list', 1: 'line-list', 2: 'line-strip', 3: 'triangle-list', 4: 'triangle-strip' };
+const WGPU_FRONT = { 0: 'ccw', 1: 'cw' };
+const WGPU_CULL = { 0: 'none', 1: 'front', 2: 'back' };
+const WGPU_ALPHA = { 0: 'opaque', 1: 'opaque', 2: 'premultiplied' };
+
+/* Status codes (must match webgpu.h). */
+const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
+
+function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
+  const { readString, getMemory, getExports } = ctx;
+  const gpu = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
+  const utf8 = new TextDecoder();
+
+  /* Handle table: index 0 == null. Freelist reuses slots so a per-frame churn
+   * of textures/views/encoders does not grow the array without bound. */
+  const handles = [null];
+  const freeList = [];
+  function alloc(obj) {
+    if (freeList.length) { const i = freeList.pop(); handles[i] = obj; return i; }
+    handles.push(obj); return handles.length - 1;
+  }
+  function get(h) { return h ? handles[h] : null; }
+  function release(h) {
+    if (h > 0 && h < handles.length) { handles[h] = null; freeList.push(h); }
+  }
+
+  function readStr(ptr, len) {
+    if (!ptr) return '';
+    if (len < 0) return readString(ptr);  /* WGPU_STRLEN -> null-terminated */
+    return utf8.decode(new Uint8Array(getMemory().buffer, ptr, len));
+  }
+  function entryName(ptr, len) {
+    if (!ptr || len === 0) return undefined;  /* let WebGPU pick the sole entry */
+    return readStr(ptr, len);
+  }
+  function preferredFormat() {
+    try { if (gpu && gpu.getPreferredCanvasFormat) return gpu.getPreferredCanvasFormat(); }
+    catch (e) {}
+    return 'bgra8unorm';
+  }
+
+  function callAdapterCb(cb, status, adapterHandle, ud1, ud2) {
+    const fn = getExports().__wgpu_call_adapter_cb;
+    if (fn) fn(cb, status, adapterHandle, 0, 0, ud1, ud2);
+  }
+  function callDeviceCb(cb, status, deviceHandle, ud1, ud2) {
+    const fn = getExports().__wgpu_call_device_cb;
+    if (fn) fn(cb, status, deviceHandle, 0, 0, ud1, ud2);
+  }
+
+  return {
+    [ENV_KEY]: {
+      __wgpu_create_instance: function () { return alloc({ kind: 'instance' }); },
+
+      __wgpu_instance_create_surface: function (instance) {
+        if (!canvas) return 0;
+        let gpuCtx = null;
+        try { gpuCtx = canvas.getContext('webgpu'); }
+        catch (e) { console.error('wgpuInstanceCreateSurface: getContext(webgpu) failed', e); }
+        if (!gpuCtx) { console.error('wgpuInstanceCreateSurface: no webgpu canvas context'); return 0; }
+        return alloc({ kind: 'surface', gpuCtx: gpuCtx, format: null });
+      },
+
+      __wgpu_instance_request_adapter: function (instance, cb, ud1, ud2) {
+        if (!gpu) {
+          console.error('WebGPU unavailable (navigator.gpu missing)');
+          Promise.resolve().then(function () { callAdapterCb(cb, WGPU_REQ_UNAVAILABLE, 0, ud1, ud2); });
+          return;
+        }
+        gpu.requestAdapter().then(function (ad) {
+          if (!ad) { callAdapterCb(cb, WGPU_REQ_UNAVAILABLE, 0, ud1, ud2); return; }
+          callAdapterCb(cb, WGPU_REQ_SUCCESS, alloc(ad), ud1, ud2);
+        }).catch(function (e) {
+          console.error('requestAdapter failed', e);
+          callAdapterCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2);
+        });
+      },
+
+      __wgpu_adapter_request_device: function (adapter, cb, ud1, ud2) {
+        const ad = get(adapter);
+        if (!ad) { Promise.resolve().then(function () { callDeviceCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2); }); return; }
+        ad.requestDevice().then(function (dev) {
+          if (!dev) { callDeviceCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2); return; }
+          try {
+            dev.addEventListener('uncapturederror', function (ev) {
+              console.error('WebGPU uncaptured error:', ev.error && ev.error.message);
+            });
+          } catch (e) {}
+          callDeviceCb(cb, WGPU_REQ_SUCCESS, alloc(dev), ud1, ud2);
+        }).catch(function (e) {
+          console.error('requestDevice failed', e);
+          callDeviceCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2);
+        });
+      },
+
+      __wgpu_device_get_queue: function (device) { const d = get(device); return d ? alloc(d.queue) : 0; },
+
+      __wgpu_surface_get_preferred_format: function (surface) {
+        return WGPU_STR_TO_FORMAT[preferredFormat()] || 23;
+      },
+
+      __wgpu_surface_configure: function (surface, device, format, usage, width, height, alphaMode) {
+        const s = get(surface), d = get(device);
+        if (!s || !s.gpuCtx || !d) throw new Error('wgpuSurfaceConfigure: invalid surface/device handle');
+        const fmt = WGPU_FORMAT_TO_STR[format] || preferredFormat();
+        s.format = fmt;
+        /* WebGPU's configure() takes no size — the canvas drawing buffer size IS
+         * the surface size. Honor the requested width/height by sizing the
+         * (Offscreen)canvas, mirroring __sdl_create_window. */
+        if (canvas && width > 0 && height > 0) { canvas.width = width; canvas.height = height; }
+        s.gpuCtx.configure({ device: d, format: fmt, usage: usage >>> 0, alphaMode: WGPU_ALPHA[alphaMode] || 'opaque' });
+        /* Reveal the canvas in the emitted page (reuses the SDL window path). */
+        if (notifyWindow) notifyWindow({ type: 'sdl-window', width: width, height: height });
+      },
+
+      __wgpu_surface_get_current_texture: function (surface) {
+        const s = get(surface);
+        if (!s || !s.gpuCtx) return 0;
+        try { return alloc(s.gpuCtx.getCurrentTexture()); }
+        catch (e) { console.error('getCurrentTexture failed', e); return 0; }
+      },
+
+      __wgpu_texture_create_view: function (texture) { const t = get(texture); return t ? alloc(t.createView()) : 0; },
+
+      __wgpu_device_create_shader_module_wgsl: function (device, codePtr, codeLen) {
+        const d = get(device); if (!d) return 0;
+        return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
+      },
+
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace) {
+        const d = get(device); if (!d) return 0;
+        const desc = {
+          layout: 'auto',
+          vertex: { module: get(vsModule), entryPoint: entryName(vsEntry, vsEntryLen) },
+          primitive: {
+            topology: WGPU_TOPO[topology] || 'triangle-list',
+            frontFace: WGPU_FRONT[frontFace] || 'ccw',
+            cullMode: WGPU_CULL[cullMode] || 'none',
+          },
+        };
+        if (fsModule) {
+          desc.fragment = {
+            module: get(fsModule),
+            entryPoint: entryName(fsEntry, fsEntryLen),
+            targets: [{ format: WGPU_FORMAT_TO_STR[format] || preferredFormat() }],
+          };
+        }
+        return alloc(d.createRenderPipeline(desc));
+      },
+
+      __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
+
+      __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a) {
+        const enc = get(encoder), v = get(view);
+        if (!enc || !v) return 0;
+        return alloc(enc.beginRenderPass({
+          colorAttachments: [{
+            view: v,
+            loadOp: WGPU_LOADOP[loadOp] || 'clear',
+            storeOp: WGPU_STOREOP[storeOp] || 'store',
+            clearValue: { r: r, g: g, b: b, a: a },
+          }],
+        }));
+      },
+
+      __wgpu_render_pass_set_pipeline: function (pass, pipeline) { const p = get(pass); if (p) p.setPipeline(get(pipeline)); },
+      __wgpu_render_pass_draw: function (pass, vc, ic, fv, fi) { const p = get(pass); if (p) p.draw(vc >>> 0, ic >>> 0, fv >>> 0, fi >>> 0); },
+      __wgpu_render_pass_end: function (pass) { const p = get(pass); if (p) p.end(); },
+      __wgpu_command_encoder_finish: function (encoder) { const e = get(encoder); return e ? alloc(e.finish()) : 0; },
+      __wgpu_queue_submit_one: function (queue, cmd) { const q = get(queue), c = get(cmd); if (q && c) q.submit([c]); },
+      __wgpu_release: function (handle) { release(handle); },
+    },
+  };
+}
+
+/* Null WebGPU backend: resolves the imports in headless/Node so modules always
+ * instantiate. Async requests report failure (the program sees a clean error
+ * rather than hanging on a never-fired callback). */
+function createNullWebGPU(ctx) {
+  function failAdapter(cb, ud1, ud2) {
+    const fn = ctx && ctx.getExports() && ctx.getExports().__wgpu_call_adapter_cb;
+    if (fn) fn(cb, WGPU_REQ_UNAVAILABLE, 0, 0, 0, ud1, ud2);
+  }
+  function failDevice(cb, ud1, ud2) {
+    const fn = ctx && ctx.getExports() && ctx.getExports().__wgpu_call_device_cb;
+    if (fn) fn(cb, WGPU_REQ_ERROR, 0, 0, 0, ud1, ud2);
+  }
+  return {
+    [ENV_KEY]: {
+      __wgpu_create_instance: function () { return 0; },
+      __wgpu_instance_create_surface: function () { return 0; },
+      __wgpu_instance_request_adapter: function (instance, cb, ud1, ud2) {
+        Promise.resolve().then(function () { failAdapter(cb, ud1, ud2); });
+      },
+      __wgpu_adapter_request_device: function (adapter, cb, ud1, ud2) {
+        Promise.resolve().then(function () { failDevice(cb, ud1, ud2); });
+      },
+      __wgpu_device_get_queue: function () { return 0; },
+      __wgpu_surface_get_preferred_format: function () { return 23; },
+      __wgpu_surface_configure: function () {},
+      __wgpu_surface_get_current_texture: function () { return 0; },
+      __wgpu_texture_create_view: function () { return 0; },
+      __wgpu_device_create_shader_module_wgsl: function () { return 0; },
+      __wgpu_device_create_render_pipeline: function () { return 0; },
+      __wgpu_device_create_command_encoder: function () { return 0; },
+      __wgpu_command_encoder_begin_render_pass: function () { return 0; },
+      __wgpu_render_pass_set_pipeline: function () {},
+      __wgpu_render_pass_draw: function () {},
+      __wgpu_render_pass_end: function () {},
+      __wgpu_command_encoder_finish: function () { return 0; },
+      __wgpu_queue_submit_one: function () {},
+      __wgpu_release: function () {},
+    },
+  };
+}
+
 /**
  * SDL_WEB — the shared DOM↔SDL input bridge.
  *
@@ -6293,6 +6533,15 @@ async function runModule({
   // loop), not at import-build time.
   if (typeof onSdl === 'function') onSdl(sdl);
 
+  /* ---- WebGPU backend ----
+     Shares the SDL canvas (the transferred OffscreenCanvas) and notifyWindow.
+     Browser: real binding; headless/Node: null stubs that report failure rather
+     than hang. Frames reuse the SDL rAF loop. */
+  const webgpu = getBrowserSDL
+    ? createBrowserWebGPU({ canvas: getBrowserSDL, ctx: ctx, notifyWindow: notifyWindow })
+    : createNullWebGPU(ctx);
+  Object.assign(imports[ENV_KEY], webgpu[ENV_KEY]);
+
   /* ---- Process model: __spawn / __spawn_wait / __spawn_kill ----
      Real hooks when the embedder can create processes; ENOSYS stubs otherwise
      (so the imports always resolve). */
@@ -6710,6 +6959,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   // Test exports: BLOCK_FS components
   module.exports.BLOCK_FS = BLOCK_FS;
   module.exports.SDL_WEB = SDL_WEB;
+  module.exports.createBrowserWebGPU = createBrowserWebGPU;
 }
 
 // Browser global exports
@@ -6725,6 +6975,7 @@ if (typeof window !== 'undefined') {
 if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof module === 'undefined') {
   self.runModule = runModule;
   self.createBrowserSDL = createBrowserSDL;
+  self.createBrowserWebGPU = createBrowserWebGPU;
   self.BLOCK_FS = BLOCK_FS;
   self.SDL_WEB = SDL_WEB;
 }

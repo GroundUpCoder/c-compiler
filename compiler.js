@@ -17308,6 +17308,384 @@ bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream);
 bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream);
 void SDL_DestroyAudioStream(SDL_AudioStream *stream);
   `,
+  "webgpu.h": `
+#pragma once
+/* WebGPU for this compiler's web backend (modern Dawn/Emdawnwebgpu dialect).
+   The browser's WebGPU JS API is exposed to C. webgpu.h declares the standard
+   types + wgpu* prototypes; __webgpu.c flattens descriptor structs (the C
+   compiler's layout is authoritative) and forwards PRIMITIVES to host.js's
+   __wgpu_* imports — so the host never hand-computes C struct offsets, mirroring
+   __SDL.c's "host knows nothing about C struct layouts" design. Async
+   (requestAdapter/requestDevice) is callback-based (NO JSPI): the host invokes
+   C trampolines (__wgpu_call_*_cb) which reconstruct the by-value WGPUStringView
+   and call the user callback. Frames run on the shared rAF loop via
+   wgpuSetMainLoopCallback. See todos/WEBGPU.md. */
+__require_source("__webgpu.c");
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifndef __cplusplus
+#ifndef __WGPU_BOOL_DEFINED
+#define __WGPU_BOOL_DEFINED
+#endif
+#endif
+
+typedef uint32_t WGPUFlags;
+typedef uint32_t WGPUBool;
+
+/* Opaque handles (host-side handle-table indices, pointer-width). */
+typedef struct WGPUInstanceImpl*          WGPUInstance;
+typedef struct WGPUAdapterImpl*           WGPUAdapter;
+typedef struct WGPUDeviceImpl*            WGPUDevice;
+typedef struct WGPUQueueImpl*             WGPUQueue;
+typedef struct WGPUSurfaceImpl*           WGPUSurface;
+typedef struct WGPUTextureImpl*           WGPUTexture;
+typedef struct WGPUTextureViewImpl*       WGPUTextureView;
+typedef struct WGPUShaderModuleImpl*      WGPUShaderModule;
+typedef struct WGPUPipelineLayoutImpl*    WGPUPipelineLayout;
+typedef struct WGPURenderPipelineImpl*    WGPURenderPipeline;
+typedef struct WGPUCommandEncoderImpl*    WGPUCommandEncoder;
+typedef struct WGPURenderPassEncoderImpl* WGPURenderPassEncoder;
+typedef struct WGPUCommandBufferImpl*     WGPUCommandBuffer;
+typedef struct WGPUBufferImpl*            WGPUBuffer;
+
+/* WGPUStringView: ptr+len string (NULL data + 0 length == "use default"). */
+typedef struct WGPUStringView {
+    const char *data;
+    size_t length;
+} WGPUStringView;
+#define WGPU_STRLEN ((size_t)-1)
+
+/* WGPUFuture: opaque async token. We drive completion via callbacks, so the id
+   is a plain monotonic counter the user does not need to inspect. */
+typedef struct WGPUFuture { uint64_t id; } WGPUFuture;
+
+typedef struct WGPUColor { double r, g, b, a; } WGPUColor;
+
+/* ---- Enums (values are self-consistent header<->host; use the NAMES). ---- */
+typedef enum WGPUSType {
+    WGPUSType_ShaderSourceWGSL = 2
+} WGPUSType;
+
+typedef enum WGPURequestAdapterStatus {
+    WGPURequestAdapterStatus_Success = 1,
+    WGPURequestAdapterStatus_Unavailable = 2,
+    WGPURequestAdapterStatus_Error = 3
+} WGPURequestAdapterStatus;
+
+typedef enum WGPURequestDeviceStatus {
+    WGPURequestDeviceStatus_Success = 1,
+    WGPURequestDeviceStatus_Error = 3
+} WGPURequestDeviceStatus;
+
+typedef enum WGPUCallbackMode {
+    WGPUCallbackMode_WaitAnyOnly = 1,
+    WGPUCallbackMode_AllowProcessEvents = 2,
+    WGPUCallbackMode_AllowSpontaneous = 3
+} WGPUCallbackMode;
+
+typedef enum WGPUPowerPreference {
+    WGPUPowerPreference_Undefined = 0,
+    WGPUPowerPreference_LowPower = 1,
+    WGPUPowerPreference_HighPerformance = 2
+} WGPUPowerPreference;
+
+typedef enum WGPUTextureFormat {
+    WGPUTextureFormat_Undefined = 0,
+    WGPUTextureFormat_RGBA8Unorm = 18,
+    WGPUTextureFormat_RGBA8UnormSrgb = 19,
+    WGPUTextureFormat_BGRA8Unorm = 23,
+    WGPUTextureFormat_BGRA8UnormSrgb = 24
+} WGPUTextureFormat;
+
+typedef enum WGPULoadOp {
+    WGPULoadOp_Undefined = 0,
+    WGPULoadOp_Clear = 1,
+    WGPULoadOp_Load = 2
+} WGPULoadOp;
+
+typedef enum WGPUStoreOp {
+    WGPUStoreOp_Undefined = 0,
+    WGPUStoreOp_Store = 1,
+    WGPUStoreOp_Discard = 2
+} WGPUStoreOp;
+
+typedef enum WGPUPrimitiveTopology {
+    WGPUPrimitiveTopology_PointList = 0,
+    WGPUPrimitiveTopology_LineList = 1,
+    WGPUPrimitiveTopology_LineStrip = 2,
+    WGPUPrimitiveTopology_TriangleList = 3,
+    WGPUPrimitiveTopology_TriangleStrip = 4
+} WGPUPrimitiveTopology;
+
+typedef enum WGPUFrontFace {
+    WGPUFrontFace_CCW = 0,
+    WGPUFrontFace_CW = 1
+} WGPUFrontFace;
+
+typedef enum WGPUCullMode {
+    WGPUCullMode_None = 0,
+    WGPUCullMode_Front = 1,
+    WGPUCullMode_Back = 2
+} WGPUCullMode;
+
+typedef enum WGPUIndexFormat {
+    WGPUIndexFormat_Undefined = 0,
+    WGPUIndexFormat_Uint16 = 1,
+    WGPUIndexFormat_Uint32 = 2
+} WGPUIndexFormat;
+
+typedef enum WGPUCompositeAlphaMode {
+    WGPUCompositeAlphaMode_Auto = 0,
+    WGPUCompositeAlphaMode_Opaque = 1,
+    WGPUCompositeAlphaMode_Premultiplied = 2
+} WGPUCompositeAlphaMode;
+
+typedef enum WGPUPresentMode {
+    WGPUPresentMode_Fifo = 0
+} WGPUPresentMode;
+
+/* Texture usage flags. */
+#define WGPUTextureUsage_CopySrc          0x01
+#define WGPUTextureUsage_CopyDst          0x02
+#define WGPUTextureUsage_TextureBinding   0x04
+#define WGPUTextureUsage_StorageBinding   0x08
+#define WGPUTextureUsage_RenderAttachment 0x10
+
+/* Color write mask. */
+#define WGPUColorWriteMask_None  0x0
+#define WGPUColorWriteMask_Red   0x1
+#define WGPUColorWriteMask_Green 0x2
+#define WGPUColorWriteMask_Blue  0x4
+#define WGPUColorWriteMask_Alpha 0x8
+#define WGPUColorWriteMask_All   0xF
+
+#define WGPU_DEPTH_SLICE_UNDEFINED 0xFFFFFFFF
+
+/* ---- Chained struct base ---- */
+typedef struct WGPUChainedStruct {
+    const struct WGPUChainedStruct *next;
+    WGPUSType sType;
+} WGPUChainedStruct;
+
+/* ---- Callbacks + callback-info ---- */
+typedef void (*WGPURequestAdapterCallback)(WGPURequestAdapterStatus status,
+    WGPUAdapter adapter, WGPUStringView message, void *userdata1, void *userdata2);
+typedef void (*WGPURequestDeviceCallback)(WGPURequestDeviceStatus status,
+    WGPUDevice device, WGPUStringView message, void *userdata1, void *userdata2);
+
+typedef struct WGPURequestAdapterCallbackInfo {
+    const WGPUChainedStruct *nextInChain;
+    WGPUCallbackMode mode;
+    WGPURequestAdapterCallback callback;
+    void *userdata1;
+    void *userdata2;
+} WGPURequestAdapterCallbackInfo;
+
+typedef struct WGPURequestDeviceCallbackInfo {
+    const WGPUChainedStruct *nextInChain;
+    WGPUCallbackMode mode;
+    WGPURequestDeviceCallback callback;
+    void *userdata1;
+    void *userdata2;
+} WGPURequestDeviceCallbackInfo;
+
+/* ---- Descriptors ---- */
+typedef struct WGPUInstanceDescriptor {
+    const WGPUChainedStruct *nextInChain;
+} WGPUInstanceDescriptor;
+
+typedef struct WGPURequestAdapterOptions {
+    const WGPUChainedStruct *nextInChain;
+    WGPUSurface compatibleSurface;
+    WGPUPowerPreference powerPreference;
+    WGPUBool forceFallbackAdapter;
+} WGPURequestAdapterOptions;
+
+typedef struct WGPUDeviceDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+} WGPUDeviceDescriptor;
+
+typedef struct WGPUSurfaceDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+} WGPUSurfaceDescriptor;
+
+typedef struct WGPUSurfaceConfiguration {
+    const WGPUChainedStruct *nextInChain;
+    WGPUDevice device;
+    WGPUTextureFormat format;
+    WGPUFlags usage;
+    uint32_t width;
+    uint32_t height;
+    size_t viewFormatCount;
+    const WGPUTextureFormat *viewFormats;
+    WGPUCompositeAlphaMode alphaMode;
+    WGPUPresentMode presentMode;
+} WGPUSurfaceConfiguration;
+
+typedef enum WGPUSurfaceGetCurrentTextureStatus {
+    WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal = 1,
+    WGPUSurfaceGetCurrentTextureStatus_Error = 5
+} WGPUSurfaceGetCurrentTextureStatus;
+
+typedef struct WGPUSurfaceTexture {
+    const WGPUChainedStruct *nextInChain;
+    WGPUTexture texture;
+    WGPUSurfaceGetCurrentTextureStatus status;
+} WGPUSurfaceTexture;
+
+typedef struct WGPUShaderSourceWGSL {
+    WGPUChainedStruct chain;   /* chain.sType = WGPUSType_ShaderSourceWGSL */
+    WGPUStringView code;
+} WGPUShaderSourceWGSL;
+
+typedef struct WGPUShaderModuleDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+} WGPUShaderModuleDescriptor;
+
+typedef struct WGPUTextureViewDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+} WGPUTextureViewDescriptor;
+
+typedef struct WGPUBlendState WGPUBlendState;
+typedef struct WGPUConstantEntry WGPUConstantEntry;
+typedef struct WGPUVertexBufferLayout WGPUVertexBufferLayout;
+
+typedef struct WGPUColorTargetState {
+    const WGPUChainedStruct *nextInChain;
+    WGPUTextureFormat format;
+    const WGPUBlendState *blend;
+    WGPUFlags writeMask;
+} WGPUColorTargetState;
+
+typedef struct WGPUVertexState {
+    const WGPUChainedStruct *nextInChain;
+    WGPUShaderModule module;
+    WGPUStringView entryPoint;
+    size_t constantCount;
+    const WGPUConstantEntry *constants;
+    size_t bufferCount;
+    const WGPUVertexBufferLayout *buffers;
+} WGPUVertexState;
+
+typedef struct WGPUFragmentState {
+    const WGPUChainedStruct *nextInChain;
+    WGPUShaderModule module;
+    WGPUStringView entryPoint;
+    size_t constantCount;
+    const WGPUConstantEntry *constants;
+    size_t targetCount;
+    const WGPUColorTargetState *targets;
+} WGPUFragmentState;
+
+typedef struct WGPUPrimitiveState {
+    const WGPUChainedStruct *nextInChain;
+    WGPUPrimitiveTopology topology;
+    WGPUIndexFormat stripIndexFormat;
+    WGPUFrontFace frontFace;
+    WGPUCullMode cullMode;
+} WGPUPrimitiveState;
+
+typedef struct WGPUMultisampleState {
+    const WGPUChainedStruct *nextInChain;
+    uint32_t count;
+    uint32_t mask;
+    WGPUBool alphaToCoverageEnabled;
+} WGPUMultisampleState;
+
+typedef struct WGPUDepthStencilState WGPUDepthStencilState;
+
+typedef struct WGPURenderPipelineDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUPipelineLayout layout;
+    WGPUVertexState vertex;
+    WGPUPrimitiveState primitive;
+    const WGPUDepthStencilState *depthStencil;
+    WGPUMultisampleState multisample;
+    const WGPUFragmentState *fragment;
+} WGPURenderPipelineDescriptor;
+
+typedef struct WGPUCommandEncoderDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+} WGPUCommandEncoderDescriptor;
+
+typedef struct WGPURenderPassDepthStencilAttachment WGPURenderPassDepthStencilAttachment;
+
+typedef struct WGPURenderPassColorAttachment {
+    const WGPUChainedStruct *nextInChain;
+    WGPUTextureView view;
+    uint32_t depthSlice;
+    WGPUTextureView resolveTarget;
+    WGPULoadOp loadOp;
+    WGPUStoreOp storeOp;
+    WGPUColor clearValue;
+} WGPURenderPassColorAttachment;
+
+typedef struct WGPURenderPassDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    size_t colorAttachmentCount;
+    const WGPURenderPassColorAttachment *colorAttachments;
+    const WGPURenderPassDepthStencilAttachment *depthStencilAttachment;
+} WGPURenderPassDescriptor;
+
+typedef struct WGPUCommandBufferDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+} WGPUCommandBufferDescriptor;
+
+/* ---- Functions ---- */
+WGPUInstance wgpuCreateInstance(const WGPUInstanceDescriptor *descriptor);
+WGPUFuture wgpuInstanceRequestAdapter(WGPUInstance instance,
+    const WGPURequestAdapterOptions *options, WGPURequestAdapterCallbackInfo callbackInfo);
+WGPUSurface wgpuInstanceCreateSurface(WGPUInstance instance,
+    const WGPUSurfaceDescriptor *descriptor);
+WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter,
+    const WGPUDeviceDescriptor *descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+WGPUQueue wgpuDeviceGetQueue(WGPUDevice device);
+
+WGPUTextureFormat wgpuSurfaceGetPreferredFormat(WGPUSurface surface, WGPUAdapter adapter);
+void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration *config);
+void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture *surfaceTexture);
+void wgpuSurfacePresent(WGPUSurface surface);
+
+WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureViewDescriptor *descriptor);
+WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, const WGPUShaderModuleDescriptor *descriptor);
+WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPURenderPipelineDescriptor *descriptor);
+WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor);
+WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder commandEncoder, const WGPURenderPassDescriptor *descriptor);
+void wgpuRenderPassEncoderSetPipeline(WGPURenderPassEncoder renderPassEncoder, WGPURenderPipeline pipeline);
+void wgpuRenderPassEncoderDraw(WGPURenderPassEncoder renderPassEncoder, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+void wgpuRenderPassEncoderEnd(WGPURenderPassEncoder renderPassEncoder);
+WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder commandEncoder, const WGPUCommandBufferDescriptor *descriptor);
+void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuffer *commands);
+
+/* Release/reference: free or retain a host handle. */
+void wgpuInstanceRelease(WGPUInstance v);
+void wgpuAdapterRelease(WGPUAdapter v);
+void wgpuDeviceRelease(WGPUDevice v);
+void wgpuQueueRelease(WGPUQueue v);
+void wgpuSurfaceRelease(WGPUSurface v);
+void wgpuTextureRelease(WGPUTexture v);
+void wgpuTextureViewRelease(WGPUTextureView v);
+void wgpuShaderModuleRelease(WGPUShaderModule v);
+void wgpuRenderPipelineRelease(WGPURenderPipeline v);
+void wgpuCommandEncoderRelease(WGPUCommandEncoder v);
+void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder v);
+void wgpuCommandBufferRelease(WGPUCommandBuffer v);
+
+/* Frame loop (shared rAF; NO JSPI). Register a callback; it is called once per
+   animation frame. Pass NULL to stop. Works with or without SDL. */
+void wgpuSetMainLoopCallback(void (*callback)(void));
+
+  `,
   "__atexit.h": `
 #pragma once
 __require_source("__atexit.c");
@@ -20030,6 +20408,196 @@ bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
 }
 
 void __setAnimationFrameFunc(void (*callback)(void)) {
+    __sdl_set_animation_frame_func(callback);
+}
+  `,
+  "__webgpu.c": `
+#include <webgpu.h>
+
+/* Low-level host imports — primitives only (handles are i32 indices into the
+   host handle table; pointers are i32; clear color is f64). host.js never reads
+   C struct layouts: __webgpu.c flattens descriptors here. See todos/WEBGPU.md. */
+__import int  __wgpu_create_instance(void);
+__import int  __wgpu_instance_create_surface(int instance);
+__import void __wgpu_instance_request_adapter(int instance, WGPURequestAdapterCallback cb, void *ud1, void *ud2);
+__import void __wgpu_adapter_request_device(int adapter, WGPURequestDeviceCallback cb, void *ud1, void *ud2);
+__import int  __wgpu_device_get_queue(int device);
+__import int  __wgpu_surface_get_preferred_format(int surface);
+__import void __wgpu_surface_configure(int surface, int device, int format, int usage, int width, int height, int alphaMode);
+__import int  __wgpu_surface_get_current_texture(int surface);
+__import int  __wgpu_texture_create_view(int texture);
+__import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace);
+__import int  __wgpu_device_create_command_encoder(int device);
+__import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
+__import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
+__import void __wgpu_render_pass_draw(int pass, int vc, int ic, int fv, int fi);
+__import void __wgpu_render_pass_end(int pass);
+__import int  __wgpu_command_encoder_finish(int encoder);
+__import void __wgpu_queue_submit_one(int queue, int commandBuffer);
+__import void __wgpu_release(int handle);
+__import void __sdl_set_animation_frame_func(void (*callback)(void));
+
+WGPUInstance wgpuCreateInstance(const WGPUInstanceDescriptor *descriptor) {
+    (void)descriptor;
+    return (WGPUInstance)__wgpu_create_instance();
+}
+
+WGPUSurface wgpuInstanceCreateSurface(WGPUInstance instance, const WGPUSurfaceDescriptor *descriptor) {
+    (void)descriptor;
+    return (WGPUSurface)__wgpu_instance_create_surface((int)instance);
+}
+
+static unsigned long long __wgpu_future_seq = 0;
+
+WGPUFuture wgpuInstanceRequestAdapter(WGPUInstance instance,
+        const WGPURequestAdapterOptions *options, WGPURequestAdapterCallbackInfo callbackInfo) {
+    (void)options;
+    __wgpu_instance_request_adapter((int)instance, callbackInfo.callback,
+                                    callbackInfo.userdata1, callbackInfo.userdata2);
+    WGPUFuture f; f.id = ++__wgpu_future_seq; return f;
+}
+
+WGPUFuture wgpuAdapterRequestDevice(WGPUAdapter adapter,
+        const WGPUDeviceDescriptor *descriptor, WGPURequestDeviceCallbackInfo callbackInfo) {
+    (void)descriptor;
+    __wgpu_adapter_request_device((int)adapter, callbackInfo.callback,
+                                  callbackInfo.userdata1, callbackInfo.userdata2);
+    WGPUFuture f; f.id = ++__wgpu_future_seq; return f;
+}
+
+/* Trampolines invoked by host.js when the requestAdapter/requestDevice promise
+   settles. They rebuild the by-value WGPUStringView in C (the host only passes
+   primitives) and call the user's callback through its table index. */
+void __wgpu_call_adapter_cb(WGPURequestAdapterCallback cb, int status,
+        WGPUAdapter adapter, const char *msg, int msgLen, void *ud1, void *ud2) {
+    WGPUStringView sv; sv.data = msg; sv.length = (size_t)(msgLen < 0 ? 0 : msgLen);
+    if (cb) cb((WGPURequestAdapterStatus)status, adapter, sv, ud1, ud2);
+}
+__export __wgpu_call_adapter_cb = __wgpu_call_adapter_cb;
+
+void __wgpu_call_device_cb(WGPURequestDeviceCallback cb, int status,
+        WGPUDevice device, const char *msg, int msgLen, void *ud1, void *ud2) {
+    WGPUStringView sv; sv.data = msg; sv.length = (size_t)(msgLen < 0 ? 0 : msgLen);
+    if (cb) cb((WGPURequestDeviceStatus)status, device, sv, ud1, ud2);
+}
+__export __wgpu_call_device_cb = __wgpu_call_device_cb;
+
+WGPUQueue wgpuDeviceGetQueue(WGPUDevice device) {
+    return (WGPUQueue)__wgpu_device_get_queue((int)device);
+}
+
+WGPUTextureFormat wgpuSurfaceGetPreferredFormat(WGPUSurface surface, WGPUAdapter adapter) {
+    (void)adapter;
+    return (WGPUTextureFormat)__wgpu_surface_get_preferred_format((int)surface);
+}
+
+void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration *config) {
+    __wgpu_surface_configure((int)surface, (int)config->device, (int)config->format,
+        (int)config->usage, (int)config->width, (int)config->height, (int)config->alphaMode);
+}
+
+void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture *surfaceTexture) {
+    int t = __wgpu_surface_get_current_texture((int)surface);
+    surfaceTexture->nextInChain = 0;
+    surfaceTexture->texture = (WGPUTexture)t;
+    surfaceTexture->status = t ? WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal
+                               : WGPUSurfaceGetCurrentTextureStatus_Error;
+}
+
+void wgpuSurfacePresent(WGPUSurface surface) { (void)surface; /* implicit on web */ }
+
+WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureViewDescriptor *descriptor) {
+    (void)descriptor;
+    return (WGPUTextureView)__wgpu_texture_create_view((int)texture);
+}
+
+WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, const WGPUShaderModuleDescriptor *descriptor) {
+    const WGPUChainedStruct *c = descriptor->nextInChain;
+    while (c) {
+        if (c->sType == WGPUSType_ShaderSourceWGSL) {
+            const WGPUShaderSourceWGSL *w = (const WGPUShaderSourceWGSL *)c;
+            return (WGPUShaderModule)__wgpu_device_create_shader_module_wgsl(
+                (int)device, w->code.data, (int)w->code.length);
+        }
+        c = c->next;
+    }
+    return (WGPUShaderModule)0;
+}
+
+WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPURenderPipelineDescriptor *desc) {
+    int fsModule = 0, fsEntryLen = 0, fmt = 0;
+    const char *fsEntry = 0;
+    if (desc->fragment) {
+        fsModule = (int)desc->fragment->module;
+        fsEntry = desc->fragment->entryPoint.data;
+        fsEntryLen = (int)desc->fragment->entryPoint.length;
+        if (desc->fragment->targetCount > 0 && desc->fragment->targets)
+            fmt = (int)desc->fragment->targets[0].format;
+    }
+    return (WGPURenderPipeline)__wgpu_device_create_render_pipeline(
+        (int)device,
+        (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
+        fsModule, fsEntry, fsEntryLen,
+        fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace);
+}
+
+WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor) {
+    (void)descriptor;
+    return (WGPUCommandEncoder)__wgpu_device_create_command_encoder((int)device);
+}
+
+WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder commandEncoder, const WGPURenderPassDescriptor *desc) {
+    int view = 0, loadOp = 0, storeOp = 0;
+    double r = 0, g = 0, b = 0, a = 1;
+    if (desc->colorAttachmentCount > 0 && desc->colorAttachments) {
+        const WGPURenderPassColorAttachment *att = &desc->colorAttachments[0];
+        view = (int)att->view;
+        loadOp = (int)att->loadOp;
+        storeOp = (int)att->storeOp;
+        r = att->clearValue.r; g = att->clearValue.g;
+        b = att->clearValue.b; a = att->clearValue.a;
+    }
+    return (WGPURenderPassEncoder)__wgpu_command_encoder_begin_render_pass(
+        (int)commandEncoder, view, loadOp, storeOp, r, g, b, a);
+}
+
+void wgpuRenderPassEncoderSetPipeline(WGPURenderPassEncoder renderPassEncoder, WGPURenderPipeline pipeline) {
+    __wgpu_render_pass_set_pipeline((int)renderPassEncoder, (int)pipeline);
+}
+
+void wgpuRenderPassEncoderDraw(WGPURenderPassEncoder renderPassEncoder, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) {
+    __wgpu_render_pass_draw((int)renderPassEncoder, (int)vertexCount, (int)instanceCount, (int)firstVertex, (int)firstInstance);
+}
+
+void wgpuRenderPassEncoderEnd(WGPURenderPassEncoder renderPassEncoder) {
+    __wgpu_render_pass_end((int)renderPassEncoder);
+}
+
+WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder commandEncoder, const WGPUCommandBufferDescriptor *descriptor) {
+    (void)descriptor;
+    return (WGPUCommandBuffer)__wgpu_command_encoder_finish((int)commandEncoder);
+}
+
+void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuffer *commands) {
+    for (size_t i = 0; i < commandCount; i++)
+        __wgpu_queue_submit_one((int)queue, (int)commands[i]);
+}
+
+void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }
+void wgpuAdapterRelease(WGPUAdapter v) { __wgpu_release((int)v); }
+void wgpuDeviceRelease(WGPUDevice v) { __wgpu_release((int)v); }
+void wgpuQueueRelease(WGPUQueue v) { __wgpu_release((int)v); }
+void wgpuSurfaceRelease(WGPUSurface v) { __wgpu_release((int)v); }
+void wgpuTextureRelease(WGPUTexture v) { __wgpu_release((int)v); }
+void wgpuTextureViewRelease(WGPUTextureView v) { __wgpu_release((int)v); }
+void wgpuShaderModuleRelease(WGPUShaderModule v) { __wgpu_release((int)v); }
+void wgpuRenderPipelineRelease(WGPURenderPipeline v) { __wgpu_release((int)v); }
+void wgpuCommandEncoderRelease(WGPUCommandEncoder v) { __wgpu_release((int)v); }
+void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder v) { __wgpu_release((int)v); }
+void wgpuCommandBufferRelease(WGPUCommandBuffer v) { __wgpu_release((int)v); }
+
+void wgpuSetMainLoopCallback(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
 }
   `,
