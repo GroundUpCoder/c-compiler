@@ -23543,16 +23543,8 @@ var stdinNotifyResolvers = [];
 self.onmessage = function(e) {
   var msg = e.data;
   if (msg.type === 'run') doRun(msg);
-  else if (msg.type === 'keydown' || msg.type === 'keyup') {
-    if (sdlRef) sdlRef.pushKeyEvent(msg.handle, msg.eventType, msg.scancode, msg.sym);
-  } else if (msg.type === 'mousedown' || msg.type === 'mouseup') {
-    if (sdlRef) sdlRef.pushMouseButtonEvent(msg.handle, msg.eventType, msg.button, msg.x, msg.y);
-  } else if (msg.type === 'mousemove') {
-    if (sdlRef) sdlRef.pushMouseMotionEvent(msg.handle, msg.x, msg.y);
-  } else if (msg.type === 'wheel') {
-    if (sdlRef) sdlRef.pushMouseWheelEvent(msg.handle, msg.x, msg.y);
-  } else if (msg.type === 'quit') {
-    if (sdlRef) sdlRef.pushQuitEvent(1);
+  else if (msg.type === 'sdl-input') {
+    if (sdlRef) SDL_WEB.dispatch(sdlRef, msg.input);
   } else if (msg.type === 'stdin-response') {
     if (stdinResolve) { var r = stdinResolve; stdinResolve = null; r(msg.data ? new Uint8Array(msg.data) : null); }
   } else if (msg.type === 'terminal-size') {
@@ -23875,68 +23867,37 @@ window.onunhandledrejection = function(e) {
     });
   }
 
-  var sdlNamedKeysyms = {
-    'Enter':13,'Escape':27,'Backspace':8,'Tab':9,' ':32,'Delete':127
-  };
-  var sdlScancodeMap = {
-    'ArrowUp':82,'ArrowDown':81,'ArrowLeft':80,'ArrowRight':79,
-    'ShiftLeft':225,'ShiftRight':229,'ControlLeft':224,'ControlRight':228,
-    'AltLeft':226,'AltRight':230,
-    'F1':58,'F2':59,'F3':60,'F4':61,'F5':62,'F6':63,
-    'F7':64,'F8':65,'F9':66,'F10':67,'F11':68,'F12':69
-  };
-  function sdlKeysym(e) {
-    if (typeof e.key==='string'&&e.key.length===1) return e.key.charCodeAt(0);
-    if (sdlNamedKeysyms[e.key]!==undefined) return sdlNamedKeysyms[e.key];
-    return (sdlScancodeMap[e.code]||0)|0x40000000;
-  }
-  function sdlScancode(e) { return sdlScancodeMap[e.code]||0; }
-
+  // DOM→SDL input mapping lives in host.js's shared SDL_WEB bridge (in scope
+  // here — host.js is inlined above). This page only owns the listener wiring
+  // and the per-run transport (postMessage to the single worker). The c/ app
+  // shares the very same SDL_WEB.
+  function sdlLogical() { return { w: sdlCanvasW, h: sdlCanvasH }; }
   function onKeydown(e) {
     if (!worker||!hasSDL) return;
     e.preventDefault();
-    worker.postMessage({type:'keydown',handle:1,eventType:0x300,scancode:sdlScancode(e),sym:sdlKeysym(e)});
+    worker.postMessage({type:'sdl-input',input:SDL_WEB.keyMsg(e,true)});
   }
   function onKeyup(e) {
     if (!worker||!hasSDL) return;
     e.preventDefault();
-    worker.postMessage({type:'keyup',handle:1,eventType:0x301,scancode:sdlScancode(e),sym:sdlKeysym(e)});
-  }
-  function canvasCoords(e) {
-    var rect = canvas.getBoundingClientRect();
-    var cw = sdlCanvasW || canvas.width || rect.width;
-    var ch = sdlCanvasH || canvas.height || rect.height;
-    var aspect = cw / ch;
-    var rw, rh, ox, oy;
-    if (rect.width / rect.height > aspect) {
-      rh = rect.height; rw = rh * aspect; ox = (rect.width - rw) / 2; oy = 0;
-    } else {
-      rw = rect.width; rh = rw / aspect; ox = 0; oy = (rect.height - rh) / 2;
-    }
-    return {x:Math.round((e.offsetX-ox)*cw/rw), y:Math.round((e.offsetY-oy)*ch/rh)};
+    worker.postMessage({type:'sdl-input',input:SDL_WEB.keyMsg(e,false)});
   }
   function onMousedown(e) {
     if (!worker||!hasSDL) return;
-    var c=canvasCoords(e);
-    worker.postMessage({type:'mousedown',handle:1,eventType:0x401,button:e.button+1,x:c.x,y:c.y});
+    worker.postMessage({type:'sdl-input',input:SDL_WEB.mouseButtonMsg(canvas,e,true,sdlLogical())});
   }
   function onMouseup(e) {
     if (!worker||!hasSDL) return;
-    var c=canvasCoords(e);
-    worker.postMessage({type:'mouseup',handle:1,eventType:0x402,button:e.button+1,x:c.x,y:c.y});
+    worker.postMessage({type:'sdl-input',input:SDL_WEB.mouseButtonMsg(canvas,e,false,sdlLogical())});
   }
   function onMousemove(e) {
     if (!worker||!hasSDL) return;
-    var c=canvasCoords(e);
-    worker.postMessage({type:'mousemove',handle:1,x:c.x,y:c.y});
+    worker.postMessage({type:'sdl-input',input:SDL_WEB.mouseMoveMsg(canvas,e,sdlLogical())});
   }
   function onWheel(e) {
     if (!worker||!hasSDL) return;
     e.preventDefault();
-    var dy = e.deltaY;
-    if (e.deltaMode === 1) dy *= 20;
-    else if (e.deltaMode === 2) dy *= 600;
-    worker.postMessage({type:'wheel',handle:1,x:0,y:Math.round(dy)});
+    worker.postMessage({type:'sdl-input',input:SDL_WEB.wheelMsg(e)});
   }
 
   function base64ToBytes(b64) {

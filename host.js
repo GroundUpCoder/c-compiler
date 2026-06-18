@@ -4595,6 +4595,118 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
 }
 
 /**
+ * SDL_WEB — the shared DOM↔SDL input bridge.
+ *
+ * The pure (transport-free) half of the web SDL glue, factored out so the two
+ * frontends that drive the SDL backend share ONE implementation instead of
+ * keeping drifting copies:
+ *   - the compiler-emitted self-contained .html page (single worker; glue baked
+ *     into the page template + worker script), and
+ *   - netguc's `c/` app (workspace-owner worker + disposable run worker; its own
+ *     DOM capture in sdl-input.ts / GraphicalRunSheet.tsx).
+ *
+ * host.js is loaded in every context that needs this (emitted page main thread,
+ * emitted worker, c/ main thread via loadHostMedia, c/ run worker via loadHost),
+ * so this is the natural single home. It is pure: it makes NO assumption about
+ * worker topology, transfers, or message channels — each frontend keeps its own.
+ * DOM access is duck-typed and only happens inside the mappers (called in-browser
+ * only), so requiring host.js in Node stays side-effect-free.
+ *
+ * Flow: a frontend's DOM listener turns an event into a canonical descriptor
+ * (`keyMsg`/`mouseButtonMsg`/`mouseMoveMsg`/`wheelMsg`), posts it across whatever
+ * channel it uses, and the worker side feeds it into the live SDL object with
+ * `dispatch(sdl, descriptor)`. Descriptor shape:
+ *   { kind:'key'|'mousebutton'|'mousemove'|'wheel'|'quit',
+ *     eventType?, scancode?, sym?, button?, x?, y? }
+ */
+const SDL_WEB = (function () {
+  /* SDL2/SDL3 event type codes (these values are stable across SDL2 and SDL3). */
+  const KEYDOWN = 0x300, KEYUP = 0x301;
+  const MOUSEMOTION = 0x400, MOUSEBUTTONDOWN = 0x401, MOUSEBUTTONUP = 0x402, MOUSEWHEEL = 0x403;
+  const QUIT = 0x100;
+
+  const NAMED_KEYSYMS = {
+    'Enter': 13, 'Escape': 27, 'Backspace': 8, 'Tab': 9, ' ': 32, 'Delete': 127,
+  };
+  const SCANCODE_MAP = {
+    'ArrowUp': 82, 'ArrowDown': 81, 'ArrowLeft': 80, 'ArrowRight': 79,
+    'ShiftLeft': 225, 'ShiftRight': 229, 'ControlLeft': 224, 'ControlRight': 228,
+    'AltLeft': 226, 'AltRight': 230,
+    'F1': 58, 'F2': 59, 'F3': 60, 'F4': 61, 'F5': 62, 'F6': 63,
+    'F7': 64, 'F8': 65, 'F9': 66, 'F10': 67, 'F11': 68, 'F12': 69,
+  };
+
+  function keysym(e) {
+    if (typeof e.key === 'string' && e.key.length === 1) return e.key.charCodeAt(0);
+    if (NAMED_KEYSYMS[e.key] !== undefined) return NAMED_KEYSYMS[e.key];
+    return (SCANCODE_MAP[e.code] || 0) | 0x40000000;
+  }
+  function scancode(e) { return SCANCODE_MAP[e.code] || 0; }
+
+  /* Browser pixel coords → logical SDL window coords, accounting for the
+   * canvas's CSS scaling and letterboxing (object-fit: contain). `logical` is
+   * the SDL window's {w,h} (e.g. from a notifyWindow event); falls back to the
+   * canvas's own size, then its CSS box. */
+  function canvasCoords(canvas, e, logical) {
+    const rect = canvas.getBoundingClientRect();
+    const cw = (logical && logical.w) || canvas.width || rect.width;
+    const ch = (logical && logical.h) || canvas.height || rect.height;
+    const aspect = cw / ch;
+    let rw, rh, ox, oy;
+    if (rect.width / rect.height > aspect) {
+      rh = rect.height; rw = rh * aspect; ox = (rect.width - rw) / 2; oy = 0;
+    } else {
+      rw = rect.width; rh = rw / aspect; ox = 0; oy = (rect.height - rh) / 2;
+    }
+    return {
+      x: Math.round((e.offsetX - ox) * cw / rw),
+      y: Math.round((e.offsetY - oy) * ch / rh),
+    };
+  }
+
+  return {
+    KEYDOWN: KEYDOWN, KEYUP: KEYUP,
+    MOUSEMOTION: MOUSEMOTION, MOUSEBUTTONDOWN: MOUSEBUTTONDOWN,
+    MOUSEBUTTONUP: MOUSEBUTTONUP, MOUSEWHEEL: MOUSEWHEEL, QUIT: QUIT,
+    keysym: keysym,
+    scancode: scancode,
+    canvasCoords: canvasCoords,
+
+    /* DOM event → canonical descriptor */
+    keyMsg: function (e, down) {
+      return { kind: 'key', eventType: down ? KEYDOWN : KEYUP, scancode: scancode(e), sym: keysym(e) };
+    },
+    mouseButtonMsg: function (canvas, e, down, logical) {
+      const c = canvasCoords(canvas, e, logical);
+      return { kind: 'mousebutton', eventType: down ? MOUSEBUTTONDOWN : MOUSEBUTTONUP, button: e.button + 1, x: c.x, y: c.y };
+    },
+    mouseMoveMsg: function (canvas, e, logical) {
+      const c = canvasCoords(canvas, e, logical);
+      return { kind: 'mousemove', x: c.x, y: c.y };
+    },
+    wheelMsg: function (e) {
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 20;       /* lines  → ~px */
+      else if (e.deltaMode === 2) dy *= 600; /* pages  → ~px */
+      return { kind: 'wheel', x: 0, y: Math.round(dy) };
+    },
+
+    /* Worker side: feed a canonical descriptor into the live SDL object. The
+     * SDL window handle is always 1 (single-window today, both frontends). */
+    dispatch: function (sdl, m) {
+      if (!sdl || !m) return;
+      switch (m.kind) {
+        case 'key': sdl.pushKeyEvent(1, m.eventType, m.scancode, m.sym); break;
+        case 'mousebutton': sdl.pushMouseButtonEvent(1, m.eventType, m.button, m.x, m.y); break;
+        case 'mousemove': sdl.pushMouseMotionEvent(1, m.x, m.y); break;
+        case 'wheel': sdl.pushMouseWheelEvent(1, m.x, m.y); break;
+        case 'quit': sdl.pushQuitEvent(1); break;
+      }
+    },
+  };
+})();
+
+/**
  * Create a shared audio buffer for worker-based audio.
  *
  * Layout of the SharedArrayBuffer:
@@ -6570,6 +6682,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports = runModule;
   // Test exports: BLOCK_FS components
   module.exports.BLOCK_FS = BLOCK_FS;
+  module.exports.SDL_WEB = SDL_WEB;
 }
 
 // Browser global exports
@@ -6578,6 +6691,7 @@ if (typeof window !== 'undefined') {
   window.createAudioReceiver = createAudioReceiver;
   window.createSharedConsoleBuffer = createSharedConsoleBuffer;
   window.createConsoleReceiver = createConsoleReceiver;
+  window.SDL_WEB = SDL_WEB;
 }
 
 // Worker global exports
@@ -6585,4 +6699,5 @@ if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof modul
   self.runModule = runModule;
   self.createBrowserSDL = createBrowserSDL;
   self.BLOCK_FS = BLOCK_FS;
+  self.SDL_WEB = SDL_WEB;
 }
