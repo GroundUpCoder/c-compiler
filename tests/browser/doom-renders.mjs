@@ -73,35 +73,47 @@ try {
 
   // Give the engine real time to load the WAD off the filesystem backend and
   // render the title screen + attract-mode demo.
-  console.log('[test] canvas visible. Letting Doom render…');
-  await page.waitForTimeout(6000);
-
+  console.log('[test] canvas visible. Polling for a rendered Doom frame…');
   const shotPath = path.join(__dirname, SHOT);
-  const canvasBox = await page.locator('#canvas').boundingBox();
-  await page.screenshot({ path: shotPath, clip: canvasBox });
-  console.log('[test] canvas screenshot saved to', shotPath);
-
-  const stats = await page.evaluate(async (b64) => {
-    const blob = await fetch('data:image/png;base64,' + b64).then(r => r.blob());
-    const img = new Image();
-    img.src = window.URL.createObjectURL(blob);
-    await img.decode();
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth; c.height = img.naturalHeight;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const data = ctx.getImageData(0, 0, c.width, c.height).data;
-    let nonBlack = 0, opaque = 0, total = 0;
-    const sample = new Set();
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
-      total++;
-      if (a === 255) opaque++;
-      if (r !== 0 || g !== 0 || b !== 0) nonBlack++;
-      if (sample.size < 16) sample.add(`${r},${g},${b}`);
+  // page.screenshot of a worker-rendered WebGPU canvas comes out black in
+  // headless; read the canvas via main-thread drawImage (which DOES capture the
+  // transferred OffscreenCanvas) and poll until it's substantially non-black.
+  let stats = { w: 0, h: 0, total: 0, opaque: 0, nonBlack: 0, distinct: [] };
+  for (let i = 0; i < 40; i++) {
+    await page.waitForTimeout(1500);
+    stats = await page.evaluate(() => {
+      const c = document.querySelector('#canvas') || document.querySelector('canvas');
+      if (!c || !c.width) return { w: 0, h: 0, total: 0, opaque: 0, nonBlack: 0, distinct: [] };
+      const s = document.createElement('canvas');
+      s.width = c.width; s.height = c.height;
+      const ctx = s.getContext('2d');
+      ctx.drawImage(c, 0, 0);
+      const data = ctx.getImageData(0, 0, c.width, c.height).data;
+      let nonBlack = 0, opaque = 0, total = 0;
+      const sample = new Set();
+      for (let j = 0; j < data.length; j += 4) {
+        const r = data[j], g = data[j+1], b = data[j+2], a = data[j+3];
+        total++;
+        if (a === 255) opaque++;
+        if (r !== 0 || g !== 0 || b !== 0) nonBlack++;
+        if (sample.size < 16) sample.add(`${r},${g},${b}`);
+      }
+      return { w: c.width, h: c.height, total, opaque, nonBlack, distinct: [...sample] };
+    });
+    if (stats.total > 0 && stats.nonBlack > stats.total * 0.10) {
+      console.log(`[test] frame rendered after ~${((i + 1) * 1.5).toFixed(1)}s`);
+      break;
     }
-    return { w: c.width, h: c.height, total, opaque, nonBlack, distinct: [...sample] };
-  }, fs.readFileSync(shotPath).toString('base64'));
+  }
+  const dataUrl = await page.evaluate(() => {
+    const c = document.querySelector('#canvas') || document.querySelector('canvas');
+    const s = document.createElement('canvas');
+    s.width = c.width; s.height = c.height;
+    s.getContext('2d').drawImage(c, 0, 0);
+    return s.toDataURL('image/png');
+  });
+  fs.writeFileSync(shotPath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+  console.log('[test] canvas frame saved to', shotPath);
 
   console.log('[test] canvas pixel stats:', JSON.stringify(stats));
 

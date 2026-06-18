@@ -186,7 +186,14 @@ void DG_DrawFrame()
 
 void DG_SleepMs(uint32_t ms)
 {
-  SDL_Delay(ms);
+  /* No-op in the browser rAF/callback model: there is no blocking sleep here.
+     main() registers doomgeneric_Tick via emscripten_set_main_loop(...,0,1) and
+     returns; the host drives it via requestAnimationFrame (no JSPI). Doom's
+     35Hz tics are paced by real-time I_GetTime() (SDL_GetTicks), which advances
+     on its own, so the init title-melt and TryRunTics wait-loops still make
+     progress without sleeping. SDL_Delay would throw without JSPI (and a
+     blocking sleep can't yield to the browser anyway), so we never call it. */
+  (void)ms;
 }
 
 uint32_t DG_GetTicksMs()
