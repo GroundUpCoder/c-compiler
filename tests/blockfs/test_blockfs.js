@@ -1259,6 +1259,97 @@ test('write bumps both mtime and ctime, not btime', function () {
 });
 
 // ---------------------------------------------------------------
+// Symbolic links (real, followable — added 2026-06)
+// ---------------------------------------------------------------
+
+var S_IFMT_T = 0o170000, S_IFLNK_T = 0o120000, S_IFREG_T = 0o100000;
+function mkfile(fs, path, text) {
+  var fd = fs.open(path, 0x40 | 0x200 | 1, 0o644);  // O_CREAT|O_TRUNC|O_WRONLY
+  if (text && text.length) fs.write(fd, encode(text), text.length);
+  fs.close(fd);
+}
+function readlinkStr(fs, path) {
+  var buf = new Uint8Array(512);
+  var n = fs.readlink(path, buf, buf.length);
+  return (typeof n === 'number' && n >= 0) ? decode(buf.subarray(0, n)) : null;
+}
+
+test('symlink: lstat reports a link, stat follows to the target', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/target.txt', 'payload');
+  assertEq(r.fs.symlink('/target.txt', '/link'), 0, 'symlink ok');
+  assertEq(r.fs.lstat('/link').mode & S_IFMT_T, S_IFLNK_T, 'lstat: link type');
+  var st = r.fs.stat('/link');
+  assertEq(st.mode & S_IFMT_T, S_IFREG_T, 'stat: follows to a regular file');
+  assertEq(st.size, 7, 'stat reports the target size');
+});
+
+test('symlink: open/read follows the link to target content', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/t.txt', 'hello');
+  r.fs.symlink('/t.txt', '/l');
+  var fd = r.fs.open('/l', 0, 0);
+  assert(fd >= 3, 'open through link');
+  var buf = new Uint8Array(5); r.fs.read(fd, buf, 5); r.fs.close(fd);
+  assertEq(decode(buf), 'hello', 'read through symlink');
+});
+
+test('readlink returns the target; EINVAL on a non-symlink', function () {
+  var r = makeFS();
+  r.fs.symlink('/some/where', '/lnk');
+  assertEq(readlinkStr(r.fs, '/lnk'), '/some/where', 'readlink target');
+  mkfile(r.fs, '/plain', 'x');
+  assertEq(r.fs.readlink('/plain', new Uint8Array(16), 16), null, 'readlink non-link fails');
+  assertEq(r.fs._lastError, 'EINVAL', 'EINVAL set for a non-symlink');
+});
+
+test('a symlink in an intermediate path component is followed', function () {
+  var r = makeFS();
+  r.fs.mkdir('/real', 0o755);
+  mkfile(r.fs, '/real/f.txt', 'xy');
+  r.fs.symlink('/real', '/alias');              // directory symlink
+  var st = r.fs.stat('/alias/f.txt');
+  assert(st && st.size === 2, 'resolved through the dir symlink');
+});
+
+test('a relative symlink target resolves against the link directory', function () {
+  var r = makeFS();
+  r.fs.mkdir('/d', 0o755);
+  mkfile(r.fs, '/d/real.txt', 'zzz');
+  r.fs.symlink('real.txt', '/d/rel');           // relative target
+  var st = r.fs.stat('/d/rel');
+  assert(st && st.size === 3, 'relative target resolved in /d');
+});
+
+test('a symlink loop is ELOOP, not a hang', function () {
+  var r = makeFS();
+  r.fs.symlink('/b', '/a');
+  r.fs.symlink('/a', '/b');
+  assertEq(r.fs.stat('/a'), null, 'loop returns null');
+  assertEq(r.fs._lastError, 'ELOOP', 'ELOOP set');
+});
+
+test('unlink removes the symlink, not its target', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/keep.txt', 'k');
+  r.fs.symlink('/keep.txt', '/l');
+  assertEq(r.fs.unlink('/l'), 0, 'unlink the link');
+  assertEq(r.fs.lstat('/l'), null, 'link entry gone');
+  var st = r.fs.stat('/keep.txt');
+  assert(st && st.size === 1, 'target survives');
+});
+
+test('rename moves the symlink itself (not its target)', function () {
+  var r = makeFS();
+  mkfile(r.fs, '/tgt', 't');
+  r.fs.symlink('/tgt', '/a');
+  assertEq(r.fs.rename('/a', '/b'), 0, 'rename link');
+  assertEq(r.fs.lstat('/a'), null, 'old name gone');
+  assertEq(r.fs.lstat('/b').mode & S_IFMT_T, S_IFLNK_T, 'new name is the link');
+  assertEq(readlinkStr(r.fs, '/b'), '/tgt', 'target preserved across rename');
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- BlockFS Tests ---');
 console.log('Passed: ' + passed);

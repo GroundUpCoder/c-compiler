@@ -890,6 +890,8 @@ var BLOCK_FS = (function () {
   var S_IFDIR = 0o040000;
   var S_IFCHR = 0o020000;
   var S_IFREG = 0o100000;
+  var S_IFLNK = 0o120000;
+  var SYMLOOP_MAX = 40;     // symlink-following hop cap → ELOOP
   var DEFAULT_DIR_MODE = 0o40755;
   var DEFAULT_FILE_MODE = 0o100644;
 
@@ -2307,7 +2309,16 @@ var BLOCK_FS = (function () {
   };
 
   // Get the inode for a path. Returns { inoId, ino } or null.
-  BlockFS.prototype._walkPath = function (path) {
+  // Walk a path to its inode, following symbolic links along the way. With
+  // noFollowFinal=true the LAST component is not followed (for lstat/readlink/
+  // unlink/rename, which act on the link itself). A symlink component is
+  // resolved by splicing its target into the path and restarting from root,
+  // bounded by SYMLOOP_MAX hops (→ ELOOP). Note: '..' is collapsed lexically by
+  // _resolvePath before the walk (logical, not physical — like realpath sans -P).
+  BlockFS.prototype._walkPath = function (path, noFollowFinal) {
+    return this._walkHops(path, !!noFollowFinal, 0);
+  };
+  BlockFS.prototype._walkHops = function (path, noFollowFinal, hops) {
     var resolved = this._resolvePath(path);
     if (resolved === '/') {
       var ri = this._inodes.read(this._rootIno);
@@ -2322,7 +2333,24 @@ var BLOCK_FS = (function () {
       var found = dirLookup(this._s, dirIno.extentOffset,
         dirIno.dataSize, parts[i]);
       if (!found) return null;
-      inoId = found.inodeId;
+      var childId = found.inodeId;
+      var childIno = this._inodes.read(childId);
+      if (!childIno) return null;
+      var isLast = (i === parts.length - 1);
+      if ((childIno.mode & S_IFMT) === S_IFLNK && !(isLast && noFollowFinal)) {
+        if (hops >= SYMLOOP_MAX) return this._setErr('ELOOP');
+        var tlen = childIno.dataSize;
+        var target = (childIno.extentOffset && tlen > 0)
+          ? decodeStr(this._s.getBytes(childIno.extentOffset, tlen)) : '';
+        if (!target) return null;                 // empty/dangling target
+        var dirPath = '/' + parts.slice(0, i).join('/');
+        var rest = parts.slice(i + 1).join('/');
+        var next = target.charAt(0) === '/'
+          ? target + (rest ? '/' + rest : '')
+          : (dirPath === '/' ? '' : dirPath) + '/' + target + (rest ? '/' + rest : '');
+        return this._walkHops(next, noFollowFinal, hops + 1);
+      }
+      inoId = childId;
     }
     var ino = this._inodes.read(inoId);
     return ino ? { inoId: inoId, ino: ino } : null;
@@ -2802,7 +2830,7 @@ var BLOCK_FS = (function () {
 
   BlockFS.prototype.unlink = function (path) {
     var resolved = this._resolvePath(path);
-    var w = this._walkPath(resolved);
+    var w = this._walkPath(resolved, true);   // remove the link itself, not its target
     if (!w) return this._setErr('ENOENT');
     if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EPERM');
 
@@ -2837,7 +2865,7 @@ var BLOCK_FS = (function () {
     var newResolved = this._resolvePath(newPath);
     if (oldResolved === newResolved) return 0;
 
-    var oldW = this._walkPath(oldResolved);
+    var oldW = this._walkPath(oldResolved, true);   // rename the link itself, not its target
     if (!oldW) return this._setErr('ENOENT');
 
     // Remove old directory entry
@@ -2852,8 +2880,8 @@ var BLOCK_FS = (function () {
     oldPW.ino.nlink--;
     this._inodes.write(oldPW.inoId, oldPW.ino);
 
-    // If target exists, remove it first
-    var newW = this._walkPath(newResolved);
+    // If target exists, remove it first (the name itself, not a link's target)
+    var newW = this._walkPath(newResolved, true);
     if (newW) {
       if ((newW.ino.mode & S_IFMT) === S_IFDIR) {
         if (newW.ino.extentOffset && newW.ino.dataSize > 0) {
@@ -2927,12 +2955,11 @@ var BLOCK_FS = (function () {
     return 0;
   };
 
-  BlockFS.prototype.stat = function (path) {
-    var w = this._walkPath(this._resolvePath(path));
-    if (!w) return this._setErr('ENOENT');
-    // Native unit -> whole seconds + sub-second nanoseconds. v3 stores seconds
-    // (nsec always 0); v4 stores ms (nsec = ms-remainder * 1e6), which is what
-    // lets build tools distinguish writes within the same second.
+  // Build the stat struct from a walk result. Native unit -> whole seconds +
+  // sub-second nanoseconds. v3 stores seconds (nsec always 0); v4 stores ms
+  // (nsec = ms-remainder * 1e6), which lets build tools distinguish writes
+  // within the same second.
+  BlockFS.prototype._statOf = function (w) {
     var sc = this._fmt.timeScale, ns = 1e9 / sc;
     var i = w.ino;
     return {
@@ -2944,9 +2971,16 @@ var BLOCK_FS = (function () {
       nlink: i.nlink, rdev: i.rdev || 0, uid: 0, gid: 0
     };
   };
+  BlockFS.prototype.stat = function (path) {
+    var w = this._walkPath(this._resolvePath(path));        // follows symlinks
+    if (!w) return this._lastError === 'ELOOP' ? null : this._setErr('ENOENT');
+    return this._statOf(w);
+  };
 
   BlockFS.prototype.lstat = function (path) {
-    return this.stat(path); // no symlinks
+    var w = this._walkPath(this._resolvePath(path), true);  // the link itself
+    if (!w) return this._lastError === 'ELOOP' ? null : this._setErr('ENOENT');
+    return this._statOf(w);
   };
 
   BlockFS.prototype.fstat = function (fd) {
@@ -3293,7 +3327,7 @@ var BLOCK_FS = (function () {
   // Stores the target path as the symlink inode's data.
   BlockFS.prototype.symlink = function (target, linkPath) {
     var linkResolved = this._resolvePath(linkPath);
-    if (this._walkPath(linkResolved)) return this._setErr('EEXIST');
+    if (this._walkPath(linkResolved, true)) return this._setErr('EEXIST');
 
     var parentPath = linkResolved.substring(0, linkResolved.lastIndexOf('/')) || '/';
     var linkName = linkResolved.substring(linkResolved.lastIndexOf('/') + 1);
@@ -3301,7 +3335,7 @@ var BLOCK_FS = (function () {
     if (!pw) return this._setErr('ENOENT');
     if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
 
-    var inoId = this._allocInode(S_IFREG | 0o777);
+    var inoId = this._allocInode(S_IFLNK | 0o777);
     if (inoId === null) return -1;
 
     var targetBytes = encodeStr(target);
@@ -3332,8 +3366,9 @@ var BLOCK_FS = (function () {
 
   // readlink(path, buf, bufsize) — read symlink target into buf.
   BlockFS.prototype.readlink = function (path, buf, bufsize) {
-    var w = this._walkPath(this._resolvePath(path));
+    var w = this._walkPath(this._resolvePath(path), true);   // the link itself
     if (!w) return this._setErr('ENOENT');
+    if ((w.ino.mode & S_IFMT) !== S_IFLNK) return this._setErr('EINVAL'); // not a symlink
     if (!w.ino.extentOffset || w.ino.dataSize === 0) return 0;
     var n = Math.min(w.ino.dataSize, bufsize);
     var data = this._s.getBytes(w.ino.extentOffset, n);
@@ -4180,7 +4215,7 @@ var BLOCK_FS = (function () {
         if (ent.name === '.' || ent.name === '..') continue;
         var sp = srcDir === '/' ? '/' + ent.name : srcDir + '/' + ent.name;
         var dp = dstDir === '/' ? '/' + ent.name : dstDir + '/' + ent.name;
-        var st = src.stat(sp);
+        var st = src.lstat(sp);               // the entry itself (don't follow links)
         var type = st.mode & S_IFMT, perm = st.mode & 0o7777;
         if (type !== S_IFDIR && inoMap[st.ino] !== undefined) {
           dst.link(inoMap[st.ino], dp); // hardlink: same inode already copied
@@ -4191,9 +4226,16 @@ var BLOCK_FS = (function () {
           walk(sp, dp);
           dst.chmod(dp, perm);
           dst.utime(dp, st.atime, st.mtime); // restore dir times after populating
+        } else if (type === S_IFLNK) {
+          // Symlink: copy the target text, recreate as a real link (not a byte copy
+          // of a regular file — symlinks are a distinct inode type now).
+          var lbuf = new Uint8Array(st.size > 0 ? st.size : 1);
+          var ln = src.readlink(sp, lbuf, lbuf.length);
+          var tgt = ln > 0 ? decodeStr(lbuf.subarray(0, ln)) : '';
+          dst.symlink(tgt, dp);
+          inoMap[st.ino] = dp;
         } else {
-          // Regular file (symlinks are stored as regular files whose content is
-          // the target, so a byte copy migrates them correctly too).
+          // Regular file.
           var data = new Uint8Array(st.size);
           if (st.size > 0) { var fr = src.open(sp, 0, 0); src.read(fr, data, st.size); src.close(fr); }
           var fw = dst.open(dp, 0x40 | 0x200 | 1, perm); // O_CREAT|O_TRUNC|O_WRONLY
