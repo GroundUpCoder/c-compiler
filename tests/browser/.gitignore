@@ -4,6 +4,7 @@ www/pak0.pak
 www/host.js
 www/doom.html
 www/doom-old.html
+www/doom-extract.html
 www/sdl-input-spike.html
 package-lock.json
 pnpm-lock.yaml
