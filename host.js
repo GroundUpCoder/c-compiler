@@ -5089,10 +5089,21 @@ const WGPU_TOPO = { 0: 'point-list', 1: 'line-list', 2: 'line-strip', 3: 'triang
 const WGPU_FRONT = { 0: 'ccw', 1: 'cw' };
 const WGPU_CULL = { 0: 'none', 1: 'front', 2: 'back' };
 const WGPU_ALPHA = { 0: 'opaque', 1: 'opaque', 2: 'premultiplied' };
-/* Vertex attribute formats — int (webgpu.h WGPUVertexFormat) -> WGSL string. */
+/* Vertex attribute formats — int (webgpu.h WGPUVertexFormat) -> WebGPU string.
+   Full set; values 1-9 historical, 10+ appended (mirror the header exactly). */
 const WGPU_VERTEX_FORMAT = {
   1: 'float32', 2: 'float32x2', 3: 'float32x3', 4: 'float32x4',
   5: 'uint32', 6: 'uint32x2', 7: 'uint32x3', 8: 'uint32x4', 9: 'unorm8x4',
+  10: 'uint8', 11: 'uint8x2', 12: 'uint8x4',
+  13: 'sint8', 14: 'sint8x2', 15: 'sint8x4',
+  16: 'unorm8', 17: 'unorm8x2', 18: 'snorm8', 19: 'snorm8x2', 20: 'snorm8x4',
+  21: 'uint16', 22: 'uint16x2', 23: 'uint16x4',
+  24: 'sint16', 25: 'sint16x2', 26: 'sint16x4',
+  27: 'unorm16', 28: 'unorm16x2', 29: 'unorm16x4',
+  30: 'snorm16', 31: 'snorm16x2', 32: 'snorm16x4',
+  33: 'float16', 34: 'float16x2', 35: 'float16x4',
+  36: 'sint32', 37: 'sint32x2', 38: 'sint32x3', 39: 'sint32x4',
+  40: 'unorm10-10-10-2', 41: 'unorm8x4-bgra',
 };
 const WGPU_STEP_MODE = { 0: 'vertex', 1: 'instance' };
 /* Buffer binding type — int (WGPUBufferBindingType) -> WGSL/JS string. */

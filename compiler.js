@@ -17527,17 +17527,54 @@ typedef enum WGPUPresentMode {
 } WGPUPresentMode;
 
 /* Vertex attribute formats. Values are self-consistent header<->host (the host
-   maps these ints to WGSL format strings); add more as samples need them. */
+   maps these ints to WGSL format strings). Values 1-9 are historical (kept for
+   compatibility); 10+ append the rest of the WebGPU set. The NAME is the
+   contract — these ints are NOT the canonical Dawn webgpu.h numbers. Full
+   coverage: every WGPUVertexFormat the spec defines is mapped host-side. */
 typedef enum WGPUVertexFormat {
-    WGPUVertexFormat_Float32   = 1,
-    WGPUVertexFormat_Float32x2 = 2,
-    WGPUVertexFormat_Float32x3 = 3,
-    WGPUVertexFormat_Float32x4 = 4,
-    WGPUVertexFormat_Uint32    = 5,
-    WGPUVertexFormat_Uint32x2  = 6,
-    WGPUVertexFormat_Uint32x3  = 7,
-    WGPUVertexFormat_Uint32x4  = 8,
-    WGPUVertexFormat_Unorm8x4  = 9
+    WGPUVertexFormat_Undefined  = 0,
+    WGPUVertexFormat_Float32    = 1,
+    WGPUVertexFormat_Float32x2  = 2,
+    WGPUVertexFormat_Float32x3  = 3,
+    WGPUVertexFormat_Float32x4  = 4,
+    WGPUVertexFormat_Uint32     = 5,
+    WGPUVertexFormat_Uint32x2   = 6,
+    WGPUVertexFormat_Uint32x3   = 7,
+    WGPUVertexFormat_Uint32x4   = 8,
+    WGPUVertexFormat_Unorm8x4   = 9,
+    /* --- appended: rest of the WebGPU vertex format set --- */
+    WGPUVertexFormat_Uint8      = 10,
+    WGPUVertexFormat_Uint8x2    = 11,
+    WGPUVertexFormat_Uint8x4    = 12,
+    WGPUVertexFormat_Sint8      = 13,
+    WGPUVertexFormat_Sint8x2    = 14,
+    WGPUVertexFormat_Sint8x4    = 15,
+    WGPUVertexFormat_Unorm8     = 16,
+    WGPUVertexFormat_Unorm8x2   = 17,
+    WGPUVertexFormat_Snorm8     = 18,
+    WGPUVertexFormat_Snorm8x2   = 19,
+    WGPUVertexFormat_Snorm8x4   = 20,
+    WGPUVertexFormat_Uint16     = 21,
+    WGPUVertexFormat_Uint16x2   = 22,
+    WGPUVertexFormat_Uint16x4   = 23,
+    WGPUVertexFormat_Sint16     = 24,
+    WGPUVertexFormat_Sint16x2   = 25,
+    WGPUVertexFormat_Sint16x4   = 26,
+    WGPUVertexFormat_Unorm16    = 27,
+    WGPUVertexFormat_Unorm16x2  = 28,
+    WGPUVertexFormat_Unorm16x4  = 29,
+    WGPUVertexFormat_Snorm16    = 30,
+    WGPUVertexFormat_Snorm16x2  = 31,
+    WGPUVertexFormat_Snorm16x4  = 32,
+    WGPUVertexFormat_Float16    = 33,
+    WGPUVertexFormat_Float16x2  = 34,
+    WGPUVertexFormat_Float16x4  = 35,
+    WGPUVertexFormat_Sint32     = 36,
+    WGPUVertexFormat_Sint32x2   = 37,
+    WGPUVertexFormat_Sint32x3   = 38,
+    WGPUVertexFormat_Sint32x4   = 39,
+    WGPUVertexFormat_Unorm10_10_10_2 = 40,
+    WGPUVertexFormat_Unorm8x4BGRA    = 41
 } WGPUVertexFormat;
 
 typedef enum WGPUVertexStepMode {
