@@ -7,7 +7,7 @@
 //
 // One-time: sudo safaridriver --enable  (mac-mini only; needs a display).
 // Run: node webgpu-safari.mjs
-import { Builder, By } from 'selenium-webdriver';
+import { Builder } from 'selenium-webdriver';
 import 'selenium-webdriver/safari.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -63,10 +63,13 @@ try {
   step('navigating …');
   await driver.get(URL);
   step('navigated; looking for overlay …');
-  // Click the start overlay (user gesture).
+  // Click the start overlay (user gesture). JS-click, not WebDriver .click():
+  // on current Safari a native click doesn't dispatch to the handler so the
+  // program never starts (canvas stays at the default 300×150, no output).
   let clicked = false;
   for (let i = 0; i < 40; i++) {
-    try { const ov = await driver.findElement(By.id('overlay')); if (await ov.isDisplayed()) { await ov.click(); clicked = true; break; } } catch {}
+    const ok = await driver.executeScript(`const o=document.getElementById('overlay');if(o){o.click();return true;}return false;`).catch(() => false);
+    if (ok) { clicked = true; break; }
     await driver.sleep(250);
   }
   step('overlay clicked=' + clicked + '; sampling …');

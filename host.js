@@ -4484,6 +4484,9 @@ function sdlDelayUnsupported() {
 function createNullSDL() {
   let animationFrameFunc = null;
   let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
+  const nullTextures = [];   // 1-based; tracks per-texture state observable headless
+                             // (scale mode), so the C↔host contract is testable
+                             // without a GPU. Same fail-loud rules as createBrowserSDL.
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     [ENV_KEY]: {
@@ -4495,13 +4498,19 @@ function createNullSDL() {
       __sdl_update_window_surface: function () { return 0; },
       __sdl_create_renderer: function () { return 1; },
       __sdl_destroy_renderer: function () {},
-      __sdl_create_texture: function () { return 1; },
-      __sdl_destroy_texture: function () {},
+      __sdl_create_texture: function () { nullTextures.push({ scaleMode: 1 }); return nullTextures.length; },  // SDL3 default LINEAR
+      __sdl_destroy_texture: function (t) { if (t > 0 && nullTextures[t - 1]) nullTextures[t - 1] = null; },
       __sdl_update_texture: function () {},
       __sdl_set_texture_color_mod: function () {},
       __sdl_set_texture_alpha_mod: function () {},
       __sdl_set_texture_blend_mode: function () {},
-      __sdl_set_texture_scale_mode: function () {},
+      __sdl_set_texture_scale_mode: function (t, mode) {
+        if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
+        const tx = nullTextures[t - 1]; if (tx) tx.scaleMode = mode;
+      },
+      __sdl_get_texture_scale_mode: function (t) {
+        const tx = nullTextures[t - 1]; return tx ? tx.scaleMode : 1;
+      },
       __sdl_set_draw_color: function () {},
       __sdl_set_draw_blend_mode: function () {},
       __sdl_render_clear: function () {},
@@ -4794,6 +4803,13 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     if (!t.view) {
       t.gpuTex = dev.createTexture({ size: { width: t.w, height: t.h }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
       t.view = t.gpuTex.createView();
+    }
+    // Rebuild the bind group whenever it's been invalidated — first materialize,
+    // or after SDL_SetTextureScaleMode nulled it to swap samplers. Gating this on
+    // !t.view (as before) left a scale-mode change AFTER the texture's first
+    // present returning a null bind group: view was already truthy so the block
+    // never re-ran. SDL lets a program change scale mode at any time.
+    if (!t.bindGroup) {
       const sampler = t.scaleMode === 0 ? rdrSamplerNearest : rdrSamplerLinear;
       t.bindGroup = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: sampler }, { binding: 1, resource: t.view }] });
     }
@@ -5003,6 +5019,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (!tx) return;
         if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
         if (tx.scaleMode !== mode) { tx.scaleMode = mode; tx.bindGroup = null; }   // recreate bind group with the right sampler
+      },
+      __sdl_get_texture_scale_mode: function (t) {
+        const tx = sdlTextures[t - 1];
+        return tx ? tx.scaleMode : 1;   // SDL3 default LINEAR for an unknown handle
       },
       __sdl_set_draw_color: function (r, rr, gg, bb, aa) {
         const rd = sdlRenderers[r - 1]; if (rd) rd.drawColor = [rr, gg, bb, aa];

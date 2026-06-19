@@ -99,11 +99,24 @@ Fixed a batch of stray-from-SDL behaviors found in an audit (all tested, headles
 - **Full scancode map** — letters/digits/punct/keypad/nav now carry the right
   `SDL_Scancode` (only arrows/mods/F-keys were mapped → WASD reported scancode 0).
 - **Mouse wheel sign** corrected to SDL's convention (+y = away/up) + horizontal.
-- **SDL_SetTextureScaleMode** (nearest/linear per texture) — two samplers, one
-  per filter mode; `texBindGroup()` picks the right one based on `t.scaleMode`;
-  NEAREST preserves pixel-art crispness at scale, LINEAR blurs. SDL3-default
-  LINEAR honored. Unsupported modes fail loud. Test: 8×8 checkerboard rendered
-  at 25× in both modes; Playwright pixel assertions at texel centers + boundaries.
+- **SDL_SetTextureScaleMode / SDL_GetTextureScaleMode** (nearest/linear per
+  texture) — two samplers, one per filter mode; `texBindGroup()` picks the right
+  one based on `t.scaleMode`; NEAREST preserves pixel-art crispness at scale,
+  LINEAR blurs. SDL3-default LINEAR honored. Unsupported modes fail loud. The
+  getter round-trips the mode (real SDL3 `bool` + out-param signature).
+  Test: 8×8 checkerboard at 25× in both modes (Playwright pixel assertions at
+  texel centers + boundaries); a headless unit test for the get/set round-trip.
+  **Fixed 2026-06-20 (follow-up):** changing the scale mode AFTER a texture's
+  first present was a no-op that then crashed — `texBindGroup()` rebuilt the bind
+  group only when `!t.view`, but the setter only nulled `t.bindGroup`, so a
+  post-present mode change returned a null bind group (`No bind group set at group
+  index 0`). Now the bind group rebuilds whenever it's null. Regression-tested in
+  Chromium AND on real Safari (safaridriver) with a texture that toggles
+  LINEAR↔NEAREST every ~1s at runtime; the test gates on the red texel staying
+  red so a "texture stopped drawing" regression can't masquerade as a pass.
+  (Also fixed the Safari test harness: current Safari needs a JS-click, not a
+  WebDriver native click, to start an emitted page — `webgpu-safari.mjs` was
+  silently broken by this too and is now fixed.)
 
 ## Known strays still open (audited, not yet fixed)
 
