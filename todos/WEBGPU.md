@@ -1,8 +1,10 @@
 # WebGPU for the C compiler (webgpu.h)
 
-Status: **Tiers 0–3 landed (triangle → textured quad → SDL bridge → compute /
-readback / blend / depth / stencil / error scopes). Now driving to FULL spec
-coverage — see "Path to full spec coverage (2026-06-19)" at the bottom.**
+Status: **Tiers 0–3 + conformance pass A1–A9 landed. Direction (2026-06-19):
+finish the conformance pass (A10–A15) on the surface we already expose, PAUSE
+further surface expansion (Phase B), and make SDL3 the next major feature (see
+`todos/SDL3.md`). Unifying SDL_Renderer onto `webgpu.h` is deferred until JSPI
+reaches iOS. See "Progress + revised direction" below.**
 Decision date: 2026-06-18. Full-coverage plan: 2026-06-19.
 
 ## What and why
@@ -209,13 +211,77 @@ For every feature in the standard `webgpu.h`:
   the runtime supports them, and **logged as skipped** otherwise — never
   silently passed.
 
-## Progress (updated 2026-06-19)
+## Progress + revised direction (updated 2026-06-19)
 
 **Landed (each on `main` with a `tests/browser/webgpu-*` pixel/readback test):**
 A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅.
-**Remaining Phase A:** A10–A15. **Phase B:** B16–B27 (none started).
+
+**Direction decision (2026-06-19):** stop *widening* the WebGPU surface for now;
+make the surface we already expose as **conformant** as possible instead.
+
+- **Immediate work = finish Phase A (A10–A15).** These are not new API — they
+  fix *silent drops on already-declared* functions/structs (MRT + write masks,
+  multiple color attachments, pipeline constants, full sampler, depth bias /
+  read-only / stripIndex, surface viewFormats/presentMode). I.e. conformance of
+  the declared surface, per the "behaves correctly for the surface we implement"
+  goal.
+- **Phase B (B16–B27) = PAUSED.** Adding brand-new API surface
+  (viewport/scissor, copies, query sets, render bundles, indirect, …) is
+  deferred — revisit after the conformance pass and after SDL3 (below).
+- **Next major feature after conformance = SDL3** (see `todos/SDL3.md`), not more
+  raw WebGPU.
+
 Vendored into `netguc/c` on disk (compiler `b8bdbc4`); netguc e2e + vendored-bump
 commit deferred until port 8006 is free (dev server running).
+
+## DEFERRED: unify SDL_Renderer onto the `webgpu.h` binding — wait for JSPI
+
+Considered (2026-06-19): reimplement the SDL backend's renderer/blitter (today a
+~550-line hand-written JS WebGPU path in `createBrowserSDL`, with its own
+`createCanvasGPU` device acquisition, pipelines, and readback) **in C on top of
+`webgpu.h`**, so there is ONE WebGPU code path that both raw and SDL programs
+exercise.
+
+**Verdict without JSPI: not a clear win — deferred.** Complexity *relocates*
+JS→C rather than dropping (~250–350 JS lines deleted, comparable C added), and
+the one hard part gets *harder* in C: `SDL_CreateRenderer`/`RenderPresent` are
+**synchronous**, WebGPU device acquisition is **async**, and with **no JSPI** C
+cannot block — so the C glue would have to hand-roll the async "device-ready?"
+state machine + frame buffering that JS today expresses cleanly with promises
+(`createCanvasGPU.whenReady`). Net ~neutral LOC + real regression risk on a path
+that already works and is already 100% GPU-backed.
+
+**With JSPI it flips to a clear win.** `SDL_CreateRenderer` could *suspend* on
+`wgpuAdapterRequestDevice` and return a ready renderer synchronously — no
+state machine, near-direct port of upstream `sdl3webgpu`/SDL_Renderer, and the
+JS path deletes cleanly. JSPI ships in Chrome; **iOS Safari is the holdout**
+(see memory `c-sdl-ios-jspi-blocking-loop`). **Revisit when JSPI lands on iOS.**
+(NB: the SDL path is already on the GPU — this is code-path *unification*, not a
+capability change.)
+
+## Performance characteristics (as implemented, 2026-06-19)
+
+Audited the per-frame hot paths.
+
+- **Raw `webgpu.h` binding: no per-frame GPU resource allocation.** Buffers /
+  textures / pipelines / bind groups are created once at setup. Per frame a
+  program creates only the transient swapchain texture + view + command encoder
+  + render pass + command buffer — required by WebGPU — and on our side those are
+  handle-table slots **reused via a freelist** (O(1), no array growth, by
+  design). `writeBuffer`/`writeTexture` copy in place via a `Uint8Array` *view*
+  over wasm memory (no alloc). Per-call cost is O(1) / O(descriptor size).
+- **The one genuinely expensive per-frame path is the SDL_Renderer readback**
+  (`rdrEncodeReadback`/`rdrStartReadbackMap`, `host.js:~4775`), used for
+  `getLastFrame()` snapshots: after every present it does a `copyTextureToBuffer`
+  + `mapAsync` (GPU buffer reused, one-in-flight guard — good) **but** a
+  double-nested **O(W·H) per-pixel JS loop** that allocates a fresh
+  `new Uint8Array(W*H*4)` every frame to de-pad 256B-aligned rows and swap B/R.
+  **Fix:** do BGRA→RGBA + unpad on the GPU (small blit/compute), or row-wise
+  `.set` when no swizzle is needed (rows are already contiguous).
+- **Minor:** `Array.from(new Uint32Array(...))` in dynamic-offset `SetBindGroup`
+  allocates a JS array per call (per draw) — pass the typed array directly or
+  reuse a scratch. `beginRenderPass` rebuilds a small descriptor object each
+  frame (cheap; unavoidable in the stateless design).
 
 ## Phase A — fix "implemented but not to spec" (silent drops / partial coverage)
 
@@ -246,7 +312,10 @@ A14. **Depth-stencil completeness** — depthBias/SlopeScale/Clamp,
      depth/stencilReadOnly, `stripIndexFormat`.
 A15. **Surface** — viewFormats, presentMode, correct alphaMode.
 
-## Phase B — add "not implemented at all" (highest-use first)
+## Phase B — add "not implemented at all" (highest-use first) — PAUSED
+
+**Paused as of 2026-06-19** (surface expansion deferred; do the A10–A15
+conformance pass and SDL3 first). Kept here as the backlog for when it resumes.
 
 B16. **Viewport / Scissor / BlendConstant**.
 B17. **`copyBufferToTexture`, `copyTextureToTexture`, `clearBuffer`**.
