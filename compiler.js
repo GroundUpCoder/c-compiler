@@ -21319,7 +21319,7 @@ __import void __wgpu_surface_configure(int surface, int device, int format, int 
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture, int format, int dimension, int baseMip, int mipCount, int baseLayer, int layerCount, int aspect);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
-__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int blendEnabled, int colorOp, int colorSrc, int colorDst, int alphaOp, int alphaSrc, int alphaDst, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, const int *stencilPacked, int sampleCount, int sampleMask, int alphaToCoverage);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, const int *targetsPacked, int targetsLen, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, const int *stencilPacked, int sampleCount, int sampleMask, int alphaToCoverage);
 __import int  __wgpu_device_create_buffer(int device, int size, int usage, int mappedAtCreation);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
@@ -21346,7 +21346,7 @@ __import void __wgpu_compute_pass_end(int pass);
 __import void __wgpu_device_push_error_scope(int device, int filter);
 __import void __wgpu_device_pop_error_scope(int device, WGPUPopErrorScopeCallback cb, void *ud1, void *ud2);
 __import int  __wgpu_device_create_command_encoder(int device);
-__import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int resolveView, int loadOp, int storeOp, double r, double g, double b, double a, int depthView, int depthLoadOp, int depthStoreOp, double depthClearValue, int stencilLoadOp, int stencilStoreOp, int stencilClearValue);
+__import int  __wgpu_command_encoder_begin_render_pass(int encoder, const int *colorPacked, int colorLen, const double *clearPacked, int depthView, int depthLoadOp, int depthStoreOp, double depthClearValue, int stencilLoadOp, int stencilStoreOp, int stencilClearValue);
 __import void __wgpu_render_pass_set_stencil_reference(int pass, int reference);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
 __import void __wgpu_render_pass_draw(int pass, int vc, int ic, int fv, int fi);
@@ -21460,14 +21460,12 @@ WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, const WGPUShade
 }
 
 WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPURenderPipelineDescriptor *desc) {
-    int fsModule = 0, fsEntryLen = 0, fmt = 0;
+    int fsModule = 0, fsEntryLen = 0;
     const char *fsEntry = 0;
     if (desc->fragment) {
         fsModule = (int)desc->fragment->module;
         fsEntry = desc->fragment->entryPoint.data;
         fsEntryLen = (int)desc->fragment->entryPoint.length;
-        if (desc->fragment->targetCount > 0 && desc->fragment->targets)
-            fmt = (int)desc->fragment->targets[0].format;
     }
 
     /* Flatten the variable-length vertex.buffers[] (buffers -> attributes) into
@@ -21498,14 +21496,31 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         }
     }
 
-    /* Color-target blend state (target 0). NULL blend => opaque (host skips). */
-    int blendEnabled = 0, colorOp = 0, colorSrc = 0, colorDst = 0, alphaOp = 0, alphaSrc = 0, alphaDst = 0;
-    if (desc->fragment && desc->fragment->targetCount > 0 && desc->fragment->targets) {
-        const WGPUBlendState *bl = desc->fragment->targets[0].blend;
+    /* Color targets (MRT) + per-target write masks + blend, packed into ONE int
+       array (the host stays struct-ignorant; same packed-array convention as the
+       vertex layout above). Layout: [ targetCount,
+         per target: format, writeMask, blendEnabled,
+           colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst ].
+       NULL blend => blendEnabled 0 (host leaves the target unblended/opaque). */
+    static int ct[1 + 8 * 9];
+    int ctn = 0, ctcap = (int)(sizeof(ct) / sizeof(ct[0]));
+    int targetCount = (desc->fragment && desc->fragment->targets) ? (int)desc->fragment->targetCount : 0;
+    ct[ctn++] = targetCount;
+    for (int t = 0; t < targetCount; t++) {
+        const WGPUColorTargetState *T = &desc->fragment->targets[t];
+        if (ctn + 9 > ctcap) {
+            fprintf(stderr, "wgpuDeviceCreateRenderPipeline: color targets exceed packed cap (%d); raise ct[]\\n", ctcap);
+            abort();
+        }
+        ct[ctn++] = (int)T->format;
+        ct[ctn++] = (int)T->writeMask;
+        const WGPUBlendState *bl = T->blend;
         if (bl) {
-            blendEnabled = 1;
-            colorOp = (int)bl->color.operation; colorSrc = (int)bl->color.srcFactor; colorDst = (int)bl->color.dstFactor;
-            alphaOp = (int)bl->alpha.operation; alphaSrc = (int)bl->alpha.srcFactor; alphaDst = (int)bl->alpha.dstFactor;
+            ct[ctn++] = 1;
+            ct[ctn++] = (int)bl->color.operation; ct[ctn++] = (int)bl->color.srcFactor; ct[ctn++] = (int)bl->color.dstFactor;
+            ct[ctn++] = (int)bl->alpha.operation; ct[ctn++] = (int)bl->alpha.srcFactor; ct[ctn++] = (int)bl->alpha.dstFactor;
+        } else {
+            ct[ctn++] = 0; ct[ctn++] = 0; ct[ctn++] = 0; ct[ctn++] = 0; ct[ctn++] = 0; ct[ctn++] = 0; ct[ctn++] = 0;
         }
     }
 
@@ -21544,9 +21559,8 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         (int)device,
         (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
         fsModule, fsEntry, fsEntryLen,
-        fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
+        ct, ctn, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
         vb, n, (int)desc->layout,
-        blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst,
         depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPtr,
         sampleCount, sampleMask, alphaToCoverage);
 }
@@ -21557,16 +21571,27 @@ WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUC
 }
 
 WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder commandEncoder, const WGPURenderPassDescriptor *desc) {
-    int view = 0, resolveView = 0, loadOp = 0, storeOp = 0;
-    double r = 0, g = 0, b = 0, a = 1;
-    if (desc->colorAttachmentCount > 0 && desc->colorAttachments) {
-        const WGPURenderPassColorAttachment *att = &desc->colorAttachments[0];
-        view = (int)att->view;
-        resolveView = (int)att->resolveTarget;
-        loadOp = (int)att->loadOp;
-        storeOp = (int)att->storeOp;
-        r = att->clearValue.r; g = att->clearValue.g;
-        b = att->clearValue.b; a = att->clearValue.a;
+    /* Color attachments, packed (host stays struct-ignorant). Ints:
+       [ count, per attachment: view, resolveTarget, loadOp, storeOp, depthSlice ].
+       clearValue (4 doubles/attachment) rides a parallel double array, in order. */
+    static int ca[1 + 8 * 5];
+    static double cc[8 * 4];
+    int can = 0, cacap = (int)(sizeof(ca) / sizeof(ca[0])), ccn = 0;
+    int colorCount = (desc->colorAttachments) ? (int)desc->colorAttachmentCount : 0;
+    ca[can++] = colorCount;
+    for (int i = 0; i < colorCount; i++) {
+        const WGPURenderPassColorAttachment *att = &desc->colorAttachments[i];
+        if (can + 5 > cacap) {
+            fprintf(stderr, "wgpuCommandEncoderBeginRenderPass: color attachments exceed packed cap (%d); raise ca[]\\n", cacap);
+            abort();
+        }
+        ca[can++] = (int)att->view;
+        ca[can++] = (int)att->resolveTarget;
+        ca[can++] = (int)att->loadOp;
+        ca[can++] = (int)att->storeOp;
+        ca[can++] = (int)att->depthSlice;
+        cc[ccn++] = att->clearValue.r; cc[ccn++] = att->clearValue.g;
+        cc[ccn++] = att->clearValue.b; cc[ccn++] = att->clearValue.a;
     }
     int depthView = 0, depthLoadOp = 0, depthStoreOp = 0;
     double depthClearValue = 1.0;
@@ -21582,7 +21607,7 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder comma
         stencilClearValue = (int)d->stencilClearValue;
     }
     return (WGPURenderPassEncoder)__wgpu_command_encoder_begin_render_pass(
-        (int)commandEncoder, view, resolveView, loadOp, storeOp, r, g, b, a,
+        (int)commandEncoder, ca, can, cc,
         depthView, depthLoadOp, depthStoreOp, depthClearValue,
         stencilLoadOp, stencilStoreOp, stencilClearValue);
 }

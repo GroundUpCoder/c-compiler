@@ -24,6 +24,7 @@
 /* #define PE_PRINT_SECTIONS */
 
 #ifndef _WIN32
+#include <strings.h>
 #define stricmp strcasecmp
 #define strnicmp strncasecmp
 #include <sys/stat.h> /* chmod() */
@@ -704,6 +705,8 @@ static int pe_write(struct pe_info *pe)
     if (PE_DLL == pe->type)
         pe_header.filehdr.Characteristics = CHARACTERISTICS_DLL;
     pe_header.filehdr.Characteristics |= pe->s1->pe_characteristics;
+    if (pe->subsystem >= 10)
+        pe_header.filehdr.Characteristics &= ~0x0001; /* relocatable EFI image */
 
     sum = 0;
     pe_fwrite(&pe_header, sizeof pe_header, op, &sum);

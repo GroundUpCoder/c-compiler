@@ -5322,7 +5322,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked, sampleCount, sampleMask, alphaToCoverage) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, targetsPacked, targetsLen, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked, sampleCount, sampleMask, alphaToCoverage) {
         const d = get(device); if (!d) return 0;
         const desc = {
           layout: layout ? get(layout) : 'auto',
@@ -5357,25 +5357,45 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           desc.vertex.buffers = buffers;
         }
         if (fsModule) {
-          const target = { format: wgpuFormat(format, 'colorTarget.format') || preferredFormat() };
-          if (blendEnabled) {
-            target.blend = {
-              color: {
-                operation: wgpuEnumOpt(WGPU_BLEND_OP, colorOp, 'blend.color.operation', 'add'),
-                srcFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, colorSrc, 'blend.color.srcFactor'),
-                dstFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, colorDst, 'blend.color.dstFactor'),
-              },
-              alpha: {
-                operation: wgpuEnumOpt(WGPU_BLEND_OP, alphaOp, 'blend.alpha.operation', 'add'),
-                srcFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, alphaSrc, 'blend.alpha.srcFactor'),
-                dstFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, alphaDst, 'blend.alpha.dstFactor'),
-              },
-            };
+          /* Unpack the C-side packed color targets (MRT). Layout:
+             [ targetCount, per target: format, writeMask, blendEnabled,
+               colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst ].
+             writeMask is honored as-is (0 == None); the C API requires the
+             caller to set it (samples use WGPUColorWriteMask_All). */
+          const targets = [];
+          if (targetsPacked && targetsLen > 0) {
+            const a = new Int32Array(getMemory().buffer, targetsPacked, targetsLen);
+            let i = 0;
+            const tc = a[i++];
+            for (let t = 0; t < tc; t++) {
+              const fmt = a[i++], writeMask = a[i++] >>> 0, blendEnabled = a[i++];
+              const colorOp = a[i++], colorSrc = a[i++], colorDst = a[i++];
+              const alphaOp = a[i++], alphaSrc = a[i++], alphaDst = a[i++];
+              const target = {
+                format: wgpuFormat(fmt, 'colorTarget.format') || preferredFormat(),
+                writeMask: writeMask,
+              };
+              if (blendEnabled) {
+                target.blend = {
+                  color: {
+                    operation: wgpuEnumOpt(WGPU_BLEND_OP, colorOp, 'blend.color.operation', 'add'),
+                    srcFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, colorSrc, 'blend.color.srcFactor'),
+                    dstFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, colorDst, 'blend.color.dstFactor'),
+                  },
+                  alpha: {
+                    operation: wgpuEnumOpt(WGPU_BLEND_OP, alphaOp, 'blend.alpha.operation', 'add'),
+                    srcFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, alphaSrc, 'blend.alpha.srcFactor'),
+                    dstFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, alphaDst, 'blend.alpha.dstFactor'),
+                  },
+                };
+              }
+              targets.push(target);
+            }
           }
           desc.fragment = {
             module: get(fsModule),
             entryPoint: entryName(fsEntry, fsEntryLen),
-            targets: [target],
+            targets: targets,
           };
         }
         if (depthEnabled) {
@@ -5668,17 +5688,35 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
-      __wgpu_command_encoder_begin_render_pass: function (encoder, view, resolveView, loadOp, storeOp, r, g, b, a, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
-        const enc = get(encoder), v = get(view);
-        if (!enc || !v) return 0;
-        const colorAtt = {
-          view: v,
-          loadOp: wgpuEnumOpt(WGPU_LOADOP, loadOp, 'colorAttachment.loadOp', 'clear'),
-          storeOp: wgpuEnumOpt(WGPU_STOREOP, storeOp, 'colorAttachment.storeOp', 'store'),
-          clearValue: { r: r, g: g, b: b, a: a },
-        };
-        if (resolveView) colorAtt.resolveTarget = get(resolveView);   /* MSAA resolve */
-        const rp = { colorAttachments: [colorAtt] };
+      __wgpu_command_encoder_begin_render_pass: function (encoder, colorPacked, colorLen, clearPacked, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
+        const enc = get(encoder);
+        if (!enc) return 0;
+        /* Unpack the packed color attachments. Ints: [ count, per attachment:
+           view, resolveTarget, loadOp, storeOp, depthSlice ]; clearValue rides a
+           parallel Float64 array (4 doubles/attachment, in order). */
+        const colorAttachments = [];
+        if (colorPacked && colorLen > 0) {
+          const a = new Int32Array(getMemory().buffer, colorPacked, colorLen);
+          const count = a[0];
+          const cv = new Float64Array(getMemory().buffer, clearPacked >>> 0, count * 4);
+          let i = 1, c = 0;
+          for (let k = 0; k < count; k++) {
+            const view = a[i++], resolveTarget = a[i++], loadOp = a[i++], storeOp = a[i++], depthSlice = a[i++] >>> 0;
+            const colorAtt = {
+              view: get(view),
+              loadOp: wgpuEnumOpt(WGPU_LOADOP, loadOp, 'colorAttachment.loadOp', 'clear'),
+              storeOp: wgpuEnumOpt(WGPU_STOREOP, storeOp, 'colorAttachment.storeOp', 'store'),
+              clearValue: { r: cv[c], g: cv[c + 1], b: cv[c + 2], a: cv[c + 3] },
+            };
+            c += 4;
+            if (resolveTarget) colorAtt.resolveTarget = get(resolveTarget);   /* MSAA resolve */
+            /* depthSlice is only valid for 3D color attachments; 0xFFFFFFFF
+               (WGPU_DEPTH_SLICE_UNDEFINED) means unset -> omit. */
+            if (depthSlice !== 0xFFFFFFFF) colorAtt.depthSlice = depthSlice;
+            colorAttachments.push(colorAtt);
+          }
+        }
+        const rp = { colorAttachments: colorAttachments };
         if (depthView) {
           const dsa = {
             view: get(depthView),

@@ -1,0 +1,21 @@
+{
+  "bin": true,
+  "name": "tcc-x86_64-pe",
+  "description": "TCC 0.9.27 x86-64 PE cross-compiler for UEFI targets — emits PE64 executables with -Wl,-subsystem=efi support",
+  "compilerArgs": [
+    "-DONE_SOURCE=1",
+    "-DTCC_TARGET_X86_64",
+    "-DTCC_TARGET_PE",
+    "-DTCC_WASM_BUILD",
+    "-DCONFIG_TCC_PREDEFS=1",
+    "-DCONFIG_TCC_CROSSPREFIX=\"x86_64-w64-mingw32-\"",
+    "-DCONFIG_TCCDIR=\"/tcc\"",
+    "-DCONFIG_TCC_SYSINCLUDEPATHS=\"/tcc/include\"",
+    "-DCONFIG_TCC_LIBPATHS=\"/tcc/lib\"",
+    "-DCONFIG_TRIPLET=\"x86_64-w64-mingw32\"",
+    "--allow-implicit-function-decl",
+    "--allow-undefined"
+  ],
+  "includes": ["."],
+  "sources": ["tcc.c"]
+}
