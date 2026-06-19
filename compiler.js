@@ -17836,7 +17836,14 @@ typedef struct WGPUBlendState {
     WGPUBlendComponent alpha;
 } WGPUBlendState;
 
-typedef struct WGPUConstantEntry WGPUConstantEntry;
+/* Pipeline-overridable constant (WGPUConstantEntry): a WGSL override keyed by
+   its name (or numeric id as a string) set to a scalar double at pipeline
+   creation. */
+typedef struct WGPUConstantEntry {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView key;
+    double value;
+} WGPUConstantEntry;
 
 typedef struct WGPUVertexAttribute {
     WGPUVertexFormat format;
@@ -21319,7 +21326,7 @@ __import void __wgpu_surface_configure(int surface, int device, int format, int 
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture, int format, int dimension, int baseMip, int mipCount, int baseLayer, int layerCount, int aspect);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
-__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, const int *targetsPacked, int targetsLen, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, const int *stencilPacked, int sampleCount, int sampleMask, int alphaToCoverage);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, const int *targetsPacked, int targetsLen, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, const int *stencilPacked, int sampleCount, int sampleMask, int alphaToCoverage, const int *vsConstInts, int vsConstIntsLen, const double *vsConstVals, const int *fsConstInts, int fsConstIntsLen, const double *fsConstVals);
 __import int  __wgpu_device_create_buffer(int device, int size, int usage, int mappedAtCreation);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
@@ -21337,7 +21344,7 @@ __import void __wgpu_buffer_map_async(int buffer, int mode, int offset, int size
 __import void __wgpu_buffer_get_mapped_range(int buffer, int offset, int size, void *dst);
 __import void __wgpu_buffer_unmap(int buffer);
 __import void __wgpu_cmd_copy_buffer_to_buffer(int encoder, int src, int srcOffset, int dst, int dstOffset, int size);
-__import int  __wgpu_device_create_compute_pipeline(int device, int module, const char *entry, int entryLen, int layout);
+__import int  __wgpu_device_create_compute_pipeline(int device, int module, const char *entry, int entryLen, int layout, const int *constInts, int constIntsLen, const double *constVals);
 __import int  __wgpu_command_encoder_begin_compute_pass(int encoder);
 __import void __wgpu_compute_pass_set_pipeline(int pass, int pipeline);
 __import void __wgpu_compute_pass_set_bind_group(int pass, int index, int group, const int *offsets, int offsetCount);
@@ -21459,6 +21466,26 @@ WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, const WGPUShade
     return (WGPUShaderModule)0;
 }
 
+/* Pack WGPUConstantEntry[] (pipeline-overridable constants) into a parallel int
+   array (keys) + double array (values), the host staying struct-ignorant. Int
+   layout: [ count, per entry: keyPtr, keyLen ]; dp[i] = value. Returns the int
+   array length. Each stage gets its own static buffers (a render pipeline may
+   set both vertex and fragment constants). */
+static int __wgpu_pack_constants(const WGPUConstantEntry *cs, int count, int *ip, double *dp, int cap) {
+    if (1 + count * 2 > cap) {
+        fprintf(stderr, "wgpu: pipeline constants exceed packed cap (%d entries max); raise the buffer\\n", (cap - 1) / 2);
+        abort();
+    }
+    int n = 0;
+    ip[n++] = count;
+    for (int i = 0; i < count; i++) {
+        ip[n++] = (int)cs[i].key.data;
+        ip[n++] = (int)cs[i].key.length;
+        dp[i] = cs[i].value;
+    }
+    return n;
+}
+
 WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPURenderPipelineDescriptor *desc) {
     int fsModule = 0, fsEntryLen = 0;
     const char *fsEntry = 0;
@@ -21555,6 +21582,14 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
     int sampleMask = (int)desc->multisample.mask;
     int alphaToCoverage = (int)desc->multisample.alphaToCoverageEnabled;
 
+    /* Pipeline-overridable constants for the vertex + fragment stages. */
+    static int vsc[1 + 64 * 2]; static double vscv[64];
+    static int fsc[1 + 64 * 2]; static double fscv[64];
+    int vscn = __wgpu_pack_constants(desc->vertex.constants, (int)desc->vertex.constantCount, vsc, vscv, (int)(sizeof(vsc) / sizeof(vsc[0])));
+    int fscn = 1; fsc[0] = 0;
+    if (desc->fragment)
+        fscn = __wgpu_pack_constants(desc->fragment->constants, (int)desc->fragment->constantCount, fsc, fscv, (int)(sizeof(fsc) / sizeof(fsc[0])));
+
     return (WGPURenderPipeline)__wgpu_device_create_render_pipeline(
         (int)device,
         (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
@@ -21562,7 +21597,8 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         ct, ctn, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
         vb, n, (int)desc->layout,
         depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPtr,
-        sampleCount, sampleMask, alphaToCoverage);
+        sampleCount, sampleMask, alphaToCoverage,
+        vsc, vscn, vscv, fsc, fscn, fscv);
 }
 
 WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor) {
@@ -21823,9 +21859,11 @@ void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder enc, WGPUBuffer src
 }
 
 WGPUComputePipeline wgpuDeviceCreateComputePipeline(WGPUDevice device, const WGPUComputePipelineDescriptor *desc) {
+    static int csc[1 + 64 * 2]; static double cscv[64];
+    int cscn = __wgpu_pack_constants(desc->compute.constants, (int)desc->compute.constantCount, csc, cscv, (int)(sizeof(csc) / sizeof(csc[0])));
     return (WGPUComputePipeline)__wgpu_device_create_compute_pipeline((int)device,
         (int)desc->compute.module, desc->compute.entryPoint.data, (int)desc->compute.entryPoint.length,
-        (int)desc->layout);
+        (int)desc->layout, csc, cscn, cscv);
 }
 
 WGPUComputePassEncoder wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder enc, const WGPUComputePassDescriptor *desc) {

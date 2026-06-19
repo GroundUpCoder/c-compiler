@@ -5220,6 +5220,23 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
     catch (e) {}
     return 'bgra8unorm';
   }
+  /* Unpack packed pipeline-overridable constants into a {name: value} record.
+     Ints: [ count, per entry: keyPtr, keyLen ]; values ride a parallel Float64
+     array (count doubles). Returns null when there are no constants. */
+  function unpackConstants(intsPtr, intsLen, valsPtr) {
+    if (!intsPtr || intsLen <= 0) return null;
+    const a = new Int32Array(getMemory().buffer, intsPtr, intsLen);
+    const count = a[0];
+    if (!count) return null;
+    const dv = new Float64Array(getMemory().buffer, valsPtr >>> 0, count);
+    const out = {};
+    let i = 1;
+    for (let k = 0; k < count; k++) {
+      const keyPtr = a[i++], keyLen = a[i++];
+      out[readStr(keyPtr, keyLen)] = dv[k];
+    }
+    return out;
+  }
 
   function callAdapterCb(cb, status, adapterHandle, ud1, ud2) {
     const fn = getExports().__wgpu_call_adapter_cb;
@@ -5322,8 +5339,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, targetsPacked, targetsLen, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked, sampleCount, sampleMask, alphaToCoverage) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, targetsPacked, targetsLen, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked, sampleCount, sampleMask, alphaToCoverage, vsConstInts, vsConstIntsLen, vsConstVals, fsConstInts, fsConstIntsLen, fsConstVals) {
         const d = get(device); if (!d) return 0;
+        const vsConstants = unpackConstants(vsConstInts, vsConstIntsLen, vsConstVals);
         const desc = {
           layout: layout ? get(layout) : 'auto',
           vertex: { module: get(vsModule), entryPoint: entryName(vsEntry, vsEntryLen) },
@@ -5356,6 +5374,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           }
           desc.vertex.buffers = buffers;
         }
+        if (vsConstants) desc.vertex.constants = vsConstants;
         if (fsModule) {
           /* Unpack the C-side packed color targets (MRT). Layout:
              [ targetCount, per target: format, writeMask, blendEnabled,
@@ -5397,6 +5416,8 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
             entryPoint: entryName(fsEntry, fsEntryLen),
             targets: targets,
           };
+          const fsConstants = unpackConstants(fsConstInts, fsConstIntsLen, fsConstVals);
+          if (fsConstants) desc.fragment.constants = fsConstants;
         }
         if (depthEnabled) {
           const dfmt = WGPU_FORMAT_TO_STR[depthFormat];
@@ -5642,11 +5663,14 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         enc.copyBufferToBuffer(s, srcOffset >>> 0, d, dstOffset >>> 0, size >>> 0);
       },
 
-      __wgpu_device_create_compute_pipeline: function (device, module, entry, entryLen, layout) {
+      __wgpu_device_create_compute_pipeline: function (device, module, entry, entryLen, layout, constInts, constIntsLen, constVals) {
         const d = get(device); if (!d) return 0;
+        const compute = { module: get(module), entryPoint: entryName(entry, entryLen) };
+        const constants = unpackConstants(constInts, constIntsLen, constVals);
+        if (constants) compute.constants = constants;
         return alloc(d.createComputePipeline({
           layout: layout ? get(layout) : 'auto',
-          compute: { module: get(module), entryPoint: entryName(entry, entryLen) },
+          compute: compute,
         }));
       },
 
