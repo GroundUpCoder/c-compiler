@@ -21637,9 +21637,11 @@ void wgpuRenderPassEncoderDrawIndexed(WGPURenderPassEncoder renderPassEncoder,
 }
 
 WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGPUBindGroupLayoutDescriptor *desc) {
-    /* Packed: [ entryCount, per entry: binding, visibility, kind, detail, extra ].
-       kind 0=buffer (detail=WGPUBufferBindingType, extra=hasDynamicOffset),
-       1=sampler (detail=type), 2=texture (detail=WGPUTextureSampleType).
+    /* Packed: [ entryCount, per entry: binding, visibility, kind, detail, e0, e1, e2 ].
+       kind 0=buffer (detail=WGPUBufferBindingType, e0=hasDynamicOffset),
+       1=sampler (detail=WGPUSamplerBindingType),
+       2=texture (detail=WGPUTextureSampleType, e0=viewDimension, e1=multisampled),
+       3=storageTexture (detail=WGPUStorageTextureAccess, e0=format, e1=viewDimension).
        The set sub-struct selects kind. */
     static int p[256];
     int n = 0, cap = (int)(sizeof(p) / sizeof(p[0]));
@@ -21647,17 +21649,28 @@ WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGP
     p[n++] = ec;
     for (int i = 0; i < ec; i++) {
         const WGPUBindGroupLayoutEntry *e = &desc->entries[i];
-        int kind, detail, extra = 0;
-        if (e->buffer.type != WGPUBufferBindingType_Undefined) { kind = 0; detail = (int)e->buffer.type; extra = (int)e->buffer.hasDynamicOffset; }
-        else if (e->sampler.type != WGPUSamplerBindingType_Undefined) { kind = 1; detail = (int)e->sampler.type; }
-        else if (e->texture.sampleType != WGPUTextureSampleType_Undefined) { kind = 2; detail = (int)e->texture.sampleType; }
-        else { kind = 0; detail = (int)WGPUBufferBindingType_Uniform; }
-        if (n + 5 > cap) { fprintf(stderr, "wgpuDeviceCreateBindGroupLayout: entry cap exceeded\\n"); abort(); }
+        int kind, detail, e0 = 0, e1 = 0, e2 = 0;
+        if (e->buffer.type != WGPUBufferBindingType_Undefined) {
+            kind = 0; detail = (int)e->buffer.type; e0 = (int)e->buffer.hasDynamicOffset;
+        } else if (e->sampler.type != WGPUSamplerBindingType_Undefined) {
+            kind = 1; detail = (int)e->sampler.type;
+        } else if (e->texture.sampleType != WGPUTextureSampleType_Undefined) {
+            kind = 2; detail = (int)e->texture.sampleType;
+            e0 = (int)e->texture.viewDimension; e1 = (int)e->texture.multisampled;
+        } else if (e->storageTexture.format != WGPUTextureFormat_Undefined) {
+            kind = 3; detail = (int)e->storageTexture.access;
+            e0 = (int)e->storageTexture.format; e1 = (int)e->storageTexture.viewDimension;
+        } else {
+            kind = 0; detail = (int)WGPUBufferBindingType_Uniform;
+        }
+        if (n + 7 > cap) { fprintf(stderr, "wgpuDeviceCreateBindGroupLayout: entry cap exceeded\\n"); abort(); }
         p[n++] = (int)e->binding;
         p[n++] = (int)e->visibility;
         p[n++] = kind;
         p[n++] = detail;
-        p[n++] = extra;
+        p[n++] = e0;
+        p[n++] = e1;
+        p[n++] = e2;
     }
     return (WGPUBindGroupLayout)__wgpu_device_create_bind_group_layout((int)device, p, n);
 }

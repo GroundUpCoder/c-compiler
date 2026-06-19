@@ -5457,16 +5457,20 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         const count = a[i++];
         const entries = [];
         for (let e = 0; e < count; e++) {
-          const binding = a[i++] >>> 0, visibility = a[i++] >>> 0, kind = a[i++], detail = a[i++], extra = a[i++];
+          const binding = a[i++] >>> 0, visibility = a[i++] >>> 0, kind = a[i++], detail = a[i++];
+          const e0 = a[i++], e1 = a[i++], e2 = a[i++]; void e2;   /* e2 reserved */
           const entry = { binding: binding, visibility: visibility };
           if (kind === 0) {
             const t = WGPU_BUFFER_BINDING_TYPE[detail];
             if (!t) throw new Error('createBindGroupLayout: unsupported buffer binding type ' + detail);
-            entry.buffer = { type: t, hasDynamicOffset: !!extra };
+            entry.buffer = { type: t, hasDynamicOffset: !!e0 };
           } else if (kind === 1) {
             entry.sampler = { type: wgpuEnumReq(WGPU_SAMPLER_BINDING_TYPE, detail, 'sampler.bindingType') };
           } else if (kind === 2) {
-            entry.texture = { sampleType: wgpuEnumReq(WGPU_TEXTURE_SAMPLE_TYPE, detail, 'texture.sampleType'), viewDimension: '2d' };
+            const tex = { sampleType: wgpuEnumReq(WGPU_TEXTURE_SAMPLE_TYPE, detail, 'texture.sampleType') };
+            tex.viewDimension = e0 ? wgpuEnumReq(WGPU_VIEW_DIMENSION, e0, 'texture.viewDimension') : '2d';
+            if (e1) tex.multisampled = true;
+            entry.texture = tex;
           } else {
             throw new Error('createBindGroupLayout: unknown entry kind ' + kind);
           }
