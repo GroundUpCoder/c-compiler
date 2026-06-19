@@ -20,3 +20,5 @@ test-bundle.mjs
 www/sdl-blend-spike.html
 www/sdl-scancode-spike.html
 www/sdl-wheel-spike.html
+www/sdl-render-spike.html
+www/sdl-geometry-spike.html
