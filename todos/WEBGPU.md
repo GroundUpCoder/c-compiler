@@ -305,14 +305,16 @@ Audited the per-frame hot paths.
   handle-table slots **reused via a freelist** (O(1), no array growth, by
   design). `writeBuffer`/`writeTexture` copy in place via a `Uint8Array` *view*
   over wasm memory (no alloc). Per-call cost is O(1) / O(descriptor size).
-- **The one genuinely expensive per-frame path is the SDL_Renderer readback**
-  (`rdrEncodeReadback`/`rdrStartReadbackMap`, `host.js:~4775`), used for
-  `getLastFrame()` snapshots: after every present it does a `copyTextureToBuffer`
-  + `mapAsync` (GPU buffer reused, one-in-flight guard — good) **but** a
-  double-nested **O(W·H) per-pixel JS loop** that allocates a fresh
-  `new Uint8Array(W*H*4)` every frame to de-pad 256B-aligned rows and swap B/R.
-  **Fix:** do BGRA→RGBA + unpad on the GPU (small blit/compute), or row-wise
-  `.set` when no swizzle is needed (rows are already contiguous).
+- **The SDL_Renderer readback** (`rdrEncodeReadback`/`rdrStartReadbackMap`,
+  `host.js:~4775`), used for `getLastFrame()` snapshots: after every present it
+  did a `copyTextureToBuffer` + `mapAsync` (GPU buffer reused, one-in-flight
+  guard — good) **but** a double-nested **O(W·H) per-pixel JS loop** that
+  allocated a fresh `new Uint8Array(W*H*4)` every frame to de-pad 256B-aligned
+  rows and swap B/R.
+  **Fixed 2026-06-20:** readback is now on-demand (only when `getLastFrame()` is
+  called) and the BGRA→RGBA swizzle moved to a GPU blit pass (BLIT_WGSL shader,
+  nearest sampler, bgra8unorm canvas → rgba8unorm readback texture). JS only
+  unpad rows via fast `.set()` (memcpy speed). Non-capture frames pay zero cost.
 - **Minor:** `Array.from(new Uint32Array(...))` in dynamic-offset `SetBindGroup`
   allocates a JS array per call (per draw) — pass the typed array directly or
   reuse a scratch. `beginRenderPass` rebuilds a small descriptor object each

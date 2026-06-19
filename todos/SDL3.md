@@ -151,13 +151,11 @@ principles). Listed so they're visible, not silently shipped.
   previous frame to be retained) won't see it retained.
 
 ### Performance
-- **Per-present GPU→CPU readback runs unconditionally.** Every
-  `SDL_RenderPresent` does a `copyTextureToBuffer` + `mapAsync` + an **O(W·H)
-  per-pixel JS loop** allocating a fresh `Uint8Array(W*H*4)`, solely to feed
-  `getLastFrame()` (the capture probe). A normal render loop pays this **every
-  frame even when nothing is capturing**. Fix: make it **on-demand** (only when a
-  capture is pending) and move the unpad/BGRA→RGBA swizzle onto the GPU. (Also in
-  `todos/WEBGPU.md` → Performance.)
+- ~~**Per-present GPU→CPU readback runs unconditionally.**~~ **Fixed 2026-06-20.**
+  Readback is now on-demand (only when `getLastFrame()` arms it) and the BGRA→RGBA
+  swizzle moved to a GPU blit pass (BLIT_WGSL shader, nearest sampler, bgra8unorm
+  canvas → rgba8unorm readback texture). JS only unpad rows via fast `.set()`
+  (memcpy speed). Non-capture frames pay zero GPU→CPU transfer cost.
 - **Per-primitive allocation in the renderer.** `__sdl_render_quad` allocates a
   48-float `Float32Array` per quad; `rdrFlush` then allocates one combined array
   **and creates+destroys a GPU vertex buffer every present**. A sprite/tile-heavy
