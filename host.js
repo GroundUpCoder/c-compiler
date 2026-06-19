@@ -4462,12 +4462,13 @@ function createNullSpawn(ctx) {
 // ships JSPI), and such a loop fundamentally cannot yield to the browser without
 // JSPI: the window never repaints and input never arrives — it just hangs. So
 // rather than a silent no-op (an unexplained freeze) the no-JSPI SDL_Delay paths
-// throw this — UNIFORMLY, including on JSPI-capable Chrome/Android, so there is
-// one behaviour to reason about everywhere. (Callers gate on whether a main-loop
-// callback was registered, so the valid callback model — which DOES delay
-// harmlessly — keeps working; only a true blocking loop reaches here.) The throw
-// unwinds out of main() and the run pipeline surfaces it (shell stderr →
-// Term/agent tool result, and the graphical sheet's on-screen debug overlay).
+// throw this — UNIFORMLY: every SDL_Delay call throws, on every engine, whether
+// or not a main-loop callback was registered. SDL_Delay simply has no honourable
+// implementation here, so it fails loud rather than silently doing nothing. The
+// callback model never needs it (rAF paces frames); programs that called it for
+// frame-limiting just delete the call. The throw unwinds out of main() and the
+// run pipeline surfaces it (shell stderr → Term/agent tool result, and the
+// graphical sheet's on-screen debug overlay).
 function sdlDelayUnsupported() {
   throw new Error(
     'SDL_Delay() is not supported in this runtime (no JSPI). A blocking SDL ' +
@@ -4482,10 +4483,11 @@ function sdlDelayUnsupported() {
 
 function createNullSDL() {
   let animationFrameFunc = null;
+  let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     [ENV_KEY]: {
-      __sdl_init: function () { return 0; },
+      __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function () { return 1; },
       __sdl_destroy_window: function () {},
@@ -4515,11 +4517,15 @@ function createNullSDL() {
       __sdl_clear_queued_audio: function () {},
       __sdl_pause_audio_device: function () {},
       __sdl_close_audio_device: function () {},
-      __sdl_get_ticks: function () { return Date.now() & 0xffffffff; },
-      // No-op once a main-loop callback is registered (callback model — rAF
-      // already paces frames, e.g. DOOM's DG_SleepMs); throw only for a blocking
-      // loop that never registered one (the case that hangs without JSPI).
-      __sdl_delay: function () { if (!animationFrameFunc) sdlDelayUnsupported(); },
+      // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
+      // wrap). Lazily baseline if a program reads ticks before SDL_Init.
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
+      // SDL_Delay cannot be honoured without JSPI on ANY engine: a blocking sleep
+      // never yields to the browser, so the window never repaints and input never
+      // arrives. We throw UNIFORMLY (no callback-model exception) — the callback
+      // model paces frames via rAF and must not call SDL_Delay. See
+      // sdlDelayUnsupported() for the restructure guidance.
+      __sdl_delay: function () { sdlDelayUnsupported(); },
     },
   };
 }
@@ -4615,6 +4621,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   const sdlWindows = [];
   const sdlAudioDevices = [];
   let animationFrameFunc = null;
+  let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
 
   // Shared canvas WebGPU context — both the software blitter and SDL_Renderer
   // build on it (a program uses one or the other; first use triggers the async
@@ -4841,7 +4848,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
 
   return {
     [ENV_KEY]: {
-      __sdl_init: function (flags) { return 0; },
+      __sdl_init: function (flags) { sdlTicksBase = performance.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
 
       __sdl_create_window: function (title_ptr, x, y, w, h, flags) {
@@ -5008,12 +5015,15 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (notifyAudio) notifyAudio({ type: 'audio-close', id: dev });
       },
 
-      // No JSPI branch — uniform with the headless null-SDL path. No-op once a
-      // main-loop callback is registered (callback model — rAF paces frames);
-      // throw only for a blocking loop that never registered one. The error
-      // surfaces in the graphical sheet's on-screen debug overlay.
-      __sdl_delay: function () { if (!animationFrameFunc) sdlDelayUnsupported(); },
-      __sdl_get_ticks: function () { return Math.floor(performance.now()); },
+      // No JSPI branch — uniform with the headless null-SDL path. SDL_Delay
+      // cannot yield to the browser without JSPI, so it ALWAYS throws (no
+      // callback-model exception): the callback model paces frames via rAF and
+      // must not call SDL_Delay. The error surfaces in the graphical sheet's
+      // on-screen debug overlay.
+      __sdl_delay: function () { sdlDelayUnsupported(); },
+      // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
+      // wrap). Lazily baseline if ticks are read before SDL_Init.
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return Math.floor(performance.now() - sdlTicksBase); },
       __sdl_set_animation_frame_func: function (callbackPtr) {
         animationFrameFunc = callbackPtr;
       },

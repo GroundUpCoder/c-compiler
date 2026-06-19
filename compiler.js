@@ -17356,6 +17356,16 @@ bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream);
 bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream);
 void SDL_DestroyAudioStream(SDL_AudioStream *stream);
 
+/* ---- Error handling ----
+   SDL keeps a per-thread error string; this runtime is single-threaded, so it's
+   a single global. SDL_GetError never returns NULL (empty when no error).
+   SDL_SetError always returns false and SDL_ClearError always returns true,
+   matching SDL3's bool-returning convention (so \`return SDL_SetError(...)\` is
+   the idiomatic early-out from a function that returns bool). */
+const char *SDL_GetError(void);
+bool SDL_SetError(const char *fmt, ...);
+bool SDL_ClearError(void);
+
 /* ---- SDL_Renderer (2D accelerated) ---- */
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name);
 void SDL_DestroyRenderer(SDL_Renderer *renderer);
@@ -20892,6 +20902,8 @@ __externref __jss(const char *s) {
 #include <SDL.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include <math.h>
 
 /* Opaque to user code (only the forward declaration is in SDL.h).
@@ -20914,7 +20926,9 @@ __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
 __import int __sdl_update_window_surface(int handle, const void *pixels, int w, int h, int pitch);
 __import void __sdl_delay(int ms);
-__import int __sdl_get_ticks(void);
+/* ms since SDL_Init as an f64 (exact for integer ms up to 2^53 — ~285k years),
+   so SDL_GetTicks can return a full Uint64 without the old 32-bit wrap. */
+__import double __sdl_get_ticks(void);
 __import void __sdl_set_animation_frame_func(void (*callback)(void));
 __import int __sdl_open_audio_device(int freq, int format, int channels);
 __import int __sdl_queue_audio(int dev, const void *data, int len);
@@ -20938,20 +20952,49 @@ __import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1
 __import void __sdl_render_geometry(int r, int texH, const float *verts, int vertCount);
 __import void __sdl_render_present(int r);
 
+/* ---- Error handling ----
+   Single-threaded runtime ⇒ one global error buffer. SDL_GetError returns it
+   verbatim (empty string, never NULL, when no error is set). SDL_SetError
+   formats with vsnprintf and returns false; SDL_ClearError returns true. */
+static char __sdl_error[1024];
+
+const char *SDL_GetError(void) {
+    return __sdl_error;
+}
+
+bool SDL_SetError(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(__sdl_error, sizeof(__sdl_error), fmt, ap);
+    va_end(ap);
+    return 0;   /* SDL3 convention: SDL_SetError always returns false */
+}
+
+bool SDL_ClearError(void) {
+    __sdl_error[0] = '\\0';
+    return 1;   /* SDL3 convention: SDL_ClearError always returns true */
+}
+
 bool SDL_Init(SDL_InitFlags flags) {
-    return __sdl_init((int)flags) == 0;
+    if (__sdl_init((int)flags) != 0) {
+        return SDL_SetError("SDL_Init failed to initialize subsystems (flags=%u)", (unsigned)flags);
+    }
+    return 1;
 }
 
 SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags) {
     /* SDL3 dropped the x,y args; the host centers the window, so pass 0,0. */
     int handle = __sdl_create_window(title, 0, 0, w, h, (int)flags);
+    if (handle <= 0) { SDL_SetError("SDL_CreateWindow: host failed to create a window"); return NULL; }
     int pitch = w * 4;
     SDL_Window *win = (SDL_Window *)malloc(sizeof(SDL_Window));
+    if (!win) { SDL_SetError("Out of memory"); return NULL; }
     win->handle = handle;
     win->surface.w = w;
     win->surface.h = h;
     win->surface.pitch = pitch;
     win->surface.pixels = malloc(pitch * h);
+    if (!win->surface.pixels) { free(win); SDL_SetError("Out of memory"); return NULL; }
     memset(win->surface.pixels, 0, pitch * h);
     return win;
 }
@@ -21086,9 +21129,11 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
                                            SDL_AudioStreamCallback callback,
                                            void *userdata) {
     (void)devid; (void)callback; (void)userdata;
+    if (!spec) { SDL_SetError("SDL_OpenAudioDeviceStream: a NULL spec (device default) is not supported by this runtime"); return NULL; }
     int dev = __sdl_open_audio_device(spec->freq, spec->format, spec->channels);
-    if (dev <= 0) return 0;
+    if (dev <= 0) { SDL_SetError("SDL_OpenAudioDeviceStream: host failed to open an audio device"); return NULL; }
     SDL_AudioStream *s = (SDL_AudioStream *)malloc(sizeof(SDL_AudioStream));
+    if (!s) { SDL_SetError("Out of memory"); return NULL; }
     s->dev = dev;
     return s;
 }
@@ -21137,7 +21182,9 @@ void SDL_Delay(Uint32 ms) {
 }
 
 Uint64 SDL_GetTicks(void) {
-    return (Uint64)(Uint32)__sdl_get_ticks();
+    /* f64 ms since SDL_Init → Uint64. Value is a non-negative integer well below
+       2^53, so the double→long long→Uint64 path is exact (no 32-bit wrap). */
+    return (Uint64)(long long)__sdl_get_ticks();
 }
 
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
@@ -21156,8 +21203,9 @@ struct SDL_Renderer {
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name) {
     (void)name;
     int h = __sdl_create_renderer(window ? window->handle : 0);
-    if (h <= 0) return 0;
+    if (h <= 0) { SDL_SetError("SDL_CreateRenderer: host failed to create a renderer"); return NULL; }
     SDL_Renderer *r = (SDL_Renderer *)malloc(sizeof(SDL_Renderer));
+    if (!r) { SDL_SetError("Out of memory"); return NULL; }
     r->handle = h;
     return r;
 }
@@ -21170,8 +21218,9 @@ void SDL_DestroyRenderer(SDL_Renderer *renderer) {
 
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, SDL_TextureAccess access, int w, int h) {
     int th = __sdl_create_texture(renderer->handle, (int)access, w, h);
-    if (th <= 0) return 0;
+    if (th <= 0) { SDL_SetError("SDL_CreateTexture: host failed to create a texture (%dx%d)", w, h); return NULL; }
     SDL_Texture *t = (SDL_Texture *)malloc(sizeof(SDL_Texture));
+    if (!t) { SDL_SetError("Out of memory"); return NULL; }
     t->format = format;
     t->w = w;
     t->h = h;

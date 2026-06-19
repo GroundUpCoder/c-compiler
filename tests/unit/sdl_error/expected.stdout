@@ -1,0 +1,4 @@
+initial=[]
+set_ret=0 msg=[boom 42/x]
+clear_ret=1 msg=[]
+stream_null=1 err=[SDL_OpenAudioDeviceStream: a NULL spec (device default) is not supported by this runtime]
