@@ -5096,6 +5096,7 @@ const WGPU_INDEX_FORMAT = { 1: 'uint16', 2: 'uint32' };
 
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
+const WGPU_MAP_SUCCESS = 1, WGPU_MAP_ERROR = 3;
 
 function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
   const { readString, getMemory, getExports } = ctx;
@@ -5399,6 +5400,35 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         );
       },
 
+      __wgpu_cmd_copy_texture_to_buffer: function (encoder, srcTexture, mipLevel, ox, oy, oz, dstBuffer, offset, bytesPerRow, rowsPerImage, width, height, depth) {
+        const enc = get(encoder), tex = get(srcTexture), buf = get(dstBuffer);
+        if (!enc || !tex || !buf) throw new Error('wgpuCommandEncoderCopyTextureToBuffer: invalid handle');
+        const dst = { buffer: buf, offset: offset >>> 0, bytesPerRow: bytesPerRow >>> 0 };
+        if (rowsPerImage > 0) dst.rowsPerImage = rowsPerImage >>> 0;
+        enc.copyTextureToBuffer(
+          { texture: tex, mipLevel: mipLevel >>> 0, origin: { x: ox >>> 0, y: oy >>> 0, z: oz >>> 0 } },
+          dst,
+          { width: width >>> 0, height: height >>> 0, depthOrArrayLayers: (depth >>> 0) || 1 }
+        );
+      },
+
+      __wgpu_buffer_map_async: function (buffer, mode, offset, size, cb, ud1, ud2) {
+        const buf = get(buffer);
+        const callCb = function (status) { const fn = getExports().__wgpu_call_buffer_map_cb; if (fn) fn(cb, status, ud1, ud2); };
+        if (!buf) { Promise.resolve().then(function () { callCb(WGPU_MAP_ERROR); }); return; }
+        buf.mapAsync(mode >>> 0, offset >>> 0, size >>> 0)
+          .then(function () { callCb(WGPU_MAP_SUCCESS); })
+          .catch(function (e) { console.error('wgpuBufferMapAsync failed', e); callCb(WGPU_MAP_ERROR); });
+      },
+
+      __wgpu_buffer_get_mapped_range: function (buffer, offset, size, dstPtr) {
+        const buf = get(buffer); if (!buf) throw new Error('wgpuBufferGetMappedRange: invalid buffer handle');
+        const range = buf.getMappedRange(offset >>> 0, size >>> 0);
+        new Uint8Array(getMemory().buffer, dstPtr, size >>> 0).set(new Uint8Array(range));
+      },
+
+      __wgpu_buffer_unmap: function (buffer) { const b = get(buffer); if (b) b.unmap(); },
+
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
       __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a) {
@@ -5465,6 +5495,13 @@ function createNullWebGPU(ctx) {
       __wgpu_device_create_texture: function () { return 0; },
       __wgpu_device_create_sampler: function () { return 0; },
       __wgpu_queue_write_texture: function () {},
+      __wgpu_cmd_copy_texture_to_buffer: function () {},
+      __wgpu_buffer_map_async: function (buffer, mode, offset, size, cb, ud1, ud2) {
+        const fn = ctx && ctx.getExports() && ctx.getExports().__wgpu_call_buffer_map_cb;
+        Promise.resolve().then(function () { if (fn) fn(cb, WGPU_MAP_ERROR, ud1, ud2); });
+      },
+      __wgpu_buffer_get_mapped_range: function () {},
+      __wgpu_buffer_unmap: function () {},
       __wgpu_device_create_command_encoder: function () { return 0; },
       __wgpu_command_encoder_begin_render_pass: function () { return 0; },
       __wgpu_render_pass_set_pipeline: function () {},

@@ -17871,6 +17871,34 @@ typedef struct WGPUTexelCopyBufferLayout {
     uint32_t rowsPerImage;
 } WGPUTexelCopyBufferLayout;
 
+typedef struct WGPUTexelCopyBufferInfo {
+    WGPUTexelCopyBufferLayout layout;
+    WGPUBuffer buffer;
+} WGPUTexelCopyBufferInfo;
+
+/* ---- Buffer mapping / readback (async; callback-based, NO JSPI) ---- */
+typedef WGPUFlags WGPUMapMode;
+#define WGPUMapMode_None  0x0
+#define WGPUMapMode_Read  0x1
+#define WGPUMapMode_Write 0x2
+
+typedef enum WGPUMapAsyncStatus {
+    WGPUMapAsyncStatus_Success = 1,
+    WGPUMapAsyncStatus_Error = 3,
+    WGPUMapAsyncStatus_Aborted = 4
+} WGPUMapAsyncStatus;
+
+typedef void (*WGPUBufferMapCallback)(WGPUMapAsyncStatus status,
+    WGPUStringView message, void *userdata1, void *userdata2);
+
+typedef struct WGPUBufferMapCallbackInfo {
+    const WGPUChainedStruct *nextInChain;
+    WGPUCallbackMode mode;
+    WGPUBufferMapCallback callback;
+    void *userdata1;
+    void *userdata2;
+} WGPUBufferMapCallbackInfo;
+
 typedef struct WGPUColorTargetState {
     const WGPUChainedStruct *nextInChain;
     WGPUTextureFormat format;
@@ -18001,6 +18029,15 @@ void wgpuRenderPassEncoderSetBindGroup(WGPURenderPassEncoder renderPassEncoder, 
 WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, const WGPUTextureDescriptor *descriptor);
 WGPUSampler wgpuDeviceCreateSampler(WGPUDevice device, const WGPUSamplerDescriptor *descriptor);
 void wgpuQueueWriteTexture(WGPUQueue queue, const WGPUTexelCopyTextureInfo *destination, const void *data, size_t dataSize, const WGPUTexelCopyBufferLayout *dataLayout, const WGPUExtent3D *writeSize);
+
+/* GPU->CPU readback: render/copy to a buffer, map it async, read the bytes.
+   getMappedRange returns a wasm-side copy of the mapped GPU bytes (read path);
+   unmap frees it. copyTextureToBuffer requires bytesPerRow %256 == 0. */
+void wgpuCommandEncoderCopyTextureToBuffer(WGPUCommandEncoder commandEncoder, const WGPUTexelCopyTextureInfo *source, const WGPUTexelCopyBufferInfo *destination, const WGPUExtent3D *copySize);
+WGPUFuture wgpuBufferMapAsync(WGPUBuffer buffer, WGPUMapMode mode, size_t offset, size_t size, WGPUBufferMapCallbackInfo callbackInfo);
+void *wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset, size_t size);
+const void *wgpuBufferGetConstMappedRange(WGPUBuffer buffer, size_t offset, size_t size);
+void wgpuBufferUnmap(WGPUBuffer buffer);
 
 /* Release/reference: free or retain a host handle. */
 void wgpuBufferRelease(WGPUBuffer v);
@@ -20977,6 +21014,10 @@ __import void __wgpu_render_pass_set_bind_group(int pass, int index, int group);
 __import int  __wgpu_device_create_texture(int device, int width, int height, int depthOrArrayLayers, int format, int usage, int dimension, int mipLevelCount, int sampleCount);
 __import int  __wgpu_device_create_sampler(int device, int addrU, int addrV, int addrW, int magFilter, int minFilter, int mipmapFilter);
 __import void __wgpu_queue_write_texture(int queue, int texture, int mipLevel, int originX, int originY, int originZ, int aspect, const void *data, int dataSize, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depthOrArrayLayers);
+__import void __wgpu_cmd_copy_texture_to_buffer(int encoder, int srcTexture, int mipLevel, int ox, int oy, int oz, int dstBuffer, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depth);
+__import void __wgpu_buffer_map_async(int buffer, int mode, int offset, int size, WGPUBufferMapCallback cb, void *ud1, void *ud2);
+__import void __wgpu_buffer_get_mapped_range(int buffer, int offset, int size, void *dst);
+__import void __wgpu_buffer_unmap(int buffer);
 __import int  __wgpu_device_create_command_encoder(int device);
 __import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
@@ -21031,6 +21072,12 @@ void __wgpu_call_device_cb(WGPURequestDeviceCallback cb, int status,
     if (cb) cb((WGPURequestDeviceStatus)status, device, sv, ud1, ud2);
 }
 __export __wgpu_call_device_cb = __wgpu_call_device_cb;
+
+void __wgpu_call_buffer_map_cb(WGPUBufferMapCallback cb, int status, void *ud1, void *ud2) {
+    WGPUStringView sv; sv.data = 0; sv.length = 0;
+    if (cb) cb((WGPUMapAsyncStatus)status, sv, ud1, ud2);
+}
+__export __wgpu_call_buffer_map_cb = __wgpu_call_buffer_map_cb;
 
 WGPUQueue wgpuDeviceGetQueue(WGPUDevice device) {
     return (WGPUQueue)__wgpu_device_get_queue((int)device);
@@ -21273,6 +21320,53 @@ void wgpuQueueWriteTexture(WGPUQueue queue, const WGPUTexelCopyTextureInfo *dst,
         (int)dst->origin.x, (int)dst->origin.y, (int)dst->origin.z, (int)dst->aspect,
         data, (int)dataSize, (int)layout->offset, (int)layout->bytesPerRow, (int)layout->rowsPerImage,
         (int)size->width, (int)size->height, (int)size->depthOrArrayLayers);
+}
+
+void wgpuCommandEncoderCopyTextureToBuffer(WGPUCommandEncoder enc,
+        const WGPUTexelCopyTextureInfo *src, const WGPUTexelCopyBufferInfo *dst, const WGPUExtent3D *copySize) {
+    __wgpu_cmd_copy_texture_to_buffer((int)enc, (int)src->texture, (int)src->mipLevel,
+        (int)src->origin.x, (int)src->origin.y, (int)src->origin.z,
+        (int)dst->buffer, (int)dst->layout.offset, (int)dst->layout.bytesPerRow, (int)dst->layout.rowsPerImage,
+        (int)copySize->width, (int)copySize->height, (int)copySize->depthOrArrayLayers);
+}
+
+WGPUFuture wgpuBufferMapAsync(WGPUBuffer buffer, WGPUMapMode mode, size_t offset, size_t size,
+        WGPUBufferMapCallbackInfo callbackInfo) {
+    __wgpu_buffer_map_async((int)buffer, (int)mode, (int)offset, (int)size,
+        callbackInfo.callback, callbackInfo.userdata1, callbackInfo.userdata2);
+    WGPUFuture f; f.id = ++__wgpu_future_seq; return f;
+}
+
+/* Mapped-range staging (read path): getMappedRange mallocs a wasm-side copy of
+   the mapped GPU bytes (the host fills it via __wgpu_buffer_get_mapped_range);
+   unmap frees it. Enough for readback; write-back mapping is not modeled. */
+#define __WGPU_MAX_MAPPED 16
+static struct { int buffer; void *ptr; } __wgpu_mapped[__WGPU_MAX_MAPPED];
+
+void *wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset, size_t size) {
+    void *p = malloc(size ? size : 1);
+    if (!p) { fprintf(stderr, "wgpuBufferGetMappedRange: out of memory\\n"); abort(); }
+    __wgpu_buffer_get_mapped_range((int)buffer, (int)offset, (int)size, p);
+    for (int i = 0; i < __WGPU_MAX_MAPPED; i++) {
+        if (!__wgpu_mapped[i].ptr) { __wgpu_mapped[i].buffer = (int)buffer; __wgpu_mapped[i].ptr = p; return p; }
+    }
+    fprintf(stderr, "wgpuBufferGetMappedRange: too many mapped buffers (raise __WGPU_MAX_MAPPED)\\n");
+    abort();
+}
+
+const void *wgpuBufferGetConstMappedRange(WGPUBuffer buffer, size_t offset, size_t size) {
+    return wgpuBufferGetMappedRange(buffer, offset, size);
+}
+
+void wgpuBufferUnmap(WGPUBuffer buffer) {
+    for (int i = 0; i < __WGPU_MAX_MAPPED; i++) {
+        if (__wgpu_mapped[i].ptr && __wgpu_mapped[i].buffer == (int)buffer) {
+            free(__wgpu_mapped[i].ptr);
+            __wgpu_mapped[i].ptr = 0;
+            __wgpu_mapped[i].buffer = 0;
+        }
+    }
+    __wgpu_buffer_unmap((int)buffer);
 }
 
 void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }
