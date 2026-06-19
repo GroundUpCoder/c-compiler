@@ -55,10 +55,31 @@ Host ops implemented (32) and the `SDL.h`/`__SDL.c` C API on top of them:
 - **Audio:** `SDL_OpenAudioDeviceStream`, `SDL_PutAudioStreamData`,
   `SDL_PauseAudioStreamDevice`/`Resume`, `SDL_ClearAudioStream`,
   `SDL_GetAudioStreamQueued`, `SDL_DestroyAudioStream` (Web Audio backed).
-- **Timer:** `SDL_GetTicks`, `SDL_Delay`.
+- **Timer:** `SDL_GetTicks` (true `Uint64` ms since `SDL_Init`), `SDL_Delay`
+  (always throws — a blocking sleep can't yield without JSPI; use the callback).
+- **Errors:** `SDL_GetError`/`SDL_SetError`/`SDL_ClearError` (single global
+  string; set on the failure paths of Init/CreateWindow/Renderer/Texture/audio).
 - **Frame loop:** `__sdl_set_animation_frame_func` (rAF; the no-JSPI loop).
 - **WebGPU bridge:** `sdl3webgpu.h` → `SDL_GetWGPUSurface` (surface from the
   canvas), so SDL programs can drive raw `webgpu.h`.
+
+## Conformance pass (2026-06-19, after this doc was first written)
+
+Fixed a batch of stray-from-SDL behaviors found in an audit (all tested, headless
++ Chromium + real Safari):
+
+- **Error API** is real now (was entirely absent — `SDL_GetError()` didn't even
+  compile).
+- **`SDL_GetTicks`** returns a full `Uint64` (was 32-bit-truncated, wrapped ~49d).
+- **`SDL_Delay`** always throws (was a silent no-op when a frame callback was
+  registered) — no shipping demo calls it; Doom routes around it.
+- **Blend modes are honored per draw** (`SDL_SetTextureBlendMode`/
+  `SetRenderDrawBlendMode` were no-op stubs; everything was force-alpha-blended).
+  One WebGPU pipeline per mode; SDL-correct defaults (renderer draw + CreateTexture
+  = NONE, CreateTextureFromSurface = BLEND); unsupported modes fail loud.
+- **Full scancode map** — letters/digits/punct/keypad/nav now carry the right
+  `SDL_Scancode` (only arrows/mods/F-keys were mapped → WASD reported scancode 0).
+- **Mouse wheel sign** corrected to SDL's convention (+y = away/up) + horizontal.
 
 ## The work to do — by subsystem
 
@@ -109,13 +130,16 @@ clipboard-update, render-targets-reset. Web: DOM event listeners already feed th
 queue; extend the producers.
 
 ### Keyboard (SDL_keyboard) — ◑ partial — P0
-Have: key down/up events. Missing: `SDL_GetKeyboardState` (snapshot array),
-scancode↔keycode maps (`SDL_GetKeyFromScancode`, names), `SDL_GetModState`,
+Have: key down/up events with full USB-HID `SDL_Scancode`s (letters/digits/
+punctuation/keypad/nav/modifiers) + keycodes. Missing: `SDL_GetKeyboardState`
+(snapshot array), scancode↔keycode maps (`SDL_GetKeyFromScancode`, names),
+`SDL_GetModState` (event `.mod` is not yet populated),
 **text input** (`SDL_StartTextInput`/`Stop` + `SDL_EVENT_TEXT_INPUT`, IME),
 on-screen keyboard. Web: `KeyboardEvent.code`/`key`, `beforeinput`/composition.
 
 ### Mouse (SDL_mouse) — ◑ partial — P0
-Have: motion/button/wheel events. Missing: `SDL_GetMouseState` /
+Have: motion/button/wheel events (wheel `.y` sign matches SDL: +y = away/up,
++x = right). Missing: `SDL_GetMouseState` /
 `GetRelativeMouseState`, **relative mouse mode** (`SDL_SetWindowRelativeMouseMode`
 → Pointer Lock — critical for FPS games), cursor create/set/show/hide
 (`SDL_CreateCursor`, system cursors), `SDL_WarpMouseInWindow`, mouse capture.

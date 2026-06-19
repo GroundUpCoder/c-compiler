@@ -20946,7 +20946,9 @@ __import void __sdl_destroy_texture(int t);
 __import void __sdl_update_texture(int t, const void *pixels, int pitch, int w, int h);
 __import void __sdl_set_texture_color_mod(int t, double r, double g, double b);
 __import void __sdl_set_texture_alpha_mod(int t, double a);
+__import void __sdl_set_texture_blend_mode(int t, int mode);
 __import void __sdl_set_draw_color(int r, double rr, double gg, double bb, double aa);
+__import void __sdl_set_draw_blend_mode(int r, int mode);
 __import void __sdl_render_clear(int r);
 __import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3, double sx, double sy, double sw, double sh);
 __import void __sdl_render_geometry(int r, int texH, const float *verts, int vertCount);
@@ -21233,6 +21235,9 @@ SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *s
                                        SDL_TEXTUREACCESS_STATIC, surface->w, surface->h);
     if (!t) return 0;
     __sdl_update_texture(t->__handle, surface->pixels, surface->pitch, surface->w, surface->h);
+    /* SDL defaults a surface-derived texture to BLEND when the surface has an
+       alpha channel; our surfaces are always RGBA32 (alpha present), so BLEND. */
+    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
     return t;
 }
 
@@ -21259,7 +21264,7 @@ bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha) {
 }
 
 bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode) {
-    (void)texture; (void)blendMode; /* v1: always alpha-blended */
+    __sdl_set_texture_blend_mode(texture->__handle, (int)blendMode);
     return 1;
 }
 
@@ -21269,7 +21274,7 @@ bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, U
 }
 
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode) {
-    (void)renderer; (void)blendMode;
+    __sdl_set_draw_blend_mode(renderer->handle, (int)blendMode);
     return 1;
 }
 

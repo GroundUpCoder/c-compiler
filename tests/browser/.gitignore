@@ -17,3 +17,6 @@ oc-*.png
 *-extracted.png
 www/doom-debug.html
 test-bundle.mjs
+www/sdl-blend-spike.html
+www/sdl-scancode-spike.html
+www/sdl-wheel-spike.html

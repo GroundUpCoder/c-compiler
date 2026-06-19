@@ -4500,7 +4500,9 @@ function createNullSDL() {
       __sdl_update_texture: function () {},
       __sdl_set_texture_color_mod: function () {},
       __sdl_set_texture_alpha_mod: function () {},
+      __sdl_set_texture_blend_mode: function () {},
       __sdl_set_draw_color: function () {},
+      __sdl_set_draw_blend_mode: function () {},
       __sdl_render_clear: function () {},
       __sdl_render_quad: function () {},
       __sdl_render_geometry: function () {},
@@ -4697,44 +4699,67 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // device arrives. Early presents (pre-device) drop their frame (rAF re-draws).
   const sdlRenderers = [];   // 1-based handles
   const sdlTextures = [];     // 1-based handles (shared across renderers)
-  let rdrPipeline = null, rdrSampler = null, rdrWhiteView = null, rdrWhiteBind = null;
+  // One pipeline per SDL blend mode (chosen per draw); a shared explicit bind
+  // layout so a texture's bind group works with ANY of them.
+  let rdrPipelines = null, rdrSampler = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
+
+  // SDL_BLENDMODE → WebGPU blend descriptor (null = NONE, blending disabled).
+  // These mirror SDL's documented blend equations:
+  //   BLEND: dstRGB = srcRGB*srcA + dstRGB*(1-srcA);  dstA = srcA + dstA*(1-srcA)
+  //   ADD:   dstRGB = srcRGB*srcA + dstRGB;           dstA = dstA
+  //   MOD:   dstRGB = srcRGB*dstRGB;                  dstA = dstA
+  const SDL_BLEND_DESC = {
+    0: null,
+    1: { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } },
+    2: { color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } },
+    4: { color: { srcFactor: 'dst', dstFactor: 'zero', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } },
+  };
+  function sdlBlendValidate(mode) {
+    if (!(mode in SDL_BLEND_DESC)) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
+    return mode;
+  }
 
   function rdrEnsure() {
-    if (rdrPipeline) return;
+    if (rdrPipelines) return;
     cgpu.whenReady(function () {
-      if (rdrPipeline) return;
+      if (rdrPipelines) return;
       const dev = cgpu.device;
       rdrSampler = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-      const shader = dev.createShaderModule({ code: RENDER_WGSL });
-      rdrPipeline = dev.createRenderPipeline({
-        layout: 'auto',
-        vertex: {
-          module: shader, entryPoint: 'vs',
-          buffers: [{
-            arrayStride: 32,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x2' },
-              { shaderLocation: 1, offset: 8, format: 'float32x2' },
-              { shaderLocation: 2, offset: 16, format: 'float32x4' },
-            ],
-          }],
-        },
-        fragment: {
-          module: shader, entryPoint: 'fs',
-          targets: [{
-            format: cgpu.format,
-            blend: {
-              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            },
-          }],
-        },
-        primitive: { topology: 'triangle-list' },
+      rdrBindLayout = dev.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d' } },
+        ],
       });
+      const pipelineLayout = dev.createPipelineLayout({ bindGroupLayouts: [rdrBindLayout] });
+      const shader = dev.createShaderModule({ code: RENDER_WGSL });
+      const mkPipeline = function (blend) {
+        return dev.createRenderPipeline({
+          layout: pipelineLayout,
+          vertex: {
+            module: shader, entryPoint: 'vs',
+            buffers: [{
+              arrayStride: 32,
+              attributes: [
+                { shaderLocation: 0, offset: 0, format: 'float32x2' },
+                { shaderLocation: 1, offset: 8, format: 'float32x2' },
+                { shaderLocation: 2, offset: 16, format: 'float32x4' },
+              ],
+            }],
+          },
+          fragment: {
+            module: shader, entryPoint: 'fs',
+            targets: [blend ? { format: cgpu.format, blend: blend } : { format: cgpu.format }],
+          },
+          primitive: { topology: 'triangle-list' },
+        });
+      };
+      rdrPipelines = {};
+      for (const mode of [0, 1, 2, 4]) rdrPipelines[mode] = mkPipeline(SDL_BLEND_DESC[mode]);
       const white = dev.createTexture({ size: { width: 1, height: 1 }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
       dev.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, { width: 1, height: 1 });
       rdrWhiteView = white.createView();
-      rdrWhiteBind = dev.createBindGroup({ layout: rdrPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: rdrWhiteView }] });
+      rdrWhiteBind = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: rdrWhiteView }] });
     });
   }
 
@@ -4744,7 +4769,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     if (!t.view) {
       t.gpuTex = dev.createTexture({ size: { width: t.w, height: t.h }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
       t.view = t.gpuTex.createView();
-      t.bindGroup = dev.createBindGroup({ layout: rdrPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: t.view }] });
+      t.bindGroup = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: t.view }] });
     }
     if (t.dirty && t.cpuPixels) {
       dev.queue.writeTexture({ texture: t.gpuTex }, t.cpuPixels, { offset: 0, bytesPerRow: t.pitch, rowsPerImage: t.h }, { width: t.w, height: t.h });
@@ -4827,10 +4852,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     const enc = dev.createCommandEncoder();
     const curTex = cgpu.context.getCurrentTexture();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: curTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
-    pass.setPipeline(rdrPipeline);
     pass.setVertexBuffer(0, vbuf);
     let first = 0;
     for (const e of entries) {
+      pass.setPipeline(rdrPipelines[e.blend]);   // e.blend ∈ {0,1,2,4}, validated when set
       pass.setBindGroup(0, e.texH ? texBindGroup(sdlTextures[e.texH - 1]) : rdrWhiteBind);
       pass.draw(e.n, 1, first, 0);
       first += e.n;
@@ -4884,7 +4909,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
          from it. texH 0 = the 1×1 white texture (solid fill). */
       __sdl_create_renderer: function (window) {
         rdrEnsure();
-        sdlRenderers.push({ drawColor: [1, 1, 1, 1], clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [] });
+        // SDL renderers default to SDL_BLENDMODE_NONE for draw ops.
+        sdlRenderers.push({ drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [] });
         return sdlRenderers.length;
       },
       __sdl_destroy_renderer: function (r) {
@@ -4895,6 +4921,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
           w: w, h: h, access: access, cpuPixels: null, pitch: w * 4,
           gpuTex: null, view: null, bindGroup: null, dirty: false,
           colorR: 1, colorG: 1, colorB: 1, alpha: 1,
+          blendMode: 0,   // SDL_CreateTexture defaults to SDL_BLENDMODE_NONE
         });
         return sdlTextures.length;
       },
@@ -4914,8 +4941,14 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_set_texture_alpha_mod: function (t, a) {
         const tx = sdlTextures[t - 1]; if (tx) tx.alpha = a;
       },
+      __sdl_set_texture_blend_mode: function (t, mode) {
+        const tx = sdlTextures[t - 1]; if (tx) tx.blendMode = sdlBlendValidate(mode);
+      },
       __sdl_set_draw_color: function (r, rr, gg, bb, aa) {
         const rd = sdlRenderers[r - 1]; if (rd) rd.drawColor = [rr, gg, bb, aa];
+      },
+      __sdl_set_draw_blend_mode: function (r, mode) {
+        const rd = sdlRenderers[r - 1]; if (rd) rd.drawBlendMode = sdlBlendValidate(mode);
       },
       __sdl_render_clear: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
@@ -4924,10 +4957,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
         let cr, cg, cb, ca, u0, u1, v0, v1;
+        let blend = rd.drawBlendMode;   // textured draws use the texture's mode (below)
         if (texH) {
           const tx = sdlTextures[texH - 1];
           if (!tx) return;
           cr = tx.colorR; cg = tx.colorG; cb = tx.colorB; ca = tx.alpha;
+          blend = tx.blendMode;
           const tw = tx.w || 1, th = tx.h || 1;
           u0 = sx / tw; u1 = (sx + sw) / tw; v0 = sy / th; v1 = (sy + sh) / th;
         } else {
@@ -4936,7 +4971,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         }
         // TL,TR,BR,BL → two triangles (TL,TR,BR) + (TL,BR,BL)
         rd.batch.push({
-          texH: texH, n: 6,
+          texH: texH, n: 6, blend: blend,
           verts: new Float32Array([
             x0, y0, u0, v0, cr, cg, cb, ca,  x1, y1, u1, v0, cr, cg, cb, ca,  x2, y2, u1, v1, cr, cg, cb, ca,
             x0, y0, u0, v0, cr, cg, cb, ca,  x2, y2, u1, v1, cr, cg, cb, ca,  x3, y3, u0, v1, cr, cg, cb, ca,
@@ -4949,11 +4984,15 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_render_geometry: function (r, texH, vertsPtr, vertCount) {
         const rd = sdlRenderers[r - 1]; if (!rd || vertCount <= 0) return;
         const verts = new Float32Array(getMemory().buffer, vertsPtr, vertCount * 8).slice();
-        rd.batch.push({ texH: texH, n: vertCount, verts: verts });
+        // Textured geometry uses the texture's blend mode; untextured uses the
+        // renderer's draw blend mode.
+        const tx = texH ? sdlTextures[texH - 1] : null;
+        const blend = tx ? tx.blendMode : rd.drawBlendMode;
+        rd.batch.push({ texH: texH, n: vertCount, blend: blend, verts: verts });
       },
       __sdl_render_present: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
-        if (!rdrPipeline) { rdrEnsure(); rd.batch = []; return; }   // drop pre-device frames
+        if (!rdrPipelines) { rdrEnsure(); rd.batch = []; return; }   // drop pre-device frames
         rdrFlush(rd);
       },
 
@@ -5929,13 +5968,31 @@ const SDL_WEB = (function () {
   const NAMED_KEYSYMS = {
     'Enter': 13, 'Escape': 27, 'Backspace': 8, 'Tab': 9, ' ': 32, 'Delete': 127,
   };
-  const SCANCODE_MAP = {
-    'ArrowUp': 82, 'ArrowDown': 81, 'ArrowLeft': 80, 'ArrowRight': 79,
-    'ShiftLeft': 225, 'ShiftRight': 229, 'ControlLeft': 224, 'ControlRight': 228,
-    'AltLeft': 226, 'AltRight': 230,
-    'F1': 58, 'F2': 59, 'F3': 60, 'F4': 61, 'F5': 62, 'F6': 63,
-    'F7': 64, 'F8': 65, 'F9': 66, 'F10': 67, 'F11': 68, 'F12': 69,
-  };
+  // DOM KeyboardEvent.code → SDL_Scancode (USB-HID usage page, the same numbers
+  // SDL uses). Complete enough for real games: letters, digits, punctuation,
+  // nav/edit, function, keypad, and modifiers. Previously only arrows/mods/F-keys
+  // were mapped, so every letter/digit reported scancode 0 (WASD was dead).
+  const SCANCODE_MAP = (function () {
+    const m = {
+      'Enter': 40, 'Escape': 41, 'Backspace': 42, 'Tab': 43, 'Space': 44,
+      'Minus': 45, 'Equal': 46, 'BracketLeft': 47, 'BracketRight': 48, 'Backslash': 49,
+      'Semicolon': 51, 'Quote': 52, 'Backquote': 53, 'Comma': 54, 'Period': 55, 'Slash': 56,
+      'CapsLock': 57,
+      'PrintScreen': 70, 'ScrollLock': 71, 'Pause': 72, 'Insert': 73, 'Home': 74,
+      'PageUp': 75, 'Delete': 76, 'End': 77, 'PageDown': 78,
+      'ArrowRight': 79, 'ArrowLeft': 80, 'ArrowDown': 81, 'ArrowUp': 82,
+      'NumLock': 83, 'NumpadDivide': 84, 'NumpadMultiply': 85, 'NumpadSubtract': 86,
+      'NumpadAdd': 87, 'NumpadEnter': 88, 'NumpadDecimal': 99,
+      'IntlBackslash': 100, 'ContextMenu': 101,
+      'ControlLeft': 224, 'ShiftLeft': 225, 'AltLeft': 226, 'MetaLeft': 227,
+      'ControlRight': 228, 'ShiftRight': 229, 'AltRight': 230, 'MetaRight': 231,
+    };
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function (c, i) { m['Key' + c] = 4 + i; });   // A=4 … Z=29
+    for (let d = 1; d <= 9; d++) { m['Digit' + d] = 29 + d; m['Numpad' + d] = 88 + d; }            // 1=30…9=38, KP1=89…KP9=97
+    m['Digit0'] = 39; m['Numpad0'] = 98;
+    for (let f = 1; f <= 12; f++) m['F' + f] = 57 + f;                                             // F1=58 … F12=69
+    return m;
+  })();
 
   function keysym(e) {
     if (typeof e.key === 'string' && e.key.length === 1) return e.key.charCodeAt(0);
@@ -5986,10 +6043,12 @@ const SDL_WEB = (function () {
       return { kind: 'mousemove', x: c.x, y: c.y };
     },
     wheelMsg: function (e) {
-      let dy = e.deltaY;
-      if (e.deltaMode === 1) dy *= 20;       /* lines  → ~px */
-      else if (e.deltaMode === 2) dy *= 600; /* pages  → ~px */
-      return { kind: 'wheel', x: 0, y: Math.round(dy) };
+      const scale = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 600 : 1; /* lines/pages → ~px */
+      const dx = e.deltaX * scale, dy = e.deltaY * scale;
+      // SDL_MouseWheelEvent: +y is AWAY from the user (scroll up), +x is to the
+      // right. DOM WheelEvent.deltaY is +down and deltaX is +right, so negate Y
+      // (the old code passed deltaY through → wheel was inverted) and keep X.
+      return { kind: 'wheel', x: Math.round(dx), y: -Math.round(dy) };
     },
 
     /* Worker side: feed a canonical descriptor into the live SDL object. The
