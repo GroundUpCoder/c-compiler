@@ -141,13 +141,12 @@ principles). Listed so they're visible, not silently shipped.
   (`0x16462004` then `0x16762004`). Harmless only because the host treats every
   texture as RGBA bytes, but it's a real redefinition.
 - **Audio:** no format conversion / resampling (the defining feature of
-  `SDL_AudioStream`); the get-callback pull mode is silently ignored;
-  `PutAudioStreamData` drops on a full ring; `GetAudioStreamQueued` returns a
-  `0x7FFFFFFF` sentinel when no SAB is wired.
-- **`SDL_Init` ignores its flags** — no subsystem tracking; no `SDL_WasInit` /
-  `SDL_InitSubSystem` / `SDL_QuitSubSystem`.
-- **`SDL_SetWindowTitle` is a no-op**, and **`SDL_CreateTextureFromSurface`
-  assumes RGBA32** input.
+  `SDL_AudioStream`); `PutAudioStreamData` drops on a full ring; `GetAudioStreamQueued`
+  returns a `0x7FFFFFFF` sentinel when no SAB is wired. (Fixed 2026-06-20: the
+  get-callback / pull mode now **fails loud** — passing a non-NULL callback to
+  `SDL_OpenAudioDeviceStream` throws with guidance to use push mode, instead of
+  silently behaving as push and playing silence.)
+- **`SDL_CreateTextureFromSurface` assumes RGBA32** input.
 - **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (1px quad / 1px
   borders), not Bresenham — sub-pixel coverage and endpoints differ slightly.
 - **HiDPI: the canvas renders at logical size and is CSS-upscaled.**
@@ -169,11 +168,13 @@ principles). Listed so they're visible, not silently shipped.
   swizzle moved to a GPU blit pass (BLIT_WGSL shader, nearest sampler, bgra8unorm
   canvas → rgba8unorm readback texture). JS only unpad rows via fast `.set()`
   (memcpy speed). Non-capture frames pay zero GPU→CPU transfer cost.
-- **Per-primitive allocation in the renderer.** `__sdl_render_quad` allocates a
-  48-float `Float32Array` per quad; `rdrFlush` then allocates one combined array
-  **and creates+destroys a GPU vertex buffer every present**. A sprite/tile-heavy
-  frame churns N allocations + a buffer create/destroy per frame; the expected
-  cost is a reused, grown vertex buffer.
+- ~~**Per-primitive allocation in the renderer.**~~ **Fixed 2026-06-20.**
+  `__sdl_render_quad` now writes its 6 verts straight into a per-renderer growable
+  CPU scratch (no per-quad `Float32Array`); `rdrFlush` transforms to NDC in place
+  and uploads into ONE persistent GPU vertex buffer reused + grown across presents
+  (no per-present array alloc, no per-present buffer create/destroy). A
+  sprite/tile-heavy frame now costs amortized O(1) allocations. Regression-tested
+  with a 256-quad batch that forces the buffer to grow (`sdl-render-batch`).
 - **`SDL_UpdateTexture` reuploads the whole texture** for any update (it ignores
   the sub-rect, see Correctness) — a one-pixel change is O(texture).
 
@@ -201,10 +202,11 @@ primitives (`RenderLines`, `RenderPoints`, `RenderRects`, `RenderFillRects`);
 `RenderTextureRotated` / `RenderTextureTiled` / `RenderTexture9Grid`;
 `RenderReadPixels`; `SetRenderVSync`; `GetRenderOutputSize`; render debug text
 (`SDL_RenderDebugText`); `SDL_GetRenderDrawColorFloat` / float-color variants.
-(Fixed 2026-06-20: `SDL_SetTextureScaleMode` — nearest + linear samplers, per-texture
-bind group selection, pixel-art crispness tested.) Note: the per-frame readback
-that already exists (`getLastFrame`) has a perf issue — see `todos/WEBGPU.md`
-Performance section.
+(Fixed 2026-06-20: `SDL_SetTextureScaleMode`/`GetTextureScaleMode` — nearest +
+linear samplers, per-texture bind-group selection, pixel-art crispness tested,
+runtime mode change honoured. Renderer vertex path now uses one reused/grown GPU
+vertex buffer + no per-quad allocation. The `getLastFrame` per-present readback is
+on-demand now — both done; see `todos/WEBGPU.md`.)
 
 ### SDL_GPU (SDL3 explicit GPU API) — ✗ missing — P1, **JSPI-gated**
 The modern SDL3 GPU abstraction: `SDL_GPUDevice`, command buffers, render/compute

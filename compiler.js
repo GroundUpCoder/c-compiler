@@ -17253,8 +17253,14 @@ typedef union SDL_Event {
 
 typedef Uint32 SDL_InitFlags;
 typedef Uint64 SDL_WindowFlags;
-#define SDL_INIT_VIDEO 0x00000020u
 #define SDL_INIT_AUDIO 0x00000010u
+#define SDL_INIT_VIDEO 0x00000020u
+#define SDL_INIT_JOYSTICK 0x00000200u
+#define SDL_INIT_HAPTIC 0x00001000u
+#define SDL_INIT_GAMEPAD 0x00002000u
+#define SDL_INIT_EVENTS 0x00004000u
+#define SDL_INIT_SENSOR 0x00008000u
+#define SDL_INIT_CAMERA 0x00010000u
 #define SDL_WINDOW_FULLSCREEN 0x0000000000000001ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
@@ -17338,6 +17344,9 @@ typedef void (*SDL_AudioStreamCallback)(void *userdata, SDL_AudioStream *stream,
                                         int additional_amount, int total_amount);
 
 bool SDL_Init(SDL_InitFlags flags);
+bool SDL_InitSubSystem(SDL_InitFlags flags);
+void SDL_QuitSubSystem(SDL_InitFlags flags);
+SDL_InitFlags SDL_WasInit(SDL_InitFlags flags);
 SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags);
 SDL_WindowID SDL_GetWindowID(SDL_Window *window);
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
@@ -20943,6 +20952,9 @@ __import int __sdl_get_queued_audio_size(int dev);
 __import void __sdl_clear_queued_audio(int dev);
 __import void __sdl_pause_audio_device(int dev, int pause_on);
 __import void __sdl_close_audio_device(int dev);
+/* Throws (fail-loud) — the SDL_AudioStream get-callback / pull mode has no
+   honourable implementation here (no audio thread to call it). */
+__import void __sdl_audio_callback_unsupported(void);
 
 /* SDL_Renderer primitives. Colors are 0..1 floats; the single draw primitive
    takes 4 dst corners (TL,TR,BR,BL in pixels) + a src rect (texture pixels). */
@@ -20986,11 +20998,47 @@ bool SDL_ClearError(void) {
     return 1;   /* SDL3 convention: SDL_ClearError always returns true */
 }
 
-bool SDL_Init(SDL_InitFlags flags) {
-    if (__sdl_init((int)flags) != 0) {
-        return SDL_SetError("SDL_Init failed to initialize subsystems (flags=%u)", (unsigned)flags);
+/* Subsystems this runtime actually backs: VIDEO (WebGPU canvas), AUDIO (Web
+   Audio), and EVENTS (the event queue needs no device). Joystick/haptic/gamepad/
+   sensor/camera have no backend yet, so SDL_Init FAILS LOUD on them rather than
+   pretending it initialized (Guiding principle 1: behave like SDL or fail loud).
+   When iOS/gamepad support lands, widen this mask. */
+#define __SDL_SUPPORTED_SUBSYSTEMS (SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)
+
+static SDL_InitFlags __sdl_initted = 0;
+
+static bool __sdl_do_init(SDL_InitFlags flags) {
+    SDL_InitFlags unsupported = flags & ~(SDL_InitFlags)__SDL_SUPPORTED_SUBSYSTEMS;
+    if (unsupported) {
+        return SDL_SetError(
+            "SDL_Init: requested subsystem(s) 0x%X are not supported by this runtime "
+            "(supported: SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS). "
+            "Joystick/gamepad/haptic/sensor/camera have no web backend yet.",
+            (unsigned)unsupported);
     }
+    /* SDL implicitly brings up EVENTS alongside VIDEO/AUDIO. */
+    if (flags & (SDL_INIT_VIDEO | SDL_INIT_AUDIO)) flags |= SDL_INIT_EVENTS;
+    /* Baseline the tick clock exactly once (re-calling would reset SDL_GetTicks). */
+    if (__sdl_initted == 0) __sdl_init((int)flags);
+    __sdl_initted |= flags;
     return 1;
+}
+
+bool SDL_Init(SDL_InitFlags flags) {
+    return __sdl_do_init(flags);
+}
+
+bool SDL_InitSubSystem(SDL_InitFlags flags) {
+    return __sdl_do_init(flags);
+}
+
+void SDL_QuitSubSystem(SDL_InitFlags flags) {
+    __sdl_initted &= ~flags;
+}
+
+SDL_InitFlags SDL_WasInit(SDL_InitFlags flags) {
+    /* SDL3: flags==0 returns the full initialized mask; otherwise the subset. */
+    return flags ? (__sdl_initted & flags) : __sdl_initted;
 }
 
 SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags) {
@@ -21139,8 +21187,14 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
                                            const SDL_AudioSpec *spec,
                                            SDL_AudioStreamCallback callback,
                                            void *userdata) {
-    (void)devid; (void)callback; (void)userdata;
+    (void)devid; (void)userdata;
     if (!spec) { SDL_SetError("SDL_OpenAudioDeviceStream: a NULL spec (device default) is not supported by this runtime"); return NULL; }
+    /* A non-NULL callback selects SDL's get-callback (pull) mode: SDL would call
+       it from its own audio thread to fetch samples. There is no such thread here
+       (audio is driven from the main thread via Web Audio), so this can't be
+       honoured — fail loud rather than silently fall back to push mode and play
+       silence. The host throw explains the push-mode alternative. */
+    if (callback) { __sdl_audio_callback_unsupported(); return NULL; }
     int dev = __sdl_open_audio_device(spec->freq, spec->format, spec->channels);
     if (dev <= 0) { SDL_SetError("SDL_OpenAudioDeviceStream: host failed to open an audio device"); return NULL; }
     SDL_AudioStream *s = (SDL_AudioStream *)malloc(sizeof(SDL_AudioStream));
@@ -21185,6 +21239,7 @@ void SDL_DestroyWindow(SDL_Window *window) {
 }
 
 void SDL_Quit(void) {
+    __sdl_initted = 0;
     __sdl_quit();
 }
 
@@ -26113,7 +26168,10 @@ window.onunhandledrejection = function(e) {
         logPanel.style.display = 'flex';
         logContent.style.display = 'none';
         logToggle.textContent = 'Console \\u25B6';
+        if (msg.title) document.title = msg.title;   // SDL_CreateWindow title
         setStatus('');
+      } else if (msg.type === 'sdl-title') {
+        document.title = msg.title || '';            // SDL_SetWindowTitle
       } else if (msg.type === 'error') {
         writeOutput('Runtime error: ' + msg.message + '\\n', true);
         setStatus('');

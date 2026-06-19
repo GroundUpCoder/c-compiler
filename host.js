@@ -4481,6 +4481,22 @@ function sdlDelayUnsupported() {
   );
 }
 
+// SDL_AudioStream get-callback (pull) mode: passing a non-NULL callback to
+// SDL_OpenAudioDeviceStream tells SDL to call it from its own audio thread to
+// PULL samples. There is no audio thread here (Web Audio is driven from the main
+// thread), so this can't be honoured — fail loud rather than silently behave as
+// push mode and play silence. Mirrors sdlDelayUnsupported: explain why + the
+// supported alternative.
+function sdlAudioGetCallbackUnsupported() {
+  throw new Error(
+    'SDL_OpenAudioDeviceStream was given a non-NULL get-callback (pull mode), ' +
+    'which is not supported in this runtime: there is no SDL audio thread to ' +
+    'invoke it (audio is driven from the main thread via Web Audio). Pass a NULL ' +
+    'callback and push samples yourself with SDL_PutAudioStreamData (push mode), ' +
+    'which this runtime backs with a SharedArrayBuffer ring into Web Audio.'
+  );
+}
+
 function createNullSDL() {
   let animationFrameFunc = null;
   let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
@@ -4529,6 +4545,7 @@ function createNullSDL() {
       __sdl_clear_queued_audio: function () {},
       __sdl_pause_audio_device: function () {},
       __sdl_close_audio_device: function () {},
+      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if a program reads ticks before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
@@ -4712,6 +4729,13 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // One pipeline per SDL blend mode (chosen per draw); a shared explicit bind
   // layout so a texture's bind group works with ANY of them.
   let rdrPipelines = null, rdrSamplerLinear = null, rdrSamplerNearest = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
+  // ONE persistent vertex buffer reused (and grown) across presents — never
+  // created/destroyed per frame. Vertices for a frame accumulate in each
+  // renderer's own growable CPU scratch (rd.verts) at draw time, are transformed
+  // to NDC once at flush, and uploaded into this buffer. (Replaces the old path
+  // that allocated a 48-float array per quad + created/destroyed a GPU buffer
+  // every present — O(draws) garbage + a buffer churn per frame.)
+  let rdrVbuf = null, rdrVbufSize = 0;
   let rdrCapturePending = false;   // set by getLastFrame(), cleared after readback
   // GPU-side BGRA→RGBA readback blit: fullscreen quad samples the bgra8unorm
   // canvas texture through a nearest sampler → rgba8unorm texture, so the
@@ -4892,37 +4916,50 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     }).catch(function (e) { console.error('SDL/WebGPU readback failed', e && e.message); rb.busy = false; });
   }
 
+  // Ensure rd.verts can hold (rd.vertCount + addVerts) vertices (8 floats each),
+  // growing by doubling and preserving the vertices already written this frame.
+  function rdrReserve(rd, addVerts) {
+    const need = (rd.vertCount + addVerts) * 8;
+    if (rd.verts && rd.verts.length >= need) return;
+    let cap = rd.verts ? rd.verts.length : 4096;   // 512 verts to start
+    while (cap < need) cap *= 2;
+    const next = new Float32Array(cap);
+    if (rd.verts) next.set(rd.verts.subarray(0, rd.vertCount * 8));
+    rd.verts = next;
+  }
+  function rdrResetBatch(rd) { rd.batch = []; rd.vertCount = 0; }
+
   function rdrFlush(rd) {
     const dev = cgpu.device;
     const W = canvas.width || 1, H = canvas.height || 1;
     const entries = rd.batch;
-    let total = 0;
-    for (const e of entries) total += e.n;
-    const data = new Float32Array(total * 8);
-    let off = 0;
-    for (const e of entries) {
-      const v = e.verts;
-      for (let i = 0; i < e.n; i++) {
-        const s = i * 8, d = off * 8;
-        data[d] = (v[s] / W) * 2 - 1;          // NDC x
-        data[d + 1] = 1 - (v[s + 1] / H) * 2;  // NDC y (flip)
-        data[d + 2] = v[s + 2]; data[d + 3] = v[s + 3];                       // uv
-        data[d + 4] = v[s + 4]; data[d + 5] = v[s + 5]; data[d + 6] = v[s + 6]; data[d + 7] = v[s + 7]; // rgba
-        off++;
-      }
+    const totalVerts = rd.vertCount;
+    const verts = rd.verts;
+    // Transform this frame's pixel-space vertices to NDC IN PLACE (no new array).
+    // Only x,y change; uv/rgba are left as written.
+    for (let i = 0; i < totalVerts; i++) {
+      const s = i * 8;
+      verts[s] = (verts[s] / W) * 2 - 1;
+      verts[s + 1] = 1 - (verts[s + 1] / H) * 2;
     }
-    const vbuf = dev.createBuffer({ size: Math.max(32, data.byteLength), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-    if (data.byteLength) dev.queue.writeBuffer(vbuf, 0, data);
+    // Reuse (and grow) the one persistent vertex buffer — never per-present churn.
+    const byteLen = Math.max(32, totalVerts * 8 * 4);
+    if (!rdrVbuf || rdrVbufSize < byteLen) {
+      if (rdrVbuf) rdrVbuf.destroy();
+      let cap = rdrVbufSize || (4096 * 4);
+      while (cap < byteLen) cap *= 2;
+      rdrVbuf = dev.createBuffer({ size: cap, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+      rdrVbufSize = cap;
+    }
+    if (totalVerts) dev.queue.writeBuffer(rdrVbuf, 0, verts, 0, totalVerts * 8);
     const enc = dev.createCommandEncoder();
     const curTex = cgpu.context.getCurrentTexture();
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: curTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: rd.clear }] });
-    pass.setVertexBuffer(0, vbuf);
-    let first = 0;
+    pass.setVertexBuffer(0, rdrVbuf);
     for (const e of entries) {
       pass.setPipeline(rdrPipelines[e.blend]);   // e.blend ∈ {0,1,2,4}, validated when set
       pass.setBindGroup(0, e.texH ? texBindGroup(sdlTextures[e.texH - 1]) : rdrWhiteBind);
-      pass.draw(e.n, 1, first, 0);
-      first += e.n;
+      pass.draw(e.n, 1, e.first, 0);
     }
     pass.end();
     // On-demand GPU readback: only when getLastFrame() has been called since the
@@ -4935,9 +4972,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       didReadback = rdrEncodeReadback(enc, dev, curTex, W, H);
     }
     dev.queue.submit([enc.finish()]);
-    vbuf.destroy();
     if (didReadback) rdrStartReadbackMap();
-    rd.batch = [];
+    rdrResetBatch(rd);
   }
 
   return {
@@ -4951,9 +4987,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         // the program's own wgpu* calls (SDL_GetWGPUSurface).
         canvas.width = w;
         canvas.height = h;
-        sdlWindows.push({ width: w, height: h });
+        const title = title_ptr ? readString(title_ptr) : '';
+        sdlWindows.push({ width: w, height: h, title: title });
         const handle = sdlWindows.length;
-        if (notifyWindow) notifyWindow({ type: 'sdl-window', width: w, height: h });
+        // Carry the window title to the page so it can set document.title (SDL
+        // sets the OS window title from the create-window title).
+        if (notifyWindow) notifyWindow({ type: 'sdl-window', width: w, height: h, title: title });
         return handle;
       },
       __sdl_destroy_window: function (handle) {
@@ -4962,6 +5001,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         }
       },
       __sdl_set_window_title: function (handle, title_ptr) {
+        const win = sdlWindows[handle - 1]; if (!win) return;
+        const title = title_ptr ? readString(title_ptr) : '';
+        win.title = title;
+        if (notifyWindow) notifyWindow({ type: 'sdl-title', title: title });
       },
 
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
@@ -4978,8 +5021,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
          from it. texH 0 = the 1×1 white texture (solid fill). */
       __sdl_create_renderer: function (window) {
         rdrEnsure();
-        // SDL renderers default to SDL_BLENDMODE_NONE for draw ops.
-        sdlRenderers.push({ drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [] });
+        // SDL renderers default to SDL_BLENDMODE_NONE for draw ops. verts is a
+        // growable CPU scratch (pixel-space vertices for the current frame);
+        // vertCount tracks how many are written; batch records draw ranges into it.
+        sdlRenderers.push({ drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [], verts: null, vertCount: 0 });
         return sdlRenderers.length;
       },
       __sdl_destroy_renderer: function (r) {
@@ -5032,7 +5077,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_render_clear: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
-        const c = rd.drawColor; rd.clear = { r: c[0], g: c[1], b: c[2], a: c[3] }; rd.batch = [];
+        const c = rd.drawColor; rd.clear = { r: c[0], g: c[1], b: c[2], a: c[3] }; rdrResetBatch(rd);
       },
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
@@ -5049,30 +5094,37 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
           const c = rd.drawColor; cr = c[0]; cg = c[1]; cb = c[2]; ca = c[3];
           u0 = 0; u1 = 0; v0 = 0; v1 = 0;
         }
-        // TL,TR,BR,BL → two triangles (TL,TR,BR) + (TL,BR,BL)
-        rd.batch.push({
-          texH: texH, n: 6, blend: blend,
-          verts: new Float32Array([
-            x0, y0, u0, v0, cr, cg, cb, ca,  x1, y1, u1, v0, cr, cg, cb, ca,  x2, y2, u1, v1, cr, cg, cb, ca,
-            x0, y0, u0, v0, cr, cg, cb, ca,  x2, y2, u1, v1, cr, cg, cb, ca,  x3, y3, u0, v1, cr, cg, cb, ca,
-          ]),
-        });
+        // TL,TR,BR,BL → two triangles (TL,TR,BR) + (TL,BR,BL). Write the 6 verts
+        // straight into the renderer's growable scratch — no per-quad allocation.
+        rdrReserve(rd, 6);
+        const a = rd.verts; let o = rd.vertCount * 8;
+        a[o]=x0;a[o+1]=y0;a[o+2]=u0;a[o+3]=v0;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
+        a[o]=x1;a[o+1]=y1;a[o+2]=u1;a[o+3]=v0;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
+        a[o]=x2;a[o+1]=y2;a[o+2]=u1;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
+        a[o]=x0;a[o+1]=y0;a[o+2]=u0;a[o+3]=v0;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
+        a[o]=x2;a[o+1]=y2;a[o+2]=u1;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
+        a[o]=x3;a[o+1]=y3;a[o+2]=u0;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;
+        rd.batch.push({ texH: texH, n: 6, blend: blend, first: rd.vertCount });
+        rd.vertCount += 6;
       },
       // SDL_RenderGeometry: C resolves indices into a flat triangle soup of
-      // [x, y, u, v, r, g, b, a] per vertex (vertCount = a multiple of 3); we
-      // just copy it in as one batch entry. texH 0 = solid (white tex × color).
+      // [x, y, u, v, r, g, b, a] per vertex (vertCount = a multiple of 3); copy it
+      // straight into the renderer's scratch as one batch entry. texH 0 = solid.
       __sdl_render_geometry: function (r, texH, vertsPtr, vertCount) {
         const rd = sdlRenderers[r - 1]; if (!rd || vertCount <= 0) return;
-        const verts = new Float32Array(getMemory().buffer, vertsPtr, vertCount * 8).slice();
+        const src = new Float32Array(getMemory().buffer, vertsPtr, vertCount * 8);
+        rdrReserve(rd, vertCount);
+        rd.verts.set(src, rd.vertCount * 8);
         // Textured geometry uses the texture's blend mode; untextured uses the
         // renderer's draw blend mode.
         const tx = texH ? sdlTextures[texH - 1] : null;
         const blend = tx ? tx.blendMode : rd.drawBlendMode;
-        rd.batch.push({ texH: texH, n: vertCount, blend: blend, verts: verts });
+        rd.batch.push({ texH: texH, n: vertCount, blend: blend, first: rd.vertCount });
+        rd.vertCount += vertCount;
       },
       __sdl_render_present: function (r) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
-        if (!rdrPipelines) { rdrEnsure(); rd.batch = []; return; }   // drop pre-device frames
+        if (!rdrPipelines) { rdrEnsure(); rdrResetBatch(rd); return; }   // drop pre-device frames
         rdrFlush(rd);
       },
 
@@ -5133,6 +5185,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_close_audio_device: function (dev) {
         if (notifyAudio) notifyAudio({ type: 'audio-close', id: dev });
       },
+      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
 
       // No JSPI branch — uniform with the headless null-SDL path. SDL_Delay
       // cannot yield to the browser without JSPI, so it ALWAYS throws (no
