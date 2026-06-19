@@ -5075,6 +5075,10 @@ const WGPU_COMPARE = {
   1: 'never', 2: 'less', 3: 'equal', 4: 'less-equal',
   5: 'greater', 6: 'not-equal', 7: 'greater-equal', 8: 'always',
 };
+const WGPU_STENCIL_OP = {
+  1: 'keep', 2: 'zero', 3: 'replace', 4: 'invert',
+  5: 'increment-clamp', 6: 'decrement-clamp', 7: 'increment-wrap', 8: 'decrement-wrap',
+};
 const WGPU_STR_TO_FORMAT = {
   'rgba8unorm': 18, 'rgba8unorm-srgb': 19, 'bgra8unorm': 23, 'bgra8unorm-srgb': 24,
 };
@@ -5232,7 +5236,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst, depthEnabled, depthFormat, depthWriteEnabled, depthCompare) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked) {
         const d = get(device); if (!d) return 0;
         const desc = {
           layout: layout ? get(layout) : 'auto',
@@ -5291,11 +5295,27 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         if (depthEnabled) {
           const dfmt = WGPU_FORMAT_TO_STR[depthFormat];
           if (!dfmt) throw new Error('createRenderPipeline: unsupported depthStencil format ' + depthFormat);
-          desc.depthStencil = {
+          const dss = {
             format: dfmt,
             depthWriteEnabled: !!depthWriteEnabled,
             depthCompare: WGPU_COMPARE[depthCompare] || 'always',
           };
+          /* Packed stencil: [frontCompare, frontFail, frontDepthFail, frontPass,
+             backCompare, backFail, backDepthFail, backPass, readMask, writeMask]. */
+          if (stencilPacked) {
+            const a = new Int32Array(getMemory().buffer, stencilPacked, 10);
+            const face = (o) => ({
+              compare: WGPU_COMPARE[a[o]] || 'always',
+              failOp: WGPU_STENCIL_OP[a[o + 1]] || 'keep',
+              depthFailOp: WGPU_STENCIL_OP[a[o + 2]] || 'keep',
+              passOp: WGPU_STENCIL_OP[a[o + 3]] || 'keep',
+            });
+            dss.stencilFront = face(0);
+            dss.stencilBack = face(4);
+            dss.stencilReadMask = a[8] >>> 0;
+            dss.stencilWriteMask = a[9] >>> 0;
+          }
+          desc.depthStencil = dss;
         }
         return alloc(d.createRenderPipeline(desc));
       },
@@ -5331,6 +5351,10 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_render_pass_draw_indexed: function (pass, indexCount, instanceCount, firstIndex, baseVertex, firstInstance) {
         const p = get(pass); if (p) p.drawIndexed(indexCount >>> 0, instanceCount >>> 0, firstIndex >>> 0, baseVertex | 0, firstInstance >>> 0);
+      },
+
+      __wgpu_render_pass_set_stencil_reference: function (pass, reference) {
+        const p = get(pass); if (p) p.setStencilReference(reference >>> 0);
       },
 
       __wgpu_device_create_bind_group_layout: function (device, packedPtr, packedLen) {
@@ -5489,7 +5513,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
-      __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a, depthView, depthLoadOp, depthStoreOp, depthClearValue) {
+      __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
         const enc = get(encoder), v = get(view);
         if (!enc || !v) return 0;
         const rp = {
@@ -5501,12 +5525,19 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           }],
         };
         if (depthView) {
-          rp.depthStencilAttachment = {
+          const dsa = {
             view: get(depthView),
             depthClearValue: depthClearValue,
             depthLoadOp: WGPU_LOADOP[depthLoadOp] || 'clear',
             depthStoreOp: WGPU_STOREOP[depthStoreOp] || 'store',
           };
+          /* A stencil aspect (combined depth-stencil format) needs its own ops. */
+          if (stencilLoadOp) {
+            dsa.stencilLoadOp = WGPU_LOADOP[stencilLoadOp] || 'clear';
+            dsa.stencilStoreOp = WGPU_STOREOP[stencilStoreOp] || 'store';
+            dsa.stencilClearValue = stencilClearValue >>> 0;
+          }
+          rp.depthStencilAttachment = dsa;
         }
         return alloc(enc.beginRenderPass(rp));
       },
@@ -5555,6 +5586,7 @@ function createNullWebGPU(ctx) {
       __wgpu_render_pass_set_vertex_buffer: function () {},
       __wgpu_render_pass_set_index_buffer: function () {},
       __wgpu_render_pass_draw_indexed: function () {},
+      __wgpu_render_pass_set_stencil_reference: function () {},
       __wgpu_device_create_bind_group_layout: function () { return 0; },
       __wgpu_device_create_pipeline_layout: function () { return 0; },
       __wgpu_device_create_bind_group: function () { return 0; },
