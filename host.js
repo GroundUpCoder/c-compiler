@@ -5308,7 +5308,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked, sampleCount, sampleMask, alphaToCoverage) {
         const d = get(device); if (!d) return 0;
         const desc = {
           layout: layout ? get(layout) : 'auto',
@@ -5389,6 +5389,13 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           }
           desc.depthStencil = dss;
         }
+        /* Multisample state (MSAA). count defaults to 1; a 0 mask means the
+           caller left it unset -> all-ones default. */
+        desc.multisample = {
+          count: (sampleCount >>> 0) || 1,
+          mask: (sampleMask >>> 0) || 0xFFFFFFFF,
+          alphaToCoverageEnabled: !!alphaToCoverage,
+        };
         return alloc(d.createRenderPipeline(desc));
       },
 
@@ -5635,17 +5642,17 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
-      __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
+      __wgpu_command_encoder_begin_render_pass: function (encoder, view, resolveView, loadOp, storeOp, r, g, b, a, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
         const enc = get(encoder), v = get(view);
         if (!enc || !v) return 0;
-        const rp = {
-          colorAttachments: [{
-            view: v,
-            loadOp: wgpuEnumOpt(WGPU_LOADOP, loadOp, 'colorAttachment.loadOp', 'clear'),
-            storeOp: wgpuEnumOpt(WGPU_STOREOP, storeOp, 'colorAttachment.storeOp', 'store'),
-            clearValue: { r: r, g: g, b: b, a: a },
-          }],
+        const colorAtt = {
+          view: v,
+          loadOp: wgpuEnumOpt(WGPU_LOADOP, loadOp, 'colorAttachment.loadOp', 'clear'),
+          storeOp: wgpuEnumOpt(WGPU_STOREOP, storeOp, 'colorAttachment.storeOp', 'store'),
+          clearValue: { r: r, g: g, b: b, a: a },
         };
+        if (resolveView) colorAtt.resolveTarget = get(resolveView);   /* MSAA resolve */
+        const rp = { colorAttachments: [colorAtt] };
         if (depthView) {
           const dsa = {
             view: get(depthView),
