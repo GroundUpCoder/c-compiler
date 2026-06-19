@@ -99,6 +99,11 @@ Fixed a batch of stray-from-SDL behaviors found in an audit (all tested, headles
 - **Full scancode map** — letters/digits/punct/keypad/nav now carry the right
   `SDL_Scancode` (only arrows/mods/F-keys were mapped → WASD reported scancode 0).
 - **Mouse wheel sign** corrected to SDL's convention (+y = away/up) + horizontal.
+- **SDL_SetTextureScaleMode** (nearest/linear per texture) — two samplers, one
+  per filter mode; `texBindGroup()` picks the right one based on `t.scaleMode`;
+  NEAREST preserves pixel-art crispness at scale, LINEAR blurs. SDL3-default
+  LINEAR honored. Unsupported modes fail loud. Test: 8×8 checkerboard rendered
+  at 25× in both modes; Playwright pixel assertions at texel centers + boundaries.
 
 ## Known strays still open (audited, not yet fixed)
 
@@ -132,11 +137,6 @@ principles). Listed so they're visible, not silently shipped.
   assumes RGBA32** input.
 - **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (1px quad / 1px
   borders), not Bresenham — sub-pixel coverage and endpoints differ slightly.
-- **Forced linear texture filtering; no `SDL_SetTextureScaleMode`.** The renderer
-  sampler is hardcoded `linear`. SDL3's *default* is also linear, so defaults
-  match — but a program can't select `SDL_SCALEMODE_NEAREST`, so **pixel-art games
-  render blurry when scaled** with no fix. (Fix: a second nearest sampler +
-  per-texture bind group selected by the texture's scale mode.)
 - **HiDPI: the canvas renders at logical size and is CSS-upscaled.**
   `canvas.width = w` (logical), so on a retina display output is upscaled by the
   browser, not rendered at device-pixel density like native SDL. Blurrier; no
@@ -189,8 +189,9 @@ TEXTUREACCESS_TARGET); **viewport / clip rect / scale** (`SetRenderViewport`,
 primitives (`RenderLines`, `RenderPoints`, `RenderRects`, `RenderFillRects`);
 `RenderTextureRotated` / `RenderTextureTiled` / `RenderTexture9Grid`;
 `RenderReadPixels`; `SetRenderVSync`; `GetRenderOutputSize`; render debug text
-(`SDL_RenderDebugText`); `SDL_GetRenderDrawColorFloat` / float-color variants;
-scale mode per texture (`SDL_SetTextureScaleMode`). Note: the per-frame readback
+(`SDL_RenderDebugText`); `SDL_GetRenderDrawColorFloat` / float-color variants.
+(Fixed 2026-06-20: `SDL_SetTextureScaleMode` — nearest + linear samplers, per-texture
+bind group selection, pixel-art crispness tested.) Note: the per-frame readback
 that already exists (`getLastFrame`) has a perf issue — see `todos/WEBGPU.md`
 Performance section.
 
