@@ -21294,7 +21294,7 @@ __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
 __import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int blendEnabled, int colorOp, int colorSrc, int colorDst, int alphaOp, int alphaSrc, int alphaDst, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, const int *stencilPacked);
-__import int  __wgpu_device_create_buffer(int device, int size, int usage);
+__import int  __wgpu_device_create_buffer(int device, int size, int usage, int mappedAtCreation);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
 __import void __wgpu_render_pass_set_index_buffer(int pass, int buffer, int format, int offset, int size);
@@ -21578,7 +21578,8 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
 
 WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, const WGPUBufferDescriptor *descriptor) {
     return (WGPUBuffer)__wgpu_device_create_buffer(
-        (int)device, (int)descriptor->size, (int)descriptor->usage);
+        (int)device, (int)descriptor->size, (int)descriptor->usage,
+        (int)descriptor->mappedAtCreation);
 }
 
 void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset,
@@ -21703,9 +21704,11 @@ WGPUFuture wgpuBufferMapAsync(WGPUBuffer buffer, WGPUMapMode mode, size_t offset
     WGPUFuture f; f.id = ++__wgpu_future_seq; return f;
 }
 
-/* Mapped-range staging (read path): getMappedRange mallocs a wasm-side copy of
-   the mapped GPU bytes (the host fills it via __wgpu_buffer_get_mapped_range);
-   unmap frees it. Enough for readback; write-back mapping is not modeled. */
+/* Mapped-range staging: getMappedRange mallocs a wasm-side copy of the mapped
+   GPU bytes (host fills it via __wgpu_buffer_get_mapped_range for the read
+   path). The host also remembers the JS range so wgpuBufferUnmap flushes the
+   staging bytes back into the GPU buffer (write path / mappedAtCreation) before
+   the staging is freed. */
 #define __WGPU_MAX_MAPPED 16
 static struct { int buffer; void *ptr; } __wgpu_mapped[__WGPU_MAX_MAPPED];
 
@@ -21725,6 +21728,10 @@ const void *wgpuBufferGetConstMappedRange(WGPUBuffer buffer, size_t offset, size
 }
 
 void wgpuBufferUnmap(WGPUBuffer buffer) {
+    /* Unmap FIRST: the host flushes the wasm staging bytes back into the GPU
+       mapped range (write path / mappedAtCreation) before unmapping. Only then
+       is it safe to free the staging copy. */
+    __wgpu_buffer_unmap((int)buffer);
     for (int i = 0; i < __WGPU_MAX_MAPPED; i++) {
         if (__wgpu_mapped[i].ptr && __wgpu_mapped[i].buffer == (int)buffer) {
             free(__wgpu_mapped[i].ptr);
@@ -21732,7 +21739,6 @@ void wgpuBufferUnmap(WGPUBuffer buffer) {
             __wgpu_mapped[i].buffer = 0;
         }
     }
-    __wgpu_buffer_unmap((int)buffer);
 }
 
 void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder enc, WGPUBuffer src,

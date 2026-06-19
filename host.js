@@ -5191,6 +5191,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
    * of textures/views/encoders does not grow the array without bound. */
   const handles = [null];
   const freeList = [];
+  /* Active mapped ranges per buffer handle: { range (JS ArrayBuffer), dstPtr,
+     size }. getMappedRange records them; unmap flushes wasm staging -> GPU. */
+  const mappedRanges = new Map();
   function alloc(obj) {
     if (freeList.length) { const i = freeList.pop(); handles[i] = obj; return i; }
     handles.push(obj); return handles.length - 1;
@@ -5389,9 +5392,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createRenderPipeline(desc));
       },
 
-      __wgpu_device_create_buffer: function (device, size, usage) {
+      __wgpu_device_create_buffer: function (device, size, usage, mappedAtCreation) {
         const d = get(device); if (!d) return 0;
-        return alloc(d.createBuffer({ size: size >>> 0, usage: usage >>> 0 }));
+        return alloc(d.createBuffer({ size: size >>> 0, usage: usage >>> 0, mappedAtCreation: !!mappedAtCreation }));
       },
 
       __wgpu_queue_write_buffer: function (queue, buffer, bufferOffset, dataPtr, size) {
@@ -5551,11 +5554,27 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_buffer_get_mapped_range: function (buffer, offset, size, dstPtr) {
         const buf = get(buffer); if (!buf) throw new Error('wgpuBufferGetMappedRange: invalid buffer handle');
-        const range = buf.getMappedRange(offset >>> 0, size >>> 0);
-        new Uint8Array(getMemory().buffer, dstPtr, size >>> 0).set(new Uint8Array(range));
+        size = size >>> 0; dstPtr = dstPtr >>> 0;
+        const range = buf.getMappedRange(offset >>> 0, size);
+        /* read path: seed the wasm staging copy with the current GPU bytes. */
+        new Uint8Array(getMemory().buffer, dstPtr, size).set(new Uint8Array(range));
+        /* remember for write-back on unmap (mappedAtCreation / MAP_WRITE). */
+        let list = mappedRanges.get(buffer);
+        if (!list) { list = []; mappedRanges.set(buffer, list); }
+        list.push({ range: range, dstPtr: dstPtr, size: size });
       },
 
-      __wgpu_buffer_unmap: function (buffer) { const b = get(buffer); if (b) b.unmap(); },
+      __wgpu_buffer_unmap: function (buffer) {
+        const b = get(buffer); if (!b) return;
+        const list = mappedRanges.get(buffer);
+        if (list) {
+          /* flush staging -> GPU mapped range before unmap (write path /
+             mappedAtCreation). Harmless for MAP_READ — unmap discards it. */
+          for (const m of list) new Uint8Array(m.range).set(new Uint8Array(getMemory().buffer, m.dstPtr, m.size));
+          mappedRanges.delete(buffer);
+        }
+        b.unmap();
+      },
 
       __wgpu_cmd_copy_buffer_to_buffer: function (encoder, src, srcOffset, dst, dstOffset, size) {
         const enc = get(encoder), s = get(src), d = get(dst);
