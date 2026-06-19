@@ -21302,7 +21302,7 @@ __import void __wgpu_render_pass_draw_indexed(int pass, int indexCount, int inst
 __import int  __wgpu_device_create_bind_group_layout(int device, const int *packed, int packedLen);
 __import int  __wgpu_device_create_pipeline_layout(int device, const int *bgls, int count);
 __import int  __wgpu_device_create_bind_group(int device, int layout, const int *packed, int packedLen);
-__import void __wgpu_render_pass_set_bind_group(int pass, int index, int group);
+__import void __wgpu_render_pass_set_bind_group(int pass, int index, int group, const int *offsets, int offsetCount);
 __import int  __wgpu_device_create_texture(int device, int width, int height, int depthOrArrayLayers, int format, int usage, int dimension, int mipLevelCount, int sampleCount);
 __import int  __wgpu_device_create_sampler(int device, int addrU, int addrV, int addrW, int magFilter, int minFilter, int mipmapFilter);
 __import void __wgpu_queue_write_texture(int queue, int texture, int mipLevel, int originX, int originY, int originZ, int aspect, const void *data, int dataSize, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depthOrArrayLayers);
@@ -21314,7 +21314,7 @@ __import void __wgpu_cmd_copy_buffer_to_buffer(int encoder, int src, int srcOffs
 __import int  __wgpu_device_create_compute_pipeline(int device, int module, const char *entry, int entryLen, int layout);
 __import int  __wgpu_command_encoder_begin_compute_pass(int encoder);
 __import void __wgpu_compute_pass_set_pipeline(int pass, int pipeline);
-__import void __wgpu_compute_pass_set_bind_group(int pass, int index, int group);
+__import void __wgpu_compute_pass_set_bind_group(int pass, int index, int group, const int *offsets, int offsetCount);
 __import void __wgpu_compute_pass_dispatch(int pass, int x, int y, int z);
 __import void __wgpu_compute_pass_end(int pass);
 __import void __wgpu_device_push_error_scope(int device, int filter);
@@ -21603,25 +21603,27 @@ void wgpuRenderPassEncoderDrawIndexed(WGPURenderPassEncoder renderPassEncoder,
 }
 
 WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGPUBindGroupLayoutDescriptor *desc) {
-    /* Packed: [ entryCount, per entry: binding, visibility, kind, detail ].
-       kind 0=buffer (detail=WGPUBufferBindingType), 1=sampler (detail=type),
-       2=texture (detail=WGPUTextureSampleType). The set sub-struct selects kind. */
+    /* Packed: [ entryCount, per entry: binding, visibility, kind, detail, extra ].
+       kind 0=buffer (detail=WGPUBufferBindingType, extra=hasDynamicOffset),
+       1=sampler (detail=type), 2=texture (detail=WGPUTextureSampleType).
+       The set sub-struct selects kind. */
     static int p[256];
     int n = 0, cap = (int)(sizeof(p) / sizeof(p[0]));
     int ec = (int)desc->entryCount;
     p[n++] = ec;
     for (int i = 0; i < ec; i++) {
         const WGPUBindGroupLayoutEntry *e = &desc->entries[i];
-        int kind, detail;
-        if (e->buffer.type != WGPUBufferBindingType_Undefined) { kind = 0; detail = (int)e->buffer.type; }
+        int kind, detail, extra = 0;
+        if (e->buffer.type != WGPUBufferBindingType_Undefined) { kind = 0; detail = (int)e->buffer.type; extra = (int)e->buffer.hasDynamicOffset; }
         else if (e->sampler.type != WGPUSamplerBindingType_Undefined) { kind = 1; detail = (int)e->sampler.type; }
         else if (e->texture.sampleType != WGPUTextureSampleType_Undefined) { kind = 2; detail = (int)e->texture.sampleType; }
         else { kind = 0; detail = (int)WGPUBufferBindingType_Uniform; }
-        if (n + 4 > cap) { fprintf(stderr, "wgpuDeviceCreateBindGroupLayout: entry cap exceeded\\n"); abort(); }
+        if (n + 5 > cap) { fprintf(stderr, "wgpuDeviceCreateBindGroupLayout: entry cap exceeded\\n"); abort(); }
         p[n++] = (int)e->binding;
         p[n++] = (int)e->visibility;
         p[n++] = kind;
         p[n++] = detail;
+        p[n++] = extra;
     }
     return (WGPUBindGroupLayout)__wgpu_device_create_bind_group_layout((int)device, p, n);
 }
@@ -21661,9 +21663,8 @@ WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device, const WGPUBindGroupDe
 
 void wgpuRenderPassEncoderSetBindGroup(WGPURenderPassEncoder renderPassEncoder,
         uint32_t groupIndex, WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets) {
-    (void)dynamicOffsets;
-    if (dynamicOffsetCount > 0) { fprintf(stderr, "wgpuRenderPassEncoderSetBindGroup: dynamic offsets not yet supported\\n"); abort(); }
-    __wgpu_render_pass_set_bind_group((int)renderPassEncoder, (int)groupIndex, (int)group);
+    __wgpu_render_pass_set_bind_group((int)renderPassEncoder, (int)groupIndex, (int)group,
+        (const int *)dynamicOffsets, (int)dynamicOffsetCount);
 }
 
 WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, const WGPUTextureDescriptor *d) {
@@ -21763,9 +21764,8 @@ void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder pass, WGPUComputeP
 
 void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder pass, uint32_t groupIndex,
         WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets) {
-    (void)dynamicOffsets;
-    if (dynamicOffsetCount > 0) { fprintf(stderr, "wgpuComputePassEncoderSetBindGroup: dynamic offsets not yet supported\\n"); abort(); }
-    __wgpu_compute_pass_set_bind_group((int)pass, (int)groupIndex, (int)group);
+    __wgpu_compute_pass_set_bind_group((int)pass, (int)groupIndex, (int)group,
+        (const int *)dynamicOffsets, (int)dynamicOffsetCount);
 }
 
 void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder pass,

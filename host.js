@@ -5437,12 +5437,12 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         const count = a[i++];
         const entries = [];
         for (let e = 0; e < count; e++) {
-          const binding = a[i++] >>> 0, visibility = a[i++] >>> 0, kind = a[i++], detail = a[i++];
+          const binding = a[i++] >>> 0, visibility = a[i++] >>> 0, kind = a[i++], detail = a[i++], extra = a[i++];
           const entry = { binding: binding, visibility: visibility };
           if (kind === 0) {
             const t = WGPU_BUFFER_BINDING_TYPE[detail];
             if (!t) throw new Error('createBindGroupLayout: unsupported buffer binding type ' + detail);
-            entry.buffer = { type: t };
+            entry.buffer = { type: t, hasDynamicOffset: !!extra };
           } else if (kind === 1) {
             entry.sampler = { type: wgpuEnumReq(WGPU_SAMPLER_BINDING_TYPE, detail, 'sampler.bindingType') };
           } else if (kind === 2) {
@@ -5487,8 +5487,15 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createBindGroup({ layout: get(layout), entries: entries }));
       },
 
-      __wgpu_render_pass_set_bind_group: function (pass, index, group) {
-        const p = get(pass); if (p) p.setBindGroup(index >>> 0, get(group));
+      __wgpu_render_pass_set_bind_group: function (pass, index, group, offsetsPtr, offsetCount) {
+        const p = get(pass); if (!p) return;
+        offsetCount = offsetCount >>> 0;
+        if (offsetCount > 0) {
+          const offs = Array.from(new Uint32Array(getMemory().buffer, offsetsPtr >>> 0, offsetCount));
+          p.setBindGroup(index >>> 0, get(group), offs);
+        } else {
+          p.setBindGroup(index >>> 0, get(group));
+        }
       },
 
       __wgpu_device_create_texture: function (device, width, height, depth, format, usage, dimension, mipLevelCount, sampleCount) {
@@ -5595,7 +5602,16 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       },
 
       __wgpu_compute_pass_set_pipeline: function (pass, pipeline) { const p = get(pass); if (p) p.setPipeline(get(pipeline)); },
-      __wgpu_compute_pass_set_bind_group: function (pass, index, group) { const p = get(pass); if (p) p.setBindGroup(index >>> 0, get(group)); },
+      __wgpu_compute_pass_set_bind_group: function (pass, index, group, offsetsPtr, offsetCount) {
+        const p = get(pass); if (!p) return;
+        offsetCount = offsetCount >>> 0;
+        if (offsetCount > 0) {
+          const offs = Array.from(new Uint32Array(getMemory().buffer, offsetsPtr >>> 0, offsetCount));
+          p.setBindGroup(index >>> 0, get(group), offs);
+        } else {
+          p.setBindGroup(index >>> 0, get(group));
+        }
+      },
       __wgpu_compute_pass_dispatch: function (pass, x, y, z) { const p = get(pass); if (p) p.dispatchWorkgroups(x >>> 0, y >>> 0, z >>> 0); },
       __wgpu_compute_pass_end: function (pass) { const p = get(pass); if (p) p.end(); },
 
