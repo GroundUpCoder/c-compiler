@@ -5121,6 +5121,23 @@ const WGPU_BLEND_FACTOR = {
   6: 'dst', 7: 'one-minus-dst', 8: 'dst-alpha', 9: 'one-minus-dst-alpha',
 };
 
+/* Strict enum resolvers — fail loud on an unrecognized value instead of
+   silently substituting a default (the repo's "surface errors loudly" rule).
+   wgpuEnumReq: every value (including 0) must be a real enumerant.
+   wgpuEnumOpt: 0 == WGPU*_Undefined -> the spec default; anything else strict. */
+function wgpuEnumReq(map, v, name) {
+  const s = map[v >>> 0];
+  if (s === undefined) throw new Error(name + ': unsupported enum value ' + v);
+  return s;
+}
+function wgpuEnumOpt(map, v, name, dflt) {
+  v = v >>> 0;
+  if (v === 0) return dflt;
+  const s = map[v];
+  if (s === undefined) throw new Error(name + ': unsupported enum value ' + v);
+  return s;
+}
+
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
 const WGPU_MAP_SUCCESS = 1, WGPU_MAP_ERROR = 3;
@@ -5229,7 +5246,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         if (canvas && width > 0 && height > 0) { canvas.width = width; canvas.height = height; }
         // OR in COPY_SRC so the canvas is always read-back-able (snapshots,
         // the netguc surface probe + camera capture); harmless if unused.
-        s.gpuCtx.configure({ device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: WGPU_ALPHA[alphaMode] || 'opaque' });
+        s.gpuCtx.configure({ device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: wgpuEnumReq(WGPU_ALPHA, alphaMode, 'alphaMode') });
         /* Reveal the canvas in the emitted page (reuses the SDL window path). */
         if (notifyWindow) notifyWindow({ type: 'sdl-window', width: width, height: height });
       },
@@ -5254,9 +5271,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           layout: layout ? get(layout) : 'auto',
           vertex: { module: get(vsModule), entryPoint: entryName(vsEntry, vsEntryLen) },
           primitive: {
-            topology: WGPU_TOPO[topology] || 'triangle-list',
-            frontFace: WGPU_FRONT[frontFace] || 'ccw',
-            cullMode: WGPU_CULL[cullMode] || 'none',
+            topology: wgpuEnumReq(WGPU_TOPO, topology, 'primitive.topology'),
+            frontFace: wgpuEnumReq(WGPU_FRONT, frontFace, 'primitive.frontFace'),
+            cullMode: wgpuEnumReq(WGPU_CULL, cullMode, 'primitive.cullMode'),
           },
         };
         /* Unpack the C-side packed vertex layout (struct-ignorant: a flat int
@@ -5278,7 +5295,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
               if (!fmtStr) throw new Error('wgpuDeviceCreateRenderPipeline: unsupported WGPUVertexFormat ' + fmt);
               attributes.push({ format: fmtStr, offset: off, shaderLocation: loc });
             }
-            buffers.push({ arrayStride: arrayStride, stepMode: WGPU_STEP_MODE[stepMode] || 'vertex', attributes: attributes });
+            buffers.push({ arrayStride: arrayStride, stepMode: wgpuEnumReq(WGPU_STEP_MODE, stepMode, 'vertex.stepMode'), attributes: attributes });
           }
           desc.vertex.buffers = buffers;
         }
@@ -5287,14 +5304,14 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           if (blendEnabled) {
             target.blend = {
               color: {
-                operation: WGPU_BLEND_OP[colorOp] || 'add',
-                srcFactor: WGPU_BLEND_FACTOR[colorSrc] || 'one',
-                dstFactor: WGPU_BLEND_FACTOR[colorDst] || 'zero',
+                operation: wgpuEnumOpt(WGPU_BLEND_OP, colorOp, 'blend.color.operation', 'add'),
+                srcFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, colorSrc, 'blend.color.srcFactor'),
+                dstFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, colorDst, 'blend.color.dstFactor'),
               },
               alpha: {
-                operation: WGPU_BLEND_OP[alphaOp] || 'add',
-                srcFactor: WGPU_BLEND_FACTOR[alphaSrc] || 'one',
-                dstFactor: WGPU_BLEND_FACTOR[alphaDst] || 'zero',
+                operation: wgpuEnumOpt(WGPU_BLEND_OP, alphaOp, 'blend.alpha.operation', 'add'),
+                srcFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, alphaSrc, 'blend.alpha.srcFactor'),
+                dstFactor: wgpuEnumReq(WGPU_BLEND_FACTOR, alphaDst, 'blend.alpha.dstFactor'),
               },
             };
           }
@@ -5310,17 +5327,17 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           const dss = {
             format: dfmt,
             depthWriteEnabled: !!depthWriteEnabled,
-            depthCompare: WGPU_COMPARE[depthCompare] || 'always',
+            depthCompare: wgpuEnumOpt(WGPU_COMPARE, depthCompare, 'depthStencil.depthCompare', 'always'),
           };
           /* Packed stencil: [frontCompare, frontFail, frontDepthFail, frontPass,
              backCompare, backFail, backDepthFail, backPass, readMask, writeMask]. */
           if (stencilPacked) {
             const a = new Int32Array(getMemory().buffer, stencilPacked, 10);
             const face = (o) => ({
-              compare: WGPU_COMPARE[a[o]] || 'always',
-              failOp: WGPU_STENCIL_OP[a[o + 1]] || 'keep',
-              depthFailOp: WGPU_STENCIL_OP[a[o + 2]] || 'keep',
-              passOp: WGPU_STENCIL_OP[a[o + 3]] || 'keep',
+              compare: wgpuEnumOpt(WGPU_COMPARE, a[o], 'stencil.compare', 'always'),
+              failOp: wgpuEnumOpt(WGPU_STENCIL_OP, a[o + 1], 'stencil.failOp', 'keep'),
+              depthFailOp: wgpuEnumOpt(WGPU_STENCIL_OP, a[o + 2], 'stencil.depthFailOp', 'keep'),
+              passOp: wgpuEnumOpt(WGPU_STENCIL_OP, a[o + 3], 'stencil.passOp', 'keep'),
             });
             dss.stencilFront = face(0);
             dss.stencilBack = face(4);
@@ -5384,9 +5401,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
             if (!t) throw new Error('createBindGroupLayout: unsupported buffer binding type ' + detail);
             entry.buffer = { type: t };
           } else if (kind === 1) {
-            entry.sampler = { type: WGPU_SAMPLER_BINDING_TYPE[detail] || 'filtering' };
+            entry.sampler = { type: wgpuEnumReq(WGPU_SAMPLER_BINDING_TYPE, detail, 'sampler.bindingType') };
           } else if (kind === 2) {
-            entry.texture = { sampleType: WGPU_TEXTURE_SAMPLE_TYPE[detail] || 'float', viewDimension: '2d' };
+            entry.texture = { sampleType: wgpuEnumReq(WGPU_TEXTURE_SAMPLE_TYPE, detail, 'texture.sampleType'), viewDimension: '2d' };
           } else {
             throw new Error('createBindGroupLayout: unknown entry kind ' + kind);
           }
@@ -5439,7 +5456,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           size: { width: width >>> 0, height: height >>> 0, depthOrArrayLayers: (depth >>> 0) || 1 },
           format: fmt,
           usage: usage >>> 0,
-          dimension: WGPU_TEXTURE_DIMENSION[dimension] || '2d',
+          dimension: wgpuEnumOpt(WGPU_TEXTURE_DIMENSION, dimension, 'texture.dimension', '2d'),
           mipLevelCount: (mipLevelCount >>> 0) || 1,
           sampleCount: (sampleCount >>> 0) || 1,
         }));
@@ -5448,12 +5465,12 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       __wgpu_device_create_sampler: function (device, addrU, addrV, addrW, magFilter, minFilter, mipmapFilter) {
         const d = get(device); if (!d) return 0;
         return alloc(d.createSampler({
-          addressModeU: WGPU_ADDRESS_MODE[addrU] || 'clamp-to-edge',
-          addressModeV: WGPU_ADDRESS_MODE[addrV] || 'clamp-to-edge',
-          addressModeW: WGPU_ADDRESS_MODE[addrW] || 'clamp-to-edge',
-          magFilter: WGPU_FILTER_MODE[magFilter] || 'nearest',
-          minFilter: WGPU_FILTER_MODE[minFilter] || 'nearest',
-          mipmapFilter: WGPU_FILTER_MODE[mipmapFilter] || 'nearest',
+          addressModeU: wgpuEnumOpt(WGPU_ADDRESS_MODE, addrU, 'sampler.addressModeU', 'clamp-to-edge'),
+          addressModeV: wgpuEnumOpt(WGPU_ADDRESS_MODE, addrV, 'sampler.addressModeV', 'clamp-to-edge'),
+          addressModeW: wgpuEnumOpt(WGPU_ADDRESS_MODE, addrW, 'sampler.addressModeW', 'clamp-to-edge'),
+          magFilter: wgpuEnumOpt(WGPU_FILTER_MODE, magFilter, 'sampler.magFilter', 'nearest'),
+          minFilter: wgpuEnumOpt(WGPU_FILTER_MODE, minFilter, 'sampler.minFilter', 'nearest'),
+          mipmapFilter: wgpuEnumOpt(WGPU_FILTER_MODE, mipmapFilter, 'sampler.mipmapFilter', 'nearest'),
         }));
       },
 
@@ -5524,7 +5541,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       __wgpu_compute_pass_end: function (pass) { const p = get(pass); if (p) p.end(); },
 
       __wgpu_device_push_error_scope: function (device, filter) {
-        const d = get(device); if (d) d.pushErrorScope(WGPU_ERROR_FILTER[filter] || 'validation');
+        const d = get(device); if (d) d.pushErrorScope(wgpuEnumReq(WGPU_ERROR_FILTER, filter, 'errorScope.filter'));
       },
 
       __wgpu_device_pop_error_scope: function (device, cb, ud1, ud2) {
@@ -5549,8 +5566,8 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         const rp = {
           colorAttachments: [{
             view: v,
-            loadOp: WGPU_LOADOP[loadOp] || 'clear',
-            storeOp: WGPU_STOREOP[storeOp] || 'store',
+            loadOp: wgpuEnumOpt(WGPU_LOADOP, loadOp, 'colorAttachment.loadOp', 'clear'),
+            storeOp: wgpuEnumOpt(WGPU_STOREOP, storeOp, 'colorAttachment.storeOp', 'store'),
             clearValue: { r: r, g: g, b: b, a: a },
           }],
         };
@@ -5558,13 +5575,13 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           const dsa = {
             view: get(depthView),
             depthClearValue: depthClearValue,
-            depthLoadOp: WGPU_LOADOP[depthLoadOp] || 'clear',
-            depthStoreOp: WGPU_STOREOP[depthStoreOp] || 'store',
+            depthLoadOp: wgpuEnumOpt(WGPU_LOADOP, depthLoadOp, 'depthAttachment.depthLoadOp', 'clear'),
+            depthStoreOp: wgpuEnumOpt(WGPU_STOREOP, depthStoreOp, 'depthAttachment.depthStoreOp', 'store'),
           };
           /* A stencil aspect (combined depth-stencil format) needs its own ops. */
           if (stencilLoadOp) {
-            dsa.stencilLoadOp = WGPU_LOADOP[stencilLoadOp] || 'clear';
-            dsa.stencilStoreOp = WGPU_STOREOP[stencilStoreOp] || 'store';
+            dsa.stencilLoadOp = wgpuEnumOpt(WGPU_LOADOP, stencilLoadOp, 'depthAttachment.stencilLoadOp', 'clear');
+            dsa.stencilStoreOp = wgpuEnumOpt(WGPU_STOREOP, stencilStoreOp, 'depthAttachment.stencilStoreOp', 'store');
             dsa.stencilClearValue = stencilClearValue >>> 0;
           }
           rp.depthStencilAttachment = dsa;
