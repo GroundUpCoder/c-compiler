@@ -17787,6 +17787,90 @@ typedef struct WGPUPipelineLayoutDescriptor {
     const WGPUBindGroupLayout *bindGroupLayouts;
 } WGPUPipelineLayoutDescriptor;
 
+/* ---- Textures + samplers ---- */
+typedef enum WGPUTextureDimension {
+    WGPUTextureDimension_1D = 1,
+    WGPUTextureDimension_2D = 2,
+    WGPUTextureDimension_3D = 3
+} WGPUTextureDimension;
+
+typedef enum WGPUTextureAspect {
+    WGPUTextureAspect_All = 1
+} WGPUTextureAspect;
+
+typedef enum WGPUAddressMode {
+    WGPUAddressMode_Undefined = 0,
+    WGPUAddressMode_ClampToEdge = 1,
+    WGPUAddressMode_Repeat = 2,
+    WGPUAddressMode_MirrorRepeat = 3
+} WGPUAddressMode;
+
+typedef enum WGPUFilterMode {
+    WGPUFilterMode_Undefined = 0,
+    WGPUFilterMode_Nearest = 1,
+    WGPUFilterMode_Linear = 2
+} WGPUFilterMode;
+
+typedef enum WGPUMipmapFilterMode {
+    WGPUMipmapFilterMode_Undefined = 0,
+    WGPUMipmapFilterMode_Nearest = 1,
+    WGPUMipmapFilterMode_Linear = 2
+} WGPUMipmapFilterMode;
+
+typedef struct WGPUExtent3D {
+    uint32_t width;
+    uint32_t height;
+    uint32_t depthOrArrayLayers;
+} WGPUExtent3D;
+
+typedef struct WGPUOrigin3D {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+} WGPUOrigin3D;
+
+typedef struct WGPUTextureDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUFlags usage;
+    WGPUTextureDimension dimension;
+    WGPUExtent3D size;
+    WGPUTextureFormat format;
+    uint32_t mipLevelCount;
+    uint32_t sampleCount;
+    size_t viewFormatCount;
+    const WGPUTextureFormat *viewFormats;
+} WGPUTextureDescriptor;
+
+typedef struct WGPUSamplerDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUAddressMode addressModeU;
+    WGPUAddressMode addressModeV;
+    WGPUAddressMode addressModeW;
+    WGPUFilterMode magFilter;
+    WGPUFilterMode minFilter;
+    WGPUMipmapFilterMode mipmapFilter;
+    float lodMinClamp;
+    float lodMaxClamp;
+    uint16_t maxAnisotropy;
+} WGPUSamplerDescriptor;
+
+/* Newer dialect spelling: WGPUTexelCopyTextureInfo / WGPUTexelCopyBufferLayout
+   (formerly WGPUImageCopyTexture / WGPUTextureDataLayout). */
+typedef struct WGPUTexelCopyTextureInfo {
+    WGPUTexture texture;
+    uint32_t mipLevel;
+    WGPUOrigin3D origin;
+    WGPUTextureAspect aspect;
+} WGPUTexelCopyTextureInfo;
+
+typedef struct WGPUTexelCopyBufferLayout {
+    uint64_t offset;
+    uint32_t bytesPerRow;
+    uint32_t rowsPerImage;
+} WGPUTexelCopyBufferLayout;
+
 typedef struct WGPUColorTargetState {
     const WGPUChainedStruct *nextInChain;
     WGPUTextureFormat format;
@@ -17910,6 +17994,11 @@ WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGP
 WGPUPipelineLayout wgpuDeviceCreatePipelineLayout(WGPUDevice device, const WGPUPipelineLayoutDescriptor *descriptor);
 WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device, const WGPUBindGroupDescriptor *descriptor);
 void wgpuRenderPassEncoderSetBindGroup(WGPURenderPassEncoder renderPassEncoder, uint32_t groupIndex, WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets);
+
+/* Textures + samplers. */
+WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, const WGPUTextureDescriptor *descriptor);
+WGPUSampler wgpuDeviceCreateSampler(WGPUDevice device, const WGPUSamplerDescriptor *descriptor);
+void wgpuQueueWriteTexture(WGPUQueue queue, const WGPUTexelCopyTextureInfo *destination, const void *data, size_t dataSize, const WGPUTexelCopyBufferLayout *dataLayout, const WGPUExtent3D *writeSize);
 
 /* Release/reference: free or retain a host handle. */
 void wgpuBufferRelease(WGPUBuffer v);
@@ -20881,6 +20970,9 @@ __import int  __wgpu_device_create_bind_group_layout(int device, const int *pack
 __import int  __wgpu_device_create_pipeline_layout(int device, const int *bgls, int count);
 __import int  __wgpu_device_create_bind_group(int device, int layout, const int *packed, int packedLen);
 __import void __wgpu_render_pass_set_bind_group(int pass, int index, int group);
+__import int  __wgpu_device_create_texture(int device, int width, int height, int depthOrArrayLayers, int format, int usage, int dimension, int mipLevelCount, int sampleCount);
+__import int  __wgpu_device_create_sampler(int device, int addrU, int addrV, int addrW, int magFilter, int minFilter, int mipmapFilter);
+__import void __wgpu_queue_write_texture(int queue, int texture, int mipLevel, int originX, int originY, int originZ, int aspect, const void *data, int dataSize, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depthOrArrayLayers);
 __import int  __wgpu_device_create_command_encoder(int device);
 __import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
@@ -21144,6 +21236,29 @@ void wgpuRenderPassEncoderSetBindGroup(WGPURenderPassEncoder renderPassEncoder,
     (void)dynamicOffsets;
     if (dynamicOffsetCount > 0) { fprintf(stderr, "wgpuRenderPassEncoderSetBindGroup: dynamic offsets not yet supported\\n"); abort(); }
     __wgpu_render_pass_set_bind_group((int)renderPassEncoder, (int)groupIndex, (int)group);
+}
+
+WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, const WGPUTextureDescriptor *d) {
+    return (WGPUTexture)__wgpu_device_create_texture((int)device,
+        (int)d->size.width, (int)d->size.height, (int)d->size.depthOrArrayLayers,
+        (int)d->format, (int)d->usage, (int)d->dimension,
+        (int)(d->mipLevelCount ? d->mipLevelCount : 1),
+        (int)(d->sampleCount ? d->sampleCount : 1));
+}
+
+WGPUSampler wgpuDeviceCreateSampler(WGPUDevice device, const WGPUSamplerDescriptor *d) {
+    return (WGPUSampler)__wgpu_device_create_sampler((int)device,
+        (int)d->addressModeU, (int)d->addressModeV, (int)d->addressModeW,
+        (int)d->magFilter, (int)d->minFilter, (int)d->mipmapFilter);
+}
+
+void wgpuQueueWriteTexture(WGPUQueue queue, const WGPUTexelCopyTextureInfo *dst,
+        const void *data, size_t dataSize, const WGPUTexelCopyBufferLayout *layout,
+        const WGPUExtent3D *size) {
+    __wgpu_queue_write_texture((int)queue, (int)dst->texture, (int)dst->mipLevel,
+        (int)dst->origin.x, (int)dst->origin.y, (int)dst->origin.z, (int)dst->aspect,
+        data, (int)dataSize, (int)layout->offset, (int)layout->bytesPerRow, (int)layout->rowsPerImage,
+        (int)size->width, (int)size->height, (int)size->depthOrArrayLayers);
 }
 
 void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }

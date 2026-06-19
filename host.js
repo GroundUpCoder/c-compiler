@@ -5086,6 +5086,12 @@ const WGPU_VERTEX_FORMAT = {
 const WGPU_STEP_MODE = { 0: 'vertex', 1: 'instance' };
 /* Buffer binding type — int (WGPUBufferBindingType) -> WGSL/JS string. */
 const WGPU_BUFFER_BINDING_TYPE = { 1: 'uniform', 2: 'storage', 3: 'read-only-storage' };
+/* Texture/sampler enums — int -> WebGPU JS string. */
+const WGPU_ADDRESS_MODE = { 0: 'clamp-to-edge', 1: 'clamp-to-edge', 2: 'repeat', 3: 'mirror-repeat' };
+const WGPU_FILTER_MODE = { 0: 'nearest', 1: 'nearest', 2: 'linear' };
+const WGPU_TEXTURE_DIMENSION = { 1: '1d', 2: '2d', 3: '3d' };
+const WGPU_SAMPLER_BINDING_TYPE = { 1: 'filtering', 2: 'non-filtering', 3: 'comparison' };
+const WGPU_TEXTURE_SAMPLE_TYPE = { 1: 'float', 2: 'unfilterable-float', 3: 'depth', 4: 'sint', 5: 'uint' };
 
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
@@ -5292,8 +5298,12 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
             const t = WGPU_BUFFER_BINDING_TYPE[detail];
             if (!t) throw new Error('createBindGroupLayout: unsupported buffer binding type ' + detail);
             entry.buffer = { type: t };
+          } else if (kind === 1) {
+            entry.sampler = { type: WGPU_SAMPLER_BINDING_TYPE[detail] || 'filtering' };
+          } else if (kind === 2) {
+            entry.texture = { sampleType: WGPU_TEXTURE_SAMPLE_TYPE[detail] || 'float', viewDimension: '2d' };
           } else {
-            throw new Error('createBindGroupLayout: sampler/texture bindings not yet supported (kind ' + kind + ')');
+            throw new Error('createBindGroupLayout: unknown entry kind ' + kind);
           }
           entries.push(entry);
         }
@@ -5334,6 +5344,46 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_render_pass_set_bind_group: function (pass, index, group) {
         const p = get(pass); if (p) p.setBindGroup(index >>> 0, get(group));
+      },
+
+      __wgpu_device_create_texture: function (device, width, height, depth, format, usage, dimension, mipLevelCount, sampleCount) {
+        const d = get(device); if (!d) return 0;
+        const fmt = WGPU_FORMAT_TO_STR[format];
+        if (!fmt) throw new Error('wgpuDeviceCreateTexture: unsupported format ' + format);
+        return alloc(d.createTexture({
+          size: { width: width >>> 0, height: height >>> 0, depthOrArrayLayers: (depth >>> 0) || 1 },
+          format: fmt,
+          usage: usage >>> 0,
+          dimension: WGPU_TEXTURE_DIMENSION[dimension] || '2d',
+          mipLevelCount: (mipLevelCount >>> 0) || 1,
+          sampleCount: (sampleCount >>> 0) || 1,
+        }));
+      },
+
+      __wgpu_device_create_sampler: function (device, addrU, addrV, addrW, magFilter, minFilter, mipmapFilter) {
+        const d = get(device); if (!d) return 0;
+        return alloc(d.createSampler({
+          addressModeU: WGPU_ADDRESS_MODE[addrU] || 'clamp-to-edge',
+          addressModeV: WGPU_ADDRESS_MODE[addrV] || 'clamp-to-edge',
+          addressModeW: WGPU_ADDRESS_MODE[addrW] || 'clamp-to-edge',
+          magFilter: WGPU_FILTER_MODE[magFilter] || 'nearest',
+          minFilter: WGPU_FILTER_MODE[minFilter] || 'nearest',
+          mipmapFilter: WGPU_FILTER_MODE[mipmapFilter] || 'nearest',
+        }));
+      },
+
+      __wgpu_queue_write_texture: function (queue, texture, mipLevel, ox, oy, oz, aspect, dataPtr, dataSize, offset, bytesPerRow, rowsPerImage, width, height, depth) {
+        const q = get(queue), t = get(texture);
+        if (!q || !t) throw new Error('wgpuQueueWriteTexture: invalid queue/texture handle');
+        /* writeTexture copies synchronously; a view into (non-shared) wasm memory is safe. */
+        const src = new Uint8Array(getMemory().buffer, dataPtr, dataSize >>> 0);
+        const layout = { offset: offset >>> 0, bytesPerRow: bytesPerRow >>> 0 };
+        if (rowsPerImage > 0) layout.rowsPerImage = rowsPerImage >>> 0;
+        q.writeTexture(
+          { texture: t, mipLevel: mipLevel >>> 0, origin: { x: ox >>> 0, y: oy >>> 0, z: oz >>> 0 } },
+          src, layout,
+          { width: width >>> 0, height: height >>> 0, depthOrArrayLayers: (depth >>> 0) || 1 }
+        );
       },
 
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
@@ -5397,6 +5447,9 @@ function createNullWebGPU(ctx) {
       __wgpu_device_create_pipeline_layout: function () { return 0; },
       __wgpu_device_create_bind_group: function () { return 0; },
       __wgpu_render_pass_set_bind_group: function () {},
+      __wgpu_device_create_texture: function () { return 0; },
+      __wgpu_device_create_sampler: function () { return 0; },
+      __wgpu_queue_write_texture: function () {},
       __wgpu_device_create_command_encoder: function () { return 0; },
       __wgpu_command_encoder_begin_render_pass: function () { return 0; },
       __wgpu_render_pass_set_pipeline: function () {},
