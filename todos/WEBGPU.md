@@ -209,6 +209,14 @@ For every feature in the standard `webgpu.h`:
   the runtime supports them, and **logged as skipped** otherwise — never
   silently passed.
 
+## Progress (updated 2026-06-19)
+
+**Landed (each on `main` with a `tests/browser/webgpu-*` pixel/readback test):**
+A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅.
+**Remaining Phase A:** A10–A15. **Phase B:** B16–B27 (none started).
+Vendored into `netguc/c` on disk (compiler `b8bdbc4`); netguc e2e + vendored-bump
+commit deferred until port 8006 is free (dev server running).
+
 ## Phase A — fix "implemented but not to spec" (silent drops / partial coverage)
 
 A1. **Texture formats** — full `WGPUTextureFormat` set + host maps + a
