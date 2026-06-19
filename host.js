@@ -5078,6 +5078,12 @@ const WGPU_TOPO = { 0: 'point-list', 1: 'line-list', 2: 'line-strip', 3: 'triang
 const WGPU_FRONT = { 0: 'ccw', 1: 'cw' };
 const WGPU_CULL = { 0: 'none', 1: 'front', 2: 'back' };
 const WGPU_ALPHA = { 0: 'opaque', 1: 'opaque', 2: 'premultiplied' };
+/* Vertex attribute formats — int (webgpu.h WGPUVertexFormat) -> WGSL string. */
+const WGPU_VERTEX_FORMAT = {
+  1: 'float32', 2: 'float32x2', 3: 'float32x3', 4: 'float32x4',
+  5: 'uint32', 6: 'uint32x2', 7: 'uint32x3', 8: 'uint32x4', 9: 'unorm8x4',
+};
+const WGPU_STEP_MODE = { 0: 'vertex', 1: 'instance' };
 
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
@@ -5205,7 +5211,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen) {
         const d = get(device); if (!d) return 0;
         const desc = {
           layout: 'auto',
@@ -5216,6 +5222,29 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
             cullMode: WGPU_CULL[cullMode] || 'none',
           },
         };
+        /* Unpack the C-side packed vertex layout (struct-ignorant: a flat int
+         * array). Layout: [ bufferCount, per buffer: arrayStride, stepMode,
+         * attrCount, per attr: format, byteOffset, shaderLocation ]. */
+        if (vbLayout && vbLayoutLen > 0) {
+          const a = new Int32Array(getMemory().buffer, vbLayout, vbLayoutLen);
+          let i = 0;
+          const bufferCount = a[i++];
+          const buffers = [];
+          for (let b = 0; b < bufferCount; b++) {
+            const arrayStride = a[i++] >>> 0;
+            const stepMode = a[i++];
+            const attrCount = a[i++];
+            const attributes = [];
+            for (let k = 0; k < attrCount; k++) {
+              const fmt = a[i++], off = a[i++] >>> 0, loc = a[i++] >>> 0;
+              const fmtStr = WGPU_VERTEX_FORMAT[fmt];
+              if (!fmtStr) throw new Error('wgpuDeviceCreateRenderPipeline: unsupported WGPUVertexFormat ' + fmt);
+              attributes.push({ format: fmtStr, offset: off, shaderLocation: loc });
+            }
+            buffers.push({ arrayStride: arrayStride, stepMode: WGPU_STEP_MODE[stepMode] || 'vertex', attributes: attributes });
+          }
+          desc.vertex.buffers = buffers;
+        }
         if (fsModule) {
           desc.fragment = {
             module: get(fsModule),
@@ -5224,6 +5253,27 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           };
         }
         return alloc(d.createRenderPipeline(desc));
+      },
+
+      __wgpu_device_create_buffer: function (device, size, usage) {
+        const d = get(device); if (!d) return 0;
+        return alloc(d.createBuffer({ size: size >>> 0, usage: usage >>> 0 }));
+      },
+
+      __wgpu_queue_write_buffer: function (queue, buffer, bufferOffset, dataPtr, size) {
+        const q = get(queue), buf = get(buffer);
+        if (!q || !buf) throw new Error('wgpuQueueWriteBuffer: invalid queue/buffer handle');
+        /* writeBuffer copies synchronously, so a view straight into wasm memory
+         * is safe (no retained reference). */
+        const src = new Uint8Array(getMemory().buffer, dataPtr, size >>> 0);
+        q.writeBuffer(buf, bufferOffset >>> 0, src, 0, size >>> 0);
+      },
+
+      __wgpu_render_pass_set_vertex_buffer: function (pass, slot, buffer, offset, size) {
+        const p = get(pass); if (!p) return;
+        /* size < 0 (i.e. WGPU_WHOLE_SIZE truncated to -1) => rest of buffer. */
+        if (size < 0) p.setVertexBuffer(slot >>> 0, get(buffer), offset >>> 0);
+        else p.setVertexBuffer(slot >>> 0, get(buffer), offset >>> 0, size >>> 0);
       },
 
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
@@ -5280,6 +5330,9 @@ function createNullWebGPU(ctx) {
       __wgpu_texture_create_view: function () { return 0; },
       __wgpu_device_create_shader_module_wgsl: function () { return 0; },
       __wgpu_device_create_render_pipeline: function () { return 0; },
+      __wgpu_device_create_buffer: function () { return 0; },
+      __wgpu_queue_write_buffer: function () {},
+      __wgpu_render_pass_set_vertex_buffer: function () {},
       __wgpu_device_create_command_encoder: function () { return 0; },
       __wgpu_command_encoder_begin_render_pass: function () { return 0; },
       __wgpu_render_pass_set_pipeline: function () {},

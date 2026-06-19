@@ -17425,6 +17425,7 @@ typedef struct WGPUStringView {
     size_t length;
 } WGPUStringView;
 #define WGPU_STRLEN ((size_t)-1)
+#define WGPU_WHOLE_SIZE (0xFFFFFFFFFFFFFFFFULL)
 
 /* WGPUFuture: opaque async token. We drive completion via callbacks, so the id
    is a plain monotonic counter the user does not need to inspect. */
@@ -17514,6 +17515,38 @@ typedef enum WGPUCompositeAlphaMode {
 typedef enum WGPUPresentMode {
     WGPUPresentMode_Fifo = 0
 } WGPUPresentMode;
+
+/* Vertex attribute formats. Values are self-consistent header<->host (the host
+   maps these ints to WGSL format strings); add more as samples need them. */
+typedef enum WGPUVertexFormat {
+    WGPUVertexFormat_Float32   = 1,
+    WGPUVertexFormat_Float32x2 = 2,
+    WGPUVertexFormat_Float32x3 = 3,
+    WGPUVertexFormat_Float32x4 = 4,
+    WGPUVertexFormat_Uint32    = 5,
+    WGPUVertexFormat_Uint32x2  = 6,
+    WGPUVertexFormat_Uint32x3  = 7,
+    WGPUVertexFormat_Uint32x4  = 8,
+    WGPUVertexFormat_Unorm8x4  = 9
+} WGPUVertexFormat;
+
+typedef enum WGPUVertexStepMode {
+    WGPUVertexStepMode_Vertex   = 0,
+    WGPUVertexStepMode_Instance = 1
+} WGPUVertexStepMode;
+
+/* Buffer usage flags. Values mirror the JS GPUBufferUsage bits exactly so they
+   pass straight through to the host (no remap). */
+#define WGPUBufferUsage_MapRead      0x0001
+#define WGPUBufferUsage_MapWrite     0x0002
+#define WGPUBufferUsage_CopySrc      0x0004
+#define WGPUBufferUsage_CopyDst      0x0008
+#define WGPUBufferUsage_Index        0x0010
+#define WGPUBufferUsage_Vertex       0x0020
+#define WGPUBufferUsage_Uniform      0x0040
+#define WGPUBufferUsage_Storage      0x0080
+#define WGPUBufferUsage_Indirect     0x0100
+#define WGPUBufferUsage_QueryResolve 0x0200
 
 /* Texture usage flags. */
 #define WGPUTextureUsage_CopySrc          0x01
@@ -17623,7 +17656,27 @@ typedef struct WGPUTextureViewDescriptor {
 
 typedef struct WGPUBlendState WGPUBlendState;
 typedef struct WGPUConstantEntry WGPUConstantEntry;
-typedef struct WGPUVertexBufferLayout WGPUVertexBufferLayout;
+
+typedef struct WGPUVertexAttribute {
+    WGPUVertexFormat format;
+    uint64_t offset;
+    uint32_t shaderLocation;
+} WGPUVertexAttribute;
+
+typedef struct WGPUVertexBufferLayout {
+    uint64_t arrayStride;
+    WGPUVertexStepMode stepMode;
+    size_t attributeCount;
+    const WGPUVertexAttribute *attributes;
+} WGPUVertexBufferLayout;
+
+typedef struct WGPUBufferDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUFlags usage;
+    uint64_t size;
+    WGPUBool mappedAtCreation;
+} WGPUBufferDescriptor;
 
 typedef struct WGPUColorTargetState {
     const WGPUChainedStruct *nextInChain;
@@ -17736,7 +17789,14 @@ void wgpuRenderPassEncoderEnd(WGPURenderPassEncoder renderPassEncoder);
 WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder commandEncoder, const WGPUCommandBufferDescriptor *descriptor);
 void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuffer *commands);
 
+/* Buffers (vertex/index/uniform). size/offset are bytes; the browser sandbox
+   keeps these well under 2GB so they marshal as i32. */
+WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, const WGPUBufferDescriptor *descriptor);
+void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, const void *data, size_t size);
+void wgpuRenderPassEncoderSetVertexBuffer(WGPURenderPassEncoder renderPassEncoder, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
+
 /* Release/reference: free or retain a host handle. */
+void wgpuBufferRelease(WGPUBuffer v);
 void wgpuInstanceRelease(WGPUInstance v);
 void wgpuAdapterRelease(WGPUAdapter v);
 void wgpuDeviceRelease(WGPUDevice v);
@@ -20677,6 +20737,8 @@ void __setAnimationFrameFunc(void (*callback)(void)) {
   `,
   "__webgpu.c": `
 #include <webgpu.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* Low-level host imports — primitives only (handles are i32 indices into the
    host handle table; pointers are i32; clear color is f64). host.js never reads
@@ -20691,7 +20753,10 @@ __import void __wgpu_surface_configure(int surface, int device, int format, int 
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
-__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen);
+__import int  __wgpu_device_create_buffer(int device, int size, int usage);
+__import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
+__import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
 __import int  __wgpu_device_create_command_encoder(int device);
 __import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
@@ -20799,11 +20864,41 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         if (desc->fragment->targetCount > 0 && desc->fragment->targets)
             fmt = (int)desc->fragment->targets[0].format;
     }
+
+    /* Flatten the variable-length vertex.buffers[] (buffers -> attributes) into
+       ONE packed int array; the host stays struct-ignorant and reads only ints.
+       Layout: [ bufferCount,
+                 per buffer: arrayStride, stepMode, attrCount,
+                   per attr: format, byteOffset, shaderLocation ].
+       This is the packed-array convention all array-bearing WebGPU descriptors
+       use here. */
+    static int vb[256];
+    int n = 0, cap = (int)(sizeof(vb) / sizeof(vb[0]));
+    int bc = (int)desc->vertex.bufferCount;
+    vb[n++] = bc;
+    for (int i = 0; i < bc; i++) {
+        const WGPUVertexBufferLayout *L = &desc->vertex.buffers[i];
+        int ac = (int)L->attributeCount;
+        if (n + 3 + ac * 3 > cap) {
+            fprintf(stderr, "wgpuDeviceCreateRenderPipeline: vertex layout exceeds packed cap (%d ints); raise vb[]\\n", cap);
+            abort();
+        }
+        vb[n++] = (int)L->arrayStride;
+        vb[n++] = (int)L->stepMode;
+        vb[n++] = ac;
+        for (int j = 0; j < ac; j++) {
+            vb[n++] = (int)L->attributes[j].format;
+            vb[n++] = (int)L->attributes[j].offset;
+            vb[n++] = (int)L->attributes[j].shaderLocation;
+        }
+    }
+
     return (WGPURenderPipeline)__wgpu_device_create_render_pipeline(
         (int)device,
         (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
         fsModule, fsEntry, fsEntryLen,
-        fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace);
+        fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
+        vb, n);
 }
 
 WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor) {
@@ -20848,6 +20943,21 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
         __wgpu_queue_submit_one((int)queue, (int)commands[i]);
 }
 
+WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, const WGPUBufferDescriptor *descriptor) {
+    return (WGPUBuffer)__wgpu_device_create_buffer(
+        (int)device, (int)descriptor->size, (int)descriptor->usage);
+}
+
+void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset,
+        const void *data, size_t size) {
+    __wgpu_queue_write_buffer((int)queue, (int)buffer, (int)bufferOffset, data, (int)size);
+}
+
+void wgpuRenderPassEncoderSetVertexBuffer(WGPURenderPassEncoder renderPassEncoder,
+        uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size) {
+    __wgpu_render_pass_set_vertex_buffer((int)renderPassEncoder, (int)slot, (int)buffer, (int)offset, (int)size);
+}
+
 void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }
 void wgpuAdapterRelease(WGPUAdapter v) { __wgpu_release((int)v); }
 void wgpuDeviceRelease(WGPUDevice v) { __wgpu_release((int)v); }
@@ -20860,6 +20970,7 @@ void wgpuRenderPipelineRelease(WGPURenderPipeline v) { __wgpu_release((int)v); }
 void wgpuCommandEncoderRelease(WGPUCommandEncoder v) { __wgpu_release((int)v); }
 void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder v) { __wgpu_release((int)v); }
 void wgpuCommandBufferRelease(WGPUCommandBuffer v) { __wgpu_release((int)v); }
+void wgpuBufferRelease(WGPUBuffer v) { __wgpu_release((int)v); }
 
 void wgpuSetMainLoopCallback(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
