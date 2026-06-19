@@ -17937,6 +17937,37 @@ typedef struct WGPUBufferMapCallbackInfo {
     void *userdata2;
 } WGPUBufferMapCallbackInfo;
 
+/* ---- Error handling (push/pop error scope; callback-based, NO JSPI) ---- */
+typedef enum WGPUErrorFilter {
+    WGPUErrorFilter_Validation = 1,
+    WGPUErrorFilter_OutOfMemory = 2,
+    WGPUErrorFilter_Internal = 3
+} WGPUErrorFilter;
+
+typedef enum WGPUErrorType {
+    WGPUErrorType_NoError = 1,
+    WGPUErrorType_Validation = 2,
+    WGPUErrorType_OutOfMemory = 3,
+    WGPUErrorType_Internal = 4,
+    WGPUErrorType_Unknown = 5
+} WGPUErrorType;
+
+typedef enum WGPUPopErrorScopeStatus {
+    WGPUPopErrorScopeStatus_Success = 1,
+    WGPUPopErrorScopeStatus_Error = 3
+} WGPUPopErrorScopeStatus;
+
+typedef void (*WGPUPopErrorScopeCallback)(WGPUPopErrorScopeStatus status,
+    WGPUErrorType type, WGPUStringView message, void *userdata1, void *userdata2);
+
+typedef struct WGPUPopErrorScopeCallbackInfo {
+    const WGPUChainedStruct *nextInChain;
+    WGPUCallbackMode mode;
+    WGPUPopErrorScopeCallback callback;
+    void *userdata1;
+    void *userdata2;
+} WGPUPopErrorScopeCallbackInfo;
+
 typedef struct WGPUColorTargetState {
     const WGPUChainedStruct *nextInChain;
     WGPUTextureFormat format;
@@ -18163,6 +18194,11 @@ void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder computePassEncoder
 void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder computePassEncoder, uint32_t groupIndex, WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets);
 void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder computePassEncoder, uint32_t workgroupCountX, uint32_t workgroupCountY, uint32_t workgroupCountZ);
 void wgpuComputePassEncoderEnd(WGPUComputePassEncoder computePassEncoder);
+
+/* Error scopes: bracket GPU work to catch validation/oom errors in C (the
+   message is also logged host-side). pop is async (callback model, NO JSPI). */
+void wgpuDevicePushErrorScope(WGPUDevice device, WGPUErrorFilter filter);
+WGPUFuture wgpuDevicePopErrorScope(WGPUDevice device, WGPUPopErrorScopeCallbackInfo callbackInfo);
 
 /* Release/reference: free or retain a host handle. */
 void wgpuBufferRelease(WGPUBuffer v);
@@ -21152,6 +21188,8 @@ __import void __wgpu_compute_pass_set_pipeline(int pass, int pipeline);
 __import void __wgpu_compute_pass_set_bind_group(int pass, int index, int group);
 __import void __wgpu_compute_pass_dispatch(int pass, int x, int y, int z);
 __import void __wgpu_compute_pass_end(int pass);
+__import void __wgpu_device_push_error_scope(int device, int filter);
+__import void __wgpu_device_pop_error_scope(int device, WGPUPopErrorScopeCallback cb, void *ud1, void *ud2);
 __import int  __wgpu_device_create_command_encoder(int device);
 __import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a, int depthView, int depthLoadOp, int depthStoreOp, double depthClearValue, int stencilLoadOp, int stencilStoreOp, int stencilClearValue);
 __import void __wgpu_render_pass_set_stencil_reference(int pass, int reference);
@@ -21213,6 +21251,12 @@ void __wgpu_call_buffer_map_cb(WGPUBufferMapCallback cb, int status, void *ud1, 
     if (cb) cb((WGPUMapAsyncStatus)status, sv, ud1, ud2);
 }
 __export __wgpu_call_buffer_map_cb = __wgpu_call_buffer_map_cb;
+
+void __wgpu_call_pop_error_cb(WGPUPopErrorScopeCallback cb, int status, int type, void *ud1, void *ud2) {
+    WGPUStringView sv; sv.data = 0; sv.length = 0;   /* message is logged host-side */
+    if (cb) cb((WGPUPopErrorScopeStatus)status, (WGPUErrorType)type, sv, ud1, ud2);
+}
+__export __wgpu_call_pop_error_cb = __wgpu_call_pop_error_cb;
 
 WGPUQueue wgpuDeviceGetQueue(WGPUDevice device) {
     return (WGPUQueue)__wgpu_device_get_queue((int)device);
@@ -21596,6 +21640,15 @@ void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder pass,
 
 void wgpuComputePassEncoderEnd(WGPUComputePassEncoder pass) {
     __wgpu_compute_pass_end((int)pass);
+}
+
+void wgpuDevicePushErrorScope(WGPUDevice device, WGPUErrorFilter filter) {
+    __wgpu_device_push_error_scope((int)device, (int)filter);
+}
+
+WGPUFuture wgpuDevicePopErrorScope(WGPUDevice device, WGPUPopErrorScopeCallbackInfo callbackInfo) {
+    __wgpu_device_pop_error_scope((int)device, callbackInfo.callback, callbackInfo.userdata1, callbackInfo.userdata2);
+    WGPUFuture f; f.id = ++__wgpu_future_seq; return f;
 }
 
 void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }

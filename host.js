@@ -5079,6 +5079,7 @@ const WGPU_STENCIL_OP = {
   1: 'keep', 2: 'zero', 3: 'replace', 4: 'invert',
   5: 'increment-clamp', 6: 'decrement-clamp', 7: 'increment-wrap', 8: 'decrement-wrap',
 };
+const WGPU_ERROR_FILTER = { 1: 'validation', 2: 'out-of-memory', 3: 'internal' };
 const WGPU_STR_TO_FORMAT = {
   'rgba8unorm': 18, 'rgba8unorm-srgb': 19, 'bgra8unorm': 23, 'bgra8unorm-srgb': 24,
 };
@@ -5511,6 +5512,24 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       __wgpu_compute_pass_dispatch: function (pass, x, y, z) { const p = get(pass); if (p) p.dispatchWorkgroups(x >>> 0, y >>> 0, z >>> 0); },
       __wgpu_compute_pass_end: function (pass) { const p = get(pass); if (p) p.end(); },
 
+      __wgpu_device_push_error_scope: function (device, filter) {
+        const d = get(device); if (d) d.pushErrorScope(WGPU_ERROR_FILTER[filter] || 'validation');
+      },
+
+      __wgpu_device_pop_error_scope: function (device, cb, ud1, ud2) {
+        const d = get(device);
+        const fire = function (status, type) { const fn = getExports().__wgpu_call_pop_error_cb; if (fn) fn(cb, status, type, ud1, ud2); };
+        if (!d) { Promise.resolve().then(function () { fire(3, 5); }); return; }
+        d.popErrorScope().then(function (err) {
+          if (!err) { fire(1, 1); return; }   /* success status, NoError */
+          let type = 4;                        /* internal */
+          if (typeof GPUValidationError !== 'undefined' && err instanceof GPUValidationError) type = 2;
+          else if (typeof GPUOutOfMemoryError !== 'undefined' && err instanceof GPUOutOfMemoryError) type = 3;
+          console.error('WebGPU error scope captured:', err.message);
+          fire(1, type);                       /* success status, captured error type */
+        }).catch(function (e) { console.error('popErrorScope failed', e); fire(3, 5); });
+      },
+
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
       __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
@@ -5608,6 +5627,11 @@ function createNullWebGPU(ctx) {
       __wgpu_compute_pass_set_bind_group: function () {},
       __wgpu_compute_pass_dispatch: function () {},
       __wgpu_compute_pass_end: function () {},
+      __wgpu_device_push_error_scope: function () {},
+      __wgpu_device_pop_error_scope: function (device, cb, ud1, ud2) {
+        const fn = ctx && ctx.getExports() && ctx.getExports().__wgpu_call_pop_error_cb;
+        Promise.resolve().then(function () { if (fn) fn(cb, 1, 1, ud1, ud2); });  /* success, NoError */
+      },
       __wgpu_device_create_command_encoder: function () { return 0; },
       __wgpu_command_encoder_begin_render_pass: function () { return 0; },
       __wgpu_render_pass_set_pipeline: function () {},
