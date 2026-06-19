@@ -214,7 +214,7 @@ For every feature in the standard `webgpu.h`:
 ## Progress + revised direction (updated 2026-06-19)
 
 **Landed (each on `main` with a `tests/browser/webgpu-*` pixel/readback test):**
-A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A12 ✅ A13 ✅.
+A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A12 ✅ A13 ✅ A14 ✅.
 
 - **A10+A11** (`webgpu-mrt`): render pipeline color targets and render-pass color
   attachments are now packed arrays — multiple color targets with per-target
@@ -232,6 +232,13 @@ A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A
   the `compare` field to `WGPUSamplerDescriptor` and moved `WGPUCompareFunction`
   ahead of it. Test clears a depth32float texture and samples it through a
   comparison sampler (shadow-style).
+- **A14** (`webgpu-depthbias`): depth-stencil completeness — `depthBias` /
+  `depthBiasSlopeScale` / `depthBiasClamp` (pipeline), `depthReadOnly` /
+  `stencilReadOnly` (render-pass attachment; when read-only the aspect carries no
+  load/store ops), and primitive `stripIndexFormat`. Test uses a depth16unorm
+  texture (well-defined bias unit), a read-only depth pass, and an indexed
+  triangle-strip — depthBias is the deciding factor (verified: bias 0 → red,
+  bias -2048 → green).
 
 **Direction decision (2026-06-19):** stop *widening* the WebGPU surface for now;
 make the surface we already expose as **conformant** as possible instead.

@@ -5339,17 +5339,25 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, targetsPacked, targetsLen, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, stencilPacked, sampleCount, sampleMask, alphaToCoverage, vsConstInts, vsConstIntsLen, vsConstVals, fsConstInts, fsConstIntsLen, fsConstVals) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, targetsPacked, targetsLen, topology, stripIndexFormat, cullMode, frontFace, vbLayout, vbLayoutLen, layout, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, depthBias, depthBiasSlopeScale, depthBiasClamp, stencilPacked, sampleCount, sampleMask, alphaToCoverage, vsConstInts, vsConstIntsLen, vsConstVals, fsConstInts, fsConstIntsLen, fsConstVals) {
         const d = get(device); if (!d) return 0;
         const vsConstants = unpackConstants(vsConstInts, vsConstIntsLen, vsConstVals);
+        const primitive = {
+          topology: wgpuEnumReq(WGPU_TOPO, topology, 'primitive.topology'),
+          frontFace: wgpuEnumReq(WGPU_FRONT, frontFace, 'primitive.frontFace'),
+          cullMode: wgpuEnumReq(WGPU_CULL, cullMode, 'primitive.cullMode'),
+        };
+        /* stripIndexFormat: required for indexed strip draws, must be undefined
+           for list topologies -> 0 (Undefined) means omit. */
+        if (stripIndexFormat) {
+          const f = WGPU_INDEX_FORMAT[stripIndexFormat >>> 0];
+          if (!f) throw new Error('primitive.stripIndexFormat: unsupported index format ' + stripIndexFormat);
+          primitive.stripIndexFormat = f;
+        }
         const desc = {
           layout: layout ? get(layout) : 'auto',
           vertex: { module: get(vsModule), entryPoint: entryName(vsEntry, vsEntryLen) },
-          primitive: {
-            topology: wgpuEnumReq(WGPU_TOPO, topology, 'primitive.topology'),
-            frontFace: wgpuEnumReq(WGPU_FRONT, frontFace, 'primitive.frontFace'),
-            cullMode: wgpuEnumReq(WGPU_CULL, cullMode, 'primitive.cullMode'),
-          },
+          primitive: primitive,
         };
         /* Unpack the C-side packed vertex layout (struct-ignorant: a flat int
          * array). Layout: [ bufferCount, per buffer: arrayStride, stepMode,
@@ -5426,6 +5434,9 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
             format: dfmt,
             depthWriteEnabled: !!depthWriteEnabled,
             depthCompare: wgpuEnumOpt(WGPU_COMPARE, depthCompare, 'depthStencil.depthCompare', 'always'),
+            depthBias: depthBias | 0,
+            depthBiasSlopeScale: depthBiasSlopeScale,
+            depthBiasClamp: depthBiasClamp,
           };
           /* Packed stencil: [frontCompare, frontFail, frontDepthFail, frontPass,
              backCompare, backFail, backDepthFail, backPass, readMask, writeMask]. */
@@ -5721,7 +5732,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
-      __wgpu_command_encoder_begin_render_pass: function (encoder, colorPacked, colorLen, clearPacked, depthView, depthLoadOp, depthStoreOp, depthClearValue, stencilLoadOp, stencilStoreOp, stencilClearValue) {
+      __wgpu_command_encoder_begin_render_pass: function (encoder, colorPacked, colorLen, clearPacked, depthView, depthLoadOp, depthStoreOp, depthClearValue, depthReadOnly, stencilLoadOp, stencilStoreOp, stencilClearValue, stencilReadOnly) {
         const enc = get(encoder);
         if (!enc) return 0;
         /* Unpack the packed color attachments. Ints: [ count, per attachment:
@@ -5751,14 +5762,21 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         }
         const rp = { colorAttachments: colorAttachments };
         if (depthView) {
-          const dsa = {
-            view: get(depthView),
-            depthClearValue: depthClearValue,
-            depthLoadOp: wgpuEnumOpt(WGPU_LOADOP, depthLoadOp, 'depthAttachment.depthLoadOp', 'clear'),
-            depthStoreOp: wgpuEnumOpt(WGPU_STOREOP, depthStoreOp, 'depthAttachment.depthStoreOp', 'store'),
-          };
-          /* A stencil aspect (combined depth-stencil format) needs its own ops. */
-          if (stencilLoadOp) {
+          const dsa = { view: get(depthView) };
+          /* Read-only depth: the aspect is read (for testing) but never written,
+             so it must NOT carry load/store ops. Otherwise set the ops + clear. */
+          if (depthReadOnly) {
+            dsa.depthReadOnly = true;
+          } else {
+            dsa.depthClearValue = depthClearValue;
+            dsa.depthLoadOp = wgpuEnumOpt(WGPU_LOADOP, depthLoadOp, 'depthAttachment.depthLoadOp', 'clear');
+            dsa.depthStoreOp = wgpuEnumOpt(WGPU_STOREOP, depthStoreOp, 'depthAttachment.depthStoreOp', 'store');
+          }
+          /* A stencil aspect (combined depth-stencil format) is read-only or needs
+             its own ops. */
+          if (stencilReadOnly) {
+            dsa.stencilReadOnly = true;
+          } else if (stencilLoadOp) {
             dsa.stencilLoadOp = wgpuEnumOpt(WGPU_LOADOP, stencilLoadOp, 'depthAttachment.stencilLoadOp', 'clear');
             dsa.stencilStoreOp = wgpuEnumOpt(WGPU_STOREOP, stencilStoreOp, 'depthAttachment.stencilStoreOp', 'store');
             dsa.stencilClearValue = stencilClearValue >>> 0;
