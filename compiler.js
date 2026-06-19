@@ -17987,6 +17987,8 @@ void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, const WGPUCommandBuff
 WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, const WGPUBufferDescriptor *descriptor);
 void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, const void *data, size_t size);
 void wgpuRenderPassEncoderSetVertexBuffer(WGPURenderPassEncoder renderPassEncoder, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
+void wgpuRenderPassEncoderSetIndexBuffer(WGPURenderPassEncoder renderPassEncoder, WGPUBuffer buffer, WGPUIndexFormat format, uint64_t offset, uint64_t size);
+void wgpuRenderPassEncoderDrawIndexed(WGPURenderPassEncoder renderPassEncoder, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t baseVertex, uint32_t firstInstance);
 
 /* Bind groups + pipeline layout (uniform/storage buffer bindings; sampler &
    texture bindings land with the textures increment). */
@@ -20966,6 +20968,8 @@ __import int  __wgpu_device_create_render_pipeline(int device, int vsModule, con
 __import int  __wgpu_device_create_buffer(int device, int size, int usage);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
+__import void __wgpu_render_pass_set_index_buffer(int pass, int buffer, int format, int offset, int size);
+__import void __wgpu_render_pass_draw_indexed(int pass, int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance);
 __import int  __wgpu_device_create_bind_group_layout(int device, const int *packed, int packedLen);
 __import int  __wgpu_device_create_pipeline_layout(int device, const int *bgls, int count);
 __import int  __wgpu_device_create_bind_group(int device, int layout, const int *packed, int packedLen);
@@ -21172,6 +21176,16 @@ void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOff
 void wgpuRenderPassEncoderSetVertexBuffer(WGPURenderPassEncoder renderPassEncoder,
         uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size) {
     __wgpu_render_pass_set_vertex_buffer((int)renderPassEncoder, (int)slot, (int)buffer, (int)offset, (int)size);
+}
+
+void wgpuRenderPassEncoderSetIndexBuffer(WGPURenderPassEncoder renderPassEncoder,
+        WGPUBuffer buffer, WGPUIndexFormat format, uint64_t offset, uint64_t size) {
+    __wgpu_render_pass_set_index_buffer((int)renderPassEncoder, (int)buffer, (int)format, (int)offset, (int)size);
+}
+
+void wgpuRenderPassEncoderDrawIndexed(WGPURenderPassEncoder renderPassEncoder,
+        uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t baseVertex, uint32_t firstInstance) {
+    __wgpu_render_pass_draw_indexed((int)renderPassEncoder, (int)indexCount, (int)instanceCount, (int)firstIndex, (int)baseVertex, (int)firstInstance);
 }
 
 WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGPUBindGroupLayoutDescriptor *desc) {

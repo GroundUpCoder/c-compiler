@@ -5092,6 +5092,7 @@ const WGPU_FILTER_MODE = { 0: 'nearest', 1: 'nearest', 2: 'linear' };
 const WGPU_TEXTURE_DIMENSION = { 1: '1d', 2: '2d', 3: '3d' };
 const WGPU_SAMPLER_BINDING_TYPE = { 1: 'filtering', 2: 'non-filtering', 3: 'comparison' };
 const WGPU_TEXTURE_SAMPLE_TYPE = { 1: 'float', 2: 'unfilterable-float', 3: 'depth', 4: 'sint', 5: 'uint' };
+const WGPU_INDEX_FORMAT = { 1: 'uint16', 2: 'uint32' };
 
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
@@ -5284,6 +5285,18 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         else p.setVertexBuffer(slot >>> 0, get(buffer), offset >>> 0, size >>> 0);
       },
 
+      __wgpu_render_pass_set_index_buffer: function (pass, buffer, format, offset, size) {
+        const p = get(pass); if (!p) return;
+        const fmt = WGPU_INDEX_FORMAT[format];
+        if (!fmt) throw new Error('wgpuRenderPassEncoderSetIndexBuffer: unsupported index format ' + format);
+        if (size < 0) p.setIndexBuffer(get(buffer), fmt, offset >>> 0);
+        else p.setIndexBuffer(get(buffer), fmt, offset >>> 0, size >>> 0);
+      },
+
+      __wgpu_render_pass_draw_indexed: function (pass, indexCount, instanceCount, firstIndex, baseVertex, firstInstance) {
+        const p = get(pass); if (p) p.drawIndexed(indexCount >>> 0, instanceCount >>> 0, firstIndex >>> 0, baseVertex | 0, firstInstance >>> 0);
+      },
+
       __wgpu_device_create_bind_group_layout: function (device, packedPtr, packedLen) {
         const d = get(device); if (!d) return 0;
         /* Packed: [ entryCount, per entry: binding, visibility, kind, detail ]. */
@@ -5443,6 +5456,8 @@ function createNullWebGPU(ctx) {
       __wgpu_device_create_buffer: function () { return 0; },
       __wgpu_queue_write_buffer: function () {},
       __wgpu_render_pass_set_vertex_buffer: function () {},
+      __wgpu_render_pass_set_index_buffer: function () {},
+      __wgpu_render_pass_draw_indexed: function () {},
       __wgpu_device_create_bind_group_layout: function () { return 0; },
       __wgpu_device_create_pipeline_layout: function () { return 0; },
       __wgpu_device_create_bind_group: function () { return 0; },
