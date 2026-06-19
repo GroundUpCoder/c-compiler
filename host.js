@@ -5093,6 +5093,11 @@ const WGPU_TEXTURE_DIMENSION = { 1: '1d', 2: '2d', 3: '3d' };
 const WGPU_SAMPLER_BINDING_TYPE = { 1: 'filtering', 2: 'non-filtering', 3: 'comparison' };
 const WGPU_TEXTURE_SAMPLE_TYPE = { 1: 'float', 2: 'unfilterable-float', 3: 'depth', 4: 'sint', 5: 'uint' };
 const WGPU_INDEX_FORMAT = { 1: 'uint16', 2: 'uint32' };
+const WGPU_BLEND_OP = { 1: 'add', 2: 'subtract', 3: 'reverse-subtract', 4: 'min', 5: 'max' };
+const WGPU_BLEND_FACTOR = {
+  0: 'zero', 1: 'one', 2: 'src', 3: 'one-minus-src', 4: 'src-alpha', 5: 'one-minus-src-alpha',
+  6: 'dst', 7: 'one-minus-dst', 8: 'dst-alpha', 9: 'one-minus-dst-alpha',
+};
 
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
@@ -5221,7 +5226,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout, blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst) {
         const d = get(device); if (!d) return 0;
         const desc = {
           layout: layout ? get(layout) : 'auto',
@@ -5256,10 +5261,25 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           desc.vertex.buffers = buffers;
         }
         if (fsModule) {
+          const target = { format: WGPU_FORMAT_TO_STR[format] || preferredFormat() };
+          if (blendEnabled) {
+            target.blend = {
+              color: {
+                operation: WGPU_BLEND_OP[colorOp] || 'add',
+                srcFactor: WGPU_BLEND_FACTOR[colorSrc] || 'one',
+                dstFactor: WGPU_BLEND_FACTOR[colorDst] || 'zero',
+              },
+              alpha: {
+                operation: WGPU_BLEND_OP[alphaOp] || 'add',
+                srcFactor: WGPU_BLEND_FACTOR[alphaSrc] || 'one',
+                dstFactor: WGPU_BLEND_FACTOR[alphaDst] || 'zero',
+              },
+            };
+          }
           desc.fragment = {
             module: get(fsModule),
             entryPoint: entryName(fsEntry, fsEntryLen),
-            targets: [{ format: WGPU_FORMAT_TO_STR[format] || preferredFormat() }],
+            targets: [target],
           };
         }
         return alloc(d.createRenderPipeline(desc));

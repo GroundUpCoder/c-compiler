@@ -17671,7 +17671,38 @@ typedef struct WGPUTextureViewDescriptor {
     WGPUStringView label;
 } WGPUTextureViewDescriptor;
 
-typedef struct WGPUBlendState WGPUBlendState;
+typedef enum WGPUBlendOperation {
+    WGPUBlendOperation_Add = 1,
+    WGPUBlendOperation_Subtract = 2,
+    WGPUBlendOperation_ReverseSubtract = 3,
+    WGPUBlendOperation_Min = 4,
+    WGPUBlendOperation_Max = 5
+} WGPUBlendOperation;
+
+typedef enum WGPUBlendFactor {
+    WGPUBlendFactor_Zero = 0,
+    WGPUBlendFactor_One = 1,
+    WGPUBlendFactor_Src = 2,
+    WGPUBlendFactor_OneMinusSrc = 3,
+    WGPUBlendFactor_SrcAlpha = 4,
+    WGPUBlendFactor_OneMinusSrcAlpha = 5,
+    WGPUBlendFactor_Dst = 6,
+    WGPUBlendFactor_OneMinusDst = 7,
+    WGPUBlendFactor_DstAlpha = 8,
+    WGPUBlendFactor_OneMinusDstAlpha = 9
+} WGPUBlendFactor;
+
+typedef struct WGPUBlendComponent {
+    WGPUBlendOperation operation;
+    WGPUBlendFactor srcFactor;
+    WGPUBlendFactor dstFactor;
+} WGPUBlendComponent;
+
+typedef struct WGPUBlendState {
+    WGPUBlendComponent color;
+    WGPUBlendComponent alpha;
+} WGPUBlendState;
+
 typedef struct WGPUConstantEntry WGPUConstantEntry;
 
 typedef struct WGPUVertexAttribute {
@@ -21037,7 +21068,7 @@ __import void __wgpu_surface_configure(int surface, int device, int format, int 
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
-__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int blendEnabled, int colorOp, int colorSrc, int colorDst, int alphaOp, int alphaSrc, int alphaDst);
 __import int  __wgpu_device_create_buffer(int device, int size, int usage);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
@@ -21203,12 +21234,24 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         }
     }
 
+    /* Color-target blend state (target 0). NULL blend => opaque (host skips). */
+    int blendEnabled = 0, colorOp = 0, colorSrc = 0, colorDst = 0, alphaOp = 0, alphaSrc = 0, alphaDst = 0;
+    if (desc->fragment && desc->fragment->targetCount > 0 && desc->fragment->targets) {
+        const WGPUBlendState *bl = desc->fragment->targets[0].blend;
+        if (bl) {
+            blendEnabled = 1;
+            colorOp = (int)bl->color.operation; colorSrc = (int)bl->color.srcFactor; colorDst = (int)bl->color.dstFactor;
+            alphaOp = (int)bl->alpha.operation; alphaSrc = (int)bl->alpha.srcFactor; alphaDst = (int)bl->alpha.dstFactor;
+        }
+    }
+
     return (WGPURenderPipeline)__wgpu_device_create_render_pipeline(
         (int)device,
         (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
         fsModule, fsEntry, fsEntryLen,
         fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
-        vb, n, (int)desc->layout);
+        vb, n, (int)desc->layout,
+        blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst);
 }
 
 WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor) {
