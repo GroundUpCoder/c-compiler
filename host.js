@@ -4703,6 +4703,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // One pipeline per SDL blend mode (chosen per draw); a shared explicit bind
   // layout so a texture's bind group works with ANY of them.
   let rdrPipelines = null, rdrSamplerLinear = null, rdrSamplerNearest = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
+  let rdrCapturePending = false;   // set by getLastFrame(), cleared after readback
+  // GPU-side BGRA→RGBA readback blit: fullscreen quad samples the bgra8unorm
+  // canvas texture through a nearest sampler → rgba8unorm texture, so the
+  // copyTextureToBuffer gives RGBA bytes (no swizzle needed in JS).
+  let rdrReadbackPipeline = null, rdrReadbackBindLayout = null, rdrReadbackTex = null, rdrReadbackW = 0, rdrReadbackH = 0;
 
   // SDL_BLENDMODE → WebGPU blend descriptor (null = NONE, blending disabled).
   // These mirror SDL's documented blend equations:
@@ -4762,6 +4767,24 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       dev.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, { width: 1, height: 1 });
       rdrWhiteView = white.createView();
       rdrWhiteBind = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: rdrSamplerLinear }, { binding: 1, resource: rdrWhiteView }] });
+      // Readback blit pipeline: fullscreen quad sampling the canvas texture
+      // (bgra8unorm) through a nearest sampler → rgba8unorm output. Sampling
+      // a bgra8unorm texture through a WGSL sampler normalises to RGBA in the
+      // shader (the GPU does the swizzle), so copyTextureToBuffer from the
+      // output gets RGBA bytes — no JS swizzle needed.
+      rdrReadbackBindLayout = dev.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d' } },
+        ],
+      });
+      const readbackShader = dev.createShaderModule({ code: BLIT_WGSL });
+      rdrReadbackPipeline = dev.createRenderPipeline({
+        layout: dev.createPipelineLayout({ bindGroupLayouts: [rdrReadbackBindLayout] }),
+        vertex: { module: readbackShader, entryPoint: 'vs' },
+        fragment: { module: readbackShader, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
+        primitive: { topology: 'triangle-list' },
+      });
     });
   }
 
@@ -4786,16 +4809,28 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // 6 verts (2 triangles); SDL_RenderGeometry contributes its index-resolved
   // triangle soup. Flush packs them all into one vertex buffer (NDC-transforming
   // x,y) and draws one range per entry (so each entry keeps its own texture).
-  // GPU→CPU readback for the SDL_Renderer path. The renderer draws straight to
-  // the canvas with NO CPU framebuffer, so getLastFrame() (the real-Safari
-  // surface readback + the in-app camera capture) would be empty for renderer
-  // programs — only the software blitter retained a CPU copy. After each present
-  // we copy the canvas texture into a mappable buffer and async-fill
-  // blit.lastFrame (shared: a program uses the blitter OR the renderer, never
-  // both). One readback in flight at a time (busy guard); the buffer is reused.
+  // GPU→CPU readback for the SDL_Renderer path — ON DEMAND only (triggered by
+  // getLastFrame()). The renderer draws straight to the canvas with NO CPU
+  // framebuffer, so getLastFrame() (the surface probe + camera capture) would
+  // be empty for renderer programs. On a capture frame: (1) a blit pass samples
+  // the bgra8unorm canvas texture through a nearest sampler → rgba8unorm texture
+  // (GPU does the BGRA→RGBA swizzle); (2) copyTextureToBuffer from the rgba8unorm
+  // texture; (3) async map + row-wise unpad in JS (fast .set(), no per-pixel
+  // branch). Non-capture frames pay zero GPU readback cost.
   const rb = { buf: null, bufSize: 0, busy: false, pending: null };
-  function rdrEncodeReadback(enc, dev, tex, W, H) {
-    if (rb.busy) return false;                            // prior map still in flight
+  function rdrReadbackEnsure(dev, W, H) {
+    if (!rdrReadbackTex || rdrReadbackW !== W || rdrReadbackH !== H) {
+      if (rdrReadbackTex) rdrReadbackTex.destroy();
+      rdrReadbackTex = dev.createTexture({
+        size: { width: W, height: H }, format: 'rgba8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+      rdrReadbackW = W; rdrReadbackH = H;
+    }
+  }
+  function rdrEncodeReadback(enc, dev, canvasTex, W, H) {
+    if (rb.busy) return false;
+    rdrReadbackEnsure(dev, W, H);
     const bytesPerRow = Math.ceil((W * 4) / 256) * 256;  // WebGPU 256B row alignment
     const size = bytesPerRow * H;
     if (!rb.buf || rb.bufSize !== size) {
@@ -4803,27 +4838,37 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       rb.buf = dev.createBuffer({ size: size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       rb.bufSize = size;
     }
-    enc.copyTextureToBuffer({ texture: tex }, { buffer: rb.buf, bytesPerRow: bytesPerRow, rowsPerImage: H }, { width: W, height: H });
+    // Second render pass: blit canvas (bgra8unorm, sampled → RGBA in WGSL) →
+    // readback texture (rgba8unorm). Nearest sampler for exact pixel values.
+    const readbackBind = dev.createBindGroup({
+      layout: rdrReadbackBindLayout,
+      entries: [{ binding: 0, resource: rdrSamplerNearest }, { binding: 1, resource: canvasTex.createView() }],
+    });
+    const rpass = enc.beginRenderPass({
+      colorAttachments: [{ view: rdrReadbackTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+    });
+    rpass.setPipeline(rdrReadbackPipeline);
+    rpass.setBindGroup(0, readbackBind);
+    rpass.draw(3, 1, 0, 0);
+    rpass.end();
+    // Copy rgba8unorm readback texture → buffer (RGBA bytes, may have padded rows)
+    enc.copyTextureToBuffer({ texture: rdrReadbackTex }, { buffer: rb.buf, bytesPerRow: bytesPerRow, rowsPerImage: H }, { width: W, height: H });
     rb.pending = { W: W, H: H, bytesPerRow: bytesPerRow };
     return true;
   }
   function rdrStartReadbackMap() {
     if (!rb.pending || rb.busy) return;
     const p = rb.pending; rb.pending = null; rb.busy = true;
-    // getPreferredCanvasFormat() is usually bgra8unorm; getLastFrame() consumers
-    // want RGBA, so swap B/R when the canvas is a bgra* format.
-    const swap = !!(cgpu.format && cgpu.format.indexOf('bgra') === 0);
     rb.buf.mapAsync(GPUMapMode.READ).then(function () {
       const padded = new Uint8Array(rb.buf.getMappedRange());
       const W = p.W, H = p.H, bpr = p.bytesPerRow, pitch = W * 4;
       const out = new Uint8Array(pitch * H);
-      for (let y = 0; y < H; y++) {
-        const srow = y * bpr, drow = y * pitch;
-        for (let x = 0; x < W; x++) {
-          const si = srow + x * 4, di = drow + x * 4;
-          if (swap) { out[di] = padded[si + 2]; out[di + 1] = padded[si + 1]; out[di + 2] = padded[si]; out[di + 3] = padded[si + 3]; }
-          else { out[di] = padded[si]; out[di + 1] = padded[si + 1]; out[di + 2] = padded[si + 2]; out[di + 3] = padded[si + 3]; }
-        }
+      // Row-wise unpad only — the blit pass already did BGRA→RGBA on the GPU,
+      // so the bytes are already RGBA. Use .set() (memcpy speed) per row.
+      if (bpr === pitch) {
+        out.set(padded.subarray(0, pitch * H));
+      } else {
+        for (let y = 0; y < H; y++) out.set(padded.subarray(y * bpr, y * bpr + pitch), y * pitch);
       }
       blit.lastFrame = { width: W, height: H, pitch: pitch, pixels: out };
       rb.buf.unmap();
@@ -4864,10 +4909,15 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       first += e.n;
     }
     pass.end();
-    // Snapshot the just-rendered canvas into blit.lastFrame (same encoder, so the
-    // copy is ordered after the draw) for getLastFrame() — the renderer has no
-    // CPU framebuffer of its own.
-    const didReadback = rdrEncodeReadback(enc, dev, curTex, W, H);
+    // On-demand GPU readback: only when getLastFrame() has been called since the
+    // last present (surface probe or camera capture). Encoded in the same command
+    // encoder so it's ordered after the draw calls. Non-capture frames skip this
+    // entirely — zero GPU→CPU transfer cost.
+    let didReadback = false;
+    if (rdrCapturePending) {
+      rdrCapturePending = false;
+      didReadback = rdrEncodeReadback(enc, dev, curTex, W, H);
+    }
     dev.queue.submit([enc.finish()]);
     vbuf.destroy();
     if (didReadback) rdrStartReadbackMap();
@@ -5080,7 +5130,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     // Last presented SDL framebuffer (RGBA) for deterministic readback, or null
     // if nothing has been blitted yet. { width, height, pitch, pixels }.
-    getLastFrame: function () { return blit.lastFrame; },
+    // Each call arms a readback on the NEXT RenderPresent (on-demand — no GPU
+    // readback cost on frames where nothing is capturing).
+    getLastFrame: function () { rdrCapturePending = true; return blit.lastFrame; },
     requestAnimationFrame: typeof requestAnimationFrame === 'function'
       ? function (cb) { requestAnimationFrame(cb); }
       : null,
