@@ -17172,6 +17172,11 @@ typedef enum SDL_BlendMode {
     SDL_BLENDMODE_MOD = 4
 } SDL_BlendMode;
 
+typedef enum SDL_ScaleMode {
+    SDL_SCALEMODE_NEAREST = 0,
+    SDL_SCALEMODE_LINEAR = 1
+} SDL_ScaleMode;
+
 /* SDL3 SDL_Texture exposes format/w/h as public fields (programs read tex->w/h);
    the host handle is an internal trailer. */
 typedef struct SDL_Texture {
@@ -17376,6 +17381,7 @@ bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *p
 bool SDL_SetTextureColorMod(SDL_Texture *texture, Uint8 r, Uint8 g, Uint8 b);
 bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha);
 bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode);
+bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode);
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode);
 bool SDL_RenderClear(SDL_Renderer *renderer);
@@ -20947,6 +20953,7 @@ __import void __sdl_update_texture(int t, const void *pixels, int pitch, int w, 
 __import void __sdl_set_texture_color_mod(int t, double r, double g, double b);
 __import void __sdl_set_texture_alpha_mod(int t, double a);
 __import void __sdl_set_texture_blend_mode(int t, int mode);
+__import void __sdl_set_texture_scale_mode(int t, int mode);
 __import void __sdl_set_draw_color(int r, double rr, double gg, double bb, double aa);
 __import void __sdl_set_draw_blend_mode(int r, int mode);
 __import void __sdl_render_clear(int r);
@@ -21265,6 +21272,11 @@ bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha) {
 
 bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode) {
     __sdl_set_texture_blend_mode(texture->__handle, (int)blendMode);
+    return 1;
+}
+
+bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode) {
+    __sdl_set_texture_scale_mode(texture->__handle, (int)scaleMode);
     return 1;
 }
 

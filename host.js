@@ -4501,6 +4501,7 @@ function createNullSDL() {
       __sdl_set_texture_color_mod: function () {},
       __sdl_set_texture_alpha_mod: function () {},
       __sdl_set_texture_blend_mode: function () {},
+      __sdl_set_texture_scale_mode: function () {},
       __sdl_set_draw_color: function () {},
       __sdl_set_draw_blend_mode: function () {},
       __sdl_render_clear: function () {},
@@ -4701,7 +4702,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   const sdlTextures = [];     // 1-based handles (shared across renderers)
   // One pipeline per SDL blend mode (chosen per draw); a shared explicit bind
   // layout so a texture's bind group works with ANY of them.
-  let rdrPipelines = null, rdrSampler = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
+  let rdrPipelines = null, rdrSamplerLinear = null, rdrSamplerNearest = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
 
   // SDL_BLENDMODE → WebGPU blend descriptor (null = NONE, blending disabled).
   // These mirror SDL's documented blend equations:
@@ -4724,7 +4725,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     cgpu.whenReady(function () {
       if (rdrPipelines) return;
       const dev = cgpu.device;
-      rdrSampler = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+      rdrSamplerLinear = dev.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+      rdrSamplerNearest = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
       rdrBindLayout = dev.createBindGroupLayout({
         entries: [
           { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
@@ -4759,7 +4761,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       const white = dev.createTexture({ size: { width: 1, height: 1 }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
       dev.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, { width: 1, height: 1 });
       rdrWhiteView = white.createView();
-      rdrWhiteBind = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: rdrWhiteView }] });
+      rdrWhiteBind = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: rdrSamplerLinear }, { binding: 1, resource: rdrWhiteView }] });
     });
   }
 
@@ -4769,7 +4771,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     if (!t.view) {
       t.gpuTex = dev.createTexture({ size: { width: t.w, height: t.h }, format: 'rgba8unorm', usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
       t.view = t.gpuTex.createView();
-      t.bindGroup = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: rdrSampler }, { binding: 1, resource: t.view }] });
+      const sampler = t.scaleMode === 0 ? rdrSamplerNearest : rdrSamplerLinear;
+      t.bindGroup = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: sampler }, { binding: 1, resource: t.view }] });
     }
     if (t.dirty && t.cpuPixels) {
       dev.queue.writeTexture({ texture: t.gpuTex }, t.cpuPixels, { offset: 0, bytesPerRow: t.pitch, rowsPerImage: t.h }, { width: t.w, height: t.h });
@@ -4921,7 +4924,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
           w: w, h: h, access: access, cpuPixels: null, pitch: w * 4,
           gpuTex: null, view: null, bindGroup: null, dirty: false,
           colorR: 1, colorG: 1, colorB: 1, alpha: 1,
-          blendMode: 0,   // SDL_CreateTexture defaults to SDL_BLENDMODE_NONE
+          blendMode: 0,     // SDL_CreateTexture defaults to SDL_BLENDMODE_NONE
+          scaleMode: 1,     // SDL_SCALEMODE_LINEAR (SDL3 default)
         });
         return sdlTextures.length;
       },
@@ -4943,6 +4947,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_set_texture_blend_mode: function (t, mode) {
         const tx = sdlTextures[t - 1]; if (tx) tx.blendMode = sdlBlendValidate(mode);
+      },
+      __sdl_set_texture_scale_mode: function (t, mode) {
+        const tx = sdlTextures[t - 1];
+        if (!tx) return;
+        if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
+        if (tx.scaleMode !== mode) { tx.scaleMode = mode; tx.bindGroup = null; }   // recreate bind group with the right sampler
       },
       __sdl_set_draw_color: function (r, rr, gg, bb, aa) {
         const rd = sdlRenderers[r - 1]; if (rd) rd.drawColor = [rr, gg, bb, aa];
