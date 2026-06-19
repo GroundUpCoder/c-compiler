@@ -5298,7 +5298,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return WGPU_STR_TO_FORMAT[preferredFormat()] || 23;
       },
 
-      __wgpu_surface_configure: function (surface, device, format, usage, width, height, alphaMode) {
+      __wgpu_surface_configure: function (surface, device, format, usage, width, height, alphaMode, presentMode, viewFormatsPacked, viewFormatsLen) {
         const s = get(surface), d = get(device);
         if (!s || !s.gpuCtx || !d) throw new Error('wgpuSurfaceConfigure: invalid surface/device handle');
         const fmt = wgpuFormat(format, 'surfaceConfigure.format') || preferredFormat();
@@ -5309,7 +5309,23 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         if (canvas && width > 0 && height > 0) { canvas.width = width; canvas.height = height; }
         // OR in COPY_SRC so the canvas is always read-back-able (snapshots,
         // the netguc surface probe + camera capture); harmless if unused.
-        s.gpuCtx.configure({ device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: wgpuEnumReq(WGPU_ALPHA, alphaMode, 'alphaMode') });
+        const cfg = { device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: wgpuEnumReq(WGPU_ALPHA, alphaMode, 'alphaMode') };
+        /* presentMode: a web canvas always presents vsync'd (Fifo). Accept
+           Undefined(0)/Fifo(1); anything else is genuinely unsupported here. */
+        presentMode = presentMode >>> 0;
+        if (presentMode > 1) throw new Error('wgpuSurfaceConfigure: presentMode ' + presentMode + ' unsupported on a web canvas (only Fifo)');
+        /* viewFormats packed: [ count, fmt0, ... ] -> additional formats the
+           surface texture's views may use (e.g. an -srgb variant). */
+        if (viewFormatsPacked && viewFormatsLen > 0) {
+          const a = new Int32Array(getMemory().buffer, viewFormatsPacked, viewFormatsLen);
+          const count = a[0];
+          if (count) {
+            const vfs = [];
+            for (let i = 0; i < count; i++) vfs.push(wgpuFormat(a[1 + i], 'surfaceConfigure.viewFormats'));
+            cfg.viewFormats = vfs;
+          }
+        }
+        s.gpuCtx.configure(cfg);
         /* Reveal the canvas in the emitted page (reuses the SDL window path). */
         if (notifyWindow) notifyWindow({ type: 'sdl-window', width: width, height: height });
       },

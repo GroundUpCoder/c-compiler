@@ -214,7 +214,11 @@ For every feature in the standard `webgpu.h`:
 ## Progress + revised direction (updated 2026-06-19)
 
 **Landed (each on `main` with a `tests/browser/webgpu-*` pixel/readback test):**
-A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A12 ✅ A13 ✅ A14 ✅.
+A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A12 ✅ A13 ✅ A14 ✅ A15 ✅.
+
+**Phase A conformance pass COMPLETE (2026-06-19).** Every A-item lands with a
+`tests/browser/webgpu-*` pixel/readback test; the full webgpu-* suite (25 tests)
+is green on Chromium (SwiftShader).
 
 - **A10+A11** (`webgpu-mrt`): render pipeline color targets and render-pass color
   attachments are now packed arrays — multiple color targets with per-target
@@ -239,6 +243,13 @@ A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A
   texture (well-defined bias unit), a read-only depth pass, and an indexed
   triangle-strip — depthBias is the deciding factor (verified: bias 0 → red,
   bias -2048 → green).
+- **A15** (`webgpu-surfcfg`): surface configuration — `viewFormats`,
+  `presentMode`, `alphaMode` in `wgpuSurfaceConfigure`. `WGPUPresentMode` is now
+  the canonical enum (Undefined=0, Fifo=1, …); a web canvas is always Fifo so
+  Undefined/Fifo are accepted and anything else fails loud. Test configures an
+  rgba8unorm surface with an rgba8unorm-srgb viewFormat and renders linear 0.5
+  through an srgb view (stored ~188, vs 128 without) — proving the view format
+  was honored.
 
 **Direction decision (2026-06-19):** stop *widening* the WebGPU surface for now;
 make the surface we already expose as **conformant** as possible instead.

@@ -17615,7 +17615,11 @@ typedef enum WGPUCompositeAlphaMode {
 } WGPUCompositeAlphaMode;
 
 typedef enum WGPUPresentMode {
-    WGPUPresentMode_Fifo = 0
+    WGPUPresentMode_Undefined = 0,
+    WGPUPresentMode_Fifo = 1,
+    WGPUPresentMode_FifoRelaxed = 2,
+    WGPUPresentMode_Immediate = 3,
+    WGPUPresentMode_Mailbox = 4
 } WGPUPresentMode;
 
 /* Vertex attribute formats. Values are self-consistent header<->host (the host
@@ -21323,7 +21327,7 @@ __import void __wgpu_instance_request_adapter(int instance, WGPURequestAdapterCa
 __import void __wgpu_adapter_request_device(int adapter, WGPURequestDeviceCallback cb, void *ud1, void *ud2);
 __import int  __wgpu_device_get_queue(int device);
 __import int  __wgpu_surface_get_preferred_format(int surface);
-__import void __wgpu_surface_configure(int surface, int device, int format, int usage, int width, int height, int alphaMode);
+__import void __wgpu_surface_configure(int surface, int device, int format, int usage, int width, int height, int alphaMode, int presentMode, const int *viewFormatsPacked, int viewFormatsLen);
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture, int format, int dimension, int baseMip, int mipCount, int baseLayer, int layerCount, int aspect);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
@@ -21431,8 +21435,19 @@ WGPUTextureFormat wgpuSurfaceGetPreferredFormat(WGPUSurface surface, WGPUAdapter
 }
 
 void wgpuSurfaceConfigure(WGPUSurface surface, const WGPUSurfaceConfiguration *config) {
+    /* viewFormats packed: [ count, fmt0, fmt1, ... ]. */
+    static int vf[1 + 16];
+    int vc = (int)config->viewFormatCount;
+    if (vc > 16) {
+        fprintf(stderr, "wgpuSurfaceConfigure: too many viewFormats (%d > 16); raise vf[]\\n", vc);
+        abort();
+    }
+    int vfn = 0;
+    vf[vfn++] = vc;
+    for (int i = 0; i < vc; i++) vf[vfn++] = (int)config->viewFormats[i];
     __wgpu_surface_configure((int)surface, (int)config->device, (int)config->format,
-        (int)config->usage, (int)config->width, (int)config->height, (int)config->alphaMode);
+        (int)config->usage, (int)config->width, (int)config->height, (int)config->alphaMode,
+        (int)config->presentMode, vf, vfn);
 }
 
 void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture *surfaceTexture) {
