@@ -132,6 +132,23 @@ principles). Listed so they're visible, not silently shipped.
   assumes RGBA32** input.
 - **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (1px quad / 1px
   borders), not Bresenham — sub-pixel coverage and endpoints differ slightly.
+- **Forced linear texture filtering; no `SDL_SetTextureScaleMode`.** The renderer
+  sampler is hardcoded `linear`. SDL3's *default* is also linear, so defaults
+  match — but a program can't select `SDL_SCALEMODE_NEAREST`, so **pixel-art games
+  render blurry when scaled** with no fix. (Fix: a second nearest sampler +
+  per-texture bind group selected by the texture's scale mode.)
+- **HiDPI: the canvas renders at logical size and is CSS-upscaled.**
+  `canvas.width = w` (logical), so on a retina display output is upscaled by the
+  browser, not rendered at device-pixel density like native SDL. Blurrier; no
+  `SDL_GetWindowSizeInPixels` / pixel-density / `devicePixelRatio` handling.
+- **Destroying a texture already recorded in the current frame's batch** → null
+  deref at present (`texBindGroup` on a nulled slot). SDL tolerates this; we trap.
+  Robustness edge case.
+- **Deferred batch-render model vs SDL's immediate mode** (subtle, mostly within
+  spec): draws are recorded and executed only at `RenderPresent` (one pass,
+  `loadOp: clear`). Equivalent under SDL's "backbuffer undefined after present"
+  rule, BUT a program that draws incrementally **without clearing** (expecting the
+  previous frame to be retained) won't see it retained.
 
 ### Performance
 - **Per-present GPU→CPU readback runs unconditionally.** Every
