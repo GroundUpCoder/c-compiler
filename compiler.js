@@ -17471,7 +17471,12 @@ typedef enum WGPUTextureFormat {
     WGPUTextureFormat_RGBA8Unorm = 18,
     WGPUTextureFormat_RGBA8UnormSrgb = 19,
     WGPUTextureFormat_BGRA8Unorm = 23,
-    WGPUTextureFormat_BGRA8UnormSrgb = 24
+    WGPUTextureFormat_BGRA8UnormSrgb = 24,
+    WGPUTextureFormat_Depth16Unorm = 40,
+    WGPUTextureFormat_Depth24Plus = 41,
+    WGPUTextureFormat_Depth24PlusStencil8 = 42,
+    WGPUTextureFormat_Depth32Float = 43,
+    WGPUTextureFormat_Depth32FloatStencil8 = 44
 } WGPUTextureFormat;
 
 typedef enum WGPULoadOp {
@@ -17974,7 +17979,51 @@ typedef struct WGPUMultisampleState {
     WGPUBool alphaToCoverageEnabled;
 } WGPUMultisampleState;
 
-typedef struct WGPUDepthStencilState WGPUDepthStencilState;
+typedef enum WGPUCompareFunction {
+    WGPUCompareFunction_Undefined = 0,
+    WGPUCompareFunction_Never = 1,
+    WGPUCompareFunction_Less = 2,
+    WGPUCompareFunction_Equal = 3,
+    WGPUCompareFunction_LessEqual = 4,
+    WGPUCompareFunction_Greater = 5,
+    WGPUCompareFunction_NotEqual = 6,
+    WGPUCompareFunction_GreaterEqual = 7,
+    WGPUCompareFunction_Always = 8
+} WGPUCompareFunction;
+
+typedef enum WGPUStencilOperation {
+    WGPUStencilOperation_Keep = 1,
+    WGPUStencilOperation_Zero = 2,
+    WGPUStencilOperation_Replace = 3,
+    WGPUStencilOperation_Invert = 4,
+    WGPUStencilOperation_IncrementClamp = 5,
+    WGPUStencilOperation_DecrementClamp = 6,
+    WGPUStencilOperation_IncrementWrap = 7,
+    WGPUStencilOperation_DecrementWrap = 8
+} WGPUStencilOperation;
+
+typedef struct WGPUStencilFaceState {
+    WGPUCompareFunction compare;
+    WGPUStencilOperation failOp;
+    WGPUStencilOperation depthFailOp;
+    WGPUStencilOperation passOp;
+} WGPUStencilFaceState;
+
+/* WGPUOptionalBool-style depthWriteEnabled in the modern dialect; we accept a
+   plain WGPUBool (0/1) — 1 = write depth. */
+typedef struct WGPUDepthStencilState {
+    const WGPUChainedStruct *nextInChain;
+    WGPUTextureFormat format;
+    WGPUBool depthWriteEnabled;
+    WGPUCompareFunction depthCompare;
+    WGPUStencilFaceState stencilFront;
+    WGPUStencilFaceState stencilBack;
+    uint32_t stencilReadMask;
+    uint32_t stencilWriteMask;
+    int32_t depthBias;
+    float depthBiasSlopeScale;
+    float depthBiasClamp;
+} WGPUDepthStencilState;
 
 typedef struct WGPURenderPipelineDescriptor {
     const WGPUChainedStruct *nextInChain;
@@ -17992,7 +18041,17 @@ typedef struct WGPUCommandEncoderDescriptor {
     WGPUStringView label;
 } WGPUCommandEncoderDescriptor;
 
-typedef struct WGPURenderPassDepthStencilAttachment WGPURenderPassDepthStencilAttachment;
+typedef struct WGPURenderPassDepthStencilAttachment {
+    WGPUTextureView view;
+    WGPULoadOp depthLoadOp;
+    WGPUStoreOp depthStoreOp;
+    float depthClearValue;
+    WGPUBool depthReadOnly;
+    WGPULoadOp stencilLoadOp;
+    WGPUStoreOp stencilStoreOp;
+    uint32_t stencilClearValue;
+    WGPUBool stencilReadOnly;
+} WGPURenderPassDepthStencilAttachment;
 
 typedef struct WGPURenderPassColorAttachment {
     const WGPUChainedStruct *nextInChain;
@@ -21068,7 +21127,7 @@ __import void __wgpu_surface_configure(int surface, int device, int format, int 
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
-__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int blendEnabled, int colorOp, int colorSrc, int colorDst, int alphaOp, int alphaSrc, int alphaDst);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int blendEnabled, int colorOp, int colorSrc, int colorDst, int alphaOp, int alphaSrc, int alphaDst, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare);
 __import int  __wgpu_device_create_buffer(int device, int size, int usage);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
@@ -21093,7 +21152,7 @@ __import void __wgpu_compute_pass_set_bind_group(int pass, int index, int group)
 __import void __wgpu_compute_pass_dispatch(int pass, int x, int y, int z);
 __import void __wgpu_compute_pass_end(int pass);
 __import int  __wgpu_device_create_command_encoder(int device);
-__import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
+__import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a, int depthView, int depthLoadOp, int depthStoreOp, double depthClearValue);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
 __import void __wgpu_render_pass_draw(int pass, int vc, int ic, int fv, int fi);
 __import void __wgpu_render_pass_end(int pass);
@@ -21245,13 +21304,23 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         }
     }
 
+    /* Depth/stencil state. NULL => no depth testing (host skips). */
+    int depthEnabled = 0, depthFormat = 0, depthWriteEnabled = 0, depthCompare = 0;
+    if (desc->depthStencil) {
+        depthEnabled = 1;
+        depthFormat = (int)desc->depthStencil->format;
+        depthWriteEnabled = (int)desc->depthStencil->depthWriteEnabled;
+        depthCompare = (int)desc->depthStencil->depthCompare;
+    }
+
     return (WGPURenderPipeline)__wgpu_device_create_render_pipeline(
         (int)device,
         (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
         fsModule, fsEntry, fsEntryLen,
         fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
         vb, n, (int)desc->layout,
-        blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst);
+        blendEnabled, colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst,
+        depthEnabled, depthFormat, depthWriteEnabled, depthCompare);
 }
 
 WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor) {
@@ -21270,8 +21339,18 @@ WGPURenderPassEncoder wgpuCommandEncoderBeginRenderPass(WGPUCommandEncoder comma
         r = att->clearValue.r; g = att->clearValue.g;
         b = att->clearValue.b; a = att->clearValue.a;
     }
+    int depthView = 0, depthLoadOp = 0, depthStoreOp = 0;
+    double depthClearValue = 1.0;
+    if (desc->depthStencilAttachment) {
+        const WGPURenderPassDepthStencilAttachment *d = desc->depthStencilAttachment;
+        depthView = (int)d->view;
+        depthLoadOp = (int)d->depthLoadOp;
+        depthStoreOp = (int)d->depthStoreOp;
+        depthClearValue = d->depthClearValue;
+    }
     return (WGPURenderPassEncoder)__wgpu_command_encoder_begin_render_pass(
-        (int)commandEncoder, view, loadOp, storeOp, r, g, b, a);
+        (int)commandEncoder, view, loadOp, storeOp, r, g, b, a,
+        depthView, depthLoadOp, depthStoreOp, depthClearValue);
 }
 
 void wgpuRenderPassEncoderSetPipeline(WGPURenderPassEncoder renderPassEncoder, WGPURenderPipeline pipeline) {
