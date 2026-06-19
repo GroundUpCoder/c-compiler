@@ -17800,10 +17800,9 @@ typedef struct WGPUShaderModuleDescriptor {
     WGPUStringView label;
 } WGPUShaderModuleDescriptor;
 
-typedef struct WGPUTextureViewDescriptor {
-    const WGPUChainedStruct *nextInChain;
-    WGPUStringView label;
-} WGPUTextureViewDescriptor;
+/* WGPUTextureViewDescriptor is defined after the texture enums it references
+   (WGPUTextureViewDimension / WGPUTextureAspect), below near WGPUSamplerDescriptor. */
+typedef struct WGPUTextureViewDescriptor WGPUTextureViewDescriptor;
 
 typedef enum WGPUBlendOperation {
     WGPUBlendOperation_Add = 1,
@@ -17879,7 +17878,12 @@ typedef enum WGPUTextureSampleType {
 
 typedef enum WGPUTextureViewDimension {
     WGPUTextureViewDimension_Undefined = 0,
-    WGPUTextureViewDimension_2D = 2
+    WGPUTextureViewDimension_1D = 1,
+    WGPUTextureViewDimension_2D = 2,
+    WGPUTextureViewDimension_2DArray = 3,
+    WGPUTextureViewDimension_Cube = 4,
+    WGPUTextureViewDimension_CubeArray = 5,
+    WGPUTextureViewDimension_3D = 6
 } WGPUTextureViewDimension;
 
 typedef enum WGPUStorageTextureAccess {
@@ -17962,7 +17966,10 @@ typedef enum WGPUTextureDimension {
 } WGPUTextureDimension;
 
 typedef enum WGPUTextureAspect {
-    WGPUTextureAspect_All = 1
+    WGPUTextureAspect_Undefined = 0,
+    WGPUTextureAspect_All = 1,
+    WGPUTextureAspect_StencilOnly = 2,
+    WGPUTextureAspect_DepthOnly = 3
 } WGPUTextureAspect;
 
 typedef enum WGPUAddressMode {
@@ -18022,6 +18029,22 @@ typedef struct WGPUSamplerDescriptor {
     float lodMaxClamp;
     uint16_t maxAnisotropy;
 } WGPUSamplerDescriptor;
+
+/* Full texture-view descriptor (defined here, after WGPUTextureViewDimension /
+   WGPUTextureAspect / WGPUTextureFormat). 0 fields mean "default": format 0 =
+   the texture's format, dimension 0 = inferred, mipLevelCount/arrayLayerCount 0
+   = remaining levels/layers. */
+typedef struct WGPUTextureViewDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUTextureFormat format;
+    WGPUTextureViewDimension dimension;
+    uint32_t baseMipLevel;
+    uint32_t mipLevelCount;
+    uint32_t baseArrayLayer;
+    uint32_t arrayLayerCount;
+    WGPUTextureAspect aspect;
+} WGPUTextureViewDescriptor;
 
 /* Newer dialect spelling: WGPUTexelCopyTextureInfo / WGPUTexelCopyBufferLayout
    (formerly WGPUImageCopyTexture / WGPUTextureDataLayout). */
@@ -21291,7 +21314,7 @@ __import int  __wgpu_device_get_queue(int device);
 __import int  __wgpu_surface_get_preferred_format(int surface);
 __import void __wgpu_surface_configure(int surface, int device, int format, int usage, int width, int height, int alphaMode);
 __import int  __wgpu_surface_get_current_texture(int surface);
-__import int  __wgpu_texture_create_view(int texture);
+__import int  __wgpu_texture_create_view(int texture, int format, int dimension, int baseMip, int mipCount, int baseLayer, int layerCount, int aspect);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
 __import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int blendEnabled, int colorOp, int colorSrc, int colorDst, int alphaOp, int alphaSrc, int alphaDst, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, const int *stencilPacked, int sampleCount, int sampleMask, int alphaToCoverage);
 __import int  __wgpu_device_create_buffer(int device, int size, int usage, int mappedAtCreation);
@@ -21411,9 +21434,13 @@ void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture *surfa
 
 void wgpuSurfacePresent(WGPUSurface surface) { (void)surface; /* implicit on web */ }
 
-WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureViewDescriptor *descriptor) {
-    (void)descriptor;
-    return (WGPUTextureView)__wgpu_texture_create_view((int)texture);
+WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureViewDescriptor *d) {
+    /* NULL descriptor (or all-zero fields) => host applies WebGPU defaults. */
+    if (!d)
+        return (WGPUTextureView)__wgpu_texture_create_view((int)texture, 0, 0, 0, 0, 0, 0, 0);
+    return (WGPUTextureView)__wgpu_texture_create_view((int)texture,
+        (int)d->format, (int)d->dimension, (int)d->baseMipLevel, (int)d->mipLevelCount,
+        (int)d->baseArrayLayer, (int)d->arrayLayerCount, (int)d->aspect);
 }
 
 WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, const WGPUShaderModuleDescriptor *descriptor) {

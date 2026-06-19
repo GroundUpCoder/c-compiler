@@ -5144,6 +5144,8 @@ const WGPU_BUFFER_BINDING_TYPE = { 1: 'uniform', 2: 'storage', 3: 'read-only-sto
 const WGPU_ADDRESS_MODE = { 0: 'clamp-to-edge', 1: 'clamp-to-edge', 2: 'repeat', 3: 'mirror-repeat' };
 const WGPU_FILTER_MODE = { 0: 'nearest', 1: 'nearest', 2: 'linear' };
 const WGPU_TEXTURE_DIMENSION = { 1: '1d', 2: '2d', 3: '3d' };
+const WGPU_VIEW_DIMENSION = { 1: '1d', 2: '2d', 3: '2d-array', 4: 'cube', 5: 'cube-array', 6: '3d' };
+const WGPU_TEXTURE_ASPECT = { 1: 'all', 2: 'stencil-only', 3: 'depth-only' };
 const WGPU_SAMPLER_BINDING_TYPE = { 1: 'filtering', 2: 'non-filtering', 3: 'comparison' };
 const WGPU_TEXTURE_SAMPLE_TYPE = { 1: 'float', 2: 'unfilterable-float', 3: 'depth', 4: 'sint', 5: 'uint' };
 const WGPU_INDEX_FORMAT = { 1: 'uint16', 2: 'uint32' };
@@ -5301,7 +5303,18 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         catch (e) { console.error('getCurrentTexture failed', e); return 0; }
       },
 
-      __wgpu_texture_create_view: function (texture) { const t = get(texture); return t ? alloc(t.createView()) : 0; },
+      __wgpu_texture_create_view: function (texture, format, dimension, baseMip, mipCount, baseLayer, layerCount, aspect) {
+        const t = get(texture); if (!t) return 0;
+        const desc = {};
+        const fmt = wgpuFormat(format, 'textureView.format'); if (fmt) desc.format = fmt;
+        if (dimension) desc.dimension = wgpuEnumReq(WGPU_VIEW_DIMENSION, dimension, 'textureView.dimension');
+        if (aspect) desc.aspect = wgpuEnumReq(WGPU_TEXTURE_ASPECT, aspect, 'textureView.aspect');
+        if (baseMip) desc.baseMipLevel = baseMip >>> 0;
+        if (mipCount) desc.mipLevelCount = mipCount >>> 0;
+        if (baseLayer) desc.baseArrayLayer = baseLayer >>> 0;
+        if (layerCount) desc.arrayLayerCount = layerCount >>> 0;
+        return alloc(Object.keys(desc).length ? t.createView(desc) : t.createView());
+      },
 
       __wgpu_device_create_shader_module_wgsl: function (device, codePtr, codeLen) {
         const d = get(device); if (!d) return 0;
