@@ -18026,6 +18026,18 @@ typedef struct WGPUTextureDescriptor {
     const WGPUTextureFormat *viewFormats;
 } WGPUTextureDescriptor;
 
+typedef enum WGPUCompareFunction {
+    WGPUCompareFunction_Undefined = 0,
+    WGPUCompareFunction_Never = 1,
+    WGPUCompareFunction_Less = 2,
+    WGPUCompareFunction_Equal = 3,
+    WGPUCompareFunction_LessEqual = 4,
+    WGPUCompareFunction_Greater = 5,
+    WGPUCompareFunction_NotEqual = 6,
+    WGPUCompareFunction_GreaterEqual = 7,
+    WGPUCompareFunction_Always = 8
+} WGPUCompareFunction;
+
 typedef struct WGPUSamplerDescriptor {
     const WGPUChainedStruct *nextInChain;
     WGPUStringView label;
@@ -18037,6 +18049,7 @@ typedef struct WGPUSamplerDescriptor {
     WGPUMipmapFilterMode mipmapFilter;
     float lodMinClamp;
     float lodMaxClamp;
+    WGPUCompareFunction compare;   /* 0 (Undefined) => not a comparison sampler */
     uint16_t maxAnisotropy;
 } WGPUSamplerDescriptor;
 
@@ -18171,18 +18184,6 @@ typedef struct WGPUMultisampleState {
     uint32_t mask;
     WGPUBool alphaToCoverageEnabled;
 } WGPUMultisampleState;
-
-typedef enum WGPUCompareFunction {
-    WGPUCompareFunction_Undefined = 0,
-    WGPUCompareFunction_Never = 1,
-    WGPUCompareFunction_Less = 2,
-    WGPUCompareFunction_Equal = 3,
-    WGPUCompareFunction_LessEqual = 4,
-    WGPUCompareFunction_Greater = 5,
-    WGPUCompareFunction_NotEqual = 6,
-    WGPUCompareFunction_GreaterEqual = 7,
-    WGPUCompareFunction_Always = 8
-} WGPUCompareFunction;
 
 typedef enum WGPUStencilOperation {
     WGPUStencilOperation_Keep = 1,
@@ -21337,7 +21338,7 @@ __import int  __wgpu_device_create_pipeline_layout(int device, const int *bgls, 
 __import int  __wgpu_device_create_bind_group(int device, int layout, const int *packed, int packedLen);
 __import void __wgpu_render_pass_set_bind_group(int pass, int index, int group, const int *offsets, int offsetCount);
 __import int  __wgpu_device_create_texture(int device, int width, int height, int depthOrArrayLayers, int format, int usage, int dimension, int mipLevelCount, int sampleCount);
-__import int  __wgpu_device_create_sampler(int device, int addrU, int addrV, int addrW, int magFilter, int minFilter, int mipmapFilter);
+__import int  __wgpu_device_create_sampler(int device, int addrU, int addrV, int addrW, int magFilter, int minFilter, int mipmapFilter, double lodMinClamp, double lodMaxClamp, int maxAnisotropy, int compare);
 __import void __wgpu_queue_write_texture(int queue, int texture, int mipLevel, int originX, int originY, int originZ, int aspect, const void *data, int dataSize, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depthOrArrayLayers);
 __import void __wgpu_cmd_copy_texture_to_buffer(int encoder, int srcTexture, int mipLevel, int ox, int oy, int oz, int dstBuffer, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depth);
 __import void __wgpu_buffer_map_async(int buffer, int mode, int offset, int size, WGPUBufferMapCallback cb, void *ud1, void *ud2);
@@ -21789,7 +21790,8 @@ WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, const WGPUTextureDescript
 WGPUSampler wgpuDeviceCreateSampler(WGPUDevice device, const WGPUSamplerDescriptor *d) {
     return (WGPUSampler)__wgpu_device_create_sampler((int)device,
         (int)d->addressModeU, (int)d->addressModeV, (int)d->addressModeW,
-        (int)d->magFilter, (int)d->minFilter, (int)d->mipmapFilter);
+        (int)d->magFilter, (int)d->minFilter, (int)d->mipmapFilter,
+        (double)d->lodMinClamp, (double)d->lodMaxClamp, (int)d->maxAnisotropy, (int)d->compare);
 }
 
 void wgpuQueueWriteTexture(WGPUQueue queue, const WGPUTexelCopyTextureInfo *dst,

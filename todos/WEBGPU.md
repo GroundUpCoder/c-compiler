@@ -214,7 +214,7 @@ For every feature in the standard `webgpu.h`:
 ## Progress + revised direction (updated 2026-06-19)
 
 **Landed (each on `main` with a `tests/browser/webgpu-*` pixel/readback test):**
-A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A12 ✅.
+A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A12 ✅ A13 ✅.
 
 - **A10+A11** (`webgpu-mrt`): render pipeline color targets and render-pass color
   attachments are now packed arrays — multiple color targets with per-target
@@ -226,6 +226,12 @@ A1 ✅ A2 ✅ A3 ✅ A4 ✅ A5 ✅ A6 ✅ A7 ✅ A8 ✅ A9 ✅ A10 ✅ A11 ✅ A
   constants into a parallel int (key ptr/len) + double (value) array; the host
   rebuilds the `{name: value}` record. `WGPUConstantEntry` now has a full struct
   definition (was a forward decl).
+- **A13** (`webgpu-sampler`): sampler completeness — `lodMinClamp`, `lodMaxClamp`
+  (passed as doubles), `maxAnisotropy` (0 == unset → spec default 1), and
+  `compare` (0 == Undefined → normal sampler; else a comparison sampler). Added
+  the `compare` field to `WGPUSamplerDescriptor` and moved `WGPUCompareFunction`
+  ahead of it. Test clears a depth32float texture and samples it through a
+  comparison sampler (shadow-style).
 
 **Direction decision (2026-06-19):** stop *widening* the WebGPU surface for now;
 make the surface we already expose as **conformant** as possible instead.

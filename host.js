@@ -5586,16 +5586,25 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         }));
       },
 
-      __wgpu_device_create_sampler: function (device, addrU, addrV, addrW, magFilter, minFilter, mipmapFilter) {
+      __wgpu_device_create_sampler: function (device, addrU, addrV, addrW, magFilter, minFilter, mipmapFilter, lodMinClamp, lodMaxClamp, maxAnisotropy, compare) {
         const d = get(device); if (!d) return 0;
-        return alloc(d.createSampler({
+        const sd = {
           addressModeU: wgpuEnumOpt(WGPU_ADDRESS_MODE, addrU, 'sampler.addressModeU', 'clamp-to-edge'),
           addressModeV: wgpuEnumOpt(WGPU_ADDRESS_MODE, addrV, 'sampler.addressModeV', 'clamp-to-edge'),
           addressModeW: wgpuEnumOpt(WGPU_ADDRESS_MODE, addrW, 'sampler.addressModeW', 'clamp-to-edge'),
           magFilter: wgpuEnumOpt(WGPU_FILTER_MODE, magFilter, 'sampler.magFilter', 'nearest'),
           minFilter: wgpuEnumOpt(WGPU_FILTER_MODE, minFilter, 'sampler.minFilter', 'nearest'),
           mipmapFilter: wgpuEnumOpt(WGPU_FILTER_MODE, mipmapFilter, 'sampler.mipmapFilter', 'nearest'),
-        }));
+          lodMinClamp: lodMinClamp,
+          lodMaxClamp: lodMaxClamp,
+        };
+        /* maxAnisotropy 0 is invalid in WebGPU (min 1) -> treat as unset and let
+           the spec default (1) apply. compare 0 == Undefined -> a normal
+           (non-comparison) sampler; any other value makes it a comparison sampler. */
+        maxAnisotropy = maxAnisotropy >>> 0;
+        if (maxAnisotropy > 0) sd.maxAnisotropy = maxAnisotropy;
+        if (compare) sd.compare = wgpuEnumReq(WGPU_COMPARE, compare, 'sampler.compare');
+        return alloc(d.createSampler(sd));
       },
 
       __wgpu_queue_write_texture: function (queue, texture, mipLevel, ox, oy, oz, aspect, dataPtr, dataSize, offset, bytesPerRow, rowsPerImage, width, height, depth) {
