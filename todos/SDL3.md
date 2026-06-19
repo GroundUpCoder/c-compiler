@@ -12,6 +12,25 @@ Let compiled C programs `#include <SDL.h>` (SDL3 dialect) and run real SDL3
 apps/games on this runtime — backed by browser APIs (WebGPU for video, Web Audio
 for sound, DOM/Pointer/Gamepad/Keyboard events for input), with **no JSPI**.
 
+## Guiding principles
+
+Two goals govern every part of this implementation. A gap in either is a bug to
+file, not an acceptable shortcut — both are first-class:
+
+1. **Correctness.** The interface must behave **exactly** as a program written
+   against upstream SDL3 expects: same function semantics, same struct fields
+   populated, same event values/codes, same defaults, same error behavior. When
+   something genuinely can't be honored on this runtime (e.g. a blocking sleep
+   without JSPI), it **fails loud** — it never silently no-ops or mis-behaves.
+2. **Performance.** Every operation should cost **no more than a user would
+   reasonably expect** of it. A per-frame `RenderPresent` must not do a hidden
+   full-canvas GPU→CPU readback; a one-pixel `UpdateTexture` must not reupload the
+   whole texture; batched 2D draws must not allocate per primitive. Hidden O(n) or
+   per-frame overhead on a path the caller believes is cheap is a defect.
+
+A change that is correct but quietly quadratic, or fast but subtly off-spec, is
+not done. The "Known strays" section below tracks current violations of either.
+
 ## Architecture (how SDL3 maps onto this runtime)
 
 - **Single `env` import model**, same as WebGPU: `__SDL.c` (in `compiler.js`,
@@ -80,6 +99,55 @@ Fixed a batch of stray-from-SDL behaviors found in an audit (all tested, headles
 - **Full scancode map** — letters/digits/punct/keypad/nav now carry the right
   `SDL_Scancode` (only arrows/mods/F-keys were mapped → WASD reported scancode 0).
 - **Mouse wheel sign** corrected to SDL's convention (+y = away/up) + horizontal.
+
+## Known strays still open (audited, not yet fixed)
+
+Each of these violates **correctness**, **performance**, or both (per the Guiding
+principles). Listed so they're visible, not silently shipped.
+
+### Correctness
+- **Event `timestamp` is always 0.** SDL stamps every event with
+  `SDL_GetTicksNS()`; ours are memset-zeroed in `__sdl_push_*`.
+- **Keyboard `mod` never populated** (no `SDL_GetModState`). Programs reading
+  `event.key.mod` for Shift/Ctrl/Alt see 0. Web: `KeyboardEvent.getModifierState`.
+- **Keyboard `repeat` never set.** DOM provides `e.repeat`; every auto-repeat
+  currently looks like a fresh press.
+- **Shifted-letter keycode is wrong.** `keysym` returns `e.key.charCodeAt(0)`, so
+  Shift+A → keycode 65; SDL's keycode for the A key is `SDLK_a` (97) regardless of
+  shift. (Unshifted letters are fine; scancodes are now correct.)
+- **Mouse `xrel`/`yrel` always 0; no relative / pointer-lock mode.** Kills FPS
+  mouselook; `SDL_GetRelativeMouseState` / `SDL_SetWindowRelativeMouseMode` absent.
+- **Mouse motion `state` mask + button `clicks` never set** (no held-button mask,
+  no double-click count).
+- **Duplicate `SDL_PIXELFORMAT_RGBA32` macro** with conflicting values
+  (`0x16462004` then `0x16762004`). Harmless only because the host treats every
+  texture as RGBA bytes, but it's a real redefinition.
+- **Audio:** no format conversion / resampling (the defining feature of
+  `SDL_AudioStream`); the get-callback pull mode is silently ignored;
+  `PutAudioStreamData` drops on a full ring; `GetAudioStreamQueued` returns a
+  `0x7FFFFFFF` sentinel when no SAB is wired.
+- **`SDL_Init` ignores its flags** — no subsystem tracking; no `SDL_WasInit` /
+  `SDL_InitSubSystem` / `SDL_QuitSubSystem`.
+- **`SDL_SetWindowTitle` is a no-op**, and **`SDL_CreateTextureFromSurface`
+  assumes RGBA32** input.
+- **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (1px quad / 1px
+  borders), not Bresenham — sub-pixel coverage and endpoints differ slightly.
+
+### Performance
+- **Per-present GPU→CPU readback runs unconditionally.** Every
+  `SDL_RenderPresent` does a `copyTextureToBuffer` + `mapAsync` + an **O(W·H)
+  per-pixel JS loop** allocating a fresh `Uint8Array(W*H*4)`, solely to feed
+  `getLastFrame()` (the capture probe). A normal render loop pays this **every
+  frame even when nothing is capturing**. Fix: make it **on-demand** (only when a
+  capture is pending) and move the unpad/BGRA→RGBA swizzle onto the GPU. (Also in
+  `todos/WEBGPU.md` → Performance.)
+- **Per-primitive allocation in the renderer.** `__sdl_render_quad` allocates a
+  48-float `Float32Array` per quad; `rdrFlush` then allocates one combined array
+  **and creates+destroys a GPU vertex buffer every present**. A sprite/tile-heavy
+  frame churns N allocations + a buffer create/destroy per frame; the expected
+  cost is a reused, grown vertex buffer.
+- **`SDL_UpdateTexture` reuploads the whole texture** for any update (it ignores
+  the sub-rect, see Correctness) — a one-pixel change is O(texture).
 
 ## The work to do — by subsystem
 
