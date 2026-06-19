@@ -1,7 +1,9 @@
 # WebGPU for the C compiler (webgpu.h)
 
-Status: **planned, starting Goal A (the `webgpu.h` binding).**
-Decision date: 2026-06-18.
+Status: **Tiers 0–3 landed (triangle → textured quad → SDL bridge → compute /
+readback / blend / depth / stencil / error scopes). Now driving to FULL spec
+coverage — see "Path to full spec coverage (2026-06-19)" at the bottom.**
+Decision date: 2026-06-18. Full-coverage plan: 2026-06-19.
 
 ## What and why
 
@@ -166,3 +168,103 @@ never silently no-ops — per the repo's "surface errors loudly" rule.
 
 - Goal B: SDL3 Renderer/Texture or full `SDL_GPU` on top of this binding.
 - Native (non-browser) WebGPU.
+
+---
+
+# Path to full spec coverage (2026-06-19)
+
+Tiers 0–3 proved the architecture end-to-end. The binding now covers the common
+render + compute path, but a large slice of `webgpu.h` is either **declared but
+silently dropped** (descriptor fields the glue ignores) or **not present at
+all**. This section is the gap inventory + build order to reach faithful,
+fully-tested coverage of the standard (Dawn/Emdawnwebgpu) `webgpu.h`.
+
+## Definition of done
+
+For every feature in the standard `webgpu.h`:
+- **Implemented correctly** — descriptor fields are marshalled, not dropped.
+- **Complete** — every enum variant is present and mapped; `Undefined` → the
+  spec default, **unknown values throw/abort** (no silent `|| 'default'`).
+- **Fails loud** on anything genuinely unsupported by the browser/runtime.
+- **Tested** — a `tests/browser/webgpu-<feat>.c` + `-renders.mjs` asserting on
+  pixels or compute readback; representative capstones re-verified on real
+  Safari (in-page pixel read-back, never screenshots); vendored into `netguc/c`
+  with an e2e case (graphical sheet or headless compute).
+
+## Invariants (unchanged from Tiers 0–3)
+
+- 3-layer contract: `webgpu.h` + `__webgpu.c` (in `compiler.js`) flatten
+  descriptors into **primitives / packed-int arrays**; `host.js`
+  (`createBrowserWebGPU`) keeps the int↔JS handle table and calls real WebGPU.
+  The host never reads C struct layouts.
+- Array-bearing descriptors use the packed-int convention already established
+  (`[count, per-item fields…]`); raise the static `cap` + `abort()` on overflow.
+- Async is callback-based, **NO JSPI** (host invokes `__wgpu_call_*_cb`
+  trampolines). Frames via `wgpuSetMainLoopCallback` → shared rAF.
+- **Enum values:** names are the contract (header↔host self-consistent). New
+  variants get canonical `webgpu.h` values where known; existing working enums
+  are **not** retroactively renumbered.
+- **Environment-gated** features (compressed formats, `timestamp-query`,
+  `float32-filterable`, …) are implemented + **feature-detected**, tested where
+  the runtime supports them, and **logged as skipped** otherwise — never
+  silently passed.
+
+## Phase A — fix "implemented but not to spec" (silent drops / partial coverage)
+
+A1. **Texture formats** — full `WGPUTextureFormat` set + host maps + a
+    bytes-per-block helper for copy validation; compressed (BC/ETC2/EAC/ASTC)
+    behind feature-detect.
+A2. **Vertex formats** — full `WGPUVertexFormat` set (8/16/32-bit, float16,
+    unorm10-10-10-2).
+A3. **Lossy enum collapses → exact** — address/filter/mipmap-filter, `alphaMode`
+    (+ Unpremultiplied/Inherit), sampler & texture binding types: default on
+    `Undefined`, throw on unknown.
+A4. **Buffer write-mapping + `mappedAtCreation`** — creation-mapped buffers and
+    write-back on `unmap` (today only the read path exists).
+A5. **Multisample / MSAA** — `WGPUMultisampleState` into the pipeline +
+    `resolveTarget` in color attachments.
+A6. **Dynamic bind-group offsets** — render + compute `SetBindGroup` (today
+    `abort()`).
+A7. **Texture view descriptors** — format / dimension (1d/2d/2d-array/cube/
+    cube-array/3d) / aspect / base+count mip & array layers.
+A8. **Storage-texture bind layout** — handle the kind the glue currently skips.
+A9. **Texture binding `viewDimension`/`multisampled`** — read from the struct.
+A10. **Multiple color targets + per-target write masks** (MRT).
+A11. **Multiple color attachments + `depthSlice`** in a render pass.
+A12. **Pipeline-overridable constants** — `WGPUConstantEntry` (vs/fs/compute).
+A13. **Sampler completeness** — lodMin/MaxClamp, maxAnisotropy, compare
+     (comparison samplers / shadow maps).
+A14. **Depth-stencil completeness** — depthBias/SlopeScale/Clamp,
+     depth/stencilReadOnly, `stripIndexFormat`.
+A15. **Surface** — viewFormats, presentMode, correct alphaMode.
+
+## Phase B — add "not implemented at all" (highest-use first)
+
+B16. **Viewport / Scissor / BlendConstant**.
+B17. **`copyBufferToTexture`, `copyTextureToTexture`, `clearBuffer`**.
+B18. **`GetBindGroupLayout`** on render & compute pipelines (unlocks
+     `layout:"auto"`).
+B19. **Adapter/Device introspection** — Get Limits/Info/Features, Has Feature;
+     `requestDevice` descriptor (requiredFeatures/Limits) + `requestAdapter`
+     options.
+B20. **Indirect** — Draw/DrawIndexed/DispatchWorkgroups Indirect.
+B21. **Render bundles** — `RenderBundleEncoder*` + `ExecuteBundles`.
+B22. **Query sets** — CreateQuerySet, ResolveQuerySet, occlusion + timestamp
+     (timestamps feature-gated).
+B23. **Async / events** — QueueOnSubmittedWorkDone, Create*PipelineAsync,
+     InstanceProcessEvents.
+B24. **Error / diagnostics** — SetUncapturedErrorCallback, device-lost,
+     ShaderModuleGetCompilationInfo.
+B25. **Surface caps** — GetCapabilities, Unconfigure.
+B26. **Object lifecycle / introspection** — `AddRef` for every type,
+     Buffer/TextureDestroy, Buffer Get Size/Usage/MapState, Texture Get
+     Width/Height/…/Format, `SetLabel`.
+B27. **Debug markers** — Push/Pop debug group + insert marker (render/compute/
+     command encoders).
+
+## Cadence
+
+One commit per increment (or small capstone) in `c-compiler` `main`, each with
+its test. After each batch: `netguc/c/scripts/sync-compiler.sh`, rebuild
+`/bin` wasms, run netguc e2e, commit the vendored bump in `netguc` `main`.
+Report the netguc `c` build number on syncs meant to go live.
