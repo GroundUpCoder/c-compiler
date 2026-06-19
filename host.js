@@ -5065,11 +5065,42 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
  * ========================================================================== */
 
 /* Enum int <-> WebGPU JS string maps. Values mirror webgpu.h exactly. */
+/* Full WGPUTextureFormat -> WebGPU string map (mirrors the header exactly;
+   single source of truth — WGPU_STR_TO_FORMAT is derived by inverting it).
+   0 == Undefined -> undefined (caller substitutes the preferred canvas format).
+   Compressed (100+) resolve to strings unconditionally; the browser validates
+   the backing feature (texture-compression-bc/etc2/astc) at create time. */
 const WGPU_FORMAT_TO_STR = {
-  0: undefined, 18: 'rgba8unorm', 19: 'rgba8unorm-srgb',
+  0: undefined,
+  1: 'r8unorm', 2: 'r8snorm', 3: 'r8uint', 4: 'r8sint',
+  5: 'r16uint', 6: 'r16sint', 7: 'r16float',
+  8: 'rg8unorm', 9: 'rg8snorm', 10: 'rg8uint', 11: 'rg8sint',
+  12: 'r32float', 13: 'r32uint', 14: 'r32sint',
+  15: 'rg16uint', 16: 'rg16sint', 17: 'rg16float',
+  18: 'rgba8unorm', 19: 'rgba8unorm-srgb', 20: 'rgba8snorm', 21: 'rgba8uint', 22: 'rgba8sint',
   23: 'bgra8unorm', 24: 'bgra8unorm-srgb',
+  25: 'rgb10a2uint', 26: 'rgb10a2unorm', 27: 'rg11b10ufloat', 28: 'rgb9e5ufloat',
+  29: 'rg32float', 30: 'rg32uint', 31: 'rg32sint',
+  32: 'rgba16uint', 33: 'rgba16sint', 34: 'rgba16float',
+  35: 'rgba32float', 36: 'rgba32uint', 37: 'rgba32sint',
+  38: 'stencil8',
   40: 'depth16unorm', 41: 'depth24plus', 42: 'depth24plus-stencil8',
   43: 'depth32float', 44: 'depth32float-stencil8',
+  /* compressed (feature-gated) */
+  100: 'bc1-rgba-unorm', 101: 'bc1-rgba-unorm-srgb', 102: 'bc2-rgba-unorm', 103: 'bc2-rgba-unorm-srgb',
+  104: 'bc3-rgba-unorm', 105: 'bc3-rgba-unorm-srgb', 106: 'bc4-r-unorm', 107: 'bc4-r-snorm',
+  108: 'bc5-rg-unorm', 109: 'bc5-rg-snorm', 110: 'bc6h-rgb-ufloat', 111: 'bc6h-rgb-float',
+  112: 'bc7-rgba-unorm', 113: 'bc7-rgba-unorm-srgb',
+  114: 'etc2-rgb8unorm', 115: 'etc2-rgb8unorm-srgb', 116: 'etc2-rgb8a1unorm', 117: 'etc2-rgb8a1unorm-srgb',
+  118: 'etc2-rgba8unorm', 119: 'etc2-rgba8unorm-srgb',
+  120: 'eac-r11unorm', 121: 'eac-r11snorm', 122: 'eac-rg11unorm', 123: 'eac-rg11snorm',
+  124: 'astc-4x4-unorm', 125: 'astc-4x4-unorm-srgb', 126: 'astc-5x4-unorm', 127: 'astc-5x4-unorm-srgb',
+  128: 'astc-5x5-unorm', 129: 'astc-5x5-unorm-srgb', 130: 'astc-6x5-unorm', 131: 'astc-6x5-unorm-srgb',
+  132: 'astc-6x6-unorm', 133: 'astc-6x6-unorm-srgb', 134: 'astc-8x5-unorm', 135: 'astc-8x5-unorm-srgb',
+  136: 'astc-8x6-unorm', 137: 'astc-8x6-unorm-srgb', 138: 'astc-8x8-unorm', 139: 'astc-8x8-unorm-srgb',
+  140: 'astc-10x5-unorm', 141: 'astc-10x5-unorm-srgb', 142: 'astc-10x6-unorm', 143: 'astc-10x6-unorm-srgb',
+  144: 'astc-10x8-unorm', 145: 'astc-10x8-unorm-srgb', 146: 'astc-10x10-unorm', 147: 'astc-10x10-unorm-srgb',
+  148: 'astc-12x10-unorm', 149: 'astc-12x10-unorm-srgb', 150: 'astc-12x12-unorm', 151: 'astc-12x12-unorm-srgb',
 };
 const WGPU_COMPARE = {
   1: 'never', 2: 'less', 3: 'equal', 4: 'less-equal',
@@ -5080,9 +5111,10 @@ const WGPU_STENCIL_OP = {
   5: 'increment-clamp', 6: 'decrement-clamp', 7: 'increment-wrap', 8: 'decrement-wrap',
 };
 const WGPU_ERROR_FILTER = { 1: 'validation', 2: 'out-of-memory', 3: 'internal' };
-const WGPU_STR_TO_FORMAT = {
-  'rgba8unorm': 18, 'rgba8unorm-srgb': 19, 'bgra8unorm': 23, 'bgra8unorm-srgb': 24,
-};
+/* Inverse of WGPU_FORMAT_TO_STR (string -> int), derived so the two never drift. */
+const WGPU_STR_TO_FORMAT = Object.fromEntries(
+  Object.entries(WGPU_FORMAT_TO_STR).filter(([, v]) => v).map(([k, v]) => [v, +k])
+);
 const WGPU_LOADOP = { 1: 'clear', 2: 'load' };
 const WGPU_STOREOP = { 1: 'store', 2: 'discard' };
 const WGPU_TOPO = { 0: 'point-list', 1: 'line-list', 2: 'line-strip', 3: 'triangle-list', 4: 'triangle-strip' };
@@ -5136,6 +5168,14 @@ function wgpuEnumOpt(map, v, name, dflt) {
   const s = map[v];
   if (s === undefined) throw new Error(name + ': unsupported enum value ' + v);
   return s;
+}
+/* Texture format: 0 (Undefined) -> undefined (caller substitutes a default);
+   any other value must be a known WGPUTextureFormat or we fail loud. */
+function wgpuFormat(v, name) {
+  v = v >>> 0;
+  if (v === 0) return undefined;
+  if (!(v in WGPU_FORMAT_TO_STR)) throw new Error(name + ': unsupported WGPUTextureFormat ' + v);
+  return WGPU_FORMAT_TO_STR[v];
 }
 
 /* Status codes (must match webgpu.h). */
@@ -5238,7 +5278,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       __wgpu_surface_configure: function (surface, device, format, usage, width, height, alphaMode) {
         const s = get(surface), d = get(device);
         if (!s || !s.gpuCtx || !d) throw new Error('wgpuSurfaceConfigure: invalid surface/device handle');
-        const fmt = WGPU_FORMAT_TO_STR[format] || preferredFormat();
+        const fmt = wgpuFormat(format, 'surfaceConfigure.format') || preferredFormat();
         s.format = fmt;
         /* WebGPU's configure() takes no size — the canvas drawing buffer size IS
          * the surface size. Honor the requested width/height by sizing the
@@ -5300,7 +5340,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
           desc.vertex.buffers = buffers;
         }
         if (fsModule) {
-          const target = { format: WGPU_FORMAT_TO_STR[format] || preferredFormat() };
+          const target = { format: wgpuFormat(format, 'colorTarget.format') || preferredFormat() };
           if (blendEnabled) {
             target.blend = {
               color: {
