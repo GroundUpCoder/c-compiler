@@ -5146,6 +5146,7 @@ const WGPU_FILTER_MODE = { 0: 'nearest', 1: 'nearest', 2: 'linear' };
 const WGPU_TEXTURE_DIMENSION = { 1: '1d', 2: '2d', 3: '3d' };
 const WGPU_VIEW_DIMENSION = { 1: '1d', 2: '2d', 3: '2d-array', 4: 'cube', 5: 'cube-array', 6: '3d' };
 const WGPU_TEXTURE_ASPECT = { 1: 'all', 2: 'stencil-only', 3: 'depth-only' };
+const WGPU_STORAGE_ACCESS = { 1: 'write-only', 2: 'read-only', 3: 'read-write' };
 const WGPU_SAMPLER_BINDING_TYPE = { 1: 'filtering', 2: 'non-filtering', 3: 'comparison' };
 const WGPU_TEXTURE_SAMPLE_TYPE = { 1: 'float', 2: 'unfilterable-float', 3: 'depth', 4: 'sint', 5: 'uint' };
 const WGPU_INDEX_FORMAT = { 1: 'uint16', 2: 'uint32' };
@@ -5471,6 +5472,14 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
             tex.viewDimension = e0 ? wgpuEnumReq(WGPU_VIEW_DIMENSION, e0, 'texture.viewDimension') : '2d';
             if (e1) tex.multisampled = true;
             entry.texture = tex;
+          } else if (kind === 3) {
+            const fmt = wgpuFormat(e0, 'storageTexture.format');
+            if (!fmt) throw new Error('createBindGroupLayout: storageTexture.format required');
+            entry.storageTexture = {
+              access: wgpuEnumReq(WGPU_STORAGE_ACCESS, detail, 'storageTexture.access'),
+              format: fmt,
+              viewDimension: e1 ? wgpuEnumReq(WGPU_VIEW_DIMENSION, e1, 'storageTexture.viewDimension') : '2d',
+            };
           } else {
             throw new Error('createBindGroupLayout: unknown entry kind ' + kind);
           }

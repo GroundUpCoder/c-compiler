@@ -17887,7 +17887,10 @@ typedef enum WGPUTextureViewDimension {
 } WGPUTextureViewDimension;
 
 typedef enum WGPUStorageTextureAccess {
-    WGPUStorageTextureAccess_Undefined = 0
+    WGPUStorageTextureAccess_Undefined = 0,
+    WGPUStorageTextureAccess_WriteOnly = 1,
+    WGPUStorageTextureAccess_ReadOnly = 2,
+    WGPUStorageTextureAccess_ReadWrite = 3
 } WGPUStorageTextureAccess;
 
 typedef struct WGPUBufferBindingLayout {
