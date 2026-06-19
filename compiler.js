@@ -17418,6 +17418,9 @@ typedef struct WGPUCommandEncoderImpl*    WGPUCommandEncoder;
 typedef struct WGPURenderPassEncoderImpl* WGPURenderPassEncoder;
 typedef struct WGPUCommandBufferImpl*     WGPUCommandBuffer;
 typedef struct WGPUBufferImpl*            WGPUBuffer;
+typedef struct WGPUBindGroupLayoutImpl*   WGPUBindGroupLayout;
+typedef struct WGPUBindGroupImpl*         WGPUBindGroup;
+typedef struct WGPUSamplerImpl*           WGPUSampler;
 
 /* WGPUStringView: ptr+len string (NULL data + 0 length == "use default"). */
 typedef struct WGPUStringView {
@@ -17547,6 +17550,18 @@ typedef enum WGPUVertexStepMode {
 #define WGPUBufferUsage_Storage      0x0080
 #define WGPUBufferUsage_Indirect     0x0100
 #define WGPUBufferUsage_QueryResolve 0x0200
+
+/* Shader stage visibility flags (mirror JS GPUShaderStage). */
+#define WGPUShaderStage_Vertex   0x1
+#define WGPUShaderStage_Fragment 0x2
+#define WGPUShaderStage_Compute  0x4
+
+typedef enum WGPUBufferBindingType {
+    WGPUBufferBindingType_Undefined        = 0,
+    WGPUBufferBindingType_Uniform          = 1,
+    WGPUBufferBindingType_Storage          = 2,
+    WGPUBufferBindingType_ReadOnlyStorage  = 3
+} WGPUBufferBindingType;
 
 /* Texture usage flags. */
 #define WGPUTextureUsage_CopySrc          0x01
@@ -17678,6 +17693,100 @@ typedef struct WGPUBufferDescriptor {
     WGPUBool mappedAtCreation;
 } WGPUBufferDescriptor;
 
+/* ---- Bind groups / pipeline layout ---- */
+typedef enum WGPUSamplerBindingType {
+    WGPUSamplerBindingType_Undefined = 0,
+    WGPUSamplerBindingType_Filtering = 1,
+    WGPUSamplerBindingType_NonFiltering = 2,
+    WGPUSamplerBindingType_Comparison = 3
+} WGPUSamplerBindingType;
+
+typedef enum WGPUTextureSampleType {
+    WGPUTextureSampleType_Undefined = 0,
+    WGPUTextureSampleType_Float = 1,
+    WGPUTextureSampleType_UnfilterableFloat = 2,
+    WGPUTextureSampleType_Depth = 3,
+    WGPUTextureSampleType_Sint = 4,
+    WGPUTextureSampleType_Uint = 5
+} WGPUTextureSampleType;
+
+typedef enum WGPUTextureViewDimension {
+    WGPUTextureViewDimension_Undefined = 0,
+    WGPUTextureViewDimension_2D = 2
+} WGPUTextureViewDimension;
+
+typedef enum WGPUStorageTextureAccess {
+    WGPUStorageTextureAccess_Undefined = 0
+} WGPUStorageTextureAccess;
+
+typedef struct WGPUBufferBindingLayout {
+    const WGPUChainedStruct *nextInChain;
+    WGPUBufferBindingType type;
+    WGPUBool hasDynamicOffset;
+    uint64_t minBindingSize;
+} WGPUBufferBindingLayout;
+
+typedef struct WGPUSamplerBindingLayout {
+    const WGPUChainedStruct *nextInChain;
+    WGPUSamplerBindingType type;
+} WGPUSamplerBindingLayout;
+
+typedef struct WGPUTextureBindingLayout {
+    const WGPUChainedStruct *nextInChain;
+    WGPUTextureSampleType sampleType;
+    WGPUTextureViewDimension viewDimension;
+    WGPUBool multisampled;
+} WGPUTextureBindingLayout;
+
+typedef struct WGPUStorageTextureBindingLayout {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStorageTextureAccess access;
+    WGPUTextureFormat format;
+    WGPUTextureViewDimension viewDimension;
+} WGPUStorageTextureBindingLayout;
+
+typedef struct WGPUBindGroupLayoutEntry {
+    const WGPUChainedStruct *nextInChain;
+    uint32_t binding;
+    WGPUFlags visibility;
+    WGPUBufferBindingLayout buffer;
+    WGPUSamplerBindingLayout sampler;
+    WGPUTextureBindingLayout texture;
+    WGPUStorageTextureBindingLayout storageTexture;
+} WGPUBindGroupLayoutEntry;
+
+typedef struct WGPUBindGroupLayoutDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    size_t entryCount;
+    const WGPUBindGroupLayoutEntry *entries;
+} WGPUBindGroupLayoutDescriptor;
+
+typedef struct WGPUBindGroupEntry {
+    const WGPUChainedStruct *nextInChain;
+    uint32_t binding;
+    WGPUBuffer buffer;
+    uint64_t offset;
+    uint64_t size;
+    WGPUSampler sampler;
+    WGPUTextureView textureView;
+} WGPUBindGroupEntry;
+
+typedef struct WGPUBindGroupDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUBindGroupLayout layout;
+    size_t entryCount;
+    const WGPUBindGroupEntry *entries;
+} WGPUBindGroupDescriptor;
+
+typedef struct WGPUPipelineLayoutDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    size_t bindGroupLayoutCount;
+    const WGPUBindGroupLayout *bindGroupLayouts;
+} WGPUPipelineLayoutDescriptor;
+
 typedef struct WGPUColorTargetState {
     const WGPUChainedStruct *nextInChain;
     WGPUTextureFormat format;
@@ -17795,8 +17904,19 @@ WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, const WGPUBufferDescriptor 
 void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, const void *data, size_t size);
 void wgpuRenderPassEncoderSetVertexBuffer(WGPURenderPassEncoder renderPassEncoder, uint32_t slot, WGPUBuffer buffer, uint64_t offset, uint64_t size);
 
+/* Bind groups + pipeline layout (uniform/storage buffer bindings; sampler &
+   texture bindings land with the textures increment). */
+WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGPUBindGroupLayoutDescriptor *descriptor);
+WGPUPipelineLayout wgpuDeviceCreatePipelineLayout(WGPUDevice device, const WGPUPipelineLayoutDescriptor *descriptor);
+WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device, const WGPUBindGroupDescriptor *descriptor);
+void wgpuRenderPassEncoderSetBindGroup(WGPURenderPassEncoder renderPassEncoder, uint32_t groupIndex, WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets);
+
 /* Release/reference: free or retain a host handle. */
 void wgpuBufferRelease(WGPUBuffer v);
+void wgpuBindGroupLayoutRelease(WGPUBindGroupLayout v);
+void wgpuBindGroupRelease(WGPUBindGroup v);
+void wgpuPipelineLayoutRelease(WGPUPipelineLayout v);
+void wgpuSamplerRelease(WGPUSampler v);
 void wgpuInstanceRelease(WGPUInstance v);
 void wgpuAdapterRelease(WGPUAdapter v);
 void wgpuDeviceRelease(WGPUDevice v);
@@ -20753,10 +20873,14 @@ __import void __wgpu_surface_configure(int surface, int device, int format, int 
 __import int  __wgpu_surface_get_current_texture(int surface);
 __import int  __wgpu_texture_create_view(int texture);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
-__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen);
+__import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, int format, int topology, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout);
 __import int  __wgpu_device_create_buffer(int device, int size, int usage);
 __import void __wgpu_queue_write_buffer(int queue, int buffer, int bufferOffset, const void *data, int size);
 __import void __wgpu_render_pass_set_vertex_buffer(int pass, int slot, int buffer, int offset, int size);
+__import int  __wgpu_device_create_bind_group_layout(int device, const int *packed, int packedLen);
+__import int  __wgpu_device_create_pipeline_layout(int device, const int *bgls, int count);
+__import int  __wgpu_device_create_bind_group(int device, int layout, const int *packed, int packedLen);
+__import void __wgpu_render_pass_set_bind_group(int pass, int index, int group);
 __import int  __wgpu_device_create_command_encoder(int device);
 __import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
@@ -20898,7 +21022,7 @@ WGPURenderPipeline wgpuDeviceCreateRenderPipeline(WGPUDevice device, const WGPUR
         (int)desc->vertex.module, desc->vertex.entryPoint.data, (int)desc->vertex.entryPoint.length,
         fsModule, fsEntry, fsEntryLen,
         fmt, (int)desc->primitive.topology, (int)desc->primitive.cullMode, (int)desc->primitive.frontFace,
-        vb, n);
+        vb, n, (int)desc->layout);
 }
 
 WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, const WGPUCommandEncoderDescriptor *descriptor) {
@@ -20958,6 +21082,70 @@ void wgpuRenderPassEncoderSetVertexBuffer(WGPURenderPassEncoder renderPassEncode
     __wgpu_render_pass_set_vertex_buffer((int)renderPassEncoder, (int)slot, (int)buffer, (int)offset, (int)size);
 }
 
+WGPUBindGroupLayout wgpuDeviceCreateBindGroupLayout(WGPUDevice device, const WGPUBindGroupLayoutDescriptor *desc) {
+    /* Packed: [ entryCount, per entry: binding, visibility, kind, detail ].
+       kind 0=buffer (detail=WGPUBufferBindingType), 1=sampler (detail=type),
+       2=texture (detail=WGPUTextureSampleType). The set sub-struct selects kind. */
+    static int p[256];
+    int n = 0, cap = (int)(sizeof(p) / sizeof(p[0]));
+    int ec = (int)desc->entryCount;
+    p[n++] = ec;
+    for (int i = 0; i < ec; i++) {
+        const WGPUBindGroupLayoutEntry *e = &desc->entries[i];
+        int kind, detail;
+        if (e->buffer.type != WGPUBufferBindingType_Undefined) { kind = 0; detail = (int)e->buffer.type; }
+        else if (e->sampler.type != WGPUSamplerBindingType_Undefined) { kind = 1; detail = (int)e->sampler.type; }
+        else if (e->texture.sampleType != WGPUTextureSampleType_Undefined) { kind = 2; detail = (int)e->texture.sampleType; }
+        else { kind = 0; detail = (int)WGPUBufferBindingType_Uniform; }
+        if (n + 4 > cap) { fprintf(stderr, "wgpuDeviceCreateBindGroupLayout: entry cap exceeded\\n"); abort(); }
+        p[n++] = (int)e->binding;
+        p[n++] = (int)e->visibility;
+        p[n++] = kind;
+        p[n++] = detail;
+    }
+    return (WGPUBindGroupLayout)__wgpu_device_create_bind_group_layout((int)device, p, n);
+}
+
+WGPUPipelineLayout wgpuDeviceCreatePipelineLayout(WGPUDevice device, const WGPUPipelineLayoutDescriptor *desc) {
+    static int bgls[64];
+    int c = (int)desc->bindGroupLayoutCount;
+    if (c > (int)(sizeof(bgls) / sizeof(bgls[0]))) { fprintf(stderr, "wgpuDeviceCreatePipelineLayout: too many bind group layouts\\n"); abort(); }
+    for (int i = 0; i < c; i++) bgls[i] = (int)desc->bindGroupLayouts[i];
+    return (WGPUPipelineLayout)__wgpu_device_create_pipeline_layout((int)device, bgls, c);
+}
+
+WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device, const WGPUBindGroupDescriptor *desc) {
+    /* Packed: [ entryCount, per entry: binding, kind, handle, offset, size ].
+       kind 0=buffer (handle=buffer, offset, size), 1=sampler (handle=sampler),
+       2=textureView (handle=textureView). */
+    static int p[256];
+    int n = 0, cap = (int)(sizeof(p) / sizeof(p[0]));
+    int ec = (int)desc->entryCount;
+    p[n++] = ec;
+    for (int i = 0; i < ec; i++) {
+        const WGPUBindGroupEntry *e = &desc->entries[i];
+        int kind, handle, offset = 0, size = 0;
+        if (e->buffer) { kind = 0; handle = (int)e->buffer; offset = (int)e->offset; size = (int)e->size; }
+        else if (e->sampler) { kind = 1; handle = (int)e->sampler; }
+        else if (e->textureView) { kind = 2; handle = (int)e->textureView; }
+        else { fprintf(stderr, "wgpuDeviceCreateBindGroup: entry %d has no resource\\n", i); abort(); }
+        if (n + 5 > cap) { fprintf(stderr, "wgpuDeviceCreateBindGroup: entry cap exceeded\\n"); abort(); }
+        p[n++] = (int)e->binding;
+        p[n++] = kind;
+        p[n++] = handle;
+        p[n++] = offset;
+        p[n++] = size;
+    }
+    return (WGPUBindGroup)__wgpu_device_create_bind_group((int)device, (int)desc->layout, p, n);
+}
+
+void wgpuRenderPassEncoderSetBindGroup(WGPURenderPassEncoder renderPassEncoder,
+        uint32_t groupIndex, WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets) {
+    (void)dynamicOffsets;
+    if (dynamicOffsetCount > 0) { fprintf(stderr, "wgpuRenderPassEncoderSetBindGroup: dynamic offsets not yet supported\\n"); abort(); }
+    __wgpu_render_pass_set_bind_group((int)renderPassEncoder, (int)groupIndex, (int)group);
+}
+
 void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }
 void wgpuAdapterRelease(WGPUAdapter v) { __wgpu_release((int)v); }
 void wgpuDeviceRelease(WGPUDevice v) { __wgpu_release((int)v); }
@@ -20971,6 +21159,10 @@ void wgpuCommandEncoderRelease(WGPUCommandEncoder v) { __wgpu_release((int)v); }
 void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder v) { __wgpu_release((int)v); }
 void wgpuCommandBufferRelease(WGPUCommandBuffer v) { __wgpu_release((int)v); }
 void wgpuBufferRelease(WGPUBuffer v) { __wgpu_release((int)v); }
+void wgpuBindGroupLayoutRelease(WGPUBindGroupLayout v) { __wgpu_release((int)v); }
+void wgpuBindGroupRelease(WGPUBindGroup v) { __wgpu_release((int)v); }
+void wgpuPipelineLayoutRelease(WGPUPipelineLayout v) { __wgpu_release((int)v); }
+void wgpuSamplerRelease(WGPUSampler v) { __wgpu_release((int)v); }
 
 void wgpuSetMainLoopCallback(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);

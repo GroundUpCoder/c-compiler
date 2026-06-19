@@ -5084,6 +5084,8 @@ const WGPU_VERTEX_FORMAT = {
   5: 'uint32', 6: 'uint32x2', 7: 'uint32x3', 8: 'uint32x4', 9: 'unorm8x4',
 };
 const WGPU_STEP_MODE = { 0: 'vertex', 1: 'instance' };
+/* Buffer binding type — int (WGPUBufferBindingType) -> WGSL/JS string. */
+const WGPU_BUFFER_BINDING_TYPE = { 1: 'uniform', 2: 'storage', 3: 'read-only-storage' };
 
 /* Status codes (must match webgpu.h). */
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
@@ -5211,10 +5213,10 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         return alloc(d.createShaderModule({ code: readStr(codePtr, codeLen) }));
       },
 
-      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen) {
+      __wgpu_device_create_render_pipeline: function (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, format, topology, cullMode, frontFace, vbLayout, vbLayoutLen, layout) {
         const d = get(device); if (!d) return 0;
         const desc = {
-          layout: 'auto',
+          layout: layout ? get(layout) : 'auto',
           vertex: { module: get(vsModule), entryPoint: entryName(vsEntry, vsEntryLen) },
           primitive: {
             topology: WGPU_TOPO[topology] || 'triangle-list',
@@ -5276,6 +5278,64 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         else p.setVertexBuffer(slot >>> 0, get(buffer), offset >>> 0, size >>> 0);
       },
 
+      __wgpu_device_create_bind_group_layout: function (device, packedPtr, packedLen) {
+        const d = get(device); if (!d) return 0;
+        /* Packed: [ entryCount, per entry: binding, visibility, kind, detail ]. */
+        const a = new Int32Array(getMemory().buffer, packedPtr, packedLen);
+        let i = 0;
+        const count = a[i++];
+        const entries = [];
+        for (let e = 0; e < count; e++) {
+          const binding = a[i++] >>> 0, visibility = a[i++] >>> 0, kind = a[i++], detail = a[i++];
+          const entry = { binding: binding, visibility: visibility };
+          if (kind === 0) {
+            const t = WGPU_BUFFER_BINDING_TYPE[detail];
+            if (!t) throw new Error('createBindGroupLayout: unsupported buffer binding type ' + detail);
+            entry.buffer = { type: t };
+          } else {
+            throw new Error('createBindGroupLayout: sampler/texture bindings not yet supported (kind ' + kind + ')');
+          }
+          entries.push(entry);
+        }
+        return alloc(d.createBindGroupLayout({ entries: entries }));
+      },
+
+      __wgpu_device_create_pipeline_layout: function (device, bglsPtr, count) {
+        const d = get(device); if (!d) return 0;
+        const a = new Int32Array(getMemory().buffer, bglsPtr, count);
+        const bindGroupLayouts = [];
+        for (let i = 0; i < count; i++) bindGroupLayouts.push(get(a[i]));
+        return alloc(d.createPipelineLayout({ bindGroupLayouts: bindGroupLayouts }));
+      },
+
+      __wgpu_device_create_bind_group: function (device, layout, packedPtr, packedLen) {
+        const d = get(device); if (!d) return 0;
+        /* Packed: [ entryCount, per entry: binding, kind, handle, offset, size ]. */
+        const a = new Int32Array(getMemory().buffer, packedPtr, packedLen);
+        let i = 0;
+        const count = a[i++];
+        const entries = [];
+        for (let e = 0; e < count; e++) {
+          const binding = a[i++] >>> 0, kind = a[i++], handle = a[i++], offset = a[i++] >>> 0, size = a[i++];
+          if (kind === 0) {
+            const res = { buffer: get(handle), offset: offset };
+            if (size > 0) res.size = size >>> 0;
+            entries.push({ binding: binding, resource: res });
+          } else if (kind === 1) {
+            entries.push({ binding: binding, resource: get(handle) });           /* GPUSampler */
+          } else if (kind === 2) {
+            entries.push({ binding: binding, resource: get(handle) });           /* GPUTextureView */
+          } else {
+            throw new Error('createBindGroup: unknown entry kind ' + kind);
+          }
+        }
+        return alloc(d.createBindGroup({ layout: get(layout), entries: entries }));
+      },
+
+      __wgpu_render_pass_set_bind_group: function (pass, index, group) {
+        const p = get(pass); if (p) p.setBindGroup(index >>> 0, get(group));
+      },
+
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
       __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a) {
@@ -5333,6 +5393,10 @@ function createNullWebGPU(ctx) {
       __wgpu_device_create_buffer: function () { return 0; },
       __wgpu_queue_write_buffer: function () {},
       __wgpu_render_pass_set_vertex_buffer: function () {},
+      __wgpu_device_create_bind_group_layout: function () { return 0; },
+      __wgpu_device_create_pipeline_layout: function () { return 0; },
+      __wgpu_device_create_bind_group: function () { return 0; },
+      __wgpu_render_pass_set_bind_group: function () {},
       __wgpu_device_create_command_encoder: function () { return 0; },
       __wgpu_command_encoder_begin_render_pass: function () { return 0; },
       __wgpu_render_pass_set_pipeline: function () {},
