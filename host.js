@@ -5429,6 +5429,29 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_buffer_unmap: function (buffer) { const b = get(buffer); if (b) b.unmap(); },
 
+      __wgpu_cmd_copy_buffer_to_buffer: function (encoder, src, srcOffset, dst, dstOffset, size) {
+        const enc = get(encoder), s = get(src), d = get(dst);
+        if (!enc || !s || !d) throw new Error('wgpuCommandEncoderCopyBufferToBuffer: invalid handle');
+        enc.copyBufferToBuffer(s, srcOffset >>> 0, d, dstOffset >>> 0, size >>> 0);
+      },
+
+      __wgpu_device_create_compute_pipeline: function (device, module, entry, entryLen, layout) {
+        const d = get(device); if (!d) return 0;
+        return alloc(d.createComputePipeline({
+          layout: layout ? get(layout) : 'auto',
+          compute: { module: get(module), entryPoint: entryName(entry, entryLen) },
+        }));
+      },
+
+      __wgpu_command_encoder_begin_compute_pass: function (encoder) {
+        const enc = get(encoder); return enc ? alloc(enc.beginComputePass()) : 0;
+      },
+
+      __wgpu_compute_pass_set_pipeline: function (pass, pipeline) { const p = get(pass); if (p) p.setPipeline(get(pipeline)); },
+      __wgpu_compute_pass_set_bind_group: function (pass, index, group) { const p = get(pass); if (p) p.setBindGroup(index >>> 0, get(group)); },
+      __wgpu_compute_pass_dispatch: function (pass, x, y, z) { const p = get(pass); if (p) p.dispatchWorkgroups(x >>> 0, y >>> 0, z >>> 0); },
+      __wgpu_compute_pass_end: function (pass) { const p = get(pass); if (p) p.end(); },
+
       __wgpu_device_create_command_encoder: function (device) { const d = get(device); return d ? alloc(d.createCommandEncoder()) : 0; },
 
       __wgpu_command_encoder_begin_render_pass: function (encoder, view, loadOp, storeOp, r, g, b, a) {
@@ -5502,6 +5525,13 @@ function createNullWebGPU(ctx) {
       },
       __wgpu_buffer_get_mapped_range: function () {},
       __wgpu_buffer_unmap: function () {},
+      __wgpu_cmd_copy_buffer_to_buffer: function () {},
+      __wgpu_device_create_compute_pipeline: function () { return 0; },
+      __wgpu_command_encoder_begin_compute_pass: function () { return 0; },
+      __wgpu_compute_pass_set_pipeline: function () {},
+      __wgpu_compute_pass_set_bind_group: function () {},
+      __wgpu_compute_pass_dispatch: function () {},
+      __wgpu_compute_pass_end: function () {},
       __wgpu_device_create_command_encoder: function () { return 0; },
       __wgpu_command_encoder_begin_render_pass: function () { return 0; },
       __wgpu_render_pass_set_pipeline: function () {},
@@ -7187,11 +7217,16 @@ async function runModule({
   if (typeof onSdl === 'function') onSdl(sdl);
 
   /* ---- WebGPU backend ----
-     Shares the SDL canvas (the transferred OffscreenCanvas) and notifyWindow.
-     Browser: real binding; headless/Node: null stubs that report failure rather
-     than hang. Frames reuse the SDL rAF loop. */
-  const webgpu = getBrowserSDL
-    ? createBrowserWebGPU({ canvas: getBrowserSDL, ctx: ctx, notifyWindow: notifyWindow })
+     Shares the SDL canvas (the transferred OffscreenCanvas) when there is one,
+     but WebGPU does NOT require a canvas: compute pipelines and offscreen
+     render→readback need only an adapter/device. So install the real binding
+     whenever navigator.gpu exists (canvas may be null — only wgpuCreateSurface
+     needs it); fall back to null stubs only in Node / engines without WebGPU.
+     The async adapter/device/map callbacks are driven by the post-main loop
+     (a program keeps alive via wgpuSetMainLoopCallback and stops it when done). */
+  const hasGpu = (typeof navigator !== 'undefined' && navigator.gpu);
+  const webgpu = (getBrowserSDL || hasGpu)
+    ? createBrowserWebGPU({ canvas: getBrowserSDL || null, ctx: ctx, notifyWindow: notifyWindow })
     : createNullWebGPU(ctx);
   Object.assign(imports[ENV_KEY], webgpu[ENV_KEY]);
 

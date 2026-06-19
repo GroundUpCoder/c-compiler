@@ -17421,6 +17421,8 @@ typedef struct WGPUBufferImpl*            WGPUBuffer;
 typedef struct WGPUBindGroupLayoutImpl*   WGPUBindGroupLayout;
 typedef struct WGPUBindGroupImpl*         WGPUBindGroup;
 typedef struct WGPUSamplerImpl*           WGPUSampler;
+typedef struct WGPUComputePipelineImpl*   WGPUComputePipeline;
+typedef struct WGPUComputePassEncoderImpl* WGPUComputePassEncoder;
 
 /* WGPUStringView: ptr+len string (NULL data + 0 length == "use default"). */
 typedef struct WGPUStringView {
@@ -17984,6 +17986,28 @@ typedef struct WGPUCommandBufferDescriptor {
     WGPUStringView label;
 } WGPUCommandBufferDescriptor;
 
+/* ---- Compute ---- */
+typedef struct WGPUComputeState {
+    const WGPUChainedStruct *nextInChain;
+    WGPUShaderModule module;
+    WGPUStringView entryPoint;
+    size_t constantCount;
+    const WGPUConstantEntry *constants;
+} WGPUComputeState;
+
+typedef struct WGPUComputePipelineDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    WGPUPipelineLayout layout;
+    WGPUComputeState compute;
+} WGPUComputePipelineDescriptor;
+
+typedef struct WGPUComputePassDescriptor {
+    const WGPUChainedStruct *nextInChain;
+    WGPUStringView label;
+    const void *timestampWrites;   /* WGPUComputePassTimestampWrites*, ignored */
+} WGPUComputePassDescriptor;
+
 /* ---- Functions ---- */
 WGPUInstance wgpuCreateInstance(const WGPUInstanceDescriptor *descriptor);
 WGPUFuture wgpuInstanceRequestAdapter(WGPUInstance instance,
@@ -18039,8 +18063,20 @@ void *wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset, size_t size);
 const void *wgpuBufferGetConstMappedRange(WGPUBuffer buffer, size_t offset, size_t size);
 void wgpuBufferUnmap(WGPUBuffer buffer);
 
+void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder commandEncoder, WGPUBuffer source, uint64_t sourceOffset, WGPUBuffer destination, uint64_t destinationOffset, uint64_t size);
+
+/* Compute pipelines + passes. */
+WGPUComputePipeline wgpuDeviceCreateComputePipeline(WGPUDevice device, const WGPUComputePipelineDescriptor *descriptor);
+WGPUComputePassEncoder wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder commandEncoder, const WGPUComputePassDescriptor *descriptor);
+void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder computePassEncoder, WGPUComputePipeline pipeline);
+void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder computePassEncoder, uint32_t groupIndex, WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets);
+void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder computePassEncoder, uint32_t workgroupCountX, uint32_t workgroupCountY, uint32_t workgroupCountZ);
+void wgpuComputePassEncoderEnd(WGPUComputePassEncoder computePassEncoder);
+
 /* Release/reference: free or retain a host handle. */
 void wgpuBufferRelease(WGPUBuffer v);
+void wgpuComputePipelineRelease(WGPUComputePipeline v);
+void wgpuComputePassEncoderRelease(WGPUComputePassEncoder v);
 void wgpuBindGroupLayoutRelease(WGPUBindGroupLayout v);
 void wgpuBindGroupRelease(WGPUBindGroup v);
 void wgpuPipelineLayoutRelease(WGPUPipelineLayout v);
@@ -21018,6 +21054,13 @@ __import void __wgpu_cmd_copy_texture_to_buffer(int encoder, int srcTexture, int
 __import void __wgpu_buffer_map_async(int buffer, int mode, int offset, int size, WGPUBufferMapCallback cb, void *ud1, void *ud2);
 __import void __wgpu_buffer_get_mapped_range(int buffer, int offset, int size, void *dst);
 __import void __wgpu_buffer_unmap(int buffer);
+__import void __wgpu_cmd_copy_buffer_to_buffer(int encoder, int src, int srcOffset, int dst, int dstOffset, int size);
+__import int  __wgpu_device_create_compute_pipeline(int device, int module, const char *entry, int entryLen, int layout);
+__import int  __wgpu_command_encoder_begin_compute_pass(int encoder);
+__import void __wgpu_compute_pass_set_pipeline(int pass, int pipeline);
+__import void __wgpu_compute_pass_set_bind_group(int pass, int index, int group);
+__import void __wgpu_compute_pass_dispatch(int pass, int x, int y, int z);
+__import void __wgpu_compute_pass_end(int pass);
 __import int  __wgpu_device_create_command_encoder(int device);
 __import int  __wgpu_command_encoder_begin_render_pass(int encoder, int view, int loadOp, int storeOp, double r, double g, double b, double a);
 __import void __wgpu_render_pass_set_pipeline(int pass, int pipeline);
@@ -21369,6 +21412,42 @@ void wgpuBufferUnmap(WGPUBuffer buffer) {
     __wgpu_buffer_unmap((int)buffer);
 }
 
+void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder enc, WGPUBuffer src,
+        uint64_t srcOffset, WGPUBuffer dst, uint64_t dstOffset, uint64_t size) {
+    __wgpu_cmd_copy_buffer_to_buffer((int)enc, (int)src, (int)srcOffset, (int)dst, (int)dstOffset, (int)size);
+}
+
+WGPUComputePipeline wgpuDeviceCreateComputePipeline(WGPUDevice device, const WGPUComputePipelineDescriptor *desc) {
+    return (WGPUComputePipeline)__wgpu_device_create_compute_pipeline((int)device,
+        (int)desc->compute.module, desc->compute.entryPoint.data, (int)desc->compute.entryPoint.length,
+        (int)desc->layout);
+}
+
+WGPUComputePassEncoder wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder enc, const WGPUComputePassDescriptor *desc) {
+    (void)desc;
+    return (WGPUComputePassEncoder)__wgpu_command_encoder_begin_compute_pass((int)enc);
+}
+
+void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder pass, WGPUComputePipeline pipeline) {
+    __wgpu_compute_pass_set_pipeline((int)pass, (int)pipeline);
+}
+
+void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder pass, uint32_t groupIndex,
+        WGPUBindGroup group, size_t dynamicOffsetCount, const uint32_t *dynamicOffsets) {
+    (void)dynamicOffsets;
+    if (dynamicOffsetCount > 0) { fprintf(stderr, "wgpuComputePassEncoderSetBindGroup: dynamic offsets not yet supported\\n"); abort(); }
+    __wgpu_compute_pass_set_bind_group((int)pass, (int)groupIndex, (int)group);
+}
+
+void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder pass,
+        uint32_t workgroupCountX, uint32_t workgroupCountY, uint32_t workgroupCountZ) {
+    __wgpu_compute_pass_dispatch((int)pass, (int)workgroupCountX, (int)workgroupCountY, (int)workgroupCountZ);
+}
+
+void wgpuComputePassEncoderEnd(WGPUComputePassEncoder pass) {
+    __wgpu_compute_pass_end((int)pass);
+}
+
 void wgpuInstanceRelease(WGPUInstance v) { __wgpu_release((int)v); }
 void wgpuAdapterRelease(WGPUAdapter v) { __wgpu_release((int)v); }
 void wgpuDeviceRelease(WGPUDevice v) { __wgpu_release((int)v); }
@@ -21386,6 +21465,8 @@ void wgpuBindGroupLayoutRelease(WGPUBindGroupLayout v) { __wgpu_release((int)v);
 void wgpuBindGroupRelease(WGPUBindGroup v) { __wgpu_release((int)v); }
 void wgpuPipelineLayoutRelease(WGPUPipelineLayout v) { __wgpu_release((int)v); }
 void wgpuSamplerRelease(WGPUSampler v) { __wgpu_release((int)v); }
+void wgpuComputePipelineRelease(WGPUComputePipeline v) { __wgpu_release((int)v); }
+void wgpuComputePassEncoderRelease(WGPUComputePassEncoder v) { __wgpu_release((int)v); }
 
 void wgpuSetMainLoopCallback(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
