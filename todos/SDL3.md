@@ -159,133 +159,84 @@ Shift+1→'!'=33, Caps+a→65). Verified against `wiki.libsdl.org/SDL3/`
 `SDL_HINT_KEYCODE_OPTIONS` + `SDL_GetKeyFromScancode`. (One residual corner remains
 — see new stray on keypad-digit keycodes.)
 
-## Known strays still open (audited, not yet fixed)
+## Fixed 2026-06-20 (conformance fixes pass)
 
-Each of these violates **correctness**, **performance**, or both (per the Guiding
-principles). Listed so they're visible, not silently shipped. `file:line` are
-`compiler.js`/`host.js` unless noted.
+The audit's strays were then **fixed** (all behind headless unit tests
+`tests/unit/sdl_*` + the `tests/browser/sdl-*` Chromium suite; vendored into
+`netguc/c` and deployed). Done:
 
-### Correctness — NEW (2026-06-20 audit)
-- **`SDL_CreateTexture` default blend mode is `NONE`, but SDL3 defaults an
-  alpha-format texture to `BLEND`.** `host.js:5038` hardcodes `blendMode: 0` for
-  every texture; our textures are always `rgba8unorm` (alpha present), so SDL3's
-  `texture->blendMode = SDL_ISPIXELFORMAT_ALPHA(format) ? BLEND : NONE`
-  (`SDL_render.c`) yields **BLEND**. **Silent visual deviation**: a program that
-  `CreateTexture` + `UpdateTexture` (with alpha) + `RenderTexture` *without* calling
-  `SDL_SetTextureBlendMode` gets opaque output here, alpha-blended in real SDL3.
-  (Note: the prior pass's claim "CreateTexture = NONE is SDL-correct" was right for
-  SDL2, wrong for SDL3.) Fix would key the default off `SDL_ISPIXELFORMAT_ALPHA(format)`.
-  Repro: draw a half-transparent texture over a filled background, no explicit blend
-  mode; expect see-through, get opaque. **Severity: high (silent).**
-- **`SDL_PollEvent(NULL)` crashes and has wrong semantics.** `compiler.js:21164` does
-  `*event = e->event;` unconditionally → a NULL `event` is a null-pointer write
-  (trap). Worse, even if it didn't trap it *dequeues*, whereas SDL3 defines
-  `SDL_PollEvent(NULL)` as a **peek**: "if event is NULL, it simply returns true if
-  there is an event in the queue, but will not remove it" (wiki). Repro:
-  `while (SDL_PollEvent(NULL)) {}` — SDL3 spins true-without-draining; ours faults.
-  **Severity: medium (crash, but most callers pass non-NULL).**
-- **`SDL_UpdateTexture` with a non-NULL `rect` uploads wrong data and reads
-  out-of-bounds.** `compiler.js:21314` drops `rect` and calls the host with the
-  texture's *full* `w`/`h`; `host.js:5047` then reads `pitch * texture->h` bytes from
-  the caller's buffer. A sub-rect caller passes a buffer sized `rect->h` rows → the
-  host reads past it (OOB → `RangeError`/garbage) and, even if it fits, writes the
-  data at (0,0) over the whole texture instead of into the sub-rect. This is the same
-  root cause as the perf stray below, but it's a **correctness + memory-safety** bug,
-  not just slow. Repro: `SDL_UpdateTexture(t, &(SDL_Rect){10,10,4,4}, buf16px, 16)`.
-  **Severity: high for sub-rect callers** (full-frame callers with `rect==NULL` —
-  e.g. Doom — are unaffected).
-- **Keypad digit keycodes are wrong when NumLock is on.** `host.js:6132` `keysym()`
-  returns the DOM character, so `Numpad1` (NumLock on) → `'1'` = `SDLK_1` (49); SDL3
-  reports `SDLK_KP_1` (`89 | 0x40000000`). The **scancode** is correct (KP_1=89);
-  only the keycode differs. Niche (programs usually read scancodes for the keypad).
-  **Severity: low.** (Confidence: medium — verify exact SDL3 keypad-keycode default.)
-- **`SDL_Init(0)` then a later `SDL_Init(...)` re-baselines `SDL_GetTicks` to 0.**
-  `compiler.js:21022` calls the host init (which stamps the tick base) whenever
-  `__sdl_initted == 0`. `SDL_Init(0)` leaves the mask 0, so the next `SDL_Init`
-  re-runs host init and resets the clock. Niche (real apps init video/audio first,
-  which sets the mask). **Severity: low.**
+### Correctness — fixed
+- **NULL/invalid handling + `SDL_SetError`.** Every object-taking entry point
+  (renderer/texture/window/stream) now validates its handle and sets SDL's exact
+  wording via `SDL_InvalidParamError` ("Parameter 'X' is invalid") instead of
+  dereferencing NULL; `SDL_UpdateWindowSurface` and `SDL_RenderGeometry` (incl.
+  `malloc` failure) failure paths set the error too. Test: `sdl_null_guards`.
+- **`SDL_PollEvent(NULL)` peeks** — returns true if an event is queued without
+  removing it, never derefs the NULL. Test: `sdl_null_guards`.
+- **`SDL_CreateTexture` default blend mode is alpha-aware** — `BLEND` for an
+  alpha format, `NONE` otherwise (added the real `SDL_ISPIXELFORMAT_*` macros +
+  `SDL_GetTextureBlendMode`). Test: `sdl_texture_blend_default`, `sdl-blend-renders`.
+- **`SDL_UpdateTexture` honours the rect** — patches only the sub-region into a
+  full CPU buffer (dirty bbox) and uploads just that region: fixes the wrong-data,
+  the OOB read, AND the O(texture) cost (a 1px update is O(1)). Bounds-validated.
+  Test: `sdl_update_texture_rect`.
+- **`SDL_AudioStream` is an unbounded queue** — never silently drops:
+  `__sdl_queue_audio` reports bytes *accepted* and the C stream backlogs the
+  remainder, re-pumping each Put; `GetAudioStreamQueued` = ring + backlog; no-SAB
+  sentinel fixed. (No resampler needed for the push path — the Web Audio device is
+  opened at the program's exact spec.) Test: `sdl_audio_queue`.
+- **Events carry their full fields** — `timestamp` (GetTicksNS-equivalent), key
+  `mod` + `repeat`, motion `xrel`/`yrel` (relative deltas) + `state` button-mask +
+  float coords, button `clicks` (double-click count) + float coords, wheel float
+  x/y + `direction` + `mouse_x`/`mouse_y`, and a nonzero `which` throughout. New
+  `__sdl_push_*` ABI carries DOM-only fields; C derives the rest. Added
+  `SDL_KMOD_*`, `SDL_MOUSEWHEEL_*`, `SDL_BUTTON_MASK`, `SDL_CommonEvent`. Keypad
+  keys report `SDLK_KP_*`. Test: `sdl_event_fields`, `sdl-input-check`,
+  `sdl-scancode-check`, `sdl-wheel-check`.
+- **Duplicate `SDL_PIXELFORMAT_RGBA32`** removed — single canonical LE value
+  (`0x16762004` == ABGR8888). Test: `sdl_pixelformat_surface`.
+- **`SDL_Surface`** gained SDL3's public fields (`flags/format/refcount/reserved`)
+  in order. **`SDL_Init(0)`** no longer re-baselines the tick clock on a later
+  init. Test: `sdl_pixelformat_surface`.
+- **Mid-frame `SDL_DestroyTexture`** no longer crashes at present — the GPU free is
+  deferred until after the next present and batch entries hold the texture object,
+  so the in-flight frame still renders (matches SDL keeping it alive for the frame).
 
-### Correctness — confirmed still open
-- **Event `timestamp` is always 0.** SDL stamps every event with `SDL_GetTicksNS()`
-  (wiki `SDL_CommonEvent`); ours are memset-zeroed in `__sdl_push_*`
-  (`compiler.js:21109+`).
-- **Keyboard `mod` never populated** (no `SDL_GetModState`). Programs reading
-  `event.key.mod` for Shift/Ctrl/Alt see 0 — even though the *keycode* is correctly
-  modifier-applied (see deleted stray above). Web: `KeyboardEvent.getModifierState`.
-- **Keyboard `repeat` never set** (`compiler.js:21117`). DOM provides `e.repeat`;
-  every auto-repeat currently looks like a fresh press (`down=true, repeat=false`).
-- **Mouse `xrel`/`yrel` always 0; no relative / pointer-lock mode** (`compiler.js:21142`).
-  Kills FPS mouselook; `SDL_GetRelativeMouseState` / `SDL_SetWindowRelativeMouseMode`
-  absent.
-- **Mouse motion `state` mask + button `clicks` never set** (`compiler.js:21129`,
-  `21142`). `clicks` stays 0, but SDL always reports `clicks >= 1` (1 single, 2
-  double) — so `clicks == 0` is a value SDL never emits. Also `which` (mouse/keyboard
-  instance id) is always 0 on every event, which is not a valid SDL instance id.
-- **Mouse/wheel coordinates are integer-rounded though SDL3 carries float.**
-  `host.js:6155` (`canvasCoords` `Math.round`) and `6186` (wheel `Math.round`) round
-  to whole pixels/lines; SDL3 `x/y/xrel/yrel` and wheel `x/y` are `float` with
-  sub-pixel/fractional precision. Also `SDL_MouseWheelEvent.mouse_x/mouse_y` are left
-  0 (SDL fills them with the mouse position). **Severity: low.**
-- **Duplicate `SDL_PIXELFORMAT_RGBA32` macro.** Defined twice: `compiler.js:17158`
-  as `0x16462004u` (that's the **RGBA8888** value — wrong for RGBA32) then
-  `compiler.js:17267` as `376840196` = `0x16762004` (= ABGR8888, the **correct**
-  little-endian RGBA32 value per SDL's `SDL_BYTEORDER` macro). The second wins, so
-  the *effective* value is SDL-correct, but it's a real redefinition and the first
-  value is semantically the wrong format. Harmless at runtime only because the host
-  treats every texture as RGBA bytes.
-- **Audio `SDL_PutAudioStreamData` silently drops on a full ring and still returns
-  true.** `host.js:5152` returns 0 (success) when `queuedBytes + len > cap`, dropping
-  the chunk; `compiler.js:21206` maps that to a `true` return. SDL3's
-  `SDL_AudioStream` grows unbounded and never drops (`SDL_audioqueue.c`
-  `SDL_WriteToAudioQueue` allocates a fresh track), so a `true` return means "queued"
-  — silent data loss here violates fail-loud. Also: no format conversion / resampling
-  (the defining feature of `SDL_AudioStream`); `GetAudioStreamQueued` returns a
-  `0x7FFFFFFF` sentinel when no SAB is wired (`host.js:5172`). (The get-callback /
-  pull mode already **fails loud** as of 2026-06-20.)
-- **`SDL_CreateTextureFromSurface` assumes RGBA32** input (`compiler.js:21297`).
-  Latent only because every surface this runtime can produce is RGBA32 (no
-  `SDL_CreateSurface`/`SDL_LoadBMP`).
-- **`SDL_Surface` is a reduced struct with a different field order than SDL3.** Ours
-  (`compiler.js:17124`) is `{int w, h; int pitch; void *pixels;}`; SDL3 is
-  `{SDL_SurfaceFlags flags; SDL_PixelFormat format; int w; int h; int pitch; void
-  *pixels; int refcount; void *reserved;}`. Self-consistent within this runtime
-  (everything compiles against this header), and `->format`/`->flags` simply don't
-  exist (a program using them fails to compile = loud), but `sizeof`/by-value/offset
-  assumptions differ from SDL3. **Severity: low.**
-- **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (`compiler.js:21384`,
-  `21394`) — 1px quad / 1px borders, not Bresenham; sub-pixel coverage and endpoints
-  differ slightly.
-- **HiDPI: the canvas renders at logical size and is CSS-upscaled** (`host.js:4988`,
-  `4692`). `canvas.width = w` (logical), so on a retina display output is upscaled by
-  the browser, not rendered at device-pixel density like native SDL. Blurrier; no
-  `SDL_GetWindowSizeInPixels` / pixel-density / `devicePixelRatio` handling.
-- **Destroying a texture already recorded in the current frame's batch** → null deref
-  at present (`host.js:4961` `texBindGroup(sdlTextures[e.texH-1])` on a nulled slot).
-  SDL tolerates this; we trap. Robustness edge case.
-- **Deferred batch-render model vs SDL's immediate mode** (subtle, mostly within
-  spec): draws are recorded and executed only at `RenderPresent` (one pass,
-  `loadOp: clear`, `host.js:4957`). Equivalent under SDL's "backbuffer undefined
-  after present" rule, BUT a program that draws incrementally **without clearing**
-  (expecting the previous frame retained) won't see it retained.
-- **Several failure paths don't call `SDL_SetError`.** E.g. `SDL_RenderGeometry`
-  returns false on `malloc` failure without setting the error (`compiler.js:21421`).
-  SDL3's convention is to `SDL_SetError` on every documented failure so `SDL_GetError`
-  is meaningful. **Severity: low.** (Most paths — Init/CreateWindow/Renderer/Texture/
-  audio-open — do set it.)
+### Performance — fixed (earlier 2026-06-20)
+- ~~Per-present GPU→CPU readback~~ — now on-demand + GPU-side BGRA→RGBA blit.
+- ~~Per-primitive allocation in the renderer~~ — one reused/grown vertex buffer,
+  no per-quad allocation (`sdl-render-batch`).
+- ~~`SDL_UpdateTexture` whole-texture reupload~~ — now uploads only the dirty rect
+  (see the UpdateTexture correctness fix above).
 
-### Performance
-- ~~**Per-present GPU→CPU readback runs unconditionally.**~~ **Fixed 2026-06-20.**
-  Readback is now on-demand (only when `getLastFrame()` arms it) and the BGRA→RGBA
-  swizzle moved to a GPU blit pass (BLIT_WGSL shader, nearest sampler, bgra8unorm
-  canvas → rgba8unorm readback texture). JS only unpad rows via fast `.set()`
-  (memcpy speed). Non-capture frames pay zero GPU→CPU transfer cost.
-- ~~**Per-primitive allocation in the renderer.**~~ **Fixed 2026-06-20.**
-  `__sdl_render_quad` now writes its 6 verts straight into a per-renderer growable
-  CPU scratch (no per-quad `Float32Array`); `rdrFlush` transforms to NDC in place
-  and uploads into ONE persistent GPU vertex buffer reused + grown across presents
-  (no per-present array alloc, no per-present buffer create/destroy). A
-  sprite/tile-heavy frame now costs amortized O(1) allocations. Regression-tested
-  with a 256-quad batch that forces the buffer to grow (`sdl-render-batch`).
+### Corrected (was a false positive, deleted not fixed)
+- "Shifted-letter keycode is wrong" — SDL3 keycodes are modifier-applied by
+  default, so our DOM-resolved char already matches (Shift+A → 65). Not a deviation.
+
+## Still open — deferred feature/within-spec work (NOT silent deviations)
+
+These remain, but are either deferred feature work or within SDL's own latitude;
+none is a silent misbehavior. Decided 2026-06-20 to defer.
+
+- **HiDPI: canvas renders at logical size, CSS-upscaled** (`host.js`). Blurrier on
+  retina; needs device-pixel rendering + a logical/device coordinate split +
+  `SDL_GetWindowSizeInPixels`/pixel-density. Deferred — pairs with the missing
+  Video features (window resize / display APIs).
+- **Full relative-mouse mode (Pointer Lock)** — `xrel`/`yrel` are now populated
+  (motion deltas), but `SDL_SetWindowRelativeMouseMode` / `SDL_GetRelativeMouseState`
+  (Pointer Lock API) are still missing. Feature work.
+- **`SDL_RenderLine`/`SDL_RenderRect` are quad approximations** (1px quad / 1px
+  borders), not Bresenham. SDL's own line rasterization isn't byte-identical across
+  backends, so "exactly like SDL" is ill-defined; accepted as a close approximation.
+- **Deferred batch-render vs immediate mode** — draws execute at `RenderPresent`
+  (one `loadOp: clear` pass). Within SDL's "backbuffer undefined after present"
+  rule, but a program that draws incrementally *without* clearing won't see the
+  previous frame retained (would need a persistent offscreen target). Deferred.
+- **`SDL_CreateTextureFromSurface` assumes RGBA32** — latent only; every surface
+  this runtime can produce is RGBA32 (no `SDL_CreateSurface`/`SDL_LoadBMP` yet).
+- **`SDL_AudioStream` as a standalone format converter** — `SDL_SetAudioStreamFormat`
+  / cross-format stream binding are unimplemented (the push path needs no
+  conversion). Missing feature, not a stray.
 - **`SDL_UpdateTexture` reuploads the whole texture** for any update (it ignores
   the sub-rect — and see the elevated correctness+safety stray above) — a one-pixel
   change is O(texture).
