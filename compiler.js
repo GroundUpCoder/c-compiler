@@ -21007,7 +21007,7 @@ __import int  __sdl_create_renderer(int window);
 __import void __sdl_destroy_renderer(int r);
 __import int  __sdl_create_texture(int r, int access, int w, int h);
 __import void __sdl_destroy_texture(int t);
-__import void __sdl_update_texture(int t, const void *pixels, int pitch, int w, int h);
+__import void __sdl_update_texture(int t, const void *pixels, int pitch, int x, int y, int w, int h);
 __import void __sdl_set_texture_color_mod(int t, double r, double g, double b);
 __import void __sdl_set_texture_alpha_mod(int t, double a);
 __import void __sdl_set_texture_blend_mode(int t, int mode);
@@ -21244,7 +21244,27 @@ bool SDL_PollEvent(SDL_Event *event) {
    same as the old SDL_PauseAudioDevice(dev, 0). */
 struct SDL_AudioStream {
     int dev;
+    /* Overflow buffer: bytes the host ring couldn't accept yet. SDL_AudioStream is
+       an UNBOUNDED queue (src/audio/SDL_audioqueue.c grows new tracks rather than
+       dropping), so we must never drop — what doesn't fit the fixed SAB ring is
+       held here and pumped into the ring on the next Put as the audio thread
+       drains it. Preserves FIFO order; SDL_PutAudioStreamData always succeeds. */
+    unsigned char *backlog;
+    int backlog_len;
+    int backlog_cap;
 };
+
+/* Push as much of the backlog into the host ring as it will currently accept,
+   then compact the remainder to the front. __sdl_queue_audio returns the number
+   of bytes the ring actually accepted. */
+static void __sdl_stream_pump(SDL_AudioStream *s) {
+    if (s->backlog_len <= 0) return;
+    int accepted = __sdl_queue_audio(s->dev, s->backlog, s->backlog_len);
+    if (accepted <= 0) return;
+    if (accepted >= s->backlog_len) { s->backlog_len = 0; return; }
+    memmove(s->backlog, s->backlog + accepted, (size_t)(s->backlog_len - accepted));
+    s->backlog_len -= accepted;
+}
 
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
                                            const SDL_AudioSpec *spec,
@@ -21263,21 +21283,50 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
     SDL_AudioStream *s = (SDL_AudioStream *)malloc(sizeof(SDL_AudioStream));
     if (!s) { SDL_SetError("Out of memory"); return NULL; }
     s->dev = dev;
+    s->backlog = NULL;
+    s->backlog_len = 0;
+    s->backlog_cap = 0;
     return s;
 }
 
 bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
     if (!stream) return SDL_InvalidParamError("stream");
-    return __sdl_queue_audio(stream->dev, buf, len) == 0;
+    if (len <= 0) return 1;
+    /* Drain any backlog first so the ring is as empty as possible. */
+    __sdl_stream_pump(stream);
+    int accepted = 0;
+    /* Only write the new data straight to the ring if the backlog is empty —
+       otherwise it would jump ahead of already-queued samples (FIFO violation). */
+    if (stream->backlog_len == 0) {
+        accepted = __sdl_queue_audio(stream->dev, buf, len);
+        if (accepted < 0) accepted = 0;
+    }
+    if (accepted < len) {
+        int rem = len - accepted;
+        if (stream->backlog_len + rem > stream->backlog_cap) {
+            int newcap = stream->backlog_cap ? stream->backlog_cap : 65536;
+            while (newcap < stream->backlog_len + rem) newcap *= 2;
+            unsigned char *nb = (unsigned char *)realloc(stream->backlog, (size_t)newcap);
+            if (!nb) return SDL_SetError("Out of memory");
+            stream->backlog = nb;
+            stream->backlog_cap = newcap;
+        }
+        memcpy(stream->backlog + stream->backlog_len, (const unsigned char *)buf + accepted, (size_t)rem);
+        stream->backlog_len += rem;
+    }
+    return 1;
 }
 
 int SDL_GetAudioStreamQueued(SDL_AudioStream *stream) {
     if (!stream) { SDL_InvalidParamError("stream"); return -1; }
-    return __sdl_get_queued_audio_size(stream->dev);
+    int ring = __sdl_get_queued_audio_size(stream->dev);
+    if (ring < 0) ring = 0;
+    return ring + stream->backlog_len;
 }
 
 bool SDL_ClearAudioStream(SDL_AudioStream *stream) {
     if (!stream) return SDL_InvalidParamError("stream");
+    stream->backlog_len = 0;
     __sdl_clear_queued_audio(stream->dev);
     return 1;
 }
@@ -21296,6 +21345,7 @@ bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream) {
 
 void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
     if (!stream) return;
+    free(stream->backlog);
     __sdl_close_audio_device(stream->dev);
     free(stream);
 }
@@ -21376,7 +21426,7 @@ SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *s
     SDL_Texture *t = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
                                        SDL_TEXTUREACCESS_STATIC, surface->w, surface->h);
     if (!t) return 0;
-    __sdl_update_texture(t->__handle, surface->pixels, surface->pitch, surface->w, surface->h);
+    __sdl_update_texture(t->__handle, surface->pixels, surface->pitch, 0, 0, surface->w, surface->h);
     /* SDL defaults a surface-derived texture to BLEND when the surface has an
        alpha channel; our surfaces are always RGBA32 (alpha present), so BLEND. */
     SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
@@ -21392,8 +21442,17 @@ void SDL_DestroyTexture(SDL_Texture *texture) {
 bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
     if (!texture) return SDL_InvalidParamError("texture");
     if (!pixels) return SDL_InvalidParamError("pixels");
-    (void)rect; /* v1: full-texture update */
-    __sdl_update_texture(texture->__handle, pixels, pitch, texture->w, texture->h);
+    /* SDL3: rect==NULL updates the entire texture; otherwise only that sub-region
+       (the source buffer is rect->h rows of 'pitch' bytes). Honour the rect so a
+       sub-rect update writes the right pixels AND the host reads only the bytes the
+       caller actually provided (the old full-size read was wrong + read OOB). */
+    int x = 0, y = 0, w = texture->w, h = texture->h;
+    if (rect) {
+        x = rect->x; y = rect->y; w = rect->w; h = rect->h;
+        if (x < 0 || y < 0 || w < 0 || h < 0 || x + w > texture->w || y + h > texture->h)
+            return SDL_SetError("SDL_UpdateTexture: rect is outside the texture bounds");
+    }
+    __sdl_update_texture(texture->__handle, pixels, pitch, x, y, w, h);
     return 1;
 }
 

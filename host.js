@@ -4732,6 +4732,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
   // device arrives. Early presents (pre-device) drop their frame (rAF re-draws).
   const sdlRenderers = [];   // 1-based handles
   const sdlTextures = [];     // 1-based handles (shared across renderers)
+  // Textures destroyed mid-frame: SDL keeps a texture alive until the frame that
+  // references it has presented, so we defer the GPU resource free to just after
+  // the next present instead of destroying it out from under an in-flight draw.
+  const pendingTexDestroy = [];
   // One pipeline per SDL blend mode (chosen per draw); a shared explicit bind
   // layout so a texture's bind group works with ANY of them.
   let rdrPipelines = null, rdrSamplerLinear = null, rdrSamplerNearest = null, rdrWhiteView = null, rdrWhiteBind = null, rdrBindLayout = null;
@@ -4844,7 +4848,17 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       t.bindGroup = dev.createBindGroup({ layout: rdrBindLayout, entries: [{ binding: 0, resource: sampler }, { binding: 1, resource: t.view }] });
     }
     if (t.dirty && t.cpuPixels) {
-      dev.queue.writeTexture({ texture: t.gpuTex }, t.cpuPixels, { offset: 0, bytesPerRow: t.pitch, rowsPerImage: t.h }, { width: t.w, height: t.h });
+      // Upload only the dirty bounding box, sourced from the full cpuPixels buffer
+      // (queue.writeTexture has no 256-byte bytesPerRow constraint, so the full
+      // stride + a row offset addresses the sub-rect directly). A full-texture
+      // update has dx/dy=0 and dw/dh=w/h, so this stays a single full upload.
+      const fullPitch = t.w * 4;
+      const dx = t.dx, dy = t.dy, dw = t.dx2 - t.dx, dh = t.dy2 - t.dy;
+      dev.queue.writeTexture(
+        { texture: t.gpuTex, origin: { x: dx, y: dy } },
+        t.cpuPixels,
+        { offset: dy * fullPitch + dx * 4, bytesPerRow: fullPitch, rowsPerImage: dh },
+        { width: dw, height: dh });
       t.dirty = false;
     }
     return t.bindGroup;
@@ -4964,7 +4978,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     pass.setVertexBuffer(0, rdrVbuf);
     for (const e of entries) {
       pass.setPipeline(rdrPipelines[e.blend]);   // e.blend ∈ {0,1,2,4}, validated when set
-      pass.setBindGroup(0, e.texH ? texBindGroup(sdlTextures[e.texH - 1]) : rdrWhiteBind);
+      // e.tex is the texture OBJECT captured at draw time (not a slot index), so a
+      // texture destroyed mid-frame still renders this frame — its GPU free is
+      // deferred until after this submit (pendingTexDestroy).
+      pass.setBindGroup(0, e.tex ? texBindGroup(e.tex) : rdrWhiteBind);
       pass.draw(e.n, 1, e.first, 0);
     }
     pass.end();
@@ -4980,6 +4997,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     dev.queue.submit([enc.finish()]);
     if (didReadback) rdrStartReadbackMap();
     rdrResetBatch(rd);
+    // Now that this frame's draws are submitted, free any textures destroyed since
+    // the last present (their GPU resources are no longer referenced by a batch).
+    if (pendingTexDestroy.length) {
+      for (const tx of pendingTexDestroy) { if (tx.gpuTex) { try { tx.gpuTex.destroy(); } catch (e) {} } }
+      pendingTexDestroy.length = 0;
+    }
   }
 
   return {
@@ -5048,13 +5071,38 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_destroy_texture: function (t) {
         const tx = sdlTextures[t - 1];
-        if (tx) { if (tx.gpuTex) { try { tx.gpuTex.destroy(); } catch (e) {} } sdlTextures[t - 1] = null; }
+        if (!tx) return;
+        sdlTextures[t - 1] = null;
+        // Defer the GPU free: the current frame's batch may still reference this
+        // texture (it captures the object, not the slot). Freeing now would null a
+        // bind group at present. Drained right after the next submit.
+        pendingTexDestroy.push(tx);
       },
-      __sdl_update_texture: function (t, pixelsPtr, pitch, w, h) {
+      __sdl_update_texture: function (t, pixelsPtr, pitch, x, y, w, h) {
         const tx = sdlTextures[t - 1];
         if (!tx) return;
-        tx.cpuPixels = new Uint8Array(getMemory().buffer, pixelsPtr, pitch * h).slice();
-        tx.pitch = pitch; tx.dirty = true;
+        // Keep cpuPixels as the FULL texture (tightly packed, fullPitch stride) and
+        // patch the (x,y,w,h) sub-region into it. A one-pixel update is then O(1),
+        // and we only ever read the rect->h rows the caller actually provided
+        // (the old code read pitch*texture->h → wrong data + OOB for sub-rects).
+        const fullPitch = tx.w * 4;
+        if (!tx.cpuPixels || tx.cpuPixels.length !== fullPitch * tx.h) {
+          tx.cpuPixels = new Uint8Array(fullPitch * tx.h);
+        }
+        const mem = new Uint8Array(getMemory().buffer);
+        const rowBytes = w * 4;
+        for (let row = 0; row < h; row++) {
+          const srcOff = pixelsPtr + row * pitch;
+          tx.cpuPixels.set(mem.subarray(srcOff, srcOff + rowBytes), (y + row) * fullPitch + x * 4);
+        }
+        tx.pitch = fullPitch;
+        // Union into the dirty bounding box (uploaded at present time).
+        if (tx.dirty) {
+          tx.dx = Math.min(tx.dx, x); tx.dy = Math.min(tx.dy, y);
+          tx.dx2 = Math.max(tx.dx2, x + w); tx.dy2 = Math.max(tx.dy2, y + h);
+        } else {
+          tx.dx = x; tx.dy = y; tx.dx2 = x + w; tx.dy2 = y + h; tx.dirty = true;
+        }
       },
       __sdl_set_texture_color_mod: function (t, rr, gg, bb) {
         const tx = sdlTextures[t - 1]; if (tx) { tx.colorR = rr; tx.colorG = gg; tx.colorB = bb; }
@@ -5091,10 +5139,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_render_quad: function (r, texH, x0, y0, x1, y1, x2, y2, x3, y3, sx, sy, sw, sh) {
         const rd = sdlRenderers[r - 1]; if (!rd) return;
         let cr, cg, cb, ca, u0, u1, v0, v1;
+        let tex = null;
         let blend = rd.drawBlendMode;   // textured draws use the texture's mode (below)
         if (texH) {
           const tx = sdlTextures[texH - 1];
           if (!tx) return;
+          tex = tx;
           cr = tx.colorR; cg = tx.colorG; cb = tx.colorB; ca = tx.alpha;
           blend = tx.blendMode;
           const tw = tx.w || 1, th = tx.h || 1;
@@ -5113,7 +5163,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         a[o]=x0;a[o+1]=y0;a[o+2]=u0;a[o+3]=v0;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
         a[o]=x2;a[o+1]=y2;a[o+2]=u1;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
         a[o]=x3;a[o+1]=y3;a[o+2]=u0;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;
-        rd.batch.push({ texH: texH, n: 6, blend: blend, first: rd.vertCount });
+        rd.batch.push({ tex: tex, n: 6, blend: blend, first: rd.vertCount });
         rd.vertCount += 6;
       },
       // SDL_RenderGeometry: C resolves indices into a flat triangle soup of
@@ -5128,7 +5178,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         // renderer's draw blend mode.
         const tx = texH ? sdlTextures[texH - 1] : null;
         const blend = tx ? tx.blendMode : rd.drawBlendMode;
-        rd.batch.push({ texH: texH, n: vertCount, blend: blend, first: rd.vertCount });
+        rd.batch.push({ tex: tx, n: vertCount, blend: blend, first: rd.vertCount });
         rd.vertCount += vertCount;
       },
       __sdl_render_present: function (r) {
@@ -5151,34 +5201,38 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (notifyAudio) notifyAudio({ type: 'audio-open', id: id, freq: freq, format: format, channels: channels });
         return id;
       },
+      // Returns the number of bytes ACCEPTED into the ring (may be a partial fill
+      // when the ring is nearly full). The C SDL_AudioStream holds whatever isn't
+      // accepted in its unbounded backlog and re-pumps it next Put — so audio is
+      // never silently dropped (SDL_AudioStream is an unbounded queue).
       __sdl_queue_audio: function (dev, dataPtr, len) {
-        if (!sharedAudioBuffer) return 0;
+        if (!sharedAudioBuffer) return 0;   // no ring wired → C keeps it all in backlog
         const sab = sharedAudioBuffer.sharedBuffer;
         const cap = sharedAudioBuffer.bufferSize;
         const control = new Int32Array(sab, 0, 4);
         const ringData = new Uint8Array(sab, 16, cap);
         const queuedBytes = Atomics.load(control, 1);
-        if (queuedBytes + len > cap) return 0; /* buffer full */
+        const free = cap - queuedBytes;
+        if (free <= 0 || len <= 0) return 0;
+        const accepted = Math.min(len, free);
         const memory = getMemory();
-        // Defend against the wasm passing a bad (dataPtr, len) pair —
-        // drop the chunk rather than crash the worker.
-        if (dataPtr < 0 || len < 0 ||
-            (dataPtr >>> 0) + (len >>> 0) > memory.buffer.byteLength) {
+        // Defend against the wasm passing a bad (dataPtr, accepted) pair.
+        if (dataPtr < 0 || (dataPtr >>> 0) + (accepted >>> 0) > memory.buffer.byteLength) {
           return 0;
         }
-        const src = new Uint8Array(memory.buffer, dataPtr, len);
+        const src = new Uint8Array(memory.buffer, dataPtr, accepted);
         const writePos = Atomics.load(control, 0) % cap;
-        const firstChunk = Math.min(len, cap - writePos);
+        const firstChunk = Math.min(accepted, cap - writePos);
         ringData.set(src.subarray(0, firstChunk), writePos);
-        if (firstChunk < len) {
+        if (firstChunk < accepted) {
           ringData.set(src.subarray(firstChunk), 0);
         }
-        Atomics.add(control, 0, len); /* advance writePos */
-        Atomics.add(control, 1, len); /* increment queuedBytes */
-        return 0;
+        Atomics.add(control, 0, accepted); /* advance writePos */
+        Atomics.add(control, 1, accepted); /* increment queuedBytes */
+        return accepted;
       },
       __sdl_get_queued_audio_size: function (dev) {
-        if (!sharedAudioBuffer) return 0x7FFFFFFF;
+        if (!sharedAudioBuffer) return 0;   // no ring → ring holds nothing (C adds backlog)
         const control = new Int32Array(sharedAudioBuffer.sharedBuffer, 0, 4);
         return Atomics.load(control, 1);
       },

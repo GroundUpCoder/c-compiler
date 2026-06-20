@@ -1,0 +1,4 @@
+full=1
+sub=1
+oob=0 err_nonempty=1
+nullpix=0
