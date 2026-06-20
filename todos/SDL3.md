@@ -118,49 +118,160 @@ Fixed a batch of stray-from-SDL behaviors found in an audit (all tested, headles
   WebDriver native click, to start an emitted page — `webgpu-safari.mjs` was
   silently broken by this too and is now fixed.)
 
+## Conformance audit (2026-06-20, read-only investigation)
+
+Re-audited the **implemented** surface (declared in `SDL.h` AND wired in
+`__SDL.c`/`host.js`) against shipping **SDL3 release-3.2.0** headers/source and the
+wiki. Every numeric value, struct layout, and semantic below was verified against a
+cited source, not assumed. Outcome: confirmed most prior strays, **deleted one that
+was a false positive under SDL3 semantics**, elevated one perf stray to a
+correctness+safety bug, and found **5 new strays**. No implementation code was
+changed in this pass. Baseline references: SDL `release-3.2.0`
+`include/SDL3/SDL_{events,audio,surface,render,pixels,init,scancode,keycode}.h`,
+`src/render/SDL_render.c`, `src/audio/SDL_audioqueue.c`, and `wiki.libsdl.org`.
+
+Verified **conformant** (so they don't get re-flagged):
+- Every event/audio struct field order + type matches `release-3.2.0` exactly
+  (`SDL_KeyboardEvent`, `SDL_Mouse{Motion,Button,Wheel}Event`, `SDL_AudioSpec`,
+  `SDL_Vertex`/`SDL_FColor`/`SDL_FPoint`, `SDL_Event` `padding[128]`).
+- All enum/macro numeric values match (`SDL_INIT_*`, `SDL_AUDIO_*`, `SDL_BLENDMODE_*`
+  0/1/2/4, `SDL_SCALEMODE_NEAREST/LINEAR` = 0/1 — unchanged across all 3.2.x;
+  `SDL_BUTTON_*`, `SDLK_*`, `SDLK_SCANCODE_MASK` 0x40000000, `WINDOWPOS_*`,
+  `SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK`).
+- The full `code → SDL_Scancode` map (`SDL_WEB.SCANCODE_MAP`, host.js) is correct
+  USB-HID (A=4…Z=29, 1=30…0=39, F1=58…F12=69, keypad, nav, mods; `NumpadEnter`→
+  KP_ENTER 88, `ContextMenu`→APPLICATION 101, `IntlBackslash`→NONUSBACKSLASH 100).
+- Blend math: the WebGPU blend descriptors for BLEND/ADD/MOD match SDL's documented
+  equations exactly (host.js `SDL_BLEND_DESC`).
+- `SDL_RenderGeometry` uses per-vertex colors **as-is** and does NOT apply the
+  texture's color/alpha mod — this matches SDL3 (verified in `SDL_render_gl.c` /
+  `SDL_render_gpu.c`; only `SDL_RenderTexture` honors color mod).
+- Renderer default draw blend = `SDL_BLENDMODE_NONE` (matches SDL3); texture default
+  scale mode = `SDL_SCALEMODE_LINEAR` (matches SDL3).
+
+**Deleted (was a false positive):** the old *"Shifted-letter keycode is wrong"*
+stray. It applied SDL2 semantics. In SDL3 the key event's `key` (keycode) is
+**modifier-applied by default** (`SDL_HINT_KEYCODE_OPTIONS` defaults to
+`"french_numbers,latin_letters"`; neither disables shift), so Shift+A → `SDLK_A`
+(65), not 97. Our `keysym()` returns `e.key.charCodeAt(0)` = the DOM-resolved
+character, which tracks SDL3's modifier-applied keycode (Shift+A→65, plain a→97,
+Shift+1→'!'=33, Caps+a→65). Verified against `wiki.libsdl.org/SDL3/`
+`SDL_HINT_KEYCODE_OPTIONS` + `SDL_GetKeyFromScancode`. (One residual corner remains
+— see new stray on keypad-digit keycodes.)
+
 ## Known strays still open (audited, not yet fixed)
 
 Each of these violates **correctness**, **performance**, or both (per the Guiding
-principles). Listed so they're visible, not silently shipped.
+principles). Listed so they're visible, not silently shipped. `file:line` are
+`compiler.js`/`host.js` unless noted.
 
-### Correctness
-- **Event `timestamp` is always 0.** SDL stamps every event with
-  `SDL_GetTicksNS()`; ours are memset-zeroed in `__sdl_push_*`.
+### Correctness — NEW (2026-06-20 audit)
+- **`SDL_CreateTexture` default blend mode is `NONE`, but SDL3 defaults an
+  alpha-format texture to `BLEND`.** `host.js:5038` hardcodes `blendMode: 0` for
+  every texture; our textures are always `rgba8unorm` (alpha present), so SDL3's
+  `texture->blendMode = SDL_ISPIXELFORMAT_ALPHA(format) ? BLEND : NONE`
+  (`SDL_render.c`) yields **BLEND**. **Silent visual deviation**: a program that
+  `CreateTexture` + `UpdateTexture` (with alpha) + `RenderTexture` *without* calling
+  `SDL_SetTextureBlendMode` gets opaque output here, alpha-blended in real SDL3.
+  (Note: the prior pass's claim "CreateTexture = NONE is SDL-correct" was right for
+  SDL2, wrong for SDL3.) Fix would key the default off `SDL_ISPIXELFORMAT_ALPHA(format)`.
+  Repro: draw a half-transparent texture over a filled background, no explicit blend
+  mode; expect see-through, get opaque. **Severity: high (silent).**
+- **`SDL_PollEvent(NULL)` crashes and has wrong semantics.** `compiler.js:21164` does
+  `*event = e->event;` unconditionally → a NULL `event` is a null-pointer write
+  (trap). Worse, even if it didn't trap it *dequeues*, whereas SDL3 defines
+  `SDL_PollEvent(NULL)` as a **peek**: "if event is NULL, it simply returns true if
+  there is an event in the queue, but will not remove it" (wiki). Repro:
+  `while (SDL_PollEvent(NULL)) {}` — SDL3 spins true-without-draining; ours faults.
+  **Severity: medium (crash, but most callers pass non-NULL).**
+- **`SDL_UpdateTexture` with a non-NULL `rect` uploads wrong data and reads
+  out-of-bounds.** `compiler.js:21314` drops `rect` and calls the host with the
+  texture's *full* `w`/`h`; `host.js:5047` then reads `pitch * texture->h` bytes from
+  the caller's buffer. A sub-rect caller passes a buffer sized `rect->h` rows → the
+  host reads past it (OOB → `RangeError`/garbage) and, even if it fits, writes the
+  data at (0,0) over the whole texture instead of into the sub-rect. This is the same
+  root cause as the perf stray below, but it's a **correctness + memory-safety** bug,
+  not just slow. Repro: `SDL_UpdateTexture(t, &(SDL_Rect){10,10,4,4}, buf16px, 16)`.
+  **Severity: high for sub-rect callers** (full-frame callers with `rect==NULL` —
+  e.g. Doom — are unaffected).
+- **Keypad digit keycodes are wrong when NumLock is on.** `host.js:6132` `keysym()`
+  returns the DOM character, so `Numpad1` (NumLock on) → `'1'` = `SDLK_1` (49); SDL3
+  reports `SDLK_KP_1` (`89 | 0x40000000`). The **scancode** is correct (KP_1=89);
+  only the keycode differs. Niche (programs usually read scancodes for the keypad).
+  **Severity: low.** (Confidence: medium — verify exact SDL3 keypad-keycode default.)
+- **`SDL_Init(0)` then a later `SDL_Init(...)` re-baselines `SDL_GetTicks` to 0.**
+  `compiler.js:21022` calls the host init (which stamps the tick base) whenever
+  `__sdl_initted == 0`. `SDL_Init(0)` leaves the mask 0, so the next `SDL_Init`
+  re-runs host init and resets the clock. Niche (real apps init video/audio first,
+  which sets the mask). **Severity: low.**
+
+### Correctness — confirmed still open
+- **Event `timestamp` is always 0.** SDL stamps every event with `SDL_GetTicksNS()`
+  (wiki `SDL_CommonEvent`); ours are memset-zeroed in `__sdl_push_*`
+  (`compiler.js:21109+`).
 - **Keyboard `mod` never populated** (no `SDL_GetModState`). Programs reading
-  `event.key.mod` for Shift/Ctrl/Alt see 0. Web: `KeyboardEvent.getModifierState`.
-- **Keyboard `repeat` never set.** DOM provides `e.repeat`; every auto-repeat
-  currently looks like a fresh press.
-- **Shifted-letter keycode is wrong.** `keysym` returns `e.key.charCodeAt(0)`, so
-  Shift+A → keycode 65; SDL's keycode for the A key is `SDLK_a` (97) regardless of
-  shift. (Unshifted letters are fine; scancodes are now correct.)
-- **Mouse `xrel`/`yrel` always 0; no relative / pointer-lock mode.** Kills FPS
-  mouselook; `SDL_GetRelativeMouseState` / `SDL_SetWindowRelativeMouseMode` absent.
-- **Mouse motion `state` mask + button `clicks` never set** (no held-button mask,
-  no double-click count).
-- **Duplicate `SDL_PIXELFORMAT_RGBA32` macro** with conflicting values
-  (`0x16462004` then `0x16762004`). Harmless only because the host treats every
-  texture as RGBA bytes, but it's a real redefinition.
-- **Audio:** no format conversion / resampling (the defining feature of
-  `SDL_AudioStream`); `PutAudioStreamData` drops on a full ring; `GetAudioStreamQueued`
-  returns a `0x7FFFFFFF` sentinel when no SAB is wired. (Fixed 2026-06-20: the
-  get-callback / pull mode now **fails loud** — passing a non-NULL callback to
-  `SDL_OpenAudioDeviceStream` throws with guidance to use push mode, instead of
-  silently behaving as push and playing silence.)
-- **`SDL_CreateTextureFromSurface` assumes RGBA32** input.
-- **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (1px quad / 1px
-  borders), not Bresenham — sub-pixel coverage and endpoints differ slightly.
-- **HiDPI: the canvas renders at logical size and is CSS-upscaled.**
-  `canvas.width = w` (logical), so on a retina display output is upscaled by the
-  browser, not rendered at device-pixel density like native SDL. Blurrier; no
+  `event.key.mod` for Shift/Ctrl/Alt see 0 — even though the *keycode* is correctly
+  modifier-applied (see deleted stray above). Web: `KeyboardEvent.getModifierState`.
+- **Keyboard `repeat` never set** (`compiler.js:21117`). DOM provides `e.repeat`;
+  every auto-repeat currently looks like a fresh press (`down=true, repeat=false`).
+- **Mouse `xrel`/`yrel` always 0; no relative / pointer-lock mode** (`compiler.js:21142`).
+  Kills FPS mouselook; `SDL_GetRelativeMouseState` / `SDL_SetWindowRelativeMouseMode`
+  absent.
+- **Mouse motion `state` mask + button `clicks` never set** (`compiler.js:21129`,
+  `21142`). `clicks` stays 0, but SDL always reports `clicks >= 1` (1 single, 2
+  double) — so `clicks == 0` is a value SDL never emits. Also `which` (mouse/keyboard
+  instance id) is always 0 on every event, which is not a valid SDL instance id.
+- **Mouse/wheel coordinates are integer-rounded though SDL3 carries float.**
+  `host.js:6155` (`canvasCoords` `Math.round`) and `6186` (wheel `Math.round`) round
+  to whole pixels/lines; SDL3 `x/y/xrel/yrel` and wheel `x/y` are `float` with
+  sub-pixel/fractional precision. Also `SDL_MouseWheelEvent.mouse_x/mouse_y` are left
+  0 (SDL fills them with the mouse position). **Severity: low.**
+- **Duplicate `SDL_PIXELFORMAT_RGBA32` macro.** Defined twice: `compiler.js:17158`
+  as `0x16462004u` (that's the **RGBA8888** value — wrong for RGBA32) then
+  `compiler.js:17267` as `376840196` = `0x16762004` (= ABGR8888, the **correct**
+  little-endian RGBA32 value per SDL's `SDL_BYTEORDER` macro). The second wins, so
+  the *effective* value is SDL-correct, but it's a real redefinition and the first
+  value is semantically the wrong format. Harmless at runtime only because the host
+  treats every texture as RGBA bytes.
+- **Audio `SDL_PutAudioStreamData` silently drops on a full ring and still returns
+  true.** `host.js:5152` returns 0 (success) when `queuedBytes + len > cap`, dropping
+  the chunk; `compiler.js:21206` maps that to a `true` return. SDL3's
+  `SDL_AudioStream` grows unbounded and never drops (`SDL_audioqueue.c`
+  `SDL_WriteToAudioQueue` allocates a fresh track), so a `true` return means "queued"
+  — silent data loss here violates fail-loud. Also: no format conversion / resampling
+  (the defining feature of `SDL_AudioStream`); `GetAudioStreamQueued` returns a
+  `0x7FFFFFFF` sentinel when no SAB is wired (`host.js:5172`). (The get-callback /
+  pull mode already **fails loud** as of 2026-06-20.)
+- **`SDL_CreateTextureFromSurface` assumes RGBA32** input (`compiler.js:21297`).
+  Latent only because every surface this runtime can produce is RGBA32 (no
+  `SDL_CreateSurface`/`SDL_LoadBMP`).
+- **`SDL_Surface` is a reduced struct with a different field order than SDL3.** Ours
+  (`compiler.js:17124`) is `{int w, h; int pitch; void *pixels;}`; SDL3 is
+  `{SDL_SurfaceFlags flags; SDL_PixelFormat format; int w; int h; int pitch; void
+  *pixels; int refcount; void *reserved;}`. Self-consistent within this runtime
+  (everything compiles against this header), and `->format`/`->flags` simply don't
+  exist (a program using them fails to compile = loud), but `sizeof`/by-value/offset
+  assumptions differ from SDL3. **Severity: low.**
+- **`SDL_RenderLine` / `SDL_RenderRect` are quad approximations** (`compiler.js:21384`,
+  `21394`) — 1px quad / 1px borders, not Bresenham; sub-pixel coverage and endpoints
+  differ slightly.
+- **HiDPI: the canvas renders at logical size and is CSS-upscaled** (`host.js:4988`,
+  `4692`). `canvas.width = w` (logical), so on a retina display output is upscaled by
+  the browser, not rendered at device-pixel density like native SDL. Blurrier; no
   `SDL_GetWindowSizeInPixels` / pixel-density / `devicePixelRatio` handling.
-- **Destroying a texture already recorded in the current frame's batch** → null
-  deref at present (`texBindGroup` on a nulled slot). SDL tolerates this; we trap.
-  Robustness edge case.
+- **Destroying a texture already recorded in the current frame's batch** → null deref
+  at present (`host.js:4961` `texBindGroup(sdlTextures[e.texH-1])` on a nulled slot).
+  SDL tolerates this; we trap. Robustness edge case.
 - **Deferred batch-render model vs SDL's immediate mode** (subtle, mostly within
   spec): draws are recorded and executed only at `RenderPresent` (one pass,
-  `loadOp: clear`). Equivalent under SDL's "backbuffer undefined after present"
-  rule, BUT a program that draws incrementally **without clearing** (expecting the
-  previous frame to be retained) won't see it retained.
+  `loadOp: clear`, `host.js:4957`). Equivalent under SDL's "backbuffer undefined
+  after present" rule, BUT a program that draws incrementally **without clearing**
+  (expecting the previous frame retained) won't see it retained.
+- **Several failure paths don't call `SDL_SetError`.** E.g. `SDL_RenderGeometry`
+  returns false on `malloc` failure without setting the error (`compiler.js:21421`).
+  SDL3's convention is to `SDL_SetError` on every documented failure so `SDL_GetError`
+  is meaningful. **Severity: low.** (Most paths — Init/CreateWindow/Renderer/Texture/
+  audio-open — do set it.)
 
 ### Performance
 - ~~**Per-present GPU→CPU readback runs unconditionally.**~~ **Fixed 2026-06-20.**
@@ -176,7 +287,8 @@ principles). Listed so they're visible, not silently shipped.
   sprite/tile-heavy frame now costs amortized O(1) allocations. Regression-tested
   with a 256-quad batch that forces the buffer to grow (`sdl-render-batch`).
 - **`SDL_UpdateTexture` reuploads the whole texture** for any update (it ignores
-  the sub-rect, see Correctness) — a one-pixel change is O(texture).
+  the sub-rect — and see the elevated correctness+safety stray above) — a one-pixel
+  change is O(texture).
 
 ## The work to do — by subsystem
 
