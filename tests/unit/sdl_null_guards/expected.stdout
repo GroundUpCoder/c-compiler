@@ -1,0 +1,10 @@
+renderclear=0 err=[Parameter 'renderer' is invalid]
+texblend=0 err=[Parameter 'texture' is invalid]
+putaudio=0 err=[Parameter 'stream' is invalid]
+settitle=0 err=[Parameter 'window' is invalid]
+getqueued=-1
+poll_null_empty=0
+peek1=1
+peek2=1
+drain=1 type_is_quit=1
+poll_after_drain=0

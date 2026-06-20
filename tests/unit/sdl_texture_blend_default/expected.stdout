@@ -1,0 +1,6 @@
+alpha_rgba32=1
+alpha_rgba8888=1
+alpha_xrgb8888=0
+rgba32_default_blend=1
+xrgb_default_blend=0
+after_set_add=2

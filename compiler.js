@@ -17121,10 +17121,20 @@ typedef Uint32 SDL_Scancode;
 typedef Uint32 SDL_Keycode;
 typedef Uint16 SDL_Keymod;
 
+/* SDL3 made SDL_Surface a public struct. Match its field order + types so a
+   program that reads surface->format / ->flags compiles and lays out the same.
+   (This runtime only ever hands back RGBA32 window surfaces; refcount/reserved
+   are inert here but present for layout fidelity.) */
+typedef Uint32 SDL_PixelFormat;
+typedef Uint32 SDL_SurfaceFlags;
 typedef struct SDL_Surface {
+    SDL_SurfaceFlags flags;
+    SDL_PixelFormat format;
     int w, h;
     int pitch;
     void *pixels;
+    int refcount;
+    void *reserved;
 } SDL_Surface;
 
 typedef struct SDL_Window SDL_Window;
@@ -17152,12 +17162,40 @@ typedef struct SDL_Vertex {
    pixel format is informational only (textures are RGBA bytes in memory). */
 typedef struct SDL_Renderer SDL_Renderer;
 
-typedef Uint32 SDL_PixelFormat;
-/* Byte-order RGBA (memory is R,G,B,A). The host treats every texture as RGBA
-   bytes, so the exact value is informational. */
-#define SDL_PIXELFORMAT_RGBA32   0x16462004u
+/* SDL_PixelFormat is typedef'd above (with SDL_Surface). Byte-order packed RGBA
+   formats; the host treats every texture as RGBA bytes, so the exact value is
+   informational. SDL_PIXELFORMAT_RGBA32 is defined ONCE, below, to the
+   little-endian-correct value (== ABGR8888) — no conflicting redefinition. */
 #define SDL_PIXELFORMAT_RGBA8888 0x16462004u
 #define SDL_PIXELFORMAT_ABGR8888 0x16762004u
+
+/* Pixel-format bitfield accessors + classification (SDL_pixels.h). Just enough
+   for SDL_ISPIXELFORMAT_ALPHA, which SDL_CreateTexture uses to pick SDL3's
+   alpha-aware default blend mode. These are pure bit math on the packed format
+   id, so they're correct for any SDL pixel format, not only the ones we ship. */
+#define SDL_PIXELFLAG(X)   (((X) >> 28) & 0x0F)
+#define SDL_PIXELTYPE(X)   (((X) >> 24) & 0x0F)
+#define SDL_PIXELORDER(X)  (((X) >> 20) & 0x0F)
+#define SDL_PIXELTYPE_PACKED8  4
+#define SDL_PIXELTYPE_PACKED16 5
+#define SDL_PIXELTYPE_PACKED32 6
+#define SDL_PACKEDORDER_ARGB 3
+#define SDL_PACKEDORDER_RGBA 4
+#define SDL_PACKEDORDER_ABGR 7
+#define SDL_PACKEDORDER_BGRA 8
+/* FOURCC formats carry flag != 1; the named RGBA formats all carry flag == 1. */
+#define SDL_ISPIXELFORMAT_FOURCC(format) ((format) && (SDL_PIXELFLAG(format) != 1))
+#define SDL_ISPIXELFORMAT_PACKED(format) \
+    (!SDL_ISPIXELFORMAT_FOURCC(format) && \
+     ((SDL_PIXELTYPE(format) == SDL_PIXELTYPE_PACKED8) || \
+      (SDL_PIXELTYPE(format) == SDL_PIXELTYPE_PACKED16) || \
+      (SDL_PIXELTYPE(format) == SDL_PIXELTYPE_PACKED32)))
+#define SDL_ISPIXELFORMAT_ALPHA(format) \
+    (SDL_ISPIXELFORMAT_PACKED(format) && \
+     ((SDL_PIXELORDER(format) == SDL_PACKEDORDER_ARGB) || \
+      (SDL_PIXELORDER(format) == SDL_PACKEDORDER_RGBA) || \
+      (SDL_PIXELORDER(format) == SDL_PACKEDORDER_ABGR) || \
+      (SDL_PIXELORDER(format) == SDL_PACKEDORDER_BGRA)))
 
 typedef enum SDL_TextureAccess {
     SDL_TEXTUREACCESS_STATIC = 0,
@@ -17264,8 +17302,10 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_WINDOW_FULLSCREEN 0x0000000000000001ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
-#define SDL_PIXELFORMAT_RGBA32 376840196
-#define SDL_PIXELFORMAT_XRGB8888 370546692
+/* SDL3: on little-endian, SDL_PIXELFORMAT_RGBA32 aliases ABGR8888
+   (0x16762004 = 376840196). Single canonical definition. */
+#define SDL_PIXELFORMAT_RGBA32 0x16762004u
+#define SDL_PIXELFORMAT_XRGB8888 0x16161804u
 
 /* SDL3 event types (SDL_EVENT_*). Values are unchanged from SDL2. */
 #define SDL_EVENT_QUIT 0x100
@@ -17379,6 +17419,10 @@ void SDL_DestroyAudioStream(SDL_AudioStream *stream);
 const char *SDL_GetError(void);
 bool SDL_SetError(const char *fmt, ...);
 bool SDL_ClearError(void);
+/* SDL3's standard "invalid parameter" helper (SDL_error.h). Expands to a
+   SDL_SetError with SDL's exact wording, so SDL_GetError() after passing a NULL
+   handle reads like upstream ("Parameter 'renderer' is invalid"). */
+#define SDL_InvalidParamError(param) SDL_SetError("Parameter '%s' is invalid", (param))
 
 /* ---- SDL_Renderer (2D accelerated) ---- */
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name);
@@ -17390,6 +17434,7 @@ bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *p
 bool SDL_SetTextureColorMod(SDL_Texture *texture, Uint8 r, Uint8 g, Uint8 b);
 bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha);
 bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode);
+bool SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode);
 bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode);
 bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode);
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
@@ -20966,6 +21011,7 @@ __import void __sdl_update_texture(int t, const void *pixels, int pitch, int w, 
 __import void __sdl_set_texture_color_mod(int t, double r, double g, double b);
 __import void __sdl_set_texture_alpha_mod(int t, double a);
 __import void __sdl_set_texture_blend_mode(int t, int mode);
+__import int __sdl_get_texture_blend_mode(int t);
 __import void __sdl_set_texture_scale_mode(int t, int mode);
 __import int __sdl_get_texture_scale_mode(int t);
 __import void __sdl_set_draw_color(int r, double rr, double gg, double bb, double aa);
@@ -21006,6 +21052,11 @@ bool SDL_ClearError(void) {
 #define __SDL_SUPPORTED_SUBSYSTEMS (SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)
 
 static SDL_InitFlags __sdl_initted = 0;
+/* Whether the host __sdl_init (which baselines the SDL_GetTicks clock) has run
+   this init cycle. Tracked separately from the subsystem mask: keying the
+   one-time baseline on (__sdl_initted == 0) was wrong because SDL_Init(0) leaves
+   the mask 0, so a subsequent SDL_Init would re-call the host and reset ticks. */
+static bool __sdl_host_inited = 0;
 
 static bool __sdl_do_init(SDL_InitFlags flags) {
     SDL_InitFlags unsupported = flags & ~(SDL_InitFlags)__SDL_SUPPORTED_SUBSYSTEMS;
@@ -21018,8 +21069,8 @@ static bool __sdl_do_init(SDL_InitFlags flags) {
     }
     /* SDL implicitly brings up EVENTS alongside VIDEO/AUDIO. */
     if (flags & (SDL_INIT_VIDEO | SDL_INIT_AUDIO)) flags |= SDL_INIT_EVENTS;
-    /* Baseline the tick clock exactly once (re-calling would reset SDL_GetTicks). */
-    if (__sdl_initted == 0) __sdl_init((int)flags);
+    /* Baseline the tick clock exactly once per init cycle. */
+    if (!__sdl_host_inited) { __sdl_init((int)flags); __sdl_host_inited = 1; }
     __sdl_initted |= flags;
     return 1;
 }
@@ -21049,9 +21100,13 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     SDL_Window *win = (SDL_Window *)malloc(sizeof(SDL_Window));
     if (!win) { SDL_SetError("Out of memory"); return NULL; }
     win->handle = handle;
+    win->surface.flags = 0;
+    win->surface.format = SDL_PIXELFORMAT_RGBA32;
     win->surface.w = w;
     win->surface.h = h;
     win->surface.pitch = pitch;
+    win->surface.refcount = 1;
+    win->surface.reserved = NULL;
     win->surface.pixels = malloc(pitch * h);
     if (!win->surface.pixels) { free(win); SDL_SetError("Out of memory"); return NULL; }
     memset(win->surface.pixels, 0, pitch * h);
@@ -21059,16 +21114,21 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
 }
 
 SDL_WindowID SDL_GetWindowID(SDL_Window *window) {
+    if (!window) { SDL_InvalidParamError("window"); return 0; }
     return (SDL_WindowID)window->handle;
 }
 
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window) {
+    if (!window) { SDL_InvalidParamError("window"); return NULL; }
     return &window->surface;
 }
 
 bool SDL_UpdateWindowSurface(SDL_Window *window) {
+    if (!window) return SDL_InvalidParamError("window");
     SDL_Surface *s = &window->surface;
-    return __sdl_update_window_surface(window->handle, s->pixels, s->w, s->h, s->pitch) == 0;
+    if (__sdl_update_window_surface(window->handle, s->pixels, s->w, s->h, s->pitch) != 0)
+        return SDL_SetError("SDL_UpdateWindowSurface: the window has no surface to present");
+    return 1;
 }
 
 /* ---- Event queue (freelist-based linked list) ---- */
@@ -21164,6 +21224,9 @@ __export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;
 bool SDL_PollEvent(SDL_Event *event) {
     __SDL_EventEntry *e = __sdl_eq_head;
     if (!e) return 0;
+    /* SDL3: a NULL event peeks — return true if one is queued, but do NOT remove
+       it from the queue (and never dereference the NULL pointer). */
+    if (!event) return 1;
     __sdl_eq_head = e->next;
     if (!__sdl_eq_head) __sdl_eq_tail = 0;
     *event = e->event;
@@ -21204,24 +21267,29 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
 }
 
 bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buf, int len) {
+    if (!stream) return SDL_InvalidParamError("stream");
     return __sdl_queue_audio(stream->dev, buf, len) == 0;
 }
 
 int SDL_GetAudioStreamQueued(SDL_AudioStream *stream) {
+    if (!stream) { SDL_InvalidParamError("stream"); return -1; }
     return __sdl_get_queued_audio_size(stream->dev);
 }
 
 bool SDL_ClearAudioStream(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
     __sdl_clear_queued_audio(stream->dev);
     return 1;
 }
 
 bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
     __sdl_pause_audio_device(stream->dev, 0);
     return 1;
 }
 
 bool SDL_PauseAudioStreamDevice(SDL_AudioStream *stream) {
+    if (!stream) return SDL_InvalidParamError("stream");
     __sdl_pause_audio_device(stream->dev, 1);
     return 1;
 }
@@ -21233,6 +21301,7 @@ void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
 }
 
 void SDL_DestroyWindow(SDL_Window *window) {
+    if (!window) return;
     __sdl_destroy_window(window->handle);
     free(window->surface.pixels);
     free(window);
@@ -21240,6 +21309,7 @@ void SDL_DestroyWindow(SDL_Window *window) {
 
 void SDL_Quit(void) {
     __sdl_initted = 0;
+    __sdl_host_inited = 0;   /* next SDL_Init re-baselines the tick clock */
     __sdl_quit();
 }
 
@@ -21254,6 +21324,7 @@ Uint64 SDL_GetTicks(void) {
 }
 
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
+    if (!window) return SDL_InvalidParamError("window");
     __sdl_set_window_title(window->handle, title);
     return 1;
 }
@@ -21283,6 +21354,7 @@ void SDL_DestroyRenderer(SDL_Renderer *renderer) {
 }
 
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, SDL_TextureAccess access, int w, int h) {
+    if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
     int th = __sdl_create_texture(renderer->handle, (int)access, w, h);
     if (th <= 0) { SDL_SetError("SDL_CreateTexture: host failed to create a texture (%dx%d)", w, h); return NULL; }
     SDL_Texture *t = (SDL_Texture *)malloc(sizeof(SDL_Texture));
@@ -21291,10 +21363,16 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, SDL_PixelFormat format, S
     t->w = w;
     t->h = h;
     t->__handle = th;
+    /* SDL3 default blend mode is alpha-aware: an alpha-format texture defaults to
+       SDL_BLENDMODE_BLEND, a non-alpha one to SDL_BLENDMODE_NONE
+       (src/render/SDL_render.c). */
+    SDL_SetTextureBlendMode(t, SDL_ISPIXELFORMAT_ALPHA(format) ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
     return t;
 }
 
 SDL_Texture *SDL_CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *surface) {
+    if (!renderer) { SDL_InvalidParamError("renderer"); return NULL; }
+    if (!surface) { SDL_InvalidParamError("surface"); return NULL; }
     SDL_Texture *t = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
                                        SDL_TEXTUREACCESS_STATIC, surface->w, surface->h);
     if (!t) return 0;
@@ -21312,47 +21390,63 @@ void SDL_DestroyTexture(SDL_Texture *texture) {
 }
 
 bool SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch) {
+    if (!texture) return SDL_InvalidParamError("texture");
+    if (!pixels) return SDL_InvalidParamError("pixels");
     (void)rect; /* v1: full-texture update */
     __sdl_update_texture(texture->__handle, pixels, pitch, texture->w, texture->h);
     return 1;
 }
 
 bool SDL_SetTextureColorMod(SDL_Texture *texture, Uint8 r, Uint8 g, Uint8 b) {
+    if (!texture) return SDL_InvalidParamError("texture");
     __sdl_set_texture_color_mod(texture->__handle, r / 255.0, g / 255.0, b / 255.0);
     return 1;
 }
 
 bool SDL_SetTextureAlphaMod(SDL_Texture *texture, Uint8 alpha) {
+    if (!texture) return SDL_InvalidParamError("texture");
     __sdl_set_texture_alpha_mod(texture->__handle, alpha / 255.0);
     return 1;
 }
 
 bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode) {
+    if (!texture) return SDL_InvalidParamError("texture");
     __sdl_set_texture_blend_mode(texture->__handle, (int)blendMode);
     return 1;
 }
 
+bool SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode) {
+    if (!texture) return SDL_InvalidParamError("texture");
+    if (blendMode) *blendMode = (SDL_BlendMode)__sdl_get_texture_blend_mode(texture->__handle);
+    return 1;
+}
+
 bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode) {
+    if (!texture) return SDL_InvalidParamError("texture");
     __sdl_set_texture_scale_mode(texture->__handle, (int)scaleMode);
     return 1;
 }
 
 bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode) {
+    if (!texture) return SDL_InvalidParamError("texture");
     if (scaleMode) *scaleMode = (SDL_ScaleMode)__sdl_get_texture_scale_mode(texture->__handle);
     return 1;
 }
 
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     __sdl_set_draw_color(renderer->handle, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
     return 1;
 }
 
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     __sdl_set_draw_blend_mode(renderer->handle, (int)blendMode);
     return 1;
 }
 
 bool SDL_RenderClear(SDL_Renderer *renderer) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     __sdl_render_clear(renderer->handle);
     return 1;
 }
@@ -21366,6 +21460,8 @@ static void __sdl_quad_rect(int r, int texH, float dx, float dy, float dw, float
 
 bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
                        const SDL_FRect *srcrect, const SDL_FRect *dstrect) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!texture) return SDL_InvalidParamError("texture");
     float sx = 0, sy = 0, sw = (float)texture->w, sh = (float)texture->h;
     if (srcrect) { sx = srcrect->x; sy = srcrect->y; sw = srcrect->w; sh = srcrect->h; }
     float dx = 0, dy = 0, dw = (float)texture->w, dh = (float)texture->h;
@@ -21375,6 +21471,7 @@ bool SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 }
 
 bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     float dx = 0, dy = 0, dw = 0, dh = 0;
     if (rect) { dx = rect->x; dy = rect->y; dw = rect->w; dh = rect->h; }
     __sdl_quad_rect(renderer->handle, 0, dx, dy, dw, dh, 0, 0, 1, 1);
@@ -21382,6 +21479,7 @@ bool SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
 }
 
 bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     if (!rect) return 1;
     float x = rect->x, y = rect->y, w = rect->w, h = rect->h;
     __sdl_quad_rect(renderer->handle, 0, x, y, w, 1, 0, 0, 1, 1);          /* top */
@@ -21392,6 +21490,7 @@ bool SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect) {
 }
 
 bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float y2) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     float ddx = x2 - x1, ddy = y2 - y1;
     float len = (float)sqrt(ddx * ddx + ddy * ddy);
     if (len < 0.0001f) {
@@ -21407,6 +21506,7 @@ bool SDL_RenderLine(SDL_Renderer *renderer, float x1, float y1, float x2, float 
 }
 
 bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
     __sdl_quad_rect(renderer->handle, 0, x, y, 1, 1, 0, 0, 1, 1);
     return 1;
 }
@@ -21414,12 +21514,16 @@ bool SDL_RenderPoint(SDL_Renderer *renderer, float x, float y) {
 bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
                         const SDL_Vertex *vertices, int num_vertices,
                         const int *indices, int num_indices) {
+    if (!renderer) return SDL_InvalidParamError("renderer");
+    if (!vertices) return SDL_InvalidParamError("vertices");
+    if (num_vertices < 3) return SDL_SetError("SDL_RenderGeometry: num_vertices must be >= 3");
+    if (indices && num_indices % 3 != 0) return SDL_SetError("SDL_RenderGeometry: num_indices must be a multiple of 3");
     int n = indices ? num_indices : num_vertices;
-    if (n <= 0 || !vertices) return 1;
+    if (n <= 0) return 1;
     /* Resolve indices into a flat triangle soup of [x,y,u,v,r,g,b,a] per vertex
        (host stays struct-ignorant — it just reads floats). */
     float *buf = (float *)malloc((size_t)n * 8 * sizeof(float));
-    if (!buf) return 0;
+    if (!buf) return SDL_SetError("Out of memory");
     for (int i = 0; i < n; i++) {
         const SDL_Vertex *v = &vertices[indices ? indices[i] : i];
         float *o = buf + (size_t)i * 8;
@@ -21434,6 +21538,7 @@ bool SDL_RenderGeometry(SDL_Renderer *renderer, SDL_Texture *texture,
 }
 
 void SDL_RenderPresent(SDL_Renderer *renderer) {
+    if (!renderer) { SDL_InvalidParamError("renderer"); return; }
     __sdl_render_present(renderer->handle);
 }
 

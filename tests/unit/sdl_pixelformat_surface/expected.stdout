@@ -1,0 +1,7 @@
+rgba8888=0x16462004
+abgr8888=0x16762004
+rgba32=0x16762004
+xrgb8888=0x16161804
+rgba32_is_abgr=1
+surf w=320 h=240 pitch=1280
+surf flags=0 format_is_rgba32=1 refcount=1 pixels_nonnull=1

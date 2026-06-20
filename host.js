@@ -4514,12 +4514,18 @@ function createNullSDL() {
       __sdl_update_window_surface: function () { return 0; },
       __sdl_create_renderer: function () { return 1; },
       __sdl_destroy_renderer: function () {},
-      __sdl_create_texture: function () { nullTextures.push({ scaleMode: 1 }); return nullTextures.length; },  // SDL3 default LINEAR
+      __sdl_create_texture: function () { nullTextures.push({ scaleMode: 1, blendMode: 0 }); return nullTextures.length; },  // SDL3 default LINEAR; blend set by C
       __sdl_destroy_texture: function (t) { if (t > 0 && nullTextures[t - 1]) nullTextures[t - 1] = null; },
       __sdl_update_texture: function () {},
       __sdl_set_texture_color_mod: function () {},
       __sdl_set_texture_alpha_mod: function () {},
-      __sdl_set_texture_blend_mode: function () {},
+      __sdl_set_texture_blend_mode: function (t, mode) {
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 4) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
+        const tx = nullTextures[t - 1]; if (tx) tx.blendMode = mode;
+      },
+      __sdl_get_texture_blend_mode: function (t) {
+        const tx = nullTextures[t - 1]; return tx ? tx.blendMode : 0;
+      },
       __sdl_set_texture_scale_mode: function (t, mode) {
         if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
         const tx = nullTextures[t - 1]; if (tx) tx.scaleMode = mode;
@@ -5058,6 +5064,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_set_texture_blend_mode: function (t, mode) {
         const tx = sdlTextures[t - 1]; if (tx) tx.blendMode = sdlBlendValidate(mode);
+      },
+      __sdl_get_texture_blend_mode: function (t) {
+        const tx = sdlTextures[t - 1]; return tx ? tx.blendMode : 0;
       },
       __sdl_set_texture_scale_mode: function (t, mode) {
         const tx = sdlTextures[t - 1];
