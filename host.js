@@ -5272,10 +5272,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     requestAnimationFrame: typeof requestAnimationFrame === 'function'
       ? function (cb) { requestAnimationFrame(cb); }
       : null,
-    /* Push a key event from external source (e.g. worker message) */
-    pushKeyEvent: function (handle, eventType, scancode, sym) {
+    /* Push a key event from external source (e.g. worker message). mod is an
+     * SDL_Keymod bitmask, repeat the DOM auto-repeat flag. */
+    pushKeyEvent: function (handle, eventType, scancode, sym, mod, repeat) {
       const fn = getExports().__sdl_push_key_event;
-      if (fn) fn(handle, eventType, scancode, sym);
+      if (fn) fn(handle, eventType, scancode, sym, mod | 0, repeat ? 1 : 0);
     },
     pushQuitEvent: function (handle) {
       const fn = getExports().__sdl_push_quit_event;
@@ -5283,15 +5284,15 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     },
     pushMouseButtonEvent: function (handle, eventType, button, x, y) {
       const fn = getExports().__sdl_push_mouse_button_event;
-      if (fn) fn(handle, eventType, button, x, y);
+      if (fn) fn(handle, eventType, button, x, y);   // x,y are float (SDL coords)
     },
-    pushMouseMotionEvent: function (handle, x, y) {
+    pushMouseMotionEvent: function (handle, x, y, state) {
       const fn = getExports().__sdl_push_mouse_motion_event;
-      if (fn) fn(handle, x, y);
+      if (fn) fn(handle, x, y, state | 0);   // state = SDL button-mask
     },
-    pushMouseWheelEvent: function (handle, x, y) {
+    pushMouseWheelEvent: function (handle, x, y, direction) {
       const fn = getExports().__sdl_push_mouse_wheel_event;
-      if (fn) fn(handle, x, y);
+      if (fn) fn(handle, x, y, direction | 0);
     },
   };
 
@@ -6192,12 +6193,52 @@ const SDL_WEB = (function () {
     return m;
   })();
 
+  // Numeric keypad keys: SDL reports the KP_* keycode (scancode | mask), not the
+  // ASCII digit the DOM resolves them to (e.g. NumLock '1' → SDLK_KP_1, not '1').
+  const KP_CODES = {
+    'Numpad0': 1, 'Numpad1': 1, 'Numpad2': 1, 'Numpad3': 1, 'Numpad4': 1,
+    'Numpad5': 1, 'Numpad6': 1, 'Numpad7': 1, 'Numpad8': 1, 'Numpad9': 1,
+    'NumpadDecimal': 1, 'NumpadEnter': 1, 'NumpadAdd': 1, 'NumpadSubtract': 1,
+    'NumpadMultiply': 1, 'NumpadDivide': 1,
+  };
   function keysym(e) {
+    if (e.code && KP_CODES[e.code]) return (SCANCODE_MAP[e.code] || 0) | 0x40000000;
     if (typeof e.key === 'string' && e.key.length === 1) return e.key.charCodeAt(0);
     if (NAMED_KEYSYMS[e.key] !== undefined) return NAMED_KEYSYMS[e.key];
     return (SCANCODE_MAP[e.code] || 0) | 0x40000000;
   }
   function scancode(e) { return SCANCODE_MAP[e.code] || 0; }
+
+  // DOM modifier state → SDL_Keymod bitmask (SDL_KMOD_*). getModifierState can't
+  // tell left vs right, so report the left variant (programs test SDL_KMOD_SHIFT
+  // etc, which OR both). AltGraph → RALT, matching SDL's AltGr handling.
+  function keymod(e) {
+    if (!e || typeof e.getModifierState !== 'function') return 0;
+    let m = 0;
+    if (e.getModifierState('Shift')) m |= 0x0001;      // KMOD_LSHIFT
+    if (e.getModifierState('Control')) m |= 0x0040;    // KMOD_LCTRL
+    if (e.getModifierState('Alt')) m |= 0x0100;        // KMOD_LALT
+    if (e.getModifierState('Meta')) m |= 0x0400;       // KMOD_LGUI
+    if (e.getModifierState('AltGraph')) m |= 0x0200;   // KMOD_RALT
+    if (e.getModifierState('CapsLock')) m |= 0x2000;   // KMOD_CAPS
+    if (e.getModifierState('NumLock')) m |= 0x1000;    // KMOD_NUM
+    if (e.getModifierState('ScrollLock')) m |= 0x8000; // KMOD_SCROLL
+    return m;
+  }
+
+  // DOM MouseEvent.buttons bitmask → SDL motion-state button mask. The bit order
+  // differs: DOM is left=1, right=2, middle=4; SDL is SDL_BUTTON_MASK(b)=1<<(b-1)
+  // with left=1, middle=2, right=3.
+  function buttonMask(e) {
+    const b = (e && e.buttons) | 0;
+    let s = 0;
+    if (b & 1) s |= 1;    // left   → 1<<0
+    if (b & 2) s |= 4;    // right  → 1<<2
+    if (b & 4) s |= 2;    // middle → 1<<1
+    if (b & 8) s |= 8;    // X1     → 1<<3
+    if (b & 16) s |= 16;  // X2     → 1<<4
+    return s;
+  }
 
   /* Browser pixel coords → logical SDL window coords, accounting for the
    * canvas's CSS scaling and letterboxing (object-fit: contain). `logical` is
@@ -6214,9 +6255,10 @@ const SDL_WEB = (function () {
     } else {
       rw = rect.width; rh = rw / aspect; ox = 0; oy = (rect.height - rh) / 2;
     }
+    // SDL mouse coordinates are float (sub-pixel); don't round.
     return {
-      x: Math.round((e.offsetX - ox) * cw / rw),
-      y: Math.round((e.offsetY - oy) * ch / rh),
+      x: (e.offsetX - ox) * cw / rw,
+      y: (e.offsetY - oy) * ch / rh,
     };
   }
 
@@ -6228,9 +6270,11 @@ const SDL_WEB = (function () {
     scancode: scancode,
     canvasCoords: canvasCoords,
 
-    /* DOM event → canonical descriptor */
+    /* DOM event → canonical descriptor. Carries the DOM-only fields the C layer
+     * can't derive (mod, repeat, button-mask state, wheel direction); C fills in
+     * timestamp, which, xrel/yrel, click-count, and the wheel's mouse position. */
     keyMsg: function (e, down) {
-      return { kind: 'key', eventType: down ? KEYDOWN : KEYUP, scancode: scancode(e), sym: keysym(e) };
+      return { kind: 'key', eventType: down ? KEYDOWN : KEYUP, scancode: scancode(e), sym: keysym(e), mod: keymod(e), repeat: e.repeat ? 1 : 0 };
     },
     mouseButtonMsg: function (canvas, e, down, logical) {
       const c = canvasCoords(canvas, e, logical);
@@ -6238,15 +6282,15 @@ const SDL_WEB = (function () {
     },
     mouseMoveMsg: function (canvas, e, logical) {
       const c = canvasCoords(canvas, e, logical);
-      return { kind: 'mousemove', x: c.x, y: c.y };
+      return { kind: 'mousemove', x: c.x, y: c.y, state: buttonMask(e) };
     },
     wheelMsg: function (e) {
       const scale = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 600 : 1; /* lines/pages → ~px */
       const dx = e.deltaX * scale, dy = e.deltaY * scale;
       // SDL_MouseWheelEvent: +y is AWAY from the user (scroll up), +x is to the
       // right. DOM WheelEvent.deltaY is +down and deltaX is +right, so negate Y
-      // (the old code passed deltaY through → wheel was inverted) and keep X.
-      return { kind: 'wheel', x: Math.round(dx), y: -Math.round(dy) };
+      // and keep X. Values are float (sub-line precision); direction is NORMAL.
+      return { kind: 'wheel', x: dx, y: -dy, direction: 0 };
     },
 
     /* Worker side: feed a canonical descriptor into the live SDL object. The
@@ -6254,10 +6298,10 @@ const SDL_WEB = (function () {
     dispatch: function (sdl, m) {
       if (!sdl || !m) return;
       switch (m.kind) {
-        case 'key': sdl.pushKeyEvent(1, m.eventType, m.scancode, m.sym); break;
+        case 'key': sdl.pushKeyEvent(1, m.eventType, m.scancode, m.sym, m.mod | 0, m.repeat ? 1 : 0); break;
         case 'mousebutton': sdl.pushMouseButtonEvent(1, m.eventType, m.button, m.x, m.y); break;
-        case 'mousemove': sdl.pushMouseMotionEvent(1, m.x, m.y); break;
-        case 'wheel': sdl.pushMouseWheelEvent(1, m.x, m.y); break;
+        case 'mousemove': sdl.pushMouseMotionEvent(1, m.x, m.y, m.state | 0); break;
+        case 'wheel': sdl.pushMouseWheelEvent(1, m.x, m.y, m.direction | 0); break;
         case 'quit': sdl.pushQuitEvent(1); break;
       }
     },

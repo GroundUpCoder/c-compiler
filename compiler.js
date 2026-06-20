@@ -17224,6 +17224,14 @@ typedef struct SDL_Texture {
     int __handle;
 } SDL_Texture;
 
+/* Fields common to the head of every SDL event (type/reserved/timestamp), shared
+   layout so SDL_Event.common can read them for any event. */
+typedef struct SDL_CommonEvent {
+    Uint32 type;
+    Uint32 reserved;
+    Uint64 timestamp;
+} SDL_CommonEvent;
+
 /* SDL3 flattened the keyboard event: scancode/key live directly on the event
    (no SDL_Keysym sub-struct), timestamps are Uint64, and state is a bool down. */
 typedef struct SDL_KeyboardEvent {
@@ -17282,6 +17290,7 @@ typedef struct SDL_MouseWheelEvent {
 
 typedef union SDL_Event {
     Uint32 type;
+    SDL_CommonEvent common;
     SDL_KeyboardEvent key;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
@@ -17360,6 +17369,33 @@ typedef Uint64 SDL_WindowFlags;
 #define SDLK_RCTRL 1073742052
 #define SDLK_RSHIFT 1073742053
 #define SDLK_RALT 1073742054
+
+/* SDL3 key modifier flags (SDL_Keymod, SDL_keycode.h). Populated on
+   event.key.mod from the DOM modifier state. */
+#define SDL_KMOD_NONE   0x0000
+#define SDL_KMOD_LSHIFT 0x0001
+#define SDL_KMOD_RSHIFT 0x0002
+#define SDL_KMOD_LCTRL  0x0040
+#define SDL_KMOD_RCTRL  0x0080
+#define SDL_KMOD_LALT   0x0100
+#define SDL_KMOD_RALT   0x0200
+#define SDL_KMOD_LGUI   0x0400
+#define SDL_KMOD_RGUI   0x0800
+#define SDL_KMOD_NUM    0x1000
+#define SDL_KMOD_CAPS   0x2000
+#define SDL_KMOD_MODE   0x4000
+#define SDL_KMOD_SCROLL 0x8000
+#define SDL_KMOD_CTRL  (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)
+#define SDL_KMOD_SHIFT (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT)
+#define SDL_KMOD_ALT   (SDL_KMOD_LALT | SDL_KMOD_RALT)
+#define SDL_KMOD_GUI   (SDL_KMOD_LGUI | SDL_KMOD_RGUI)
+
+/* SDL_MouseWheelDirection */
+#define SDL_MOUSEWHEEL_NORMAL  0
+#define SDL_MOUSEWHEEL_FLIPPED 1
+
+/* SDL button mask helper (SDL_mouse.h): SDL_BUTTON_MASK(b) == 1u << (b-1). */
+#define SDL_BUTTON_MASK(X) (1u << ((X) - 1))
 
 /* SDL3 audio format constants (SDL_AUDIO_*). Values are unchanged from SDL2. */
 typedef int SDL_AudioFormat;
@@ -21162,61 +21198,125 @@ static void __sdl_eq_push(__SDL_EventEntry *e) {
     __sdl_eq_tail = e;
 }
 
-/* The host's __sdl_push_* imports pass primitives unchanged across the SDL3
-   rename; only the SDL_Event fields they're stored into changed shape (flat
-   key event with scancode/key + bool down; float mouse coords). The event
-   type codes are the SDL_EVENT_* values, identical to the old SDL2 codes. */
+/* Event field population. The host passes DOM-derived primitives (scancode/sym,
+   key mod + repeat, button, float coords, motion button-mask state, wheel
+   direction); everything else SDL stamps itself — timestamp (SDL_GetTicksNS),
+   the device 'which' id, relative motion (xrel/yrel), button click-count, and
+   the wheel's mouse position — which we derive here so the SDL_Event matches
+   upstream's populated fields, not a memset-zeroed shell. */
+
+/* SDL stamps every event with SDL_GetTicksNS(). We have ms (sub-ms precise via
+   performance.now()); ns = ms * 1e6. */
+static Uint64 __sdl_now_ns(void) { return (Uint64)(__sdl_get_ticks() * 1000000.0); }
+
+/* Single mouse / keyboard in this runtime; SDL uses a nonzero instance id (0 is
+   not a valid SDL device id). */
+#define __SDL_MOUSE_ID 1u
+#define __SDL_KEYBOARD_ID 1u
+
+/* Tracked to derive xrel/yrel, the wheel's mouse_x/y, and the click count. */
+static float __sdl_mx = 0, __sdl_my = 0;
+static bool __sdl_have_mpos = 0;
+static Uint64 __sdl_last_click_ns = 0;
+static int __sdl_last_click_btn = 0;
+static float __sdl_last_click_x = 0, __sdl_last_click_y = 0;
+static Uint8 __sdl_click_count = 0;
+
 void __sdl_push_quit_event(int window_id) {
+    (void)window_id;
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
     e->event.type = SDL_EVENT_QUIT;
+    e->event.common.timestamp = __sdl_now_ns();
     __sdl_eq_push(e);
 }
 __export __sdl_push_quit_event = __sdl_push_quit_event;
 
-void __sdl_push_key_event(int window_id, int type, int scancode, int sym) {
+void __sdl_push_key_event(int window_id, int type, int scancode, int sym, int mod, int repeat) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
     e->event.type = (Uint32)type;
+    e->event.key.timestamp = __sdl_now_ns();
     e->event.key.windowID = (SDL_WindowID)window_id;
+    e->event.key.which = __SDL_KEYBOARD_ID;
     e->event.key.down = (type == SDL_EVENT_KEY_DOWN);
+    e->event.key.repeat = repeat ? 1 : 0;
     e->event.key.scancode = (SDL_Scancode)scancode;
     e->event.key.key = (SDL_Keycode)sym;
+    e->event.key.mod = (SDL_Keymod)mod;
     __sdl_eq_push(e);
 }
 __export __sdl_push_key_event = __sdl_push_key_event;
 
-void __sdl_push_mouse_button_event(int window_id, int type, int button, int x, int y) {
+void __sdl_push_mouse_button_event(int window_id, int type, int button, double x, double y) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
+    bool down = (type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+    Uint64 now = __sdl_now_ns();
+    if (down) {
+        /* Click-count: consecutive presses of the same button within 500 ms and a
+           small radius accumulate (double/triple click), else reset to 1. SDL
+           never reports clicks == 0. */
+        if (button == __sdl_last_click_btn &&
+            now - __sdl_last_click_ns <= 500000000ULL &&
+            fabs(x - __sdl_last_click_x) <= 32.0 &&
+            fabs(y - __sdl_last_click_y) <= 32.0) {
+            __sdl_click_count++;
+        } else {
+            __sdl_click_count = 1;
+        }
+        __sdl_last_click_ns = now;
+        __sdl_last_click_btn = button;
+        __sdl_last_click_x = (float)x;
+        __sdl_last_click_y = (float)y;
+    }
     e->event.type = (Uint32)type;
+    e->event.button.timestamp = now;
     e->event.button.windowID = (SDL_WindowID)window_id;
+    e->event.button.which = __SDL_MOUSE_ID;
     e->event.button.button = (Uint8)button;
-    e->event.button.down = (type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+    e->event.button.down = down;
+    e->event.button.clicks = __sdl_click_count ? __sdl_click_count : 1;
     e->event.button.x = (float)x;
     e->event.button.y = (float)y;
+    __sdl_mx = (float)x; __sdl_my = (float)y; __sdl_have_mpos = 1;
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_button_event = __sdl_push_mouse_button_event;
 
-void __sdl_push_mouse_motion_event(int window_id, int x, int y) {
+void __sdl_push_mouse_motion_event(int window_id, double x, double y, int state) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
+    float fx = (float)x, fy = (float)y;
+    float xrel = 0, yrel = 0;
+    if (__sdl_have_mpos) { xrel = fx - __sdl_mx; yrel = fy - __sdl_my; }
+    __sdl_mx = fx; __sdl_my = fy; __sdl_have_mpos = 1;
     e->event.type = SDL_EVENT_MOUSE_MOTION;
+    e->event.motion.timestamp = __sdl_now_ns();
     e->event.motion.windowID = (SDL_WindowID)window_id;
-    e->event.motion.x = (float)x;
-    e->event.motion.y = (float)y;
+    e->event.motion.which = __SDL_MOUSE_ID;
+    e->event.motion.state = (Uint32)state;
+    e->event.motion.x = fx;
+    e->event.motion.y = fy;
+    e->event.motion.xrel = xrel;
+    e->event.motion.yrel = yrel;
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
 
-void __sdl_push_mouse_wheel_event(int window_id, int x, int y) {
+void __sdl_push_mouse_wheel_event(int window_id, double x, double y, int direction) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
     e->event.type = SDL_EVENT_MOUSE_WHEEL;
+    e->event.wheel.timestamp = __sdl_now_ns();
     e->event.wheel.windowID = (SDL_WindowID)window_id;
+    e->event.wheel.which = __SDL_MOUSE_ID;
     e->event.wheel.x = (float)x;
     e->event.wheel.y = (float)y;
+    e->event.wheel.direction = (Uint32)direction;
+    /* SDL fills the wheel event with the current mouse position. */
+    e->event.wheel.mouse_x = __sdl_mx;
+    e->event.wheel.mouse_y = __sdl_my;
     __sdl_eq_push(e);
 }
 __export __sdl_push_mouse_wheel_event = __sdl_push_mouse_wheel_event;

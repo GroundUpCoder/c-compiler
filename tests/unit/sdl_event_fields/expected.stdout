@@ -1,0 +1,6 @@
+key type=1 down=1 repeat=1 scancode=26 key=119 mod=0x41 which=1
+motion x=100.50 y=50.25 xrel=0.00 yrel=0.00 state=1 which=1
+motion2 xrel=10.00 yrel=-5.00
+btn1 button=1 down=1 clicks=1 x=110.50 which=1
+btn2 clicks=2
+wheel x=0.00 y=1.00 dir=0 mouse_x=110.50 mouse_y=45.25 which=1
