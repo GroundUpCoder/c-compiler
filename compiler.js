@@ -23496,12 +23496,28 @@ void *calloc(size_t count, size_t size) {
 void *realloc(void *ptr, size_t new_size) {
   if (!ptr) return malloc(new_size);
   if (new_size == 0) { free(ptr); return (void *)0; }
+  // Reject sizes malloc itself would reject; also guards adjust_request below
+  // from overflowing a huge request down to MIN_BLOCK_SIZE.
+  if (new_size > 0x40000000L) return (void *)0;
 
   long block = payload_to_block((long)ptr);
   long old_payload = block_size(block) - BLOCK_OVERHEAD;
 
   // If new size fits in current block, keep it
   if (new_size <= (size_t)old_payload) return ptr;
+
+  // Grow in place by absorbing the next physical block when it is free and the
+  // combined size satisfies the request; avoids the malloc+copy+free round-trip.
+  // Mirrors the reference TLSF tlsf_realloc.
+  long adjusted = adjust_request((long)new_size);
+  long next = block_next_phys(block);
+  if (next < pool_end && block_is_free(next) &&
+      block_size(block) + block_size(next) >= adjusted) {
+    merge_next(block);
+    split_block(block, adjusted);
+    block_mark_used(block);
+    return ptr;
+  }
 
   // Allocate new, copy, free old
   void *new_ptr = malloc(new_size);
