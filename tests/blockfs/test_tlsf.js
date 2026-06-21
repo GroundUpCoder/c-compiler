@@ -181,6 +181,47 @@ test('realloc larger may move', function () {
   alloc.free(guard);
 });
 
+test('realloc grows in place into freed neighbor', function () {
+  var store = new MemoryByteStore(65536);
+  var alloc = new TLSFAllocator(store, 256, 65536 - 2304);
+
+  var a = alloc.malloc(64);
+  var data = new Uint8Array(64);
+  for (var i = 0; i < 64; i++) data[i] = (i * 7) & 0xFF;
+  store.setBytes(a, data);
+  var b = alloc.malloc(256);  // neighbor to be absorbed
+  var c = alloc.malloc(64);   // guard: keep b off the pool tail
+  alloc.free(b);              // [a used][b free][c used]
+
+  var a2 = alloc.realloc(a, 200);  // fits in a(64)+b(256) => grow in place
+  assertEq(a2, a, 'realloc should grow in place (same pointer)');
+  var rb = store.getBytes(a2, 64);
+  for (var j = 0; j < 64; j++) assertEq(rb[j], (j * 7) & 0xFF, 'preserved at ' + j);
+
+  var d = alloc.malloc(64);  // split remainder of b must be reusable
+  assert(d > 0 && d !== a2 && d !== c, 'split remainder reusable');
+  alloc.free(a2); alloc.free(c); alloc.free(d);
+});
+
+test('realloc moves when next block is too small', function () {
+  var store = new MemoryByteStore(65536);
+  var alloc = new TLSFAllocator(store, 256, 65536 - 2304);
+
+  var a = alloc.malloc(64);
+  var data = new Uint8Array(64);
+  for (var i = 0; i < 64; i++) data[i] = (i + 1) & 0xFF;
+  store.setBytes(a, data);
+  var b = alloc.malloc(64);   // small neighbor
+  var c = alloc.malloc(64);   // guard
+  alloc.free(b);
+
+  var a2 = alloc.realloc(a, 600);  // > a+b combined => must move
+  assert(a2 !== a, 'realloc should move when neighbor is too small');
+  var rb = store.getBytes(a2, 64);
+  for (var j = 0; j < 64; j++) assertEq(rb[j], (j + 1) & 0xFF, 'preserved at ' + j);
+  alloc.free(a2); alloc.free(c);
+});
+
 // ---------------------------------------------------------------
 // calloc
 // ---------------------------------------------------------------

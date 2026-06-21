@@ -1370,12 +1370,27 @@ var BLOCK_FS = (function () {
   TLSFAllocator.prototype.realloc = function (ptr, newSize) {
     if (!ptr) return this.malloc(newSize);
     if (newSize === 0) { this.free(ptr); return 0; }
+    // Reject sizes malloc itself would reject.
+    if (newSize > 0xFFFFFF00) return 0;
 
     var block = ptr - BLOCK_OVERHEAD;
     var oldPayload = this._blockSize(block) - BLOCK_OVERHEAD;
 
     // If new size fits in current block, keep it
     if (newSize <= oldPayload) return ptr;
+
+    // Grow in place by absorbing the next physical block when it is free and
+    // the combined size satisfies the request; avoids the malloc+copy+free
+    // round-trip. Mirrors the reference TLSF tlsf_realloc.
+    var adjusted = this._adjustRequest(newSize);
+    var next = this._blockNextPhys(block);
+    if (next < this._readMeta32(META_POOL_END) && this._blockIsFree(next) &&
+        this._blockSize(block) + this._blockSize(next) >= adjusted) {
+      this._mergeNext(block);
+      this._splitBlock(block, adjusted);
+      this._blockMarkUsed(block);
+      return ptr;
+    }
 
     // Allocate new, copy, free old
     var newPtr = this.malloc(newSize);
@@ -1760,9 +1775,22 @@ var BLOCK_FS = (function () {
   TLSF64Allocator.prototype.realloc = function (ptr, newSize) {
     if (!ptr) return this.malloc(newSize);
     if (newSize === 0) { this.free(ptr); return 0; }
+    if (newSize > 0xFFFFFFFFFFFF) return 0;
     var block = ptr - BLOCK_OVERHEAD64;
     var oldPayload = this._blockSize(block) - BLOCK_OVERHEAD64;
     if (newSize <= oldPayload) return ptr;
+    // Grow in place by absorbing the next physical block when it is free and
+    // the combined size satisfies the request; avoids the malloc+copy+free
+    // round-trip. Mirrors the reference TLSF tlsf_realloc.
+    var adjusted = this._adjustRequest(newSize);
+    var next = this._blockNextPhys(block);
+    if (next < this._readMeta64(M64_POOL_END) && this._blockIsFree(next) &&
+        this._blockSize(block) + this._blockSize(next) >= adjusted) {
+      this._mergeNext(block);
+      this._splitBlock(block, adjusted);
+      this._blockMarkUsed(block);
+      return ptr;
+    }
     var newPtr = this.malloc(newSize);
     if (!newPtr) return 0;
     this._s.setBytes(newPtr, this._s.getBytes(ptr, oldPayload));

@@ -167,6 +167,28 @@ function fsck(a) {
   eq(fsck(a).length, 0, 'fsck clean after realloc churn: ' + fsck(a).join('; '));
 }
 
+// ---- 6b. realloc: in-place grow absorbs a freed neighbor (same pointer) ----
+{
+  const store = new MemoryByteStore(1 << 20);
+  const a = new TLSF64Allocator(store, 256, (1 << 20) - POOL_OFFSET);
+  const p = a.malloc(64);
+  const pat = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) pat[i] = (i * 7) & 0xFF;
+  store.setBytes(p, pat);
+  const nbr = a.malloc(256);   // neighbor to be absorbed
+  const guard = a.malloc(64);  // keep nbr off the pool tail
+  ok(nbr && guard, 'in-place setup allocs');
+  a.free(nbr);                 // [p used][nbr free][guard used]
+  const q = a.realloc(p, 200); // fits in p+nbr => grow in place
+  eq(q, p, 'realloc grows in place (same pointer) when next block is free');
+  const got = store.getBytes(q, 64);
+  ok(got.every((b, i) => b === ((i * 7) & 0xFF)), 'in-place grow preserves payload');
+  eq(fsck(a).length, 0, 'fsck clean after in-place grow: ' + fsck(a).join('; '));
+  const reuse = a.malloc(64);  // split remainder of nbr must be reusable
+  ok(reuse && reuse !== q && reuse !== guard, 'split remainder reusable');
+  eq(fsck(a).length, 0, 'fsck clean after remainder reuse: ' + fsck(a).join('; '));
+}
+
 // ---- 7. calloc zeroes; overflow guarded ----
 {
   const store = new MemoryByteStore(1 << 18);
