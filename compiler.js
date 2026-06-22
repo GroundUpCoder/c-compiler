@@ -17025,7 +17025,35 @@ function generateCode(units, outputFile, options) {
   const memoryIdx = wmod.addMemory(minPages);
   wmod.addExport("memory", 0x02, memoryIdx);
   wmod.addExport("__indirect_function_table", 0x01, 0);
-  if (cg.staticData.length > 0) wmod.addDataSegment(staticDataStart, cg.staticData);
+  // Emit static data as sparse active segments, skipping long runs of zeros.
+  // WASM zero-inits linear memory, so omitted zeros read back as 0 — a zeroed
+  // global (e.g. a stdio buffer or an uninitialized array) then costs no binary
+  // bytes. Short zero runs stay inline: each extra segment costs ~6-10 header
+  // bytes (memidx + i32.const offset expr + length leb), so only break the span
+  // on a zero run long enough to pay for a new segment. Trailing zeros in a span
+  // are dropped (the segment ends at its last non-zero byte). An all-zero
+  // staticData emits no segments at all.
+  if (cg.staticData.length > 0) {
+    const data = cg.staticData;
+    const MIN_ZERO_RUN = 64;
+    const n = data.length;
+    let i = 0;
+    while (i < n) {
+      while (i < n && data[i] === 0) i++;        // skip leading zeros (free)
+      if (i >= n) break;
+      const spanStart = i;
+      let lastNonZero = i;
+      while (i < n) {
+        if (data[i] !== 0) { lastNonZero = i++; continue; }
+        let zr = i;
+        while (zr < n && data[zr] === 0) zr++;   // measure the zero run
+        if (zr - i >= MIN_ZERO_RUN || zr >= n) break;  // long/trailing run ends span
+        i = zr;                                  // short run: absorb and continue
+      }
+      wmod.addDataSegment(staticDataStart + spanStart, data.slice(spanStart, lastNonZero + 1));
+      // i now sits at the breaking zero run (or n); the outer loop skips it.
+    }
+  }
   wmod.patchGlobalI32(cg.heapBaseGlobalIdx, heapBase);
   wmod.addExport("__heap_base", 0x03, cg.heapBaseGlobalIdx);
 
