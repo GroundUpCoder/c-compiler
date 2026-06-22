@@ -14117,6 +14117,7 @@ class CodeGenerator {
         } else {
           const val = this._constEvalExpr(elem);
           if (val) this.writeConstValueToStatic(elemOffset, elemType, val);
+          else if (this._staticInitErrSink && elem) this._staticInitErrSink.push({ loc: elem.loc });
         }
       }
     } else if (type.isTag()) {
@@ -14144,6 +14145,7 @@ class CodeGenerator {
                 unit = (unit & ~(mask << bo)) | (bits << bo);
                 for (let b = 0; b < unitSize; b++) this.staticData[fieldOffset + b] = (unit >>> (b * 8)) & 0xFF;
               }
+              else if (this._staticInitErrSink && elem) this._staticInitErrSink.push({ loc: elem.loc });
             } else if (elem instanceof AST.EInitList) {
               this.populateInitListStatic(elem, member.type, fieldOffset);
             } else if (elem instanceof AST.EString && member.type.isArray()) {
@@ -14151,6 +14153,7 @@ class CodeGenerator {
             } else {
               const val = this._constEvalExpr(elem);
               if (val) this.writeConstValueToStatic(fieldOffset, member.type, val);
+              else if (this._staticInitErrSink && elem) this._staticInitErrSink.push({ loc: elem.loc });
             }
           }
           elemIdx++;
@@ -14171,6 +14174,7 @@ class CodeGenerator {
             } else {
               const val = this._constEvalExpr(elem);
               if (val) this.writeConstValueToStatic(baseOffset, member.type, val);
+              else if (this._staticInitErrSink && elem) this._staticInitErrSink.push({ loc: elem.loc });
             }
             break;
           }
@@ -16811,6 +16815,16 @@ function generateCode(units, outputFile, options) {
     }
   }
 
+  // Diagnose non-constant initializers for static-storage objects (C11
+  // 6.7.9p4: they "shall be constant expressions or string literals" — gcc/clang
+  // reject this too). Collected across all static-init population below and
+  // reported before any function body is emitted. The sink is active only for
+  // this window: the local-aggregate runtime-init path (emitted with function
+  // bodies) legitimately reuses populateInitListStatic for non-constant elements
+  // and must not trip it.
+  const staticInitErrors = [];
+  cg._staticInitErrSink = staticInitErrors;
+
   // Initialize file-scope compound literals
   for (const unit of units) {
     for (const cl of collectFileScopeCompoundLiterals(unit)) {
@@ -16825,6 +16839,7 @@ function generateCode(units, outputFile, options) {
         const initExpr = cl.initList.elements.length === 0 ? new AST.EInt(cl.loc, cl.type, 0n) : cl.initList.elements[0];
         const val = cg._constEvalExpr(initExpr);
         if (val) cg.writeConstValueToStatic(baseOffset, cl.type, val);
+        else if (cg._staticInitErrSink) cg._staticInitErrSink.push({ loc: (initExpr && initExpr.loc) || cl.loc });
       }
     }
   }
@@ -16846,6 +16861,7 @@ function generateCode(units, outputFile, options) {
       } else if (varDef.initExpr && !varDef.type.isAggregate()) {
         const val = cg._constEvalExpr(varDef.initExpr);
         if (val) cg.writeConstValueToStatic(baseOffset, varDef.type, val);
+        else if (cg._staticInitErrSink) cg._staticInitErrSink.push({ loc: varDef.initExpr.loc });
       }
     } else if (varDef.type.removeQualifiers().isRef()) {
       const rt = varDef.type.removeQualifiers();
@@ -16910,7 +16926,11 @@ function generateCode(units, outputFile, options) {
           else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(BigInt(Math.trunc(numVal)), true);
           else globalIdx = wmod.addGlobalI32(numVal | 0, true);
         } else {
-          // Zero init
+          // Non-constant initializer for a static-storage scalar (e.g. a
+          // function call) — not a constant expression (C11 6.7.9p4). Record
+          // the diagnostic; the zero-fill below keeps codegen well-formed until
+          // compilation fails on the collected errors.
+          if (cg._staticInitErrSink) cg._staticInitErrSink.push({ loc: varDef.initExpr.loc });
           if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(0n, true);
           else if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(0.0, true);
           else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(0.0, true);
@@ -16943,6 +16963,19 @@ function generateCode(units, outputFile, options) {
       if (!fdef) continue;
       for (const varDef of (fdef.staticLocals || [])) registerGlobalVar(varDef);
     }
+  }
+
+  // Done populating static storage — close the diagnostic window before
+  // function bodies (whose local-aggregate inits may carry non-constant
+  // elements legitimately) are emitted, and fail on any collected errors.
+  cg._staticInitErrSink = null;
+  if (staticInitErrors.length > 0) {
+    for (const e of staticInitErrors) {
+      const at = e.loc && e.loc.filename ? `${e.loc.filename}:${e.loc.line}: ` : "";
+      writeErr(`${at}error: initializer element is not a compile-time constant\n`);
+    }
+    fatalExit(1);
+    return;
   }
 
   // Emit function bodies. Default path: structured codegen for every
@@ -24503,14 +24536,6 @@ char *gets(char *s) {
   abort();
   return 0;
 }
-
-static void __stdio_cleanup(void) {
-  fflush(0);
-}
-// Register stdio cleanup as an atexit handler.
-// This uses a GCC-style constructor attribute to run at startup.
-// For now, we use a dummy function pointer to trigger registration.
-static int __stdio_cleanup_registered = atexit(__stdio_cleanup);
 
 FILE *freopen(const char *path, const char *mode, FILE *stream) {
   if (!stream) return 0;
