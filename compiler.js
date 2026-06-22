@@ -20124,6 +20124,8 @@ __import int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int printf(const char *fmt, ...);
 int vprintf(const char *fmt, va_list ap);
 int fprintf(FILE *stream, const char *fmt, ...);
+int dprintf(int fd, const char *fmt, ...);
+int vdprintf(int fd, const char *fmt, va_list ap);
 int vfprintf(FILE *stream, const char *fmt, va_list ap);
 int vsprintf(char *buf, const char *fmt, va_list ap);
 int putchar(int c);
@@ -24068,6 +24070,33 @@ int fprintf(FILE *stream, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   int r = vfprintf(stream, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+/* POSIX dprintf/vdprintf: formatted output written unbuffered straight to a
+   file descriptor (no FILE, no stdio buffering). Mirrors vfprintf but uses
+   write() as the sink. */
+int vdprintf(int fd, const char *fmt, va_list ap) {
+  va_list ap2;
+  va_copy(ap2, ap);
+  int len = vsnprintf(0, 0, fmt, ap);
+  char stackbuf[256];
+  char *buf = stackbuf;
+  if (len + 1 > 256) {
+    buf = (char *)malloc(len + 1);
+  }
+  vsnprintf(buf, len + 1, fmt, ap2);
+  va_end(ap2);
+  write(fd, buf, len);
+  if (buf != stackbuf) free(buf);
+  return len;
+}
+
+int dprintf(int fd, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vdprintf(fd, fmt, ap);
   va_end(ap);
   return r;
 }
