@@ -963,6 +963,8 @@ var BLOCK_FS = (function () {
     this._dv = new DataView(buf);
     this._u8.set(old);
   };
+  // No backing store — writes are already in the ArrayBuffer.
+  MemoryByteStore.prototype.flush = function () {};
 
   // For production: backed by a FileSystemSyncAccessHandle.
   function SyncAccessHandleStore(handle) {
@@ -992,6 +994,12 @@ var BLOCK_FS = (function () {
   SyncAccessHandleStore.prototype.resize = function (newSize) {
     this._h.truncate(newSize);
   };
+  // Force buffered writes to durable storage. OPFS write() does NOT guarantee
+  // durability until flush() — without this, acknowledged writes can be lost
+  // on a tab crash / kill.
+  SyncAccessHandleStore.prototype.flush = function () {
+    this._h.flush();
+  };
 
   // Wraps a store so every write throws — used to mount the legacy v3 image as a
   // strictly read-only "view" (the toggle), so it can never be mutated.
@@ -1002,6 +1010,7 @@ var BLOCK_FS = (function () {
   ReadOnlyStore.prototype.setUint32 = function () { throw new Error('EROFS: read-only filesystem'); };
   ReadOnlyStore.prototype.setBytes = function () { throw new Error('EROFS: read-only filesystem'); };
   ReadOnlyStore.prototype.resize = function () { throw new Error('EROFS: read-only filesystem'); };
+  ReadOnlyStore.prototype.flush = function () {};
 
   // =================================================================
   // TLSFAllocator — O(1) segregated-fit allocator
@@ -4044,7 +4053,11 @@ var BLOCK_FS = (function () {
         // I/O error.
         return 0;
       }),
-      fsync: wrap(function (fd) { return 0; }),
+      // fsync/fdatasync: a program explicitly asking for durability. The store
+      // is one handle, so flush() is whole-image (allowed — fsync may flush
+      // more than requested). Cheap to call only because programs ask rarely.
+      fsync: wrap(function (fd) { this._s.flush(); return 0; }),
+      fdatasync: wrap(function (fd) { this._s.flush(); return 0; }),
     };
   };
 
