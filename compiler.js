@@ -8168,7 +8168,14 @@ function gcSectionsPass(units, options) {
       if (f.name === "main" || f.name === "alloca") enqueueFunc(f);
     }
     if (!(options && options.gcNoExportRoots)) {
-      for (const [, func] of unit.exportDirectives) enqueueFunc(func);
+      // Root the body-bearing definition: an export directive may name a
+      // forward declaration (no body) whose .definition is the real function
+      // (linked in by linkTranslationUnits). Enqueuing the bodiless declaration
+      // marks it live but never visits the body or keeps the definition node,
+      // so the exported function gets dropped. Canonical victim: libc `exit`
+      // (prototype, defined later), which the host runtime calls after main to
+      // flush stdio — dropping it silently loses unflushed, non-newline output.
+      for (const [, func] of unit.exportDirectives) enqueueFunc(func.definition || func);
     }
   }
 
