@@ -18,6 +18,7 @@ var tests = [
   ['test_stdin_sab.js', []],
   ['test_e2e.js', []],
   ['test_fsck.js', []],
+  ['test_posix.js', []],
   ['test_fuzz.js', long ? ['--long'] : []],
 ];
 

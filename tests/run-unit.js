@@ -351,7 +351,7 @@ function workerMain() {
 // ---------- Main ----------
 
 function parseArgs(argv) {
-  const opts = { verbose: false, quiet: false, jsonl: false, filter: null, jobs: os.cpus().length };
+  const opts = { verbose: false, quiet: false, jsonl: false, filter: null, jobs: os.cpus().length, timeoutMs: 30000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-v' || a === '--verbose') opts.verbose = true;
@@ -359,11 +359,18 @@ function parseArgs(argv) {
     else if (a === '--jsonl') opts.jsonl = true;
     else if (a === '--filter') opts.filter = argv[++i];
     else if (a.startsWith('--filter=')) opts.filter = a.substring('--filter='.length);
+    else if (a === '--timeout') opts.timeoutMs = parseInt(argv[++i], 10);
+    else if (a.startsWith('--timeout=')) opts.timeoutMs = parseInt(a.substring('--timeout='.length), 10);
     else if (a === '-j') opts.jobs = parseInt(argv[++i], 10);
     else if (a.startsWith('-j')) opts.jobs = parseInt(a.substring(2), 10);
     else if (a === '-h' || a === '--help') {
       process.stdout.write(
-        'Usage: node tests/run-unit.js [-v] [--jsonl] [--filter=<substr>] [-j N]\n' +
+        'Usage: node tests/run-unit.js [-v] [--jsonl] [--filter=<substr>] [-j N] [--timeout=MS]\n' +
+        '\n' +
+        '  --timeout Per-test deadline in ms (default 30000). A test that\n' +
+        '            exceeds it fails with "Timed out" and its worker is\n' +
+        '            replaced, so hangs cannot stall the suite. Per-test\n' +
+        '            override: "timeoutMs" in the test\'s config.json.\n' +
         '\n' +
         '  --jsonl   Emit one JSON line per test result to stdout. Suppresses\n' +
         '            human-readable banners and the trailing summary. Intended\n' +
@@ -416,27 +423,59 @@ async function mainMain() {
   }
 
   async function spawnWorker() {
-    const w = new Worker(__filename);
     return new Promise((resolveDone, rejectDone) => {
-      function takeNext() {
-        if (nextIdx >= queue.length) { w.terminate(); resolveDone(); return; }
-        const td = queue[nextIdx++];
-        w.postMessage(td);
-      }
-      w.on('message', (result) => {
+      // Each in-flight test gets a deadline. A test that blows it (e.g. a
+      // miscompiled infinite loop) is reported as a failure and its worker
+      // terminated and replaced, so a hang can never stall the suite.
+      let w = null;
+      let timer = null;
+      let currentTd = null;
+
+      function report(result) {
         if (result.status === 'pass') passed++;
         else if (result.status === 'skip') skipped++;
         else { failed++; failures.push(result); }
 
         if (opts.jsonl) reportJsonl(result);
         else reportHuman(result);
+      }
 
+      function takeNext() {
+        if (nextIdx >= queue.length) { w.terminate(); resolveDone(); return; }
+        currentTd = queue[nextIdx++];
+        timer = setTimeout(onTimeout, currentTd.config.timeoutMs || opts.timeoutMs);
+        w.postMessage(currentTd);
+      }
+
+      function onTimeout() {
+        const td = currentTd;
+        currentTd = null;
+        timer = null;
+        report({ name: td.name, status: 'fail',
+                 msg: `Timed out after ${td.config.timeoutMs || opts.timeoutMs}ms (hang?)` });
+        const old = w;
+        old.removeAllListeners();
+        old.terminate();
+        startWorker(); // replace the killed worker and keep draining the queue
         takeNext();
-      });
-      w.on('error', rejectDone);
-      w.on('exit', (code) => {
-        if (code !== 0 && code !== 1) rejectDone(new Error(`Worker exited with ${code}`));
-      });
+      }
+
+      function startWorker() {
+        w = new Worker(__filename);
+        w.on('message', (result) => {
+          clearTimeout(timer);
+          timer = null;
+          currentTd = null;
+          report(result);
+          takeNext();
+        });
+        w.on('error', (e) => { clearTimeout(timer); rejectDone(e); });
+        w.on('exit', (code) => {
+          if (code !== 0 && code !== 1) rejectDone(new Error(`Worker exited with ${code}`));
+        });
+      }
+
+      startWorker();
       takeNext();
     });
   }

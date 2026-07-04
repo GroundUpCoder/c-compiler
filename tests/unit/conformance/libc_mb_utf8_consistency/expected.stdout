@@ -1,0 +1,4 @@
+mbtowc n=2 wc=233
+mbrtowc n=2 wc=233
+wctomb k=2 b0=195 b1=169
+wcrtomb k=2 b0=195 b1=169
