@@ -1543,9 +1543,24 @@ function preprocess(filename, initialTokens, ppRegistry) {
   }
 
   // --- 3. PRATT-STYLE EXPRESSION EVALUATOR ---
-  function evaluateExpression(line) {
+  // C11 6.10.1p4: all arithmetic happens at intmax_t/uintmax_t width
+  // (itemFromPPNumber types every constant 64-bit). && / || / ?: genuinely
+  // short-circuit: the unevaluated operand is still parsed for syntax, but
+  // its value is ignored and errors inside it (division by zero, malformed
+  // constants) are not diagnosed — `#if 0 && 1/0` is valid C.
+  // `onError` receives a message for errors in EVALUATED positions; the
+  // expression then poisons to 0 rather than crashing the compiler.
+  function evaluateExpression(line, onError) {
     const ZERO = new ConstEval.Item(0n, ConstEval.SIGNED);
     let pos = 0;
+    let errored = false;
+    function evalFail(msg, evaluating) {
+      if (evaluating && !errored) {
+        errored = true;
+        if (onError) onError(msg);
+      }
+      return ZERO; // poison value; keep parsing for syntax
+    }
     function peek() { return pos < line.length ? line[pos] : null; }
     function consume() { return line[pos++]; }
 
@@ -1578,23 +1593,26 @@ function preprocess(filename, initialTokens, ppRegistry) {
       return null;
     };
 
-    function parseBinary(minPrec) {
+    function parseBinary(minPrec, evaluating) {
       const t = consume();
       if (!t) return ZERO;
 
       let left;
       if (t.kind === TokenKind.PP_NUMBER) {
         left = ConstEval.itemFromPPNumber(t.text);
+        if (left === null) {
+          left = evalFail(`invalid integer constant '${t.text}' in preprocessor expression`, evaluating);
+        }
       } else if (t.atPunct(Punct.BANG)) {
-        left = ConstEval.unary("!", parseBinary(12));
+        left = ConstEval.unary("!", parseBinary(12, evaluating));
       } else if (t.atPunct(Punct.MINUS)) {
-        left = ConstEval.unary("-", parseBinary(12));
+        left = ConstEval.unary("-", parseBinary(12, evaluating));
       } else if (t.atPunct(Punct.PLUS)) {
-        left = ConstEval.unary("+", parseBinary(12));
+        left = ConstEval.unary("+", parseBinary(12, evaluating));
       } else if (t.atPunct(Punct.TILDE)) {
-        left = ConstEval.unary("~", parseBinary(12));
+        left = ConstEval.unary("~", parseBinary(12, evaluating));
       } else if (t.atPunct(Punct.LPAREN)) {
-        left = parseBinary(0);
+        left = parseBinary(0, evaluating);
         const next = peek();
         if (next && next.atPunct(Punct.RPAREN)) consume();
       } else if (t.kind === TokenKind.CHAR) {
@@ -1624,21 +1642,43 @@ function preprocess(filename, initialTokens, ppRegistry) {
         consume();
 
         if (op.atPunct(Punct.QMARK)) {
-          const thenVal = parseBinary(0);
+          const cond = left.value !== 0n;
+          // Only the selected arm is semantically evaluated (6.5.15).
+          const thenVal = parseBinary(0, evaluating && cond);
           const next = peek();
           if (next && next.atPunct(Punct.COLON)) consume();
-          const elseVal = parseBinary(prec);
-          left = left.value !== 0n ? thenVal : elseVal;
+          // The conditional operator is right-associative: parse the else
+          // arm with minPrec BELOW '?' so a nested `a ? b : c ? d : e`
+          // groups as `a ? b : (c ? d : e)`.
+          const elseVal = parseBinary(prec - 1, evaluating && !cond);
+          left = cond ? thenVal : elseVal;
           continue;
         }
 
-        const right = parseBinary(prec);
-        left = ConstEval.binary(punctToOp(op), left, right);
+        const opStr = punctToOp(op);
+        if (opStr === "&&" || opStr === "||") {
+          // Genuine short-circuit (6.5.13/14): parse the right operand for
+          // syntax, but only evaluate it when the left doesn't decide.
+          const lTrue = left.value !== 0n;
+          const rightDecides = (opStr === "&&") ? lTrue : !lTrue;
+          const right = parseBinary(prec, evaluating && rightDecides);
+          const result = (opStr === "&&") ? (lTrue && right.value !== 0n)
+                                          : (lTrue || right.value !== 0n);
+          left = new ConstEval.Item(result ? 1n : 0n, ConstEval.SIGNED);
+          continue;
+        }
+
+        const right = parseBinary(prec, evaluating);
+        const r = ConstEval.binary(opStr, left, right);
+        left = r !== null ? r
+          : evalFail((opStr === "/" || opStr === "%")
+              ? "division by zero in preprocessor expression"
+              : `invalid operands to '${opStr}' in preprocessor expression`, evaluating);
       }
       return left;
     }
 
-    return parseBinary(0).value;
+    return parseBinary(0, true).value;
   }
 
   // --- 4. INCLUDE RESOLUTION ---
@@ -1734,8 +1774,14 @@ function preprocess(filename, initialTokens, ppRegistry) {
             while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE) {
               lineTokens.push(state.consume());
             }
-            const expandedTokens = expand(lineTokens, new Set());
-            condition = evaluateExpression(expandedTokens) !== 0n;
+            // Inside a skipped group, conditionals are only tracked for
+            // nesting (C11 6.10p6) — expanding/evaluating them there would
+            // diagnose expressions the standard says to ignore.
+            if (isActive()) {
+              const expandedTokens = expand(lineTokens, new Set());
+              condition = evaluateExpression(expandedTokens, (msg) =>
+                result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
+            }
           }
           const parentActive = isActive();
           ifStack.push({ active: parentActive && condition, anyBranchRan: condition });
@@ -1747,10 +1793,17 @@ function preprocess(filename, initialTokens, ppRegistry) {
             while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE) {
               lineTokens.push(state.consume());
             }
-            const expandedTokens = expand(lineTokens, new Set());
-            const condition = evaluateExpression(expandedTokens) !== 0n;
             const top = ifStack[ifStack.length - 1];
             const parentActive = ifStack.length > 1 ? ifStack[ifStack.length - 2].active : true;
+            // Evaluate only when this #elif can actually select a branch:
+            // an earlier branch already taken (or a skipped enclosing group)
+            // means the expression is ignored per C11 6.10p6.
+            let condition = false;
+            if (parentActive && !top.anyBranchRan) {
+              const expandedTokens = expand(lineTokens, new Set());
+              condition = evaluateExpression(expandedTokens, (msg) =>
+                result.errors.push(new LexError(msg, state.currentFile, dir.line))) !== 0n;
+            }
             top.active = parentActive && !top.anyBranchRan && condition;
             if (top.active) top.anyBranchRan = true;
           }
@@ -2884,8 +2937,10 @@ return {
 // (#if expressions operate at intmax_t/uintmax_t per C99 §6.10.1) and
 // available for constEvalInt / inliner migration later.
 const ConstEval = (() => {
-const { TINT, TUINT, TLLONG, TULLONG, truncateConstInt, usualArithmeticConversions } = Types;
+const { TINT, TUINT, TLLONG, TULLONG, TFLOAT, TBOOL, truncateConstInt, usualArithmeticConversions } = Types;
 
+// Integer-typed constant. `value` is a BigInt, always kept truncated to the
+// type's width, so every intermediate result wraps exactly like the target.
 class Item {
   constructor(value, type) {
     this.value = truncateConstInt(value, type);
@@ -2893,19 +2948,79 @@ class Item {
   }
 }
 
+// Floating-typed constant. `fval` is a JS number (an IEEE double, which is
+// exactly the target's double). For TFLOAT the value is re-rounded to f32 at
+// construction, so every intermediate result rounds exactly like runtime f32
+// arithmetic. TDOUBLE and TLDOUBLE are both 8-byte IEEE doubles here.
+class FloatItem {
+  constructor(fval, type) {
+    this.fval = type.removeQualifiers() === TFLOAT ? Math.fround(fval) : fval;
+    this.type = type;
+  }
+}
+
+function isFloatItem(item) { return item instanceof FloatItem; }
+function isTruthy(item) { return isFloatItem(item) ? item.fval !== 0 : item.value !== 0n; }
+
 function isUnsigned(type) {
   return type === TUINT || type === Types.TULONG || type === TULLONG
       || type === Types.TUCHAR || type === Types.TUSHORT;
 }
 
+// float → integer conversion for constants. C makes out-of-range conversions
+// undefined; we fold them with saturating semantics (NaN → 0) so constant
+// evaluation agrees with the wasm runtime's trunc_sat instructions.
+function saturatingTruncToInt(f, type) {
+  if (Number.isNaN(f)) return 0n;
+  const w = BigInt(type.size * 8);
+  const lo = isUnsigned(type) ? 0n : -(1n << (w - 1n));
+  const hi = isUnsigned(type) ? (1n << w) - 1n : (1n << (w - 1n)) - 1n;
+  if (f === Infinity) return hi;
+  if (f === -Infinity) return lo;
+  const b = BigInt(Math.trunc(f));
+  return b < lo ? lo : b > hi ? hi : b;
+}
+
+// C11 6.3.1 scalar conversion of a constant to `type`. Returns a new
+// Item/FloatItem, or null when the conversion can't be folded. This is THE
+// conversion routine — the parser's evaluator, the inliner, and codegen's
+// static-initializer evaluator must all funnel casts through it so the three
+// never disagree (they used to: (long double) casts were dropped, (float)
+// casts skipped the f32 rounding, and _Bool truncated before testing != 0).
+function convert(item, type) {
+  const t = type.removeQualifiers();
+  if (t === TBOOL) {
+    // 6.3.1.2: the result is value != 0 — test BEFORE any truncation.
+    return new Item(isTruthy(item) ? 1n : 0n, TBOOL);
+  }
+  if (t.isFloatingPoint()) {
+    // Number(BigInt) rounds to nearest-even — exactly 6.3.1.4p2. The
+    // FloatItem constructor applies the extra f32 rounding for TFLOAT.
+    return new FloatItem(isFloatItem(item) ? item.fval : Number(item.value), t);
+  }
+  if (t.isInteger()) {
+    if (!isFloatItem(item)) return new Item(item.value, t);
+    // float → int truncates toward zero (6.3.1.4p1). Out-of-range/NaN is
+    // UB — DECLINE to fold so the runtime conversion keeps its semantics
+    // (saturating by default, trapping under --trapping-float-conversions).
+    // Static-initializer emission, which must produce bytes with no runtime
+    // to defer to, opts into saturation explicitly via saturatingTruncToInt.
+    if (!Number.isFinite(item.fval)) return null;
+    const b = BigInt(Math.trunc(item.fval));
+    if (truncateConstInt(b, t) !== b) return null; // out of range for t
+    return new Item(b, t);
+  }
+  if (t.isPointer() && !isFloatItem(item)) return new Item(item.value, t);
+  return null;
+}
+
 function itemFromPPNumber(text) {
   let unsigned = false;
-  let longlong = false;
   let end = text.length;
   for (let i = text.length - 1; i > 0; --i) {
     const c = text[i];
     if (c === "u" || c === "U") { unsigned = true; end = i; }
-    else if (c === "l" || c === "L") { if (i > 1 && (text[i-1] === "l" || text[i-1] === "L")) { longlong = true; end = --i; } else { end = i; } }
+    else if (c === "l" || c === "L") { if (i > 1 && (text[i-1] === "l" || text[i-1] === "L")) { end = --i; } else { end = i; } }
     else break;
   }
   const numText = text.substring(0, end);
@@ -2913,26 +3028,22 @@ function itemFromPPNumber(text) {
   try {
     if (numText.length >= 2 && numText[0] === "0" && (numText[1] === "x" || numText[1] === "X"))
       value = BigInt(numText);
-    else if (numText.length >= 2 && numText[0] === "0" && /^[0-7]+$/.test(numText))
-      value = BigInt("0o" + numText);
+    else if (numText[0] === "0" && numText.length >= 2)
+      value = /^[0-7]+$/.test(numText) ? BigInt("0o" + numText) : null;
     else
       value = BigInt(numText);
-  } catch { value = 0n; }
-  let type;
-  if (unsigned && longlong) type = TULLONG;
-  else if (unsigned) type = TUINT;
-  else if (longlong) type = TLLONG;
-  else type = TINT;
-  if (!unsigned && isUnsigned(type) === false) {
-    const truncated = truncateConstInt(value, type);
-    if (truncated < 0n && value >= 0n) {
-      type = (type === TLLONG) ? TULLONG : TUINT;
-    }
-  }
+  } catch { value = null; }
+  if (value === null) return null; // malformed constant (e.g. "08") — caller diagnoses
+  // C11 6.10.1p4: #if operands evaluate as intmax_t/uintmax_t (64-bit),
+  // regardless of suffix width. Unsuffixed constants are signed; they
+  // escalate to uintmax_t only when the value doesn't fit intmax_t
+  // (possible for hex/octal constants per 6.4.4.1's type progression).
+  const type = (unsigned || BigInt.asIntN(64, value) !== value) ? TULLONG : TLLONG;
   return new Item(value, type);
 }
 
 function promote(item) {
+  if (isFloatItem(item)) return item;
   if (item.type === Types.TCHAR || item.type === Types.TSCHAR || item.type === Types.TUCHAR
       || item.type === Types.TSHORT || item.type === Types.TUSHORT || item.type === Types.TBOOL)
     return new Item(item.value, TINT);
@@ -2941,6 +3052,14 @@ function promote(item) {
 
 function unary(op, a) {
   a = promote(a);
+  if (isFloatItem(a)) {
+    switch (op) {
+      case "-": case "OP_NEG": return new FloatItem(-a.fval, a.type);
+      case "+": case "OP_POS": return a;
+      case "!": case "OP_LNOT": return new Item(a.fval === 0 ? 1n : 0n, TINT);
+      default: return null; // ~ is a constraint violation on floats
+    }
+  }
   switch (op) {
     case "~": case "OP_BNOT": return new Item(~a.value, a.type);
     case "-": case "OP_NEG": return new Item(-a.value, a.type);
@@ -2952,6 +3071,43 @@ function unary(op, a) {
 
 function binary(op, a, b) {
   a = promote(a); b = promote(b);
+
+  if (isFloatItem(a) || isFloatItem(b)) {
+    // 6.3.1.8: the common type is floating; arithmetic happens in that type
+    // (the FloatItem constructor rounds per-operation for f32).
+    const rt = usualArithmeticConversions(a.type, b.type);
+    if (!rt.isFloatingPoint()) return null;
+    const lv = isFloatItem(a) ? a.fval : Number(a.value);
+    const rv = isFloatItem(b) ? b.fval : Number(b.value);
+    switch (op) {
+      case "+": case "ADD": return new FloatItem(lv + rv, rt);
+      case "-": case "SUB": return new FloatItem(lv - rv, rt);
+      case "*": case "MUL": return new FloatItem(lv * rv, rt);
+      case "/": case "DIV": return new FloatItem(lv / rv, rt); // IEEE: x/0 = ±inf
+      case "==": case "EQ": return new Item(lv === rv ? 1n : 0n, TINT);
+      case "!=": case "NE": return new Item(lv !== rv ? 1n : 0n, TINT);
+      case "<": case "LT": return new Item(lv < rv ? 1n : 0n, TINT);
+      case ">": case "GT": return new Item(lv > rv ? 1n : 0n, TINT);
+      case "<=": case "LE": return new Item(lv <= rv ? 1n : 0n, TINT);
+      case ">=": case "GE": return new Item(lv >= rv ? 1n : 0n, TINT);
+      case "&&": case "LAND": return new Item((lv !== 0 && rv !== 0) ? 1n : 0n, TINT);
+      case "||": case "LOR": return new Item((lv !== 0 || rv !== 0) ? 1n : 0n, TINT);
+      default: return null; // %, shifts, bitwise: constraint violations on floats
+    }
+  }
+
+  // C11 6.5.7p3: shift operands are promoted INDEPENDENTLY; the result has
+  // the promoted LEFT operand's type. Usual arithmetic conversions do not
+  // apply (applying them used to let an unsigned right operand turn an
+  // arithmetic right-shift of a negative left operand into a logical one).
+  if (op === "<<" || op === "SHL" || op === ">>" || op === "SHR") {
+    const width = BigInt(a.type.size * 8);
+    const count = b.value;
+    if (count < 0n || count >= width) return null; // UB — decline, caller diagnoses
+    const res = (op === "<<" || op === "SHL") ? (a.value << count) : (a.value >> count);
+    return new Item(res, a.type); // Item ctor wraps to the result type
+  }
+
   const rt = usualArithmeticConversions(a.type, b.type);
   const lv = truncateConstInt(a.value, rt);
   const rv = truncateConstInt(b.value, rt);
@@ -2964,8 +3120,6 @@ function binary(op, a, b) {
     case "&": case "BAND": return new Item(lv & rv, rt);
     case "|": case "BOR": return new Item(lv | rv, rt);
     case "^": case "BXOR": return new Item(lv ^ rv, rt);
-    case "<<": case "SHL": return new Item(lv << rv, rt);
-    case ">>": case "SHR": return new Item(lv >> rv, rt);
     case "==": case "EQ": return new Item(lv === rv ? 1n : 0n, TINT);
     case "!=": case "NE": return new Item(lv !== rv ? 1n : 0n, TINT);
     case "<": case "LT": return new Item(lv < rv ? 1n : 0n, TINT);
@@ -2978,7 +3132,9 @@ function binary(op, a, b) {
   }
 }
 
-return { Item, itemFromPPNumber, unary, binary, isUnsigned, promote, SIGNED: TLLONG, UNSIGNED: TULLONG };
+return { Item, FloatItem, isFloatItem, isTruthy, convert, saturatingTruncToInt,
+         itemFromPPNumber, unary, binary, isUnsigned, promote,
+         SIGNED: TLLONG, UNSIGNED: TULLONG };
 })();
 
 // ====================
@@ -4738,6 +4894,7 @@ function constEvalItem(expr) {
   if (!expr) return null;
   switch (expr.constructor) {
     case AST.EInt: return new ConstEval.Item(expr.value, expr.type);
+    case AST.EFloat: return new ConstEval.FloatItem(expr.value, expr.type);
     case AST.EIdent:
       if (expr.decl && expr.decl instanceof AST.DEnumConst)
         return new ConstEval.Item(expr.decl.value, expr.type);
@@ -4752,7 +4909,8 @@ function constEvalItem(expr) {
         const inner = expr.operand;
         if (inner instanceof AST.EArrow || inner instanceof AST.EMember) {
           const base = constEvalItem(inner.base);
-          if (base !== null) return new ConstEval.Item(base.value + BigInt(inner.memberDecl.byteOffset), expr.type);
+          if (base !== null && !ConstEval.isFloatItem(base))
+            return new ConstEval.Item(base.value + BigInt(inner.memberDecl.byteOffset), expr.type);
         }
         return null;
       }
@@ -4760,20 +4918,18 @@ function constEvalItem(expr) {
       if (a === null) return null;
       return ConstEval.unary(expr.op, a);
     }
-    case AST.EImplicitCast: {
+    // Casts go through ConstEval.convert — the single implementation of
+    // C11 6.3.1 constant conversions (int↔float, f32 rounding, _Bool).
+    case AST.EImplicitCast:
+    case AST.ECast: {
       const inner = constEvalItem(expr.expr);
       if (inner === null) return null;
-      return new ConstEval.Item(inner.value, expr.type);
+      return ConstEval.convert(inner, expr.type);
     }
     case AST.ETernary: {
       const c = constEvalItem(expr.condition);
       if (c === null) return null;
-      return constEvalItem(c.value !== 0n ? expr.thenExpr : expr.elseExpr);
-    }
-    case AST.ECast: {
-      const inner = constEvalItem(expr.expr);
-      if (inner === null) return null;
-      return new ConstEval.Item(inner.value, expr.type);
+      return constEvalItem(ConstEval.isTruthy(c) ? expr.thenExpr : expr.elseExpr);
     }
     case AST.ESizeofExpr: return new ConstEval.Item(BigInt(expr.expr.type.size), Types.TUINT);
     case AST.ESizeofType: return new ConstEval.Item(BigInt(expr.operandType.size), Types.TUINT);
@@ -4783,9 +4939,12 @@ function constEvalItem(expr) {
   }
 }
 
+// Integer-only view of constEvalItem: floating results are NOT integer
+// constant expressions, so they yield null here (callers want array sizes,
+// case labels, enum values — a float reaching them is a caller bug).
 function constEvalInt(expr) {
   const item = constEvalItem(expr);
-  return item !== null ? item.value : null;
+  return item !== null && !ConstEval.isFloatItem(item) ? item.value : null;
 }
 
 // ====================
@@ -4819,6 +4978,20 @@ const INLINER = (() => {
 // is OK iff this is true AND the operands are themselves pure.
 function isPureBinop(op) {
   return !AST.BinOp[op].isAssign;
+}
+
+// Materialize a ConstEval result as a literal node of `type` (converting
+// per C11 6.3.1 on the way), or null when it doesn't fold to a literal.
+// One materializer for every fold site so integer results always become a
+// width-truncated EInt and floating results a precision-correct EFloat —
+// float-typed values must never be rebuilt through integer arithmetic.
+function materializeConst(loc, type, item) {
+  const conv = ConstEval.convert(item, type);
+  if (conv === null) return null;
+  if (ConstEval.isFloatItem(conv)) {
+    return type.isFloatingPoint() ? new AST.EFloat(loc, type, conv.fval) : null;
+  }
+  return type.isInteger() ? new AST.EInt(loc, type, conv.value) : null;
 }
 
 // Evaluate a pure integer binary op on BigInt operands. Returns the
@@ -4855,10 +5028,11 @@ function foldExpr(expr) {
           : new AST.EUnary(expr.loc, expr.type, op, operand);
       }
       const a = constEvalItem(operand);
-      if (a !== null && expr.type.isInteger()) {
+      if (a !== null) {
         const r = ConstEval.unary(op, a);
         if (r !== null) {
-          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r.value, expr.type));
+          const lit = materializeConst(expr.loc, expr.type, r);
+          if (lit !== null) return lit;
         }
       }
       return operand === expr.operand ? expr
@@ -4874,13 +5048,14 @@ function foldExpr(expr) {
           : new AST.EBinary(expr.loc, expr.type, op, left, right);
       }
       const li = constEvalItem(left);
-      if (op === "LAND" && li !== null && li.value === 0n) return new AST.EInt(expr.loc, expr.type, 0n);
-      if (op === "LOR"  && li !== null && li.value !== 0n) return new AST.EInt(expr.loc, expr.type, 1n);
+      if (op === "LAND" && li !== null && !ConstEval.isTruthy(li)) return new AST.EInt(expr.loc, expr.type, 0n);
+      if (op === "LOR"  && li !== null && ConstEval.isTruthy(li)) return new AST.EInt(expr.loc, expr.type, 1n);
       const ri = constEvalItem(right);
-      if (li !== null && ri !== null && expr.type.isInteger()) {
+      if (li !== null && ri !== null) {
         const r = ConstEval.binary(op, li, ri);
         if (r !== null) {
-          return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(r.value, expr.type));
+          const lit = materializeConst(expr.loc, expr.type, r);
+          if (lit !== null) return lit;
         }
       }
       return (left === expr.left && right === expr.right) ? expr
@@ -4889,12 +5064,12 @@ function foldExpr(expr) {
 
     case AST.ETernary: {
       const cond = foldExpr(expr.condition);
-      const cv = constEvalInt(cond);
-      if (cv !== null) {
+      const ci = constEvalItem(cond);
+      if (ci !== null) {
         // Pick the live branch; fold and return it directly (its type
         // matches expr.type by the parser's ternary type computation,
         // possibly via an EImplicitCast wrapper).
-        return foldExpr(cv !== 0n ? expr.thenExpr : expr.elseExpr);
+        return foldExpr(ConstEval.isTruthy(ci) ? expr.thenExpr : expr.elseExpr);
       }
       const thenE = foldExpr(expr.thenExpr);
       const elseE = foldExpr(expr.elseExpr);
@@ -4941,8 +5116,12 @@ function foldExpr(expr) {
     case AST.ECast: {
       const inner = foldExpr(expr.expr);
       const a = constEvalItem(inner);
-      if (a !== null && expr.targetType.isInteger()) {
-        return new AST.EInt(expr.loc, expr.targetType, Types.truncateConstInt(a.value, expr.targetType));
+      if (a !== null) {
+        // materializeConst routes through ConstEval.convert, so folding a
+        // cast applies the real conversion (f32 rounding, float→int
+        // truncation, _Bool != 0) instead of reinterpreting the raw value.
+        const lit = materializeConst(expr.loc, expr.targetType, a);
+        if (lit !== null) return lit;
       }
       return inner === expr.expr ? expr
         : new AST.ECast(expr.loc, expr.type, expr.targetType, inner);
@@ -4951,8 +5130,9 @@ function foldExpr(expr) {
     case AST.EImplicitCast: {
       const inner = foldExpr(expr.expr);
       const a = constEvalItem(inner);
-      if (a !== null && expr.type.isInteger()) {
-        return new AST.EInt(expr.loc, expr.type, Types.truncateConstInt(a.value, expr.type));
+      if (a !== null) {
+        const lit = materializeConst(expr.loc, expr.type, a);
+        if (lit !== null) return lit;
       }
       return inner === expr.expr ? expr
         : new AST.EImplicitCast(expr.loc, expr.type, inner);
@@ -13640,11 +13820,11 @@ function constEvalExpr(expr, policy) {
       if (!v) return null;
       if (expr.op === "OP_POS") return v;
       if (expr.op === "OP_NEG") {
-        if (v.kind === "int") return { kind: "int", intVal: -v.intVal };
+        if (v.kind === "int") return { kind: "int", intVal: Types.truncateConstInt(-v.intVal, expr.type) };
         if (v.kind === "float") return { kind: "float", floatVal: -v.floatVal };
       }
       if (expr.op === "OP_BNOT") {
-        if (v.kind === "int") return { kind: "int", intVal: ~v.intVal };
+        if (v.kind === "int") return { kind: "int", intVal: Types.truncateConstInt(~v.intVal, expr.type) };
       }
       if (expr.op === "OP_LNOT") {
         if (v.kind === "int") return { kind: "int", intVal: v.intVal === 0n ? 1n : 0n };
@@ -13696,8 +13876,10 @@ function constEvalExpr(expr, policy) {
           case "BAND": result = lv & rv; break;
           case "BOR": result = lv | rv; break;
           case "BXOR": result = lv ^ rv; break;
-          case "SHL": result = lv << rv; break;
-          case "SHR": result = lv >> rv; break;
+          // Out-of-range shift counts are UB and would blow up BigInt —
+          // decline to fold and let runtime semantics stand.
+          case "SHL": result = (rv < 0n || rv >= 64n) ? null : lv << rv; break;
+          case "SHR": result = (rv < 0n || rv >= 64n) ? null : lv >> rv; break;
           case "EQ": result = lv === rv ? 1n : 0n; break;
           case "NE": result = lv !== rv ? 1n : 0n; break;
           case "LT": result = lv < rv ? 1n : 0n; break;
@@ -13707,16 +13889,21 @@ function constEvalExpr(expr, policy) {
           default: return null;
         }
         if (result === null) return null;
-        return { kind: "int", intVal: result };
+        // Wrap to the expression's C type so every intermediate agrees
+        // with runtime arithmetic (no-op for pointer-typed expressions).
+        return { kind: "int", intVal: Types.truncateConstInt(result, expr.type) };
       }
       if (!hasAddr && hasFloat) {
         const lv = l.kind === "float" ? l.floatVal : Number(l.intVal);
         const rv = r.kind === "float" ? r.floatVal : Number(r.intVal);
+        // f32-typed arithmetic must round each operation to f32, exactly
+        // like the runtime's f32 instructions.
+        const round = expr.type.removeQualifiers() === Types.TFLOAT ? Math.fround : (x) => x;
         switch (expr.op) {
-          case "ADD": return { kind: "float", floatVal: lv + rv };
-          case "SUB": return { kind: "float", floatVal: lv - rv };
-          case "MUL": return { kind: "float", floatVal: lv * rv };
-          case "DIV": return { kind: "float", floatVal: lv / rv }; // IEEE 754: div by zero = infinity
+          case "ADD": return { kind: "float", floatVal: round(lv + rv) };
+          case "SUB": return { kind: "float", floatVal: round(lv - rv) };
+          case "MUL": return { kind: "float", floatVal: round(lv * rv) };
+          case "DIV": return { kind: "float", floatVal: round(lv / rv) }; // IEEE 754: div by zero = infinity
           case "EQ": return { kind: "int", intVal: lv === rv ? 1n : 0n };
           case "NE": return { kind: "int", intVal: lv !== rv ? 1n : 0n };
           case "LT": return { kind: "int", intVal: lv < rv ? 1n : 0n };
@@ -13775,14 +13962,28 @@ function constEvalExpr(expr, policy) {
       const v = constEvalExpr(expr.expr, policy);
       if (!v) return null;
       const t = expr.type.removeQualifiers();
-      if ((t === Types.TFLOAT || t === Types.TDOUBLE) && v.kind === "int") {
-        return { kind: "float", floatVal: Number(v.intVal) };
+      // Scalar conversions follow C11 6.3.1, matching the front end's
+      // ConstEval.convert exactly: _Bool tests != 0 before truncating,
+      // (float) re-rounds to f32, (long double) is a real conversion,
+      // float→int saturates like the wasm runtime's trunc_sat. These items
+      // carry no C type, but their BigInt/number values are already in
+      // correct signed magnitude, so value-based conversion is exact.
+      if (t === Types.TBOOL) {
+        const truthy = v.kind === "int" ? v.intVal !== 0n
+                     : v.kind === "float" ? v.floatVal !== 0 : null;
+        if (truthy === null) return v; // addr → bool: leave for the caller
+        return { kind: "int", intVal: truthy ? 1n : 0n };
       }
-      if (t.isInteger() && v.kind === "float") {
-        return { kind: "int", intVal: Types.truncateConstInt(BigInt(Math.trunc(v.floatVal)), t) };
+      if (t.isFloatingPoint() && (v.kind === "int" || v.kind === "float")) {
+        let x = v.kind === "int" ? Number(v.intVal) : v.floatVal;
+        if (t === Types.TFLOAT) x = Math.fround(x);
+        return { kind: "float", floatVal: x };
       }
       if ((t.isInteger() || t.isPointer()) && v.kind === "int") {
         return { kind: "int", intVal: Types.truncateConstInt(v.intVal, t) };
+      }
+      if (t.isInteger() && v.kind === "float") {
+        return { kind: "int", intVal: ConstEval.saturatingTruncToInt(v.floatVal, t) };
       }
       return v;
     }
@@ -14009,12 +14210,13 @@ class CodeGenerator {
   // --- Write scalar to static data ---
   writeConstValueToStatic(offset, type, val) {
     const ut = type.removeQualifiers();
-    if ((ut === Types.TFLOAT || ut === Types.TDOUBLE) && val.kind === "int") {
+    if (ut.isFloatingPoint() && val.kind === "int") {
       val = { kind: "float", floatVal: Number(val.intVal) };
-    } else if ((ut === Types.TINT || ut === Types.TUINT || ut === Types.TLONG || ut === Types.TULONG ||
-                ut === Types.TSHORT || ut === Types.TUSHORT || ut === Types.TCHAR || ut === Types.TUCHAR ||
-                ut === Types.TLLONG || ut === Types.TULLONG) && val.kind === "float") {
-      val = { kind: "int", intVal: BigInt(Math.trunc(val.floatVal)) };
+    } else if (ut.isInteger() && ut !== Types.TBOOL && val.kind === "float") {
+      // Match runtime trunc_sat semantics (see ConstEval.convert).
+      val = { kind: "int", intVal: ConstEval.saturatingTruncToInt(val.floatVal, ut) };
+    } else if (ut === Types.TBOOL && val.kind === "float") {
+      val = { kind: "int", intVal: val.floatVal !== 0 ? 1n : 0n };
     }
     const size = this.sizeOf(type);
     if (val.kind === "int") {
@@ -14135,15 +14337,19 @@ class CodeGenerator {
             if (member.bitWidth >= 0) {
               const val = this._constEvalExpr(elem);
               if (val) {
-                const bw = member.bitWidth;
-                const bo = member.bitOffset;
+                // Whole read-modify-write in BigInt: JS Number shifts are
+                // mod-32, which zeroed width-32 fields and scrambled 8-byte
+                // storage units. BigInt keeps 64-bit units and bw == 32/64
+                // masks exact. (The runtime store path already does this.)
+                const bw = BigInt(member.bitWidth);
+                const bo = BigInt(member.bitOffset);
                 const unitSize = this.sizeOf(member.type);
-                const mask = (1 << bw) - 1;
-                const bits = (Number(val.intVal) & mask);
-                let unit = 0;
-                for (let b = 0; b < unitSize; b++) unit |= this.staticData[fieldOffset + b] << (b * 8);
+                const mask = (1n << bw) - 1n;
+                const bits = BigInt.asUintN(64, val.intVal) & mask;
+                let unit = 0n;
+                for (let b = 0; b < unitSize; b++) unit |= BigInt(this.staticData[fieldOffset + b]) << BigInt(b * 8);
                 unit = (unit & ~(mask << bo)) | (bits << bo);
-                for (let b = 0; b < unitSize; b++) this.staticData[fieldOffset + b] = (unit >>> (b * 8)) & 0xFF;
+                for (let b = 0; b < unitSize; b++) this.staticData[fieldOffset + b] = Number((unit >> BigInt(b * 8)) & 0xFFn);
               }
               else if (this._staticInitErrSink && elem) this._staticInitErrSink.push({ loc: elem.loc });
             } else if (elem instanceof AST.EInitList) {
@@ -16921,9 +17127,14 @@ function generateCode(units, outputFile, options) {
         if (val && (val.kind === "int" || val.kind === "float" || val.kind === "addr")) {
           const numVal = val.kind === "int" ? Number(val.intVal) :
                          val.kind === "float" ? val.floatVal : val.addrVal;
+          // i64 globals must take the BigInt directly — routing a 64-bit
+          // constant through a JS double loses bits above 2^53.
+          const i64Val = val.kind === "int" ? BigInt.asIntN(64, val.intVal) :
+                         val.kind === "float" ? ConstEval.saturatingTruncToInt(val.floatVal, Types.TLLONG) :
+                         BigInt(val.addrVal);
           if (wtEquals(wt, WT_F32)) globalIdx = wmod.addGlobalF32(numVal, true);
           else if (wtEquals(wt, WT_F64)) globalIdx = wmod.addGlobalF64(numVal, true);
-          else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(BigInt(Math.trunc(numVal)), true);
+          else if (wtEquals(wt, WT_I64)) globalIdx = wmod.addGlobalI64(i64Val, true);
           else globalIdx = wmod.addGlobalI32(numVal | 0, true);
         } else {
           // Non-constant initializer for a static-storage scalar (e.g. a
