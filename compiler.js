@@ -2779,14 +2779,24 @@ function functionType(retType, paramTypes, isVarArg, hasUnspecifiedParams = fals
   return t;
 }
 
-// Tag type cache: tagKind+name -> TagType
-function getOrCreateTagType(tagTypeCache, tagKind, name) {
-  const key = tagKind + ":" + name;
-  if (tagTypeCache.has(key)) return tagTypeCache.get(key);
+// Create a fresh (incomplete) tag type. Each *definition* of a tag is a
+// distinct type (C11 6.7.2.3p5) — definitions must NOT share objects
+// through the name cache below, or an inner-scope `struct S {...}` would
+// overwrite the file-scope `struct S`'s layout in place.
+function createTagType(tagKind, name) {
   const isEnum = tagKind === TagKind.ENUM;
   const size = isEnum ? 4 : 0;
   const align = isEnum ? 4 : 0;
-  const t = new TagType(tagKind, name, size, align);
+  return new TagType(tagKind, name, size, align);
+}
+
+// Tag type cache: tagKind+name -> TagType. Used only for *references* to
+// not-yet-declared tags, so repeated `struct S *` mentions resolve to one
+// incomplete type object.
+function getOrCreateTagType(tagTypeCache, tagKind, name) {
+  const key = tagKind + ":" + name;
+  if (tagTypeCache.has(key)) return tagTypeCache.get(key);
+  const t = createTagType(tagKind, name);
   tagTypeCache.set(key, t);
   return t;
 }
@@ -3006,7 +3016,7 @@ return {
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
   TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
   TDIVERGENT,
-  arrayOf, functionType, getOrCreateTagType,
+  arrayOf, functionType, getOrCreateTagType, createTagType,
   getOrCreateGCStructType, gcArrayOf, validateNoHeapInValueType,
   computeStructLayout, computeUnionLayout, computeUnaryType,
   usualArithmeticConversions, truncateConstInt,
@@ -3302,6 +3312,9 @@ class Scope {
   getInCurrentScope(name) {
     return this.stack[this.stack.length - 1].get(name);
   }
+  replaceInCurrentScope(name, value) {
+    this.stack[this.stack.length - 1].set(name, value);
+  }
   getLevel(name) {
     for (let i = this.stack.length - 1; i >= 0; i--) {
       if (this.stack[i].has(name)) return i;
@@ -3539,9 +3552,13 @@ class Expr {
     }
   }
   class DEnumConst extends Decl {
-    constructor(loc, name, value) {
+    constructor(loc, name, value, type) {
       super();
       this.loc = loc; this.name = name; this.value = value;
+      // int normally; unsigned int for values in (INT_MAX, UINT_MAX] —
+      // the gcc/clang extension this project follows (see the repo's
+      // unsigned_consteval test). Keeps bit-31 flag enums positive.
+      this.type = type || Types.TINT;
       Object.seal(this);
     }
   }
@@ -4534,8 +4551,13 @@ function makeBinary(loc, op, left, right) {
                         rightType.removeQualifiers().isRef();
     const involvesPtr = leftType.isPointer() || rightType.isPointer();
     if (!isPtrArith && !involvesRef && !(meta.isCompare && involvesPtr)) {
+      // Comparisons convert operands at the common type of the PROMOTED
+      // operands (C11 6.5.8p3) — bitfield promotion included: an
+      // `unsigned bf:3` promotes to (signed) int since its values fit,
+      // so `bf > -1` is a signed compare. Using the raw member types
+      // here used to make it unsigned.
       const opType = meta.isCompare
-        ? Types.usualArithmeticConversions(leftType, rightType)
+        ? Types.usualArithmeticConversions(promoteExprType(left), promoteExprType(right))
         : resType;
       left = maybeImplicitCast(left, opType);
       right = maybeImplicitCast(right, opType);
@@ -4795,7 +4817,7 @@ function makeIdent(loc, name, scope) {
   const decl = scope.get(name);
   if (decl instanceof DVar)       return new EIdent(loc, decl.type, decl);
   if (decl instanceof DFunc)      return new EIdent(loc, decl.type, decl);
-  if (decl instanceof DEnumConst) return new EIdent(loc, Types.TINT, decl);
+  if (decl instanceof DEnumConst) return new EIdent(loc, decl.type, decl);
   reportError(loc, `Undeclared identifier '${name}'`);
   return new EIdent(loc, Types.TDIVERGENT, _placeholderDVar(loc, name));
 }
@@ -8556,10 +8578,18 @@ function linkTranslationUnits(units, compilerOptions) {
     if (!isDefinition(decl) || isImportFunction(decl)) return;
 
     if (isDefinition(existing)) {
-      // Allow duplicate definitions for inline functions
-      if (decl instanceof AST.DFunc && decl.isInline &&
-          existing instanceof AST.DFunc && existing.isInline) {
-        return;
+      // Inline semantics (C11 6.7.4p7): an inline definition does not
+      // provide the external definition, so besides inline+inline being
+      // fine, an inline definition may coexist with ONE non-inline
+      // (external) definition from another TU — and the external one is
+      // THE definition of the symbol.
+      if (decl instanceof AST.DFunc && existing instanceof AST.DFunc &&
+          (decl.isInline || existing.isInline)) {
+        if (existing.isInline && !decl.isInline) {
+          scope.set(name, decl); // external definition supersedes inline
+          return;
+        }
+        return; // inline+inline, or existing external + new inline
       }
       // C11 6.9.2: tentative definitions merge. Two tentatives → same
       // object; a later definition with an initializer supersedes any
@@ -8691,8 +8721,15 @@ function normalizeInitList(initList, containerType) {
     // character/integer type (char[] from "..", wchar[] from L"..").
     if (!abt.isAggregate() && !abt.isPointer() && !abt.isArray() &&
         abt.size === sbt.size) {
-      const arrType = (containerType.arraySize || 0) === 0
-        ? Types.arrayOf(containerType.baseType, initList.elements[0].type.arraySize)
+      // C11 6.7.9p14: the string may exceed the array only by its NUL.
+      const fixedSize = containerType.arraySize || 0;
+      const strSize = initList.elements[0].type.arraySize; // includes the NUL
+      if (fixedSize > 0 && strSize - 1 > fixedSize) {
+        reportError(initList.loc,
+          `initializer string (${strSize - 1} chars) is too long for '${containerType.toString()}'`);
+      }
+      const arrType = fixedSize === 0
+        ? Types.arrayOf(containerType.baseType, strSize)
         : containerType;
       return new AST.EInitList(initList.loc, arrType, initList.elements.slice(),
                                initList.designators.slice(), initList.unionMemberIndex);
@@ -8811,6 +8848,7 @@ function normalizeInitList(initList, containerType) {
       stack.length = 0;
       stack.push({ type: containerType, index: 0, count: rootCount, output: initList });
 
+      let desigError = false;
       for (let si = 0; si < steps.length; si++) {
         const step = steps[si];
         const top = stack[stack.length - 1];
@@ -8820,39 +8858,37 @@ function normalizeInitList(initList, containerType) {
           if (!top.type.isTag() || !top.type.tagDecl) break;
           const tag = top.type.tagDecl;
 
-          if (tag.tagKind === Types.TagKind.UNION) {
-            const members = getVarMembers(tag);
+          // One path for structs AND unions: findMemberChain sees through
+          // anonymous struct/union members, and the per-level loop below
+          // already sets unionMemberIndex when a level is a union. (Unions
+          // used to scan only direct members — `.b = 42` naming a member
+          // of an anonymous struct inside a union silently landed on
+          // member 0.)
+          const chain = findMemberChain(tag, step.fieldName);
+          if (!chain) {
+            reportError(initList.loc,
+              `designator '.${step.fieldName}' names no member of '${top.type.toString()}'`);
+            desigError = true;
+            break;
+          }
+          for (let ci = 0; ci < chain.length; ci++) {
+            const member = chain[ci];
+            let currentTag = stack[stack.length - 1].type.tagDecl;
+            const members = getVarMembers(currentTag);
             for (let j = 0; j < members.length; j++) {
-              if (members[j].name === step.fieldName) {
-                top.output.unionMemberIndex = j;
-                top.index = 0;
+              if (members[j] === member) {
+                if (currentTag.tagKind === Types.TagKind.UNION) {
+                  stack[stack.length - 1].output.unionMemberIndex = j;
+                  stack[stack.length - 1].index = 0;
+                } else {
+                  stack[stack.length - 1].index = j;
+                }
                 break;
               }
             }
-          } else {
-            // Struct: use findMemberChain for anonymous member support
-            const chain = findMemberChain(tag, step.fieldName);
-            if (chain) {
-              for (let ci = 0; ci < chain.length; ci++) {
-                const member = chain[ci];
-                let currentTag = stack[stack.length - 1].type.tagDecl;
-                const members = getVarMembers(currentTag);
-                for (let j = 0; j < members.length; j++) {
-                  if (members[j] === member) {
-                    if (currentTag.tagKind === Types.TagKind.UNION) {
-                      stack[stack.length - 1].output.unionMemberIndex = j;
-                      stack[stack.length - 1].index = 0;
-                    } else {
-                      stack[stack.length - 1].index = j;
-                    }
-                    break;
-                  }
-                }
-                // If not the final member in chain, descend into anonymous aggregate
-                if (ci < chain.length - 1) {
-                  descend();
-                }
-              }
+            // If not the final member in chain, descend into anonymous aggregate
+            if (ci < chain.length - 1) {
+              descend();
             }
           }
         } else {
@@ -8860,7 +8896,17 @@ function normalizeInitList(initList, containerType) {
           if (!top.type.isArray()) break;
           const val = constEvalInt(step.indexExpr);
           if (val !== null) {
-            top.index = Number(val);
+            const idx = Number(val);
+            const bound = top.type.arraySize || 0;
+            if (val < 0n || (bound > 0 && idx >= bound)) {
+              // C11 6.7.9p3 constraint — accepting this used to write past
+              // the object and corrupt neighboring memory at runtime.
+              reportError(initList.loc,
+                `array designator index ${val} is out of bounds for '${top.type.toString()}'`);
+              desigError = true;
+              break;
+            }
+            top.index = idx;
             ensureSlot(top.output, top.index);
           }
         }
@@ -8870,6 +8916,7 @@ function normalizeInitList(initList, containerType) {
           descend();
         }
       }
+      if (desigError) { srcIdx++; continue; } // skip the element; error already reported
     }
 
     if (stack.length === 0) break;
@@ -8879,20 +8926,49 @@ function normalizeInitList(initList, containerType) {
       const top = stack[stack.length - 1];
       ensureSlot(top.output, top.index);
       const slotType = childType(top.type, top.index, top.output);
+      // The extent of an unsized ROOT array is the highest root-level slot
+      // touched — placements at nested levels advance stack[0].index only
+      // when the whole nested aggregate is consumed, so read the extent
+      // from the root cursor, never from the innermost one. (Reading the
+      // innermost index used to inflate `struct P a[] = {1,2,3}` to three
+      // elements.)
+      const noteExtent = () => {
+        const rootIdx = stack.length > 0 ? stack[0].index : 0;
+        if (rootIdx + 1 > maxExtent) maxExtent = rootIdx + 1;
+      };
 
-      if (src[srcIdx] instanceof AST.EInitList) {
-        // Braced sub-init-list: place and recurse
+      if (src[srcIdx] instanceof AST.EInitList &&
+          (slotType.isAggregate() || slotType.isArray())) {
+        // Braced sub-init-list at an aggregate slot: place and recurse
         top.output.elements[top.index] = src[srcIdx];
         top.output.elements[top.index] = normalizeInitList(top.output.elements[top.index], slotType);
         srcIdx++;
-        if (top.index + 1 > maxExtent) maxExtent = top.index + 1;
+        noteExtent();
+        advanceCursor();
+        break;
+      } else if (src[srcIdx] instanceof AST.EInitList) {
+        // C11 6.7.9p11: a SCALAR's initializer may be brace-enclosed —
+        // unwrap to the single expression. (Leaving the EInitList wrapper
+        // on a scalar slot used to make codegen emit 0.)
+        let inner = src[srcIdx];
+        while (inner instanceof AST.EInitList && inner.elements.length > 0) {
+          if (inner.elements.length > 1) {
+            reportError(inner.loc, `excess elements in scalar initializer`);
+            break;
+          }
+          inner = inner.elements[0];
+        }
+        top.output.elements[top.index] =
+          inner instanceof AST.EInitList ? makeZero(slotType) : inner; // {} → zero
+        srcIdx++;
+        noteExtent();
         advanceCursor();
         break;
       } else if (src[srcIdx] instanceof AST.EString && slotType.isArray()) {
         // String literal for char array
         top.output.elements[top.index] = src[srcIdx];
         srcIdx++;
-        if (top.index + 1 > maxExtent) maxExtent = top.index + 1;
+        noteExtent();
         advanceCursor();
         break;
       } else if (slotType.isAggregate() &&
@@ -8900,7 +8976,7 @@ function normalizeInitList(initList, containerType) {
         // Aggregate expression matching slot type: place directly
         top.output.elements[top.index] = src[srcIdx];
         srcIdx++;
-        if (top.index + 1 > maxExtent) maxExtent = top.index + 1;
+        noteExtent();
         advanceCursor();
         break;
       } else if (slotType.isAggregate()) {
@@ -8911,11 +8987,18 @@ function normalizeInitList(initList, containerType) {
         // Scalar at scalar slot
         top.output.elements[top.index] = src[srcIdx];
         srcIdx++;
-        if (top.index + 1 > maxExtent) maxExtent = top.index + 1;
+        noteExtent();
         advanceCursor();
         break;
       }
     }
+  }
+
+  // Anything left in src after the cursor ran off the end of a fixed-size
+  // object is a constraint violation (C11 6.7.9p2) — it used to be
+  // silently dropped.
+  if (srcIdx < src.length) {
+    reportError(initList.loc, `excess elements in initializer for '${containerType.toString()}'`);
   }
 
   // For unsized arrays, finalize type based on actual extent.
@@ -9440,9 +9523,29 @@ class Parser {
     }
 
     if (this.matchText("{")) {
-      // Tag body definition
+      // Tag body definition. Each definition declares a DISTINCT type in
+      // the current scope (C11 6.7.2.3p5): an inner-scope `struct S {...}`
+      // shadows — never mutates — an outer `struct S`. The only object we
+      // may complete in place is a forward declaration made in THIS scope
+      // (so `struct S; struct S *p; struct S {...};` keeps one identity).
       if (!name) name = "__anon_" + this.anonCounter++;
-      const tagType = Types.getOrCreateTagType(this.tagTypeCache, tagKind, name);
+      let tagType;
+      const existing = this.tagScope.getInCurrentScope(name);
+      if (existing !== undefined && existing.tagKind === tagKind && !existing.isComplete) {
+        tagType = existing; // complete the same-scope forward declaration
+      } else {
+        if (existing !== undefined) {
+          this.recoverableError(this.peek(),
+            existing.tagKind === tagKind
+              ? `redefinition of '${tagKind === Types.TagKind.STRUCT ? "struct" : "union"} ${name}'`
+              : `'${name}' defined as wrong kind of tag`);
+        }
+        tagType = Types.createTagType(tagKind, name);
+        // Bind before parsing members so `struct S { struct S *next; }`
+        // resolves the self-reference to this definition.
+        if (existing !== undefined) this.tagScope.replaceInCurrentScope(name, tagType);
+        else this.tagScope.set(name, tagType);
+      }
       const members = [];
 
       // Create tag decl
@@ -9464,7 +9567,9 @@ class Parser {
           this.expect(")");
           this.expect(";");
           const val = constEvalInt(condExpr);
-          if (val === 0) this.recoverableError(this.peek(-1) || this.peek(), `_Static_assert failed: ${msg}`);
+          // constEvalInt returns a BigInt — compare against 0n (a bare 0
+          // here silently disabled every in-struct _Static_assert).
+          if (val === 0n) this.recoverableError(this.peek(-1) || this.peek(), `_Static_assert failed: ${msg}`);
           continue;
         }
         const memSpecs = this.parseDeclSpecifiers();
@@ -9617,8 +9722,7 @@ class Parser {
       if (tagType._constVariant) propagate(tagType._constVariant._volatileVariant);
       if (tagType._volatileVariant) propagate(tagType._volatileVariant._constVariant);
 
-      this.tagScope.set(name, tagType);
-
+      // (already bound into tagScope before member parsing)
       return tagType;
     }
 
@@ -9765,21 +9869,52 @@ class Parser {
 
     if (this.matchText("{")) {
       if (!name) name = "__anon_" + this.anonCounter++;
-      const tagType = Types.getOrCreateTagType(this.tagTypeCache, Types.TagKind.ENUM, name);
+      // Same scoping rule as struct/union definitions (C11 6.7.2.3p5): a
+      // definition declares a distinct type in the current scope; only a
+      // same-scope forward reference may be completed in place.
+      let tagType;
+      const existing = this.tagScope.getInCurrentScope(name);
+      if (existing !== undefined && existing.tagKind === Types.TagKind.ENUM && !existing.tagDecl) {
+        tagType = existing;
+      } else {
+        if (existing !== undefined) {
+          this.recoverableError(this.peek(),
+            existing.tagKind === Types.TagKind.ENUM
+              ? `redefinition of 'enum ${name}'`
+              : `'${name}' defined as wrong kind of tag`);
+        }
+        tagType = Types.createTagType(Types.TagKind.ENUM, name);
+        if (existing !== undefined) this.tagScope.replaceInCurrentScope(name, tagType);
+        else this.tagScope.set(name, tagType);
+      }
       tagType.size = 4; tagType.align = 4; tagType.isComplete = true;
       const tagDecl = new AST.DTag({ filename: this.peek().filename, line: this.peek().line },
         Types.TagKind.ENUM, name, true, []);
 
       let nextVal = 0n;
       while (!this.atEnd() && !this.atText("}")) {
-        const eName = this.expectKind(Lexer.TokenKind.IDENT).text;
+        const eNameTok = this.expectKind(Lexer.TokenKind.IDENT);
+        const eName = eNameTok.text;
         let val = nextVal;
         if (this.matchText("=")) {
           const valExpr = this.parseAssignmentExpression();
           val = constEvalInt(valExpr) ?? nextVal;
         }
+        // C11 6.7.2.2p2 wants each enumerator representable as int; this
+        // project follows the gcc/clang extension where values up to
+        // UINT_MAX get type unsigned int (silently wrapping them to a
+        // NEGATIVE int was the bug — it flipped bit-31 flag enums).
+        // Anything outside 32 bits is diagnosed.
+        let ecType = Types.TINT;
+        if (val > 2147483647n && val <= 4294967295n) {
+          ecType = Types.TUINT;
+        } else if (val < -2147483648n || val > 4294967295n) {
+          this.recoverableError(eNameTok,
+            `enumerator '${eName}' value ${val} does not fit in 32 bits`);
+          val = Types.truncateConstInt(val, Types.TINT); // keep parsing coherently
+        }
         nextVal = val + 1n;
-        const ec = new AST.DEnumConst({ filename: this.peek().filename, line: this.peek().line }, eName, val);
+        const ec = new AST.DEnumConst({ filename: this.peek().filename, line: this.peek().line }, eName, val, ecType);
         tagDecl.members.push(ec);
         // Register enum constant in varScope
         this.varScope.set(eName, ec);
@@ -9787,7 +9922,6 @@ class Parser {
       }
       this.expect("}");
       tagType.tagDecl = tagDecl;
-      this.tagScope.set(name, tagType);
       return tagType;
     }
 
@@ -10013,6 +10147,26 @@ class Parser {
           }
           this.expect(")");
           if (sType.removeQualifiers().isRef()) this.error(this.peek(-1), `sizeof(${sType.removeQualifiers().toString()}) is not allowed`);
+          if (this.atText("{")) {
+            // `sizeof (T){...}` — the operand is a compound-literal
+            // postfix-expression (C11 6.5.3 grammar), not a parenthesized
+            // type name. Build it exactly like the cast-expression path.
+            let litType = sType;
+            let initList = this.parseInitList(litType);
+            if (litType.isArray() && litType.arraySize === 0 &&
+                initList.elements.length === 1 && initList.elements[0] instanceof AST.EString) {
+              litType = initList.elements[0].type;
+              initList = new AST.EInitList(initList.loc, litType,
+                initList.elements, initList.designators, initList.unionMemberIndex);
+            } else if (litType.isArray() && litType.arraySize === 0) {
+              initList = normalizeInitList(initList, litType);
+              litType = initList.type;
+            } else if (litType.isAggregate()) {
+              initList = normalizeInitList(initList, litType);
+            }
+            const lit = new AST.ECompoundLiteral(sizeofLoc, litType, initList);
+            return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, lit);
+          }
           return new AST.ESizeofType(sizeofLoc, Types.TULONG, sType);
         }
         const expr = this.parseExpression();
@@ -10570,7 +10724,12 @@ class Parser {
           }
           this.expect(":");
           const gExpr = this.parseAssignmentExpression();
-          if (controlExpr.type.removeQualifiers() === gType.removeQualifiers()) result = gExpr;
+          // C17 6.5.1.1p2 (post-DR481): the controlling expression
+          // undergoes lvalue conversion — arrays decay to element
+          // pointers, functions to function pointers, qualifiers drop.
+          let ctrlType = controlExpr.type.removeQualifiers();
+          if (ctrlType.isArray() || ctrlType.isFunction()) ctrlType = ctrlType.decay();
+          if (ctrlType.removeQualifiers() === gType.removeQualifiers()) result = gExpr;
         }
       }
       this.expect(")");
@@ -10913,7 +11072,17 @@ class Parser {
   }
 
   computeTernaryType(thenType, elseType) {
-    if (thenType === elseType) return thenType;
+    if (thenType === elseType) {
+      // Same-type arithmetic operands still undergo the usual arithmetic
+      // conversions (C11 6.5.15p5) — `1 ? c1 : c2` has type int, not char.
+      // The identity early-out is only for non-arithmetic types (pointers,
+      // aggregates, refs), where no promotion applies.
+      const uq = thenType.removeQualifiers();
+      if (uq.isInteger() || uq.isFloatingPoint()) {
+        return Types.usualArithmeticConversions(thenType, elseType);
+      }
+      return thenType;
+    }
     const tIsRef = thenType.removeQualifiers().isRef();
     const eIsRef = elseType.removeQualifiers().isRef();
     if (tIsRef && eIsRef) return thenType;
@@ -11566,6 +11735,14 @@ class Parser {
             dvar.initExpr instanceof AST.EString) {
           type = dvar.initExpr.type;
           dvar.type = type;
+        } else if (type.isArray() && (type.arraySize || 0) > 0 && dvar.initExpr &&
+                   dvar.initExpr instanceof AST.EString &&
+                   dvar.initExpr.type && dvar.initExpr.type.isArray() &&
+                   dvar.initExpr.type.arraySize - 1 > type.arraySize) {
+          // C11 6.7.9p14: the string may exceed the array only by its NUL —
+          // silently truncating used to hide real overflows.
+          this.recoverableError(eqTok,
+            `initializer string (${dvar.initExpr.type.arraySize - 1} chars) is too long for '${type.toString()}'`);
         }
         // Normalize init list
         if (dvar.initExpr && dvar.initExpr instanceof AST.EInitList) {
@@ -11882,6 +12059,14 @@ class Parser {
             dvar.initExpr instanceof AST.EString) {
           type = Types.arrayOf(type.baseType, dvar.initExpr.type.arraySize);
           dvar.type = type;
+        } else if (type.isArray() && (type.arraySize || 0) > 0 && dvar.initExpr &&
+                   dvar.initExpr instanceof AST.EString &&
+                   dvar.initExpr.type && dvar.initExpr.type.isArray() &&
+                   dvar.initExpr.type.arraySize - 1 > type.arraySize) {
+          // C11 6.7.9p14: the string may exceed the array only by its NUL —
+          // silently truncating used to hide real overflows.
+          this.recoverableError(eqTok,
+            `initializer string (${dvar.initExpr.type.arraySize - 1} chars) is too long for '${type.toString()}'`);
         }
         // Normalize init list
         if (dvar.initExpr && dvar.initExpr instanceof AST.EInitList) {
@@ -20658,7 +20843,8 @@ int flsll(long long x);
 #define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-struct timespec;  // forward; defined in <time.h>
+#include <time.h>   /* struct timespec (one definition; redefining it here
+                       would collide with time.h at file scope) */
 // 64-bit ABI: st_size, st_blocks and all timestamps are 64-bit so files can
 // exceed 4 GiB and times can exceed 2038/2106. Fields are grouped 32-bit-first
 // then 8-byte-aligned 64-bit, so there's no internal padding before the wide
@@ -20680,7 +20866,7 @@ struct stat {
   long long     st_atime;
   long long     st_mtime;
   long long     st_ctime;
-  struct timespec { long long tv_sec; long tv_nsec; } st_atim;
+  struct timespec st_atim;
   struct timespec st_mtim;
   struct timespec st_ctim;
 };

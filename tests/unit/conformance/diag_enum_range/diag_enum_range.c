@@ -1,5 +1,8 @@
-// BUG: an enumeration constant not representable as int (0x80000000) is silently wrapped to a negative value.
-// C11: 6.7.2.2p2 -- the expression defining an enumeration constant shall have a value representable as an int (constraint).
-// EXPECT: compiler exits 1 with a diagnostic (clang: error under -pedantic-errors, "C23 extension" otherwise).
-enum { BIG = 0x80000000 };
+// BUG: enumerator values outside 32 bits were silently wrapped.
+// C11: 6.7.2.2p2 wants int-representable values; this project follows the
+// gcc/clang extension giving (INT_MAX, UINT_MAX] values type unsigned int
+// (see parse_enum_uint_ext) -- but a value that does not fit 32 bits at
+// all must be diagnosed, not wrapped.
+// EXPECT: compile error (exit 1).
+enum { HUGE_E = 0x1FFFFFFFFll };
 int main(void) { return 0; }
