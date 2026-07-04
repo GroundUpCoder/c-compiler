@@ -215,6 +215,9 @@ class Token {
     this.floating = 0; // number for FLOAT tokens
     this.keyword = null; // Keyword value for KEYWORD tokens
     this.punct = 0; // Punct value for PUNCT tokens
+    // Blue paint (C11 6.10.3.4p2): set on an IDENT that emerged from its
+    // own macro's expansion — never eligible for macro replacement again.
+    this.noExpand = false;
     this.flags = new TokenFlags();
     Object.seal(this);
   }
@@ -912,8 +915,45 @@ const KEYWORD_MAP = new Map([
 // Tokenize (phase 1 + post-processing, without preprocessor)
 // ====================
 
+// Multiply by 2^e exactly, splitting the scale so no intermediate step
+// overflows or underflows before the final result would.
+function ldexpNumber(x, e) {
+  while (e > 1000) { x *= Math.pow(2, 1000); e -= 1000; }
+  while (e < -1000) { x *= Math.pow(2, -1000); e += 1000; }
+  return x * Math.pow(2, e);
+}
+
+// Round M * 2^E (M a non-negative BigInt) to the nearest double, ties to
+// even — the single correct rounding C11 6.4.4.2p3 requires for hex float
+// literals. Handles overflow to Infinity and gradual underflow.
+function bigIntTimesPow2ToDouble(M, E) {
+  if (M === 0n) return 0;
+  while ((M & 1n) === 0n) { M >>= 1n; E++; } // normalize; keeps M small
+  const bits = M.toString(2).length;
+  const topExp = bits - 1 + E; // floor(log2(value))
+  if (topExp > 1023) return Infinity;
+  // Normals keep 53 significand bits; subnormals lose one per exponent
+  // step below -1022.
+  const sigBits = topExp >= -1022 ? 53 : 53 - (-1022 - topExp);
+  if (sigBits <= 0) {
+    // Below (or at half of) the minimum subnormal: only a value strictly
+    // above 2^-1075 rounds up to 2^-1074; a tie rounds to even (zero).
+    return (topExp === -1075 && bits > 1) ? Math.pow(2, -1074) : 0;
+  }
+  const drop = bits - sigBits;
+  if (drop <= 0) return ldexpNumber(Number(M), E); // exact
+  const kept = M >> BigInt(drop);
+  const roundBit = (M >> BigInt(drop - 1)) & 1n;
+  const sticky = (M & ((1n << BigInt(drop - 1)) - 1n)) !== 0n;
+  const rounded = (roundBit === 1n && (sticky || (kept & 1n) === 1n)) ? kept + 1n : kept;
+  return ldexpNumber(Number(rounded), E + drop);
+}
+
 // Parse a floating-point literal, including C hex floats (0x1.8p3).
-// JS parseFloat doesn't handle hex floats, so we do it manually.
+// JS parseFloat doesn't handle hex floats, so we do it manually. The
+// mantissa is accumulated as a BigInt and rounded ONCE — parsing the
+// fraction through parseInt(.., 16) used to round twice, losing sticky
+// bits below the 53rd (hex floats exist for bit-exact constants).
 function parseHexFloat(text) {
   // Try standard parseFloat first (handles decimal floats)
   if (!(text.length >= 2 && text[0] === "0" && (text[1] === "x" || text[1] === "X"))) {
@@ -925,17 +965,15 @@ function parseHexFloat(text) {
   const mantissaStr = text.substring(2, pIdx); // after "0x"
   const expStr = text.substring(pIdx + 1);
   const exp = expStr.length > 0 ? parseInt(expStr, 10) : 0;
+  if (Number.isNaN(exp)) return NaN;
   const dotIdx = mantissaStr.indexOf(".");
-  let mantissa;
-  if (dotIdx === -1) {
-    mantissa = parseInt(mantissaStr, 16);
-  } else {
-    const intPart = mantissaStr.substring(0, dotIdx);
-    const fracPart = mantissaStr.substring(dotIdx + 1);
-    mantissa = (intPart.length > 0 ? parseInt(intPart, 16) : 0) +
-      (fracPart.length > 0 ? parseInt(fracPart, 16) / Math.pow(16, fracPart.length) : 0);
-  }
-  return mantissa * Math.pow(2, exp);
+  const digits = dotIdx === -1
+    ? mantissaStr
+    : mantissaStr.substring(0, dotIdx) + mantissaStr.substring(dotIdx + 1);
+  const fracLen = dotIdx === -1 ? 0 : mantissaStr.length - dotIdx - 1;
+  let M;
+  try { M = BigInt("0x" + (digits.length > 0 ? digits : "0")); } catch { return NaN; }
+  return bigIntTimesPow2ToDouble(M, exp - 4 * fracLen);
 }
 
 // Post-process a LexResult: strip newlines, resolve keywords, convert numbers/chars.
@@ -1118,6 +1156,11 @@ function postProcess(lexResult) {
 // point at the original source line. For sources with no splices,
 // `lineOffsets` is `null` (zero-overhead fast path).
 function spliceLines(source) {
+  // Translation phase 1: map physical line endings to '\n' — CRLF (and lone
+  // CR) sources must splice `\`-continuations and count lines identically
+  // to LF sources. Every lex path funnels through here, so this is the one
+  // normalization point.
+  if (source.indexOf("\r") !== -1) source = source.replace(/\r\n?/g, "\n");
   if (source.indexOf("\\\n") === -1) return { spliced: source, lineOffsets: null };
   let spliced = "";
   const lineOffsets = [];
@@ -1275,7 +1318,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       }
 
       // Normal expansion logic
-      if (t.kind === TokenKind.IDENT && macros.has(t.text) && !hideset.has(t.text)) {
+      if (t.kind === TokenKind.IDENT && !t.noExpand && macros.has(t.text) && !hideset.has(t.text)) {
         const m = macros.get(t.text);
         if (!m.isFunctionLike) {
           const nextHideset = new Set(hideset);
@@ -1297,7 +1340,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
           // macro's replacement list.
           while (replacement.length > 0) {
             const last = replacement[replacement.length - 1];
-            if (last.kind !== TokenKind.IDENT || !macros.has(last.text) ||
+            if (last.kind !== TokenKind.IDENT || last.noExpand || !macros.has(last.text) ||
                 !macros.get(last.text).isFunctionLike || hideset.has(last.text))
               break;
             let k = i + 1;
@@ -1345,7 +1388,13 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
               j++;
             }
-            if (currentArg.length > 0 || args.length > 0) {
+            // C11 6.10.3p4: `M()` supplies ONE argument — an empty one —
+            // whenever the macro expects any (params or variadic). Failing
+            // to record it left the parameter unmapped, so the parameter
+            // NAME survived in the expansion and could capture an in-scope
+            // variable. Only a zero-parameter macro's `()` is zero args.
+            if (currentArg.length > 0 || args.length > 0 ||
+                m.params.length > 0 || m.isVariadic) {
               args.push(currentArg);
             }
 
@@ -1535,6 +1584,14 @@ function preprocess(filename, initialTokens, ppRegistry) {
             expanded.push(t);
           }
         }
+      } else if (t.kind === TokenKind.IDENT && !t.noExpand && hideset.has(t.text) && macros.has(t.text)) {
+        // Blue paint (C11 6.10.3.4p2): this occurrence of the name came out
+        // of its own macro's expansion, so it is never replaced again — not
+        // even when a later rescan with a fresh hideset finds it followed
+        // by an argument list. Mark it permanently.
+        const painted = cloneToken(t);
+        painted.noExpand = true;
+        expanded.push(painted);
       } else {
         expanded.push(t);
       }
@@ -1722,7 +1779,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   function rescanTrailingMacros(expanded, state) {
     while (expanded.length > 0 && !state.atEnd && state.peek().atPunct(Punct.LPAREN)) {
       const last = expanded[expanded.length - 1];
-      if (last.kind !== TokenKind.IDENT || !macros.has(last.text) ||
+      if (last.kind !== TokenKind.IDENT || last.noExpand || !macros.has(last.text) ||
           !macros.get(last.text).isFunctionLike)
         break;
       const combined = [...expanded];
@@ -1784,7 +1841,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
             }
           }
           const parentActive = isActive();
-          ifStack.push({ active: parentActive && condition, anyBranchRan: condition });
+          ifStack.push({ active: parentActive && condition, anyBranchRan: condition,
+                         dirName: "#" + dir.text, file: state.currentFile, line: dir.line });
         } else if (dir.atIdent("elif")) {
           if (ifStack.length === 0) {
             result.errors.push(new LexError("#elif without #if", state.currentFile, dir.line));
@@ -1915,7 +1973,17 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   includeStack.push(includeRes.resolvedFile);
                   const toks = includeRes.lexResult.tokens;
                   const nextState = makePPState(includeRes.resolvedFile, toks, 0, toks.length);
+                  const ifDepthBefore = ifStack.length;
                   processTokens(nextState);
+                  // A conditional opened in an included file must close in
+                  // that file (C11 6.10.2). Pop leaked frames so a dangling
+                  // false branch can't swallow the rest of the includer.
+                  while (ifStack.length > ifDepthBefore) {
+                    const frame = ifStack.pop();
+                    result.errors.push(new LexError(
+                      `unterminated ${frame.dirName || "#if"} — missing #endif`,
+                      frame.file || includeRes.resolvedFile, frame.line || 0));
+                  }
                   includeStack.pop();
                 }
               }
@@ -1993,6 +2061,12 @@ function preprocess(filename, initialTokens, ppRegistry) {
           if (m.isFunctionLike) {
             const invocation = [];
             invocation.push(state.consume()); // macro name
+            // The '(' may sit on the next line — an invocation spans
+            // newlines (C11 6.10.3p10, expand() already skips them when
+            // collecting arguments). NEWLINE tokens are dropped by this
+            // loop anyway, so consuming them is behavior-neutral even
+            // when no '(' follows and the name is emitted unexpanded.
+            while (!state.atEnd && state.peek().kind === TokenKind.NEWLINE) state.consume();
             if (!state.atEnd && state.peek().atPunct(Punct.LPAREN)) {
               invocation.push(state.consume()); // '('
               let parenDepth = 1;
@@ -2029,6 +2103,15 @@ function preprocess(filename, initialTokens, ppRegistry) {
   const initialState = makePPState(filename, initialTokens, 0, initialTokens.length);
   processTokens(initialState);
 
+  // An #if left open at end of input is ill-formed (C11 6.10.1) — and worse
+  // than a syntax nit: a dangling false branch silently discards the rest of
+  // the file. Report each unmatched conditional at its opening directive.
+  for (const frame of ifStack) {
+    result.errors.push(new LexError(
+      `unterminated ${frame.dirName || "#if"} — missing #endif`,
+      frame.file || filename, frame.line || 0));
+  }
+
   result.tokens = output;
   return result;
 }
@@ -2051,6 +2134,7 @@ function cloneToken(t) {
   c.floating = t.floating;
   c.keyword = t.keyword;
   c.punct = t.punct;
+  if (t.noExpand) c.noExpand = true; // blue paint survives cloning
   c.flags = new TokenFlags();
   c.flags.atBol = t.flags.atBol;
   c.flags.hasSpace = t.flags.hasSpace;
