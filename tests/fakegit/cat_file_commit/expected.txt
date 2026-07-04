@@ -1,0 +1,19 @@
+tree 7db97e9d29e92d9665e0e7e35189f653b0ee8ac0
+parent b627c7c8b306534a40903ebf11157a26d8cae843
+author josephkimgpt <josephkimgpt@gmail.com> 1782109433 +0900
+committer josephkimgpt <josephkimgpt@gmail.com> 1782109433 +0900
+
+host/blockfs: flush to durable storage on fsync/fdatasync
+
+OPFS FileSystemSyncAccessHandle.write() does not guarantee durability
+until flush() is called â¬ acknowledged writes could be lost on a tab
+crash/kill. Add flush() to the ByteStore types (SyncAccessHandleStore
+forwards to the handle; MemoryByteStore/ReadOnlyStore are no-ops) and
+wire the fsync/fdatasync syscalls to call it, so a program explicitly
+asking for durability gets it. The store is one handle, so the flush is
+whole-image (permitted â¬ fsync may flush more than requested); cost is
+incurred only when programs ask, which is rare.
+
+fdatasync is also newly provided (declared in libc). Runtime-verified:
+fsync/fdatasync return 0 and data round-trips; full suite green.
+

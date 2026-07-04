@@ -85,7 +85,10 @@ MICROPYTHON_DIR = os.path.join(VENDOR_DIR, "micropython")
 MICROPYTHON_TEST_DIR = os.path.join(SCRIPT_DIR, "micropython")
 MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 
-ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "ext", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz"]
+FAKEGIT_DIR = os.path.join(VENDOR_DIR, "fakegit")
+FAKEGIT_TEST_DIR = os.path.join(SCRIPT_DIR, "fakegit")
+
+ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "ext", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz", "fakegit"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -1598,6 +1601,91 @@ def run_blockfs_tests(results, filter_str=None):
             results.record(test_name, False, '\n'.join(summary) if isinstance(summary, list) else summary)
 
 
+# --- fakegit tests ---
+#
+# Builds vendor/fakegit/bin.json once, then runs each tests/fakegit/<name>/
+# test. Each directory contains:
+#   args.txt     — one argument per line (the repo path is prepended automatically)
+#   expected.txt — required, exact stdout match
+
+def run_fakegit_tests(results, filter_str=None):
+    bin_json = os.path.join(FAKEGIT_DIR, "bin.json")
+    if not os.path.exists(bin_json):
+        results.record("fakegit/build", False, f"Not found: {bin_json}")
+        return
+
+    # The repo to test against
+    # We run tests against the c-compiler repo itself — it's always available
+    # and has a known state.
+    test_repo = os.path.abspath(ROOT_DIR)
+
+    # Fakegit needs a longer build timeout (libgit2 is large)
+    wasm, err = build_project(bin_json, timeout=600)
+    if wasm is None:
+        results.record("fakegit/build", False, f"Build failed:\n{err}")
+        return
+
+    if not os.path.isdir(FAKEGIT_TEST_DIR):
+        results.record("fakegit/build", False, f"Test dir not found: {FAKEGIT_TEST_DIR}")
+        return
+
+    test_dirs = sorted(
+        d for d in os.listdir(FAKEGIT_TEST_DIR)
+        if os.path.isdir(os.path.join(FAKEGIT_TEST_DIR, d))
+    )
+
+    for tdir in test_dirs:
+        test_name = f"fakegit/{tdir}"
+        if filter_str and filter_str not in test_name:
+            continue
+
+        args_file = os.path.join(FAKEGIT_TEST_DIR, tdir, "args.txt")
+        expected_file = os.path.join(FAKEGIT_TEST_DIR, tdir, "expected.txt")
+
+        if not os.path.exists(args_file):
+            results.record(test_name, False, f"Missing args.txt")
+            continue
+        if not os.path.exists(expected_file):
+            results.record(test_name, False, f"Missing expected.txt")
+            continue
+
+        with open(args_file) as f:
+            args = [line.strip() for line in f if line.strip()]
+
+        try:
+            r = subprocess.run(
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, test_repo] + args,
+                capture_output=True, timeout=60,
+            )
+            # Compare raw bytes to handle potential binary output cleanly
+            actual = r.stdout
+            with open(expected_file, "rb") as f:
+                expected = f.read()
+            if actual == expected:
+                results.record(test_name, True)
+            else:
+                msg = ""
+                if r.returncode != 0:
+                    msg += f"Exit code: {r.returncode}\n"
+                if r.stderr:
+                    stderr_str = r.stderr.decode("utf-8", errors="replace")
+                    msg += f"stderr: {stderr_str[:200]}\n"
+                # Show first diff line (decode for display)
+                alines = actual.decode("utf-8", errors="replace").split("\n")
+                elines = expected.decode("utf-8", errors="replace").split("\n")
+                msg += f"stdout lines: got {len(alines)}, expected {len(elines)}\n"
+                for i, (a, e) in enumerate(zip(alines[:10], elines[:10])):
+                    if a != e:
+                        msg += f"  L{i+1}  got: {a[:100]}\n"
+                        msg += f"  L{i+1}  exp: {e[:100]}\n"
+                        break
+                if len(actual) != len(expected):
+                    msg += f"stdout bytes: got {len(actual)}, expected {len(expected)}\n"
+                results.record(test_name, False, msg.strip())
+        except subprocess.TimeoutExpired:
+            results.record(test_name, False, "Timed out (60s)")
+
+
 # --- Main ---
 
 def main():
@@ -1710,6 +1798,10 @@ def main():
         elif cat == "sourcemap":
             results.section("sourcemap")
             run_sourcemap_tests(results, filter_str=args.filter)
+
+        elif cat == "fakegit":
+            results.section("fakegit")
+            run_fakegit_tests(results, filter_str=args.filter)
 
     results.print_summary()
     sys.exit(0 if results.success else 1)

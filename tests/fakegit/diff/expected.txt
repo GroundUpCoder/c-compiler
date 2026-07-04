@@ -1,0 +1,4 @@
+M	compiler.js
+M	host.js
+A	tests/unit/static_init_not_constant/expected.compiler.exitcode
+A	tests/unit/static_init_not_constant/main.c
