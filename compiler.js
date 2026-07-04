@@ -5098,6 +5098,26 @@ function isPureBinop(op) {
   return !AST.BinOp[op].isAssign;
 }
 
+// True if discarding `stmt` would delete a jump target that code OUTSIDE
+// it can still reach: any goto label (goto targets are function-wide), or
+// a case/default owned by an ENCLOSING switch. `caseBag` already respects
+// switch barriers (a nested switch owns its cases and reports none), so
+// it is exactly the set of externally-owned case labels; goto labels are
+// found by a full scan (they're reachable even inside nested switches).
+function hasExternalJumpTargets(stmt) {
+  if (!stmt) return false;
+  if (stmt.caseBag.size > 0) return true;
+  const scan = (n) => {
+    if (!n) return false;
+    if (n instanceof AST.SLabel) return true;
+    if (n.children) {
+      for (const c of n.children) if (c && scan(c)) return true;
+    }
+    return false;
+  };
+  return scan(stmt);
+}
+
 // Materialize a ConstEval result as a literal node of `type` (converting
 // per C11 6.3.1 on the way), or null when it doesn't fold to a literal.
 // One materializer for every fold site so integer results always become a
@@ -5380,8 +5400,17 @@ function foldStmt(stmt) {
       const cond = foldExpr(stmt.condition);
       const cv = constEvalInt(cond);
       // Dead-branch elimination when the condition is a known constant.
-      if (cv === 0n) return stmt.elseBranch ? foldStmt(stmt.elseBranch) : new AST.SEmpty(stmt.loc);
-      if (cv !== null && cv !== 0n) return foldStmt(stmt.thenBranch);
+      // A branch that contains a label or an enclosing switch's case is
+      // NOT dead — goto/switch can jump into it (C11 6.8.6.1) — so it
+      // must survive; deleting it used to leave live SGoto.targets
+      // dangling (the irreducible fallback then spun forever on a state
+      // with no segment) and to silently drop case labels.
+      if (cv === 0n && !hasExternalJumpTargets(stmt.thenBranch)) {
+        return stmt.elseBranch ? foldStmt(stmt.elseBranch) : new AST.SEmpty(stmt.loc);
+      }
+      if (cv !== null && cv !== 0n && !hasExternalJumpTargets(stmt.elseBranch)) {
+        return foldStmt(stmt.thenBranch);
+      }
       const thenB = foldStmt(stmt.thenBranch);
       const elseB = foldStmt(stmt.elseBranch);
       return (cond === stmt.condition && thenB === stmt.thenBranch && elseB === stmt.elseBranch)
@@ -5392,8 +5421,11 @@ function foldStmt(stmt) {
     case AST.SWhile: {
       const cond = foldExpr(stmt.condition);
       const body = foldStmt(stmt.body);
-      // while (0) — body never runs. Replace with empty.
-      if (constEvalInt(cond) === 0n) return new AST.SEmpty(stmt.loc);
+      // while (0) — body never runs (unless it holds a jump target that
+      // code outside can still enter through; see SIf above).
+      if (constEvalInt(cond) === 0n && !hasExternalJumpTargets(stmt.body)) {
+        return new AST.SEmpty(stmt.loc);
+      }
       return (cond === stmt.condition && body === stmt.body)
         ? stmt
         : new AST.SWhile(stmt.loc, cond, body);
@@ -5994,6 +6026,41 @@ function applyHoist(body, labelInfo, hoistTarget) {
   // Walk anchor subtree; replace labelCompound deep inside with the modified
   // version. This rebuilds the SIf/SCompound chain on the way down.
   const oldAnchor = lcaCompound.statements[anchorIndex];
+
+  // The hoisted tail may also reference DVars declared in INTERMEDIATE
+  // compounds between the anchor and labelCompound (checkHoistSafe
+  // condition 4 permits the hoist when the label-path child is the last
+  // statement of such a compound). After the hoist those compounds no
+  // longer enclose the tail, so codegen's block-scope slot reuse would
+  // free their wasm locals while the tail still uses them — mark every
+  // DVar on the path function-scope, exactly like the pre-label ones.
+  {
+    const pathCompounds = [];
+    const collect = (node) => {
+      if (!node) return false;
+      if (node === labelCompound) return true;
+      if (node.children) {
+        for (const c of node.children) {
+          if (c && collect(c)) {
+            if (node instanceof AST.SCompound) pathCompounds.push(node);
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    collect(oldAnchor);
+    for (const comp of pathCompounds) {
+      for (const s of comp.statements) {
+        if (s instanceof AST.SDecl) {
+          for (const d of s.declarations) {
+            if (d instanceof AST.DVar) HOIST_PROMOTED_DVARS.add(d);
+          }
+        }
+      }
+    }
+  }
+
   const newAnchor = rebuildAlongPath(oldAnchor, labelCompound, newLabelCompound);
 
   // Update the label's enclosingBlock pointer to point to the lcaCompound
@@ -6502,18 +6569,16 @@ function hoistDeclarations(funcDef) {
            (d.type.isArray && d.type.isArray()) ||
            (d.type.isAggregate && d.type.isAggregate()));
         if (initIsListLike) {
-          // Keep the init on the hoisted DVar (codegen runs it at the
-          // function-entry hoisted site) ONLY when entry-time evaluation
-          // is indistinguishable from in-place evaluation: nothing it
-          // reads can change between entry and the original position.
-          const entrySafe = init.referencedVariables.size === 0 &&
-                            init.referencedFunctions.size === 0;
-          if (entrySafe) {
-            hoisted.push(d);
-            continue;
-          }
-          // Otherwise: hoist the bare decl and reproduce the initializer
-          // with per-leaf assignments at the original position.
+          // Always hoist the BARE decl and reproduce the initializer with
+          // per-leaf assignments at the original position. A C initializer
+          // runs every time the declaration is reached (C11 6.8p3); the
+          // old "entry-safe" shortcut kept constant initializers on the
+          // hoisted decl (evaluated once at function entry), so a
+          // loop-local `int a[2] = {1,2}` in a lowered function kept its
+          // mutated values across iterations. What the init READS never
+          // mattered — the target itself changes between visits.
+          // (Cost: constant tables re-store per visit in irreducible
+          // functions; correctness owns that trade.)
           d.initExpr = null;
           hoisted.push(d);
           const target = new AST.EIdent(d.loc, d.type, d);
@@ -12543,6 +12608,10 @@ function extractSetjmpCall(cond) {
   return { call: null, zeroIsTrue: false };
 }
 
+// Unique suffix for the retry scaffolding lowerSetjmpInCompound emits when
+// statements follow a setjmp-if (see the comment there).
+let __setjmpRetryCounter = 0;
+
 // Build expression: buf[0]
 function makeBufIdExpr(bufExpr) {
   const loc = bufExpr.loc;
@@ -12592,11 +12661,18 @@ function makeCatchBody(tag, idVar, valVar, bufExpr, userBody) {
 function lowerLongjmpInStmt(stmt, tag) {
   switch (stmt.constructor) {
     case AST.SExpr: {
-      const call = getNamedCall(stmt.expr, "longjmp");
-      if (call && call.arguments.length === 2) {
-        const idExpr = makeBufIdExpr(call.arguments[0]);
-        const valExpr = call.arguments[1];
-        return makeThrowLongJump(tag, idExpr, valExpr);
+      const r = getNamedCallWithPrefix(stmt.expr, "longjmp");
+      if (r && r.call.arguments.length === 2) {
+        const idExpr = makeBufIdExpr(r.call.arguments[0]);
+        const valExpr = r.call.arguments[1];
+        const throwStmt = makeThrowLongJump(tag, idExpr, valExpr);
+        if (r.prefix.length === 0) return throwStmt;
+        // `(cleanup(), longjmp(b, 1))` — the leading comma operands are
+        // side-effecting and sequenced BEFORE the jump (the very hazard
+        // getNamedCallWithPrefix documents for the setjmp side); dropping
+        // them silently deleted the cleanup call.
+        const prefixStmts = r.prefix.map(e => new AST.SExpr(e.loc, e));
+        return new AST.SCompound(stmt.loc, [...prefixStmts, throwStmt]);
       }
       return stmt;
     }
@@ -12722,29 +12798,66 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     const valVar = new AST.DVar(loc, valName, Types.TINT, Types.StorageClass.NONE, null);
     valVar.definition = valVar;
 
-    // Determine try-body and catch-body based on pattern
-    let tryBody, catchUserBody;
-
+    // Determine try-body and catch-body based on pattern.
+    //
+    // The jmp_buf stays armed until the function returns (C11 7.13.2.1),
+    // so any statement FOLLOWING the setjmp-if in this compound can still
+    // longjmp here — and after the jump is handled, control must resume
+    // at those following statements again (the standard retry-loop idiom).
+    // When such statements exist we build a guarded retry structure:
+    //
+    //   buf[0] = ++counter;
+    //   int jumped = 0, caught = 0;
+    //  retry:
+    //   caught = 0;
+    //   try { if (jumped) X; else Y;  ...remaining... }
+    //   catch (id,val) { if (id != buf[0]) rethrow; caught = jumped = 1; }
+    //   if (caught) goto retry;
+    //
+    // A plain backward goto (not a synthesized loop) so enclosing
+    // break/continue targets inside the bodies are not captured. With no
+    // remaining statements the simple try/catch shape below is already
+    // exact.
     const stmtLoc = stmt.loc;
-    if (zeroIsTrue) {
-      // Pattern A: if (setjmp(buf) == 0) { Y } else { X }
-      tryBody = stmt.thenBranch;
-      catchUserBody = stmt.elseBranch || new AST.SEmpty(stmtLoc);
-    } else {
-      // Pattern B: if (setjmp(buf)) { X }  <remaining stmts>
-      catchUserBody = stmt.thenBranch;
+    const firstBody = zeroIsTrue ? stmt.thenBranch : (stmt.elseBranch || new AST.SEmpty(stmtLoc));
+    const jumpBody = zeroIsTrue ? (stmt.elseBranch || new AST.SEmpty(stmtLoc)) : stmt.thenBranch;
+    const remaining = stmts.splice(i + 1);
 
-      if (stmt.elseBranch) {
-        tryBody = stmt.elseBranch;
-      } else {
-        // Gather remaining statements from the compound as the try body
-        const remaining = stmts.splice(i + 1);
-        if (remaining.length === 0) {
-          tryBody = new AST.SEmpty(stmtLoc);
-        } else {
-          tryBody = new AST.SCompound(stmtLoc, remaining);
-        }
-      }
+    let tryBody, catchUserBody, retryTail = null;
+    if (remaining.length === 0) {
+      tryBody = firstBody;
+      catchUserBody = jumpBody;
+    } else {
+      const jumpedName = Lexer.intern(`__setjmp_jumped_${++__setjmpRetryCounter}`);
+      const caughtName = Lexer.intern(`__setjmp_caught_${__setjmpRetryCounter}`);
+      const retryName = Lexer.intern(`__setjmp_retry_${__setjmpRetryCounter}`);
+      const jumpedVar = new AST.DVar(loc, jumpedName, Types.TINT, Types.StorageClass.NONE, null);
+      jumpedVar.definition = jumpedVar;
+      jumpedVar.initExpr = new AST.EInt(loc, Types.TINT, 0n);
+      const caughtVar = new AST.DVar(loc, caughtName, Types.TINT, Types.StorageClass.NONE, null);
+      caughtVar.definition = caughtVar;
+      caughtVar.initExpr = new AST.EInt(loc, Types.TINT, 0n);
+      const mkRef = (v) => new AST.EIdent(loc, Types.TINT, v);
+      const mkSet = (v, n) => new AST.SExpr(loc,
+        new AST.EBinary(loc, Types.TINT, "ASSIGN", mkRef(v), new AST.EInt(loc, Types.TINT, n)));
+
+      const retryLabel = new AST.SLabel(loc, retryName, compound);
+      retryLabel.hasGotos = true;
+      const retryGoto = new AST.SGoto(loc, retryName);
+      retryGoto.target = retryLabel;
+      retryLabel.labelKind = Types.LabelKind.LOOP;
+
+      tryBody = new AST.SCompound(stmtLoc, [
+        new AST.SIf(stmtLoc, mkRef(jumpedVar), jumpBody, firstBody),
+        ...remaining,
+      ]);
+      catchUserBody = new AST.SCompound(stmtLoc, [mkSet(caughtVar, 1n), mkSet(jumpedVar, 1n)]);
+      retryTail = {
+        decls: new AST.SDecl(loc, [jumpedVar, caughtVar]),
+        label: retryLabel,
+        resetCaught: mkSet(caughtVar, 0n),
+        retryIf: new AST.SIf(loc, mkRef(caughtVar), retryGoto, null),
+      };
     }
 
     // Recurse into the try body and catch body
@@ -12781,16 +12894,22 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // up in nlr_jump_fail's `while(1)`.
     const prefixStmts = (setjmpPrefix || []).map(e => new AST.SExpr(e.loc, e));
 
-    // Replace the if-statement with [...prefix, setBuf, tryCatch]
+    // Replace the if-statement with [...prefix, setBuf, (retry scaffold,)
+    // tryCatch(, retry check)]
     stmts[i] = setBufStmt;
     if (prefixStmts.length > 0) {
       stmts.splice(i, 0, ...prefixStmts);
       i += prefixStmts.length;
     }
-    stmts.splice(i + 1, 0, tryCatch);
-
-    // Skip the tryCatch we just inserted
-    i++;
+    if (retryTail) {
+      stmts.splice(i + 1, 0,
+        retryTail.decls, retryTail.label, retryTail.resetCaught, tryCatch, retryTail.retryIf);
+      i += 5;
+    } else {
+      stmts.splice(i + 1, 0, tryCatch);
+      // Skip the tryCatch we just inserted
+      i++;
+    }
   }
 }
 
