@@ -19154,6 +19154,7 @@ int iswctype(wint_t c, wctype_t type);
 #include <stddef.h>
 #include <wctype.h>
 __require_source("__wchar.c");
+__require_source("__stdlib.c");  /* mbrtowc/wcrtomb use its shared UTF-8 codec */
 typedef struct { int __state; } mbstate_t;
 size_t wcslen(const wchar_t *s);
 wchar_t *wcscpy(wchar_t *dest, const wchar_t *src);
@@ -20613,6 +20614,12 @@ __require_source("__stdio.c");
  * Used to keep fflush from treating a partially-consumed read buffer
  * as pending write data in an r+ / w+ stream. */
 #define __F_RBUF  32
+/* The buffer was allocated by the library (fclose/setvbuf may free it).
+ * Not set for the static stdio buffers or user buffers from setvbuf. */
+#define __F_OWNBUF 64
+/* The FILE object itself is static (stdin/stdout/stderr): fclose must
+ * mark it closed but must not free() it. */
+#define __F_STATIC 128
 
 typedef struct FILE {
   int fd;
@@ -20748,7 +20755,7 @@ int putenv(char *string);
 int clearenv(void);
 int system(const char *command);
 
-#define MB_CUR_MAX 1
+#define MB_CUR_MAX 4  /* UTF-8, matching the restartable mbrtowc/wcrtomb family */
 int mblen(const char *s, size_t n);
 int mbtowc(wchar_t *pwc, const char *s, size_t n);
 int wctomb(char *s, wchar_t wc);
@@ -23167,39 +23174,20 @@ unsigned int btowc(int c) { return (c >= 0 && c <= 0x7F) ? (unsigned int)c : (un
 int wctob(unsigned int c) { return (c <= 0x7F) ? (int)c : -1; }
 int mbsinit(const mbstate_t *ps) { (void)ps; return 1; }
 
+/* The actual UTF-8 codec lives in __stdlib.c (shared with the
+   non-restartable mbtowc/wctomb family — C11 7.22.7 requires one
+   consistent encoding). UTF-8 is stateless, so ps is unused. */
+size_t __mbrtowc_utf8(wchar_t *pwc, const char *s, size_t n);
+size_t __wcrtomb_utf8(char *s, wchar_t wc);
+
 size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps) {
   (void)ps;
-  unsigned int c = (unsigned int)wc;
-  if (!s) return 1;
-  if (c < 0x80) { s[0] = (char)c; return 1; }
-  if (c < 0x800) { s[0] = (char)(0xC0 | (c >> 6)); s[1] = (char)(0x80 | (c & 0x3F)); return 2; }
-  if (c < 0x10000) { s[0] = (char)(0xE0 | (c >> 12)); s[1] = (char)(0x80 | ((c >> 6) & 0x3F)); s[2] = (char)(0x80 | (c & 0x3F)); return 3; }
-  if (c < 0x110000) { s[0] = (char)(0xF0 | (c >> 18)); s[1] = (char)(0x80 | ((c >> 12) & 0x3F)); s[2] = (char)(0x80 | ((c >> 6) & 0x3F)); s[3] = (char)(0x80 | (c & 0x3F)); return 4; }
-  return (size_t)-1;
+  return __wcrtomb_utf8(s, wc);
 }
 
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps) {
   (void)ps;
-  if (!s) return 0;
-  if (n == 0) return (size_t)-2;
-  unsigned char b0 = (unsigned char)s[0];
-  if (b0 < 0x80) {
-    if (pwc) *pwc = b0;
-    return b0 ? 1 : 0;
-  }
-  unsigned int cp; size_t len;
-  if ((b0 & 0xE0) == 0xC0)      { cp = b0 & 0x1F; len = 2; }
-  else if ((b0 & 0xF0) == 0xE0) { cp = b0 & 0x0F; len = 3; }
-  else if ((b0 & 0xF8) == 0xF0) { cp = b0 & 0x07; len = 4; }
-  else return (size_t)-1;
-  if (len > n) return (size_t)-2;
-  for (size_t i = 1; i < len; i++) {
-    unsigned char bi = (unsigned char)s[i];
-    if ((bi & 0xC0) != 0x80) return (size_t)-1;
-    cp = (cp << 6) | (bi & 0x3F);
-  }
-  if (pwc) *pwc = (wchar_t)cp;
-  return cp ? len : 0;
+  return __mbrtowc_utf8(pwc, s, n);
 }
   `,
   "__dirent.c": `
@@ -24140,13 +24128,32 @@ float rintf(float x) { return __wasm(float, (x), op 0x90); }
 float sqrtf(float x) { return __wasm(float, (x), op 0x91); }
 
 // Binary f64 (double)
-double fmin(double x, double y) { return __wasm(double, (x, y), op 0xA4); }
-double fmax(double x, double y) { return __wasm(double, (x, y), op 0xA5); }
+// fmin/fmax: C11 F.10.9 treats one NaN argument as missing data (return the
+// other argument); the raw wasm min/max opcodes would propagate the NaN, so
+// they only handle the no-NaN path (where their -0/+0 ordering is correct).
+double fmin(double x, double y) {
+  if (x != x) return y;
+  if (y != y) return x;
+  return __wasm(double, (x, y), op 0xA4);
+}
+double fmax(double x, double y) {
+  if (x != x) return y;
+  if (y != y) return x;
+  return __wasm(double, (x, y), op 0xA5);
+}
 double copysign(double x, double y) { return __wasm(double, (x, y), op 0xA6); }
 
 // Binary f32 (float)
-float fminf(float x, float y) { return __wasm(float, (x, y), op 0x96); }
-float fmaxf(float x, float y) { return __wasm(float, (x, y), op 0x97); }
+float fminf(float x, float y) {
+  if (x != x) return y;
+  if (y != y) return x;
+  return __wasm(float, (x, y), op 0x96);
+}
+float fmaxf(float x, float y) {
+  if (x != x) return y;
+  if (y != y) return x;
+  return __wasm(float, (x, y), op 0x97);
+}
 float copysignf(float x, float y) { return __wasm(float, (x, y), op 0x98); }
 
 // Float wrappers for host-imported functions
@@ -24306,6 +24313,12 @@ double logb(double x) {
 }
 
 double modf(double x, double *iptr) {
+  /* C99 F.10.3.12: modf(+/-inf) stores +/-inf and returns +/-0; the
+     naive x - *iptr would compute inf - inf = NaN. */
+  if (__isinfd(x)) {
+    *iptr = x;
+    return copysign(0.0, x);
+  }
   *iptr = trunc(x);
   /* C99 F.10.3.12: the fractional part carries the sign of x, including
      for a zero fraction: modf(-100.0) is (-0.0, -100.0). Plain x - *iptr
@@ -24313,6 +24326,10 @@ double modf(double x, double *iptr) {
   return copysign(x - *iptr, x);
 }
 float modff(float x, float *iptr) {
+  if (__isinff(x)) {
+    *iptr = x;
+    return copysignf(0.0f, x);
+  }
   *iptr = truncf(x);
   return copysignf(x - *iptr, x);
 }
@@ -24401,9 +24418,9 @@ float lgammaf(float x) { return (float)lgamma((double)x); }
 static char __stdin_buf[BUFSIZ];
 static char __stdout_buf[BUFSIZ];
 
-FILE __stdin_file  = {0, __F_READ,  _IOLBF, __stdin_buf,  BUFSIZ, 0, 0, EOF};
-FILE __stdout_file = {1, __F_WRITE, _IOLBF, __stdout_buf, BUFSIZ, 0, 0, EOF};
-FILE __stderr_file = {2, __F_WRITE, _IONBF, 0, 0, 0, 0, EOF};
+FILE __stdin_file  = {0, __F_READ  | __F_STATIC, _IOLBF, __stdin_buf,  BUFSIZ, 0, 0, EOF};
+FILE __stdout_file = {1, __F_WRITE | __F_STATIC, _IOLBF, __stdout_buf, BUFSIZ, 0, 0, EOF};
+FILE __stderr_file = {2, __F_WRITE | __F_STATIC, _IONBF, 0, 0, 0, 0, EOF};
 
 static FILE *__open_files[64];
 static int __num_open_files;
@@ -24680,7 +24697,7 @@ FILE *fopen(const char *path, const char *mode) {
   FILE *f = (FILE *)malloc(sizeof(FILE));
   char *buf = (char *)malloc(BUFSIZ);
   f->fd = fd;
-  f->flags = fflags;
+  f->flags = fflags | __F_OWNBUF;
   f->buf_mode = _IOFBF;
   f->buf = buf;
   f->buf_size = BUFSIZ;
@@ -24708,7 +24725,7 @@ FILE *fdopen(int fd, const char *mode) {
   FILE *f = (FILE *)malloc(sizeof(FILE));
   char *buf = (char *)malloc(BUFSIZ);
   f->fd = fd;
-  f->flags = fflags;
+  f->flags = fflags | __F_OWNBUF;
   f->buf_mode = _IOFBF;
   f->buf = buf;
   f->buf_size = BUFSIZ;
@@ -24726,12 +24743,24 @@ int fileno(FILE *stream) { return stream ? stream->fd : -1; }
 int fclose(FILE *stream) {
   fflush(stream);
   int r = close(stream->fd);
-  if (stream->buf) free(stream->buf);
+  if (stream->buf && (stream->flags & __F_OWNBUF)) free(stream->buf);
   for (int i = 0; i < __num_open_files; i++) {
     if (__open_files[i] == stream) {
       __open_files[i] = __open_files[--__num_open_files];
       break;
     }
+  }
+  if (stream->flags & __F_STATIC) {
+    /* stdin/stdout/stderr are static objects: mark the stream closed
+       (drop the read/write bits so the exit-path fflush and any later
+       I/O leave the dead fd alone) instead of freeing it. */
+    stream->flags = __F_STATIC;
+    stream->buf = 0;
+    stream->buf_size = 0;
+    stream->buf_pos = 0;
+    stream->buf_len = 0;
+    stream->ungetc_char = EOF;
+    return r;
   }
   free(stream);
   return r;
@@ -24843,6 +24872,11 @@ int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
   fflush(stream);
   stream->buf_mode = mode;
   if (buf) {
+    /* Caller-supplied buffer: the library no longer owns the storage,
+       so fclose must not free it (and the old owned buffer, if any,
+       would leak without an explicit free here). */
+    if ((stream->flags & __F_OWNBUF) && stream->buf) free(stream->buf);
+    stream->flags &= ~__F_OWNBUF;
     stream->buf = buf;
     stream->buf_size = size;
   }
@@ -25049,7 +25083,8 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
   int fd = open(path, flags, 0666);
   if (fd < 0) return 0;
   stream->fd = fd;
-  stream->flags = fflags;
+  /* Keep the ownership bits: freopen reuses the FILE and its buffer. */
+  stream->flags = fflags | (stream->flags & (__F_OWNBUF | __F_STATIC));
   stream->buf_pos = 0;
   stream->buf_len = 0;
   stream->ungetc_char = EOF;
@@ -25365,8 +25400,10 @@ void qsort(void *base, size_t nmemb, size_t size,
 __import void __exit(int status);
 
 void exit(int status) {
-  fflush(0);
+  /* C11 7.22.4.4: atexit handlers run first (they may still write to
+     streams), then streams are flushed and closed. */
   __run_atexits();
+  fflush(0);
   __exit(status);
 }
 __export exit = exit;
@@ -25568,47 +25605,92 @@ int system(const char *command) {
   return status;
 }
 
-int mblen(const char *s, size_t n) {
+/* UTF-8 primitives shared by the non-restartable conversions below and the
+   restartable mbrtowc/wcrtomb in __wchar.c — C11 7.22.7 requires both
+   families to describe the same execution-environment encoding. They live
+   here (always linked) rather than in __wchar.c so plain stdlib users don't
+   pull the whole wide-char library into the link. Return values follow
+   mbrtowc/wcrtomb: (size_t)-1 invalid sequence, (size_t)-2 incomplete. */
+size_t __mbrtowc_utf8(wchar_t *pwc, const char *s, size_t n) {
   if (!s) return 0;
-  if (n == 0 || *s == '\\0') return 0;
-  return 1;
+  if (n == 0) return (size_t)-2;
+  unsigned char b0 = (unsigned char)s[0];
+  if (b0 < 0x80) {
+    if (pwc) *pwc = b0;
+    return b0 ? 1 : 0;
+  }
+  unsigned int cp; size_t len;
+  if ((b0 & 0xE0) == 0xC0)      { cp = b0 & 0x1F; len = 2; }
+  else if ((b0 & 0xF0) == 0xE0) { cp = b0 & 0x0F; len = 3; }
+  else if ((b0 & 0xF8) == 0xF0) { cp = b0 & 0x07; len = 4; }
+  else return (size_t)-1;
+  if (len > n) return (size_t)-2;
+  for (size_t i = 1; i < len; i++) {
+    unsigned char bi = (unsigned char)s[i];
+    if ((bi & 0xC0) != 0x80) return (size_t)-1;
+    cp = (cp << 6) | (bi & 0x3F);
+  }
+  if (pwc) *pwc = (wchar_t)cp;
+  return cp ? len : 0;
+}
+
+size_t __wcrtomb_utf8(char *s, wchar_t wc) {
+  unsigned int c = (unsigned int)wc;
+  if (!s) return 1;
+  if (c < 0x80) { s[0] = (char)c; return 1; }
+  if (c < 0x800) { s[0] = (char)(0xC0 | (c >> 6)); s[1] = (char)(0x80 | (c & 0x3F)); return 2; }
+  if (c < 0x10000) { s[0] = (char)(0xE0 | (c >> 12)); s[1] = (char)(0x80 | ((c >> 6) & 0x3F)); s[2] = (char)(0x80 | (c & 0x3F)); return 3; }
+  if (c < 0x110000) { s[0] = (char)(0xF0 | (c >> 18)); s[1] = (char)(0x80 | ((c >> 12) & 0x3F)); s[2] = (char)(0x80 | ((c >> 6) & 0x3F)); s[3] = (char)(0x80 | (c & 0x3F)); return 4; }
+  return (size_t)-1;
+}
+
+/* Non-restartable multibyte conversions (C11 7.22.7), UTF-8 like the
+   restartable family (the encoding is stateless — no shift sequences). */
+int mblen(const char *s, size_t n) {
+  return mbtowc((wchar_t *)0, s, n);
 }
 
 int mbtowc(wchar_t *pwc, const char *s, size_t n) {
   if (!s) return 0;
-  if (n == 0) return -1;
-  if (*s == '\\0') {
-    if (pwc) *pwc = 0;
-    return 0;
-  }
-  if (pwc) *pwc = (unsigned char)*s;
-  return 1;
+  size_t r = __mbrtowc_utf8(pwc, s, n);
+  if (r == (size_t)-1 || r == (size_t)-2) return -1;
+  return (int)r;
 }
 
 int wctomb(char *s, wchar_t wc) {
   if (!s) return 0;
-  if (wc < 0 || wc > 255) return -1;
-  *s = (char)wc;
-  return 1;
+  size_t r = __wcrtomb_utf8(s, wc);
+  return r == (size_t)-1 ? -1 : (int)r;
 }
 
 size_t mbstowcs(wchar_t *dest, const char *src, size_t n) {
-  size_t i;
-  for (i = 0; i < n; i++) {
-    if (dest) dest[i] = (unsigned char)src[i];
-    if (src[i] == '\\0') return i;
+  size_t out = 0;
+  while (!dest || out < n) {
+    wchar_t wc = 0;
+    int k = mbtowc(&wc, src, MB_CUR_MAX);
+    if (k < 0) return (size_t)-1;
+    if (dest) dest[out] = wc;
+    if (k == 0) return out;  /* null wide char stored, not counted */
+    out++;
+    src += k;
   }
-  return i;
+  return out;
 }
 
 size_t wcstombs(char *dest, const wchar_t *src, size_t n) {
-  size_t i;
-  for (i = 0; i < n; i++) {
-    if (src[i] < 0 || src[i] > 255) return (size_t)-1;
-    if (dest) dest[i] = (char)src[i];
-    if (src[i] == '\\0') return i;
+  size_t out = 0;
+  for (size_t i = 0; ; i++) {
+    char tmp[MB_CUR_MAX];
+    int k = wctomb(tmp, src[i]);
+    if (k < 0) return (size_t)-1;
+    if (src[i] == 0) {
+      if (dest && out < n) dest[out] = '\\0';
+      return out;  /* null byte stored, not counted */
+    }
+    if (dest && out + (size_t)k > n) return out;  /* no room for a whole char */
+    if (dest) for (int j = 0; j < k; j++) dest[out + j] = tmp[j];
+    out += k;
   }
-  return i;
 }
   `,
   "__string.c": `

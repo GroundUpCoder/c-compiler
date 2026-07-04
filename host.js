@@ -6923,6 +6923,12 @@ async function runModule({
       let width = 0;
       if (fmt[i] === '*') {
         width = readArg('i32');
+        /* C11 7.21.6.1p5: a negative field width argument is taken as a
+           '-' flag followed by a positive field width. */
+        if (width < 0) {
+          flags.minus = true;
+          width = -width;
+        }
         i++;
       } else {
         while (i < fmt.length && fmt[i] >= '0' && fmt[i] <= '9') {
@@ -7069,6 +7075,20 @@ async function runModule({
           const ptr = readArg('ptr');
           if (ptr === 0) {
             str = '(null)';
+          } else if (length === 'l') {
+            /* %ls: a wchar_t (32-bit little-endian code point) string.
+               Convert each wide char to multibyte (UTF-8, matching
+               wcrtomb) — the output pipeline is Latin-1 byte-transparent,
+               so encode the bytes as individual char codes. */
+            const view = new DataView(instance.exports.memory.buffer);
+            for (let p = ptr; ; p += 4) {
+              const wc = view.getUint32(p, true);
+              if (wc === 0) break;
+              if (wc < 0x80) str += String.fromCharCode(wc);
+              else if (wc < 0x800) str += String.fromCharCode(0xC0 | (wc >> 6), 0x80 | (wc & 0x3F));
+              else if (wc < 0x10000) str += String.fromCharCode(0xE0 | (wc >> 12), 0x80 | ((wc >> 6) & 0x3F), 0x80 | (wc & 0x3F));
+              else str += String.fromCharCode(0xF0 | (wc >> 18), 0x80 | ((wc >> 12) & 0x3F), 0x80 | ((wc >> 6) & 0x3F), 0x80 | (wc & 0x3F));
+            }
           } else {
             str = readLatin1(ptr);
           }
@@ -7140,10 +7160,14 @@ async function runModule({
             if (exp < -4 || exp >= prec) {
               let m = mant;
               if (!flags.hash && m.indexOf('.') !== -1) m = m.replace(/\.?0+$/, '');
+              /* C11 7.21.6.1p6: '#' with g/G — the result ALWAYS has a
+                 decimal point (even with no fraction digits left). */
+              if (flags.hash && m.indexOf('.') === -1) m += '.';
               str = m + 'e' + fmtExponent(exp);
             } else {
               str = fmtFixedExact(val, Math.max(0, prec - 1 - exp));
               if (!flags.hash && str.indexOf('.') !== -1) str = str.replace(/\.?0+$/, '');
+              if (flags.hash && str.indexOf('.') === -1) str += '.';
             }
             str = (neg ? '-' : '') + str;
             if (spec === 'G') str = str.toUpperCase();
@@ -7220,7 +7244,10 @@ async function runModule({
         const pad = width - str.length;
         const isFloat = (spec === 'f' || spec === 'F' || spec === 'e' || spec === 'E' ||
                        spec === 'g' || spec === 'G' || spec === 'a' || spec === 'A');
-        const padChar = (flags.zero && !flags.minus && (isFloat || precision < 0)) ? '0' : ' ';
+        /* The 0 flag is ignored for infinities and NaNs (consensus libc
+           behavior, made normative in C23): space-pad instead. */
+        const floatSpecial = isFloat && /inf|nan/i.test(str);
+        const padChar = (flags.zero && !flags.minus && !floatSpecial && (isFloat || precision < 0)) ? '0' : ' ';
         if (flags.minus) {
           str = str + ' '.repeat(pad);
         } else if (padChar === '0' && (str[0] === '-' || str[0] === '+' || str[0] === ' ')) {
@@ -7260,7 +7287,7 @@ async function runModule({
        the bytes beyond it. */
     if (length === 'hh') view.setInt8(ptr, count);
     else if (length === 'h') view.setInt16(ptr, count, true);
-    else if (length === 'll') view.setBigInt64(ptr, BigInt(count), true);
+    else if (length === 'll' || length === 'j') view.setBigInt64(ptr, BigInt(count), true);
     else view.setInt32(ptr, count, true);
   }
 
@@ -7419,9 +7446,12 @@ async function runModule({
           break;
         }
         case 'u': {
-          /* Unsigned decimal */
+          /* Unsigned decimal. C11 7.21.6.2p12: matches an OPTIONALLY
+             SIGNED decimal integer with strtoul semantics — a leading
+             '-' is accepted and the value wraps in unsigned arithmetic
+             (writeToPtr's setUint32/setBigUint64 wrap negatives). */
           const start = si;
-          if (si < str.length && str[si] === '+') si++;
+          if (si < str.length && (str[si] === '+' || str[si] === '-')) si++;
           if (si >= str.length) { si = start; return { matched: matched || -1, consumed: si }; }
           if (str[si] < '0' || str[si] > '9') { si = start; return { matched: matched, consumed: si }; }
           while (si < str.length && str[si] >= '0' && str[si] <= '9' && (si - start) < maxChars) si++;
