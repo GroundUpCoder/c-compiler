@@ -4925,13 +4925,25 @@ function makeCall(loc, callee, args) {
     for (let i = 0; i < args.length && i < numFixed; i++) {
       args[i] = maybeImplicitCast(args[i], paramTypes[i]);
     }
-    // Default-argument promotion (C99 6.5.2.2/6) for varargs: float → double.
-    if (funcType.isVarArg) {
-      for (let i = numFixed; i < args.length; i++) {
-        if (args[i].type.removeQualifiers() === Types.TFLOAT) {
-          args[i] = maybeImplicitCast(args[i], Types.TDOUBLE);
-        }
+    // Default-argument promotions (C11 6.5.2.2p6): float → double plus the
+    // integer promotions. They apply to variadic arguments AND to every
+    // argument of a call through an unprototyped declaration (`int f();`)
+    // — the latter used to get no conversion at all, so a float argument
+    // reached a double-parameter definition unconverted and codegen
+    // emitted invalid wasm.
+    const promoteDefault = (arg) => {
+      const t = arg.type.removeQualifiers();
+      if (t === Types.TFLOAT) return maybeImplicitCast(arg, Types.TDOUBLE);
+      if (t === Types.TCHAR || t === Types.TSCHAR || t === Types.TUCHAR ||
+          t === Types.TSHORT || t === Types.TUSHORT || t === Types.TBOOL) {
+        return maybeImplicitCast(arg, Types.TINT);
       }
+      return arg;
+    };
+    if (funcType.hasUnspecifiedParams) {
+      for (let i = 0; i < args.length; i++) args[i] = promoteDefault(args[i]);
+    } else if (funcType.isVarArg) {
+      for (let i = numFixed; i < args.length; i++) args[i] = promoteDefault(args[i]);
     }
   }
   return new ECall(loc, callee, args);
@@ -15648,7 +15660,15 @@ class CodeGenerator {
     return WT_I32;
   }
 
-  isUnsignedType(type) { return type.removeQualifiers().isUnsigned(); }
+  isUnsignedType(type) {
+    const t = type.removeQualifiers();
+    // Pointers order and widen as unsigned addresses on wasm32: signed
+    // i32.lt_s comparisons break for objects above 2 GiB (memory can grow
+    // to 4 GiB), and pointer→u64 must zero-extend (clang's wasm32 ABI).
+    // Pointer difference doesn't route through here (emitDivByElemSize is
+    // explicitly signed).
+    return t.isUnsigned() || t.isPointer();
+  }
 
   // --- Pointer scaling helpers ---
   // Multiply the i32 value already on top of the stack by sizeof(elemType).
@@ -16177,7 +16197,13 @@ class CodeGenerator {
       const rhsType = rhs.type;
       let opType = lhsType;
       if (!lhsType.isPointer()) {
-        opType = Types.usualArithmeticConversions(lhsType, rhsType);
+        // Shifts compute in the PROMOTED LEFT type (C11 6.5.7p3 via
+        // 6.5.16.2p3) — usual arithmetic conversions would let an
+        // unsigned right operand turn `int >>= n` into a logical shift.
+        // UAC(lhs, lhs) is exactly "promoted lhs".
+        opType = (op === "SHL_ASSIGN" || op === "SHR_ASSIGN")
+          ? Types.usualArithmeticConversions(lhsType, lhsType)
+          : Types.usualArithmeticConversions(lhsType, rhsType);
       }
       const opWt = this.getBinaryWasmType(opType);
       const isUnsigned = this.isUnsignedType(opType);
@@ -16190,7 +16216,10 @@ class CodeGenerator {
       }
       this.emitCompoundOp(opWt, op, isUnsigned);
       if (opType !== lhsType) this.emitConversion(opType, lhsType);
-      if (lv.kind === LV_REGISTER && lhsType.isInteger() && lhsType.size < Types.TINT.size) {
+      // Same rule as emitIncDec: the assignment's value has the lvalue's
+      // type after conversion (6.5.16p3) — narrow/_Bool-normalize for
+      // memory lvalues too, not just register ones.
+      if (lhsType.isInteger() && lhsType.size < Types.TINT.size) {
         this.emitConversion(Types.TINT, lhsType);
       }
       if (wantValue && !lv.bitField) {
@@ -16223,7 +16252,12 @@ class CodeGenerator {
       else if (wtEquals(wt, WT_I64)) this.body.i64Const(1n);
       else this.body.i32Const(1);
     };
-    const needsNarrowing = lv.kind === LV_REGISTER && wtEquals(wt, WT_I32) &&
+    // The value of ++E/E-- is the new/old value of E *as E's type* (C11
+    // 6.5.3.1): narrow-type wraparound and _Bool's !=0 normalization apply
+    // no matter where E lives. Gating this on LV_REGISTER used to make
+    // `++*p` on char 127 yield 128 (and store 2 into a _Bool — the memory
+    // store truncates bits, but 2 & 0xff is still 2).
+    const needsNarrowing = wtEquals(wt, WT_I32) &&
       type.isInteger() && type.size < Types.TINT.size && !type.isPointer();
     if (isPre) {
       this.lvaluePush(lv); this.lvaluePushAndLoad(lv);
