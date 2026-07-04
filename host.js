@@ -598,8 +598,11 @@ function createFileSystem({ fs, ctx }) {
         }
       },
       pipe: function (pipefd_ptr) {
-        /* Create an in-memory pipe: two fds sharing a buffer */
-        const pipe = { buffer: [], closed: { read: false, write: false } };
+        /* Create an in-memory pipe: two fds sharing a buffer. Each end is
+           reference-counted so a dup'd end closes only when the LAST
+           duplicate is closed. */
+        const pipe = { buffer: [], closed: { read: false, write: false },
+                       refs: { read: 1, write: 1 } };
         const readFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null });
         const writeFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'write', position: null });
         const memory = getMemory();
@@ -611,8 +614,9 @@ function createFileSystem({ fs, ctx }) {
       dup: function (oldfd) {
         if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
         const entry = fdTable[oldfd];
-        /* For pipe fds, share the same pipe object */
+        /* For pipe fds, share the same pipe object and refcount the end */
         if (entry.type === 'pipe') {
+          entry.pipe.refs[entry.pipeEnd]++;
           return allocFd({ type: 'pipe', pipe: entry.pipe, pipeEnd: entry.pipeEnd, position: null });
         }
         /* POSIX: dup'd fds share one open file description — including the
@@ -628,7 +632,9 @@ function createFileSystem({ fs, ctx }) {
         /* Close newfd if open */
         if (newfd < fdTable.length && fdTable[newfd]) {
           const entry = fdTable[newfd];
-          if (entry.nativeFd !== undefined && newfd >= 3) {
+          if (entry.type === 'pipe') {
+            if (--entry.pipe.refs[entry.pipeEnd] <= 0) entry.pipe.closed[entry.pipeEnd] = true;
+          } else if (entry.nativeFd !== undefined && newfd >= 3) {
             if (entry.refs && entry.refs > 1) entry.refs--;
             else try { fs.closeSync(entry.nativeFd); } catch (e) { }
           }
@@ -638,6 +644,7 @@ function createFileSystem({ fs, ctx }) {
         while (fdTable.length <= newfd) fdTable.push(null);
         const src = fdTable[oldfd];
         if (src.type === 'pipe') {
+          src.pipe.refs[src.pipeEnd]++;
           fdTable[newfd] = { type: 'pipe', pipe: src.pipe, pipeEnd: src.pipeEnd, position: null };
         } else {
           /* Same shared-description semantics as dup. */
@@ -806,7 +813,10 @@ function createFileSystem({ fs, ctx }) {
   result[ENV_KEY].close = function (fd) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
       const entry = fdTable[fd];
-      entry.pipe.closed[entry.pipeEnd] = true;
+      /* Per-end refcount: the end closes when its LAST duplicate goes. */
+      if (--entry.pipe.refs[entry.pipeEnd] <= 0) {
+        entry.pipe.closed[entry.pipeEnd] = true;
+      }
       fdTable[fd] = null;
       return 0;
     }
@@ -1112,7 +1122,17 @@ var BLOCK_FS = (function () {
     // SEARCH_ROUND = size + 2^(floor(log2(size)) - SL_LOG2) - 1
     if (sz >= (1 << (FL_SHIFT + 1))) {
       var t = 31 - this._clz32(sz);
-      sz = (sz + (1 << (t - SL_LOG2)) - 1) >>> 0;
+      // Plain number arithmetic — a `>>> 0` here wrapped near-2^32 sizes to a
+      // tiny class, handing out a massively undersized block (cross-file
+      // extent corruption). Mirrors the TLSF64 allocator's approach.
+      sz = sz + Math.pow(2, t - SL_LOG2) - 1;
+    }
+    if (sz >= 0x100000000) {
+      // Rounded size doesn't fit the 32-bit class table — no free block on a
+      // v3 pool (capped below 4 GiB) can satisfy it. Signal "beyond all
+      // classes"; malloc turns this into a clean allocation failure (ENOSPC).
+      out[0] = FL_COUNT; out[1] = 0;
+      return;
     }
     // Fall through to mapping_insert
     this._mappingInsert(sz, out);
@@ -1282,14 +1302,17 @@ var BLOCK_FS = (function () {
     var block = poolEnd;
     var blockSz = newEnd - poolEnd;
 
-    // Round up so mapping_search can find this block
+    // Round up so mapping_search can find this block. Plain number arithmetic
+    // (like TLSF64) — a `>>> 0` here wrapped near-2^32 sizes to a tiny block.
     if (blockSz >= (1 << (FL_SHIFT + 1))) {
       var t = 31 - this._clz32(blockSz);
-      blockSz = (blockSz + (1 << (t - SL_LOG2)) - 1) >>> 0;
+      blockSz = blockSz + Math.pow(2, t - SL_LOG2) - 1;
     }
-    // Round up to alignment
-    blockSz = (blockSz + BLOCK_ALIGN - 1) & ~(BLOCK_ALIGN - 1);
+    // Round up to alignment (mod arithmetic, not `&` — no 32-bit truncation)
+    blockSz = blockSz + (BLOCK_ALIGN - 1); blockSz = blockSz - (blockSz % BLOCK_ALIGN);
     newEnd = poolEnd + blockSz;
+    // Re-check the 4 GiB pool cap after rounding
+    if (newEnd > 0xFFFF0000) return 0;
 
     // Re-check store size after rounding
     if (newEnd > this._s.size()) {
@@ -1334,9 +1357,9 @@ var BLOCK_FS = (function () {
     var flsl = [0, 0];
     this._mappingSearch(adjusted, flsl);
     if (flsl[0] >= FL_COUNT) {
-      // Too large even for search — grow directly
-      if (!this._growPool(adjusted)) return 0;
-      this._mappingSearch(adjusted, flsl);
+      // Rounded search size is beyond every class the 32-bit table can hold —
+      // unfulfillable on a v3 pool. Fail cleanly (callers map this to ENOSPC).
+      return 0;
     }
 
     var block = this._findSuitableBlock(flsl);
@@ -2238,6 +2261,15 @@ var BLOCK_FS = (function () {
       { position: null }, // 2 = stderr
     ];
     this._dirTable = [];
+    // Open-reference counts (inoId -> number of fd-table slots holding it).
+    // POSIX unlink-while-open: an inode whose last hard link is removed is
+    // reclaimed only when the last open fd releases it (_dropLink/_inoUnref).
+    // This is IN-MEMORY, PER-INSTANCE state — nothing persisted, so the
+    // on-disk format is unchanged. Limitation: fd tables are per-instance and
+    // there is no cross-instance mechanism for them (unlike broker pipes), so
+    // an unlink in one live instance while ANOTHER instance holds the file
+    // open still frees it — same behavior as before this fix.
+    this._openInodes = new Map();
 
     // If freshly formatted, create the root directory
     if (sbFormat) {
@@ -2343,6 +2375,69 @@ var BLOCK_FS = (function () {
       extentOffset: 0, extentCapacity: 0, dataSize: 0,
       mode: 0, nlink: 0, mtime: 0, ctime: 0, btime: 0, atime: 0
     });
+  };
+
+  // ---- Open-reference counting (see _openInodes in the constructor) ----
+  BlockFS.prototype._inoRef = function (inoId) {
+    this._openInodes.set(inoId, (this._openInodes.get(inoId) || 0) + 1);
+  };
+  BlockFS.prototype._inoUnref = function (inoId) {
+    var n = (this._openInodes.get(inoId) || 0) - 1;
+    if (n > 0) { this._openInodes.set(inoId, n); return; }
+    this._openInodes.delete(inoId);
+    // Last close of an unlinked-but-open file reclaims it now.
+    var ino = this._inodes.read(inoId);
+    if (ino && ino.mode !== 0 && ino.nlink <= 0) this._freeInode(inoId);
+  };
+
+  // Drop one hard link from an inode (its dirent must already be removed):
+  // reclaim the inode + data extent only when the last link is gone AND no
+  // open fd in this instance still references it (POSIX unlink-while-open;
+  // the last close reclaims it via _inoUnref).
+  BlockFS.prototype._dropLink = function (inoId, ino) {
+    ino.nlink--;
+    if (ino.nlink <= 0 && !this._openInodes.get(inoId)) {
+      this._freeInode(inoId);
+    } else {
+      ino.ctime = this._now(); // link-count change updates ctime
+      this._inodes.write(inoId, ino);
+    }
+  };
+
+  // Duplicate an fd-table entry (shared by dup(), dup2() and fcntl F_DUPFD).
+  // Pipe ends are reference-counted — broker-side for owner-brokered pipes,
+  // per-end refs for in-memory ones — so closing one duplicate doesn't close
+  // the end. Plain file/dev entries are shared (same object, same position,
+  // like POSIX dup) and bump the inode's open-reference count.
+  BlockFS.prototype._dupEntry = function (entry) {
+    if (entry.type === 'pipe') {
+      if (entry.pipeId !== undefined && this._pipeBroker) {
+        this._pipeBroker.pipeRef(entry.pipeId, entry.pipeEnd === 'write' ? 1 : 0);
+        return { type: 'pipe', pipeId: entry.pipeId, pipeEnd: entry.pipeEnd, position: null };
+      }
+      entry.pipe.refs[entry.pipeEnd]++;
+      return { type: 'pipe', pipe: entry.pipe, pipeEnd: entry.pipeEnd, position: null };
+    }
+    if (entry.inoId !== undefined) this._inoRef(entry.inoId);
+    return entry;
+  };
+
+  // Release one fd-table reference to an entry (shared by close() and the
+  // implicit close inside dup2()). A pipe end closes when its last duplicate
+  // goes; a file drops one open-reference (possibly reclaiming an unlinked
+  // inode).
+  BlockFS.prototype._releaseEntry = function (entry) {
+    if (entry.type === 'pipe') {
+      // A pipe end on ANY fd (incl. 0/1/2 after dup2 — the pipeline case) must
+      // release its ref so the peer sees EOF/EPIPE.
+      if (entry.pipeId !== undefined && this._pipeBroker) {
+        this._pipeBroker.pipeClose(entry.pipeId, entry.pipeEnd === 'write' ? 1 : 0);
+      } else if (--entry.pipe.refs[entry.pipeEnd] <= 0) {
+        entry.pipe.closed[entry.pipeEnd] = true;
+      }
+      return;
+    }
+    if (entry.inoId !== undefined) this._inoUnref(entry.inoId);
   };
 
   // Get the inode for a path. Returns { inoId, ino } or null.
@@ -2491,6 +2586,7 @@ var BLOCK_FS = (function () {
         // Character device: no data extent, O_TRUNC is a no-op. I/O is
         // dispatched by device number, not by reading/writing the (absent)
         // extent. Keep inoId so fstat() returns the S_IFCHR inode + rdev.
+        this._inoRef(w.inoId);
         return this._allocFd({
           type: 'dev', dev: w.ino.rdev || 0,
           inoId: w.inoId, position: 0, path: resolved
@@ -2546,6 +2642,7 @@ var BLOCK_FS = (function () {
     }
 
     var position = append ? w.ino.dataSize : 0;
+    this._inoRef(w.inoId);
     var fd = this._allocFd({
       inoId: w.inoId, position: position, append: append, path: resolved
     });
@@ -2556,21 +2653,11 @@ var BLOCK_FS = (function () {
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
-    if (entry.type === 'pipe') {
-      // A pipe end on ANY fd (incl. 0/1/2 after dup2 — the pipeline case) must
-      // release its ref so the peer sees EOF/EPIPE.
-      if (entry.pipeId !== undefined && this._pipeBroker) {
-        this._pipeBroker.pipeClose(entry.pipeId, entry.pipeEnd === 'write' ? 1 : 0);
-      } else {
-        entry.pipe.closed[entry.pipeEnd] = true;
-      }
-      this._fdTable[fd] = null;
-      return 0;
-    }
     // Closing a never-redirected stdin/stdout/stderr is a no-op that keeps the
-    // slot for the console path (the prior behavior). A real (file/dev) entry on
-    // any fd, including a redirected 0/1/2, is closed normally.
+    // slot for the console path (the prior behavior). A real (file/dev/pipe)
+    // entry on any fd, including a redirected 0/1/2, is closed normally.
     if (fd < 3 && entry.type === undefined && entry.inoId === undefined) return 0;
+    this._releaseEntry(entry);
     this._fdTable[fd] = null;
     return 0;
   };
@@ -2677,6 +2764,16 @@ var BLOCK_FS = (function () {
       // _growExtent updated ino in-place — use the modified object directly.
       // No re-read from table: the table still has the old extent values;
       // we persist the update below via _inodes.write().
+    }
+
+    // POSIX hole semantics: a write past EOF must make the gap between the
+    // old dataSize and the write position read back as zeros. Extents are
+    // recycled by the allocator, so without this the hole exposes whatever a
+    // deleted file left there (data disclosure). Same mechanism as
+    // ftruncate()'s zero-fill-on-extend.
+    if (writePos > ino.dataSize) {
+      this._s.setBytes(ino.extentOffset + ino.dataSize,
+        new Uint8Array(writePos - ino.dataSize));
     }
 
     this._s.setBytes(ino.extentOffset + writePos, buf.subarray(0, count));
@@ -2883,15 +2980,9 @@ var BLOCK_FS = (function () {
     this._inodes.write(pw.inoId, pw.ino);
 
     // Drop one reference to the file; only reclaim the inode (and its data
-    // extent) when the last hard link is gone. Previously the inode was freed
-    // unconditionally, which dangled any remaining hard links.
-    w.ino.nlink--;
-    if (w.ino.nlink <= 0) {
-      this._freeInode(w.inoId);
-    } else {
-      w.ino.ctime = this._now(); // link-count change updates ctime
-      this._inodes.write(w.inoId, w.ino);
-    }
+    // extent) when the last hard link is gone AND no fd still has it open
+    // (POSIX unlink-while-open — the last close reclaims it).
+    this._dropLink(w.inoId, w.ino);
     return 0;
   };
 
@@ -2905,83 +2996,81 @@ var BLOCK_FS = (function () {
     var oldW = this._walkPath(oldResolved, true);   // rename the link itself, not its target
     if (!oldW) return this._setErr('ENOENT');
 
-    // Remove old directory entry
     var oldParentPath = oldResolved.substring(0, oldResolved.lastIndexOf('/')) || '/';
     var oldName = oldResolved.substring(oldResolved.lastIndexOf('/') + 1);
     var oldPW = this._walkPath(oldParentPath);
     if (!oldPW) return this._setErr('ENOENT');
 
+    var newParentPath = newResolved.substring(0,
+      newResolved.lastIndexOf('/')) || '/';
+    var newName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
+
+    // Pre-flight every failure we can detect BEFORE touching the source
+    // dirent, so those paths need no rollback (a prior version restored the
+    // source on some failure paths but forgot on others, orphaning it).
+    var newPW = this._walkPath(newParentPath);
+    if (!newPW) return this._setErr('ENOENT');
+    if ((newPW.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+
+    var newW = this._walkPath(newResolved, true);   // the target name itself
+    if (newW) {
+      // POSIX: if oldpath and newpath are links to the same inode, rename
+      // does nothing and succeeds — neither entry is removed.
+      if (newW.inoId === oldW.inoId) return 0;
+      if ((newW.ino.mode & S_IFMT) === S_IFDIR &&
+          newW.ino.extentOffset && newW.ino.dataSize > 0) {
+        var ent = dirList(this._s, newW.ino.extentOffset, newW.ino.dataSize);
+        if (ent.length > 0) return this._setErr('ENOTEMPTY');
+      }
+    }
+
+    // Remove old directory entry
     dirRemove(this._s, oldPW.ino.extentOffset, oldPW.ino.dataSize, oldName);
     oldPW.ino.dataSize -= DIR_ENT_HEADER + encodeStr(oldName).length;
     oldPW.ino.mtime = this._now();
     oldPW.ino.nlink--;
     this._inodes.write(oldPW.inoId, oldPW.ino);
 
-    // If target exists, remove it first (the name itself, not a link's target)
-    var newW = this._walkPath(newResolved, true);
+    // If the target exists, unlink it: drop one hard link — the inode lives
+    // on if it has other links or is still held open (rename-over-open).
     if (newW) {
-      if ((newW.ino.mode & S_IFMT) === S_IFDIR) {
-        if (newW.ino.extentOffset && newW.ino.dataSize > 0) {
-          var ent = dirList(this._s, newW.ino.extentOffset,
-            newW.ino.dataSize);
-          if (ent.length > 0) {
-            // Restore old entry
-            dirInsert(this._s, oldPW.ino.extentOffset,
-              oldPW.ino.dataSize, oldW.inoId, oldName);
-            oldPW.ino.dataSize += DIR_ENT_HEADER + encodeStr(oldName).length;
-            oldPW.ino.nlink++;
-            this._inodes.write(oldPW.inoId, oldPW.ino);
-            return this._setErr('ENOTEMPTY');
-          }
+      var tpw = this._walkPath(newParentPath); // re-walk: dir changed above
+      if (tpw) {
+        dirRemove(this._s, tpw.ino.extentOffset, tpw.ino.dataSize, newName);
+        tpw.ino.dataSize -= DIR_ENT_HEADER + encodeStr(newName).length;
+        tpw.ino.mtime = this._now();
+        tpw.ino.nlink--;
+        this._inodes.write(tpw.inoId, tpw.ino);
+      }
+      var tIno = this._inodes.read(newW.inoId); // re-read (walk data is stale)
+      if (tIno) this._dropLink(newW.inoId, tIno);
+    }
+
+    // Add new entry pointing to the old inode. Re-walk the new parent — the
+    // removals above may have rewritten it (same-directory rename).
+    newPW = this._walkPath(newParentPath);
+    var entSize = DIR_ENT_HEADER + encodeStr(newName).length;
+    if (!newPW ||
+        ((!newPW.ino.extentOffset ||
+          newPW.ino.dataSize + entSize > newPW.ino.extentCapacity) &&
+         this._growExtent(newPW.ino,
+           (newPW.ino.dataSize || 0) + Math.max(entSize, 256)) === null)) {
+      // Restore the source dirent (re-walk: its parent may have changed too)
+      var rpw = this._walkPath(oldParentPath);
+      if (rpw) {
+        var oldEntSize = DIR_ENT_HEADER + encodeStr(oldName).length;
+        if ((rpw.ino.extentOffset &&
+             rpw.ino.dataSize + oldEntSize <= rpw.ino.extentCapacity) ||
+            this._growExtent(rpw.ino,
+              (rpw.ino.dataSize || 0) + Math.max(oldEntSize, 256)) !== null) {
+          dirInsert(this._s, rpw.ino.extentOffset,
+            rpw.ino.dataSize || 0, oldW.inoId, oldName);
+          rpw.ino.dataSize = (rpw.ino.dataSize || 0) + oldEntSize;
+          rpw.ino.nlink++;
+          this._inodes.write(rpw.inoId, rpw.ino);
         }
       }
-      // Remove new entry from its parent
-      var newParentPath = newResolved.substring(0,
-        newResolved.lastIndexOf('/')) || '/';
-      var newName = newResolved.substring(
-        newResolved.lastIndexOf('/') + 1);
-      var newPW = this._walkPath(newParentPath);
-      if (newPW) {
-        dirRemove(this._s, newPW.ino.extentOffset,
-          newPW.ino.dataSize, newName);
-        newPW.ino.dataSize -= DIR_ENT_HEADER + encodeStr(newName).length;
-        newPW.ino.nlink--;
-        this._inodes.write(newPW.inoId, newPW.ino);
-      }
-      this._freeInode(newW.inoId);
-    }
-
-    // Add new entry pointing to old inode
-    var newParentPath = newResolved.substring(0,
-      newResolved.lastIndexOf('/')) || '/';
-    var newName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
-    var newPW = this._walkPath(newParentPath);
-    if (!newPW) {
-      // Try to restore old entry
-      dirInsert(this._s, oldPW.ino.extentOffset,
-        oldPW.ino.dataSize, oldW.inoId, oldName);
-      oldPW.ino.dataSize += DIR_ENT_HEADER + encodeStr(oldName).length;
-      oldPW.ino.nlink++;
-      this._inodes.write(oldPW.inoId, oldPW.ino);
-      return this._setErr('ENOENT');
-    }
-    if ((newPW.ino.mode & S_IFMT) !== S_IFDIR) {
-      return this._setErr('ENOTDIR');
-    }
-
-    var entSize = DIR_ENT_HEADER + encodeStr(newName).length;
-    if (!newPW.ino.extentOffset ||
-        newPW.ino.dataSize + entSize > newPW.ino.extentCapacity) {
-      if (this._growExtent(newPW.ino,
-          (newPW.ino.dataSize || 0) + Math.max(entSize, 256)) === null) {
-        // Restore old entry
-        dirInsert(this._s, oldPW.ino.extentOffset,
-          oldPW.ino.dataSize, oldW.inoId, oldName);
-        oldPW.ino.dataSize += DIR_ENT_HEADER + encodeStr(oldName).length;
-        oldPW.ino.nlink++;
-        this._inodes.write(oldPW.inoId, oldPW.ino);
-        return this._setErr('ENOSPC');
-      }
+      return this._setErr(newPW ? 'ENOSPC' : 'ENOENT');
     }
     dirInsert(this._s, newPW.ino.extentOffset,
       newPW.ino.dataSize || 0, oldW.inoId, newName);
@@ -3166,7 +3255,10 @@ var BLOCK_FS = (function () {
       var wFd = this._allocFd({ type: 'pipe', pipeId: id, pipeEnd: 'write', position: null });
       return [rFd, wFd];
     }
-    var pipe = { buffer: [], closed: { read: false, write: false } };
+    // Per-end reference counts so dup'd ends close only when the LAST
+    // duplicate goes (see _dupEntry/_releaseEntry). In-memory only.
+    var pipe = { buffer: [], closed: { read: false, write: false },
+                 refs: { read: 1, write: 1 } };
     var readFd = this._allocFd({
       type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null
     });
@@ -3179,20 +3271,7 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.dup = function (oldfd) {
     if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
       return this._setErr('EBADF');
-    var entry = this._fdTable[oldfd];
-    if (entry.type === 'pipe') {
-      if (entry.pipeId !== undefined && this._pipeBroker) {
-        this._pipeBroker.pipeRef(entry.pipeId, entry.pipeEnd === 'write' ? 1 : 0);
-        return this._allocFd({
-          type: 'pipe', pipeId: entry.pipeId, pipeEnd: entry.pipeEnd, position: null
-        });
-      }
-      return this._allocFd({
-        type: 'pipe', pipe: entry.pipe,
-        pipeEnd: entry.pipeEnd, position: null
-      });
-    }
-    return this._allocFd(entry);
+    return this._allocFd(this._dupEntry(this._fdTable[oldfd]));
   };
 
   BlockFS.prototype.dup2 = function (oldfd, newfd) {
@@ -3201,30 +3280,12 @@ var BLOCK_FS = (function () {
     if (newfd < 0) return this._setErr('EBADF');
     if (oldfd === newfd) return newfd;
     if (newfd < this._fdTable.length && this._fdTable[newfd] !== null) {
-      // Closing newfd releases a broker-pipe ref it may have held.
-      var prev = this._fdTable[newfd];
-      if (prev.type === 'pipe' && prev.pipeId !== undefined && this._pipeBroker) {
-        this._pipeBroker.pipeClose(prev.pipeId, prev.pipeEnd === 'write' ? 1 : 0);
-      }
+      // Implicit close of newfd — releases a pipe-end/inode ref it held.
+      this._releaseEntry(this._fdTable[newfd]);
       this._fdTable[newfd] = null;
     }
     while (this._fdTable.length <= newfd) this._fdTable.push(null);
-    var src = this._fdTable[oldfd];
-    if (src.type === 'pipe') {
-      if (src.pipeId !== undefined && this._pipeBroker) {
-        this._pipeBroker.pipeRef(src.pipeId, src.pipeEnd === 'write' ? 1 : 0);
-        this._fdTable[newfd] = {
-          type: 'pipe', pipeId: src.pipeId, pipeEnd: src.pipeEnd, position: null
-        };
-      } else {
-        this._fdTable[newfd] = {
-          type: 'pipe', pipe: src.pipe,
-          pipeEnd: src.pipeEnd, position: null
-        };
-      }
-    } else {
-      this._fdTable[newfd] = src;
-    }
+    this._fdTable[newfd] = this._dupEntry(this._fdTable[oldfd]);
     return newfd;
   };
 
@@ -3397,6 +3458,8 @@ var BLOCK_FS = (function () {
       pw.ino.dataSize || 0, inoId, linkName);
     pw.ino.dataSize = (pw.ino.dataSize || 0) + entSize;
     pw.ino.mtime = this._now();
+    pw.ino.nlink++; // new dir entry — same convention as open()/mkdir()/
+                    // mknod()/link()/rename(), balanced by unlink()
     this._inodes.write(pw.inoId, pw.ino);
     return 0;
   };
@@ -3430,14 +3493,7 @@ var BLOCK_FS = (function () {
       newfd = this._fdTable.length - 1;
     }
 
-    if (entry.type === 'pipe') {
-      this._fdTable[newfd] = {
-        type: 'pipe', pipe: entry.pipe,
-        pipeEnd: entry.pipeEnd, position: null
-      };
-    } else {
-      this._fdTable[newfd] = entry;
-    }
+    this._fdTable[newfd] = this._dupEntry(entry);
     return newfd;
   };
 
@@ -7690,6 +7746,10 @@ async function runModule({
     return Math.exp(lgammaCore(x));
   }
 
+  /* clock_gettime latch state — see __clock_ns_hi/__clock_ns_lo below. */
+  let clockNsLatchLo = 0;
+  let clockMonoLastMs = 0;
+
   const imports = {
     [ENV_KEY]: {
       __exit: function (status) {
@@ -7835,15 +7895,33 @@ async function runModule({
         view.setInt32(usecPtr, (now % 1000) * 1000, true);
         return 0;
       },
-      /* POSIX clock_gettime */
-      __clock_ns_hi: function () {
-        const now = performance.now();
-        return Math.floor(now / 1000);
+      /* POSIX clock_gettime — __clock_ns_hi(clk_id) latches ONE time sample
+         as a 64-bit nanosecond count and returns its high 32 bits;
+         __clock_ns_lo() returns the latched low 32 bits. Wasm is
+         single-threaded between the two calls, so the pair always describes
+         the same instant (two independent performance.now() samples used to
+         step the clock backwards ~1s at second boundaries).
+         CLOCK_REALTIME (0) is epoch-anchored via Date.now(); everything else
+         is CLOCK_MONOTONIC via performance.now(), clamped to never go
+         backwards. BigInt keeps the ns split exact (epoch ns exceed 2^53). */
+      __clock_ns_hi: function (clk_id) {
+        let ms;
+        if (clk_id === 0) {
+          ms = Date.now();
+        } else {
+          ms = performance.now();
+          if (ms < clockMonoLastMs) ms = clockMonoLastMs;
+          else clockMonoLastMs = ms;
+        }
+        const sec = Math.floor(ms / 1000);
+        let nsec = Math.round((ms - sec * 1000) * 1e6);
+        if (nsec > 999999999) nsec = 999999999;
+        const ns = BigInt(sec) * 1000000000n + BigInt(nsec);
+        clockNsLatchLo = Number(ns & 0xFFFFFFFFn);
+        return Number(ns >> 32n);
       },
       __clock_ns_lo: function () {
-        const now = performance.now();
-        const secs = Math.floor(now / 1000);
-        return Math.floor((now - secs * 1000) * 1000000);
+        return clockNsLatchLo;
       },
       /* Emscripten compatibility stubs */
       __emscripten_async_call: function (funcPtr, argPtr, millis) {

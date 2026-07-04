@@ -26311,16 +26311,21 @@ done:
   return pos;
 }
 
-__import long __clock_ns_hi(void);
+__import long __clock_ns_hi(int clk_id);
 __import long __clock_ns_lo(void);
 
 int clock_gettime(clockid_t clk_id, struct timespec *tp) {
-  (void)clk_id;
-  long hi = __clock_ns_hi();
-  long lo = __clock_ns_lo();
-  /* hi = seconds, lo = nanoseconds remainder */
-  tp->tv_sec = hi;
-  tp->tv_nsec = lo;
+  /* __clock_ns_hi(clk_id) latches ONE host time sample as a 64-bit
+     nanosecond count (CLOCK_REALTIME is epoch-anchored, CLOCK_MONOTONIC
+     never goes backwards) and returns its high 32 bits; __clock_ns_lo()
+     returns the low 32 bits of the SAME latched sample. Reassembling one
+     64-bit value here keeps sec/nsec coherent — two independent samples
+     used to step the clock backwards near second boundaries. */
+  unsigned long long ns =
+      ((unsigned long long)(unsigned long)__clock_ns_hi(clk_id) << 32) |
+      (unsigned long)__clock_ns_lo();
+  tp->tv_sec = ns / 1000000000ULL;
+  tp->tv_nsec = ns % 1000000000ULL;
   return 0;
 }
   `,
