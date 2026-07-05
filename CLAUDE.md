@@ -2,6 +2,12 @@
 
 `compiler.js` is the primary compiler in this repo — a C → WebAssembly compiler in a single file. All other files (host.js, serve.js, tools/, vendor/) are auxiliary.
 
+**North star** (see `todos/OS.md`): a WebAssembly-native, almost-POSIX OS in a
+browser tab — every binary a real wasm module from this compiler, with
+persistence (BlockFS), a shell, and eventually a compositor/window manager.
+"Almost" because `fork()` is deliberately replaced by the owner-brokered
+`posix_spawn` model (decision + rationale in `todos/OS.md` — don't re-litigate).
+
 ## Portability
 
 `compiler.js` MUST work in both browser and Node.js environments. Never use `process.env`, `process.stderr`, `process.exit`, `process.hrtime`, or any other Node.js-specific API without a `typeof process !== 'undefined'` guard and a browser-compatible fallback. No environment variables — use compiler options and CLI flags instead.
