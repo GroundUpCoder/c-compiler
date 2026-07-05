@@ -26,3 +26,7 @@ forwarding once 0002 lands). Doubles as the live harness for kernel phases.
 
 - `node serve.js .` → open the page → land in the protoshell over a
   persistent BlockFS; spawn programs; reboot the tab and files persist.
+- **Headless boot mode** (agent-friendly requirement, OS.md): the same
+  kernel + image boots under plain Node with the tty on stdio —
+  `echo 'ls /' | node os/boot.js` works, so agents/CI drive the OS with
+  pipes and exit codes, no browser.

@@ -20,3 +20,14 @@ for free — that's the acceptance test to design toward.
 - Input routing: focus ≈ foreground-pgroup analogy, keyboard/mouse capture.
 - Who owns the terminal: xterm.js as privileged surface vs wasm terminal app.
 - Decorations/hit-testing split between compositor and WM client.
+
+## Hard requirements (OS.md "agent-friendly by construction")
+
+- **Headless surface screenshot** as a kernel op: read any surface's pixels
+  without a display (shm transport makes this free); PNG encoding in the
+  harness. WebGPU surfaces via readback where possible.
+- **Agent control channel**: enumerate windows (id/title/geometry/z/focus),
+  focus, synthetic key/pointer input targeted at a window, screenshot —
+  same protocol from the outside (test harness/agent) and inside (wmctl).
+- **Win95-ish management** as the reference WM look: overlapping windows,
+  decorations, taskbar — deterministic layout is an agent feature too.

@@ -16,6 +16,29 @@ kernel-ish layer, BlockFS is the disk, vendored ports are the userland.
 plan to implement faithfully (see the decision below). Everything else is fair
 game.
 
+**Agent-friendly by construction.** The environment must be as drivable by AI
+agents as by humans, at every layer, without a separate automation bolt-on:
+
+- **Headless-first**: the whole OS runs under Node (kernel.js + host.js +
+  worker_threads) with no browser — `tests/kernel/` already boots it this
+  way. The reference os/ build keeps a headless boot mode (tty on stdio) so
+  an agent can drive the shell with pipes and exit codes.
+- **The tty bridge is dumb bytes in/bytes out** — a scripted bridge (what the
+  kernel tests use) IS the agent interface; xterm.js is just the human skin
+  over the same protocol.
+- **Screenshots without a display**: compositor surfaces use readable pixel
+  transports (shm framebuffer first), so "screenshot surface X" is a kernel
+  op that works headlessly — deterministic pixels for graphics testing.
+  WebGPU content falls back to GPU readback or Playwright against the real
+  page (always available as the outer loop).
+- **Semantic window access**: the kernel routes all input and owns the
+  surface list, so the WM protocol exposes an agent control channel — list
+  windows/geometry, focus, send keys, click, screenshot — usable from
+  outside (test harness) and inside the OS (a wmctl binary), like
+  xdotool-as-a-syscall. Target look for the WM is Windows-95-ish window
+  management (overlapping windows, decorations, taskbar) — which is also a
+  good agent target: discrete widgets, deterministic layout.
+
 ## Non-goals
 
 - **Not an emulator.** tinyemu booting Linux is a compiler stress test, not the

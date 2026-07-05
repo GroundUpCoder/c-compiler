@@ -29,3 +29,7 @@ stdin-read/select EINTR via the doorbell.
 - tests/kernel: canonical vs raw transitions, erase/kill/EOF editing, echo
   bytes, VINTR→SIGINT to fg pgroup only, SIGWINCH, blocked read EINTR.
 - A scripted fake UI bridge drives it all under Node (no browser needed).
+  Note (OS.md agent-friendly requirement): this scripted bridge IS the
+  agent-driving interface — keep it bytes-in/bytes-out and embedder-visible
+  (kernel API, not test-private), so headless agents and xterm.js are just
+  two consumers of the same protocol.
