@@ -10,6 +10,35 @@
 
 Planned work and design docs live in the `todos/` folder. Each file covers a distinct feature or topic. Check there before starting new work to see what's already been planned.
 
+## Dev logs
+
+`logs/YYYY-MM-DD/<topic>.md` is a **committed** engineering journal (folder per
+local day, file per topic) capturing the *why* behind non-trivial work —
+decisions, trade-offs, gotchas. Add an entry when landing anything
+substantial. (Machine-wide convention; see `~/git/netguc/skills/logging.md`.)
+
+## Conformance tests (bug regression corpus)
+
+`tests/unit/conformance/` holds one directory per fixed conformance bug:
+minimal C repro + clang-verified `expected.stdout` (programs are ILP32-clean),
+with `// BUG:` / `// C11:` / `// EXPECT:` header comments. `diag_*` dirs assert
+a *required* diagnostic via `expected.compiler.exitcode` (no stderr golden —
+the message wording is free to change). **Fix bugs test-first: add the failing
+test here, commit it, then fix.** Verified-but-unfixed findings are tracked in
+`todos/CONFORMANCE-REMAINING.md`.
+
+Semantics decisions already made (don't re-litigate without cause):
+- Enum constants in `(INT_MAX, UINT_MAX]` get type `unsigned int` (gcc
+  extension, per the `unsigned_consteval` golden); outside 32 bits errors.
+- All constant scalar conversions go through `ConstEval.convert` (C11 6.3.1,
+  single implementation — PP, sema, inliner, codegen). Float→int folding
+  declines out-of-range so `--trapping-float-conversions` keeps its runtime
+  semantics; static-initializer emission saturates explicitly.
+
+`tests/run-unit.js` enforces a per-test timeout (default 30s, `--timeout=MS`,
+per-test `timeoutMs` in `config.json`) and replaces the killed worker, so
+hang-class miscompiles fail fast instead of stalling the suite.
+
 ## Vendored projects
 
 `vendor/` contains real-world C codebases already ported to this compiler — each has its own `bin.json`. **Check this list before proposing a "new" port; many obvious candidates are already done.** As of writing:
@@ -45,6 +74,12 @@ offset → silent cross-file corruption. (This was a real bug — fixed by makin
 
 **Test suite** (`tests/blockfs/`, run `node tests/blockfs/run.js [--long]`):
 - `test_tlsf.js`, `test_blockfs.js`, `test_e2e.js` — example-based unit/e2e.
+- `test_posix.js` — POSIX semantics: unlink/rename-while-open lifetime (inodes
+  carry an in-memory, per-instance open-refcount; freeing defers to last
+  close), same-inode rename no-op, failed-rename rollback, hole zero-fill,
+  TLSF v3 huge-size arithmetic, symlink nlink symmetry, pipe-end refcounts
+  across dup/dup2/F_DUPFD. Note: the open-refcount is per-instance only —
+  cross-instance unlink-while-open still frees early (documented limitation).
 - `fsck.js` — an INDEPENDENT consistency checker (shares no code with host.js;
   re-declares the on-disk format with a version guard; reads the store raw). It
   walks the block map, free lists, inodes/extents, and the directory tree and
