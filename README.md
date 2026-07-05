@@ -277,6 +277,20 @@ for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
 
 For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
 
+## The OS (os/)
+
+The repo's north star ([todos/OS.md](todos/OS.md)) is a wasm-native, almost-POSIX OS in a browser tab — every binary a real wasm module from this compiler. It boots:
+
+```bash
+node serve.js .            # then open http://localhost:8080/os/os.html
+# → a terminal over a persistent filesystem (BlockFS on OPFS); pid 1 is a
+#   small C protoshell; `cc hello.c && ./a.out` compiles and runs IN the OS.
+
+echo 'ls /' | node os/boot.js   # the same OS headless, tty on stdio
+```
+
+Under it sits **kernel.js**, the owner-side process control plane ([todos/KERNEL.md](todos/KERNEL.md)): process table, posix_spawn (deliberately **not** fork — see OS.md for the decision), async signal delivery with EINTR, a kernel-side tty line discipline (Ctrl-C means SIGINT), kernel-owned fd tables over one shared BlockFS, pipes with real cross-process blocking + SIGPIPE, and job control (stop/continue, WUNTRACED/WCONTINUED, SIGTTIN). First boot compiles the OS's own userland from C sources in `os/image.json` — there is no build step. The next milestone is a real shell port ([todos/0005](todos/0005-shell-port-busybox.md)).
+
 ## Vendored projects
 
 The compiler is tested against real-world C projects:

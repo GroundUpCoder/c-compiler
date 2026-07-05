@@ -169,31 +169,27 @@ like an OS. The WM then lands on proven process infrastructure.
 
 ### Phase 1 — Shell + the tty/signal layer it needs
 
-The single highest-leverage project in the repo. The signals/tty/job-control
-substrate below is designed in `todos/KERNEL.md` (a separate owner-side
-`kernel.js` — process table, doorbell futex, tty line discipline, unified
-control-plane protocol); the shell port is its acceptance test.
+The single highest-leverage project in the repo. **The substrate is DONE**
+(kernel.js Phases 1–4, `todos/done/0001–0004` + `0009`; design in
+`todos/KERNEL.md`); the shell port (`todos/0005`) is its acceptance test.
 
-- **Port a real shell** (busybox ash or dash) to `/bin/sh`. Patch fork points:
-  plain command execution becomes spawn; subshells/`$( )` either spawn the
-  shell binary itself with the command text, or run in-process where safe.
-  This also instantly unlocks the already-written `popen()`/`system()`.
-- **Signals**: host-side delivery for the async-safe core — SIGINT/SIGTERM/
-  SIGKILL/SIGCHLD, `signal`/`sigaction` dispatch, default actions
-  (terminate/ignore). Delivery can check a SAB flag at safe points (libc
-  syscall entry) rather than true preemption.
-- **termios/tty**: back `tcgetattr`/`tcsetattr` for the xterm fd — raw vs
-  canonical mode, echo, VINTR→SIGINT, `TIOCGWINSZ` + SIGWINCH. This is what
-  makes line editors, `less`-style pagers, and REPLs behave.
-- **Job control** (can trail the rest): process groups (`setpgid` — spawn attr
-  plumbing for pgroups already exists), foreground/background, SIGTSTP/`fg`/
-  `bg`. Stopping a wasm instance mid-run needs thought (worker suspension via
-  Atomics.wait on a resume flag at safe points).
+- **Port a real shell** (busybox — see the shell-choice open question below)
+  to `/bin/sh`. Patch fork points: plain command execution becomes spawn;
+  subshells/`$( )` either spawn the shell binary itself with the command
+  text, or run in-process where safe. This also instantly unlocks the
+  already-written `popen()`/`system()`. ← THE remaining Phase-1 item.
+- ~~Signals~~ DONE (0001): safe-point delivery, SIGPEND on the kernel page,
+  EINTR/SA_RESTART, default actions, SIGCHLD, ordered exit handshake.
+- ~~termios/tty~~ DONE (0002): kernel-object tty, full termios, canonical/
+  raw + echo, VINTR→SIGINT to the fg pgroup, TIOCGWINSZ + SIGWINCH.
+- ~~Job control~~ DONE (0003): pgroups, fg/bg via tcsetpgrp, stop/cont
+  (cooperative park at safe points), WUNTRACED/WCONTINUED, SIGTTIN. Pipes
+  as kernel OFDs with real blocking + SIGPIPE landed with it.
+- ~~select over pipes/tty/files~~ DONE (0009/0003, kernel-side readiness).
 - **Coreutils**: a busybox-style multicall binary (ls, cat, cp, mv, rm, mkdir,
   grep, sed…) — mostly straight ports once the shell exists.
-- Small enablers as they come up: `select`/`poll` over the fds we actually
-  have (pipes, tty, files), `mmap` (at least MAP_ANON; file-backed can be
-  read-copy at first).
+- Small enablers as they come up: `poll`, `mmap` (at least MAP_ANON;
+  file-backed can be read-copy at first).
 
 Exit criteria: open the tab, land in a shell over BlockFS; pipelines, Ctrl-C,
 an editor, and `cc hello.c && ./a.out` all work. That's already "an OS in a
@@ -245,15 +241,24 @@ matches it:
 
 ## Open questions
 
-- **Stopping/suspending a process** (SIGSTOP, job control): coop suspension at
-  libc safe points vs worker termination+resnapshot. Coop is simpler and
-  probably fine.
-- **Signal delivery granularity**: safe-point polling misses pure-compute
-  loops (`while(1);` won't die on Ctrl-C). Acceptable? Or compile-time option
-  to insert polls in loop back-edges (cost?).
-- **Shell choice**: busybox ash (drags in coreutils for free, heavier patch
-  surface) vs dash (smaller, cleaner, shell only). Leaning busybox for the
-  coreutils dividend.
+- ~~Stopping/suspending a process~~ DECIDED + DONE (0003): cooperative
+  suspension at safe points (KP_FLAGS.STOP, parked in the kernel client at
+  RPC entry / sigpoll); SIGKILL (worker.terminate) is the backstop.
+- ~~Signal delivery granularity~~ DECIDED (0001): safe-point polling;
+  pure-compute loops are uninterruptible by design in v1, SIGKILL still
+  works; `--signal-polls` (loop back-edge checks) recorded as a future
+  compiler flag if a port demands it.
+- **Shell choice** (the 0005 decision): busybox ash (drags in coreutils for
+  free) vs busybox hush vs dash. Key input: **NOMMU Linux has no fork()
+  either**, and busybox has lived there for years — its NOMMU builds use
+  vfork + re-exec-self with handed-over state, which is exactly
+  spawn-shaped. Upstream, **hush is the NOMMU-capable shell** (ash
+  historically requires real fork; its Kconfig gates on MMU), so hush's
+  subshell/pipeline paths already have the "respawn yourself" structure our
+  posix_spawn model needs, while ash would need us to patch every fork
+  site by hand. Still leaning busybox (coreutils dividend) — but hush
+  first, ash only if hush's POSIX coverage disappoints. Verify NOMMU
+  specifics against the vendored source when 0005 starts.
 - **Surface transport for the compositor**: shared-memory framebuffer
   (simple, works today, CPU blit) vs WebGPU texture sharing (fast, but
   cross-worker GPU resource sharing is awkward). Probably shm first.
