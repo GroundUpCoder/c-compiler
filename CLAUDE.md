@@ -12,16 +12,28 @@ persistence (BlockFS), a shell, and eventually a compositor/window manager.
 
 `compiler.js` MUST work in both browser and Node.js environments. Never use `process.env`, `process.stderr`, `process.exit`, `process.hrtime`, or any other Node.js-specific API without a `typeof process !== 'undefined'` guard and a browser-compatible fallback. No environment variables — use compiler options and CLI flags instead.
 
-## TODOs
+## TODOs & the work queue
 
-Planned work and design docs live in the `todos/` folder. Each file covers a distinct feature or topic. Check there before starting new work to see what's already been planned.
+Planned work lives in `todos/` (system doc: `todos/README.md`):
+
+- **Work queue**: `todos/NNNN-<slug>.md` — one numbered item per committed
+  unit of work (stable IDs, never reused; status header inside; done items
+  move to `todos/done/`, so `ls todos/*.md` is the open queue). The
+  README's *Next up* list is the authoritative order of attack — keep it
+  and item status headers current.
+- **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
+  long-lived designs and backlogs that queue items reference for detail.
+
+Check both before starting new work; reference items as `todos/NNNN` in
+commits and dev logs.
 
 ## Dev logs
 
 `logs/YYYY-MM-DD/<topic>.md` is a **committed** engineering journal (folder per
 local day, file per topic) capturing the *why* behind non-trivial work —
 decisions, trade-offs, gotchas. Add an entry when landing anything
-substantial. (Machine-wide convention; see `~/git/netguc/skills/logging.md`.)
+substantial, cross-linking `todos/NNNN` items. In-repo convention doc:
+`logs/README.md` (machine-wide origin: `~/git/netguc/skills/logging.md`).
 
 ## Conformance tests (bug regression corpus)
 
