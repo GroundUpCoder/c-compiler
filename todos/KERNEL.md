@@ -18,8 +18,14 @@ kernel object — line discipline (canonical editing/echo/ICRNL), ISIG chars
 `__tty_getattr`/`__tty_setattr` RPCs, `tcgetpgrp`/`tcsetpgrp`, SIGWINCH,
 EOF, stdin-read/select EINTR (kernel rings the tty futex on signal posts).
 v1 tty limits (documented in kernel.js): one tty, single-active-reader
-consume path, empty-line VEOF is sticky. Phases 4–5 remain design
-(`todos/0003`+).
+consume path (ring mode only), empty-line VEOF is sticky. The fd/data-plane
+amendment is implemented (`todos/done/0009`): kernel-owned per-process fd
+tables → shared open file descriptions → one BlockFS in the kernel; 0x04xx
+fs RPCs with raw read/write payloads (KP_RPC_KIND); RemoteFS reusing
+toWasmEnv; brokered-mode tty reads as deferred RPCs; SIGKILL is
+fsck-verified leak-free (the Phase-1 accepted leak retired). Benchmark:
+~10µs/RPC — 559 MB/s write, 96.6K metadata ops/s brokered. Phases 4–5
+remain design (`todos/0003`+).
 
 ## Why this exists
 

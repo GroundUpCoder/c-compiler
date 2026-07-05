@@ -1,6 +1,9 @@
 # 0009 — kernel-owned fd table + brokered filesystem
 
-- **Status**: in progress
+- **Status**: DONE (2026-07-06; dev log: `logs/2026-07-06/brokered-fs.md`)
+- **Benchmark gate (passed)**: brokered 559 MB/s write / 482 MB/s read /
+  96.6K metadata ops/s (~10µs per RPC) vs in-process 1327 / 1163 / 698K —
+  2.4× bulk, 7× metadata cost; absolute numbers far above interactive needs
 - **Depends**: — (amends the data-plane decision; MUST land before 0003)
 - **Design**: `todos/KERNEL.md` ("The fd/data-plane amendment", 2026-07-06)
 

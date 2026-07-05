@@ -4455,6 +4455,9 @@ var BLOCK_FS = (function () {
     createV4: BlockFS.createV4,
     migrateV3toV4: BlockFS.migrateV3toV4,
     isMigrationComplete: BlockFS.isMigrationComplete,
+    // The class itself: kernel.js's RemoteFS reuses BlockFS.prototype
+    // .toWasmEnv over its RPC-backed method surface (todos/0009).
+    BlockFS: BlockFS,
     MemoryByteStore: MemoryByteStore,
     ReadOnlyStore: ReadOnlyStore,
     TLSFAllocator: TLSFAllocator,

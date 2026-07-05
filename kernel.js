@@ -58,11 +58,14 @@ var KP_FLAGS = 3;
 var KP_RPC_STATE = 4;
 var KP_RPC_OP = 5;
 var KP_RPC_LEN = 6;
+var KP_RPC_KIND = 7;               // payload encoding: RPCK_JSON | RPCK_RAW
 var KP_PAYLOAD_OFF = 32;           // byte offset of the payload region
 var KP_SIZE = 64 * 1024;           // fits compile stdout/stderr comfortably
 var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF;
 
 var RPC_IDLE = 0, RPC_REQUEST = 1, RPC_DONE = 2;
+var RPCK_JSON = 0, RPCK_RAW = 1;   // RAW: fs read/write bulk bytes — no JSON,
+                                   // no structured clone, one memcpy each way
 
 /* Opcode space (todos/KERNEL.md): 0x00xx process, 0x01xx tty, 0x02xx pipes,
  * 0x03xx misc, 0x1xxx reserved for WM surfaces. Only the ops the current
@@ -82,6 +85,15 @@ var OP = {
   TCGETPGRP: 0x0103,
   TCSETPGRP: 0x0104,
   COMPILE: 0x0301,
+  // 0x04xx — the brokered filesystem (KERNEL.md "fd/data-plane amendment").
+  FS_OPEN: 0x0401, FS_CLOSE: 0x0402, FS_READ: 0x0403, FS_WRITE: 0x0404,
+  FS_LSEEK: 0x0405, FS_STAT: 0x0406, FS_LSTAT: 0x0407, FS_FSTAT: 0x0408,
+  FS_ACCESS: 0x0409, FS_UNLINK: 0x040A, FS_RENAME: 0x040B, FS_MKDIR: 0x040C,
+  FS_RMDIR: 0x040D, FS_LINK: 0x040E, FS_SYMLINK: 0x040F, FS_READLINK: 0x0410,
+  FS_FTRUNCATE: 0x0411, FS_CHMOD: 0x0412, FS_FCHMOD: 0x0413, FS_CHDIR: 0x0414,
+  FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
+  FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
+  FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E,
 };
 
 /* Wait options / status packing — must match <sys/wait.h>. */
@@ -116,11 +128,25 @@ function writePayload(i32, u8, obj) {
   if (bytes.length > KP_PAYLOAD_CAP) return false;
   u8.set(bytes, KP_PAYLOAD_OFF);
   Atomics.store(i32, KP_RPC_LEN, bytes.length);
+  Atomics.store(i32, KP_RPC_KIND, RPCK_JSON);
+  return true;
+}
+
+function writeRawPayload(i32, u8, bytes) {
+  if (bytes.length > KP_PAYLOAD_CAP) return false;
+  u8.set(bytes, KP_PAYLOAD_OFF);
+  Atomics.store(i32, KP_RPC_LEN, bytes.length);
+  Atomics.store(i32, KP_RPC_KIND, RPCK_RAW);
   return true;
 }
 
 function readPayload(i32, u8) {
   var len = Atomics.load(i32, KP_RPC_LEN);
+  if (Atomics.load(i32, KP_RPC_KIND) === RPCK_RAW) {
+    var raw = new Uint8Array(len);
+    raw.set(u8.subarray(KP_PAYLOAD_OFF, KP_PAYLOAD_OFF + len));
+    return { raw: raw };
+  }
   if (len <= 0) return {};
   // Copy out of the SAB before decoding (TextDecoder rejects SAB views).
   var copy = new Uint8Array(len);
@@ -151,9 +177,21 @@ function KernelClient(sab, postToKernel) {
  * while parked: the first one posts a krpc-intr message and the kernel
  * answers EINTR (or the already-raced real result — both are fine; the
  * signal delivers at the caller's next safe point). */
+/* Raw-payload variant (FS_WRITE): `bytes` land in the payload region as-is
+ * (op-specific layout); the response comes back through the same
+ * readPayload (JSON or raw). */
+KernelClient.prototype.callRaw = function (op, bytes, interruptible) {
+  if (!writeRawPayload(this._i32, this._u8, bytes)) return { errno: 'E2BIG' };
+  return this._finish(op, interruptible);
+};
+
 KernelClient.prototype.call = function (op, req, interruptible) {
+  if (!writePayload(this._i32, this._u8, req)) return { errno: 'E2BIG' };
+  return this._finish(op, interruptible);
+};
+
+KernelClient.prototype._finish = function (op, interruptible) {
   var i32 = this._i32;
-  if (!writePayload(i32, this._u8, req)) return { errno: 'E2BIG' };
   Atomics.store(i32, KP_RPC_OP, op);
   Atomics.store(i32, KP_RPC_STATE, RPC_REQUEST);
   this._post({ type: 'krpc' });
@@ -306,6 +344,13 @@ function Tty(kernel, opts) {
   Atomics.store(this._i32, SI_ROWS, opts.rows || 24);
   this.fgPgid = 0;              // set at boot; tcsetpgrp moves it
   this._line = [];              // canonical-mode edit buffer
+  // Brokered mode (the fd/data-plane amendment): cooked bytes queue here
+  // and the kernel serves deferred FS_READ RPCs from it — the SAB ring is
+  // unused for data (the header still carries winsize for TIOCGWINSZ).
+  // Ring mode (standalone pages) keeps the Phase-3 behavior.
+  this._brokered = false;
+  this._cooked = [];
+  this._eofFlag = false;
   this.termios = {
     iflag: T_ICRNL,
     oflag: T_OPOST | T_ONLCR,
@@ -332,9 +377,15 @@ Tty.prototype.wakeReaders = function () {
   Atomics.notify(this._i32, SI_SEQ);
 };
 
-/* Commit cooked bytes into the shared ring. Overflow drops (like a real tty
+/* Commit cooked bytes: brokered mode queues them for deferred FS_READ
+ * RPCs; ring mode writes the shared ring. Overflow drops (like a real tty
  * input queue) — loudly, via the kernel log. */
 Tty.prototype._push = function (bytes) {
+  if (this._brokered) {
+    for (var bi = 0; bi < bytes.length; bi++) this._cooked.push(bytes[bi]);
+    this._kernel._ttyNotify(this);
+    return;
+  }
   var i32 = this._i32, ring = this._ring, size = ring.length;
   var free = size - Atomics.load(i32, SI_AVAIL);
   var n = Math.min(bytes.length, free);
@@ -435,8 +486,19 @@ Tty.prototype.resize = function (cols, rows) {
 
 /* End of input (agent closed stdin / user hit the page's EOF control). */
 Tty.prototype.eof = function () {
+  this._eofFlag = true;
   Atomics.store(this._i32, SI_EOF, 1);
+  if (this._brokered) { this._kernel._ttyNotify(this); return; }
   this.wakeReaders();
+};
+
+/* Brokered readiness (select) and read service. */
+Tty.prototype.readable = function () {
+  return this._cooked.length > 0 || this._eofFlag;
+};
+Tty.prototype.take = function (count) {
+  var n = Math.min(count, this._cooked.length);
+  return Uint8Array.from(this._cooked.splice(0, n));
 };
 
 Tty.prototype.getattr = function () {
@@ -501,7 +563,51 @@ function Kernel(opts) {
   this._nextPid = 1;
   this._halted = false;
   this._tty = null;
+  // The brokered filesystem (KERNEL.md "fd/data-plane amendment"): with an
+  // opts.fs BlockFS instance, the kernel owns per-process fd tables over a
+  // system-wide open-file-description table, and processes reach the fs via
+  // 0x04xx RPCs (host.js RemoteFS). Without opts.fs, processes keep their
+  // own private in-process fs (the standalone/Phase-1 arrangement).
+  this._fs = opts.fs || null;
+  this._brokered = !!opts.fs;
+  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null', refs, bfsFd?, ch? }
+  this._nextOfd = 1;
+  this._std = null;          // lazy singleton OFDs for default stdio
+  this._ttyWaiters = [];     // pids with a deferred tty FS_READ, FIFO
 }
+
+Kernel.prototype._makeOfd = function (kind, extra) {
+  var o = { id: this._nextOfd++, kind: kind, refs: 0 };
+  if (extra) for (var k in extra) o[k] = extra[k];
+  this._ofds.set(o.id, o);
+  return o;
+};
+
+Kernel.prototype._ofdUnref = function (id) {
+  var o = this._ofds.get(id);
+  if (!o || --o.refs > 0) return;
+  this._ofds.delete(id);
+  if (o.kind === 'file') this._fs.close(o.bfsFd);
+};
+
+Kernel.prototype._stdOfds = function () {
+  if (!this._std) {
+    this._std = {
+      in_: this._makeOfd(this._tty ? 'tty' : 'null'),
+      out: this._makeOfd('out', { ch: 1 }),
+      err: this._makeOfd('out', { ch: 2 }),
+    };
+  }
+  return this._std;
+};
+
+/* Absolute path in `pcb`'s working directory (BlockFS normalizes . and ..
+ * on absolute paths; the kernel only supplies the base). */
+Kernel.prototype._pathFor = function (pcb, p) {
+  if (typeof p !== 'string' || p.length === 0) return p;
+  if (p.charCodeAt(0) === 47) return p;
+  return (pcb.cwd === '/' ? '' : pcb.cwd) + '/' + p;
+};
 
 /* Create the system tty (call BEFORE boot; v1: one tty, attached to every
  * process). opts: { cols, rows, ringSize, output(bytes) } — output receives
@@ -509,6 +615,7 @@ function Kernel(opts) {
  * flows through onOutput. Returns the Tty (input/resize/eof/sab). */
 Kernel.prototype.createTty = function (opts) {
   this._tty = new Tty(this, opts || {});
+  this._tty._brokered = this._brokered;
   return this._tty;
 };
 
@@ -563,7 +670,10 @@ Kernel.prototype._spawn = function (parent, spec) {
       cwd: spec.cwd !== null && spec.cwd !== undefined ? spec.cwd
         : (parent ? parent.cwd : '/'),
       sigdisp: new Int8Array(NSIG),  // __on_sigdisp mirror; all DFL initially
-      waiter: null,                  // deferred WAIT: {sel, options}
+      // ONE deferred RPC at a time (the worker is parked):
+      // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
+      waiter: null,
+      fds: new Map(),                // procFd -> ofdId (brokered mode)
       page: null, i32: null, u8: null,
       worker: null,
       tty: self._tty,                // v1: the one system tty (or null)
@@ -572,6 +682,58 @@ Kernel.prototype._spawn = function (parent, spec) {
     pcb.page = sab;
     pcb.i32 = new Int32Array(sab);
     pcb.u8 = new Uint8Array(sab);
+
+    // Brokered fd table: full POSIX inheritance (every parent fd, sharing
+    // the open file descriptions), then the spawn file_actions in order.
+    // The kernel IS the parent's fd table, so no translation is needed —
+    // the payoff of the fd/data-plane amendment.
+    if (self._brokered) {
+      var inherit = parent ? parent.fds : null;
+      if (inherit) {
+        inherit.forEach(function (ofdId, fd) {
+          var o = self._ofds.get(ofdId);
+          if (o) { o.refs++; pcb.fds.set(fd, ofdId); }
+        });
+      } else {
+        var std = self._stdOfds();
+        std.in_.refs++; pcb.fds.set(0, std.in_.id);
+        std.out.refs++; pcb.fds.set(1, std.out.id);
+        std.err.refs++; pcb.fds.set(2, std.err.id);
+      }
+      var actions = spec.actions || [];
+      for (var ai = 0; ai < actions.length; ai++) {
+        var a = actions[ai];
+        var fail = null;
+        if (a.op === 0) {           // DUP2: child fd `arg` -> child fd `fd`
+          var srcId = pcb.fds.get(a.arg);
+          if (srcId === undefined) fail = 'EBADF';
+          else {
+            self._ofds.get(srcId).refs++;
+            var oldId = pcb.fds.get(a.fd);
+            if (oldId !== undefined) self._ofdUnref(oldId);
+            pcb.fds.set(a.fd, srcId);
+          }
+        } else if (a.op === 1) {    // OPEN path at fd (arg = oflag)
+          var bfsFd = self._fs.open(self._pathFor(pcb, a.path), a.arg | 0, a.mode | 0);
+          if (bfsFd === null) fail = self._fs._lastError || 'EIO';
+          else {
+            var no = self._makeOfd('file', { bfsFd: bfsFd });
+            no.refs++;
+            var prevId = pcb.fds.get(a.fd);
+            if (prevId !== undefined) self._ofdUnref(prevId);
+            pcb.fds.set(a.fd, no.id);
+          }
+        } else if (a.op === 2) {    // CLOSE
+          var cId = pcb.fds.get(a.fd);
+          if (cId !== undefined) { self._ofdUnref(cId); pcb.fds.delete(a.fd); }
+        }
+        if (fail) {
+          pcb.fds.forEach(function (id) { self._ofdUnref(id); });
+          return { errno: fail };
+        }
+      }
+    }
+
     self._procs.set(pid, pcb);
     if (parent) parent.children.add(pid);
     var procSpec = {
@@ -585,6 +747,7 @@ Kernel.prototype._spawn = function (parent, spec) {
       image: image,
       kernelPage: sab,
       ttySab: pcb.tty ? pcb.tty.sab : null,
+      brokered: self._brokered,
     };
     try {
       pcb.worker = self._createWorker(procSpec);
@@ -609,12 +772,12 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
   if (!msg || pcb.state !== STATE_RUNNING) return;
   switch (msg.type) {
     case 'krpc': this._dispatchRpc(pcb); break;
-    // A parked interruptible RPC (WAIT) noticed a deliverable signal: answer
-    // EINTR if the wait is still registered. If the real result raced in
-    // first, the waiter is already gone — ignore, the signal delivers at the
-    // caller's next safe point anyway.
+    // A parked interruptible RPC (WAIT / tty FS_READ / FS_SELECT) noticed a
+    // deliverable signal: answer EINTR if it's still registered. If the real
+    // result raced in first, the waiter is already gone — ignore, the signal
+    // delivers at the caller's next safe point anyway.
     case 'krpc-intr':
-      if (pcb.waiter) { pcb.waiter = null; this._respond(pcb, { errno: 'EINTR' }); }
+      if (pcb.waiter) { this._cancelWaiter(pcb); this._respond(pcb, { errno: 'EINTR' }); }
       break;
     case 'out': this._onOutput(pcb.pid, msg.fd, msg.bytes); break;
     case 'exited': this._exitProcess(pcb, W_EXITCODE(msg.code | 0)); break;
@@ -699,8 +862,288 @@ Kernel.prototype._dispatchRpc = function (pcb) {
           self._respond(pcb, { errno: 'EIO' });
         });
       break;
+    default:
+      if ((op & 0xff00) === 0x0400) { this._fsRpc(pcb, op, req); break; }
+      this._respond(pcb, { errno: 'ENOSYS' });
+  }
+};
+
+Kernel.prototype._respondRaw = function (pcb, bytes) {
+  if (!writeRawPayload(pcb.i32, pcb.u8, bytes)) {
+    writePayload(pcb.i32, pcb.u8, { errno: 'ENOMEM' });
+  }
+  Atomics.store(pcb.i32, KP_RPC_STATE, RPC_DONE);
+  this._ring(pcb);
+};
+
+/* ---- the brokered filesystem (0x04xx) ----
+ * One BlockFS instance (this._fs) serves every process; per-process fd maps
+ * point at shared open file descriptions. A 'file' OFD is backed by one
+ * BlockFS fd of the kernel instance — its position IS the shared offset, so
+ * dup/inheritance get POSIX open-file-description semantics for free, and
+ * BlockFS's tested unlink-while-open refcounts become system-global. */
+Kernel.prototype._fsRpc = function (pcb, op, req) {
+  var self = this;
+  var fs = this._fs;
+  if (!fs) { this._respond(pcb, { errno: 'ENOSYS' }); return; }
+  var eFs = function () { return { errno: fs._lastError || 'EIO' }; };
+  var ofdOf = function (fd) {
+    var id = pcb.fds.get(fd | 0);
+    return id === undefined ? null : self._ofds.get(id) || null;
+  };
+  var allocFd = function (min) {
+    var fd = min | 0;
+    while (pcb.fds.has(fd)) fd++;
+    return fd;
+  };
+  var P = function (p) { return self._pathFor(pcb, p); };
+  var r;
+
+  switch (op) {
+    case OP.FS_OPEN: {
+      var bfsFd = fs.open(P(req.path), req.flags | 0, req.mode | 0);
+      if (bfsFd === null) { this._respond(pcb, eFs()); return; }
+      var o = this._makeOfd('file', { bfsFd: bfsFd });
+      o.refs++;
+      var fd = allocFd(0);
+      pcb.fds.set(fd, o.id);
+      this._respond(pcb, { fd: fd });
+      return;
+    }
+    case OP.FS_CLOSE: {
+      var id = pcb.fds.get(req.fd | 0);
+      if (id === undefined) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      this._ofdUnref(id);
+      pcb.fds.delete(req.fd | 0);
+      this._respond(pcb, {});
+      return;
+    }
+    case OP.FS_READ: {
+      var o1 = ofdOf(req.fd);
+      if (!o1) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      var count = Math.min(req.count | 0, KP_PAYLOAD_CAP);
+      if (o1.kind === 'file') {
+        var buf = new Uint8Array(count);
+        var n = fs.read(o1.bfsFd, buf, count);
+        if (n === null) { this._respond(pcb, eFs()); return; }
+        this._respondRaw(pcb, buf.subarray(0, n));
+        return;
+      }
+      if (o1.kind === 'null') { this._respondRaw(pcb, new Uint8Array(0)); return; }
+      if (o1.kind === 'tty') {
+        var tty = pcb.tty;
+        if (!tty) { this._respondRaw(pcb, new Uint8Array(0)); return; }
+        if (tty._cooked.length > 0) { this._respondRaw(pcb, tty.take(count)); return; }
+        if (tty._eofFlag) { this._respondRaw(pcb, new Uint8Array(0)); return; }
+        pcb.waiter = { op: 'ttyread', count: count };   // served by _ttyNotify
+        this._ttyWaiters.push(pcb.pid);
+        return;
+      }
+      this._respond(pcb, { errno: 'EBADF' });           // 'out'
+      return;
+    }
+    case OP.FS_WRITE: {
+      // Raw request: [u32 fd][bytes...]
+      var rawq = req.raw;
+      if (!rawq || rawq.length < 4) { this._respond(pcb, { errno: 'EFAULT' }); return; }
+      var wfd = rawq[0] | (rawq[1] << 8) | (rawq[2] << 16) | (rawq[3] << 24);
+      var data = rawq.subarray(4);
+      var o2 = ofdOf(wfd);
+      if (!o2) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      if (o2.kind === 'file') {
+        var wn = fs.write(o2.bfsFd, data, data.length);
+        if (wn === null) { this._respond(pcb, eFs()); return; }
+        this._respond(pcb, { n: wn });
+        return;
+      }
+      if (o2.kind === 'out') { this._onOutput(pcb.pid, o2.ch, data.slice()); this._respond(pcb, { n: data.length }); return; }
+      if (o2.kind === 'tty') { this._onOutput(pcb.pid, 1, data.slice()); this._respond(pcb, { n: data.length }); return; }
+      this._respond(pcb, { n: data.length });           // 'null'
+      return;
+    }
+    case OP.FS_LSEEK: {
+      var o3 = ofdOf(req.fd);
+      if (!o3) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      if (o3.kind !== 'file') { this._respond(pcb, { errno: 'ESPIPE' }); return; }
+      r = fs.lseek(o3.bfsFd, req.offset, req.whence | 0);
+      this._respond(pcb, r === null ? eFs() : { offset: r });
+      return;
+    }
+    case OP.FS_STAT: r = fs.stat(P(req.path)); this._respond(pcb, r === null ? eFs() : { st: r }); return;
+    case OP.FS_LSTAT: r = fs.lstat(P(req.path)); this._respond(pcb, r === null ? eFs() : { st: r }); return;
+    case OP.FS_FSTAT: {
+      var o4 = ofdOf(req.fd);
+      if (!o4) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      if (o4.kind === 'file') {
+        r = fs.fstat(o4.bfsFd);
+        this._respond(pcb, r === null ? eFs() : { st: r });
+      } else {
+        // Character device (tty / console / null).
+        this._respond(pcb, { st: { ino: 0, mode: 0x2000 | 0o666, nlink: 1, size: 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
+      }
+      return;
+    }
+    case OP.FS_ACCESS: r = fs.access(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_UNLINK: r = fs.unlink(P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_RENAME: r = fs.rename(P(req.from), P(req.to)); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_MKDIR: r = fs.mkdir(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_RMDIR: r = fs.rmdir(P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_LINK: r = fs.link(P(req.from), P(req.to)); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_SYMLINK: r = fs.symlink(req.target, P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_READLINK: r = fs.readlink(P(req.path)); this._respond(pcb, r === null ? eFs() : { target: r }); return;
+    case OP.FS_FTRUNCATE: {
+      var o5 = ofdOf(req.fd);
+      if (!o5 || o5.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
+      r = fs.ftruncate(o5.bfsFd, req.size | 0);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_CHMOD: r = fs.chmod(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_FCHMOD: {
+      var o6 = ofdOf(req.fd);
+      if (!o6 || o6.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
+      r = fs.fchmod(o6.bfsFd, req.mode | 0);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_UTIME: r = fs.utime(P(req.path), req.atime, req.mtime); this._respond(pcb, r === null ? eFs() : {}); return;
+    case OP.FS_FUTIME: {
+      var o7 = ofdOf(req.fd);
+      if (!o7 || o7.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
+      r = fs.futime(o7.bfsFd, req.atime, req.mtime);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_CHDIR: {
+      var abs = P(req.path);
+      var resolved;
+      try { resolved = fs._resolvePath(abs); } catch (e) { resolved = null; }
+      if (!resolved) { this._respond(pcb, { errno: fs._lastError || 'ENOENT' }); return; }
+      var st = fs.stat(resolved);
+      if (st === null) { this._respond(pcb, eFs()); return; }
+      if ((st.mode & 0xF000) !== 0x4000) { this._respond(pcb, { errno: 'ENOTDIR' }); return; }
+      pcb.cwd = resolved;
+      this._respond(pcb, {});
+      return;
+    }
+    case OP.FS_GETCWD: this._respond(pcb, { cwd: pcb.cwd }); return;
+    case OP.FS_DUP: {
+      var o8 = ofdOf(req.fd);
+      if (!o8) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      o8.refs++;
+      var dfd = allocFd(0);
+      pcb.fds.set(dfd, o8.id);
+      this._respond(pcb, { fd: dfd });
+      return;
+    }
+    case OP.FS_DUP2: {
+      var o9 = ofdOf(req.fd);
+      if (!o9) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      if ((req.fd | 0) !== (req.newfd | 0)) {
+        o9.refs++;
+        var prev = pcb.fds.get(req.newfd | 0);
+        if (prev !== undefined) this._ofdUnref(prev);
+        pcb.fds.set(req.newfd | 0, o9.id);
+      }
+      this._respond(pcb, { fd: req.newfd | 0 });
+      return;
+    }
+    case OP.FS_FCNTL_DUPFD: {
+      var oA = ofdOf(req.fd);
+      if (!oA) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      oA.refs++;
+      var mfd = allocFd(req.min | 0);
+      pcb.fds.set(mfd, oA.id);
+      this._respond(pcb, { fd: mfd });
+      return;
+    }
+    case OP.FS_OPENDIR: {
+      var dh = fs.opendir(P(req.path));
+      if (dh === null) { this._respond(pcb, eFs()); return; }
+      var entries = [];
+      for (;;) {
+        var ent = fs.readdir(dh);
+        if (ent === null) break;
+        entries.push({ ino: ent.ino, type: ent.type, name: ent.name });
+      }
+      fs.closedir(dh);
+      this._respond(pcb, { entries: entries });
+      return;
+    }
+    case OP.FS_REALPATH: {
+      var rp;
+      try { rp = fs._resolvePath(P(req.path)); } catch (e) { rp = null; }
+      this._respond(pcb, rp ? { path: rp } : { errno: fs._lastError || 'ENOENT' });
+      return;
+    }
+    case OP.FS_ISATTY: {
+      var oB = ofdOf(req.fd);
+      this._respond(pcb, { tty: oB && oB.kind === 'tty' ? 1 : 0 });
+      return;
+    }
+    case OP.FS_SELECT: {
+      var ready = this._selectScan(pcb, req.r || [], req.w || []);
+      if (ready.count > 0 || req.timeoutMs === 0) { this._respond(pcb, ready); return; }
+      var w = { op: 'select', r: req.r || [], w: req.w || [], timer: null };
+      if (req.timeoutMs !== null && req.timeoutMs !== undefined) {
+        w.timer = setTimeout(function () {
+          if (pcb.waiter === w) {
+            self._cancelWaiter(pcb);
+            self._respond(pcb, self._selectScan(pcb, w.r, w.w));
+          }
+        }, req.timeoutMs);
+      }
+      pcb.waiter = w;                                   // completed by _ttyNotify
+      return;
+    }
     default: this._respond(pcb, { errno: 'ENOSYS' });
   }
+};
+
+/* Readiness for FS_SELECT: files and write interest are always ready; a tty
+ * read is ready when cooked bytes or EOF are waiting (pipes join in 0003). */
+Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
+  var self = this;
+  var r = [], w = [];
+  rfds.forEach(function (fd) {
+    var id = pcb.fds.get(fd | 0);
+    var o = id === undefined ? null : self._ofds.get(id);
+    if (!o) { r.push(fd); return; }                     // EBADF surfaces on use
+    if (o.kind === 'tty') { if (pcb.tty && pcb.tty.readable()) r.push(fd); }
+    else if (o.kind !== 'out') r.push(fd);
+  });
+  wfds.forEach(function (fd) { w.push(fd); });
+  return { count: r.length + w.length, r: r, w: w };
+};
+
+/* Cooked tty data / EOF arrived: serve deferred reads FIFO, then re-check
+ * deferred selects with tty interest. */
+Kernel.prototype._ttyNotify = function (tty) {
+  while (this._ttyWaiters.length) {
+    var pid = this._ttyWaiters[0];
+    var pcb = this._procs.get(pid);
+    if (!pcb || !pcb.waiter || pcb.waiter.op !== 'ttyread') { this._ttyWaiters.shift(); continue; }
+    if (tty._cooked.length > 0) {
+      var count = pcb.waiter.count;
+      this._cancelWaiter(pcb);
+      this._respondRaw(pcb, tty.take(count));
+    } else if (tty._eofFlag) {
+      this._cancelWaiter(pcb);
+      this._respondRaw(pcb, new Uint8Array(0));
+    } else {
+      break;                                            // no data yet
+    }
+  }
+  var self = this;
+  this._procs.forEach(function (pcb) {
+    if (pcb.waiter && pcb.waiter.op === 'select') {
+      var ready = self._selectScan(pcb, pcb.waiter.r, pcb.waiter.w);
+      if (ready.count > 0) {
+        self._cancelWaiter(pcb);
+        self._respond(pcb, ready);
+      }
+    }
+  });
 };
 
 /* ---- wait / reap ---- */
@@ -729,7 +1172,20 @@ Kernel.prototype._wait = function (pcb, sel, options) {
     }
   }
   if (options & WNOHANG) { this._respond(pcb, { pid: 0, status: 0 }); return; }
-  pcb.waiter = { sel: sel, options: options };  // answered by _exitProcess
+  pcb.waiter = { op: 'wait', sel: sel, options: options };  // answered by _exitProcess
+};
+
+/* Drop a deferred RPC registration (answered, interrupted, or the process
+ * died) — clears timers and tty wait-queue membership. */
+Kernel.prototype._cancelWaiter = function (pcb) {
+  var w = pcb.waiter;
+  pcb.waiter = null;
+  if (!w) return;
+  if (w.timer) clearTimeout(w.timer);
+  if (w.op === 'ttyread') {
+    var i = this._ttyWaiters.indexOf(pcb.pid);
+    if (i >= 0) this._ttyWaiters.splice(i, 1);
+  }
 };
 
 Kernel.prototype._reap = function (zombie) {
@@ -744,9 +1200,15 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   if (pcb.state === STATE_ZOMBIE) return;
   pcb.state = STATE_ZOMBIE;
   pcb.exit = status;
-  pcb.waiter = null;
+  this._cancelWaiter(pcb);
   if (pcb.worker) { try { pcb.worker.terminate(); } catch (e) {} }
   pcb.worker = null;
+  // Release every fd — this is what makes SIGKILL leak-free under the
+  // brokered fs: the kernel, not the dead worker, owns the descriptions,
+  // so unlink-while-open lifetimes complete even on a hard kill.
+  var self0 = this;
+  pcb.fds.forEach(function (ofdId) { self0._ofdUnref(ofdId); });
+  pcb.fds.clear();
 
   var self = this;
   // Reparent children (running AND zombie) to init.
@@ -758,9 +1220,9 @@ Kernel.prototype._exitProcess = function (pcb, status) {
     if (init && init !== pcb) {
       init.children.add(cpid);
       // A reparented zombie may satisfy init's pending wait immediately.
-      if (c.state === STATE_ZOMBIE && init.waiter &&
+      if (c.state === STATE_ZOMBIE && init.waiter && init.waiter.op === 'wait' &&
           waitSelectorMatch(init.waiter.sel, init, c)) {
-        init.waiter = null;
+        self._cancelWaiter(init);
         self._reap(c);
         self._respond(init, { pid: c.pid, status: c.exit });
       }
@@ -783,8 +1245,9 @@ Kernel.prototype._exitProcess = function (pcb, status) {
     // returns to the program. (Default-ignore drops it; a stray krpc-intr
     // triggered by the post is ignored once the waiter is answered.)
     this._deliver(parent, SIG.CHLD);
-    if (parent.waiter && waitSelectorMatch(parent.waiter.sel, parent, pcb)) {
-      parent.waiter = null;
+    if (parent.waiter && parent.waiter.op === 'wait' &&
+        waitSelectorMatch(parent.waiter.sel, parent, pcb)) {
+      this._cancelWaiter(parent);
       this._reap(pcb);
       this._respond(parent, { pid: pcb.pid, status: status });
     } else {
@@ -873,6 +1336,177 @@ Kernel.prototype._deliver = function (pcb, sig) {
 };
 
 /* ============================================================
+ * RemoteFS — the process-side client of the brokered filesystem.
+ *
+ * Implements the same JS method surface (names, arguments, null +
+ * _lastError conventions) that BlockFS.prototype.toWasmEnv dispatches to
+ * via `this.`, so the wasm env is built by REUSING toWasmEnv over this
+ * object: BLOCK_FS.BlockFS.prototype.toWasmEnv.call(remoteFs, ctx). Two
+ * env entries need overriding afterwards (isatty and __select_impl — their
+ * toWasmEnv versions consult in-process state that doesn't exist here);
+ * everything else flows through these methods as RPCs.
+ * ============================================================ */
+function RemoteFS(client) {
+  this._c = client;
+  this._lastError = null;
+  // Markers so toWasmEnv's fd-1/2 console fast path sees "redirectable
+  // entries" and routes writes through this.write (i.e. the kernel).
+  this._fdTable = [];
+  this._fdTable[0] = { type: 'remote' };
+  this._fdTable[1] = { type: 'remote' };
+  this._fdTable[2] = { type: 'remote' };
+  this._dirs = [];              // opendir snapshots: {entries, pos}
+  this._stdinSab = null;        // never set: stdin flows via FS_READ RPCs
+  this._stdinCtrl = null;       // winsize words only (TIOCGWINSZ)
+  this._pipeBroker = null;      // unused (pipes become OFDs in todos/0003)
+  this._sigcheck = null;        // assigned by toWasmEnv; unused (no ring waits)
+}
+
+RemoteFS.prototype._setErr = function (name) { this._lastError = name; return null; };
+RemoteFS.prototype._ok = function (resp) {
+  return (resp && resp.errno) ? this._setErr(resp.errno) : resp;
+};
+/* Winsize-only wiring: keep _stdinSab null so no ring path ever engages. */
+RemoteFS.prototype.setStdinSab = function (sab) {
+  this._stdinCtrl = sab ? new Int32Array(sab, 0, 8) : null;
+};
+
+RemoteFS.prototype.open = function (path, flags, mode) {
+  var r = this._ok(this._c.call(OP.FS_OPEN, { path: path, flags: flags, mode: mode }));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
+RemoteFS.prototype.close = function (fd) {
+  var r = this._ok(this._c.call(OP.FS_CLOSE, { fd: fd }));
+  if (r === null) return null;
+  delete this._fdTable[fd];
+  return 0;
+};
+RemoteFS.prototype.read = function (fd, buf, count) {
+  // Interruptible: a tty read defers kernel-side; a posted signal turns it
+  // into EINTR (regular files respond immediately, so it never fires).
+  var r = this._c.call(OP.FS_READ, { fd: fd, count: Math.min(count, 60000) }, true);
+  if (r.errno) return this._setErr(r.errno);
+  if (!r.raw) return this._setErr('EIO');
+  buf.set(r.raw);
+  return r.raw.length;
+};
+RemoteFS.prototype.write = function (fd, buf, count) {
+  var n = Math.min(count, 60000);
+  var payload = new Uint8Array(4 + n);
+  payload[0] = fd & 0xff; payload[1] = (fd >> 8) & 0xff;
+  payload[2] = (fd >> 16) & 0xff; payload[3] = (fd >> 24) & 0xff;
+  payload.set(buf.subarray(0, n), 4);
+  var r = this._ok(this._c.callRaw(OP.FS_WRITE, payload));
+  return r === null ? null : r.n;
+};
+RemoteFS.prototype.lseek = function (fd, offset, whence) {
+  var r = this._ok(this._c.call(OP.FS_LSEEK, { fd: fd, offset: offset, whence: whence }));
+  return r === null ? null : r.offset;
+};
+RemoteFS.prototype.stat = function (p) { var r = this._ok(this._c.call(OP.FS_STAT, { path: p })); return r && r.st; };
+RemoteFS.prototype.lstat = function (p) { var r = this._ok(this._c.call(OP.FS_LSTAT, { path: p })); return r && r.st; };
+RemoteFS.prototype.fstat = function (fd) { var r = this._ok(this._c.call(OP.FS_FSTAT, { fd: fd })); return r && r.st; };
+RemoteFS.prototype.access = function (p, mode) { return this._ok(this._c.call(OP.FS_ACCESS, { path: p, mode: mode })) && 0; };
+RemoteFS.prototype.unlink = function (p) { return this._ok(this._c.call(OP.FS_UNLINK, { path: p })) && 0; };
+RemoteFS.prototype.rename = function (a, b) { return this._ok(this._c.call(OP.FS_RENAME, { from: a, to: b })) && 0; };
+RemoteFS.prototype.mkdir = function (p, mode) { return this._ok(this._c.call(OP.FS_MKDIR, { path: p, mode: mode })) && 0; };
+RemoteFS.prototype.rmdir = function (p) { return this._ok(this._c.call(OP.FS_RMDIR, { path: p })) && 0; };
+RemoteFS.prototype.link = function (a, b) { return this._ok(this._c.call(OP.FS_LINK, { from: a, to: b })) && 0; };
+RemoteFS.prototype.symlink = function (target, p) { return this._ok(this._c.call(OP.FS_SYMLINK, { target: target, path: p })) && 0; };
+RemoteFS.prototype.readlink = function (p) {
+  var r = this._ok(this._c.call(OP.FS_READLINK, { path: p }));
+  return r === null ? null : r.target;
+};
+RemoteFS.prototype.ftruncate = function (fd, size) { return this._ok(this._c.call(OP.FS_FTRUNCATE, { fd: fd, size: size })) && 0; };
+RemoteFS.prototype.chmod = function (p, mode) { return this._ok(this._c.call(OP.FS_CHMOD, { path: p, mode: mode })) && 0; };
+RemoteFS.prototype.fchmod = function (fd, mode) { return this._ok(this._c.call(OP.FS_FCHMOD, { fd: fd, mode: mode })) && 0; };
+RemoteFS.prototype.utime = function (p, a, m) { return this._ok(this._c.call(OP.FS_UTIME, { path: p, atime: a, mtime: m })) && 0; };
+RemoteFS.prototype.futime = function (fd, a, m) { return this._ok(this._c.call(OP.FS_FUTIME, { fd: fd, atime: a, mtime: m })) && 0; };
+RemoteFS.prototype.chdir = function (p) { return this._ok(this._c.call(OP.FS_CHDIR, { path: p })) && 0; };
+RemoteFS.prototype.getcwd = function () {
+  var r = this._ok(this._c.call(OP.FS_GETCWD, {}));
+  return r === null ? null : r.cwd;
+};
+RemoteFS.prototype.dup = function (fd) {
+  var r = this._ok(this._c.call(OP.FS_DUP, { fd: fd }));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
+RemoteFS.prototype.dup2 = function (oldfd, newfd) {
+  var r = this._ok(this._c.call(OP.FS_DUP2, { fd: oldfd, newfd: newfd }));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
+RemoteFS.prototype.fcntl_dupfd = function (fd, min) {
+  var r = this._ok(this._c.call(OP.FS_FCNTL_DUPFD, { fd: fd, min: min }));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
+RemoteFS.prototype.opendir = function (p) {
+  var r = this._ok(this._c.call(OP.FS_OPENDIR, { path: p }));
+  if (r === null) return null;
+  this._dirs.push({ entries: r.entries, pos: 0 });
+  return this._dirs.length - 1;
+};
+RemoteFS.prototype.readdir = function (h) {
+  var d = this._dirs[h];
+  if (!d || d.pos >= d.entries.length) return null;
+  return d.entries[d.pos++];
+};
+RemoteFS.prototype.closedir = function (h) { this._dirs[h] = undefined; return 0; };
+RemoteFS.prototype._resolvePath = function (p) {
+  var r = this._c.call(OP.FS_REALPATH, { path: p });
+  return r.errno ? p : r.path;   // best effort, like the lexical resolver
+};
+RemoteFS.prototype.isatty = function (fd) {
+  var r = this._c.call(OP.FS_ISATTY, { fd: fd });
+  return r.errno ? 0 : r.tty;
+};
+RemoteFS.prototype.pipe = function () { return this._setErr('ENOSYS'); };  // todos/0003
+
+/* The brokered __select_impl (replaces toWasmEnv's in-process scanner):
+ * fd-set bitmaps <-> fd lists; readiness, blocking, and timeout are all
+ * kernel-side; interruption surfaces as EINTR per POSIX. */
+RemoteFS.prototype.selectImpl = function (ctx) {
+  var self = this;
+  return function (nfds, readfds_ptr, writefds_ptr, exceptfds_ptr,
+    timeout_sec, timeout_usec, has_timeout) {
+    var mem = new DataView(ctx.getMemory().buffer);
+    function toList(ptr) {
+      if (!ptr) return [];
+      var out = [];
+      for (var fd = 0; fd < nfds && fd < 64; fd++) {
+        if (mem.getInt32(ptr + ((fd >> 5) * 4), true) & (1 << (fd & 31))) out.push(fd);
+      }
+      return out;
+    }
+    var req = {
+      r: toList(readfds_ptr), w: toList(writefds_ptr),
+      timeoutMs: has_timeout ? (timeout_sec * 1000 + timeout_usec / 1000) : null,
+    };
+    var resp = self._c.call(OP.FS_SELECT, req, true);
+    if (resp.errno) { ctx.setErrnoName(resp.errno); return -1; }
+    var out = new DataView(ctx.getMemory().buffer);
+    function writeList(ptr, list) {
+      if (!ptr) return;
+      var b = [0, 0];
+      list.forEach(function (fd) { b[fd >> 5] |= (1 << (fd & 31)); });
+      out.setInt32(ptr, b[0], true);
+      out.setInt32(ptr + 4, b[1], true);
+    }
+    writeList(readfds_ptr, resp.r || []);
+    writeList(writefds_ptr, resp.w || []);
+    writeList(exceptfds_ptr, []);
+    return (resp.r ? resp.r.length : 0) + (resp.w ? resp.w.length : 0);
+  };
+};
+
+/* ============================================================
  * nodeCreateWorker — the tested Node reference createWorker factory.
  *
  *   var kernel = new Kernel({
@@ -898,9 +1532,25 @@ var BOOT_SOURCE = [
   "var K = require(wd.kernelPath);",
   "var BLOCK_FS = runModule.BLOCK_FS;",
   "var client = new K.KernelClient(wd.kernelPage, function (m) { wt.parentPort.postMessage(m); });",
-  "var store = new BLOCK_FS.MemoryByteStore(1 << 20);",
-  "var bfs = BLOCK_FS.createV4(store);",
-  "if (wd.cwd && wd.cwd !== '/') { try { bfs.chdir(wd.cwd); } catch (e) {} }",
+  "var fsFactory;",
+  "if (wd.brokered) {",
+  "  // The brokered filesystem: the kernel serves every fs syscall; the env",
+  "  // is toWasmEnv REUSED over a RemoteFS (same method surface), with the",
+  "  // two in-process-state entries overridden.",
+  "  var rfs = new K.RemoteFS(client);",
+  "  fsFactory = function (ctx) {",
+  "    var env = BLOCK_FS.BlockFS.prototype.toWasmEnv.call(rfs, ctx);",
+  "    env.__select_impl = rfs.selectImpl(ctx);",
+  "    env.isatty = function (fd) { return rfs.isatty(fd); };",
+  "    return Promise.resolve({ c: env });",
+  "  };",
+  "} else {",
+  "  // Standalone arrangement (no shared fs): private in-memory BlockFS.",
+  "  var store = new BLOCK_FS.MemoryByteStore(1 << 20);",
+  "  var bfs = BLOCK_FS.createV4(store);",
+  "  if (wd.cwd && wd.cwd !== '/') { try { bfs.chdir(wd.cwd); } catch (e) {} }",
+  "  fsFactory = function (ctx) { return Promise.resolve({ c: bfs.toWasmEnv(ctx) }); };",
+  "}",
   "function envObj(envp) { var o = {}; (envp || []).forEach(function (s) {",
   "  var i = s.indexOf('='); if (i > 0) o[s.slice(0, i)] = s.slice(i + 1); }); return o; }",
   "function ship(fd) { return function (b) {",
@@ -911,7 +1561,7 @@ var BOOT_SOURCE = [
   "  args: wd.argv,",
   "  env: envObj(wd.envp),",
   "  stdinSab: wd.ttySab || undefined,",
-  "  blockFsFactory: function (ctx) { return Promise.resolve({ c: bfs.toWasmEnv(ctx) }); },",
+  "  blockFsFactory: fsFactory,",
   "  writeOut: ship(1),",
   "  writeErr: ship(2),",
   "  spawnHooks: client.spawnHooks(),",
@@ -948,6 +1598,7 @@ function nodeCreateWorker(config) {
         image: imageBuf,
         kernelPage: procSpec.kernelPage,
         ttySab: procSpec.ttySab || null,
+        brokered: !!procSpec.brokered,
       },
       // Program stdout/stderr flow through {type:'out'} messages (writeOut/
       // writeErr are overridden in BOOT_SOURCE); the worker's own process
@@ -967,6 +1618,7 @@ var KERNEL_EXPORTS = {
   Kernel: Kernel,
   KernelClient: KernelClient,
   Tty: Tty,
+  RemoteFS: RemoteFS,
   nodeCreateWorker: nodeCreateWorker,
   OP: OP,
   SIG: SIG,
