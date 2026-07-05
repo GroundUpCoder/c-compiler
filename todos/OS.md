@@ -84,6 +84,47 @@ the shell port should handle subshells — see Phase 1).
 | Networking | Stubs only. |
 | Editor | CodeMirror vendored, not wired into the environment. |
 
+## Reference build: `os/` in this repo
+
+The OS ships as a self-contained reference page in this repo — external apps
+(the c/ app) become consumers of the same parts, not keepers of the only
+kernel.
+
+**Multi-file source page, no build step** (the repo's discipline), served by
+`serve.js` — which already sends the COOP/COEP headers that
+SharedArrayBuffer requires. That requirement also settles an architectural
+question: a truly standalone single-file `os.html` opened from `file://` can
+never get SABs, so the served multi-file page IS the natural reference form.
+A single-file packaging mode (inline everything + a pre-baked BlockFS image)
+can come later as a distribution convenience; it is not the dev setup.
+
+Layout and load graph:
+
+```
+os/os.html            thin boot shim (UI bridge): xterm + canvas + input
+  ├─ vendor/xterm/…   terminal widget (main thread)
+  └─ new Worker ──► kernel worker
+        ├─ kernel.js      process table, signals, tty discipline (KERNEL.md)
+        ├─ host.js        for BLOCK_FS (store access — SyncAccessHandle is
+        │                 worker-only, which is WHY the kernel is a worker)
+        ├─ compiler.js    backs the __compile hook → /bin/cc works in-browser
+        └─ createWorker ──► process workers (one per pid)
+              └─ host.js + the process's .wasm image
+```
+
+- `os.html` stays thin on purpose: everything with logic lives in
+  kernel.js/host.js so it's testable under Node (`tests/kernel/`); the page
+  is just DOM glue. Process workers boot from a tiny shim injected via the
+  kernel's `createWorker` capability (blob/module bootstrap that loads
+  host.js and waits for the run message — same shape under `worker_threads`).
+- **First boot**: kernel formats BlockFS on OPFS, creates /bin /dev /etc
+  /root + device nodes, and seeds binaries per a manifest (`os/image.json`:
+  path → fetch URL of built wasm). Later a `tools/mkimage.js` can pre-bake a
+  seeded image blob; manifest-fetch is fine to start.
+- **pid 1**: eventually the shell. Until the busybox port lands, a ~200-line
+  C *protoshell* (read line, spawn argv, wait; Ctrl-C forwarding) is the boot
+  program — it doubles as the live test harness for kernel Phases 1–3.
+
 ## Roadmap
 
 Sequencing principle: **shell before window manager.** The shell is the
@@ -93,7 +134,10 @@ like an OS. The WM then lands on proven process infrastructure.
 
 ### Phase 1 — Shell + the tty/signal layer it needs
 
-The single highest-leverage project in the repo.
+The single highest-leverage project in the repo. The signals/tty/job-control
+substrate below is designed in `todos/KERNEL.md` (a separate owner-side
+`kernel.js` — process table, doorbell futex, tty line discipline, unified
+control-plane protocol); the shell port is its acceptance test.
 
 - **Port a real shell** (busybox ash or dash) to `/bin/sh`. Patch fork points:
   plain command execution becomes spawn; subshells/`$( )` either spawn the
