@@ -18239,6 +18239,7 @@ typedef struct WGPUStringView {
 } WGPUStringView;
 #define WGPU_STRLEN ((size_t)-1)
 #define WGPU_WHOLE_SIZE (0xFFFFFFFFFFFFFFFFULL)
+#define WGPU_WHOLE_MAP_SIZE ((size_t)-1)
 
 /* WGPUFuture: opaque async token. We drive completion via callbacks, so the id
    is a plain monotonic counter the user does not need to inspect. */
@@ -22449,6 +22450,7 @@ __import int  __wgpu_device_create_sampler(int device, int addrU, int addrV, int
 __import void __wgpu_queue_write_texture(int queue, int texture, int mipLevel, int originX, int originY, int originZ, int aspect, const void *data, int dataSize, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depthOrArrayLayers);
 __import void __wgpu_cmd_copy_texture_to_buffer(int encoder, int srcTexture, int mipLevel, int ox, int oy, int oz, int dstBuffer, int offset, int bytesPerRow, int rowsPerImage, int width, int height, int depth);
 __import void __wgpu_buffer_map_async(int buffer, int mode, int offset, int size, WGPUBufferMapCallback cb, void *ud1, void *ud2);
+__import int  __wgpu_buffer_get_size(int buffer);
 __import void __wgpu_buffer_get_mapped_range(int buffer, int offset, int size, void *dst);
 __import void __wgpu_buffer_unmap(int buffer);
 __import void __wgpu_cmd_copy_buffer_to_buffer(int encoder, int src, int srcOffset, int dst, int dstOffset, int size);
@@ -22952,6 +22954,10 @@ WGPUFuture wgpuBufferMapAsync(WGPUBuffer buffer, WGPUMapMode mode, size_t offset
 static struct { int buffer; void *ptr; } __wgpu_mapped[__WGPU_MAX_MAPPED];
 
 void *wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset, size_t size) {
+    /* WGPU_WHOLE_SIZE / WGPU_WHOLE_MAP_SIZE truncate to (size_t)-1 in ILP32:
+       resolve to "rest of buffer" BEFORE allocating the staging copy (the host
+       side gets a concrete size, mirroring the setVertex/IndexBuffer paths). */
+    if (size == (size_t)-1) size = (size_t)__wgpu_buffer_get_size((int)buffer) - offset;
     void *p = malloc(size ? size : 1);
     if (!p) { fprintf(stderr, "wgpuBufferGetMappedRange: out of memory\\n"); abort(); }
     __wgpu_buffer_get_mapped_range((int)buffer, (int)offset, (int)size, p);

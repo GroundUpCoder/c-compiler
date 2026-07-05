@@ -21,18 +21,30 @@ they were deprioritized, not disproven. Fixed items live as green tests under
   the read cursor; block or drop-with-counter, never overrun.
 - `runModule` leaks an `'error'` listener on process.stdout/stderr per call.
 
-## host.js — browser-only paths (code-verified, need browser testing)
+## host.js — browser-only paths (code-verified)
+
+Browser-testable via the existing Playwright harness in `tests/browser/`
+(headless Chromium; real Safari via safaridriver — see its README). Fixed items
+get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
 
 - **Audio ring write position wraps at 2^31** (`Atomics.add` on Int32Array,
   no modulo) → RangeError kills the run after ~1.5–3 h of audio. Mask positions
   modulo capacity on both ends.
 - **S8 audio decoded with the U8 formula** (`(getInt8(x)-128)/128`): signed
   silence becomes a full-scale DC rail. Correct: `getInt8(x)/128`.
-- **`WGPU_WHOLE_SIZE` truncated** in `__wgpu_buffer_map_async` /
-  `get_mapped_range` (`size >>> 0` → 4294967295); the set_vertex/index_buffer
-  paths already special-case it — mirror them.
-- **SDL keysym for shifted letters**: `e.key.charCodeAt(0)` gives 'A' (65) for
-  Shift+a; SDL keycodes are unshifted (`SDLK_a` = 97).
+- ~~**`WGPU_WHOLE_SIZE` truncated** in `__wgpu_buffer_map_async` /
+  `get_mapped_range`~~ — FIXED (`tests/browser/webgpu-wholesize-renders.mjs`):
+  map_async mirrors the set_vertex/index_buffer `size < 0` special-case; the C
+  wrapper resolves `(size_t)-1` via a new `__wgpu_buffer_get_size` import
+  before allocating the staging copy; `WGPU_WHOLE_MAP_SIZE` added to webgpu.h.
+- ~~**SDL keysym for shifted letters**~~ — **FALSE POSITIVE, dropped** (the
+  campaign re-found a stray the 2026-06 SDL3 audit had already retired, see
+  `todos/SDL3.md`). SDL3 keycodes are *modifier-applied* — upstream computes
+  the event keycode as `SDL_GetKeyFromScancode(scancode, keyboard->modstate,
+  true)` (src/events/SDL_keyboard.c), so Shift+a ⇒ SDLK_A (65) is CORRECT and
+  `e.key.charCodeAt(0)` is the faithful implementation. "SDL keycodes are
+  unshifted" is SDL2 semantics. Now pinned by
+  `tests/browser/sdl-shifted-keysym-check.mjs` so it can't be "fixed" again.
 - **Worker script not `</script>`-hardened in HTML output** (the top-level
   inline host.js is; the JSON.stringify'd worker copy isn't). Latent until a
   `</script`-containing string enters host.js or runArgs.

@@ -159,6 +159,13 @@ Shift+1→'!'=33, Caps+a→65). Verified against `wiki.libsdl.org/SDL3/`
 `SDL_HINT_KEYCODE_OPTIONS` + `SDL_GetKeyFromScancode`. (One residual corner remains
 — see new stray on keypad-digit keycodes.)
 
+> **2026-07-05: this stray got re-found (and briefly re-"fixed") by the July
+> conformance campaign** — re-verified against upstream `SDL_keyboard.c`
+> (`SDL_GetKeyFromScancode(scancode, keyboard->modstate, true)`: keycodes ARE
+> modifier-applied), reverted, and pinned by
+> `tests/browser/sdl-shifted-keysym-check.mjs` (Shift+A must deliver 65 +
+> `SDL_KMOD_SHIFT`; delivering 97 fails the test).
+
 ## Fixed 2026-06-20 (conformance fixes pass)
 
 The audit's strays were then **fixed** (all behind headless unit tests

@@ -6009,9 +6009,16 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
         const buf = get(buffer);
         const callCb = function (status) { const fn = getExports().__wgpu_call_buffer_map_cb; if (fn) fn(cb, status, ud1, ud2); };
         if (!buf) { Promise.resolve().then(function () { callCb(WGPU_MAP_ERROR); }); return; }
-        buf.mapAsync(mode >>> 0, offset >>> 0, size >>> 0)
+        /* size < 0 (i.e. WGPU_WHOLE_SIZE truncated to -1) => rest of buffer. */
+        (size < 0 ? buf.mapAsync(mode >>> 0, offset >>> 0) : buf.mapAsync(mode >>> 0, offset >>> 0, size >>> 0))
           .then(function () { callCb(WGPU_MAP_SUCCESS); })
           .catch(function (e) { console.error('wgpuBufferMapAsync failed', e); callCb(WGPU_MAP_ERROR); });
+      },
+
+      __wgpu_buffer_get_size: function (buffer) {
+        /* Lets the C wrapper resolve WGPU_WHOLE_SIZE/WGPU_WHOLE_MAP_SIZE to
+           "rest of buffer" before it allocates the wasm-side staging copy. */
+        const buf = get(buffer); return buf ? buf.size : 0;
       },
 
       __wgpu_buffer_get_mapped_range: function (buffer, offset, size, dstPtr) {
@@ -6204,6 +6211,7 @@ function createNullWebGPU(ctx) {
         const fn = ctx && ctx.getExports() && ctx.getExports().__wgpu_call_buffer_map_cb;
         Promise.resolve().then(function () { if (fn) fn(cb, WGPU_MAP_ERROR, ud1, ud2); });
       },
+      __wgpu_buffer_get_size: function () { return 0; },
       __wgpu_buffer_get_mapped_range: function () {},
       __wgpu_buffer_unmap: function () {},
       __wgpu_cmd_copy_buffer_to_buffer: function () {},
@@ -6300,6 +6308,12 @@ const SDL_WEB = (function () {
   };
   function keysym(e) {
     if (e.code && KP_CODES[e.code]) return (SCANCODE_MAP[e.code] || 0) | 0x40000000;
+    /* SDL3 keycodes are MODIFIER-APPLIED (unlike SDL2): the event keycode is
+       SDL_GetKeyFromScancode(scancode, modstate, true), so Shift+a => SDLK_A
+       (65), plain a => 97, Shift+1 => '!' (33). DOM e.key is exactly that
+       produced character. Do NOT "fix" this to unshifted SDL2 semantics — see
+       todos/SDL3.md (audit false positive) and tests/browser/
+       sdl-shifted-keysym-check.mjs, which pins this. */
     if (typeof e.key === 'string' && e.key.length === 1) return e.key.charCodeAt(0);
     if (NAMED_KEYSYMS[e.key] !== undefined) return NAMED_KEYSYMS[e.key];
     return (SCANCODE_MAP[e.code] || 0) | 0x40000000;
