@@ -4482,8 +4482,7 @@ function readSpawnSpec(ctx, p) {
 // (return synchronously to C) — in the run worker that's a park on Atomics.wait
 // over the block-RPC SAB, so posix_spawn's synchronous contract is JSPI-free.
 function createSpawn(ctx, hooks) {
-  return {
-    [ENV_KEY]: {
+  const env = {
       __spawn: function (p) {
         let spec;
         try { spec = readSpawnSpec(ctx, p); }
@@ -4493,12 +4492,23 @@ function createSpawn(ctx, hooks) {
         return r.pid;
       },
       __spawn_wait: function (pid, statusPtr, options) {
-        const r = hooks.wait(pid, options);
-        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
-        if (statusPtr) {
-          new DataView(ctx.getMemory().buffer).setInt32(statusPtr, r.status | 0, true);
+        for (;;) {
+          const r = hooks.wait(pid, options);
+          if (r && r.errno) {
+            // EINTR: run the interrupting handlers NOW (this is the safe
+            // point); transparently restart the wait when every delivered
+            // action carried SA_RESTART. deliverSignals: null = nothing ran
+            // (don't spin), true = all restartable, false = EINTR surfaces.
+            if (r.errno === 'EINTR' && ctx.deliverSignals) {
+              if (ctx.deliverSignals() === true) continue;
+            }
+            ctx.setErrnoName(r.errno); return -1;
+          }
+          if (statusPtr) {
+            new DataView(ctx.getMemory().buffer).setInt32(statusPtr, r.status | 0, true);
+          }
+          return r.pid;
         }
-        return r.pid;
       },
       __spawn_kill: function (pid, sig) {
         const r = hooks.kill(pid, sig);
@@ -4542,15 +4552,72 @@ function createSpawn(ctx, hooks) {
         m.set(err, bufPtr + 12 + out.length);
         return total;
       },
-    },
+      // Mirror the libc blocked mask onto the kernel page (kernel.js honors
+      // it for default actions; sigpoll leaves blocked bits pending), then
+      // deliver anything that just became claimable — this is the unblock
+      // half of sigprocmask/sigsuspend.
+      __on_sigmask: function (mask) {
+        if (hooks.sigmask) hooks.sigmask(mask >>> 0);
+        if (ctx.deliverSignals) ctx.deliverSignals();
+      },
+      // pause()/sigsuspend() backend: park on the kernel doorbell until a
+      // signal is deliverable, run its handlers, and only then return (the
+      // libc surfaces EINTR). Loops on spurious wakes where another safe
+      // point raced the claim.
+      __sig_pause: function () {
+        if (!hooks.park) { ctx.setErrnoName('ENOSYS'); return -1; }
+        for (;;) {
+          hooks.park();
+          if (!ctx.deliverSignals) return 0;
+          if (ctx.deliverSignals() !== null) return 0;
+        }
+      },
   };
+  // With a kernel doorbell available, sleeps become interruptible: park on
+  // the doorbell (any posted signal rings it), deliver, and report the
+  // interruption the way each API wants it. These override the BlockFS env
+  // versions (createSpawn merges later in runModule).
+  if (hooks.park) {
+    env.sleep = function (seconds) {
+      const ms = seconds * 1000;
+      const start = Date.now();
+      if (hooks.park(ms) === 'signal') {
+        if (ctx.deliverSignals) ctx.deliverSignals();
+        const left = Math.ceil((ms - (Date.now() - start)) / 1000);
+        return left > 0 ? left : 0;   // sleep(): seconds left unslept
+      }
+      return 0;
+    };
+    env.usleep = function (usec) {
+      if (hooks.park(usec / 1000) === 'signal') {
+        if (ctx.deliverSignals) ctx.deliverSignals();
+        ctx.setErrnoName('EINTR');
+        return -1;
+      }
+      return 0;
+    };
+    env.__nanosleep = function (sec, nsec) {
+      if (hooks.park(sec * 1000 + nsec / 1e6) === 'signal') {
+        if (ctx.deliverSignals) ctx.deliverSignals();
+        ctx.setErrnoName('EINTR');   // rem not reported (documented in KERNEL.md)
+        return -1;
+      }
+      return 0;
+    };
+  }
+  return { [ENV_KEY]: env };
 }
 
 function createNullSpawn(ctx) {
   const enosys = function () { ctx.setErrnoName('ENOSYS'); return -1; };
-  // __on_sigdisp is a no-op without a kernel — dispositions are still recorded
-  // libc-side for raise()/abort(); there's just no owner to mirror to.
-  return { [ENV_KEY]: { __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys, __on_sigdisp: function () {}, __compile: enosys } };
+  // __on_sigdisp/__on_sigmask are no-ops without a kernel — dispositions and
+  // the mask are still recorded libc-side for raise()/abort(); there's just
+  // no owner to mirror to. __sig_pause reports ENOSYS so pause() never hangs.
+  return { [ENV_KEY]: {
+    __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys,
+    __on_sigdisp: function () {}, __on_sigmask: function () {},
+    __sig_pause: enosys, __compile: enosys,
+  } };
 }
 
 // A blocking SDL loop (while(running){ poll; render; SDL_Delay; }) can't be
@@ -8189,8 +8256,63 @@ async function runModule({
     return (read === str.length) ? 1 : 0;
   };
 
+  /* ---- Kernel signal delivery (todos/KERNEL.md Phase 2) ----
+     With a kernel attached (spawnHooks.sigpoll), every env import return is
+     a SAFE POINT: claim the deliverable pending signals off the kernel page
+     and run the C handlers through the module's __sig_dispatch export.
+     ctx.deliverSignals returns null (nothing ran) / true (every delivered
+     action allows transparent restart, SA_RESTART) / false. Math
+     passthroughs are skipped — hot, pure, and never a place a C program can
+     block. Zero cost without a kernel (block never entered). */
+  if (spawnHooks && spawnHooks.sigpoll) {
+    let sigDispatchFn = null;   // bound after instantiation
+    let inSigDispatch = false;  // C handlers make syscalls; don't re-enter
+    ctx.deliverSignals = function () {
+      if (inSigDispatch || !sigDispatchFn) return null;
+      let delivered = false;
+      let restartOk = true;
+      for (;;) {
+        const m = spawnHooks.sigpoll();
+        if (!m) break;
+        inSigDispatch = true;
+        try {
+          for (let s = 1; s < 32; s++) {
+            if (m & (1 << (s - 1))) {
+              delivered = true;
+              if (!sigDispatchFn(s)) restartOk = false;
+            }
+          }
+        } finally { inSigDispatch = false; }
+      }
+      return delivered ? restartOk : null;
+    };
+    ctx.bindSigDispatch = function (exp) { sigDispatchFn = exp.__sig_dispatch || null; };
+    const envImports = imports[ENV_KEY];
+    Object.keys(envImports).forEach(function (name) {
+      const fn = envImports[name];
+      if (typeof fn !== 'function' || Math[name] === fn) return;
+      envImports[name] = function () {
+        const r = fn.apply(this, arguments);
+        ctx.deliverSignals();
+        return r;
+      };
+    });
+  }
+  /* Ordered exit handshake: report the status to the kernel BEFORE
+     unwinding (all earlier output messages are already ahead of it on the
+     worker channel), so waiters see the status only after the output. The
+     kernel tears the worker down; the throw is the no-kernel fallback. */
+  if (spawnHooks && spawnHooks.exit) {
+    const innerExit = imports[ENV_KEY].__exit;
+    imports[ENV_KEY].__exit = function (status) {
+      try { spawnHooks.exit(status | 0); } catch (e) { /* kernel gone — fall through */ }
+      return innerExit(status);
+    };
+  }
+
   const instance = new WebAssembly.Instance(module, imports);
 
+  if (ctx.bindSigDispatch) ctx.bindSigDispatch(instance.exports);
   if (onReady) onReady({ sdl: sdl, instance: instance });
 
   let exitCode;

@@ -6,18 +6,19 @@
 // worker and knows nothing about other processes; its `spawnHooks` seam is
 // how a process reaches this kernel.
 //
-// Phase 1 (this file's current scope — see KERNEL.md "Implementation phases"):
-//   - process table (pid/ppid/pgid/sid, RUNNING/ZOMBIE, reaping, orphan
-//     reparenting to pid 1, pid-1 exit halts the system)
-//   - the per-process kernel page (SAB) + JSON block-RPC transport
-//   - KernelClient: the process-side stub whose .spawnHooks() plugs straight
-//     into host.js runModule — host.js is UNCHANGED in this phase
-//   - spawn/wait/kill/exit/compile semantics at parity with the previous
-//     external-embedder kernels (kill consults the __on_sigdisp mirror;
-//     terminate only on DFL of a terminate-class signal)
-// Phase 2 adds SIGPEND delivery at libc safe points, EINTR, and the ordered
-// exit handshake; Phase 3 the tty object; Phase 4 pipes/job control. The
-// page layout below already reserves their words so the SAB format is stable.
+// Implemented phases (see KERNEL.md "Implementation phases"):
+//   Phase 1 — process table (pid/ppid/pgid/sid, RUNNING/ZOMBIE, reaping,
+//     orphan reparenting to pid 1, pid-1 exit halts the system); the
+//     per-process kernel page (SAB) + JSON block-RPC transport; KernelClient
+//     plugging into host.js's spawnHooks seam; spawn/wait/kill/compile.
+//   Phase 2 (todos/0001) — asynchronous signal delivery: SIGPEND/SIGBLOCK
+//     live on the kernel page, host.js claims deliverable bits at libc safe
+//     points and runs C handlers via the __sig_dispatch export; blocking
+//     WAIT interrupts with EINTR (krpc-intr); SIGCHLD on child exit; the
+//     ordered exit handshake (OP.EXIT).
+// Phase 3 (todos/0002) adds the tty object; Phase 4 (todos/0003) pipes/job
+// control. The page layout already reserves their state so the SAB format
+// is stable.
 //
 // Environment: plain JS, no build step, Node + browser (same discipline as
 // host.js/compiler.js — no Node-only APIs without a typeof-guard). The
@@ -70,7 +71,7 @@ var OP = {
   SPAWN: 0x0001,
   WAIT: 0x0002,
   KILL: 0x0003,
-  EXIT: 0x0004,      // reserved: Phase 2 ordered exit handshake
+  EXIT: 0x0004,      // ordered exit handshake (no response; kernel tears down)
   SETPGID: 0x0005,
   GETPGID: 0x0006,
   SETSID: 0x0007,
@@ -141,8 +142,12 @@ function KernelClient(sab, postToKernel) {
 }
 
 /* Synchronous block-RPC: returns the response object ({errno: 'NAME'} on
- * failure — the names flow into ctx.setErrnoName via the hooks contract). */
-KernelClient.prototype.call = function (op, req) {
+ * failure — the names flow into ctx.setErrnoName via the hooks contract).
+ * `interruptible` ops (WAIT) additionally watch for deliverable signals
+ * while parked: the first one posts a krpc-intr message and the kernel
+ * answers EINTR (or the already-raced real result — both are fine; the
+ * signal delivers at the caller's next safe point). */
+KernelClient.prototype.call = function (op, req, interruptible) {
   var i32 = this._i32;
   if (!writePayload(i32, this._u8, req)) return { errno: 'E2BIG' };
   Atomics.store(i32, KP_RPC_OP, op);
@@ -151,11 +156,16 @@ KernelClient.prototype.call = function (op, req) {
   // Park on the doorbell until the kernel marks the RPC done. Read the seq
   // BEFORE checking state: if the kernel completes in between, wait() sees a
   // stale seq and returns 'not-equal' immediately — no lost wakeup. The
-  // doorbell also fires for non-RPC events (signals etc., later phases), so
+  // doorbell also fires for non-RPC events (signal posts, child changes), so
   // spurious wakes just re-check state and re-park.
+  var sentIntr = false;
   for (;;) {
     var seq = Atomics.load(i32, KP_DOORBELL);
     if (Atomics.load(i32, KP_RPC_STATE) === RPC_DONE) break;
+    if (interruptible && !sentIntr && this.pending()) {
+      sentIntr = true;
+      this._post({ type: 'krpc-intr' });
+    }
     Atomics.wait(i32, KP_DOORBELL, seq);
   }
   var resp = readPayload(i32, this._u8);
@@ -163,15 +173,62 @@ KernelClient.prototype.call = function (op, req) {
   return resp;
 };
 
-/* Adapter to host.js's spawnHooks seam (createSpawn's contract). */
+/* Deliverable = pending and not blocked. */
+KernelClient.prototype.pending = function () {
+  return Atomics.load(this._i32, KP_SIGPEND) & ~Atomics.load(this._i32, KP_SIGBLOCK);
+};
+
+/* Atomically claim all deliverable pending signals; returns the claimed
+ * mask (0 if none). Blocked bits stay pending until sigmask() unblocks. */
+KernelClient.prototype.sigpoll = function () {
+  var i32 = this._i32;
+  for (;;) {
+    var p = Atomics.load(i32, KP_SIGPEND);
+    var take = p & ~Atomics.load(i32, KP_SIGBLOCK);
+    if (!take) return 0;
+    if (Atomics.compareExchange(i32, KP_SIGPEND, p, p & ~take) === p) return take;
+  }
+};
+
+/* Publish the libc's blocked mask so the kernel honors it for default
+ * actions and so sigpoll leaves blocked bits pending. */
+KernelClient.prototype.sigmask = function (mask) {
+  Atomics.store(this._i32, KP_SIGBLOCK, mask | 0);
+};
+
+/* Park on the doorbell until a signal is deliverable ('signal') or the
+ * timeout elapses ('timeout'). ms undefined/null → wait forever. */
+KernelClient.prototype.park = function (ms) {
+  var i32 = this._i32;
+  var deadline = (ms === undefined || ms === null) ? null : Date.now() + ms;
+  for (;;) {
+    var seq = Atomics.load(i32, KP_DOORBELL);
+    if (this.pending()) return 'signal';
+    if (deadline === null) {
+      Atomics.wait(i32, KP_DOORBELL, seq);
+    } else {
+      var left = deadline - Date.now();
+      if (left <= 0) return 'timeout';
+      if (Atomics.wait(i32, KP_DOORBELL, seq, left) === 'timed-out') return 'timeout';
+    }
+  }
+};
+
+/* Adapter to host.js's spawnHooks seam (createSpawn's contract). The Phase 2
+ * members (sigpoll/sigmask/park/exit) light up host.js's safe-point signal
+ * delivery, interruptible sleeps, and the ordered exit handshake. */
 KernelClient.prototype.spawnHooks = function () {
   var self = this;
   return {
     spawn: function (spec) { return self.call(OP.SPAWN, spec); },
-    wait: function (pid, options) { return self.call(OP.WAIT, { pid: pid, options: options }); },
+    wait: function (pid, options) { return self.call(OP.WAIT, { pid: pid, options: options }, true); },
     kill: function (pid, sig) { return self.call(OP.KILL, { pid: pid, sig: sig }); },
     sigdisp: function (sig, kind) { self.call(OP.SIGDISP, { sig: sig, kind: kind }); },
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
+    sigpoll: function () { return self.sigpoll(); },
+    sigmask: function (mask) { self.sigmask(mask); },
+    park: function (ms) { return self.park(ms); },
+    exit: function (status) { return self.call(OP.EXIT, { code: status }); },
   };
 };
 
@@ -304,6 +361,13 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
   if (!msg || pcb.state !== STATE_RUNNING) return;
   switch (msg.type) {
     case 'krpc': this._dispatchRpc(pcb); break;
+    // A parked interruptible RPC (WAIT) noticed a deliverable signal: answer
+    // EINTR if the wait is still registered. If the real result raced in
+    // first, the waiter is already gone — ignore, the signal delivers at the
+    // caller's next safe point anyway.
+    case 'krpc-intr':
+      if (pcb.waiter) { pcb.waiter = null; this._respond(pcb, { errno: 'EINTR' }); }
+      break;
     case 'out': this._onOutput(pcb.pid, msg.fd, msg.bytes); break;
     case 'exited': this._exitProcess(pcb, W_EXITCODE(msg.code | 0)); break;
     case 'crashed':
@@ -341,6 +405,11 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       break;
     case OP.WAIT: this._wait(pcb, req.pid | 0, req.options | 0); break;
     case OP.KILL: this._respond(pcb, this.kill(req.pid | 0, req.sig | 0, pcb)); break;
+    // Ordered exit handshake (libc exit() → host __exit hook → here). All
+    // prior 'out' messages are already processed (same FIFO channel), so the
+    // status becomes visible only after the output did. No response — the
+    // worker is torn down by _exitProcess.
+    case OP.EXIT: this._exitProcess(pcb, W_EXITCODE(req.code | 0)); break;
     case OP.SIGDISP:
       if (req.sig > 0 && req.sig < NSIG) pcb.sigdisp[req.sig] = req.kind | 0;
       this._respond(pcb, {});
@@ -443,13 +512,19 @@ Kernel.prototype._exitProcess = function (pcb, status) {
 
   var parent = this._procs.get(pcb.ppid);
   if (parent && parent.state === STATE_RUNNING) {
+    // Post SIGCHLD BEFORE answering a parked wait: the parent wakes on the
+    // response and races through its safe point immediately — the pending
+    // bit must already be visible so the handler runs before waitpid
+    // returns to the program. (Default-ignore drops it; a stray krpc-intr
+    // triggered by the post is ignored once the waiter is answered.)
+    this._deliver(parent, SIG.CHLD);
     if (parent.waiter && waitSelectorMatch(parent.waiter.sel, parent, pcb)) {
       parent.waiter = null;
       this._reap(pcb);
       this._respond(parent, { pid: pcb.pid, status: status });
     } else {
-      // No pending wait: stay a zombie until reaped. Ring the parent anyway —
-      // harmless now, and Phase 2 turns this into SIGCHLD delivery.
+      // No pending wait: stay a zombie until reaped; ring so any parked
+      // parent re-checks its world.
       this._ring(parent);
     }
   } else {
@@ -503,11 +578,22 @@ Kernel.prototype._deliver = function (pcb, sig) {
     return;
   }
   switch (sigDefaultAction(sig)) {
-    case 0: this._exitProcess(pcb, W_TERMSIG(sig)); break;   // terminate
+    case 0:
+      // Terminate — but honor the target's published blocked mask: a blocked
+      // fatal signal stays pending; libc applies the default action when
+      // sigprocmask unblocks it (it kill-selfs, so the termsig still
+      // round-trips as WIFSIGNALED).
+      if (Atomics.load(pcb.i32, KP_SIGBLOCK) & (1 << (sig - 1))) {
+        Atomics.or(pcb.i32, KP_SIGPEND, 1 << (sig - 1));
+        this._ring(pcb);
+      } else {
+        this._exitProcess(pcb, W_TERMSIG(sig));
+      }
+      break;
     case 1: break;                                           // ignore
     default:
-      // stop/continue: Phase 4 (job control). Dropped, loudly.
-      this._log('pid ' + pcb.pid + ': stop/cont signal ' + sig + ' dropped (Phase 4)');
+      // stop/continue: todos/0003 (job control). Dropped, loudly.
+      this._log('pid ' + pcb.pid + ': stop/cont signal ' + sig + ' dropped (todos/0003)');
   }
 };
 

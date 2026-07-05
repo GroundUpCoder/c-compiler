@@ -88,6 +88,16 @@ function rpcDeferred(pid, op, req) {
     },
   };
 }
+// Fire an RPC without awaiting a response (EXIT never gets one — the kernel
+// tears the worker down instead).
+function rpcFire(pid, op, req) {
+  const h = workers.get(pid);
+  const { i32, u8 } = page(pid);
+  K.writePayload(i32, u8, req);
+  Atomics.store(i32, K.KP_RPC_OP, op);
+  Atomics.store(i32, K.KP_RPC_STATE, K.RPC_REQUEST);
+  h.msg({ type: 'krpc' });
+}
 const exitMsg = (pid, code) => workers.get(pid).msg({ type: 'exited', code });
 const spawnReq = (p, extra) => Object.assign(
   { path: p, argv: [p], envp: null, cwd: null, actions: [], flags: 0, pgid: 0 }, extra);
@@ -227,6 +237,40 @@ const spawnReq = (p, extra) => Object.assign(
   check('unimplemented op -> ENOSYS', r.errno === 'ENOSYS');
   exitMsg(13, 0);
   await rpc(1, K.OP.WAIT, { pid: -1, options: 0 });
+
+  // ---- Phase 2: exit handshake, WAIT interruption, blocked-DFL, SIGCHLD ----
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a')); // pid 14
+  const d14 = rpcDeferred(1, K.OP.WAIT, { pid: 14, options: 0 });
+  await tick();
+  rpcFire(14, K.OP.EXIT, { code: 9 });
+  r = await d14.finish();
+  check('EXIT rpc: waiter gets W_EXITCODE', r.pid === 14 && r.status === (9 << 8), JSON.stringify(r));
+  check('EXIT rpc: worker torn down', workers.get(14).terminated);
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a')); // pid 15
+  const d15 = rpcDeferred(1, K.OP.WAIT, { pid: 15, options: 0 });
+  await tick();
+  check('WAIT parked before intr', d15.pending());
+  workers.get(1).msg({ type: 'krpc-intr' });
+  r = await d15.finish();
+  check('krpc-intr answers EINTR', r.errno === 'EINTR', JSON.stringify(r));
+  workers.get(1).msg({ type: 'krpc-intr' }); // no waiter registered: ignored
+  await tick();
+  check('stray intr ignored', kernel.process(15).state === 'running');
+
+  Atomics.store(page(15).i32, K.KP_SIGBLOCK, 1 << 14); // block SIGTERM (15)
+  r = await rpc(1, K.OP.KILL, { pid: 15, sig: 15 });
+  check('blocked SIGTERM parks as pending, not death',
+    !r.errno && kernel.process(15).state === 'running' &&
+    (Atomics.load(page(15).i32, K.KP_SIGPEND) & (1 << 14)) !== 0);
+
+  await rpc(1, K.OP.SIGDISP, { sig: 17, kind: 2 }); // init catches SIGCHLD
+  exitMsg(15, 0);
+  check('SIGCHLD posted to catching parent on child exit',
+    (Atomics.load(page(1).i32, K.KP_SIGPEND) & (1 << 16)) !== 0);
+  await rpc(1, K.OP.WAIT, { pid: 15, options: 0 });
+  await rpc(1, K.OP.SIGDISP, { sig: 17, kind: 0 });
+  Atomics.store(page(1).i32, K.KP_SIGPEND, 0);
 
   // ---- pid 1 exit halts the system ----
   check('all children reaped pre-halt', kernel.processCount() === 1, String(kernel.processCount()));

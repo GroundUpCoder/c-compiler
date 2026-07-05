@@ -20596,6 +20596,14 @@ int killpg(int __pgrp, int __sig);
 /* Notify the runtime of a disposition change (kind: 0=DFL 1=IGN 2=HANDLER) so
    the process kernel's kill() applies the right action. Host-provided. */
 __import void __on_sigdisp(int __sig, int __kind);
+/* Publish the blocked mask to the kernel page (low 32 bits; NSIG is 32) and
+   let the host deliver any kernel-pending signal that just became
+   unblocked. No-op without a kernel. Host-provided. */
+__import void __on_sigmask(unsigned __mask);
+/* Park on the kernel doorbell until a signal has been DELIVERED (the host
+   runs the handlers before this returns). -1/ENOSYS without a kernel —
+   never hangs. Backs pause()/sigsuspend(). Host-provided. */
+__import int __sig_pause(void);
   `,
   "stdalign.h": `
 #pragma once
@@ -21301,7 +21309,11 @@ static inline void  _exit(int s)            { (void)s; for (;;) {} }
 static inline long  sysconf(int name)       { (void)name; return -1; }
 static inline int   setuid(unsigned uid)    { (void)uid; return -1; }
 static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
-static inline int   kill(int pid, int sig)  { return __spawn_kill(pid, sig); }
+/* kill() lives in __signal.c (declared in signal.h; declared here too for
+   unistd-only callers): self-directed signals must deliver through the libc
+   handler tables, not just the kernel RPC. __signal.c links into every
+   stdlib program via abort(), so the symbol is always present. */
+int kill(int __pid, int __sig);
 /* Single root user: real and effective user/group IDs are all 0 (root).
    These never fail (POSIX getuid/getgid have no error return). */
 static inline unsigned getuid(void)         { return 0; }
@@ -23680,11 +23692,15 @@ int getopt_long_only(int argc, char *const argv[], const char *optstring,
 #include <unistd.h>   /* getpid */
 __import void __exit(int status);
 
-/* Per-process disposition state (the libc owns it — sigaction set it here). No
-   async delivery exists (a running wasm instance can't be preempted), so:
-   handlers are RECORDED and fire on raise()/abort() (synchronous self-delivery)
-   and, once Phase 2 lands, at syscall boundaries; the runtime is told the
-   disposition KIND via __on_sigdisp so kill() applies the right action. */
+/* Per-process disposition state (the libc owns it — sigaction set it here).
+   A running wasm instance can't be preempted, so delivery happens at SAFE
+   POINTS: raise()/abort() deliver synchronously, and with a kernel attached
+   (kernel.js) the host claims kernel-posted signals at every syscall
+   boundary and calls the exported __sig_dispatch (todos/KERNEL.md Phase 2).
+   The runtime is told the disposition KIND via __on_sigdisp so kill()
+   applies the right action, and the blocked mask via __on_sigmask so the
+   kernel parks blocked signals as pending. Pure-compute loops never reach a
+   safe point — settled caveat, SIGKILL still works. */
 static __sighandler_t __sig_h[NSIG];                       /* SIG_DFL = 0 */
 static void (*__sig_a[NSIG])(int, siginfo_t *, void *);    /* SA_SIGINFO action */
 static int __sig_fl[NSIG];
@@ -23712,6 +23728,73 @@ static int __sig_kind(int s) {
   return 2;
 }
 
+/* Counts user-visible deliveries (handler invocations). sigsuspend() uses it
+   to detect that unblocking already delivered — POSIX says it must return
+   then, not park for a second signal. */
+static volatile int __sig_ncalls;
+
+/* Deliver one signal to this process's tables right now. Async deliveries
+   (host safe-point dispatch, unblock drains, kill(getpid(), sig)) park
+   blocked signals in __sig_pending; raise() keeps its historical synchronous
+   semantics and does not consult the mask (C11 raise; matches the existing
+   goldens). Returns nonzero when an interrupted primitive may transparently
+   restart: SA_RESTART on the action that ran, or nothing user-visible ran. */
+static int __sig_deliver(int sig, int async) {
+  if (async && (__sig_blocked & ((sigset_t)1 << (sig - 1)))) {
+    __sig_pending |= (sigset_t)1 << (sig - 1);
+    return 1;
+  }
+  if (__sig_a[sig]) {
+    siginfo_t info; info.si_signo = sig; info.si_code = 0; info.si_errno = 0;
+    info.si_pid = getpid(); info.si_uid = 0; info.si_status = 0; info.si_addr = NULL;
+    info.si_value.sival_int = 0;
+    void (*a)(int, siginfo_t *, void *) = __sig_a[sig];
+    int restart = (__sig_fl[sig] & SA_RESTART) != 0;   /* before the handler can sigaction() */
+    if (__sig_fl[sig] & SA_RESETHAND) { __sig_a[sig] = NULL; __on_sigdisp(sig, 0); }
+    __sig_ncalls++;
+    a(sig, &info, NULL);
+    return restart;
+  }
+  __sighandler_t h = __sig_h[sig];
+  if (h == SIG_IGN) return 1;
+  if (h == SIG_DFL) {
+    if (__sig_default_action(sig) != 0) return 1;   /* ignore; stop/cont → todos/0003 */
+    /* Terminate: prefer the kernel — kill-self makes the termsig round-trip
+       to the parent as WIFSIGNALED. Without a kernel (__spawn_kill ENOSYS
+       and returns), approximate with the classic 128+sig exit. */
+    __spawn_kill(getpid(), sig);
+    __exit(128 + sig);
+  }
+  int restart = (__sig_fl[sig] & SA_RESTART) != 0;
+  if (__sig_fl[sig] & SA_RESETHAND) { __sig_h[sig] = SIG_DFL; __on_sigdisp(sig, 0); }
+  __sig_ncalls++;
+  h(sig);
+  return restart;
+}
+
+/* The mask changed: publish it to the kernel page (the host delivers any
+   kernel-pending signal that became claimable inside __on_sigmask), then
+   drain locally-parked pending signals that are now unblocked. */
+static void __sig_mask_changed(void) {
+  __on_sigmask((unsigned)__sig_blocked);
+  sigset_t ready;
+  while ((ready = (__sig_pending & ~__sig_blocked)) != 0) {
+    for (int s = 1; s < NSIG; s++) {
+      sigset_t b = (sigset_t)1 << (s - 1);
+      if (ready & b) { __sig_pending &= ~b; __sig_deliver(s, 1); }
+    }
+  }
+}
+
+/* Host-called safe-point dispatch: kernel.js posted sig on our kernel page
+   and host.js claimed it. Returns the may-restart verdict (see
+   __sig_deliver) so interrupted waits can honor SA_RESTART. */
+int __sig_dispatch(int sig) {
+  if (!__sig_ok(sig)) return 1;
+  return __sig_deliver(sig, 1);
+}
+__export __sig_dispatch = __sig_dispatch;
+
 int sigemptyset(sigset_t *set) { if (set) *set = 0; return 0; }
 int sigfillset(sigset_t *set) { if (set) *set = ~(sigset_t)0; return 0; }
 int sigaddset(sigset_t *set, int sig) {
@@ -23738,6 +23821,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     else { errno = EINVAL; return -1; }
     /* SIGKILL/SIGSTOP can never be blocked. */
     __sig_blocked &= ~(((sigset_t)1 << (SIGKILL - 1)) | ((sigset_t)1 << (SIGSTOP - 1)));
+    __sig_mask_changed();
   }
   return 0;
 }
@@ -23773,44 +23857,45 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
   return 0;
 }
 
-/* raise(): synchronous self-delivery (kill(getpid(), sig) on a single thread).
-   The handler runs right here; a default-terminate disposition exits. */
+/* raise(): synchronous self-delivery (C11). The handler runs right here; a
+   default-terminate disposition exits (via kill-self when a kernel exists,
+   so the parent sees WIFSIGNALED). Historically mask-blind — kept. */
 int raise(int sig) {
   if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
-  if (__sig_a[sig]) {
-    siginfo_t info; info.si_signo = sig; info.si_code = 0; info.si_errno = 0;
-    info.si_pid = getpid(); info.si_uid = 0; info.si_status = 0; info.si_addr = NULL;
-    info.si_value.sival_int = 0;
-    void (*a)(int, siginfo_t *, void *) = __sig_a[sig];
-    if (__sig_fl[sig] & SA_RESETHAND) { __sig_a[sig] = NULL; __on_sigdisp(sig, 0); }
-    a(sig, &info, NULL);
-    return 0;
-  }
-  __sighandler_t h = __sig_h[sig];
-  if (h == SIG_IGN) return 0;
-  if (h == SIG_DFL) {
-    int act = __sig_default_action(sig);
-    if (act != 0) return 0;             /* ignore / stop / continue → no-op here */
-    __exit(128 + sig);                  /* terminate (raise of an unhandled fatal signal) */
-  }
-  if (__sig_fl[sig] & SA_RESETHAND) { __sig_h[sig] = SIG_DFL; __on_sigdisp(sig, 0); }
-  h(sig);
+  __sig_deliver(sig, 0);
   return 0;
 }
 
-/* No deliverable async signal exists yet (Phase 2), so a bare pause()/sigsuspend()
-   would wait forever. Report EINTR-less ENOSYS rather than hang, so callers can
-   degrade. (Phase 2 makes these block until a real delivery wakes them.) */
-int pause(void) { errno = ENOSYS; return -1; }
-int sigsuspend(const sigset_t *mask) { (void)mask; errno = ENOSYS; return -1; }
+/* pause()/sigsuspend(): park on the kernel doorbell; the host delivers the
+   waking signal's handlers inside __sig_pause, so these return EINTR right
+   after. Without a kernel __sig_pause reports ENOSYS (never hangs). */
+int pause(void) {
+  if (__sig_pause() < 0) return -1;   /* errno set by the host */
+  errno = EINTR;
+  return -1;
+}
+int sigsuspend(const sigset_t *mask) {
+  sigset_t old = __sig_blocked;
+  int before = __sig_ncalls;
+  __sig_blocked = (mask ? *mask : 0)
+    & ~(((sigset_t)1 << (SIGKILL - 1)) | ((sigset_t)1 << (SIGSTOP - 1)));
+  __sig_mask_changed();               /* may deliver a newly-unblocked pending signal */
+  int r = 0;
+  if (__sig_ncalls == before) r = __sig_pause();
+  __sig_blocked = old;
+  __sig_mask_changed();
+  if (r < 0) return -1;
+  errno = EINTR;
+  return -1;
+}
 
-/* kill(): route through the process kernel (kernel.js). Self-directed signals
-   take the raise() path so an unblocked handler runs synchronously before
-   return — the kernel round-trip can't deliver into this instance until
-   Phase 2's safe-point dispatch lands. */
+/* kill(): route through the process kernel (kernel.js). Self-directed
+   signals deliver locally with async semantics (blocked → pending, handler
+   runs before return otherwise) — the kernel round-trip couldn't reach this
+   very instance any sooner than we can. */
 int kill(int pid, int sig) {
   if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
-  if (pid == getpid()) return raise(sig);
+  if (pid == getpid()) { __sig_deliver(sig, 1); return 0; }
   return __spawn_kill(pid, sig);
 }
 int killpg(int pgrp, int sig) {

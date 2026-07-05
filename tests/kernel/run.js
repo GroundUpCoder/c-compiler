@@ -6,8 +6,9 @@ var { spawnSync } = require('child_process');
 var path = require('path');
 
 var tests = [
-  ['test_kernel.js', []],   // process-table semantics over the real SAB protocol
-  ['test_e2e.js', []],      // real C programs in worker_threads via nodeCreateWorker
+  ['test_kernel.js', []],       // process-table semantics over the real SAB protocol
+  ['test_e2e.js', []],          // real C programs in worker_threads via nodeCreateWorker
+  ['test_signals_e2e.js', []],  // Phase 2: async delivery, EINTR/SA_RESTART, pause, exit handshake
 ];
 
 var failures = 0;

@@ -82,11 +82,15 @@ table, per-process kernel-page SAB, block-RPC transport, spawn/wait/kill
 routing. It is per-SYSTEM; `host.js` is per-PROCESS (loaded in every process
 worker) — keep that boundary. `KernelClient.spawnHooks()` plugs into
 host.js's existing `spawnHooks` seam, so host.js needs no kernel-specific
-code. Tests: `node tests/kernel/run.js` — `test_kernel.js` drives the real
-SAB protocol against fake workers (deterministic, no threads);
-`test_e2e.js` compiles real C and runs it in `worker_threads` via
-`nodeCreateWorker`. When changing the kernel-page layout or opcodes, keep
-KERNEL.md's layout comment and both tests in sync.
+code. Signal delivery is cooperative: kernel.js posts SIGPEND bits on the
+kernel page, host.js claims them at env-import safe points and calls the
+wasm `__sig_dispatch` export (so pure-compute loops are uninterruptible by
+design — SIGKILL still works). Tests: `node tests/kernel/run.js` —
+`test_kernel.js` drives the real SAB protocol against fake workers
+(deterministic, no threads); `test_e2e.js` and `test_signals_e2e.js`
+compile real C and run it in `worker_threads` via `nodeCreateWorker`. When
+changing the kernel-page layout or opcodes, keep KERNEL.md's layout comment
+and the tests in sync.
 
 ## BlockFS (host.js) and its tests
 

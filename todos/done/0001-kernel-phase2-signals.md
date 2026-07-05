@@ -1,6 +1,6 @@
 # 0001 — kernel Phase 2: signal delivery, EINTR, exit handshake
 
-- **Status**: in progress
+- **Status**: DONE (2026-07-05; dev log: `logs/2026-07-05/kernel-phase2.md`)
 - **Depends**: — (Phase 1 landed: kernel.js @ 990c5ee)
 - **Design**: `todos/KERNEL.md` (Signals; Exit and teardown; phases list)
 
