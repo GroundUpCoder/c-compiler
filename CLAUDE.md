@@ -63,6 +63,19 @@ hang-class miscompiles fail fast instead of stalling the suite.
   it on PATH) or any package-manager cmake. Invoke by full path:
   `~/.local/bin/cmake`.
 
+## kernel.js (the process control plane) and its tests
+
+`kernel.js` is the owner-side kernel (design: `todos/KERNEL.md`): process
+table, per-process kernel-page SAB, block-RPC transport, spawn/wait/kill
+routing. It is per-SYSTEM; `host.js` is per-PROCESS (loaded in every process
+worker) — keep that boundary. `KernelClient.spawnHooks()` plugs into
+host.js's existing `spawnHooks` seam, so host.js needs no kernel-specific
+code. Tests: `node tests/kernel/run.js` — `test_kernel.js` drives the real
+SAB protocol against fake workers (deterministic, no threads);
+`test_e2e.js` compiles real C and runs it in `worker_threads` via
+`nodeCreateWorker`. When changing the kernel-page layout or opcodes, keep
+KERNEL.md's layout comment and both tests in sync.
+
 ## BlockFS (host.js) and its tests
 
 `host.js` contains **BlockFS** — a POSIX-ish filesystem backed by one byte store

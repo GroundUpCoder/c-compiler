@@ -20590,6 +20590,8 @@ int sigprocmask(int __how, const sigset_t *__set, sigset_t *__old);
 int sigpending(sigset_t *__set);
 int pause(void);
 int sigsuspend(const sigset_t *__mask);
+int kill(int __pid, int __sig);
+int killpg(int __pgrp, int __sig);
 
 /* Notify the runtime of a disposition change (kind: 0=DFL 1=IGN 2=HANDLER) so
    the process kernel's kill() applies the right action. Host-provided. */
@@ -21526,9 +21528,10 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
 #define WTERMSIG(status)     ((status) & 0x7f)
 #define WIFSTOPPED(status)   (((status) & 0xff) == 0x7f)
 #define WSTOPSIG(status)     WEXITSTATUS(status)
-// Reap a spawned child via the process kernel. waitpid(-1, ...) (any child) is
-// not yet supported by the owner — pass a specific pid (it returns -1/ECHILD
-// otherwise). status is POSIX-encoded: WEXITSTATUS(status) == child's exit code.
+// Reap a spawned child via the process kernel. status is POSIX-encoded:
+// WEXITSTATUS(status) == child's exit code. waitpid(-1, ...) (any child) and
+// the pgroup selectors (0 / -pgid) are supported by kernel.js; older external
+// owner kernels may fail them with ECHILD.
 static inline pid_t waitpid(pid_t pid, int *status, int options) {
   return __spawn_wait(pid, status, options);
 }
@@ -23800,6 +23803,20 @@ int raise(int sig) {
    degrade. (Phase 2 makes these block until a real delivery wakes them.) */
 int pause(void) { errno = ENOSYS; return -1; }
 int sigsuspend(const sigset_t *mask) { (void)mask; errno = ENOSYS; return -1; }
+
+/* kill(): route through the process kernel (kernel.js). Self-directed signals
+   take the raise() path so an unblocked handler runs synchronously before
+   return — the kernel round-trip can't deliver into this instance until
+   Phase 2's safe-point dispatch lands. */
+int kill(int pid, int sig) {
+  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
+  if (pid == getpid()) return raise(sig);
+  return __spawn_kill(pid, sig);
+}
+int killpg(int pgrp, int sig) {
+  if (pgrp < 0) { errno = EINVAL; return -1; }
+  return kill(pgrp == 0 ? 0 : -pgrp, sig);
+}
   `,
   "__locale.c": `
 #include <locale.h>

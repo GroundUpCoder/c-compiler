@@ -5,7 +5,9 @@ for the north star and the posix_spawn-not-fork decision; this doc designs the
 thing that decision implies: a real kernel — process table, signals, tty line
 discipline, job control — as a first-class, in-repo component.
 
-**Status: design. Review before implementation.**
+**Status: Phase 1 implemented** (`kernel.js` + `tests/kernel/` — process
+table, kernel page, block-RPC, KernelClient, spawn/wait/kill/exit/compile
+parity; libc gained `kill()`/`killpg()`). Phases 2–5 remain design.
 
 ## Why this exists
 
