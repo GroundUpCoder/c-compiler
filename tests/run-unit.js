@@ -249,6 +249,10 @@ function workerMain() {
     } catch (e) {
       if (e instanceof ExitOverride) {
         compilerExitCode = e.code || 1;
+      } else if (e && e.compilationFailed) {
+        // parseAllUnits with writeErr injected: diagnostics already flowed
+        // through writeCompilerErr; the throw just carries the exit status.
+        compilerExitCode = 1;
       } else {
         writeCompilerErr(`Compiler threw: ${e.message}\n${e.stack || ''}\n`);
         compilerExitCode = 1;

@@ -15,6 +15,7 @@ var tests = [
   ['test_pipes.js', []],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js', []],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
   ['test_jobctl_e2e.js', []],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
+  ['test_os_boot.js', []],      // 0004: headless OS boot — seed, protoshell, cc, persistence
 ];
 
 var failures = 0;

@@ -1,0 +1,106 @@
+// kernel-worker.js — the OS's kernel worker (todos/0004; layout in
+// todos/OS.md "Reference build"). Runs once per tab: mounts BlockFS on OPFS
+// (SyncAccessHandle is worker-only — this is WHY the kernel lives in a
+// worker), seeds the image on first boot, owns the process table + tty +
+// fd layer (kernel.js), backs /bin/cc with compiler.js, and spawns one
+// nested process worker per pid.
+//
+// Protocol with the page (os.html, a dumb UI bridge):
+//   page -> kernel: {type:'input', data}         raw tty bytes/keystrokes
+//                   {type:'resize', cols, rows}
+//                   {type:'eof'}
+//   kernel -> page: {type:'out', bytes}          tty output (program + echo)
+//                   {type:'boot-log', msg}       boot progress / kernel log
+//                   {type:'boot-error', msg}
+//                   {type:'ready', mode}         booted; mode = openWorkspace's
+//                   {type:'halt', status}        pid 1 exited
+'use strict';
+
+importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js');
+// worker globals: BLOCK_FS, runModule (host.js); KERNEL (kernel.js);
+// CompilerJS (compiler.js); OS_COMMON (os-common.js)
+
+var kernel = null;
+var tty = null;
+var post = function (m) { self.postMessage(m); };
+var pending = [];   // input that raced the boot
+
+self.onmessage = function (e) {
+  var m = e.data;
+  if (!m) return;
+  if (!tty) { pending.push(m); return; }
+  if (m.type === 'input') tty.input(typeof m.data === 'string' ? m.data : new Uint8Array(m.data));
+  else if (m.type === 'resize') tty.resize(m.cols | 0, m.rows | 0);
+  else if (m.type === 'eof') tty.eof();
+};
+
+function createWorker(procSpec) {
+  var w = new Worker('process-worker.js');
+  var exitCb = null;
+  w.postMessage({
+    type: 'boot',
+    pid: procSpec.pid, ppid: procSpec.ppid, pgid: procSpec.pgid,
+    path: procSpec.path, argv: procSpec.argv, envp: procSpec.envp,
+    cwd: procSpec.cwd, actions: procSpec.actions, flags: procSpec.flags,
+    image: procSpec.image,
+    kernelPage: procSpec.kernelPage,
+    ttySab: procSpec.ttySab || null,
+    brokered: !!procSpec.brokered,
+  });
+  return {
+    postMessage: function (m) { w.postMessage(m); },
+    onMessage: function (fn) { w.onmessage = function (ev) { fn(ev.data); }; },
+    // Browsers have no worker 'exit' event; an uncaught error in the worker
+    // is the observable equivalent of silent death (kernel treats it as
+    // termsig SIGSEGV when no 'exited'/'crashed' message preceded it).
+    onExit: function (fn) { exitCb = fn; w.onerror = function () { if (exitCb) exitCb(); }; },
+    terminate: function () { w.terminate(); },
+  };
+}
+
+async function boot() {
+  post({ type: 'boot-log', msg: 'mounting BlockFS on OPFS…' });
+  var ws = await BLOCK_FS.openWorkspace({ v4Name: 'os.v4.img' });
+  var kfs = ws.fs;
+  var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
+
+  var manifest = await (await fetch('image.json')).json();
+  await OS_COMMON.seedImage(kfs, manifest, {
+    readAsset: function (name) {
+      return fetch(name).then(function (r) {
+        if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
+        return r.text();
+      });
+    },
+    compile: ccCompile,
+    log: function (m) { post({ type: 'boot-log', msg: m }); },
+  });
+
+  kernel = new KERNEL.Kernel({
+    fs: kfs,
+    createWorker: createWorker,
+    loadImage: function (p) { return OS_COMMON.readFileBytes(kfs, p); },
+    compile: ccCompile,
+    onOutput: function (pid, fd, bytes) { post({ type: 'out', bytes: bytes }); },
+    onHalt: function (status) { post({ type: 'halt', status: status }); },
+    log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
+  });
+  tty = kernel.createTty({
+    output: function (b) { post({ type: 'out', bytes: b instanceof Uint8Array ? b.slice() : Uint8Array.from(b) }); },
+  });
+
+  await kernel.boot({
+    path: '/bin/sh',
+    argv: ['sh'],
+    envp: ['PATH=/bin', 'HOME=/root', 'TERM=xterm-256color'],
+    cwd: '/root',
+  });
+  post({ type: 'ready', mode: ws.mode });
+
+  var queued = pending; pending = [];
+  queued.forEach(function (m) { self.onmessage({ data: m }); });
+}
+
+boot().catch(function (e) {
+  post({ type: 'boot-error', msg: String((e && e.stack) || e) });
+});

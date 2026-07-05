@@ -4275,7 +4275,17 @@ var BLOCK_FS = (function () {
       return { fs: BlockFS.createV4(v4.store), mode: 'migrated', handles: [v4.handle] };
     }
     if (legacy) legacy.handle.close();
-    return { fs: BlockFS.createV4(v4.store), mode: 'fresh', handles: [v4.handle] };
+    var freshFs = BlockFS.createV4(v4.store);
+    // A natively-fresh v4 has no migration pending: mark it complete NOW, at
+    // the one site where "no legacy exists" was just verified. Without this,
+    // every future mount re-enters the migrate-check path — and a legacy
+    // workspace.img appearing later (same-origin app, restored backup) would
+    // truncate(0) this image and "migrate" over it. Deliberately NOT set in
+    // createV4 itself: migrateV3toV4 formats its destination through
+    // createV4, and only its final copy step may set the bit (a crash
+    // mid-migration must stay visibly incomplete).
+    v4.store.setUint32(SB_FLAGS, v4.store.getUint32(SB_FLAGS) | SB_MIGRATED_BIT);
+    return { fs: freshFs, mode: 'fresh', handles: [v4.handle] };
   };
 
   // Test init: sync, backed by any ByteStore.

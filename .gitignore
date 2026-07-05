@@ -7,3 +7,4 @@ node_modules/
 test-results/
 tools/disasm/index.html
 *.pyc
+os/os.img

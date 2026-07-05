@@ -98,9 +98,10 @@ the shell port should handle subshells — see Phase 1).
 |---|---|
 | Compiler | ~28k lines, C89/99/11/23 broadly solid; 694/694 unit tests; builds sqlite, doom, quake, lua, micropython, libgit2, freetype; tinyemu boots Linux. Residual QoI items in `CONFORMANCE-REMAINING.md`. |
 | Persistence | Done. BlockFS (inodes, TLSF, symlinks, pipes, device nodes) on OPFS, with independent fsck + differential fuzzer + dual-instance coherence. |
-| Processes | Done (spawn model above). No signals delivery, no job control. |
-| Terminal | xterm.js vendored, bidirectional stdio works. No termios backing, no raw mode, no Ctrl-C delivery. |
-| Shell | **Does not exist.** libc already points at `/bin/sh` (`popen`, `system`, `_PATH_BSHELL`) — the slot is reserved. |
+| Processes | Done — kernel.js Phases 1–4 (todos/done/0001–0003, 0009): async signal delivery, EINTR, tty line discipline + control-char signals, kernel-owned fd tables + brokered fs, pipes as OFDs + SIGPIPE, job control (stop/cont, WUNTRACED/WCONTINUED, SIGTTIN). |
+| Terminal | Done for Phase 1 — the tty is a kernel object (termios, canonical/raw, echo, Ctrl-C→SIGINT, SIGWINCH); xterm.js is the dumb UI bridge (`os/os.html`). |
+| Reference build | **Boots** (todos/done/0004): `os/os.html` in a tab over OPFS, `os/boot.js` headless on stdio; first boot self-seeds from `os/image.json` (C sources compiled by the kernel's cc driver); `cc hello.c && ./a.out` works in-OS. |
+| Shell | Protoshell only (`os/protoshell.c`, pid 1): builtins + spawn + `&&` + foreground job handoff. The real port is `todos/0005`; libc already points at `/bin/sh` (`popen`, `system`, `_PATH_BSHELL`). |
 | Threads | Not implemented. `_Atomic` parses but doesn't codegen; `pthread.h`/`threads.h` are stubs. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
 | Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
@@ -136,17 +137,28 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
 ```
 
 - `os.html` stays thin on purpose: everything with logic lives in
-  kernel.js/host.js so it's testable under Node (`tests/kernel/`); the page
-  is just DOM glue. Process workers boot from a tiny shim injected via the
-  kernel's `createWorker` capability (blob/module bootstrap that loads
-  host.js and waits for the run message — same shape under `worker_threads`).
-- **First boot**: kernel formats BlockFS on OPFS, creates /bin /dev /etc
-  /root + device nodes, and seeds binaries per a manifest (`os/image.json`:
-  path → fetch URL of built wasm). Later a `tools/mkimage.js` can pre-bake a
-  seeded image blob; manifest-fetch is fine to start.
-- **pid 1**: eventually the shell. Until the busybox port lands, a ~200-line
-  C *protoshell* (read line, spawn argv, wait; Ctrl-C forwarding) is the boot
-  program — it doubles as the live test harness for kernel Phases 1–3.
+  kernel.js/host.js/os-common.js so it's testable under Node
+  (`tests/kernel/`); the page is just DOM glue plus the `window.__osOut`/
+  `__osState` agent probe. Process workers boot from `os/process-worker.js`
+  (the browser twin of kernel.js's Node BOOT_SOURCE), created by the kernel
+  worker's `createWorker` capability.
+- **First boot** (implemented, todos/done/0004): the kernel worker mounts
+  BlockFS on OPFS (`openWorkspace`, image `os.v4.img`), creates /bin /etc
+  /root (+/dev via `ensureDevNodes`), and seeds per `os/image.json` —
+  which maps paths to **C sources compiled at seed time by the kernel's own
+  cc driver** (`os/os-common.js`), not pre-built wasm URLs: no build step,
+  the repo discipline. `/etc/.image-version` gates re-seeding (bump
+  `image.json`'s `version` after editing seeded sources). A pre-baked image
+  blob (`tools/mkimage.js`) stays a future distribution convenience.
+- **Headless twin** (the agent-first requirement): `os/boot.js` boots the
+  same kernel + manifest under plain Node — file-backed store, tty on
+  stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and
+  exit codes. `tests/kernel/test_os_boot.js` scripts it;
+  `tests/browser/os-boots.mjs` drives the real page in headless Chromium.
+- **pid 1**: eventually the shell. Until the busybox port lands, the
+  ~230-line C *protoshell* (`os/protoshell.c`: builtins, spawn, `&&`,
+  trailing `&`, foreground pgroup handoff via tcsetpgrp) is the boot
+  program — it doubles as the live harness for kernel Phases 1–4.
 
 ## Roadmap
 

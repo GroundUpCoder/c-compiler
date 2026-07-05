@@ -1,6 +1,11 @@
 # 0004 — os/ reference page + C protoshell (pid 1)
 
-- **Status**: queued
+- **Status**: done (2026-07-06 — one deliberate deviation: `os/image.json`
+  maps paths to C SOURCES compiled by the kernel's own cc driver at first
+  boot, not to pre-built wasm URLs — no build step, per repo discipline.
+  Acceptance verified both ways: `tests/kernel/test_os_boot.js` headless,
+  `tests/browser/os-boots.mjs` in real Chromium. Dev log:
+  `logs/2026-07-06/os-page-protoshell.md`)
 - **Depends**: 0001 (usable already; better after 0002)
 - **Design**: `todos/OS.md` (Reference build: os/ in this repo)
 

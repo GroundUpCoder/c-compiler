@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "dirs": ["/bin", "/etc", "/root"],
+  "files": {
+    "/bin/sh": { "c": "protoshell.c" },
+    "/bin/cc": { "c": "cc.c" },
+    "/root/hello.c": { "text": "hello.c" }
+  }
+}

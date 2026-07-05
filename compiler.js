@@ -26812,8 +26812,16 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   }
 
   if (hasErrors) {
-    if (typeof process !== 'undefined' && process.exit) process.exit(1);
-    throw new Error("Compilation failed");
+    // An embedder that injected writeErr (the OS kernel's compile hook, the
+    // unit runner, any library caller) is collecting diagnostics and must
+    // survive the failure; process.exit is CLI-only behavior. The marker
+    // tells callers every diagnostic already flowed through writeErr — no
+    // stack dump needed.
+    if (!(options && options.writeErr) &&
+        typeof process !== 'undefined' && process.exit) process.exit(1);
+    var failure = new Error("Compilation failed");
+    failure.compilationFailed = true;
+    throw failure;
   }
   return units;
 }

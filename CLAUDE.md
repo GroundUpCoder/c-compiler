@@ -105,6 +105,21 @@ threads); the `*_e2e.js` files compile real C and run it in
 benchmark. When changing the kernel-page layout or opcodes, keep KERNEL.md's
 layout comment and the tests in sync.
 
+## os/ (the reference OS build)
+
+`os/` is the bootable reference build (design: `todos/OS.md` "Reference
+build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge) →
+`kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
+/bin/cc) → `process-worker.js` per pid. `boot.js` is the headless twin —
+same kernel/manifest under Node with the tty on stdio
+(`echo 'ls /' | node os/boot.js`). First boot seeds the image from
+`image.json`: paths map to **C sources compiled at seed time** by the cc
+driver in `os-common.js` (no build step); bump `image.json`'s `version`
+after editing seeded sources (`protoshell.c`, `cc.c`) or existing images
+won't re-seed. pid 1 is `protoshell.c` until the shell port (todos/0005).
+Tests: `tests/kernel/test_os_boot.js` (headless, in the kernel suite);
+`tests/browser/os-boots.mjs` (real Chromium, manual).
+
 ## BlockFS (host.js) and its tests
 
 `host.js` contains **BlockFS** — a POSIX-ish filesystem backed by one byte store

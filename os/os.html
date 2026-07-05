@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!-- os.html — the reference OS page (todos/0004; design: todos/OS.md
+     "Reference build"). Deliberately a dumb UI bridge: xterm renders bytes,
+     keystrokes go to the kernel worker, and EVERYTHING with logic lives in
+     kernel.js / host.js / os-common.js so it stays testable under Node
+     (os/boot.js is the same OS with the tty on stdio).
+
+     Serve from the repo root — SharedArrayBuffer needs the COOP/COEP
+     headers serve.js sends:   node serve.js .   then open /os/os.html  -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wasm-os</title>
+<link rel="stylesheet" href="../vendor/xterm/xterm.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #0d0d1a; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #status {
+    font: 12px 'Menlo', 'Consolas', monospace; color: #557755;
+    padding: 2px 8px; white-space: nowrap; overflow: hidden;
+  }
+  #status.error { color: #cc5555; }
+  #terminal { flex: 1; min-height: 0; padding: 4px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="terminal"></div>
+  <div id="status">booting…</div>
+</div>
+<script src="../vendor/xterm/xterm.js"></script>
+<script src="../vendor/xterm/xterm-addon-fit.js"></script>
+<script>
+'use strict';
+
+var statusEl = document.getElementById('status');
+function status(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? 'error' : '';
+}
+
+if (typeof SharedArrayBuffer === 'undefined') {
+  status('SharedArrayBuffer unavailable — serve this page with COOP/COEP headers (node serve.js .)', true);
+  throw new Error('no SAB');
+}
+
+var term = new Terminal({
+  cursorBlink: true,
+  // Program stdout arrives raw (the kernel stays out of the output data
+  // plane — no OPOST pass), so let xterm treat bare \n as \r\n.
+  convertEol: true,
+  fontSize: 14,
+  fontFamily: "'Menlo', 'Consolas', 'Courier New', monospace",
+  theme: { background: '#0d0d1a', foreground: '#c0c0d8', cursor: '#c0c0d8' },
+});
+var fitAddon = new FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+
+var kernel = new Worker('kernel-worker.js');
+
+term.onData(function (data) { kernel.postMessage({ type: 'input', data: data }); });
+term.onResize(function (sz) { kernel.postMessage({ type: 'resize', cols: sz.cols, rows: sz.rows }); });
+window.addEventListener('resize', function () { fitAddon.fit(); });
+
+// Agent/test probe (OS.md "agent-friendly by construction"): every tty
+// output byte also lands in window.__osOut, and __osState tracks the boot,
+// so a driver (tests/browser/os-boots.mjs, or any agent) can poll instead
+// of scraping the xterm buffer.
+window.__osOut = '';
+window.__osState = 'booting';
+var outDecoder = new TextDecoder();
+
+kernel.onmessage = function (e) {
+  var m = e.data;
+  switch (m.type) {
+    case 'out':
+      term.write(m.bytes);
+      window.__osOut += outDecoder.decode(m.bytes, { stream: true });
+      break;
+    case 'boot-log': status(m.msg); break;
+    case 'boot-error':
+      status('boot failed', true);
+      window.__osState = 'error';
+      term.write('\r\n\x1b[31mboot failed:\x1b[0m\r\n' + m.msg.replace(/\n/g, '\r\n') + '\r\n');
+      break;
+    case 'ready':
+      status('running (image: ' + m.mode + ') — files persist in OPFS');
+      window.__osState = 'ready';
+      kernel.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
+      term.focus();
+      break;
+    case 'halt': {
+      var sig = m.status & 0x7f;
+      var code = sig ? 128 + sig : (m.status >> 8) & 0xff;
+      status('halted (exit ' + code + ') — reload to reboot', true);
+      window.__osState = 'halted:' + code;
+      term.write('\r\n\x1b[33m[system halted — reload the page to reboot]\x1b[0m\r\n');
+      break;
+    }
+  }
+};
+kernel.onerror = function (e) {
+  status('kernel worker error: ' + e.message, true);
+};
+</script>
+</body>
+</html>
