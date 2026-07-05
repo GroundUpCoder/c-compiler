@@ -83,6 +83,20 @@ patched at source. `posix_spawn` + `popen` + `system` covers the overwhelming
 majority of real software; the rest gets a small patch (this is exactly how
 the shell port should handle subshells — see Phase 1).
 
+**The native primitive is `__spawn(struct __spawn_spec *)`, not posix_spawn.**
+The spec (path, argv, envp, **cwd**, declarative fd_actions, pgroup) is the
+OS's real process-creation interface — deliberately CreateProcess-class
+rather than POSIX-class (posix_spawn can't even set the child's cwd; ours
+can). `posix_spawn`/`posix_spawnp`/`popen`/`system` are thin C facades over
+it, and the spec rides as JSON over the kernel RPC, so it GROWS BY FIELD:
+suspended spawn (CREATE_SUSPENDED — cheap now that job control has the
+STOPPED state), rlimits, inheritance masks, and later WM surface binding
+(Phase 3) extend the spec — never a parallel primitive, never a fork.
+Port patches (the shell, anything vfork-shaped) should target `__spawn`'s
+declarative model: child-side setup dances (dup2/close, setpgid) become
+spec fields, which also kills their classic races (the kernel assigns
+pgid atomically at spawn).
+
 **Possible future mitigations** (only if a port genuinely needs them):
 1. *fork+exec idiom lowering*: a `fork()` immediately followed by `exec*()` in
    the child is semantically a spawn; a source-level or libc-level shim could
