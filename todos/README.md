@@ -47,8 +47,9 @@ don't duplicate them. Current map:
   posix_spawn-not-fork decision, the reference-build (`os/`) layout, the
   phased roadmap the queue is drawn from.
 - `KERNEL.md` — the process control plane design (kernel.js): kernel page,
-  doorbell, signals, tty, pipes, settled-decisions table. Phase 1 is
-  implemented; queue items 0001–0003 are its remaining phases.
+  doorbell, signals, tty, the fd/data-plane amendment, pipes,
+  settled-decisions table. Phases 1–3 + the brokered fs are implemented
+  (0001/0002/0009 in done/); `0003` (pipes + job control) is the remainder.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
 - `SDL3.md`, `SDL3-MIGRATION.md`, `WEBGPU.md` — runtime API surface plans.
 - `DOM.md` — C-to-DOM bytecode + diffing renderer idea.

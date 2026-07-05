@@ -85,12 +85,19 @@ host.js's existing `spawnHooks` seam, so host.js needs no kernel-specific
 code. Signal delivery is cooperative: kernel.js posts SIGPEND bits on the
 kernel page, host.js claims them at env-import safe points and calls the
 wasm `__sig_dispatch` export (so pure-compute loops are uninterruptible by
-design — SIGKILL still works). Tests: `node tests/kernel/run.js` —
-`test_kernel.js` drives the real SAB protocol against fake workers
-(deterministic, no threads); `test_e2e.js` and `test_signals_e2e.js`
-compile real C and run it in `worker_threads` via `nodeCreateWorker`. When
-changing the kernel-page layout or opcodes, keep KERNEL.md's layout comment
-and the tests in sync.
+design — SIGKILL still works). The tty (line discipline, termios, fg-pgroup
+signal routing) is a kernel object. With `Kernel({fs})` the kernel also owns
+the fd layer — per-process fd tables → shared open file descriptions → ONE
+BlockFS instance, with fs syscalls as 0x04xx RPCs served to host.js's
+RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
+in-process fs (standalone pages keep that path forever — two transports,
+one BlockFS; see KERNEL.md "fd/data-plane amendment"). Tests:
+`node tests/kernel/run.js` — `test_kernel.js`/`test_tty.js` drive the real
+SAB protocol against fake workers (deterministic, no threads); the
+`*_e2e.js` files compile real C and run it in `worker_threads`;
+`bench_fs.js` is the manual brokered-vs-inprocess benchmark. When changing
+the kernel-page layout or opcodes, keep KERNEL.md's layout comment and the
+tests in sync.
 
 ## BlockFS (host.js) and its tests
 
