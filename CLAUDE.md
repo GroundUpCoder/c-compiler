@@ -91,13 +91,19 @@ the fd layer — per-process fd tables → shared open file descriptions → ONE
 BlockFS instance, with fs syscalls as 0x04xx RPCs served to host.js's
 RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
 in-process fs (standalone pages keep that path forever — two transports,
-one BlockFS; see KERNEL.md "fd/data-plane amendment"). Tests:
-`node tests/kernel/run.js` — `test_kernel.js`/`test_tty.js` drive the real
-SAB protocol against fake workers (deterministic, no threads); the
-`*_e2e.js` files compile real C and run it in `worker_threads`;
-`bench_fs.js` is the manual brokered-vs-inprocess benchmark. When changing
-the kernel-page layout or opcodes, keep KERNEL.md's layout comment and the
-tests in sync.
+one BlockFS; see KERNEL.md "fd/data-plane amendment"). Pipes are just
+another OFD kind (PIPE_CREATE; kernel-side buffers + wait queues; blocking
+read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness). Job
+control is cooperative like signals: STOP sets KP_FLAGS bit0 and the
+process parks at its next safe point (RPC entry or sigpoll), SIGCONT
+clears it; waitpid takes WUNTRACED/WCONTINUED; background brokered tty
+readers get SIGTTIN (EIO if ignored/blocked). Tests:
+`node tests/kernel/run.js` — `test_kernel.js`/`test_tty.js`/`test_pipes.js`
+drive the real SAB protocol against fake workers (deterministic, no
+threads); the `*_e2e.js` files compile real C and run it in
+`worker_threads`; `bench_fs.js` is the manual brokered-vs-inprocess
+benchmark. When changing the kernel-page layout or opcodes, keep KERNEL.md's
+layout comment and the tests in sync.
 
 ## BlockFS (host.js) and its tests
 

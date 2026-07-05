@@ -5,7 +5,7 @@ for the north star and the posix_spawn-not-fork decision; this doc designs the
 thing that decision implies: a real kernel — process table, signals, tty line
 discipline, job control — as a first-class, in-repo component.
 
-**Status: Phases 1–3 implemented** (`kernel.js` + `tests/kernel/`).
+**Status: Phases 1–4 implemented** (`kernel.js` + `tests/kernel/`).
 Phase 1: process table, kernel page, block-RPC, KernelClient,
 spawn/wait/kill/compile parity; libc `kill()`/`killpg()`. Phase 2
 (`todos/done/0001`): asynchronous signal delivery at libc safe points
@@ -24,8 +24,15 @@ tables → shared open file descriptions → one BlockFS in the kernel; 0x04xx
 fs RPCs with raw read/write payloads (KP_RPC_KIND); RemoteFS reusing
 toWasmEnv; brokered-mode tty reads as deferred RPCs; SIGKILL is
 fsck-verified leak-free (the Phase-1 accepted leak retired). Benchmark:
-~10µs/RPC — 559 MB/s write, 96.6K metadata ops/s brokered. Phases 4–5
-remain design (`todos/0003`+).
+~10µs/RPC — 559 MB/s write, 96.6K metadata ops/s brokered. Phase 4
+(`todos/done/0003`): pipes as OFDs — `PIPE_CREATE` + kernel-side buffers
+with wait queues (blocking read/write as deferred RPCs, EOF on last
+write-end close, EPIPE + SIGPIPE, select readiness) — and job control:
+STOPPED state, cooperative stop via `KP_FLAGS.STOP` parked at RPC-entry /
+sigpoll safe points, SIGCONT resume regardless of disposition,
+`WUNTRACED`/`WCONTINUED` (each transition reported once), SIGTTIN (EIO
+when ignored/blocked) for background brokered tty readers. Phase 5 — the
+shell port — is the acceptance gate (`todos/0005`).
 
 ## Why this exists
 
@@ -281,33 +288,40 @@ fd 0/1/2 is the tty (fd inheritance already models this). Reads consume from
 the shared ring under an Atomics lock — bytes go to whoever reads first,
 which is POSIX behavior for pgroup members sharing a terminal.
 
-- Background `read()` from the tty: libc compares its pgid (cached, refreshed
-  via kernel page) against the fg-pgid word → not fg → RPC → kernel sends
-  SIGTTIN (stop class). SIGTTOU only with TOSTOP set; **v1 leaves output
-  un-gated** — per-process stdout rings keep draining to the UI bridge
-  directly (kernel out of the data plane), so background jobs may interleave
-  output like most real shells' default anyway.
+- Background `read()` from the tty (implemented kernel-side in 0003, simpler
+  than the libc-compares-pgid design: the brokered FS_READ already lands in
+  the kernel, which IS the authority on fgPgid): not the fg pgroup → SIGTTIN
+  to the reader's pgroup and EINTR, or EIO if SIGTTIN is ignored/blocked
+  (POSIX). Ring-mode (standalone) reads stay un-gated. SIGTTOU only with
+  TOSTOP set; **v1 leaves output un-gated** — per-process stdout rings keep
+  draining to the UI bridge directly (kernel out of the data plane), so
+  background jobs may interleave output like most real shells' default
+  anyway.
 - `TIOCGWINSZ` stays a SAB read (`SI_COLS/ROWS` today), no RPC.
 - One tty in v1. Sessions exist in the PCB but `/dev/tty`, multiple ttys, and
   pty pairs wait until something needs them (the WM's terminal app will).
 
-## Pipes and cross-process blocking
+## Pipes and cross-process blocking (implemented, todos/done/0003)
 
 Keep the existing split: in-instance JS pipes when no kernel is present
-(single-program pages), owner-brokered pipes otherwise — but fold the
-`pipeBroker` into kernel opcodes and fix blocking:
+(single-program pages, via host.js's `pipeBroker` seam or in-memory
+fallback), kernel pipes otherwise. Post-0009 the kernel side needed ONE new
+opcode: `PIPE_CREATE` makes two OFDs over a kernel-side buffer, and
+everything else — inheritance, fd_actions, read/write/close/dup, select —
+is the same fd machinery files use. The design doc's PIPE_REF/CLOSE/WAIT/
+NOTIFY opcodes were subsumed by OFD refcounts + FS_* RPCs + the doorbell.
 
-- Pipe buffers live kernel-side (they are rendezvous, not bulk data; shell
-  pipelines move modest volumes through them, and PIPE_READ/WRITE payloads
-  ride the RPC region). If profiling ever says otherwise, a per-pipe SAB ring
-  is a drop-in upgrade behind the same opcodes.
-- Blocked readers/writers register on kernel-side wait queues; any state
-  change (write, close of an end) bumps the waiters' doorbells. This is what
-  the current broker can't do — today a cross-worker blocking pipe read has
-  no wake path at all.
-- EPIPE + SIGPIPE to the writer when the read side is gone (routing through
-  the normal signal path — today `write` can only return EPIPE; real SIGPIPE
-  kills `yes | head` pipelines the way scripts expect).
+- Pipe buffers live kernel-side (they are rendezvous, not bulk data; 64 KiB
+  cap, PIPE_ATOMIC=512 writes never split). If profiling ever says
+  otherwise, a per-pipe SAB ring is a drop-in upgrade behind the same
+  opcodes.
+- Blocked readers/writers are deferred RPCs on per-pipe wait queues; any
+  state change (write, read, close of an end) serves the queues and rings
+  the waiters' doorbells. This is what the pre-kernel broker couldn't do —
+  a cross-worker blocking pipe read had no wake path at all.
+- EPIPE + SIGPIPE to the writer when the read side is gone (through the
+  normal signal path — SIGPIPE at DFL kills `yes | head` pipelines the way
+  scripts expect; a handler sees EPIPE + the pending bit).
 
 ## Exit and teardown — an ordered handshake
 
@@ -428,14 +442,18 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
 
 1. **kernel.js skeleton**: process table + kernel page + RPC transport;
    re-implement today's spawn/wait/kill/compile semantics over it (parity —
-   `tests/spawn/` keeps passing); Node + browser.
+   `tests/spawn/` keeps passing); Node + browser. DONE.
 2. **Doorbell + signals + exit handshake**: SIGPEND/SIGBLOCK, safe-point
    dispatch in host.js's syscall layer, EINTR across all blocking ops,
-   ordered teardown. (Fixes the exit-truncation bug class.)
+   ordered teardown. (Fixes the exit-truncation bug class.) DONE
+   (todos/done/0001).
 3. **TTY object**: line discipline into the kernel, full termios, control-char
-   signals, fg pgroup, SIGWINCH; UI bridge protocol for xterm pages.
+   signals, fg pgroup, SIGWINCH; UI bridge protocol for xterm pages. DONE
+   (todos/done/0002).
 4. **Job control + pipes**: setpgid/setsid/tcsetpgrp, stop/cont, SIGTTIN;
-   pipe wait-queues + SIGPIPE.
+   pipe wait-queues + SIGPIPE. DONE (todos/done/0003; setpgid/getpgid RPCs
+   exist kernel-side — the thin libc wrappers land with the shell port that
+   needs them).
 5. **Acceptance: the shell port** (`todos/OS.md` Phase 1) — busybox ash lands
    on this and `popen()`/`system()` light up. The shell is the integration
    test; if it needs a kernel workaround, the kernel design was wrong.

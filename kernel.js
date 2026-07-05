@@ -16,9 +16,13 @@
 //     points and runs C handlers via the __sig_dispatch export; blocking
 //     WAIT interrupts with EINTR (krpc-intr); SIGCHLD on child exit; the
 //     ordered exit handshake (OP.EXIT).
-// Phase 3 (todos/0002) adds the tty object; Phase 4 (todos/0003) pipes/job
-// control. The page layout already reserves their state so the SAB format
-// is stable.
+//   Phase 3 (todos/0002) — the Tty object: kernel-side line discipline,
+//     termios RPCs, control chars as fg-pgroup signals (Ctrl-C = SIGINT).
+//   Phase 4 (todos/0003) — pipes as OFDs (PIPE_CREATE + kernel-side buffers,
+//     blocking read/write via deferred RPCs, EOF/EPIPE + SIGPIPE, select
+//     readiness) and job control (STOPPED state, cooperative stop at safe
+//     points via KP_FLAGS.STOP, SIGCONT resume, WUNTRACED/WCONTINUED,
+//     SIGTTIN for background tty readers).
 //
 // Environment: plain JS, no build step, Node + browser (same discipline as
 // host.js/compiler.js — no Node-only APIs without a typeof-guard). The
@@ -64,6 +68,7 @@ var KP_SIZE = 64 * 1024;           // fits compile stdout/stderr comfortably
 var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF;
 
 var RPC_IDLE = 0, RPC_REQUEST = 1, RPC_DONE = 2;
+var KF_STOP = 1;                   // KP_FLAGS bit0: park at the next safe point
 var RPCK_JSON = 0, RPCK_RAW = 1;   // RAW: fs read/write bulk bytes — no JSON,
                                    // no structured clone, one memcpy each way
 
@@ -84,6 +89,10 @@ var OP = {
   TCSETATTR: 0x0102,
   TCGETPGRP: 0x0103,
   TCSETPGRP: 0x0104,
+  // 0x02xx pipes. Post-0009 only CREATE is an opcode: the design doc's
+  // PIPE_REF/CLOSE/WAIT/NOTIFY are subsumed by the kernel-owned fd layer
+  // (OFD refcounts + FS_READ/FS_WRITE/FS_CLOSE + the doorbell).
+  PIPE_CREATE: 0x0201,
   COMPILE: 0x0301,
   // 0x04xx — the brokered filesystem (KERNEL.md "fd/data-plane amendment").
   FS_OPEN: 0x0401, FS_CLOSE: 0x0402, FS_READ: 0x0403, FS_WRITE: 0x0404,
@@ -97,9 +106,17 @@ var OP = {
 };
 
 /* Wait options / status packing — must match <sys/wait.h>. */
-var WNOHANG = 0x01;
+var WNOHANG = 0x01, WUNTRACED = 0x02, WCONTINUED = 0x08;
 function W_EXITCODE(code) { return (code & 0xff) << 8; }
 function W_TERMSIG(sig) { return sig & 0x7f; }
+function W_STOPCODE(sig) { return ((sig & 0xff) << 8) | 0x7f; }
+var W_CONTINUED_STATUS = 0xffff;
+
+/* Pipes (todos/0003): kernel-side buffers — rendezvous, not bulk data.
+ * PIPE_ATOMIC mirrors POSIX PIPE_BUF (writes that small never interleave:
+ * they defer whole rather than land partially). */
+var PIPE_CAP = 64 * 1024;
+var PIPE_ATOMIC = 512;
 
 /* Signal numbering + default actions — must match <signal.h> /
  * __sig_default_action in libc. Kind mirror (__on_sigdisp): 0=DFL 1=IGN
@@ -191,6 +208,7 @@ KernelClient.prototype.call = function (op, req, interruptible) {
 };
 
 KernelClient.prototype._finish = function (op, interruptible) {
+  this._stopWait();          // a stopped process issues no new syscalls
   var i32 = this._i32;
   Atomics.store(i32, KP_RPC_OP, op);
   Atomics.store(i32, KP_RPC_STATE, RPC_REQUEST);
@@ -220,9 +238,24 @@ KernelClient.prototype.pending = function () {
   return Atomics.load(this._i32, KP_SIGPEND) & ~Atomics.load(this._i32, KP_SIGBLOCK);
 };
 
+/* Job control (todos/0003): park while the kernel asserts STOP, until
+ * SIGCONT clears the flag (SIGKILL terminates the worker outright). Runs at
+ * the two safe-point families a process is guaranteed to hit: entry to
+ * every kernel RPC (_finish — i.e. every brokered syscall) and sigpoll
+ * (host.js's env-import return probe, when __sig_dispatch is exported). */
+KernelClient.prototype._stopWait = function () {
+  var i32 = this._i32;
+  while (Atomics.load(i32, KP_FLAGS) & KF_STOP) {
+    var seq = Atomics.load(i32, KP_DOORBELL);
+    if (!(Atomics.load(i32, KP_FLAGS) & KF_STOP)) break;
+    Atomics.wait(i32, KP_DOORBELL, seq);
+  }
+};
+
 /* Atomically claim all deliverable pending signals; returns the claimed
  * mask (0 if none). Blocked bits stay pending until sigmask() unblocks. */
 KernelClient.prototype.sigpoll = function () {
+  this._stopWait();
   var i32 = this._i32;
   for (;;) {
     var p = Atomics.load(i32, KP_SIGPEND);
@@ -300,7 +333,8 @@ KernelClient.prototype.spawnHooks = function () {
  * v1 scope (documented limits): ONE tty per system, attached to every
  * process; single-ACTIVE-reader assumption (the ring consume path is not
  * multi-consumer-atomic — real shells park in waitpid while the fg child
- * reads, so this holds in practice; Phase 4's SIGTTIN formalizes it);
+ * reads, so this holds in practice; brokered mode formalizes it with
+ * SIGTTIN for background readers, see the FS_READ dispatch);
  * VEOF on an empty line is sticky EOF, not transient.
  * ============================================================ */
 
@@ -547,7 +581,7 @@ Tty.prototype.setattr = function (actions, t) {
  * {type:'out', fd, bytes} — stdout/stderr traffic; {type:'exited', code} —
  * runModule resolved; {type:'crashed', error} — runModule rejected.
  * ============================================================ */
-var STATE_RUNNING = 'running', STATE_ZOMBIE = 'zombie';
+var STATE_RUNNING = 'running', STATE_STOPPED = 'stopped', STATE_ZOMBIE = 'zombie';
 
 function Kernel(opts) {
   if (!opts || typeof opts.createWorker !== 'function') {
@@ -570,7 +604,7 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
-  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null', refs, bfsFd?, ch? }
+  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null'|'pipe', refs, bfsFd?, ch?, pipe?, end? }
   this._nextOfd = 1;
   this._std = null;          // lazy singleton OFDs for default stdio
   this._ttyWaiters = [];     // pids with a deferred tty FS_READ, FIFO
@@ -588,6 +622,12 @@ Kernel.prototype._ofdUnref = function (id) {
   if (!o || --o.refs > 0) return;
   this._ofds.delete(id);
   if (o.kind === 'file') this._fs.close(o.bfsFd);
+  else if (o.kind === 'pipe') {
+    // Last reference to this end anywhere in the system: the peers must
+    // learn (readers see EOF, writers see EPIPE + SIGPIPE).
+    if (o.end === 'read') o.pipe.rOpen = false; else o.pipe.wOpen = false;
+    this._pipeNotify(o.pipe);
+  }
 };
 
 Kernel.prototype._stdOfds = function () {
@@ -664,6 +704,8 @@ Kernel.prototype._spawn = function (parent, spec) {
       sid: parent ? parent.sid : pid,
       state: STATE_RUNNING,
       exit: 0,                       // wait-status once ZOMBIE
+      pendingStop: 0,                // stop signal not yet reported via WUNTRACED
+      pendingCont: false,            // continue not yet reported via WCONTINUED
       children: new Set(),
       envp: spec.envp !== null && spec.envp !== undefined ? spec.envp
         : (parent ? parent.envp : []),
@@ -672,6 +714,7 @@ Kernel.prototype._spawn = function (parent, spec) {
       sigdisp: new Int8Array(NSIG),  // __on_sigdisp mirror; all DFL initially
       // ONE deferred RPC at a time (the worker is parked):
       // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
+      // | {op:'piperead',pipe,count} | {op:'pipewrite',pipe,data}
       waiter: null,
       fds: new Map(),                // procFd -> ofdId (brokered mode)
       page: null, i32: null, u8: null,
@@ -742,7 +785,7 @@ Kernel.prototype._spawn = function (parent, spec) {
       argv: (spec.argv && spec.argv.length) ? spec.argv : [spec.path],
       envp: pcb.envp,
       cwd: pcb.cwd,
-      actions: spec.actions || [],   // carried verbatim; applied in Phase 4
+      actions: spec.actions || [],   // brokered: already applied kernel-side above
       flags: spec.flags | 0,
       image: image,
       kernelPage: sab,
@@ -769,11 +812,14 @@ Kernel.prototype._spawn = function (parent, spec) {
 /* ---- worker message handling ---- */
 
 Kernel.prototype._onWorkerMessage = function (pcb, msg) {
-  if (!msg || pcb.state !== STATE_RUNNING) return;
+  // STOPPED still accepts messages: a krpc/exit can race the stop, and
+  // dropping the krpc would deadlock the parked worker awaiting a response.
+  if (!msg || pcb.state === STATE_ZOMBIE) return;
   switch (msg.type) {
     case 'krpc': this._dispatchRpc(pcb); break;
-    // A parked interruptible RPC (WAIT / tty FS_READ / FS_SELECT) noticed a
-    // deliverable signal: answer EINTR if it's still registered. If the real
+    // A parked interruptible RPC (WAIT / tty FS_READ / FS_SELECT / pipe
+    // FS_READ/FS_WRITE) noticed a deliverable signal: answer EINTR if it's
+    // still registered. If the real
     // result raced in first, the waiter is already gone — ignore, the signal
     // delivers at the caller's next safe point anyway.
     case 'krpc-intr':
@@ -853,6 +899,27 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       pcb.tty.fgPgid = req.pgid | 0;
       this._respond(pcb, {});
       break;
+    case OP.PIPE_CREATE: {
+      // Pipes are just another OFD kind (the fd/data-plane amendment's
+      // payoff): two descriptions over one kernel-side buffer, riding the
+      // same fd tables, inheritance, fd_actions, FS_READ/WRITE/CLOSE and
+      // select paths as files. Brokered mode only — standalone pages keep
+      // host.js's in-process pipes.
+      if (!this._brokered) { this._respond(pcb, { errno: 'ENOSYS' }); break; }
+      var pipe = {
+        buf: [], cap: PIPE_CAP, rOpen: true, wOpen: true,
+        readWaiters: [], writeWaiters: [],   // pids with a deferred RPC, FIFO
+      };
+      var ro = this._makeOfd('pipe', { pipe: pipe, end: 'read' });
+      var wo = this._makeOfd('pipe', { pipe: pipe, end: 'write' });
+      ro.refs++; wo.refs++;
+      var rfd = 0; while (pcb.fds.has(rfd)) rfd++;
+      pcb.fds.set(rfd, ro.id);
+      var wfd = 0; while (pcb.fds.has(wfd)) wfd++;
+      pcb.fds.set(wfd, wo.id);
+      this._respond(pcb, { rfd: rfd, wfd: wfd });
+      break;
+    }
     case OP.COMPILE:
       if (!this._compile) { this._respond(pcb, { errno: 'ENOSYS' }); break; }
       Promise.resolve(this._compile(req.argv || [], req.cwd || '/')).then(
@@ -930,9 +997,37 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         return;
       }
       if (o1.kind === 'null') { this._respondRaw(pcb, new Uint8Array(0)); return; }
+      if (o1.kind === 'pipe') {
+        if (o1.end !== 'read') { this._respond(pcb, { errno: 'EBADF' }); return; }
+        var rp = o1.pipe;
+        if (rp.buf.length > 0) {
+          var rn = Math.min(count, rp.buf.length);
+          this._respondRaw(pcb, Uint8Array.from(rp.buf.splice(0, rn)));
+          this._pipeNotify(rp);                     // space freed: writers may proceed
+          return;
+        }
+        if (!rp.wOpen) { this._respondRaw(pcb, new Uint8Array(0)); return; }  // EOF
+        pcb.waiter = { op: 'piperead', pipe: rp, count: count };  // served by _pipeNotify
+        rp.readWaiters.push(pcb.pid);
+        return;
+      }
       if (o1.kind === 'tty') {
         var tty = pcb.tty;
         if (!tty) { this._respondRaw(pcb, new Uint8Array(0)); return; }
+        // Job control (todos/0003): a background pgroup reading the tty gets
+        // SIGTTIN (stop class); if it's ignored or blocked, POSIX says the
+        // read fails with EIO instead. The read itself returns EINTR — after
+        // SIGCONT the libc caller retries, now (typically) in the foreground.
+        if (tty.fgPgid > 0 && pcb.pgid !== tty.fgPgid) {
+          if (pcb.sigdisp[SIG.TTIN] === DISP_IGN ||
+              (Atomics.load(pcb.i32, KP_SIGBLOCK) & (1 << (SIG.TTIN - 1)))) {
+            this._respond(pcb, { errno: 'EIO' });
+            return;
+          }
+          this._killPgid(pcb.pgid, SIG.TTIN);
+          this._respond(pcb, { errno: 'EINTR' });
+          return;
+        }
         if (tty._cooked.length > 0) { this._respondRaw(pcb, tty.take(count)); return; }
         if (tty._eofFlag) { this._respondRaw(pcb, new Uint8Array(0)); return; }
         pcb.waiter = { op: 'ttyread', count: count };   // served by _ttyNotify
@@ -956,6 +1051,30 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         this._respond(pcb, { n: wn });
         return;
       }
+      if (o2.kind === 'pipe') {
+        if (o2.end !== 'write') { this._respond(pcb, { errno: 'EBADF' }); return; }
+        var wp = o2.pipe;
+        if (!wp.rOpen) {
+          // POSIX: write to a pipe nobody reads = EPIPE + SIGPIPE (default
+          // action terminates — the `yes | head` pipeline death).
+          this._respond(pcb, { errno: 'EPIPE' });
+          this._deliver(pcb, SIG.PIPE);
+          return;
+        }
+        var free = wp.cap - wp.buf.length;
+        if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free)) {
+          // Full (or a PIPE_ATOMIC-small write that would split): block.
+          // Copy the bytes OUT of the SAB payload region — it's reused.
+          pcb.waiter = { op: 'pipewrite', pipe: wp, data: data.slice() };
+          wp.writeWaiters.push(pcb.pid);
+          return;
+        }
+        var wn0 = Math.min(free, data.length);
+        for (var wi = 0; wi < wn0; wi++) wp.buf.push(data[wi]);
+        this._respond(pcb, { n: wn0 });
+        this._pipeNotify(wp);                       // data arrived: readers may proceed
+        return;
+      }
       if (o2.kind === 'out') { this._onOutput(pcb.pid, o2.ch, data.slice()); this._respond(pcb, { n: data.length }); return; }
       if (o2.kind === 'tty') { this._onOutput(pcb.pid, 1, data.slice()); this._respond(pcb, { n: data.length }); return; }
       this._respond(pcb, { n: data.length });           // 'null'
@@ -977,6 +1096,8 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (o4.kind === 'file') {
         r = fs.fstat(o4.bfsFd);
         this._respond(pcb, r === null ? eFs() : { st: r });
+      } else if (o4.kind === 'pipe') {
+        this._respond(pcb, { st: { ino: 0, mode: 0x1000 | 0o600, nlink: 1, size: o4.pipe.buf.length, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       } else {
         // Character device (tty / console / null).
         this._respond(pcb, { st: { ino: 0, mode: 0x2000 | 0o666, nlink: 1, size: 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
@@ -1100,8 +1221,10 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
   }
 };
 
-/* Readiness for FS_SELECT: files and write interest are always ready; a tty
- * read is ready when cooked bytes or EOF are waiting (pipes join in 0003). */
+/* Readiness for FS_SELECT: files and non-pipe write interest are always
+ * ready; a tty read is ready when cooked bytes or EOF are waiting; a pipe
+ * read is ready on data or writer-gone EOF, a pipe write on free space or
+ * reader-gone (the write then surfaces EPIPE). */
 Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
   var self = this;
   var r = [], w = [];
@@ -1110,9 +1233,18 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
     var o = id === undefined ? null : self._ofds.get(id);
     if (!o) { r.push(fd); return; }                     // EBADF surfaces on use
     if (o.kind === 'tty') { if (pcb.tty && pcb.tty.readable()) r.push(fd); }
+    else if (o.kind === 'pipe') {
+      if (o.end !== 'read' || o.pipe.buf.length > 0 || !o.pipe.wOpen) r.push(fd);
+    }
     else if (o.kind !== 'out') r.push(fd);
   });
-  wfds.forEach(function (fd) { w.push(fd); });
+  wfds.forEach(function (fd) {
+    var id = pcb.fds.get(fd | 0);
+    var o = id === undefined ? null : self._ofds.get(id);
+    if (o && o.kind === 'pipe' && o.end === 'write' &&
+        o.pipe.buf.length >= o.pipe.cap && o.pipe.rOpen) return;   // full: not ready
+    w.push(fd);
+  });
   return { count: r.length + w.length, r: r, w: w };
 };
 
@@ -1134,6 +1266,12 @@ Kernel.prototype._ttyNotify = function (tty) {
       break;                                            // no data yet
     }
   }
+  this._recheckSelects();
+};
+
+/* Re-scan every deferred select after any readiness change (tty bytes,
+ * pipe data/space, pipe end closed). */
+Kernel.prototype._recheckSelects = function () {
   var self = this;
   this._procs.forEach(function (pcb) {
     if (pcb.waiter && pcb.waiter.op === 'select') {
@@ -1144,6 +1282,61 @@ Kernel.prototype._ttyNotify = function (tty) {
       }
     }
   });
+};
+
+/* Pipe state changed (write, read, end closed): serve deferred readers
+ * (data / EOF) and writers (space / EPIPE+SIGPIPE) until nothing more
+ * moves, then re-check deferred selects. Serving a read frees space and
+ * serving a write supplies data, so loop until a full pass makes no
+ * progress. Reentrancy (a SIGPIPE death unrefs fds and re-enters) is safe:
+ * every service re-checks pcb.waiter before acting. */
+Kernel.prototype._pipeNotify = function (pipe) {
+  var progress = true;
+  while (progress) {
+    progress = false;
+    while (pipe.readWaiters.length) {
+      var rpcb = this._procs.get(pipe.readWaiters[0]);
+      if (!rpcb || !rpcb.waiter || rpcb.waiter.op !== 'piperead' || rpcb.waiter.pipe !== pipe) {
+        pipe.readWaiters.shift();
+        continue;
+      }
+      if (pipe.buf.length > 0) {
+        var count = rpcb.waiter.count;
+        this._cancelWaiter(rpcb);
+        this._respondRaw(rpcb, Uint8Array.from(pipe.buf.splice(0, Math.min(count, pipe.buf.length))));
+        progress = true;
+      } else if (!pipe.wOpen) {
+        this._cancelWaiter(rpcb);
+        this._respondRaw(rpcb, new Uint8Array(0));     // EOF
+        progress = true;
+      } else {
+        break;                                          // no data yet
+      }
+    }
+    while (pipe.writeWaiters.length) {
+      var wpcb = this._procs.get(pipe.writeWaiters[0]);
+      if (!wpcb || !wpcb.waiter || wpcb.waiter.op !== 'pipewrite' || wpcb.waiter.pipe !== pipe) {
+        pipe.writeWaiters.shift();
+        continue;
+      }
+      if (!pipe.rOpen) {
+        this._cancelWaiter(wpcb);
+        this._respond(wpcb, { errno: 'EPIPE' });
+        this._deliver(wpcb, SIG.PIPE);
+        progress = true;
+        continue;
+      }
+      var data = wpcb.waiter.data;
+      var free = pipe.cap - pipe.buf.length;
+      if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free)) break;
+      this._cancelWaiter(wpcb);
+      var n = Math.min(free, data.length);
+      for (var i = 0; i < n; i++) pipe.buf.push(data[i]);
+      this._respond(wpcb, { n: n });
+      progress = true;
+    }
+  }
+  this._recheckSelects();
 };
 
 /* ---- wait / reap ---- */
@@ -1171,6 +1364,22 @@ Kernel.prototype._wait = function (pcb, sel, options) {
       return;
     }
   }
+  // Job control (todos/0003): unreported stop/continue transitions satisfy a
+  // wait that asked for them; each transition is reported exactly once.
+  for (var j = 0; j < candidates.length; j++) {
+    var c = candidates[j];
+    if ((options & WUNTRACED) && c.state === STATE_STOPPED && c.pendingStop) {
+      var ssig = c.pendingStop;
+      c.pendingStop = 0;
+      this._respond(pcb, { pid: c.pid, status: W_STOPCODE(ssig) });
+      return;
+    }
+    if ((options & WCONTINUED) && c.pendingCont) {
+      c.pendingCont = false;
+      this._respond(pcb, { pid: c.pid, status: W_CONTINUED_STATUS });
+      return;
+    }
+  }
   if (options & WNOHANG) { this._respond(pcb, { pid: 0, status: 0 }); return; }
   pcb.waiter = { op: 'wait', sel: sel, options: options };  // answered by _exitProcess
 };
@@ -1185,6 +1394,10 @@ Kernel.prototype._cancelWaiter = function (pcb) {
   if (w.op === 'ttyread') {
     var i = this._ttyWaiters.indexOf(pcb.pid);
     if (i >= 0) this._ttyWaiters.splice(i, 1);
+  } else if (w.op === 'piperead' || w.op === 'pipewrite') {
+    var q = w.op === 'piperead' ? w.pipe.readWaiters : w.pipe.writeWaiters;
+    var j = q.indexOf(pcb.pid);
+    if (j >= 0) q.splice(j, 1);
   }
 };
 
@@ -1277,7 +1490,9 @@ Kernel.prototype.kill = function (pid, sig, sender) {
   var self = this;
   if (pid > 0) {
     var t = this._procs.get(pid);
-    if (!t || t.state !== STATE_RUNNING) return { errno: 'ESRCH' };
+    // STOPPED processes are valid targets (SIGCONT/SIGKILL must reach them);
+    // zombies are not (they only await reaping).
+    if (!t || t.state === STATE_ZOMBIE) return { errno: 'ESRCH' };
     targets.push(t);
   } else if (pid === -1) {
     return { errno: 'EPERM' };
@@ -1290,12 +1505,13 @@ Kernel.prototype.kill = function (pid, sig, sender) {
   return {};
 };
 
-/* Deliver sig to every RUNNING member of a pgroup; returns the member
- * count. Used by pgroup kill() and by the tty's control-char routing. */
+/* Deliver sig to every live (running or stopped) member of a pgroup;
+ * returns the member count. Used by pgroup kill() and by the tty's
+ * control-char routing. */
 Kernel.prototype._killPgid = function (pgid, sig) {
   var targets = [];
   this._procs.forEach(function (p) {
-    if (p.state === STATE_RUNNING && p.pgid === pgid) targets.push(p);
+    if (p.state !== STATE_ZOMBIE && p.pgid === pgid) targets.push(p);
   });
   for (var i = 0; i < targets.length; i++) this._deliver(targets[i], sig);
   return targets.length;
@@ -1303,6 +1519,11 @@ Kernel.prototype._killPgid = function (pgid, sig) {
 
 Kernel.prototype._deliver = function (pcb, sig) {
   if (sig === SIG.KILL) { this._exitProcess(pcb, W_TERMSIG(sig)); return; }
+  // SIGCONT resumes a stopped process REGARDLESS of disposition (POSIX);
+  // any handler then delivers normally through the mirror below.
+  if (sig === SIG.CONT) this._contProcess(pcb);
+  // SIGSTOP is uncatchable and never consults the mirror.
+  if (sig === SIG.STOP) { this._stopProcess(pcb, sig); return; }
   var disp = pcb.sigdisp[sig];
   if (disp === DISP_IGN) return;
   if (disp === DISP_HANDLER) {
@@ -1329,9 +1550,57 @@ Kernel.prototype._deliver = function (pcb, sig) {
       }
       break;
     case 1: break;                                           // ignore
-    default:
-      // stop/continue: todos/0003 (job control). Dropped, loudly.
-      this._log('pid ' + pcb.pid + ': stop/cont signal ' + sig + ' dropped (todos/0003)');
+    case 2: this._stopProcess(pcb, sig); break;              // TSTP/TTIN/TTOU at DFL
+    default: break;                                          // CONT: resumed above
+  }
+};
+
+/* ---- job control (todos/0003) ----
+ * Stop is cooperative, like signal delivery: the kernel sets KP_FLAGS.STOP
+ * and rings; the process parks inside KernelClient.sigpoll at its next safe
+ * point (so a pure-compute loop stops only at its next env import — same
+ * caveat as catchable signals; SIGKILL remains the backstop). A process
+ * already parked in a deferred RPC simply stays parked; if the RPC completes
+ * while stopped, the worker runs to the next safe point and parks there. */
+
+Kernel.prototype._stopProcess = function (pcb, sig) {
+  if (pcb.state !== STATE_RUNNING) return;             // already stopped, or a zombie
+  pcb.state = STATE_STOPPED;
+  pcb.pendingStop = sig;                               // unreported for WUNTRACED
+  pcb.pendingCont = false;
+  Atomics.or(pcb.i32, KP_FLAGS, KF_STOP);
+  this._ring(pcb);
+  if (pcb.tty) pcb.tty.wakeReaders();                  // ring-mode reads re-scan -> safe point
+  this._jobNotifyParent(pcb, 'stop');
+};
+
+Kernel.prototype._contProcess = function (pcb) {
+  if (pcb.state !== STATE_STOPPED) return;
+  pcb.state = STATE_RUNNING;
+  pcb.pendingStop = 0;
+  pcb.pendingCont = true;                              // unreported for WCONTINUED
+  Atomics.and(pcb.i32, KP_FLAGS, ~KF_STOP);
+  this._ring(pcb);                                     // wakes the stop-park
+  this._jobNotifyParent(pcb, 'cont');
+};
+
+/* SIGCHLD + a parked wait answer for a stop/continue transition — the same
+ * ordering discipline as _exitProcess (pending bit visible before the wait
+ * response wakes the parent). */
+Kernel.prototype._jobNotifyParent = function (pcb, kind) {
+  var parent = this._procs.get(pcb.ppid);
+  if (!parent || parent.state === STATE_ZOMBIE) return;
+  this._deliver(parent, SIG.CHLD);
+  var need = kind === 'stop' ? WUNTRACED : WCONTINUED;
+  if (parent.waiter && parent.waiter.op === 'wait' &&
+      (parent.waiter.options & need) &&
+      waitSelectorMatch(parent.waiter.sel, parent, pcb)) {
+    var status = kind === 'stop' ? W_STOPCODE(pcb.pendingStop) : W_CONTINUED_STATUS;
+    if (kind === 'stop') pcb.pendingStop = 0; else pcb.pendingCont = false;
+    this._cancelWaiter(parent);
+    this._respond(parent, { pid: pcb.pid, status: status });
+  } else {
+    this._ring(parent);
   }
 };
 
@@ -1358,7 +1627,7 @@ function RemoteFS(client) {
   this._dirs = [];              // opendir snapshots: {entries, pos}
   this._stdinSab = null;        // never set: stdin flows via FS_READ RPCs
   this._stdinCtrl = null;       // winsize words only (TIOCGWINSZ)
-  this._pipeBroker = null;      // unused (pipes become OFDs in todos/0003)
+  this._pipeBroker = null;      // unused: brokered pipes are kernel OFDs (PIPE_CREATE)
   this._sigcheck = null;        // assigned by toWasmEnv; unused (no ring waits)
 }
 
@@ -1398,7 +1667,9 @@ RemoteFS.prototype.write = function (fd, buf, count) {
   payload[0] = fd & 0xff; payload[1] = (fd >> 8) & 0xff;
   payload[2] = (fd >> 16) & 0xff; payload[3] = (fd >> 24) & 0xff;
   payload.set(buf.subarray(0, n), 4);
-  var r = this._ok(this._c.callRaw(OP.FS_WRITE, payload));
+  // Interruptible: a full-pipe write defers kernel-side; a posted signal
+  // turns it into EINTR (files/tty/out respond immediately — never fires).
+  var r = this._ok(this._c.callRaw(OP.FS_WRITE, payload, true));
   return r === null ? null : r.n;
 };
 RemoteFS.prototype.lseek = function (fd, offset, whence) {
@@ -1467,7 +1738,13 @@ RemoteFS.prototype.isatty = function (fd) {
   var r = this._c.call(OP.FS_ISATTY, { fd: fd });
   return r.errno ? 0 : r.tty;
 };
-RemoteFS.prototype.pipe = function () { return this._setErr('ENOSYS'); };  // todos/0003
+RemoteFS.prototype.pipe = function () {
+  var r = this._ok(this._c.call(OP.PIPE_CREATE, {}));
+  if (r === null) return null;
+  this._fdTable[r.rfd] = { type: 'remote' };
+  this._fdTable[r.wfd] = { type: 'remote' };
+  return [r.rfd, r.wfd];
+};
 
 /* The brokered __select_impl (replaces toWasmEnv's in-process scanner):
  * fd-set bitmaps <-> fd lists; readiness, blocking, and timeout are all
@@ -1521,8 +1798,8 @@ RemoteFS.prototype.selectImpl = function (ctx) {
  * chdirs to the spawn cwd, and runs the image. stdout/stderr flow back as
  * {type:'out'} messages (bytes copied out of wasm memory first — postMessage
  * would otherwise clone the whole wasm heap or ship a detached view).
- * fd_actions are NOT applied yet (Phase 4, with pipes); they arrive in
- * workerData for forward compatibility.
+ * In brokered mode fd_actions were already applied kernel-side at spawn;
+ * they still arrive in workerData for the standalone path's benefit.
  * ============================================================ */
 var BOOT_SOURCE = [
   "'use strict';",
@@ -1634,10 +1911,16 @@ var KERNEL_EXPORTS = {
   RPC_IDLE: RPC_IDLE,
   RPC_REQUEST: RPC_REQUEST,
   RPC_DONE: RPC_DONE,
+  KF_STOP: KF_STOP,
+  KP_RPC_KIND: KP_RPC_KIND,
+  RPCK_JSON: RPCK_JSON,
+  RPCK_RAW: RPCK_RAW,
   writePayload: writePayload,
+  writeRawPayload: writeRawPayload,
   readPayload: readPayload,
   W_EXITCODE: W_EXITCODE,
   W_TERMSIG: W_TERMSIG,
+  W_STOPCODE: W_STOPCODE,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

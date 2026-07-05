@@ -1,6 +1,8 @@
 # 0003 — kernel Phase 4: pipes + job control
 
-- **Status**: queued
+- **Status**: done (2026-07-06 — the 0009 bet paid off: one new opcode,
+  PIPE_CREATE; everything else rode the existing fd machinery. Dev log:
+  `logs/2026-07-06/kernel-phase4-pipes-jobctl.md`)
 - **Depends**: 0002, **0009** (the fd/data-plane amendment — resequenced
   ahead of this after the 2026-07-06 difficulty analysis: with kernel-owned
   fd tables, pipes are just another OFD kind, fd_action translation

@@ -21543,6 +21543,7 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
 #define WTERMSIG(status)     ((status) & 0x7f)
 #define WIFSTOPPED(status)   (((status) & 0xff) == 0x7f)
 #define WSTOPSIG(status)     WEXITSTATUS(status)
+#define WIFCONTINUED(status) ((status) == 0xffff)
 // Reap a spawned child via the process kernel. status is POSIX-encoded:
 // WEXITSTATUS(status) == child's exit code. waitpid(-1, ...) (any child) and
 // the pgroup selectors (0 / -pgid) are supported by kernel.js; older external

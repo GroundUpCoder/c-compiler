@@ -272,6 +272,61 @@ const spawnReq = (p, extra) => Object.assign(
   await rpc(1, K.OP.SIGDISP, { sig: 17, kind: 0 });
   Atomics.store(page(1).i32, K.KP_SIGPEND, 0);
 
+  // ---- Phase 4: job control (stop/continue, WUNTRACED/WCONTINUED) ----
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a')); // pid 16
+  check('jobctl child spawned', r.pid === 16, JSON.stringify(r));
+  await rpc(1, K.OP.KILL, { pid: 16, sig: 19 });    // SIGSTOP
+  check('SIGSTOP stops', kernel.process(16).state === 'stopped');
+  check('STOP flag posted', (Atomics.load(page(16).i32, K.KP_FLAGS) & K.KF_STOP) !== 0);
+  check('stopped worker not terminated', !workers.get(16).terminated);
+  await rpc(1, K.OP.KILL, { pid: 16, sig: 19 });
+  check('double stop is a no-op', kernel.process(16).state === 'stopped');
+  r = await rpc(1, K.OP.WAIT, { pid: 16, options: 2 /* WUNTRACED */ });
+  check('WUNTRACED reports the stop', r.pid === 16 && r.status === ((19 << 8) | 0x7f), JSON.stringify(r));
+  r = await rpc(1, K.OP.WAIT, { pid: 16, options: 2 | 1 /* WUNTRACED|WNOHANG */ });
+  check('stop reported exactly once', r.pid === 0, JSON.stringify(r));
+  await rpc(1, K.OP.KILL, { pid: 16, sig: 18 });    // SIGCONT
+  check('SIGCONT resumes', kernel.process(16).state === 'running');
+  check('STOP flag cleared', (Atomics.load(page(16).i32, K.KP_FLAGS) & K.KF_STOP) === 0);
+  r = await rpc(1, K.OP.WAIT, { pid: 16, options: 8 /* WCONTINUED */ });
+  check('WCONTINUED reports the continue', r.pid === 16 && r.status === 0xffff, JSON.stringify(r));
+  r = await rpc(1, K.OP.WAIT, { pid: 16, options: 8 | 1 });
+  check('continue reported exactly once', r.pid === 0, JSON.stringify(r));
+
+  // While pid 1's WAIT is parked it can't issue RPCs (one in flight per
+  // process) — deliver the signals through the embedder-facing kill().
+  const dj = rpcDeferred(1, K.OP.WAIT, { pid: 16, options: 2 /* WUNTRACED */ });
+  await tick();
+  check('WUNTRACED wait defers while child runs', dj.pending());
+  kernel.kill(16, 20);                              // SIGTSTP at DFL: stop class
+  r = await dj.finish();
+  check('parked wait answered by a TSTP stop', r.pid === 16 && r.status === ((20 << 8) | 0x7f), JSON.stringify(r));
+
+  const dp = rpcDeferred(1, K.OP.WAIT, { pid: 16, options: 0 });
+  await tick();
+  check('plain wait ignores a stopped child', dp.pending());
+  kernel.kill(16, 18);                              // continue (no WCONTINUED asked)
+  await tick();
+  check('plain wait ignores a continue too', dp.pending());
+  kernel.kill(16, 9);
+  r = await dp.finish();
+  check('SIGKILL after continue: wait sees the termsig', r.pid === 16 && r.status === 9, JSON.stringify(r));
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a')); // pid 17
+  await rpc(17, K.OP.SIGDISP, { sig: 20, kind: 2 /* HANDLER */ });
+  await rpc(1, K.OP.KILL, { pid: 17, sig: 20 });
+  check('caught TSTP posts the bit, does not stop',
+    kernel.process(17).state === 'running' &&
+    (Atomics.load(page(17).i32, K.KP_SIGPEND) & (1 << 19)) !== 0);
+  Atomics.store(page(17).i32, K.KP_SIGPEND, 0);
+  await rpc(1, K.OP.KILL, { pid: 17, sig: 19 });
+  check('SIGSTOP ignores dispositions', kernel.process(17).state === 'stopped');
+  await rpc(1, K.OP.KILL, { pid: 17, sig: 15 });    // DFL terminate applies while stopped
+  check('SIGTERM terminates a stopped process', kernel.process(17).state === 'zombie');
+  r = await rpc(1, K.OP.WAIT, { pid: 17, options: 0 });
+  check('stopped-then-termed waits as WTERMSIG 15', r.status === 15, String(r.status));
+  Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop the SIGCHLDs this section posted
+
   // ---- pid 1 exit halts the system ----
   check('all children reaped pre-halt', kernel.processCount() === 1, String(kernel.processCount()));
   exitMsg(1, 42);

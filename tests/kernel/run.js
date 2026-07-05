@@ -12,6 +12,9 @@ var tests = [
   ['test_tty.js', []],          // Phase 3: line discipline semantics (kernel-side, no wasm)
   ['test_tty_e2e.js', []],      // Phase 3: real C driven by a scripted UI bridge
   ['test_fs_e2e.js', []],       // 0009: brokered fs — shared offsets, fd_actions, SIGKILL+fsck
+  ['test_pipes.js', []],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
+  ['test_pipes_e2e.js', []],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
+  ['test_jobctl_e2e.js', []],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
 ];
 
 var failures = 0;
