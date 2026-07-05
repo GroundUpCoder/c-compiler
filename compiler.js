@@ -21463,24 +21463,27 @@ struct termios {
 #define B38400  38400
 #define B115200 115200
 
-__import int __tcgetattr(int fd, int *iflag, int *oflag, int *cflag, int *lflag);
-__import int __tcsetattr(int fd, int actions, int iflag, int oflag, int cflag, int lflag);
+/* Full-struct transfer (control chars included) — the host reads/writes the
+   struct termios layout directly: 4 x u32 flags, c_cc[NCCS]@16, speeds@36/40.
+   With kernel.js attached these are RPCs into the kernel's line discipline
+   (todos/KERNEL.md Phase 3); without one, host defaults answer (canned
+   values / the CLI's real terminal). The pgrp pair is ENOTTY without a
+   kernel — no process groups to route to. */
+__import int __tty_getattr(int fd, struct termios *t);
+__import int __tty_setattr(int fd, int actions, const struct termios *t);
+__import int __tty_getpgrp(int fd);
+__import int __tty_setpgrp(int fd, int pgid);
 
 static inline int tcgetattr(int fd, struct termios *t) {
-  int iflag, oflag, cflag, lflag;
-  int r = __tcgetattr(fd, &iflag, &oflag, &cflag, &lflag);
-  if (r == 0) {
-    t->c_iflag = (tcflag_t)iflag;
-    t->c_oflag = (tcflag_t)oflag;
-    t->c_cflag = (tcflag_t)cflag;
-    t->c_lflag = (tcflag_t)lflag;
-  }
-  return r;
+  return __tty_getattr(fd, t);
 }
 
 static inline int tcsetattr(int fd, int actions, const struct termios *t) {
-  return __tcsetattr(fd, actions, (int)t->c_iflag, (int)t->c_oflag, (int)t->c_cflag, (int)t->c_lflag);
+  return __tty_setattr(fd, actions, t);
 }
+
+static inline pid_t tcgetpgrp(int fd) { return (pid_t)__tty_getpgrp(fd); }
+static inline int tcsetpgrp(int fd, pid_t pgrp) { return __tty_setpgrp(fd, (int)pgrp); }
 
 static inline void cfmakeraw(struct termios *t) {
   t->c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);

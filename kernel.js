@@ -77,6 +77,10 @@ var OP = {
   SETSID: 0x0007,
   SIGDISP: 0x0008,
   SIGMASK: 0x0009,   // reserved: Phase 2
+  TCGETATTR: 0x0101,
+  TCSETATTR: 0x0102,
+  TCGETPGRP: 0x0103,
+  TCSETPGRP: 0x0104,
   COMPILE: 0x0301,
 };
 
@@ -229,7 +233,234 @@ KernelClient.prototype.spawnHooks = function () {
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
     exit: function (status) { return self.call(OP.EXIT, { code: status }); },
+    // Phase 3 tty control plane (line discipline lives kernel-side).
+    ttyGetattr: function () { return self.call(OP.TCGETATTR, {}); },
+    ttySetattr: function (actions, t) {
+      return self.call(OP.TCSETATTR, {
+        actions: actions, iflag: t.iflag, oflag: t.oflag,
+        cflag: t.cflag, lflag: t.lflag, cc: t.cc,
+      });
+    },
+    ttyGetpgrp: function () { return self.call(OP.TCGETPGRP, {}); },
+    ttySetpgrp: function (pgid) { return self.call(OP.TCSETPGRP, { pgid: pgid }); },
   };
+};
+
+/* ============================================================
+ * Tty — the terminal as a kernel object (todos/KERNEL.md Phase 3).
+ *
+ * The tty SAB is the same ring format host.js's BlockFS stdin path already
+ * consumes (SI_* header, 32 bytes, ring after) — the kernel is simply the
+ * producer where the page used to be, and the LINE DISCIPLINE moves here:
+ * canonical-mode editing (erase/kill/EOF), echo, ICRNL, and ISIG control
+ * chars routed as signals to the FOREGROUND PROCESS GROUP (VINTR -> SIGINT:
+ * Ctrl-C finally means something). The UI bridge stays dumb — raw bytes in
+ * via tty.input(), echo/output bytes out via the output callback; a
+ * scripted bridge (tests, agents) and xterm.js are two consumers of the
+ * same byte protocol (OS.md "agent-friendly by construction").
+ *
+ * v1 scope (documented limits): ONE tty per system, attached to every
+ * process; single-ACTIVE-reader assumption (the ring consume path is not
+ * multi-consumer-atomic — real shells park in waitpid while the fg child
+ * reads, so this holds in practice; Phase 4's SIGTTIN formalizes it);
+ * VEOF on an empty line is sticky EOF, not transient.
+ * ============================================================ */
+
+/* SI_* header layout — MUST match host.js (BlockFS setStdinSab). */
+var SI_SEQ = 0, SI_AVAIL = 1, SI_WRITEPOS = 2, SI_READPOS = 3,
+    SI_EOF = 4, SI_COLS = 5, SI_ROWS = 6, SI_TERMIOS = 7;
+var SI_HDR_BYTES = 32;
+
+/* termios bits the line discipline consults — MUST match <termios.h>. */
+var T_ICRNL = 0x100, T_INLCR = 0x40, T_IGNCR = 0x80;          // c_iflag
+var T_OPOST = 0x1, T_ONLCR = 0x2;                              // c_oflag
+var T_ECHOE = 0x2, T_ECHOK = 0x4, T_ECHO = 0x8, T_ECHONL = 0x10,
+    T_ISIG = 0x80, T_ICANON = 0x100;                           // c_lflag
+var V_EOF = 0, V_ERASE = 3, V_KILL = 5, V_INTR = 8, V_QUIT = 9,
+    V_SUSP = 10, V_START = 12, V_STOP = 13, V_MIN = 16, V_TIME = 17;
+var NCCS = 20;
+var TCSAFLUSH = 2;
+
+function defaultCc() {
+  var cc = new Array(NCCS).fill(0);
+  cc[V_EOF] = 4;      // ^D
+  cc[V_ERASE] = 127;  // DEL
+  cc[V_KILL] = 21;    // ^U
+  cc[V_INTR] = 3;     // ^C
+  cc[V_QUIT] = 28;    // ^\
+  cc[V_SUSP] = 26;    // ^Z
+  cc[V_START] = 17;   // ^Q
+  cc[V_STOP] = 19;    // ^S
+  cc[V_MIN] = 1;
+  return cc;
+}
+
+function Tty(kernel, opts) {
+  this._kernel = kernel;
+  this._output = opts.output || function () {};
+  var ringSize = opts.ringSize || 64 * 1024;
+  this.sab = new SharedArrayBuffer(SI_HDR_BYTES + ringSize);
+  this._i32 = new Int32Array(this.sab, 0, 8);
+  this._ring = new Uint8Array(this.sab, SI_HDR_BYTES, ringSize);
+  Atomics.store(this._i32, SI_COLS, opts.cols || 80);
+  Atomics.store(this._i32, SI_ROWS, opts.rows || 24);
+  this.fgPgid = 0;              // set at boot; tcsetpgrp moves it
+  this._line = [];              // canonical-mode edit buffer
+  this.termios = {
+    iflag: T_ICRNL,
+    oflag: T_OPOST | T_ONLCR,
+    cflag: 0xB00,               // CS8|CREAD (matches the legacy canned value)
+    lflag: T_ISIG | T_ICANON | T_ECHO | T_ECHOE | T_ECHOK,
+    cc: defaultCc(),
+  };
+  this._publishModeWord();
+}
+
+/* Legacy 3-bit mode word (icanon/echo/opost) — kept current so pre-kernel
+ * page observers keep working; nothing kernel-side reads it back. */
+Tty.prototype._publishModeWord = function () {
+  var t = this.termios;
+  var mode = ((t.lflag & T_ICANON) ? 1 : 0) | ((t.lflag & T_ECHO) ? 2 : 0)
+    | ((t.oflag & T_OPOST) ? 4 : 0);
+  Atomics.store(this._i32, SI_TERMIOS, mode);
+};
+
+/* Wake anything parked on the ring futex (readers re-scan; also rung by the
+ * kernel when it posts a signal, so a blocked read can turn into EINTR). */
+Tty.prototype.wakeReaders = function () {
+  Atomics.add(this._i32, SI_SEQ, 1);
+  Atomics.notify(this._i32, SI_SEQ);
+};
+
+/* Commit cooked bytes into the shared ring. Overflow drops (like a real tty
+ * input queue) — loudly, via the kernel log. */
+Tty.prototype._push = function (bytes) {
+  var i32 = this._i32, ring = this._ring, size = ring.length;
+  var free = size - Atomics.load(i32, SI_AVAIL);
+  var n = Math.min(bytes.length, free);
+  if (n < bytes.length) this._kernel._log('tty: input ring overflow, dropping ' + (bytes.length - n) + ' bytes');
+  var wp = Atomics.load(i32, SI_WRITEPOS);
+  for (var k = 0; k < n; k++) ring[(wp + k) % size] = bytes[k];
+  Atomics.store(i32, SI_WRITEPOS, (wp + n) % size);
+  Atomics.add(i32, SI_AVAIL, n);
+  this.wakeReaders();
+};
+
+Tty.prototype._echo = function (bytes) {
+  if (bytes.length) this._output(Uint8Array.from(bytes));
+};
+
+Tty.prototype._echoNl = function () {
+  var t = this.termios;
+  this._echo((t.oflag & T_OPOST) && (t.oflag & T_ONLCR) ? [13, 10] : [10]);
+};
+
+Tty.prototype._signalFg = function (sig) {
+  // Route by pgid directly — NOT via kill(-pgid): a foreground pgid of 1
+  // would encode as kill(-1), which POSIX reserves for "every process".
+  if (this.fgPgid > 0) this._kernel._killPgid(this.fgPgid, sig);
+};
+
+/* Raw bytes from the UI bridge (keystrokes). String or Uint8Array. */
+Tty.prototype.input = function (data) {
+  var bytes = typeof data === 'string' ? textEncoder.encode(data) : data;
+  var t = this.termios;
+  var raw = [];
+  for (var i = 0; i < bytes.length; i++) {
+    var b = bytes[i];
+    if (b === 13) {
+      if (t.iflag & T_IGNCR) continue;
+      if (t.iflag & T_ICRNL) b = 10;
+    } else if (b === 10 && (t.iflag & T_INLCR)) {
+      b = 13;
+    }
+    if (t.lflag & T_ISIG) {
+      var sig = b === t.cc[V_INTR] ? SIG.INT
+        : b === t.cc[V_QUIT] ? SIG.QUIT
+        : b === t.cc[V_SUSP] ? SIG.TSTP : 0;
+      if (sig) {
+        if (raw.length) { this._push(raw); raw = []; }
+        this._line.length = 0;                       // POSIX: flush the edit buffer
+        if (t.lflag & T_ECHO) { this._echo([94, 64 + (b & 31)]); this._echoNl(); } // ^C style
+        this._signalFg(sig);
+        continue;
+      }
+    }
+    if (t.lflag & T_ICANON) {
+      if (b === t.cc[V_ERASE]) {
+        if (this._line.length) {
+          this._line.pop();
+          if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOE)) this._echo([8, 32, 8]);
+        }
+        continue;
+      }
+      if (b === t.cc[V_KILL]) {
+        if ((t.lflag & T_ECHO) && (t.lflag & T_ECHOK)) {
+          while (this._line.length) { this._line.pop(); this._echo([8, 32, 8]); }
+        } else {
+          this._line.length = 0;
+        }
+        continue;
+      }
+      if (b === t.cc[V_EOF]) {
+        if (this._line.length) { this._push(this._line); this._line = []; }
+        else this.eof();                             // sticky EOF (v1)
+        continue;
+      }
+      if (b === 10) {
+        this._line.push(10);
+        if (t.lflag & (T_ECHO | T_ECHONL)) this._echoNl();
+        this._push(this._line);
+        this._line = [];
+        continue;
+      }
+      this._line.push(b);
+      if (t.lflag & T_ECHO) this._echo([b]);
+    } else {
+      raw.push(b);
+      if (t.lflag & T_ECHO) this._echo([b]);
+    }
+  }
+  if (raw.length) this._push(raw);
+};
+
+/* The bridge reports a resize; the fg pgroup learns via SIGWINCH. */
+Tty.prototype.resize = function (cols, rows) {
+  var changed = Atomics.load(this._i32, SI_COLS) !== cols ||
+    Atomics.load(this._i32, SI_ROWS) !== rows;
+  Atomics.store(this._i32, SI_COLS, cols);
+  Atomics.store(this._i32, SI_ROWS, rows);
+  if (changed) this._signalFg(SIG.WINCH);
+};
+
+/* End of input (agent closed stdin / user hit the page's EOF control). */
+Tty.prototype.eof = function () {
+  Atomics.store(this._i32, SI_EOF, 1);
+  this.wakeReaders();
+};
+
+Tty.prototype.getattr = function () {
+  var t = this.termios;
+  return { iflag: t.iflag, oflag: t.oflag, cflag: t.cflag, lflag: t.lflag, cc: t.cc.slice() };
+};
+
+Tty.prototype.setattr = function (actions, t) {
+  this.termios.iflag = t.iflag >>> 0;
+  this.termios.oflag = t.oflag >>> 0;
+  this.termios.cflag = t.cflag >>> 0;
+  this.termios.lflag = t.lflag >>> 0;
+  if (Array.isArray(t.cc)) {
+    for (var i = 0; i < NCCS; i++) this.termios.cc[i] = (t.cc[i] | 0) & 0xff;
+  }
+  if (actions === TCSAFLUSH) {
+    // Discard unread input (rare; the benign race with a mid-read consumer
+    // is acceptable — flush during concurrent reads is undefined anyway).
+    Atomics.store(this._i32, SI_READPOS, Atomics.load(this._i32, SI_WRITEPOS));
+    Atomics.store(this._i32, SI_AVAIL, 0);
+    this._line = [];
+  }
+  this._publishModeWord();
+  this.wakeReaders();
 };
 
 /* ============================================================
@@ -269,11 +500,22 @@ function Kernel(opts) {
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
   this._halted = false;
+  this._tty = null;
 }
+
+/* Create the system tty (call BEFORE boot; v1: one tty, attached to every
+ * process). opts: { cols, rows, ringSize, output(bytes) } — output receives
+ * echo/control bytes for the UI bridge to render; process stdout still
+ * flows through onOutput. Returns the Tty (input/resize/eof/sab). */
+Kernel.prototype.createTty = function (opts) {
+  this._tty = new Tty(this, opts || {});
+  return this._tty;
+};
 
 /* Boot the system: spawn pid 1 (init). spec: {path, argv, envp, cwd}.
  * Resolves to init's pid (1); rejects if the image can't be loaded. */
 Kernel.prototype.boot = function (spec) {
+  var self = this;
   return this._spawn(null, {
     path: spec.path,
     argv: spec.argv || [spec.path],
@@ -284,6 +526,10 @@ Kernel.prototype.boot = function (spec) {
     pgid: 0,
   }).then(function (r) {
     if (r.errno) throw new Error('boot: ' + r.errno);
+    if (self._tty && !self._tty.fgPgid) {
+      var init = self._procs.get(r.pid);
+      self._tty.fgPgid = init ? init.pgid : r.pid;
+    }
     return r.pid;
   });
 };
@@ -320,6 +566,7 @@ Kernel.prototype._spawn = function (parent, spec) {
       waiter: null,                  // deferred WAIT: {sel, options}
       page: null, i32: null, u8: null,
       worker: null,
+      tty: self._tty,                // v1: the one system tty (or null)
     };
     var sab = new SharedArrayBuffer(KP_SIZE);
     pcb.page = sab;
@@ -337,6 +584,7 @@ Kernel.prototype._spawn = function (parent, spec) {
       flags: spec.flags | 0,
       image: image,
       kernelPage: sab,
+      ttySab: pcb.tty ? pcb.tty.sab : null,
     };
     try {
       pcb.worker = self._createWorker(procSpec);
@@ -424,6 +672,23 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       if (pcb.pgid === pcb.pid) { this._respond(pcb, { errno: 'EPERM' }); break; }
       pcb.pgid = pcb.pid; pcb.sid = pcb.pid;
       this._respond(pcb, { sid: pcb.sid });
+      break;
+    case OP.TCGETATTR:
+      this._respond(pcb, pcb.tty ? pcb.tty.getattr() : { errno: 'ENOTTY' });
+      break;
+    case OP.TCSETATTR:
+      if (!pcb.tty) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
+      pcb.tty.setattr(req.actions | 0, req);
+      this._respond(pcb, {});
+      break;
+    case OP.TCGETPGRP:
+      this._respond(pcb, pcb.tty ? { pgid: pcb.tty.fgPgid } : { errno: 'ENOTTY' });
+      break;
+    case OP.TCSETPGRP:
+      if (!pcb.tty) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
+      if (!(req.pgid > 0)) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      pcb.tty.fgPgid = req.pgid | 0;
+      this._respond(pcb, {});
       break;
     case OP.COMPILE:
       if (!this._compile) { this._respond(pcb, { errno: 'ENOSYS' }); break; }
@@ -555,13 +820,22 @@ Kernel.prototype.kill = function (pid, sig, sender) {
     return { errno: 'EPERM' };
   } else {
     var pgid = pid === 0 ? (sender ? sender.pgid : 0) : -pid;
-    this._procs.forEach(function (p) {
-      if (p.state === STATE_RUNNING && p.pgid === pgid) targets.push(p);
-    });
-    if (targets.length === 0) return { errno: 'ESRCH' };
+    if (this._killPgid(pgid, sig) === 0) return { errno: 'ESRCH' };
+    return {};
   }
   for (var i = 0; i < targets.length; i++) this._deliver(targets[i], sig);
   return {};
+};
+
+/* Deliver sig to every RUNNING member of a pgroup; returns the member
+ * count. Used by pgroup kill() and by the tty's control-char routing. */
+Kernel.prototype._killPgid = function (pgid, sig) {
+  var targets = [];
+  this._procs.forEach(function (p) {
+    if (p.state === STATE_RUNNING && p.pgid === pgid) targets.push(p);
+  });
+  for (var i = 0; i < targets.length; i++) this._deliver(targets[i], sig);
+  return targets.length;
 };
 
 Kernel.prototype._deliver = function (pcb, sig) {
@@ -569,12 +843,12 @@ Kernel.prototype._deliver = function (pcb, sig) {
   var disp = pcb.sigdisp[sig];
   if (disp === DISP_IGN) return;
   if (disp === DISP_HANDLER) {
-    // Post the pending bit and ring the doorbell. Phase 2 wires the libc
-    // safe-point dispatch that consumes this; until then a caught signal is
-    // recorded but not yet asynchronously delivered (same as the previous
-    // external kernels, which dropped it entirely).
+    // Post the pending bit; libc claims it at its next safe point and runs
+    // the handler. Also wake the tty ring: a read blocked on the SI_SEQ
+    // futex must re-scan, notice the pending signal, and turn into EINTR.
     Atomics.or(pcb.i32, KP_SIGPEND, 1 << (sig - 1));
     this._ring(pcb);
+    if (pcb.tty) pcb.tty.wakeReaders();
     return;
   }
   switch (sigDefaultAction(sig)) {
@@ -586,6 +860,7 @@ Kernel.prototype._deliver = function (pcb, sig) {
       if (Atomics.load(pcb.i32, KP_SIGBLOCK) & (1 << (sig - 1))) {
         Atomics.or(pcb.i32, KP_SIGPEND, 1 << (sig - 1));
         this._ring(pcb);
+        if (pcb.tty) pcb.tty.wakeReaders();
       } else {
         this._exitProcess(pcb, W_TERMSIG(sig));
       }
@@ -635,6 +910,7 @@ var BOOT_SOURCE = [
   "  bytes: wd.image,",
   "  args: wd.argv,",
   "  env: envObj(wd.envp),",
+  "  stdinSab: wd.ttySab || undefined,",
   "  blockFsFactory: function (ctx) { return Promise.resolve({ c: bfs.toWasmEnv(ctx) }); },",
   "  writeOut: ship(1),",
   "  writeErr: ship(2),",
@@ -671,6 +947,7 @@ function nodeCreateWorker(config) {
         cwd: procSpec.cwd, actions: procSpec.actions, flags: procSpec.flags,
         image: imageBuf,
         kernelPage: procSpec.kernelPage,
+        ttySab: procSpec.ttySab || null,
       },
       // Program stdout/stderr flow through {type:'out'} messages (writeOut/
       // writeErr are overridden in BOOT_SOURCE); the worker's own process
@@ -689,6 +966,7 @@ function nodeCreateWorker(config) {
 var KERNEL_EXPORTS = {
   Kernel: Kernel,
   KernelClient: KernelClient,
+  Tty: Tty,
   nodeCreateWorker: nodeCreateWorker,
   OP: OP,
   SIG: SIG,

@@ -1,6 +1,6 @@
 # 0002 — kernel Phase 3: the tty object + line discipline
 
-- **Status**: queued
+- **Status**: DONE (2026-07-05; dev log: `logs/2026-07-05/kernel-phase3-tty.md`)
 - **Depends**: 0001
 - **Design**: `todos/KERNEL.md` (TTY and line discipline)
 

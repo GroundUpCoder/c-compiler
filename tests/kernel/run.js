@@ -9,6 +9,8 @@ var tests = [
   ['test_kernel.js', []],       // process-table semantics over the real SAB protocol
   ['test_e2e.js', []],          // real C programs in worker_threads via nodeCreateWorker
   ['test_signals_e2e.js', []],  // Phase 2: async delivery, EINTR/SA_RESTART, pause, exit handshake
+  ['test_tty.js', []],          // Phase 3: line discipline semantics (kernel-side, no wasm)
+  ['test_tty_e2e.js', []],      // Phase 3: real C driven by a scripted UI bridge
 ];
 
 var failures = 0;

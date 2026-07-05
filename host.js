@@ -687,6 +687,42 @@ function createFileSystem({ fs, ctx }) {
         }
         return 0;
       },
+      // Full-struct termios (new binaries; the CLI's real terminal): same
+      // termiosState + real setRawMode switching as the legacy pair above.
+      // Layout: 4×u32 flags, cc[20]@16, speeds@36/40.
+      __tty_getattr: function (fd, tPtr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        const mem = new DataView(getMemory().buffer);
+        mem.setUint32(tPtr, termiosState.iflag >>> 0, true);
+        mem.setUint32(tPtr + 4, termiosState.oflag >>> 0, true);
+        mem.setUint32(tPtr + 8, termiosState.cflag >>> 0, true);
+        mem.setUint32(tPtr + 12, termiosState.lflag >>> 0, true);
+        const bytes = new Uint8Array(getMemory().buffer);
+        const cc = termiosState.cc || [4, 0, 0, 127, 0, 21, 0, 0, 3, 28, 26, 0, 17, 19, 0, 0, 1, 0, 0, 0];
+        for (let ci = 0; ci < 20; ci++) bytes[tPtr + 16 + ci] = cc[ci] | 0;
+        mem.setUint32(tPtr + 36, 0, true);
+        mem.setUint32(tPtr + 40, 0, true);
+        return 0;
+      },
+      __tty_setattr: function (fd, actions, tPtr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        const mem = new DataView(getMemory().buffer);
+        const bytes = new Uint8Array(getMemory().buffer);
+        const wasCanon = !!(termiosState.lflag & 0x100);
+        termiosState.iflag = mem.getUint32(tPtr, true);
+        termiosState.oflag = mem.getUint32(tPtr + 4, true);
+        termiosState.cflag = mem.getUint32(tPtr + 8, true);
+        termiosState.lflag = mem.getUint32(tPtr + 12, true);
+        termiosState.cc = Array.from(bytes.subarray(tPtr + 16, tPtr + 36));
+        const isCanon = !!(termiosState.lflag & 0x100);
+        if (typeof process !== 'undefined' && process.stdin && typeof process.stdin.setRawMode === 'function') {
+          if (wasCanon && !isCanon) process.stdin.setRawMode(true);
+          else if (!wasCanon && isCanon) process.stdin.setRawMode(false);
+        }
+        return 0;
+      },
+      __tty_getpgrp: function (fd) { void fd; setErrnoName('ENOTTY'); return -1; },
+      __tty_setpgrp: function (fd, pgid) { void fd; void pgid; setErrnoName('ENOTTY'); return -1; },
       __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
         if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
         const mem = new DataView(getMemory().buffer);
@@ -3693,7 +3729,10 @@ var BLOCK_FS = (function () {
       }
       if (Atomics.load(ctrl, SI_EOF)) return 0; // EOF
       if (!_canBlock) return 0; // can't park → behave as EOF, never spin
-      Atomics.wait(ctrl, SI_SEQ, seq); // wake on next producer push/EOF
+      Atomics.wait(ctrl, SI_SEQ, seq); // wake on next producer push/EOF/signal
+      // The kernel also rings SI_SEQ when it posts a signal to this process:
+      // deliver here and surface EINTR (unless every action allows restart).
+      if (this._sigcheck && this._sigcheck() === false) return this._setErr('EINTR');
     }
   };
 
@@ -3749,6 +3788,15 @@ var BLOCK_FS = (function () {
     // Wire the optional live-stdin sab (interactive page). Absent → stdin
     // stays pre-buffered/EOF and select reports it always-ready (old path).
     if (ctx.stdinSab) self.setStdinSab(ctx.stdinSab);
+
+    // Signal safe-point probe for blocking stdin/select waits: with a kernel
+    // attached (ctx.deliverSignals, bound late by runModule), a wake on the
+    // SI_SEQ futex may mean "signal pending", not "bytes arrived" — the
+    // check turns a parked read into EINTR (or transparently restarts under
+    // SA_RESTART semantics: true = restart, false = EINTR, null = nothing).
+    self._sigcheck = function () {
+      return ctx.deliverSignals ? ctx.deliverSignals() : null;
+    };
 
     // Wire the optional owner-brokered pipe transport (the embedder's runtime).
     // Absent → in-memory pipes (single instance). With it, pipe ends can cross
@@ -3894,6 +3942,9 @@ var BLOCK_FS = (function () {
         return nfd;
       }),
       isatty: function (fd) {
+        // A live tty ring attached means stdio IS a terminal (kernel path),
+        // regardless of what the worker's process.stdin says.
+        if (fd >= 0 && fd <= 2 && self._stdinSab) return 1;
         // When running in Node, report the real TTY status for fd 0
         // so programs (Lua, etc.) can detect batch vs interactive mode.
         if (fd === 0 && typeof process !== 'undefined' && process.stdin) {
@@ -3923,6 +3974,40 @@ var BLOCK_FS = (function () {
         }
         return 0;
       },
+      // ---- full-struct termios defaults (new binaries; no kernel) ----
+      // With kernel.js attached, createSpawn's RPC-backed versions override
+      // these (merge order). Here: canned values matching the legacy
+      // __tcgetattr, plus standard control chars; setattr publishes the same
+      // 3-bit mode word for the page line discipline. pgrp ops are ENOTTY —
+      // no process groups without a kernel. Layout: 4×u32 flags, cc[20]@16.
+      __tty_getattr: function (fd, tPtr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        var dv = new DataView(getMemory().buffer);
+        dv.setUint32(tPtr, 0x100, true);        // ICRNL
+        dv.setUint32(tPtr + 4, 0x1, true);      // OPOST
+        dv.setUint32(tPtr + 8, 0xB00, true);    // CS8|CREAD
+        dv.setUint32(tPtr + 12, 0x188, true);   // ISIG|ICANON|ECHO
+        var m = new Uint8Array(getMemory().buffer);
+        var cc = [4, 0, 0, 127, 0, 21, 0, 0, 3, 28, 26, 0, 17, 19, 0, 0, 1, 0, 0, 0];
+        for (var ci = 0; ci < 20; ci++) m[tPtr + 16 + ci] = cc[ci];
+        dv.setUint32(tPtr + 36, 0, true);
+        dv.setUint32(tPtr + 40, 0, true);
+        return 0;
+      },
+      __tty_setattr: function (fd, actions, tPtr) {
+        if (fd < 0 || fd > 2) { setErrnoName('ENOTTY'); return -1; }
+        if (self._stdinSab) {
+          var dv2 = new DataView(getMemory().buffer);
+          var oflag2 = dv2.getUint32(tPtr + 4, true);
+          var lflag2 = dv2.getUint32(tPtr + 12, true);
+          var mode2 = ((lflag2 & 0x100) ? 1 : 0) | ((lflag2 & 0x8) ? 2 : 0)
+                    | ((oflag2 & 0x1) ? 4 : 0);
+          Atomics.store(self._stdinCtrl, SI_TERMIOS, mode2);
+        }
+        return 0;
+      },
+      __tty_getpgrp: function (fd) { void fd; setErrnoName('ENOTTY'); return -1; },
+      __tty_setpgrp: function (fd, pgid) { void fd; void pgid; setErrnoName('ENOTTY'); return -1; },
       sleep: function (seconds) {
         // Returns seconds left unslept (0 here — never interrupted). When
         // blocking is unavailable nothing is slept, so report the full amount.
@@ -4014,6 +4099,11 @@ var BLOCK_FS = (function () {
             if (ms > 0) {
               var seq = Atomics.load(ctrl, SI_SEQ);
               if (!self._stdinSabReady()) Atomics.wait(ctrl, SI_SEQ, seq, ms);
+              // Signal wake (kernel rings SI_SEQ on posts): POSIX select
+              // reports EINTR rather than restarting the timeout.
+              if (self._sigcheck && self._sigcheck() === false) {
+                setErrnoName('EINTR'); return -1;
+              }
             }
             return commit(scan());
           }
@@ -4021,6 +4111,9 @@ var BLOCK_FS = (function () {
             var seq2 = Atomics.load(ctrl, SI_SEQ);
             if (self._stdinSabReady()) break;
             Atomics.wait(ctrl, SI_SEQ, seq2);
+            if (self._sigcheck && self._sigcheck() === false) {
+              setErrnoName('EINTR'); return -1;
+            }
           }
           return commit(scan());
         }
@@ -4573,6 +4666,54 @@ function createSpawn(ctx, hooks) {
         }
       },
   };
+  // ---- Phase 3 tty control plane: termios/pgrp syscalls become kernel RPCs
+  // (the line discipline lives in kernel.js's Tty). struct termios layout
+  // (must match <termios.h>): iflag@0 oflag@4 cflag@8 lflag@12, cc[20]@16,
+  // ispeed@36 ospeed@40. Without these hooks the BlockFS/node-fs defaults
+  // (canned values) stay in effect — createSpawn merges later and wins.
+  if (hooks.ttyGetattr) {
+    env.__tty_getattr = function (fd, tPtr) {
+      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      const r = hooks.ttyGetattr();
+      if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+      const dv = new DataView(ctx.getMemory().buffer);
+      dv.setUint32(tPtr, r.iflag >>> 0, true);
+      dv.setUint32(tPtr + 4, r.oflag >>> 0, true);
+      dv.setUint32(tPtr + 8, r.cflag >>> 0, true);
+      dv.setUint32(tPtr + 12, r.lflag >>> 0, true);
+      const m = new Uint8Array(ctx.getMemory().buffer);
+      for (let i = 0; i < 20; i++) m[tPtr + 16 + i] = (r.cc && r.cc[i]) | 0;
+      dv.setUint32(tPtr + 36, 0, true);
+      dv.setUint32(tPtr + 40, 0, true);
+      return 0;
+    };
+    env.__tty_setattr = function (fd, actions, tPtr) {
+      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      const dv = new DataView(ctx.getMemory().buffer);
+      const m = new Uint8Array(ctx.getMemory().buffer);
+      const r = hooks.ttySetattr(actions, {
+        iflag: dv.getUint32(tPtr, true),
+        oflag: dv.getUint32(tPtr + 4, true),
+        cflag: dv.getUint32(tPtr + 8, true),
+        lflag: dv.getUint32(tPtr + 12, true),
+        cc: Array.from(m.subarray(tPtr + 16, tPtr + 36)),
+      });
+      if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+      return 0;
+    };
+    env.__tty_getpgrp = function (fd) {
+      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      const r = hooks.ttyGetpgrp();
+      if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+      return r.pgid;
+    };
+    env.__tty_setpgrp = function (fd, pgid) {
+      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      const r = hooks.ttySetpgrp(pgid);
+      if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+      return 0;
+    };
+  }
   // With a kernel doorbell available, sleeps become interruptible: park on
   // the doorbell (any posted signal rings it), deliver, and report the
   // interruption the way each API wants it. These override the BlockFS env

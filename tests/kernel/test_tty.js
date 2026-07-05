@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+// Phase 3 tty semantics (todos/0002), no wasm: a real kernel + Tty with fake
+// workers; the test is both the UI bridge (tty.input / captured echo) and
+// the consumer (reads the shared ring directly). Covers the line
+// discipline: canonical editing (erase/kill/EOF), echo, ICRNL, raw mode,
+// ISIG control chars -> signals to the FOREGROUND pgroup only, TCSAFLUSH,
+// SIGWINCH, and the termios RPCs.
+//
+// Run: node tests/kernel/test_tty.js
+'use strict';
+const path = require('path');
+const K = require(path.resolve(__dirname, '../../kernel.js'));
+
+let failures = 0;
+function check(name, cond, extra) {
+  if (cond) { console.log('  ok   ' + name); }
+  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
+}
+const tick = () => new Promise((r) => setImmediate(r));
+
+const workers = new Map();
+function createWorker(procSpec) {
+  const h = {
+    procSpec, msg: null, exitCb: null, terminated: false,
+    postMessage() {}, onMessage(fn) { h.msg = fn; }, onExit(fn) { h.exitCb = fn; },
+    terminate() { h.terminated = true; },
+  };
+  workers.set(procSpec.pid, h);
+  return h;
+}
+
+const kernel = new K.Kernel({
+  createWorker,
+  loadImage: () => new Uint8Array([1]),
+  onHalt: () => {},
+  log: () => {},
+});
+
+let echoed = [];
+const tty = kernel.createTty({
+  cols: 80, rows: 24,
+  output: (bytes) => echoed.push(Buffer.from(bytes).toString('latin1')),
+});
+const takeEcho = () => { const s = echoed.join(''); echoed = []; return s; };
+
+// The test doubles as the ring consumer (what BlockFS._readStdinSab does).
+const SI_AVAIL = 1, SI_READPOS = 3, SI_EOF = 4, SI_HDR = 32;
+const ttyI32 = new Int32Array(tty.sab, 0, 8);
+const ttyRing = new Uint8Array(tty.sab, SI_HDR, tty.sab.byteLength - SI_HDR);
+function ringAvail() { return Atomics.load(ttyI32, SI_AVAIL); }
+function ringTake() {
+  const n = ringAvail();
+  const rp = Atomics.load(ttyI32, SI_READPOS);
+  let s = '';
+  for (let i = 0; i < n; i++) s += String.fromCharCode(ttyRing[(rp + i) % ttyRing.length]);
+  Atomics.store(ttyI32, SI_READPOS, (rp + n) % ttyRing.length);
+  Atomics.sub(ttyI32, SI_AVAIL, n);
+  return s;
+}
+
+function page(pid) {
+  const pcb = kernel.process(pid);
+  return { i32: new Int32Array(pcb.page), u8: new Uint8Array(pcb.page) };
+}
+async function rpc(pid, op, req) {
+  const h = workers.get(pid);
+  const { i32, u8 } = page(pid);
+  K.writePayload(i32, u8, req);
+  Atomics.store(i32, K.KP_RPC_OP, op);
+  Atomics.store(i32, K.KP_RPC_STATE, K.RPC_REQUEST);
+  h.msg({ type: 'krpc' });
+  while (Atomics.load(i32, K.KP_RPC_STATE) !== K.RPC_DONE) await tick();
+  const resp = K.readPayload(i32, u8);
+  Atomics.store(i32, K.KP_RPC_STATE, K.RPC_IDLE);
+  return resp;
+}
+const pend = (pid) => Atomics.load(page(pid).i32, K.KP_SIGPEND);
+const clearPend = (pid) => Atomics.store(page(pid).i32, K.KP_SIGPEND, 0);
+const bit = (sig) => 1 << (sig - 1);
+
+(async () => {
+  await kernel.boot({ path: '/bin/init', argv: ['init'] });
+  check('tty attached to init', workers.get(1).procSpec.ttySab === tty.sab);
+  check('boot sets fg pgroup', tty.fgPgid === 1, String(tty.fgPgid));
+
+  // ---- canonical mode: buffering, ICRNL, echo ----
+  tty.input('hi');
+  check('canonical buffers until NL', ringAvail() === 0);
+  check('echo of typed chars', takeEcho() === 'hi');
+  tty.input('\r');                       // ICRNL: CR -> NL, commits
+  check('CR commits as NL', ringTake() === 'hi\n');
+  check('NL echoes CRLF (ONLCR)', takeEcho() === '\r\n');
+
+  // ---- erase / kill editing ----
+  tty.input('ab\x7f');                   // VERASE
+  check('erase echoes backspace-space-backspace', takeEcho() === 'ab\b \b');
+  tty.input('\r');
+  check('erased char not committed', ringTake() === 'a\n');
+  takeEcho();
+  tty.input('junk\x15done\r');           // VKILL ^U wipes the line
+  check('kill wipes the line', ringTake() === 'done\n');
+  takeEcho();
+
+  // ---- VEOF: commit-without-NL, sticky EOF on empty line ----
+  tty.input('ab\x04');                   // ^D commits "ab" with no newline
+  check('VEOF commits partial line', ringTake() === 'ab');
+  check('VEOF alone is not EOF yet', Atomics.load(ttyI32, SI_EOF) === 0);
+  tty.input('\x04');                     // ^D on empty line -> EOF
+  check('empty-line VEOF sets EOF', Atomics.load(ttyI32, SI_EOF) === 1);
+  Atomics.store(ttyI32, SI_EOF, 0);      // reset for the rest of the test
+  takeEcho();
+
+  // ---- ISIG: ^C -> SIGINT to the fg pgroup (init has a handler) ----
+  await rpc(1, K.OP.SIGDISP, { sig: 2, kind: 2 });
+  tty.input('partial\x03');              // typed text then ^C
+  check('^C posts SIGINT to fg', (pend(1) & bit(2)) !== 0);
+  check('^C echoes caret form', takeEcho() === 'partial^C\r\n');
+  tty.input('after\r');
+  check('^C flushed the edit buffer', ringTake() === 'after\n');
+  clearPend(1);
+  takeEcho();
+
+  // ---- foreground routing: tcsetpgrp moves the target ----
+  let r = await rpc(1, K.OP.SPAWN, { path: '/bin/a', argv: ['a'], envp: null, cwd: null, actions: [], flags: 1, pgid: 0 }); // pid 2, pgid 2
+  await rpc(2, K.OP.SIGDISP, { sig: 2, kind: 2 });
+  r = await rpc(1, K.OP.TCSETPGRP, { pgid: 2 });
+  check('tcsetpgrp accepted', !r.errno);
+  r = await rpc(1, K.OP.TCGETPGRP, {});
+  check('tcgetpgrp reads it back', r.pgid === 2, JSON.stringify(r));
+  tty.input('\x03');
+  check('^C hits new fg pgroup', (pend(2) & bit(2)) !== 0);
+  check('^C spares the old fg', (pend(1) & bit(2)) === 0);
+  clearPend(2);
+  takeEcho();
+
+  // ---- termios RPCs: getattr, raw mode, TCSAFLUSH ----
+  r = await rpc(1, K.OP.TCGETATTR, {});
+  check('getattr: canonical defaults', (r.lflag & 0x100) !== 0 && (r.lflag & 0x8) !== 0 && r.cc[8] === 3, JSON.stringify(r));
+  const raw = { actions: 0, iflag: 0, oflag: r.oflag, cflag: r.cflag, lflag: 0, cc: r.cc };
+  await rpc(1, K.OP.TCSETATTR, raw);
+  tty.input('x\x03y\r');                 // raw: no ISIG, no ICRNL, no echo
+  check('raw mode passes everything through', ringTake() === 'x\x03y\r');
+  check('raw mode does not echo', takeEcho() === '');
+  check('raw ^C posts nothing', (pend(2) & bit(2)) === 0);
+
+  tty.input('pending');
+  r = await rpc(1, K.OP.TCGETATTR, {});
+  await rpc(1, K.OP.TCSETATTR, { actions: 2 /* TCSAFLUSH */, iflag: 0x100, oflag: r.oflag, cflag: r.cflag, lflag: 0x18E, cc: r.cc });
+  check('TCSAFLUSH discards unread input', ringAvail() === 0);
+  takeEcho();
+
+  // ---- SIGWINCH on resize (fg pgroup, handler disposition) ----
+  await rpc(2, K.OP.SIGDISP, { sig: 28, kind: 2 });
+  tty.resize(100, 50);
+  check('resize posts SIGWINCH to fg', (pend(2) & bit(28)) !== 0);
+  check('winsize words updated', Atomics.load(ttyI32, 5) === 100 && Atomics.load(ttyI32, 6) === 50);
+  tty.resize(100, 50);
+  clearPend(2);
+  check('no-op resize posts nothing', (pend(2) & bit(28)) === 0);
+
+  console.log(failures === 0 ? '\ntty semantics: PASS' : `\ntty semantics: ${failures} FAILED`);
+  process.exit(failures === 0 ? 0 : 1);
+})().catch((e) => { console.error(e); process.exit(1); });
