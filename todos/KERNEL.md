@@ -351,6 +351,52 @@ should need rework for this; that's why the opcode space, the per-process
 page, and the doorbell are designed process-generic rather than
 terminal-specific.
 
+## The fd/data-plane amendment (2026-07-06, todos/0009)
+
+The original settled decision — "control plane only; fs data plane stays
+in-process" — was validated for a world of ONE process (plus the netguc
+dual-instance case, which is two instances cooperating in one thread,
+serialized by the event loop). True multi-process breaks it three ways:
+
+1. **OPFS handle exclusivity**: `createSyncAccessHandle()` locks the file;
+   N process workers can't each open the store. The escape hatch
+   (`mode: "readwrite-unsafe"`) is Chromium-only territory.
+2. **True parallelism**: BlockFS metadata ops are multi-step RMW; the
+   read-through invariant fixes staleness, not interleaving. Correctness
+   would need a global cross-worker fs lock.
+3. **SIGKILL tears ops**: worker.terminate() mid-metadata-op (or while
+   holding that lock) corrupts or deadlocks the store.
+
+Keeping the old rule for the OS would cost a locking protocol + crash
+recovery + a portability gamble, and still leave the POSIX warts (no shared
+open-file descriptions/offsets across spawn, cross-process
+unlink-while-open freeing early, the SIGKILL fd leak, fd_action
+translation). Emscripten reached the same conclusion for the same substrate
+(WasmFS's OPFS backend proxies fs ops to one dedicated worker).
+
+**Amended decision:** for the OS, the kernel owns a proper two-level fd
+structure — per-process fd tables → system-wide open file descriptions
+(offset, flags, refcount) → the ONE BlockFS instance, held by the kernel
+worker (which is also why the kernel lives in a worker: SyncAccessHandle).
+Process fs syscalls are RPCs on the existing kernel-page transport (raw-byte
+payloads for read/write; JSON elsewhere). What this buys, in one move:
+shared offsets on inherited fds, trivially correct fd_actions (the kernel
+IS the parent's fd table), global unlink-while-open refcounts, no fd/inode
+leak on SIGKILL, kill-proof metadata (the kernel completes every op), one
+readiness source for select/poll across files/pipes/tty, and the Phase-1
+"private fs per process" placeholder finally becomes a real shared
+filesystem. The price is syscall latency (postMessage + park + SAB copy;
+stdio buffering amortizes it, `Atomics.waitAsync` offers a pure-SAB upgrade
+path) and kernel serialization — 0009 carries a benchmark gate so the cost
+is measured, not assumed.
+
+Scope note: this is two *transports* to one BlockFS implementation, not two
+filesystems. Standalone single-program pages (doom.html, the Node CLI, the
+unit-test harness) keep the in-process path and the live-stdin SAB exactly
+as they are; the brokered path is the OS's. The in-process tty ring stays
+for those pages; under the OS, tty reads become deferred kernel RPCs served
+straight from the line discipline's cooked buffer.
+
 ## Testing (`tests/kernel/`)
 
 The BlockFS suite is the model: example-based + adversarial, Node-only,
@@ -394,7 +440,7 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
 |---|---|
 | Separate `kernel.js`, owner-side; host.js stays process-side | Different cardinality (1/system vs 1/process); single-program pages stay lean; makes the kernel in-repo at all |
 | Reference deployment: kernel in a dedicated worker; main thread is a dumb UI bridge | OPFS SyncAccessHandle is worker-only (seeding/fsck/orphan sweep need it); isolates control plane from rendering jank; module stays location-agnostic via injected createWorker |
-| Control plane only — fs data plane stays in-process | Existing read-through architecture is correct; brokers must never sit on syscall-frequency paths |
+| **AMENDED 2026-07-06**: for the OS, the kernel owns the fd table and serves the filesystem (see "The fd/data-plane amendment"); standalone single-program pages keep the in-process path | The original "fs stays in-process" rule predated true multi-process and doesn't survive it (OPFS handle exclusivity, parallel metadata races, kill-torn ops) |
 | One doorbell futex per process; all blocking ops loop on it | Uniform EINTR; anything kernel-visible can interrupt any blocking call |
 | Signal routing/defaults in kernel, handlers in process | Matches existing libc tables + `__on_sigdisp` mirror |
 | Safe-point (syscall-entry) signal delivery; compute loops uncatchable in v1 | Zero preemption machinery; SIGKILL (terminate) is the backstop; `--signal-polls` is a future compiler flag |

@@ -1,9 +1,13 @@
 # 0003 — kernel Phase 4: pipes + job control
 
 - **Status**: queued
-- **Depends**: 0002
+- **Depends**: 0002, **0009** (the fd/data-plane amendment — resequenced
+  ahead of this after the 2026-07-06 difficulty analysis: with kernel-owned
+  fd tables, pipes are just another OFD kind, fd_action translation
+  disappears, the shared-offset deviation disappears, and select/poll
+  readiness unifies kernel-side)
 - **Design**: `todos/KERNEL.md` (Pipes and cross-process blocking; Signals
-  stop/continue classes)
+  stop/continue classes; the fd/data-plane amendment)
 
 ## Goal
 
