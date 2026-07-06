@@ -49,7 +49,11 @@ function tryListen(port) {
 }
 
 server.once('listening', () => {
-  console.log(`Open http://localhost:${server.address().port}`);
+  const port = server.address().port;
+  // There is no index.html at the repo root, so the bare URL 404s — point
+  // at the real entry when serving a tree that contains the OS page.
+  const osPage = !singleFile && fs.existsSync(path.join(root, 'os', 'os.html'));
+  console.log(`Open http://localhost:${port}${osPage ? '/os/os.html' : ''}`);
 });
 
 tryListen(preferredPort);
