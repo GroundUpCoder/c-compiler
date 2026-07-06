@@ -25,9 +25,14 @@ One numbered file per unit of work we have actually committed to doing.
 ### Next up (order of attack)
 
 1. `0010` busybox coreutils (multicall /bin binaries)
-2. `0006` threads + atomics
-3. `0007` window manager / compositor — design doc first
-4. `0008` networking — AF_UNIX first
+2. `0007` window manager / compositor — design doc first
+3. `0008` networking — AF_UNIX first
+
+(Deferred indefinitely: `0006` threads + atomics — processes are the
+parallelism unit; no consumer exists and the complexity tax is permanent.
+Rationale + re-trigger condition in the item and
+`logs/2026-07-07/threads-atomics-deferral.md`. The item stays in `todos/`
+with a `deferred` status; it is not part of the order of attack.)
 
 (Done: `0001` signals/EINTR/exit handshake; `0002` tty + line discipline;
 `0009` kernel-owned fd table + brokered fs; `0003` pipes + job control;

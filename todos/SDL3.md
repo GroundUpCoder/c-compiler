@@ -344,10 +344,13 @@ Note: this runtime already has a libc FS (BlockFS/OPFS) — `SDL_IOFromFile` sho
 
 ### Threads / sync / atomics (SDL_thread, SDL_mutex, SDL_atomic) — ✗ missing — P2
 `SDL_CreateThread`, mutex/cond/semaphore/rwlock, `SDL_RunOnMainThread`, atomics.
-Hard without pthreads. Options: back atomics with `Atomics`/SAB (already used by
-the SAB runner), back threads with Web Workers (heavy, limited), or **stub
-single-threaded** + fail loud on real thread creation. Decide policy; many ports
-only need atomics + a mutex.
+**Policy decided 2026-07-07** (with the indefinite deferral of `todos/0006`
+threads+atomics — processes are the parallelism unit): **stub
+single-threaded + fail loud on real thread creation**. Mutex/cond/SDL_atomic
+may be provided as trivially-correct single-threaded implementations (no-op
+lock, plain ops) *behind the SDL API* — that's SDL's contract, not C11's,
+so it isn't the rejected `_Atomic` shim. `SDL_CreateThread` returns an
+error. Revisit only if 0006 is ever re-triggered.
 
 ### Clipboard (SDL_clipboard) — ✗ missing — P3
 `SDL_SetClipboardText`/`GetClipboardText`/`HasClipboardText`. Web:

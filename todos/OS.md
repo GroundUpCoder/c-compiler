@@ -116,7 +116,7 @@ pgid atomically at spawn).
 | Terminal | Done for Phase 1 — the tty is a kernel object (termios, canonical/raw, echo, Ctrl-C→SIGINT, SIGWINCH); xterm.js is the dumb UI bridge (`os/os.html`). |
 | Reference build | **Boots** (todos/done/0004): `os/os.html` in a tab over OPFS, `os/boot.js` headless on stdio; first boot self-seeds from `os/image.json` (C sources compiled by the kernel's cc driver); `cc hello.c && ./a.out` works in-OS. |
 | Shell | **Done** (todos/done/0005): busybox 1.37.0 hush as `/bin/sh`, ported via the vfork-on-__spawn journaling shim (`vendor/busybox/`). Pipelines, `$( )`, redirects, here-docs, control flow, interactive mode with prompt/line editing, `popen()`/`system()` all live. Coreutils beyond tiny cat/ls: `todos/0010`. |
-| Threads | Not implemented. `_Atomic` parses but doesn't codegen; `pthread.h`/`threads.h` are stubs. |
+| Threads | **Deferred indefinitely** (todos/0006, 2026-07-07): processes are the parallelism unit. `_Atomic` is not accepted (`__STDC_NO_ATOMICS__` stays defined — fail loud, no shim); `pthread.h` absent; `threads.h` a one-line stub. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
 | Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
 | Networking | Stubs only. |
@@ -210,10 +210,16 @@ Exit criteria: open the tab, land in a shell over BlockFS; pipelines, Ctrl-C,
 an editor, and `cc hello.c && ./a.out` all work. That's already "an OS in a
 tab" for terminal people.
 
-### Phase 2 — Threads and atomics
+### Phase 2 — Threads and atomics — DEFERRED indefinitely (2026-07-07)
 
-The other large compiler+host joint effort. Needed for real ports (and later
-for WM clients that assume pthreads).
+**Deferred; decision + full rationale in `todos/0006`.** Short form:
+processes are the parallelism unit (posix_spawn already gives multi-core
+parallelism); no vendored or planned port needs pthreads; the cost — a
+second shared-memory instantiation model, real TLS, libc-wide thread-safety
+obligations, per-thread syscall channels, signals × threads — is a permanent
+tax out of proportion to any current benefit. Don't re-litigate without a
+port that hard-requires pthreads. The sketch below is kept for that
+eventuality.
 
 - wasm shared memory + threads proposal: shared `WebAssembly.Memory`, worker
   pool as threads, `_Atomic` codegen onto wasm atomics, `_Thread_local` for
