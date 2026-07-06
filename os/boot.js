@@ -14,6 +14,10 @@
 //   --image=PATH   image file (default: os/os.img)
 //   --fresh        discard the image and re-seed
 //   --quiet        suppress boot progress on stderr
+//   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
+//                  shells go interactive — drive prompts/job control from
+//                  a script; output gains prompts/echo, no longer byte-clean)
+//   --dump-state   dev aid: dump each process's RPC/waiter state every 3s
 'use strict';
 
 const fs = require('fs');

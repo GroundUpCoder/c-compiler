@@ -51,6 +51,13 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
 
 ## compiler.js
 
+- **`__attribute__((aligned(N)))` after an array declarator crashes the
+  compiler** (`this._constEvalInt is not a function` — an internal error, not
+  a diagnostic): `static const char x[] __attribute__((aligned(1))) = "a";`.
+  Found porting busybox (its ALIGN1 idiom; the port defines ALIGN* empty
+  under `__wasm__` as a workaround, `vendor/busybox/src/include/platform.h`).
+  Repro is one line; fix is wiring the attribute path's const-eval helper.
+  (Found 2026-07-06 during todos/0005.)
 - **Volatile accesses vs the inliner**: `twice(mmio)` inlines to two volatile
   reads, `ignore(mmio)` to zero (C11 5.1.2.3 — access count is observable).
   Fix: EIdent/deref of volatile-qualified type must not be UNRESTRICTED
