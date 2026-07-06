@@ -31,10 +31,14 @@ const COMMON = require(path.join(__dirname, 'os-common.js'));
 let imagePath = path.join(__dirname, 'os.img');
 let freshBoot = false;
 let quiet = false;
+let dumpState = false;
+let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
   else if (a === '--fresh') freshBoot = true;
   else if (a === '--quiet') quiet = true;
+  else if (a === '--dump-state') dumpState = true;
+  else if (a === '--tty-out') ttyOut = true;
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
     process.exit(2);
@@ -105,6 +109,10 @@ const tty = kernel.createTty({
   // Echo/edit control bytes matter only when a human is typing; under piped
   // stdin (agents, CI) dropping them keeps stdout byte-exact program output.
   output: interactive ? (b) => process.stdout.write(Buffer.from(b)) : () => {},
+  // A human terminal makes fd 1/2 tty-kind (isatty true -> the shell goes
+  // interactive: prompt, line editing, job control). Piped runs keep plain
+  // output channels so stdout stays byte-exact.
+  interactiveOut: ttyOut || (interactive && !!process.stdout.isTTY),
 });
 
 /* ---- stdio <-> tty bridge ---- */
@@ -118,6 +126,18 @@ process.stdin.on('data', (chunk) => tty.input(new Uint8Array(chunk)));
 process.stdin.on('end', () => tty.eof());
 process.stdin.resume();
 
+/* ---- debug: periodic kernel-state dump (development aid) ---- */
+if (dumpState) {
+  setInterval(() => {
+    kernel._procs.forEach((pcb) => {
+      const st = Atomics.load(pcb.i32, 4 /* KP_RPC_STATE */);
+      const op = Atomics.load(pcb.i32, 5 /* KP_RPC_OP */);
+      process.stderr.write(`[state] pid ${pcb.pid} ${pcb.state} rpc=${st}/op=0x${op.toString(16)}` +
+        ` waiter=${pcb.waiter ? pcb.waiter.op : '-'} ttyq=${kernel._ttyWaiters}\n`);
+    });
+  }, 3000).unref();
+}
+
 /* ---- boot ---- */
 seedAndBoot().catch((e) => {
   process.stderr.write('boot failed: ' + (e && e.stack || e) + '\n');
@@ -128,6 +148,9 @@ async function seedAndBoot() {
   const seeded = await COMMON.seedImage(kfs, manifest, {
     readAsset: (name) => fs.readFileSync(path.join(__dirname, name), 'utf-8'),
     compile: ccCompile,
+    // project entries (busybox hush) are repo-relative multi-file builds
+    buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
+      (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
     log: bootLog,
   });
   if (seeded) store.flush();

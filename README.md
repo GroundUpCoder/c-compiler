@@ -283,13 +283,14 @@ The repo's north star ([todos/OS.md](todos/OS.md)) is a wasm-native, almost-POSI
 
 ```bash
 node serve.js .            # then open http://localhost:8080/os/os.html
-# → a terminal over a persistent filesystem (BlockFS on OPFS); pid 1 is a
-#   small C protoshell; `cc hello.c && ./a.out` compiles and runs IN the OS.
+# → a real shell (busybox hush) over a persistent filesystem (BlockFS on
+#   OPFS): pipelines, $( ), redirections, here-docs, job control — and
+#   `cc hello.c && ./a.out` compiles and runs IN the OS.
 
-echo 'ls /' | node os/boot.js   # the same OS headless, tty on stdio
+echo 'ls / | cat' | node os/boot.js   # the same OS headless, tty on stdio
 ```
 
-Under it sits **kernel.js**, the owner-side process control plane ([todos/KERNEL.md](todos/KERNEL.md)): process table, posix_spawn (deliberately **not** fork — see OS.md for the decision), async signal delivery with EINTR, a kernel-side tty line discipline (Ctrl-C means SIGINT), kernel-owned fd tables over one shared BlockFS, pipes with real cross-process blocking + SIGPIPE, and job control (stop/continue, WUNTRACED/WCONTINUED, SIGTTIN). First boot compiles the OS's own userland from C sources in `os/image.json` — there is no build step. The next milestone is a real shell port ([todos/0005](todos/0005-shell-port-busybox.md)).
+Under it sits **kernel.js**, the owner-side process control plane ([todos/KERNEL.md](todos/KERNEL.md)): process table, posix_spawn (deliberately **not** fork — see OS.md for the decision), async signal delivery with EINTR, a kernel-side tty line discipline (Ctrl-C means SIGINT), kernel-owned fd tables over one shared BlockFS, pipes with real cross-process blocking + SIGPIPE, and job control (stop/continue, WUNTRACED/WCONTINUED, SIGTTIN). First boot compiles the OS's own userland — including the shell itself — from sources listed in `os/image.json`; there is no build step. `/bin/sh` is **busybox hush**, ported to the no-fork world through a vfork-on-`__spawn` journaling shim ([vendor/busybox/README.md](vendor/busybox/README.md)) — `popen()`/`system()` work, and the port is the kernel design's acceptance test ([todos/KERNEL.md](todos/KERNEL.md)).
 
 ## Vendored projects
 

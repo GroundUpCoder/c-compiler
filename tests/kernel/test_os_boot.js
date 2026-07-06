@@ -1,15 +1,20 @@
 #!/usr/bin/env node
-// 0004 acceptance, headless half: the reference OS boots under plain Node
-// with the tty on stdio (OS.md "agent-friendly by construction"), driven
-// exactly the way an agent or CI would drive it — pipes and exit codes:
+// OS acceptance, headless (0004 + 0005): the reference OS boots under plain
+// Node with busybox hush as pid 1 (/bin/sh), driven the way an agent or CI
+// would drive it — pipes and exit codes.
 //
-//   - first boot seeds the image from os/image.json (protoshell + cc
-//     compiled INTO the image by the kernel's own compile hook)
-//   - `ls /` over a pipe prints the seeded tree
+//   - first boot seeds the image from os/image.json: protoshell, cc, tiny
+//     cat/ls, and BUSYBOX HUSH built from vendor/busybox/bin.json by the
+//     kernel's own compiler (no build step)
+//   - the shell is real: pipelines (cross-process), command substitution
+//     (spawn-self with serialized state, the NOMMU re-exec machinery on
+//     __spawn), redirections, here-docs (bash-style temp file), control
+//     flow, functions, exit-status propagation
 //   - `cc hello.c && ./a.out` — the OS compiles and runs a program
-//   - `exit N` propagates as boot.js's exit code
-//   - a second boot on the same image file REUSES it (no re-seed) and sees
-//     files created in the first session — persistence across "reboots"
+//   - popen()/system() light up (the 0005 acceptance): a C program written
+//     via here-doc, compiled in-OS, runs `popen("... | cat")` and
+//     `system("... > file")`
+//   - a second boot on the same image REUSES it; files persist
 //
 // Run: node tests/kernel/test_os_boot.js
 'use strict';
@@ -32,61 +37,97 @@ const image = path.join(tmp, 'os.img');
 
 function session(input, extraArgs) {
   // Not --quiet: the [boot] lines on stderr are themselves under test
-  // (seeded vs reused), and program stdout stays clean either way.
+  // (seeded vs reused); program stdout stays byte-clean either way (hush is
+  // non-interactive under piped stdio — no prompts).
   const r = cp.spawnSync('node',
     [BOOT, '--image=' + image].concat(extraArgs || []),
-    { input, encoding: 'utf8', timeout: 120000 });
+    { input, encoding: 'utf8', timeout: 300000 });
   if (r.error) throw r.error;
   return r;
 }
 
-// ---- first boot: seed + the canonical session ----
+// ---- first boot: seed + the full shell gauntlet ----
 let r = session([
-  'ls /',
-  'pwd',
-  'echo hi from the protoshell',
-  'cc hello.c && ./a.out',
-  'ls',
-  'cat /etc/.image-version',
+  'ls /',                                  // seeded tree (tiny native ls)
+  'echo A | cat | cat',                    // 3-stage cross-process pipeline
+  'echo sub=$(echo inner $(echo deep))',   // nested command substitution
+  'echo redir > /root/r.txt',
+  'cat /root/r.txt',
+  'for i in 1 2; do echo loop-$i; done',
+  'f() { echo fn-$1; }; f arg',
+  'case zap in z*) echo case-ok;; esac',
+  'test 2 -gt 1 && echo test-ok',
+  'false || echo or-ok',
+  'false; echo status=$?',
+  'cc hello.c && ./a.out',                 // compile + run, in-OS
   'exit 7',
   '',
 ].join('\n'), ['--fresh']);
 
-check('exit N propagates', r.status === 7, String(r.status));
+check('exit N propagates through hush', r.status === 7, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 const lines = r.stdout.split('\n');
 const expectStdout = [
-  'bin', 'dev', 'etc', 'root',        // ls /
-  '/root',                            // pwd
-  'hi from the protoshell',           // echo
-  'hello, wasm world',                // cc hello.c && ./a.out
-  'a.out', 'hello.c',                 // ls (after cc)
-  '1',                                // /etc/.image-version
+  'bin', 'dev', 'etc', 'root', 'tmp',      // ls /
+  'A',                                     // pipeline
+  'sub=inner deep',                        // nested $( )
+  'redir',                                 // > then cat
+  'loop-1', 'loop-2',                      // for
+  'fn-arg',                                // function
+  'case-ok', 'test-ok', 'or-ok',           // case/test/||
+  'status=1',                              // $?
+  'hello, wasm world',                     // cc hello.c && ./a.out
 ];
 for (let i = 0; i < expectStdout.length; i++) {
   check('stdout[' + i + '] = ' + JSON.stringify(expectStdout[i]),
     lines[i] === expectStdout[i], JSON.stringify(lines[i]));
 }
-check('first boot seeds the image', r.stderr.includes('(compiled protoshell.c)'), r.stderr.slice(0, 200));
-check('prompts go to stderr, not stdout', !r.stdout.includes('# '));
+check('first boot builds hush from vendor/busybox', r.stderr.includes('built vendor/busybox/bin.json'),
+  r.stderr.slice(0, 300));
+
+// ---- popen()/system(): the 0005 acceptance — heredoc -> cc -> run ----
+r = session([
+  "cat > po.c << 'CEOF'",
+  '#include <stdio.h>',
+  '#include <stdlib.h>',
+  'int main(void) {',
+  '    FILE *p = popen("echo from-popen | cat", "r");',
+  '    char line[64];',
+  '    if (p && fgets(line, sizeof line, p)) printf("read: %s", line);',
+  '    printf("pclose: %d\\n", pclose(p));',
+  '    printf("system: %d\\n", system("echo from-system > /tmp/sys.txt"));',
+  '    FILE *f = fopen("/tmp/sys.txt", "r");',
+  '    if (f && fgets(line, sizeof line, f)) printf("file: %s", line);',
+  '    return 0;',
+  '}',
+  'CEOF',
+  'cc po.c -o po && ./po',
+  'exit',
+  '',
+].join('\n'));
+check('popen/system session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+const po = r.stdout.split('\n');
+const expectPo = ['read: from-popen', 'pclose: 0', 'system: 0', 'file: from-system'];
+for (let i = 0; i < expectPo.length; i++) {
+  check('popen[' + i + '] = ' + JSON.stringify(expectPo[i]), po[i] === expectPo[i], JSON.stringify(po[i]));
+}
 
 // ---- second boot, same image: persistence + no re-seed ----
 r = session('ls\nexit\n');
-check('second boot exits clean', r.status === 0, String(r.status) + ' ' + r.stderr.slice(0, 300));
+check('second boot exits clean', r.status === 0, String(r.status));
 check('no re-seed on second boot', !r.stderr.includes('seeding image'), r.stderr.slice(0, 200));
-check('a.out persisted across reboot', r.stdout.split('\n')[0] === 'a.out', JSON.stringify(r.stdout.split('\n')[0]));
+const names = r.stdout.split('\n');
+check('a.out persisted across reboot', names.includes('a.out'), JSON.stringify(names.slice(0, 5)));
+check('po persisted across reboot', names.includes('po'), JSON.stringify(names.slice(0, 6)));
 
-// ---- compile errors surface as cc failure, not a wedged system ----
+// ---- failure modes leave the OS alive ----
 r = session('cc nosuch.c\necho alive\nexit\n');
-check('OS survives a failed cc (next command runs)', r.stdout.split('\n')[0] === 'alive',
-  JSON.stringify(r.stdout.split('\n')[0]));
+check('OS survives a failed cc', r.stdout.split('\n')[0] === 'alive', JSON.stringify(r.stdout.split('\n')[0]));
 check('cc error reaches stderr', /nosuch\.c/.test(r.stderr), r.stderr.slice(-300));
-check('bare exit propagates $? = 0 after echo', r.status === 0, String(r.status));
 
-// ---- unknown command: 127, flowing into $? ----
 r = session('definitely-not-a-command\nexit\n');
-check('unknown command reported', /command not found/.test(r.stderr), r.stderr.slice(-200));
+check('unknown command reported', /can't execute|not found/.test(r.stderr), r.stderr.slice(-200));
 check('unknown command is 127 via $?', r.status === 127, String(r.status));
 
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(failures === 0 ? '\nos boot (headless): PASS' : `\nos boot (headless): ${failures} FAILED`);
+console.log(failures === 0 ? '\nos boot (headless, hush): PASS' : `\nos boot (headless, hush): ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

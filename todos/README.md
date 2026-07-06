@@ -24,16 +24,17 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0005` shell port (busybox ash) — the Phase-1 acceptance test
+1. `0010` busybox coreutils (multicall /bin binaries)
 2. `0006` threads + atomics
 3. `0007` window manager / compositor — design doc first
 4. `0008` networking — AF_UNIX first
 
 (Done: `0001` signals/EINTR/exit handshake; `0002` tty + line discipline;
-`0009` kernel-owned fd table + brokered fs; `0003` pipes + job control —
-kernel Phases 1–4 complete; `0004` the os/ reference build — the OS boots
-in a tab and headless, protoshell as pid 1, `cc hello.c && ./a.out` works
-in-OS. The shell port lands on a live system now.)
+`0009` kernel-owned fd table + brokered fs; `0003` pipes + job control;
+`0004` the os/ reference build; `0005` THE SHELL — busybox hush as
+/bin/sh via the vfork-on-__spawn port: pipelines, $( ), redirects,
+here-docs, job control, popen/system — the kernel design's acceptance
+test, passed. OS.md Phase 1 is complete except coreutils.)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
 WebGPU backlogs run alongside; promote specific chunks into numbered items

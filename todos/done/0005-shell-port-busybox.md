@@ -1,6 +1,16 @@
 # 0005 — shell port: busybox ash (+ coreutils)
 
-- **Status**: queued
+- **Status**: done (2026-07-06 — busybox 1.37.0 **hush**, not ash: ash
+  hard-requires fork (Kconfig `depends on !NOMMU`) while hush's NOMMU
+  vfork+re-exec machinery maps directly onto `__spawn` via the journaling
+  shim in `vendor/busybox/port/` (design + patch table:
+  `vendor/busybox/README.md`). Acceptance green both ways:
+  `tests/kernel/test_os_boot.js` (pipelines, $( ), redirects, here-docs,
+  control flow, `cc hello.c && ./a.out`, popen/system) and
+  `tests/browser/os-boots.mjs` (interactive hush + prompt in Chromium).
+  Coreutils deviation: hush builtins (echo/printf/test/kill) + tiny native
+  cat/ls seeded into /bin; the busybox multicall port is todos/0010.
+  Dev log: `logs/2026-07-06/shell-port-busybox-hush.md`)
 - **Depends**: 0001–0004
 - **Design**: `todos/OS.md` (Phase 1); `todos/KERNEL.md` (phase 5 acceptance)
 

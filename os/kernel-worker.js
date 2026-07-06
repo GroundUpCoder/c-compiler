@@ -17,6 +17,11 @@
 'use strict';
 
 importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js');
+try {
+  // Optional libc extension (fnmatch/glob/regex — busybox hush needs it).
+  // compiler.js's getExtLibMap picks up the EXT_LIB_MAP global it defines.
+  importScripts('../libc-ext.js');
+} catch (e) { /* absent is fine; cc just lacks the ext headers */ }
 // worker globals: BLOCK_FS, runModule (host.js); KERNEL (kernel.js);
 // CompilerJS (compiler.js); OS_COMMON (os-common.js)
 
@@ -73,6 +78,18 @@ async function boot() {
       });
     },
     compile: ccCompile,
+    // project entries build repo-relative bin.json trees; the compiler
+    // needs a SYNCHRONOUS file reader, so use sync XHR — legal in a
+    // worker, and seeding is a one-off (cached in the image afterwards).
+    buildProject: function (proj) {
+      return OS_COMMON.buildProject(CompilerJS, proj, function (p) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '../' + p, false /* synchronous */);
+        xhr.send(null);
+        if (xhr.status !== 200) throw new Error(p + ': HTTP ' + xhr.status);
+        return xhr.responseText;
+      });
+    },
     log: function (m) { post({ type: 'boot-log', msg: m }); },
   });
 
@@ -87,6 +104,7 @@ async function boot() {
   });
   tty = kernel.createTty({
     output: function (b) { post({ type: 'out', bytes: b instanceof Uint8Array ? b.slice() : Uint8Array.from(b) }); },
+    interactiveOut: true,   // xterm IS a human terminal: shells go interactive
   });
 
   await kernel.boot({

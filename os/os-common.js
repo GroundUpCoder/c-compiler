@@ -136,12 +136,68 @@ function createCcDriver(CompilerJS, kfs) {
   };
 }
 
+/* ---- building a vendored bin.json project at seed time ----
+ *
+ * The manifest's `project` entries (busybox hush) are multi-file builds of
+ * repo-relative bin.json projects, compiled by the CompilerJS library over
+ * a synchronous host-file reader: fs.readFileSync under Node, synchronous
+ * XHR in the kernel worker (legal in workers, and seeding is a boot-time
+ * one-off). Returns the wasm bytes.
+ */
+function buildProject(CompilerJS, projPath, readHostFile) {
+  var dir = projPath.slice(0, projPath.lastIndexOf('/'));
+  var proj = JSON.parse(readHostFile(projPath));
+  var err = '';
+  var writeErr = function (s) { err += s; };
+
+  var pp = CompilerJS.createDefaultPPRegistry();
+  (proj.includes || []).forEach(function (inc) { pp.includePaths.push(dir + '/' + inc); });
+  (proj.compilerArgs || []).forEach(function (a) {
+    if (a.lastIndexOf('-D', 0) === 0) {
+      var def = a.substring(2), eq = def.indexOf('=');
+      if (eq >= 0) pp.defines.set(def.substring(0, eq), def.substring(eq + 1));
+      else pp.defines.set(def, '1');
+    } else if (a.lastIndexOf('-I', 0) === 0) {
+      pp.includePaths.push(dir + '/' + a.substring(2));
+    }
+  });
+  pp.fileReader = function (fp) {
+    try { return readHostFile(fp); } catch (e) { return null; }
+  };
+  var sources = (proj.sources || []).map(function (s) { return dir + '/' + s; });
+  var fsShim = { readFileSync: function (p) { return readHostFile(p); } };
+  var compilerOptions = { requireSources: [], backend: 'default' };
+  var warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
+  var units;
+  try {
+    units = CompilerJS.parseAllUnits(fsShim, pp, sources, {
+      warningFlags: warningFlags, compilerOptions: compilerOptions, writeErr: writeErr,
+    });
+  } catch (e) {
+    throw new Error('buildProject ' + projPath + ' failed:\n' + (err || e.message));
+  }
+  var linkResult = CompilerJS.linkTranslationUnits(units, compilerOptions);
+  if (linkResult.errors.length > 0) {
+    linkResult.errors.forEach(function (e) { writeErr('Link error: ' + e.message + '\n'); });
+    throw new Error('buildProject ' + projPath + ' failed:\n' + err);
+  }
+  return CompilerJS.generateCode(units, 'a.wasm', {
+    compilerOptions: compilerOptions,
+    warningFlags: warningFlags,
+    writeErr: writeErr,
+    fatalExit: function (code) { throw new Error('buildProject ' + projPath + ' fatal (' + code + '):\n' + err); },
+  });
+}
+
 /* ---- first-boot image seeding ----
  *
  * manifest (os/image.json): { version, dirs: [...], files: { "/path": entry } }
- *   entry.c    — asset name of a C source; compiled to a wasm binary at /path
- *   entry.text — asset name of a raw text file; copied verbatim to /path
- * io: { readAsset(name) -> Promise<string>, compile(argv, cwd), log(msg) }
+ *   entry.c       — asset name of a C source; compiled to a wasm binary at /path
+ *   entry.text    — asset name of a raw text file; copied verbatim to /path
+ *   entry.project — REPO-relative bin.json path; multi-file build via
+ *                   buildProject (needs io.buildProject)
+ * io: { readAsset(name) -> Promise<string>, compile(argv, cwd), log(msg),
+ *       buildProject(projPath) -> wasm bytes }
  *   (readAsset is fetch() in the browser, fs.readFile under Node — both
  *   relative to the os/ directory.)
  *
@@ -176,6 +232,12 @@ function seedImage(kfs, manifest, io) {
           log('  ' + path + ' (from ' + entry.text + ')');
         });
       }
+      if (entry.project !== undefined) {
+        var wasm = io.buildProject(entry.project);
+        writeFile(kfs, path, wasm, 0o755);
+        log('  ' + path + ' (built ' + entry.project + ', ' + wasm.length + ' bytes)');
+        return undefined;
+      }
       if (entry.c !== undefined) {
         return Promise.resolve(io.readAsset(entry.c)).then(function (src) {
           // Stage the source in the image, compile it there, clean up. The
@@ -203,6 +265,7 @@ function seedImage(kfs, manifest, io) {
 /* ---- environment exports (host.js discipline) ---- */
 var OS_COMMON = {
   createCcDriver: createCcDriver,
+  buildProject: buildProject,
   seedImage: seedImage,
   readFileBytes: readFileBytes,
   readFileText: readFileText,

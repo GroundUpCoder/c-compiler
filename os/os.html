@@ -70,6 +70,7 @@ window.addEventListener('resize', function () { fitAddon.fit(); });
 // of scraping the xterm buffer.
 window.__osOut = '';
 window.__osState = 'booting';
+window.__osLogs = [];   // boot-log/kernel lines (agent probe)
 var outDecoder = new TextDecoder();
 
 kernel.onmessage = function (e) {
@@ -79,10 +80,15 @@ kernel.onmessage = function (e) {
       term.write(m.bytes);
       window.__osOut += outDecoder.decode(m.bytes, { stream: true });
       break;
-    case 'boot-log': status(m.msg); break;
+    case 'boot-log':
+      status(m.msg);
+      window.__osLogs.push(m.msg);
+      if (window.__osLogs.length > 200) window.__osLogs.shift();
+      break;
     case 'boot-error':
       status('boot failed', true);
       window.__osState = 'error';
+      window.__osBootErr = m.msg;   // agent probe: the full failure text
       term.write('\r\n\x1b[31mboot failed:\x1b[0m\r\n' + m.msg.replace(/\n/g, '\r\n') + '\r\n');
       break;
     case 'ready':

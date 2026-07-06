@@ -298,6 +298,8 @@ KernelClient.prototype.spawnHooks = function () {
     spawn: function (spec) { return self.call(OP.SPAWN, spec); },
     wait: function (pid, options) { return self.call(OP.WAIT, { pid: pid, options: options }, true); },
     kill: function (pid, sig) { return self.call(OP.KILL, { pid: pid, sig: sig }); },
+    setpgid: function (pid, pgid) { return self.call(OP.SETPGID, { pid: pid, pgid: pgid }); },
+    getpgid: function (pid) { return self.call(OP.GETPGID, { pid: pid }); },
     sigdisp: function (sig, kind) { self.call(OP.SIGDISP, { sig: sig, kind: kind }); },
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
     sigpoll: function () { return self.sigpoll(); },
@@ -385,6 +387,9 @@ function Tty(kernel, opts) {
   this._brokered = false;
   this._cooked = [];
   this._eofFlag = false;
+  // Bridge-declared: a human terminal is attached, so std fd 1/2 should be
+  // tty-kind (isatty true -> shells prompt). See Kernel._stdOfds.
+  this.interactiveOut = !!opts.interactiveOut;
   this.termios = {
     iflag: T_ICRNL,
     oflag: T_OPOST | T_ONLCR,
@@ -632,10 +637,17 @@ Kernel.prototype._ofdUnref = function (id) {
 
 Kernel.prototype._stdOfds = function () {
   if (!this._std) {
+    // interactiveOut (a createTty opt, set by the UI bridge): fd 1/2 are
+    // THE TTY, like a real login terminal — isatty(1) turns true and
+    // shells go interactive (prompts, line editing, job control). Without
+    // it (piped/CI runs) stdout stays a plain output channel and program
+    // output is byte-clean. Writes route identically either way; only the
+    // OFD kind (and thus isatty) differs.
+    var ttyStd = this._tty && this._tty.interactiveOut;
     this._std = {
-      in_: this._makeOfd(this._tty ? 'tty' : 'null'),
-      out: this._makeOfd('out', { ch: 1 }),
-      err: this._makeOfd('out', { ch: 2 }),
+      in_: this._makeOfd(this._tty ? 'tty' : 'null', { ch: 0 }),
+      out: this._makeOfd(ttyStd ? 'tty' : 'out', { ch: 1 }),
+      err: this._makeOfd(ttyStd ? 'tty' : 'out', { ch: 2 }),
     };
   }
   return this._std;
@@ -1076,7 +1088,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         return;
       }
       if (o2.kind === 'out') { this._onOutput(pcb.pid, o2.ch, data.slice()); this._respond(pcb, { n: data.length }); return; }
-      if (o2.kind === 'tty') { this._onOutput(pcb.pid, 1, data.slice()); this._respond(pcb, { n: data.length }); return; }
+      if (o2.kind === 'tty') { this._onOutput(pcb.pid, o2.ch || 1, data.slice()); this._respond(pcb, { n: data.length }); return; }
       this._respond(pcb, { n: data.length });           // 'null'
       return;
     }
@@ -1337,6 +1349,21 @@ Kernel.prototype._pipeNotify = function (pipe) {
     }
   }
   this._recheckSelects();
+};
+
+/* ---- process groups ----
+ * setpgid(pid, pgid): pid 0 = the caller, pgid 0 = "target's own pid".
+ * POSIX scoping kept simple for one user: the target must be the caller or
+ * one of its children, in the same session. (Latent since Phase 1 — the
+ * dispatch existed but nothing defined this until the shell port's libc
+ * wrappers landed, todos/0005.) */
+Kernel.prototype._setpgid = function (pcb, pid, pgid) {
+  var t = (pid === 0) ? pcb : this._procs.get(pid);
+  if (!t || t.state === STATE_ZOMBIE) return { errno: 'ESRCH' };
+  if (t !== pcb && !pcb.children.has(t.pid)) return { errno: 'ESRCH' };
+  if (t.sid !== pcb.sid) return { errno: 'EPERM' };
+  t.pgid = (pgid > 0) ? pgid : t.pid;
+  return {};
 };
 
 /* ---- wait / reap ---- */

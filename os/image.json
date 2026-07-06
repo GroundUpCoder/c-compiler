@@ -1,9 +1,29 @@
 {
-  "version": 1,
-  "dirs": ["/bin", "/etc", "/root"],
+  "version": 5,
+  "dirs": [
+    "/bin",
+    "/etc",
+    "/root",
+    "/tmp"
+  ],
   "files": {
-    "/bin/sh": { "c": "protoshell.c" },
-    "/bin/cc": { "c": "cc.c" },
-    "/root/hello.c": { "text": "hello.c" }
+    "/bin/sh": {
+      "project": "vendor/busybox/bin.json"
+    },
+    "/bin/psh": {
+      "c": "protoshell.c"
+    },
+    "/bin/cc": {
+      "c": "cc.c"
+    },
+    "/root/hello.c": {
+      "text": "hello.c"
+    },
+    "/bin/cat": {
+      "c": "cat.c"
+    },
+    "/bin/ls": {
+      "c": "ls.c"
+    }
   }
 }

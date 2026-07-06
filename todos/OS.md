@@ -115,7 +115,7 @@ pgid atomically at spawn).
 | Processes | Done — kernel.js Phases 1–4 (todos/done/0001–0003, 0009): async signal delivery, EINTR, tty line discipline + control-char signals, kernel-owned fd tables + brokered fs, pipes as OFDs + SIGPIPE, job control (stop/cont, WUNTRACED/WCONTINUED, SIGTTIN). |
 | Terminal | Done for Phase 1 — the tty is a kernel object (termios, canonical/raw, echo, Ctrl-C→SIGINT, SIGWINCH); xterm.js is the dumb UI bridge (`os/os.html`). |
 | Reference build | **Boots** (todos/done/0004): `os/os.html` in a tab over OPFS, `os/boot.js` headless on stdio; first boot self-seeds from `os/image.json` (C sources compiled by the kernel's cc driver); `cc hello.c && ./a.out` works in-OS. |
-| Shell | Protoshell only (`os/protoshell.c`, pid 1): builtins + spawn + `&&` + foreground job handoff. The real port is `todos/0005`; libc already points at `/bin/sh` (`popen`, `system`, `_PATH_BSHELL`). |
+| Shell | **Done** (todos/done/0005): busybox 1.37.0 hush as `/bin/sh`, ported via the vfork-on-__spawn journaling shim (`vendor/busybox/`). Pipelines, `$( )`, redirects, here-docs, control flow, interactive mode with prompt/line editing, `popen()`/`system()` all live. Coreutils beyond tiny cat/ls: `todos/0010`. |
 | Threads | Not implemented. `_Atomic` parses but doesn't codegen; `pthread.h`/`threads.h` are stubs. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
 | Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
@@ -187,11 +187,12 @@ The single highest-leverage project in the repo. **The substrate is DONE**
 (kernel.js Phases 1–4, `todos/done/0001–0004` + `0009`; design in
 `todos/KERNEL.md`); the shell port (`todos/0005`) is its acceptance test.
 
-- **Port a real shell** (busybox — see the shell-choice open question below)
-  to `/bin/sh`. Patch fork points: plain command execution becomes spawn;
-  subshells/`$( )` either spawn the shell binary itself with the command
-  text, or run in-process where safe. This also instantly unlocks the
-  already-written `popen()`/`system()`. ← THE remaining Phase-1 item.
+- ~~Port a real shell~~ DONE (0005): busybox hush in its NOMMU
+  configuration — every fork-shaped site maps onto `__spawn` through the
+  journaling vfork shim (`vendor/busybox/port/`); subshells/`$( )` re-exec
+  `/bin/sh` with serialized state (upstream's own NOMMU machinery).
+  `popen()`/`system()` lit up as predicted. The kernel needed NO
+  workarounds — the acceptance criterion held.
 - ~~Signals~~ DONE (0001): safe-point delivery, SIGPEND on the kernel page,
   EINTR/SA_RESTART, default actions, SIGCHLD, ordered exit handshake.
 - ~~termios/tty~~ DONE (0002): kernel-object tty, full termios, canonical/
@@ -262,17 +263,11 @@ matches it:
   pure-compute loops are uninterruptible by design in v1, SIGKILL still
   works; `--signal-polls` (loop back-edge checks) recorded as a future
   compiler flag if a port demands it.
-- **Shell choice** (the 0005 decision): busybox ash (drags in coreutils for
-  free) vs busybox hush vs dash. Key input: **NOMMU Linux has no fork()
-  either**, and busybox has lived there for years — its NOMMU builds use
-  vfork + re-exec-self with handed-over state, which is exactly
-  spawn-shaped. Upstream, **hush is the NOMMU-capable shell** (ash
-  historically requires real fork; its Kconfig gates on MMU), so hush's
-  subshell/pipeline paths already have the "respawn yourself" structure our
-  posix_spawn model needs, while ash would need us to patch every fork
-  site by hand. Still leaning busybox (coreutils dividend) — but hush
-  first, ash only if hush's POSIX coverage disappoints. Verify NOMMU
-  specifics against the vendored source when 0005 starts.
+- ~~Shell choice~~ DECIDED + DONE (0005): busybox hush. The NOMMU
+  reasoning held up exactly — ash's Kconfig gates on `!NOMMU` (hard fork
+  dependency) while hush's vfork+re-exec-self machinery mapped onto
+  `__spawn` with three patched call sites and a journaling shim
+  (`vendor/busybox/README.md` has the full patch table).
 - **Surface transport for the compositor**: shared-memory framebuffer
   (simple, works today, CPU blit) vs WebGPU texture sharing (fast, but
   cross-worker GPU resource sharing is awkward). Probably shm first.

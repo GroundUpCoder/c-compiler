@@ -625,6 +625,27 @@ function createFileSystem({ fs, ctx }) {
         entry.refs = (entry.refs || 1) + 1;
         return allocFd(entry);
       },
+      // libc fcntl arrives as __fcntl3 (see fcntl.h): only the dup
+      // commands act here; everything else reports success (locking is
+      // meaningless single-user — the SQLite convention).
+      __fcntl3: function (fd, cmd, arg) {
+        if (cmd === 0 || cmd === 1030) {   /* F_DUPFD / F_DUPFD_CLOEXEC */
+          if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+          let newfd = Math.max(0, arg | 0);
+          while (newfd < fdTable.length && fdTable[newfd]) newfd++;
+          while (fdTable.length <= newfd) fdTable.push(null);
+          const entry = fdTable[fd];
+          if (entry.type === 'pipe') {
+            entry.pipe.refs[entry.pipeEnd]++;
+            fdTable[newfd] = { type: 'pipe', pipe: entry.pipe, pipeEnd: entry.pipeEnd, position: null };
+          } else {
+            entry.refs = (entry.refs || 1) + 1;
+            fdTable[newfd] = entry;
+          }
+          return newfd;
+        }
+        return 0;
+      },
       dup2: function (oldfd, newfd) {
         if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
         if (newfd < 0) { setErrnoName('EBADF'); return -1; }
@@ -4183,11 +4204,13 @@ var BLOCK_FS = (function () {
         var buf = new Uint8Array(memory.buffer, buf_ptr, bufsize);
         return this.readlink(readString(path_ptr), buf, bufsize);
       }),
-      fcntl: wrap(function (fd, cmd) {
-        // F_DUPFD (cmd == 0)
-        if (cmd === 0) {
-          var arg = arguments[2] || 0;
-          return this.fcntl_dupfd(fd, arg);
+      // libc fcntl reaches us as __fcntl3(fd, cmd, arg) — the C inline
+      // unpacks its variadic int (todos/0005: the shell's fd-save dance
+      // needs a REAL F_DUPFD; before that the C fcntl was a no-op).
+      __fcntl3: wrap(function (fd, cmd, arg) {
+        // F_DUPFD (0) / F_DUPFD_CLOEXEC (1030; CLOEXEC untracked in v1)
+        if (cmd === 0 || cmd === 1030) {
+          return this.fcntl_dupfd(fd, arg | 0);
         }
         // F_GETFL (cmd == 3) — return file access mode
         if (cmd === 3) {
@@ -4621,6 +4644,20 @@ function createSpawn(ctx, hooks) {
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return 0;
       },
+      // Process groups (libc setpgid/getpgid/getpgrp — landed with the
+      // shell port, todos/0005; the kernel RPCs existed since Phase 1).
+      __spawn_setpgid: function (pid, pgid) {
+        if (!hooks.setpgid) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const r = hooks.setpgid(pid, pgid);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        return 0;
+      },
+      __spawn_getpgid: function (pid) {
+        if (!hooks.getpgid) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const r = hooks.getpgid(pid);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        return r.pgid | 0;
+      },
       // Mirror a signal-disposition change to the kernel so kill() applies the
       // right action (terminate only when the target left the signal at DFL).
       __on_sigdisp: function (sig, kind) { if (hooks.sigdisp) hooks.sigdisp(sig, kind); },
@@ -4714,14 +4751,19 @@ function createSpawn(ctx, hooks) {
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       return 0;
     };
+    // v1 has exactly ONE tty, so any fd that IS a tty maps to it — and
+    // shells hold the tty on a high dup'd fd (hush parks it at 255), so
+    // gating on fd<=2 wedged the interactive init (todos/0005). Accepting
+    // any fd >= 0 is the v1-honest shape; a real per-fd check needs the
+    // fd table, which lives kernel-side.
     env.__tty_getpgrp = function (fd) {
-      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
       const r = hooks.ttyGetpgrp();
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       return r.pgid;
     };
     env.__tty_setpgrp = function (fd, pgid) {
-      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
       const r = hooks.ttySetpgrp(pgid);
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       return 0;
@@ -4769,6 +4811,7 @@ function createNullSpawn(ctx) {
   // no owner to mirror to. __sig_pause reports ENOSYS so pause() never hangs.
   return { [ENV_KEY]: {
     __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys,
+    __spawn_setpgid: enosys, __spawn_getpgid: enosys,
     __on_sigdisp: function () {}, __on_sigmask: function () {},
     __sig_pause: enosys, __compile: enosys,
   } };

@@ -14317,21 +14317,20 @@ function constEvalExpr(expr, policy) {
         // addr + int, addr - int (pointer arithmetic: scale by pointee size)
         if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
           const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
-          const elemSize = elemType ? elemType.size : 1;
+          const elemSize = elemType ? (elemType.size || 1) : 1;  // void*: gcc ext, 1
           const offset = Number(r.intVal) * elemSize;
           return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
         }
         // int + addr
         if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
           const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
-          const elemSize = elemType ? elemType.size : 1;
+          const elemSize = elemType ? (elemType.size || 1) : 1;  // void*: gcc ext, 1
           return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
         }
         // addr - addr (pointer difference)
         if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
           const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
-          const elemSize = elemType ? elemType.size : 1;
-          if (elemSize === 0) return null;
+          const elemSize = elemType ? (elemType.size || 1) : 1;  // void*: gcc ext, 1
           return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
         }
         // addr comparisons
@@ -15790,9 +15789,17 @@ class CodeGenerator {
   }
 
   // --- Pointer scaling helpers ---
+  // sizeof(pointee) for pointer arithmetic. void* (and function pointers)
+  // scale by 1 — the gcc/clang extension (sizeof(void)==1). Without the
+  // clamp, void* + n multiplied by 0 (silent no-op) and void* difference
+  // divided by 0 (trap) — see tests/unit/conformance/void_ptr_arith.
+  ptrArithElemSize(elemType) {
+    const size = this.sizeOf(elemType);
+    return size > 0 ? size : 1;
+  }
   // Multiply the i32 value already on top of the stack by sizeof(elemType).
   emitScaleByElemSize(elemType) {
-    const elemSize = this.sizeOf(elemType);
+    const elemSize = this.ptrArithElemSize(elemType);
     if (elemSize !== 1) {
       this.body.i32Const(elemSize);
       this.body.aop(WT_I32, ALU.OP_MUL);
@@ -15800,7 +15807,7 @@ class CodeGenerator {
   }
   // Divide the i32 value already on top of the stack by sizeof(elemType) (signed).
   emitDivByElemSize(elemType) {
-    const elemSize = this.sizeOf(elemType);
+    const elemSize = this.ptrArithElemSize(elemType);
     if (elemSize !== 1) {
       this.body.i32Const(elemSize);
       this.body.aop(WT_I32, ALU.OP_DIV, true);
@@ -19948,7 +19955,7 @@ extern int errno;
 #define EINPROGRESS 115
   `,
   "fcntl.h": `
-#pragma once
+#pragma once\n#include <stdarg.h>
 #include <unistd.h>
 #include <sys/types.h>
 #define O_RDONLY  0
@@ -19986,12 +19993,21 @@ struct flock {
 
 __import int __open_impl(const char *path, int flags, int mode);
 int open(const char *path, int flags, ...);
+#define F_DUPFD_CLOEXEC 1030  /* Linux value; CLOEXEC is untracked (v1) */
+/* Real fcntl for the int-argument commands (F_DUPFD and friends reach the
+ * host — the shell's fd-save dance needs them, todos/0005). Lock commands
+ * (F_SETLK etc.) pass arg 0 and the host returns success: SQLite's
+ * advisory locking stays a no-op in this single-user runtime. */
+__import int __fcntl3(int fd, int cmd, int arg);
 static inline int fcntl(int fd, int cmd, ...) {
-  (void)fd; (void)cmd;
-  /* No-op locking: SQLite uses fcntl() for advisory file locking which
-   * doesn't apply in our single-threaded wasm runtime. Return success
-   * so SQLite believes it acquired/released locks. */
-  return 0;
+  int arg = 0;
+  if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC || cmd == F_SETFD || cmd == F_SETFL) {
+    va_list ap;
+    va_start(ap, cmd);
+    arg = va_arg(ap, int);
+    va_end(ap);
+  }
+  return __fcntl3(fd, cmd, arg);
 }
   `,
   "fenv.h": `
@@ -21294,6 +21310,12 @@ struct __spawn_spec {
 __import int __spawn(const struct __spawn_spec *spec);        /* -> pid | -1+errno */
 __import int __spawn_wait(int pid, int *status, int options); /* -> pid | -1+errno */
 __import int __spawn_kill(int pid, int sig);                  /* -> 0   | -1+errno */
+__import int __spawn_setpgid(int pid, int pgid);              /* -> 0   | -1+errno */
+__import int __spawn_getpgid(int pid);                        /* -> pgid| -1+errno */
+/* plain int like the imports above: pid_t's typedef comes later */
+static inline int setpgid(int pid, int pgid) { return __spawn_setpgid(pid, pgid); }
+static inline int getpgid(int pid)           { return __spawn_getpgid(pid); }
+static inline int getpgrp(void)              { return __spawn_getpgid(0); }
 /* Run the host's in-browser C compiler (it has no wasm image to exec). Packs the
    result into buf as: int exitCode, int outLen, int errLen, then outLen stdout
    bytes, then errLen stderr bytes. Returns total bytes written, or -1+errno
@@ -21305,7 +21327,12 @@ __import int __compile(const char *cwd, char *const *argv, char *buf, int cap);
 #define _SC_OPEN_MAX 4
 static inline int   fork(void)              { return -1; }
 static inline int   execve(const char *p, char *const a[], char *const e[]) { (void)p; (void)a; (void)e; return -1; }
-static inline void  _exit(int s)            { (void)s; for (;;) {} }
+/* _exit: terminate WITHOUT atexit handlers / stdio flushing (KERNEL.md
+   "Exit and teardown": same __exit handshake as exit(), minus step 1).
+   Was a spin-forever stub from the pre-kernel era — hush's exit path hung
+   on it (todos/0005). The loop after __exit only satisfies noreturn. */
+__import void __exit(int status);
+static inline void  _exit(int s)            { __exit(s); for (;;) {} }
 static inline long  sysconf(int name)       { (void)name; return -1; }
 static inline int   setuid(unsigned uid)    { (void)uid; return -1; }
 static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
@@ -26613,6 +26640,17 @@ let _extLibMap = undefined;
 function getExtLibMap() {
   if (_extLibMap !== undefined) return _extLibMap;
   _extLibMap = {};
+  // A host that loaded libc-ext.js as a sibling SCRIPT (browser worker via
+  // importScripts, QuickJS via evalScript) exposes its top-level
+  // `const EXT_LIB_MAP` in the shared global lexical scope — honor it
+  // first; the filesystem lookup below is the Node path.
+  try {
+    /* eslint-disable no-undef */
+    if (typeof EXT_LIB_MAP !== "undefined" && EXT_LIB_MAP) {
+      _extLibMap = EXT_LIB_MAP;
+      return _extLibMap;
+    }
+  } catch (e) { /* TDZ or absent: fall through */ }
   // Locate libc-ext.js next to compiler.js. __dirname works when compiler.js
   // is run or required under Node; the browser shim (new Function(...)) has no
   // __dirname, so fall back to argv[1]'s directory — where the app mounts the

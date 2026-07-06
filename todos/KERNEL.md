@@ -32,7 +32,8 @@ STOPPED state, cooperative stop via `KP_FLAGS.STOP` parked at RPC-entry /
 sigpoll safe points, SIGCONT resume regardless of disposition,
 `WUNTRACED`/`WCONTINUED` (each transition reported once), SIGTTIN (EIO
 when ignored/blocked) for background brokered tty readers. Phase 5 — the
-shell port — is the acceptance gate (`todos/0005`).
+shell-port acceptance gate — **PASSED** (`todos/done/0005`): busybox hush
+runs as /bin/sh with zero kernel workarounds.
 
 ## Why this exists
 
@@ -454,9 +455,12 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
    pipe wait-queues + SIGPIPE. DONE (todos/done/0003; setpgid/getpgid RPCs
    exist kernel-side — the thin libc wrappers land with the shell port that
    needs them).
-5. **Acceptance: the shell port** (`todos/OS.md` Phase 1) — busybox ash lands
-   on this and `popen()`/`system()` light up. The shell is the integration
-   test; if it needs a kernel workaround, the kernel design was wrong.
+5. **Acceptance: the shell port** — PASSED (todos/done/0005): busybox hush
+   landed on this kernel with ZERO kernel workarounds (the port's patches
+   are all shell-side: the vfork journaling shim + libc gaps it exposed —
+   `_exit`, real `fcntl(F_DUPFD)`, setpgid wrappers, the tty-fd gate).
+   `popen()`/`system()` lit up as written. Pipelines, `$( )`, here-docs,
+   job control, interactive line editing all ride Phases 1–4 unchanged.
 
 ## Settled decisions (don't re-litigate without cause)
 

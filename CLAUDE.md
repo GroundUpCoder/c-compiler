@@ -63,7 +63,9 @@ hang-class miscompiles fail fast instead of stalling the suite.
 
 - **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
-- **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux)
+- **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
+  (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
+  journaling shim; patch table in `vendor/busybox/README.md`)
 - **Libraries**: `zlib`, `libpng`, `freetype`, `libgit2` (@44c05e5, core only; builds + `git_index_open` smoke test runs — used as a large-codebase stress test, see `vendor/libgit2/README.md`)
 - **Frontend infra (JS, not C)**: `xterm` (terminal widget), `codemirror` (editor widget)
 - **Project-specific tools**: `disw` (WASM disassembler), `hello` (minimal smoke test)
@@ -116,8 +118,11 @@ same kernel/manifest under Node with the tty on stdio
 `image.json`: paths map to **C sources compiled at seed time** by the cc
 driver in `os-common.js` (no build step); bump `image.json`'s `version`
 after editing seeded sources (`protoshell.c`, `cc.c`) or existing images
-won't re-seed. pid 1 is `protoshell.c` until the shell port (todos/0005).
-Tests: `tests/kernel/test_os_boot.js` (headless, in the kernel suite);
+won't re-seed. pid 1 is busybox hush (`/bin/sh`, built at seed time from
+`vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`. The tty's
+`interactiveOut` opt makes fd 1/2 tty-kind (isatty true → hush goes
+interactive); piped runs stay byte-clean. Tests:
+`tests/kernel/test_os_boot.js` (headless, in the kernel suite);
 `tests/browser/os-boots.mjs` (real Chromium, manual).
 
 ## BlockFS (host.js) and its tests
