@@ -82,11 +82,27 @@ async function boot() {
     // needs a SYNCHRONOUS file reader, so use sync XHR — legal in a
     // worker, and seeding is a one-off (cached in the image afterwards).
     buildProject: function (proj) {
+      // Memoize reads INCLUDING misses: include resolution probes several
+      // directories per #include across ~40 TUs, which is ~18k lookups for
+      // the hush build but only a few hundred distinct paths — uncached,
+      // each one is a BLOCKING localhost round trip and first boot spends
+      // ~7s in XHR instead of ~1.5s compiling. Safe because the tree can't
+      // change mid-seed.
+      var xhrCache = new Map();
       return OS_COMMON.buildProject(CompilerJS, proj, function (p) {
+        if (xhrCache.has(p)) {
+          var hit = xhrCache.get(p);
+          if (hit === null) throw new Error(p + ': HTTP 404 (cached)');
+          return hit;
+        }
         var xhr = new XMLHttpRequest();
         xhr.open('GET', '../' + p, false /* synchronous */);
         xhr.send(null);
-        if (xhr.status !== 200) throw new Error(p + ': HTTP ' + xhr.status);
+        if (xhr.status !== 200) {
+          xhrCache.set(p, null);
+          throw new Error(p + ': HTTP ' + xhr.status);
+        }
+        xhrCache.set(p, xhr.responseText);
         return xhr.responseText;
       });
     },
