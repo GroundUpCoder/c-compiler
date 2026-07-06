@@ -35,15 +35,19 @@ Orientation docs, in reading order: `todos/README.md` (queue + next-up),
 1. **`0010` busybox coreutils** — real applets in /bin; replaces the tiny
    `os/cat.c`/`os/ls.c` stopgaps. The vendor infrastructure from 0005 is
    waiting for it. Decision to make early: multicall vs per-applet builds.
-2. `0006` threads + atomics (big; compiler + host joint effort)
-3. `0007` WM/compositor — design doc first
-4. `0008` networking — AF_UNIX first
+2. `0007` WM/compositor — design doc first
+3. `0008` networking — AF_UNIX first
+
+(`0006` threads + atomics was **deferred indefinitely** on 2026-07-07 —
+processes are the parallelism unit; rationale in `todos/0006` +
+`logs/2026-07-07/threads-atomics-deferral.md`. Don't re-open without a
+port that hard-requires pthreads.)
 
 ## Lingering small items (none blocking)
 
-- **Compiler crash to fix someday**: `__attribute__((aligned(N)))` after an
-  array declarator → internal error (top entry in
-  `todos/CONFORMANCE-REMAINING.md` §compiler.js; busybox works around it).
+- ~~Compiler crash: `__attribute__((aligned(N)))`~~ — fixed 2026-07-07
+  (turned out to be every-position, not just after-array; busybox ALIGN*
+  workaround reverted; see `logs/2026-07-07/aligned-attr-fix.md`).
 - **Interactive job control** (Ctrl-Z/fg/bg in the browser tab) works by
   construction and the kernel pieces are unit-tested, but no automated
   end-to-end test drives hush's `fg`/`bg` interactively — needs a pty-ish

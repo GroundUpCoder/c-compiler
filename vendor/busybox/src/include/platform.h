@@ -339,16 +339,7 @@ typedef unsigned smalluint;
 #define fdprintf dprintf
 
 /* Useful for defeating gcc's alignment of "char message[]"-like data */
-/* WASM PORT PATCH: this compiler chokes on aligned() after an array
- * declarator, and wasm data placement doesn't benefit — all empty. */
-#if defined(__wasm__)
-# define ALIGN1
-# define ALIGN2
-# define ALIGN4
-# define ALIGN8
-# define ALIGN_INT
-# define ALIGN_PTR
-#elif !defined(__s390__)
+#if !defined(__s390__)
     /* on s390[x], non-word-aligned data accesses require larger code */
 # define ALIGN1 __attribute__((aligned(1)))
 # define ALIGN2 __attribute__((aligned(2)))
@@ -359,11 +350,9 @@ typedef unsigned smalluint;
 # define ALIGN2
 # define ALIGN4
 #endif
-#if !defined(__wasm__)
 #define ALIGN8     __attribute__((aligned(8)))
 #define ALIGN_INT  __attribute__((aligned(sizeof(int))))
 #define ALIGN_PTR  __attribute__((aligned(sizeof(void*))))
-#endif
 
 /*
  * For 0.9.29 and svn, __ARCH_USE_MMU__ indicates no-mmu reliably.

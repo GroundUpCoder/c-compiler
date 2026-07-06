@@ -9289,8 +9289,17 @@ class Parser {
           attrs.aligned = Math.max(attrs.aligned, 8);
         } else {
           const alignExpr = this.parseAssignmentExpression();
-          const v = this._constEvalInt(alignExpr);
-          if (v !== null) attrs.aligned = Math.max(attrs.aligned, Number(v));
+          const v = constEvalInt(alignExpr);
+          if (v !== null) {
+            const n = Number(v);
+            // GCC: "requested alignment is not a positive power of 2".
+            // 2^28 matches GCC's MAX_OFILE_ALIGNMENT-class cap; anything
+            // bigger is a typo, not a request.
+            if (n <= 0 || (n & (n - 1)) !== 0 || n > (1 << 28)) {
+              this.error(nameTok, `aligned(${v}) is not a positive power of 2 (or exceeds the supported maximum)`);
+            }
+            attrs.aligned = Math.max(attrs.aligned, n);
+          }
         }
         this.expect(")");
       } else {
@@ -14444,6 +14453,8 @@ class CodeGenerator {
     this.paramMemoryOffsets = new Map();
     this.compoundLiteralOffsets = new Map();
     this.frameSize = 0;
+    this.frameAlign = 16;
+    this.frameBaseLocalIdx = -1;
     this.savedSpLocalIdx = 0;
     this.currentFuncLocals = null;
     this.nextLocalIdx = 0;
@@ -14595,6 +14606,16 @@ class CodeGenerator {
 
   // --- Frame address ---
   emitFrameAddr(offset) {
+    if (this.frameBaseLocalIdx >= 0) {
+      // Over-aligned frame: base was masked in the prologue and lives in
+      // its own local; offsets are relative to that base directly.
+      this.body.localGet(this.frameBaseLocalIdx);
+      if (offset !== 0) {
+        this.body.i32Const(offset);
+        this.body.aop(WT_I32, ALU.OP_ADD);
+      }
+      return;
+    }
     this.body.localGet(this.savedSpLocalIdx);
     const adj = offset - this.frameSize;
     if (adj !== 0) {
@@ -15070,6 +15091,8 @@ class CodeGenerator {
     this.paramMemoryOffsets.clear();
     this.compoundLiteralOffsets.clear();
     this.frameSize = 0;
+    this.frameAlign = 16;
+    this.frameBaseLocalIdx = -1;
     // Eager peek: do we have any frame-scope compound literals?
     let hasFrameCompoundLiterals = false;
     if (funcDef.body) {
@@ -15083,9 +15106,11 @@ class CodeGenerator {
     if (memoryVars.length > 0 || memoryParams.length > 0 || hasFrameCompoundLiterals) {
       this.savedSpLocalIdx = this.allocLocal(WT_I32);
       let offset = 0;
+      let maxAlign = 16;
       for (const v of memoryVars) {
         let a = this.alignOf(v.type);
         if (v.requestedAlignment > 0 && v.requestedAlignment > a) a = v.requestedAlignment;
+        if (a > maxAlign) maxAlign = a;
         offset = (offset + a - 1) & ~(a - 1);
         this.localArrayOffsets.set(v, offset);
         offset += this.sizeOf(v.type);
@@ -15110,6 +15135,14 @@ class CodeGenerator {
         }
       }
       this.frameSize = (offset + 15) & ~15;
+      // Over-aligned frame: some local requested alignment beyond the
+      // stack's guaranteed 16 (__attribute__((aligned(N)))). The prologue
+      // masks the frame base down to maxAlign and frame addressing switches
+      // from savedSp-relative to a dedicated base local.
+      if (maxAlign > 16) {
+        this.frameAlign = maxAlign;
+        this.frameBaseLocalIdx = this.allocLocal(WT_I32);
+      }
     }
 
     // Warn when a single function's stack frame is at or above the
@@ -15177,6 +15210,15 @@ class CodeGenerator {
       this.body.localGet(this.savedSpLocalIdx);
       this.body.i32Const(this.frameSize);
       this.body.aop(WT_I32, ALU.OP_SUB);
+      if (this.frameBaseLocalIdx >= 0) {
+        // Over-aligned frame: round the base down to frameAlign (consumes up
+        // to frameAlign-1 extra stack bytes) and keep it in a local — the
+        // epilogue still restores savedSp, so this needs no unwinding.
+        this.body.i32Const(-this.frameAlign);
+        this.body.aop(WT_I32, ALU.OP_AND);
+        this.body.localSet(this.frameBaseLocalIdx);
+        this.body.localGet(this.frameBaseLocalIdx);
+      }
       this.body.globalSet(this.stackPointerGlobalIdx);
       // Copy MEMORY parameters
       for (const [paramVar, offset] of this.paramMemoryOffsets) {

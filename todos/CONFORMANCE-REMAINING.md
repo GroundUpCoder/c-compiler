@@ -51,13 +51,15 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
 
 ## compiler.js
 
-- **`__attribute__((aligned(N)))` after an array declarator crashes the
-  compiler** (`this._constEvalInt is not a function` — an internal error, not
-  a diagnostic): `static const char x[] __attribute__((aligned(1))) = "a";`.
-  Found porting busybox (its ALIGN1 idiom; the port defines ALIGN* empty
-  under `__wasm__` as a workaround, `vendor/busybox/src/include/platform.h`).
-  Repro is one line; fix is wiring the attribute path's const-eval helper.
-  (Found 2026-07-06 during todos/0005.)
+- ~~**`__attribute__((aligned(N)))` after an array declarator crashes the
+  compiler**~~ — FIXED 2026-07-07 (`tests/unit/conformance/parse_attr_aligned_arg`
+  + `diag_attr_aligned_pow2`): the attribute handler called a nonexistent
+  `this._constEvalInt` — and it crashed in EVERY declarator position with any
+  argument, not just after arrays (busybox ALIGN1 was merely where it was
+  found). Fixed to call the free `constEvalInt`; statics honor any power-of-2
+  (allocateStatic), locals > 16 get an over-aligned frame (prologue masks the
+  base into a dedicated local); non-power-of-2 now diagnosed like gcc/clang.
+  The busybox ALIGN* workaround patch was reverted.
 - **Volatile accesses vs the inliner**: `twice(mmio)` inlines to two volatile
   reads, `ignore(mmio)` to zero (C11 5.1.2.3 — access count is observable).
   Fix: EIdent/deref of volatile-qualified type must not be UNRESTRICTED
