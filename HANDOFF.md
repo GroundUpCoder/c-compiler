@@ -1,4 +1,4 @@
-# Handoff — start of thread (written 2026-07-06, after todos/0005)
+# Handoff — start of thread (updated 2026-07-06, after the 0005 arc + fresh-pull fixes)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,21 +7,27 @@
 
 ## Where the repo stands
 
-One day's arc (2026-07-06, five commits `0b06aa4..f2cc759`, all green, all
-pushed): kernel Phase 4 (pipes + job control) → the bootable `os/` reference
-build → **busybox hush as `/bin/sh`** — the kernel design's acceptance test,
-passed with zero kernel workarounds. OS.md Phase 1 is complete except
-coreutils. Try it:
+One day's arc (2026-07-06, eight commits `0b06aa4..5f00e19`, all green,
+all pushed): kernel Phase 4 (pipes + job control) → the bootable `os/`
+reference build → **busybox hush as `/bin/sh`** (the kernel design's
+acceptance test, passed with zero kernel workarounds) → fresh-pull fixes
+after the user tried it (serve.js now prints the real entry URL; first
+browser boot cut 7.5s → 2.3s by memoizing the seed-time sync-XHR reads —
+it was 18,722 blocking include-probe requests, not slow compilation).
+OS.md Phase 1 is complete except coreutils. Verified working from a fresh
+pull by the user. Try it:
 
 ```bash
-node serve.js .                        # → open /os/os.html: real shell in a tab
+node serve.js .    # prints http://localhost:PORT/os/os.html — open THAT
+                   # (~2s first boot while it compiles the userland into
+                   #  OPFS; instant + persistent afterwards)
 printf 'echo hi | cat\nexit\n' | node os/boot.js   # same OS headless
-node tests/kernel/run.js               # 10/10 (includes the OS acceptance)
+node tests/kernel/run.js                           # 10/10, incl. OS acceptance
 ```
 
 Orientation docs, in reading order: `todos/README.md` (queue + next-up),
 `todos/OS.md` (north star + phase status), `todos/KERNEL.md`,
-`vendor/busybox/README.md` (the port + its patch table), and the three
+`vendor/busybox/README.md` (the port + its patch table), and the four
 `logs/2026-07-06/*.md` dev logs for the why of everything above.
 
 ## The queue (todos/README.md is authoritative)
@@ -43,6 +49,12 @@ Orientation docs, in reading order: `todos/README.md` (queue + next-up),
   end-to-end test drives hush's `fg`/`bg` interactively — needs a pty-ish
   harness (`os/boot.js --tty-out` is the hook) or a Playwright script that
   types Ctrl-Z. Worth adding when touching the shell again.
+- **The first-run path has no automated test** (the fresh-pull 404 was
+  invisible to the browser test because it navigates straight to the
+  page — see `logs/2026-07-06/first-boot-ux-and-seeding-perf.md`). A tiny
+  "curl the printed URL" check would close it.
+- `tools/mkimage.js` (pre-baked image blob) is the recorded next step if
+  first-boot latency ever matters beyond the dev loop.
 - Bare `$(trap)` doesn't report parent traps (vendor README "Known
   limitations"; niche POSIX idiom, everything else about traps works).
 - `tests/browser/os-boots.mjs` is manual (repo convention for browser
