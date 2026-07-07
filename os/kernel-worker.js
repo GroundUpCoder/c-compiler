@@ -22,6 +22,13 @@
 //                                                the mixer's output ring
 //                                                (todos/0017) — play with
 //                                                host.js createAudioReceiver
+//                   {type:'pointer-lock', wanted}  relative mouse (todos/0018):
+//                                                the focused surface wants the
+//                                                pointer lock (page arms
+//                                                click-to-lock / exits); the
+//                                                page reports transitions back
+//                                                as a {kind:'lockchange'}
+//                                                wm-input event
 'use strict';
 
 importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'compositor.js');
@@ -138,6 +145,7 @@ async function boot() {
     compile: ccCompile,
     onOutput: function (pid, fd, bytes) { post({ type: 'out', bytes: bytes }); },
     onHalt: function (status) { post({ type: 'halt', status: status }); },
+    onPointerLock: function (wanted) { post({ type: 'pointer-lock', wanted: wanted }); },
     log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
   });
   tty = kernel.createTty({

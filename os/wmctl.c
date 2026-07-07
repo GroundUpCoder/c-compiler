@@ -8,6 +8,7 @@
  *   wmctl resize SID W H              asks the client; applies at its ack
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
+ *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
  *
  * SID 0 targets the focused window (key/click/shot).
@@ -29,6 +30,7 @@ static int usage(void) {
         "       wmctl resize SID W H\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
+        "       wmctl relmove SID DX DY\n"
         "       wmctl shot SID|screen [FILE]\n");
     return 2;
 }
@@ -46,10 +48,11 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[4] = "---";
+        char flags[5] = "----";
         if (r.flags & WMP_F_FOCUSED)    flags[0] = 'f';
         if (r.flags & WMP_F_MINIMIZED)  flags[1] = 'm';
         if (r.flags & WMP_F_BORDERLESS) flags[2] = 'b';
+        if (r.flags & WMP_F_RELMOUSE)   flags[3] = 'r';
         r.title[31] = 0;
         printf("%d\t%d\t%dx%d+%d+%d\t%d\t%s\t%s\n",
                r.sid, r.pid, r.w, r.h, r.x, r.y, r.z, flags, r.title);
@@ -131,6 +134,12 @@ int main(int argc, char **argv) {
         if (wmp_cmd(fd, WMP_INJECT_KEY, a, 5)) return fail("no such window");
         a[1] = 0;
         return wmp_cmd(fd, WMP_INJECT_KEY, a, 5) ? fail("no such window") : 0;
+    }
+    if (!strcmp(cmd, "relmove")) {      /* relative motion (todos/0018) */
+        if (argc < 5) return usage();
+        int32_t dx = f32bits((float)atoi(argv[3])), dy = f32bits((float)atoi(argv[4]));
+        int32_t a[6] = { sid, 4 /* rel */, dx, dy, 0, 0 };
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
     }
     if (!strcmp(cmd, "click")) {
         if (argc < 5) return usage();

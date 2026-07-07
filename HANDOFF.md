@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-08, after 0019 landed)
+# Handoff — start of thread (updated 2026-07-08, after 0018 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,82 +7,87 @@
 
 ## Where the repo stands
 
-**Windows are resizable.** This thread landed **0019** — client resize on
-the reserved `SURFACE_CONFIGURE` opcode (design + status: WM.md
-"Implementation status — client resize"; dev log
-`logs/2026-07-08/surface-resize.md`). Shape: resize is KERNEL-initiated —
-request = `WINDOW_RESIZED` (0x206) input-ring record; ack =
-`SURFACE_CONFIGURE` (0x1005) RPC whose NEW fb SAB (riding `{type:'wm-sabs'}`
-like at create) already holds the first frame at the new size, swapped
-atomically kernel-side → tear-free by construction. host.js routes old-size
-in-flight presents into the OLD (still displayed) SAB, so slow adopters
-stay live; pre-0019 binaries just keep their geometry. Latest-wins
-coalescing: stale acks are accepted + the configure re-issued. Kernel
-chrome grew a 4px frame (E/S/SE drag zones, 16px SE grip, rubber-band
-outline, ONE configure at release — Win95 outline semantics). SDL layer
-grew `SDL_EVENT_WINDOW_RESIZED` (0x202–0x207 block), `SDL_WindowEvent`,
-`SDL_GetWindowSize`, and in-place surface re-derive with HIGH-WATER pixel
-allocation (stale-size drawing can't corrupt the heap). Exposures:
-`wmResize` / WMP `RESIZE`+`EV_CONFIGURED` / `wmctl resize`. winbox +
-gpubox handle resize (gpubox: reconfigure surface + rebuild depth — the
-canonical webgpu.h dance); image.json is **v13**.
-
-Decisions made in 0019 (don't re-litigate): kernel-initiated only (a
-client `SURFACE_CONFIGURE` with nothing pending is EINVAL —
-`SDL_SetWindowSize` would land as a new request path, not a bare ack);
-left/top borders are focus-only (moving-edge resize defers); outline-drag
-not live-resize (no per-motion SAB churn); ack accepted even when stale.
+**Quake is windowed and the WM acceptance test holds for all four vendor
+apps.** This thread landed **0018** — relative mouse / pointer lock (design
++ status: WM.md "Implementation status — relative mouse / quake"; dev log
+`logs/2026-07-08/quake-relative-mouse.md`). Shape:
+`SDL_SetWindowRelativeMouseMode` → `SURFACE_SET_FLAGS` (0x1006; flag word
+bit0 borderless, bit1 relative-mouse) → kernel WANTED state (focused
+surface wants relative; `onPointerLock` tells the UI bridge on change) vs
+ACTIVE state (bridge-reported via `wmPointerLockChanged`; only ACTIVE flips
+routing). **The lock gesture is kernel-hit-tested**: a client-area click on
+the focused relative surface RE-OFFERS wanted=true and os.html requests the
+lock inside that click's transient activation — title/desktop clicks never
+do, so windows stay draggable/closable unlocked (ESC drops the lock,
+browser-enforced; next client click re-takes it). Locked routing: motion →
+rel ring records (motion word [5]=1, [2]/[3] = f32 dx/dy) →
+`__sdl_push_mouse_motion_rel_event` → SDL `xrel/yrel` with frozen x/y;
+buttons land at the client center. Agent exposure: `wmInjectPointer 'rel'`
+/ WMP INJECT_POINTER kind 4 / `wmctl relmove`; record flags bit3 (wmctl
+list column is 4 chars now: `f---`). Standalone pages got the same SDL API
+(`sdl-relative-mouse` notify + `SDL_WEB.mouseMoveRelMsg`). `/bin/quake`
+seeds from `vendor/quake/bin.json` (os-common buildProject grew
+`--allow-old-c` and now THROWS on unknown compilerArgs); pak0.pak (18MB) +
+autoexec.cfg (now ships `+mlook`) land at `/root/id1`; **image.json is
+v14**.
 
 All green at hand-off: unit 697✓ (3 pre-existing skips), host✓, blockfs✓,
-kernel suite✓ (test_wm renegotiation section, test_wm_policy
-RESIZE/EV_CONFIGURED, test_wm_e2e real-C resize leg, test_gpubox_dawn_e2e
-320x200 resize leg), browser os-boots✓ + os-wm✓ (real-mouse drag-resize
-240x160→300x200) + os-doom✓ + os-gpubox✓.
+kernel suite✓ (test_wm relative-mouse section, test_wm_policy rel-inject +
+flag bit3, test_wm_e2e RELMODE/MOTION legs, test_os_apps_e2e quake leg),
+browser os-boots✓ + os-wm✓ + os-doom✓ + os-gpubox✓ + os-quake✓ (new).
 
 ## The queue (todos/README.md is authoritative)
 
-1. **`0018` quake windowed** — relative-mouse/pointer-lock surface flag +
-   pak0.pak seeding (trivial via `bin` entries)
-2. `0020` wasm terminal + ptys
-3. (unnumbered) real-world WebGPU C app port — candidates via WEBGPU.md
+1. `0020` wasm terminal + ptys
+2. (unnumbered) real-world WebGPU C app port — candidates via WEBGPU.md
 
 (`0006` threads + atomics stays deferred indefinitely.)
 
 ## Gotchas from this thread (details in the dev log)
 
-- **os-gpubox.mjs is environmentally flaky**: WebGPU adapter availability
-  in headless Chromium comes and goes (the PRE-change tree failed 3/3 in
-  one window, passed in another; failure mode is "cube never composited",
-  upstream of everything 0019 touched). Retry before suspecting a
-  regression; when an adapter appears the whole test passes.
-- Compositor ImageData cache must key on dims, not just frameSeq — a
-  resize ack swaps in a FRESH SAB whose seq restarts (fixed; keep in mind
-  for any other seq-keyed cache).
-- The chrome frame moved pixels: anything sampling "just outside a
-  window" needs to clear `WM_BORDER` (os-wm.mjs placement probe moved
-  from 3px to 7px out).
-- host.js's renegotiation is gated on `hooks.surfaceConfigure` existing —
-  pre-0019 embedders simply never renegotiate.
+- **Chromium DENIES `requestPointerLock` under ALL Playwright-driven input**
+  (headless AND headful, branded Chrome too; `WrongDocumentError`,
+  playwright#20956) — CDP clicks aren't OS-level gestures to the
+  browser-side permission gate. os-quake.mjs asserts the OFFER round trip
+  (`__osPtrLockOffers` probe) and simulates the grant through the real
+  `{kind:'lockchange'}` bridge path; the literal lock UX needs one human
+  check in a real browser after touching it.
+- **Typed shell input right after `ready` races hush's banner and gets
+  eaten.** All os-*.mjs now wait for `/~ #/` in `__osOut` before typing —
+  keep that guard in new browser tests (this bit os-doom after the bigger
+  v14 first-boot seed shifted the timing).
+- `wmctl list` FLAGS is 4 chars (`f---`; bit3 = `r` relative-mouse) — tests
+  grepping `\tf--\t` broke once already (test_wm_service_e2e).
+- The kernel's lock re-offer fires `onPointerLock(true)` WITHOUT a state
+  change — bridge handlers must treat wanted=true as idempotent.
+- os-gpubox.mjs stays environmentally flaky (WebGPU adapter availability in
+  headless Chromium comes and goes — pre-0019 note still applies). The
+  os-boots vi leg can flake on paced-keystroke timing; rerun before
+  suspecting a regression.
 
 ## Conventions to keep (bite-sized reminders)
 
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log per
   landing, README next-up current.
-- Seeded OS sources changed? **Bump `os/image.json` `version`** (v13 now).
+- Seeded OS sources changed? **Bump `os/image.json` `version`** (v14 now).
 - compiler.js must stay browser-clean (no bare `process.*`).
 - MUST-MATCH blocks: WM protocol in kernel.js (WMP) ↔ os/wm_proto.h ↔
-  test_wm_policy.js; surface/ring layout kernel.js (SH_*/IR_*) ↔ host.js
-  (WMSH_*/WMIR_*); ring event numbers (WMEV) ↔ <SDL3> event values in
-  compiler.js ↔ host.js WMEV_*; audio ring layout kernel.js (AU_*) ↔
-  host.js createSharedAudioBuffer/audioRingPush; SDL audio format words ↔
-  <SDL3/SDL_audio.h> in compiler.js.
+  test_wm_policy.js (incl. the flag bits + INJECT_POINTER kinds);
+  surface/ring layout kernel.js (SH_*/IR_* — motion word [5] is the rel
+  flag) ↔ host.js (WMSH_*/WMIR_*); ring event numbers (WMEV) ↔ <SDL3>
+  event values in compiler.js ↔ host.js WMEV_*; audio ring layout kernel.js
+  (AU_*) ↔ host.js createSharedAudioBuffer/audioRingPush; SDL audio format
+  words ↔ <SDL3/SDL_audio.h> in compiler.js.
 - `tests/browser/os-*.mjs` are manual — run os-boots/os-wm/os-doom/
-  os-gpubox after touching os/, kernel.js, host.js SDL/webgpu/fd/audio
-  paths.
+  os-gpubox/os-quake after touching os/, kernel.js, host.js
+  SDL/webgpu/fd/audio/input paths.
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
-  invariants, 0014/0015/0016/0017's decisions, 0019's decisions above.
+  invariants, 0014/0015/0016/0017/0019's decisions, 0018's decisions
+  (kernel-hit-tested lock gesture, wanted/active split, rel flag in motion
+  word [5], locked buttons at client center).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0018 (quake windowed), a lingering item, or something else."
+to tackle: 0020 (wasm terminal + ptys), a lingering item, or something
+else."

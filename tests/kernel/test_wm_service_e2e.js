@@ -79,15 +79,15 @@ check('taskbar is borderless, parked at the bottom edge (0,740 @1024x768)',
   bar1.includes('1024x28+0+740') && bar1.includes('b'), bar1);
 check('winbox placed by the WM policy (12,36 — not the kernel cascade)',
   win1.includes('240x160+12+36'), win1);
-check('winbox focused', win1.includes('\tf--\t'), win1);
+check('winbox focused', win1.includes('\tf---\t'), win1);
 
 // ---- minimize via wmctl -> EV to the wm ----
 const win2 = row(l2, 'winbox');
-check('wmctl min: winbox minimized', win2.includes('-m-'), win2);
+check('wmctl min: winbox minimized', win2.includes('-m--'), win2);
 
 // ---- taskbar click (real input ring -> wm SDL loop) restores ----
 const win3 = row(l3, 'winbox');
-check('taskbar click restores + focuses winbox', win3.includes('f--'), win3);
+check('taskbar click restores + focuses winbox', win3.includes('f---'), win3);
 
 // ---- shot + errors ----
 check('wmctl shot screen writes a PPM', out.includes('P6'), out.slice(0, 400));

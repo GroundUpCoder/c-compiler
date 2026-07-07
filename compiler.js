@@ -18207,6 +18207,8 @@ void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
 Uint64 SDL_GetTicks(void);
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title);
+bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled);
+bool SDL_GetWindowRelativeMouseMode(SDL_Window *window);
 void __setAnimationFrameFunc(void (*callback)(void));
 
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
@@ -22036,6 +22038,7 @@ struct SDL_Window {
     int handle;
     SDL_Surface surface;
     int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
+    bool relative_mouse; /* requested relative-mouse mode (todos/0018) */
 };
 
 /* Window registry: __sdl_push_window_event must find the SDL_Window by
@@ -22072,6 +22075,7 @@ __import void __sdl_quit(void);
 __import int __sdl_create_window(const char *title, int x, int y, int w, int h, int flags);
 __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
+__import void __sdl_set_relative_mouse_mode(int handle, int enabled);
 __import int __sdl_update_window_surface(int handle, const void *pixels, int w, int h, int pitch);
 __import void __sdl_delay(int ms);
 /* ms since SDL_Init as an f64 (exact for integer ms up to 2^53 — ~285k years),
@@ -22198,6 +22202,7 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     if (!win->surface.pixels) { free(win); SDL_SetError("Out of memory"); return NULL; }
     memset(win->surface.pixels, 0, pitch * h);
     win->pixels_cap = pitch * h;
+    win->relative_mouse = 0;
     __sdl_window_register(win);
     return win;
 }
@@ -22401,6 +22406,26 @@ void __sdl_push_mouse_motion_event(int window_id, double x, double y, int state)
 }
 __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
 
+/* Relative-mode motion (todos/0018): the host passes TRUE deltas (pointer-lock
+   movementX/Y or an injected rel record) — x/y stay at the last tracked
+   position (SDL3 semantics: the position freezes while relative mode is on)
+   and the tracked position is NOT advanced by deltas. */
+void __sdl_push_mouse_motion_rel_event(int window_id, double dx, double dy, int state) {
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_EVENT_MOUSE_MOTION;
+    e->event.motion.timestamp = __sdl_now_ns();
+    e->event.motion.windowID = (SDL_WindowID)window_id;
+    e->event.motion.which = __SDL_MOUSE_ID;
+    e->event.motion.state = (Uint32)state;
+    e->event.motion.x = __sdl_mx;
+    e->event.motion.y = __sdl_my;
+    e->event.motion.xrel = (float)dx;
+    e->event.motion.yrel = (float)dy;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_mouse_motion_rel_event = __sdl_push_mouse_motion_rel_event;
+
 void __sdl_push_mouse_wheel_event(int window_id, double x, double y, int direction) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
@@ -22575,6 +22600,25 @@ bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     if (!window) return SDL_InvalidParamError("window");
     __sdl_set_window_title(window->handle, title);
     return 1;
+}
+
+/* ---- Relative mouse mode (todos/0018) ----
+   The REQUESTED mode is tracked here (SDL3: Get returns what Set asked for);
+   the host arms the actual pointer-lock machinery (browser: lock on the next
+   click into the window; the user can drop the lock with ESC and re-lock by
+   clicking back in — the requested mode is unchanged throughout). While the
+   pointer is locked the host pushes motion with true relative deltas
+   (__sdl_push_mouse_motion_rel_event) instead of absolute positions. */
+bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled) {
+    if (!window) return SDL_InvalidParamError("window");
+    window->relative_mouse = enabled ? 1 : 0;
+    __sdl_set_relative_mouse_mode(window->handle, window->relative_mouse);
+    return 1;
+}
+
+bool SDL_GetWindowRelativeMouseMode(SDL_Window *window) {
+    if (!window) return SDL_InvalidParamError("window");
+    return window->relative_mouse;
 }
 
 /* ---- SDL_Renderer (2D accelerated) ----
@@ -27514,6 +27558,7 @@ window.onunhandledrejection = function(e) {
   var audioReceiver = null;
   var hasSDL = false;
   var sdlCanvasW = 0, sdlCanvasH = 0;
+  var sdlRelativeMouse = false;   // SDL_SetWindowRelativeMouseMode requested (todos/0018)
   var term = null;
   var stdinLine = '';
   var stdinResolve = null;
@@ -27637,6 +27682,11 @@ window.onunhandledrejection = function(e) {
   }
   function onMousedown(e) {
     if (!worker||!hasSDL) return;
+    // Relative mode armed: a click into the canvas (a user gesture, which the
+    // Pointer Lock API needs) takes the lock. The click still reaches the app.
+    if (sdlRelativeMouse && document.pointerLockElement !== canvas && canvas.requestPointerLock) {
+      canvas.requestPointerLock();
+    }
     worker.postMessage({type:'sdl-input',input:SDL_WEB.mouseButtonMsg(canvas,e,true,sdlLogical())});
   }
   function onMouseup(e) {
@@ -27645,6 +27695,10 @@ window.onunhandledrejection = function(e) {
   }
   function onMousemove(e) {
     if (!worker||!hasSDL) return;
+    if (document.pointerLockElement === canvas) {
+      worker.postMessage({type:'sdl-input',input:SDL_WEB.mouseMoveRelMsg(canvas,e,sdlLogical())});
+      return;
+    }
     worker.postMessage({type:'sdl-input',input:SDL_WEB.mouseMoveMsg(canvas,e,sdlLogical())});
   }
   function onWheel(e) {
@@ -27804,6 +27858,14 @@ window.onunhandledrejection = function(e) {
         setStatus('');
       } else if (msg.type === 'sdl-title') {
         document.title = msg.title || '';            // SDL_SetWindowTitle
+      } else if (msg.type === 'sdl-relative-mouse') {
+        // Relative mouse mode (todos/0018): arm click-to-pointer-lock. The
+        // lock itself needs a user gesture, so it's requested in onMousedown;
+        // ESC drops it (browser-enforced) and the next click re-locks.
+        sdlRelativeMouse = !!msg.enabled;
+        if (!sdlRelativeMouse && document.pointerLockElement === canvas && document.exitPointerLock) {
+          document.exitPointerLock();
+        }
       } else if (msg.type === 'error') {
         writeOutput('Runtime error: ' + msg.message + '\\n', true);
         setStatus('');

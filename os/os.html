@@ -88,6 +88,20 @@ function mods(e) {
     .forEach(function (k) { out[k] = e.getModifierState ? e.getModifierState(k) : false; });
   return out;
 }
+// Pointer lock (todos/0018): the kernel sends {type:'pointer-lock', wanted}
+// when the focused surface wants relative mouse, and RE-SENDS wanted=true
+// when a client-area click lands on it (the kernel hit-tests; the page can't)
+// — that click is the user gesture the Pointer Lock API needs, so the
+// request below succeeds then and no-ops silently otherwise (e.g. at app
+// startup with no gesture; the browser-enforced ESC unlock is re-taken by
+// the next client click the same way). Transitions are reported back so the
+// kernel flips between relative and absolute routing.
+var ptrLockWanted = false;
+function ptrLocked() { return document.pointerLockElement === screen; }
+document.addEventListener('pointerlockchange', function () {
+  wmSend({ kind: 'lockchange', active: ptrLocked() });
+  window.__osPtrLock = ptrLocked();   // agent probe
+});
 screen.addEventListener('mousedown', function (e) {
   screen.focus();
   wmSend({ kind: 'down', x: e.offsetX, y: e.offsetY, button: e.button });
@@ -97,6 +111,10 @@ screen.addEventListener('mouseup', function (e) {
   wmSend({ kind: 'up', x: e.offsetX, y: e.offsetY, button: e.button });
 });
 screen.addEventListener('mousemove', function (e) {
+  if (ptrLocked()) {
+    wmSend({ kind: 'move', locked: 1, dx: e.movementX, dy: e.movementY, buttons: e.buttons });
+    return;
+  }
   wmSend({ kind: 'move', x: e.offsetX, y: e.offsetY, buttons: e.buttons });
 });
 screen.addEventListener('wheel', function (e) {
@@ -154,6 +172,23 @@ kernel.onmessage = function (e) {
       term.write('\r\n\x1b[33m[system halted — reload the page to reboot]\x1b[0m\r\n');
       break;
     }
+    // Relative mouse (todos/0018): the kernel's wanted state / lock re-offer
+    // (see the pointer-lock comment above the mousedown handler).
+    case 'pointer-lock':
+      ptrLockWanted = !!m.wanted;
+      window.__osPtrLockWanted = ptrLockWanted;   // agent probe
+      if (ptrLockWanted) window.__osPtrLockOffers = (window.__osPtrLockOffers || 0) + 1;   // agent probe
+      if (!ptrLockWanted && ptrLocked() && document.exitPointerLock) {
+        document.exitPointerLock();
+      } else if (ptrLockWanted && !ptrLocked() && screen.requestPointerLock) {
+        // Succeeds inside the transient activation of the client click the
+        // kernel just hit-tested; rejects quietly without a gesture.
+        try {
+          var lockP = screen.requestPointerLock();
+          if (lockP && lockP.catch) lockP.catch(function () {});
+        } catch (err) { /* no gesture yet */ }
+      }
+      break;
     // The audio mixer's output ring (todos/0017): play it with host.js's
     // createAudioReceiver — one synthetic device, resumed on the first user
     // gesture (browser autoplay policy gates AudioContext until then).

@@ -1,9 +1,10 @@
 {
-  "version": 13,
+  "version": 14,
   "dirs": [
     "/bin",
     "/etc",
     "/root",
+    "/root/id1",
     "/root/roms",
     "/run",
     "/tmp"
@@ -44,8 +45,17 @@
     "/bin/gameboy": {
       "project": "vendor/gameboy/bin.json"
     },
+    "/bin/quake": {
+      "project": "vendor/quake/bin.json"
+    },
     "/root/doom1.wad": {
       "bin": "vendor/doom/data/doom1.wad"
+    },
+    "/root/id1/pak0.pak": {
+      "bin": "vendor/quake/data/id1/pak0.pak"
+    },
+    "/root/id1/autoexec.cfg": {
+      "bin": "vendor/quake/data/id1/autoexec.cfg"
     },
     "/root/roms/PokemonBlue.gb": {
       "bin": "vendor/gameboy/roms/PokemonBlue.gb",

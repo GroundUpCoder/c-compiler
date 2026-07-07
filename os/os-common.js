@@ -150,6 +150,7 @@ function buildProject(CompilerJS, projPath, readHostFile) {
 
   var pp = CompilerJS.createDefaultPPRegistry();
   var sources = [];
+  var compilerOptions = { requireSources: [], backend: 'default' };
   /* Normalize "a/b/../c" -> "a/c" so dep-relative paths stay readable in
    * errors and stable as XHR URLs. */
   function normalize(p) {
@@ -174,6 +175,14 @@ function buildProject(CompilerJS, projPath, readHostFile) {
         else pp.defines.set(def, '1');
       } else if (a.lastIndexOf('-I', 0) === 0) {
         pp.includePaths.push(normalize(dir + '/' + a.substring(2)));
+      } else if (a === '--allow-old-c') {
+        // Same expansion as the cc driver's flag (quake's 1996 C).
+        compilerOptions.allowImplicitInt = true;
+        compilerOptions.allowEmptyParams = true;
+        compilerOptions.allowKnRDefinitions = true;
+        compilerOptions.allowImplicitFunctionDecl = true;
+      } else {
+        throw new Error('buildProject ' + projPath + ': unsupported compilerArg ' + a);
       }
     });
     (proj.sources || []).forEach(function (s) { sources.push(normalize(dir + '/' + s)); });
@@ -182,7 +191,6 @@ function buildProject(CompilerJS, projPath, readHostFile) {
     try { return readHostFile(fp); } catch (e) { return null; }
   };
   var fsShim = { readFileSync: function (p) { return readHostFile(p); } };
-  var compilerOptions = { requireSources: [], backend: 'default' };
   var warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
   var units;
   try {

@@ -47,6 +47,8 @@ try {
   await page.goto(URL);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
   check('boots to ready (doom/gameboy/snake + game data seeded)', true);
+  // Don't race hush's banner: typed input before the first prompt is eaten.
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
   // The audio mixer (todos/0017): the kernel handed the page its output
   // ring at boot; playback is gated on the first user gesture.

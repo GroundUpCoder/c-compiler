@@ -1,6 +1,7 @@
 # 0018 — quake windowed: relative mouse + pointer lock
 
-- **Status**: queued
+- **Status**: DONE 2026-07-08 (dev log `logs/2026-07-08/quake-relative-mouse.md`;
+  WM.md "Implementation status — relative mouse / quake")
 - **Depends**: 0015 (binary-asset seeding, vendor-app pattern); 0017
   (nice-to-have — quake with sound)
 - **Design**: `todos/WM.md` ("Input routing" — relative-mouse as a surface

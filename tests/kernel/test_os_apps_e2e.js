@@ -69,20 +69,26 @@ async function testOptionalSeeding() {
   check('required missing bin entry still fails the boot', err !== null);
 }
 
-/* ---- session A: seed, launch doom + gameboy, list, shot their surfaces ---- */
+/* ---- session A: seed, launch doom + gameboy + quake, list, shot surfaces ---- */
 function sessionApps() {
   const script = [
     'ls -l /root/doom1.wad',                        // bin entry seeded
+    'ls -l /root/id1/pak0.pak',                     // 18MB bin entry (todos/0018)
     'doom &',
     'sleep 5',                                      // wasm instantiation + WAD load
     GB_CMD,
     'sleep 3.5',
+    'quake &',
+    'sleep 6',                                      // pak load + demo start
     'echo ==list1',
     'wmctl list',
     'DSID=$(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")',
     'GSID=$(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")',
+    'QSID=$(wmctl list | grep "Quake$" | sed "s/[^0-9].*//")',
+    'wmctl relmove $QSID 15 5 && echo relmove-ok',  // rel inject over the socket
     'wmctl shot $DSID /root/doom.ppm && echo shot-doom-ok',
     'wmctl shot $GSID /root/gb.ppm && echo shot-gb-ok',
+    'wmctl shot $QSID /root/quake.ppm && echo shot-quake-ok',
     '',
   ].join('\n');
 
@@ -105,15 +111,28 @@ function sessionApps() {
     (HAVE_ROM ? ' (ROM from /root/roms)' : ' (built-in test ROM; local ROM absent)'),
     gbRow !== '', JSON.stringify(list1));
   check('gameboy window is 480x432 (160x144 tripled)', gbRow.includes('480x432'), gbRow);
-  check('wmctl shot wrote both surface PPMs',
-    out.includes('shot-doom-ok') && out.includes('shot-gb-ok'));
+
+  // Quake (todos/0018): the 18MB pak seeds, the game boots into its demo
+  // loop, and its VID_Init relative-mouse request shows as the 'r' flag.
+  check('pak0.pak seeded via the bin entry (18689235 bytes)',
+    out.includes('18689235'), out.split('\n')[1]);
+  const qRow = row('Quake');
+  check('quake opens a window titled "Quake"', qRow !== '', JSON.stringify(list1));
+  check('quake window is 320x200 (native software renderer)',
+    qRow.includes('320x200'), qRow);
+  check('quake requested relative mouse (r flag in wmctl list)',
+    (qRow.split('\t')[4] || '').includes('r'), qRow);
+  check('wmctl relmove injects over the socket', out.includes('relmove-ok'));
+  check('wmctl shot wrote all three surface PPMs',
+    out.includes('shot-doom-ok') && out.includes('shot-gb-ok') &&
+    out.includes('shot-quake-ok'));
 }
 
 /* ---- session B: extract the PPMs byte-clean and prove they're real frames ---- */
 function sessionFrames() {
   const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat /root/doom.ppm /root/gb.ppm\n', timeout: 120000,
-      maxBuffer: 32 * 1024 * 1024 });   // two raw PPMs ≈ 5.7MB
+    { input: 'cat /root/doom.ppm /root/gb.ppm /root/quake.ppm\n', timeout: 120000,
+      maxBuffer: 32 * 1024 * 1024 });   // three raw PPMs ≈ 5.9MB
   if (b.error) throw b.error;
 
   function parsePPM(buf, off) {
@@ -150,6 +169,15 @@ function sessionFrames() {
       const gn = frameStats(b.stdout, gbPPM);
       check('gameboy frame has the LCD palette (>=2 colors, not a fill)',
         gn >= 2, gn + ' distinct colors');
+      const qPPM = parsePPM(b.stdout, gbPPM.end);
+      check('quake shot parses as P6 at full client size 320x200 (todos/0018)',
+        qPPM !== null && qPPM.w === 320 && qPPM.h === 200,
+        qPPM && `${qPPM.w}x${qPPM.h}`);
+      if (qPPM) {
+        const qn = frameStats(b.stdout, qPPM);
+        check('quake frame is a real render (rich color histogram, not a fill)',
+          qn > 50, qn + ' distinct colors');
+      }
     }
   }
 }

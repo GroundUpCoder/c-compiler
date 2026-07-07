@@ -143,7 +143,12 @@ hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms` — the ROM
 files are gitignored, so their entries are `optional`: missing binary
 assets log a skip instead of failing the boot; bare `gameboy` runs a
 built-in test ROM), `/bin/snake` (tty game; needs two paced `q`s to quit
-— its exit-prompt read loop spins on EOF). `/bin/gpubox` (todos/0016) is
+— its exit-prompt read loop spins on EOF), `/bin/quake` (todos/0018 —
+pak0.pak + autoexec.cfg at `/root/id1`; requests relative mouse at
+VID_Init: SURFACE_SET_FLAGS bit1 → kernel wanted-state → os.html pointer
+lock, the lock gesture being a kernel-hit-tested client click; ESC
+unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
+`/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
 `webgpu` devDependency in the root package.json, LAZILY probed by host.js
@@ -164,7 +169,7 @@ byte-clean. Tests: `tests/kernel/test_os_boot.js` +
 skips without the webgpu pkg) + `test_audio.js`/`test_audio_e2e.js`
 (0017); `tests/browser/os-boots.mjs` + `os-wm.mjs`
 + `os-doom.mjs` (now asserts the audio pipeline) + `os-gpubox.mjs`
-(real Chromium, manual).
++ `os-quake.mjs` (pointer-lock UX; real Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

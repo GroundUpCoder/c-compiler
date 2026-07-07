@@ -84,8 +84,15 @@ void VID_Init (unsigned char *palette)
 	sdl_window = SDL_CreateWindow("Quake",
 		BASEWIDTH, BASEHEIGHT,
 		0);
-	if (sdl_window)
+	if (sdl_window) {
 		sdl_surface = SDL_GetWindowSurface(sdl_window);
+		// Mouse look (todos/0018): ask for relative mouse mode. The host
+		// arms click-to-pointer-lock on the window (ESC releases, click
+		// re-locks); while locked, motion events carry true xrel/yrel
+		// deltas. Where the host predates the feature this is a no-op and
+		// motion keeps its absolute-derived deltas — same as before.
+		SDL_SetWindowRelativeMouseMode(sdl_window, 1);
+	}
 
 	// Seed the palette LUT from the supplied palette so the first frame
 	// shows something sensible even if VID_SetPalette isn't called again.

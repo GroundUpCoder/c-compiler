@@ -39,11 +39,13 @@ const images = new Map([
 ]);
 const store = new BLOCK_FS.MemoryByteStore(1 << 20);
 const kfs = BLOCK_FS.createV4(store);
+const ptrLockEvents = [];   // onPointerLock wanted-state transitions (0018)
 const kernel = new K.Kernel({
   fs: kfs,
   createWorker,
   loadImage: (p) => images.get(p) || null,
   onHalt: () => {},
+  onPointerLock: (wanted) => ptrLockEvents.push(wanted),
   log: () => {},
   screen: { w: 640, h: 480 },
 });
@@ -364,6 +366,108 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   // wmResize input validation + a dead-ring request leaves nothing pending.
   check('wmResize below the floor is refused', kernel.wmResize(1, 8, 8) === false);
   check('wmResize on a bogus sid is refused', kernel.wmResize(999, 64, 64) === false);
+
+  // ---- relative mouse / pointer lock (todos/0018) ----
+  // SET_FLAGS validation, the wanted-state round trip, rel-record injection,
+  // and locked vs unlocked routing. sid 1 is focused here.
+  const badFlags = await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: 999, flags: 2 });
+  check('SET_FLAGS on a bogus sid -> EINVAL', badFlags.errno === 'EINVAL');
+  check('no pointer-lock events yet', ptrLockEvents.length === 0, JSON.stringify(ptrLockEvents));
+  const setF = await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: 1, flags: 2 });
+  check('SET_FLAGS bit1 sets relativeMouse', !setF.errno &&
+    kernel.wmList().find(s => s.sid === 1).relativeMouse === true);
+  check('focused relative surface -> onPointerLock(true)',
+    ptrLockEvents.length === 1 && ptrLockEvents[0] === true, JSON.stringify(ptrLockEvents));
+  check('wmScene exposes the wanted state', kernel.wmScene().pointerLockWanted === true);
+
+  // Injection: rel records carry deltas + the relative flag (word [5]).
+  kernel.wmInjectPointer(1, 'rel', 5, -3, { buttons: 1 });
+  evs = drain(ring1);
+  check('inject rel: MOUSEMOTION with deltas + rel flag', evs.length === 1 &&
+    evs[0].type === K.WMEV.MOUSEMOTION && evs[0].f[0] === 5 && evs[0].f[1] === -3 &&
+    evs[0].w[2] === 1 && evs[0].w[3] === 1, JSON.stringify(evs));
+
+  // Not locked yet: bridge motion still routes by hit test (desktop misses).
+  check('unlocked motion still hit-tests', kernel.wmPointer('move', 5, 5, { buttons: 0 }) === 'desktop');
+
+  // Lock reported by the bridge: EVERYTHING routes to the focused surface.
+  kernel.wmPointerLockChanged(true);
+  let lact = kernel.wmPointer('move', 5, 5, { dx: 7, dy: -2, buttons: 0 });
+  evs = drain(ring1);
+  check('locked motion -> rel record to the focused surface (no hit test)',
+    lact === 'locked' && evs.length === 1 && evs[0].win === 1 &&
+    evs[0].type === K.WMEV.MOUSEMOTION && evs[0].f[0] === 7 && evs[0].f[1] === -2 &&
+    evs[0].w[3] === 1, JSON.stringify([lact, evs]));
+  const lw = kernel.wmList().find(s => s.sid === 1);
+  lact = kernel.wmPointer('down', 5, 5, { button: 1 });
+  evs = drain(ring1);
+  check('locked button -> focused surface at the client center',
+    lact === 'locked' && evs.length === 1 && evs[0].type === K.WMEV.MOUSEBUTTONDOWN &&
+    evs[0].win === 1 && evs[0].f[0] === lw.w / 2 && evs[0].f[1] === lw.h / 2,
+    JSON.stringify([lact, evs]));
+
+  // Unlock (the browser ESC path): absolute routing returns — the window is
+  // draggable/closable again (the 0018 acceptance line).
+  kernel.wmPointerLockChanged(false);
+  check('unlocked motion hit-tests again', kernel.wmPointer('move', 5, 5, { buttons: 0 }) === 'desktop');
+  const dw = kernel.wmList().find(s => s.sid === 1);
+  kernel.wmPointer('down', dw.x + 5, dw.y - 10, {});
+  kernel.wmPointer('move', dw.x + 15, dw.y - 5, {});
+  kernel.wmPointer('up', dw.x + 15, dw.y - 5, {});
+  const dw2 = kernel.wmList().find(s => s.sid === 1);
+  check('window drags while unlocked', dw2.x === dw.x + 10 && dw2.y === dw.y + 5,
+    JSON.stringify([dw.x, dw.y, dw2.x, dw2.y]));
+  drain(ring1);
+
+  // Focus moving to a non-relative surface withdraws the wanted state (and
+  // kills active routing even if the bridge report races).
+  kernel.wmPointerLockChanged(true);
+  kernel.wmFocus(c2.sid);
+  check('focus to a non-relative surface -> onPointerLock(false)',
+    ptrLockEvents.length === 2 && ptrLockEvents[1] === false, JSON.stringify(ptrLockEvents));
+  check('active routing dropped with the wanted state',
+    kernel.wmPointer('move', 5, 5, { dx: 1, dy: 1 }) === 'desktop');
+  drain(ring1);
+
+  // Focus back -> wanted again; minimize -> withdrawn again.
+  kernel.wmFocus(1);
+  check('refocus re-wants the lock', ptrLockEvents.length === 3 && ptrLockEvents[2] === true);
+  kernel.wmMinimize(1);
+  check('minimize withdraws the lock', ptrLockEvents.length === 4 && ptrLockEvents[3] === false);
+  kernel.wmFocus(1);                                    // restore for later legs
+  check('restore re-wants the lock', ptrLockEvents.length === 5 && ptrLockEvents[4] === true);
+
+  // The lock gesture: a client click on the focused relative-mouse surface
+  // RE-OFFERS wanted=true (the bridge requests the lock inside the click's
+  // transient activation). Title clicks must not — dragging stays intact.
+  const cw = kernel.wmList().find(s => s.sid === 1);
+  kernel.wmPointer('down', cw.x + 5, cw.y + 5, { button: 1 });
+  kernel.wmPointer('up', cw.x + 5, cw.y + 5, { button: 1 });
+  check('client click re-offers the lock (the gesture path)',
+    ptrLockEvents.length === 6 && ptrLockEvents[5] === true, JSON.stringify(ptrLockEvents));
+  kernel.wmPointer('down', cw.x + 5, cw.y - 10, {});    // title: drag-start
+  kernel.wmPointer('up', cw.x + 5, cw.y - 10, {});
+  check('title click does NOT re-offer', ptrLockEvents.length === 6);
+  kernel.wmPointerLockChanged(true);                    // lock taken:
+  kernel.wmPointer('down', cw.x + 5, cw.y + 5, { button: 1 });
+  check('locked client click does not re-offer', ptrLockEvents.length === 6);
+  kernel.wmPointerLockChanged(false);
+  drain(ring1);
+
+  // Clearing the flag withdraws it; creating WITH bit1 set wants it at birth.
+  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: 1, flags: 0 });
+  check('SET_FLAGS clearing bit1 -> onPointerLock(false)',
+    ptrLockEvents.length === 7 && ptrLockEvents[6] === false &&
+    kernel.wmList().find(s => s.sid === 1).relativeMouse === false);
+  const fbRel = makeFb(40, 30);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbRel.sab, ring: null });
+  const cRel = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 40, h: 30, title: 'rel', flags: 2 });
+  check('CREATE with flags bit1 wants the lock at birth', !cRel.errno &&
+    ptrLockEvents.length === 8 && ptrLockEvents[7] === true);
+  // Destroying the focused relative surface withdraws it (lifecycle sync).
+  await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: cRel.sid });
+  check('destroy withdraws the lock', ptrLockEvents.length === 9 && ptrLockEvents[8] === false);
+  drain(ring1);
 
   // ---- lifecycle: normal exit reclaims surfaces ----
   workers.get(appPid).msg({ type: 'exited', code: 0 });

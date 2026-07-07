@@ -122,7 +122,14 @@ function routeInput(kernel, sdlWeb, ev) {
     if (b & 1) state |= 1;
     if (b & 2) state |= 4;
     if (b & 4) state |= 2;
-    kernel.wmPointer('move', ev.x, ev.y, { buttons: state });
+    // Pointer-locked moves (todos/0018) carry movementX/Y deltas instead of
+    // coordinates; the kernel's locked routing consumes opts.dx/dy.
+    if (ev.locked) kernel.wmPointer('move', 0, 0, { buttons: state, dx: ev.dx, dy: ev.dy });
+    else kernel.wmPointer('move', ev.x, ev.y, { buttons: state });
+  } else if (ev.kind === 'lockchange') {
+    // The page's pointerlockchange report (todos/0018): flips the kernel
+    // between locked (relative to the focused surface) and normal routing.
+    kernel.wmPointerLockChanged(!!ev.active);
   } else if (ev.kind === 'down' || ev.kind === 'up') {
     kernel.wmPointer(ev.kind, ev.x, ev.y, { button: (ev.button | 0) + 1 });
   } else if (ev.kind === 'wheel') {

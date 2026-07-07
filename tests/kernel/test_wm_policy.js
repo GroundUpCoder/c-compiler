@@ -184,7 +184,7 @@ function drainRing(ring) {
   while (rpos !== Atomics.load(ring.i32, K.IR_WPOS)) {
     const base = (K.IR_HDR_BYTES >> 2) + (rpos % ring.cap) * K.IR_RECORD_WORDS;
     out.push({ type: ring.i32[base], win: ring.i32[base + 1],
-               w: [ring.i32[base + 2], ring.i32[base + 3], ring.i32[base + 4]],
+               w: [ring.i32[base + 2], ring.i32[base + 3], ring.i32[base + 4], ring.i32[base + 5]],
                f: [ring.f32[base + 2], ring.f32[base + 3]] });
     rpos = (rpos + 1) % cap2;
     Atomics.store(ring.i32, K.IR_RPOS, rpos);
@@ -344,6 +344,26 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     evs[1].type === K.WMEV.MOUSEBUTTONDOWN && evs[1].w[2] === 2 &&
     evs[1].f[0] === 7 && evs[1].f[1] === 9 && evs[2].type === K.WMEV.QUIT,
     JSON.stringify(evs));
+
+  // ---- relative mouse (todos/0018): rel inject + record flag bit3 ----
+  f = await cmd(wm, WMP.INJECT_POINTER, [c1.sid, 4 /* rel */, f32bits(6), f32bits(-4), 1, 0]);
+  check('INJECT_POINTER rel -> R_OK', f.type === WMP.R_OK);
+  const relEvs = drainRing(ring1);
+  check('rel inject: deltas + buttons + rel flag in the record',
+    relEvs.length === 1 && relEvs[0].type === K.WMEV.MOUSEMOTION &&
+    relEvs[0].f[0] === 6 && relEvs[0].f[1] === -4 &&
+    relEvs[0].w[2] === 1 && relEvs[0].w[3] === 1, JSON.stringify(relEvs));
+  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 2 });
+  f = await cmd(wm, WMP.LIST);
+  check('record flag bit3 = relative-mouse', f.type === WMP.R_LIST &&
+    (function () {
+      for (let i = 0; i < f.g(0); i++) {
+        const r0 = rec(f, 4 + i * K.WMP_REC_BYTES);
+        if (r0.sid === c1.sid) return (r0.flags & 8) === 8;
+      }
+      return false;
+    })(), JSON.stringify(f.g(0)));
+  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 0 });
 
   // ---- SHOT: single surface, then the megabyte screen composite ----
   f = await cmd(wm, WMP.SHOT, [c1.sid]);

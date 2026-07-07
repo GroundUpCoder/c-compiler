@@ -48,6 +48,7 @@ typedef struct {
 #define WMP_F_FOCUSED    1
 #define WMP_F_MINIMIZED  2
 #define WMP_F_BORDERLESS 4
+#define WMP_F_RELMOUSE   8   /* surface requested relative mouse (todos/0018) */
 
 /* Frame header as read off the wire (after the length word). */
 typedef struct { uint32_t type; uint32_t plen; } wmp_hdr;

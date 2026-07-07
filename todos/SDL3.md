@@ -229,9 +229,12 @@ none is a silent misbehavior. Decided 2026-06-20 to defer.
   retina; needs device-pixel rendering + a logical/device coordinate split +
   `SDL_GetWindowSizeInPixels`/pixel-density. Deferred — pairs with the missing
   Video features (window resize / display APIs).
-- **Full relative-mouse mode (Pointer Lock)** — `xrel`/`yrel` are now populated
-  (motion deltas), but `SDL_SetWindowRelativeMouseMode` / `SDL_GetRelativeMouseState`
-  (Pointer Lock API) are still missing. Feature work.
+- ~~**Full relative-mouse mode (Pointer Lock)**~~ — landed 2026-07-08
+  (todos/0018): `SDL_SetWindowRelativeMouseMode` / `SDL_GetWindowRelativeMouseMode`
+  with real Pointer Lock — click-to-lock, true movementX/Y deltas via
+  `__sdl_push_mouse_motion_rel_event` (position frozen while locked) — in
+  both the OS surface flavor (SURFACE_SET_FLAGS) and standalone pages.
+  `SDL_GetRelativeMouseState` (the polling accessor) is still missing.
 - **`SDL_RenderLine`/`SDL_RenderRect` are quad approximations** (1px quad / 1px
   borders), not Bresenham. SDL's own line rasterization isn't byte-identical across
   backends, so "exactly like SDL" is ill-defined; accepted as a close approximation.
@@ -312,11 +315,12 @@ on-screen keyboard. Web: `KeyboardEvent.code`/`key`, `beforeinput`/composition.
 
 ### Mouse (SDL_mouse) — ◑ partial — P0
 Have: motion/button/wheel events (wheel `.y` sign matches SDL: +y = away/up,
-+x = right). Missing: `SDL_GetMouseState` /
-`GetRelativeMouseState`, **relative mouse mode** (`SDL_SetWindowRelativeMouseMode`
-→ Pointer Lock — critical for FPS games), cursor create/set/show/hide
++x = right); **relative mouse mode** (`SDL_SetWindowRelativeMouseMode` /
+`SDL_GetWindowRelativeMouseMode` → Pointer Lock; landed 2026-07-08,
+todos/0018 — quake mouse look). Missing: `SDL_GetMouseState` /
+`GetRelativeMouseState`, cursor create/set/show/hide
 (`SDL_CreateCursor`, system cursors), `SDL_WarpMouseInWindow`, mouse capture.
-Web: Pointer Lock API, CSS cursors.
+Web: CSS cursors.
 
 ### Gamepad / Joystick (SDL_gamepad, SDL_joystick) — ✗ missing — P1
 Entire subsystem absent. `SDL_GetGamepads`, open, button/axis state + events,

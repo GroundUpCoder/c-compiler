@@ -37,6 +37,8 @@ try {
   await page.goto(URL);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
   check('boots to ready', true);
+  // Don't race hush's banner: typed input before the first prompt is eaten.
+  await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
   // Sample composited pixels off the (transferred) desktop canvas.
   const sample = (x, y) => page.evaluate(([sx, sy]) => {

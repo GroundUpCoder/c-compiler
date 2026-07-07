@@ -14,7 +14,11 @@
   output ring; doom/gameboy audible in-OS; design section below);
   **client resize landed** (todos/done/0019, 2026-07-08 — SURFACE_CONFIGURE
   buffer renegotiation + kernel-chrome frame resize drags; status section
-  below). Remaining queue: 0018 (quake), per todos/README.md.
+  below); **relative mouse / quake landed** (todos/done/0018, 2026-07-08 —
+  SURFACE_SET_FLAGS bit1 round-tripping to pointer lock, rel input-ring
+  records, /bin/quake + pak0.pak seeded; status section below). The
+  acceptance test now holds for ALL four vendor apps. Remaining queue:
+  0020 (wasm terminal + ptys), per todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -33,8 +37,9 @@ enumeration, synthetic input, and screenshots are kernel ops that work
 headlessly. **PASSED 2026-07-07** (todos/done/0015) for doom, snake and
 gameboy — seeded in-OS via image.json `bin` game-data entries, verified
 headless (`tests/kernel/test_os_apps_e2e.js`: histogram-checked
-`wmctl shot` frames) and in Chromium (`tests/browser/os-doom.mjs`); quake
-is deferred to todos/0018 (needs the relative-mouse/pointer-lock flag).
+`wmctl shot` frames) and in Chromium (`tests/browser/os-doom.mjs`); **quake
+joined 2026-07-08** (todos/done/0018 — the relative-mouse/pointer-lock
+flag; status section below), completing the set.
 
 ## Fundamentals — the substrate mapping
 
@@ -122,7 +127,8 @@ SURFACE_DESTROY  (id)
 SURFACE_PRESENT  (id, frameSeq)        shm: flip notify; gpu: rides the
                                        bitmap's own postMessage (transfer)
 SURFACE_SET_TITLE(id, title)
-SURFACE_SET_FLAGS(id, flags)           cursor visible, relative-mouse, …
+SURFACE_SET_FLAGS(id, flags)           flag-word update (todos/0018; 0x1006):
+                                       bit0 borderless, bit1 relative-mouse
 SURFACE_CONFIGURE(id, w, h)            the client's resize ACK (todos/0019;
                                        new fb SAB rides the wm-sabs channel)
 ```
@@ -183,7 +189,8 @@ is KERNEL.md's own: **focused surface : input routing :: foreground
 pgroup : tty routing.** Focus policy (click-to-focus etc.) belongs to the
 WM; the kernel just applies it. Pointer capture during WM drags is
 kernel-enforced; relative-mouse mode (quake) is a surface flag that
-round-trips to the UI bridge for pointer lock.
+round-trips to the UI bridge for pointer lock *(landed — todos/done/0018;
+status section below)*.
 
 ## The WM client
 
@@ -511,7 +518,48 @@ RESIZE/EV_CONFIGURED, `test_wm_e2e.js` real-C resize leg,
   (socket protocol) / `wmctl resize SID W H` (shell) — one op set, defined
   once, exposed everywhere, per the agent-channel rule.
 
-## Spike appendix — VERDICTS (run 2026-07-07, todos/0012;
+## Implementation status — relative mouse / quake (landed 2026-07-08, todos/0018)
+
+The last vendor app and the pointer-lock flag from "Input routing" (suites:
+`test_wm.js` relative-mouse section, `test_wm_policy.js` rel-inject + flag
+bit3, `test_wm_e2e.js` real-C RELMODE/MOTION legs, `test_os_apps_e2e.js`
+quake leg, browser `os-quake.mjs`; dev log
+`logs/2026-07-08/quake-relative-mouse.md`):
+
+- **App API**: `SDL_SetWindowRelativeMouseMode` / `SDL_GetWindowRelativeMouseMode`
+  in the SDL3 layer → `SURFACE_SET_FLAGS` (0x1006; flag word: bit0
+  borderless, bit1 relative-mouse; host.js preserves bit0 across the call).
+  On a pre-0018 embedder (no `surfaceSetFlags` hook) the request is a clean
+  no-op — apps keep absolute-derived xrel/yrel.
+- **The wanted/active split**: WANTED = focused surface requested relative
+  mouse (kernel-computed; `onPointerLock(wanted)` fires the UI bridge on
+  every change — focus moves, minimize, destroy, flag clears all withdraw
+  it). ACTIVE = the bridge actually holds the Pointer Lock API lock,
+  reported back via `wmPointerLockChanged`. Only ACTIVE flips routing.
+- **The lock gesture is kernel-hit-tested**: `requestPointerLock` needs a
+  user gesture, and only the kernel knows what a click hit — so a client-
+  area mousedown on the focused relative surface RE-OFFERS wanted=true and
+  the page requests the lock inside that click's transient activation.
+  Title/chrome/desktop clicks never re-offer: the window stays draggable and
+  closable while unlocked (the acceptance line). ESC (browser-enforced)
+  drops the lock; the next client click re-takes it.
+- **Locked routing**: no cursor, no hit test — motion goes to the focused
+  surface as RELATIVE ring records (motion word [5]=1, words [2]/[3] = f32
+  dx/dy), buttons land at the client center, wheel as usual. host.js drains
+  rel records into `__sdl_push_mouse_motion_rel_event` (true xrel/yrel,
+  position frozen — SDL3 relative-mode semantics).
+- **Agent channel**: `wmInjectPointer(sid, 'rel', dx, dy)` / WMP
+  INJECT_POINTER kind 4 / `wmctl relmove SID DX DY`; window records carry
+  flag bit3 (wmctl list shows `r`). Injection is post-hit-test by design —
+  no lock state needed headless.
+- **Standalone pages** got the same feature through the same SDL API:
+  `{type:'sdl-relative-mouse'}` notify → click-to-lock on the page canvas →
+  `SDL_WEB.mouseMoveRelMsg` (movementX/Y, letterbox-scaled) → the same rel
+  push. One window = every click is a client click, so no hit-test needed.
+- **Quake**: `/bin/quake` seeded from `vendor/quake/bin.json` (buildProject
+  grew `--allow-old-c`), pak0.pak (18MB) + autoexec.cfg via image.json `bin`
+  entries under `/root/id1` (basedir is cwd = /root); `VID_Init` requests
+  relative mouse; autoexec now ships `+mlook`.
 ## harnesses: `tests/browser/wm-spikes.mjs` + `tests/spikes/s3_dawn.mjs`)
 
 - **S1 — PASS, `gpu` transport validated.** `transferToImageBitmap()` on a

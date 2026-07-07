@@ -24,11 +24,9 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
-   pak0.pak seeding (trivial now via image.json `bin` entries)
-2. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
+1. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
    demotes to bootstrap chrome
-3. (unnumbered) a real-world WebGPU C app port — candidates via
+2. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -73,7 +71,14 @@ tolerance-diff suite (`logs/2026-07-08/webgpu-demo-dawn-tier.md`);
 rings via AUDIO_OPEN (0x2xxx), kernel-side mixing (resample + sum +
 clamp, pure math) into one page-owned output ring played by the existing
 createAudioReceiver; doom/gameboy audible in-OS, drain-on-exit lifecycle
-(`logs/2026-07-08/audio-mixer.md`).
+(`logs/2026-07-08/audio-mixer.md`);
+`0019` **client resize** — SURFACE_CONFIGURE buffer renegotiation +
+kernel-chrome frame resize drags, SDL window events + high-water surface
+re-derive (`logs/2026-07-08/surface-resize.md`);
+`0018` **quake windowed** — relative-mouse as SURFACE_SET_FLAGS bit1
+round-tripping to pointer lock (kernel hit-tests the lock gesture; rel
+ring records → SDL xrel/yrel), /bin/quake + the 18MB pak0.pak seeded
+(`logs/2026-07-08/quake-relative-mouse.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

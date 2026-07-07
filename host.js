@@ -4939,6 +4939,7 @@ function createNullSDL() {
       __sdl_create_window: function () { return 1; },
       __sdl_destroy_window: function () {},
       __sdl_set_window_title: function () {},
+      __sdl_set_relative_mouse_mode: function () {},
       __sdl_update_window_surface: function () { return 0; },
       __sdl_create_renderer: function () { return 1; },
       __sdl_destroy_renderer: function () {},
@@ -5085,6 +5086,7 @@ const WMAUDIO_RING_BYTES = 256 * 1024;
 function createSurfaceSDL({ ctx, hooks }) {
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
+  const kFlagsBySid = new Map();     // sid -> current kernel surface flags word
   let ring = null;                   // { sab, i32, f32, cap } — one per process
   let onConfigure = null;            // flavor hook: WINDOW_RESIZED ring record
 
@@ -5174,7 +5176,23 @@ function createSurfaceSDL({ ctx, hooks }) {
     const kFlags = (sdlFlags & 0x10) ? 1 : 0;
     const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags);
     if (!r || r.errno || !(r.sid > 0)) return null;
+    kFlagsBySid.set(r.sid, kFlags);
     return { sid: r.sid, fb };
+  }
+  /* SDL_SetWindowRelativeMouseMode -> SURFACE_SET_FLAGS bit1 (todos/0018).
+   * The kernel round-trips the flag to the UI bridge (pointer lock) and
+   * pushes rel-flagged motion records while the lock is held. Pre-0018
+   * embedders lack the hook: the request is a clean no-op (the app keeps
+   * absolute-derived xrel/yrel, exactly the pre-0018 behavior). */
+  function setRelativeMouse(handle, enabled) {
+    if (typeof hooks.surfaceSetFlags !== 'function') return;
+    for (const [sid, h] of handleBySid) {
+      if (h === handle) {
+        const flags = ((kFlagsBySid.get(sid) | 0) & ~2) | (enabled ? 2 : 0);
+        kFlagsBySid.set(sid, flags);
+        hooks.surfaceSetFlags(sid, flags);
+      }
+    }
   }
   /* ---- buffer renegotiation (todos/0019) ----
    * A WINDOW_RESIZED ring record allocates the NEW fb here; the ack (a
@@ -5240,7 +5258,13 @@ function createSurfaceSDL({ ctx, hooks }) {
           }
           break;
         case WMEV_MOUSEMOTION:
-          if (ex.__sdl_push_mouse_motion_event) {
+          if (ring.i32[base + 5]) {
+            // Relative record (word[5]=1, todos/0018): [2]/[3] are f32 deltas,
+            // not positions — pointer-lock motion or an injected rel event.
+            if (ex.__sdl_push_mouse_motion_rel_event) {
+              ex.__sdl_push_mouse_motion_rel_event(handle, ring.f32[base + 2], ring.f32[base + 3], ring.i32[base + 4]);
+            }
+          } else if (ex.__sdl_push_mouse_motion_event) {
             ex.__sdl_push_mouse_motion_event(handle, ring.f32[base + 2], ring.f32[base + 3], ring.i32[base + 4]);
           }
           break;
@@ -5325,7 +5349,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       innerDestroy(handle);
       fbByHandle.delete(handle);
       for (const [sid, h] of handleBySid) {
-        if (h === handle) { hooks.surfaceDestroy(sid); handleBySid.delete(sid); if (currentSid === sid) currentSid = 0; }
+        if (h === handle) { hooks.surfaceDestroy(sid); handleBySid.delete(sid); kFlagsBySid.delete(sid); if (currentSid === sid) currentSid = 0; }
       }
     };
     env.__sdl_set_window_title = function (handle, titlePtr) {
@@ -5333,6 +5357,11 @@ function createSurfaceSDL({ ctx, hooks }) {
       for (const [sid, h] of handleBySid) {
         if (h === handle) hooks.surfaceSetTitle(sid, titlePtr ? readString(titlePtr) : '');
       }
+    };
+    // OS flavor: pointer lock is the KERNEL's (via the surface flag), not the
+    // worker-local OffscreenCanvas's — fully override the inner notify path.
+    env.__sdl_set_relative_mouse_mode = function (handle, enabled) {
+      setRelativeMouse(handle, enabled);
     };
     // Resize request (todos/0019): allocate the new shm SAB and resize the
     // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
@@ -5416,12 +5445,14 @@ function createSurfaceSDL({ ctx, hooks }) {
         if (!win) return;
         hooks.surfaceDestroy(win.sid);
         handleBySid.delete(win.sid);
+        kFlagsBySid.delete(win.sid);
         windows[handle - 1] = null;
       },
       __sdl_set_window_title: function (handle, titlePtr) {
         const win = windows[handle - 1];
         if (win) hooks.surfaceSetTitle(win.sid, titlePtr ? readString(titlePtr) : '');
       },
+      __sdl_set_relative_mouse_mode: setRelativeMouse,
       /* The real pixel path: CPU framebuffer -> shm back buffer -> flip
        * (mailbox present; never blocks, newest frame wins). */
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
@@ -5947,6 +5978,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         win.title = title;
         if (notifyWindow) notifyWindow({ type: 'sdl-title', title: title });
       },
+      // SDL_SetWindowRelativeMouseMode (todos/0018): the page owns the DOM, so
+      // carry the request out — it arms click-to-pointer-lock on the canvas and
+      // switches mousemove to movementX/Y descriptors while locked.
+      __sdl_set_relative_mouse_mode: function (handle, enabled) {
+        if (notifyWindow) notifyWindow({ type: 'sdl-relative-mouse', enabled: !!enabled });
+      },
 
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
         const winInfo = sdlWindows[handle - 1];
@@ -6196,6 +6233,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     pushMouseMotionEvent: function (handle, x, y, state) {
       const fn = getExports().__sdl_push_mouse_motion_event;
       if (fn) fn(handle, x, y, state | 0);   // state = SDL button-mask
+    },
+    pushMouseMotionRelEvent: function (handle, dx, dy, state) {
+      const fn = getExports().__sdl_push_mouse_motion_rel_event;
+      if (fn) fn(handle, dx, dy, state | 0);   // pointer-lock deltas (todos/0018)
     },
     pushMouseWheelEvent: function (handle, x, y, direction) {
       const fn = getExports().__sdl_push_mouse_wheel_event;
@@ -7312,6 +7353,18 @@ const SDL_WEB = (function () {
       const c = canvasCoords(canvas, e, logical);
       return { kind: 'mousemove', x: c.x, y: c.y, state: buttonMask(e) };
     },
+    /* Pointer-locked motion (todos/0018): movementX/Y are CSS-pixel deltas;
+     * scale them to logical SDL pixels with the same letterbox math as
+     * canvasCoords so sensitivity doesn't change with the CSS zoom. */
+    mouseMoveRelMsg: function (canvas, e, logical) {
+      const rect = canvas.getBoundingClientRect();
+      const cw = (logical && logical.w) || canvas.width || rect.width;
+      const ch = (logical && logical.h) || canvas.height || rect.height;
+      const aspect = cw / ch;
+      const rw = (rect.width / rect.height > aspect) ? rect.height * aspect : rect.width;
+      const scale = rw > 0 ? cw / rw : 1;
+      return { kind: 'mousemoverel', dx: (e.movementX || 0) * scale, dy: (e.movementY || 0) * scale, state: buttonMask(e) };
+    },
     wheelMsg: function (e) {
       const scale = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 600 : 1; /* lines/pages → ~px */
       const dx = e.deltaX * scale, dy = e.deltaY * scale;
@@ -7329,6 +7382,7 @@ const SDL_WEB = (function () {
         case 'key': sdl.pushKeyEvent(1, m.eventType, m.scancode, m.sym, m.mod | 0, m.repeat ? 1 : 0); break;
         case 'mousebutton': sdl.pushMouseButtonEvent(1, m.eventType, m.button, m.x, m.y); break;
         case 'mousemove': sdl.pushMouseMotionEvent(1, m.x, m.y, m.state | 0); break;
+        case 'mousemoverel': sdl.pushMouseMotionRelEvent(1, m.dx, m.dy, m.state | 0); break;
         case 'wheel': sdl.pushMouseWheelEvent(1, m.x, m.y, m.direction | 0); break;
         case 'quit': sdl.pushQuitEvent(1); break;
       }

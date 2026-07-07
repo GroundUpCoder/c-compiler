@@ -118,8 +118,11 @@ var OP = {
   // NEW fb SAB (riding {type:'wm-sabs'}, the create handshake verbatim)
   // whose front buffer already holds the first frame at the new size — the
   // kernel swaps buffers atomically here, so the compositor never tears.
+  // SURFACE_SET_FLAGS (todos/0018) updates the surface flag word (bit0
+  // borderless, bit1 relative-mouse); the relative-mouse bit round-trips
+  // to the UI bridge as a pointer-lock request (onPointerLock).
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
-  SURFACE_CONFIGURE: 0x1005,
+  SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
   // one page-owned output ring — never RPCs.
@@ -182,6 +185,8 @@ var S_IFSOCK_MODE = 0o140000;
  *     [0] SDL event type          [1] windowId (sid)
  *     key:    [2] scancode [3] keysym [4] mod [5] repeat
  *     motion: [2] x(f32 bits) [3] y(f32 bits) [4] button state mask
+ *             [5] relative flag (todos/0018): 1 = [2]/[3] are dx/dy deltas
+ *             (pointer-lock motion / injected rel), not positions
  *     button: [2] x(f32 bits) [3] y(f32 bits) [4] button index
  *     wheel:  [2] x(f32 bits) [3] y(f32 bits) [4] direction
  *   The kernel rings the process doorbell after each write, so
@@ -241,8 +246,8 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * that subscribes just skips event frames while awaiting a reply.
  *
  * Window record (fixed 72 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
- * flags (bit0 focused, bit1 minimized, bit2 borderless), frameSeq,
- * reserved, then 32 bytes NUL-padded UTF-8 title.
+ * flags (bit0 focused, bit1 minimized, bit2 borderless, bit3 relative-
+ * mouse), frameSeq, reserved, then 32 bytes NUL-padded UTF-8 title.
  *
  * Commands -> replies:
  *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
@@ -260,7 +265,8 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
- *     (xf32/yf32 = wheelX/wheelY, a=direction); sid 0 = focused window
+ *     (xf32/yf32 = wheelX/wheelY, a=direction) | 4 rel (todos/0018:
+ *     xf32/yf32 = dx/dy deltas, a=buttons); sid 0 = focused window
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
  * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
  * Events: EV_CREATED record | EV_DESTROYED { sid } | EV_TITLE { sid,
@@ -514,6 +520,8 @@ KernelClient.prototype.spawnHooks = function () {
     },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
+    // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
+    surfaceSetFlags: function (sid, flags) { return self.call(OP.SURFACE_SET_FLAGS, { sid: sid, flags: flags | 0 }); },
     // Resize ack (todos/0019): the NEW fb SAB (first new-size frame already
     // presented into it) rides the FIFO channel like at create.
     surfaceConfigure: function (sid, w, h, fbSab) {
@@ -813,6 +821,10 @@ function Kernel(opts) {
   this._compile = opts.compile || null;
   this._onOutput = opts.onOutput || function () {};
   this._onHalt = opts.onHalt || function () {};
+  // Pointer lock (todos/0018): the UI bridge is told when the WANTED state
+  // changes (focused surface requests relative mouse); it owns the actual
+  // Pointer Lock API dance and reports transitions via wmPointerLockChanged.
+  this._onPointerLock = opts.onPointerLock || function () {};
   this._log = opts.log || function () {};
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
@@ -837,7 +849,7 @@ function Kernel(opts) {
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap, minimized, borderless, pendingConfigure }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;
@@ -850,6 +862,10 @@ function Kernel(opts) {
   this._wmVersion = 0;        // bumped on any scene change (create/destroy/
                               // move/focus/title) — compositor idle-skip aid
   this._wmSubs = new Set();   // WM-protocol connections subscribed to events
+  this._wmPtrLockWanted = false;  // last wanted state emitted to the bridge
+  this._wmPtrLockActive = false;  // actual lock state (bridge-reported); while
+                                  // true, pointer input routes RELATIVE to the
+                                  // focused relative-mouse surface (no hit-test)
   // Audio mixer (todos/0017; WM.md "Audio mixing"). Streams register via
   // AUDIO_OPEN; the pump mixes them into the one output ring (audioInit).
   this._audioStreams = new Map(); // aid -> stream (see _audioRpc AUDIO_OPEN)
@@ -1783,7 +1799,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         y: WM_TITLE_H + 8 + ((n * 24) % Math.max(64, this._wmScreen.h >> 2)),
         bitmap: null,             // gpu transport: latest ImageBitmap (browser)
         minimized: false,
-        borderless: !!((req.flags | 0) & 1),   // bit0: no kernel chrome (taskbar-class)
+        borderless: !!((req.flags | 0) & 1),      // bit0: no kernel chrome (taskbar-class)
+        relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
         pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
       };
       this._surfaces.set(sid, surf);
@@ -1794,6 +1811,21 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._respond(pcb, { sid: sid, x: surf.x, y: surf.y });
       this._wmEmit(WMP.EV_CREATED, this._wmpRecord(surf));
       this._wmEmit(WMP.EV_FOCUS, [sid]);
+      this._wmSyncPointerLock();
+      break;
+    }
+    // Update the surface flag word (todos/0018): bit0 borderless, bit1
+    // relative-mouse. The pointer-lock sync below round-trips a wanted-state
+    // change to the UI bridge.
+    case OP.SURFACE_SET_FLAGS: {
+      var sf = this._surfaces.get(req.sid | 0);
+      if (!sf || sf.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      var fl = req.flags | 0;
+      sf.borderless = !!(fl & 1);
+      sf.relativeMouse = !!(fl & 2);
+      this._wmVersion++;
+      this._respond(pcb, {});
+      this._wmSyncPointerLock();
       break;
     }
     case OP.SURFACE_DESTROY: {
@@ -1872,6 +1904,32 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   }
   this._wmVersion++;
   this._wmEmit(WMP.EV_DESTROYED, [sid]);
+  this._wmSyncPointerLock();
+};
+
+/* ---- pointer lock (todos/0018) ----
+ * WANTED = the focused surface requested relative mouse (and is on screen).
+ * The kernel tells the UI bridge on every wanted-state CHANGE (onPointerLock);
+ * the bridge does the Pointer Lock API dance (the lock needs a user gesture,
+ * so it arms click-to-lock; ESC drops it browser-side) and reports actual
+ * transitions back via wmPointerLockChanged. While the lock is ACTIVE,
+ * wmPointer routes everything to the focused surface with relative motion
+ * records — no hit-testing (there is no cursor). Unlocked, routing is the
+ * normal absolute path, so the window stays draggable/closable. */
+Kernel.prototype._wmSyncPointerLock = function () {
+  var s = this._surfaces.get(this._focusSid);
+  var wanted = !!(s && s.relativeMouse && !s.minimized);
+  if (wanted !== this._wmPtrLockWanted) {
+    this._wmPtrLockWanted = wanted;
+    if (!wanted) this._wmPtrLockActive = false;   // routing reverts immediately;
+                                                  // the bridge exit is async
+    this._wmVersion++;
+    this._onPointerLock(wanted);
+  }
+};
+
+Kernel.prototype.wmPointerLockChanged = function (active) {
+  this._wmPtrLockActive = !!active && this._wmPtrLockWanted;
 };
 
 /* ============================================================
@@ -2142,9 +2200,31 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
 };
 
 /* kind: 'move' | 'down' | 'up' | 'wheel'; opts: { button, buttons, wheelX,
- * wheelY, direction }. Returns what happened (for tests/bridge cursors). */
+ * wheelY, direction, dx, dy }. Returns what happened (for tests/bridge
+ * cursors). While the pointer lock is active (todos/0018) the bridge sends
+ * moves with dx/dy deltas instead of coordinates. */
 Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   opts = opts || {};
+  // Pointer lock active: everything goes to the focused relative-mouse
+  // surface — motion as relative records, buttons/wheel at the client
+  // center (SDL freezes the position in relative mode; apps read deltas).
+  // No hit-test, no chrome: there is no cursor while locked.
+  if (this._wmPtrLockActive) {
+    var lockSurf = this._surfaces.get(this._focusSid);
+    if (lockSurf && lockSurf.relativeMouse && !lockSurf.minimized) {
+      if (kind === 'move') {
+        this._wmEventTo(lockSurf.sid, [WMEV.MOUSEMOTION, 0,
+          f32bits(opts.dx || 0), f32bits(opts.dy || 0), opts.buttons | 0, 1, 0, 0]);
+      } else if (kind === 'down' || kind === 'up') {
+        this._wmEventTo(lockSurf.sid, [kind === 'down' ? WMEV.MOUSEBUTTONDOWN : WMEV.MOUSEBUTTONUP,
+          0, f32bits(lockSurf.w / 2), f32bits(lockSurf.h / 2), (opts.button | 0) || 1, 0, 0, 0]);
+      } else if (kind === 'wheel') {
+        this._wmEventTo(lockSurf.sid, [WMEV.MOUSEWHEEL, 0, f32bits(opts.wheelX || 0),
+          f32bits(opts.wheelY || 0), opts.direction | 0, 0, 0, 0]);
+      }
+      return 'locked';
+    }
+  }
   // An in-flight title drag captures the pointer (kernel-enforced capture).
   if (this._wmDrag) {
     var d = this._wmDrag, ds = this._surfaces.get(d.sid);
@@ -2236,6 +2316,14 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       // the focus state it's acting ON (minimize-toggle), and Win95 agrees.
       // A borderless surface gets focus only via the WM protocol.
       if (kind === 'down' && !s.borderless) this.wmFocus(s.sid);
+      // A client click on the focused relative-mouse surface IS the lock
+      // gesture (todos/0018): re-offer the wanted state so the UI bridge
+      // requests the pointer lock inside the click's transient activation.
+      // Chrome/title/desktop clicks never re-offer — dragging stays intact.
+      if (kind === 'down' && s.relativeMouse && s.sid === this._focusSid &&
+          this._wmPtrLockWanted && !this._wmPtrLockActive) {
+        this._onPointerLock(true);
+      }
       var lx = x - s.x, ly = y - s.y;
       if (kind === 'move') {
         this._wmEventTo(s.sid, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
@@ -2264,6 +2352,7 @@ Kernel.prototype.wmList = function () {
     out.push({ sid: s.sid, pid: s.pid, x: s.x, y: s.y, w: s.w, h: s.h,
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
+               relativeMouse: !!s.relativeMouse,
                configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
@@ -2288,6 +2377,7 @@ Kernel.prototype.wmFocus = function (sid) {
     this._wmVersion++;
     this._wmEmit(WMP.EV_FOCUS, [s.sid]);
   }
+  this._wmSyncPointerLock();
   return true;
 };
 
@@ -2341,6 +2431,7 @@ Kernel.prototype.wmMinimize = function (sid) {
     this._wmEmit(WMP.EV_FOCUS, [this._focusSid]);
   }
   this._wmVersion++;
+  this._wmSyncPointerLock();
   return true;
 };
 
@@ -2371,6 +2462,11 @@ Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
   opts = opts || {};
   if (kind === 'move') {
     return this._wmEventTo(target, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
+  }
+  // Relative motion (todos/0018): lx/ly are dx/dy deltas. Injection is
+  // post-hit-test by design, so no pointer-lock state is required.
+  if (kind === 'rel') {
+    return this._wmEventTo(target, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 1, 0, 0]);
   }
   if (kind === 'down' || kind === 'up') {
     return this._wmEventTo(target, [kind === 'down' ? WMEV.MOUSEBUTTONDOWN : WMEV.MOUSEBUTTONUP,
@@ -2455,6 +2551,7 @@ Kernel.prototype.wmScene = function () {
     version: this._wmVersion,
     screen: { w: this._wmScreen.w, h: this._wmScreen.h },
     focusSid: this._focusSid,
+    pointerLockWanted: this._wmPtrLockWanted,   // relative mouse (todos/0018)
     resizeDrag: this._wmResizeDrag,   // rubber-band preview (todos/0019)
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); }).filter(Boolean),
   };
@@ -2492,7 +2589,7 @@ Kernel.prototype._wmpRecord = function (s) {
   var rec = new Uint8Array(WMP_REC_BYTES);
   var dv = new DataView(rec.buffer);
   var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
-              (s.borderless ? 4 : 0);
+              (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0);
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ), 0];
   for (var i = 0; i < fields.length; i++) dv.setInt32(i * 4, fields[i] | 0, true);
@@ -2580,8 +2677,8 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       ok(this.wmInjectKey(g(0), g(1) !== 0, g(2), g(3), g(4)));
       break;
     case WMP.INJECT_POINTER: {
-      var kind = ['move', 'down', 'up', 'wheel'][g(1)] || '';
-      var opts = kind === 'move' ? { buttons: g(4) }
+      var kind = ['move', 'down', 'up', 'wheel', 'rel'][g(1)] || '';
+      var opts = kind === 'move' || kind === 'rel' ? { buttons: g(4) }
         : kind === 'wheel' ? { wheelX: gf(2), wheelY: gf(3), direction: g(4) }
         : { button: g(4) };
       ok(this.wmInjectPointer(g(0), kind, gf(2), gf(3), opts));

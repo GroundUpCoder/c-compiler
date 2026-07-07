@@ -46,6 +46,9 @@ static void frame_cb(void) {
         if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == 4) newstate = 1;  /* 'A' */
         else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
             printf("CLICK %d %d b%d\\n", (int)e.button.x, (int)e.button.y, (int)e.button.button);
+        else if (e.type == SDL_EVENT_MOUSE_MOTION)
+            printf("MOTION %d %d rel %d %d\\n", (int)e.motion.x, (int)e.motion.y,
+                   (int)e.motion.xrel, (int)e.motion.yrel);
         else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
             surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
             printf("RESIZED %d %d\\n", (int)e.window.data1, (int)e.window.data2);
@@ -65,6 +68,9 @@ int main(void) {
     win = SDL_CreateWindow("e2e win", W, H, 0);
     if (!win) { printf("NOWIN\\n"); return 3; }
     surf = SDL_GetWindowSurface(win);
+    /* Relative mouse (todos/0018): request it, read the tracked state back. */
+    SDL_SetWindowRelativeMouseMode(win, 1);
+    printf("RELMODE %d\\n", SDL_GetWindowRelativeMouseMode(win) ? 1 : 0);
     __setAnimationFrameFunc(frame_cb);
     return 0;
 }
@@ -138,6 +144,24 @@ const watchdog = setTimeout(() => {
   kernel.wmPointer('up', w.x + 5, w.y + 6, { button: 1 });
   await waitOut('CLICK 5 6 b1');
   check('screen-coordinate click routed through hit test', true);
+
+  // Relative mouse (todos/0018): the C app requested it at startup
+  // (SDL_SetWindowRelativeMouseMode before the frame loop).
+  await waitOut('RELMODE 1');
+  check('relativeMouse flag round-tripped to the kernel',
+    kernel.wmList()[0].relativeMouse === true, JSON.stringify(kernel.wmList()));
+  // Injected relative deltas: C sees xrel/yrel with the position FROZEN at
+  // the last absolute point (the click above landed at 5,6).
+  kernel.wmInjectPointer(sid, 'rel', 12, -7, { buttons: 1 });
+  await waitOut('MOTION 5 6 rel 12 -7');
+  check('rel deltas reach SDL_PollEvent with frozen x/y', true);
+  // Locked-bridge path: pointer-lock reported active -> raw moves become
+  // rel records to the focused surface, no hit test.
+  kernel.wmPointerLockChanged(true);
+  kernel.wmPointer('move', 0, 0, { dx: 3, dy: 4, buttons: 0 });
+  await waitOut('MOTION 5 6 rel 3 4');
+  check('locked bridge motion arrives as relative', true);
+  kernel.wmPointerLockChanged(false);
 
   // Title drag moves the window (kernel-chrome policy).
   kernel.wmPointer('down', w.x + 30, w.y - 10, {});
