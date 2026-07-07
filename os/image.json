@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 12,
   "dirs": [
     "/bin",
     "/etc",
@@ -20,6 +20,9 @@
     },
     "/bin/winbox": {
       "c": "winbox.c"
+    },
+    "/bin/gpubox": {
+      "c": "gpubox.c"
     },
     "/bin/wm": {
       "c": "wm.c",

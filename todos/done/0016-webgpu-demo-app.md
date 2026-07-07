@@ -1,6 +1,15 @@
 # 0016 — SDL+WebGPU demo app windowed + Dawn tier-1 suite
 
-- **Status**: queued
+- **Status**: DONE 2026-07-08 — /bin/gpubox (webgpu.h cube) windowed in
+  browser (`gpu` transport) and headless (new Dawn readback→shm present
+  tail); `wgpuSurfacePresent` became a real host import; lazy optional
+  `webgpu` probe (tier 0 unchanged); tier-1 tolerance-diff suite
+  `tests/kernel/test_gpubox_dawn_e2e.js` (skips cleanly without the pkg) +
+  browser `tests/browser/os-gpubox.mjs`. S3 caveat handled via tracked
+  promises + `ctx.gpuDrain` before the EXIT handshake. Dev log:
+  `logs/2026-07-08/webgpu-demo-dawn-tier.md`. One-window-per-process v1
+  limitation exercised, unchanged. Real-world WebGPU port stays the
+  unnumbered follow-up.
 - **Depends**: 0013 (WM v1 — gpu transport); 0014 (soft)
 - **Design**: `todos/WM.md` ("The two axes", "Headless testing tiers",
   spike verdicts S1/S3), `todos/WEBGPU.md`

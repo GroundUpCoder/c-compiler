@@ -136,12 +136,21 @@ hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms` — the ROM
 files are gitignored, so their entries are `optional`: missing binary
 assets log a skip instead of failing the boot; bare `gameboy` runs a
 built-in test ROM), `/bin/snake` (tty game; needs two paced `q`s to quit
-— its exit-prompt read loop spins on EOF). The tty's `interactiveOut` opt makes fd 1/2
+— its exit-prompt read loop spins on EOF). `/bin/gpubox` (todos/0016) is
+the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
+device + ImageBitmap handoff; headless = the optional Dawn tier (the
+`webgpu` devDependency in the root package.json, LAZILY probed by host.js
+— never hard-imported, stock Node stays tier 0; present = texture
+readback→shm SAB, so `wmctl shot` works identically to CPU apps). GPU
+apps must quit via SDL_Quit(), not exit()-in-frame-callback — the runtime
+drains pending Dawn work before the EXIT handshake (WM.md spike-S3
+caveat). The tty's `interactiveOut` opt makes fd 1/2
 tty-kind (isatty true → hush goes interactive); piped runs stay
 byte-clean. Tests: `tests/kernel/test_os_boot.js` +
-`test_wm_service_e2e.js` + `test_os_apps_e2e.js` (headless, in the kernel
-suite); `tests/browser/os-boots.mjs` + `os-wm.mjs` + `os-doom.mjs` (real
-Chromium, manual).
+`test_wm_service_e2e.js` + `test_os_apps_e2e.js` +
+`test_gpubox_dawn_e2e.js` (headless, in the kernel suite; the gpubox one
+skips without the webgpu pkg); `tests/browser/os-boots.mjs` + `os-wm.mjs`
++ `os-doom.mjs` + `os-gpubox.mjs` (real Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

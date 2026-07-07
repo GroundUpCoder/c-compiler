@@ -24,16 +24,15 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0016` SDL+WebGPU demo app windowed + Dawn tier-1 suite — first real
-   `gpu`-transport consumer; a real-world WebGPU port follows later
-   (unnumbered)
-2. `0017` audio mixing — the kernel sound server (WM.md open question;
+1. `0017` audio mixing — the kernel sound server (WM.md open question;
    consumers: doom, gameboy)
-3. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
+2. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
    pak0.pak seeding (trivial now via image.json `bin` entries)
-4. `0019` client resize (`SURFACE_CONFIGURE`)
-5. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
+3. `0019` client resize (`SURFACE_CONFIGURE`)
+4. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
    demotes to bootstrap chrome
+5. (unnumbered) a real-world WebGPU C app port — candidates via
+   `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
@@ -67,7 +66,12 @@ fallback (`logs/2026-07-07/wm-policy-client.md`);
 `0015` **windowed vendor apps** — doom/snake/gameboy in-OS with zero
 source changes, image.json `bin` entries for binary game data (doom1.wad,
 ROMs), WM.md unit 7's acceptance test passed
-(`logs/2026-07-07/windowed-vendor-apps.md`).
+(`logs/2026-07-07/windowed-vendor-apps.md`);
+`0016` **GPU apps windowed + the Dawn tier** — `/bin/gpubox` (direct
+webgpu.h cube) through the `gpu` transport in the browser and the new
+canvas-less Dawn present tail (readback → shm) headless; lazy optional
+`webgpu` probe, `wgpuSurfacePresent` now a real host import, tier-1
+tolerance-diff suite (`logs/2026-07-08/webgpu-demo-dawn-tier.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

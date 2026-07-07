@@ -22723,6 +22723,7 @@ __import int  __wgpu_device_get_queue(int device);
 __import int  __wgpu_surface_get_preferred_format(int surface);
 __import void __wgpu_surface_configure(int surface, int device, int format, int usage, int width, int height, int alphaMode, int presentMode, const int *viewFormatsPacked, int viewFormatsLen);
 __import int  __wgpu_surface_get_current_texture(int surface);
+__import void __wgpu_surface_present(int surface);
 __import int  __wgpu_texture_create_view(int texture, int format, int dimension, int baseMip, int mipCount, int baseLayer, int layerCount, int aspect);
 __import int  __wgpu_device_create_shader_module_wgsl(int device, const char *code, int codeLen);
 __import int  __wgpu_device_create_render_pipeline(int device, int vsModule, const char *vsEntry, int vsEntryLen, int fsModule, const char *fsEntry, int fsEntryLen, const int *targetsPacked, int targetsLen, int topology, int stripIndexFormat, int cullMode, int frontFace, const int *vbLayout, int vbLayoutLen, int layout, int depthEnabled, int depthFormat, int depthWriteEnabled, int depthCompare, int depthBias, double depthBiasSlopeScale, double depthBiasClamp, const int *stencilPacked, int sampleCount, int sampleMask, int alphaToCoverage, const int *vsConstInts, int vsConstIntsLen, const double *vsConstVals, const int *fsConstInts, int fsConstIntsLen, const double *fsConstVals);
@@ -22853,7 +22854,13 @@ void wgpuSurfaceGetCurrentTexture(WGPUSurface surface, WGPUSurfaceTexture *surfa
                                : WGPUSurfaceGetCurrentTextureStatus_Error;
 }
 
-void wgpuSurfacePresent(WGPUSurface surface) { (void)surface; /* implicit on web */ }
+void wgpuSurfacePresent(WGPUSurface surface) {
+    /* Web canvas: presentation is implicit (the browser presents the configured
+       context after the frame) — the host import is a no-op there. Under the OS
+       it is the real present: gpu transport hands the frame to the kernel as an
+       ImageBitmap; the Dawn (headless) tier does the readback -> shm flip. */
+    __wgpu_surface_present((int)surface);
+}
 
 WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, const WGPUTextureViewDescriptor *d) {
     /* NULL descriptor (or all-zero fields) => host applies WebGPU defaults. */

@@ -5024,6 +5024,23 @@ const WMEV_QUIT = 0x100, WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
       WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
       WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
 
+/* Lazy, optional Dawn probe (todos/WM.md "Headless testing tiers", tier 1):
+ * the `webgpu` package (dawn-gpu/node-webgpu) is a devDependency, NEVER a hard
+ * import — stock Node resolves null and webgpu programs see a clean
+ * adapter-unavailable (identical to the null backend). Probed only when a
+ * program actually calls wgpuInstanceRequestAdapter, so non-GPU OS processes
+ * never pay the native-addon load. One Dawn GPU per worker (spike S3 shape). */
+let dawnGpu;   /* undefined = unprobed; null = unavailable; else the Dawn GPU */
+function resolveDawnGpu() {
+  if (dawnGpu === undefined) {
+    dawnGpu = null;
+    if (typeof process !== 'undefined' && typeof require === 'function') {
+      try { dawnGpu = require('webgpu').create([]); } catch (e) { /* not installed */ }
+    }
+  }
+  return Promise.resolve(dawnGpu);
+}
+
 function createSurfaceSDL({ ctx, hooks }) {
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
@@ -5125,16 +5142,17 @@ function createSurfaceSDL({ ctx, hooks }) {
       typeof hooks.surfaceFrame === 'function') {
     const canvas = new OffscreenCanvas(1, 1);
     let currentSid = 0;
-    const inner = createBrowserSDL({
-      canvas, ctx,
-      onPresent: function () {
-        if (!currentSid) return;
-        try {
-          const bmp = canvas.transferToImageBitmap();
-          hooks.surfaceFrame(currentSid, bmp);
-        } catch (e) { /* canvas may be zero-sized pre-configure */ }
-      },
-    });
+    /* The gpu-transport present tail (shared by the SDL renderer's flush and a
+     * raw webgpu.h app's wgpuSurfacePresent): snapshot the worker-local canvas
+     * and hand the frame to the kernel (todos/WM.md, spike S1). */
+    const presentFrame = function () {
+      if (!currentSid) return;
+      try {
+        const bmp = canvas.transferToImageBitmap();
+        hooks.surfaceFrame(currentSid, bmp);
+      } catch (e) { /* canvas may be zero-sized pre-configure */ }
+    };
+    const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame });
     const env = Object.assign({}, inner[ENV_KEY]);
     const innerCreate = env.__sdl_create_window;
     const innerDestroy = env.__sdl_destroy_window;
@@ -5171,6 +5189,9 @@ function createSurfaceSDL({ ctx, hooks }) {
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
     out.drainInput = drainInput;
+    // Raw webgpu.h apps share the same canvas + present tail (runModule builds
+    // the webgpu binding from this instead of the standalone canvas path).
+    out.webgpuConfig = { canvas: canvas, onPresent: presentFrame };
     return out;
   }
 
@@ -5184,6 +5205,33 @@ function createSurfaceSDL({ ctx, hooks }) {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     requestAnimationFrame: null,     // frame loop falls back to setTimeout
     drainInput: drainInput,
+    /* Raw webgpu.h apps: real WebGPU headless via the lazy Dawn probe (tier 1);
+     * the binding's shm present tail lands frames in the SDL window's SAB —
+     * kernel screenshots can't tell Dawn output from a CPU app. Without the
+     * package the resolver yields null (clean adapter-unavailable, tier 0). */
+    webgpuConfig: {
+      resolveGpu: resolveDawnGpu,
+      shmSurface: {
+        getTarget: function () {   /* one window per process (v1); newest wins */
+          for (let i = windows.length - 1; i >= 0; i--) if (windows[i]) return windows[i];
+          return null;
+        },
+        /* Tightly-packed RGBA rows (src may carry copyTextureToBuffer's 256B
+         * row padding) -> back buffer -> mailbox flip, mirroring shmPresent. */
+        present: function (win, src, srcPitch, sw, sh) {
+          const cw = Math.min(sw, win.w), ch = Math.min(sh, win.h);
+          const front = Atomics.load(win.fb.i32, WMSH_FLIP) & 1;
+          const back = 1 - front;
+          const base = WMSH_HDR_BYTES + back * win.w * win.h * 4;
+          for (let row = 0; row < ch; row++) {
+            win.fb.u8.set(src.subarray(row * srcPitch, row * srcPitch + cw * 4),
+              base + row * win.w * 4);
+          }
+          Atomics.store(win.fb.i32, WMSH_FLIP, back);
+          Atomics.add(win.fb.i32, WMSH_SEQ, 1);
+        },
+      },
+    },
     [ENV_KEY]: {
       __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
@@ -6152,9 +6200,41 @@ function wgpuFormat(v, name) {
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
 const WGPU_MAP_SUCCESS = 1, WGPU_MAP_ERROR = 3;
 
-function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
+function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface, onPresent }) {
   const { readString, getMemory, getExports } = ctx;
-  const gpu = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
+  /* GPU acquisition: navigator.gpu synchronously when present (browser);
+   * otherwise an injected async resolver — the OS headless flavor's lazy Dawn
+   * probe (todos/WM.md tier 1). gpuNow latches once the resolver settles so the
+   * sync paths keep working. */
+  let gpuNow = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
+  function gpuPromise() {
+    if (gpuNow) return Promise.resolve(gpuNow);
+    if (resolveGpu) return resolveGpu().then(function (g) { if (g) gpuNow = g; return g; });
+    return Promise.resolve(null);
+  }
+  /* Dawn (resolveGpu) mode: every backend promise is tracked so the exit path
+   * can drain before the kernel terminates the worker — worker.terminate()
+   * with pending Dawn async events aborts the whole Node process (WM.md spike
+   * S3 caveat). ctx.gpuDrain is awaited by runModule's deferred exit path;
+   * SIGKILL mid-frame remains the accepted crash risk of the optional tier. */
+  const inflight = new Set();
+  const dawnDevices = [];
+  function track(p) {
+    if (!resolveGpu) return p;               /* browser: no drain needed */
+    inflight.add(p);
+    const drop = function () { inflight.delete(p); };
+    p.then(drop, drop);
+    return p;
+  }
+  if (resolveGpu) {
+    ctx.gpuDrain = function () {
+      return Promise.allSettled(Array.from(inflight)).then(function () {
+        for (const d of dawnDevices) { try { d.destroy(); } catch (e) {} }
+        /* let destroy's own events settle before the EXIT handshake */
+        return new Promise(function (res) { setTimeout(res, 25); });
+      });
+    };
+  }
   const utf8 = new TextDecoder();
 
   /* Handle table: index 0 == null. Freelist reuses slots so a per-frame churn
@@ -6183,9 +6263,42 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
     return readStr(ptr, len);
   }
   function preferredFormat() {
-    try { if (gpu && gpu.getPreferredCanvasFormat) return gpu.getPreferredCanvasFormat(); }
+    if (shmSurface) return 'rgba8unorm';   /* the shm SAB framebuffer is RGBA8 */
+    try { if (gpuNow && gpuNow.getPreferredCanvasFormat) return gpuNow.getPreferredCanvasFormat(); }
     catch (e) {}
     return 'bgra8unorm';
+  }
+  /* ---- shm present tail (Dawn / headless OS): the "swapchain" is a plain
+   * GPUTexture; present = copyTextureToBuffer readback -> the SDL window's shm
+   * SAB, flipped mailbox-style — the kernel compositor cannot tell Dawn output
+   * from a CPU app (todos/WM.md "The two axes"). Usage/mode literals are the
+   * WebGPU spec constants (Dawn's globals are not installed). */
+  function shmPresentTail(s) {
+    if (!s.tex || !s.device || s.pending) return;  /* mailbox: drop while a readback is in flight */
+    const target = shmSurface.getTarget();
+    if (!target) return;                           /* no SDL window to present into */
+    const enc = s.device.createCommandEncoder();
+    enc.copyTextureToBuffer(
+      { texture: s.tex },
+      { buffer: s.readBuf, bytesPerRow: s.bytesPerRow },
+      { width: s.w, height: s.h }
+    );
+    s.device.queue.submit([enc.finish()]);
+    s.pending = true;
+    track(s.readBuf.mapAsync(1 /* GPUMapMode.READ */).then(function () {
+      let px = new Uint8Array(s.readBuf.getMappedRange());
+      if (s.format === 'bgra8unorm') {
+        if (!s.scratch || s.scratch.length !== px.length) s.scratch = new Uint8Array(px.length);
+        const sc = s.scratch;
+        for (let i = 0; i < px.length; i += 4) {
+          sc[i] = px[i + 2]; sc[i + 1] = px[i + 1]; sc[i + 2] = px[i]; sc[i + 3] = px[i + 3];
+        }
+        px = sc;
+      }
+      shmSurface.present(target, px, s.bytesPerRow, s.w, s.h);
+      s.readBuf.unmap();
+      s.pending = false;
+    }).catch(function (e) { s.pending = false; console.error('wgpu shm present readback failed', e); }));
   }
   /* Unpack packed pipeline-overridable constants into a {name: value} record.
      Ints: [ count, per entry: keyPtr, keyLen ]; values ride a parallel Float64
@@ -6219,6 +6332,13 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       __wgpu_create_instance: function () { return alloc({ kind: 'instance' }); },
 
       __wgpu_instance_create_surface: function (instance) {
+        if (shmSurface) {
+          /* Canvas-less surface (Dawn/headless): the swapchain texture is
+           * created at configure time; present is the readback tail. */
+          return alloc({ kind: 'surface', shm: true, tex: null, w: 0, h: 0,
+                         format: null, device: null, readBuf: null, bytesPerRow: 0,
+                         pending: false, scratch: null });
+        }
         if (!canvas) return 0;
         let gpuCtx = null;
         try { gpuCtx = canvas.getContext('webgpu'); }
@@ -6228,35 +6348,38 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
       },
 
       __wgpu_instance_request_adapter: function (instance, cb, ud1, ud2) {
-        if (!gpu) {
-          console.error('WebGPU unavailable (navigator.gpu missing)');
-          Promise.resolve().then(function () { callAdapterCb(cb, WGPU_REQ_UNAVAILABLE, 0, ud1, ud2); });
-          return;
-        }
-        gpu.requestAdapter().then(function (ad) {
-          if (!ad) { callAdapterCb(cb, WGPU_REQ_UNAVAILABLE, 0, ud1, ud2); return; }
-          callAdapterCb(cb, WGPU_REQ_SUCCESS, alloc(ad), ud1, ud2);
+        track(gpuPromise().then(function (g) {
+          if (!g) {
+            console.error('WebGPU unavailable (no navigator.gpu / headless GPU backend)');
+            callAdapterCb(cb, WGPU_REQ_UNAVAILABLE, 0, ud1, ud2);
+            return;
+          }
+          return g.requestAdapter().then(function (ad) {
+            if (!ad) { callAdapterCb(cb, WGPU_REQ_UNAVAILABLE, 0, ud1, ud2); return; }
+            callAdapterCb(cb, WGPU_REQ_SUCCESS, alloc(ad), ud1, ud2);
+          });
         }).catch(function (e) {
           console.error('requestAdapter failed', e);
           callAdapterCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2);
-        });
+        }));
       },
 
       __wgpu_adapter_request_device: function (adapter, cb, ud1, ud2) {
         const ad = get(adapter);
         if (!ad) { Promise.resolve().then(function () { callDeviceCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2); }); return; }
-        ad.requestDevice().then(function (dev) {
+        track(ad.requestDevice().then(function (dev) {
           if (!dev) { callDeviceCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2); return; }
           try {
             dev.addEventListener('uncapturederror', function (ev) {
               console.error('WebGPU uncaptured error:', ev.error && ev.error.message);
             });
           } catch (e) {}
+          if (resolveGpu) dawnDevices.push(dev);
           callDeviceCb(cb, WGPU_REQ_SUCCESS, alloc(dev), ud1, ud2);
         }).catch(function (e) {
           console.error('requestDevice failed', e);
           callDeviceCb(cb, WGPU_REQ_ERROR, 0, ud1, ud2);
-        });
+        }));
       },
 
       __wgpu_device_get_queue: function (device) { const d = get(device); return d ? alloc(d.queue) : 0; },
@@ -6267,6 +6390,25 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_surface_configure: function (surface, device, format, usage, width, height, alphaMode, presentMode, viewFormatsPacked, viewFormatsLen) {
         const s = get(surface), d = get(device);
+        if (s && s.shm) {
+          if (!d) throw new Error('wgpuSurfaceConfigure: invalid device handle');
+          const sfmt = wgpuFormat(format, 'surfaceConfigure.format') || preferredFormat();
+          if (sfmt !== 'rgba8unorm' && sfmt !== 'bgra8unorm') {
+            throw new Error('wgpuSurfaceConfigure: format ' + sfmt + ' unsupported on the shm present tail (rgba8unorm/bgra8unorm only)');
+          }
+          s.format = sfmt; s.device = d;
+          s.w = width >>> 0; s.h = height >>> 0;
+          /* OR in texture-usage RENDER_ATTACHMENT(0x10) + COPY_SRC(0x01): the
+           * app renders into it and present reads it back. */
+          s.tex = d.createTexture({
+            size: { width: s.w, height: s.h }, format: sfmt,
+            usage: (usage >>> 0) | 0x10 | 0x01,
+          });
+          s.bytesPerRow = Math.ceil((s.w * 4) / 256) * 256;   /* copyTextureToBuffer alignment */
+          s.readBuf = d.createBuffer({ size: s.bytesPerRow * s.h, usage: 0x08 /* COPY_DST */ | 0x01 /* MAP_READ */ });
+          s.pending = false;
+          return;
+        }
         if (!s || !s.gpuCtx || !d) throw new Error('wgpuSurfaceConfigure: invalid surface/device handle');
         const fmt = wgpuFormat(format, 'surfaceConfigure.format') || preferredFormat();
         s.format = fmt;
@@ -6299,9 +6441,21 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
 
       __wgpu_surface_get_current_texture: function (surface) {
         const s = get(surface);
+        if (s && s.shm) return s.tex ? alloc(s.tex) : 0;
         if (!s || !s.gpuCtx) return 0;
         try { return alloc(s.gpuCtx.getCurrentTexture()); }
         catch (e) { console.error('getCurrentTexture failed', e); return 0; }
+      },
+
+      __wgpu_surface_present: function (surface) {
+        const s = get(surface);
+        if (s && s.shm) { shmPresentTail(s); return; }
+        /* Canvas: presentation is implicit (the browser presents the configured
+         * context after the frame). Under the OS the gpu transport hands the
+         * finished frame to the kernel here (ImageBitmap handoff). */
+        if (onPresent) {
+          try { onPresent(); } catch (e) { console.error('wgpu present handoff failed', e); }
+        }
       },
 
       __wgpu_texture_create_view: function (texture, format, dimension, baseMip, mipCount, baseLayer, layerCount, aspect) {
@@ -6812,6 +6966,7 @@ function createNullWebGPU(ctx) {
       __wgpu_surface_get_preferred_format: function () { return 23; },
       __wgpu_surface_configure: function () {},
       __wgpu_surface_get_current_texture: function () { return 0; },
+      __wgpu_surface_present: function () {},
       __wgpu_texture_create_view: function () { return 0; },
       __wgpu_device_create_shader_module_wgsl: function () { return 0; },
       __wgpu_device_create_render_pipeline: function () { return 0; },
@@ -8704,9 +8859,16 @@ async function runModule({
      The async adapter/device/map callbacks are driven by the post-main loop
      (a program keeps alive via wgpuSetMainLoopCallback and stops it when done). */
   const hasGpu = (typeof navigator !== 'undefined' && navigator.gpu);
-  const webgpu = (getBrowserSDL || hasGpu)
-    ? createBrowserWebGPU({ canvas: getBrowserSDL || null, ctx: ctx, notifyWindow: notifyWindow })
-    : createNullWebGPU(ctx);
+  // OS surface backend (createSurfaceSDL): the webgpu binding rides its config —
+  // browser flavor shares the worker-local canvas + ImageBitmap present tail;
+  // headless flavor gets the lazy Dawn probe + shm readback tail (todos/0016).
+  const wCfg = (sdl && sdl.webgpuConfig) || null;
+  const webgpu = wCfg
+    ? createBrowserWebGPU({ canvas: wCfg.canvas || null, ctx: ctx, notifyWindow: notifyWindow,
+                            resolveGpu: wCfg.resolveGpu, shmSurface: wCfg.shmSurface, onPresent: wCfg.onPresent })
+    : (getBrowserSDL || hasGpu)
+      ? createBrowserWebGPU({ canvas: getBrowserSDL || null, ctx: ctx, notifyWindow: notifyWindow })
+      : createNullWebGPU(ctx);
   Object.assign(imports[ENV_KEY], webgpu[ENV_KEY]);
 
   /* ---- Process model: __spawn / __spawn_wait / __spawn_kill ----
@@ -9034,6 +9196,10 @@ async function runModule({
       // tears the process down) runs AFTER the frame loop stops, below.
       // Calling it here killed OS processes before their first frame.
     } else if (instance.exports.exit) {
+      // Dawn tier: settle pending GPU promises before the EXIT handshake —
+      // the kernel terminates the worker on EXIT, and worker.terminate() with
+      // pending Dawn events aborts the whole Node process (WM.md spike S3).
+      if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
       instance.exports.exit(exitCode);
     } else if (instance.exports.__run_atexits) {
       instance.exports.__run_atexits();
@@ -9093,6 +9259,10 @@ async function runModule({
     // The loop stopped (frame func cleared, or exit() unwound a frame): now
     // run the deferred C exit path — atexits, and under kernel.js the EXIT
     // handshake. ExitStatus is how a host __exit stub reports the code.
+    // Dawn tier: drain pending GPU promises FIRST (see the gpuDrain comment
+    // above) — this is why Dawn apps quit via SDL_Quit(), not exit(): exit()
+    // inside a frame tick fires the EXIT handshake before any drain can run.
+    if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
     try {
       if (instance.exports.exit) {
         instance.exports.exit(exitCode);

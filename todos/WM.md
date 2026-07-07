@@ -5,9 +5,12 @@
   below for what shipped and where it deviates); **/bin/wm + wmctl landed**
   (todos/done/0014, status section below); **the acceptance test passed**
   (todos/done/0015 — doom/snake/gameboy windowed in-OS with zero source
-  changes; quake awaits the relative-mouse flag, todos/0018). Remaining
-  queue: 0016 (WebGPU demo + Dawn tier), 0017 (audio), 0019 (resize),
-  per todos/README.md.
+  changes; quake awaits the relative-mouse flag, todos/0018); **GPU apps +
+  the Dawn tier landed** (todos/done/0016, 2026-07-08 — /bin/gpubox through
+  the `gpu` transport in the browser and the Dawn readback→shm present tail
+  headless; tier-1 suite in the kernel run; status section below).
+  Remaining queue: 0017 (audio), 0018 (quake), 0019 (resize), per
+  todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -358,6 +361,35 @@ browser `os-wm.mjs`):
 Still kernel-side at v2: title-bar DRAG and the close box (kernel chrome) —
 moving those to the WM needs frame surfaces or a pointer-grab protocol;
 placement/stacking/minimize policy is already the WM's.
+
+## Implementation status — GPU apps + the Dawn tier (landed 2026-07-08, todos/0016)
+
+The first real `gpu`-transport consumer and the tier-1 suite from the table
+above (suites: `test_gpubox_dawn_e2e.js` in the kernel run, browser
+`os-gpubox.mjs`; dev log `logs/2026-07-08/webgpu-demo-dawn-tier.md`):
+
+- **/bin/gpubox** (os/gpubox.c, seeded): SDL window + direct `webgpu.h`
+  rendering (lambert-shaded cube, per-face flat colors, frame-indexed
+  rotation; `-f N` freezes a pose for tolerance-diff shots). Same binary in
+  all three environments — invariant 1 held.
+- **`wgpuSurfacePresent` is now a real host import** (`__wgpu_surface_present`)
+  — no-op on a DOM canvas (present stays implicit), the ImageBitmap handoff in
+  the browser OS flavor, the readback tail under Dawn.
+- **Dawn present tail exactly as designed** ("The two axes"): host.js's
+  surface seam hands the app a plain `GPUTexture`; present =
+  `copyTextureToBuffer` → shm SAB mailbox flip — kernel screenshots cannot
+  tell Dawn output from a CPU app. Formats: rgba8unorm preferred, bgra8unorm
+  swizzled, anything else fails loud.
+- **Lazy optional probe**: `require('webgpu')` fires only on a process's first
+  `wgpuInstanceRequestAdapter`; stock Node yields a clean adapter-unavailable
+  (tier 0 unchanged, zero-dep core kept — the root package.json stays
+  devDependencies-only).
+- **S3 caveat discipline**: all Dawn promises are tracked; `ctx.gpuDrain`
+  (allSettled + device.destroy) runs before the deferred EXIT handshake. GPU
+  apps must quit via `SDL_Quit()`, not `exit()`-in-frame-callback; SIGKILL
+  mid-frame remains the accepted crash risk of the optional tier.
+- The browser `gpu` flavor's one-window-per-process v1 limitation was
+  exercised and stands unchanged (gpubox is one window).
 
 ## Spike appendix — VERDICTS (run 2026-07-07, todos/0012;
 ## harnesses: `tests/browser/wm-spikes.mjs` + `tests/spikes/s3_dawn.mjs`)
