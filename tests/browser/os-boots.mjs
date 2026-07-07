@@ -77,6 +77,32 @@ try {
   await waitOut('hello, wasm world', 120000);
   check('cc hello.c && ./a.out runs in-browser', true);
 
+  // vi (todos/0011): the full-screen editor through the REAL xterm path —
+  // keystrokes -> xterm -> kernel tty (raw mode) -> vi; file bytes asserted
+  // after :wq. Deep edit scenarios live in tests/kernel/test_vi_e2e.js; this
+  // proves the browser half. ESC goes via press() with air around it
+  // (read_key resolves a lone ESC by timeout).
+  await type('vi /tmp/b.txt');
+  await waitOut('\x1b[?1049h');              // vi entered the alternate screen
+  await page.keyboard.type('ibrowser vi works');
+  // No text needle here: Playwright types char-by-char, so each char is its
+  // own tty read -> own refresh -> cursor-positioned single-char render; the
+  // typed string never appears contiguously. The file bytes below are the
+  // real assertion.
+  await page.waitForTimeout(600);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await page.keyboard.type(':wq\r');
+  await waitOut('\x1b[?1049l');              // vi exited the alternate screen
+  await type('cat /tmp/b.txt && echo VI-CAT-OK');
+  await waitOut('VI-CAT-OK');
+  const okVi = await page.evaluate(() => {
+    const out = window.__osOut;
+    const exit = out.lastIndexOf('\x1b[?1049l');   // only trust post-vi output
+    return out.slice(exit).replace(/\r/g, '').includes('browser vi works\n');
+  });
+  check('vi edits a file through xterm (todos/0011)', okVi);
+
   // Reboot the tab: same context = same OPFS; the image must be reused and
   // the compiled a.out must still be there.
   await page.reload();

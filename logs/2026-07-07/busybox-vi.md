@@ -75,6 +75,16 @@ Two hard-won harness rules:
 `\x1b[?1049h` / `l` (alternate screen enter/leave) turn out to be perfect
 vi-started / vi-exited markers.
 
+**Browser half** (follow-up, same day): `tests/browser/os-boots.mjs` grew a
+vi section — type/edit/`:wq`/`cat` through real Chromium + xterm. One
+cross-path gotcha worth remembering: Playwright's `keyboard.type` delivers
+one char per key event, so each char is its own tty read → own vi refresh
+→ cursor-positioned single-char render (`ESC[4;16Hv ESC[4;17Hi …`) — typed
+text NEVER appears contiguously in the output stream, unlike the kernel
+e2e where the whole string lands in one tty buffer read and renders as a
+line. So in the browser test the sync is time-based and the file bytes are
+(as always) the assertion.
+
 ## Numbers
 
 - Multicall grows to 28 applets, 219 KB wasm (from ~200 KB) — vi is ~26 KB
