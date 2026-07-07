@@ -25,7 +25,6 @@ One numbered file per unit of work we have actually committed to doing.
 ### Next up (order of attack)
 
 1. `0007` window manager / compositor — design doc first
-2. `0008` networking — AF_UNIX first
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
@@ -41,7 +40,10 @@ here-docs, job control, popen/system — the kernel design's acceptance
 test, passed; `0010` busybox coreutils — 27 applets as one multicall
 /bin/coreutils + /bin symlinks (`logs/2026-07-07/coreutils-multicall.md`);
 `0011` busybox vi — the OS's editor, 28th multicall applet, driven e2e
-through the kernel tty (`logs/2026-07-07/busybox-vi.md`).
+through the kernel tty (`logs/2026-07-07/busybox-vi.md`);
+`0008` AF_UNIX sockets — the 0x05xx control plane over the pipe machinery,
+S_IFSOCK rendezvous in BlockFS, `<sys/socket.h>` in the libc
+(`logs/2026-07-07/af-unix-sockets.md`).
 **OS.md Phase 1 is complete.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
@@ -57,9 +59,10 @@ don't duplicate them. Current map:
   posix_spawn-not-fork decision, the reference-build (`os/`) layout, the
   phased roadmap the queue is drawn from.
 - `KERNEL.md` — the process control plane design (kernel.js): kernel page,
-  doorbell, signals, tty, the fd/data-plane amendment, pipes,
-  settled-decisions table. Phases 1–3 + the brokered fs are implemented
-  (0001/0002/0009 in done/); `0003` (pipes + job control) is the remainder.
+  doorbell, signals, tty, the fd/data-plane amendment, pipes, AF_UNIX
+  sockets, settled-decisions table. All phases implemented
+  (0001/0002/0003/0009/0008 in done/); the 0x1xxx WM opcode space is the
+  reserved remainder.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
 - `SDL3.md`, `SDL3-MIGRATION.md`, `WEBGPU.md` — runtime API surface plans.
 - `DOM.md` — C-to-DOM bytecode + diffing renderer idea.

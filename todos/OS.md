@@ -120,7 +120,7 @@ pgid atomically at spawn).
 | Threads | **Deferred indefinitely** (todos/0006, 2026-07-07): processes are the parallelism unit. `_Atomic` is not accepted (`__STDC_NO_ATOMICS__` stays defined — fail loud, no shim); `pthread.h` absent; `threads.h` a one-line stub. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
 | Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
-| Networking | Stubs only. |
+| Networking | **AF_UNIX done** (todos/done/0008): socket/bind/listen/accept/connect/send/recv/socketpair/shutdown between processes, S_IFSOCK rendezvous nodes in BlockFS, poll/select integration — IPC for the WM protocol is unlocked. AF_INET (WebSocket/WebTransport relay) still absent. |
 | Editor | **busybox vi is `/bin/vi`** (todos/done/0011) — full-screen editing in the terminal, e2e-tested through the kernel tty. CodeMirror stays vendored but unwired (a GUI editor is compositor-era work). |
 
 ## Reference build: `os/` in this repo
@@ -255,10 +255,14 @@ matches it:
 
 ### Phase 4 — Networking and the long tail
 
-- Sockets: AF_INET emulation over WebSocket/WebTransport (needs a relay or
-  same-origin services), plus an AF_UNIX that's purely local (trivial — pipes
-  with names in BlockFS). AF_UNIX first: it unlocks IPC for the WM protocol
-  and multiplexers without any relay infrastructure.
+- ~~AF_UNIX~~ DONE (todos/done/0008): stream sockets as OFDs over the pipe
+  machinery, S_IFSOCK rendezvous nodes in BlockFS, `<sys/socket.h>`/
+  `<sys/un.h>` in the libc, poll/select integration. The "trivial — pipes
+  with names in BlockFS" prediction held (design: `todos/KERNEL.md`
+  "AF_UNIX sockets"). IPC for the WM protocol and multiplexers is unlocked.
+- Sockets, remaining: AF_INET emulation over WebSocket/WebTransport (needs
+  a relay or same-origin services); SOCK_DGRAM/SCM_RIGHTS/O_NONBLOCK if a
+  port demands them (v1 non-goals, recorded in KERNEL.md).
 - `fetch()`-backed HTTP convenience API for ports that just want HTTP.
 - Locale/wchar beyond the current minimal level, as ports demand.
 

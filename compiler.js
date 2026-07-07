@@ -19455,6 +19455,169 @@ static inline int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *ex
     timeout ? 1 : 0);
 }
   `,
+  "sys/socket.h": `
+#pragma once
+/* AF_UNIX stream sockets over the kernel's pipe machinery (todos/0008).
+   Only AF_UNIX + SOCK_STREAM is implemented — AF_INET needs a network relay
+   and is a separate future item. The sockaddr surface is POSIX; the host
+   imports speak plain fs paths (the only address family there is). The
+   other families/types are defined so ports compile; using them fails at
+   runtime with EAFNOSUPPORT/EPROTONOSUPPORT.
+   v1 limits: SOCK_NONBLOCK/O_NONBLOCK are accepted but ignored (all socket
+   I/O is blocking); MSG_NOSIGNAL is accepted but SIGPIPE still fires;
+   setsockopt is accepted and ignored; the abstract namespace (sun_path
+   starting with NUL) is EOPNOTSUPP. */
+#include <stddef.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+
+typedef unsigned socklen_t;
+typedef unsigned short sa_family_t;
+
+struct sockaddr { sa_family_t sa_family; char sa_data[14]; };
+struct sockaddr_storage { sa_family_t ss_family; char __ss_pad[126]; };
+
+#define AF_UNSPEC 0
+#define AF_UNIX   1
+#define AF_LOCAL  AF_UNIX
+#define AF_INET   2
+#define AF_INET6  10
+#define PF_UNSPEC AF_UNSPEC
+#define PF_UNIX   AF_UNIX
+#define PF_LOCAL  AF_LOCAL
+#define PF_INET   AF_INET
+
+#define SOCK_STREAM    1
+#define SOCK_DGRAM     2
+#define SOCK_SEQPACKET 5
+#define SOCK_CLOEXEC  0x80000  /* == O_CLOEXEC; moot (no exec-style fd leak) */
+#define SOCK_NONBLOCK 0x800    /* == O_NONBLOCK; accepted, ignored (v1) */
+
+#define SHUT_RD   0
+#define SHUT_WR   1
+#define SHUT_RDWR 2
+
+#define MSG_PEEK     2
+#define MSG_DONTWAIT 0x40
+#define MSG_NOSIGNAL 0x4000
+
+#define SOL_SOCKET   1
+#define SO_REUSEADDR 2
+#define SO_ERROR     4
+#define SO_SNDBUF    7
+#define SO_RCVBUF    8
+#define SO_KEEPALIVE 9
+
+__import int __sock_socket(int domain, int type, int protocol);
+__import int __sock_bind(int fd, const char *path);
+__import int __sock_listen(int fd, int backlog);
+__import int __sock_accept(int fd);
+__import int __sock_connect(int fd, const char *path);
+__import int __sock_pair(int sv[2]);
+__import int __sock_shutdown(int fd, int how);
+
+/* Extract the NUL-terminated fs path from a sockaddr_un-shaped address
+   (family at offset 0, path bytes right after — see <sys/un.h>). */
+static inline int __sockaddr_un_path(const struct sockaddr *addr, socklen_t len,
+                                     char *out /* [109] */) {
+  if (!addr || len < (socklen_t)sizeof(sa_family_t)) { errno = EINVAL; return -1; }
+  if (addr->sa_family != AF_UNIX) { errno = EAFNOSUPPORT; return -1; }
+  {
+    const char *p = (const char *)addr + sizeof(sa_family_t);
+    socklen_t max = len - (socklen_t)sizeof(sa_family_t);
+    socklen_t n = 0;
+    if (max > 108) max = 108;
+    while (n < max && p[n]) n++;
+    if (n == 0) { errno = EINVAL; return -1; }          /* unnamed */
+    if (p[0] == 0) { errno = EOPNOTSUPP; return -1; }   /* abstract ns */
+    memcpy(out, p, n);
+    out[n] = 0;
+  }
+  return 0;
+}
+
+static inline int socket(int domain, int type, int protocol) {
+  type &= ~(SOCK_CLOEXEC | SOCK_NONBLOCK);
+  if (domain != AF_UNIX) { errno = EAFNOSUPPORT; return -1; }
+  if (type != SOCK_STREAM || protocol != 0) { errno = EPROTONOSUPPORT; return -1; }
+  return __sock_socket(domain, type, protocol);
+}
+static inline int socketpair(int domain, int type, int protocol, int sv[2]) {
+  type &= ~(SOCK_CLOEXEC | SOCK_NONBLOCK);
+  if (domain != AF_UNIX) { errno = EAFNOSUPPORT; return -1; }
+  if (type != SOCK_STREAM || protocol != 0) { errno = EPROTONOSUPPORT; return -1; }
+  return __sock_pair(sv);
+}
+static inline int bind(int fd, const struct sockaddr *addr, socklen_t len) {
+  char __p[109];
+  if (__sockaddr_un_path(addr, len, __p) < 0) return -1;
+  return __sock_bind(fd, __p);
+}
+static inline int connect(int fd, const struct sockaddr *addr, socklen_t len) {
+  char __p[109];
+  if (__sockaddr_un_path(addr, len, __p) < 0) return -1;
+  return __sock_connect(fd, __p);
+}
+static inline int listen(int fd, int backlog) { return __sock_listen(fd, backlog); }
+static inline int accept(int fd, struct sockaddr *addr, socklen_t *len) {
+  int nfd = __sock_accept(fd);
+  if (nfd >= 0 && addr && len) {          /* the peer is an unnamed AF_UNIX addr */
+    if (*len >= (socklen_t)sizeof(sa_family_t)) addr->sa_family = AF_UNIX;
+    *len = (socklen_t)sizeof(sa_family_t);
+  }
+  return nfd;
+}
+static inline int shutdown(int fd, int how) { return __sock_shutdown(fd, how); }
+static inline long send(int fd, const void *buf, size_t n, int flags) {
+  if (flags & ~MSG_NOSIGNAL) { errno = EOPNOTSUPP; return -1; }
+  return write(fd, buf, n);
+}
+static inline long recv(int fd, void *buf, size_t n, int flags) {
+  if (flags) { errno = EOPNOTSUPP; return -1; }
+  return read(fd, buf, n);
+}
+static inline long sendto(int fd, const void *buf, size_t n, int flags,
+                          const struct sockaddr *addr, socklen_t len) {
+  if (addr || len) { errno = EISCONN; return -1; }  /* stream: no per-msg dest */
+  return send(fd, buf, n, flags);
+}
+static inline long recvfrom(int fd, void *buf, size_t n, int flags,
+                            struct sockaddr *addr, socklen_t *len) {
+  if (len) *len = 0;
+  return recv(fd, buf, n, flags);
+}
+static inline int setsockopt(int fd, int level, int opt, const void *v, socklen_t l) {
+  (void)fd; (void)level; (void)opt; (void)v; (void)l;
+  return 0;                               /* accepted and ignored */
+}
+static inline int getsockopt(int fd, int level, int opt, void *v, socklen_t *l) {
+  (void)fd; (void)level; (void)opt;
+  if (v && l && *l >= (socklen_t)sizeof(int)) { *(int *)v = 0; *l = sizeof(int); }
+  return 0;                               /* everything reads back 0 (incl. SO_ERROR) */
+}
+static inline int getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
+  (void)fd;
+  if (addr && len && *len >= (socklen_t)sizeof(sa_family_t)) {
+    addr->sa_family = AF_UNIX;
+    *len = (socklen_t)sizeof(sa_family_t);
+  }
+  return 0;
+}
+static inline int getpeername(int fd, struct sockaddr *addr, socklen_t *len) {
+  return getsockname(fd, addr, len);
+}
+  `,
+  "sys/un.h": `
+#pragma once
+#include <sys/socket.h>
+#include <string.h>
+struct sockaddr_un {
+  sa_family_t sun_family;
+  char sun_path[108];
+};
+#define SUN_LEN(su) ((socklen_t)(sizeof(sa_family_t) + strlen((su)->sun_path)))
+  `,
   "byteswap.h": `
 #pragma once
 static inline unsigned short bswap_16(unsigned short x) {
@@ -19985,11 +20148,19 @@ extern int errno;
 #define EWOULDBLOCK EAGAIN
 #define ENOLCK    37
 #define ETIMEDOUT 110
+#define ENOTSOCK     88
+#define EDESTADDRREQ 89
+#define EPROTOTYPE   91
+#define EPROTONOSUPPORT 93
 #define EOPNOTSUPP   95
+#define ENOTSUP      EOPNOTSUPP
+#define EAFNOSUPPORT 97
 #define EADDRINUSE   98
+#define EADDRNOTAVAIL 99
 #define ECONNABORTED 103
 #define ECONNRESET   104
 #define ENOBUFS      105
+#define EISCONN      106
 #define ENOTCONN     107
 #define ECONNREFUSED 111
 #define EHOSTUNREACH 113

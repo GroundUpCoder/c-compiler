@@ -617,6 +617,15 @@ function createFileSystem({ fs, ctx }) {
         view.setInt32(pipefd_ptr + 4, writeFd, true);
         return 0;
       },
+      // AF_UNIX sockets (todos/0008) need the brokered kernel — this plain
+      // Node-fs env has no process kernel, so the family links but ENOSYSes.
+      __sock_socket: function () { setErrnoName('ENOSYS'); return -1; },
+      __sock_bind: function () { setErrnoName('ENOSYS'); return -1; },
+      __sock_listen: function () { setErrnoName('ENOSYS'); return -1; },
+      __sock_accept: function () { setErrnoName('ENOSYS'); return -1; },
+      __sock_connect: function () { setErrnoName('ENOSYS'); return -1; },
+      __sock_pair: function () { setErrnoName('ENOSYS'); return -1; },
+      __sock_shutdown: function () { setErrnoName('ENOSYS'); return -1; },
       dup: function (oldfd) {
         if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
         const entry = fdTable[oldfd];
@@ -964,6 +973,7 @@ var BLOCK_FS = (function () {
   var S_IFCHR = 0o020000;
   var S_IFREG = 0o100000;
   var S_IFLNK = 0o120000;
+  var S_IFSOCK = 0o140000;
   var SYMLOOP_MAX = 40;     // symlink-following hop cap → ELOOP
   var DEFAULT_DIR_MODE = 0o40755;
   var DEFAULT_FILE_MODE = 0o100644;
@@ -2645,6 +2655,8 @@ var BLOCK_FS = (function () {
       // Exists
       if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EISDIR');
       if (excl && create) return this._setErr('EEXIST');
+      // A socket node (todos/0008 rendezvous) is not open()able — POSIX ENXIO.
+      if ((w.ino.mode & S_IFMT) === S_IFSOCK) return this._setErr('ENXIO');
       if ((w.ino.mode & S_IFMT) === S_IFCHR) {
         // Character device: no data extent, O_TRUNC is a no-op. I/O is
         // dispatched by device number, not by reading/writing the (absent)
@@ -3337,6 +3349,18 @@ var BLOCK_FS = (function () {
     return [readFd, writeFd];
   };
 
+  // AF_UNIX sockets (todos/0008) exist only under the brokered kernel —
+  // the in-process fs has no second process to talk to, so the whole
+  // family is ENOSYS here. RemoteFS overrides these with kernel RPCs;
+  // toWasmEnv dispatches via `this.`, so both transports share the env.
+  BlockFS.prototype.sockSocket = function () { return this._setErr('ENOSYS'); };
+  BlockFS.prototype.sockBind = function () { return this._setErr('ENOSYS'); };
+  BlockFS.prototype.sockListen = function () { return this._setErr('ENOSYS'); };
+  BlockFS.prototype.sockAccept = function () { return this._setErr('ENOSYS'); };
+  BlockFS.prototype.sockConnect = function () { return this._setErr('ENOSYS'); };
+  BlockFS.prototype.sockPair = function () { return this._setErr('ENOSYS'); };
+  BlockFS.prototype.sockShutdown = function () { return this._setErr('ENOSYS'); };
+
   BlockFS.prototype.dup = function (oldfd) {
     if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
       return this._setErr('EBADF');
@@ -3963,6 +3987,34 @@ var BLOCK_FS = (function () {
         view.setInt32(pipefd_ptr, fds[0], true);
         view.setInt32(pipefd_ptr + 4, fds[1], true);
         return 0;
+      }),
+      // AF_UNIX sockets (todos/0008): thin marshalling over the sock*
+      // methods — real on RemoteFS (kernel RPCs), ENOSYS on plain BlockFS.
+      __sock_socket: wrap(function (domain, type, protocol) {
+        return this.sockSocket(domain, type, protocol);
+      }),
+      __sock_bind: wrap(function (fd, path_ptr) {
+        return this.sockBind(fd, readString(path_ptr));
+      }),
+      __sock_listen: wrap(function (fd, backlog) {
+        return this.sockListen(fd, backlog);
+      }),
+      __sock_accept: wrap(function (fd) {
+        return this.sockAccept(fd);
+      }),
+      __sock_connect: wrap(function (fd, path_ptr) {
+        return this.sockConnect(fd, readString(path_ptr));
+      }),
+      __sock_pair: wrap(function (sv_ptr) {
+        var sfds = this.sockPair();
+        if (sfds === null) return -1;
+        var sview = new DataView(getMemory().buffer);
+        sview.setInt32(sv_ptr, sfds[0], true);
+        sview.setInt32(sv_ptr + 4, sfds[1], true);
+        return 0;
+      }),
+      __sock_shutdown: wrap(function (fd, how) {
+        return this.sockShutdown(fd, how);
       }),
       dup: wrap(function (oldfd) {
         var nfd = this.dup(oldfd);
@@ -7990,7 +8042,12 @@ async function runModule({
     'EEXIST': 17, 'EXDEV': 18, 'ENODEV': 19, 'ENOTDIR': 20, 'EISDIR': 21,
     'EINVAL': 22, 'ENFILE': 23, 'EMFILE': 24, 'ENOTTY': 25, 'EFBIG': 27,
     'ENOSPC': 28, 'ESPIPE': 29, 'EROFS': 30, 'EPIPE': 32, 'EDOM': 33,
-    'ERANGE': 34, 'ENAMETOOLONG': 36, 'ENOSYS': 38, 'ENOTEMPTY': 39
+    'ERANGE': 34, 'ENAMETOOLONG': 36, 'ENOSYS': 38, 'ENOTEMPTY': 39,
+    // Socket family (todos/0008) — numbers match <errno.h> in the libc.
+    'ENOTSOCK': 88, 'EDESTADDRREQ': 89, 'EPROTOTYPE': 91, 'EPROTONOSUPPORT': 93,
+    'EOPNOTSUPP': 95, 'EAFNOSUPPORT': 97, 'EADDRINUSE': 98, 'ECONNABORTED': 103,
+    'ECONNRESET': 104, 'ENOBUFS': 105, 'EISCONN': 106, 'ENOTCONN': 107,
+    'ETIMEDOUT': 110, 'ECONNREFUSED': 111
   };
 
   function setErrno(e) {

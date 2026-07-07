@@ -347,6 +347,35 @@ test('fcntl-dupfd-pipe', function () {
 });
 
 // ---------------------------------------------------------------
+// 10. socket-node — AF_UNIX rendezvous nodes (todos/0008): mknod with
+//     S_IFSOCK creates a real socket inode (v4: mknod needs rdev), stat
+//     reports the type, open() refuses it with ENXIO (POSIX), and plain
+//     unlink removes it. No fsck pass: fsck guards on VERSION 3 and this
+//     needs a v4 store.
+// ---------------------------------------------------------------
+
+test('socket-node', function () {
+  var store = new MemoryByteStore(1024 * 1024);
+  var fs = BLOCK_FS.createV4(store);
+  var S_IFSOCK = 0o140000;
+
+  assertEq(fs.mknod('/srv.sock', S_IFSOCK | 0o777, 0), 0, 'mknod S_IFSOCK');
+  var st = fs.stat('/srv.sock');
+  assert(st && (st.mode & 0o170000) === S_IFSOCK, 'stat reports S_IFSOCK');
+
+  assertEq(fs.open('/srv.sock', O_RDWR, 0), null, 'open() on a socket node fails');
+  assertEq(fs._lastError, 'ENXIO', 'and the errno is ENXIO');
+  assertEq(fs.open('/srv.sock', O_CREAT | O_RDWR, 0o644), null, 'O_CREAT does not bypass it');
+  assertEq(fs._lastError, 'ENXIO', 'ENXIO again');
+
+  assertEq(fs.mknod('/srv.sock', S_IFSOCK | 0o777, 0), null, 'mknod on a taken path fails');
+  assertEq(fs._lastError, 'EEXIST', 'with EEXIST (the kernel maps it to EADDRINUSE)');
+
+  assertEq(fs.unlink('/srv.sock'), 0, 'unlink removes the socket node');
+  assertEq(fs.stat('/srv.sock'), null, 'gone');
+});
+
+// ---------------------------------------------------------------
 
 console.log('--- POSIX-semantics Tests ---');
 console.log('Passed: ' + passed);

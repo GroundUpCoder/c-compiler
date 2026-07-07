@@ -211,6 +211,10 @@ response, sets DONE, bumps the doorbell. Node path identical via
                  a SAB read — no RPC for hot paths)
 0x02xx pipes     PIPE_CREATE PIPE_REF PIPE_CLOSE PIPE_WAIT PIPE_NOTIFY
 0x03xx misc      COMPILE (the existing /bin/cc hook)
+0x04xx fs        the brokered filesystem (fd/data-plane amendment below)
+0x05xx sockets   SOCK_SOCKET/BIND/LISTEN/ACCEPT/CONNECT/PAIR/SHUTDOWN —
+                 AF_UNIX control plane (todos/0008; data plane rides
+                 FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT, see below)
 0x1xxx reserved  WM surfaces (SURFACE_CREATE/PRESENT/…, see below)
 ```
 
@@ -324,6 +328,46 @@ NOTIFY opcodes were subsumed by OFD refcounts + FS_* RPCs + the doorbell.
   normal signal path — SIGPIPE at DFL kills `yes | head` pipelines the way
   scripts expect; a handler sees EPIPE + the pending bit).
 
+## AF_UNIX sockets (implemented, todos/done/0008)
+
+Sockets are the pipe machinery, twice. A connection is a PAIR of pipe-shaped
+directions (`{buf, cap, rOpen, wOpen, readWaiters, writeWaiters}` — the
+exact pipe fields); a connected 'socket' OFD holds `rx`/`tx` pointers into
+the pair, crossed between the two ends. `_streamRead`/`_streamWrite` (the
+factored-out pipe read/write bodies) serve both kinds, waiters register
+under the pipe op names, and `_pipeNotify`/`_cancelWaiter`/select needed
+only kind-dispatch additions. What's genuinely new:
+
+- **Rendezvous**: `bind` creates a real S_IFSOCK node in BlockFS (generic
+  `mknod` — no format change; `open()` on one is ENXIO) and registers the
+  resolved path in a kernel map. `connect` resolves through the fs (so
+  unlink → ENOENT, non-socket → ECONNREFUSED, symlinks work), then looks up
+  a LISTENING OFD (else ECONNREFUSED). Rebind-after-unlink replaces the map
+  entry; the old listener drains dead.
+- **connect never blocks** (v1): a connection within the backlog is queued
+  with usable buffers — client writes land before accept. Over-backlog is
+  ECONNREFUSED, and the socket stays fresh for retry. A parked `accept` is
+  served directly by the arriving connect (and is EINTR-interruptible like
+  every deferred RPC).
+- **shutdown** is connection-global (close is per-reference): SHUT_WR marks
+  the tx direction writer-gone (peer EOF, own writes EPIPE), SHUT_RD the rx
+  reader-gone (peer writes EPIPE).
+- **socketpair** is two crossed conn OFDs, no rendezvous.
+- **libc**: `<sys/socket.h>`/`<sys/un.h>` marshal sockaddr_un to plain-path
+  `__sock_*` imports; send/recv are write/read (flags: MSG_NOSIGNAL
+  accepted but SIGPIPE still fires; the rest EOPNOTSUPP); AF_UNIX +
+  SOCK_STREAM only, validated libc-side (EAFNOSUPPORT/EPROTONOSUPPORT).
+  poll/select ride `FS_SELECT` (listener ready ⇔ pending connection; conn
+  ready ⇔ data or peer-gone).
+- Brokered mode only, like PIPE_CREATE — plain BlockFS answers ENOSYS
+  (standalone pages have no second process to call).
+
+Deliberately NOT in v1 (recorded so nobody trips on them): SOCK_DGRAM /
+SEQPACKET, the abstract namespace (EOPNOTSUPP), SCM_RIGHTS fd passing,
+O_NONBLOCK socket I/O, MSG_PEEK, blocking-until-accept connect. AF_INET is
+a separate future item (needs a WebSocket/WebTransport relay — OS.md
+Phase 4).
+
 ## Exit and teardown — an ordered handshake
 
 `CONFORMANCE-REMAINING.md` already records the symptom class: stdout
@@ -434,6 +478,12 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
   handoff, SIGWINCH.
 - Pipes: cross-worker blocking read woken by write, EOF on close, EPIPE +
   SIGPIPE, full-pipe writer blocking.
+- Sockets (0008): the same protocol-level suite (`test_sockets.js` — state
+  errors, rendezvous lifecycle incl. rebind-after-unlink and listener-close
+  fan-out, backlog, deferred accept, EINTR, shutdown, socketpair, dup
+  refcounts, SIGKILL-while-parked, OFD-leak baseline) plus a real
+  client/server C pair (`test_sockets_e2e.js` — parked accept woken by
+  connect, poll/select, stage bitmasks in exit codes).
 - Exit: output-complete-before-wait-returns ordering; hard-kill leak is
   *asserted* (fsck flags it) so the limitation stays visible and intentional.
 - C-level: `tests/unit/` programs exercising signal(), pipe(), pgroups
@@ -461,6 +511,10 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
    `_exit`, real `fcntl(F_DUPFD)`, setpgid wrappers, the tty-fd gate).
    `popen()`/`system()` lit up as written. Pipelines, `$( )`, here-docs,
    job control, interactive line editing all ride Phases 1–4 unchanged.
+6. **AF_UNIX sockets** (todos/done/0008): the 0x05xx control plane over the
+   pipe machinery — see "AF_UNIX sockets" above. First consumer of the
+   claim that new OFD kinds are cheap post-0009; it held (the data plane
+   needed only kind-dispatch branches).
 
 ## Settled decisions (don't re-litigate without cause)
 

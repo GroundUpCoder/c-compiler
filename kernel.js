@@ -73,8 +73,9 @@ var RPCK_JSON = 0, RPCK_RAW = 1;   // RAW: fs read/write bulk bytes — no JSON,
                                    // no structured clone, one memcpy each way
 
 /* Opcode space (todos/KERNEL.md): 0x00xx process, 0x01xx tty, 0x02xx pipes,
- * 0x03xx misc, 0x1xxx reserved for WM surfaces. Only the ops the current
- * phase implements are dispatched; the rest respond ENOSYS. */
+ * 0x03xx misc, 0x04xx brokered fs, 0x05xx AF_UNIX sockets, 0x1xxx reserved
+ * for WM surfaces. Only the ops the current phase implements are
+ * dispatched; the rest respond ENOSYS. */
 var OP = {
   SPAWN: 0x0001,
   WAIT: 0x0002,
@@ -103,6 +104,11 @@ var OP = {
   FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
   FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
   FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E,
+  // 0x05xx — AF_UNIX sockets (todos/0008). Stream-only; data flows through
+  // FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT like every other OFD kind.
+  SOCK_SOCKET: 0x0501, SOCK_BIND: 0x0502, SOCK_LISTEN: 0x0503,
+  SOCK_ACCEPT: 0x0504, SOCK_CONNECT: 0x0505, SOCK_PAIR: 0x0506,
+  SOCK_SHUTDOWN: 0x0507,
 };
 
 /* Wait options / status packing — must match <sys/wait.h>. */
@@ -117,6 +123,15 @@ var W_CONTINUED_STATUS = 0xffff;
  * they defer whole rather than land partially). */
 var PIPE_CAP = 64 * 1024;
 var PIPE_ATOMIC = 512;
+
+/* AF_UNIX sockets (todos/0008): a connection is two pipe-shaped directions
+ * (same fields, same waiter queues), so the entire blocking/EOF/EPIPE/
+ * select machinery is the pipe machinery. */
+function sockDir() {
+  return { buf: [], cap: PIPE_CAP, rOpen: true, wOpen: true,
+           readWaiters: [], writeWaiters: [] };
+}
+var S_IFSOCK_MODE = 0o140000;
 
 /* Signal numbering + default actions — must match <signal.h> /
  * __sig_default_action in libc. Kind mirror (__on_sigdisp): 0=DFL 1=IGN
@@ -609,10 +624,11 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
-  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null'|'pipe', refs, bfsFd?, ch?, pipe?, end? }
+  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null'|'pipe'|'socket', refs, bfsFd?, ch?, pipe?, end?, st?, rx?, tx?, path?, backlog?, pending?, acceptWaiters? }
   this._nextOfd = 1;
   this._std = null;          // lazy singleton OFDs for default stdio
   this._ttyWaiters = [];     // pids with a deferred tty FS_READ, FIFO
+  this._sockBinds = new Map(); // resolved path -> listener/bound socket ofdId
 }
 
 Kernel.prototype._makeOfd = function (kind, extra) {
@@ -632,6 +648,25 @@ Kernel.prototype._ofdUnref = function (id) {
     // learn (readers see EOF, writers see EPIPE + SIGPIPE).
     if (o.end === 'read') o.pipe.rOpen = false; else o.pipe.wOpen = false;
     this._pipeNotify(o.pipe);
+  } else if (o.kind === 'socket') {
+    if (o.st === 'conn') {
+      // Both directions lose this side: the peer reads EOF and writes EPIPE.
+      o.rx.rOpen = false; o.tx.wOpen = false;
+      this._pipeNotify(o.rx); this._pipeNotify(o.tx);
+    } else if (o.st === 'listening' || o.st === 'bound') {
+      // Unregister the rendezvous (only if it still points here — a
+      // rebind after unlink may have replaced the entry).
+      if (this._sockBinds.get(o.path) === o.id) this._sockBinds.delete(o.path);
+      if (o.st === 'listening') {
+        // Never-accepted queued connections: their client ends must learn.
+        for (var pi = 0; pi < o.pending.length; pi++) {
+          var pc = o.pending[pi];
+          pc.rx.rOpen = false; pc.tx.wOpen = false;
+          this._pipeNotify(pc.rx); this._pipeNotify(pc.tx);
+        }
+        o.pending.length = 0;
+      }
+    }
   }
 };
 
@@ -943,6 +978,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       break;
     default:
       if ((op & 0xff00) === 0x0400) { this._fsRpc(pcb, op, req); break; }
+      if ((op & 0xff00) === 0x0500) { this._sockRpc(pcb, op, req); break; }
       this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
@@ -1011,16 +1047,12 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (o1.kind === 'null') { this._respondRaw(pcb, new Uint8Array(0)); return; }
       if (o1.kind === 'pipe') {
         if (o1.end !== 'read') { this._respond(pcb, { errno: 'EBADF' }); return; }
-        var rp = o1.pipe;
-        if (rp.buf.length > 0) {
-          var rn = Math.min(count, rp.buf.length);
-          this._respondRaw(pcb, Uint8Array.from(rp.buf.splice(0, rn)));
-          this._pipeNotify(rp);                     // space freed: writers may proceed
-          return;
-        }
-        if (!rp.wOpen) { this._respondRaw(pcb, new Uint8Array(0)); return; }  // EOF
-        pcb.waiter = { op: 'piperead', pipe: rp, count: count };  // served by _pipeNotify
-        rp.readWaiters.push(pcb.pid);
+        this._streamRead(pcb, o1.pipe, count);
+        return;
+      }
+      if (o1.kind === 'socket') {
+        if (o1.st !== 'conn') { this._respond(pcb, { errno: 'ENOTCONN' }); return; }
+        this._streamRead(pcb, o1.rx, count);
         return;
       }
       if (o1.kind === 'tty') {
@@ -1065,26 +1097,12 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       }
       if (o2.kind === 'pipe') {
         if (o2.end !== 'write') { this._respond(pcb, { errno: 'EBADF' }); return; }
-        var wp = o2.pipe;
-        if (!wp.rOpen) {
-          // POSIX: write to a pipe nobody reads = EPIPE + SIGPIPE (default
-          // action terminates — the `yes | head` pipeline death).
-          this._respond(pcb, { errno: 'EPIPE' });
-          this._deliver(pcb, SIG.PIPE);
-          return;
-        }
-        var free = wp.cap - wp.buf.length;
-        if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free)) {
-          // Full (or a PIPE_ATOMIC-small write that would split): block.
-          // Copy the bytes OUT of the SAB payload region — it's reused.
-          pcb.waiter = { op: 'pipewrite', pipe: wp, data: data.slice() };
-          wp.writeWaiters.push(pcb.pid);
-          return;
-        }
-        var wn0 = Math.min(free, data.length);
-        for (var wi = 0; wi < wn0; wi++) wp.buf.push(data[wi]);
-        this._respond(pcb, { n: wn0 });
-        this._pipeNotify(wp);                       // data arrived: readers may proceed
+        this._streamWrite(pcb, o2.pipe, data);
+        return;
+      }
+      if (o2.kind === 'socket') {
+        if (o2.st !== 'conn') { this._respond(pcb, { errno: 'ENOTCONN' }); return; }
+        this._streamWrite(pcb, o2.tx, data);
         return;
       }
       if (o2.kind === 'out') { this._onOutput(pcb.pid, o2.ch, data.slice()); this._respond(pcb, { n: data.length }); return; }
@@ -1110,6 +1128,8 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         this._respond(pcb, r === null ? eFs() : { st: r });
       } else if (o4.kind === 'pipe') {
         this._respond(pcb, { st: { ino: 0, mode: 0x1000 | 0o600, nlink: 1, size: o4.pipe.buf.length, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
+      } else if (o4.kind === 'socket') {
+        this._respond(pcb, { st: { ino: 0, mode: S_IFSOCK_MODE | 0o777, nlink: 1, size: o4.st === 'conn' ? o4.rx.buf.length : 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       } else {
         // Character device (tty / console / null).
         this._respond(pcb, { st: { ino: 0, mode: 0x2000 | 0o666, nlink: 1, size: 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
@@ -1241,6 +1261,150 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
   }
 };
 
+/* ---- AF_UNIX sockets (0x05xx; todos/0008) ----
+ * Stream sockets over the pipe machinery: a connection is a pair of
+ * pipe-shaped directions (client tx == server rx and vice versa); bind is a
+ * real S_IFSOCK node in BlockFS plus an entry in the kernel's rendezvous
+ * map; connect never blocks (the queued connection's buffers are usable
+ * before accept — data simply waits). Data plane and select ride the
+ * existing FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT paths via the 'socket' OFD
+ * kind. Brokered mode only, like PIPE_CREATE. */
+Kernel.prototype._sockRpc = function (pcb, op, req) {
+  var self = this;
+  var fs = this._fs;
+  if (!this._brokered) { this._respond(pcb, { errno: 'ENOSYS' }); return; }
+  var ofdOf = function (fd) {
+    var id = pcb.fds.get(fd | 0);
+    return id === undefined ? null : self._ofds.get(id) || null;
+  };
+  var attach = function (target, o) {          // new OFD -> lowest free fd of `target`
+    o.refs++;
+    var fd = 0;
+    while (target.fds.has(fd)) fd++;
+    target.fds.set(fd, o.id);
+    return fd;
+  };
+  var sockOf = function (fd) {                 // 'socket'-kind OFD or null+respond
+    var o = ofdOf(fd);
+    if (!o) { self._respond(pcb, { errno: 'EBADF' }); return null; }
+    if (o.kind !== 'socket') { self._respond(pcb, { errno: 'ENOTSOCK' }); return null; }
+    return o;
+  };
+
+  switch (op) {
+    case OP.SOCK_SOCKET: {
+      var no = this._makeOfd('socket', { st: 'fresh' });
+      this._respond(pcb, { fd: attach(pcb, no) });
+      return;
+    }
+    case OP.SOCK_BIND: {
+      var ob = sockOf(req.fd); if (!ob) return;
+      if (ob.st !== 'fresh') { this._respond(pcb, { errno: 'EINVAL' }); return; }
+      var abs = this._pathFor(pcb, String(req.path || ''));
+      // The socket node is a real S_IFSOCK inode (mknod: no data extent) —
+      // ls/stat/test -S see it; EEXIST is POSIX's EADDRINUSE here.
+      if (fs.mknod(abs, S_IFSOCK_MODE | 0o777, 0) !== 0) {
+        var be = fs._lastError || 'EIO';
+        this._respond(pcb, { errno: be === 'EEXIST' ? 'EADDRINUSE' : be });
+        return;
+      }
+      var resolved;
+      try { resolved = fs._resolvePath(abs); } catch (e) { resolved = abs; }
+      ob.st = 'bound';
+      ob.path = resolved || abs;
+      this._sockBinds.set(ob.path, ob.id);
+      this._respond(pcb, {});
+      return;
+    }
+    case OP.SOCK_LISTEN: {
+      var ol = sockOf(req.fd); if (!ol) return;
+      if (ol.st === 'conn') { this._respond(pcb, { errno: 'EISCONN' }); return; }
+      if (ol.st === 'fresh') { this._respond(pcb, { errno: 'EDESTADDRREQ' }); return; }
+      var bl = req.backlog | 0;
+      if (bl < 1) bl = 1; if (bl > 128) bl = 128;
+      if (ol.st === 'bound') { ol.st = 'listening'; ol.pending = []; ol.acceptWaiters = []; }
+      ol.backlog = bl;
+      this._respond(pcb, {});
+      return;
+    }
+    case OP.SOCK_CONNECT: {
+      var oc = sockOf(req.fd); if (!oc) return;
+      if (oc.st === 'conn') { this._respond(pcb, { errno: 'EISCONN' }); return; }
+      if (oc.st !== 'fresh') { this._respond(pcb, { errno: 'EINVAL' }); return; }
+      var cabs = this._pathFor(pcb, String(req.path || ''));
+      var cres;
+      try { cres = fs._resolvePath(cabs); } catch (e) { cres = null; }
+      var cst = cres ? fs.stat(cres) : null;
+      if (!cst) { this._respond(pcb, { errno: fs._lastError || 'ENOENT' }); return; }
+      if ((cst.mode & 0xF000) !== S_IFSOCK_MODE) { this._respond(pcb, { errno: 'ECONNREFUSED' }); return; }
+      var lid = this._sockBinds.get(cres);
+      var lo = lid === undefined ? null : this._ofds.get(lid);
+      if (!lo || lo.st !== 'listening') { this._respond(pcb, { errno: 'ECONNREFUSED' }); return; }
+      // Serve a parked accept directly; otherwise queue within the backlog.
+      var served = false;
+      while (lo.acceptWaiters.length) {
+        var apid = lo.acceptWaiters[0];
+        var apcb = this._procs.get(apid);
+        if (!apcb || !apcb.waiter || apcb.waiter.op !== 'accept' || apcb.waiter.lofd !== lo) {
+          lo.acceptWaiters.shift();
+          continue;
+        }
+        served = true;
+        break;
+      }
+      if (!served && lo.pending.length >= lo.backlog) {
+        this._respond(pcb, { errno: 'ECONNREFUSED' });
+        return;
+      }
+      var a = sockDir(), b = sockDir();            // a: client->server, b: server->client
+      oc.st = 'conn'; oc.rx = b; oc.tx = a;
+      if (served) {
+        var acc = this._procs.get(lo.acceptWaiters[0]);
+        this._cancelWaiter(acc);
+        var so = this._makeOfd('socket', { st: 'conn', rx: a, tx: b });
+        this._respond(acc, { fd: attach(acc, so) });
+      } else {
+        lo.pending.push({ rx: a, tx: b });
+        this._recheckSelects();                    // listener became read-ready
+      }
+      this._respond(pcb, {});
+      return;
+    }
+    case OP.SOCK_ACCEPT: {
+      var oa = sockOf(req.fd); if (!oa) return;
+      if (oa.st !== 'listening') { this._respond(pcb, { errno: 'EINVAL' }); return; }
+      if (oa.pending.length) {
+        var conn = oa.pending.shift();
+        var ao = this._makeOfd('socket', { st: 'conn', rx: conn.rx, tx: conn.tx });
+        this._respond(pcb, { fd: attach(pcb, ao) });
+        return;
+      }
+      pcb.waiter = { op: 'accept', lofd: oa };     // served by SOCK_CONNECT
+      oa.acceptWaiters.push(pcb.pid);
+      return;
+    }
+    case OP.SOCK_PAIR: {
+      var pa = sockDir(), pb = sockDir();
+      var e0 = this._makeOfd('socket', { st: 'conn', rx: pb, tx: pa });
+      var e1 = this._makeOfd('socket', { st: 'conn', rx: pa, tx: pb });
+      this._respond(pcb, { fd0: attach(pcb, e0), fd1: attach(pcb, e1) });
+      return;
+    }
+    case OP.SOCK_SHUTDOWN: {
+      var os = sockOf(req.fd); if (!os) return;
+      if (os.st !== 'conn') { this._respond(pcb, { errno: 'ENOTCONN' }); return; }
+      var how = req.how | 0;
+      if (how < 0 || how > 2) { this._respond(pcb, { errno: 'EINVAL' }); return; }
+      // Shutdown is connection-global (unlike close, which is per-reference).
+      if (how !== 1) { os.rx.rOpen = false; this._pipeNotify(os.rx); }   // SHUT_RD/RDWR
+      if (how !== 0) { os.tx.wOpen = false; this._pipeNotify(os.tx); }   // SHUT_WR/RDWR
+      this._respond(pcb, {});
+      return;
+    }
+    default: this._respond(pcb, { errno: 'ENOSYS' });
+  }
+};
+
 /* Readiness for FS_SELECT: files and non-pipe write interest are always
  * ready; a tty read is ready when cooked bytes or EOF are waiting; a pipe
  * read is ready on data or writer-gone EOF, a pipe write on free space or
@@ -1256,6 +1420,13 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
     else if (o.kind === 'pipe') {
       if (o.end !== 'read' || o.pipe.buf.length > 0 || !o.pipe.wOpen) r.push(fd);
     }
+    else if (o.kind === 'socket') {
+      // conn: data or peer-gone EOF; listening: a queued connection;
+      // fresh/bound: ready (the read fails immediately, so it won't block).
+      if (o.st === 'conn') { if (o.rx.buf.length > 0 || !o.rx.wOpen) r.push(fd); }
+      else if (o.st === 'listening') { if (o.pending.length > 0) r.push(fd); }
+      else r.push(fd);
+    }
     else if (o.kind !== 'out') r.push(fd);
   });
   wfds.forEach(function (fd) {
@@ -1263,6 +1434,8 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
     var o = id === undefined ? null : self._ofds.get(id);
     if (o && o.kind === 'pipe' && o.end === 'write' &&
         o.pipe.buf.length >= o.pipe.cap && o.pipe.rOpen) return;   // full: not ready
+    if (o && o.kind === 'socket' && o.st === 'conn' &&
+        o.tx.buf.length >= o.tx.cap && o.tx.rOpen) return;         // full: not ready
     w.push(fd);
   });
   return { count: r.length + w.length, r: r, w: w };
@@ -1304,6 +1477,45 @@ Kernel.prototype._recheckSelects = function () {
   });
 };
 
+/* Blocking stream ops shared by pipes and connected sockets — `dir` is one
+ * pipe-shaped direction. Deferred waiters register under the pipe op names
+ * so _pipeNotify/_cancelWaiter serve both kinds unchanged. */
+Kernel.prototype._streamRead = function (pcb, dir, count) {
+  if (dir.buf.length > 0) {
+    var n = Math.min(count, dir.buf.length);
+    this._respondRaw(pcb, Uint8Array.from(dir.buf.splice(0, n)));
+    this._pipeNotify(dir);                        // space freed: writers may proceed
+    return;
+  }
+  if (!dir.wOpen) { this._respondRaw(pcb, new Uint8Array(0)); return; }  // EOF
+  pcb.waiter = { op: 'piperead', pipe: dir, count: count };  // served by _pipeNotify
+  dir.readWaiters.push(pcb.pid);
+};
+
+Kernel.prototype._streamWrite = function (pcb, dir, data) {
+  if (!dir.rOpen || !dir.wOpen) {
+    // POSIX: write to a pipe/socket nobody reads = EPIPE + SIGPIPE (default
+    // action terminates — the `yes | head` pipeline death). !wOpen is the
+    // socket shutdown(SHUT_WR) case: the direction's write side is gone
+    // even though this OFD is still referenced.
+    this._respond(pcb, { errno: 'EPIPE' });
+    this._deliver(pcb, SIG.PIPE);
+    return;
+  }
+  var free = dir.cap - dir.buf.length;
+  if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free)) {
+    // Full (or a PIPE_ATOMIC-small write that would split): block.
+    // Copy the bytes OUT of the SAB payload region — it's reused.
+    pcb.waiter = { op: 'pipewrite', pipe: dir, data: data.slice() };
+    dir.writeWaiters.push(pcb.pid);
+    return;
+  }
+  var n = Math.min(free, data.length);
+  for (var i = 0; i < n; i++) dir.buf.push(data[i]);
+  this._respond(pcb, { n: n });
+  this._pipeNotify(dir);                          // data arrived: readers may proceed
+};
+
 /* Pipe state changed (write, read, end closed): serve deferred readers
  * (data / EOF) and writers (space / EPIPE+SIGPIPE) until nothing more
  * moves, then re-check deferred selects. Serving a read frees space and
@@ -1339,7 +1551,7 @@ Kernel.prototype._pipeNotify = function (pipe) {
         pipe.writeWaiters.shift();
         continue;
       }
-      if (!pipe.rOpen) {
+      if (!pipe.rOpen || !pipe.wOpen) {   // !wOpen: shutdown(SHUT_WR) raced a parked write
         this._cancelWaiter(wpcb);
         this._respond(wpcb, { errno: 'EPIPE' });
         this._deliver(wpcb, SIG.PIPE);
@@ -1433,6 +1645,9 @@ Kernel.prototype._cancelWaiter = function (pcb) {
     var q = w.op === 'piperead' ? w.pipe.readWaiters : w.pipe.writeWaiters;
     var j = q.indexOf(pcb.pid);
     if (j >= 0) q.splice(j, 1);
+  } else if (w.op === 'accept') {
+    var k = w.lofd.acceptWaiters.indexOf(pcb.pid);
+    if (k >= 0) w.lofd.acceptWaiters.splice(k, 1);
   }
 };
 
@@ -1786,6 +2001,32 @@ RemoteFS.prototype.pipe = function () {
   this._fdTable[r.wfd] = { type: 'remote' };
   return [r.rfd, r.wfd];
 };
+/* AF_UNIX sockets (todos/0008). Data flows through read/write above; only
+ * the control plane needs methods. accept is interruptible (it parks
+ * kernel-side until a connect arrives — EINTR per POSIX). */
+RemoteFS.prototype.sockSocket = function () {
+  var r = this._ok(this._c.call(OP.SOCK_SOCKET, {}));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
+RemoteFS.prototype.sockBind = function (fd, path) { return this._ok(this._c.call(OP.SOCK_BIND, { fd: fd, path: path })) && 0; };
+RemoteFS.prototype.sockListen = function (fd, backlog) { return this._ok(this._c.call(OP.SOCK_LISTEN, { fd: fd, backlog: backlog })) && 0; };
+RemoteFS.prototype.sockConnect = function (fd, path) { return this._ok(this._c.call(OP.SOCK_CONNECT, { fd: fd, path: path })) && 0; };
+RemoteFS.prototype.sockAccept = function (fd) {
+  var r = this._ok(this._c.call(OP.SOCK_ACCEPT, { fd: fd }, true));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
+RemoteFS.prototype.sockPair = function () {
+  var r = this._ok(this._c.call(OP.SOCK_PAIR, {}));
+  if (r === null) return null;
+  this._fdTable[r.fd0] = { type: 'remote' };
+  this._fdTable[r.fd1] = { type: 'remote' };
+  return [r.fd0, r.fd1];
+};
+RemoteFS.prototype.sockShutdown = function (fd, how) { return this._ok(this._c.call(OP.SOCK_SHUTDOWN, { fd: fd, how: how })) && 0; };
 
 /* The brokered __select_impl (replaces toWasmEnv's in-process scanner):
  * fd-set bitmaps <-> fd lists; readiness, blocking, and timeout are all

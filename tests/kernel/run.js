@@ -14,6 +14,8 @@ var tests = [
   ['test_fs_e2e.js', []],       // 0009: brokered fs — shared offsets, fd_actions, SIGKILL+fsck, winsize
   ['test_pipes.js', []],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js', []],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
+  ['test_sockets.js', []],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
+  ['test_sockets_e2e.js', []],  // 0008: real C client/server — accept/connect/send/recv, poll
   ['test_jobctl_e2e.js', []],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
   ['test_os_boot.js', []],      // 0004: headless OS boot — seed, protoshell, cc, persistence
   ['test_vi_e2e.js', []],       // 0011: busybox vi through the real tty — raw mode, edit sessions
