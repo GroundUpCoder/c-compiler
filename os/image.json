@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "dirs": [
     "/bin",
     "/etc",
@@ -19,11 +19,89 @@
     "/root/hello.c": {
       "text": "hello.c"
     },
+    "/bin/coreutils": {
+      "project": "vendor/busybox/coreutils.json"
+    },
+    "/bin/[": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/basename": {
+      "link": "/bin/coreutils"
+    },
     "/bin/cat": {
-      "c": "cat.c"
+      "link": "/bin/coreutils"
+    },
+    "/bin/cp": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/dirname": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/echo": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/egrep": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/false": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/fgrep": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/grep": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/head": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/kill": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/ln": {
+      "link": "/bin/coreutils"
     },
     "/bin/ls": {
-      "c": "ls.c"
+      "link": "/bin/coreutils"
+    },
+    "/bin/mkdir": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/mv": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/printf": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/pwd": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/rm": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/rmdir": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/sed": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/sort": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/tail": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/test": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/touch": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/true": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/wc": {
+      "link": "/bin/coreutils"
     }
   }
 }

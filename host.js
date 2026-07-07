@@ -354,6 +354,12 @@ function createFileSystem({ fs, ctx }) {
         await new Promise(resolve => setTimeout(resolve, seconds * 1000));
         return 0;
       }),
+      link: function (old_ptr, new_ptr) {
+        try {
+          fs.linkSync(readString(old_ptr), readString(new_ptr));
+          return 0;
+        } catch (e) { setErrno(e); return -1; }
+      },
       symlink: function (target_ptr, link_ptr) {
         try {
           fs.symlinkSync(readString(target_ptr), readString(link_ptr));
@@ -2670,7 +2676,13 @@ var BLOCK_FS = (function () {
       if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
 
       var fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
-      var inoId = this._allocInode(DEFAULT_FILE_MODE);
+      // Honor the caller's create mode — seeded /bin binaries want their
+      // 0755 to survive into ls -l. The single-user system has a fixed 022
+      // umask, applied here (there is no per-process umask in the fs), so
+      // fopen's 0666 lands as the traditional 0644. A falsy mode means
+      // "default": the fs RPC turns an absent mode into 0.
+      var createMode = mode ? (S_IFREG | (mode & ~0o022 & 0o7777)) : DEFAULT_FILE_MODE;
+      var inoId = this._allocInode(createMode);
       if (inoId === null) return -1; // errno already set
 
       // Write inode

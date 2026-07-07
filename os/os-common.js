@@ -145,26 +145,42 @@ function createCcDriver(CompilerJS, kfs) {
  * one-off). Returns the wasm bytes.
  */
 function buildProject(CompilerJS, projPath, readHostFile) {
-  var dir = projPath.slice(0, projPath.lastIndexOf('/'));
-  var proj = JSON.parse(readHostFile(projPath));
   var err = '';
   var writeErr = function (s) { err += s; };
 
   var pp = CompilerJS.createDefaultPPRegistry();
-  (proj.includes || []).forEach(function (inc) { pp.includePaths.push(dir + '/' + inc); });
-  (proj.compilerArgs || []).forEach(function (a) {
-    if (a.lastIndexOf('-D', 0) === 0) {
-      var def = a.substring(2), eq = def.indexOf('=');
-      if (eq >= 0) pp.defines.set(def.substring(0, eq), def.substring(eq + 1));
-      else pp.defines.set(def, '1');
-    } else if (a.lastIndexOf('-I', 0) === 0) {
-      pp.includePaths.push(dir + '/' + a.substring(2));
-    }
-  });
+  var sources = [];
+  /* Normalize "a/b/../c" -> "a/c" so dep-relative paths stay readable in
+   * errors and stable as XHR URLs. */
+  function normalize(p) {
+    var parts = p.split('/'), out = [];
+    parts.forEach(function (seg) {
+      if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+      else if (seg !== '.') out.push(seg);
+    });
+    return out.join('/');
+  }
+  /* Expand a bin.json, depth-first over its deps (type "lib" projects —
+   * e.g. the busybox applets all dep on vendor/busybox/libbb-core.json). */
+  (function expand(p) {
+    var dir = p.slice(0, p.lastIndexOf('/'));
+    var proj = JSON.parse(readHostFile(p));
+    (proj.deps || []).forEach(function (d) { expand(normalize(dir + '/' + d)); });
+    (proj.includes || []).forEach(function (inc) { pp.includePaths.push(normalize(dir + '/' + inc)); });
+    (proj.compilerArgs || []).forEach(function (a) {
+      if (a.lastIndexOf('-D', 0) === 0) {
+        var def = a.substring(2), eq = def.indexOf('=');
+        if (eq >= 0) pp.defines.set(def.substring(0, eq), def.substring(eq + 1));
+        else pp.defines.set(def, '1');
+      } else if (a.lastIndexOf('-I', 0) === 0) {
+        pp.includePaths.push(normalize(dir + '/' + a.substring(2)));
+      }
+    });
+    (proj.sources || []).forEach(function (s) { sources.push(normalize(dir + '/' + s)); });
+  })(projPath);
   pp.fileReader = function (fp) {
     try { return readHostFile(fp); } catch (e) { return null; }
   };
-  var sources = (proj.sources || []).map(function (s) { return dir + '/' + s; });
   var fsShim = { readFileSync: function (p) { return readHostFile(p); } };
   var compilerOptions = { requireSources: [], backend: 'default' };
   var warningFlags = { pointerDecay: false, circularDependency: false, largeStackFrame: true };
@@ -196,6 +212,8 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
  *   entry.project — REPO-relative bin.json path; multi-file build via
  *                   buildProject (needs io.buildProject)
+ *   entry.link    — symlink target; /path becomes a symlink to it (the
+ *                   coreutils applet names all point at /bin/coreutils)
  * io: { readAsset(name) -> Promise<string>, compile(argv, cwd), log(msg),
  *       buildProject(projPath) -> wasm bytes }
  *   (readAsset is fetch() in the browser, fs.readFile under Node — both
@@ -238,6 +256,12 @@ function seedImage(kfs, manifest, io) {
         log('  ' + path + ' (built ' + entry.project + ', ' + wasm.length + ' bytes)');
         return undefined;
       }
+      if (entry.link !== undefined) {
+        if (kfs.lstat(path) !== null) kfs.unlink(path);   // re-seed overwrites
+        kfs.symlink(entry.link, path);
+        log('  ' + path + ' -> ' + entry.link);
+        return undefined;
+      }
       if (entry.c !== undefined) {
         return Promise.resolve(io.readAsset(entry.c)).then(function (src) {
           // Stage the source in the image, compile it there, clean up. The
@@ -252,7 +276,7 @@ function seedImage(kfs, manifest, io) {
           log('  ' + path + ' (compiled ' + entry.c + ')');
         });
       }
-      throw new Error('image.json: ' + path + ': entry needs "c" or "text"');
+      throw new Error('image.json: ' + path + ': entry needs "c", "text", "project" or "link"');
     });
   });
   return chain.then(function () {

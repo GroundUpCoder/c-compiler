@@ -67,9 +67,11 @@ try {
   check('boots to ready over OPFS', true);
   await waitOut('# ');                       // the prompt echoes through the tty
 
-  await type('ls /');
-  await waitOut('bin\ndev\netc\nroot');   // program stdout is raw \n (no OPOST)
-  check('ls / lists the seeded tree', true);
+  // -1: busybox ls (todos/0010) prints columns on a tty; one-per-line keeps
+  // the needle stable. Program stdout is raw \n (no OPOST).
+  await type('ls -1 /');
+  await waitOut('bin\ndev\netc\nroot');
+  check('ls -1 / lists the seeded tree', true);
 
   await type('cc hello.c && ./a.out');
   await waitOut('hello, wasm world', 120000);

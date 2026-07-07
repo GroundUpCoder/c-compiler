@@ -1,6 +1,8 @@
 # 0010 — busybox coreutils (multicall /bin binaries)
 
-- **Status**: queued
+- **Status**: done (2026-07-07 — multicall won: hand-rolled dispatch table,
+  27 applets, /bin symlinks; per-applet builds measured at ~26s of seeding
+  vs ~2s. Dev log: `logs/2026-07-07/coreutils-multicall.md`)
 - **Depends**: 0005 (hush + the vendor/busybox port infrastructure)
 - **Design**: `todos/OS.md` (Phase 1 "Coreutils"); `vendor/busybox/README.md`
 

@@ -65,7 +65,9 @@ hang-class miscompiles fail fast instead of stalling the suite.
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
   (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
-  journaling shim; patch table in `vendor/busybox/README.md`)
+  journaling shim — plus 27 coreutils applets as one multicall
+  /bin/coreutils with /bin symlinks; patch table in
+  `vendor/busybox/README.md`)
 - **Libraries**: `zlib`, `libpng`, `freetype`, `libgit2` (@44c05e5, core only; builds + `git_index_open` smoke test runs — used as a large-codebase stress test, see `vendor/libgit2/README.md`)
 - **Frontend infra (JS, not C)**: `xterm` (terminal widget), `codemirror` (editor widget)
 - **Project-specific tools**: `disw` (WASM disassembler), `hello` (minimal smoke test)

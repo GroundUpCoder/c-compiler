@@ -115,7 +115,8 @@ pgid atomically at spawn).
 | Processes | Done — kernel.js Phases 1–4 (todos/done/0001–0003, 0009): async signal delivery, EINTR, tty line discipline + control-char signals, kernel-owned fd tables + brokered fs, pipes as OFDs + SIGPIPE, job control (stop/cont, WUNTRACED/WCONTINUED, SIGTTIN). |
 | Terminal | Done for Phase 1 — the tty is a kernel object (termios, canonical/raw, echo, Ctrl-C→SIGINT, SIGWINCH); xterm.js is the dumb UI bridge (`os/os.html`). |
 | Reference build | **Boots** (todos/done/0004): `os/os.html` in a tab over OPFS, `os/boot.js` headless on stdio; first boot self-seeds from `os/image.json` (C sources compiled by the kernel's cc driver); `cc hello.c && ./a.out` works in-OS. |
-| Shell | **Done** (todos/done/0005): busybox 1.37.0 hush as `/bin/sh`, ported via the vfork-on-__spawn journaling shim (`vendor/busybox/`). Pipelines, `$( )`, redirects, here-docs, control flow, interactive mode with prompt/line editing, `popen()`/`system()` all live. Coreutils beyond tiny cat/ls: `todos/0010`. |
+| Shell | **Done** (todos/done/0005): busybox 1.37.0 hush as `/bin/sh`, ported via the vfork-on-__spawn journaling shim (`vendor/busybox/`). Pipelines, `$( )`, redirects, here-docs, control flow, interactive mode with prompt/line editing, `popen()`/`system()` all live. |
+| Coreutils | **Done** (todos/done/0010): 27 busybox applets (ls cat cp mv rm mkdir grep sed sort … kill) as ONE multicall `/bin/coreutils` + `/bin` symlinks — hand-rolled dispatch, not appletlib (`vendor/busybox/coreutils.json`, `port/multicall_main.c`). |
 | Threads | **Deferred indefinitely** (todos/0006, 2026-07-07): processes are the parallelism unit. `_Atomic` is not accepted (`__STDC_NO_ATOMICS__` stays defined — fail loud, no shim); `pthread.h` absent; `threads.h` a one-line stub. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
 | Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
@@ -201,8 +202,9 @@ The single highest-leverage project in the repo. **The substrate is DONE**
   (cooperative park at safe points), WUNTRACED/WCONTINUED, SIGTTIN. Pipes
   as kernel OFDs with real blocking + SIGPIPE landed with it.
 - ~~select over pipes/tty/files~~ DONE (0009/0003, kernel-side readiness).
-- **Coreutils**: a busybox-style multicall binary (ls, cat, cp, mv, rm, mkdir,
-  grep, sed…) — mostly straight ports once the shell exists.
+- ~~Coreutils~~ DONE (0010): busybox multicall `/bin/coreutils` + symlinks
+  (ls cat cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
+  basename dirname grep egrep fgrep sed echo printf test `[` kill).
 - Small enablers as they come up: `poll`, `mmap` (at least MAP_ANON;
   file-backed can be read-copy at first).
 

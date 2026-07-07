@@ -3,9 +3,10 @@
 // Node with busybox hush as pid 1 (/bin/sh), driven the way an agent or CI
 // would drive it — pipes and exit codes.
 //
-//   - first boot seeds the image from os/image.json: protoshell, cc, tiny
-//     cat/ls, and BUSYBOX HUSH built from vendor/busybox/bin.json by the
-//     kernel's own compiler (no build step)
+//   - first boot seeds the image from os/image.json: protoshell, cc,
+//     BUSYBOX HUSH built from vendor/busybox/bin.json, and the busybox
+//     COREUTILS multicall (vendor/busybox/coreutils.json) with its /bin
+//     applet symlinks — all by the kernel's own compiler (no build step)
 //   - the shell is real: pipelines (cross-process), command substitution
 //     (spawn-self with serialized state, the NOMMU re-exec machinery on
 //     __spawn), redirections, here-docs (bash-style temp file), control
@@ -83,6 +84,10 @@ for (let i = 0; i < expectStdout.length; i++) {
 }
 check('first boot builds hush from vendor/busybox', r.stderr.includes('built vendor/busybox/bin.json'),
   r.stderr.slice(0, 300));
+check('first boot builds the coreutils multicall', r.stderr.includes('built vendor/busybox/coreutils.json'),
+  r.stderr.slice(0, 300));
+check('applet names seeded as symlinks', r.stderr.includes('/bin/ls -> /bin/coreutils'),
+  r.stderr.slice(0, 600));
 
 // ---- popen()/system(): the 0005 acceptance — heredoc -> cc -> run ----
 r = session([
@@ -109,6 +114,28 @@ const po = r.stdout.split('\n');
 const expectPo = ['read: from-popen', 'pclose: 0', 'system: 0', 'file: from-system'];
 for (let i = 0; i < expectPo.length; i++) {
   check('popen[' + i + '] = ' + JSON.stringify(expectPo[i]), po[i] === expectPo[i], JSON.stringify(po[i]));
+}
+
+// ---- coreutils (0010): real applets, /bin symlinks to the multicall ----
+r = session([
+  'cd /tmp && mkdir cu && cd cu',
+  "printf 'cherry 3\\napple 1\\nbanana 2\\n' > fruit.txt",
+  'sort fruit.txt | head -2 | wc -l',       // applet pipeline, 3 processes
+  'grep -c an fruit.txt',
+  "sed 's/apple/APPLE/' fruit.txt | grep APPLE",
+  'cp fruit.txt copy.txt && mv copy.txt moved.txt && rm fruit.txt && ls',
+  'echo x | egrep x >/dev/null && echo egrep-ok',   // argv[0] alias applet
+  'touch t.txt && test -f t.txt && echo touch-ok',
+  'ls -l /bin/grep | grep -c coreutils',    // ls -l renders the symlink
+  'coreutils basename /a/b/c.txt',          // busybox-style explicit form
+  'exit',
+  '',
+].join('\n'));
+check('coreutils session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+const cu = r.stdout.split('\n');
+const expectCu = ['2', '1', 'APPLE 1', 'moved.txt', 'egrep-ok', 'touch-ok', '1', 'c.txt'];
+for (let i = 0; i < expectCu.length; i++) {
+  check('coreutils[' + i + '] = ' + JSON.stringify(expectCu[i]), cu[i] === expectCu[i], JSON.stringify(cu[i]));
 }
 
 // ---- second boot, same image: persistence + no re-seed ----

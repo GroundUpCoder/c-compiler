@@ -1,8 +1,8 @@
 /*
  * Automatically generated C config: don't edit
- * Busybox version: 1.37.0
+ * Busybox version: 
  */
-#define AUTOCONF_TIMESTAMP "2026-07-06 09:30:31 KST"
+#define AUTOCONF_TIMESTAMP "2026-07-07 09:10:02 KST"
 
 #define CONFIG_HAVE_DOT_CONFIG 1
 #define ENABLE_HAVE_DOT_CONFIG 1
@@ -32,10 +32,14 @@
 #define ENABLE_INCLUDE_SUSv2 0
 #define IF_INCLUDE_SUSv2(...)
 #define IF_NOT_INCLUDE_SUSv2(...) __VA_ARGS__
-#undef CONFIG_LONG_OPTS
-#define ENABLE_LONG_OPTS 0
-#define IF_LONG_OPTS(...)
-#define IF_NOT_LONG_OPTS(...) __VA_ARGS__
+#define CONFIG_LONG_OPTS 1
+#define ENABLE_LONG_OPTS 1
+#ifdef MAKE_SUID
+# define IF_LONG_OPTS(...) __VA_ARGS__ "CONFIG_LONG_OPTS"
+#else
+# define IF_LONG_OPTS(...) __VA_ARGS__
+#endif
+#define IF_NOT_LONG_OPTS(...)
 #undef CONFIG_SHOW_USAGE
 #define ENABLE_SHOW_USAGE 0
 #define IF_SHOW_USAGE(...)
@@ -827,26 +831,50 @@
 #define ENABLE_FEATURE_TIMEZONE 0
 #define IF_FEATURE_TIMEZONE(...)
 #define IF_NOT_FEATURE_TIMEZONE(...) __VA_ARGS__
+
+/*
+ * Common options for cp and mv
+ */
 #undef CONFIG_FEATURE_PRESERVE_HARDLINKS
 #define ENABLE_FEATURE_PRESERVE_HARDLINKS 0
 #define IF_FEATURE_PRESERVE_HARDLINKS(...)
 #define IF_NOT_FEATURE_PRESERVE_HARDLINKS(...) __VA_ARGS__
-#undef CONFIG_FEATURE_HUMAN_READABLE
-#define ENABLE_FEATURE_HUMAN_READABLE 0
-#define IF_FEATURE_HUMAN_READABLE(...)
-#define IF_NOT_FEATURE_HUMAN_READABLE(...) __VA_ARGS__
-#undef CONFIG_BASENAME
-#define ENABLE_BASENAME 0
-#define IF_BASENAME(...)
-#define IF_NOT_BASENAME(...) __VA_ARGS__
-#undef CONFIG_CAT
-#define ENABLE_CAT 0
-#define IF_CAT(...)
-#define IF_NOT_CAT(...) __VA_ARGS__
-#undef CONFIG_FEATURE_CATN
-#define ENABLE_FEATURE_CATN 0
-#define IF_FEATURE_CATN(...)
-#define IF_NOT_FEATURE_CATN(...) __VA_ARGS__
+
+/*
+ * Common options for df, du, ls
+ */
+#define CONFIG_FEATURE_HUMAN_READABLE 1
+#define ENABLE_FEATURE_HUMAN_READABLE 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_HUMAN_READABLE(...) __VA_ARGS__ "CONFIG_FEATURE_HUMAN_READABLE"
+#else
+# define IF_FEATURE_HUMAN_READABLE(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_HUMAN_READABLE(...)
+#define CONFIG_BASENAME 1
+#define ENABLE_BASENAME 1
+#ifdef MAKE_SUID
+# define IF_BASENAME(...) __VA_ARGS__ "CONFIG_BASENAME"
+#else
+# define IF_BASENAME(...) __VA_ARGS__
+#endif
+#define IF_NOT_BASENAME(...)
+#define CONFIG_CAT 1
+#define ENABLE_CAT 1
+#ifdef MAKE_SUID
+# define IF_CAT(...) __VA_ARGS__ "CONFIG_CAT"
+#else
+# define IF_CAT(...) __VA_ARGS__
+#endif
+#define IF_NOT_CAT(...)
+#define CONFIG_FEATURE_CATN 1
+#define ENABLE_FEATURE_CATN 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_CATN(...) __VA_ARGS__ "CONFIG_FEATURE_CATN"
+#else
+# define IF_FEATURE_CATN(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_CATN(...)
 #undef CONFIG_FEATURE_CATV
 #define ENABLE_FEATURE_CATV 0
 #define IF_FEATURE_CATV(...)
@@ -883,10 +911,14 @@
 #define ENABLE_COMM 0
 #define IF_COMM(...)
 #define IF_NOT_COMM(...) __VA_ARGS__
-#undef CONFIG_CP
-#define ENABLE_CP 0
-#define IF_CP(...)
-#define IF_NOT_CP(...) __VA_ARGS__
+#define CONFIG_CP 1
+#define ENABLE_CP 1
+#ifdef MAKE_SUID
+# define IF_CP(...) __VA_ARGS__ "CONFIG_CP"
+#else
+# define IF_CP(...) __VA_ARGS__
+#endif
+#define IF_NOT_CP(...)
 #undef CONFIG_FEATURE_CP_LONG_OPTIONS
 #define ENABLE_FEATURE_CP_LONG_OPTIONS 0
 #define IF_FEATURE_CP_LONG_OPTIONS(...)
@@ -951,10 +983,14 @@
 #define ENABLE_FEATURE_SKIP_ROOTFS 0
 #define IF_FEATURE_SKIP_ROOTFS(...)
 #define IF_NOT_FEATURE_SKIP_ROOTFS(...) __VA_ARGS__
-#undef CONFIG_DIRNAME
-#define ENABLE_DIRNAME 0
-#define IF_DIRNAME(...)
-#define IF_NOT_DIRNAME(...) __VA_ARGS__
+#define CONFIG_DIRNAME 1
+#define ENABLE_DIRNAME 1
+#ifdef MAKE_SUID
+# define IF_DIRNAME(...) __VA_ARGS__ "CONFIG_DIRNAME"
+#else
+# define IF_DIRNAME(...) __VA_ARGS__
+#endif
+#define IF_NOT_DIRNAME(...)
 #undef CONFIG_DOS2UNIX
 #define ENABLE_DOS2UNIX 0
 #define IF_DOS2UNIX(...)
@@ -1003,22 +1039,34 @@
 #define ENABLE_FACTOR 0
 #define IF_FACTOR(...)
 #define IF_NOT_FACTOR(...) __VA_ARGS__
-#undef CONFIG_FALSE
-#define ENABLE_FALSE 0
-#define IF_FALSE(...)
-#define IF_NOT_FALSE(...) __VA_ARGS__
+#define CONFIG_FALSE 1
+#define ENABLE_FALSE 1
+#ifdef MAKE_SUID
+# define IF_FALSE(...) __VA_ARGS__ "CONFIG_FALSE"
+#else
+# define IF_FALSE(...) __VA_ARGS__
+#endif
+#define IF_NOT_FALSE(...)
 #undef CONFIG_FOLD
 #define ENABLE_FOLD 0
 #define IF_FOLD(...)
 #define IF_NOT_FOLD(...) __VA_ARGS__
-#undef CONFIG_HEAD
-#define ENABLE_HEAD 0
-#define IF_HEAD(...)
-#define IF_NOT_HEAD(...) __VA_ARGS__
-#undef CONFIG_FEATURE_FANCY_HEAD
-#define ENABLE_FEATURE_FANCY_HEAD 0
-#define IF_FEATURE_FANCY_HEAD(...)
-#define IF_NOT_FEATURE_FANCY_HEAD(...) __VA_ARGS__
+#define CONFIG_HEAD 1
+#define ENABLE_HEAD 1
+#ifdef MAKE_SUID
+# define IF_HEAD(...) __VA_ARGS__ "CONFIG_HEAD"
+#else
+# define IF_HEAD(...) __VA_ARGS__
+#endif
+#define IF_NOT_HEAD(...)
+#define CONFIG_FEATURE_FANCY_HEAD 1
+#define ENABLE_FEATURE_FANCY_HEAD 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_FANCY_HEAD(...) __VA_ARGS__ "CONFIG_FEATURE_FANCY_HEAD"
+#else
+# define IF_FEATURE_FANCY_HEAD(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_FANCY_HEAD(...)
 #undef CONFIG_HOSTID
 #define ENABLE_HOSTID 0
 #define IF_HOSTID(...)
@@ -1043,42 +1091,74 @@
 #define ENABLE_LINK 0
 #define IF_LINK(...)
 #define IF_NOT_LINK(...) __VA_ARGS__
-#undef CONFIG_LN
-#define ENABLE_LN 0
-#define IF_LN(...)
-#define IF_NOT_LN(...) __VA_ARGS__
+#define CONFIG_LN 1
+#define ENABLE_LN 1
+#ifdef MAKE_SUID
+# define IF_LN(...) __VA_ARGS__ "CONFIG_LN"
+#else
+# define IF_LN(...) __VA_ARGS__
+#endif
+#define IF_NOT_LN(...)
 #undef CONFIG_LOGNAME
 #define ENABLE_LOGNAME 0
 #define IF_LOGNAME(...)
 #define IF_NOT_LOGNAME(...) __VA_ARGS__
-#undef CONFIG_LS
-#define ENABLE_LS 0
-#define IF_LS(...)
-#define IF_NOT_LS(...) __VA_ARGS__
-#undef CONFIG_FEATURE_LS_FILETYPES
-#define ENABLE_FEATURE_LS_FILETYPES 0
-#define IF_FEATURE_LS_FILETYPES(...)
-#define IF_NOT_FEATURE_LS_FILETYPES(...) __VA_ARGS__
-#undef CONFIG_FEATURE_LS_FOLLOWLINKS
-#define ENABLE_FEATURE_LS_FOLLOWLINKS 0
-#define IF_FEATURE_LS_FOLLOWLINKS(...)
-#define IF_NOT_FEATURE_LS_FOLLOWLINKS(...) __VA_ARGS__
-#undef CONFIG_FEATURE_LS_RECURSIVE
-#define ENABLE_FEATURE_LS_RECURSIVE 0
-#define IF_FEATURE_LS_RECURSIVE(...)
-#define IF_NOT_FEATURE_LS_RECURSIVE(...) __VA_ARGS__
-#undef CONFIG_FEATURE_LS_WIDTH
-#define ENABLE_FEATURE_LS_WIDTH 0
-#define IF_FEATURE_LS_WIDTH(...)
-#define IF_NOT_FEATURE_LS_WIDTH(...) __VA_ARGS__
-#undef CONFIG_FEATURE_LS_SORTFILES
-#define ENABLE_FEATURE_LS_SORTFILES 0
-#define IF_FEATURE_LS_SORTFILES(...)
-#define IF_NOT_FEATURE_LS_SORTFILES(...) __VA_ARGS__
-#undef CONFIG_FEATURE_LS_TIMESTAMPS
-#define ENABLE_FEATURE_LS_TIMESTAMPS 0
-#define IF_FEATURE_LS_TIMESTAMPS(...)
-#define IF_NOT_FEATURE_LS_TIMESTAMPS(...) __VA_ARGS__
+#define CONFIG_LS 1
+#define ENABLE_LS 1
+#ifdef MAKE_SUID
+# define IF_LS(...) __VA_ARGS__ "CONFIG_LS"
+#else
+# define IF_LS(...) __VA_ARGS__
+#endif
+#define IF_NOT_LS(...)
+#define CONFIG_FEATURE_LS_FILETYPES 1
+#define ENABLE_FEATURE_LS_FILETYPES 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_LS_FILETYPES(...) __VA_ARGS__ "CONFIG_FEATURE_LS_FILETYPES"
+#else
+# define IF_FEATURE_LS_FILETYPES(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_LS_FILETYPES(...)
+#define CONFIG_FEATURE_LS_FOLLOWLINKS 1
+#define ENABLE_FEATURE_LS_FOLLOWLINKS 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_LS_FOLLOWLINKS(...) __VA_ARGS__ "CONFIG_FEATURE_LS_FOLLOWLINKS"
+#else
+# define IF_FEATURE_LS_FOLLOWLINKS(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_LS_FOLLOWLINKS(...)
+#define CONFIG_FEATURE_LS_RECURSIVE 1
+#define ENABLE_FEATURE_LS_RECURSIVE 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_LS_RECURSIVE(...) __VA_ARGS__ "CONFIG_FEATURE_LS_RECURSIVE"
+#else
+# define IF_FEATURE_LS_RECURSIVE(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_LS_RECURSIVE(...)
+#define CONFIG_FEATURE_LS_WIDTH 1
+#define ENABLE_FEATURE_LS_WIDTH 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_LS_WIDTH(...) __VA_ARGS__ "CONFIG_FEATURE_LS_WIDTH"
+#else
+# define IF_FEATURE_LS_WIDTH(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_LS_WIDTH(...)
+#define CONFIG_FEATURE_LS_SORTFILES 1
+#define ENABLE_FEATURE_LS_SORTFILES 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_LS_SORTFILES(...) __VA_ARGS__ "CONFIG_FEATURE_LS_SORTFILES"
+#else
+# define IF_FEATURE_LS_SORTFILES(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_LS_SORTFILES(...)
+#define CONFIG_FEATURE_LS_TIMESTAMPS 1
+#define ENABLE_FEATURE_LS_TIMESTAMPS 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_LS_TIMESTAMPS(...) __VA_ARGS__ "CONFIG_FEATURE_LS_TIMESTAMPS"
+#else
+# define IF_FEATURE_LS_TIMESTAMPS(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_LS_TIMESTAMPS(...)
 #undef CONFIG_FEATURE_LS_USERNAME
 #define ENABLE_FEATURE_LS_USERNAME 0
 #define IF_FEATURE_LS_USERNAME(...)
@@ -1115,10 +1195,14 @@
 #define ENABLE_FEATURE_MD5_SHA1_SUM_CHECK 0
 #define IF_FEATURE_MD5_SHA1_SUM_CHECK(...)
 #define IF_NOT_FEATURE_MD5_SHA1_SUM_CHECK(...) __VA_ARGS__
-#undef CONFIG_MKDIR
-#define ENABLE_MKDIR 0
-#define IF_MKDIR(...)
-#define IF_NOT_MKDIR(...) __VA_ARGS__
+#define CONFIG_MKDIR 1
+#define ENABLE_MKDIR 1
+#ifdef MAKE_SUID
+# define IF_MKDIR(...) __VA_ARGS__ "CONFIG_MKDIR"
+#else
+# define IF_MKDIR(...) __VA_ARGS__
+#endif
+#define IF_NOT_MKDIR(...)
 #undef CONFIG_MKFIFO
 #define ENABLE_MKFIFO 0
 #define IF_MKFIFO(...)
@@ -1131,10 +1215,14 @@
 #define ENABLE_MKTEMP 0
 #define IF_MKTEMP(...)
 #define IF_NOT_MKTEMP(...) __VA_ARGS__
-#undef CONFIG_MV
-#define ENABLE_MV 0
-#define IF_MV(...)
-#define IF_NOT_MV(...) __VA_ARGS__
+#define CONFIG_MV 1
+#define ENABLE_MV 1
+#ifdef MAKE_SUID
+# define IF_MV(...) __VA_ARGS__ "CONFIG_MV"
+#else
+# define IF_MV(...) __VA_ARGS__
+#endif
+#define IF_NOT_MV(...)
 #undef CONFIG_NICE
 #define ENABLE_NICE 0
 #define IF_NICE(...)
@@ -1167,10 +1255,14 @@
 #define ENABLE_PRINTF 0
 #define IF_PRINTF(...)
 #define IF_NOT_PRINTF(...) __VA_ARGS__
-#undef CONFIG_PWD
-#define ENABLE_PWD 0
-#define IF_PWD(...)
-#define IF_NOT_PWD(...) __VA_ARGS__
+#define CONFIG_PWD 1
+#define ENABLE_PWD 1
+#ifdef MAKE_SUID
+# define IF_PWD(...) __VA_ARGS__ "CONFIG_PWD"
+#else
+# define IF_PWD(...) __VA_ARGS__
+#endif
+#define IF_NOT_PWD(...)
 #undef CONFIG_READLINK
 #define ENABLE_READLINK 0
 #define IF_READLINK(...)
@@ -1183,14 +1275,22 @@
 #define ENABLE_REALPATH 0
 #define IF_REALPATH(...)
 #define IF_NOT_REALPATH(...) __VA_ARGS__
-#undef CONFIG_RM
-#define ENABLE_RM 0
-#define IF_RM(...)
-#define IF_NOT_RM(...) __VA_ARGS__
-#undef CONFIG_RMDIR
-#define ENABLE_RMDIR 0
-#define IF_RMDIR(...)
-#define IF_NOT_RMDIR(...) __VA_ARGS__
+#define CONFIG_RM 1
+#define ENABLE_RM 1
+#ifdef MAKE_SUID
+# define IF_RM(...) __VA_ARGS__ "CONFIG_RM"
+#else
+# define IF_RM(...) __VA_ARGS__
+#endif
+#define IF_NOT_RM(...)
+#define CONFIG_RMDIR 1
+#define ENABLE_RMDIR 1
+#ifdef MAKE_SUID
+# define IF_RMDIR(...) __VA_ARGS__ "CONFIG_RMDIR"
+#else
+# define IF_RMDIR(...) __VA_ARGS__
+#endif
+#define IF_NOT_RMDIR(...)
 #undef CONFIG_SEQ
 #define ENABLE_SEQ 0
 #define IF_SEQ(...)
@@ -1211,14 +1311,22 @@
 #define ENABLE_FEATURE_FANCY_SLEEP 0
 #define IF_FEATURE_FANCY_SLEEP(...)
 #define IF_NOT_FEATURE_FANCY_SLEEP(...) __VA_ARGS__
-#undef CONFIG_SORT
-#define ENABLE_SORT 0
-#define IF_SORT(...)
-#define IF_NOT_SORT(...) __VA_ARGS__
-#undef CONFIG_FEATURE_SORT_BIG
-#define ENABLE_FEATURE_SORT_BIG 0
-#define IF_FEATURE_SORT_BIG(...)
-#define IF_NOT_FEATURE_SORT_BIG(...) __VA_ARGS__
+#define CONFIG_SORT 1
+#define ENABLE_SORT 1
+#ifdef MAKE_SUID
+# define IF_SORT(...) __VA_ARGS__ "CONFIG_SORT"
+#else
+# define IF_SORT(...) __VA_ARGS__
+#endif
+#define IF_NOT_SORT(...)
+#define CONFIG_FEATURE_SORT_BIG 1
+#define ENABLE_FEATURE_SORT_BIG 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_SORT_BIG(...) __VA_ARGS__ "CONFIG_FEATURE_SORT_BIG"
+#else
+# define IF_FEATURE_SORT_BIG(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_SORT_BIG(...)
 #undef CONFIG_FEATURE_SORT_OPTIMIZE_MEMORY
 #define ENABLE_FEATURE_SORT_OPTIMIZE_MEMORY 0
 #define IF_FEATURE_SORT_OPTIMIZE_MEMORY(...)
@@ -1267,14 +1375,22 @@
 #define ENABLE_TAC 0
 #define IF_TAC(...)
 #define IF_NOT_TAC(...) __VA_ARGS__
-#undef CONFIG_TAIL
-#define ENABLE_TAIL 0
-#define IF_TAIL(...)
-#define IF_NOT_TAIL(...) __VA_ARGS__
-#undef CONFIG_FEATURE_FANCY_TAIL
-#define ENABLE_FEATURE_FANCY_TAIL 0
-#define IF_FEATURE_FANCY_TAIL(...)
-#define IF_NOT_FEATURE_FANCY_TAIL(...) __VA_ARGS__
+#define CONFIG_TAIL 1
+#define ENABLE_TAIL 1
+#ifdef MAKE_SUID
+# define IF_TAIL(...) __VA_ARGS__ "CONFIG_TAIL"
+#else
+# define IF_TAIL(...) __VA_ARGS__
+#endif
+#define IF_NOT_TAIL(...)
+#define CONFIG_FEATURE_FANCY_TAIL 1
+#define ENABLE_FEATURE_FANCY_TAIL 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_FANCY_TAIL(...) __VA_ARGS__ "CONFIG_FEATURE_FANCY_TAIL"
+#else
+# define IF_FEATURE_FANCY_TAIL(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_FANCY_TAIL(...)
 #undef CONFIG_TEE
 #define ENABLE_TEE 0
 #define IF_TEE(...)
@@ -1303,14 +1419,22 @@
 #define ENABLE_TIMEOUT 0
 #define IF_TIMEOUT(...)
 #define IF_NOT_TIMEOUT(...) __VA_ARGS__
-#undef CONFIG_TOUCH
-#define ENABLE_TOUCH 0
-#define IF_TOUCH(...)
-#define IF_NOT_TOUCH(...) __VA_ARGS__
-#undef CONFIG_FEATURE_TOUCH_SUSV3
-#define ENABLE_FEATURE_TOUCH_SUSV3 0
-#define IF_FEATURE_TOUCH_SUSV3(...)
-#define IF_NOT_FEATURE_TOUCH_SUSV3(...) __VA_ARGS__
+#define CONFIG_TOUCH 1
+#define ENABLE_TOUCH 1
+#ifdef MAKE_SUID
+# define IF_TOUCH(...) __VA_ARGS__ "CONFIG_TOUCH"
+#else
+# define IF_TOUCH(...) __VA_ARGS__
+#endif
+#define IF_NOT_TOUCH(...)
+#define CONFIG_FEATURE_TOUCH_SUSV3 1
+#define ENABLE_FEATURE_TOUCH_SUSV3 1
+#ifdef MAKE_SUID
+# define IF_FEATURE_TOUCH_SUSV3(...) __VA_ARGS__ "CONFIG_FEATURE_TOUCH_SUSV3"
+#else
+# define IF_FEATURE_TOUCH_SUSV3(...) __VA_ARGS__
+#endif
+#define IF_NOT_FEATURE_TOUCH_SUSV3(...)
 #undef CONFIG_TR
 #define ENABLE_TR 0
 #define IF_TR(...)
@@ -1323,10 +1447,14 @@
 #define ENABLE_FEATURE_TR_EQUIV 0
 #define IF_FEATURE_TR_EQUIV(...)
 #define IF_NOT_FEATURE_TR_EQUIV(...) __VA_ARGS__
-#undef CONFIG_TRUE
-#define ENABLE_TRUE 0
-#define IF_TRUE(...)
-#define IF_NOT_TRUE(...) __VA_ARGS__
+#define CONFIG_TRUE 1
+#define ENABLE_TRUE 1
+#ifdef MAKE_SUID
+# define IF_TRUE(...) __VA_ARGS__ "CONFIG_TRUE"
+#else
+# define IF_TRUE(...) __VA_ARGS__
+#endif
+#define IF_NOT_TRUE(...)
 #undef CONFIG_TRUNCATE
 #define ENABLE_TRUNCATE 0
 #define IF_TRUNCATE(...)
@@ -1383,10 +1511,14 @@
 #define ENABLE_UUENCODE 0
 #define IF_UUENCODE(...)
 #define IF_NOT_UUENCODE(...) __VA_ARGS__
-#undef CONFIG_WC
-#define ENABLE_WC 0
-#define IF_WC(...)
-#define IF_NOT_WC(...) __VA_ARGS__
+#define CONFIG_WC 1
+#define ENABLE_WC 1
+#ifdef MAKE_SUID
+# define IF_WC(...) __VA_ARGS__ "CONFIG_WC"
+#else
+# define IF_WC(...) __VA_ARGS__
+#endif
+#define IF_NOT_WC(...)
 #undef CONFIG_FEATURE_WC_LARGE
 #define ENABLE_FEATURE_WC_LARGE 0
 #define IF_FEATURE_WC_LARGE(...)
@@ -1603,10 +1735,14 @@
 #define ENABLE_PATCH 0
 #define IF_PATCH(...)
 #define IF_NOT_PATCH(...) __VA_ARGS__
-#undef CONFIG_SED
-#define ENABLE_SED 0
-#define IF_SED(...)
-#define IF_NOT_SED(...) __VA_ARGS__
+#define CONFIG_SED 1
+#define ENABLE_SED 1
+#ifdef MAKE_SUID
+# define IF_SED(...) __VA_ARGS__ "CONFIG_SED"
+#else
+# define IF_SED(...) __VA_ARGS__
+#endif
+#define IF_NOT_SED(...)
 #undef CONFIG_VI
 #define ENABLE_VI 0
 #define IF_VI(...)
@@ -1831,18 +1967,30 @@
 #define ENABLE_FEATURE_FIND_LINKS 0
 #define IF_FEATURE_FIND_LINKS(...)
 #define IF_NOT_FEATURE_FIND_LINKS(...) __VA_ARGS__
-#undef CONFIG_GREP
-#define ENABLE_GREP 0
-#define IF_GREP(...)
-#define IF_NOT_GREP(...) __VA_ARGS__
-#undef CONFIG_EGREP
-#define ENABLE_EGREP 0
-#define IF_EGREP(...)
-#define IF_NOT_EGREP(...) __VA_ARGS__
-#undef CONFIG_FGREP
-#define ENABLE_FGREP 0
-#define IF_FGREP(...)
-#define IF_NOT_FGREP(...) __VA_ARGS__
+#define CONFIG_GREP 1
+#define ENABLE_GREP 1
+#ifdef MAKE_SUID
+# define IF_GREP(...) __VA_ARGS__ "CONFIG_GREP"
+#else
+# define IF_GREP(...) __VA_ARGS__
+#endif
+#define IF_NOT_GREP(...)
+#define CONFIG_EGREP 1
+#define ENABLE_EGREP 1
+#ifdef MAKE_SUID
+# define IF_EGREP(...) __VA_ARGS__ "CONFIG_EGREP"
+#else
+# define IF_EGREP(...) __VA_ARGS__
+#endif
+#define IF_NOT_EGREP(...)
+#define CONFIG_FGREP 1
+#define ENABLE_FGREP 1
+#ifdef MAKE_SUID
+# define IF_FGREP(...) __VA_ARGS__ "CONFIG_FGREP"
+#else
+# define IF_FGREP(...) __VA_ARGS__
+#endif
+#define IF_NOT_FGREP(...)
 #undef CONFIG_FEATURE_GREP_CONTEXT
 #define ENABLE_FEATURE_GREP_CONTEXT 0
 #define IF_FEATURE_GREP_CONTEXT(...)

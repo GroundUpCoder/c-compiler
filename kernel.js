@@ -1123,7 +1123,15 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_RMDIR: r = fs.rmdir(P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
     case OP.FS_LINK: r = fs.link(P(req.from), P(req.to)); this._respond(pcb, r === null ? eFs() : {}); return;
     case OP.FS_SYMLINK: r = fs.symlink(req.target, P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_READLINK: r = fs.readlink(P(req.path)); this._respond(pcb, r === null ? eFs() : { target: r }); return;
+    case OP.FS_READLINK: {
+      // BlockFS.readlink is buffer-style (POSIX shape); the RPC carries the
+      // target as a string. PATH_MAX here is BlockFS's path component budget.
+      var lbuf = new Uint8Array(4096);
+      r = fs.readlink(P(req.path), lbuf, lbuf.length);
+      this._respond(pcb, r === null ? eFs()
+        : { target: new TextDecoder().decode(lbuf.subarray(0, r)) });
+      return;
+    }
     case OP.FS_FTRUNCATE: {
       var o5 = ofdOf(req.fd);
       if (!o5 || o5.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
@@ -1713,9 +1721,15 @@ RemoteFS.prototype.mkdir = function (p, mode) { return this._ok(this._c.call(OP.
 RemoteFS.prototype.rmdir = function (p) { return this._ok(this._c.call(OP.FS_RMDIR, { path: p })) && 0; };
 RemoteFS.prototype.link = function (a, b) { return this._ok(this._c.call(OP.FS_LINK, { from: a, to: b })) && 0; };
 RemoteFS.prototype.symlink = function (target, p) { return this._ok(this._c.call(OP.FS_SYMLINK, { target: target, path: p })) && 0; };
-RemoteFS.prototype.readlink = function (p) {
+/* Buffer-style like BlockFS.readlink — toWasmEnv is reused over RemoteFS,
+ * so the signatures must match (the RPC itself carries a string). */
+RemoteFS.prototype.readlink = function (p, buf, bufsize) {
   var r = this._ok(this._c.call(OP.FS_READLINK, { path: p }));
-  return r === null ? null : r.target;
+  if (r === null) return null;
+  var bytes = new TextEncoder().encode(r.target);
+  var n = Math.min(bytes.length, bufsize);
+  for (var i = 0; i < n; i++) buf[i] = bytes[i];
+  return n;
 };
 RemoteFS.prototype.ftruncate = function (fd, size) { return this._ok(this._c.call(OP.FS_FTRUNCATE, { fd: fd, size: size })) && 0; };
 RemoteFS.prototype.chmod = function (p, mode) { return this._ok(this._c.call(OP.FS_CHMOD, { path: p, mode: mode })) && 0; };

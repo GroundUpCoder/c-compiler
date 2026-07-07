@@ -20025,6 +20025,11 @@ extern int errno;
 #define F_WRLCK  1
 #define F_UNLCK  2
 
+/* *at() anchors: dirfd is always treated as the cwd in this libc (see
+   utimensat), so AT_FDCWD is the only meaningful value. */
+#define AT_FDCWD            (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
+
 struct flock {
   short l_type;
   short l_whence;
@@ -20976,6 +20981,7 @@ int unsetenv(const char *name);
 int putenv(char *string);
 int clearenv(void);
 int system(const char *command);
+int mkstemp(char *template_);
 
 #define MB_CUR_MAX 4  /* UTF-8, matching the restartable mbrtowc/wcrtomb family */
 int mblen(const char *s, size_t n);
@@ -21029,6 +21035,7 @@ __require_source("__strings.c");
 #include <stddef.h>
 int strcasecmp(const char *s1, const char *s2);
 int strncasecmp(const char *s1, const char *s2, size_t n);
+char *strcasestr(const char *haystack, const char *needle);
 int ffs(int x);
 int ffsl(long x);
 int ffsll(long long x);
@@ -21105,6 +21112,12 @@ __import int stat(const char *path, struct stat *buf);
 __import int lstat(const char *path, struct stat *buf);
 __import int fstat(int fd, struct stat *buf);
 
+/* mknod: no device/special nodes on this fs — always fails. (Regular-file
+   creation goes through open(); callers wanting FIFOs get pipes via pipe().) */
+static inline int mknod(const char *path, mode_t mode, dev_t dev) {
+  (void)path; (void)mode; (void)dev; return -1;
+}
+
 #include <sys/time.h>   /* __utime / __futime / gettimeofday */
 
 #define UTIME_NOW  ((1l << 30) - 1l)
@@ -21172,6 +21185,9 @@ typedef unsigned int gid_t;
 typedef unsigned long dev_t;
 typedef unsigned long ino_t;
 typedef long long time_t;
+typedef unsigned long nlink_t;
+typedef long long blkcnt_t;
+typedef long blksize_t;
   `,
   "tgmath.h": `
 #pragma once
@@ -21323,6 +21339,11 @@ __import int fdatasync(int fd);
 __import int chmod(const char *path, int mode);
 __import int fchmod(int fd, int mode);
 __import int link(const char *oldpath, const char *newpath);
+/* Ownership: single root user (uid/gid 0 everywhere, see getuid below) and
+   the fs stores no owner metadata — "changing" ownership always succeeds. */
+static inline int chown(const char *path, unsigned owner, unsigned group)  { (void)path; (void)owner; (void)group; return 0; }
+static inline int lchown(const char *path, unsigned owner, unsigned group) { (void)path; (void)owner; (void)group; return 0; }
+static inline int fchown(int fd, unsigned owner, unsigned group)           { (void)fd; (void)owner; (void)group; return 0; }
 __import unsigned int sleep(unsigned int seconds);
 __import int symlink(const char *target, const char *linkpath);
 __import int chmod(const char *path, int mode);
@@ -25476,6 +25497,8 @@ int pclose(FILE *stream) {
   "__stdlib.c": `
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>     // mkstemp() uses strlen
+#include <fcntl.h>      // mkstemp() uses open
 #include <errno.h>
 #include <inttypes.h>
 #include <__atexit.h>
@@ -25483,6 +25506,31 @@ int pclose(FILE *stream) {
 #include <sys/wait.h>   // waitpid()
 #include <signal.h>     // abort() raises SIGABRT
 __import double __strtod_impl(const char *nptr, char **endptr, const char *bound);
+
+/* mkstemp: POSIX temp-file creation (sed -i and friends). Replaces the
+   trailing XXXXXX and opens O_CREAT|O_EXCL. Uniqueness comes from time +
+   pid + a counter, like tmpfile() — no anti-tamper story is needed on a
+   single-user fs. */
+__import long long __time_now(void);
+static int __mkstemp_counter;
+int mkstemp(char *template_) {
+  size_t len = strlen(template_);
+  char *x = template_ + len - 6;
+  if (len < 6) { errno = EINVAL; return -1; }
+  for (int i = 0; i < 6; i++) {
+    if (x[i] != 'X') { errno = EINVAL; return -1; }
+  }
+  for (int tries = 0; tries < 100; tries++) {
+    unsigned long v = (unsigned long)__time_now()
+        ^ ((unsigned long)getpid() << 8) ^ (unsigned long)__mkstemp_counter++;
+    for (int i = 0; i < 6; i++) { x[i] = (char)('a' + v % 26); v /= 26; }
+    int fd = open(template_, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0) return fd;
+    if (errno != EEXIST) return -1;
+  }
+  errno = EEXIST;
+  return -1;
+}
 
 int abs(int n) { return n < 0 ? -n : n; }
 long labs(long n) { return n < 0 ? -n : n; }
@@ -26312,6 +26360,16 @@ int strcasecmp(const char *s1, const char *s2) {
     s2++;
   }
   return __tolower((unsigned char)*s1) - __tolower((unsigned char)*s2);
+}
+
+char *strcasestr(const char *haystack, const char *needle) {
+  if (!*needle) return (char *)haystack;
+  for (; *haystack; haystack++) {
+    const char *h = haystack, *n = needle;
+    while (*h && *n && __tolower((unsigned char)*h) == __tolower((unsigned char)*n)) { h++; n++; }
+    if (!*n) return (char *)haystack;
+  }
+  return 0;
 }
 
 int strncasecmp(const char *s1, const char *s2, size_t n) {

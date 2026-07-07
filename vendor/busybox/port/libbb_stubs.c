@@ -29,8 +29,12 @@ unsigned FAST_FUNC bb_clk_tck(void)
     return 100;
 }
 
-/* appletlib.c globals. hush IS the applet here. */
-const char *applet_name = "hush";
+/* appletlib.c globals. Each binary IS its applet: hush by default, or
+ * whatever the per-applet bin.json defines (todos/0010). */
+#ifndef PORT_APPLET_NAME
+#define PORT_APPLET_NAME "hush"
+#endif
+const char *applet_name = PORT_APPLET_NAME;
 uint8_t xfunc_error_retval = EXIT_FAILURE;
 
 /* bb_getgroups.c replacement: single-user system — root, one group. */

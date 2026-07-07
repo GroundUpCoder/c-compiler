@@ -281,7 +281,8 @@ off_t FAST_FUNC xlseek(int fd, off_t offset, int whence)
 	return off;
 }
 
-#ifndef __wasm__ /* WASM PORT: wraps a syscall this libc lacks; unused by hush */
+/* WASM PORT: formerly guarded out; the libc grew mkstemp() for sed -i
+ * (todos/0010). */
 int FAST_FUNC xmkstemp(char *template)
 {
 	int fd = mkstemp(template);
@@ -289,7 +290,6 @@ int FAST_FUNC xmkstemp(char *template)
 		bb_perror_msg_and_die("can't create temp file '%s'", template);
 	return fd;
 }
-#endif /* WASM PORT */
 
 // Die with supplied filename if this FILE* has ferror set.
 void FAST_FUNC die_if_ferror(FILE *fp, const char *fn)

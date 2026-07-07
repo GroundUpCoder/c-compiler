@@ -1,0 +1,51 @@
+{
+  "type": "lib",
+  "name": "libbb-core",
+  "description": "shared libbb slice for the busybox binaries (hush uses bin.json; coreutils.json deps on this) (todos/0010)",
+  "includes": [
+    "src/include",
+    "port/include"
+  ],
+  "compilerArgs": [
+    "-DBB_VER=\"1.37.0-wasm\"",
+    "-DBB_GLOBAL_CONST=",
+    "-DPV_NO_INTERCEPT"
+  ],
+  "sources": [
+    "port/libbb_stubs.c",
+    "src/libbb/bb_qsort.c",
+    "src/libbb/bb_strtonum.c",
+    "src/libbb/common_bufsiz.c",
+    "src/libbb/compare_string_array.c",
+    "src/libbb/concat_path_file.c",
+    "src/libbb/copyfd.c",
+    "src/libbb/fflush_stdout_and_exit.c",
+    "src/libbb/fclose_nonstdin.c",
+    "src/libbb/full_write.c",
+    "src/libbb/get_last_path_component.c",
+    "src/libbb/get_line_from_file.c",
+    "src/libbb/getopt32.c",
+    "src/libbb/last_char_is.c",
+    "src/libbb/llist.c",
+    "src/libbb/messages.c",
+    "src/libbb/perror_msg.c",
+    "src/libbb/platform.c",
+    "src/libbb/process_escape_sequence.c",
+    "src/libbb/ptr_to_globals.c",
+    "src/libbb/read.c",
+    "src/libbb/safe_strncpy.c",
+    "src/libbb/safe_write.c",
+    "src/libbb/single_argv.c",
+    "src/libbb/skip_whitespace.c",
+    "src/libbb/time.c",
+    "src/libbb/verror_msg.c",
+    "src/libbb/wfopen.c",
+    "src/libbb/wfopen_input.c",
+    "src/libbb/xatonum.c",
+    "src/libbb/xfunc_die.c",
+    "src/libbb/xfuncs.c",
+    "src/libbb/xfuncs_printf.c",
+    "src/libbb/xgetcwd.c",
+    "src/libbb/xrealloc_vector.c"
+  ]
+}

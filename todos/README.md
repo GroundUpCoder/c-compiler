@@ -24,9 +24,8 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0010` busybox coreutils (multicall /bin binaries)
-2. `0007` window manager / compositor — design doc first
-3. `0008` networking — AF_UNIX first
+1. `0007` window manager / compositor — design doc first
+2. `0008` networking — AF_UNIX first
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
@@ -39,7 +38,9 @@ with a `deferred` status; it is not part of the order of attack.)
 `0004` the os/ reference build; `0005` THE SHELL — busybox hush as
 /bin/sh via the vfork-on-__spawn port: pipelines, $( ), redirects,
 here-docs, job control, popen/system — the kernel design's acceptance
-test, passed. OS.md Phase 1 is complete except coreutils.)
+test, passed; `0010` busybox coreutils — 27 applets as one multicall
+/bin/coreutils + /bin symlinks (`logs/2026-07-07/coreutils-multicall.md`).
+**OS.md Phase 1 is complete.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
 WebGPU backlogs run alongside; promote specific chunks into numbered items
