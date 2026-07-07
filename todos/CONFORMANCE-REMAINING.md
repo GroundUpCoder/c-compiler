@@ -17,10 +17,17 @@ they were deprioritized, not disproven. Fixed items live as green tests under
   (`Buffer.from`) before `stream.write`. The predicted masking was real:
   with only the drain fix applied, the test catches corruption at the
   first post-pipe-buffer byte.
-- **Console SharedArrayBuffer ring has no overflow handling** (~64 KiB per
-  16 ms flush window permanently desyncs the terminal; `available` can exceed
-  capacity). Needs a real SPSC protocol: producer checks free space against
-  the read cursor; block or drop-with-counter, never overrun.
+- ~~**Console SharedArrayBuffer ring has no overflow handling**~~ — FIXED
+  (`tests/host/test_console_ring.js`): pty-style blocking backpressure.
+  console_write writes at most the free space, then Atomics.wait()s on
+  `available` until the receiver drains and notifies — a burst larger
+  than the ring blocks the program like write(2) to a full pty, never
+  laps the reader. Writes larger than the whole ring proceed in chunks.
+  The test runs the real producer (compiled C in a worker_thread)
+  against the real receiver and asserts byte-exact 1 MiB delivery
+  (pattern period coprime to the ring size, so a lap can't fake
+  correctness — the first pattern tried had period 256 and passed
+  straight through the pre-fix overrun).
 - ~~`runModule` leaks an `'error'` listener on process.stdout/stderr per
   call~~ — FIXED (`tests/host/test_epipe_listeners.js`): the exit-on-EPIPE
   handler moved to module scope with idempotent per-stream install.
@@ -31,9 +38,14 @@ Browser-testable via the existing Playwright harness in `tests/browser/`
 (headless Chromium; real Safari via safaridriver — see its README). Fixed items
 get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
 
-- **Audio ring write position wraps at 2^31** (`Atomics.add` on Int32Array,
-  no modulo) → RangeError kills the run after ~1.5–3 h of audio. Mask positions
-  modulo capacity on both ends.
+- ~~**Audio ring write position wraps at 2^31**~~ — FIXED
+  (`tests/host/test_audio_ring_wrap.js` — Node-level rather than a browser
+  spike: createBrowserSDL constructs under Node with a stub canvas/ctx
+  because WebGPU init is lazy, so the real `__sdl_queue_audio` is driven
+  directly with the counter seeded near 2^31): writePos now stays masked
+  modulo capacity (single producer → load/modify/store is race-free). The
+  receiver already double-mod'ed its readPos math, so only the producer
+  needed the mask.
 - **S8 audio decoded with the U8 formula** (`(getInt8(x)-128)/128`): signed
   silence becomes a full-scale DC rail. Correct: `getInt8(x)/128`.
 - ~~**`WGPU_WHOLE_SIZE` truncated** in `__wgpu_buffer_map_async` /

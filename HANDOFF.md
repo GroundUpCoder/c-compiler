@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-07, after the lingering-items sweep)
+# Handoff — start of thread (updated 2026-07-07, after the SAB ring fixes)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -25,6 +25,14 @@ earlier on 2026-07-07 — see `logs/2026-07-07/af-unix-sockets.md` and
   epipe listeners, stdout flush, first-run). Run it alongside
   unit/blockfs/kernel.
 
+Later the same day, the **SAB ring fixes** landed
+(`logs/2026-07-07/sab-ring-fixes.md`): the console ring got pty-style
+blocking backpressure (producer Atomics.waits on a full ring; never
+overruns the reader) and the audio ring's writePos is masked modulo
+capacity (no more RangeError after ~2h of audio). Both test-first in
+`tests/host/` — note the coprime-pattern gotcha in the log if you ever
+write another ring test.
+
 All green and verified: unit 700✓, blockfs✓, kernel✓, host✓, browser
 os-boots.mjs (real Chromium)✓.
 
@@ -48,10 +56,6 @@ os-boots.mjs (real Chromium)✓.
   `not_bol`/`not_eol`) and `:s///` needs `REG_STARTEND` — all absent from
   the musl regex in libc-ext.js (POSIX regcomp/regexec only). Requires a
   GNU-compat shim in libc or hand-patching both vi.c search paths.
-- Console SAB ring overflow (CONFORMANCE-REMAINING): needs a real SPSC
-  protocol (producer checks free space against the read cursor) +
-  browser-side verification. The other Node-output-path items there are
-  now fixed.
 - AF_INET / fetch()-HTTP are future Phase 4 items (need a relay design);
   socket v1 non-goals listed in KERNEL.md "AF_UNIX sockets".
 

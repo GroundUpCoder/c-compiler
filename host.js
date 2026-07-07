@@ -5620,7 +5620,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
        * reads from the same buffer and handles AudioContext scheduling.
        *
        * SharedArrayBuffer layout (see createSharedAudioBuffer):
-       *   Int32[0] = writePos, Int32[1] = queuedBytes, Int32[2] = playing
+       *   Int32[0] = writePos (masked mod capacity), Int32[1] = queuedBytes,
+       *   Int32[2] = playing
        *   Bytes 16+ = PCM ring buffer data
        */
       __sdl_open_audio_device: function (freq, format, channels) {
@@ -5655,7 +5656,13 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (firstChunk < accepted) {
           ringData.set(src.subarray(firstChunk), 0);
         }
-        Atomics.add(control, 0, accepted); /* advance writePos */
+        /* Advance writePos MASKED modulo capacity. An unbounded
+           Atomics.add wraps the Int32 negative after 2^31 cumulative
+           bytes (~1.5-3h of 44.1kHz stereo S16) and the negative ring
+           offset kills the run with a RangeError. Single producer, so
+           load/modify/store is race-free; the receiver's readPos math
+           ((writePos - queuedBytes) double-mod cap) is unaffected. */
+        Atomics.store(control, 0, (writePos + accepted) % cap);
         Atomics.add(control, 1, accepted); /* increment queuedBytes */
         return accepted;
       },
@@ -6754,7 +6761,7 @@ const SDL_WEB = (function () {
  * Create a shared audio buffer for worker-based audio.
  *
  * Layout of the SharedArrayBuffer:
- *   Bytes 0-3:   Int32 writePos (updated by worker via Atomics)
+ *   Bytes 0-3:   Int32 writePos (worker-only cursor, masked mod bufferSize)
  *   Bytes 4-7:   Int32 queuedBytes (updated by both sides via Atomics)
  *   Bytes 8-11:  Int32 playing (set by main thread)
  *   Bytes 12-15: (reserved)
@@ -6766,11 +6773,21 @@ const SDL_WEB = (function () {
 /**
  * Create a shared console buffer for emulator terminal I/O (browser workers).
  * Layout (16-byte header + ring buffer):
- *   Int32[0]: writePos  (worker writes, main reads)
- *   Int32[1]: available (worker increments via Atomics.add, main decrements)
+ *   Int32[0]: writePos  (producer cursor, masked mod bufferSize; worker-only)
+ *   Int32[1]: available (worker adds AFTER copying bytes in, main subtracts
+ *             AFTER copying bytes out — the single SPSC synchronization cell)
  *   Int32[2]: termCols  (main writes, worker reads)
  *   Int32[3]: termRows  (main writes, worker reads)
  *   Bytes 16+: ring buffer data
+ *
+ * Overflow protocol (pty-style blocking backpressure): the producer writes
+ * at most (bufferSize - available) bytes, then Atomics.wait()s on
+ * `available` until the receiver drains and Atomics.notify()s. So a burst
+ * larger than the ring blocks the program — like write(2) to a full pty —
+ * instead of lapping the reader and permanently desyncing the stream.
+ * The producer therefore MUST run off the receiver's thread (it does: the
+ * console_write import lives in the process worker, the receiver on the
+ * page's main thread — which couldn't Atomics.wait anyway).
  */
 function createSharedConsoleBuffer(bufferSize) {
   bufferSize = bufferSize || 65536;
@@ -6809,6 +6826,8 @@ function createConsoleReceiver(options) {
     }
     readPos = (readPos + avail) % bufferSize;
     Atomics.sub(control, 1, avail);
+    /* Wake a producer blocked on a full ring (see console_write). */
+    Atomics.notify(control, 1);
     onData(buf);
   }
 
@@ -8418,15 +8437,38 @@ async function runModule({
     const conRingBuf = new Uint8Array(conSab, 16, conBufSize);
 
     imports[ENV_KEY].console_write = function (opaque, bufPtr, len) {
+      /* Blocking SPSC producer (see createSharedConsoleBuffer): write at
+         most the free space, then park on `available` until the receiver
+         drains and notifies. Never overruns the reader — a burst larger
+         than the ring blocks the program, pty-style. A single write
+         larger than the whole ring proceeds in chunks. Runs on the
+         process worker, where Atomics.wait is legal (same contract as
+         the stdin ring's futex wait); no wasm executes in this worker
+         while we're parked, so memory.buffer can't move under us. */
       const memory = instance.exports.memory;
-      const src = new Uint8Array(memory.buffer, bufPtr, len);
-      const writePos = Atomics.load(conControl, 0);
-      for (let i = 0; i < len; i++) {
-        conRingBuf[(writePos + i) % conBufSize] = src[i];
+      let off = 0;
+      while (off < len) {
+        const avail = Atomics.load(conControl, 1);
+        const free = conBufSize - avail;
+        if (free <= 0) {
+          /* Bounded wait + re-check: a lost notify can't wedge us;
+             semantically we still block until there's space. */
+          Atomics.wait(conControl, 1, avail, 100);
+          continue;
+        }
+        const n = Math.min(len - off, free);
+        const src = new Uint8Array(memory.buffer, bufPtr + off, n);
+        const writePos = Atomics.load(conControl, 0);
+        const first = Math.min(n, conBufSize - writePos);
+        conRingBuf.set(src.subarray(0, first), writePos);
+        if (first < n) conRingBuf.set(src.subarray(first), 0);
+        Atomics.store(conControl, 0, (writePos + n) % conBufSize);
+        Atomics.add(conControl, 1, n);
+        off += n;
+        /* Per-chunk nudge so the page can drain while we're still
+           feeding a multi-chunk write. */
+        if (notifyConsole) notifyConsole();
       }
-      Atomics.store(conControl, 0, (writePos + len) % conBufSize);
-      Atomics.add(conControl, 1, len);
-      if (notifyConsole) notifyConsole();
     };
     imports[ENV_KEY].console_get_size = function (pwPtr, phPtr) {
       const memory = instance.exports.memory;
