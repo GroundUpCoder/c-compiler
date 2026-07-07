@@ -11,6 +11,9 @@
 //   - SIGKILL leaks nothing: the kernel owns the descriptions, so the
 //     hog's unlinked-open file is reclaimed — fsck proves the store clean
 //   - tty reads arrive via deferred RPCs (brokered mode has no stdin ring)
+//   - TIOCGWINSZ sees tty.resize() over the brokered fs (todos/0011: the
+//     ioctl guard read _stdinSab — never set in brokered mode — so every
+//     brokered process saw 80x24 forever; vi was the first to notice)
 //
 // Run: node tests/kernel/test_fs_e2e.js
 'use strict';
@@ -44,6 +47,7 @@ const INIT_C = `
 #include <sys/stat.h>
 #include <signal.h>
 #include <dirent.h>
+#include <sys/ioctl.h>
 
 static pid_t run(const char *what, posix_spawn_file_actions_t *fa) {
     char *argv[] = { "child", (char *)what, 0 };
@@ -123,6 +127,14 @@ int main(void) {
     kill(pid, SIGKILL);
     waitpid(pid, &st, 0);
     printf("hogkilled=%d\\n", WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL);
+
+    /* 8: TIOCGWINSZ over the brokered fs — the winsize words live in the
+       tty SAB header even though brokered stdin has no ring */
+    printf("R8\\n");
+    if (!fgets(line, sizeof line, stdin)) return 1;   /* driver resizes first */
+    struct winsize ws;
+    ioctl(0, TIOCGWINSZ, &ws);
+    printf("ws=%dx%d\\n", ws.ws_col, ws.ws_row);
 
     printf("done\\n");
     return 42;
@@ -221,6 +233,10 @@ const watchdog = setTimeout(() => {
   await waitFor('R1');
   tty.input('brokered!\r');
 
+  await waitFor('R8');
+  tty.resize(132, 43);               // the bridge resizes; the ioctl must see it
+  tty.input('go\r');
+
   const status = await haltPromise;
   clearTimeout(watchdog);
 
@@ -236,6 +252,8 @@ const watchdog = setTimeout(() => {
     'sub=[rel] childcwd=5 mycwd=[/]',
     'rootentries=4',                   // dev (fresh-image default), log.txt, out.txt, sub
     'hogkilled=1',
+    'R8',
+    'ws=132x43',
     'done',
   ];
   for (let i = 0; i < expect.length; i++) {

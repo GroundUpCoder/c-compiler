@@ -84,6 +84,10 @@ try {
   // (read_key resolves a lone ESC by timeout).
   await type('vi /tmp/b.txt');
   await waitOut('\x1b[?1049h');              // vi entered the alternate screen
+  await waitOut('- /tmp/b.txt');             // status line: first full draw done,
+                                             // raw mode live — now safe to type
+                                             // (the echoed command was "vi /tmp/…",
+                                             // so "- /tmp/…" is unambiguous)
   await page.keyboard.type('ibrowser vi works');
   // No text needle here: Playwright types char-by-char, so each char is its
   // own tty read -> own refresh -> cursor-positioned single-char render; the
@@ -96,12 +100,13 @@ try {
   await waitOut('\x1b[?1049l');              // vi exited the alternate screen
   await type('cat /tmp/b.txt && echo VI-CAT-OK');
   await waitOut('VI-CAT-OK');
-  const okVi = await page.evaluate(() => {
+  const viSeg = await page.evaluate(() => {
     const out = window.__osOut;
     const exit = out.lastIndexOf('\x1b[?1049l');   // only trust post-vi output
-    return out.slice(exit).replace(/\r/g, '').includes('browser vi works\n');
+    return out.slice(exit).replace(/\r/g, '');
   });
-  check('vi edits a file through xterm (todos/0011)', okVi);
+  check('vi edits a file through xterm (todos/0011)',
+    viSeg.includes('browser vi works\n'), JSON.stringify(viSeg.slice(0, 300)));
 
   // Reboot the tab: same context = same OPFS; the image must be reused and
   // the compiled a.out must still be there.

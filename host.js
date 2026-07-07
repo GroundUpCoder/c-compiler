@@ -4163,10 +4163,13 @@ var BLOCK_FS = (function () {
         setErrnoName('ENOSYS'); return -1;
       },
       __ioctl_tiocgwinsz: function (fd, rows_ptr, cols_ptr) {
-        // Read the real terminal size from the live-stdin sab when wired (the
-        // page keeps COLS/ROWS current); otherwise fall back to 80x24.
+        // Read the real terminal size from the tty SAB header when wired (the
+        // bridge keeps COLS/ROWS current); otherwise fall back to 80x24.
+        // Guard on _stdinCtrl, NOT _stdinSab: brokered-mode RemoteFS wires
+        // ONLY the winsize words (stdin flows via FS_READ RPCs, no ring), so
+        // a _stdinSab guard left every brokered process at 80x24 (todos/0011).
         var rows = 24, cols = 80;
-        if (self._stdinSab) {
+        if (self._stdinCtrl) {
           var c = Atomics.load(self._stdinCtrl, SI_COLS);
           var r = Atomics.load(self._stdinCtrl, SI_ROWS);
           if (c > 0) cols = c;

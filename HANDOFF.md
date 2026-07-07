@@ -17,6 +17,13 @@ save); two vi.c compiler-dialect patches (sigsetjmp if-form, 6 GNU `?:`
 sites). `os/image.json` is **v8**. Full story:
 `logs/2026-07-07/busybox-vi.md`; port doc: `vendor/busybox/README.md`.
 
+Post-landing, the user's eye caught vi painting only 80×24 of a 42-row
+xterm — root cause was a kernel-class bug, not vi: `__ioctl_tiocgwinsz`
+guarded on `_stdinSab`, which brokered-mode RemoteFS deliberately never
+sets, so EVERY brokered process saw 80×24 forever (same
+first-user-of-a-path class as 0010's FS_READLINK). Fixed test-first
+(`test_fs_e2e.js` scenario 8); story: `logs/2026-07-07/brokered-winsize.md`.
+
 The interesting artifact is the test: `tests/kernel/test_vi_e2e.js`
 drives REAL edit sessions (insert/append/search/cw/undo/dd/:wq/:q!)
 through `boot.js --tty-out` — keystrokes through the kernel tty into vi's
