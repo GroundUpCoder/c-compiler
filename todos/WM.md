@@ -2,8 +2,12 @@
 
 - **Status**: designed 2026-07-07 (todos/0007); **v1 IMPLEMENTED the same
   day** (todos/0012 spikes + todos/0013 — see "Implementation status v1"
-  below for what shipped and where it deviates). Next: todos/0014
-  (/bin/wm policy client + wmctl).
+  below for what shipped and where it deviates); **/bin/wm + wmctl landed**
+  (todos/done/0014, status section below); **the acceptance test passed**
+  (todos/done/0015 — doom/snake/gameboy windowed in-OS with zero source
+  changes; quake awaits the relative-mouse flag, todos/0018). Remaining
+  queue: 0016 (WebGPU demo + Dawn tier), 0017 (audio), 0019 (resize),
+  per todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -19,7 +23,11 @@ kernel owning surfaces, input routing, and pixels. **Acceptance test:
 vendor app (doom, quake, snake, gameboy) becomes a windowed app with zero
 source changes.** And per OS.md "agent-friendly by construction": window
 enumeration, synthetic input, and screenshots are kernel ops that work
-headlessly.
+headlessly. **PASSED 2026-07-07** (todos/done/0015) for doom, snake and
+gameboy — seeded in-OS via image.json `bin` game-data entries, verified
+headless (`tests/kernel/test_os_apps_e2e.js`: histogram-checked
+`wmctl shot` frames) and in Chromium (`tests/browser/os-doom.mjs`); quake
+is deferred to todos/0018 (needs the relative-mouse/pointer-lock flag).
 
 ## Fundamentals — the substrate mapping
 
