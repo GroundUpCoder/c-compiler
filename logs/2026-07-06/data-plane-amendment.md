@@ -10,7 +10,7 @@ exposed that the rule predates true multi-process and doesn't survive it:
 - OPFS `createSyncAccessHandle()` is exclusive per file — N workers can't
   each open the store; `readwrite-unsafe` mode is Chromium-only territory.
 - The read-through coherence invariant was validated for two instances in
-  ONE thread (netguc). Truly parallel workers interleave multi-step
+  ONE thread (an external embedder). Truly parallel workers interleave multi-step
   metadata RMW — correctness would need a global cross-worker fs lock.
 - SIGKILL (worker.terminate) tears metadata ops, or worse, kills a lock
   holder. Phase 1 quietly punted the whole question by giving each process

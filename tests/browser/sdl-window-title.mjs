@@ -1,5 +1,5 @@
 // SDL_SetWindowTitle → document.title (Chromium). The window is created as
-// "netguc-title-init" then renamed to "netguc-title-changed"; we assert the page
+// "sdl-title-init" then renamed to "sdl-title-changed"; we assert the page
 // title ends up as the renamed value (proves both the create-window title and
 // SDL_SetWindowTitle reach the DOM, not the old silent no-op).
 import { chromium } from 'playwright';
@@ -37,12 +37,12 @@ try {
     return cc && getComputedStyle(cc).display !== 'none';
   }, {}, { timeout: 30000 });
   // document.title is set from the worker's sdl-title message; poll briefly.
-  await page.waitForFunction(() => document.title === 'netguc-title-changed', {}, { timeout: 10000 })
+  await page.waitForFunction(() => document.title === 'sdl-title-changed', {}, { timeout: 10000 })
     .catch(() => {});
   const title = await page.evaluate(() => document.title);
   console.log('[sdl-window-title] document.title =', JSON.stringify(title));
-  if (title !== 'netguc-title-changed') {
-    throw new Error(`expected document.title "netguc-title-changed", got ${JSON.stringify(title)}`);
+  if (title !== 'sdl-title-changed') {
+    throw new Error(`expected document.title "sdl-title-changed", got ${JSON.stringify(title)}`);
   }
   console.log('[sdl-window-title] PASS — SDL_SetWindowTitle updates document.title');
 } catch (e) {

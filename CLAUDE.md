@@ -33,7 +33,7 @@ commits and dev logs.
 local day, file per topic) capturing the *why* behind non-trivial work —
 decisions, trade-offs, gotchas. Add an entry when landing anything
 substantial, cross-linking `todos/NNNN` items. In-repo convention doc:
-`logs/README.md` (machine-wide origin: `~/git/netguc/skills/logging.md`).
+`logs/README.md`.
 
 ## Conformance tests (bug regression corpus)
 
@@ -137,7 +137,7 @@ superblock + TLSF allocator + inode table + directories all live in the store.
 persisted in the superblock (inode-table extent/capacity, `nextInodeId`, pool
 end, free lists) MUST be read THROUGH the store on each access, never cached on
 the JS instance. Caching breaks coherence when **two live BlockFS instances run
-over one store** (e.g. the netguc concurrent headless runner + the workspace
+over one store** (e.g. an embedder's concurrent headless runner + the workspace
 owner): a stale cache hands out a used inode id or reads inodes at a relocated
 offset → silent cross-file corruption. (This was a real bug — fixed by making
 `InodeTable` extent/cap and `_nextInode` read-through.)

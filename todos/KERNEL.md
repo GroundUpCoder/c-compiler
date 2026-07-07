@@ -419,7 +419,7 @@ terminal-specific.
 ## The fd/data-plane amendment (2026-07-06, todos/0009)
 
 The original settled decision — "control plane only; fs data plane stays
-in-process" — was validated for a world of ONE process (plus the netguc
+in-process" — was validated for a world of ONE process (plus an embedder's
 dual-instance case, which is two instances cooperating in one thread,
 serialized by the event loop). True multi-process breaks it three ways:
 

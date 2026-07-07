@@ -1,6 +1,6 @@
 /* WebGPU triangle (callback model, NO JSPI). Renders a pink triangle on a
    dark-blue clear. Drives the shared rAF loop via wgpuSetMainLoopCallback.
-   Used by webgpu-renders.mjs (Playwright screenshot) and the netguc/c e2e. */
+   Used by webgpu-renders.mjs (Playwright screenshot) and an external e2e. */
 #include <webgpu.h>
 #include <stddef.h>
 #include <stdio.h>

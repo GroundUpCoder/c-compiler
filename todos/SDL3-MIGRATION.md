@@ -14,12 +14,12 @@ in `host.js`):
    (single worker; DOM glue baked into the template, ~`compiler.js:23500-24195`).
    This is the `node compiler.js game.c -o game.html` artifact and is NOT going
    away — it's independent of any app.
-2. **netguc `c/` app** — runs the same compiler in-browser with a 2-worker
-   topology (workspace owner + disposable run worker) and its own DOM glue
-   (`frontend/src/compiler/sdl-input.ts`, `GraphicalRunSheet.tsx`,
-   `run-exec-sab-worker.ts`, `host-media.ts`).
+2. **An external embedder app** — runs the same compiler in-browser with a
+   2-worker topology (workspace owner + disposable run worker) and its own DOM
+   glue (`sdl-input.ts`, `GraphicalRunSheet.tsx`, `run-exec-sab-worker.ts`,
+   `host-media.ts`).
 
-The **DOM→SDL input mapping is duplicated** between them — `c/`'s `sdl-input.ts`
+The **DOM→SDL input mapping is duplicated** between them — the embedder's `sdl-input.ts`
 is openly "ported from the emitted-page DOM→SDL mapping". Two copies of the same
 keysym/scancode tables + `canvasCoords` + dispatch drift silently.
 

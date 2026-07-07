@@ -143,10 +143,10 @@ never silently no-ops — per the repo's "surface errors loudly" rule.
    page, drive with Playwright (Chromium, WebGPU enabled), screenshot, assert on
    pixels (e.g. center pixel is the triangle color, corners are clear color).
    `webgpu-renders.mjs` alongside `doom-renders.mjs`.
-2. **Vendor into netguc/c** via `scripts/sync-compiler.sh`, then run the samples
+2. **Vendor into the external embedder** via its sync script, then run the samples
    through the real graphical run pipeline (`GraphicalRunSheet`, OffscreenCanvas
    through nested workers); Playwright e2e + screenshot.
-3. **Real Safari** via safaridriver + Selenium (netguc/c `scripts/safari-probe`
+3. **Real Safari** via safaridriver + Selenium (the embedder's safari-probe
    style + `tests/browser/safari-renders.mjs`): confirm WebGPU presence on the
    shipping engine and that a sample renders. Playwright's `webkit` is trunk and
    is NOT authoritative for shipping-Safari capability (see memory:
@@ -190,8 +190,8 @@ For every feature in the standard `webgpu.h`:
 - **Fails loud** on anything genuinely unsupported by the browser/runtime.
 - **Tested** — a `tests/browser/webgpu-<feat>.c` + `-renders.mjs` asserting on
   pixels or compute readback; representative capstones re-verified on real
-  Safari (in-page pixel read-back, never screenshots); vendored into `netguc/c`
-  with an e2e case (graphical sheet or headless compute).
+  Safari (in-page pixel read-back, never screenshots); vendored into the
+  external embedder with an e2e case (graphical sheet or headless compute).
 
 ## Invariants (unchanged from Tiers 0–3)
 
@@ -266,8 +266,8 @@ make the surface we already expose as **conformant** as possible instead.
 - **Next major feature after conformance = SDL3** (see `todos/SDL3.md`), not more
   raw WebGPU.
 
-Vendored into `netguc/c` on disk (compiler `b8bdbc4`); netguc e2e + vendored-bump
-commit deferred until port 8006 is free (dev server running).
+Vendored into the external embedder on disk (compiler `b8bdbc4`); embedder e2e +
+vendored-bump commit deferred until port 8006 is free (dev server running).
 
 ## DEFERRED: unify SDL_Renderer onto the `webgpu.h` binding — wait for JSPI
 
@@ -379,6 +379,6 @@ B27. **Debug markers** — Push/Pop debug group + insert marker (render/compute/
 ## Cadence
 
 One commit per increment (or small capstone) in `c-compiler` `main`, each with
-its test. After each batch: `netguc/c/scripts/sync-compiler.sh`, rebuild
-`/bin` wasms, run netguc e2e, commit the vendored bump in `netguc` `main`.
-Report the netguc `c` build number on syncs meant to go live.
+its test. After each batch: run the external embedder's compiler sync, rebuild
+`/bin` wasms, run the embedder e2e, commit the vendored bump there.
+Report the embedder build number on syncs meant to go live.

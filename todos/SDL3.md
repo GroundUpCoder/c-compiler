@@ -170,7 +170,7 @@ Shift+1→'!'=33, Caps+a→65). Verified against `wiki.libsdl.org/SDL3/`
 
 The audit's strays were then **fixed** (all behind headless unit tests
 `tests/unit/sdl_*` + the `tests/browser/sdl-*` Chromium suite; vendored into
-`netguc/c` and deployed). Done:
+the external embedder and deployed). Done:
 
 ### Correctness — fixed
 - **NULL/invalid handling + `SDL_SetError`.** Every object-taking entry point
@@ -408,4 +408,4 @@ SDL_mixer (on top of audio). Note as future, separate docs.
   binding's stance.
 - **Tests:** each subsystem lands with a `tests/browser/` sample + Playwright
   assertion (pixel for video, value for input/audio/timer), then vendored into
-  `netguc/c` with an e2e case (graphical sheet / headless).
+  the external embedder with an e2e case (graphical sheet / headless).

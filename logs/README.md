@@ -19,5 +19,5 @@ going; this says how we got here.
   name, commits by short hash. Backwards too — queue items and design docs
   may point at log entries for the full story.
 
-Machine-wide origin of the convention: `~/git/netguc/skills/logging.md`
-(private repo); this README makes the repo self-describing without it.
+This README is the convention's home for this repo — self-describing, no
+external doc needed.
