@@ -151,6 +151,8 @@ seedAndBoot().catch((e) => {
 async function seedAndBoot() {
   const seeded = await COMMON.seedImage(kfs, manifest, {
     readAsset: (name) => fs.readFileSync(path.join(__dirname, name), 'utf-8'),
+    // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries
+    readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
     compile: ccCompile,
     // project entries (busybox hush) are repo-relative multi-file builds
     buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,

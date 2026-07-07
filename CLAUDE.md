@@ -123,15 +123,22 @@ build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge) →
 same kernel/manifest under Node with the tty on stdio
 (`echo 'ls /' | node os/boot.js`). First boot seeds the image from
 `image.json`: paths map to **C sources compiled at seed time** by the cc
-driver in `os-common.js` (no build step); bump `image.json`'s `version`
-after editing seeded sources (`protoshell.c`, `cc.c`) or existing images
-won't re-seed. pid 1 is busybox hush (`/bin/sh`, built at seed time from
+driver in `os-common.js` (no build step), vendor `project` builds, `bin`
+binary blobs (repo-relative game data: doom1.wad, ROMs), raw `text`, and
+`link` symlinks; bump `image.json`'s `version` after editing seeded
+sources (`protoshell.c`, `cc.c`) or existing images won't re-seed. pid 1
+is busybox hush (`/bin/sh`, built at seed time from
 `vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`; `/bin/wm`
 autostarts as a kernel service (killing it falls back to kernel-chrome;
-`wm &` respawns). The tty's `interactiveOut` opt makes fd 1/2 tty-kind
-(isatty true → hush goes interactive); piped runs stay byte-clean. Tests:
-`tests/kernel/test_os_boot.js` + `test_wm_service_e2e.js` (headless, in
-the kernel suite); `tests/browser/os-boots.mjs` + `os-wm.mjs` (real
+`wm &` respawns). Windowed vendor apps are seeded in-OS (todos/0015):
+`/bin/doom` (WAD at `/root/doom1.wad` — doomgeneric searches cwd only,
+hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms`),
+`/bin/snake` (tty game; needs two paced `q`s to quit — its exit-prompt
+read loop spins on EOF). The tty's `interactiveOut` opt makes fd 1/2
+tty-kind (isatty true → hush goes interactive); piped runs stay
+byte-clean. Tests: `tests/kernel/test_os_boot.js` +
+`test_wm_service_e2e.js` + `test_os_apps_e2e.js` (headless, in the kernel
+suite); `tests/browser/os-boots.mjs` + `os-wm.mjs` + `os-doom.mjs` (real
 Chromium, manual).
 
 ## BlockFS (host.js) and its tests

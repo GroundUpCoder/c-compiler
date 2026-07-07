@@ -24,6 +24,7 @@ var tests = [
   ['test_wm_e2e.js', []],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
   ['test_wm_policy.js', []],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
   ['test_wm_service_e2e.js', []], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
+  ['test_os_apps_e2e.js', []],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
 ];
 
 var failures = 0;

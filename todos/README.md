@@ -24,18 +24,15 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0015` windowed vendor apps in-OS — doom/snake/gameboy + binary-asset
-   image seeding (WM.md unit 7, the design's acceptance test; quake
-   split to 0018)
-2. `0016` SDL+WebGPU demo app windowed + Dawn tier-1 suite — first real
+1. `0016` SDL+WebGPU demo app windowed + Dawn tier-1 suite — first real
    `gpu`-transport consumer; a real-world WebGPU port follows later
    (unnumbered)
-3. `0017` audio mixing — the kernel sound server (WM.md open question;
+2. `0017` audio mixing — the kernel sound server (WM.md open question;
    consumers: doom, gameboy)
-4. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
-   pak0.pak seeding
-5. `0019` client resize (`SURFACE_CONFIGURE`)
-6. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
+3. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
+   pak0.pak seeding (trivial now via image.json `bin` entries)
+4. `0019` client resize (`SURFACE_CONFIGURE`)
+5. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
    demotes to bootstrap chrome
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -66,7 +63,11 @@ in-OS, tested headless + real Chromium
 `0014` **/bin/wm + wmctl** — WM policy out of the kernel: kernel-owned
 AF_UNIX endpoints (`sockServe`), the framed WM protocol on /run/wm.sock,
 taskbar, `Kernel.service()` autostart, kernel-chrome as the crashed-WM
-fallback (`logs/2026-07-07/wm-policy-client.md`).
+fallback (`logs/2026-07-07/wm-policy-client.md`);
+`0015` **windowed vendor apps** — doom/snake/gameboy in-OS with zero
+source changes, image.json `bin` entries for binary game data (doom1.wad,
+ROMs), WM.md unit 7's acceptance test passed
+(`logs/2026-07-07/windowed-vendor-apps.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

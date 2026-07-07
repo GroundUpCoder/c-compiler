@@ -212,14 +212,18 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.hdrs    — (with entry.c) asset names of local headers the source
  *                   quotes-includes; staged beside it for the compile
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
+ *   entry.bin     — REPO-relative binary file; copied verbatim to /path
+ *                   (game data: doom1.wad, gameboy ROMs — needs io.readBinary)
  *   entry.project — REPO-relative bin.json path; multi-file build via
  *                   buildProject (needs io.buildProject)
  *   entry.link    — symlink target; /path becomes a symlink to it (the
  *                   coreutils applet names all point at /bin/coreutils)
  * io: { readAsset(name) -> Promise<string>, compile(argv, cwd), log(msg),
- *       buildProject(projPath) -> wasm bytes }
+ *       buildProject(projPath) -> wasm bytes,
+ *       readBinary(repoPath) -> Uint8Array | Promise<Uint8Array> }
  *   (readAsset is fetch() in the browser, fs.readFile under Node — both
- *   relative to the os/ directory.)
+ *   relative to the os/ directory; readBinary is repo-relative like
+ *   project entries.)
  *
  * Idempotent + versioned: /etc/.image-version records the seeded manifest
  * version; seeding runs only when the manifest is newer, and overwrites the
@@ -250,6 +254,12 @@ function seedImage(kfs, manifest, io) {
         return Promise.resolve(io.readAsset(entry.text)).then(function (text) {
           writeFile(kfs, path, text, entry.mode);
           log('  ' + path + ' (from ' + entry.text + ')');
+        });
+      }
+      if (entry.bin !== undefined) {
+        return Promise.resolve(io.readBinary(entry.bin)).then(function (bytes) {
+          writeFile(kfs, path, bytes, entry.mode);
+          log('  ' + path + ' (binary ' + entry.bin + ', ' + bytes.length + ' bytes)');
         });
       }
       if (entry.project !== undefined) {
@@ -289,7 +299,7 @@ function seedImage(kfs, manifest, io) {
           log('  ' + path + ' (compiled ' + entry.c + ')');
         });
       }
-      throw new Error('image.json: ' + path + ': entry needs "c", "text", "project" or "link"');
+      throw new Error('image.json: ' + path + ': entry needs "c", "text", "bin", "project" or "link"');
     });
   });
   return chain.then(function () {

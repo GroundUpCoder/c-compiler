@@ -1,6 +1,6 @@
 # 0015 — windowed vendor apps in-OS: doom, snake, gameboy
 
-- **Status**: queued
+- **Status**: done (2026-07-07 — `logs/2026-07-07/windowed-vendor-apps.md`)
 - **Depends**: 0013 (WM v1 — hard); 0014 (soft — wmctl/taskbar make the
   acceptance test nicer, not required)
 - **Design**: `todos/WM.md` (implementation plan unit 7 — this is the

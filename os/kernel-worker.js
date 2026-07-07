@@ -87,6 +87,14 @@ async function boot() {
         return r.text();
       });
     },
+    // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries;
+    // seedImage's chain awaits the promise.
+    readBinary: function (p) {
+      return fetch('../' + p).then(function (r) {
+        if (!r.ok) throw new Error(p + ': HTTP ' + r.status);
+        return r.arrayBuffer();
+      }).then(function (ab) { return new Uint8Array(ab); });
+    },
     compile: ccCompile,
     // project entries build repo-relative bin.json trees; the compiler
     // needs a SYNCHRONOUS file reader, so use sync XHR — legal in a

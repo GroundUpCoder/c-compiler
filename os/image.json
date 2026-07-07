@@ -1,9 +1,10 @@
 {
-  "version": 10,
+  "version": 11,
   "dirs": [
     "/bin",
     "/etc",
     "/root",
+    "/root/roms",
     "/run",
     "/tmp"
   ],
@@ -30,6 +31,24 @@
     },
     "/root/hello.c": {
       "text": "hello.c"
+    },
+    "/bin/doom": {
+      "project": "vendor/doom/bin.json"
+    },
+    "/bin/snake": {
+      "project": "vendor/snake/bin.json"
+    },
+    "/bin/gameboy": {
+      "project": "vendor/gameboy/bin.json"
+    },
+    "/root/doom1.wad": {
+      "bin": "vendor/doom/data/doom1.wad"
+    },
+    "/root/roms/PokemonBlue.gb": {
+      "bin": "vendor/gameboy/roms/PokemonBlue.gb"
+    },
+    "/root/roms/SuperMarioDeluxe.gbc": {
+      "bin": "vendor/gameboy/roms/SuperMarioDeluxe.gbc"
     },
     "/bin/coreutils": {
       "project": "vendor/busybox/coreutils.json"
