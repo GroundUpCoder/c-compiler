@@ -22,6 +22,8 @@ var tests = [
   ['test_vi_e2e.js', []],       // 0011: busybox vi through the real tty — raw mode, edit sessions
   ['test_wm.js', []],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
   ['test_wm_e2e.js', []],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
+  ['test_audio.js', []],        // 0017: the kernel mixer — exact-value mixes, resample, lifecycle (no wasm)
+  ['test_audio_e2e.js', []],    // 0017: real C SDL audio streams — AUDIO_OPEN handshake, mix, SIGKILL drain
   ['test_wm_policy.js', []],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
   ['test_wm_service_e2e.js', []], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
   ['test_os_apps_e2e.js', []],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot

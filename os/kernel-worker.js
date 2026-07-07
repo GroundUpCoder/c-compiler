@@ -18,6 +18,10 @@
 //                   {type:'boot-error', msg}
 //                   {type:'ready', mode}         booted; mode = openWorkspace's
 //                   {type:'halt', status}        pid 1 exited
+//                   {type:'audio', sab, bufferSize, freq, channels, format}
+//                                                the mixer's output ring
+//                                                (todos/0017) — play with
+//                                                host.js createAudioReceiver
 'use strict';
 
 importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'compositor.js');
@@ -145,6 +149,14 @@ async function boot() {
   // /bin/wm as a kernel service after pid 1. Failure is non-fatal by design —
   // kernel-chrome is the fallback policy; `wm &` respawns it from the shell.
   kernel.wmServe();
+
+  // The audio mixer (todos/0017): one page-owned output ring, kernel-side
+  // mixing on a 20ms pump. The page plays it with host.js's
+  // createAudioReceiver (resumed on first user gesture — autoplay policy).
+  var audioOut = kernel.audioInit({});
+  post({ type: 'audio', sab: audioOut.sab, bufferSize: audioOut.bufferSize,
+         freq: audioOut.freq, channels: audioOut.channels, format: audioOut.format });
+  setInterval(function () { kernel.audioPump(); }, 20);
   await kernel.boot({
     path: '/bin/sh',
     argv: ['sh'],

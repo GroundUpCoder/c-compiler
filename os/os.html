@@ -36,6 +36,10 @@
 </div>
 <script src="../vendor/xterm/xterm.js"></script>
 <script src="../vendor/xterm/xterm-addon-fit.js"></script>
+<!-- host.js on the page ONLY for createAudioReceiver (todos/0017): the
+     mixer's output ring plays through the same Web Audio path standalone
+     pages use. The page stays a dumb bridge — no other host.js use here. -->
+<script src="../host.js"></script>
 <script>
 'use strict';
 
@@ -148,6 +152,23 @@ kernel.onmessage = function (e) {
       status('halted (exit ' + code + ') — reload to reboot', true);
       window.__osState = 'halted:' + code;
       term.write('\r\n\x1b[33m[system halted — reload the page to reboot]\x1b[0m\r\n');
+      break;
+    }
+    // The audio mixer's output ring (todos/0017): play it with host.js's
+    // createAudioReceiver — one synthetic device, resumed on the first user
+    // gesture (browser autoplay policy gates AudioContext until then).
+    case 'audio': {
+      var receiver = createAudioReceiver({ sharedBuffer: m.sab, bufferSize: m.bufferSize });
+      receiver.handleMessage({ type: 'audio-open', id: 1, freq: m.freq, format: m.format, channels: m.channels });
+      var resumeAudio = function () {
+        receiver.handleMessage({ type: 'audio-pause', id: 1, pause: false });
+        window.__osAudio = 'playing';   // agent probe
+      };
+      ['mousedown', 'keydown', 'touchstart'].forEach(function (evName) {
+        window.addEventListener(evName, resumeAudio, { once: true, capture: true });
+      });
+      window.__osAudio = 'ready';       // agent probe: ring received, awaiting gesture
+      window.__osAudioSab = m.sab;      // agent probe: tests read queuedBytes
       break;
     }
   }

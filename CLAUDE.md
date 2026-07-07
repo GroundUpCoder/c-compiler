@@ -106,7 +106,14 @@ AF_UNIX peer (`sockServe`) — first user is the WM protocol server on
 /run/wm.sock (framed spec in the WMP block, MUST MATCH os/wm_proto.h),
 serving /bin/wm (policy: placement, taskbar, minimize) and /bin/wmctl;
 `Kernel.service()` spawns parentless auto-reaped service processes (the
-wm autostart). Tests:
+wm autostart). The kernel is also the sound server (todos/0017, design in
+WM.md "Audio mixing"): per-process source rings register via AUDIO_OPEN
+(0x2xxx; SAB rides {type:'audio-sab'} before the RPC — the wm-sabs
+handshake), `audioInit()` allocates the one page-owned f32/48k output
+ring, `audioPump()` mixes (linear-interp resample, mono fan-out, sum,
+clamp — pure deterministic math; the embedder schedules it, 20ms in
+kernel-worker). Lifecycle: close/exit/SIGKILL mark streams dying → drain
+dry → reclaim (paused/no-output drop at once — never wedge). Tests:
 `node tests/kernel/run.js` — `test_kernel.js`/`test_tty.js`/`test_pipes.js`
 drive the real SAB protocol against fake workers (deterministic, no
 threads); the `*_e2e.js` files compile real C and run it in
@@ -144,13 +151,20 @@ device + ImageBitmap handoff; headless = the optional Dawn tier (the
 readback→shm SAB, so `wmctl shot` works identically to CPU apps). GPU
 apps must quit via SDL_Quit(), not exit()-in-frame-callback — the runtime
 drains pending Dawn work before the EXIT handshake (WM.md spike-S3
-caveat). The tty's `interactiveOut` opt makes fd 1/2
+caveat). Audio (todos/0017): doom/gameboy sound mixes kernel-side into
+one output ring; os.html loads host.js ONLY for `createAudioReceiver`
+and resumes the AudioContext on the first user gesture (autoplay
+policy); `boot.js` stays silent by design (no `audioInit` — apps
+self-pace against SDL_GetAudioStreamQueued, bounded memory). The tty's
+`interactiveOut` opt makes fd 1/2
 tty-kind (isatty true → hush goes interactive); piped runs stay
 byte-clean. Tests: `tests/kernel/test_os_boot.js` +
 `test_wm_service_e2e.js` + `test_os_apps_e2e.js` +
 `test_gpubox_dawn_e2e.js` (headless, in the kernel suite; the gpubox one
-skips without the webgpu pkg); `tests/browser/os-boots.mjs` + `os-wm.mjs`
-+ `os-doom.mjs` + `os-gpubox.mjs` (real Chromium, manual).
+skips without the webgpu pkg) + `test_audio.js`/`test_audio_e2e.js`
+(0017); `tests/browser/os-boots.mjs` + `os-wm.mjs`
++ `os-doom.mjs` (now asserts the audio pipeline) + `os-gpubox.mjs`
+(real Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

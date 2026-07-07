@@ -5015,6 +5015,40 @@ function createNullSDL() {
  *
  * Layout constants MUST MATCH kernel.js (SH_* / IR_* there).
  * ========================================================================== */
+/* Push bytes from wasm memory into an audio ring SAB (layout:
+ * createSharedAudioBuffer — [writePos, queuedBytes, playing, reserved] +
+ * PCM). Returns the byte count ACCEPTED (partial when the ring is nearly
+ * full; the C SDL_AudioStream backlogs the rest — FIFO preserved, never
+ * dropped). alignBytes > 1 rounds the accept DOWN to whole frames: the
+ * kernel mixer (todos/0017) derives its read position from
+ * writePos - queuedBytes and needs both to advance by whole frames.
+ * writePos advances MASKED modulo capacity — an unbounded Atomics.add
+ * wraps the Int32 negative after 2^31 cumulative bytes (~1.5-3h of
+ * 44.1kHz stereo S16) and the negative ring offset kills the run with a
+ * RangeError. Single producer, so load/modify/store is race-free. */
+function audioRingPush(control, ringData, cap, memory, dataPtr, len, alignBytes) {
+  const queuedBytes = Atomics.load(control, 1);
+  const free = cap - Math.max(0, queuedBytes);
+  if (free <= 0 || len <= 0) return 0;
+  let accepted = Math.min(len, free, cap);
+  if (alignBytes > 1) accepted -= accepted % alignBytes;
+  if (accepted <= 0) return 0;
+  // Defend against the wasm passing a bad (dataPtr, accepted) pair.
+  if (dataPtr < 0 || (dataPtr >>> 0) + (accepted >>> 0) > memory.buffer.byteLength) {
+    return 0;
+  }
+  const src = new Uint8Array(memory.buffer, dataPtr, accepted);
+  const writePos = Atomics.load(control, 0) % cap;
+  const firstChunk = Math.min(accepted, cap - writePos);
+  ringData.set(src.subarray(0, firstChunk), writePos);
+  if (firstChunk < accepted) {
+    ringData.set(src.subarray(firstChunk), 0);
+  }
+  Atomics.store(control, 0, (writePos + accepted) % cap);
+  Atomics.add(control, 1, accepted); /* increment queuedBytes */
+  return accepted;
+}
+
 const WMSH_MAGIC = 0, WMSH_W = 1, WMSH_H = 2, WMSH_FLIP = 4, WMSH_SEQ = 5;
 const WMSH_MAGIC_VALUE = 0x574d5346;
 const WMSH_HDR_BYTES = 64;
@@ -5041,10 +5075,80 @@ function resolveDawnGpu() {
   return Promise.resolve(dawnGpu);
 }
 
+// Per-device source ring for the kernel audio mixer (todos/0017). 256K is
+// ~1.5s of 44.1kHz stereo S16 — apps self-pace against much smaller queue
+// targets (doom keeps 200ms), and it is a multiple of every frame size
+// (1..8 bytes), which the kernel requires (frames never straddle the wrap).
+const WMAUDIO_RING_BYTES = 256 * 1024;
+
 function createSurfaceSDL({ ctx, hooks }) {
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
   let ring = null;                   // { sab, i32, f32, cap } — one per process
+
+  /* ---- audio: per-device source rings into the kernel mixer (todos/0017;
+   * WM.md "Audio mixing"). Same SAB layout as the standalone ring
+   * (createSharedAudioBuffer); the kernel is the consumer instead of the
+   * page. `playing` is written HERE (SDL3 devices open paused; resume sets
+   * it) — the mixer skips paused rings. Kernels without the mixer hooks
+   * (older embedders) keep the historical null behavior. ---- */
+  const audioDevices = [];           // handle-1 -> { aid, control, ring, cap, frameBytes } | null
+  function buildAudioEnv() {
+    if (typeof hooks.audioOpen !== 'function') {
+      return {
+        __sdl_open_audio_device: function () { return 1; },
+        __sdl_queue_audio: function () { return 0; },
+        __sdl_get_queued_audio_size: function () { return 0; },
+        __sdl_clear_queued_audio: function () {},
+        __sdl_pause_audio_device: function () {},
+        __sdl_close_audio_device: function () {},
+        __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
+      };
+    }
+    return {
+      __sdl_open_audio_device: function (freq, format, channels) {
+        const sab = new SharedArrayBuffer(16 + WMAUDIO_RING_BYTES);
+        const r = hooks.audioOpen(freq, format, channels, sab);
+        if (!r || r.errno || !(r.aid > 0)) return 0;   // C shim sets the SDL error
+        let bytesPerSample = 2;                        // S16 default
+        if (format === 0x8120 || format === 0x8020) bytesPerSample = 4;
+        else if (format === 0x8008 || format === 0x0008) bytesPerSample = 1;
+        audioDevices.push({
+          aid: r.aid,
+          control: new Int32Array(sab, 0, 4),
+          ring: new Uint8Array(sab, 16, WMAUDIO_RING_BYTES),
+          cap: WMAUDIO_RING_BYTES,
+          frameBytes: bytesPerSample * channels,
+        });
+        return audioDevices.length;
+      },
+      __sdl_queue_audio: function (dev, dataPtr, len) {
+        const d = audioDevices[dev - 1];
+        if (!d) return 0;
+        // Frame-aligned pushes (the mixer's readPos derivation needs them);
+        // the C SDL_AudioStream backlogs any rounded-off remainder.
+        return audioRingPush(d.control, d.ring, d.cap, getMemory(), dataPtr, len, d.frameBytes);
+      },
+      __sdl_get_queued_audio_size: function (dev) {
+        const d = audioDevices[dev - 1];
+        return d ? Math.max(0, Atomics.load(d.control, 1)) : 0;
+      },
+      __sdl_clear_queued_audio: function (dev) {
+        const d = audioDevices[dev - 1];
+        if (d) Atomics.store(d.control, 1, 0);   // mixer self-heals a racy negative
+      },
+      __sdl_pause_audio_device: function (dev, pause_on) {
+        const d = audioDevices[dev - 1];
+        if (d) Atomics.store(d.control, 2, pause_on ? 0 : 1);
+      },
+      __sdl_close_audio_device: function (dev) {
+        const d = audioDevices[dev - 1];
+        if (d) { hooks.audioClose(d.aid); audioDevices[dev - 1] = null; }
+      },
+      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
+    };
+  }
+  const audioEnv = buildAudioEnv();
 
   function allocFb(w, h) {
     const sab = new SharedArrayBuffer(WMSH_HDR_BYTES + 2 * w * h * 4);
@@ -5153,7 +5257,9 @@ function createSurfaceSDL({ ctx, hooks }) {
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
     };
     const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame });
-    const env = Object.assign({}, inner[ENV_KEY]);
+    // Audio goes to the kernel mixer, not the page: override the inner
+    // backend's ring-less stubs (it was built without sharedAudioBuffer).
+    const env = Object.assign({}, inner[ENV_KEY], audioEnv);
     const innerCreate = env.__sdl_create_window;
     const innerDestroy = env.__sdl_destroy_window;
     const innerSetTitle = env.__sdl_set_window_title;
@@ -5232,7 +5338,7 @@ function createSurfaceSDL({ ctx, hooks }) {
         },
       },
     },
-    [ENV_KEY]: {
+    [ENV_KEY]: Object.assign({
       __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function (titlePtr, x, y, w, h, flags) {
@@ -5295,16 +5401,11 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_push_mouse_motion_event: function () {},
       __sdl_push_mouse_wheel_event: function () {},
       __sdl_push_quit_event: function () {},
-      __sdl_open_audio_device: function () { return 1; },
-      __sdl_queue_audio: function () { return 0; },
-      __sdl_get_queued_audio_size: function () { return 0; },
-      __sdl_clear_queued_audio: function () {},
-      __sdl_pause_audio_device: function () {},
-      __sdl_close_audio_device: function () {},
-      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
       __sdl_delay: function () { sdlDelayUnsupported(); },
-    },
+      // Audio: real source rings into the kernel mixer in both flavors
+      // (todos/0017) — see buildAudioEnv above.
+    }, audioEnv),
   };
 }
 
@@ -5960,31 +6061,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         const cap = sharedAudioBuffer.bufferSize;
         const control = new Int32Array(sab, 0, 4);
         const ringData = new Uint8Array(sab, 16, cap);
-        const queuedBytes = Atomics.load(control, 1);
-        const free = cap - queuedBytes;
-        if (free <= 0 || len <= 0) return 0;
-        const accepted = Math.min(len, free);
-        const memory = getMemory();
-        // Defend against the wasm passing a bad (dataPtr, accepted) pair.
-        if (dataPtr < 0 || (dataPtr >>> 0) + (accepted >>> 0) > memory.buffer.byteLength) {
-          return 0;
-        }
-        const src = new Uint8Array(memory.buffer, dataPtr, accepted);
-        const writePos = Atomics.load(control, 0) % cap;
-        const firstChunk = Math.min(accepted, cap - writePos);
-        ringData.set(src.subarray(0, firstChunk), writePos);
-        if (firstChunk < accepted) {
-          ringData.set(src.subarray(firstChunk), 0);
-        }
-        /* Advance writePos MASKED modulo capacity. An unbounded
-           Atomics.add wraps the Int32 negative after 2^31 cumulative
-           bytes (~1.5-3h of 44.1kHz stereo S16) and the negative ring
-           offset kills the run with a RangeError. Single producer, so
-           load/modify/store is race-free; the receiver's readPos math
-           ((writePos - queuedBytes) double-mod cap) is unaffected. */
-        Atomics.store(control, 0, (writePos + accepted) % cap);
-        Atomics.add(control, 1, accepted); /* increment queuedBytes */
-        return accepted;
+        return audioRingPush(control, ringData, cap, getMemory(), dataPtr, len, 1);
       },
       __sdl_get_queued_audio_size: function (dev) {
         if (!sharedAudioBuffer) return 0;   // no ring → ring holds nothing (C adds backlog)

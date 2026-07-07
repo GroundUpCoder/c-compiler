@@ -48,6 +48,11 @@ try {
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
   check('boots to ready (doom/gameboy/snake + game data seeded)', true);
 
+  // The audio mixer (todos/0017): the kernel handed the page its output
+  // ring at boot; playback is gated on the first user gesture.
+  check('audio output ring reached the page',
+    (await page.evaluate(() => window.__osAudio)) === 'ready');
+
   // Region stats over the desktop canvas: FNV hash (order-sensitive) +
   // distinct-color count + non-desktop coverage of a sample grid.
   const region = (x0, y0, x1, y1) => page.evaluate(([a, b, c, d]) => {
@@ -108,6 +113,19 @@ try {
     await new Promise(r => setTimeout(r, 1200));
   }
   check('doom animates (distinct frame signatures over ~6s)', sigs.size >= 2, sigs.size);
+
+  // Sound (todos/0017): the click above was the resume gesture; with the
+  // receiver draining, the mixer's output writePos advances while doom's
+  // music plays (kernel-side mix -> page-owned ring, end to end).
+  check('audio resumed on the gesture',
+    (await page.evaluate(() => window.__osAudio)) === 'playing');
+  const wposAt = () => page.evaluate(() =>
+    new Int32Array(window.__osAudioSab, 0, 4)[0]);
+  const w0 = await wposAt();
+  await new Promise(r => setTimeout(r, 1500));
+  const w1 = await wposAt();
+  check('mixer output advances while doom plays (music mixed + consumed)',
+    w1 !== w0, { w0, w1 });
 
   // wmctl from the in-browser shell sees the window; close it — the WM close
   // request delivers SDL_EVENT_QUIT and doom exits cleanly.

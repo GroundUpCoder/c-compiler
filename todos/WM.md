@@ -8,9 +8,11 @@
   changes; quake awaits the relative-mouse flag, todos/0018); **GPU apps +
   the Dawn tier landed** (todos/done/0016, 2026-07-08 — /bin/gpubox through
   the `gpu` transport in the browser and the Dawn readback→shm present tail
-  headless; tier-1 suite in the kernel run; status section below).
-  Remaining queue: 0017 (audio), 0018 (quake), 0019 (resize), per
-  todos/README.md.
+  headless; tier-1 suite in the kernel run; status section below);
+  **audio mixing landed** (todos/done/0017, 2026-07-08 — the kernel sound
+  server: per-process source rings mixed kernel-side into one page-owned
+  output ring; doom/gameboy audible in-OS; design section below).
+  Remaining queue: 0018 (quake), 0019 (resize), per todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -260,9 +262,8 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 
 ## Open questions (tracked, not blocking)
 
-- **Audio mixing** — today's audio ring assumes one process ↔ the page;
-  multi-process needs a small mixer (the sound-server analog of this
-  compositor). Design when the second concurrent audio app exists.
+- ~~**Audio mixing**~~ — designed + landed (todos/0017); see "Audio mixing —
+  the kernel sound server" below.
 - **`direct` transport promotion** — light it up when a fullscreen app
   measurably wants the copy back; needs the two-hop OffscreenCanvas
   transfer spike.
@@ -324,7 +325,8 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
   composite has no cursor).
 - **One window per process in the browser gpu flavor** (one OffscreenCanvas
   — same as the standalone runtime); the shm flavor supports many.
-- **Audio in OS processes stays null** (the mixer open-question below).
+- ~~**Audio in OS processes stays null**~~ — lifted by todos/0017 (the
+  kernel sound server; see "Audio mixing" below).
 
 ## Implementation status — the WM client (landed 2026-07-07, todos/0014)
 
@@ -390,6 +392,76 @@ above (suites: `test_gpubox_dawn_e2e.js` in the kernel run, browser
   mid-frame remains the accepted crash risk of the optional tier.
 - The browser `gpu` flavor's one-window-per-process v1 limitation was
   exercised and stands unchanged (gpubox is one window).
+
+## Audio mixing — the kernel sound server (design + landed, todos/0017)
+
+The sound-server analog of the compositor: N per-process source rings in,
+ONE page-owned output ring out, the kernel worker mixing between them on a
+timer. Same substrate mapping as everything else here — a ring is a SAB,
+the mix is pure math, the page stays a dumb playback bridge.
+
+**Rings.** Every ring (source and output) reuses the EXISTING standalone
+audio-ring layout (host.js `createSharedAudioBuffer`: 16-byte header
+`[writePos, queuedBytes, playing, reserved]` + PCM bytes; writePos masked
+mod capacity, `queuedBytes` the single Atomics synchronization cell). What
+changes is who sits on each end:
+
+- **Source rings** — one per SDL audio device, allocated by the PROCESS
+  (host.js `createSurfaceSDL`, which previously null-stubbed audio) and
+  registered with the kernel via `AUDIO_OPEN` (0x2001; `AUDIO_CLOSE`
+  0x2002) — the SAB rides a `{type:'audio-sab'}` message immediately
+  before the RPC, the exact `wm-sabs` FIFO handshake. The process is the
+  producer (`__sdl_queue_audio`, byte-identical discipline to the
+  standalone path), the kernel mixer the consumer. The `playing` header
+  cell is written by the PRODUCER here (SDL3 devices open paused;
+  `SDL_ResumeAudioStreamDevice` sets it) — the mixer skips paused rings.
+- **Output ring** — allocated by the kernel (`kernel.audioInit()`),
+  fixed format **f32 stereo 48kHz**, handed to the page once at boot
+  (`{type:'audio'}` from kernel-worker). The page runs host.js's existing
+  `createAudioReceiver` over it VERBATIM (one synthetic `audio-open`) —
+  the whole Web Audio scheduling path is reused, and the AudioContext
+  autoplay gate is one `resume()` on first user gesture.
+
+**Format/rate normalization** happens kernel-side at mix time, per source
+frame: decode (S16/S32/F32/U8/S8 at any sane rate, mono or stereo) →
+float, linear-interpolation resample to 48k on a persistent fractional
+cursor, mono duplicated to both channels, sum across streams, clamp to
+[-1, 1], write f32 interleaved. Unsupported channel counts (>2) are
+EINVAL at open — fail loud, per house rules.
+
+**Pacing.** `kernel.audioPump()` runs on a 20ms interval in the kernel
+worker (tests call it directly with an explicit frame budget —
+deterministic, no timers). Each pump tops the output ring up to a fixed
+target depth (~80ms), bounded by the MOST-available active stream — so
+one starved app pads with silence rather than stalling another's audio,
+and a lone app never has silence manufactured ahead of its data. Apps
+self-pace against `SDL_GetAudioStreamQueued` (ring + C-side backlog), so
+a stalled consumer (page pre-gesture, headless with no pump) costs
+bounded memory: ring fills, app stops pushing — exactly the standalone
+page's pre-gesture behavior.
+
+**Lifecycle** (the never-wedge rule): `AUDIO_CLOSE`, process exit, and
+SIGKILL all mark the stream *dying*; a dying stream keeps contributing
+until its ring is DRY (queued sfx finishes — "drain"), then is reclaimed;
+a dying ring that is paused (or when no output ring exists) is dropped
+immediately (nothing will ever drain it). Reclaim runs inside the pump,
+so a dead process can never stall the mixer — same discipline as fd and
+surface reclaim in `_exitProcess`.
+
+**Headless** stays tier 0 with zero setup: `os/boot.js` doesn't call
+`audioInit`, streams still register, apps self-pace, nothing plays. The
+deterministic mix tests (`tests/kernel/test_audio.js`) drive `audioInit`
++ `audioPump` directly over fake workers: exact-value mixes (same-rate
+S16, resample ratios, mono fan-out, two-stream sum, clamp), cursor
+continuity across pumps, pause semantics, drain-on-close, SIGKILL
+reclaim mid-play.
+
+Deliberate v1 limits: no per-stream volume/pan (the receiver's master
+gain is the only knob), no output-rate negotiation (48k fixed), linear
+(not windowed-sinc) resampling, `SDL_ClearAudioStream` uses a racy-but-
+self-healing `queuedBytes` store-0 (the mixer clamps a negative
+underflow back to 0 — worst case a clear drops a few already-mixed
+bytes, which is what clear means anyway).
 
 ## Spike appendix — VERDICTS (run 2026-07-07, todos/0012;
 ## harnesses: `tests/browser/wm-spikes.mjs` + `tests/spikes/s3_dawn.mjs`)

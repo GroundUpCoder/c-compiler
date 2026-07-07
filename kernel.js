@@ -114,6 +114,10 @@ var OP = {
   // {type:'wm-frame'} messages — never RPCs. 0x1004 stays reserved for a
   // present RPC should damage tracking ever want one.
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
+  // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
+  // Control plane only: PCM rides the per-process source ring SABs and the
+  // one page-owned output ring — never RPCs.
+  AUDIO_OPEN: 0x2001, AUDIO_CLOSE: 0x2002,
 };
 
 /* Wait options / status packing — must match <sys/wait.h>. */
@@ -188,6 +192,32 @@ var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
  * sdlEvents): the ring carries them verbatim. */
 var WMEV = { QUIT: 0x100, KEYDOWN: 0x300, KEYUP: 0x301, MOUSEMOTION: 0x400,
              MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402, MOUSEWHEEL: 0x403 };
+
+/* ============================================================
+ * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
+ * server"). Ring layout — MUST MATCH host.js createSharedAudioBuffer
+ * (16-byte Int32 header + PCM ring):
+ *   [0] AU_WPOS    writePos, masked mod capacity (producer-only cursor)
+ *   [1] AU_QUEUED  queuedBytes (producer Atomics.add, consumer Atomics.sub —
+ *                  the single synchronization cell; readPos is derived:
+ *                  (writePos - queuedBytes) double-mod capacity)
+ *   [2] AU_PLAYING source rings: written by the PROCESS (SDL3 devices open
+ *                  paused; resume sets 1) — the mixer skips paused rings.
+ *                  Output ring: written by the page receiver on resume.
+ *   [3] reserved
+ * Source rings are process-allocated and registered via AUDIO_OPEN (the
+ * SAB rides {type:'audio-sab'} immediately before the RPC — the wm-sabs
+ * FIFO handshake). The output ring is kernel-allocated (audioInit) and
+ * fixed f32 stereo AU_OUT_FREQ; the page plays it with host.js's existing
+ * createAudioReceiver, verbatim.
+ * SDL audio format words — MUST MATCH <SDL3/SDL_audio.h>. */
+var AU_WPOS = 0, AU_QUEUED = 1, AU_PLAYING = 2;
+var AU_HDR_BYTES = 16;
+var AU_OUT_FREQ = 48000, AU_OUT_CHANNELS = 2;
+var AU_FMT_F32 = 0x8120, AU_FMT_S32 = 0x8020, AU_FMT_S16 = 0x8010,
+    AU_FMT_S8 = 0x8008, AU_FMT_U8 = 0x0008;
+var AU_TARGET_MS = 80;                 // output queue depth the pump tops up to
+var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
 
 /* ============================================================
  * The WM protocol (todos/0014) — the kernel-owned AF_UNIX endpoint at
@@ -467,6 +497,13 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceFrame: function (sid, bmp) {
       self._post({ type: 'wm-frame', sid: sid, bmp: bmp }, [bmp]);
     },
+    // Audio mixer (todos/0017): the process-allocated source ring rides the
+    // FIFO channel immediately before the RPC that names it (wm-sabs shape).
+    audioOpen: function (freq, format, channels, sab) {
+      self._post({ type: 'audio-sab', sab: sab });
+      return self.call(OP.AUDIO_OPEN, { freq: freq, format: format, channels: channels });
+    },
+    audioClose: function (aid) { return self.call(OP.AUDIO_CLOSE, { aid: aid }); },
   };
 };
 
@@ -782,6 +819,11 @@ function Kernel(opts) {
   this._wmVersion = 0;        // bumped on any scene change (create/destroy/
                               // move/focus/title) — compositor idle-skip aid
   this._wmSubs = new Set();   // WM-protocol connections subscribed to events
+  // Audio mixer (todos/0017; WM.md "Audio mixing"). Streams register via
+  // AUDIO_OPEN; the pump mixes them into the one output ring (audioInit).
+  this._audioStreams = new Map(); // aid -> stream (see _audioRpc AUDIO_OPEN)
+  this._nextAid = 1;
+  this._audioOut = null;          // { sab, control, f32, cap, freq, channels }
 }
 
 Kernel.prototype._makeOfd = function (kind, extra) {
@@ -939,6 +981,8 @@ Kernel.prototype._spawn = function (parent, spec) {
       surfaces: new Set(),           // sids owned by this process (WM.md)
       wmRing: null,                  // input ring: { i32, f32, cap }
       _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
+      audios: new Set(),             // aids owned by this process (todos/0017)
+      _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
     };
     var sab = new SharedArrayBuffer(KP_SIZE);
     pcb.page = sab;
@@ -1051,6 +1095,11 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
       if (msg.fb) pcb._wmPendingFb = msg.fb;
       if (msg.ring && !pcb.wmRing) this._wmSetRing(pcb, msg.ring);
       break;
+    // Audio (todos/0017): the source-ring SAB precedes its AUDIO_OPEN on the
+    // same FIFO channel — the wm-sabs handshake, verbatim.
+    case 'audio-sab':
+      if (msg.sab) pcb._audioPendingSab = msg.sab;
+      break;
     case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp); break;
     case 'exited': this._exitProcess(pcb, W_EXITCODE(msg.code | 0)); break;
     case 'crashed':
@@ -1159,6 +1208,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       if ((op & 0xff00) === 0x0400) { this._fsRpc(pcb, op, req); break; }
       if ((op & 0xff00) === 0x0500) { this._sockRpc(pcb, op, req); break; }
       if ((op & 0xf000) === 0x1000) { this._wmRpc(pcb, op, req); break; }
+      if ((op & 0xf000) === 0x2000) { this._audioRpc(pcb, op, req); break; }
       this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
@@ -1754,6 +1804,216 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   }
   this._wmVersion++;
   this._wmEmit(WMP.EV_DESTROYED, [sid]);
+};
+
+/* ============================================================
+ * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
+ * server"). Control plane: AUDIO_OPEN/AUDIO_CLOSE below. Data plane: the
+ * pump — pure math over SABs, no timers here (the embedder schedules it;
+ * tests call it with an explicit frame budget).
+ * ============================================================ */
+
+/* Bytes per sample + float decoder per SDL format word. The decode is
+ * CORRECT per format (unlike the page receiver's legacy S8 quirk — the
+ * mixer owns both ends of the source rings, so there is no compatibility
+ * to preserve). */
+function audioFormatInfo(format) {
+  switch (format | 0) {
+    case AU_FMT_F32: return { bytes: 4, decode: function (dv, off) { return dv.getFloat32(off, true); } };
+    case AU_FMT_S32: return { bytes: 4, decode: function (dv, off) { return dv.getInt32(off, true) / 2147483648; } };
+    case AU_FMT_S16: return { bytes: 2, decode: function (dv, off) { return dv.getInt16(off, true) / 32768; } };
+    case AU_FMT_S8:  return { bytes: 1, decode: function (dv, off) { return dv.getInt8(off) / 128; } };
+    case AU_FMT_U8:  return { bytes: 1, decode: function (dv, off) { return (dv.getUint8(off) - 128) / 128; } };
+    default: return null;
+  }
+}
+
+Kernel.prototype._audioRpc = function (pcb, op, req) {
+  switch (op) {
+    case OP.AUDIO_OPEN: {
+      var sab = pcb._audioPendingSab;
+      pcb._audioPendingSab = null;
+      var freq = req.freq | 0, channels = req.channels | 0;
+      var fmt = audioFormatInfo(req.format);
+      if (!sab || sab.byteLength <= AU_HDR_BYTES || !fmt ||
+          freq < 4000 || freq > 192000 || (channels !== 1 && channels !== 2)) {
+        this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      var cap = sab.byteLength - AU_HDR_BYTES;
+      var frameBytes = fmt.bytes * channels;
+      // A frame must never straddle the ring wrap (samples are read with a
+      // DataView at a linear offset) — require frame-aligned capacity.
+      if (cap % frameBytes !== 0) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      var aid = this._nextAid++;
+      this._audioStreams.set(aid, {
+        aid: aid, pid: pcb.pid,
+        control: new Int32Array(sab, 0, 4),
+        dv: new DataView(sab, AU_HDR_BYTES, cap),
+        cap: cap, freq: freq, channels: channels,
+        sampleBytes: fmt.bytes, frameBytes: frameBytes, decode: fmt.decode,
+        frac: 0,        // fractional resample cursor, in source frames [0, 1)
+        dying: false,   // close/exit marked; drains dry, then reclaimed
+      });
+      pcb.audios.add(aid);
+      this._respond(pcb, { aid: aid });
+      break;
+    }
+    case OP.AUDIO_CLOSE: {
+      var s = this._audioStreams.get(req.aid | 0);
+      if (!s || s.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      pcb.audios.delete(s.aid);
+      this._audioMarkDying(s);
+      this._respond(pcb, {});
+      break;
+    }
+    default: this._respond(pcb, { errno: 'ENOSYS' });
+  }
+};
+
+/* Close/exit path: drain what's queued (sfx tails finish), drop what can't
+ * drain — a paused ring will never be consumed, and with no output ring the
+ * pump never runs. Never wedge the mixer on a dead process. */
+Kernel.prototype._audioMarkDying = function (s) {
+  s.dying = true;
+  if (!this._audioOut || !Atomics.load(s.control, AU_PLAYING) ||
+      Atomics.load(s.control, AU_QUEUED) <= 0) {
+    this._audioStreams.delete(s.aid);
+  }
+};
+
+/* Allocate + install the output ring (browser kernel-worker calls this at
+ * boot and hands the SAB to the page; tests call it directly). Fixed f32
+ * stereo AU_OUT_FREQ — the receiver end is host.js createAudioReceiver. */
+Kernel.prototype.audioInit = function (opts) {
+  opts = opts || {};
+  var cap = (opts.bufferSize | 0) || AU_OUT_RING_BYTES;
+  var sab = new SharedArrayBuffer(AU_HDR_BYTES + cap);
+  this._audioOut = {
+    sab: sab, control: new Int32Array(sab, 0, 4),
+    f32: null, u8: new Uint8Array(sab, AU_HDR_BYTES, cap),
+    cap: cap, freq: AU_OUT_FREQ, channels: AU_OUT_CHANNELS,
+  };
+  return { sab: sab, bufferSize: cap, freq: AU_OUT_FREQ,
+           channels: AU_OUT_CHANNELS, format: AU_FMT_F32 };
+};
+
+/* Test/debug view of the stream table. */
+Kernel.prototype.audioList = function () {
+  var out = [];
+  this._audioStreams.forEach(function (s) {
+    out.push({ aid: s.aid, pid: s.pid, freq: s.freq, channels: s.channels,
+               dying: s.dying, queued: Atomics.load(s.control, AU_QUEUED) });
+  });
+  return out;
+};
+
+/* The mix. Tops the output ring up to AU_TARGET_MS (or maxFrames when the
+ * caller bounds it — tests), producing only as many frames as the MOST-
+ * available active stream can fill: a starved app pads with silence next
+ * to a healthy one, but a lone app never has silence manufactured ahead
+ * of data that is about to arrive. Per stream: linear-interp resample on
+ * a persistent fractional cursor, mono duplicated, float sum, clamp.
+ * Everything here is deterministic math over the SABs. */
+Kernel.prototype.audioPump = function (maxFrames) {
+  var out = this._audioOut;
+  if (!out) return 0;
+
+  // Reclaim dying streams that went dry or paused since the last pump.
+  var self = this;
+  var dead = null;
+  this._audioStreams.forEach(function (s) {
+    if (s.dying && (!Atomics.load(s.control, AU_PLAYING) ||
+                    Atomics.load(s.control, AU_QUEUED) <= 0)) {
+      (dead = dead || []).push(s.aid);
+    }
+  });
+  if (dead) dead.forEach(function (aid) { self._audioStreams.delete(aid); });
+
+  var outFrameBytes = 4 * out.channels;              // f32 interleaved
+  var queued = Atomics.load(out.control, AU_QUEUED);
+  if (queued < 0) { Atomics.store(out.control, AU_QUEUED, 0); queued = 0; }
+  var targetBytes = Math.min(out.cap,
+    Math.floor(AU_TARGET_MS * out.freq / 1000) * outFrameBytes);
+  var wantFrames = Math.floor(Math.min(out.cap - queued, targetBytes - queued) / outFrameBytes);
+  if (maxFrames !== undefined) wantFrames = Math.min(wantFrames, maxFrames | 0);
+  if (wantFrames <= 0) return 0;
+
+  // Snapshot each active stream: how many output frames can it back?
+  var active = [];
+  var mostAvail = 0;
+  this._audioStreams.forEach(function (s) {
+    if (!Atomics.load(s.control, AU_PLAYING)) return;   // paused: skip, keep queued
+    var qb = Atomics.load(s.control, AU_QUEUED);
+    if (qb < 0) { Atomics.store(s.control, AU_QUEUED, 0); qb = 0; }  // clear() race heal
+    var srcFrames = Math.floor(qb / s.frameBytes);
+    if (srcFrames <= 0) return;
+    var ratio = s.freq / out.freq;
+    var avail = Math.floor((srcFrames - s.frac) / ratio);
+    if (avail <= 0) return;
+    // readPos = writePos - queuedBytes (the standalone receiver's derivation).
+    // Frame-aligned by construction: the surface-flavor producer only pushes
+    // whole frames (host.js), consumption subtracts whole frames, and clear
+    // resets to wpos itself. The wpos/queued loads are two cells, so a
+    // concurrent push can skew one pump by a frame's worth — transient and
+    // self-healing (next pump re-derives), same class as the standalone
+    // receiver's race.
+    var wpos = Atomics.load(s.control, AU_WPOS) % s.cap;
+    var readBase = ((wpos - qb) % s.cap + s.cap) % s.cap;
+    active.push({ s: s, srcFrames: srcFrames, ratio: ratio, readBase: readBase, avail: avail });
+    if (avail > mostAvail) mostAvail = avail;
+  });
+  if (mostAvail === 0) return 0;
+
+  var frames = Math.min(wantFrames, mostAvail);
+  var mixL = new Float32Array(frames);
+  var mixR = new Float32Array(frames);
+
+  for (var ai = 0; ai < active.length; ai++) {
+    var a = active[ai], s = a.s;
+    var n = Math.min(frames, a.avail);
+    var pos = s.frac;
+    for (var i = 0; i < n; i++) {
+      var i0 = Math.floor(pos);
+      var t = pos - i0;
+      var i1 = i0 + 1 < a.srcFrames ? i0 + 1 : i0;   // clamp lookahead at the edge
+      var off0 = (a.readBase + i0 * s.frameBytes) % s.cap;
+      var off1 = (a.readBase + i1 * s.frameBytes) % s.cap;
+      var l0 = s.decode(s.dv, off0), l1 = s.decode(s.dv, off1);
+      var L = l0 + (l1 - l0) * t, R;
+      if (s.channels === 2) {
+        var r0 = s.decode(s.dv, off0 + s.sampleBytes);
+        var r1 = s.decode(s.dv, off1 + s.sampleBytes);
+        R = r0 + (r1 - r0) * t;
+      } else {
+        R = L;
+      }
+      mixL[i] += L;
+      mixR[i] += R;
+      pos += a.ratio;
+    }
+    // Consume whole source frames; the fractional remainder carries over.
+    var consumed = Math.min(Math.floor(pos), a.srcFrames);
+    s.frac = pos - consumed;
+    if (consumed > 0) Atomics.sub(s.control, AU_QUEUED, consumed * s.frameBytes);
+  }
+
+  // Write f32 interleaved into the output ring (the __sdl_queue_audio
+  // producer discipline: fill, then advance writePos masked mod cap, then
+  // publish via queuedBytes).
+  var bytes = frames * outFrameBytes;
+  var chunk = new Uint8Array(bytes);
+  var cdv = new DataView(chunk.buffer);
+  for (var f = 0; f < frames; f++) {
+    cdv.setFloat32(f * outFrameBytes, Math.max(-1, Math.min(1, mixL[f])), true);
+    cdv.setFloat32(f * outFrameBytes + 4, Math.max(-1, Math.min(1, mixR[f])), true);
+  }
+  var owpos = Atomics.load(out.control, AU_WPOS) % out.cap;
+  var first = Math.min(bytes, out.cap - owpos);
+  out.u8.set(chunk.subarray(0, first), owpos);
+  if (first < bytes) out.u8.set(chunk.subarray(first), 0);
+  Atomics.store(out.control, AU_WPOS, (owpos + bytes) % out.cap);
+  Atomics.add(out.control, AU_QUEUED, bytes);
+  return frames;
 };
 
 /* gpu transport (browser): latest-frame-wins; superseded bitmaps are closed
@@ -2509,6 +2769,16 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   }
   pcb.wmRing = null;
   pcb._wmPendingFb = null;
+  // Audio streams (todos/0017): same discipline — mark dying; the pump
+  // drains queued tails then reclaims (paused/no-output drop immediately).
+  if (pcb.audios.size) {
+    Array.from(pcb.audios).forEach(function (aid) {
+      var s = self0._audioStreams.get(aid);
+      if (s) self0._audioMarkDying(s);
+    });
+  }
+  pcb.audios.clear();
+  pcb._audioPendingSab = null;
 
   var self = this;
   // Reparent children (running AND zombie) to init.
@@ -3052,6 +3322,14 @@ var KERNEL_EXPORTS = {
   WM_COLORS: WM_COLORS,
   // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
   WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,
+  // Audio mixer (todos/0017) — ring layout MUST MATCH host.js
+  // createSharedAudioBuffer; format words MUST MATCH <SDL3/SDL_audio.h>.
+  AU_WPOS: AU_WPOS, AU_QUEUED: AU_QUEUED, AU_PLAYING: AU_PLAYING,
+  AU_HDR_BYTES: AU_HDR_BYTES,
+  AU_OUT_FREQ: AU_OUT_FREQ, AU_OUT_CHANNELS: AU_OUT_CHANNELS,
+  AU_FMT_F32: AU_FMT_F32, AU_FMT_S32: AU_FMT_S32, AU_FMT_S16: AU_FMT_S16,
+  AU_FMT_S8: AU_FMT_S8, AU_FMT_U8: AU_FMT_U8,
+  AU_TARGET_MS: AU_TARGET_MS,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

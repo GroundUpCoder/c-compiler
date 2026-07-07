@@ -1,9 +1,18 @@
 # 0017 — audio mixing (the kernel sound server)
 
-- **Status**: queued
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/audio-mixer.md`)
 - **Depends**: 0015 (the concurrent-audio consumers: doom, gameboy)
-- **Design**: `todos/WM.md` ("Open questions" — audio mixing);
+- **Design**: `todos/WM.md` ("Audio mixing — the kernel sound server");
   `todos/KERNEL.md` (SAB ring patterns); host.js audio ring
+
+Landed: per-process source rings (AUDIO_OPEN/AUDIO_CLOSE, 0x2xxx) +
+kernel-side mixer (`audioInit`/`audioPump` — linear-interp resample, mono
+fan-out, sum + clamp into one page-owned f32/48k output ring, played by
+the existing `createAudioReceiver`), drain-on-exit/SIGKILL lifecycle.
+Suites: `tests/kernel/test_audio.js` (deterministic exact-value mixes) +
+`test_audio_e2e.js` (real C SDL streams); browser `os-doom.mjs` grew the
+audio-pipeline assertions (ring to page, gesture resume, output advancing
+while doom's music plays).
 
 ## Goal
 

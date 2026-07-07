@@ -24,14 +24,12 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0017` audio mixing — the kernel sound server (WM.md open question;
-   consumers: doom, gameboy)
-2. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
+1. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
    pak0.pak seeding (trivial now via image.json `bin` entries)
-3. `0019` client resize (`SURFACE_CONFIGURE`)
-4. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
+2. `0019` client resize (`SURFACE_CONFIGURE`)
+3. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
    demotes to bootstrap chrome
-5. (unnumbered) a real-world WebGPU C app port — candidates via
+4. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -71,7 +69,12 @@ ROMs), WM.md unit 7's acceptance test passed
 webgpu.h cube) through the `gpu` transport in the browser and the new
 canvas-less Dawn present tail (readback → shm) headless; lazy optional
 `webgpu` probe, `wgpuSurfacePresent` now a real host import, tier-1
-tolerance-diff suite (`logs/2026-07-08/webgpu-demo-dawn-tier.md`).
+tolerance-diff suite (`logs/2026-07-08/webgpu-demo-dawn-tier.md`);
+`0017` **audio mixing** — the kernel sound server: per-process source
+rings via AUDIO_OPEN (0x2xxx), kernel-side mixing (resample + sum +
+clamp, pure math) into one page-owned output ring played by the existing
+createAudioReceiver; doom/gameboy audible in-OS, drain-on-exit lifecycle
+(`logs/2026-07-08/audio-mixer.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
@@ -89,8 +92,8 @@ don't duplicate them. Current map:
 - `KERNEL.md` — the process control plane design (kernel.js): kernel page,
   doorbell, signals, tty, the fd/data-plane amendment, pipes, AF_UNIX
   sockets, settled-decisions table. All phases implemented
-  (0001/0002/0003/0009/0008 in done/); the 0x1xxx WM opcode space is the
-  reserved remainder.
+  (0001/0002/0003/0009/0008 in done/); 0x1xxx is the WM opcode space,
+  0x2xxx the audio mixer's (0017).
 - `WM.md` — **the compositor/WM design** (0007, 2026-07-07): backend ×
   transport axes, per-process WebGPU devices, kernel-worker compositing,
   surface protocol, WM-as-client over AF_UNIX, agent control channel,
