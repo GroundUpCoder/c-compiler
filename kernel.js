@@ -109,6 +109,11 @@ var OP = {
   SOCK_SOCKET: 0x0501, SOCK_BIND: 0x0502, SOCK_LISTEN: 0x0503,
   SOCK_ACCEPT: 0x0504, SOCK_CONNECT: 0x0505, SOCK_PAIR: 0x0506,
   SOCK_SHUTDOWN: 0x0507,
+  // 0x1xxx — WM surfaces (todos/WM.md). Control plane only: present rides
+  // the surface SAB (flip+seq, mailbox) and gpu-transport frames ride
+  // {type:'wm-frame'} messages — never RPCs. 0x1004 stays reserved for a
+  // present RPC should damage tracking ever want one.
+  SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
 };
 
 /* Wait options / status packing — must match <sys/wait.h>. */
@@ -132,6 +137,70 @@ function sockDir() {
            readWaiters: [], writeWaiters: [] };
 }
 var S_IFSOCK_MODE = 0o140000;
+
+/* ============================================================
+ * WM surfaces (todos/WM.md; opcodes 0x1xxx as reserved in the design).
+ *
+ * Surface framebuffer SAB — allocated by the PROCESS (host.js), shared to
+ * the kernel via a {type:'wm-sabs'} postMessage immediately before the
+ * SURFACE_CREATE RPC (same-channel FIFO makes the pairing race-free; the
+ * kernel can't hand a new SAB to a parked worker, so the process side is
+ * the natural allocator). Layout — MUST MATCH host.js (SH_* there):
+ *
+ *   Int32 header, 64 bytes:
+ *     [0] SH_MAGIC 0x574d5346   [1] SH_W   [2] SH_H
+ *     [3] SH_FORMAT (0 = RGBA8) [4] SH_FLIP  front buffer index (Atomics)
+ *     [5] SH_SEQ   frame counter (Atomics.add at present)
+ *     [6..15] reserved (damage rect, v2)
+ *   then fb[0], fb[1]: w*h*4 bytes each (double buffer, MAILBOX semantics:
+ *   the producer writes the back buffer, flips SH_FLIP, never blocks; the
+ *   compositor samples the front buffer at its own cadence).
+ *
+ * Present is pure SAB (flip + seq) — NO RPC on the frame path (WM.md's
+ * data-plane rule; the ~10us RPC toll never lands per-frame).
+ *
+ * Input ring SAB — one per process, allocated with the first surface,
+ * kernel -> process (the console-ring pattern; the kernel is the single
+ * producer, the process's SDL pump the single consumer). Layout — MUST
+ * MATCH host.js (IR_*):
+ *
+ *   Int32 header, 32 bytes:
+ *     [0] IR_WPOS  [1] IR_RPOS   indices in [0, 2*cap) (full/empty disambig)
+ *     [2] IR_CAP   capacity in records (power of two, set by the allocator)
+ *     [3] IR_DROPPED  events dropped on overflow (drop-newest)
+ *   then IR_CAP records x 32 bytes: 8 Int32 words
+ *     [0] SDL event type          [1] windowId (sid)
+ *     key:    [2] scancode [3] keysym [4] mod [5] repeat
+ *     motion: [2] x(f32 bits) [3] y(f32 bits) [4] button state mask
+ *     button: [2] x(f32 bits) [3] y(f32 bits) [4] button index
+ *     wheel:  [2] x(f32 bits) [3] y(f32 bits) [4] direction
+ *   The kernel rings the process doorbell after each write, so
+ *   SDL_WaitEvent-style parks wake like every other blocking op.
+ * ============================================================ */
+var SH_MAGIC = 0, SH_W = 1, SH_H = 2, SH_FORMAT = 3, SH_FLIP = 4, SH_SEQ = 5;
+var SH_MAGIC_VALUE = 0x574d5346;             // 'WMSF'
+var SH_HDR_BYTES = 64;
+var IR_WPOS = 0, IR_RPOS = 1, IR_CAP = 2, IR_DROPPED = 3;
+var IR_HDR_BYTES = 32;
+var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
+
+/* SDL event type numbers (MUST MATCH <SDL3/SDL_events.h> / host.js
+ * sdlEvents): the ring carries them verbatim. */
+var WMEV = { QUIT: 0x100, KEYDOWN: 0x300, KEYUP: 0x301, MOUSEMOTION: 0x400,
+             MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402, MOUSEWHEEL: 0x403 };
+
+/* Kernel-drawn chrome, v1 (WM.md "Decorations — staged"): fixed Win95-ish
+ * metrics, deterministic — the same numbers drive hit-testing here, the
+ * browser compositor's drawing, and the headless screenshot composite.
+ * The client rect is (x, y, w, h); the title bar sits ABOVE it. */
+var WM_TITLE_H = 24;
+var WM_CLOSE_W = 16, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
+var WM_COLORS = {                            // RGBA byte tuples
+  desktop: [0, 128, 128, 255],               // the teal
+  titleFocused: [0, 0, 128, 255],            // navy
+  titleBlurred: [128, 128, 128, 255],
+  closeBox: [192, 192, 192, 255],
+};
 
 /* Signal numbering + default actions — must match <signal.h> /
  * __sig_default_action in libc. Kind mirror (__on_sigdisp): 0=DFL 1=IGN
@@ -194,8 +263,9 @@ function readPayload(i32, u8) {
  *   var client = new KernelClient(kernelPageSab, postToKernel);
  *   runModule({ ..., spawnHooks: client.spawnHooks() });
  *
- * postToKernel(msg) must deliver msg to the kernel's message handler for
- * this process (worker postMessage in both browser and Node).
+ * postToKernel(msg, transferList?) must deliver msg to the kernel's message
+ * handler for this process (worker postMessage in both browser and Node;
+ * the optional transfer list carries gpu-transport frame bitmaps).
  * ============================================================ */
 function KernelClient(sab, postToKernel) {
   this._i32 = new Int32Array(sab);
@@ -331,6 +401,20 @@ KernelClient.prototype.spawnHooks = function () {
     },
     ttyGetpgrp: function () { return self.call(OP.TCGETPGRP, {}); },
     ttySetpgrp: function (pgid) { return self.call(OP.TCSETPGRP, { pgid: pgid }); },
+    // WM surfaces (todos/WM.md). The process allocates the SABs (the kernel
+    // can't hand one to a parked worker) and posts them on the same FIFO
+    // channel immediately before the RPC that names them.
+    surfaceCreate: function (w, h, title, fbSab, ringSab) {
+      self._post({ type: 'wm-sabs', fb: fbSab, ring: ringSab || null });
+      return self.call(OP.SURFACE_CREATE, { w: w, h: h, title: title || '' });
+    },
+    surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
+    surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
+    // gpu transport (browser): per-present frame handoff; transfer the
+    // bitmap so it never copies. Fire-and-forget by design (mailbox).
+    surfaceFrame: function (sid, bmp) {
+      self._post({ type: 'wm-frame', sid: sid, bmp: bmp }, [bmp]);
+    },
   };
 };
 
@@ -629,6 +713,19 @@ function Kernel(opts) {
   this._std = null;          // lazy singleton OFDs for default stdio
   this._ttyWaiters = [];     // pids with a deferred tty FS_READ, FIFO
   this._sockBinds = new Map(); // resolved path -> listener/bound socket ofdId
+  // WM surfaces (todos/WM.md). The kernel owns the scene: registry, z-order,
+  // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
+  // placement policy in v2). The compositor (browser) and the screenshot
+  // composite (headless) both read this state.
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap }
+  this._nextSid = 1;
+  this._zOrder = [];          // sids, bottom -> top
+  this._focusSid = 0;
+  this._wmDrag = null;        // { sid, dx, dy } during a title-bar drag
+  this._wmScreen = { w: (opts.screen && opts.screen.w) || 1024,
+                     h: (opts.screen && opts.screen.h) || 768 };
+  this._wmVersion = 0;        // bumped on any scene change (create/destroy/
+                              // move/focus/title) — compositor idle-skip aid
 }
 
 Kernel.prototype._makeOfd = function (kind, extra) {
@@ -767,6 +864,9 @@ Kernel.prototype._spawn = function (parent, spec) {
       page: null, i32: null, u8: null,
       worker: null,
       tty: self._tty,                // v1: the one system tty (or null)
+      surfaces: new Set(),           // sids owned by this process (WM.md)
+      wmRing: null,                  // input ring: { i32, f32, cap }
+      _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
     };
     var sab = new SharedArrayBuffer(KP_SIZE);
     pcb.page = sab;
@@ -873,6 +973,13 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
       if (pcb.waiter) { this._cancelWaiter(pcb); this._respond(pcb, { errno: 'EINTR' }); }
       break;
     case 'out': this._onOutput(pcb.pid, msg.fd, msg.bytes); break;
+    // WM (todos/WM.md): SABs precede their SURFACE_CREATE on the same FIFO
+    // channel; gpu-transport frames arrive per-present (browser only).
+    case 'wm-sabs':
+      if (msg.fb) pcb._wmPendingFb = msg.fb;
+      if (msg.ring && !pcb.wmRing) this._wmSetRing(pcb, msg.ring);
+      break;
+    case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp); break;
     case 'exited': this._exitProcess(pcb, W_EXITCODE(msg.code | 0)); break;
     case 'crashed':
       this._log('pid ' + pcb.pid + ' crashed: ' + msg.error);
@@ -979,6 +1086,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
     default:
       if ((op & 0xff00) === 0x0400) { this._fsRpc(pcb, op, req); break; }
       if ((op & 0xff00) === 0x0500) { this._sockRpc(pcb, op, req); break; }
+      if ((op & 0xf000) === 0x1000) { this._wmRpc(pcb, op, req); break; }
       this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
@@ -1409,6 +1517,346 @@ Kernel.prototype._sockRpc = function (pcb, op, req) {
  * ready; a tty read is ready when cooked bytes or EOF are waiting; a pipe
  * read is ready on data or writer-gone EOF, a pipe write on free space or
  * reader-gone (the write then surfaces EPIPE). */
+/* ============================================================
+ * WM surfaces (todos/WM.md; todos/0007 design, spikes todos/0012).
+ *
+ * The kernel owns the scene — registry, z-order, focus, input routing —
+ * and, in v1, the window-management POLICY too (kernel-chrome: title-bar
+ * drag-move, click-to-focus, close box; WM.md stages a /bin/wm client for
+ * v2, at which point this default policy becomes the WM-crashed fallback).
+ *
+ * Pixel planes (never RPCs — WM.md's data-plane rule):
+ *   shm  — the surface SAB (double-buffered, mailbox); works everywhere,
+ *          bit-exact headless screenshots.
+ *   gpu  — per-present ImageBitmaps via {type:'wm-frame'} (browser only);
+ *          the compositor draws surf.bitmap instead of the SAB.
+ * Input rides the per-process ring; every write rings the doorbell.
+ * ============================================================ */
+
+Kernel.prototype._wmSetRing = function (pcb, sab) {
+  var i32 = new Int32Array(sab);
+  var cap = Atomics.load(i32, IR_CAP);
+  if (!(cap > 0) || (cap & (cap - 1))) { this._log('wm: bad input ring cap ' + cap); return; }
+  pcb.wmRing = { i32: i32, f32: new Float32Array(sab), cap: cap };
+};
+
+Kernel.prototype._wmRpc = function (pcb, op, req) {
+  switch (op) {
+    case OP.SURFACE_CREATE: {
+      var w = req.w | 0, h = req.h | 0;
+      var fb = pcb._wmPendingFb;
+      pcb._wmPendingFb = null;
+      if (!(w > 0) || !(h > 0) || w > 8192 || h > 8192) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      if (!fb || fb.byteLength < SH_HDR_BYTES + 2 * w * h * 4) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      var i32 = new Int32Array(fb);
+      if (Atomics.load(i32, SH_MAGIC) !== SH_MAGIC_VALUE ||
+          Atomics.load(i32, SH_W) !== w || Atomics.load(i32, SH_H) !== h) {
+        this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      var sid = this._nextSid++;
+      // Cascade placement (v1 policy); the client rect is (x,y,w,h) with the
+      // title bar above it, so y starts below the bar.
+      var n = sid - 1;
+      var surf = {
+        sid: sid, pid: pcb.pid, sab: fb, i32: i32, u8: new Uint8Array(fb),
+        w: w, h: h, title: typeof req.title === 'string' ? req.title.slice(0, 128) : '',
+        x: 8 + ((n * 24) % Math.max(64, this._wmScreen.w >> 2)),
+        y: WM_TITLE_H + 8 + ((n * 24) % Math.max(64, this._wmScreen.h >> 2)),
+        bitmap: null,             // gpu transport: latest ImageBitmap (browser)
+      };
+      this._surfaces.set(sid, surf);
+      this._zOrder.push(sid);
+      pcb.surfaces.add(sid);
+      this._focusSid = sid;       // new window takes focus (v1 policy)
+      this._wmVersion++;
+      this._respond(pcb, { sid: sid, x: surf.x, y: surf.y });
+      break;
+    }
+    case OP.SURFACE_DESTROY: {
+      var s = this._surfaces.get(req.sid | 0);
+      if (!s || s.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      this._wmDestroySurface(s.sid);
+      this._respond(pcb, {});
+      break;
+    }
+    case OP.SURFACE_SET_TITLE: {
+      var st = this._surfaces.get(req.sid | 0);
+      if (!st || st.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      st.title = typeof req.title === 'string' ? req.title.slice(0, 128) : '';
+      this._wmVersion++;
+      this._respond(pcb, {});
+      break;
+    }
+    default: this._respond(pcb, { errno: 'ENOSYS' });
+  }
+};
+
+Kernel.prototype._wmDestroySurface = function (sid) {
+  var s = this._surfaces.get(sid);
+  if (!s) return;
+  this._surfaces.delete(sid);
+  var zi = this._zOrder.indexOf(sid);
+  if (zi >= 0) this._zOrder.splice(zi, 1);
+  var owner = this._procs.get(s.pid);
+  if (owner) owner.surfaces.delete(sid);
+  if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
+  if (this._wmDrag && this._wmDrag.sid === sid) this._wmDrag = null;
+  if (this._focusSid === sid) {
+    this._focusSid = this._zOrder.length ? this._zOrder[this._zOrder.length - 1] : 0;
+  }
+  this._wmVersion++;
+};
+
+/* gpu transport (browser): latest-frame-wins; superseded bitmaps are closed
+ * immediately so GPU memory can't balloon behind a slow compositor (WM.md
+ * "lifetime discipline"). */
+Kernel.prototype._wmFrame = function (pcb, sid, bmp) {
+  var s = this._surfaces.get(sid);
+  if (!s || s.pid !== pcb.pid || !bmp) {
+    if (bmp && bmp.close) { try { bmp.close(); } catch (e) {} }
+    return;
+  }
+  if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
+  s.bitmap = bmp;
+  Atomics.add(s.i32, SH_SEQ, 1);   // frameSeq accounting rides the header either way
+};
+
+/* ---- input ring (kernel = single producer) ---- */
+
+Kernel.prototype._wmPushEvent = function (pcb, words) {
+  var ring = pcb.wmRing;
+  if (!ring) return false;
+  var cap2 = ring.cap * 2;
+  var wpos = Atomics.load(ring.i32, IR_WPOS);
+  var rpos = Atomics.load(ring.i32, IR_RPOS);
+  if (((wpos - rpos + cap2) % cap2) >= ring.cap) {         // full: drop-newest
+    Atomics.add(ring.i32, IR_DROPPED, 1);
+    return false;
+  }
+  var base = (IR_HDR_BYTES >> 2) + (wpos % ring.cap) * IR_RECORD_WORDS;
+  for (var k = 0; k < IR_RECORD_WORDS; k++) ring.i32[base + k] = words[k] | 0;
+  Atomics.store(ring.i32, IR_WPOS, (wpos + 1) % cap2);
+  this._ring(pcb);                                          // wake SDL_WaitEvent parks
+  return true;
+};
+
+var _wmF32Scratch = new Float32Array(1);
+var _wmI32Scratch = new Int32Array(_wmF32Scratch.buffer);
+function f32bits(v) { _wmF32Scratch[0] = v; return _wmI32Scratch[0]; }
+
+Kernel.prototype._wmEventTo = function (sid, words) {
+  var s = this._surfaces.get(sid);
+  if (!s) return false;
+  var pcb = this._procs.get(s.pid);
+  if (!pcb || pcb.state !== STATE_RUNNING) return false;
+  words[1] = sid;
+  return this._wmPushEvent(pcb, words);
+};
+
+/* ---- raw input from the UI bridge (SCREEN coordinates) ----
+ * The kernel hit-tests against the scene and routes: client-area events go
+ * to the owning process (window-local coords); chrome events run the v1
+ * policy right here. The agent inject API below shares these code paths. */
+
+Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
+  if (!this._focusSid) return false;
+  return this._wmEventTo(this._focusSid,
+    [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
+};
+
+/* kind: 'move' | 'down' | 'up' | 'wheel'; opts: { button, buttons, wheelX,
+ * wheelY, direction }. Returns what happened (for tests/bridge cursors). */
+Kernel.prototype.wmPointer = function (kind, x, y, opts) {
+  opts = opts || {};
+  // An in-flight title drag captures the pointer (kernel-enforced capture).
+  if (this._wmDrag) {
+    var d = this._wmDrag, ds = this._surfaces.get(d.sid);
+    if (!ds) { this._wmDrag = null; }
+    else if (kind === 'move') {
+      ds.x = Math.round(x - d.dx);
+      ds.y = Math.round(y - d.dy);
+      // Keep the title bar reachable: clamp to the screen.
+      ds.x = Math.max(40 - ds.w, Math.min(ds.x, this._wmScreen.w - 40));
+      ds.y = Math.max(WM_TITLE_H, Math.min(ds.y, this._wmScreen.h - 8));
+      this._wmVersion++;
+      return 'drag';
+    } else if (kind === 'up') {
+      this._wmDrag = null;
+      return 'drag-end';
+    }
+  }
+  // Hit test, topmost first.
+  for (var i = this._zOrder.length - 1; i >= 0; i--) {
+    var s = this._surfaces.get(this._zOrder[i]);
+    if (!s) continue;
+    var inTitle = x >= s.x && x < s.x + s.w && y >= s.y - WM_TITLE_H && y < s.y;
+    var inClient = x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h;
+    if (inTitle) {
+      if (kind === 'down') {
+        var cx0 = s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD;
+        var cy0 = s.y - WM_TITLE_H + WM_CLOSE_PAD;
+        if (x >= cx0 && x < cx0 + WM_CLOSE_W && y >= cy0 && y < cy0 + WM_CLOSE_W) {
+          // Close = request-close: SDL_EVENT_QUIT to the owner (graceful;
+          // agents/wmctl can still kill). v1: no per-window close event.
+          this._wmEventTo(s.sid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
+          return 'close';
+        }
+        this.wmFocus(s.sid);
+        this._wmDrag = { sid: s.sid, dx: x - s.x, dy: y - s.y };
+        return 'drag-start';
+      }
+      return 'title';
+    }
+    if (inClient) {
+      if (kind === 'down') this.wmFocus(s.sid);
+      var lx = x - s.x, ly = y - s.y;
+      if (kind === 'move') {
+        this._wmEventTo(s.sid, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
+      } else if (kind === 'down' || kind === 'up') {
+        this._wmEventTo(s.sid, [kind === 'down' ? WMEV.MOUSEBUTTONDOWN : WMEV.MOUSEBUTTONUP,
+          0, f32bits(lx), f32bits(ly), (opts.button | 0) || 1, 0, 0, 0]);
+      } else if (kind === 'wheel') {
+        this._wmEventTo(s.sid, [WMEV.MOUSEWHEEL, 0, f32bits(opts.wheelX || 0),
+          f32bits(opts.wheelY || 0), opts.direction | 0, 0, 0, 0]);
+      }
+      return 'client';
+    }
+  }
+  return 'desktop';
+};
+
+/* ---- the agent control channel (WM.md hard requirement) ----
+ * One op set, defined once: these kernel-JS methods serve the outside
+ * (test harness, Node agents); wmctl RPCs can wrap the same methods later. */
+
+Kernel.prototype.wmList = function () {
+  var out = [];
+  for (var i = 0; i < this._zOrder.length; i++) {
+    var s = this._surfaces.get(this._zOrder[i]);
+    if (!s) continue;
+    out.push({ sid: s.sid, pid: s.pid, x: s.x, y: s.y, w: s.w, h: s.h,
+               title: s.title, z: i, focused: s.sid === this._focusSid,
+               frameSeq: Atomics.load(s.i32, SH_SEQ) });
+  }
+  return out;
+};
+
+Kernel.prototype.wmFocus = function (sid) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return false;
+  var zi = this._zOrder.indexOf(s.sid);
+  if (zi >= 0 && zi !== this._zOrder.length - 1) {
+    this._zOrder.splice(zi, 1);
+    this._zOrder.push(s.sid);
+  }
+  if (this._focusSid !== s.sid) { this._focusSid = s.sid; this._wmVersion++; }
+  return true;
+};
+
+Kernel.prototype.wmMove = function (sid, x, y) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return false;
+  s.x = x | 0; s.y = y | 0;
+  this._wmVersion++;
+  return true;
+};
+
+/* Synthetic input TARGETED at a window id (post-hit-test injection into the
+ * same rings as real input — xdotool-as-a-syscall). Pointer coords are
+ * window-local. sid 0 = the focused window. */
+Kernel.prototype.wmInjectKey = function (sid, down, scancode, keysym, mod) {
+  var target = (sid | 0) || this._focusSid;
+  return this._wmEventTo(target,
+    [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, 0, 0, 0]);
+};
+
+Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
+  var target = (sid | 0) || this._focusSid;
+  opts = opts || {};
+  if (kind === 'move') {
+    return this._wmEventTo(target, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
+  }
+  if (kind === 'down' || kind === 'up') {
+    return this._wmEventTo(target, [kind === 'down' ? WMEV.MOUSEBUTTONDOWN : WMEV.MOUSEBUTTONUP,
+      0, f32bits(lx), f32bits(ly), (opts.button | 0) || 1, 0, 0, 0]);
+  }
+  if (kind === 'wheel') {
+    return this._wmEventTo(target, [WMEV.MOUSEWHEEL, 0, f32bits(opts.wheelX || 0),
+      f32bits(opts.wheelY || 0), opts.direction | 0, 0, 0, 0]);
+  }
+  return false;
+};
+
+/* Screenshot one surface: a copy of its front (shm) framebuffer. gpu-kind
+ * surfaces have no CPU pixels here — the browser compositor owns readback
+ * for those (headless they run shm, so tests are covered). */
+Kernel.prototype.wmScreenshot = function (sid) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return null;
+  var front = Atomics.load(s.i32, SH_FLIP) & 1;
+  var bytes = s.w * s.h * 4;
+  var rgba = new Uint8Array(bytes);
+  rgba.set(s.u8.subarray(SH_HDR_BYTES + front * bytes, SH_HDR_BYTES + (front + 1) * bytes));
+  return { w: s.w, h: s.h, rgba: rgba };
+};
+
+/* Screenshot the screen: CPU composite of the scene in z-order — desktop
+ * fill, then each surface's front buffer + its kernel chrome (solid fills;
+ * text is a browser-compositor affordance, not part of the deterministic
+ * composite). ~40 lines of row blits, exactly as WM.md promised. */
+Kernel.prototype.wmScreenshotScreen = function () {
+  var W = this._wmScreen.w, H = this._wmScreen.h;
+  var out = new Uint8Array(W * H * 4);
+  var fill = function (x0, y0, w, h, c) {
+    var x1 = Math.max(0, x0), y1 = Math.max(0, y0);
+    var x2 = Math.min(W, x0 + w), y2 = Math.min(H, y0 + h);
+    for (var y = y1; y < y2; y++) {
+      var row = (y * W + x1) * 4;
+      for (var x = x1; x < x2; x++) {
+        out[row] = c[0]; out[row + 1] = c[1]; out[row + 2] = c[2]; out[row + 3] = c[3];
+        row += 4;
+      }
+    }
+  };
+  fill(0, 0, W, H, WM_COLORS.desktop);
+  for (var i = 0; i < this._zOrder.length; i++) {
+    var s = this._surfaces.get(this._zOrder[i]);
+    if (!s) continue;
+    // Chrome: title bar + close box.
+    fill(s.x, s.y - WM_TITLE_H, s.w, WM_TITLE_H,
+      s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
+    fill(s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
+      WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+    // Client pixels: front buffer rows, clipped to the screen.
+    var front = Atomics.load(s.i32, SH_FLIP) & 1;
+    var base = SH_HDR_BYTES + front * s.w * s.h * 4;
+    var sx0 = Math.max(0, -s.x), sy0 = Math.max(0, -s.y);
+    var sx1 = Math.min(s.w, W - s.x), sy1 = Math.min(s.h, H - s.y);
+    for (var sy = sy0; sy < sy1; sy++) {
+      var src = base + (sy * s.w + sx0) * 4;
+      var dst = ((s.y + sy) * W + (s.x + sx0)) * 4;
+      out.set(s.u8.subarray(src, src + (sx1 - sx0) * 4), dst);
+    }
+  }
+  return { w: W, h: H, rgba: out };
+};
+
+Kernel.prototype.wmSetScreen = function (w, h) {
+  if (w > 0 && h > 0) { this._wmScreen.w = w | 0; this._wmScreen.h = h | 0; this._wmVersion++; }
+};
+
+/* Scene accessors for the browser compositor (same worker; it may hold the
+ * returned surface objects and read their SABs/bitmaps directly). */
+Kernel.prototype.wmScene = function () {
+  var self = this;
+  return {
+    version: this._wmVersion,
+    screen: { w: this._wmScreen.w, h: this._wmScreen.h },
+    focusSid: this._focusSid,
+    surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); }).filter(Boolean),
+  };
+};
+
 Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
   var self = this;
   var r = [], w = [];
@@ -1695,6 +2143,13 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   var self0 = this;
   pcb.fds.forEach(function (ofdId) { self0._ofdUnref(ofdId); });
   pcb.fds.clear();
+  // Reclaim WM surfaces (same discipline as fds: the kernel, not the dead
+  // worker, owns the scene — SIGKILL leaves no ghost windows).
+  if (pcb.surfaces.size) {
+    Array.from(pcb.surfaces).forEach(function (sid) { self0._wmDestroySurface(sid); });
+  }
+  pcb.wmRing = null;
+  pcb._wmPendingFb = null;
 
   var self = this;
   // Reparent children (running AND zombie) to init.
@@ -2113,7 +2568,7 @@ var BOOT_SOURCE = [
   "var runModule = require(wd.hostPath);",
   "var K = require(wd.kernelPath);",
   "var BLOCK_FS = runModule.BLOCK_FS;",
-  "var client = new K.KernelClient(wd.kernelPage, function (m) { wt.parentPort.postMessage(m); });",
+  "var client = new K.KernelClient(wd.kernelPage, function (m, t) { wt.parentPort.postMessage(m, t); });",
   "var fsFactory;",
   "if (wd.brokered) {",
   "  // The brokered filesystem: the kernel serves every fs syscall; the env",
@@ -2226,6 +2681,15 @@ var KERNEL_EXPORTS = {
   W_EXITCODE: W_EXITCODE,
   W_TERMSIG: W_TERMSIG,
   W_STOPCODE: W_STOPCODE,
+  // WM surfaces (todos/WM.md) — layout constants MUST MATCH host.js.
+  SH_MAGIC: SH_MAGIC, SH_W: SH_W, SH_H: SH_H, SH_FORMAT: SH_FORMAT,
+  SH_FLIP: SH_FLIP, SH_SEQ: SH_SEQ,
+  SH_MAGIC_VALUE: SH_MAGIC_VALUE, SH_HDR_BYTES: SH_HDR_BYTES,
+  IR_WPOS: IR_WPOS, IR_RPOS: IR_RPOS, IR_CAP: IR_CAP, IR_DROPPED: IR_DROPPED,
+  IR_HDR_BYTES: IR_HDR_BYTES, IR_RECORD_WORDS: IR_RECORD_WORDS,
+  WMEV: WMEV,
+  WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
+  WM_COLORS: WM_COLORS,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

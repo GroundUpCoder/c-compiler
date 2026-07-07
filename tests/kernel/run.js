@@ -20,6 +20,8 @@ var tests = [
   ['test_jobctl_tty_e2e.js', []], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
   ['test_os_boot.js', []],      // 0004: headless OS boot — seed, protoshell, cc, persistence
   ['test_vi_e2e.js', []],       // 0011: busybox vi through the real tty — raw mode, edit sessions
+  ['test_wm.js', []],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
+  ['test_wm_e2e.js', []],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
 ];
 
 var failures = 0;

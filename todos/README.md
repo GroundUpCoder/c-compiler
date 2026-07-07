@@ -24,10 +24,9 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0012` WM platform spikes (S1–S5) — verify the assumptions `WM.md`
-   leans on (bitmap-handoff GPU-backedness, worker rAF, Dawn under Node,
-   two-hop canvas transfer, input-ring storms) before implementation
-   units land
+1. `0014` /bin/wm policy client + wmctl — move WM policy out of the
+   kernel onto the AF_UNIX protocol; taskbar; agent RPCs (`WM.md`
+   "The WM client")
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
@@ -48,8 +47,13 @@ through the kernel tty (`logs/2026-07-07/busybox-vi.md`);
 S_IFSOCK rendezvous in BlockFS, `<sys/socket.h>` in the libc
 (`logs/2026-07-07/af-unix-sockets.md`);
 `0007` WM/compositor design — landed as `todos/WM.md`
-(`logs/2026-07-07/wm-design.md`).
-**OS.md Phase 1 is complete.**)
+(`logs/2026-07-07/wm-design.md`);
+`0012` WM platform spikes — five verdicts in WM.md's appendix;
+`0013` **WM v1** — kernel surfaces + input rings + agent channel,
+kernel-worker compositor, `createSurfaceSDL`, `/bin/winbox` windowed
+in-OS, tested headless + real Chromium
+(`logs/2026-07-07/wm-v1-implementation.md`).
+**OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
 WebGPU backlogs run alongside; promote specific chunks into numbered items

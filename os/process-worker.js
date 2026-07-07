@@ -14,7 +14,9 @@ self.onmessage = function (e) {
   if (!wd || wd.type !== 'boot') return;
   self.onmessage = null;   // the kernel speaks SAB+doorbell from here on
 
-  var client = new KERNEL.KernelClient(wd.kernelPage, function (m) { self.postMessage(m); });
+  var client = new KERNEL.KernelClient(wd.kernelPage, function (m, t) {
+    if (t) self.postMessage(m, t); else self.postMessage(m);
+  });
 
   // The brokered filesystem: the kernel serves every fs syscall; the wasm
   // env is toWasmEnv REUSED over a RemoteFS (same method surface), with the

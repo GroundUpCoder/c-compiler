@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "dirs": [
     "/bin",
     "/etc",
@@ -15,6 +15,9 @@
     },
     "/bin/cc": {
       "c": "cc.c"
+    },
+    "/bin/winbox": {
+      "c": "winbox.c"
     },
     "/root/hello.c": {
       "text": "hello.c"

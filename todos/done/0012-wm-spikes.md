@@ -1,6 +1,13 @@
 # 0012 — WM platform spikes (S1–S5)
 
-- **Status**: queued
+- **Status**: DONE 2026-07-07 — all five verdicts recorded in `todos/WM.md`
+  spike appendix. S1/S2/S4 PASS (harness kept: `tests/browser/wm-spikes.mjs`
+  + `www/wm-spikes.html`); S3 PASS with the Dawn worker.terminate() caveat
+  (`tests/spikes/s3_dawn.mjs`; `webgpu` devDependency in the repo's first
+  package.json); S5 folded into `tests/kernel/test_wm.js` (the 10k-event
+  storm). One spike verdict was WRONG in a useful way: rAF works in
+  page-level workers but THROWS in nested workers — found and fixed during
+  0013 (host.js setTimeout latch).
 - **Depends**: 0007 (design: `todos/WM.md`, spike appendix)
 - **Design**: `todos/WM.md`
 

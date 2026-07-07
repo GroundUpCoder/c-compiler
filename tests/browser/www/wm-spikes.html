@@ -1,0 +1,221 @@
+<!doctype html>
+<!-- WM spikes S1/S2/S4 (todos/0012, WM.md appendix). Driven by wm-spikes.mjs.
+     S1: proc worker renders WebGPU on a worker-local OffscreenCanvas,
+         transferToImageBitmap -> postMessage(transfer) -> kern worker imports
+         via copyExternalImageToTexture -> readback asserts pixels + timings.
+     S2: kern worker runs a rAF loop (the compositor cadence) while servicing
+         frame imports + simulated RPC busy-work; reports interval jitter.
+     S4: DOM canvas -> transferControlToOffscreen -> kern -> re-transfer ->
+         proc, which renders WebGPU onto it (the future `direct` transport). -->
+<meta charset="utf-8">
+<title>wm spikes</title>
+<canvas id="direct" width="128" height="128" style="position:fixed;left:8px;top:8px"></canvas>
+<pre id="log" style="position:fixed;left:8px;top:160px;font:12px monospace"></pre>
+<script>
+'use strict';
+window.__spikes = null;
+const logEl = document.getElementById('log');
+const log = (s) => { logEl.textContent += s + '\n'; };
+
+const workerURL = (fn) => URL.createObjectURL(
+  new Blob(['(' + fn.toString() + ')();'], { type: 'text/javascript' }));
+
+/* ---------------- proc worker: the "app process" ---------------- */
+function procWorkerMain() {
+  const summarize = (a) => {
+    const s = a.slice().sort((x, y) => x - y);
+    return { n: a.length, p50: s[a.length >> 1], p95: s[(a.length * 0.95) | 0], max: s[a.length - 1] };
+  };
+  let kernPort = null;
+  const handle = async (m) => {
+    try {
+      if (m.kind === 'port') {
+        kernPort = m.port;
+        kernPort.onmessage = (e) => handle(e.data);   // 'direct' arrives via kern
+        await runS1();
+      } else if (m.kind === 'direct') await runS4(m.canvas);
+    } catch (err) {
+      self.postMessage({ kind: 'error', where: m.kind, message: String(err && (err.stack || err.message) || err) });
+    }
+  };
+  self.onmessage = (e) => handle(e.data);
+  async function device() {
+    const a = await navigator.gpu.requestAdapter();
+    if (!a) throw new Error('no adapter in worker');
+    return await a.requestDevice();
+  }
+  async function runS1() {
+    const dev = await device();
+    const W = 640, H = 480;
+    const oc = new OffscreenCanvas(W, H);
+    const ctx = oc.getContext('webgpu');
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({ device: dev, format, alphaMode: 'opaque' });
+    const times = [];
+    const FRAMES = 120;
+    for (let i = 0; i < FRAMES; i++) {
+      const t0 = performance.now();
+      const enc = dev.createCommandEncoder();
+      const pass = enc.beginRenderPass({ colorAttachments: [{
+        view: ctx.getCurrentTexture().createView(),
+        loadOp: 'clear', storeOp: 'store',
+        clearValue: { r: 0, g: 1, b: 0, a: 1 },   // solid green
+      }] });
+      pass.end();
+      dev.queue.submit([enc.finish()]);
+      const bmp = oc.transferToImageBitmap();
+      kernPort.postMessage({ kind: 'frame', seq: i, w: W, h: H, bmp }, [bmp]);
+      times.push(performance.now() - t0);
+      await new Promise(r => setTimeout(r, 0));
+    }
+    kernPort.postMessage({ kind: 'proc-done', frames: FRAMES, renderPresentMs: summarize(times) });
+  }
+  async function runS4(canvas) {
+    // Two-hop-transferred DOM canvas: render on it directly (direct transport).
+    const dev = await device();
+    const ctx = canvas.getContext('webgpu');
+    ctx.configure({ device: dev, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' });
+    const enc = dev.createCommandEncoder();
+    const pass = enc.beginRenderPass({ colorAttachments: [{
+      view: ctx.getCurrentTexture().createView(),
+      loadOp: 'clear', storeOp: 'store',
+      clearValue: { r: 1, g: 0, b: 1, a: 1 },     // solid magenta
+    }] });
+    pass.end();
+    dev.queue.submit([enc.finish()]);
+    self.postMessage({ kind: 's4-rendered' });
+  }
+}
+
+/* ---------------- kern worker: the "kernel/compositor" ---------------- */
+function kernWorkerMain() {
+  const summarize = (a) => {
+    const s = a.slice().sort((x, y) => x - y);
+    return { n: a.length, p50: s[a.length >> 1], p95: s[(a.length * 0.95) | 0], max: s[a.length - 1] };
+  };
+  let procPort = null, dev = null, screen = null, readbackDone = false;
+  const importTimes = [];
+  let frames = 0, procStats = null, firstPixel = null;
+
+  self.onmessage = async (e) => {
+    const m = e.data;
+    try {
+      if (m.kind === 'port') {
+        procPort = m.port;
+        const a = await navigator.gpu.requestAdapter();
+        if (!a) throw new Error('no adapter in kern worker');
+        dev = await a.requestDevice();
+        procPort.onmessage = onProc;
+        procPort.postMessage({ kind: 'go' });
+        runS2();
+        self.postMessage({ kind: 'kern-ready' });
+      } else if (m.kind === 'direct') {
+        // S4 second hop: re-transfer the DOM canvas onward to proc.
+        procPort.postMessage({ kind: 'direct', canvas: m.canvas }, [m.canvas]);
+      }
+    } catch (err) {
+      self.postMessage({ kind: 'error', where: 'kern', message: String(err && (err.stack || err.message) || err) });
+    }
+  };
+
+  async function onProc(e) {
+    const m = e.data;
+    try {
+      if (m.kind === 'frame') {
+        const t0 = performance.now();
+        if (!screen || screen.width !== m.w) screen = dev.createTexture({
+          size: { width: m.w, height: m.h }, format: 'rgba8unorm',
+          usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC |
+                 GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        dev.queue.copyExternalImageToTexture({ source: m.bmp }, { texture: screen }, { width: m.w, height: m.h });
+        m.bmp.close();
+        importTimes.push(performance.now() - t0);
+        frames++;
+        if (!readbackDone) { readbackDone = true; await readback(m.w, m.h); }
+      } else if (m.kind === 'proc-done') {
+        procStats = m;
+        finishWhenReady();
+      }
+    } catch (err) {
+      self.postMessage({ kind: 'error', where: 'kern-frame', message: String(err && (err.stack || err.message) || err) });
+    }
+  }
+
+  async function readback(W, H) {
+    const buf = dev.createBuffer({ size: W * H * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = dev.createCommandEncoder();
+    enc.copyTextureToBuffer({ texture: screen }, { buffer: buf, bytesPerRow: W * 4 }, { width: W, height: H });
+    dev.queue.submit([enc.finish()]);
+    await buf.mapAsync(GPUMapMode.READ);
+    const px = new Uint8Array(buf.getMappedRange());
+    const mid = ((H >> 1) * W + (W >> 1)) * 4;
+    firstPixel = [px[mid], px[mid + 1], px[mid + 2], px[mid + 3]];
+    buf.unmap();
+  }
+
+  // S2: rAF loop in the kernel worker, with simulated RPC busy-work.
+  const rafIntervals = [];
+  let lastT = 0, rafFrames = 0, rafDone = false;
+  function runS2() {
+    if (typeof requestAnimationFrame !== 'function') {
+      self.postMessage({ kind: 'error', where: 's2', message: 'no rAF in worker' });
+      rafDone = true;
+      return;
+    }
+    const tick = (t) => {
+      if (lastT) rafIntervals.push(t - lastT);
+      lastT = t;
+      // Simulated RPC service load: ~2ms busy per frame.
+      const until = performance.now() + 2;
+      while (performance.now() < until) {}
+      if (++rafFrames < 90) requestAnimationFrame(tick);
+      else { rafDone = true; finishWhenReady(); }
+    };
+    requestAnimationFrame(tick);
+  }
+
+  function finishWhenReady() {
+    if (!procStats || !rafDone) return;
+    self.postMessage({
+      kind: 'results',
+      s1: { frames, importMs: summarize(importTimes), renderPresentMs: procStats.renderPresentMs, screenMidPixel: firstPixel },
+      s2: { rafIntervalMs: summarize(rafIntervals) },
+    });
+  }
+}
+
+/* ---------------- main thread orchestration ---------------- */
+(async () => {
+  const results = { errors: [] };
+  try {
+    const proc = new Worker(workerURL(procWorkerMain));
+    const kern = new Worker(workerURL(kernWorkerMain));
+    proc.onmessage = (e) => {
+      const m = e.data;
+      if (m.kind === 'error') { results.errors.push(m); log('ERR(proc): ' + m.message); }
+      if (m.kind === 's4-rendered') { results.s4 = { rendered: true }; log('S4 rendered (magenta)'); maybeDone(); }
+    };
+    kern.onmessage = (e) => {
+      const m = e.data;
+      if (m.kind === 'error') { results.errors.push(m); log('ERR(kern): ' + m.message); }
+      if (m.kind === 'results') { results.s1 = m.s1; results.s2 = m.s2; log(JSON.stringify(m, null, 1)); maybeDone(); }
+    };
+    const ch = new MessageChannel();
+    proc.postMessage({ kind: 'port', port: ch.port1 }, [ch.port1]);
+    kern.postMessage({ kind: 'port', port: ch.port2 }, [ch.port2]);
+
+    // S4: two-hop transfer main -> kern -> proc.
+    const direct = document.getElementById('direct').transferControlToOffscreen();
+    kern.postMessage({ kind: 'direct', canvas: direct }, [direct]);
+  } catch (err) {
+    results.errors.push({ where: 'main', message: String(err && err.message || err) });
+    window.__spikes = results;
+  }
+  function maybeDone() {
+    if (results.s1 && results.s4) window.__spikes = results;
+  }
+  // Errors should still publish (with a grace period for stragglers).
+  setTimeout(() => { if (!window.__spikes) window.__spikes = results; }, 30000);
+})();
+</script>

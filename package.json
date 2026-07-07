@@ -1,0 +1,7 @@
+{
+	"name": "c-compiler",
+	"private": true,
+	"devDependencies": {
+		"webgpu": "^0.4.0"
+	}
+}

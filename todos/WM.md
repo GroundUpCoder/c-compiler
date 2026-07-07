@@ -1,7 +1,9 @@
 # WM.md — compositor + window manager design
 
-- **Status**: designed 2026-07-07 (todos/0007); implementation queued from
-  the plan at the bottom (spikes first: todos/0012).
+- **Status**: designed 2026-07-07 (todos/0007); **v1 IMPLEMENTED the same
+  day** (todos/0012 spikes + todos/0013 — see "Implementation status v1"
+  below for what shipped and where it deviates). Next: todos/0014
+  (/bin/wm policy client + wmctl).
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -258,22 +260,89 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - **Cross-agent WebGPU sharing** — if the spec ships it, `gpu` present
   becomes zero-copy at the same seam.
 
-## Spike appendix — verify before building (todos/0012)
+## Implementation status v1 (landed 2026-07-07, todos/0013)
 
-- **S1**: `transferToImageBitmap()` on a `webgpu`-context OffscreenCanvas in
-  a dedicated worker — works, and the bitmap stays GPU-backed through
-  postMessage transfer + `copyExternalImageToTexture` (no hidden readback).
-  *This validates the `gpu` transport; if it readbacks, `direct` gets
-  promoted and shm carries the interim.*
-- **S2**: rAF cadence in a busy kernel worker (compositor competes with RPC
-  service on one thread) — measure jitter under fs load.
-- **S3**: Dawn (`webgpu` pkg) under `worker_threads`: one device per process
-  worker, render, `copyTextureToBuffer` readback. Also: install footprint,
-  platforms.
-- **S4**: two-hop OffscreenCanvas transfer (DOM canvas → kernel worker →
-  process worker) for the future `direct` kind.
-- **S5**: input-ring throughput sanity (mousemove storms at 250Hz+ through
-  ring → SDL queue).
+**What shipped** (all tested; suites: `tests/kernel/test_wm.js`,
+`test_wm_e2e.js`, browser `tests/browser/os-wm.mjs`):
+
+- **kernel.js "WM surfaces"**: registry + z-order + focus, 0x1xxx RPCs
+  (CREATE/DESTROY/SET_TITLE), shm double-buffer SABs (process-allocated,
+  handed over via `{type:'wm-sabs'}` on the FIFO channel — the kernel can't
+  post to a parked worker), per-process input ring (kernel producer, drop-
+  newest, doorbell wake), kernel-chrome v1 policy (click-to-focus, title
+  drag with capture + clamping, close box → SDL_EVENT_QUIT), agent channel
+  (`wmList/wmFocus/wmMove/wmInjectKey/wmInjectPointer/wmScreenshot/
+  wmScreenshotScreen` — the last is the ~40-line CPU composite), lifecycle
+  reclaim on exit AND SIGKILL.
+- **host.js `createSurfaceSDL`**: auto-selected when spawnHooks carry the
+  surface ops. Browser flavor = full WebGPU SDL renderer on a worker-local
+  OffscreenCanvas + per-present `transferToImageBitmap` handoff
+  (`{type:'wm-frame'}`); headless flavor = null renderer + real windows.
+  **`SDL_UpdateWindowSurface` rides shm in BOTH flavors** (no GPU
+  dependency for CPU-present apps — doom-class apps display even where
+  nested-worker WebGPU is unavailable). Input-ring drain before every
+  frame tick.
+- **os/compositor.js** (kernel-worker side): Canvas2D scene draw per rAF —
+  desktop, shm surfaces via seq-cached ImageData, gpu surfaces via
+  drawImage(bitmap), chrome + title text; `routeInput` maps the bridge's
+  raw events through SDL_WEB's tables into `wmKey`/`wmPointer`.
+- **os/os.html**: desktop canvas pane (800×500, natural size) transferred
+  to the kernel worker; raw input forwarding (keys as plain objects with a
+  getModifierState shim; pointer in canvas coords).
+- **os/winbox.c** seeded as `/bin/winbox` (image.json v9): the windowed
+  demo/acceptance app (`winbox &` from hush).
+- **runModule exit-ordering fix** (host.js): with a frame callback
+  registered at main-return, the C exit path (atexits + the OS EXIT
+  handshake) is DEFERRED until the frame loop stops — it used to run
+  first, which killed OS processes before their first frame.
+- **Nested-worker rAF**: `requestAnimationFrame` exists but THROWS in
+  workers-of-workers (Chromium); host.js latches to a setTimeout(16) pacer
+  on first failure.
+
+**Deliberate v1 deviations from the sections above** (revisit at v2):
+
+- **Present is pure SAB** (flip + seq, mailbox) — no SURFACE_PRESENT RPC at
+  all; 0x1004 stays reserved for damage tracking.
+- **Compositor is Canvas2D**, not a WebGPU pass — single-digit quads;
+  bitmap drawImage is still GPU-composited by the browser. Revisit only if
+  profiling says so.
+- **Terminal is a separate pane**, not a scene-positioned privileged DOM
+  surface yet — the split layout was the honest v1; the positioned-xterm
+  (clip-path) design stays queued.
+- **Cursor is the native browser cursor** (no kernel sprite; headless
+  composite has no cursor).
+- **One window per process in the browser gpu flavor** (one OffscreenCanvas
+  — same as the standalone runtime); the shm flavor supports many.
+- **Audio in OS processes stays null** (the mixer open-question below).
+- **wmctl / in-OS agent RPCs not yet exposed** — the op set exists as
+  kernel JS methods; wrapping them as RPCs + a wmctl binary lands with
+  /bin/wm (todos/0014).
+
+## Spike appendix — VERDICTS (run 2026-07-07, todos/0012;
+## harnesses: `tests/browser/wm-spikes.mjs` + `tests/spikes/s3_dawn.mjs`)
+
+- **S1 — PASS, `gpu` transport validated.** `transferToImageBitmap()` on a
+  webgpu OffscreenCanvas in a worker + postMessage transfer +
+  `copyExternalImageToTexture` stays GPU-backed end to end: 640×480 frame,
+  render+present p50 **0.02ms** (p95 0.055), kern-side import p50
+  **0.005ms** — no hidden readback anywhere. Pixels verified by kern-side
+  readback.
+- **S2 — PASS.** rAF exists in dedicated workers and holds cadence with
+  concurrent message service + 2ms/frame busy-work: intervals p50 10.9ms,
+  p95 26ms, max 27ms (headless Chromium). Fine for a compositor.
+- **S3 — PASS with caveat.** Dawn via the `webgpu` npm pkg (v0.4.0,
+  prebuilt darwin-universal): device per `worker_threads` worker, render +
+  readback green, two concurrent workers fine. **Caveat: `worker.terminate()`
+  while Dawn has pending async events aborts the whole Node process**
+  (napi_throw on torn-down env) — Dawn-tier processes must exit gracefully;
+  the OS's SIGKILL path needs a Dawn-aware drain or accepts the crash risk
+  in the optional tier.
+- **S4 — PASS.** Two-hop OffscreenCanvas transfer (DOM canvas → kern worker
+  → proc worker) works; the proc worker configures webgpu on it and its
+  frames display. The `direct` transport is viable whenever wanted.
+- **S5 — folded into implementation**: the input ring reuses the proven
+  console-ring pattern; the storm test lives with the kernel WM tests
+  rather than as a separate spike.
 
 ## Implementation plan (landing-sized units → queue items as they start)
 

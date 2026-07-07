@@ -20,11 +20,17 @@
     padding: 2px 8px; white-space: nowrap; overflow: hidden;
   }
   #status.error { color: #cc5555; }
+  /* The desktop (todos/WM.md): the kernel composites windows onto this
+     canvas in its worker; the page only forwards raw input. Natural-size
+     canvas (no CSS scaling) keeps event offsets == screen coordinates. */
+  #desktop { display: flex; justify-content: center; background: #06131a; }
+  #screen { outline: none; display: block; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
 </style>
 </head>
 <body>
 <div id="wrap">
+  <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
   <div id="status">booting…</div>
 </div>
@@ -63,6 +69,45 @@ var kernel = new Worker('kernel-worker.js');
 term.onData(function (data) { kernel.postMessage({ type: 'input', data: data }); });
 term.onResize(function (sz) { kernel.postMessage({ type: 'resize', cols: sz.cols, rows: sz.rows }); });
 window.addEventListener('resize', function () { fitAddon.fit(); });
+
+// The desktop (todos/WM.md): hand the canvas to the kernel worker (the
+// compositor runs THERE — this page stays a dumb bridge) and forward raw
+// input. DOM events don't structured-clone, so ship plain objects; the
+// kernel side re-shapes them for SDL_WEB's mappers.
+var screen = document.getElementById('screen');
+var offscreen = screen.transferControlToOffscreen();
+kernel.postMessage({ type: 'wm-canvas', canvas: offscreen }, [offscreen]);
+function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
+function mods(e) {
+  var out = {};
+  ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock']
+    .forEach(function (k) { out[k] = e.getModifierState ? e.getModifierState(k) : false; });
+  return out;
+}
+screen.addEventListener('mousedown', function (e) {
+  screen.focus();
+  wmSend({ kind: 'down', x: e.offsetX, y: e.offsetY, button: e.button });
+  e.preventDefault();
+});
+screen.addEventListener('mouseup', function (e) {
+  wmSend({ kind: 'up', x: e.offsetX, y: e.offsetY, button: e.button });
+});
+screen.addEventListener('mousemove', function (e) {
+  wmSend({ kind: 'move', x: e.offsetX, y: e.offsetY, buttons: e.buttons });
+});
+screen.addEventListener('wheel', function (e) {
+  wmSend({ kind: 'wheel', x: e.offsetX, y: e.offsetY, deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode });
+  e.preventDefault();
+}, { passive: false });
+screen.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+screen.addEventListener('keydown', function (e) {
+  wmSend({ kind: 'key', down: true, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
+  e.preventDefault();
+});
+screen.addEventListener('keyup', function (e) {
+  wmSend({ kind: 'key', down: false, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
+  e.preventDefault();
+});
 
 // Agent/test probe (OS.md "agent-friendly by construction"): every tty
 // output byte also lands in window.__osOut, and __osState tracks the boot,

@@ -4993,6 +4993,271 @@ function createNullSDL() {
   };
 }
 
+/* ==========================================================================
+ * Surface-backed SDL for OS processes (todos/WM.md; kernel side: kernel.js
+ * "WM surfaces"). Selected by runModule when spawnHooks carry the surface
+ * ops (i.e. the process runs under kernel.js) and no canvas was injected.
+ *
+ * The app-facing API is unchanged (WM.md invariant #1); what varies is the
+ * present transport, picked per environment:
+ *   - browser (OffscreenCanvas + navigator.gpu): the full WebGPU SDL backend
+ *     renders onto a WORKER-LOCAL OffscreenCanvas; each present transfers an
+ *     ImageBitmap to the kernel compositor ({type:'wm-frame'} — spike S1:
+ *     GPU-backed end to end). One window per process in this flavor (one
+ *     canvas), matching the standalone runtime.
+ *   - headless (stock Node): SDL_UpdateWindowSurface writes REAL pixels into
+ *     the surface's shm double buffer (mailbox: write back, flip, never
+ *     block) — deterministic kernel screenshots with zero dependencies. The
+ *     SDL_Renderer API keeps null-backend behavior (WM.md tier 0; Dawn or
+ *     the browser provide GPU pixels).
+ * Input arrives on the per-process ring (kernel = producer); the frame loop
+ * drains it into the wasm event queue before every tick.
+ *
+ * Layout constants MUST MATCH kernel.js (SH_* / IR_* there).
+ * ========================================================================== */
+const WMSH_MAGIC = 0, WMSH_W = 1, WMSH_H = 2, WMSH_FLIP = 4, WMSH_SEQ = 5;
+const WMSH_MAGIC_VALUE = 0x574d5346;
+const WMSH_HDR_BYTES = 64;
+const WMIR_WPOS = 0, WMIR_RPOS = 1, WMIR_CAP = 2;
+const WMIR_HDR_BYTES = 32, WMIR_RECORD_WORDS = 8, WMIR_DEFAULT_CAP = 256;
+const WMEV_QUIT = 0x100, WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
+      WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
+      WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
+
+function createSurfaceSDL({ ctx, hooks }) {
+  const { readString, getMemory, getExports } = ctx;
+  const handleBySid = new Map();     // sid -> SDL window handle
+  let ring = null;                   // { sab, i32, f32, cap } — one per process
+
+  function allocFb(w, h) {
+    const sab = new SharedArrayBuffer(WMSH_HDR_BYTES + 2 * w * h * 4);
+    const i32 = new Int32Array(sab);
+    i32[WMSH_MAGIC] = WMSH_MAGIC_VALUE;
+    i32[WMSH_W] = w; i32[WMSH_H] = h;
+    return { sab, i32, u8: new Uint8Array(sab), w, h };
+  }
+  function ensureRing() {
+    if (ring) return ring;
+    const sab = new SharedArrayBuffer(WMIR_HDR_BYTES + WMIR_DEFAULT_CAP * WMIR_RECORD_WORDS * 4);
+    const i32 = new Int32Array(sab);
+    i32[WMIR_CAP] = WMIR_DEFAULT_CAP;
+    ring = { sab, i32, f32: new Float32Array(sab), cap: WMIR_DEFAULT_CAP };
+    return ring;
+  }
+  function surfaceCreate(titlePtr, w, h) {
+    const title = titlePtr ? readString(titlePtr) : '';
+    const fb = allocFb(w, h);
+    const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab);
+    if (!r || r.errno || !(r.sid > 0)) return null;
+    return { sid: r.sid, fb };
+  }
+  /* SDL_UpdateWindowSurface -> shm mailbox present (write the back buffer,
+   * flip, never block). Used by BOTH flavors: CPU-present apps ride the shm
+   * transport even in the browser (no GPU dependency; the compositor
+   * putImageData's it) — only GPU-rendered frames ride bitmap handoff. */
+  function shmPresent(win, pixelsPtr, w, h, pitch) {
+    const cw = Math.min(w, win.w), ch = Math.min(h, win.h);
+    const mem = new Uint8Array(getMemory().buffer);
+    const front = Atomics.load(win.fb.i32, WMSH_FLIP) & 1;
+    const back = 1 - front;
+    const base = WMSH_HDR_BYTES + back * win.w * win.h * 4;
+    if (pitch === win.w * 4 && cw === win.w) {
+      win.fb.u8.set(mem.subarray(pixelsPtr, pixelsPtr + cw * 4 * ch), base);
+    } else {
+      for (let row = 0; row < ch; row++) {
+        win.fb.u8.set(mem.subarray(pixelsPtr + row * pitch, pixelsPtr + row * pitch + cw * 4),
+          base + row * win.w * 4);
+      }
+    }
+    Atomics.store(win.fb.i32, WMSH_FLIP, back);
+    Atomics.add(win.fb.i32, WMSH_SEQ, 1);
+    return 0;
+  }
+  /* Drain the input ring into the wasm event queue. Runs before every frame
+   * tick (and is exposed for embedder pumps). Single consumer by design. */
+  function drainInput() {
+    if (!ring) return;
+    const ex = getExports();
+    const cap2 = ring.cap * 2;
+    let rpos = Atomics.load(ring.i32, WMIR_RPOS);
+    while (rpos !== Atomics.load(ring.i32, WMIR_WPOS)) {
+      const base = (WMIR_HDR_BYTES >> 2) + (rpos % ring.cap) * WMIR_RECORD_WORDS;
+      const type = ring.i32[base];
+      const handle = handleBySid.get(ring.i32[base + 1]) || 1;
+      switch (type) {
+        case WMEV_KEYDOWN: case WMEV_KEYUP:
+          if (ex.__sdl_push_key_event) {
+            ex.__sdl_push_key_event(handle, type, ring.i32[base + 2], ring.i32[base + 3],
+              ring.i32[base + 4], ring.i32[base + 5]);
+          }
+          break;
+        case WMEV_MOUSEMOTION:
+          if (ex.__sdl_push_mouse_motion_event) {
+            ex.__sdl_push_mouse_motion_event(handle, ring.f32[base + 2], ring.f32[base + 3], ring.i32[base + 4]);
+          }
+          break;
+        case WMEV_MOUSEBUTTONDOWN: case WMEV_MOUSEBUTTONUP:
+          if (ex.__sdl_push_mouse_button_event) {
+            ex.__sdl_push_mouse_button_event(handle, type, ring.i32[base + 4],
+              ring.f32[base + 2], ring.f32[base + 3]);
+          }
+          break;
+        case WMEV_MOUSEWHEEL:
+          if (ex.__sdl_push_mouse_wheel_event) {
+            ex.__sdl_push_mouse_wheel_event(handle, ring.f32[base + 2], ring.f32[base + 3], ring.i32[base + 4]);
+          }
+          break;
+        case WMEV_QUIT:
+          if (ex.__sdl_push_quit_event) ex.__sdl_push_quit_event();
+          break;
+      }
+      rpos = (rpos + 1) % cap2;
+      Atomics.store(ring.i32, WMIR_RPOS, rpos);
+    }
+  }
+
+  /* ---- browser flavor: the real WebGPU SDL backend on a worker-local
+   * OffscreenCanvas, presents handed to the kernel as ImageBitmaps ---- */
+  if (typeof OffscreenCanvas !== 'undefined' &&
+      typeof navigator !== 'undefined' && navigator.gpu &&
+      typeof hooks.surfaceFrame === 'function') {
+    const canvas = new OffscreenCanvas(1, 1);
+    let currentSid = 0;
+    const inner = createBrowserSDL({
+      canvas, ctx,
+      onPresent: function () {
+        if (!currentSid) return;
+        try {
+          const bmp = canvas.transferToImageBitmap();
+          hooks.surfaceFrame(currentSid, bmp);
+        } catch (e) { /* canvas may be zero-sized pre-configure */ }
+      },
+    });
+    const env = Object.assign({}, inner[ENV_KEY]);
+    const innerCreate = env.__sdl_create_window;
+    const innerDestroy = env.__sdl_destroy_window;
+    const innerSetTitle = env.__sdl_set_window_title;
+    const fbByHandle = new Map();              // handle -> { sid, fb, w, h }
+    env.__sdl_create_window = function (titlePtr, x, y, w, h, flags) {
+      const s = surfaceCreate(titlePtr, w, h);
+      if (!s) return 0;
+      const handle = innerCreate(titlePtr, x, y, w, h, flags);
+      currentSid = s.sid;                      // one window per process (one canvas)
+      handleBySid.set(s.sid, handle);
+      fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
+      return handle;
+    };
+    // CPU software-present path: shm transport, no GPU dependency (see
+    // shmPresent). The WebGPU renderer keeps the bitmap path via onPresent.
+    env.__sdl_update_window_surface = function (handle, pixelsPtr, w, h, pitch) {
+      const win = fbByHandle.get(handle);
+      return win ? shmPresent(win, pixelsPtr, w, h, pitch) : -1;
+    };
+    env.__sdl_destroy_window = function (handle) {
+      innerDestroy(handle);
+      fbByHandle.delete(handle);
+      for (const [sid, h] of handleBySid) {
+        if (h === handle) { hooks.surfaceDestroy(sid); handleBySid.delete(sid); if (currentSid === sid) currentSid = 0; }
+      }
+    };
+    env.__sdl_set_window_title = function (handle, titlePtr) {
+      innerSetTitle(handle, titlePtr);
+      for (const [sid, h] of handleBySid) {
+        if (h === handle) hooks.surfaceSetTitle(sid, titlePtr ? readString(titlePtr) : '');
+      }
+    };
+    const out = Object.assign({}, inner);
+    out[ENV_KEY] = env;
+    out.drainInput = drainInput;
+    return out;
+  }
+
+  /* ---- headless/shm flavor: real UpdateWindowSurface pixels, null-backend
+   * renderer (tier 0), real windows + events ---- */
+  let animationFrameFunc = null;
+  let sdlTicksBase = null;
+  const windows = [];                // handle-1 -> { sid, w, h, fb } | null
+  const nullTextures = [];
+  return {
+    getAnimationFrameFunc: function () { return animationFrameFunc; },
+    requestAnimationFrame: null,     // frame loop falls back to setTimeout
+    drainInput: drainInput,
+    [ENV_KEY]: {
+      __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
+      __sdl_quit: function () { animationFrameFunc = null; },
+      __sdl_create_window: function (titlePtr, x, y, w, h, flags) {
+        const s = surfaceCreate(titlePtr, w, h);
+        if (!s) return 0;
+        windows.push({ sid: s.sid, w: w, h: h, fb: s.fb });
+        handleBySid.set(s.sid, windows.length);
+        return windows.length;
+      },
+      __sdl_destroy_window: function (handle) {
+        const win = windows[handle - 1];
+        if (!win) return;
+        hooks.surfaceDestroy(win.sid);
+        handleBySid.delete(win.sid);
+        windows[handle - 1] = null;
+      },
+      __sdl_set_window_title: function (handle, titlePtr) {
+        const win = windows[handle - 1];
+        if (win) hooks.surfaceSetTitle(win.sid, titlePtr ? readString(titlePtr) : '');
+      },
+      /* The real pixel path: CPU framebuffer -> shm back buffer -> flip
+       * (mailbox present; never blocks, newest frame wins). */
+      __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
+        const win = windows[handle - 1];
+        return win ? shmPresent(win, pixelsPtr, w, h, pitch) : -1;
+      },
+      /* Renderer API: null-backend contract (tier 0 — no GPU pixels headless;
+       * Dawn or the browser flavor provide them). Validation mirrors
+       * createNullSDL so the C<->host contract stays testable. */
+      __sdl_create_renderer: function () { return 1; },
+      __sdl_destroy_renderer: function () {},
+      __sdl_create_texture: function () { nullTextures.push({ scaleMode: 1, blendMode: 0 }); return nullTextures.length; },
+      __sdl_destroy_texture: function (t) { if (t > 0 && nullTextures[t - 1]) nullTextures[t - 1] = null; },
+      __sdl_update_texture: function () {},
+      __sdl_set_texture_color_mod: function () {},
+      __sdl_set_texture_alpha_mod: function () {},
+      __sdl_set_texture_blend_mode: function (t, mode) {
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 4) throw new Error('SDL: unsupported blend mode ' + mode + ' (supported: NONE=0, BLEND=1, ADD=2, MOD=4)');
+        const tx = nullTextures[t - 1]; if (tx) tx.blendMode = mode;
+      },
+      __sdl_get_texture_blend_mode: function (t) {
+        const tx = nullTextures[t - 1]; return tx ? tx.blendMode : 0;
+      },
+      __sdl_set_texture_scale_mode: function (t, mode) {
+        if (mode !== 0 && mode !== 1) throw new Error('SDL: unsupported scale mode ' + mode + ' (supported: NEAREST=0, LINEAR=1)');
+        const tx = nullTextures[t - 1]; if (tx) tx.scaleMode = mode;
+      },
+      __sdl_get_texture_scale_mode: function (t) {
+        const tx = nullTextures[t - 1]; return tx ? tx.scaleMode : 1;
+      },
+      __sdl_set_draw_color: function () {},
+      __sdl_set_draw_blend_mode: function () {},
+      __sdl_render_clear: function () {},
+      __sdl_render_quad: function () {},
+      __sdl_render_geometry: function () {},
+      __sdl_render_present: function () {},
+      __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
+      __sdl_push_key_event: function () {},
+      __sdl_push_mouse_button_event: function () {},
+      __sdl_push_mouse_motion_event: function () {},
+      __sdl_push_mouse_wheel_event: function () {},
+      __sdl_push_quit_event: function () {},
+      __sdl_open_audio_device: function () { return 1; },
+      __sdl_queue_audio: function () { return 0; },
+      __sdl_get_queued_audio_size: function () { return 0; },
+      __sdl_clear_queued_audio: function () {},
+      __sdl_pause_audio_device: function () {},
+      __sdl_close_audio_device: function () {},
+      __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
+      __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
+      __sdl_delay: function () { sdlDelayUnsupported(); },
+    },
+  };
+}
+
 // Fullscreen-quad shader for the SDL software-surface blitter: a single
 // covering triangle, sampling the uploaded CPU framebuffer texture. UV is
 // derived from clip position with Y flipped (texture row 0 is the top).
@@ -5078,8 +5343,11 @@ function createCanvasGPU(canvas) {
  * @param {RuntimeContext} options.ctx - Runtime helpers shared with the host.
  * @returns {Object} Object with WASM imports keyed by ENV_KEY.
  */
-function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyWindow }) {
+function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyWindow, onPresent }) {
   const { readString, getMemory, getExports } = ctx;
+  // onPresent (todos/WM.md gpu transport): called after every frame actually
+  // reaches the canvas (software blit or renderer flush) — the OS surface
+  // backend hooks transferToImageBitmap + kernel handoff here.
 
   const sdlWindows = [];
   const sdlAudioDevices = [];
@@ -5149,6 +5417,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     });
     pass.setPipeline(blit.pipeline); pass.setBindGroup(0, blit.bindGroup); pass.draw(3, 1, 0, 0); pass.end();
     dev.queue.submit([enc.finish()]);
+    if (onPresent) onPresent();
   }
 
   // --- SDL_Renderer (batched 2D quads on WebGPU) ----------------------------
@@ -5424,6 +5693,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     }
     dev.queue.submit([enc.finish()]);
     if (didReadback) rdrStartReadbackMap();
+    if (onPresent) onPresent();
     rdrResetBatch(rd);
     // Now that this frame's draws are submitted, free any textures destroyed since
     // the last present (their GPU resources are no longer referenced by a batch).
@@ -5704,8 +5974,20 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     // Each call arms a readback on the NEXT RenderPresent (on-demand — no GPU
     // readback cost on frames where nothing is capturing).
     getLastFrame: function () { rdrCapturePending = true; return blit.lastFrame; },
+    // NESTED workers (OS process workers are workers-of-workers) expose
+    // requestAnimationFrame as a global but THROW NotSupportedError on call
+    // (Chromium). Latch to a setTimeout pacer on the first failure instead
+    // of dying — frame pacing degrades gracefully, the app keeps running.
     requestAnimationFrame: typeof requestAnimationFrame === 'function'
-      ? function (cb) { requestAnimationFrame(cb); }
+      ? (function () {
+          let rafWorks = true;
+          return function (cb) {
+            if (rafWorks) {
+              try { requestAnimationFrame(cb); return; } catch (e) { rafWorks = false; }
+            }
+            setTimeout(cb, 16);
+          };
+        })()
       : null,
     /* Push a key event from external source (e.g. worker message). mod is an
      * SDL_Keymod bitmask, repeat the DOM auto-repeat flag. */
@@ -8391,6 +8673,13 @@ async function runModule({
   if (!sdl && getBrowserSDL) {
     sdl = createBrowserSDL({ canvas: getBrowserSDL, ctx: ctx, sharedAudioBuffer: sharedAudioBuffer, notifyAudio: notifyAudio, notifyWindow: notifyWindow });
   }
+  // OS process (kernel.js spawnHooks carry the surface ops) with no injected
+  // canvas: SDL windows become kernel surfaces (todos/WM.md) — WebGPU onto a
+  // worker-local OffscreenCanvas + ImageBitmap handoff in the browser, shm
+  // framebuffer pixels headless.
+  if (!sdl && spawnHooks && typeof spawnHooks.surfaceCreate === 'function') {
+    sdl = createSurfaceSDL({ ctx: ctx, hooks: spawnHooks });
+  }
   // No canvas, no override → null stubs so __sdl_* imports still resolve
   // (Node CLI, headless tests). Browser host always sets getBrowserSDL.
   if (!sdl) sdl = createNullSDL();
@@ -8736,7 +9025,13 @@ async function runModule({
       }
       await new Promise(() => { /* await indefinitely */ });
     }
-    if (instance.exports.exit) {
+    if (sdl && sdl.getAnimationFrameFunc()) {
+      // emscripten_set_main_loop semantics: main returned with a frame
+      // callback registered, so the runtime stays alive — the C exit path
+      // (atexits, and under kernel.js the ordered EXIT handshake, which
+      // tears the process down) runs AFTER the frame loop stops, below.
+      // Calling it here killed OS processes before their first frame.
+    } else if (instance.exports.exit) {
       instance.exports.exit(exitCode);
     } else if (instance.exports.__run_atexits) {
       instance.exports.__run_atexits();
@@ -8759,6 +9054,11 @@ async function runModule({
           if (!animFunc) {
             resolve();
             return;
+          }
+          // OS surface backend: pull kernel-routed input from the ring into
+          // the wasm event queue before the frame runs (todos/WM.md).
+          if (sdl.drainInput) {
+            try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
           }
           try {
             if (hasJSPI) {
@@ -8788,6 +9088,19 @@ async function runModule({
       }
       scheduleFrame();
     });
+    // The loop stopped (frame func cleared, or exit() unwound a frame): now
+    // run the deferred C exit path — atexits, and under kernel.js the EXIT
+    // handshake. ExitStatus is how a host __exit stub reports the code.
+    try {
+      if (instance.exports.exit) {
+        instance.exports.exit(exitCode);
+      } else if (instance.exports.__run_atexits) {
+        instance.exports.__run_atexits();
+      }
+    } catch (e) {
+      if (e instanceof ExitStatus) exitCode = e.code;
+      else throw e;
+    }
   }
 
   return exitCode;

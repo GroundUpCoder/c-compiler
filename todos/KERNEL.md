@@ -215,7 +215,9 @@ response, sets DONE, bumps the doorbell. Node path identical via
 0x05xx sockets   SOCK_SOCKET/BIND/LISTEN/ACCEPT/CONNECT/PAIR/SHUTDOWN —
                  AF_UNIX control plane (todos/0008; data plane rides
                  FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT, see below)
-0x1xxx reserved  WM surfaces (SURFACE_CREATE/PRESENT/…, see below)
+0x1xxx WM        SURFACE_CREATE/DESTROY/SET_TITLE (todos/WM.md; present is
+                 deliberately NOT an RPC — pure SAB flip/seq, mailbox;
+                 0x1004 reserved should damage tracking ever want one)
 ```
 
 `host.js`'s existing imports (`__spawn`, `__spawn_wait`, `__spawn_kill`,

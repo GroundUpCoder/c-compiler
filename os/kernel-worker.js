@@ -9,6 +9,10 @@
 //   page -> kernel: {type:'input', data}         raw tty bytes/keystrokes
 //                   {type:'resize', cols, rows}
 //                   {type:'eof'}
+//                   {type:'wm-canvas', canvas}   the desktop OffscreenCanvas
+//                                                (todos/WM.md — the kernel
+//                                                composites in-worker)
+//                   {type:'wm-input', ev}        raw desktop key/pointer input
 //   kernel -> page: {type:'out', bytes}          tty output (program + echo)
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
@@ -16,7 +20,7 @@
 //                   {type:'halt', status}        pid 1 exited
 'use strict';
 
-importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js');
+importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'compositor.js');
 try {
   // Optional libc extension (fnmatch/glob/regex — busybox hush needs it).
   // compiler.js's getExtLibMap picks up the EXT_LIB_MAP global it defines.
@@ -37,6 +41,12 @@ self.onmessage = function (e) {
   if (m.type === 'input') tty.input(typeof m.data === 'string' ? m.data : new Uint8Array(m.data));
   else if (m.type === 'resize') tty.resize(m.cols | 0, m.rows | 0);
   else if (m.type === 'eof') tty.eof();
+  else if (m.type === 'wm-canvas') {
+    kernel.wmSetScreen(m.canvas.width, m.canvas.height);
+    OS_COMPOSITOR.startCompositor(kernel, m.canvas);
+  } else if (m.type === 'wm-input') {
+    OS_COMPOSITOR.routeInput(kernel, SDL_WEB, m.ev);
+  }
 };
 
 function createWorker(procSpec) {
