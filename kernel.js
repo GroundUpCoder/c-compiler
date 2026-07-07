@@ -206,8 +206,9 @@ var WMEV = { QUIT: 0x100, KEYDOWN: 0x300, KEYUP: 0x301, MOUSEMOTION: 0x400,
  * reserved, then 32 bytes NUL-padded UTF-8 title.
  *
  * Commands -> replies:
- *   SUBSCRIBE {}                 -> R_OK, then EV_CREATED per surface
- *                                   (z-order) + EV_FOCUS (the snapshot)
+ *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
+ *                                   EV_CREATED per surface (z-order) +
+ *                                   EV_FOCUS (the snapshot)
  *   LIST {}                      -> R_LIST { count, count * record }
  *   MOVE { sid, x, y }           -> R_OK | R_ERR
  *   FOCUS { sid }                -> R_OK | R_ERR   (restores if minimized)
@@ -221,7 +222,8 @@ var WMEV = { QUIT: 0x100, KEYDOWN: 0x300, KEYUP: 0x301, MOUSEMOTION: 0x400,
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
  * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
  * Events: EV_CREATED record | EV_DESTROYED { sid } | EV_TITLE { sid,
- * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y }.
+ * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y } |
+ * EV_MINIMIZED { sid, minimized 0|1 } (restore also implies focus).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
@@ -233,7 +235,7 @@ var WMP = {
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
-  EV_MOVED: 0x84,
+  EV_MOVED: 0x84, EV_MINIMIZED: 0x85,
 };
 var WMP_REC_BYTES = 72;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -881,6 +883,22 @@ Kernel.prototype.boot = function (spec) {
 
 Kernel.prototype.process = function (pid) { return this._procs.get(pid) || null; };
 Kernel.prototype.processCount = function () { return this._procs.size; };
+
+/* Spawn a kernel-owned service (todos/0014: the /bin/wm autostart): no
+ * parent, own session, auto-reaped on exit (ppid 0 in _exitProcess — the
+ * kernel never waits). Resolves to the pid, or 0 on failure (a missing
+ * /bin/wm must not break boot: kernel-chrome is the fallback policy). */
+Kernel.prototype.service = function (spec) {
+  return this._spawn(null, {
+    path: spec.path,
+    argv: spec.argv || [spec.path],
+    envp: spec.envp || [],
+    cwd: spec.cwd || '/',
+    actions: [],
+    flags: 0,
+    pgid: 0,
+  }).then(function (r) { return r.errno ? 0 : r.pid; });
+};
 
 /* ---- process creation ---- */
 
@@ -1881,7 +1899,11 @@ Kernel.prototype.wmList = function () {
 Kernel.prototype.wmFocus = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return false;
-  if (s.minimized) { s.minimized = false; this._wmVersion++; }  // focus restores
+  if (s.minimized) {                                            // focus restores
+    s.minimized = false;
+    this._wmVersion++;
+    this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 0]);
+  }
   var zi = this._zOrder.indexOf(s.sid);
   if (zi >= 0 && zi !== this._zOrder.length - 1) {
     this._zOrder.splice(zi, 1);
@@ -1911,6 +1933,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   if (!s) return false;
   if (s.minimized) return true;
   s.minimized = true;
+  this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
   if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
   if (this._focusSid === s.sid) {
     this._focusSid = 0;
@@ -2120,7 +2143,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
   switch (type) {
     case WMP.SUBSCRIBE: {
       this._wmSubs.add(conn);
-      ok(true);
+      conn.peer.send(this._wmpFrame(WMP.R_OK, [this._wmScreen.w, this._wmScreen.h]));
       // The snapshot: current scene as EV_CREATED per surface (z-order,
       // bottom -> top; each record carries geometry/flags) + the focus.
       for (var i = 0; i < this._zOrder.length; i++) {
@@ -2530,8 +2553,9 @@ Kernel.prototype._exitProcess = function (pcb, status) {
     }
   } else {
     // Parent already gone: we were (or just became) init's child; init will
-    // reap us, or we ride out as a zombie under it.
-    if (!this._procs.get(1)) this._reap(pcb);
+    // reap us, or we ride out as a zombie under it. Kernel-owned services
+    // (ppid 0, Kernel.service) have no parent to ever wait: auto-reap.
+    if (!this._procs.get(1) || pcb.ppid === 0) this._reap(pcb);
   }
 };
 

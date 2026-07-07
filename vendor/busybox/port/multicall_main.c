@@ -45,6 +45,28 @@ int true_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int vi_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int wc_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 
+/* sleep: hand-rolled (upstream sleep.c wasn't vendored) — POSIX seconds
+ * plus the busybox fractional extension (`sleep 0.5`); multiple args sum.
+ * Wanted by shell scripts and the OS test harnesses (todos/0014). */
+static int sleep_main(int argc, char **argv)
+{
+	double total = 0;
+	int i;
+	if (argc < 2) bb_show_usage();
+	for (i = 1; i < argc; i++) {
+		char *end;
+		double v = strtod(argv[i], &end);
+		if (end == argv[i] || *end != '\0' || v < 0) bb_show_usage();
+		total += v;
+	}
+	struct timespec ts;
+	ts.tv_sec = (time_t)total;
+	ts.tv_nsec = (long)((total - (double)ts.tv_sec) * 1e9);
+	while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
+		continue;
+	return 0;
+}
+
 static const struct applet {
 	const char *name;
 	int (*mainfn)(int argc, char **argv);
@@ -70,6 +92,7 @@ static const struct applet {
 	{ "rm",       rm_main },
 	{ "rmdir",    rmdir_main },
 	{ "sed",      sed_main },
+	{ "sleep",    sleep_main },
 	{ "sort",     sort_main },
 	{ "tail",     tail_main },
 	{ "test",     test_main },

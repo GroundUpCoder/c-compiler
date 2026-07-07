@@ -68,7 +68,7 @@ let r = session([
 check('exit N propagates through hush', r.status === 7, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 const lines = r.stdout.split('\n');
 const expectStdout = [
-  'bin', 'dev', 'etc', 'root', 'tmp',      // ls /
+  'bin', 'dev', 'etc', 'root', 'run', 'tmp',   // ls / (run: WM endpoint, 0014)
   'A',                                     // pipeline
   'sub=inner deep',                        // nested $( )
   'redir',                                 // > then cat

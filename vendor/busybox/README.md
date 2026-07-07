@@ -5,7 +5,9 @@ Two binaries come out of this vendor tree:
 - **`bin.json`** → `/bin/sh`: hush, the shell (the 0005 port, below).
 - **`coreutils.json`** → `/bin/coreutils`: a **multicall** binary carrying
   cat ls cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
-  basename dirname grep egrep fgrep sed **vi** echo printf test `[` kill; the
+  basename dirname grep egrep fgrep sed **vi** echo printf test `[` kill
+  sleep (hand-rolled in `port/multicall_main.c` — upstream `sleep.c`
+  wasn't vendored; added for todos/0014's harnesses); the
   `/bin` applet names are BlockFS symlinks to it and dispatch is by
   argv[0] (`port/multicall_main.c` — a hand-rolled table, NOT upstream's
   kbuild-generated appletlib, so the 0005 appletlib stubs stay). Invoked

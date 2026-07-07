@@ -133,12 +133,17 @@ async function boot() {
     interactiveOut: true,   // xterm IS a human terminal: shells go interactive
   });
 
+  // The WM control plane (todos/0014): the kernel-owned endpoint first, then
+  // /bin/wm as a kernel service after pid 1. Failure is non-fatal by design —
+  // kernel-chrome is the fallback policy; `wm &` respawns it from the shell.
+  kernel.wmServe();
   await kernel.boot({
     path: '/bin/sh',
     argv: ['sh'],
     envp: ['PATH=/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
   });
+  await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/bin'] });
   post({ type: 'ready', mode: ws.mode });
 
   var queued = pending; pending = [];

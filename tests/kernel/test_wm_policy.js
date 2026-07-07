@@ -214,7 +214,8 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
 
   // ---- subscribe on an empty scene: R_OK + focus-0 snapshot ----
   let f = await cmd(wm, WMP.SUBSCRIBE);
-  check('SUBSCRIBE -> R_OK', f.type === WMP.R_OK);
+  check('SUBSCRIBE -> R_OK with screen dims', f.type === WMP.R_OK &&
+    f.g(0) === 640 && f.g(1) === 480, JSON.stringify([f.g(0), f.g(1)]));
   f = await readEvent(wm);
   check('empty snapshot is just EV_FOCUS 0', f.type === WMP.EV_FOCUS && f.g(0) === 0 && idle(wm),
     JSON.stringify([f.type, f.g(0)]));
@@ -298,6 +299,8 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   f = await cmd(wm, WMP.MINIMIZE, [c1.sid]);
   check('MINIMIZE -> R_OK', f.type === WMP.R_OK);
   f = await readEvent(wm);
+  check('EV_MINIMIZED 1', f.type === WMP.EV_MINIMIZED && f.g(0) === c1.sid && f.g(1) === 1);
+  f = await readEvent(wm);
   check('focus falls off the minimized window', f.type === WMP.EV_FOCUS && f.g(0) === ct.sid);
   check('wmList reports minimized', kernel.wmList().find(s => s.sid === c1.sid).minimized === true);
   const scr2 = kernel.wmScreenshotScreen();
@@ -307,6 +310,8 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   kernel.wmPointer('up', 110, 130, {});
   f = await cmd(wm, WMP.RESTORE, [c1.sid]);
   check('RESTORE -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm);
+  check('EV_MINIMIZED 0 on restore', f.type === WMP.EV_MINIMIZED && f.g(0) === c1.sid && f.g(1) === 0);
   f = await readEvent(wm);
   check('restore refocuses', f.type === WMP.EV_FOCUS && f.g(0) === c1.sid);
   check('restored + unminimized', kernel.wmList().find(s => s.sid === c1.sid).minimized === false);
@@ -392,6 +397,15 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('snapshot has both windows + focus',
     snap[0].type === WMP.EV_CREATED && snap[1].type === WMP.EV_CREATED &&
     snap[2].type === WMP.EV_FOCUS, JSON.stringify(snap.map(s => s.type)));
+
+  // ---- kernel.service: the /bin/wm autostart shape — no parent, auto-reap ----
+  const svcPid = await kernel.service({ path: '/bin/wm', argv: ['wm'] });
+  check('service spawns parentless', svcPid > 0 && kernel.process(svcPid).ppid === 0);
+  workers.get(svcPid).msg({ type: 'exited', code: 0 });
+  await tick();
+  check('service auto-reaped on exit (no zombie)', kernel.process(svcPid) === null);
+  check('service spawn of a missing binary resolves 0',
+    (await kernel.service({ path: '/bin/nope' })) === 0);
 
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);

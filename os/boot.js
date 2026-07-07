@@ -159,10 +159,15 @@ async function seedAndBoot() {
   });
   if (seeded) store.flush();
   bootLog('image ' + imagePath + (seeded ? ' (seeded)' : ''));
+  // The WM control plane (todos/0014) — same shape as kernel-worker.js:
+  // endpoint first, /bin/wm as a kernel service after pid 1 (non-fatal;
+  // kernel-chrome is the fallback, `wm &` respawns).
+  kernel.wmServe();
   await kernel.boot({
     path: '/bin/sh',
     argv: ['sh'],
     envp: ['PATH=/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
   });
+  await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/bin'] });
 }

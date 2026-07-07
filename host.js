@@ -5044,10 +5044,12 @@ function createSurfaceSDL({ ctx, hooks }) {
     ring = { sab, i32, f32: new Float32Array(sab), cap: WMIR_DEFAULT_CAP };
     return ring;
   }
-  function surfaceCreate(titlePtr, w, h) {
+  function surfaceCreate(titlePtr, w, h, sdlFlags) {
     const title = titlePtr ? readString(titlePtr) : '';
     const fb = allocFb(w, h);
-    const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab);
+    // SDL_WINDOW_BORDERLESS (0x10) -> kernel surface flags bit0 (no chrome).
+    const kFlags = (sdlFlags & 0x10) ? 1 : 0;
+    const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags);
     if (!r || r.errno || !(r.sid > 0)) return null;
     return { sid: r.sid, fb };
   }
@@ -5139,7 +5141,7 @@ function createSurfaceSDL({ ctx, hooks }) {
     const innerSetTitle = env.__sdl_set_window_title;
     const fbByHandle = new Map();              // handle -> { sid, fb, w, h }
     env.__sdl_create_window = function (titlePtr, x, y, w, h, flags) {
-      const s = surfaceCreate(titlePtr, w, h);
+      const s = surfaceCreate(titlePtr, w, h, flags);
       if (!s) return 0;
       const handle = innerCreate(titlePtr, x, y, w, h, flags);
       currentSid = s.sid;                      // one window per process (one canvas)
@@ -5186,7 +5188,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_init: function () { sdlTicksBase = Date.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
       __sdl_create_window: function (titlePtr, x, y, w, h, flags) {
-        const s = surfaceCreate(titlePtr, w, h);
+        const s = surfaceCreate(titlePtr, w, h, flags);
         if (!s) return 0;
         windows.push({ sid: s.sid, w: w, h: h, fb: s.fb });
         handleBySid.set(s.sid, windows.length);

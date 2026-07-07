@@ -18059,6 +18059,9 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_INIT_SENSOR 0x00008000u
 #define SDL_INIT_CAMERA 0x00010000u
 #define SDL_WINDOW_FULLSCREEN 0x0000000000000001ULL
+/* Borderless: under the OS WM this is a kernel surface with no chrome
+   (taskbar-class windows — todos/0014); standalone runtimes ignore it. */
+#define SDL_WINDOW_BORDERLESS 0x0000000000000010ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
 /* SDL3: on little-endian, SDL_PIXELFORMAT_RGBA32 aliases ABGR8888

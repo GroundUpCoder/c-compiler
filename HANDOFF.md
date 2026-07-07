@@ -66,7 +66,7 @@ unnumbered until scheduled.)
 
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log per
   landing, README next-up current.
-- Seeded OS sources changed? **Bump `os/image.json` `version`** (v9 now).
+- Seeded OS sources changed? **Bump `os/image.json` `version`** (v10 now).
 - compiler.js must stay browser-clean (no bare `process.*`).
 - WM layout constants (SH_*/IR_*/WM_*) are duplicated kernel.js ↔ host.js
   with MUST-MATCH comments (the SI_* precedent) — change both or tests

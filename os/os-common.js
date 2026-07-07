@@ -209,6 +209,8 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *
  * manifest (os/image.json): { version, dirs: [...], files: { "/path": entry } }
  *   entry.c       — asset name of a C source; compiled to a wasm binary at /path
+ *   entry.hdrs    — (with entry.c) asset names of local headers the source
+ *                   quotes-includes; staged beside it for the compile
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
  *   entry.project — REPO-relative bin.json path; multi-file build via
  *                   buildProject (needs io.buildProject)
@@ -263,13 +265,24 @@ function seedImage(kfs, manifest, io) {
         return undefined;
       }
       if (entry.c !== undefined) {
-        return Promise.resolve(io.readAsset(entry.c)).then(function (src) {
+        var assets = [entry.c].concat(entry.hdrs || []);
+        return Promise.all(assets.map(function (a) {
+          return Promise.resolve(io.readAsset(a));
+        })).then(function (srcs) {
           // Stage the source in the image, compile it there, clean up. The
-          // compiler (and its diagnostics) see real image paths.
+          // compiler (and its diagnostics) see real image paths. Local
+          // headers stage under their own names beside the source (quoted
+          // includes resolve relative to the including file's directory).
           var staged = '/etc/.seed-' + entry.c.replace(/[^A-Za-z0-9._-]/g, '_');
-          writeFile(kfs, staged, src);
+          writeFile(kfs, staged, srcs[0]);
+          var hdrPaths = (entry.hdrs || []).map(function (hname, i) {
+            var hp = '/etc/' + hname.replace(/[^A-Za-z0-9._-]/g, '_');
+            writeFile(kfs, hp, srcs[i + 1]);
+            return hp;
+          });
           var r = io.compile(['cc', staged, '-o', path], '/');
           kfs.unlink(staged);
+          hdrPaths.forEach(function (hp) { kfs.unlink(hp); });
           if (r.exitCode !== 0) {
             throw new Error('seeding ' + path + ' from ' + entry.c + ' failed:\n' + r.stderr);
           }
