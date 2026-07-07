@@ -5099,7 +5099,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     pipeline: null, sampler: null, bindGroup: null, tex: null, texW: 0, texH: 0,
     ready: false, pending: null,
     // Last presented CPU framebuffer (RGBA), exposed via getLastFrame() for
-    // deterministic surface readback (netguc's surface probe + camera capture) —
+    // deterministic surface readback (external surface probes + camera capture) —
     // reading the WebGPU canvas back is racy against the rAF present cycle.
     lastFrame: null,
   };
@@ -5984,7 +5984,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow }) {
          * (Offscreen)canvas, mirroring __sdl_create_window. */
         if (canvas && width > 0 && height > 0) { canvas.width = width; canvas.height = height; }
         // OR in COPY_SRC so the canvas is always read-back-able (snapshots,
-        // the netguc surface probe + camera capture); harmless if unused.
+        // external surface probes + camera capture); harmless if unused.
         const cfg = { device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: wgpuEnumReq(WGPU_ALPHA, alphaMode, 'alphaMode') };
         /* presentMode: a web canvas always presents vsync'd (Fifo). Accept
            Undefined(0)/Fifo(1); anything else is genuinely unsupported here. */
@@ -6577,11 +6577,11 @@ function createNullWebGPU(ctx) {
  * keeping drifting copies:
  *   - the compiler-emitted self-contained .html page (single worker; glue baked
  *     into the page template + worker script), and
- *   - netguc's `c/` app (workspace-owner worker + disposable run worker; its own
- *     DOM capture in sdl-input.ts / GraphicalRunSheet.tsx).
+ *   - an external embedder app (workspace-owner worker + disposable run worker;
+ *     its own DOM capture glue).
  *
  * host.js is loaded in every context that needs this (emitted page main thread,
- * emitted worker, c/ main thread via loadHostMedia, c/ run worker via loadHost),
+ * emitted worker, embedder main thread via loadHostMedia, run worker via loadHost),
  * so this is the natural single home. It is pure: it makes NO assumption about
  * worker topology, transfers, or message channels — each frontend keeps its own.
  * DOM access is duck-typed and only happens inside the mappers (called in-browser
@@ -7037,13 +7037,23 @@ async function runModule({
   writeErr,
   onReady,
 }) {
+  /* Default writers COPY the chunk (Buffer.from of a TypedArray copies):
+     buf is a raw view into wasm memory, and stream.write queues chunks by
+     reference — memory.grow detaches the view and the program reuses the
+     region long before an async pipe flush (CONFORMANCE-REMAINING
+     "non-copied views into wasm memory"). One memcpy per write, same as
+     native stdio. */
   if (!writeOut && typeof process !== 'undefined' && process.stdout) {
     installExitOnEpipe(process.stdout);
-    writeOut = function (buf) { process.stdout.write(buf); };
+    writeOut = function (buf) {
+      process.stdout.write(ArrayBuffer.isView(buf) ? Buffer.from(buf) : buf);
+    };
   }
   if (!writeErr && typeof process !== 'undefined' && process.stderr) {
     installExitOnEpipe(process.stderr);
-    writeErr = function (buf) { process.stderr.write(buf); };
+    writeErr = function (buf) {
+      process.stderr.write(ArrayBuffer.isView(buf) ? Buffer.from(buf) : buf);
+    };
   }
   if (!writeOut) writeOut = function () {};
   if (!writeErr) writeErr = function () {};
@@ -8751,6 +8761,22 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const wasmPath = process.argv[2] || 'a.wasm';
   const bytes = fs.readFileSync(wasmPath);
 
+  /* Drain stdout/stderr before exiting. process.exit() discards writes
+     still queued in the stream (pipes flush asynchronously), so
+     `prog | grep` lost everything past ~one pipe buffer AFTER write()
+     had already returned success to the C program
+     (CONFORMANCE-REMAINING "Piped stdout truncated at exit"). A
+     zero-length write's callback fires only once everything queued
+     before it has been flushed — like native stdio, this blocks for as
+     long as the pipe consumer takes to read. EPIPE during the drain is
+     handled by the installed exit-on-EPIPE listener (exit 141). */
+  function flushAndExit(code) {
+    var pending = 2;
+    function done() { if (--pending === 0) process.exit(code); }
+    process.stdout.write('', done);
+    process.stderr.write('', done);
+  }
+
   // --block-fs: use the synchronous block filesystem instead of the
   // real Node.js filesystem.  Pass --block-fs=<path> to back it with a
   // real file; bare --block-fs uses an ephemeral in-memory store.
@@ -8832,11 +8858,11 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
           process.stderr.write('BlockFS flush failed: ' + e.message + '\n');
         }
       }
-      process.exit(exitCode);
+      flushAndExit(exitCode);
     }).catch(function (e) {
       process.stderr.write('Fatal: ' + e.message + '\n');
       if (e.stack) process.stderr.write(e.stack + '\n');
-      process.exit(1);
+      flushAndExit(1);
     });
   } else {
     runModule({
@@ -8847,11 +8873,11 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       env: process.env,
       fs: fs,
     }).then(function (exitCode) {
-      process.exit(exitCode);
+      flushAndExit(exitCode);
     }).catch(function (e) {
       process.stderr.write('Fatal: ' + e.message + '\n');
       if (e.stack) process.stderr.write(e.stack + '\n');
-      process.exit(1);
+      flushAndExit(1);
     });
   }
 

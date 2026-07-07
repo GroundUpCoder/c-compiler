@@ -7,14 +7,16 @@ they were deprioritized, not disproven. Fixed items live as green tests under
 
 ## host.js — Node output path (medium, user-visible)
 
-- **Piped stdout truncated at exit**: `process.exit()` fires before Node drains
-  async pipe writes; `prog | grep` loses everything past ~one pipe buffer AFTER
-  `write()` already returned success to the C program. Fix: await stdout/stderr
-  drain before exiting.
-- **Queued stdout chunks are non-copied views into wasm memory** (detached by
-  `memory.grow`, overwritten on buffer reuse). Currently masked by the
-  truncation bug above — fixing that one WILL surface this one; fix both
-  together (`.slice()` before queueing).
+- ~~**Piped stdout truncated at exit**~~ — FIXED
+  (`tests/host/test_stdout_flush.js`): the CLI exits through
+  `flushAndExit`, which drains stdout/stderr (zero-length-write callback)
+  before `process.exit`; exit code preserved, EPIPE during the drain
+  still exits 141.
+- ~~**Queued stdout chunks are non-copied views into wasm memory**~~ —
+  FIXED (same test): runModule's default Node writers copy
+  (`Buffer.from`) before `stream.write`. The predicted masking was real:
+  with only the drain fix applied, the test catches corruption at the
+  first post-pipe-buffer byte.
 - **Console SharedArrayBuffer ring has no overflow handling** (~64 KiB per
   16 ms flush window permanently desyncs the terminal; `available` can exceed
   capacity). Needs a real SPSC protocol: producer checks free space against

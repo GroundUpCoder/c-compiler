@@ -8,6 +8,7 @@ var path = require('path');
 
 var tests = [
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
+  ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
 ];
 
