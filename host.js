@@ -6984,6 +6984,22 @@ function createAudioReceiver(options) {
   return { handleMessage: handleMessage, close: close, setVolume: setVolume };
 }
 
+/* Die quietly on EPIPE (e.g. `prog | head`) like a native program killed
+   by SIGPIPE (128+13), instead of crashing with an unhandled stream
+   'error' event. Only installed for runModule's default writers — callers
+   that pass their own writeOut/writeErr handle their own errors. Module
+   scope (not per-run) so repeated runModule calls in one process don't
+   stack listeners; installExitOnEpipe is idempotent per stream. */
+function exitOnEpipe(e) {
+  if (e && e.code === 'EPIPE') process.exit(141);
+  throw e;
+}
+function installExitOnEpipe(stream) {
+  if (stream.listeners('error').indexOf(exitOnEpipe) === -1) {
+    stream.on('error', exitOnEpipe);
+  }
+}
+
 /**
  * Instantiate and run a compiled WASM module.
  * @param {RunModuleOptions} options
@@ -7021,20 +7037,12 @@ async function runModule({
   writeErr,
   onReady,
 }) {
-  /* Die quietly on EPIPE (e.g. `prog | head`) like a native program killed
-     by SIGPIPE (128+13), instead of crashing with an unhandled stream
-     'error' event. Only installed for the default writers — callers that
-     pass their own writeOut/writeErr handle their own errors. */
-  function exitOnEpipe(e) {
-    if (e && e.code === 'EPIPE') process.exit(141);
-    throw e;
-  }
   if (!writeOut && typeof process !== 'undefined' && process.stdout) {
-    process.stdout.on('error', exitOnEpipe);
+    installExitOnEpipe(process.stdout);
     writeOut = function (buf) { process.stdout.write(buf); };
   }
   if (!writeErr && typeof process !== 'undefined' && process.stderr) {
-    process.stderr.on('error', exitOnEpipe);
+    installExitOnEpipe(process.stderr);
     writeErr = function (buf) { process.stderr.write(buf); };
   }
   if (!writeOut) writeOut = function () {};

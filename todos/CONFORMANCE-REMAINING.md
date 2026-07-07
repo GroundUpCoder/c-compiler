@@ -19,7 +19,9 @@ they were deprioritized, not disproven. Fixed items live as green tests under
   16 ms flush window permanently desyncs the terminal; `available` can exceed
   capacity). Needs a real SPSC protocol: producer checks free space against
   the read cursor; block or drop-with-counter, never overrun.
-- `runModule` leaks an `'error'` listener on process.stdout/stderr per call.
+- ~~`runModule` leaks an `'error'` listener on process.stdout/stderr per
+  call~~ — FIXED (`tests/host/test_epipe_listeners.js`): the exit-on-EPIPE
+  handler moved to module scope with idempotent per-stream install.
 
 ## host.js — browser-only paths (code-verified)
 
