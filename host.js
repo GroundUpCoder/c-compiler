@@ -8888,6 +8888,11 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.BLOCK_FS = BLOCK_FS;
   module.exports.SDL_WEB = SDL_WEB;
   module.exports.createBrowserWebGPU = createBrowserWebGPU;
+  // Test exports: SAB ring endpoints (console + audio)
+  module.exports.createSharedConsoleBuffer = createSharedConsoleBuffer;
+  module.exports.createConsoleReceiver = createConsoleReceiver;
+  module.exports.createSharedAudioBuffer = createSharedAudioBuffer;
+  module.exports.createBrowserSDL = createBrowserSDL;
 }
 
 // Browser global exports
