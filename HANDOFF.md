@@ -39,10 +39,16 @@ gitignored; **nothing in core imports it**. Keep it that way.
    over an AF_UNIX protocol (design: WM.md "The WM client"); taskbar;
    agent RPC exposure of the existing kernel op set. The v1 kernel-chrome
    default policy stays as the WM-crashed fallback.
+2. `0015` windowed vendor apps (doom/snake/gameboy + binary-asset seeding)
+3. `0016` SDL+WebGPU demo app + Dawn tier-1 suite
+4. `0017` audio mixing (kernel sound server)
+5. `0018` quake (relative-mouse/pointer-lock flag + pak0.pak seeding)
+6. `0019` client resize (SURFACE_CONFIGURE)
+7. `0020` wasm terminal + ptys
 
-After that (unnumbered until scheduled): windowed vendor apps in-OS (doom
-needs its WAD in the fs), resize (SURFACE_CONFIGURE), wasm terminal +
-ptys, audio mixing, Dawn tier-1 GPU suite.
+(Queue planned 2026-07-07, second thread — items 0015–0020 in todos/ with
+rationale; a real-world WebGPU app port is a wanted follow-up after 0016,
+unnumbered until scheduled.)
 
 (`0006` threads + atomics stays deferred indefinitely.)
 

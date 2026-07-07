@@ -27,6 +27,19 @@ One numbered file per unit of work we have actually committed to doing.
 1. `0014` /bin/wm policy client + wmctl — move WM policy out of the
    kernel onto the AF_UNIX protocol; taskbar; agent RPCs (`WM.md`
    "The WM client")
+2. `0015` windowed vendor apps in-OS — doom/snake/gameboy + binary-asset
+   image seeding (WM.md unit 7, the design's acceptance test; quake
+   split to 0018)
+3. `0016` SDL+WebGPU demo app windowed + Dawn tier-1 suite — first real
+   `gpu`-transport consumer; a real-world WebGPU port follows later
+   (unnumbered)
+4. `0017` audio mixing — the kernel sound server (WM.md open question;
+   consumers: doom, gameboy)
+5. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
+   pak0.pak seeding
+6. `0019` client resize (`SURFACE_CONFIGURE`)
+7. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
+   demotes to bootstrap chrome
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
