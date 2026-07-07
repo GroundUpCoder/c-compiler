@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-07, after 0011 busybox vi)
+# Handoff — start of thread (updated 2026-07-07, after 0008 AF_UNIX + jobctl e2e)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,45 +7,43 @@
 
 ## Where the repo stands
 
-**OS.md Phase 1 is COMPLETE, and the OS now has an editor.** 0011 landed
-2026-07-07: busybox `vi` as `/bin/vi`, the 28th applet in the coreutils
-multicall. The port cost almost nothing (the investigation is the story:
-hush's line editing already ran vi's entire input stack — read_key,
-safe_poll, raw termios). New for the platform: libc `sigsetjmp`/
-`siglongjmp` (macros over setjmp — cooperative signals have no mask to
-save); two vi.c compiler-dialect patches (sigsetjmp if-form, 6 GNU `?:`
-sites). `os/image.json` is **v8**. Full story:
-`logs/2026-07-07/busybox-vi.md`; port doc: `vendor/busybox/README.md`.
+**Phase 4 opened: the OS has sockets.** 0008 landed 2026-07-07: AF_UNIX
+stream sockets as OFDs over the pipe machinery — the "trivial: pipes with
+names in BlockFS" prediction held because 0009 made new OFD kinds cheap.
+A connection is two pipe-shaped directions; the pipe read/write bodies
+became shared `_streamRead`/`_streamWrite`; new 0x05xx opcodes are control
+plane only. bind mknods a real S_IFSOCK inode (no format change; open()
+on one is ENXIO now). libc grew `<sys/socket.h>`/`<sys/un.h>` + socket
+errnos. IPC for the 0007 WM protocol is unlocked. v1 non-goals (DGRAM,
+abstract ns, SCM_RIGHTS, O_NONBLOCK, MSG_PEEK) recorded in KERNEL.md.
+Story: `logs/2026-07-07/af-unix-sockets.md`.
 
-Post-landing, the user's eye caught vi painting only 80×24 of a 42-row
-xterm — root cause was a kernel-class bug, not vi: `__ioctl_tiocgwinsz`
-guarded on `_stdinSab`, which brokered-mode RemoteFS deliberately never
-sets, so EVERY brokered process saw 80×24 forever (same
-first-user-of-a-path class as 0010's FS_READLINK). Fixed test-first
-(`test_fs_e2e.js` scenario 8); story: `logs/2026-07-07/brokered-winsize.md`.
+**The interactive job-control e2e gap is closed — and it caught a real
+0003-era kernel bug on its first run.** `tests/kernel/test_jobctl_tty_e2e.js`
+(vi-harness pattern: boot.js --tty-out, hush, `cat` as tty reader, `$?`
+markers) drives Ctrl-C, Ctrl-Z→jobs→fg, bg→SIGTTIN, kill %1. The bug: a
+stopped `cat`'s parked tty read sat at the head of `_ttyWaiters` and STOLE
+the shell's next typed line — `_ttyNotify` had no serve-time eligibility.
+Fix: stopped waiters consume nothing (stay queued); waiters whose pgroup
+lost the tty since parking get the dispatch-time SIGTTIN/EIO treatment.
+Same first-user-of-a-path class as 0010's FS_READLINK and 0011's
+TIOCGWINSZ. Also pinned: hush (unlike bash) /dev/null's stdin of `cmd &`
+even interactively — the SIGTTIN route in hush is Ctrl-Z then `bg`.
+Story: `logs/2026-07-07/jobctl-tty-e2e.md`.
 
-The interesting artifact is the test: `tests/kernel/test_vi_e2e.js`
-drives REAL edit sessions (insert/append/search/cw/undo/dd/:wq/:q!)
-through `boot.js --tty-out` — keystrokes through the kernel tty into vi's
-raw mode, file bytes asserted via cat+marker after every save. Harness
-rules that took iteration: the file is the assertion (screen is scenery);
-only full-line renders are expectable (vi paints incrementally —
-`ESC[1;12H!`, never "world!"); ESC goes alone with air around it;
-`ESC[?1049h/l` (alternate screen) are perfect vi-started/exited markers.
-That harness is the template for any future full-screen-app test.
-
-All green and verified: unit 697✓, blockfs✓, kernel incl. vi e2e✓,
-browser os-boots.mjs (real Chromium)✓. Try it:
+All green and verified: unit 697✓, blockfs (incl. new socket-node case)✓,
+kernel incl. test_sockets/test_sockets_e2e/test_jobctl_tty_e2e✓, browser
+os-boots.mjs (real Chromium)✓. Try it:
 
 ```bash
-node serve.js .    # open the printed /os/os.html URL, run: vi /tmp/x.txt
-node tests/kernel/test_vi_e2e.js
+node tests/kernel/test_sockets_e2e.js      # C client/server over AF_UNIX
+node tests/kernel/test_jobctl_tty_e2e.js   # Ctrl-Z/fg/bg through hush
 ```
 
 ## The queue (todos/README.md is authoritative)
 
-1. **`0007` WM/compositor — design doc first**
-2. `0008` networking — AF_UNIX first
+1. **`0007` WM/compositor — design doc first** (now the ONLY queued item;
+   its IPC prerequisite just landed)
 
 (`0006` threads + atomics stays deferred indefinitely.)
 
@@ -53,34 +51,33 @@ node tests/kernel/test_vi_e2e.js
 
 - Browser first boot seeds hush + coreutils + cc; `tools/mkimage.js`
   (pre-baked image) is the recorded fix if seeding time ever matters.
-- Interactive job control (Ctrl-Z/fg/bg) still has no automated e2e —
-  though test_vi_e2e.js's --tty-out harness is most of the pty-ish
-  machinery that item was waiting for.
 - The first-run path (serve.js → printed URL 200s) has no automated test.
 - Bare `$(trap)` doesn't report parent traps (vendor README).
 - `tests/browser/os-boots.mjs` is manual — run after touching os/,
   kernel.js, host.js fd/fs paths, or the busybox port.
 - `FEATURE_VI_REGEX_SEARCH` is off (upstream default); we DO have regex
-  (sed/grep use xregcomp) — flip it if someone misses regex search.
+  (musl regcomp in libc-ext.js; sed/grep use it) — flip it if someone
+  misses regex search (~1-2h: kconfig regen + image bump + a vi e2e case).
 - Node-side stdout truncation items in `CONFORMANCE-REMAINING.md`.
+- AF_INET / fetch()-HTTP are future Phase 4 items (need a relay design);
+  socket v1 non-goals listed in KERNEL.md "AF_UNIX sockets".
 
 ## Conventions to keep (bite-sized reminders)
 
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log per
   landing (`logs/YYYY-MM-DD/<topic>.md`), README next-up current.
 - Conformance bugs: **failing test first, commit, then fix**.
-- Seeded OS sources changed? **Bump `os/image.json` `version`** (now v8).
+- Seeded OS sources changed? **Bump `os/image.json` `version`** (v8 now).
 - compiler.js must stay browser-clean (no bare `process.*`).
 - busybox config changes: regenerate `autoconf.h` via kconfig
-  (upstream tree lives at `/tmp/busybox-1.37.0`; rebuild it from
-  `/tmp/busybox.tar.bz2` if the tmpdir got cleaned), re-apply the two
-  `WASM PORT` hand-patches (exec path, NOMMU). `LONG_OPTS=y` is
-  load-bearing.
+  (upstream tree at `/tmp/busybox-1.37.0`; rebuild from
+  `/tmp/busybox.tar.bz2` if tmp got cleaned), re-apply the two
+  `WASM PORT` hand-patches. `LONG_OPTS=y` is load-bearing.
 - Don't re-litigate: posix_spawn-not-fork, hush-not-ash, kernel-owned
-  fds, multicall-not-per-applet, builtin-in-pipe re-execs `/bin/sh`.
+  fds, multicall-not-per-applet, connect-never-blocks (v1 socket
+  semantics, KERNEL.md).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0007 compositor design, 0008 networking, a lingering item, or
-something else."
+to tackle: 0007 compositor design, a lingering item, or something else."
