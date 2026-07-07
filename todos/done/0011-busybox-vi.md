@@ -2,7 +2,12 @@
 
 - **Status**: done (2026-07-07 — /bin/vi in the coreutils multicall (28 applets);
   libc grew sigsetjmp/siglongjmp; vi e2e test drives real edit sessions
-  through the kernel tty. Dev log: `logs/2026-07-07/busybox-vi.md`)
+  through the kernel tty, plus a browser-half section in os-boots.mjs
+  (real Chromium + xterm). Follow-up find: vi was the FIRST program to ask
+  the brokered fs for TIOCGWINSZ, exposing a wrong-field guard that left
+  every OS process at 80×24 — fixed test-first in test_fs_e2e.js. Dev
+  logs: `logs/2026-07-07/busybox-vi.md`,
+  `logs/2026-07-07/brokered-winsize.md`)
 - **Depends**: 0010 (coreutils multicall — vi joins that binary), 0002/0003
   (tty raw mode, SIGWINCH, job control)
 - **Design**: `vendor/busybox/README.md` (port conventions);

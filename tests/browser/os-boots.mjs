@@ -6,7 +6,9 @@
 // host.js/kernel.js/compiler.js exactly as a developer's `node serve.js .`
 // session would. Asserts: boot reaches the shell over a fresh OPFS image,
 // `ls /` lists the seeded tree, `cc hello.c && ./a.out` compiles and runs
-// in-OS, and a reload REUSES the persisted image (a.out survives).
+// in-OS, vi edits a file through the xterm keyboard path (todos/0011 —
+// deep edit scenarios live in tests/kernel/test_vi_e2e.js), and a reload
+// REUSES the persisted image (a.out survives).
 //
 // Usage: node os-boots.mjs
 import { chromium } from 'playwright';

@@ -283,7 +283,8 @@ The repo's north star ([todos/OS.md](todos/OS.md)) is a wasm-native, almost-POSI
 
 ```bash
 node serve.js .            # then open http://localhost:8080/os/os.html
-# → a real shell (busybox hush) over a persistent filesystem (BlockFS on
+# → a real shell (busybox hush) + userland (28 busybox applets: ls, grep,
+#   sed, … and vi as /bin/vi) over a persistent filesystem (BlockFS on
 #   OPFS): pipelines, $( ), redirections, here-docs, job control — and
 #   `cc hello.c && ./a.out` compiles and runs IN the OS.
 

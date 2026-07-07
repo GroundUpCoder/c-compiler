@@ -115,6 +115,22 @@ From 0010 (coreutils):
 - **os/os-common.js**: `buildProject` learned bin.json `deps` (matching
   the compiler CLI), and image manifests learned `link` entries.
 
+From 0011 (vi — dev logs `logs/2026-07-07/busybox-vi.md`,
+`logs/2026-07-07/brokered-winsize.md`):
+
+- **libc**: `sigjmp_buf`/`sigsetjmp`/`siglongjmp` added to `setjmp.h` — as
+  macros over setjmp/longjmp (semantically correct here: signals are
+  cooperative, there is no blocked-signal mask to save; macros so the
+  compiler's setjmp lowering sees the plain `setjmp` call).
+- **host.js**: `__ioctl_tiocgwinsz` guarded the winsize read on
+  `_stdinSab`, which brokered-mode RemoteFS deliberately never sets (stdin
+  is FS_READ RPCs; only `_stdinCtrl` — the tty SAB winsize words — is
+  wired), so EVERY brokered process saw 80×24 forever; vi was the first
+  program to ask. Same first-user-of-a-path class as 0010's FS_READLINK.
+- **coreutils link**: vi pulls `read_key.c`/`safe_poll.c` (already
+  vendored for hush) plus newly-vendored `read_printf.c`
+  (`xmalloc_open_read_close`) into `coreutils.json`.
+
 ## Known limitations
 
 - Bare `$(trap)` (the POSIX save-traps idiom) doesn't report parent traps:
