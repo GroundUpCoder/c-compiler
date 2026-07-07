@@ -1862,7 +1862,11 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       return 'title';
     }
     if (inClient) {
-      if (kind === 'down') this.wmFocus(s.sid);
+      // Click-to-focus — except borderless (taskbar-class) surfaces, which
+      // receive the click but never steal focus: a taskbar click must see
+      // the focus state it's acting ON (minimize-toggle), and Win95 agrees.
+      // A borderless surface gets focus only via the WM protocol.
+      if (kind === 'down' && !s.borderless) this.wmFocus(s.sid);
       var lx = x - s.x, ly = y - s.y;
       if (kind === 'move') {
         this._wmEventTo(s.sid, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);

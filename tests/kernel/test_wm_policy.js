@@ -283,6 +283,14 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   // No title-bar band: a click just above it falls through to the desktop.
   check('borderless has no chrome band', kernel.wmPointer('down', 320, 450, {}) === 'desktop');
   kernel.wmPointer('up', 320, 450, {});
+  // Clicks land in the borderless client but never steal focus (the taskbar
+  // must see the focus state it acts on — the browser-test minimize toggle).
+  const focusBefore = kernel.wmScene().focusSid;
+  check('borderless click routes without stealing focus',
+    kernel.wmPointer('down', 320, 460, {}) === 'client' &&
+    kernel.wmScene().focusSid === focusBefore);
+  kernel.wmPointer('up', 320, 460, {});
+  drainRing(ring1);      // the taskbar shares the app's ring in this test
   present(fbT, [10, 20, 30, 255]);
   const scr1 = kernel.wmScreenshotScreen();
   check('composite: borderless pixels, no chrome above',

@@ -1,9 +1,12 @@
-// WM browser acceptance (todos/WM.md): boot the reference OS page in headless
-// Chromium, launch the seeded /bin/winbox from the shell, and drive its
-// WINDOW through the real UI-bridge path — canvas mouse/keyboard -> kernel
-// hit-test/rings -> SDL app — asserting composited pixels on the desktop
-// canvas at every step (window fill, kernel chrome, click paint, key toggle,
-// title-bar drag, close box).
+// WM browser acceptance (todos/WM.md + todos/0014): boot the reference OS
+// page in headless Chromium, launch the seeded /bin/winbox from the shell,
+// and drive its WINDOW through the real UI-bridge path — canvas mouse/
+// keyboard -> kernel hit-test/rings -> SDL app — asserting composited
+// pixels on the desktop canvas at every step (window fill, kernel chrome,
+// click paint, key toggle, title-bar drag, close box). With 0014 the
+// autostarted /bin/wm is part of the scene: the borderless taskbar strip,
+// WM (not kernel) placement, taskbar-button minimize/restore, and wmctl
+// from the shell.
 //
 // Usage: node os-wm.mjs
 import { chromium } from 'playwright';
@@ -56,17 +59,28 @@ try {
   };
 
   const TEAL = [0, 128, 128], ORANGE = [255, 140, 0], GREEN = [0, 200, 80],
-        NAVY = [0, 0, 128], WHITE = [255, 255, 255], BLACK = [0, 0, 0];
+        NAVY = [0, 0, 128], WHITE = [255, 255, 255], BLACK = [0, 0, 0],
+        FACE = [192, 192, 192], FACE_DOWN = [222, 222, 222];
 
-  check('desktop teal before any window', near(await sample(780, 480), TEAL), await sample(780, 480));
+  check('desktop teal before any window', near(await sample(780, 440), TEAL), await sample(780, 440));
+
+  // 0014: the autostarted /bin/wm parks its borderless taskbar at the
+  // bottom edge (screen 800x500 -> strip y in [472, 500)).
+  const BARY = 486;                              // mid-strip sample row
+  await waitPixel(400, BARY, FACE, 60000);
+  check('taskbar strip composited (wm autostart)', true);
+  check('taskbar is borderless (no chrome band above it)',
+    near(await sample(400, 468), TEAL), await sample(400, 468));
 
   // Launch the seeded windowed app from the shell (real tty path).
   await page.keyboard.type('winbox &\r');
 
-  // First window cascades to client (8,32), 240x160 (kernel placement).
-  const WX = 8, WY = 32, WW = 240, WH = 160;
+  // The WM (not the kernel cascade) places the first window at (12,36).
+  const WX = 12, WY = 36, WW = 240, WH = 160;
   await waitPixel(WX + 120, WY + 80, ORANGE, 60000);
   check('winbox window composited (orange fill)', true);
+  await waitPixel(WX - 3, WY - 3, TEAL);         // left of the settled window
+  check('WM placement settled (kernel cascade spot vacated)', true);
   check('white app border', near(await sample(WX + 2, WY + 2), WHITE), await sample(WX + 2, WY + 2));
   // Sample chrome AWAY from the title text and the close-box 'x' glyph.
   check('focused title bar navy', near(await sample(WX + 150, WY - 12), NAVY), await sample(WX + 150, WY - 12));
@@ -74,13 +88,26 @@ try {
   // top-right corner, clear of the black 'x' glyph.
   check('close box present', near(await sample(WX + WW - 6, WY - 18), [192, 192, 192]), await sample(WX + WW - 6, WY - 18));
 
-  // Click inside the client: kernel hit test -> ring -> SDL -> black paint
-  // at the LOCAL point.
   const rect = await page.evaluate(() => {
     const r = document.getElementById('screen').getBoundingClientRect();
     return { x: r.x, y: r.y };
   });
   const clickAt = (sx, sy) => page.mouse.click(rect.x + sx, rect.y + sy);
+
+  // 0014: winbox has a taskbar button (button 0, sunken while focused);
+  // clicking it minimizes, clicking again restores — the wm's policy loop
+  // driven through its OWN surface's input ring.
+  await waitPixel(50, BARY, FACE_DOWN);
+  check('taskbar button sunken while winbox focused', true);
+  await clickAt(50, BARY);                       // minimize
+  await waitPixel(WX + 120, WY + 80, TEAL);
+  check('taskbar click minimized winbox (window off screen)', true);
+  await clickAt(50, BARY);                       // restore
+  await waitPixel(WX + 120, WY + 80, ORANGE);
+  check('taskbar click restored winbox', true);
+
+  // Click inside the client: kernel hit test -> ring -> SDL -> black paint
+  // at the LOCAL point.
   await clickAt(WX + 60, WY + 60);
   await waitPixel(WX + 60, WY + 60, BLACK);
   check('client click painted at local coords', true);
@@ -105,12 +132,21 @@ try {
   await waitPixel(NX + 120, NY + 80, TEAL);
   check('close box quit the app; desktop restored', true);
 
+  // ... and its taskbar button is gone (EV_DESTROYED -> wm model -> redraw).
+  await waitPixel(50, BARY, FACE);
+  check('taskbar button removed after close', true);
+
   // The shell survives its windowed child (background job reaped). Click the
   // terminal first — the desktop canvas took keyboard focus during the test.
   await page.click('#terminal');
   await page.keyboard.type('echo WM-SHELL-OK\r');
   await page.waitForFunction(() => window.__osOut.includes('WM-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after windowed app exits', true);
+
+  // 0014: wmctl from the shell, in the browser — one op set, everywhere.
+  await page.keyboard.type('wmctl list\r');
+  await page.waitForFunction(() => window.__osOut.includes('taskbar'), { timeout: 20000, polling: 200 });
+  check('wmctl list from the in-browser shell sees the taskbar', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   failures++;

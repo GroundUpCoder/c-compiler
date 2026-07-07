@@ -1,10 +1,17 @@
 # 0014 — /bin/wm policy client + wmctl
 
-- **Status**: queued
+- **Status**: done (2026-07-07; dev log `logs/2026-07-07/wm-policy-client.md`)
 - **Depends**: 0013 (WM v1 — kernel surfaces, compositor, default policy)
 - **Design**: `todos/WM.md` ("The WM client", "Agent control channel";
   protocol carrier decision: AF_UNIX socket to a kernel-owned endpoint —
   dogfoods todos/0008)
+
+All acceptance criteria met — see WM.md "Implementation status — the WM
+client" and KERNEL.md "Kernel-owned endpoints". Notable deltas from the
+plan below: wmctl rides the SAME socket protocol instead of new RPC
+opcodes (one op set, zero new opcodes), and borderless surfaces
+deliberately don't take kernel click-to-focus (the taskbar minimize
+toggle needs the focus state it acts on).
 
 ## Goal
 

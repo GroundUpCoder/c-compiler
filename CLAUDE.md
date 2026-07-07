@@ -101,7 +101,12 @@ read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness). Job
 control is cooperative like signals: STOP sets KP_FLAGS bit0 and the
 process parks at its next safe point (RPC entry or sigpoll), SIGCONT
 clears it; waitpid takes WUNTRACED/WCONTINUED; background brokered tty
-readers get SIGTTIN (EIO if ignored/blocked). Tests:
+readers get SIGTTIN (EIO if ignored/blocked). The kernel can be a native
+AF_UNIX peer (`sockServe`) — first user is the WM protocol server on
+/run/wm.sock (framed spec in the WMP block, MUST MATCH os/wm_proto.h),
+serving /bin/wm (policy: placement, taskbar, minimize) and /bin/wmctl;
+`Kernel.service()` spawns parentless auto-reaped service processes (the
+wm autostart). Tests:
 `node tests/kernel/run.js` — `test_kernel.js`/`test_tty.js`/`test_pipes.js`
 drive the real SAB protocol against fake workers (deterministic, no
 threads); the `*_e2e.js` files compile real C and run it in
@@ -121,11 +126,13 @@ same kernel/manifest under Node with the tty on stdio
 driver in `os-common.js` (no build step); bump `image.json`'s `version`
 after editing seeded sources (`protoshell.c`, `cc.c`) or existing images
 won't re-seed. pid 1 is busybox hush (`/bin/sh`, built at seed time from
-`vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`. The tty's
-`interactiveOut` opt makes fd 1/2 tty-kind (isatty true → hush goes
-interactive); piped runs stay byte-clean. Tests:
-`tests/kernel/test_os_boot.js` (headless, in the kernel suite);
-`tests/browser/os-boots.mjs` (real Chromium, manual).
+`vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`; `/bin/wm`
+autostarts as a kernel service (killing it falls back to kernel-chrome;
+`wm &` respawns). The tty's `interactiveOut` opt makes fd 1/2 tty-kind
+(isatty true → hush goes interactive); piped runs stay byte-clean. Tests:
+`tests/kernel/test_os_boot.js` + `test_wm_service_e2e.js` (headless, in
+the kernel suite); `tests/browser/os-boots.mjs` + `os-wm.mjs` (real
+Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

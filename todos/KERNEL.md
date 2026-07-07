@@ -370,6 +370,24 @@ O_NONBLOCK socket I/O, MSG_PEEK, blocking-until-accept connect. AF_INET is
 a separate future item (needs a WebSocket/WebTransport relay — OS.md
 Phase 4).
 
+### Kernel-owned endpoints (todos/0014)
+
+`sockServe(path, onConnect)` makes the KERNEL a native socket peer: it
+plants the S_IFSOCK node and registers the path; a process `connect()`
+rendezvouses there ahead of `_sockBinds` and yields a kernel-side `peer`
+object instead of queueing on a listener. Same crossed pipe-pair as any
+connection — the client blocks/selects/EOFs through unchanged machinery —
+but the kernel never parks: arriving bytes fire `peer.onData` via a
+`drain` hook in `_pipeNotify`, peer-gone fires `peer.onClose` once, and
+`peer.send()` ignores the direction cap (trusted system peers; megabyte
+replies buffer whole, the client reads in chunks). First user: the WM
+protocol server on `/run/wm.sock` (framed spec: the `WMP` block in
+kernel.js; MUST MATCH `os/wm_proto.h` + `tests/kernel/test_wm_policy.js`).
+
+`Kernel.service(spec)` spawns kernel-owned service processes (the /bin/wm
+autostart): parentless (ppid 0), own session, auto-reaped on exit —
+`_exitProcess` reaps ppid-0 zombies since no one will ever wait on them.
+
 ## Exit and teardown — an ordered handshake
 
 `CONFORMANCE-REMAINING.md` already records the symptom class: stdout
@@ -407,7 +425,7 @@ only alongside other format work. Future mitigation, when wanted: orphan
 list + boot-time sweep. Recorded here so nobody "fixes" it casually with a
 broker round-trip per open().
 
-## WM extension (designed: `todos/WM.md`, 2026-07-07)
+## WM extension (designed: `todos/WM.md`, 2026-07-07; WM client landed, todos/0014)
 
 Per `todos/OS.md` Phase 3, the compositor rides this same control plane:
 `0x1xxx` opcodes for SURFACE_CREATE / SURFACE_PRESENT / input routing, with
@@ -418,7 +436,9 @@ kernel-worker compositing, WM-as-client over AF_UNIX) lives in
 foreground pgroup : tty routing — and the kernel already owns both sides of
 it. Nothing in v1 needed rework for this; that's why the opcode space, the
 per-process page, and the doorbell are designed process-generic rather than
-terminal-specific.
+terminal-specific. With 0014, WM POLICY moved out to `/bin/wm` over the
+kernel-owned `/run/wm.sock` endpoint (see "Kernel-owned endpoints" above);
+`/bin/wmctl` is just another protocol client — no new opcodes were needed.
 
 ## The fd/data-plane amendment (2026-07-06, todos/0009)
 

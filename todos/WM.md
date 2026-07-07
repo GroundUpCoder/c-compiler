@@ -314,9 +314,42 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - **One window per process in the browser gpu flavor** (one OffscreenCanvas
   — same as the standalone runtime); the shm flavor supports many.
 - **Audio in OS processes stays null** (the mixer open-question below).
-- **wmctl / in-OS agent RPCs not yet exposed** — the op set exists as
-  kernel JS methods; wrapping them as RPCs + a wmctl binary lands with
-  /bin/wm (todos/0014).
+
+## Implementation status — the WM client (landed 2026-07-07, todos/0014)
+
+Policy is out of the kernel. What shipped (suites: `test_wm_policy.js`
+scripted-client, `test_wm_service_e2e.js` real binaries over os/boot.js,
+browser `os-wm.mjs`):
+
+- **Kernel-owned AF_UNIX endpoints** (`sockServe` — KERNEL.md "Kernel-owned
+  endpoints") and the framed WM protocol server on **/run/wm.sock** (spec:
+  kernel.js `WMP` block, MUST MATCH `os/wm_proto.h`). Events out
+  (CREATED/DESTROYED/TITLE/FOCUS/MOVED/MINIMIZED + subscribe snapshot),
+  commands in (MOVE/FOCUS/MINIMIZE/RESTORE/RESTACK/CLOSE_REQ/LIST/
+  INJECT_KEY/INJECT_POINTER/SHOT/SHOT_SCREEN).
+- **Carrier decision**: `wmctl` is just another socket client — the agent
+  op set gained its second exposure with ZERO new opcodes ("one op set,
+  defined once, exposed twice" held literally).
+- **/bin/wm** (os/wm.c, seeded): subscribes, places windows (cascade clear
+  of the taskbar strip), draws the taskbar as a **borderless** SDL shm
+  surface (SDL_WINDOW_BORDERLESS → surface flags bit0: no kernel chrome,
+  and no click-to-focus steal — a taskbar click must see the focus state
+  it acts on). Button click focuses/restores; the active window's button
+  minimizes (the Win95 toggle). Autostarted at boot via `Kernel.service()`
+  (parentless, auto-reaped, non-fatal if missing).
+- **/bin/wmctl** (os/wmctl.c, seeded): list/focus/min/restore/close/raise/
+  lower/move/key/click/shot (PPM out) — xdotool-as-a-syscall from hush.
+- **Crashed-WM story verified**: kill /bin/wm → its surfaces are reclaimed,
+  kernel-chrome fallback keeps the system driveable (the endpoint is the
+  KERNEL's, so wmctl keeps working), and `wm &` respawns it — the snapshot
+  re-places the scene (deliberate: a WM restart tidies the desktop).
+- New surface state: `minimized` (+ EV_MINIMIZED both ways) and
+  `borderless`. Minimizing the focused window falls focus to the top
+  non-minimized surface; focus/restore un-minimizes.
+
+Still kernel-side at v2: title-bar DRAG and the close box (kernel chrome) —
+moving those to the WM needs frame surfaces or a pointer-grab protocol;
+placement/stacking/minimize policy is already the WM's.
 
 ## Spike appendix — VERDICTS (run 2026-07-07, todos/0012;
 ## harnesses: `tests/browser/wm-spikes.mjs` + `tests/spikes/s3_dawn.mjs`)
