@@ -24,7 +24,10 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0007` window manager / compositor — design doc first
+1. `0012` WM platform spikes (S1–S5) — verify the assumptions `WM.md`
+   leans on (bitmap-handoff GPU-backedness, worker rAF, Dawn under Node,
+   two-hop canvas transfer, input-ring storms) before implementation
+   units land
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
@@ -43,7 +46,9 @@ test, passed; `0010` busybox coreutils — 27 applets as one multicall
 through the kernel tty (`logs/2026-07-07/busybox-vi.md`);
 `0008` AF_UNIX sockets — the 0x05xx control plane over the pipe machinery,
 S_IFSOCK rendezvous in BlockFS, `<sys/socket.h>` in the libc
-(`logs/2026-07-07/af-unix-sockets.md`).
+(`logs/2026-07-07/af-unix-sockets.md`);
+`0007` WM/compositor design — landed as `todos/WM.md`
+(`logs/2026-07-07/wm-design.md`).
 **OS.md Phase 1 is complete.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
@@ -63,6 +68,10 @@ don't duplicate them. Current map:
   sockets, settled-decisions table. All phases implemented
   (0001/0002/0003/0009/0008 in done/); the 0x1xxx WM opcode space is the
   reserved remainder.
+- `WM.md` — **the compositor/WM design** (0007, 2026-07-07): backend ×
+  transport axes, per-process WebGPU devices, kernel-worker compositing,
+  surface protocol, WM-as-client over AF_UNIX, agent control channel,
+  headless tiers, spike appendix (→ 0012), implementation plan.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
 - `SDL3.md`, `SDL3-MIGRATION.md`, `WEBGPU.md` — runtime API surface plans.
 - `DOM.md` — C-to-DOM bytecode + diffing renderer idea.

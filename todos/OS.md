@@ -119,7 +119,7 @@ pgid atomically at spawn).
 | Coreutils | **Done** (todos/done/0010, +0011): 28 busybox applets (ls cat cp mv rm mkdir grep sed sort vi … kill) as ONE multicall `/bin/coreutils` + `/bin` symlinks — hand-rolled dispatch, not appletlib (`vendor/busybox/coreutils.json`, `port/multicall_main.c`). |
 | Threads | **Deferred indefinitely** (todos/0006, 2026-07-07): processes are the parallelism unit. `_Atomic` is not accepted (`__STDC_NO_ATOMICS__` stays defined — fail loud, no shim); `pthread.h` absent; `threads.h` a one-line stub. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
-| Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
+| Window manager | **Designed, not built** (todos/0007 → `todos/WM.md`, 2026-07-07): surface protocol, kernel-worker compositing, WM-as-client, agent channel. Implementation starts with the spike pack (todos/0012). |
 | Networking | **AF_UNIX done** (todos/done/0008): socket/bind/listen/accept/connect/send/recv/socketpair/shutdown between processes, S_IFSOCK rendezvous nodes in BlockFS, poll/select integration — IPC for the WM protocol is unlocked. AF_INET (WebSocket/WebTransport relay) still absent. |
 | Editor | **busybox vi is `/bin/vi`** (todos/done/0011) — full-screen editing in the terminal, e2e-tested through the kernel tty. CodeMirror stays vendored but unwired (a GUI editor is compositor-era work). |
 
@@ -234,9 +234,11 @@ eventuality.
 
 ### Phase 3 — Compositor, window manager, GUI apps
 
-Design doc needed before code (future `todos/WM.md`). Sketch of the likely
-shape — Wayland-flavored, not X11-flavored, because our spawn model already
-matches it:
+**Designed (2026-07-07, todos/0007): `todos/WM.md`** — Wayland-flavored as
+sketched below, with the axes made explicit (rendering backend × present
+transport, per-process WebGPU devices, kernel-worker compositing, headless
+tiers). Implementation queued from WM.md's plan (spikes first, todos/0012).
+The original sketch, kept for context:
 
 - **Compositor in the host**: each GUI process renders into an offscreen
   surface (shared-memory framebuffer or WebGPU texture); the host composites
@@ -280,11 +282,15 @@ matches it:
   dependency) while hush's vfork+re-exec-self machinery mapped onto
   `__spawn` with three patched call sites and a journaling shim
   (`vendor/busybox/README.md` has the full patch table).
-- **Surface transport for the compositor**: shared-memory framebuffer
-  (simple, works today, CPU blit) vs WebGPU texture sharing (fast, but
-  cross-worker GPU resource sharing is awkward). Probably shm first.
-- **Who owns the xterm tty** once there's a WM — terminal emulator as a
-  wasm GUI app rendering its own text, or keep xterm.js as a privileged
-  built-in surface? (Keeping xterm.js is pragmatic; a wasm terminal is purer.)
+- ~~Surface transport for the compositor~~ DECIDED (0007, `todos/WM.md`):
+  transport is a per-surface property invisible to apps — GPU-side bitmap
+  handoff in the browser (the dma-buf analog), SAB framebuffer for
+  headless/CPU-present, per-window DOM canvas reserved as the zero-copy
+  escape hatch. Apps render with their own real per-worker WebGPU device;
+  no GPU virtualization.
+- ~~Who owns the xterm tty~~ DECIDED for v1 (0007, `todos/WM.md`):
+  xterm.js stays as a privileged DOM-kind surface positioned by the
+  kernel's scene list; a wasm terminal app (SDL + pty + freetype) is the
+  recorded v2.
 - **msvc extensions**: which ones are actually worth it (`__declspec`?
   `#pragma pack` already?) — driven by ports, not speculation.

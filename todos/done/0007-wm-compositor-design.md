@@ -1,10 +1,11 @@
 # 0007 — window manager / compositor: design doc
 
-- **Status**: queued
+- **Status**: DONE 2026-07-07 — the design doc landed as `todos/WM.md`
+  (dev log: `logs/2026-07-07/wm-design.md`); implementation spikes queued
+  as `todos/0012`.
 - **Depends**: 0004 (a booting OS page to design against)
-- **Design**: to be written (future todos/WM.md); groundwork in
-  `todos/OS.md` (Phase 3) and `todos/KERNEL.md` (WM extension, 0x1xxx
-  opcodes reserved)
+- **Design**: `todos/WM.md`; groundwork in `todos/OS.md` (Phase 3) and
+  `todos/KERNEL.md` (WM extension, 0x1xxx opcodes reserved)
 
 ## Goal
 

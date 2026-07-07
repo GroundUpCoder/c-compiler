@@ -405,15 +405,17 @@ only alongside other format work. Future mitigation, when wanted: orphan
 list + boot-time sweep. Recorded here so nobody "fixes" it casually with a
 broker round-trip per open().
 
-## WM extension (reserved, not designed here)
+## WM extension (designed: `todos/WM.md`, 2026-07-07)
 
 Per `todos/OS.md` Phase 3, the compositor rides this same control plane:
 `0x1xxx` opcodes for SURFACE_CREATE / SURFACE_PRESENT / input routing, with
-surface pixel transport on per-surface SABs (rings pattern again). The
-analogy is direct — focused surface : input routing :: foreground pgroup :
-tty routing — and the kernel already owns both sides of it. Nothing in v1
-should need rework for this; that's why the opcode space, the per-process
-page, and the doorbell are designed process-generic rather than
+surface pixel transport on per-surface SABs (rings pattern again) or
+GPU-side bitmap handoff — the full design (backend × transport axes,
+kernel-worker compositing, WM-as-client over AF_UNIX) lives in
+`todos/WM.md`. The analogy is direct — focused surface : input routing ::
+foreground pgroup : tty routing — and the kernel already owns both sides of
+it. Nothing in v1 needed rework for this; that's why the opcode space, the
+per-process page, and the doorbell are designed process-generic rather than
 terminal-specific.
 
 ## The fd/data-plane amendment (2026-07-06, todos/0009)
