@@ -189,6 +189,55 @@ var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
 var WMEV = { QUIT: 0x100, KEYDOWN: 0x300, KEYUP: 0x301, MOUSEMOTION: 0x400,
              MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402, MOUSEWHEEL: 0x403 };
 
+/* ============================================================
+ * The WM protocol (todos/0014) — the kernel-owned AF_UNIX endpoint at
+ * /run/wm.sock. ONE op set exposed twice (WM.md "Agent control channel"):
+ * the kernel-JS wm* methods serve the outside (tests, Node agents); this
+ * framed protocol serves the inside (/bin/wm policy client, /bin/wmctl).
+ *
+ * Framing (everything little-endian): u32 len (bytes that follow, i.e.
+ * 4 + payload) | u32 type | payload. All payload fields are i32 unless
+ * noted. Types >= 0x80 are events (subscriber-only); replies to commands
+ * arrive strictly in request order on the same connection, so a client
+ * that subscribes just skips event frames while awaiting a reply.
+ *
+ * Window record (fixed 72 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
+ * flags (bit0 focused, bit1 minimized, bit2 borderless), frameSeq,
+ * reserved, then 32 bytes NUL-padded UTF-8 title.
+ *
+ * Commands -> replies:
+ *   SUBSCRIBE {}                 -> R_OK, then EV_CREATED per surface
+ *                                   (z-order) + EV_FOCUS (the snapshot)
+ *   LIST {}                      -> R_LIST { count, count * record }
+ *   MOVE { sid, x, y }           -> R_OK | R_ERR
+ *   FOCUS { sid }                -> R_OK | R_ERR   (restores if minimized)
+ *   MINIMIZE / RESTORE { sid }   -> R_OK | R_ERR
+ *   RESTACK { sid, place }       -> R_OK | R_ERR   (place: 0 raise, 1 lower)
+ *   CLOSE_REQ { sid }            -> R_OK | R_ERR   (SDL_EVENT_QUIT to owner)
+ *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
+ *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
+ *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
+ *     (xf32/yf32 = wheelX/wheelY, a=direction); sid 0 = focused window
+ *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
+ * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
+ * Events: EV_CREATED record | EV_DESTROYED { sid } | EV_TITLE { sid,
+ * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y }.
+ *
+ * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
+ * in tests/kernel/test_wm_policy.js. */
+var WMP = {
+  SUBSCRIBE: 0x01, LIST: 0x02,
+  MOVE: 0x10, FOCUS: 0x11, MINIMIZE: 0x12, RESTORE: 0x13, RESTACK: 0x14,
+  CLOSE_REQ: 0x15,
+  INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
+  SHOT: 0x30, SHOT_SCREEN: 0x31,
+  R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
+  EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
+  EV_MOVED: 0x84,
+};
+var WMP_REC_BYTES = 72;
+var WM_SOCK_PATH = '/run/wm.sock';
+
 /* Kernel-drawn chrome, v1 (WM.md "Decorations — staged"): fixed Win95-ish
  * metrics, deterministic — the same numbers drive hit-testing here, the
  * browser compositor's drawing, and the headless screenshot composite.
@@ -404,9 +453,10 @@ KernelClient.prototype.spawnHooks = function () {
     // WM surfaces (todos/WM.md). The process allocates the SABs (the kernel
     // can't hand one to a parked worker) and posts them on the same FIFO
     // channel immediately before the RPC that names them.
-    surfaceCreate: function (w, h, title, fbSab, ringSab) {
+    // flags bit0: borderless (no kernel chrome — taskbar-class surfaces).
+    surfaceCreate: function (w, h, title, fbSab, ringSab, flags) {
       self._post({ type: 'wm-sabs', fb: fbSab, ring: ringSab || null });
-      return self.call(OP.SURFACE_CREATE, { w: w, h: h, title: title || '' });
+      return self.call(OP.SURFACE_CREATE, { w: w, h: h, title: title || '', flags: flags | 0 });
     },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
@@ -713,11 +763,14 @@ function Kernel(opts) {
   this._std = null;          // lazy singleton OFDs for default stdio
   this._ttyWaiters = [];     // pids with a deferred tty FS_READ, FIFO
   this._sockBinds = new Map(); // resolved path -> listener/bound socket ofdId
+  this._kernelSockServers = new Map(); // resolved path -> onConnect(peer, pcb)
+                             // — KERNEL-owned AF_UNIX endpoints (sockServe;
+                             // todos/0014). Checked before _sockBinds.
   // WM surfaces (todos/WM.md). The kernel owns the scene: registry, z-order,
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap, minimized, borderless }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;
@@ -726,6 +779,7 @@ function Kernel(opts) {
                      h: (opts.screen && opts.screen.h) || 768 };
   this._wmVersion = 0;        // bumped on any scene change (create/destroy/
                               // move/focus/title) — compositor idle-skip aid
+  this._wmSubs = new Set();   // WM-protocol connections subscribed to events
 }
 
 Kernel.prototype._makeOfd = function (kind, extra) {
@@ -1445,6 +1499,18 @@ Kernel.prototype._sockRpc = function (pcb, op, req) {
       var cst = cres ? fs.stat(cres) : null;
       if (!cst) { this._respond(pcb, { errno: fs._lastError || 'ENOENT' }); return; }
       if ((cst.mode & 0xF000) !== S_IFSOCK_MODE) { this._respond(pcb, { errno: 'ECONNREFUSED' }); return; }
+      // Kernel-owned endpoints (sockServe, todos/0014) rendezvous first: the
+      // kernel holds the server half of the crossed pair natively — bytes
+      // drain to the handler via the _pipeNotify drain hook, no PCB involved.
+      var ksrv = this._kernelSockServers.get(cres);
+      if (ksrv) {
+        var ka = sockDir(), kb = sockDir();        // ka: client->kernel, kb: kernel->client
+        oc.st = 'conn'; oc.rx = kb; oc.tx = ka;
+        var kpeer = this._kernelPeer(ka, kb);
+        this._respond(pcb, {});
+        try { ksrv(kpeer, pcb); } catch (e) { this._log('sockServe handler: ' + (e && e.message)); kpeer.close(); }
+        return;
+      }
       var lid = this._sockBinds.get(cres);
       var lo = lid === undefined ? null : this._ofds.get(lid);
       if (!lo || lo.st !== 'listening') { this._respond(pcb, { errno: 'ECONNREFUSED' }); return; }
@@ -1513,6 +1579,59 @@ Kernel.prototype._sockRpc = function (pcb, op, req) {
   }
 };
 
+/* ---- kernel-owned AF_UNIX endpoints (todos/0014) ----
+ * The kernel as a native socket peer: sockServe(path, onConnect) plants a
+ * S_IFSOCK inode and registers the path; a process connect() then yields a
+ * `peer` object on the kernel side instead of queueing on a listener.
+ * The connection is the same crossed pipe-shaped pair as any socket, so
+ * the client side blocks/selects/EOFs through the unchanged machinery; the
+ * kernel side never parks — arriving bytes fire peer.onData via the
+ * _pipeNotify drain hook, peer-gone fires peer.onClose once.
+ *
+ * peer.send() ignores the direction's cap: kernel replies (a screenshot is
+ * megabytes) buffer in full and the client reads them out in chunks. The
+ * peer is trusted system software (wm/wmctl) — a reader that never reads
+ * costs kernel memory, not correctness. */
+
+Kernel.prototype.sockServe = function (path, onConnect) {
+  if (!this._brokered) throw new Error('sockServe: needs the kernel-owned fs');
+  var fs = this._fs;
+  // Parent dir + socket node, idempotent across reboots over one image
+  // (the node persists in BlockFS; the registration doesn't).
+  var slash = path.lastIndexOf('/');
+  if (slash > 0) fs.mkdir(path.slice(0, slash), 0o755);      // EEXIST is fine
+  if (fs.mknod(path, S_IFSOCK_MODE | 0o777, 0) !== 0) {
+    if (fs._lastError !== 'EEXIST' ||
+        (fs.unlink(path), fs.mknod(path, S_IFSOCK_MODE | 0o777, 0) !== 0)) {
+      throw new Error('sockServe ' + path + ': ' + fs._lastError);
+    }
+  }
+  var resolved;
+  try { resolved = fs._resolvePath(path); } catch (e) { resolved = path; }
+  this._kernelSockServers.set(resolved || path, onConnect);
+};
+
+Kernel.prototype._kernelPeer = function (recvDir, sendDir) {
+  var self = this;
+  var peer = {
+    onData: null,               // (Uint8Array) — set by the endpoint handler
+    onClose: null,              // () — client hung up (fires once)
+    send: function (bytes) {
+      if (!sendDir.rOpen || !sendDir.wOpen) return false;
+      for (var i = 0; i < bytes.length; i++) sendDir.buf.push(bytes[i]);
+      self._pipeNotify(sendDir);                  // serve the client's park
+      return true;
+    },
+    close: function () {
+      sendDir.wOpen = false; recvDir.rOpen = false;
+      self._pipeNotify(sendDir); self._pipeNotify(recvDir);
+    },
+  };
+  recvDir.drain = function (chunk) { if (peer.onData) peer.onData(chunk); };
+  recvDir.onEof = function () { if (peer.onClose) peer.onClose(); };
+  return peer;
+};
+
 /* Readiness for FS_SELECT: files and non-pipe write interest are always
  * ready; a tty read is ready when cooked bytes or EOF are waiting; a pipe
  * read is ready on data or writer-gone EOF, a pipe write on free space or
@@ -1554,8 +1673,9 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
       var sid = this._nextSid++;
-      // Cascade placement (v1 policy); the client rect is (x,y,w,h) with the
-      // title bar above it, so y starts below the bar.
+      // Cascade placement (kernel default; a connected /bin/wm re-places on
+      // EV_CREATED); the client rect is (x,y,w,h) with the title bar above
+      // it, so y starts below the bar.
       var n = sid - 1;
       var surf = {
         sid: sid, pid: pcb.pid, sab: fb, i32: i32, u8: new Uint8Array(fb),
@@ -1563,6 +1683,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         x: 8 + ((n * 24) % Math.max(64, this._wmScreen.w >> 2)),
         y: WM_TITLE_H + 8 + ((n * 24) % Math.max(64, this._wmScreen.h >> 2)),
         bitmap: null,             // gpu transport: latest ImageBitmap (browser)
+        minimized: false,
+        borderless: !!((req.flags | 0) & 1),   // bit0: no kernel chrome (taskbar-class)
       };
       this._surfaces.set(sid, surf);
       this._zOrder.push(sid);
@@ -1570,6 +1692,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._focusSid = sid;       // new window takes focus (v1 policy)
       this._wmVersion++;
       this._respond(pcb, { sid: sid, x: surf.x, y: surf.y });
+      this._wmEmit(WMP.EV_CREATED, this._wmpRecord(surf));
+      this._wmEmit(WMP.EV_FOCUS, [sid]);
       break;
     }
     case OP.SURFACE_DESTROY: {
@@ -1585,6 +1709,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       st.title = typeof req.title === 'string' ? req.title.slice(0, 128) : '';
       this._wmVersion++;
       this._respond(pcb, {});
+      this._wmEmit(WMP.EV_TITLE, [st.sid], st.title);
       break;
     }
     default: this._respond(pcb, { errno: 'ENOSYS' });
@@ -1602,9 +1727,15 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
   if (this._wmDrag && this._wmDrag.sid === sid) this._wmDrag = null;
   if (this._focusSid === sid) {
-    this._focusSid = this._zOrder.length ? this._zOrder[this._zOrder.length - 1] : 0;
+    this._focusSid = 0;
+    for (var i = this._zOrder.length - 1; i >= 0; i--) {
+      var t = this._surfaces.get(this._zOrder[i]);
+      if (t && !t.minimized) { this._focusSid = t.sid; break; }
+    }
+    this._wmEmit(WMP.EV_FOCUS, [this._focusSid]);
   }
   this._wmVersion++;
+  this._wmEmit(WMP.EV_DESTROYED, [sid]);
 };
 
 /* gpu transport (browser): latest-frame-wins; superseded bitmaps are closed
@@ -1681,15 +1812,20 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       this._wmVersion++;
       return 'drag';
     } else if (kind === 'up') {
+      var dend = this._wmDrag;
       this._wmDrag = null;
+      var dsurf = this._surfaces.get(dend.sid);
+      if (dsurf) this._wmEmit(WMP.EV_MOVED, [dsurf.sid, dsurf.x, dsurf.y]);
       return 'drag-end';
     }
   }
-  // Hit test, topmost first.
+  // Hit test, topmost first. Minimized surfaces aren't on screen;
+  // borderless ones (taskbar-class) have no title-bar band.
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s) continue;
-    var inTitle = x >= s.x && x < s.x + s.w && y >= s.y - WM_TITLE_H && y < s.y;
+    if (!s || s.minimized) continue;
+    var inTitle = !s.borderless &&
+      x >= s.x && x < s.x + s.w && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h;
     if (inTitle) {
       if (kind === 'down') {
@@ -1736,6 +1872,7 @@ Kernel.prototype.wmList = function () {
     if (!s) continue;
     out.push({ sid: s.sid, pid: s.pid, x: s.x, y: s.y, w: s.w, h: s.h,
                title: s.title, z: i, focused: s.sid === this._focusSid,
+               minimized: s.minimized, borderless: s.borderless,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
   return out;
@@ -1744,12 +1881,17 @@ Kernel.prototype.wmList = function () {
 Kernel.prototype.wmFocus = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return false;
+  if (s.minimized) { s.minimized = false; this._wmVersion++; }  // focus restores
   var zi = this._zOrder.indexOf(s.sid);
   if (zi >= 0 && zi !== this._zOrder.length - 1) {
     this._zOrder.splice(zi, 1);
     this._zOrder.push(s.sid);
   }
-  if (this._focusSid !== s.sid) { this._focusSid = s.sid; this._wmVersion++; }
+  if (this._focusSid !== s.sid) {
+    this._focusSid = s.sid;
+    this._wmVersion++;
+    this._wmEmit(WMP.EV_FOCUS, [s.sid]);
+  }
   return true;
 };
 
@@ -1757,6 +1899,40 @@ Kernel.prototype.wmMove = function (sid, x, y) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return false;
   s.x = x | 0; s.y = y | 0;
+  this._wmVersion++;
+  this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
+  return true;
+};
+
+/* Minimize: off screen + out of hit-testing, still listed. Focus falls to
+ * the top non-minimized surface. Restore = wmFocus (which un-minimizes). */
+Kernel.prototype.wmMinimize = function (sid) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return false;
+  if (s.minimized) return true;
+  s.minimized = true;
+  if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
+  if (this._focusSid === s.sid) {
+    this._focusSid = 0;
+    for (var i = this._zOrder.length - 1; i >= 0; i--) {
+      var t = this._surfaces.get(this._zOrder[i]);
+      if (t && !t.minimized) { this._focusSid = t.sid; break; }
+    }
+    this._wmEmit(WMP.EV_FOCUS, [this._focusSid]);
+  }
+  this._wmVersion++;
+  return true;
+};
+
+/* place: 0 = raise to top (without stealing focus), 1 = lower to bottom. */
+Kernel.prototype.wmRestack = function (sid, place) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return false;
+  var zi = this._zOrder.indexOf(s.sid);
+  if (zi < 0) return false;
+  this._zOrder.splice(zi, 1);
+  if ((place | 0) === 1) this._zOrder.unshift(s.sid);
+  else this._zOrder.push(s.sid);
   this._wmVersion++;
   return true;
 };
@@ -1821,12 +1997,14 @@ Kernel.prototype.wmScreenshotScreen = function () {
   fill(0, 0, W, H, WM_COLORS.desktop);
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s) continue;
-    // Chrome: title bar + close box.
-    fill(s.x, s.y - WM_TITLE_H, s.w, WM_TITLE_H,
-      s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
-    fill(s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
-      WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+    if (!s || s.minimized) continue;
+    // Chrome: title bar + close box (borderless surfaces draw bare).
+    if (!s.borderless) {
+      fill(s.x, s.y - WM_TITLE_H, s.w, WM_TITLE_H,
+        s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
+      fill(s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
+        WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+    }
     // Client pixels: front buffer rows, clipped to the screen.
     var front = Atomics.load(s.i32, SH_FLIP) & 1;
     var base = SH_HDR_BYTES + front * s.w * s.h * 4;
@@ -1855,6 +2033,148 @@ Kernel.prototype.wmScene = function () {
     focusSid: this._focusSid,
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); }).filter(Boolean),
   };
+};
+
+/* ---- the WM protocol server (todos/0014; framing spec at WMP above) ----
+ * wmServe() plants the kernel-owned endpoint; /bin/wm subscribes and gets
+ * events + a snapshot, /bin/wmctl connects per-invocation for one command.
+ * Policy stays OUT of the kernel: this server only translates frames onto
+ * the same wm* methods the outside agents call — the kernel-chrome default
+ * policy above keeps working with no WM connected (the crashed-WM
+ * fallback), and the WM is respawnable at any time. */
+
+function wmpTitle32(title) {
+  var out = new Uint8Array(32);
+  var enc = textEncoder.encode(String(title || ''));
+  out.set(enc.subarray(0, Math.min(31, enc.length)));   // always NUL-terminated
+  return out;
+}
+
+Kernel.prototype._wmpFrame = function (type, i32s, tail) {
+  var ilen = (i32s ? i32s.length : 0) * 4;
+  var tlen = tail ? tail.length : 0;
+  var buf = new Uint8Array(8 + ilen + tlen);
+  var dv = new DataView(buf.buffer);
+  dv.setUint32(0, 4 + ilen + tlen, true);
+  dv.setUint32(4, type >>> 0, true);
+  for (var i = 0; i < (i32s ? i32s.length : 0); i++) dv.setInt32(8 + i * 4, i32s[i] | 0, true);
+  if (tail) buf.set(tail, 8 + ilen);
+  return buf;
+};
+
+/* The fixed 72-byte window record (see the WMP block comment). */
+Kernel.prototype._wmpRecord = function (s) {
+  var rec = new Uint8Array(WMP_REC_BYTES);
+  var dv = new DataView(rec.buffer);
+  var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
+              (s.borderless ? 4 : 0);
+  var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
+                this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ), 0];
+  for (var i = 0; i < fields.length; i++) dv.setInt32(i * 4, fields[i] | 0, true);
+  rec.set(wmpTitle32(s.title), 40);
+  return rec;
+};
+
+/* Emit an event to every subscriber. `payload` is either an i32 array or a
+ * raw Uint8Array (a window record); `title` appends a 32-byte title field. */
+Kernel.prototype._wmEmit = function (type, payload, title) {
+  if (!this._wmSubs.size) return;
+  var frame = (payload instanceof Uint8Array)
+    ? this._wmpFrame(type, null, payload)
+    : this._wmpFrame(type, payload, title !== undefined ? wmpTitle32(title) : null);
+  this._wmSubs.forEach(function (conn) { conn.peer.send(frame); });
+};
+
+Kernel.prototype.wmServe = function (path) {
+  var self = this;
+  this.sockServe(path || WM_SOCK_PATH, function (peer) {
+    var conn = { peer: peer, acc: [] };
+    peer.onData = function (chunk) {
+      for (var i = 0; i < chunk.length; i++) conn.acc.push(chunk[i]);
+      for (;;) {
+        if (conn.acc.length < 4) return;
+        var len = (conn.acc[0] | (conn.acc[1] << 8) | (conn.acc[2] << 16) |
+                   (conn.acc[3] << 24)) >>> 0;
+        if (len < 4 || len > (1 << 20)) {       // corrupt stream: hang up
+          self._wmSubs.delete(conn);
+          peer.close();
+          return;
+        }
+        if (conn.acc.length < 4 + len) return;
+        var frame = Uint8Array.from(conn.acc.splice(0, 4 + len));
+        self._wmpDispatch(conn, new DataView(frame.buffer).getUint32(4, true),
+                          new DataView(frame.buffer), len - 4);
+      }
+    };
+    peer.onClose = function () { self._wmSubs.delete(conn); };
+  });
+};
+
+Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
+  var self = this;
+  var g = function (i) { return (i + 1) * 4 <= plen ? dv.getInt32(8 + i * 4, true) : 0; };
+  var gf = function (i) { return (i + 1) * 4 <= plen ? dv.getFloat32(8 + i * 4, true) : 0; };
+  var ok = function (r) {
+    conn.peer.send(r ? self._wmpFrame(WMP.R_OK, []) : self._wmpFrame(WMP.R_ERR, [22]));
+  };
+  switch (type) {
+    case WMP.SUBSCRIBE: {
+      this._wmSubs.add(conn);
+      ok(true);
+      // The snapshot: current scene as EV_CREATED per surface (z-order,
+      // bottom -> top; each record carries geometry/flags) + the focus.
+      for (var i = 0; i < this._zOrder.length; i++) {
+        var s = this._surfaces.get(this._zOrder[i]);
+        if (s) conn.peer.send(this._wmpFrame(WMP.EV_CREATED, null, this._wmpRecord(s)));
+      }
+      conn.peer.send(this._wmpFrame(WMP.EV_FOCUS, [this._focusSid]));
+      break;
+    }
+    case WMP.LIST: {
+      var recs = [];
+      for (var li = 0; li < this._zOrder.length; li++) {
+        var ls = this._surfaces.get(this._zOrder[li]);
+        if (ls) recs.push(this._wmpRecord(ls));
+      }
+      var payload = new Uint8Array(4 + recs.length * WMP_REC_BYTES);
+      new DataView(payload.buffer).setInt32(0, recs.length, true);
+      for (var ri = 0; ri < recs.length; ri++) payload.set(recs[ri], 4 + ri * WMP_REC_BYTES);
+      conn.peer.send(this._wmpFrame(WMP.R_LIST, null, payload));
+      break;
+    }
+    case WMP.MOVE: ok(this.wmMove(g(0), g(1), g(2))); break;
+    case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
+    case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
+    case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores
+    case WMP.RESTACK: ok(this.wmRestack(g(0), g(1))); break;
+    case WMP.CLOSE_REQ:
+      ok(this._wmEventTo(g(0), [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]));
+      break;
+    case WMP.INJECT_KEY:
+      ok(this.wmInjectKey(g(0), g(1) !== 0, g(2), g(3), g(4)));
+      break;
+    case WMP.INJECT_POINTER: {
+      var kind = ['move', 'down', 'up', 'wheel'][g(1)] || '';
+      var opts = kind === 'move' ? { buttons: g(4) }
+        : kind === 'wheel' ? { wheelX: gf(2), wheelY: gf(3), direction: g(4) }
+        : { button: g(4) };
+      ok(this.wmInjectPointer(g(0), kind, gf(2), gf(3), opts));
+      break;
+    }
+    case WMP.SHOT: case WMP.SHOT_SCREEN: {
+      var shot = type === WMP.SHOT ? this.wmScreenshot(g(0)) : this.wmScreenshotScreen();
+      if (!shot) { ok(false); break; }
+      var head = new Uint8Array(12 + shot.rgba.length);
+      var hdv = new DataView(head.buffer);
+      hdv.setInt32(0, type === WMP.SHOT ? g(0) : 0, true);
+      hdv.setInt32(4, shot.w, true);
+      hdv.setInt32(8, shot.h, true);
+      head.set(shot.rgba, 12);
+      conn.peer.send(this._wmpFrame(WMP.R_SHOT, null, head));
+      break;
+    }
+    default: conn.peer.send(this._wmpFrame(WMP.R_ERR, [38]));   // ENOSYS
+  }
 };
 
 Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
@@ -1997,6 +2317,13 @@ Kernel.prototype._pipeNotify = function (pipe) {
   var progress = true;
   while (progress) {
     progress = false;
+    // Kernel-held read end (sockServe): no PCB ever parks a read here — the
+    // arriving bytes drain to the endpoint's handler instead. Draining frees
+    // space, so the writeWaiters pass below still serves a blocked client.
+    if (pipe.drain && pipe.buf.length) {
+      pipe.drain(Uint8Array.from(pipe.buf.splice(0, pipe.buf.length)));
+      progress = true;
+    }
     while (pipe.readWaiters.length) {
       var rpcb = this._procs.get(pipe.readWaiters[0]);
       if (!rpcb || !rpcb.waiter || rpcb.waiter.op !== 'piperead' || rpcb.waiter.pipe !== pipe) {
@@ -2038,6 +2365,11 @@ Kernel.prototype._pipeNotify = function (pipe) {
       this._respond(wpcb, { n: n });
       progress = true;
     }
+  }
+  // Kernel-held read end: surface peer-gone EOF to the handler exactly once.
+  if (pipe.drain && !pipe.wOpen && !pipe._eofSeen) {
+    pipe._eofSeen = true;
+    if (pipe.onEof) pipe.onEof();
   }
   this._recheckSelects();
 };
@@ -2690,6 +3022,8 @@ var KERNEL_EXPORTS = {
   WMEV: WMEV,
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
   WM_COLORS: WM_COLORS,
+  // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
+  WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

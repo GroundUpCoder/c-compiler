@@ -49,6 +49,7 @@ function startCompositor(kernel, canvas) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
+      if (s.minimized) continue;               // off screen, still in the scene
       // Client pixels first, chrome after (they don't overlap; the next
       // window in z covers both — painter's algorithm).
       if (s.bitmap) {
@@ -56,6 +57,7 @@ function startCompositor(kernel, canvas) {
       } else {
         ctx.putImageData(surfaceImage(s), s.x, s.y);
       }
+      if (s.borderless) continue;              // taskbar-class: bare pixels
       ctx.fillStyle = s.sid === scene.focusSid ? COL_FOCUS : COL_BLUR;
       ctx.fillRect(s.x, s.y - K.WM_TITLE_H, s.w, K.WM_TITLE_H);
       ctx.fillStyle = COL_CLOSE;
