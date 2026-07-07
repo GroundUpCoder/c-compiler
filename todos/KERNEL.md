@@ -476,6 +476,13 @@ deterministic. Kernel + `host.js` workers run under `worker_threads` with a
 - TTY: canonical vs raw transitions, erase/kill/EOF editing, echo bytes,
   VINTR→SIGINT to fg pgroup only, SIGTTIN for background readers, tcsetpgrp
   handoff, SIGWINCH.
+- Interactive job control (`test_jobctl_tty_e2e.js`, via boot.js
+  --tty-out + hush): Ctrl-Z→jobs→fg roundtrip where the resumed reader
+  CONSUMES new input, `cat &` SIGTTIN-stop, `kill %1` on a stopped job.
+  Serve-time eligibility in `_ttyNotify` (stopped waiters consume nothing;
+  late-backgrounded waiters get SIGTTIN) exists because this test caught
+  a stopped `cat` stealing the shell's input
+  (`logs/2026-07-07/jobctl-tty-e2e.md`).
 - Pipes: cross-worker blocking read woken by write, EOF on close, EPIPE +
   SIGPIPE, full-pipe writer blocking.
 - Sockets (0008): the same protocol-level suite (`test_sockets.js` — state

@@ -17,6 +17,7 @@ var tests = [
   ['test_sockets.js', []],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
   ['test_sockets_e2e.js', []],  // 0008: real C client/server — accept/connect/send/recv, poll
   ['test_jobctl_e2e.js', []],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
+  ['test_jobctl_tty_e2e.js', []], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
   ['test_os_boot.js', []],      // 0004: headless OS boot — seed, protoshell, cc, persistence
   ['test_vi_e2e.js', []],       // 0011: busybox vi through the real tty — raw mode, edit sessions
 ];

@@ -1442,21 +1442,44 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
 };
 
 /* Cooked tty data / EOF arrived: serve deferred reads FIFO, then re-check
- * deferred selects with tty interest. */
+ * deferred selects with tty interest.
+ *
+ * Serve-time eligibility (job control): a STOPPED process's parked read
+ * stays parked and consumes nothing — otherwise a Ctrl-Z'd `cat` steals
+ * the shell's next typed line (found by test_jobctl_tty_e2e). And a read
+ * whose pgroup lost the tty since it parked (`bg` on a stopped reader)
+ * gets the same SIGTTIN/EIO treatment as the FS_READ dispatch-time check:
+ * the input belongs to the foreground pgroup, not to whoever parked
+ * first. */
 Kernel.prototype._ttyNotify = function (tty) {
-  while (this._ttyWaiters.length) {
-    var pid = this._ttyWaiters[0];
+  var i = 0;
+  while (i < this._ttyWaiters.length) {
+    var pid = this._ttyWaiters[i];
     var pcb = this._procs.get(pid);
-    if (!pcb || !pcb.waiter || pcb.waiter.op !== 'ttyread') { this._ttyWaiters.shift(); continue; }
+    if (!pcb || !pcb.waiter || pcb.waiter.op !== 'ttyread') { this._ttyWaiters.splice(i, 1); continue; }
+    if (pcb.state === STATE_STOPPED) { i++; continue; }  // parked, not a consumer
+    if (tty.fgPgid > 0 && pcb.pgid !== tty.fgPgid) {
+      // Backgrounded since it parked. _cancelWaiter drops it from this
+      // queue, so the loop continues at the same index.
+      this._cancelWaiter(pcb);
+      if (pcb.sigdisp[SIG.TTIN] === DISP_IGN ||
+          (Atomics.load(pcb.i32, KP_SIGBLOCK) & (1 << (SIG.TTIN - 1)))) {
+        this._respond(pcb, { errno: 'EIO' });
+      } else {
+        this._killPgid(pcb.pgid, SIG.TTIN);
+        this._respond(pcb, { errno: 'EINTR' });
+      }
+      continue;
+    }
     if (tty._cooked.length > 0) {
       var count = pcb.waiter.count;
-      this._cancelWaiter(pcb);
+      this._cancelWaiter(pcb);                           // splices index i out
       this._respondRaw(pcb, tty.take(count));
     } else if (tty._eofFlag) {
       this._cancelWaiter(pcb);
       this._respondRaw(pcb, new Uint8Array(0));
     } else {
-      break;                                            // no data yet
+      break;                                             // no data for anyone eligible
     }
   }
   this._recheckSelects();
