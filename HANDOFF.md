@@ -54,6 +54,12 @@ demo animates, wmctl close quits, gameboy lifecycle).
   `maxBuffer` for multi-MB frames).
 - image.json `bin` entries are REPO-relative (like `project`); `c`/`text`
   stay os/-relative.
+- **The gameboy ROMs are gitignored** (copyrighted, local-only — unlike
+  the committed shareware doom1.wad). Their entries are
+  `"optional": true`: a missing asset logs SKIPPED and boot continues
+  (post-landing fix — the first cut 404-bricked boots on other
+  checkouts). Bare `gameboy` boots a built-in test ROM; both acceptance
+  tests adapt to ROM presence.
 
 ## Conventions to keep (bite-sized reminders)
 

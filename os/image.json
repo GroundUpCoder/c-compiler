@@ -45,10 +45,12 @@
       "bin": "vendor/doom/data/doom1.wad"
     },
     "/root/roms/PokemonBlue.gb": {
-      "bin": "vendor/gameboy/roms/PokemonBlue.gb"
+      "bin": "vendor/gameboy/roms/PokemonBlue.gb",
+      "optional": true
     },
     "/root/roms/SuperMarioDeluxe.gbc": {
-      "bin": "vendor/gameboy/roms/SuperMarioDeluxe.gbc"
+      "bin": "vendor/gameboy/roms/SuperMarioDeluxe.gbc",
+      "optional": true
     },
     "/bin/coreutils": {
       "project": "vendor/busybox/coreutils.json"

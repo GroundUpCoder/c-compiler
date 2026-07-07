@@ -214,6 +214,10 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
  *   entry.bin     — REPO-relative binary file; copied verbatim to /path
  *                   (game data: doom1.wad, gameboy ROMs — needs io.readBinary)
+ *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
+ *                   failing the boot: for assets that are deliberately NOT
+ *                   in the repo (the gameboy ROMs are gitignored), so other
+ *                   checkouts still boot — minus that file
  *   entry.project — REPO-relative bin.json path; multi-file build via
  *                   buildProject (needs io.buildProject)
  *   entry.link    — symlink target; /path becomes a symlink to it (the
@@ -257,9 +261,16 @@ function seedImage(kfs, manifest, io) {
         });
       }
       if (entry.bin !== undefined) {
-        return Promise.resolve(io.readBinary(entry.bin)).then(function (bytes) {
+        // Wrap the call itself so a synchronous throw (Node's readFileSync
+        // ENOENT) lands in the same rejection path as an async fetch 404.
+        return Promise.resolve().then(function () {
+          return io.readBinary(entry.bin);
+        }).then(function (bytes) {
           writeFile(kfs, path, bytes, entry.mode);
           log('  ' + path + ' (binary ' + entry.bin + ', ' + bytes.length + ' bytes)');
+        }, function (e) {
+          if (!entry.optional) throw e;
+          log('  ' + path + ' SKIPPED (optional; ' + ((e && e.message) || e) + ')');
         });
       }
       if (entry.project !== undefined) {

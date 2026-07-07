@@ -75,3 +75,21 @@ seed time from their vendor `bin.json`s via the existing `project` path
 
 Queue: quake stays split to `todos/0018` (needs relative-mouse/pointer-lock,
 plus pak0.pak seeding — now trivial via `bin` entries). Next up: 0016.
+
+## Post-landing fix: `optional` bin entries
+
+First landing bricked boots on other checkouts: the gameboy ROMs are
+**gitignored** (`vendor/gameboy/.gitignore` — copyrighted, local-only,
+unlike the committed shareware WAD), so a fresh clone's seed died with
+`PokemonBlue.gb: HTTP 404` and the OS never came up. A missing *game
+asset* must not take down the *boot*.
+
+Fix: `bin` entries take `"optional": true` — a missing asset logs
+`SKIPPED (optional; …)` and seeding continues (sync ENOENT and async
+fetch-404 land in the same rejection path; required entries still fail
+loud, and a failed seed still doesn't stamp `/etc/.image-version`, so the
+next boot retries). Both ROM entries are optional; both acceptance tests
+adapt — without a local ROM they run `gameboy` bare, which boots its
+built-in test ROM (same window, same LCD), and test_os_apps_e2e gains a
+direct seedImage unit check of the skip/fail-loud pair so the graceful
+path is exercised on every checkout, including ones that have the ROMs.

@@ -18,9 +18,15 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
+
+// The ROMs are gitignored (optional image.json entries) — without one
+// locally, gameboy's built-in test ROM keeps the lifecycle test running.
+const HAVE_ROM = fs.existsSync(path.join(ROOT, 'vendor/gameboy/roms/PokemonBlue.gb'));
+const GB_CMD = HAVE_ROM ? 'gameboy /root/roms/PokemonBlue.gb &' : 'gameboy &';
 const PORT = 3194;
 const URL = `http://localhost:${PORT}/os/os.html`;
 
@@ -119,9 +125,11 @@ try {
   // Gameboy with the seeded ROM: first-slot placement (12,36), 480x432
   // client — LCD frames in the visible region, then the same clean close.
   const GB_REGION = [16, 40, 488, 464];
-  await page.keyboard.type('gameboy /root/roms/PokemonBlue.gb &\r');
+  await page.keyboard.type(GB_CMD + '\r');
   const gb = await waitFrame(GB_REGION, s => s.colors >= 2 && s.nonTeal > s.n * 0.9, 60000);
-  check('gameboy composites LCD frames (ROM from /root/roms)', true, { colors: gb.colors });
+  check('gameboy composites LCD frames' +
+    (HAVE_ROM ? ' (ROM from /root/roms)' : ' (built-in test ROM; local ROM absent)'),
+    true, { colors: gb.colors });
   await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")\r');
   await waitFrame(GB_REGION, s => s.nonTeal === 0, 30000);
   check('wmctl close quit gameboy; desktop restored', true);

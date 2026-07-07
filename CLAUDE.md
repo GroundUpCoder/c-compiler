@@ -132,9 +132,11 @@ is busybox hush (`/bin/sh`, built at seed time from
 autostarts as a kernel service (killing it falls back to kernel-chrome;
 `wm &` respawns). Windowed vendor apps are seeded in-OS (todos/0015):
 `/bin/doom` (WAD at `/root/doom1.wad` — doomgeneric searches cwd only,
-hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms`),
-`/bin/snake` (tty game; needs two paced `q`s to quit — its exit-prompt
-read loop spins on EOF). The tty's `interactiveOut` opt makes fd 1/2
+hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms` — the ROM
+files are gitignored, so their entries are `optional`: missing binary
+assets log a skip instead of failing the boot; bare `gameboy` runs a
+built-in test ROM), `/bin/snake` (tty game; needs two paced `q`s to quit
+— its exit-prompt read loop spins on EOF). The tty's `interactiveOut` opt makes fd 1/2
 tty-kind (isatty true → hush goes interactive); piped runs stay
 byte-clean. Tests: `tests/kernel/test_os_boot.js` +
 `test_wm_service_e2e.js` + `test_os_apps_e2e.js` (headless, in the kernel

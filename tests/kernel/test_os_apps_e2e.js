@@ -3,13 +3,14 @@
 // /bin/snake — built from vendor bin.jsons at seed time, game data landed via
 // image.json `bin` entries) run windowed in-OS with zero source changes,
 // driven through os/boot.js. Covers: binary-asset seeding (doom1.wad found in
-// cwd /root by d_iwad.c, a ROM under /root/roms), WM placement + titles for
-// real SDL apps, and `wmctl shot SID` frames that are verifiably real
-// (bit-exact shm client pixels: full window dims, rich color histograms).
-// Snake (tty app, not SDL) gets a paced interactive session: play, quit,
-// shell survives. NOTE snake needs TWO paced 'q's (game over, then the
-// "Press q to exit" prompt) — its final read loop spins on EOF, so the q's
-// must arrive in separate reads.
+// cwd /root by d_iwad.c, a ROM under /root/roms), optional-entry semantics
+// (the gitignored ROMs must not brick boots on other checkouts), WM placement
+// + titles for real SDL apps, and `wmctl shot SID` frames that are verifiably
+// real (bit-exact shm client pixels: full window dims, rich color
+// histograms). Snake (tty app, not SDL) gets a paced interactive session:
+// play, quit, shell survives. NOTE snake needs TWO paced 'q's (game over,
+// then the "Press q to exit" prompt) — its final read loop spins on EOF, so
+// the q's must arrive in separate reads.
 //
 // Run: node tests/kernel/test_os_apps_e2e.js
 'use strict';
@@ -30,83 +31,126 @@ function check(name, cond, extra) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-apps-'));
 const image = path.join(tmp, 'os.img');
 
+// The gameboy ROMs are deliberately NOT in the repo (gitignored) — their
+// image.json entries are `optional`. With the ROM present locally we play
+// Pokémon; without it, gameboy's built-in test ROM (same window, same LCD)
+// keeps the test meaningful on any checkout.
+const HAVE_ROM = fs.existsSync(path.join(ROOT, 'vendor/gameboy/roms/PokemonBlue.gb'));
+const GB_CMD = HAVE_ROM ? 'gameboy /root/roms/PokemonBlue.gb &' : 'gameboy &';
+
+/* ---- optional bin entries: a missing asset skips, a required one fails ----
+ * Direct seedImage unit check (in-memory BlockFS) so the graceful path is
+ * exercised on EVERY checkout, including ones where the ROMs exist. */
+async function testOptionalSeeding() {
+  const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
+  const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const mkfs = () => BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(4 * 1024 * 1024));
+  const io = {
+    readBinary: (p) => {
+      if (p === 'present.bin') return new Uint8Array([1, 2, 3]);
+      throw new Error(p + ': No such file');
+    },
+    log: () => {},
+  };
+  const kfs1 = mkfs();
+  const seeded = await COMMON.seedImage(kfs1, { version: 1, dirs: ['/etc'], files: {
+    '/a': { bin: 'present.bin' },
+    '/b': { bin: 'missing.bin', optional: true },
+    '/c': { bin: 'present.bin' },
+  } }, io).then((s) => s, (e) => e);
+  check('optional missing bin entry: seeding completes', seeded === true,
+    seeded && seeded.message);
+  check('  ...later entries still seeded', kfs1.stat('/c') !== null);
+  check('  ...the missing path is absent, not empty', kfs1.stat('/b') === null);
+
+  const err = await COMMON.seedImage(mkfs(), { version: 1, dirs: ['/etc'], files: {
+    '/b': { bin: 'missing.bin' },
+  } }, io).then(() => null, (e) => e);
+  check('required missing bin entry still fails the boot', err !== null);
+}
+
 /* ---- session A: seed, launch doom + gameboy, list, shot their surfaces ---- */
-const script = [
-  'ls -l /root/doom1.wad',                        // bin entry seeded
-  'doom &',
-  'sleep 5',                                      // wasm instantiation + WAD load
-  'gameboy /root/roms/PokemonBlue.gb &',
-  'sleep 3.5',
-  'echo ==list1',
-  'wmctl list',
-  'DSID=$(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")',
-  'GSID=$(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")',
-  'wmctl shot $DSID /root/doom.ppm && echo shot-doom-ok',
-  'wmctl shot $GSID /root/gb.ppm && echo shot-gb-ok',
-  '',
-].join('\n');
+function sessionApps() {
+  const script = [
+    'ls -l /root/doom1.wad',                        // bin entry seeded
+    'doom &',
+    'sleep 5',                                      // wasm instantiation + WAD load
+    GB_CMD,
+    'sleep 3.5',
+    'echo ==list1',
+    'wmctl list',
+    'DSID=$(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")',
+    'GSID=$(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")',
+    'wmctl shot $DSID /root/doom.ppm && echo shot-doom-ok',
+    'wmctl shot $GSID /root/gb.ppm && echo shot-gb-ok',
+    '',
+  ].join('\n');
 
-const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-  { input: script, encoding: 'utf8', timeout: 300000 });
-if (a.error) throw a.error;
-const out = a.stdout;
-const list1 = (out.split('==list1\n')[1] || '');
-const row = (title) => list1.split('\n').find(l => l.endsWith('\t' + title)) || '';
+  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 300000 });
+  if (a.error) throw a.error;
+  const out = a.stdout;
+  const list1 = (out.split('==list1\n')[1] || '');
+  const row = (title) => list1.split('\n').find(l => l.endsWith('\t' + title)) || '';
 
-check('doom1.wad seeded via the bin entry (4196020 bytes)',
-  out.includes('4196020'), out.split('\n')[0]);
-const doomRow = row('DOOM Shareware');
-check('doom opens a WM-placed window titled "DOOM Shareware"',
-  doomRow !== '', JSON.stringify(list1));
-check('doom window is 1280x800 (640x400 doubled — the app chose, not the WM)',
-  doomRow.includes('1280x800'), doomRow);
-const gbRow = row('Peanut-GB');
-check('gameboy opens a window titled "Peanut-GB" (ROM from /root/roms)',
-  gbRow !== '', JSON.stringify(list1));
-check('gameboy window is 480x432 (160x144 tripled)', gbRow.includes('480x432'), gbRow);
-check('wmctl shot wrote both surface PPMs',
-  out.includes('shot-doom-ok') && out.includes('shot-gb-ok'));
+  check('doom1.wad seeded via the bin entry (4196020 bytes)',
+    out.includes('4196020'), out.split('\n')[0]);
+  const doomRow = row('DOOM Shareware');
+  check('doom opens a WM-placed window titled "DOOM Shareware"',
+    doomRow !== '', JSON.stringify(list1));
+  check('doom window is 1280x800 (640x400 doubled — the app chose, not the WM)',
+    doomRow.includes('1280x800'), doomRow);
+  const gbRow = row('Peanut-GB');
+  check('gameboy opens a window titled "Peanut-GB"' +
+    (HAVE_ROM ? ' (ROM from /root/roms)' : ' (built-in test ROM; local ROM absent)'),
+    gbRow !== '', JSON.stringify(list1));
+  check('gameboy window is 480x432 (160x144 tripled)', gbRow.includes('480x432'), gbRow);
+  check('wmctl shot wrote both surface PPMs',
+    out.includes('shot-doom-ok') && out.includes('shot-gb-ok'));
+}
 
 /* ---- session B: extract the PPMs byte-clean and prove they're real frames ---- */
-const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-  { input: 'cat /root/doom.ppm /root/gb.ppm\n', timeout: 120000,
-    maxBuffer: 32 * 1024 * 1024 });   // two raw PPMs ≈ 5.7MB
-if (b.error) throw b.error;
+function sessionFrames() {
+  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: 'cat /root/doom.ppm /root/gb.ppm\n', timeout: 120000,
+      maxBuffer: 32 * 1024 * 1024 });   // two raw PPMs ≈ 5.7MB
+  if (b.error) throw b.error;
 
-function parsePPM(buf, off) {
-  const head = buf.toString('latin1', off, off + 32);
-  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
-  if (!m) return null;
-  const w = +m[1], h = +m[2], data = off + m[0].length;
-  return { w, h, data, end: data + w * h * 3 };
-}
-function frameStats(buf, ppm) {
-  const colors = new Set();
-  for (let y = 0; y < ppm.h; y += 3) {
-    for (let x = 0; x < ppm.w; x += 3) {
-      const i = ppm.data + (y * ppm.w + x) * 3;
-      colors.add((buf[i] << 16) | (buf[i + 1] << 8) | buf[i + 2]);
-    }
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
   }
-  return colors.size;
-}
+  function frameStats(buf, ppm) {
+    const colors = new Set();
+    for (let y = 0; y < ppm.h; y += 3) {
+      for (let x = 0; x < ppm.w; x += 3) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        colors.add((buf[i] << 16) | (buf[i + 1] << 8) | buf[i + 2]);
+      }
+    }
+    return colors.size;
+  }
 
-const doomPPM = parsePPM(b.stdout, 0);
-check('doom shot parses as P6 at full client size 1280x800',
-  doomPPM !== null && doomPPM.w === 1280 && doomPPM.h === 800,
-  doomPPM && `${doomPPM.w}x${doomPPM.h}`);
-if (doomPPM) {
-  const n = frameStats(b.stdout, doomPPM);
-  check('doom frame is a real render (rich color histogram, not a fill)',
-    n > 50, n + ' distinct colors');
-  const gbPPM = parsePPM(b.stdout, doomPPM.end);
-  check('gameboy shot parses as P6 at full client size 480x432',
-    gbPPM !== null && gbPPM.w === 480 && gbPPM.h === 432,
-    gbPPM && `${gbPPM.w}x${gbPPM.h}`);
-  if (gbPPM) {
-    const gn = frameStats(b.stdout, gbPPM);
-    check('gameboy frame has the LCD palette (>=2 colors, not a fill)',
-      gn >= 2, gn + ' distinct colors');
+  const doomPPM = parsePPM(b.stdout, 0);
+  check('doom shot parses as P6 at full client size 1280x800',
+    doomPPM !== null && doomPPM.w === 1280 && doomPPM.h === 800,
+    doomPPM && `${doomPPM.w}x${doomPPM.h}`);
+  if (doomPPM) {
+    const n = frameStats(b.stdout, doomPPM);
+    check('doom frame is a real render (rich color histogram, not a fill)',
+      n > 50, n + ' distinct colors');
+    const gbPPM = parsePPM(b.stdout, doomPPM.end);
+    check('gameboy shot parses as P6 at full client size 480x432',
+      gbPPM !== null && gbPPM.w === 480 && gbPPM.h === 432,
+      gbPPM && `${gbPPM.w}x${gbPPM.h}`);
+    if (gbPPM) {
+      const gn = frameStats(b.stdout, gbPPM);
+      check('gameboy frame has the LCD palette (>=2 colors, not a fill)',
+        gn >= 2, gn + ' distinct colors');
+    }
   }
 }
 
@@ -135,7 +179,11 @@ function snakeSession() {
   });
 }
 
-snakeSession().then((sout) => {
+(async () => {
+  await testOptionalSeeding();
+  sessionApps();
+  sessionFrames();
+  const sout = await snakeSession();
   check('snake draws its board through the kernel tty', sout.includes('Arrow keys to move'),
     JSON.stringify(sout.slice(0, 200)));
   check('snake reaches GAME OVER on q', sout.includes('GAME OVER'));
@@ -145,4 +193,4 @@ snakeSession().then((sout) => {
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nos apps e2e: ${failures} FAILED` : '\nos apps e2e: PASS');
   process.exit(failures ? 1 : 0);
-});
+})();
