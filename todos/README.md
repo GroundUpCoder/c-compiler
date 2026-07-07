@@ -39,7 +39,9 @@ with a `deferred` status; it is not part of the order of attack.)
 /bin/sh via the vfork-on-__spawn port: pipelines, $( ), redirects,
 here-docs, job control, popen/system — the kernel design's acceptance
 test, passed; `0010` busybox coreutils — 27 applets as one multicall
-/bin/coreutils + /bin symlinks (`logs/2026-07-07/coreutils-multicall.md`).
+/bin/coreutils + /bin symlinks (`logs/2026-07-07/coreutils-multicall.md`);
+`0011` busybox vi — the OS's editor, 28th multicall applet, driven e2e
+through the kernel tty (`logs/2026-07-07/busybox-vi.md`).
 **OS.md Phase 1 is complete.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

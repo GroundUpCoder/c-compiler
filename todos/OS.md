@@ -116,12 +116,12 @@ pgid atomically at spawn).
 | Terminal | Done for Phase 1 — the tty is a kernel object (termios, canonical/raw, echo, Ctrl-C→SIGINT, SIGWINCH); xterm.js is the dumb UI bridge (`os/os.html`). |
 | Reference build | **Boots** (todos/done/0004): `os/os.html` in a tab over OPFS, `os/boot.js` headless on stdio; first boot self-seeds from `os/image.json` (C sources compiled by the kernel's cc driver); `cc hello.c && ./a.out` works in-OS. |
 | Shell | **Done** (todos/done/0005): busybox 1.37.0 hush as `/bin/sh`, ported via the vfork-on-__spawn journaling shim (`vendor/busybox/`). Pipelines, `$( )`, redirects, here-docs, control flow, interactive mode with prompt/line editing, `popen()`/`system()` all live. |
-| Coreutils | **Done** (todos/done/0010): 27 busybox applets (ls cat cp mv rm mkdir grep sed sort … kill) as ONE multicall `/bin/coreutils` + `/bin` symlinks — hand-rolled dispatch, not appletlib (`vendor/busybox/coreutils.json`, `port/multicall_main.c`). |
+| Coreutils | **Done** (todos/done/0010, +0011): 28 busybox applets (ls cat cp mv rm mkdir grep sed sort vi … kill) as ONE multicall `/bin/coreutils` + `/bin` symlinks — hand-rolled dispatch, not appletlib (`vendor/busybox/coreutils.json`, `port/multicall_main.c`). |
 | Threads | **Deferred indefinitely** (todos/0006, 2026-07-07): processes are the parallelism unit. `_Atomic` is not accepted (`__STDC_NO_ATOMICS__` stays defined — fail loud, no shim); `pthread.h` absent; `threads.h` a one-line stub. |
 | Graphics | SDL3 ~90% of the 2D surface on WebGPU; WebGPU bindings core-complete (`todos/SDL3.md`, `todos/WEBGPU.md`). Single fullscreen canvas only. |
 | Window manager | **Does not exist.** No compositor, no multi-surface, no client protocol. |
 | Networking | Stubs only. |
-| Editor | CodeMirror vendored, not wired into the environment. |
+| Editor | **busybox vi is `/bin/vi`** (todos/done/0011) — full-screen editing in the terminal, e2e-tested through the kernel tty. CodeMirror stays vendored but unwired (a GUI editor is compositor-era work). |
 
 ## Reference build: `os/` in this repo
 

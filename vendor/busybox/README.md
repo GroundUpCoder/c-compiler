@@ -5,7 +5,7 @@ Two binaries come out of this vendor tree:
 - **`bin.json`** → `/bin/sh`: hush, the shell (the 0005 port, below).
 - **`coreutils.json`** → `/bin/coreutils`: a **multicall** binary carrying
   cat ls cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
-  basename dirname grep egrep fgrep sed echo printf test `[` kill; the
+  basename dirname grep egrep fgrep sed **vi** echo printf test `[` kill; the
   `/bin` applet names are BlockFS symlinks to it and dispatch is by
   argv[0] (`port/multicall_main.c` — a hand-rolled table, NOT upstream's
   kbuild-generated appletlib, so the 0005 appletlib stubs stay). Invoked
@@ -66,6 +66,7 @@ journaling mode:
 | `src/libbb/xfuncs_printf.c` | unused syscall wrappers (xsocket/xbind/…/xmkstemp/xchroot/xsettimeofday, the NOEXEC vfork helper) guarded out under `__wasm__` |
 | `src/coreutils/test.c` | `res = setjmp(leaving)` → supported if-form (every longjmp passes 2) |
 | `src/coreutils/sort.c` | tiny local `strptime()` under `__wasm__` — this libc has none and `-M` only ever asks for `"%b"` |
+| `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0); 6 GNU `?:` elvis sites → plain ternary (side-effect-free operands, this compiler has no `?:`) |
 | `src/procps/kill.c` | killall/killall5 branches guarded out (need /proc scanning) |
 | `port/libbb_stubs.c` | appletlib globals (`applet_name` — overridable via `PORT_APPLET_NAME`, `xfunc_error_retval`, `bb_show_usage`, `string_array_len`), `bb_clk_tck`, single-user `bb_getgroups` |
 

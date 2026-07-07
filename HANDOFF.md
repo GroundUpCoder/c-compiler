@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-07, after 0010 coreutils)
+# Handoff — start of thread (updated 2026-07-07, after 0011 busybox vi)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,33 +7,32 @@
 
 ## Where the repo stands
 
-**OS.md Phase 1 is COMPLETE.** 0010 landed 2026-07-07: 27 busybox
-coreutils applets (ls cat cp mv rm mkdir rmdir head tail wc sort pwd true
-false ln touch basename dirname grep egrep fgrep sed echo printf test `[`
-kill) as ONE multicall `/bin/coreutils` with `/bin` symlinks. The
-`os/cat.c`/`os/ls.c` stopgaps are gone. Key call, made by measurement:
-per-applet builds cost ~26s of first-boot seeding vs ~2s for the
-multicall, so the multicall won — but it's a hand-rolled dispatch table
-(`vendor/busybox/port/multicall_main.c`), NOT upstream appletlib, so
-0005's stubs survive. Full story: `logs/2026-07-07/coreutils-multicall.md`;
-port doc: `vendor/busybox/README.md`.
+**OS.md Phase 1 is COMPLETE, and the OS now has an editor.** 0011 landed
+2026-07-07: busybox `vi` as `/bin/vi`, the 28th applet in the coreutils
+multicall. The port cost almost nothing (the investigation is the story:
+hush's line editing already ran vi's entire input stack — read_key,
+safe_poll, raw termios). New for the platform: libc `sigsetjmp`/
+`siglongjmp` (macros over setjmp — cooperative signals have no mask to
+save); two vi.c compiler-dialect patches (sigsetjmp if-form, 6 GNU `?:`
+sites). `os/image.json` is **v8**. Full story:
+`logs/2026-07-07/busybox-vi.md`; port doc: `vendor/busybox/README.md`.
 
-The applet symlinks flushed out real bugs now fixed: kernel FS_READLINK
-had never worked (signature mismatch both sides), BlockFS.open ignored
-its create mode (now honored under a fixed 022 umask), the Node-fs host
-lacked the `link` import, and the libc grew mkstemp/strcasestr/AT_*/
-nlink_t-family/chown-noops/mknod-stub. `os-common.js` buildProject
-learned bin.json `deps`; image manifests learned `link` entries;
-`os/image.json` is v7.
+The interesting artifact is the test: `tests/kernel/test_vi_e2e.js`
+drives REAL edit sessions (insert/append/search/cw/undo/dd/:wq/:q!)
+through `boot.js --tty-out` — keystrokes through the kernel tty into vi's
+raw mode, file bytes asserted via cat+marker after every save. Harness
+rules that took iteration: the file is the assertion (screen is scenery);
+only full-line renders are expectable (vi paints incrementally —
+`ESC[1;12H!`, never "world!"); ESC goes alone with air around it;
+`ESC[?1049h/l` (alternate screen) are perfect vi-started/exited markers.
+That harness is the template for any future full-screen-app test.
 
-All green and verified: unit 697✓, blockfs✓, kernel incl. OS acceptance
-with new coreutils pipelines✓, browser os-boots.mjs (real Chromium)✓.
-Try it:
+All green and verified: unit 697✓, blockfs✓, kernel incl. vi e2e✓,
+browser os-boots.mjs (real Chromium)✓. Try it:
 
 ```bash
-node serve.js .    # open the printed /os/os.html URL
-printf 'ls -l /bin | head\nexit\n' | node os/boot.js   # headless
-node tests/kernel/run.js
+node serve.js .    # open the printed /os/os.html URL, run: vi /tmp/x.txt
+node tests/kernel/test_vi_e2e.js
 ```
 
 ## The queue (todos/README.md is authoritative)
@@ -41,36 +40,35 @@ node tests/kernel/run.js
 1. **`0007` WM/compositor — design doc first**
 2. `0008` networking — AF_UNIX first
 
-(`0006` threads + atomics stays deferred indefinitely — don't re-open
-without a port that hard-requires pthreads.)
+(`0006` threads + atomics stays deferred indefinitely.)
 
 ## Lingering small items (none blocking)
 
-- Browser first boot now seeds hush + coreutils + cc (~2s slower than the
-  2.3s from 2026-07-06). `tools/mkimage.js` (pre-baked image) is the
-  recorded fix if it ever matters.
-- Interactive job control (Ctrl-Z/fg/bg) still has no automated e2e test
-  (kernel pieces unit-tested; needs a pty-ish harness or Playwright
-  typing Ctrl-Z).
+- Browser first boot seeds hush + coreutils + cc; `tools/mkimage.js`
+  (pre-baked image) is the recorded fix if seeding time ever matters.
+- Interactive job control (Ctrl-Z/fg/bg) still has no automated e2e —
+  though test_vi_e2e.js's --tty-out harness is most of the pty-ish
+  machinery that item was waiting for.
 - The first-run path (serve.js → printed URL 200s) has no automated test.
-- Bare `$(trap)` doesn't report parent traps (vendor README "Known
-  limitations").
+- Bare `$(trap)` doesn't report parent traps (vendor README).
 - `tests/browser/os-boots.mjs` is manual — run after touching os/,
-  kernel.js, host.js fd/fs paths, or the busybox port. (It types
-  `ls -1 /` now: busybox ls prints columns on a tty.)
-- Node-side stdout truncation items in `CONFORMANCE-REMAINING.md`
-  (host.js §) still stand.
+  kernel.js, host.js fd/fs paths, or the busybox port.
+- `FEATURE_VI_REGEX_SEARCH` is off (upstream default); we DO have regex
+  (sed/grep use xregcomp) — flip it if someone misses regex search.
+- Node-side stdout truncation items in `CONFORMANCE-REMAINING.md`.
 
 ## Conventions to keep (bite-sized reminders)
 
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log per
   landing (`logs/YYYY-MM-DD/<topic>.md`), README next-up current.
 - Conformance bugs: **failing test first, commit, then fix**.
-- Seeded OS sources changed? **Bump `os/image.json` `version`**.
+- Seeded OS sources changed? **Bump `os/image.json` `version`** (now v8).
 - compiler.js must stay browser-clean (no bare `process.*`).
-- busybox config changes: regenerate `autoconf.h` via kconfig, re-apply
-  the two `WASM PORT` patches (exec path, NOMMU). `LONG_OPTS=y` is
-  load-bearing (see vendor README).
+- busybox config changes: regenerate `autoconf.h` via kconfig
+  (upstream tree lives at `/tmp/busybox-1.37.0`; rebuild it from
+  `/tmp/busybox.tar.bz2` if the tmpdir got cleaned), re-apply the two
+  `WASM PORT` hand-patches (exec path, NOMMU). `LONG_OPTS=y` is
+  load-bearing.
 - Don't re-litigate: posix_spawn-not-fork, hush-not-ash, kernel-owned
   fds, multicall-not-per-applet, builtin-in-pipe re-execs `/bin/sh`.
 

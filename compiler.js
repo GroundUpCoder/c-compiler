@@ -20568,6 +20568,13 @@ __exception __LongJump(int, int);
 extern int __setjmp_id_counter;
 __import int setjmp(jmp_buf env);
 __import void longjmp(jmp_buf env, int val);
+/* POSIX sigsetjmp/siglongjmp: signals are cooperative on this platform and
+ * there is no blocked-signal mask to save, so these are exactly setjmp/
+ * longjmp. Macros (not wrappers) so the compiler's setjmp lowering sees the
+ * plain setjmp call after preprocessing. */
+typedef jmp_buf sigjmp_buf;
+#define sigsetjmp(env, savemask) setjmp(env)
+#define siglongjmp(env, val) longjmp(env, val)
 `,
   "signal.h": `
 #pragma once

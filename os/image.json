@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "dirs": [
     "/bin",
     "/etc",
@@ -98,6 +98,9 @@
       "link": "/bin/coreutils"
     },
     "/bin/true": {
+      "link": "/bin/coreutils"
+    },
+    "/bin/vi": {
       "link": "/bin/coreutils"
     },
     "/bin/wc": {

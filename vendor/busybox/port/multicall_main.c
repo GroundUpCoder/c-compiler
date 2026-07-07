@@ -42,6 +42,7 @@ int tail_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int test_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int touch_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int true_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int vi_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int wc_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 
 static const struct applet {
@@ -74,6 +75,7 @@ static const struct applet {
 	{ "test",     test_main },
 	{ "touch",    touch_main },
 	{ "true",     true_main },
+	{ "vi",       vi_main },
 	{ "wc",       wc_main },
 };
 
