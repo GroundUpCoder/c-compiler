@@ -1,8 +1,9 @@
 {
-  "version": 14,
+  "version": 15,
   "dirs": [
     "/bin",
     "/etc",
+    "/etc/fonts",
     "/root",
     "/root/id1",
     "/root/roms",
@@ -47,6 +48,12 @@
     },
     "/bin/quake": {
       "project": "vendor/quake/bin.json"
+    },
+    "/bin/term": {
+      "project": "os/term/bin.json"
+    },
+    "/etc/fonts/mono.ttf": {
+      "bin": "vendor/freetype/demo/robotomono.ttf"
     },
     "/root/doom1.wad": {
       "bin": "vendor/doom/data/doom1.wad"

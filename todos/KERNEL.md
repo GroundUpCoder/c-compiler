@@ -35,6 +35,31 @@ when ignored/blocked) for background brokered tty readers. Phase 5 — the
 shell-port acceptance gate — **PASSED** (`todos/done/0005`): busybox hush
 runs as /bin/sh with zero kernel workarounds.
 
+**Ptys are implemented** (`todos/done/0020`, brokered mode only): the
+"pty pairs wait for a consumer" note below is retired — the consumer is
+the WM's terminal app (`/bin/term`). `PTY_CREATE` (0x0106) returns a
+master/slave fd pair; the SLAVE IS A FULL `Tty` instance (line
+discipline, termios, ISIG fg-pgroup signal routing, and the deferred-read
+machinery reused verbatim — read waiters moved from a kernel-global queue
+to per-Tty `waiters` since many ttys now exist). The slave→master
+direction is one pipe-shaped buffer (echo + OPOST/ONLCR-processed slave
+writes; whole-or-block so an expansion never splits and the writer's
+count stays pre-processed; `_streamRead`/`_pipeNotify` reused for master
+reads/select). Master writes feed `tty.input()`. Termios/pgrp RPCs are
+fd-aware (`_ttyForFd`: the fd resolves through the caller's fd table to
+the tty it names; fd-less callers and ring mode fall back to the attached
+tty). `TIOCSWINSZ` (0x0105) → winsize words + SIGWINCH. Spawn attaches
+`pcb.tty` from the child's post-actions fd 0 (a slave fd 0 means the
+child lives on that pty: ttySab/TIOCGWINSZ, control chars, SIGTTIN all
+follow; first attach claims fgPgid — the terminal app spawns its shell
+as a pgroup leader). Lifecycle: master close → SIGHUP to the pty's fg
+pgroup, slave reads EOF, slave writes EIO (not EPIPE — pty semantics);
+last slave ref gone (including via SIGKILL: kernel-owned fds) → master
+reads EOF after drain. libc: `openpty()` in `<pty.h>` (`__openpty`),
+`TIOCSWINSZ` in `<sys/ioctl.h>`; RemoteFS `openpty`/`setWinsize`.
+Tests: `tests/kernel/test_pty.js` (SAB protocol), `test_pty_e2e.js`
+(real C), `test_term_e2e.js` (the terminal app acceptance).
+
 ## Why this exists
 
 Today the repo defines the *seams* of a process model but not the kernel
@@ -207,7 +232,9 @@ response, sets DONE, bumps the doorbell. Node path identical via
 
 ```
 0x00xx process   SPAWN WAIT KILL EXIT SETPGID GETPGID SETSID SIGDISP SIGMASK
-0x01xx tty       TCGETATTR TCSETATTR TCSETPGRP TCGETPGRP (TIOCGWINSZ stays
+0x01xx tty       TCGETATTR TCSETATTR TCSETPGRP TCGETPGRP (all fd-aware
+                 since 0020: the fd resolves to the tty it names) +
+                 TIOCSWINSZ PTY_CREATE (0020 ptys; TIOCGWINSZ stays
                  a SAB read — no RPC for hot paths)
 0x02xx pipes     PIPE_CREATE PIPE_REF PIPE_CLOSE PIPE_WAIT PIPE_NOTIFY
 0x03xx misc      COMPILE (the existing /bin/cc hook)
@@ -308,9 +335,15 @@ which is POSIX behavior for pgroup members sharing a terminal.
   draining to the UI bridge directly (kernel out of the data plane), so
   background jobs may interleave output like most real shells' default
   anyway.
-- `TIOCGWINSZ` stays a SAB read (`SI_COLS/ROWS` today), no RPC.
-- One tty in v1. Sessions exist in the PCB but `/dev/tty`, multiple ttys, and
-  pty pairs wait until something needs them (the WM's terminal app will).
+- `TIOCGWINSZ` stays a SAB read (`SI_COLS/ROWS` today), no RPC. Per-process:
+  the SAB handed to a worker is its ATTACHED tty's (fd 0 at spawn — a pty
+  slave means the pty's SAB), so a later `open()` of a different tty would
+  read the wrong winsize — accepted v1 limit, nothing opens ttys by path yet.
+- ~~One tty in v1 ... pty pairs wait until something needs them~~ — pty
+  pairs landed with their consumer (`todos/done/0020`, the WM's terminal
+  app; see the Status paragraph at the top for the shape). Still waiting
+  for a need: `/dev/tty`, tty nodes in the fs namespace, sessions beyond
+  the PCB fields.
 
 ## Pipes and cross-process blocking (implemented, todos/done/0003)
 

@@ -18073,6 +18073,10 @@ typedef Uint64 SDL_WindowFlags;
 /* Borderless: under the OS WM this is a kernel surface with no chrome
    (taskbar-class windows — todos/0014); standalone runtimes ignore it. */
 #define SDL_WINDOW_BORDERLESS 0x0000000000000010ULL
+/* Resizable: declared by apps that handle SDL_EVENT_WINDOW_RESIZED (the
+   0019 renegotiation). Accepted everywhere; todos/0021 will make the WM
+   offer resize ONLY to windows that declare it. */
+#define SDL_WINDOW_RESIZABLE 0x0000000000000020ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
 /* SDL3: on little-endian, SDL_PIXELFORMAT_RGBA32 aliases ABGR8888
@@ -21798,6 +21802,7 @@ static inline int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; r
 #pragma once
 
 #define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
 
 struct winsize {
   unsigned short ws_row;
@@ -21807,6 +21812,7 @@ struct winsize {
 };
 
 __import int __ioctl_tiocgwinsz(int fd, int *rows, int *cols);
+__import int __ioctl_tiocswinsz(int fd, int rows, int cols);
 
 static inline int ioctl(int fd, unsigned long request, void *arg) {
   if (request == TIOCGWINSZ) {
@@ -21821,7 +21827,36 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
     }
     return r;
   }
+  if (request == TIOCSWINSZ) {
+    /* Pty resize (todos/0020): winsize words + SIGWINCH to the tty's
+       foreground pgroup. Needs a kernel; ENOTTY elsewhere. */
+    const struct winsize *ws = (const struct winsize *)arg;
+    return __ioctl_tiocswinsz(fd, (int)ws->ws_row, (int)ws->ws_col);
+  }
   return -1;
+}
+  `,
+  "pty.h": `
+#pragma once
+/* Ptys over the kernel pty layer (todos/0020). openpty() creates a
+   master/slave pair; the slave is a full kernel tty (line discipline,
+   termios, job control), the master is the terminal application's end.
+   termp/winp are accepted for API familiarity but the caller should
+   tcsetattr/TIOCSWINSZ explicitly (name, termp, winp may be NULL). */
+#include <termios.h>
+#include <sys/ioctl.h>
+
+__import int __openpty(int *amaster, int *aslave);
+
+static inline int openpty(int *amaster, int *aslave, char *name,
+                          const struct termios *termp,
+                          const struct winsize *winp) {
+  if (name) name[0] = '\\0';
+  int r = __openpty(amaster, aslave);
+  if (r != 0) return -1;
+  if (termp) tcsetattr(*aslave, TCSANOW, termp);
+  if (winp) ioctl(*amaster, TIOCSWINSZ, (void *)winp);
+  return 0;
 }
   `,
   "sys/wait.h": `

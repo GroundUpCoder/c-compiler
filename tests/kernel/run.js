@@ -14,6 +14,8 @@ var tests = [
   ['test_fs_e2e.js', []],       // 0009: brokered fs — shared offsets, fd_actions, SIGKILL+fsck, winsize
   ['test_pipes.js', []],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js', []],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
+  ['test_pty.js', []],          // 0020: pty pair semantics over the SAB protocol (no wasm)
+  ['test_pty_e2e.js', []],      // 0020: real C over a pty — openpty, spawn-on-slave, winsize, SIGHUP
   ['test_sockets.js', []],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
   ['test_sockets_e2e.js', []],  // 0008: real C client/server — accept/connect/send/recv, poll
   ['test_jobctl_e2e.js', []],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
@@ -27,6 +29,7 @@ var tests = [
   ['test_wm_policy.js', []],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
   ['test_wm_service_e2e.js', []], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
   ['test_os_apps_e2e.js', []],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
+  ['test_term_e2e.js', []],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
   ['test_gpubox_dawn_e2e.js', []], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
 ];
 

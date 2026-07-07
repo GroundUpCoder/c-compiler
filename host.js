@@ -766,6 +766,9 @@ function createFileSystem({ fs, ctx }) {
         mem.setInt32(cols_ptr, process.stdout.columns || 80, true);
         return 0;
       },
+      // Ptys need a kernel (todos/0020); the CLI runtime has none.
+      __openpty: function (m_ptr, s_ptr) { void m_ptr; void s_ptr; setErrnoName('ENOSYS'); return -1; },
+      __ioctl_tiocswinsz: function (fd, rows, cols) { void fd; void rows; void cols; setErrnoName('ENOTTY'); return -1; },
       usleep: new WebAssembly.Suspending(async function (usec) {
         await new Promise(resolve => setTimeout(resolve, usec / 1000));
         return 0;
@@ -4232,6 +4235,25 @@ var BLOCK_FS = (function () {
         mem.setInt32(cols_ptr, cols, true);
         return 0;
       },
+      // Pty control plane (todos/0020) — real only over a kernel (RemoteFS
+      // implements openpty/setWinsize as RPCs); in-process BlockFS has no
+      // second terminal to speak of, so these answer ENOSYS/ENOTTY.
+      __openpty: function (m_ptr, s_ptr) {
+        if (typeof self.openpty !== 'function') { setErrnoName('ENOSYS'); return -1; }
+        var pr = self.openpty();
+        if (pr === null) { setErrnoName(self._lastError || 'EIO'); return -1; }
+        var pm = new DataView(getMemory().buffer);
+        pm.setInt32(m_ptr, pr[0], true);
+        pm.setInt32(s_ptr, pr[1], true);
+        return 0;
+      },
+      __ioctl_tiocswinsz: function (fd, rows, cols) {
+        if (typeof self.setWinsize !== 'function') { setErrnoName('ENOTTY'); return -1; }
+        if (self.setWinsize(fd, rows | 0, cols | 0) === null) {
+          setErrnoName(self._lastError || 'ENOTTY'); return -1;
+        }
+        return 0;
+      },
 
       // ---- additional POSIX ops ----
       realpath: wrap(function (path_ptr, resolved_ptr) {
@@ -4789,9 +4811,13 @@ function createSpawn(ctx, hooks) {
   // ispeed@36 ospeed@40. Without these hooks the BlockFS/node-fs defaults
   // (canned values) stay in effect — createSpawn merges later and wins.
   if (hooks.ttyGetattr) {
+    // The fd passes through to the kernel since 0020 (ptys): it resolves
+    // which tty the fd names (pty slave/master vs the system tty) through
+    // the caller's fd table — shells hold the tty on high dup'd fds (hush
+    // parks it at 255), so no fd gate here.
     env.__tty_getattr = function (fd, tPtr) {
-      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
-      const r = hooks.ttyGetattr();
+      if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
+      const r = hooks.ttyGetattr(fd);
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       const dv = new DataView(ctx.getMemory().buffer);
       dv.setUint32(tPtr, r.iflag >>> 0, true);
@@ -4805,10 +4831,10 @@ function createSpawn(ctx, hooks) {
       return 0;
     };
     env.__tty_setattr = function (fd, actions, tPtr) {
-      if (fd < 0 || fd > 2) { ctx.setErrnoName('ENOTTY'); return -1; }
+      if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
       const dv = new DataView(ctx.getMemory().buffer);
       const m = new Uint8Array(ctx.getMemory().buffer);
-      const r = hooks.ttySetattr(actions, {
+      const r = hooks.ttySetattr(fd, actions, {
         iflag: dv.getUint32(tPtr, true),
         oflag: dv.getUint32(tPtr + 4, true),
         cflag: dv.getUint32(tPtr + 8, true),
@@ -4818,20 +4844,18 @@ function createSpawn(ctx, hooks) {
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       return 0;
     };
-    // v1 has exactly ONE tty, so any fd that IS a tty maps to it — and
-    // shells hold the tty on a high dup'd fd (hush parks it at 255), so
-    // gating on fd<=2 wedged the interactive init (todos/0005). Accepting
-    // any fd >= 0 is the v1-honest shape; a real per-fd check needs the
-    // fd table, which lives kernel-side.
+    // The kernel resolves the fd through the caller's fd table (0020);
+    // fds it can't resolve fall back to the process's attached tty, which
+    // keeps hush's high dup'd tty fd (255) working (todos/0005).
     env.__tty_getpgrp = function (fd) {
       if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
-      const r = hooks.ttyGetpgrp();
+      const r = hooks.ttyGetpgrp(fd);
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       return r.pgid;
     };
     env.__tty_setpgrp = function (fd, pgid) {
       if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
-      const r = hooks.ttySetpgrp(pgid);
+      const r = hooks.ttySetpgrp(fd, pgid);
       if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
       return 0;
     };

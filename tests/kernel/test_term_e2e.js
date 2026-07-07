@@ -1,0 +1,177 @@
+#!/usr/bin/env node
+// 0020 acceptance, headless: the wasm terminal (/bin/term — SDL surface +
+// kernel pty + freetype, seeded from os/term/bin.json) runs hush on a pty
+// inside a WM window, driven through os/boot.js:
+//   - `term &` opens a 640x432 window (80x24 at the mono font's 8x18 cell)
+//   - injected SDL keys become pty bytes: `ls /bin` renders MORE text
+//     (screenshot pixel deltas prove the echo + output path)
+//   - busybox vi works INSIDE the terminal: alt screen, insert, :wq — the
+//     file assertion is authoritative (cat from the system shell)
+//   - `wmctl resize` -> SURFACE_CONFIGURE ack (geometry changes only then)
+//     -> grid reflow + TIOCSWINSZ; the post-resize shot is at the new size
+//     and still renders text
+//   - typing `exit` ends hush -> term reaps it and closes its window
+// Shots are shm and bit-exact: the pixel assertions (counts, deltas, the
+// vi status row) are deterministic — freetype is vendored at a fixed rev.
+//
+// Run: node tests/kernel/test_term_e2e.js
+'use strict';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const cp = require('child_process');
+
+const ROOT = path.resolve(__dirname, '../..');
+const BOOT = path.join(ROOT, 'os/boot.js');
+
+let failures = 0;
+function check(name, cond, extra) {
+  if (cond) { console.log('  ok   ' + name); }
+  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
+}
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-term-'));
+const image = path.join(tmp, 'os.img');
+
+// Inject a string as SDL key events (down+up per char). SDL3 keysyms are
+// modifier-applied characters, so term maps them straight to pty bytes;
+// scancode 0 is fine (term reads only key/mod).
+const keys = (s) => [...s].map((ch) => 'wmctl key $TSID 0 ' + ch.charCodeAt(0)).join('\n');
+
+/* ---- session A: seed, launch term, type, vi, resize, exit ---- */
+function sessionTerm() {
+  const script = [
+    'term &',
+    'sleep 5',                                     // wasm + freetype + hush spawn
+    'echo ==list1',
+    'wmctl list',
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    'wmctl shot $TSID /root/t1.ppm && echo shot1-ok',
+    keys('ls /bin\r'),
+    'sleep 2',
+    'wmctl shot $TSID /root/t2.ppm && echo shot2-ok',
+    // vi inside the terminal. ESC is sent alone with air on both sides:
+    // vi's read_key resolves a lone ESC by timeout.
+    keys('vi /tmp/t.txt\r'),
+    'sleep 2.5',
+    'wmctl shot $TSID /root/tvi.ppm && echo shotvi-ok',
+    keys('ihey from term'),
+    'sleep 1.5',
+    keys('\x1b'),
+    'sleep 1.5',
+    keys(':wq\r'),
+    'sleep 2.5',
+    // Drag-resize equivalent over the agent channel (the kernel path is
+    // identical past the drag): reflow + TIOCSWINSZ + re-render.
+    'wmctl resize $TSID 500 260',
+    'sleep 2.5',
+    'echo ==list2',
+    'wmctl list',
+    'wmctl shot $TSID /root/trs.ppm && echo shotrs-ok',
+    // Session teardown: hush exits -> term reaps it -> window gone.
+    keys('exit\r'),
+    'sleep 2.5',
+    'echo ==list3',
+    'wmctl list',
+    'echo ==cat',
+    'cat /tmp/t.txt',
+    '',
+  ].join('\n');
+
+  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 420000 });
+  if (a.error) throw a.error;
+  const out = a.stdout;
+
+  const list1 = (out.split('==list1\n')[1] || '').split('==')[0];
+  const termRow = list1.split('\n').find((l) => l.endsWith('\tterm')) || '';
+  check('term opens a WM window titled "term"', termRow !== '', JSON.stringify(list1));
+  check('term window is 640x432 (80x24 at the 8x18 mono cell)',
+    termRow.includes('640x432'), termRow);
+  check('all four shots written',
+    out.includes('shot1-ok') && out.includes('shot2-ok') &&
+    out.includes('shotvi-ok') && out.includes('shotrs-ok'));
+
+  const list2 = (out.split('==list2\n')[1] || '').split('==')[0];
+  const termRow2 = list2.split('\n').find((l) => l.endsWith('\tterm')) || '';
+  check('resize acked: geometry is 500x260 (SURFACE_CONFIGURE landed)',
+    termRow2.includes('500x260'), termRow2);
+
+  const list3 = (out.split('==list3\n')[1] || '').split('==')[0];
+  check('typed exit ends the session: term window gone',
+    !list3.includes('\tterm'), JSON.stringify(list3));
+
+  const body = (out.split('==cat\n')[1] || '');
+  check('vi-in-term wrote the file (insert + ESC + :wq over the pty)',
+    body.startsWith('hey from term'), JSON.stringify(body.slice(0, 40)));
+}
+
+/* ---- session B: extract the PPMs byte-clean, assert rendered text ---- */
+function sessionFrames() {
+  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: 'cat /root/t1.ppm /root/t2.ppm /root/tvi.ppm /root/trs.ppm\n',
+      timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+  if (b.error) throw b.error;
+
+  function parsePPM(buf, off) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = off + m[0].length;
+    return { w, h, data, end: data + w * h * 3 };
+  }
+  // Foreground = any non-black pixel (the terminal's default bg is black;
+  // glyphs are light gray + antialiasing ramps).
+  function fgPixels(buf, ppm, y0, y1) {
+    let n = 0;
+    const ya = y0 === undefined ? 0 : y0, yb = y1 === undefined ? ppm.h : y1;
+    for (let y = ya; y < yb; y++) {
+      for (let x = 0; x < ppm.w; x++) {
+        const i = ppm.data + (y * ppm.w + x) * 3;
+        if (buf[i] | buf[i + 1] | buf[i + 2]) n++;
+      }
+    }
+    return n;
+  }
+
+  const t1 = parsePPM(b.stdout, 0);
+  check('shot1 parses at 640x432', t1 && t1.w === 640 && t1.h === 432,
+    t1 && `${t1.w}x${t1.h}`);
+  if (!t1) return;
+  const t1fg = fgPixels(b.stdout, t1);
+  check('shot1 shows rendered text (hush banner + prompt)', t1fg > 1500, String(t1fg));
+
+  const t2 = parsePPM(b.stdout, t1.end);
+  check('shot2 parses at 640x432', t2 && t2.w === 640 && t2.h === 432);
+  if (!t2) return;
+  const t2fg = fgPixels(b.stdout, t2);
+  check('ls /bin rendered more text (echo + output over the pty)',
+    t2fg > t1fg + 1000, `${t1fg} -> ${t2fg}`);
+
+  const tvi = parsePPM(b.stdout, t2.end);
+  check('vi shot parses at 640x432', tvi && tvi.w === 640 && tvi.h === 432);
+  if (!tvi) return;
+  // The alternate screen replaced the shell: mostly empty rows of tildes +
+  // the status line in the bottom cell row (cell height 18).
+  const statusFg = fgPixels(b.stdout, tvi, tvi.h - 18, tvi.h);
+  check('vi status line rendered in the bottom row', statusFg > 100, String(statusFg));
+  const middleFg = fgPixels(b.stdout, tvi, 5 * 18, 6 * 18);
+  check('vi cleared the shell scrollback (alt screen row is tilde-only)',
+    middleFg > 0 && middleFg < 200, String(middleFg));
+
+  const trs = parsePPM(b.stdout, tvi.end);
+  check('post-resize shot parses at 500x260 (reflowed present)',
+    trs && trs.w === 500 && trs.h === 260, trs && `${trs.w}x${trs.h}`);
+  if (!trs) return;
+  const rsfg = fgPixels(b.stdout, trs);
+  check('post-resize shot still renders text', rsfg > 800, String(rsfg));
+}
+
+(async () => {
+  sessionTerm();
+  sessionFrames();
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log(failures ? `\nterm e2e: ${failures} FAILED` : '\nterm e2e: PASS');
+  process.exit(failures ? 1 : 0);
+})();

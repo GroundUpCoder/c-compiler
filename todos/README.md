@@ -24,9 +24,13 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
-   demotes to bootstrap chrome
-2. (unnumbered) a real-world WebGPU C app port — candidates via
+1. `0021` honor SDL_WINDOW_RESIZABLE — bug: drag-resizing doom/quake
+   corrupts their image (0019 offers resize to apps that can't
+   renegotiate); fix is SDL3 conformance, not per-app patches
+2. `0022` VT switching tty ↔ desktop — availability under partial
+   failure: the tty as maintenance mode when the desktop is broken/
+   suspect (design in WM.md "Screen, VTs, and scaling")
+3. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -78,7 +82,12 @@ re-derive (`logs/2026-07-08/surface-resize.md`);
 `0018` **quake windowed** — relative-mouse as SURFACE_SET_FLAGS bit1
 round-tripping to pointer lock (kernel hit-tests the lock gesture; rel
 ring records → SDL xrel/yrel), /bin/quake + the 18MB pak0.pak seeded
-(`logs/2026-07-08/quake-relative-mouse.md`).
+(`logs/2026-07-08/quake-relative-mouse.md`);
+`0020` **wasm terminal + ptys** — kernel pty pairs (the slave IS a Tty:
+line discipline reused verbatim; fd-aware termios; TIOCSWINSZ→SIGWINCH;
+SIGHUP/EOF lifecycle) + `/bin/term` (SDL surface + freetype + escape
+parser scoped to hush/vi) running hush interactive in a window, vi
+inside, drag-resize reflow (`logs/2026-07-08/wasm-terminal-ptys.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

@@ -218,18 +218,27 @@ focus, minimize. `SURFACE_CONFIGURE` is reserved so resize lands additively.
 *(It did — todos/done/0019; see "Implementation status — client resize"
 below.)*
 
-## The terminal (v1: xterm.js as a privileged DOM surface)
+## The terminal (v2 LANDED, todos/done/0020: /bin/term, the pure path)
 
-xterm.js stays the terminal, tracked in the scene list as a `dom`-kind
-surface: the UI bridge positions/sizes the xterm element per kernel
-geometry. Honest limitation: it composites in the browser's layer above the
-master canvas, so a canvas window overlapping it needs CSS `clip-path`
-cutouts (rect holes, evenodd) applied by the bridge — workable, slightly
-ugly, and quarantined to the bridge. Its "screenshot" is the xterm buffer
-as *text*, which is more agent-useful than pixels anyway. The pure path — a
-wasm terminal app (SDL surface + pty + freetype) — is real but a
-multi-session project; it waits until the compositor exists (KERNEL.md
-already notes pty pairs wait for exactly this consumer).
+**The wasm terminal exists**: `/bin/term` (os/term/) is an ordinary SDL
+surface app — kernel pty master + freetype cell-grid rendering + an
+escape-sequence state machine scoped to what hush lineedit and busybox vi
+actually emit under TERM=xterm-256color (CUP/CUU..CUB/CHA/VPA, ED/EL,
+IL/DL/ICH/DCH/ECH, SU/SD, DECSTBM, SGR incl. 256→16 mapping, alt screen
+?1049, ?25/?7/?1, DSR-6/DA replies, OSC title → SDL_SetWindowTitle). It
+spawns its session (default `/bin/sh`, or `term cmd args...`) on the pty
+slave as a pgroup leader; WINDOW_RESIZED → grid realloc + TIOCSWINSZ →
+SIGWINCH reflow; closing the window HUPs the session (master close). Being
+shm + pure CPU rendering, its screenshots are bit-exact headless — the
+acceptance suite (`tests/kernel/test_term_e2e.js`, browser `os-term.mjs`)
+asserts rendered text by pixels and drives vi inside it. Pty design:
+KERNEL.md (status paragraph + the tty section).
+
+xterm.js remains the BOOTSTRAP chrome — the system console pane beside the
+desktop canvas (maintenance mode when the desktop is broken; see the VT
+item, todos/0022). The old v1 idea of tracking xterm as a scene-positioned
+`dom`-kind surface with clip-path cutouts is retired — the pure path made
+it unnecessary.
 
 ## Agent control channel (OS.md hard requirement)
 
@@ -279,10 +288,74 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - **`direct` transport promotion** — light it up when a fullscreen app
   measurably wants the copy back; needs the two-hop OffscreenCanvas
   transfer spike.
-- **wasm terminal app** — the v2 terminal; pty layer lands with it.
+- ~~**wasm terminal app**~~ — landed with the pty layer (todos/done/0020);
+  see "The terminal" above.
 - **Damage rects / partial present** — optimization, after correctness.
 - **Cross-agent WebGPU sharing** — if the spec ships it, `gpu` present
   becomes zero-copy at the same seam.
+- **Screen geometry / VTs / scaling fixed-size clients** — designed below
+  ("Screen, VTs, and scaling fixed-size clients"); VT switching is
+  committed as todos/0022, the rest awaits promotion.
+
+## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
+
+Where the desktop's outer geometry stands and where it goes. Committed:
+VT switching is todos/0022. The rest is design captured ahead of
+promotion — maximize and viewport scaling pair naturally with 0021
+(both are policy keyed on the resizable flag).
+
+**Today**: the screen is a natural-size 800×500 canvas hardcoded in
+os.html, sampled ONCE by `wmSetScreen` at the wm-canvas handoff. The
+xterm tty shares the page below it, both always visible. Screen
+resolution never changes after boot; a browser-window resize only
+re-fits xterm.
+
+**VT switching (todos/0022)** — the Linux console metaphor: the xterm
+tty is VT1, the desktop VT2; the page shows exactly one, with a
+keybinding + visible affordance to switch. The point is availability
+under partial failure, not layout: VT1's path is kernel worker + xterm
+only — no compositor, no wm, no GPU — so it stays fully usable while
+the desktop is broken or merely suspect. It remains the escape
+hatch/bootstrap chrome even after 0020 puts the everyday terminal in a
+window. Pure UI-bridge work (the page is already a dumb bridge); the
+kernel keeps compositing while hidden (frames are mailbox — bounded
+cost, zero protocol change). Pointer lock drops on switch
+(browser-enforced) and re-arms per 0018 on the next client click.
+
+**Dynamic screen resolution** (unpromoted; prerequisite for a
+full-viewport desktop on VT2, and the real fix for windows larger than
+the screen). Needs: `wmSetScreen` re-callable after boot → compositor
+resizes its OffscreenCanvas (worker-side resize works); a WMP event
+(EV_SCREEN?) so /bin/wm re-lays the taskbar and re-clamps placement;
+policy for windows left off-screen after a shrink. Precedent: RandR /
+Wayland output events. Until then the screen stays a boot-time
+constant.
+
+**Maximize** (unpromoted; rides 0021's flag). Real-OS shape
+(Windows work area, EWMH `_NET_WM_STATE_MAXIMIZED`/`_NET_WORKAREA`,
+xdg_toplevel.set_maximized): double-click title toggles; WM sends
+SURFACE_CONFIGURE with the work area (screen minus taskbar); restore
+returns to saved geometry. RESIZABLE windows only — fixed-size windows
+get the scale-to-fit below instead (Windows greys the maximize box;
+we dispatch on the same flag).
+
+**Scaling fixed-size clients** (unpromoted). The converged real-OS
+answer decouples buffer size from window size and lets the compositor
+map one to the other: Wayland `wp_viewport` (client buffer at native
+res, compositor scales to a dst rect), DWM DPI virtualization
+(non-DPI-aware apps bitmap-stretched, app never knows), SDL3's own
+logical presentation. Ours: a per-surface **dst w×h** in the scene
+list, buffer size untouched. Browser compositor: `drawImage` src→dst —
+free. Headless composite: nearest-neighbor loop (also what pixel-art
+wants; integer-scale snapping as a nicety for gameboy). The real work
+is input: hit-testing stays in screen coords but client-bound pointer
+records must inverse-map through the scale before the input ring.
+Policy (in /bin/wm): non-resizable surfaces become
+scalable-not-configurable — resize drags and double-click-fit adjust
+the dst rect, aspect-preserving letterbox, SURFACE_CONFIGURE never
+sent. DOOM then fits the screen with zero source changes — and its
+`WINDOW_SCALE 2` CPU pre-scale loop becomes redundant (present 640×400
+raw, let the compositor scale).
 
 ## Implementation status v1 (landed 2026-07-07, todos/0013)
 

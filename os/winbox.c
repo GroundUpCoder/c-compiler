@@ -59,7 +59,7 @@ static void frame_cb(void) {
 
 int main(void) {
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("winbox", W, H, 0);
+    win = SDL_CreateWindow("winbox", W, H, SDL_WINDOW_RESIZABLE);
     if (!win) return 3;
     surf = SDL_GetWindowSurface(win);
     __setAnimationFrameFunc(frame_cb);

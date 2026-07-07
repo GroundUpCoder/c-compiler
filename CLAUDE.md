@@ -90,7 +90,14 @@ code. Signal delivery is cooperative: kernel.js posts SIGPEND bits on the
 kernel page, host.js claims them at env-import safe points and calls the
 wasm `__sig_dispatch` export (so pure-compute loops are uninterruptible by
 design — SIGKILL still works). The tty (line discipline, termios, fg-pgroup
-signal routing) is a kernel object. With `Kernel({fs})` the kernel also owns
+signal routing) is a kernel object; ptys (todos/0020) are pairs where the
+SLAVE is a full Tty (line discipline reused verbatim, per-Tty read-waiter
+queues) and slave→master is a pipe-shaped buffer (echo + ONLCR output;
+whole-or-block writes) — termios/pgrp RPCs are fd-aware (`_ttyForFd`),
+TIOCSWINSZ→SIGWINCH, master close→SIGHUP+slave EOF (writes EIO), spawn
+attaches `pcb.tty` from the child's post-actions fd 0 (a slave there means
+that pty's winsize SAB, control chars, SIGTTIN; first attach claims
+fgPgid). With `Kernel({fs})` the kernel also owns
 the fd layer — per-process fd tables → shared open file descriptions → ONE
 BlockFS instance, with fs syscalls as 0x04xx RPCs served to host.js's
 RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
@@ -148,6 +155,11 @@ pak0.pak + autoexec.cfg at `/root/id1`; requests relative mouse at
 VID_Init: SURFACE_SET_FLAGS bit1 → kernel wanted-state → os.html pointer
 lock, the lock gesture being a kernel-hit-tested client click; ESC
 unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
+`/bin/term` (todos/0020, `os/term/`) is the wasm terminal: kernel pty +
+freetype (vendored lib, font seeded at `/etc/fonts/mono.ttf`) + an escape
+parser scoped to hush/vi; `term &` runs hush interactive in a window
+(640x432 = 80x24), `term cmd...` runs that instead; drag-resize reflows
+via TIOCSWINSZ, close = SIGHUP. Image version is **v15**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
@@ -164,12 +176,15 @@ self-pace against SDL_GetAudioStreamQueued, bounded memory). The tty's
 `interactiveOut` opt makes fd 1/2
 tty-kind (isatty true → hush goes interactive); piped runs stay
 byte-clean. Tests: `tests/kernel/test_os_boot.js` +
-`test_wm_service_e2e.js` + `test_os_apps_e2e.js` +
-`test_gpubox_dawn_e2e.js` (headless, in the kernel suite; the gpubox one
-skips without the webgpu pkg) + `test_audio.js`/`test_audio_e2e.js`
-(0017); `tests/browser/os-boots.mjs` + `os-wm.mjs`
+`test_wm_service_e2e.js` + `test_os_apps_e2e.js` + `test_term_e2e.js`
+(0020) + `test_gpubox_dawn_e2e.js` (headless, in the kernel suite; the
+gpubox one skips without the webgpu pkg) +
+`test_audio.js`/`test_audio_e2e.js` (0017) +
+`test_pty.js`/`test_pty_e2e.js` (0020);
+`tests/browser/os-boots.mjs` + `os-wm.mjs`
 + `os-doom.mjs` (now asserts the audio pipeline) + `os-gpubox.mjs`
-+ `os-quake.mjs` (pointer-lock UX; real Chromium, manual).
++ `os-quake.mjs` (pointer-lock UX) + `os-term.mjs` (0020; real
+Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

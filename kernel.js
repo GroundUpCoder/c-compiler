@@ -90,6 +90,11 @@ var OP = {
   TCSETATTR: 0x0102,
   TCGETPGRP: 0x0103,
   TCSETPGRP: 0x0104,
+  // Ptys (todos/0020): PTY_CREATE makes a master/slave pair — the slave is
+  // a full Tty (line discipline reused verbatim); TIOCSWINSZ is the master
+  // side's resize (winsize words + SIGWINCH to the pty's fg pgroup).
+  TIOCSWINSZ: 0x0105,
+  PTY_CREATE: 0x0106,
   // 0x02xx pipes. Post-0009 only CREATE is an opcode: the design doc's
   // PIPE_REF/CLOSE/WAIT/NOTIFY are subsumed by the kernel-owned fd layer
   // (OFD refcounts + FS_READ/FS_WRITE/FS_CLOSE + the doorbell).
@@ -141,6 +146,13 @@ var W_CONTINUED_STATUS = 0xffff;
  * they defer whole rather than land partially). */
 var PIPE_CAP = 64 * 1024;
 var PIPE_ATOMIC = 512;
+
+/* Ptys (todos/0020): the slave→master output direction. Sized so a whole
+ * worst-case slave write always fits EVENTUALLY: RemoteFS caps writes at
+ * 60000 bytes and OPOST/ONLCR at most doubles them (120000 < cap), so the
+ * whole-or-block discipline (a \r\n must never split across a full buffer)
+ * can always be satisfied by a draining master. */
+var PTY_OUT_CAP = 256 * 1024;
 
 /* AF_UNIX sockets (todos/0008): a connection is two pipe-shaped directions
  * (same fields, same waiter queues), so the entire blocking/EOF/EPIPE/
@@ -500,16 +512,19 @@ KernelClient.prototype.spawnHooks = function () {
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
     exit: function (status) { return self.call(OP.EXIT, { code: status }); },
-    // Phase 3 tty control plane (line discipline lives kernel-side).
-    ttyGetattr: function () { return self.call(OP.TCGETATTR, {}); },
-    ttySetattr: function (actions, t) {
+    // Phase 3 tty control plane (line discipline lives kernel-side). The fd
+    // rides along since 0020 (ptys): the kernel resolves it through the fd
+    // table to THE tty it names (slave pty vs system tty), falling back to
+    // the process's attached tty for old callers / ring mode.
+    ttyGetattr: function (fd) { return self.call(OP.TCGETATTR, { fd: fd }); },
+    ttySetattr: function (fd, actions, t) {
       return self.call(OP.TCSETATTR, {
-        actions: actions, iflag: t.iflag, oflag: t.oflag,
+        fd: fd, actions: actions, iflag: t.iflag, oflag: t.oflag,
         cflag: t.cflag, lflag: t.lflag, cc: t.cc,
       });
     },
-    ttyGetpgrp: function () { return self.call(OP.TCGETPGRP, {}); },
-    ttySetpgrp: function (pgid) { return self.call(OP.TCSETPGRP, { pgid: pgid }); },
+    ttyGetpgrp: function (fd) { return self.call(OP.TCGETPGRP, { fd: fd }); },
+    ttySetpgrp: function (fd, pgid) { return self.call(OP.TCSETPGRP, { fd: fd, pgid: pgid }); },
     // WM surfaces (todos/WM.md). The process allocates the SABs (the kernel
     // can't hand one to a parked worker) and posts them on the same FIFO
     // channel immediately before the RPC that names them.
@@ -611,6 +626,8 @@ function Tty(kernel, opts) {
   this._brokered = false;
   this._cooked = [];
   this._eofFlag = false;
+  this.waiters = [];            // pids with a deferred FS_READ on THIS tty, FIFO
+                                // (per-instance since 0020: ptys mean many ttys)
   // Bridge-declared: a human terminal is attached, so std fd 1/2 should be
   // tty-kind (isatty true -> shells prompt). See Kernel._stdOfds.
   this.interactiveOut = !!opts.interactiveOut;
@@ -837,10 +854,11 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
-  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null'|'pipe'|'socket', refs, bfsFd?, ch?, pipe?, end?, st?, rx?, tx?, path?, backlog?, pending?, acceptWaiters? }
+  this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null'|'pipe'|'socket'|'ptm', refs, bfsFd?, ch?, pipe?, end?, st?, rx?, tx?, path?, backlog?, pending?, acceptWaiters?, tty?, pty? }
+                             // 'tty' with pty set = a pty SLAVE (0020);
+                             // 'ptm' = a pty master.
   this._nextOfd = 1;
   this._std = null;          // lazy singleton OFDs for default stdio
-  this._ttyWaiters = [];     // pids with a deferred tty FS_READ, FIFO
   this._sockBinds = new Map(); // resolved path -> listener/bound socket ofdId
   this._kernelSockServers = new Map(); // resolved path -> onConnect(peer, pcb)
                              // — KERNEL-owned AF_UNIX endpoints (sockServe;
@@ -885,6 +903,21 @@ Kernel.prototype._ofdUnref = function (id) {
   if (!o || --o.refs > 0) return;
   this._ofds.delete(id);
   if (o.kind === 'file') this._fs.close(o.bfsFd);
+  else if (o.kind === 'ptm') {
+    // The terminal is gone (0020): SIGHUP to the pty's fg pgroup (POSIX —
+    // this is how closing the terminal window ends the session), parked
+    // slave writers get EIO, slave readers drain to EOF.
+    var pt = o.pty;
+    pt.out.rOpen = false;
+    this._pipeNotify(pt.out);
+    if (pt.tty.fgPgid > 0) this._killPgid(pt.tty.fgPgid, SIG.HUP);
+    pt.tty.eof();
+  } else if (o.kind === 'tty') {
+    // A pty slave gone everywhere (0020) — the system tty's std OFDs keep
+    // living in _std, so only pty slaves carry o.pty here: master reads
+    // see EOF once the buffered output drains.
+    if (o.pty) { o.pty.out.wOpen = false; this._pipeNotify(o.pty.out); }
+  }
   else if (o.kind === 'pipe') {
     // Last reference to this end anywhere in the system: the peers must
     // learn (readers see EOF, writers see EPIPE + SIGPIPE).
@@ -1085,6 +1118,17 @@ Kernel.prototype._spawn = function (parent, spec) {
           return { errno: fail };
         }
       }
+      // Attach the controlling-ish tty (0020): a child whose fd 0 is a pty
+      // slave lives on THAT pty — termios/pgrp RPC fallback, control-char
+      // signals, and the winsize SAB handed to the worker below all follow.
+      // The first attach claims the foreground (the terminal app spawns its
+      // shell as a pgroup leader; the shell then owns tcsetpgrp).
+      var o0id = pcb.fds.get(0);
+      var o0 = o0id === undefined ? null : self._ofds.get(o0id);
+      if (o0 && o0.kind === 'tty' && o0.tty) {
+        pcb.tty = o0.tty;
+        if (!pcb.tty.fgPgid) pcb.tty.fgPgid = pcb.pgid;
+      }
     }
 
     self._procs.set(pid, pcb);
@@ -1204,23 +1248,73 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       pcb.pgid = pcb.pid; pcb.sid = pcb.pid;
       this._respond(pcb, { sid: pcb.sid });
       break;
-    case OP.TCGETATTR:
-      this._respond(pcb, pcb.tty ? pcb.tty.getattr() : { errno: 'ENOTTY' });
+    // Termios/pgrp RPCs resolve the tty THROUGH the caller's fd (0020:
+    // ptys mean many ttys); fd-less requests and ring mode fall back to
+    // the process's attached tty (_ttyForFd).
+    case OP.TCGETATTR: {
+      var gAt = this._ttyForFd(pcb, req.fd);
+      this._respond(pcb, gAt ? gAt.getattr() : { errno: 'ENOTTY' });
       break;
-    case OP.TCSETATTR:
-      if (!pcb.tty) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
-      pcb.tty.setattr(req.actions | 0, req);
+    }
+    case OP.TCSETATTR: {
+      var sAt = this._ttyForFd(pcb, req.fd);
+      if (!sAt) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
+      sAt.setattr(req.actions | 0, req);
       this._respond(pcb, {});
       break;
-    case OP.TCGETPGRP:
-      this._respond(pcb, pcb.tty ? { pgid: pcb.tty.fgPgid } : { errno: 'ENOTTY' });
+    }
+    case OP.TCGETPGRP: {
+      var gPg = this._ttyForFd(pcb, req.fd);
+      this._respond(pcb, gPg ? { pgid: gPg.fgPgid } : { errno: 'ENOTTY' });
       break;
-    case OP.TCSETPGRP:
-      if (!pcb.tty) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
+    }
+    case OP.TCSETPGRP: {
+      var sPg = this._ttyForFd(pcb, req.fd);
+      if (!sPg) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
       if (!(req.pgid > 0)) { this._respond(pcb, { errno: 'EINVAL' }); break; }
-      pcb.tty.fgPgid = req.pgid | 0;
+      sPg.fgPgid = req.pgid | 0;
       this._respond(pcb, {});
       break;
+    }
+    // The master side's resize (0020): winsize words + SIGWINCH to the
+    // pty's fg pgroup (Tty.resize, shared with the system tty's bridge).
+    case OP.TIOCSWINSZ: {
+      var wTty = this._ttyForFd(pcb, req.fd);
+      if (!wTty) { this._respond(pcb, { errno: 'ENOTTY' }); break; }
+      wTty.resize(req.cols | 0, req.rows | 0);
+      this._respond(pcb, {});
+      break;
+    }
+    case OP.PTY_CREATE: {
+      // Ptys (todos/0020): the slave is a FULL Tty — line discipline,
+      // termios, control-char signal routing, and the deferred-read
+      // machinery are reused verbatim; only the byte endpoints differ
+      // (the master fd stands where the UI bridge does for the system
+      // tty). Echo and slave output land in `out` (pipe-shaped), so
+      // master reads and select ride _streamRead/_pipeNotify unchanged.
+      if (!this._brokered) { this._respond(pcb, { errno: 'ENOSYS' }); break; }
+      var pOut = { buf: [], cap: PTY_OUT_CAP, rOpen: true, wOpen: true,
+                   readWaiters: [], writeWaiters: [] };
+      var pTty = new Tty(this, {
+        output: function (bytes) {
+          // Kernel-side echo producer: never blocks; a closed master drops.
+          if (!pOut.rOpen || !pOut.wOpen) return;
+          for (var eb = 0; eb < bytes.length; eb++) pOut.buf.push(bytes[eb]);
+          self._pipeNotify(pOut);
+        },
+      });
+      pTty._brokered = true;
+      var pty = { out: pOut, tty: pTty };
+      var mO = this._makeOfd('ptm', { pty: pty });
+      var sO = this._makeOfd('tty', { tty: pTty, pty: pty });
+      mO.refs++; sO.refs++;
+      var pmfd = 0; while (pcb.fds.has(pmfd)) pmfd++;
+      pcb.fds.set(pmfd, mO.id);
+      var psfd = 0; while (pcb.fds.has(psfd)) psfd++;
+      pcb.fds.set(psfd, sO.id);
+      this._respond(pcb, { mfd: pmfd, sfd: psfd });
+      break;
+    }
     case OP.PIPE_CREATE: {
       // Pipes are just another OFD kind (the fd/data-plane amendment's
       // payoff): two descriptions over one kernel-side buffer, riding the
@@ -1332,8 +1426,13 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         this._streamRead(pcb, o1.rx, count);
         return;
       }
+      if (o1.kind === 'ptm') {
+        // Master read: post-line-discipline output + echo, pipe-shaped.
+        this._streamRead(pcb, o1.pty.out, count);
+        return;
+      }
       if (o1.kind === 'tty') {
-        var tty = pcb.tty;
+        var tty = o1.tty || pcb.tty;
         if (!tty) { this._respondRaw(pcb, new Uint8Array(0)); return; }
         // Job control (todos/0003): a background pgroup reading the tty gets
         // SIGTTIN (stop class); if it's ignored or blocked, POSIX says the
@@ -1351,8 +1450,8 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         }
         if (tty._cooked.length > 0) { this._respondRaw(pcb, tty.take(count)); return; }
         if (tty._eofFlag) { this._respondRaw(pcb, new Uint8Array(0)); return; }
-        pcb.waiter = { op: 'ttyread', count: count };   // served by _ttyNotify
-        this._ttyWaiters.push(pcb.pid);
+        pcb.waiter = { op: 'ttyread', tty: tty, count: count };   // served by _ttyNotify
+        tty.waiters.push(pcb.pid);
         return;
       }
       this._respond(pcb, { errno: 'EBADF' });           // 'out'
@@ -1383,7 +1482,20 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         return;
       }
       if (o2.kind === 'out') { this._onOutput(pcb.pid, o2.ch, data.slice()); this._respond(pcb, { n: data.length }); return; }
-      if (o2.kind === 'tty') { this._onOutput(pcb.pid, o2.ch || 1, data.slice()); this._respond(pcb, { n: data.length }); return; }
+      if (o2.kind === 'ptm') {
+        // Master write = terminal keystrokes: feed the slave's line
+        // discipline (echo/signals/canonical editing for free). Input
+        // never blocks — an overfull cooked queue drops, like a real tty.
+        o2.pty.tty.input(data);
+        this._respond(pcb, { n: data.length });
+        return;
+      }
+      if (o2.kind === 'tty') {
+        if (o2.pty) { this._ptySlaveWrite(pcb, o2.pty, data); return; }
+        this._onOutput(pcb.pid, o2.ch || 1, data.slice());
+        this._respond(pcb, { n: data.length });
+        return;
+      }
       this._respond(pcb, { n: data.length });           // 'null'
       return;
     }
@@ -1516,7 +1628,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     }
     case OP.FS_ISATTY: {
       var oB = ofdOf(req.fd);
-      this._respond(pcb, { tty: oB && oB.kind === 'tty' ? 1 : 0 });
+      this._respond(pcb, { tty: oB && (oB.kind === 'tty' || oB.kind === 'ptm') ? 1 : 0 });
       return;
     }
     case OP.FS_SELECT: {
@@ -2707,7 +2819,14 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
     var id = pcb.fds.get(fd | 0);
     var o = id === undefined ? null : self._ofds.get(id);
     if (!o) { r.push(fd); return; }                     // EBADF surfaces on use
-    if (o.kind === 'tty') { if (pcb.tty && pcb.tty.readable()) r.push(fd); }
+    if (o.kind === 'tty') {
+      var sTty = o.tty || pcb.tty;
+      if (sTty && sTty.readable()) r.push(fd);
+    }
+    else if (o.kind === 'ptm') {
+      // Master read-ready: buffered slave output/echo, or slave-gone EOF.
+      if (o.pty.out.buf.length > 0 || !o.pty.out.wOpen) r.push(fd);
+    }
     else if (o.kind === 'pipe') {
       if (o.end !== 'read' || o.pipe.buf.length > 0 || !o.pipe.wOpen) r.push(fd);
     }
@@ -2744,10 +2863,11 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
  * first. */
 Kernel.prototype._ttyNotify = function (tty) {
   var i = 0;
-  while (i < this._ttyWaiters.length) {
-    var pid = this._ttyWaiters[i];
+  while (i < tty.waiters.length) {
+    var pid = tty.waiters[i];
     var pcb = this._procs.get(pid);
-    if (!pcb || !pcb.waiter || pcb.waiter.op !== 'ttyread') { this._ttyWaiters.splice(i, 1); continue; }
+    if (!pcb || !pcb.waiter || pcb.waiter.op !== 'ttyread' ||
+        pcb.waiter.tty !== tty) { tty.waiters.splice(i, 1); continue; }
     if (pcb.state === STATE_STOPPED) { i++; continue; }  // parked, not a consumer
     if (tty.fgPgid > 0 && pcb.pgid !== tty.fgPgid) {
       // Backgrounded since it parked. _cancelWaiter drops it from this
@@ -2789,6 +2909,58 @@ Kernel.prototype._recheckSelects = function () {
       }
     }
   });
+};
+
+/* Resolve the tty an fd names (0020): pty slave OFDs carry their Tty,
+ * masters resolve to the same Tty (termios on either end reaches the
+ * pair's line discipline, like Linux); the system tty's std OFDs fall
+ * through o.tty to the attached tty. Ring mode (no fd table) and fd-less
+ * requests (older callers, tests) fall back to the attached tty; an fd
+ * that names a non-tty resolves null (the caller answers ENOTTY). */
+Kernel.prototype._ttyForFd = function (pcb, fd) {
+  if (this._brokered && fd !== undefined && fd !== null) {
+    var id = pcb.fds.get(fd | 0);
+    var o = id === undefined ? null : this._ofds.get(id);
+    if (o) {
+      if (o.kind === 'ptm') return o.pty.tty;
+      if (o.kind === 'tty') return o.tty || pcb.tty;
+      return null;
+    }
+  }
+  return pcb.tty;
+};
+
+/* Pty slave write (0020) — process output to the terminal. OPOST output
+ * processing per the slave's termios (ONLCR: \n -> \r\n), then whole-or-
+ * block into the master direction: a partial landing could split the
+ * expansion, and the byte count reported to the writer must be in PRE-
+ * processed bytes (PTY_OUT_CAP guarantees a whole write always fits once
+ * the master drains). Master gone -> EIO, no SIGPIPE (pty semantics; the
+ * fg pgroup already got SIGHUP at master close). */
+Kernel.prototype._ptySlaveWrite = function (pcb, pty, data) {
+  var dir = pty.out;
+  if (!dir.rOpen) { this._respond(pcb, { errno: 'EIO' }); return; }
+  var t = pty.tty.termios;
+  var processed;
+  if ((t.oflag & T_OPOST) && (t.oflag & T_ONLCR)) {
+    var out = [];
+    for (var i = 0; i < data.length; i++) {
+      if (data[i] === 10) out.push(13);
+      out.push(data[i]);
+    }
+    processed = Uint8Array.from(out);
+  } else {
+    processed = data.slice();          // copy out of the reused SAB payload
+  }
+  if (dir.buf.length + processed.length <= dir.cap) {
+    for (var k = 0; k < processed.length; k++) dir.buf.push(processed[k]);
+    this._respond(pcb, { n: data.length });
+    this._pipeNotify(dir);
+    return;
+  }
+  pcb.waiter = { op: 'pipewrite', pipe: dir, data: processed,
+                 whole: true, n: data.length, ptyw: true };
+  dir.writeWaiters.push(pcb.pid);
 };
 
 /* Blocking stream ops shared by pipes and connected sockets — `dir` is one
@@ -2872,20 +3044,27 @@ Kernel.prototype._pipeNotify = function (pipe) {
         pipe.writeWaiters.shift();
         continue;
       }
+      var ww = wpcb.waiter;
       if (!pipe.rOpen || !pipe.wOpen) {   // !wOpen: shutdown(SHUT_WR) raced a parked write
         this._cancelWaiter(wpcb);
-        this._respond(wpcb, { errno: 'EPIPE' });
-        this._deliver(wpcb, SIG.PIPE);
+        if (ww.ptyw) {
+          // Pty slave writer, master gone: EIO, no SIGPIPE (_ptySlaveWrite).
+          this._respond(wpcb, { errno: 'EIO' });
+        } else {
+          this._respond(wpcb, { errno: 'EPIPE' });
+          this._deliver(wpcb, SIG.PIPE);
+        }
         progress = true;
         continue;
       }
-      var data = wpcb.waiter.data;
+      var data = ww.data;
       var free = pipe.cap - pipe.buf.length;
-      if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free)) break;
+      if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free) ||
+          (ww.whole && data.length > free)) break;
       this._cancelWaiter(wpcb);
-      var n = Math.min(free, data.length);
+      var n = ww.whole ? data.length : Math.min(free, data.length);
       for (var i = 0; i < n; i++) pipe.buf.push(data[i]);
-      this._respond(wpcb, { n: n });
+      this._respond(wpcb, { n: ww.n !== undefined ? ww.n : n });
       progress = true;
     }
   }
@@ -2965,8 +3144,8 @@ Kernel.prototype._cancelWaiter = function (pcb) {
   if (!w) return;
   if (w.timer) clearTimeout(w.timer);
   if (w.op === 'ttyread') {
-    var i = this._ttyWaiters.indexOf(pcb.pid);
-    if (i >= 0) this._ttyWaiters.splice(i, 1);
+    var i = w.tty.waiters.indexOf(pcb.pid);
+    if (i >= 0) w.tty.waiters.splice(i, 1);
   } else if (w.op === 'piperead' || w.op === 'pipewrite') {
     var q = w.op === 'piperead' ? w.pipe.readWaiters : w.pipe.writeWaiters;
     var j = q.indexOf(pcb.pid);
@@ -3344,6 +3523,18 @@ RemoteFS.prototype.pipe = function () {
   this._fdTable[r.rfd] = { type: 'remote' };
   this._fdTable[r.wfd] = { type: 'remote' };
   return [r.rfd, r.wfd];
+};
+/* Ptys (todos/0020): kernel pty pair -> [masterFd, slaveFd]; the terminal
+ * app resizes the pair through the master (TIOCSWINSZ -> SIGWINCH). */
+RemoteFS.prototype.openpty = function () {
+  var r = this._ok(this._c.call(OP.PTY_CREATE, {}));
+  if (r === null) return null;
+  this._fdTable[r.mfd] = { type: 'remote' };
+  this._fdTable[r.sfd] = { type: 'remote' };
+  return [r.mfd, r.sfd];
+};
+RemoteFS.prototype.setWinsize = function (fd, rows, cols) {
+  return this._ok(this._c.call(OP.TIOCSWINSZ, { fd: fd, rows: rows, cols: cols })) && 0;
 };
 /* AF_UNIX sockets (todos/0008). Data flows through read/write above; only
  * the control plane needs methods. accept is interruptible (it parks

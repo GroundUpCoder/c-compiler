@@ -1,0 +1,14 @@
+{
+  "name": "term",
+  "description": "The wasm terminal (todos/0020): SDL surface + kernel pty + freetype",
+  "deps": [
+    "../../vendor/freetype/lib.json"
+  ],
+  "includes": [
+    "../../vendor/freetype/demo",
+    "../../vendor/freetype/include"
+  ],
+  "sources": [
+    "term.c"
+  ]
+}
