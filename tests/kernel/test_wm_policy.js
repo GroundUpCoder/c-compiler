@@ -358,6 +358,29 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('screen shot pixels match the direct composite',
     String(px(f.bytes.subarray(20), 640, 320, 460)) === '10,20,30,255');
 
+  // ---- resize: RESIZE command -> client renegotiates -> EV_CONFIGURED ----
+  f = await cmd(wm, WMP.RESIZE, [c1.sid, 100, 70]);
+  check('RESIZE -> R_OK', f.type === WMP.R_OK);
+  const rr = drainRing(ring1);
+  check('client got WINDOW_RESIZED', rr.length === 1 &&
+    rr[0].type === K.WMEV.WINDOW_RESIZED && rr[0].win === c1.sid &&
+    rr[0].w[0] === 100 && rr[0].w[1] === 70, JSON.stringify(rr));
+  const fbR = makeFb(100, 70);
+  present(fbR, [50, 60, 70, 255]);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbR.sab, ring: null });
+  const rAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: c1.sid, w: 100, h: 70 });
+  check('SURFACE_CONFIGURE ack ok', !rAck.errno, JSON.stringify(rAck));
+  f = await readEvent(wm);
+  check('EV_CONFIGURED { sid, w, h } at the ack', f.type === WMP.EV_CONFIGURED &&
+    f.g(0) === c1.sid && f.g(1) === 100 && f.g(2) === 70,
+    JSON.stringify([f.type, f.g(0), f.g(1), f.g(2)]));
+  check('kernel geometry follows the ack',
+    kernel.wmList().find(s => s.sid === c1.sid).w === 100);
+  f = await cmd(wm, WMP.RESIZE, [999, 64, 64]);
+  check('RESIZE bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  f = await cmd(wm, WMP.RESIZE, [c1.sid, 8, 8]);
+  check('RESIZE below the size floor -> R_ERR', f.type === WMP.R_ERR);
+
   // ---- a parked read wakes on a pushed event ----
   check('connection quiescent before the park', idle(wm));
   const parked = submit(wmPid, K.OP.FS_READ, { fd: wmFd, count: 65536 });

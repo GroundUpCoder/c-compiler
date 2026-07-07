@@ -254,9 +254,13 @@ Legend: **✅ have** · **◑ partial** · **✗ missing**. "Web" = the backing 
 API. Priority P0 (needed for most apps) → P3 (niche).
 
 ### Video / Window — ◑ partial — P0
-Missing: multiple windows; window resize + `SDL_EVENT_WINDOW_*` (resized,
-focus gained/lost, exposed, close-requested); `SDL_GetWindowSize` /
-`SetWindowSize` / `GetWindowSizeInPixels` / position / min/max; fullscreen
+(Landed 2026-07-08, todos/0019: WM-initiated window resize —
+`SDL_EVENT_WINDOW_RESIZED` delivered with in-place surface re-derivation,
+the 0x202–0x207 window-event block defined, `SDL_WindowEvent` in the union —
+plus `SDL_GetWindowSize`.)
+Missing: multiple windows; the other `SDL_EVENT_WINDOW_*` deliveries (focus
+gained/lost, exposed, close-requested);
+`SDL_SetWindowSize` (app-initiated resize) / `GetWindowSizeInPixels` / position / min/max; fullscreen
 toggle at runtime; `SDL_GetWindowPixelDensity`/display scale (HiDPI);
 `SDL_SetWindowResizable`/`Bordered`; display enumeration (`SDL_GetDisplays`,
 desktop/current mode); `SDL_ShowWindow`/`Hide`; `SDL_GetWindowFlags`;

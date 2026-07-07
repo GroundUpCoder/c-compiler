@@ -16,6 +16,10 @@
  * Quit: close box / 'q'. Quits via SDL_Quit() (stops the frame loop; the
  * runtime drains pending Dawn readbacks before the EXIT handshake) — Dawn-tier
  * apps must NOT call exit() from a frame callback (WM.md spike S3 caveat).
+ *
+ * Resize (todos/0019): SDL_EVENT_WINDOW_RESIZED reconfigures the surface at
+ * the new size and rebuilds the depth buffer — the canonical webgpu.h
+ * resize dance, same in the browser and under Dawn.
  */
 #include <sdl3webgpu.h>
 #include <math.h>
@@ -35,8 +39,10 @@ static WGPUQueue queue;
 static WGPURenderPipeline pipeline;
 static WGPUBuffer vbuf, ibuf, ubuf;
 static WGPUBindGroup bindGroup;
+static WGPUTexture depthTex;
 static WGPUTextureView depthView;
 static WGPUTextureFormat format;
+static int gw = W, gh = H;       /* current size (resize events update it) */
 static int ready = 0;
 static int failed = 0;
 static long frame_no = 0;
@@ -142,12 +148,41 @@ static void update_uniforms(long pose) {
     float view_model[16];
     memcpy(view_model, model, sizeof(model));
     view_model[14] -= 3.6f;
-    mat_perspective(proj, 55.0f * 3.14159265f / 180.0f, (float)W / (float)H, 0.1f, 10.0f);
+    mat_perspective(proj, 55.0f * 3.14159265f / 180.0f, (float)gw / (float)gh, 0.1f, 10.0f);
     float u[32];
     mat_mul(mvp, proj, view_model);
     memcpy(&u[0], mvp, sizeof(mvp));
     memcpy(&u[16], model, sizeof(model));
     wgpuQueueWriteBuffer(queue, ubuf, 0, u, sizeof(u));
+}
+
+/* (Re)build the depth buffer at the current size — at init and per resize. */
+static void make_depth(void) {
+    if (depthView) wgpuTextureViewRelease(depthView);
+    if (depthTex) wgpuTextureRelease(depthTex);
+    WGPUTextureDescriptor dtd;
+    memset(&dtd, 0, sizeof(dtd));
+    dtd.usage = WGPUTextureUsage_RenderAttachment;
+    dtd.dimension = WGPUTextureDimension_2D;
+    dtd.size.width = (uint32_t)gw; dtd.size.height = (uint32_t)gh;
+    dtd.size.depthOrArrayLayers = 1;
+    dtd.format = WGPUTextureFormat_Depth24Plus;
+    dtd.mipLevelCount = 1; dtd.sampleCount = 1;
+    depthTex = wgpuDeviceCreateTexture(device, &dtd);
+    depthView = wgpuTextureCreateView(depthTex, NULL);
+}
+
+/* (Re)configure the swapchain surface at the current size — at device init
+ * and per resize (the canonical webgpu.h resize dance). */
+static void configure_surface(void) {
+    WGPUSurfaceConfiguration cfg;
+    cfg.nextInChain = NULL; cfg.device = device; cfg.format = format;
+    cfg.usage = WGPUTextureUsage_RenderAttachment;
+    cfg.width = (uint32_t)gw; cfg.height = (uint32_t)gh;
+    cfg.viewFormatCount = 0; cfg.viewFormats = NULL;
+    cfg.alphaMode = WGPUCompositeAlphaMode_Opaque;
+    cfg.presentMode = WGPUPresentMode_Fifo;
+    wgpuSurfaceConfigure(surface, &cfg);
 }
 
 static void build(void) {
@@ -196,14 +231,7 @@ static void build(void) {
     pld.bindGroupLayoutCount = 1; pld.bindGroupLayouts = &bgl;
     WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(device, &pld);
 
-    WGPUTextureDescriptor dtd;
-    memset(&dtd, 0, sizeof(dtd));
-    dtd.usage = WGPUTextureUsage_RenderAttachment;
-    dtd.dimension = WGPUTextureDimension_2D;
-    dtd.size.width = W; dtd.size.height = H; dtd.size.depthOrArrayLayers = 1;
-    dtd.format = WGPUTextureFormat_Depth24Plus;
-    dtd.mipLevelCount = 1; dtd.sampleCount = 1;
-    depthView = wgpuTextureCreateView(wgpuDeviceCreateTexture(device, &dtd), NULL);
+    make_depth();
 
     WGPUVertexAttribute attrs[3];
     attrs[0].format = WGPUVertexFormat_Float32x3; attrs[0].offset = 0;  attrs[0].shaderLocation = 0;
@@ -253,6 +281,12 @@ static void frame(void) {
             (e.type == SDL_EVENT_KEY_DOWN && e.key.key == 'q')) {
             SDL_Quit();          /* stop the frame loop; runtime drains + exits */
             return;
+        }
+        if (e.type == SDL_EVENT_WINDOW_RESIZED && ready) {
+            gw = e.window.data1;
+            gh = e.window.data2;
+            configure_surface();     /* swapchain at the new size */
+            make_depth();            /* depth must match the color target */
         }
     }
     /* GPU init failed: no Dawn work is in flight, so a direct exit is safe
@@ -318,17 +352,10 @@ static void on_device(WGPURequestDeviceStatus status, WGPUDevice dev,
     device = dev;
     queue = wgpuDeviceGetQueue(device);
     format = wgpuSurfaceGetPreferredFormat(surface, adapter);
-    WGPUSurfaceConfiguration cfg;
-    cfg.nextInChain = NULL; cfg.device = device; cfg.format = format;
-    cfg.usage = WGPUTextureUsage_RenderAttachment;
-    cfg.width = W; cfg.height = H;
-    cfg.viewFormatCount = 0; cfg.viewFormats = NULL;
-    cfg.alphaMode = WGPUCompositeAlphaMode_Opaque;
-    cfg.presentMode = WGPUPresentMode_Fifo;
-    wgpuSurfaceConfigure(surface, &cfg);
+    configure_surface();
     build();
     ready = 1;
-    printf("gpubox: ready %dx%d\n", W, H);
+    printf("gpubox: ready %dx%d\n", gw, gh);
 }
 
 static void on_adapter(WGPURequestAdapterStatus status, WGPUAdapter ad,

@@ -5,6 +5,7 @@
  *   wmctl list                        windows: SID PID GEOM Z FLAGS TITLE
  *   wmctl focus|min|restore|close|raise|lower SID
  *   wmctl move SID X Y
+ *   wmctl resize SID W H              asks the client; applies at its ack
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
@@ -25,6 +26,7 @@ static int usage(void) {
         "usage: wmctl list\n"
         "       wmctl focus|min|restore|close|raise|lower SID\n"
         "       wmctl move SID X Y\n"
+        "       wmctl resize SID W H\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl shot SID|screen [FILE]\n");
@@ -114,6 +116,11 @@ int main(int argc, char **argv) {
         if (argc < 5) return usage();
         int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
         return wmp_cmd(fd, WMP_MOVE, a, 3) ? fail("no such window") : 0;
+    }
+    if (!strcmp(cmd, "resize")) {
+        if (argc < 5) return usage();
+        int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
+        return wmp_cmd(fd, WMP_RESIZE, a, 3) ? fail("resize refused") : 0;
     }
     if (!strcmp(cmd, "key")) {
         if (argc < 4) return usage();

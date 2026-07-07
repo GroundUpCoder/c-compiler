@@ -3,7 +3,8 @@
 // and drive its WINDOW through the real UI-bridge path — canvas mouse/
 // keyboard -> kernel hit-test/rings -> SDL app — asserting composited
 // pixels on the desktop canvas at every step (window fill, kernel chrome,
-// click paint, key toggle, title-bar drag, close box). With 0014 the
+// click paint, key toggle, title-bar drag, border drag-resize with the
+// SURFACE_CONFIGURE renegotiation (todos/0019), close box). With 0014 the
 // autostarted /bin/wm is part of the scene: the borderless taskbar strip,
 // WM (not kernel) placement, taskbar-button minimize/restore, and wmctl
 // from the shell.
@@ -79,7 +80,7 @@ try {
   const WX = 12, WY = 36, WW = 240, WH = 160;
   await waitPixel(WX + 120, WY + 80, ORANGE, 60000);
   check('winbox window composited (orange fill)', true);
-  await waitPixel(WX - 3, WY - 3, TEAL);         // left of the settled window
+  await waitPixel(WX - 7, WY - 7, TEAL);         // clear of the resize frame (0019)
   check('WM placement settled (kernel cascade spot vacated)', true);
   check('white app border', near(await sample(WX + 2, WY + 2), WHITE), await sample(WX + 2, WY + 2));
   // Sample chrome AWAY from the title text and the close-box 'x' glyph.
@@ -127,8 +128,26 @@ try {
   check('title drag moved the window', true);
   check('old spot back to desktop', near(await sample(WX + 4, WY + 4), TEAL), await sample(WX + 4, WY + 4));
 
+  // Drag-resize (todos/0019): grab the SE frame corner (the WM_BORDER band
+  // just outside the client), drag +60/+40 — Win95 outline preview during
+  // the drag, ONE configure at release; winbox re-derives its surface and
+  // redraws, the ack swaps the kernel buffer. 240x160 -> 300x200.
+  await page.mouse.move(rect.x + NX + WW + 2, rect.y + NY + WH + 2);
+  await page.mouse.down();
+  await page.mouse.move(rect.x + NX + WW + 62, rect.y + NY + WH + 42, { steps: 8 });
+  await page.mouse.up();
+  const RW = WW + 60, RH = WH + 40;
+  await waitPixel(NX + RW - 20, NY + RH - 20, GREEN);
+  check('drag-resize: client re-rendered at 300x200', true);
+  check('new white border at the new right edge',
+    near(await sample(NX + RW - 2, NY + 100), WHITE), await sample(NX + RW - 2, NY + 100));
+  check('area beyond the old width is client now',
+    near(await sample(NX + WW + 20, NY + 80), GREEN), await sample(NX + WW + 20, NY + 80));
+  check('frame border flanks the resized client',
+    near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
+
   // Close box -> SDL_EVENT_QUIT -> app exits -> window gone.
-  await clickAt(NX + WW - 12, NY - 12);
+  await clickAt(NX + RW - 12, NY - 12);
   await waitPixel(NX + 120, NY + 80, TEAL);
   check('close box quit the app; desktop restored', true);
 

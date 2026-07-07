@@ -61,6 +61,13 @@ function sessionRender() {
     'wmctl list',
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
     'wmctl shot $SID /root/g0.ppm && echo shot0-ok',
+    // Client resize (todos/0019): configure -> gpubox reconfigures its Dawn
+    // surface + depth at 320x200 -> readback ack swaps the kernel buffer.
+    'wmctl resize $SID 320 200 && echo resize-ok',
+    'sleep 2',
+    'echo ==list1b',
+    'wmctl list',
+    'wmctl shot $SID /root/gr.ppm && echo shotr-ok',
     'wmctl close $SID',
     'sleep 2',                                      // SDL_Quit -> drain -> exit
     'echo ==list2',
@@ -86,6 +93,10 @@ function sessionRender() {
   const row1 = section('list1').split('\n').find((l) => l.endsWith('\tgpubox')) || '';
   check('gpubox opens a WM-placed 256x256 window', row1.includes('256x256'), row1);
   check('both poses shot to PPM', out.includes('shot0-ok') && out.includes('shot45-ok'));
+  const row1b = section('list1b').split('\n').find((l) => l.endsWith('\tgpubox')) || '';
+  check('wmctl resize renegotiates: window is 320x200 after the ack',
+    out.includes('resize-ok') && row1b.includes('320x200'), row1b);
+  check('resized pose shot to PPM', out.includes('shotr-ok'));
   // A ghost window would show as a list ROW (title column); the next launch's
   // "gpubox: ready" stdout may interleave into the section — ignore non-rows.
   const hasRow = (sec) => sec.split('\n').some((l) => l.endsWith('\tgpubox'));
@@ -97,7 +108,7 @@ function sessionRender() {
 /* ---- session B: extract the PPMs byte-clean and tolerance-check ---- */
 function sessionPixels() {
   const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat /root/g0.ppm /root/g45.ppm\n', timeout: 120000,
+    { input: 'cat /root/g0.ppm /root/gr.ppm /root/g45.ppm\n', timeout: 120000,
       maxBuffer: 8 * 1024 * 1024 });
   if (b.error) throw b.error;
 
@@ -133,7 +144,17 @@ function sessionPixels() {
     near(px(b.stdout, g0, 4, 4), CLEAR, 12) && near(px(b.stdout, g0, 251, 251), CLEAR, 12),
     px(b.stdout, g0, 4, 4).join(','));
 
-  const g45 = parsePPM(b.stdout, g0.end);
+  const gr = parsePPM(b.stdout, g0.end);
+  check('resized shot parses as P6 at the NEW client size 320x200',
+    gr !== null && gr.w === 320 && gr.h === 200, gr && `${gr.w}x${gr.h}`);
+  if (!gr) return;
+  check('resized center is still the lit red +Z face (re-rendered, not scaled)',
+    near(px(b.stdout, gr, 160, 100), CENTER0, 30), px(b.stdout, gr, 160, 100).join(','));
+  check('resized corners are the clear color (depth/color targets match)',
+    near(px(b.stdout, gr, 4, 4), CLEAR, 12) && near(px(b.stdout, gr, 315, 195), CLEAR, 12),
+    px(b.stdout, gr, 315, 195).join(','));
+
+  const g45 = parsePPM(b.stdout, gr.end);
   check('pose-45 shot parses as P6 256x256',
     g45 !== null && g45.w === 256 && g45.h === 256, g45 && `${g45.w}x${g45.h}`);
   if (!g45) return;

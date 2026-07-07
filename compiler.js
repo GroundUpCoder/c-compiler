@@ -18038,6 +18038,16 @@ typedef struct SDL_MouseWheelEvent {
     float mouse_y;
 } SDL_MouseWheelEvent;
 
+/* SDL3 window event: data1/data2 are event-dependent (RESIZED: new w/h). */
+typedef struct SDL_WindowEvent {
+    Uint32 type;
+    Uint32 reserved;
+    Uint64 timestamp;
+    SDL_WindowID windowID;
+    Sint32 data1;
+    Sint32 data2;
+} SDL_WindowEvent;
+
 typedef union SDL_Event {
     Uint32 type;
     SDL_CommonEvent common;
@@ -18045,6 +18055,7 @@ typedef union SDL_Event {
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
     SDL_MouseWheelEvent wheel;
+    SDL_WindowEvent window;
     Uint8 padding[128];
 } SDL_Event;
 
@@ -18071,6 +18082,15 @@ typedef Uint64 SDL_WindowFlags;
 
 /* SDL3 event types (SDL_EVENT_*). Values are unchanged from SDL2. */
 #define SDL_EVENT_QUIT 0x100
+/* SDL3 window events (flattened enum, one type per event). Only RESIZED is
+   delivered today — the OS WM's client-resize protocol (todos/0019); the
+   rest of the block is defined for source compatibility. */
+#define SDL_EVENT_WINDOW_SHOWN 0x202
+#define SDL_EVENT_WINDOW_HIDDEN 0x203
+#define SDL_EVENT_WINDOW_EXPOSED 0x204
+#define SDL_EVENT_WINDOW_MOVED 0x205
+#define SDL_EVENT_WINDOW_RESIZED 0x206
+#define SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED 0x207
 #define SDL_EVENT_KEY_DOWN 0x300
 #define SDL_EVENT_KEY_UP 0x301
 #define SDL_EVENT_MOUSE_MOTION 0x400
@@ -18180,6 +18200,7 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
 SDL_WindowID SDL_GetWindowID(SDL_Window *window);
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
+bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
 bool SDL_PollEvent(SDL_Event *event);
 void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
@@ -22014,7 +22035,35 @@ __externref __jss(const char *s) {
 struct SDL_Window {
     int handle;
     SDL_Surface surface;
+    int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
 };
+
+/* Window registry: __sdl_push_window_event must find the SDL_Window by
+   handle to re-derive its surface on RESIZED (todos/0019). Windows are
+   few; a small fixed table with linear scans is fine. A window past the
+   cap still works — it just never re-derives on resize. */
+#define __SDL_MAX_WINDOWS 32
+static SDL_Window *__sdl_window_registry[__SDL_MAX_WINDOWS];
+
+static void __sdl_window_register(SDL_Window *w) {
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++) {
+        if (!__sdl_window_registry[i]) { __sdl_window_registry[i] = w; return; }
+    }
+}
+
+static void __sdl_window_unregister(SDL_Window *w) {
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++) {
+        if (__sdl_window_registry[i] == w) { __sdl_window_registry[i] = 0; return; }
+    }
+}
+
+static SDL_Window *__sdl_window_by_handle(int handle) {
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++) {
+        SDL_Window *w = __sdl_window_registry[i];
+        if (w && w->handle == handle) return w;
+    }
+    return 0;
+}
 
 /* Low-level host imports — all operate on primitive values only.
    The host (host.js) knows nothing about C struct layouts. */
@@ -22148,6 +22197,8 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     win->surface.pixels = malloc(pitch * h);
     if (!win->surface.pixels) { free(win); SDL_SetError("Out of memory"); return NULL; }
     memset(win->surface.pixels, 0, pitch * h);
+    win->pixels_cap = pitch * h;
+    __sdl_window_register(win);
     return win;
 }
 
@@ -22159,6 +22210,14 @@ SDL_WindowID SDL_GetWindowID(SDL_Window *window) {
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window) {
     if (!window) { SDL_InvalidParamError("window"); return NULL; }
     return &window->surface;
+}
+
+bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
+    if (!window) return SDL_InvalidParamError("window");
+    /* The surface tracks the window size (resize events re-derive it). */
+    if (w) *w = window->surface.w;
+    if (h) *h = window->surface.h;
+    return 1;
 }
 
 bool SDL_UpdateWindowSurface(SDL_Window *window) {
@@ -22233,6 +22292,42 @@ void __sdl_push_quit_event(int window_id) {
     __sdl_eq_push(e);
 }
 __export __sdl_push_quit_event = __sdl_push_quit_event;
+
+/* Kernel-WM window events (todos/0019). RESIZED re-derives the window
+   surface IN PLACE before the event is queued: w/h/pitch update, but the
+   pixel allocation only ever GROWS (high-water) — a program that keeps
+   drawing with stale dimensions writes inside the allocation instead of
+   corrupting the heap. Per the SDL3 contract, programs should re-fetch
+   SDL_GetWindowSurface after a resize event (same pointer here; fields
+   are current either way). */
+void __sdl_push_window_event(int window_id, int type, int data1, int data2) {
+    if (type == SDL_EVENT_WINDOW_RESIZED && data1 > 0 && data2 > 0) {
+        SDL_Window *w = __sdl_window_by_handle(window_id);
+        if (w) {
+            int pitch = data1 * 4;
+            int need = pitch * data2;
+            if (need > w->pixels_cap) {
+                void *np = realloc(w->surface.pixels, (size_t)need);
+                if (!np) return;           /* can't grow: drop the event */
+                w->surface.pixels = np;
+                w->pixels_cap = need;
+            }
+            w->surface.w = data1;
+            w->surface.h = data2;
+            w->surface.pitch = pitch;
+            memset(w->surface.pixels, 0, (size_t)need);
+        }
+    }
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = (Uint32)type;
+    e->event.window.timestamp = __sdl_now_ns();
+    e->event.window.windowID = (SDL_WindowID)window_id;
+    e->event.window.data1 = data1;
+    e->event.window.data2 = data2;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_window_event = __sdl_push_window_event;
 
 void __sdl_push_key_event(int window_id, int type, int scancode, int sym, int mod, int repeat) {
     __SDL_EventEntry *e = __sdl_eq_alloc();
@@ -22454,6 +22549,7 @@ void SDL_DestroyAudioStream(SDL_AudioStream *stream) {
 
 void SDL_DestroyWindow(SDL_Window *window) {
     if (!window) return;
+    __sdl_window_unregister(window);
     __sdl_destroy_window(window->handle);
     free(window->surface.pixels);
     free(window);

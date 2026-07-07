@@ -26,10 +26,9 @@ One numbered file per unit of work we have actually committed to doing.
 
 1. `0018` quake windowed — relative-mouse/pointer-lock surface flag +
    pak0.pak seeding (trivial now via image.json `bin` entries)
-2. `0019` client resize (`SURFACE_CONFIGURE`)
-3. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
+2. `0020` wasm terminal + ptys — KERNEL.md's waiting consumer; xterm.js
    demotes to bootstrap chrome
-4. (unnumbered) a real-world WebGPU C app port — candidates via
+3. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the

@@ -4,7 +4,9 @@
 // reaching the kernel compositor via the `gpu` transport (wgpuSurfacePresent ->
 // transferToImageBitmap handoff, spike S1). Asserts composited desktop pixels:
 // the shaded cube renders, it ANIMATES (raw webgpu.h present is live, not a
-// stale frame), and `wmctl close` quits the app cleanly.
+// stale frame), `wmctl resize` renegotiates the gpu-transport window
+// (todos/0019: canvas + surface + depth reconfigure, bitmap-size ack), and
+// `wmctl close` quits the app cleanly.
 //
 // Usage: node os-gpubox.mjs
 import { chromium } from 'playwright';
@@ -80,6 +82,20 @@ try {
     animated = b.some((v, j) => Math.abs(v - a[j]) > 12);
   }
   check('cube animates (webgpu.h present loop is live)', animated);
+
+  // Client resize through the gpu transport (todos/0019): configure event ->
+  // gpubox reconfigures its canvas surface + depth at 320x200 -> the first
+  // new-size ImageBitmap acks and the kernel geometry follows. The probe
+  // point is desktop BEFORE the resize and render-pass clear AFTER it.
+  await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl resize $SID 320 200\r');
+  const tR = Date.now();
+  for (;;) {
+    const got = await sample(WX + 316, WY + 196);
+    if (near(got, CLEAR)) break;
+    if (Date.now() - tR > 30000) throw new Error(`resized client never composited; probe ${got}`);
+    await new Promise(r => setTimeout(r, 250));
+  }
+  check('wmctl resize renegotiated the gpu-transport window to 320x200', true);
 
   // wmctl close from the shell -> SDL_EVENT_QUIT -> clean quit, window gone.
   await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl close $SID\r');

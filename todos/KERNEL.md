@@ -215,9 +215,10 @@ response, sets DONE, bumps the doorbell. Node path identical via
 0x05xx sockets   SOCK_SOCKET/BIND/LISTEN/ACCEPT/CONNECT/PAIR/SHUTDOWN —
                  AF_UNIX control plane (todos/0008; data plane rides
                  FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT, see below)
-0x1xxx WM        SURFACE_CREATE/DESTROY/SET_TITLE (todos/WM.md; present is
-                 deliberately NOT an RPC — pure SAB flip/seq, mailbox;
-                 0x1004 reserved should damage tracking ever want one)
+0x1xxx WM        SURFACE_CREATE/DESTROY/SET_TITLE/CONFIGURE (todos/WM.md;
+                 present is deliberately NOT an RPC — pure SAB flip/seq,
+                 mailbox; 0x1004 reserved should damage tracking ever want
+                 one; CONFIGURE = the client's resize ack, todos/0019)
 0x2xxx audio     AUDIO_OPEN/AUDIO_CLOSE (todos/0017; WM.md "Audio mixing" —
                  PCM rides the source-ring SABs and the one page-owned
                  output ring, never RPCs)

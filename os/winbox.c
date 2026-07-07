@@ -7,6 +7,8 @@
  *   - any KEYDOWN toggles the fill green (and back)
  *   - MOUSE_BUTTON_DOWN paints a black 8x8 square at the click point
  *   - SDL_EVENT_QUIT (the title-bar close box) exits 0
+ *   - SDL_EVENT_WINDOW_RESIZED re-fetches the surface and redraws at the
+ *     new size (the todos/0019 client-resize acceptance app)
  */
 #include <SDL.h>
 #include <stdint.h>
@@ -33,19 +35,22 @@ static void frame_cb(void) {
             marks[nmarks][0] = (uint32_t)e.button.x;
             marks[nmarks][1] = (uint32_t)e.button.y;
             nmarks++;
+        } else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
+            surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
         } else if (e.type == SDL_EVENT_QUIT) exit(0);
     }
+    int w = surf->w, h = surf->h;
     uint32_t fill = green ? rgb(0, 200, 80) : rgb(255, 140, 0);
     uint32_t border = rgb(255, 255, 255);
     uint32_t *px = (uint32_t *)surf->pixels;
-    for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            px[y * W + x] = (x < 4 || y < 4 || x >= W - 4 || y >= H - 4) ? border : fill;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            px[y * w + x] = (x < 4 || y < 4 || x >= w - 4 || y >= h - 4) ? border : fill;
     for (int i = 0; i < nmarks; i++) {
         for (int dy = 0; dy < 8; dy++) {
             for (int dx = 0; dx < 8; dx++) {
                 int x = (int)marks[i][0] - 4 + dx, y = (int)marks[i][1] - 4 + dy;
-                if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = rgb(0, 0, 0);
+                if (x >= 0 && x < w && y >= 0 && y < h) px[y * w + x] = rgb(0, 0, 0);
             }
         }
     }

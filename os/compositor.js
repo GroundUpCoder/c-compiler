@@ -28,11 +28,14 @@ function startCompositor(kernel, canvas) {
   var COL_FOCUS = rgba(K.WM_COLORS.titleFocused);
   var COL_BLUR = rgba(K.WM_COLORS.titleBlurred);
   var COL_CLOSE = rgba(K.WM_COLORS.closeBox);
+  var COL_BORDER = rgba(K.WM_COLORS.border);
 
   function surfaceImage(surf) {
     var seq = Atomics.load(surf.i32, K.SH_SEQ);
     var c = caches.get(surf.sid);
-    if (c && c.seq === seq) return c.img;
+    // Size check: after a resize ack the surface has a FRESH SAB whose seq
+    // restarts, so seq alone could collide with the stale old-size image.
+    if (c && c.seq === seq && c.img.width === surf.w && c.img.height === surf.h) return c.img;
     var bytes = surf.w * surf.h * 4;
     var front = Atomics.load(surf.i32, K.SH_FLIP) & 1;
     // Copy out of the SAB (ImageData can't view shared memory).
@@ -50,8 +53,14 @@ function startCompositor(kernel, canvas) {
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
       if (s.minimized) continue;               // off screen, still in the scene
-      // Client pixels first, chrome after (they don't overlap; the next
-      // window in z covers both — painter's algorithm).
+      // Chrome frame first (the resize border sits UNDER title+client),
+      // then client pixels; the next window in z covers both — painter's
+      // algorithm.
+      if (!s.borderless) {
+        ctx.fillStyle = COL_BORDER;
+        ctx.fillRect(s.x - K.WM_BORDER, s.y - K.WM_TITLE_H - K.WM_BORDER,
+          s.w + 2 * K.WM_BORDER, K.WM_TITLE_H + s.h + 2 * K.WM_BORDER);
+      }
       if (s.bitmap) {
         ctx.drawImage(s.bitmap, s.x, s.y, s.w, s.h);
       } else {
@@ -71,6 +80,20 @@ function startCompositor(kernel, canvas) {
       ctx.fillStyle = '#fff';
       ctx.fillText(s.title || ('pid ' + s.pid), s.x + 6, s.y - K.WM_TITLE_H / 2,
         Math.max(8, s.w - K.WM_CLOSE_W - 16));
+    }
+    // Resize rubber band (todos/0019): Win95 outline semantics — the drag
+    // only previews; the client renegotiates once, at release.
+    if (scene.resizeDrag) {
+      for (var r = 0; r < scene.surfaces.length; r++) {
+        var rs = scene.surfaces[r];
+        if (rs.sid !== scene.resizeDrag.sid) continue;
+        ctx.strokeStyle = '#000';
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(rs.x - 0.5, rs.y - K.WM_TITLE_H - 0.5,
+          scene.resizeDrag.curW + 1, K.WM_TITLE_H + scene.resizeDrag.curH + 1);
+        ctx.setLineDash([]);
+        break;
+      }
     }
     // Drop caches of destroyed surfaces.
     if (caches.size > scene.surfaces.length) {

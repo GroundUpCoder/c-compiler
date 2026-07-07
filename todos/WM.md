@@ -11,8 +11,10 @@
   headless; tier-1 suite in the kernel run; status section below);
   **audio mixing landed** (todos/done/0017, 2026-07-08 — the kernel sound
   server: per-process source rings mixed kernel-side into one page-owned
-  output ring; doom/gameboy audible in-OS; design section below).
-  Remaining queue: 0018 (quake), 0019 (resize), per todos/README.md.
+  output ring; doom/gameboy audible in-OS; design section below);
+  **client resize landed** (todos/done/0019, 2026-07-08 — SURFACE_CONFIGURE
+  buffer renegotiation + kernel-chrome frame resize drags; status section
+  below). Remaining queue: 0018 (quake), per todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -121,7 +123,8 @@ SURFACE_PRESENT  (id, frameSeq)        shm: flip notify; gpu: rides the
                                        bitmap's own postMessage (transfer)
 SURFACE_SET_TITLE(id, title)
 SURFACE_SET_FLAGS(id, flags)           cursor visible, relative-mouse, …
-SURFACE_CONFIGURE                      RESERVED (client resize — v2)
+SURFACE_CONFIGURE(id, w, h)            the client's resize ACK (todos/0019;
+                                       new fb SAB rides the wm-sabs channel)
 ```
 
 **shm SAB layout** (per surface): a 64-byte header — magic/version, w, h,
@@ -205,6 +208,8 @@ surfaces.
 part of every windowing protocol (buffer renegotiation, in-flight frames),
 and every current GUI vendor app is fixed-size. v1 windows move, stack,
 focus, minimize. `SURFACE_CONFIGURE` is reserved so resize lands additively.
+*(It did — todos/done/0019; see "Implementation status — client resize"
+below.)*
 
 ## The terminal (v1: xterm.js as a privileged DOM surface)
 
@@ -462,6 +467,49 @@ gain is the only knob), no output-rate negotiation (48k fixed), linear
 self-healing `queuedBytes` store-0 (the mixer clamps a negative
 underflow back to 0 — worst case a clear drops a few already-mixed
 bytes, which is what clear means anyway).
+
+## Implementation status — client resize (landed 2026-07-08, todos/0019)
+
+The deliberately-deferred fiddly part, landed additively on the reserved
+opcode (suites: `test_wm.js` renegotiation section, `test_wm_policy.js`
+RESIZE/EV_CONFIGURED, `test_wm_e2e.js` real-C resize leg,
+`test_gpubox_dawn_e2e.js` Dawn resize leg, browser `os-wm.mjs` drag-resize
++ `os-gpubox.mjs` wmctl-resize; dev log `logs/2026-07-08/surface-resize.md`):
+
+- **Protocol shape**: resize is KERNEL-initiated. The request rides the
+  input ring (`WINDOW_RESIZED` 0x206 record, words [2]=w [3]=h — the ring
+  is the existing kernel→process channel); the ack is the
+  `SURFACE_CONFIGURE` RPC (0x1005) whose NEW fb SAB rides `{type:'wm-sabs'}`
+  exactly like at create, and whose front buffer already holds the first
+  frame at the new size — the kernel swaps buffers atomically at the ack,
+  so the compositor never sees a torn or partial frame. Until the ack the
+  old SAB stays on screen at the old geometry; host.js keeps routing
+  old-size in-flight presents into the OLD buffer, so a slow adopter stays
+  live mid-negotiation (mailbox semantics preserved throughout).
+- **Latest wins**: a new request while one is pending replaces it; a stale
+  ack is ACCEPTED (the buffer is newer than what's on screen) and the
+  kernel immediately re-issues the configure for the still-pending size.
+  A request that can't reach the client (dead process, full ring) leaves
+  no pending state — nothing would ever ack it.
+- **Chrome**: non-borderless windows grew a `WM_BORDER` (4px) Win95-ish
+  frame around title+client — same numbers in hit-testing, the browser
+  compositor, and the headless composite. Drag zones: right edge → E,
+  bottom edge → S, within `WM_GRIP` (16px) of the corner → SE; left/top
+  edges are focus-only (moving-edge resizes deliberately deferred). Drags
+  preview as a rubber-band outline and send ONE configure at release
+  (Win95 outline semantics — no per-motion SAB churn). Floor:
+  `WM_MIN_SIZE` (32px) per axis.
+- **Client side**: `SDL_EVENT_WINDOW_RESIZED` (+ the 0x202–0x207 window
+  event block, `SDL_WindowEvent`, `SDL_GetWindowSize`) landed in the SDL3
+  layer; the C runtime re-derives the window surface in place at event
+  push (pixel allocation only ever grows — high-water — so stale-size
+  drawing can't corrupt the heap). gpu transport resizes the worker-local
+  OffscreenCanvas; a webgpu.h app reconfigures its surface + depth (the
+  canonical dance, now in gpubox.c); under Dawn the reconfigure recreates
+  the readback texture/buffer and the ack rides the shm present tail.
+- **Second exposure**: `wmResize` (kernel JS) / `WMP RESIZE` + `EV_CONFIGURED`
+  (socket protocol) / `wmctl resize SID W H` (shell) — one op set, defined
+  once, exposed everywhere, per the agent-channel rule.
 
 ## Spike appendix — VERDICTS (run 2026-07-07, todos/0012;
 ## harnesses: `tests/browser/wm-spikes.mjs` + `tests/spikes/s3_dawn.mjs`)

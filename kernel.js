@@ -113,7 +113,13 @@ var OP = {
   // the surface SAB (flip+seq, mailbox) and gpu-transport frames ride
   // {type:'wm-frame'} messages — never RPCs. 0x1004 stays reserved for a
   // present RPC should damage tracking ever want one.
+  // SURFACE_CONFIGURE (todos/0019) is the client's resize ACK: the kernel
+  // asks via a WINDOW_RESIZED input-ring event; the client answers with a
+  // NEW fb SAB (riding {type:'wm-sabs'}, the create handshake verbatim)
+  // whose front buffer already holds the first frame at the new size — the
+  // kernel swaps buffers atomically here, so the compositor never tears.
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
+  SURFACE_CONFIGURE: 0x1005,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
   // one page-owned output ring — never RPCs.
@@ -189,9 +195,12 @@ var IR_HDR_BYTES = 32;
 var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
 
 /* SDL event type numbers (MUST MATCH <SDL3/SDL_events.h> / host.js
- * sdlEvents): the ring carries them verbatim. */
-var WMEV = { QUIT: 0x100, KEYDOWN: 0x300, KEYUP: 0x301, MOUSEMOTION: 0x400,
-             MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402, MOUSEWHEEL: 0x403 };
+ * sdlEvents): the ring carries them verbatim. WINDOW_RESIZED is the resize
+ * request (todos/0019): record words [2]=w [3]=h; the client acks with the
+ * SURFACE_CONFIGURE RPC once it has a frame at the new size. */
+var WMEV = { QUIT: 0x100, WINDOW_RESIZED: 0x206, KEYDOWN: 0x300, KEYUP: 0x301,
+             MOUSEMOTION: 0x400, MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402,
+             MOUSEWHEEL: 0x403 };
 
 /* ============================================================
  * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
@@ -245,6 +254,9 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *   MINIMIZE / RESTORE { sid }   -> R_OK | R_ERR
  *   RESTACK { sid, place }       -> R_OK | R_ERR   (place: 0 raise, 1 lower)
  *   CLOSE_REQ { sid }            -> R_OK | R_ERR   (SDL_EVENT_QUIT to owner)
+ *   RESIZE { sid, w, h }         -> R_OK | R_ERR   (asks the client; geometry
+ *                                   changes only at its SURFACE_CONFIGURE ack
+ *                                   -> EV_CONFIGURED)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
@@ -253,19 +265,21 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
  * Events: EV_CREATED record | EV_DESTROYED { sid } | EV_TITLE { sid,
  * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y } |
- * EV_MINIMIZED { sid, minimized 0|1 } (restore also implies focus).
+ * EV_MINIMIZED { sid, minimized 0|1 } (restore also implies focus) |
+ * EV_CONFIGURED { sid, w, h } (the client's resize ack landed; geometry
+ * is now the new size).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
 var WMP = {
   SUBSCRIBE: 0x01, LIST: 0x02,
   MOVE: 0x10, FOCUS: 0x11, MINIMIZE: 0x12, RESTORE: 0x13, RESTACK: 0x14,
-  CLOSE_REQ: 0x15,
+  CLOSE_REQ: 0x15, RESIZE: 0x16,
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
-  EV_MOVED: 0x84, EV_MINIMIZED: 0x85,
+  EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86,
 };
 var WMP_REC_BYTES = 72;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -273,14 +287,22 @@ var WM_SOCK_PATH = '/run/wm.sock';
 /* Kernel-drawn chrome, v1 (WM.md "Decorations — staged"): fixed Win95-ish
  * metrics, deterministic — the same numbers drive hit-testing here, the
  * browser compositor's drawing, and the headless screenshot composite.
- * The client rect is (x, y, w, h); the title bar sits ABOVE it. */
+ * The client rect is (x, y, w, h); the title bar sits ABOVE it, and a
+ * WM_BORDER frame surrounds title+client (todos/0019). Resize drag zones
+ * on the frame: right edge -> E, bottom edge -> S, within WM_GRIP of the
+ * bottom-right corner -> SE (left/top edges just focus — moving-edge
+ * resizes are deliberately not in this version). */
 var WM_TITLE_H = 24;
 var WM_CLOSE_W = 16, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
+var WM_BORDER = 4;                           // resize frame around title+client
+var WM_GRIP = 16;                            // SE-corner zone (resizes both axes)
+var WM_MIN_SIZE = 32;                        // client floor for resize requests
 var WM_COLORS = {                            // RGBA byte tuples
   desktop: [0, 128, 128, 255],               // the teal
   titleFocused: [0, 0, 128, 255],            // navy
   titleBlurred: [128, 128, 128, 255],
   closeBox: [192, 192, 192, 255],
+  border: [192, 192, 192, 255],              // the Win95 face gray
 };
 
 /* Signal numbering + default actions — must match <signal.h> /
@@ -492,6 +514,12 @@ KernelClient.prototype.spawnHooks = function () {
     },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
+    // Resize ack (todos/0019): the NEW fb SAB (first new-size frame already
+    // presented into it) rides the FIFO channel like at create.
+    surfaceConfigure: function (sid, w, h, fbSab) {
+      self._post({ type: 'wm-sabs', fb: fbSab, ring: null });
+      return self.call(OP.SURFACE_CONFIGURE, { sid: sid, w: w, h: h });
+    },
     // gpu transport (browser): per-present frame handoff; transfer the
     // bitmap so it never copies. Fire-and-forget by design (mailbox).
     surfaceFrame: function (sid, bmp) {
@@ -809,11 +837,14 @@ function Kernel(opts) {
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap, minimized, borderless }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap, minimized, borderless, pendingConfigure }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;
   this._wmDrag = null;        // { sid, dx, dy } during a title-bar drag
+  this._wmResizeDrag = null;  // { sid, ex, ey, baseW, baseH, x0, y0, curW, curH }
+                              // during a border resize drag (todos/0019);
+                              // ex/ey: 1 = that axis tracks the pointer
   this._wmScreen = { w: (opts.screen && opts.screen.w) || 1024,
                      h: (opts.screen && opts.screen.h) || 768 };
   this._wmVersion = 0;        // bumped on any scene change (create/destroy/
@@ -1753,6 +1784,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         bitmap: null,             // gpu transport: latest ImageBitmap (browser)
         minimized: false,
         borderless: !!((req.flags | 0) & 1),   // bit0: no kernel chrome (taskbar-class)
+        pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
       };
       this._surfaces.set(sid, surf);
       this._zOrder.push(sid);
@@ -1780,6 +1812,41 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmEmit(WMP.EV_TITLE, [st.sid], st.title);
       break;
     }
+    // The resize ack (todos/0019). Only valid while a configure is pending
+    // (resize is kernel-initiated; there is no client-initiated resize).
+    // The new SAB's front buffer already holds a frame at the new size, so
+    // the swap is the whole no-tearing story. In-flight frames on the OLD
+    // SAB are simply never looked at again — legal and ignored (mailbox).
+    case OP.SURFACE_CONFIGURE: {
+      var sc = this._surfaces.get(req.sid | 0);
+      var fb2 = pcb._wmPendingFb;
+      pcb._wmPendingFb = null;
+      var cw = req.w | 0, ch = req.h | 0;
+      if (!sc || sc.pid !== pcb.pid || !sc.pendingConfigure ||
+          !(cw > 0) || !(ch > 0) || cw > 8192 || ch > 8192 ||
+          !fb2 || fb2.byteLength < SH_HDR_BYTES + 2 * cw * ch * 4) {
+        this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      var ci32 = new Int32Array(fb2);
+      if (Atomics.load(ci32, SH_MAGIC) !== SH_MAGIC_VALUE ||
+          Atomics.load(ci32, SH_W) !== cw || Atomics.load(ci32, SH_H) !== ch) {
+        this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      sc.sab = fb2; sc.i32 = ci32; sc.u8 = new Uint8Array(fb2);
+      sc.w = cw; sc.h = ch;
+      if (sc.pendingConfigure.w !== cw || sc.pendingConfigure.h !== ch) {
+        // Superseded while the client was renegotiating: latest wins — keep
+        // the (valid, newer-than-old) buffer and re-issue the configure.
+        this._wmEventTo(sc.sid, [WMEV.WINDOW_RESIZED, 0,
+          sc.pendingConfigure.w, sc.pendingConfigure.h, 0, 0, 0, 0]);
+      } else {
+        sc.pendingConfigure = null;
+      }
+      this._wmVersion++;
+      this._respond(pcb, { sid: sc.sid, w: cw, h: ch });
+      this._wmEmit(WMP.EV_CONFIGURED, [sc.sid, cw, ch]);
+      break;
+    }
     default: this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
@@ -1794,6 +1861,7 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   if (owner) owner.surfaces.delete(sid);
   if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
   if (this._wmDrag && this._wmDrag.sid === sid) this._wmDrag = null;
+  if (this._wmResizeDrag && this._wmResizeDrag.sid === sid) this._wmResizeDrag = null;
   if (this._focusSid === sid) {
     this._focusSid = 0;
     for (var i = this._zOrder.length - 1; i >= 0; i--) {
@@ -2097,14 +2165,55 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       return 'drag-end';
     }
   }
+  // An in-flight border resize drag captures the pointer too (todos/0019).
+  // Win95 outline semantics: the drag only tracks a preview rectangle (the
+  // compositor draws it from wmScene().resizeDrag); ONE configure goes to
+  // the client at release — no per-motion SAB renegotiation.
+  if (this._wmResizeDrag) {
+    var rd = this._wmResizeDrag, rs = this._surfaces.get(rd.sid);
+    if (!rs) { this._wmResizeDrag = null; }
+    else if (kind === 'move') {
+      if (rd.ex) rd.curW = Math.max(WM_MIN_SIZE, Math.min(8192, rd.baseW + Math.round(x - rd.x0)));
+      if (rd.ey) rd.curH = Math.max(WM_MIN_SIZE, Math.min(8192, rd.baseH + Math.round(y - rd.y0)));
+      this._wmVersion++;
+      return 'resize';
+    } else if (kind === 'up') {
+      var rdend = this._wmResizeDrag;
+      this._wmResizeDrag = null;
+      this._wmVersion++;
+      if (rdend.curW !== rdend.baseW || rdend.curH !== rdend.baseH) {
+        this.wmResize(rdend.sid, rdend.curW, rdend.curH);
+      }
+      return 'resize-end';
+    }
+  }
   // Hit test, topmost first. Minimized surfaces aren't on screen;
-  // borderless ones (taskbar-class) have no title-bar band.
+  // borderless ones (taskbar-class) have no title-bar band and no frame.
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized) continue;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + s.w && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h;
+    // The resize frame: a WM_BORDER band around title+client (todos/0019).
+    var inFrame = !s.borderless && !inTitle && !inClient &&
+      x >= s.x - WM_BORDER && x < s.x + s.w + WM_BORDER &&
+      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + s.h + WM_BORDER;
+    if (inFrame) {
+      if (kind === 'down') {
+        var ex = x >= s.x + s.w ? 1 : 0;               // right edge -> E
+        var ey = y >= s.y + s.h ? 1 : 0;               // bottom edge -> S
+        // A WM_GRIP corner zone widens E/S into SE near the corner.
+        if (ex && y >= s.y + s.h - WM_GRIP) ey = 1;
+        if (ey && x >= s.x + s.w - WM_GRIP) ex = 1;
+        this.wmFocus(s.sid);
+        if (!ex && !ey) return 'border';               // left/top: focus only
+        this._wmResizeDrag = { sid: s.sid, ex: ex, ey: ey, x0: x, y0: y,
+                               baseW: s.w, baseH: s.h, curW: s.w, curH: s.h };
+        return 'resize-start';
+      }
+      return 'border';
+    }
     if (inTitle) {
       if (kind === 'down') {
         var cx0 = s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD;
@@ -2155,6 +2264,7 @@ Kernel.prototype.wmList = function () {
     out.push({ sid: s.sid, pid: s.pid, x: s.x, y: s.y, w: s.w, h: s.h,
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
+               configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
   return out;
@@ -2190,6 +2300,28 @@ Kernel.prototype.wmMove = function (sid, x, y) {
   return true;
 };
 
+/* Ask the client to resize (todos/0019). Geometry does NOT change here —
+ * the surface keeps its old buffer and size until the SURFACE_CONFIGURE
+ * ack lands (so a slow client shows its last frame, never a torn one).
+ * Latest wins: a new request while one is pending replaces it, and the ack
+ * path re-issues the configure if the client acked a stale size. Returns
+ * false when the request can't reach the client (dead process, full ring):
+ * nothing would ever ack, so no pending state is left behind. */
+Kernel.prototype.wmResize = function (sid, w, h) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return false;
+  w = w | 0; h = h | 0;
+  if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
+  if (w === s.w && h === s.h && !s.pendingConfigure) return true;   // no-op
+  var prev = s.pendingConfigure;
+  s.pendingConfigure = { w: w, h: h };
+  if (!this._wmEventTo(s.sid, [WMEV.WINDOW_RESIZED, 0, w, h, 0, 0, 0, 0])) {
+    s.pendingConfigure = prev;
+    return false;
+  }
+  return true;
+};
+
 /* Minimize: off screen + out of hit-testing, still listed. Focus falls to
  * the top non-minimized surface. Restore = wmFocus (which un-minimizes). */
 Kernel.prototype.wmMinimize = function (sid) {
@@ -2199,6 +2331,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   s.minimized = true;
   this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
   if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
+  if (this._wmResizeDrag && this._wmResizeDrag.sid === s.sid) this._wmResizeDrag = null;
   if (this._focusSid === s.sid) {
     this._focusSid = 0;
     for (var i = this._zOrder.length - 1; i >= 0; i--) {
@@ -2285,8 +2418,12 @@ Kernel.prototype.wmScreenshotScreen = function () {
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized) continue;
-    // Chrome: title bar + close box (borderless surfaces draw bare).
+    // Chrome: resize frame under title bar + close box (borderless surfaces
+    // draw bare). The frame is one outer fill; title + client cover its
+    // middle — cheap, and exactly the hit-test geometry.
     if (!s.borderless) {
+      fill(s.x - WM_BORDER, s.y - WM_TITLE_H - WM_BORDER,
+        s.w + 2 * WM_BORDER, WM_TITLE_H + s.h + 2 * WM_BORDER, WM_COLORS.border);
       fill(s.x, s.y - WM_TITLE_H, s.w, WM_TITLE_H,
         s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
       fill(s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
@@ -2318,6 +2455,7 @@ Kernel.prototype.wmScene = function () {
     version: this._wmVersion,
     screen: { w: this._wmScreen.w, h: this._wmScreen.h },
     focusSid: this._focusSid,
+    resizeDrag: this._wmResizeDrag,   // rubber-band preview (todos/0019)
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); }).filter(Boolean),
   };
 };
@@ -2430,6 +2568,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       break;
     }
     case WMP.MOVE: ok(this.wmMove(g(0), g(1), g(2))); break;
+    case WMP.RESIZE: ok(this.wmResize(g(0), g(1), g(2))); break;
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores
@@ -3319,6 +3458,7 @@ var KERNEL_EXPORTS = {
   IR_HDR_BYTES: IR_HDR_BYTES, IR_RECORD_WORDS: IR_RECORD_WORDS,
   WMEV: WMEV,
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
+  WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
   WM_COLORS: WM_COLORS,
   // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
   WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,

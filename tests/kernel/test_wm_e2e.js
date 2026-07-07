@@ -6,6 +6,8 @@
 //   SDL_UpdateWindowSurface -> shm mailbox present -> kernel screenshot pixels
 //   kernel.wmInjectKey/Pointer -> input ring -> frame-loop drain ->
 //     SDL_PollEvent in C (scancode + LOCAL button coords)
+//   kernel.wmResize -> SDL_EVENT_WINDOW_RESIZED in C -> surface re-derive ->
+//     SURFACE_CONFIGURE ack with the first new-size frame (todos/0019)
 //   kernel-chrome close box -> SDL_EVENT_QUIT -> app exit(5) -> halt
 //
 // Run: node tests/kernel/test_wm_e2e.js
@@ -44,6 +46,11 @@ static void frame_cb(void) {
         if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == 4) newstate = 1;  /* 'A' */
         else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
             printf("CLICK %d %d b%d\\n", (int)e.button.x, (int)e.button.y, (int)e.button.button);
+        else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
+            surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
+            printf("RESIZED %d %d\\n", (int)e.window.data1, (int)e.window.data2);
+            fflush(stdout);
+        }
         else if (e.type == SDL_EVENT_QUIT) { printf("QUIT\\n"); fflush(stdout); exit(5); }
     }
     uint32_t color = newstate ? rgb(230, 40, 40) : rgb(30, 60, 180);
@@ -140,9 +147,27 @@ const watchdog = setTimeout(() => {
   check('title drag moved the window', moved.x === w.x + 50 && moved.y === w.y + 25,
     JSON.stringify([w.x, w.y, moved.x, moved.y]));
 
+  // Client resize (todos/0019): configure event -> C re-derives its surface
+  // -> host acks with the first new-size frame -> kernel geometry + pixels.
+  kernel.wmResize(sid, 140, 90);
+  await waitOut('RESIZED 140 90');
+  {
+    const t0 = Date.now();
+    while (kernel.wmList()[0].w !== 140 && Date.now() - t0 < 20000) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+  const rsz = kernel.wmList()[0];
+  check('geometry follows the SURFACE_CONFIGURE ack',
+    rsz.w === 140 && rsz.h === 90 && rsz.configurePending === false, JSON.stringify(rsz));
+  shot = kernel.wmScreenshot(sid);
+  check('pixels re-render at the new size (still red)',
+    shot.w === 140 && shot.h === 90 && String(px(shot, 139, 89)) === '230,40,40,255',
+    JSON.stringify([shot.w, shot.h, px(shot, 139, 89)]));
+
   // Close box -> SDL_EVENT_QUIT -> app exits 5 -> system halts.
-  kernel.wmPointer('down', moved.x + moved.w - K.WM_CLOSE_PAD - 2,
-    moved.y - K.WM_TITLE_H + K.WM_CLOSE_PAD + 2, {});
+  kernel.wmPointer('down', rsz.x + rsz.w - K.WM_CLOSE_PAD - 2,
+    rsz.y - K.WM_TITLE_H + K.WM_CLOSE_PAD + 2, {});
   await waitOut('QUIT');
   const status = await haltPromise;
   clearTimeout(watchdog);

@@ -1,6 +1,8 @@
 # 0019 — client resize (SURFACE_CONFIGURE)
 
-- **Status**: queued
+- **Status**: done (landed 2026-07-08; dev log
+  `logs/2026-07-08/surface-resize.md`; implementation status in
+  `todos/WM.md` "Implementation status — client resize")
 - **Depends**: 0014 (resize interaction is WM policy)
 - **Design**: `todos/WM.md` (surface protocol — `SURFACE_CONFIGURE`
   reserved; "Resize: not in v1" decision)

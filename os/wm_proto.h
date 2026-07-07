@@ -26,6 +26,9 @@ enum {
     WMP_SUBSCRIBE = 0x01, WMP_LIST = 0x02,
     WMP_MOVE = 0x10, WMP_FOCUS = 0x11, WMP_MINIMIZE = 0x12,
     WMP_RESTORE = 0x13, WMP_RESTACK = 0x14, WMP_CLOSE_REQ = 0x15,
+    WMP_RESIZE = 0x16,                 /* { sid, w, h }: asks the client;
+                                          geometry changes at its ack ->
+                                          EV_CONFIGURED (todos/0019) */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     /* replies */
@@ -33,6 +36,7 @@ enum {
     /* events */
     WMP_EV_CREATED = 0x80, WMP_EV_DESTROYED = 0x81, WMP_EV_TITLE = 0x82,
     WMP_EV_FOCUS = 0x83, WMP_EV_MOVED = 0x84, WMP_EV_MINIMIZED = 0x85,
+    WMP_EV_CONFIGURED = 0x86,          /* { sid, w, h }: resize ack landed */
 };
 
 /* The fixed 72-byte window record (EV_CREATED payload; R_LIST carries

@@ -247,6 +247,124 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   }
   check('10k-event storm: every event delivered in order', ok && seen === 10000, seen);
 
+  // ---- client resize: SURFACE_CONFIGURE renegotiation (todos/0019) ----
+  check('wmResize asks the client', kernel.wmResize(1, 96, 80) === true);
+  let s1r = kernel.wmList().find(s => s.sid === 1);
+  check('geometry unchanged while pending', s1r.w === 64 && s1r.h === 48 &&
+    s1r.configurePending === true, JSON.stringify(s1r));
+  let revs = drain(ring1);
+  check('WINDOW_RESIZED event in the ring', revs.length === 1 &&
+    revs[0].type === K.WMEV.WINDOW_RESIZED && revs[0].win === 1 &&
+    revs[0].w[0] === 96 && revs[0].w[1] === 80, JSON.stringify(revs));
+  // In-flight old-size frame: legal — lands in the OLD sab, still displayed.
+  present(fb1, [255, 255, 0, 255]);
+  shot = kernel.wmScreenshot(1);
+  check('old-size in-flight frame still shows (old buffer live)',
+    shot.w === 64 && String(px(shot, 1, 1)) === '255,255,0,255', px(shot, 1, 1));
+  // Bad acks: no SAB handshake; SAB header dims that contradict the RPC.
+  const noSab = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  check('CONFIGURE without a new SAB -> EINVAL', noSab.errno === 'EINVAL');
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: makeFb(32, 32).sab, ring: null });
+  const badAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  check('CONFIGURE with mismatched SAB dims -> EINVAL', badAck.errno === 'EINVAL');
+  // The real ack: first frame at the new size already presented into it.
+  const fb1b = makeFb(96, 80);
+  present(fb1b, [0, 128, 255, 255]);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1b.sab, ring: null });
+  const ackR = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  check('CONFIGURE ack accepted', !ackR.errno && ackR.w === 96 && ackR.h === 80,
+    JSON.stringify(ackR));
+  s1r = kernel.wmList().find(s => s.sid === 1);
+  check('geometry + pending updated at ack', s1r.w === 96 && s1r.h === 80 &&
+    s1r.configurePending === false, JSON.stringify(s1r));
+  shot = kernel.wmScreenshot(1);
+  check('screenshot reads the swapped buffer', shot.w === 96 && shot.h === 80 &&
+    String(px(shot, 90, 70)) === '0,128,255,255', JSON.stringify([shot.w, shot.h]));
+  present(fb1, [1, 2, 3, 255]);                       // the abandoned old SAB
+  shot = kernel.wmScreenshot(1);
+  check('old-buffer flips are ignored after the swap',
+    String(px(shot, 1, 1)) === '0,128,255,255', px(shot, 1, 1));
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: makeFb(96, 80).sab, ring: null });
+  const spont = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  check('CONFIGURE with nothing pending -> EINVAL (kernel-initiated only)',
+    spont.errno === 'EINVAL');
+
+  // ---- superseded resize: latest wins, stale ack accepted + re-asked ----
+  kernel.wmResize(1, 120, 90);
+  kernel.wmResize(1, 150, 100);
+  revs = drain(ring1);
+  check('both configure events pushed (latest wins)', revs.length === 2 &&
+    revs[0].w[0] === 120 && revs[1].w[0] === 150, JSON.stringify(revs));
+  const fbStale = makeFb(120, 90);
+  present(fbStale, [9, 9, 9, 255]);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbStale.sab, ring: null });
+  const staleAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 120, h: 90 });
+  s1r = kernel.wmList().find(s => s.sid === 1);
+  check('stale ack accepted (newer than the old buffer)', !staleAck.errno &&
+    s1r.w === 120 && s1r.configurePending === true, JSON.stringify(s1r));
+  revs = drain(ring1);
+  check('kernel re-asks for the still-pending size', revs.length === 1 &&
+    revs[0].type === K.WMEV.WINDOW_RESIZED && revs[0].w[0] === 150 &&
+    revs[0].w[1] === 100, JSON.stringify(revs));
+  const fbFinal = makeFb(150, 100);
+  present(fbFinal, [7, 7, 7, 255]);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbFinal.sab, ring: null });
+  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 150, h: 100 });
+  s1r = kernel.wmList().find(s => s.sid === 1);
+  check('final ack settles', s1r.w === 150 && s1r.h === 100 &&
+    s1r.configurePending === false, JSON.stringify(s1r));
+
+  // ---- border resize drag: E/S/SE zones, outline preview, one configure ----
+  kernel.wmMove(1, 200, 200);
+  kernel.wmFocus(1);                                   // topmost for hit tests
+  let ract = kernel.wmPointer('down', 200 + 150 + 1, 200 + 100 + 1, {});
+  check('SE border mousedown starts a resize drag', ract === 'resize-start', ract);
+  ract = kernel.wmPointer('move', 200 + 150 + 41, 200 + 100 + 21, {});
+  const rd = kernel.wmScene().resizeDrag;
+  check('drag previews only (no configure yet)', ract === 'resize' &&
+    drain(ring1).length === 0 && rd && rd.curW === 190 && rd.curH === 120,
+    JSON.stringify(rd));
+  ract = kernel.wmPointer('up', 200 + 150 + 41, 200 + 100 + 21, {});
+  revs = drain(ring1);
+  check('release sends ONE configure at the dragged size', ract === 'resize-end' &&
+    revs.length === 1 && revs[0].type === K.WMEV.WINDOW_RESIZED &&
+    revs[0].w[0] === 190 && revs[0].w[1] === 120, JSON.stringify([ract, revs]));
+  const fbDrag = makeFb(190, 120);
+  present(fbDrag, [4, 4, 4, 255]);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbDrag.sab, ring: null });
+  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 190, h: 120 });
+
+  ract = kernel.wmPointer('down', 200 + 190 + 2, 200 + 30, {});   // right border
+  check('E border starts a width-only drag', ract === 'resize-start', ract);
+  kernel.wmPointer('move', 200 - 500, 200 + 30, {});   // far left: clamps
+  const rdE = kernel.wmScene().resizeDrag;
+  check('E drag: width tracks (clamped at the floor), height fixed',
+    rdE.curW === K.WM_MIN_SIZE && rdE.curH === 120, JSON.stringify(rdE));
+  kernel.wmPointer('up', 200 - 500, 200 + 30, {});
+  revs = drain(ring1);
+  check('clamped configure at release', revs.length === 1 &&
+    revs[0].w[0] === K.WM_MIN_SIZE && revs[0].w[1] === 120, JSON.stringify(revs));
+  const fbE = makeFb(K.WM_MIN_SIZE, 120);
+  present(fbE, [11, 12, 13, 255]);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbE.sab, ring: null });
+  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: K.WM_MIN_SIZE, h: 120 });
+
+  // Left border: focus affordance only (no W/N resize in this version).
+  ract = kernel.wmPointer('down', 200 - 2, 200 + 30, {});
+  check('left border is focus-only', ract === 'border', ract);
+  kernel.wmPointer('up', 200 - 2, 200 + 30, {});
+
+  // The screen composite draws the frame border around the chrome.
+  screen = kernel.wmScreenshotScreen();
+  check('composite: frame border pixels flank the client',
+    String(px(screen, 200 - 2, 200 + 10)) === String(K.WM_COLORS.border) &&
+    String(px(screen, 200 + K.WM_MIN_SIZE + 2, 200 + 119)) === String(K.WM_COLORS.border),
+    JSON.stringify([px(screen, 198, 210), px(screen, 200 + K.WM_MIN_SIZE + 2, 319)]));
+
+  // wmResize input validation + a dead-ring request leaves nothing pending.
+  check('wmResize below the floor is refused', kernel.wmResize(1, 8, 8) === false);
+  check('wmResize on a bogus sid is refused', kernel.wmResize(999, 64, 64) === false);
+
   // ---- lifecycle: normal exit reclaims surfaces ----
   workers.get(appPid).msg({ type: 'exited', code: 0 });
   await tick();

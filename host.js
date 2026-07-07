@@ -5054,7 +5054,8 @@ const WMSH_MAGIC_VALUE = 0x574d5346;
 const WMSH_HDR_BYTES = 64;
 const WMIR_WPOS = 0, WMIR_RPOS = 1, WMIR_CAP = 2;
 const WMIR_HDR_BYTES = 32, WMIR_RECORD_WORDS = 8, WMIR_DEFAULT_CAP = 256;
-const WMEV_QUIT = 0x100, WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
+const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
+      WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
       WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
       WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
 
@@ -5085,6 +5086,7 @@ function createSurfaceSDL({ ctx, hooks }) {
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
   let ring = null;                   // { sab, i32, f32, cap } — one per process
+  let onConfigure = null;            // flavor hook: WINDOW_RESIZED ring record
 
   /* ---- audio: per-device source rings into the kernel mixer (todos/0017;
    * WM.md "Audio mixing"). Same SAB layout as the standalone ring
@@ -5174,26 +5176,49 @@ function createSurfaceSDL({ ctx, hooks }) {
     if (!r || r.errno || !(r.sid > 0)) return null;
     return { sid: r.sid, fb };
   }
+  /* ---- buffer renegotiation (todos/0019) ----
+   * A WINDOW_RESIZED ring record allocates the NEW fb here; the ack (a
+   * SURFACE_CONFIGURE RPC, new SAB riding {type:'wm-sabs'} like at create)
+   * is gated on the app's first present AT the new size — that frame lands
+   * in the new SAB, so the kernel's swap is tear-free by construction.
+   * Old-size in-flight frames keep landing in the OLD SAB (still the one
+   * on screen), so the app stays live while it adopts the new size; a
+   * binary that never handles the event just keeps its old geometry. */
+  function beginConfigure(win, w, h) {
+    if (typeof hooks.surfaceConfigure !== 'function') return;  // pre-0019 embedder
+    win.pendingCfg = { w: w, h: h, fb: allocFb(w, h) };
+  }
+  function ackConfigure(win) {
+    const cfg = win.pendingCfg;
+    win.pendingCfg = null;
+    const r = hooks.surfaceConfigure(win.sid, cfg.w, cfg.h, cfg.fb.sab);
+    // EINVAL (surface gone / no configure pending kernel-side): keep the
+    // old buffer; a fresh WINDOW_RESIZED event re-negotiates if wanted.
+    if (r && !r.errno) { win.fb = cfg.fb; win.w = cfg.w; win.h = cfg.h; }
+  }
   /* SDL_UpdateWindowSurface -> shm mailbox present (write the back buffer,
    * flip, never block). Used by BOTH flavors: CPU-present apps ride the shm
    * transport even in the browser (no GPU dependency; the compositor
    * putImageData's it) — only GPU-rendered frames ride bitmap handoff. */
   function shmPresent(win, pixelsPtr, w, h, pitch) {
-    const cw = Math.min(w, win.w), ch = Math.min(h, win.h);
+    const cfg = win.pendingCfg;
+    const fb = (cfg && w === cfg.w && h === cfg.h) ? cfg.fb : win.fb;
+    const cw = Math.min(w, fb.w), ch = Math.min(h, fb.h);
     const mem = new Uint8Array(getMemory().buffer);
-    const front = Atomics.load(win.fb.i32, WMSH_FLIP) & 1;
+    const front = Atomics.load(fb.i32, WMSH_FLIP) & 1;
     const back = 1 - front;
-    const base = WMSH_HDR_BYTES + back * win.w * win.h * 4;
-    if (pitch === win.w * 4 && cw === win.w) {
-      win.fb.u8.set(mem.subarray(pixelsPtr, pixelsPtr + cw * 4 * ch), base);
+    const base = WMSH_HDR_BYTES + back * fb.w * fb.h * 4;
+    if (pitch === fb.w * 4 && cw === fb.w) {
+      fb.u8.set(mem.subarray(pixelsPtr, pixelsPtr + cw * 4 * ch), base);
     } else {
       for (let row = 0; row < ch; row++) {
-        win.fb.u8.set(mem.subarray(pixelsPtr + row * pitch, pixelsPtr + row * pitch + cw * 4),
-          base + row * win.w * 4);
+        fb.u8.set(mem.subarray(pixelsPtr + row * pitch, pixelsPtr + row * pitch + cw * 4),
+          base + row * fb.w * 4);
       }
     }
-    Atomics.store(win.fb.i32, WMSH_FLIP, back);
-    Atomics.add(win.fb.i32, WMSH_SEQ, 1);
+    Atomics.store(fb.i32, WMSH_FLIP, back);
+    Atomics.add(fb.i32, WMSH_SEQ, 1);
+    if (fb !== win.fb) ackConfigure(win);   // first new-size frame: ack + swap
     return 0;
   }
   /* Drain the input ring into the wasm event queue. Runs before every frame
@@ -5233,6 +5258,15 @@ function createSurfaceSDL({ ctx, hooks }) {
         case WMEV_QUIT:
           if (ex.__sdl_push_quit_event) ex.__sdl_push_quit_event();
           break;
+        case WMEV_WINDOW_RESIZED:
+          // Renegotiate BEFORE the wasm sees the event: the app handles it
+          // in this same frame tick, and its next present at the new size
+          // must find the new SAB waiting (see beginConfigure above).
+          if (onConfigure) onConfigure(ring.i32[base + 1], ring.i32[base + 2], ring.i32[base + 3]);
+          if (ex.__sdl_push_window_event) {
+            ex.__sdl_push_window_event(handle, type, ring.i32[base + 2], ring.i32[base + 3]);
+          }
+          break;
       }
       rpos = (rpos + 1) % cap2;
       Atomics.store(ring.i32, WMIR_RPOS, rpos);
@@ -5253,6 +5287,14 @@ function createSurfaceSDL({ ctx, hooks }) {
       if (!currentSid) return;
       try {
         const bmp = canvas.transferToImageBitmap();
+        // gpu-transport resize ack (todos/0019): the first bitmap at the
+        // pending size acks FIRST, so the kernel geometry is already the
+        // new size when this frame lands (no one-frame scaled draw).
+        const win = fbByHandle.get(handleBySid.get(currentSid));
+        if (win && win.pendingCfg &&
+            bmp.width === win.pendingCfg.w && bmp.height === win.pendingCfg.h) {
+          ackConfigure(win);
+        }
         hooks.surfaceFrame(currentSid, bmp);
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
     };
@@ -5292,6 +5334,18 @@ function createSurfaceSDL({ ctx, hooks }) {
         if (h === handle) hooks.surfaceSetTitle(sid, titlePtr ? readString(titlePtr) : '');
       }
     };
+    // Resize request (todos/0019): allocate the new shm SAB and resize the
+    // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
+    // draws at canvas size, and a webgpu.h app's own wgpuSurfaceConfigure
+    // re-sizes it again (idempotent). The ack rides the next matching-size
+    // present (shmPresent or presentFrame above).
+    onConfigure = function (sid, w, h) {
+      const win = fbByHandle.get(handleBySid.get(sid));
+      if (!win) return;
+      beginConfigure(win, w, h);
+      canvas.width = w;
+      canvas.height = h;
+    };
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
     out.drainInput = drainInput;
@@ -5305,8 +5359,12 @@ function createSurfaceSDL({ ctx, hooks }) {
    * renderer (tier 0), real windows + events ---- */
   let animationFrameFunc = null;
   let sdlTicksBase = null;
-  const windows = [];                // handle-1 -> { sid, w, h, fb } | null
+  const windows = [];                // handle-1 -> { sid, w, h, fb, pendingCfg? } | null
   const nullTextures = [];
+  onConfigure = function (sid, w, h) {
+    const win = windows[(handleBySid.get(sid) || 0) - 1];
+    if (win) beginConfigure(win, w, h);
+  };
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
     requestAnimationFrame: null,     // frame loop falls back to setTimeout
@@ -5323,18 +5381,23 @@ function createSurfaceSDL({ ctx, hooks }) {
           return null;
         },
         /* Tightly-packed RGBA rows (src may carry copyTextureToBuffer's 256B
-         * row padding) -> back buffer -> mailbox flip, mirroring shmPresent. */
+         * row padding) -> back buffer -> mailbox flip, mirroring shmPresent —
+         * including the renegotiation gate: a Dawn app that reconfigured its
+         * surface to the pending size acks through here (todos/0019). */
         present: function (win, src, srcPitch, sw, sh) {
-          const cw = Math.min(sw, win.w), ch = Math.min(sh, win.h);
-          const front = Atomics.load(win.fb.i32, WMSH_FLIP) & 1;
+          const cfg = win.pendingCfg;
+          const fb = (cfg && sw === cfg.w && sh === cfg.h) ? cfg.fb : win.fb;
+          const cw = Math.min(sw, fb.w), ch = Math.min(sh, fb.h);
+          const front = Atomics.load(fb.i32, WMSH_FLIP) & 1;
           const back = 1 - front;
-          const base = WMSH_HDR_BYTES + back * win.w * win.h * 4;
+          const base = WMSH_HDR_BYTES + back * fb.w * fb.h * 4;
           for (let row = 0; row < ch; row++) {
-            win.fb.u8.set(src.subarray(row * srcPitch, row * srcPitch + cw * 4),
-              base + row * win.w * 4);
+            fb.u8.set(src.subarray(row * srcPitch, row * srcPitch + cw * 4),
+              base + row * fb.w * 4);
           }
-          Atomics.store(win.fb.i32, WMSH_FLIP, back);
-          Atomics.add(win.fb.i32, WMSH_SEQ, 1);
+          Atomics.store(fb.i32, WMSH_FLIP, back);
+          Atomics.add(fb.i32, WMSH_SEQ, 1);
+          if (fb !== win.fb) ackConfigure(win);
         },
       },
     },
