@@ -173,6 +173,16 @@ const script = [
   'sleep 0.3',
   'echo ==layer1',
   'wmctl list',
+  // ---- the focus fall skips pinned furniture (todos/0039): SIGKILL the
+  // focused winbox; with the real wm.c bar pinned +1 at the top of z, the
+  // fall must land on another NORMAL window, never the furniture. ----
+  'wmctl focus $WSID',
+  'sleep 0.3',
+  'FPID=$(wmctl list | cut -f2,6 | grep "\tf" | cut -f1)',
+  'kill -9 $FPID',
+  'sleep 1',
+  'echo ==fall1',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -353,6 +363,18 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     (row(lay1, 'desktop').split('\t')[5] || '').includes('B') &&
     !/[TB]/.test(row(lay1, 'winbox').split('\t')[5] || ''),
     JSON.stringify([row(lay1, 'taskbar'), row(lay1, 'desktop'), row(lay1, 'winbox')]));
+}
+
+// ---- the focus fall skips pinned furniture (todos/0039 storm find):
+// after SIGKILL of the focused winbox, focus must land on another NORMAL
+// window — with the bar pinned +1, a raw top-of-z fall would park the
+// focus on the taskbar and typed keys would vanish into the furniture.
+{
+  const fl1 = section('fall1');
+  const focusedRow = fl1.split('\n')
+    .find(l => ((l.split('\t')[5] || ''))[0] === 'f') || '';
+  check('SIGKILL of the focused winbox: focus falls to a normal window, not the bar',
+    focusedRow.endsWith('\twinbox'), JSON.stringify(fl1));
 }
 
 // Icon pixels: read the shot back OUT of the root (writable) volume (the

@@ -807,6 +807,56 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   f = await cmd(wm2, WMP.SET_LAYER, [c1.sid, 2]);
   check('SET_LAYER out-of-range layer -> R_ERR', f.type === WMP.R_ERR);
 
+  // ---- the focus fall skips pinned furniture (todos/0039 storm find):
+  // after 0038 the top of raw z is ALWAYS the +1-pinned taskbar, so a
+  // top-of-z fall parked keyboard focus on the bar whenever the focused
+  // window minimized or died. The fall must prefer the topmost normal-
+  // layer (0) window; furniture only takes focus when no normal window
+  // remains. State here: z = [cl, c1, ct(+1 bar)], focus = cl. ----
+  f = await cmd(wm2, WMP.FOCUS, [c1.sid]);
+  check('focus a normal window under the pinned bar', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_FOCUS echo
+  f = await cmd(wm2, WMP.MINIMIZE, [c1.sid]);
+  check('MINIMIZE the focused window -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);                            // EV_MINIMIZED 1
+  check('EV_MINIMIZED echo', f.type === WMP.EV_MINIMIZED && f.g(0) === c1.sid);
+  f = await readEvent(wm2);                            // the focus fall
+  check('minimize focus fall skips the pinned bar (lands on the normal window)',
+    f.type === WMP.EV_FOCUS && f.g(0) === cl.sid,
+    JSON.stringify([f.type, f.g(0), { bar: ct.sid, normal: cl.sid }]));
+  f = await cmd(wm2, WMP.RESTORE, [c1.sid]);
+  check('RESTORE -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MINIMIZED 0
+  await readEvent(wm2);                                // EV_FOCUS c1
+  // The destroy path takes the same fall (c1 focused; the fall precedes
+  // EV_DESTROYED — kernel emit order).
+  await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: c1.sid });
+  f = await readEvent(wm2);
+  check('destroy focus fall skips the pinned bar too',
+    f.type === WMP.EV_FOCUS && f.g(0) === cl.sid,
+    JSON.stringify([f.type, f.g(0), { bar: ct.sid, normal: cl.sid }]));
+  f = await readEvent(wm2);
+  check('EV_DESTROYED follows the fall', f.type === WMP.EV_DESTROYED && f.g(0) === c1.sid);
+  // Degenerate: no normal window left -> furniture takes the fall (the
+  // pre-0038 behavior survives when there is nothing else to focus).
+  // A fresh window pins the focus deterministically (create always
+  // focuses), so this leg can't wedge on a missing echo pre-fix.
+  const fbN = makeFb(32, 24);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbN.sab, ring: null });
+  const cn = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 32, h: 24, title: 'lastwin' });
+  await readEvent(wm2);                                // EV_CREATED
+  await readEvent(wm2);                                // EV_FOCUS cn
+  f = await cmd(wm2, WMP.MINIMIZE, [cl.sid]);          // unfocused: no fall
+  check('MINIMIZE the unfocused normal window -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MINIMIZED 1
+  f = await cmd(wm2, WMP.MINIMIZE, [cn.sid]);          // the LAST normal window
+  check('MINIMIZE the last normal window -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MINIMIZED 1
+  f = await readEvent(wm2);
+  check('no normal window left: furniture takes the focus (degenerate fall)',
+    f.type === WMP.EV_FOCUS && f.g(0) === ct.sid,
+    JSON.stringify([f.type, f.g(0)]));
+
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });
