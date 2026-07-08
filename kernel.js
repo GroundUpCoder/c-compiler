@@ -2095,17 +2095,27 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
   if (this._wmDrag && this._wmDrag.sid === sid) this._wmDrag = null;
   if (this._wmResizeDrag && this._wmResizeDrag.sid === sid) this._wmResizeDrag = null;
-  if (this._focusSid === sid) {
-    this._focusSid = 0;
-    for (var i = this._zOrder.length - 1; i >= 0; i--) {
-      var t = this._surfaces.get(this._zOrder[i]);
-      if (t && !t.minimized) { this._focusSid = t.sid; break; }
-    }
-    this._wmEmit(WMP.EV_FOCUS, [this._focusSid]);
-  }
+  if (this._focusSid === sid) this._wmFocusFall();
   this._wmVersion++;
   this._wmEmit(WMP.EV_DESTROYED, [sid]);
   this._wmSyncPointerLock();
+};
+
+/* The focus fall (todos/0039): when the focused surface goes away
+ * (destroy, minimize), prefer the topmost non-minimized NORMAL-layer
+ * window — after 0038 the top of raw z is ALWAYS pinned furniture (the
+ * taskbar), which must not swallow keyboard focus. Furniture only takes
+ * the fall when no normal window remains (the pre-0038 degenerate). */
+Kernel.prototype._wmFocusFall = function () {
+  var fall = 0;
+  for (var i = this._zOrder.length - 1; i >= 0; i--) {
+    var t = this._surfaces.get(this._zOrder[i]);
+    if (!t || t.minimized) continue;
+    if (t.layer === 0) { fall = t.sid; break; }
+    if (!fall) fall = t.sid;              // remember the topmost furniture
+  }
+  this._focusSid = fall;
+  this._wmEmit(WMP.EV_FOCUS, [fall]);
 };
 
 /* ---- pointer lock (todos/0018) ----
@@ -2768,8 +2778,9 @@ Kernel.prototype.wmCycle = function (dir) {
   return true;
 };
 
-/* Minimize: off screen + out of hit-testing, still listed. Focus falls to
- * the top non-minimized surface. Restore = wmFocus (which un-minimizes). */
+/* Minimize: off screen + out of hit-testing, still listed. Focus falls via
+ * _wmFocusFall (topmost normal-layer window first — todos/0039). Restore =
+ * wmFocus (which un-minimizes). */
 Kernel.prototype.wmMinimize = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return false;
@@ -2778,14 +2789,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
   if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
   if (this._wmResizeDrag && this._wmResizeDrag.sid === s.sid) this._wmResizeDrag = null;
-  if (this._focusSid === s.sid) {
-    this._focusSid = 0;
-    for (var i = this._zOrder.length - 1; i >= 0; i--) {
-      var t = this._surfaces.get(this._zOrder[i]);
-      if (t && !t.minimized) { this._focusSid = t.sid; break; }
-    }
-    this._wmEmit(WMP.EV_FOCUS, [this._focusSid]);
-  }
+  if (this._focusSid === s.sid) this._wmFocusFall();
   this._wmVersion++;
   this._wmSyncPointerLock();
   return true;
