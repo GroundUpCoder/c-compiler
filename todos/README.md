@@ -35,10 +35,18 @@ One numbered file per unit of work we have actually committed to doing.
    (no WM → chord passes through, not swallowed), `wmctl cycle`
 6. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
    the standing known-issue checklist; repro tests first
-7. (unnumbered) a real-world WebGPU C app port — candidates via
-   `WEBGPU.md`; the platform side landed with 0016
-8. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
-   `os-system.img` blob for one-blob virgin boots + fast test fixtures
+7. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
+   stat md5sum … — no-spawn filters, multicall adds)
+8. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+   `PV_NO_INTERCEPT`, link the vfork shim into coreutils
+9. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+   (measure sqlite's seed cost first)
+10. `0037` wasm module cache — kernel-side compiled-Module cache on the
+    spawn path (system-volume /bin first; Modules clone, instances don't)
+11. (unnumbered) a real-world WebGPU C app port — candidates via
+    `WEBGPU.md`; the platform side landed with 0016
+12. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
+    `os-system.img` blob for one-blob virgin boots + fast test fixtures
 
 (The desktop-shell round 0028–0033 is designed in `WM.md` "The desktop
 shell", 2026-07-08.)
