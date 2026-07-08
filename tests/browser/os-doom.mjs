@@ -150,7 +150,9 @@ try {
   check('wmctl list from the shell shows DOOM Shareware', true);
   await page.keyboard.type('wmctl close $(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")\r');
   await setVt(2);
-  await waitFrame(DOOM_REGION, s => s.nonTeal === 0, 30000);
+  // "Restored" tolerates the 0029 desktop-icon pixels in the region
+  // (< 2% of it) — only the WINDOW must be gone, not the icons.
+  await waitFrame(DOOM_REGION, s => s.nonTeal < s.n * 0.02, 30000);
   check('wmctl close quit doom; desktop restored', true);
   await setVt(1);
   await page.keyboard.type('echo DOOM-GONE-$?\r');
@@ -169,7 +171,7 @@ try {
   await setVt(1);
   await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")\r');
   await setVt(2);
-  await waitFrame(GB_REGION, s => s.nonTeal === 0, 30000);
+  await waitFrame(GB_REGION, s => s.nonTeal < s.n * 0.02, 30000);   // icons stay (0029)
   check('wmctl close quit gameboy; desktop restored', true);
   await setVt(1);
   await page.keyboard.type('echo GB-GONE-$?\r');

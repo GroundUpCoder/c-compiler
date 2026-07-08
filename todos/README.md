@@ -24,23 +24,22 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
-   the standing known-issue checklist; repro tests first
-2. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
+1. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
    stat md5sum … — no-spawn filters, multicall adds)
-3. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+2. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils
-4. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+3. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-5. `0037` wasm module cache — kernel-side compiled-Module cache on the
+4. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (system-volume /bin first; Modules clone, instances don't)
-6. (unnumbered) a real-world WebGPU C app port — candidates via
+5. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-7. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
+6. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
    `os-system.img` blob for one-blob virgin boots + fast test fixtures
 
-(The desktop-shell round 0028–0033 is designed in `WM.md` "The desktop
-shell", 2026-07-08.)
+(The desktop-shell round 0028–0033 landed 2026-07-08 — design in
+`WM.md` "The desktop shell", verified-but-unfixed items on its
+"Known issues" standing list.)
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.

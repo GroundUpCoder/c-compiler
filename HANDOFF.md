@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-08, after 0026 landed)
+# Handoff — start of thread (updated 2026-07-08, after the desktop-shell round)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,47 +7,71 @@
 
 ## Where the repo stands
 
-This thread landed **0026 — mount points / split system+user volumes**
-(dev log `logs/2026-07-08/mount-points.md`): host.js gained **MountFS**
-(longest-prefix routing over N BlockFS volumes, own fd/dir-handle
-namespaces, EXDEV/EBUSY edges, full-namespace symlink resolution via the
-volume-side `_mountOwns` escape hook — foreign targets THROW
-`__mountEscape`, MountFS's dispatch loop rewrites + retries). Both
-embedders mount `/` system + `/root` user volumes
-(`os-system.v4.img`/`os-user.v4.img` in OPFS; `os-system.img` +
-`os-user.img` headless, `--image=` names the system one); zero kernel.js
-changes. Upgrades now reseed the system volume while `/root` survives —
-`boot.js --fresh-system` demonstrates it; the pre-split `os.v4.img` /
-`os/os.img` are orphaned by design. **image.json is v21.** The user
-volume mounts with `noDevNodes` (no `~/dev` clutter).
+This thread landed the whole **desktop-shell round 0028–0033** (design:
+`WM.md` "The desktop shell"; dev logs `logs/2026-07-08/start-menu.md`,
+`desktop-icons.md`, `titlebar-boxes.md`, `taskbar-polish.md`,
+`window-cycling.md`, `wm-bug-sweep-1.md`):
 
-All green at hand-off: unit 697✓ (3 pre-existing skips), blockfs suite✓
-(incl. new `test_mounts.js` — walk mechanics + both-volume fsck), kernel
-suite✓ (incl. new `test_mounts.js` semantics + the test_os_boot reseed/
---fresh-system acceptance legs), browser sweep os-boots✓ os-wm✓ os-scale✓
-os-doom✓ os-gpubox✓ os-quake✓ os-term✓ os-vt✓ os-screen✓ — run serially.
+- **0028 Start menu** — wm.c Start button + borderless menu popup from
+  seeded `/etc/menu`; posix_spawn children (own pgroup, cwd /root,
+  WNOHANG reap); child stdio resolved: services get the system std OFDs
+  and children inherit them. os-common gained an inline `content` seed
+  kind.
+- **0029 desktop icons** — fullscreen bottom-of-z layer from
+  `/root/Desktop`; own timestamp-based double-click (the SDL clicks
+  counter accumulates ACROSS windows — don't trust it); `wmctl
+  dblclick`; desktop clicks now dismiss the menu.
+- **0030 title-bar [min][max][close]** — min = kernel `wmMinimize`
+  direct, max = EV_TITLE_ACTIVATE (one policy path with double-click and
+  wmctl max); **fit-gating**: each box exists only if it fits the title
+  (32px windows stay draggable); glyphs are flat rects in BOTH
+  composites.
+- **0031 taskbar polish** — HH.MM clock (45px right cell, real local
+  time), launch-order-stable buttons (memmove compaction), overflow
+  shrink left of the clock (btn_width() shared by draw + click map).
+- **0032 window cycling** — kernel chord (Tab+Alt held; Ctrl optional,
+  Shift reverses) at the wmKey seam → WMP EV_CYCLE 0x8B; CYCLE 0x19 /
+  `wmctl cycle` is the second exposure; NO subscriber → no interception
+  (key passes through). wm.c policy is LRU-stamp based (deliberate
+  deviation from "z-order" — RESTACK has no event and Alt-Esc lowering
+  would sink windows under the desktop layer).
+- **0033 bug sweep round 1** — all suites + storms green; WM.md gained
+  the standing **"Known issues"** list (taskbar not always-on-top —
+  verified, deferred with repro; Dawn+SIGKILL caveat SHRUNK on current
+  webgpu pkg; gpubox adapter flake quiet; pointer-lock still needs a
+  per-round HUMAN check — Playwright can't grant the lock).
+
+**image.json is v25.** All green at hand-off: unit 697✓ (3 pre-existing
+skips), blockfs✓, kernel suite✓, browser sweep os-boots✓ os-wm✓
+os-scale✓ os-doom✓ os-gpubox✓ os-quake✓ os-term✓ os-vt✓ os-screen✓ +
+new os-shell✓ — run serially. Headless open-everything/kill-9/respawn
+storm and a browser shrink/VT-flip/kill-mid-audio storm both clean.
 
 ## The queue (todos/README.md is authoritative)
 
-The desktop-shell round 0028–0033 (designed in `WM.md` "The desktop
-shell") is next up: 0028 start menu, 0029 desktop icons, 0030 title-bar
-min/max boxes, 0031 taskbar polish, 0032 window cycling, 0033 WM bug
-sweep. After that: the WebGPU app port (WEBGPU.md) and the
-0026-unlocked `tools/mkimage.js` baked system image. (`0006`
+Next up: `0034` coreutils batch 2, `0035` spawn-capable applets,
+`0036` seed the REPLs, `0037` wasm module cache, then the WebGPU app
+port (WEBGPU.md) and the 0026-unlocked `tools/mkimage.js`. (`0006`
 threads+atomics stays deferred indefinitely.)
 
 ## Gotchas carried forward
 
-- 0026's: every BlockFS path op must walk ALL components via `_walkPath`
-  BEFORE mutating (an escape aborts the op — that ordering is what makes
-  throw-and-retry safe); volumes share inode numbers (both roots ino 1,
-  no st_dev) — don't compare inos across volumes; MountFS is
-  kernel-embedder-side only (RemoteFS/standalone paths untouched).
-- 0025's: unfocused window emits EV_FOCUS before EV_TITLE_ACTIVATE;
-  double-click detection needs `opts.t` timestamps in tests (dt >= 0
-  guard, mixed clock origins never match); wm.c work area is
-  `scr_w x (scr_h - BAR_H - TITLE_H)` at `(0, TITLE_H)` with TITLE_H=28
-  (wm.c's, not the kernel's 24).
+- Browser pixel tests: "empty desktop" asserts must tolerate the 0029
+  icon grid (bit os-doom/os-quake in the sweep — fixed to <2%/<5%
+  thresholds), and the desktop layer's teal is IDENTICAL to the
+  compositor background teal — assert the layer via icons or `wmctl
+  list`, never fill color.
+- hush `kill` is cooperative SIGTERM: after killing the wm, barrier on
+  its surfaces vanishing (taskbar pixel → teal) before asserting no-WM
+  behavior — the subscription outlives the kill by a beat.
+- Taskbar button coordinates shifted right of the 50px Start button
+  (button 0 spans x 56..160 at ≤8 windows); with ≥9 windows at 1024
+  they shrink (btn_width()).
+- wm.c wins[] is launch order (compaction since 0031) — button index ↔
+  creation order; sids ascend with creation.
+- 0025's: double-click detection needs `opts.t` timestamps in tests;
+  wm.c work area is `scr_w x (scr_h - BAR_H - TITLE_H)` at (0, TITLE_H)
+  with TITLE_H=28 (wm.c's, not the kernel's 24).
 - 0023's browser-test rules: derive geometry from `__osScreen`/live
   canvas rect, VT2 settle before pixel work, wm placement is async,
   keep the sweep serial.
@@ -58,25 +82,24 @@ threads+atomics stays deferred indefinitely.)
 
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log
   per landing, README next-up current.
-- Seeded OS sources changed? **Bump `os/image.json` `version`** (v21 now).
+- Seeded OS sources changed? **Bump `os/image.json` `version`** (v25 now).
 - compiler.js must stay browser-clean (no bare `process.*`).
-- MUST-MATCH blocks: WM protocol in kernel.js (WMP incl. ACTIVATE/
-  EV_TITLE_ACTIVATE; 80-byte record) ↔ os/wm_proto.h ↔
-  test_wm_policy.js; surface/ring layout kernel.js (SH_*/IR_*) ↔
-  host.js (WMSH_*/WMIR_*); ring event numbers (WMEV) ↔ <SDL3> event
-  values in compiler.js ↔ host.js WMEV_*; audio ring layout kernel.js
-  (AU_*) ↔ host.js; SDL audio format words ↔ <SDL3/SDL_audio.h>;
-  SI_* tty header kernel.js ↔ host.js.
-- `tests/browser/os-*.mjs` are manual — run os-boots/os-wm/os-scale/
-  os-doom/os-gpubox/os-quake/os-term/os-vt/os-screen (serially!) after
-  touching os/, kernel.js, host.js SDL/webgpu/fd/audio/input/tty paths.
+- MUST-MATCH blocks: WM protocol in kernel.js (WMP incl. CYCLE/EV_CYCLE;
+  80-byte record) ↔ os/wm_proto.h ↔ test_wm_policy.js; surface/ring
+  layout kernel.js (SH_*/IR_*) ↔ host.js (WMSH_*/WMIR_*); ring event
+  numbers (WMEV) ↔ <SDL3> event values in compiler.js ↔ host.js WMEV_*;
+  audio ring layout kernel.js (AU_*) ↔ host.js; SDL audio format words ↔
+  <SDL3/SDL_audio.h>; SI_* tty header kernel.js ↔ host.js.
+- `tests/browser/os-*.mjs` are manual — run the full sweep incl.
+  os-shell.mjs (serially!) after touching os/, kernel.js, host.js
+  SDL/webgpu/fd/audio/input/tty paths.
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
-  invariants, 0013–0027's decisions, 0026's (throw-and-retry escape over
-  VFS namei; EXDEV on cross-volume rename/link; mount-point dirs
-  materialized in the outer volume; user volume skips /dev).
+  invariants, 0013–0033's decisions (incl. 0032's LRU-stamp cycling and
+  no-subscriber passthrough; 0030's fit-gating; 0026's throw-and-retry
+  escape / EXDEV / user volume skips /dev).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: the desktop-shell round (0028 start menu first), the WebGPU
-app port, or something else."
+to tackle: 0034 coreutils batch 2, the WebGPU app port, or something
+else."

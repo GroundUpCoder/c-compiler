@@ -1,6 +1,7 @@
 # 0033 — WM bug sweep, round 1
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/wm-bug-sweep-1.md`;
+  standing list created in WM.md "Known issues")
 - **Depends**: best after 0028/0029 land (new features are where the
   bugs will be); not blocked by them
 - **Design**: `todos/WM.md` "The desktop shell" (bug-sweep block —

@@ -197,6 +197,24 @@ sends `screen-resize`, the worker resizes the OffscreenCanvas +
 no-WM fallback); /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps — browser tests must derive screen-edge geometry from the
 LIVE canvas rect (`window.__osScreen` probe), never 800×500 constants.
+The desktop shell (todos/0028–0033, 2026-07-08): wm.c owns a Start
+button + menu popup (entries from seeded `/etc/menu`: symlink → spawn
+via its path, one-line file → argv line; children get own pgroup,
+PATH=/bin HOME=/root, cwd /root, WNOHANG-reaped) and a fullscreen
+bottom-of-z desktop layer (icon grid from `/root/Desktop`, dbl-click
+launches — own timestamp check, NOT e.button.clicks which accumulates
+across windows; `wmctl dblclick` injects both clicks on one
+connection), all in the one wm process dispatched by windowID; the
+kernel title bar has [min][max][close] boxes (min = wmMinimize direct,
+max = EV_TITLE_ACTIVATE, each box only if it fits the title — 32px
+windows stay draggable); the taskbar has a right-aligned HH.MM clock,
+launch-order-stable buttons (memmove compaction), and overflow shrink
+left of the clock; Ctrl+Alt+Tab (Alt+Tab on macOS) is intercepted at
+wmKey ONLY with a WM subscribed → WMP EV_CYCLE 0x8B / CYCLE 0x19 /
+`wmctl cycle` (wm.c walks LRU stamps forward, previous-window on
+Shift; minimized skipped) — no subscriber, the key passes through.
+Verified-but-unfixed items live in WM.md "Known issues" (taskbar not
+always-on-top; pointer-lock needs a per-round human check).
 Image version is **v25**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
@@ -220,7 +238,8 @@ gpubox one skips without the webgpu pkg) +
 `test_audio.js`/`test_audio_e2e.js` (0017) +
 `test_pty.js`/`test_pty_e2e.js` (0020);
 `tests/browser/os-boots.mjs` + `os-wm.mjs` (incl. the 0025
-double-click maximize/restore leg on resizable winbox)
+double-click maximize/restore leg on resizable winbox, the 0030
+title-box legs, and the 0032 cycle-chord legs)
 + `os-doom.mjs` (now asserts the audio pipeline) + `os-gpubox.mjs`
 + `os-quake.mjs` (pointer-lock UX + the 0024 grip-scale leg)
 + `os-term.mjs` (0020) + `os-vt.mjs`
@@ -228,7 +247,10 @@ double-click maximize/restore leg on resizable winbox)
 + `os-screen.mjs` (0023; viewport-tracking screen, taskbar re-lay,
 shrink re-clamp) + `os-scale.mjs` (0024; drag-to-scale, inverse-mapped
 input, wmctl scale/unscale; + the 0025 fixed-size scale-to-fit
-maximize leg) (real Chromium, manual).
+maximize leg) + `os-shell.mjs` (0028/0029/0031; Start menu, desktop
+icons, clock — note: "empty desktop" pixel asserts must tolerate the
+icon grid, and the desktop layer's teal equals the compositor
+background teal) (real Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

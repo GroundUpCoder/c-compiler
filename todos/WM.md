@@ -501,6 +501,41 @@ unlink-while-open). Findings become minimal repro tests FIRST
 (conformance-corpus discipline), fixes land as separate commits.
 Subsequent sweeps allocate new numbers when scheduled.
 
+## Known issues (standing list; round 1 = 2026-07-08, todos/done/0033)
+
+Verified-but-unfixed, each with a repro. Re-check every sweep; entries
+graduate to queue items when a fix is scheduled.
+
+- **The taskbar is not always-on-top.** Every window creates ABOVE the
+  bar in kernel z (create raises), so wm.c's furniture only stays
+  visible because placement clears the strip — a window DRAGGED onto
+  the bottom strip covers the bar (repro: `winbox &`, title-drag it to
+  the bottom edge; z in `wmctl list` shows winbox above taskbar). Fix
+  would be wm.c policy (re-raise the bar on EV_MOVED overlap) or a
+  kernel always-on-top layer bit — neither scheduled; the strip-clear
+  placement + Ctrl+Alt+Tab keep the system driveable.
+- **Pointer-lock UX needs a HUMAN check each round** (Chromium denies
+  CDP-gesture lock requests, so Playwright cannot exercise it): quake
+  lock on client click, ESC unlock, click re-lock, VT-switch release.
+  Not re-verified by a human this round — mechanics covered by
+  `test_wm.js`/`os-quake.mjs` up to the browser lock grant itself.
+- **snake needs two paced `q`s to quit** (vendor exit-prompt loop spins
+  on EOF; documented since 0015). Vendor quirk, not worth patching.
+- **Dawn + SIGKILL abort (S3 caveat) — SHRUNK, keep watching**: two
+  round-1 trials (open-everything storm + isolated retest, webgpu
+  0.4.x) survived `kill -9` of a live gpubox with no Node abort. The
+  drain discipline stays (GPU apps quit via SDL_Quit); retest per
+  sweep before relying on it.
+- **os-gpubox adapter flake: not reproduced this round** (headless
+  Chromium adapter came up in all runs). Environmental; keep on the
+  list until it's been quiet for a few rounds.
+
+Round-1 non-issues worth remembering: the 0029 icons broke os-doom/
+os-quake's "desktop restored = pure teal" asserts (test expectations,
+fixed to icon-tolerant thresholds in the 0033 commit); hush `kill` of
+the wm is cooperative SIGTERM — tests must barrier on surface
+reclaim, not the kill returning (bit os-wm.mjs during 0032).
+
 ## Implementation status v1 (landed 2026-07-07, todos/0013)
 
 **What shipped** (all tested; suites: `tests/kernel/test_wm.js`,
