@@ -24,7 +24,10 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. (unnumbered) a real-world WebGPU C app port — candidates via
+1. `0026` mount points: split system / user volumes — MountFS over N
+   BlockFS volumes (`/` system, `/root` user); upgrades stop recompiling
+   the world and a baked `os-system.img` becomes safe as a follow-on
+2. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the

@@ -163,8 +163,12 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
   which maps paths to **C sources compiled at seed time by the kernel's own
   cc driver** (`os/os-common.js`), not pre-built wasm URLs: no build step,
   the repo discipline. `/etc/.image-version` gates re-seeding (bump
-  `image.json`'s `version` after editing seeded sources). A pre-baked image
-  blob (`tools/mkimage.js`) stays a future distribution convenience.
+  `image.json`'s `version` after editing seeded sources). Wart: a bump
+  reseeds (and recompiles) EVERYTHING, because system and user files share
+  one store — `todos/0026` splits them (MountFS: `/` system volume, `/root`
+  user volume), after which upgrade = discard/reseed the system volume and
+  a pre-baked image blob (`tools/mkimage.js`, still a future distribution
+  convenience) becomes trivially safe to ship.
 - **Headless twin** (the agent-first requirement): `os/boot.js` boots the
   same kernel + manifest under plain Node — file-backed store, tty on
   stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and
