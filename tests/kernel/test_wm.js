@@ -187,6 +187,33 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     JSON.stringify([moved.x, moved.y, x0, y0]));
   check('drag did not leak events to the app', drain(ring1).length === 0);
 
+  // ---- title double-click -> the maximize gesture (todos/0025) ----
+  // Mechanism only here (no WM subscribed, the event goes nowhere; the
+  // policy round-trip lives in test_wm_policy.js). opts.t drives the clock
+  // deterministically. A second down within the interval+slop returns
+  // 'title-activate' and starts NO drag; slow or far-apart pairs drag.
+  const m0 = kernel.wmList()[0];
+  act = kernel.wmPointer('down', m0.x + 5, m0.y - 10, { t: 1000 });
+  check('first title down is a plain drag-start', act === 'drag-start', act);
+  kernel.wmPointer('up', m0.x + 5, m0.y - 10, { t: 1010 });
+  act = kernel.wmPointer('down', m0.x + 5, m0.y - 10, { t: 1200 });
+  check('quick second title down -> title-activate', act === 'title-activate', act);
+  kernel.wmPointer('move', m0.x + 200, m0.y + 200, {});  // desktop; a live drag would capture it
+  check('the activating down started NO drag (window unmoved)',
+    kernel.wmList()[0].x === m0.x && kernel.wmList()[0].y === m0.y,
+    JSON.stringify([kernel.wmList()[0].x, m0.x]));
+  kernel.wmPointer('up', m0.x + 5, m0.y - 10, { t: 1210 });
+  act = kernel.wmPointer('down', m0.x + 5, m0.y - 10, { t: 1300 });
+  check('a third quick click starts over (drag, not activate)', act === 'drag-start', act);
+  kernel.wmPointer('up', m0.x + 5, m0.y - 10, { t: 1310 });
+  act = kernel.wmPointer('down', m0.x + 5, m0.y - 10, { t: 2000 });
+  check('two SLOW clicks never activate', act === 'drag-start', act);
+  kernel.wmPointer('up', m0.x + 5, m0.y - 10, { t: 2010 });
+  act = kernel.wmPointer('down', m0.x + 30, m0.y - 10, { t: 2100 });
+  check('quick pair outside the slop still drags', act === 'drag-start', act);
+  kernel.wmPointer('up', m0.x + 30, m0.y - 10, { t: 2110 });
+  check('double-click leg leaked no app events', drain(ring1).length === 0);
+
   // ---- second window: z-order, focus, occlusion ----
   const fb2 = makeFb(64, 48);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb2.sab, ring: null });

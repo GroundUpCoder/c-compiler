@@ -170,7 +170,9 @@ document.addEventListener('pointerlockchange', function () {
 });
 screen.addEventListener('mousedown', function (e) {
   screen.focus();
-  wmSend({ kind: 'down', x: e.offsetX, y: e.offsetY, button: e.button });
+  // t: the event timestamp — the kernel's title double-click detection
+  // (todos/0025) measures the real inter-click gap, not worker latency.
+  wmSend({ kind: 'down', x: e.offsetX, y: e.offsetY, button: e.button, t: e.timeStamp });
   e.preventDefault();
 });
 screen.addEventListener('mouseup', function (e) {

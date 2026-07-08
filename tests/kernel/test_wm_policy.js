@@ -626,6 +626,41 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('service spawn of a missing binary resolves 0',
     (await kernel.service({ path: '/bin/nope' })) === 0);
 
+  // ---- the maximize gesture (todos/0025): a title double-click emits
+  // EV_TITLE_ACTIVATE to the subscriber; the ACTIVATE command (wmctl max)
+  // rides the SAME event — one policy path. The kernel keeps no maximize
+  // state: policy (wm.c) answers with MOVE+RESIZE / MOVE+SET_DST. ----
+  if (kernel.wmScene().focusSid !== c1.sid) {
+    f = await cmd(wm2, WMP.FOCUS, [c1.sid]);
+    check('focus c1 for the title clicks -> R_OK', f.type === WMP.R_OK);
+    await readEvent(wm2);                                // EV_FOCUS echo
+  }
+  const ws = kernel.wmList().find(s => s.sid === c1.sid);
+  let dact = kernel.wmPointer('down', ws.x + 8, ws.y - 6, { t: 5000 });
+  check('first title down: drag-start', dact === 'drag-start', dact);
+  kernel.wmPointer('up', ws.x + 8, ws.y - 6, { t: 5010 });
+  f = await readEvent(wm2);                              // drag-end echo
+  check('drag-end EV_MOVED echo', f.type === WMP.EV_MOVED && f.g(0) === c1.sid,
+    JSON.stringify([f.type, f.g(0)]));
+  dact = kernel.wmPointer('down', ws.x + 8, ws.y - 6, { t: 5200 });
+  check('quick second title down: title-activate', dact === 'title-activate', dact);
+  kernel.wmPointer('up', ws.x + 8, ws.y - 6, { t: 5210 });
+  f = await readEvent(wm2);
+  check('EV_TITLE_ACTIVATE { sid } pushed to the subscriber',
+    f.type === WMP.EV_TITLE_ACTIVATE && f.g(0) === c1.sid && idle(wm2),
+    JSON.stringify([f.type, f.g(0)]));
+  f = await cmd(wm2, WMP.ACTIVATE, [c1.sid]);
+  check('ACTIVATE -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('ACTIVATE rides the same event (wmctl max = the double-click)',
+    f.type === WMP.EV_TITLE_ACTIVATE && f.g(0) === c1.sid && idle(wm2),
+    JSON.stringify([f.type, f.g(0)]));
+  f = await cmd(wm2, WMP.ACTIVATE, [999]);
+  check('ACTIVATE bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  f = await cmd(wm2, WMP.ACTIVATE, [ct.sid]);
+  check('ACTIVATE on a borderless surface -> R_ERR (no title bar, no gesture)',
+    f.type === WMP.R_ERR);
+
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

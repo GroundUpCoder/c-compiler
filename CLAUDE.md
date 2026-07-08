@@ -175,14 +175,21 @@ a DST list column, NN compositing in both flavors, input inverse-maps
 EV_SCALE_REQ answered by wm.c's aspect-fit integer-snap policy (no-WM
 fallback: kernel applies the raw box); SET_DST on a resizable surface
 refuses — scaled and configurable are exclusive modes. `winbox fixed`
-(title "fixbox") is the fixed-size acceptance app. The screen is dynamic (todos/0023): on VT2 the desktop
+(title "fixbox") is the fixed-size acceptance app. Maximize/restore
+(todos/0025): the kernel detects a title-bar double-click (400ms + 4px
+slop, event timestamps threaded from the page) and emits WMP
+EV_TITLE_ACTIVATE — mechanism only; wm.c owns the maximized set + saved
+geometry and dispatches on the resizable bit (work-area MOVE+RESIZE vs
+centered aspect-fit SET_DST whose integer snap never overflows the work
+area), re-fitting on EV_SCREEN; `wmctl max` sends WMP ACTIVATE → the
+same event (R_ERR with no WM subscriber — no WM, no maximize). The screen is dynamic (todos/0023): on VT2 the desktop
 canvas tracks the viewport (1 CSS px = 1 screen px, no DPR); os.html
 sends `screen-resize`, the worker resizes the OffscreenCanvas +
 `wmSetScreen` → WMP EV_SCREEN + a kernel one-shot position clamp (the
 no-WM fallback); /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps — browser tests must derive screen-edge geometry from the
 LIVE canvas rect (`window.__osScreen` probe), never 800×500 constants.
-Image version is **v18**.
+Image version is **v19**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
@@ -204,14 +211,16 @@ byte-clean. Tests: `tests/kernel/test_os_boot.js` +
 gpubox one skips without the webgpu pkg) +
 `test_audio.js`/`test_audio_e2e.js` (0017) +
 `test_pty.js`/`test_pty_e2e.js` (0020);
-`tests/browser/os-boots.mjs` + `os-wm.mjs`
+`tests/browser/os-boots.mjs` + `os-wm.mjs` (incl. the 0025
+double-click maximize/restore leg on resizable winbox)
 + `os-doom.mjs` (now asserts the audio pipeline) + `os-gpubox.mjs`
 + `os-quake.mjs` (pointer-lock UX + the 0024 grip-scale leg)
 + `os-term.mjs` (0020) + `os-vt.mjs`
 (0022; VT semantics incl. the kill-the-wm maintenance mode)
 + `os-screen.mjs` (0023; viewport-tracking screen, taskbar re-lay,
 shrink re-clamp) + `os-scale.mjs` (0024; drag-to-scale, inverse-mapped
-input, wmctl scale/unscale) (real Chromium, manual).
+input, wmctl scale/unscale; + the 0025 fixed-size scale-to-fit
+maximize leg) (real Chromium, manual).
 
 ## BlockFS (host.js) and its tests
 

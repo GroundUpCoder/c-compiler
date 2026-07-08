@@ -24,9 +24,7 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0025` maximize/restore — title double-click; configure for
-   resizable windows, 0024 scale-to-fit for fixed-size ones
-2. (unnumbered) a real-world WebGPU C app port — candidates via
+1. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -103,7 +101,13 @@ configurable: per-surface dst rect (`wmSetDst`/SET_DST/`wmctl scale`),
 NN compositing both flavors, inverse-mapped input, frame drags →
 EV_SCALE_REQ → wm.c's aspect-fit + integer-snap policy (kernel raw-box
 fallback), record 80 bytes with dst dims, image v18
-(`logs/2026-07-08/viewport-scaling.md`).
+(`logs/2026-07-08/viewport-scaling.md`);
+`0025` **maximize/restore** — title double-click (kernel-detected,
+EV_TITLE_ACTIVATE) toggles wm.c policy dispatched on the resizable bit:
+configure to the work area vs centered 0024 scale-to-fit (never
+overflowing), saved-geometry restore, EV_SCREEN re-fit, `wmctl max` via
+WMP ACTIVATE (same event path; R_ERR with no WM), image v19
+(`logs/2026-07-08/maximize.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

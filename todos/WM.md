@@ -23,9 +23,9 @@
   status — client resize"); **VT switching landed** (todos/done/0022,
   2026-07-08 — tty=VT1 / desktop=VT2, exactly one visible; see the
   screen/VT section below). The
-  acceptance test now holds for ALL four vendor apps. Remaining queue:
-  0023 (dynamic screen resolution), 0024 (scaling fixed-size clients),
-  0025 (maximize), per todos/README.md.
+  acceptance test now holds for ALL four vendor apps. The outer-geometry
+  queue is complete: 0023 (dynamic screen resolution), 0024 (scaling
+  fixed-size clients) and 0025 (maximize) all landed 2026-07-08.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -304,18 +304,17 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - ~~**Screen geometry / VTs / scaling fixed-size clients**~~ — designed
   below ("Screen, VTs, and scaling fixed-size clients"); VT switching
   LANDED (todos/done/0022), dynamic screen resolution LANDED
-  (todos/done/0023), viewport scaling LANDED (todos/done/0024); still
-  queued: maximize = todos/0025.
+  (todos/done/0023), viewport scaling LANDED (todos/done/0024),
+  maximize LANDED (todos/done/0025). The block is complete.
 
 ## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
 
-Where the desktop's outer geometry stands and where it goes. All four
-pieces are committed work: VT switching landed (todos/done/0022),
-dynamic screen resolution landed (todos/done/0023), scaling fixed-size
-clients landed (todos/done/0024); still queued — maximize =
-**todos/0025** (last because by now it's nearly pure policy,
-dispatching on 0021's resizable flag for both branches: configure vs
-0024 scale-to-fit).
+Where the desktop's outer geometry stands. All four pieces LANDED:
+VT switching (todos/done/0022), dynamic screen resolution
+(todos/done/0023), scaling fixed-size clients (todos/done/0024),
+maximize (todos/done/0025 — nearly pure policy by then, dispatching on
+0021's resizable flag for both branches: configure vs 0024
+scale-to-fit).
 
 **Today** (post-0023): on VT2 the screen tracks the browser viewport
 (the #desktop pane; 1 CSS px = 1 screen px, DPR deliberately ignored);
@@ -355,13 +354,26 @@ the initial mode. Acceptance: `tests/browser/os-screen.mjs`, EV_SCREEN
 legs in `test_wm_policy.js`; dev log
 `logs/2026-07-08/dynamic-screen-resolution.md`.
 
-**Maximize** (**todos/0025**; rides 0021's flag). Real-OS shape
-(Windows work area, EWMH `_NET_WM_STATE_MAXIMIZED`/`_NET_WORKAREA`,
-xdg_toplevel.set_maximized): double-click title toggles; WM sends
-SURFACE_CONFIGURE with the work area (screen minus taskbar); restore
-returns to saved geometry. RESIZABLE windows only — fixed-size windows
-get the scale-to-fit below instead (Windows greys the maximize box;
-we dispatch on the same flag).
+**Maximize (todos/done/0025 — LANDED 2026-07-08**; rides 0021's flag).
+Real-OS shape (Windows work area, EWMH
+`_NET_WM_STATE_MAXIMIZED`/`_NET_WORKAREA`, xdg_toplevel.set_maximized):
+double-click title toggles; the WM sends MOVE + RESIZE to the work area
+(screen minus taskbar); restore returns to saved geometry. Fixed-size
+windows get the scale-to-fit below instead — same gesture, dispatched
+on the flag (Windows greys the maximize box; we're friendlier): a
+centered aspect-fit SET_DST whose integer snap is suppressed when it
+would overflow the work area. Mechanism/policy split: the kernel only
+detects the double-click (WM_DBLCLICK_MS 400 + 4px slop, event
+timestamps threaded from the page so worker latency doesn't eat the
+gesture) and emits **EV_TITLE_ACTIVATE 0x8A**; wm.c owns the maximized
+set + saved geometry and re-fits on EV_SCREEN. `wmctl max SID` sends
+**ACTIVATE 0x18**, which the kernel turns into the SAME event — one
+policy path; R_ERR with no subscriber (no WM = no maximize, unlike
+kernel-implemented minimize). A wm restart forgets maximize state
+(restarting the WM tidies the desktop, as with placement). Acceptance:
+maximize legs in `tests/browser/os-wm.mjs` (resizable) +
+`os-scale.mjs` (fixed-size), test_wm/test_wm_policy/
+test_wm_service_e2e; dev log `logs/2026-07-08/maximize.md`.
 
 **Scaling fixed-size clients (todos/done/0024 — LANDED 2026-07-08)**.
 The converged real-OS answer decouples buffer size from window size and

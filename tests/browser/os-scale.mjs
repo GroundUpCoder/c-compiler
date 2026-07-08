@@ -83,6 +83,7 @@ try {
     const r = document.getElementById('screen').getBoundingClientRect();
     return { x: r.x, y: r.y };
   });
+  const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
   const clickAt = (sx, sy) => page.mouse.click(rect.x + sx, rect.y + sy);
 
   // Launch the fixed-size app; the WM places the first window at (12,36).
@@ -148,6 +149,40 @@ try {
   check('wmctl scale back to 1x: the scaled area is desktop again', true);
   await waitPixel(WX + 120, WY + 80, GREEN);
   check('window renders at 1x (green fill intact)', true);
+
+  // Maximize (todos/0025) on a FIXED-SIZE window: the title double-click
+  // dispatches to the 0024 scale-to-fit — aspect-fit dst into the work
+  // area (SW x SH-56), centered, buffer untouched. Mirror wm.c's fit: the
+  // 15% integer snap applies only if it does NOT overflow the work area.
+  const WORKW = SW, WORKH = SH - 56;
+  let fs = Math.min(WORKW / WW, WORKH / WH);
+  const fsnap = Math.round(fs);
+  if (fsnap >= 1 && fs >= fsnap * 0.85 && fs <= fsnap * 1.15 &&
+      WW * fsnap <= WORKW && WH * fsnap <= WORKH) fs = fsnap;
+  const FDW = Math.floor(WW * fs + 0.5), FDH = Math.floor(WH * fs + 0.5);
+  const FX = Math.floor((WORKW - FDW) / 2), FY = 28 + Math.floor((WORKH - FDH) / 2);
+  await page.mouse.dblclick(rect.x + WX + 100, rect.y + WY - 12);
+  await waitPixel(Math.round(FX + FDW / 2), Math.round(FY + FDH / 2), GREEN, 30000);
+  check('title double-click maximized the fixed window (centered scale-to-fit)', true);
+  check('maximized title bar above the dst', near(await sample(FX + 100, FY - 12), NAVY),
+    await sample(FX + 100, FY - 12));
+  if (FY + FDH + 10 < SH - 30)                     // room for a letterbox stripe?
+    check('letterboxed: desktop below the fitted dst',
+      near(await sample(Math.round(FX + FDW / 2), FY + FDH + 10), TEAL),
+      await sample(Math.round(FX + FDW / 2), FY + FDH + 10));
+  // Inverse-mapped input still lands right while maximized: click the dst
+  // center -> buffer (120, 80) -> the mark composites back at the center.
+  await clickAt(Math.round(FX + FDW / 2), Math.round(FY + FDH / 2));
+  await waitPixel(Math.round(FX + FDW / 2), Math.round(FY + FDH / 2), BLACK);
+  check('click at the maximized center painted at the inverse-mapped point', true);
+  // Double-click again -> restore: pre-max dst (1x) at the saved spot.
+  await page.mouse.dblclick(rect.x + FX + 100, rect.y + FY - 12);
+  await waitPixel(Math.round(FX + FDW / 2), Math.round(FY + FDH / 2), TEAL, 30000);
+  check('second double-click restored: maximized area is desktop again', true);
+  check('window back at 1x at the saved spot',
+    near(await sample(WX + 60, WY + 40), GREEN), await sample(WX + 60, WY + 40));
+  check('frame back at the 1x edge', near(await sample(WX + WW + 2, WY + 80), FACE),
+    await sample(WX + WW + 2, WY + 80));
 
   // Close box at 1x geometry.
   await clickAt(WX + WW - 12, WY - 12);

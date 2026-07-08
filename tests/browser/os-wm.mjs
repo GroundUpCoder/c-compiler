@@ -176,6 +176,30 @@ try {
   check('frame border flanks the resized client',
     near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
 
+  // Maximize (todos/0025): double-click the title bar — kernel detects the
+  // gesture (EV_TITLE_ACTIVATE), /bin/wm answers with MOVE + RESIZE to the
+  // work area (screen minus taskbar, client top below the kernel title
+  // bar): winbox re-renders at SW x (SH - 56), position (0, 28).
+  await page.mouse.dblclick(rect.x + NX + 100, rect.y + NY - 12);
+  const MW = SW, MH = SH - 56;                   // wm.c work area (BAR_H + TITLE_H)
+  await waitPixel(MW - 30, 28 + MH - 30, GREEN, 30000);
+  check('title double-click maximized winbox to the work area', true);
+  check('maximized fill reaches the left edge (client at x=0)',
+    near(await sample(10, 200), GREEN), await sample(10, 200));
+  check('maximized title bar spans the top', near(await sample(300, 16), NAVY), await sample(300, 16));
+  check('taskbar still visible below the maximized window',
+    near(await sample(400, BARY), FACE) || near(await sample(400, BARY), FACE_DOWN),
+    await sample(400, BARY));
+  // Double-click again -> restore to the EXACT pre-maximize geometry
+  // (NX, NY, 300x200). The maximized title bar sits at y in [4, 28).
+  await page.mouse.dblclick(rect.x + 300, rect.y + 16);
+  await waitPixel(NX + RW - 20, NY + RH - 20, GREEN, 30000);
+  check('second double-click restored the saved geometry', true);
+  await waitPixel(MW - 30, 28 + MH - 30, TEAL);
+  check('the maximized area is desktop again', true);
+  check('restored frame at the restored edge',
+    near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
+
   // Close box -> SDL_EVENT_QUIT -> app exits -> window gone.
   await clickAt(NX + RW - 12, NY - 12);
   await waitPixel(NX + 120, NY + 80, TEAL);

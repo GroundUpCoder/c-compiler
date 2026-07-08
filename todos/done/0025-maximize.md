@@ -1,6 +1,12 @@
 # 0025 — maximize / restore
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/maximize.md`).
+  Decided in-item: `wmctl max` sends a new WMP ACTIVATE 0x18 which the
+  kernel re-emits as EV_TITLE_ACTIVATE 0x8A — the double-click and the
+  agent share ONE wm.c policy path; R_ERR with no subscriber (no WM =
+  no maximize). The fixed-size branch reuses 0024's fit but suppresses
+  the integer snap when it would overflow the work area. No maximized
+  record-flag bit (the kernel keeps zero maximize state).
 - **Depends**: 0021 (the resizable-flag dispatch); 0024 for the
   fixed-size branch (scale-to-fit). Ordered last — by then it's nearly
   pure policy.

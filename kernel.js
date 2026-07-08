@@ -288,6 +288,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   FIXED-SIZE surface — buffer untouched,
  *                                   app oblivious; R_ERR on a resizable
  *                                   surface, which configures instead)
+ *   ACTIVATE { sid }             -> R_OK | R_ERR   (todos/0025: fire the
+ *                                   title-activate gesture — the wmctl-max
+ *                                   path into the SAME policy code the title
+ *                                   double-click hits; R_ERR when no WM is
+ *                                   subscribed, since maximize IS policy)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
@@ -307,20 +312,24 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * is now dstW x dstH, todos/0024) | EV_SCALE_REQ { sid, w, h } (the user
  * released a frame drag on a FIXED-SIZE surface at that box — the wp_
  * viewport shape: policy answers with an aspect-preserving SET_DST; only
- * emitted with a subscriber, else the kernel applies the raw box itself).
+ * emitted with a subscriber, else the kernel applies the raw box itself) |
+ * EV_TITLE_ACTIVATE { sid } (todos/0025: title-bar double-click, or an
+ * ACTIVATE command — the maximize gesture; the kernel keeps NO maximize
+ * state, policy toggles configure-vs-scale on the resizable bit and holds
+ * the saved geometry).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
 var WMP = {
   SUBSCRIBE: 0x01, LIST: 0x02,
   MOVE: 0x10, FOCUS: 0x11, MINIMIZE: 0x12, RESTORE: 0x13, RESTACK: 0x14,
-  CLOSE_REQ: 0x15, RESIZE: 0x16, SET_DST: 0x17,
+  CLOSE_REQ: 0x15, RESIZE: 0x16, SET_DST: 0x17, ACTIVATE: 0x18,
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
-  EV_SCALED: 0x88, EV_SCALE_REQ: 0x89,
+  EV_SCALED: 0x88, EV_SCALE_REQ: 0x89, EV_TITLE_ACTIVATE: 0x8A,
 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -338,6 +347,8 @@ var WM_CLOSE_W = 16, WM_CLOSE_PAD = 4;       // close box, right-aligned in the 
 var WM_BORDER = 4;                           // resize frame around title+client
 var WM_GRIP = 16;                            // SE-corner zone (resizes both axes)
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
+var WM_DBLCLICK_MS = 400;                    // title double-click window (todos/0025)
+var WM_DBLCLICK_SLOP = 4;                    // ...and max px drift between the downs
 var WM_COLORS = {                            // RGBA byte tuples
   desktop: [0, 128, 128, 255],               // the teal
   titleFocused: [0, 0, 128, 255],            // navy
@@ -895,6 +906,8 @@ function Kernel(opts) {
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;
   this._wmDrag = null;        // { sid, dx, dy } during a title-bar drag
+  this._wmTitleDown = null;   // { sid, x, y, t } — last title-bar mousedown,
+                              // for double-click detection (todos/0025)
   this._wmResizeDrag = null;  // { sid, ex, ey, baseW, baseH, x0, y0, curW, curH }
                               // during a border resize drag (todos/0019);
                               // ex/ey: 1 = that axis tracks the pointer.
@@ -2473,6 +2486,27 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           return 'close';
         }
         this.wmFocus(s.sid);
+        // Title double-click (todos/0025): a second down on the SAME title
+        // within WM_DBLCLICK_MS and WM_DBLCLICK_SLOP px is the maximize
+        // gesture — EV_TITLE_ACTIVATE to the WM, and NO drag starts (so the
+        // gesture never also moves the window). Mechanism only: policy
+        // (/bin/wm) toggles maximize; with no subscriber the event goes
+        // nowhere (the kernel-chrome fallback has no maximize, by design).
+        // Two slow clicks just focus-and-drag twice; a title drag that
+        // MOVED the window breaks the slop check, so drag-drop-drag never
+        // misfires. opts.t (ms, any consistent origin — the bridge sends
+        // event timestamps) overrides the clock for deterministic tests.
+        var t = opts.t !== undefined ? opts.t : Date.now();
+        var lastDown = this._wmTitleDown;
+        this._wmTitleDown = { sid: s.sid, x: x, y: y, t: t };
+        if (lastDown && lastDown.sid === s.sid &&
+            t - lastDown.t >= 0 && t - lastDown.t <= WM_DBLCLICK_MS &&
+            Math.abs(x - lastDown.x) <= WM_DBLCLICK_SLOP &&
+            Math.abs(y - lastDown.y) <= WM_DBLCLICK_SLOP) {
+          this._wmTitleDown = null;            // a third click starts over
+          this._wmEmit(WMP.EV_TITLE_ACTIVATE, [s.sid]);
+          return 'title-activate';
+        }
         this._wmDrag = { sid: s.sid, dx: x - s.x, dy: y - s.y };
         return 'drag-start';
       }
@@ -2601,6 +2635,21 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
   s.dstW = w; s.dstH = h;
   this._wmVersion++;
   this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
+  return true;
+};
+
+/* Fire the title-activate (maximize) gesture for a surface — the same
+ * EV_TITLE_ACTIVATE the title-bar double-click emits, so wmctl max and the
+ * mouse share ONE policy path in /bin/wm (todos/0025). Mechanism only: the
+ * kernel keeps no maximize state; policy dispatches configure-vs-scale on
+ * the resizable bit and holds the saved geometry. Refuses without a
+ * subscriber (maximize IS policy — nothing would ever answer) and on
+ * borderless surfaces (no title bar, no gesture). */
+Kernel.prototype.wmTitleActivate = function (sid) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s || s.borderless) return false;
+  if (!this._wmSubs.size) return false;
+  this._wmEmit(WMP.EV_TITLE_ACTIVATE, [s.sid]);
   return true;
 };
 
@@ -2903,6 +2952,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.MOVE: ok(this.wmMove(g(0), g(1), g(2))); break;
     case WMP.RESIZE: ok(this.wmResize(g(0), g(1), g(2))); break;
     case WMP.SET_DST: ok(this.wmSetDst(g(0), g(1), g(2))); break;
+    case WMP.ACTIVATE: ok(this.wmTitleActivate(g(0))); break;
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores

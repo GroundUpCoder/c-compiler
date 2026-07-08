@@ -5,8 +5,10 @@
 // borderless surface parked at the bottom edge, the wm's placement policy
 // (not the kernel cascade), wmctl list/min/click/shot/focus, taskbar-click
 // restore (injected through the real input ring into the wm's SDL loop),
-// and the crashed-WM story — kill the wm, the system stays driveable
-// (kernel-chrome fallback + kernel-owned endpoint), `wm &` respawns it.
+// wmctl max maximize/restore on both branches of the resizable dispatch
+// (todos/0025), and the crashed-WM story — kill the wm, the system stays
+// driveable (kernel-chrome fallback + kernel-owned endpoint), `wm &`
+// respawns it.
 //
 // Run: node tests/kernel/test_wm_service_e2e.js
 'use strict';
@@ -55,8 +57,25 @@ const script = [
   'wmctl scale $WSID 300 200 || echo scale-refused',
   'echo ==list6',
   'wmctl list',
+  'wmctl max $WSID && echo max-ok',              // maximize/restore (todos/0025)
+  'sleep 1',                                     // RESIZE round-trips the client ack
+  'echo ==list7',
+  'wmctl list',
+  'wmctl max $WSID',                             // toggle back
+  'sleep 1',
+  'echo ==list8',
+  'wmctl list',
+  'wmctl max $FSID',                             // fixed-size: scale-to-fit branch
+  'sleep 0.5',
+  'echo ==list9',
+  'wmctl list',
+  'wmctl max $FSID',                             // restore the pre-max dst
+  'sleep 0.5',
+  'echo ==list10',
+  'wmctl list',
   'kill $WMPID',                                 // crash the WM
   'sleep 0.5',
+  'wmctl max $WSID || echo max-refused',         // maximize IS policy: no WM, no max
   'echo ==list4',
   'wmctl list',                                  // endpoint is the KERNEL's: still up
   'wm &',                                        // respawn
@@ -76,9 +95,13 @@ function section(name) {
   return m.length > 1 ? m[1].split('==')[0] : '';
 }
 const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
-      l4 = section('list4'), l5 = section('list5'), l6 = section('list6');
+      l4 = section('list4'), l5 = section('list5'), l6 = section('list6'),
+      l7 = section('list7'), l8 = section('list8'), l9 = section('list9'),
+      l10 = section('list10');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
+const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
+const dst = (line) => line.split('\t')[3] || '';    // the DST column
 
 // ---- autostart + placement ----
 const bar1 = row(l1, 'taskbar'), win1 = row(l1, 'winbox');
@@ -113,9 +136,28 @@ check('fixbox is not resizable (no R flag)', fix6 !== '' && !fix6.includes('R'),
 const win6 = row(l6, 'winbox');
 check('winbox unscaled: DST column is -', win6.includes('\t-\t'), win6);
 
+// ---- maximize/restore (todos/0025): wmctl max -> EV_TITLE_ACTIVATE ->
+// wm.c policy, dispatching on the RESIZABLE bit ----
+check('wmctl max on the resizable winbox succeeds', out.includes('max-ok'));
+check('maximized winbox fills the work area (1024x712+0+28: screen minus taskbar, below the title bar)',
+  geom(row(l7, 'winbox')) === '1024x712+0+28', row(l7, 'winbox'));
+check('second max restores the exact saved geometry',
+  geom(row(l8, 'winbox')) === geom(win1) && geom(win1) === '240x160+12+36',
+  row(l8, 'winbox'));
+check('max on the fixed-size fixbox: aspect-fit scale-to-fit (960x640, integer-snapped 4x), centered',
+  dst(row(l9, 'fixbox')) === '960x640' && geom(row(l9, 'fixbox')) === '240x160+32+64',
+  row(l9, 'fixbox'));
+check('fixbox buffer untouched by max (still 240x160)',
+  geom(row(l9, 'fixbox')).startsWith('240x160'), row(l9, 'fixbox'));
+check('second max restores the pre-max dst and position',
+  dst(row(l10, 'fixbox')) === dst(row(l6, 'fixbox')) &&
+  geom(row(l10, 'fixbox')) === geom(row(l6, 'fixbox')), row(l10, 'fixbox'));
+
 // ---- crashed-WM story ----
 check('WM killed: taskbar gone, endpoint still serves wmctl',
   row(l4, 'taskbar') === '' && row(l4, 'winbox') !== '', JSON.stringify(l4));
+check('wmctl max with no WM is refused (maximize IS policy)',
+  out.includes('max-refused'));
 const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
   bar5.includes('1024x28+0+740'), JSON.stringify(l5));

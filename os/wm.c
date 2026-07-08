@@ -6,7 +6,11 @@
  * clear of the taskbar), and draws the taskbar — itself just a borderless
  * SDL window whose surface is an shm kernel surface like any other app's.
  * Buttons: click focuses (restoring if minimized); clicking the focused
- * window's button minimizes it (the Win95 toggle).
+ * window's button minimizes it (the Win95 toggle). Maximize (todos/0025)
+ * also lives here: EV_TITLE_ACTIVATE (title double-click / wmctl max)
+ * toggles between the work area and saved geometry, dispatching on the
+ * RESIZABLE bit — configure vs scale-to-fit. A wm restart forgets
+ * maximize state (deliberate: restarting the WM tidies the desktop).
  *
  * The kernel keeps its chrome policy (drag, close box, click-to-focus) as
  * the WM-crashed fallback — killing this process leaves the system usable,
@@ -38,6 +42,12 @@ typedef struct {
                                           todos/0024) — the clamp must use
                                           the SCALED size */
     int minimized, focused;
+    int resizable;                     /* WMP_F_RESIZABLE at create — the
+                                          maximize dispatch bit (todos/0025) */
+    int maximized;                     /* maximize state lives HERE, not in
+                                          the kernel (todos/0025) */
+    int32_t sx, sy, sw, sh;            /* saved geometry for restore: x, y,
+                                          and w/h (resizable) or dst (fixed) */
     char title[32];
 } win_t;
 
@@ -125,24 +135,86 @@ static void place(int32_t sid, int w, int h) {
     wmp_send(sock, WMP_MOVE, a, 3);    /* fire-and-forget; R_OK skipped */
 }
 
-/* The user drag-released a fixed-size window's frame at box (bw, bh)
- * (EV_SCALE_REQ, todos/0024). Policy: the largest aspect-correct dst that
- * fits the box, with an integer-snap nicety — a scale within 15% of a
- * whole multiple snaps to it (the pixel-art case: gameboy at exactly 2x).
- * The kernel floors dst dims at 32; preserve aspect by flooring the SCALE,
- * not the dims. The SET_DST echo (EV_SCALED) updates the model. */
-static void scale_request(int32_t sid, int32_t bw, int32_t bh) {
-    win_t *w = find(sid);
-    if (!w || w->w <= 0 || w->h <= 0) return;
+/* The largest aspect-correct dst for w's BUFFER that fits box (bw, bh),
+ * with an integer-snap nicety — a scale within 15% of a whole multiple
+ * snaps to it (the pixel-art case: gameboy at exactly 2x). The snap may
+ * round UP past the box (a drag box is an approximate gesture — desired)
+ * unless allow_over is 0 (maximize must never overflow the work area:
+ * then an over-box snap falls back to the raw fit). The kernel floors dst
+ * dims at 32; preserve aspect by flooring the SCALE, not the dims. Shared
+ * by the drag-release answer (0024) and the fixed-size maximize branch
+ * (0025). */
+static void fit_dst(const win_t *w, int32_t bw, int32_t bh, int allow_over,
+                    int32_t *ow, int32_t *oh) {
     float s = (float)bw / (float)w->w;
     float sy = (float)bh / (float)w->h;
     if (sy < s) s = sy;
     float snap = (float)(int)(s + 0.5f);
-    if (snap >= 1.0f && s >= snap * 0.85f && s <= snap * 1.15f) s = snap;
+    if (snap >= 1.0f && s >= snap * 0.85f && s <= snap * 1.15f &&
+        (allow_over || ((float)w->w * snap <= (float)bw &&
+                        (float)w->h * snap <= (float)bh)))
+        s = snap;
     float floor_s = 32.0f / (float)(w->w < w->h ? w->w : w->h);
     if (s < floor_s) s = floor_s;
-    int32_t a[3] = { sid, (int32_t)(w->w * s + 0.5f), (int32_t)(w->h * s + 0.5f) };
+    *ow = (int32_t)(w->w * s + 0.5f);
+    *oh = (int32_t)(w->h * s + 0.5f);
+}
+
+/* The user drag-released a fixed-size window's frame at box (bw, bh)
+ * (EV_SCALE_REQ, todos/0024): answer with the aspect-fit SET_DST. The
+ * echo (EV_SCALED) updates the model. */
+static void scale_request(int32_t sid, int32_t bw, int32_t bh) {
+    win_t *w = find(sid);
+    if (!w || w->w <= 0 || w->h <= 0) return;
+    int32_t a[3] = { sid, 0, 0 };
+    fit_dst(w, bw, bh, 1, &a[1], &a[2]);
     wmp_send(sock, WMP_SET_DST, a, 3);
+}
+
+/* Fill the work area (screen minus taskbar, below the kernel title bar)
+ * with w — the maximize half of the 0025 toggle, also re-run on EV_SCREEN
+ * while maximized. Dispatch on the RESIZABLE bit (the same bit that makes
+ * RESIZE vs SET_DST legal — exclusive modes, todos/0021/0024): resizable
+ * gets a real MOVE + RESIZE configure to the work area; fixed-size gets
+ * the aspect-fit SET_DST letterbox, centered. Echoes (EV_MOVED /
+ * EV_CONFIGURED / EV_SCALED) update the model. */
+static void maximize(win_t *w) {
+    int32_t work_w = scr_w, work_h = scr_h - BAR_H - TITLE_H;
+    if (work_w < 64 || work_h < 64) return;    /* degenerate screen: skip */
+    if (w->resizable) {
+        int32_t m[3] = { w->sid, 0, TITLE_H };
+        wmp_send(sock, WMP_MOVE, m, 3);
+        int32_t r[3] = { w->sid, work_w, work_h };
+        wmp_send(sock, WMP_RESIZE, r, 3);
+    } else {
+        int32_t d[3] = { w->sid, 0, 0 };
+        fit_dst(w, work_w, work_h, 0, &d[1], &d[2]);
+        int32_t m[3] = { w->sid, (work_w - d[1]) / 2,
+                         TITLE_H + (work_h - d[2]) / 2 };
+        wmp_send(sock, WMP_MOVE, m, 3);
+        wmp_send(sock, WMP_SET_DST, d, 3);
+    }
+}
+
+/* EV_TITLE_ACTIVATE (title double-click or wmctl max, todos/0025): toggle.
+ * First activate saves geometry (w/h for resizable, dst for fixed — the
+ * mode the branch will clobber) and maximizes; the second restores it. */
+static void title_activate(int32_t sid) {
+    win_t *w = find(sid);
+    if (!w || w->w <= 0 || w->h <= 0) return;
+    if (!w->maximized) {
+        w->sx = w->x; w->sy = w->y;
+        w->sw = w->resizable ? w->w : w->dst_w;
+        w->sh = w->resizable ? w->h : w->dst_h;
+        w->maximized = 1;
+        maximize(w);
+    } else {
+        w->maximized = 0;
+        int32_t m[3] = { w->sid, w->sx, w->sy };
+        wmp_send(sock, WMP_MOVE, m, 3);
+        int32_t g[3] = { w->sid, w->sw, w->sh };
+        wmp_send(sock, w->resizable ? WMP_RESIZE : WMP_SET_DST, g, 3);
+    }
 }
 
 /* Create the taskbar window at the current screen width. Its EV_CREATED
@@ -171,6 +243,7 @@ static void screen_changed(void) {
         }
     for (int i = 0; i < nwins; i++) {
         win_t *w = &wins[i];
+        if (w->maximized) { maximize(w); continue; }   /* re-fit (todos/0025) */
         int nx = w->x, ny = w->y;
         if (nx > scr_w - 40) nx = scr_w - 40;
         if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
@@ -201,6 +274,8 @@ static void handle_event(wmp_hdr *h) {
             w->dst_w = r.dst_w; w->dst_h = r.dst_h;
             w->minimized = (r.flags & WMP_F_MINIMIZED) ? 1 : 0;
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
+            w->resizable = (r.flags & WMP_F_RESIZABLE) ? 1 : 0;
+            w->maximized = 0;          /* slots are reused: reset (0025) */
             memcpy(w->title, r.title, 32);
             w->title[31] = 0;
         }
@@ -263,6 +338,11 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_SCALE_REQ: {            /* drag box -> aspect-fit SET_DST */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         scale_request(p[0], p[1], p[2]);
+        break;
+    }
+    case WMP_EV_TITLE_ACTIVATE: {       /* maximize toggle (todos/0025) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        title_activate(p[0]);
         break;
     }
     case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */

@@ -34,6 +34,12 @@ enum {
                                           dst rect of a FIXED-SIZE surface;
                                           buffer untouched, app oblivious.
                                           R_ERR on a resizable surface */
+    WMP_ACTIVATE = 0x18,               /* { sid }: fire the title-activate
+                                          (maximize) gesture (todos/0025) —
+                                          the wmctl-max path into the same
+                                          policy code the title double-click
+                                          hits. R_ERR with no subscribed WM
+                                          (maximize IS policy) */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     /* replies */
@@ -51,6 +57,11 @@ enum {
                                           a fixed-size surface at that box —
                                           policy answers with an aspect-
                                           preserving SET_DST (todos/0024) */
+    WMP_EV_TITLE_ACTIVATE = 0x8A,      /* { sid }: title-bar double-click or an
+                                          ACTIVATE command (todos/0025) — the
+                                          maximize gesture; policy toggles
+                                          configure-vs-scale on the RESIZABLE
+                                          bit and keeps the saved geometry */
 };
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries

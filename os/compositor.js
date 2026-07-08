@@ -140,7 +140,9 @@ function routeInput(kernel, sdlWeb, ev) {
     // between locked (relative to the focused surface) and normal routing.
     kernel.wmPointerLockChanged(!!ev.active);
   } else if (ev.kind === 'down' || ev.kind === 'up') {
-    kernel.wmPointer(ev.kind, ev.x, ev.y, { button: (ev.button | 0) + 1 });
+    // ev.t (event timestamp) feeds the kernel's title double-click
+    // detection (todos/0025) — real inter-click gap, not worker latency.
+    kernel.wmPointer(ev.kind, ev.x, ev.y, { button: (ev.button | 0) + 1, t: ev.t });
   } else if (ev.kind === 'wheel') {
     var scale = ev.deltaMode === 1 ? 20 : ev.deltaMode === 2 ? 600 : 1;
     kernel.wmPointer('wheel', ev.x, ev.y,

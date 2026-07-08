@@ -8,6 +8,9 @@
  *   wmctl resize SID W H              asks the client; applies at its ack
  *   wmctl scale SID W H               sets a fixed-size window's on-screen
  *                                     dst rect (todos/0024); app oblivious
+ *   wmctl max SID                     toggle maximize/restore (todos/0025) —
+ *                                     the title double-click gesture; policy
+ *                                     lives in /bin/wm, so this needs one
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
@@ -31,6 +34,7 @@ static int usage(void) {
         "       wmctl move SID X Y\n"
         "       wmctl resize SID W H\n"
         "       wmctl scale SID W H\n"
+        "       wmctl max SID\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl relmove SID DX DY\n"
@@ -136,6 +140,10 @@ int main(int argc, char **argv) {
         if (argc < 5) return usage();
         int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
         return wmp_cmd(fd, WMP_SET_DST, a, 3) ? fail("scale refused") : 0;
+    }
+    if (!strcmp(cmd, "max")) {          /* maximize toggle (todos/0025) */
+        int32_t a[1] = { sid };
+        return wmp_cmd(fd, WMP_ACTIVATE, a, 1) ? fail("max refused (no WM?)") : 0;
     }
     if (!strcmp(cmd, "key")) {
         if (argc < 4) return usage();
