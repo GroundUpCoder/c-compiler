@@ -1,6 +1,12 @@
 # 0034 — coreutils batch 2: the trivial applets
 
-- **Status**: open
+- **Status**: done (2026-07-08) — dev log `logs/2026-07-08/coreutils-batch2.md`.
+  37 applets landed (all targets; whoami/id/hostname as hand-rolled
+  stubs per plan; env can't exec until 0035 — always-fail execvp seam
+  in wasm_port.h). Surfaced: the fn-type param-qualifier conformance
+  bug (`fn_compat_param_quals`), the standalone-host dup2-over-stdout
+  hole (split), and 7 libc additions (clock_settime, sync, getpagesize,
+  mktemp/mkdtemp, fseeko/ftello, strftime %z/%s). Image v28.
 - **Depends**: —
 - **Design**: `vendor/busybox/README.md` (multicall mechanics, config
   gotchas), `logs/2026-07-07/coreutils-multicall.md`

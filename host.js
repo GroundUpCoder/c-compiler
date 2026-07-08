@@ -72,8 +72,8 @@ function createFileSystem({ fs, ctx }) {
   /* POSIX fd table: entries for fds 0/1/2 (stdin/stdout/stderr) */
   const fdTable = [
     { nativeFd: 0, position: null, isStdin: true },  /* fd 0 = stdin  (not seekable) */
-    { nativeFd: 1, position: null },  /* fd 1 = stdout (not seekable) */
-    { nativeFd: 2, position: null },  /* fd 2 = stderr (not seekable) */
+    { nativeFd: 1, position: null, isStdout: true }, /* fd 1 = stdout (not seekable) */
+    { nativeFd: 2, position: null, isStderr: true }, /* fd 2 = stderr (not seekable) */
   ];
   const stdinBuf = [];
   let stdinEOF = false;
@@ -225,13 +225,15 @@ function createFileSystem({ fs, ctx }) {
       },
       close: function (fd) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
-        if (fd < 3) {
+        const entry = fdTable[fd];
+        if (entry.isStdin || entry.isStdout || entry.isStderr) {
           /* POSIX allows closing std fds. Drop the table entry (further
-             use is EBADF) without closing the host process's streams. */
+             use is EBADF) without closing the host process's streams.
+             A dup2'd FILE entry on fd 0/1/2 falls through and closes
+             normally (todos/0034). */
           fdTable[fd] = null;
           return 0;
         }
-        const entry = fdTable[fd];
         /* dup'd fds alias one entry; only close the native fd with the
            last alias. */
         if (entry.refs && entry.refs > 1) {
@@ -250,20 +252,25 @@ function createFileSystem({ fs, ctx }) {
       },
       read: function () { /* placeholder — replaced after pipe patching */ },
       write: function (fd, buf_ptr, count) {
-        if (fd === 1 || fd === 2) {
+        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+        const entry = fdTable[fd];
+        /* Route by the ENTRY, not the fd number: a dup2'd file on fd 1/2
+           must hit the file, and a `2>&1`-style alias of the default
+           stderr entry must keep hitting the console. split(1) re-points
+           fd 1 at each output part — the first program to do so here
+           (todos/0034; readImpl's isStdin check is the same pattern). */
+        if (entry.isStdout || entry.isStderr) {
           const memory = getMemory();
           const buf = new Uint8Array(memory.buffer, buf_ptr, count);
-          if (fd === 1) {
+          if (entry.isStdout) {
             writeOut(buf);
           } else {
             writeErr(buf);
           }
           return count;
         }
-        if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
         const memory = getMemory();
         const buf = new Uint8Array(memory.buffer, buf_ptr, count);
-        const entry = fdTable[fd];
         try {
           let n;
           if (entry.append) {
@@ -665,12 +672,16 @@ function createFileSystem({ fs, ctx }) {
         if (oldfd < 0 || oldfd >= fdTable.length || !fdTable[oldfd]) { setErrnoName('EBADF'); return -1; }
         if (newfd < 0) { setErrnoName('EBADF'); return -1; }
         if (oldfd === newfd) return newfd;
-        /* Close newfd if open */
+        /* Close newfd if open. The default std entries are never
+           closeSync'd (host streams); a dup2'd FILE entry sitting on
+           fd 1/2 is — split(1) re-points fd 1 per output part and
+           would otherwise leak a native fd each time (todos/0034). */
         if (newfd < fdTable.length && fdTable[newfd]) {
           const entry = fdTable[newfd];
           if (entry.type === 'pipe') {
             if (--entry.pipe.refs[entry.pipeEnd] <= 0) entry.pipe.closed[entry.pipeEnd] = true;
-          } else if (entry.nativeFd !== undefined && newfd >= 3) {
+          } else if (entry.nativeFd !== undefined
+                     && !(entry.isStdin || entry.isStdout || entry.isStderr)) {
             if (entry.refs && entry.refs > 1) entry.refs--;
             else try { fs.closeSync(entry.nativeFd); } catch (e) { }
           }

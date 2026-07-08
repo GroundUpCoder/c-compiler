@@ -26,21 +26,20 @@ One numbered file per unit of work we have actually committed to doing.
 
 1. `0039` WM bug sweep round 2 — the repeatable 0033 format; incl. the
    deferred pointer-lock HUMAN check and re-verifying 0038 under storm
-2. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
-   stat md5sum … — no-spawn filters, multicall adds)
-3. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
-   `PV_NO_INTERCEPT`, link the vfork shim into coreutils
-4. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+2. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+   `PV_NO_INTERCEPT`, link the vfork shim into coreutils (0034's
+   always-fail execvp in wasm_port.h marks the seam)
+3. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-5. `0037` wasm module cache — kernel-side compiled-Module cache on the
+4. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (the sealed system blob's `/usr/share/os-release`
    VERSION_ID is the natural cache key since 0040; Modules clone,
    instances don't)
-6. (unnumbered) a real-world WebGPU C app port — candidates via
+5. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-7. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+6. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-8. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+7. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in

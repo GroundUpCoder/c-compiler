@@ -2561,7 +2561,11 @@ class FunctionType extends TypeInfo {
     if (this.isVarArg !== other.isVarArg) return false;
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
-      if (!a[i].isCompatibleWith(b[i], seen)) return false;
+      // C11 6.7.6.3p15: for compatibility, each parameter is taken as
+      // having the unqualified version of its declared type — only the
+      // TOP-LEVEL qualifiers drop (`const char *const` param compares as
+      // `const char *`; the pointee's const still matters).
+      if (!a[i].removeQualifiers().isCompatibleWith(b[i].removeQualifiers(), seen)) return false;
     }
     return true;
   }
@@ -21110,6 +21114,10 @@ long ftell(FILE *stream);
 void rewind(FILE *stream);
 int fgetpos(FILE *stream, fpos_t *pos);
 int fsetpos(FILE *stream, const fpos_t *pos);
+/* POSIX off_t-wide seek/tell (>2 GiB safe, like fgetpos/fsetpos). */
+typedef long long off_t;
+int fseeko(FILE *stream, off_t offset, int whence);
+off_t ftello(FILE *stream);
 
 int feof(FILE *stream);
 int ferror(FILE *stream);
@@ -21190,6 +21198,8 @@ int putenv(char *string);
 int clearenv(void);
 int system(const char *command);
 int mkstemp(char *template_);
+char *mktemp(char *template_);
+char *mkdtemp(char *template_);
 
 #define MB_CUR_MAX 4  /* UTF-8, matching the restartable mbrtowc/wcrtomb family */
 int mblen(const char *s, size_t n);
@@ -21494,6 +21504,12 @@ char *asctime(const struct tm *tm);
 char *ctime(const time_t *timep);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
+/* clock_settime: the wall clock belongs to the host/browser — a process
+   cannot set it. Fails EPERM, like an unprivileged caller on POSIX. */
+#include <errno.h>
+static inline int clock_settime(clockid_t clk_id, const struct timespec *tp) {
+  (void)clk_id; (void)tp; errno = EPERM; return -1;
+}
 __import int __nanosleep(long sec, long nsec);
 static inline int nanosleep(const struct timespec *req, struct timespec *rem) {
   (void)rem;
@@ -21540,10 +21556,16 @@ __import int getpid(void);
 __import int getppid(void);
 __import int isatty(int fd);
 __import int usleep(unsigned int usec);
+/* wasm linear memory grows in 64KiB pages — that IS the page size here. */
+static inline int getpagesize(void) { return 65536; }
 __import int ftruncate(int fd, long long length);
 __import long readlink(const char *path, char *buf, long bufsize);
 __import int fsync(int fd);
 __import int fdatasync(int fd);
+/* sync(): whole-fs flush. Writes reach the backing store as they happen
+   (BlockFS has no process-side dirty cache; per-fd durability is fsync),
+   so there is nothing extra to flush from here — a no-op by design. */
+static inline void sync(void) { }
 __import int chmod(const char *path, int mode);
 __import int fchmod(int fd, int mode);
 __import int link(const char *oldpath, const char *newpath);
@@ -25563,6 +25585,32 @@ int fgetpos(FILE *stream, fpos_t *pos) {
   return 0;
 }
 
+/* fseeko/ftello: the POSIX off_t-wide fseek/ftell (od's dump_skip seeks
+   with fseeko — todos/0034). Same buffer discipline as fseek/ftell, at
+   64-bit width like fgetpos/fsetpos. */
+int fseeko(FILE *stream, off_t offset, int whence) {
+  fflush(stream);
+  if (whence == SEEK_CUR) {
+    if (stream->flags & __F_RBUF) {
+      offset -= (off_t)(stream->buf_len - stream->buf_pos);
+    }
+    if (stream->ungetc_char != EOF) offset--;
+  }
+  stream->buf_pos = 0;
+  stream->buf_len = 0;
+  stream->ungetc_char = EOF;
+  off_t r = lseek(stream->fd, offset, whence);
+  if (r < 0) return -1;
+  stream->flags &= ~(__F_EOF | __F_RBUF);
+  return 0;
+}
+
+off_t ftello(FILE *stream) {
+  fpos_t p;
+  if (fgetpos(stream, &p) != 0) return -1;
+  return (off_t)p;
+}
+
 int fsetpos(FILE *stream, const fpos_t *pos) {
   fflush(stream);
   stream->buf_pos = 0;
@@ -25862,6 +25910,8 @@ int pclose(FILE *stream) {
 #include <stdio.h>
 #include <string.h>     // mkstemp() uses strlen
 #include <fcntl.h>      // mkstemp() uses open
+#include <unistd.h>     // mktemp() probes with access()
+#include <sys/stat.h>   // mkdtemp() uses mkdir
 #include <errno.h>
 #include <inttypes.h>
 #include <__atexit.h>
@@ -25893,6 +25943,45 @@ int mkstemp(char *template_) {
   }
   errno = EEXIST;
   return -1;
+}
+
+/* mktemp/mkdtemp: same XXXXXX churn as mkstemp (busybox's mktemp applet
+   wants all three — todos/0034). mktemp() only NAMES a path (that's why
+   POSIX withdrew it — the classic TOCTOU); callers here accept that.
+   Failure protocol differs per spec: mktemp returns template_ with
+   template_[0] = '\\0', mkdtemp returns NULL. */
+static int __mktemp_spin(char *template_, int (*probe)(const char *)) {
+  size_t len = strlen(template_);
+  char *x = template_ + len - 6;
+  if (len < 6) { errno = EINVAL; return -1; }
+  for (int i = 0; i < 6; i++) {
+    if (x[i] != 'X') { errno = EINVAL; return -1; }
+  }
+  for (int tries = 0; tries < 100; tries++) {
+    unsigned long v = (unsigned long)__time_now()
+        ^ ((unsigned long)getpid() << 8) ^ (unsigned long)__mkstemp_counter++;
+    for (int i = 0; i < 6; i++) { x[i] = (char)('a' + v % 26); v /= 26; }
+    if (probe(template_) == 0) return 0;
+    if (errno != EEXIST) return -1;
+  }
+  errno = EEXIST;
+  return -1;
+}
+static int __mktemp_probe_free(const char *path) {
+  if (access(path, F_OK) != 0) return 0;  /* name is free — good */
+  errno = EEXIST;
+  return -1;
+}
+static int __mktemp_probe_mkdir(const char *path) {
+  return mkdir(path, 0700);
+}
+char *mktemp(char *template_) {
+  if (__mktemp_spin(template_, __mktemp_probe_free) != 0) template_[0] = '\\0';
+  return template_;
+}
+char *mkdtemp(char *template_) {
+  if (__mktemp_spin(template_, __mktemp_probe_mkdir) != 0) return 0;
+  return template_;
 }
 
 int abs(int n) { return n < 0 ? -n : n; }
@@ -27050,6 +27139,21 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
       __ap_int(s, max, &pos, tp->tm_sec, 2);
       break;
     case 'Z': break; /* no timezone name available in wasm */
+    case 'z': { /* +hhmm from tm_gmtoff (localtime fills it in; gmtime's is 0) */
+      long off = tp->tm_gmtoff;
+      char zbuf[8];
+      long a = off < 0 ? -off : off;
+      snprintf(zbuf, sizeof zbuf, "%c%02ld%02ld",
+               off < 0 ? '-' : '+', a / 3600, (a % 3600) / 60);
+      __ap_str(s, max, &pos, zbuf);
+      break;
+    }
+    case 's': { /* GNU extension, but every shell script's date +%s */
+      char sbuf[24];
+      snprintf(sbuf, sizeof sbuf, "%lld", (long long)mktime((struct tm *)tp));
+      __ap_str(s, max, &pos, sbuf);
+      break;
+    }
     case '%': s[pos++] = '%'; break;
     case 'n': s[pos++] = '\\n'; break;
     case 't': s[pos++] = '\\t'; break;

@@ -1,5 +1,5 @@
 {
-  "version": 27,
+  "version": 28,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -76,16 +76,40 @@
       "/usr/bin/[": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/base64": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/basename": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/cat": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/cksum": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/cmp": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/comm": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/cp": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/cut": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/date": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/dd": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/dirname": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/du": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/echo": {
@@ -94,16 +118,31 @@
       "/usr/bin/egrep": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/env": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/expr": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/false": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/fgrep": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/fold": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/grep": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/head": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/hostname": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/id": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/kill": {
@@ -115,16 +154,37 @@
       "/usr/bin/ls": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/md5sum": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/mkdir": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/mktemp": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/mv": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/nl": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/od": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/paste": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/printf": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/pwd": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/readlink": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/realpath": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/rm": {
@@ -136,13 +196,37 @@
       "/usr/bin/sed": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/seq": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/sha1sum": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/sha256sum": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/sleep": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/sort": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/split": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/stat": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/sync": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/tac": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/tail": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/tee": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/test": {
@@ -151,13 +235,40 @@
       "/usr/bin/touch": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/tr": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/true": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/truncate": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/uname": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/uniq": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/unlink": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/usleep": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/vi": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/wc": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/which": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/whoami": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/yes": {
         "link": "/usr/bin/coreutils"
       }
     }

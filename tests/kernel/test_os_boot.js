@@ -146,6 +146,82 @@ for (let i = 0; i < expectCu.length; i++) {
   check('coreutils[' + i + '] = ' + JSON.stringify(expectCu[i]), cu[i] === expectCu[i], JSON.stringify(cu[i]));
 }
 
+// ---- coreutils batch 2 (0034): a leg per applet class ----
+// Text filters (cut/tr/uniq/tac/nl/fold/od/comm/paste), file ops
+// (cmp/du/dd/split/truncate/unlink/readlink/realpath/mktemp/stat/sync),
+// misc (yes/seq/env/expr/date/uname/usleep/which/cksum/base64), hashes,
+// and the single-user stubs (whoami/id/hostname). `yes | head` doubles as
+// the EPIPE-terminates-the-writer check; `env /bin/true` documents the
+// designed no-exec limit of the multicall (spawning applets are 0035).
+r = session([
+  'cd /tmp && mkdir cu2 && cd cu2',
+  'seq 3 | tac',
+  "printf 'a:b:c\\n' | cut -d: -f2 | tr a-z A-Z",
+  "printf 'x\\nx\\ny\\n' | uniq | wc -l",
+  'echo hello | md5sum | cut -c1-32',
+  'echo hello | base64 | base64 -d',
+  'echo abc > f.txt && truncate -s 2 f.txt && stat -c %s f.txt',
+  'dd if=f.txt bs=1 count=1 2>/dev/null | wc -c',
+  'split -b 2 f.txt p_ && cat p_aa | wc -c',
+  'ln -s f.txt l && readlink l && unlink l && echo unlink-ok',
+  'realpath /bin/../tmp',
+  'yes | head -2',
+  'seq 2 | tee copy >/dev/null && wc -l copy',
+  'expr 7 % 3',
+  'date +%s | wc -c',                       // epoch seconds: 10 digits + \n
+  'uname -m && whoami && id -u && hostname',
+  'which sh',
+  'cksum f.txt | cut -d" " -f1',            // CRC of "ab" (truncated f.txt)
+  "printf '1\\n3\\n' > ca && printf '2\\n3\\n' > cb && comm ca cb | wc -l",
+  'paste ca cb | head -1',
+  "printf 'long line here\\n' | fold -w5 | head -1",
+  "printf 'AB\\n' | od -c | head -1",
+  "printf 'x\\n' | nl | wc -w",
+  'mktemp m.XXXXXX >/dev/null && echo mktemp-ok',
+  'sync && echo sync-ok',
+  'cmp f.txt f.txt && echo cmp-same',
+  'du -s /etc | cut -f2',
+  'env | grep -c ^PATH=',
+  'env /bin/true; echo env-exec=$?',
+  'usleep 1000 && echo usleep-ok',
+  'exit',
+  '',
+].join('\n'));
+check('coreutils batch-2 session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+const cu2 = r.stdout.split('\n');
+const expectCu2 = [
+  '3', '2', '1',                            // seq | tac
+  'B',                                      // cut | tr
+  '2',                                      // uniq | wc
+  'b1946ac92492d2347c6235b4d2611184',       // md5sum ("hello\n")
+  'hello',                                  // base64 round-trip
+  '2',                                      // truncate + stat -c %s
+  '1',                                      // dd bs=1 count=1
+  '2',                                      // split -b 2, first part
+  'f.txt', 'unlink-ok',                     // readlink, unlink
+  '/tmp',                                   // realpath normalizes
+  'y', 'y',                                 // yes stops on EPIPE
+  '2 copy',                                 // tee
+  '1',                                      // expr 7 % 3
+  '11',                                     // date +%s length
+  'wasm32', 'root', '0', 'localhost',       // uname -m + stubs
+  '/bin/sh',                                // which
+  '2072780115',                             // cksum ("ab")
+  '3',                                      // comm line count
+  '1\t2',                                   // paste
+  'long ',                                  // fold -w5
+  '0000000   A   B  \\n',                   // od -c (literal backslash-n)
+  '2',                                      // nl | wc -w
+  'mktemp-ok', 'sync-ok', 'cmp-same',
+  '/etc',                                   // du -s field 2
+  '1',                                      // env sees PATH
+  'env-exec=126',                           // no exec in the multicall (0035)
+  'usleep-ok',
+];
+for (let i = 0; i < expectCu2.length; i++) {
+  check('coreutils2[' + i + '] = ' + JSON.stringify(expectCu2[i]), cu2[i] === expectCu2[i], JSON.stringify(cu2[i]));
+}
+
 // ---- second boot, same image: persistence + no re-seed ----
 r = session('ls\nexit\n');
 check('second boot exits clean', r.status === 0, String(r.status));

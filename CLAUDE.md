@@ -65,7 +65,7 @@ hang-class miscompiles fail fast instead of stalling the suite.
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
   (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
-  journaling shim — plus 29 coreutils applets, including vi as /bin/vi,
+  journaling shim — plus 66 coreutils applets (0010 + the 0034 trivial batch), including vi as /bin/vi,
   as one multicall /bin/coreutils with /bin symlinks; patch table in
   `vendor/busybox/README.md`)
 - **Libraries**: `zlib`, `libpng`, `freetype`, `libgit2` (@44c05e5, core only; builds + `git_index_open` smoke test runs — used as a large-codebase stress test, see `vendor/libgit2/README.md`)
@@ -236,7 +236,7 @@ the bar is always-on-top and nothing sinks under the desktop; the
 no-WM fallback never sets layers.
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
-Image version is **v27**.
+Image version is **v28**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

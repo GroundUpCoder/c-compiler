@@ -1,4 +1,4 @@
-# busybox — the shell port (todos/0005) + coreutils (todos/0010)
+# busybox — the shell port (todos/0005) + coreutils (todos/0010, 0034)
 
 Two binaries come out of this vendor tree:
 
@@ -6,8 +6,14 @@ Two binaries come out of this vendor tree:
 - **`coreutils.json`** → `/bin/coreutils`: a **multicall** binary carrying
   cat ls cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
   basename dirname grep egrep fgrep sed **vi** echo printf test `[` kill
-  sleep (hand-rolled in `port/multicall_main.c` — upstream `sleep.c`
-  wasn't vendored; added for todos/0014's harnesses); the
+  (0010), plus — batch 2, todos/0034 — cut tr uniq tee nl od paste fold
+  tac comm cmp du dd split truncate unlink readlink realpath mktemp stat
+  sync yes seq env expr date uname usleep which cksum base64 md5sum
+  sha1sum sha256sum; sleep, whoami, id and hostname are hand-rolled in
+  `port/multicall_main.c` (sleep: upstream `sleep.c` wasn't vendored,
+  added for todos/0014's harnesses; whoami/id/hostname: single-user stubs
+  printing root/0/localhost rather than dragging in libpwdgrp — the
+  `FEATURE_LS_USERNAME`-off philosophy). The
   `/bin` applet names are BlockFS symlinks to it and dispatch is by
   argv[0] (`port/multicall_main.c` — a hand-rolled table, NOT upstream's
   kbuild-generated appletlib, so the 0005 appletlib stubs stay). Invoked
@@ -20,6 +26,17 @@ Two binaries come out of this vendor tree:
   ~26s of seeding vs ~2s for this one binary — measured. Applet builds
   also get `-DPV_NO_INTERCEPT`: they never spawn, so the vfork journal
   interception (below) is compiled out and `vfork_spawn.c` isn't linked.
+  Corollary (0034): NOTHING in the multicall can exec — `env cmd` dies
+  126 "Function not implemented" via the always-fail `execvp` stand-in in
+  `wasm_port.h`'s `PV_NO_INTERCEPT` branch (bare `env` prints the
+  environment fine). Spawn-capable applets (find/xargs/awk/tar/env-exec)
+  are todos/0035. Config notes for batch 2: od is the non-DESKTOP od
+  (BSD-style `-bcdox`, no GNU `-A/-t` — that's od_bloaty, DESKTOP-gated);
+  `FEATURE_DATE_ISOFMT` stays OFF (needs a real strptime this libc
+  doesn't have — see the date.c patch below); `FEATURE_STAT_FILESYSTEM`
+  OFF (no statfs); `FEATURE_SYNC_FANCY` OFF (no syncfs);
+  `FEATURE_DD_SIGNAL_HANDLING` OFF (status-on-SIGUSR1, not worth the
+  signal surface); `CONFIG_UNAME_OSNAME="wasm"`.
 
   hush's NOMMU builtin-in-pipe path still re-execs `/bin/sh` (see the
   find_builtin patch below) rather than the real applets: the cost is one
@@ -68,6 +85,8 @@ journaling mode:
 | `src/libbb/xfuncs_printf.c` | unused syscall wrappers (xsocket/xbind/…/xmkstemp/xchroot/xsettimeofday, the NOEXEC vfork helper) guarded out under `__wasm__` |
 | `src/coreutils/test.c` | `res = setjmp(leaving)` → supported if-form (every longjmp passes 2) |
 | `src/coreutils/sort.c` | tiny local `strptime()` under `__wasm__` — this libc has none and `-M` only ever asks for `"%b"` |
+| `src/coreutils/date.c` | strptime branch (`-D`, ISOFMT-gated) wrapped in `#if ENABLE_FEATURE_DATE_ISOFMT` — implicit declarations are hard errors in this compiler, so upstream's if(0)-DCE idiom can't carry the undeclared strptime; ISOFMT stays off |
+| `port/include/wasm_port.h` | `PV_NO_INTERCEPT` branch grew an always-fail `execvp` (ENOSYS) so `BB_EXECVP_or_die` (env's exec path) links in the no-spawn multicall |
 | `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0); 6 GNU `?:` elvis sites → plain ternary (side-effect-free operands, this compiler has no `?:`) |
 | `src/procps/kill.c` | killall/killall5 branches guarded out (need /proc scanning) |
 | `port/libbb_stubs.c` | appletlib globals (`applet_name` — overridable via `PORT_APPLET_NAME`, `xfunc_error_retval`, `bb_show_usage`, `string_array_len`), `bb_clk_tck`, single-user `bb_getgroups` |
@@ -132,6 +151,32 @@ From 0011 (vi — dev logs `logs/2026-07-07/busybox-vi.md`,
 - **coreutils link**: vi pulls `read_key.c`/`safe_poll.c` (already
   vendored for hush) plus newly-vendored `read_printf.c`
   (`xmalloc_open_read_close`) into `coreutils.json`.
+
+From 0034 (coreutils batch 2 — dev log
+`logs/2026-07-08/coreutils-batch2.md`):
+
+- **Compiler**: top-level parameter qualifiers participated in function
+  type compatibility (C11 6.7.6.3p15 says drop them) — busybox stat.c's
+  `print_it(print_stat)` was rejected; fixed +
+  `tests/unit/conformance/fn_compat_param_quals`.
+- **libc additions**: `clock_settime` (EPERM stub — the host owns the
+  wall clock; date -s reports "can't set date"), `sync()` (no-op by
+  design; per-fd durability is fsync), `getpagesize()` (64KiB — the wasm
+  page), `mktemp`/`mkdtemp` (beside the existing mkstemp; the mktemp
+  applet wants all three), `fseeko`/`ftello` (od's dump_skip),
+  strftime `%z` (real offset from `tm_gmtoff`) and `%s` (epoch seconds —
+  every script's `date +%s`).
+- **host.js (plain Node-fs env)**: `write()` short-circuited fd 1/2 to
+  the console BEFORE consulting the fd table, so split(1)'s
+  `xmove_fd(xopen(part), 1)` wrote every part to the terminal and left
+  the files empty — first program ever to dup2 a file over stdout in the
+  standalone env (same first-user class as 0010's FS_READLINK).
+  write/close/dup2 now route by the ENTRY's isStdin/isStdout/isStderr
+  flags, the same pattern readImpl already used.
+- New libbb files vendored: `hash_md5_sha.c`, `crc32.c`, `uuencode.c`,
+  `dump.c` (od), `bb_bswap_64.c`, `executable.c` (which/env — now also
+  in coreutils.json, not just hush's bin.json), `warn_ignoring_args.c`
+  (sync).
 
 ## Known limitations
 
