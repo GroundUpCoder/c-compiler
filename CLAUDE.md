@@ -197,7 +197,7 @@ sends `screen-resize`, the worker resizes the OffscreenCanvas +
 no-WM fallback); /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps — browser tests must derive screen-edge geometry from the
 LIVE canvas rect (`window.__osScreen` probe), never 800×500 constants.
-Image version is **v22**.
+Image version is **v23**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

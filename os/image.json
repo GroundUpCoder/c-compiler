@@ -1,11 +1,12 @@
 {
-  "version": 22,
+  "version": 23,
   "dirs": [
     "/bin",
     "/etc",
     "/etc/fonts",
     "/etc/menu",
     "/root",
+    "/root/Desktop",
     "/root/id1",
     "/root/roms",
     "/run",
@@ -58,6 +59,18 @@
     },
     "/etc/menu/snake": {
       "content": "term snake\n"
+    },
+    "/root/Desktop/doom": {
+      "link": "/bin/doom"
+    },
+    "/root/Desktop/quake": {
+      "link": "/bin/quake"
+    },
+    "/root/Desktop/gameboy": {
+      "link": "/bin/gameboy"
+    },
+    "/root/Desktop/term": {
+      "link": "/bin/term"
     },
     "/bin/doom": {
       "project": "vendor/doom/bin.json"

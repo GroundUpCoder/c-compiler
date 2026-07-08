@@ -13,6 +13,9 @@
  *                                     lives in /bin/wm, so this needs one
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
+ *   wmctl dblclick SID X Y [BUTTON]            two clicks on one connection
+ *                                     (fast enough for client double-click
+ *                                     detection — todos/0029 desktop icons)
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
  *
@@ -37,6 +40,7 @@ static int usage(void) {
         "       wmctl max SID\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
+        "       wmctl dblclick SID X Y [BUTTON]\n"
         "       wmctl relmove SID DX DY\n"
         "       wmctl shot SID|screen [FILE]\n");
     return 2;
@@ -161,14 +165,19 @@ int main(int argc, char **argv) {
         int32_t a[6] = { sid, 4 /* rel */, dx, dy, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
     }
-    if (!strcmp(cmd, "click")) {
+    if (!strcmp(cmd, "click") || !strcmp(cmd, "dblclick")) {
         if (argc < 5) return usage();
         int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
         int32_t btn = argc > 5 ? atoi(argv[5]) : 1;
-        int32_t a[6] = { sid, 1 /* down */, x, y, btn, 0 };
-        if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
-        a[1] = 2;                       /* up */
-        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+        int reps = cmd[0] == 'd' ? 2 : 1;   /* dblclick: both clicks ride one
+                                               connection, ms apart (0029) */
+        for (int i = 0; i < reps; i++) {
+            int32_t a[6] = { sid, 1 /* down */, x, y, btn, 0 };
+            if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
+            a[1] = 2;                   /* up */
+            if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
+        }
+        return 0;
     }
     return usage();
 }

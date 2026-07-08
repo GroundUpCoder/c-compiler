@@ -1,6 +1,6 @@
 # 0029 — desktop icons: a folder-backed desktop layer
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/desktop-icons.md`)
 - **Depends**: 0028 (shares the wm.c multi-window + spawn plumbing; also
   its dismiss story completes with this layer)
 - **Design**: `todos/WM.md` "The desktop shell" (desktop-icons block).

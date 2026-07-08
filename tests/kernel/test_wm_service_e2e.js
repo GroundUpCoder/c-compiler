@@ -101,6 +101,19 @@ const script = [
   'sleep 0.5',
   'echo ==menu4',
   'wmctl list',
+  // ---- the desktop layer (todos/0029) ----
+  'echo ==desk1',
+  'wmctl list',
+  'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
+  'wmctl shot $DSID /root/d.ppm && echo desk-shot-ok',
+  'wmctl click $DSID 58 112',                    // SINGLE click icon 1 (gameboy)
+  'sleep 2.5',                                   // would-be spawn time
+  'echo ==desk2',
+  'wmctl list',
+  'wmctl dblclick $DSID 58 240',                 // double-click icon 3 (term)
+  'sleep 4',                                     // term loads freetype
+  'echo ==desk3',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -118,7 +131,8 @@ const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       l7 = section('list7'), l8 = section('list8'), l9 = section('list9'),
       l10 = section('list10'),
       m1 = section('menu1'), m2 = section('menu2'), m3 = section('menu3'),
-      m4 = section('menu4');
+      m4 = section('menu4'),
+      d1 = section('desk1'), d2 = section('desk2'), d3 = section('desk3');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
@@ -192,6 +206,55 @@ check('menu entry click launches winbox (second instance)',
 check('selection dismissed the menu', row(m2, 'startmenu') === '', JSON.stringify(m2));
 check('Start click re-opens the menu', row(m3, 'startmenu') !== '', JSON.stringify(m3));
 check('focus change dismisses the menu', row(m4, 'startmenu') === '', JSON.stringify(m4));
+
+// ---- the desktop layer (todos/0029) ----
+const dl = row(d1, 'desktop');
+check('desktop layer: fullscreen borderless surface', dl.includes('1024x768+0+0') && dl.includes('b'),
+  JSON.stringify(d1));
+check('desktop layer sits at the BOTTOM of z', dl.split('\t')[4] === '0', dl);
+check('taskbar and app windows composite above it',
+  row(d1, 'taskbar').split('\t')[4] !== '0' && row(d1, 'winbox').split('\t')[4] !== '0',
+  JSON.stringify([row(d1, 'taskbar'), row(d1, 'winbox')]));
+check('desktop shot written', out.includes('desk-shot-ok'));
+check('single click does NOT launch (no gameboy window)',
+  d2.split('\n').every(l => !l.endsWith('\tgameboy')), JSON.stringify(d2));
+check('injected double-click on the term icon spawns term',
+  row(d3, 'term') !== '', JSON.stringify(d3));
+
+// Icon pixels: read the shot back OUT of the user volume (0026 split) and
+// histogram icon cell 0 (doom at 16,16): white tile, navy center, black
+// link notch on the teal ground.
+{
+  const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
+  const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const bytes = fs.readFileSync(path.join(tmp, 'os-user.img'));
+  const store = new BLOCK_FS.MemoryByteStore(bytes.length);
+  store.setBytes(0, bytes);
+  const ufs = BLOCK_FS.createV4(store);
+  // /root strips to / inside the user volume (mount-prefix routing, 0026).
+  const ppm = COMMON.readFileBytes(ufs, '/d.ppm');
+  const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
+  const m = /^P6\n(\d+) (\d+)\n255\n/.exec(head);
+  check('desktop shot is a 1024x768 P6', !!m && m[1] === '1024' && m[2] === '768', head);
+  if (m) {
+    const off = head.indexOf('255\n') + 4, W = 1024;
+    const px = (x, y) => Array.from(ppm.subarray(off + (y * W + x) * 3, off + (y * W + x) * 3 + 3));
+    let white = 0, navy = 0, black = 0, teal = 0;
+    for (let y = 16; y < 80; y++) {
+      for (let x = 16; x < 100; x++) {
+        const p = px(x, y), s = String(p);
+        if (s === '255,255,255') white++;
+        else if (s === '0,0,128') navy++;
+        else if (s === '0,0,0') black++;
+        else if (s === '0,128,128') teal++;
+      }
+    }
+    check('icon cell 0 histogram: tile + glyph + notch + ground',
+      white > 250 && navy > 100 && black > 20 && teal > 3000,
+      JSON.stringify({ white, navy, black, teal }));
+    check('empty desktop area is pure teal', String(px(500, 400)) === '0,128,128', px(500, 400));
+  }
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nwm service e2e: ${failures} FAILED` : '\nwm service e2e: PASS');

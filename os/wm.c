@@ -20,6 +20,15 @@
  * `term ...`). Children spawn with cwd /root (the wm chdir's at startup —
  * doom finds its WAD by cwd) and are reaped with a WNOHANG poll.
  *
+ * The desktop layer (todos/0029) is a third borderless window: fullscreen,
+ * restacked to the bottom of z at create and never raised, teal fill + an
+ * icon grid from /root/Desktop (re-read on a coarse frame-tick timer).
+ * Double-click (SDL event timestamps) launches: a symlink spawns its
+ * target, any other regular file opens in `term vi`. Free side effect:
+ * desktop clicks — invisible to the WM before (kernel hit-test returned
+ * 'desktop' to the embedder only) — are ordinary client clicks on this
+ * layer now, so they dismiss the Start menu.
+ *
  * The kernel keeps its chrome policy (drag, close box, click-to-focus) as
  * the WM-crashed fallback — killing this process leaves the system usable,
  * and it can simply be started again (`wm &`).
@@ -52,6 +61,13 @@
 #define MENU_ENTRY_H 20
 #define MENU_PAD     4
 #define MAX_MENU     32
+
+#define DESK_MARGIN  16     /* the icon grid (todos/0029) */
+#define CELL_W       84
+#define CELL_H       64
+#define ICON_W       24
+#define MAX_DESK     64
+#define DBLCLICK_NS  500000000ULL   /* 500ms, the SDL click-count window */
 
 typedef struct {
     int32_t sid, pid;
@@ -92,6 +108,19 @@ static menu_ent menu[MAX_MENU];
 static int menu_n = 0;
 static int menu_hover = -1;
 static int nkids = 0;              /* live spawned children (reap on frame) */
+
+/* Desktop layer state (todos/0029): fullscreen, bottom of z, recreated on
+ * EV_SCREEN like the taskbar. menu_ent is the same shape (name + is_link). */
+static SDL_Window *desk_win;
+static SDL_Surface *desk_surf;
+static int32_t desk_sid = 0;
+static menu_ent desk[MAX_DESK];
+static int desk_n = 0;
+static int desk_sel = -1;          /* single-click selection highlight */
+static int desk_dirty = 1;         /* redraw only when contents change */
+static int desk_last_idx = -1;     /* double-click tracking (event timestamps) */
+static uint64_t desk_last_ns = 0;
+static int desk_tick = 0;          /* coarse /root/Desktop re-read timer */
 
 /* ---- 5x7 font (classic HD44780-style patterns), A-Z 0-9 - . ---- */
 static const uint8_t F_AZ[26][7] = {
@@ -291,26 +320,31 @@ static int entcmp(const void *a, const void *b) {
     return strcmp(((const menu_ent *)a)->name, ((const menu_ent *)b)->name);
 }
 
-/* Read /etc/menu: name = filename, symlink vs one-line-command told apart
- * at launch time by lstat. Plain sort for a deterministic layout. */
-static void menu_load(void) {
-    menu_n = 0;
-    DIR *d = opendir("/etc/menu");
-    if (!d) return;
+/* Read a launcher directory: name = filename, symlink vs plain file told
+ * apart by lstat. Plain sort for a deterministic layout. Shared by the
+ * Start menu (/etc/menu) and the desktop grid (/root/Desktop). */
+static int load_entries(const char *dir, menu_ent *dst, int max) {
+    int n = 0;
+    DIR *d = opendir(dir);
+    if (!d) return 0;
     struct dirent *de;
-    while ((de = readdir(d)) && menu_n < MAX_MENU) {
+    while ((de = readdir(d)) && n < max) {
         if (de->d_name[0] == '.') continue;
         struct stat st;
         char path[300];
-        snprintf(path, sizeof path, "/etc/menu/%s", de->d_name);
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
         if (lstat(path, &st) != 0) continue;
-        menu_ent *e = &menu[menu_n++];
+        menu_ent *e = &dst[n++];
+        memset(e, 0, sizeof *e);
         snprintf(e->name, sizeof e->name, "%s", de->d_name);
         e->is_link = S_ISLNK(st.st_mode);
     }
     closedir(d);
-    qsort(menu, menu_n, sizeof menu[0], entcmp);
+    qsort(dst, n, sizeof dst[0], entcmp);
+    return n;
 }
+
+static void menu_load(void) { menu_n = load_entries("/etc/menu", menu, MAX_MENU); }
 
 static void menu_dismiss(void) {
     if (!menu_win) return;
@@ -395,6 +429,112 @@ static void draw_menu(void) {
     SDL_UpdateWindowSurface(menu_win);
 }
 
+/* ---- the desktop layer (todos/0029) ---- */
+
+/* Icons flow down the left edge, column-major (Win95), clear of the
+ * taskbar strip. */
+static int desk_per_col(void) {
+    int rows = (scr_h - BAR_H - 2 * DESK_MARGIN) / CELL_H;
+    return rows < 1 ? 1 : rows;
+}
+
+static void desk_load(void) {
+    menu_ent fresh[MAX_DESK];
+    int n = load_entries("/root/Desktop", fresh, MAX_DESK);
+    if (n == desk_n && memcmp(fresh, desk, (size_t)n * sizeof fresh[0]) == 0) return;
+    memcpy(desk, fresh, (size_t)n * sizeof fresh[0]);
+    desk_n = n;
+    if (desk_sel >= desk_n) desk_sel = -1;
+    desk_dirty = 1;
+}
+
+/* Fullscreen borderless window; its EV_CREATED echo parks it at (0,0),
+ * restacks it to the BOTTOM of z, and gives focus back (see handle_event).
+ * The compositor's own background never shows again while the wm lives —
+ * which is the point: every "desktop" click is a client click now. */
+static int make_desk(void) {
+    desk_load();
+    desk_win = SDL_CreateWindow("desktop", scr_w, scr_h, SDL_WINDOW_BORDERLESS);
+    if (!desk_win) return -1;
+    desk_surf = SDL_GetWindowSurface(desk_win);
+    desk_dirty = 1;
+    return 0;
+}
+
+/* Cell under a desktop click, or -1. The whole cell is the click target. */
+static int desk_hit(int x, int y) {
+    if (x < DESK_MARGIN || y < DESK_MARGIN || y >= scr_h - BAR_H) return -1;
+    int col = (x - DESK_MARGIN) / CELL_W;
+    int row = (y - DESK_MARGIN) / CELL_H;
+    if (row >= desk_per_col()) return -1;
+    int idx = col * desk_per_col() + row;
+    return idx < desk_n ? idx : -1;
+}
+
+/* A symlink icon spawns its target (0028's spawn path, via the link);
+ * any other regular file opens in the editor: `term vi <file>`. */
+static void desk_launch(int idx) {
+    if (idx < 0 || idx >= desk_n) return;
+    static char path[300];
+    snprintf(path, sizeof path, "/root/Desktop/%s", desk[idx].name);
+    if (desk[idx].is_link) {
+        char *argv[2] = { desk[idx].name, 0 };
+        spawn_path(path, argv);
+    } else {
+        char *argv[4] = { "term", "vi", path, 0 };
+        spawn_path("/bin/term", argv);
+    }
+}
+
+/* Desktop mousedown: select on one click, launch on a quick second click
+ * on the SAME icon (own timestamp check — the global SDL click counter
+ * accumulates across windows, so it can't be trusted alone). Empty-area
+ * clicks clear the selection. */
+static void desk_down(float fx, float fy, uint64_t t) {
+    int idx = desk_hit((int)fx, (int)fy);
+    if (idx >= 0 && idx == desk_last_idx &&
+        t >= desk_last_ns && t - desk_last_ns <= DBLCLICK_NS) {
+        desk_last_idx = -1;            /* a third click starts over */
+        desk_launch(idx);
+        return;
+    }
+    desk_last_idx = idx;
+    desk_last_ns = t;
+    if (desk_sel != idx) { desk_sel = idx; desk_dirty = 1; }
+}
+
+static void draw_desk(void) {
+    if (!desk_win || !desk_dirty) return;
+    desk_dirty = 0;
+    int w = scr_w, h = scr_h;
+    uint32_t *px = (uint32_t *)desk_surf->pixels;
+    uint32_t teal = rgb(0, 128, 128), white = rgb(255, 255, 255),
+             navy = rgb(0, 0, 128), black = rgb(0, 0, 0);
+    fill_s(px, w, h, 0, 0, w, h, teal);
+    int per_col = desk_per_col();
+    for (int i = 0; i < desk_n; i++) {
+        int cx = DESK_MARGIN + (i / per_col) * CELL_W;
+        int cy = DESK_MARGIN + (i % per_col) * CELL_H;
+        int ix = cx + (CELL_W - ICON_W) / 2, iy = cy + 6;
+        /* Flat-rect glyph: white tile, navy center block; links get a
+         * black launcher notch at the bottom-left (the Win95 arrow). */
+        fill_s(px, w, h, ix, iy, ICON_W, ICON_W, white);
+        fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
+        if (desk[i].is_link)
+            fill_s(px, w, h, ix + 2, iy + ICON_W - 8, 6, 6, black);
+        int len = (int)strlen(desk[i].name);
+        if (len > 13) len = 13;
+        int lx = cx + (CELL_W - len * 6) / 2, ly = cy + ICON_W + 10;
+        if (i == desk_sel)
+            fill_s(px, w, h, lx - 2, ly - 2, len * 6 + 3, 11, navy);
+        char label[14];
+        memcpy(label, desk[i].name, (size_t)len);
+        label[len] = 0;
+        draw_text_s(px, w, h, lx, ly, label, white);
+    }
+    SDL_UpdateWindowSurface(desk_win);
+}
+
 /* Create the taskbar window at the current screen width. Its EV_CREATED
  * echo (own pid) parks it at the bottom edge — see handle_event. */
 static int make_bar(void) {
@@ -412,7 +552,10 @@ static int make_bar(void) {
  * don't re-cascade — no placement churn on a mere resize. */
 static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
+    if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
+    desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
+    if (make_desk() != 0) exit(2);
     if (make_bar() != 0) exit(2);
     for (int i = 0; i < nwins; i++)
         if (wins[i].focused && !wins[i].minimized) {
@@ -444,6 +587,20 @@ static void handle_event(wmp_hdr *h) {
                 menu_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H - menu_h() };
                 wmp_send(sock, WMP_MOVE, a, 3);
+            } else if (strncmp(r.title, "desktop", 8) == 0) {   /* todos/0029 */
+                desk_sid = r.sid;
+                int32_t a[3] = { r.sid, 0, 0 };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t rs[2] = { r.sid, 1 };       /* place=1: bottom of z */
+                wmp_send(sock, WMP_RESTACK, rs, 2);
+                /* Creating furniture steals focus (create-focus is kernel
+                 * mechanism); hand it back to the focused app window. */
+                for (int i = 0; i < nwins; i++)
+                    if (wins[i].focused && !wins[i].minimized) {
+                        int32_t f[1] = { wins[i].sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                        break;
+                    }
             } else {                   /* the taskbar: bottom edge */
                 bar_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H };
@@ -614,13 +771,20 @@ static void draw_bar(void) {
 static void frame_cb(void) {
     drain_socket();
     reap_kids();
-    /* Two windows, one queue: dispatch by windowID (todos/0028). */
+    /* Coarse /root/Desktop watch (todos/0029): one readdir per second-ish
+     * of frame ticks — no watch API exists or is needed. */
+    if (++desk_tick >= 60) { desk_tick = 0; desk_load(); }
+    /* Three windows, one queue: dispatch by windowID (todos/0028/0029). */
     SDL_WindowID mid = menu_win ? SDL_GetWindowID(menu_win) : 0;
+    SDL_WindowID did = desk_win ? SDL_GetWindowID(desk_win) : 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
             if (menu_win && e.button.windowID == mid) menu_click(e.button.y);
-            else bar_click(e.button.x);
+            else if (desk_win && e.button.windowID == did) {
+                menu_dismiss();        /* a desktop click dismisses (0029) */
+                desk_down(e.button.x, e.button.y, e.button.timestamp);
+            } else bar_click(e.button.x);
             mid = menu_win ? SDL_GetWindowID(menu_win) : 0;   /* may toggle */
         } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
             if (menu_win && e.motion.windowID == mid) {
@@ -631,6 +795,7 @@ static void frame_cb(void) {
     }
     draw_bar();
     draw_menu();
+    draw_desk();
 }
 
 int main(void) {
@@ -653,6 +818,7 @@ int main(void) {
      * pre-existing windows get buttons AND get re-placed — (re)starting
      * the WM deliberately tidies the desktop. */
     SDL_Init(SDL_INIT_VIDEO);
+    if (make_desk() != 0) return 2;    /* bottom of z; created first (0029) */
     if (make_bar() != 0) return 2;
     __setAnimationFrameFunc(frame_cb);
     return 0;

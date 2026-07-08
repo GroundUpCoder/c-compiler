@@ -3,7 +3,9 @@
 // drive the /bin/wm shell furniture through the real UI-bridge path —
 // canvas clicks -> kernel hit-test/rings -> wm.c policy — asserting
 // composited pixels. Covers: the Start button, menu open/dismiss, entry
-// hover highlight, launching a windowed app from the menu.
+// hover highlight, launching a windowed app from the menu; the desktop
+// icon grid (EV_SCREEN-recreated at the live size), single-click select,
+// double-click launch of term, minimize revealing the desktop.
 //
 // Usage: node os-shell.mjs   (manual tier — run the os-*.mjs sweep serially)
 import { chromium } from 'playwright';
@@ -120,6 +122,55 @@ try {
   await clickAt(25, BARY);
   await waitPixel(120, MENU_Y + 74, TEAL);
   check('Start click toggles the menu closed', true);
+
+  // ---- the desktop layer (todos/0029) ----
+  const WHITE = [255, 255, 255];
+  const waitNotPixel = async (x, y, notWant, ms) => {
+    const t0 = Date.now();
+    for (;;) {
+      const got = await sample(x, y);
+      if (!near(got, notWant)) return got;
+      if (Date.now() - t0 > (ms || 30000)) throw new Error(`pixel (${x},${y}) stayed ${notWant}`);
+      await new Promise(r => setTimeout(r, 200));
+    }
+  };
+
+  // Icons flow down the left edge (sorted: doom gameboy quake term). The
+  // winbox launched above covers rows 0-2; icon 3 (term) at cell (16,208)
+  // is clear: white 24x24 tile at (46,214), navy center, label below.
+  const I3X = 46, I3Y = 16 + 3 * 64 + 6;         // term's icon tile origin
+  await waitPixel(I3X + 2, I3Y + 2, WHITE);
+  check('desktop icon tile composited (term, cell 3)', true);
+  check('icon glyph navy center', near(await sample(I3X + 12, I3Y + 12), NAVY),
+    await sample(I3X + 12, I3Y + 12));
+
+  // Single click: selection highlight (navy label strip), NO launch.
+  await clickAt(58, I3Y + 10);
+  await waitPixel(45, 16 + 3 * 64 + 24 + 10 + 3, NAVY);   // label bg, left of text
+  check('single click selects (navy label strip)', true);
+
+  // Double-click launches term (640x432 at the cascade slot). Sample a
+  // point inside term but outside winbox; wait for it to leave teal.
+  await page.mouse.dblclick(rect.x + 58, rect.y + I3Y + 10);
+  await waitNotPixel(500, 300, TEAL, 90000);     // freetype startup is slow
+  check('double-click launched term (window composited)', true);
+
+  // wmctl from VT1: the desktop layer tracks the LIVE screen (EV_SCREEN
+  // recreate on the VT2-entry resize) and sits at the bottom of z.
+  await setVt(1);
+  await page.keyboard.type('wmctl list\r');
+  await page.waitForFunction(() => window.__osOut.split('\n').some(l => l.trim().endsWith('desktop')), { timeout: 20000, polling: 200 });
+  const dline = await page.evaluate(() => window.__osOut.split('\n').find(l => l.trim().endsWith('desktop')));
+  check('desktop layer recreated at the live screen size (EV_SCREEN)',
+    dline.includes(`${SW}x${SH}+0+0`), { dline, SW, SH });
+  check('desktop layer at the bottom of z', dline.split('\t')[4] === '0', dline);
+  await setVt(2);
+
+  // Minimize term via its taskbar button (button 1, right of winbox's):
+  // the desktop shows through where the window was.
+  await clickAt(200, BARY);
+  await waitPixel(500, 300, TEAL);
+  check('minimize reveals the desktop', true);
 
   // The shell stays healthy behind the desktop (menu spawns are reaped —
   // no zombie pileup would show here, but the VT1 round-trip proves the
