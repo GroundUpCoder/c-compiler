@@ -16,6 +16,8 @@
 //     via here-doc, compiled in-OS, runs `popen("... | cat")` and
 //     `system("... > file")`
 //   - a second boot on the same image REUSES it; files persist
+//   - split volumes (0026): a system reseed (version bump or --fresh-system)
+//     repopulates /bin while /root — the user volume — survives untouched
 //
 // Run: node tests/kernel/test_os_boot.js
 'use strict';
@@ -145,6 +147,29 @@ check('no re-seed on second boot', !r.stderr.includes('seeding image'), r.stderr
 const names = r.stdout.split('\n');
 check('a.out persisted across reboot', names.includes('a.out'), JSON.stringify(names.slice(0, 5)));
 check('po persisted across reboot', names.includes('po'), JSON.stringify(names.slice(0, 6)));
+
+// ---- split volumes (0026): system reseed never touches user files ----
+// The whole point of the system/user split: lower the recorded image version
+// (as if the manifest were bumped), reboot -> the SYSTEM volume reseeds while
+// /root (the user volume) survives untouched.
+check('system + user images both exist on disk',
+  fs.existsSync(image) && fs.existsSync(image.slice(0, -4) + '-user.img'),
+  fs.readdirSync(tmp).join(','));
+r = session('echo precious > /root/keep.txt\necho 1 > /etc/.image-version\nexit\n');
+check('version-lowering session exits clean', r.status === 0, String(r.status));
+r = session('cat /root/keep.txt\ncat /root/r.txt\ncc hello.c && ./a.out\nexit\n');
+check('reseed ran after the version drop', r.stderr.includes('seeding image'), r.stderr.slice(0, 200));
+{
+  const sv = r.stdout.split('\n');
+  check('user file survived the system reseed', sv[0] === 'precious', JSON.stringify(sv[0]));
+  check('pre-split user file survived too', sv[1] === 'redir', JSON.stringify(sv[1]));
+  check('reseeded /bin/cc still compiles', sv[2] === 'hello, wasm world', JSON.stringify(sv[2]));
+}
+// --fresh-system: discard the system volume outright; user volume untouched.
+r = session('cat /root/keep.txt\nexit\n', ['--fresh-system']);
+check('--fresh-system reseeds', r.stderr.includes('seeding image'), r.stderr.slice(0, 200));
+check('--fresh-system keeps user files', r.stdout.split('\n')[0] === 'precious',
+  JSON.stringify(r.stdout.split('\n')[0]));
 
 // ---- failure modes leave the OS alive ----
 r = session('cc nosuch.c\necho alive\nexit\n');

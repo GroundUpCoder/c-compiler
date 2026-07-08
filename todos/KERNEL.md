@@ -519,7 +519,9 @@ is measured, not assumed.
 Scope note: this is two *transports* to one BlockFS implementation, not two
 filesystems. Standalone single-program pages (doom.html, the Node CLI, the
 unit-test harness) keep the in-process path and the live-stdin SAB exactly
-as they are; the brokered path is the OS's. The in-process tty ring stays
+as they are; the brokered path is the OS's. (Since todos/0026 the OS's
+kernel-side fs object is a host.js MountFS over two BlockFS volumes —
+`/` system, `/root` user; same method surface, so the kernel is oblivious.) The in-process tty ring stays
 for those pages; under the OS, tty reads become deferred kernel RPCs served
 straight from the line discipline's cooked buffer.
 

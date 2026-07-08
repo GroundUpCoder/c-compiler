@@ -99,10 +99,12 @@ attaches `pcb.tty` from the child's post-actions fd 0 (a slave there means
 that pty's winsize SAB, control chars, SIGTTIN; first attach claims
 fgPgid). With `Kernel({fs})` the kernel also owns
 the fd layer — per-process fd tables → shared open file descriptions → ONE
-BlockFS instance, with fs syscalls as 0x04xx RPCs served to host.js's
+kernel-side fs object (a BlockFS, or since todos/0026 the OS hands it a
+MountFS over two volumes — the kernel treats it identically), with fs
+syscalls as 0x04xx RPCs served to host.js's
 RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
 in-process fs (standalone pages keep that path forever — two transports,
-one BlockFS; see KERNEL.md "fd/data-plane amendment"). Pipes are just
+one fs; see KERNEL.md "fd/data-plane amendment"). Pipes are just
 another OFD kind (PIPE_CREATE; kernel-side buffers + wait queues; blocking
 read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness). Job
 control is cooperative like signals: STOP sets KP_FLAGS bit0 and the
@@ -139,7 +141,13 @@ input and VT1 for shell typing — the `window.__osVtSwitch(n)` probe) →
 `kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
 /bin/cc) → `process-worker.js` per pid. `boot.js` is the headless twin —
 same kernel/manifest under Node with the tty on stdio
-(`echo 'ls /' | node os/boot.js`). First boot seeds the image from
+(`echo 'ls /' | node os/boot.js`). The OS store is SPLIT (todos/0026):
+a system volume at `/` + a user volume at `/root`, host.js `MountFS` on
+top (browser: `os-system.v4.img`/`os-user.v4.img` in OPFS; headless:
+`os-system.img` + derived `-user` sibling, `--image=` names the system
+one) — a reseed or `--fresh-system` rebuilds /bin while `/root`
+survives; the user volume mounts with `noDevNodes` (its /dev would be
+$HOME clutter). First boot seeds the image from
 `image.json`: paths map to **C sources compiled at seed time** by the cc
 driver in `os-common.js` (no build step), vendor `project` builds, `bin`
 binary blobs (repo-relative game data: doom1.wad, ROMs), raw `text`, and
@@ -189,7 +197,7 @@ sends `screen-resize`, the worker resizes the OffscreenCanvas +
 no-WM fallback); /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps — browser tests must derive screen-edge geometry from the
 LIVE canvas rect (`window.__osScreen` probe), never 800×500 constants.
-Image version is **v20**.
+Image version is **v21**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
@@ -227,6 +235,22 @@ maximize leg) (real Chromium, manual).
 `host.js` contains **BlockFS** — a POSIX-ish filesystem backed by one byte store
 (an OPFS `SyncAccessHandle` in the browser, a `MemoryByteStore` in tests). The
 superblock + TLSF allocator + inode table + directories all live in the store.
+
+**MountFS** (also host.js, todos/0026) is a mount table over N BlockFS volumes:
+longest-prefix routing with prefix strip, its own fd/dir-handle namespaces,
+cross-volume rename/link → `EXDEV`, mount points → `EBUSY`. Symlinks resolve in
+the FULL namespace: MountFS wires `_mountPrefix`/`_mountOwns` hooks into each
+volume; `_walkHops` resolves targets through them (in-volume → strip and keep
+walking; foreign → throw `__mountEscape` with the full-namespace continuation,
+which MountFS's dispatch loop catches, rewrites, and retries — parent-dir walks
+are always a path prefix of their argument, so the rewrite is unambiguous).
+Every BlockFS path op walks all components via `_walkPath` BEFORE mutating, so
+an escape aborts with no partial state — keep that ordering when adding ops.
+Each volume stays an independently fsck-able image; only the kernel embedders
+(`Kernel({fs: mountfs})`) use MountFS — process-side RemoteFS and standalone
+single-volume paths are untouched. Tests: `tests/blockfs/test_mounts.js` (walk
+mechanics + fsck), `tests/kernel/test_mounts.js` (routing/EXDEV/EBUSY/escape
+semantics).
 
 **Invariant: the store is the single source of truth.** Any metadata that's
 persisted in the superblock (inode-table extent/capacity, `nextInodeId`, pool

@@ -35,12 +35,10 @@ One numbered file per unit of work we have actually committed to doing.
    (no WM → chord passes through, not swallowed), `wmctl cycle`
 6. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
    the standing known-issue checklist; repro tests first
-7. `0026` mount points: split system / user volumes — MountFS over N
-   BlockFS volumes (`/` system, `/root` user); upgrades stop recompiling
-   the world and a baked `os-system.img` becomes safe as a follow-on
-   (no dependency on the desktop-shell round — reorder freely)
-8. (unnumbered) a real-world WebGPU C app port — candidates via
+7. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
+8. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
+   `os-system.img` blob for one-blob virgin boots + fast test fixtures
 
 (The desktop-shell round 0028–0033 is designed in `WM.md` "The desktop
 shell", 2026-07-08.)
@@ -128,7 +126,12 @@ WMP ACTIVATE (same event path; R_ERR with no WM), image v19
 (`logs/2026-07-08/maximize.md`);
 `0027` **DOOM presents 640×400 raw** — the `WINDOW_SCALE 2` CPU
 pre-scale dropped now that 0024 compositor scaling covers it, image v20
-(`logs/2026-07-08/doom-native-present.md`).
+(`logs/2026-07-08/doom-native-present.md`);
+`0026` **mount points: split system/user volumes** — host.js MountFS
+(longest-prefix routing, EXDEV/EBUSY edges, full-namespace symlink
+escape via `_mountOwns`), `/` system + `/root` user volumes in both
+embedders, `boot.js --fresh-system`, reseed never touches /root, image
+v21 (`logs/2026-07-08/mount-points.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

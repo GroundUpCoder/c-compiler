@@ -157,18 +157,21 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
   `__osState` agent probe. Process workers boot from `os/process-worker.js`
   (the browser twin of kernel.js's Node BOOT_SOURCE), created by the kernel
   worker's `createWorker` capability.
-- **First boot** (implemented, todos/done/0004): the kernel worker mounts
-  BlockFS on OPFS (`openWorkspace`, image `os.v4.img`), creates /bin /etc
-  /root (+/dev via `ensureDevNodes`), and seeds per `os/image.json` —
-  which maps paths to **C sources compiled at seed time by the kernel's own
-  cc driver** (`os/os-common.js`), not pre-built wasm URLs: no build step,
-  the repo discipline. `/etc/.image-version` gates re-seeding (bump
-  `image.json`'s `version` after editing seeded sources). Wart: a bump
-  reseeds (and recompiles) EVERYTHING, because system and user files share
-  one store — `todos/0026` splits them (MountFS: `/` system volume, `/root`
-  user volume), after which upgrade = discard/reseed the system volume and
-  a pre-baked image blob (`tools/mkimage.js`, still a future distribution
-  convenience) becomes trivially safe to ship.
+- **First boot** (implemented, todos/done/0004; split volumes
+  todos/done/0026): the kernel worker mounts TWO BlockFS volumes on OPFS
+  (`openWorkspace` × `os-system.v4.img` + `os-user.v4.img`) under a
+  host.js **MountFS** — `/` system volume, `/root` user volume,
+  longest-prefix routing, cross-volume rename/link → EXDEV, mount points
+  EBUSY, symlinks resolved in the FULL namespace via the volume-side
+  `_mountOwns` escape hook — and seeds per `os/image.json`, which maps
+  paths to **C sources compiled at seed time by the kernel's own cc
+  driver** (`os/os-common.js`), not pre-built wasm URLs: no build step,
+  the repo discipline. `/etc/.image-version` (system volume) gates
+  re-seeding (bump `image.json`'s `version` after editing seeded sources).
+  Since the split, upgrade = reseed (or discard: `boot.js
+  --fresh-system`) the system volume while `/root` survives untouched,
+  and a pre-baked image blob (`tools/mkimage.js`, still a future
+  distribution convenience) becomes trivially safe to ship as a follow-on.
 - **Headless twin** (the agent-first requirement): `os/boot.js` boots the
   same kernel + manifest under plain Node — file-backed store, tty on
   stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and

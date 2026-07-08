@@ -8,4 +8,6 @@ test-results/
 tools/disasm/index.html
 *.pyc
 os/os.img
+os/os-system.img
+os/os-user.img
 media/

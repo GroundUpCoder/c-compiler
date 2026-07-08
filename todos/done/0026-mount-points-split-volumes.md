@@ -1,6 +1,6 @@
 # 0026 — mount points: split system / user volumes
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/mount-points.md`)
 - **Depends**: — (touches host.js symlink walk + both embedders; no open
   item overlaps)
 - **Design**: `todos/OS.md` ("Reference build" → first-boot/seeding notes).

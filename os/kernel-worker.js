@@ -101,8 +101,16 @@ function createWorker(procSpec) {
 
 async function boot() {
   post({ type: 'boot-log', msg: 'mounting BlockFS on OPFS…' });
-  var ws = await BLOCK_FS.openWorkspace({ v4Name: 'os.v4.img' });
-  var kfs = ws.fs;
+  // Two volumes (todos/0026): system at /, user at /root, MountFS routing on
+  // top — a system reseed (image-version bump) never touches user files. The
+  // pre-split single-volume os.v4.img is left orphaned in OPFS by design.
+  // (explicit v3Names so a standalone page's legacy workspace.img on the
+  // same origin is never "migrated" into an OS volume — those files have
+  // never existed, so the legacy path is inert.)
+  var wsSys = await BLOCK_FS.openWorkspace({ v4Name: 'os-system.v4.img', v3Name: 'os-system.v3.img' });
+  var wsUsr = await BLOCK_FS.openWorkspace({ v4Name: 'os-user.v4.img', v3Name: 'os-user.v3.img',
+                                             noDevNodes: true }); // /dev is the system volume's
+  var kfs = new BLOCK_FS.MountFS({ '/': wsSys.fs, '/root': wsUsr.fs });
   var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
 
   var manifest = await (await fetch('image.json')).json();
@@ -187,7 +195,7 @@ async function boot() {
     cwd: '/root',
   });
   await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/bin'] });
-  post({ type: 'ready', mode: ws.mode });
+  post({ type: 'ready', mode: wsSys.mode });
 
   var queued = pending; pending = [];
   queued.forEach(function (m) { self.onmessage({ data: m }); });

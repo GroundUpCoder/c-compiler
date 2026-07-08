@@ -2315,6 +2315,12 @@ var BLOCK_FS = (function () {
 
     this._lastError = '';
     this._cwd = '/';
+    // Mount hooks (todos/0026), wired by MountFS when this volume is one of
+    // several in a mount table. _mountOwns(fullPath) -> volume-relative path
+    // if this volume owns it, else null; null hook = standalone volume
+    // (symlink walk behavior unchanged — the single-volume fast path).
+    this._mountPrefix = '/';
+    this._mountOwns = null;
     this._stdinBuffer = [];
     this._stdinEOF = false;
     // Optional live-stdin SAB ring (main-thread producer → this worker
@@ -2524,7 +2530,22 @@ var BLOCK_FS = (function () {
   // bounded by SYMLOOP_MAX hops (→ ELOOP). Note: '..' is collapsed lexically by
   // _resolvePath before the walk (logical, not physical — like realpath sans -P).
   BlockFS.prototype._walkPath = function (path, noFollowFinal) {
-    return this._walkHops(path, !!noFollowFinal, 0);
+    if (!this._mountOwns) return this._walkHops(path, !!noFollowFinal, 0);
+    // Mounted volume (todos/0026): a symlink target that leaves this volume
+    // makes _walkHops throw a __mountEscape. Tag it with the path THIS
+    // top-level walk was given (__mountFrom) so MountFS can tell which of an
+    // operation's path arguments (or which parent-dir walk) escaped, rewrite
+    // it, and retry on the owning volume. All BlockFS path ops resolve every
+    // component through _walkPath before mutating anything, so an escape
+    // aborts the operation with no partial state.
+    try {
+      return this._walkHops(path, !!noFollowFinal, 0);
+    } catch (e) {
+      if (e && e.__mountEscape && e.__mountFrom === undefined) {
+        e.__mountFrom = this._resolvePath(path);
+      }
+      throw e;
+    }
   };
   BlockFS.prototype._walkHops = function (path, noFollowFinal, hops) {
     var resolved = this._resolvePath(path);
@@ -2553,6 +2574,27 @@ var BLOCK_FS = (function () {
         if (!target) return null;                 // empty/dangling target
         var dirPath = '/' + parts.slice(0, i).join('/');
         var rest = parts.slice(i + 1).join('/');
+        if (this._mountOwns) {
+          // Mounted volume (todos/0026): resolve the target in the FULL
+          // namespace. Absolute targets are full-namespace by convention;
+          // relative ones are joined under this volume's mount prefix so a
+          // '..' can climb over the mount root. If the result still belongs
+          // to this volume, strip back to volume-relative and keep walking
+          // (the single-volume fast path); otherwise throw the escape for
+          // MountFS to re-walk on the owning volume.
+          var pfx = this._mountPrefix === '/' ? '' : this._mountPrefix;
+          var full = target.charAt(0) === '/'
+            ? target + (rest ? '/' + rest : '')
+            : pfx + (dirPath === '/' ? '' : dirPath) + '/' + target + (rest ? '/' + rest : '');
+          full = this._resolvePath(full);   // lexical collapse, full namespace
+          var relNext = this._mountOwns(full);
+          if (relNext === null) {
+            var esc = new Error('mount escape to ' + full);
+            esc.__mountEscape = full;
+            throw esc;
+          }
+          return this._walkHops(relNext, noFollowFinal, hops + 1);
+        }
         var next = target.charAt(0) === '/'
           ? target + (rest ? '/' + rest : '')
           : (dirPath === '/' ? '' : dirPath) + '/' + target + (rest ? '/' + rest : '');
@@ -4374,9 +4416,12 @@ var BLOCK_FS = (function () {
       return { fs: rfs, mode: 'legacy-readonly', handles: [leg.handle] };
     }
 
+    // Pass-through for MountFS user volumes (todos/0026): skip the /dev
+    // self-heal on volumes mounted at a non-root prefix.
+    var v4opts = opts.noDevNodes ? { noDevNodes: true } : undefined;
     var v4 = await open(v4name, true);
     if (BlockFS.isMigrationComplete(v4.store)) {
-      return { fs: BlockFS.createV4(v4.store), mode: 'v4', handles: [v4.handle] };
+      return { fs: BlockFS.createV4(v4.store, v4opts), mode: 'v4', handles: [v4.handle] };
     }
     // v4 absent/incomplete: migrate forward from a legacy v3 image if present.
     var legacy = await open(v3name, false);
@@ -4384,10 +4429,10 @@ var BLOCK_FS = (function () {
       v4.handle.truncate(0);                       // discard any partial v4, clean retry
       BlockFS.migrateV3toV4(legacy.store, v4.store); // legacy is read-only inside migrate
       legacy.handle.close();                       // release v3 handle; file kept as rollback
-      return { fs: BlockFS.createV4(v4.store), mode: 'migrated', handles: [v4.handle] };
+      return { fs: BlockFS.createV4(v4.store, v4opts), mode: 'migrated', handles: [v4.handle] };
     }
     if (legacy) legacy.handle.close();
-    var freshFs = BlockFS.createV4(v4.store);
+    var freshFs = BlockFS.createV4(v4.store, v4opts);
     // A natively-fresh v4 has no migration pending: mark it complete NOW, at
     // the one site where "no legacy exists" was just verified. Without this,
     // every future mount re-enters the migrate-check path — and a legacy
@@ -4469,7 +4514,10 @@ var BLOCK_FS = (function () {
   // Mount/format a v4 image (128-byte inodes, TLSF64, ms timestamps). Parallel to
   // create(); v3 stays the default. Formats a fresh store, or loads an existing
   // v4 one (magic + version 4). Used by the migration and the v4 worker path.
-  BlockFS.createV4 = function (store) {
+  // opts.noDevNodes skips the /dev self-heal — for volumes mounted at a
+  // non-root prefix under MountFS (todos/0026), where /dev is served by the
+  // root volume and a /root/dev would just be clutter in $HOME.
+  BlockFS.createV4 = function (store, opts) {
     var storeSize = store.size();
     var formatted = false;
     if (storeSize < SUPERBLOCK_SIZE) {
@@ -4488,13 +4536,13 @@ var BLOCK_FS = (function () {
       inodeTable.init(INITIAL_INODE_CAPACITY);
       fs = new BlockFS(store, alloc, inodeTable, 1, true, FMT_V4);
       fs._writeSuperblock();
-      fs.ensureDevNodes();
+      if (!(opts && opts.noDevNodes)) fs.ensureDevNodes();
       return fs;
     }
     alloc = new TLSF64Allocator(store, SUPERBLOCK_SIZE, 0); // load existing metadata
     inodeTable = new InodeTable128(alloc);
     fs = new BlockFS(store, alloc, inodeTable, store.getUint32(SB_ROOT_INODE), false, FMT_V4);
-    fs.ensureDevNodes(); // self-heal /dev on every v4 mount (idempotent)
+    if (!(opts && opts.noDevNodes)) fs.ensureDevNodes(); // self-heal /dev on every v4 mount (idempotent)
     return fs;
   };
 
@@ -4567,6 +4615,338 @@ var BLOCK_FS = (function () {
   };
 
   // =================================================================
+  // MountFS (todos/0026) — mount table over N BlockFS volumes
+  // =================================================================
+  //
+  // Delegates every path operation to the volume owning the longest matching
+  // mount prefix ('/' system, '/root' user in the reference OS), prefix
+  // stripped. Own fd/dir-handle namespaces map handle -> {volume, volume
+  // handle} — the kernel's 'file' OFDs treat the fd as opaque, so
+  // Kernel({fs: mountfs}) just works. POSIX edges: cross-volume rename/link
+  // -> EXDEV (busybox mv falls back to copy+unlink); unlink/rmdir/rename
+  // targeting a mount point -> EBUSY.
+  //
+  // Symlinks resolve in the FULL namespace: each volume gets
+  // _mountPrefix/_mountOwns hooks; _walkHops resolves targets through them
+  // (in-volume targets strip back to volume-relative — the fast path — and
+  // foreign ones throw __mountEscape with the full-namespace continuation).
+  // The _dispatch loop here catches the escape, rewrites the path argument
+  // whose walk escaped (__mountFrom tells it which, including parent-dir
+  // walks, which are always a prefix of their argument), and retries on the
+  // owning volume — bounded by SYMLOOP_MAX like the in-volume walk. Each
+  // volume stays a complete, independently fsck-able BlockFS image.
+  //
+  // MountFS is kernel-embedder-side only: process-side RemoteFS and the
+  // standalone single-volume paths are untouched. Console stdio (fd 0-2)
+  // never routes here, so read/write on 0-2 are EBADF by design.
+
+  function MountFS(mounts) {
+    // mounts: { '/': fs, '/root': fs } or [{ prefix, fs }]; '/' is required.
+    var list = Array.isArray(mounts)
+      ? mounts.map(function (m) { return { prefix: m.prefix, fs: m.fs }; })
+      : Object.keys(mounts).map(function (p) { return { prefix: p, fs: mounts[p] }; });
+    list.forEach(function (m) {
+      if (m.prefix !== '/' && m.prefix.slice(-1) === '/') m.prefix = m.prefix.slice(0, -1);
+      if (m.prefix.charAt(0) !== '/') throw new Error('MountFS: prefix must be absolute: ' + m.prefix);
+    });
+    list.sort(function (a, b) { return b.prefix.length - a.prefix.length; }); // longest first, '/' last
+    if (!list.length || list[list.length - 1].prefix !== '/') {
+      throw new Error('MountFS: a "/" mount is required');
+    }
+    this._mounts = list;
+    this._cwd = '/';
+    this._lastError = '';
+    this._fdTable = [null, null, null];   // 0-2 reserved (stdio convention)
+    this._dirTable = [];
+
+    var self = this;
+    list.forEach(function (m) {
+      m.fs._mountPrefix = m.prefix;
+      m.fs._mountOwns = function (full) {
+        var r = self._route(full);
+        return r.mount === m ? r.rel : null;
+      };
+    });
+    // The mount-point directory must exist in the volume UNDERNEATH it so a
+    // readdir of the parent lists it (no synthesis). mkdir -p, idempotent.
+    list.forEach(function (m) {
+      if (m.prefix === '/') return;
+      var parts = m.prefix.split('/').filter(function (p) { return p; });
+      var acc = '';
+      for (var i = 0; i < parts.length; i++) {
+        acc += '/' + parts[i];
+        var under = self._routeUnder(acc);
+        if (under && under.fs.lstat(under.rel) === null) under.fs.mkdir(under.rel, 0o755);
+      }
+    });
+  }
+
+  MountFS.prototype._setErr = function (name) {
+    this._lastError = name;
+    return null;
+  };
+
+  // Lexical resolve against MountFS's cwd — same logic as BlockFS._resolvePath.
+  MountFS.prototype._resolvePath = function (path) {
+    if (path.length > 0 && path[0] !== '/') {
+      path = this._cwd + (this._cwd.endsWith('/') ? '' : '/') + path;
+    }
+    var parts = path.split('/');
+    var resolved = [];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '' || parts[i] === '.') continue;
+      if (parts[i] === '..') { resolved.pop(); continue; }
+      resolved.push(parts[i]);
+    }
+    return '/' + resolved.join('/');
+  };
+
+  // Longest-prefix route of a NORMALIZED absolute path -> { mount, fs, rel }.
+  MountFS.prototype._route = function (path) {
+    for (var i = 0; i < this._mounts.length; i++) {
+      var m = this._mounts[i], p = m.prefix;
+      if (p === '/' || path === p || path.lastIndexOf(p + '/', 0) === 0) {
+        return { mount: m, fs: m.fs, rel: p === '/' ? path : (path.slice(p.length) || '/') };
+      }
+    }
+  };
+
+  // Route ignoring an exact-prefix match — the volume UNDERNEATH a mount
+  // point (used to materialize mount-point directories in the outer volume).
+  MountFS.prototype._routeUnder = function (path) {
+    for (var i = 0; i < this._mounts.length; i++) {
+      var m = this._mounts[i], p = m.prefix;
+      if (p === path) continue;
+      if (p === '/' || path === p || path.lastIndexOf(p + '/', 0) === 0) {
+        return { mount: m, fs: m.fs, rel: p === '/' ? path : (path.slice(p.length) || '/') };
+      }
+    }
+    return null;
+  };
+
+  MountFS.prototype._isMountPoint = function (path) {
+    for (var i = 0; i < this._mounts.length; i++) {
+      if (this._mounts[i].prefix !== '/' && this._mounts[i].prefix === path) return true;
+    }
+    return false;
+  };
+
+  // Run `fn(vol, rel...)` with every path routed to ONE volume, retrying on
+  // cross-volume symlink escapes. opts.busyOnMount: refuse mount-point
+  // arguments with EBUSY (unlink/rmdir/rename). Two-path calls that route to
+  // different volumes fail EXDEV (rename/link are the only two-path ops).
+  MountFS.prototype._dispatch = function (paths, opts, fn) {
+    var self = this;
+    for (var n = 0; n < paths.length; n++) paths[n] = this._resolvePath(String(paths[n]));
+    for (var hop = 0; hop <= SYMLOOP_MAX; hop++) {
+      if (opts.busyOnMount) {
+        for (var b = 0; b < paths.length; b++) {
+          if (this._isMountPoint(paths[b])) return this._setErr('EBUSY');
+        }
+      }
+      var routes = paths.map(function (p) { return self._route(p); });
+      if (routes.length === 2 && routes[0].mount !== routes[1].mount) {
+        return this._setErr('EXDEV');
+      }
+      var vol = routes[0].fs;
+      try {
+        var r = fn.apply(null, [vol].concat(routes.map(function (m) { return m.rel; })));
+        this._lastError = vol._lastError;
+        return r;
+      } catch (e) {
+        if (!e || !e.__mountEscape) throw e;
+        // Rewrite every argument whose walk (or parent-dir walk — always a
+        // path prefix of the argument) escaped, then retry. Escape splicing
+        // is prefix-stable: replacing the escaped prefix is exactly what the
+        // walk itself would have produced for the longer path.
+        var from = e.__mountFrom, to = e.__mountEscape, hit = false;
+        for (var j = 0; j < paths.length; j++) {
+          var rel = routes[j].rel;
+          var match = rel === from ||
+            (from === '/' ? true : rel.lastIndexOf(from + '/', 0) === 0);
+          if (match) {
+            paths[j] = this._resolvePath(from === '/' ? to + rel : to + rel.slice(from.length));
+            hit = true;
+          }
+        }
+        if (!hit) throw e; // escape from a path we never passed — a bug; surface it
+      }
+    }
+    return this._setErr('ELOOP');
+  };
+
+  // ---- handle tables ----
+  MountFS.prototype._allocFd = function (entry) {
+    for (var i = 3; i < this._fdTable.length; i++) {
+      if (this._fdTable[i] === null) { this._fdTable[i] = entry; return i; }
+    }
+    this._fdTable.push(entry);
+    return this._fdTable.length - 1;
+  };
+  MountFS.prototype._fdEntry = function (fd) {
+    if (fd < 3 || fd >= this._fdTable.length) return null;
+    return this._fdTable[fd];
+  };
+
+  // ---- path operations ----
+  MountFS.prototype.open = function (path, flags, mode) {
+    var owner = null;
+    var volFd = this._dispatch([path], {}, function (vol, rel) {
+      owner = vol;
+      return vol.open(rel, flags, mode);
+    });
+    if (volFd === null || typeof volFd !== 'number' || volFd < 0) return null;
+    return this._allocFd({ vol: owner, fd: volFd });
+  };
+
+  MountFS.prototype.stat = function (path) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.stat(rel); });
+  };
+  MountFS.prototype.lstat = function (path) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.lstat(rel); });
+  };
+  MountFS.prototype.access = function (path, mode) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.access(rel, mode); });
+  };
+  MountFS.prototype.chmod = function (path, mode) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.chmod(rel, mode); });
+  };
+  MountFS.prototype.utime = function (path, atime, mtime) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.utime(rel, atime, mtime); });
+  };
+  MountFS.prototype.readlink = function (path, buf, bufsize) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.readlink(rel, buf, bufsize); });
+  };
+  MountFS.prototype.mkdir = function (path, mode) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.mkdir(rel, mode); });
+  };
+  MountFS.prototype.mknod = function (path, mode, dev) {
+    return this._dispatch([path], {}, function (vol, rel) { return vol.mknod(rel, mode, dev); });
+  };
+  MountFS.prototype.unlink = function (path) {
+    return this._dispatch([path], { busyOnMount: true }, function (vol, rel) { return vol.unlink(rel); });
+  };
+  MountFS.prototype.remove = MountFS.prototype.unlink; // alias, like BlockFS
+  MountFS.prototype.rmdir = function (path) {
+    return this._dispatch([path], { busyOnMount: true }, function (vol, rel) { return vol.rmdir(rel); });
+  };
+  MountFS.prototype.rename = function (oldPath, newPath) {
+    return this._dispatch([oldPath, newPath], { busyOnMount: true },
+      function (vol, relOld, relNew) { return vol.rename(relOld, relNew); });
+  };
+  MountFS.prototype.link = function (oldPath, newPath) {
+    return this._dispatch([oldPath, newPath], {},
+      function (vol, relOld, relNew) { return vol.link(relOld, relNew); });
+  };
+  MountFS.prototype.symlink = function (target, linkPath) {
+    // Only linkPath routes; the target is opaque text stored verbatim
+    // (full-namespace by convention — that's the point of the escape walk).
+    return this._dispatch([linkPath], {}, function (vol, rel) { return vol.symlink(target, rel); });
+  };
+
+  MountFS.prototype.opendir = function (path) {
+    var owner = null;
+    var volH = this._dispatch([path], {}, function (vol, rel) {
+      owner = vol;
+      return vol.opendir(rel);
+    });
+    if (volH === null || typeof volH !== 'number' || volH < 0) return null;
+    for (var i = 0; i < this._dirTable.length; i++) {
+      if (this._dirTable[i] === null) { this._dirTable[i] = { vol: owner, h: volH }; return i; }
+    }
+    this._dirTable.push({ vol: owner, h: volH });
+    return this._dirTable.length - 1;
+  };
+  MountFS.prototype.readdir = function (handle) {
+    var d = (handle >= 0 && handle < this._dirTable.length) ? this._dirTable[handle] : null;
+    if (!d) return this._setErr('EBADF');
+    var r = d.vol.readdir(d.h);
+    this._lastError = d.vol._lastError;
+    return r;
+  };
+  MountFS.prototype.closedir = function (handle) {
+    var d = (handle >= 0 && handle < this._dirTable.length) ? this._dirTable[handle] : null;
+    if (!d) return this._setErr('EBADF');
+    var r = d.vol.closedir(d.h);
+    this._lastError = d.vol._lastError;
+    this._dirTable[handle] = null;
+    return r;
+  };
+
+  MountFS.prototype.getcwd = function () { return this._cwd; };
+  MountFS.prototype.chdir = function (path) {
+    var resolved = this._resolvePath(String(path));
+    var st = this.stat(resolved);
+    if (st === null) return null; // _lastError set by stat
+    if ((st.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    this._cwd = resolved;
+    return 0;
+  };
+
+  // ---- fd operations (delegate through the fd map) ----
+  MountFS.prototype._fdOp = function (fd, fn) {
+    var e = this._fdEntry(fd);
+    if (!e) return this._setErr('EBADF');
+    var r = fn(e.vol, e.fd);
+    this._lastError = e.vol._lastError;
+    return r;
+  };
+  MountFS.prototype.read = function (fd, buf, count) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.read(vfd, buf, count); });
+  };
+  MountFS.prototype.write = function (fd, buf, count) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.write(vfd, buf, count); });
+  };
+  MountFS.prototype.lseek = function (fd, offset, whence) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.lseek(vfd, offset, whence); });
+  };
+  MountFS.prototype.fstat = function (fd) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.fstat(vfd); });
+  };
+  MountFS.prototype.ftruncate = function (fd, size) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.ftruncate(vfd, size); });
+  };
+  MountFS.prototype.fchmod = function (fd, mode) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.fchmod(vfd, mode); });
+  };
+  MountFS.prototype.futime = function (fd, atime, mtime) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.futime(vfd, atime, mtime); });
+  };
+  MountFS.prototype.close = function (fd) {
+    var e = this._fdEntry(fd);
+    if (!e) return this._setErr('EBADF');
+    var r = e.vol.close(e.fd);
+    this._lastError = e.vol._lastError;
+    this._fdTable[fd] = null;
+    return r;
+  };
+  MountFS.prototype.dup = function (fd) {
+    var e = this._fdEntry(fd);
+    if (!e) return this._setErr('EBADF');
+    var nf = e.vol.dup(e.fd);
+    this._lastError = e.vol._lastError;
+    if (nf === null || typeof nf !== 'number' || nf < 0) return null;
+    return this._allocFd({ vol: e.vol, fd: nf });
+  };
+  MountFS.prototype.fcntl_dupfd = function (fd, minfd) {
+    var e = this._fdEntry(fd);
+    if (!e) return this._setErr('EBADF');
+    var nf = e.vol.dup(e.fd);
+    this._lastError = e.vol._lastError;
+    if (nf === null || typeof nf !== 'number' || nf < 0) return null;
+    if (minfd < 3) minfd = 3; // 0-2 reserved in the mount namespace
+    while (this._fdTable.length < minfd) this._fdTable.push(null);
+    for (var i = minfd; i < this._fdTable.length; i++) {
+      if (this._fdTable[i] === null) { this._fdTable[i] = { vol: e.vol, fd: nf }; return i; }
+    }
+    this._fdTable.push({ vol: e.vol, fd: nf });
+    return this._fdTable.length - 1;
+  };
+  MountFS.prototype.isatty = function (fd) {
+    return fd >= 0 && fd <= 2 ? 1 : 0; // stdio convention, like BlockFS
+  };
+
+  // =================================================================
   // Module exports
   // =================================================================
 
@@ -4580,6 +4960,7 @@ var BLOCK_FS = (function () {
     // The class itself: kernel.js's RemoteFS reuses BlockFS.prototype
     // .toWasmEnv over its RPC-backed method surface (todos/0009).
     BlockFS: BlockFS,
+    MountFS: MountFS,
     MemoryByteStore: MemoryByteStore,
     ReadOnlyStore: ReadOnlyStore,
     TLSFAllocator: TLSFAllocator,

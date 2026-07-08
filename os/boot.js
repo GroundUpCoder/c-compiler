@@ -8,11 +8,16 @@
 //   printf 'cc hello.c && ./a.out\nexit\n' | node os/boot.js
 //   node os/boot.js                    # interactive (raw-mode terminal)
 //
-// The image persists in a plain file (default os/os.img — first boot seeds
-// it from os/image.json, later boots reuse it, so files survive "reboots").
+// The OS lives on TWO volumes (todos/0026 — MountFS): a system volume at /
+// and a user volume mounted at /root, each a plain-file BlockFS image. First
+// boot seeds both from os/image.json (system paths on the system volume,
+// /root/... on the user volume); later boots reuse them, so files survive
+// "reboots" — and a system reseed (version bump / --fresh-system) never
+// touches user files.
 //
-//   --image=PATH   image file (default: os/os.img)
-//   --fresh        discard the image and re-seed
+//   --image=PATH   system image file (default: os/os-system.img); the user
+//                  image lives beside it (foo.img -> foo-user.img)
+//   --fresh        discard BOTH images and re-seed
 //   --quiet        suppress boot progress on stderr
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -32,14 +37,16 @@ const CompilerJS = require(path.join(ROOT, 'compiler.js'));
 const COMMON = require(path.join(__dirname, 'os-common.js'));
 
 /* ---- args ---- */
-let imagePath = path.join(__dirname, 'os.img');
+let imagePath = path.join(__dirname, 'os-system.img');
 let freshBoot = false;
+let freshSystem = false;   // discard only the system volume (user files survive)
 let quiet = false;
 let dumpState = false;
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
   else if (a === '--fresh') freshBoot = true;
+  else if (a === '--fresh-system') freshSystem = true;
   else if (a === '--quiet') quiet = true;
   else if (a === '--dump-state') dumpState = true;
   else if (a === '--tty-out') ttyOut = true;
@@ -48,6 +55,13 @@ for (const a of process.argv.slice(2)) {
     process.exit(2);
   }
 }
+// The user volume lives beside the system image: foo-system.img or foo.img
+// -> foo-user.img (default pair: os-system.img + os-user.img).
+const userImagePath = imagePath.endsWith('-system.img')
+  ? imagePath.slice(0, -11) + '-user.img'
+  : imagePath.endsWith('.img')
+    ? imagePath.slice(0, -4) + '-user.img'
+    : imagePath + '-user';
 const bootLog = quiet ? () => {} : (m) => process.stderr.write('[boot] ' + m + '\n');
 
 /* ---- NodeFileStore: the ByteStore interface over a plain file ----
@@ -80,9 +94,16 @@ NodeFileStore.prototype.resize = function (newSize) { fs.ftruncateSync(this._fd,
 NodeFileStore.prototype.flush = function () { fs.fsyncSync(this._fd); };
 NodeFileStore.prototype.close = function () { fs.closeSync(this._fd); };
 
-/* ---- mount + seed ---- */
-const store = new NodeFileStore(imagePath, freshBoot);
-const kfs = BLOCK_FS.createV4(store);
+/* ---- mount + seed ----
+ * Two volumes (todos/0026): system at /, user at /root, MountFS routing on
+ * top. Discarding/reseeding the system image never touches the user image —
+ * that's the whole point of the split. */
+const store = new NodeFileStore(imagePath, freshBoot || freshSystem);
+const userStore = new NodeFileStore(userImagePath, freshBoot);
+const kfs = new BLOCK_FS.MountFS({
+  '/': BLOCK_FS.createV4(store),
+  '/root': BLOCK_FS.createV4(userStore, { noDevNodes: true }), // /dev is the system volume's
+});
 const ccCompile = COMMON.createCcDriver(CompilerJS, kfs);
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'), 'utf-8'));
 
@@ -100,6 +121,8 @@ const kernel = new K.Kernel({
   onHalt: (status) => {
     store.flush();
     store.close();
+    userStore.flush();
+    userStore.close();
     // POSIX-style: exit code for a clean init exit, 128+sig if it died.
     const sig = status & 0x7f;
     process.exit(sig ? 128 + sig : (status >> 8) & 0xff);
@@ -159,8 +182,8 @@ async function seedAndBoot() {
       (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
     log: bootLog,
   });
-  if (seeded) store.flush();
-  bootLog('image ' + imagePath + (seeded ? ' (seeded)' : ''));
+  if (seeded) { store.flush(); userStore.flush(); }
+  bootLog('image ' + imagePath + ' + ' + userImagePath + (seeded ? ' (seeded)' : ''));
   // The WM control plane (todos/0014) — same shape as kernel-worker.js:
   // endpoint first, /bin/wm as a kernel service after pid 1 (non-fatal;
   // kernel-chrome is the fallback, `wm &` respawns).
