@@ -167,9 +167,83 @@ function sessionFrames() {
   check('post-resize shot still renders text', rsfg > 800, String(rsfg));
 }
 
+/* ---- session C: nested-term lifecycle (0039 follow-up, user report) ----
+ * `term &` typed INSIDE a term spawns a second, independent session.
+ * - Parent KILLED (SIGKILL; the close box is the same cascade): pty1's
+ *   master closes -> kernel SIGHUPs the fg pgroup (the inner hush) ->
+ *   hush resends SIGHUP to its jobs and exits (hush.c's documented,
+ *   bash-consistent teardown) -> the child term dies too. No ghosts.
+ * - Parent hush EXITS (typed exit): plain exit does NOT HUP background
+ *   jobs, so the child SURVIVES its parent — orphaned (reparented to
+ *   init) but fully functional: typed input still executes and the
+ *   close box still reclaims it. The historical "orphaned child term
+ *   wedges" report is what this session pins as fixed. */
+function sessionNested() {
+  const keysT = (v, s) => [...s].map((ch) => `wmctl key $${v} 0 ${ch.charCodeAt(0)}`).join('\n');
+  const TROW = 'wmctl list | grep "\tterm$" | sort -n';
+  const script = [
+    // A: SIGKILL the parent -> the whole nested session dies
+    'term &',
+    'sleep 5',
+    `T1=$(${TROW} | head -n 1 | cut -f1)`,
+    `P1=$(${TROW} | head -n 1 | cut -f2)`,
+    keysT('T1', 'term &\r'),
+    'sleep 6',
+    `T2=$(${TROW} | tail -n 1 | cut -f1)`,
+    `P2=$(${TROW} | tail -n 1 | cut -f2)`,
+    'echo ==nest1',
+    'wmctl list',
+    'kill -9 $P1',
+    'sleep 2.5',
+    'echo ==nest2',
+    'wmctl list',
+    'kill -0 $P2 || echo nested-child-died-with-parent',
+    // B: exit the parent shell -> the bg child survives, works, closes
+    'term &',
+    'sleep 5',
+    `T1=$(${TROW} | head -n 1 | cut -f1)`,
+    keysT('T1', 'term &\r'),
+    'sleep 6',
+    `T2=$(${TROW} | tail -n 1 | cut -f1)`,
+    `P2=$(${TROW} | tail -n 1 | cut -f2)`,
+    keysT('T1', 'exit\r'),
+    'sleep 3',
+    'echo ==nest3',
+    'wmctl list',
+    'kill -0 $P2 && echo orphan-alive',
+    keysT('T2', 'mkdir /qnest\r'),
+    'sleep 3',
+    'test -d /qnest && echo orphan-responsive',
+    'wmctl close $T2',
+    'sleep 2.5',
+    'echo ==nest4',
+    'wmctl list',
+    '',
+  ].join('\n');
+  const c = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 420000 });
+  if (c.error) throw c.error;
+  const out = c.stdout;
+  const sec = (n) => (out.split('==' + n + '\n')[1] || '').split('==')[0];
+  const terms = (s) => s.split('\n').filter((l) => l.endsWith('\tterm')).length;
+  check('nested: term-in-term brings up two term windows', terms(sec('nest1')) === 2,
+    JSON.stringify(sec('nest1')));
+  check('nested: SIGKILL of the parent takes the child session down (no ghosts)',
+    terms(sec('nest2')) === 0 && out.includes('nested-child-died-with-parent'),
+    JSON.stringify(sec('nest2')));
+  check('nested: typed exit orphans the bg child — window stays up, process alive',
+    terms(sec('nest3')) === 1 && out.includes('orphan-alive'),
+    JSON.stringify(sec('nest3')));
+  check('nested: the orphaned term still executes typed input (not wedged)',
+    out.includes('orphan-responsive'), JSON.stringify(out.slice(-400)));
+  check('nested: close box reclaims the orphan', terms(sec('nest4')) === 0,
+    JSON.stringify(sec('nest4')));
+}
+
 (async () => {
   sessionTerm();
   sessionFrames();
+  sessionNested();
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nterm e2e: ${failures} FAILED` : '\nterm e2e: PASS');
