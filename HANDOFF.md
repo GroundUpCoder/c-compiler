@@ -33,9 +33,14 @@ os-doom✓ + os-quake✓ + os-gpubox✓ + os-term✓ + **os-vt✓ (new, 19 check
 
 ## The queue (todos/README.md is authoritative)
 
-1. (unnumbered) real-world WebGPU C app port — candidates via WEBGPU.md
-2. Unpromoted WM.md follow-ons if wanted: dynamic screen resolution
-   (full-viewport VT2), maximize, scaling fixed-size clients
+The WM.md follow-ons were promoted 2026-07-08 (design discussion in
+this thread; details in each item + WM.md "Screen, VTs, and scaling
+fixed-size clients"):
+
+1. `0023` dynamic screen resolution — full-viewport VT2, EV_SCREEN
+2. `0024` scaling fixed-size clients — per-surface dst rect
+3. `0025` maximize/restore — title double-click, dispatch on bit4
+4. (unnumbered) real-world WebGPU C app port — candidates via WEBGPU.md
 
 (`0006` threads + atomics stays deferred indefinitely.)
 

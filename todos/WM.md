@@ -20,9 +20,12 @@
   **resizable gating landed** (todos/done/0021, 2026-07-08 —
   SDL_WINDOW_RESIZABLE honored end to end: surface-flag bit2 gates drag
   zones and every RESIZE path; see the bullet under "Implementation
-  status — client resize"). The
+  status — client resize"); **VT switching landed** (todos/done/0022,
+  2026-07-08 — tty=VT1 / desktop=VT2, exactly one visible; see the
+  screen/VT section below). The
   acceptance test now holds for ALL four vendor apps. Remaining queue:
-  0022 (VT switching), per todos/README.md.
+  0023 (dynamic screen resolution), 0024 (scaling fixed-size clients),
+  0025 (maximize), per todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -298,16 +301,21 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - **Damage rects / partial present** — optimization, after correctness.
 - **Cross-agent WebGPU sharing** — if the spec ships it, `gpu` present
   becomes zero-copy at the same seam.
-- **Screen geometry / VTs / scaling fixed-size clients** — designed below
-  ("Screen, VTs, and scaling fixed-size clients"); VT switching LANDED
-  (todos/done/0022), the rest awaits promotion.
+- ~~**Screen geometry / VTs / scaling fixed-size clients**~~ — designed
+  below ("Screen, VTs, and scaling fixed-size clients"); VT switching
+  LANDED (todos/done/0022), the rest promoted 2026-07-08: dynamic screen
+  resolution = todos/0023, viewport scaling = todos/0024, maximize =
+  todos/0025.
 
 ## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
 
-Where the desktop's outer geometry stands and where it goes. Committed:
-VT switching is todos/0022. The rest is design captured ahead of
-promotion — maximize and viewport scaling pair naturally with 0021
-(both are policy keyed on the resizable flag).
+Where the desktop's outer geometry stands and where it goes. All four
+pieces are now committed work: VT switching landed (todos/done/0022);
+the rest were promoted 2026-07-08 — dynamic screen resolution =
+**todos/0023**, scaling fixed-size clients = **todos/0024**, maximize =
+**todos/0025** (order of attack: 0023 → 0024 → 0025; maximize goes
+last because by then it's nearly pure policy, dispatching on 0021's
+resizable flag for both branches).
 
 **Today**: the screen is a natural-size 800×500 canvas hardcoded in
 os.html, sampled ONCE by `wmSetScreen` at the wm-canvas handoff. Screen
@@ -331,7 +339,7 @@ synthetic Ctrl/Alt keyups into the focused surface (stuck-modifier
 fixup). Acceptance: `tests/browser/os-vt.mjs` (incl. kill-the-wm
 maintenance mode); dev log `logs/2026-07-08/vt-switching.md`.
 
-**Dynamic screen resolution** (unpromoted; prerequisite for a
+**Dynamic screen resolution** (**todos/0023**; prerequisite for a
 full-viewport desktop on VT2, and the real fix for windows larger than
 the screen). Needs: `wmSetScreen` re-callable after boot → compositor
 resizes its OffscreenCanvas (worker-side resize works); a WMP event
@@ -340,7 +348,7 @@ policy for windows left off-screen after a shrink. Precedent: RandR /
 Wayland output events. Until then the screen stays a boot-time
 constant.
 
-**Maximize** (unpromoted; rides 0021's flag). Real-OS shape
+**Maximize** (**todos/0025**; rides 0021's flag). Real-OS shape
 (Windows work area, EWMH `_NET_WM_STATE_MAXIMIZED`/`_NET_WORKAREA`,
 xdg_toplevel.set_maximized): double-click title toggles; WM sends
 SURFACE_CONFIGURE with the work area (screen minus taskbar); restore
@@ -348,7 +356,7 @@ returns to saved geometry. RESIZABLE windows only — fixed-size windows
 get the scale-to-fit below instead (Windows greys the maximize box;
 we dispatch on the same flag).
 
-**Scaling fixed-size clients** (unpromoted). The converged real-OS
+**Scaling fixed-size clients** (**todos/0024**). The converged real-OS
 answer decouples buffer size from window size and lets the compositor
 map one to the other: Wayland `wp_viewport` (client buffer at native
 res, compositor scales to a dst rect), DWM DPI virtualization

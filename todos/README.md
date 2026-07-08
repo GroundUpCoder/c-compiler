@@ -24,7 +24,13 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. (unnumbered) a real-world WebGPU C app port — candidates via
+1. `0023` dynamic screen resolution — full-viewport VT2, EV_SCREEN,
+   the real fix for windows larger than the screen
+2. `0024` scaling fixed-size clients — per-surface dst rect
+   (wp_viewport-style); DOOM fills the screen with zero source changes
+3. `0025` maximize/restore — title double-click; configure for
+   resizable windows, 0024 scale-to-fit for fixed-size ones
+4. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
