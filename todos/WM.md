@@ -26,6 +26,10 @@
   acceptance test now holds for ALL four vendor apps. The outer-geometry
   queue is complete: 0023 (dynamic screen resolution), 0024 (scaling
   fixed-size clients) and 0025 (maximize) all landed 2026-07-08.
+  **The desktop-shell round is queued 2026-07-08** (0028 start menu,
+  0029 desktop icons, 0030 title-bar min/max boxes, 0031 taskbar polish,
+  0032 window cycling, 0033 bug sweep — design in "The desktop shell"
+  below).
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -306,6 +310,9 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
   LANDED (todos/done/0022), dynamic screen resolution LANDED
   (todos/done/0023), viewport scaling LANDED (todos/done/0024),
   maximize LANDED (todos/done/0025). The block is complete.
+- **The desktop shell** — start menu, desktop icons, title-bar
+  min/max boxes, taskbar polish, window cycling: designed below ("The
+  desktop shell"), queued as todos/0028–0033.
 
 ## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
 
@@ -398,6 +405,101 @@ scale with zero source changes. Acceptance:
 `tests/browser/os-scale.mjs` (+ the inverted os-quake grip leg), 0024
 legs in test_wm/test_wm_policy/test_wm_service_e2e; dev log
 `logs/2026-07-08/viewport-scaling.md`.
+
+## The desktop shell (design, 2026-07-08 — queued: todos/0028–0033)
+
+What turns the WM from window plumbing into a desktop: launcher, desktop
+icons, the missing title-bar boxes, taskbar polish, window cycling — plus
+a repeatable bug-sweep format now that the surface area is big enough to
+dogfood. Verified substrate facts this design leans on (checked against
+the code, not assumed):
+
+- **wm.c can own many windows.** The shm flavor supports N surfaces per
+  process; input-ring records carry the surface id, host.js maps it to
+  the per-window handle at drain (host.js `drainInput`), and the SDL
+  event structs expose it — `e.button.windowID` etc. are filled on every
+  push (compiler.js runtime). Taskbar + menu + desktop layer live in the
+  one wm process, dispatched per event by windowID.
+- **WMP RESTACK place=1 already means "send to bottom"**, and borderless
+  surfaces receive client clicks but never steal focus — the taskbar's
+  own mechanics, reused verbatim by the desktop layer.
+- **A click that hits no surface is invisible to the WM** (the kernel
+  hit-test returns `'desktop'` to the embedder only, no WMP event). The
+  desktop LAYER fixes this as a side effect: once a fullscreen wm
+  surface sits at the bottom of z, every "desktop" click is an ordinary
+  client click on it. No protocol addition needed.
+- **opendir/readdir and posix_spawn are available to seeded apps**
+  (protoshell.c is the in-repo pattern for both); wm.c just doesn't
+  include those headers yet.
+
+**Start menu (todos/0028).** A ~50px Start button at the taskbar's left
+(window buttons shift right); click creates a borderless menu surface
+above it, destroyed on selection or dismiss. Entries come from
+**/etc/menu** (seeded via image.json): a symlink is exec'd directly, a
+one-line text file is an argv line (covers tty apps: `term snake`) —
+name = filename, plain sort. Selection → `posix_spawn` (PATH=/bin,
+cwd=/root — doom finds its WAD by cwd). Dismiss: menu-surface click
+outside an entry, EV_FOCUS change, taskbar click; desktop clicks join
+at 0029 (until then a desktop click doesn't dismiss — accepted gap).
+Open question to resolve in-item: **child stdio** — the wm is a
+parentless service, so spawned apps get no fd 0/1/2; verify writes to a
+missing fd are harmless (doom printf's at startup) or give children
+/dev/null-ish fds via spawn file actions.
+
+**Desktop icons (todos/0029).** A fullscreen borderless wm surface,
+restacked to bottom at create, teal fill (it covers the compositor's
+background wherever it sits) + an icon grid from
+`readdir("/root/Desktop")` (seeded: symlinks to doom/quake/gameboy/
+term). Double-click (SDL event timestamps, the 0025 threading):
+symlink → spawn its target; other regular file → `term vi <file>`.
+Recreate on EV_SCREEN like the taskbar; re-read the folder on a coarse
+frame-tick timer (~1s — one readdir RPC/s, no watch API exists or is
+needed). Minimize already reveals it; nothing kernel-side changes.
+
+**Title-bar buttons (todos/0030).** Today the bar has ONE box (close).
+Add minimize and maximize boxes left of it — Win95 order
+[min][max][close], the close box's 16px metrics. The mechanism/policy
+split follows 0025 exactly: the **minimize box calls kernel
+`wmMinimize` directly** (kernel-implemented, works with no WM — the
+precedent is minimize being kernel mechanism already); the **maximize
+box emits EV_TITLE_ACTIVATE** — the double-click's event, so wm.c's
+existing toggle handles it unchanged (no WM → same R_ERR/no-op as
+`wmctl max`). Hit zones in `wmPointer`'s title branch; boxes drawn in
+both flavors (os/compositor.js + the headless composite), glyphs as
+flat rects in the chrome style.
+
+**Taskbar polish (todos/0031).** A right-aligned clock (`time()` + the
+5×7 font, minute granularity); **stable button order** (the `wins[]`
+swap-remove — wm.c `wins[i] = wins[--nwins]` — reshuffles buttons on
+any close; keep launch order like Win95); **button overflow** (shrink
+button widths once they'd run past the clock, rather than off screen).
+
+**Window cycling (todos/0032).** The one shell piece needing new kernel
+mechanism: every key goes to the focused surface and there is no grab.
+Add a kernel-recognized chord at the key-routing seam (`wmKey`) that
+emits **WMP EV_CYCLE** (next free event id, direction word for
+shift-reversal) instead of delivering the key; wm.c cycles focus
+through non-minimized surfaces in z-order. **No subscriber → no
+interception**: the chord passes through to the focused app like any
+other key (decision, 2026-07-08 — the kernel never silently eats
+keystrokes, and cycling is purely WM policy per the maximize
+precedent; maintenance mode is covered by mouse click-to-focus and
+VT1). Chord choice is
+browser-constrained: OS-level Alt-Tab never reaches the page on
+Windows/Linux — pick a deliverable chord (the Ctrl+Alt family, aligning
+with the VT chords; decide in-item) and document it in the tab-bar
+tooltip per the discoverability rule. `wmctl cycle` is the agent
+exposure (same path as the chord, per "one op set, exposed twice").
+
+**Bug sweep (todos/0033, repeatable format).** One session: drive the
+whole browser suite in real Chromium, then free-form dogfood storms
+(open-everything, drag/scale/maximize storms, `kill -9` storms, wm
+kill/respawn, VT flips mid-drag) against the standing known-issue list
+(pointer-lock UX needs a human check — Playwright can't grant it;
+os-gpubox adapter flake; Dawn + SIGKILL process abort; cross-instance
+unlink-while-open). Findings become minimal repro tests FIRST
+(conformance-corpus discipline), fixes land as separate commits.
+Subsequent sweeps allocate new numbers when scheduled.
 
 ## Implementation status v1 (landed 2026-07-07, todos/0013)
 
