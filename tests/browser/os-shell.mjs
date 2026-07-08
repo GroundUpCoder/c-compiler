@@ -81,6 +81,23 @@ try {
   // ---- the Start menu (todos/0028) ----
   await waitPixel(400, BARY, FACE, 60000);       // taskbar composited
   check('taskbar strip composited', true);
+
+  // The clock (todos/0031): right-aligned HH.MM — histogram the black
+  // text pixels over the clock cell (exact digits depend on the time).
+  const clockBlack = await page.evaluate(([x0, y0, w, h]) => {
+    const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
+    const t = document.createElement('canvas');
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
+    const ctx = t.getContext('2d');
+    ctx.drawImage(c, 0, 0);
+    const d = ctx.getImageData(x0, y0, w, h).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] < 40 && d[i + 1] < 40 && d[i + 2] < 40) n++;
+    return n;
+  }, [SW - 45, SH - 20, 42, 12]);
+  check('taskbar clock digits present (black-pixel histogram)', clockBlack >= 15, clockBlack);
   // The Start button face, right of the "START" label glyphs (x 8..38).
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
     await sample(44, BARY));

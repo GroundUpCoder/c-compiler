@@ -114,6 +114,32 @@ const script = [
   'sleep 4',                                     // term loads freetype
   'echo ==desk3',
   'wmctl list',
+  // ---- taskbar polish (todos/0031) ----
+  // Stable button order: 4 fresh winboxes; closing the SECOND must slide
+  // the later buttons left (compaction), not swap the last into its slot.
+  'winbox & winbox & winbox & winbox &',
+  'sleep 6',
+  'echo ==bar1',
+  'wmctl list',
+  'W2=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//" | sort -n | tail -4 | head -2 | tail -1)',
+  'wmctl close $W2',
+  'sleep 0.5',
+  // Buttons: [4 pre-existing][W1][W3][W4] now; button 5 (x center 650)
+  // must focus W3 (compaction) — swap-remove would put W4 there.
+  'wmctl click $TSID 650 14',
+  'sleep 0.3',
+  'echo ==bar2',
+  'wmctl list',
+  // Overflow: two more windows -> 9 buttons only fit shrunk left of the
+  // clock; a click in the clock cell must fall on NO button (pre-0031 it
+  // lands on button 8 and toggles it).
+  'winbox & winbox &',
+  'sleep 5',
+  'wmctl click $TSID 1000 14',
+  'sleep 0.3',
+  'echo ==bar3',
+  'wmctl list',
+  'wmctl shot $TSID /root/bar.ppm && echo bar-shot-ok',
   '',
 ].join('\n');
 
@@ -132,7 +158,8 @@ const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       l10 = section('list10'),
       m1 = section('menu1'), m2 = section('menu2'), m3 = section('menu3'),
       m4 = section('menu4'),
-      d1 = section('desk1'), d2 = section('desk2'), d3 = section('desk3');
+      d1 = section('desk1'), d2 = section('desk2'), d3 = section('desk3'),
+      b1 = section('bar1'), b2 = section('bar2'), b3 = section('bar3');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
@@ -221,6 +248,33 @@ check('single click does NOT launch (no gameboy window)',
 check('injected double-click on the term icon spawns term',
   row(d3, 'term') !== '', JSON.stringify(d3));
 
+// ---- taskbar polish (todos/0031) ----
+// wins[] order is creation order (sids ascend); the wmctl-list winbox rows
+// give us the sid ladder to reason about button indices.
+const wsids = (sec) => sec.split('\n').filter(l => l.endsWith('\twinbox'))
+  .map(l => parseInt(l)).sort((a, b) => a - b);
+const flagsOf = (sec, sid) => {
+  const l = sec.split('\n').find(l => parseInt(l) === sid && l.endsWith('\twinbox'));
+  return l ? l.split('\t')[5] : '';
+};
+check('four more winboxes up (6 winbox windows total)', wsids(b1).length === 6,
+  JSON.stringify(wsids(b1)));
+// After closing the 2nd of the new four, button 5 is the NEXT window (W3,
+// now the second-highest sid) under compaction; swap-remove would have put
+// the LAST window there (already focused -> the click would minimize it).
+const s2 = wsids(b2);
+check('close-middle keeps launch order: button 5 click focuses the slid-left window',
+  flagsOf(b2, s2[s2.length - 2])[0] === 'f' && flagsOf(b2, s2[s2.length - 2])[1] !== 'm',
+  JSON.stringify(b2));
+// Overflow: 9 windows shrink the buttons clear of the clock — a click in
+// the clock cell hits NO button (unshrunk it lands on button 8, the
+// focused window, and would minimize it).
+const s3 = wsids(b3);
+check('clock-cell click falls on no button (focused window untouched)',
+  flagsOf(b3, s3[s3.length - 1])[0] === 'f' && flagsOf(b3, s3[s3.length - 1])[1] !== 'm',
+  JSON.stringify(b3));
+check('taskbar shot written', out.includes('bar-shot-ok'));
+
 // Icon pixels: read the shot back OUT of the user volume (0026 split) and
 // histogram icon cell 0 (doom at 16,16): white tile, navy center, black
 // link notch on the teal ground.
@@ -253,6 +307,25 @@ check('injected double-click on the term icon spawns term',
       white > 250 && navy > 100 && black > 20 && teal > 3000,
       JSON.stringify({ white, navy, black, teal }));
     check('empty desktop area is pure teal', String(px(500, 400)) === '0,128,128', px(500, 400));
+  }
+
+  // The taskbar shot (todos/0031): clock digits render in the right-aligned
+  // HH.MM cell — histogram the black text pixels over the clock area.
+  const bppm = COMMON.readFileBytes(ufs, '/bar.ppm');
+  const bhead = Buffer.from(bppm.subarray(0, 20)).toString('latin1');
+  const bm = /^P6\n(\d+) (\d+)\n255\n/.exec(bhead);
+  check('taskbar shot is a 1024x28 P6', !!bm && bm[1] === '1024' && bm[2] === '28', bhead);
+  if (bm) {
+    const boff = bhead.indexOf('255\n') + 4, BW = 1024;
+    let clock = 0;
+    for (let y = 8; y < 20; y++) {
+      for (let x = 979; x < 1021; x++) {
+        const i = boff + (y * BW + x) * 3;
+        if (bppm[i] === 0 && bppm[i + 1] === 0 && bppm[i + 2] === 0) clock++;
+      }
+    }
+    check('clock digits present in the taskbar shot (black-pixel histogram)',
+      clock >= 15, clock);
   }
 }
 

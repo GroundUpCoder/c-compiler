@@ -1,6 +1,6 @@
 # 0031 — taskbar polish: clock, stable order, overflow
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/taskbar-polish.md`)
 - **Depends**: 0028 (button layout shifts for the Start button; do the
   polish on the post-0028 layout)
 - **Design**: `todos/WM.md` "The desktop shell" (taskbar-polish block)

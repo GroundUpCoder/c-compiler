@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <errno.h>
 #include <spawn.h>
@@ -52,8 +53,10 @@
 
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
-#define BTN_W     104
+#define BTN_W     104   /* preferred button width; shrinks on overflow (0031) */
+#define BTN_MIN   24    /* ...but never below a clickable floor */
 #define BTN_GAP   4
+#define CLOCK_W   45    /* right-aligned HH.MM cell: 8 + 5*6-1 + 8 (0031) */
 #define MAX_WIN   64
 #define TITLE_H   28    /* keep placements below the kernel title bar (>= WM_TITLE_H) */
 
@@ -632,8 +635,14 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         if (p[0] == menu_sid) menu_sid = 0;               /* defensive (0028) */
+        /* Compact, don't swap-remove: taskbar buttons keep launch order
+         * across any close (todos/0031 — the Win95 behavior). */
         for (int i = 0; i < nwins; i++)
-            if (wins[i].sid == p[0]) { wins[i] = wins[--nwins]; break; }
+            if (wins[i].sid == p[0]) {
+                memmove(&wins[i], &wins[i + 1], (size_t)(nwins - i - 1) * sizeof wins[0]);
+                nwins--;
+                break;
+            }
         break;
     }
     case WMP_EV_FOCUS: {
@@ -721,12 +730,25 @@ static void drain_socket(void) {
 
 /* ---- the taskbar ---- */
 
+/* Current button width: BTN_W until the row would run past the clock,
+ * then shrink to fit (Win95 overflow, todos/0031). Drawing and click
+ * mapping share this. */
+static int btn_width(void) {
+    if (nwins == 0) return BTN_W;
+    int avail = bar_w - START_W - BTN_GAP - 2 - CLOCK_W;
+    int w = avail / nwins - BTN_GAP;
+    if (w > BTN_W) w = BTN_W;
+    if (w < BTN_MIN) w = BTN_MIN;
+    return w;
+}
+
 static void bar_click(float fx) {
     if ((int)fx < START_W) { menu_toggle(); return; }     /* Start (0028) */
     menu_dismiss();                    /* any other taskbar click dismisses */
+    int bw = btn_width();
     int rel = (int)fx - START_W - BTN_GAP;
-    int i = rel / (BTN_W + BTN_GAP);
-    if (rel < 0 || rel % (BTN_W + BTN_GAP) >= BTN_W || i >= nwins) return;
+    int i = rel / (bw + BTN_GAP);
+    if (rel < 0 || rel % (bw + BTN_GAP) >= bw || i >= nwins) return;
     int32_t a[1] = { wins[i].sid };
     if (wins[i].focused && !wins[i].minimized) wmp_send(sock, WMP_MINIMIZE, a, 1);
     else wmp_send(sock, WMP_FOCUS, a, 1);
@@ -748,22 +770,33 @@ static void draw_bar(void) {
         fill(px, START_W - 3, 3, 1, BAR_H - 6, down ? hi : sh);
         draw_text(px, 8, (BAR_H - 7) / 2, "START", txt);
     }
+    int bw = btn_width();              /* overflow shrink (todos/0031) */
     for (int i = 0; i < nwins; i++) {
-        int x = START_W + BTN_GAP + i * (BTN_W + BTN_GAP) + 2;
-        if (x + BTN_W > bar_w) break;
+        int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
+        if (x + bw > bar_w - CLOCK_W) break;   /* never under the clock */
         int down = wins[i].focused && !wins[i].minimized;
         /* Win95 button relief: raised normally, sunken when active. */
-        fill(px, x, 3, BTN_W, BAR_H - 6, down ? rgb(222, 222, 222) : face);
-        fill(px, x, 3, BTN_W, 1, down ? sh : hi);
+        fill(px, x, 3, bw, BAR_H - 6, down ? rgb(222, 222, 222) : face);
+        fill(px, x, 3, bw, 1, down ? sh : hi);
         fill(px, x, 3, 1, BAR_H - 6, down ? sh : hi);
-        fill(px, x, BAR_H - 4, BTN_W, 1, down ? hi : sh);
-        fill(px, x + BTN_W - 1, 3, 1, BAR_H - 6, down ? hi : sh);
+        fill(px, x, BAR_H - 4, bw, 1, down ? hi : sh);
+        fill(px, x + bw - 1, 3, 1, BAR_H - 6, down ? hi : sh);
         char label[17];
-        int n = 0;
-        for (const char *s = wins[i].title; *s && n < 16; s++) label[n++] = *s;
+        int n = 0, maxn = (bw - 10) / 6;
+        if (maxn > 16) maxn = 16;
+        for (const char *s = wins[i].title; *s && n < maxn; s++) label[n++] = *s;
         label[n] = 0;
         draw_text(px, x + 6, (BAR_H - 7) / 2, label,
                   wins[i].minimized ? rgb(80, 80, 80) : txt);
+    }
+    /* The clock (todos/0031): right-aligned HH.MM, local time; draw_bar
+     * runs per frame, so it updates on the minute by construction. */
+    {
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        char hhmm[6];
+        snprintf(hhmm, sizeof hhmm, "%02d.%02d", tm->tm_hour, tm->tm_min);
+        draw_text(px, bar_w - CLOCK_W + 8, (BAR_H - 7) / 2, hhmm, txt);
     }
     SDL_UpdateWindowSurface(bar_win);
 }
