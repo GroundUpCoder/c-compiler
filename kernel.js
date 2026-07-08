@@ -3577,7 +3577,9 @@ Kernel.prototype._exitProcess = function (pcb, status) {
  * SIGKILL/SIGSTOP never consult the mirror. `sender` is the calling PCB
  * (null for kernel/embedder-initiated kills). */
 Kernel.prototype.kill = function (pid, sig, sender) {
-  if (!(sig > 0 && sig < NSIG)) return { errno: 'EINVAL' };
+  // Signal 0 is the POSIX existence probe: route + error-check only,
+  // deliver nothing (kill(2) — hush's `kill -0 PID` rides on it).
+  if (!(sig >= 0 && sig < NSIG)) return { errno: 'EINVAL' };
   var targets = [];
   var self = this;
   if (pid > 0) {
@@ -3593,6 +3595,7 @@ Kernel.prototype.kill = function (pid, sig, sender) {
     if (this._killPgid(pgid, sig) === 0) return { errno: 'ESRCH' };
     return {};
   }
+  if (sig === 0) return {};
   for (var i = 0; i < targets.length; i++) this._deliver(targets[i], sig);
   return {};
 };
@@ -3605,6 +3608,7 @@ Kernel.prototype._killPgid = function (pgid, sig) {
   this._procs.forEach(function (p) {
     if (p.state !== STATE_ZOMBIE && p.pgid === pgid) targets.push(p);
   });
+  if (sig === 0) return targets.length;           // probe: count, deliver nothing
   for (var i = 0; i < targets.length; i++) this._deliver(targets[i], sig);
   return targets.length;
 };
