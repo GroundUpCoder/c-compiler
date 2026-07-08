@@ -1,6 +1,10 @@
 # 0039 — WM bug sweep, round 2
 
-- **Status**: open
+- **Status**: done (2026-07-09; dev log `logs/2026-07-09/wm-bug-sweep-2.md`;
+  one real find fixed test-first: the focus fall skipped pinned furniture —
+  9a040a1 + 5798a0c; 0038 re-verified under a 29-snapshot layer storm;
+  EXCEPTION: the pointer-lock HUMAN check was deferred AGAIN — operator
+  away at close — and carries forward as a MUST for round 3)
 - **Depends**: best after 0038 lands (re-verify its fix under storm);
   not blocked by it
 - **Design**: `todos/WM.md` "The desktop shell" (bug-sweep block — the

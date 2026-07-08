@@ -24,30 +24,34 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0039` WM bug sweep round 2 — the repeatable 0033 format; incl. the
-   deferred pointer-lock HUMAN check and re-verifying 0038 under storm
-2. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+1. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils (0034's
    always-fail execvp in wasm_port.h marks the seam)
-3. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+2. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-4. `0037` wasm module cache — kernel-side compiled-Module cache on the
+3. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (the sealed system blob's `/usr/share/os-release`
    VERSION_ID is the natural cache key since 0040; Modules clone,
    instances don't)
-5. (unnumbered) a real-world WebGPU C app port — candidates via
+4. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-6. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+5. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-7. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+6. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
+
+(The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
+a MUST for WM sweep round 3, whenever that gets a number.)
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in
 `WM.md` "The desktop shell", verified-but-unfixed items on its
 "Known issues" standing list. `0040` read-only system image landed
 2026-07-08: tools/mkimage.js-baked sealed blob RO at /usr, writable
 root at /, systemd-style /etc, swap-the-blob upgrades — decisions in
-`DISK-IMAGE.md`.)
+`DISK-IMAGE.md`. `0039` WM sweep round 2 landed 2026-07-09: 0038
+re-verified under storm, one kernel fix — the focus fall skips pinned
+furniture — and the known-issues list re-dated;
+`logs/2026-07-09/wm-bug-sweep-2.md`.)
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.

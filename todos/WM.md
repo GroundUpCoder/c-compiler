@@ -504,37 +504,52 @@ unlink-while-open). Findings become minimal repro tests FIRST
 (conformance-corpus discipline), fixes land as separate commits.
 Subsequent sweeps allocate new numbers when scheduled.
 
-## Known issues (standing list; round 1 = 2026-07-08, todos/done/0033)
+## Known issues (standing list; round 1 = 2026-07-08 todos/done/0033, round 2 = 2026-07-09 todos/done/0039)
 
 Verified-but-unfixed, each with a repro. Re-check every sweep; entries
 graduate to queue items when a fix is scheduled.
 
 - ~~**The taskbar is not always-on-top.**~~ **FIXED in todos/0038**
-  (2026-07-08) by kernel z layers — see "Implementation status — z
-  layers" below. The old repro (title-drag winbox onto the strip →
-  winbox above taskbar in `wmctl list` z) is now a regression leg in
+  (2026-07-08) by kernel z layers, **RETIRED after round 2**: held under
+  the 0039 layer storm (29 op-by-op invariant snapshots) and a browser
+  4-window pile-on with clicks through the overlap. Regression legs in
   test_wm_policy.js / test_wm_service_e2e.js / os-wm.mjs.
+- ~~**The focus fall landed on pinned furniture.**~~ **FOUND + FIXED in
+  round 2 (todos/0039)**: after 0038 the destroy/minimize focus fall
+  (topmost non-minimized surface) parked keyboard focus on the
+  always-top taskbar. `_wmFocusFall` now prefers the topmost
+  normal-layer window; furniture only takes the fall when nothing else
+  remains. Legs in test_wm_policy.js / test_wm_service_e2e.js.
 - **Pointer-lock UX needs a HUMAN check each round** (Chromium denies
   CDP-gesture lock requests, so Playwright cannot exercise it): quake
   lock on client click, ESC unlock, click re-lock, VT-switch release.
-  Not re-verified by a human this round — mechanics covered by
-  `test_wm.js`/`os-quake.mjs` up to the browser lock grant itself.
+  Mechanics covered by `test_wm.js`/`os-quake.mjs` up to the browser
+  lock grant itself. **Deferred in rounds 1 AND 2** (operator away at
+  round-2 close; anecdotally fine in regular use) — a MUST for round 3.
 - **snake needs two paced `q`s to quit** (vendor exit-prompt loop spins
   on EOF; documented since 0015). Vendor quirk, not worth patching.
-- **Dawn + SIGKILL abort (S3 caveat) — SHRUNK, keep watching**: two
-  round-1 trials (open-everything storm + isolated retest, webgpu
-  0.4.x) survived `kill -9` of a live gpubox with no Node abort. The
-  drain discipline stays (GPU apps quit via SDL_Quit); retest per
-  sweep before relying on it.
-- **os-gpubox adapter flake: not reproduced this round** (headless
-  Chromium adapter came up in all runs). Environmental; keep on the
-  list until it's been quiet for a few rounds.
+- **Dawn + SIGKILL abort (S3 caveat) — SHRUNK, keep watching**: rounds 1
+  AND 2 (storm leg + isolated retest each, webgpu 0.4.x) survived
+  `kill -9` of a live gpubox with no Node abort. The drain discipline
+  stays (GPU apps quit via SDL_Quit); retest per sweep before relying
+  on it.
+- **os-gpubox adapter flake: quiet for two rounds** (headless Chromium
+  adapter came up in all runs, rounds 1 + 2). Environmental; one more
+  quiet round and it can drop off the list.
 
 Round-1 non-issues worth remembering: the 0029 icons broke os-doom/
 os-quake's "desktop restored = pure teal" asserts (test expectations,
 fixed to icon-tolerant thresholds in the 0033 commit); hush `kill` of
 the wm is cooperative SIGTERM — tests must barrier on surface
 reclaim, not the kill returning (bit os-wm.mjs during 0032).
+
+Round-2 notes (2026-07-09): a wm respawn puts the NEW desktop above an
+agent-`wmctl layer -1`-pinned window (within-band arrival order — the
+same stable-sort semantics that stack the menu above the bar; by
+design, not worth policy). Storm-authoring gotchas for round 3 live in
+`logs/2026-07-09/wm-bug-sweep-2.md` (bar-strip pixels are button
+chrome, taskbar-button focus-then-minimize semantics, `&;` hush parse
+error, `__osScreen` only tracks the viewport on VT2).
 
 ## Implementation status — z layers (landed 2026-07-08, todos/0038)
 

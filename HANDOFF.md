@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-08, after 0034 landed)
+# Handoff — start of thread (updated 2026-07-09, after 0039 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,58 +7,53 @@
 
 ## Where the repo stands
 
-**0034 (coreutils batch 2) landed 2026-07-08** — dev log
-`logs/2026-07-08/coreutils-batch2.md`. 37 new busybox applets in the
-multicall (66 /bin names total): text filters (cut tr uniq tee nl od
-paste fold tac comm), file ops (cmp du dd split truncate unlink readlink
-realpath mktemp stat sync), misc (yes seq env expr date uname usleep
-which cksum base64), hashes (md5sum sha1sum sha256sum), and hand-rolled
-whoami/id/hostname stubs. Image is **v28**. Landed test-first for the
-conformance bug it surfaced (`fn_compat_param_quals`, commit 69d37f2):
-top-level param qualifiers wrongly participated in function type
-compatibility (C11 6.7.6.3p15). Also fixed: the standalone Node-fs host
-env ignored dup2-over-stdout (split(1) was the first to do it — write/
-close/dup2 now route by entry flags like readImpl always did). libc
-grew clock_settime (EPERM), sync() (no-op), getpagesize (64KiB),
-mktemp/mkdtemp, fseeko/ftello, strftime %z/%s. All suites green at the
-landing: unit 698✓, blockfs✓, kernel✓ (test_os_boot grew a batch-2
-section), full serial browser sweep 10/10✓.
+**0039 (WM bug sweep round 2) landed 2026-07-09** — dev log
+`logs/2026-07-09/wm-bug-sweep-2.md`. The sweep was clean except ONE real
+find, fixed test-first (9a040a1 tests, 5798a0c fix): **the focus fall
+skipped pinned furniture** — after 0038 the taskbar is always top of raw
+z, so killing/minimizing the focused window parked keyboard focus on the
+bar. `_wmFocusFall` (kernel.js, one helper for the destroy + minimize
+sites) now prefers the topmost normal-layer window; furniture only takes
+the fall when nothing else remains. No image bump (kernel.js is
+host-side; image stays **v28**). 0038's layer invariant held under a
+29-snapshot mechanical storm checker; Dawn+SIGKILL survived round 2
+(both trials); gpubox adapter flake quiet two rounds. WM.md "Known
+issues" re-dated; storm-authoring gotchas for round 3 are in the dev
+log's findings ledger.
 
-**Earlier the same day**: 0038 (kernel z layers) and 0040 (read-only
-system image) — see `todos/done/` and the 2026-07-08 dev logs.
+**Still owed from 0039**: the pointer-lock HUMAN check was deferred by
+BOTH sweep rounds (operator away at round-2 close). It is a MUST for
+sweep round 3 — first free moment with a human at the keys: quake lock
+on click, ESC unlock, click re-lock, VT-switch release.
+
+**The day before (2026-07-08)**: 0034 coreutils batch 2 (66 /bin names),
+0038 kernel z layers, 0040 read-only sealed /usr — see `todos/done/` and
+the 2026-07-08 dev logs.
 
 ## The queue (todos/README.md is authoritative)
 
-Next up: `0039` WM sweep round 2 (MUST include the pointer-lock HUMAN
-check round 1 skipped + re-verifying 0038 under storm — try
-`wmctl layer`/`raise`/`lower` combinations against the layer invariant),
-then `0035` spawn-capable applets (find/xargs/awk/tar; drop
+Next up: `0035` spawn-capable applets (find/xargs/awk/tar; drop
 `PV_NO_INTERCEPT`, link the vfork shim into coreutils — 0034's
-always-fail execvp in wasm_port.h marks the exact seam to replace),
-`0036` seed the REPLs, `0037` wasm module cache, the WebGPU app port
-(WEBGPU.md). (`0006` threads+atomics stays deferred indefinitely.)
+always-fail execvp in wasm_port.h marks the exact seam), then `0036`
+seed the REPLs, `0037` wasm module cache, the WebGPU app port
+(WEBGPU.md), `0041` __gcstr, `0042` wc fork bring-up. (`0006`
+threads+atomics stays deferred indefinitely.)
 
 ## Gotchas carried forward
 
 - **Editing seeded sources or coreutils.json requires bumping
-  `os/image.json` `version`** (now 28) — a same-version blob is reused.
-  Rebake `os/os-system.img` with `node tools/mkimage.js` to keep browser
-  boots fast (gitignored, version-gated, but stale = slow first boot).
+  `os/image.json` `version`** (still 28) — a same-version blob is
+  reused. Rebake `os/os-system.img` with `node tools/mkimage.js` after.
 - 0034 config decisions (don't re-litigate casually): od is non-DESKTOP
-  od (BSD flags, no `-A/-t`); FEATURE_DATE_ISOFMT off (no strptime —
-  date.c carries a WASM PORT #if guard); STAT_FILESYSTEM/SYNC_FANCY/
+  od; FEATURE_DATE_ISOFMT off; STAT_FILESYSTEM/SYNC_FANCY/
   DD_SIGNAL_HANDLING off; `env cmd` fails 126 by design until 0035.
-- 0034's three known limitations are now TRACKED FIX-WORTHY items in
-  `todos/MISC.md` "libc / host follow-ups" (none fundamental, fix
-  paths written down): BlockFS-env realpath is lexical-only (no
-  symlink walk; Node-fs env is correct), libc ignores TZ so `date -u`
-  displays local time, and the standalone Node bundle OOMs when a
-  writer outlives its stdout reader (async writeOut starves the event
-  loop; in-OS kernel pipes EPIPE correctly — test leg exists).
+- 0034's three known limitations are TRACKED FIX-WORTHY in
+  `todos/MISC.md` "libc / host follow-ups": lexical-only BlockFS-env
+  realpath, TZ ignored (`date -u` shows local), standalone Node bundle
+  OOM when a writer outlives its stdout reader.
 - Two unit goldens encode libc internals and move when libc changes:
-  `switch_br_table`'s expected.compiler.stderr (lists stdlib switch
-  lowerings) and `printf`'s pointer-address line. Updating them is
-  routine — verify the test's OWN asserts are untouched first.
+  `switch_br_table` expected.compiler.stderr and `printf`'s
+  pointer-address line. Verify the tests' OWN asserts before updating.
 - **0040 layout in tests**: `ls /` is `bin dev etc root run tmp usr var`;
   headless images pair as `foo-system.img` + `foo-root.img`; OPFS names
   `os-system.v5.img`/`os-root.v5.img`.
@@ -67,10 +62,13 @@ always-fail execvp in wasm_port.h marks the exact seam to replace),
 - Browser pixel tests: "empty desktop" asserts must tolerate the icon
   grid; desktop teal == compositor teal; SETTLE after VT switch; derive
   geometry from `__osScreen`/live canvas rect; keep the sweep serial.
+  NEW from 0039: the taskbar strip row is button CHROME once windows
+  are up (white bevels/black glyphs) — don't demand pure FACE; a
+  taskbar button click on an UNFOCUSED window focuses (not minimizes);
+  `cmd &; echo` is a hush parse error; `__osScreen` only tracks the
+  viewport while VT2 is visible.
 - hush `kill` is cooperative SIGTERM: barrier on surfaces vanishing
   before asserting no-WM behavior.
-- Headless applet note (obsolete since 0034): `cut` IS seeded now —
-  wmctl-field extraction can use it, but existing tests still use `sed`.
 - The IDE's clangd flags os/*.c and vendor busybox/SDL sources — noise;
   those headers are compiler.js built-ins.
 
@@ -79,8 +77,8 @@ always-fail execvp in wasm_port.h marks the exact seam to replace),
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log
   per landing, README next-up current.
 - compiler.js must stay browser-clean (no bare `process.*`).
-- Fix compiler bugs test-first: failing conformance test commit, then
-  the fix (0034 followed it; see 69d37f2).
+- Fix bugs test-first: failing test commit, then the fix (0034 and 0039
+  both followed it; see 69d37f2, 9a040a1).
 - MUST-MATCH blocks: WM protocol kernel.js ↔ os/wm_proto.h ↔
   test_wm_policy.js; surface/ring layout kernel.js ↔ host.js; WMEV ↔
   <SDL3> ↔ host.js; audio ring kernel.js ↔ host.js; SDL audio format
@@ -90,10 +88,9 @@ always-fail execvp in wasm_port.h marks the exact seam to replace),
   after touching os/, kernel.js, host.js SDL/webgpu/fd/audio/input/tty
   paths.
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
-  invariants, 0013–0038's decisions, DISK-IMAGE.md's settled layout.
+  invariants, 0013–0039's decisions, DISK-IMAGE.md's settled layout.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0039 WM sweep round 2 (incl. the pointer-lock human check),
-0035 spawn-capable applets, or something else."
+to tackle: 0035 spawn-capable applets, or something else."
