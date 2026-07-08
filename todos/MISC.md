@@ -1,5 +1,43 @@
 # Misc TODO
 
+## libc / host follow-ups (surfaced by 0034, all fixable — none fundamental)
+
+Found porting coreutils batch 2 (dev log
+`logs/2026-07-08/coreutils-batch2.md`); noted-not-fixed to keep 0034
+scoped. Each has a clear fix path:
+
+- **BlockFS-env `realpath` doesn't resolve symlinks** — it returns
+  `_resolvePath(path)` (lexical `.`/`..` normalization only), so in-OS
+  `realpath lnk` prints the link's own path where GNU prints the
+  target's; `readlink -f` inherits the same flaw. The plain Node-fs env
+  is CORRECT (`fs.realpathSync`) — only the BlockFS/brokered side is
+  lexical. Fix: walk components with the existing readlink/lstat
+  machinery (the `_walkHops` symlink resolver already does this for
+  path ops — realpath just needs to reuse it and emit the resolved
+  string, ELOOP-bounded). Also decide the `realpath(path, NULL)`
+  glibc-allocates form while there (currently NULL-unsupported in both
+  envs; busybox happens to always pass a buffer).
+- **libc ignores `TZ`, so `date -u` displays local time** — busybox
+  implements `-u` as `putenv("TZ=UTC0")` + `localtime_r`, but
+  localtime always applies the host offset via the `__timezone_offset`
+  import. Epoch math (`date +%s`) is unaffected. Fix: have
+  localtime/mktime check `getenv("TZ")` first and honor the POSIX
+  fixed-offset forms (`UTC0`, `JST-9`, empty → UTC) before falling
+  back to the host offset. No zoneinfo database needed — fixed-offset
+  parsing covers `date -u` and script usage; DST rule strings can stay
+  unsupported.
+- **Standalone Node bundle OOMs when a writer outlives its stdout
+  reader** — `node cu.js yes | head -1` grows the V8 heap until it
+  dies: the default `writeOut` uses async `process.stdout.write`,
+  synchronous wasm never yields to the event loop, so Node neither
+  flushes the buffer nor delivers the EPIPE 'error' event
+  (`installExitOnEpipe` is wired but starved). In-OS kernel pipes are
+  CORRECT (EPIPE + SIGPIPE; `yes | head` is a test leg). Fix: make the
+  Node default writers synchronous — `fs.writeSync(1/2, …)` raises
+  EPIPE synchronously (map to errno EPIPE / exit), with a small EAGAIN
+  retry loop for non-blocking pipe stdout. One copy per write either
+  way, so no perf change.
+
 ## Test categories to add
 
 - **doom** — Doom OPL music module tests. Requires vendoring Doom and Nuked-OPL3 sources.

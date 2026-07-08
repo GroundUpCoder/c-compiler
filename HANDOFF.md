@@ -48,12 +48,13 @@ always-fail execvp in wasm_port.h marks the exact seam to replace),
   od (BSD flags, no `-A/-t`); FEATURE_DATE_ISOFMT off (no strptime —
   date.c carries a WASM PORT #if guard); STAT_FILESYSTEM/SYNC_FANCY/
   DD_SIGNAL_HANDLING off; `env cmd` fails 126 by design until 0035.
-- Known limitations noted in the 0034 dev log: libc realpath doesn't
-  resolve symlinks (returns normalized path); `date -u` display is
-  local-tz (busybox sets TZ via putenv, libc ignores env); the
-  STANDALONE Node bundle host OOMs when a writer keeps writing after
-  its stdout reader exits (`node cu.js yes | head`) — in-OS kernel
-  pipes EPIPE correctly (test leg exists).
+- 0034's three known limitations are now TRACKED FIX-WORTHY items in
+  `todos/MISC.md` "libc / host follow-ups" (none fundamental, fix
+  paths written down): BlockFS-env realpath is lexical-only (no
+  symlink walk; Node-fs env is correct), libc ignores TZ so `date -u`
+  displays local time, and the standalone Node bundle OOMs when a
+  writer outlives its stdout reader (async writeOut starves the event
+  loop; in-OS kernel pipes EPIPE correctly — test leg exists).
 - Two unit goldens encode libc internals and move when libc changes:
   `switch_br_table`'s expected.compiler.stderr (lists stdlib switch
   lowerings) and `printf`'s pointer-address line. Updating them is
