@@ -83,7 +83,13 @@ try {
   // The WM places the first window at (12,36); term is 640x432 (80x24).
   const TX = 12, TY = 36, TW = 640, TH = 432;
 
+  // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
+  // compositor may idle while its placeholder canvas is hidden). Deep VT
+  // coverage lives in os-vt.mjs.
+  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+
   await page.keyboard.type('term &\r');
+  await setVt(2);
   await waitPixel(TX + 320, TY + 300, BLACK, 90000);   // client fill composited
   check('term window composited (black client)', true);
   check('focused title bar navy', near(await sample(TX + 300, TY - 12), NAVY), await sample(TX + 300, TY - 12));
@@ -112,13 +118,14 @@ try {
   check('typed command echoed + rendered (bright pixels grew)', after > before + 100, `${before} -> ${after}`);
 
   // wmctl from the system shell sees the terminal window.
-  await page.click('#terminal');
+  await setVt(1);
   await page.keyboard.type('wmctl list\r');
   await page.waitForFunction(() => /\tterm/.test(window.__osOut), { timeout: 20000, polling: 200 });
   check('wmctl list sees the term window', true);
 
   // SE drag-resize: 640x432 -> 500x260 (todos/0019 renegotiation; term
   // reflows the grid + TIOCSWINSZ). Outline preview, one configure at drop.
+  await setVt(2);
   await page.mouse.move(rect.x + TX + TW + 2, rect.y + TY + TH + 2);
   await page.mouse.down();
   await page.mouse.move(rect.x + TX + 500, rect.y + TY + 260, { steps: 8 });
@@ -134,7 +141,7 @@ try {
   check('close box ended the session; desktop restored', true);
 
   // The system shell survives.
-  await page.click('#terminal');
+  await setVt(1);
   await page.keyboard.type('echo TERM-SHELL-OK\r');
   await page.waitForFunction(() => window.__osOut.includes('TERM-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after the terminal session', true);

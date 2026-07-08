@@ -40,6 +40,13 @@ try {
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
+  // VTs (todos/0022): boot lands on VT1 (tty); the desktop is VT2 and only
+  // one is visible. Shell typing happens on VT1, canvas pixels/input on VT2
+  // (the compositor may idle while its placeholder canvas is hidden, so
+  // pixel waits on VT1 could stall on stale frames). Deep VT coverage lives
+  // in os-vt.mjs.
+  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+
   // Sample composited pixels off the (transferred) desktop canvas.
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
@@ -65,6 +72,7 @@ try {
         NAVY = [0, 0, 128], WHITE = [255, 255, 255], BLACK = [0, 0, 0],
         FACE = [192, 192, 192], FACE_DOWN = [222, 222, 222];
 
+  await setVt(2);
   check('desktop teal before any window', near(await sample(780, 440), TEAL), await sample(780, 440));
 
   // 0014: the autostarted /bin/wm parks its borderless taskbar at the
@@ -76,7 +84,9 @@ try {
     near(await sample(400, 468), TEAL), await sample(400, 468));
 
   // Launch the seeded windowed app from the shell (real tty path).
+  await setVt(1);
   await page.keyboard.type('winbox &\r');
+  await setVt(2);
 
   // The WM (not the kernel cascade) places the first window at (12,36).
   const WX = 12, WY = 36, WW = 240, WH = 160;
@@ -157,9 +167,9 @@ try {
   await waitPixel(50, BARY, FACE);
   check('taskbar button removed after close', true);
 
-  // The shell survives its windowed child (background job reaped). Click the
-  // terminal first — the desktop canvas took keyboard focus during the test.
-  await page.click('#terminal');
+  // The shell survives its windowed child (background job reaped). Back to
+  // VT1 — the switch refocuses the terminal.
+  await setVt(1);
   await page.keyboard.type('echo WM-SHELL-OK\r');
   await page.waitForFunction(() => window.__osOut.includes('WM-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after windowed app exits', true);

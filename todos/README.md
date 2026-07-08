@@ -24,10 +24,7 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0022` VT switching tty ↔ desktop — availability under partial
-   failure: the tty as maintenance mode when the desktop is broken/
-   suspect (design in WM.md "Screen, VTs, and scaling")
-2. (unnumbered) a real-world WebGPU C app port — candidates via
+1. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -84,7 +81,14 @@ ring records → SDL xrel/yrel), /bin/quake + the 18MB pak0.pak seeded
 line discipline reused verbatim; fd-aware termios; TIOCSWINSZ→SIGWINCH;
 SIGHUP/EOF lifecycle) + `/bin/term` (SDL surface + freetype + escape
 parser scoped to hush/vi) running hush interactive in a window, vi
-inside, drag-resize reflow (`logs/2026-07-08/wasm-terminal-ptys.md`).
+inside, drag-resize reflow (`logs/2026-07-08/wasm-terminal-ptys.md`);
+`0021` **SDL_WINDOW_RESIZABLE honored** — resizable = surface-flag bit2,
+non-resizable frames are focus-only, RESIZE refusals, WMP record bit4
+(`logs/2026-07-08/resizable-gating.md`);
+`0022` **VT switching** — os.html shows exactly one of tty (VT1) /
+desktop (VT2), Ctrl+Alt+F1/F2 + status-strip switch, boot lands on VT1;
+the tty as maintenance mode under partial desktop failure, zero kernel
+change (`logs/2026-07-08/vt-switching.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

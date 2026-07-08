@@ -131,7 +131,11 @@ layout comment and the tests in sync.
 ## os/ (the reference OS build)
 
 `os/` is the bootable reference build (design: `todos/OS.md` "Reference
-build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge) →
+build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge;
+VTs per todos/0022 — the tty is VT1, the desktop VT2, exactly ONE visible
+at a time via Ctrl+Alt+F1/F2 or the status-strip switch, boot lands on
+VT1, zero kernel change; browser tests must sit on VT2 for canvas pixels/
+input and VT1 for shell typing — the `window.__osVtSwitch(n)` probe) →
 `kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
 /bin/cc) → `process-worker.js` per pid. `boot.js` is the headless twin —
 same kernel/manifest under Node with the tty on stdio
@@ -188,7 +192,8 @@ gpubox one skips without the webgpu pkg) +
 `test_pty.js`/`test_pty_e2e.js` (0020);
 `tests/browser/os-boots.mjs` + `os-wm.mjs`
 + `os-doom.mjs` (now asserts the audio pipeline) + `os-gpubox.mjs`
-+ `os-quake.mjs` (pointer-lock UX) + `os-term.mjs` (0020; real
++ `os-quake.mjs` (pointer-lock UX) + `os-term.mjs` (0020) + `os-vt.mjs`
+(0022; VT semantics incl. the kill-the-wm maintenance mode) (real
 Chromium, manual).
 
 ## BlockFS (host.js) and its tests

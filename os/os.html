@@ -5,6 +5,14 @@
      kernel.js / host.js / os-common.js so it stays testable under Node
      (os/boot.js is the same OS with the tty on stdio).
 
+     VTs (todos/0022, Linux-console semantics): the xterm tty is VT1, the
+     desktop VT2 — the page shows exactly one at a time (Ctrl+Alt+F1/F2, or
+     the switch in #status). Boot lands on VT1. The point is availability
+     under partial failure: VT1's path is kernel worker + xterm only — no
+     compositor, no wm, no GPU — so the shell stays usable while the desktop
+     is broken or merely suspect. Pure page-side state; the kernel keeps
+     compositing while hidden (mailbox frames, bounded cost).
+
      Serve from the repo root — SharedArrayBuffer needs the COOP/COEP
      headers serve.js sends:   node serve.js .   then open /os/os.html  -->
 <html lang="en">
@@ -16,23 +24,39 @@
   html, body { height: 100%; margin: 0; background: #0d0d1a; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
   #status {
+    display: flex; gap: 8px; align-items: baseline;
     font: 12px 'Menlo', 'Consolas', monospace; color: #557755;
     padding: 2px 8px; white-space: nowrap; overflow: hidden;
   }
-  #status.error { color: #cc5555; }
+  #status.error #statusmsg { color: #cc5555; }
+  /* VT switch (todos/0022): the always-visible affordance in the status
+     strip; the keybinding is Ctrl+Alt+F1/F2 (Ctrl+Alt+1/2 works too). */
+  .vtbtn {
+    color: #557755; cursor: pointer; user-select: none;
+    padding: 0 4px; border: 1px solid transparent;
+  }
+  .vtbtn.active { color: #99cc99; border-color: #335533; }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. Natural-size
      canvas (no CSS scaling) keeps event offsets == screen coordinates. */
-  #desktop { display: flex; justify-content: center; background: #06131a; }
+  #desktop { flex: 1; min-height: 0; display: flex; justify-content: center;
+             align-items: center; background: #06131a; }
   #screen { outline: none; display: block; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
+  /* VTs: exactly one of tty/desktop is visible (todos/0022). */
+  body[data-vt="1"] #desktop { display: none; }
+  body[data-vt="2"] #terminal { display: none; }
 </style>
 </head>
-<body>
+<body data-vt="1">
 <div id="wrap">
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
-  <div id="status">booting…</div>
+  <div id="status">
+    <span id="vt1btn" class="vtbtn active" title="tty (Ctrl+Alt+F1)">1:tty</span>
+    <span id="vt2btn" class="vtbtn" title="desktop (Ctrl+Alt+F2)">2:desktop</span>
+    <span id="statusmsg">booting…</span>
+  </div>
 </div>
 <script src="../vendor/xterm/xterm.js"></script>
 <script src="../vendor/xterm/xterm-addon-fit.js"></script>
@@ -44,8 +68,9 @@
 'use strict';
 
 var statusEl = document.getElementById('status');
+var statusMsgEl = document.getElementById('statusmsg');
 function status(msg, isError) {
-  statusEl.textContent = msg;
+  statusMsgEl.textContent = msg;
   statusEl.className = isError ? 'error' : '';
 }
 
@@ -72,7 +97,7 @@ var kernel = new Worker('kernel-worker.js');
 
 term.onData(function (data) { kernel.postMessage({ type: 'input', data: data }); });
 term.onResize(function (sz) { kernel.postMessage({ type: 'resize', cols: sz.cols, rows: sz.rows }); });
-window.addEventListener('resize', function () { fitAddon.fit(); });
+window.addEventListener('resize', function () { if (vt === 1) fitAddon.fit(); });
 
 // The desktop (todos/WM.md): hand the canvas to the kernel worker (the
 // compositor runs THERE — this page stays a dumb bridge) and forward raw
@@ -131,6 +156,52 @@ screen.addEventListener('keyup', function (e) {
   e.preventDefault();
 });
 
+// VTs (todos/0022): Linux-console semantics — VT1 = the xterm tty, VT2 = the
+// desktop; the page shows exactly one (body[data-vt] CSS above). Keybinding
+// Ctrl+Alt+F1/F2, with Ctrl+Alt+1/2 as an alias (F-keys are OS-contested on
+// some platforms), plus the clickable switch in #status. Page-side state
+// ONLY: the kernel keeps compositing while hidden (frames are mailbox —
+// bounded cost, zero protocol change), so VT1 stays fully usable when the
+// desktop stack is broken — the escape hatch is the point. Pointer lock is
+// dropped on leaving VT2 (and lock requests are gated to VT2); it re-arms
+// per 0018 on the next client click.
+var vt = 1;
+window.__osVt = 1;   // agent probe
+function setVt(n) {
+  n = n === 2 ? 2 : 1;
+  if (n === vt) return;
+  if (vt === 2) {
+    if (ptrLocked() && document.exitPointerLock) document.exitPointerLock();
+    // Release the switch chord's modifiers into the focused surface: their
+    // keyups will land on VT1's xterm, so without this the app would see
+    // Ctrl/Alt held forever (the stuck-modifier class every console
+    // switcher has to handle).
+    [['ControlLeft', 'Control'], ['AltLeft', 'Alt']].forEach(function (k) {
+      wmSend({ kind: 'key', down: false, code: k[0], key: k[1], repeat: false, mods: {} });
+    });
+  }
+  vt = n;
+  window.__osVt = n;   // agent probe
+  document.body.setAttribute('data-vt', String(n));
+  document.getElementById('vt1btn').className = 'vtbtn' + (n === 1 ? ' active' : '');
+  document.getElementById('vt2btn').className = 'vtbtn' + (n === 2 ? ' active' : '');
+  // Re-fit AFTER unhiding — xterm can't measure a display:none pane.
+  if (n === 1) { fitAddon.fit(); term.focus(); }
+  else { screen.focus(); }
+}
+window.__osVtSwitch = setVt;   // agent probe (tests/browser/os-vt.mjs)
+document.getElementById('vt1btn').addEventListener('click', function () { setVt(1); });
+document.getElementById('vt2btn').addEventListener('click', function () { setVt(2); });
+window.addEventListener('keydown', function (e) {
+  if (!e.ctrlKey || !e.altKey) return;
+  var n = (e.code === 'F1' || e.code === 'Digit1') ? 1
+        : (e.code === 'F2' || e.code === 'Digit2') ? 2 : 0;
+  if (!n) return;
+  e.preventDefault();
+  e.stopPropagation();   // capture phase: beats xterm's and the canvas's handlers
+  setVt(n);
+}, true);
+
 // Agent/test probe (OS.md "agent-friendly by construction"): every tty
 // output byte also lands in window.__osOut, and __osState tracks the boot,
 // so a driver (tests/browser/os-boots.mjs, or any agent) can poll instead
@@ -156,19 +227,21 @@ kernel.onmessage = function (e) {
       status('boot failed', true);
       window.__osState = 'error';
       window.__osBootErr = m.msg;   // agent probe: the full failure text
+      setVt(1);   // the escape hatch surfaces the failure (todos/0022)
       term.write('\r\n\x1b[31mboot failed:\x1b[0m\r\n' + m.msg.replace(/\n/g, '\r\n') + '\r\n');
       break;
     case 'ready':
       status('running (image: ' + m.mode + ') — files persist in OPFS');
       window.__osState = 'ready';
       kernel.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
-      term.focus();
+      if (vt === 1) term.focus();
       break;
     case 'halt': {
       var sig = m.status & 0x7f;
       var code = sig ? 128 + sig : (m.status >> 8) & 0xff;
       status('halted (exit ' + code + ') — reload to reboot', true);
       window.__osState = 'halted:' + code;
+      setVt(1);   // the halt notice lives on the tty (todos/0022)
       term.write('\r\n\x1b[33m[system halted — reload the page to reboot]\x1b[0m\r\n');
       break;
     }
@@ -180,7 +253,7 @@ kernel.onmessage = function (e) {
       if (ptrLockWanted) window.__osPtrLockOffers = (window.__osPtrLockOffers || 0) + 1;   // agent probe
       if (!ptrLockWanted && ptrLocked() && document.exitPointerLock) {
         document.exitPointerLock();
-      } else if (ptrLockWanted && !ptrLocked() && screen.requestPointerLock) {
+      } else if (ptrLockWanted && vt === 2 && !ptrLocked() && screen.requestPointerLock) {
         // Succeeds inside the transient activation of the client click the
         // kernel just hit-tested; rejects quietly without a gesture.
         try {

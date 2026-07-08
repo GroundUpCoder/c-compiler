@@ -55,6 +55,11 @@ try {
   check('audio output ring reached the page',
     (await page.evaluate(() => window.__osAudio)) === 'ready');
 
+  // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
+  // compositor may idle while its placeholder canvas is hidden). Deep VT
+  // coverage lives in os-vt.mjs.
+  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+
   // Region stats over the desktop canvas: FNV hash (order-sensitive) +
   // distinct-color count + non-desktop coverage of a sample grid.
   const region = (x0, y0, x1, y1) => page.evaluate(([a, b, c, d]) => {
@@ -89,6 +94,7 @@ try {
   };
 
   await page.keyboard.type('doom &\r');
+  await setVt(2);
   const first = await waitFrame(DOOM_REGION,
     s => s.colors > 50 && s.nonTeal > s.n * 0.9, 90000);
   check('doom composites a real frame (rich colors over the window region)',
@@ -131,13 +137,15 @@ try {
 
   // wmctl from the in-browser shell sees the window; close it — the WM close
   // request delivers SDL_EVENT_QUIT and doom exits cleanly.
-  await page.click('#terminal');
+  await setVt(1);
   await page.keyboard.type('wmctl list\r');
   await page.waitForFunction(() => window.__osOut.includes('DOOM Shareware'), { timeout: 20000, polling: 200 });
   check('wmctl list from the shell shows DOOM Shareware', true);
   await page.keyboard.type('wmctl close $(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")\r');
+  await setVt(2);
   await waitFrame(DOOM_REGION, s => s.nonTeal === 0, 30000);
   check('wmctl close quit doom; desktop restored', true);
+  await setVt(1);
   await page.keyboard.type('echo DOOM-GONE-$?\r');
   await page.waitForFunction(() => window.__osOut.includes('DOOM-GONE-0'), { timeout: 20000, polling: 200 });
   check('shell alive after doom exits', true);
@@ -146,13 +154,17 @@ try {
   // client — LCD frames in the visible region, then the same clean close.
   const GB_REGION = [16, 40, 488, 464];
   await page.keyboard.type(GB_CMD + '\r');
+  await setVt(2);
   const gb = await waitFrame(GB_REGION, s => s.colors >= 2 && s.nonTeal > s.n * 0.9, 60000);
   check('gameboy composites LCD frames' +
     (HAVE_ROM ? ' (ROM from /root/roms)' : ' (built-in test ROM; local ROM absent)'),
     true, { colors: gb.colors });
+  await setVt(1);
   await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")\r');
+  await setVt(2);
   await waitFrame(GB_REGION, s => s.nonTeal === 0, 30000);
   check('wmctl close quit gameboy; desktop restored', true);
+  await setVt(1);
   await page.keyboard.type('echo GB-GONE-$?\r');
   await page.waitForFunction(() => window.__osOut.includes('GB-GONE-0'), { timeout: 20000, polling: 200 });
   check('shell alive after gameboy exits', true);

@@ -299,8 +299,8 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - **Cross-agent WebGPU sharing** — if the spec ships it, `gpu` present
   becomes zero-copy at the same seam.
 - **Screen geometry / VTs / scaling fixed-size clients** — designed below
-  ("Screen, VTs, and scaling fixed-size clients"); VT switching is
-  committed as todos/0022, the rest awaits promotion.
+  ("Screen, VTs, and scaling fixed-size clients"); VT switching LANDED
+  (todos/done/0022), the rest awaits promotion.
 
 ## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
 
@@ -310,22 +310,26 @@ promotion — maximize and viewport scaling pair naturally with 0021
 (both are policy keyed on the resizable flag).
 
 **Today**: the screen is a natural-size 800×500 canvas hardcoded in
-os.html, sampled ONCE by `wmSetScreen` at the wm-canvas handoff. The
-xterm tty shares the page below it, both always visible. Screen
+os.html, sampled ONCE by `wmSetScreen` at the wm-canvas handoff. Screen
 resolution never changes after boot; a browser-window resize only
 re-fits xterm.
 
-**VT switching (todos/0022)** — the Linux console metaphor: the xterm
-tty is VT1, the desktop VT2; the page shows exactly one, with a
-keybinding + visible affordance to switch. The point is availability
-under partial failure, not layout: VT1's path is kernel worker + xterm
-only — no compositor, no wm, no GPU — so it stays fully usable while
-the desktop is broken or merely suspect. It remains the escape
+**VT switching (todos/done/0022 — LANDED 2026-07-08)** — the Linux
+console metaphor: the xterm tty is VT1, the desktop VT2; the page shows
+exactly one (`body[data-vt]` CSS), with Ctrl+Alt+F1/F2 (+ Ctrl+Alt+1/2
+alias) on a window-capture listener plus the `1:tty`/`2:desktop` switch
+in the status strip; boot lands on VT1. The point is availability under
+partial failure, not layout: VT1's path is kernel worker + xterm only —
+no compositor, no wm, no GPU — so it stays fully usable while the
+desktop is broken or merely suspect. It remains the escape
 hatch/bootstrap chrome even after 0020 puts the everyday terminal in a
-window. Pure UI-bridge work (the page is already a dumb bridge); the
-kernel keeps compositing while hidden (frames are mailbox — bounded
-cost, zero protocol change). Pointer lock drops on switch
-(browser-enforced) and re-arms per 0018 on the next client click.
+window (halt/boot-error force VT1). Pure UI-bridge work, zero kernel
+change; the kernel keeps compositing while hidden (frames are mailbox —
+bounded cost). Pointer lock is exited on leaving VT2 (requests gated to
+VT2) and re-arms per 0018 on the next client click; VT2→VT1 releases
+synthetic Ctrl/Alt keyups into the focused surface (stuck-modifier
+fixup). Acceptance: `tests/browser/os-vt.mjs` (incl. kill-the-wm
+maintenance mode); dev log `logs/2026-07-08/vt-switching.md`.
 
 **Dynamic screen resolution** (unpromoted; prerequisite for a
 full-viewport desktop on VT2, and the real fix for windows larger than

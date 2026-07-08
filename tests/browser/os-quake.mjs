@@ -54,6 +54,11 @@ try {
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
+  // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
+  // compositor may idle while its placeholder canvas is hidden). Deep VT
+  // coverage lives in os-vt.mjs.
+  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+
   // Region stats over the desktop canvas (os-doom.mjs shape).
   const region = (x0, y0, x1, y1) => page.evaluate(([a, b, c, d]) => {
     const cv = document.getElementById('screen');
@@ -85,6 +90,7 @@ try {
   // First WM slot (12,36); quake's client is 320x200 native.
   const Q_REGION = [16, 40, 328, 232];
   await page.keyboard.type('quake &\r');
+  await setVt(2);
   const first = await waitFrame(Q_REGION, s => s.colors > 50 && s.nonTeal > s.n * 0.9, 120000);
   check('quake composites a real frame (rich colors over the window region)',
     true, { colors: first.colors });
@@ -140,7 +146,7 @@ try {
     (await page.evaluate(() => window.__osPtrLockWanted)) === true);
 
   // Read the dragged geometry via the shell.
-  await page.click('#terminal');
+  await setVt(1);
   await page.keyboard.type('wmctl list\r');
   await page.waitForFunction(() => {
     const m = window.__osOut.match(/(\d+)x(\d+)\+(\d+)\+(\d+)\t\d+\tf..r-\tQuake/);
@@ -153,11 +159,12 @@ try {
   // Fixed-res gating (todos/0021): quake has no SDL_WINDOW_RESIZABLE (the
   // '-' after 'r' above), so a drag on the SE frame grip is focus-only —
   // no rubber band, no configure, geometry untouched at 320x200+72+76.
+  await setVt(2);
   await page.mouse.move(rect.x + 72 + 320 + 2, rect.y + 76 + 200 + 2);
   await page.mouse.down();
   await page.mouse.move(rect.x + 72 + 320 + 82, rect.y + 76 + 200 + 62, { steps: 6 });
   await page.mouse.up();
-  await page.click('#terminal');
+  await setVt(1);
   await page.keyboard.type('echo GRIP-DONE && wmctl list\r');
   await page.waitForFunction(() => {
     const i = window.__osOut.indexOf('GRIP-DONE');
@@ -169,10 +176,12 @@ try {
 
   // Clean quit via the WM close request.
   await page.keyboard.type('wmctl close $(wmctl list | grep "Quake$" | sed "s/[^0-9].*//")\r');
+  await setVt(2);
   await waitFrame([16, 40, 328, 232], s => s.nonTeal === 0, 30000);
   check('wmctl close quit quake; desktop restored', true);
   check('lock request withdrawn when quake died',
     (await page.evaluate(() => window.__osPtrLockWanted)) === false);
+  await setVt(1);
   await page.keyboard.type('echo QUAKE-GONE-$?\r');
   await page.waitForFunction(() => window.__osOut.includes('QUAKE-GONE-0'), { timeout: 20000, polling: 200 });
   check('shell alive after quake exits', true);

@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-08, after 0021 landed)
+# Handoff — start of thread (updated 2026-07-08, after 0022 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,51 +7,54 @@
 
 ## Where the repo stands
 
-**Fixed-res windows can no longer be sheared.** This thread landed **0021**
-— `SDL_WINDOW_RESIZABLE` honored end to end (design bullet: WM.md
-"Implementation status — client resize"; dev log
-`logs/2026-07-08/resizable-gating.md`). Shape:
+**os.html has VTs.** This thread landed **0022** — VT switching, Linux-
+console semantics (design: WM.md "Screen, VTs, and scaling fixed-size
+clients"; dev log `logs/2026-07-08/vt-switching.md`). Shape:
 
-- host.js maps SDL flag 0x20 → kernel surface-flag **bit2** at create
-  (borderless 0x10 → bit0 as before); `SURFACE_SET_FLAGS` carries it too
-  (the word is replaced whole — host.js's `kFlagsBySid` preserves bits
-  across the relative-mouse call, so real apps never lose it).
-- kernel.js dispatches on `surf.resizable` everywhere resize can start:
-  frame hit-test has NO E/S/SE drag zones on a non-resizable surface (the
-  whole frame is focus-only, like left/top edges), and `wmResize` / WMP
-  `RESIZE` / `wmctl resize` refuse with an error, leaving no pending
-  configure. WMP window record flag **bit4** (`WMP_F_RESIZABLE`,
-  `R` in `wmctl list` — FLAGS column is now 5 chars).
-- winbox/term already declared the flag; **gpubox now does**; doom/quake/
-  gameboy stay `flags=0` = fixed, per real SDL3. **image.json is v16**
-  (gpubox.c + wmctl.c are seeded sources).
+- The xterm tty is **VT1**, the desktop **VT2**; the page shows exactly
+  one (`body[data-vt]` CSS), boot lands on VT1. Ctrl+Alt+F1/F2 (+
+  Ctrl+Alt+1/2 alias) on a window-CAPTURE keydown listener, plus the
+  clickable `1:tty`/`2:desktop` switch in the status strip (`#status` now
+  wraps its text in `#statusmsg` — don't write textContent on the strip).
+- VT1 entry re-fits + refocuses xterm; VT2 entry focuses the canvas;
+  pointer lock is exited on leaving VT2 and requests are gated to VT2
+  (re-arms per 0018 on the next client click); halt/boot-error force VT1;
+  VT2→VT1 releases synthetic Ctrl/Alt keyups to the focused surface
+  (stuck-modifier fixup). **Zero kernel/compositor/protocol change**;
+  boot.js untouched; image.json stays **v16** (os.html isn't seeded).
+- Rationale is availability under partial failure: VT1 = kernel worker +
+  xterm only — proven in the new test by `kill $WMPID` mid-doom.
+- Agent probes: `window.__osVt`, `window.__osVtSwitch(n)`.
 
 All green at hand-off: unit 697✓ (3 pre-existing skips), host✓, blockfs✓,
-kernel suite✓ (incl. new gating legs in test_wm.js/test_wm_policy.js, the
-wmctl-resize-refused doom leg in test_os_apps_e2e.js, `f---R` in
-test_wm_service_e2e.js), browser os-boots✓ + os-wm✓ + os-doom✓ +
-os-quake✓ (new SE-grip no-op leg) + os-gpubox✓ + os-term✓.
+kernel suite✓ (untouched by this change), browser os-boots✓ + os-wm✓ +
+os-doom✓ + os-quake✓ + os-gpubox✓ + os-term✓ + **os-vt✓ (new, 19 checks)**.
 
 ## The queue (todos/README.md is authoritative)
 
-1. `0022` VT switching tty ↔ desktop (item file exists; design in WM.md
-   "Screen, VTs, and scaling fixed-size clients")
-2. (unnumbered) real-world WebGPU C app port — candidates via WEBGPU.md
+1. (unnumbered) real-world WebGPU C app port — candidates via WEBGPU.md
+2. Unpromoted WM.md follow-ons if wanted: dynamic screen resolution
+   (full-viewport VT2), maximize, scaling fixed-size clients
 
 (`0006` threads + atomics stays deferred indefinitely.)
 
 ## Gotchas from this thread (details in the dev log)
 
-- **`SURFACE_SET_FLAGS` replaces the whole flag word.** A raw-RPC caller
-  toggling bit1 must carry bit2 along or it revokes resizability — that
-  deadlocked test_wm_policy.js's resize leg (an EV_CONFIGURED that can
-  never come). Real apps are immune via host.js's kFlagsBySid.
-- Anything parsing `wmctl list`'s FLAGS column must expect 5 chars now
-  (`f---R`, `f..r-\t` regexes were updated in test_wm_service_e2e.js and
-  os-quake.mjs).
-- doom's 1280x800 window clips its frame off the 800x500 screen, so
-  browser no-resize-drag coverage lives in os-quake.mjs (320x200, grip
-  visible); doom gets the `wmctl resize`-refused check headless.
+- **Browser tests must sit on the right VT**: canvas pixel sampling and
+  mouse/key input on VT2, shell typing on VT1 (`setVt` helper in each
+  test → `window.__osVtSwitch`). Pixel waits on VT1 can stall forever —
+  the worker-side compositor rAF may idle while the placeholder canvas is
+  display:none (mailbox makes that safe; the scene is current again the
+  moment you switch back).
+- `page.click('#terminal')` is gone from the tests — VT1 entry refocuses
+  the term; on VT2 the terminal isn't clickable at all.
+- os-doom's `wmctl close` teal-wait leg can exceed its 30s window if you
+  run the browser sweep CONCURRENTLY with the Node suites (machine
+  saturation, doom's slow quit path); run the browser tests serially —
+  it passed 2/2 solo after failing once under full parallel load.
+- Shell-output assertions in os-vt use a quote-split (`echo VT1-O''K`) so
+  the needle can't be satisfied by the command's own tty echo — steal
+  that pattern for new tests.
 - The vi/os-boots timing guards from 0018/0020 still apply: wait for
   `/~ #/` in `__osOut` before typing in browser tests; os-gpubox stays
   environmentally flaky (headless WebGPU adapter availability).
@@ -72,15 +75,15 @@ os-quake✓ (new SE-grip no-op leg) + os-gpubox✓ + os-term✓.
   (AU_*) ↔ host.js; SDL audio format words ↔ <SDL3/SDL_audio.h>; SI_* tty
   header kernel.js ↔ host.js.
 - `tests/browser/os-*.mjs` are manual — run os-boots/os-wm/os-doom/
-  os-gpubox/os-quake/os-term after touching os/, kernel.js, host.js
-  SDL/webgpu/fd/audio/input/tty paths.
+  os-gpubox/os-quake/os-term/os-vt (serially!) after touching os/,
+  kernel.js, host.js SDL/webgpu/fd/audio/input/tty paths.
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
-  invariants, 0013–0020's decisions, 0021's decisions (resizable =
-  surface-flag bit2 / record bit4; non-resizable frames are focus-only;
-  RESIZE refusal leaves no pending state; SET_FLAGS stays whole-word).
+  invariants, 0013–0021's decisions, 0022's decisions (exactly-one-visible
+  VTs, page-side state only, boot lands VT1, halt forces VT1, lock
+  requests gated to VT2).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0022 (VT switching), a WebGPU app port, a lingering item, or
-something else."
+to tackle: a WebGPU app port, a WM.md follow-on (dynamic screen res /
+maximize / scaling), a lingering item, or something else."

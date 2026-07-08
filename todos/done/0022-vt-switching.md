@@ -1,6 +1,15 @@
 # 0022 — VT switching: tty ↔ desktop
 
-- **Status**: open
+- **Status**: done (2026-07-08 — os.html-only: `body[data-vt]` shows exactly
+  one of tty/desktop, boot lands on VT1; Ctrl+Alt+F1/F2 (+ Ctrl+Alt+1/2
+  alias) on a window-capture listener + the `1:tty`/`2:desktop` switch in
+  #status; VT1 entry re-fits+refocuses xterm, VT2 entry focuses the canvas;
+  pointer lock exited on leaving VT2 and requests gated to VT2; halt/
+  boot-error force VT1; stuck-modifier keyups released to the focused
+  surface on VT2→VT1. Zero kernel change. `tests/browser/os-vt.mjs` covers
+  the acceptance incl. the kill-the-wm failure mode; the other os-*.mjs
+  tests now switch VTs at each shell↔canvas transition. Dev log
+  `logs/2026-07-08/vt-switching.md`)
 - **Depends**: — (pure UI-bridge work; the full-viewport-desktop
   follow-on needs dynamic screen resolution, deliberately out of scope)
 - **Design**: `todos/WM.md` ("Screen, VTs, and scaling fixed-size

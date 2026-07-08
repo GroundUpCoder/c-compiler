@@ -53,8 +53,14 @@ try {
   const TEAL = [0, 128, 128];
   const CLEAR = [20, 20, 64];                 // gpubox render-pass clear color
 
+  // VTs (todos/0022): shell typing on VT1, canvas pixels on VT2 (the
+  // compositor may idle while its placeholder canvas is hidden). Deep VT
+  // coverage lives in os-vt.mjs.
+  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+
   // Launch from the real shell; the WM places the first window at (12,36).
   await page.keyboard.type('gpubox &\r');
+  await setVt(2);
   const WX = 12, WY = 36, CX = WX + 128, CY = WY + 128;
 
   // Cube covers the window center from every rotation angle; wait for ANY
@@ -89,7 +95,9 @@ try {
   // gpubox reconfigures its canvas surface + depth at 320x200 -> the first
   // new-size ImageBitmap acks and the kernel geometry follows. The probe
   // point is desktop BEFORE the resize and render-pass clear AFTER it.
+  await setVt(1);
   await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl resize $SID 320 200\r');
+  await setVt(2);
   const tR = Date.now();
   for (;;) {
     const got = await sample(WX + 316, WY + 196);
@@ -100,7 +108,9 @@ try {
   check('wmctl resize renegotiated the gpu-transport window to 320x200', true);
 
   // wmctl close from the shell -> SDL_EVENT_QUIT -> clean quit, window gone.
+  await setVt(1);
   await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl close $SID\r');
+  await setVt(2);
   const t1 = Date.now();
   for (;;) {
     const got = await sample(CX, CY);
@@ -110,6 +120,7 @@ try {
   }
   check('wmctl close quit gpubox; desktop restored', true);
 
+  await setVt(1);
   await page.keyboard.type('echo GPU-SHELL-OK\r');
   await page.waitForFunction(() => window.__osOut.includes('GPU-SHELL-OK'), { timeout: 20000, polling: 200 });
   check('shell alive after the GPU app exits', true);
