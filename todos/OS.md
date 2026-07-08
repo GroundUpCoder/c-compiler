@@ -274,10 +274,12 @@ The original sketch, kept for context:
   `<sys/un.h>` in the libc, poll/select integration. The "trivial — pipes
   with names in BlockFS" prediction held (design: `todos/KERNEL.md`
   "AF_UNIX sockets"). IPC for the WM protocol and multiplexers is unlocked.
-- Sockets, remaining: AF_INET emulation over WebSocket/WebTransport (needs
-  a relay or same-origin services); SOCK_DGRAM/SCM_RIGHTS/O_NONBLOCK if a
-  port demands them (v1 non-goals, recorded in KERNEL.md).
-- `fetch()`-backed HTTP convenience API for ports that just want HTTP.
+- Sockets + HTTP, remaining — **designed 2026-07-09, `todos/NETWORK.md`**
+  (the tier model): loopback AF_INET fully in-kernel (0052), the
+  curl-easy HTTP facade over kernel fetch (0053), getaddrinfo via DoH,
+  and a pluggable localhost websockify relay for arbitrary hosts (0054).
+  SOCK_DGRAM/SCM_RIGHTS/O_NONBLOCK stay on-demand (v1 non-goals,
+  recorded in KERNEL.md) — none is a web limitation, purely scope.
 - Locale/wchar beyond the current minimal level, as ports demand.
 
 ## Open questions
@@ -306,3 +308,8 @@ The original sketch, kept for context:
   recorded v2.
 - **msvc extensions**: which ones are actually worth it (`__declspec`?
   `#pragma pack` already?) — driven by ports, not speculation.
+- **Multi-tab**: todos/0045 locks the disk to ONE kernel (Web Locks).
+  "Seats v2" — extra tabs as remote seats over clone-based transports
+  (os.html is already a postMessage bridge; SABs don't cross agent
+  clusters; SharedWorker blocked by SyncAccessHandle being
+  dedicated-worker-only) — sketched in the 0045 item, unscheduled.

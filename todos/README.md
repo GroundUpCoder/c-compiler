@@ -27,18 +27,29 @@ One numbered file per unit of work we have actually committed to doing.
 1. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils (0034's
    always-fail execvp in wasm_port.h marks the seam)
-2. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+2. `0045` two-tab boot guard — Web Locks mutex on the OPFS images
+   (correctness: two tabs today = two kernels over one store)
+3. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-3. `0037` wasm module cache — kernel-side compiled-Module cache on the
+4. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (the sealed system blob's `/usr/share/os-release`
    VERSION_ID is the natural cache key since 0040; Modules clone,
    instances don't)
-4. (unnumbered) a real-world WebGPU C app port — candidates via
+5. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-5. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+6. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-6. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+7. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
+8. The kernel-POSIX batch (any order): `0043` procfs + ps/top/pgrep,
+   `0044` interval timers/SIGALRM, `0046` strace
+9. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
+   AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
+10. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
+    apps wave 1 (fileman/notepad/calc/minesweeper/control panel) →
+    `0049` wallpaper; `0050` pdpmake + busybox diff/patch alongside
+    (after 0035)
+11. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
@@ -162,6 +173,9 @@ don't duplicate them. Current map:
 - `OS.md` — **the north star**: the wasm-native browser OS, the
   posix_spawn-not-fork decision, the reference-build (`os/`) layout, the
   phased roadmap the queue is drawn from.
+- `NETWORK.md` — the networking tier model (2026-07-09): loopback
+  AF_INET in-kernel, curl-easy HTTP over fetch, getaddrinfo-over-DoH,
+  the pluggable localhost websockify relay (→ 0052/0053/0054).
 - `KERNEL.md` — the process control plane design (kernel.js): kernel page,
   doorbell, signals, tty, the fd/data-plane amendment, pipes, AF_UNIX
   sockets, settled-decisions table. All phases implemented
