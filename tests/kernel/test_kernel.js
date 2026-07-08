@@ -193,8 +193,19 @@ const spawnReq = (p, extra) => Object.assign(
   check('empty pgroup -> ESRCH', r.errno === 'ESRCH', JSON.stringify(r));
   r = await rpc(1, K.OP.KILL, { pid: 12345, sig: 15 });
   check('unknown pid -> ESRCH', r.errno === 'ESRCH');
+  // Signal 0 is the POSIX existence probe (kill(2): error checking only,
+  // no signal sent) — hush's `kill -0 PID` liveness idiom rides on it.
   r = await rpc(1, K.OP.KILL, { pid: 9, sig: 0 });
+  check('kill(pid, 0) probes a live process -> success, no delivery',
+    !r.errno && kernel.process(9).state === 'running', JSON.stringify(r));
+  r = await rpc(1, K.OP.KILL, { pid: 12345, sig: 0 });
+  check('kill(pid, 0) on an unknown pid -> ESRCH', r.errno === 'ESRCH');
+  r = await rpc(1, K.OP.KILL, { pid: -1234, sig: 0 });
+  check('kill(-pgid, 0) on an empty pgroup -> ESRCH', r.errno === 'ESRCH');
+  r = await rpc(1, K.OP.KILL, { pid: 9, sig: 999 });
   check('bad signal -> EINVAL', r.errno === 'EINVAL');
+  r = await rpc(1, K.OP.KILL, { pid: 9, sig: -2 });
+  check('negative signal -> EINVAL', r.errno === 'EINVAL');
   await rpc(1, K.OP.WAIT, { pid: -1, options: 0 });
   await rpc(1, K.OP.WAIT, { pid: -1, options: 0 });
 
