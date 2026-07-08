@@ -293,6 +293,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   path into the SAME policy code the title
  *                                   double-click hits; R_ERR when no WM is
  *                                   subscribed, since maximize IS policy)
+ *   CYCLE { direction }          -> R_OK | R_ERR   (todos/0032: fire the
+ *                                   window-cycling gesture — the wmctl-cycle
+ *                                   path into the SAME EV_CYCLE the Alt+Tab
+ *                                   chord emits; R_ERR with no subscriber,
+ *                                   since cycling IS policy)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
@@ -316,7 +321,10 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * EV_TITLE_ACTIVATE { sid } (todos/0025: title-bar double-click, or an
  * ACTIVATE command — the maximize gesture; the kernel keeps NO maximize
  * state, policy toggles configure-vs-scale on the resizable bit and holds
- * the saved geometry).
+ * the saved geometry) | EV_CYCLE { direction } (todos/0032: the cycling
+ * chord — Tab with Alt held, Shift reversing — or a CYCLE command; only
+ * emitted with a subscriber, else the chord is not recognized and the key
+ * passes through to the focused app; policy walks focus and sends FOCUS).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
@@ -324,12 +332,24 @@ var WMP = {
   SUBSCRIBE: 0x01, LIST: 0x02,
   MOVE: 0x10, FOCUS: 0x11, MINIMIZE: 0x12, RESTORE: 0x13, RESTACK: 0x14,
   CLOSE_REQ: 0x15, RESIZE: 0x16, SET_DST: 0x17, ACTIVATE: 0x18,
+  CYCLE: 0x19,                       /* { direction }: fire the window-cycling
+                                        gesture (todos/0032) — the wmctl-cycle
+                                        path into the same EV_CYCLE the kernel
+                                        chord emits. R_ERR with no subscribed
+                                        WM (cycling IS policy) */
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
   EV_SCALED: 0x88, EV_SCALE_REQ: 0x89, EV_TITLE_ACTIVATE: 0x8A,
+  EV_CYCLE: 0x8B,                    /* { direction }: the cycling chord
+                                        (Alt/Ctrl+Alt+Tab; Shift reverses) or
+                                        a CYCLE command — policy walks focus
+                                        (todos/0032); only emitted with a
+                                        subscriber, else the chord is NOT
+                                        recognized and the key passes through
+                                        (the kernel never eats keystrokes) */
 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -2361,6 +2381,18 @@ Kernel.prototype._wmEventTo = function (sid, words) {
  * policy right here. The agent inject API below shares these code paths. */
 
 Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
+  // Window cycling (todos/0032): ONE kernel chord — Tab with Alt held
+  // (Ctrl+Alt+Tab; plain Alt+Tab where the browser delivers it, e.g.
+  // macOS) — is intercepted at this routing seam and emitted as WMP
+  // EV_CYCLE (Shift reverses) instead of being delivered. ONLY with a WM
+  // subscribed: cycling is pure policy, and the kernel never silently
+  // eats keystrokes — no WM, and the chord isn't recognized at all (the
+  // focused app gets its Tab). The matching keyup is swallowed too, so
+  // apps never see half a chord; key repeat keeps cycling.
+  if ((scancode | 0) === 43 && (mod & 0x300) && this._wmSubs.size) {
+    if (down) this._wmEmit(WMP.EV_CYCLE, [(mod & 0x3) ? -1 : 1]);
+    return 'cycle';
+  }
   if (!this._focusSid) return false;
   return this._wmEventTo(this._focusSid,
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
@@ -2674,6 +2706,17 @@ Kernel.prototype.wmTitleActivate = function (sid) {
   if (!s || s.borderless) return false;
   if (!this._wmSubs.size) return false;
   this._wmEmit(WMP.EV_TITLE_ACTIVATE, [s.sid]);
+  return true;
+};
+
+/* Fire the window-cycling gesture (todos/0032) — the same EV_CYCLE the
+ * Alt+Tab-family chord emits, so wmctl cycle and the keyboard share ONE
+ * policy path in /bin/wm. Mechanism only: the kernel keeps no cycle
+ * state; policy picks the next window and sends FOCUS. Refuses without a
+ * subscriber (cycling IS policy — nothing would ever answer). */
+Kernel.prototype.wmCycle = function (dir) {
+  if (!this._wmSubs.size) return false;
+  this._wmEmit(WMP.EV_CYCLE, [(dir | 0) < 0 ? -1 : 1]);
   return true;
 };
 
@@ -2996,6 +3039,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.RESIZE: ok(this.wmResize(g(0), g(1), g(2))); break;
     case WMP.SET_DST: ok(this.wmSetDst(g(0), g(1), g(2))); break;
     case WMP.ACTIVATE: ok(this.wmTitleActivate(g(0))); break;
+    case WMP.CYCLE: ok(this.wmCycle(g(0))); break;
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores

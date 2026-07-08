@@ -87,6 +87,8 @@ typedef struct {
                                           the kernel (todos/0025) */
     int32_t sx, sy, sw, sh;            /* saved geometry for restore: x, y,
                                           and w/h (resizable) or dst (fixed) */
+    uint32_t stamp;                    /* focus recency (EV_FOCUS/CREATED) —
+                                          the cycling order (todos/0032) */
     char title[32];
 } win_t;
 
@@ -124,6 +126,7 @@ static int desk_dirty = 1;         /* redraw only when contents change */
 static int desk_last_idx = -1;     /* double-click tracking (event timestamps) */
 static uint64_t desk_last_ns = 0;
 static int desk_tick = 0;          /* coarse /root/Desktop re-read timer */
+static uint32_t zctr = 0;          /* focus-recency counter (todos/0032) */
 
 /* ---- 5x7 font (classic HD44780-style patterns), A-Z 0-9 - . ---- */
 static const uint8_t F_AZ[26][7] = {
@@ -538,6 +541,29 @@ static void draw_desk(void) {
     SDL_UpdateWindowSurface(desk_win);
 }
 
+/* EV_CYCLE (todos/0032): walk focus. dir > 0 focuses the LEAST recently
+ * used window — repeated presses tour the whole ring in LRU order (each
+ * FOCUS echo restamps, so the walk converges instead of ping-ponging);
+ * dir < 0 focuses the PREVIOUS window (second most recent — the quick
+ * toggle, and the inverse of one forward step). Minimized windows are
+ * skipped. */
+static void cycle(int dir) {
+    win_t *cur = NULL, *pick = NULL;
+    for (int i = 0; i < nwins; i++)
+        if (!wins[i].minimized && (!cur || wins[i].stamp > cur->stamp))
+            cur = &wins[i];
+    if (!cur) return;
+    for (int i = 0; i < nwins; i++) {
+        win_t *w = &wins[i];
+        if (w->minimized || w == cur) continue;
+        if (dir > 0 ? (!pick || w->stamp < pick->stamp)
+                    : (!pick || w->stamp > pick->stamp)) pick = w;
+    }
+    if (!pick) return;
+    int32_t a[1] = { pick->sid };
+    wmp_send(sock, WMP_FOCUS, a, 1);
+}
+
 /* Create the taskbar window at the current screen width. Its EV_CREATED
  * echo (own pid) parks it at the bottom edge — see handle_event. */
 static int make_bar(void) {
@@ -621,6 +647,7 @@ static void handle_event(wmp_hdr *h) {
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
             w->resizable = (r.flags & WMP_F_RESIZABLE) ? 1 : 0;
             w->maximized = 0;          /* slots are reused: reset (0025) */
+            w->stamp = ++zctr;         /* newest (create focuses; 0032) */
             memcpy(w->title, r.title, 32);
             w->title[31] = 0;
         }
@@ -653,8 +680,16 @@ static void handle_event(wmp_hdr *h) {
         if (menu_win && p[0] != menu_sid) menu_dismiss();
         for (int i = 0; i < nwins; i++) {
             wins[i].focused = wins[i].sid == p[0];
-            if (wins[i].focused) wins[i].minimized = 0;   /* focus restores */
+            if (wins[i].focused) {
+                wins[i].minimized = 0;                    /* focus restores */
+                wins[i].stamp = ++zctr;                   /* recency (0032) */
+            }
         }
+        break;
+    }
+    case WMP_EV_CYCLE: {               /* window cycling (todos/0032) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        cycle(p[0]);
         break;
     }
     case WMP_EV_MINIMIZED: {

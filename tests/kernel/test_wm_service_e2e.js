@@ -140,6 +140,32 @@ const script = [
   'echo ==bar3',
   'wmctl list',
   'wmctl shot $TSID /root/bar.ppm && echo bar-shot-ok',
+  // ---- window cycling (todos/0032): wmctl cycle -> WMP CYCLE -> the same
+  // EV_CYCLE -> wm.c policy. Focus fixbox then winbox so the recency
+  // ladder's top three are known: [.., W6(create), fixbox, winbox]. ----
+  'wmctl focus $FSID',
+  'wmctl focus $WSID',
+  'sleep 0.3',
+  'echo ==cyc1',
+  'wmctl list',
+  'wmctl cycle -1',                              // previous window
+  'sleep 0.3',
+  'echo ==cyc2',
+  'wmctl list',
+  'wmctl cycle -1',                              // ...and back (the toggle)
+  'sleep 0.3',
+  'echo ==cyc3',
+  'wmctl list',
+  'wmctl min $FSID',                             // minimize the 2nd-recent
+  'sleep 0.3',
+  'wmctl cycle -1',                              // must skip it
+  'sleep 0.3',
+  'echo ==cyc4',
+  'wmctl list',
+  'wmctl cycle',                                 // forward: the LRU window
+  'sleep 0.3',
+  'echo ==cyc5',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -159,7 +185,9 @@ const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       m1 = section('menu1'), m2 = section('menu2'), m3 = section('menu3'),
       m4 = section('menu4'),
       d1 = section('desk1'), d2 = section('desk2'), d3 = section('desk3'),
-      b1 = section('bar1'), b2 = section('bar2'), b3 = section('bar3');
+      b1 = section('bar1'), b2 = section('bar2'), b3 = section('bar3'),
+      c1s = section('cyc1'), c2s = section('cyc2'), c3s = section('cyc3'),
+      c4s = section('cyc4'), c5s = section('cyc5');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
@@ -274,6 +302,28 @@ check('clock-cell click falls on no button (focused window untouched)',
   flagsOf(b3, s3[s3.length - 1])[0] === 'f' && flagsOf(b3, s3[s3.length - 1])[1] !== 'm',
   JSON.stringify(b3));
 check('taskbar shot written', out.includes('bar-shot-ok'));
+
+// ---- window cycling (todos/0032) ----
+// Recency ladder set up in-script: [.., W6, fixbox, winbox]. wmctl cycle -1
+// is "previous window"; forward is the LRU walk; minimized are skipped.
+const fsidOf = (sec) => {
+  const l = sec.split('\n').find(l => ((l.split('\t')[5] || ''))[0] === 'f');
+  return l ? parseInt(l) : -1;
+};
+const fixSid = parseInt(row(c1s, 'fixbox'));
+const wLow = wsids(c1s)[0], wHigh = wsids(c1s)[wsids(c1s).length - 1];
+check('pre-cycle: the original winbox is focused', fsidOf(c1s) === wLow,
+  JSON.stringify([fsidOf(c1s), wLow]));
+check('wmctl cycle -1 focuses the previous window (fixbox)', fsidOf(c2s) === fixSid,
+  JSON.stringify([fsidOf(c2s), fixSid]));
+check('cycle -1 again toggles back (winbox)', fsidOf(c3s) === wLow,
+  JSON.stringify([fsidOf(c3s), wLow]));
+check('minimized window skipped: cycle -1 lands on the 3rd-recent (W6)',
+  fsidOf(c4s) === wHigh && row(c4s, 'fixbox').includes('m'),
+  JSON.stringify([fsidOf(c4s), wHigh, row(c4s, 'fixbox')]));
+check('forward cycle walks to the LRU window (focus moved, minimized still skipped)',
+  fsidOf(c5s) !== fsidOf(c4s) && fsidOf(c5s) !== fixSid && fsidOf(c5s) > 0,
+  JSON.stringify([fsidOf(c5s), fsidOf(c4s)]));
 
 // Icon pixels: read the shot back OUT of the user volume (0026 split) and
 // histogram icon cell 0 (doom at 16,16): white tile, navy center, black

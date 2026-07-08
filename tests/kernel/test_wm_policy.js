@@ -687,6 +687,41 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('focus fall follows the min-box minimize', f.type === WMP.EV_FOCUS &&
     f.g(0) !== c1.sid, JSON.stringify([f.type, f.g(0)]));
 
+  // ---- window cycling (todos/0032) with a subscriber: the chord is
+  // intercepted at the wmKey seam and rides EV_CYCLE; the keyup is
+  // swallowed too; Shift reverses; the CYCLE command is the same event
+  // (wmctl cycle = the chord). c1 is minimized from the min-box leg —
+  // restore it so a focused surface exists for the ring assert. ----
+  f = await cmd(wm2, WMP.RESTORE, [c1.sid]);
+  check('restore c1 for the cycle legs -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MINIMIZED 0
+  await readEvent(wm2);                                // EV_FOCUS echo
+  let kact = kernel.wmKey(true, 43, 9, 0x300, false);  // Alt+Tab down
+  check('chord down intercepted', kact === 'cycle', kact);
+  f = await readEvent(wm2);
+  check('EV_CYCLE { +1 } pushed', f.type === WMP.EV_CYCLE && f.g(0) === 1,
+    JSON.stringify([f.type, f.g(0)]));
+  kact = kernel.wmKey(false, 43, 9, 0x300, false);     // keyup swallowed
+  check('chord keyup swallowed (no half-chord to the app)', kact === 'cycle' &&
+    drainRing(ring1).length === 0);
+  kact = kernel.wmKey(true, 43, 9, 0x301, false);      // +Shift: reverse
+  f = await readEvent(wm2);
+  check('Shift reverses: EV_CYCLE { -1 }', kact === 'cycle' &&
+    f.type === WMP.EV_CYCLE && f.g(0) === -1, JSON.stringify([f.type, f.g(0)]));
+  kernel.wmKey(false, 43, 9, 0x301, false);
+  f = await cmd(wm2, WMP.CYCLE, [1]);
+  check('CYCLE command -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('CYCLE rides the same EV_CYCLE (wmctl cycle = the chord)',
+    f.type === WMP.EV_CYCLE && f.g(0) === 1 && idle(wm2),
+    JSON.stringify([f.type, f.g(0)]));
+  check('plain Tab (no Alt) still reaches the app', (() => {
+    kernel.wmKey(true, 43, 9, 0, false);
+    kernel.wmKey(false, 43, 9, 0, false);
+    const r = drainRing(ring1);
+    return r.length === 2 && r[0].w[0] === 43;
+  })());
+
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

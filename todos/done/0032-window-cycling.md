@@ -1,6 +1,6 @@
 # 0032 — window cycling: a kernel chord → EV_CYCLE
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/window-cycling.md`)
 - **Depends**: —
 - **Design**: `todos/WM.md` "The desktop shell" (window-cycling block)
 

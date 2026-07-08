@@ -168,6 +168,18 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     evs[0].win === 1 && evs[0].w[0] === 4 && evs[0].w[1] === 97, JSON.stringify(evs));
   check('doorbell rung for input', Atomics.load(kp1, K.KP_DOORBELL) > bellBefore);
 
+  // ---- window cycling chord with NO subscriber (todos/0032): the chord
+  // is NOT recognized — Alt+Tab lands in the focused app like any other
+  // key (the kernel never silently eats keystrokes) ----
+  kernel.wmKey(true, 43, 9, 0x140, false);            // Ctrl+Alt+Tab down
+  kernel.wmKey(false, 43, 9, 0x140, false);
+  evs = drain(ring1);
+  check('no WM: the cycle chord passes through to the app',
+    evs.length === 2 && evs[0].type === K.WMEV.KEYDOWN && evs[0].w[0] === 43 &&
+    evs[0].w[2] === 0x140 && evs[1].type === K.WMEV.KEYUP, JSON.stringify(evs));
+  check('wmCycle refuses with no subscriber (cycling IS policy)',
+    kernel.wmCycle(1) === false);
+
   // ---- pointer: client hit, local coords ----
   let act = kernel.wmPointer('down', s1.x + 10, s1.y + 20, { button: 1 });
   kernel.wmPointer('up', s1.x + 10, s1.y + 20, { button: 1 });

@@ -11,6 +11,9 @@
  *   wmctl max SID                     toggle maximize/restore (todos/0025) —
  *                                     the title double-click gesture; policy
  *                                     lives in /bin/wm, so this needs one
+ *   wmctl cycle [DIR]                 cycle focus (todos/0032) — the Alt+Tab
+ *                                     chord's event; DIR -1 reverses (the
+ *                                     previous-window toggle); needs a WM
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl dblclick SID X Y [BUTTON]            two clicks on one connection
@@ -38,6 +41,7 @@ static int usage(void) {
         "       wmctl resize SID W H\n"
         "       wmctl scale SID W H\n"
         "       wmctl max SID\n"
+        "       wmctl cycle [DIR]\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl dblclick SID X Y [BUTTON]\n"
@@ -107,6 +111,10 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "shot")) {
         if (argc < 3) return usage();
         return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL);
+    }
+    if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
+        int32_t a[1] = { argc > 2 ? atoi(argv[2]) : 1 };
+        return wmp_cmd(fd, WMP_CYCLE, a, 1) ? fail("cycle refused (no WM?)") : 0;
     }
 
     /* Everything else leads with a SID. */

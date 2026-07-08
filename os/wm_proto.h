@@ -40,6 +40,11 @@ enum {
                                           policy code the title double-click
                                           hits. R_ERR with no subscribed WM
                                           (maximize IS policy) */
+    WMP_CYCLE = 0x19,                  /* { direction }: fire the window-
+                                          cycling gesture (todos/0032) — the
+                                          wmctl-cycle path into the same
+                                          EV_CYCLE the Alt+Tab chord emits.
+                                          R_ERR with no subscribed WM */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     /* replies */
@@ -62,6 +67,11 @@ enum {
                                           maximize gesture; policy toggles
                                           configure-vs-scale on the RESIZABLE
                                           bit and keeps the saved geometry */
+    WMP_EV_CYCLE = 0x8B,               /* { direction }: the cycling chord
+                                          (Tab with Alt held; Shift reverses)
+                                          or a CYCLE command (todos/0032) —
+                                          policy walks focus; only emitted
+                                          with a subscriber */
 };
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries

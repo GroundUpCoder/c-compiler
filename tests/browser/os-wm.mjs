@@ -243,6 +243,54 @@ try {
   await page.keyboard.type('wmctl list\r');
   await page.waitForFunction(() => window.__osOut.includes('taskbar'), { timeout: 20000, polling: 200 });
   check('wmctl list from the in-browser shell sees the taskbar', true);
+
+  // ---- window cycling (todos/0032): the Ctrl+Alt+Tab chord ----
+  // Two fresh winboxes (cascade slots k=1: 40,60 and k=2: 68,84; the
+  // second is focused). The chord flips focus to the least-recent one;
+  // again flips back. After killing the wm the chord is NOT recognized
+  // and the Tab reaches the app (winbox toggles green on any keydown).
+  await page.keyboard.type('winbox & winbox &\r');
+  await setVt(2);
+  const AX = 40, AY = 60, BX = 68, BY = 84;      // cascade slots 1 and 2
+  await waitPixel(BX + 200, BY + 100, ORANGE, 60000);   // B's client, clear of A
+  check('two more winboxes composited', true);
+  await waitPixel(BX + 150, BY - 12, NAVY);
+  check('second winbox focused (navy title)', true);
+  check('first winbox blurred (gray title)',
+    near(await sample(AX + 150, AY - 12), [128, 128, 128]), await sample(AX + 150, AY - 12));
+
+  const chord = async () => {
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Alt');
+    await page.keyboard.press('Tab');
+    await page.keyboard.up('Alt');
+    await page.keyboard.up('Control');
+  };
+  await clickAt(BX + 200, BY + 100);             // focus the canvas (B stays focused)
+  await chord();
+  await waitPixel(AX + 100, AY - 12, NAVY);      // A's title, clear of B's bar
+  check('chord flipped focus to the other winbox', true);
+  await chord();
+  await waitPixel(BX + 150, BY - 12, NAVY);
+  check('chord again flipped back', true);
+
+  // Kill the wm: the chord passes through — the focused winbox sees the
+  // Tab keydown and toggles green (the kernel never eats keys without a
+  // subscriber). B was clicked once above, so it carries one black mark.
+  await setVt(1);
+  await page.keyboard.type('WMPID=$(wmctl list | grep taskbar$ | sed "s/^[0-9]*.//;s/[^0-9].*//") && kill $WMPID && echo WM-DEAD\r');
+  await page.waitForFunction(() => window.__osOut.includes('WM-DEAD'), { timeout: 20000, polling: 200 });
+  await setVt(2);
+  // The kill is cooperative (SIGTERM at a safe point): wait for the wm's
+  // surfaces to actually vanish (taskbar strip -> teal) before the chord,
+  // or the still-subscribed wm would eat it.
+  await waitPixel(400, BARY, TEAL, 30000);
+  check('wm dead: taskbar reclaimed', true);
+  await clickAt(BX + 200, BY + 100);             // re-focus B post-kill
+  const preToggle = await sample(BX + 220, BY + 130);
+  await chord();
+  await waitPixel(BX + 220, BY + 130, near(preToggle, ORANGE) ? GREEN : ORANGE);
+  check('no WM: the chord reaches the app (fill toggled)', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   failures++;
