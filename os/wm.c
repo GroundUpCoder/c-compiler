@@ -34,6 +34,9 @@ typedef struct {
     int32_t x, y, w, h;                /* tracked geometry (EV_MOVED /
                                           EV_CONFIGURED) — the EV_SCREEN
                                           re-clamp needs it (todos/0023) */
+    int32_t dst_w, dst_h;              /* on-screen viewport (EV_SCALED,
+                                          todos/0024) — the clamp must use
+                                          the SCALED size */
     int minimized, focused;
     char title[32];
 } win_t;
@@ -122,6 +125,26 @@ static void place(int32_t sid, int w, int h) {
     wmp_send(sock, WMP_MOVE, a, 3);    /* fire-and-forget; R_OK skipped */
 }
 
+/* The user drag-released a fixed-size window's frame at box (bw, bh)
+ * (EV_SCALE_REQ, todos/0024). Policy: the largest aspect-correct dst that
+ * fits the box, with an integer-snap nicety — a scale within 15% of a
+ * whole multiple snaps to it (the pixel-art case: gameboy at exactly 2x).
+ * The kernel floors dst dims at 32; preserve aspect by flooring the SCALE,
+ * not the dims. The SET_DST echo (EV_SCALED) updates the model. */
+static void scale_request(int32_t sid, int32_t bw, int32_t bh) {
+    win_t *w = find(sid);
+    if (!w || w->w <= 0 || w->h <= 0) return;
+    float s = (float)bw / (float)w->w;
+    float sy = (float)bh / (float)w->h;
+    if (sy < s) s = sy;
+    float snap = (float)(int)(s + 0.5f);
+    if (snap >= 1.0f && s >= snap * 0.85f && s <= snap * 1.15f) s = snap;
+    float floor_s = 32.0f / (float)(w->w < w->h ? w->w : w->h);
+    if (s < floor_s) s = floor_s;
+    int32_t a[3] = { sid, (int32_t)(w->w * s + 0.5f), (int32_t)(w->h * s + 0.5f) };
+    wmp_send(sock, WMP_SET_DST, a, 3);
+}
+
 /* Create the taskbar window at the current screen width. Its EV_CREATED
  * echo (own pid) parks it at the bottom edge — see handle_event. */
 static int make_bar(void) {
@@ -150,7 +173,7 @@ static void screen_changed(void) {
         win_t *w = &wins[i];
         int nx = w->x, ny = w->y;
         if (nx > scr_w - 40) nx = scr_w - 40;
-        if (nx < 40 - w->w) nx = 40 - w->w;
+        if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
         if (ny > scr_h - BAR_H - 8) ny = scr_h - BAR_H - 8;
         if (ny < TITLE_H) ny = TITLE_H;
         if (nx != w->x || ny != w->y) {
@@ -175,6 +198,7 @@ static void handle_event(wmp_hdr *h) {
             win_t *w = &wins[nwins++];
             w->sid = r.sid; w->pid = r.pid;
             w->x = r.x; w->y = r.y; w->w = r.w; w->h = r.h;
+            w->dst_w = r.dst_w; w->dst_h = r.dst_h;
             w->minimized = (r.flags & WMP_F_MINIMIZED) ? 1 : 0;
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
             memcpy(w->title, r.title, 32);
@@ -226,7 +250,19 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_CONFIGURED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         win_t *w = find(p[0]);
-        if (w) { w->w = p[1]; w->h = p[2]; }
+        /* configure implies resizable: dst tracks the buffer (todos/0024) */
+        if (w) { w->w = p[1]; w->h = p[2]; w->dst_w = p[1]; w->dst_h = p[2]; }
+        break;
+    }
+    case WMP_EV_SCALED: {               /* dst viewport changed (todos/0024) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        win_t *w = find(p[0]);
+        if (w) { w->dst_w = p[1]; w->dst_h = p[2]; }
+        break;
+    }
+    case WMP_EV_SCALE_REQ: {            /* drag box -> aspect-fit SET_DST */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        scale_request(p[0], p[1], p[2]);
         break;
     }
     case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */

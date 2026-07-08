@@ -137,11 +137,11 @@ async function readEvent(conn) {
   }
 }
 const idle = (conn) => conn.acc.length === 0 && conn.events.length === 0;
-function rec(f, off) {                 // parse a 72-byte window record
+function rec(f, off) {                 // parse an 80-byte window record
   const b = 8 + (off || 0);
   let title = '';
   for (let i = 0; i < 32; i++) {
-    const c = f.bytes[b + 40 + i];
+    const c = f.bytes[b + 48 + i];
     if (!c) break;
     title += String.fromCharCode(c);
   }
@@ -149,7 +149,9 @@ function rec(f, off) {                 // parse a 72-byte window record
            x: f.dv.getInt32(b + 8, true), y: f.dv.getInt32(b + 12, true),
            w: f.dv.getInt32(b + 16, true), h: f.dv.getInt32(b + 20, true),
            z: f.dv.getInt32(b + 24, true), flags: f.dv.getInt32(b + 28, true),
-           frameSeq: f.dv.getInt32(b + 32, true), title };
+           frameSeq: f.dv.getInt32(b + 32, true),
+           dstW: f.dv.getInt32(b + 36, true), dstH: f.dv.getInt32(b + 40, true),
+           title };
 }
 const cmd = async (conn, type, i32s) => {
   await wRpc(conn.pid, conn.fd, frame(type, i32s || []));
@@ -421,6 +423,108 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
       }
       return false;
     })());
+
+  // ---- viewport scaling (todos/0024): SET_DST/EV_SCALED, the scale-request
+  // path (frame drag on a fixed-size surface -> EV_SCALE_REQ -> policy
+  // answers), scaled hit-test/input, and the NN composite over the socket ----
+  const fbX = makeFb(40, 30);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbX.sab, ring: null });
+  const cx = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 40, h: 30, title: 'fixed' });
+  f = await readEvent(wm);
+  check('fixed-size create: record dst defaults to the buffer',
+    f.type === WMP.EV_CREATED && rec(f).sid === cx.sid &&
+    rec(f).dstW === 40 && rec(f).dstH === 30, JSON.stringify(rec(f)));
+  await readEvent(wm);                                   // its EV_FOCUS
+  f = await cmd(wm, WMP.SET_DST, [c1.sid, 200, 140]);
+  check('SET_DST on a RESIZABLE surface -> R_ERR (it configures, never scales)',
+    f.type === WMP.R_ERR);
+  f = await cmd(wm, WMP.SET_DST, [cx.sid, 8, 8]);
+  check('SET_DST below the size floor -> R_ERR', f.type === WMP.R_ERR);
+  f = await cmd(wm, WMP.SET_DST, [cx.sid, 80, 60]);
+  check('SET_DST -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm);
+  check('EV_SCALED echo { sid, dstW, dstH }', f.type === WMP.EV_SCALED &&
+    f.g(0) === cx.sid && f.g(1) === 80 && f.g(2) === 60,
+    JSON.stringify([f.type, f.g(0), f.g(1), f.g(2)]));
+  check('scene tracks the dst, buffer untouched', (() => {
+    const s = kernel.wmList().find(s => s.sid === cx.sid);
+    return s.dstW === 80 && s.dstH === 60 && s.w === 40 && s.h === 30;
+  })(), JSON.stringify(kernel.wmList().find(s => s.sid === cx.sid)));
+  f = await cmd(wm, WMP.LIST);
+  check('LIST record carries the dst dims', f.type === WMP.R_LIST && (() => {
+    for (let i = 0; i < f.g(0); i++) {
+      const r0 = rec(f, 4 + i * K.WMP_REC_BYTES);
+      if (r0.sid === cx.sid) return r0.dstW === 80 && r0.dstH === 60 && r0.w === 40;
+    }
+    return false;
+  })());
+
+  // The drag path WITH a WM subscribed: the kernel emits EV_SCALE_REQ and
+  // waits for policy — no dst change until the SET_DST answer lands.
+  f = await cmd(wm, WMP.MOVE, [cx.sid, 60, 300]);
+  check('park the fixed surface -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm);                                   // EV_MOVED echo
+  // cx was created last: already focused and topmost for the drag.
+  let ract = kernel.wmPointer('down', 60 + 80 + 1, 300 + 60 + 1, {});   // SE grip at the DST corner
+  check('SE grip on the scaled surface starts a scale drag', ract === 'resize-start', ract);
+  kernel.wmPointer('move', 60 + 80 + 41, 300 + 60 + 31, {});
+  ract = kernel.wmPointer('up', 60 + 80 + 41, 300 + 60 + 31, {});
+  check('release ends the drag', ract === 'resize-end', ract);
+  f = await readEvent(wm);
+  check('EV_SCALE_REQ { sid, w, h } with the dragged box', f.type === WMP.EV_SCALE_REQ &&
+    f.g(0) === cx.sid && f.g(1) === 120 && f.g(2) === 90,
+    JSON.stringify([f.type, f.g(0), f.g(1), f.g(2)]));
+  check('kernel waits for policy (dst unchanged, nothing configured)', (() => {
+    const s = kernel.wmList().find(s => s.sid === cx.sid);
+    return s.dstW === 80 && s.dstH === 60 && s.configurePending === false;
+  })());
+  f = await cmd(wm, WMP.SET_DST, [cx.sid, 120, 90]);     // the policy answer
+  check('policy answer applies', f.type === WMP.R_OK &&
+    kernel.wmList().find(s => s.sid === cx.sid).dstW === 120);
+  await readEvent(wm);                                   // EV_SCALED echo
+  check('no WINDOW_RESIZED ever reached the client (app oblivious)',
+    drainRing(ring1).length === 0);
+
+  // Scaled input through the real hit-test: screen coords inverse-map to
+  // BUFFER coords (3x now: 40x30 -> 120x90).
+  kernel.wmPointer('down', 60 + 90, 300 + 60, { button: 1 });   // dst (90,60) -> buffer (30,20)
+  kernel.wmPointer('up', 60 + 90, 300 + 60, { button: 1 });
+  const sevs = drainRing(ring1);
+  check('pointer input inverse-maps through the scale (90,60 -> 30,20)',
+    sevs.length === 2 && sevs[0].win === cx.sid &&
+    sevs[0].f[0] === 30 && sevs[0].f[1] === 20, JSON.stringify(sevs));
+
+  // The NN composite rides SHOT_SCREEN: left half red / right half blue in
+  // the 40x30 buffer -> exact halves of the 120x90 dst (integer 3x).
+  {
+    const front = Atomics.load(fbX.i32, K.SH_FLIP) & 1;
+    const back = 1 - front;
+    const base = K.SH_HDR_BYTES + back * 40 * 30 * 4;
+    for (let y = 0; y < 30; y++) {
+      for (let x = 0; x < 40; x++) {
+        fbX.u8.set(x < 20 ? [255, 0, 0, 255] : [0, 0, 255, 255], base + (y * 40 + x) * 4);
+      }
+    }
+    Atomics.store(fbX.i32, K.SH_FLIP, back);
+    Atomics.add(fbX.i32, K.SH_SEQ, 1);
+  }
+  f = await cmd(wm, WMP.SHOT_SCREEN, []);
+  check('scaled SHOT_SCREEN: exact NN halves at 3x', f.type === WMP.R_SHOT && (() => {
+    const rgba = f.bytes.subarray(20), W = f.g(1);
+    return String(px(rgba, W, 60 + 59, 300 + 45)) === '255,0,0,255' &&
+           String(px(rgba, W, 60 + 60, 300 + 45)) === '0,0,255,255' &&
+           String(px(rgba, W, 60 + 119, 300 + 89)) === '0,0,255,255';
+  })(), f.type);
+
+  // Clean up: destroy the fixed surface (the focus fall precedes the
+  // EV_DESTROYED — kernel emit order).
+  await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: cx.sid });
+  f = await readEvent(wm);
+  check('focus falls off the destroyed surface', f.type === WMP.EV_FOCUS,
+    JSON.stringify([f.type, f.g(0)]));
+  f = await readEvent(wm);
+  check('fixed surface destroyed', f.type === WMP.EV_DESTROYED &&
+    f.g(0) === cx.sid && idle(wm), JSON.stringify([f.type, f.g(0)]));
 
   // ---- dynamic screen resolution (todos/0023): EV_SCREEN + the clamp ----
   // Park c1 (100x70 after the configure) near the bottom-right corner, then

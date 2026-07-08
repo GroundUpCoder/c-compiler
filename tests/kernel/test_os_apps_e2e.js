@@ -124,12 +124,12 @@ function sessionApps() {
   check('quake window is 320x200 (native software renderer)',
     qRow.includes('320x200'), qRow);
   check('quake requested relative mouse (r flag in wmctl list)',
-    (qRow.split('\t')[4] || '').includes('r'), qRow);
+    (qRow.split('\t')[5] || '').includes('r'), qRow);   // FLAGS col (after DST, 0024)
   check('wmctl relmove injects over the socket', out.includes('relmove-ok'));
   check('wmctl resize on fixed-res doom is refused (todos/0021)',
     out.includes('resize-refused'));
   check('doom is not resizable (no R flag in wmctl list)',
-    !(doomRow.split('\t')[4] || '').includes('R'), doomRow);
+    !(doomRow.split('\t')[5] || '').includes('R'), doomRow);   // FLAGS col (after DST, 0024)
   check('wmctl shot wrote all three surface PPMs',
     out.includes('shot-doom-ok') && out.includes('shot-gb-ok') &&
     out.includes('shot-quake-ok'));

@@ -2,10 +2,12 @@
  * control channel"). One connection per invocation to the kernel's WM
  * endpoint (wm_proto.h); unsubscribed, so the stream carries only replies.
  *
- *   wmctl list                        windows: SID PID GEOM Z FLAGS TITLE
+ *   wmctl list                        windows: SID PID GEOM DST Z FLAGS TITLE
  *   wmctl focus|min|restore|close|raise|lower SID
  *   wmctl move SID X Y
  *   wmctl resize SID W H              asks the client; applies at its ack
+ *   wmctl scale SID W H               sets a fixed-size window's on-screen
+ *                                     dst rect (todos/0024); app oblivious
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
@@ -28,6 +30,7 @@ static int usage(void) {
         "       wmctl focus|min|restore|close|raise|lower SID\n"
         "       wmctl move SID X Y\n"
         "       wmctl resize SID W H\n"
+        "       wmctl scale SID W H\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl relmove SID DX DY\n"
@@ -44,7 +47,7 @@ static int do_list(int fd) {
     if (h.type != WMP_R_LIST) { wmp_skip(fd, h.plen); return fail("LIST refused"); }
     int32_t count;
     if (wmp_read_all(fd, &count, 4) != 0) return fail("short reply");
-    printf("SID\tPID\tGEOMETRY\tZ\tFLAGS\tTITLE\n");
+    printf("SID\tPID\tGEOMETRY\tDST\tZ\tFLAGS\tTITLE\n");
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
@@ -55,8 +58,11 @@ static int do_list(int fd) {
         if (r.flags & WMP_F_RELMOUSE)   flags[3] = 'r';
         if (r.flags & WMP_F_RESIZABLE)  flags[4] = 'R';
         r.title[31] = 0;
-        printf("%d\t%d\t%dx%d+%d+%d\t%d\t%s\t%s\n",
-               r.sid, r.pid, r.w, r.h, r.x, r.y, r.z, flags, r.title);
+        char dst[32] = "-";            /* scaled viewport (todos/0024), or - */
+        if (r.dst_w != r.w || r.dst_h != r.h)
+            snprintf(dst, sizeof dst, "%dx%d", r.dst_w, r.dst_h);
+        printf("%d\t%d\t%dx%d+%d+%d\t%s\t%d\t%s\t%s\n",
+               r.sid, r.pid, r.w, r.h, r.x, r.y, dst, r.z, flags, r.title);
     }
     return 0;
 }
@@ -125,6 +131,11 @@ int main(int argc, char **argv) {
         if (argc < 5) return usage();
         int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
         return wmp_cmd(fd, WMP_RESIZE, a, 3) ? fail("resize refused") : 0;
+    }
+    if (!strcmp(cmd, "scale")) {        /* viewport scaling (todos/0024) */
+        if (argc < 5) return usage();
+        int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
+        return wmp_cmd(fd, WMP_SET_DST, a, 3) ? fail("scale refused") : 0;
     }
     if (!strcmp(cmd, "key")) {
         if (argc < 4) return usage();

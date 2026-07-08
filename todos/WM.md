@@ -304,18 +304,18 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
 - ~~**Screen geometry / VTs / scaling fixed-size clients**~~ — designed
   below ("Screen, VTs, and scaling fixed-size clients"); VT switching
   LANDED (todos/done/0022), dynamic screen resolution LANDED
-  (todos/done/0023); still queued: viewport scaling = todos/0024,
-  maximize = todos/0025.
+  (todos/done/0023), viewport scaling LANDED (todos/done/0024); still
+  queued: maximize = todos/0025.
 
 ## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
 
 Where the desktop's outer geometry stands and where it goes. All four
-pieces are committed work: VT switching landed (todos/done/0022) and
-dynamic screen resolution landed (todos/done/0023); still queued —
-scaling fixed-size clients = **todos/0024**, maximize = **todos/0025**
-(order of attack: 0024 → 0025; maximize goes last because by then it's
-nearly pure policy, dispatching on 0021's resizable flag for both
-branches).
+pieces are committed work: VT switching landed (todos/done/0022),
+dynamic screen resolution landed (todos/done/0023), scaling fixed-size
+clients landed (todos/done/0024); still queued — maximize =
+**todos/0025** (last because by now it's nearly pure policy,
+dispatching on 0021's resizable flag for both branches: configure vs
+0024 scale-to-fit).
 
 **Today** (post-0023): on VT2 the screen tracks the browser viewport
 (the #desktop pane; 1 CSS px = 1 screen px, DPR deliberately ignored);
@@ -363,23 +363,29 @@ returns to saved geometry. RESIZABLE windows only — fixed-size windows
 get the scale-to-fit below instead (Windows greys the maximize box;
 we dispatch on the same flag).
 
-**Scaling fixed-size clients** (**todos/0024**). The converged real-OS
-answer decouples buffer size from window size and lets the compositor
-map one to the other: Wayland `wp_viewport` (client buffer at native
-res, compositor scales to a dst rect), DWM DPI virtualization
-(non-DPI-aware apps bitmap-stretched, app never knows), SDL3's own
-logical presentation. Ours: a per-surface **dst w×h** in the scene
-list, buffer size untouched. Browser compositor: `drawImage` src→dst —
-free. Headless composite: nearest-neighbor loop (also what pixel-art
-wants; integer-scale snapping as a nicety for gameboy). The real work
-is input: hit-testing stays in screen coords but client-bound pointer
-records must inverse-map through the scale before the input ring.
-Policy (in /bin/wm): non-resizable surfaces become
-scalable-not-configurable — resize drags and double-click-fit adjust
-the dst rect, aspect-preserving letterbox, SURFACE_CONFIGURE never
-sent. DOOM then fits the screen with zero source changes — and its
-`WINDOW_SCALE 2` CPU pre-scale loop becomes redundant (present 640×400
-raw, let the compositor scale).
+**Scaling fixed-size clients (todos/done/0024 — LANDED 2026-07-08)**.
+The converged real-OS answer decouples buffer size from window size and
+lets the compositor map one to the other: Wayland `wp_viewport` (client
+buffer at native res, compositor scales to a dst rect), DWM DPI
+virtualization (non-DPI-aware apps bitmap-stretched, app never knows),
+SDL3's own logical presentation. Ours: a per-surface **dstW×dstH** in
+the scene (default = buffer), one op set exposed everywhere —
+`wmSetDst` / WMP `SET_DST` (+ `EV_SCALED` echo) / `wmctl scale`; the
+window record grew to 80 bytes carrying dst dims. Non-resizable
+surfaces are scalable-not-configurable; SET_DST on a RESIZABLE surface
+is refused (exclusive modes — 0025's maximize dispatches on the same
+bit). Browser compositor: per-surface scratch-canvas cache →
+`drawImage` src→dst, smoothing off. Headless composite: nearest-
+neighbor loop (integer scales replicate exactly). Hit-testing/chrome/
+clamps run on dst dims; client-bound pointer records inverse-map
+through the scale (`wmInjectPointer` stays buffer-coords by design).
+Frame drags on fixed-size surfaces rubber-band and emit **EV_SCALE_REQ**
+at release; /bin/wm answers with an aspect-fit, integer-snapped (±15%)
+SET_DST; with no WM the kernel applies the raw box. DOOM/quake/gameboy
+scale with zero source changes. Acceptance:
+`tests/browser/os-scale.mjs` (+ the inverted os-quake grip leg), 0024
+legs in test_wm/test_wm_policy/test_wm_service_e2e; dev log
+`logs/2026-07-08/viewport-scaling.md`.
 
 ## Implementation status v1 (landed 2026-07-07, todos/0013)
 

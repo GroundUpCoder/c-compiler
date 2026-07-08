@@ -24,11 +24,9 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0024` scaling fixed-size clients — per-surface dst rect
-   (wp_viewport-style); DOOM fills the screen with zero source changes
-2. `0025` maximize/restore — title double-click; configure for
+1. `0025` maximize/restore — title double-click; configure for
    resizable windows, 0024 scale-to-fit for fixed-size ones
-3. (unnumbered) a real-world WebGPU C app port — candidates via
+2. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -99,7 +97,13 @@ boot-time 800×500 constant: full-viewport VT2 (1 CSS px = 1 screen px),
 `wmSetScreen` re-callable → WMP EV_SCREEN + a kernel one-shot clamp
 (no-WM fallback), /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps, image v17
-(`logs/2026-07-08/dynamic-screen-resolution.md`).
+(`logs/2026-07-08/dynamic-screen-resolution.md`);
+`0024` **viewport scaling** — fixed-size windows scalable-not-
+configurable: per-surface dst rect (`wmSetDst`/SET_DST/`wmctl scale`),
+NN compositing both flavors, inverse-mapped input, frame drags →
+EV_SCALE_REQ → wm.c's aspect-fit + integer-snap policy (kernel raw-box
+fallback), record 80 bytes with dst dims, image v18
+(`logs/2026-07-08/viewport-scaling.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

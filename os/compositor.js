@@ -8,9 +8,12 @@
 // Pixel sources per surface (transport is per-surface, invisible to apps):
 //   surf.bitmap — gpu transport: the latest ImageBitmap the process handed
 //                 over at present (kernel closes superseded ones).
-//   surf SAB    — shm transport: front-buffer pixels; copied into a cached
-//                 ImageData only when frameSeq changes (move/z changes
-//                 redraw from the cache with no SAB traffic).
+//   surf SAB    — shm transport: front-buffer pixels; painted into a cached
+//                 per-surface scratch OffscreenCanvas only when frameSeq
+//                 changes (move/z changes redraw from the cache with no SAB
+//                 traffic), then drawImage'd at the surface's dst viewport
+//                 (todos/0024) with smoothing OFF — nearest-neighbor, the
+//                 same mapping as the headless composite.
 //
 // Canvas2D on purpose (v1): the scene is single-digit quads and the chrome
 // is rects + text — a WebGPU pass buys nothing here yet. The bitmap
@@ -30,56 +33,62 @@ function startCompositor(kernel, canvas) {
   var COL_CLOSE = rgba(K.WM_COLORS.closeBox);
   var COL_BORDER = rgba(K.WM_COLORS.border);
 
-  function surfaceImage(surf) {
+  function surfaceCanvas(surf) {
     var seq = Atomics.load(surf.i32, K.SH_SEQ);
     var c = caches.get(surf.sid);
     // Size check: after a resize ack the surface has a FRESH SAB whose seq
-    // restarts, so seq alone could collide with the stale old-size image.
-    if (c && c.seq === seq && c.img.width === surf.w && c.img.height === surf.h) return c.img;
+    // restarts, so seq alone could collide with the stale old-size pixels.
+    if (c && c.seq === seq && c.cnv.width === surf.w && c.cnv.height === surf.h) return c.cnv;
+    if (!c || c.cnv.width !== surf.w || c.cnv.height !== surf.h) {
+      var cnv = new OffscreenCanvas(surf.w, surf.h);
+      c = { seq: -1, cnv: cnv, ctx: cnv.getContext('2d') };
+      caches.set(surf.sid, c);
+    }
     var bytes = surf.w * surf.h * 4;
     var front = Atomics.load(surf.i32, K.SH_FLIP) & 1;
     // Copy out of the SAB (ImageData can't view shared memory).
     var px = new Uint8ClampedArray(bytes);
     px.set(new Uint8Array(surf.sab, K.SH_HDR_BYTES + front * bytes, bytes));
-    var img = new ImageData(px, surf.w, surf.h);
-    caches.set(surf.sid, { seq: seq, img: img });
-    return img;
+    c.ctx.putImageData(new ImageData(px, surf.w, surf.h), 0, 0);
+    c.seq = seq;
+    return c.cnv;
   }
 
   function draw() {
     var scene = kernel.wmScene();
+    // Nearest-neighbor scaling (todos/0024) — pixel-art correct, and the
+    // same mapping the headless composite uses. Re-set per frame: resizing
+    // the OffscreenCanvas (screen-resize, todos/0023) resets context state.
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = COL_DESKTOP;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
       if (s.minimized) continue;               // off screen, still in the scene
+      var dw = s.dstW, dh = s.dstH;            // on-screen viewport (todos/0024)
       // Chrome frame first (the resize border sits UNDER title+client),
       // then client pixels; the next window in z covers both — painter's
       // algorithm.
       if (!s.borderless) {
         ctx.fillStyle = COL_BORDER;
         ctx.fillRect(s.x - K.WM_BORDER, s.y - K.WM_TITLE_H - K.WM_BORDER,
-          s.w + 2 * K.WM_BORDER, K.WM_TITLE_H + s.h + 2 * K.WM_BORDER);
+          dw + 2 * K.WM_BORDER, K.WM_TITLE_H + dh + 2 * K.WM_BORDER);
       }
-      if (s.bitmap) {
-        ctx.drawImage(s.bitmap, s.x, s.y, s.w, s.h);
-      } else {
-        ctx.putImageData(surfaceImage(s), s.x, s.y);
-      }
+      ctx.drawImage(s.bitmap || surfaceCanvas(s), s.x, s.y, dw, dh);
       if (s.borderless) continue;              // taskbar-class: bare pixels
       ctx.fillStyle = s.sid === scene.focusSid ? COL_FOCUS : COL_BLUR;
-      ctx.fillRect(s.x, s.y - K.WM_TITLE_H, s.w, K.WM_TITLE_H);
+      ctx.fillRect(s.x, s.y - K.WM_TITLE_H, dw, K.WM_TITLE_H);
       ctx.fillStyle = COL_CLOSE;
-      ctx.fillRect(s.x + s.w - K.WM_CLOSE_W - K.WM_CLOSE_PAD,
+      ctx.fillRect(s.x + dw - K.WM_CLOSE_W - K.WM_CLOSE_PAD,
         s.y - K.WM_TITLE_H + K.WM_CLOSE_PAD, K.WM_CLOSE_W, K.WM_CLOSE_W);
       ctx.fillStyle = '#000';
       ctx.font = 'bold 11px sans-serif';
       ctx.textBaseline = 'middle';
-      ctx.fillText('x', s.x + s.w - K.WM_CLOSE_W - K.WM_CLOSE_PAD + 5,
+      ctx.fillText('x', s.x + dw - K.WM_CLOSE_W - K.WM_CLOSE_PAD + 5,
         s.y - K.WM_TITLE_H + K.WM_CLOSE_PAD + K.WM_CLOSE_W / 2 + 1);
       ctx.fillStyle = '#fff';
       ctx.fillText(s.title || ('pid ' + s.pid), s.x + 6, s.y - K.WM_TITLE_H / 2,
-        Math.max(8, s.w - K.WM_CLOSE_W - 16));
+        Math.max(8, dw - K.WM_CLOSE_W - 16));
     }
     // Resize rubber band (todos/0019): Win95 outline semantics — the drag
     // only previews; the client renegotiates once, at release.

@@ -9,10 +9,16 @@
  *   - SDL_EVENT_QUIT (the title-bar close box) exits 0
  *   - SDL_EVENT_WINDOW_RESIZED re-fetches the surface and redraws at the
  *     new size (the todos/0019 client-resize acceptance app)
+ *
+ * `winbox fixed` creates the window WITHOUT SDL_WINDOW_RESIZABLE, titled
+ * "fixbox" — the fixed-size acceptance app for viewport scaling
+ * (todos/0024): frame drags scale its dst rect instead of configuring,
+ * and the app never knows.
  */
 #include <SDL.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define W 240
 #define H 160
@@ -57,9 +63,11 @@ static void frame_cb(void) {
     SDL_UpdateWindowSurface(win);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    int fixed = argc > 1 && strcmp(argv[1], "fixed") == 0;
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("winbox", W, H, SDL_WINDOW_RESIZABLE);
+    win = SDL_CreateWindow(fixed ? "fixbox" : "winbox", W, H,
+                           fixed ? 0 : SDL_WINDOW_RESIZABLE);
     if (!win) return 3;
     surf = SDL_GetWindowSurface(win);
     __setAnimationFrameFunc(frame_cb);

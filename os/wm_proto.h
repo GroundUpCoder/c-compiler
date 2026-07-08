@@ -29,6 +29,11 @@ enum {
     WMP_RESIZE = 0x16,                 /* { sid, w, h }: asks the client;
                                           geometry changes at its ack ->
                                           EV_CONFIGURED (todos/0019) */
+    WMP_SET_DST = 0x17,                /* { sid, w, h }: viewport scaling
+                                          (todos/0024) — set the on-screen
+                                          dst rect of a FIXED-SIZE surface;
+                                          buffer untouched, app oblivious.
+                                          R_ERR on a resizable surface */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     /* replies */
@@ -40,12 +45,20 @@ enum {
     WMP_EV_SCREEN = 0x87,              /* { w, h }: screen resolution changed
                                           (todos/0023); the kernel has already
                                           clamped window positions */
+    WMP_EV_SCALED = 0x88,              /* { sid, dstW, dstH }: a SET_DST landed
+                                          (todos/0024) */
+    WMP_EV_SCALE_REQ = 0x89,           /* { sid, w, h }: frame drag released on
+                                          a fixed-size surface at that box —
+                                          policy answers with an aspect-
+                                          preserving SET_DST (todos/0024) */
 };
 
-/* The fixed 72-byte window record (EV_CREATED payload; R_LIST carries
- * u32 count then count of these). No padding: 10 i32 + 32 bytes. */
+/* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries
+ * u32 count then count of these). No padding: 12 i32 + 32 bytes.
+ * dst_w/dst_h: the on-screen viewport (todos/0024) — equals w/h unless
+ * the surface is scaled. */
 typedef struct {
-    int32_t sid, pid, x, y, w, h, z, flags, frame_seq, reserved;
+    int32_t sid, pid, x, y, w, h, z, flags, frame_seq, dst_w, dst_h, reserved;
     char title[32];                    /* NUL-padded, always terminated */
 } wmp_rec;
 #define WMP_F_FOCUSED    1

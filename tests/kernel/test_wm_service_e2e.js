@@ -47,6 +47,14 @@ const script = [
   'wmctl list',
   'wmctl shot screen /root/s.ppm && head -c 2 /root/s.ppm && echo',
   'wmctl focus 999 || echo bad-sid-fails',
+  'winbox fixed &',                              // viewport scaling (todos/0024)
+  'sleep 2.5',
+  'FSID=$(wmctl list | grep fixbox$ | sed "s/[^0-9].*//")',
+  'wmctl scale $FSID 480 320 && echo scale-ok',
+  'wmctl resize $FSID 300 200 || echo resize-refused',
+  'wmctl scale $WSID 300 200 || echo scale-refused',
+  'echo ==list6',
+  'wmctl list',
   'kill $WMPID',                                 // crash the WM
   'sleep 0.5',
   'echo ==list4',
@@ -68,7 +76,7 @@ function section(name) {
   return m.length > 1 ? m[1].split('==')[0] : '';
 }
 const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
-      l4 = section('list4'), l5 = section('list5');
+      l4 = section('list4'), l5 = section('list5'), l6 = section('list6');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 
@@ -93,6 +101,17 @@ check('taskbar click restores + focuses winbox', win3.includes('f---'), win3);
 // ---- shot + errors ----
 check('wmctl shot screen writes a PPM', out.includes('P6'), out.slice(0, 400));
 check('wmctl focus on a bogus sid fails', out.includes('bad-sid-fails'));
+
+// ---- viewport scaling (todos/0024): wmctl scale on the real binaries ----
+check('wmctl scale on a fixed-size window succeeds', out.includes('scale-ok'));
+check('wmctl resize on a fixed-size window is refused', out.includes('resize-refused'));
+check('wmctl scale on a RESIZABLE window is refused', out.includes('scale-refused'));
+const fix6 = row(l6, 'fixbox');
+check('fixbox scaled: buffer geometry intact, DST column shows 480x320',
+  fix6.includes('240x160+') && fix6.includes('\t480x320\t'), fix6);
+check('fixbox is not resizable (no R flag)', fix6 !== '' && !fix6.includes('R'), fix6);
+const win6 = row(l6, 'winbox');
+check('winbox unscaled: DST column is -', win6.includes('\t-\t'), win6);
 
 // ---- crashed-WM story ----
 check('WM killed: taskbar gone, endpoint still serves wmctl',

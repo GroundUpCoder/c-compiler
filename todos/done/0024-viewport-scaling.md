@@ -1,6 +1,9 @@
 # 0024 — scaling fixed-size clients (per-surface dst rect)
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log
+  `logs/2026-07-08/viewport-scaling.md`). Decided in-item: SET_DST on a
+  resizable surface is REFUSED (exclusive modes; SET_FLAGS bit2 grant
+  snaps dst back to the buffer); integer-snap lives in wm.c policy.
 - **Depends**: — (no hard dependency; ordered after 0023 — DOOM filling
   the screen is the payoff and wants a full-viewport screen)
 - **Design**: `todos/WM.md` ("Screen, VTs, and scaling fixed-size

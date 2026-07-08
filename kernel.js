@@ -128,7 +128,9 @@ var OP = {
   // bit round-trips to the UI bridge as a pointer-lock request
   // (onPointerLock). The resizable bit (todos/0021, SDL3 semantics: only
   // SDL_WINDOW_RESIZABLE windows may be resized) gates every resize path
-  // — chrome drag zones, wmResize, WMP RESIZE.
+  // — wmResize, WMP RESIZE. Frame drag zones exist on BOTH kinds since
+  // todos/0024, but dispatch on the bit: resizable -> configure the client;
+  // fixed-size -> scale its dst rect (wmSetDst; the app never knows).
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
   SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
@@ -260,10 +262,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * arrive strictly in request order on the same connection, so a client
  * that subscribes just skips event frames while awaiting a reply.
  *
- * Window record (fixed 72 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
+ * Window record (fixed 80 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
  * flags (bit0 focused, bit1 minimized, bit2 borderless, bit3 relative-
- * mouse, bit4 resizable), frameSeq, reserved, then 32 bytes NUL-padded
- * UTF-8 title.
+ * mouse, bit4 resizable), frameSeq, dstW, dstH (the on-screen viewport,
+ * todos/0024 — equals w/h unless scaled), reserved, then 32 bytes
+ * NUL-padded UTF-8 title.
  *
  * Commands -> replies:
  *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
@@ -280,6 +283,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   changes only at its SURFACE_CONFIGURE ack
  *                                   -> EV_CONFIGURED; R_ERR on a surface
  *                                   without flag bit4 resizable, todos/0021)
+ *   SET_DST { sid, w, h }        -> R_OK | R_ERR   (viewport scaling, todos/
+ *                                   0024: set the on-screen dst rect of a
+ *                                   FIXED-SIZE surface — buffer untouched,
+ *                                   app oblivious; R_ERR on a resizable
+ *                                   surface, which configures instead)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
@@ -294,21 +302,27 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * is now the new size) | EV_SCREEN { w, h } (the screen changed resolution,
  * todos/0023 — RandR/wl_output shape: the display owner set a new mode via
  * wmSetScreen; the kernel one-shot-clamps window positions itself so the
- * no-WM fallback stays usable, and a subscribed WM re-lays its furniture).
+ * no-WM fallback stays usable, and a subscribed WM re-lays its furniture) |
+ * EV_SCALED { sid, dstW, dstH } (a SET_DST landed; the on-screen viewport
+ * is now dstW x dstH, todos/0024) | EV_SCALE_REQ { sid, w, h } (the user
+ * released a frame drag on a FIXED-SIZE surface at that box — the wp_
+ * viewport shape: policy answers with an aspect-preserving SET_DST; only
+ * emitted with a subscriber, else the kernel applies the raw box itself).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
 var WMP = {
   SUBSCRIBE: 0x01, LIST: 0x02,
   MOVE: 0x10, FOCUS: 0x11, MINIMIZE: 0x12, RESTORE: 0x13, RESTACK: 0x14,
-  CLOSE_REQ: 0x15, RESIZE: 0x16,
+  CLOSE_REQ: 0x15, RESIZE: 0x16, SET_DST: 0x17,
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
+  EV_SCALED: 0x88, EV_SCALE_REQ: 0x89,
 };
-var WMP_REC_BYTES = 72;
+var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
 
 /* Kernel-drawn chrome, v1 (WM.md "Decorations — staged"): fixed Win95-ish
@@ -876,14 +890,18 @@ function Kernel(opts) {
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;
   this._wmDrag = null;        // { sid, dx, dy } during a title-bar drag
   this._wmResizeDrag = null;  // { sid, ex, ey, baseW, baseH, x0, y0, curW, curH }
                               // during a border resize drag (todos/0019);
-                              // ex/ey: 1 = that axis tracks the pointer
+                              // ex/ey: 1 = that axis tracks the pointer.
+                              // On a fixed-size surface the same drag is a
+                              // SCALE drag (todos/0024): base/cur are dst
+                              // dims and release goes to wmSetDst/the WM
+                              // instead of a configure.
   this._wmScreen = { w: (opts.screen && opts.screen.w) || 1024,
                      h: (opts.screen && opts.screen.h) || 768 };
   this._wmVersion = 0;        // bumped on any scene change (create/destroy/
@@ -1915,7 +1933,10 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var n = sid - 1;
       var surf = {
         sid: sid, pid: pcb.pid, sab: fb, i32: i32, u8: new Uint8Array(fb),
-        w: w, h: h, title: typeof req.title === 'string' ? req.title.slice(0, 128) : '',
+        w: w, h: h,
+        dstW: w, dstH: h,         // on-screen viewport (todos/0024); wmSetDst
+                                  // scales fixed-size surfaces, buffer untouched
+        title: typeof req.title === 'string' ? req.title.slice(0, 128) : '',
         x: 8 + ((n * 24) % Math.max(64, this._wmScreen.w >> 2)),
         y: WM_TITLE_H + 8 + ((n * 24) % Math.max(64, this._wmScreen.h >> 2)),
         bitmap: null,             // gpu transport: latest ImageBitmap (browser)
@@ -1946,6 +1967,12 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       sf.borderless = !!(fl & 1);
       sf.relativeMouse = !!(fl & 2);
       sf.resizable = !!(fl & 4);
+      // Resizable and scaled are exclusive modes (todos/0024): granting
+      // bit2 snaps the viewport back to the buffer (resizable => dst == w/h).
+      if (sf.resizable && (sf.dstW !== sf.w || sf.dstH !== sf.h)) {
+        sf.dstW = sf.w; sf.dstH = sf.h;
+        this._wmEmit(WMP.EV_SCALED, [sf.sid, sf.dstW, sf.dstH]);
+      }
       this._wmVersion++;
       this._respond(pcb, {});
       this._wmSyncPointerLock();
@@ -1989,6 +2016,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       sc.sab = fb2; sc.i32 = ci32; sc.u8 = new Uint8Array(fb2);
       sc.w = cw; sc.h = ch;
+      sc.dstW = cw; sc.dstH = ch;   // configure implies resizable: dst tracks
+                                    // the buffer (never scaled, todos/0024)
       if (sc.pendingConfigure.w !== cw || sc.pendingConfigure.h !== ch) {
         // Superseded while the client was renegotiating: latest wins — keep
         // the (valid, newer-than-old) buffer and re-issue the configure.
@@ -2355,8 +2384,9 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     else if (kind === 'move') {
       ds.x = Math.round(x - d.dx);
       ds.y = Math.round(y - d.dy);
-      // Keep the title bar reachable: clamp to the screen.
-      ds.x = Math.max(40 - ds.w, Math.min(ds.x, this._wmScreen.w - 40));
+      // Keep the title bar reachable: clamp to the screen (on-screen size
+      // is the dst rect, todos/0024).
+      ds.x = Math.max(40 - ds.dstW, Math.min(ds.x, this._wmScreen.w - 40));
       ds.y = Math.max(WM_TITLE_H, Math.min(ds.y, this._wmScreen.h - 8));
       this._wmVersion++;
       return 'drag';
@@ -2385,45 +2415,56 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       this._wmResizeDrag = null;
       this._wmVersion++;
       if (rdend.curW !== rdend.baseW || rdend.curH !== rdend.baseH) {
-        this.wmResize(rdend.sid, rdend.curW, rdend.curH);
+        if (rs.resizable) {
+          this.wmResize(rdend.sid, rdend.curW, rdend.curH);
+        } else if (this._wmSubs.size) {
+          // Scale drag on a fixed-size surface (todos/0024): policy decides
+          // the dst — /bin/wm answers with an aspect-preserving SET_DST.
+          this._wmEmit(WMP.EV_SCALE_REQ, [rdend.sid, rdend.curW, rdend.curH]);
+        } else {
+          // No-WM fallback: apply the raw dragged box.
+          this.wmSetDst(rdend.sid, rdend.curW, rdend.curH);
+        }
       }
       return 'resize-end';
     }
   }
-  // Hit test, topmost first. Minimized surfaces aren't on screen;
-  // borderless ones (taskbar-class) have no title-bar band and no frame.
+  // Hit test, topmost first, against the ON-SCREEN rect — the dst viewport
+  // (todos/0024; equals the buffer unless scaled): what you click is what
+  // you see. Minimized surfaces aren't on screen; borderless ones (taskbar-
+  // class) have no title-bar band and no frame.
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized) continue;
+    var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
-      x >= s.x && x < s.x + s.w && y >= s.y - WM_TITLE_H && y < s.y;
-    var inClient = x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h;
+      x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
+    var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
     // The resize frame: a WM_BORDER band around title+client (todos/0019).
     var inFrame = !s.borderless && !inTitle && !inClient &&
-      x >= s.x - WM_BORDER && x < s.x + s.w + WM_BORDER &&
-      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + s.h + WM_BORDER;
+      x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER &&
+      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER;
     if (inFrame) {
       if (kind === 'down') {
         this.wmFocus(s.sid);
-        // Non-resizable surfaces (no SDL_WINDOW_RESIZABLE, todos/0021) have
-        // no drag zones: the whole frame is a focus affordance, like the
-        // left/top edges. Fixed-res apps (doom, quake) never see a resize.
-        if (!s.resizable) return 'border';
-        var ex = x >= s.x + s.w ? 1 : 0;               // right edge -> E
-        var ey = y >= s.y + s.h ? 1 : 0;               // bottom edge -> S
+        // Drag zones on E/S/SE edges. Both kinds get them since todos/0024;
+        // the release dispatches on the resizable bit — configure (0019) vs
+        // scale the dst rect (fixed-res apps like doom stay oblivious).
+        var ex = x >= s.x + dw ? 1 : 0;                // right edge -> E
+        var ey = y >= s.y + dh ? 1 : 0;                // bottom edge -> S
         // A WM_GRIP corner zone widens E/S into SE near the corner.
-        if (ex && y >= s.y + s.h - WM_GRIP) ey = 1;
-        if (ey && x >= s.x + s.w - WM_GRIP) ex = 1;
+        if (ex && y >= s.y + dh - WM_GRIP) ey = 1;
+        if (ey && x >= s.x + dw - WM_GRIP) ex = 1;
         if (!ex && !ey) return 'border';               // left/top: focus only
         this._wmResizeDrag = { sid: s.sid, ex: ex, ey: ey, x0: x, y0: y,
-                               baseW: s.w, baseH: s.h, curW: s.w, curH: s.h };
+                               baseW: dw, baseH: dh, curW: dw, curH: dh };
         return 'resize-start';
       }
       return 'border';
     }
     if (inTitle) {
       if (kind === 'down') {
-        var cx0 = s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD;
+        var cx0 = s.x + dw - WM_CLOSE_W - WM_CLOSE_PAD;
         var cy0 = s.y - WM_TITLE_H + WM_CLOSE_PAD;
         if (x >= cx0 && x < cx0 + WM_CLOSE_W && y >= cy0 && y < cy0 + WM_CLOSE_W) {
           // Close = request-close: SDL_EVENT_QUIT to the owner (graceful;
@@ -2451,7 +2492,10 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           this._wmPtrLockWanted && !this._wmPtrLockActive) {
         this._onPointerLock(true);
       }
-      var lx = x - s.x, ly = y - s.y;
+      // Inverse-map through the scale (todos/0024): the client thinks in
+      // BUFFER coordinates; screen offsets shrink/grow by w/dstW. Exact
+      // identity when unscaled (dst == buffer).
+      var lx = (x - s.x) * s.w / dw, ly = (y - s.y) * s.h / dh;
       if (kind === 'move') {
         this._wmEventTo(s.sid, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
       } else if (kind === 'down' || kind === 'up') {
@@ -2477,6 +2521,7 @@ Kernel.prototype.wmList = function () {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s) continue;
     out.push({ sid: s.sid, pid: s.pid, x: s.x, y: s.y, w: s.w, h: s.h,
+               dstW: s.dstW, dstH: s.dstH,
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
                relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
@@ -2538,6 +2583,24 @@ Kernel.prototype.wmResize = function (sid, w, h) {
     s.pendingConfigure = prev;
     return false;
   }
+  return true;
+};
+
+/* Set the on-screen dst viewport of a FIXED-SIZE surface (todos/0024 —
+ * the wp_viewport / DWM-DPI-virtualization shape): the buffer keeps its
+ * size, the compositor maps it to dstW x dstH (nearest-neighbor), input
+ * inverse-maps, and the app never knows. Resizable surfaces refuse — they
+ * configure (todos/0019/0021); the two modes are exclusive by design, and
+ * maximize (todos/0025) dispatches on the same bit. Echoes EV_SCALED. */
+Kernel.prototype.wmSetDst = function (sid, w, h) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s || s.resizable) return false;
+  w = w | 0; h = h | 0;
+  if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
+  if (w === s.dstW && h === s.dstH) return true;    // no-op
+  s.dstW = w; s.dstH = h;
+  this._wmVersion++;
+  this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
   return true;
 };
 
@@ -2608,9 +2671,11 @@ Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
   return false;
 };
 
-/* Screenshot one surface: a copy of its front (shm) framebuffer. gpu-kind
- * surfaces have no CPU pixels here — the browser compositor owns readback
- * for those (headless they run shm, so tests are covered). */
+/* Screenshot one surface: a copy of its front (shm) framebuffer, at BUFFER
+ * resolution — scaling (todos/0024) is a composite affordance; the app's
+ * own pixels are what an agent wants here. gpu-kind surfaces have no CPU
+ * pixels — the browser compositor owns readback for those (headless they
+ * run shm, so tests are covered). */
 Kernel.prototype.wmScreenshot = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return null;
@@ -2624,7 +2689,8 @@ Kernel.prototype.wmScreenshot = function (sid) {
 /* Screenshot the screen: CPU composite of the scene in z-order — desktop
  * fill, then each surface's front buffer + its kernel chrome (solid fills;
  * text is a browser-compositor affordance, not part of the deterministic
- * composite). ~40 lines of row blits, exactly as WM.md promised. */
+ * composite). Row blits when unscaled; a nearest-neighbor loop maps the
+ * buffer into the dst viewport when scaled (todos/0024). */
 Kernel.prototype.wmScreenshotScreen = function () {
   var W = this._wmScreen.w, H = this._wmScreen.h;
   var out = new Uint8Array(W * H * 4);
@@ -2643,26 +2709,44 @@ Kernel.prototype.wmScreenshotScreen = function () {
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized) continue;
+    var dw = s.dstW, dh = s.dstH;      // on-screen rect (todos/0024)
     // Chrome: resize frame under title bar + close box (borderless surfaces
     // draw bare). The frame is one outer fill; title + client cover its
     // middle — cheap, and exactly the hit-test geometry.
     if (!s.borderless) {
       fill(s.x - WM_BORDER, s.y - WM_TITLE_H - WM_BORDER,
-        s.w + 2 * WM_BORDER, WM_TITLE_H + s.h + 2 * WM_BORDER, WM_COLORS.border);
-      fill(s.x, s.y - WM_TITLE_H, s.w, WM_TITLE_H,
+        dw + 2 * WM_BORDER, WM_TITLE_H + dh + 2 * WM_BORDER, WM_COLORS.border);
+      fill(s.x, s.y - WM_TITLE_H, dw, WM_TITLE_H,
         s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
-      fill(s.x + s.w - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
+      fill(s.x + dw - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
         WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
     }
     // Client pixels: front buffer rows, clipped to the screen.
     var front = Atomics.load(s.i32, SH_FLIP) & 1;
     var base = SH_HDR_BYTES + front * s.w * s.h * 4;
     var sx0 = Math.max(0, -s.x), sy0 = Math.max(0, -s.y);
-    var sx1 = Math.min(s.w, W - s.x), sy1 = Math.min(s.h, H - s.y);
-    for (var sy = sy0; sy < sy1; sy++) {
-      var src = base + (sy * s.w + sx0) * 4;
-      var dst = ((s.y + sy) * W + (s.x + sx0)) * 4;
-      out.set(s.u8.subarray(src, src + (sx1 - sx0) * 4), dst);
+    var sx1 = Math.min(dw, W - s.x), sy1 = Math.min(dh, H - s.y);
+    if (dw === s.w && dh === s.h) {
+      // Unscaled: straight row blits.
+      for (var sy = sy0; sy < sy1; sy++) {
+        var src = base + (sy * s.w + sx0) * 4;
+        var dst = ((s.y + sy) * W + (s.x + sx0)) * 4;
+        out.set(s.u8.subarray(src, src + (sx1 - sx0) * 4), dst);
+      }
+    } else {
+      // Scaled (todos/0024): nearest-neighbor — src = floor(dst * buf/dst),
+      // which at an integer scale k is exact pixel replication (what pixel-
+      // art wants, and what the goldens assert).
+      for (var dy = sy0; dy < sy1; dy++) {
+        var srow = base + Math.floor(dy * s.h / dh) * s.w * 4;
+        var drow = ((s.y + dy) * W + s.x) * 4;
+        for (var dx = sx0; dx < sx1; dx++) {
+          var si = srow + Math.floor(dx * s.w / dw) * 4;
+          var di = drow + dx * 4;
+          out[di] = s.u8[si]; out[di + 1] = s.u8[si + 1];
+          out[di + 2] = s.u8[si + 2]; out[di + 3] = s.u8[si + 3];
+        }
+      }
     }
   }
   return { w: W, h: H, rgba: out };
@@ -2685,7 +2769,7 @@ Kernel.prototype.wmSetScreen = function (w, h) {
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.borderless) continue;
-    var nx = Math.max(40 - s.w, Math.min(s.x, w - 40));
+    var nx = Math.max(40 - s.dstW, Math.min(s.x, w - 40));
     var ny = Math.max(WM_TITLE_H, Math.min(s.y, h - 8));
     if (nx === s.x && ny === s.y) continue;
     s.x = nx; s.y = ny;
@@ -2734,7 +2818,7 @@ Kernel.prototype._wmpFrame = function (type, i32s, tail) {
   return buf;
 };
 
-/* The fixed 72-byte window record (see the WMP block comment). */
+/* The fixed 80-byte window record (see the WMP block comment). */
 Kernel.prototype._wmpRecord = function (s) {
   var rec = new Uint8Array(WMP_REC_BYTES);
   var dv = new DataView(rec.buffer);
@@ -2742,9 +2826,10 @@ Kernel.prototype._wmpRecord = function (s) {
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
               (s.resizable ? 16 : 0);
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
-                this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ), 0];
+                this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
+                s.dstW, s.dstH, 0];
   for (var i = 0; i < fields.length; i++) dv.setInt32(i * 4, fields[i] | 0, true);
-  rec.set(wmpTitle32(s.title), 40);
+  rec.set(wmpTitle32(s.title), 48);
   return rec;
 };
 
@@ -2817,6 +2902,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     }
     case WMP.MOVE: ok(this.wmMove(g(0), g(1), g(2))); break;
     case WMP.RESIZE: ok(this.wmResize(g(0), g(1), g(2))); break;
+    case WMP.SET_DST: ok(this.wmSetDst(g(0), g(1), g(2))); break;
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores

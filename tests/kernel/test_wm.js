@@ -368,9 +368,11 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmResize below the floor is refused', kernel.wmResize(1, 8, 8) === false);
   check('wmResize on a bogus sid is refused', kernel.wmResize(999, 64, 64) === false);
 
-  // ---- SDL_WINDOW_RESIZABLE gating (todos/0021): a window created without
-  // flags bit2 is fixed-size — frame drag zones are focus-only, wmResize is
-  // refused, and nothing is ever left pending ----
+  // ---- SDL_WINDOW_RESIZABLE gating (todos/0021) + viewport scaling
+  // (todos/0024): a window created without flags bit2 is fixed-size —
+  // wmResize is refused with nothing left pending; its frame drag zones
+  // START A SCALE DRAG instead (rubber band; with no WM subscribed the
+  // release applies the raw box as the dst rect, buffer untouched) ----
   const fbFix = makeFb(50, 40);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbFix.sab, ring: null });
   const cFix = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 50, h: 40, title: 'fixed' });
@@ -378,6 +380,10 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     kernel.wmList().find(s => s.sid === cFix.sid).resizable === false);
   check('wmList: bit2 create is resizable',
     kernel.wmList().find(s => s.sid === 1).resizable === true);
+  check('create defaults dst to the buffer dims', (() => {
+    const s = kernel.wmList().find(s => s.sid === cFix.sid);
+    return s.dstW === 50 && s.dstH === 40;
+  })());
   check('wmResize on a non-resizable surface is refused',
     kernel.wmResize(cFix.sid, 100, 90) === false);
   check('refusal leaves nothing pending, no event to the client',
@@ -386,19 +392,90 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   kernel.wmMove(cFix.sid, 400, 100);
   kernel.wmFocus(cFix.sid);                            // topmost for hit tests
   let fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});   // SE grip
-  kernel.wmPointer('up', 400 + 50 + 1, 100 + 40 + 1, {});
-  check('SE grip on a fixed window is focus-only (no drag starts)',
-    fact === 'border' && kernel.wmScene().resizeDrag === null, fact);
-  fact = kernel.wmPointer('down', 400 + 50 + 2, 100 + 10, {});           // E edge
-  kernel.wmPointer('up', 400 + 50 + 2, 100 + 10, {});
-  check('E edge on a fixed window is focus-only', fact === 'border', fact);
-  fact = kernel.wmPointer('down', 400 + 10, 100 + 40 + 2, {});           // S edge
-  kernel.wmPointer('up', 400 + 10, 100 + 40 + 2, {});
-  check('S edge on a fixed window is focus-only', fact === 'border', fact);
-  // SET_FLAGS bit2 grants resizability at runtime (and the zones light up).
+  check('SE grip on a fixed window starts a SCALE drag (todos/0024)',
+    fact === 'resize-start', fact);
+  fact = kernel.wmPointer('move', 400 + 50 + 51, 100 + 40 + 41, {});
+  const srd = kernel.wmScene().resizeDrag;
+  check('scale drag previews only (rubber band, no dst change yet)',
+    fact === 'resize' && srd && srd.curW === 100 && srd.curH === 80 &&
+    kernel.wmList().find(s => s.sid === cFix.sid).dstW === 50, JSON.stringify(srd));
+  fact = kernel.wmPointer('up', 400 + 50 + 51, 100 + 40 + 41, {});
+  const scaled = kernel.wmList().find(s => s.sid === cFix.sid);
+  check('release applies the raw dst (no-WM fallback): buffer untouched, no client event',
+    fact === 'resize-end' && scaled.dstW === 100 && scaled.dstH === 80 &&
+    scaled.w === 50 && scaled.h === 40 && scaled.configurePending === false &&
+    drain(ring1).length === 0, JSON.stringify(scaled));
+
+  // Scaled composite (2x): nearest-neighbor is exact pixel replication.
+  // Present left half red / right half blue into the 50x40 buffer.
+  {
+    const front = Atomics.load(fbFix.i32, K.SH_FLIP) & 1;
+    const back = 1 - front;
+    const base = K.SH_HDR_BYTES + back * 50 * 40 * 4;
+    for (let y = 0; y < 40; y++) {
+      for (let x = 0; x < 50; x++) {
+        fbFix.u8.set(x < 25 ? [255, 0, 0, 255] : [0, 0, 255, 255], base + (y * 50 + x) * 4);
+      }
+    }
+    Atomics.store(fbFix.i32, K.SH_FLIP, back);
+    Atomics.add(fbFix.i32, K.SH_SEQ, 1);
+  }
+  screen = kernel.wmScreenshotScreen();
+  check('scaled composite: 2x NN left half red', String(px(screen, 400 + 2, 100 + 2)) === '255,0,0,255'
+    && String(px(screen, 400 + 49, 100 + 79)) === '255,0,0,255',
+    [px(screen, 402, 102), px(screen, 449, 179)]);
+  check('scaled composite: 2x NN right half blue at the dst edge',
+    String(px(screen, 400 + 50, 100 + 2)) === '0,0,255,255' &&
+    String(px(screen, 400 + 99, 100 + 79)) === '0,0,255,255',
+    [px(screen, 450, 102), px(screen, 499, 179)]);
+  check('chrome tracks the dst rect (frame border past the scaled edge, title bar above)',
+    String(px(screen, 400 + 100 + 2, 100 + 40)) === String(K.WM_COLORS.border) &&
+    String(px(screen, 400 + 60, 100 - 2)) === String(K.WM_COLORS.titleFocused),
+    [px(screen, 502, 140), px(screen, 460, 98)]);
+
+  // Input: hit-testing sees the dst rect; client-bound coords inverse-map
+  // to BUFFER coordinates; agent injection stays buffer-coords verbatim.
+  fact = kernel.wmPointer('down', 400 + 90, 100 + 60, { button: 1 });   // dst (90,60)
+  kernel.wmPointer('up', 400 + 90, 100 + 60, { button: 1 });
+  evs = drain(ring1);
+  check('client click inside the scaled area inverse-maps (90,60 -> 45,30)',
+    fact === 'client' && evs.length === 2 && evs[0].win === cFix.sid &&
+    evs[0].f[0] === 45 && evs[0].f[1] === 30, JSON.stringify(evs));
+  fact = kernel.wmPointer('move', 400 + 95, 100 + 75, { buttons: 0 });  // beyond the BUFFER, inside the dst
+  evs = drain(ring1);
+  check('hit test covers the whole dst rect (what you see is what you click)',
+    fact === 'client' && evs.length === 1 && evs[0].f[0] === 47.5 && evs[0].f[1] === 37.5,
+    JSON.stringify([fact, evs]));
+  kernel.wmInjectPointer(cFix.sid, 'down', 3, 4, { button: 1 });
+  evs = drain(ring1);
+  check('injection stays in buffer coords (post-hit-test, resolution-independent)',
+    evs.length === 1 && evs[0].f[0] === 3 && evs[0].f[1] === 4, JSON.stringify(evs));
+
+  // wmSetDst validation: resizable surfaces refuse (they configure), floors/
+  // caps like wmResize, bogus sids refuse.
+  check('wmSetDst on a RESIZABLE surface is refused', kernel.wmSetDst(1, 200, 100) === false);
+  check('wmSetDst below the floor is refused', kernel.wmSetDst(cFix.sid, 8, 8) === false);
+  check('wmSetDst on a bogus sid is refused', kernel.wmSetDst(999, 64, 64) === false);
+
+  // The wmSetScreen one-shot clamp (todos/0023) measures the SCALED size.
+  kernel.wmMove(cFix.sid, -90, 100);       // dst is 100 wide: floor is 40-100
+  kernel.wmSetScreen(632, 480);
+  check('screen clamp uses the dst width (x -> 40 - dstW)',
+    kernel.wmList().find(s => s.sid === cFix.sid).x === -60,
+    kernel.wmList().find(s => s.sid === cFix.sid).x);
+  kernel.wmSetScreen(640, 480);
+  kernel.wmMove(cFix.sid, 400, 100);
+
+  // SET_FLAGS bit2 grants resizability at runtime (and the zones light up);
+  // the grant snaps the viewport back to the buffer — resizable and scaled
+  // are exclusive modes (todos/0024).
   await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: cFix.sid, flags: 4 });
   check('SET_FLAGS bit2 makes it resizable',
     kernel.wmList().find(s => s.sid === cFix.sid).resizable === true);
+  check('the grant resets dst to the buffer (exclusive modes)', (() => {
+    const s = kernel.wmList().find(s => s.sid === cFix.sid);
+    return s.dstW === 50 && s.dstH === 40;
+  })());
   fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});
   check('SE grip works after the grant', fact === 'resize-start', fact);
   kernel.wmPointer('up', 400 + 50 + 1, 100 + 40 + 1, {});   // no-move: no configure
