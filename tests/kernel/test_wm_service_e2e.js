@@ -166,6 +166,13 @@ const script = [
   'sleep 0.3',
   'echo ==cyc5',
   'wmctl list',
+  // ---- z layers (todos/0038): the real wm.c pins its furniture — the
+  // taskbar rides the TOP layer, the desktop the BOTTOM one; a raise (or
+  // any later create) must stop below the bar. ----
+  'wmctl raise $WSID',
+  'sleep 0.3',
+  'echo ==layer1',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -187,7 +194,8 @@ const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       d1 = section('desk1'), d2 = section('desk2'), d3 = section('desk3'),
       b1 = section('bar1'), b2 = section('bar2'), b3 = section('bar3'),
       c1s = section('cyc1'), c2s = section('cyc2'), c3s = section('cyc3'),
-      c4s = section('cyc4'), c5s = section('cyc5');
+      c4s = section('cyc4'), c5s = section('cyc5'),
+      lay1 = section('layer1');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
@@ -324,6 +332,28 @@ check('minimized window skipped: cycle -1 lands on the 3rd-recent (W6)',
 check('forward cycle walks to the LRU window (focus moved, minimized still skipped)',
   fsidOf(c5s) !== fsidOf(c4s) && fsidOf(c5s) !== fixSid && fsidOf(c5s) > 0,
   JSON.stringify([fsidOf(c5s), fsidOf(c4s)]));
+
+// ---- z layers (todos/0038): wm.c pins the taskbar to the TOP layer and
+// the desktop to the BOTTOM one; the raised winbox stops below the bar.
+// The wmctl FLAGS column grows a layer char (T/B) for pinned surfaces.
+const zOf = (line) => parseInt((line || '').split('\t')[4]);
+{
+  const zAll = lay1.split('\n').filter(l => /\t/.test(l) && !/^SID\t/.test(l)).map(zOf);
+  check('taskbar rides the top of z after a wmctl raise (todos/0038)',
+    row(lay1, 'taskbar') !== '' && zOf(row(lay1, 'taskbar')) === Math.max(...zAll),
+    JSON.stringify(lay1));
+  check('raised winbox sits directly below the pinned bar',
+    zOf(row(lay1, 'taskbar')) - 1 ===
+      Math.max(...lay1.split('\n').filter(l => l.endsWith('\twinbox')).map(zOf)),
+    JSON.stringify(lay1));
+  check('desktop layer stays pinned at the bottom of z', zOf(row(lay1, 'desktop')) === 0,
+    row(lay1, 'desktop'));
+  check('FLAGS carry the layer char (taskbar T, desktop B, winbox neither)',
+    (row(lay1, 'taskbar').split('\t')[5] || '').includes('T') &&
+    (row(lay1, 'desktop').split('\t')[5] || '').includes('B') &&
+    !/[TB]/.test(row(lay1, 'winbox').split('\t')[5] || ''),
+    JSON.stringify([row(lay1, 'taskbar'), row(lay1, 'desktop'), row(lay1, 'winbox')]));
+}
 
 // Icon pixels: read the shot back OUT of the root (writable) volume (the
 // 0040 flip: /root lives on the root volume, full path preserved) and

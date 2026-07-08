@@ -151,6 +151,7 @@ function rec(f, off) {                 // parse an 80-byte window record
            z: f.dv.getInt32(b + 24, true), flags: f.dv.getInt32(b + 28, true),
            frameSeq: f.dv.getInt32(b + 32, true),
            dstW: f.dv.getInt32(b + 36, true), dstH: f.dv.getInt32(b + 40, true),
+           layer: f.dv.getInt32(b + 44, true),
            title };
 }
 const cmd = async (conn, type, i32s) => {
@@ -721,6 +722,90 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     const r = drainRing(ring1);
     return r.length === 2 && r[0].w[0] === 43;
   })());
+
+  // ---- z layers (todos/0038): SET_LAYER pins furniture above (+1, the
+  // taskbar) or below (-1, the desktop layer) the normal windows; EVERY
+  // z-order op — create-raise, focus-raise, restack — stays within its
+  // layer, so a window can never cover the bar or sink under the desktop.
+  // The record's word 11 (ex-reserved) carries the layer. MUST MATCH
+  // os/wm_proto.h + the kernel.js WMP block. ----
+  f = await cmd(wm2, WMP.SET_LAYER, [ct.sid, 1]);
+  check('SET_LAYER top -> R_OK', f.type === WMP.R_OK);
+  check('the pinned taskbar jumps above the focused window',
+    kernel.wmList()[kernel.wmList().length - 1].sid === ct.sid,
+    JSON.stringify(kernel.wmList().map(s => [s.sid, s.title])));
+  f = await cmd(wm2, WMP.LIST);
+  check('record word 11 carries the layer', f.type === WMP.R_LIST && (() => {
+    let bar = null, app = null;
+    for (let i = 0; i < f.g(0); i++) {
+      const r0 = rec(f, 4 + i * K.WMP_REC_BYTES);
+      if (r0.sid === ct.sid) bar = r0.layer;
+      if (r0.sid === c1.sid) app = r0.layer;
+    }
+    return bar === 1 && app === 0;
+  })());
+  // The 0038 repro class: a NEW window creates above the old top but must
+  // stay below the pinned bar (create-raise cannot cross the boundary).
+  const fbL = makeFb(48, 32);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbL.sab, ring: null });
+  const cl = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 48, h: 32, title: 'newwin' });
+  await readEvent(wm2);                                // EV_CREATED
+  await readEvent(wm2);                                // EV_FOCUS
+  {
+    const zs = kernel.wmList();
+    check('create raises to the top of the NORMAL layer only',
+      zs[zs.length - 1].sid === ct.sid && zs[zs.length - 2].sid === cl.sid,
+      JSON.stringify(zs.map(s => [s.sid, s.title])));
+  }
+  f = await cmd(wm2, WMP.RESTACK, [c1.sid, 0]);        // raise
+  check('RESTACK raise stops below the pinned taskbar', f.type === WMP.R_OK &&
+    kernel.wmList()[kernel.wmList().length - 1].sid === ct.sid &&
+    kernel.wmList()[kernel.wmList().length - 2].sid === c1.sid,
+    JSON.stringify(kernel.wmList().map(s => [s.sid, s.title])));
+  f = await cmd(wm2, WMP.FOCUS, [c1.sid]);
+  check('FOCUS raise stops below the pinned taskbar too', f.type === WMP.R_OK &&
+    kernel.wmList()[kernel.wmList().length - 1].sid === ct.sid &&
+    kernel.wmScene().focusSid === c1.sid);
+  await readEvent(wm2);                                // EV_FOCUS echo
+  // The WM.md repro: a window parked over the bottom strip no longer
+  // covers the bar — composite and hit-test both resolve the top layer.
+  // c1 (100x70, front buffer [50,60,70]) at y 430 overlaps the taskbar
+  // rows (456..479); the strip pixel must stay the bar's [10,20,30].
+  f = await cmd(wm2, WMP.MOVE, [c1.sid, 300, 430]);
+  check('park the window over the strip -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MOVED echo
+  {
+    const scr = kernel.wmScreenshotScreen();
+    check('composite: the strip pixel is still the taskbar (bar above)',
+      String(px(scr.rgba, scr.w, 320, 460)) === '10,20,30,255' &&
+      String(px(scr.rgba, scr.w, 320, 445)) === '50,60,70,255',
+      JSON.stringify([px(scr.rgba, scr.w, 320, 460), px(scr.rgba, scr.w, 320, 445)]));
+    const fBefore = kernel.wmScene().focusSid;
+    check('hit test on the strip resolves the bar (furniture stays clickable)',
+      kernel.wmPointer('down', 320, 460, {}) === 'client' &&
+      kernel.wmScene().focusSid === fBefore);
+    kernel.wmPointer('up', 320, 460, {});
+  }
+  // The mirrored problem (the desktop layer's bottom pin): a lowered
+  // window must never sink UNDER a bottom-pinned surface.
+  f = await cmd(wm2, WMP.SET_LAYER, [cl.sid, -1]);
+  check('SET_LAYER bottom -> R_OK + bottom of z', f.type === WMP.R_OK &&
+    kernel.wmList()[0].sid === cl.sid,
+    JSON.stringify(kernel.wmList().map(s => [s.sid, s.title])));
+  f = await cmd(wm2, WMP.RESTACK, [c1.sid, 1]);        // lower
+  check('RESTACK lower stops above the bottom layer', f.type === WMP.R_OK &&
+    kernel.wmList()[0].sid === cl.sid && kernel.wmList()[1].sid === c1.sid,
+    JSON.stringify(kernel.wmList().map(s => [s.sid, s.title])));
+  f = await cmd(wm2, WMP.FOCUS, [cl.sid]);             // focus never re-layers
+  check('focusing the bottom-layer window keeps it pinned', f.type === WMP.R_OK &&
+    kernel.wmList()[0].sid === cl.sid && kernel.wmScene().focusSid === cl.sid);
+  await readEvent(wm2);                                // EV_FOCUS echo
+  f = await cmd(wm2, WMP.SET_LAYER, [cl.sid, 0]);
+  check('SET_LAYER back to normal -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.SET_LAYER, [999, 1]);
+  check('SET_LAYER bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  f = await cmd(wm2, WMP.SET_LAYER, [c1.sid, 2]);
+  check('SET_LAYER out-of-range layer -> R_ERR', f.type === WMP.R_ERR);
 
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);
