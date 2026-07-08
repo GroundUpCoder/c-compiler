@@ -1,6 +1,8 @@
 # 0040 — read-only system image: mkimage + the layout flip
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log
+  `logs/2026-07-08/read-only-system-image.md`; in-item decisions
+  recorded in `DISK-IMAGE.md`)
 - **Depends**: 0026 (landed). Complements 0037 (blob version = module
   cache key). Subsumes the old unnumbered `tools/mkimage.js` entry.
 - **Design**: `todos/DISK-IMAGE.md` (decisions settled 2026-07-08 —

@@ -237,6 +237,66 @@ test('escape: mkdir/unlink through an escaping directory symlink', function () {
   assert(f.usr.stat('/tmp.txt') === null, 'unlink through the link');
 });
 
+// ---- read-only volume under the mount (todos/0040) ----
+// The flipped reference layout: writable root at '/', a READONLY system
+// volume at /usr, /bin -> /usr/bin, /usr/local -> /var/local. The kernel
+// funnels fs RPCs through this exact surface, so EROFS/_lastError here IS
+// what a process sees.
+
+function fresh0040() {
+  var sysStore = new MemoryByteStore(4 << 20);
+  var rw = BLOCK_FS.createV4(sysStore, { noDevNodes: true });   // bake stand-in
+  rw.mkdir('/bin', 0o755);
+  rw.mkdir('/share', 0o755);
+  var fd = rw.open('/bin/sh', O_WRONLY | O_CREAT, 0o755);
+  rw.write(fd, encode('SH'), 2);
+  rw.close(fd);
+  rw.symlink('/var/local', '/local');
+  var sys = BLOCK_FS.createV4(sysStore, { readonly: true });
+  var root = BLOCK_FS.createV4(new MemoryByteStore(4 << 20));
+  var m = new BLOCK_FS.MountFS({ '/': root, '/usr': sys });
+  m.mkdir('/var', 0o755);
+  m.mkdir('/var/local', 0o755);
+  m.mkdir('/var/local/bin', 0o755);
+  m.symlink('/usr/bin', '/bin');
+  return { m: m, root: root };
+}
+
+test('readonly /usr: every mutator on the RPC surface is EROFS', function () {
+  var f = fresh0040();
+  assert(f.m.open('/usr/bin/evil', O_WRONLY | O_CREAT, 0o755) === null &&
+    f.m._lastError === 'EROFS', 'creat');
+  assert(f.m.open('/bin/evil', O_WRONLY | O_CREAT, 0o755) === null &&
+    f.m._lastError === 'EROFS', 'creat via the /bin symlink');
+  assert(f.m.open('/usr/bin/sh', O_WRONLY, 0) === null && f.m._lastError === 'EROFS', 'open for write');
+  assert(f.m.unlink('/usr/bin/sh') === null && f.m._lastError === 'EROFS', 'unlink');
+  assert(f.m.mkdir('/usr/newdir', 0o755) === null && f.m._lastError === 'EROFS', 'mkdir');
+  assert(f.m.rmdir('/usr/share') === null && f.m._lastError === 'EROFS', 'rmdir');
+  assert(f.m.rename('/usr/bin/sh', '/usr/bin/sh2') === null && f.m._lastError === 'EROFS', 'rename');
+  assert(f.m.link('/usr/bin/sh', '/usr/bin/sh2') === null && f.m._lastError === 'EROFS', 'link');
+  assert(f.m.symlink('/x', '/usr/lnk') === null && f.m._lastError === 'EROFS', 'symlink');
+  assert(f.m.chmod('/usr/bin/sh', 0o600) === null && f.m._lastError === 'EROFS', 'chmod');
+  assert(f.m.utime('/usr/bin/sh', 1, 2) === null && f.m._lastError === 'EROFS', 'utime');
+  var fd = f.m.open('/usr/bin/sh', 0, 0);
+  assert(fd !== null, 'O_RDONLY still opens');
+  assert(f.m.write(fd, encode('X'), 1) === null && f.m._lastError === 'EROFS', 'write on a read fd');
+  assert(f.m.ftruncate(fd, 0) === null && f.m._lastError === 'EROFS', 'ftruncate');
+  f.m.close(fd);
+});
+
+test('readonly /usr: reads, the /bin symlink, and the /usr/local escape work', function () {
+  var f = fresh0040();
+  assertEq(readFile(f.m, '/bin/sh'), 'SH', 'binary loads via /bin -> /usr/bin');
+  assertEq(readFile(f.m, '/usr/bin/sh'), 'SH', 'and directly');
+  writeFile(f.m, '/usr/local/bin/mytool', 'MINE', 0o755);
+  assertEq(readFile(f.m, '/var/local/bin/mytool'), 'MINE', '/usr/local escaped to /var/local');
+  assert(f.root.stat('/var/local/bin/mytool') !== null, 'on the writable volume');
+  var h = f.m.opendir('/usr/bin'), names = [];
+  for (var e; (e = f.m.readdir(h)) !== null;) if (e.name[0] !== '.') names.push(e.name);
+  f.m.closedir(h);
+  assert(names.indexOf('sh') >= 0, 'readdir of the RO volume: ' + names.join(','));
+});
+
 // ---- error propagation + resolve ----
 
 test('_lastError propagates from the routed volume', function () {

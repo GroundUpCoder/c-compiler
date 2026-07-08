@@ -1,201 +1,206 @@
 {
-  "version": 25,
-  "dirs": [
-    "/bin",
-    "/etc",
-    "/etc/fonts",
-    "/etc/menu",
-    "/root",
-    "/root/Desktop",
-    "/root/id1",
-    "/root/roms",
-    "/run",
-    "/tmp"
-  ],
-  "files": {
-    "/bin/sh": {
-      "project": "vendor/busybox/bin.json"
-    },
-    "/bin/psh": {
-      "c": "protoshell.c"
-    },
-    "/bin/cc": {
-      "c": "cc.c"
-    },
-    "/bin/winbox": {
-      "c": "winbox.c"
-    },
-    "/bin/gpubox": {
-      "c": "gpubox.c"
-    },
-    "/bin/wm": {
-      "c": "wm.c",
-      "hdrs": ["wm_proto.h"]
-    },
-    "/bin/wmctl": {
-      "c": "wmctl.c",
-      "hdrs": ["wm_proto.h"]
-    },
-    "/root/hello.c": {
-      "text": "hello.c"
-    },
-    "/etc/menu/doom": {
-      "link": "/bin/doom"
-    },
-    "/etc/menu/quake": {
-      "link": "/bin/quake"
-    },
-    "/etc/menu/gameboy": {
-      "link": "/bin/gameboy"
-    },
-    "/etc/menu/term": {
-      "link": "/bin/term"
-    },
-    "/etc/menu/winbox": {
-      "link": "/bin/winbox"
-    },
-    "/etc/menu/gpubox": {
-      "link": "/bin/gpubox"
-    },
-    "/etc/menu/snake": {
-      "content": "term snake\n"
-    },
-    "/root/Desktop/doom": {
-      "link": "/bin/doom"
-    },
-    "/root/Desktop/quake": {
-      "link": "/bin/quake"
-    },
-    "/root/Desktop/gameboy": {
-      "link": "/bin/gameboy"
-    },
-    "/root/Desktop/term": {
-      "link": "/bin/term"
-    },
-    "/bin/doom": {
-      "project": "vendor/doom/bin.json"
-    },
-    "/bin/snake": {
-      "project": "vendor/snake/bin.json"
-    },
-    "/bin/gameboy": {
-      "project": "vendor/gameboy/bin.json"
-    },
-    "/bin/quake": {
-      "project": "vendor/quake/bin.json"
-    },
-    "/bin/term": {
-      "project": "os/term/bin.json"
-    },
-    "/etc/fonts/mono.ttf": {
-      "bin": "vendor/freetype/demo/robotomono.ttf"
-    },
-    "/root/doom1.wad": {
-      "bin": "vendor/doom/data/doom1.wad"
-    },
-    "/root/id1/pak0.pak": {
-      "bin": "vendor/quake/data/id1/pak0.pak"
-    },
-    "/root/id1/autoexec.cfg": {
-      "bin": "vendor/quake/data/id1/autoexec.cfg"
-    },
-    "/root/roms/PokemonBlue.gb": {
-      "bin": "vendor/gameboy/roms/PokemonBlue.gb",
-      "optional": true
-    },
-    "/root/roms/SuperMarioDeluxe.gbc": {
-      "bin": "vendor/gameboy/roms/SuperMarioDeluxe.gbc",
-      "optional": true
-    },
-    "/bin/coreutils": {
-      "project": "vendor/busybox/coreutils.json"
-    },
-    "/bin/[": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/basename": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/cat": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/cp": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/dirname": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/echo": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/egrep": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/false": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/fgrep": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/grep": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/head": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/kill": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/ln": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/ls": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/mkdir": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/mv": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/printf": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/pwd": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/rm": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/rmdir": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/sed": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/sleep": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/sort": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/tail": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/test": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/touch": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/true": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/vi": {
-      "link": "/bin/coreutils"
-    },
-    "/bin/wc": {
-      "link": "/bin/coreutils"
+  "version": 26,
+  "system": {
+    "dirs": [
+      "/usr/bin",
+      "/usr/share",
+      "/usr/share/fonts",
+      "/usr/share/menu"
+    ],
+    "files": {
+      "/usr/bin/sh": {
+        "project": "vendor/busybox/bin.json"
+      },
+      "/usr/bin/psh": {
+        "c": "protoshell.c"
+      },
+      "/usr/bin/cc": {
+        "c": "cc.c"
+      },
+      "/usr/bin/winbox": {
+        "c": "winbox.c"
+      },
+      "/usr/bin/gpubox": {
+        "c": "gpubox.c"
+      },
+      "/usr/bin/wm": {
+        "c": "wm.c",
+        "hdrs": ["wm_proto.h"]
+      },
+      "/usr/bin/wmctl": {
+        "c": "wmctl.c",
+        "hdrs": ["wm_proto.h"]
+      },
+      "/usr/bin/doom": {
+        "project": "vendor/doom/bin.json"
+      },
+      "/usr/bin/snake": {
+        "project": "vendor/snake/bin.json"
+      },
+      "/usr/bin/gameboy": {
+        "project": "vendor/gameboy/bin.json"
+      },
+      "/usr/bin/quake": {
+        "project": "vendor/quake/bin.json"
+      },
+      "/usr/bin/term": {
+        "project": "os/term/bin.json"
+      },
+      "/usr/share/menu/doom": {
+        "link": "/usr/bin/doom"
+      },
+      "/usr/share/menu/quake": {
+        "link": "/usr/bin/quake"
+      },
+      "/usr/share/menu/gameboy": {
+        "link": "/usr/bin/gameboy"
+      },
+      "/usr/share/menu/term": {
+        "link": "/usr/bin/term"
+      },
+      "/usr/share/menu/winbox": {
+        "link": "/usr/bin/winbox"
+      },
+      "/usr/share/menu/gpubox": {
+        "link": "/usr/bin/gpubox"
+      },
+      "/usr/share/menu/snake": {
+        "content": "term snake\n"
+      },
+      "/usr/share/fonts/mono.ttf": {
+        "bin": "vendor/freetype/demo/robotomono.ttf"
+      },
+      "/usr/bin/coreutils": {
+        "project": "vendor/busybox/coreutils.json"
+      },
+      "/usr/bin/[": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/basename": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/cat": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/cp": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/dirname": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/echo": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/egrep": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/false": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/fgrep": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/grep": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/head": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/kill": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/ln": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/ls": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/mkdir": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/mv": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/printf": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/pwd": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/rm": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/rmdir": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/sed": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/sleep": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/sort": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/tail": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/test": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/touch": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/true": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/vi": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/wc": {
+        "link": "/usr/bin/coreutils"
+      }
+    }
+  },
+  "user": {
+    "dirs": [
+      "/root/Desktop",
+      "/root/id1",
+      "/root/roms"
+    ],
+    "files": {
+      "/root/hello.c": {
+        "text": "hello.c"
+      },
+      "/root/Desktop/doom": {
+        "link": "/usr/bin/doom"
+      },
+      "/root/Desktop/quake": {
+        "link": "/usr/bin/quake"
+      },
+      "/root/Desktop/gameboy": {
+        "link": "/usr/bin/gameboy"
+      },
+      "/root/Desktop/term": {
+        "link": "/usr/bin/term"
+      },
+      "/root/doom1.wad": {
+        "bin": "vendor/doom/data/doom1.wad"
+      },
+      "/root/id1/pak0.pak": {
+        "bin": "vendor/quake/data/id1/pak0.pak"
+      },
+      "/root/id1/autoexec.cfg": {
+        "bin": "vendor/quake/data/id1/autoexec.cfg"
+      },
+      "/root/roms/PokemonBlue.gb": {
+        "bin": "vendor/gameboy/roms/PokemonBlue.gb",
+        "optional": true
+      },
+      "/root/roms/SuperMarioDeluxe.gbc": {
+        "bin": "vendor/gameboy/roms/SuperMarioDeluxe.gbc",
+        "optional": true
+      }
     }
   }
 }

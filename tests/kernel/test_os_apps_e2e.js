@@ -39,7 +39,7 @@ const HAVE_ROM = fs.existsSync(path.join(ROOT, 'vendor/gameboy/roms/PokemonBlue.
 const GB_CMD = HAVE_ROM ? 'gameboy /root/roms/PokemonBlue.gb &' : 'gameboy &';
 
 /* ---- optional bin entries: a missing asset skips, a required one fails ----
- * Direct seedImage unit check (in-memory BlockFS) so the graceful path is
+ * Direct seedEntries unit check (in-memory BlockFS) so the graceful path is
  * exercised on EVERY checkout, including ones where the ROMs exist. */
 async function testOptionalSeeding() {
   const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
@@ -53,7 +53,7 @@ async function testOptionalSeeding() {
     log: () => {},
   };
   const kfs1 = mkfs();
-  const seeded = await COMMON.seedImage(kfs1, { version: 1, dirs: ['/etc'], files: {
+  const seeded = await COMMON.seedEntries(kfs1, { dirs: ['/etc'], files: {
     '/a': { bin: 'present.bin' },
     '/b': { bin: 'missing.bin', optional: true },
     '/c': { bin: 'present.bin' },
@@ -63,7 +63,7 @@ async function testOptionalSeeding() {
   check('  ...later entries still seeded', kfs1.stat('/c') !== null);
   check('  ...the missing path is absent, not empty', kfs1.stat('/b') === null);
 
-  const err = await COMMON.seedImage(mkfs(), { version: 1, dirs: ['/etc'], files: {
+  const err = await COMMON.seedEntries(mkfs(), { dirs: ['/etc'], files: {
     '/b': { bin: 'missing.bin' },
   } }, io).then(() => null, (e) => e);
   check('required missing bin entry still fails the boot', err !== null);

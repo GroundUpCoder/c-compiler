@@ -1,9 +1,10 @@
 // kernel-worker.js — the OS's kernel worker (todos/0004; layout in
 // todos/OS.md "Reference build"). Runs once per tab: mounts BlockFS on OPFS
 // (SyncAccessHandle is worker-only — this is WHY the kernel lives in a
-// worker), seeds the image on first boot, owns the process table + tty +
-// fd layer (kernel.js), backs /bin/cc with compiler.js, and spawns one
-// nested process worker per pid.
+// worker) — a writable root volume at / plus the read-only baked system
+// blob at /usr (todos/0040; materialized by fetch-or-bake when missing or
+// stale), owns the process table + tty + fd layer (kernel.js), backs
+// /bin/cc with compiler.js, and spawns one nested process worker per pid.
 //
 // Protocol with the page (os.html, a dumb UI bridge):
 //   page -> kernel: {type:'input', data}         raw tty bytes/keystrokes
@@ -99,22 +100,27 @@ function createWorker(procSpec) {
   };
 }
 
+// Open (creating if absent) a raw OPFS-backed byte store.
+async function opfsStore(name) {
+  var root = await navigator.storage.getDirectory();
+  var fh = await root.getFileHandle(name, { create: true });
+  var h = await fh.createSyncAccessHandle();
+  return new BLOCK_FS.SyncAccessHandleStore(h);
+}
+
+// Copy a fetched blob into an OPFS store, superblock LAST: a crash mid-copy
+// leaves no magic, so the next boot sees "stale" and re-materializes.
+function materializeBlob(store, bytes) {
+  store.resize(0);
+  if (bytes.length > 256) store.setBytes(256, bytes.subarray(256));
+  store.setBytes(0, bytes.subarray(0, Math.min(256, bytes.length)));
+  store.flush();
+}
+
 async function boot() {
   post({ type: 'boot-log', msg: 'mounting BlockFS on OPFS…' });
-  // Two volumes (todos/0026): system at /, user at /root, MountFS routing on
-  // top — a system reseed (image-version bump) never touches user files. The
-  // pre-split single-volume os.v4.img is left orphaned in OPFS by design.
-  // (explicit v3Names so a standalone page's legacy workspace.img on the
-  // same origin is never "migrated" into an OS volume — those files have
-  // never existed, so the legacy path is inert.)
-  var wsSys = await BLOCK_FS.openWorkspace({ v4Name: 'os-system.v4.img', v3Name: 'os-system.v3.img' });
-  var wsUsr = await BLOCK_FS.openWorkspace({ v4Name: 'os-user.v4.img', v3Name: 'os-user.v3.img',
-                                             noDevNodes: true }); // /dev is the system volume's
-  var kfs = new BLOCK_FS.MountFS({ '/': wsSys.fs, '/root': wsUsr.fs });
-  var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
-
   var manifest = await (await fetch('image.json')).json();
-  await OS_COMMON.seedImage(kfs, manifest, {
+  var seedIo = {
     readAsset: function (name) {
       return fetch(name).then(function (r) {
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
@@ -122,24 +128,23 @@ async function boot() {
       });
     },
     // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries;
-    // seedImage's chain awaits the promise.
+    // seedEntries' chain awaits the promise.
     readBinary: function (p) {
       return fetch('../' + p).then(function (r) {
         if (!r.ok) throw new Error(p + ': HTTP ' + r.status);
         return r.arrayBuffer();
       }).then(function (ab) { return new Uint8Array(ab); });
     },
-    compile: ccCompile,
     // project entries build repo-relative bin.json trees; the compiler
     // needs a SYNCHRONOUS file reader, so use sync XHR — legal in a
-    // worker, and seeding is a one-off (cached in the image afterwards).
+    // worker, and baking is a one-off (cached in the blob afterwards).
     buildProject: function (proj) {
       // Memoize reads INCLUDING misses: include resolution probes several
       // directories per #include across ~40 TUs, which is ~18k lookups for
       // the hush build but only a few hundred distinct paths — uncached,
       // each one is a BLOCKING localhost round trip and first boot spends
       // ~7s in XHR instead of ~1.5s compiling. Safe because the tree can't
-      // change mid-seed.
+      // change mid-bake.
       var xhrCache = new Map();
       return OS_COMMON.buildProject(CompilerJS, proj, function (p) {
         if (xhrCache.has(p)) {
@@ -159,7 +164,54 @@ async function boot() {
       });
     },
     log: function (m) { post({ type: 'boot-log', msg: m }); },
-  });
+  };
+
+  // The system blob (todos/0040): a sealed, read-only BlockFS image mounted
+  // at /usr. Materialize when the OPFS copy is missing or version-stale
+  // ("upgrade = swap the blob"): prefer a prebaked os/os-system.img served
+  // beside the page (tools/mkimage.js output — zero compilation on the boot
+  // path), else bake in-worker (the no-build-step dev path). New OPFS names
+  // orphan the pre-flip os-system.v4.img/os-user.v4.img pair by design
+  // (the 0026 precedent).
+  var sysStore = await opfsStore('os-system.v5.img');
+  var sysMode = 'reused';
+  if (OS_COMMON.bakedVersion(BLOCK_FS, sysStore) < (manifest.version | 0)) {
+    sysMode = null;
+    try {
+      var r = await fetch('os-system.img');
+      if (r.ok) {
+        var blob = new Uint8Array(await r.arrayBuffer());
+        var memStore = new BLOCK_FS.MemoryByteStore(blob.length);
+        memStore.setBytes(0, blob);
+        if (OS_COMMON.bakedVersion(BLOCK_FS, memStore) >= (manifest.version | 0)) {
+          post({ type: 'boot-log', msg: 'installing prebaked system image (v' +
+            OS_COMMON.bakedVersion(BLOCK_FS, memStore) + ')…' });
+          materializeBlob(sysStore, blob);
+          sysMode = 'fetched';
+        }
+      }
+    } catch (e) { /* no prebaked blob served — fall through to the bake */ }
+    if (!sysMode) {
+      await OS_COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, seedIo);
+      sysMode = 'baked';
+    }
+  }
+  var sysFs = BLOCK_FS.createV4(sysStore, { readonly: true });
+
+  // The root (writable) volume owns '/' — /etc, /var, /tmp, /root, /dev,
+  // /run. Seeded (skeleton + the manifest's `user` section) exactly once,
+  // when freshly created; upgrades never write here. (Explicit v3Name so a
+  // standalone page's legacy workspace.img on the same origin is never
+  // "migrated" into an OS volume — that file has never existed, so the
+  // legacy path is inert.)
+  var wsRoot = await BLOCK_FS.openWorkspace({ v4Name: 'os-root.v5.img', v3Name: 'os-root.v3.img' });
+  var kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs });
+  if (wsRoot.mode === 'fresh') {
+    post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
+    OS_COMMON.initRootVolume(kfs);
+    await OS_COMMON.seedEntries(kfs, manifest.user, seedIo);
+  }
+  var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
 
   kernel = new KERNEL.Kernel({
     fs: kfs,
@@ -191,11 +243,11 @@ async function boot() {
   await kernel.boot({
     path: '/bin/sh',
     argv: ['sh'],
-    envp: ['PATH=/bin', 'HOME=/root', 'TERM=xterm-256color'],
+    envp: ['PATH=/usr/local/bin:/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
   });
-  await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/bin'] });
-  post({ type: 'ready', mode: wsSys.mode });
+  await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/usr/local/bin:/bin'] });
+  post({ type: 'ready', mode: sysMode + '/' + wsRoot.mode });
 
   var queued = pending; pending = [];
   queued.forEach(function (m) { self.onmessage({ data: m }); });

@@ -104,8 +104,9 @@ async function run() {
   r = await BLOCK_FS.openWorkspace({ viewLegacy: true });
   eq(r.mode, 'legacy-readonly', 'viewLegacy -> legacy-readonly');
   eq(rfile(r.fs, '/docs/note.txt'), 'legacy v3 content', 'legacy view reads v3 data');
-  let threw = false; try { wfile(r.fs, '/x.txt', 'no'); } catch (e) { threw = true; }
-  ok(threw, 'legacy view rejects writes');
+  // Clean refusal (todos/0040): _readonly makes open() itself return EROFS.
+  const wfd = r.fs.open('/x.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  ok(wfd === null && r.fs._lastError === 'EROFS', 'legacy view rejects writes');
 
   // ---- 5. Toggle with no legacy image present ----
   env = makeFakeOPFS(); Object.defineProperty(globalThis, "navigator", { value: env.navigator, configurable: true });

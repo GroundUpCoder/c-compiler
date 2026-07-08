@@ -1,23 +1,26 @@
 #!/usr/bin/env node
 // boot.js — headless boot of the reference OS (todos/0004; OS.md
 // "agent-friendly by construction"). Same kernel, same image manifest, same
-// protoshell as os/os.html — but under plain Node with the tty on stdio, so
+// shell as os/os.html — but under plain Node with the tty on stdio, so
 // agents and CI drive the OS with pipes and exit codes:
 //
 //   echo 'ls /' | node os/boot.js
 //   printf 'cc hello.c && ./a.out\nexit\n' | node os/boot.js
 //   node os/boot.js                    # interactive (raw-mode terminal)
 //
-// The OS lives on TWO volumes (todos/0026 — MountFS): a system volume at /
-// and a user volume mounted at /root, each a plain-file BlockFS image. First
-// boot seeds both from os/image.json (system paths on the system volume,
-// /root/... on the user volume); later boots reuse them, so files survive
-// "reboots" — and a system reseed (version bump / --fresh-system) never
-// touches user files.
+// The OS lives on TWO volumes (todos/0026 + the 0040 flip): a WRITABLE root
+// volume at `/` (/etc, /var, /tmp, /root, /dev, /run — user territory, never
+// touched by upgrades) and a READ-ONLY baked system blob mounted at `/usr`
+// (`/bin` is a root-volume symlink to /usr/bin). The blob is baked here on
+// demand — missing or version-stale system image -> re-bake from
+// os/image.json (the same pipeline as tools/mkimage.js); the root volume is
+// seeded once, when freshly created, from the manifest's `user` section.
+// Upgrades are therefore "swap the blob": user files can't be touched.
 //
-//   --image=PATH   system image file (default: os/os-system.img); the user
-//                  image lives beside it (foo.img -> foo-user.img)
-//   --fresh        discard BOTH images and re-seed
+//   --image=PATH   system image file (default: os/os-system.img); the root
+//                  image lives beside it (foo-system.img -> foo-root.img)
+//   --fresh        discard BOTH images: re-bake + re-seed
+//   --fresh-system re-bake only the system blob (user files survive)
 //   --quiet        suppress boot progress on stderr
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -39,7 +42,7 @@ const COMMON = require(path.join(__dirname, 'os-common.js'));
 /* ---- args ---- */
 let imagePath = path.join(__dirname, 'os-system.img');
 let freshBoot = false;
-let freshSystem = false;   // discard only the system volume (user files survive)
+let freshSystem = false;   // re-bake only the system blob (user files survive)
 let quiet = false;
 let dumpState = false;
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
@@ -55,135 +58,122 @@ for (const a of process.argv.slice(2)) {
     process.exit(2);
   }
 }
-// The user volume lives beside the system image: foo-system.img or foo.img
-// -> foo-user.img (default pair: os-system.img + os-user.img).
-const userImagePath = imagePath.endsWith('-system.img')
-  ? imagePath.slice(0, -11) + '-user.img'
+// The root (writable) volume lives beside the system image: foo-system.img
+// or foo.img -> foo-root.img (default pair: os-system.img + os-root.img).
+const rootImagePath = imagePath.endsWith('-system.img')
+  ? imagePath.slice(0, -11) + '-root.img'
   : imagePath.endsWith('.img')
-    ? imagePath.slice(0, -4) + '-user.img'
-    : imagePath + '-user';
+    ? imagePath.slice(0, -4) + '-root.img'
+    : imagePath + '-root';
 const bootLog = quiet ? () => {} : (m) => process.stderr.write('[boot] ' + m + '\n');
 
-/* ---- NodeFileStore: the ByteStore interface over a plain file ----
- * The headless twin of host.js's SyncAccessHandleStore (OPFS). */
-function NodeFileStore(filePath, fresh) {
-  if (fresh) { try { fs.unlinkSync(filePath); } catch (e) {} }
-  this._fd = fs.openSync(filePath, fs.existsSync(filePath) ? 'r+' : 'w+');
-  this._tmp4 = new Uint8Array(4);
-  this._tmpDV = new DataView(this._tmp4.buffer);
-}
-NodeFileStore.prototype.getUint32 = function (off) {
-  this._tmp4.fill(0);
-  fs.readSync(this._fd, this._tmp4, 0, 4, off);
-  return this._tmpDV.getUint32(0, true);
+/* ---- the seed/bake io (repo-relative assets, synchronous reads) ---- */
+const seedIo = {
+  readAsset: (name) => fs.readFileSync(path.join(__dirname, name), 'utf-8'),
+  // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries
+  readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
+  // project entries (busybox hush) are repo-relative multi-file builds
+  buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
+    (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
+  log: bootLog,
 };
-NodeFileStore.prototype.setUint32 = function (off, val) {
-  this._tmpDV.setUint32(0, val, true);
-  fs.writeSync(this._fd, this._tmp4, 0, 4, off);
-};
-NodeFileStore.prototype.getBytes = function (off, len) {
-  const buf = new Uint8Array(len);
-  if (len > 0) fs.readSync(this._fd, buf, 0, len, off);
-  return buf;
-};
-NodeFileStore.prototype.setBytes = function (off, data) {
-  if (data.length > 0) fs.writeSync(this._fd, data, 0, data.length, off);
-};
-NodeFileStore.prototype.size = function () { return fs.fstatSync(this._fd).size; };
-NodeFileStore.prototype.resize = function (newSize) { fs.ftruncateSync(this._fd, newSize); };
-NodeFileStore.prototype.flush = function () { fs.fsyncSync(this._fd); };
-NodeFileStore.prototype.close = function () { fs.closeSync(this._fd); };
-
-/* ---- mount + seed ----
- * Two volumes (todos/0026): system at /, user at /root, MountFS routing on
- * top. Discarding/reseeding the system image never touches the user image —
- * that's the whole point of the split. */
-const store = new NodeFileStore(imagePath, freshBoot || freshSystem);
-const userStore = new NodeFileStore(userImagePath, freshBoot);
-const kfs = new BLOCK_FS.MountFS({
-  '/': BLOCK_FS.createV4(store),
-  '/root': BLOCK_FS.createV4(userStore, { noDevNodes: true }), // /dev is the system volume's
-});
-const ccCompile = COMMON.createCcDriver(CompilerJS, kfs);
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'), 'utf-8'));
 
-/* ---- the system ---- */
-const interactive = !!process.stdin.isTTY;
-
-const kernel = new K.Kernel({
-  fs: kfs,
-  createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
-  loadImage: (p) => COMMON.readFileBytes(kfs, p),
-  compile: ccCompile,
-  onOutput: (pid, fd, bytes) => {
-    (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(bytes));
-  },
-  onHalt: (status) => {
-    store.flush();
-    store.close();
-    userStore.flush();
-    userStore.close();
-    // POSIX-style: exit code for a clean init exit, 128+sig if it died.
-    const sig = status & 0x7f;
-    process.exit(sig ? 128 + sig : (status >> 8) & 0xff);
-  },
-  log: quiet ? () => {} : (m) => process.stderr.write('[kernel] ' + m + '\n'),
-});
-
-const tty = kernel.createTty({
-  cols: process.stdout.columns || 80,
-  rows: process.stdout.rows || 24,
-  // Echo/edit control bytes matter only when a human is typing; under piped
-  // stdin (agents, CI) dropping them keeps stdout byte-exact program output.
-  output: interactive ? (b) => process.stdout.write(Buffer.from(b)) : () => {},
-  // A human terminal makes fd 1/2 tty-kind (isatty true -> the shell goes
-  // interactive: prompt, line editing, job control). Piped runs keep plain
-  // output channels so stdout stays byte-exact.
-  interactiveOut: ttyOut || (interactive && !!process.stdout.isTTY),
-});
-
-/* ---- stdio <-> tty bridge ---- */
-if (interactive) {
-  process.stdin.setRawMode(true);          // the KERNEL owns the line discipline
-  process.stdout.on('resize', () => {
-    tty.resize(process.stdout.columns || 80, process.stdout.rows || 24);
-  });
-}
-process.stdin.on('data', (chunk) => tty.input(new Uint8Array(chunk)));
-process.stdin.on('end', () => tty.eof());
-process.stdin.resume();
-
-/* ---- debug: periodic kernel-state dump (development aid) ---- */
-if (dumpState) {
-  setInterval(() => {
-    kernel._procs.forEach((pcb) => {
-      const st = Atomics.load(pcb.i32, 4 /* KP_RPC_STATE */);
-      const op = Atomics.load(pcb.i32, 5 /* KP_RPC_OP */);
-      process.stderr.write(`[state] pid ${pcb.pid} ${pcb.state} rpc=${st}/op=0x${op.toString(16)}` +
-        ` waiter=${pcb.waiter ? pcb.waiter.op : '-'} ttyq=${kernel._ttyWaiters}\n`);
-    });
-  }, 3000).unref();
-}
-
 /* ---- boot ---- */
-seedAndBoot().catch((e) => {
+mountAndBoot().catch((e) => {
   process.stderr.write('boot failed: ' + (e && e.stack || e) + '\n');
   process.exit(1);
 });
 
-async function seedAndBoot() {
-  const seeded = await COMMON.seedImage(kfs, manifest, {
-    readAsset: (name) => fs.readFileSync(path.join(__dirname, name), 'utf-8'),
-    // bin entries (game data: doom1.wad, ROMs) are repo-relative binaries
-    readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
+async function mountAndBoot() {
+  /* System blob: bake on demand (missing / version-stale / --fresh*), then
+   * mount READ-ONLY at /usr. bakedVersion() is the staleness gate — it reads
+   * the blob's own /usr/share/os-release, written last in the bake, so a
+   * crashed half-bake reads -1 and re-bakes. STRICTLY older re-bakes; a
+   * NEWER blob (an upgrade swapped in from outside, e.g. mkimage against a
+   * bumped manifest) is kept as-is — "upgrade = swap the blob". */
+  const store = new COMMON.NodeFileStore(fs, imagePath, freshBoot || freshSystem);
+  let baked = false;
+  if (COMMON.bakedVersion(BLOCK_FS, store) < (manifest.version | 0)) {
+    store.resize(0);   // a stale blob re-bakes from scratch (regenerable)
+    await COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, store, manifest, seedIo);
+    baked = true;
+  }
+  const sysFs = BLOCK_FS.createV4(store, { readonly: true });
+
+  /* Root (writable) volume: fresh files get the skeleton + the manifest's
+   * `user` section, exactly once. Later boots (and system re-bakes) never
+   * write here — that's the whole 0040 contract. */
+  const rootFresh = freshBoot || !fs.existsSync(rootImagePath);
+  const rootStore = new COMMON.NodeFileStore(fs, rootImagePath, freshBoot);
+  const rootFs = BLOCK_FS.createV4(rootStore);   // devNodes ON: its /dev IS /dev
+  const kfs = new BLOCK_FS.MountFS({ '/': rootFs, '/usr': sysFs });
+  if (rootFresh) {
+    bootLog('seeding user volume (manifest v' + manifest.version + ')');
+    COMMON.initRootVolume(kfs);
+    await COMMON.seedEntries(kfs, manifest.user, seedIo);
+    rootStore.flush();
+  }
+  bootLog('image ' + imagePath + (baked ? ' (baked)' : ' (reused)') +
+    ' + ' + rootImagePath + (rootFresh ? ' (seeded)' : ''));
+
+  const ccCompile = COMMON.createCcDriver(CompilerJS, kfs);
+  const interactive = !!process.stdin.isTTY;
+
+  const kernel = new K.Kernel({
+    fs: kfs,
+    createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
+    loadImage: (p) => COMMON.readFileBytes(kfs, p),
     compile: ccCompile,
-    // project entries (busybox hush) are repo-relative multi-file builds
-    buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
-      (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
-    log: bootLog,
+    onOutput: (pid, fd, bytes) => {
+      (fd === 2 ? process.stderr : process.stdout).write(Buffer.from(bytes));
+    },
+    onHalt: (status) => {
+      rootStore.flush();
+      rootStore.close();
+      store.close();                    // read-only: nothing to flush
+      // POSIX-style: exit code for a clean init exit, 128+sig if it died.
+      const sig = status & 0x7f;
+      process.exit(sig ? 128 + sig : (status >> 8) & 0xff);
+    },
+    log: quiet ? () => {} : (m) => process.stderr.write('[kernel] ' + m + '\n'),
   });
-  if (seeded) { store.flush(); userStore.flush(); }
-  bootLog('image ' + imagePath + ' + ' + userImagePath + (seeded ? ' (seeded)' : ''));
+
+  const tty = kernel.createTty({
+    cols: process.stdout.columns || 80,
+    rows: process.stdout.rows || 24,
+    // Echo/edit control bytes matter only when a human is typing; under piped
+    // stdin (agents, CI) dropping them keeps stdout byte-exact program output.
+    output: interactive ? (b) => process.stdout.write(Buffer.from(b)) : () => {},
+    // A human terminal makes fd 1/2 tty-kind (isatty true -> the shell goes
+    // interactive: prompt, line editing, job control). Piped runs keep plain
+    // output channels so stdout stays byte-exact.
+    interactiveOut: ttyOut || (interactive && !!process.stdout.isTTY),
+  });
+
+  /* ---- stdio <-> tty bridge ---- */
+  if (interactive) {
+    process.stdin.setRawMode(true);          // the KERNEL owns the line discipline
+    process.stdout.on('resize', () => {
+      tty.resize(process.stdout.columns || 80, process.stdout.rows || 24);
+    });
+  }
+  process.stdin.on('data', (chunk) => tty.input(new Uint8Array(chunk)));
+  process.stdin.on('end', () => tty.eof());
+  process.stdin.resume();
+
+  /* ---- debug: periodic kernel-state dump (development aid) ---- */
+  if (dumpState) {
+    setInterval(() => {
+      kernel._procs.forEach((pcb) => {
+        const st = Atomics.load(pcb.i32, 4 /* KP_RPC_STATE */);
+        const op = Atomics.load(pcb.i32, 5 /* KP_RPC_OP */);
+        process.stderr.write(`[state] pid ${pcb.pid} ${pcb.state} rpc=${st}/op=0x${op.toString(16)}` +
+          ` waiter=${pcb.waiter ? pcb.waiter.op : '-'} ttyq=${kernel._ttyWaiters}\n`);
+      });
+    }, 3000).unref();
+  }
+
   // The WM control plane (todos/0014) — same shape as kernel-worker.js:
   // endpoint first, /bin/wm as a kernel service after pid 1 (non-fatal;
   // kernel-chrome is the fallback, `wm &` respawns).
@@ -191,8 +181,8 @@ async function seedAndBoot() {
   await kernel.boot({
     path: '/bin/sh',
     argv: ['sh'],
-    envp: ['PATH=/bin', 'HOME=/root', 'TERM=xterm-256color'],
+    envp: ['PATH=/usr/local/bin:/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
   });
-  await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/bin'] });
+  await kernel.service({ path: '/bin/wm', argv: ['wm'], envp: ['PATH=/usr/local/bin:/bin'] });
 }

@@ -36,16 +36,18 @@ One numbered file per unit of work we have actually committed to doing.
 5. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
 6. `0037` wasm module cache — kernel-side compiled-Module cache on the
-   spawn path (system-volume /bin first; Modules clone, instances don't)
+   spawn path (the sealed system blob's `/usr/share/os-release`
+   VERSION_ID is the natural cache key since 0040; Modules clone,
+   instances don't)
 7. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-8. `0040` read-only system image — mkimage + the layout flip +
-   systemd-style /etc; swap-the-blob upgrades (design: `DISK-IMAGE.md`;
-   subsumes the old unnumbered mkimage entry)
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in
 `WM.md` "The desktop shell", verified-but-unfixed items on its
-"Known issues" standing list.)
+"Known issues" standing list. `0040` read-only system image landed
+2026-07-08: tools/mkimage.js-baked sealed blob RO at /usr, writable
+root at /, systemd-style /etc, swap-the-blob upgrades — decisions in
+`DISK-IMAGE.md`.)
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
 parallelism unit; no consumer exists and the complexity tax is permanent.
@@ -165,9 +167,9 @@ don't duplicate them. Current map:
 - `WASM_GC.md`, `EXTERNREF.md` — wasm GC / externref features.
 - `GOTO-LABELS-AST-REFACTOR.md` — control-flow lowering refactor.
 - `DISK-IMAGE.md` — the read-only system image & upgrade discipline
-  (0040): mkimage-baked RO volume at /usr, merged-usr, /usr/local,
-  systemd-style /etc, swap-the-blob upgrades. Decisions settled
-  2026-07-08.
+  (0040, LANDED 2026-07-08): mkimage-baked sealed RO volume at /usr,
+  merged-usr, /usr/local, systemd-style /etc, swap-the-blob upgrades.
+  Design decisions + the in-item decisions record.
 - `BLOCK_FS.md`, `MISC.md` — filesystem notes; grab-bag.
 
 ## Conventions

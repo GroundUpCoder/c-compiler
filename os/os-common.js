@@ -1,17 +1,25 @@
-// os-common.js — logic shared by the two OS boot paths (todos/0004):
-// os/kernel-worker.js (browser, OPFS store) and os/boot.js (headless Node,
-// file store). Environment-neutral: plain script, exports via module.exports
+// os-common.js — logic shared by the OS boot paths (todos/0004) and the
+// image baker (todos/0040): os/kernel-worker.js (browser, OPFS store),
+// os/boot.js (headless Node, file store) and tools/mkimage.js (offline
+// bake). Environment-neutral: plain script, exports via module.exports
 // under Node and self.OS_COMMON under a worker (host.js discipline).
 //
-// Two responsibilities:
+// Responsibilities:
 //   createCcDriver(CompilerJS, kfs)  — the kernel's compile hook: a cc-style
 //     argv driver over the compiler library, reading sources from and writing
 //     wasm to the kernel's BlockFS. Backs /bin/cc (the __compile RPC).
-//   seedImage(kfs, manifest, io)     — first-boot population of the image
-//     from os/image.json: mkdirs, raw text files, and .c entries compiled to
-//     wasm binaries with the same driver. Versioned via /etc/.image-version
-//     so bumping manifest.version re-seeds (edits to protoshell.c reach
-//     existing images).
+//   bakeSystemImage(...)             — bake the read-only system volume from
+//     os/image.json's `system` section (todos/0040): compiled sources,
+//     vendor builds, /usr/local -> /var/local, /usr/share/os-release with
+//     the manifest version, then seal. Runs offline (mkimage), or as the
+//     boot-time fallback when no current blob exists.
+//   seedEntries(kfs, section, io)    — populate paths from a manifest
+//     section (dirs + files). Used by the bake (system section, full
+//     namespace) and by the virgin-boot user seed (user section).
+//   initRootVolume(mfs)              — skeleton for a fresh writable root
+//     volume: /etc /var/local/bin /tmp /root /run + /bin -> /usr/bin.
+//   bakedVersion(BLOCK_FS, store)    — a blob's VERSION_ID (or -1): the
+//     staleness gate for "upgrade = swap the blob".
 
 'use strict';
 
@@ -213,15 +221,15 @@ function buildProject(CompilerJS, projPath, readHostFile) {
   });
 }
 
-/* ---- first-boot image seeding ----
+/* ---- manifest-section seeding ----
  *
- * manifest (os/image.json): { version, dirs: [...], files: { "/path": entry } }
+ * section (os/image.json `system` or `user`): { dirs: [...], files: { "/path": entry } }
  *   entry.c       — asset name of a C source; compiled to a wasm binary at /path
  *   entry.hdrs    — (with entry.c) asset names of local headers the source
  *                   quotes-includes; staged beside it for the compile
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
  *   entry.content — inline string; written verbatim to /path (one-liners
- *                   like /etc/menu command entries, todos/0028)
+ *                   like the /usr/share/menu command entries, todos/0028)
  *   entry.bin     — REPO-relative binary file; copied verbatim to /path
  *                   (game data: doom1.wad, gameboy ROMs — needs io.readBinary)
  *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
@@ -231,7 +239,7 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.project — REPO-relative bin.json path; multi-file build via
  *                   buildProject (needs io.buildProject)
  *   entry.link    — symlink target; /path becomes a symlink to it (the
- *                   coreutils applet names all point at /bin/coreutils)
+ *                   coreutils applet names all point at /usr/bin/coreutils)
  * io: { readAsset(name) -> Promise<string>, compile(argv, cwd), log(msg),
  *       buildProject(projPath) -> wasm bytes,
  *       readBinary(repoPath) -> Uint8Array | Promise<Uint8Array> }
@@ -239,30 +247,23 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   relative to the os/ directory; readBinary is repo-relative like
  *   project entries.)
  *
- * Idempotent + versioned: /etc/.image-version records the seeded manifest
- * version; seeding runs only when the manifest is newer, and overwrites the
- * seeded paths (user files elsewhere in the image are untouched).
+ * No version gate here (todos/0040): the system section is baked into the
+ * sealed blob (whose /usr/share/os-release carries the version — the
+ * staleness check happens BEFORE the bake), and the user section seeds
+ * exactly once, onto a freshly formatted root volume. The old
+ * /etc/.image-version re-seed dance is gone — upgrades never rewrite user
+ * territory.
  */
-var VERSION_FILE = '/etc/.image-version';
-
-function seededVersion(kfs) {
-  var t = readFileText(kfs, VERSION_FILE);
-  if (t === null) return 0;
-  var v = parseInt(t, 10);
-  return isNaN(v) ? 0 : v;
-}
-
-function seedImage(kfs, manifest, io) {
-  if (seededVersion(kfs) >= (manifest.version | 0)) return Promise.resolve(false);
+function seedEntries(kfs, section, io) {
+  if (!section) return Promise.resolve(false);
   var log = io.log || function () {};
-  log('seeding image (manifest v' + manifest.version + ')');
-  (manifest.dirs || []).forEach(function (d) {
+  (section.dirs || []).forEach(function (d) {
     if (kfs.stat(d) === null) kfs.mkdir(d, 0o755);
   });
-  var names = Object.keys(manifest.files || {});
+  var names = Object.keys(section.files || {});
   var chain = Promise.resolve();
   names.forEach(function (path) {
-    var entry = manifest.files[path];
+    var entry = section.files[path];
     chain = chain.then(function () {
       if (entry.text !== undefined) {
         return Promise.resolve(io.readAsset(entry.text)).then(function (text) {
@@ -329,17 +330,125 @@ function seedImage(kfs, manifest, io) {
     });
   });
   return chain.then(function () {
-    writeFile(kfs, VERSION_FILE, String(manifest.version | 0) + '\n');
     kfs.flush && kfs.flush();
     return true;
   });
 }
 
+/* ---- baking the read-only system image (todos/0040) ----
+ *
+ * Bakes manifest.system into sysStore as a sealed, independently mountable
+ * BlockFS v4 blob whose root is the /usr subtree (bin/, share/, local).
+ * The bake replays the runtime mount layout — a throwaway in-memory root
+ * volume at '/', the target volume at '/usr' — so manifest paths, symlink
+ * targets, and cc diagnostics are all full-namespace, and the compile
+ * staging area (/etc) lands on the throwaway volume. Ends by planting
+ * /usr/local -> /var/local (the admin's escape into writable territory)
+ * and /usr/share/os-release (VERSION_ID=<manifest.version> — the blob's
+ * own version, read back by bakedVersion), then seals the store
+ * (superblock hash — fsck_v4 flags any post-bake mutation).
+ *
+ * sysStore must not hold a live filesystem worth keeping: the superblock
+ * is zeroed first so the bake always formats fresh. Async (compiles run
+ * synchronously, the seal is WebCrypto). io: readAsset/readBinary/
+ * buildProject/log — compile is created here, over the bake namespace.
+ */
+function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
+  var log = io.log || function () {};
+  log('baking system image (manifest v' + manifest.version + ')');
+  if (sysStore.size() >= 256) sysStore.setBytes(0, new Uint8Array(256)); // force format
+  var sys = BLOCK_FS.createV4(sysStore, { noDevNodes: true });
+  var tmpRoot = BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(1 << 20), { noDevNodes: true });
+  var mfs = new BLOCK_FS.MountFS({ '/': tmpRoot, '/usr': sys });
+  mfs.mkdir('/etc', 0o755);   // seedEntries' compile staging area (throwaway)
+  var bakeIo = {
+    readAsset: io.readAsset,
+    readBinary: io.readBinary,
+    buildProject: io.buildProject,
+    log: log,
+    compile: createCcDriver(CompilerJS, mfs),
+  };
+  return seedEntries(mfs, manifest.system, bakeIo).then(function () {
+    mfs.symlink('/var/local', '/usr/local');
+    writeFile(mfs, '/usr/share/os-release',
+      'NAME=wasm-os\nVERSION_ID=' + (manifest.version | 0) + '\n');
+    sysStore.flush && sysStore.flush();
+    return BLOCK_FS.sealVolume(sysStore);
+  });
+}
+
+/* The version a blob was baked with (its /usr/share/os-release — blob-root
+ * path /share/os-release), or -1 for anything that isn't a complete baked
+ * system image (empty store, wrong format, half-written copy). -1 means
+ * "re-materialize": fetch/copy a current blob, or fall back to baking. */
+function bakedVersion(BLOCK_FS, store) {
+  try {
+    var fs = BLOCK_FS.createV4(store, { readonly: true });
+    var t = readFileText(fs, '/share/os-release');
+    if (t === null) return -1;
+    var m = /(?:^|\n)VERSION_ID=(\d+)/.exec(t);
+    return m ? parseInt(m[1], 10) : -1;
+  } catch (e) {
+    return -1;   // readonly mount refuses unformatted/non-v4 stores
+  }
+}
+
+/* Skeleton for a freshly formatted root (writable) volume: the structural
+ * dirs every boot expects — /etc (user overrides only; EMPTY on a virgin
+ * boot by design), /var/local/bin (the admin's PATH head), /tmp, /root,
+ * /run — plus the merged-usr /bin -> /usr/bin symlink. /dev comes from
+ * ensureDevNodes (the root volume mounts WITH dev nodes now). Idempotent;
+ * runs through the full MountFS namespace. */
+function initRootVolume(mfs) {
+  ['/etc', '/var', '/var/local', '/var/local/bin', '/tmp', '/root', '/run']
+    .forEach(function (d) {
+      if (mfs.stat(d) === null) mfs.mkdir(d, 0o755);
+    });
+  if (mfs.lstat('/bin') === null) mfs.symlink('/usr/bin', '/bin');
+}
+
+/* ---- NodeFileStore: the ByteStore interface over a plain file ----
+ * The headless twin of host.js's SyncAccessHandleStore (OPFS). Takes the
+ * caller's `fs` module so this file stays environment-neutral (os/boot.js
+ * and tools/mkimage.js pass require('fs'); the browser never calls it). */
+function NodeFileStore(fsMod, filePath, fresh) {
+  if (fresh) { try { fsMod.unlinkSync(filePath); } catch (e) {} }
+  this._fs = fsMod;
+  this._fd = fsMod.openSync(filePath, fsMod.existsSync(filePath) ? 'r+' : 'w+');
+  this._tmp4 = new Uint8Array(4);
+  this._tmpDV = new DataView(this._tmp4.buffer);
+}
+NodeFileStore.prototype.getUint32 = function (off) {
+  this._tmp4.fill(0);
+  this._fs.readSync(this._fd, this._tmp4, 0, 4, off);
+  return this._tmpDV.getUint32(0, true);
+};
+NodeFileStore.prototype.setUint32 = function (off, val) {
+  this._tmpDV.setUint32(0, val, true);
+  this._fs.writeSync(this._fd, this._tmp4, 0, 4, off);
+};
+NodeFileStore.prototype.getBytes = function (off, len) {
+  var buf = new Uint8Array(len);
+  if (len > 0) this._fs.readSync(this._fd, buf, 0, len, off);
+  return buf;
+};
+NodeFileStore.prototype.setBytes = function (off, data) {
+  if (data.length > 0) this._fs.writeSync(this._fd, data, 0, data.length, off);
+};
+NodeFileStore.prototype.size = function () { return this._fs.fstatSync(this._fd).size; };
+NodeFileStore.prototype.resize = function (newSize) { this._fs.ftruncateSync(this._fd, newSize); };
+NodeFileStore.prototype.flush = function () { this._fs.fsyncSync(this._fd); };
+NodeFileStore.prototype.close = function () { this._fs.closeSync(this._fd); };
+
 /* ---- environment exports (host.js discipline) ---- */
 var OS_COMMON = {
   createCcDriver: createCcDriver,
   buildProject: buildProject,
-  seedImage: seedImage,
+  seedEntries: seedEntries,
+  bakeSystemImage: bakeSystemImage,
+  bakedVersion: bakedVersion,
+  initRootVolume: initRootVolume,
+  NodeFileStore: NodeFileStore,
   readFileBytes: readFileBytes,
   readFileText: readFileText,
   writeFile: writeFile,

@@ -141,22 +141,36 @@ input and VT1 for shell typing — the `window.__osVtSwitch(n)` probe) →
 `kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
 /bin/cc) → `process-worker.js` per pid. `boot.js` is the headless twin —
 same kernel/manifest under Node with the tty on stdio
-(`echo 'ls /' | node os/boot.js`). The OS store is SPLIT (todos/0026):
-a system volume at `/` + a user volume at `/root`, host.js `MountFS` on
-top (browser: `os-system.v4.img`/`os-user.v4.img` in OPFS; headless:
-`os-system.img` + derived `-user` sibling, `--image=` names the system
-one) — a reseed or `--fresh-system` rebuilds /bin while `/root`
-survives; the user volume mounts with `noDevNodes` (its /dev would be
-$HOME clutter). First boot seeds the image from
-`image.json`: paths map to **C sources compiled at seed time** by the cc
-driver in `os-common.js` (no build step), vendor `project` builds, `bin`
-binary blobs (repo-relative game data: doom1.wad, ROMs), raw `text`, and
-`link` symlinks; bump `image.json`'s `version` after editing seeded
-sources (`protoshell.c`, `cc.c`) or existing images won't re-seed. pid 1
-is busybox hush (`/bin/sh`, built at seed time from
+(`echo 'ls /' | node os/boot.js`). The OS store is a WRITABLE root
+volume at `/` + a READ-ONLY baked system blob at `/usr` (todos/0040,
+design `todos/DISK-IMAGE.md`; supersedes 0026's system-at-/ split),
+host.js `MountFS` on top: `/bin` is a root-volume symlink → `/usr/bin`
+(merged-usr), `/usr/local` a baked symlink → `/var/local` (the admin's
+writable territory; `PATH=/usr/local/bin:/bin` everywhere), /etc is
+systemd-style (user overrides only; vendor defaults under `/usr/share`;
+an EMPTY /etc boots; factory reset = wipe /etc+/var). The blob is a
+sealed BlockFS image (superblock SHA-256, fsck_v4-checked) baked by
+`tools/mkimage.js` — or on demand: boot.js re-bakes when the blob's
+`/usr/share/os-release` `VERSION_ID` < `image.json version`
+(`--fresh-system` forces); the browser (OPFS `os-system.v5.img` /
+`os-root.v5.img` — pre-flip v4 images orphaned) first tries fetching a
+prebaked `os/os-system.img` (mkimage output, gitignored), else bakes
+in-worker. A NEWER blob than the manifest is kept — upgrade = swap the
+blob, rollback = keep the old one; user territory is never written by
+an upgrade. `image.json` is split `system`/`user`: paths map to **C
+sources compiled at bake time** by the cc driver in `os-common.js` (no
+build step), vendor `project` builds, `bin` blobs (repo-relative game
+data), raw `text`, and `link` symlinks; the `user` section (doom1.wad,
+pak0.pak, Desktop links) seeds ONCE onto a freshly created root volume
+(no version gate — `/etc/.image-version` is gone); bump `image.json`'s
+`version` after editing seeded sources (`wm.c`, `cc.c`, …) or existing
+blobs stay stale. Writes under /usr fail EROFS (host.js `readonly`
+volume flag, decided AFTER the path walk so `/usr/local/...` escapes to
+the rw volume). pid 1 is busybox hush (`/bin/sh`, baked from
 `vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`; `/bin/wm`
 autostarts as a kernel service (killing it falls back to kernel-chrome;
-`wm &` respawns). Windowed vendor apps are seeded in-OS (todos/0015):
+`wm &` respawns) and reads its Start menu from `/etc/menu` if that dir
+exists, else `/usr/share/menu` (first-existing-dir wins). Windowed vendor apps are seeded in-OS (todos/0015):
 `/bin/doom` (WAD at `/root/doom1.wad` — doomgeneric searches cwd only,
 hush starts in /root), `/bin/gameboy` (ROMs under `/root/roms` — the ROM
 files are gitignored, so their entries are `optional`: missing binary
@@ -168,7 +182,8 @@ VID_Init: SURFACE_SET_FLAGS bit1 → kernel wanted-state → os.html pointer
 lock, the lock gesture being a kernel-hit-tested client click; ESC
 unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
 `/bin/term` (todos/0020, `os/term/`) is the wasm terminal: kernel pty +
-freetype (vendored lib, font seeded at `/etc/fonts/mono.ttf`) + an escape
+freetype (vendored lib, font at `/etc/fonts/mono.ttf` with the baked
+`/usr/share/fonts/mono.ttf` as fallback) + an escape
 parser scoped to hush/vi; `term &` runs hush interactive in a window
 (640x432 = 80x24), `term cmd...` runs that instead; drag-resize reflows
 via TIOCSWINSZ, close = SIGHUP. Resize is gated on
@@ -215,7 +230,7 @@ wmKey ONLY with a WM subscribed → WMP EV_CYCLE 0x8B / CYCLE 0x19 /
 Shift; minimized skipped) — no subscriber, the key passes through.
 Verified-but-unfixed items live in WM.md "Known issues" (taskbar not
 always-on-top; pointer-lock needs a per-round human check).
-Image version is **v25**.
+Image version is **v26**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
@@ -272,7 +287,18 @@ Each volume stays an independently fsck-able image; only the kernel embedders
 (`Kernel({fs: mountfs})`) use MountFS — process-side RemoteFS and standalone
 single-volume paths are untouched. Tests: `tests/blockfs/test_mounts.js` (walk
 mechanics + fsck), `tests/kernel/test_mounts.js` (routing/EXDEV/EBUSY/escape
-semantics).
+semantics + the 0040 readonly-/usr layout).
+
+**Read-only volumes + sealed blobs** (host.js, todos/0040):
+`createV4(store, {readonly: true})` mounts an EXISTING v4 image read-only —
+every mutating op returns `EROFS` via `_setErr`, decided AFTER the path walk
+(so a path escaping through a symlink to a writable volume retries on its
+owner — that ordering is load-bearing for `/usr/local` → `/var/local`);
+the store is wrapped in `ReadOnlyStore` as a throw-on-write backstop, and an
+unformatted store throws instead of formatting. `sealVolume`/`verifySeal`
+(async, WebCrypto): superblock flags bit 1 + SHA-256 of everything after the
+superblock at offset 36 — `fsck_v4.js` re-checks it independently. Tests:
+`tests/blockfs/test_readonly.js`.
 
 **Invariant: the store is the single source of truth.** Any metadata that's
 persisted in the superblock (inode-table extent/capacity, `nextInodeId`, pool

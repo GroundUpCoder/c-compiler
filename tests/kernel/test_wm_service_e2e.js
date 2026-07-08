@@ -325,18 +325,18 @@ check('forward cycle walks to the LRU window (focus moved, minimized still skipp
   fsidOf(c5s) !== fsidOf(c4s) && fsidOf(c5s) !== fixSid && fsidOf(c5s) > 0,
   JSON.stringify([fsidOf(c5s), fsidOf(c4s)]));
 
-// Icon pixels: read the shot back OUT of the user volume (0026 split) and
+// Icon pixels: read the shot back OUT of the root (writable) volume (the
+// 0040 flip: /root lives on the root volume, full path preserved) and
 // histogram icon cell 0 (doom at 16,16): white tile, navy center, black
 // link notch on the teal ground.
 {
   const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
   const COMMON = require(path.join(ROOT, 'os/os-common.js'));
-  const bytes = fs.readFileSync(path.join(tmp, 'os-user.img'));
+  const bytes = fs.readFileSync(path.join(tmp, 'os-root.img'));
   const store = new BLOCK_FS.MemoryByteStore(bytes.length);
   store.setBytes(0, bytes);
   const ufs = BLOCK_FS.createV4(store);
-  // /root strips to / inside the user volume (mount-prefix routing, 0026).
-  const ppm = COMMON.readFileBytes(ufs, '/d.ppm');
+  const ppm = COMMON.readFileBytes(ufs, '/root/d.ppm');
   const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
   const m = /^P6\n(\d+) (\d+)\n255\n/.exec(head);
   check('desktop shot is a 1024x768 P6', !!m && m[1] === '1024' && m[2] === '768', head);
@@ -361,7 +361,7 @@ check('forward cycle walks to the LRU window (focus moved, minimized still skipp
 
   // The taskbar shot (todos/0031): clock digits render in the right-aligned
   // HH.MM cell — histogram the black text pixels over the clock area.
-  const bppm = COMMON.readFileBytes(ufs, '/bar.ppm');
+  const bppm = COMMON.readFileBytes(ufs, '/root/bar.ppm');
   const bhead = Buffer.from(bppm.subarray(0, 20)).toString('latin1');
   const bm = /^P6\n(\d+) (\d+)\n255\n/.exec(bhead);
   check('taskbar shot is a 1024x28 P6', !!bm && bm[1] === '1024' && bm[2] === '28', bhead);

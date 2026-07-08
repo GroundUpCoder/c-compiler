@@ -14,6 +14,7 @@ var tests = [
   ['test_migrate.js', []],
   ['test_openworkspace.js', []],
   ['test_fsck_v4.js', []],
+  ['test_readonly.js', []],
   ['test_mounts.js', []],
   ['test_blockfs.js', []],
   ['test_stdin_sab.js', []],

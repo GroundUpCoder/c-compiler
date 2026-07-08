@@ -14,8 +14,10 @@ const TLSF_META_SIZE = 8192;
 const TLSF_POOL_OFFSET = SUPERBLOCK_SIZE + TLSF_META_SIZE; // 8448
 
 // superblock (v4): 64-bit inode-table extent at 16; cap 24; next-id 28; root 32
-const SB_MAGIC = 0, SB_VERSION = 4;
+const SB_MAGIC = 0, SB_VERSION = 4, SB_FLAGS = 8;
 const SB4_INODE_EXTENT = 16, SB4_INODE_CAP = 24, SB_NEXT_INODE_ID = 28, SB_ROOT_INODE = 32;
+// Sealed blob (todos/0040): flags bit 1 + SHA-256 of bytes [256, size) at 36.
+const SB_SEALED_BIT = 2, SB_SEAL_HASH = 36;
 
 // TLSF64 meta offsets (relative to TLSF_META_BASE)
 const FL_COUNT = 32, SL_COUNT = 16;
@@ -53,6 +55,17 @@ function fsck(store) {
   if (u32(SB_MAGIC) !== MAGIC) { err('bad magic (not a BlockFS image)'); return problems; }
   const version = u32(SB_VERSION);
   if (version !== VERSION) { err(`unsupported format version ${version} (fsck_v4 knows ${VERSION})`); return problems; }
+
+  // ---- Pass 0b: sealed-volume integrity (todos/0040) ----
+  // A baked read-only blob carries a content hash; ANY post-bake mutation
+  // (a bug writing through the readonly guard, an accidental rw mount)
+  // changes some byte after the superblock and breaks the seal.
+  if ((u32(SB_FLAGS) & SB_SEALED_BIT) !== 0) {
+    const want = Buffer.from(bytes(SB_SEAL_HASH, 32)).toString('hex');
+    const got = require('crypto').createHash('sha256')
+      .update(bytes(SUPERBLOCK_SIZE, storeSize - SUPERBLOCK_SIZE)).digest('hex');
+    if (got !== want) err('sealed volume was mutated (seal hash mismatch)');
+  }
 
   const poolStart = meta64(M_POOL_START);
   const poolEnd = meta64(M_POOL_END);

@@ -2315,6 +2315,11 @@ var BLOCK_FS = (function () {
 
     this._lastError = '';
     this._cwd = '/';
+    // Read-only volume (todos/0040): every mutating op returns EROFS, atime
+    // bumps and the /dev self-heal are suppressed. Set by createV4's
+    // opts.readonly (which also wraps the store in ReadOnlyStore as a
+    // backstop) and by the migration source / legacy-view paths.
+    this._readonly = false;
     // Mount hooks (todos/0026), wired by MountFS when this volume is one of
     // several in a mount table. _mountOwns(fullPath) -> volume-relative path
     // if this volume owns it, else null; null hook = standalone volume
@@ -2696,6 +2701,14 @@ var BLOCK_FS = (function () {
     var resolved = this._resolvePath(path);
     var w = this._walkPath(resolved);
 
+    // Read-only volume (todos/0040): any write-intent open is EROFS. AFTER
+    // the walk: a path that resolves out of this volume via a symlink
+    // (/usr/local -> /var/local) must escape to the owning volume, not fail
+    // here. (RO volumes carry no /dev, so there is no device-write
+    // exception to make.)
+    if (this._readonly && ((flags & 3) !== 0 || create || trunc || append))
+      return this._setErr('EROFS');
+
     if (w) {
       // Exists
       if ((w.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EISDIR');
@@ -2878,6 +2891,9 @@ var BLOCK_FS = (function () {
     }
     if (entry.type === 'dev') return this._writeDev(entry, buf, count);
     if (entry.inoId === undefined) return this._setErr('EBADF');
+    // Belt-and-braces: open() can't hand out a writable fd on a readonly
+    // volume, but write() doesn't check the open mode, so guard here too.
+    if (this._readonly) return this._setErr('EROFS');
 
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
@@ -2945,6 +2961,8 @@ var BLOCK_FS = (function () {
     var pw = this._walkPath(parentPath);
     if (!pw) return this._setErr('ENOENT');
     if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
 
     var inoId = this._allocInode(DEFAULT_DIR_MODE);
     if (inoId === null) return -1;
@@ -2991,6 +3009,8 @@ var BLOCK_FS = (function () {
     if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
 
     var name = resolved.substring(resolved.lastIndexOf('/') + 1);
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
     var inoId = this._allocInode(mode);
     if (inoId === null) return -1;
     var ino = this._inodes.read(inoId);
@@ -3064,6 +3084,8 @@ var BLOCK_FS = (function () {
     var w = this._walkPath(resolved);
     if (!w) return this._setErr('ENOENT');
     if ((w.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
 
     // Check if directory is empty
     if (w.ino.extentOffset && w.ino.dataSize > 0) {
@@ -3098,6 +3120,8 @@ var BLOCK_FS = (function () {
     var fileName = resolved.substring(resolved.lastIndexOf('/') + 1);
     var pw = this._walkPath(parentPath);
     if (!pw) return this._setErr('ENOENT');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
 
     dirRemove(this._s, pw.ino.extentOffset, pw.ino.dataSize, fileName);
     pw.ino.dataSize -= DIR_ENT_HEADER + encodeStr(fileName).length;
@@ -3126,6 +3150,8 @@ var BLOCK_FS = (function () {
     var oldName = oldResolved.substring(oldResolved.lastIndexOf('/') + 1);
     var oldPW = this._walkPath(oldParentPath);
     if (!oldPW) return this._setErr('ENOENT');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
 
     var newParentPath = newResolved.substring(0,
       newResolved.lastIndexOf('/')) || '/';
@@ -3435,6 +3461,7 @@ var BLOCK_FS = (function () {
 
   // ftruncate(fd, size) — truncate or extend an open file.
   BlockFS.prototype.ftruncate = function (fd, size) {
+    if (this._readonly) return this._setErr('EROFS');
     if (size < 0) return this._setErr('EINVAL');
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
@@ -3474,6 +3501,8 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.chmod = function (path, mode) {
     var w = this._walkPath(this._resolvePath(path));
     if (!w) return this._setErr('ENOENT');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
     w.ino.mode = (w.ino.mode & S_IFMT) | (mode & 0o7777);
     w.ino.ctime = this._now();
     this._inodes.write(w.inoId, w.ino);
@@ -3482,6 +3511,7 @@ var BLOCK_FS = (function () {
 
   // fchmod(fd, mode) — change mode on an open file.
   BlockFS.prototype.fchmod = function (fd, mode) {
+    if (this._readonly) return this._setErr('EROFS');
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
@@ -3499,6 +3529,8 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.utime = function (path, atime, mtime) {
     var w = this._walkPath(this._resolvePath(path));
     if (!w) return this._setErr('ENOENT');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
     var sc = this._fmt.timeScale; // seconds (ABI) -> native unit
     w.ino.atime = atime !== undefined ? atime * sc : this._now();
     w.ino.mtime = mtime !== undefined ? mtime * sc : this._now();
@@ -3509,6 +3541,7 @@ var BLOCK_FS = (function () {
 
   // futime(fd, atime, mtime) — like utime() but on an open fd.
   BlockFS.prototype.futime = function (fd, atime, mtime) {
+    if (this._readonly) return this._setErr('EROFS');
     if (fd < 0 || fd >= this._fdTable.length || !this._fdTable[fd])
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
@@ -3536,6 +3569,8 @@ var BLOCK_FS = (function () {
     var fileName = newResolved.substring(newResolved.lastIndexOf('/') + 1);
     var pw = this._walkPath(parentPath);
     if (!pw) return this._setErr('ENOENT');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
     if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
 
     var entSize = DIR_ENT_HEADER + encodeStr(fileName).length;
@@ -3570,6 +3605,8 @@ var BLOCK_FS = (function () {
     var pw = this._walkPath(parentPath);
     if (!pw) return this._setErr('ENOENT');
     if ((pw.ino.mode & S_IFMT) !== S_IFDIR) return this._setErr('ENOTDIR');
+    // EROFS only after the walks: an escaping path retries on its owner.
+    if (this._readonly) return this._setErr('EROFS');
 
     var inoId = this._allocInode(S_IFLNK | 0o777);
     if (inoId === null) return -1;
@@ -4517,7 +4554,23 @@ var BLOCK_FS = (function () {
   // opts.noDevNodes skips the /dev self-heal — for volumes mounted at a
   // non-root prefix under MountFS (todos/0026), where /dev is served by the
   // root volume and a /root/dev would just be clutter in $HOME.
+  // opts.readonly (todos/0040) mounts an EXISTING v4 image read-only: every
+  // mutating op returns EROFS, the store is wrapped in ReadOnlyStore as a
+  // backstop, and an unformatted/non-v4 store throws (a readonly mount must
+  // never format). This is how the baked system blob is mounted at /usr.
   BlockFS.createV4 = function (store, opts) {
+    if (opts && opts.readonly) {
+      if (store.size() < SUPERBLOCK_SIZE ||
+          store.getUint32(SB_MAGIC) !== MAGIC || store.getUint32(SB_VERSION) !== 4) {
+        throw new Error('createV4: readonly mount of an unformatted or non-v4 store');
+      }
+      var roStore = new ReadOnlyStore(store);
+      var roAlloc = new TLSF64Allocator(roStore, SUPERBLOCK_SIZE, 0); // load, no init
+      var roFs = new BlockFS(roStore, roAlloc, new InodeTable128(roAlloc),
+        roStore.getUint32(SB_ROOT_INODE), false, FMT_V4);
+      roFs._readonly = true;
+      return roFs;
+    }
     var storeSize = store.size();
     var formatted = false;
     if (storeSize < SUPERBLOCK_SIZE) {
@@ -4554,6 +4607,42 @@ var BLOCK_FS = (function () {
     if (store.size() < SUPERBLOCK_SIZE) return false;
     if (store.getUint32(SB_MAGIC) !== MAGIC || store.getUint32(SB_VERSION) !== 4) return false;
     return (store.getUint32(SB_FLAGS) & SB_MIGRATED_BIT) !== 0;
+  };
+
+  // ---- sealed volumes (todos/0040) ----
+  // A baked read-only blob is SEALED: superblock flags bit 1 + a SHA-256 of
+  // every byte after the superblock at SB_SEAL_HASH. mkimage seals at bake
+  // time; fsck_v4 recomputes and flags any post-bake mutation. Runtime mounts
+  // don't verify (the ReadOnlyStore wrap prevents mutation in the first
+  // place) — the seal is the OFFLINE tamper check. Superblock bytes 36..67
+  // were reserved/zero before this, so old images read as unsealed.
+  var SB_SEALED_BIT = 2;
+  var SB_SEAL_HASH = 36;   // 32 bytes
+  function sha256(bytes) {
+    // WebCrypto is everywhere we run (browsers, workers, Node >= 19) — async.
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      return Promise.reject(new Error('sealVolume: WebCrypto unavailable'));
+    }
+    return crypto.subtle.digest('SHA-256', bytes).then(function (h) { return new Uint8Array(h); });
+  }
+  BlockFS.sealVolume = function (store) {
+    return sha256(store.getBytes(SUPERBLOCK_SIZE, store.size() - SUPERBLOCK_SIZE))
+      .then(function (hash) {
+        store.setUint32(SB_FLAGS, store.getUint32(SB_FLAGS) | SB_SEALED_BIT);
+        store.setBytes(SB_SEAL_HASH, hash);
+        store.flush();
+      });
+  };
+  // -> Promise<true|false|null>: intact / mutated / not sealed.
+  BlockFS.verifySeal = function (store) {
+    if (store.size() < SUPERBLOCK_SIZE ||
+        (store.getUint32(SB_FLAGS) & SB_SEALED_BIT) === 0) return Promise.resolve(null);
+    var want = store.getBytes(SB_SEAL_HASH, 32);
+    return sha256(store.getBytes(SUPERBLOCK_SIZE, store.size() - SUPERBLOCK_SIZE))
+      .then(function (got) {
+        for (var i = 0; i < 32; i++) if (got[i] !== want[i]) return false;
+        return true;
+      });
   };
 
   // Non-destructive migrate-forward: read the v3 image, write a fresh v4 image.
@@ -4957,12 +5046,15 @@ var BLOCK_FS = (function () {
     createV4: BlockFS.createV4,
     migrateV3toV4: BlockFS.migrateV3toV4,
     isMigrationComplete: BlockFS.isMigrationComplete,
+    sealVolume: BlockFS.sealVolume,
+    verifySeal: BlockFS.verifySeal,
     // The class itself: kernel.js's RemoteFS reuses BlockFS.prototype
     // .toWasmEnv over its RPC-backed method surface (todos/0009).
     BlockFS: BlockFS,
     MountFS: MountFS,
     MemoryByteStore: MemoryByteStore,
     ReadOnlyStore: ReadOnlyStore,
+    SyncAccessHandleStore: SyncAccessHandleStore,
     TLSFAllocator: TLSFAllocator,
     TLSF64Allocator: TLSF64Allocator,
   };

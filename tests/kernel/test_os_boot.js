@@ -16,8 +16,10 @@
 //     via here-doc, compiled in-OS, runs `popen("... | cat")` and
 //     `system("... > file")`
 //   - a second boot on the same image REUSES it; files persist
-//   - split volumes (0026): a system reseed (version bump or --fresh-system)
-//     repopulates /bin while /root — the user volume — survives untouched
+//   - the 0040 layout: a writable root volume at / and a READ-ONLY baked
+//     system blob at /usr (/bin -> /usr/bin). Upgrades swap the blob and
+//     never touch user territory; writes under /usr are EROFS; factory
+//     reset (wipe /etc + /var) boots identically
 //
 // Run: node tests/kernel/test_os_boot.js
 'use strict';
@@ -70,7 +72,7 @@ let r = session([
 check('exit N propagates through hush', r.status === 7, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 const lines = r.stdout.split('\n');
 const expectStdout = [
-  'bin', 'dev', 'etc', 'root', 'run', 'tmp',   // ls / (run: WM endpoint, 0014)
+  'bin', 'dev', 'etc', 'root', 'run', 'tmp', 'usr', 'var',   // ls / (0040 layout)
   'A',                                     // pipeline
   'sub=inner deep',                        // nested $( )
   'redir',                                 // > then cat
@@ -84,12 +86,16 @@ for (let i = 0; i < expectStdout.length; i++) {
   check('stdout[' + i + '] = ' + JSON.stringify(expectStdout[i]),
     lines[i] === expectStdout[i], JSON.stringify(lines[i]));
 }
+check('first boot bakes the system blob', r.stderr.includes('baking system image'),
+  r.stderr.slice(0, 300));
 check('first boot builds hush from vendor/busybox', r.stderr.includes('built vendor/busybox/bin.json'),
   r.stderr.slice(0, 300));
 check('first boot builds the coreutils multicall', r.stderr.includes('built vendor/busybox/coreutils.json'),
   r.stderr.slice(0, 300));
-check('applet names seeded as symlinks', r.stderr.includes('/bin/ls -> /bin/coreutils'),
+check('applet names baked as symlinks', r.stderr.includes('/usr/bin/ls -> /usr/bin/coreutils'),
   r.stderr.slice(0, 600));
+check('first boot seeds the user volume', r.stderr.includes('seeding user volume'),
+  r.stderr.slice(0, 300));
 
 // ---- popen()/system(): the 0005 acceptance — heredoc -> cc -> run ----
 r = session([
@@ -143,31 +149,86 @@ for (let i = 0; i < expectCu.length; i++) {
 // ---- second boot, same image: persistence + no re-seed ----
 r = session('ls\nexit\n');
 check('second boot exits clean', r.status === 0, String(r.status));
-check('no re-seed on second boot', !r.stderr.includes('seeding image'), r.stderr.slice(0, 200));
+check('no re-bake on second boot', !r.stderr.includes('baking system image'), r.stderr.slice(0, 200));
+check('no user re-seed on second boot', !r.stderr.includes('seeding user volume'), r.stderr.slice(0, 200));
 const names = r.stdout.split('\n');
 check('a.out persisted across reboot', names.includes('a.out'), JSON.stringify(names.slice(0, 5)));
 check('po persisted across reboot', names.includes('po'), JSON.stringify(names.slice(0, 6)));
 
-// ---- split volumes (0026): system reseed never touches user files ----
-// The whole point of the system/user split: lower the recorded image version
-// (as if the manifest were bumped), reboot -> the SYSTEM volume reseeds while
-// /root (the user volume) survives untouched.
-check('system + user images both exist on disk',
-  fs.existsSync(image) && fs.existsSync(image.slice(0, -4) + '-user.img'),
+// ---- the 0040 layout: read-only /usr, writable root volume ----
+check('system + root images both exist on disk',
+  fs.existsSync(image) && fs.existsSync(image.slice(0, -4) + '-root.img'),
   fs.readdirSync(tmp).join(','));
-r = session('echo precious > /root/keep.txt\necho 1 > /etc/.image-version\nexit\n');
-check('version-lowering session exits clean', r.status === 0, String(r.status));
-r = session('cat /root/keep.txt\ncat /root/r.txt\ncc hello.c && ./a.out\nexit\n');
-check('reseed ran after the version drop', r.stderr.includes('seeding image'), r.stderr.slice(0, 200));
+// Writes under the sealed blob are EROFS — via /bin (symlink into /usr) too.
+r = session([
+  'echo x > /bin/hack 2>/dev/null || echo erofs-bin',
+  'touch /usr/x || echo erofs-usr',
+  'echo precious > /root/keep.txt',
+  'echo override > /etc/keep-etc.txt',
+  'echo tool > /usr/local/bin/mytool && cat /var/local/bin/mytool',
+  'exit',
+  '',
+].join('\n'));
+check('EROFS session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
 {
-  const sv = r.stdout.split('\n');
-  check('user file survived the system reseed', sv[0] === 'precious', JSON.stringify(sv[0]));
-  check('pre-split user file survived too', sv[1] === 'redir', JSON.stringify(sv[1]));
-  check('reseeded /bin/cc still compiles', sv[2] === 'hello, wasm world', JSON.stringify(sv[2]));
+  const ro = r.stdout.split('\n');
+  check('write via /bin is EROFS', ro[0] === 'erofs-bin', JSON.stringify(ro[0]));
+  check('write under /usr is EROFS', ro[1] === 'erofs-usr', JSON.stringify(ro[1]));
+  check('/usr/local lands on /var/local (writable)', ro[2] === 'tool', JSON.stringify(ro[2]));
 }
-// --fresh-system: discard the system volume outright; user volume untouched.
+
+// ---- upgrade = swap the blob: user territory untouched ----
+// Bake a v(N+1) blob with mkimage against a version-bumped manifest and swap
+// it in place of the system image; boot must keep it (no re-bake, no user
+// seed) and every user file must survive.
+const vNext = (JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf-8')).version | 0) + 1;
+{
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf-8'));
+  manifest.version = vNext;
+  const mfPath = path.join(tmp, 'image-vnext.json');
+  fs.writeFileSync(mfPath, JSON.stringify(manifest));
+  const mk = cp.spawnSync('node',
+    [path.join(ROOT, 'tools/mkimage.js'), '--out=' + image, '--manifest=' + mfPath, '--quiet'],
+    { encoding: 'utf8', timeout: 300000 });
+  check('mkimage bakes the v(N+1) blob', mk.status === 0, (mk.stderr || '').slice(-300));
+}
+r = session([
+  'cat /usr/share/os-release',
+  'cat /root/keep.txt',
+  'cat /etc/keep-etc.txt',
+  'cat /var/local/bin/mytool',
+  'cc hello.c && ./a.out',
+  'exit',
+  '',
+].join('\n'));
+check('upgraded boot exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
+check('the swapped blob is kept (no re-bake)', !r.stderr.includes('baking system image'),
+  r.stderr.slice(0, 200));
+check('no user re-seed on upgrade', !r.stderr.includes('seeding user volume'), r.stderr.slice(0, 200));
+{
+  const up = r.stdout.split('\n');
+  check('os-release reports the upgraded version', up.includes('VERSION_ID=' + vNext),
+    JSON.stringify(up.slice(0, 3)));
+  check('user file survived the upgrade', up.includes('precious'), JSON.stringify(up));
+  check('/etc override survived the upgrade', up.includes('override'), JSON.stringify(up));
+  check('admin-installed tool survived the upgrade', up.includes('tool'), JSON.stringify(up));
+  check('upgraded /bin/cc still compiles', up.includes('hello, wasm world'), JSON.stringify(up));
+}
+
+// ---- factory reset: wipe /etc + /var -> boots identically ----
+r = session('rm -rf /etc/* /var/*\nexit\n');
+check('factory-reset wipe exits clean', r.status === 0, String(r.status));
+r = session('ls /etc\necho etc-rc=$?\ncc hello.c && ./a.out\nexit\n');
+check('post-reset boot exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
+{
+  const fr = r.stdout.split('\n');
+  check('/etc is empty after the reset', fr[0] === 'etc-rc=0', JSON.stringify(fr.slice(0, 2)));
+  check('the OS still compiles and runs', fr.includes('hello, wasm world'), JSON.stringify(fr));
+}
+
+// --fresh-system: re-bake the blob outright; user volume untouched.
 r = session('cat /root/keep.txt\nexit\n', ['--fresh-system']);
-check('--fresh-system reseeds', r.stderr.includes('seeding image'), r.stderr.slice(0, 200));
+check('--fresh-system re-bakes', r.stderr.includes('baking system image'), r.stderr.slice(0, 200));
 check('--fresh-system keeps user files', r.stdout.split('\n')[0] === 'precious',
   JSON.stringify(r.stdout.split('\n')[0]));
 

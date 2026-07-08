@@ -157,24 +157,26 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
   `__osState` agent probe. Process workers boot from `os/process-worker.js`
   (the browser twin of kernel.js's Node BOOT_SOURCE), created by the kernel
   worker's `createWorker` capability.
-- **First boot** (implemented, todos/done/0004; split volumes
-  todos/done/0026): the kernel worker mounts TWO BlockFS volumes on OPFS
-  (`openWorkspace` × `os-system.v4.img` + `os-user.v4.img`) under a
-  host.js **MountFS** — `/` system volume, `/root` user volume,
-  longest-prefix routing, cross-volume rename/link → EXDEV, mount points
-  EBUSY, symlinks resolved in the FULL namespace via the volume-side
-  `_mountOwns` escape hook — and seeds per `os/image.json`, which maps
-  paths to **C sources compiled at seed time by the kernel's own cc
-  driver** (`os/os-common.js`), not pre-built wasm URLs: no build step,
-  the repo discipline. `/etc/.image-version` (system volume) gates
-  re-seeding (bump `image.json`'s `version` after editing seeded sources).
-  Since the split, upgrade = reseed (or discard: `boot.js
-  --fresh-system`) the system volume while `/root` survives untouched.
-  The END-STATE upgrade story is designed in `todos/DISK-IMAGE.md`
-  (2026-07-08, queued as todos/0040): a `tools/mkimage.js`-baked
-  READ-ONLY system volume mounted at /usr (merged-usr, writable root
-  volume at /, systemd-style /etc where an empty /etc boots), and an
-  upgrade is just swapping the blob — settled decisions live there.
+- **First boot** (implemented, todos/done/0004; volumes reshaped by
+  todos/done/0026 then todos/done/0040): the kernel worker mounts TWO
+  BlockFS volumes on OPFS under a host.js **MountFS** — a WRITABLE root
+  volume at `/` (`os-root.v5.img`; /etc, /var, /tmp, /root, /dev, /run)
+  and a READ-ONLY baked system blob at `/usr` (`os-system.v5.img`;
+  merged-usr `/bin → /usr/bin`, `/usr/local → /var/local`, EROFS on
+  writes) — longest-prefix routing, cross-volume rename/link → EXDEV,
+  mount points EBUSY, symlinks resolved in the FULL namespace via the
+  volume-side `_mountOwns` escape hook. The blob is baked from
+  `os/image.json`'s `system` section, which maps paths to **C sources
+  compiled at bake time by the repo's own cc driver**
+  (`os/os-common.js`), not pre-built wasm URLs: no build step, the repo
+  discipline — offline via `tools/mkimage.js`, or on demand (headless
+  boot.js bakes when the blob's `/usr/share/os-release` is older than
+  the manifest; the browser fetches a prebaked `os/os-system.img` if
+  served, else bakes in-worker). The `user` section (game data, Desktop
+  links) seeds ONCE onto a freshly created root volume. **Upgrade =
+  swap the blob**; user territory is never written by an upgrade;
+  factory reset = wipe /etc + /var. Design + settled decisions:
+  `todos/DISK-IMAGE.md`.
 - **Headless twin** (the agent-first requirement): `os/boot.js` boots the
   same kernel + manifest under plain Node — file-backed store, tty on
   stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and

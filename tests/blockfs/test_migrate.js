@@ -119,9 +119,10 @@ eq(rfile(v4, '/many/f74'), 'payload-74', 'grown-table file intact');
   ro._readonly = true; // suppress relatime atime writes (would hit the RO store)
   eq(rfile(ro, '/readme.txt'), 'top level readme', 'read-only v3 view reads files');
   eq(rfile(ro, '/many/f10'), 'payload-10', 'read-only v3 view reads grown-table files');
-  let threw = false;
-  try { wfile(ro, '/should-fail.txt', 'nope', 0o644); } catch (e) { threw = true; }
-  ok(threw, 'read-only v3 view rejects writes (EROFS)');
+  // Clean refusal (todos/0040): _readonly makes the op itself return EROFS
+  // (the ReadOnlyStore wrap stays as the throw-on-write backstop).
+  const wfd = ro.open('/should-fail.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
+  ok(wfd === null && ro._lastError === 'EROFS', 'read-only v3 view rejects writes (EROFS)');
 }
 
 console.log(`\nmigrate: ${passed} passed, ${failed} failed`);

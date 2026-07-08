@@ -15,7 +15,9 @@
  * The Start menu (todos/0028) is a second borderless SDL window in this
  * same process, created on Start-button click and destroyed on selection
  * or dismiss — SDL events dispatch per window by e.*.windowID. Entries
- * come from /etc/menu (seeded): a symlink is spawned directly (the fs
+ * come from /etc/menu if that directory exists, else the baked default
+ * /usr/share/menu (todos/0040 — systemd-style /etc: user overrides only,
+ * first-existing-dir wins): a symlink is spawned directly (the fs
  * resolves it), a one-line text file is an argv line (tty apps ride
  * `term ...`). Children spawn with cwd /root (the wm chdir's at startup —
  * doom finds its WAD by cwd) and are reaped with a WNOHANG poll.
@@ -104,12 +106,14 @@ static SDL_Surface *bar_surf;
 static int bar_w;
 
 /* Start menu state (todos/0028): a second borderless window, live only
- * while open. Entries are (re)read from /etc/menu at each open. */
+ * while open. Entries are (re)read at each open from /etc/menu if present,
+ * else /usr/share/menu (todos/0040). */
 typedef struct { char name[32]; int is_link; } menu_ent;
 static SDL_Window *menu_win;       /* NULL = closed */
 static SDL_Surface *menu_surf;
 static int32_t menu_sid = 0;       /* from our own EV_CREATED ("startmenu") */
 static menu_ent menu[MAX_MENU];
+static char menu_dir[32];          /* which directory menu_load picked */
 static int menu_n = 0;
 static int menu_hover = -1;
 static int nkids = 0;              /* live spawned children (reap on frame) */
@@ -302,9 +306,11 @@ static void title_activate(int32_t sid) {
 /* Spawn an app the desktop way: own pgroup, PATH/HOME env, cwd inherited
  * from the wm (/root — doom finds its WAD by cwd). Children get the wm's
  * std fds (the kernel gives parentless services the system std OFDs, and
- * spawn inherits them), so startup printf's land on the console. */
+ * spawn inherits them), so startup printf's land on the console.
+ * PATH puts /usr/local/bin first (todos/0040): user-installed binaries
+ * deliberately win over system ones. */
 static void spawn_path(const char *path, char *const argv[]) {
-    static char *const envp[] = { "PATH=/bin", "HOME=/root", 0 };
+    static char *const envp[] = { "PATH=/usr/local/bin:/bin", "HOME=/root", 0 };
     posix_spawnattr_t at;
     posix_spawnattr_init(&at);
     posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
@@ -350,7 +356,14 @@ static int load_entries(const char *dir, menu_ent *dst, int max) {
     return n;
 }
 
-static void menu_load(void) { menu_n = load_entries("/etc/menu", menu, MAX_MENU); }
+/* /etc/menu wins if the DIRECTORY exists (even empty — first-existing-dir,
+ * no union merge; todos/0040); the baked /usr/share/menu is the default. */
+static void menu_load(void) {
+    DIR *d = opendir("/etc/menu");
+    if (d) { closedir(d); strcpy(menu_dir, "/etc/menu"); }
+    else strcpy(menu_dir, "/usr/share/menu");
+    menu_n = load_entries(menu_dir, menu, MAX_MENU);
+}
 
 static void menu_dismiss(void) {
     if (!menu_win) return;
@@ -361,13 +374,14 @@ static void menu_dismiss(void) {
     menu_hover = -1;
 }
 
-/* Selection: a symlink entry is spawned via its /etc/menu path (the fs
+/* Selection: a symlink entry is spawned via its menu-dir path (the fs
  * resolves the link); a regular file's first line is the argv (bare
- * argv[0] resolves in /bin — `term snake` runs snake in a terminal). */
+ * argv[0] resolves in /usr/local/bin, then /bin — the PATH order —
+ * `term snake` runs snake in a terminal). */
 static void menu_launch(int idx) {
     if (idx < 0 || idx >= menu_n) return;
     char path[300];
-    snprintf(path, sizeof path, "/etc/menu/%s", menu[idx].name);
+    snprintf(path, sizeof path, "%s/%s", menu_dir, menu[idx].name);
     if (menu[idx].is_link) {
         char *argv[2] = { menu[idx].name, 0 };
         spawn_path(path, argv);
@@ -388,7 +402,12 @@ static void menu_launch(int idx) {
     if (n == 0) return;
     char full[300];
     if (argv[0][0] == '/') snprintf(full, sizeof full, "%s", argv[0]);
-    else snprintf(full, sizeof full, "/bin/%s", argv[0]);
+    else {
+        /* PATH-order resolution: the admin's /usr/local/bin shadows /bin. */
+        snprintf(full, sizeof full, "/usr/local/bin/%s", argv[0]);
+        if (access(full, X_OK) != 0)
+            snprintf(full, sizeof full, "/bin/%s", argv[0]);
+    }
     spawn_path(full, argv);
 }
 

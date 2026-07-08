@@ -91,6 +91,47 @@ design exists to eliminate.
   tests currently lean on the seed pipeline and can lean on mkimage
   instead.
 
+## In-item decisions (landed with todos/0040, 2026-07-08)
+
+The design above left five things to decide in-item; here is what landed:
+
+1. **Blob version location**: a FILE inside the blob —
+   `/usr/share/os-release` (`NAME=wasm-os` + `VERSION_ID=<n>`, blob-root
+   path `/share/os-release`), written LAST in the bake so a crashed
+   half-bake reads as "no version" and re-materializes. Readable in-OS
+   (`cat /usr/share/os-release`); the natural 0037 module-cache key.
+   `os-common.js bakedVersion()` is the one reader.
+2. **Staleness gate**: `bakedVersion < manifest.version` re-bakes
+   (headless) / re-materializes (browser). Strictly `<`: a NEWER blob
+   than the repo manifest is kept as-is — that's what makes "swap in
+   blob v(N+1)" an upgrade rather than something boot.js undoes. Same
+   discipline as before: editing a seeded source without bumping
+   `image.json version` leaves a stale blob.
+3. **Virgin-boot user assets** (doom1.wad, pak0.pak, Desktop links,
+   hello.c): `image.json` split into `system` / `user` sections; the
+   `user` section seeds exactly ONCE, when the root volume is freshly
+   created (no version gate — later manifest additions deliberately do
+   NOT reach existing user volumes; that territory is the user's).
+   `/etc/.image-version` and the seed-gate died with this.
+4. **Live-seed as a dev flag**: no flag. Headless bake-on-stale IS the
+   dev loop (boot.js bakes in-process, same pipeline as
+   `tools/mkimage.js`); the browser tries a prebaked `os/os-system.img`
+   (mkimage output, gitignored, fetched beside the page — zero
+   compilation on the boot path) and falls back to baking in-worker.
+5. **Seal**: superblock flags bit 1 (`SB_SEALED_BIT=2`) + SHA-256 of
+   every byte after the superblock at offset 36. `BLOCK_FS.sealVolume/
+   verifySeal` (WebCrypto, async); `tests/blockfs/fsck_v4.js`
+   recomputes it independently. Runtime mounts don't verify — the
+   `readonly` flag (EROFS from the op, after the walk so escaping paths
+   retry on their owner) plus the ReadOnlyStore wrap prevent mutation;
+   the seal is the offline tamper check.
+
+One documented edge: two-path ops (`rename`/`link`) where BOTH args go
+through the `/usr/local` alias get `EXDEV`, because MountFS rewrites only
+the escaped argument and the pair then routes to different volumes —
+pre-existing lazy-resolution behavior, not a readonly regression; busybox
+`mv` falls back to copy+unlink, and direct `/var/local` paths work.
+
 ## Migration notes (in-item detail, recorded here so they aren't lost)
 
 - Today's layout is inverted (system at `/`, user at `/root`,

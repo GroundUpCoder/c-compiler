@@ -102,8 +102,9 @@ try {
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
     await sample(44, BARY));
 
-  // /etc/menu seeds 7 entries (sorted): doom gameboy gpubox quake snake
-  // term winbox -> 150x148, parked above the taskbar.
+  // /usr/share/menu bakes 7 entries (sorted): doom gameboy gpubox quake
+  // snake term winbox -> 150x148, parked above the taskbar (/etc/menu is
+  // EMPTY on a virgin boot — todos/0040; the override leg below covers it).
   const MENU_Y = SH - 28 - 148;
   check('menu spot is desktop before the click', near(await sample(120, MENU_Y + 74), TEAL),
     await sample(120, MENU_Y + 74));
@@ -139,6 +140,31 @@ try {
   await clickAt(25, BARY);
   await waitPixel(120, MENU_Y + 74, TEAL);
   check('Start click toggles the menu closed', true);
+
+  // ---- /etc/menu override wins (todos/0040: first-existing-dir) ----
+  // Create /etc/menu with a single entry; the next Start click must read
+  // IT (150x28, one row) instead of the baked /usr/share/menu (7 rows).
+  await setVt(1);
+  await page.keyboard.type('mkdir /etc/menu && ln -s /usr/bin/winbox /etc/menu/solo && echo MENU-SET\r');
+  await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 200 });
+  await setVt(2);
+  // VT2 settle (HANDOFF rule): the entry resize re-lays the furniture —
+  // wait for the taskbar and let the recreate finish before clicking.
+  await waitPixel(400, BARY, FACE);
+  await page.waitForTimeout(800);
+  const SOLO_Y = SH - 28 - 28;                   // menu_h(1) = 28, above the bar
+  await clickAt(25, BARY);
+  await waitPixel(75, SOLO_Y + 14, FACE);
+  check('override menu opens with ONE entry (/etc/menu wins)', true);
+  check('the 7-entry region stays desktop (no union merge)',
+    near(await sample(120, MENU_Y + 74), TEAL), await sample(120, MENU_Y + 74));
+  await clickAt(25, BARY);                       // toggle closed
+  await waitPixel(75, SOLO_Y + 14, TEAL);
+  await setVt(1);
+  await page.keyboard.type('rm -rf /etc/menu && echo MENU-RESET\r');
+  await page.waitForFunction(() => window.__osOut.includes('MENU-RESET'), { timeout: 20000, polling: 200 });
+  await setVt(2);
+  check('override removed: back to the baked default', true);
 
   // ---- the desktop layer (todos/0029) ----
   const WHITE = [255, 255, 255];

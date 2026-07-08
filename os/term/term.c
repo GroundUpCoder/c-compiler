@@ -35,7 +35,10 @@
 #include <sys/select.h>
 #include <sys/wait.h>
 
-#define FONT_PATH  "/etc/fonts/mono.ttf"
+/* User-override font first, then the baked vendor default (todos/0040 —
+ * systemd-style /etc: an empty /etc must boot). */
+#define FONT_PATH      "/etc/fonts/mono.ttf"
+#define FONT_FALLBACK  "/usr/share/fonts/mono.ttf"
 #define FONT_SIZE  14
 #define INIT_COLS  80
 #define INIT_ROWS  24
@@ -635,7 +638,8 @@ static void frame_cb(void) {
 
 static int load_glyphs(void) {
     if (FT_Init_FreeType(&ft_lib)) return -1;
-    if (FT_New_Face(ft_lib, FONT_PATH, 0, &face)) return -1;
+    if (FT_New_Face(ft_lib, FONT_PATH, 0, &face) &&
+        FT_New_Face(ft_lib, FONT_FALLBACK, 0, &face)) return -1;
     FT_Set_Pixel_Sizes(face, 0, FONT_SIZE);
     cell_h = (int)(face->size->metrics.height >> 6);
     ascent = (int)(face->size->metrics.ascender >> 6);
@@ -667,7 +671,7 @@ static int load_glyphs(void) {
 
 int main(int argc, char **argv) {
     if (load_glyphs() != 0) {
-        fprintf(stderr, "term: cannot load %s\n", FONT_PATH);
+        fprintf(stderr, "term: cannot load %s (or %s)\n", FONT_PATH, FONT_FALLBACK);
         return 1;
     }
 
@@ -703,7 +707,7 @@ int main(int argc, char **argv) {
         sh_argv[1] = 0;
         path = "/bin/sh";
     }
-    char *envp[] = { "PATH=/bin", "HOME=/root", "TERM=xterm-256color", 0 };
+    char *envp[] = { "PATH=/usr/local/bin:/bin", "HOME=/root", "TERM=xterm-256color", 0 };
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, sfd, 0);

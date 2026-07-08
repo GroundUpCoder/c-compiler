@@ -116,7 +116,8 @@ try {
   await page.waitForFunction(() => window.__osState === 'ready',
     { timeout: 120000, polling: 250 });
   const mode = await page.evaluate(() => document.getElementById('status').textContent);
-  check('second boot reuses the image', /image: v4/.test(mode), mode);
+  // 0040 mode string: <system>/<root> — blob reused + existing v4 root volume.
+  check('second boot reuses the image', /image: reused\/v4/.test(mode), mode);
   await type('ls');
   await waitOut('a.out');
   check('a.out persisted across reload', true);
