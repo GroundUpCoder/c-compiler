@@ -169,9 +169,12 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
   the repo discipline. `/etc/.image-version` (system volume) gates
   re-seeding (bump `image.json`'s `version` after editing seeded sources).
   Since the split, upgrade = reseed (or discard: `boot.js
-  --fresh-system`) the system volume while `/root` survives untouched,
-  and a pre-baked image blob (`tools/mkimage.js`, still a future
-  distribution convenience) becomes trivially safe to ship as a follow-on.
+  --fresh-system`) the system volume while `/root` survives untouched.
+  The END-STATE upgrade story is designed in `todos/DISK-IMAGE.md`
+  (2026-07-08, queued as todos/0040): a `tools/mkimage.js`-baked
+  READ-ONLY system volume mounted at /usr (merged-usr, writable root
+  volume at /, systemd-style /etc where an empty /etc boots), and an
+  upgrade is just swapping the blob — settled decisions live there.
 - **Headless twin** (the agent-first requirement): `os/boot.js` boots the
   same kernel + manifest under plain Node — file-backed store, tty on
   stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and

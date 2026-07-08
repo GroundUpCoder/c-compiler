@@ -512,8 +512,9 @@ graduate to queue items when a fix is scheduled.
   the bottom strip covers the bar (repro: `winbox &`, title-drag it to
   the bottom edge; z in `wmctl list` shows winbox above taskbar). Fix
   would be wm.c policy (re-raise the bar on EV_MOVED overlap) or a
-  kernel always-on-top layer bit — neither scheduled; the strip-clear
-  placement + Ctrl+Alt+Tab keep the system driveable.
+  kernel always-on-top layer bit — **graduated to `todos/0038`**
+  (fix shape decided in-item); the strip-clear placement +
+  Ctrl+Alt+Tab keep the system driveable meanwhile.
 - **Pointer-lock UX needs a HUMAN check each round** (Chromium denies
   CDP-gesture lock requests, so Playwright cannot exercise it): quake
   lock on client click, ESC unlock, click re-lock, VT-switch release.

@@ -24,18 +24,24 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
+1. `0038` WM known-issues fixes — graduate the fixable WM.md
+   known-issues entries (taskbar always-on-top; fix shape decided
+   in-item)
+2. `0039` WM bug sweep round 2 — the repeatable 0033 format; incl. the
+   deferred pointer-lock HUMAN check and re-verifying 0038 under storm
+3. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
    stat md5sum … — no-spawn filters, multicall adds)
-2. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+4. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils
-3. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+5. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-4. `0037` wasm module cache — kernel-side compiled-Module cache on the
+6. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (system-volume /bin first; Modules clone, instances don't)
-5. (unnumbered) a real-world WebGPU C app port — candidates via
+7. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-6. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
-   `os-system.img` blob for one-blob virgin boots + fast test fixtures
+8. `0040` read-only system image — mkimage + the layout flip +
+   systemd-style /etc; swap-the-blob upgrades (design: `DISK-IMAGE.md`;
+   subsumes the old unnumbered mkimage entry)
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in
 `WM.md` "The desktop shell", verified-but-unfixed items on its
@@ -158,6 +164,10 @@ don't duplicate them. Current map:
 - `DOM.md` — C-to-DOM bytecode + diffing renderer idea.
 - `WASM_GC.md`, `EXTERNREF.md` — wasm GC / externref features.
 - `GOTO-LABELS-AST-REFACTOR.md` — control-flow lowering refactor.
+- `DISK-IMAGE.md` — the read-only system image & upgrade discipline
+  (0040): mkimage-baked RO volume at /usr, merged-usr, /usr/local,
+  systemd-style /etc, swap-the-blob upgrades. Decisions settled
+  2026-07-08.
 - `BLOCK_FS.md`, `MISC.md` — filesystem notes; grab-bag.
 
 ## Conventions
