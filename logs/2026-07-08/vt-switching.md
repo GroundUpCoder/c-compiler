@@ -1,9 +1,9 @@
 # VT switching: tty ↔ desktop (todos/0022)
 
 os.html gets Linux-console semantics: the xterm tty is **VT1**, the desktop
-**VT2**, and the page shows exactly one at a time — Ctrl+Alt+F1/F2 (with
-Ctrl+Alt+1/2 as an alias) or the clickable `1:tty` / `2:desktop` switch in
-the status strip. Boot lands on VT1.
+**VT2**, and the page shows exactly one at a time — switched with the
+**Terminal/Desktop tab bar** at the top (Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2
+remain as hotkey aliases). Boot lands on VT1.
 
 ## Why (and why it's this small)
 
@@ -24,11 +24,17 @@ untouched (headless has no desktop).
   whole page-side state machine. xterm can't measure a hidden pane, so VT1
   entry re-fits *after* unhiding, then focuses the term; VT2 entry focuses
   the canvas.
-- **Keybinding is Ctrl+Alt+F1/F2 on a window-level CAPTURE listener** — it
-  fires before xterm's key handling and before the canvas's forwarding
-  handler, so the chord works identically on both VTs. Ctrl+Alt+1/2 is an
-  alias because bare F-keys are OS-contested on some platforms (macOS media
-  keys). Matched on `e.code`, so keyboard layouts don't matter.
+- **The primary affordance is a Terminal/Desktop TAB BAR at the top of the
+  page** (follow-up, same day: the first cut used a small `1:tty`/
+  `2:desktop` switch in the status strip; user feedback rightly called it
+  under-discoverable, and the hotkeys can't be primary because they're
+  OS-contested — tabs are the conventional shape for exactly-one-pane).
+- **Keybindings stay as aliases: Ctrl+Alt+F1/F2 on a window-level CAPTURE
+  listener** — it fires before xterm's key handling and before the canvas's
+  forwarding handler, so the chord works identically on both VTs.
+  Ctrl+Alt+1/2 too, because bare F-keys are OS-contested on some platforms
+  (macOS media keys). Matched on `e.code`, so keyboard layouts don't
+  matter. They're documented in the tab tooltips.
 - **Stuck-modifier release**: switching VT2→VT1 mid-chord means the app saw
   Ctrl/Alt keydowns whose keyups will land on the xterm. setVt synthesizes
   ControlLeft/AltLeft keyups into the focused surface — the same class of
@@ -63,8 +69,8 @@ command's own tty echo.
 
 ## Gotchas
 
-- `#status` used to be a bare text node; anything writing
-  `statusEl.textContent` would have wiped the new switch controls — status
-  text now targets a `#statusmsg` span.
+- The tab bar lives OUTSIDE `#status` (its own `#vtbar` row) so the
+  status line stays a bare text node — anything writing
+  `statusEl.textContent` would wipe controls placed inside it.
 - The seeded image is untouched (os.html isn't seeded) — image.json stays
   **v16**; no re-seed needed.

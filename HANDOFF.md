@@ -12,10 +12,11 @@ console semantics (design: WM.md "Screen, VTs, and scaling fixed-size
 clients"; dev log `logs/2026-07-08/vt-switching.md`). Shape:
 
 - The xterm tty is **VT1**, the desktop **VT2**; the page shows exactly
-  one (`body[data-vt]` CSS), boot lands on VT1. Ctrl+Alt+F1/F2 (+
-  Ctrl+Alt+1/2 alias) on a window-CAPTURE keydown listener, plus the
-  clickable `1:tty`/`2:desktop` switch in the status strip (`#status` now
-  wraps its text in `#statusmsg` — don't write textContent on the strip).
+  one (`body[data-vt]` CSS), boot lands on VT1. The PRIMARY switch is the
+  Terminal/Desktop tab bar at the top (`#vt1tab`/`#vt2tab` — promoted
+  from a status-strip control on user feedback: discoverability);
+  Ctrl+Alt+F1/F2 (+ Ctrl+Alt+1/2 alias) stay as hotkey aliases on a
+  window-CAPTURE keydown listener.
 - VT1 entry re-fits + refocuses xterm; VT2 entry focuses the canvas;
   pointer lock is exited on leaving VT2 and requests are gated to VT2
   (re-arms per 0018 on the next client click); halt/boot-error force VT1;

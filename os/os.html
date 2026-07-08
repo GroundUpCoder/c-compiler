@@ -6,12 +6,14 @@
      (os/boot.js is the same OS with the tty on stdio).
 
      VTs (todos/0022, Linux-console semantics): the xterm tty is VT1, the
-     desktop VT2 — the page shows exactly one at a time (Ctrl+Alt+F1/F2, or
-     the switch in #status). Boot lands on VT1. The point is availability
-     under partial failure: VT1's path is kernel worker + xterm only — no
-     compositor, no wm, no GPU — so the shell stays usable while the desktop
-     is broken or merely suspect. Pure page-side state; the kernel keeps
-     compositing while hidden (mailbox frames, bounded cost).
+     desktop VT2 — the page shows exactly one at a time, switched with the
+     Terminal/Desktop TAB BAR at the top (the discoverable, primary
+     affordance; Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2 remain as aliases). Boot
+     lands on VT1. The point is availability under partial failure: VT1's
+     path is kernel worker + xterm only — no compositor, no wm, no GPU — so
+     the shell stays usable while the desktop is broken or merely suspect.
+     Pure page-side state; the kernel keeps compositing while hidden
+     (mailbox frames, bounded cost).
 
      Serve from the repo root — SharedArrayBuffer needs the COOP/COEP
      headers serve.js sends:   node serve.js .   then open /os/os.html  -->
@@ -24,18 +26,26 @@
   html, body { height: 100%; margin: 0; background: #0d0d1a; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
   #status {
-    display: flex; gap: 8px; align-items: baseline;
     font: 12px 'Menlo', 'Consolas', monospace; color: #557755;
     padding: 2px 8px; white-space: nowrap; overflow: hidden;
   }
-  #status.error #statusmsg { color: #cc5555; }
-  /* VT switch (todos/0022): the always-visible affordance in the status
-     strip; the keybinding is Ctrl+Alt+F1/F2 (Ctrl+Alt+1/2 works too). */
-  .vtbtn {
-    color: #557755; cursor: pointer; user-select: none;
-    padding: 0 4px; border: 1px solid transparent;
+  #status.error { color: #cc5555; }
+  /* VT tabs (todos/0022): the primary, discoverable switch — one tab per
+     VT, browser-tab styling. Ctrl+Alt+F1/F2 (or 1/2) are quiet aliases. */
+  #vtbar {
+    display: flex; gap: 2px; padding: 6px 8px 0;
+    border-bottom: 1px solid #333355;
   }
-  .vtbtn.active { color: #99cc99; border-color: #335533; }
+  .vttab {
+    font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
+    cursor: pointer; user-select: none; padding: 5px 18px;
+    background: #16162a; border: 1px solid #333355; border-bottom: none;
+    border-radius: 6px 6px 0 0; position: relative; top: 1px;
+  }
+  .vttab:hover { color: #c0c0d8; }
+  .vttab.active {
+    color: #e0e0f0; background: #22223a; border-color: #4a4a77;
+  }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. Natural-size
      canvas (no CSS scaling) keeps event offsets == screen coordinates. */
@@ -50,13 +60,13 @@
 </head>
 <body data-vt="1">
 <div id="wrap">
+  <div id="vtbar">
+    <span id="vt1tab" class="vttab active" title="the tty, VT1 (Ctrl+Alt+F1)">Terminal</span>
+    <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2)">Desktop</span>
+  </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
-  <div id="status">
-    <span id="vt1btn" class="vtbtn active" title="tty (Ctrl+Alt+F1)">1:tty</span>
-    <span id="vt2btn" class="vtbtn" title="desktop (Ctrl+Alt+F2)">2:desktop</span>
-    <span id="statusmsg">booting…</span>
-  </div>
+  <div id="status">booting…</div>
 </div>
 <script src="../vendor/xterm/xterm.js"></script>
 <script src="../vendor/xterm/xterm-addon-fit.js"></script>
@@ -68,9 +78,8 @@
 'use strict';
 
 var statusEl = document.getElementById('status');
-var statusMsgEl = document.getElementById('statusmsg');
 function status(msg, isError) {
-  statusMsgEl.textContent = msg;
+  statusEl.textContent = msg;
   statusEl.className = isError ? 'error' : '';
 }
 
@@ -157,11 +166,11 @@ screen.addEventListener('keyup', function (e) {
 });
 
 // VTs (todos/0022): Linux-console semantics — VT1 = the xterm tty, VT2 = the
-// desktop; the page shows exactly one (body[data-vt] CSS above). Keybinding
-// Ctrl+Alt+F1/F2, with Ctrl+Alt+1/2 as an alias (F-keys are OS-contested on
-// some platforms), plus the clickable switch in #status. Page-side state
-// ONLY: the kernel keeps compositing while hidden (frames are mailbox —
-// bounded cost, zero protocol change), so VT1 stays fully usable when the
+// desktop; the page shows exactly one (body[data-vt] CSS above). The PRIMARY
+// switch is the Terminal/Desktop tab bar (discoverable; hotkeys are OS-
+// contested); Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2 remain as aliases. Page-side
+// state ONLY: the kernel keeps compositing while hidden (frames are mailbox
+// — bounded cost, zero protocol change), so VT1 stays fully usable when the
 // desktop stack is broken — the escape hatch is the point. Pointer lock is
 // dropped on leaving VT2 (and lock requests are gated to VT2); it re-arms
 // per 0018 on the next client click.
@@ -183,15 +192,15 @@ function setVt(n) {
   vt = n;
   window.__osVt = n;   // agent probe
   document.body.setAttribute('data-vt', String(n));
-  document.getElementById('vt1btn').className = 'vtbtn' + (n === 1 ? ' active' : '');
-  document.getElementById('vt2btn').className = 'vtbtn' + (n === 2 ? ' active' : '');
+  document.getElementById('vt1tab').className = 'vttab' + (n === 1 ? ' active' : '');
+  document.getElementById('vt2tab').className = 'vttab' + (n === 2 ? ' active' : '');
   // Re-fit AFTER unhiding — xterm can't measure a display:none pane.
   if (n === 1) { fitAddon.fit(); term.focus(); }
   else { screen.focus(); }
 }
 window.__osVtSwitch = setVt;   // agent probe (tests/browser/os-vt.mjs)
-document.getElementById('vt1btn').addEventListener('click', function () { setVt(1); });
-document.getElementById('vt2btn').addEventListener('click', function () { setVt(2); });
+document.getElementById('vt1tab').addEventListener('click', function () { setVt(1); });
+document.getElementById('vt2tab').addEventListener('click', function () { setVt(2); });
 window.addEventListener('keydown', function (e) {
   if (!e.ctrlKey || !e.altKey) return;
   var n = (e.code === 'F1' || e.code === 'Digit1') ? 1

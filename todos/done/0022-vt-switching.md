@@ -1,9 +1,11 @@
 # 0022 — VT switching: tty ↔ desktop
 
 - **Status**: done (2026-07-08 — os.html-only: `body[data-vt]` shows exactly
-  one of tty/desktop, boot lands on VT1; Ctrl+Alt+F1/F2 (+ Ctrl+Alt+1/2
-  alias) on a window-capture listener + the `1:tty`/`2:desktop` switch in
-  #status; VT1 entry re-fits+refocuses xterm, VT2 entry focuses the canvas;
+  one of tty/desktop, boot lands on VT1; the Terminal/Desktop tab bar is
+  the primary switch (follow-up same day: promoted from a status-strip
+  control for discoverability), with Ctrl+Alt+F1/F2 (+ Ctrl+Alt+1/2) as
+  aliases on a window-capture listener; VT1 entry re-fits+refocuses xterm,
+  VT2 entry focuses the canvas;
   pointer lock exited on leaving VT2 and requests gated to VT2; halt/
   boot-error force VT1; stuck-modifier keyups released to the focused
   surface on VT2→VT1. Zero kernel change. `tests/browser/os-vt.mjs` covers

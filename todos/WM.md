@@ -316,9 +316,9 @@ re-fits xterm.
 
 **VT switching (todos/done/0022 — LANDED 2026-07-08)** — the Linux
 console metaphor: the xterm tty is VT1, the desktop VT2; the page shows
-exactly one (`body[data-vt]` CSS), with Ctrl+Alt+F1/F2 (+ Ctrl+Alt+1/2
-alias) on a window-capture listener plus the `1:tty`/`2:desktop` switch
-in the status strip; boot lands on VT1. The point is availability under
+exactly one (`body[data-vt]` CSS), switched with the Terminal/Desktop
+tab bar (the primary, discoverable affordance) or Ctrl+Alt+F1/F2 (+
+Ctrl+Alt+1/2) aliases on a window-capture listener; boot lands on VT1. The point is availability under
 partial failure, not layout: VT1's path is kernel worker + xterm only —
 no compositor, no wm, no GPU — so it stays fully usable while the
 desktop is broken or merely suspect. It remains the escape

@@ -1,8 +1,9 @@
 // 0022 browser acceptance: VT switching, Linux-console semantics — the xterm
 // tty is VT1, the desktop VT2; os.html shows exactly one at a time. Boot must
-// land on VT1 with the tty full-page; Ctrl+Alt+F1/F2 (and the Ctrl+Alt+1/2
-// alias) plus the clickable switch in #status flip between them; VT1 entry
-// refocuses (and re-fits) xterm, VT2 entry focuses the canvas. The rationale
+// land on VT1 with the tty full-page; the Terminal/Desktop TAB BAR is the
+// primary affordance, with Ctrl+Alt+F1/F2 (and the Ctrl+Alt+1/2 alias) as
+// the hotkey path — both flip between them. VT1 entry refocuses (and
+// re-fits) xterm, VT2 entry focuses the canvas. The rationale
 // under test is availability under partial failure: VT1's path is kernel
 // worker + xterm only, so the shell must stay fully usable mid-app (doom
 // running) and after the wm service is killed (kernel-chrome fallback).
@@ -136,10 +137,10 @@ try {
   };
 
   await page.keyboard.type('doom &\r');
-  // Switch via the #status affordance this time (the clickable path).
-  await page.click('#vt2btn');
+  // Switch via the tab bar this time (the primary, clickable path).
+  await page.click('#vt2tab');
   s = await vtState();
-  check('status-strip switch control reaches VT2', s.vt === 2 && s.desktopVisible, s);
+  check('Desktop tab reaches VT2', s.vt === 2 && s.desktopVisible, s);
   const first = await waitFrame(DOOM_REGION, st => st.colors > 50 && st.nonTeal > st.n * 0.9, 90000);
   check('doom composites on VT2', true, { colors: first.colors });
 
@@ -183,7 +184,9 @@ try {
   await waitFrame(DOOM_REGION, st => st.colors > 50 && st.nonTeal > st.n * 0.9, 30000);
   check('doom still composited under kernel-chrome fallback', true);
 
-  await page.keyboard.press('Control+Alt+F1');
+  await page.click('#vt1tab');   // the Terminal tab (primary affordance)
+  s = await vtState();
+  check('Terminal tab returns to VT1', s.vt === 1 && s.termVisible, s);
   await page.keyboard.type("echo POST-WM-O''K\r");
   await waitOut('POST-WM-OK');
   check('shell alive after wm death (maintenance mode works)', true);

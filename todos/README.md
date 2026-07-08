@@ -86,7 +86,8 @@ inside, drag-resize reflow (`logs/2026-07-08/wasm-terminal-ptys.md`);
 non-resizable frames are focus-only, RESIZE refusals, WMP record bit4
 (`logs/2026-07-08/resizable-gating.md`);
 `0022` **VT switching** — os.html shows exactly one of tty (VT1) /
-desktop (VT2), Ctrl+Alt+F1/F2 + status-strip switch, boot lands on VT1;
+desktop (VT2), Terminal/Desktop tab bar + Ctrl+Alt+F1/F2 alias, boot
+lands on VT1;
 the tty as maintenance mode under partial desktop failure, zero kernel
 change (`logs/2026-07-08/vt-switching.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
