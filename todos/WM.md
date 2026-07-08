@@ -422,7 +422,9 @@ the code, not assumed):
   one wm process, dispatched per event by windowID.
 - **WMP RESTACK place=1 already means "send to bottom"**, and borderless
   surfaces receive client clicks but never steal focus — the taskbar's
-  own mechanics, reused verbatim by the desktop layer.
+  own mechanics, reused verbatim by the desktop layer. (Since
+  todos/0038 the desktop pin is SET_LAYER -1 — a real pin, not a
+  one-shot restack.)
 - **A click that hits no surface is invisible to the WM** (the kernel
   hit-test returns `'desktop'` to the embedder only, no WMP event). The
   desktop LAYER fixes this as a side effect: once a fullscreen wm
@@ -447,7 +449,8 @@ missing fd are harmless (doom printf's at startup) or give children
 /dev/null-ish fds via spawn file actions.
 
 **Desktop icons (todos/0029).** A fullscreen borderless wm surface,
-restacked to bottom at create, teal fill (it covers the compositor's
+pinned to the bottom z layer at create (SET_LAYER since todos/0038;
+originally a one-shot RESTACK), teal fill (it covers the compositor's
 background wherever it sits) + an icon grid from
 `readdir("/root/Desktop")` (seeded: symlinks to doom/quake/gameboy/
 term). Double-click (SDL event timestamps, the 0025 threading):
@@ -506,15 +509,11 @@ Subsequent sweeps allocate new numbers when scheduled.
 Verified-but-unfixed, each with a repro. Re-check every sweep; entries
 graduate to queue items when a fix is scheduled.
 
-- **The taskbar is not always-on-top.** Every window creates ABOVE the
-  bar in kernel z (create raises), so wm.c's furniture only stays
-  visible because placement clears the strip — a window DRAGGED onto
-  the bottom strip covers the bar (repro: `winbox &`, title-drag it to
-  the bottom edge; z in `wmctl list` shows winbox above taskbar). Fix
-  would be wm.c policy (re-raise the bar on EV_MOVED overlap) or a
-  kernel always-on-top layer bit — **graduated to `todos/0038`**
-  (fix shape decided in-item); the strip-clear placement +
-  Ctrl+Alt+Tab keep the system driveable meanwhile.
+- ~~**The taskbar is not always-on-top.**~~ **FIXED in todos/0038**
+  (2026-07-08) by kernel z layers — see "Implementation status — z
+  layers" below. The old repro (title-drag winbox onto the strip →
+  winbox above taskbar in `wmctl list` z) is now a regression leg in
+  test_wm_policy.js / test_wm_service_e2e.js / os-wm.mjs.
 - **Pointer-lock UX needs a HUMAN check each round** (Chromium denies
   CDP-gesture lock requests, so Playwright cannot exercise it): quake
   lock on client click, ESC unlock, click re-lock, VT-switch release.
@@ -536,6 +535,33 @@ os-quake's "desktop restored = pure teal" asserts (test expectations,
 fixed to icon-tolerant thresholds in the 0033 commit); hush `kill` of
 the wm is cooperative SIGTERM — tests must barrier on surface
 reclaim, not the kill returning (bit os-wm.mjs during 0032).
+
+## Implementation status — z layers (landed 2026-07-08, todos/0038)
+
+**Decision: kernel mechanism, not reactive wm.c policy.** Each surface
+carries a z LAYER (-1 bottom / 0 normal / +1 top, default 0; record
+word 11, the ex-reserved slot), set via **WMP SET_LAYER 0x1A** /
+kernel-JS `wmSetLayer` / `wmctl layer SID -1|0|1` (`wmctl list` FLAGS
+grow a `T`/`B` char for pinned surfaces). Every z mutation —
+create-push, focus-raise, RESTACK raise/lower — is followed by a
+STABLE sort of `_zOrder` by layer (`_wmZNormalize`), so an op lands at
+the top/bottom of its OWN layer and can never cross a boundary: the
+pinned taskbar stays above any create/raise/drag, and a RESTACK lower
+can never sink a window under the pinned desktop layer (the same
+problem mirrored — one mechanism fixes both). Rationale over the wm.c
+re-raise-on-EV_MOVED shape: airtight (no one-composited-frame overlap),
+and wm.c could not even SEE a `wmctl lower`-driven violation (RESTACK
+has no event). Policy still decides WHICH windows are furniture: wm.c
+pins its taskbar + Start menu to +1 and the desktop layer to -1 on
+their EV_CREATED echoes (the menu is created after the bar, so the
+stable sort keeps it above within the layer); the no-WM fallback never
+sets layers, so kernel-chrome behavior is untouched. No new event —
+subscribers see the layer in EV_CREATED/LIST records. Tests: 0038 legs
+in test_wm_policy.js (scripted client: pinning, boundary-crossing
+attempts, strip composite + hit-test), test_wm_service_e2e.js (real
+wm.c furniture pins, wmctl raise/list), os-wm.mjs (real drag onto the
+strip; bar stays visible and its buttons clickable through the
+overlap). Image v27.
 
 ## Implementation status v1 (landed 2026-07-07, todos/0013)
 

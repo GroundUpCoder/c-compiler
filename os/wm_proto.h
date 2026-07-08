@@ -45,6 +45,14 @@ enum {
                                           wmctl-cycle path into the same
                                           EV_CYCLE the Alt+Tab chord emits.
                                           R_ERR with no subscribed WM */
+    WMP_SET_LAYER = 0x1A,              /* { sid, layer }: pin the surface to
+                                          a z layer (todos/0038) — -1 below
+                                          normal windows (the desktop layer),
+                                          0 normal, +1 above (the taskbar);
+                                          every z-order op stays within its
+                                          layer, so a raise/create can never
+                                          cover the bar nor a lower sink
+                                          under the desktop */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     /* replies */
@@ -77,9 +85,10 @@ enum {
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries
  * u32 count then count of these). No padding: 12 i32 + 32 bytes.
  * dst_w/dst_h: the on-screen viewport (todos/0024) — equals w/h unless
- * the surface is scaled. */
+ * the surface is scaled. layer: the z layer (todos/0038; was reserved) —
+ * -1 bottom / 0 normal / +1 top. */
 typedef struct {
-    int32_t sid, pid, x, y, w, h, z, flags, frame_seq, dst_w, dst_h, reserved;
+    int32_t sid, pid, x, y, w, h, z, flags, frame_seq, dst_w, dst_h, layer;
     char title[32];                    /* NUL-padded, always terminated */
 } wmp_rec;
 #define WMP_F_FOCUSED    1

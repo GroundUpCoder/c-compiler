@@ -23,7 +23,9 @@
  * doom finds its WAD by cwd) and are reaped with a WNOHANG poll.
  *
  * The desktop layer (todos/0029) is a third borderless window: fullscreen,
- * restacked to the bottom of z at create and never raised, teal fill + an
+ * pinned to the BOTTOM z layer at create (SET_LAYER -1, todos/0038 — the
+ * taskbar and Start menu ride the TOP layer, so app windows can neither
+ * cover the bar nor sink under the desktop), teal fill + an
  * icon grid from /root/Desktop (re-read on a coarse frame-tick timer).
  * Double-click (SDL event timestamps) launches: a symlink spawns its
  * target, any other regular file opens in `term vi`. Free side effect:
@@ -474,7 +476,7 @@ static void desk_load(void) {
 }
 
 /* Fullscreen borderless window; its EV_CREATED echo parks it at (0,0),
- * restacks it to the BOTTOM of z, and gives focus back (see handle_event).
+ * pins it to the BOTTOM z layer, and gives focus back (see handle_event).
  * The compositor's own background never shows again while the wm lives —
  * which is the point: every "desktop" click is a client click now. */
 static int make_desk(void) {
@@ -635,12 +637,18 @@ static void handle_event(wmp_hdr *h) {
                 menu_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H - menu_h() };
                 wmp_send(sock, WMP_MOVE, a, 3);
+                /* Top layer like the bar (todos/0038) — created later, so
+                 * the stable sort keeps the menu above it. */
+                int32_t ly[2] = { r.sid, 1 };
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
             } else if (strncmp(r.title, "desktop", 8) == 0) {   /* todos/0029 */
                 desk_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, 0 };
                 wmp_send(sock, WMP_MOVE, a, 3);
-                int32_t rs[2] = { r.sid, 1 };       /* place=1: bottom of z */
-                wmp_send(sock, WMP_RESTACK, rs, 2);
+                /* Bottom layer (todos/0038, was RESTACK place=1): pinned —
+                 * a lowered app window can no longer sink under it. */
+                int32_t ly[2] = { r.sid, -1 };
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
                 /* Creating furniture steals focus (create-focus is kernel
                  * mechanism); hand it back to the focused app window. */
                 for (int i = 0; i < nwins; i++)
@@ -653,6 +661,10 @@ static void handle_event(wmp_hdr *h) {
                 bar_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H };
                 wmp_send(sock, WMP_MOVE, a, 3);
+                /* Always-on-top (todos/0038): windows dragged onto the strip
+                 * slide UNDER the bar; its buttons stay clickable. */
+                int32_t ly[2] = { r.sid, 1 };
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
             }
             return;
         }

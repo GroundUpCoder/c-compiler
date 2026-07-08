@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-08, after 0040 landed)
+# Handoff — start of thread (updated 2026-07-08, after 0038 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,26 +7,34 @@
 
 ## Where the repo stands
 
-**0040 (read-only system image) landed 2026-07-08** — dev log
-`logs/2026-07-08/read-only-system-image.md`, decisions recorded in
-`todos/DISK-IMAGE.md`. The OS now boots a WRITABLE root volume at `/` +
-a SEALED read-only blob at `/usr` (`/bin → /usr/bin`,
-`/usr/local → /var/local`, systemd-style /etc, `PATH=/usr/local/bin:/bin`);
-`tools/mkimage.js` bakes the blob offline (`os/os-system.img`, gitignored,
-fetched by the browser boot — else the embedders bake on demand);
-`image.json` is **v26**, split `system`/`user`. All suites green at the
-landing: unit 697✓, blockfs✓ (new `test_readonly.js` + fsck_v4 seal),
-kernel✓ (test_os_boot rewritten: upgrade-swap, factory reset, EROFS),
-full serial browser sweep✓ (os-shell gained the /etc/menu override leg).
+**0038 (WM known-issues fixes: kernel z layers) landed 2026-07-08** —
+dev log `logs/2026-07-08/wm-z-layers.md`, decision recorded in
+`todos/WM.md` "Implementation status — z layers". Per-surface z layer
+-1/0/+1 (WMP SET_LAYER 0x1A / `wmSetLayer` / `wmctl layer`; record
+word 11 = ex-reserved; `wmctl list` FLAGS grow a T/B char), every
+z-order op stable-sort-normalized within its layer; wm.c pins
+taskbar+Start menu → +1, desktop → -1. The taskbar is always-on-top
+and nothing sinks under the desktop; no-WM fallback untouched. Image
+is **v27**. Test-first: failing legs committed as a17f7e5, fix
+separate. All suites green at the landing: unit 697✓, blockfs✓,
+kernel✓ (new legs in test_wm_policy + test_wm_service_e2e), full
+serial browser sweep✓ (os-wm gained the drag-onto-strip leg; ran 3×
+clean after one non-reproducing first-run boot-phase flake).
+
+**0040 (read-only system image) landed earlier the same day** — dev log
+`logs/2026-07-08/read-only-system-image.md`, decisions in
+`todos/DISK-IMAGE.md`: writable root at `/` + sealed RO blob at `/usr`,
+`tools/mkimage.js` bakes `os/os-system.img` (gitignored).
 
 ## The queue (todos/README.md is authoritative)
 
-Next up: `0038` WM known-issues fixes (taskbar always-on-top,
-test-first), `0039` WM sweep round 2 (MUST include the pointer-lock
-HUMAN check round 1 skipped + re-verifying 0038 under storm), then
-`0034` coreutils batch 2, `0035` spawn-capable applets, `0036` seed the
-REPLs, `0037` wasm module cache (its cache key now exists: the blob's
-`/usr/share/os-release` VERSION_ID), the WebGPU app port (WEBGPU.md).
+Next up: `0039` WM sweep round 2 (MUST include the pointer-lock
+HUMAN check round 1 skipped + re-verifying 0038 under storm — try
+`wmctl layer`/`raise`/`lower` combinations against the layer
+invariant), then `0034` coreutils batch 2, `0035` spawn-capable
+applets, `0036` seed the REPLs, `0037` wasm module cache (its cache
+key exists: the blob's `/usr/share/os-release` VERSION_ID), the
+WebGPU app port (WEBGPU.md).
 (`0006` threads+atomics stays deferred indefinitely.)
 
 ## Gotchas carried forward
@@ -66,8 +74,9 @@ REPLs, `0037` wasm module cache (its cache key now exists: the blob's
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/`, dev log
   per landing, README next-up current.
 - compiler.js must stay browser-clean (no bare `process.*`).
-- MUST-MATCH blocks: WM protocol in kernel.js (WMP incl. CYCLE/EV_CYCLE;
-  80-byte record) ↔ os/wm_proto.h ↔ test_wm_policy.js; surface/ring
+- MUST-MATCH blocks: WM protocol in kernel.js (WMP incl. CYCLE/EV_CYCLE
+  + SET_LAYER; 80-byte record, word 11 = layer) ↔ os/wm_proto.h ↔
+  test_wm_policy.js; surface/ring
   layout kernel.js (SH_*/IR_*) ↔ host.js (WMSH_*/WMIR_*); ring event
   numbers (WMEV) ↔ <SDL3> event values in compiler.js ↔ host.js WMEV_*;
   audio ring layout kernel.js (AU_*) ↔ host.js; SDL audio format words ↔
@@ -85,5 +94,5 @@ REPLs, `0037` wasm module cache (its cache key now exists: the blob's
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0038 taskbar always-on-top (test-first), 0039 sweep round 2,
-or something else."
+to tackle: 0039 WM sweep round 2 (incl. the pointer-lock human check),
+0034 coreutils batch 2, or something else."

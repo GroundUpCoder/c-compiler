@@ -274,6 +274,45 @@ try {
   await waitPixel(BX + 150, BY - 12, NAVY);
   check('chord again flipped back', true);
 
+  // ---- taskbar always-on-top (todos/0038): drag B onto the bottom strip;
+  // the bar is pinned to the TOP z layer (wm.c SET_LAYER), so it composites
+  // and hit-tests ABOVE the dragged window — its buttons stay clickable. ----
+  const preStrip = await sample(200, BARY);
+  check('strip is furniture before the drag', near(preStrip, FACE) || near(preStrip, FACE_DOWN), preStrip);
+  // Grab B's title, drop so the client top lands at SH-60: the window then
+  // overlaps the strip (which starts at SH-28).
+  await page.mouse.move(rect.x + BX + 100, rect.y + BY - 12);
+  await page.mouse.down();
+  await page.mouse.move(rect.x + BX + 100, rect.y + SH - 72, { steps: 8 });
+  await page.mouse.up();
+  await waitPixel(BX + 120, SH - 45, ORANGE);    // B's fill just above the bar
+  check('winbox dragged onto the strip', true);
+  const strip = await sample(200, BARY);
+  check('taskbar still composited above the dragged window (todos/0038)',
+    near(strip, FACE) || near(strip, FACE_DOWN), strip);
+  // The button UNDER the overlap still clicks: B is focused, so its button
+  // click must minimize it (pre-0038 the click landed in B's client).
+  await clickAt(200, BARY);
+  await waitPixel(BX + 120, SH - 45, TEAL);
+  check('taskbar button under the overlap still clicks (B minimized)', true);
+  await clickAt(200, BARY);                      // restore
+  await waitPixel(BX + 120, SH - 45, ORANGE);
+  check('...and restores', true);
+  // wmctl agrees: the LAST list row (top of z) is the pinned taskbar.
+  await setVt(1);
+  await page.keyboard.type("wmctl list | sed '$!d' | grep -q taskbar && echo Z-TOP-O''K\r");
+  await page.waitForFunction(() => window.__osOut.includes('Z-TOP-OK'), { timeout: 20000, polling: 200 });
+  check('wmctl list: top of z is the taskbar (todos/0038)', true);
+  await setVt(2);
+  // Put B back where the kill-the-wm legs expect it.
+  await waitPixel(BX + 150, SH - 66, NAVY);      // B's title, refocused settle
+  await page.mouse.move(rect.x + BX + 100, rect.y + SH - 66);
+  await page.mouse.down();
+  await page.mouse.move(rect.x + BX + 100, rect.y + BY - 6, { steps: 8 });
+  await page.mouse.up();
+  await waitPixel(BX + 150, BY - 12, NAVY);
+  check('winbox dragged back off the strip', true);
+
   // Kill the wm: the chord passes through — the focused winbox sees the
   // Tab keydown and toggles green (the kernel never eats keys without a
   // subscriber). B was clicked once above, so it carries one black mark.

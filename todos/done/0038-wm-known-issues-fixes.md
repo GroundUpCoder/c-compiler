@@ -1,6 +1,9 @@
 # 0038 — WM known-issues fixes (graduate the fixable entries)
 
-- **Status**: open
+- **Status**: DONE (2026-07-08) — kernel z layers (WMP SET_LAYER,
+  stable-sort normalization; wm.c pins taskbar/menu +1, desktop -1);
+  decision + rationale in WM.md "Implementation status — z layers",
+  dev log `logs/2026-07-08/wm-z-layers.md`, image v27
 - **Depends**: — (0033 created the list; this graduates its fixable
   entries per WM.md's "entries graduate to queue items when a fix is
   scheduled")

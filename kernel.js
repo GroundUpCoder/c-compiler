@@ -265,8 +265,8 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * Window record (fixed 80 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
  * flags (bit0 focused, bit1 minimized, bit2 borderless, bit3 relative-
  * mouse, bit4 resizable), frameSeq, dstW, dstH (the on-screen viewport,
- * todos/0024 — equals w/h unless scaled), reserved, then 32 bytes
- * NUL-padded UTF-8 title.
+ * todos/0024 — equals w/h unless scaled), layer (todos/0038: -1 bottom /
+ * 0 normal / +1 top; was reserved), then 32 bytes NUL-padded UTF-8 title.
  *
  * Commands -> replies:
  *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
@@ -298,6 +298,13 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   path into the SAME EV_CYCLE the Alt+Tab
  *                                   chord emits; R_ERR with no subscriber,
  *                                   since cycling IS policy)
+ *   SET_LAYER { sid, layer }     -> R_OK | R_ERR   (todos/0038: pin the
+ *                                   surface to a z LAYER — -1 below normal
+ *                                   windows (the desktop layer), 0 normal,
+ *                                   +1 above (the taskbar). Every z-order op
+ *                                   keeps layers separated, so create/raise/
+ *                                   focus/lower can never cross a boundary;
+ *                                   no event — the record carries the layer)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
@@ -337,6 +344,10 @@ var WMP = {
                                         path into the same EV_CYCLE the kernel
                                         chord emits. R_ERR with no subscribed
                                         WM (cycling IS policy) */
+  SET_LAYER: 0x1A,                   /* { sid, layer }: pin a surface to a z
+                                        layer (todos/0038) — -1 bottom (the
+                                        desktop layer), 0 normal, +1 top (the
+                                        taskbar); z ops never cross layers */
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
@@ -1979,10 +1990,13 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         borderless: !!((req.flags | 0) & 1),      // bit0: no kernel chrome (taskbar-class)
         relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
         resizable: !!((req.flags | 0) & 4),       // bit2: SDL_WINDOW_RESIZABLE (0021)
+        layer: 0,                 // z layer (todos/0038): -1 bottom / 0 / +1 top;
+                                  // set post-create via SET_LAYER / wmSetLayer
         pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
       };
       this._surfaces.set(sid, surf);
       this._zOrder.push(sid);
+      this._wmZNormalize();       // create raises within the NORMAL layer only
       pcb.surfaces.add(sid);
       this._focusSid = sid;       // new window takes focus (v1 policy)
       this._wmVersion++;
@@ -2615,10 +2629,43 @@ Kernel.prototype.wmList = function () {
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
                relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
+               layer: s.layer | 0,
                configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
   return out;
+};
+
+/* Re-sort _zOrder by z layer (todos/0038). Array.prototype.sort is stable
+ * (ES2019), so within a layer the existing order — including the raise/
+ * lower/create that just happened — is preserved; the sort only pushes a
+ * surface back inside its layer's band. Called after EVERY z mutation:
+ * that is the whole always-on-top mechanism (a raise lands at the top of
+ * its OWN layer, never above a +1-pinned bar; a lower lands at the bottom
+ * of its layer, never under a -1-pinned desktop). */
+Kernel.prototype._wmZNormalize = function () {
+  var self = this;
+  this._zOrder.sort(function (a, b) {
+    var sa = self._surfaces.get(a), sb = self._surfaces.get(b);
+    return (sa ? sa.layer : 0) - (sb ? sb.layer : 0);
+  });
+};
+
+/* Pin a surface to a z layer (todos/0038): -1 below normal windows (the
+ * desktop layer), 0 normal, +1 above (the taskbar). Mechanism only — which
+ * surfaces are furniture is WM policy (/bin/wm pins its own windows); the
+ * no-WM fallback never sets layers, so kernel-chrome behavior is untouched.
+ * No event: the window record carries the layer (word 11). */
+Kernel.prototype.wmSetLayer = function (sid, layer) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return false;
+  layer = layer | 0;
+  if (layer < -1 || layer > 1) return false;
+  if (s.layer === layer) return true;                           // no-op
+  s.layer = layer;
+  this._wmZNormalize();
+  this._wmVersion++;
+  return true;
 };
 
 Kernel.prototype.wmFocus = function (sid) {
@@ -2633,6 +2680,7 @@ Kernel.prototype.wmFocus = function (sid) {
   if (zi >= 0 && zi !== this._zOrder.length - 1) {
     this._zOrder.splice(zi, 1);
     this._zOrder.push(s.sid);
+    this._wmZNormalize();                       // raise stays within the layer
   }
   if (this._focusSid !== s.sid) {
     this._focusSid = s.sid;
@@ -2743,7 +2791,10 @@ Kernel.prototype.wmMinimize = function (sid) {
   return true;
 };
 
-/* place: 0 = raise to top (without stealing focus), 1 = lower to bottom. */
+/* place: 0 = raise to top (without stealing focus), 1 = lower to bottom —
+ * of the surface's own z LAYER (todos/0038): the normalize below pushes it
+ * back inside its band, so a lower never sinks under a pinned desktop and
+ * a raise never covers a pinned taskbar. */
 Kernel.prototype.wmRestack = function (sid, place) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return false;
@@ -2752,6 +2803,7 @@ Kernel.prototype.wmRestack = function (sid, place) {
   this._zOrder.splice(zi, 1);
   if ((place | 0) === 1) this._zOrder.unshift(s.sid);
   else this._zOrder.push(s.sid);
+  this._wmZNormalize();
   this._wmVersion++;
   return true;
 };
@@ -2962,7 +3014,7 @@ Kernel.prototype._wmpRecord = function (s) {
               (s.resizable ? 16 : 0);
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
-                s.dstW, s.dstH, 0];
+                s.dstW, s.dstH, s.layer | 0];
   for (var i = 0; i < fields.length; i++) dv.setInt32(i * 4, fields[i] | 0, true);
   rec.set(wmpTitle32(s.title), 48);
   return rec;
@@ -3040,6 +3092,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.SET_DST: ok(this.wmSetDst(g(0), g(1), g(2))); break;
     case WMP.ACTIVATE: ok(this.wmTitleActivate(g(0))); break;
     case WMP.CYCLE: ok(this.wmCycle(g(0))); break;
+    case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores

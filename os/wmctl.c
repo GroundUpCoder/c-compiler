@@ -14,6 +14,9 @@
  *   wmctl cycle [DIR]                 cycle focus (todos/0032) — the Alt+Tab
  *                                     chord's event; DIR -1 reverses (the
  *                                     previous-window toggle); needs a WM
+ *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
+ *                                     bottom, 0 normal, 1 top; z ops never
+ *                                     cross layers (list flags: T/B)
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up)
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl dblclick SID X Y [BUTTON]            two clicks on one connection
@@ -42,6 +45,7 @@ static int usage(void) {
         "       wmctl scale SID W H\n"
         "       wmctl max SID\n"
         "       wmctl cycle [DIR]\n"
+        "       wmctl layer SID -1|0|1\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl dblclick SID X Y [BUTTON]\n"
@@ -63,12 +67,14 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[6] = "-----";
+        char flags[7] = "-----";       /* [5] only for pinned layers (0038) */
         if (r.flags & WMP_F_FOCUSED)    flags[0] = 'f';
         if (r.flags & WMP_F_MINIMIZED)  flags[1] = 'm';
         if (r.flags & WMP_F_BORDERLESS) flags[2] = 'b';
         if (r.flags & WMP_F_RELMOUSE)   flags[3] = 'r';
         if (r.flags & WMP_F_RESIZABLE)  flags[4] = 'R';
+        if (r.layer > 0) flags[5] = 'T';
+        else if (r.layer < 0) flags[5] = 'B';
         r.title[31] = 0;
         char dst[32] = "-";            /* scaled viewport (todos/0024), or - */
         if (r.dst_w != r.w || r.dst_h != r.h)
@@ -156,6 +162,11 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "max")) {          /* maximize toggle (todos/0025) */
         int32_t a[1] = { sid };
         return wmp_cmd(fd, WMP_ACTIVATE, a, 1) ? fail("max refused (no WM?)") : 0;
+    }
+    if (!strcmp(cmd, "layer")) {        /* z-layer pin (todos/0038) */
+        if (argc < 4) return usage();
+        int32_t a[2] = { sid, atoi(argv[3]) };
+        return wmp_cmd(fd, WMP_SET_LAYER, a, 2) ? fail("layer refused") : 0;
     }
     if (!strcmp(cmd, "key")) {
         if (argc < 4) return usage();

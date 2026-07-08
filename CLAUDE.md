@@ -228,9 +228,15 @@ left of the clock; Ctrl+Alt+Tab (Alt+Tab on macOS) is intercepted at
 wmKey ONLY with a WM subscribed → WMP EV_CYCLE 0x8B / CYCLE 0x19 /
 `wmctl cycle` (wm.c walks LRU stamps forward, previous-window on
 Shift; minimized skipped) — no subscriber, the key passes through.
-Verified-but-unfixed items live in WM.md "Known issues" (taskbar not
-always-on-top; pointer-lock needs a per-round human check).
-Image version is **v26**.
+Z layers (todos/0038): per-surface layer -1/0/+1 (WMP SET_LAYER 0x1A /
+kernel-JS `wmSetLayer` / `wmctl layer`; record word 11, T/B chars in
+`wmctl list` FLAGS), every z-order op stable-sort-normalized within
+its layer — wm.c pins taskbar+menu to +1 and the desktop to -1, so
+the bar is always-on-top and nothing sinks under the desktop; the
+no-WM fallback never sets layers.
+Verified-but-unfixed items live in WM.md "Known issues"
+(pointer-lock needs a per-round human check).
+Image version is **v27**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

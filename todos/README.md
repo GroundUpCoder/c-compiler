@@ -24,22 +24,19 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0038` WM known-issues fixes — graduate the fixable WM.md
-   known-issues entries (taskbar always-on-top; fix shape decided
-   in-item)
-2. `0039` WM bug sweep round 2 — the repeatable 0033 format; incl. the
+1. `0039` WM bug sweep round 2 — the repeatable 0033 format; incl. the
    deferred pointer-lock HUMAN check and re-verifying 0038 under storm
-3. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
+2. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
    stat md5sum … — no-spawn filters, multicall adds)
-4. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+3. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils
-5. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+4. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-6. `0037` wasm module cache — kernel-side compiled-Module cache on the
+5. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (the sealed system blob's `/usr/share/os-release`
    VERSION_ID is the natural cache key since 0040; Modules clone,
    instances don't)
-7. (unnumbered) a real-world WebGPU C app port — candidates via
+6. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in
@@ -137,7 +134,13 @@ pre-scale dropped now that 0024 compositor scaling covers it, image v20
 (longest-prefix routing, EXDEV/EBUSY edges, full-namespace symlink
 escape via `_mountOwns`), `/` system + `/root` user volumes in both
 embedders, `boot.js --fresh-system`, reseed never touches /root, image
-v21 (`logs/2026-07-08/mount-points.md`).
+v21 (`logs/2026-07-08/mount-points.md`);
+`0038` **WM known-issues fixes** — kernel z layers (WMP SET_LAYER /
+`wmSetLayer` / `wmctl layer`, record word 11): wm.c pins the taskbar +
+Start menu to the top layer and the desktop to the bottom one, every
+z-order op stays within its layer — the taskbar is always-on-top and
+nothing sinks under the desktop, image v27
+(`logs/2026-07-08/wm-z-layers.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
