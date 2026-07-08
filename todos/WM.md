@@ -303,24 +303,24 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
   becomes zero-copy at the same seam.
 - ~~**Screen geometry / VTs / scaling fixed-size clients**~~ — designed
   below ("Screen, VTs, and scaling fixed-size clients"); VT switching
-  LANDED (todos/done/0022), the rest promoted 2026-07-08: dynamic screen
-  resolution = todos/0023, viewport scaling = todos/0024, maximize =
-  todos/0025.
+  LANDED (todos/done/0022), dynamic screen resolution LANDED
+  (todos/done/0023); still queued: viewport scaling = todos/0024,
+  maximize = todos/0025.
 
 ## Screen, VTs, and scaling fixed-size clients (design, 2026-07-08)
 
 Where the desktop's outer geometry stands and where it goes. All four
-pieces are now committed work: VT switching landed (todos/done/0022);
-the rest were promoted 2026-07-08 — dynamic screen resolution =
-**todos/0023**, scaling fixed-size clients = **todos/0024**, maximize =
-**todos/0025** (order of attack: 0023 → 0024 → 0025; maximize goes
-last because by then it's nearly pure policy, dispatching on 0021's
-resizable flag for both branches).
+pieces are committed work: VT switching landed (todos/done/0022) and
+dynamic screen resolution landed (todos/done/0023); still queued —
+scaling fixed-size clients = **todos/0024**, maximize = **todos/0025**
+(order of attack: 0024 → 0025; maximize goes last because by then it's
+nearly pure policy, dispatching on 0021's resizable flag for both
+branches).
 
-**Today**: the screen is a natural-size 800×500 canvas hardcoded in
-os.html, sampled ONCE by `wmSetScreen` at the wm-canvas handoff. Screen
-resolution never changes after boot; a browser-window resize only
-re-fits xterm.
+**Today** (post-0023): on VT2 the screen tracks the browser viewport
+(the #desktop pane; 1 CSS px = 1 screen px, DPR deliberately ignored);
+VT1 resizes still only re-fit xterm, and headless stays at the kernel
+default until an embedder calls `wmSetScreen`.
 
 **VT switching (todos/done/0022 — LANDED 2026-07-08)** — the Linux
 console metaphor: the xterm tty is VT1, the desktop VT2; the page shows
@@ -339,14 +339,21 @@ synthetic Ctrl/Alt keyups into the focused surface (stuck-modifier
 fixup). Acceptance: `tests/browser/os-vt.mjs` (incl. kill-the-wm
 maintenance mode); dev log `logs/2026-07-08/vt-switching.md`.
 
-**Dynamic screen resolution** (**todos/0023**; prerequisite for a
-full-viewport desktop on VT2, and the real fix for windows larger than
-the screen). Needs: `wmSetScreen` re-callable after boot → compositor
-resizes its OffscreenCanvas (worker-side resize works); a WMP event
-(EV_SCREEN?) so /bin/wm re-lays the taskbar and re-clamps placement;
-policy for windows left off-screen after a shrink. Precedent: RandR /
-Wayland output events. Until then the screen stays a boot-time
-constant.
+**Dynamic screen resolution (todos/done/0023 — LANDED 2026-07-08)** —
+the RandR / wl_output shape: the display owner sets the mode, everyone
+else gets an event. os.html measures the #desktop pane on VT2 entry +
+debounced window resizes → `{type:'screen-resize'}` → the kernel worker
+resizes the OffscreenCanvas (a transferred canvas can't be resized from
+the page) and re-calls `wmSetScreen`, which now emits WMP **EV_SCREEN
+{w,h}** (0x87) to subscribers and one-shot-clamps non-borderless window
+positions (drag-clamp bounds) so the NO-WM fallback stays usable after
+a shrink. /bin/wm on EV_SCREEN: re-lays the taskbar by destroy +
+recreate (no client-initiated resize, by 0019's design), restores the
+focus the create stole, and re-clamps windows with its taskbar-aware
+policy (clamp, never re-cascade). SUBSCRIBE's reply dims are now just
+the initial mode. Acceptance: `tests/browser/os-screen.mjs`, EV_SCREEN
+legs in `test_wm_policy.js`; dev log
+`logs/2026-07-08/dynamic-screen-resolution.md`.
 
 **Maximize** (**todos/0025**; rides 0021's flag). Real-OS shape
 (Windows work area, EWMH `_NET_WM_STATE_MAXIMIZED`/`_NET_WORKAREA`,
@@ -400,8 +407,9 @@ raw, let the compositor scale).
   desktop, shm surfaces via seq-cached ImageData, gpu surfaces via
   drawImage(bitmap), chrome + title text; `routeInput` maps the bridge's
   raw events through SDL_WEB's tables into `wmKey`/`wmPointer`.
-- **os/os.html**: desktop canvas pane (800×500, natural size) transferred
-  to the kernel worker; raw input forwarding (keys as plain objects with a
+- **os/os.html**: desktop canvas pane (natural size; 800×500 at boot,
+  viewport-tracking on VT2 since todos/done/0023) transferred to the
+  kernel worker; raw input forwarding (keys as plain objects with a
   getModifierState shim; pointer in canvas coords).
 - **os/winbox.c** seeded as `/bin/winbox` (image.json v9): the windowed
   demo/acceptance app (`winbox &` from hush).

@@ -47,11 +47,15 @@ try {
   // in os-vt.mjs.
   const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
 
-  // Sample composited pixels off the (transferred) desktop canvas.
+  // Sample composited pixels off the (transferred) desktop canvas. Size the
+  // temp canvas from the LAYOUT rect: with 0023 the screen tracks the
+  // viewport, and the placeholder's intrinsic size follows the worker's
+  // OffscreenCanvas commits (don't trust the stale width/height attributes).
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
     const t = document.createElement('canvas');
-    t.width = c.width; t.height = c.height;
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
     const ctx = t.getContext('2d');
     ctx.drawImage(c, 0, 0);
     const d = ctx.getImageData(sx, sy, 1, 1).data;
@@ -73,15 +77,29 @@ try {
         FACE = [192, 192, 192], FACE_DOWN = [222, 222, 222];
 
   await setVt(2);
-  check('desktop teal before any window', near(await sample(780, 440), TEAL), await sample(780, 440));
+  // Dynamic screen resolution (todos/0023): VT2 entry resizes the screen to
+  // the viewport pane. Wait for the worker's canvas commit to catch up, then
+  // derive all screen-edge geometry from the LIVE size.
+  await page.waitForFunction(() => {
+    const r = document.getElementById('screen').getBoundingClientRect();
+    return window.__osScreen && window.__osScreen.w > 800 &&
+      Math.abs(r.width - window.__osScreen.w) < 2 &&
+      Math.abs(r.height - window.__osScreen.h) < 2;
+  }, { timeout: 30000, polling: 200 });
+  const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
+  check('VT2 screen tracks the viewport pane (todos/0023)', SW > 800 && SH > 500, { SW, SH });
+  check('desktop teal before any window', near(await sample(SW - 20, SH - 60), TEAL), await sample(SW - 20, SH - 60));
 
   // 0014: the autostarted /bin/wm parks its borderless taskbar at the
-  // bottom edge (screen 800x500 -> strip y in [472, 500)).
-  const BARY = 486;                              // mid-strip sample row
+  // bottom edge (strip y in [SH-28, SH)) — with 0023 it RE-LAYS there on
+  // the VT2-entry resize (EV_SCREEN -> destroy + recreate at the new width).
+  const BARY = SH - 14;                          // mid-strip sample row
   await waitPixel(400, BARY, FACE, 60000);
   check('taskbar strip composited (wm autostart)', true);
+  await waitPixel(SW - 40, BARY, FACE, 30000);
+  check('taskbar spans the RESIZED screen width (EV_SCREEN re-lay)', true);
   check('taskbar is borderless (no chrome band above it)',
-    near(await sample(400, 468), TEAL), await sample(400, 468));
+    near(await sample(400, SH - 32), TEAL), await sample(400, SH - 32));
 
   // Launch the seeded windowed app from the shell (real tty path).
   await setVt(1);

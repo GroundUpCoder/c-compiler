@@ -268,7 +268,8 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * Commands -> replies:
  *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
  *                                   EV_CREATED per surface (z-order) +
- *                                   EV_FOCUS (the snapshot)
+ *                                   EV_FOCUS (the snapshot); the dims can
+ *                                   change later -> EV_SCREEN (todos/0023)
  *   LIST {}                      -> R_LIST { count, count * record }
  *   MOVE { sid, x, y }           -> R_OK | R_ERR
  *   FOCUS { sid }                -> R_OK | R_ERR   (restores if minimized)
@@ -290,7 +291,10 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y } |
  * EV_MINIMIZED { sid, minimized 0|1 } (restore also implies focus) |
  * EV_CONFIGURED { sid, w, h } (the client's resize ack landed; geometry
- * is now the new size).
+ * is now the new size) | EV_SCREEN { w, h } (the screen changed resolution,
+ * todos/0023 — RandR/wl_output shape: the display owner set a new mode via
+ * wmSetScreen; the kernel one-shot-clamps window positions itself so the
+ * no-WM fallback stays usable, and a subscribed WM re-lays its furniture).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
@@ -302,7 +306,7 @@ var WMP = {
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
-  EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86,
+  EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
 };
 var WMP_REC_BYTES = 72;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -2664,8 +2668,29 @@ Kernel.prototype.wmScreenshotScreen = function () {
   return { w: W, h: H, rgba: out };
 };
 
+/* Set the screen resolution (re-callable — dynamic resolution, todos/0023;
+ * RandR / wl_output shape: the display owner sets the mode, everyone else
+ * gets an event). Subscribers get EV_SCREEN, then a one-shot position clamp
+ * (the drag-clamp bounds) keeps every title bar reachable after a shrink —
+ * kernel-side so the NO-WM fallback stays usable; /bin/wm re-clamps on
+ * EV_SCREEN with its own (taskbar-aware) policy. Borderless surfaces are
+ * skipped: no title bar to keep reachable, placement is WM policy. */
 Kernel.prototype.wmSetScreen = function (w, h) {
-  if (w > 0 && h > 0) { this._wmScreen.w = w | 0; this._wmScreen.h = h | 0; this._wmVersion++; }
+  w = w | 0; h = h | 0;
+  if (w <= 0 || h <= 0) return;
+  if (w === this._wmScreen.w && h === this._wmScreen.h) return;
+  this._wmScreen.w = w; this._wmScreen.h = h;
+  this._wmVersion++;
+  this._wmEmit(WMP.EV_SCREEN, [w, h]);
+  for (var i = 0; i < this._zOrder.length; i++) {
+    var s = this._surfaces.get(this._zOrder[i]);
+    if (!s || s.borderless) continue;
+    var nx = Math.max(40 - s.w, Math.min(s.x, w - 40));
+    var ny = Math.max(WM_TITLE_H, Math.min(s.y, h - 8));
+    if (nx === s.x && ny === s.y) continue;
+    s.x = nx; s.y = ny;
+    this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
+  }
 };
 
 /* Scene accessors for the browser compositor (same worker; it may hold the

@@ -422,6 +422,39 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
       return false;
     })());
 
+  // ---- dynamic screen resolution (todos/0023): EV_SCREEN + the clamp ----
+  // Park c1 (100x70 after the configure) near the bottom-right corner, then
+  // shrink the screen: the subscriber gets EV_SCREEN {w,h} first, then the
+  // kernel's one-shot clamp emits EV_MOVED per stranded window (title bars
+  // stay reachable — the no-WM fallback guarantee). Borderless surfaces are
+  // skipped: their placement is WM policy.
+  f = await cmd(wm, WMP.MOVE, [c1.sid, 500, 400]);
+  check('pre-shrink park at the bottom-right -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm);                                   // EV_MOVED echo
+  kernel.wmSetScreen(320, 240);
+  f = await readEvent(wm);
+  check('EV_SCREEN { w, h } pushed on wmSetScreen', f.type === WMP.EV_SCREEN &&
+    f.g(0) === 320 && f.g(1) === 240, JSON.stringify([f.type, f.g(0), f.g(1)]));
+  f = await readEvent(wm);
+  check('one-shot clamp: EV_MOVED to a reachable spot (280,232)',
+    f.type === WMP.EV_MOVED && f.g(0) === c1.sid && f.g(1) === 280 && f.g(2) === 232,
+    JSON.stringify([f.g(0), f.g(1), f.g(2)]));
+  const cl1 = kernel.wmList().find(s => s.sid === c1.sid);
+  check('clamped geometry in the scene (title bar reachable)',
+    cl1.x === 280 && cl1.y === 232 && idle(wm), JSON.stringify(cl1));
+  check('borderless surface skipped by the clamp (WM policy owns it)',
+    kernel.wmList().find(s => s.sid === ct.sid).y === 456);
+  kernel.wmSetScreen(320, 240);          // unchanged -> must NOT push EV_SCREEN
+  f = await cmd(wm, WMP.MOVE, [c1.sid, 60, 50]);
+  check('MOVE after the no-op resize -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm);
+  check('same-dims wmSetScreen pushed nothing (next event is the MOVE echo)',
+    f.type === WMP.EV_MOVED && f.g(1) === 60 && idle(wm), JSON.stringify([f.type, f.g(1)]));
+  kernel.wmSetScreen(640, 480);          // grow back: EV_SCREEN, no moves
+  f = await readEvent(wm);
+  check('grow emits EV_SCREEN and clamps nothing', f.type === WMP.EV_SCREEN &&
+    f.g(0) === 640 && idle(wm), JSON.stringify([f.type, f.g(0)]));
+
   // ---- a parked read wakes on a pushed event ----
   check('connection quiescent before the park', idle(wm));
   const parked = submit(wmPid, K.OP.FS_READ, { fd: wmFd, count: 65536 });
@@ -454,6 +487,14 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   await rpc(wmPid, K.OP.FS_CLOSE, { fd: wmFd });
   await tick();
   kernel.wmMove(c1.sid, 55, 66);                         // emits into the void: no crash
+  // The 0023 clamp with NO WM connected — the fallback the kernel-side
+  // clamp exists for: a shrink still leaves every title bar reachable.
+  kernel.wmSetScreen(80, 60);
+  const noWm = kernel.wmList().find(s => s.sid === c1.sid);
+  check('clamp works with no WM connected (title bar reachable)',
+    noWm.x === 40 && noWm.y === 52, JSON.stringify(noWm));
+  kernel.wmSetScreen(640, 480);          // restore for the respawn snapshot
+  kernel.wmMove(c1.sid, 55, 66);
   const wsurf = kernel.wmList().find(s => s.sid === c1.sid);
   check('WM gone: kernel-chrome drag still works',
     kernel.wmPointer('down', wsurf.x + 5, wsurf.y - 5, {}) === 'drag-start');
@@ -464,7 +505,9 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('WM reconnects', !r.errno);
   const wm2 = mkConn(wmPid, wmFd2);
   f = await cmd(wm2, WMP.SUBSCRIBE);
-  check('resubscribe -> R_OK', f.type === WMP.R_OK);
+  check('resubscribe -> R_OK with the CURRENT screen dims (todos/0023)',
+    f.type === WMP.R_OK && f.g(0) === 640 && f.g(1) === 480,
+    JSON.stringify([f.g(0), f.g(1)]));
   const snap = [await readEvent(wm2), await readEvent(wm2), await readEvent(wm2)];
   check('snapshot has both windows + focus',
     snap[0].type === WMP.EV_CREATED && snap[1].type === WMP.EV_CREATED &&

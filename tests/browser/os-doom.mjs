@@ -95,6 +95,13 @@ try {
 
   await page.keyboard.type('doom &\r');
   await setVt(2);
+  // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the
+  // resized canvas commit so rect capture / pixel geometry below is stable.
+  await page.waitForFunction(() => {
+    const r = document.getElementById('screen').getBoundingClientRect();
+    const s = window.__osScreen;
+    return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
+  }, { timeout: 30000, polling: 200 });
   const first = await waitFrame(DOOM_REGION,
     s => s.colors > 50 && s.nonTeal > s.n * 0.9, 90000);
   check('doom composites a real frame (rich colors over the window region)',

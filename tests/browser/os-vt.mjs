@@ -74,11 +74,23 @@ try {
   check('VT2: desktop visible, tty hidden, canvas focused',
     s.desktopVisible && !s.termVisible && s.canvasFocused, s);
 
-  // Desktop is live on VT2: teal wallpaper + the wm's taskbar strip.
+  // Desktop is live on VT2: teal wallpaper + the wm's taskbar strip. With
+  // 0023 the screen resized to the viewport pane on VT2 entry — wait for the
+  // worker's canvas commit, then derive edge geometry from the live size
+  // (size the temp canvas from the layout rect, not the stale attributes).
+  await page.waitForFunction(() => {
+    const r = document.getElementById('screen').getBoundingClientRect();
+    return window.__osScreen && window.__osScreen.w > 800 &&
+      Math.abs(r.width - window.__osScreen.w) < 2 &&
+      Math.abs(r.height - window.__osScreen.h) < 2;
+  }, { timeout: 30000, polling: 200 });
+  const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
+  check('VT2 screen tracks the viewport pane (todos/0023)', SW > 800 && SH > 500, { SW, SH });
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
     const t = document.createElement('canvas');
-    t.width = c.width; t.height = c.height;
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
     const ctx = t.getContext('2d');
     ctx.drawImage(c, 0, 0);
     const d = ctx.getImageData(sx, sy, 1, 1).data;
@@ -95,8 +107,8 @@ try {
     }
   };
   const TEAL = [0, 128, 128], FACE = [192, 192, 192];
-  await waitPixel(780, 440, TEAL, 60000);
-  await waitPixel(400, 486, FACE, 60000);
+  await waitPixel(SW - 20, SH - 60, TEAL, 60000);
+  await waitPixel(400, SH - 14, FACE, 60000);   // taskbar re-laid at the new bottom
   check('VT2 desktop composites (teal wallpaper + wm taskbar)', true);
 
   // ---- Ctrl+Alt+F1 -> back to VT1; the switch refocuses the tty.

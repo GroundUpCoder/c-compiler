@@ -61,15 +61,26 @@ try {
   // Launch from the real shell; the WM places the first window at (12,36).
   await page.keyboard.type('gpubox &\r');
   await setVt(2);
+  // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the
+  // resized canvas commit so rect capture / pixel geometry below is stable.
+  await page.waitForFunction(() => {
+    const r = document.getElementById('screen').getBoundingClientRect();
+    const s = window.__osScreen;
+    return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
+  }, { timeout: 30000, polling: 200 });
   const WX = 12, WY = 36, CX = WX + 128, CY = WY + 128;
 
   // Cube covers the window center from every rotation angle; wait for ANY
-  // non-desktop, non-clear color there (face colors vary as it spins).
+  // non-desktop, non-clear color there (face colors vary as it spins). Also
+  // require the corner to be the clear color: the wm's placement MOVE is
+  // async (the window renders at the kernel-cascade spot until it lands), so
+  // geometry-dependent samples below must wait for the (12,36) slot for real.
   const t0 = Date.now();
   let center = null;
   for (;;) {
     center = await sample(CX, CY);
-    if (center && !near(center, TEAL) && !near(center, CLEAR)) break;
+    const corner = await sample(WX + 4, WY + 4);
+    if (center && !near(center, TEAL) && !near(center, CLEAR) && near(corner, CLEAR)) break;
     if (Date.now() - t0 > 90000) throw new Error(`cube never composited at center; last ${center}`);
     await new Promise(r => setTimeout(r, 250));
   }

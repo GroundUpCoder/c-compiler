@@ -48,9 +48,12 @@
   }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. Natural-size
-     canvas (no CSS scaling) keeps event offsets == screen coordinates. */
+     canvas (no CSS scaling) keeps event offsets == screen coordinates.
+     The screen tracks the pane (todos/0023: full-viewport VT2, 1 CSS px =
+     1 screen px); overflow hidden covers the resize transient while the
+     worker's canvas commit lags the layout. */
   #desktop { flex: 1; min-height: 0; display: flex; justify-content: center;
-             align-items: center; background: #06131a; }
+             align-items: center; background: #06131a; overflow: hidden; }
   #screen { outline: none; display: block; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
   /* VTs: exactly one of tty/desktop is visible (todos/0022). */
@@ -106,7 +109,10 @@ var kernel = new Worker('kernel-worker.js');
 
 term.onData(function (data) { kernel.postMessage({ type: 'input', data: data }); });
 term.onResize(function (sz) { kernel.postMessage({ type: 'resize', cols: sz.cols, rows: sz.rows }); });
-window.addEventListener('resize', function () { if (vt === 1) fitAddon.fit(); });
+window.addEventListener('resize', function () {
+  if (vt === 1) fitAddon.fit();
+  else scheduleScreenSync();   // dynamic screen resolution (todos/0023)
+});
 
 // The desktop (todos/WM.md): hand the canvas to the kernel worker (the
 // compositor runs THERE — this page stays a dumb bridge) and forward raw
@@ -116,6 +122,32 @@ var screen = document.getElementById('screen');
 var offscreen = screen.transferControlToOffscreen();
 kernel.postMessage({ type: 'wm-canvas', canvas: offscreen }, [offscreen]);
 function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
+
+// Dynamic screen resolution (todos/0023): on VT2 the screen tracks the
+// #desktop pane — natural canvas size only (1 CSS px = 1 screen px, DPR
+// deliberately ignored: a scale factor would taint every coordinate path).
+// A transferred canvas can't be resized from the page, so the pane size
+// rides {type:'screen-resize'} and the WORKER resizes the OffscreenCanvas +
+// re-calls wmSetScreen (-> EV_SCREEN to the wm, kernel position clamp).
+// VT2 entry syncs immediately (the pane is measurable only while visible);
+// live window resizes are debounced — every send costs a wm taskbar re-lay.
+var screenSent = { w: 800, h: 500 };   // the boot-time canvas attributes
+window.__osScreen = { w: 800, h: 500 };   // agent probe: last size sent
+var screenSyncTimer = null;
+function syncScreenSize() {
+  if (vt !== 2) return;
+  var pane = document.getElementById('desktop');
+  var w = pane.clientWidth, h = pane.clientHeight;
+  if (w <= 0 || h <= 0) return;                          // hidden/degenerate
+  if (w === screenSent.w && h === screenSent.h) return;
+  screenSent = { w: w, h: h };
+  window.__osScreen = { w: w, h: h };
+  kernel.postMessage({ type: 'screen-resize', w: w, h: h });
+}
+function scheduleScreenSync() {
+  if (screenSyncTimer) clearTimeout(screenSyncTimer);
+  screenSyncTimer = setTimeout(function () { screenSyncTimer = null; syncScreenSize(); }, 150);
+}
 function mods(e) {
   var out = {};
   ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock']
@@ -194,9 +226,10 @@ function setVt(n) {
   document.body.setAttribute('data-vt', String(n));
   document.getElementById('vt1tab').className = 'vttab' + (n === 1 ? ' active' : '');
   document.getElementById('vt2tab').className = 'vttab' + (n === 2 ? ' active' : '');
-  // Re-fit AFTER unhiding — xterm can't measure a display:none pane.
+  // Re-fit AFTER unhiding — xterm can't measure a display:none pane; same
+  // for the desktop pane (todos/0023: the screen syncs to it on VT2 entry).
   if (n === 1) { fitAddon.fit(); term.focus(); }
-  else { screen.focus(); }
+  else { syncScreenSize(); screen.focus(); }
 }
 window.__osVtSwitch = setVt;   // agent probe (tests/browser/os-vt.mjs)
 document.getElementById('vt1tab').addEventListener('click', function () { setVt(1); });

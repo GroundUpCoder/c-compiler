@@ -90,6 +90,13 @@ try {
 
   await page.keyboard.type('term &\r');
   await setVt(2);
+  // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the
+  // resized canvas commit so rect capture / pixel geometry below is stable.
+  await page.waitForFunction(() => {
+    const r = document.getElementById('screen').getBoundingClientRect();
+    const s = window.__osScreen;
+    return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
+  }, { timeout: 30000, polling: 200 });
   await waitPixel(TX + 320, TY + 300, BLACK, 90000);   // client fill composited
   check('term window composited (black client)', true);
   check('focused title bar navy', near(await sample(TX + 300, TY - 12), NAVY), await sample(TX + 300, TY - 12));

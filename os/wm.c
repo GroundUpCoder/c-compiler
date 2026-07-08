@@ -31,6 +31,9 @@
 
 typedef struct {
     int32_t sid, pid;
+    int32_t x, y, w, h;                /* tracked geometry (EV_MOVED /
+                                          EV_CONFIGURED) — the EV_SCREEN
+                                          re-clamp needs it (todos/0023) */
     int minimized, focused;
     char title[32];
 } win_t;
@@ -119,6 +122,44 @@ static void place(int32_t sid, int w, int h) {
     wmp_send(sock, WMP_MOVE, a, 3);    /* fire-and-forget; R_OK skipped */
 }
 
+/* Create the taskbar window at the current screen width. Its EV_CREATED
+ * echo (own pid) parks it at the bottom edge — see handle_event. */
+static int make_bar(void) {
+    bar_w = scr_w;
+    bar_win = SDL_CreateWindow("taskbar", bar_w, BAR_H, SDL_WINDOW_BORDERLESS);
+    if (!bar_win) return -1;
+    bar_surf = SDL_GetWindowSurface(bar_win);
+    return 0;
+}
+
+/* The screen changed resolution (EV_SCREEN, todos/0023). Re-lay the taskbar
+ * by destroy + recreate (there is no client-initiated resize, by 0019's
+ * design), give focus back (a create steals it), and re-clamp windows so
+ * every title bar stays reachable and clear of the taskbar. Policy: clamp,
+ * don't re-cascade — no placement churn on a mere resize. */
+static void screen_changed(void) {
+    if (bar_win) SDL_DestroyWindow(bar_win);
+    if (make_bar() != 0) exit(2);
+    for (int i = 0; i < nwins; i++)
+        if (wins[i].focused && !wins[i].minimized) {
+            int32_t a[1] = { wins[i].sid };
+            wmp_send(sock, WMP_FOCUS, a, 1);
+            break;
+        }
+    for (int i = 0; i < nwins; i++) {
+        win_t *w = &wins[i];
+        int nx = w->x, ny = w->y;
+        if (nx > scr_w - 40) nx = scr_w - 40;
+        if (nx < 40 - w->w) nx = 40 - w->w;
+        if (ny > scr_h - BAR_H - 8) ny = scr_h - BAR_H - 8;
+        if (ny < TITLE_H) ny = TITLE_H;
+        if (nx != w->x || ny != w->y) {
+            int32_t a[3] = { w->sid, nx, ny };
+            wmp_send(sock, WMP_MOVE, a, 3);   /* echo updates the model */
+        }
+    }
+}
+
 static void handle_event(wmp_hdr *h) {
     if (h->type == WMP_EV_CREATED) {
         wmp_rec r;
@@ -133,6 +174,7 @@ static void handle_event(wmp_hdr *h) {
         if (nwins < MAX_WIN) {
             win_t *w = &wins[nwins++];
             w->sid = r.sid; w->pid = r.pid;
+            w->x = r.x; w->y = r.y; w->w = r.w; w->h = r.h;
             w->minimized = (r.flags & WMP_F_MINIMIZED) ? 1 : 0;
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
             memcpy(w->title, r.title, 32);
@@ -175,7 +217,25 @@ static void handle_event(wmp_hdr *h) {
         if (w) { memcpy(w->title, t, 32); w->title[31] = 0; }
         break;
     }
-    default:                            /* EV_MOVED etc: geometry we don't track */
+    case WMP_EV_MOVED: {                /* tracked for the EV_SCREEN re-clamp */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        win_t *w = find(p[0]);
+        if (w) { w->x = p[1]; w->y = p[2]; }
+        break;
+    }
+    case WMP_EV_CONFIGURED: {
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        win_t *w = find(p[0]);
+        if (w) { w->w = p[1]; w->h = p[2]; }
+        break;
+    }
+    case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        scr_w = p[0]; scr_h = p[1];
+        screen_changed();
+        break;
+    }
+    default:
         if (wmp_skip(sock, h->plen) != 0) exit(1);
     }
 }
@@ -261,10 +321,7 @@ int main(void) {
      * pre-existing windows get buttons AND get re-placed — (re)starting
      * the WM deliberately tidies the desktop. */
     SDL_Init(SDL_INIT_VIDEO);
-    bar_w = scr_w;
-    bar_win = SDL_CreateWindow("taskbar", bar_w, BAR_H, SDL_WINDOW_BORDERLESS);
-    if (!bar_win) return 2;
-    bar_surf = SDL_GetWindowSurface(bar_win);
+    if (make_bar() != 0) return 2;
     __setAnimationFrameFunc(frame_cb);
     return 0;
 }

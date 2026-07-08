@@ -24,13 +24,11 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0023` dynamic screen resolution — full-viewport VT2, EV_SCREEN,
-   the real fix for windows larger than the screen
-2. `0024` scaling fixed-size clients — per-surface dst rect
+1. `0024` scaling fixed-size clients — per-surface dst rect
    (wp_viewport-style); DOOM fills the screen with zero source changes
-3. `0025` maximize/restore — title double-click; configure for
+2. `0025` maximize/restore — title double-click; configure for
    resizable windows, 0024 scale-to-fit for fixed-size ones
-4. (unnumbered) a real-world WebGPU C app port — candidates via
+3. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the
@@ -95,7 +93,13 @@ non-resizable frames are focus-only, RESIZE refusals, WMP record bit4
 desktop (VT2), Terminal/Desktop tab bar + Ctrl+Alt+F1/F2 alias, boot
 lands on VT1;
 the tty as maintenance mode under partial desktop failure, zero kernel
-change (`logs/2026-07-08/vt-switching.md`).
+change (`logs/2026-07-08/vt-switching.md`);
+`0023` **dynamic screen resolution** — the screen stops being a
+boot-time 800×500 constant: full-viewport VT2 (1 CSS px = 1 screen px),
+`wmSetScreen` re-callable → WMP EV_SCREEN + a kernel one-shot clamp
+(no-WM fallback), /bin/wm re-lays the taskbar (destroy+recreate) and
+re-clamps, image v17
+(`logs/2026-07-08/dynamic-screen-resolution.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

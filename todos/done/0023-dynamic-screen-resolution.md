@@ -1,6 +1,7 @@
 # 0023 — dynamic screen resolution (full-viewport VT2)
 
-- **Status**: open
+- **Status**: done (landed 2026-07-08; dev log
+  `logs/2026-07-08/dynamic-screen-resolution.md`)
 - **Depends**: — (0022 landed; this is the prerequisite it deliberately
   scoped out)
 - **Design**: `todos/WM.md` ("Screen, VTs, and scaling fixed-size

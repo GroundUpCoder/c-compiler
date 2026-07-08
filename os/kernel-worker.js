@@ -13,6 +13,10 @@
 //                                                (todos/WM.md — the kernel
 //                                                composites in-worker)
 //                   {type:'wm-input', ev}        raw desktop key/pointer input
+//                   {type:'screen-resize', w, h} dynamic screen resolution
+//                                                (todos/0023): resize the
+//                                                OffscreenCanvas + wmSetScreen
+//                                                (-> EV_SCREEN to the wm)
 //   kernel -> page: {type:'out', bytes}          tty output (program + echo)
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
@@ -42,6 +46,7 @@ try {
 
 var kernel = null;
 var tty = null;
+var wmCanvas = null;   // the desktop OffscreenCanvas (screen-resize target)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
 
@@ -53,8 +58,18 @@ self.onmessage = function (e) {
   else if (m.type === 'resize') tty.resize(m.cols | 0, m.rows | 0);
   else if (m.type === 'eof') tty.eof();
   else if (m.type === 'wm-canvas') {
+    wmCanvas = m.canvas;
     kernel.wmSetScreen(m.canvas.width, m.canvas.height);
     OS_COMPOSITOR.startCompositor(kernel, m.canvas);
+  } else if (m.type === 'screen-resize') {
+    // Dynamic screen resolution (todos/0023): the page tracks the viewport;
+    // the OffscreenCanvas is resized HERE (a transferred canvas can't be
+    // resized from the page) and wmSetScreen emits EV_SCREEN + the clamp.
+    if (wmCanvas && m.w > 0 && m.h > 0) {
+      wmCanvas.width = m.w | 0;
+      wmCanvas.height = m.h | 0;
+      kernel.wmSetScreen(m.w | 0, m.h | 0);
+    }
   } else if (m.type === 'wm-input') {
     OS_COMPOSITOR.routeInput(kernel, SDL_WEB, m.ev);
   }

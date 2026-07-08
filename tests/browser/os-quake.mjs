@@ -91,6 +91,13 @@ try {
   const Q_REGION = [16, 40, 328, 232];
   await page.keyboard.type('quake &\r');
   await setVt(2);
+  // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the
+  // resized canvas commit so rect capture / pixel geometry below is stable.
+  await page.waitForFunction(() => {
+    const r = document.getElementById('screen').getBoundingClientRect();
+    const s = window.__osScreen;
+    return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
+  }, { timeout: 30000, polling: 200 });
   const first = await waitFrame(Q_REGION, s => s.colors > 50 && s.nonTeal > s.n * 0.9, 120000);
   check('quake composites a real frame (rich colors over the window region)',
     true, { colors: first.colors });
