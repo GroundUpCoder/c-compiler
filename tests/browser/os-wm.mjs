@@ -201,6 +201,28 @@ try {
   check('restored frame at the restored edge',
     near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
 
+  // Title-bar boxes (todos/0030), [min][max][close] right-aligned, 16px
+  // metrics + 2px gaps: centers at RW-48 / RW-30 / RW-12 from the left
+  // edge, mid-title. Min box -> kernel wmMinimize directly; max box ->
+  // EV_TITLE_ACTIVATE -> the same wm.c toggle as the double-click.
+  check('min/max box faces composited', near(await sample(NX + RW - 48, NY - 12), FACE)
+    && near(await sample(NX + RW - 27, NY - 12), FACE),   // hollow-box interior
+    [await sample(NX + RW - 48, NY - 12), await sample(NX + RW - 27, NY - 12)]);
+  await clickAt(NX + RW - 48, NY - 12);          // min box
+  await waitPixel(NX + 120, NY + 80, TEAL);
+  check('min box minimized the window', true);
+  await waitPixel(100, BARY, FACE);              // its button un-sunken
+  await clickAt(100, BARY);                      // restore via the taskbar
+  await waitPixel(NX + 120, NY + 80, GREEN);
+  check('taskbar restored after the min box', true);
+  await clickAt(NX + RW - 30, NY - 12);          // max box
+  await waitPixel(MW - 30, 28 + MH - 30, GREEN, 30000);
+  check('max box maximized to the work area (same policy as the double-click)', true);
+  await clickAt(MW - 30, 16);                    // max box at the maximized spot
+  await waitPixel(NX + RW - 20, NY + RH - 20, GREEN, 30000);
+  await waitPixel(MW - 30, 28 + MH - 30, TEAL);
+  check('max box again restored the saved geometry', true);
+
   // Close box -> SDL_EVENT_QUIT -> app exits -> window gone.
   await clickAt(NX + RW - 12, NY - 12);
   await waitPixel(NX + 120, NY + 80, TEAL);

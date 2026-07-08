@@ -24,25 +24,23 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0030` title-bar minimize/maximize boxes — kernel chrome + both
-   composites; min = kernel-direct, max = EV_TITLE_ACTIVATE (0025 path)
-2. `0031` taskbar polish — clock, stable button order, overflow
-3. `0032` window cycling — kernel chord → WMP EV_CYCLE, wm policy
+1. `0031` taskbar polish — clock, stable button order, overflow
+2. `0032` window cycling — kernel chord → WMP EV_CYCLE, wm policy
    (no WM → chord passes through, not swallowed), `wmctl cycle`
-4. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
+3. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
    the standing known-issue checklist; repro tests first
-5. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
+4. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
    stat md5sum … — no-spawn filters, multicall adds)
-6. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+5. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils
-7. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+6. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-8. `0037` wasm module cache — kernel-side compiled-Module cache on the
+7. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (system-volume /bin first; Modules clone, instances don't)
-9. (unnumbered) a real-world WebGPU C app port — candidates via
+8. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-10. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
-    `os-system.img` blob for one-blob virgin boots + fast test fixtures
+9. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
+   `os-system.img` blob for one-blob virgin boots + fast test fixtures
 
 (The desktop-shell round 0028–0033 is designed in `WM.md` "The desktop
 shell", 2026-07-08.)

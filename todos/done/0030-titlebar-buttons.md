@@ -1,6 +1,6 @@
 # 0030 — title-bar minimize/maximize boxes
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/titlebar-boxes.md`)
 - **Depends**: —
 - **Design**: `todos/WM.md` "The desktop shell" (title-bar-buttons
   block); mechanism/policy split per done/0025

@@ -209,9 +209,11 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   act = kernel.wmPointer('down', m0.x + 5, m0.y - 10, { t: 2000 });
   check('two SLOW clicks never activate', act === 'drag-start', act);
   kernel.wmPointer('up', m0.x + 5, m0.y - 10, { t: 2010 });
-  act = kernel.wmPointer('down', m0.x + 30, m0.y - 10, { t: 2100 });
+  // (x offset 0: >slop from the last down at +5, and still left of the
+  // 0030 min box — on this 64px window the boxes start at x+8.)
+  act = kernel.wmPointer('down', m0.x, m0.y - 10, { t: 2100 });
   check('quick pair outside the slop still drags', act === 'drag-start', act);
-  kernel.wmPointer('up', m0.x + 30, m0.y - 10, { t: 2110 });
+  kernel.wmPointer('up', m0.x, m0.y - 10, { t: 2110 });
   check('double-click leg leaked no app events', drain(ring1).length === 0);
 
   // ---- second window: z-order, focus, occlusion ----
@@ -245,6 +247,43 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   evs = drain(ring1);
   check('close box posts QUIT', act === 'close' && evs.length === 1 && evs[0].type === K.WMEV.QUIT,
     JSON.stringify([act, evs]));
+
+  // ---- title-bar boxes (todos/0030): [min][max][close], same metrics ----
+  // No WM is subscribed here: the MAX box must be a complete no-op (the
+  // same R_ERR/no-op as wmctl max — maximize IS policy), and the MIN box
+  // must work anyway (minimize is kernel mechanism, focus-fall included).
+  const bw1 = kernel.wmList().find(s => s.sid === 1);
+  const bxC = bw1.x + bw1.dstW - K.WM_CLOSE_W - K.WM_CLOSE_PAD;
+  const bxM = bxC - K.WM_CLOSE_W - K.WM_BOX_GAP;
+  const bxN = bxM - K.WM_CLOSE_W - K.WM_BOX_GAP;
+  const byB = bw1.y - K.WM_TITLE_H + K.WM_CLOSE_PAD;
+  act = kernel.wmPointer('down', bxM + 8, byB + 8, {});
+  check('max box with no WM is a no-op', act === 'title-box', act);
+  kernel.wmPointer('move', bxM + 50, byB + 60, {});      // a live drag would move it
+  check('max box started no drag (window unmoved)',
+    kernel.wmList().find(s => s.sid === 1).x === bw1.x &&
+    kernel.wmList().find(s => s.sid === 1).y === bw1.y);
+  kernel.wmPointer('up', bxM + 50, byB + 60, {});
+  check('max box leaked no app events', drain(ring1).length === 0);
+  act = kernel.wmPointer('down', bxN + 8, byB + 8, {});
+  check('min box minimizes directly (kernel mechanism)', act === 'minimize' &&
+    kernel.wmList().find(s => s.sid === 1).minimized === true, act);
+  kernel.wmPointer('up', bxN + 8, byB + 8, {});
+  check('focus falls off the min-box minimize', kernel.wmScene().focusSid === c2.sid);
+  check('min box leaked no app events', drain(ring1).length === 0);
+  kernel.wmFocus(1);                                     // restore for later legs
+  // Composite: three boxes at the hit-test offsets; flat-rect glyphs (the
+  // min bar, the hollow max box) are part of the deterministic composite.
+  screen = kernel.wmScreenshotScreen();
+  check('composite: three box faces at the expected offsets',
+    String(px(screen, bxC + 8, byB + 2)) === '192,192,192,255' &&
+    String(px(screen, bxM + 8, byB + 7)) === '192,192,192,255' &&   // hollow center
+    String(px(screen, bxN + 8, byB + 4)) === '192,192,192,255',
+    JSON.stringify([px(screen, bxC + 8, byB + 2), px(screen, bxM + 8, byB + 7), px(screen, bxN + 8, byB + 4)]));
+  check('composite: min bar + max frame glyph pixels',
+    String(px(screen, bxN + 4, byB + 12)) === '0,0,0,255' &&
+    String(px(screen, bxM + 4, byB + 4)) === '0,0,0,255',
+    JSON.stringify([px(screen, bxN + 4, byB + 12), px(screen, bxM + 4, byB + 4)]));
 
   // ---- agent inject API (targeted, post-hit-test) ----
   kernel.wmInjectKey(1, true, 44, 32, 0);
@@ -477,6 +516,17 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   evs = drain(ring1);
   check('injection stays in buffer coords (post-hit-test, resolution-independent)',
     evs.length === 1 && evs[0].f[0] === 3 && evs[0].f[1] === 4, JSON.stringify(evs));
+
+  // Title-bar boxes respect the dst rect (todos/0030): on the scaled
+  // surface the min box sits at dstW-relative offsets, like the close box.
+  fact = kernel.wmPointer('down',
+    400 + 100 - K.WM_CLOSE_PAD - K.WM_CLOSE_W - 2 * (K.WM_CLOSE_W + K.WM_BOX_GAP) + 8,
+    100 - K.WM_TITLE_H + K.WM_CLOSE_PAD + 8, {});
+  check('min box hits at the SCALED offsets (dst rect)', fact === 'minimize' &&
+    kernel.wmList().find(s => s.sid === cFix.sid).minimized === true, fact);
+  kernel.wmPointer('up', 452, 88, {});
+  kernel.wmFocus(cFix.sid);                              // restore (un-minimizes)
+  drain(ring1);
 
   // wmSetDst validation: resizable surfaces refuse (they configure), floors/
   // caps like wmResize, bogus sids refuse.

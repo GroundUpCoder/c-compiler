@@ -344,6 +344,8 @@ var WM_SOCK_PATH = '/run/wm.sock';
  * resizes are deliberately not in this version). */
 var WM_TITLE_H = 24;
 var WM_CLOSE_W = 16, WM_CLOSE_PAD = 4;       // close box, right-aligned in the bar
+var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
+                                             // (todos/0030; same 16px metrics)
 var WM_BORDER = 4;                           // resize frame around title+client
 var WM_GRIP = 16;                            // SE-corner zone (resizes both axes)
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
@@ -2485,6 +2487,28 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           this._wmEventTo(s.sid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
           return 'close';
         }
+        // Title-bar boxes (todos/0030), Win95 order [min][max][close] —
+        // same metrics, left of the close box. Like close, box clicks
+        // never focus and never start a drag or the double-click timer.
+        // Each box exists only if it FITS inside the title (a WM_MIN_SIZE
+        // window keeps a draggable title instead of an unreachable one);
+        // the same rule gates the composites.
+        var mx0 = cx0 - WM_CLOSE_W - WM_BOX_GAP;         // maximize box
+        var nx0 = mx0 - WM_CLOSE_W - WM_BOX_GAP;         // minimize box
+        if (y >= cy0 && y < cy0 + WM_CLOSE_W) {
+          if (mx0 >= s.x && x >= mx0 && x < mx0 + WM_CLOSE_W) {
+            // Maximize = the 0025 gesture: EV_TITLE_ACTIVATE to the WM
+            // (policy owns the toggle); no subscriber -> the same no-op
+            // as wmctl max (kernel-chrome has no maximize, by design).
+            return this.wmTitleActivate(s.sid) ? 'title-activate' : 'title-box';
+          }
+          if (nx0 >= s.x && x >= nx0 && x < nx0 + WM_CLOSE_W) {
+            // Minimize is kernel MECHANISM already — the box calls it
+            // directly and works with no WM (focus-fall included).
+            this.wmMinimize(s.sid);
+            return 'minimize';
+          }
+        }
         this.wmFocus(s.sid);
         // Title double-click (todos/0025): a second down on the SAME title
         // within WM_DBLCLICK_MS and WM_DBLCLICK_SLOP px is the maximize
@@ -2767,8 +2791,27 @@ Kernel.prototype.wmScreenshotScreen = function () {
         dw + 2 * WM_BORDER, WM_TITLE_H + dh + 2 * WM_BORDER, WM_COLORS.border);
       fill(s.x, s.y - WM_TITLE_H, dw, WM_TITLE_H,
         s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
-      fill(s.x + dw - WM_CLOSE_W - WM_CLOSE_PAD, s.y - WM_TITLE_H + WM_CLOSE_PAD,
-        WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+      // Title-bar boxes, Win95 order [min][max][close] (todos/0030) — the
+      // same offsets and fit-gating the hit test uses. Glyphs are
+      // deterministic flat rects (bar / hollow box), part of the composite
+      // unlike title TEXT.
+      var bx = s.x + dw - WM_CLOSE_W - WM_CLOSE_PAD;
+      var by = s.y - WM_TITLE_H + WM_CLOSE_PAD;
+      var mxx = bx - WM_CLOSE_W - WM_BOX_GAP;
+      var nxx = mxx - WM_CLOSE_W - WM_BOX_GAP;
+      var glyph = [0, 0, 0, 255];
+      fill(bx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+      if (mxx >= s.x) {
+        fill(mxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+        fill(mxx + 3, by + 3, 10, 2, glyph);             // max: hollow box
+        fill(mxx + 3, by + 11, 10, 1, glyph);
+        fill(mxx + 3, by + 3, 1, 9, glyph);
+        fill(mxx + 12, by + 3, 1, 9, glyph);
+      }
+      if (nxx >= s.x) {
+        fill(nxx, by, WM_CLOSE_W, WM_CLOSE_W, WM_COLORS.closeBox);
+        fill(nxx + 3, by + 11, 8, 2, glyph);             // min: the bar
+      }
     }
     // Client pixels: front buffer rows, clipped to the screen.
     var front = Atomics.load(s.i32, SH_FLIP) & 1;
@@ -3921,6 +3964,7 @@ var KERNEL_EXPORTS = {
   IR_HDR_BYTES: IR_HDR_BYTES, IR_RECORD_WORDS: IR_RECORD_WORDS,
   WMEV: WMEV,
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
+  WM_BOX_GAP: WM_BOX_GAP,
   WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
   WM_COLORS: WM_COLORS,
   // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.

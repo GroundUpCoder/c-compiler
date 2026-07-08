@@ -661,6 +661,32 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('ACTIVATE on a borderless surface -> R_ERR (no title bar, no gesture)',
     f.type === WMP.R_ERR);
 
+  // ---- title-bar boxes (todos/0030) with a subscriber: the max box rides
+  // the SAME EV_TITLE_ACTIVATE (one policy path — box, double-click, and
+  // wmctl max are indistinguishable to /bin/wm); the min box is kernel-
+  // direct and echoes EV_MINIMIZED + the focus fall. ----
+  const bws = kernel.wmList().find(s => s.sid === c1.sid);
+  const pbxC = bws.x + bws.dstW - K.WM_CLOSE_W - K.WM_CLOSE_PAD;
+  const pbxM = pbxC - K.WM_CLOSE_W - K.WM_BOX_GAP;
+  const pbxN = pbxM - K.WM_CLOSE_W - K.WM_BOX_GAP;
+  const pbyB = bws.y - K.WM_TITLE_H + K.WM_CLOSE_PAD;
+  dact = kernel.wmPointer('down', pbxM + 8, pbyB + 8, { t: 9000 });
+  check('max box click -> title-activate', dact === 'title-activate', dact);
+  kernel.wmPointer('up', pbxM + 8, pbyB + 8, { t: 9010 });
+  f = await readEvent(wm2);
+  check('max box rides EV_TITLE_ACTIVATE to the subscriber',
+    f.type === WMP.EV_TITLE_ACTIVATE && f.g(0) === c1.sid && idle(wm2),
+    JSON.stringify([f.type, f.g(0)]));
+  dact = kernel.wmPointer('down', pbxN + 8, pbyB + 8, { t: 9200 });
+  check('min box click minimizes (kernel mechanism)', dact === 'minimize', dact);
+  kernel.wmPointer('up', pbxN + 8, pbyB + 8, { t: 9210 });
+  f = await readEvent(wm2);
+  check('EV_MINIMIZED 1 pushed for the min box', f.type === WMP.EV_MINIMIZED &&
+    f.g(0) === c1.sid && f.g(1) === 1, JSON.stringify([f.type, f.g(0), f.g(1)]));
+  f = await readEvent(wm2);
+  check('focus fall follows the min-box minimize', f.type === WMP.EV_FOCUS &&
+    f.g(0) !== c1.sid, JSON.stringify([f.type, f.g(0)]));
+
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

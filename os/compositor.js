@@ -78,17 +78,33 @@ function startCompositor(kernel, canvas) {
       if (s.borderless) continue;              // taskbar-class: bare pixels
       ctx.fillStyle = s.sid === scene.focusSid ? COL_FOCUS : COL_BLUR;
       ctx.fillRect(s.x, s.y - K.WM_TITLE_H, dw, K.WM_TITLE_H);
+      // Title-bar boxes, Win95 order [min][max][close] (todos/0030) — the
+      // same offsets as the kernel hit test and the headless composite;
+      // flat-rect glyphs (bar / hollow box / x).
+      var bx = s.x + dw - K.WM_CLOSE_W - K.WM_CLOSE_PAD;
+      var by = s.y - K.WM_TITLE_H + K.WM_CLOSE_PAD;
+      var mxx = bx - K.WM_CLOSE_W - K.WM_BOX_GAP;
+      var nxx = mxx - K.WM_CLOSE_W - K.WM_BOX_GAP;
       ctx.fillStyle = COL_CLOSE;
-      ctx.fillRect(s.x + dw - K.WM_CLOSE_W - K.WM_CLOSE_PAD,
-        s.y - K.WM_TITLE_H + K.WM_CLOSE_PAD, K.WM_CLOSE_W, K.WM_CLOSE_W);
+      ctx.fillRect(bx, by, K.WM_CLOSE_W, K.WM_CLOSE_W);
+      // Each box only if it fits inside the title — same gate as the
+      // kernel hit test and the headless composite.
+      if (mxx >= s.x) ctx.fillRect(mxx, by, K.WM_CLOSE_W, K.WM_CLOSE_W);
+      if (nxx >= s.x) ctx.fillRect(nxx, by, K.WM_CLOSE_W, K.WM_CLOSE_W);
       ctx.fillStyle = '#000';
+      if (nxx >= s.x) ctx.fillRect(nxx + 3, by + 11, 8, 2);   // min: the bar
+      if (mxx >= s.x) {                                       // max: hollow box
+        ctx.fillRect(mxx + 3, by + 3, 10, 2);
+        ctx.fillRect(mxx + 3, by + 11, 10, 1);
+        ctx.fillRect(mxx + 3, by + 3, 1, 9);
+        ctx.fillRect(mxx + 12, by + 3, 1, 9);
+      }
       ctx.font = 'bold 11px sans-serif';
       ctx.textBaseline = 'middle';
-      ctx.fillText('x', s.x + dw - K.WM_CLOSE_W - K.WM_CLOSE_PAD + 5,
-        s.y - K.WM_TITLE_H + K.WM_CLOSE_PAD + K.WM_CLOSE_W / 2 + 1);
+      ctx.fillText('x', bx + 5, by + K.WM_CLOSE_W / 2 + 1);
       ctx.fillStyle = '#fff';
       ctx.fillText(s.title || ('pid ' + s.pid), s.x + 6, s.y - K.WM_TITLE_H / 2,
-        Math.max(8, dw - K.WM_CLOSE_W - 16));
+        Math.max(8, dw - 3 * (K.WM_CLOSE_W + K.WM_BOX_GAP) - 16));
     }
     // Resize rubber band (todos/0019): Win95 outline semantics — the drag
     // only previews; the client renegotiates once, at release.
