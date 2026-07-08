@@ -24373,8 +24373,11 @@ int sigsuspend(const sigset_t *mask) {
    runs before return otherwise) — the kernel round-trip couldn't reach this
    very instance any sooner than we can. */
 int kill(int pid, int sig) {
-  if (!__sig_ok(sig)) { errno = EINVAL; return -1; }
-  if (pid == getpid()) { __sig_deliver(sig, 1); return 0; }
+  /* sig 0 is the POSIX existence probe (kill(2)): route + error-check,
+     deliver nothing. Only kill() takes it — signal()/sigaction()/raise()
+     keep rejecting 0 via __sig_ok. */
+  if (sig != 0 && !__sig_ok(sig)) { errno = EINVAL; return -1; }
+  if (pid == getpid()) { if (sig != 0) __sig_deliver(sig, 1); return 0; }
   return __spawn_kill(pid, sig);
 }
 int killpg(int pgrp, int sig) {
