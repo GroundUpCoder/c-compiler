@@ -49,6 +49,7 @@ typedef struct {
 #define WMP_F_MINIMIZED  2
 #define WMP_F_BORDERLESS 4
 #define WMP_F_RELMOUSE   8   /* surface requested relative mouse (todos/0018) */
+#define WMP_F_RESIZABLE 16   /* SDL_WINDOW_RESIZABLE: RESIZE allowed (0021) */
 
 /* Frame header as read off the wire (after the length word). */
 typedef struct { uint32_t type; uint32_t plen; } wmp_hdr;

@@ -16,9 +16,13 @@
   buffer renegotiation + kernel-chrome frame resize drags; status section
   below); **relative mouse / quake landed** (todos/done/0018, 2026-07-08 —
   SURFACE_SET_FLAGS bit1 round-tripping to pointer lock, rel input-ring
-  records, /bin/quake + pak0.pak seeded; status section below). The
+  records, /bin/quake + pak0.pak seeded; status section below);
+  **resizable gating landed** (todos/done/0021, 2026-07-08 —
+  SDL_WINDOW_RESIZABLE honored end to end: surface-flag bit2 gates drag
+  zones and every RESIZE path; see the bullet under "Implementation
+  status — client resize"). The
   acceptance test now holds for ALL four vendor apps. Remaining queue:
-  0020 (wasm terminal + ptys), per todos/README.md.
+  0022 (VT switching), per todos/README.md.
 - **Related**: `OS.md` Phase 3 (goals, agent-friendly requirements),
   `KERNEL.md` (kernel page, doorbell, 0x1xxx opcode reservation, AF_UNIX),
   `SDL3.md`/`WEBGPU.md` (the rendering runtime this retargets),
@@ -128,7 +132,8 @@ SURFACE_PRESENT  (id, frameSeq)        shm: flip notify; gpu: rides the
                                        bitmap's own postMessage (transfer)
 SURFACE_SET_TITLE(id, title)
 SURFACE_SET_FLAGS(id, flags)           flag-word update (todos/0018; 0x1006):
-                                       bit0 borderless, bit1 relative-mouse
+                                       bit0 borderless, bit1 relative-mouse,
+                                       bit2 resizable (todos/0021)
 SURFACE_CONFIGURE(id, w, h)            the client's resize ACK (todos/0019;
                                        new fb SAB rides the wm-sabs channel)
 ```
@@ -590,6 +595,17 @@ RESIZE/EV_CONFIGURED, `test_wm_e2e.js` real-C resize leg,
 - **Second exposure**: `wmResize` (kernel JS) / `WMP RESIZE` + `EV_CONFIGURED`
   (socket protocol) / `wmctl resize SID W H` (shell) — one op set, defined
   once, exposed everywhere, per the agent-channel rule.
+- **Resizable gating (landed 2026-07-08, todos/0021)**: SDL3 semantics —
+  a window is non-resizable unless created with `SDL_WINDOW_RESIZABLE`
+  (0x20), which host.js maps to kernel surface-flag bit2 at create (and
+  through SURFACE_SET_FLAGS). Every resize path dispatches on it: frame
+  hit-testing on a non-resizable surface has NO drag zones (the whole
+  frame is a focus affordance, like left/top edges), and `wmResize` /
+  WMP `RESIZE` / `wmctl resize` refuse with an error, leaving no pending
+  configure. Fixed-res apps (doom, quake, gameboy — `flags=0`) can no
+  longer be sheared by a drag-resize they never handle; winbox/gpubox/term
+  declare the flag and renegotiate as before. The WMP window record
+  carries it as flag bit4 (`wmctl list` shows `R`).
 
 ## Implementation status — relative mouse / quake (landed 2026-07-08, todos/0018)
 
@@ -601,7 +617,8 @@ quake leg, browser `os-quake.mjs`; dev log
 
 - **App API**: `SDL_SetWindowRelativeMouseMode` / `SDL_GetWindowRelativeMouseMode`
   in the SDL3 layer → `SURFACE_SET_FLAGS` (0x1006; flag word: bit0
-  borderless, bit1 relative-mouse; host.js preserves bit0 across the call).
+  borderless, bit1 relative-mouse, bit2 resizable since 0021; host.js
+  preserves the other bits across the call).
   On a pre-0018 embedder (no `surfaceSetFlags` hook) the request is a clean
   no-op — apps keep absolute-derived xrel/yrel.
 - **The wanted/active split**: WANTED = focused surface requested relative

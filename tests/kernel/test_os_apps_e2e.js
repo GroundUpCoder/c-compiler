@@ -86,6 +86,9 @@ function sessionApps() {
     'GSID=$(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")',
     'QSID=$(wmctl list | grep "Quake$" | sed "s/[^0-9].*//")',
     'wmctl relmove $QSID 15 5 && echo relmove-ok',  // rel inject over the socket
+    // 0021 acceptance: doom is fixed-res (no SDL_WINDOW_RESIZABLE) — the
+    // kernel refuses the resize and the window keeps its geometry.
+    'wmctl resize $DSID 900 700 || echo resize-refused',
     'wmctl shot $DSID /root/doom.ppm && echo shot-doom-ok',
     'wmctl shot $GSID /root/gb.ppm && echo shot-gb-ok',
     'wmctl shot $QSID /root/quake.ppm && echo shot-quake-ok',
@@ -123,6 +126,10 @@ function sessionApps() {
   check('quake requested relative mouse (r flag in wmctl list)',
     (qRow.split('\t')[4] || '').includes('r'), qRow);
   check('wmctl relmove injects over the socket', out.includes('relmove-ok'));
+  check('wmctl resize on fixed-res doom is refused (todos/0021)',
+    out.includes('resize-refused'));
+  check('doom is not resizable (no R flag in wmctl list)',
+    !(doomRow.split('\t')[4] || '').includes('R'), doomRow);
   check('wmctl shot wrote all three surface PPMs',
     out.includes('shot-doom-ok') && out.includes('shot-gb-ok') &&
     out.includes('shot-quake-ok'));

@@ -65,7 +65,7 @@ static void frame_cb(void) {
 }
 int main(void) {
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("e2e win", W, H, 0);
+    win = SDL_CreateWindow("e2e win", W, H, SDL_WINDOW_RESIZABLE);  /* resize leg needs it (todos/0021) */
     if (!win) { printf("NOWIN\\n"); return 3; }
     surf = SDL_GetWindowSurface(win);
     /* Relative mouse (todos/0018): request it, read the tracked state back. */

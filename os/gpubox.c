@@ -382,7 +382,7 @@ int main(int argc, char **argv) {
         }
     }
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("gpubox", W, H, 0);
+    win = SDL_CreateWindow("gpubox", W, H, SDL_WINDOW_RESIZABLE);
     if (!win) { fprintf(stderr, "gpubox: no window\n"); return 3; }
     instance = wgpuCreateInstance(NULL);
     surface = SDL_GetWGPUSurface(instance, win);

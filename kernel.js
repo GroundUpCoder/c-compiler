@@ -124,8 +124,11 @@ var OP = {
   // whose front buffer already holds the first frame at the new size — the
   // kernel swaps buffers atomically here, so the compositor never tears.
   // SURFACE_SET_FLAGS (todos/0018) updates the surface flag word (bit0
-  // borderless, bit1 relative-mouse); the relative-mouse bit round-trips
-  // to the UI bridge as a pointer-lock request (onPointerLock).
+  // borderless, bit1 relative-mouse, bit2 resizable); the relative-mouse
+  // bit round-trips to the UI bridge as a pointer-lock request
+  // (onPointerLock). The resizable bit (todos/0021, SDL3 semantics: only
+  // SDL_WINDOW_RESIZABLE windows may be resized) gates every resize path
+  // — chrome drag zones, wmResize, WMP RESIZE.
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
   SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
@@ -259,7 +262,8 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *
  * Window record (fixed 72 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
  * flags (bit0 focused, bit1 minimized, bit2 borderless, bit3 relative-
- * mouse), frameSeq, reserved, then 32 bytes NUL-padded UTF-8 title.
+ * mouse, bit4 resizable), frameSeq, reserved, then 32 bytes NUL-padded
+ * UTF-8 title.
  *
  * Commands -> replies:
  *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
@@ -273,7 +277,8 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *   CLOSE_REQ { sid }            -> R_OK | R_ERR   (SDL_EVENT_QUIT to owner)
  *   RESIZE { sid, w, h }         -> R_OK | R_ERR   (asks the client; geometry
  *                                   changes only at its SURFACE_CONFIGURE ack
- *                                   -> EV_CONFIGURED)
+ *                                   -> EV_CONFIGURED; R_ERR on a surface
+ *                                   without flag bit4 resizable, todos/0021)
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
@@ -1913,6 +1918,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         minimized: false,
         borderless: !!((req.flags | 0) & 1),      // bit0: no kernel chrome (taskbar-class)
         relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
+        resizable: !!((req.flags | 0) & 4),       // bit2: SDL_WINDOW_RESIZABLE (0021)
         pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
       };
       this._surfaces.set(sid, surf);
@@ -1927,14 +1933,15 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       break;
     }
     // Update the surface flag word (todos/0018): bit0 borderless, bit1
-    // relative-mouse. The pointer-lock sync below round-trips a wanted-state
-    // change to the UI bridge.
+    // relative-mouse, bit2 resizable (0021). The pointer-lock sync below
+    // round-trips a wanted-state change to the UI bridge.
     case OP.SURFACE_SET_FLAGS: {
       var sf = this._surfaces.get(req.sid | 0);
       if (!sf || sf.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       var fl = req.flags | 0;
       sf.borderless = !!(fl & 1);
       sf.relativeMouse = !!(fl & 2);
+      sf.resizable = !!(fl & 4);
       this._wmVersion++;
       this._respond(pcb, {});
       this._wmSyncPointerLock();
@@ -2393,12 +2400,16 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + s.h + WM_BORDER;
     if (inFrame) {
       if (kind === 'down') {
+        this.wmFocus(s.sid);
+        // Non-resizable surfaces (no SDL_WINDOW_RESIZABLE, todos/0021) have
+        // no drag zones: the whole frame is a focus affordance, like the
+        // left/top edges. Fixed-res apps (doom, quake) never see a resize.
+        if (!s.resizable) return 'border';
         var ex = x >= s.x + s.w ? 1 : 0;               // right edge -> E
         var ey = y >= s.y + s.h ? 1 : 0;               // bottom edge -> S
         // A WM_GRIP corner zone widens E/S into SE near the corner.
         if (ex && y >= s.y + s.h - WM_GRIP) ey = 1;
         if (ey && x >= s.x + s.w - WM_GRIP) ex = 1;
-        this.wmFocus(s.sid);
         if (!ex && !ey) return 'border';               // left/top: focus only
         this._wmResizeDrag = { sid: s.sid, ex: ex, ey: ey, x0: x, y0: y,
                                baseW: s.w, baseH: s.h, curW: s.w, curH: s.h };
@@ -2464,7 +2475,7 @@ Kernel.prototype.wmList = function () {
     out.push({ sid: s.sid, pid: s.pid, x: s.x, y: s.y, w: s.w, h: s.h,
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
-               relativeMouse: !!s.relativeMouse,
+               relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
                configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
@@ -2508,10 +2519,12 @@ Kernel.prototype.wmMove = function (sid, x, y) {
  * Latest wins: a new request while one is pending replaces it, and the ack
  * path re-issues the configure if the client acked a stale size. Returns
  * false when the request can't reach the client (dead process, full ring):
- * nothing would ever ack, so no pending state is left behind. */
+ * nothing would ever ack, so no pending state is left behind. Non-resizable
+ * surfaces (no SDL_WINDOW_RESIZABLE, todos/0021) refuse outright — same
+ * no-pending-state rule: the app would never renegotiate. */
 Kernel.prototype.wmResize = function (sid, w, h) {
   var s = this._surfaces.get(sid | 0);
-  if (!s) return false;
+  if (!s || !s.resizable) return false;
   w = w | 0; h = h | 0;
   if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
   if (w === s.w && h === s.h && !s.pendingConfigure) return true;   // no-op
@@ -2701,7 +2714,8 @@ Kernel.prototype._wmpRecord = function (s) {
   var rec = new Uint8Array(WMP_REC_BYTES);
   var dv = new DataView(rec.buffer);
   var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
-              (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0);
+              (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
+              (s.resizable ? 16 : 0);
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ), 0];
   for (var i = 0; i < fields.length; i++) dv.setInt32(i * 4, fields[i] | 0, true);

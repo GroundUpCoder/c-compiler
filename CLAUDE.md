@@ -159,7 +159,12 @@ unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
 freetype (vendored lib, font seeded at `/etc/fonts/mono.ttf`) + an escape
 parser scoped to hush/vi; `term &` runs hush interactive in a window
 (640x432 = 80x24), `term cmd...` runs that instead; drag-resize reflows
-via TIOCSWINSZ, close = SIGHUP. Image version is **v15**.
+via TIOCSWINSZ, close = SIGHUP. Resize is gated on
+`SDL_WINDOW_RESIZABLE` (todos/0021): host.js maps it to kernel
+surface-flag bit2; without it there are no frame drag zones and
+`wmResize`/WMP RESIZE/`wmctl resize` refuse (fixed-res doom/quake/gameboy
+can't be sheared; winbox/gpubox/term declare it; WMP record bit4, `R` in
+`wmctl list`). Image version is **v16**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

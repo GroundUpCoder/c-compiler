@@ -125,7 +125,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   const fb1 = makeFb(64, 48);
   const ring1 = makeRing(256);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1.sab, ring: ring1.sab });
-  const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one' });
+  // flags bit2 = resizable (todos/0021) — the resize legs below need it.
+  const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one', flags: 4 });
   check('create -> sid 1', c1.sid === 1, JSON.stringify(c1));
   check('placement below the title bar', c1.y >= K.WM_TITLE_H, c1.y);
 
@@ -366,6 +367,45 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   // wmResize input validation + a dead-ring request leaves nothing pending.
   check('wmResize below the floor is refused', kernel.wmResize(1, 8, 8) === false);
   check('wmResize on a bogus sid is refused', kernel.wmResize(999, 64, 64) === false);
+
+  // ---- SDL_WINDOW_RESIZABLE gating (todos/0021): a window created without
+  // flags bit2 is fixed-size — frame drag zones are focus-only, wmResize is
+  // refused, and nothing is ever left pending ----
+  const fbFix = makeFb(50, 40);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbFix.sab, ring: null });
+  const cFix = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 50, h: 40, title: 'fixed' });
+  check('wmList: no-flags create is not resizable',
+    kernel.wmList().find(s => s.sid === cFix.sid).resizable === false);
+  check('wmList: bit2 create is resizable',
+    kernel.wmList().find(s => s.sid === 1).resizable === true);
+  check('wmResize on a non-resizable surface is refused',
+    kernel.wmResize(cFix.sid, 100, 90) === false);
+  check('refusal leaves nothing pending, no event to the client',
+    kernel.wmList().find(s => s.sid === cFix.sid).configurePending === false &&
+    drain(ring1).length === 0);
+  kernel.wmMove(cFix.sid, 400, 100);
+  kernel.wmFocus(cFix.sid);                            // topmost for hit tests
+  let fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});   // SE grip
+  kernel.wmPointer('up', 400 + 50 + 1, 100 + 40 + 1, {});
+  check('SE grip on a fixed window is focus-only (no drag starts)',
+    fact === 'border' && kernel.wmScene().resizeDrag === null, fact);
+  fact = kernel.wmPointer('down', 400 + 50 + 2, 100 + 10, {});           // E edge
+  kernel.wmPointer('up', 400 + 50 + 2, 100 + 10, {});
+  check('E edge on a fixed window is focus-only', fact === 'border', fact);
+  fact = kernel.wmPointer('down', 400 + 10, 100 + 40 + 2, {});           // S edge
+  kernel.wmPointer('up', 400 + 10, 100 + 40 + 2, {});
+  check('S edge on a fixed window is focus-only', fact === 'border', fact);
+  // SET_FLAGS bit2 grants resizability at runtime (and the zones light up).
+  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: cFix.sid, flags: 4 });
+  check('SET_FLAGS bit2 makes it resizable',
+    kernel.wmList().find(s => s.sid === cFix.sid).resizable === true);
+  fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});
+  check('SE grip works after the grant', fact === 'resize-start', fact);
+  kernel.wmPointer('up', 400 + 50 + 1, 100 + 40 + 1, {});   // no-move: no configure
+  check('wmResize works after the grant', kernel.wmResize(cFix.sid, 60, 50) === true);
+  drain(ring1);                                        // its WINDOW_RESIZED
+  await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: cFix.sid });
+  kernel.wmFocus(1);                                   // restore for later legs
 
   // ---- relative mouse / pointer lock (todos/0018) ----
   // SET_FLAGS validation, the wanted-state round trip, rel-record injection,

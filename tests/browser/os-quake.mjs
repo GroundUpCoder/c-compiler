@@ -9,8 +9,9 @@
 //   kernel-hit-tested gesture — __osPtrLockOffers ticks) while a title-bar
 //   drag does NOT (and still moves the window — absolute routing intact);
 //   with the lock granted, locked moves flow as rel deltas and quake keeps
-//   presenting; releasing reverts routing; wmctl close quits quake cleanly
-//   and withdraws the wanted state.
+//   presenting; releasing reverts routing; a SE-grip drag is a no-op (quake
+//   is fixed-res — no SDL_WINDOW_RESIZABLE, todos/0021); wmctl close quits
+//   quake cleanly and withdraws the wanted state.
 //
 // CAVEAT: Chromium DENIES requestPointerLock under ALL Playwright-driven
 // input (headless or headful, CDP clicks aren't OS-level gestures —
@@ -142,11 +143,28 @@ try {
   await page.click('#terminal');
   await page.keyboard.type('wmctl list\r');
   await page.waitForFunction(() => {
-    const m = window.__osOut.match(/(\d+)x(\d+)\+(\d+)\+(\d+)\t\d+\tf..r\tQuake/);
+    const m = window.__osOut.match(/(\d+)x(\d+)\+(\d+)\+(\d+)\t\d+\tf..r-\tQuake/);
     return m && +m[3] === 72 && +m[4] === 76;
   }, { timeout: 20000, polling: 200 }).then(
     () => check('title drag moved the window while unlocked (wmctl list geometry + r flag)', true),
     async () => check('title drag moved the window while unlocked (wmctl list geometry + r flag)',
+      false, await page.evaluate(() => window.__osOut.slice(-500))));
+
+  // Fixed-res gating (todos/0021): quake has no SDL_WINDOW_RESIZABLE (the
+  // '-' after 'r' above), so a drag on the SE frame grip is focus-only —
+  // no rubber band, no configure, geometry untouched at 320x200+72+76.
+  await page.mouse.move(rect.x + 72 + 320 + 2, rect.y + 76 + 200 + 2);
+  await page.mouse.down();
+  await page.mouse.move(rect.x + 72 + 320 + 82, rect.y + 76 + 200 + 62, { steps: 6 });
+  await page.mouse.up();
+  await page.click('#terminal');
+  await page.keyboard.type('echo GRIP-DONE && wmctl list\r');
+  await page.waitForFunction(() => {
+    const i = window.__osOut.indexOf('GRIP-DONE');
+    return i >= 0 && /320x200\+72\+76\t\d+\tf..r-\tQuake/.test(window.__osOut.slice(i));
+  }, { timeout: 20000, polling: 200 }).then(
+    () => check('SE grip drag on fixed-res quake does not resize (todos/0021)', true),
+    async () => check('SE grip drag on fixed-res quake does not resize (todos/0021)',
       false, await page.evaluate(() => window.__osOut.slice(-500))));
 
   // Clean quit via the WM close request.

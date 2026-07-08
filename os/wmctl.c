@@ -48,11 +48,12 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[5] = "----";
+        char flags[6] = "-----";
         if (r.flags & WMP_F_FOCUSED)    flags[0] = 'f';
         if (r.flags & WMP_F_MINIMIZED)  flags[1] = 'm';
         if (r.flags & WMP_F_BORDERLESS) flags[2] = 'b';
         if (r.flags & WMP_F_RELMOUSE)   flags[3] = 'r';
+        if (r.flags & WMP_F_RESIZABLE)  flags[4] = 'R';
         r.title[31] = 0;
         printf("%d\t%d\t%dx%d+%d+%d\t%d\t%s\t%s\n",
                r.sid, r.pid, r.w, r.h, r.x, r.y, r.z, flags, r.title);

@@ -226,12 +226,15 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   const fb1 = makeFb(64, 48);
   const ring1 = makeRing(64);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1.sab, ring: ring1.sab });
-  const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one' });
+  // flags bit2 = resizable (todos/0021) — the RESIZE leg below needs it.
+  const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one', flags: 4 });
   f = await readEvent(wm);
   const w1 = rec(f);
   check('EV_CREATED pushed with the full record',
     f.type === WMP.EV_CREATED && w1.sid === c1.sid && w1.pid === appPid &&
     w1.w === 64 && w1.h === 48 && w1.title === 'app one' && (w1.flags & 1) === 1,
+    JSON.stringify(w1));
+  check('record flag bit4 = resizable (todos/0021)', (w1.flags & 16) === 16,
     JSON.stringify(w1));
   f = await readEvent(wm);
   check('EV_FOCUS follows create', f.type === WMP.EV_FOCUS && f.g(0) === c1.sid);
@@ -353,7 +356,9 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     relEvs.length === 1 && relEvs[0].type === K.WMEV.MOUSEMOTION &&
     relEvs[0].f[0] === 6 && relEvs[0].f[1] === -4 &&
     relEvs[0].w[2] === 1 && relEvs[0].w[3] === 1, JSON.stringify(relEvs));
-  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 2 });
+  // (keep bit2: SET_FLAGS replaces the whole word, and the resize leg
+  // below needs c1 to stay resizable — todos/0021)
+  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 2 | 4 });
   f = await cmd(wm, WMP.LIST);
   check('record flag bit3 = relative-mouse', f.type === WMP.R_LIST &&
     (function () {
@@ -363,7 +368,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
       }
       return false;
     })(), JSON.stringify(f.g(0)));
-  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 0 });
+  await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 4 });
 
   // ---- SHOT: single surface, then the megabyte screen composite ----
   f = await cmd(wm, WMP.SHOT, [c1.sid]);
@@ -400,6 +405,22 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('RESIZE bogus sid -> R_ERR', f.type === WMP.R_ERR);
   f = await cmd(wm, WMP.RESIZE, [c1.sid, 8, 8]);
   check('RESIZE below the size floor -> R_ERR', f.type === WMP.R_ERR);
+  // Non-resizable gating (todos/0021): the taskbar was created without
+  // flags bit2, so RESIZE is refused and its record carries no bit4.
+  f = await cmd(wm, WMP.RESIZE, [ct.sid, 100, 24]);
+  check('RESIZE a non-resizable surface -> R_ERR (todos/0021)', f.type === WMP.R_ERR);
+  check('non-resizable stays unchanged, nothing pending',
+    kernel.wmList().find(s => s.sid === ct.sid).w === 640 &&
+    kernel.wmList().find(s => s.sid === ct.sid).configurePending === false);
+  f = await cmd(wm, WMP.LIST);
+  check('record flag bit4 clear on the non-resizable surface',
+    f.type === WMP.R_LIST && (() => {
+      for (let i = 0; i < f.g(0); i++) {
+        const r0 = rec(f, 4 + i * K.WMP_REC_BYTES);
+        if (r0.sid === ct.sid) return (r0.flags & 16) === 0;
+      }
+      return false;
+    })());
 
   // ---- a parked read wakes on a pushed event ----
   check('connection quiescent before the park', idle(wm));

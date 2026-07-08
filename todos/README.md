@@ -24,13 +24,10 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0021` honor SDL_WINDOW_RESIZABLE — bug: drag-resizing doom/quake
-   corrupts their image (0019 offers resize to apps that can't
-   renegotiate); fix is SDL3 conformance, not per-app patches
-2. `0022` VT switching tty ↔ desktop — availability under partial
+1. `0022` VT switching tty ↔ desktop — availability under partial
    failure: the tty as maintenance mode when the desktop is broken/
    suspect (design in WM.md "Screen, VTs, and scaling")
-3. (unnumbered) a real-world WebGPU C app port — candidates via
+2. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
 
 (Deferred indefinitely: `0006` threads + atomics — processes are the

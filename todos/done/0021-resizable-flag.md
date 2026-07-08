@@ -1,6 +1,10 @@
 # 0021 — honor SDL_WINDOW_RESIZABLE (fixed-res apps corrupt on resize)
 
-- **Status**: open
+- **Status**: done (2026-07-08 — SDL_WINDOW_RESIZABLE → kernel surface-flag
+  bit2; hit-test drag zones + wmResize/WMP RESIZE/wmctl resize all gate on
+  it; WMP record bit4 / `R` in wmctl list; gpubox declares the flag
+  (winbox/term already did); image v16. Dev log
+  `logs/2026-07-08/resizable-gating.md`)
 - **Depends**: 0019 (SURFACE_CONFIGURE — the mechanism this gates)
 - **Design**: `todos/WM.md` ("Implementation status — client resize");
   SDL3 semantics: a window is non-resizable unless created with
