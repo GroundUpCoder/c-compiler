@@ -137,7 +137,7 @@ try {
     }
     return { h, colors: colors.size, nonTeal, n };
   }, [x0, y0, x1, y1]);
-  const DOOM_REGION = [16, 40, 784, 464];
+  const DOOM_REGION = [16, 40, 648, 432];   // inside doom's 640x400 client at (12,36)
   const waitFrame = async (reg, pred, ms) => {
     const t0 = Date.now();
     for (;;) {

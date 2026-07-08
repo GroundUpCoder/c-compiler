@@ -6,12 +6,12 @@
 // animating (present loop pumping), keyboard reaching the app (Escape opens
 // the DOOM menu while the title screen is otherwise static), and a clean
 // quit via the WM close request (wmctl close — the same SDL_EVENT_QUIT the
-// clipped-off-screen close box would deliver; the literal close-box click is
-// covered by os-wm.mjs). Then the same lifecycle, shorter, for gameboy with
-// the seeded ROM.
+// close box would deliver; the literal close-box click is covered by
+// os-wm.mjs). Then the same lifecycle, shorter, for gameboy with the
+// seeded ROM.
 //
-// DOOM's 1280x800 window overflows the 800x500 desktop by design — the
-// kernel clips; we only sample the visible region.
+// DOOM presents at native 640x400 (no CPU pre-scale since todos/0024 made
+// fixed-size windows compositor-scalable); the window fits the desktop.
 //
 // Usage: node os-doom.mjs
 import { chromium } from 'playwright';
@@ -80,9 +80,9 @@ try {
     return { h, colors: colors.size, nonTeal, n };
   }, [x0, y0, x1, y1]);
 
-  // The WM places the first window at (12,36); DOOM's client is 1280x800,
-  // clipped to the visible x<800, y<472 (taskbar strip below).
-  const DOOM_REGION = [16, 40, 784, 464];
+  // The WM places the first window at (12,36); DOOM's client is 640x400
+  // (native res, unscaled dst) — sample inside it with a small margin.
+  const DOOM_REGION = [16, 40, 648, 432];
   const waitFrame = async (reg, pred, ms) => {
     const t0 = Date.now();
     for (;;) {

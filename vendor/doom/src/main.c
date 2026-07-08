@@ -13,8 +13,6 @@
 
 #include <emscripten.h>
 
-#define WINDOW_SCALE 2
-
 SDL_Window* window = NULL;
 SDL_Surface* surface = NULL;
 
@@ -149,9 +147,12 @@ static void handleKeyInput()
 
 void DG_Init()
 {
+  /* Present at native 640x400 — no CPU pre-scale. The compositor scales
+     fixed-size windows via the per-surface dst rect (todos/0024): drag a
+     frame edge, `wmctl scale`, or maximize for scale-to-fit. */
   window = SDL_CreateWindow("DOOM",
-                            DOOMGENERIC_RESX * WINDOW_SCALE,
-                            DOOMGENERIC_RESY * WINDOW_SCALE,
+                            DOOMGENERIC_RESX,
+                            DOOMGENERIC_RESY,
                             0
                             );
 
@@ -161,23 +162,13 @@ void DG_Init()
 void DG_DrawFrame()
 {
   unsigned char *dst = (unsigned char *)surface->pixels;
-  int win_w = DOOMGENERIC_RESX * WINDOW_SCALE;
-  for (int sy = 0; sy < DOOMGENERIC_RESY; sy++) {
-    for (int sx = 0; sx < DOOMGENERIC_RESX; sx++) {
-      unsigned int px = DG_ScreenBuffer[sy * DOOMGENERIC_RESX + sx];
-      unsigned char r = (px >> 16) & 0xFF;
-      unsigned char g = (px >> 8)  & 0xFF;
-      unsigned char b =  px        & 0xFF;
-      for (int dy = 0; dy < WINDOW_SCALE; dy++) {
-        for (int dx = 0; dx < WINDOW_SCALE; dx++) {
-          int di = (sy * WINDOW_SCALE + dy) * win_w + (sx * WINDOW_SCALE + dx);
-          dst[di * 4 + 0] = r;
-          dst[di * 4 + 1] = g;
-          dst[di * 4 + 2] = b;
-          dst[di * 4 + 3] = 255;
-        }
-      }
-    }
+  int n = DOOMGENERIC_RESX * DOOMGENERIC_RESY;
+  for (int i = 0; i < n; i++) {
+    unsigned int px = DG_ScreenBuffer[i];
+    dst[i * 4 + 0] = (px >> 16) & 0xFF;
+    dst[i * 4 + 1] = (px >> 8)  & 0xFF;
+    dst[i * 4 + 2] =  px        & 0xFF;
+    dst[i * 4 + 3] = 255;
   }
   SDL_UpdateWindowSurface(window);
 

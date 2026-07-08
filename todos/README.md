@@ -110,7 +110,10 @@ EV_TITLE_ACTIVATE) toggles wm.c policy dispatched on the resizable bit:
 configure to the work area vs centered 0024 scale-to-fit (never
 overflowing), saved-geometry restore, EV_SCREEN re-fit, `wmctl max` via
 WMP ACTIVATE (same event path; R_ERR with no WM), image v19
-(`logs/2026-07-08/maximize.md`).
+(`logs/2026-07-08/maximize.md`);
+`0027` **DOOM presents 640×400 raw** — the `WINDOW_SCALE 2` CPU
+pre-scale dropped now that 0024 compositor scaling covers it, image v20
+(`logs/2026-07-08/doom-native-present.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

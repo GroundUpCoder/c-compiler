@@ -107,8 +107,8 @@ function sessionApps() {
   const doomRow = row('DOOM Shareware');
   check('doom opens a WM-placed window titled "DOOM Shareware"',
     doomRow !== '', JSON.stringify(list1));
-  check('doom window is 1280x800 (640x400 doubled — the app chose, not the WM)',
-    doomRow.includes('1280x800'), doomRow);
+  check('doom window is 640x400 (native res — 0024 compositor scaling, no CPU pre-scale)',
+    doomRow.includes('640x400'), doomRow);
   const gbRow = row('Peanut-GB');
   check('gameboy opens a window titled "Peanut-GB"' +
     (HAVE_ROM ? ' (ROM from /root/roms)' : ' (built-in test ROM; local ROM absent)'),
@@ -139,7 +139,7 @@ function sessionApps() {
 function sessionFrames() {
   const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
     { input: 'cat /root/doom.ppm /root/gb.ppm /root/quake.ppm\n', timeout: 120000,
-      maxBuffer: 32 * 1024 * 1024 });   // three raw PPMs ≈ 5.9MB
+      maxBuffer: 32 * 1024 * 1024 });   // three raw PPMs ≈ 1.6MB
   if (b.error) throw b.error;
 
   function parsePPM(buf, off) {
@@ -161,8 +161,8 @@ function sessionFrames() {
   }
 
   const doomPPM = parsePPM(b.stdout, 0);
-  check('doom shot parses as P6 at full client size 1280x800',
-    doomPPM !== null && doomPPM.w === 1280 && doomPPM.h === 800,
+  check('doom shot parses as P6 at full client size 640x400',
+    doomPPM !== null && doomPPM.w === 640 && doomPPM.h === 400,
     doomPPM && `${doomPPM.w}x${doomPPM.h}`);
   if (doomPPM) {
     const n = frameStats(b.stdout, doomPPM);
