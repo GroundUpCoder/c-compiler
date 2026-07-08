@@ -38,6 +38,10 @@ One numbered file per unit of work we have actually committed to doing.
    instances don't)
 6. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
+7. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+   the main compiler (wc W1; independently useful to C)
+8. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+   rides the main project, must never get in its way; design `WC.md`)
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in
 `WM.md` "The desktop shell", verified-but-unfixed items on its

@@ -1,259 +1,238 @@
-# WC — memory-free wasm modules from C (and, later, the wc dialect)
+# WC — the wc dialect: memory-less wasm from a forked C compiler
 
-Status: **design / not yet queued.** Round 1 re-scoped 2026-07-08: **no
-dialect** — two compiler flags on plain C + the existing `__`-extensions.
-The wc dialect survives as a later, pure-sugar milestone (see "The dialect,
-demoted to sugar" below). Original 2026-07-07 findings preserved; decision
-log in `logs/2026-07-08/wc-round1-flags.md`.
+Status: **design settled 2026-07-08 (round 2); queued as `todos/0041` +
+`todos/0042`.** Round 2 SUPERSEDES the round-1 "flags on plain C, no
+dialect" re-scope: **fork-first is authoritative.** The round-1 design is
+not discarded — it is demoted to the *fold-back* plan, to be applied to
+`compiler.js` only after wc has proven the language's usefulness and
+effectiveness. Decision logs: `logs/2026-07-08/wc-round1-flags.md`
+(superseded), `logs/2026-07-08/wc-round2-fork.md` (this design).
 Related: `WASM_GC.md`, `EXTERNREF.md`, `OS.md` (dlopen/`.so` story).
 
 ## Thesis
 
 A memory-free module's wasm *import section* is a complete, honest manifest
 of everything it needs to link, because the compiler emits no implicit
-memory, static data, relocations, or shadow stack for it. Two such modules
-(or one and a full-C module) link by name-matching wasm imports/exports and
-passing values/refs — no memory-layout merging, no GOT, no
-`__memory_base`/`__table_base`. The heavy Emscripten "dylink" ABI
-evaporates, *specifically because* the module manages no memory.
+memory, static data, relocations, or shadow stack. Two such modules link by
+name-matching imports/exports and passing values/refs — no memory-layout
+merging, no GOT, no `__memory_base`/`__table_base`. The heavy Emscripten
+"dylink" ABI evaporates *specifically because* the module manages no memory.
 
-Originally this was framed as a dialect ("wc"). The 2026-07-08 re-scope
-recognizes the substance was never the dialect — it is three
-dialect-independent capabilities:
+wc is the language shaped around that property: C's machinery (preprocessor,
+macros, parser, control flow, exceptions) with the memory model replaced —
+every local/global a real wasm slot, every aggregate a wasm-GC object,
+every string an externref.
 
-1. **Envelope gating** — stop emitting memory/table scaffolding nothing used.
-2. **Memory-freedom enforcement** — a flag that makes demanding linear
-   memory a compile error, checked at the point of demand.
-3. **GC string literals** — string constants as externrefs, not data
-   segments.
+## Round 2 decision: fork first (2026-07-08, settled)
 
-Plain C + `__struct`/`__array`/`__externref` can express every memory-free
-program today; the dialect is ergonomics and can come later, purely as
-sugar over a proven core.
+- **`wc.js` is a fork (copy) of `compiler.js`.** Sources are `.wc`/`.wh`.
+- **The main compiler and the os/ project are not touched** by wc work,
+  with exactly one sanctioned exception: `todos/0041` lands `__gcstr` in
+  `compiler.js` *before* the fork (independently useful to C; the fork
+  then inherits the one genuinely new emission mechanism for free).
+- **Why fork, not flags/sugar** (reversing round 1): total isolation — the
+  experiment must not get in the way of the main project at all; the
+  language is proven in its own artifact first. The fork also lets wc
+  *delete* the linear-memory machinery outright instead of gating it,
+  which is the honest shape of a language whose semantics don't include it.
+- **Fold-back**: only after wc proves out, capabilities migrate to
+  `compiler.js` per the round-1 blueprint (envelope gating,
+  `--no-linear-memory`, `--shared`, keyword-alias-table sugar). When that
+  happens, sync this doc. Until then, round-1 mechanics live in its log.
 
-## Round 1: two flags, no dialect (decided 2026-07-08)
+Don't re-litigate fork-vs-flags without new evidence; both rationales are
+recorded in the logs.
 
-- **`--no-linear-memory`** — enforcement flag. Compiling a TU that *demands*
-  linear memory (or a function table — see choke points below) is an error,
-  reported at the first demanding construct's source location.
-- **`--shared`** — `.so` output mode: no `main` required, `__export`
-  directives (already implemented — parsed :12468, emitted :17449) are the
-  module interface. **Forces `--no-linear-memory`, and additionally forbids
-  table demand, for now**: until the M2 imported-memory tier exists a `.so`
-  must be memory-free, and a module-local funcptr table index crossing a
-  module boundary is meaningless to the other side — funcptrs-in-`.so` wait
-  for M3. Driver shape: `cc -shared foo.c -o foo.so` (morally: `-shared`
-  implies `-fPIC`).
+## The language (v1 semantics — all decided)
 
-Only flag-validated TUs become `.so` files — the driver enforces this, not
-the language. `--no-linear-memory` alone (without `--shared`) permits a
-module-private table: self-contained `call_indirect` is sound when no index
-escapes, and enforcing escape is not statically possible anyway.
+1. **Memory-less by design.** No shadow stack, no data segments, no
+   allocator, no `__stack_pointer`/`__heap_base`, no `alloca`. The
+   envelope (memory/table sections + exports) is emitted only on demand
+   (see "Envelope gating" below).
+2. **`struct` ≡ `__struct`, verbatim.** wc's `struct` is the existing GC
+   struct with rules inherited unchanged: `struct Foo *` is the ref (the
+   value type — `GCStructRefType`), access via `->`, allocation via
+   `__new`, reference-semantics assignment, no `&ref->field`, single
+   inheritance via `__extends`, `__ref_cast`/`__ref_test`/null rules as-is.
+   The heap form in value position stays an error (`struct Foo x` — no).
+3. **Arrays are GC arrays.** `T x[]` types as `__array(T)`; no
+   array-to-pointer decay; runtime length (`__array_len`), engine bounds
+   checks. `T x[N]` as a local declarator sugars to `__array_new(T, N)`.
+4. **Unions removed.** No type punning, no `memcpy`-over-aggregates.
+5. **Pointers are ints.** For non-GC `T`, the type `T*` parses but *is*
+   `int` (i32): pass/store/compare/arithmetic fine, dereference
+   (`*p`, `p[i]`, `->`) is a compile error. Keeps adapted `.h` prototypes
+   compiling and enables Tier-1 interop (hold a C pointer as an opaque
+   token, hand it back, never look inside). Function pointers are ints
+   too — see 6.
+6. **Function pointers: inherited `call_indirect`** (table indices,
+   1-indexed i32s), NOT funcref — consistent with pointers-are-ints, zero
+   new codegen. wc change: the table/elem is populated with
+   **address-taken functions only** and omitted entirely when no function
+   pointers occur (today every function gets a slot — `compiler.js:13643`).
+   Typed funcrefs/`call_ref` are deferred to the `.so` callback milestone
+   (W5); no `call_ref` support exists today (verified).
+7. **String literals are imported externref constants.** Every `"..."`
+   lowers as a js-string `importedStringConstants` global: module **`"#"`**,
+   import name = string content (dedup by construction), typed
+   `__refextern` (non-nullable; decays to `__externref`), codegen is a
+   `global.get`. `str` is a prelude typedef of `__externref` for v1
+   (promote to a nominal type only if mixing bugs bite). String ops ride
+   the `wasm:js-string` builtins already bound in the stdlib
+   (`compiler.js:22009+`) and already enabled in host.js
+   (`builtins: ['js-string']`, host.js:8210). No engine cliff: where the
+   builtin/compile-option is absent, the polyfill is
+   `imports["#"] = new Proxy({}, {get: (_, name) => name})`.
+   `importedStringConstants` verified working in Node v25.8.2 by direct
+   probe. Because imported globals are wasm constant expressions, string
+   literals may initialize globals.
+8. **Variadics dropped** (the arg-block ABI is stripped). In their place,
+   a **`format("...", args...)` builtin**: format string must be a
+   literal, parsed and type-checked against the args at compile time,
+   lowered to a `wasm:js-string` `concat` chain. Integer specifiers
+   (`%d`/`%u`/`%x`/`%c`/`%s`) need no host help — itoa is pure prelude
+   code (digit loop into a mutable i16 `__array(short)` +
+   `fromCharCodeArray`). Floats use one host util (`__wc_dtoa`) because
+   `wasm:js-string` has no number→string conversion.
+9. **Exceptions kept; setjmp/longjmp stripped.** `__try`/`__catch
+   tag(bindings)`/`__throw tag(args)` is a first-class dialect feature
+   (`DExceptionTag`, `compiler.js:3545`) independent of the setjmp
+   lowering. Wasm tags carry typed values — scalars and refs (a thrown
+   `str` works natively). The only impossible payload class
+   (aggregate-by-value) doesn't exist in wc.
+10. **Globals & static locals.** Scalars → wasm globals (a static local is
+    a function-scoped global; supported, free). Ref-typed globals/statics:
+    init restricted to null or a string literal (constant-expression
+    imported global); anything else initializes in `main`. No synthesized
+    start function for the foreseeable future — less complicated than C.
+11. **Compound literals** (in v1): `(T[]){...}` → `__array_of`;
+    `(struct Foo){...}` → `struct.new` when fully positional, else
+    `struct.new_default` + per-field `struct.set` (both opcodes wired).
+12. **`sizeof`**: error on GC types, kept for scalars (userland `__wasm`
+    memory code wants `sizeof(int)`).
+13. **Userland linear memory escape hatch.** `__wasm(type, (args...),
+    op 0xNN, ...)` inline wasm (`compiler.js:10706`) and
+    `__memory_size`/`__memory_grow` are inherited. Addresses are ints;
+    the compiler does zero memory bookkeeping. Prelude code can define
+    load/store helpers out of `__wasm` if a program wants raw bytes.
 
-## The envelope, and gating it
+## Runtime ABI (the `__wc_*` veneer) — deliberately tiny
 
-**"Envelope"** = the module-level scaffolding emitted *unconditionally
-around* the compiled functions, as opposed to per-construct code inside
-bodies (already demand-driven). Inventory (all verified 2026-07-08):
+Entry point is **`int main(void)`**; args/env are *pulled* by the program,
+never pushed by the host (the host never has to construct GC values —
+externrefs are all it produces). All wc-specific imports are prefixed
+`__wc_*` (module `"c"`, alongside the existing C import table). v1 set:
 
-| piece | where | gated today? |
+| import | signature | note |
 |---|---|---|
-| `__stack_pointer` + `__heap_base` globals | `compiler.js:17397-17398` | never |
-| `addMemory` + `memory`/`__indirect_function_table`/`__heap_base` exports | `:17747-17780` | never |
-| table section 4 — sized `totalFuncs + 1` (every function gets a slot) | `:13643-13646` | never |
-| memory section 5 | `:13648-13657` | never |
-| `alloca` helper + export | `:17430` | never |
-| data segments | `:17758` | `staticData.length > 0` |
-| shadow-stack prologue/epilogue | `:15207`/`:15247` | `frameSize > 0` |
-| tag section | `:13660` | `tags.length > 0` |
+| `__wc_argc` | `() -> int` | |
+| `__wc_arg` | `(int i) -> str` | |
+| `__wc_getenv` | `(str) -> str` | null if unset |
+| `__wc_read` | `(int fd, int max) -> str` | null at EOF |
+| `__wc_write` | `(int fd, str) -> int` | |
+| `__wc_exit` | `(int) -> void` | |
+| `__wc_dtoa` | `(double) -> str` | `format` `%f`; JS `String(x)` |
 
-Gating = `cg.usedMemory` / `cg.usedTable` flags; emit the top block only
-when the corresponding flag is set (the tag section is the in-tree
-precedent). Note table gating touches **elem population** too, not just the
-section header — today every function occupies a slot regardless of
-address-taken-ness.
+Binary-safe I/O (byte/i16 arrays) is post-v1.
 
-Gating is **unconditional** (not behind the flags): every pure-compute
-module slims, so this is removing a baked-in assumption, not adding
-wc-specific complexity. The care item: hosts that assume a `memory`/table
-export (host.js instantiation, tooling) must tolerate their absence.
+**Loader is fully agnostic — no provenance detection anywhere.** The host
+always supplies the superset import object (C table + `__wc_*` + the `"#"`
+namespace/compile option); instantiation binds only what a module declares,
+and existing C binaries declare none of it. Call convention dispatches on
+the module's own signature: `main.length === 3` → the existing
+argv-in-linear-memory path; `0` → just call it. host.js already contains
+both call paths. One loader, C and wc alike, in node hosts and in os/.
 
-## Enforcement: at the point of demand, not the syntax (decided 2026-07-08)
+## The fork worklist (what wc.js strips / redirects / adds)
 
-**No AST/syntax reject pass.** Syntax is too surface-level — many paths
-reach the same bad tree, and syntax rules also *over*-reject: holding a C
-pointer as an opaque scalar token (`int f(char *p) { return g(p); }`)
-demands no memory and is exactly the Tier-1 interop pattern we want.
+**Strip**: shadow-stack + `AllocClass.MEMORY` machinery (address-taken
+promotion becomes a diagnostic), static-data layout + data segments,
+variadic arg-block ABI (`va_*` gone), setjmp/longjmp lowering, unions,
+`alloca`, the C stdlib (replaced by a small `.wh` prelude), always-on
+envelope emission.
 
-Instead, **the gating flags are the validator.** They flip at the choke
-points where the demanding *bytes* are emitted, so the checked property is
-a property of the artifact, not the tree — there is no second way to reach
-a memory-using module that bypasses them, by construction:
+**Redirect**: `struct` → the GC-struct path; array declarators →
+`__array`; string literals → `"#"` imports; non-GC pointer types → int;
+compound literals → `__new`/`__array_of`; driver accepts `.wc`/`.wh`.
 
-`usedMemory` flips in:
-- `body.mop(...)` — the single funnel for every load/store instruction
-  (all of `emitLoad`/`emitStore` route through it, `:15881`+)
-- `body.memoryCopy()` / `body.memoryFill()` (`:13234-13235`)
-- `__memory_size` / `__memory_grow` / `__heap_base` intrinsic codegen
-- staticData allocation (`getStringAddress` `:14556`; global data placement)
-- `frameSize > 0` at function emit (`:15207`) — itself demand-driven:
-  address-taken locals, by-value aggregates, VLA, `alloca`, `va_arg`
+**Keep unchanged**: preprocessor + macros, lexer, parser shape, sema,
+`ConstEval`, inliner, goto normalizer + irreducible lowering, exceptions,
+`__wasm`, the whole GC/externref codegen, the wasm emitter (incl. minimal
+rec groups), name/sourcemap sections.
 
-`usedTable` flips in:
-- `call_indirect` emission
-- function-address materialization (funcptr → table index)
+**Add** (short list): `format()` lowering; the `__wc_*` prelude
+declarations; address-taken-only elem population; demand-gated envelope;
+diagnostics with blame locs for the removed constructs (see below).
 
-Each flag records its **first blame loc**. Under `--no-linear-memory` the
-first flip is an immediate error at that loc (fail fast, precise
-diagnostic); the `emit()`-time gate doubles as a backstop assertion. If
-neither flag flipped, the module provably carries no memory/table — nothing
-is left to validate after the fact.
+## Enforcement: at the point of demand (inherited from round 1)
 
-Consequences accepted deliberately:
-- Flagged TUs live outside libc — `printf` and friends demand memory
-  everywhere. These are leaf modules: scalars, GC structs, externref
-  strings, `__import`ed capabilities.
-- A bare `"..."` (staticData) under the flag fails with a blame loc at the
-  literal; the fix is `GCSTR("...")`. Honest diagnostic, right nudge.
+The round-1 insight carries over verbatim into wc.js: don't reject syntax,
+flip flags at the emitter choke points where demanding *bytes* are
+written, each recording its first blame loc. In wc most linear paths are
+deleted outright, but the pattern still governs what remains:
 
-## GC string literals (decided 2026-07-08)
+- `body.mop(...)` is the single funnel for every load/store
+  (`compiler.js:15881+`), plus `memoryCopy`/`memoryFill` (`:13234`),
+  `__memory_size`/`__memory_grow` — in wc these flip `usedMemory`, which
+  *gates the memory section in* (userland `__wasm` demand) rather than
+  erroring.
+- staticData allocation (`getStringAddress` `:14556`) and `frameSize > 0`
+  (`:15207`) must be unreachable in wc; assert with blame locs.
+- `call_indirect` + funcptr materialization flip `usedTable` → gates
+  table/elem in, populated address-taken-only.
 
-- New expression node **`GCStringLiteral`**, typed **`__refextern`**
-  (non-nullable — the js-string spec types imported constants
-  `(ref extern)`, and a constant is never null); decays to `__externref`
-  like other refs.
-- Surface spelling: **`__gcstr("...")`** keyword builtin (pattern-matching
-  `__new`/`__array_len`), with **`GCSTR(s)`** as the friendly macro.
-  Argument must be a string literal; adjacent-literal concatenation works
-  (parser already concatenates, `:10142`). **No `@"..."`** — it would break
-  the parses-as-C principle and choke C analyzers/IDEs.
-- Lowering: js-string **`importedStringConstants`, module `"#"`**. Each
-  distinct literal is one imported immutable externref global whose import
-  *name is the string content* — dedup is by construction; codegen is a
-  `global.get`.
-- **No engine cliff.** Where the engine builtin is absent (or in our own
-  loaders), the polyfill is one line:
-  `imports["#"] = new Proxy({}, { get: (_, name) => name })`.
-  Engine support merely upgrades the constants to validator-known
-  immutables. `boot.js`/host.js keep working everywhere.
-- Emitter net-new: **imported globals** (import kind 0x03) + the
-  index-space shift — defined-global indices offset by the imported count,
-  the same dance function imports already do (`:13630`). Classic off-by-N
-  bug class; wants a targeted test.
+## Envelope inventory (verified 2026-07-08, line refs valid at fork time)
 
-## Codegen coupling — how hard is the memory-free mode? (verified 2026-07-07)
+| piece | where | wc disposition |
+|---|---|---|
+| `__stack_pointer` + `__heap_base` globals | `compiler.js:17397-17398` | stripped |
+| `addMemory` + `memory`/table/`__heap_base` exports | `:17747-17780` | demand-gated |
+| table section — sized `totalFuncs + 1` | `:13643-13646` | address-taken only, else omitted |
+| memory section | `:13648-13657` | demand-gated (`__wasm` users) |
+| `alloca` helper + export | `:17430` | stripped |
+| data segments | `:17758` | stripped (literals are `"#"` imports) |
+| shadow-stack prologue/epilogue | `:15207`/`:15247` | stripped |
+| tag section | `:13660` | kept (already demand-gated — the precedent) |
 
-Linear memory is **demand-driven, not deeply threaded.** Per-construct
-usage is already gated (see envelope table above); only the envelope is
-unconditional, and it is centralized. Gating it is a localized,
-~day-of-careful-work-with-tests change — a mode, not a second backend. The
-GC/externref codegen paths needed already exist and work.
+## `.so` / dynamic linking (wc-only; C programs are never `.so`s)
 
-Empirical baseline: a pure-GC program today still emits `memory`,
-`__heap_base`, `__indirect_function_table`, `alloca`, and a data section
-(193 bytes for `int main(){return add(2,3);}` + one `__struct`). Gating
-removes all of it.
+- **Type identity is already solved**: the type emitter's iterative Tarjan
+  SCC pass (`compiler.js:13528`) emits **minimal rec groups**, and wasm-GC
+  canonicalization is structural — two independently compiled wc modules
+  sharing a `.wh` get identical `struct` identity from the engine, no
+  registry. Care: field mutability/finality/rec-group shape must match —
+  both sides compiling the same header ensures it.
+- `__export` already exists end-to-end (`:12468` parse, `:17449` emit) —
+  the export-surface story is done.
+- v1 `.so` interface: named function imports/exports, scalars + GC refs +
+  externrefs crossing. **No function pointers across module boundaries**
+  (a module-local table index is meaningless to the other side) until W5.
 
-## Minimal rec groups — already done (verified 2026-07-07)
+## Staging
 
-Cross-module GC type identity relies on structural canonicalization of
-**minimal rec groups**. The type emitter already does exactly this: an
-iterative Tarjan SCC pass (`compiler.js:13528`) puts each type in its own
-singleton rec group unless it is part of a genuine mutually-recursive
-cycle, in which case the minimal SCC becomes the group (comment at
-`:13494-13504`). Cross-*module* identity rides the same guarantee that
-already fixes cross-*TU* identity. Remaining care: field mutability /
-finality / rec-group shape must match exactly across modules — both sides
-compiling the same header ensures it.
+- **W1 = `todos/0041`** — `__gcstr("...")` in the MAIN compiler (the one
+  sanctioned pre-fork touch): `GCStringLiteral` typed `__refextern`,
+  `"#"` importedStringConstants, imported globals (kind 0x03) + the
+  defined-global index-space shift (off-by-N class — wants a targeted
+  test), `GCSTR()` macro, host.js compileOptions token + `"#"` proxy
+  polyfill in loaders, tests. Independently useful to C.
+- **W2 = `todos/0042`** — the fork: copy `compiler.js` → `wc.js`, apply
+  the strip/redirect worklist, v1 language per this doc, first tests, a
+  size baseline (hello-world section dump — no memory/table/data).
+- **W3** — prelude + `format()` + the `__wc_*` veneer + loader arity
+  dispatch: wc binaries run under the node host and in os/.
+- **W4** — separate compilation + `.so`: `-shared`-style driver mode in
+  wc.js, host cross-wires two modules by name, first cross-module
+  GC-identity test.
+- **W5** — `dlopen`-in-wc + the cross-module callback decision (typed
+  funcrefs vs shared table at the boundary).
+- **Fold-back (unscheduled)** — after wc proves out: the round-1
+  flags/gating design applied to `compiler.js`; sync this doc then.
 
-## Interop model — two tiers
+## Open questions (small, deferrable)
 
-**Tier 1 — values, refs, handles. Zero shared memory.** Exchange scalars,
-GC refs, and externrefs by wasm import/export. A memory-free module holds a
-**C pointer as an opaque scalar it never dereferences**, so it works as
-clean orchestration over C libraries:
-
-```c
-int db = c_sqlite3_open("foo.db");   // C returns a heap offset; held as a token
-c_sqlite3_exec(db, "SELECT ...");    // handed back — never dereferenced
-```
-
-Needs *nothing new in the compiler* — honest import/export already works.
-This is the round-1 sweet spot. (Note the enforcement design deliberately
-permits this: demand-point checking accepts opaque pointer-holding; only an
-actual dereference flips `usedMemory`.)
-
-**Tier 2 — shared linear memory.** To actually read a `char*` C handed
-over, the module must **import C's `memory`** and use explicit builtins,
-with a shared allocator (`__import("env","malloc")` — C owns the heap). A
-flag-validated module contributes no static data and takes no addresses of
-statics, so it needs **zero relocations** — far lighter than Emscripten
-dylink.
-
-## Function pointers across modules (M3)
-
-The one dylink primitive that can't be fully avoided — but it is naturally
-deferred (round-1 `.so`s forbid table demand entirely). When it lands:
-
-- **C-boundary callbacks**: a shared table, append-at-`dlopen`, index
-  handed back — C's `call_indirect` needs a slot.
-- **GC-world callables**: prefer **typed funcrefs / `call_ref`**
-  (net-new codegen — no support today, verified). Funcref values need no
-  table and no indices, so no module-local compile-time slots exist to
-  collide — which is exactly what keeps the "zero relocations" promise
-  airtight. The shared table then shrinks to the C ABI boundary only.
-
-## The dialect, demoted to sugar (2026-07-08)
-
-When wc/.wh arrive, the mechanism is a **per-file keyword-alias table in
-`postProcess`** (`:990-997` — the existing IDENT→KEYWORD pass; tokens carry
-their source file), **not PP macros**:
-
-- `struct`→`X_STRUCT_GC`, `str`→`X_EXTERNREF`, `array`→`X_ARRAY_GC`,
-  `new`→`X_NEW` — all already parse in C-compatible shapes
-  (`__array(int)`, `__new(...)`), so the sugar is literally a spelling
-  remap, ~30 lines, consulted only for tokens whose file ends `.wc`/`.wh`.
-- Why not macros: PP defines are TU-global once defined, `#undef`-able, and
-  hazardous under mixed includes. The alias table is scoped exactly "for
-  the duration of those files," can't leak, and needs no push/pop
-  machinery.
-- Bonus: it plausibly makes `.wh` **directly includable from `.c`** —
-  tokens lexed from the `.wh` remap, the includer's don't — which would
-  kill the `.wh`→`.h` projection pass from the original design. To verify
-  then: PP macro expansion preserves definition-site file locs on body
-  tokens (giving definition-site dialect semantics for macros defined in
-  `.wh`).
-- Verified fun fact: keyword resolution runs **after** the PP in this
-  compiler (`postProcess`, `:982-997` — correct C phase order), so
-  `#define struct __struct` in plain C works **today**. Sugar is
-  user-opt-in with zero compiler changes in the meantime.
-
-Original dialect principles kept for that milestone: parses as C;
-isomorphic core (`int add(int,int)` byte-identical in both); `int` is i32;
-no parser-managed linear memory; `.wh` canonical for cross-module ABI.
-
-## Staging (revised 2026-07-08)
-
-- **R1** — envelope gating (+ host tolerance for absent memory/table
-  exports) + demand-point enforcement with blame locs + `--no-linear-memory`
-  + `--shared` driver mode + `__gcstr`/`GCStringLiteral`/imported-globals
-  emitter/`"#"` wiring in the loaders. Plain C only. Days, not weeks.
-- **M1** — separate compilation; host instantiates two modules and
-  cross-wires imports↔exports by name. First real cross-module GC-identity
-  test. No compiler changes.
-- **M2** — memory-import codegen + shared malloc → Tier 2; relaxes the
-  `--shared` ⇒ `--no-linear-memory` coupling.
-- **M3** — real `dlopen`/`dlsym` loader + shared table and/or `call_ref` →
-  the full `.so` vision, function-pointer callbacks included.
-- **M4** — the wc dialect as sugar (keyword-alias table, `.wc`/`.wh`,
-  possibly direct `.wh`-from-`.c` include).
-
-## Open questions
-
-- Exact flag spellings (`--no-linear-memory` vs `-mno-linear-memory`;
-  `--shared` vs `-shared`).
-- `__gcstr` name bikeshed (`__str`? `__jsstr`?). `GCSTR()` macro home
-  (a tiny `<gc.h>`?).
-- Whether unconditional envelope gating needs a compat escape hatch for
-  embedders that assume a `memory` export exists.
-- `str` `+`-as-concat sugar — deferred with the dialect (M4).
+- `str` nominal type vs typedef (start typedef; revisit on evidence).
+- Binary-safe I/O shape (byte arrays vs i16 arrays) — post-v1.
+- W5 callback mechanism (funcref preferred GC-side to keep
+  zero-relocations airtight; shared table only at a C ABI boundary).
+- `format()` specifier set beyond `%d %u %x %c %s %f` (`%g`? width/pad?).
