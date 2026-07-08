@@ -1,9 +1,10 @@
 {
-  "version": 21,
+  "version": 22,
   "dirs": [
     "/bin",
     "/etc",
     "/etc/fonts",
+    "/etc/menu",
     "/root",
     "/root/id1",
     "/root/roms",
@@ -36,6 +37,27 @@
     },
     "/root/hello.c": {
       "text": "hello.c"
+    },
+    "/etc/menu/doom": {
+      "link": "/bin/doom"
+    },
+    "/etc/menu/quake": {
+      "link": "/bin/quake"
+    },
+    "/etc/menu/gameboy": {
+      "link": "/bin/gameboy"
+    },
+    "/etc/menu/term": {
+      "link": "/bin/term"
+    },
+    "/etc/menu/winbox": {
+      "link": "/bin/winbox"
+    },
+    "/etc/menu/gpubox": {
+      "link": "/bin/gpubox"
+    },
+    "/etc/menu/snake": {
+      "content": "term snake\n"
     },
     "/bin/doom": {
       "project": "vendor/doom/bin.json"

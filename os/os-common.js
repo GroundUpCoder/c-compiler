@@ -220,6 +220,8 @@ function buildProject(CompilerJS, projPath, readHostFile) {
  *   entry.hdrs    — (with entry.c) asset names of local headers the source
  *                   quotes-includes; staged beside it for the compile
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
+ *   entry.content — inline string; written verbatim to /path (one-liners
+ *                   like /etc/menu command entries, todos/0028)
  *   entry.bin     — REPO-relative binary file; copied verbatim to /path
  *                   (game data: doom1.wad, gameboy ROMs — needs io.readBinary)
  *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
@@ -267,6 +269,11 @@ function seedImage(kfs, manifest, io) {
           writeFile(kfs, path, text, entry.mode);
           log('  ' + path + ' (from ' + entry.text + ')');
         });
+      }
+      if (entry.content !== undefined) {
+        writeFile(kfs, path, entry.content, entry.mode);
+        log('  ' + path + ' (inline, ' + entry.content.length + ' bytes)');
+        return undefined;
       }
       if (entry.bin !== undefined) {
         // Wrap the call itself so a synchronous throw (Node's readFileSync
@@ -318,7 +325,7 @@ function seedImage(kfs, manifest, io) {
           log('  ' + path + ' (compiled ' + entry.c + ')');
         });
       }
-      throw new Error('image.json: ' + path + ': entry needs "c", "text", "bin", "project" or "link"');
+      throw new Error('image.json: ' + path + ': entry needs "c", "text", "content", "bin", "project" or "link"');
     });
   });
   return chain.then(function () {

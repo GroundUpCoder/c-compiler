@@ -24,28 +24,26 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0028` start menu — Start button + `/etc/menu` launcher popup
-   (wm.c only; child-stdio question decided in-item)
-2. `0029` desktop icons — fullscreen bottom-of-z wm layer backed by
+1. `0029` desktop icons — fullscreen bottom-of-z wm layer backed by
    `/root/Desktop` (also makes desktop clicks visible to the WM)
-3. `0030` title-bar minimize/maximize boxes — kernel chrome + both
+2. `0030` title-bar minimize/maximize boxes — kernel chrome + both
    composites; min = kernel-direct, max = EV_TITLE_ACTIVATE (0025 path)
-4. `0031` taskbar polish — clock, stable button order, overflow
-5. `0032` window cycling — kernel chord → WMP EV_CYCLE, wm policy
+3. `0031` taskbar polish — clock, stable button order, overflow
+4. `0032` window cycling — kernel chord → WMP EV_CYCLE, wm policy
    (no WM → chord passes through, not swallowed), `wmctl cycle`
-6. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
+5. `0033` WM bug sweep round 1 — full browser suite + dogfood storms +
    the standing known-issue checklist; repro tests first
-7. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
+6. `0034` coreutils batch 2 — the trivial applets (cut tr uniq tee dd
    stat md5sum … — no-spawn filters, multicall adds)
-8. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
+7. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
    `PV_NO_INTERCEPT`, link the vfork shim into coreutils
-9. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+8. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-10. `0037` wasm module cache — kernel-side compiled-Module cache on the
-    spawn path (system-volume /bin first; Modules clone, instances don't)
-11. (unnumbered) a real-world WebGPU C app port — candidates via
+9. `0037` wasm module cache — kernel-side compiled-Module cache on the
+   spawn path (system-volume /bin first; Modules clone, instances don't)
+10. (unnumbered) a real-world WebGPU C app port — candidates via
     `WEBGPU.md`; the platform side landed with 0016
-12. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
+11. (unnumbered, unlocked by 0026) `tools/mkimage.js` — bake a
     `os-system.img` blob for one-blob virgin boots + fast test fixtures
 
 (The desktop-shell round 0028–0033 is designed in `WM.md` "The desktop

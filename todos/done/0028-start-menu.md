@@ -1,6 +1,6 @@
 # 0028 — start menu: Start button + /etc/menu launcher
 
-- **Status**: open
+- **Status**: done (2026-07-08; dev log `logs/2026-07-08/start-menu.md`)
 - **Depends**: — (0029's desktop layer completes dismiss-on-desktop-click;
   not blocking)
 - **Design**: `todos/WM.md` "The desktop shell" (start-menu block + the

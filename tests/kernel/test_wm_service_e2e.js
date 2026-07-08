@@ -82,6 +82,25 @@ const script = [
   'sleep 2.5',
   'echo ==list5',
   'wmctl list',
+  'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',   // new wm, new sid
+  // ---- the Start menu (todos/0028) ----
+  'wmctl click $TSID 25 14',                     // Start button (x < 50)
+  'sleep 0.5',
+  'echo ==menu1',
+  'wmctl list',
+  'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
+  'wmctl click $MSID 20 134',                    // entry 6 = winbox (sorted)
+  'sleep 2.5',                                   // real wasm spawn
+  'echo ==menu2',
+  'wmctl list',
+  'wmctl click $TSID 25 14',                     // re-open
+  'sleep 0.5',
+  'echo ==menu3',
+  'wmctl list',
+  'wmctl focus $WSID',                           // focus change dismisses
+  'sleep 0.5',
+  'echo ==menu4',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -97,7 +116,9 @@ function section(name) {
 const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       l4 = section('list4'), l5 = section('list5'), l6 = section('list6'),
       l7 = section('list7'), l8 = section('list8'), l9 = section('list9'),
-      l10 = section('list10');
+      l10 = section('list10'),
+      m1 = section('menu1'), m2 = section('menu2'), m3 = section('menu3'),
+      m4 = section('menu4');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
@@ -161,6 +182,16 @@ check('wmctl max with no WM is refused (maximize IS policy)',
 const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
   bar5.includes('1024x28+0+740'), JSON.stringify(l5));
+
+// ---- the Start menu (todos/0028) ----
+const menu1 = row(m1, 'startmenu');
+check('Start click opens the menu: borderless surface above the taskbar (150x148+0+592 — 7 entries)',
+  menu1.includes('150x148+0+592') && menu1.includes('b'), JSON.stringify(m1));
+check('menu entry click launches winbox (second instance)',
+  m2.split('\n').filter(l => l.endsWith('\twinbox')).length === 2, JSON.stringify(m2));
+check('selection dismissed the menu', row(m2, 'startmenu') === '', JSON.stringify(m2));
+check('Start click re-opens the menu', row(m3, 'startmenu') !== '', JSON.stringify(m3));
+check('focus change dismisses the menu', row(m4, 'startmenu') === '', JSON.stringify(m4));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nwm service e2e: ${failures} FAILED` : '\nwm service e2e: PASS');

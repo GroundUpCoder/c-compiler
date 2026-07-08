@@ -127,13 +127,14 @@ try {
 
   // 0014: winbox has a taskbar button (button 0, sunken while focused);
   // clicking it minimizes, clicking again restores — the wm's policy loop
-  // driven through its OWN surface's input ring.
-  await waitPixel(50, BARY, FACE_DOWN);
+  // driven through its OWN surface's input ring. Button 0 sits right of
+  // the Start button since todos/0028 (x in [56, 160)).
+  await waitPixel(100, BARY, FACE_DOWN);
   check('taskbar button sunken while winbox focused', true);
-  await clickAt(50, BARY);                       // minimize
+  await clickAt(100, BARY);                      // minimize
   await waitPixel(WX + 120, WY + 80, TEAL);
   check('taskbar click minimized winbox (window off screen)', true);
-  await clickAt(50, BARY);                       // restore
+  await clickAt(100, BARY);                      // restore
   await waitPixel(WX + 120, WY + 80, ORANGE);
   check('taskbar click restored winbox', true);
 
@@ -206,7 +207,7 @@ try {
   check('close box quit the app; desktop restored', true);
 
   // ... and its taskbar button is gone (EV_DESTROYED -> wm model -> redraw).
-  await waitPixel(50, BARY, FACE);
+  await waitPixel(100, BARY, FACE);
   check('taskbar button removed after close', true);
 
   // The shell survives its windowed child (background job reaped). Back to
