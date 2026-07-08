@@ -15,11 +15,21 @@ z, so killing/minimizing the focused window parked keyboard focus on the
 bar. `_wmFocusFall` (kernel.js, one helper for the destroy + minimize
 sites) now prefers the topmost normal-layer window; furniture only takes
 the fall when nothing else remains. No image bump (kernel.js is
-host-side; image stays **v28**). 0038's layer invariant held under a
+host-side; the later kill-0 libc follow-up bumped the image to **v29**). 0038's layer invariant held under a
 29-snapshot mechanical storm checker; Dawn+SIGKILL survived round 2
 (both trials); gpubox adapter flake quiet two rounds. WM.md "Known
 issues" re-dated; storm-authoring gotchas for round 3 are in the dev
 log's findings ledger.
+
+**0039 follow-up, same day** (dev log
+`logs/2026-07-09/nested-term-kill0.md`): a user report ("nested term
+wedges when the parent dies") did NOT reproduce — the lifecycle is
+correct and now regression-pinned (test_term_e2e.js session C: kill
+cascade takes the child; typed exit orphans it ALIVE and responsive) —
+but the chase surfaced **kill(pid, 0) rejected at two layers** (kernel
+`sig > 0` guard + libc `__sig_ok` gate), so hush's `kill -0` always
+reported dead. Both fixed test-first (f9a9997+40df750 kernel,
+7d9553d+0be0d6a libc); the libc fix is what bumped the image to v29.
 
 **Still owed from 0039**: the pointer-lock HUMAN check was deferred by
 BOTH sweep rounds (operator away at round-2 close). It is a MUST for
@@ -42,8 +52,9 @@ threads+atomics stays deferred indefinitely.)
 ## Gotchas carried forward
 
 - **Editing seeded sources or coreutils.json requires bumping
-  `os/image.json` `version`** (still 28) — a same-version blob is
-  reused. Rebake `os/os-system.img` with `node tools/mkimage.js` after.
+  `os/image.json` `version`** (now 29) — a same-version blob is
+  reused, and a LIBC change in compiler.js counts (baked binaries) —
+  rebake `os/os-system.img` with `node tools/mkimage.js` after.
 - 0034 config decisions (don't re-litigate casually): od is non-DESKTOP
   od; FEATURE_DATE_ISOFMT off; STAT_FILESYSTEM/SYNC_FANCY/
   DD_SIGNAL_HANDLING off; `env cmd` fails 126 by design until 0035.

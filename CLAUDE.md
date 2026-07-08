@@ -236,7 +236,7 @@ the bar is always-on-top and nothing sinks under the desktop; the
 no-WM fallback never sets layers.
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
-Image version is **v28**.
+Image version is **v29**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
