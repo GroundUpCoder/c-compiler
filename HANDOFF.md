@@ -46,18 +46,14 @@ slices (`todos/SS-INTEROP.md`, host.js .ss-module support). If host.js
 shows uncommitted changes you didn't make, that's them — stage only your
 own files.
 
-## The queue (todos/queue.json is authoritative; README narrative)
+## The queue (todos/queue.json is authoritative)
 
-Next up: `0066` unified run/activate (now unblocked — ONE
-`activate(path)` in wm.c for desktop dbl-click + Start menu; peek
-`\0asm`/`#!` to decide runnable; launchers become executable scripts) →
-`0067` desktop drag-drop; then `0060` OSS-port harness EARLY (its
-missing-symbol log is the backlog 0058 deferred into: DialogBox
-templates, menus, accelerators, SetTimer, clipboard, Tab navigation,
-WinMain shim, per-window kernel close), `0059` kernel32, `0048` apps as
-ReactOS ports; parallel tracks `0061` Cairo / `0062` zero-copy present /
-`0063` Aero; `0046` strace, `0041` __gcstr → `0042` wc fork, networking
-(`0052`/`0053`), `0064` WM sweep 3, tail `0049`/`0050`/`0054`/`0051`.
+Order + deps: `node todos/queue.js list` — do NOT copy the ordering into
+this file (hand-copied roadmaps drift; the 2026-07-10 single-source
+change deleted the README's for exactly that). Immediate context only:
+`0066` unified run/activate is in flight, unblocked by 0065's shebang
+exec (ONE `activate(path)` in wm.c for desktop dbl-click + Start menu;
+peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
 
 ## Gotchas carried forward
 
@@ -136,8 +132,10 @@ ReactOS ports; parallel tracks `0061` Cairo / `0062` zero-copy present /
 ## Conventions to keep
 
 - Queue discipline: work = `todos/NNNN`, done → `todos/done/` via
-  `node todos/queue.js done NNNN`, dev log per landing, README next-up
-  current.
+  `node todos/queue.js done NNNN`, dev log per landing. Order and dep
+  ids live ONLY in queue.json (`queue.js add/reorder/block`): no
+  hand-written roadmap lists anywhere, no `- **Depends**:` lines in open
+  items (`queue.js check` lints against them; rationale = body prose).
 - compiler.js must stay browser-clean (no bare `process.*`).
 - Fix bugs test-first: failing test commit, then the fix.
 - MUST-MATCH blocks: WM protocol kernel.js ↔ os/wm_proto.h ↔
