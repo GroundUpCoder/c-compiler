@@ -24,32 +24,29 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0035` spawn-capable applets — find/xargs/awk/tar/less; drop
-   `PV_NO_INTERCEPT`, link the vfork shim into coreutils (0034's
-   always-fail execvp in wasm_port.h marks the seam)
-2. `0045` two-tab boot guard — Web Locks mutex on the OPFS images
+1. `0045` two-tab boot guard — Web Locks mutex on the OPFS images
    (correctness: two tabs today = two kernels over one store)
-3. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
+2. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
    (measure sqlite's seed cost first)
-4. `0037` wasm module cache — kernel-side compiled-Module cache on the
+3. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (the sealed system blob's `/usr/share/os-release`
    VERSION_ID is the natural cache key since 0040; Modules clone,
    instances don't)
-5. (unnumbered) a real-world WebGPU C app port — candidates via
+4. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-6. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+5. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-7. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+6. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
-8. The kernel-POSIX batch (any order): `0043` procfs + ps/top/pgrep,
+7. The kernel-POSIX batch (any order): `0043` procfs + ps/top/pgrep,
    `0044` interval timers/SIGALRM, `0046` strace
-9. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
+8. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
    AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
-10. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
-    apps wave 1 (fileman/notepad/calc/minesweeper/control panel) →
-    `0049` wallpaper; `0050` pdpmake + busybox diff/patch alongside
-    (after 0035)
-11. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
+9. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
+   apps wave 1 (fileman/notepad/calc/minesweeper/control panel) →
+   `0049` wallpaper; `0050` pdpmake + busybox patch/ed alongside
+   (diff itself landed with 0035)
+10. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
@@ -158,7 +155,15 @@ v21 (`logs/2026-07-08/mount-points.md`);
 Start menu to the top layer and the desktop to the bottom one, every
 z-order op stays within its layer — the taskbar is always-on-top and
 nothing sinks under the desktop, image v27
-(`logs/2026-07-08/wm-z-layers.md`).
+(`logs/2026-07-08/wm-z-layers.md`);
+`0035` **spawn-capable applets** — find/xargs/awk/tar/gzip/gunzip/zcat/
+less/diff in the multicall, which now links the vfork-on-__spawn shim
+(hand-rolled spawn()/spawn_and_wait() over pv_*; bare-exec emulation
+makes `env cmd` real); tar -z proves both shim paths (spawn gzip on
+create, re-exec `gunzip -cf -` on extract); surfaced the
+switch-decl-before-first-case codegen bug (fixed test-first) + libc
+sched.h; /bin is 75 multicall names, image v30
+(`logs/2026-07-09/spawn-applets.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

@@ -1,6 +1,16 @@
 # 0035 — spawn-capable applets: find, xargs, awk, tar/gzip, less, diff
 
-- **Status**: open
+- **Status**: done (2026-07-09) — dev log `logs/2026-07-09/spawn-applets.md`.
+  All six targets landed (find -exec/xargs/awk/tar+gzip/less/diff, plus
+  gunzip/zcat); the multicall links the shim (spawn_helpers.c replaces
+  vfork_daemon_rexec.c) and `env cmd` execs for real via the new
+  bare-exec emulation in pv_execve. tar -z works in BOTH directions (no
+  need for the documented piped fallback). Surfaced: the
+  switch-decl-before-first-case codegen bug
+  (`tests/unit/conformance/switch_decl_before_case`, fixed test-first)
+  and libc `sched.h`/`sched_yield` (less). patch/ed deliberately left
+  for 0050's orbit. Acceptance legs: test_os_boot.js "batch 3" session +
+  the less-in-term pty leg in test_term_e2e.js. Image v30.
 - **Depends**: 0034 (soft — shares the vendoring mechanics, not blocking)
 - **Design**: `vendor/busybox/README.md` (the vfork-on-__spawn shim),
   `todos/OS.md` (spawn model)
