@@ -3,7 +3,8 @@
 - **Status**: open
 - **Depends**: —
 - **Design**: discussion + trade study (microui vs nuklear) in
-  `logs/2026-07-09/roadmap-network-desktop.md`
+  `logs/2026-07-09/roadmap-network-desktop.md`; long-run direction
+  (Elm/MVU layer over this substrate) in `todos/TOOLKIT.md`
 
 ## Goal
 
@@ -23,10 +24,13 @@ a Win95-flavored skin. Gates the whole desktop-apps wave (0048).
   layer + microui's style struct; we own both, so no upstream fight.
 - Input: kernel input-ring key/mouse events → `mu_input_*`. Clipboard
   hooks stubbed until a clipboard item exists.
-- Fallback recorded: if list-widget/multi-line-edit needs outgrow
-  microui (the known gaps), trade up to nuklear — same immediate-mode
-  model, app code migrates. Decide from real 0048 experience, not
-  speculation.
+- SUPERSEDED (2026-07-09): the earlier nuklear trade-up fallback is
+  replaced by the Elm/MVU declarative layer (`todos/0056`, design
+  `todos/TOOLKIT.md`). This item's deliverables — the command-list
+  renderer, the shared freetype text helper, input plumbing, the
+  Win95 skin — are the PERMANENT substrate that layer builds on, not
+  throwaway; microui itself stays for quick immediate-mode tools
+  until 0056 reaches widget parity.
 
 ## Acceptance
 

@@ -183,6 +183,14 @@ traffic per frame ≈ 1GB/s at 60fps against hundreds of GB/s available; the
 quad count is single-digit. Damage-rect optimization is deliberately
 deferred.
 
+*(Status: v1 shipped a Canvas2D stand-in for this pass; `todos/0055`
+implements the WebGPU pass as specified here, as the ONLY compositor — the
+no-fallback decision and boot guard are recorded in the v1-deviations list
+below and in `logs/2026-07-09/webgpu-mvu-direction.md`. WebGPU is the
+native rendering interface of the platform end to end: apps render through
+`webgpu.h`, the compositor composites with it; Canvas2D scene assembly was
+a shortcut, not an architecture.)*
+
 **Headless twin**: same scene list, no blit target. Screenshot of a surface
 = copy bytes out of its SAB; screenshot of the screen = a ~40-line CPU
 row-blit compositing the scene in z-order. PNG encoding lives in the test
@@ -622,9 +630,15 @@ overlap). Image v27.
 
 - **Present is pure SAB** (flip + seq, mailbox) — no SURFACE_PRESENT RPC at
   all; 0x1004 stays reserved for damage tracking.
-- **Compositor is Canvas2D**, not a WebGPU pass — single-digit quads;
-  bitmap drawImage is still GPU-composited by the browser. Revisit only if
-  profiling says so.
+- ~~**Compositor is Canvas2D**~~ — SUPERSEDED (decision 2026-07-09, →
+  `todos/0055`): the WebGPU pass this doc designed becomes the ONLY
+  browser compositor. **No Canvas2D fallback** — a fallback is two
+  compositors with one a permanently undertested zombie; WebGPU
+  unavailable in the kernel worker → a loud `boot-nogpu` guard screen
+  (the 0045 pattern), never quiet degradation. Headless (`boot.js`,
+  kernel suite, the deterministic CPU screenshot composite) is
+  unaffected — it never had a compositor. Rationale in
+  `logs/2026-07-09/webgpu-mvu-direction.md`.
 - **Terminal is a separate pane**, not a scene-positioned privileged DOM
   surface yet — the split layout was the honest v1; the positioned-xterm
   (clip-path) design stays queued.

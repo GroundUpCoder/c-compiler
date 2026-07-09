@@ -24,21 +24,27 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. (unnumbered) a real-world WebGPU C app port — candidates via
+1. `0055` **WebGPU compositor** — the kernel-worker scene assembly as
+   the one WebGPU pass WM.md designed; NO Canvas2D fallback (loud
+   `boot-nogpu` guard; decision 2026-07-09,
+   `logs/2026-07-09/webgpu-mvu-direction.md`)
+2. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-2. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+3. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-3. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+4. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
-4. The kernel-POSIX batch (any order): `0044` interval timers/SIGALRM,
+5. The kernel-POSIX batch (any order): `0044` interval timers/SIGALRM,
    `0046` strace
-5. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
+6. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
    AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
-6. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
-   apps wave 1 (fileman/notepad/calc/minesweeper/control panel) →
+7. The desktop wave: `0047` GUI toolkit substrate (microui) → `0056`
+   Elm/MVU declarative layer (design: `TOOLKIT.md`) → `0048` desktop
+   apps wave 1 (fileman/notepad/calc/minesweeper/control panel;
+   notepad's editor rides 0056, the other four don't wait) →
    `0049` wallpaper; `0050` pdpmake + busybox patch/ed alongside
    (diff itself landed with 0035)
-7. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
+8. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
@@ -208,9 +214,14 @@ don't duplicate them. Current map:
   transport axes, per-process WebGPU devices, kernel-worker compositing,
   surface protocol, WM-as-client over AF_UNIX, agent control channel,
   headless tiers, spike appendix (→ 0012), implementation plan.
+- `TOOLKIT.md` — the GUI toolkit architecture (2026-07-09): Elm/MVU
+  declarative layer over the 0047 substrate (→ 0056); the
+  MVU-over-React-hooks decision; supersedes the nuklear trade-up.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
 - `SDL3.md`, `SDL3-MIGRATION.md`, `WEBGPU.md` — runtime API surface plans.
-- `DOM.md` — C-to-DOM bytecode + diffing renderer idea.
+- `DOM.md` — C-to-DOM bytecode + diffing renderer idea; its declaration
+  encoding is reused by `TOOLKIT.md`'s vtree (browser-DOM as a possible
+  alternate backend later).
 - `WASM_GC.md`, `EXTERNREF.md` — wasm GC / externref features.
 - `SS-INTEROP.md` — running self-service (`.ss`) modules in this runtime
   (proposed 2026-07-09): the flavor-agnostic `runModule`, and ss-as-a-

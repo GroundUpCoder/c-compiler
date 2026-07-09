@@ -16,8 +16,10 @@ incrementally — each app is its own commit with its own acceptance.
   directories navigate, executables spawn (an `/etc/openwith` map is a
   later idea, not v1).
 - **notepad**: open/edit/save text. microui's textbox is single-line —
-  budget a small multi-line edit widget here (or this is where the
-  nuklear trade-up decision gets made; see 0047).
+  the multi-line editor is the FIRST real retained widget of the
+  Elm/MVU layer (`todos/0056`, design `todos/TOOLKIT.md`; the nuklear
+  trade-up is superseded). Notepad therefore lands after 0056's core;
+  the other four apps don't wait on it.
 - **calc**: Win95-style button grid.
 - **minesweeper**: the identity piece. Core logic as plain C,
   unit-testable without the GUI.
