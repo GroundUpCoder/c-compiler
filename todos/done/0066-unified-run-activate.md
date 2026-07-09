@@ -1,6 +1,10 @@
 # 0066 — unified run/activate mechanism
 
-- **Status**: open
+- **Status**: done — landed 2026-07-10 (`activate()` in os/wm.c shared by
+  the Start menu + desktop grid; runnable = `\0asm` or `#!` first-bytes
+  peek; menu/snake converted to a real `#!/bin/sh` script, image v36;
+  acceptance legs in `tests/kernel/test_wm_service_e2e.js`; dev log
+  `logs/2026-07-10/unified-activate.md`)
 - **Design**: `WM.md` (desktop grid + Start menu launching)
 
 ## Goal
