@@ -365,6 +365,10 @@
       "/root/roms/SuperMarioDeluxe.gbc": {
         "bin": "vendor/gameboy/roms/SuperMarioDeluxe.gbc",
         "optional": true
+      },
+      "/root/roms/DrMario.gb": {
+        "bin": "vendor/gameboy/roms/DrMario.gb",
+        "optional": true
       }
     }
   }
