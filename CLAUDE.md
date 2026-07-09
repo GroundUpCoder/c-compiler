@@ -122,6 +122,11 @@ prefix:ino after symlink resolution) compile once kernel-side and the
 `WebAssembly.Module` structured-clones in the spawn message (`procSpec.
 module`, bytes dropped); rw binaries (`cc -o a.out`), ss modules, and
 no-fs kernels keep the bytes path — `kernel.moduleCacheStats()` counts.
+Spawn honours `#!` (todos/0065, `_spawnShebang`): a text image starting
+`#!` re-dispatches to its interpreter line (execve(2) semantics — one
+optional arg, script path replaces argv[0], depth-4 chain cap →
+ENOEXEC), checked BEFORE the module cache; `./foo` on a `#!/bin/sh`
+script just runs.
 Pipes are just
 another OFD kind (PIPE_CREATE; kernel-side buffers + wait queues; blocking
 read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness). Job

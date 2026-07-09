@@ -1,6 +1,8 @@
 # 0065 — shebang (`#!`) exec support
 
-- **Status**: open
+- **Status**: done — landed 2026-07-10 (kernel.js `_spawnShebang`; unit
+  legs in `tests/kernel/test_kernel.js`, hush acceptance in
+  `test_os_boot.js`; dev log `logs/2026-07-10/shebang-exec.md`)
 - **Depends**: none
 - **Design**: `KERNEL.md` (spawn/exec path)
 

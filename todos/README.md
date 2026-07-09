@@ -75,7 +75,14 @@ silently on repos without a `queue.json`.
 disagrees with `queue.json`, the manifest wins; keep this in sync by hand or
 regenerate intent from `queue.js list`.)*
 
-1. **The Win32 desktop platform** (design: `WIN32.md`, 2026-07-09 — the
+1. **Run/activate track**: `0065` shebang exec **landed 2026-07-10**
+   (the kernel honours `#!` interpreter lines in `_spawnBytes` —
+   `./foo` on a `#!/bin/sh` script just runs; execve(2) argv rules,
+   depth-4 chain cap → ENOEXEC; `logs/2026-07-10/shebang-exec.md`) →
+   `0066` unified run/activate (ONE `activate(path)` in wm.c for the
+   desktop double-click + Start menu; launcher = executable shell
+   script) → `0067` desktop drag-drop (host file → `/root/Desktop`).
+2. **The Win32 desktop platform** (design: `WIN32.md`, 2026-07-09 — the
    primary UI toolkit; **supersedes microui/MVU**, which are dropped):
    `0057` gdi32 (CPU→shm drawing) **landed 2026-07-10** (`os/win32/`,
    `/bin/gdidemo`) → `0058` user32 **landed 2026-07-10** (windowing +
@@ -90,24 +97,24 @@ regenerate intent from `queue.js list`.)*
    the OSS ports themselves (ReactOS applets + corpus) then land
    through it. Apps (`0048` reframed): winmine/sol/notepad/calc arrive
    as real ReactOS C ports.
-2. Drawing / compositor track (parallel): `0061` **Cairo** — modern C 2D
+3. Drawing / compositor track (parallel): `0061` **Cairo** — modern C 2D
    vector API with a real corpus (adopt, don't invent); `0062` zero-copy
    present (`direct` transport; pixels never touch RAM except on
    `wmctl shot`); `0063` Aero effects (alpha/shadows/thumbnails/blur/
    animation on the 0055 pass).
-3. `0046` strace (kernel-POSIX batch remainder) — near-free given the
+4. `0046` strace (kernel-POSIX batch remainder) — near-free given the
    architecture and a debugging force-multiplier for the Win32
    bring-up above; do it early.
-4. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+5. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-5. `0042` wc fork bring-up — `wc.js`, the v1 language (side project)
-6. Networking (design: `NETWORK.md`): `0052` loopback AF_INET; `0053`
+6. `0042` wc fork bring-up — `wc.js`, the v1 language (side project)
+7. Networking (design: `NETWORK.md`): `0052` loopback AF_INET; `0053`
    HTTP-for-C (curl easy facade over kernel fetch — independent of
    0052, rides fetch not sockets; pull forward whenever HTTP is wanted)
-7. `0064` WM bug sweep round 3 — once the Win32 wave has landed enough
+8. `0064` WM bug sweep round 3 — once the Win32 wave has landed enough
    new WM surface; the pointer-lock HUMAN check is its non-negotiable
    MUST (deferred by BOTH prior rounds; needs an operator present)
-8. Tail: `0049` wallpaper; `0050` pdpmake + busybox patch/ed; `0054`
+9. Tail: `0049` wallpaper; `0050` pdpmake + busybox patch/ed; `0054`
    AF_INET relay transport; `0051` halt/reboot
 
 (`0055` WebGPU compositor landed 2026-07-09: os/compositor.js is one

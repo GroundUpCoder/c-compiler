@@ -316,6 +316,39 @@ check('procps session exits clean', r.status === 0, String(r.status) + ' ' + (r.
   check('/proc/uptime format', rest[10] === '1', JSON.stringify(rest[10]));
 }
 
+// ---- shebang exec (todos/0065): `./script` runs via its #! line ----
+// The kernel re-dispatches a "#!" image to its interpreter, so a shell
+// script is directly executable (no explicit `sh`) — the 0066 launcher
+// primitive. `-e` rides through as one interpreter arg; a shebang cycle
+// dies with ENOEXEC ("Exec format error") instead of hanging.
+r = session([
+  "printf '#!/bin/sh\\necho hi-$1\\n' > /root/foo",
+  'chmod +x /root/foo',
+  './foo world',                            // relative path, no explicit sh
+  '/root/foo direct',                       // absolute path
+  'sh /root/foo classic',                   // the old spelling still works
+  "printf '#!/bin/sh -e\\nfalse\\necho unreachable\\n' > strict",
+  './strict; echo strict-rc=$?',
+  "printf '#!/root/loop\\n' > loop",
+  './loop 2>/dev/null; echo loop-rc=$?',
+  'exit',
+  '',
+].join('\n'));
+check('shebang session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+{
+  const sh = r.stdout.split('\n');
+  const expectSh = [
+    'hi-world',                             // ./foo
+    'hi-direct',                            // /root/foo
+    'hi-classic',                           // sh foo unchanged
+    'strict-rc=1',                          // #!/bin/sh -e: false aborts
+    'loop-rc=2',                            // cycle -> ENOEXEC -> hush exit 2
+  ];
+  for (let i = 0; i < expectSh.length; i++) {
+    check('shebang[' + i + '] = ' + JSON.stringify(expectSh[i]), sh[i] === expectSh[i], JSON.stringify(sh[i]));
+  }
+}
+
 // ---- second boot, same image: persistence + no re-seed ----
 r = session('ls\nexit\n');
 check('second boot exits clean', r.status === 0, String(r.status));

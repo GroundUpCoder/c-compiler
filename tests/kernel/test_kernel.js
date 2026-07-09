@@ -401,6 +401,65 @@ const spawnReq = (p, extra) => Object.assign(
   check('termsig is SIGALRM', r.status === 14, JSON.stringify(r));
   Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop this section's SIGCHLDs
 
+  // ---- shebang exec (todos/0065): #! images re-dispatch to the interpreter ----
+  const sb = (s) => new Uint8Array(Buffer.from(s, 'latin1'));
+  images.set('/bin/interp', new Uint8Array([9]));
+  images.set('/root/bin/interp', new Uint8Array([10]));
+  images.set('/root/script', sb('#!/bin/interp\nbody\n'));
+  images.set('/root/script-arg', sb('#!/bin/interp -e -x\nbody\n'));
+  images.set('/root/rel', sb('#!bin/interp\nbody\n'));
+  images.set('/root/crlf', sb('#! /bin/interp \r\nbody\n'));
+  images.set('/root/chain1', sb('#!/root/chain2\n'));
+  images.set('/root/chain2', sb('#!/bin/interp\n'));
+  images.set('/root/loop', sb('#!/root/loop\n'));
+  images.set('/root/longline', sb('#!/bin/interp' + ' '.repeat(300) + '\n'));
+  images.set('/root/bare', sb('#!\nbody\n'));
+  images.set('/root/gone', sb('#!/no/such/interp\n'));
+  const reap = async (pid) => { exitMsg(pid, 0); await rpc(1, K.OP.WAIT, { pid, options: 0 }); };
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/script', { argv: ['script', 'x1', 'x2'] }));
+  check('shebang spawn succeeds', r.pid > 0, JSON.stringify(r));
+  let ss = workers.get(r.pid).procSpec;
+  check('interpreter is the spawned image', ss.path === '/bin/interp', ss.path);
+  check('argv = [interp, scriptPath, orig[1:]]',
+    JSON.stringify(ss.argv) === JSON.stringify(['/bin/interp', '/root/script', 'x1', 'x2']),
+    JSON.stringify(ss.argv));
+  await reap(r.pid);
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/script-arg'));
+  ss = workers.get(r.pid).procSpec;
+  check('optarg rides as ONE argument', JSON.stringify(ss.argv) ===
+    JSON.stringify(['/bin/interp', '-e -x', '/root/script-arg']), JSON.stringify(ss.argv));
+  await reap(r.pid);
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/rel'));   // pid 1 cwd is /root
+  ss = workers.get(r.pid).procSpec;
+  check('relative interpreter resolves against cwd', ss.path === '/root/bin/interp', ss.path);
+  await reap(r.pid);
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/crlf'));
+  ss = workers.get(r.pid).procSpec;
+  check('CRLF + padding tolerated', ss.path === '/bin/interp' &&
+    JSON.stringify(ss.argv) === JSON.stringify(['/bin/interp', '/root/crlf']), JSON.stringify(ss.argv));
+  await reap(r.pid);
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/chain1'));
+  ss = workers.get(r.pid).procSpec;
+  check('script-interpreting-script chains', ss.path === '/bin/interp' &&
+    JSON.stringify(ss.argv) === JSON.stringify(['/bin/interp', '/root/chain2', '/root/chain1']),
+    JSON.stringify(ss.argv));
+  await reap(r.pid);
+
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/loop'));
+  check('shebang cycle -> ENOEXEC', r.errno === 'ENOEXEC', JSON.stringify(r));
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/longline'));
+  check('no newline in budget -> ENOEXEC', r.errno === 'ENOEXEC', JSON.stringify(r));
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/bare'));
+  check('empty interpreter line -> ENOEXEC', r.errno === 'ENOEXEC', JSON.stringify(r));
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/root/gone'));
+  check('missing interpreter -> ENOENT', r.errno === 'ENOENT', JSON.stringify(r));
+  Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop this section's SIGCHLDs
+
   // ---- pid 1 exit halts the system ----
   check('all children reaped pre-halt', kernel.processCount() === 1, String(kernel.processCount()));
   exitMsg(1, 42);

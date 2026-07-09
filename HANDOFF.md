@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10, after 0058 landed)
+# Handoff — start of thread (updated 2026-07-10, after 0065 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,38 +7,34 @@
 
 ## Where the repo stands
 
-**0058 (win32: user32 windowing + controls + the agent tree) landed
-2026-07-10** — dev log `logs/2026-07-10/win32-user32.md`, design
-`todos/WIN32.md`. `os/win32/user32.c` + the windows.h user32 surface:
-window classes, the HWND tree (top-level ↔ SDL window/kernel surface,
-child controls drawn in-process Wine-style through the
-`win32_internal.h` `__gdi_dc_wrap` seam — 0057's `__gdi_bind_hwnd`
-scaffold is DELETED), the CLASSIC blocking `while (GetMessage)` loop,
-input routing (hit-test/capture/focus, table-free WM_CHAR since SDL3
-keysyms are modifier-applied), BUTTON/STATIC/EDIT(multiline)/LISTBOX/
-SCROLLBAR (notify-only, Windows semantics), MessageBox as a real modal
-(own surface, owner disabled). The agent tree serves
-`/run/win32/agent.<pid>.sock` (`os/wm_agent.h`) from the GetMessage
-idle loop; `wmctl tree` / `wmctl click "OK"` (BY LABEL, no pixels;
-"CLASS:n" for text-less controls) / `gettext` / `settext`. Acceptance
-apps `/bin/ctldemo` (new) + `/bin/gdidemo` (converted to the real
-message loop).
+**0065 (shebang `#!` exec) landed 2026-07-10** — dev log
+`logs/2026-07-10/shebang-exec.md`, design note in `todos/KERNEL.md`
+"The spawn path: shebang exec". `kernel.js _spawnBytes` peeks the image
+before the wasm compile; `#!` bytes re-dispatch via the new
+`_spawnShebang` with execve(2) semantics: interpreter + at most ONE
+optional arg (rest of line verbatim, 256-byte budget), argv =
+`[interp, optarg?, scriptPath, ...origArgv[1:]]` (script path replaces
+the caller's argv[0]), envp/cwd/fd-actions/pgroup carry over, relative
+interpreter resolves against the child's cwd, depth-4 chain cap →
+**ENOEXEC** (deliberate: the libc has no ELOOP and host.js's errnoMap
+throws on unknown names). The check runs BEFORE the module cache, so
+scripts never allocate cache entries; non-`#!` bytes take the exact old
+path. `./foo` on a `#!/bin/sh` script now just runs — the 0066 launcher
+primitive.
 
-**The one runtime change the veneer needed** (0057 had none): a
-blocking GetMessage can't ride the frame-callback input drain, so
-host.js grew the `__sdl_pump_wait(timeoutMs)` env import (surface
-backend, BOTH flavors: drain the input ring in place, `Atomics.wait`
-on `IR_WPOS`) and kernel.js `_wmPushEvent` now `Atomics.notify`s
-`IR_WPOS` after each push (ring layout unchanged). Input wakes a
-parked GetMessage instantly; the 25ms park ceiling only bounds
-agent-socket latency.
+**No image bump** (kernel-side JS only; image stays **v35**).
 
-**Image bumped v34 → v35** (ctldemo + menu entry + rebuilt win32 lib),
-`os/os-system.img` rebaked via `node tools/mkimage.js`.
+**Suites this session**: kernel — ALL files pass (test_kernel.js grew a
+shebang section; test_os_boot.js grew a hush acceptance leg: `./foo`,
+`#!/bin/sh -e`, cycle → rc 2); blockfs 12/12; unit 699/0/3 (no compiler
+change); browser subset serial — os-boots / os-shell / os-wm PASS (only
+the spawn path changed; the two-byte peek can't affect wasm binaries, so
+the full sweep wasn't re-run).
 
-**Suites this session**: kernel — ALL files pass incl. the new
-`test_user32_e2e.js`; blockfs 12/12; unit 699/0/3 (no libc change);
-browser sweep serial (results in the landing commit).
+**Gotcha recorded for busybox bumps**: hush in our build has NO ENOEXEC
+run-as-script fallback (`execvp_or_die` just perrors + exit 2). The
+os_boot shebang leg asserts `loop-rc=2`; if a busybox upgrade grows the
+fallback, that leg is the tripwire.
 
 **Still owed from 0039**: the pointer-lock HUMAN check was deferred by
 ALL sweep rounds so far. It is a MUST for WM sweep round 3 (`0064`) —
@@ -52,17 +48,23 @@ own files.
 
 ## The queue (todos/queue.json is authoritative; README narrative)
 
-Next up: `0065` shebang exec → `0066` unified run → `0067` desktop
-drag-drop; then `0060` OSS-port harness EARLY (its missing-symbol log
-is the backlog 0058 deferred into: DialogBox templates, menus,
-accelerators, SetTimer, clipboard, Tab navigation, WinMain shim,
-per-window kernel close), `0059` kernel32, `0048` apps as ReactOS
-ports; parallel tracks `0061` Cairo / `0062` zero-copy present / `0063`
-Aero; `0046` strace, `0041` __gcstr → `0042` wc fork, networking
+Next up: `0066` unified run/activate (now unblocked — ONE
+`activate(path)` in wm.c for desktop dbl-click + Start menu; peek
+`\0asm`/`#!` to decide runnable; launchers become executable scripts) →
+`0067` desktop drag-drop; then `0060` OSS-port harness EARLY (its
+missing-symbol log is the backlog 0058 deferred into: DialogBox
+templates, menus, accelerators, SetTimer, clipboard, Tab navigation,
+WinMain shim, per-window kernel close), `0059` kernel32, `0048` apps as
+ReactOS ports; parallel tracks `0061` Cairo / `0062` zero-copy present /
+`0063` Aero; `0046` strace, `0041` __gcstr → `0042` wc fork, networking
 (`0052`/`0053`), `0064` WM sweep 3, tail `0049`/`0050`/`0054`/`0051`.
 
 ## Gotchas carried forward
 
+- **0065**: shebang optarg is ONE argument (no word splitting) — don't
+  "fix" that; it's Linux semantics and the -e leg depends on it. Depth
+  rides a `_spawn` parameter, NOT the spec (RPC specs are
+  process-supplied input).
 - **0058**: the agent protocol is one request per connection (the app
   closes after replying — wmctl must not hold the socket open). The
   scrollbar control NEVER moves itself: it notifies WM_V/HSCROLL and the
@@ -78,8 +80,7 @@ Aero; `0046` strace, `0041` __gcstr → `0042` wc fork, networking
 - **Start-menu geometry** (again): a new `/usr/share/menu` entry changes
   entry indices AND the box — now NINE entries (ctldemo sorts first),
   150x188+0+552, winbox click row y=174. `test_wm_service_e2e.js` +
-  `os-shell.mjs` hardcode both; updated this round — update them with
-  any future entry.
+  `os-shell.mjs` hardcode both; update them with any future entry.
 - **0057**: `os/win32/lib.json` include ORDER is load-bearing —
   `vendor/freetype/demo` must precede `vendor/freetype/include`. Every
   gdi32 write forces alpha 0xFF. COLORREF needs no swizzle against the
@@ -115,7 +116,7 @@ Aero; `0046` strace, `0041` __gcstr → `0042` wc fork, networking
 - Two unit goldens encode libc internals and move when libc changes:
   `switch_br_table` expected.compiler.stderr and `printf`'s
   pointer-address line. Verify the tests' OWN asserts before updating.
-  (0058 touched no libc — suite stayed 699/0/3.)
+  (0065 touched no libc — suite stayed 699/0/3.)
 - **0040 layout in tests**: headless images pair as `foo-system.img` +
   `foo-root.img`; OPFS names `os-system.v5.img`/`os-root.v5.img` — those
   names are ALSO the Web Lock name (0045): renaming the images renames
@@ -161,13 +162,13 @@ Aero; `0046` strace, `0041` __gcstr → `0042` wc fork, networking
   0037's RO-volume-only cache policy, 0043's synthetic-values-by-design,
   0044's no-VIRTUAL/PROF and cooperative-SIGALRM calls, 0055's
   no-fallback calls, WIN32.md's Win32-as-primary-toolkit decision
-  (microui/MVU are DROPPED), 0057's recorded simplifications, and
-  0058's (scrollbar notify-only, one-request-per-connection agent
-  protocol, process-wide kernel close — grow via 0060's missing-symbol
-  log, don't gold-plate).
+  (microui/MVU are DROPPED), 0057's recorded simplifications, 0058's
+  (scrollbar notify-only, one-request-per-connection agent protocol,
+  process-wide kernel close — grow via 0060's missing-symbol log, don't
+  gold-plate), and 0065's ENOEXEC-not-ELOOP + one-optarg calls.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0065 shebang exec, standing up 0060's port harness early,
-0046 strace, or something else."
+to tackle: 0066 unified run/activate, standing up 0060's port harness
+early, 0046 strace, or something else."

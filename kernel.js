@@ -1149,7 +1149,7 @@ Kernel.prototype.service = function (spec) {
 
 /* ---- process creation ---- */
 
-Kernel.prototype._spawn = function (parent, spec) {
+Kernel.prototype._spawn = function (parent, spec, depth) {
   var self = this;
   if (this._halted) return Promise.resolve({ errno: 'ESRCH' });
   if (!spec || typeof spec.path !== 'string') return Promise.resolve({ errno: 'EFAULT' });
@@ -1168,22 +1168,70 @@ Kernel.prototype._spawn = function (parent, spec) {
       // Cached null = "uncacheable after all" (ss flavor / engine-rejected
       // bytes / no clone support): fall through to the bytes path.
       return module ? self._spawnImage(parent, spec, null, module)
-        : self._spawnBytes(parent, spec, null);
+        : self._spawnBytes(parent, spec, null, depth);
     });
   }
-  return this._spawnBytes(parent, spec, mkey);
+  return this._spawnBytes(parent, spec, mkey, depth);
 };
 
 /* The bytes leg of _spawn: read the image, compile-and-cache when mkey says
- * it's immutable, then hand off. */
-Kernel.prototype._spawnBytes = function (parent, spec, mkey) {
+ * it's immutable, then hand off. A `#!` image re-dispatches to its
+ * interpreter instead (todos/0065); `depth` counts those hops. */
+Kernel.prototype._spawnBytes = function (parent, spec, mkey, depth) {
   var self = this;
   return Promise.resolve(this._loadImage(spec.path)).then(function (image) {
     if (!image) return { errno: 'ENOENT' };
+    var u8 = image instanceof Uint8Array ? image : new Uint8Array(image);
+    if (u8.length >= 2 && u8[0] === 0x23 && u8[1] === 0x21) {   // "#!"
+      return self._spawnShebang(parent, spec, u8, depth | 0);
+    }
     return self._moduleFor(mkey, image).then(function (module) {
       return self._spawnImage(parent, spec, image, module);
     });
   });
+};
+
+/* Shebang exec (todos/0065): a text image starting "#!" runs its interpreter
+ * line, Unix-style — `./foo` and a desktop double-click work on shell
+ * scripts with no explicit `sh`. The interpreter line is `#!` + path + at
+ * most ONE optional argument (the rest of the line verbatim, per Linux — no
+ * word splitting), capped at SHEBANG_MAX bytes. The re-dispatched argv is
+ * [interp, optarg?, scriptPath, ...origArgv[1:]] (the script path replaces
+ * the caller's argv[0], per execve(2)); everything else in the spec — envp,
+ * cwd, fd actions, pgroup flags — carries over unchanged, so the
+ * interpreter lands exactly where the script would have. Depth caps a
+ * script→script→… chain (ENOEXEC — ELOOP isn't in the libc's errno set);
+ * non-`#!` bytes never reach here, so WASM binaries are untouched. */
+var SHEBANG_MAX = 256;        // interpreter-line budget (Linux BINPRM_BUF_SIZE)
+var SHEBANG_MAX_DEPTH = 4;    // interpreter-is-itself-a-script hops
+
+Kernel.prototype._spawnShebang = function (parent, spec, u8, depth) {
+  if (depth >= SHEBANG_MAX_DEPTH) return Promise.resolve({ errno: 'ENOEXEC' });
+  var end = -1;
+  var lim = Math.min(u8.length, SHEBANG_MAX);
+  for (var i = 2; i < lim; i++) { if (u8[i] === 10) { end = i; break; } }
+  if (end < 0) return Promise.resolve({ errno: 'ENOEXEC' });  // no newline in budget
+  var line = '';
+  for (var j = 2; j < end; j++) line += String.fromCharCode(u8[j]);
+  line = line.replace(/\r$/, '').replace(/^[ \t]+/, '').replace(/[ \t]+$/, '');
+  if (!line) return Promise.resolve({ errno: 'ENOEXEC' });    // "#!\n"
+  var sp = line.search(/[ \t]/);
+  var interp = sp < 0 ? line : line.slice(0, sp);
+  var optarg = sp < 0 ? '' : line.slice(sp).replace(/^[ \t]+/, '');
+  // A relative interpreter resolves against the CHILD's cwd (the lookup the
+  // spec's cwd implies); shebang interpreters are conventionally absolute.
+  if (interp.charCodeAt(0) !== 47) {
+    var cwd = (spec.cwd !== null && spec.cwd !== undefined) ? spec.cwd
+      : (parent ? parent.cwd : '/');
+    interp = (cwd === '/' ? '' : cwd) + '/' + interp;
+  }
+  var argv = [interp];
+  if (optarg) argv.push(optarg);
+  argv.push(spec.path);
+  var orig = spec.argv;
+  if (orig && orig.length > 1) argv = argv.concat(orig.slice(1));
+  var nspec = Object.assign({}, spec, { path: interp, argv: argv });
+  return this._spawn(parent, nspec, (depth | 0) + 1);
 };
 
 /* immutableKey through the kernel fs, or null (no fs / fs without the hook /

@@ -236,7 +236,25 @@ clone — each process still instantiates its own memory/imports.
 - Tests: `tests/kernel/test_module_cache.js` (policy over fake workers +
   a real worker_threads clone e2e), `test_mounts.js` (immutableKey).
 
-## The kernel page (per-process SAB) and the unified protocol
+## The spawn path: shebang exec (todos/0065, landed 2026-07-10)
+
+`_spawnBytes` peeks the loaded image before the WASM compile: bytes
+starting `#!` re-dispatch to the interpreter line (`_spawnShebang`)
+instead — `./foo` on a `#!/bin/sh` script, or a desktop double-click on
+one, just works (the 0066 launcher primitive). Semantics follow
+execve(2): interpreter path + at most ONE optional argument (the rest of
+the line verbatim, no word splitting; 256-byte line budget à la
+BINPRM_BUF_SIZE), re-spawned as `[interp, optarg?, scriptPath,
+...origArgv[1:]]` — the script path replaces the caller's argv[0]; envp/
+cwd/fd-actions/pgroup flags carry over unchanged. A relative interpreter
+resolves against the child's cwd. Interpreter chains are allowed to
+depth 4; past that (cycles) → `ENOEXEC` (the libc has no ELOOP). The
+shebang check runs BEFORE `_moduleFor`, so scripts never touch the
+module cache; non-`#!` bytes take the compile path exactly as before
+(wasm's `\0asm` magic can't collide). hush has no ENOEXEC-fallback in
+this build, so a rejected exec is a clean `can't execute` + exit 2.
+Tests: `test_kernel.js` (parse/argv/depth legs over fake workers),
+`test_os_boot.js` (hush acceptance: `./foo`, `#!/bin/sh -e`, cycle).
 
 One small SAB per process, created at spawn, shared kernel↔worker. Layout
 (i32 words; one 4 KiB page is plenty):
