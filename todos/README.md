@@ -10,8 +10,10 @@ One numbered file per unit of work we have actually committed to doing.
 - **Numbers are stable IDs**, four digits, allocated sequentially, never
   reused. Reference items as `todos/0001` in commits, dev logs, and other
   docs.
-- **Number ≠ priority.** The *Next up* list below is the authoritative order
-  of attack; keep it short and current.
+- **Number ≠ priority.** The order of attack lives in the **`queue.json`
+  ordering manifest** (see "Maintaining the queue" below), not in the number.
+  The prose *Next up* list further down is human narrative — kept for
+  readability, but `queue.json` is what tools parse.
 - **Each item carries its own status header** (`Status:`, `Depends:`,
   `Design:`) followed by goal / plan / acceptance criteria. Items stay
   thin — detail belongs in the design doc they point at.
@@ -21,11 +23,46 @@ One numbered file per unit of work we have actually committed to doing.
   header intact (0047/0056); ones with nothing to keep are deleted
   outright with the rationale in a dev log (0006). Land a dev-log entry
   when completing anything substantial.
-- New work: allocate the next number, add a file, slot it into *Next up*.
-  Ideas that aren't committed work yet stay in the topic docs below until
-  promoted.
+- New work: `node todos/queue.js add next --slug <slug>` scaffolds the file
+  **and** slots it into the manifest in one checked step (don't hand-allocate
+  numbers or hand-edit two files). Ideas that aren't committed work yet stay in
+  the topic docs below until promoted.
+
+### Maintaining the queue: `queue.json` + `queue.js`
+
+`todos/queue.json` is the **ordering manifest** — the authoritative source for
+the order of attack and the hard-vs-soft dependency split (which prose can't
+express unambiguously). Array order *is* the order. Each entry:
+
+- `blockedBy` — HARD deps: the item isn't ready until every listed id is in
+  `todos/done/` (the cc Todos tab renders this as a ⛓ block).
+- `after` — SOFT/advisory "best sequenced after" hints; they do **not** gate
+  readiness (rendered lighter, as `after ▸`). Use this for "do X before Y is
+  nicer" rather than "Y is broken without X".
+
+Everything else (title, status, prose `Depends:`, body) stays in the
+`NNNN-<slug>.md` files. Mutate the queue through the CLI — the single writer +
+validator — never by hand-editing `queue.json`:
+
+```
+node todos/queue.js list                              # resolved order + ready/blocked
+node todos/queue.js add next --slug foo [--blocked-by 0057 --after 0058]
+node todos/queue.js reorder 0064 --after 0058
+node todos/queue.js block 0048 --hard 0058,0060 --soft 0059
+node todos/queue.js done 0057                         # git-mv to done/, drop from queue
+node todos/queue.js check                             # MUST pass before committing a queue change
+```
+
+`node todos/queue.js check` must pass before a queue change is committed (it
+verifies every open file is listed exactly once, no ghost ids, deps reference
+real todos, and no `blockedBy` cycles). Its tests live in `todos/queue.test.js`
+(`node todos/queue.test.js`).
 
 ### Next up (order of attack)
+
+*(Human-readable narrative of the manifest above — grouped by theme. When it
+disagrees with `queue.json`, the manifest wins; keep this in sync by hand or
+regenerate intent from `queue.js list`.)*
 
 1. **The Win32 desktop platform** (design: `WIN32.md`, 2026-07-09 — the
    primary UI toolkit; **supersedes microui/MVU**, which are dropped):

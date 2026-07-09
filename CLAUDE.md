@@ -18,13 +18,18 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
 
 - **Work queue**: `todos/NNNN-<slug>.md` — one numbered item per committed
   unit of work (stable IDs, never reused; status header inside; done items
-  move to `todos/done/`, so `ls todos/*.md` is the open queue). The
-  README's *Next up* list is the authoritative order of attack — keep it
-  and item status headers current.
+  move to `todos/done/`, so `ls todos/*.md` is the open queue).
+- **Ordering manifest**: `todos/queue.json` is the authoritative order of
+  attack + the hard/soft dependency split. Mutate it **only** through the CLI
+  `node todos/queue.js` (single writer + validator): `add next --slug …` to
+  start work, `done <ID>` to close it, `reorder`/`block` to adjust. **`node
+  todos/queue.js check` must pass before committing a queue change.** The prose
+  *Next up* list in `todos/README.md` is now human narrative, not the parsed
+  source. Full convention: `todos/README.md` §1 "Maintaining the queue".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.
 
-Check both before starting new work; reference items as `todos/NNNN` in
+Check all three before starting new work; reference items as `todos/NNNN` in
 commits and dev logs.
 
 ## Dev logs
