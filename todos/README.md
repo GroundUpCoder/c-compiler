@@ -189,6 +189,11 @@ don't duplicate them. Current map:
 - `SDL3.md`, `SDL3-MIGRATION.md`, `WEBGPU.md` — runtime API surface plans.
 - `DOM.md` — C-to-DOM bytecode + diffing renderer idea.
 - `WASM_GC.md`, `EXTERNREF.md` — wasm GC / externref features.
+- `SS-INTEROP.md` — running self-service (`.ss`) modules in this runtime
+  (proposed 2026-07-09): the flavor-agnostic `runModule`, and ss-as-a-
+  loadable-library that C `dlopen`s — GC/externref shared ABI, no PIC. One
+  slice landed (`host.js` core-env dispatch, `6b8e385`). ss-loads-into-C
+  only; the reverse is a settled no.
 - `GOTO-LABELS-AST-REFACTOR.md` — control-flow lowering refactor.
 - `DISK-IMAGE.md` — the read-only system image & upgrade discipline
   (0040, LANDED 2026-07-08): mkimage-baked sealed RO volume at /usr,
