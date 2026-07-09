@@ -141,5 +141,8 @@ don't duplicate them. Current map:
 
 - Don't re-litigate settled decisions (marked in the design docs) without
   new evidence — record the *why* when deciding anything new.
-- Keep this README's *Next up* list and the queue-item status headers in
-  sync with reality; they are the "where are we" of the repo.
+- Keep the queue-item status headers in sync with reality; together with
+  `queue.json` (viewed via `node todos/queue.js list`) and `todos/done/`
+  they are the "where are we" of the repo. There is no *Next up* list to
+  maintain — hand-copied roadmaps were deleted 2026-07-10 for drifting
+  (`logs/2026-07-10/todos-single-source.md`).
