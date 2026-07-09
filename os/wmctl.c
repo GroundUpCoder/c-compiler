@@ -25,14 +25,30 @@
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
  *
- * SID 0 targets the focused window (key/click/shot).
+ * The win32 agent tree (todos/0058; wm_agent.h — served per-process by
+ * user32 on /run/win32/agent.<pid>.sock, discovered by directory scan):
+ *
+ *   wmctl tree                        dump every win32 app's HWND tree
+ *   wmctl click LABEL                 press the widget with that text —
+ *                                     resolved BY LABEL, never pixels
+ *                                     (BM_CLICK on buttons); "CLASS:n"
+ *                                     (e.g. EDIT:0) addresses the nth
+ *                                     window of a class in tree order
+ *   wmctl gettext LABEL               print the widget's WM_GETTEXT text
+ *   wmctl settext LABEL TEXT          set it (WM_SETTEXT)
+ *
+ * SID 0 targets the focused window (key/click/shot). `click` with one
+ * non-numeric argument is the label form; with SID X Y it is the pixel
+ * injection above.
  * Exit: 0 ok, 1 command failed / WM endpoint unreachable, 2 usage.
  */
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "wm_proto.h"
+#include "wm_agent.h"
 
 static int fail(const char *msg) { fprintf(stderr, "wmctl: %s\n", msg); return 1; }
 
@@ -50,8 +66,140 @@ static int usage(void) {
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl dblclick SID X Y [BUTTON]\n"
         "       wmctl relmove SID DX DY\n"
-        "       wmctl shot SID|screen [FILE]\n");
+        "       wmctl shot SID|screen [FILE]\n"
+        "       wmctl tree\n"
+        "       wmctl click LABEL\n"
+        "       wmctl gettext LABEL\n"
+        "       wmctl settext LABEL TEXT\n");
     return 2;
+}
+
+/* ---- the win32 agent tree (todos/0058; wm_agent.h) ----
+ * Scan /run/win32 for agent sockets; one request per connection. Actions
+ * take the FIRST app that accepts the label; tree dumps them all. */
+
+static int agent_connect(const char *sockName) {
+    char path[128];
+    snprintf(path, sizeof path, "%s/%s", WM_AGENT_DIR, sockName);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
+    return fd;
+}
+
+static int agent_is_sock(const char *name) {
+    return strncmp(name, "agent.", 6) == 0 &&
+           strlen(name) > 11 && strcmp(name + strlen(name) - 5, ".sock") == 0;
+}
+
+/* Visit every agent socket; fn returns 1 to stop (handled). Returns the
+ * number of sockets visited, or -1 if the dir is missing. */
+typedef int (*AgentFn)(int fd, const char *name, void *ctx);
+
+static int agent_scan(AgentFn fn, void *ctx) {
+    DIR *d = opendir(WM_AGENT_DIR);
+    if (!d) return -1;
+    struct dirent *de;
+    int visited = 0, stop = 0;
+    while (!stop && (de = readdir(d)) != NULL) {
+        if (!agent_is_sock(de->d_name)) continue;
+        int fd = agent_connect(de->d_name);
+        if (fd < 0) continue;                    /* stale socket: app gone */
+        visited++;
+        stop = fn(fd, de->d_name, ctx);
+        close(fd);
+    }
+    closedir(d);
+    return visited;
+}
+
+static int tree_one(int fd, const char *name, void *ctx) {
+    (void)ctx;
+    if (aq_send(fd, AQ_TREE, NULL, 0) != 0) return 0;
+    uint32_t type, plen;
+    if (aq_next(fd, &type, &plen) != 0 || type != AQ_R_TEXT) return 0;
+    int pid = atoi(name + 6);
+    printf("== pid %d\n", pid);
+    char buf[512];
+    while (plen > 0) {
+        uint32_t c = plen > sizeof buf ? (uint32_t)sizeof buf : plen;
+        if (aq_read_all(fd, buf, (int)c) != 0) return 0;
+        fwrite(buf, 1, c, stdout);
+        plen -= c;
+    }
+    return 0;                                    /* keep going: dump all apps */
+}
+
+typedef struct { const char *label; const char *text; int done; char *out; } AgentReq;
+
+static int click_one(int fd, const char *name, void *ctx) {
+    (void)name;
+    AgentReq *rq = (AgentReq *)ctx;
+    if (aq_send(fd, AQ_CLICK, rq->label, (uint32_t)strlen(rq->label)) != 0) return 0;
+    uint32_t type, plen;
+    if (aq_next(fd, &type, &plen) != 0) return 0;
+    while (plen > 0) { char sink[256]; uint32_t c = plen > 256 ? 256 : plen; if (aq_read_all(fd, sink, (int)c) != 0) return 0; plen -= c; }
+    if (type != AQ_R_OK) return 0;
+    rq->done = 1;
+    return 1;
+}
+
+static int gettext_one(int fd, const char *name, void *ctx) {
+    (void)name;
+    AgentReq *rq = (AgentReq *)ctx;
+    if (aq_send(fd, AQ_GETTEXT, rq->label, (uint32_t)strlen(rq->label)) != 0) return 0;
+    uint32_t type, plen;
+    if (aq_next(fd, &type, &plen) != 0) return 0;
+    if (type != AQ_R_TEXT) { wmp_skip(fd, plen); return 0; }
+    rq->out = (char *)malloc(plen + 1);
+    if (!rq->out || aq_read_all(fd, rq->out, (int)plen) != 0) return 0;
+    rq->out[plen] = 0;
+    rq->done = 1;
+    return 1;
+}
+
+static int settext_one(int fd, const char *name, void *ctx) {
+    (void)name;
+    AgentReq *rq = (AgentReq *)ctx;
+    size_t ll = strlen(rq->label), tl = strlen(rq->text);
+    char *payload = (char *)malloc(ll + 1 + tl);
+    if (!payload) return 0;
+    memcpy(payload, rq->label, ll);
+    payload[ll] = 0;
+    memcpy(payload + ll + 1, rq->text, tl);
+    int rc = aq_send(fd, AQ_SETTEXT, payload, (uint32_t)(ll + 1 + tl));
+    free(payload);
+    if (rc != 0) return 0;
+    uint32_t type, plen;
+    if (aq_next(fd, &type, &plen) != 0) return 0;
+    wmp_skip(fd, plen);
+    if (type != AQ_R_OK) return 0;
+    rq->done = 1;
+    return 1;
+}
+
+static int do_agent(const char *cmd, const char *label, const char *text) {
+    AgentReq rq = { label, text, 0, NULL };
+    int visited;
+    if (!strcmp(cmd, "tree")) {
+        visited = agent_scan(tree_one, &rq);
+        if (visited <= 0) return fail("no win32 apps (nothing under /run/win32)");
+        return 0;
+    }
+    if (!strcmp(cmd, "click")) visited = agent_scan(click_one, &rq);
+    else if (!strcmp(cmd, "gettext")) visited = agent_scan(gettext_one, &rq);
+    else visited = agent_scan(settext_one, &rq);
+    if (visited <= 0) return fail("no win32 apps (nothing under /run/win32)");
+    if (!rq.done) return fail("no widget with that label");
+    if (rq.out) {
+        printf("%s\n", rq.out);
+        free(rq.out);
+    }
+    return 0;
 }
 
 static int32_t f32bits(float v) { int32_t b; memcpy(&b, &v, 4); return b; }
@@ -107,12 +255,33 @@ static int do_shot(int fd, const char *what, const char *file) {
     return 0;
 }
 
+static int all_digits(const char *s) {
+    if (!*s) return 0;
+    for (; *s; s++)
+        if (*s < '0' || *s > '9') return 0;
+    return 1;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) return usage();
+    const char *cmd = argv[1];
+
+    /* Agent-tree ops (todos/0058) talk to apps, not the kernel endpoint. */
+    if (!strcmp(cmd, "tree")) return do_agent(cmd, NULL, NULL);
+    if (!strcmp(cmd, "gettext")) {
+        if (argc < 3) return usage();
+        return do_agent(cmd, argv[2], NULL);
+    }
+    if (!strcmp(cmd, "settext")) {
+        if (argc < 4) return usage();
+        return do_agent(cmd, argv[2], argv[3]);
+    }
+    if (!strcmp(cmd, "click") && argc == 3 && !all_digits(argv[2]))
+        return do_agent(cmd, argv[2], NULL);     /* click by LABEL, no pixels */
+
     int fd = wmp_connect();
     if (fd < 0) return fail("cannot reach /run/wm.sock (no kernel WM endpoint?)");
 
-    const char *cmd = argv[1];
     if (!strcmp(cmd, "list")) return do_list(fd);
     if (!strcmp(cmd, "shot")) {
         if (argc < 3) return usage();

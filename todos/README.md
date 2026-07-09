@@ -78,12 +78,15 @@ regenerate intent from `queue.js list`.)*
 1. **The Win32 desktop platform** (design: `WIN32.md`, 2026-07-09 — the
    primary UI toolkit; **supersedes microui/MVU**, which are dropped):
    `0057` gdi32 (CPU→shm drawing) **landed 2026-07-10** (`os/win32/`,
-   `/bin/gdidemo`) → `0058` user32 (windowing + standard
-   controls + the HWND agent tree) → `0059` kernel32 subset over POSIX
-   (file/mem/time/process/dir; grows on demand), with `0060`'s
-   compile-test harness stood up EARLY — as soon as 0057/0058 have
-   skeletons — since its missing-symbol log is the authoritative
-   backlog for all three (implement to real demand, not speculation);
+   `/bin/gdidemo`) → `0058` user32 **landed 2026-07-10** (windowing +
+   standard controls + the HWND agent tree — blocking GetMessage,
+   BUTTON/STATIC/EDIT/LISTBOX/SCROLLBAR, MessageBox, `wmctl tree`/
+   `click "OK"` by label; `/bin/ctldemo`) → `0059` kernel32 subset over
+   POSIX (file/mem/time/process/dir; grows on demand), with `0060`'s
+   compile-test harness stood up EARLY — its missing-symbol log is the
+   authoritative backlog for all three (implement to real demand, not
+   speculation; 0058 deferred DialogBox templates, menus, accelerators,
+   SetTimer, clipboard, Tab navigation, the WinMain shim into it);
    the OSS ports themselves (ReactOS applets + corpus) then land
    through it. Apps (`0048` reframed): winmine/sol/notepad/calc arrive
    as real ReactOS C ports.

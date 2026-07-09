@@ -1,5 +1,5 @@
 {
-  "version": 34,
+  "version": 35,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -29,7 +29,7 @@
       },
       "/usr/bin/wmctl": {
         "c": "wmctl.c",
-        "hdrs": ["wm_proto.h"]
+        "hdrs": ["wm_proto.h", "wm_agent.h"]
       },
       "/usr/bin/doom": {
         "project": "vendor/doom/bin.json"
@@ -48,6 +48,9 @@
       },
       "/usr/bin/gdidemo": {
         "project": "os/win32/gdidemo.json"
+      },
+      "/usr/bin/ctldemo": {
+        "project": "os/win32/ctldemo.json"
       },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
@@ -78,6 +81,9 @@
       },
       "/usr/share/menu/gdidemo": {
         "link": "/usr/bin/gdidemo"
+      },
+      "/usr/share/menu/ctldemo": {
+        "link": "/usr/bin/ctldemo"
       },
       "/usr/share/menu/snake": {
         "content": "term snake\n"

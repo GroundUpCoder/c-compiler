@@ -10,22 +10,19 @@
  *                      (repeated paint cycles free every object/DC).
  *                      Prints "ok NAME"/"FAIL NAME", exits nonzero on FAIL.
  *
- * The window half is WndProc-SHAPED (a msg switch), but the message loop
- * is 0058's: until then the SDL frame callback dispatches a synthetic
- * WM_PAINT and QUIT, and the HWND is the __gdi_bind_hwnd scaffold.
+ * Since 0058 the window half is a REAL Win32 app: RegisterClass +
+ * CreateWindowEx + the classic blocking GetMessage loop (it was the
+ * __gdi_bind_hwnd scaffold over an SDL window before user32 existed).
+ * The scene paints once per WM_PAINT; the shm surface persists, so
+ * repeated `wmctl shot`s stay bit-exact.
  */
 #include <windows.h>
-#include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define WIN_W 480
 #define WIN_H 360
-
-/* Until 0058 (user32) provides the real message constants. */
-#define WM_PAINT   0x000F
-#define WM_DESTROY 0x0002
 
 /* ============================================================ the scene
  * Coordinates are load-bearing: tests/kernel/test_gdi32_e2e.js probes
@@ -115,16 +112,14 @@ static void draw_scene(HDC hdc) {
 
 /* ============================================================ window mode */
 
-static SDL_Window *g_win;
-static HWND g_hwnd;
 static int g_painted;
 
-static void WndProc(HWND hwnd, unsigned msg) {
+static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        if (!hdc) return;
+        if (!hdc) return 0;
         draw_scene(hdc);
         EndPaint(hwnd, &ps);
         if (!g_painted) {
@@ -132,32 +127,31 @@ static void WndProc(HWND hwnd, unsigned msg) {
             printf("gdidemo: painted\n");
             fflush(stdout);
         }
-        break;
+        return 0;
     }
     case WM_DESTROY:
-        exit(0);
+        PostQuitMessage(0);
+        return 0;
     }
-}
-
-static void frame_cb(void) {
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_EVENT_QUIT) WndProc(g_hwnd, WM_DESTROY);
-    }
-    WndProc(g_hwnd, WM_PAINT);   /* repaint each frame: same pixels, and the
-                                    create/delete cycle exercises the leak
-                                    discipline continuously */
+    return DefWindowProc(hwnd, msg, wp, lp);
 }
 
 static int run_window(void) {
-    SDL_Init(SDL_INIT_VIDEO);
-    g_win = SDL_CreateWindow("GDI Demo", WIN_W, WIN_H, 0);
-    if (!g_win) return 3;
-    g_hwnd = __gdi_bind_hwnd(g_win);
-    if (!g_hwnd) return 3;
-    WndProc(g_hwnd, WM_PAINT);
-    __setAnimationFrameFunc(frame_cb);
-    return 0;
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = WndProc;
+    wc.lpszClassName = "gdidemo";
+    if (!RegisterClass(&wc)) return 3;
+    HWND hwnd = CreateWindowEx(0, "gdidemo", "GDI Demo", WS_OVERLAPPED | WS_VISIBLE,
+                               CW_USEDEFAULT, CW_USEDEFAULT, WIN_W, WIN_H,
+                               NULL, NULL, NULL, NULL);
+    if (!hwnd) return 3;
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    return (int)msg.wParam;
 }
 
 /* ============================================================ selftest */

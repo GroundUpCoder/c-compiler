@@ -2,11 +2,11 @@
  *
  * A CPU rasterizer over 32-bit RGBA pixel buffers — the same pixel format
  * the surface protocol presents (R in byte 0, A in byte 3, tight rows).
- * An HDC wraps either a window's SDL surface (screen DC: EndPaint/
- * ReleaseDC presents via SDL_UpdateWindowSurface -> shm mailbox) or a
- * selected HBITMAP (memory DC). This is the DWM redirection model: CPU
- * draw -> shm -> GPU composite (todos/0055) — GDI *is* a CPU rasterizer,
- * on Windows and here.
+ * An HDC wraps either a window's surface span (screen DC — since 0058
+ * user32 owns HWNDs and presenting; gdi32 sees only the raw span via
+ * __gdi_dc_wrap, win32_internal.h) or a selected HBITMAP (memory DC).
+ * This is the DWM redirection model: CPU draw -> shm -> GPU composite
+ * (todos/0055) — GDI *is* a CPU rasterizer, on Windows and here.
  *
  * Text goes through freetype (the vendored lib /bin/term uses), font at
  * /etc/fonts/mono.ttf with the baked /usr/share/fonts/mono.ttf fallback;
@@ -28,9 +28,10 @@
  */
 
 #include <windows.h>
-#include <SDL.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
+
+#include "win32_internal.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -71,15 +72,12 @@ struct __DC {
     uint32_t *bits;
     int w, h, stride;           /* stride in pixels */
     int isScreen;
-    struct __HWND *hwnd;        /* screen DCs */
     HGDIOBJ pen, brush, font, bitmap, defBitmap;
     COLORREF textColor, bkColor;
     int bkMode, rop2;
     POINT cur;
     RECT clip;                  /* device coords, right/bottom exclusive */
 };
-
-struct __HWND { SDL_Window *win; };   /* 0057 scaffold; 0058 owns HWND */
 
 static int g_objCount;          /* live non-stock GDI objects */
 static int g_dcCount;           /* live DCs */
@@ -384,63 +382,27 @@ static void dc_defaults(HDC dc) {
     SetRect(&dc->clip, 0, 0, dc->w, dc->h);
 }
 
-HWND __gdi_bind_hwnd(void *sdl_window) {
-    if (!sdl_window) return NULL;
-    HWND h = (HWND)calloc(1, sizeof(struct __HWND));
-    if (!h) return NULL;
-    h->win = (SDL_Window *)sdl_window;
-    return h;
-}
-
-BOOL GetClientRect(HWND hwnd, RECT *r) {
-    if (!hwnd || !r) return FALSE;
-    SDL_Surface *s = SDL_GetWindowSurface(hwnd->win);
-    if (!s) return FALSE;
-    SetRect(r, 0, 0, s->w, s->h);
-    return TRUE;
-}
-
-HDC GetDC(HWND hwnd) {
-    if (!hwnd) return NULL;                      /* no screen DC without 0058 */
-    SDL_Surface *s = SDL_GetWindowSurface(hwnd->win);
-    if (!s) return NULL;
+/* The user32 seam (0058, win32_internal.h): user32 resolves an HWND to its
+ * surface span (client-origin pointer + stride) and wraps it here; GetDC/
+ * ReleaseDC/BeginPaint/EndPaint live in user32.c, which also presents. */
+HDC __gdi_dc_wrap(void *bits, int w, int h, int stridePx) {
+    if (!bits || w < 1 || h < 1 || stridePx < w) return NULL;
     HDC dc = (HDC)calloc(1, sizeof(struct __DC));
     if (!dc) return NULL;
-    dc->bits = (uint32_t *)s->pixels;
-    dc->w = s->w;
-    dc->h = s->h;
-    dc->stride = s->pitch / 4;
+    dc->bits = (uint32_t *)bits;
+    dc->w = w;
+    dc->h = h;
+    dc->stride = stridePx;
     dc->isScreen = 1;
-    dc->hwnd = hwnd;
     dc_defaults(dc);
     g_dcCount++;
     return dc;
 }
 
-int ReleaseDC(HWND hwnd, HDC dc) {
-    (void)hwnd;
-    if (!dc || !dc->isScreen) return 0;
-    SDL_UpdateWindowSurface(dc->hwnd->win);      /* present: shm mailbox flip */
+void __gdi_dc_unwrap(HDC dc) {
+    if (!dc || !dc->isScreen) return;
     free(dc);
     g_dcCount--;
-    return 1;
-}
-
-HDC BeginPaint(HWND hwnd, PAINTSTRUCT *ps) {
-    HDC dc = GetDC(hwnd);
-    if (!dc) return NULL;
-    if (ps) {
-        memset(ps, 0, sizeof(*ps));
-        ps->hdc = dc;
-        ps->fErase = FALSE;
-        SetRect(&ps->rcPaint, 0, 0, dc->w, dc->h);
-    }
-    return dc;
-}
-
-BOOL EndPaint(HWND hwnd, const PAINTSTRUCT *ps) {
-    if (!ps || !ps->hdc) return FALSE;
-    return ReleaseDC(hwnd, ps->hdc) ? TRUE : FALSE;
 }
 
 HDC CreateCompatibleDC(HDC ref) {

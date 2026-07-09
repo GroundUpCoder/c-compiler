@@ -282,18 +282,40 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v34**.
+Image version is **v35**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
 objects + stock + leak counters, all 16 ROP2s, shapes with GDI
 right/bottom-exclusive and LineTo-endpoint semantics, freetype text
 sharing term's font, BitBlt/StretchBlt/PatBlt, GetDIBits/SetDIBits
-B<->R swizzle, IntersectClipRect); HWND is scaffolded over an SDL
-window via `__gdi_bind_hwnd` until 0058's user32 (GetDC/BeginPaint
-draw into the surface, ReleaseDC/EndPaint present). `/bin/gdidemo`
-(windowed Petzold-style scene + `selftest` mode) is the acceptance
-app; tests `tests/kernel/test_gdi32_e2e.js` + `tests/browser/os-gdi.mjs`.
+B<->R swizzle, IntersectClipRect). 0058 landed user32 (`user32.c`):
+window classes + the HWND tree (top-level HWND ↔ SDL window/kernel
+surface; child controls drawn IN-PROCESS into the top-level's surface,
+Wine-style — a child DC is the surface span offset to its client
+origin via the `win32_internal.h` `__gdi_dc_wrap` seam, which replaced
+0057's `__gdi_bind_hwnd` scaffold), the CLASSIC blocking message loop
+(GetMessage parks in host.js's `__sdl_pump_wait` import, which drains
+the input ring in place and Atomics.waits on IR_WPOS — kernel.js
+notifies it in `_wmPushEvent`; WM_PAINT only when the queue is dry,
+WM_QUIT last), input routing (hit-test/capture/focus; SDL3 keysyms are
+modifier-applied so TranslateMessage→WM_CHAR is table-free), the
+standard controls (BUTTON incl. check/radio/groupbox, STATIC, EDIT
+single+multiline, LISTBOX, SCROLLBAR with Windows notify-only
+semantics) and MessageBox as a real modal (own surface, owner
+disabled). The agent tree records OS.md's agent-target pillar: every
+user32 process serves `os/wm_agent.h`'s protocol on
+/run/win32/agent.<pid>.sock from the GetMessage idle loop — `wmctl
+tree` dumps every window (class/id/rect/live text), `wmctl click
+"OK"` presses BY LABEL ('&' stripped; "CLASS:n" addresses text-less
+controls), gettext/settext round-trip WM_GETTEXT/WM_SETTEXT — no
+pixel coordinates. `/bin/gdidemo` (Petzold GDI scene + `selftest`,
+now a real message-loop app) and `/bin/ctldemo` (controls +
+MessageBox) are the acceptance apps; tests
+`tests/kernel/test_gdi32_e2e.js` + `test_user32_e2e.js` +
+`tests/browser/os-gdi.mjs` + `os-user32.mjs`. Deferred to 0060's
+missing-symbol log: DialogBox templates, menus, accelerators,
+SetTimer/caret blink, clipboard, Tab navigation, WinMain shim.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

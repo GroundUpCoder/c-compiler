@@ -219,7 +219,10 @@ var S_IFSOCK_MODE = 0o140000;
  *     button: [2] x(f32 bits) [3] y(f32 bits) [4] button index
  *     wheel:  [2] x(f32 bits) [3] y(f32 bits) [4] direction
  *   The kernel rings the process doorbell after each write, so
- *   SDL_WaitEvent-style parks wake like every other blocking op.
+ *   SDL_WaitEvent-style parks wake like every other blocking op; it also
+ *   Atomics.notifies IR_WPOS itself so a host parked on the ring (host.js
+ *   __sdl_pump_wait — user32's blocking GetMessage, todos/0058) wakes
+ *   without polling.
  * ============================================================ */
 var SH_MAGIC = 0, SH_W = 1, SH_H = 2, SH_FORMAT = 3, SH_FLIP = 4, SH_SEQ = 5;
 var SH_MAGIC_VALUE = 0x574d5346;             // 'WMSF'
@@ -2554,6 +2557,9 @@ Kernel.prototype._wmPushEvent = function (pcb, words) {
   var base = (IR_HDR_BYTES >> 2) + (wpos % ring.cap) * IR_RECORD_WORDS;
   for (var k = 0; k < IR_RECORD_WORDS; k++) ring.i32[base + k] = words[k] | 0;
   Atomics.store(ring.i32, IR_WPOS, (wpos + 1) % cap2);
+  // Wake a host parked ON THE RING (host.js __sdl_pump_wait — user32's
+  // blocking GetMessage, todos/0058) and the doorbell parks alike.
+  Atomics.notify(ring.i32, IR_WPOS);
   this._ring(pcb);                                          // wake SDL_WaitEvent parks
   return true;
 };

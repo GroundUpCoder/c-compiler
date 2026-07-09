@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "ctldemo",
+  "description": "0058 user32 acceptance app: Petzold-style controls + MessageBox over the classic GetMessage loop",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "ctldemo.c"
+  ]
+}

@@ -5889,6 +5889,28 @@ function createSurfaceSDL({ ctx, hooks }) {
       Atomics.store(ring.i32, WMIR_RPOS, rpos);
     }
   }
+  /* Blocking message-loop park (todos/0058 — user32's GetMessage): drain,
+   * and if the ring is dry park on IR_WPOS until the kernel's push
+   * notifies (kernel.js _wmPushEvent) or timeoutMs elapses, then drain
+   * again. Runs INSIDE a wasm import call, so the drained events are in
+   * the wasm event queue when the import returns — the one way input
+   * reaches a main() that never returns to the frame scheduler. Returns 1
+   * if a ring exists (a window was created), 0 otherwise so the caller
+   * can pace itself instead of spinning. Wakes can be spurious; the
+   * caller re-checks its queues. Processes run in workers, where
+   * Atomics.wait is allowed. */
+  function pumpWait(timeoutMs) {
+    drainInput();
+    if (!ring) return 0;
+    if (timeoutMs > 0) {
+      const wpos = Atomics.load(ring.i32, WMIR_WPOS);
+      if (wpos === Atomics.load(ring.i32, WMIR_RPOS)) {
+        Atomics.wait(ring.i32, WMIR_WPOS, wpos, timeoutMs);
+        drainInput();
+      }
+    }
+    return 1;
+  }
 
   /* ---- browser flavor: the real WebGPU SDL backend on a worker-local
    * OffscreenCanvas, presents handed to the kernel as ImageBitmaps ---- */
@@ -5956,6 +5978,7 @@ function createSurfaceSDL({ ctx, hooks }) {
     env.__sdl_set_relative_mouse_mode = function (handle, enabled) {
       setRelativeMouse(handle, enabled);
     };
+    env.__sdl_pump_wait = pumpWait;   // user32 blocking GetMessage (0058)
     // Resize request (todos/0019): allocate the new shm SAB and resize the
     // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
     // draws at canvas size, and a webgpu.h app's own wgpuSurfaceConfigure
@@ -6090,6 +6113,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_push_quit_event: function () {},
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
       __sdl_delay: function () { sdlDelayUnsupported(); },
+      __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
       // Audio: real source rings into the kernel mixer in both flavors
       // (todos/0017) — see buildAudioEnv above.
     }, audioEnv),

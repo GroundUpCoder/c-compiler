@@ -102,25 +102,26 @@ try {
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
     await sample(44, BARY));
 
-  // /usr/share/menu bakes 8 entries (sorted): doom gameboy gdidemo gpubox
-  // quake snake term winbox -> 150x168, parked above the taskbar (/etc/menu
-  // is EMPTY on a virgin boot — todos/0040; the override leg below covers it).
-  const MENU_Y = SH - 28 - 168;
+  // /usr/share/menu bakes 9 entries (sorted): ctldemo doom gameboy gdidemo
+  // gpubox quake snake term winbox -> 150x188, parked above the taskbar
+  // (/etc/menu is EMPTY on a virgin boot — todos/0040; the override leg
+  // below covers it).
+  const MENU_Y = SH - 28 - 188;
   check('menu spot is desktop before the click', near(await sample(120, MENU_Y + 74), TEAL),
     await sample(120, MENU_Y + 74));
   await clickAt(25, BARY);                       // Start (x < 50)
   await waitPixel(120, MENU_Y + 74, FACE);
   check('Start click opens the menu (face fill above the taskbar)', true);
 
-  // Hover the winbox entry (index 7, rows are 20px from MENU_Y+4): the
+  // Hover the winbox entry (index 8, rows are 20px from MENU_Y+4): the
   // Win95 navy highlight tracks the pointer.
-  await page.mouse.move(rect.x + 75, rect.y + MENU_Y + 154);
-  await waitPixel(120, MENU_Y + 154, NAVY);
+  await page.mouse.move(rect.x + 75, rect.y + MENU_Y + 174);
+  await waitPixel(120, MENU_Y + 174, NAVY);
   check('entry hover highlights navy', true);
 
   // Select it: winbox spawns (the WM places its first window at 12,36),
   // the menu closes.
-  await clickAt(75, MENU_Y + 154);
+  await clickAt(75, MENU_Y + 174);
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);
   check('menu entry launched winbox (orange fill at the WM placement)', true);
   await waitPixel(120, MENU_Y + 74, TEAL);
@@ -143,7 +144,7 @@ try {
 
   // ---- /etc/menu override wins (todos/0040: first-existing-dir) ----
   // Create /etc/menu with a single entry; the next Start click must read
-  // IT (150x28, one row) instead of the baked /usr/share/menu (7 rows).
+  // IT (150x28, one row) instead of the baked /usr/share/menu (9 rows).
   await setVt(1);
   await page.keyboard.type('mkdir /etc/menu && ln -s /usr/bin/winbox /etc/menu/solo && echo MENU-SET\r');
   await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 200 });
