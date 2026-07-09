@@ -5281,6 +5281,13 @@ function createSpawn(ctx, hooks) {
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return r.pgid | 0;
       },
+      // libc getsid() (todos/0043 — pgrep -s 0 resolves its own session).
+      __spawn_getsid: function (pid) {
+        if (!hooks.getsid) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const r = hooks.getsid(pid);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        return r.sid | 0;
+      },
       // Mirror a signal-disposition change to the kernel so kill() applies the
       // right action (terminate only when the target left the signal at DFL).
       __on_sigdisp: function (sig, kind) { if (hooks.sigdisp) hooks.sigdisp(sig, kind); },
@@ -5436,7 +5443,7 @@ function createNullSpawn(ctx) {
   // no owner to mirror to. __sig_pause reports ENOSYS so pause() never hangs.
   return { [ENV_KEY]: {
     __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys,
-    __spawn_setpgid: enosys, __spawn_getpgid: enosys,
+    __spawn_setpgid: enosys, __spawn_getpgid: enosys, __spawn_getsid: enosys,
     __on_sigdisp: function () {}, __on_sigmask: function () {},
     __sig_pause: enosys, __compile: enosys,
   } };

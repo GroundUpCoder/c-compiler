@@ -14,6 +14,7 @@ var tests = [
   ['test_fs_e2e.js', []],       // 0009: brokered fs — shared offsets, fd_actions, SIGKILL+fsck, winsize
   ['test_mounts.js', []],       // 0026: MountFS — prefix routing, EXDEV/EBUSY, symlink escapes (no wasm)
   ['test_module_cache.js', []], // 0037: compiled-Module cache on spawn — RO-volume policy, ss/rw exclusions, real clone e2e
+  ['test_procfs.js', []],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)
   ['test_pipes.js', []],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js', []],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
   ['test_pty.js', []],          // 0020: pty pair semantics over the SAB protocol (no wasm)

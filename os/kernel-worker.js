@@ -246,7 +246,9 @@ async function boot() {
   // "migrated" into an OS volume — that file has never existed, so the
   // legacy path is inert.)
   var wsRoot = await BLOCK_FS.openWorkspace({ v4Name: ROOT_IMG, v3Name: 'os-root.v3.img' });
-  var kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs });
+  // /proc (todos/0043): a synthetic kernel-rendered volume — the Kernel
+  // constructor binds itself to it via the mount table.
+  var kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs, '/proc': new KERNEL.ProcFS() });
   if (wsRoot.mode === 'fresh') {
     post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
     OS_COMMON.initRootVolume(kfs);

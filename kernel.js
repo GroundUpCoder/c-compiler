@@ -86,6 +86,7 @@ var OP = {
   SETSID: 0x0007,
   SIGDISP: 0x0008,
   SIGMASK: 0x0009,   // reserved: Phase 2
+  GETSID: 0x000A,    // libc getsid() (todos/0043 — pgrep -s 0 wants it)
   TCGETATTR: 0x0101,
   TCSETATTR: 0x0102,
   TCGETPGRP: 0x0103,
@@ -573,6 +574,7 @@ KernelClient.prototype.spawnHooks = function () {
     kill: function (pid, sig) { return self.call(OP.KILL, { pid: pid, sig: sig }); },
     setpgid: function (pid, pgid) { return self.call(OP.SETPGID, { pid: pid, pgid: pgid }); },
     getpgid: function (pid) { return self.call(OP.GETPGID, { pid: pid }); },
+    getsid: function (pid) { return self.call(OP.GETSID, { pid: pid }); },
     sigdisp: function (sig, kind) { self.call(OP.SIGDISP, { sig: sig, kind: kind }); },
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
     sigpoll: function () { return self.sigpoll(); },
@@ -925,6 +927,18 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
+  // Boot instant — /proc/uptime's zero and the base for per-process
+  // start_time (procfs, todos/0043).
+  this._bootMs = Date.now();
+  // procfs (todos/0043): a ProcFS volume in the mount table renders THIS
+  // kernel's process table. Bound here so embedders just add
+  // `'/proc': new ProcFS()` to their MountFS mounts — nothing to wire.
+  if (this._fs && Array.isArray(this._fs._mounts)) {
+    for (var mi = 0; mi < this._fs._mounts.length; mi++) {
+      var mfs = this._fs._mounts[mi].fs;
+      if (mfs instanceof ProcFS) mfs._kernel = this;
+    }
+  }
   // The compiled-Module cache (todos/0037): spawn compiles each READ-ONLY-
   // volume binary once and ships the WebAssembly.Module in the spawn message
   // (Modules structured-clone across workers; Instances don't). Keyed by the
@@ -1218,6 +1232,11 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     pgid: pgid,
     sid: parent ? parent.sid : pid,
     state: STATE_RUNNING,
+    // Identity for /proc (todos/0043): comm/cmdline render from these;
+    // startMs backs stat field 22 (start_time) and ps -l's STIME/ELAPSED.
+    path: spec.path,
+    argv: (spec.argv && spec.argv.length) ? spec.argv.slice() : [spec.path],
+    startMs: Date.now(),
     exit: 0,                       // wait-status once ZOMBIE
     pendingStop: 0,                // stop signal not yet reported via WUNTRACED
     pendingCont: false,            // continue not yet reported via WCONTINUED
@@ -1313,7 +1332,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
   var procSpec = {
     pid: pid, ppid: pcb.ppid, pgid: pcb.pgid,
     path: spec.path,
-    argv: (spec.argv && spec.argv.length) ? spec.argv : [spec.path],
+    argv: pcb.argv,
     envp: pcb.envp,
     cwd: pcb.cwd,
     actions: spec.actions || [],   // brokered: already applied kernel-side above
@@ -1428,6 +1447,11 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       pcb.pgid = pcb.pid; pcb.sid = pcb.pid;
       this._respond(pcb, { sid: pcb.sid });
       break;
+    case OP.GETSID: {
+      var tSid = (req.pid | 0) === 0 ? pcb : this._procs.get(req.pid | 0);
+      this._respond(pcb, tSid ? { sid: tSid.sid } : { errno: 'ESRCH' });
+      break;
+    }
     // Termios/pgrp RPCs resolve the tty THROUGH the caller's fd (0020:
     // ptys mean many ttys); fd-less requests and ring mode fall back to
     // the process's attached tty (_ttyForFd).
@@ -4156,9 +4180,409 @@ function nodeCreateWorker(config) {
   };
 }
 
+/* ============================================================
+ * ProcFS (todos/0043) — a synthetic /proc volume.
+ *
+ * Implements exactly the fs-op surface MountFS routes to (open/read/stat/
+ * readdir/…), generating Linux-format content from the LIVE kernel process
+ * table so busybox ps/top/pgrep/pkill/uptime/free parse it unmodified. No
+ * BlockFS backing, no on-disk format, nothing for fsck to check. Mount it
+ * as `'/proc': new ProcFS()` in the MountFS table handed to Kernel({fs}) —
+ * the Kernel constructor scans the mount table and binds itself (until a
+ * kernel is bound the volume is an empty read-only tree).
+ *
+ * Semantics:
+ * - Snapshot at open, like Linux: open() renders the whole file into a
+ *   buffer; reads/lseek work that buffer. read_to_buf-style single-read
+ *   consumers and fstat-then-read consumers both work (sizes are real,
+ *   unlike Linux's size-0 procfs — host-side readFileBytes sizes via
+ *   fstat).
+ * - Read-only: every mutator answers EROFS (the 0040 convention); opens
+ *   for writing answer EACCES like Linux procfs.
+ * - What exists: /proc/<pid>/{stat,status,cmdline,comm} for every pcb in
+ *   the table (zombies included, like Linux), plus uptime, loadavg,
+ *   meminfo, stat, version. No /proc/self: the fs layer has no caller
+ *   identity (fs ops carry a path, not a pid), and nothing shipped needs
+ *   it (CONFIG_BUSYBOX_EXEC_PATH is hand-patched to /bin/sh).
+ * - What's synthetic: per-process CPU time is not tracked (workers run on
+ *   their own OS threads) — utime/stime are 0 and top's %CPU column is
+ *   boring by design. VmSize/VmRSS are nominal constants (the kernel
+ *   can't see worker heaps); meminfo is a fixed plausible table. Real:
+ *   pids, ppid/pgid/sid, state (R running / S parked-in-RPC / T stopped /
+ *   Z zombie), comm/cmdline from spawn argv, start_time and uptime from
+ *   the kernel clock, loadavg's running/total counts and last-pid.
+ * ============================================================ */
+
+var PROC_HZ = 100;                 // jiffies/sec — matches bb_clk_tck()'s 100
+var PROC_VMSIZE_KB = 4096;         // nominal VmSize (worker heaps invisible)
+var PROC_VMRSS_KB = 1024;          // nominal VmRSS; 16 pages of 64KiB
+var PROC_ROOT_FILES = ['loadavg', 'meminfo', 'stat', 'uptime', 'version'];
+var PROC_PID_FILES = ['cmdline', 'comm', 'stat', 'status'];
+
+function ProcFS() {
+  this._kernel = null;             // bound by Kernel's mount-table scan
+  this._lastError = '';
+  this._fdTable = [];              // fd -> { buf, pos, ino } (dup shares)
+  this._dirTable = [];             // handle -> { entries, pos, dotState }
+  this._inos = new Map();          // path -> synthetic ino, stable per mount
+  this._nextIno = 1;
+}
+
+ProcFS.prototype._setErr = function (name) {
+  this._lastError = name;
+  return null;
+};
+
+ProcFS.prototype._ino = function (path) {
+  var ino = this._inos.get(path);
+  if (!ino) { ino = this._nextIno++; this._inos.set(path, ino); }
+  return ino;
+};
+
+/* Resolve a volume-relative path (MountFS hands them normalized) to
+ * { dir: 'root' } | { dir: 'pid', pcb } | { file, pcb? } | null. */
+ProcFS.prototype._lookup = function (path) {
+  var parts = String(path).split('/').filter(function (p) { return p && p !== '.'; });
+  if (parts.length === 0) return { dir: 'root' };
+  var k = this._kernel;
+  if (parts.length === 1) {
+    if (PROC_ROOT_FILES.indexOf(parts[0]) >= 0) return { file: parts[0] };
+    var pcb = /^\d+$/.test(parts[0]) && k ? k._procs.get(parts[0] | 0) : null;
+    return pcb ? { dir: 'pid', pcb: pcb } : null;
+  }
+  if (parts.length === 2 && PROC_PID_FILES.indexOf(parts[1]) >= 0) {
+    var pcb2 = /^\d+$/.test(parts[0]) && k ? k._procs.get(parts[0] | 0) : null;
+    return pcb2 ? { file: parts[1], pcb: pcb2 } : null;
+  }
+  return null;
+};
+
+/* ---- content generators (Linux formats — see proc(5)) ---- */
+
+ProcFS.prototype._comm = function (pcb) {
+  var a0 = (pcb.argv && pcb.argv[0]) || pcb.path || '?';
+  var base = a0.slice(a0.lastIndexOf('/') + 1);
+  return base.slice(0, 15) || '?';
+};
+
+ProcFS.prototype._stateChar = function (pcb) {
+  if (pcb.state === STATE_ZOMBIE) return 'Z';
+  if (pcb.state === STATE_STOPPED) return 'T';
+  return pcb.waiter ? 'S' : 'R';
+};
+
+ProcFS.prototype._uptimeSec = function () {
+  var k = this._kernel;
+  return k ? Math.max(0, (Date.now() - k._bootMs) / 1000) : 0;
+};
+
+ProcFS.prototype._counts = function () {
+  var running = 0, total = 0;
+  this._kernel._procs.forEach(function (p) {
+    if (p.state === STATE_ZOMBIE) return;
+    total++;
+    if (p.state === STATE_RUNNING && !p.waiter) running++;
+  });
+  return { running: running || 1, total: total };
+};
+
+ProcFS.prototype._render = function (hit) {
+  var k = this._kernel, pcb = hit.pcb;
+  if (pcb) return this._renderPid(hit.file, pcb);
+  switch (hit.file) {
+    case 'uptime': {
+      var up = this._uptimeSec().toFixed(2);
+      return up + ' ' + up + '\n';
+    }
+    case 'loadavg': {
+      // Cooperative single-runqueue system: the load numbers stay 0.00;
+      // running/total and last-pid are real.
+      if (!k) return '0.00 0.00 0.00 0/0 0\n';
+      var c = this._counts();
+      return '0.00 0.00 0.00 ' + c.running + '/' + c.total + ' ' + (k._nextPid - 1) + '\n';
+    }
+    case 'meminfo':
+      // Fixed plausible table (kB): the kernel can't see worker heaps.
+      // SReclaimable/MemAvailable/Shmem are what busybox free reads;
+      // MemTotal MUST stay nonzero (top divides by it).
+      return 'MemTotal:        1048576 kB\n' +
+        'MemFree:          786432 kB\n' +
+        'MemAvailable:     786432 kB\n' +
+        'Buffers:               0 kB\n' +
+        'Cached:                0 kB\n' +
+        'SwapCached:            0 kB\n' +
+        'Shmem:                 0 kB\n' +
+        'SwapTotal:             0 kB\n' +
+        'SwapFree:              0 kB\n' +
+        'Dirty:                 0 kB\n' +
+        'Writeback:             0 kB\n' +
+        'AnonPages:             0 kB\n' +
+        'Mapped:                0 kB\n' +
+        'Slab:                  0 kB\n' +
+        'SReclaimable:          0 kB\n';
+    case 'stat': {
+      // One aggregate cpu line (idle accrues with the clock so interval
+      // deltas divide cleanly), then the bookkeeping lines top ignores.
+      var idle = Math.floor(this._uptimeSec() * PROC_HZ);
+      var c2 = k ? this._counts() : { running: 0, total: 0 };
+      if (!k) k = { _bootMs: Date.now(), _nextPid: 1 };   // unbound: zeros
+      return 'cpu  0 0 0 ' + idle + ' 0 0 0 0\n' +
+        'cpu0 0 0 0 ' + idle + ' 0 0 0 0\n' +
+        'intr 0\n' +
+        'ctxt 0\n' +
+        'btime ' + Math.floor(k._bootMs / 1000) + '\n' +
+        'processes ' + (k._nextPid - 1) + '\n' +
+        'procs_running ' + c2.running + '\n' +
+        'procs_blocked 0\n';
+    }
+    case 'version':
+      return 'Linux version 6.6.0-wasm (root@localhost) (cc wasm-os) #1 ' +
+        'almost-POSIX on WebAssembly\n';
+  }
+  return null;
+};
+
+/* /proc/<pid>/<file>. */
+ProcFS.prototype._renderPid = function (file, pcb) {
+  switch (file) {
+    case 'cmdline': {
+      // argv NUL-joined with a trailing NUL; empty for zombies, so
+      // busybox's read_cmdline falls back to "[comm]" — like Linux.
+      if (pcb.state === STATE_ZOMBIE) return '';
+      var argv = (pcb.argv && pcb.argv.length) ? pcb.argv : [pcb.path || '?'];
+      return argv.join('\0') + '\0';
+    }
+    case 'comm':
+      return this._comm(pcb) + '\n';
+    case 'status': {
+      var sc = this._stateChar(pcb);
+      var word = { R: 'running', S: 'sleeping', T: 'stopped (signal)', Z: 'zombie' }[sc];
+      return 'Name:\t' + this._comm(pcb) + '\n' +
+        'State:\t' + sc + ' (' + word + ')\n' +
+        'Tgid:\t' + pcb.pid + '\n' +
+        'Pid:\t' + pcb.pid + '\n' +
+        'PPid:\t' + pcb.ppid + '\n' +
+        'TracerPid:\t0\n' +
+        'Uid:\t0\t0\t0\t0\n' +
+        'Gid:\t0\t0\t0\t0\n' +
+        'FDSize:\t' + (pcb.fds ? pcb.fds.size : 0) + '\n' +
+        'Groups:\t0\n' +
+        'NSpgid:\t' + pcb.pgid + '\n' +
+        'NSsid:\t' + pcb.sid + '\n' +
+        'VmSize:\t' + PROC_VMSIZE_KB + ' kB\n' +
+        'VmRSS:\t' + PROC_VMRSS_KB + ' kB\n' +
+        'Threads:\t1\n';
+    }
+    case 'stat': {
+      // proc(5) field order; parsers key on the ')' before the state char,
+      // so a comm with spaces/parens stays parseable the same way Linux's
+      // does. Fields 14/15 (utime/stime) are 0 by design; field 22
+      // (starttime, jiffies since boot) and 7 (tty_nr) are real.
+      var ttyNr = pcb.tty ? ((4 << 8) | 1) : 0;             // tty1, or none
+      var tpgid = pcb.tty && pcb.tty.fgPgid > 0 ? pcb.tty.fgPgid : -1;
+      var startJiffies = Math.max(0,
+        Math.floor(((pcb.startMs || this._kernel._bootMs) - this._kernel._bootMs) / (1000 / PROC_HZ)));
+      var vsizeBytes = PROC_VMSIZE_KB * 1024;
+      var rssPages = 16;                                    // ×64KiB pages = VmRSS
+      return pcb.pid + ' (' + this._comm(pcb) + ') ' + this._stateChar(pcb) +
+        ' ' + pcb.ppid + ' ' + pcb.pgid + ' ' + pcb.sid +
+        ' ' + ttyNr + ' ' + tpgid +
+        ' 0 0 0 0 0' +                                      // flags, faults
+        ' 0 0 0 0' +                                        // utime stime cutime cstime
+        ' 20 0 1 0' +                                       // priority nice threads itreal
+        ' ' + startJiffies +
+        ' ' + vsizeBytes + ' ' + rssPages +
+        ' 4194304 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n'; // rsslim + cruft
+      }
+  }
+  return null;
+};
+
+/* Render a file to bytes, or null (ENOENT). */
+ProcFS.prototype._genBytes = function (hit) {
+  var text = this._render(hit);
+  if (text === null || text === undefined) return null;
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text);
+  var out = new Uint8Array(text.length);   // content is pure ASCII
+  for (var i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+  return out;
+};
+
+ProcFS.prototype._statObj = function (path, hit) {
+  var now = Math.floor(Date.now() / 1000);
+  if (hit.dir) {
+    return { ino: this._ino(path), mode: 0x4000 | 0o555, nlink: 2, size: 0,
+      atime: now, mtime: now, ctime: now, rdev: 0 };
+  }
+  var bytes = this._genBytes(hit);
+  return { ino: this._ino(path), mode: 0x8000 | 0o444, nlink: 1,
+    size: bytes ? bytes.length : 0, atime: now, mtime: now, ctime: now, rdev: 0 };
+};
+
+/* ---- path operations ---- */
+
+ProcFS.prototype.open = function (path, flags, mode) {
+  var hit = this._lookup(path);
+  if (!hit) return this._setErr((flags & 0x40) ? 'EROFS' : 'ENOENT'); // O_CREAT
+  if (hit.dir) return this._setErr('EISDIR');
+  if ((flags & 3) !== 0 || (flags & 0x200)) return this._setErr('EACCES'); // write / O_TRUNC
+  var buf = this._genBytes(hit);
+  if (!buf) return this._setErr('ENOENT');
+  var entry = { buf: buf, pos: 0, ino: this._ino(path) };
+  for (var i = 0; i < this._fdTable.length; i++) {
+    if (this._fdTable[i] === null) { this._fdTable[i] = entry; return i; }
+  }
+  this._fdTable.push(entry);
+  return this._fdTable.length - 1;
+};
+
+ProcFS.prototype.stat = function (path) {
+  var hit = this._lookup(path);
+  return hit ? this._statObj(path, hit) : this._setErr('ENOENT');
+};
+ProcFS.prototype.lstat = ProcFS.prototype.stat;   // no symlinks in this tree
+
+ProcFS.prototype.access = function (path, mode) {
+  var hit = this._lookup(path);
+  if (!hit) return this._setErr('ENOENT');
+  if (mode & 2) return this._setErr('EROFS');     // W_OK
+  return 0;
+};
+
+ProcFS.prototype.readlink = function (path) {
+  return this._setErr(this._lookup(path) ? 'EINVAL' : 'ENOENT');
+};
+
+ProcFS.prototype.opendir = function (path) {
+  var hit = this._lookup(path);
+  if (!hit) return this._setErr('ENOENT');
+  if (!hit.dir) return this._setErr('ENOTDIR');
+  var self = this;
+  var entries = [];
+  if (hit.dir === 'root') {
+    PROC_ROOT_FILES.forEach(function (n) {
+      entries.push({ ino: self._ino('/' + n), type: 8, name: n });
+    });
+    if (this._kernel) {
+      var pids = [];
+      this._kernel._procs.forEach(function (p, pid) { pids.push(pid); });
+      pids.sort(function (a, b) { return a - b; });
+      pids.forEach(function (pid) {
+        entries.push({ ino: self._ino('/' + pid), type: 4, name: String(pid) });
+      });
+    }
+  } else {
+    PROC_PID_FILES.forEach(function (n) {
+      entries.push({ ino: self._ino('/' + hit.pcb.pid + '/' + n), type: 8, name: n });
+    });
+  }
+  var d = { entries: entries, pos: 0, dotState: 0 };
+  for (var i = 0; i < this._dirTable.length; i++) {
+    if (this._dirTable[i] === null) { this._dirTable[i] = d; return i; }
+  }
+  this._dirTable.push(d);
+  return this._dirTable.length - 1;
+};
+
+ProcFS.prototype.readdir = function (handle) {
+  var d = (handle >= 0 && handle < this._dirTable.length) ? this._dirTable[handle] : null;
+  if (!d) return this._setErr('EBADF');
+  if (d.dotState < 2) {                            // '.' / '..' like BlockFS
+    var dotName = d.dotState === 0 ? '.' : '..';
+    d.dotState++;
+    return { ino: 0, type: 4, name: dotName };
+  }
+  if (d.pos >= d.entries.length) return null;
+  return d.entries[d.pos++];
+};
+
+ProcFS.prototype.closedir = function (handle) {
+  var d = (handle >= 0 && handle < this._dirTable.length) ? this._dirTable[handle] : null;
+  if (!d) return this._setErr('EBADF');
+  this._dirTable[handle] = null;
+  return 0;
+};
+
+/* ---- mutators: a read-only synthetic tree (0040 EROFS convention) ---- */
+
+ProcFS.prototype._erofs = function () { return this._setErr('EROFS'); };
+ProcFS.prototype.chmod = ProcFS.prototype._erofs;
+ProcFS.prototype.utime = ProcFS.prototype._erofs;
+ProcFS.prototype.mkdir = ProcFS.prototype._erofs;
+ProcFS.prototype.mknod = ProcFS.prototype._erofs;
+ProcFS.prototype.unlink = ProcFS.prototype._erofs;
+ProcFS.prototype.remove = ProcFS.prototype._erofs;
+ProcFS.prototype.rmdir = ProcFS.prototype._erofs;
+ProcFS.prototype.rename = ProcFS.prototype._erofs;
+ProcFS.prototype.link = ProcFS.prototype._erofs;
+ProcFS.prototype.symlink = ProcFS.prototype._erofs;
+ProcFS.prototype.ftruncate = ProcFS.prototype._erofs;
+ProcFS.prototype.fchmod = ProcFS.prototype._erofs;
+ProcFS.prototype.futime = ProcFS.prototype._erofs;
+
+/* ---- fd operations ---- */
+
+ProcFS.prototype._fdEntry = function (fd) {
+  return (fd >= 0 && fd < this._fdTable.length) ? this._fdTable[fd] : null;
+};
+
+ProcFS.prototype.read = function (fd, buf, count) {
+  var e = this._fdEntry(fd);
+  if (!e) return this._setErr('EBADF');
+  var n = Math.min(count | 0, buf.length, e.buf.length - e.pos);
+  if (n <= 0) return 0;
+  buf.set(e.buf.subarray(e.pos, e.pos + n));
+  e.pos += n;
+  return n;
+};
+
+ProcFS.prototype.write = function (fd, buf, count) {
+  // Opens are read-only (open() refuses write modes), so any write is EBADF.
+  return this._setErr('EBADF');
+};
+
+ProcFS.prototype.lseek = function (fd, offset, whence) {
+  var e = this._fdEntry(fd);
+  if (!e) return this._setErr('EBADF');
+  var base = whence === 1 ? e.pos : whence === 2 ? e.buf.length : 0;
+  var pos = base + (offset | 0);
+  if (pos < 0) return this._setErr('EINVAL');
+  e.pos = pos;
+  return pos;
+};
+
+ProcFS.prototype.fstat = function (fd) {
+  var e = this._fdEntry(fd);
+  if (!e) return this._setErr('EBADF');
+  var now = Math.floor(Date.now() / 1000);
+  return { ino: e.ino, mode: 0x8000 | 0o444, nlink: 1, size: e.buf.length,
+    atime: now, mtime: now, ctime: now, rdev: 0 };
+};
+
+ProcFS.prototype.fsync = function (fd) {
+  return this._fdEntry(fd) ? 0 : this._setErr('EBADF');
+};
+
+ProcFS.prototype.close = function (fd) {
+  if (!this._fdEntry(fd)) return this._setErr('EBADF');
+  this._fdTable[fd] = null;
+  return 0;
+};
+
+ProcFS.prototype.dup = function (fd) {
+  var e = this._fdEntry(fd);
+  if (!e) return this._setErr('EBADF');
+  for (var i = 0; i < this._fdTable.length; i++) {
+    if (this._fdTable[i] === null) { this._fdTable[i] = e; return i; }
+  }
+  this._fdTable.push(e);                           // shared entry = shared offset
+  return this._fdTable.length - 1;
+};
+
 /* ---- environment exports (host.js discipline) ---- */
 var KERNEL_EXPORTS = {
   Kernel: Kernel,
+  ProcFS: ProcFS,
   KernelClient: KernelClient,
   Tty: Tty,
   RemoteFS: RemoteFS,

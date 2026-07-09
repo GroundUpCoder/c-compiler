@@ -107,7 +107,9 @@ async function mountAndBoot() {
   const rootFresh = freshBoot || !fs.existsSync(rootImagePath);
   const rootStore = new COMMON.NodeFileStore(fs, rootImagePath, freshBoot);
   const rootFs = BLOCK_FS.createV4(rootStore);   // devNodes ON: its /dev IS /dev
-  const kfs = new BLOCK_FS.MountFS({ '/': rootFs, '/usr': sysFs });
+  // /proc (todos/0043): a synthetic kernel-rendered volume — the Kernel
+  // constructor binds itself to it via the mount table.
+  const kfs = new BLOCK_FS.MountFS({ '/': rootFs, '/usr': sysFs, '/proc': new K.ProcFS() });
   if (rootFresh) {
     bootLog('seeding user volume (manifest v' + manifest.version + ')');
     COMMON.initRootVolume(kfs);
