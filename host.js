@@ -8167,6 +8167,165 @@ function installExitOnEpipe(stream) {
  * @param {RunModuleOptions} options
  * @returns {Promise<number>} The exit code from main().
  */
+// ───────────────────────────────────────────────────────────────────────────
+// Self-service (.ss) module support.
+//
+// .ss programs are Wasm GC modules with a wholly different host contract than C:
+// language values are GC structs/arrays and JS strings (externref via the
+// js-string builtin), imports live under the "ss" / "suspend.ss" namespaces,
+// and the entry point is _start (not main(argc, argv)). There is no linear-
+// memory ABI to marshal — linear memory is used only for __embed/__static data.
+//
+// This is a faithful port of the *core* import env from the self-hosting repo's
+// ss-runtime.js (createCoreEnv + the stdio streams + splitSuspendImports),
+// enough to run compute / string / print programs. The JS-interop, OPFS,
+// BigInt, SDL and GPU envs are intentionally not ported here — a program that
+// needs them will fail to instantiate with a clear missing-import error naming
+// exactly what to add next. Only standard Web/JS APIs are used, so this stays
+// browser- and Node-portable per the runtime's portability rule.
+// ───────────────────────────────────────────────────────────────────────────
+function createSsCoreEnv(getInstance) {
+  return {
+    'str.__hash': function (s) {
+      let h = 0x811c9dc5 | 0;
+      for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+      return h;
+    },
+    'str.fromUTF8Bytes': function (ptr, nbytes) {
+      const bytes = new Uint8Array(getInstance().exports.memory.buffer, ptr, nbytes);
+      return new TextDecoder().decode(bytes);
+    },
+    'str.indexOf': function (s, search) { return s.indexOf(search); },
+    'str.lastIndexOf': function (s, search) { return s.lastIndexOf(search); },
+    'str.includes': function (s, search) { return s.includes(search) ? 1 : 0; },
+    'str.startsWith': function (s, prefix) { return s.startsWith(prefix) ? 1 : 0; },
+    'str.endsWith': function (s, suffix) { return s.endsWith(suffix) ? 1 : 0; },
+    'str._split': function (s, sep) { return s.split(sep); },
+    'str.trim': function (s) { return s.trim(); },
+    'str.trimStart': function (s) { return s.trimStart(); },
+    'str.trimEnd': function (s) { return s.trimEnd(); },
+    'str.toUpperCase': function (s) { return s.toUpperCase(); },
+    'str.toLowerCase': function (s) { return s.toLowerCase(); },
+    'str.repeat': function (s, count) { return s.repeat(count); },
+    'str.replace': function (s, search, replacement) { return s.replace(search, replacement); },
+    'str.replaceAll': function (s, search, replacement) { return s.replaceAll(search, replacement); },
+    'str.padStart': function (s, len, pad) { return s.padStart(len, pad); },
+    'str.padEnd': function (s, len, pad) { return s.padEnd(len, pad); },
+
+    'Native.dtos': function (d) { return String(d); },
+    'Native.ltos': function (n) { return String(n); },
+    'Native.ultos': function (n) { return String(BigInt.asUintN(64, n)); },
+    'Native.repr': function (s) { return JSON.stringify(s); },
+    'Native.dtoFixed': function (d, prec) { return Number(d).toFixed(prec); },
+    'Native.dtoExp': function (d, prec) { return Number(d).toExponential(prec); },
+    'Native.fromCharCode': function (code) { return String.fromCharCode(code); },
+    'Native.encodeUTF8': function (s, ptr, maxBytes) {
+      const buf = new Uint8Array(getInstance().exports.memory.buffer, ptr, maxBytes);
+      return new TextEncoder().encodeInto(s, buf).written;
+    },
+    'Native.computeUTF8Length': function (s) { return new TextEncoder().encode(s).length; },
+    'Native.jsarrLen': function (arr) { return arr.length; },
+    'Native.jsarrGetStr': function (arr, i) {
+      const v = arr[i];
+      if (typeof v !== 'string') throw new Error('jsarrGetStr: expected string, got ' + typeof v);
+      return v;
+    },
+    'Native.pow': Math.pow,
+
+    'JSBufferView.copyFromMemory': function (ptr, len) {
+      const src = new Uint8Array(getInstance().exports.memory.buffer, ptr, len);
+      const ab = new ArrayBuffer(len); new Uint8Array(ab).set(src); return new DataView(ab);
+    },
+    'JSBufferView.copyToMemory': function (dv, ptr) {
+      const dst = new Uint8Array(getInstance().exports.memory.buffer, ptr, dv.byteLength);
+      dst.set(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+    },
+    'JSBufferView.fromMemory': function (ptr, len) { return new DataView(getInstance().exports.memory.buffer, ptr, len); },
+    'JSBufferView.copyInto': function (src, dst) {
+      new Uint8Array(dst.buffer, dst.byteOffset, dst.byteLength)
+        .set(new Uint8Array(src.buffer, src.byteOffset, src.byteLength));
+    },
+
+    'Time._now': function () { return BigInt(Date.now()); },
+    'Time._isoString': function (millis) { return new Date(Number(millis)).toISOString(); },
+
+    'Math.PI': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.PI),
+    'Math.E': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.E),
+    'Math.TAU': new WebAssembly.Global({ value: 'f64', mutable: false }, 2 * Math.PI),
+    'Math.LN2': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.LN2),
+    'Math.LN10': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.LN10),
+    'Math.LOG2E': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.LOG2E),
+    'Math.LOG10E': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.LOG10E),
+    'Math.SQRT2': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.SQRT2),
+    'Math.SQRT1_2': new WebAssembly.Global({ value: 'f64', mutable: false }, Math.SQRT1_2),
+    'Math.sin': Math.sin, 'Math.cos': Math.cos, 'Math.tan': Math.tan,
+    'Math.asin': Math.asin, 'Math.acos': Math.acos, 'Math.atan': Math.atan, 'Math.atan2': Math.atan2,
+    'Math.exp': Math.exp, 'Math.expm1': Math.expm1,
+    'Math.log': Math.log, 'Math.log2': Math.log2, 'Math.log10': Math.log10, 'Math.log1p': Math.log1p,
+    'Math.pow': Math.pow, 'Math.cbrt': Math.cbrt, 'Math.hypot': Math.hypot,
+    'Math.sinh': Math.sinh, 'Math.cosh': Math.cosh, 'Math.tanh': Math.tanh,
+    'Math.asinh': Math.asinh, 'Math.acosh': Math.acosh, 'Math.atanh': Math.atanh,
+    'Math.random': Math.random,
+  };
+}
+
+// Move Suspending-wrapped imports from "ss" into the "suspend.ss" namespace,
+// matching the split the ss compiler emits (createEnv → splitSuspendImports).
+function splitSsSuspendImports(imports) {
+  if (!imports['ss']) return;
+  const suspend = {};
+  let count = 0;
+  for (const k of Object.keys(imports['ss'])) {
+    if (imports['ss'][k] instanceof WebAssembly.Suspending) { suspend[k] = imports['ss'][k]; delete imports['ss'][k]; count++; }
+  }
+  if (count > 0) imports['suspend.ss'] = Object.assign(imports['suspend.ss'] || {}, suspend);
+}
+
+async function runSsModule(bytes, opts) {
+  const writeOut = opts.writeOut, writeErr = opts.writeErr, args = opts.args || [];
+  const enc = new TextEncoder();
+  const writeStdout = function (s) { writeOut(enc.encode(s)); return s.length; };
+  const writeStderr = function (s) { writeErr(enc.encode(s)); return s.length; };
+
+  let instance;
+  const stdoutHandle = { __type: 'stdout' };
+  const stderrHandle = { __type: 'stderr' };
+  const stdinHandle = { __type: 'stdin' };
+  const importObject = {
+    'ss': {
+      'stdin': stdinHandle,
+      'stdout': stdoutHandle,
+      'stderr': stderrHandle,
+      'StandardWriteStream.writeString': function (handle, s) {
+        if (handle === stdoutHandle) return writeStdout(s);
+        if (handle === stderrHandle) return writeStderr(s);
+        throw new Error('StandardWriteStream.writeString: unknown handle');
+      },
+      'StandardReadStream.readString': function () {
+        throw new Error('StandardReadStream.readString: requires a filesystem backend (not ported)');
+      },
+      'System.args': args,
+      'System.getenv': (typeof process !== 'undefined' && process.env)
+        ? function (name) { return process.env[name] != null ? process.env[name] : null; }
+        : function () { return null; },
+      'System.cwd': (typeof process !== 'undefined' && process.cwd)
+        ? function () { return process.cwd(); }
+        : function () { return '/'; },
+    },
+  };
+  Object.assign(importObject['ss'], createSsCoreEnv(function () { return instance; }));
+  splitSsSuspendImports(importObject);
+
+  const module = new WebAssembly.Module(bytes, { builtins: ['js-string'], importedStringConstants: '#' });
+  instance = new WebAssembly.Instance(module, importObject);
+
+  const start = instance.exports._start;
+  if (typeof start !== 'function') throw new Error('ss module has no _start export');
+  const needsAsync = !!importObject['suspend.ss'] && typeof WebAssembly.promising === 'function';
+  await (needsAsync ? WebAssembly.promising(start) : start)();
+  return 0;
+}
+
 async function runModule({
   bytes,
   args,
@@ -8221,6 +8380,16 @@ async function runModule({
   if (!writeErr) writeErr = function () {};
   const compileOptions = { builtins: ['js-string'] };
   const module = new WebAssembly.Module(bytes, compileOptions);
+
+  /* Flavor dispatch. A module that imports the "ss" namespace is a
+     self-service (.ss) program, not C: it uses Wasm GC values + JS-string
+     imports and a _start entry — a wholly different host contract from the
+     linear-memory C ABI below. Delegate to the ss env and return its exit
+     code, leaving the entire C path untouched. */
+  if (WebAssembly.Module.imports(module).some(function (i) { return i.module === 'ss'; })) {
+    return await runSsModule(bytes, { writeOut: writeOut, writeErr: writeErr, args: args });
+  }
+
   const hasJSPI = typeof WebAssembly.Suspending === 'function';
 
   /* Import object providing host functions */
