@@ -189,6 +189,9 @@ function buildProject(CompilerJS, projPath, readHostFile) {
         compilerOptions.allowEmptyParams = true;
         compilerOptions.allowKnRDefinitions = true;
         compilerOptions.allowImplicitFunctionDecl = true;
+      } else if (a === '--gc-spill-locals') {
+        // Same as the CLI flag (micropython's precise-GC root scanning).
+        compilerOptions.gcSpillLocals = true;
       } else {
         throw new Error('buildProject ' + projPath + ': unsupported compilerArg ' + a);
       }

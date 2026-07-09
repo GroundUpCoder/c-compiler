@@ -1,5 +1,5 @@
 {
-  "version": 30,
+  "version": 31,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -45,6 +45,15 @@
       },
       "/usr/bin/term": {
         "project": "os/term/bin.json"
+      },
+      "/usr/bin/lua": {
+        "project": "vendor/lua/bin.json"
+      },
+      "/usr/bin/micropython": {
+        "project": "vendor/micropython/bin.json"
+      },
+      "/usr/bin/sqlite3": {
+        "project": "vendor/sqlite/bin.json"
       },
       "/usr/share/menu/doom": {
         "link": "/usr/bin/doom"
