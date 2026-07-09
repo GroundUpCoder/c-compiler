@@ -516,7 +516,9 @@ kill/respawn, VT flips mid-drag) against the standing known-issue list
 os-gpubox adapter flake; Dawn + SIGKILL process abort; cross-instance
 unlink-while-open). Findings become minimal repro tests FIRST
 (conformance-corpus discipline), fixes land as separate commits.
-Subsequent sweeps allocate new numbers when scheduled.
+Subsequent sweeps allocate new numbers when scheduled — round 3 is
+`todos/0064` (the pointer-lock HUMAN check, deferred by rounds 1 AND 2,
+is its non-negotiable MUST).
 
 ## Known issues (standing list; round 1 = 2026-07-08 todos/done/0033, round 2 = 2026-07-09 todos/done/0039)
 
@@ -539,7 +541,8 @@ graduate to queue items when a fix is scheduled.
   lock on client click, ESC unlock, click re-lock, VT-switch release.
   Mechanics covered by `test_wm.js`/`os-quake.mjs` up to the browser
   lock grant itself. **Deferred in rounds 1 AND 2** (operator away at
-  round-2 close; anecdotally fine in regular use) — a MUST for round 3.
+  round-2 close; anecdotally fine in regular use) — a MUST for round 3
+  (`todos/0064`, which numbers this so it cannot slip a third time).
 - **snake needs two paced `q`s to quit** (vendor exit-prompt loop spins
   on EOF; documented since 0015). Vendor quirk, not worth patching.
 - **Dawn + SIGKILL abort (S3 caveat) — SHRUNK, keep watching**: rounds 1

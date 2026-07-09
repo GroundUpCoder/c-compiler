@@ -171,6 +171,16 @@ never silently no-ops — per the repo's "surface errors loudly" rule.
 - Goal B: SDL3 Renderer/Texture or full `SDL_GPU` on top of this binding.
 - Native (non-browser) WebGPU.
 
+## Backlog: a real-world WebGPU C app port
+
+The wanted follow-up from `todos/done/0016` (gpubox proved the binding;
+a real port would exercise it at scale). Stays here — unnumbered, per
+the queue convention — until a concrete candidate is picked; it gets a
+`todos/NNNN` item then. Candidate criteria: raw C (not C++/Rust),
+targets the modern standardized `webgpu.h` dialect (Dawn/wgpu-native/
+Emdawnwebgpu style), and small enough that the port is about the
+binding, not the app.
+
 ---
 
 # Path to full spec coverage (2026-06-19)

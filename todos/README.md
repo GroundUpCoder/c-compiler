@@ -16,8 +16,11 @@ One numbered file per unit of work we have actually committed to doing.
   `Design:`) followed by goal / plan / acceptance criteria. Items stay
   thin — detail belongs in the design doc they point at.
 - **Done items move to `todos/done/`** (same filename), so
-  `ls todos/*.md` is always the open queue. Land a dev-log entry when
-  completing anything substantial.
+  `ls todos/*.md` is always the open queue. Dropped/superseded items
+  whose text is worth keeping move there too, with the DROPPED status
+  header intact (0047/0056); ones with nothing to keep are deleted
+  outright with the rationale in a dev log (0006). Land a dev-log entry
+  when completing anything substantial.
 - New work: allocate the next number, add a file, slot it into *Next up*.
   Ideas that aren't committed work yet stay in the topic docs below until
   promoted.
@@ -28,27 +31,32 @@ One numbered file per unit of work we have actually committed to doing.
    primary UI toolkit; **supersedes microui/MVU**, which are dropped):
    `0057` gdi32 (CPU→shm drawing) → `0058` user32 (windowing + standard
    controls + the HWND agent tree) → `0059` kernel32 subset over POSIX
-   (file/mem/time/process/dir; grows on demand) → `0060` OSS Win32/GDI
-   ports (ReactOS applets + corpus; a compile-test harness whose
-   missing-symbol log drives 0057–0059). Apps (`0048` reframed):
-   winmine/sol/notepad/calc arrive as real ReactOS C ports.
+   (file/mem/time/process/dir; grows on demand), with `0060`'s
+   compile-test harness stood up EARLY — as soon as 0057/0058 have
+   skeletons — since its missing-symbol log is the authoritative
+   backlog for all three (implement to real demand, not speculation);
+   the OSS ports themselves (ReactOS applets + corpus) then land
+   through it. Apps (`0048` reframed): winmine/sol/notepad/calc arrive
+   as real ReactOS C ports.
 2. Drawing / compositor track (parallel): `0061` **Cairo** — modern C 2D
    vector API with a real corpus (adopt, don't invent); `0062` zero-copy
    present (`direct` transport; pixels never touch RAM except on
    `wmctl shot`); `0063` Aero effects (alpha/shadows/thumbnails/blur/
    animation on the 0055 pass).
-3. (unnumbered) a real-world WebGPU C app port — candidates via `WEBGPU.md`
+3. `0046` strace (kernel-POSIX batch remainder) — near-free given the
+   architecture and a debugging force-multiplier for the Win32
+   bring-up above; do it early.
 4. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
 5. `0042` wc fork bring-up — `wc.js`, the v1 language (side project)
-6. `0046` strace (kernel-POSIX batch remainder)
-7. Networking (design: `NETWORK.md`): `0052` loopback AF_INET → `0053`
-   HTTP-for-C (curl easy facade over kernel fetch)
+6. Networking (design: `NETWORK.md`): `0052` loopback AF_INET; `0053`
+   HTTP-for-C (curl easy facade over kernel fetch — independent of
+   0052, rides fetch not sockets; pull forward whenever HTTP is wanted)
+7. `0064` WM bug sweep round 3 — once the Win32 wave has landed enough
+   new WM surface; the pointer-lock HUMAN check is its non-negotiable
+   MUST (deferred by BOTH prior rounds; needs an operator present)
 8. Tail: `0049` wallpaper; `0050` pdpmake + busybox patch/ed; `0054`
    AF_INET relay transport; `0051` halt/reboot
-
-(The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
-a MUST for WM sweep round 3, whenever that gets a number.)
 
 (`0055` WebGPU compositor landed 2026-07-09: os/compositor.js is one
 WebGPU render pass per rAF — shm seq-gated writeTexture, gpu
@@ -76,7 +84,10 @@ furniture — and the known-issues list re-dated;
 processes are the parallelism unit; no consumer exists and the complexity
 tax is permanent. The todo file was removed as clutter; the rationale +
 re-trigger condition live in `logs/2026-07-07/threads-atomics-deferral.md`.
-Not planned; re-open only if a concrete port hard-requires pthreads.)
+Not planned; re-open only if a concrete port hard-requires pthreads.
+`0047` microui and `0056` MVU — superseded by the Win32 direction
+(`WIN32.md`); their files moved to `todos/done/` with DROPPED status
+headers, retained for history.)
 
 (Done: `0001` signals/EINTR/exit handshake; `0002` tty + line discipline;
 `0009` kernel-owned fd table + brokered fs; `0003` pipes + job control;
@@ -199,7 +210,9 @@ per-spawn fs work + `moduleCacheStats()` observability)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
 WebGPU backlogs run alongside; promote specific chunks into numbered items
-when they get scheduled.)
+when they get scheduled. That includes the real-world WebGPU C app port —
+the done/0016 follow-up — which lives in `WEBGPU.md`'s backlog until a
+concrete candidate is picked; it gets a number then, not before.)
 
 ## 2. Design / topic docs: `NAME.md`
 
