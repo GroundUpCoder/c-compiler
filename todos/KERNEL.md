@@ -182,8 +182,30 @@ sigpending/sigblocked   mirrors of the SAB words (kernel is authoritative)
   `WUNTRACED`, `WCONTINUED`. Status encoding follows the existing
   `__spawn_wait` contract (exit code / termsig packing per POSIX macros
   already in `<sys/wait.h>`).
-- `setpgid`, `getpgid`, `setsid`, plus honoring the already-plumbed
-  `POSIX_SPAWN_SETPGROUP`.
+- `setpgid`, `getpgid`, `setsid`, `getsid` (0x000A, todos/0043 — pgrep
+  wanted it), plus honoring the already-plumbed `POSIX_SPAWN_SETPGROUP`.
+
+### /proc — the synthetic procfs (todos/0043, landed 2026-07-09)
+
+`ProcFS` (kernel.js) renders the LIVE process table as a read-only volume
+implementing exactly the fs-op surface MountFS routes to — no BlockFS
+backing, no on-disk format, nothing for fsck. Embedders add
+`'/proc': new ProcFS()` to their MountFS table; the Kernel constructor
+scans the mounts and binds itself. Files are **Linux formats** (proc(5)),
+so busybox ps/top/pgrep/pkill/uptime/free parse them unmodified:
+`/proc/<pid>/{stat,status,cmdline,comm}` (zombies listed until reaped,
+like Linux) + `uptime`, `loadavg`, `meminfo`, `stat`, `version`. Content
+snapshots at open. Real: pids/ppid/pgid/sid, state (R / S=parked-in-RPC /
+T / Z), comm+cmdline from spawn argv (pcb.argv/path/startMs carry them),
+start_time and uptime from the kernel clock (`kernel._bootMs`), loadavg's
+running/total + last-pid. Synthetic by design: utime/stime 0 (workers run
+on their own OS threads — top's %CPU is boring), VmSize/VmRSS nominal
+constants, meminfo a fixed plausible table (MemTotal must stay nonzero —
+top divides by it). No `/proc/self`: fs ops carry a path, not a caller
+pid. Writes: EROFS (mutators) / EACCES (write-mode opens);
+`immutableKey` stays null so spawn never Module-caches from /proc.
+Tests: `tests/kernel/test_procfs.js` (formats, snapshot, zombies, RPC
+transport, GETSID), `test_os_boot.js` (busybox procps acceptance).
 
 ## The spawn path: compiled-Module cache (todos/0037, landed 2026-07-09)
 
@@ -260,7 +282,7 @@ response, sets DONE, bumps the doorbell. Node path identical via
 **Opcode space** (versioned header; groups reserved):
 
 ```
-0x00xx process   SPAWN WAIT KILL EXIT SETPGID GETPGID SETSID SIGDISP SIGMASK
+0x00xx process   SPAWN WAIT KILL EXIT SETPGID GETPGID SETSID SIGDISP SIGMASK GETSID
 0x01xx tty       TCGETATTR TCSETATTR TCSETPGRP TCGETPGRP (all fd-aware
                  since 0020: the fd resolves to the tty it names) +
                  TIOCSWINSZ PTY_CREATE (0020 ptys; TIOCGWINSZ stays

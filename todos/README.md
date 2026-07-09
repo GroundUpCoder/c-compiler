@@ -30,8 +30,8 @@ One numbered file per unit of work we have actually committed to doing.
    the main compiler (wc W1; independently useful to C)
 3. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
-4. The kernel-POSIX batch (any order): `0043` procfs + ps/top/pgrep,
-   `0044` interval timers/SIGALRM, `0046` strace
+4. The kernel-POSIX batch (any order): `0044` interval timers/SIGALRM,
+   `0046` strace
 5. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
    AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
 6. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
@@ -42,6 +42,12 @@ One numbered file per unit of work we have actually committed to doing.
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
+
+(`0043` procfs + the process tools landed 2026-07-09: synthetic /proc as
+a MountFS volume rendered from the kernel process table, busybox
+ps/top/pgrep/pkill/uptime/free as coreutils batch 4, libc getsid, image
+v32 — `logs/2026-07-09/procfs.md`. killall/killall5 un-guarding is a
+noted cheap follow-up in `vendor/busybox/README.md`.)
 
 (The desktop-shell round 0028–0033 landed 2026-07-08 — design in
 `WM.md` "The desktop shell", verified-but-unfixed items on its

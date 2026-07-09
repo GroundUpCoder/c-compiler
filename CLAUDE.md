@@ -65,9 +65,10 @@ hang-class miscompiles fail fast instead of stalling the suite.
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
   (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
-  journaling shim — plus 75 coreutils applets (0010, the 0034 trivial
-  batch, and 0035's spawn-capable batch: find/xargs/awk/tar/gzip/gunzip/
-  zcat/less/diff), including vi as /bin/vi, as one multicall
+  journaling shim — plus 81 coreutils applets (0010, the 0034 trivial
+  batch, 0035's spawn-capable batch: find/xargs/awk/tar/gzip/gunzip/
+  zcat/less/diff, and 0043's procps batch over the synthetic /proc:
+  ps/top/pgrep/pkill/uptime/free), including vi as /bin/vi, as one multicall
   /bin/coreutils with /bin symlinks; since 0035 the multicall links the
   vfork shim too — find -exec, xargs, awk system()/getline-pipe, tar -z
   and env-exec all really spawn; patch table in
@@ -258,7 +259,12 @@ the bar is always-on-top and nothing sinks under the desktop; the
 no-WM fallback never sets layers.
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
-Image version is **v31**.
+/proc is a synthetic kernel-rendered volume (todos/0043: `ProcFS` in
+kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
+formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
+applets over it; per-process CPU time reads 0 by design; libc grew
+getsid over a new GETSID RPC).
+Image version is **v32**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

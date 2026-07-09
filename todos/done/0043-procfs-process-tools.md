@@ -1,9 +1,14 @@
 # 0043 — procfs + the process-tools applet batch
 
-- **Status**: open
+- **Status**: done (2026-07-09) — ProcFS in kernel.js (synthetic MountFS
+  volume, Kernel-ctor auto-bind), mounted in both embedders; busybox
+  ps/top/pgrep/pkill/uptime/free as coreutils batch 4 (+ libc getsid via
+  OP.GETSID, port sysinfo()); image v32; tests
+  `tests/kernel/test_procfs.js` + test_os_boot.js procps legs; dev log
+  `logs/2026-07-09/procfs.md`
 - **Depends**: —
-- **Design**: `todos/KERNEL.md` (process table), discussion in
-  `logs/2026-07-09/roadmap-network-desktop.md`
+- **Design**: `todos/KERNEL.md` (process table + the landed "/proc"
+  section), discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal
 
