@@ -11,6 +11,36 @@ const stat = fs.statSync(resolved, { throwIfNoEntry: false });
 const singleFile = stat && stat.isFile() ? resolved : null;
 const root = singleFile ? path.dirname(resolved) : resolved;
 
+// Prebaked system-image freshness (todos/0040): when serving the OS tree,
+// make sure os/os-system.img is at least the manifest version BEFORE
+// listening — a stale/missing blob makes every fresh browser boot silently
+// fall back to the ~16s in-worker bake. Baking is delegated to
+// tools/mkimage.js (the same seed pipeline). Mirrors kernel-worker.js's
+// staleness rule: rebake only when baked < manifest (a NEWER blob is kept).
+function ensureSystemImage(dir) {
+  const manifestPath = path.join(dir, 'os', 'image.json');
+  const mkimagePath = path.join(dir, 'tools', 'mkimage.js');
+  if (!fs.existsSync(manifestPath) || !fs.existsSync(mkimagePath)) return;
+  const wanted = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')).version | 0;
+  const imgPath = path.join(dir, 'os', 'os-system.img');
+  let baked = -1;
+  if (fs.existsSync(imgPath)) {
+    const { BLOCK_FS } = require(path.join(dir, 'host.js'));
+    const COMMON = require(path.join(dir, 'os', 'os-common.js'));
+    const store = new COMMON.NodeFileStore(fs, imgPath, false);
+    baked = COMMON.bakedVersion(BLOCK_FS, store);
+    store.close();
+  }
+  if (baked >= wanted) return;
+  console.log(`os/os-system.img ${baked < 0 ? 'missing' : 'is v' + baked} < manifest v${wanted} — baking…`);
+  const r = require('child_process').spawnSync(process.execPath, [mkimagePath], { stdio: 'inherit' });
+  if (r.status !== 0) {
+    console.error('mkimage failed — not serving a stale system image');
+    process.exit(1);
+  }
+}
+if (!singleFile) ensureSystemImage(root);
+
 const MIME = {
   '.html': 'text/html',
   '.js': 'text/javascript',
