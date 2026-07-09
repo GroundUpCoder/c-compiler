@@ -185,6 +185,35 @@ sigpending/sigblocked   mirrors of the SAB words (kernel is authoritative)
 - `setpgid`, `getpgid`, `setsid`, plus honoring the already-plumbed
   `POSIX_SPAWN_SETPGROUP`.
 
+## The spawn path: compiled-Module cache (todos/0037, landed 2026-07-09)
+
+Every spawn used to re-parse + re-compile the binary in the process worker
+(`new WebAssembly.Module(bytes)`) — each `ls` in a pipeline paid a full
+compile of the multicall coreutils. Now the kernel compiles each
+**read-only-volume** binary once and ships the `WebAssembly.Module` in the
+spawn message: Modules structured-clone across workers (browser and
+`worker_threads`), sharing the engine's compiled code; *Instances* don't
+clone — each process still instantiates its own memory/imports.
+
+- **Key**: the fs's `immutableKey(path)` (host.js) — `mountPrefix:ino`,
+  non-null only for a regular file whose owning volume (after full symlink
+  resolution, so `/bin/ls` → `/usr/bin/ls`) is mounted read-only. RO
+  contents can't change for the mount's lifetime, so there is no
+  invalidation to get wrong; the inode dedupes the 75 coreutils applet
+  symlinks into ONE entry. Mutable binaries (`cc -o a.out` on the rw
+  volume) key null and keep the bytes+compile-per-spawn path forever.
+- **Exclusions**: ss-flavored modules (they recompile from bytes with
+  `importedStringConstants` in `runSsModule`), engine-rejected bytes (the
+  worker owns the error report), tiers where Modules don't structured-clone
+  (one-shot `structuredClone` probe), and kernels without an fs.
+- **Transport**: `procSpec.module` (exactly one of `image`/`module` is
+  non-null — a cache hit drops the multi-MB bytes clone too);
+  `runModule({module})` skips its compile. Cache values are Promises, so
+  racing spawns of one binary share a single compile.
+- **Stats**: `kernel.moduleCacheStats()` → `{entries, hits, misses}`.
+- Tests: `tests/kernel/test_module_cache.js` (policy over fake workers +
+  a real worker_threads clone e2e), `test_mounts.js` (immutableKey).
+
 ## The kernel page (per-process SAB) and the unified protocol
 
 One small SAB per process, created at spawn, shared kernel↔worker. Layout

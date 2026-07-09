@@ -108,7 +108,13 @@ MountFS over two volumes — the kernel treats it identically), with fs
 syscalls as 0x04xx RPCs served to host.js's
 RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
 in-process fs (standalone pages keep that path forever — two transports,
-one fs; see KERNEL.md "fd/data-plane amendment"). Pipes are just
+one fs; see KERNEL.md "fd/data-plane amendment"). Spawn caches compiled
+Modules (todos/0037): read-only-volume binaries (fs `immutableKey` —
+prefix:ino after symlink resolution) compile once kernel-side and the
+`WebAssembly.Module` structured-clones in the spawn message (`procSpec.
+module`, bytes dropped); rw binaries (`cc -o a.out`), ss modules, and
+no-fs kernels keep the bytes path — `kernel.moduleCacheStats()` counts.
+Pipes are just
 another OFD kind (PIPE_CREATE; kernel-side buffers + wait queues; blocking
 read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness). Job
 control is cooperative like signals: STOP sets KP_FLAGS bit0 and the

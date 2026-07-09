@@ -1,6 +1,22 @@
 # 0037 — wasm module cache on the spawn path
 
-- **Status**: open
+- **Status**: done (2026-07-09) — dev log `logs/2026-07-09/module-cache.md`;
+  design note in KERNEL.md ("The spawn path: compiled-Module cache").
+  Key = fs `immutableKey` (mountPrefix:ino, non-null only on a READ-ONLY
+  volume after full symlink resolution) — the plan's "system-volume
+  binaries only" v1, made airtight by 0040's RO /usr: no generation to
+  track, `cc -o a.out` stays bytes-path by construction. Cache values are
+  Promises (racing spawns share one compile); ss-flavored/engine-rejected/
+  unclonable modules are cached exclusions; a hit skips loadImage entirely
+  and ships the Module instead of bytes. Measured (the plan's "measure
+  before assuming"): per-spawn latency PARITY headless — V8's engine-wide
+  NativeModule cache already deduped identical-bytes compiles, and ~27ms
+  per spawn is worker-bootstrap-bound, not wasm — so the win is the
+  engine-agnostic guarantee + zero per-spawn fs read/clone + the stats
+  counter, at zero hot-path cost. `kernel.moduleCacheStats()` observable;
+  tests `tests/kernel/test_module_cache.js` + `test_mounts.js`
+  immutableKey legs; full kernel/blockfs/unit suites + the 10-file
+  browser sweep green (which also covered the owed 0036 sweep).
 - **Depends**: — (complements the unnumbered `tools/mkimage.js` item:
   that one kills cold-boot SEED cost, this kills per-spawn COMPILE cost)
 - **Design**: `todos/KERNEL.md` (spawn path), host.js instantiation
