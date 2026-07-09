@@ -25,8 +25,10 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
   start work, `done <ID>` to close it, `reorder`/`block` to adjust. **`node
   todos/queue.js check` must pass before committing a queue change** — a
   committed pre-commit hook (`todos/githooks/pre-commit`) enforces this once you
-  run `git config core.hooksPath todos/githooks` per clone. The prose *Next up*
-  list in `todos/README.md` is now human narrative, not the parsed source. Full
+  run `git config core.hooksPath todos/githooks` per clone. Dep ids live ONLY in
+  `queue.json` (open items carry no `Depends:` line — `check` rejects one;
+  rationale goes in the item body), and there is no prose "Next up" list — view
+  the order with `node todos/queue.js list` or the cc Todos tab. Full
   convention: `todos/README.md` §1 "Maintaining the queue".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.

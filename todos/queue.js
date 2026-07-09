@@ -3,7 +3,10 @@
 //
 // The order of attack and the hard/soft dependency split live in
 // todos/queue.json (the manifest); the per-item todos/NNNN-<slug>.md files stay
-// the source of truth for everything else (title, status, body, prose Depends).
+// the source of truth for everything else (title, status, body). Dependency
+// ids live ONLY in the manifest — open items must not carry a structured
+// `- **Depends**:` line (the check below enforces this); dependency
+// *rationale* belongs in the item's body prose.
 // This script is the SINGLE WRITER of queue.json and the validator that keeps
 // the manifest and the filesystem consistent, so agents and humans mutate the
 // queue through one checked interface instead of hand-editing two files in sync.
@@ -198,6 +201,18 @@ function validate(manifest, fsState) {
     if (done.has(id)) errors.push(`"${id}" exists in BOTH todos/ and todos/done/`);
   }
 
+  // No structured `- **Depends**:` line in OPEN items — dependency ids live
+  // only in this manifest (blockedBy/after); rationale belongs in body prose.
+  // (done/ files are frozen history and exempt.)
+  for (const [id, file] of open) {
+    let body;
+    try { body = fs.readFileSync(path.join(TODOS_DIR, file), 'utf8'); }
+    catch { continue; } // unreadable file already surfaces as a queue error
+    if (/^-\s*\*{0,2}Depends\*{0,2}\s*:/mi.test(body)) {
+      errors.push(`todos/${file} carries a structured Depends: line — deps belong in queue.json (queue.js block ${id} --hard/--soft); move any rationale into the body prose`);
+    }
+  }
+
   // Cycle detection over the hard-dependency graph (open ids only — done deps
   // are already satisfied and terminal).
   const hard = new Map();
@@ -303,7 +318,6 @@ function scaffold(id, title) {
   return `# ${id} — ${title}
 
 - **Status**: open
-- **Depends**: —
 - **Design**: —
 
 ## Goal

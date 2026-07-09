@@ -1,7 +1,6 @@
 # 0054 — AF_INET relay transport (arbitrary hosts)
 
 - **Status**: open
-- **Depends**: 0052 (the socket surface)
 - **Design**: `todos/NETWORK.md` (tier 4 — the localhost-relay
   rationale, secure-context carve-out, PNA headers)
 
@@ -12,7 +11,7 @@
 documented default** — it works even when the page is hosted on a
 public https origin (localhost is a trustworthy origin in
 Chrome/Firefox; Safari holdout recorded), and it runs with the user's
-own network identity (their LAN, their firewall).
+own network identity (their LAN, their firewall). Builds on the 0052 socket surface.
 
 ## Plan
 

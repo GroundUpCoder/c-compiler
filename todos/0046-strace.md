@@ -1,7 +1,6 @@
 # 0046 — strace: per-pid syscall-RPC trace
 
 - **Status**: open
-- **Depends**: —
 - **Design**: `todos/KERNEL.md` (the kernel brokers every syscall — this
   is mostly formatting), discussion in
   `logs/2026-07-09/roadmap-network-desktop.md`

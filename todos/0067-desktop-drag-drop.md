@@ -1,7 +1,6 @@
 # 0067 — drag-and-drop files onto the desktop
 
 - **Status**: open
-- **Depends**: none (soft: nicer after 0066, so a dropped ROM is runnable)
 - **Design**: `OS.md` (page ↔ kernel bridge), `KERNEL.md` / BlockFS
 
 ## Goal

@@ -1,8 +1,6 @@
 # 0050 — pdpmake + busybox diff/patch
 
 - **Status**: open
-- **Depends**: 0035 (spawn-capable applets prove the exec seam pdpmake
-  needs; pdpmake runs recipe lines through the shell)
 - **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal
@@ -10,7 +8,8 @@
 Round out the in-OS dev environment: cc + **make** + vi + **diff** +
 **patch**. pdpmake (Ron Yorston's public-domain POSIX make, written to
 pair with busybox) becomes `/bin/make`; diff and patch join the
-coreutils multicall.
+coreutils multicall. 0035's spawn-capable applets proved the exec seam
+pdpmake needs (pdpmake runs recipe lines through the shell).
 
 ## Plan
 

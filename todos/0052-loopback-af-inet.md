@@ -1,7 +1,6 @@
 # 0052 — loopback AF_INET
 
 - **Status**: open
-- **Depends**: —
 - **Design**: `todos/NETWORK.md` (tier 1), `todos/KERNEL.md` (AF_UNIX,
   0008 — the machinery this reuses)
 

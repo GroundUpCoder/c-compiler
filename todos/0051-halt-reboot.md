@@ -1,7 +1,6 @@
 # 0051 — halt / reboot
 
 - **Status**: open (low priority)
-- **Depends**: —
 - **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal

@@ -1,8 +1,6 @@
 # 0041 — `__gcstr("...")`: GC string literals via importedStringConstants
 
 - **Status**: open
-- **Depends**: — (deliberately lands BEFORE the 0042 wc fork so the fork
-  inherits it; the one sanctioned main-compiler touch of the wc project)
 - **Design**: `todos/WC.md` (W1; "GC string literals" decisions in
   `logs/2026-07-08/wc-round1-flags.md` still apply verbatim)
 
@@ -13,6 +11,9 @@ externref constant instead of a data-segment address. Zero-copy, zero
 linear memory, deduped by construction — and independently useful to
 plain C (today's `__jsstr(const char *)` pays a runtime conversion
 through linear memory on every call).
+
+Deliberately lands BEFORE the 0042 wc fork so the fork inherits it —
+the one sanctioned main-compiler touch of the wc project.
 
 ## Plan
 

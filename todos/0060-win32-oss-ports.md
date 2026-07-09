@@ -1,7 +1,6 @@
 # 0060 — win32: OSS GDI program ports + compile-test harness
 
 - **Status**: open
-- **Depends**: 0057/0058/0059 (incremental — the harness drives their backlog)
 - **Design**: `todos/WIN32.md` (references); this item (the target list)
 
 ## Goal

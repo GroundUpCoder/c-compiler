@@ -1,7 +1,6 @@
 # 0066 — unified run/activate mechanism
 
 - **Status**: open
-- **Depends**: 0065 (shebang exec — so launcher scripts actually run)
 - **Design**: `WM.md` (desktop grid + Start menu launching)
 
 ## Goal
@@ -15,6 +14,8 @@ reason — just incremental history (0028 menu vs 0029 desktop):
   first line as argv and spawn** (the `term snake` convention).
 - `desk_launch()` (`wm.c` ~L503): symlink → run; **plain file → open in
   `term vi`**.
+
+Sequenced after 0065 (shebang exec) so launcher scripts actually run.
 
 ## Plan
 

@@ -31,8 +31,11 @@ function setup(queue) {
 
 function writeItem(todos, id, slug, opts = {}) {
   const dir = opts.done ? path.join(todos, 'done') : todos;
+  // Note: no `- **Depends**:` line — deps live only in queue.json, and the
+  // check lint rejects the structured line in open items.
+  const extra = opts.extraHeader ? `${opts.extraHeader}\n` : '';
   fs.writeFileSync(path.join(dir, `${id}-${slug}.md`),
-    `# ${id} — ${slug}\n\n- **Status**: ${opts.status || 'open'}\n- **Depends**: —\n\n## Goal\n`);
+    `# ${id} — ${slug}\n\n- **Status**: ${opts.status || 'open'}\n${extra}\n## Goal\n`);
 }
 
 function writeManifest(todos, queue) {
@@ -120,6 +123,17 @@ test('check detects a dependency cycle', () => {
   const r = run(todos, ['check']);
   assert.strictEqual(r.code, 1);
   assert.match(r.stderr, /cycle in blockedBy/);
+});
+
+test('check rejects a structured Depends: line in an open item (done/ exempt)', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a', { extraHeader: '- **Depends**: 0002 (rationale)' });
+  writeItem(todos, '0002', 'b', { done: true, extraHeader: '- **Depends**: —' });
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['check']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /0001-a\.md carries a structured Depends: line/);
+  assert.doesNotMatch(r.stderr, /0002-b\.md/); // frozen history is exempt
 });
 
 test('check rejects a malformed manifest loudly', () => {

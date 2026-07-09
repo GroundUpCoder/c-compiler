@@ -1,7 +1,6 @@
 # 0062 — zero-copy present (direct transport + cross-agent seam)
 
 - **Status**: open
-- **Depends**: `0055` compositor
 - **Design**: `todos/WM.md` (transports; "Open questions: `direct`
   transport promotion" and "Cross-agent WebGPU sharing")
 
@@ -13,7 +12,7 @@ Today `gpu`-transport frames already stay GPU→GPU in the browser; this item
 promotes the reserved `direct` transport (zero-copy fullscreen present via
 a per-window DOM canvas the browser composites) and wires the cross-agent
 WebGPU texture-sharing seam so `gpu` present becomes a zero-copy *import*
-when the spec ships it.
+when the spec ships it. Rides the `0055` WebGPU compositor pass.
 
 ## Plan
 

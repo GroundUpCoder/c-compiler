@@ -1,7 +1,6 @@
 # 0061 — Cairo: the modern C 2D vector API (adopt, don't invent)
 
 - **Status**: open
-- **Depends**: surface protocol (image backend → shm); `0055` compositor
 - **Design**: `todos/WIN32.md` (windowing-vs-drawing split); this item
 
 ## Goal
@@ -12,7 +11,8 @@ apps — instead of inventing a Direct2D analog. Cairo is pure C, the stable
 real testing oracle. Its **image backend is software rasterization into a
 pixel buffer = our shm transport already**, so a Cairo port draws
 correctly with near-zero backend invention; a `cairo-webgpu` backend is
-the *optional* GPU upgrade, not a prerequisite.
+the *optional* GPU upgrade, not a prerequisite. Rides the surface
+protocol (image backend → shm) on the `0055` compositor.
 
 ## Why Cairo over the alternatives
 

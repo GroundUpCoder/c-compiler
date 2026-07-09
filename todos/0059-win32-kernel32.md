@@ -1,14 +1,15 @@
 # 0059 — win32: kernel32 subset over POSIX
 
 - **Status**: open
-- **Depends**: existing POSIX surface (fds, spawn); grows on demand from 0060
 - **Design**: `todos/WIN32.md` (coexistence section)
 
 ## Goal
 
 The non-UI Win32 surface ported programs need, as a **user-space veneer**
 over the existing POSIX primitives — additive, no kernel change (the
-Wine/Cygwin model). POSIX stays the other veneer; a program picks one.
+Wine/Cygwin model). POSIX stays the other veneer; a program picks one. Sits on the
+existing POSIX surface (fds, spawn); the surface grows on demand from
+0060's missing-symbol backlog.
 
 ## Plan
 

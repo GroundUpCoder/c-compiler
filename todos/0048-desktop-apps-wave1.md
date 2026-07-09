@@ -4,7 +4,6 @@
   as real ReactOS C/Win32 ports via `0060`, not hand-written microui/MVU
   apps. See `WIN32.md`. The app *targets* below stand; the *how* is Win32
   ports.
-- **Depends**: 0058 (user32), 0060 (the port harness + first-wave targets)
 - **Design**: `WIN32.md`; original discussion in
   `logs/2026-07-09/roadmap-network-desktop.md`
 
@@ -12,7 +11,8 @@
 
 The Win95 organ set as `/bin` apps + Start-menu entries: **file
 manager, notepad, calc, minesweeper, control panel**. Land
-incrementally — each app is its own commit with its own acceptance.
+incrementally — each app is its own commit with its own acceptance. Rides 0058
+(user32) and 0060 (the port harness + its first-wave targets).
 
 ## Plan
 

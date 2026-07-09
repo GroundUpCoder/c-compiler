@@ -1,7 +1,6 @@
 # 0053 — HTTP for C: the curl easy facade over kernel fetch
 
 - **Status**: open
-- **Depends**: — (0052 not required; this rides fetch, not sockets)
 - **Design**: `todos/NETWORK.md` (tier 2; tier 3 DoH noted there)
 
 ## Goal
@@ -10,7 +9,8 @@
 libc** over a kernel fetch RPC, plus `/bin/curl`. POSIX has no HTTP
 API; curl-easy is the de-facto standard header — ports that "just want
 HTTP" compile unmodified. Not a port of real libcurl (it wants sockets
-underneath; we own the libc).
+underneath; we own the libc). 0052 is not required — this rides fetch,
+not sockets.
 
 ## Plan
 

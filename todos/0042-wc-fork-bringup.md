@@ -1,7 +1,6 @@
 # 0042 — wc fork bring-up: wc.js, the v1 language
 
 - **Status**: open
-- **Depends**: 0041 (fork inherits `__gcstr`/imported-globals emission)
 - **Design**: `todos/WC.md` (authoritative, round-2 fork-first; v1
   semantics all decided there — don't re-litigate without new evidence)
 
@@ -11,7 +10,8 @@ Fork `compiler.js` → `wc.js` and strip/redirect it into the wc v1
 language: memory-less by design, `struct` ≡ `__struct` verbatim, GC
 arrays, string literals as `"#"` imports, pointers-are-ints, no unions,
 no variadics, exceptions kept. `.wc`/`.wh` sources. The main compiler
-and os/ stay untouched.
+and os/ stay untouched. Forked after 0041 lands so wc inherits the
+`__gcstr`/imported-globals emission.
 
 ## Plan
 

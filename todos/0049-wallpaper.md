@@ -1,14 +1,14 @@
 # 0049 — wallpaper
 
 - **Status**: open
-- **Depends**: — (wm.c only; the control-panel picker rides 0048)
 - **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal
 
 `/etc/wallpaper/` holds candidate images; `current` is a symlink to the
 chosen one; wm.c's desktop layer draws it under the icon grid;
-`wmctl wallpaper <name>` switches.
+`wmctl wallpaper <name>` switches. wm.c only — the control-panel
+picker rides 0048.
 
 ## Plan
 

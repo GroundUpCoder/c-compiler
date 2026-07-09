@@ -1,10 +1,6 @@
 # 0064 — WM bug sweep, round 3
 
 - **Status**: open
-- **Depends**: best after the Win32 wave (0057/0058) lands enough new WM
-  surface to be worth sweeping; not blocked by it. **Requires an operator
-  present** — the pointer-lock HUMAN check cannot be automated and cannot
-  slip a third time.
 - **Design**: `todos/WM.md` "The desktop shell" (bug-sweep block — the
   repeatable format established by todos/done/0033; round 2 =
   todos/done/0039)
@@ -14,6 +10,11 @@
 Third dedicated dogfood/verification session over the desktop surface
 area, per the 0033 format. Output is repro tests + fixes + an updated
 WM.md known-issues list — not a feature.
+
+Best after the Win32 wave (0057/0058) lands enough new WM surface to be
+worth sweeping — not blocked by it. **Requires an operator present** —
+the pointer-lock HUMAN check cannot be automated and cannot slip a
+third time.
 
 ## Plan
 

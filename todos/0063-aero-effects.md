@@ -1,14 +1,14 @@
 # 0063 — Aero effects on the WebGPU compositor
 
 - **Status**: open
-- **Depends**: `0055` compositor; benefits from `0062`
 - **Design**: `todos/WM.md` (Compositor; the earlier Aero-track survey)
 
 ## Goal
 
 The DWM/Aero visual wave on the `0055` WebGPU pass. The compositing model
 is already there (0055); this adds the per-pixel effects, in dependency
-order, GPU-side.
+order, GPU-side. Benefits from `0062`'s zero-copy present but doesn't
+require it.
 
 ## Plan (rough dependency order)
 
