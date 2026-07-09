@@ -15526,6 +15526,35 @@ class CodeGenerator {
           if (topLevelCases[i].caseNode.isDefault) { defaultIdx = i; break; }
         }
 
+        // C11 6.8.4.2: statements before the first case label are
+        // unreachable, but declarations among them are in scope for the
+        // WHOLE switch body (busybox awk.c: `switch (tc) { var *v;
+        // case ...: v = ...`). Case-body emission below starts at the
+        // first case's position, so register those locals here —
+        // initializers are skipped, exactly like jumping past a
+        // declaration with goto. MEMORY-class decls already got frame
+        // slots from the prepass walker, which does descend into switch
+        // bodies; only REGISTER-class locals need rescuing.
+        {
+          const preambleEnd = topLevelCases.length > 0
+            ? topLevelCases[0].stmtPos : sw.body.statements.length;
+          for (let si = 0; si < preambleEnd; si++) {
+            const s = sw.body.statements[si];
+            if (!(s instanceof AST.SDecl)) continue;
+            for (const decl of s.declarations) {
+              if (decl instanceof AST.DVar &&
+                  decl.storageClass !== Types.StorageClass.STATIC &&
+                  decl.definition === decl &&
+                  decl.allocClass === Types.AllocClass.REGISTER &&
+                  !this.localVarToWasmLocalIdx.has(decl)) {
+                const li = this.allocLocal(cToWasmType(decl.type, this.wmod));
+                this.localVarToWasmLocalIdx.set(decl, li);
+                this._trackLocalName(li, decl.name);
+              }
+            }
+          }
+        }
+
         // Collect forward labels and their statement positions in switch body
         const switchFwdLabels = [];
         for (let si = 0; si < sw.body.statements.length; si++) {
@@ -20780,6 +20809,15 @@ __import void longjmp(jmp_buf env, int val);
 typedef jmp_buf sigjmp_buf;
 #define sigsetjmp(env, savemask) setjmp(env)
 #define siglongjmp(env, val) longjmp(env, val)
+`,
+  "sched.h": `
+#pragma once
+/* Minimal POSIX scheduling surface (todos/0035: busybox less calls
+   sched_yield() in its non-blocking-stdin retry loop). Processes are
+   single-threaded and cooperative here — there is nobody in-process to
+   yield to, so yielding is a successful no-op; real waiting happens in
+   blocking kernel RPCs. */
+static inline int sched_yield(void) { return 0; }
 `,
   "signal.h": `
 #pragma once
