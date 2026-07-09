@@ -108,7 +108,7 @@ var OP = {
   FS_FTRUNCATE: 0x0411, FS_CHMOD: 0x0412, FS_FCHMOD: 0x0413, FS_CHDIR: 0x0414,
   FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
   FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
-  FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E,
+  FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E, FS_FSYNC: 0x041F,
   // 0x05xx — AF_UNIX sockets (todos/0008). Stream-only; data flows through
   // FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT like every other OFD kind.
   SOCK_SOCKET: 0x0501, SOCK_BIND: 0x0502, SOCK_LISTEN: 0x0503,
@@ -1619,6 +1619,19 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (!o5 || o5.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
       r = fs.ftruncate(o5.bfsFd, req.size | 0);
       this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_FSYNC: {
+      // fsync/fdatasync: only file OFDs reach the store (whole-image flush —
+      // fsync may flush more than asked); tty/pipe/socket/null are a
+      // harmless 0, matching the in-process env's no-validation behavior.
+      var oSync = ofdOf(req.fd);
+      if (!oSync) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      if (oSync.kind === 'file' && fs.fsync(oSync.bfsFd) === null) {
+        this._respond(pcb, eFs());
+        return;
+      }
+      this._respond(pcb, {});
       return;
     }
     case OP.FS_CHMOD: r = fs.chmod(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
@@ -3793,6 +3806,7 @@ RemoteFS.prototype.readlink = function (p, buf, bufsize) {
   return n;
 };
 RemoteFS.prototype.ftruncate = function (fd, size) { return this._ok(this._c.call(OP.FS_FTRUNCATE, { fd: fd, size: size })) && 0; };
+RemoteFS.prototype.fsync = function (fd) { return this._ok(this._c.call(OP.FS_FSYNC, { fd: fd })) && 0; };
 RemoteFS.prototype.chmod = function (p, mode) { return this._ok(this._c.call(OP.FS_CHMOD, { path: p, mode: mode })) && 0; };
 RemoteFS.prototype.fchmod = function (fd, mode) { return this._ok(this._c.call(OP.FS_FCHMOD, { fd: fd, mode: mode })) && 0; };
 RemoteFS.prototype.utime = function (p, a, m) { return this._ok(this._c.call(OP.FS_UTIME, { path: p, atime: a, mtime: m })) && 0; };

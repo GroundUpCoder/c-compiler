@@ -3470,6 +3470,15 @@ var BLOCK_FS = (function () {
     return 0;
   };
 
+  // fsync(fd)/fdatasync(fd) — durability. The store is one handle, so
+  // flush() is whole-image (allowed: fsync may flush more than requested).
+  // No fd validation, matching the historical env behavior: stdio and
+  // freshly-dup'd fds all land here and must not fail.
+  BlockFS.prototype.fsync = function (fd) {
+    this._s.flush();
+    return 0;
+  };
+
   // ftruncate(fd, size) — truncate or extend an open file.
   BlockFS.prototype.ftruncate = function (fd, size) {
     if (this._readonly) return this._setErr('EROFS');
@@ -4404,11 +4413,13 @@ var BLOCK_FS = (function () {
         // I/O error.
         return 0;
       }),
-      // fsync/fdatasync: a program explicitly asking for durability. The store
-      // is one handle, so flush() is whole-image (allowed — fsync may flush
-      // more than requested). Cheap to call only because programs ask rarely.
-      fsync: wrap(function (fd) { this._s.flush(); return 0; }),
-      fdatasync: wrap(function (fd) { this._s.flush(); return 0; }),
+      // fsync/fdatasync: a program explicitly asking for durability. Dispatch
+      // via `this.` like every other fd op so RemoteFS (kernel.js) can serve
+      // it as an RPC — the old inline `this._s.flush()` reached for the
+      // BlockFS-private store handle and crashed brokered processes (sqlite's
+      // journal fsync was the first caller to notice).
+      fsync: wrap(function (fd) { return this.fsync(fd); }),
+      fdatasync: wrap(function (fd) { return this.fsync(fd); }),
     };
   };
 
@@ -5011,6 +5022,9 @@ var BLOCK_FS = (function () {
   };
   MountFS.prototype.futime = function (fd, atime, mtime) {
     return this._fdOp(fd, function (vol, vfd) { return vol.futime(vfd, atime, mtime); });
+  };
+  MountFS.prototype.fsync = function (fd) {
+    return this._fdOp(fd, function (vol, vfd) { return vol.fsync(vfd); });
   };
   MountFS.prototype.close = function (fd) {
     var e = this._fdEntry(fd);
