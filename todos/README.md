@@ -24,27 +24,25 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0036` seed the REPLs — lua, micropython, sqlite3 into the image
-   (measure sqlite's seed cost first)
-2. `0037` wasm module cache — kernel-side compiled-Module cache on the
+1. `0037` wasm module cache — kernel-side compiled-Module cache on the
    spawn path (the sealed system blob's `/usr/share/os-release`
    VERSION_ID is the natural cache key since 0040; Modules clone,
    instances don't)
-3. (unnumbered) a real-world WebGPU C app port — candidates via
+2. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-4. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+3. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-5. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+4. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
-6. The kernel-POSIX batch (any order): `0043` procfs + ps/top/pgrep,
+5. The kernel-POSIX batch (any order): `0043` procfs + ps/top/pgrep,
    `0044` interval timers/SIGALRM, `0046` strace
-7. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
+6. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
    AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
-8. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
+7. The desktop wave: `0047` GUI toolkit (microui) → `0048` desktop
    apps wave 1 (fileman/notepad/calc/minesweeper/control panel) →
    `0049` wallpaper; `0050` pdpmake + busybox patch/ed alongside
    (diff itself landed with 0035)
-9. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
+8. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
@@ -166,7 +164,13 @@ sched.h; /bin is 75 multicall names, image v30
 pair, taken in kernel-worker.js BEFORE any mount and held for the tab's
 lifetime: the losing tab gets a guard screen + Retry (the lock frees
 when the winner closes; no steal in v1), single-tab boots unchanged
-(`logs/2026-07-09/two-tab-boot-guard.md`).
+(`logs/2026-07-09/two-tab-boot-guard.md`);
+`0036` **the REPLs seeded** — /bin/lua, /bin/micropython (minimal port:
+REPL only), /bin/sqlite3 as image.json `project` entries, image v31;
+piped use EOF-exits, interactive use proven over a kernel pty
+(`test_repl_pty_e2e.js`); sqlite3's journal fsync exposed the brokered
+fsync crash — fixed test-first as a dispatched fs method + FS_FSYNC RPC
+(`logs/2026-07-09/seed-repls.md`).
 **OS.md Phase 1 is complete; Phase 3 (windows) is walking.**)
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/

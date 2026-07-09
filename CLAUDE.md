@@ -191,6 +191,12 @@ pak0.pak + autoexec.cfg at `/root/id1`; requests relative mouse at
 VID_Init: SURFACE_SET_FLAGS bit1 → kernel wanted-state → os.html pointer
 lock, the lock gesture being a kernel-hit-tested client click; ESC
 unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
+The REPLs are seeded too (todos/0036): `/bin/lua`, `/bin/micropython`
+(the minimal port — REPL only: argv ignored, no `open()`/import),
+`/bin/sqlite3` — piped use exits cleanly on EOF, interactive use works
+at the hush prompt and over ptys (`tests/kernel/test_repl_pty_e2e.js`);
+sqlite3 file-backed DBs exposed the brokered-fsync crash fixed in 0036
+(FS_FSYNC RPC, fsync as a dispatched fs method).
 `/bin/term` (todos/0020, `os/term/`) is the wasm terminal: kernel pty +
 freetype (vendored lib, font at `/etc/fonts/mono.ttf` with the baked
 `/usr/share/fonts/mono.ttf` as fallback) + an escape
@@ -246,7 +252,7 @@ the bar is always-on-top and nothing sinks under the desktop; the
 no-WM fallback never sets layers.
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
-Image version is **v30**.
+Image version is **v31**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

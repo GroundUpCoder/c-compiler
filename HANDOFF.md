@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-09, after 0045 landed)
+# Handoff — start of thread (updated 2026-07-09, after 0036 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,27 +7,38 @@
 
 ## Where the repo stands
 
-**0045 (two-tab boot guard) landed 2026-07-09** — dev log
-`logs/2026-07-09/two-tab-boot-guard.md`. kernel-worker.js takes a Web
-Lock named after the OPFS image pair (`wasm-os:os-system.v5.img+
-os-root.v5.img`) BEFORE any mount, `ifAvailable` + a forever-pending
-callback to hold it for the tab's lifetime; a losing tab gets
-`boot-locked` → os.html's guard screen + Retry (`boot-retry` message,
-`booting` flag makes over-clicking harmless; `__osState === 'locked'`
-is the probe). A HALTED tab still holds the lock (worker alive until
-close) — deliberate, and the new os-boots.mjs legs assert it. Headless
-`boot.js` stays unguarded by design (flock follow-up noted in the
-item). No image bump — no seeded source changed.
+**0036 (seed the REPLs) landed 2026-07-09** — dev log
+`logs/2026-07-09/seed-repls.md`. `/bin/lua`, `/bin/micropython`,
+`/bin/sqlite3` are image.json `project` entries; **image v31** (fresh
+bake 9.1s → 16.1s — mp is the heavy TU set, not sqlite; prebaked-blob
+boots don't pay it). En route, test-first: **brokered fsync crashed the
+process worker** (toWasmEnv's inline `this._s.flush()` — RemoteFS has no
+`_s`; sqlite3's file-DB journal was the first brokered fsync caller
+ever). fsync is now a dispatched fs method + FS_FSYNC RPC (0x041F);
+when touching toWasmEnv, dispatch via `this.` — never BlockFS-private
+state. New `tests/kernel/test_repl_pty_e2e.js` drives all three REPLs
+interactively on a kernel pty (registered in run.js; ~8s of vendor
+compiles by design). micropython is the minimal port — REPL only (argv
+ignored, no open()/import); a unix-port upgrade would be a new item.
+No REPL menu entries: os-shell.mjs pixel-asserts exactly 7 baked menu
+rows — desktop integration belongs to the 0047–0049 wave.
 
-**0035 (spawn-capable applets) landed 2026-07-09** — dev log
-`logs/2026-07-09/spawn-applets.md`; /bin is 75 multicall names, the
-multicall links the vfork shim, tar -z / find -exec / xargs / awk
-system() really spawn. **Image v30.**
+**0045 (two-tab boot guard) landed 2026-07-09** — dev log
+`logs/2026-07-09/two-tab-boot-guard.md`. Web Lock on the OPFS image pair
+held for the tab's lifetime; loser gets guard screen + Retry
+(`__osState === 'locked'` probe). Headless boot.js stays unguarded by
+design (flock follow-up noted in the item).
 
 **Still owed from 0039**: the pointer-lock HUMAN check was deferred by
 BOTH sweep rounds. It is a MUST for WM sweep round 3 — first free moment
 with a human at the keys: quake lock on click, ESC unlock, click
 re-lock, VT-switch release.
+
+**Browser sweep note**: 0036 changed host.js/kernel.js (fsync) and the
+image (v31). The kernel + blockfs suites passed; the manual
+`tests/browser/os-*.mjs` sweep has NOT been re-run for it — worth
+folding into the next round that touches os/ (the fsync change is off
+the SDL/input/audio paths, so it rode on the headless suites).
 
 **Concurrent work note**: another session is landing SS-INTEROP slices
 (`todos/SS-INTEROP.md`, host.js .ss-module support). If host.js shows
@@ -36,23 +47,25 @@ files.
 
 ## The queue (todos/README.md is authoritative)
 
-Next up: `0036` seed the REPLs (lua/micropython/sqlite3 — measure
-sqlite's seed cost first), then `0037` wasm module cache, the WebGPU
-app port (WEBGPU.md), `0041` __gcstr, `0042` wc fork bring-up, the
-kernel-POSIX batch (0043/0044/0046), networking (0052/0053,
-NETWORK.md), the desktop wave (0047→0048→0049, 0050). (`0006`
-threads+atomics stays deferred.)
+Next up: `0037` wasm module cache, the WebGPU app port (WEBGPU.md),
+`0041` __gcstr, `0042` wc fork bring-up, the kernel-POSIX batch
+(0043/0044/0046), networking (0052/0053, NETWORK.md), the desktop wave
+(0047→0048→0049, 0050). (`0006` threads+atomics stays deferred.)
 
 ## Gotchas carried forward
 
 - **Editing seeded sources or coreutils.json/bin.json requires bumping
-  `os/image.json` `version`** (now 30) — a same-version blob is reused,
+  `os/image.json` `version`** (now 31) — a same-version blob is reused,
   and a LIBC change in compiler.js counts (baked binaries) — rebake
   `os/os-system.img` with `node tools/mkimage.js` after.
+- REPL-over-pty framing (new, from 0036): micropython emits `\r\n`
+  itself and ONLCR doubles the `\r` (`42\r\r\n`); sqlite3 on a tty
+  defaults to box-drawn tables (`.mode list` to match bare values);
+  don't anchor pty markers on `\r\n` seams across multi-line writes.
+  Details in the dev log.
 - **busybox.config changes**: regenerate via /tmp/busybox-1.37.0
-  kconfig (`conf -o` + `conf -s` — the built `scripts/kconfig/conf` is
-  still there), then re-apply the two WASM PORT hand-patches to
-  autoconf.h (exec-path "/bin/sh", NOMMU comment).
+  kconfig (`conf -o` + `conf -s`), then re-apply the two WASM PORT
+  hand-patches to autoconf.h (exec-path "/bin/sh", NOMMU comment).
 - 0034/0035 busybox config decisions are recorded in
   `vendor/busybox/README.md` — don't re-litigate casually.
 - 0034's three known limitations are TRACKED FIX-WORTHY in
@@ -64,8 +77,8 @@ threads+atomics stays deferred.)
   pointer-address line. Verify the tests' OWN asserts before updating.
 - **0040 layout in tests**: `ls /` is `bin dev etc root run tmp usr var`;
   headless images pair as `foo-system.img` + `foo-root.img`; OPFS names
-  `os-system.v5.img`/`os-root.v5.img` — those names are now ALSO the
-  Web Lock name (0045): renaming the images renames the lock with them
+  `os-system.v5.img`/`os-root.v5.img` — those names are ALSO the Web
+  Lock name (0045): renaming the images renames the lock with them
   (kernel-worker.js consts, single point).
 - EROFS guards in host.js run AFTER the path walk — keep that ordering
   (escaping `/usr/local` paths depend on it).
@@ -89,7 +102,7 @@ threads+atomics stays deferred.)
   per landing, README next-up current.
 - compiler.js must stay browser-clean (no bare `process.*`).
 - Fix bugs test-first: failing test commit, then the fix (0034, 0039,
-  0035 all followed it; see e590dbd → e501702).
+  0035, 0036 all followed it; see 47d29d7 → f4203f6).
 - MUST-MATCH blocks: WM protocol kernel.js ↔ os/wm_proto.h ↔
   test_wm_policy.js; surface/ring layout kernel.js ↔ host.js; WMEV ↔
   <SDL3> ↔ host.js; audio ring kernel.js ↔ host.js; SDL audio format
@@ -101,9 +114,9 @@ threads+atomics stays deferred.)
   does).
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
   invariants, 0013–0040's decisions, DISK-IMAGE.md's settled layout,
-  0045's no-steal/no-SharedWorker calls.
+  0045's no-steal/no-SharedWorker calls, 0036's minimal-port-mp scope.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0036 seed the REPLs, or something else."
+to tackle: 0037 wasm module cache, or something else."

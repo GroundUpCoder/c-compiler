@@ -217,6 +217,12 @@ The single highest-leverage project in the repo. **The substrate is DONE**
 - ~~Coreutils~~ DONE (0010): busybox multicall `/bin/coreutils` + symlinks
   (ls cat cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
   basename dirname grep egrep fgrep sed echo printf test `[` kill).
+- ~~REPLs~~ DONE (0036): `/bin/lua`, `/bin/micropython` (minimal port —
+  REPL only), `/bin/sqlite3` seeded from their vendor bin.json projects;
+  piped use EOF-exits cleanly, interactive use works at the hush prompt
+  and over ptys (`tests/kernel/test_repl_pty_e2e.js`). sqlite3's
+  file-backed journal fsync exposed and fixed the brokered-fs fsync crash
+  (FS_FSYNC RPC).
 - Small enablers as they come up: `poll`, `mmap` (at least MAP_ANON;
   file-backed can be read-copy at first).
 
