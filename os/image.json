@@ -1,5 +1,5 @@
 {
-  "version": 29,
+  "version": 30,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -76,6 +76,9 @@
       "/usr/bin/[": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/awk": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/base64": {
         "link": "/usr/bin/coreutils"
       },
@@ -106,6 +109,9 @@
       "/usr/bin/dd": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/diff": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/dirname": {
         "link": "/usr/bin/coreutils"
       },
@@ -130,10 +136,19 @@
       "/usr/bin/fgrep": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/find": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/fold": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/grep": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/gunzip": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/gzip": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/head": {
@@ -146,6 +161,9 @@
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/kill": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/less": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/ln": {
@@ -226,6 +244,9 @@
       "/usr/bin/tail": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/tar": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/tee": {
         "link": "/usr/bin/coreutils"
       },
@@ -268,7 +289,13 @@
       "/usr/bin/whoami": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/xargs": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/yes": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/zcat": {
         "link": "/usr/bin/coreutils"
       }
     }

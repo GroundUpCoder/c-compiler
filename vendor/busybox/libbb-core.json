@@ -8,8 +8,7 @@
   ],
   "compilerArgs": [
     "-DBB_VER=\"1.37.0-wasm\"",
-    "-DBB_GLOBAL_CONST=",
-    "-DPV_NO_INTERCEPT"
+    "-DBB_GLOBAL_CONST="
   ],
   "sources": [
     "port/libbb_stubs.c",

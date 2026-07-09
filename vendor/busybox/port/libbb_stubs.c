@@ -45,3 +45,17 @@ gid_t* FAST_FUNC bb_getgroups(int *ngroups, gid_t *group_array)
     if (ngroups) *ngroups = 1;
     return group_array;
 }
+
+/* bb_pwd.c replacement (todos/0035): tar create stamps uname/gname into
+ * every header — on a single-user system the answer is fixed, so these
+ * skip libpwdgrp entirely (the FEATURE_LS_USERNAME-off philosophy). */
+const char* FAST_FUNC get_cached_username(uid_t uid)
+{
+    (void)uid;
+    return "root";
+}
+const char* FAST_FUNC get_cached_groupname(gid_t gid)
+{
+    (void)gid;
+    return "root";
+}

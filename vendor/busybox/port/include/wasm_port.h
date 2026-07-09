@@ -133,19 +133,11 @@ int  pv_sigprocmask(int how, const sigset_t *set, sigset_t *old);
 /* open is variadic; route both arities */
 #define open(...)                 PV_OPEN_PICK(__VA_ARGS__, pv_open3, pv_open2)(__VA_ARGS__)
 #define PV_OPEN_PICK(a, b, c, f, ...) f
-#else
-/* No-spawn builds (the coreutils multicall, todos/0010/0034): nothing may
- * exec, and this libc has no exec* at all. libbb/executable.c still links
- * (`which` wants find_executable); its BB_EXECVP_or_die — env's exec path
- * — needs an execvp symbol, so this always-fail stand-in keeps the link
- * honest: `env cmd` dies "can't execute: Function not implemented" (126).
- * Spawn-capable applets are todos/0035. (vfork_spawn.c also defines
- * PV_NO_INTERCEPT and sees this — unused there; it has pv_execvp.) */
-static inline int execvp(const char *file, char *const argv[]) {
-	(void)file; (void)argv;
-	errno = ENOSYS;
-	return -1;
-}
 #endif
+/* (Since todos/0035 BOTH binaries link vfork_spawn.c — the coreutils
+ * multicall gained the spawn-capable applets (find -exec, xargs, awk,
+ * tar, env-exec), so the former PV_NO_INTERCEPT always-fail execvp stub
+ * is gone. PV_NO_INTERCEPT remains only for the port's own TUs, which
+ * need the real functions.) */
 
 #endif /* BB_WASM_PORT_H */

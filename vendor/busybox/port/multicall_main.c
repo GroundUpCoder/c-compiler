@@ -15,13 +15,28 @@
  * Invoked under an unknown name (or as plain "coreutils"), it falls back
  * to argv[1] as the applet name: `coreutils ls -l` works like busybox's
  * own `busybox ls -l`.
+ *
+ * Since todos/0035 the multicall links the vfork-on-__spawn shim
+ * (port/vfork_spawn.c) — the spawn-capable applets (find -exec, xargs,
+ * awk via popen/system, tar's seamless .gz, env-exec) journal their
+ * "vfork children" exactly like hush does. The former PV_NO_INTERCEPT
+ * define is gone with the no-spawn era: this TU compiles under the
+ * intercept macros like every applet TU (they pass straight through to
+ * the real calls outside journaling mode).
  */
-#define PV_NO_INTERCEPT 1
 #include "libbb.h"
 
+int awk_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int baseNUM_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int basename_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int cat_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int diff_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int find_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int gunzip_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int gzip_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int less_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int tar_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int xargs_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int cksum_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int cmp_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int comm_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -144,6 +159,7 @@ static const struct applet {
 	int (*mainfn)(int argc, char **argv);
 } applets[] = {
 	{ "[",        test_main },
+	{ "awk",      awk_main },
 	{ "base64",   baseNUM_main },
 	{ "basename", basename_main },
 	{ "cat",      cat_main },
@@ -154,6 +170,7 @@ static const struct applet {
 	{ "cut",      cut_main },
 	{ "date",     date_main },
 	{ "dd",       dd_main },
+	{ "diff",     diff_main },
 	{ "dirname",  dirname_main },
 	{ "du",       du_main },
 	{ "echo",     echo_main },
@@ -162,12 +179,16 @@ static const struct applet {
 	{ "expr",     expr_main },
 	{ "false",    false_main },
 	{ "fgrep",    grep_main },
+	{ "find",     find_main },
 	{ "fold",     fold_main },
 	{ "grep",     grep_main },
+	{ "gunzip",   gunzip_main },
+	{ "gzip",     gzip_main },
 	{ "head",     head_main },
 	{ "hostname", hostname_main },
 	{ "id",       id_main },
 	{ "kill",     kill_main },
+	{ "less",     less_main },
 	{ "ln",       ln_main },
 	{ "ls",       ls_main },
 	{ "md5sum",   md5_sha1_sum_main },
@@ -194,6 +215,7 @@ static const struct applet {
 	{ "sync",     sync_main },
 	{ "tac",      tac_main },
 	{ "tail",     tail_main },
+	{ "tar",      tar_main },
 	{ "tee",      tee_main },
 	{ "test",     test_main },
 	{ "touch",    touch_main },
@@ -208,7 +230,9 @@ static const struct applet {
 	{ "wc",       wc_main },
 	{ "which",    which_main },
 	{ "whoami",   whoami_main },
+	{ "xargs",    xargs_main },
 	{ "yes",      yes_main },
+	{ "zcat",     gunzip_main },
 };
 
 static const struct applet *find_applet(const char *name)

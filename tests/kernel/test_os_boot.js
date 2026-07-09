@@ -151,8 +151,9 @@ for (let i = 0; i < expectCu.length; i++) {
 // (cmp/du/dd/split/truncate/unlink/readlink/realpath/mktemp/stat/sync),
 // misc (yes/seq/env/expr/date/uname/usleep/which/cksum/base64), hashes,
 // and the single-user stubs (whoami/id/hostname). `yes | head` doubles as
-// the EPIPE-terminates-the-writer check; `env /bin/true` documents the
-// designed no-exec limit of the multicall (spawning applets are 0035).
+// the EPIPE-terminates-the-writer check; `env /bin/true` exercises the
+// bare-exec emulation the multicall gained with todos/0035 (spawn + wait
+// + exit-with-child-status behind the scenes).
 r = session([
   'cd /tmp && mkdir cu2 && cd cu2',
   'seq 3 | tac',
@@ -215,11 +216,65 @@ const expectCu2 = [
   'mktemp-ok', 'sync-ok', 'cmp-same',
   '/etc',                                   // du -s field 2
   '1',                                      // env sees PATH
-  'env-exec=126',                           // no exec in the multicall (0035)
+  'env-exec=0',                             // bare-exec emulation (0035)
   'usleep-ok',
 ];
 for (let i = 0; i < expectCu2.length; i++) {
   check('coreutils2[' + i + '] = ' + JSON.stringify(expectCu2[i]), cu2[i] === expectCu2[i], JSON.stringify(cu2[i]));
+}
+
+// ---- coreutils batch 3: the spawn-capable applets (todos/0035) ----
+// find -exec / xargs spawn real processes through the vfork-on-__spawn
+// shim (now linked into the multicall); awk exercises popen (cmd |
+// getline) and system(); tar -z covers BOTH shim paths — create spawns
+// gzip via the patched vfork_compressor, extract re-execs `gunzip -cf -`
+// via the NOMMU fork_transformer; diff/gzip/gunzip/zcat are file-only.
+r = session([
+  'cd /tmp && mkdir cu3 && cd cu3',
+  'mkdir -p s && echo alpha > s/a.txt && printf "b1\\nb2\\n" > s/b.txt',
+  'find s -name "*.txt" | sort',
+  'find s -name "a.*" -exec wc -c {} \\;',
+  'find s -type f | sort | xargs -n1 basename',
+  'printf "one two\\nthree four\\n" | awk "{print \\$NF}"',
+  'awk "BEGIN { \\"echo piped\\" | getline v; print \\"got-\\" v }"',
+  'awk "BEGIN { r = system(\\"echo sys-out\\"); print \\"sys-rc=\\" r }"',
+  'tar cf x.tar s && tar tf x.tar | sort',
+  'mkdir e1 && cd e1 && tar xf ../x.tar && cat s/a.txt && cd ..',
+  'tar czf x.tgz s',
+  'mkdir e2 && cd e2 && tar xzf ../x.tgz && cat s/b.txt && cd ..',
+  'tar cf - s | gzip | gunzip | tar tf - | sort | tail -1',
+  'gzip -k x.tar && ls x.tar x.tar.gz',
+  'zcat x.tar.gz | cmp - x.tar && echo zcat-matches',
+  'gunzip -c x.tar.gz | wc -c && rm x.tar.gz',
+  'echo one > d1 && echo two > d2',
+  'diff d1 d2 > d.out; echo diff-rc=$?',
+  'tail -2 d.out',
+  'diff d1 d1 && echo diff-same-rc=$?',
+  'exit',
+  '',
+].join('\n'));
+check('coreutils batch-3 session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+const cu3 = r.stdout.split('\n');
+const expectCu3 = [
+  's/a.txt', 's/b.txt',                     // find -name
+  '6 s/a.txt',                              // find -exec wc -c ("alpha\n")
+  'a.txt', 'b.txt',                         // find | xargs -n1 basename
+  'two', 'four',                            // awk $NF
+  'got-piped',                              // awk cmd | getline (popen)
+  'sys-out', 'sys-rc=0',                    // awk system()
+  's/', 's/a.txt', 's/b.txt',               // tar cf + tf
+  'alpha',                                  // tar xf roundtrip content
+  'b1', 'b2',                               // tar czf/xzf roundtrip content
+  's/b.txt',                                // piped tar|gzip|gunzip|tar
+  'x.tar', 'x.tar.gz',                      // gzip -k keeps the original
+  'zcat-matches',                           // zcat == original bytes
+  '3584',                                   // gunzip -c byte count (7 tar records)
+  'diff-rc=1',                              // differing files exit 1
+  '-one', '+two',                           // unified diff hunk body
+  'diff-same-rc=0',                         // identical files exit 0
+];
+for (let i = 0; i < expectCu3.length; i++) {
+  check('coreutils3[' + i + '] = ' + JSON.stringify(expectCu3[i]), cu3[i] === expectCu3[i], JSON.stringify(cu3[i]));
 }
 
 // ---- second boot, same image: persistence + no re-seed ----

@@ -240,10 +240,76 @@ function sessionNested() {
     JSON.stringify(sec('nest4')));
 }
 
+/* ---- session D: less inside the terminal (todos/0035) ----
+ * The pager is pure tty work over the same pty the vi leg proved: alt
+ * screen in, space to page, q back to the shell. Assertions: the shell
+ * regains the keyboard after q (the rc-file echo executes), rc is 0, and
+ * the shot taken while less was up actually rendered the file (pixel
+ * count) with a status row at the bottom. */
+function sessionLess() {
+  const script = [
+    'seq 100 > /tmp/big.txt',
+    'term &',
+    'sleep 5',
+    'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
+    keys('less /tmp/big.txt\r'),
+    'sleep 2.5',
+    'wmctl shot $TSID /root/tless.ppm && echo shotless-ok',
+    keys(' '),                       // space: page down inside less
+    'sleep 1.5',
+    keys('q'),                       // quit back to hush
+    'sleep 1.5',
+    keys('echo lessrc=$? > /tmp/lessrc\r'),
+    'sleep 1.5',
+    keys('exit\r'),
+    'sleep 2.5',
+    'echo ==rc',
+    'cat /tmp/lessrc',
+    'echo ==done',
+    '',
+  ].join('\n');
+  const d = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 420000 });
+  if (d.error) throw d.error;
+  const out = d.stdout;
+  check('less shot written', out.includes('shotless-ok'), out.slice(-300));
+  const rc = (out.split('==rc\n')[1] || '').split('==')[0].trim();
+  check('q quits less back to the shell, exit 0 (typed echo ran at hush)',
+    rc === 'lessrc=0', JSON.stringify(rc));
+
+  // Pixel pass on the in-less shot (same parser as session B).
+  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: 'cat /root/tless.ppm\n',
+      timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+  if (b.error) throw b.error;
+  const head = b.stdout.toString('latin1', 0, 32);
+  const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+  check('less shot parses at 640x432', !!m && +m[1] === 640 && +m[2] === 432,
+    JSON.stringify(head.slice(0, 16)));
+  if (m) {
+    const w = +m[1], h = +m[2], data = m[0].length;
+    const fg = (y0, y1) => {
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = data + (y * w + x) * 3;
+          if (b.stdout[i] | b.stdout[i + 1] | b.stdout[i + 2]) n++;
+        }
+      }
+      return n;
+    };
+    check('less rendered the file body (numbered lines fill the screen)',
+      fg(0, h - 18) > 1500, String(fg(0, h - 18)));
+    check('less status row rendered in the bottom cell row',
+      fg(h - 18, h) > 100, String(fg(h - 18, h)));
+  }
+}
+
 (async () => {
   sessionTerm();
   sessionFrames();
   sessionNested();
+  sessionLess();
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures ? `\nterm e2e: ${failures} FAILED` : '\nterm e2e: PASS');

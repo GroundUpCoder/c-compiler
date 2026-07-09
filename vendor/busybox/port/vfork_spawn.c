@@ -17,6 +17,7 @@
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>   /* the bare-exec emulation reaps its child */
 #include <termios.h>
 #include <unistd.h>
 
@@ -186,8 +187,6 @@ int pv_execve(const char *path, char *const argv[], char *const envp[])
     char abs[1024];
     int pid;
 
-    if (!pv_state.in_child) { errno = ENOSYS; return -1; }  /* no real exec */
-
     /* The kernel loads images by absolute path (spawn specs don't carry
      * a cwd for the LOOKUP, only for the child): resolve ./a.out here. */
     if (path[0] != '/') {
@@ -203,6 +202,27 @@ int pv_execve(const char *path, char *const argv[], char *const envp[])
     spec.argv = argv;
     spec.envp = envp;          /* hush passes environ or a built env */
     spec.cwd = 0;              /* inherit */
+
+    if (!pv_state.in_child) {
+        /* Bare exec, outside any vfork child (env's BB_EXECVP, tar's
+         * re-exec'd helpers under an exec-only applet): there is no real
+         * exec on this platform, so emulate the observable behavior —
+         * spawn the image with an EMPTY journal (fds/cwd/pgroup inherit)
+         * and become a shell around it: wait, then exit with its status.
+         * The lingering parent is invisible to scripts (todos/0035). */
+        int status = 0;
+        spec.actions = 0;
+        spec.n_actions = 0;
+        spec.flags = 0;
+        spec.pgid = 0;
+        pid = __spawn(&spec);
+        if (pid < 0) return -1;             /* errno from the spawn */
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            continue;
+        if (WIFSIGNALED(status)) _exit(128 + WTERMSIG(status));
+        _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 127);
+    }
+
     spec.actions = pv_state.acts;
     spec.n_actions = pv_state.n_acts;
     spec.flags = (unsigned)pv_state.spawn_flags;

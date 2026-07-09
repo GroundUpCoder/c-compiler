@@ -1,4 +1,4 @@
-# busybox — the shell port (todos/0005) + coreutils (todos/0010, 0034)
+# busybox — the shell port (todos/0005) + coreutils (todos/0010, 0034, 0035)
 
 Two binaries come out of this vendor tree:
 
@@ -13,7 +13,8 @@ Two binaries come out of this vendor tree:
   `port/multicall_main.c` (sleep: upstream `sleep.c` wasn't vendored,
   added for todos/0014's harnesses; whoami/id/hostname: single-user stubs
   printing root/0/localhost rather than dragging in libpwdgrp — the
-  `FEATURE_LS_USERNAME`-off philosophy). The
+  `FEATURE_LS_USERNAME`-off philosophy); plus — batch 3, todos/0035, the
+  SPAWN-CAPABLE set — **find xargs awk tar gzip gunzip zcat less diff**. The
   `/bin` applet names are BlockFS symlinks to it and dispatch is by
   argv[0] (`port/multicall_main.c` — a hand-rolled table, NOT upstream's
   kbuild-generated appletlib, so the 0005 appletlib stubs stay). Invoked
@@ -23,20 +24,41 @@ Two binaries come out of this vendor tree:
 
   Why multicall and not per-applet builds: the OS compiles its userland
   from source at first boot (os/image.json), and 27 separate builds cost
-  ~26s of seeding vs ~2s for this one binary — measured. Applet builds
-  also get `-DPV_NO_INTERCEPT`: they never spawn, so the vfork journal
-  interception (below) is compiled out and `vfork_spawn.c` isn't linked.
-  Corollary (0034): NOTHING in the multicall can exec — `env cmd` dies
-  126 "Function not implemented" via the always-fail `execvp` stand-in in
-  `wasm_port.h`'s `PV_NO_INTERCEPT` branch (bare `env` prints the
-  environment fine). Spawn-capable applets (find/xargs/awk/tar/env-exec)
-  are todos/0035. Config notes for batch 2: od is the non-DESKTOP od
+  ~26s of seeding vs ~2s for this one binary — measured.
+
+  Since todos/0035 the multicall LINKS THE SHIM (`vfork_spawn.c` +
+  `port/spawn_helpers.c` — libbb's spawn()/xspawn()/spawn_and_wait()
+  hand-rolled over pv_*, replacing vfork_daemon_rexec.c which drags in
+  the kbuild applet tables): find -exec and xargs journal their "vfork
+  children" exactly like hush; awk's `cmd | getline` and `system()` go
+  through libc popen/system (posix_spawn of /bin/sh); tar -cz spawns
+  gzip via the patched `vfork_compressor`, tar -xz re-execs
+  `gunzip -cf -` via the NOMMU `fork_transformer`, both landing on
+  /bin symlinks back into this same binary. `pv_execve` also grew a
+  BARE-EXEC emulation (exec outside any vfork child = spawn with an
+  empty journal + wait + exit-with-child-status), so 0034's designed
+  `env cmd` = 126 limit is gone — env execs for real. The former
+  `-DPV_NO_INTERCEPT` applet-build define is history; only the port's
+  own TUs (vfork_spawn.c, libbb_stubs.c, the two mains) still define it
+  to reach the real functions.
+
+  Config notes for batch 2: od is the non-DESKTOP od
   (BSD-style `-bcdox`, no GNU `-A/-t` — that's od_bloaty, DESKTOP-gated);
   `FEATURE_DATE_ISOFMT` stays OFF (needs a real strptime this libc
   doesn't have — see the date.c patch below); `FEATURE_STAT_FILESYSTEM`
   OFF (no statfs); `FEATURE_SYNC_FANCY` OFF (no syncfs);
   `FEATURE_DD_SIGNAL_HANDLING` OFF (status-on-SIGUSR1, not worth the
-  signal surface); `CONFIG_UNAME_OSNAME="wasm"`.
+  signal surface); `CONFIG_UNAME_OSNAME="wasm"`. For batch 3 (0035):
+  `FEATURE_ALLOW_EXEC=y` (without it awk's system() silently returns 0
+  by upstream design); `USE_PORTABLE_CODE=y` (find.c's -exec argv is
+  alloca, not a VLA — this compiler has no VLAs);
+  `FEATURE_SEAMLESS_GZ=y` only (no xz/bz2/lzma/Z decompressors
+  vendored); `FEATURE_TAR_TO_COMMAND` OFF (would spawn a shell per
+  file; the OPT_2COMMAND block is #if-guarded out — see the patch
+  table); `FEATURE_TAR_UNAME_GNAME` OFF (tar headers stamp root/root
+  via libbb_stubs.c's get_cached_username/groupname, single-user);
+  less has BRACKETS/FLAGS/TRUNCATE/MARKS/REGEXP/WINCH/LINENUMS/RAW on,
+  ASK_TERMINAL/DASHCMD/ENV off.
 
   hush's NOMMU builtin-in-pipe path still re-execs `/bin/sh` (see the
   find_builtin patch below) rather than the real applets: the cost is one
@@ -86,7 +108,13 @@ journaling mode:
 | `src/coreutils/test.c` | `res = setjmp(leaving)` → supported if-form (every longjmp passes 2) |
 | `src/coreutils/sort.c` | tiny local `strptime()` under `__wasm__` — this libc has none and `-M` only ever asks for `"%b"` |
 | `src/coreutils/date.c` | strptime branch (`-D`, ISOFMT-gated) wrapped in `#if ENABLE_FEATURE_DATE_ISOFMT` — implicit declarations are hard errors in this compiler, so upstream's if(0)-DCE idiom can't carry the undeclared strptime; ISOFMT stays off |
-| `port/include/wasm_port.h` | `PV_NO_INTERCEPT` branch grew an always-fail `execvp` (ENOSYS) so `BB_EXECVP_or_die` (env's exec path) links in the no-spawn multicall |
+| `port/include/wasm_port.h` | (0035) the former `PV_NO_INTERCEPT` always-fail `execvp` stub is gone — both binaries link the shim now; `pv_execve` grew the bare-exec emulation (spawn with empty journal + wait + exit) for env-exec-class callers |
+| `port/spawn_helpers.c` | (0035) libbb `spawn()`/`xspawn()`/`spawn_and_wait()` hand-rolled over the pv shim — upstream's vfork_daemon_rexec.c needs the kbuild applet tables this port replaced |
+| `src/archival/tar.c` | (0035) `vfork_compressor`'s xvfork site → setjmp shim form; `execlp` → `execvp` (no execlp in this libc, the intercepts route execv*); `OPT_2COMMAND` block #if-guarded (address-taken `data_extract_to_command` survives if(0) DCE — only dead CALLS are dropped) |
+| `src/archival/libarchive/open_transformer.c` | (0035) `fork_transformer`'s xvfork site → setjmp shim form (the journaled "child" re-execs `gunzip -cf -`, NOMMU-style) |
+| `src/findutils/xargs.c` | (0035) `ISSPACE` statement expression → ALWAYS_INLINE helper (no GNU statement exprs; same rewrite as libbb.h's ctype trio) |
+| `src/editors/awk.c` | (0035) F_rn: `#elif` branch composing 63 uniform bits from five 15-bit rand() draws — this libc's RAND_MAX is 32767, upstream only handles ≥31-bit |
+| `src/miscutils/less.c` | (0035) three VLAs (`re_wrap` linebuf, `print_found`/`print_ascii` buf) → xmalloc/free (no VLAs in this compiler) |
 | `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0); 6 GNU `?:` elvis sites → plain ternary (side-effect-free operands, this compiler has no `?:`) |
 | `src/procps/kill.c` | killall/killall5 branches guarded out (need /proc scanning) |
 | `port/libbb_stubs.c` | appletlib globals (`applet_name` — overridable via `PORT_APPLET_NAME`, `xfunc_error_retval`, `bb_show_usage`, `string_array_len`), `bb_clk_tck`, single-user `bb_getgroups` |
@@ -177,6 +205,25 @@ From 0034 (coreutils batch 2 — dev log
   `dump.c` (od), `bb_bswap_64.c`, `executable.c` (which/env — now also
   in coreutils.json, not just hush's bin.json), `warn_ignoring_args.c`
   (sync).
+
+From 0035 (spawn-capable applets — dev log
+`logs/2026-07-09/spawn-applets.md`):
+
+- **Compiler**: a declaration between `switch (...) {` and the first
+  `case` label lost its wasm local (C11 6.8.4.2 keeps it in scope for
+  the whole body; the initializer is legitimately skipped) — awk.c's
+  `parse_expr` does exactly this; fixed +
+  `tests/unit/conformance/switch_decl_before_case`.
+- **libc addition**: `sched.h` with a no-op `sched_yield()` (less's
+  non-blocking-stdin retry loop; single-threaded cooperative processes
+  have nobody to yield to).
+- **libbb_stubs.c** grew `get_cached_username`/`get_cached_groupname`
+  single-user stubs (root/root — tar headers want them
+  unconditionally).
+- New libbb files vendored: `replace.c` (xargs -I), `isqrt.c` (awk) —
+  plus the whole `src/archival/` + `src/archival/libarchive/` slice
+  (tar/gzip/bbunzip + the transformer framework); `endofname.c` (awk)
+  joins coreutils.json (it was hush-only).
 
 ## Known limitations
 
