@@ -14,6 +14,9 @@
 //   - TIOCGWINSZ sees tty.resize() over the brokered fs (todos/0011: the
 //     ioctl guard read _stdinSab — never set in brokered mode — so every
 //     brokered process saw 80x24 forever; vi was the first to notice)
+//   - fsync/fdatasync work on brokered fds (todos/0036: the env's inline
+//     fsync used the BlockFS-private store handle, crashing the worker —
+//     sqlite3's journal fsync was the first caller)
 //
 // Run: node tests/kernel/test_fs_e2e.js
 'use strict';
@@ -136,6 +139,17 @@ int main(void) {
     ioctl(0, TIOCGWINSZ, &ws);
     printf("ws=%dx%d\\n", ws.ws_col, ws.ws_row);
 
+    /* 9: fsync/fdatasync on a brokered fd (regression: toWasmEnv's inline
+       fsync reached for the BlockFS-private store handle, which RemoteFS
+       doesn't have — the TypeError killed the worker, so any program that
+       fsync'd a file died SIGSEGV; sqlite's journal was the first). Also
+       exercise the non-file kinds: fsync(tty fd) must be a harmless 0. */
+    fd = open("/sync.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    write(fd, "S", 1);
+    printf("fsync=%d fdatasync=%d ttyfsync=%d badfsync=%d\\n",
+           fsync(fd), fdatasync(fd), fsync(1), fsync(77) == 0 ? 1 : 0);
+    close(fd);
+
     printf("done\\n");
     return 42;
 }
@@ -254,6 +268,7 @@ const watchdog = setTimeout(() => {
     'hogkilled=1',
     'R8',
     'ws=132x43',
+    'fsync=0 fdatasync=0 ttyfsync=0 badfsync=0',   // badfsync: kernel says EBADF
     'done',
   ];
   for (let i = 0; i < expect.length; i++) {
