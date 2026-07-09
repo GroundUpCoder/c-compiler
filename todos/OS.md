@@ -308,8 +308,11 @@ The original sketch, kept for context:
   recorded v2.
 - **msvc extensions**: which ones are actually worth it (`__declspec`?
   `#pragma pack` already?) — driven by ports, not speculation.
-- **Multi-tab**: todos/0045 locks the disk to ONE kernel (Web Locks).
-  "Seats v2" — extra tabs as remote seats over clone-based transports
-  (os.html is already a postMessage bridge; SABs don't cross agent
-  clusters; SharedWorker blocked by SyncAccessHandle being
-  dedicated-worker-only) — sketched in the 0045 item, unscheduled.
+- **Multi-tab**: todos/0045 (LANDED 2026-07-09) locks the disk to ONE
+  kernel — a Web Lock named after the OPFS image pair, taken in
+  kernel-worker.js before any mount; the losing tab gets a guard
+  screen + Retry. "Seats v2" — extra tabs as remote seats over
+  clone-based transports (os.html is already a postMessage bridge;
+  SABs don't cross agent clusters; SharedWorker blocked by
+  SyncAccessHandle being dedicated-worker-only) — sketched in the 0045
+  item, unscheduled.

@@ -143,9 +143,15 @@ at a time via the Terminal/Desktop tab bar (Ctrl+Alt+F1/F2 as aliases),
 boot lands on VT1, zero kernel change; browser tests must sit on VT2 for canvas pixels/
 input and VT1 for shell typing — the `window.__osVtSwitch(n)` probe) →
 `kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
-/bin/cc) → `process-worker.js` per pid. `boot.js` is the headless twin —
-same kernel/manifest under Node with the tty on stdio
-(`echo 'ls /' | node os/boot.js`). The OS store is a WRITABLE root
+/bin/cc) → `process-worker.js` per pid. One kernel per origin
+(todos/0045): kernel-worker takes a Web Lock named after the OPFS image
+pair BEFORE any mount and holds it for the tab's lifetime — a second
+tab gets `boot-locked` → os.html's guard screen + Retry (`boot-retry`
+re-enters; the lock frees when the winner closes; `__osState ===
+'locked'` is the probe). `boot.js` is the headless twin — same
+kernel/manifest under Node with the tty on stdio
+(`echo 'ls /' | node os/boot.js`) — deliberately unguarded (a
+flock-style guard is a noted-only follow-up in the 0045 item). The OS store is a WRITABLE root
 volume at `/` + a READ-ONLY baked system blob at `/usr` (todos/0040,
 design `todos/DISK-IMAGE.md`; supersedes 0026's system-at-/ split),
 host.js `MountFS` on top: `/bin` is a root-volume symlink → `/usr/bin`

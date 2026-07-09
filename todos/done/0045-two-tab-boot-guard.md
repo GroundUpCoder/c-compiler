@@ -1,6 +1,11 @@
 # 0045 — two-tab boot guard (Web Locks)
 
-- **Status**: open
+- **Status**: done (2026-07-09) — dev log
+  `logs/2026-07-09/two-tab-boot-guard.md`. Web Lock in kernel-worker.js
+  BEFORE any OPFS mount, named after the v5 image pair; os.html guard
+  screen + Retry; three new os-boots.mjs legs (second tab locked, retry
+  after close boots + reaches a live shell). Headless flock-guard stays
+  a noted-only follow-up; the "seats v2" sketch below stands unscheduled.
 - **Depends**: —
 - **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
