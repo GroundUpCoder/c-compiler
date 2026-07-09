@@ -58,6 +58,17 @@ verifies every open file is listed exactly once, no ghost ids, deps reference
 real todos, and no `blockedBy` cycles). Its tests live in `todos/queue.test.js`
 (`node todos/queue.test.js`).
 
+A committed **pre-commit hook** (`todos/githooks/pre-commit`) runs that check on
+every commit so a drifted manifest can't land. It's off until you point git at
+it once per clone (the setting is local, not committed):
+
+```
+git config core.hooksPath todos/githooks
+```
+
+Bypass a single unrelated commit with `git commit --no-verify`. The hook skips
+silently on repos without a `queue.json`.
+
 ### Next up (order of attack)
 
 *(Human-readable narrative of the manifest above — grouped by theme. When it

@@ -23,9 +23,11 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
   attack + the hard/soft dependency split. Mutate it **only** through the CLI
   `node todos/queue.js` (single writer + validator): `add next --slug …` to
   start work, `done <ID>` to close it, `reorder`/`block` to adjust. **`node
-  todos/queue.js check` must pass before committing a queue change.** The prose
-  *Next up* list in `todos/README.md` is now human narrative, not the parsed
-  source. Full convention: `todos/README.md` §1 "Maintaining the queue".
+  todos/queue.js check` must pass before committing a queue change** — a
+  committed pre-commit hook (`todos/githooks/pre-commit`) enforces this once you
+  run `git config core.hooksPath todos/githooks` per clone. The prose *Next up*
+  list in `todos/README.md` is now human narrative, not the parsed source. Full
+  convention: `todos/README.md` §1 "Maintaining the queue".
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.
 

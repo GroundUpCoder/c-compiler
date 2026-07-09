@@ -1,0 +1,22 @@
+#!/bin/sh
+# pre-commit — keep todos/queue.json consistent with the filesystem.
+#
+# The hard net behind the queue convention: no commit lands with a drifted
+# manifest (an open file unlisted, a queued id whose file moved to done/, a
+# dangling dep, a cycle). Runs `node todos/queue.js check` against the working
+# tree; blocks the commit on failure.
+#
+# Install (per clone — core.hooksPath is local, not committed):
+#   git config core.hooksPath todos/githooks
+# Bypass a single commit (e.g. an unrelated WIP) with: git commit --no-verify
+#
+# Skips silently on repos that haven't adopted the manifest.
+[ -f todos/queue.json ] || exit 0
+
+if ! out=$(node todos/queue.js check 2>&1); then
+  echo "pre-commit: todos/queue.js check failed —" >&2
+  echo "$out" >&2
+  echo "Fix the queue (see: node todos/queue.js check) or bypass with: git commit --no-verify" >&2
+  exit 1
+fi
+exit 0
