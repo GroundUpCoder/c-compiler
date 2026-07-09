@@ -17,21 +17,29 @@
  * or dismiss — SDL events dispatch per window by e.*.windowID. Entries
  * come from /etc/menu if that directory exists, else the baked default
  * /usr/share/menu (todos/0040 — systemd-style /etc: user overrides only,
- * first-existing-dir wins): a symlink is spawned directly (the fs
- * resolves it), a one-line text file is an argv line (tty apps ride
- * `term ...`). Children spawn with cwd /root (the wm chdir's at startup —
- * doom finds its WAD by cwd) and are reaped with a WNOHANG poll.
+ * first-existing-dir wins). Children spawn with cwd /root (the wm chdir's
+ * at startup — doom finds its WAD by cwd) and are reaped with a WNOHANG
+ * poll.
  *
  * The desktop layer (todos/0029) is a third borderless window: fullscreen,
  * pinned to the BOTTOM z layer at create (SET_LAYER -1, todos/0038 — the
  * taskbar and Start menu ride the TOP layer, so app windows can neither
  * cover the bar nor sink under the desktop), teal fill + an
  * icon grid from /root/Desktop (re-read on a coarse frame-tick timer).
- * Double-click (SDL event timestamps) launches: a symlink spawns its
- * target, any other regular file opens in `term vi`. Free side effect:
+ * Double-click (SDL event timestamps) launches. Free side effect:
  * desktop clicks — invisible to the WM before (kernel hit-test returned
  * 'desktop' to the embedder only) — are ordinary client clicks on this
  * layer now, so they dismiss the Start menu.
+ *
+ * Launching is ONE mechanism (activate(), todos/0066), shared by the menu
+ * and the desktop (and any future file browser): a symlink spawns its
+ * target (the fs resolves it); a regular file the kernel can exec — wasm
+ * magic `\0asm` or a `#!` script (todos/0065), told apart by peeking the
+ * first bytes — spawns directly; anything else opens in its type's
+ * viewer (`term vi` today). Launcher entries are ordinary executable
+ * scripts (`#!/bin/sh` + a command line), not a private format — the old
+ * first-line-argv menu convention is gone (its seeded user, menu/snake,
+ * became a real script in image.json v36).
  *
  * The kernel keeps its chrome policy (drag, close box, click-to-focus) as
  * the WM-crashed fallback — killing this process leaves the system usable,
@@ -330,6 +338,39 @@ static void reap_kids(void) {
     while (nkids > 0 && waitpid(-1, &st, WNOHANG) > 0) nkids--;
 }
 
+/* "Runnable" = the kernel can exec it (todos/0066): a wasm binary
+ * (`\0asm`) or a `#!` script (shebang exec, todos/0065). Peek the first
+ * bytes — same dispatch the kernel spawn path does. */
+static int is_runnable(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char b[4];
+    size_t n = fread(b, 1, 4, f);
+    fclose(f);
+    if (n >= 4 && b[0] == 0 && b[1] == 'a' && b[2] == 's' && b[3] == 'm') return 1;
+    if (n >= 2 && b[0] == '#' && b[1] == '!') return 1;
+    return 0;
+}
+
+/* One "activate a path" (todos/0066), shared by the Start menu and the
+ * desktop grid (and any future file browser — 0048): a symlink spawns its
+ * target via the link path (the fs resolves it); a runnable regular file
+ * spawns directly (launchers are ordinary #!/bin/sh scripts); anything
+ * else opens in its type's default viewer — `term vi` for now. */
+static void activate(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return;
+    if (S_ISLNK(st.st_mode) || (S_ISREG(st.st_mode) && is_runnable(path))) {
+        const char *name = strrchr(path, '/');
+        name = name ? name + 1 : path;
+        char *argv[2] = { (char *)name, 0 };
+        spawn_path(path, argv);
+        return;
+    }
+    char *argv[4] = { "term", "vi", (char *)path, 0 };
+    spawn_path("/bin/term", argv);
+}
+
 static int entcmp(const void *a, const void *b) {
     return strcmp(((const menu_ent *)a)->name, ((const menu_ent *)b)->name);
 }
@@ -376,41 +417,14 @@ static void menu_dismiss(void) {
     menu_hover = -1;
 }
 
-/* Selection: a symlink entry is spawned via its menu-dir path (the fs
- * resolves the link); a regular file's first line is the argv (bare
- * argv[0] resolves in /usr/local/bin, then /bin — the PATH order —
- * `term snake` runs snake in a terminal). */
+/* Selection: the shared activate() (todos/0066) — a menu entry is a
+ * symlink or an executable launcher script; a stray non-runnable file
+ * just opens in the viewer like anywhere else. */
 static void menu_launch(int idx) {
     if (idx < 0 || idx >= menu_n) return;
     char path[300];
     snprintf(path, sizeof path, "%s/%s", menu_dir, menu[idx].name);
-    if (menu[idx].is_link) {
-        char *argv[2] = { menu[idx].name, 0 };
-        spawn_path(path, argv);
-        return;
-    }
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-    static char line[160];
-    line[0] = 0;
-    if (!fgets(line, sizeof line, f)) { fclose(f); return; }
-    fclose(f);
-    line[strcspn(line, "\r\n")] = 0;
-    char *argv[9];
-    int n = 0;
-    for (char *t = strtok(line, " \t"); t && n < 8; t = strtok(NULL, " \t"))
-        argv[n++] = t;
-    argv[n] = 0;
-    if (n == 0) return;
-    char full[300];
-    if (argv[0][0] == '/') snprintf(full, sizeof full, "%s", argv[0]);
-    else {
-        /* PATH-order resolution: the admin's /usr/local/bin shadows /bin. */
-        snprintf(full, sizeof full, "/usr/local/bin/%s", argv[0]);
-        if (access(full, X_OK) != 0)
-            snprintf(full, sizeof full, "/bin/%s", argv[0]);
-    }
-    spawn_path(full, argv);
+    activate(path);
 }
 
 static int menu_h(void) { return 2 * MENU_PAD + menu_n * MENU_ENTRY_H; }
@@ -498,19 +512,14 @@ static int desk_hit(int x, int y) {
     return idx < desk_n ? idx : -1;
 }
 
-/* A symlink icon spawns its target (0028's spawn path, via the link);
- * any other regular file opens in the editor: `term vi <file>`. */
+/* Double-click: the same activate() the Start menu uses (todos/0066) —
+ * symlinks and runnable files (wasm, #! launchers) spawn, anything else
+ * opens in the viewer. */
 static void desk_launch(int idx) {
     if (idx < 0 || idx >= desk_n) return;
-    static char path[300];
+    char path[300];
     snprintf(path, sizeof path, "/root/Desktop/%s", desk[idx].name);
-    if (desk[idx].is_link) {
-        char *argv[2] = { desk[idx].name, 0 };
-        spawn_path(path, argv);
-    } else {
-        char *argv[4] = { "term", "vi", path, 0 };
-        spawn_path("/bin/term", argv);
-    }
+    activate(path);
 }
 
 /* Desktop mousedown: select on one click, launch on a quick second click

@@ -6,9 +6,10 @@
 // (not the kernel cascade), wmctl list/min/click/shot/focus, taskbar-click
 // restore (injected through the real input ring into the wm's SDL loop),
 // wmctl max maximize/restore on both branches of the resizable dispatch
-// (todos/0025), and the crashed-WM story — kill the wm, the system stays
+// (todos/0025), the crashed-WM story — kill the wm, the system stays
 // driveable (kernel-chrome fallback + kernel-owned endpoint), `wm &`
-// respawns it.
+// respawns it — and the unified activate mechanism (todos/0066): desktop
+// and Start menu share one launch rule (symlink/runnable spawn, else vi).
 //
 // Run: node tests/kernel/test_wm_service_e2e.js
 'use strict';
@@ -183,6 +184,37 @@ const script = [
   'sleep 1',
   'echo ==fall1',
   'wmctl list',
+  // ---- unified activate (todos/0066): the desktop and the Start menu
+  // share ONE launch mechanism — a #!/bin/sh launcher script spawns
+  // (shebang exec, todos/0065), a plain text file opens in `term vi`,
+  // symlinks keep running their target (the desk3 leg above). ----
+  "printf '#!/bin/sh\\nwinbox\\n' > /root/Desktop/alauncher",
+  "printf 'plain notes, not a program\\n' > /root/Desktop/notes.txt",
+  'sleep 2.5',                                   // desk_load re-read tick (~1s)
+  'echo ==act1',
+  'wmctl list',
+  'wmctl dblclick $DSID 58 48',                  // icon 0 = alauncher (sorted)
+  'sleep 3',                                     // sh -> winbox spawn
+  'echo ==act2',
+  'wmctl list',
+  'wmctl dblclick $DSID 58 240',                 // icon 3 = notes.txt
+  'sleep 4',                                     // term loads freetype
+  'echo ==act3',
+  'wmctl list',
+  // The seeded snake entry became a real launcher script (image v36).
+  'head -c 2 /usr/share/menu/snake && echo =snake-shebang',
+  // The menu takes the same path: an /etc/menu override dir with ONE
+  // launcher-script entry (the dir existing wins, todos/0040).
+  'mkdir /etc/menu',
+  "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/go",
+  'wmctl click $TSID 25 14',                     // Start
+  'sleep 0.5',
+  'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
+  'wmctl click $MSID 20 14',                     // entry 0 (the only one)
+  'sleep 3',
+  'echo ==act4',
+  'wmctl list',
+  'rm -rf /etc/menu',
   '',
 ].join('\n');
 
@@ -205,7 +237,9 @@ const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       b1 = section('bar1'), b2 = section('bar2'), b3 = section('bar3'),
       c1s = section('cyc1'), c2s = section('cyc2'), c3s = section('cyc3'),
       c4s = section('cyc4'), c5s = section('cyc5'),
-      lay1 = section('layer1');
+      lay1 = section('layer1'),
+      a1 = section('act1'), a2 = section('act2'), a3 = section('act3'),
+      a4 = section('act4');
 const row = (sec, title) =>
   sec.split('\n').find(l => l.endsWith('\t' + title)) || '';
 const geom = (line) => line.split('\t')[2] || '';   // the GEOMETRY column
@@ -375,6 +409,27 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     .find(l => ((l.split('\t')[5] || ''))[0] === 'f') || '';
   check('SIGKILL of the focused winbox: focus falls to a normal window, not the bar',
     focusedRow.endsWith('\twinbox'), JSON.stringify(fl1));
+}
+
+// ---- unified activate (todos/0066): both launch paths are activate() —
+// runnable regular files (a #!/bin/sh launcher) spawn directly, plain
+// files open in the viewer. Window-count deltas cross-check the peek: if
+// is_runnable() misfired, the launcher would open in vi (term, not
+// winbox) and notes.txt would fail to spawn (no term).
+{
+  const count = (sec, title) =>
+    sec.split('\n').filter(l => l.endsWith('\t' + title)).length;
+  check('desktop dblclick on a #!/bin/sh launcher runs it (winbox +1)',
+    count(a2, 'winbox') === count(a1, 'winbox') + 1,
+    JSON.stringify([count(a1, 'winbox'), count(a2, 'winbox')]));
+  check('desktop dblclick on plain text still opens the viewer (term +1)',
+    count(a3, 'term') === count(a2, 'term') + 1,
+    JSON.stringify([count(a2, 'term'), count(a3, 'term')]));
+  check('menu launcher script takes the same activate path (winbox +1)',
+    count(a4, 'winbox') === count(a2, 'winbox') + 1,
+    JSON.stringify([count(a2, 'winbox'), count(a4, 'winbox')]));
+  check('seeded menu/snake is a real #! script now (image v36)',
+    out.includes('#!=snake-shebang'));
 }
 
 // Icon pixels: read the shot back OUT of the root (writable) volume (the

@@ -1,5 +1,5 @@
 {
-  "version": 35,
+  "version": 36,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -86,7 +86,7 @@
         "link": "/usr/bin/ctldemo"
       },
       "/usr/share/menu/snake": {
-        "content": "term snake\n"
+        "content": "#!/bin/sh\nterm snake\n"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"

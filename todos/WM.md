@@ -454,7 +454,11 @@ above it, destroyed on selection or dismiss. Entries come from
 **/etc/menu** (seeded via image.json): a symlink is exec'd directly, a
 one-line text file is an argv line (covers tty apps: `term snake`) —
 name = filename, plain sort. Selection → `posix_spawn` (PATH=/bin,
-cwd=/root — doom finds its WAD by cwd). Dismiss: menu-surface click
+cwd=/root — doom finds its WAD by cwd). *(The first-line-argv format was
+retired by todos/0066: launching is one `activate()` — symlinks and
+runnable files (wasm magic / `#!` scripts, todos/0065) spawn, everything
+else opens in the viewer; launcher entries are ordinary `#!/bin/sh`
+scripts now.)* Dismiss: menu-surface click
 outside an entry, EV_FOCUS change, taskbar click; desktop clicks join
 at 0029 (until then a desktop click doesn't dismiss — accepted gap).
 Open question to resolve in-item: **child stdio** — the wm is a
@@ -468,7 +472,8 @@ originally a one-shot RESTACK), teal fill (it covers the compositor's
 background wherever it sits) + an icon grid from
 `readdir("/root/Desktop")` (seeded: symlinks to doom/quake/gameboy/
 term). Double-click (SDL event timestamps, the 0025 threading):
-symlink → spawn its target; other regular file → `term vi <file>`.
+symlink → spawn its target; other regular file → `term vi <file>`
+*(since todos/0066: the shared `activate()` — runnable files spawn too)*.
 Recreate on EV_SCREEN like the taskbar; re-read the folder on a coarse
 frame-tick timer (~1s — one readdir RPC/s, no watch API exists or is
 needed). Minimize already reveals it; nothing kernel-side changes.

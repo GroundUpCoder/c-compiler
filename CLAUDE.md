@@ -261,13 +261,18 @@ no-WM fallback); /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps — browser tests must derive screen-edge geometry from the
 LIVE canvas rect (`window.__osScreen` probe), never 800×500 constants.
 The desktop shell (todos/0028–0033, 2026-07-08): wm.c owns a Start
-button + menu popup (entries from seeded `/etc/menu`: symlink → spawn
-via its path, one-line file → argv line; children get own pgroup,
-PATH=/bin HOME=/root, cwd /root, WNOHANG-reaped) and a fullscreen
-bottom-of-z desktop layer (icon grid from `/root/Desktop`, dbl-click
-launches — own timestamp check, NOT e.button.clicks which accumulates
-across windows; `wmctl dblclick` injects both clicks on one
-connection), all in the one wm process dispatched by windowID; the
+button + menu popup (entries from seeded `/etc/menu`; children get own
+pgroup, PATH=/bin HOME=/root, cwd /root, WNOHANG-reaped) and a
+fullscreen bottom-of-z desktop layer (icon grid from `/root/Desktop`,
+dbl-click launches — own timestamp check, NOT e.button.clicks which
+accumulates across windows; `wmctl dblclick` injects both clicks on
+one connection), all in the one wm process dispatched by windowID;
+menu + desktop launch through ONE `activate(path)` (todos/0066):
+symlink → spawn its target; regular file that is runnable — `\0asm`
+or `#!`, told by peeking the first bytes — spawn directly (launchers
+are ordinary `#!/bin/sh` scripts; the old first-line-argv menu format
+is gone, menu/snake became a real script); anything else opens in
+`term vi`; the
 kernel title bar has [min][max][close] boxes (min = wmMinimize direct,
 max = EV_TITLE_ACTIVATE, each box only if it fits the title — 32px
 windows stay draggable); the taskbar has a right-aligned HH.MM clock,
@@ -289,7 +294,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v35**.
+Image version is **v36**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

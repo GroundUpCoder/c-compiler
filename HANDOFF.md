@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10, after 0065 landed)
+# Handoff — start of thread (updated 2026-07-10, after 0066 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,60 +7,75 @@
 
 ## Where the repo stands
 
-**0065 (shebang `#!` exec) landed 2026-07-10** — dev log
-`logs/2026-07-10/shebang-exec.md`, design note in `todos/KERNEL.md`
-"The spawn path: shebang exec". `kernel.js _spawnBytes` peeks the image
-before the wasm compile; `#!` bytes re-dispatch via the new
-`_spawnShebang` with execve(2) semantics: interpreter + at most ONE
-optional arg (rest of line verbatim, 256-byte budget), argv =
-`[interp, optarg?, scriptPath, ...origArgv[1:]]` (script path replaces
-the caller's argv[0]), envp/cwd/fd-actions/pgroup carry over, relative
-interpreter resolves against the child's cwd, depth-4 chain cap →
-**ENOEXEC** (deliberate: the libc has no ELOOP and host.js's errnoMap
-throws on unknown names). The check runs BEFORE the module cache, so
-scripts never allocate cache entries; non-`#!` bytes take the exact old
-path. `./foo` on a `#!/bin/sh` script now just runs — the 0066 launcher
-primitive.
+**0066 (unified run/activate) landed 2026-07-10** — dev log
+`logs/2026-07-10/unified-activate.md`. ONE `activate(path)` in `os/wm.c`
+now serves the Start menu AND the desktop double-click (and any future
+file browser — 0048): symlink → spawn its target; regular file that is
+runnable → spawn directly ("runnable" = the kernel can exec it — wasm
+`\0asm` or a `#!` script (0065), decided by peeking the first bytes,
+mirroring `kernel.js _spawnBytes`' own dispatch; content decides, NOT
+mode bits — the kernel checks no X bit); anything else → `term vi`. The
+old first-line-argv menu format is DELETED (no compat branch); launchers
+are ordinary `#!/bin/sh` scripts. Its one seeded user,
+`/usr/share/menu/snake`, became `#!/bin/sh\nterm snake\n` in image.json.
 
-**No image bump** (kernel-side JS only; image stays **v35**).
+**Image bumped v35 → v36** (menu/snake content + the wm binary changed);
+`os/os-system.img` rebaked via `node tools/mkimage.js`.
 
-**Suites this session**: kernel — ALL files pass (test_kernel.js grew a
-shebang section; test_os_boot.js grew a hush acceptance leg: `./foo`,
-`#!/bin/sh -e`, cycle → rc 2); blockfs 12/12; unit 699/0/3 (no compiler
-change); browser subset serial — os-boots / os-shell / os-wm PASS (only
-the spawn path changed; the two-byte peek can't affect wasm binaries, so
-the full sweep wasn't re-run).
+**Suites this session**: kernel — ALL files pass (test_wm_service_e2e.js
+grew a 0066 section: a runtime-dropped `#!/bin/sh` desktop launcher
+spawns winbox +1, notes.txt still opens the viewer (term +1), an
+/etc/menu launcher script launches identically from the Start menu, and
+seeded menu/snake starts `#!`); blockfs 12/12; browser subset serial —
+os-boots / os-shell / os-wm PASS (menu still 9 entries, same names —
+the 150x188+0+552 constants hold). Unit suite not re-run:
+compiler.js/host.js/kernel.js untouched (os/wm.c + image.json + tests +
+docs only).
 
-**Gotcha recorded for busybox bumps**: hush in our build has NO ENOEXEC
-run-as-script fallback (`execvp_or_die` just perrors + exit 2). The
-os_boot shebang leg asserts `loop-rc=2`; if a busybox upgrade grows the
-fallback, that leg is the tripwire.
+**Concurrent landing mid-thread**: `dec3424` (todos queue
+single-sourcing — per-item `- **Depends**:` lines stripped, README
+*Next up* enumeration deleted; queue.json is the ONLY order/dep source,
+`queue.js list` the view). Leftover spotted, NOT fixed (their scope):
+`todos/README.md` "Conventions" still tells you to keep "this README's
+*Next up* list" in sync — that list no longer exists.
 
 **Still owed from 0039**: the pointer-lock HUMAN check was deferred by
 ALL sweep rounds so far. It is a MUST for WM sweep round 3 (`0064`) —
 first free moment with a human at the keys: quake lock on click, ESC
 unlock, click re-lock, VT-switch release.
 
-**Concurrent work note**: another session may be landing SS-INTEROP
-slices (`todos/SS-INTEROP.md`, host.js .ss-module support). If host.js
-shows uncommitted changes you didn't make, that's them — stage only your
-own files.
+**Concurrent work note**: other sessions are active on this tree
+(SS-INTEROP slices per `todos/SS-INTEROP.md`; the queue tooling landed
+mid-thread here). If files show uncommitted changes you didn't make,
+that's them — verify todos/ freshness and stage ONLY your own files.
 
 ## The queue (todos/queue.json is authoritative)
 
 Order + deps: `node todos/queue.js list` — do NOT copy the ordering into
 this file (hand-copied roadmaps drift; the 2026-07-10 single-source
 change deleted the README's for exactly that). Immediate context only:
-`0066` unified run/activate is in flight, unblocked by 0065's shebang
-exec (ONE `activate(path)` in wm.c for desktop dbl-click + Start menu;
-peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
+`0066` is done; `0067` desktop drag-drop is now unblocked (dropping a
+file onto the desktop = putting a file in /root/Desktop, and 0066's
+activate() already runs whatever lands there).
 
 ## Gotchas carried forward
 
+- **0066**: `activate()` does its own lstat (the entry array is a stale
+  UI snapshot; `menu_ent.is_link` survives for icon drawing only). The
+  runnable peek is fopen/fread of the first 4 bytes — keep it matching
+  kernel.js `_spawnBytes` (`#!` on ≥2 bytes, `\0asm` on ≥4). The e2e's
+  window-count deltas cross-check the peek direction (a misfire flips
+  which window type appears) — don't weaken them to `>=`. The 0066 legs
+  hardcode /root/Desktop icon indices (alauncher=0 y=48, notes.txt=3
+  y=240 — sorted against the four seeded links) and reuse `$TSID`/`$DSID`
+  captured much earlier in the script.
 - **0065**: shebang optarg is ONE argument (no word splitting) — don't
   "fix" that; it's Linux semantics and the -e leg depends on it. Depth
   rides a `_spawn` parameter, NOT the spec (RPC specs are
-  process-supplied input).
+  process-supplied input). hush in our build has NO ENOEXEC
+  run-as-script fallback (`execvp_or_die` perrors + exit 2); the
+  os_boot shebang leg asserts `loop-rc=2` as the tripwire for busybox
+  bumps.
 - **0058**: the agent protocol is one request per connection (the app
   closes after replying — wmctl must not hold the socket open). The
   scrollbar control NEVER moves itself: it notifies WM_V/HSCROLL and the
@@ -74,7 +89,7 @@ peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
   rebake; 0060 item). Test sections in test_user32_e2e.js cut at
   explicit `==cut` echoes because tree dumps contain `== pid` lines.
 - **Start-menu geometry** (again): a new `/usr/share/menu` entry changes
-  entry indices AND the box — now NINE entries (ctldemo sorts first),
+  entry indices AND the box — NINE entries (ctldemo sorts first),
   150x188+0+552, winbox click row y=174. `test_wm_service_e2e.js` +
   `os-shell.mjs` hardcode both; update them with any future entry.
 - **0057**: `os/win32/lib.json` include ORDER is load-bearing —
@@ -84,7 +99,7 @@ peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
   MIRROR `gdidemo.c draw_scene`; `test_user32_e2e.js` + `os-user32.mjs`
   MIRROR `ctldemo.c` WM_CREATE layout — change together.
 - **Editing seeded sources or coreutils.json/bin.json/lib.json requires
-  bumping `os/image.json` `version`** (now 35) — a same-version blob is
+  bumping `os/image.json` `version`** (now 36) — a same-version blob is
   reused, and a LIBC change in compiler.js counts (baked binaries) —
   rebake `os/os-system.img` with `node tools/mkimage.js` after.
 - Queue changes go through `node todos/queue.js` ONLY (`done`, `add`,
@@ -112,7 +127,7 @@ peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
 - Two unit goldens encode libc internals and move when libc changes:
   `switch_br_table` expected.compiler.stderr and `printf`'s
   pointer-address line. Verify the tests' OWN asserts before updating.
-  (0065 touched no libc — suite stayed 699/0/3.)
+  (0066 touched no libc.)
 - **0040 layout in tests**: headless images pair as `foo-system.img` +
   `foo-root.img`; OPFS names `os-system.v5.img`/`os-root.v5.img` — those
   names are ALSO the Web Lock name (0045): renaming the images renames
@@ -149,7 +164,7 @@ peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
   <sys/time.h> ITIMER_* ↔ kernel.js ITIMER_REAL (0044);
   test_gdi32_e2e.js/os-gdi.mjs probes ↔ os/win32/gdidemo.c draw_scene
   (0057); test_user32_e2e.js/os-user32.mjs ↔ os/win32/ctldemo.c layout
-  (0058).
+  (0058); wm.c is_runnable ↔ kernel.js _spawnBytes dispatch (0066).
 - `tests/browser/os-*.mjs` are manual — run the full sweep serially
   after touching os/, kernel.js, host.js SDL/webgpu/fd/audio/input/tty
   paths, or anything that rebakes every binary (a libc/codegen change
@@ -163,10 +178,12 @@ peek `\0asm`/`#!` to decide runnable; launchers = executable scripts).
   (microui/MVU are DROPPED), 0057's recorded simplifications, 0058's
   (scrollbar notify-only, one-request-per-connection agent protocol,
   process-wide kernel close — grow via 0060's missing-symbol log, don't
-  gold-plate), and 0065's ENOEXEC-not-ELOOP + one-optarg calls.
+  gold-plate), 0065's ENOEXEC-not-ELOOP + one-optarg calls, and 0066's
+  no-compat-branch call (launchers are ordinary `#!` scripts; the
+  first-line-argv menu format is gone for good).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0066 unified run/activate, standing up 0060's port harness
-early, 0046 strace, or something else."
+to tackle: 0067 desktop drag-drop, standing up 0060's port harness early,
+0046 strace, or something else."
