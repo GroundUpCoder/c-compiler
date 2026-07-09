@@ -59,6 +59,20 @@
   /* VTs: exactly one of tty/desktop is visible (todos/0022). */
   body[data-vt="1"] #desktop { display: none; }
   body[data-vt="2"] #terminal { display: none; }
+  /* Two-tab boot guard (todos/0045): another tab holds the boot lock —
+     shown INSTEAD of the VT panes; retry re-attempts the lock. */
+  #guard { flex: 1; display: none; flex-direction: column; gap: 14px;
+           align-items: center; justify-content: center; text-align: center;
+           font: 14px 'Menlo', 'Consolas', monospace; color: #c0c0d8; }
+  #guard button {
+    font: 13px 'Menlo', 'Consolas', monospace; color: #e0e0f0;
+    background: #22223a; border: 1px solid #4a4a77; border-radius: 6px;
+    padding: 6px 22px; cursor: pointer;
+  }
+  #guard button:hover { background: #2c2c4a; border-color: #6a6aa7; }
+  body[data-guard] #guard { display: flex; }
+  body[data-guard] #vtbar, body[data-guard] #terminal,
+  body[data-guard] #desktop { display: none; }
 </style>
 </head>
 <body data-vt="1">
@@ -69,6 +83,11 @@
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
+  <div id="guard">
+    <div>wasm-os is already running in another tab.<br>
+         Close that tab, then retry — the lock frees when it closes.</div>
+    <button id="guardRetry">Retry</button>
+  </div>
   <div id="status">booting…</div>
 </div>
 <script src="../vendor/xterm/xterm.js"></script>
@@ -274,6 +293,15 @@ kernel.onmessage = function (e) {
       setVt(1);   // the escape hatch surfaces the failure (todos/0022)
       term.write('\r\n\x1b[31mboot failed:\x1b[0m\r\n' + m.msg.replace(/\n/g, '\r\n') + '\r\n');
       break;
+    // Two-tab boot guard (todos/0045): the kernel worker takes a Web Lock on
+    // the image pair BEFORE mounting OPFS; a losing tab lands here with
+    // nothing mounted. Retry (below) re-attempts — the lock frees when the
+    // winning tab closes. No steal in v1.
+    case 'boot-locked':
+      status('already running in another tab', true);
+      window.__osState = 'locked';   // agent probe (tests/browser/os-boots.mjs)
+      document.body.setAttribute('data-guard', '1');
+      break;
     case 'ready':
       status('running (image: ' + m.mode + ') — files persist in OPFS');
       window.__osState = 'ready';
@@ -328,6 +356,16 @@ kernel.onmessage = function (e) {
 kernel.onerror = function (e) {
   status('kernel worker error: ' + e.message, true);
 };
+
+// Two-tab boot guard retry (todos/0045): hide the guard optimistically; if
+// the lock is still held the worker answers with another boot-locked and it
+// comes right back. The worker ignores retries while a boot is in flight.
+document.getElementById('guardRetry').addEventListener('click', function () {
+  document.body.removeAttribute('data-guard');
+  status('booting…');
+  window.__osState = 'booting';
+  kernel.postMessage({ type: 'boot-retry' });
+});
 </script>
 </body>
 </html>

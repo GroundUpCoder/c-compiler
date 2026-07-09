@@ -10,6 +10,9 @@
 //   page -> kernel: {type:'input', data}         raw tty bytes/keystrokes
 //                   {type:'resize', cols, rows}
 //                   {type:'eof'}
+//                   {type:'boot-retry'}          two-tab guard (todos/0045):
+//                                                re-attempt the boot lock
+//                                                after a boot-locked
 //                   {type:'wm-canvas', canvas}   the desktop OffscreenCanvas
 //                                                (todos/WM.md — the kernel
 //                                                composites in-worker)
@@ -21,6 +24,10 @@
 //   kernel -> page: {type:'out', bytes}          tty output (program + echo)
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
+//                   {type:'boot-locked'}         two-tab guard (todos/0045):
+//                                                another tab holds the boot
+//                                                lock — nothing was mounted;
+//                                                the page shows retry
 //                   {type:'ready', mode}         booted; mode = openWorkspace's
 //                   {type:'halt', status}        pid 1 exited
 //                   {type:'audio', sab, bufferSize, freq, channels, format}
@@ -54,6 +61,9 @@ var pending = [];   // input that raced the boot
 self.onmessage = function (e) {
   var m = e.data;
   if (!m) return;
+  // Two-tab guard (todos/0045): boot-retry must bypass the pending queue —
+  // it drives the boot, it can't wait for one.
+  if (m.type === 'boot-retry') { startBoot(); return; }
   if (!tty) { pending.push(m); return; }
   if (m.type === 'input') tty.input(typeof m.data === 'string' ? m.data : new Uint8Array(m.data));
   else if (m.type === 'resize') tty.resize(m.cols | 0, m.rows | 0);
@@ -100,6 +110,31 @@ function createWorker(procSpec) {
   };
 }
 
+// Two-tab boot guard (todos/0045): two tabs would run two KERNELS — two
+// process tables, two compositors, two fd brokers — over the same OPFS
+// images; BlockFS's dual-instance coherence does not cover that. A Web Lock
+// named after the image pair (so unrelated dev pages on this origin never
+// collide) is taken BEFORE any OPFS mount and held for the worker's
+// lifetime — the browser releases it when the tab closes, including crashes.
+// ifAvailable keeps it non-blocking: the losing tab gets {type:'boot-locked'}
+// with NOTHING mounted, and the page offers retry (no steal in v1). The
+// winning callback parks on a forever-pending promise — the Web Locks idiom
+// for "hold until the agent dies".
+var SYS_IMG = 'os-system.v5.img';
+var ROOT_IMG = 'os-root.v5.img';
+var BOOT_LOCK = 'wasm-os:' + SYS_IMG + '+' + ROOT_IMG;
+function acquireBootLock() {
+  if (typeof navigator === 'undefined' || !navigator.locks) {
+    return Promise.resolve(true);   // no Web Locks API — boot unguarded
+  }
+  return new Promise(function (resolve) {
+    navigator.locks.request(BOOT_LOCK, { ifAvailable: true }, function (lock) {
+      resolve(!!lock);
+      if (lock) return new Promise(function () {});   // hold forever
+    }).catch(function () { resolve(false); });
+  });
+}
+
 // Open (creating if absent) a raw OPFS-backed byte store.
 async function opfsStore(name) {
   var root = await navigator.storage.getDirectory();
@@ -118,6 +153,11 @@ function materializeBlob(store, bytes) {
 }
 
 async function boot() {
+  if (!(await acquireBootLock())) {
+    booting = false;               // let a boot-retry re-enter
+    post({ type: 'boot-locked' });
+    return;
+  }
   post({ type: 'boot-log', msg: 'mounting BlockFS on OPFS…' });
   var manifest = await (await fetch('image.json')).json();
   var seedIo = {
@@ -173,7 +213,7 @@ async function boot() {
   // path), else bake in-worker (the no-build-step dev path). New OPFS names
   // orphan the pre-flip os-system.v4.img/os-user.v4.img pair by design
   // (the 0026 precedent).
-  var sysStore = await opfsStore('os-system.v5.img');
+  var sysStore = await opfsStore(SYS_IMG);
   var sysMode = 'reused';
   if (OS_COMMON.bakedVersion(BLOCK_FS, sysStore) < (manifest.version | 0)) {
     sysMode = null;
@@ -204,7 +244,7 @@ async function boot() {
   // standalone page's legacy workspace.img on the same origin is never
   // "migrated" into an OS volume — that file has never existed, so the
   // legacy path is inert.)
-  var wsRoot = await BLOCK_FS.openWorkspace({ v4Name: 'os-root.v5.img', v3Name: 'os-root.v3.img' });
+  var wsRoot = await BLOCK_FS.openWorkspace({ v4Name: ROOT_IMG, v3Name: 'os-root.v3.img' });
   var kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs });
   if (wsRoot.mode === 'fresh') {
     post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
@@ -253,6 +293,16 @@ async function boot() {
   queued.forEach(function (m) { self.onmessage({ data: m }); });
 }
 
-boot().catch(function (e) {
-  post({ type: 'boot-error', msg: String((e && e.stack) || e) });
-});
+// Boot entry — also the boot-retry target (todos/0045). `booting` blocks
+// double entry (retry clicks while a boot is in flight or after one won);
+// only the lock-lost path resets it. A real boot failure stays terminal
+// (reload to reboot), as before.
+var booting = false;
+function startBoot() {
+  if (booting || tty) return;
+  booting = true;
+  boot().catch(function (e) {
+    post({ type: 'boot-error', msg: String((e && e.stack) || e) });
+  });
+}
+startBoot();

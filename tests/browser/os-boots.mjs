@@ -126,6 +126,46 @@ try {
   await page.waitForFunction(() => window.__osState === 'halted:3',
     { timeout: 30000, polling: 250 });
   check('halt reaches the page with the exit code', true);
+
+  // Two-tab boot guard (todos/0045): a second tab in the SAME context (same
+  // origin, same OPFS) must NOT boot a second kernel — the first tab's
+  // worker still holds the Web Lock (halted != closed; the lock lives until
+  // the tab dies). Closing the first tab frees it; the guard's Retry then
+  // boots normally over the reused image.
+  const page2 = await context.newPage();
+  page2.on('console', (m) => { if (m.type() === 'error') process.stderr.write('[page2] ' + m.text() + '\n'); });
+  await page2.goto(URL);
+  await page2.waitForFunction(() => window.__osState === 'locked',
+    { timeout: 30000, polling: 250 });
+  const guardShown = await page2.evaluate(() =>
+    document.body.hasAttribute('data-guard') &&
+    getComputedStyle(document.getElementById('guard')).display !== 'none' &&
+    getComputedStyle(document.getElementById('terminal')).display === 'none');
+  check('second tab hits the boot guard (todos/0045)', guardShown);
+
+  await page.close();   // the winning tab dies -> the browser releases the lock
+  // Retry until the release lands (close -> lock-free is not synchronous). A
+  // still-held lock just answers boot-locked again; the worker ignores
+  // retries while a boot is in flight, so over-clicking is harmless.
+  const t0 = Date.now();
+  let st = '';
+  while (Date.now() - t0 < 120000) {
+    st = await page2.evaluate(() => window.__osState);
+    if (st === 'ready') break;
+    if (st === 'locked') {
+      await page2.evaluate(() => document.getElementById('guardRetry').click());
+    }
+    await page2.waitForTimeout(500);
+  }
+  check('retry boots after the first tab closes (todos/0045)', st === 'ready', st);
+  const mode2 = await page2.evaluate(() => document.getElementById('status').textContent);
+  check('the retried boot reuses the image', /image: reused\/v4/.test(mode2), mode2);
+  await page2.evaluate(() => { window.__osOut = ''; });
+  await page2.keyboard.type('echo GUARD-SHELL-OK\r');
+  await page2.waitForFunction(
+    () => window.__osOut.includes('GUARD-SHELL-OK\n'),
+    { timeout: 30000, polling: 250 });
+  check('the retried boot reaches a live shell', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   failures++;
