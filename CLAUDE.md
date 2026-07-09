@@ -282,7 +282,18 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v33**.
+Image version is **v34**.
+The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
+lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
+rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
+objects + stock + leak counters, all 16 ROP2s, shapes with GDI
+right/bottom-exclusive and LineTo-endpoint semantics, freetype text
+sharing term's font, BitBlt/StretchBlt/PatBlt, GetDIBits/SetDIBits
+B<->R swizzle, IntersectClipRect); HWND is scaffolded over an SDL
+window via `__gdi_bind_hwnd` until 0058's user32 (GetDC/BeginPaint
+draw into the surface, ReleaseDC/EndPaint present). `/bin/gdidemo`
+(windowed Petzold-style scene + `selftest` mode) is the acceptance
+app; tests `tests/kernel/test_gdi32_e2e.js` + `tests/browser/os-gdi.mjs`.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

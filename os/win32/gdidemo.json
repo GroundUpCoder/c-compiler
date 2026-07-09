@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "gdidemo",
+  "description": "0057 gdi32 acceptance app: Petzold-style paint scene + headless selftest",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "gdidemo.c"
+  ]
+}

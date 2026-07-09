@@ -89,7 +89,7 @@ const script = [
   'echo ==menu1',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $MSID 20 134',                    // entry 6 = winbox (sorted)
+  'wmctl click $MSID 20 154',                    // entry 7 = winbox (sorted)
   'sleep 2.5',                                   // real wasm spawn
   'echo ==menu2',
   'wmctl list',
@@ -272,8 +272,8 @@ check('wm & respawns: taskbar back at the bottom edge',
 
 // ---- the Start menu (todos/0028) ----
 const menu1 = row(m1, 'startmenu');
-check('Start click opens the menu: borderless surface above the taskbar (150x148+0+592 — 7 entries)',
-  menu1.includes('150x148+0+592') && menu1.includes('b'), JSON.stringify(m1));
+check('Start click opens the menu: borderless surface above the taskbar (150x168+0+572 — 8 entries)',
+  menu1.includes('150x168+0+572') && menu1.includes('b'), JSON.stringify(m1));
 check('menu entry click launches winbox (second instance)',
   m2.split('\n').filter(l => l.endsWith('\twinbox')).length === 2, JSON.stringify(m2));
 check('selection dismissed the menu', row(m2, 'startmenu') === '', JSON.stringify(m2));

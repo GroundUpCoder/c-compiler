@@ -77,7 +77,8 @@ regenerate intent from `queue.js list`.)*
 
 1. **The Win32 desktop platform** (design: `WIN32.md`, 2026-07-09 — the
    primary UI toolkit; **supersedes microui/MVU**, which are dropped):
-   `0057` gdi32 (CPU→shm drawing) → `0058` user32 (windowing + standard
+   `0057` gdi32 (CPU→shm drawing) **landed 2026-07-10** (`os/win32/`,
+   `/bin/gdidemo`) → `0058` user32 (windowing + standard
    controls + the HWND agent tree) → `0059` kernel32 subset over POSIX
    (file/mem/time/process/dir; grows on demand), with `0060`'s
    compile-test harness stood up EARLY — as soon as 0057/0058 have

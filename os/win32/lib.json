@@ -1,0 +1,16 @@
+{
+  "type": "lib",
+  "name": "win32",
+  "description": "The Win32 veneer (todos/WIN32.md): gdi32 CPU drawing (0057); user32 (0058) and kernel32 (0059) land here too",
+  "deps": [
+    "../../vendor/freetype/lib.json"
+  ],
+  "includes": [
+    "include",
+    "../../vendor/freetype/demo",
+    "../../vendor/freetype/include"
+  ],
+  "sources": [
+    "gdi32.c"
+  ]
+}

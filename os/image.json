@@ -1,5 +1,5 @@
 {
-  "version": 33,
+  "version": 34,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -46,6 +46,9 @@
       "/usr/bin/term": {
         "project": "os/term/bin.json"
       },
+      "/usr/bin/gdidemo": {
+        "project": "os/win32/gdidemo.json"
+      },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
       },
@@ -72,6 +75,9 @@
       },
       "/usr/share/menu/gpubox": {
         "link": "/usr/bin/gpubox"
+      },
+      "/usr/share/menu/gdidemo": {
+        "link": "/usr/bin/gdidemo"
       },
       "/usr/share/menu/snake": {
         "content": "term snake\n"
