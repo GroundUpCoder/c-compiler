@@ -1,6 +1,15 @@
 # 0055 — WebGPU compositor (no Canvas2D fallback)
 
-- **Status**: open
+- **Status**: done (2026-07-09; dev log
+  `logs/2026-07-09/webgpu-compositor.md`) — os/compositor.js is one
+  WebGPU render pass per rAF (shm seq-gated writeTexture, gpu
+  copyExternalImageToTexture, chrome flat quads + cached label
+  textures); kernel-worker.js probes adapter→device before the boot
+  lock and posts `boot-nogpu` → os.html guard screen (no retry,
+  `__osState === 'nogpu'`); Canvas2D path deleted. Full 10-file
+  browser sweep green unmodified + a new no-GPU guard leg in
+  os-boots.mjs; os-boots/os-term gained the standard WebGPU launch
+  flags (boot now requires a worker device — the point).
 - **Depends**: — (0016 proved worker WebGPU + the `gpu` transport; the
   harness already runs `webgpu-*` on headless Chromium/SwiftShader)
 - **Design**: `WM.md` "Compositor" (the WebGPU pass was the designed

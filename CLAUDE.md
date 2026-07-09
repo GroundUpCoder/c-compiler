@@ -158,7 +158,18 @@ re-enters; the lock frees when the winner closes; `__osState ===
 'locked'` is the probe). `boot.js` is the headless twin — same
 kernel/manifest under Node with the tty on stdio
 (`echo 'ls /' | node os/boot.js`) — deliberately unguarded (a
-flock-style guard is a noted-only follow-up in the 0045 item). The OS store is a WRITABLE root
+flock-style guard is a noted-only follow-up in the 0045 item). The
+browser compositor is ONE WebGPU render pass per rAF in the kernel
+worker (todos/0055, `os/compositor.js`: shm surfaces seq-gated
+`writeTexture` into cached GPUTextures, gpu surfaces
+`copyExternalImageToTexture` per ImageBitmap, chrome as white-texture
+flat quads, title/'x' text as cached label textures) with NO Canvas2D
+fallback: kernel-worker probes adapter→device BEFORE the boot lock;
+failure → `boot-nogpu` → os.html guard screen (`__osState === 'nogpu'`,
+no retry). Boot thus REQUIRES worker WebGPU — every browser os test
+launches Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan`
+(flagless headless gets no adapter); headless boot.js/kernel-suite never
+construct a compositor and are unaffected. The OS store is a WRITABLE root
 volume at `/` + a READ-ONLY baked system blob at `/usr` (todos/0040,
 design `todos/DISK-IMAGE.md`; supersedes 0026's system-at-/ split),
 host.js `MountFS` on top: `/bin` is a root-volume symlink → `/usr/bin`

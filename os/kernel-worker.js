@@ -28,6 +28,12 @@
 //                                                another tab holds the boot
 //                                                lock — nothing was mounted;
 //                                                the page shows retry
+//                   {type:'boot-nogpu'}          WebGPU guard (todos/0055):
+//                                                no adapter/device in this
+//                                                worker — the compositor IS
+//                                                WebGPU (no fallback), so
+//                                                the boot stops loudly;
+//                                                nothing was mounted
 //                   {type:'ready', mode}         booted; mode = openWorkspace's
 //                   {type:'halt', status}        pid 1 exited
 //                   {type:'audio', sab, bufferSize, freq, channels, format}
@@ -55,6 +61,7 @@ try {
 var kernel = null;
 var tty = null;
 var wmCanvas = null;   // the desktop OffscreenCanvas (screen-resize target)
+var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
 
@@ -71,7 +78,7 @@ self.onmessage = function (e) {
   else if (m.type === 'wm-canvas') {
     wmCanvas = m.canvas;
     kernel.wmSetScreen(m.canvas.width, m.canvas.height);
-    OS_COMPOSITOR.startCompositor(kernel, m.canvas);
+    OS_COMPOSITOR.startCompositor(kernel, m.canvas, gpuDevice);
   } else if (m.type === 'screen-resize') {
     // Dynamic screen resolution (todos/0023): the page tracks the viewport;
     // the OffscreenCanvas is resized HERE (a transferred canvas can't be
@@ -136,6 +143,21 @@ function acquireBootLock() {
   });
 }
 
+// WebGPU boot guard (todos/0055): the compositor IS WebGPU — no Canvas2D
+// fallback (a fallback is two compositors, one a permanently undertested
+// zombie; decision log logs/2026-07-09/webgpu-mvu-direction.md). Probe the
+// full adapter->device chain HERE, before anything mounts, so a browser
+// without worker WebGPU gets a LOUD guard screen instead of a desktop that
+// quietly degraded. Terminal like boot-error: retry can't conjure a GPU.
+async function probeGPU() {
+  if (typeof navigator === 'undefined' || !navigator.gpu) return null;
+  try {
+    var adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return null;
+    return await adapter.requestDevice();
+  } catch (e) { return null; }
+}
+
 // Open (creating if absent) a raw OPFS-backed byte store.
 async function opfsStore(name) {
   var root = await navigator.storage.getDirectory();
@@ -154,6 +176,11 @@ function materializeBlob(store, bytes) {
 }
 
 async function boot() {
+  gpuDevice = await probeGPU();
+  if (!gpuDevice) {                // todos/0055: terminal — no lock taken,
+    post({ type: 'boot-nogpu' });  // nothing mounted, `booting` stays set
+    return;
+  }
   if (!(await acquireBootLock())) {
     booting = false;               // let a boot-retry re-enter
     post({ type: 'boot-locked' });

@@ -19,7 +19,8 @@ const PORT = 3197;
 const URL = `http://localhost:${PORT}/os/os.html`;
 
 const server = spawn('node', [path.join(ROOT, 'serve.js'), ROOT, String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
-const browser = await chromium.launch();
+// WebGPU flags: the OS boot requires a worker WebGPU device (todos/0055).
+const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 let failures = 0;
 const check = (name, cond, extra) => {
   if (cond) console.log('  ok   ' + name);

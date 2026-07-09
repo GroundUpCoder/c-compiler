@@ -7,8 +7,9 @@
 // session would. Asserts: boot reaches the shell over a fresh OPFS image,
 // `ls /` lists the seeded tree, `cc hello.c && ./a.out` compiles and runs
 // in-OS, vi edits a file through the xterm keyboard path (todos/0011 —
-// deep edit scenarios live in tests/kernel/test_vi_e2e.js), and a reload
-// REUSES the persisted image (a.out survives).
+// deep edit scenarios live in tests/kernel/test_vi_e2e.js), a reload
+// REUSES the persisted image (a.out survives), and a WebGPU-disabled
+// browser hits the loud boot-nogpu guard (todos/0055 — no fallback).
 //
 // Usage: node os-boots.mjs
 import { chromium } from 'playwright';
@@ -43,7 +44,11 @@ function check(name, cond, extra) {
 }
 
 const server = startServer();
-const browser = await chromium.launch();
+// WebGPU flags: since todos/0055 the OS boot REQUIRES a worker WebGPU
+// device (the compositor has no Canvas2D fallback) — same flags as the
+// rest of the os-*.mjs sweep. The no-GPU guard leg below launches its own
+// flag-disabled browser to assert the boot-nogpu screen.
+const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
 try {
   await waitForServer();
   const context = await browser.newContext();
@@ -166,6 +171,26 @@ try {
     () => window.__osOut.includes('GUARD-SHELL-OK\n'),
     { timeout: 30000, polling: 250 });
   check('the retried boot reaches a live shell', true);
+
+  // WebGPU boot guard (todos/0055): a browser without worker WebGPU must
+  // NOT boot — the compositor has no fallback, so the kernel worker stops
+  // before mounting anything and the page shows the loud guard screen.
+  // --disable-features=WebGPU makes requestAdapter deterministically null.
+  const noGpuBrowser = await chromium.launch({ args: ['--disable-features=WebGPU'] });
+  try {
+    const page3 = await (await noGpuBrowser.newContext()).newPage();
+    await page3.goto(URL);
+    await page3.waitForFunction(() => window.__osState === 'nogpu',
+      { timeout: 60000, polling: 250 });
+    const nogpuGuard = await page3.evaluate(() =>
+      document.body.hasAttribute('data-guard') &&
+      getComputedStyle(document.getElementById('guard')).display !== 'none' &&
+      /WebGPU/.test(document.getElementById('guardMsg').textContent) &&
+      getComputedStyle(document.getElementById('guardRetry')).display === 'none');
+    check('no-WebGPU boot hits the boot-nogpu guard (todos/0055)', nogpuGuard);
+  } finally {
+    await noGpuBrowser.close();
+  }
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   failures++;

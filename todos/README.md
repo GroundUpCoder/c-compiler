@@ -24,30 +24,32 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. `0055` **WebGPU compositor** — the kernel-worker scene assembly as
-   the one WebGPU pass WM.md designed; NO Canvas2D fallback (loud
-   `boot-nogpu` guard; decision 2026-07-09,
-   `logs/2026-07-09/webgpu-mvu-direction.md`)
-2. (unnumbered) a real-world WebGPU C app port — candidates via
+1. (unnumbered) a real-world WebGPU C app port — candidates via
    `WEBGPU.md`; the platform side landed with 0016
-3. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+2. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-4. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
+3. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
-5. The kernel-POSIX batch (any order): `0044` interval timers/SIGALRM,
+4. The kernel-POSIX batch (any order): `0044` interval timers/SIGALRM,
    `0046` strace
-6. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
+5. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
    AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
-7. The desktop wave: `0047` GUI toolkit substrate (microui) → `0056`
+6. The desktop wave: `0047` GUI toolkit substrate (microui) → `0056`
    Elm/MVU declarative layer (design: `TOOLKIT.md`) → `0048` desktop
    apps wave 1 (fileman/notepad/calc/minesweeper/control panel;
    notepad's editor rides 0056, the other four don't wait) →
    `0049` wallpaper; `0050` pdpmake + busybox patch/ed alongside
    (diff itself landed with 0035)
-8. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
+7. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
+
+(`0055` WebGPU compositor landed 2026-07-09: os/compositor.js is one
+WebGPU render pass per rAF — shm seq-gated writeTexture, gpu
+copyExternalImageToTexture, chrome flat quads + cached label textures —
+with NO Canvas2D fallback; no worker WebGPU at boot is a loud
+`boot-nogpu` guard screen. `logs/2026-07-09/webgpu-compositor.md`.)
 
 (`0043` procfs + the process tools landed 2026-07-09: synthetic /proc as
 a MountFS volume rendered from the kernel process table, busybox

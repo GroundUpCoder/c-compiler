@@ -10,8 +10,10 @@
      Terminal/Desktop TAB BAR at the top (the discoverable, primary
      affordance; Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2 remain as aliases). Boot
      lands on VT1. The point is availability under partial failure: VT1's
-     path is kernel worker + xterm only — no compositor, no wm, no GPU — so
-     the shell stays usable while the desktop is broken or merely suspect.
+     path is kernel worker + xterm only — no compositor, no wm — so the
+     shell stays usable while the desktop is broken or merely suspect.
+     (Boot itself requires WebGPU since todos/0055 — the boot-nogpu guard
+     below; a tty-only no-GPU boot was considered and rejected there.)
      Pure page-side state; the kernel keeps compositing while hidden
      (mailbox frames, bounded cost).
 
@@ -59,8 +61,9 @@
   /* VTs: exactly one of tty/desktop is visible (todos/0022). */
   body[data-vt="1"] #desktop { display: none; }
   body[data-vt="2"] #terminal { display: none; }
-  /* Two-tab boot guard (todos/0045): another tab holds the boot lock —
-     shown INSTEAD of the VT panes; retry re-attempts the lock. */
+  /* Boot guard screen — two-tab lock (todos/0045: retry re-attempts) and
+     the WebGPU requirement (todos/0055: no retry — the compositor IS
+     WebGPU, no fallback) — shown INSTEAD of the VT panes. */
   #guard { flex: 1; display: none; flex-direction: column; gap: 14px;
            align-items: center; justify-content: center; text-align: center;
            font: 14px 'Menlo', 'Consolas', monospace; color: #c0c0d8; }
@@ -84,7 +87,7 @@
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
   <div id="guard">
-    <div>wasm-os is already running in another tab.<br>
+    <div id="guardMsg">wasm-os is already running in another tab.<br>
          Close that tab, then retry — the lock frees when it closes.</div>
     <button id="guardRetry">Retry</button>
   </div>
@@ -300,6 +303,21 @@ kernel.onmessage = function (e) {
     case 'boot-locked':
       status('already running in another tab', true);
       window.__osState = 'locked';   // agent probe (tests/browser/os-boots.mjs)
+      document.getElementById('guardRetry').style.display = '';
+      document.body.setAttribute('data-guard', '1');
+      break;
+    // WebGPU boot guard (todos/0055): the kernel worker found no adapter/
+    // device — the compositor is WebGPU with NO fallback (decision log
+    // logs/2026-07-09/webgpu-mvu-direction.md), so the boot stops loudly
+    // before mounting anything. No retry: a reload won't grow a GPU.
+    case 'boot-nogpu':
+      status('WebGPU unavailable — cannot boot', true);
+      window.__osState = 'nogpu';    // agent probe (tests/browser/os-boots.mjs)
+      document.getElementById('guardMsg').innerHTML =
+        'wasm-os requires WebGPU — the desktop compositor renders with it<br>' +
+        '(no fallback). Use a browser with WebGPU available in workers,<br>' +
+        'e.g. current Chrome or Edge.';
+      document.getElementById('guardRetry').style.display = 'none';
       document.body.setAttribute('data-guard', '1');
       break;
     case 'ready':

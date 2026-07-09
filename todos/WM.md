@@ -183,13 +183,19 @@ traffic per frame ≈ 1GB/s at 60fps against hundreds of GB/s available; the
 quad count is single-digit. Damage-rect optimization is deliberately
 deferred.
 
-*(Status: v1 shipped a Canvas2D stand-in for this pass; `todos/0055`
-implements the WebGPU pass as specified here, as the ONLY compositor — the
-no-fallback decision and boot guard are recorded in the v1-deviations list
-below and in `logs/2026-07-09/webgpu-mvu-direction.md`. WebGPU is the
-native rendering interface of the platform end to end: apps render through
-`webgpu.h`, the compositor composites with it; Canvas2D scene assembly was
-a shortcut, not an architecture.)*
+*(Status: LANDED — `todos/done/0055`, 2026-07-09. os/compositor.js renders
+this pass as the ONLY compositor: shm surfaces seq-gated into cached
+per-surface GPUTextures via `writeTexture`, gpu surfaces imported once per
+ImageBitmap via `copyExternalImageToTexture`, chrome as flat quads over a
+1×1 white texture, title text + the close 'x' as cached label textures,
+nearest sampling at the dst viewport. No Canvas2D fallback — WebGPU
+missing in the kernel worker is a loud `boot-nogpu` guard
+(kernel-worker.js probe + os.html screen). The kernel-drawn cursor sprite
+is still not-yet (native browser cursor — see the deviations list). WebGPU
+is the native rendering interface of the platform end to end: apps render
+through `webgpu.h`, the compositor composites with it. Decision log
+`logs/2026-07-09/webgpu-mvu-direction.md`, dev log
+`logs/2026-07-09/webgpu-compositor.md`.)*
 
 **Headless twin**: same scene list, no blit target. Screenshot of a surface
 = copy bytes out of its SAB; screenshot of the screen = a ~40-line CPU
@@ -608,10 +614,16 @@ overlap). Image v27.
   dependency for CPU-present apps — doom-class apps display even where
   nested-worker WebGPU is unavailable). Input-ring drain before every
   frame tick.
-- **os/compositor.js** (kernel-worker side): Canvas2D scene draw per rAF —
-  desktop, shm surfaces via seq-cached ImageData, gpu surfaces via
-  drawImage(bitmap), chrome + title text; `routeInput` maps the bridge's
-  raw events through SDL_WEB's tables into `wmKey`/`wmPointer`.
+- **os/compositor.js** (kernel-worker side): ONE WebGPU render pass per
+  rAF (todos/done/0055; was Canvas2D in v1) — desktop clear, shm surfaces
+  as seq-gated `writeTexture` uploads into cached per-surface GPUTextures,
+  gpu surfaces imported once per ImageBitmap via
+  `copyExternalImageToTexture`, chrome as flat quads over a 1×1 white
+  texture, title text + the close 'x' as cached label textures (rasterized
+  through a throwaway 2D canvas — a texture source, not scene assembly).
+  No fallback: kernel-worker.js's `boot-nogpu` guard is the failure mode.
+  `routeInput` maps the bridge's raw events through SDL_WEB's tables into
+  `wmKey`/`wmPointer`.
 - **os/os.html**: desktop canvas pane (natural size; 800×500 at boot,
   viewport-tracking on VT2 since todos/done/0023) transferred to the
   kernel worker; raw input forwarding (keys as plain objects with a
@@ -630,8 +642,8 @@ overlap). Image v27.
 
 - **Present is pure SAB** (flip + seq, mailbox) — no SURFACE_PRESENT RPC at
   all; 0x1004 stays reserved for damage tracking.
-- ~~**Compositor is Canvas2D**~~ — SUPERSEDED (decision 2026-07-09, →
-  `todos/0055`): the WebGPU pass this doc designed becomes the ONLY
+- ~~**Compositor is Canvas2D**~~ — CLOSED (landed 2026-07-09,
+  `todos/done/0055`): the WebGPU pass this doc designed is now the ONLY
   browser compositor. **No Canvas2D fallback** — a fallback is two
   compositors with one a permanently undertested zombie; WebGPU
   unavailable in the kernel worker → a loud `boot-nogpu` guard screen
