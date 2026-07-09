@@ -2,7 +2,9 @@
 
 Status: proposed 2026-07-09, **revised same day after design review** (round 2:
 fork-not-share, `c`-namespace reuse, `@c` structs, `__funcref`, table-base-only
-PIC, linear-memory findings). **One slice landed**: `host.js` flavor dispatch +
+PIC, linear-memory findings; round 3: foreign pointers via multi-memory — a
+pointer-taking .so *accesses* C's memory as memory 1 without *residing* in it,
+so still no memory PIC). **One slice landed**: `host.js` flavor dispatch +
 a ported ss *core* env (commit `6b8e385`) runs simple `.ss` modules under
 `node host.js foo.wasm`. Everything past the core env is design, not built.
 Not yet a queue item — exploratory until promoted (per `README.md` §1).
@@ -171,7 +173,11 @@ Consequences:
   dependent only *within its own private memory*, which no other module
   addresses. The miserable parts of emscripten-style dynamic linking are all
   stack/static/heap-in-shared-memory problems; ss structurally doesn't have
-  them. No `__memory_base`, ever.
+  them. No `__memory_base`, ever. The load-bearing distinction is **access
+  vs residence**: a .so may *access* the caller's memory (multi-memory,
+  below) — what forces memory PIC is ss's own statics/heap *residing* at a
+  load-assigned address in someone else's memory, and nothing in this design
+  ever requires that.
 - **Shared malloc: the question mostly dissolves.** The two allocators are
   already the same algorithm; "picking one" is an *instance* choice, and
   allocator instances are 1:1 with memories. While memories stay private
@@ -209,15 +215,17 @@ Two rules that keep this sound:
   layout rules** — alignment, padding, ILP32 — never hand-maintained twice.
   A small tool that feeds struct decls to compiler.js and emits/asserts the
   ss `@c` defs kills a whole class of silent corruption. Bitfields excluded.
-- **The foreign-memory rule**: ss `Memory.load*` hits ss's *own* memory 0.
+- **The memory-space rule**: ss `Memory.load*` hits ss's *own* memory 0.
   In a standalone ss process that's exactly right (buffers it allocated and
   passed to `c` syscalls). But in the .so case a `Foo*` from the C caller
-  points into *C's* memory — `@c` accessors would silently read the wrong
-  memory. Rule: **pointers do not cross the .so boundary** (enforced by
-  bindgen — reject any export/import signature containing `*T`/`[n]T`/
-  `iptr`). A later escape hatch exists if ever needed: multi-memory (the ss
-  .so imports the host's memory as memory 1; foreign-pointer accessors use
-  memidx-1 loads). Gated separately; not round one.
+  points into *C's* memory — plain accessors would silently read the wrong
+  memory. The fix is that **the memory space is part of the pointer type**
+  (see "Foreign pointers via multi-memory" below): a foreign-pointer kind
+  whose accessors emit memidx-1 loads/stores against the imported caller
+  memory. `@c struct` accessors are parameterized by space — same layout
+  code monomorphized per memidx: own memory in a standalone process,
+  memory 1 for C-provided pointers in a .so. Untyped mixing of the two
+  spaces is a compile error, not a runtime surprise.
 
 ## `__funcref` in the C compiler
 
@@ -334,9 +342,41 @@ handle.
   side is the same engine type (structural canonicalization).
 - **functions** → `&fn` / `__funcref` at the typed seam; shared-table `*fn`
   slots for legacy C function-pointer APIs (table-base PIC above).
-- **pointers** (`*T`, `[n]T`, `iptr`) → **rejected at the seam by bindgen**
-  (foreign-memory rule above). Opaque-handle fallback (i32 into a host-side
-  ref table) only where a shape is deliberately hidden.
+- **pointers** → **directional**: C addresses flow *in*, typed on the ss
+  side as foreign pointers into the imported caller memory (multi-memory,
+  below); ss's own-memory addresses never flow *out* (bindgen rejects
+  `iptr`/own-space `*T` in export signatures — C cannot address ss's
+  memory). A C-space address ss received or derived may flow back out.
+  Opaque-handle fallback (i32 into a host-side ref table) only where a
+  shape is deliberately hidden.
+
+### Foreign pointers via multi-memory
+
+A pointer-free surface would cripple the classic use case —
+`ss_parse(buf, len)` with `buf` in C's memory. The mechanism that serves it
+without memory PIC: under `--shared`, the ss .so **imports the caller's
+memory as memory 1** while its own statics/allocator stay at their baked
+addresses in private memory 0. Multi-memory makes the memory index an
+immediate on every load/store, so "which memory" is a compile-time property
+of the pointer's *type* — zero runtime dispatch, zero overhead.
+
+- **Growth is transparent**: wasm loads always see the memory's current
+  size (the JS stale-TypedArray-view hazard does not exist at the wasm
+  level), so C growing its memory needs no coordination.
+- **Allocating in C's space**: when ss must return a buffer C owns, it
+  calls the caller's exported `malloc`/`free` through the FFI. ss's own
+  TLSF never touches memory 1; each allocator stays 1:1 with its memory.
+- **Engine support**: multi-memory is standardized and shipped everywhere
+  we already require GC + JSPI (which are stricter).
+- **Tiering**: a pure-GC library imports no memory at all
+  (`--no-linear-memory` still applies); a pointer-taking library adds the
+  memory-1 import. No tier ever has ss *residing* in C's memory — the only
+  tier that would cost `__memory_base` PIC, and it stays rejected.
+
+ss.js cost: a foreign-pointer kind in the type system (space as part of the
+pointer type), memidx selection in load/store emission, the memory import
+under `--shared`. Contained, but it is the largest single piece of the
+`--shared` mode — bigger than the table-base change.
 
 ### The missing toolchain piece: manifest + bindgen
 
@@ -354,6 +394,10 @@ declarations (hand-written headers drift → canonicalization mismatch →
   funcref-table slots / binding thunks.
 - **True `dlopen`**: fetch bytes from BlockFS, instantiate + wire the ss env,
   return a handle; `dlsym` → a funcref / table index.
+- **Per-instance statics**: a native `.so` has one copy of its globals per
+  process; here each *instantiation* has its own memory and globals. Loader
+  policy: `dlopen` of the same library returns the cached per-process
+  instance, matching native `.so` intuition.
 
 ### Boundary hazards
 
@@ -388,7 +432,8 @@ declarations (hand-written headers drift → canonicalization mismatch →
 5. **`@c struct`** syntax + layout golden-tests against compiler.js.
 6. **`__funcref`** in the C compiler.
 7. **Manifest + bindgen**; load-time binding via shared funcref table
-   (+ `--shared` table-base mode in ss.js); then true `dlopen` from BlockFS.
+   (+ `--shared` in ss.js: table-base rebasing and the memory-1 import /
+   foreign-pointer type); then true `dlopen` from BlockFS.
 8. Reference-shaped ss-native bindings (WebGPU, JS interop) as demand
    arises; `--no-linear-memory` mode alongside the .so work.
 

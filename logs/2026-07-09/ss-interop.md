@@ -120,6 +120,32 @@ with bindgen promoted to the *only* source of C-side declarations, since
 hand-written headers drifting out of shape-sync produce canonicalization
 mismatches that trap at call time.
 
+## Round 3 addendum: foreign pointers via multi-memory
+
+The round-2 rule "pointers never cross the .so boundary" got challenged the
+same day, correctly: it kills the classic use case — `ss_parse(buf, len)`
+with `buf` in C's memory. The resolution is a distinction worth naming:
+**access vs residence**. What forces memory PIC is *residence* — ss's own
+statics/heap living at a load-assigned address inside C's memory (the
+emscripten MAIN/SIDE model). Merely *accessing* C's memory needs only
+multi-memory: under `--shared` the ss .so imports the caller's memory as
+memory 1, dereferences C pointers with memidx-1 loads/stores, and keeps its
+own statics at their baked addresses in private memory 0. Still no
+`__memory_base`, ever.
+
+The design fallout: the memory space becomes part of the pointer type (a
+foreign-pointer kind; `@c struct` accessors monomorphize per space), the
+bindgen rule turns directional (C addresses flow in as foreign pointers;
+ss's own addresses never flow out), ss allocates in C's space only via the
+caller's exported malloc/free, and memory growth is a non-issue (wasm loads
+always see current size — the stale-view hazard is JS-only). Multi-memory
+is shipped everywhere we already require GC + JSPI. This is now the largest
+single piece of `--shared` — bigger than the table-base change — and was
+promoted in the doc from escape-hatch footnote to the pointer story proper.
+Also recorded: per-instance statics (each instantiation = own globals), so
+dlopen returns the cached per-process instance to match native .so
+intuition.
+
 Still exploratory — not yet promoted to queue items. Sequencing in the doc:
 vendor first, unify runModule second, POSIX stdlib third; the .so milestone
 rides on all of it.
