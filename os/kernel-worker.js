@@ -21,6 +21,15 @@
 //                                                (todos/0023): resize the
 //                                                OffscreenCanvas + wmSetScreen
 //                                                (-> EV_SCREEN to the wm)
+//                   {type:'drop-file', name, bytes}
+//                                                host file dropped on the
+//                                                desktop (todos/0067): write
+//                                                bytes to /root/Desktop/<name>
+//                                                (kernel-side fs — no process,
+//                                                no RPC); /bin/wm's coarse
+//                                                re-read grows the icon ~1s
+//                                                later. bytes is a transferred
+//                                                ArrayBuffer (zero-copy).
 //   kernel -> page: {type:'out', bytes}          tty output (program + echo)
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
@@ -60,6 +69,7 @@ try {
 
 var kernel = null;
 var tty = null;
+var kfs = null;        // the kernel's MountFS (drop-file writes; todos/0067)
 var wmCanvas = null;   // the desktop OffscreenCanvas (screen-resize target)
 var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
 var post = function (m) { self.postMessage(m); };
@@ -90,8 +100,56 @@ self.onmessage = function (e) {
     }
   } else if (m.type === 'wm-input') {
     OS_COMPOSITOR.routeInput(kernel, SDL_WEB, m.ev);
+  } else if (m.type === 'drop-file') {
+    dropFile(m);
   }
 };
+
+// Host-file drop (todos/0067): the page posts each dropped File's name +
+// bytes; the kernel writes them under /root/Desktop, where /bin/wm's coarse
+// per-second re-read (desk_load) grows an icon with no notify plumbing.
+// Direct kernel-side fs write — no process, no fd RPC round-trip. Policy:
+// the name is reduced to one sanitized path component, collisions get a
+// "-N" suffix before the extension (dropping never overwrites what's
+// already there), and payloads over the sanity cap are refused. Feedback
+// rides boot-log (the status line + __osLogs — visible on both VTs; the
+// tty byte stream stays program-output-clean).
+var DROP_DIR = '/root/Desktop';
+var DROP_MAX = 128 * 1024 * 1024;   // sanity cap, not a quota
+function dropFile(m) {
+  var note = function (msg) { post({ type: 'boot-log', msg: '[drop] ' + msg }); };
+  var bytes = new Uint8Array(m.bytes);
+  // Basename + control-char strip; empty/degenerate names get a stand-in.
+  var name = String(m.name || '').split('/').pop().split('\\').pop()
+    .replace(/[\x00-\x1f\x7f]/g, '').trim();
+  if (!name || name === '.' || name === '..') name = 'dropped';
+  if (bytes.length > DROP_MAX) {
+    note(name + ': refused (' + bytes.length + ' bytes > ' + DROP_MAX + ' cap)');
+    return;
+  }
+  try {
+    kfs.mkdir(DROP_DIR, 0o755);   // self-heal a deleted Desktop (EEXIST is fine)
+    // Collision policy: foo.gb -> foo-1.gb, foo-2.gb, … (lstat, not stat —
+    // a dangling symlink still owns its name).
+    var dot = name.lastIndexOf('.');
+    var stem = dot > 0 ? name.slice(0, dot) : name;
+    var ext = dot > 0 ? name.slice(dot) : '';
+    var final = name;
+    for (var i = 1; kfs.lstat(DROP_DIR + '/' + final) !== null; i++) {
+      if (i > 99) { note(name + ': refused (99 name collisions)'); return; }
+      final = stem + '-' + i + ext;
+    }
+    var path = DROP_DIR + '/' + final;
+    OS_COMMON.writeFile(kfs, path, bytes, 0o644);
+    // Durability (the acceptance's reload-survival): fsync flushes the
+    // owning volume's store to OPFS.
+    var fd = kfs.open(path, 0, 0);
+    if (fd !== null) { kfs.fsync(fd); kfs.close(fd); }
+    note(final + ' -> ' + path + ' (' + bytes.length + ' bytes)');
+  } catch (e) {
+    note(name + ': write failed — ' + String((e && e.message) || e));
+  }
+}
 
 function createWorker(procSpec) {
   var w = new Worker('process-worker.js');
@@ -274,8 +332,9 @@ async function boot() {
   // legacy path is inert.)
   var wsRoot = await BLOCK_FS.openWorkspace({ v4Name: ROOT_IMG, v3Name: 'os-root.v3.img' });
   // /proc (todos/0043): a synthetic kernel-rendered volume — the Kernel
-  // constructor binds itself to it via the mount table.
-  var kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs, '/proc': new KERNEL.ProcFS() });
+  // constructor binds itself to it via the mount table. (Worker-global:
+  // the drop-file handler writes through it — todos/0067.)
+  kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs, '/proc': new KERNEL.ProcFS() });
   if (wsRoot.mode === 'fresh') {
     post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
     OS_COMMON.initRootVolume(kfs);

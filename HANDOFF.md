@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10, after 0066 landed)
+# Handoff — start of thread (updated 2026-07-10, after 0067 landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,37 +7,30 @@
 
 ## Where the repo stands
 
-**0066 (unified run/activate) landed 2026-07-10** — dev log
-`logs/2026-07-10/unified-activate.md`. ONE `activate(path)` in `os/wm.c`
-now serves the Start menu AND the desktop double-click (and any future
-file browser — 0048): symlink → spawn its target; regular file that is
-runnable → spawn directly ("runnable" = the kernel can exec it — wasm
-`\0asm` or a `#!` script (0065), decided by peeking the first bytes,
-mirroring `kernel.js _spawnBytes`' own dispatch; content decides, NOT
-mode bits — the kernel checks no X bit); anything else → `term vi`. The
-old first-line-argv menu format is DELETED (no compat branch); launchers
-are ordinary `#!/bin/sh` scripts. Its one seeded user,
-`/usr/share/menu/snake`, became `#!/bin/sh\nterm snake\n` in image.json.
+**0067 (desktop drag-and-drop) landed 2026-07-10** — dev log
+`logs/2026-07-10/desktop-drag-drop.md`. Dropping a host file on the VT2
+desktop pane writes it to `/root/Desktop`: os.html posts
+`{type:'drop-file', name, bytes}` (ArrayBuffer transferred, zero-copy;
+`.droptarget` inset ring while hovering), kernel-worker.js owns ALL
+policy — sanitized basename, `-N` collision suffix before the extension
+(never overwrite; lstat so dangling symlinks keep their name), 128 MiB
+sanity cap, `mkdir` self-heal, `OS_COMMON.writeFile` through the
+kernel-side MountFS + `fsync` for OPFS durability. Feedback rides
+boot-log (`[drop] …` on the status line + `__osLogs`) — NOT the tty
+(deliberate deviation from the item sketch: kernel text in the tty
+stream garbles the prompt and is invisible from VT2). /bin/wm's existing
+~1s `desk_load` re-read grows the icon — zero wm/kernel.js/host.js
+change, no image bump (v36 stands; nothing baked changed), headless
+boot.js unaffected.
 
-**Image bumped v35 → v36** (menu/snake content + the wm binary changed);
-`os/os-system.img` rebaked via `node tools/mkimage.js`.
-
-**Suites this session**: kernel — ALL files pass (test_wm_service_e2e.js
-grew a 0066 section: a runtime-dropped `#!/bin/sh` desktop launcher
-spawns winbox +1, notes.txt still opens the viewer (term +1), an
-/etc/menu launcher script launches identically from the Start menu, and
-seeded menu/snake starts `#!`); blockfs 12/12; browser subset serial —
-os-boots / os-shell / os-wm PASS (menu still 9 entries, same names —
-the 150x188+0+552 constants hold). Unit suite not re-run:
-compiler.js/host.js/kernel.js untouched (os/wm.c + image.json + tests +
-docs only).
-
-**Concurrent landing mid-thread**: `dec3424` (todos queue
-single-sourcing — per-item `- **Depends**:` lines stripped, README
-*Next up* enumeration deleted; queue.json is the ONLY order/dep source,
-`queue.js list` the view). Leftover spotted, NOT fixed (their scope):
-`todos/README.md` "Conventions" still tells you to keep "this README's
-*Next up* list" in sync — that list no longer exists.
+**Suites this session**: new `tests/browser/os-drop.mjs` PASS first run
+(12 legs: highlight, md5 byte-identity of an all-values binary payload,
+icon-without-reboot, `blob-1.bin` collision, a dropped `#!/bin/sh`
+launcher double-click-spawning winbox — 0066 end-to-end — and
+close-page→reopen reload persistence with both md5s re-verified);
+regression subset serial — os-boots / os-shell / os-wm PASS. Kernel/
+blockfs/unit suites not re-run: compiler.js, host.js, kernel.js, wm.c
+all untouched (os.html + kernel-worker.js + a new test + docs only).
 
 **Still owed from 0039**: the pointer-lock HUMAN check was deferred by
 ALL sweep rounds so far. It is a MUST for WM sweep round 3 (`0064`) —
@@ -45,21 +38,25 @@ first free moment with a human at the keys: quake lock on click, ESC
 unlock, click re-lock, VT-switch release.
 
 **Concurrent work note**: other sessions are active on this tree
-(SS-INTEROP slices per `todos/SS-INTEROP.md`; the queue tooling landed
-mid-thread here). If files show uncommitted changes you didn't make,
-that's them — verify todos/ freshness and stage ONLY your own files.
+(SS-INTEROP slices per `todos/SS-INTEROP.md`). If files show uncommitted
+changes you didn't make, that's them — verify todos/ freshness and stage
+ONLY your own files.
 
 ## The queue (todos/queue.json is authoritative)
 
 Order + deps: `node todos/queue.js list` — do NOT copy the ordering into
-this file (hand-copied roadmaps drift; the 2026-07-10 single-source
-change deleted the README's for exactly that). Immediate context only:
-`0066` is done; `0067` desktop drag-drop is now unblocked (dropping a
-file onto the desktop = putting a file in /root/Desktop, and 0066's
-activate() already runs whatever lands there).
+this file. Immediate context only: `0067` is done; `0060` (Win32 port
+harness / missing-symbol log) is now the front of the queue, and `0048`
+(file browser) stays blocked on it.
 
 ## Gotchas carried forward
 
+- **0067**: kernel-worker's `kfs` is a WORKER GLOBAL assigned in
+  `boot()` — don't re-`var` it there (shadowing silently breaks the drop
+  path; pre-boot drops replay through the `pending` queue and rely on
+  `kfs` being set before `tty`). os-drop.mjs derives icon-cell rows from
+  sort order (`blob.bin` sorts before the four seeded links) — a new
+  seeded /root/Desktop entry shifts every cell index in that test.
 - **0066**: `activate()` does its own lstat (the entry array is a stale
   UI snapshot; `menu_ent.is_link` survives for icon drawing only). The
   runnable peek is fopen/fread of the first 4 bytes — keep it matching
@@ -105,6 +102,8 @@ activate() already runs whatever lands there).
 - Queue changes go through `node todos/queue.js` ONLY (`done`, `add`,
   `reorder`); `check` must pass before committing (pre-commit hook
   enforces it once `git config core.hooksPath todos/githooks` is set).
+  After `queue.js done`, check `git status` — the internal git-mv can
+  stage a pre-edit blob (re-`git add` the done file).
 - **0055**: `copyExternalImageToTexture` destinations need
   `RENDER_ATTACHMENT` usage besides COPY_DST/TEXTURE_BINDING. WebGPU
   needs a secure context; boot REQUIRES worker WebGPU: browser os tests
@@ -127,7 +126,7 @@ activate() already runs whatever lands there).
 - Two unit goldens encode libc internals and move when libc changes:
   `switch_br_table` expected.compiler.stderr and `printf`'s
   pointer-address line. Verify the tests' OWN asserts before updating.
-  (0066 touched no libc.)
+  (0067 touched no libc.)
 - **0040 layout in tests**: headless images pair as `foo-system.img` +
   `foo-root.img`; OPFS names `os-system.v5.img`/`os-root.v5.img` — those
   names are ALSO the Web Lock name (0045): renaming the images renames
@@ -137,7 +136,9 @@ activate() already runs whatever lands there).
   geometry from `__osScreen`/live canvas rect; keep the sweep serial;
   `cmd &; echo` is a hush parse error; `__osScreen` only tracks the
   viewport while VT2 is visible. A SECOND page needs a fresh
-  context/browser (the 0045 boot lock).
+  context/browser (the 0045 boot lock) — EXCEPT when the test closes
+  the first page (the lock frees; os-drop.mjs's reload leg uses this to
+  keep the same context = same OPFS).
 - hush `kill` is cooperative SIGTERM: barrier on surfaces vanishing
   before asserting no-WM behavior.
 - The IDE's clangd flags os/*.c, os/win32/*.c and vendor busybox/SDL
@@ -168,7 +169,8 @@ activate() already runs whatever lands there).
 - `tests/browser/os-*.mjs` are manual — run the full sweep serially
   after touching os/, kernel.js, host.js SDL/webgpu/fd/audio/input/tty
   paths, or anything that rebakes every binary (a libc/codegen change
-  does). The sweep now includes `os-gdi.mjs` + `os-user32.mjs`.
+  does). The sweep now includes `os-gdi.mjs` + `os-user32.mjs` +
+  `os-drop.mjs` (0067).
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
   invariants, 0013–0058's decisions, DISK-IMAGE.md's settled layout,
   0045's no-steal/no-SharedWorker calls, 0036's minimal-port-mp scope,
@@ -178,12 +180,14 @@ activate() already runs whatever lands there).
   (microui/MVU are DROPPED), 0057's recorded simplifications, 0058's
   (scrollbar notify-only, one-request-per-connection agent protocol,
   process-wide kernel close — grow via 0060's missing-symbol log, don't
-  gold-plate), 0065's ENOEXEC-not-ELOOP + one-optarg calls, and 0066's
+  gold-plate), 0065's ENOEXEC-not-ELOOP + one-optarg calls, 0066's
   no-compat-branch call (launchers are ordinary `#!` scripts; the
-  first-line-argv menu format is gone for good).
+  first-line-argv menu format is gone for good), and 0067's calls
+  (never-overwrite `-N` suffix, status-line-not-tty feedback, policy
+  lives kernel-worker-side).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0067 desktop drag-drop, standing up 0060's port harness early,
-0046 strace, or something else."
+to tackle: 0060's Win32 port harness, 0046 strace, 0061/0062, or
+something else."

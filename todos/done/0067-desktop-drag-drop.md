@@ -1,6 +1,16 @@
 # 0067 — drag-and-drop files onto the desktop
 
-- **Status**: open
+- **Status**: done — landed 2026-07-10 (page `drop`/`dragover` listeners on
+  the #desktop pane in os/os.html post `{type:'drop-file', name, bytes}`
+  with the ArrayBuffer transferred; kernel-worker.js writes via the
+  kernel-side MountFS + fsync-to-OPFS, sanitized basename, `-N` collision
+  suffix (never overwrite), 128 MiB sanity cap, feedback on the boot-log/
+  status line (`__osLogs`) — the tty byte stream stays clean; /bin/wm's
+  existing ~1s desk_load re-read grows the icon, zero wm change; no image
+  bump (nothing baked changed). Acceptance `tests/browser/os-drop.mjs`:
+  highlight, md5 byte-identity, icon-without-reboot, collision suffix, a
+  dropped `#!/bin/sh` launcher double-click-runs (0066), reload
+  persistence; dev log `logs/2026-07-10/desktop-drag-drop.md`)
 - **Design**: `OS.md` (page ↔ kernel bridge), `KERNEL.md` / BlockFS
 
 ## Goal
