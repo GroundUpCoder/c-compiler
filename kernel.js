@@ -878,7 +878,11 @@ Tty.prototype.setattr = function (actions, t) {
  * Injected capabilities (all optional except createWorker):
  *   createWorker(procSpec) -> handle   REQUIRED. Creates the process worker.
  *       procSpec: { pid, ppid, pgid, path, argv, envp, cwd, actions, flags,
- *                   image (ArrayBuffer), kernelPage (SAB) }
+ *                   image (ArrayBuffer|null), module (WebAssembly.Module|null),
+ *                   kernelPage (SAB) }
+ *       Exactly one of image/module is non-null: module is the compiled-
+ *       Module cache hit (todos/0037 — structured-clone it to the worker);
+ *       image is the raw-bytes path for everything uncacheable.
  *       handle:   { postMessage(msg), onMessage(fn), onExit(fn), terminate() }
  *   loadImage(path) -> bytes | Promise<bytes> | null   resolve a spawn path
  *       to a wasm image (null -> ENOENT). The reference OS page reads its
@@ -921,6 +925,20 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
+  // The compiled-Module cache (todos/0037): spawn compiles each READ-ONLY-
+  // volume binary once and ships the WebAssembly.Module in the spawn message
+  // (Modules structured-clone across workers; Instances don't). Keyed by the
+  // fs's immutableKey — non-null only for regular files on a read-only
+  // volume, whose contents can't change for the mount's lifetime, so there
+  // is no invalidation to get wrong: mutable binaries (a fresh `cc -o
+  // a.out`) key null and keep the bytes+compile-per-spawn path. Values are
+  // Promises (racing spawns of the same binary share one compile); a
+  // Promise resolving null marks "uncacheable after all" (ss-flavored,
+  // compile error, Modules don't clone on this tier).
+  this._moduleCache = new Map();   // immutableKey -> Promise<Module|null>
+  this._moduleCacheHits = 0;
+  this._moduleCacheMisses = 0;
+  this._moduleCloneOk = undefined; // one-shot structuredClone(Module) probe
   this._ofds = new Map();    // ofdId -> { id, kind:'file'|'tty'|'out'|'null'|'pipe'|'socket'|'ptm', refs, bfsFd?, ch?, pipe?, end?, st?, rx?, tx?, path?, backlog?, pending?, acceptWaiters?, tty?, pty? }
                              // 'tty' with pty set = a pty SLAVE (0020);
                              // 'ptm' = a pty master.
@@ -1101,139 +1119,228 @@ Kernel.prototype._spawn = function (parent, spec) {
   var self = this;
   if (this._halted) return Promise.resolve({ errno: 'ESRCH' });
   if (!spec || typeof spec.path !== 'string') return Promise.resolve({ errno: 'EFAULT' });
+  // Module cache (todos/0037): compute the key BEFORE the image read, in the
+  // same synchronous turn (both embedders' loadImage is sync), so the
+  // identity the cache stores is the identity the bytes were read under —
+  // no window for a concurrent rename to slip between them. A cache hit
+  // skips loadImage entirely (zero fs work per spawn): immutableKey just
+  // stat'ed the path, which IS the existence check, and RO-volume contents
+  // can't have drifted from the cached compile.
+  var mkey = this._imageCacheKey(spec.path);
+  var cached = mkey ? this._moduleCache.get(mkey) : null;
+  if (cached) {
+    this._moduleCacheHits++;
+    return cached.then(function (module) {
+      // Cached null = "uncacheable after all" (ss flavor / engine-rejected
+      // bytes / no clone support): fall through to the bytes path.
+      return module ? self._spawnImage(parent, spec, null, module)
+        : self._spawnBytes(parent, spec, null);
+    });
+  }
+  return this._spawnBytes(parent, spec, mkey);
+};
+
+/* The bytes leg of _spawn: read the image, compile-and-cache when mkey says
+ * it's immutable, then hand off. */
+Kernel.prototype._spawnBytes = function (parent, spec, mkey) {
+  var self = this;
   return Promise.resolve(this._loadImage(spec.path)).then(function (image) {
     if (!image) return { errno: 'ENOENT' };
-    var pid = self._nextPid++;
-    // spec.flags bit0 = "set process group" (posix_spawn normalizes
-    // POSIX_SPAWN_SETPGROUP to 1u); pgid 0 means "own pid" per POSIX.
-    var pgid = (spec.flags & 1) ? (spec.pgid > 0 ? spec.pgid : pid)
-      : (parent ? parent.pgid : pid);
-    var pcb = {
-      pid: pid,
-      ppid: parent ? parent.pid : 0,
-      pgid: pgid,
-      sid: parent ? parent.sid : pid,
-      state: STATE_RUNNING,
-      exit: 0,                       // wait-status once ZOMBIE
-      pendingStop: 0,                // stop signal not yet reported via WUNTRACED
-      pendingCont: false,            // continue not yet reported via WCONTINUED
-      children: new Set(),
-      envp: spec.envp !== null && spec.envp !== undefined ? spec.envp
-        : (parent ? parent.envp : []),
-      cwd: spec.cwd !== null && spec.cwd !== undefined ? spec.cwd
-        : (parent ? parent.cwd : '/'),
-      sigdisp: new Int8Array(NSIG),  // __on_sigdisp mirror; all DFL initially
-      // ONE deferred RPC at a time (the worker is parked):
-      // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
-      // | {op:'piperead',pipe,count} | {op:'pipewrite',pipe,data}
-      waiter: null,
-      fds: new Map(),                // procFd -> ofdId (brokered mode)
-      page: null, i32: null, u8: null,
-      worker: null,
-      tty: self._tty,                // v1: the one system tty (or null)
-      surfaces: new Set(),           // sids owned by this process (WM.md)
-      wmRing: null,                  // input ring: { i32, f32, cap }
-      _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
-      audios: new Set(),             // aids owned by this process (todos/0017)
-      _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
-    };
-    var sab = new SharedArrayBuffer(KP_SIZE);
-    pcb.page = sab;
-    pcb.i32 = new Int32Array(sab);
-    pcb.u8 = new Uint8Array(sab);
-
-    // Brokered fd table: full POSIX inheritance (every parent fd, sharing
-    // the open file descriptions), then the spawn file_actions in order.
-    // The kernel IS the parent's fd table, so no translation is needed —
-    // the payoff of the fd/data-plane amendment.
-    if (self._brokered) {
-      var inherit = parent ? parent.fds : null;
-      if (inherit) {
-        inherit.forEach(function (ofdId, fd) {
-          var o = self._ofds.get(ofdId);
-          if (o) { o.refs++; pcb.fds.set(fd, ofdId); }
-        });
-      } else {
-        var std = self._stdOfds();
-        std.in_.refs++; pcb.fds.set(0, std.in_.id);
-        std.out.refs++; pcb.fds.set(1, std.out.id);
-        std.err.refs++; pcb.fds.set(2, std.err.id);
-      }
-      var actions = spec.actions || [];
-      for (var ai = 0; ai < actions.length; ai++) {
-        var a = actions[ai];
-        var fail = null;
-        if (a.op === 0) {           // DUP2: child fd `arg` -> child fd `fd`
-          var srcId = pcb.fds.get(a.arg);
-          if (srcId === undefined) fail = 'EBADF';
-          else {
-            self._ofds.get(srcId).refs++;
-            var oldId = pcb.fds.get(a.fd);
-            if (oldId !== undefined) self._ofdUnref(oldId);
-            pcb.fds.set(a.fd, srcId);
-          }
-        } else if (a.op === 1) {    // OPEN path at fd (arg = oflag)
-          var bfsFd = self._fs.open(self._pathFor(pcb, a.path), a.arg | 0, a.mode | 0);
-          if (bfsFd === null) fail = self._fs._lastError || 'EIO';
-          else {
-            var no = self._makeOfd('file', { bfsFd: bfsFd });
-            no.refs++;
-            var prevId = pcb.fds.get(a.fd);
-            if (prevId !== undefined) self._ofdUnref(prevId);
-            pcb.fds.set(a.fd, no.id);
-          }
-        } else if (a.op === 2) {    // CLOSE
-          var cId = pcb.fds.get(a.fd);
-          if (cId !== undefined) { self._ofdUnref(cId); pcb.fds.delete(a.fd); }
-        }
-        if (fail) {
-          pcb.fds.forEach(function (id) { self._ofdUnref(id); });
-          return { errno: fail };
-        }
-      }
-      // Attach the controlling-ish tty (0020): a child whose fd 0 is a pty
-      // slave lives on THAT pty — termios/pgrp RPC fallback, control-char
-      // signals, and the winsize SAB handed to the worker below all follow.
-      // The first attach claims the foreground (the terminal app spawns its
-      // shell as a pgroup leader; the shell then owns tcsetpgrp).
-      var o0id = pcb.fds.get(0);
-      var o0 = o0id === undefined ? null : self._ofds.get(o0id);
-      if (o0 && o0.kind === 'tty' && o0.tty) {
-        pcb.tty = o0.tty;
-        if (!pcb.tty.fgPgid) pcb.tty.fgPgid = pcb.pgid;
-      }
-    }
-
-    self._procs.set(pid, pcb);
-    if (parent) parent.children.add(pid);
-    var procSpec = {
-      pid: pid, ppid: pcb.ppid, pgid: pcb.pgid,
-      path: spec.path,
-      argv: (spec.argv && spec.argv.length) ? spec.argv : [spec.path],
-      envp: pcb.envp,
-      cwd: pcb.cwd,
-      actions: spec.actions || [],   // brokered: already applied kernel-side above
-      flags: spec.flags | 0,
-      image: image,
-      kernelPage: sab,
-      ttySab: pcb.tty ? pcb.tty.sab : null,
-      brokered: self._brokered,
-    };
-    try {
-      pcb.worker = self._createWorker(procSpec);
-    } catch (e) {
-      self._procs.delete(pid);
-      if (parent) parent.children.delete(pid);
-      self._log('spawn: createWorker failed: ' + (e && e.message));
-      return { errno: 'EAGAIN' };
-    }
-    pcb.worker.onMessage(function (msg) { self._onWorkerMessage(pcb, msg); });
-    pcb.worker.onExit(function () {
-      // Channel death without an 'exited' message = abnormal termination.
-      if (pcb.state === STATE_RUNNING) self._exitProcess(pcb, W_TERMSIG(SIG.SEGV));
+    return self._moduleFor(mkey, image).then(function (module) {
+      return self._spawnImage(parent, spec, image, module);
     });
-    return { pid: pid };
   });
+};
+
+/* immutableKey through the kernel fs, or null (no fs / fs without the hook /
+ * mutable path). Never throws — an fs error just means "don't cache". */
+Kernel.prototype._imageCacheKey = function (path) {
+  if (!this._fs || typeof this._fs.immutableKey !== 'function') return null;
+  try { return this._fs.immutableKey(path); } catch (e) { return null; }
+};
+
+/* Resolve a spawn image to a shippable pre-compiled Module, or null (keep
+ * the bytes path). Cache-hit or compile-once per immutableKey; the cached
+ * Promise dedupes racing spawns of the same binary. ss-flavored modules are
+ * excluded (runModule recompiles them from bytes with importedStringConstants
+ * — see runSsModule), as are tiers where Modules don't structured-clone. */
+Kernel.prototype._moduleFor = function (mkey, image) {
+  if (!mkey) return Promise.resolve(null);
+  var cached = this._moduleCache.get(mkey);
+  if (cached) { this._moduleCacheHits++; return cached; }
+  this._moduleCacheMisses++;
+  var self = this;
+  var bytes = image instanceof Uint8Array ? image : new Uint8Array(image);
+  // Compile options MUST MATCH host.js runModule's.
+  var p = WebAssembly.compile(bytes, { builtins: ['js-string'] }).then(function (mod) {
+    if (WebAssembly.Module.imports(mod).some(function (i) { return i.module === 'ss'; })) {
+      return null;   // ss flavor: bytes path (cached null — no re-probing)
+    }
+    if (self._moduleCloneOk === undefined) {
+      if (typeof structuredClone === 'function') {
+        try { structuredClone(mod); self._moduleCloneOk = true; }
+        catch (e) { self._moduleCloneOk = false; }
+      } else {
+        self._moduleCloneOk = true;   // no probe available; postMessage decides
+      }
+    }
+    return self._moduleCloneOk ? mod : null;
+  }, function (e) {
+    // A binary the engine rejects: ship bytes and let the process worker
+    // surface the real compile error to its own caller.
+    self._log('module cache: compile failed for ' + mkey + ': ' + (e && e.message));
+    return null;
+  });
+  this._moduleCache.set(mkey, p);
+  return p;
+};
+
+Kernel.prototype.moduleCacheStats = function () {
+  return {
+    entries: this._moduleCache.size,
+    hits: this._moduleCacheHits,
+    misses: this._moduleCacheMisses,
+  };
+};
+
+/* The tail of _spawn once the image — and, on a cache hit, its pre-compiled
+ * Module — is in hand: pid allocation, fd inheritance, worker creation. */
+Kernel.prototype._spawnImage = function (parent, spec, image, module) {
+  var self = this;
+  var pid = self._nextPid++;
+  // spec.flags bit0 = "set process group" (posix_spawn normalizes
+  // POSIX_SPAWN_SETPGROUP to 1u); pgid 0 means "own pid" per POSIX.
+  var pgid = (spec.flags & 1) ? (spec.pgid > 0 ? spec.pgid : pid)
+    : (parent ? parent.pgid : pid);
+  var pcb = {
+    pid: pid,
+    ppid: parent ? parent.pid : 0,
+    pgid: pgid,
+    sid: parent ? parent.sid : pid,
+    state: STATE_RUNNING,
+    exit: 0,                       // wait-status once ZOMBIE
+    pendingStop: 0,                // stop signal not yet reported via WUNTRACED
+    pendingCont: false,            // continue not yet reported via WCONTINUED
+    children: new Set(),
+    envp: spec.envp !== null && spec.envp !== undefined ? spec.envp
+      : (parent ? parent.envp : []),
+    cwd: spec.cwd !== null && spec.cwd !== undefined ? spec.cwd
+      : (parent ? parent.cwd : '/'),
+    sigdisp: new Int8Array(NSIG),  // __on_sigdisp mirror; all DFL initially
+    // ONE deferred RPC at a time (the worker is parked):
+    // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
+    // | {op:'piperead',pipe,count} | {op:'pipewrite',pipe,data}
+    waiter: null,
+    fds: new Map(),                // procFd -> ofdId (brokered mode)
+    page: null, i32: null, u8: null,
+    worker: null,
+    tty: self._tty,                // v1: the one system tty (or null)
+    surfaces: new Set(),           // sids owned by this process (WM.md)
+    wmRing: null,                  // input ring: { i32, f32, cap }
+    _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
+    audios: new Set(),             // aids owned by this process (todos/0017)
+    _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
+  };
+  var sab = new SharedArrayBuffer(KP_SIZE);
+  pcb.page = sab;
+  pcb.i32 = new Int32Array(sab);
+  pcb.u8 = new Uint8Array(sab);
+
+  // Brokered fd table: full POSIX inheritance (every parent fd, sharing
+  // the open file descriptions), then the spawn file_actions in order.
+  // The kernel IS the parent's fd table, so no translation is needed —
+  // the payoff of the fd/data-plane amendment.
+  if (self._brokered) {
+    var inherit = parent ? parent.fds : null;
+    if (inherit) {
+      inherit.forEach(function (ofdId, fd) {
+        var o = self._ofds.get(ofdId);
+        if (o) { o.refs++; pcb.fds.set(fd, ofdId); }
+      });
+    } else {
+      var std = self._stdOfds();
+      std.in_.refs++; pcb.fds.set(0, std.in_.id);
+      std.out.refs++; pcb.fds.set(1, std.out.id);
+      std.err.refs++; pcb.fds.set(2, std.err.id);
+    }
+    var actions = spec.actions || [];
+    for (var ai = 0; ai < actions.length; ai++) {
+      var a = actions[ai];
+      var fail = null;
+      if (a.op === 0) {           // DUP2: child fd `arg` -> child fd `fd`
+        var srcId = pcb.fds.get(a.arg);
+        if (srcId === undefined) fail = 'EBADF';
+        else {
+          self._ofds.get(srcId).refs++;
+          var oldId = pcb.fds.get(a.fd);
+          if (oldId !== undefined) self._ofdUnref(oldId);
+          pcb.fds.set(a.fd, srcId);
+        }
+      } else if (a.op === 1) {    // OPEN path at fd (arg = oflag)
+        var bfsFd = self._fs.open(self._pathFor(pcb, a.path), a.arg | 0, a.mode | 0);
+        if (bfsFd === null) fail = self._fs._lastError || 'EIO';
+        else {
+          var no = self._makeOfd('file', { bfsFd: bfsFd });
+          no.refs++;
+          var prevId = pcb.fds.get(a.fd);
+          if (prevId !== undefined) self._ofdUnref(prevId);
+          pcb.fds.set(a.fd, no.id);
+        }
+      } else if (a.op === 2) {    // CLOSE
+        var cId = pcb.fds.get(a.fd);
+        if (cId !== undefined) { self._ofdUnref(cId); pcb.fds.delete(a.fd); }
+      }
+      if (fail) {
+        pcb.fds.forEach(function (id) { self._ofdUnref(id); });
+        return { errno: fail };
+      }
+    }
+    // Attach the controlling-ish tty (0020): a child whose fd 0 is a pty
+    // slave lives on THAT pty — termios/pgrp RPC fallback, control-char
+    // signals, and the winsize SAB handed to the worker below all follow.
+    // The first attach claims the foreground (the terminal app spawns its
+    // shell as a pgroup leader; the shell then owns tcsetpgrp).
+    var o0id = pcb.fds.get(0);
+    var o0 = o0id === undefined ? null : self._ofds.get(o0id);
+    if (o0 && o0.kind === 'tty' && o0.tty) {
+      pcb.tty = o0.tty;
+      if (!pcb.tty.fgPgid) pcb.tty.fgPgid = pcb.pgid;
+    }
+  }
+
+  self._procs.set(pid, pcb);
+  if (parent) parent.children.add(pid);
+  var procSpec = {
+    pid: pid, ppid: pcb.ppid, pgid: pcb.pgid,
+    path: spec.path,
+    argv: (spec.argv && spec.argv.length) ? spec.argv : [spec.path],
+    envp: pcb.envp,
+    cwd: pcb.cwd,
+    actions: spec.actions || [],   // brokered: already applied kernel-side above
+    flags: spec.flags | 0,
+    // Cache hit ships the Module and DROPS the bytes (they'd be a dead
+    // multi-MB clone per spawn — runModule never touches bytes when a
+    // pre-compiled C module arrives).
+    image: module ? null : image,
+    module: module || null,
+    kernelPage: sab,
+    ttySab: pcb.tty ? pcb.tty.sab : null,
+    brokered: self._brokered,
+  };
+  try {
+    pcb.worker = self._createWorker(procSpec);
+  } catch (e) {
+    self._procs.delete(pid);
+    if (parent) parent.children.delete(pid);
+    self._log('spawn: createWorker failed: ' + (e && e.message));
+    return { errno: 'EAGAIN' };
+  }
+  pcb.worker.onMessage(function (msg) { self._onWorkerMessage(pcb, msg); });
+  pcb.worker.onExit(function () {
+    // Channel death without an 'exited' message = abnormal termination.
+    if (pcb.state === STATE_RUNNING) self._exitProcess(pcb, W_TERMSIG(SIG.SEGV));
+  });
+  return { pid: pid };
 };
 
 /* ---- worker message handling ---- */
@@ -3988,7 +4095,8 @@ var BOOT_SOURCE = [
   "  var u = (b instanceof Uint8Array) ? b : new Uint8Array(b);",
   "  wt.parentPort.postMessage({ type: 'out', fd: fd, bytes: u.slice() }); }; }",
   "runModule({",
-  "  bytes: wd.image,",
+  "  bytes: wd.image || undefined,",
+  "  module: wd.module || undefined,   // pre-compiled Module (todos/0037)",
   "  args: wd.argv,",
   "  env: envObj(wd.envp),",
   "  stdinSab: wd.ttySab || undefined,",
@@ -4013,11 +4121,14 @@ function nodeCreateWorker(config) {
   var Worker = require('worker_threads').Worker;
   return function createWorker(procSpec) {
     // The image crosses as a plain ArrayBuffer clone (images are re-spawnable;
-    // never transfer). The kernel page crosses as the SAB it is.
+    // never transfer). The kernel page crosses as the SAB it is. On a module-
+    // cache hit (todos/0037) the image is null and the compiled Module
+    // structured-clones instead — sharing the engine's compiled code.
     var image = procSpec.image;
-    var imageBuf = image instanceof Uint8Array
-      ? image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength)
-      : image;
+    var imageBuf = image == null ? null
+      : image instanceof Uint8Array
+        ? image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength)
+        : image;
     var w = new Worker(BOOT_SOURCE, {
       eval: true,
       workerData: {
@@ -4027,6 +4138,7 @@ function nodeCreateWorker(config) {
         path: procSpec.path, argv: procSpec.argv, envp: procSpec.envp,
         cwd: procSpec.cwd, actions: procSpec.actions, flags: procSpec.flags,
         image: imageBuf,
+        module: procSpec.module || null,
         kernelPage: procSpec.kernelPage,
         ttySab: procSpec.ttySab || null,
         brokered: !!procSpec.brokered,

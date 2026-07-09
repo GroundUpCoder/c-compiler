@@ -45,7 +45,8 @@ self.onmessage = function (e) {
   }
 
   runModule({
-    bytes: wd.image,
+    bytes: wd.image || undefined,
+    module: wd.module || undefined,   // pre-compiled Module (todos/0037)
     args: wd.argv,
     env: envObj(wd.envp),
     stdinSab: wd.ttySab || undefined,

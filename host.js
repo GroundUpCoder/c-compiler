@@ -42,7 +42,11 @@ function wrapLseekI64(impl) {
 
 /**
  * @typedef {object} RunModuleOptions
- * @property {Uint8Array | ArrayBuffer} bytes - The WASM module bytes.
+ * @property {Uint8Array | ArrayBuffer} [bytes] - The WASM module bytes.
+ * @property {WebAssembly.Module} [module] - A pre-compiled Module (todos/0037:
+ *   the kernel compiles read-only-volume binaries once and structured-clones
+ *   the Module into each process worker). C-flavor only — ss modules need
+ *   `bytes` (different compile options). One of bytes/module is required.
  * @property {string[]} [args] - Command-line arguments for the C program's argv.
  */
 
@@ -3266,6 +3270,21 @@ var BLOCK_FS = (function () {
     return this._statOf(w);
   };
 
+  // immutableKey (todos/0037) — a stable content-identity token for `path`,
+  // or null. Non-null ONLY for a regular file on a READ-ONLY volume: its
+  // contents cannot change for this mount's lifetime, so the token needs no
+  // generation counter. The kernel keys its compiled-wasm-Module cache on
+  // this (mutable binaries — e.g. a fresh `cc -o a.out` — return null and
+  // keep the compile-per-spawn path, so the cache can never serve stale
+  // code). The inode id dedupes path aliases: /bin/ls and /usr/bin/ls (and
+  // every coreutils applet symlink) share one key.
+  BlockFS.prototype.immutableKey = function (path) {
+    if (!this._readonly) return null;
+    var st = this.stat(path);
+    if (!st || (st.mode & S_IFMT) !== S_IFREG) return null;
+    return this._mountPrefix + ':' + st.ino;
+  };
+
   BlockFS.prototype.lstat = function (path) {
     var w = this._walkPath(this._resolvePath(path), true);  // the link itself
     if (!w) return this._lastError === 'ELOOP' ? null : this._setErr('ENOENT');
@@ -4913,6 +4932,23 @@ var BLOCK_FS = (function () {
   MountFS.prototype.stat = function (path) {
     return this._dispatch([path], {}, function (vol, rel) { return vol.stat(rel); });
   };
+
+  // immutableKey (todos/0037): the full-namespace twin of BlockFS's — the
+  // walk (with symlink escapes, so /bin/ls resolves through the /bin ->
+  // /usr/bin link) decides the OWNING volume, and the key is non-null only
+  // when that volume is read-only. Prefix + inode id is unique across the
+  // mount table and stable for the mount's lifetime.
+  MountFS.prototype.immutableKey = function (path) {
+    var owner = null;
+    var st = this._dispatch([path], {}, function (vol, rel) {
+      owner = vol;
+      return vol.stat(rel);
+    });
+    if (!st || !owner || !owner._readonly) return null;
+    if ((st.mode & S_IFMT) !== S_IFREG) return null;
+    return owner._mountPrefix + ':' + st.ino;
+  };
+
   MountFS.prototype.lstat = function (path) {
     return this._dispatch([path], {}, function (vol, rel) { return vol.lstat(rel); });
   };
@@ -8342,6 +8378,12 @@ async function runSsModule(bytes, opts) {
 
 async function runModule({
   bytes,
+  // Pre-compiled Module (todos/0037): skips the parse+compile below. The
+  // kernel ships one for read-only-volume binaries — compiled once
+  // kernel-side, structured-cloned per spawn (Modules clone; Instances
+  // don't). ss-flavored modules are never shipped this way (they recompile
+  // from bytes with different options in runSsModule).
+  module: precompiled,
   args,
   env,
   fs: fsModule,
@@ -8392,8 +8434,8 @@ async function runModule({
   }
   if (!writeOut) writeOut = function () {};
   if (!writeErr) writeErr = function () {};
-  const compileOptions = { builtins: ['js-string'] };
-  const module = new WebAssembly.Module(bytes, compileOptions);
+  const compileOptions = { builtins: ['js-string'] };   // MUST MATCH kernel.js _moduleFor
+  const module = precompiled || new WebAssembly.Module(bytes, compileOptions);
 
   /* Flavor dispatch. A module that imports the "ss" namespace is a
      self-service (.ss) program, not C: it uses Wasm GC values + JS-string
@@ -8401,6 +8443,11 @@ async function runModule({
      linear-memory C ABI below. Delegate to the ss env and return its exit
      code, leaving the entire C path untouched. */
   if (WebAssembly.Module.imports(module).some(function (i) { return i.module === 'ss'; })) {
+    // The ss path recompiles with importedStringConstants, so it needs the
+    // bytes. The kernel never ships a pre-compiled Module without them for
+    // ss-flavored binaries (its _moduleFor excludes them), so this only
+    // trips on a caller passing `module` alone for an ss program.
+    if (!bytes) throw new Error('runModule: ss modules require bytes (module option is C-only)');
     return await runSsModule(bytes, { writeOut: writeOut, writeErr: writeErr, args: args });
   }
 

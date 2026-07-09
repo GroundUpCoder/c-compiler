@@ -95,6 +95,7 @@ function createWorker(procSpec) {
     path: procSpec.path, argv: procSpec.argv, envp: procSpec.envp,
     cwd: procSpec.cwd, actions: procSpec.actions, flags: procSpec.flags,
     image: procSpec.image,
+    module: procSpec.module || null,   // pre-compiled Module (todos/0037)
     kernelPage: procSpec.kernelPage,
     ttySab: procSpec.ttySab || null,
     brokered: !!procSpec.brokered,

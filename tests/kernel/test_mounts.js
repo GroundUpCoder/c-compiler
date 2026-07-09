@@ -297,6 +297,28 @@ test('readonly /usr: reads, the /bin symlink, and the /usr/local escape work', f
   assert(names.indexOf('sh') >= 0, 'readdir of the RO volume: ' + names.join(','));
 });
 
+test('immutableKey (todos/0037): non-null only for RO-volume regular files', function () {
+  var f = fresh0040();
+  var k = f.m.immutableKey('/usr/bin/sh');
+  assert(typeof k === 'string' && k.length > 0, 'RO regular file keys');
+  assertEq(f.m.immutableKey('/bin/sh'), k, 'alias via the /bin symlink shares the key');
+  assertEq(f.m.immutableKey('/usr/bin/sh'), k, 'key is stable across calls');
+  f.m.mkdir('/root', 0o755);
+  writeFile(f.m, '/root/a.out', 'AOUT', 0o755);
+  assert(f.m.immutableKey('/root/a.out') === null, 'rw-volume binary keys null');
+  assert(f.m.immutableKey('/usr/bin') === null, 'directories key null');
+  assert(f.m.immutableKey('/usr/bin/nope') === null, 'ENOENT keys null');
+  // /usr/local escapes to the WRITABLE /var/local — must key null even
+  // though the path spells /usr.
+  writeFile(f.m, '/usr/local/bin/mytool', 'MINE', 0o755);
+  assert(f.m.immutableKey('/usr/local/bin/mytool') === null,
+    'the /usr/local -> /var/local escape keys null');
+  // Single-volume BlockFS: rw keys null; readonly keys the same shape.
+  var rwSolo = BLOCK_FS.createV4(new MemoryByteStore(1 << 20));
+  writeFile(rwSolo, '/x', 'X', 0o755);
+  assert(rwSolo.immutableKey('/x') === null, 'standalone rw BlockFS keys null');
+});
+
 // ---- error propagation + resolve ----
 
 test('_lastError propagates from the routed volume', function () {
