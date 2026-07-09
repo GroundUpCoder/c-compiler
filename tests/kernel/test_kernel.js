@@ -338,6 +338,69 @@ const spawnReq = (p, extra) => Object.assign(
   check('stopped-then-termed waits as WTERMSIG 15', r.status === 15, String(r.status));
   Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop the SIGCHLDs this section posted
 
+  // ---- interval timers (todos/0044): SETITIMER/GETITIMER over the SAB ----
+  // Real setTimeout drives expiry, so these legs sleep with generous margins
+  // (arm 50ms, observe at 150ms) rather than exact deadlines.
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  const ALRM_BIT = 1 << (14 - 1);                   // SIGALRM = 14
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a')); // pid 18
+  check('itimer child spawned', r.pid === 18, JSON.stringify(r));
+  r = await rpc(18, K.OP.SETITIMER, { which: 1, valueMs: 100, intervalMs: 0 });
+  check('ITIMER_VIRTUAL -> EINVAL', r.errno === 'EINVAL', JSON.stringify(r));
+  r = await rpc(18, K.OP.SETITIMER, { which: 2, valueMs: 100, intervalMs: 0 });
+  check('ITIMER_PROF -> EINVAL', r.errno === 'EINVAL', JSON.stringify(r));
+  r = await rpc(18, K.OP.GETITIMER, { which: 1 });
+  check('GETITIMER bad which -> EINVAL', r.errno === 'EINVAL', JSON.stringify(r));
+  r = await rpc(18, K.OP.GETITIMER, { which: 0 });
+  check('disarmed getitimer reads zeros', r.valueMs === 0 && r.intervalMs === 0, JSON.stringify(r));
+
+  await rpc(18, K.OP.SIGDISP, { sig: 14, kind: 2 /* HANDLER */ });
+  r = await rpc(18, K.OP.SETITIMER, { which: 0, valueMs: 50, intervalMs: 0 });
+  check('arming returns previous (disarmed) values', r.valueMs === 0 && r.intervalMs === 0, JSON.stringify(r));
+  r = await rpc(18, K.OP.GETITIMER, { which: 0 });
+  check('armed getitimer reads sane remaining', r.valueMs > 0 && r.valueMs <= 50 && r.intervalMs === 0, JSON.stringify(r));
+  await sleep(150);
+  check('one-shot expiry posts SIGALRM', (Atomics.load(page(18).i32, K.KP_SIGPEND) & ALRM_BIT) !== 0);
+  r = await rpc(18, K.OP.GETITIMER, { which: 0 });
+  check('one-shot disarms after expiry', r.valueMs === 0 && r.intervalMs === 0, JSON.stringify(r));
+
+  Atomics.store(page(18).i32, K.KP_SIGPEND, 0);
+  r = await rpc(18, K.OP.SETITIMER, { which: 0, valueMs: 50, intervalMs: 50 });
+  check('interval arm returns previous zeros', r.valueMs === 0 && r.intervalMs === 0, JSON.stringify(r));
+  await sleep(150);
+  check('interval expiry posts SIGALRM', (Atomics.load(page(18).i32, K.KP_SIGPEND) & ALRM_BIT) !== 0);
+  Atomics.store(page(18).i32, K.KP_SIGPEND, 0);
+  await sleep(120);
+  check('it_interval reloads (fires again)', (Atomics.load(page(18).i32, K.KP_SIGPEND) & ALRM_BIT) !== 0);
+  r = await rpc(18, K.OP.GETITIMER, { which: 0 });
+  check('reloaded timer stays armed', r.valueMs > 0 && r.intervalMs === 50, JSON.stringify(r));
+
+  Atomics.store(page(18).i32, K.KP_SIGPEND, 0);
+  r = await rpc(18, K.OP.SETITIMER, { which: 0, valueMs: 0, intervalMs: 0 });
+  check('cancel returns the old armed values', r.valueMs > 0 && r.intervalMs === 50, JSON.stringify(r));
+  r = await rpc(18, K.OP.GETITIMER, { which: 0 });
+  check('cancelled timer reads zeros', r.valueMs === 0 && r.intervalMs === 0, JSON.stringify(r));
+  await sleep(120);
+  check('cancelled timer never fires', (Atomics.load(page(18).i32, K.KP_SIGPEND) & ALRM_BIT) === 0);
+
+  // Exit clears the timer: arm with an interval, then exit — the fresh PCB
+  // timer must be gone (a stale setTimeout would post bits on a zombie page).
+  await rpc(18, K.OP.SETITIMER, { which: 0, valueMs: 50, intervalMs: 50 });
+  exitMsg(18, 0);
+  check('exit clears the interval timer', kernel.process(18).itimer === null);
+  r = await rpc(1, K.OP.WAIT, { pid: 18, options: 0 });
+  check('itimer child reaped', r.pid === 18, JSON.stringify(r));
+
+  // Default action (no handler installed) terminates: WIFSIGNALED SIGALRM.
+  r = await rpc(1, K.OP.SPAWN, spawnReq('/bin/a')); // pid 19
+  check('DFL child spawned', r.pid === 19, JSON.stringify(r));
+  await rpc(19, K.OP.SETITIMER, { which: 0, valueMs: 40, intervalMs: 0 });
+  await sleep(150);
+  check('SIGALRM at DFL terminates', kernel.process(19).state === 'zombie');
+  r = await rpc(1, K.OP.WAIT, { pid: 19, options: 0 });
+  check('termsig is SIGALRM', r.status === 14, JSON.stringify(r));
+  Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop this section's SIGCHLDs
+
   // ---- pid 1 exit halts the system ----
   check('all children reaped pre-halt', kernel.processCount() === 1, String(kernel.processCount()));
   exitMsg(1, 42);

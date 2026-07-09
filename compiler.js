@@ -19486,6 +19486,23 @@ static inline int futimes(int fd, const struct timeval times[2]) {
   else { a = times[0].tv_sec; m = times[1].tv_sec; }
   return __futime(fd, a, m);
 }
+/* ---- interval timers (todos/0044) ----
+   ONE kernel-side real-time timer per process; expiry posts SIGALRM through
+   the ordinary cooperative signal path (safe points — the settled 0001
+   caveat applies). ITIMER_VIRTUAL/PROF fail with EINVAL: workers run on
+   their own OS threads, so there is no CPU accounting to back them.
+   Millisecond resolution (sub-ms rounds UP so a tiny-but-armed timer never
+   silently becomes "disarmed"). Implementations live in __signal.c, which
+   links into every stdlib program via abort(). */
+#define ITIMER_REAL    0
+#define ITIMER_VIRTUAL 1
+#define ITIMER_PROF    2
+struct itimerval {
+  struct timeval it_interval;   /* reload value; zero = one-shot */
+  struct timeval it_value;      /* time to expiry; zero = disarmed */
+};
+int setitimer(int __which, const struct itimerval *__nv, struct itimerval *__ov);
+int getitimer(int __which, struct itimerval *__cur);
 #include <sys/select.h>  // glibc-style: fd_set / FD_* live here under _GNU_SOURCE
   `,
   "sys/file.h": `
@@ -21674,6 +21691,11 @@ static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
    handler tables, not just the kernel RPC. __signal.c links into every
    stdlib program via abort(), so the symbol is always present. */
 int kill(int __pid, int __sig);
+/* alarm()/ualarm() are facades over the kernel's ITIMER_REAL (todos/0044,
+   setitimer in <sys/time.h>); like kill(), the implementations live in
+   __signal.c. Without a kernel they return 0 with errno ENOSYS. */
+unsigned alarm(unsigned __seconds);
+unsigned ualarm(unsigned __usecs, unsigned __interval);
 /* Single root user: real and effective user/group IDs are all 0 (root).
    These never fail (POSIX getuid/getgid have no error return). */
 static inline unsigned getuid(void)         { return 0; }
@@ -24209,6 +24231,7 @@ int getopt_long_only(int argc, char *const argv[], const char *optstring,
 #include <errno.h>
 #include <stddef.h>
 #include <unistd.h>   /* getpid */
+#include <sys/time.h> /* struct itimerval / ITIMER_REAL (todos/0044) */
 __import void __exit(int status);
 
 /* Per-process disposition state (the libc owns it — sigaction set it here).
@@ -24423,6 +24446,74 @@ int kill(int pid, int sig) {
 int killpg(int pgrp, int sig) {
   if (pgrp < 0) { errno = EINVAL; return -1; }
   return kill(pgrp == 0 ? 0 : -pgrp, sig);
+}
+
+/* ---- interval timers (todos/0044): ITIMER_REAL -> SIGALRM ----
+   The kernel owns ONE real-time timer per process (kernel.js; VIRTUAL/PROF
+   answer EINVAL — no CPU accounting). The wire ABI is milliseconds; these
+   wrappers own the timeval <-> ms conversion. out2/old2 = {value_ms,
+   interval_ms} of the PREVIOUS (setitimer) or CURRENT (getitimer) timer. */
+__import int __setitimer(int which, unsigned value_ms, unsigned interval_ms, unsigned *old2);
+__import int __getitimer(int which, unsigned *out2);
+
+/* timeval -> ms, clamped to INT_MAX ms (~24.8 days — the embedder's timer
+   ceiling); nonzero sub-ms rounds UP so an armed value never converts to
+   "disarmed". Caller has already range-checked the fields. */
+static unsigned __itimer_tv2ms(const struct timeval *tv) {
+  if (tv->tv_sec > 2147483) return 2147483647u;
+  long long ms = tv->tv_sec * 1000LL + ((long long)tv->tv_usec + 999) / 1000;
+  return ms > 2147483647LL ? 2147483647u : (unsigned)ms;
+}
+static void __itimer_ms2tv(unsigned ms, struct timeval *tv) {
+  tv->tv_sec = ms / 1000u;
+  tv->tv_usec = (long)(ms % 1000u) * 1000;
+}
+
+int setitimer(int which, const struct itimerval *nv, struct itimerval *ov) {
+  if (!nv || nv->it_value.tv_sec < 0 || nv->it_interval.tv_sec < 0 ||
+      nv->it_value.tv_usec < 0 || nv->it_value.tv_usec > 999999 ||
+      nv->it_interval.tv_usec < 0 || nv->it_interval.tv_usec > 999999) {
+    errno = EINVAL;
+    return -1;
+  }
+  unsigned old[2];
+  if (__setitimer(which, __itimer_tv2ms(&nv->it_value),
+                  __itimer_tv2ms(&nv->it_interval), old) < 0) return -1;
+  if (ov) {
+    __itimer_ms2tv(old[0], &ov->it_value);
+    __itimer_ms2tv(old[1], &ov->it_interval);
+  }
+  return 0;
+}
+
+int getitimer(int which, struct itimerval *cur) {
+  if (!cur) { errno = EINVAL; return -1; }
+  unsigned v[2];
+  if (__getitimer(which, v) < 0) return -1;
+  __itimer_ms2tv(v[0], &cur->it_value);
+  __itimer_ms2tv(v[1], &cur->it_interval);
+  return 0;
+}
+
+/* POSIX alarm() cannot report failure; without a kernel (__setitimer
+   ENOSYS) it returns 0 and the timer simply never fires — consistent with
+   the rest of the spawn/signal surface failing loud only where an error
+   return exists. Seconds remaining round UP (a still-armed alarm never
+   reports 0). */
+unsigned alarm(unsigned seconds) {
+  unsigned ms = seconds > 2147483u ? 2147483647u : seconds * 1000u;
+  unsigned old[2];
+  if (__setitimer(ITIMER_REAL, ms, 0, old) < 0) return 0;
+  return (old[0] + 999) / 1000;
+}
+
+unsigned ualarm(unsigned usecs, unsigned interval) {
+  unsigned old[2];
+  /* div-then-round (not +999 first): usecs near UINT_MAX must not wrap to
+     a tiny value and silently disarm. */
+  if (__setitimer(ITIMER_REAL, usecs / 1000 + (usecs % 1000 != 0),
+                  interval / 1000 + (interval % 1000 != 0), old) < 0) return 0;
+  return old[0] > 4294967u ? 4294967295u : old[0] * 1000u;
 }
   `,
   "__locale.c": `

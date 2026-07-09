@@ -5288,6 +5288,31 @@ function createSpawn(ctx, hooks) {
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return r.sid | 0;
       },
+      // Interval timers (todos/0044): the kernel owns ONE ITIMER_REAL per
+      // process; ms over the wire (the libc converts timeval <-> ms). The
+      // old/current value comes back through out[2] = {value_ms, interval_ms}.
+      __setitimer: function (which, valueMs, intervalMs, outPtr) {
+        if (!hooks.setitimer) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const r = hooks.setitimer(which | 0, valueMs | 0, intervalMs | 0);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        if (outPtr) {
+          const dv = new DataView(ctx.getMemory().buffer);
+          dv.setUint32(outPtr, r.valueMs >>> 0, true);
+          dv.setUint32(outPtr + 4, r.intervalMs >>> 0, true);
+        }
+        return 0;
+      },
+      __getitimer: function (which, outPtr) {
+        if (!hooks.getitimer) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const r = hooks.getitimer(which | 0);
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        if (outPtr) {
+          const dv = new DataView(ctx.getMemory().buffer);
+          dv.setUint32(outPtr, r.valueMs >>> 0, true);
+          dv.setUint32(outPtr + 4, r.intervalMs >>> 0, true);
+        }
+        return 0;
+      },
       // Mirror a signal-disposition change to the kernel so kill() applies the
       // right action (terminate only when the target left the signal at DFL).
       __on_sigdisp: function (sig, kind) { if (hooks.sigdisp) hooks.sigdisp(sig, kind); },
@@ -5446,6 +5471,7 @@ function createNullSpawn(ctx) {
     __spawn_setpgid: enosys, __spawn_getpgid: enosys, __spawn_getsid: enosys,
     __on_sigdisp: function () {}, __on_sigmask: function () {},
     __sig_pause: enosys, __compile: enosys,
+    __setitimer: enosys, __getitimer: enosys,   // timers live in the kernel (0044)
   } };
 }
 

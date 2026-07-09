@@ -87,6 +87,12 @@ var OP = {
   SIGDISP: 0x0008,
   SIGMASK: 0x0009,   // reserved: Phase 2
   GETSID: 0x000A,    // libc getsid() (todos/0043 — pgrep -s 0 wants it)
+  // Interval timers (todos/0044): ONE real-time timer per process (POSIX
+  // ITIMER_REAL); expiry posts SIGALRM through the ordinary SIGPEND path.
+  // ms resolution over the wire; VIRTUAL/PROF answer EINVAL (no CPU
+  // accounting — fail loud, documented).
+  SETITIMER: 0x000B,
+  GETITIMER: 0x000C,
   TCGETATTR: 0x0101,
   TCSETATTR: 0x0102,
   TCGETPGRP: 0x0103,
@@ -142,6 +148,11 @@ var OP = {
 
 /* Wait options / status packing — must match <sys/wait.h>. */
 var WNOHANG = 0x01, WUNTRACED = 0x02, WCONTINUED = 0x08;
+
+/* Interval timers (todos/0044) — must match <sys/time.h>. Only the
+ * real-time flavor exists (workers run on their own OS threads, so there
+ * is no per-process CPU accounting to back VIRTUAL/PROF). */
+var ITIMER_REAL = 0;
 function W_EXITCODE(code) { return (code & 0xff) << 8; }
 function W_TERMSIG(sig) { return sig & 0x7f; }
 function W_STOPCODE(sig) { return ((sig & 0xff) << 8) | 0x7f; }
@@ -575,6 +586,12 @@ KernelClient.prototype.spawnHooks = function () {
     setpgid: function (pid, pgid) { return self.call(OP.SETPGID, { pid: pid, pgid: pgid }); },
     getpgid: function (pid) { return self.call(OP.GETPGID, { pid: pid }); },
     getsid: function (pid) { return self.call(OP.GETSID, { pid: pid }); },
+    // Interval timers (todos/0044): ms over the wire; the libc converts
+    // timeval <-> ms and owns the sub-ms round-up.
+    setitimer: function (which, valueMs, intervalMs) {
+      return self.call(OP.SETITIMER, { which: which, valueMs: valueMs, intervalMs: intervalMs });
+    },
+    getitimer: function (which) { return self.call(OP.GETITIMER, { which: which }); },
     sigdisp: function (sig, kind) { self.call(OP.SIGDISP, { sig: sig, kind: kind }); },
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
     sigpoll: function () { return self.sigpoll(); },
@@ -1246,6 +1263,8 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     cwd: spec.cwd !== null && spec.cwd !== undefined ? spec.cwd
       : (parent ? parent.cwd : '/'),
     sigdisp: new Int8Array(NSIG),  // __on_sigdisp mirror; all DFL initially
+    itimer: null,                  // ITIMER_REAL (todos/0044): {expiresAt, intervalMs, timer}
+                                   // — not inherited (POSIX), cleared at exit
     // ONE deferred RPC at a time (the worker is parked):
     // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
     // | {op:'piperead',pipe,count} | {op:'pipewrite',pipe,data}
@@ -1452,6 +1471,15 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       this._respond(pcb, tSid ? { sid: tSid.sid } : { errno: 'ESRCH' });
       break;
     }
+    // Interval timers (todos/0044): pure kernel-side bookkeeping over the
+    // existing SIGPEND delivery machinery.
+    case OP.SETITIMER:
+      this._respond(pcb, this._setitimer(pcb, req.which | 0, req.valueMs | 0, req.intervalMs | 0));
+      break;
+    case OP.GETITIMER:
+      this._respond(pcb, (req.which | 0) !== ITIMER_REAL ? { errno: 'EINVAL' }
+        : this._itimerRemaining(pcb));
+      break;
     // Termios/pgrp RPCs resolve the tty THROUGH the caller's fd (0020:
     // ptys mean many ttys); fd-less requests and ring mode fall back to
     // the process's attached tty (_ttyForFd).
@@ -3632,6 +3660,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   pcb.state = STATE_ZOMBIE;
   pcb.exit = status;
   this._cancelWaiter(pcb);
+  this._itimerClear(pcb);        // interval timers die with the process (0044)
   if (pcb.worker) { try { pcb.worker.terminate(); } catch (e) {} }
   pcb.worker = null;
   // Release every fd — this is what makes SIGKILL leak-free under the
@@ -3793,6 +3822,60 @@ Kernel.prototype._deliver = function (pcb, sig) {
     case 2: this._stopProcess(pcb, sig); break;              // TSTP/TTIN/TTOU at DFL
     default: break;                                          // CONT: resumed above
   }
+};
+
+/* ---- interval timers (todos/0044) ----
+ * One kernel-side ITIMER_REAL per process; expiry posts SIGALRM through
+ * _deliver (so disposition, blocking, and the DFL-terminate action all
+ * behave exactly like any other signal — the acceptance "no handler
+ * installed terminates" falls out of the disposition mirror). Delivery is
+ * cooperative like all signals: a pure-compute loop observes SIGALRM only
+ * at its next safe point (settled 0001 caveat). Wall-clock, so a STOPPED
+ * process's timer keeps running (POSIX ITIMER_REAL is real time); the
+ * pending bit then delivers after SIGCONT. it_interval reloads from "now"
+ * at each expiry (setTimeout latency doesn't accumulate into a backlog of
+ * SIGALRMs — one pending bit is all the SAB can represent anyway). */
+
+Kernel.prototype._setitimer = function (pcb, which, valueMs, intervalMs) {
+  if (which !== ITIMER_REAL) return { errno: 'EINVAL' };
+  var old = this._itimerRemaining(pcb);
+  this._itimerClear(pcb);
+  if (valueMs > 0) this._itimerArm(pcb, valueMs, Math.max(0, intervalMs));
+  return old;
+};
+
+Kernel.prototype._itimerRemaining = function (pcb) {
+  if (!pcb.itimer) return { valueMs: 0, intervalMs: 0 };
+  return {
+    valueMs: Math.max(1, pcb.itimer.expiresAt - Date.now()),  // armed reads >0 (POSIX: 0 means disarmed)
+    intervalMs: pcb.itimer.intervalMs,
+  };
+};
+
+Kernel.prototype._itimerArm = function (pcb, valueMs, intervalMs) {
+  var self = this;
+  pcb.itimer = {
+    expiresAt: Date.now() + valueMs,
+    intervalMs: intervalMs,
+    timer: setTimeout(function () { self._itimerFire(pcb); }, valueMs),
+  };
+};
+
+Kernel.prototype._itimerFire = function (pcb) {
+  if (pcb.state === STATE_ZOMBIE || !pcb.itimer) return;   // raced an exit/cancel
+  var interval = pcb.itimer.intervalMs;
+  // Re-arm BEFORE delivering: a handler's getitimer sees the reloaded
+  // value, and if delivery terminates the process (DFL) _exitProcess
+  // clears the fresh timer along with everything else.
+  if (interval > 0) this._itimerArm(pcb, interval, interval);
+  else pcb.itimer = null;
+  this._deliver(pcb, SIG.ALRM);
+};
+
+Kernel.prototype._itimerClear = function (pcb) {
+  if (!pcb.itimer) return;
+  clearTimeout(pcb.itimer.timer);
+  pcb.itimer = null;
 };
 
 /* ---- job control (todos/0003) ----

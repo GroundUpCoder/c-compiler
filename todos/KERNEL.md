@@ -283,6 +283,7 @@ response, sets DONE, bumps the doorbell. Node path identical via
 
 ```
 0x00xx process   SPAWN WAIT KILL EXIT SETPGID GETPGID SETSID SIGDISP SIGMASK GETSID
+                 SETITIMER GETITIMER (todos/0044 — ITIMER_REAL only, ms wire)
 0x01xx tty       TCGETATTR TCSETATTR TCSETPGRP TCGETPGRP (all fd-aware
                  since 0020: the fd resolves to the tty it names) +
                  TIOCSWINSZ PTY_CREATE (0020 ptys; TIOCGWINSZ stays
@@ -347,6 +348,28 @@ SIGKILL still works (worker.terminate is preemption of last resort), which is
 what a user's `kill -9` needs. Future option, explicitly out of scope for v1:
 a `--signal-polls` compiler flag inserting a SIGPEND check at loop back-edges
 (measurable cost; off by default; needs its own benchmark-driven design).
+
+### Interval timers (todos/0044, landed 2026-07-09)
+
+`alarm`/`ualarm`/`setitimer`/`getitimer(ITIMER_REAL)` → SIGALRM: ONE
+kernel-side real-time timer per process (`pcb.itimer`, a `setTimeout`),
+expiry posts SIGALRM through `_deliver` — disposition mirror, blocking,
+and the DFL-terminate action all behave like any other signal, and
+delivery stays cooperative (safe points; the compute-loop caveat above
+applies to SIGALRM too). Wire ABI is milliseconds over SETITIMER/GETITIMER
+(0x000B/0x000C); the libc owns timeval↔ms conversion and rounds nonzero
+sub-ms UP so an armed timer never converts to "disarmed". `it_interval`
+reloads from "now" at each expiry (setTimeout latency never accumulates a
+SIGALRM backlog — one SIGPEND bit is all the SAB represents anyway).
+Wall-clock: a STOPPED process's timer keeps running (POSIX), the pending
+bit delivers after SIGCONT. Not inherited across spawn; cleared at exit.
+`ITIMER_VIRTUAL`/`ITIMER_PROF` → EINVAL, documented — workers run on their
+own OS threads, so there is no per-process CPU accounting to back them.
+Without a kernel, `__setitimer`/`__getitimer` are ENOSYS stubs (alarm
+returns 0 and the timer never fires — POSIX alarm has no error return).
+Tests: `test_kernel.js` (SAB-protocol legs), `test_itimer_e2e.js` (the
+classic alarm-EINTRs-a-blocked-read idiom, interval reload, cancellation,
+ualarm, DFL termination — real C under a live kernel).
 
 ## TTY and line discipline
 

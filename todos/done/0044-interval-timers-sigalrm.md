@@ -1,6 +1,13 @@
 # 0044 — interval timers: alarm/setitimer(ITIMER_REAL) → SIGALRM
 
-- **Status**: open
+- **Status**: done (2026-07-09) — ONE kernel-side ITIMER_REAL per process
+  (OP.SETITIMER/GETITIMER 0x000B/0x000C, ms wire ABI) firing SIGALRM
+  through `_deliver` (DFL-terminate/EINTR/pending-while-stopped for
+  free); libc setitimer/getitimer in <sys/time.h>, alarm/ualarm facades
+  in <unistd.h> (__signal.c; ENOSYS stubs without a kernel);
+  VIRTUAL/PROF → EINVAL by design; image v33 (libc rebake); tests
+  `test_kernel.js` itimer section + `tests/kernel/test_itimer_e2e.js`;
+  dev log `logs/2026-07-09/interval-timers.md`
 - **Depends**: —
 - **Design**: `todos/KERNEL.md` (signals, 0001)
 

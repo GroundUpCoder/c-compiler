@@ -275,7 +275,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v32**.
+Image version is **v33**.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

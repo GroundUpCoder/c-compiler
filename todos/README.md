@@ -30,8 +30,7 @@ One numbered file per unit of work we have actually committed to doing.
    the main compiler (wc W1; independently useful to C)
 3. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
    rides the main project, must never get in its way; design `WC.md`)
-4. The kernel-POSIX batch (any order): `0044` interval timers/SIGALRM,
-   `0046` strace
+4. The kernel-POSIX batch remainder: `0046` strace
 5. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
    AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
 6. The desktop wave: `0047` GUI toolkit substrate (microui) → `0056`
