@@ -24,22 +24,28 @@ One numbered file per unit of work we have actually committed to doing.
 
 ### Next up (order of attack)
 
-1. (unnumbered) a real-world WebGPU C app port — candidates via
-   `WEBGPU.md`; the platform side landed with 0016
-2. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
+1. **The Win32 desktop platform** (design: `WIN32.md`, 2026-07-09 — the
+   primary UI toolkit; **supersedes microui/MVU**, which are dropped):
+   `0057` gdi32 (CPU→shm drawing) → `0058` user32 (windowing + standard
+   controls + the HWND agent tree) → `0059` kernel32 subset over POSIX
+   (file/mem/time/process/dir; grows on demand) → `0060` OSS Win32/GDI
+   ports (ReactOS applets + corpus; a compile-test harness whose
+   missing-symbol log drives 0057–0059). Apps (`0048` reframed):
+   winmine/sol/notepad/calc arrive as real ReactOS C ports.
+2. Drawing / compositor track (parallel): `0061` **Cairo** — modern C 2D
+   vector API with a real corpus (adopt, don't invent); `0062` zero-copy
+   present (`direct` transport; pixels never touch RAM except on
+   `wmctl shot`); `0063` Aero effects (alpha/shadows/thumbnails/blur/
+   animation on the 0055 pass).
+3. (unnumbered) a real-world WebGPU C app port — candidates via `WEBGPU.md`
+4. `0041` `__gcstr` string constants — importedStringConstants `"#"` in
    the main compiler (wc W1; independently useful to C)
-3. `0042` wc fork bring-up — `wc.js`, the v1 language (side project:
-   rides the main project, must never get in its way; design `WC.md`)
-4. The kernel-POSIX batch remainder: `0046` strace
-5. Networking (design: `NETWORK.md`, 2026-07-09): `0052` loopback
-   AF_INET, then `0053` HTTP-for-C (curl easy facade over kernel fetch)
-6. The desktop wave: `0047` GUI toolkit substrate (microui) → `0056`
-   Elm/MVU declarative layer (design: `TOOLKIT.md`) → `0048` desktop
-   apps wave 1 (fileman/notepad/calc/minesweeper/control panel;
-   notepad's editor rides 0056, the other four don't wait) →
-   `0049` wallpaper; `0050` pdpmake + busybox patch/ed alongside
-   (diff itself landed with 0035)
-7. Tail: `0054` AF_INET relay transport, `0051` halt/reboot
+5. `0042` wc fork bring-up — `wc.js`, the v1 language (side project)
+6. `0046` strace (kernel-POSIX batch remainder)
+7. Networking (design: `NETWORK.md`): `0052` loopback AF_INET → `0053`
+   HTTP-for-C (curl easy facade over kernel fetch)
+8. Tail: `0049` wallpaper; `0050` pdpmake + busybox patch/ed; `0054`
+   AF_INET relay transport; `0051` halt/reboot
 
 (The pointer-lock HUMAN check was deferred by BOTH sweep rounds — it is
 a MUST for WM sweep round 3, whenever that gets a number.)
@@ -66,11 +72,11 @@ re-verified under storm, one kernel fix — the focus fall skips pinned
 furniture — and the known-issues list re-dated;
 `logs/2026-07-09/wm-bug-sweep-2.md`.)
 
-(Deferred indefinitely: `0006` threads + atomics — processes are the
-parallelism unit; no consumer exists and the complexity tax is permanent.
-Rationale + re-trigger condition in the item and
-`logs/2026-07-07/threads-atomics-deferral.md`. The item stays in `todos/`
-with a `deferred` status; it is not part of the order of attack.)
+(Dropped from the queue entirely (2026-07-09): `0006` threads + atomics —
+processes are the parallelism unit; no consumer exists and the complexity
+tax is permanent. The todo file was removed as clutter; the rationale +
+re-trigger condition live in `logs/2026-07-07/threads-atomics-deferral.md`.
+Not planned; re-open only if a concrete port hard-requires pthreads.)
 
 (Done: `0001` signals/EINTR/exit handshake; `0002` tty + line discipline;
 `0009` kernel-owned fd table + brokered fs; `0003` pipes + job control;
@@ -215,9 +221,13 @@ don't duplicate them. Current map:
   transport axes, per-process WebGPU devices, kernel-worker compositing,
   surface protocol, WM-as-client over AF_UNIX, agent control channel,
   headless tiers, spike appendix (→ 0012), implementation plan.
-- `TOOLKIT.md` — the GUI toolkit architecture (2026-07-09): Elm/MVU
-  declarative layer over the 0047 substrate (→ 0056); the
-  MVU-over-React-hooks decision; supersedes the nuklear trade-up.
+- `WIN32.md` — **the primary UI toolkit** (2026-07-09): Win32 (user32
+  windowing + gdi32 drawing + a kernel32 subset) over the surface protocol
+  + POSIX kernel (→ 0057–0060). Chosen because the HWND tree makes agent-
+  drivability structural; supersedes microui/MVU. Includes the windowing-
+  vs-drawing (Win7/DWM) split and the POSIX-coexistence model.
+- `TOOLKIT.md` — **superseded by `WIN32.md`** (2026-07-09): the former
+  Elm/MVU direction (0047/0056), now dropped; kept as a redirect + history.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
 - `SDL3.md`, `SDL3-MIGRATION.md`, `WEBGPU.md` — runtime API surface plans.
 - `DOM.md` — C-to-DOM bytecode + diffing renderer idea; its declaration

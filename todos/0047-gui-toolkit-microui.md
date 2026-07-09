@@ -1,6 +1,10 @@
 # 0047 — GUI toolkit: microui over SDL + freetype
 
-- **Status**: open
+- **Status**: **DROPPED / superseded by Win32** (2026-07-09) — see
+  `WIN32.md`. Immediate mode has no queryable tree for agent-drive (a hard
+  requirement). The shared freetype text-draw helper carries into gdi32
+  (`0057`); microui itself is not vendored. Rest of this item is retained
+  for history only.
 - **Depends**: —
 - **Design**: discussion + trade study (microui vs nuklear) in
   `logs/2026-07-09/roadmap-network-desktop.md`; long-run direction

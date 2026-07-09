@@ -1,6 +1,10 @@
 # 0056 — Elm/MVU declarative UI layer
 
-- **Status**: open
+- **Status**: **DROPPED / superseded by Win32** (2026-07-09) — see
+  `WIN32.md` / `TOOLKIT.md`. MVU is viable in C, but Win32 gives the same
+  message-switch shape plus a queryable HWND tree, portability, and an OSS
+  corpus. May return only as optional sugar over user32; not planned. Rest
+  retained for history only.
 - **Depends**: 0047 (the substrate: command renderer, freetype text
   helper, input plumbing, Win95 skin)
 - **Design**: `todos/TOOLKIT.md` (architecture + the MVU-over-React

@@ -1,8 +1,12 @@
 # 0048 — desktop apps wave 1
 
-- **Status**: open
-- **Depends**: 0047 (the toolkit)
-- **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
+- **Status**: **reframed** (2026-07-09) — the Win95 organ set now arrives
+  as real ReactOS C/Win32 ports via `0060`, not hand-written microui/MVU
+  apps. See `WIN32.md`. The app *targets* below stand; the *how* is Win32
+  ports.
+- **Depends**: 0058 (user32), 0060 (the port harness + first-wave targets)
+- **Design**: `WIN32.md`; original discussion in
+  `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal
 
@@ -15,11 +19,9 @@ incrementally — each app is its own commit with its own acceptance.
 - **fileman**: directory listing over plain POSIX calls; double-click:
   directories navigate, executables spawn (an `/etc/openwith` map is a
   later idea, not v1).
-- **notepad**: open/edit/save text. microui's textbox is single-line —
-  the multi-line editor is the FIRST real retained widget of the
-  Elm/MVU layer (`todos/0056`, design `todos/TOOLKIT.md`; the nuklear
-  trade-up is superseded). Notepad therefore lands after 0056's core;
-  the other four apps don't wait on it.
+- **notepad**: the ReactOS notepad (`0060`) — a real `EDIT`-control app;
+  the multi-line editor is user32's `EDIT` (`0058`), not a bespoke
+  widget. Retires the old MVU-editor dependency entirely.
 - **calc**: Win95-style button grid.
 - **minesweeper**: the identity piece. Core logic as plain C,
   unit-testable without the GUI.
