@@ -146,6 +146,43 @@ Also recorded: per-instance statics (each instantiation = own globals), so
 dlopen returns the cached per-process instance to match native .so
 intuition.
 
+## Round 4: multi-memory reversed — .so's share the primary memory
+
+Round 3 lasted about an hour. It died during the "walk me through every
+place an imported function takes a pointer" exercise, which is the right
+kind of test to kill a design: pointers are bare i32s, so *every* seam
+needs a which-memory convention, and under two spaces the conventions
+don't compose. Host env imports resolve pointers against one memory per
+instance — so with a private + a primary space, one of them is always
+syscall-dead (a C buffer received by the .so can't be `write()`n without a
+copy, or flip the wiring and the .so's own buffers can't). .so↔.so byte
+data couldn't use private memory at all. And the foreign-pointer type
+would have threaded a space axis through every pointer-taking ss signature
+*forever* — permanent user-facing tax to avoid a bounded toolchain cost.
+
+The reversal rests on the round-2 finding that ss dodges the emscripten
+pain checklist: no linear stack (no SP sharing), statics are pointer-free
+byte blobs (strings/objects live in GC ⇒ **no data-to-data relocations, no
+GOT**), no TLS. So full memory sharing costs only: import the primary
+memory as memory 0 (no memidx changes at all — simpler codegen than
+multi-memory!), passive data segments memory.init'd at an imported
+`__memory_base`, address constants rebased base+offset, and `Memory.alloc`
+delegating to the imported primary `malloc`. The loader per .so is just
+`base = malloc(staticSize)`, set two globals, instantiate — multiple .so's
+are multiple heap allocations, arrangement solved by the allocator.
+
+This also closed two open threads for free: "pick one malloc" becomes "the
+owner of the memory owns the allocator" (the .so imports whichever malloc
+the primary exports — no winner, and they're the same TLSF anyway), and
+the whole pointer-provenance question dissolves (one space, every C API's
+one-memory assumption holds, host env untouched).
+
+Cost acknowledged: no heap isolation — a wild ss pointer can corrupt the
+primary heap, like any native .so. A pure-GC `--no-linear-memory` library
+keeps isolation by having no memory at all. Multi-memory is recorded in
+the doc as rejected-with-rationale; it may return someday as an opt-in
+hardening mode, but it is not the pointer story.
+
 Still exploratory — not yet promoted to queue items. Sequencing in the doc:
 vendor first, unify runModule second, POSIX stdlib third; the .so milestone
 rides on all of it.
