@@ -72,7 +72,7 @@ try {
   // -1: busybox ls (todos/0010) prints columns on a tty; one-per-line keeps
   // the needle stable. Program stdout is raw \n (no OPOST).
   await type('ls -1 /');
-  await waitOut('bin\ndev\netc\nroot');
+  await waitOut('bin\ndev\netc\nproc\nroot');   // 0043: /proc in the tree
   check('ls -1 / lists the seeded tree', true);
 
   await type('cc hello.c && ./a.out');

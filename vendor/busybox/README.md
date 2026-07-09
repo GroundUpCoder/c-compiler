@@ -1,4 +1,4 @@
-# busybox — the shell port (todos/0005) + coreutils (todos/0010, 0034, 0035)
+# busybox — the shell port (todos/0005) + coreutils (todos/0010, 0034, 0035, 0043)
 
 Two binaries come out of this vendor tree:
 
@@ -14,7 +14,11 @@ Two binaries come out of this vendor tree:
   added for todos/0014's harnesses; whoami/id/hostname: single-user stubs
   printing root/0/localhost rather than dragging in libpwdgrp — the
   `FEATURE_LS_USERNAME`-off philosophy); plus — batch 3, todos/0035, the
-  SPAWN-CAPABLE set — **find xargs awk tar gzip gunzip zcat less diff**. The
+  SPAWN-CAPABLE set — **find xargs awk tar gzip gunzip zcat less diff**;
+  plus — batch 4, todos/0043, the PROCESS TOOLS over the kernel's synthetic
+  /proc — **ps top pgrep pkill uptime free** (upstream applets + libbb
+  `procps.c`/`duration.c`/`getopt_allopts.c`; uptime/free go through the
+  port's `sysinfo()` in libbb_stubs.c, which itself reads /proc). The
   `/bin` applet names are BlockFS symlinks to it and dispatch is by
   argv[0] (`port/multicall_main.c` — a hand-rolled table, NOT upstream's
   kbuild-generated appletlib, so the 0005 appletlib stubs stay). Invoked
@@ -58,7 +62,15 @@ Two binaries come out of this vendor tree:
   table); `FEATURE_TAR_UNAME_GNAME` OFF (tar headers stamp root/root
   via libbb_stubs.c's get_cached_username/groupname, single-user);
   less has BRACKETS/FLAGS/TRUNCATE/MARKS/REGEXP/WINCH/LINENUMS/RAW on,
-  ASK_TERMINAL/DASHCMD/ENV off.
+  ASK_TERMINAL/DASHCMD/ENV off. For batch 4 (0043): `PS`/`TOP`/`PGREP`/
+  `PKILL`/`UPTIME`/`FREE` on with `FEATURE_PS_WIDE`, `FEATURE_PS_LONG`,
+  `FEATURE_TOP_INTERACTIVE` (sort/quit keys over ptys) and
+  `FEATURE_TOP_CPU_USAGE_PERCENTAGE`+`GLOBAL_PERCENTS` (the %CPU columns
+  parse /proc/stat correctly but read ~0 by design — per-process CPU time
+  isn't tracked, workers run on their own OS threads); `FEATURE_FAST_TOP`
+  stays off (the sscanf parse path — no need for the speed hack),
+  `FEATURE_TOPMEM`/`SHOW_THREADS` off (no smaps / no threads),
+  `FEATURE_UPTIME_UTMP_SUPPORT` auto-off (FEATURE_UTMP off).
 
   hush's NOMMU builtin-in-pipe path still re-execs `/bin/sh` (see the
   find_builtin patch below) rather than the real applets: the cost is one
@@ -116,8 +128,11 @@ journaling mode:
 | `src/editors/awk.c` | (0035) F_rn: `#elif` branch composing 63 uniform bits from five 15-bit rand() draws — this libc's RAND_MAX is 32767, upstream only handles ≥31-bit |
 | `src/miscutils/less.c` | (0035) three VLAs (`re_wrap` linebuf, `print_found`/`print_ascii` buf) → xmalloc/free (no VLAs in this compiler) |
 | `src/editors/vi.c` | `sig = sigsetjmp(...); if (sig != 0)` → supported if-form (the value was only ever tested against 0); 6 GNU `?:` elvis sites → plain ternary (side-effect-free operands, this compiler has no `?:`) |
-| `src/procps/kill.c` | killall/killall5 branches guarded out (need /proc scanning) |
-| `port/libbb_stubs.c` | appletlib globals (`applet_name` — overridable via `PORT_APPLET_NAME`, `xfunc_error_retval`, `bb_show_usage`, `string_array_len`), `bb_clk_tck`, single-user `bb_getgroups` |
+| `src/procps/kill.c` | killall/killall5 branches guarded out (predates 0043's /proc; un-guarding them is a possible follow-up now that procps_scan works) |
+| `src/procps/ps.c` | (0043) the cmdline print buffer VLA → xmalloc/free (no VLAs in this compiler; same rewrite as less.c's three) |
+| `src/procps/uptime.c`, `src/procps/free.c` | (0043) `<sys/sysinfo.h>` include gate widened to `__wasm__` (the port carries the header + a /proc-reading `sysinfo()` in libbb_stubs.c) |
+| `src/libbb/procps.c` | (0043) uid/gid→name cache guarded out under `__wasm__` — it drags in libpwdgrp's uid2uname_utoa; libbb_stubs.c answers root/root without a cache (and stubs clear_username_cache) |
+| `port/libbb_stubs.c` | appletlib globals (`applet_name` — overridable via `PORT_APPLET_NAME`, `xfunc_error_retval`, `bb_show_usage`, `string_array_len`), `bb_clk_tck`, single-user `bb_getgroups`; (0043) `sysinfo()` reading /proc/{uptime,loadavg,meminfo} with graceful zeros outside the OS, and the `clear_username_cache` no-op |
 
 (`xfuncs_printf.c`'s former "xmkstemp guarded out" entry is gone: the libc
 grew `mkstemp()` for `sed -i`, todos/0010.)

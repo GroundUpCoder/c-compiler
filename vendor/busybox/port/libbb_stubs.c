@@ -59,3 +59,79 @@ const char* FAST_FUNC get_cached_groupname(gid_t gid)
     (void)gid;
     return "root";
 }
+/* libbb/procps.c's cache is compiled out with the two stubs above
+ * (todos/0043) — nothing cached, nothing to clear. */
+void FAST_FUNC clear_username_cache(void)
+{
+}
+
+/* sysinfo(2) replacement (todos/0043): uptime/free want the Linux syscall;
+ * here it's a read of the kernel's synthetic /proc (uptime, loadavg,
+ * meminfo — Linux formats by construction). Values are in mem_unit=1024
+ * units, i.e. meminfo's kB numbers verbatim; missing /proc (standalone
+ * runs outside the OS) reports zeros instead of failing. */
+#include <sys/sysinfo.h>
+
+static long pv_sysinfo_read(const char *path, char *buf, int cap)
+{
+    int fd = open(path, O_RDONLY);
+    long n = -1;
+    if (fd >= 0) {
+        n = read(fd, buf, cap - 1);
+        close(fd);
+    }
+    buf[n > 0 ? n : 0] = '\0';
+    return n;
+}
+
+int sysinfo(struct sysinfo *info)
+{
+    char buf[1024];
+    memset(info, 0, sizeof(*info));
+    info->mem_unit = 1024;
+
+    if (pv_sysinfo_read("/proc/uptime", buf, sizeof(buf)) > 0)
+        info->uptime = (long)strtoul(buf, NULL, 10);
+
+    if (pv_sysinfo_read("/proc/loadavg", buf, sizeof(buf)) > 0) {
+        /* "L1.LL L5.LL L15.LL running/total lastpid" -> 1<<16 fixed point */
+        char *p = buf;
+        int i;
+        for (i = 0; i < 3; i++) {
+            unsigned long whole = strtoul(p, &p, 10);
+            unsigned long frac = 0;
+            if (*p == '.') frac = strtoul(p + 1, &p, 10); /* two digits */
+            info->loads[i] = (whole << 16) + (frac << 16) / 100;
+            while (*p == ' ') p++;
+        }
+        strtoul(p, &p, 10);              /* running */
+        if (*p == '/') info->procs = (unsigned short)strtoul(p + 1, &p, 10);
+    }
+
+    if (pv_sysinfo_read("/proc/meminfo", buf, sizeof(buf)) > 0) {
+        /* "Field:   NNN kB" lines; values land in kB = mem_unit units. */
+        static const struct { const char *name; unsigned char off; } fields[] = {
+            { "MemTotal:",  offsetof(struct sysinfo, totalram)  },
+            { "MemFree:",   offsetof(struct sysinfo, freeram)   },
+            { "Shmem:",     offsetof(struct sysinfo, sharedram) },
+            { "Buffers:",   offsetof(struct sysinfo, bufferram) },
+            { "SwapTotal:", offsetof(struct sysinfo, totalswap) },
+            { "SwapFree:",  offsetof(struct sysinfo, freeswap)  },
+        };
+        char *line = buf;
+        while (line && *line) {
+            unsigned i;
+            for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+                const char *tp = is_prefixed_with(line, fields[i].name);
+                if (tp) {
+                    *(unsigned long *)((char *)info + fields[i].off) =
+                        strtoul(tp, NULL, 10);
+                    break;
+                }
+            }
+            line = strchr(line, '\n');
+            if (line) line++;
+        }
+    }
+    return 0;
+}

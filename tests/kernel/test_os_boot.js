@@ -72,7 +72,7 @@ let r = session([
 check('exit N propagates through hush', r.status === 7, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 const lines = r.stdout.split('\n');
 const expectStdout = [
-  'bin', 'dev', 'etc', 'root', 'run', 'tmp', 'usr', 'var',   // ls / (0040 layout)
+  'bin', 'dev', 'etc', 'proc', 'root', 'run', 'tmp', 'usr', 'var',   // ls / (0040 layout + 0043 /proc)
   'A',                                     // pipeline
   'sub=inner deep',                        // nested $( )
   'redir',                                 // > then cat
@@ -275,6 +275,45 @@ const expectCu3 = [
 ];
 for (let i = 0; i < expectCu3.length; i++) {
   check('coreutils3[' + i + '] = ' + JSON.stringify(expectCu3[i]), cu3[i] === expectCu3[i], JSON.stringify(cu3[i]));
+}
+
+// ---- procfs + the process tools (0043): busybox procps over /proc ----
+// ps lists pid 1 and itself; pgrep finds a background job by name and
+// pkill terminates it (SIGTERM -> wait status 143); /proc/1/status agrees
+// with the process table; top -bn1 parses /proc/stat+meminfo+loadavg;
+// uptime/free go through the port's sysinfo().
+r = session([
+  'ps | awk "NR>1 {print \\$1, \\$5}"',      // strip header + volatile cols
+  'sleep 30 &',
+  'pgrep -l sleep',
+  'pkill sleep && echo pkill-ok',
+  'wait $! ; echo bg-status=$?',
+  'pgrep sleep || echo sleep-gone',
+  'awk "/^(State|PPid|NSpgid):/ {print \\$1, \\$2}" /proc/1/status',
+  'uptime | grep -c "load average:"',
+  'free | awk "NR==2 {print \\$1, (\\$2>0) ? \\"total-ok\\" : \\"bad\\"}"',
+  'top -bn1 | head -1 | grep -c "^Mem:"',
+  'cat /proc/uptime | grep -cE "^[0-9]+\\.[0-9]{2} "',
+  'exit',
+  '',
+].join('\n'));
+check('procps session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+{
+  const pp = r.stdout.split('\n');
+  check('ps lists pid 1 as sh', pp.includes('1 sh'), JSON.stringify(pp.slice(0, 6)));
+  check('ps lists itself', pp.some((l) => /^\d+ ps$/.test(l)), JSON.stringify(pp.slice(0, 6)));
+  const rest = pp.slice(pp.findIndex((l) => / sleep$/.test(l)));
+  check('pgrep -l finds the bg sleep', /^\d+ sleep$/.test(rest[0] || ''), JSON.stringify(rest[0]));
+  check('pkill signals it', rest[1] === 'pkill-ok', JSON.stringify(rest[1]));
+  check('bg job died of SIGTERM', rest[2] === 'bg-status=143', JSON.stringify(rest[2]));
+  check('pgrep confirms it is gone', rest[3] === 'sleep-gone', JSON.stringify(rest[3]));
+  check('status State S (pid 1 waits)', rest[4] === 'State: S', JSON.stringify(rest[4]));
+  check('status PPid 0 for init', rest[5] === 'PPid: 0', JSON.stringify(rest[5]));
+  check('status NSpgid 1 for init', rest[6] === 'NSpgid: 1', JSON.stringify(rest[6]));
+  check('uptime prints load average', rest[7] === '1', JSON.stringify(rest[7]));
+  check('free parses meminfo', rest[8] === 'Mem: total-ok', JSON.stringify(rest[8]));
+  check('top -bn1 renders the Mem header', rest[9] === '1', JSON.stringify(rest[9]));
+  check('/proc/uptime format', rest[10] === '1', JSON.stringify(rest[10]));
 }
 
 // ---- second boot, same image: persistence + no re-seed ----

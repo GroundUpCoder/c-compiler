@@ -51,6 +51,7 @@ int env_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int expr_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int false_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int fold_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int free_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int grep_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int head_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int kill_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -63,7 +64,9 @@ int mv_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int nl_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int od_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int paste_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int pgrep_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int printf_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int ps_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int pwd_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int readlink_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int realpath_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -79,11 +82,13 @@ int tac_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int tail_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int tee_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int test_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int top_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int touch_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int tr_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int true_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int truncate_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int uname_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+int uptime_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int uniq_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int unlink_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int usleep_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -181,6 +186,7 @@ static const struct applet {
 	{ "fgrep",    grep_main },
 	{ "find",     find_main },
 	{ "fold",     fold_main },
+	{ "free",     free_main },
 	{ "grep",     grep_main },
 	{ "gunzip",   gunzip_main },
 	{ "gzip",     gzip_main },
@@ -198,7 +204,10 @@ static const struct applet {
 	{ "nl",       nl_main },
 	{ "od",       od_main },
 	{ "paste",    paste_main },
+	{ "pgrep",    pgrep_main },
+	{ "pkill",    pgrep_main },   /* pgrep.c dispatches on applet_name[1] */
 	{ "printf",   printf_main },
+	{ "ps",       ps_main },
 	{ "pwd",      pwd_main },
 	{ "readlink", readlink_main },
 	{ "realpath", realpath_main },
@@ -218,6 +227,7 @@ static const struct applet {
 	{ "tar",      tar_main },
 	{ "tee",      tee_main },
 	{ "test",     test_main },
+	{ "top",      top_main },
 	{ "touch",    touch_main },
 	{ "tr",       tr_main },
 	{ "true",     true_main },
@@ -225,6 +235,7 @@ static const struct applet {
 	{ "uname",    uname_main },
 	{ "uniq",     uniq_main },
 	{ "unlink",   unlink_main },
+	{ "uptime",   uptime_main },
 	{ "usleep",   usleep_main },
 	{ "vi",       vi_main },
 	{ "wc",       wc_main },

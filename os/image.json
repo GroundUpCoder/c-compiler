@@ -1,5 +1,5 @@
 {
-  "version": 31,
+  "version": 32,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -151,6 +151,9 @@
       "/usr/bin/fold": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/free": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/grep": {
         "link": "/usr/bin/coreutils"
       },
@@ -202,7 +205,16 @@
       "/usr/bin/paste": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/pgrep": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/pkill": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/printf": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/ps": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/pwd": {
@@ -262,6 +274,9 @@
       "/usr/bin/test": {
         "link": "/usr/bin/coreutils"
       },
+      "/usr/bin/top": {
+        "link": "/usr/bin/coreutils"
+      },
       "/usr/bin/touch": {
         "link": "/usr/bin/coreutils"
       },
@@ -281,6 +296,9 @@
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/unlink": {
+        "link": "/usr/bin/coreutils"
+      },
+      "/usr/bin/uptime": {
         "link": "/usr/bin/coreutils"
       },
       "/usr/bin/usleep": {
