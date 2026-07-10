@@ -106,7 +106,7 @@ try {
   // list when it gains an entry; the geometry below derives from it).
   // Rows are 20px + 4px pad, parked above the 28px taskbar (/etc/menu is
   // EMPTY on a virgin boot — todos/0040; the override leg below covers it).
-  const MENU_ENTRIES = ['calc', 'ctldemo', 'doom', 'gameboy', 'gdidemo',
+  const MENU_ENTRIES = ['calc', 'ctldemo', 'doom', 'fileman', 'gameboy', 'gdidemo',
                         'gpubox', 'notepad', 'quake', 'snake', 'term', 'winbox', 'winmine'];
   const MENU_H = 2 * 4 + MENU_ENTRIES.length * 20;
   const MENU_Y = SH - 28 - MENU_H;

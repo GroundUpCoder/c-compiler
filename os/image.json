@@ -1,5 +1,5 @@
 {
-  "version": 40,
+  "version": 41,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -78,6 +78,9 @@
       "/usr/bin/notepad.res": {
         "bin": "vendor/notepad/notepad.res"
       },
+      "/usr/bin/fileman": {
+        "project": "os/win32/fileman.json"
+      },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
       },
@@ -122,6 +125,9 @@
       },
       "/usr/share/menu/notepad": {
         "link": "/usr/bin/notepad"
+      },
+      "/usr/share/menu/fileman": {
+        "link": "/usr/bin/fileman"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"

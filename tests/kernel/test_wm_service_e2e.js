@@ -34,7 +34,7 @@ const image = path.join(tmp, 'os.img');
 // sorts. Geometry mirrors os/wm.c: MENU_W 150, rows 20px, 4px pad, parked
 // above the 28px taskbar on the 1024x768 headless screen. Bump the list
 // when image.json gains a menu entry; everything below derives from it.
-const MENU_ENTRIES = ['calc', 'ctldemo', 'doom', 'gameboy', 'gdidemo',
+const MENU_ENTRIES = ['calc', 'ctldemo', 'doom', 'fileman', 'gameboy', 'gdidemo',
                       'gpubox', 'notepad', 'quake', 'snake', 'term', 'winbox', 'winmine'];
 const MENU_H = 2 * 4 + MENU_ENTRIES.length * 20;
 const MENU_GEOM = `150x${MENU_H}+0+${768 - 28 - MENU_H}`;

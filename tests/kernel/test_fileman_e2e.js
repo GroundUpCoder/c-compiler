@@ -1,0 +1,153 @@
+#!/usr/bin/env node
+// 0048 acceptance, headless: /bin/fileman (the wave-1 file manager, a
+// Win32-veneer app over plain POSIX dir calls). Covers:
+//   - the listing: LISTBOX of the cwd, dirs-first sorted, dirs marked
+//     with a trailing '/' (readable via the WM_GETTEXT items convention)
+//   - navigation: the path EDIT + Go (agent settext), Up, and Open on a
+//     selected directory; the title tracks the cwd
+//   - activation (the 0066 activate() semantics, wm.c's copy): a
+//     runnable file (#! script) spawns with its own pgroup; a plain
+//     file opens in `term vi`
+//   - drag-resize relayout: wmctl resize reflows the strip + LISTBOX
+//
+// Row selection is KEYBOARD-driven (click focuses the listbox, HOME
+// selects row 0, VK_DOWN steps) so the test never depends on row-height
+// pixel math; the selection readback is the '> ' marker in the items.
+//
+// Run: node tests/kernel/test_fileman_e2e.js
+'use strict';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const cp = require('child_process');
+
+const ROOT = path.resolve(__dirname, '../..');
+const BOOT = path.join(ROOT, 'os/boot.js');
+
+let failures = 0;
+function check(name, cond, extra) {
+  if (cond) { console.log('  ok   ' + name); }
+  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
+}
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-fileman-'));
+const image = path.join(tmp, 'os.img');
+
+function boot(script) {
+  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw r.error;
+  return r.stdout;
+}
+
+function section(out, name) {
+  return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
+}
+
+/* /root fresh listing: Desktop/ id1/ roms/ | doom1.wad hello.c launcher
+ * plain.txt — launcher is row 5, plain.txt row 6 (dirs-first sorted). */
+const HOME = 'wmctl key $SID 74 1073741898';
+const DOWN = 'wmctl key $SID 81 1073741905';
+const sel = (row) => ['wmctl click $SID 200 100', HOME,
+                      ...Array(row).fill(DOWN)].join('\n');
+
+const out = boot([
+  "printf '#!/bin/sh\\nwinbox\\n' > /root/launcher",
+  "printf 'plain text, not a program\\n' > /root/plain.txt",
+  'fileman &',
+  'sleep 5',
+  'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
+  'echo ==tree1',
+  'wmctl tree',
+  'echo ==cut',
+  // Go navigation by settext
+  'wmctl settext EDIT:0 /usr/share',
+  'wmctl click Go',
+  'sleep 1',
+  'echo ==l2',
+  'wmctl gettext LISTBOX:0',
+  'echo ==cut',
+  'echo ==list2',
+  'wmctl list',
+  'echo ==cut',
+  // Up
+  'wmctl click Up',
+  'sleep 1',
+  'echo ==l3',
+  'wmctl gettext LISTBOX:0',
+  'echo ==cut',
+  // back to /root, then Open on the selected DIRECTORY (row 0 = Desktop/)
+  'wmctl settext EDIT:0 /root',
+  'wmctl click Go',
+  'sleep 1',
+  sel(0),
+  'echo ==selmark',
+  'wmctl gettext LISTBOX:0',
+  'echo ==cut',
+  'wmctl click Open',
+  'sleep 1',
+  'echo ==l4',
+  'wmctl gettext LISTBOX:0',
+  'echo ==cut',
+  'wmctl click Up',
+  'sleep 1',
+  // activate a runnable: launcher (row 5) -> sh -> winbox
+  sel(5),
+  'wmctl click Open',
+  'sleep 4',
+  'echo ==list3',
+  'wmctl list',
+  'echo ==cut',
+  // activate a plain file: plain.txt (row 6) -> term vi
+  sel(6),
+  'wmctl click Open',
+  'sleep 5',
+  'echo ==list4',
+  'wmctl list',
+  'echo ==cut',
+  // drag-resize relayout
+  'wmctl resize $SID 600 400',
+  'sleep 1',
+  'echo ==tree2',
+  'wmctl tree',
+  'echo ==cut',
+  '',
+].join('\n'));
+
+const tree1 = section(out, 'tree1');
+check('fileman window titled with the cwd',
+  /class=FileMan [^\n]*text='File Manager - \/root'/.test(tree1), tree1.slice(0, 300));
+check('listing is dirs-first with / markers',
+  /text='Desktop\/\\nid1\/\\nroms\/\\ndoom1.wad/.test(tree1), tree1);
+check('path EDIT + Go/Up/Open buttons present',
+  /class=EDIT id=100/.test(tree1) && /text='Go'/.test(tree1) &&
+  /text='Up'/.test(tree1) && /text='Open'/.test(tree1), tree1);
+
+check('settext + Go navigates to /usr/share',
+  /fonts\//.test(section(out, 'l2')) && /os-release/.test(section(out, 'l2')),
+  section(out, 'l2'));
+check('title tracks the cwd', /File Manager - \/usr\/share/.test(section(out, 'list2')),
+  section(out, 'list2'));
+check('Up goes to the parent', /bin\//.test(section(out, 'l3')) && /share\//.test(section(out, 'l3')),
+  section(out, 'l3'));
+
+check('keyboard selection marks row 0 (Desktop/)',
+  /^> Desktop\//.test(section(out, 'selmark').trim()), section(out, 'selmark'));
+check('Open on a directory navigates into it',
+  /pokemon/.test(section(out, 'l4')) && /term/.test(section(out, 'l4')),
+  section(out, 'l4'));
+
+check('Open on a #! script spawns it (winbox up)',
+  section(out, 'list3').split('\n').some(l => l.endsWith('\twinbox')),
+  section(out, 'list3'));
+check('Open on a plain file opens term vi',
+  section(out, 'list4').split('\n').some(l => l.endsWith('\tterm')),
+  section(out, 'list4'));
+
+const tree2 = section(out, 'tree2');
+check('resize reflows the listbox (592 wide)',
+  /class=LISTBOX [^\n]*rect=4,26 592x/.test(tree2), tree2);
+
+fs.rmSync(tmp, { recursive: true, force: true });
+console.log(failures ? `FAILURES: ${failures}` : 'ALL OK');
+process.exit(failures ? 1 : 0);

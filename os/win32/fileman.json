@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "fileman",
+  "description": "0048 file manager: POSIX dir listing in a LISTBOX, path EDIT + Go/Up/Open, 0066 activate() launch semantics",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "fileman.c"
+  ]
+}
