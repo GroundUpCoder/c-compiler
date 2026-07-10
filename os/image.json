@@ -1,5 +1,5 @@
 {
-  "version": 38,
+  "version": 39,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -66,6 +66,12 @@
       "/usr/bin/winmine.res": {
         "bin": "vendor/winmine/winmine.res"
       },
+      "/usr/bin/calc": {
+        "project": "vendor/calc/bin.json"
+      },
+      "/usr/bin/calc.res": {
+        "bin": "vendor/calc/calc.res"
+      },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
       },
@@ -101,6 +107,12 @@
       },
       "/usr/share/menu/snake": {
         "content": "#!/bin/sh\nterm snake\n"
+      },
+      "/usr/share/menu/calc": {
+        "link": "/usr/bin/calc"
+      },
+      "/usr/share/menu/winmine": {
+        "link": "/usr/bin/winmine"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"
@@ -374,6 +386,18 @@
       },
       "/root/Desktop/term": {
         "link": "/usr/bin/term"
+      },
+      "/root/Desktop/pokemon": {
+        "content": "#!/bin/sh\ngameboy $HOME/roms/PokemonBlue.gb\n",
+        "mode": 493
+      },
+      "/root/Desktop/mario": {
+        "content": "#!/bin/sh\ngameboy $HOME/roms/SuperMarioDeluxe.gbc\n",
+        "mode": 493
+      },
+      "/root/Desktop/drmario": {
+        "content": "#!/bin/sh\ngameboy $HOME/roms/DrMario.gb\n",
+        "mode": 493
       },
       "/root/doom1.wad": {
         "bin": "vendor/doom/data/doom1.wad"
