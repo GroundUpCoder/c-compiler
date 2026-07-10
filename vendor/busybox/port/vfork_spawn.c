@@ -202,6 +202,7 @@ int pv_execve(const char *path, char *const argv[], char *const envp[])
     spec.argv = argv;
     spec.envp = envp;          /* hush passes environ or a built env */
     spec.cwd = 0;              /* inherit */
+    spec.trace = -1;           /* no __SPAWN_TRACE — field ignored (0046) */
 
     if (!pv_state.in_child) {
         /* Bare exec, outside any vfork child (env's BB_EXECVP, tar's

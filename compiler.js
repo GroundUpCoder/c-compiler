@@ -21749,9 +21749,16 @@ struct __spawn_spec {
     const char *cwd;            /* NULL => inherit */
     const struct __fd_action *actions;
     int n_actions;
-    unsigned flags;             /* bit0 = SETPGID */
+    unsigned flags;             /* __SPAWN_* bits below */
     int pgid;
+    int trace;                  /* strace (0046): pipe write-end fd, -1 = none.
+                                   Read by the host ONLY under __SPAWN_TRACE
+                                   (spec-grows-by-field compatibility). */
 };
+/* spec.flags bits. */
+#define __SPAWN_SETPGID        1u  /* pgid field valid (0 = own pid) */
+#define __SPAWN_TRACE          2u  /* trace field valid (todos/0046) */
+#define __SPAWN_TRACE_CHILDREN 4u  /* trace descendants too (strace -f) */
 __import int __spawn(const struct __spawn_spec *spec);        /* -> pid | -1+errno */
 __import int __spawn_wait(int pid, int *status, int options); /* -> pid | -1+errno */
 __import int __spawn_kill(int pid, int sig);                  /* -> 0   | -1+errno */
@@ -22125,8 +22132,9 @@ static inline int posix_spawn(pid_t *pid, const char *path,
   spec.cwd = 0;              // inherit the parent's cwd
   spec.actions = fa ? fa->__acts : (const struct __fd_action *)0;
   spec.n_actions = fa ? fa->__n : 0;
-  spec.flags = (attr && (attr->__flags & POSIX_SPAWN_SETPGROUP)) ? 1u : 0u;
+  spec.flags = (attr && (attr->__flags & POSIX_SPAWN_SETPGROUP)) ? __SPAWN_SETPGID : 0u;
   spec.pgid = attr ? attr->__pgrp : 0;
+  spec.trace = -1;           /* no __SPAWN_TRACE bit — field ignored anyway */
   int r = __spawn(&spec);
   if (r < 0) return errno ? errno : ENOSYS;   // posix_spawn returns errno, not -1
   if (pid) *pid = r;

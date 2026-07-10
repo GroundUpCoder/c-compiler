@@ -157,6 +157,11 @@ var OP = {
   AUDIO_OPEN: 0x2001, AUDIO_CLOSE: 0x2002, AUDIO_GAIN: 0x2003,
 };
 
+/* strace (todos/0046): the decode table IS the OP table — opcode names come
+ * from the constants above, so a new opcode traces by construction. */
+var OP_NAMES = {};
+for (var opName in OP) OP_NAMES[OP[opName]] = opName;
+
 /* Wait options / status packing — must match <sys/wait.h>. */
 var WNOHANG = 0x01, WUNTRACED = 0x02, WCONTINUED = 0x08;
 
@@ -174,6 +179,95 @@ var W_CONTINUED_STATUS = 0xffff;
  * they defer whole rather than land partially). */
 var PIPE_CAP = 64 * 1024;
 var PIPE_ATOMIC = 512;
+
+/* ---- strace formatting (todos/0046) ----
+ * Pure text: one strace-flavored line per RPC — NAME(k=v, ...) = result.
+ * Strings/arrays/previews are capped so a traced `cat` of a big file stays
+ * readable and the trace pipe stays small; the caps are presentation only
+ * (nothing round-trips through these). */
+var TRACE_STR_MAX = 64;    // per-string cap in request args
+var TRACE_DATA_MAX = 32;   // read/write data preview cap (strace's -s default)
+var TRACE_ARR_MAX = 8;     // per-array element cap (argv/envp)
+
+function traceQuoteByte(c) {
+  if (c === 34) return '\\"';
+  if (c === 92) return '\\\\';
+  if (c === 10) return '\\n';
+  if (c === 9) return '\\t';
+  if (c === 13) return '\\r';
+  if (c < 32 || c > 126) return '\\x' + (c | 256).toString(16).slice(-2);
+  return String.fromCharCode(c);
+}
+
+function traceStr(s, max) {
+  var body = '';
+  var n = Math.min(s.length, max);
+  for (var i = 0; i < n; i++) body += traceQuoteByte(s.charCodeAt(i) & 0xff);
+  return '"' + body + '"' + (s.length > max ? '...' : '');
+}
+
+function traceBytes(u8, max) {
+  var body = '';
+  var n = Math.min(u8.length, max);
+  for (var i = 0; i < n; i++) body += traceQuoteByte(u8[i]);
+  return '"' + body + '"' + (u8.length > max ? '...' : '');
+}
+
+function traceVal(v, depth) {
+  if (v === null || v === undefined) return 'NULL';
+  var t = typeof v;
+  if (t === 'number' || t === 'boolean') return '' + v;
+  if (t === 'string') return traceStr(v, TRACE_STR_MAX);
+  if (v instanceof Uint8Array) return '<' + v.length + ' bytes>';
+  if (Array.isArray(v)) {
+    if (depth <= 0) return '[...]';
+    var parts = [];
+    for (var i = 0; i < v.length && i < TRACE_ARR_MAX; i++) parts.push(traceVal(v[i], depth - 1));
+    if (v.length > TRACE_ARR_MAX) parts.push('...+' + (v.length - TRACE_ARR_MAX));
+    return '[' + parts.join(', ') + ']';
+  }
+  if (t === 'object') {
+    if (depth <= 0) return '{...}';
+    var ps = [];
+    for (var k in v) ps.push(k + '=' + traceVal(v[k], depth - 1));
+    return '{' + ps.join(', ') + '}';
+  }
+  return '?';
+}
+
+/* Request args, formatted EAGERLY at dispatch (a RAW payload is a view into
+ * the kernel page — the response reuses that region, so nothing may hold it
+ * past the dispatch turn). */
+function traceArgs(op, req) {
+  if (req && req.raw) {
+    // The one RAW-request op is FS_WRITE: [u32 fd][bytes...].
+    var raw = req.raw;
+    if (op === OP.FS_WRITE && raw.length >= 4) {
+      var fd = raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24);
+      var data = raw.subarray(4);
+      return 'fd=' + fd + ', data=' + traceBytes(data, TRACE_DATA_MAX) +
+        ', count=' + data.length;
+    }
+    return 'raw=<' + raw.length + ' bytes>';
+  }
+  if (!req || typeof req !== 'object') return '';
+  var parts = [];
+  for (var k in req) parts.push(k + '=' + traceVal(req[k], 2));
+  return parts.join(', ');
+}
+
+function traceResult(resp, rawBytes) {
+  if (rawBytes) {
+    return '' + rawBytes.length +
+      (rawBytes.length ? ' ' + traceBytes(rawBytes, TRACE_DATA_MAX) : '');
+  }
+  if (resp && resp.errno) return '-1 ' + resp.errno;
+  if (!resp) return '0';
+  var keys = Object.keys(resp);
+  if (keys.length === 0) return '0';
+  if (keys.length === 1 && typeof resp[keys[0]] === 'number') return '' + resp[keys[0]];
+  return traceVal(resp, 2);
+}
 
 /* Ptys (todos/0020): the slave→master output direction. Sized so a whole
  * worst-case slave write always fits EVENTUALLY: RemoteFS caps writes at
@@ -464,6 +558,8 @@ var SIG = {
   WINCH: 28,
 };
 var NSIG = 32;
+var SIG_NAMES = {};
+for (var sigName in SIG) SIG_NAMES[SIG[sigName]] = 'SIG' + sigName;
 var DISP_DFL = 0, DISP_IGN = 1, DISP_HANDLER = 2;
 /* 0=terminate 1=ignore 2=stop 3=continue (libc's __sig_default_action). */
 function sigDefaultAction(sig) {
@@ -1353,6 +1449,11 @@ Kernel.prototype.moduleCacheStats = function () {
  * Module — is in hand: pid allocation, fd inheritance, worker creation. */
 Kernel.prototype._spawnImage = function (parent, spec, image, module) {
   var self = this;
+  // strace (0046) needs the kernel-owned fd layer (the trace sink is a pipe
+  // OFD); a no-fs kernel fails the request loudly rather than not tracing.
+  if (typeof spec.trace === 'number' && spec.trace >= 0 && !self._brokered) {
+    return { errno: 'ENOSYS' };
+  }
   var pid = self._nextPid++;
   // spec.flags bit0 = "set process group" (posix_spawn normalizes
   // POSIX_SPAWN_SETPGROUP to 1u); pgid 0 means "own pid" per POSIX.
@@ -1393,6 +1494,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
     audios: new Set(),             // aids owned by this process (todos/0017)
     _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
+    trace: null,                   // strace (0046): { ofdId, pipe, follow, drops, cur }
   };
   var sab = new SharedArrayBuffer(KP_SIZE);
   pcb.page = sab;
@@ -1458,6 +1560,27 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     if (o0 && o0.kind === 'tty' && o0.tty) {
       pcb.tty = o0.tty;
       if (!pcb.tty.fgPgid) pcb.tty.fgPgid = pcb.pgid;
+    }
+    // strace (todos/0046): spec.trace names a pipe WRITE end in the PARENT's
+    // fd table (host.js only forwards it under spawn flags bit1, so old
+    // binaries with the 32-byte spec can't set it by accident). The kernel
+    // takes its own ref — the tracer's read end sees EOF exactly at tracee
+    // teardown. flags bit2 = follow: descendants inherit the same pipe and
+    // every line gets a [pid N] prefix.
+    if (typeof spec.trace === 'number' && spec.trace >= 0) {
+      var trId = parent ? parent.fds.get(spec.trace | 0) : undefined;
+      var trO = trId === undefined ? null : self._ofds.get(trId);
+      if (!trO || trO.kind !== 'pipe' || trO.end !== 'write') {
+        pcb.fds.forEach(function (id) { self._ofdUnref(id); });
+        return { errno: 'EBADF' };
+      }
+      trO.refs++;
+      pcb.trace = { ofdId: trO.id, pipe: trO.pipe,
+                    follow: (spec.flags & 4) !== 0, drops: 0, cur: null };
+    } else if (parent && parent.trace && parent.trace.follow) {
+      self._ofds.get(parent.trace.ofdId).refs++;
+      pcb.trace = { ofdId: parent.trace.ofdId, pipe: parent.trace.pipe,
+                    follow: true, drops: 0, cur: null };
     }
   }
 
@@ -1534,7 +1657,61 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
   }
 };
 
+/* ---- strace (todos/0046): per-pid syscall-RPC trace ----
+ * pcb.trace = { ofdId, pipe, follow, drops, cur } — attached at spawn from
+ * spec.trace (a pipe WRITE end in the parent's fd table; the kernel holds
+ * its own ref until exit, so the tracer reading the other end sees EOF
+ * exactly when the tracee is gone). Every RPC appends one decoded line:
+ * the request formats at dispatch (pcb.trace.cur), the line lands at
+ * response time — deferred RPCs (parked reads/waits) trace at completion.
+ * With the flag off the cost is one falsy check per dispatch/respond. */
+Kernel.prototype._traceLine = function (pcb, line, force) {
+  var tr = pcb.trace;
+  var pipe = tr.pipe;
+  if (!pipe.rOpen || !pipe.wOpen) return;     // tracer gone: stop emitting
+  // The kernel must never block: a full pipe (tracer not draining) drops
+  // the line and says so at exit rather than growing without bound. The
+  // exit markers ride `force` — bounded, and the drop notice must not
+  // itself drop.
+  if (!force && pipe.buf.length > pipe.cap) { tr.drops++; return; }
+  if (tr.follow) line = '[pid ' + pcb.pid + '] ' + line;
+  var bytes = textEncoder.encode(line + '\n');
+  for (var i = 0; i < bytes.length; i++) pipe.buf.push(bytes[i]);
+  this._pipeNotify(pipe);
+};
+
+Kernel.prototype._traceRpc = function (pcb, resp, rawBytes) {
+  var cur = pcb.trace.cur;
+  pcb.trace.cur = null;
+  this._traceLine(pcb, cur.name + '(' + cur.args + ') = ' + traceResult(resp, rawBytes));
+};
+
+/* Final trace lines + the kernel's write-end ref release (=> reader EOF).
+ * Runs once per traced pcb, from _exitProcess. */
+Kernel.prototype._traceExit = function (pcb, status) {
+  var tr = pcb.trace;
+  var cur = tr.cur;
+  tr.cur = null;
+  if (cur) {
+    // EXIT never gets a response by design; anything else died mid-RPC.
+    this._traceLine(pcb, cur.name + '(' + cur.args + ')' +
+      (cur.name === 'EXIT' ? '' : ' = <unfinished>'), true);
+  }
+  if (tr.drops) {
+    this._traceLine(pcb, '+++ ' + tr.drops + ' trace lines dropped (pipe full) +++', true);
+  }
+  if (W_TERMSIG(status) !== 0 && (status & 0xff) !== 0x7f) {
+    this._traceLine(pcb, '+++ killed by ' +
+      (SIG_NAMES[W_TERMSIG(status)] || 'signal ' + W_TERMSIG(status)) + ' +++', true);
+  } else {
+    this._traceLine(pcb, '+++ exited with ' + ((status >> 8) & 0xff) + ' +++', true);
+  }
+  pcb.trace = null;
+  this._ofdUnref(tr.ofdId);
+};
+
 Kernel.prototype._respond = function (pcb, resp) {
+  if (pcb.trace && pcb.trace.cur) this._traceRpc(pcb, resp, null);
   if (!writePayload(pcb.i32, pcb.u8, resp)) {
     writePayload(pcb.i32, pcb.u8, { errno: 'ENOMEM' });
   }
@@ -1555,6 +1732,14 @@ Kernel.prototype._dispatchRpc = function (pcb) {
   var req;
   try { req = readPayload(pcb.i32, pcb.u8); }
   catch (e) { this._respond(pcb, { errno: 'EFAULT' }); return; }
+  if (pcb.trace) {
+    // Args format NOW (RAW payloads alias the kernel page); the line lands
+    // when the response does — see _traceRpc.
+    pcb.trace.cur = {
+      name: OP_NAMES[op] || '0x' + op.toString(16),
+      args: traceArgs(op, req),
+    };
+  }
   switch (op) {
     case OP.SPAWN:
       this._spawn(pcb, req).then(function (r) { self._respond(pcb, r); });
@@ -1702,6 +1887,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
 };
 
 Kernel.prototype._respondRaw = function (pcb, bytes) {
+  if (pcb.trace && pcb.trace.cur) this._traceRpc(pcb, null, bytes);
   if (!writeRawPayload(pcb.i32, pcb.u8, bytes)) {
     writePayload(pcb.i32, pcb.u8, { errno: 'ENOMEM' });
   }
@@ -3982,6 +4168,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   if (pcb.state === STATE_ZOMBIE) return;
   pcb.state = STATE_ZOMBIE;
   pcb.exit = status;
+  if (pcb.trace) this._traceExit(pcb, status);   // strace (0046): final lines + EOF
   this._cancelWaiter(pcb);
   this._itimerClear(pcb);        // interval timers die with the process (0044)
   if (pcb.worker) { try { pcb.worker.terminate(); } catch (e) {} }
@@ -4110,6 +4297,8 @@ Kernel.prototype._killPgid = function (pgid, sig) {
 };
 
 Kernel.prototype._deliver = function (pcb, sig) {
+  // strace (0046): signal arrivals interleave with the RPC lines.
+  if (pcb.trace) this._traceLine(pcb, '--- ' + (SIG_NAMES[sig] || 'signal ' + sig) + ' ---');
   if (sig === SIG.KILL) { this._exitProcess(pcb, W_TERMSIG(sig)); return; }
   // SIGCONT resumes a stopped process REGARDLESS of disposition (POSIX);
   // any handler then delivers normally through the mirror below.

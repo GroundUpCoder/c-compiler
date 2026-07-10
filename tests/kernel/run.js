@@ -39,6 +39,8 @@ const tests = [
   ['test_procfs.js'],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)
   ['test_pipes.js'],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js'],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
+  ['test_strace.js'],       // 0046: per-pid RPC trace — spec.trace validation, decode, deferred/unfinished, -f inheritance, drop policy (no wasm)
+  ['test_strace_e2e.js', IMG],   // 0046: /bin/strace in-OS — cat's fd stream, exit/signal status propagation, -f, -o
   ['test_pty.js'],          // 0020: pty pair semantics over the SAB protocol (no wasm)
   ['test_pty_e2e.js'],      // 0020: real C over a pty — openpty, spawn-on-slave, winsize, SIGHUP
   ['test_sockets.js'],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)

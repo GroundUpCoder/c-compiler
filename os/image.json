@@ -1,5 +1,5 @@
 {
-  "version": 46,
+  "version": 47,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -35,6 +35,9 @@
         "hdrs": [
           "openwith.h"
         ]
+      },
+      "/usr/bin/strace": {
+        "c": "strace.c"
       },
       "/usr/bin/wmctl": {
         "c": "wmctl.c",

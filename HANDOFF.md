@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0063 aero closed)
+# Handoff — start of thread (updated 2026-07-10; 0046 strace closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,88 +7,85 @@
 
 ## Where the repo stands
 
-**0063 (Aero effects on the WebGPU compositor) is CLOSED** — dev log
-`logs/2026-07-10/0063-aero-effects.md`, durable status in `todos/WM.md`
-"Implementation status — Aero effects" + `todos/done/0063-aero-effects.md`.
-Load-bearing facts:
+**0046 (strace: per-pid syscall-RPC trace) is CLOSED** — dev log
+`logs/2026-07-10/0046-strace.md`, durable design in `todos/KERNEL.md`
+"strace" section + `todos/done/0046-strace.md`. Load-bearing facts:
 
-- **All five waves landed**: per-pixel alpha (`SDL_WINDOW_TRANSPARENT` →
-  kernel flag bit3 → WMP_F_ALPHA 32; `winbox alpha` = "alphabox"
-  acceptance app), drop shadows + radius-7 rounded corners (per-quad
-  rounded-rect SDF, still ONE render pass), Aero Peek (kernel
-  `wmThumbnail`/WMP THUMB 0x32 deterministic box filter; wm.c hover
-  popup; `wmctl thumb`/`wmctl hover`), 200ms minimize/restore fly
-  animations (transient `_wmAnims` records, pruned in `wmScene()`), and
-  glass (WMP GLASS 0x1B/`wmctl glass` — segmented backdrop-blur chain,
-  browser pass only).
-- **The 0063 constraint held**: headless goldens bit-exact. Alpha is the
-  one effect implemented in the headless composite too (exact integer
-  src-over behind surface bit3); shadows/corners/anims/glass are
-  invisible to it. Glass OFF is literally the pre-0063 single-pass code
-  path (`segments.length === 1`), not an equivalent one.
-- Image version is **v46**.
+- **The trace sink is a tracer-owned pipe OFD**: `__spawn_spec` grew a
+  `trace` field (pipe WRITE-end fd in the parent's table), host-read
+  ONLY under spawn flags bit1 (`__SPAWN_TRACE`) so pre-growth binaries
+  can't set it by accident; bit2 (`__SPAWN_TRACE_CHILDREN`) = strace
+  `-f` (descendants inherit the pipe, `[pid N]` prefixes). The kernel
+  holds its OWN write-end ref → the tracer's read end EOFs exactly at
+  tracee teardown.
+- **Requests format EAGERLY at dispatch** (`pcb.trace.cur`): RAW
+  payloads alias the kernel page, which the response reuses. Lines land
+  at `_respond`/`_respondRaw`; deferred RPCs trace at completion;
+  mid-RPC death prints `= <unfinished>`. `--- SIGxxx ---` at
+  `_deliver`, `+++ exited/killed +++` at `_exitProcess`.
+- **The kernel never blocks on the trace pipe**: past-cap lines drop and
+  a counted marker (force-written past the cap, like the exit markers)
+  reports it at exit.
+- **The decode table IS kernel.js's OP map** (`OP_NAMES`) — a new opcode
+  traces by construction; KERNEL.md's opcode table stays authoritative.
+- `/bin/strace [-f] [-o FILE] cmd args...` (`os/strace.c`) is seeded;
+  image version is **v47**. Spec builders in-tree (posix_spawn header,
+  busybox vfork shim, win32 kernel32 CreateProcess) set `trace = -1`
+  for hygiene.
 
-**Residue got owners, no new queue items**: notepad's ERROR dialog when
-opening an existing file (pre-existing — verified against the unmodified
-tree) is a seeded finding in `todos/0073`; the aero aesthetics + glass
-perf human eyeball rides `todos/0064` next to the standing pointer-lock
-check.
+**No residue, no new queue items**: the item's optional `-f` landed too;
+nothing descoped.
 
-**Tests after the change**: kernel suite **42/42** (includes the new
-`test_wm_aero.js`), unit 702/702, browser sweep 16/16 including the new
-`os-aero.mjs` (exact GPU blend, shadow falloff + decay, corner clip,
-live peek popup, anim settle, glass round-trip).
+**Tests after the change**: kernel suite **44/44** (includes the new
+`test_strace.js` + `test_strace_e2e.js`), unit 702/702; browser sweep
+untouched by this change (no WM/compositor/browser surface — kernel RPC
+plane + one new seeded CLI binary only).
 
-**Next in queue**: run `node todos/queue.js list` — 0046 (strace) leads.
+**Next in queue**: run `node todos/queue.js list` — 0041 (gcstr) leads.
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
-sweep rounds so far, a MUST for WM sweep round 3 (`0064`), which now
-also carries the aero eyeball.
+sweep rounds so far, a MUST for WM sweep round 3 (`0064`), which also
+carries the 0063 aero aesthetics + glass perf eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **NEW (0063): drop shadows are real desktop pixels** — a chromed
-  window darkens ~17px beyond its frame (14 reach + 3 drop). Browser
-  TEAL/pixel asserts near a frame must sample ≥ ~25px out (os-wm,
-  os-scale, os-aero show the pattern). Borderless surfaces cast none.
-- **NEW (0063): a translucent client blends over the chrome frame PLATE
-  (FACE 192), not the desktop** — the frame quad spans the whole window.
-  50%-alpha blue reads [96,96,224]; e2e golden + os-aero agree.
-- **NEW (0063): `wmctl list` FLAGS is 7 chars now** (`A` = has-alpha at
-  [5], layer T/B moved to [6]) — literal FLAGS strings and regexes must
-  carry the extra column.
-- **NEW (0063): wm.c's peek keeps `peek_pending` across dismiss** — an
-  in-flight THUMB reply must still be consumed off the socket (replies
-  are in request order); don't "simplify" that away.
-- 0075: SameBoy core compiles with `-DGB_INTERNAL` everywhere; MIN/MAX
-  are plain ternaries in the vendored defs.h — keep call sites
-  side-effect-free. `GB_random` seeds lazily — don't pixel-match frames
-  that depend on uninitialized CGB palette RAM.
+- **NEW (0046): `wc`-style trace asserts must match the child's fd
+  table** — trace lines show KERNEL fd numbers (which are the child's);
+  strace's own pipe fds never appear (spawn spec CLOSEs them in the
+  child). A parked tracer read is served by `_traceLine`'s
+  `_pipeNotify` re-entry — don't "simplify" that away.
+- **0063: drop shadows are real desktop pixels** — a chromed window
+  darkens ~17px beyond its frame (14 reach + 3 drop). Browser TEAL/pixel
+  asserts near a frame must sample ≥ ~25px out (os-wm, os-scale,
+  os-aero show the pattern). Borderless surfaces cast none.
+- **0063: a translucent client blends over the chrome frame PLATE
+  (FACE 192), not the desktop** — 50%-alpha blue reads [96,96,224].
+- **0063: `wmctl list` FLAGS is 7 chars** (`A` = has-alpha at [5],
+  layer T/B at [6]).
+- **0063: wm.c's peek keeps `peek_pending` across dismiss** — an
+  in-flight THUMB reply must still be consumed off the socket.
+- 0075: SameBoy compiles with `-DGB_INTERNAL` everywhere; MIN/MAX are
+  plain ternaries — keep call sites side-effect-free. `GB_random` seeds
+  lazily — don't pixel-match frames depending on uninit CGB palette RAM.
 - **0072**: `wmctl click LABEL`/`settext` take the FIRST win32 app that
-  accepts the label — sequence agent-driven test legs so ambiguous labels
-  can't land in another app.
-- **0072**: `strncasecmp`/`strcasecmp` are in `<strings.h>`, not
-  `<string.h>`, in this libc.
-- **0072**: need a Peanut-GB window to stay up in a test? Don't feed it
-  garbage; synthesize the minimal valid cartridge — recipe `minimalRom()`
-  in test_openwith_e2e.js (sameboy's e2e uses its built-in test ROM
-  instead — real boot ROMs check the header).
+  accepts the label — sequence agent-driven test legs accordingly.
+- **0072**: `strncasecmp`/`strcasecmp` live in `<strings.h>` here.
 - **0070: browser tests land on VT2 at ready.** Type on the tty only
   after `setVt(1)`; assert boot-time VT1 facts only BEFORE `ready`.
 - **Don't edit bake inputs while a suite runs** (0082 gate): land the
   edit, re-run; or run mkimage first. `.md` files and `tests/` are NOT
-  bake inputs; `os/*.c/.h/.json` and `vendor/` are.
+  bake inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`, `vendor/`
+  are.
 - **New-runner habits**: after an interrupted/failed suite run, look at
   `build/test-*/summary.json` + per-file `.log` before rerunning;
-  `--resume` picks up the checkpoint (works for os-sweep too). Don't
-  crank `-j` past default on a loaded box until 0083 lands.
-- **Sweep is serial by design** (0045 boot lock + contention); os-sweep
-  rejects `-j`. Keep it that way.
+  `--resume` picks up the checkpoint. Don't crank `-j` past default on a
+  loaded box until 0083 lands.
+- **Sweep is serial by design** (0045); os-sweep rejects `-j`.
 - **Menu/desktop entry lists** image.json ↔ test_wm_service_e2e.js ↔
-  os-shell.mjs must move together ('sameboy' is in all three now).
+  os-shell.mjs must move together ('sameboy' is in all three).
 - **Editing seeded sources or coreutils.json/bin.json/lib.json**: the
   headless/test/serve paths detect it by mtime (0082). Bump `image.json`
-  `version` (now 46) anyway when an interactive browser tab must pick
+  `version` (now 47) anyway when an interactive browser tab must pick
   the change up (OPFS re-fetch is version-gated only).
 - **Cairo/pixman config is hand-written** (`vendor/cairo/config.h` +
   `src/cairo-features.h`; pixman via two -D flags in lib.json). When
@@ -98,7 +95,7 @@ also carries the aero eyeball.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. After `queue.js done`, check `git status` — the internal
   git-mv can stage a pre-edit blob (re-`git add` the done file; it fired
-  again at 0063's close).
+  at 0063's close).
 - Two unit goldens encode libc internals (`switch_br_table` stderr,
   `printf` pointer line); `setjmp_unsupported_diag`'s golden encodes the
   setjmp diagnostic wording — moves if the message changes.
@@ -130,16 +127,18 @@ VT1 until `ready`; auto-switch only on a healthy ready; user choice
 during boot wins); 0072's calls (openwith store FIRST-FILE-WINS, values
 are argv prefixes, resolver stays header-only, seeded Desktop ROM
 launchers stay scripts); 0075's calls (Peanut-GB stays the default
-.gb/.gbc handler — SameBoy is the accuracy option; boot ROMs embedded,
-not fs-seeded; GB_SECTION kept intact rather than flattened; GNU-ism
-fixes are vendored patches until 0087 promotes them); 0063's calls
-(deterministic-or-invisible split per effect; alpha blends over the
-frame plate; glass is kernel STATE but browser-only RENDERING; shadows/
-corners are SDF in the one pass, no extra passes; THUMB is kernel
-mechanism, the peek popup is wm.c policy).
+.gb/.gbc handler; boot ROMs embedded; GB_SECTION kept; GNU-ism fixes are
+vendored patches until 0087); 0063's calls (deterministic-or-invisible
+split per effect; alpha blends over the frame plate; glass is kernel
+STATE but browser-only RENDERING; shadows/corners are SDF in the one
+pass; THUMB is kernel mechanism, peek popup is wm.c policy); 0046's
+calls (trace sink is a tracer-owned pipe named by spec field, NOT a
+spawn-return fd; requests format eagerly at dispatch; whole-line
+tracing, no unfinished/resumed splitting; drop-don't-block with a
+counted marker; decode table = the OP map).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0046 strace, 0041 gcstr, 0079 dep-dedup, 0080 cairo surfaces,
-or 0064 WM sweep round 3 (the pointer-lock human check is owed)."
+to tackle: 0041 gcstr, 0079 dep-dedup, 0080 cairo surfaces, or 0064 WM
+sweep round 3 (the pointer-lock human check is owed)."

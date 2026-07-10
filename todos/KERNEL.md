@@ -256,6 +256,35 @@ this build, so a rejected exec is a clean `can't execute` + exit 2.
 Tests: `test_kernel.js` (parse/argv/depth legs over fake workers),
 `test_os_boot.js` (hush acceptance: `./foo`, `#!/bin/sh -e`, cycle).
 
+## strace — per-pid syscall-RPC trace (todos/0046, landed 2026-07-10)
+
+The kernel brokers every syscall, so tracing is formatting, not
+mechanism. `__spawn_spec` grew a `trace` field (spec-grows-by-field,
+OS.md): a pipe WRITE-end fd in the *parent's* table, read by host.js
+only under spawn flags bit1 (`__SPAWN_TRACE` — pre-growth binaries can't
+set it by accident; bit2 `__SPAWN_TRACE_CHILDREN` = descendants inherit
+the pipe, strace `-f`, every line `[pid N]`-prefixed). At spawn the
+kernel takes its own ref on the write end, so the tracer's read end hits
+EOF exactly at tracee teardown; the traced child gets CLOSE fd-actions
+for both pipe ends from /bin/strace so it never holds them.
+
+Per RPC: `_dispatchRpc` formats the request EAGERLY into
+`pcb.trace.cur` (RAW payloads alias the kernel page — nothing may hold
+them past the dispatch turn), and the line lands when `_respond`/
+`_respondRaw` runs — deferred RPCs (parked reads, WAIT) trace at
+completion, an RPC outstanding at death traces as `= <unfinished>`.
+The decode table IS the `OP` map (`OP_NAMES`) — a new opcode traces by
+construction. Extra lines: `--- SIGxxx ---` at `_deliver`, `+++ exited
+with N +++` / `+++ killed by SIGxxx +++` at `_exitProcess`. The kernel
+never blocks on the trace pipe: past-cap lines drop and the exit marker
+reports the count. Flag off = one falsy check per dispatch/respond.
+
+`/bin/strace [-f] [-o FILE] cmd args...` (`os/strace.c`) is plumbing:
+pipe(2), `__spawn` with `trace`+flags, copy trace→stderr (or FILE),
+waitpid, propagate status (128+sig for a signaled child). Tests:
+`tests/kernel/test_strace.js` (protocol semantics over fake workers),
+`test_strace_e2e.js` (the real binary in-OS).
+
 One small SAB per process, created at spawn, shared kernel↔worker. Layout
 (i32 words; one 4 KiB page is plenty):
 

@@ -1,6 +1,18 @@
 # 0046 — strace: per-pid syscall-RPC trace
 
-- **Status**: open
+- **Status**: done (2026-07-10) — landed in full, no residue. Kernel-side
+  per-pcb trace over a tracer-owned pipe OFD (`__spawn_spec.trace` under
+  flags bit1; the kernel holds its own write-end ref so EOF == tracee
+  teardown; decode table = kernel.js's OP map; never-block drop policy
+  with a counted marker), `/bin/strace [-f] [-o FILE]` seeded (image
+  v47) — `-f` (descendants, `[pid N]` prefixes) landed now rather than
+  deferred, `-o` as a bonus. Signal arrivals trace as `--- SIGxxx ---`,
+  deaths as `+++ exited/killed +++`, mid-RPC deaths as `<unfinished>`.
+  Tests: `tests/kernel/test_strace.js` (protocol/decode/drop, fake
+  workers) + `test_strace_e2e.js` (acceptance: cat's fd stream, rc 0/7/
+  143 propagation, SIGTERM markers, 127 spawn failure, -f, -o). Design
+  doc: KERNEL.md "strace" section; dev log
+  `logs/2026-07-10/0046-strace.md`.
 - **Design**: `todos/KERNEL.md` (the kernel brokers every syscall — this
   is mostly formatting), discussion in
   `logs/2026-07-09/roadmap-network-desktop.md`

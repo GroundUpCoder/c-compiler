@@ -349,7 +349,17 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v46**.
+strace (todos/0046): the kernel traces any pcb whose spawn spec named a
+trace pipe — `__spawn_spec.trace` is a pipe WRITE-end fd in the parent,
+host-read only under spawn flags bit1 (`__SPAWN_TRACE`; bit2 = follow
+descendants, lines get `[pid N]` prefixes); every RPC appends one
+decoded line (the decode table IS kernel.js's OP map), the kernel holds
+its own write-end ref so the tracer's EOF is exactly tracee teardown,
+and a full pipe drops lines + reports the count at exit (the kernel
+never blocks). `/bin/strace [-f] [-o FILE] cmd args...` (os/strace.c)
+is just the plumbing: pipe, spawn pre-traced, copy to stderr, propagate
+exit status (128+sig on a signaled child).
+Image version is **v47**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

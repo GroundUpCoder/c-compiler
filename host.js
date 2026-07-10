@@ -5184,7 +5184,9 @@ function createBrowserPosix({ ctx }) {
 //
 // Field offsets (wasm32, all i32): __fd_action {op@0,fd@4,arg@8,path@12,mode@16}
 // = 20 bytes; __spawn_spec {path@0,argv@4,envp@8,cwd@12,actions@16,n_actions@20,
-// flags@24,pgid@28} = 32 bytes.
+// flags@24,pgid@28,trace@32} = 36 bytes. `trace` (todos/0046) is read ONLY
+// under flags bit1 (__SPAWN_TRACE) — binaries built against the 32-byte spec
+// never set that bit, so the extra read can't pick up their stack garbage.
 function readSpawnSpec(ctx, p) {
   // Read the whole struct in one synchronous burst — never hold a DataView
   // across anything that could grow/detach memory.
@@ -5226,7 +5228,9 @@ function readSpawnSpec(ctx, p) {
       mode: dv.getInt32(base + 16, true),
     });
   }
-  return { path, argv, envp, cwd, actions, flags: u32(24), pgid: i32(28) };
+  const flags = u32(24);
+  return { path, argv, envp, cwd, actions, flags, pgid: i32(28),
+           trace: (flags & 2) ? i32(32) : -1 };
 }
 
 // hooks: { spawn(spec)->{pid}|{errno}, wait(pid,options)->{pid,status}|{errno},

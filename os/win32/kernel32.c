@@ -999,7 +999,7 @@ BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
     const char *cwdp = NULL;
     if (cwdW) { path_from_w(cwdW, cwd, sizeof cwd); cwdp = cwd; }
 
-    struct __spawn_spec spec = { prog, argv, NULL, cwdp, acts, na, 0, 0 };
+    struct __spawn_spec spec = { prog, argv, NULL, cwdp, acts, na, 0, 0, -1 };
     int pid = __spawn(&spec);
     if (pid < 0) { set_err_errno(); return FALSE; }
 
