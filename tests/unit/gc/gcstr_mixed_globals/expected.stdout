@@ -1,0 +1,11 @@
+initial: 11 3735928559 1234605616436508552 1.5 2.25 22
+mutated: 111 559038736 1234605616436508553 3 4.5 112
+gs1 len: 3
+gs2 len: 3
+gs1 != gs2: 1
+gnode null: 1
+gnode.v: 7
+geq roundtrip: 7
+static ll: 84
+alloca: A
+heap sane: 1

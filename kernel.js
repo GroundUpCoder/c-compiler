@@ -1414,7 +1414,7 @@ Kernel.prototype._moduleFor = function (mkey, image) {
   var self = this;
   var bytes = image instanceof Uint8Array ? image : new Uint8Array(image);
   // Compile options MUST MATCH host.js runModule's.
-  var p = WebAssembly.compile(bytes, { builtins: ['js-string'] }).then(function (mod) {
+  var p = WebAssembly.compile(bytes, { builtins: ['js-string'], importedStringConstants: '#' }).then(function (mod) {
     if (WebAssembly.Module.imports(mod).some(function (i) { return i.module === 'ss'; })) {
       return null;   // ss flavor: bytes path (cached null — no re-probing)
     }

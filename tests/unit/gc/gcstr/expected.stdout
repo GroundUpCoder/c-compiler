@@ -1,0 +1,16 @@
+len a: 5
+a equals b: 1
+a equals g: 0
+len concat: 11
+charCodeAt(5): 32
+compare: -1
+read back: hello world (11 bytes)
+g_ext len: 10
+g_ref len: 7
+g_const len: 9
+static len: 12
+macro len: 9
+pick lens: 3 2
+nul len: 3
+utf8 len: 6
+jss equals: 1

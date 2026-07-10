@@ -8533,7 +8533,7 @@ async function runModule({
   }
   if (!writeOut) writeOut = function () {};
   if (!writeErr) writeErr = function () {};
-  const compileOptions = { builtins: ['js-string'] };   // MUST MATCH kernel.js _moduleFor
+  const compileOptions = { builtins: ['js-string'], importedStringConstants: '#' };   // MUST MATCH kernel.js _moduleFor
   const module = precompiled || new WebAssembly.Module(bytes, compileOptions);
 
   /* Flavor dispatch. A module that imports the "ss" namespace is a

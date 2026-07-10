@@ -1,6 +1,22 @@
 # 0041 — `__gcstr("...")`: GC string literals via importedStringConstants
 
-- **Status**: open
+- **Status**: DONE (2026-07-10). Landed in full — keyword builtin (parsed as
+  an `EIntrinsic` GC_STR carrying the `EString`, not a new node class: three
+  dispatch sites total), module-"#" immutable `(ref extern)` global imports
+  deduped by content, defined-global index-space shift with a structural
+  guard (`addGlobalImport` throws after the first defined global; a
+  generateCode pre-scan registers every literal first), file-scope init for
+  BOTH `__externref` and `__refextern` (the latter gained its one valid
+  global initializer), `GCSTR()` macro in guc.h, importedStringConstants
+  wired into the host.js/kernel.js MUST-MATCH compile-options pair. Tests:
+  `tests/unit/gc/gcstr*` + three `err_gcstr_*` diags,
+  `tests/host/test_gcstr_imports.js` (binary-shape: dedup, zero linear
+  memory, "#"-Proxy loader polyfill). Unit 707/707, kernel 44/44, host
+  suite, headless + browser boot, in-OS `cc` all green. Residue → follow-up
+  **0097** (ss modules join the 0037 spawn module cache — the compile-option
+  unification this item performed was the only blocker). Adjacent fix landed
+  with it: `newestBakeInput` no longer counts `*.img.tmp-<pid>` bake temps
+  as inputs (a killed bake made the image perpetually stale).
 - **Design**: self-contained (Plan + Acceptance below). A main-compiler
   feature, independently useful to plain C.
 

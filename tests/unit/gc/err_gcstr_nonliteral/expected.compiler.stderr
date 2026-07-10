@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_gcstr_nonliteral/main.c.
+tests/unit/gc/err_gcstr_nonliteral/main.c:4: error: __gcstr requires a string literal argument

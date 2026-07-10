@@ -449,7 +449,10 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
       if (e.name.charAt(0) === '.') return;
       if (skipNames && skipNames[e.name]) return;
       if (e.isDirectory()) walk(pathMod.join(dir, e.name), null);
-      else if (!/\.(img|md)$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+      // .img.tmp-<pid> is mkimage's atomic-rename temp (a bake OUTPUT):
+      // one left behind by a killed bake would read as an ever-newer
+      // "input" and make the published image perpetually stale.
+      else if (!/\.(img|md)$/.test(e.name) && !/\.img\.tmp-\d+$/.test(e.name)) statFile(pathMod.join(dir, e.name));
     });
   }
   function normalize(p) {   // "a/b/../c" -> "a/c" (buildProject's rule)

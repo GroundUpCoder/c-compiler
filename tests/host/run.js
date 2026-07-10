@@ -11,6 +11,7 @@ var tests = [
   ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['test_console_ring.js', []],          // console SAB ring blocks (pty backpressure), never overruns
   ['test_audio_ring_wrap.js', []],       // audio ring writePos stays masked; no RangeError at 2^31
+  ['test_gcstr_imports.js', []],         // __gcstr binary shape: dedup, no data-segment copy, "#" Proxy polyfill
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
 ];
 

@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_gcstr_bad_utf8/main.c.
+tests/unit/gc/err_gcstr_bad_utf8/main.c:3: error: __gcstr literal must be valid UTF-8 (it becomes a wasm import name)

@@ -130,6 +130,7 @@ const Keyword = Object.freeze({
   X_REF_AS_EXTERN: "__ref_as_extern",
   X_REF_AS_EQ: "__ref_as_eq",
   X_CAST: "__cast",
+  X_GCSTR: "__gcstr",
 });
 
 // Punctuation
@@ -938,6 +939,7 @@ const KEYWORD_MAP = new Map([
   ["__ref_as_extern", Keyword.X_REF_AS_EXTERN],
   ["__ref_as_eq", Keyword.X_REF_AS_EQ],
   ["__cast", Keyword.X_CAST],
+  ["__gcstr", Keyword.X_GCSTR],
   ["__attribute__", Keyword.X_ATTRIBUTE],
   ["__attribute", Keyword.X_ATTRIBUTE],
 ]);
@@ -2274,7 +2276,7 @@ const IntrinsicKind = Object.freeze({
   ARRAY_LEN: "array_len", GC_NEW_ARRAY: "gc_new_array",
   ARRAY_FILL: "array_fill", ARRAY_COPY: "array_copy",
   REF_AS_EXTERN: "ref_as_extern", REF_AS_EQ: "ref_as_eq",
-  CAST: "cast",
+  CAST: "cast", GC_STR: "gc_str",
 });
 
 const BopStr = Object.freeze({
@@ -8226,6 +8228,7 @@ function printC(units, options) {
       case Types.IntrinsicKind.REF_AS_EXTERN: return "__ref_as_extern(" + args + ")";
       case Types.IntrinsicKind.REF_AS_EQ: return "__ref_as_eq(" + args + ")";
       case Types.IntrinsicKind.CAST: return "__cast(" + spellType(expr.argType, "") + ", " + args + ")";
+      case Types.IntrinsicKind.GC_STR: return "__gcstr(" + args + ")";
       default: return "/* intrinsic:" + expr.intrinsicKind + " */(" + args + ")";
     }
   }
@@ -10454,6 +10457,35 @@ class Parser {
         this.error(tok, `__ref_eq requires two reference operands, got '${a.type.toString()}' and '${b.type.toString()}'`);
       }
       return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TINT, Types.IntrinsicKind.REF_EQ, [a, b]);
+    }
+
+    // __gcstr("...") — the string literal as an imported externref constant
+    // (js-string importedStringConstants): one immutable `(ref extern)`
+    // global import per distinct literal, module "#", import NAME = the
+    // literal's bytes. Zero-copy, zero linear memory, deduped by
+    // construction. global.get of an immutable import is a wasm constant
+    // expression, so file-scope `__externref g = __gcstr("...")` works.
+    if (this.matchKW(Lexer.Keyword.X_GCSTR)) {
+      const tok = this.peek(-1);
+      this.expect("(");
+      if (!this.atKind(Lexer.TokenKind.STRING)) {
+        this.error(tok, `__gcstr requires a string literal argument`);
+      }
+      const lit = this.parseStringLiteral();   // adjacent-literal concatenation applies
+      this.expect(")");
+      if (lit.type.baseType !== Types.TCHAR) {
+        this.error(tok, `__gcstr requires a narrow string literal (no L/u/U prefix)`);
+      }
+      // The literal becomes a wasm import name, and import names must be
+      // valid UTF-8 — \x/octal byte escapes can produce sequences that
+      // aren't. Reject here with a source location instead of tripping the
+      // binary validator.
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(lit.value.slice(0, -1)));
+      } catch (e) {
+        this.error(tok, `__gcstr literal must be valid UTF-8 (it becomes a wasm import name)`);
+      }
+      return new AST.EIntrinsic(Lexer.Loc.fromTok(tok), Types.TREFEXTERN, Types.IntrinsicKind.GC_STR, [lit]);
     }
 
     // __ref_null(type) — produces a null of the given reference type.
@@ -13142,6 +13174,15 @@ const WT_F32 = { tag: "num", num: WasmNumType.F32 };
 const WT_F64 = { tag: "num", num: WasmNumType.F64 };
 const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F, heapIsIdx: false };
 const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F, heapIsIdx: false };
+
+// __gcstr dedup key: the literal's content bytes (NUL terminator dropped)
+// decoded as UTF-8. The parser already validated the bytes with a fatal
+// decoder, and strict UTF-8 decode is injective, so key equality is exactly
+// content-byte equality.
+const _gcstrUtf8Decoder = new TextDecoder("utf-8");
+function gcstrKey(estr) {
+  return _gcstrUtf8Decoder.decode(new Uint8Array(estr.value.slice(0, -1)));
+}
 const WT_EQREF = { tag: "ref", nullable: true, heap: 0x6D, heapIsIdx: false };
 const WT_EMPTY = { tag: "empty" };
 
@@ -13437,6 +13478,7 @@ class WasmModule {
     this.funcImports = [];      // section 2
     this.funcDefs = [];         // section 3 & 10
     this.memories = [];         // section 5
+    this.globalImports = [];    // section 2 (kind 0x03); global idx space [0, globalImports.length)
     this.globals = [];          // section 6
     this.exports = [];          // section 7
     this.dataSegments = [];     // section 11
@@ -13497,8 +13539,24 @@ class WasmModule {
     return id;
   }
 
+  // Imported globals occupy [0, globalImports.length) of the global index
+  // space; defined globals sit above them. addGlobal bakes the offset into
+  // the index it returns, so EVERY import must be registered before the
+  // first defined global — enforced here, because a late import would
+  // silently shift indices already burned into function bodies.
+  // `nameBytes` is the import name as raw UTF-8 bytes (import names aren't
+  // restricted to ASCII, and emitString's charCodeAt would mangle them).
+  addGlobalImport(moduleName, nameBytes, type, isMutable) {
+    if (this.globals.length > 0) {
+      throw new Error("addGlobalImport: all global imports must be registered before the first defined global");
+    }
+    const id = this.globalImports.length;
+    this.globalImports.push({ moduleName, nameBytes, type, isMutable });
+    return id;
+  }
+
   addGlobal(type, initExpr, isMutable) {
-    const id = this.globals.length;
+    const id = this.globalImports.length + this.globals.length;
     this.globals.push({ type, initExpr, isMutable });
     return id;
   }
@@ -13544,7 +13602,7 @@ class WasmModule {
   }
 
   patchGlobalI32(id, value) {
-    const g = this.globals[id];
+    const g = this.globals[id - this.globalImports.length];
     g.initExpr = [];
     const code = new WasmCode(g.initExpr);
     code.i32Const(value);
@@ -13719,12 +13777,20 @@ class WasmModule {
 
     // Import section (2)
     buf = [];
-    lebU(buf, this.funcImports.length);
+    lebU(buf, this.funcImports.length + this.globalImports.length);
     for (const imp of this.funcImports) {
       emitString(buf, imp.moduleName);
       emitString(buf, imp.functionName);
       buf.push(0x00); // func import kind
       lebU(buf, imp.typeId);
+    }
+    for (const imp of this.globalImports) {
+      emitString(buf, imp.moduleName);
+      lebU(buf, imp.nameBytes.length);      // raw UTF-8 name (see addGlobalImport)
+      for (const b of imp.nameBytes) buf.push(b);
+      buf.push(0x03); // global import kind
+      wtEmit(imp.type, buf);
+      buf.push(imp.isMutable ? 0x01 : 0x00);
     }
     emitSection(2, buf);
 
@@ -14540,6 +14606,9 @@ class CodeGenerator {
     this.staticDataOffset = 0;
     this.staticData = [];
     this.stringLiteralAddrs = new Map();
+    // __gcstr dedup: literal content (decoded UTF-8) → imported-global idx.
+    // Populated by generateCode's pre-scan BEFORE any defined global exists.
+    this.gcstrGlobalIdx = new Map();
     this.stackPointerGlobalIdx = 0;
     this.heapBaseGlobalIdx = 0;
     // Per-function state
@@ -17257,6 +17326,17 @@ class CodeGenerator {
             this.body.refCastNullEq();
             break;
           }
+          case Types.IntrinsicKind.GC_STR: {
+            const idx = this.gcstrGlobalIdx.get(gcstrKey(expr.args[0]));
+            if (idx === undefined) {
+              // generateCode's pre-scan walks every body and static-storage
+              // initializer before the first defined global; reaching here
+              // means a code path synthesized a GC_STR node it never saw.
+              throw new Error(`internal: __gcstr literal not pre-registered`);
+            }
+            this.body.globalGet(idx);
+            break;
+          }
           case Types.IntrinsicKind.CAST: {
             const target = expr.argType;
             const srcType = expr.args[0].type;
@@ -17517,6 +17597,44 @@ function generateCode(units, outputFile, options) {
     cg.stackPages = Math.max(cg.stackPages, minPages);
   }
 
+  // Register __gcstr imported string-constant globals (todos/0041).
+  // Imported globals sit at the BOTTOM of the global index space, so every
+  // one must be known before the first defined global — addGlobal bakes the
+  // import count into the indices it hands out, and function bodies burn
+  // those indices in as they're emitted (addGlobalImport throws if a
+  // defined global already exists). The inliner has already run, so this
+  // walk sees the final AST; a literal registered for a function the
+  // emitter later drops is just an unused import (imports resolve at
+  // compile via importedStringConstants — no runtime cost).
+  {
+    const scanned = new Set();
+    const scan = (node) => {
+      if (!node) return;
+      if (node instanceof AST.EIntrinsic && node.intrinsicKind === Types.IntrinsicKind.GC_STR) {
+        const key = gcstrKey(node.args[0]);
+        if (!cg.gcstrGlobalIdx.has(key)) {
+          const nameBytes = node.args[0].value.slice(0, -1);   // drop the NUL
+          const idx = wmod.addGlobalImport("#", nameBytes, WT_REFEXTERN, false);
+          cg.gcstrGlobalIdx.set(key, idx);
+          if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx, name: "__gcstr" });
+        }
+      }
+      if (node.children) for (const c of node.children) scan(c);
+    };
+    for (const unit of units) {
+      for (const func of [...unit.definedFunctions, ...unit.staticFunctions]) {
+        const fdef = func.definition || func;
+        if (fdef !== func || scanned.has(fdef)) continue;
+        scanned.add(fdef);
+        if (fdef.body) scan(fdef.body);
+        for (const v of (fdef.staticLocals || [])) scan(v.initExpr);
+      }
+      for (const v of [...unit.definedVariables, ...unit.externVariables, ...unit.localExternVariables]) {
+        scan((v.definition || v).initExpr);
+      }
+    }
+  }
+
   // Stack pointer global
   const initialSp = cg.stackPages * 65536;
   cg.stackPointerGlobalIdx = wmod.addGlobalI32(initialSp, true);
@@ -17667,12 +17785,32 @@ function generateCode(units, outputFile, options) {
       }
     } else if (varDef.type.removeQualifiers().isRef()) {
       const rt = varDef.type.removeQualifiers();
-      if (rt === Types.TREFEXTERN) {
-        throw new Error(`Cannot declare global '__refextern' variable '${varDef.name}' — non-nullable refs have no valid initializer. Use '__externref' instead.`);
+      // `__gcstr("...")` is the one non-null ref constant: global.get of an
+      // immutable imported global is a valid wasm constant expression. It
+      // also gives __refextern its one valid global initializer.
+      const unwrapGcstr = (e) =>
+        (e instanceof AST.EIntrinsic && e.intrinsicKind === Types.IntrinsicKind.GC_STR) ? e :
+        (e instanceof AST.EImplicitCast || e instanceof AST.ECast) ? unwrapGcstr(e.expr) : null;
+      const gcstrInit = varDef.initExpr ? unwrapGcstr(varDef.initExpr) : null;
+      if (gcstrInit && (rt === Types.TEXTERNREF || rt === Types.TREFEXTERN)) {
+        const importIdx = cg.gcstrGlobalIdx.get(gcstrKey(gcstrInit.args[0]));
+        if (importIdx === undefined) throw new Error(`internal: __gcstr literal not pre-registered`);
+        const initExpr = [];
+        const code = new WasmCode(initExpr);
+        code.globalGet(importIdx);
+        code.end();
+        const globalIdx = wmod.addGlobal(rt === Types.TREFEXTERN ? WT_REFEXTERN : WT_EXTERNREF, initExpr, true);
+        cg.globalVarToWasmGlobalIdx.set(varDef, globalIdx);
+        if (options.compilerOptions.emitNames) wmod.globalNames.push({ idx: globalIdx, name: varDef.name });
+        return;
       }
-      // WASM globals can only have constant initializers (ref.null is the
-      // only ref-typed constant we support). Reject non-null initializers
-      // for global ref types — user must initialize in main / a startup fn.
+      if (rt === Types.TREFEXTERN) {
+        throw new Error(`Cannot declare global '__refextern' variable '${varDef.name}' — non-nullable refs have no valid initializer other than __gcstr("..."). Use '__externref' instead.`);
+      }
+      // WASM globals can only have constant initializers (ref.null and
+      // __gcstr are the only ref-typed constants we support). Reject other
+      // non-null initializers for global ref types — user must initialize
+      // in main / a startup fn.
       if (varDef.initExpr) {
         const isNullConst = (e) =>
           (e instanceof AST.EInt && e.value === 0n) ||
@@ -22229,6 +22367,10 @@ __import("wasm:js-string", "cast")
 __refextern __wjs_cast(__externref val);
 
 __externref __jss(const char *s);
+
+/* Friendly spelling for the __gcstr keyword builtin: the literal as an
+   imported externref constant (zero-copy, zero linear memory, deduped). */
+#define GCSTR(s) __gcstr(s)
 
 #endif
   `,

@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0046 strace closed)
+# Handoff — start of thread (updated 2026-07-10; 0041 gcstr closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,41 +7,48 @@
 
 ## Where the repo stands
 
-**0046 (strace: per-pid syscall-RPC trace) is CLOSED** — dev log
-`logs/2026-07-10/0046-strace.md`, durable design in `todos/KERNEL.md`
-"strace" section + `todos/done/0046-strace.md`. Load-bearing facts:
+**0041 (`__gcstr` — string literals as imported externref constants) is
+CLOSED** — dev log `logs/2026-07-10/0041-gcstr.md`, item at
+`todos/done/0041-gcstr-string-constants.md`. Load-bearing facts:
 
-- **The trace sink is a tracer-owned pipe OFD**: `__spawn_spec` grew a
-  `trace` field (pipe WRITE-end fd in the parent's table), host-read
-  ONLY under spawn flags bit1 (`__SPAWN_TRACE`) so pre-growth binaries
-  can't set it by accident; bit2 (`__SPAWN_TRACE_CHILDREN`) = strace
-  `-f` (descendants inherit the pipe, `[pid N]` prefixes). The kernel
-  holds its OWN write-end ref → the tracer's read end EOFs exactly at
-  tracee teardown.
-- **Requests format EAGERLY at dispatch** (`pcb.trace.cur`): RAW
-  payloads alias the kernel page, which the response reuses. Lines land
-  at `_respond`/`_respondRaw`; deferred RPCs trace at completion;
-  mid-RPC death prints `= <unfinished>`. `--- SIGxxx ---` at
-  `_deliver`, `+++ exited/killed +++` at `_exitProcess`.
-- **The kernel never blocks on the trace pipe**: past-cap lines drop and
-  a counted marker (force-written past the cap, like the exit markers)
-  reports it at exit.
-- **The decode table IS kernel.js's OP map** (`OP_NAMES`) — a new opcode
-  traces by construction; KERNEL.md's opcode table stays authoritative.
-- `/bin/strace [-f] [-o FILE] cmd args...` (`os/strace.c`) is seeded;
-  image version is **v47**. Spec builders in-tree (posix_spawn header,
-  busybox vfork shim, win32 kernel32 CreateProcess) set `trace = -1`
-  for hygiene.
+- `__gcstr("...")` parses as an `EIntrinsic` GC_STR carrying the `EString`
+  (NO new node class — three dispatch sites: parser, C-printer, codegen).
+  One immutable `(ref extern)` global import per distinct literal, module
+  `"#"`, name = the literal bytes; deduped by decoded content. `GCSTR()`
+  macro in guc.h.
+- **Index-shift is enforced structurally, not relocated**: a generateCode
+  pre-scan registers every literal BEFORE the first defined global;
+  `addGlobalImport` throws once one exists; codegen throws on an
+  unregistered literal. `patchGlobalI32` subtracts the import count.
+- File-scope `__externref` AND `__refextern` globals can init from
+  `__gcstr` (global.get of an immutable import is a constant expr) —
+  `__refextern`'s only valid global initializer.
+- `importedStringConstants: '#'` joined the MUST-MATCH compile-options
+  pair (host.js runModule ↔ kernel.js `_moduleFor`). C and ss options are
+  now IDENTICAL → **follow-up 0097**: drop `_moduleFor`'s ss exclusion so
+  ss binaries join the 0037 spawn module cache (SS-INTEROP.md §4).
+- Loaders without compile options use
+  `imports['#'] = new Proxy({}, {get: (_, name) => name})`.
 
-**No residue, no new queue items**: the item's optional `-f` landed too;
-nothing descoped.
+**Adjacent fix**: `newestBakeInput` no longer counts `*.img.tmp-<pid>`
+(mkimage atomic-rename temps) as bake inputs — a killed bake used to make
+the image PERPETUALLY stale (each serve.js re-bake killed by a test
+timeout left another temp). Pattern gitignored too.
 
-**Tests after the change**: kernel suite **44/44** (includes the new
-`test_strace.js` + `test_strace_e2e.js`), unit 702/702; browser sweep
-untouched by this change (no WM/compositor/browser surface — kernel RPC
-plane + one new seeded CLI binary only).
+**Tests after the change**: unit **707/707** (5 new gcstr tests), kernel
+**44/44**, blockfs 15/15, host suite all-pass (new
+`test_gcstr_imports.js` — binary shape + polyfill), ast 125/125, headless
+boot + browser os-boots.mjs green, in-OS `cc` compile+run of a gcstr
+program verified. Image version stays **v47** (no seeded-source change;
+compiler.js/host.js edits re-bake by mtime).
 
-**Next in queue**: run `node todos/queue.js list` — 0041 (gcstr) leads.
+**Concurrent session note**: another session was active during this work
+(sameboy save-states + a desktop-polish queue batch 0089–0096, uncommitted
+at the time). The 0041 commit staged a SURGICAL queue.json (HEAD − 0041 +
+0097) so the pushed manifest has no dangling ids; the working tree keeps
+their full version. If their items look missing from `git log`, that's why.
+
+**Next in queue**: run `node todos/queue.js list`.
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
 sweep rounds so far, a MUST for WM sweep round 3 (`0064`), which also
@@ -49,56 +56,43 @@ carries the 0063 aero aesthetics + glass perf eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **NEW (0046): `wc`-style trace asserts must match the child's fd
-  table** — trace lines show KERNEL fd numbers (which are the child's);
-  strace's own pipe fds never appear (spawn spec CLOSEs them in the
-  child). A parked tracer read is served by `_traceLine`'s
-  `_pipeNotify` re-entry — don't "simplify" that away.
-- **0063: drop shadows are real desktop pixels** — a chromed window
-  darkens ~17px beyond its frame (14 reach + 3 drop). Browser TEAL/pixel
-  asserts near a frame must sample ≥ ~25px out (os-wm, os-scale,
-  os-aero show the pattern). Borderless surfaces cast none.
-- **0063: a translucent client blends over the chrome frame PLATE
-  (FACE 192), not the desktop** — 50%-alpha blue reads [96,96,224].
-- **0063: `wmctl list` FLAGS is 7 chars** (`A` = has-alpha at [5],
-  layer T/B at [6]).
-- **0063: wm.c's peek keeps `peek_pending` across dismiss** — an
-  in-flight THUMB reply must still be consumed off the socket.
-- 0075: SameBoy compiles with `-DGB_INTERNAL` everywhere; MIN/MAX are
-  plain ternaries — keep call sites side-effect-free. `GB_random` seeds
-  lazily — don't pixel-match frames depending on uninit CGB palette RAM.
+- **NEW (0041): all global imports before any defined global** — if you add
+  another imported-global feature, register it in generateCode's pre-scan
+  region (before the stack-pointer global), or `addGlobalImport` throws.
+- **NEW (0041): `__gcstr` literals must be valid UTF-8** — parse-time
+  fatal-decode; `\xNN` escapes that break UTF-8 are compile errors.
+- **0046: `wc`-style trace asserts must match the child's fd table** —
+  trace lines show KERNEL fd numbers; strace's own pipe fds never appear.
+  A parked tracer read is served by `_traceLine`'s `_pipeNotify` re-entry.
+- **0063: drop shadows are real desktop pixels** — sample TEAL ≥ ~25px out
+  from a chromed frame. Translucent clients blend over the frame PLATE
+  (FACE 192). `wmctl list` FLAGS is 7 chars. wm.c's peek keeps
+  `peek_pending` across dismiss.
+- 0075: SameBoy compiles with `-DGB_INTERNAL`; MIN/MAX are plain ternaries;
+  `GB_random` seeds lazily — don't pixel-match uninit CGB palette RAM.
 - **0072**: `wmctl click LABEL`/`settext` take the FIRST win32 app that
-  accepts the label — sequence agent-driven test legs accordingly.
-- **0072**: `strncasecmp`/`strcasecmp` live in `<strings.h>` here.
-- **0070: browser tests land on VT2 at ready.** Type on the tty only
-  after `setVt(1)`; assert boot-time VT1 facts only BEFORE `ready`.
-- **Don't edit bake inputs while a suite runs** (0082 gate): land the
-  edit, re-run; or run mkimage first. `.md` files and `tests/` are NOT
-  bake inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`, `vendor/`
+  accepts the label; `strncasecmp`/`strcasecmp` live in `<strings.h>`.
+- **0070: browser tests land on VT2 at ready.** Type on the tty only after
+  `setVt(1)`; assert boot-time VT1 facts only BEFORE `ready`.
+- **Don't edit bake inputs while a suite runs** (0082): `.md` and `tests/`
+  are NOT inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`, `vendor/`
   are.
-- **New-runner habits**: after an interrupted/failed suite run, look at
-  `build/test-*/summary.json` + per-file `.log` before rerunning;
-  `--resume` picks up the checkpoint. Don't crank `-j` past default on a
-  loaded box until 0083 lands.
-- **Sweep is serial by design** (0045); os-sweep rejects `-j`.
+- **New-runner habits**: check `build/test-*/summary.json` + per-file logs
+  after an interrupted run; `--resume` picks up the checkpoint. Sweep is
+  serial by design (0045).
 - **Menu/desktop entry lists** image.json ↔ test_wm_service_e2e.js ↔
   os-shell.mjs must move together ('sameboy' is in all three).
-- **Editing seeded sources or coreutils.json/bin.json/lib.json**: the
-  headless/test/serve paths detect it by mtime (0082). Bump `image.json`
-  `version` (now 47) anyway when an interactive browser tab must pick
-  the change up (OPFS re-fetch is version-gated only).
-- **Cairo/pixman config is hand-written** (`vendor/cairo/config.h` +
-  `src/cairo-features.h`; pixman via two -D flags in lib.json). When
-  adding cairo features (0080), extend BOTH headers and lib.json, and
-  record patches in the README table. Testsuite diff policy: tol 3,
-  hard cap 16.
+- Bump `image.json` `version` (47) when an interactive browser tab must
+  pick up seeded-source edits (OPFS re-fetch is version-gated only).
+- **Cairo/pixman config is hand-written** — extend BOTH headers and
+  lib.json when adding features (0080); testsuite diff tol 3, cap 16.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
-  committing. After `queue.js done`, check `git status` — the internal
-  git-mv can stage a pre-edit blob (re-`git add` the done file; it fired
-  at 0063's close).
+  committing. After `queue.js done`, check `git status` — it can stage a
+  pre-edit blob AND (seen at 0041's close) it stages OTHER sessions'
+  untracked todos/ files: `git reset` and stage your own set explicitly.
 - Two unit goldens encode libc internals (`switch_br_table` stderr,
   `printf` pointer line); `setjmp_unsupported_diag`'s golden encodes the
-  setjmp diagnostic wording — moves if the message changes.
+  setjmp diagnostic wording.
 - **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium
   with `--enable-unsafe-webgpu --enable-features=Vulkan`.
 - Browser pixel tests: tolerate the icon grid in "empty desktop" asserts;
@@ -123,22 +117,20 @@ recorded decisions (see todos/done/); DISK-IMAGE.md's settled layout;
 serial, run-unit.js untouched); 0082's calls (input-freshness by mtime
 scan, fixture = `os/os-system.img` itself, `version > manifest` blobs
 kept, test_os_boot stays the real-bake test); 0070's call (boot STAYS on
-VT1 until `ready`; auto-switch only on a healthy ready; user choice
-during boot wins); 0072's calls (openwith store FIRST-FILE-WINS, values
-are argv prefixes, resolver stays header-only, seeded Desktop ROM
-launchers stay scripts); 0075's calls (Peanut-GB stays the default
-.gb/.gbc handler; boot ROMs embedded; GB_SECTION kept; GNU-ism fixes are
-vendored patches until 0087); 0063's calls (deterministic-or-invisible
-split per effect; alpha blends over the frame plate; glass is kernel
-STATE but browser-only RENDERING; shadows/corners are SDF in the one
-pass; THUMB is kernel mechanism, peek popup is wm.c policy); 0046's
-calls (trace sink is a tracer-owned pipe named by spec field, NOT a
-spawn-return fd; requests format eagerly at dispatch; whole-line
-tracing, no unfinished/resumed splitting; drop-don't-block with a
-counted marker; decode table = the OP map).
+VT1 until `ready`); 0072's calls (openwith store FIRST-FILE-WINS, resolver
+stays header-only); 0075's calls (Peanut-GB stays the default .gb/.gbc
+handler); 0063's calls (deterministic-or-invisible split per effect; glass
+is kernel STATE but browser-only RENDERING); 0046's calls (trace sink is a
+tracer-owned pipe named by spec field; drop-don't-block with a counted
+marker); 0041's calls (GC_STR intrinsic not a node class; imports-first
+enforced by throw, no relocation; UTF-8 validated at parse; import name =
+raw literal bytes; `"#"` module; C/ss compile options unified — the cache
+unification itself is 0097).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0041 gcstr, 0079 dep-dedup, 0080 cairo surfaces, or 0064 WM
-sweep round 3 (the pointer-lock human check is owed)."
+to tackle — `node todos/queue.js list` for the order of attack (0079
+dep-dedup and 0080 cairo surfaces lead unless the concurrent session's
+reorder landed; 0064 WM sweep round 3 still owes the pointer-lock human
+check)."

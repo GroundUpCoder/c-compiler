@@ -1,0 +1,2 @@
+Got 1 parse errors in tests/unit/gc/err_gcstr_wide/main.c.
+tests/unit/gc/err_gcstr_wide/main.c:3: error: __gcstr requires a narrow string literal (no L/u/U prefix)
