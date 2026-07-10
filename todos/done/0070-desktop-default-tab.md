@@ -1,6 +1,14 @@
 # 0070 — Desktop as the default tab
 
-- **Status**: open
+- **Status**: done (2026-07-10, commit 1a40eef). Boot streams on VT1; the
+  `ready` handler auto-switches to VT2 unless the user picked a VT during
+  boot (`vtTouched` via `userSetVt` — tab clicks, hotkeys, the
+  `__osVtSwitch` probe all mark it). boot-error/halt still force VT1.
+  os.html only (runtime-only file — no image version bump). Tests: os-vt
+  restructured (incl. a synthetic boot-error leg), os-boots (VT2 landing +
+  manual-choice-wins), os-screen re-baselined, os-quake/term/gpubox/drop
+  hop to VT1 before typing. Sweep 15/15. Full intent achieved — no
+  follow-ups. Dev log `logs/2026-07-10/0070-desktop-default-tab.md`.
 - **Design**: `todos/OS.md` (the VT/tab bar, todos/done/0022); page state
   in `os/os.html`.
 
