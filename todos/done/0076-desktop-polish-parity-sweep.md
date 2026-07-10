@@ -1,6 +1,15 @@
 # 0076 — desktop polish parity sweep
 
-- **Status**: open
+- **Status**: done (2026-07-11) — sweep complete; room-by-room
+  have/partial/missing table + rejection ledger in
+  `logs/2026-07-11/0076-desktop-polish-parity.md`. Filed **0101–0107**
+  (0101 taskbar bar-menu/Show Desktop/clock date, 0102 window system
+  menu + keyboard move/resize, 0103 desktop icon rename-in-place, 0104
+  user32 dialog keyboard, 0105 pointer cursor shapes, 0106 fileman
+  navigator v2, 0107 Paint accessory), slotted behind 0098 at the tail
+  of the desktop-polish cluster. Gaps already owned were
+  cross-referenced (0049/0051/0077/0089–0096/0098/0088), not
+  re-filed; no feature code in this turn, per the item's discipline.
 - **Design**: `todos/WM.md` "The desktop shell"; `todos/WIN32.md`. The
   repeatable-sweep format is established by todos/done/0033 (bug sweeps);
   this is its **feature-parity** counterpart, not a defect hunt.
