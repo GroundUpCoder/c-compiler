@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-// 0048 acceptance, headless: /bin/ctlpanel (the wave-1 control panel).
-// Covers the AUDIO_GAIN path end to end — the app queries the kernel's
-// master mixer gain through host.js's __audio_gain import, the buttons/
-// EDIT set it (percent 0..200), and the value is KERNEL state: a second
-// ctlpanel process sees what the first one set. (The mixing math itself
-// is unit-tested in test_audio.js — this is the control-plane story.)
-// Plus the system info panel: os-release + /proc/uptime, plain POSIX.
+// 0048 + 0089 acceptance, headless: /bin/ctlpanel (the control panel).
+//
+// 0089 shape: the main window is an applet-icon HUB (Win95 Control Panel
+// folder — CplIcon children, single-click activation); each applet is its
+// own sibling top-level window. This extends the 0048 e2e rather than
+// replacing it: the AUDIO_GAIN volume drive (buttons/EDIT absolute set,
+// kernel-state persistence across processes) runs exactly as before, just
+// inside the Sound applet. New legs: per-window close (the 0089
+// SDL_EVENT_WINDOW_CLOSE_REQUESTED veneer growth — closing an applet
+// leaves the hub alive), keyboard hub navigation (arrows + Enter), the
+// System/Display/Date/Time applets, and WM_TIMER's live clock.
 //
 // Run: node tests/kernel/test_ctlpanel_e2e.js
 'use strict';
@@ -40,11 +44,17 @@ function section(out, name) {
 const out = boot([
   'ctlpanel &',
   'sleep 5',
-  'SID=$(wmctl list | grep "Control Panel$" | sed "s/[^0-9].*//")',
+  'HSID=$(wmctl list | grep "Control Panel$" | sed "s/[^0-9].*//")',
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
-  // step down, absolute set, step up
+  // single-click activation: one agent click opens the Sound applet
+  'wmctl click Sound',
+  'sleep 1',
+  'echo ==tree2',
+  'wmctl tree',
+  'echo ==cut',
+  // the 0048 volume drive, unchanged: step down, absolute set, step up
   'wmctl click "Vol -"',
   'sleep 0.5',
   'echo ==v1',
@@ -61,27 +71,73 @@ const out = boot([
   'echo ==v3',
   'wmctl gettext STATIC:0',
   'echo ==cut',
-  // the gain is KERNEL state: a second panel sees it
-  'wmctl close $SID',
+  // per-window close (0089): closing the applet leaves the hub alive
+  'SSID=$(wmctl list | grep "Sound Properties$" | sed "s/[^0-9].*//")',
+  'wmctl close $SSID',
   'sleep 1',
+  'echo ==list2',
+  'wmctl list',
+  'echo ==cut',
+  // reopen: the applet re-reads KERNEL state (65%)
+  'wmctl click Sound',
+  'sleep 1',
+  'echo ==v3b',
+  'wmctl gettext STATIC:0',
+  'echo ==cut',
+  // keyboard on the hub: Right selects System, Enter opens it
+  'wmctl key $HSID 79 1073741903',
+  'wmctl key $HSID 40 13',
+  'sleep 1',
+  'echo ==tree3',
+  'wmctl tree',
+  'echo ==cut',
+  // Display stub + Date/Time (WM_TIMER clock)
+  'wmctl click Display',
+  'wmctl click "Date/Time"',
+  'sleep 1',
+  'echo ==tree4',
+  'wmctl tree',
+  'echo ==cut',
+  'sleep 1.5',
+  'echo ==tree5',
+  'wmctl tree',
+  'echo ==cut',
+  // hub close = the whole panel quits (all applet windows mid-flight)
+  'wmctl close $HSID',
+  'sleep 1',
+  'echo ==list3',
+  'wmctl list',
+  'echo ==cut',
+  // the gain is KERNEL state: a second ctlpanel process sees it
   'ctlpanel &',
-  'sleep 5',
+  'sleep 3',
+  'wmctl click Sound',
+  'sleep 1',
   'echo ==v4',
   'wmctl gettext STATIC:0',
   'echo ==cut',
   '',
 ].join('\n'));
 
+// -- the hub folder --
 const tree1 = section(out, 'tree1');
-check('control panel comes up with the volume group',
+check('hub comes up: class=CtlPanel + four applet icons',
   /class=CtlPanel [^\n]*text='Control Panel'/.test(tree1) &&
-  /text='Volume: 100%'/.test(tree1), tree1.slice(0, 400));
+  /class=CplIcon [^\n]*text='Sound'/.test(tree1) &&
+  /class=CplIcon [^\n]*text='System'/.test(tree1) &&
+  /class=CplIcon [^\n]*text='Display'/.test(tree1) &&
+  /class=CplIcon [^\n]*text='Date\/Time'/.test(tree1), tree1.slice(0, 600));
+check('no applet window open yet',
+  !/CplSound|CplSystem|CplDisplay|CplDateTime/.test(tree1), tree1.slice(0, 600));
+
+// -- Sound applet (0048 controls, lifted) --
+const tree2 = section(out, 'tree2');
+check('click Sound opens the Sound applet with the volume group',
+  /class=CplSound [^\n]*text='Sound Properties'/.test(tree2) &&
+  /text='Volume: 100%'/.test(tree2), tree2.slice(0, 800));
 check('scrollbar + step buttons + Set present',
-  /class=SCROLLBAR/.test(tree1) && /text='Vol -'/.test(tree1) &&
-  /text='Vol \+'/.test(tree1) && /text='Set'/.test(tree1), tree1);
-check('system panel reads os-release + /proc/uptime',
-  /NAME=wasm-os/.test(tree1) && /VERSION_ID=/.test(tree1) && /UPTIME=/.test(tree1),
-  tree1);
+  /class=SCROLLBAR/.test(tree2) && /text='Vol -'/.test(tree2) &&
+  /text='Vol \+'/.test(tree2) && /text='Set'/.test(tree2), tree2);
 
 check('Vol - steps the kernel gain to 90%',
   section(out, 'v1').trim() === 'Volume: 90%', section(out, 'v1'));
@@ -89,6 +145,40 @@ check('EDIT + Set goes absolute (55%)',
   section(out, 'v2').trim() === 'Volume: 55%', section(out, 'v2'));
 check('Vol + steps back up (65%)',
   section(out, 'v3').trim() === 'Volume: 65%', section(out, 'v3'));
+
+// -- per-window close (0089) --
+const list2 = section(out, 'list2');
+check('closing the Sound applet leaves the hub alive',
+  /Control Panel/.test(list2) && !/Sound Properties/.test(list2), list2);
+check('reopened Sound applet reads the kernel gain (65%)',
+  section(out, 'v3b').trim() === 'Volume: 65%', section(out, 'v3b'));
+
+// -- keyboard nav: Right + Enter opens System --
+const tree3 = section(out, 'tree3');
+check('hub keyboard (Right, Enter) opens the System applet',
+  /class=CplSystem [^\n]*text='System Properties'/.test(tree3), tree3.slice(0, 800));
+check('System applet reads os-release + /proc/uptime',
+  /NAME=wasm-os/.test(tree3) && /VERSION_ID=/.test(tree3) && /UPTIME=/.test(tree3),
+  tree3);
+
+// -- Display stub + Date/Time clock --
+const tree4 = section(out, 'tree4');
+check('Display applet opens (the 0049 stub)',
+  /class=CplDisplay [^\n]*text='Display Properties'/.test(tree4) &&
+  /todos\/0049/.test(tree4), tree4.slice(0, 800));
+const CLOCK_RE = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/;
+const clock1 = (section(out, 'tree4').match(CLOCK_RE) || [''])[0];
+const clock2 = (section(out, 'tree5').match(CLOCK_RE) || [''])[0];
+check('Date/Time applet shows a clock', CLOCK_RE.test(clock1), section(out, 'tree4').slice(0, 400));
+check('the clock ticks (WM_TIMER)', clock2 !== '' && clock1 !== clock2,
+  clock1 + ' -> ' + clock2);
+
+// -- hub close quits the whole panel --
+const list3 = section(out, 'list3');
+check('hub close quits the panel (all windows gone)',
+  !/Control Panel|Properties/.test(list3), list3);
+
+// -- kernel state across processes --
 check('the gain is kernel state: a fresh ctlpanel reads 65%',
   section(out, 'v4').trim() === 'Volume: 65%', section(out, 'v4'));
 

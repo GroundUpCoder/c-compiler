@@ -18362,6 +18362,11 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_EVENT_WINDOW_MOVED 0x205
 #define SDL_EVENT_WINDOW_RESIZED 0x206
 #define SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED 0x207
+/* Delivered when the kernel's close request ('x' / wmctl close) names a
+   window and OTHER windows are still live (todos/0089) — a multi-window
+   process closes just that window. A single (or last) window keeps the
+   process-wide SDL_EVENT_QUIT it always got. */
+#define SDL_EVENT_WINDOW_CLOSE_REQUESTED 0x210
 #define SDL_EVENT_KEY_DOWN 0x300
 #define SDL_EVENT_KEY_UP 0x301
 #define SDL_EVENT_MOUSE_MOTION 0x400
@@ -22670,11 +22675,27 @@ static float __sdl_last_click_x = 0, __sdl_last_click_y = 0;
 static Uint8 __sdl_click_count = 0;
 
 void __sdl_push_quit_event(int window_id) {
-    (void)window_id;
+    /* The kernel's close request names a surface (the QUIT ring record
+       carries the sid; the host maps it to our handle). With several
+       windows live, deliver a per-window SDL_EVENT_WINDOW_CLOSE_REQUESTED
+       so a multi-window app (the user32 veneer) closes just that window
+       (todos/0089). The only/last window keeps the historical process-wide
+       SDL_EVENT_QUIT. Divergence from upstream SDL3 (which sends
+       CLOSE_REQUESTED and then QUIT for the last window) is deliberate:
+       one event per request, so a queued pair can't double-close. */
+    int live = 0;
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++)
+        if (__sdl_window_registry[i]) live++;
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
-    e->event.type = SDL_EVENT_QUIT;
-    e->event.common.timestamp = __sdl_now_ns();
+    if (live > 1 && __sdl_window_by_handle(window_id)) {
+        e->event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        e->event.window.timestamp = __sdl_now_ns();
+        e->event.window.windowID = (SDL_WindowID)window_id;
+    } else {
+        e->event.type = SDL_EVENT_QUIT;
+        e->event.common.timestamp = __sdl_now_ns();
+    }
     __sdl_eq_push(e);
 }
 __export __sdl_push_quit_event = __sdl_push_quit_event;

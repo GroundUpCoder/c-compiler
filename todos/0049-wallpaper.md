@@ -8,7 +8,9 @@
 `/etc/wallpaper/` holds candidate images; `current` is a symlink to the
 chosen one; wm.c's desktop layer draws it under the icon grid;
 `wmctl wallpaper <name>` switches. wm.c only — the control-panel
-picker rides 0048.
+picker's home is the 0089 hub's **Display applet** (today a stub in
+`os/win32/ctlpanel.c` naming this item — replace its two STATIC lines
+with the picker UI).
 
 ## Plan
 

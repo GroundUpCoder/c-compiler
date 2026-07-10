@@ -1,7 +1,7 @@
 {
   "bin": true,
   "name": "ctlpanel",
-  "description": "0048 control panel: master volume over the kernel AUDIO_GAIN mixer op + system info from os-release//proc",
+  "description": "0089 control panel: Win95 applet-icon hub; Sound (kernel AUDIO_GAIN mixer), System (os-release//proc), Display stub (0049), Date/Time applets as sibling windows",
   "deps": [
     "lib.json"
   ],

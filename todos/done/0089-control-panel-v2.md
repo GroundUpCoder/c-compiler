@@ -1,6 +1,26 @@
 # 0089 — Control Panel v2 — old-school Windows applet hub
 
-- **Status**: open
+- **Status**: done (2026-07-11). Landed the Win95 applet hub: the main
+  window is a folder of CplIcon applet icons (single-click activation —
+  a decided deviation from Win95 double-click so one `wmctl click
+  "Sound"` = one open; keyboard Left/Right/Home/End + Enter), each
+  applet its own sibling top-level window: Sound (0048 volume controls
+  verbatim), System (os-release + /proc/uptime), Display (stub naming
+  todos/0049 — that item owns filling it), Date/Time (live
+  SetTimer/WM_TIMER clock, built here since it was thin). Grew the
+  veneer: the kernel close request is now PER-WINDOW when several
+  top-levels are live (SDL_EVENT_WINDOW_CLOSE_REQUESTED 0x210 through
+  compiler.js SDL + host.js handle pass + user32 pump; only/last window
+  keeps process-wide SDL_EVENT_QUIT — single-window apps unchanged), so
+  closing an applet leaves the hub alive; closing the hub quits the
+  panel. Mouse/Keyboard applets deliberately not built (recorded below
+  as opportunistic): no live kernel state exists for them to control —
+  the item that introduces such state owns creating its applet. Image
+  v49 → v50; zero kernel.js change. Tests:
+  `tests/kernel/test_ctlpanel_e2e.js` extended per the acceptance
+  (per-window close, keyboard nav, WM_TIMER tick, cross-process gain
+  legs added), `tests/browser/os-shell.mjs` grew the 0089 leg. Dev log
+  `logs/2026-07-11/0089-control-panel-v2.md`.
 - **Design**: `todos/WIN32.md` (the Win32 desktop platform); `todos/OS.md`
   (agent-drivable pillar). Grows `os/win32/ctlpanel.c` from the 0048
   single-window stub into a Win95-style applet hub. Display applet folds in

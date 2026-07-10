@@ -5,7 +5,9 @@
 // composited pixels. Covers: the Start button, menu open/dismiss, entry
 // hover highlight, launching a windowed app from the menu; the desktop
 // icon grid (EV_SCREEN-recreated at the live size), single-click select,
-// double-click launch of term, minimize revealing the desktop.
+// double-click launch of term, minimize revealing the desktop; the 0089
+// Control Panel applet hub (icon-folder composite, Sound applet in its
+// own window, per-window close box, agent-tree volume/system drive).
 //
 // Usage: node os-shell.mjs   (manual tier — run the os-*.mjs sweep serially)
 import { chromium } from 'playwright';
@@ -395,6 +397,71 @@ try {
   await page.keyboard.type('WB=$(wmctl list | grep -c "winbox$"); echo WB-COUNT-$WB\r');
   await page.waitForFunction(() => window.__osOut.includes('WB-COUNT-2'), { timeout: 30000, polling: 200 });
   check('run-dialog command spawned (winbox count 2)', true);
+  await setVt(2);
+
+  // ---- Control Panel v2: the applet hub (todos/0089) ----
+  // Launch from VT1, parse LIVE geometry from wmctl list (the 0023 rule),
+  // then drive the real pixel path on VT2: single-click the Sound icon in
+  // the hub folder -> the applet opens as its OWN window; the kernel close
+  // box on the applet closes IT and the hub survives (the 0089 per-window
+  // WM_CLOSE); the 0048 volume/system behaviour still drives through the
+  // agent tree, now inside the applets.
+  await setVt(1);
+  await page.keyboard.type('ctlpanel &\r');
+  // Let hush print its async job notice before typing more — the notice
+  // redraw mid-line mangles a long typed command. And emit markers with
+  // a split quote so the TYPED echo never contains the marker string
+  // (waitForFunction must fire on the output, not the input echo).
+  await page.waitForTimeout(800);
+  await page.keyboard.type('i=0; while [ $i -lt 30 ]; do wmctl list | grep -q "Control Panel" && break; sleep 1; i=$((i+1)); done; wmctl list; echo CP-U""P\r');
+  await page.waitForFunction(() => window.__osOut.includes('CP-UP'), { timeout: 120000, polling: 200 });
+  const cpLine = await page.evaluate(() => window.__osOut.split('\n').find(l => /Control Panel\s*$/.test(l)));
+  check('ctlpanel hub listed', !!cpLine,
+    cpLine || await page.evaluate(() => window.__osOut.slice(-400)));
+  const cpGeom = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec(cpLine || '');
+  const [CPW, CPH, CPX, CPY] = cpGeom ? cpGeom.slice(1).map(Number) : [0, 0, 0, 0];
+  await setVt(2);
+  await waitPixel(CPX + CPW - 6, CPY + CPH - 4, WHITE);
+  check('hub composites as an icon folder (white interior)', true);
+  // Icon 0 (Sound) is selected by default: navy label strip, left of text.
+  check('default selection strip navy (Sound label)',
+    near(await sample(CPX + 8 + 6, CPY + 8 + 47), NAVY),
+    await sample(CPX + 8 + 6, CPY + 8 + 47));
+  // Single-click the Sound icon (hub client cell 0): the applet opens.
+  await clickAt(CPX + 46, CPY + 38);
+  await setVt(1);
+  await page.keyboard.type('i=0; while [ $i -lt 20 ]; do wmctl list | grep -q "Sound Properties" && break; sleep 1; i=$((i+1)); done; wmctl list; echo CP-SN""D\r');
+  await page.waitForFunction(() => window.__osOut.includes('CP-SND'), { timeout: 60000, polling: 200 });
+  const sndLine = await page.evaluate(() => window.__osOut.split('\n').find(l => /Sound Properties\s*$/.test(l)));
+  check('Sound applet opened as its own window', !!sndLine,
+    sndLine || await page.evaluate(() => window.__osOut.slice(-400)));
+  const sndGeom = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec(sndLine || '');
+  const [SNW, , SNX, SNY] = sndGeom ? sndGeom.slice(1).map(Number) : [0, 0, 0, 0];
+  await setVt(2);
+  await waitPixel(SNX + 240, SNY + 92, FACE);
+  check('Sound applet composites (face interior)', true);
+  // The 0048 volume drive, through the applet's agent tree.
+  await setVt(1);
+  await page.keyboard.type('wmctl click "Vol +"; sleep 1; wmctl gettext STATIC:0; echo CP-VO""L\r');
+  await page.waitForFunction(() => window.__osOut.includes('CP-VOL'), { timeout: 30000, polling: 200 });
+  check('Vol + through the applet steps the kernel gain (110%)',
+    await page.evaluate(() => window.__osOut.includes('Volume: 110%')), true);
+  // The System applet, through the agent path (icon label click).
+  await page.keyboard.type('wmctl click System; sleep 1; wmctl tree | grep "NAME="; echo CP-SY""S\r');
+  await page.waitForFunction(() => window.__osOut.includes('CP-SYS'), { timeout: 30000, polling: 200 });
+  check('System applet shows os-release',
+    await page.evaluate(() => /NAME=wasm-os/.test(window.__osOut)), true);
+  await setVt(2);
+  // Kernel close box on the Sound applet: per-window close (0089).
+  await clickAt(SNX + SNW - 12, SNY - 12);
+  await setVt(1);
+  await page.keyboard.type('sleep 1; echo CP-MAR""K; wmctl list; echo CP-AFTE""R\r');
+  await page.waitForFunction(() => window.__osOut.includes('CP-AFTER'), { timeout: 30000, polling: 200 });
+  const afterClose = await page.evaluate(() =>
+    window.__osOut.slice(window.__osOut.lastIndexOf('CP-MARK')));
+  check('close box closes only the applet: hub + System alive, Sound gone',
+    /Control Panel/.test(afterClose) && /System Properties/.test(afterClose) &&
+    !/Sound Properties/.test(afterClose), afterClose.slice(0, 400));
   await setVt(2);
 
   // The shell stays healthy behind the desktop (menu spawns are reaped —

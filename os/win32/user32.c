@@ -53,8 +53,10 @@
  *   - no clipboard, no Tab-order navigation (IsDialogMessage)
  *   - hidden top-levels: ShowWindow(SW_HIDE) on a top-level is a no-op
  *     (the kernel surface has no hide op; minimize is the WM's)
- *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) lands on
- *     the FIRST live top-level: the ring's QUIT record is process-wide
+ *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) is per-
+ *     window when several top-levels are live (SDL_EVENT_WINDOW_
+ *     CLOSE_REQUESTED, todos/0089); the only/last window gets the
+ *     process-wide SDL_EVENT_QUIT routed to the first live top-level
  *   - VK mapping covers letters/digits/named keys; punctuation VKs are
  *     approximate (WM_CHAR carries the real character — SDL3 keysyms
  *     are modifier-applied, so TranslateMessage is a table-free map)
@@ -1702,9 +1704,17 @@ static void pump_sdl(void) {
             InvalidateRect(top, NULL, TRUE);
             break;
         }
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED: {
+            /* Per-window close (todos/0089): with several top-levels live
+             * the kernel's close request names the window — WM_CLOSE goes
+             * to exactly that one (an applet closes, the hub survives). */
+            HWND top = top_by_windowid(e.window.windowID);
+            if (top) q_push(top, WM_CLOSE, 0, 0, 0);
+            break;
+        }
         case SDL_EVENT_QUIT: {
-            /* Process-wide close (title-bar 'x' / wmctl close): route
-             * WM_CLOSE to the first live top-level. */
+            /* Only/last-window close: route WM_CLOSE to the first live
+             * top-level (the single-window shape, unchanged since 0058). */
             HWND top = first_live_top();
             if (top) q_push(top, WM_CLOSE, 0, 0, 0);
             break;

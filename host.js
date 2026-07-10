@@ -5904,7 +5904,9 @@ function createSurfaceSDL({ ctx, hooks }) {
           }
           break;
         case WMEV_QUIT:
-          if (ex.__sdl_push_quit_event) ex.__sdl_push_quit_event();
+          // The record names the closed surface (kernel _wmEventTo stamps
+          // the sid); the SDL side decides per-window vs process-wide.
+          if (ex.__sdl_push_quit_event) ex.__sdl_push_quit_event(handle);
           break;
         case WMEV_WINDOW_RESIZED:
           // Renegotiate BEFORE the wasm sees the event: the app handles it
