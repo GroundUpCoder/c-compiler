@@ -27,6 +27,10 @@
  * compositor samples alpha; a 0-alpha pixel would show the desktop).
  */
 
+/* The veneer is implemented ANSI (WIN32.md friction #2: implement W, shim
+ * A). Ported apps build -DUNICODE (0060); the implementation must not. */
+#undef UNICODE
+#undef _UNICODE
 #include <windows.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H

@@ -83,6 +83,12 @@ hang-class miscompiles fail fast instead of stalling the suite.
   and env-exec all really spawn; patch table in
   `vendor/busybox/README.md`)
 - **Libraries**: `zlib`, `libpng`, `freetype`, `libgit2` (@44c05e5, core only; builds + `git_index_open` smoke test runs — used as a large-codebase stress test, see `vendor/libgit2/README.md`)
+- **Win32 port corpus (0060, compile-stage)**: `winmine`, `notepad`, `calc`
+  (ReactOS @1a706d7, UNICODE builds vs the os/win32 veneer; per-dir READMEs
+  pin commit + patch tables — only `L"…"`→`u"…"`). NOT seeded into the OS
+  image; `tools/win32ports.js` compile-tests them and writes
+  `os/win32/PORTS.md`, the 0059+ missing-symbol backlog (`--check` runs in
+  the kernel suite). Solitaire is C++ → excluded.
 - **Frontend infra (JS, not C)**: `xterm` (terminal widget), `codemirror` (editor widget)
 - **Project-specific tools**: `disw` (WASM disassembler), `hello` (minimal smoke test)
 
@@ -325,9 +331,19 @@ pixel coordinates. `/bin/gdidemo` (Petzold GDI scene + `selftest`,
 now a real message-loop app) and `/bin/ctldemo` (controls +
 MessageBox) are the acceptance apps; tests
 `tests/kernel/test_gdi32_e2e.js` + `test_user32_e2e.js` +
-`tests/browser/os-gdi.mjs` + `os-user32.mjs`. Deferred to 0060's
-missing-symbol log: DialogBox templates, menus, accelerators,
-SetTimer/caret blink, clipboard, Tab navigation, WinMain shim.
+`tests/browser/os-gdi.mjs` + `os-user32.mjs`. 0060 landed the port
+corpus + harness: vendored ReactOS winmine/notepad/calc compile
+UNICODE against the veneer (headers grew the A/W split — implemented
+entries are ANSI generic names, veneer sources `#undef UNICODE`, W
+variants declared with generic→W maps under UNICODE; WCHAR is 2-byte
+UTF-16 via `u"…"`/TEXT-paste, NOT libc's 4-byte wchar_t; 16-bit wide
+CRT = the `_tcs*` names as real symbols) — `node tools/win32ports.js`
+regenerates `os/win32/PORTS.md`, the authoritative 0059+ demand log
+(top of the table: W message pump, registry, LoadString/LoadImage
+resources, menus, dialogs, GetSystemMetrics); `--check` is
+`tests/kernel/test_win32_ports.js`. Implement to that log — DialogBox
+templates, menus, accelerators, SetTimer/caret blink, clipboard, Tab
+navigation, WinMain shim, and a resource (.rc) story all live there.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

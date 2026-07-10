@@ -1,0 +1,26 @@
+{
+  "bin": true,
+  "name": "calc",
+  "description": "ReactOS calc, IEEE-754 build (todos/0060 win32 port corpus)",
+  "deps": [
+    "../../os/win32/lib.json"
+  ],
+  "includes": [
+    "."
+  ],
+  "compilerArgs": [
+    "-DUNICODE",
+    "-D_UNICODE",
+    "-D__REACTOS__=1",
+    "-D__GNUC__=4"
+  ],
+  "sources": [
+    "convert.c",
+    "fun_ieee.c",
+    "rpn_ieee.c",
+    "utl_ieee.c",
+    "winmain.c",
+    "htmlhelp.c",
+    "theme.c"
+  ]
+}

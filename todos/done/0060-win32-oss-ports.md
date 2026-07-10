@@ -1,7 +1,32 @@
 # 0060 — win32: OSS GDI program ports + compile-test harness
 
-- **Status**: open
-- **Design**: `todos/WIN32.md` (references); this item (the target list)
+- **Status**: done (2026-07-10) — corpus vendored (winmine/notepad/calc @
+  ReactOS 1a706d7), harness `tools/win32ports.js` + committed report
+  `os/win32/PORTS.md` (175 distinct symbols, the 0059+ backlog), `--check`
+  wired into the kernel suite. Dev log
+  `logs/2026-07-10/win32-port-corpus.md`.
+- **Design**: `todos/WIN32.md` (references + "Corpus status"); this item
+  (the target list)
+
+## Landing notes (deviations from the sketch below)
+
+- **sol is C++** (ReactOS solitaire = CardLib .cpp) — excluded; the raw-C
+  scope note anticipated this. metapad/PuTTY not vendored yet: grow the
+  corpus when the current demand log shrinks (each new app is a bin.json +
+  ports.json entry away).
+- **"launches + drivable" acceptance holds for the targets that link**
+  (gdidemo/ctldemo controls — their e2e tests drive them via `wmctl
+  click`); the vendored trio deliberately STOPS at the link stage — the
+  missing-symbol report IS the deliverable, and 0059 implements to it.
+  None of the trio is seeded into the OS image yet.
+- **The Petzold ladder was not re-vendored**: 0057/0058 already consumed
+  it as the bring-up order (gdidemo/ctldemo are the Petzold-style rungs,
+  and they double as the harness's zero-missing control targets).
+- The A/W split landed here as header architecture: implemented = ANSI
+  generic names (veneer sources `#undef UNICODE`), W declared + generic→W
+  maps under UNICODE, WCHAR = 2-byte UTF-16 (`u"…"`, TEXT() pastes the
+  prefix), `_tcs*` as real 16-bit-CRT symbols (tchar.h documents why not
+  wcslen). Control apps' wasm stayed byte-identical — no image bump.
 
 ## Goal
 

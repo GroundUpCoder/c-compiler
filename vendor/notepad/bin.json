@@ -1,0 +1,23 @@
+{
+  "bin": true,
+  "name": "notepad",
+  "description": "ReactOS notepad (todos/0060 win32 port corpus)",
+  "deps": [
+    "../../os/win32/lib.json"
+  ],
+  "includes": [
+    "."
+  ],
+  "compilerArgs": [
+    "-DUNICODE",
+    "-D_UNICODE",
+    "-D__REACTOS__=1"
+  ],
+  "sources": [
+    "main.c",
+    "dialog.c",
+    "printing.c",
+    "settings.c",
+    "text.c"
+  ]
+}

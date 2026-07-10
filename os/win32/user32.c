@@ -41,6 +41,10 @@
  *     are modifier-applied, so TranslateMessage is a table-free map)
  */
 
+/* The veneer is implemented ANSI (WIN32.md friction #2: implement W, shim
+ * A). Ported apps build -DUNICODE (0060); the implementation must not. */
+#undef UNICODE
+#undef _UNICODE
 #include <windows.h>
 #include <SDL.h>
 #include <errno.h>

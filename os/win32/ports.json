@@ -1,0 +1,35 @@
+{
+  "description": "The 0060 Win32 port corpus (todos/WIN32.md). Targets for tools/win32ports.js; report in PORTS.md. expect: links | missing-symbols | parse-errors.",
+  "targets": [
+    {
+      "name": "gdidemo",
+      "project": "os/win32/gdidemo.json",
+      "expect": "links",
+      "notes": "control target — the 0057 acceptance app must stay fully covered"
+    },
+    {
+      "name": "ctldemo",
+      "project": "os/win32/ctldemo.json",
+      "expect": "links",
+      "notes": "control target — the 0058 acceptance app must stay fully covered"
+    },
+    {
+      "name": "winmine",
+      "project": "vendor/winmine/bin.json",
+      "expect": "missing-symbols",
+      "notes": "ReactOS/Wine Minesweeper — the identity port"
+    },
+    {
+      "name": "notepad",
+      "project": "vendor/notepad/bin.json",
+      "expect": "missing-symbols",
+      "notes": "ReactOS notepad — EDIT + menus + comdlg32"
+    },
+    {
+      "name": "calc",
+      "project": "vendor/calc/bin.json",
+      "expect": "missing-symbols",
+      "notes": "ReactOS calc — dense control/dialog exercise"
+    }
+  ]
+}

@@ -94,6 +94,26 @@ corpus; a compile-test harness whose missing-symbol log drives 0057–0059).
 Parallel drawing track: `0061` Cairo. Compositor track: `0062` zero-copy
 present, `0063` Aero effects.
 
+## Corpus status (0060 landed 2026-07-10)
+
+`tools/win32ports.js` compile-tests every target in `os/win32/ports.json`
+against the veneer and writes `os/win32/PORTS.md` — per-app missing
+symbols + the aggregate demand table that IS the 0059+ order of attack
+(`--check` runs in the kernel suite as the regression guard). Vendored so
+far: **winmine** (Wine/ReactOS, LGPL), **notepad** (ReactOS, GPL),
+**calc** (ReactOS IEEE build, GPL) — all UNICODE builds reaching the link
+stage; per-dir READMEs pin the upstream commit and list local patches
+(only `L"…"`→`u"…"`: WCHAR here is 2-byte UTF-16, libc wchar_t is 4-byte,
+so TEXT()/_T() paste the `u` prefix). **sol is out** — ReactOS solitaire
+is C++ (CardLib), outside the raw-C scope. Next corpus targets when
+demand justifies: metapad (first non-ReactOS), PuTTY (the milestone).
+The A/W convention landed with the corpus: implemented entries are ANSI
+generic names, veneer sources `#undef UNICODE`, W variants are declared
+and generic names map onto them under UNICODE; the 16-bit wide CRT uses
+the `_tcs*` names as real symbols (see include/tchar.h for why not
+`wcslen`). Resources (.rc — menus/dialogs/bitmaps/strings) are vendored
+but not compiled: a resource story is part of the 0059+ demand.
+
 ## References
 
 ReactOS `base/applications` + `rosapps` (C Win32 apps *and* an open

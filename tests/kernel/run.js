@@ -36,6 +36,7 @@ var tests = [
   ['test_os_apps_e2e.js', []],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
   ['test_gdi32_e2e.js', []],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
   ['test_user32_e2e.js', []],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path
+  ['test_win32_ports.js', []],  // 0060: port corpus compile-check — controls still link clean, PORTS.md (the 0059+ backlog) current
   ['test_term_e2e.js', []],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
   ['test_gpubox_dawn_e2e.js', []], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
 ];
