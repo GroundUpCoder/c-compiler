@@ -477,6 +477,33 @@ parentless service, so spawned apps get no fd 0/1/2; verify writes to a
 missing fd are harmless (doom printf's at startup) or give children
 /dev/null-ish fds via spawn file actions.
 
+**Start menu v2 — Win95 classic (todos/0078, landed 2026-07-10).** The
+flat 0028 list became a Win95 shell: **subdirectories of the menu dir
+are program groups** that cascade flyout columns (the baked tree has
+Games/Accessories/Demos; `/etc/menu` subdirs cascade identically; the
+flat list stays the degenerate one-level case). Each column is its own
+borderless window ("startmenu", "startmenu2", …, MENU_DEPTH 4) parked
+by its EV_CREATED echo — flyout at parent-right − 3, first row aligned
+to the group row, bottom-clamped to the work area. **Only the root
+column ever holds kernel focus**: a flyout's create-focus is handed
+straight back at its echo (the Aero-Peek precedent) — otherwise closing
+a flyout on a hover re-target would bounce focus to an app and the
+EV_FOCUS dismiss rule would tear the whole menu down. Hover policy is
+timer-free: hovering a group opens/re-targets its flyout; hovering a
+non-group row leaves an open flyout alone (forgiving diagonal travel).
+Below the programs the root column has a **separator + fixed section**
+(SETTINGS → activate("/bin/ctlpanel"); RUN… → the "startrun" dialog, a
+text field whose Enter spawns `/bin/sh -c <input>`; **Shut Down joins
+when todos/0051 lands**) and the navy **sidebar band** with a vertical
+label. **Keyboard**: arrows walk the deepest column, Right/Enter
+cascade, Left backs out, Esc closes all, printable keys type-ahead;
+keys route by menu-open state, not windowID. **The Start chord** is
+Ctrl+Esc, intercepted at the kernel wmKey seam exactly like the cycle
+chord (subscriber-gated, keyup swallowed, no-WM pass-through): **WMP
+EV_MENU 0x8C / MENU 0x1C / `wmctl menu`** — one op set, exposed twice.
+The Win7 two-pane stage (pinned + MRU left pane, search box) is
+**todos/0098**.
+
 **Desktop icons (todos/0029).** A fullscreen borderless wm surface,
 pinned to the bottom z layer at create (SET_LAYER since todos/0038;
 originally a one-shot RESTACK), teal fill (it covers the compositor's

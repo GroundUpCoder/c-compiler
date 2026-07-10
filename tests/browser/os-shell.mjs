@@ -102,21 +102,30 @@ try {
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
     await sample(44, BARY));
 
-  // The baked /usr/share/menu entries, sorted (os/image.json — bump the
-  // list when it gains an entry; the geometry below derives from it).
-  // Rows are 20px + 4px pad, parked above the 28px taskbar (/etc/menu is
-  // EMPTY on a virgin boot — todos/0040; the override leg below covers it).
-  const MENU_ENTRIES = ['cairodemo', 'calc', 'ctldemo', 'ctlpanel', 'doom', 'fileman', 'gameboy', 'gdidemo',
-                        'gpubox', 'notepad', 'quake', 'sameboy', 'snake', 'term', 'winbox', 'winmine'];
-  const MENU_H = 2 * 4 + MENU_ENTRIES.length * 20;
+  // The baked /usr/share/menu TREE (os/image.json, todos/0078): the root
+  // column lists the GROUP dirs (dirs-first sort) + the fixed section
+  // (SETTINGS, RUN...) below a separator; groups cascade flyout columns.
+  // Root = 18px sidebar band + 150px list, rows 20px + 4px pad + 8px
+  // separator, parked above the 28px taskbar (/etc/menu is EMPTY on a
+  // virgin boot — todos/0040; the override leg below covers it). Bump the
+  // lists when image.json's menu tree changes.
+  const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
+  const MENU_H = 2 * 4 + (MENU_GROUPS.length + 2) * 20 + 8;
   const MENU_Y = SH - 28 - MENU_H;
-  const WINBOX_ROW_Y = 4 + MENU_ENTRIES.indexOf('winbox') * 20 + 10;
+  const RUN_ROW_Y = 4 + MENU_GROUPS.length * 20 + 8 + 20 + 10;
+  const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
+  const DEMOS_H = 2 * 4 + DEMOS.length * 20;
+  const DEMOS_Y = Math.min(MENU_Y + 4 + MENU_GROUPS.indexOf('Demos') * 20 - 4,
+                           SH - 28 - DEMOS_H);
+  const GAMES_H = 2 * 4 + 6 * 20;                // doom..winmine
+  const GAMES_Y = Math.min(MENU_Y + 4 + MENU_GROUPS.indexOf('Games') * 20 - 4,
+                           SH - 28 - GAMES_H);
   check('menu spot is desktop before the click', near(await sample(120, MENU_Y + 74), TEAL),
     await sample(120, MENU_Y + 74));
   // Map-on-placement (todos/0069): burst-capture frames THROUGH the open —
   // the menu must never composite at the kernel cascade default (the
   // top-left band; x<=432, y<=436 covers every sid-cascade placement of a
-  // 150x188 menu) before appearing parked above the taskbar. In-page rAF
+  // 168x116 menu) before appearing parked above the taskbar. In-page rAF
   // sampling gives per-frame granularity that CDP round trips can't. At
   // this point nothing face-gray is in the band (icons are white/navy,
   // text antialiasing blends toward teal), so any gray blob there IS a
@@ -156,19 +165,51 @@ try {
     maxCasc < 300, { maxCasc, frames: frames.length });
   await waitPixel(120, MENU_Y + 74, FACE);       // settle for the hover leg
 
-  // Hover the winbox entry (rows are 20px from MENU_Y+4): the Win95 navy
-  // highlight tracks the pointer.
-  await page.mouse.move(rect.x + 75, rect.y + MENU_Y + WINBOX_ROW_Y);
-  await waitPixel(120, MENU_Y + WINBOX_ROW_Y, NAVY);
-  check('entry hover highlights navy', true);
+  // The Win95 sidebar band (todos/0078): navy histogram over the root
+  // column's left strip (x 1..17; the white vertical label thins it).
+  const bandNavy = await page.evaluate(([x0, y0, w, h]) => {
+    const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
+    const t = document.createElement('canvas');
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
+    const ctx = t.getContext('2d');
+    ctx.drawImage(c, 0, 0);
+    const d = ctx.getImageData(x0, y0, w, h).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] < 40 && d[i + 1] < 40 && Math.abs(d[i + 2] - 128) < 40) n++;
+    return n;
+  }, [1, MENU_Y + 1, 17, MENU_H - 2]);
+  check('sidebar band renders (navy histogram)', bandNavy > 800, bandNavy);
 
-  // Select it: winbox spawns (the WM places its first window at 12,36),
-  // the menu closes.
-  await clickAt(75, MENU_Y + WINBOX_ROW_Y);
+  // Hover the Games group row (rows are 20px from MENU_Y+4): the Win95
+  // navy highlight tracks the pointer AND the group cascades its flyout
+  // column to the right (todos/0078).
+  const GAMES_ROW_Y = 4 + MENU_GROUPS.indexOf('Games') * 20 + 10;
+  await page.mouse.move(rect.x + 75, rect.y + MENU_Y + GAMES_ROW_Y);
+  await waitPixel(120, MENU_Y + GAMES_ROW_Y, NAVY);
+  check('group hover highlights navy', true);
+  // Sample the flyout's TOP strip: both flyouts bottom-clamp to the bar,
+  // so only the taller Games column covers it — the discriminating pixel
+  // (a shared pixel would pass while a re-target is still in flight and
+  // the click below would race the flyout swap).
+  await waitPixel(300, GAMES_Y + 6, FACE);
+  check('hover cascades the Games flyout column', true);
+
+  // Re-target to the Demos group (replaces the flyout), then launch
+  // winbox from the NESTED column: it spawns (the WM places its first
+  // window at 12,36) and the whole cascade closes.
+  const DEMOS_ROW_Y = 4 + MENU_GROUPS.indexOf('Demos') * 20 + 10;
+  await page.mouse.move(rect.x + 75, rect.y + MENU_Y + DEMOS_ROW_Y);
+  await waitPixel(300, GAMES_Y + 6, TEAL);       // the Games flyout is gone...
+  await waitPixel(300, DEMOS_Y + 6, FACE);       // ...and Demos is up: settled
+  check('hovering another group re-targets the flyout', true);
+  const WINBOX_FLY_Y = DEMOS_Y + 4 + DEMOS.indexOf('winbox') * 20 + 10;
+  await clickAt(200, WINBOX_FLY_Y);
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);
-  check('menu entry launched winbox (orange fill at the WM placement)', true);
+  check('nested flyout click launched winbox (orange fill at the WM placement)', true);
   await waitPixel(120, MENU_Y + 74, TEAL);
-  check('selection dismissed the menu', true);
+  check('selection dismissed the whole cascade', true);
 
   // Re-open, then click the winbox window: the focus change dismisses.
   await clickAt(25, BARY);
@@ -185,9 +226,24 @@ try {
   await waitPixel(120, MENU_Y + 74, TEAL);
   check('Start click toggles the menu closed', true);
 
+  // Keyboard (todos/0078): Esc closes the open menu (the root column
+  // holds focus while open), and the Ctrl+Esc chord toggles it from
+  // anywhere (kernel wmKey -> WMP EV_MENU -> the same menu_toggle).
+  await clickAt(25, BARY);
+  await waitPixel(120, MENU_Y + 74, FACE);
+  await page.keyboard.press('Escape');
+  await waitPixel(120, MENU_Y + 74, TEAL);
+  check('Esc dismisses the menu', true);
+  await page.keyboard.press('Control+Escape');
+  await waitPixel(120, MENU_Y + 74, FACE);
+  check('Ctrl+Esc opens the Start menu (the chord)', true);
+  await page.keyboard.press('Control+Escape');
+  await waitPixel(120, MENU_Y + 74, TEAL);
+  check('Ctrl+Esc toggles it closed again', true);
+
   // ---- /etc/menu override wins (todos/0040: first-existing-dir) ----
   // Create /etc/menu with a single entry; the next Start click must read
-  // IT (150x28, one row) instead of the baked /usr/share/menu.
+  // IT (one program row + the fixed section) instead of the baked tree.
   await setVt(1);
   await page.keyboard.type('mkdir /etc/menu && ln -s /usr/bin/winbox /etc/menu/solo && echo MENU-SET\r');
   await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 200 });
@@ -196,12 +252,13 @@ try {
   // wait for the taskbar and let the recreate finish before clicking.
   await waitPixel(400, BARY, FACE);
   await page.waitForTimeout(800);
-  const SOLO_Y = SH - 28 - 28;                   // menu_h(1) = 28, above the bar
+  const SOLO_H = 2 * 4 + 3 * 20 + 8;             // 1 program + separator + 2 fixed
+  const SOLO_Y = SH - 28 - SOLO_H;
   await clickAt(25, BARY);
   await waitPixel(75, SOLO_Y + 14, FACE);
-  check('override menu opens with ONE entry (/etc/menu wins)', true);
-  check('the 7-entry region stays desktop (no union merge)',
-    near(await sample(120, MENU_Y + 74), TEAL), await sample(120, MENU_Y + 74));
+  check('override menu opens with ONE program entry (/etc/menu wins)', true);
+  check('the baked-tree region stays desktop (no union merge)',
+    near(await sample(120, MENU_Y + 10), TEAL), await sample(120, MENU_Y + 10));
   await clickAt(25, BARY);                       // toggle closed
   await waitPixel(75, SOLO_Y + 14, TEAL);
   await setVt(1);
@@ -264,6 +321,29 @@ try {
   await clickAt(200, BARY);
   await waitPixel(500, 300, TEAL);
   check('minimize reveals the desktop', true);
+
+  // ---- the RUN... builtin (todos/0078) ----
+  // Start -> the RUN... fixed row opens the dialog (240x70 bottom-left,
+  // white input box); typed command + Enter spawns via /bin/sh -c.
+  const WHITE2 = [255, 255, 255];
+  await clickAt(25, BARY);
+  await waitPixel(120, MENU_Y + 74, FACE);
+  await clickAt(75, MENU_Y + RUN_ROW_Y);
+  await waitPixel(200, SH - 28 - 70 - 6 + 35, WHITE2);   // the input box
+  check('RUN... row opens the run dialog', true);
+  // The menu closed behind it: sample its top strip, ABOVE the dialog
+  // (the dialog's 240x70 footprint overlaps the old fixed-section rows).
+  check('the menu closed behind it', near(await sample(120, MENU_Y + 10), TEAL),
+    await sample(120, MENU_Y + 10));
+  await page.keyboard.type('winbox');
+  await page.keyboard.press('Enter');
+  await waitPixel(200, SH - 28 - 70 - 6 + 35, TEAL);     // dialog gone
+  check('Enter closes the dialog', true);
+  await setVt(1);
+  await page.keyboard.type('WB=$(wmctl list | grep -c "winbox$"); echo WB-COUNT-$WB\r');
+  await page.waitForFunction(() => window.__osOut.includes('WB-COUNT-2'), { timeout: 30000, polling: 200 });
+  check('run-dialog command spawned (winbox count 2)', true);
+  await setVt(2);
 
   // The shell stays healthy behind the desktop (menu spawns are reaped —
   // no zombie pileup would show here, but the VT1 round-trip proves the

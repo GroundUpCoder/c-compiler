@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0041 gcstr closed)
+# Handoff — start of thread (updated 2026-07-10; 0078 start menu v2 closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,48 +7,59 @@
 
 ## Where the repo stands
 
-**0041 (`__gcstr` — string literals as imported externref constants) is
-CLOSED** — dev log `logs/2026-07-10/0041-gcstr.md`, item at
-`todos/done/0041-gcstr-string-constants.md`. Load-bearing facts:
+**0078 (start menu shell v2 — Win95 restyle) is CLOSED** — dev log
+`logs/2026-07-10/0078-start-menu-v2.md`, item at
+`todos/done/0078-start-menu-shell-v2.md`, design block "Start menu v2"
+in `todos/WM.md`. Load-bearing facts:
 
-- `__gcstr("...")` parses as an `EIntrinsic` GC_STR carrying the `EString`
-  (NO new node class — three dispatch sites: parser, C-printer, codegen).
-  One immutable `(ref extern)` global import per distinct literal, module
-  `"#"`, name = the literal bytes; deduped by decoded content. `GCSTR()`
-  macro in guc.h.
-- **Index-shift is enforced structurally, not relocated**: a generateCode
-  pre-scan registers every literal BEFORE the first defined global;
-  `addGlobalImport` throws once one exists; codegen throws on an
-  unregistered literal. `patchGlobalI32` subtracts the import count.
-- File-scope `__externref` AND `__refextern` globals can init from
-  `__gcstr` (global.get of an immutable import is a constant expr) —
-  `__refextern`'s only valid global initializer.
-- `importedStringConstants: '#'` joined the MUST-MATCH compile-options
-  pair (host.js runModule ↔ kernel.js `_moduleFor`). C and ss options are
-  now IDENTICAL → **follow-up 0097**: drop `_moduleFor`'s ss exclusion so
-  ss binaries join the 0037 spawn module cache (SS-INTEROP.md §4).
-- Loaders without compile options use
-  `imports['#'] = new Proxy({}, {get: (_, name) => name})`.
+- The menu is now CASCADING COLUMNS in os/wm.c (`mcol[MENU_DEPTH 4]`,
+  one borderless window per column, titles "startmenu"/"startmenu2"/…
+  parsed for depth at the EV_CREATED park). Menu-dir SUBDIRECTORIES are
+  groups; baked tree (image **v48**): Games/ Accessories/ Demos/ — the
+  top-level ctlpanel link is GONE (the fixed SETTINGS row replaces it).
+- **Only the root column ever holds kernel focus** — a flyout's
+  create-focus is handed back at its echo (peek precedent). This is
+  load-bearing: flyouts die on hover re-target, and a focused-surface
+  destroy would focus-fall to an app → the EV_FOCUS rule would dismiss
+  the whole menu. Keys route by menu-open state, NOT windowID.
+- Fixed section below a separator: SETTINGS → activate("/bin/ctlpanel"),
+  RUN… → "startrun" dialog (Enter spawns `/bin/sh -c <input>`). The
+  run dialog's focus-dismiss is gated on its echo having landed
+  (`run_win && run_sid && p[0] != run_sid`) — the menu-teardown focus
+  fall arrives before the echo and must not kill it.
+- **Start chord = Ctrl+Esc** at the kernel wmKey seam, EV_CYCLE rules
+  exactly (subscriber-gated, keyup swallowed, no-WM pass-through):
+  WMP **EV_MENU 0x8C / MENU 0x1C / `wmctl menu`**. MUST-MATCH trio
+  updated (kernel.js, wm_proto.h, test_wm_policy.js); VT2 tab tooltip
+  documents the chord.
+- Hover policy is timer-free: group hover opens/re-targets its flyout;
+  non-group hover leaves it open (forgiving diagonals, deterministic
+  tests). Keyboard: arrows on the deepest column, Right/Enter cascade,
+  Left backs out, Esc closes all, printable = type-ahead.
+- Residues with owners: **Win7 two-pane stage → todos/0098** (new item,
+  slotted after the desktop-polish cluster); **Shut Down fixed row →
+  todos/0051** (its body carries the hook). Non-goals recorded in the
+  done item stand (no jump lists/tiles/fs search).
 
-**Adjacent fix**: `newestBakeInput` no longer counts `*.img.tmp-<pid>`
-(mkimage atomic-rename temps) as bake inputs — a killed bake used to make
-the image PERPETUALLY stale (each serve.js re-bake killed by a test
-timeout left another temp). Pattern gitignored too.
+**Tests after the change**: kernel suite **44/44** (test_wm_service_e2e
+grew to 78 checks — flyout geometry goldens, menu-shot pixel asserts,
+`wmctl menu`, type-ahead, Esc, RUN… typed launch, keyboard-only nested
+launch; test_wm_policy grew the chord/MENU legs), blockfs 15/15,
+browser `os-sweep.mjs` green (os-shell.mjs restyled: band histogram,
+hover-cascade, nested launch, Ctrl+Esc chord, RUN… end-to-end).
+compiler.js/host.js untouched — unit suite not re-run.
 
-**Tests after the change**: unit **707/707** (5 new gcstr tests), kernel
-**44/44**, blockfs 15/15, host suite all-pass (new
-`test_gcstr_imports.js` — binary shape + polyfill), ast 125/125, headless
-boot + browser os-boots.mjs green, in-OS `cc` compile+run of a gcstr
-program verified. Image version stays **v47** (no seeded-source change;
-compiler.js/host.js edits re-bake by mtime).
+**Menu geometry moves in THREE places** (the standing entry-lists rule,
+now over trees): os/image.json's menu tree ↔ test_wm_service_e2e.js
+(MENU_GROUPS/DEMOS/GAMES + derived geometry) ↔ os-shell.mjs (copies).
+Root = 168×(8 + rows·20 + 8) at x 0; flyout = 150 wide at parent-right
+− 3, first row aligned to the group row, bottom-clamped to the work
+area. Headless goldens: root `168x116+0+624`, Demos flyout
+`150x108+165+632`, run dialog `240x70+6+664` (1024×768 screen).
 
-**Concurrent session note**: another session was active during this work
-(sameboy save-states + a desktop-polish queue batch 0089–0096, uncommitted
-at the time). The 0041 commit staged a SURGICAL queue.json (HEAD − 0041 +
-0097) so the pushed manifest has no dangling ids; the working tree keeps
-their full version. If their items look missing from `git log`, that's why.
-
-**Next in queue**: run `node todos/queue.js list`.
+**Next in queue**: run `node todos/queue.js list` (0076 desktop polish
+sweep and 0077 icon selection lead; the 0089–0096 QoL cluster follows;
+0098 sits after it).
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
 sweep rounds so far, a MUST for WM sweep round 3 (`0064`), which also
@@ -56,58 +67,60 @@ carries the 0063 aero aesthetics + glass perf eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **NEW (0041): all global imports before any defined global** — if you add
-  another imported-global feature, register it in generateCode's pre-scan
-  region (before the stack-pointer global), or `addGlobalImport` throws.
-- **NEW (0041): `__gcstr` literals must be valid UTF-8** — parse-time
-  fatal-decode; `\xNN` escapes that break UTF-8 are compile errors.
-- **0046: `wc`-style trace asserts must match the child's fd table** —
-  trace lines show KERNEL fd numbers; strace's own pipe fds never appear.
-  A parked tracer read is served by `_traceLine`'s `_pipeNotify` re-entry.
-- **0063: drop shadows are real desktop pixels** — sample TEAL ≥ ~25px out
-  from a chromed frame. Translucent clients blend over the frame PLATE
-  (FACE 192). `wmctl list` FLAGS is 7 chars. wm.c's peek keeps
-  `peek_pending` across dismiss.
-- 0075: SameBoy compiles with `-DGB_INTERNAL`; MIN/MAX are plain ternaries;
-  `GB_random` seeds lazily — don't pixel-match uninit CGB palette RAM.
-- **0072**: `wmctl click LABEL`/`settext` take the FIRST win32 app that
-  accepts the label; `strncasecmp`/`strcasecmp` live in `<strings.h>`.
-- **0070: browser tests land on VT2 at ready.** Type on the tty only after
-  `setVt(1)`; assert boot-time VT1 facts only BEFORE `ready`.
-- **Don't edit bake inputs while a suite runs** (0082): `.md` and `tests/`
-  are NOT inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`, `vendor/`
-  are.
-- **New-runner habits**: check `build/test-*/summary.json` + per-file logs
-  after an interrupted run; `--resume` picks up the checkpoint. Sweep is
-  serial by design (0045).
+- **NEW (0078): x < 18 on the root menu column is the sidebar band** —
+  entry clicks/samples in tests must use x ≥ ~20 (the e2e uses 60).
+  Old `wmctl click $MSID 20 y` habits die: content starts at x 18.
+- **NEW (0078): flyout settle pixels must DISCRIMINATE** — both baked
+  flyouts bottom-clamp to the bar and share footprint; a shared-pixel
+  waitPixel passes mid-re-target and the next click races the swap
+  (lands on the desktop → dismisses everything). Wait for the OLD
+  column's exclusive top strip to go teal first (dev log has the story).
+- **NEW (0078): don't dismiss the menu from EV_FOCUS on column sids** —
+  if you add more wm furniture that can be open WITH the menu, exempt
+  it in the EV_FOCUS rule or it'll tear the menu down.
+- **0041: all global imports before any defined global** — register new
+  imported-global features in generateCode's pre-scan region, or
+  `addGlobalImport` throws. `__gcstr` literals must be valid UTF-8.
+- **0046: trace asserts must match the child's KERNEL fd numbers.**
+- **0063: drop shadows are real desktop pixels** — sample TEAL ≥ ~25px
+  out from a chromed frame. `wmctl list` FLAGS is 7 chars.
+- 0075: SameBoy compiles with `-DGB_INTERNAL`; don't pixel-match uninit
+  CGB palette RAM.
+- **0070: browser tests land on VT2 at ready.** Type on the tty only
+  after `setVt(1)`; assert boot-time VT1 facts only BEFORE `ready`.
+- **Don't edit bake inputs while a suite runs** (0082): `.md` and
+  `tests/` are NOT inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`,
+  `vendor/` are. Bump `image.json` `version` (now **48**) when an
+  interactive browser tab must pick up seeded-source edits.
+- **New-runner habits**: check `build/test-*/summary.json` (field is
+  `status: 'pass'`, not `ok`) + per-file logs after an interrupted run;
+  `--resume` picks up the checkpoint. Sweep is serial by design (0045).
 - **Menu/desktop entry lists** image.json ↔ test_wm_service_e2e.js ↔
-  os-shell.mjs must move together ('sameboy' is in all three).
-- Bump `image.json` `version` (47) when an interactive browser tab must
-  pick up seeded-source edits (OPFS re-fetch is version-gated only).
-- **Cairo/pixman config is hand-written** — extend BOTH headers and
-  lib.json when adding features (0080); testsuite diff tol 3, cap 16.
+  os-shell.mjs must move together (now the menu TREE too — see above).
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
-  committing. After `queue.js done`, check `git status` — it can stage a
-  pre-edit blob AND (seen at 0041's close) it stages OTHER sessions'
-  untracked todos/ files: `git reset` and stage your own set explicitly.
+  committing. **`queue.js add --help` is NOT a help flag** — it ADDS an
+  item named "untitled" (that's how 0098 got its number this thread;
+  repurposed deliberately). After `queue.js done`, check `git status` —
+  it can stage a pre-edit blob and other sessions' untracked todos/
+  files: `git reset` and stage your own set explicitly.
 - Two unit goldens encode libc internals (`switch_br_table` stderr,
   `printf` pointer line); `setjmp_unsupported_diag`'s golden encodes the
   setjmp diagnostic wording.
-- **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium
-  with `--enable-unsafe-webgpu --enable-features=Vulkan`.
-- Browser pixel tests: tolerate the icon grid in "empty desktop" asserts;
-  desktop teal == compositor teal; derive geometry from `__osScreen`;
-  a SECOND page needs a fresh context/browser.
+- **0055**: boot REQUIRES worker WebGPU; browser os tests launch
+  Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan`.
+- Browser pixel tests: tolerate the icon grid in "empty desktop"
+  asserts; desktop teal == compositor teal; derive geometry from
+  `__osScreen`; a SECOND page needs a fresh context/browser.
 - Concurrent sessions may be active in this repo: check `git status`
   before staging and stage ONLY your own files.
-- The IDE's clangd flags os/*.c, os/win32/*.c and vendor sources — noise;
-  headers are compiler.js built-ins or project-include-path resolved.
+- The IDE's clangd flags os/*.c, os/win32/*.c and vendor sources —
+  noise; headers are compiler.js built-ins or include-path resolved.
 - For the long tail (WRES v2, wmctl click one-arg=label, clipboard file,
   EM_GETHANDLE, argv0, AUDIO_GAIN, TrackPopupMenu coords, 0069 unmapped
   semantics, MAKEINTRESOURCE stack caveat, shebang one-optarg, `ls /`
   goldens incl. proc, 0040 image pairing, MUST-MATCH block list): see
-  `todos/done/0048`'s Status, `logs/2026-07-10/0048-closeout.md`, and the
-  CLAUDE.md sections — they are the durable copies.
+  `todos/done/0048`'s Status, `logs/2026-07-10/0048-closeout.md`, and
+  the CLAUDE.md sections — they are the durable copies.
 
 ## Don't re-litigate
 
@@ -116,21 +129,22 @@ recorded decisions (see todos/done/); DISK-IMAGE.md's settled layout;
 0061's calls; 0081's calls (ONE shared suite engine, kernel `-j4`, sweep
 serial, run-unit.js untouched); 0082's calls (input-freshness by mtime
 scan, fixture = `os/os-system.img` itself, `version > manifest` blobs
-kept, test_os_boot stays the real-bake test); 0070's call (boot STAYS on
-VT1 until `ready`); 0072's calls (openwith store FIRST-FILE-WINS, resolver
-stays header-only); 0075's calls (Peanut-GB stays the default .gb/.gbc
-handler); 0063's calls (deterministic-or-invisible split per effect; glass
-is kernel STATE but browser-only RENDERING); 0046's calls (trace sink is a
-tracer-owned pipe named by spec field; drop-don't-block with a counted
-marker); 0041's calls (GC_STR intrinsic not a node class; imports-first
-enforced by throw, no relocation; UTF-8 validated at parse; import name =
-raw literal bytes; `"#"` module; C/ss compile options unified — the cache
-unification itself is 0097).
+kept); 0070's call (boot STAYS on VT1 until `ready`); 0072's calls
+(openwith store FIRST-FILE-WINS, resolver stays header-only); 0075's
+calls (Peanut-GB… superseded by 0072's flip: SameBoy is the default
+.gb/.gbc handler); 0063's calls (deterministic-or-invisible split per
+effect; glass is kernel STATE but browser-only RENDERING); 0046's calls
+(trace sink is a tracer-owned pipe; drop-don't-block); 0041's calls
+(GC_STR intrinsic; imports-first enforced by throw; UTF-8 at parse;
+`"#"` module; the cache unification is 0097); **0078's calls (Ctrl+Esc
+as the chord; root-column-only focus with flyout hand-back; timer-free
+hover; RUN… = sh -c; Shut Down deferred to 0051; ctlpanel via the fixed
+row, not a menu entry; Win7 pane = 0098)**.
 
 ## Suggested opening for the new thread
 
-"Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle — `node todos/queue.js list` for the order of attack (0079
-dep-dedup and 0080 cairo surfaces lead unless the concurrent session's
-reorder landed; 0064 WM sweep round 3 still owes the pointer-lock human
-check)."
+"Read HANDOFF.md, then give me a one-paragraph status and ask what I
+want to tackle — `node todos/queue.js list` for the order of attack
+(0076 desktop-polish sweep and 0077 icon selection lead, then the
+0089–0096 QoL cluster; 0064 WM sweep round 3 still owes the
+pointer-lock human check)."

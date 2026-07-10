@@ -359,7 +359,17 @@ and a full pipe drops lines + reports the count at exit (the kernel
 never blocks). `/bin/strace [-f] [-o FILE] cmd args...` (os/strace.c)
 is just the plumbing: pipe, spawn pre-traced, copy to stderr, propagate
 exit status (128+sig on a signaled child).
-Image version is **v47**.
+The Start menu is Win95-classic (todos/0078): the baked menu tree has
+Games/Accessories/Demos GROUP subdirectories (cascading flyout columns,
+one borderless window per column titled "startmenu"/"startmenu2"/…;
+`/etc/menu` subdirs cascade the same), a fixed section below a separator
+(SETTINGS → /bin/ctlpanel, RUN… → the "startrun" sh -c dialog; Shut
+Down waits on 0051), the sidebar band, and keyboard nav (arrows/Enter/
+type-ahead/Esc — only the ROOT column ever holds focus; flyouts hand it
+back at their create echo, the peek precedent). Ctrl+Esc toggles it via
+WMP EV_MENU 0x8C / MENU 0x1C / `wmctl menu` — the EV_CYCLE pattern
+exactly (subscriber-gated, keyup swallowed).
+Image version is **v48**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

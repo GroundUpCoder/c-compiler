@@ -1,8 +1,18 @@
 # 0078 — start menu shell v2 (Win95/Win7 restyle)
 
-- **Status**: open
+- **Status**: DONE (2026-07-10) — the Win95-classic stage landed in
+  full: cascading group flyouts from menu-dir subtrees (baked tree
+  Games/Accessories/Demos, image v48), fixed section (SETTINGS →
+  ctlpanel, RUN… → an sh -c dialog), sidebar band, keyboard nav
+  (arrows/Enter/Left/type-ahead/Esc), and the Ctrl+Esc Start chord via
+  WMP EV_MENU 0x8C / MENU 0x1C / `wmctl menu` (the EV_CYCLE pattern).
+  Residues, each with an owner: the optional **Win7 two-pane stage
+  (pinned+MRU left pane, search box) is todos/0098**; the **Shut Down
+  fixed row is todos/0051**'s (halt/reboot — its body carries the
+  hook). Dev log: `logs/2026-07-10/0078-start-menu-v2.md`.
 - **Design**: `todos/WM.md` "The desktop shell" (Start-menu block,
-  todos/done/0028); `todos/WIN32.md`. Extends the Start menu in
+  todos/done/0028; the landed "Start menu v2" block documents the
+  as-built shape); `todos/WIN32.md`. Extends the Start menu in
   `os/wm.c` (a borderless second window, live while open — state ~L118).
 
 ## Goal

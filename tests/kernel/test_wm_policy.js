@@ -749,6 +749,29 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     return r.length === 2 && r[0].w[0] === 43;
   })());
 
+  // ---- the Start chord (todos/0078): Esc with Ctrl held rides EV_MENU
+  // under the exact EV_CYCLE rules — subscriber-gated, keyup swallowed,
+  // plain Esc passes through; the MENU command is the same event
+  // (wmctl menu = the chord). ----
+  kact = kernel.wmKey(true, 41, 27, 0xC0, false);      // Ctrl+Esc down
+  check('start chord down intercepted', kact === 'menu', kact);
+  f = await readEvent(wm2);
+  check('EV_MENU pushed', f.type === WMP.EV_MENU, f.type);
+  kact = kernel.wmKey(false, 41, 27, 0xC0, false);     // keyup swallowed
+  check('start chord keyup swallowed (no half-chord to the app)',
+    kact === 'menu' && drainRing(ring1).length === 0);
+  check('plain Esc (no Ctrl) still reaches the app', (() => {
+    kernel.wmKey(true, 41, 27, 0, false);
+    kernel.wmKey(false, 41, 27, 0, false);
+    const r = drainRing(ring1);
+    return r.length === 2 && r[0].w[0] === 41;
+  })());
+  f = await cmd(wm2, WMP.MENU, []);
+  check('MENU command -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('MENU rides the same EV_MENU (wmctl menu = the chord)',
+    f.type === WMP.EV_MENU && idle(wm2), f.type);
+
   // ---- z layers (todos/0038): SET_LAYER pins furniture above (+1, the
   // taskbar) or below (-1, the desktop layer) the normal windows; EVERY
   // z-order op — create-raise, focus-raise, restack — stays within its

@@ -14,6 +14,8 @@
  *   wmctl cycle [DIR]                 cycle focus (todos/0032) — the Alt+Tab
  *                                     chord's event; DIR -1 reverses (the
  *                                     previous-window toggle); needs a WM
+ *   wmctl menu                        toggle the Start menu (todos/0078) —
+ *                                     the Ctrl+Esc chord's event; needs a WM
  *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
  *                                     bottom, 0 normal, 1 top; z ops never
  *                                     cross layers (list flags: T/B)
@@ -70,6 +72,7 @@ static int usage(void) {
         "       wmctl scale SID W H\n"
         "       wmctl max SID\n"
         "       wmctl cycle [DIR]\n"
+        "       wmctl menu\n"
         "       wmctl layer SID -1|0|1\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
@@ -315,6 +318,9 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
         int32_t a[1] = { argc > 2 ? atoi(argv[2]) : 1 };
         return wmp_cmd(fd, WMP_CYCLE, a, 1) ? fail("cycle refused (no WM?)") : 0;
+    }
+    if (!strcmp(cmd, "menu")) {         /* Start menu toggle (todos/0078) */
+        return wmp_cmd(fd, WMP_MENU, NULL, 0) ? fail("menu refused (no WM?)") : 0;
     }
     if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
         if (argc < 3) return usage();

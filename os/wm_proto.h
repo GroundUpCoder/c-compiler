@@ -58,6 +58,11 @@ enum {
                                           only backdrop blur behind window
                                           chrome. The headless composite
                                           never reads it; default off */
+    WMP_MENU = 0x1C,                   /* { }: fire the Start-menu gesture
+                                          (todos/0078) — the wmctl-menu path
+                                          into the same EV_MENU the Ctrl+Esc
+                                          chord emits. R_ERR with no
+                                          subscribed WM (the menu IS policy) */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     WMP_THUMB = 0x32,                  /* { sid, maxW, maxH }: downscaled
@@ -91,6 +96,11 @@ enum {
                                           or a CYCLE command (todos/0032) —
                                           policy walks focus; only emitted
                                           with a subscriber */
+    WMP_EV_MENU = 0x8C,                /* { }: the Start chord (Esc with Ctrl
+                                          held) or a MENU command (todos/0078)
+                                          — policy toggles the Start menu;
+                                          only emitted with a subscriber, else
+                                          the chord passes through */
 };
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries

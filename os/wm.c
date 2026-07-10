@@ -12,14 +12,29 @@
  * RESIZABLE bit — configure vs scale-to-fit. A wm restart forgets
  * maximize state (deliberate: restarting the WM tidies the desktop).
  *
- * The Start menu (todos/0028) is a second borderless SDL window in this
- * same process, created on Start-button click and destroyed on selection
- * or dismiss — SDL events dispatch per window by e.*.windowID. Entries
- * come from /etc/menu if that directory exists, else the baked default
- * /usr/share/menu (todos/0040 — systemd-style /etc: user overrides only,
- * first-existing-dir wins). Children spawn with cwd /root (the wm chdir's
- * at startup — doom finds its WAD by cwd) and are reaped with a WNOHANG
- * poll.
+ * The Start menu (todos/0028, restyled Win95-classic by todos/0078) is a
+ * set of borderless SDL windows in this same process, created on
+ * Start-button click (or the Ctrl+Esc chord / `wmctl menu` — WMP EV_MENU,
+ * the EV_CYCLE pattern) and destroyed on selection or dismiss — SDL
+ * events dispatch per window by e.*.windowID. Entries come from /etc/menu
+ * if that directory exists, else the baked default /usr/share/menu
+ * (todos/0040 — systemd-style /etc: user overrides only,
+ * first-existing-dir wins). Subdirectories are program GROUPS: hovering
+ * (or clicking / arrow-Right on) a group row cascades a flyout column
+ * open to the right — each column is its own window titled
+ * "startmenu"/"startmenu2"/... so the EV_CREATED park can tell them
+ * apart. Only the ROOT column ever holds keyboard focus (flyouts hand it
+ * back at their create echo, the Aero-Peek precedent — otherwise closing
+ * a flyout would bounce focus to an app and the focus rule would dismiss
+ * the whole menu); keys are routed by menu-open state, not windowID, so
+ * arrows/Enter/type-ahead/Esc drive the DEEPEST column regardless. Below
+ * the programs list the root column has a separator + fixed section
+ * (SETTINGS -> /bin/ctlpanel, RUN... -> the run dialog; Shut Down joins
+ * when todos/0051 lands) and the Win95 sidebar band. The RUN... builtin
+ * is one more borderless window ("startrun") with a text field; Enter
+ * spawns `/bin/sh -c <input>` the same desktop way. Children spawn with
+ * cwd /root (the wm chdir's at startup — doom finds its WAD by cwd) and
+ * are reaped with a WNOHANG poll.
  *
  * Aero Peek (todos/0063): hovering a taskbar button raises a live
  * thumbnail popup — another borderless window in this process, fed by
@@ -82,10 +97,18 @@
 #define MAX_WIN   64
 #define TITLE_H   28    /* keep placements below the kernel title bar (>= WM_TITLE_H) */
 
-#define MENU_W       150
+#define MENU_W       150    /* list width; a flyout column's full width */
+#define MENU_BAND_W  18     /* Win95 sidebar band, root column only (0078) */
 #define MENU_ENTRY_H 20
 #define MENU_PAD     4
+#define MENU_SEP_H   8      /* separator groove above the fixed section */
 #define MAX_MENU     32
+#define MENU_DEPTH   4      /* root + up to 3 cascading flyouts (0078) */
+#define MENU_FIXED   2      /* fixed rows below the separator (root only) */
+
+#define RUN_W        240    /* the RUN... dialog (todos/0078) */
+#define RUN_H        70
+#define RUN_MAX      100
 
 #define DESK_MARGIN  16     /* the icon grid (todos/0029) */
 #define CELL_W       84
@@ -134,18 +157,35 @@ static SDL_Window *bar_win;
 static SDL_Surface *bar_surf;
 static int bar_w;
 
-/* Start menu state (todos/0028): a second borderless window, live only
- * while open. Entries are (re)read at each open from /etc/menu if present,
- * else /usr/share/menu (todos/0040). */
-typedef struct { char name[32]; int is_link; } menu_ent;
-static SDL_Window *menu_win;       /* NULL = closed */
-static SDL_Surface *menu_surf;
-static int32_t menu_sid = 0;       /* from our own EV_CREATED ("startmenu") */
-static menu_ent menu[MAX_MENU];
-static char menu_dir[32];          /* which directory menu_load picked */
-static int menu_n = 0;
-static int menu_hover = -1;
+/* Start menu state (todos/0028, cascading columns since todos/0078): one
+ * borderless window per open column, live only while open. Entries are
+ * (re)read at each open from /etc/menu if present, else /usr/share/menu
+ * (todos/0040); subdirectories are groups that cascade flyout columns. */
+typedef struct { char name[32]; int is_link; int is_dir; } menu_ent;
+typedef struct {
+    SDL_Window *win;               /* NULL = column not live */
+    SDL_Surface *surf;
+    int32_t sid;                   /* EV_CREATED echo ("startmenu[N]") */
+    char dir[300];                 /* the directory this column lists */
+    menu_ent ents[MAX_MENU];
+    int n;
+    int hover;                     /* pointer/keyboard cursor row, -1 none */
+    int open_child;                /* row whose flyout is open, -1 none */
+    int x, y, w, h;                /* screen geometry (the park target) */
+} menu_col;
+static menu_col mcol[MENU_DEPTH];
+static int mdepth = 0;             /* live columns; 0 = menu closed */
+static char menu_dir[32];          /* which directory the root open picked */
+static const char *menu_fixed[MENU_FIXED] = { "SETTINGS", "RUN..." };
 static int nkids = 0;              /* live spawned children (reap on frame) */
+
+/* RUN... dialog state (todos/0078): one more borderless window with a
+ * text field; Enter spawns `/bin/sh -c <input>` the desktop way. */
+static SDL_Window *run_win;        /* NULL = closed */
+static SDL_Surface *run_surf;
+static int32_t run_sid = 0;        /* EV_CREATED echo ("startrun") */
+static char run_buf[RUN_MAX + 1];
+static int run_len = 0;
 
 /* Desktop layer state (todos/0029): fullscreen, bottom of z, recreated on
  * EV_SCREEN like the taskbar. menu_ent is the same shape (name + is_link). */
@@ -229,6 +269,24 @@ static void draw_text_s(uint32_t *px, int sw, int sh, int x, int y,
             for (int c = 0; c < 5; c++)
                 if (g[r] & (0x10 >> c)) px[(y + r) * sw + x + c] = col;
         }
+    }
+}
+
+/* Vertical text for the sidebar band (todos/0078): glyphs rotated 90 deg
+ * so the label reads bottom-up, Win95-style. (x, y) is the BOTTOM of the
+ * run; each glyph spans 7px wide (rows -> x) and 5px tall (cols -> -y). */
+static void draw_vtext_s(uint32_t *px, int sw, int sh, int x, int y,
+                         const char *s, uint32_t col) {
+    for (; *s; s++, y -= 6) {
+        const uint8_t *g = glyph(*s);
+        if (!g) continue;
+        for (int r = 0; r < 7; r++)
+            for (int c = 0; c < 5; c++)
+                if (g[r] & (0x10 >> c)) {
+                    int xx = x + r, yy = y - c;
+                    if (xx >= 0 && xx < sw && yy >= 0 && yy < sh)
+                        px[yy * sw + xx] = col;
+                }
     }
 }
 
@@ -397,11 +455,14 @@ static void activate(const char *path) {
 }
 
 static int entcmp(const void *a, const void *b) {
-    return strcmp(((const menu_ent *)a)->name, ((const menu_ent *)b)->name);
+    const menu_ent *ea = (const menu_ent *)a, *eb = (const menu_ent *)b;
+    if (ea->is_dir != eb->is_dir) return eb->is_dir - ea->is_dir;   /* groups first (0078) */
+    return strcmp(ea->name, eb->name);
 }
 
 /* Read a launcher directory: name = filename, symlink vs plain file told
- * apart by lstat. Plain sort for a deterministic layout. Shared by the
+ * apart by lstat; directories (or links to one) are menu GROUPS (0078).
+ * Groups-first + alpha sort for a deterministic layout. Shared by the
  * Start menu (/etc/menu) and the desktop grid (/root/Desktop). */
 static int load_entries(const char *dir, menu_ent *dst, int max) {
     int n = 0;
@@ -418,64 +479,290 @@ static int load_entries(const char *dir, menu_ent *dst, int max) {
         memset(e, 0, sizeof *e);
         snprintf(e->name, sizeof e->name, "%s", de->d_name);
         e->is_link = S_ISLNK(st.st_mode);
+        if (S_ISDIR(st.st_mode)) e->is_dir = 1;
+        else if (e->is_link) {         /* a link to a directory cascades too */
+            struct stat st2;
+            e->is_dir = stat(path, &st2) == 0 && S_ISDIR(st2.st_mode);
+        }
     }
     closedir(d);
     qsort(dst, n, sizeof dst[0], entcmp);
     return n;
 }
 
-/* /etc/menu wins if the DIRECTORY exists (even empty — first-existing-dir,
- * no union merge; todos/0040); the baked /usr/share/menu is the default. */
-static void menu_load(void) {
+/* ---- the RUN... dialog (todos/0078) ---- */
+
+static void run_dismiss(void) {
+    if (!run_win) return;
+    SDL_DestroyWindow(run_win);
+    run_win = NULL;
+    run_surf = NULL;
+    run_sid = 0;
+}
+
+/* The window parks bottom-left above the taskbar when its EV_CREATED echo
+ * arrives (title "startrun" — see handle_event); create-focus routes the
+ * keyboard here. */
+static void run_open(void) {
+    if (run_win) return;
+    run_len = 0;
+    run_buf[0] = 0;
+    run_win = SDL_CreateWindow("startrun", RUN_W, RUN_H, SDL_WINDOW_BORDERLESS);
+    if (!run_win) return;
+    run_surf = SDL_GetWindowSurface(run_win);
+}
+
+/* Enter hands the line to /bin/sh -c — full shell semantics (PATH lookup,
+ * args, pipes) for free, spawned the same desktop way as menu entries. */
+static void run_key(int sym) {
+    if (sym == SDLK_ESCAPE) { run_dismiss(); return; }
+    if (sym == SDLK_RETURN) {
+        if (run_len > 0) {
+            char *argv[4] = { (char *)"sh", (char *)"-c", run_buf, 0 };
+            spawn_path("/bin/sh", argv);
+        }
+        run_dismiss();
+        return;
+    }
+    if (sym == SDLK_BACKSPACE) {
+        if (run_len > 0) run_buf[--run_len] = 0;
+        return;
+    }
+    if (sym >= 32 && sym < 127 && run_len < RUN_MAX) {
+        run_buf[run_len++] = (char)sym;
+        run_buf[run_len] = 0;
+    }
+}
+
+static void draw_run(void) {
+    if (!run_win) return;
+    uint32_t *px = (uint32_t *)run_surf->pixels;
+    uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
+             sh = rgb(96, 96, 96), txt = rgb(0, 0, 0);
+    fill_s(px, RUN_W, RUN_H, 0, 0, RUN_W, RUN_H, face);
+    fill_s(px, RUN_W, RUN_H, 0, 0, RUN_W, 1, hi);       /* raised edge */
+    fill_s(px, RUN_W, RUN_H, 0, 0, 1, RUN_H, hi);
+    fill_s(px, RUN_W, RUN_H, 0, RUN_H - 1, RUN_W, 1, sh);
+    fill_s(px, RUN_W, RUN_H, RUN_W - 1, 0, 1, RUN_H, sh);
+    draw_text_s(px, RUN_W, RUN_H, 8, 10, "RUN", txt);
+    /* Sunken white input box: dark top/left. */
+    fill_s(px, RUN_W, RUN_H, 8, 26, RUN_W - 16, 22, hi);
+    fill_s(px, RUN_W, RUN_H, 8, 26, RUN_W - 16, 1, sh);
+    fill_s(px, RUN_W, RUN_H, 8, 26, 1, 22, sh);
+    /* The tail of the input that fits, plus a block caret. */
+    int maxn = (RUN_W - 16 - 12 - 6) / 6;
+    const char *s = run_len > maxn ? run_buf + (run_len - maxn) : run_buf;
+    draw_text_s(px, RUN_W, RUN_H, 12, 33, s, txt);
+    fill_s(px, RUN_W, RUN_H, 12 + (int)strlen(s) * 6, 32, 2, 10, txt);
+    SDL_UpdateWindowSurface(run_win);
+}
+
+/* ---- the Start menu columns (todos/0078) ---- */
+
+/* Row bookkeeping: the root column appends the fixed section (SETTINGS,
+ * RUN...) after a separator groove; flyout columns are pure entries. */
+static int col_rows(const menu_col *c, int depth) {
+    return c->n + (depth == 0 ? MENU_FIXED : 0);
+}
+
+static int menu_row_y(const menu_col *c, int depth, int i) {
+    int y = MENU_PAD + i * MENU_ENTRY_H;
+    if (depth == 0 && i >= c->n) y += MENU_SEP_H;
+    return y;
+}
+
+/* Row under local y, or -1 (padding / the separator groove). */
+static int menu_row_hit(const menu_col *c, int depth, int y) {
+    int base = y - MENU_PAD;
+    if (base < 0) return -1;
+    int i = base / MENU_ENTRY_H;
+    if (depth == 0 && base >= c->n * MENU_ENTRY_H) {
+        if (base < c->n * MENU_ENTRY_H + MENU_SEP_H) return -1;
+        i = c->n + (base - c->n * MENU_ENTRY_H - MENU_SEP_H) / MENU_ENTRY_H;
+    }
+    return i < col_rows(c, depth) ? i : -1;
+}
+
+/* Close columns depth.. (deepest first). Flyouts never hold kernel focus
+ * (see the EV_CREATED hand-back), so this can't bounce focus to an app. */
+static void menu_close_from(int depth) {
+    for (int d = mdepth - 1; d >= depth; d--) {
+        if (mcol[d].win) SDL_DestroyWindow(mcol[d].win);
+        mcol[d].win = NULL;
+        mcol[d].surf = NULL;
+        mcol[d].sid = 0;
+    }
+    if (mdepth > depth) mdepth = depth;
+    if (depth > 0) mcol[depth - 1].open_child = -1;
+}
+
+static void menu_dismiss(void) { menu_close_from(0); }
+
+/* Open the column at `depth` listing `dir`. Root parks bottom-left above
+ * the taskbar; flyouts park at (px, py) clamped on-screen. The window
+ * parks when its EV_CREATED echo arrives (title "startmenu" for the root,
+ * "startmenu<depth+1>" deeper — see handle_event). Returns 1 if live. */
+static int menu_open_col(int depth, const char *dir, int px, int py) {
+    if (depth >= MENU_DEPTH) return 0;
+    menu_col *c = &mcol[depth];
+    c->n = load_entries(dir, c->ents, MAX_MENU);
+    if (depth > 0 && c->n == 0) return 0;      /* an empty group: nothing */
+    snprintf(c->dir, sizeof c->dir, "%s", dir);
+    c->hover = -1;
+    c->open_child = -1;
+    c->w = (depth == 0 ? MENU_BAND_W : 0) + MENU_W;
+    c->h = 2 * MENU_PAD + col_rows(c, depth) * MENU_ENTRY_H +
+           (depth == 0 ? MENU_SEP_H : 0);
+    if (depth == 0) {
+        c->x = 0;
+        c->y = scr_h - BAR_H - c->h;
+    } else {
+        c->x = px;
+        c->y = py;
+        if (c->x + c->w > scr_w) c->x = scr_w - c->w;
+        if (c->y + c->h > scr_h - BAR_H) c->y = scr_h - BAR_H - c->h;
+        if (c->y < 0) c->y = 0;
+    }
+    char title[16];
+    if (depth == 0) strcpy(title, "startmenu");
+    else snprintf(title, sizeof title, "startmenu%d", depth + 1);
+    c->win = SDL_CreateWindow(title, c->w, c->h, SDL_WINDOW_BORDERLESS);
+    if (!c->win) return 0;
+    c->surf = SDL_GetWindowSurface(c->win);
+    c->sid = 0;
+    mdepth = depth + 1;
+    return 1;
+}
+
+/* Cascade the flyout for group row i of column `depth` open, replacing
+ * any open sibling flyout. The first flyout row aligns with the group
+ * row's text (Win95), clamped to the work area. */
+static void menu_open_flyout(int depth, int i) {
+    menu_col *c = &mcol[depth];
+    if (depth + 1 >= MENU_DEPTH) return;
+    if (c->open_child == i && depth + 1 < mdepth) return;   /* already up */
+    menu_close_from(depth + 1);
+    char path[600];
+    snprintf(path, sizeof path, "%s/%s", c->dir, c->ents[i].name);
+    if (menu_open_col(depth + 1, path,
+                      c->x + c->w - 3,
+                      c->y + menu_row_y(c, depth, i) - MENU_PAD))
+        c->open_child = i;
+}
+
+/* Activate row i of column `depth`: groups cascade, the fixed section
+ * runs its builtin, everything else is the shared activate() (todos/0066)
+ * — a menu entry is a symlink or an executable launcher script; a stray
+ * non-runnable file just opens through its association. */
+static void menu_row_activate(int depth, int i) {
+    menu_col *c = &mcol[depth];
+    if (i < 0 || i >= col_rows(c, depth)) return;
+    if (depth == 0 && i >= c->n) {             /* the fixed section (0078) */
+        int j = i - c->n;
+        menu_dismiss();
+        if (j == 0) activate("/bin/ctlpanel"); /* SETTINGS */
+        else run_open();                       /* RUN... */
+        return;
+    }
+    if (c->ents[i].is_dir) { menu_open_flyout(depth, i); return; }
+    char path[600];
+    snprintf(path, sizeof path, "%s/%s", c->dir, c->ents[i].name);
+    activate(path);
+    menu_dismiss();
+}
+
+/* Toggle from the Start button, the Ctrl+Esc chord, or `wmctl menu` (all
+ * ride EV_MENU or call here directly). /etc/menu wins if the DIRECTORY
+ * exists (even empty — first-existing-dir, no union merge; todos/0040);
+ * the baked /usr/share/menu is the default. The fixed section keeps the
+ * menu useful even over an empty programs list. */
+static void menu_toggle(void) {
+    if (mdepth > 0) { menu_dismiss(); return; }
     DIR *d = opendir("/etc/menu");
     if (d) { closedir(d); strcpy(menu_dir, "/etc/menu"); }
     else strcpy(menu_dir, "/usr/share/menu");
-    menu_n = load_entries(menu_dir, menu, MAX_MENU);
+    menu_open_col(0, menu_dir, 0, 0);
 }
 
-static void menu_dismiss(void) {
-    if (!menu_win) return;
-    SDL_DestroyWindow(menu_win);
-    menu_win = NULL;
-    menu_surf = NULL;
-    menu_sid = 0;
-    menu_hover = -1;
+static int menu_col_for(SDL_WindowID id) {
+    for (int d = 0; d < mdepth; d++)
+        if (mcol[d].win && SDL_GetWindowID(mcol[d].win) == id) return d;
+    return -1;
 }
 
-/* Selection: the shared activate() (todos/0066) — a menu entry is a
- * symlink or an executable launcher script; a stray non-runnable file
- * just opens through its association like anywhere else. */
-static void menu_launch(int idx) {
-    if (idx < 0 || idx >= menu_n) return;
-    char path[300];
-    snprintf(path, sizeof path, "%s/%s", menu_dir, menu[idx].name);
-    activate(path);
+static int menu_owns_sid(int32_t sid) {
+    for (int d = 0; d < mdepth; d++) if (mcol[d].sid == sid) return 1;
+    return 0;
 }
 
-static int menu_h(void) { return 2 * MENU_PAD + menu_n * MENU_ENTRY_H; }
-
-/* Toggle from the Start button. The window parks above the taskbar when
- * its EV_CREATED echo arrives (title "startmenu" — see handle_event). */
-static void menu_toggle(void) {
-    if (menu_win) { menu_dismiss(); return; }
-    menu_load();
-    if (menu_n == 0) return;
-    menu_win = SDL_CreateWindow("startmenu", MENU_W, menu_h(), SDL_WINDOW_BORDERLESS);
-    if (!menu_win) return;
-    menu_surf = SDL_GetWindowSurface(menu_win);
-    menu_hover = -1;
+static void menu_click(int depth, float fy) {
+    int i = menu_row_hit(&mcol[depth], depth, (int)fy);
+    if (i < 0) { menu_dismiss(); return; }     /* a dead-zone click */
+    mcol[depth].hover = i;
+    menu_row_activate(depth, i);
 }
 
-static void menu_click(float fy) {
-    int idx = ((int)fy - MENU_PAD) / MENU_ENTRY_H;
-    if ((int)fy >= MENU_PAD && idx >= 0 && idx < menu_n) menu_launch(idx);
-    menu_dismiss();                    /* selection or a dead-zone click */
+/* Hover-open (0078): a group row cascades its flyout; hovering a
+ * DIFFERENT group replaces it. Non-group hovers leave an open flyout
+ * alone — forgiving diagonal travel toward the flyout, no timers. */
+static void menu_motion(int depth, float fy) {
+    menu_col *c = &mcol[depth];
+    int i = menu_row_hit(c, depth, (int)fy);
+    c->hover = i;
+    if (i >= 0 && i < c->n && c->ents[i].is_dir && c->open_child != i)
+        menu_open_flyout(depth, i);
 }
 
-static void draw_menu(void) {
-    if (!menu_win) return;
-    int w = MENU_W, h = menu_h();
-    uint32_t *px = (uint32_t *)menu_surf->pixels;
+/* Keyboard navigation (todos/0078): arrows walk the DEEPEST column,
+ * Right/Enter cascade into a group, Left backs out one level, Esc closes
+ * everything, printable keys type-ahead to the next matching row. The
+ * root column holds kernel focus the whole time, so every key while the
+ * menu is open lands here regardless of pointer position. */
+static void menu_key(int sym) {
+    int depth = mdepth - 1;
+    menu_col *c = &mcol[depth];
+    int rows = col_rows(c, depth);
+    if (sym == SDLK_ESCAPE) { menu_dismiss(); return; }
+    if (sym == SDLK_DOWN || sym == SDLK_UP) {
+        int d = sym == SDLK_DOWN ? 1 : -1;
+        c->hover = c->hover < 0 ? (d > 0 ? 0 : rows - 1)
+                                : (c->hover + d + rows) % rows;
+        return;
+    }
+    if (sym == SDLK_LEFT) {
+        if (depth > 0) menu_close_from(depth);
+        return;
+    }
+    if (sym == SDLK_RIGHT) {
+        if (c->hover >= 0 && c->hover < c->n && c->ents[c->hover].is_dir) {
+            menu_open_flyout(depth, c->hover);
+            if (mdepth > depth + 1) mcol[depth + 1].hover = 0;
+        }
+        return;
+    }
+    if (sym == SDLK_RETURN) {
+        int was = mdepth;
+        menu_row_activate(depth, c->hover);
+        if (mdepth > was) mcol[mdepth - 1].hover = 0;   /* entered a group */
+        return;
+    }
+    if (sym >= 32 && sym < 127) {              /* type-ahead */
+        char lc = (char)(sym >= 'A' && sym <= 'Z' ? sym + 32 : sym);
+        for (int k = 1; k <= rows; k++) {
+            int i = (c->hover + k + rows) % rows;      /* hover -1 starts at 0 */
+            char f = i < c->n ? c->ents[i].name[0] : menu_fixed[i - c->n][0];
+            if (f >= 'A' && f <= 'Z') f = (char)(f + 32);
+            if (f == lc) { c->hover = i; break; }
+        }
+    }
+}
+
+static void draw_menu_col(int depth) {
+    menu_col *c = &mcol[depth];
+    if (!c->win) return;
+    int w = c->w, h = c->h;
+    int x0 = depth == 0 ? MENU_BAND_W : 0;
+    uint32_t *px = (uint32_t *)c->surf->pixels;
     uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
              sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
              sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255);
@@ -485,14 +772,32 @@ static void draw_menu(void) {
     fill_s(px, w, h, 0, 0, 1, h, hi);
     fill_s(px, w, h, 0, h - 1, w, 1, sh);
     fill_s(px, w, h, w - 1, 0, 1, h, sh);
-    for (int i = 0; i < menu_n; i++) {
-        int y = MENU_PAD + i * MENU_ENTRY_H;
-        if (i == menu_hover)
-            fill_s(px, w, h, 2, y, w - 4, MENU_ENTRY_H, sel);
-        draw_text_s(px, w, h, 10, y + (MENU_ENTRY_H - 7) / 2, menu[i].name,
-                    i == menu_hover ? seltxt : txt);
+    if (depth == 0) {
+        /* The Win95 sidebar band: navy strip, bottom-up label (0078). */
+        fill_s(px, w, h, 1, 1, MENU_BAND_W - 1, h - 2, sel);
+        draw_vtext_s(px, w, h, 5, h - 8, "WASM OS", seltxt);
     }
-    SDL_UpdateWindowSurface(menu_win);
+    int rows = col_rows(c, depth);
+    for (int i = 0; i < rows; i++) {
+        int y = menu_row_y(c, depth, i);
+        int hl = i == c->hover || (i < c->n && i == c->open_child);
+        if (hl) fill_s(px, w, h, x0 + 2, y, w - x0 - 4, MENU_ENTRY_H, sel);
+        const char *name = i < c->n ? c->ents[i].name : menu_fixed[i - c->n];
+        draw_text_s(px, w, h, x0 + 10, y + (MENU_ENTRY_H - 7) / 2, name,
+                    hl ? seltxt : txt);
+        if (i < c->n && c->ents[i].is_dir) {   /* the flyout arrow */
+            int ax = w - 10, ay = y + (MENU_ENTRY_H - 7) / 2;
+            for (int t = 0; t < 4; t++)
+                fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t,
+                       hl ? seltxt : txt);
+        }
+    }
+    if (depth == 0) {                          /* the separator groove */
+        int sy = MENU_PAD + c->n * MENU_ENTRY_H + MENU_SEP_H / 2 - 1;
+        fill_s(px, w, h, x0 + 4, sy, w - x0 - 8, 1, sh);
+        fill_s(px, w, h, x0 + 4, sy + 1, w - x0 - 8, 1, hi);
+    }
+    SDL_UpdateWindowSurface(c->win);
 }
 
 /* ---- the desktop layer (todos/0029) ---- */
@@ -712,6 +1017,7 @@ static int make_bar(void) {
  * don't re-cascade — no placement churn on a mere resize. */
 static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
+    run_dismiss();                     /* likewise (todos/0078) */
     peek_dismiss();                    /* likewise (todos/0063) */
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
@@ -744,13 +1050,32 @@ static void handle_event(wmp_hdr *h) {
         wmp_rec r;
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) exit(1);
         if (r.pid == own_pid) {        /* our own furniture: park by title */
-            if (strncmp(r.title, "startmenu", 9) == 0) {   /* todos/0028 */
-                menu_sid = r.sid;
-                int32_t a[3] = { r.sid, 0, scr_h - BAR_H - menu_h() };
+            if (strncmp(r.title, "startmenu", 9) == 0) {   /* 0028/0078 */
+                int depth = r.title[9] ? r.title[9] - '1' : 0;
+                if (depth < 0 || depth >= mdepth || !mcol[depth].win) return;
+                menu_col *c = &mcol[depth];
+                c->sid = r.sid;
+                int32_t a[3] = { r.sid, c->x, c->y };
                 wmp_send(sock, WMP_MOVE, a, 3);
                 /* Top layer like the bar (todos/0038) — created later, so
                  * the stable sort keeps the menu above it. */
                 int32_t ly[2] = { r.sid, 1 };
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                if (depth > 0 && mcol[0].sid) {
+                    /* Flyouts must not hold focus: closing one on a
+                     * hover re-target would bounce focus to an app and
+                     * the EV_FOCUS rule would dismiss the whole menu.
+                     * The ROOT column keeps the keyboard (the Aero-Peek
+                     * hand-back precedent, todos/0078). */
+                    int32_t f[1] = { mcol[0].sid };
+                    wmp_send(sock, WMP_FOCUS, f, 1);
+                }
+            } else if (strncmp(r.title, "startrun", 9) == 0) {   /* 0078 */
+                if (!run_win) return;          /* dismissed before the echo */
+                run_sid = r.sid;
+                int32_t a[3] = { r.sid, 6, scr_h - BAR_H - RUN_H - 6 };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t ly[2] = { r.sid, 1 };  /* top layer, like the menu */
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
             } else if (strncmp(r.title, "peek", 5) == 0) {   /* todos/0063 */
                 if (!peek_win) return;         /* dismissed before the echo */
@@ -817,7 +1142,9 @@ static void handle_event(wmp_hdr *h) {
     switch (h->type) {
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
-        if (p[0] == menu_sid) menu_sid = 0;               /* defensive (0028) */
+        for (int d = 0; d < MENU_DEPTH; d++)              /* defensive (0028) */
+            if (p[0] == mcol[d].sid) mcol[d].sid = 0;
+        if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
          * across any close (todos/0031 — the Win95 behavior). */
@@ -831,10 +1158,15 @@ static void handle_event(wmp_hdr *h) {
     }
     case WMP_EV_FOCUS: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
-        /* Focus moving anywhere but the menu itself dismisses it (0028).
-         * The menu's own create-focus echo is exempt — it may even arrive
-         * in the same drain as the EV_CREATED that told us its sid. */
-        if (menu_win && p[0] != menu_sid) menu_dismiss();
+        /* Focus moving anywhere but the menu's own columns dismisses it
+         * (0028). A column's create-focus echo is exempt — it may even
+         * arrive in the same drain as the EV_CREATED that told us its
+         * sid (EV_CREATED is emitted first, so the sid is known). The
+         * run dialog follows the same rule, gated on its echo having
+         * landed: between run_open() and the echo, the focus fall from
+         * the menu teardown must not kill it (todos/0078). */
+        if (mdepth > 0 && !menu_owns_sid(p[0])) menu_dismiss();
+        if (run_win && run_sid && p[0] != run_sid) run_dismiss();
         for (int i = 0; i < nwins; i++) {
             wins[i].focused = wins[i].sid == p[0];
             if (wins[i].focused) {
@@ -847,6 +1179,11 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_CYCLE: {               /* window cycling (todos/0032) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         cycle(p[0]);
+        break;
+    }
+    case WMP_EV_MENU: {                /* Start chord / wmctl menu (0078) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        menu_toggle();
         break;
     }
     case WMP_EV_MINIMIZED: {
@@ -939,7 +1276,7 @@ static int btn_width(void) {
  * the live thumbnail popup for its window; anywhere else on the bar drops
  * it. The Start menu wins conflicts — no previews while it's open. */
 static void bar_motion(float fx) {
-    if (menu_win) return;
+    if (mdepth > 0) return;
     int bw = btn_width();
     int rel = (int)fx - START_W - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
@@ -972,7 +1309,7 @@ static void draw_bar(void) {
     fill(px, 0, 0, bar_w, 1, hi);                       /* top edge highlight */
     /* The Start button (todos/0028): raised normally, sunken while open. */
     {
-        int down = menu_win != NULL;
+        int down = mdepth > 0;
         fill(px, 2, 3, START_W - 4, BAR_H - 6, down ? rgb(222, 222, 222) : face);
         fill(px, 2, 3, START_W - 4, 1, down ? sh : hi);
         fill(px, 2, 3, 1, BAR_H - 6, down ? sh : hi);
@@ -1017,16 +1354,21 @@ static void frame_cb(void) {
     /* Coarse /root/Desktop watch (todos/0029): one readdir per second-ish
      * of frame ticks — no watch API exists or is needed. */
     if (++desk_tick >= 60) { desk_tick = 0; desk_load(); }
-    /* Four windows, one queue: dispatch by windowID (0028/0029/0063). */
-    SDL_WindowID mid = menu_win ? SDL_GetWindowID(menu_win) : 0;
+    /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
+     * Menu columns and the run dialog come and go inside handlers, so
+     * their ids are resolved per event (menu_col_for), not cached. */
     SDL_WindowID did = desk_win ? SDL_GetWindowID(desk_win) : 0;
     SDL_WindowID pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-            if (menu_win && e.button.windowID == mid) menu_click(e.button.y);
-            else if (desk_win && e.button.windowID == did) {
+            int md = menu_col_for(e.button.windowID);
+            if (md >= 0) menu_click(md, e.button.y);
+            else if (run_win && e.button.windowID == SDL_GetWindowID(run_win)) {
+                /* a click inside the run dialog: nothing to hit */
+            } else if (desk_win && e.button.windowID == did) {
                 menu_dismiss();        /* a desktop click dismisses (0029) */
+                run_dismiss();         /* likewise (todos/0078) */
                 peek_dismiss();        /* likewise (todos/0063) */
                 desk_down(e.button.x, e.button.y, e.button.timestamp);
             } else if (peek_win && e.button.windowID == pkid) {
@@ -1034,20 +1376,24 @@ static void frame_cb(void) {
                 wmp_send(sock, WMP_FOCUS, f, 1);
                 peek_dismiss();
             } else bar_click(e.button.x);
-            mid = menu_win ? SDL_GetWindowID(menu_win) : 0;   /* may toggle */
-            pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
+            pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;   /* may drop */
         } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
-            if (menu_win && e.motion.windowID == mid) {
-                int idx = ((int)e.motion.y - MENU_PAD) / MENU_ENTRY_H;
-                menu_hover = ((int)e.motion.y >= MENU_PAD && idx < menu_n) ? idx : -1;
-            } else if (desk_win && e.motion.windowID == did) {
+            int md = menu_col_for(e.motion.windowID);
+            if (md >= 0) menu_motion(md, e.motion.y);
+            else if (desk_win && e.motion.windowID == did) {
                 peek_dismiss();        /* pointer left the bar (0063) */
             } else if (peek_win && e.motion.windowID == pkid) {
                 peek_idle = 0;         /* hovering the preview holds it */
-            } else {
+            } else if (!(run_win && e.motion.windowID == SDL_GetWindowID(run_win))) {
                 bar_motion(e.motion.x);
                 pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
             }
+        } else if (e.type == SDL_EVENT_KEY_DOWN) {
+            /* Keyboard (todos/0078): while the menu is open every key is
+             * menu navigation (the root column holds focus); otherwise
+             * the run dialog, if up, owns the keyboard. */
+            if (mdepth > 0) menu_key((int)e.key.key);
+            else if (run_win) run_key((int)e.key.key);
         } else if (e.type == SDL_EVENT_QUIT) exit(0);
     }
     /* Aero Peek housekeeping (todos/0063): keep the thumbnail live while
@@ -1057,7 +1403,8 @@ static void frame_cb(void) {
         else if (++peek_tick >= PEEK_REFRESH) { peek_tick = 0; peek_request(); }
     }
     draw_bar();
-    draw_menu();
+    for (int d = 0; d < mdepth; d++) draw_menu_col(d);
+    draw_run();
     draw_desk();
     if (peek_dirty) { peek_dirty = 0; draw_peek(); }
 }

@@ -1,11 +1,14 @@
 {
-  "version": 47,
+  "version": 48,
   "system": {
     "dirs": [
       "/usr/bin",
       "/usr/share",
       "/usr/share/fonts",
-      "/usr/share/menu"
+      "/usr/share/menu",
+      "/usr/share/menu/Accessories",
+      "/usr/share/menu/Demos",
+      "/usr/share/menu/Games"
     ],
     "files": {
       "/usr/bin/sh": {
@@ -109,53 +112,50 @@
       "/usr/bin/sqlite3": {
         "project": "vendor/sqlite/bin.json"
       },
-      "/usr/share/menu/doom": {
+      "/usr/share/menu/Games/doom": {
         "link": "/usr/bin/doom"
       },
-      "/usr/share/menu/quake": {
+      "/usr/share/menu/Games/quake": {
         "link": "/usr/bin/quake"
       },
-      "/usr/share/menu/gameboy": {
+      "/usr/share/menu/Games/gameboy": {
         "link": "/usr/bin/gameboy"
       },
-      "/usr/share/menu/sameboy": {
+      "/usr/share/menu/Games/sameboy": {
         "link": "/usr/bin/sameboy"
       },
-      "/usr/share/menu/term": {
-        "link": "/usr/bin/term"
-      },
-      "/usr/share/menu/winbox": {
-        "link": "/usr/bin/winbox"
-      },
-      "/usr/share/menu/gpubox": {
-        "link": "/usr/bin/gpubox"
-      },
-      "/usr/share/menu/cairodemo": {
-        "link": "/usr/bin/cairodemo"
-      },
-      "/usr/share/menu/gdidemo": {
-        "link": "/usr/bin/gdidemo"
-      },
-      "/usr/share/menu/ctldemo": {
-        "link": "/usr/bin/ctldemo"
-      },
-      "/usr/share/menu/snake": {
+      "/usr/share/menu/Games/snake": {
         "content": "#!/bin/sh\nterm snake\n"
       },
-      "/usr/share/menu/calc": {
-        "link": "/usr/bin/calc"
-      },
-      "/usr/share/menu/winmine": {
+      "/usr/share/menu/Games/winmine": {
         "link": "/usr/bin/winmine"
       },
-      "/usr/share/menu/notepad": {
+      "/usr/share/menu/Accessories/term": {
+        "link": "/usr/bin/term"
+      },
+      "/usr/share/menu/Accessories/calc": {
+        "link": "/usr/bin/calc"
+      },
+      "/usr/share/menu/Accessories/notepad": {
         "link": "/usr/bin/notepad"
       },
-      "/usr/share/menu/fileman": {
+      "/usr/share/menu/Accessories/fileman": {
         "link": "/usr/bin/fileman"
       },
-      "/usr/share/menu/ctlpanel": {
-        "link": "/usr/bin/ctlpanel"
+      "/usr/share/menu/Demos/winbox": {
+        "link": "/usr/bin/winbox"
+      },
+      "/usr/share/menu/Demos/gpubox": {
+        "link": "/usr/bin/gpubox"
+      },
+      "/usr/share/menu/Demos/cairodemo": {
+        "link": "/usr/bin/cairodemo"
+      },
+      "/usr/share/menu/Demos/gdidemo": {
+        "link": "/usr/bin/gdidemo"
+      },
+      "/usr/share/menu/Demos/ctldemo": {
+        "link": "/usr/bin/ctldemo"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"

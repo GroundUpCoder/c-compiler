@@ -19,6 +19,11 @@ which are currently unspecified.
   kernel-worker posts `halted`/`reboot` to os.html → a "halted" screen
   or worker re-creation.
 - pid 1 exiting gets defined behavior at the same time (treat as halt).
+- Wire the Start menu's Shut Down row (todos/0078 left the hook: the
+  fixed section in os/wm.c's root column deliberately omits the row —
+  dead UI beats nothing only when it's not dead; add "SHUT DOWN" as a
+  third fixed entry that activate()s `/bin/halt` once it exists, and
+  extend the 0078 fixed-section tests).
 
 ## Acceptance
 

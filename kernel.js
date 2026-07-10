@@ -418,6 +418,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   path into the SAME EV_CYCLE the Alt+Tab
  *                                   chord emits; R_ERR with no subscriber,
  *                                   since cycling IS policy)
+ *   MENU { }                     -> R_OK | R_ERR   (todos/0078: fire the
+ *                                   Start-menu gesture — the wmctl-menu
+ *                                   path into the SAME EV_MENU the Ctrl+Esc
+ *                                   chord emits; R_ERR with no subscriber,
+ *                                   since the menu IS policy)
  *   SET_LAYER { sid, layer }     -> R_OK | R_ERR   (todos/0038: pin the
  *                                   surface to a z LAYER — -1 below normal
  *                                   windows (the desktop layer), 0 normal,
@@ -471,7 +476,10 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * the saved geometry) | EV_CYCLE { direction } (todos/0032: the cycling
  * chord — Tab with Alt held, Shift reversing — or a CYCLE command; only
  * emitted with a subscriber, else the chord is not recognized and the key
- * passes through to the focused app; policy walks focus and sends FOCUS).
+ * passes through to the focused app; policy walks focus and sends FOCUS) |
+ * EV_MENU { } (todos/0078: the Start chord — Esc with Ctrl held — or a
+ * MENU command; the same no-subscriber pass-through rule; policy toggles
+ * the Start menu).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
@@ -493,6 +501,11 @@ var WMP = {
                                         backdrop blur behind window chrome.
                                         The headless composite NEVER reads it
                                         (deterministic goldens); default off */
+  MENU: 0x1C,                        /* { }: fire the Start-menu gesture
+                                        (todos/0078) — the wmctl-menu path
+                                        into the same EV_MENU the Ctrl+Esc
+                                        chord emits. R_ERR with no subscribed
+                                        WM (the menu IS policy) */
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   THUMB: 0x32,                       /* { sid, maxW, maxH }: downscaled
@@ -513,6 +526,11 @@ var WMP = {
                                         subscriber, else the chord is NOT
                                         recognized and the key passes through
                                         (the kernel never eats keystrokes) */
+  EV_MENU: 0x8C,                     /* { }: the Start chord (Esc with Ctrl
+                                        held) or a MENU command (todos/0078)
+                                        — policy toggles the Start menu; the
+                                        same no-subscriber pass-through rule
+                                        as EV_CYCLE */
 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -2992,6 +3010,13 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
     if (down) this._wmEmit(WMP.EV_CYCLE, [(mod & 0x3) ? -1 : 1]);
     return 'cycle';
   }
+  // Start menu (todos/0078): Esc with Ctrl held — the classic Win95
+  // chord — rides WMP EV_MENU under the exact same rules: only with a
+  // WM subscribed (otherwise the app gets its Ctrl+Esc), keyup swallowed.
+  if ((scancode | 0) === 41 && (mod & 0xC0) && this._wmSubs.size) {
+    if (down) this._wmEmit(WMP.EV_MENU, []);
+    return 'menu';
+  }
   if (!this._focusSid) return false;
   return this._wmEventTo(this._focusSid,
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
@@ -3366,6 +3391,17 @@ Kernel.prototype.wmTitleActivate = function (sid) {
 Kernel.prototype.wmCycle = function (dir) {
   if (!this._wmSubs.size) return false;
   this._wmEmit(WMP.EV_CYCLE, [(dir | 0) < 0 ? -1 : 1]);
+  return true;
+};
+
+/* Fire the Start-menu gesture (todos/0078) — the same EV_MENU the
+ * Ctrl+Esc chord emits, so wmctl menu and the keyboard share ONE policy
+ * path in /bin/wm (the menu toggle). Mechanism only: the kernel keeps no
+ * menu state; policy owns the columns. Refuses without a subscriber (the
+ * menu IS policy — nothing would ever answer). */
+Kernel.prototype.wmMenu = function () {
+  if (!this._wmSubs.size) return false;
+  this._wmEmit(WMP.EV_MENU, []);
   return true;
 };
 
@@ -3774,6 +3810,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.SET_DST: ok(this.wmSetDst(g(0), g(1), g(2))); break;
     case WMP.ACTIVATE: ok(this.wmTitleActivate(g(0))); break;
     case WMP.CYCLE: ok(this.wmCycle(g(0))); break;
+    case WMP.MENU: ok(this.wmMenu()); break;           // Start menu (0078)
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
