@@ -30,6 +30,12 @@ const TokenKind = Object.freeze({
   INT: "INT",
   FLOAT: "FLOAT",
   PLACEMARKER: "PLACEMARKER",
+  // A non-white-space character that forms no other token (C11 6.4p1's
+  // "each non-white-space character that cannot be one of the above" —
+  // @, $, `). Valid as a pp-token; diagnosed only if it survives
+  // preprocessing (skipped #if groups and unexpanded macro bodies may
+  // legally contain them).
+  OTHER: "OTHER",
 });
 
 // Keywords
@@ -649,14 +655,17 @@ function lex(filename, source, lineOffsets) {
     // Punctuation
     if (tryPunct()) continue;
 
-    // Unknown character
-    let msg = "Unexpected character: '";
-    while (i < n && !isSpaceB(bytes[i]) && !isPunctByte(bytes[i])) {
-      msg += String.fromCharCode(bytes[i]);
-      advance();
+    // Character that forms no other token: lex it as an OTHER pp-token
+    // (the whole run, for a readable diagnostic) and let the preprocessor
+    // diagnose it only if it survives into the parser's token stream.
+    {
+      let text = "";
+      while (i < n && !isSpaceB(bytes[i]) && !isPunctByte(bytes[i])) {
+        text += String.fromCharCode(bytes[i]);
+        advance();
+      }
+      addToken(TokenKind.OTHER, text);
     }
-    msg += "'";
-    result.errors.push(new LexError(msg, filename, line));
   }
 
   mark();
@@ -1801,6 +1810,15 @@ function preprocess(filename, initialTokens, ppRegistry) {
     let fileOverride = null;
 
     function emitToken(tok) {
+      if (tok.kind === TokenKind.OTHER) {
+        // An "other" pp-token survived preprocessing — only now is it an
+        // error (C11 6.4p1; skipped groups/unexpanded macros already
+        // dropped theirs).
+        result.errors.push(new LexError(
+          "Unexpected character: '" + tok.text + "'",
+          fileOverride || tok.filename, tok.line + lineOffset));
+        return;
+      }
       if (lineOffset || fileOverride) {
         tok = cloneToken(tok);
         tok.line = tok.line + lineOffset;
@@ -12596,27 +12614,49 @@ function getNamedCall(expr, name) {
 }
 
 // Detect setjmp patterns in an if-condition.
-// Returns {call, zeroIsTrue, prefix} on match (prefix = side-effecting
-// expressions to evaluate before the rewritten setjmp), or {call: null}.
+// Returns {call, zeroIsTrue, prefix, assignTarget} on match (prefix =
+// side-effecting expressions to evaluate before the rewritten setjmp;
+// assignTarget = the EIdent lvalue of an `(v = setjmp(buf))` form, which
+// must receive 0 on the direct path and the longjmp value in the catch),
+// or {call: null}.
+//
+// `(v = setjmp(buf))` is matched only for a plain-identifier LHS: the
+// target is re-referenced in both the try prologue and the catch, and an
+// arbitrary lvalue expression can't be safely evaluated twice.
+function unwrapSetjmpAssign(expr) {
+  const prefix = [];
+  while (expr instanceof AST.EComma) {
+    for (let i = 0; i < expr.expressions.length - 1; i++) prefix.push(expr.expressions[i]);
+    expr = expr.expressions[expr.expressions.length - 1];
+  }
+  if (!(expr instanceof AST.EBinary) || expr.op !== "ASSIGN") return null;
+  if (!(expr.left instanceof AST.EIdent)) return null;
+  const r = getNamedCallWithPrefix(expr.right, "setjmp");
+  if (!r) return null;
+  return { call: r.call, prefix: [...prefix, ...r.prefix], assignTarget: expr.left };
+}
 function extractSetjmpCall(cond) {
   if (cond instanceof AST.EBinary) {
     if (cond.op === "EQ" || cond.op === "NE") {
       const zeroIsTrue = cond.op === "EQ";
-      let r = getNamedCallWithPrefix(cond.left, "setjmp");
+      let r = getNamedCallWithPrefix(cond.left, "setjmp") || unwrapSetjmpAssign(cond.left);
       if (r && cond.right instanceof AST.EInt && cond.right.value === 0n)
-        return { call: r.call, zeroIsTrue, prefix: r.prefix };
-      r = getNamedCallWithPrefix(cond.right, "setjmp");
+        return { call: r.call, zeroIsTrue, prefix: r.prefix, assignTarget: r.assignTarget };
+      r = getNamedCallWithPrefix(cond.right, "setjmp") || unwrapSetjmpAssign(cond.right);
       if (r && cond.left instanceof AST.EInt && cond.left.value === 0n)
-        return { call: r.call, zeroIsTrue, prefix: r.prefix };
+        return { call: r.call, zeroIsTrue, prefix: r.prefix, assignTarget: r.assignTarget };
     }
   }
   // Pattern: setjmp(buf) used directly as condition (truthy = longjmp fired)
   const direct = getNamedCallWithPrefix(cond, "setjmp");
   if (direct) return { call: direct.call, zeroIsTrue: false, prefix: direct.prefix };
-  // Pattern: !setjmp(buf)
+  // Pattern: (v = setjmp(buf)) used directly as condition
+  const assign = unwrapSetjmpAssign(cond);
+  if (assign) return { call: assign.call, zeroIsTrue: false, prefix: assign.prefix, assignTarget: assign.assignTarget };
+  // Pattern: !setjmp(buf) / !(v = setjmp(buf))
   if (cond instanceof AST.EUnary && cond.op === "OP_LNOT") {
-    const neg = getNamedCallWithPrefix(cond.operand, "setjmp");
-    if (neg) return { call: neg.call, zeroIsTrue: true, prefix: neg.prefix };
+    const neg = getNamedCallWithPrefix(cond.operand, "setjmp") || unwrapSetjmpAssign(cond.operand);
+    if (neg) return { call: neg.call, zeroIsTrue: true, prefix: neg.prefix, assignTarget: neg.assignTarget };
   }
   return { call: null, zeroIsTrue: false };
 }
@@ -12789,7 +12829,7 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     // Now check if this is an if-statement with setjmp in the condition
     if (!(stmt instanceof AST.SIf)) continue;
 
-    const { call: setjmpCall, zeroIsTrue, prefix: setjmpPrefix } = extractSetjmpCall(stmt.condition);
+    const { call: setjmpCall, zeroIsTrue, prefix: setjmpPrefix, assignTarget } = extractSetjmpCall(stmt.condition);
     if (!setjmpCall) {
       // Not a setjmp if — but still recurse into its branches
       if (stmt.thenBranch instanceof AST.SCompound)
@@ -12879,6 +12919,26 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     if (catchUserBody instanceof AST.SCompound)
       lowerSetjmpInCompound(catchUserBody, tag, counterVar);
 
+    // For the `(v = setjmp(buf))` form, v carries the setjmp return value:
+    // 0 on the direct path (assigned just before the try below), and the
+    // longjmp value in the catch — coerced 0 -> 1 per C11 7.13.2.1p4.
+    // Assign in the catch itself (not in jumpBody) so the value is fresh
+    // on every jump, including re-entries through the retry scaffold.
+    let assignZeroStmt = null;
+    if (assignTarget) {
+      const tType = assignTarget.type;
+      const mkTargetRef = () => new AST.EIdent(loc, tType, assignTarget.decl);
+      const mkAssign = (rhs) => new AST.SExpr(loc,
+        new AST.EBinary(loc, tType, "ASSIGN", mkTargetRef(),
+          new AST.ECast(loc, tType, tType, rhs)));
+      assignZeroStmt = mkAssign(new AST.EInt(loc, Types.TINT, 0n));
+      const valRef0 = new AST.EIdent(loc, Types.TINT, valVar);
+      const valRef1 = new AST.EIdent(loc, Types.TINT, valVar);
+      const coerced = new AST.ETernary(loc, Types.TINT,
+        valRef0, valRef1, new AST.EInt(loc, Types.TINT, 1n));
+      catchUserBody = new AST.SCompound(stmtLoc, [mkAssign(coerced), catchUserBody]);
+    }
+
     // Build the catch body with rethrow logic
     const fullCatchBody = makeCatchBody(tag, idVar, valVar, bufExpr, catchUserBody);
 
@@ -12913,6 +12973,12 @@ function lowerSetjmpInCompound(compound, tag, counterVar) {
     if (prefixStmts.length > 0) {
       stmts.splice(i, 0, ...prefixStmts);
       i += prefixStmts.length;
+    }
+    if (assignZeroStmt) {
+      // Before the try (and before the retry label, so re-entries after a
+      // handled jump don't clobber the caught value back to 0).
+      stmts.splice(i + 1, 0, assignZeroStmt);
+      i++;
     }
     if (retryTail) {
       stmts.splice(i + 1, 0,
@@ -12989,7 +13055,8 @@ function lowerSetjmpLongjmp(unit, exceptionTagRegistry) {
     if (residual) {
       fatalError(residual.loc,
         "unsupported use of setjmp — only forms like 'if (setjmp(buf))', " +
-        "'if (!setjmp(buf))', or 'if (setjmp(buf) == 0)' are supported");
+        "'if (!setjmp(buf))', 'if (setjmp(buf) == 0)', or " +
+        "'if ((v = setjmp(buf)))' are supported");
     }
   };
   for (const f of unit.definedFunctions) lowerFunc(f);
