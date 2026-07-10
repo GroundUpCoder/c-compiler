@@ -158,7 +158,12 @@ dry → reclaim (paused/no-output drop at once — never wedge). Tests:
 drive the real SAB protocol against fake workers (deterministic, no
 threads); the `*_e2e.js` files compile real C and run it in
 `worker_threads`; `bench_fs.js` is the manual brokered-vs-inprocess
-benchmark. When changing the kernel-page layout or opcodes, keep KERNEL.md's
+benchmark. The runner (todos/0081, engine `tests/lib/suite-runner.js`)
+is parallel by default (`-j`, `--serial`, `--filter`, `--resume`,
+`--fail-fast`, `--timeout`); per-file logs + an incrementally
+checkpointed `summary.json` land in `build/test-kernel/`, so an
+interrupted run keeps a usable partial verdict and `--resume` picks up
+from it. When changing the kernel-page layout or opcodes, keep KERNEL.md's
 layout comment and the tests in sync.
 
 ## os/ (the reference OS build)
@@ -433,7 +438,11 @@ input, wmctl scale/unscale; + the 0025 fixed-size scale-to-fit
 maximize leg) + `os-shell.mjs` (0028/0029/0031; Start menu, desktop
 icons, clock — note: "empty desktop" pixel asserts must tolerate the
 icon grid, and the desktop layer's teal equals the compositor
-background teal) (real Chromium, manual).
+background teal) (real Chromium, manual). The whole sweep is ONE
+command since todos/0081: `node tests/browser/os-sweep.mjs`
+(discovers `os-*.mjs`, serial by design — 0045 boot lock + contention;
+`--filter`/`--resume`/`--fail-fast`; per-file logs + checkpointed
+`summary.json` in `build/test-browser/`).
 
 ## BlockFS (host.js) and its tests
 

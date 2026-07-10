@@ -1,6 +1,17 @@
 # 0081 — Testing infrastructure overhaul: holistic architecture — solid, fast, lightweight
 
-- **Status**: open
+- **Status**: done (2026-07-10). Surveyed + measured (findings below),
+  then landed the runner layer: `tests/lib/suite-runner.js` (one engine)
+  + kernel runner v2 (parallel: 20min → 6.5min at `-j4`, 40/40 green) +
+  `tests/browser/os-sweep.mjs` (the sweep as ONE command: 15/15 green in
+  ~70s with a fresh prebake) + blockfs runner conversion — all with
+  per-file logs, checkpointed `summary.json`, `--resume`/`--filter`/
+  `--fail-fast`, per-file timeout with process-group kill. Residue
+  spawned as sub-items: **0082** (prebaked-image fixture for boot.js
+  e2e — the remaining 97%-of-serial-cost bake), **0083** (retire the
+  ~205 sleep-N sync sites — the flake class; the runners themselves
+  carry none), **0084** (unified entry point + diff-aware selection).
+  Dev log: `logs/2026-07-10/test-infra-overhaul.md`.
 - **Design**: this file (user-requested at the 0061 close). This is an
   ARCHITECTURE item: survey first, then spawn concrete sub-items
   (`queue.js add`) for each workstream rather than one mega-landing.
@@ -63,6 +74,57 @@ the 0061 close (2026-07-10):
    real-Chromium, per-test isolation where the test asserts persistence
    (registry-across-boots etc.), and `run-unit.js`'s worker model is the
    template, not a casualty.
+
+## Findings (measured 2026-07-10, 10-core mac mini)
+
+Per-file timings from the new runner's `summary.json` (first full run,
+`-j4`, all 40 files green):
+
+- **Serial cost of the kernel suite = 1354s (~22.6 min)** — matching the
+  observed ~20-min monolith. Parallel wall-clock at `-j4`: **393s
+  (6.5 min), a 3.4x cut**, zero flakes across the boot-heavy family.
+- **16 files >30s account for 1315s — 97% of the suite.** Every one is a
+  boot.js e2e that bakes a full system image (compiling every seeded
+  source + vendor binary via compiler.js) into its private tmp image.
+  Top sinks: test_os_boot 168s (three bake legs by design), test_term
+  124s, test_wm_service 111s, test_user32 90s, notepad/winmine ~84s.
+  The other 24 files sum to ~40s — the no-wasm SAB-protocol class is
+  effectively free.
+- **The bake is the whole story**: the browser sweep already dodges it
+  when a prebaked `os/os-system.img` exists (kernel-worker fetches it;
+  mkimage output was present this session), but **headless boot.js has
+  no prebake path** — each of the 16 e2e files re-bakes an identical
+  v43 blob. A bake-once fixture (version- AND input-freshness-gated so
+  uncommitted compiler.js/os edits still force a re-bake) is the next
+  multiplier: est. 40-60s saved per heavy file.
+- **Sleep-based sync sites counted**: ~145 `sleep N` lines across the
+  kernel e2e boot scripts, ~60 `waitForTimeout`/sleep sites across the
+  15 browser tests. Too broad to convert in this item; needs a shared
+  wait-for-condition helper design (wmctl-observable states, __osOut
+  markers) — spawned as a sub-item.
+- **BlockFS suite**: 15 files, wall-clock == test_fuzz (121s); parallel
+  conversion was nearly free (engine reuse), serial tail eliminated.
+
+## Landed here (2026-07-10)
+
+- `tests/lib/suite-runner.js` — ONE engine for file-granular suites:
+  worker pool with longest-first scheduling from the previous run's
+  timings, per-file timeout with process-GROUP kill (boot.js children
+  can't be orphaned), per-file logs, an incrementally checkpointed
+  `summary.json` (atomic rename after every completion — an interrupted
+  session keeps a usable partial verdict), `--resume` (skip prior
+  passes), `--filter`, `--fail-fast`, `--list`, `-j/--serial`.
+- `tests/kernel/run.js` v2 over the engine (default `-j` 4, capped at
+  cpus-2; artifacts in `build/test-kernel/`). Parallel-safety audited:
+  every e2e already isolates via mkdtemp + `--image=`, no shared ports,
+  no shared build/ writes.
+- `tests/browser/os-sweep.mjs` — the browser sweep as ONE command:
+  discovers `os-*.mjs` (new acceptance files join automatically),
+  serial by design (0045 boot lock + contention), same artifacts under
+  `build/test-browser/`.
+- `tests/blockfs/run.js` converted to the engine (parallel, `--long`
+  preserved).
+- CLAUDE.md + tests/browser/README.md updated.
 
 ## Acceptance
 

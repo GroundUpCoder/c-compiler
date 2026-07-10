@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0061 Cairo closed)
+# Handoff — start of thread (updated 2026-07-10; 0081 test-infra closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,78 +7,70 @@
 
 ## Where the repo stands
 
-**0061 (Cairo) is CLOSED** — cairo 1.18.4 + pixman 0.42.2 vendored and
-`/bin/cairodemo` seeded (image **v43**), dev log
-`logs/2026-07-10/cairo-2d.md`. The load-bearing facts:
+**0081 (testing-infrastructure overhaul) is CLOSED** — dev log
+`logs/2026-07-10/test-infra-overhaul.md`, findings + measurements in
+`todos/done/0081-test-infra-overhaul.md`. The load-bearing facts:
 
-- **Two compiler fixes came out of it** (both test-first, both general):
-  the assignment setjmp forms (`if ((v = setjmp(buf)))` — value captured,
-  0→1 coerced per C11; `tests/unit/stdlib/setjmp_assign`) and C11 "other"
-  pp-tokens (`@ $ \`` lex as deferred tokens, diagnosed only if they
-  survive preprocessing; `tests/unit/conformance/pp_skipped_other_pptoken`).
-  The whole cairo+pixman vendor tree carries ONE one-line patch.
-- **Acceptance = the corpus as oracle**: `vendor/cairo/testsuite/` runs
-  14 UNMODIFIED upstream test programs against upstream reference PNGs —
-  **9 pixel-EXACT**, rest within worst channel diff 9/255 (AA jitter).
-  Growing the subset is cheap (one .c + one ref + one runner-table row).
-- Tests: `tests/run.py --types cairo` (smoke + selftest + upstream suite),
-  `tests/kernel/test_cairo_e2e.js` (in the kernel suite),
-  `tests/browser/os-cairo.mjs` (in the sweep, now **15** files).
-- cairodemo is the first RESIZABLE pixel-probed app: `wmctl resize` →
-  the VECTOR scene re-renders crisp; e2e probes anchors at 1.25x coords.
-- freetype's lib.json grew `ftmm.c`/`ftsynth.c` (cairo-ft needs them) —
-  term relinks, image rebaked.
+- **One engine, three runners**: `tests/lib/suite-runner.js` now powers
+  `tests/kernel/run.js` (parallel, default `-j4`), `tests/browser/
+  os-sweep.mjs` (the 15-file sweep as ONE serial command; discovers
+  `os-*.mjs` so new tests auto-join), and `tests/blockfs/run.js`.
+  All three: `--filter`, `--resume`, `--fail-fast`, `--timeout`, per-file
+  logs + an incrementally checkpointed `summary.json` under
+  `build/test-{kernel,browser,blockfs}/` — an interrupted run keeps its
+  partial verdict, and timeouts kill the whole process group (no more
+  orphaned boot.js/Chromium children). `tests/run-unit.js` (per-test
+  workers) is untouched and remains the fine-grained template.
+- **Measured**: kernel suite = 1354s serial, of which 16 boot.js e2e
+  files carry 97% — it's all image BAKE cost. At `-j4`: **393s, 40/40
+  green**, zero parallel flakes. Browser sweep with a fresh prebaked
+  `os/os-system.img` on disk: **~70s for 15/15** (the "1–2 min per
+  file" lore was the in-worker bake when no prebake exists).
+- **Verification debt from 0061 is PAID**: full kernel suite 40/40,
+  full 15-file sweep 15/15 (os-shell.mjs first), blockfs 15/15 — all
+  this session, on image v43.
 
-**Follow-ups created at the close** (in the queue): `0079` project-file
-diamond-dep dedup (duplicate-symbol link errors; cairo's lib.json omits
-its honest zlib dep until then), `0080` cairo PDF/SVG output surfaces
-(the subsetting machinery already compiles — near-free printing), and
-`0081` **testing-infrastructure overhaul** (user-requested, queued near
-the top: the kernel suite is a ~20-min serial monolith of full OS boots,
-the browser sweep is 15 manual serial Chromium runs, sync is sleep-based
-— survey holistically, then spawn concrete sub-items).
+**Follow-ups created at the close** (in the queue): `0082` prebaked-image
+fixture for boot.js e2e — the remaining wall-clock multiplier (~2x more),
+including input-freshness gating for BOTH prebake paths (a same-version
+blob baked before an uncommitted compiler.js edit must never be silently
+reused — today the browser path WOULD silently fetch one; run
+`node tools/mkimage.js` before trusting a sweep if compiler.js/os/ changed
+without a version bump); `0083` event-based waits (the ~205 counted
+`sleep N`/fixed-delay sites — the flake class; slotted before 0064 so WM
+sweep round 3 benefits); `0084` unified entry point + diff-aware suite
+selection.
 
-**Verification state at the 0061 close (be honest with the next round)**:
-unit suite 701 green; `run.py --types cairo` + `projects` green; targeted
-kernel tests green (cairo_e2e 21/21, wm_service, os_boot, term); 27 of 41
-kernel-suite files green across two partial runs (both runs died with
-session teardown — exactly the 0081 complaint; no failures seen). The
-FULL serial kernel suite and the full 15-file browser sweep did NOT
-complete this session: os-cairo.mjs passed, but os-shell.mjs was NOT
-re-run after its MENU_ENTRIES gained 'cairodemo'. **Owed at the next
-sweep round (0064) or first 0081 milestone: full kernel suite + 15/15
-sweep, os-shell.mjs first.**
-
-**Concurrent sessions were active this thread**: 0075 (sameboy) and
-0076–0078 (desktop polish) landed from other sessions while 0061 was in
-flight — both landings were clean, but keep checking `git status` before
-staging and stage ONLY your own files (the 758dd6e cautionary tale in
-`todos/done/0048`'s logs still applies).
-
-**Next in queue**: run `node todos/queue.js list` (0070 desktop-default-
-tab and 0072 openwith lead; 0062 zero-copy present is deferred).
+**Next in queue**: run `node todos/queue.js list` — 0082 leads, then
+0070 desktop-default-tab, 0072 openwith.
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
 sweep rounds so far, a MUST for WM sweep round 3 (`0064`): quake lock on
-click, ESC unlock, click re-lock, VT-switch release.
+click, ESC unlock, click re-lock, VT-switch release. (The automated sweep
+is now cheap enough to run casually; the human check still isn't in it.)
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **Cairo/pixman config is hand-written**: `vendor/cairo/config.h` +
-  `src/cairo-features.h` (single-threaded: CAIRO_NO_MUTEX + no-op-mutex
-  atomic fallback), pixman configured by two -D flags in lib.json. When
-  adding cairo features (0080), extend BOTH the features header and
-  lib.json, and record any patch in the README's patch table.
-- **cairo testsuite diff policy** (`testsuite/runner.c`): tol 3, hard cap
-  16, bounded outliers — refs come from a different pixman minor, so
-  don't tighten to exact; real errors are high-contrast and fail anyway.
+- **New-runner habits**: after an interrupted/failed suite run, look at
+  `build/test-*/summary.json` + the per-file `.log` before rerunning;
+  `--resume` skips prior passes. Don't crank `-j` past the default on a
+  loaded box — the e2e `sleep N` sync sites flake under contention
+  until 0083 lands.
+- **Sweep is serial by design** (0045 boot lock + contention); os-sweep
+  rejects `-j`. Keep it that way.
 - **Menu/desktop entry lists** image.json ↔ test_wm_service_e2e.js ↔
   os-shell.mjs must move together ('cairodemo' is in both lists now).
 - **Editing seeded sources or coreutils.json/bin.json/lib.json requires
   bumping `os/image.json` `version`** (now 43) — rebake with
   `node tools/mkimage.js`; boot.js `--fresh-system` forces headless.
   A LIBC change in compiler.js counts. A freetype/cairo lib.json change
-  counts too (term/cairodemo relink).
+  counts too (term/cairodemo relink). Until 0082's freshness gate, also
+  re-run mkimage so the browser sweep's prebake isn't stale.
+- **Cairo/pixman config is hand-written** (`vendor/cairo/config.h` +
+  `src/cairo-features.h`; pixman via two -D flags in lib.json). When
+  adding cairo features (0080), extend BOTH headers and lib.json, and
+  record patches in the README table. Testsuite diff policy: tol 3,
+  hard cap 16 — refs are from a different pixman minor; don't tighten.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. After `queue.js done`, check `git status` — the internal
   git-mv can stage a pre-edit blob (re-`git add` the done file).
@@ -89,12 +81,9 @@ click, ESC unlock, click re-lock, VT-switch release.
   with `--enable-unsafe-webgpu --enable-features=Vulkan`.
 - Browser pixel tests: tolerate the icon grid in "empty desktop" asserts;
   desktop teal == compositor teal; derive geometry from `__osScreen`;
-  keep the sweep serial; a SECOND page needs a fresh context/browser.
-- `tests/browser/os-*.mjs` are manual — run the full sweep serially after
-  touching os/, kernel.js, host.js SDL/webgpu/fd/audio/input/tty paths,
-  or anything that rebakes every binary. (Last FULL sweep: 2026-07-10 at
-  the 0074 close, 14/14 — 0061 ran only os-cairo.mjs; the 15-file sweep
-  is owed, see above.)
+  a SECOND page needs a fresh context/browser.
+- Concurrent sessions may be active in this repo: check `git status`
+  before staging and stage ONLY your own files.
 - The IDE's clangd flags os/*.c, os/win32/*.c and vendor sources — noise;
   headers are compiler.js built-ins or project-include-path resolved.
 - For the long tail (WRES v2, wmctl click one-arg=label, clipboard file,
@@ -108,13 +97,15 @@ click, ESC unlock, click re-lock, VT-switch release.
 
 posix_spawn-not-fork; kernel-owned fds; WM.md invariants; 0013–0069's
 recorded decisions (see todos/done/); DISK-IMAGE.md's settled layout;
-0061's calls: cairo-not-a-2D-invention, image-backend-only (0080 owns
-PDF/SVG), cairo-webgpu backend declined until a GPU-2D app measurably
-needs it, upstream-tests-as-acceptance.
+0061's calls (cairo-not-a-2D-invention, image-backend-only, upstream
+tests as acceptance); 0081's calls: file-granular parallelism via ONE
+shared engine (not a per-suite rewrite), kernel default `-j4`, sweep
+serial by design, run-unit.js's worker model untouched.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0070 desktop-default-tab, 0072 openwith, 0079 dep-dedup, 0080
-cairo PDF surfaces, 0064 WM sweep round 3 (the pointer-lock human check
-is owed), or something else."
+to tackle: 0082 boot-fixture (continues the test-infra work, ~2x more
+wall-clock), 0070 desktop-default-tab, 0072 openwith, 0079 dep-dedup,
+0080 cairo PDF surfaces, or 0064 WM sweep round 3 (the pointer-lock human
+check is owed)."
