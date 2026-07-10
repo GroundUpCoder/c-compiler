@@ -1,5 +1,5 @@
 {
-  "version": 43,
+  "version": 44,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -26,7 +26,14 @@
       "/usr/bin/wm": {
         "c": "wm.c",
         "hdrs": [
-          "wm_proto.h"
+          "wm_proto.h",
+          "openwith.h"
+        ]
+      },
+      "/usr/bin/open": {
+        "c": "open.c",
+        "hdrs": [
+          "openwith.h"
         ]
       },
       "/usr/bin/wmctl": {
@@ -143,6 +150,9 @@
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"
+      },
+      "/usr/share/openwith": {
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/gameboy\ngbc\t/bin/gameboy\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

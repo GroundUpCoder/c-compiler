@@ -206,8 +206,10 @@ const script = [
   'wmctl list',
   // ---- unified activate (todos/0066): the desktop and the Start menu
   // share ONE launch mechanism — a #!/bin/sh launcher script spawns
-  // (shebang exec, todos/0065), a plain text file opens in `term vi`,
-  // symlinks keep running their target (the desk3 leg above). ----
+  // (shebang exec, todos/0065), a plain text file opens through the
+  // openwith associations (todos/0072 — default.gui is notepad in the
+  // baked store), symlinks keep running their target (the desk3 leg
+  // above). ----
   "printf '#!/bin/sh\\nwinbox\\n' > /root/Desktop/alauncher",
   "printf 'plain notes, not a program\\n' > /root/Desktop/notes.txt",
   'sleep 2.5',                                   // desk_load re-read tick (~1s)
@@ -218,7 +220,7 @@ const script = [
   'echo ==act2',
   'wmctl list',
   `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'notes.txt')}`,  // the notes.txt icon
-  'sleep 4',                                     // term loads freetype
+  'sleep 5',                                     // notepad loads freetype + .res
   'echo ==act3',
   'wmctl list',
   // The seeded snake entry became a real launcher script (image v36).
@@ -433,18 +435,21 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
 
 // ---- unified activate (todos/0066): both launch paths are activate() —
 // runnable regular files (a #!/bin/sh launcher) spawn directly, plain
-// files open in the viewer. Window-count deltas cross-check the peek: if
-// is_runnable() misfired, the launcher would open in vi (term, not
-// winbox) and notes.txt would fail to spawn (no term).
+// files open through the openwith associations (todos/0072: default.gui
+// -> notepad). Window-count deltas cross-check the peek: if
+// ow_is_runnable() misfired, the launcher would open in notepad (not
+// winbox) and notes.txt would fail to spawn (no notepad).
 {
   const count = (sec, title) =>
     sec.split('\n').filter(l => l.endsWith('\t' + title)).length;
+  const countIn = (sec, part) =>
+    sec.split('\n').filter(l => l.includes(part)).length;
   check('desktop dblclick on a #!/bin/sh launcher runs it (winbox +1)',
     count(a2, 'winbox') === count(a1, 'winbox') + 1,
     JSON.stringify([count(a1, 'winbox'), count(a2, 'winbox')]));
-  check('desktop dblclick on plain text still opens the viewer (term +1)',
-    count(a3, 'term') === count(a2, 'term') + 1,
-    JSON.stringify([count(a2, 'term'), count(a3, 'term')]));
+  check('desktop dblclick on plain text opens the GUI default (notepad +1)',
+    countIn(a3, 'Notepad') === countIn(a2, 'Notepad') + 1,
+    JSON.stringify([countIn(a2, 'Notepad'), countIn(a3, 'Notepad')]));
   check('menu launcher script takes the same activate path (winbox +1)',
     count(a4, 'winbox') === count(a2, 'winbox') + 1,
     JSON.stringify([count(a2, 'winbox'), count(a4, 'winbox')]));

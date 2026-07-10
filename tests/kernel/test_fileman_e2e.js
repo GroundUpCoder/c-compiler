@@ -7,7 +7,9 @@
 //     selected directory; the title tracks the cwd
 //   - activation (the 0066 activate() semantics, wm.c's copy): a
 //     runnable file (#! script) spawns with its own pgroup; a plain
-//     file opens in `term vi`
+//     file opens through the openwith associations (todos/0072 —
+//     default.gui is notepad in the baked store; the picker itself is
+//     test_openwith_e2e.js's)
 //   - drag-resize relayout: wmctl resize reflows the strip + LISTBOX
 //
 // Row selection is KEYBOARD-driven (click focuses the listbox, HOME
@@ -98,7 +100,7 @@ const out = boot([
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
-  // activate a plain file: plain.txt (row 6) -> term vi
+  // activate a plain file: plain.txt (row 6) -> the GUI default (notepad)
   sel(6),
   'wmctl click Open',
   'sleep 5',
@@ -119,9 +121,10 @@ check('fileman window titled with the cwd',
   /class=FileMan [^\n]*text='File Manager - \/root'/.test(tree1), tree1.slice(0, 300));
 check('listing is dirs-first with / markers',
   /text='Desktop\/\\nid1\/\\nroms\/\\ndoom1.wad/.test(tree1), tree1);
-check('path EDIT + Go/Up/Open buttons present',
+check('path EDIT + Go/Up/Open/With buttons present',
   /class=EDIT id=100/.test(tree1) && /text='Go'/.test(tree1) &&
-  /text='Up'/.test(tree1) && /text='Open'/.test(tree1), tree1);
+  /text='Up'/.test(tree1) && /text='Open'/.test(tree1) &&
+  /text='With'/.test(tree1), tree1);
 
 check('settext + Go navigates to /usr/share',
   /fonts\//.test(section(out, 'l2')) && /os-release/.test(section(out, 'l2')),
@@ -140,8 +143,8 @@ check('Open on a directory navigates into it',
 check('Open on a #! script spawns it (winbox up)',
   section(out, 'list3').split('\n').some(l => l.endsWith('\twinbox')),
   section(out, 'list3'));
-check('Open on a plain file opens term vi',
-  section(out, 'list4').split('\n').some(l => l.endsWith('\tterm')),
+check('Open on a plain file opens the GUI default (notepad, todos/0072)',
+  section(out, 'list4').split('\n').some(l => l.includes('Notepad')),
   section(out, 'list4'));
 
 const tree2 = section(out, 'tree2');

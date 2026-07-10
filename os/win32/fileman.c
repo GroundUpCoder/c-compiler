@@ -1,12 +1,17 @@
 /* fileman.c — the file manager (todos/0048, desktop apps wave 1).
  *
- * A Win32 veneer app over plain POSIX dir calls: a path EDIT + Go/Up/Open
- * buttons on top, a LISTBOX of the directory below. Double-click (or the
- * Open button) activates the selection with wm.c's activate() semantics
- * (todos/0066, keep in step): directories navigate, a symlink or runnable
- * regular file (`\0asm` wasm / `#!` script — the kernel spawn dispatch)
- * spawns with its own pgroup + the desktop env, anything else opens in
- * `term vi`. Children are reaped WNOHANG off the idle tick (WM_TIMER).
+ * A Win32 veneer app over plain POSIX dir calls: a path EDIT + Go/Up/
+ * Open/With buttons on top, a LISTBOX of the directory below.
+ * Double-click (or the Open button) activates the selection with wm.c's
+ * activate() semantics (todos/0066, keep in step): directories navigate,
+ * a runnable file (`\0asm` wasm / `#!` script — the kernel spawn
+ * dispatch, through symlinks) spawns with its own pgroup + the desktop
+ * env, anything else opens through the openwith associations
+ * (os/openwith.h, todos/0072 — extension map, then default.gui). The
+ * "With" button is the picker: a small window with the command EDIT
+ * (prefilled with the effective association) + an "Always" checkbox
+ * that persists it via ow_set. Children are reaped WNOHANG off the idle
+ * tick (WM_TIMER).
  *
  * Agent-drivable by construction (OS.md pillar): `wmctl settext EDIT:0
  * /some/dir` + `wmctl click Go` navigates; the LISTBOX text is its items
@@ -23,19 +28,29 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "../openwith.h"
 
 #define ID_PATH 100
 #define ID_GO   101
 #define ID_UP   102
 #define ID_OPEN 103
 #define ID_LIST 104
+#define ID_WITH 105
+
+#define ID_OW_CMD    200             /* the picker window's children */
+#define ID_OW_ALWAYS 201
+#define ID_OW_OK     202
+#define ID_OW_CANCEL 203
 
 #define TOP_H  26                    /* the path/button strip */
 #define BTN_W  46
 
-static HWND g_win, g_path, g_go, g_up, g_open, g_list;
+static HWND g_win, g_path, g_go, g_up, g_open, g_with, g_list;
 static char g_cwd[512] = "/root";
 static int g_nkids;
+
+static HWND g_ow_win;                /* the "Open with" picker (one at a time) */
+static char g_ow_file[800];          /* the file it targets */
 
 /* ---- the 0066 activate() shape (wm.c is the reference copy) ---- */
 
@@ -55,15 +70,12 @@ static void reap_kids(void) {
     while (g_nkids > 0 && waitpid(-1, &st, WNOHANG) > 0) g_nkids--;
 }
 
-static int is_runnable(const char *path) {       /* kernel _spawnBytes dispatch */
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    unsigned char b[4];
-    size_t n = fread(b, 1, 4, f);
-    fclose(f);
-    if (n >= 4 && b[0] == 0 && b[1] == 'a' && b[2] == 's' && b[3] == 'm') return 1;
-    if (n >= 2 && b[0] == '#' && b[1] == '!') return 1;
-    return 0;
+/* Open `path` with a resolved association command (`cmd path`). */
+static void spawn_assoc(const char *cmd, const char *path) {
+    char buf[512], prog[300];
+    char *argv[10];
+    if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
+        spawn_path(prog, argv);
 }
 
 /* ---- listing ---- */
@@ -130,38 +142,114 @@ static void go_up(void) {
     refill();
 }
 
-static void open_selected(void) {
+/* The selected row's full path. Returns 0 with no selection; *isdir tells
+ * a directory (the trailing-'/' marker) from a file. */
+static int sel_path(char *full, size_t sz, int *isdir) {
     int sel = (int)SendMessage(g_list, LB_GETCURSEL, 0, 0);
-    if (sel < 0) return;
+    if (sel < 0) return 0;
     char row[256];
-    if (SendMessage(g_list, LB_GETTEXT, (WPARAM)sel, (LPARAM)row) == LB_ERR) return;
+    if (SendMessage(g_list, LB_GETTEXT, (WPARAM)sel, (LPARAM)row) == LB_ERR) return 0;
     size_t len = strlen(row);
-    int isdir = len && row[len - 1] == '/';
-    if (isdir) row[len - 1] = 0;
+    *isdir = len && row[len - 1] == '/';
+    if (*isdir) row[len - 1] = 0;
+    if (!strcmp(g_cwd, "/")) snprintf(full, sz, "/%s", row);
+    else snprintf(full, sz, "%s/%s", g_cwd, row);
+    return 1;
+}
+
+static void open_selected(void) {
     char full[800];
-    if (!strcmp(g_cwd, "/")) snprintf(full, sizeof full, "/%s", row);
-    else snprintf(full, sizeof full, "%s/%s", g_cwd, row);
+    int isdir;
+    if (!sel_path(full, sizeof full, &isdir)) return;
     if (isdir) { navigate(full); return; }
-    /* activate() (0066): symlink/runnable spawns, anything else -> vi */
+    /* activate() (0066/0072): runnable spawns, anything else associates */
     struct stat st;
-    if (lstat(full, &st) == 0 &&
-        (S_ISLNK(st.st_mode) || (S_ISREG(st.st_mode) && is_runnable(full)))) {
-        char *argv[2] = { row, 0 };
+    if (stat(full, &st) == 0 && S_ISREG(st.st_mode) && ow_is_runnable(full)) {
+        const char *name = strrchr(full, '/');
+        char *argv[2] = { (char *)(name ? name + 1 : full), 0 };
         spawn_path(full, argv);
         return;
     }
-    char *argv[4] = { "term", "vi", full, 0 };
-    spawn_path("/bin/term", argv);
+    char cmd[OW_CMD_MAX];
+    ow_resolve(full, 1 /* GUI context */, cmd, sizeof cmd);
+    spawn_assoc(cmd, full);
+}
+
+/* ---- the "Open with" picker (todos/0072) ----
+ * A small second top-level window: the command EDIT prefilled with the
+ * file's effective association, an "Always" checkbox (BS_AUTOCHECKBOX)
+ * that persists the pick via ow_set — under the file's extension key, or
+ * default.gui for extension-less files — and OK/Cancel. One picker at a
+ * time; OK spawns `command file` the same way Open does. */
+
+static LRESULT CALLBACK ow_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE: {
+        char key[32], cmd[OW_CMD_MAX], label[64];
+        int has_ext = ow_key_for(g_ow_file, key, sizeof key);
+        ow_resolve(g_ow_file, 1, cmd, sizeof cmd);
+        if (has_ext) snprintf(label, sizeof label, "Always for .%s", key);
+        else snprintf(label, sizeof label, "Always (GUI default)");
+        const char *base = strrchr(g_ow_file, '/');
+        CreateWindowEx(0, "STATIC", base ? base + 1 : g_ow_file,
+                       WS_CHILD | WS_VISIBLE, 8, 6, 304, 16, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "EDIT", cmd, WS_CHILD | WS_VISIBLE,
+                       8, 26, 304, 20, h, (HMENU)ID_OW_CMD, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", label, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                       8, 52, 200, 18, h, (HMENU)ID_OW_ALWAYS, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE,
+                       160, 76, 72, 22, h, (HMENU)ID_OW_OK, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE,
+                       240, 76, 72, 22, h, (HMENU)ID_OW_CANCEL, NULL, NULL);
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp) == ID_OW_OK) {
+            char cmd[OW_CMD_MAX];
+            GetWindowText(GetDlgItem(h, ID_OW_CMD), cmd, sizeof cmd);
+            if (cmd[0]) {
+                if (IsDlgButtonChecked(h, ID_OW_ALWAYS)) {
+                    char key[32];
+                    ow_set(ow_key_for(g_ow_file, key, sizeof key) ? key : "default.gui", cmd);
+                }
+                spawn_assoc(cmd, g_ow_file);
+            }
+            DestroyWindow(h);
+            return 0;
+        }
+        if (LOWORD(wp) == ID_OW_CANCEL) { DestroyWindow(h); return 0; }
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(h);
+        return 0;
+    case WM_DESTROY:
+        if (h == g_ow_win) g_ow_win = NULL;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
+static void with_selected(void) {
+    char full[800];
+    int isdir;
+    if (!sel_path(full, sizeof full, &isdir) || isdir) return;
+    if (g_ow_win) DestroyWindow(g_ow_win);
+    snprintf(g_ow_file, sizeof g_ow_file, "%s", full);
+    g_ow_win = CreateWindowEx(0, "OpenWith", "Open with",
+                              WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                              CW_USEDEFAULT, CW_USEDEFAULT, 320, 106,
+                              NULL, NULL, NULL, NULL);
 }
 
 static void relayout(HWND h) {
     RECT r;
     GetClientRect(h, &r);
     int w = r.right, hgt = r.bottom;
-    MoveWindow(g_path, 4, 3, w - 3 * BTN_W - 20, TOP_H - 6, TRUE);
-    MoveWindow(g_go, w - 3 * BTN_W - 12, 3, BTN_W, TOP_H - 6, TRUE);
-    MoveWindow(g_up, w - 2 * BTN_W - 8, 3, BTN_W, TOP_H - 6, TRUE);
-    MoveWindow(g_open, w - BTN_W - 4, 3, BTN_W, TOP_H - 6, TRUE);
+    MoveWindow(g_path, 4, 3, w - 4 * BTN_W - 24, TOP_H - 6, TRUE);
+    MoveWindow(g_go, w - 4 * BTN_W - 16, 3, BTN_W, TOP_H - 6, TRUE);
+    MoveWindow(g_up, w - 3 * BTN_W - 12, 3, BTN_W, TOP_H - 6, TRUE);
+    MoveWindow(g_open, w - 2 * BTN_W - 8, 3, BTN_W, TOP_H - 6, TRUE);
+    MoveWindow(g_with, w - BTN_W - 4, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_list, 4, TOP_H, w - 8, hgt - TOP_H - 4, TRUE);
 }
 
@@ -176,6 +264,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                               0, 0, 10, 10, h, (HMENU)ID_UP, NULL, NULL);
         g_open = CreateWindowEx(0, "BUTTON", "Open", WS_CHILD | WS_VISIBLE,
                                 0, 0, 10, 10, h, (HMENU)ID_OPEN, NULL, NULL);
+        g_with = CreateWindowEx(0, "BUTTON", "With", WS_CHILD | WS_VISIBLE,
+                                0, 0, 10, 10, h, (HMENU)ID_WITH, NULL, NULL);
         g_list = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY,
                                 0, 0, 10, 10, h, (HMENU)ID_LIST, NULL, NULL);
         return 0;
@@ -195,6 +285,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case ID_OPEN:
             open_selected();
+            return 0;
+        case ID_WITH:
+            with_selected();
             return 0;
         case ID_LIST:
             if (HIWORD(wp) == LBN_DBLCLK) open_selected();
@@ -219,6 +312,9 @@ int main(int argc, char **argv) {
     wc.lpfnWndProc = wndproc;
     wc.lpszClassName = "FileMan";
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    RegisterClass(&wc);
+    wc.lpfnWndProc = ow_wndproc;
+    wc.lpszClassName = "OpenWith";
     RegisterClass(&wc);
     g_win = CreateWindowEx(0, "FileMan", "File Manager",
                            WS_OVERLAPPEDWINDOW | WS_THICKFRAME | WS_VISIBLE,

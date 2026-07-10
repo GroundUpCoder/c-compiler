@@ -32,14 +32,14 @@
  * layer now, so they dismiss the Start menu.
  *
  * Launching is ONE mechanism (activate(), todos/0066), shared by the menu
- * and the desktop (and any future file browser): a symlink spawns its
- * target (the fs resolves it); a regular file the kernel can exec — wasm
- * magic `\0asm` or a `#!` script (todos/0065), told apart by peeking the
- * first bytes — spawns directly; anything else opens in its type's
- * viewer (`term vi` today). Launcher entries are ordinary executable
- * scripts (`#!/bin/sh` + a command line), not a private format — the old
- * first-line-argv menu convention is gone (its seeded user, menu/snake,
- * became a real script in image.json v36).
+ * and the desktop (and fileman): a file the kernel can exec — wasm magic
+ * `\0asm` or a `#!` script (todos/0065), told apart by peeking the first
+ * bytes, through symlinks — spawns directly; anything else opens through
+ * the openwith associations (openwith.h, todos/0072): extension map first,
+ * then the default.gui program (notepad in the baked store). Launcher
+ * entries are ordinary executable scripts (`#!/bin/sh` + a command line),
+ * not a private format — the old first-line-argv menu convention is gone
+ * (its seeded user, menu/snake, became a real script in image.json v36).
  *
  * The kernel keeps its chrome policy (drag, close box, click-to-focus) as
  * the WM-crashed fallback — killing this process leaves the system usable,
@@ -62,6 +62,7 @@
 #include <sys/wait.h>
 #include <sys/select.h>
 #include "wm_proto.h"
+#include "openwith.h"
 
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
@@ -338,37 +339,27 @@ static void reap_kids(void) {
     while (nkids > 0 && waitpid(-1, &st, WNOHANG) > 0) nkids--;
 }
 
-/* "Runnable" = the kernel can exec it (todos/0066): a wasm binary
- * (`\0asm`) or a `#!` script (shebang exec, todos/0065). Peek the first
- * bytes — same dispatch the kernel spawn path does. */
-static int is_runnable(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    unsigned char b[4];
-    size_t n = fread(b, 1, 4, f);
-    fclose(f);
-    if (n >= 4 && b[0] == 0 && b[1] == 'a' && b[2] == 's' && b[3] == 'm') return 1;
-    if (n >= 2 && b[0] == '#' && b[1] == '!') return 1;
-    return 0;
-}
-
 /* One "activate a path" (todos/0066), shared by the Start menu and the
- * desktop grid (and any future file browser — 0048): a symlink spawns its
- * target via the link path (the fs resolves it); a runnable regular file
- * spawns directly (launchers are ordinary #!/bin/sh scripts); anything
- * else opens in its type's default viewer — `term vi` for now. */
+ * desktop grid (fileman keeps its copy in step): anything runnable after
+ * symlink resolution — ow_is_runnable peeks through links, so a menu link
+ * to a binary still spawns via the link path — runs directly (launchers
+ * are ordinary #!/bin/sh scripts); anything else opens through the
+ * openwith associations in the GUI context (todos/0072). */
 static void activate(const char *path) {
     struct stat st;
-    if (lstat(path, &st) != 0) return;
-    if (S_ISLNK(st.st_mode) || (S_ISREG(st.st_mode) && is_runnable(path))) {
+    if (stat(path, &st) != 0) return;            /* gone, or a dangling link */
+    if (S_ISREG(st.st_mode) && ow_is_runnable(path)) {
         const char *name = strrchr(path, '/');
         name = name ? name + 1 : path;
         char *argv[2] = { (char *)name, 0 };
         spawn_path(path, argv);
         return;
     }
-    char *argv[4] = { "term", "vi", (char *)path, 0 };
-    spawn_path("/bin/term", argv);
+    char cmd[OW_CMD_MAX], buf[512], prog[300];
+    char *argv[10];
+    ow_resolve(path, 1 /* GUI context */, cmd, sizeof cmd);
+    if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
+        spawn_path(prog, argv);
 }
 
 static int entcmp(const void *a, const void *b) {
@@ -419,7 +410,7 @@ static void menu_dismiss(void) {
 
 /* Selection: the shared activate() (todos/0066) — a menu entry is a
  * symlink or an executable launcher script; a stray non-runnable file
- * just opens in the viewer like anywhere else. */
+ * just opens through its association like anywhere else. */
 static void menu_launch(int idx) {
     if (idx < 0 || idx >= menu_n) return;
     char path[300];
@@ -513,8 +504,8 @@ static int desk_hit(int x, int y) {
 }
 
 /* Double-click: the same activate() the Start menu uses (todos/0066) —
- * symlinks and runnable files (wasm, #! launchers) spawn, anything else
- * opens in the viewer. */
+ * runnable files (wasm, #! launchers, links to them) spawn, anything else
+ * opens through the openwith associations (todos/0072). */
 static void desk_launch(int idx) {
     if (idx < 0 || idx >= desk_n) return;
     char path[300];

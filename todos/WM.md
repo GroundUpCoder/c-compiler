@@ -484,7 +484,9 @@ background wherever it sits) + an icon grid from
 `readdir("/root/Desktop")` (seeded: symlinks to doom/quake/gameboy/
 term). Double-click (SDL event timestamps, the 0025 threading):
 symlink → spawn its target; other regular file → `term vi <file>`
-*(since todos/0066: the shared `activate()` — runnable files spawn too)*.
+*(since todos/0066: the shared `activate()` — runnable files spawn too;
+since todos/0072 non-runnables open through the openwith associations —
+extension map, then `default.gui`, notepad in the baked store)*.
 Recreate on EV_SCREEN like the taskbar; re-read the folder on a coarse
 frame-tick timer (~1s — one readdir RPC/s, no watch API exists or is
 needed). Minimize already reveals it; nothing kernel-side changes.

@@ -291,11 +291,20 @@ dbl-click launches — own timestamp check, NOT e.button.clicks which
 accumulates across windows; `wmctl dblclick` injects both clicks on
 one connection), all in the one wm process dispatched by windowID;
 menu + desktop launch through ONE `activate(path)` (todos/0066):
-symlink → spawn its target; regular file that is runnable — `\0asm`
-or `#!`, told by peeking the first bytes — spawn directly (launchers
-are ordinary `#!/bin/sh` scripts; the old first-line-argv menu format
-is gone, menu/snake became a real script); anything else opens in
-`term vi`; the
+a file that is runnable after symlink resolution — `\0asm` or `#!`,
+told by peeking the first bytes — spawns directly (launchers are
+ordinary `#!/bin/sh` scripts; the old first-line-argv menu format
+is gone, menu/snake became a real script); anything else opens
+through the openwith associations (todos/0072, `os/openwith.h` —
+ONE header-only resolver shared by wm.c, fileman and `/bin/open`):
+store = first existing of `~/.config/openwith`, `/etc/openwith`,
+`/usr/share/openwith` (whole-file, no merge; `KEY<ws>COMMAND` lines,
+KEY = lowercase extension or `default.gui`/`default.term`; path
+appended as one arg; bare words resolve via /usr/local/bin:/bin),
+baked seed: gb/gbc → `/bin/gameboy`, `default.gui → /bin/notepad`,
+`default.term → vi`; `open --set KEY CMD` and fileman's "With"
+picker ("Always" checkbox) write `~/.config/openwith` with the
+effective table carried forward; the
 kernel title bar has [min][max][close] boxes (min = wmMinimize direct,
 max = EV_TITLE_ACTIVATE, each box only if it fits the title — 32px
 windows stay draggable); the taskbar has a right-aligned HH.MM clock,
@@ -327,7 +336,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v43**.
+Image version is **v44**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
