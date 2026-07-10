@@ -1,6 +1,22 @@
 # 0061 — Cairo: the modern C 2D vector API (adopt, don't invent)
 
-- **Status**: open
+- **Status**: done (2026-07-10) — cairo 1.18.4 + pixman 0.42.2 vendored
+  (ONE one-line patch; the setjmp-value idiom and `#if 0` perl code became
+  COMPILER fixes: assignment setjmp forms + C11 "other" pp-tokens, both
+  test-first). `/bin/cairodemo` seeded (image v43, resizable, vector
+  re-render on resize); acceptance = 14 UNMODIFIED upstream test-suite
+  programs vs upstream reference PNGs, 9 pixel-EXACT. Tests:
+  `tests/run.py --types cairo`, `tests/kernel/test_cairo_e2e.js`,
+  `tests/browser/os-cairo.mjs`. Dev log `logs/2026-07-10/cairo-2d.md`.
+  Follow-ups: `0079` (project dep dedup — the diamond-dep link errors
+  found here), `0080` (PDF/SVG output surfaces — the subsetting machinery
+  already compiles); the close also queued `0081` (test-infra overhaul —
+  the ~20-min suite died twice with session teardown during this landing).
+  Residue owned by 0064/0081: the full kernel suite + 15-file browser
+  sweep did not complete this session (27/41 files green, no failures
+  seen; os-cairo.mjs green; os-shell.mjs re-run owed after its
+  MENU_ENTRIES change). The optional cairo-webgpu backend stays declined
+  per this item's own plan (CPU-first grain; revisit only on demand).
 - **Design**: `todos/WIN32.md` (windowing-vs-drawing split); this item
 
 ## Goal
