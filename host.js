@@ -6864,14 +6864,28 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     // requestAnimationFrame as a global but THROW NotSupportedError on call
     // (Chromium). Latch to a setTimeout pacer on the first failure instead
     // of dying — frame pacing degrades gracefully, the app keeps running.
+    // The fallback is deadline-based: a fixed setTimeout(16) after each
+    // callback makes the tick period 16ms + callback time, which silently
+    // halves the presented frame rate of any app whose frame work is
+    // non-trivial (the sameboy-GBC every-other-frame symptom).
     requestAnimationFrame: typeof requestAnimationFrame === 'function'
       ? (function () {
           let rafWorks = true;
+          const FRAME_MS = 1000 / 60;
+          let nextDue = 0;
           return function (cb) {
             if (rafWorks) {
               try { requestAnimationFrame(cb); return; } catch (e) { rafWorks = false; }
             }
-            setTimeout(cb, 16);
+            const now = Date.now();
+            if (nextDue <= now) {
+              nextDue = now + FRAME_MS;
+              setTimeout(cb, 0);
+            } else {
+              const delay = nextDue - now;
+              nextDue += FRAME_MS;
+              setTimeout(cb, delay);
+            }
           };
         })()
       : null,
@@ -10248,6 +10262,8 @@ async function runModule({
   if (sdl && sdl.getAnimationFrameFunc()) {
     const table = ctx.getIndirectFunctionTable();
     const raf = sdl.requestAnimationFrame;
+    const FRAME_MS = 1000 / 60;
+    let nextDue = 0;
     await new Promise(function (resolve) {
       function scheduleFrame() {
         const doFrame = async function () {
@@ -10284,7 +10300,22 @@ async function runModule({
         if (raf) {
           raf(doFrame);
         } else {
-          setTimeout(doFrame, 16);
+          // Deadline-based pacer: a fixed setTimeout(16) AFTER the callback
+          // makes the tick period 16ms + callback time — an app whose frame
+          // work takes ~10ms then ticks at ~26ms while its own catch-up
+          // logic keeps game-time real, i.e. it silently presents only
+          // every other frame. Aim at an absolute 60Hz schedule instead;
+          // when the callback overruns a whole period, fire immediately
+          // and restart the cadence from now.
+          const now = Date.now();
+          if (nextDue <= now) {
+            nextDue = now + FRAME_MS;
+            setTimeout(doFrame, 0);
+          } else {
+            const delay = nextDue - now;
+            nextDue += FRAME_MS;
+            setTimeout(doFrame, delay);
+          }
         }
       }
       scheduleFrame();
