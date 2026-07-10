@@ -17,6 +17,14 @@
 const path = require('path');
 const os = require('os');
 const { runSuite, parseSuiteArgs, usage } = require('../lib/suite-runner.js');
+const { ensurePrebakedImage } = require('../lib/image-fixture.js');
+
+// Rows tagged IMG spawn os/boot.js and materialize their per-test image by
+// copying the prebaked os/os-system.img fixture (todos/0082) — the runner
+// bakes that fixture ONCE up front (below) when it's missing/stale, instead
+// of every file re-baking an identical blob. test_os_boot.js is deliberately
+// untagged: it is the bake-path test and really bakes (--no-fixture).
+const IMG = { image: true };
 
 const tests = [
   ['test_kernel.js'],       // process-table semantics over the real SAB protocol
@@ -36,29 +44,29 @@ const tests = [
   ['test_sockets.js'],      // 0008: AF_UNIX OFD semantics over the SAB protocol (no wasm)
   ['test_sockets_e2e.js'],  // 0008: real C client/server — accept/connect/send/recv, poll
   ['test_jobctl_e2e.js'],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
-  ['test_jobctl_tty_e2e.js'], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
+  ['test_jobctl_tty_e2e.js', IMG], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
   ['test_os_boot.js'],      // 0004: headless OS boot — seed, protoshell, cc, persistence
-  ['test_vi_e2e.js'],       // 0011: busybox vi through the real tty — raw mode, edit sessions
+  ['test_vi_e2e.js', IMG],       // 0011: busybox vi through the real tty — raw mode, edit sessions
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
   ['test_wm.js'],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
   ['test_wm_e2e.js'],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
   ['test_audio.js'],        // 0017: the kernel mixer — exact-value mixes, resample, lifecycle (no wasm)
   ['test_audio_e2e.js'],    // 0017: real C SDL audio streams — AUDIO_OPEN handshake, mix, SIGKILL drain
   ['test_wm_policy.js'],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
-  ['test_wm_service_e2e.js'], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
-  ['test_os_apps_e2e.js'],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
-  ['test_cairo_e2e.js'],    // 0061: cairo image backend -> shm — in-OS selftest (gradients/AA/cairo-ft anchors), windowed scene via wmctl shot, theme repaint, vector re-render on resize
-  ['test_gdi32_e2e.js'],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
-  ['test_user32_e2e.js'],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path
-  ['test_kernel32_e2e.js'], // 0059: win32 kernel32/advapi32/wide-CRT — in-OS selftest, POSIX-twin identity, registry persistence across boots
+  ['test_wm_service_e2e.js', IMG], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
+  ['test_os_apps_e2e.js', IMG],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
+  ['test_cairo_e2e.js', IMG],    // 0061: cairo image backend -> shm — in-OS selftest (gradients/AA/cairo-ft anchors), windowed scene via wmctl shot, theme repaint, vector re-render on resize
+  ['test_gdi32_e2e.js', IMG],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
+  ['test_user32_e2e.js', IMG],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path
+  ['test_kernel32_e2e.js', IMG], // 0059: win32 kernel32/advapi32/wide-CRT — in-OS selftest, POSIX-twin identity, registry persistence across boots
   ['test_win32_ports.js'],  // 0060: port corpus compile-check — controls still link clean, PORTS.md (the 0059+ backlog) current
-  ['test_winmine_e2e.js'],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
-  ['test_calc_e2e.js'],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
-  ['test_notepad_e2e.js'],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
-  ['test_fileman_e2e.js'],  // 0048: file manager — dirs-first LISTBOX listing, Go/Up/Open navigation, 0066 activate() launch semantics, resize reflow
-  ['test_ctlpanel_e2e.js'], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
-  ['test_term_e2e.js'],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
-  ['test_gpubox_dawn_e2e.js'], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
+  ['test_winmine_e2e.js', IMG],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
+  ['test_calc_e2e.js', IMG],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
+  ['test_notepad_e2e.js', IMG],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
+  ['test_fileman_e2e.js', IMG],  // 0048: file manager — dirs-first LISTBOX listing, Go/Up/Open navigation, 0066 activate() launch semantics, resize reflow
+  ['test_ctlpanel_e2e.js', IMG], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
+  ['test_term_e2e.js', IMG],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
+  ['test_gpubox_dawn_e2e.js', IMG], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
 ];
 
 const defaults = {
@@ -71,7 +79,15 @@ const defaults = {
 const opts = parseSuiteArgs(process.argv.slice(2), defaults);
 if (opts.help) { process.stdout.write(usage('tests/kernel/run.js', defaults)); process.exit(0); }
 
-runSuite(tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object'))), {
+const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.filter(x => typeof x === 'object')));
+
+// 0082 pre-step: only when the (filtered) run actually contains fixture
+// consumers — a --filter=test_tlsf-style quick run never pays a bake here.
+if (!opts.list && entries.some(e => e.image && (!opts.filter || e.file.includes(opts.filter)))) {
+  ensurePrebakedImage();
+}
+
+runSuite(entries, {
   name: 'kernel suite',
   dir: __dirname,
   artifactDir: path.resolve(__dirname, '../../build/test-kernel'),

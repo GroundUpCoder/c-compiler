@@ -20,6 +20,9 @@
 //     volume: /etc /var/local/bin /tmp /root /run + /bin -> /usr/bin.
 //   bakedVersion(BLOCK_FS, store)    — a blob's VERSION_ID (or -1): the
 //     staleness gate for "upgrade = swap the blob".
+//   newestBakeInput(...)             — the 0082 input-freshness scan: newest
+//     mtime across everything that can change the blob's bytes (toolchain,
+//     os/ tree, the manifest's vendor project/bin closure). Node-only.
 
 'use strict';
 
@@ -396,6 +399,86 @@ function bakedVersion(BLOCK_FS, store) {
   }
 }
 
+/* ---- bake-input freshness (todos/0082) ----
+ *
+ * newestBakeInput(fsMod, pathMod, rootDir, manifest) -> { mtimeMs, path }
+ * The newest mtime across everything that can change the system blob's
+ * bytes: compiler.js + host.js (the toolchain), the os/ tree (manifest,
+ * bake logic, every seeded source/header), and the manifest system
+ * section's closure — each `project` bin.json expanded through its deps
+ * with the whole project directory walked (dir-granular on purpose:
+ * quoted includes resolve beside their sources), plus each `bin` blob.
+ * Node-only (statSync), like NodeFileStore.
+ *
+ * A blob or fixture whose mtime is older than this is STALE no matter
+ * what version it carries — the 0082 gate: a same-version blob baked
+ * before an uncommitted compiler.js edit must never be silently reused.
+ * Bakers stamp the blob's mtime with the bake START time (an input
+ * edited mid-bake may or may not be reflected, so it must read newer).
+ *
+ * Deliberately excluded (can't change blob bytes): *.img (the images
+ * themselves), *.md, dotfiles, and os/'s runtime-only files (os.html,
+ * boot.js, the workers, the compositor). Directory granularity
+ * over-invalidates — "when in doubt, re-bake" is the cheap direction. */
+var BAKE_INPUT_SKIP = {
+  'os.html': 1, 'boot.js': 1, 'kernel-worker.js': 1,
+  'process-worker.js': 1, 'compositor.js': 1,
+};
+function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
+  var newest = { mtimeMs: 0, path: null };
+  var seenDirs = {}, seenProjects = {};
+  function statFile(p) {
+    var st;
+    try { st = fsMod.statSync(p); } catch (e) { return; }
+    if (st.isFile() && st.mtimeMs > newest.mtimeMs) {
+      newest.mtimeMs = st.mtimeMs;
+      newest.path = p;
+    }
+  }
+  function walk(dir, skipNames) {
+    var real;
+    try { real = fsMod.realpathSync(dir); } catch (e) { return; }
+    if (seenDirs[real]) return;
+    seenDirs[real] = true;
+    var ents;
+    try { ents = fsMod.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    ents.forEach(function (e) {
+      if (e.name.charAt(0) === '.') return;
+      if (skipNames && skipNames[e.name]) return;
+      if (e.isDirectory()) walk(pathMod.join(dir, e.name), null);
+      else if (!/\.(img|md)$/.test(e.name)) statFile(pathMod.join(dir, e.name));
+    });
+  }
+  function normalize(p) {   // "a/b/../c" -> "a/c" (buildProject's rule)
+    var out = [];
+    p.split('/').forEach(function (seg) {
+      if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+      else if (seg !== '.') out.push(seg);
+    });
+    return out.join('/');
+  }
+  function addProject(rel) {   // repo-relative bin.json/lib.json path
+    var n = normalize(rel);
+    if (seenProjects[n]) return;
+    seenProjects[n] = true;
+    var dir = n.slice(0, n.lastIndexOf('/'));
+    walk(pathMod.join(rootDir, dir), null);
+    var proj;
+    try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(rootDir, n), 'utf-8')); } catch (e) { return; }
+    (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
+  }
+  statFile(pathMod.join(rootDir, 'compiler.js'));
+  statFile(pathMod.join(rootDir, 'host.js'));
+  walk(pathMod.join(rootDir, 'os'), BAKE_INPUT_SKIP);
+  var files = (manifest.system && manifest.system.files) || {};
+  Object.keys(files).forEach(function (fp) {
+    var entry = files[fp];
+    if (entry.project !== undefined) addProject(entry.project);
+    if (entry.bin !== undefined) statFile(pathMod.join(rootDir, entry.bin));
+  });
+  return newest;
+}
+
 /* Skeleton for a freshly formatted root (writable) volume: the structural
  * dirs every boot expects — /etc (user overrides only; EMPTY on a virgin
  * boot by design), /var/local/bin (the admin's PATH head), /tmp, /root,
@@ -450,6 +533,7 @@ var OS_COMMON = {
   seedEntries: seedEntries,
   bakeSystemImage: bakeSystemImage,
   bakedVersion: bakedVersion,
+  newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,
   NodeFileStore: NodeFileStore,
   readFileBytes: readFileBytes,

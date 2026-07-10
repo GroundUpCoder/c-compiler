@@ -52,6 +52,9 @@ function session(input, extraArgs) {
 }
 
 // ---- first boot: seed + the full shell gauntlet ----
+// --no-fixture: this file IS the bake-path test — the real bake (and its
+// vendor builds) is under test, so the 0082 prebaked-fixture shortcut is
+// opted out here. The fixture path itself gets its own legs at the end.
 let r = session([
   'ls /',                                  // seeded tree (tiny native ls)
   'echo A | cat | cat',                    // 3-stage cross-process pipeline
@@ -67,7 +70,7 @@ let r = session([
   'cc hello.c && ./a.out',                 // compile + run, in-OS
   'exit 7',
   '',
-].join('\n'), ['--fresh']);
+].join('\n'), ['--fresh', '--no-fixture']);
 
 check('exit N propagates through hush', r.status === 7, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 const lines = r.stdout.split('\n');
@@ -443,6 +446,63 @@ check('cc error reaches stderr', /nosuch\.c/.test(r.stderr), r.stderr.slice(-300
 r = session('definitely-not-a-command\nexit\n');
 check('unknown command reported', /can't execute|not found/.test(r.stderr), r.stderr.slice(-200));
 check('unknown command is 127 via $?', r.status === 127, String(r.status));
+
+// ---- the 0082 prebaked-fixture path + the input-freshness gate ----
+// A SECOND image pair materializes by INSTALLING a prebaked fixture (here:
+// the blob this test just baked) — a file copy, no compiling. Then the
+// gate both ways: an input-stale private blob must re-materialize instead
+// of being silently reused (--stale-ok overrides), and an input-stale
+// FIXTURE must be bypassed with a real bake. Staleness is simulated by
+// aging mtimes with utimes — same comparison as "touch compiler.js",
+// without mutating repo files under a possibly-parallel suite.
+// These legs run LAST: the aging leaves the first pair's blob stale.
+const image2 = path.join(tmp, 'os2.img');
+function session2(input, extraArgs) {
+  const r = cp.spawnSync('node',
+    [BOOT, '--image=' + image2, '--fixture=' + image].concat(extraArgs || []),
+    { input, encoding: 'utf8', timeout: 300000 });
+  if (r.error) throw r.error;
+  return r;
+}
+r = session2('cc hello.c && ./a.out\nexit\n');
+check('fixture boot exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
+check('fixture is installed, not baked', r.stderr.includes('installing prebaked system image'),
+  r.stderr.slice(0, 400));
+check('no bake on the fixture path', !r.stderr.includes('baking system image'), r.stderr.slice(0, 400));
+check('fixture-installed OS compiles and runs', r.stdout.split('\n')[0] === 'hello, wasm world',
+  JSON.stringify(r.stdout.split('\n')[0]));
+
+// Reuse: the installed blob inherited the fixture's mtime (input-fresh) —
+// the next boot neither installs nor bakes.
+r = session2('exit\n');
+check('installed blob reuses cleanly', r.status === 0 &&
+  !r.stderr.includes('installing prebaked') && !r.stderr.includes('baking system image'),
+  String(r.status) + ' ' + r.stderr.slice(0, 400));
+
+// Input-stale private blob: aged below every bake input -> the next boot
+// re-materializes (the fixture is still fresh -> installed again).
+fs.utimesSync(image2, new Date(0), new Date(0));
+r = session2('exit\n');
+check('input-stale blob re-materializes', r.stderr.includes('input-stale') &&
+  r.stderr.includes('installing prebaked system image'), r.stderr.slice(0, 400));
+
+// --stale-ok trusts a version-current blob regardless of input mtimes.
+fs.utimesSync(image2, new Date(0), new Date(0));
+r = session2('exit\n', ['--stale-ok']);
+check('--stale-ok reuses the aged blob', r.status === 0 &&
+  !r.stderr.includes('input-stale') && !r.stderr.includes('installing prebaked') &&
+  !r.stderr.includes('baking system image'),
+  String(r.status) + ' ' + r.stderr.slice(0, 400));
+
+// Input-stale FIXTURE: aged fixture must be bypassed — a real bake, never
+// a silent copy of yesterday's binaries (the 0082 acceptance).
+fs.utimesSync(image, new Date(0), new Date(0));
+fs.utimesSync(image2, new Date(0), new Date(0));
+r = session2('exit\n');
+check('input-stale fixture is bypassed (real bake)',
+  r.stderr.includes('is input-stale') && r.stderr.includes('baking system image'),
+  r.stderr.slice(0, 500));
+check('post-bypass boot exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-300));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures === 0 ? '\nos boot (headless, hush): PASS' : `\nos boot (headless, hush): ${failures} FAILED`);

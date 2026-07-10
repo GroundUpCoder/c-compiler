@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0081 test-infra closed)
+# Handoff — start of thread (updated 2026-07-10; 0082 boot-fixture closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,65 +7,65 @@
 
 ## Where the repo stands
 
-**0081 (testing-infrastructure overhaul) is CLOSED** — dev log
-`logs/2026-07-10/test-infra-overhaul.md`, findings + measurements in
-`todos/done/0081-test-infra-overhaul.md`. The load-bearing facts:
+**0082 (prebaked system-image fixture + input-freshness gate) is CLOSED** —
+dev log `logs/2026-07-10/0082-image-fixture.md`, details in
+`todos/done/0082-test-boot-fixture.md`. The load-bearing facts:
 
-- **One engine, three runners**: `tests/lib/suite-runner.js` now powers
-  `tests/kernel/run.js` (parallel, default `-j4`), `tests/browser/
-  os-sweep.mjs` (the 15-file sweep as ONE serial command; discovers
-  `os-*.mjs` so new tests auto-join), and `tests/blockfs/run.js`.
-  All three: `--filter`, `--resume`, `--fail-fast`, `--timeout`, per-file
-  logs + an incrementally checkpointed `summary.json` under
-  `build/test-{kernel,browser,blockfs}/` — an interrupted run keeps its
-  partial verdict, and timeouts kill the whole process group (no more
-  orphaned boot.js/Chromium children). `tests/run-unit.js` (per-test
-  workers) is untouched and remains the fine-grained template.
-- **Measured**: kernel suite = 1354s serial, of which 16 boot.js e2e
-  files carry 97% — it's all image BAKE cost. At `-j4`: **393s, 40/40
-  green**, zero parallel flakes. Browser sweep with a fresh prebaked
-  `os/os-system.img` on disk: **~70s for 15/15** (the "1–2 min per
-  file" lore was the in-worker bake when no prebake exists).
-- **Verification debt from 0061 is PAID**: full kernel suite 40/40,
-  full 15-file sweep 15/15 (os-shell.mjs first), blockfs 15/15 — all
-  this session, on image v43.
+- **boot.js materializes by INSTALLING a fixture**: a missing/stale system
+  blob copies `os/os-system.img` (superblock-last, ~0.16s) instead of
+  re-baking (~40-60s). Flags: `--fixture=PATH`, `--no-fixture` (real bake —
+  what test_os_boot uses), `--stale-ok`; `--fresh-system` always really
+  bakes.
+- **Staleness = version AND input freshness** on every Node-side gate:
+  `newestBakeInput()` (os-common.js, ~10ms) takes the newest mtime over
+  compiler.js, host.js, the os/ tree (minus runtime-only files: os.html,
+  boot.js, workers, compositor.js, `*.md`, `*.img`) and the manifest's
+  vendor project/bin closure; a blob older than that re-materializes.
+  A blob NEWER than the manifest version is still kept unconditionally
+  (upgrade = swap the blob). Bakers stamp blob mtime = bake START time;
+  mkimage bakes to tmp + atomic rename.
+- **Gates**: serve.js re-runs mkimage before listening (the browser half —
+  kernel-worker can't stat repo files); `tests/kernel/run.js` prebakes once
+  up front when the filtered run contains IMG-tagged rows;
+  `tests/browser/os-sweep.mjs` prebakes unconditionally. Shared helper:
+  `tests/lib/image-fixture.js` (`ensurePrebakedImage`/`fixtureState`).
+- **Measured**: kernel suite -j4 = **165s, 40/40** (was 393s in 0081,
+  1354s serial pre-0081); test_os_boot (~5min, real bakes by design) is now
+  the long pole. Browser sweep: **15/15 in 74s**. blockfs 15/15.
+- **Residual (documented, no item)**: a PERSISTENT browser OPFS image only
+  re-fetches on a `image.json` version bump — the in-browser gate can't
+  stat inputs. So keep bumping `version` after editing seeded sources when
+  you care about an existing interactive tab; headless/test/serve paths
+  self-heal without it now.
 
-**Follow-ups created at the close** (in the queue): `0082` prebaked-image
-fixture for boot.js e2e — the remaining wall-clock multiplier (~2x more),
-including input-freshness gating for BOTH prebake paths (a same-version
-blob baked before an uncommitted compiler.js edit must never be silently
-reused — today the browser path WOULD silently fetch one; run
-`node tools/mkimage.js` before trusting a sweep if compiler.js/os/ changed
-without a version bump); `0083` event-based waits (the ~205 counted
-`sleep N`/fixed-delay sites — the flake class; slotted before 0064 so WM
-sweep round 3 benefits); `0084` unified entry point + diff-aware suite
-selection.
-
-**Next in queue**: run `node todos/queue.js list` — 0082 leads, then
-0070 desktop-default-tab, 0072 openwith.
+**Next in queue**: run `node todos/queue.js list` — 0070
+desktop-default-tab leads, then 0072 openwith.
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
 sweep rounds so far, a MUST for WM sweep round 3 (`0064`): quake lock on
-click, ESC unlock, click re-lock, VT-switch release. (The automated sweep
-is now cheap enough to run casually; the human check still isn't in it.)
+click, ESC unlock, click re-lock, VT-switch release.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
+- **Don't edit bake inputs while a suite runs**: the 0082 gate makes any
+  compiler.js/os/-tree/vendor edit invalidate the fixture — files started
+  after the edit will re-bake privately (correct, but slow/contended).
+  Land the edit, re-run; or run mkimage first.
 - **New-runner habits**: after an interrupted/failed suite run, look at
   `build/test-*/summary.json` + the per-file `.log` before rerunning;
   `--resume` skips prior passes. Don't crank `-j` past the default on a
-  loaded box — the e2e `sleep N` sync sites flake under contention
-  until 0083 lands.
+  loaded box — the e2e `sleep N` sync sites flake under contention until
+  0083 lands.
 - **Sweep is serial by design** (0045 boot lock + contention); os-sweep
   rejects `-j`. Keep it that way.
 - **Menu/desktop entry lists** image.json ↔ test_wm_service_e2e.js ↔
   os-shell.mjs must move together ('cairodemo' is in both lists now).
-- **Editing seeded sources or coreutils.json/bin.json/lib.json requires
-  bumping `os/image.json` `version`** (now 43) — rebake with
-  `node tools/mkimage.js`; boot.js `--fresh-system` forces headless.
-  A LIBC change in compiler.js counts. A freetype/cairo lib.json change
-  counts too (term/cairodemo relink). Until 0082's freshness gate, also
-  re-run mkimage so the browser sweep's prebake isn't stale.
+- **Editing seeded sources or coreutils.json/bin.json/lib.json**: the
+  headless/test/serve paths now detect it by mtime (0082) — no manual
+  mkimage needed. Bump `image.json` `version` (now 43) anyway when an
+  interactive browser tab must pick the change up (OPFS re-fetch is
+  version-gated only). A LIBC change in compiler.js counts as an input;
+  so do freetype/cairo lib.json changes (term/cairodemo relink).
 - **Cairo/pixman config is hand-written** (`vendor/cairo/config.h` +
   `src/cairo-features.h`; pixman via two -D flags in lib.json). When
   adding cairo features (0080), extend BOTH headers and lib.json, and
@@ -98,14 +98,15 @@ is now cheap enough to run casually; the human check still isn't in it.)
 posix_spawn-not-fork; kernel-owned fds; WM.md invariants; 0013–0069's
 recorded decisions (see todos/done/); DISK-IMAGE.md's settled layout;
 0061's calls (cairo-not-a-2D-invention, image-backend-only, upstream
-tests as acceptance); 0081's calls: file-granular parallelism via ONE
-shared engine (not a per-suite rewrite), kernel default `-j4`, sweep
-serial by design, run-unit.js's worker model untouched.
+tests as acceptance); 0081's calls (ONE shared suite engine, kernel `-j4`,
+sweep serial, run-unit.js untouched); 0082's calls: input-freshness by
+mtime scan (not manifest hashing), fixture = `os/os-system.img` itself
+(not a separate build/ copy), `version > manifest` blobs kept
+unconditionally, test_os_boot stays the real-bake test.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0082 boot-fixture (continues the test-infra work, ~2x more
-wall-clock), 0070 desktop-default-tab, 0072 openwith, 0079 dep-dedup,
-0080 cairo PDF surfaces, or 0064 WM sweep round 3 (the pointer-lock human
+to tackle: 0070 desktop-default-tab, 0072 openwith, 0075 sameboy, 0063
+aero, 0079 dep-dedup, or 0064 WM sweep round 3 (the pointer-lock human
 check is owed)."

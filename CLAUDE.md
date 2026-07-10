@@ -215,9 +215,19 @@ sources compiled at bake time** by the cc driver in `os-common.js` (no
 build step), vendor `project` builds, `bin` blobs (repo-relative game
 data), raw `text`, and `link` symlinks; the `user` section (doom1.wad,
 pak0.pak, Desktop links) seeds ONCE onto a freshly created root volume
-(no version gate — `/etc/.image-version` is gone); bump `image.json`'s
-`version` after editing seeded sources (`wm.c`, `cc.c`, …) or existing
-blobs stay stale. Writes under /usr fail EROFS (host.js `readonly`
+(no version gate — `/etc/.image-version` is gone). Staleness (todos/
+0082): every Node-side gate is version AND input-fresh — a blob at the
+manifest version whose mtime is older than any bake input (compiler.js,
+host.js, os/ tree, the manifest's vendor project/bin closure —
+`newestBakeInput` in os-common.js) re-materializes; boot.js prefers
+INSTALLING the prebaked fixture (file copy; `--fixture=`/`--no-fixture`/
+`--stale-ok`), serve.js re-runs mkimage before listening, and the
+kernel/browser suite runners prebake once up front
+(`tests/lib/image-fixture.js`). Bakers stamp the blob's mtime with the
+bake START time; mkimage publishes via atomic rename. Still bump
+`image.json`'s `version` after editing seeded sources (`wm.c`, `cc.c`,
+…): a PERSISTENT browser OPFS image only re-fetches on a version bump
+(the in-browser gate can't stat inputs). Writes under /usr fail EROFS (host.js `readonly`
 volume flag, decided AFTER the path walk so `/usr/local/...` escapes to
 the rw volume). pid 1 is busybox hush (`/bin/sh`, baked from
 `vendor/busybox/bin.json`); `protoshell.c` stays as `/bin/psh`; `/bin/wm`
@@ -315,7 +325,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v38**.
+Image version is **v43**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

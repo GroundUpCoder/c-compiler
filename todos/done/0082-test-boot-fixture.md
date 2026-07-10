@@ -1,6 +1,22 @@
 # 0082 — Prebaked system-image fixture for the boot.js e2e family
 
-- **Status**: open
+- **Status**: done (2026-07-10). boot.js materializes by INSTALLING a
+  prebaked fixture (default `os/os-system.img`; `--fixture=`/`--no-fixture`/
+  `--stale-ok`) and every Node-side gate is version + INPUT freshness
+  (`newestBakeInput` in os-common.js: compiler.js/host.js/os/ tree/vendor
+  project-closure mtimes vs blob mtime; bakes stamp mtime = bake START;
+  mkimage publishes by atomic rename). Browser half: serve.js re-runs
+  mkimage before listening when the blob is input-stale (kernel-worker
+  can't stat); run.js (IMG-tagged rows) + os-sweep.mjs prebake once up
+  front via `tests/lib/image-fixture.js`. test_os_boot keeps really baking
+  (`--no-fixture`) and grew the fixture/staleness legs; "touch compiler.js
+  → re-bake" proven by hand on both paths. Kernel suite -j4: 393s → 165s
+  (40/40; fixture-consuming e2e: test_vi 4s, test_ctlpanel 14s). Known residual
+  (documented in CLAUDE.md, no item): a PERSISTENT browser OPFS image
+  still only re-fetches on a version bump — the in-browser gate cannot
+  stat inputs, so the "bump image.json version after seeded-source edits"
+  rule stays for interactive browser work. Dev log:
+  `logs/2026-07-10/0082-image-fixture.md`.
 - **Design**: this file (spawned from `todos/done/0081`'s measurements)
 
 ## Goal

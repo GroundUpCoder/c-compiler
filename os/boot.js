@@ -11,16 +11,27 @@
 // The OS lives on TWO volumes (todos/0026 + the 0040 flip): a WRITABLE root
 // volume at `/` (/etc, /var, /tmp, /root, /dev, /run — user territory, never
 // touched by upgrades) and a READ-ONLY baked system blob mounted at `/usr`
-// (`/bin` is a root-volume symlink to /usr/bin). The blob is baked here on
-// demand — missing or version-stale system image -> re-bake from
-// os/image.json (the same pipeline as tools/mkimage.js); the root volume is
+// (`/bin` is a root-volume symlink to /usr/bin). The blob is materialized
+// here on demand — a missing, version-stale, or input-stale (todos/0082)
+// system image installs a prebaked fixture when one is fresh, else re-bakes
+// from os/image.json (the same pipeline as tools/mkimage.js); the root volume is
 // seeded once, when freshly created, from the manifest's `user` section.
 // Upgrades are therefore "swap the blob": user files can't be touched.
 //
 //   --image=PATH   system image file (default: os/os-system.img); the root
 //                  image lives beside it (foo-system.img -> foo-root.img)
-//   --fresh        discard BOTH images: re-bake + re-seed
-//   --fresh-system re-bake only the system blob (user files survive)
+//   --fixture=PATH prebaked blob to INSTALL (file copy, no compiling) when
+//                  the system image must be materialized (todos/0082).
+//                  Default: os/os-system.img (tools/mkimage.js output).
+//                  Used only if version-current AND input-fresh.
+//   --no-fixture   never install a prebaked blob — a needed blob really
+//                  bakes (the bake-path tests use this)
+//   --stale-ok     trust any version-current blob: skip the 0082
+//                  input-freshness check (which re-bakes when compiler.js/
+//                  os// vendor sources are newer than the blob)
+//   --fresh        discard BOTH images: re-materialize + re-seed
+//   --fresh-system re-BAKE the system blob outright (user files survive;
+//                  implies --no-fixture)
 //   --quiet        suppress boot progress on stderr
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -41,13 +52,18 @@ const COMMON = require(path.join(__dirname, 'os-common.js'));
 
 /* ---- args ---- */
 let imagePath = path.join(__dirname, 'os-system.img');
+let fixturePath = path.join(__dirname, 'os-system.img');   // null = --no-fixture
 let freshBoot = false;
 let freshSystem = false;   // re-bake only the system blob (user files survive)
+let staleOk = false;       // skip the 0082 input-freshness check
 let quiet = false;
 let dumpState = false;
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
+  else if (a.startsWith('--fixture=')) fixturePath = path.resolve(a.slice(10));
+  else if (a === '--no-fixture') fixturePath = null;
+  else if (a === '--stale-ok') staleOk = true;
   else if (a === '--fresh') freshBoot = true;
   else if (a === '--fresh-system') freshSystem = true;
   else if (a === '--quiet') quiet = true;
@@ -86,18 +102,67 @@ mountAndBoot().catch((e) => {
 });
 
 async function mountAndBoot() {
-  /* System blob: bake on demand (missing / version-stale / --fresh*), then
-   * mount READ-ONLY at /usr. bakedVersion() is the staleness gate — it reads
-   * the blob's own /usr/share/os-release, written last in the bake, so a
-   * crashed half-bake reads -1 and re-bakes. STRICTLY older re-bakes; a
-   * NEWER blob (an upgrade swapped in from outside, e.g. mkimage against a
-   * bumped manifest) is kept as-is — "upgrade = swap the blob". */
+  /* System blob: materialize on demand, then mount READ-ONLY at /usr.
+   * bakedVersion() reads the blob's own /usr/share/os-release, written last
+   * in the bake, so a crashed half-bake/half-copy reads -1 and
+   * re-materializes. STRICTLY older re-bakes; a NEWER blob (an upgrade
+   * swapped in from outside, e.g. mkimage against a bumped manifest) is
+   * kept as-is — "upgrade = swap the blob". A blob at EXACTLY the manifest
+   * version must also be input-fresh (todos/0082): bake inputs newer than
+   * the blob's mtime mean it predates the current tree — never silently
+   * reuse it (--stale-ok overrides). Materialization prefers INSTALLING a
+   * prebaked fixture (file copy ≪ bake; --fixture=, default the repo's
+   * os/os-system.img) when that fixture is itself version-current and
+   * input-fresh; --no-fixture and --fresh-system force a real bake. */
   const store = new COMMON.NodeFileStore(fs, imagePath, freshBoot || freshSystem);
-  let baked = false;
-  if (COMMON.bakedVersion(BLOCK_FS, store) < (manifest.version | 0)) {
+  const mfVersion = manifest.version | 0;
+  let inputScan = null;   // lazy: ~10-25ms over ~2500 files, only when needed
+  const newestInput = () => inputScan ||
+    (inputScan = COMMON.newestBakeInput(fs, path, ROOT, manifest));
+  let sysMode = null;   // 'reused' | 'installed' | 'baked'
+  const bv = COMMON.bakedVersion(BLOCK_FS, store);
+  if (bv > mfVersion) sysMode = 'reused';           // an upgrade blob is kept
+  else if (bv === mfVersion) {
+    if (staleOk || fs.statSync(imagePath).mtimeMs >= newestInput().mtimeMs) {
+      sysMode = 'reused';
+    } else {
+      bootLog('system blob is input-stale (' + path.relative(ROOT, newestInput().path) +
+        ' is newer) — re-materializing');
+    }
+  }
+  if (sysMode === null && fixturePath && !freshSystem &&
+      path.resolve(fixturePath) !== imagePath) {
+    try {
+      const fSt = fs.statSync(fixturePath);
+      const bytes = fs.readFileSync(fixturePath);
+      const mem = new BLOCK_FS.MemoryByteStore(bytes.length);
+      mem.setBytes(0, bytes);
+      const fv = COMMON.bakedVersion(BLOCK_FS, mem);
+      if (fv >= mfVersion && (staleOk || fSt.mtimeMs >= newestInput().mtimeMs)) {
+        bootLog('installing prebaked system image ' + fixturePath + ' (v' + fv + ')');
+        // Superblock LAST (the kernel-worker discipline): a crash mid-copy
+        // reads version -1 next boot and re-materializes.
+        store.resize(0);
+        if (bytes.length > 256) store.setBytes(256, bytes.subarray(256));
+        store.setBytes(0, bytes.subarray(0, Math.min(256, bytes.length)));
+        store.flush();
+        fs.utimesSync(imagePath, fSt.atime, fSt.mtime);  // freshness rides along
+        sysMode = 'installed';
+      } else if (fv >= mfVersion) {
+        bootLog('prebaked ' + fixturePath + ' is input-stale (' +
+          path.relative(ROOT, newestInput().path) + ' is newer) — baking instead');
+      }
+    } catch (e) { /* missing/unreadable fixture -> bake */ }
+  }
+  if (sysMode === null) {
+    // Stamp the blob with the bake START time: an input edited DURING the
+    // bake may or may not be reflected, so it must read as newer.
+    const bakeStart = new Date();
     store.resize(0);   // a stale blob re-bakes from scratch (regenerable)
     await COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, store, manifest, seedIo);
-    baked = true;
+    store.flush();
+    fs.utimesSync(imagePath, bakeStart, bakeStart);
+    sysMode = 'baked';
   }
   const sysFs = BLOCK_FS.createV4(store, { readonly: true });
 
@@ -116,7 +181,7 @@ async function mountAndBoot() {
     await COMMON.seedEntries(kfs, manifest.user, seedIo);
     rootStore.flush();
   }
-  bootLog('image ' + imagePath + (baked ? ' (baked)' : ' (reused)') +
+  bootLog('image ' + imagePath + ' (' + sysMode + ')' +
     ' + ' + rootImagePath + (rootFresh ? ' (seeded)' : ''));
 
   const ccCompile = COMMON.createCcDriver(CompilerJS, kfs);

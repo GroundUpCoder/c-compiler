@@ -42,8 +42,17 @@ for (const a of process.argv.slice(2)) {
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkimage] ' + m + '\n');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
 
+// Bake into a temp file and publish with an atomic rename: a concurrent
+// reader (the 0082 fixture copy in os/boot.js, a browser fetch through
+// serve.js) sees either the old blob or the new one, never a half-bake.
+const tmpPath = outPath + '.tmp-' + process.pid;
+
 async function main() {
-  const store = new COMMON.NodeFileStore(fs, outPath, true /* fresh */);
+  // The published blob's mtime is the bake START time (todos/0082): an
+  // input edited during the bake may or may not be reflected, so the
+  // freshness gate must read it as newer than the blob.
+  const bakeStart = new Date();
+  const store = new COMMON.NodeFileStore(fs, tmpPath, true /* fresh */);
   await COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, store, manifest, {
     readAsset: (name) => fs.readFileSync(path.join(OS_DIR, name), 'utf-8'),
     readBinary: (p) => fs.readFileSync(path.join(ROOT, p)),
@@ -60,10 +69,13 @@ async function main() {
   store.flush();
   const size = store.size();
   store.close();
+  fs.utimesSync(tmpPath, bakeStart, bakeStart);
+  fs.renameSync(tmpPath, outPath);
   log(`${outPath}: v${version}, ${(size / (1 << 20)).toFixed(1)} MiB, sealed`);
 }
 
 main().catch((e) => {
+  try { fs.unlinkSync(tmpPath); } catch (e2) {}
   process.stderr.write('mkimage failed: ' + (e && e.stack || e) + '\n');
   process.exit(1);
 });
