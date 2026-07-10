@@ -15,7 +15,7 @@
 //
 //   node todos/queue.js list                         # resolved order + ready/blocked state
 //   node todos/queue.js add <NNNN|next> [--slug s] [--title t] \
-//                        [--after A,B] [--blocked-by A,B] [--pos N]
+//                        [--after A,B] [--blocked-by A,B] [--pos N] [--reflection]
 //   node todos/queue.js reorder <ID> --before <ID> | --after <ID> | --pos <N>
 //   node todos/queue.js done <ID>                    # git-mv to done/, drop from queue
 //   node todos/queue.js block <ID> [--hard A,B] [--soft C,D]
@@ -328,6 +328,45 @@ function scaffold(id, title) {
 `;
 }
 
+// The scaffold for `add --reflection`: a curation-only item whose whole turn
+// is re-evaluating the queue against reality. Created by the netguc/cc churn
+// engine on a per-project cadence (todoReflectionEvery) — an ordinary item in
+// every other way (kickoff, audit, close by file move). The cadence is
+// system-owned: reflection items must not create more reflection items.
+function reflectionScaffold(id) {
+  return `# ${id} — queue reflection
+
+- **Status**: open
+- **Design**: —
+
+## Goal
+
+Curation-only turn: re-evaluate the queue against the actual state of the
+repo, then adjust it. No feature work in this item.
+
+## Plan
+
+- Orient: HANDOFF.md, \`node todos/queue.js list\`, the most recently
+  finished items in todos/done/, and the recent dev logs.
+- For each recently-done item: did the landed work satisfy its stated
+  Goal/Acceptance? Every descoped or deferred residue must have an open
+  item that owns it — create the missing ones (\`queue.js add\`).
+- Check the committed backlog artifacts the queue is supposed to track
+  (missing-symbol reports, conformance lists, ...) for demand that has no
+  owner item.
+- For each open item: still worth doing, still correctly scoped, still
+  correctly ordered/blocked? Adjust via \`queue.js reorder\`/\`block\`;
+  defer or retire what no longer makes sense (rewrite its Status line
+  with the why — never a silent deletion).
+- Do NOT create another reflection item — the cadence is system-owned.
+
+## Acceptance
+
+- Queue order + deps reflect reality; \`node todos/queue.js check\` passes.
+- Every change carries a one-line rationale (item body or Status line).
+`;
+}
+
 function cmdAdd(argv) {
   const { flags, positional } = parseFlags(argv);
   const fsState = scanFs();
@@ -336,7 +375,10 @@ function cmdAdd(argv) {
   if (!ID_RE.test(id)) die(`add: id must be NNNN (4 digits) or "next", got "${id}"`);
   if (fsState.open.has(id) || fsState.done.has(id)) die(`add: id "${id}" already exists`);
 
-  const title = typeof flags.title === 'string' ? flags.title : (typeof flags.slug === 'string' ? flags.slug.replace(/-/g, ' ') : 'untitled');
+  const isReflection = flags.reflection !== undefined;
+  const title = typeof flags.title === 'string' ? flags.title
+    : (typeof flags.slug === 'string' ? flags.slug.replace(/-/g, ' ')
+    : (isReflection ? 'queue reflection' : 'untitled'));
   const slug = typeof flags.slug === 'string' ? flags.slug : slugify(title) || 'untitled';
   const fileName = `${id}-${slug}.md`;
   const filePath = path.join(TODOS_DIR, fileName);
@@ -358,7 +400,7 @@ function cmdAdd(argv) {
 
   // Write the scaffold first so validation sees the file, then roll it back if
   // the resulting manifest doesn't validate (never leave a half-applied add).
-  fs.writeFileSync(filePath, scaffold(id, title));
+  fs.writeFileSync(filePath, isReflection ? reflectionScaffold(id) : scaffold(id, title));
   const { errors } = validate(manifest, scanFs());
   if (errors.length) {
     fs.unlinkSync(filePath);
@@ -463,6 +505,7 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
   list                                          resolved order + ready/blocked state
   add <NNNN|next> [--slug s] [--title t]        scaffold a todo + insert into the queue
           [--after A,B] [--blocked-by A,B] [--pos N]
+          [--reflection]                        curation-only "queue reflection" scaffold
   reorder <ID> --before <ID> | --after <ID> | --pos <N>
   done <ID>                                     git-mv to done/, drop from queue
   block <ID> [--hard A,B] [--soft C,D]          set hard/soft deps ("" clears)
