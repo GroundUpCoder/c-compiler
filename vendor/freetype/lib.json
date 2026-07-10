@@ -13,6 +13,8 @@
     "src/base/ftdebug.c",
     "src/base/ftinit.c",
     "src/base/ftbitmap.c",
+    "src/base/ftmm.c",
+    "src/base/ftsynth.c",
     "src/sfnt/sfnt.c",
     "src/truetype/truetype.c",
     "src/smooth/smooth.c",
