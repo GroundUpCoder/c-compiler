@@ -781,6 +781,28 @@ function unescapeCodepoint(text, pos, end) {
   return decodeCodepoint(text, pos, end);
 }
 
+// Value of a narrow character constant's body (text between the quotes,
+// cursor range [start, end)). A single character keeps its byte value with
+// signed-char semantics on this target ('\xff' == -1). Multi-character
+// constants use the GCC/clang packing: each character shifted in from the
+// right, wrapping in int32, so only the last 4 characters survive —
+// 'SAME' == 0x53414D45. C11 6.4.4.4p10 leaves the value
+// implementation-defined; matching GCC is what real-world FourCC-style
+// magics expect. The signed-char adjustment deliberately does NOT apply
+// to multi-character constants (GCC doesn't apply it either).
+function narrowCharConstValue(text, start, end) {
+  const pos = { i: start };
+  const first = unescape(text, pos, end);
+  if (pos.i >= end) {
+    return first >= 0x80 && first <= 0xff ? first - 0x100 : first;
+  }
+  let value = first & 0xff;
+  while (pos.i < end) {
+    value = ((value << 8) | (unescape(text, pos, end) & 0xff)) | 0;
+  }
+  return value;
+}
+
 // Encode a Unicode codepoint as UTF-16LE bytes, appending to output array.
 function encodeUtf16LE(cp, out) {
   if (cp <= 0xffff) {
@@ -1136,16 +1158,15 @@ function postProcess(lexResult) {
         t.flags.stringPrefix === StringPrefix.PREFIX_u ||
         t.flags.stringPrefix === StringPrefix.PREFIX_U;
 
-      const pos = { i: start };
-      let codepoint = isWideChar
-        ? unescapeCodepoint(text, pos, end)
-        : unescape(text, pos, end);
-      // char is signed on this target, so a narrow character constant in
-      // 0x80..0xFF (e.g. '\xff', '\200') has the value of the signed char
-      // it denotes: (char)0xFF == -1. Without this, `c == '\xff'` can
-      // never be true for a char c.
-      if (!isWideChar && codepoint >= 0x80 && codepoint <= 0xff) {
-        codepoint -= 0x100;
+      // Narrow constants go through narrowCharConstValue: single chars are
+      // signed-char values ((char)0xFF == -1 — without this, `c == '\xff'`
+      // can never be true for a char c), multi-char constants pack GCC-style.
+      let codepoint;
+      if (isWideChar) {
+        const pos = { i: start };
+        codepoint = unescapeCodepoint(text, pos, end);
+      } else {
+        codepoint = narrowCharConstValue(text, start, end);
       }
       t.kind = TokenKind.INT;
       t.integer = BigInt(codepoint);
@@ -1687,11 +1708,15 @@ function preprocess(filename, initialTokens, ppRegistry) {
         if (isWide) s++;
         s++;
         const e = t.text.length - 1;
-        const p = { i: s };
-        let v = s < e ? unescape(t.text, p, e) : 0;
-        // Match the CHAR→INT token resolution: narrow char constants are
-        // signed-char values, so 0x80..0xFF sign-extends.
-        if (!isWide && v >= 0x80 && v <= 0xff) v -= 0x100;
+        // Match the CHAR→INT token resolution: narrow constants get
+        // signed-char single-char values and GCC multi-char packing.
+        let v;
+        if (isWide) {
+          const p = { i: s };
+          v = s < e ? unescape(t.text, p, e) : 0;
+        } else {
+          v = narrowCharConstValue(t.text, s, e);
+        }
         left = new ConstEval.Item(BigInt(v), ConstEval.SIGNED);
       } else if (t.kind === TokenKind.IDENT) {
         left = ZERO;

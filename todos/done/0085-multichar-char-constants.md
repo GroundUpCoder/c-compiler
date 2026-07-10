@@ -1,6 +1,11 @@
 # 0085 — Multi-character char constants: GCC packing semantics
 
-- **Status**: open
+- **Status**: done (2026-07-10) — narrow multi-char constants now pack
+  GCC-style (big-endian, int32 wrap, last 4 kept) in both the lexer CHAR→INT
+  resolution and the preprocessor `#if` evaluator via one shared
+  `narrowCharConstValue` helper; single-char behavior (incl. signed-char
+  0x80..0xFF) unchanged; wide constants untouched. Clang-verified
+  conformance test `multichar_char_const`; full unit suite green.
 - **Design**: this file. Found during the `0075` SameBoy compile probe;
   slotted ahead of it because SameBoy live code depends on the values.
 
