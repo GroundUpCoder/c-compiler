@@ -138,8 +138,15 @@ var OP = {
   // — wmResize, WMP RESIZE. Frame drag zones exist on BOTH kinds since
   // todos/0024, but dispatch on the bit: resizable -> configure the client;
   // fixed-size -> scale its dst rect (wmSetDst; the app never knows).
+  // SURFACE_RESIZE (todos/0068) is the OWNER-initiated resize (Win32 apps
+  // size their window to content — winmine per difficulty): same
+  // pendingConfigure + WINDOW_RESIZED flow as wmResize, but NOT gated on
+  // the resizable bit — that bit protects fixed-size apps from the WM
+  // shearing them, not from their own geometry choices. The ack is the
+  // same SURFACE_CONFIGURE; a scaled (SET_DST) surface that self-resizes
+  // snaps back to dst == buffer there, like any configure.
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
-  SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006,
+  SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006, SURFACE_RESIZE: 0x1007,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
   // one page-owned output ring — never RPCs.
@@ -626,6 +633,9 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
     // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
     surfaceSetFlags: function (sid, flags) { return self.call(OP.SURFACE_SET_FLAGS, { sid: sid, flags: flags | 0 }); },
+    // Owner-initiated resize (todos/0068, SDL_SetWindowSize): kernel answers
+    // with a WINDOW_RESIZED ring event; the ack is surfaceConfigure below.
+    surfaceResize: function (sid, w, h) { return self.call(OP.SURFACE_RESIZE, { sid: sid, w: w | 0, h: h | 0 }); },
     // Resize ack (todos/0019): the NEW fb SAB (first new-size frame already
     // presented into it) rides the FIFO channel like at create.
     surfaceConfigure: function (sid, w, h, fbSab) {
@@ -2248,6 +2258,29 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmVersion++;
       this._respond(pcb, {});
       this._wmSyncPointerLock();
+      break;
+    }
+    // Owner-initiated resize (todos/0068): the surface's own process asks
+    // for a new buffer size. No resizable gate (see the OP table comment);
+    // the client completes via the usual WINDOW_RESIZED -> SURFACE_CONFIGURE
+    // renegotiation, so geometry only changes at the tear-free ack.
+    case OP.SURFACE_RESIZE: {
+      var sr = this._surfaces.get(req.sid | 0);
+      if (!sr || sr.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      var rw = req.w | 0, rh = req.h | 0;
+      if (rw < WM_MIN_SIZE || rh < WM_MIN_SIZE || rw > 8192 || rh > 8192) {
+        this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      if (rw === sr.w && rh === sr.h && !sr.pendingConfigure) {
+        this._respond(pcb, {}); break;            // no-op
+      }
+      var srPrev = sr.pendingConfigure;
+      sr.pendingConfigure = { w: rw, h: rh };
+      if (!this._wmEventTo(sr.sid, [WMEV.WINDOW_RESIZED, 0, rw, rh, 0, 0, 0, 0])) {
+        sr.pendingConfigure = srPrev;
+        this._respond(pcb, { errno: 'EAGAIN' }); break;
+      }
+      this._respond(pcb, {});
       break;
     }
     case OP.SURFACE_DESTROY: {

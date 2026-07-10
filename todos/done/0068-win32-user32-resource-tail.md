@@ -1,6 +1,13 @@
 # 0068 — win32: user32/resource tail — winmine playable
 
-- **Status**: open
+- **Status**: done (2026-07-10) — winmine links (0 missing), seeded as
+  `/bin/winmine` + `/bin/winmine.res` (image v38), playable headless and
+  in-browser; notepad 64→27, calc 45→15. Resources = the sidecar-pack
+  story (`tools/win32rc.js` → WRES `<binary>.res`); menus/dialogs/
+  accelerators/timers/W-entries in user32.c; `SDL_SetWindowSize` →
+  kernel `SURFACE_RESIZE` (0x1007) is the one kernel change. Log:
+  `logs/2026-07-10/win32-winmine.md`; acceptance
+  `tests/kernel/test_winmine_e2e.js` + `tests/browser/os-winmine.mjs`.
 - **Design**: `todos/WIN32.md`; demand log `os/win32/PORTS.md`
 
 ## Goal

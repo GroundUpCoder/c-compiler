@@ -21,6 +21,18 @@
  * implement strictly to that log. WCHAR is 2-byte UTF-16 (u"..."
  * literals), NOT this libc's 4-byte wchar_t. Single-threaded by design
  * (WIN32.md friction #1): one message loop per process, no CreateThread.
+ *
+ * 0068: the user32/resource tail (winmine playable) — the user32/gdi32 W
+ * entry points are IMPLEMENTED (per-window A/W marking; text messages
+ * translate at user32's send_msg choke), plus menus (a user32-drawn bar
+ * in the top SM_CYMENU pixels of the surface; the client area offsets
+ * under it), accelerators, DialogBox templates, SetTimer/WM_TIMER, and
+ * resources from a SIDECAR pack: tools/win32rc.js compiles the app's .rc
+ * into `<binary>.res` next to the wasm binary (the PE resource section
+ * analog; WRES format spec in that tool, loader in user32.c res_*).
+ * UNICODE GUI ports whose entry is wWinMain list os/win32/wwinmain.c in
+ * their bin.json sources (the CRT entry shim). Icons/cursors are stub
+ * handles; PlaySoundW is a success stub (winmm.c).
  */
 #pragma once
 
@@ -742,8 +754,10 @@ typedef struct tagCREATESTRUCT {
 #define COLOR_SCROLLBAR      0
 #define COLOR_BACKGROUND     1
 #define COLOR_ACTIVECAPTION  2
+#define COLOR_MENU           4
 #define COLOR_WINDOW         5
 #define COLOR_WINDOWFRAME    6
+#define COLOR_MENUTEXT       7
 #define COLOR_WINDOWTEXT     8
 #define COLOR_HIGHLIGHT      13
 #define COLOR_HIGHLIGHTTEXT  14

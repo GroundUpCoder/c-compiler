@@ -9,9 +9,9 @@ port, and keep it committed (`--check` verifies freshness).
 | gdidemo | links | 0 |
 | ctldemo | links | 0 |
 | k32demo | links | 0 |
-| winmine | missing-symbols | 29 |
-| notepad | missing-symbols | 64 |
-| calc | missing-symbols | 45 |
+| winmine | links | 0 |
+| notepad | missing-symbols | 27 |
+| calc | missing-symbols | 15 |
 
 ## gdidemo — links
 
@@ -25,114 +25,43 @@ Project: `os/win32/ctldemo.json` — control target — the 0058 acceptance app 
 
 Project: `os/win32/k32demo.json` — control target — the 0059 acceptance app must stay fully covered
 
-## winmine — missing-symbols
+## winmine — links
 
-Project: `vendor/winmine/bin.json` — ReactOS/Wine Minesweeper — the identity port
-
-Missing symbols (29):
-
-```
-AdjustWindowRect
-CheckMenuItem
-CreateWindowExW
-DefWindowProcW
-DialogBoxParamW
-DispatchMessageW
-EndDialog
-GetDlgItemInt
-GetDlgItemTextW
-GetMenu
-GetMessageW
-GetMonitorInfoW
-GetSystemMetrics
-LoadAcceleratorsW
-LoadBitmapW
-LoadCursorW
-LoadIconW
-LoadImageW
-LoadStringW
-MonitorFromRect
-PlaySoundW
-RedrawWindow
-RegisterClassExW
-SendMessageW
-SetDlgItemInt
-SetDlgItemTextW
-SetTimer
-ShellAboutW
-TranslateAcceleratorW
-```
+Project: `vendor/winmine/bin.json` — ReactOS/Wine Minesweeper — the identity port, playable since 0068 (seeded as /bin/winmine)
 
 ## notepad — missing-symbols
 
 Project: `vendor/notepad/bin.json` — ReactOS notepad — EDIT + menus + comdlg32
 
-Missing symbols (64):
+Missing symbols (27):
 
 ```
 AbortDoc
-CheckMenuItem
 ChooseFontW
-CreateFontIndirectW
 CreateStatusWindowW
-CreateWindowExW
-DefWindowProcW
-DestroyAcceleratorTable
-DialogBoxParamW
-DispatchMessageW
 DragAcceptFiles
 DragFinish
 DragQueryFileW
-DrawTextW
-EnableMenuItem
-EndDialog
 EndDoc
 EndPage
 FindTextW
-GetDlgItemInt
-GetDlgItemTextW
 GetFileTitleW
-GetMenu
-GetMessageW
 GetOpenFileNameW
 GetSaveFileNameW
-GetSystemMetrics
-GetTextExtentPoint32W
-GetTextMetricsW
 GetWindowPlacement
-GetWindowTextLengthW
-GetWindowTextW
 IsClipboardFormatAvailable
 IsDialogMessageW
-LoadAcceleratorsW
-LoadCursorW
-LoadIconW
-LoadImageW
-LoadStringW
-MessageBoxW
 PageSetupDlgW
-PostMessageW
 PrintDlgW
-RegisterClassExW
 RegisterWindowMessageW
 ReplaceTextW
 SHAddToRecentDocs
-SendDlgItemMessageW
-SendMessageW
-SetCursor
-SetDlgItemInt
-SetDlgItemTextW
 SetMapMode
 SetProcessDefaultLayout
-SetWindowLongPtrW
 SetWindowPlacement
-SetWindowTextW
-ShellAboutW
 ShellExecuteW
 StartDocW
 StartPage
-TextOutW
-TranslateAcceleratorW
 WinHelpW
 ```
 
@@ -140,51 +69,21 @@ WinHelpW
 
 Project: `vendor/calc/bin.json` — ReactOS calc — dense control/dialog exercise
 
-Missing symbols (45):
+Missing symbols (15):
 
 ```
-AppendMenuW
-CheckDlgButton
-CheckMenuItem
-CheckRadioButton
 CloseClipboard
-CreateDialogParamW
-CreatePopupMenu
-DestroyMenu
-DispatchMessageW
 DrawFrameControl
 DrawStateW
 EmptyClipboard
-EnableMenuItem
-GetAsyncKeyState
-GetClassNameW
 GetClipboardData
-GetDlgItemTextW
 GetKeyboardLayout
 GetKeyboardState
-GetMenu
-GetMessageW
-GetSubMenu
-GetSystemMetrics
-GetTextExtentPoint32W
-GetWindowLongPtrW
-GetWindowTextW
 InitCommonControls
 IsClipboardFormatAvailable
-IsDlgButtonChecked
-LoadImageW
-LoadMenuW
-LoadStringW
 MapVirtualKeyExW
 OpenClipboard
-PostMessageW
-SendDlgItemMessageW
-SendMessageW
 SetClipboardData
-SetDlgItemTextW
-SetMenu
-SetWindowLongPtrW
-ShellAboutW
 ToAsciiEx
 TrackMouseEvent
 TrackPopupMenu
@@ -192,104 +91,47 @@ TrackPopupMenu
 
 ## Aggregate demand (the order of attack)
 
-98 distinct symbols across 6 targets.
+41 distinct symbols across 6 targets.
 
 | symbol | apps |
 |--------|------|
-| CheckMenuItem | winmine notepad calc |
-| DispatchMessageW | winmine notepad calc |
-| GetDlgItemTextW | winmine notepad calc |
-| GetMenu | winmine notepad calc |
-| GetMessageW | winmine notepad calc |
-| GetSystemMetrics | winmine notepad calc |
-| LoadImageW | winmine notepad calc |
-| LoadStringW | winmine notepad calc |
-| SendMessageW | winmine notepad calc |
-| SetDlgItemTextW | winmine notepad calc |
-| ShellAboutW | winmine notepad calc |
-| CreateWindowExW | winmine notepad |
-| DefWindowProcW | winmine notepad |
-| DialogBoxParamW | winmine notepad |
-| EnableMenuItem | notepad calc |
-| EndDialog | winmine notepad |
-| GetDlgItemInt | winmine notepad |
-| GetTextExtentPoint32W | notepad calc |
-| GetWindowTextW | notepad calc |
 | IsClipboardFormatAvailable | notepad calc |
-| LoadAcceleratorsW | winmine notepad |
-| LoadCursorW | winmine notepad |
-| LoadIconW | winmine notepad |
-| PostMessageW | notepad calc |
-| RegisterClassExW | winmine notepad |
-| SendDlgItemMessageW | notepad calc |
-| SetDlgItemInt | winmine notepad |
-| SetWindowLongPtrW | notepad calc |
-| TranslateAcceleratorW | winmine notepad |
 | AbortDoc | notepad |
-| AdjustWindowRect | winmine |
-| AppendMenuW | calc |
-| CheckDlgButton | calc |
-| CheckRadioButton | calc |
 | ChooseFontW | notepad |
 | CloseClipboard | calc |
-| CreateDialogParamW | calc |
-| CreateFontIndirectW | notepad |
-| CreatePopupMenu | calc |
 | CreateStatusWindowW | notepad |
-| DestroyAcceleratorTable | notepad |
-| DestroyMenu | calc |
 | DragAcceptFiles | notepad |
 | DragFinish | notepad |
 | DragQueryFileW | notepad |
 | DrawFrameControl | calc |
 | DrawStateW | calc |
-| DrawTextW | notepad |
 | EmptyClipboard | calc |
 | EndDoc | notepad |
 | EndPage | notepad |
 | FindTextW | notepad |
-| GetAsyncKeyState | calc |
-| GetClassNameW | calc |
 | GetClipboardData | calc |
 | GetFileTitleW | notepad |
 | GetKeyboardLayout | calc |
 | GetKeyboardState | calc |
-| GetMonitorInfoW | winmine |
 | GetOpenFileNameW | notepad |
 | GetSaveFileNameW | notepad |
-| GetSubMenu | calc |
-| GetTextMetricsW | notepad |
-| GetWindowLongPtrW | calc |
 | GetWindowPlacement | notepad |
-| GetWindowTextLengthW | notepad |
 | InitCommonControls | calc |
 | IsDialogMessageW | notepad |
-| IsDlgButtonChecked | calc |
-| LoadBitmapW | winmine |
-| LoadMenuW | calc |
 | MapVirtualKeyExW | calc |
-| MessageBoxW | notepad |
-| MonitorFromRect | winmine |
 | OpenClipboard | calc |
 | PageSetupDlgW | notepad |
-| PlaySoundW | winmine |
 | PrintDlgW | notepad |
-| RedrawWindow | winmine |
 | RegisterWindowMessageW | notepad |
 | ReplaceTextW | notepad |
 | SHAddToRecentDocs | notepad |
 | SetClipboardData | calc |
-| SetCursor | notepad |
 | SetMapMode | notepad |
-| SetMenu | calc |
 | SetProcessDefaultLayout | notepad |
-| SetTimer | winmine |
 | SetWindowPlacement | notepad |
-| SetWindowTextW | notepad |
 | ShellExecuteW | notepad |
 | StartDocW | notepad |
 | StartPage | notepad |
-| TextOutW | notepad |
 | ToAsciiEx | calc |
 | TrackMouseEvent | calc |
 | TrackPopupMenu | calc |

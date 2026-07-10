@@ -568,6 +568,11 @@ per-process page, and the doorbell are designed process-generic rather than
 terminal-specific. With 0014, WM POLICY moved out to `/bin/wm` over the
 kernel-owned `/run/wm.sock` endpoint (see "Kernel-owned endpoints" above);
 `/bin/wmctl` is just another protocol client — no new opcodes were needed.
+0068 added the one owner-initiated surface op since: `SURFACE_RESIZE`
+(0x1007, SDL_SetWindowSize) — a process resizing its OWN window (Win32
+apps size to content), reusing the 0019 WINDOW_RESIZED → SURFACE_CONFIGURE
+renegotiation and deliberately not gated on the resizable bit (that bit
+protects fixed-size apps from the WM, not from themselves).
 
 ## The fd/data-plane amendment (2026-07-06, todos/0009)
 

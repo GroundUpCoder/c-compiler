@@ -5531,6 +5531,7 @@ function createNullSDL() {
       __sdl_destroy_window: function () {},
       __sdl_set_window_title: function () {},
       __sdl_set_relative_mouse_mode: function () {},
+      __sdl_set_window_size: function () { return -1; },  // no window system to resize
       __sdl_update_window_surface: function () { return 0; },
       __sdl_create_renderer: function () { return 1; },
       __sdl_destroy_renderer: function () {},
@@ -5787,6 +5788,17 @@ function createSurfaceSDL({ ctx, hooks }) {
       }
     }
   }
+  /* Owner-initiated resize (todos/0068, SDL_SetWindowSize): ask the kernel
+   * for a new buffer size. The kernel answers asynchronously with the same
+   * WINDOW_RESIZED -> configure -> present-ack renegotiation as a WM/drag
+   * resize (below), so the app-facing contract is one path: the new size
+   * arrives as SDL_EVENT_WINDOW_RESIZED. Pre-0068 embedders lack the hook
+   * -> loud failure (SDL_SetWindowSize returns false). */
+  function requestResize(sid, w, h) {
+    if (typeof hooks.surfaceResize !== 'function') return -1;
+    const r = hooks.surfaceResize(sid, w | 0, h | 0);
+    return (r && !r.errno) ? 0 : -1;
+  }
   /* ---- buffer renegotiation (todos/0019) ----
    * A WINDOW_RESIZED ring record allocates the NEW fb here; the ack (a
    * SURFACE_CONFIGURE RPC, new SAB riding {type:'wm-sabs'} like at create)
@@ -5978,6 +5990,10 @@ function createSurfaceSDL({ ctx, hooks }) {
     env.__sdl_set_relative_mouse_mode = function (handle, enabled) {
       setRelativeMouse(handle, enabled);
     };
+    env.__sdl_set_window_size = function (handle, w, h) {
+      const win = fbByHandle.get(handle);
+      return win ? requestResize(win.sid, w, h) : -1;
+    };
     env.__sdl_pump_wait = pumpWait;   // user32 blocking GetMessage (0058)
     // Resize request (todos/0019): allocate the new shm SAB and resize the
     // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
@@ -6069,6 +6085,10 @@ function createSurfaceSDL({ ctx, hooks }) {
         if (win) hooks.surfaceSetTitle(win.sid, titlePtr ? readString(titlePtr) : '');
       },
       __sdl_set_relative_mouse_mode: setRelativeMouse,
+      __sdl_set_window_size: function (handle, w, h) {
+        const win = windows[handle - 1];
+        return win ? requestResize(win.sid, w, h) : -1;
+      },
       /* The real pixel path: CPU framebuffer -> shm back buffer -> flip
        * (mailbox present; never blocks, newest frame wins). */
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
@@ -6601,6 +6621,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_set_relative_mouse_mode: function (handle, enabled) {
         if (notifyWindow) notifyWindow({ type: 'sdl-relative-mouse', enabled: !!enabled });
       },
+      // SDL_SetWindowSize (todos/0068): only the kernel-surface flavor can
+      // renegotiate a buffer; the standalone page's canvas is the page's.
+      __sdl_set_window_size: function () { return -1; },
 
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
         const winInfo = sdlWindows[handle - 1];

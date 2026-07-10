@@ -38,6 +38,7 @@ var tests = [
   ['test_user32_e2e.js', []],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path
   ['test_kernel32_e2e.js', []], // 0059: win32 kernel32/advapi32/wide-CRT — in-OS selftest, POSIX-twin identity, registry persistence across boots
   ['test_win32_ports.js', []],  // 0060: port corpus compile-check — controls still link clean, PORTS.md (the 0059+ backlog) current
+  ['test_winmine_e2e.js', []],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
   ['test_term_e2e.js', []],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
   ['test_gpubox_dawn_e2e.js', []], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
 ];

@@ -300,7 +300,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v37**.
+Image version is **v38**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
@@ -358,10 +358,37 @@ kernel32 is W-NATIVE (no ANSI generics — the corpus is UNICODE-only;
 windows.h section note is canonical). `/bin/k32demo` (UNICODE build, 87
 self-checks incl. POSIX-twin identity + a redirected spawn) is the
 acceptance app; `tests/kernel/test_kernel32_e2e.js` adds
-registry-persistence-across-boots. Implement the rest to the demand
-log — DialogBox templates, menus, accelerators, SetTimer/caret blink,
-clipboard, Tab navigation, WinMain shim, and a resource (.rc) story all
-live there.
+registry-persistence-across-boots. 0068 landed the user32/resource
+tail — **winmine is seeded as `/bin/winmine` and playable**: resources
+ride a SIDECAR pack `<binary>.res` (the PE-resource-section analog)
+compiled by `tools/win32rc.js` from the app's .rc (STRINGTABLE/MENU/
+DIALOGEX/ACCELERATORS/BITMAP subset; the WRES format there MUST MATCH
+user32.c's `res_*` loader; found via argv0 at first Load* — zero link
+coupling) and committed per-port (`vendor/winmine/winmine.res`, seeded
+next to the binary). user32 grew the W entry points (per-window A/W
+mark; WM_SET/GETTEXT translate at the send_msg choke — NB
+MAKEINTRESOURCE detection can't be `< 0x10000` here: the wasm STACK is
+the low 64KB, so `is_intres` also requires the value to sit at-or-below
+a fresh local's address), menus (HMENU tree; user32 draws the BAR in
+the top 20px of the surface at every present, client area offset under
+it; popups draw in-surface and clip; items are agent targets — `wmctl
+tree` lists them, `wmctl click "Beginner"` posts the WM_COMMAND),
+accelerators, DialogBoxParamW over RT_DIALOG templates ("#32770" hosts
+both MessageBox and template dialogs), SetTimer/WM_TIMER (queue-dry
+delivery), RedrawWindow/AdjustWindowRect (menu height only — chrome is
+the kernel's), GetSystemMetrics + a synthetic monitor, and top-level
+MoveWindow → the new `SDL_SetWindowSize` → kernel `SURFACE_RESIZE`
+(0x1007, the one owner-initiated surface op: NOT gated on the
+resizable bit — that bit protects apps from the WM, not from
+themselves; reuses the 0019 renegotiation). gdi32 grew W text
+wrappers; `shell32.c` (ShellAboutW) + `winmm.c` (PlaySoundW success
+stub) are new veneer slices; `os/win32/wwinmain.c` is the wWinMain CRT
+entry shim UNICODE GUI ports list in bin.json `sources`. Icons/cursors
+are stub handles; the .ico/.wav assets are deliberately not vendored.
+After 0068: notepad 27, calc 15 (comdlg32/clipboard/printing +
+TrackPopupMenu/keyboard-layout). `tests/kernel/test_winmine_e2e.js` is
+the acceptance test (geometry, menus, dialogs, WM_TIMER, cell-reveal
+pixels, registry persistence across boots).
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

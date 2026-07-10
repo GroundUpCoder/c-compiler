@@ -102,6 +102,34 @@ note records it). Threads/LoadLibrary fail loudly per friction #1/#4.
 After 0059 the PORTS.md demand is purely user32-W/menus/dialogs/
 resources/comdlg32/shell32/winmm (winmine 29, notepad 64, calc 45).
 
+0068 landed 2026-07-10 (log: `logs/2026-07-10/win32-winmine.md`): the
+user32/resource tail — **winmine links, is seeded as `/bin/winmine`, and
+is playable**. The resource story: a tiny rc compiler (`tools/win32rc.js`,
+the STRINGTABLE/MENU/DIALOGEX/ACCELERATORS/BITMAP subset) emits a SIDECAR
+pack `<binary>.res` — the PE-resource-section analog, found via argv0 at
+the first Load*, zero link coupling (resource-less apps never know). The
+WRES format in win32rc.js is the MUST-MATCH spec for user32.c's `res_*`
+loader. user32 grew: the W entry points (per-window A/W marking; WM_SET/
+GETTEXT translate at the send_msg choke), menus (HMENU tree; the BAR is
+user32-drawn in the top 20px of the surface, client offset under it;
+popups draw in-surface and clip — a surface can't overflow its kernel
+window), accelerators, DialogBoxParamW over RT_DIALOG templates (the
+MessageBox modal shape reused; "#32770" hosts both), SetTimer/WM_TIMER
+(queue-dry delivery like WM_PAINT), RedrawWindow/AdjustWindowRect/
+GetSystemMetrics (synthetic screen numbers)/the synthetic monitor, and
+top-level MoveWindow -> the NEW `SDL_SetWindowSize` -> kernel
+SURFACE_RESIZE (0x1007; owner-initiated resize, deliberately NOT gated on
+the resizable bit — that bit protects apps from the WM, not from
+themselves). gdi32 grew the mechanical W text wrappers; `shell32.c`
+(ShellAboutW over MessageBox) and `winmm.c` (PlaySoundW success stub —
+wave assets deliberately not vendored) are new veneer slices;
+`wwinmain.c` is the wWinMain CRT entry shim UNICODE GUI ports list in
+their bin.json sources. Menu items are agent targets: the tree dump lists
+them and `wmctl click "Beginner"` posts the WM_COMMAND. Icons/cursors are
+stub handles by design. After 0068: winmine 0 missing, notepad 64→27,
+calc 45→15 — the tail is comdlg32/clipboard/printing (notepad) and
+popup-menu-tracking/clipboard/keyboard-layout (calc).
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

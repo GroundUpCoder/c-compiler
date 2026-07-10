@@ -25,13 +25,32 @@
  * center click otherwise), AQ_GETTEXT/AQ_SETTEXT read/write WM_GETTEXT
  * text. `wmctl click "OK"` needs no pixel coordinates, ever.
  *
+ * 0068 (the user32/resource tail — winmine playable) grew: the W entry
+ * points (the A/W split of WIN32.md friction #2 — windows/classes carry
+ * an isW mark and WM_SETTEXT/WM_GETTEXT translate at the send_msg choke
+ * point when caller charset != window charset; everything else converts
+ * at the API boundary), resources (a sidecar `<argv0>.res` pack compiled
+ * by tools/win32rc.js — the WRES format there is the MUST-MATCH spec for
+ * res_* below; Load{String,Bitmap,Menu,Accelerators}W read it, icons/
+ * cursors are stub handles), MENUS (an HMENU item tree; the menu BAR is
+ * drawn by user32 into the top MENU_BAR_H pixels of the surface at every
+ * present and the client area is offset under it — popups draw INSIDE
+ * the surface and clip to it, since a surface cannot overflow its kernel
+ * window; mouse-driven, agent-clickable via the tree, no keyboard nav),
+ * accelerators (TranslateAccelerator on WM_KEYDOWN), DIALOG templates
+ * (DialogBoxParamW instantiates a "#32770" top-level + child controls
+ * from the RT_DIALOG record, dialog units scaled by the stock font, the
+ * MessageBox modal-loop/owner-disable shape reused), SetTimer/WM_TIMER
+ * (delivered queue-dry like WM_PAINT), RedrawWindow, AdjustWindowRect,
+ * GetSystemMetrics + the synthetic single monitor, and top-level
+ * MoveWindow -> SDL_SetWindowSize (kernel SURFACE_RESIZE; the new size
+ * arrives as the usual RESIZED event, so apps see one resize path).
+ *
  * Deliberate 0058 simplifications (grow under 0060's missing-symbol log):
  *   - single-threaded by design (WIN32.md friction #1) — one queue, no
  *     PostThreadMessage; SendMessage is a direct call
  *   - invalidation is whole-window (rcPaint = the client rect)
- *   - no SetTimer/WM_TIMER (no caret blink — the caret is solid), no
- *     clipboard, no menus/accelerators/DialogBox templates (MessageBox
- *     is the modal dialog), no Tab-order navigation (IsDialogMessage)
+ *   - no clipboard, no Tab-order navigation (IsDialogMessage)
  *   - hidden top-levels: ShowWindow(SW_HIDE) on a top-level is a no-op
  *     (the kernel surface has no hide op; minimize is the WM's)
  *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) lands on
@@ -39,6 +58,15 @@
  *   - VK mapping covers letters/digits/named keys; punctuation VKs are
  *     approximate (WM_CHAR carries the real character — SDL3 keysyms
  *     are modifier-applied, so TranslateMessage is a table-free map)
+ * 0068 simplifications: menus are mouse/agent-driven (no Alt-mnemonics,
+ * no arrow-key nav; ESC does close); a popup taller than the window
+ * clips at the surface edge; the menu bar routes BEFORE mouse capture
+ * (a captured drag into the bar is swallowed — Windows lets capture
+ * win); PostMessageW must not carry text pointers
+ * (posted messages are never charset-translated); GetSystemMetrics
+ * screen numbers are synthetic constants (processes can't see the real
+ * screen — only the WM can); the systray/UNICODE title path keeps
+ * UTF-8 (SDL titles are UTF-8 anyway).
  */
 
 /* The veneer is implemented ANSI (WIN32.md friction #2: implement W, shim
@@ -99,6 +127,73 @@ static HBRUSH resolve_brush(HBRUSH b) {
     return b;
 }
 
+/* ============================================================ W helpers
+ * (kernel32.c owns the UTF-16<->UTF-8 boundary; these wrap its public
+ * entry points — same lib.json library, ordinary calls) */
+
+static char *w2a_dup(LPCWSTR w) {               /* malloc'd UTF-8, "" for NULL */
+    if (!w) w = (LPCWSTR)u"";
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    char *out = (char *)malloc(n > 0 ? (size_t)n : 1);
+    if (!out) return NULL;
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w, -1, out, n, NULL, NULL);
+    else out[0] = 0;
+    return out;
+}
+
+static WCHAR *a2w_dup(const char *s) {          /* malloc'd UTF-16 */
+    if (!s) s = "";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    WCHAR *out = (WCHAR *)malloc((size_t)(n > 0 ? n : 1) * sizeof(WCHAR));
+    if (!out) return NULL;
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s, -1, out, n);
+    else out[0] = 0;
+    return out;
+}
+
+/* MAKEINTRESOURCE detection. Windows' test is `value < 0x10000` (the
+ * first 64KB is never mapped there) — but in THIS wasm layout the low
+ * pages ARE mapped: they are the C STACK (static data starts above it,
+ * compiler.js staticDataStart = stackPages*64K). The stack grows DOWN,
+ * so a stack string passed to us always sits ABOVE our own frame: a
+ * low value at-or-below a fresh local's address cannot be a live
+ * caller pointer and must be a resource id. */
+static int is_intres(const void *p) {
+    if (((UINT_PTR)p >> 16) != 0) return 0;
+    char probe;
+    return (UINT_PTR)p <= (UINT_PTR)&probe;
+}
+
+/* Truncating conversions into fixed caller buffers (the kernel32 entry
+ * points return 0 on a short buffer instead of truncating — window text
+ * APIs must truncate). Both return the unit count EXCLUDING the NUL. */
+static int a2w_trunc(const char *s, LPWSTR out, int cap) {
+    if (!out || cap < 1) return 0;
+    int need = MultiByteToWideChar(CP_UTF8, 0, s ? s : "", -1, NULL, 0);
+    if (need <= 0) { out[0] = 0; return 0; }
+    WCHAR *tmp = (WCHAR *)malloc((size_t)need * sizeof(WCHAR));
+    if (!tmp) { out[0] = 0; return 0; }
+    MultiByteToWideChar(CP_UTF8, 0, s ? s : "", -1, tmp, need);
+    int n = need - 1 < cap - 1 ? need - 1 : cap - 1;
+    memcpy(out, tmp, (size_t)n * sizeof(WCHAR));
+    out[n] = 0;
+    free(tmp);
+    return n;
+}
+
+static int w2a_trunc(LPCWSTR s, char *out, int cap) {
+    if (!out || cap < 1) return 0;
+    char *full = w2a_dup(s);
+    if (!full) { out[0] = 0; return 0; }
+    int len = (int)strlen(full);
+    int n = len < cap - 1 ? len : cap - 1;
+    while (n > 0 && ((unsigned char)full[n] & 0xC0) == 0x80) n--;   /* no split UTF-8 */
+    memcpy(out, full, (size_t)n);
+    out[n] = 0;
+    free(full);
+    return n;
+}
+
 /* ============================================================ classes */
 
 #define MAX_CLASSES 64
@@ -108,6 +203,9 @@ typedef struct {
     WNDPROC proc;
     UINT style;
     HBRUSH bg;
+    int isW;                    /* registered via the W API: the wndproc
+                                   speaks UTF-16 in text messages */
+    int menuId;                 /* lpszMenuName MAKEINTRESOURCE id, or 0 */
     int used;
 } Class;
 
@@ -131,7 +229,8 @@ static Class *class_find(const char *name) {
     return NULL;
 }
 
-static ATOM class_add(const char *name, WNDPROC proc, UINT style, HBRUSH bg) {
+static ATOM class_add2(const char *name, WNDPROC proc, UINT style, HBRUSH bg,
+                       int isW, int menuId) {
     if (!name || !proc || class_find(name)) return 0;
     for (int i = 0; i < MAX_CLASSES; i++) {
         if (!g_classes[i].used) {
@@ -141,6 +240,8 @@ static ATOM class_add(const char *name, WNDPROC proc, UINT style, HBRUSH bg) {
             c->proc = proc;
             c->style = style;
             c->bg = bg;
+            c->isW = isW;
+            c->menuId = menuId;
             c->used = 1;
             return (ATOM)(i + 1);
         }
@@ -148,14 +249,42 @@ static ATOM class_add(const char *name, WNDPROC proc, UINT style, HBRUSH bg) {
     return 0;
 }
 
+static ATOM class_add(const char *name, WNDPROC proc, UINT style, HBRUSH bg) {
+    return class_add2(name, proc, style, bg, 0, 0);
+}
+
+static int menu_name_id(const void *menuName) {  /* A or W: only INTRESOURCE */
+    return is_intres(menuName) ? (int)(UINT_PTR)menuName : 0;
+}
+
 ATOM RegisterClass(const WNDCLASS *wc) {
     if (!wc) return 0;
-    return class_add(wc->lpszClassName, wc->lpfnWndProc, wc->style, wc->hbrBackground);
+    return class_add2(wc->lpszClassName, wc->lpfnWndProc, wc->style,
+                      wc->hbrBackground, 0, menu_name_id(wc->lpszMenuName));
 }
 
 ATOM RegisterClassEx(const WNDCLASSEX *wc) {
     if (!wc) return 0;
-    return class_add(wc->lpszClassName, wc->lpfnWndProc, wc->style, wc->hbrBackground);
+    return class_add2(wc->lpszClassName, wc->lpfnWndProc, wc->style,
+                      wc->hbrBackground, 0, menu_name_id(wc->lpszMenuName));
+}
+
+ATOM RegisterClassW(const WNDCLASSW *wc) {
+    if (!wc) return 0;
+    char *name = is_intres(wc->lpszClassName) ? NULL : w2a_dup(wc->lpszClassName);
+    ATOM a = class_add2(name, wc->lpfnWndProc, wc->style, wc->hbrBackground,
+                        1, menu_name_id(wc->lpszMenuName));
+    free(name);
+    return a;
+}
+
+ATOM RegisterClassExW(const WNDCLASSEXW *wc) {
+    if (!wc) return 0;
+    char *name = is_intres(wc->lpszClassName) ? NULL : w2a_dup(wc->lpszClassName);
+    ATOM a = class_add2(name, wc->lpfnWndProc, wc->style, wc->hbrBackground,
+                        1, menu_name_id(wc->lpszMenuName));
+    free(name);
+    return a;
 }
 
 /* ============================================================ HWND tree */
@@ -174,12 +303,20 @@ struct __HWND {
     char *text;
     SDL_Window *win;            /* top-level only */
     struct __HWND *focus;       /* top-level only: the keyboard-focus HWND */
+    HMENU menu;                 /* top-level only: the menu bar (0068) */
+    int isW;                    /* class registered via the W API */
     int visible, enabled;
     int needPaint;
     int inDestroy;
     LONG_PTR userdata;
-    void *ctl;                  /* control state (edit/listbox/scrollbar) */
+    void *ctl;                  /* control state (edit/listbox/scrollbar/dialog) */
 };
+
+/* The menu bar (0068): user32-drawn at the TOP of the surface; the client
+ * area sits under it. SM_CYMENU must agree. */
+#define MENU_BAR_H 20
+
+static int bar_h(HWND top) { return top->menu ? MENU_BAR_H : 0; }
 
 static HWND g_tops[32];         /* creation order; NULL holes on destroy */
 static int g_nTops;
@@ -238,8 +375,9 @@ HDC GetDC(HWND h) {
     if (!s) return NULL;
     int ox, oy;
     hwnd_origin(h, &ox, &oy);
+    oy += bar_h(top);                    /* client space starts under the bar */
     int cw = is_top(h) ? s->w : h->w;
-    int ch = is_top(h) ? s->h : h->h;
+    int ch = is_top(h) ? s->h - bar_h(top) : h->h;
     if (ox + cw > s->w) cw = s->w - ox;
     if (oy + ch > s->h) ch = s->h - oy;
     if (ox < 0 || oy < 0 || cw < 1 || ch < 1)
@@ -248,8 +386,11 @@ HDC GetDC(HWND h) {
     return __gdi_dc_wrap((uint32_t *)s->pixels + oy * stride + ox, cw, ch, stride);
 }
 
+static void menu_overlay_draw(HWND top);         /* bar + open popup (0068) */
+
 int ReleaseDC(HWND h, HDC dc) {
     if (!h || !dc) return 0;
+    if (h->top->menu) menu_overlay_draw(h->top); /* bar/popup ride every present */
     SDL_UpdateWindowSurface(h->top->win);        /* present: shm mailbox flip */
     __gdi_dc_unwrap(dc);
     return 1;
@@ -284,7 +425,8 @@ BOOL GetClientRect(HWND h, RECT *r) {
     if (is_top(h)) {                     /* live surface size: resizes seen */
         SDL_Surface *s = SDL_GetWindowSurface(h->win);
         if (!s) return FALSE;
-        SetRect(r, 0, 0, s->w, s->h);
+        int ch = s->h - bar_h(h);
+        SetRect(r, 0, 0, s->w, ch < 0 ? 0 : ch);
         return TRUE;
     }
     SetRect(r, 0, 0, h->w, h->h);
@@ -373,9 +515,56 @@ LRESULT CallWindowProc(WNDPROC proc, HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return proc(h, msg, wp, lp);
 }
 
-LRESULT SendMessage(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+/* The A/W translation choke point (0068, WIN32.md friction #2): text
+ * messages convert when the CALLER's charset differs from the WINDOW's —
+ * the same per-window marking Windows uses. Only WM_SETTEXT/WM_GETTEXT
+ * carry translated text; everything else passes through (posted messages
+ * never translate — don't post text pointers). */
+static LRESULT send_msg(HWND h, UINT msg, WPARAM wp, LPARAM lp, int callerW) {
     if (!h) return 0;
+    int winW = h->isW;
+    if (msg == WM_SETTEXT && lp && callerW != winW) {
+        void *conv = callerW ? (void *)w2a_dup((LPCWSTR)lp)
+                             : (void *)a2w_dup((const char *)lp);
+        if (!conv) return FALSE;
+        LRESULT r = CallWindowProc(h->proc, h, msg, wp, (LPARAM)conv);
+        free(conv);
+        return r;
+    }
+    if (msg == WM_GETTEXT && lp && (int)wp > 0 && callerW != winW) {
+        int cap = (int)wp;
+        if (callerW) {                           /* W caller, A window */
+            int acap = cap * 3 + 1;              /* UTF-8 worst case for cap chars */
+            char *tmp = (char *)malloc((size_t)acap);
+            if (!tmp) return 0;
+            tmp[0] = 0;
+            CallWindowProc(h->proc, h, msg, (WPARAM)acap, (LPARAM)tmp);
+            int wn = a2w_trunc(tmp, (LPWSTR)lp, cap);
+            free(tmp);
+            return wn;
+        } else {                                 /* A caller, W window */
+            WCHAR *tmp = (WCHAR *)malloc((size_t)cap * sizeof(WCHAR));
+            if (!tmp) return 0;
+            tmp[0] = 0;
+            CallWindowProc(h->proc, h, msg, (WPARAM)cap, (LPARAM)tmp);
+            int an = w2a_trunc(tmp, (char *)lp, cap);
+            free(tmp);
+            return an;
+        }
+    }
     return CallWindowProc(h->proc, h, msg, wp, lp);
+}
+
+LRESULT SendMessage(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    return send_msg(h, msg, wp, lp, 0);
+}
+
+LRESULT SendMessageW(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    return send_msg(h, msg, wp, lp, 1);
+}
+
+BOOL PostMessageW(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    return PostMessage(h, msg, wp, lp);          /* no text translation: see top */
 }
 
 /* ============================================================ VK map */
@@ -420,6 +609,764 @@ SHORT GetKeyState(int vk) {
     else if (vk == VK_CONTROL) down = (g_mod & 0x00C0) != 0;
     else if (vk == VK_MENU) down = (g_mod & 0x0300) != 0;
     return down ? (SHORT)0x8000 : 0;
+}
+
+SHORT GetAsyncKeyState(int vk) { return GetKeyState(vk); }
+
+/* ============================================================ resources
+ * The sidecar pack (0068): `<argv0>.res`, compiled by tools/win32rc.js —
+ * the WRES layout THERE is the spec; this loader re-declares it (MUST
+ * MATCH). Lazy: first Load* maps the whole pack into memory; a missing
+ * pack just means every lookup fails (resource-less apps never notice). */
+
+#define RT_BITMAP_K 2
+#define RT_MENU_K 4
+#define RT_DIALOG_K 5
+#define RT_STRING_K 6
+#define RT_ACCEL_K 9
+
+static uint8_t *g_res;
+static uint32_t g_resSize;
+static int g_resState;          /* 0 untried, 1 loaded, -1 absent */
+
+static uint32_t rd16(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8); }
+static uint32_t rd32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void res_try(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < 12 || n > 16 * 1024 * 1024) { fclose(f); return; }
+    uint8_t *buf = (uint8_t *)malloc((size_t)n);
+    if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return; }
+    fclose(f);
+    if (memcmp(buf, "WRES", 4) != 0 || rd32(buf + 4) != 1) { free(buf); return; }
+    g_res = buf;
+    g_resSize = (uint32_t)n;
+    g_resState = 1;
+}
+
+static void res_ensure(void) {
+    if (g_resState) return;
+    g_resState = -1;
+    WCHAR wpath[512];
+    if (!GetModuleFileNameW(NULL, wpath, 512)) return;
+    char *p8 = w2a_dup(wpath);
+    if (!p8) return;
+    char path[600];
+    snprintf(path, sizeof path, "%s.res", p8);
+    res_try(path);
+    if (g_resState != 1) {                       /* PATH-spawned bare name */
+        const char *base = strrchr(p8, '/');
+        snprintf(path, sizeof path, "/bin/%s.res", base ? base + 1 : p8);
+        res_try(path);
+    }
+    free(p8);
+}
+
+static const uint8_t *res_find(int type, int id, uint32_t *size) {
+    res_ensure();
+    if (g_resState != 1) return NULL;
+    uint32_t count = rd32(g_res + 8);
+    for (uint32_t i = 0; i < count && 12 + i * 12 + 12 <= g_resSize; i++) {
+        const uint8_t *e = g_res + 12 + i * 12;
+        if ((int)rd16(e) != type || (int)rd16(e + 2) != id) continue;
+        uint32_t off = rd32(e + 4), sz = rd32(e + 8);
+        if (off > g_resSize || sz > g_resSize - off) return NULL;
+        if (size) *size = sz;
+        return g_res + off;
+    }
+    return NULL;
+}
+
+int LoadStringW(HINSTANCE inst, UINT id, LPWSTR buf, int max) {
+    (void)inst;
+    if (!buf || max < 1) return 0;
+    buf[0] = 0;
+    uint32_t sz;
+    const uint8_t *d = res_find(RT_STRING_K, (int)id, &sz);
+    if (!d) return 0;
+    char tmp[512];
+    if (sz > sizeof tmp - 1) sz = sizeof tmp - 1;
+    memcpy(tmp, d, sz);
+    tmp[sz] = 0;
+    return a2w_trunc(tmp, buf, max);
+}
+
+/* Uncompressed BI_RGB .bmp (1/4/8/24/32bpp) -> 32bpp RGBA HBITMAP (the
+ * gdi32 pixel word: R | G<<8 | B<<16 | FF<<24). Bottom-up unless h < 0. */
+static HBITMAP bmp_decode(const uint8_t *d, uint32_t n) {
+    if (n < 54 || d[0] != 'B' || d[1] != 'M') return NULL;
+    uint32_t dataOff = rd32(d + 10), hdrSize = rd32(d + 14);
+    int w = (int)rd32(d + 18), h = (int)rd32(d + 22);
+    int bpp = (int)rd16(d + 28);
+    uint32_t comp = rd32(d + 30), clrUsed = rd32(d + 46);
+    int topdown = h < 0, ah = topdown ? -h : h;
+    if (hdrSize < 40 || comp != 0 || w < 1 || ah < 1 || w > 8192 || ah > 8192) return NULL;
+    if (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 24 && bpp != 32) return NULL;
+    int palN = bpp <= 8 ? (int)(clrUsed ? clrUsed : (1u << bpp)) : 0;
+    const uint8_t *pal = d + 14 + hdrSize;                  /* BGRA quads */
+    if (14 + hdrSize + (uint32_t)palN * 4 > n) return NULL;
+    uint32_t stride = (((uint32_t)w * bpp + 31) / 32) * 4;
+    if (dataOff > n || stride * (uint32_t)ah > n - dataOff) return NULL;
+    uint32_t *px = (uint32_t *)malloc((size_t)w * ah * 4);
+    if (!px) return NULL;
+    for (int row = 0; row < ah; row++) {
+        const uint8_t *src = d + dataOff + (size_t)stride * (topdown ? row : ah - 1 - row);
+        uint32_t *dst = px + (size_t)row * w;
+        for (int col = 0; col < w; col++) {
+            uint32_t r, g, b;
+            if (bpp == 24 || bpp == 32) {
+                const uint8_t *p = src + (size_t)col * (bpp / 8);
+                b = p[0]; g = p[1]; r = p[2];
+            } else {
+                int idx;
+                if (bpp == 8) idx = src[col];
+                else if (bpp == 4) idx = (src[col / 2] >> (col & 1 ? 0 : 4)) & 0xF;
+                else idx = (src[col / 8] >> (7 - (col & 7))) & 1;
+                if (idx >= palN) idx = 0;
+                const uint8_t *p = pal + (size_t)idx * 4;
+                b = p[0]; g = p[1]; r = p[2];
+            }
+            dst[col] = r | (g << 8) | (b << 16) | 0xFF000000u;
+        }
+    }
+    HBITMAP bm = CreateBitmap(w, ah, 1, 32, px);
+    free(px);
+    return bm;
+}
+
+HBITMAP LoadBitmapW(HINSTANCE inst, LPCWSTR name) {
+    (void)inst;
+    if (!is_intres(name)) return NULL;           /* named resources: none */
+    uint32_t sz;
+    const uint8_t *d = res_find(RT_BITMAP_K, (int)(UINT_PTR)name, &sz);
+    return d ? bmp_decode(d, sz) : NULL;
+}
+
+/* Icons and cursors are STUB HANDLES: the kernel chrome owns window
+ * decoration and there is no free cursor (the page pointer is the
+ * pointer), so apps get distinct non-NULL tokens and DrawIcon no-ops.
+ * The .ico/.cur assets are deliberately not vendored (0068). */
+static int g_iconStub, g_cursorStub;
+
+HICON LoadIconW(HINSTANCE inst, LPCWSTR name) {
+    (void)inst; (void)name;
+    return (HICON)&g_iconStub;
+}
+
+HCURSOR LoadCursorW(HINSTANCE inst, LPCWSTR name) {
+    (void)inst; (void)name;
+    return (HCURSOR)&g_cursorStub;
+}
+
+HANDLE LoadImageW(HINSTANCE inst, LPCWSTR name, UINT type, int cx, int cy, UINT flags) {
+    (void)cx; (void)cy;
+    if (flags & LR_LOADFROMFILE) return NULL;    /* pack-only */
+    if (type == IMAGE_BITMAP) return (HANDLE)LoadBitmapW(inst, name);
+    if (type == IMAGE_ICON) return (HANDLE)LoadIconW(inst, name);
+    if (type == IMAGE_CURSOR) return (HANDLE)LoadCursorW(inst, name);
+    return NULL;
+}
+
+BOOL DestroyIcon(HICON icon) { (void)icon; return TRUE; }
+BOOL DestroyCursor(HCURSOR cur) { (void)cur; return TRUE; }
+BOOL DrawIcon(HDC hdc, int x, int y, HICON icon) { (void)hdc; (void)x; (void)y; (void)icon; return TRUE; }
+
+HCURSOR SetCursor(HCURSOR cur) {
+    static HCURSOR current;
+    HCURSOR old = current;
+    current = cur;
+    return old;
+}
+
+/* ============================================================ accelerators
+ * WRES type 9: u16 n, then n x { u8 fFlags, u16 key, u16 cmd } — fFlags is
+ * the Windows ACCEL word (FVIRTKEY 1, FNOINVERT 2, FSHIFT 4, FCONTROL 8,
+ * FALT 16). */
+
+typedef struct {
+    int n;
+    struct { uint8_t flags; uint16_t key, cmd; } e[64];
+} AccelTbl;
+
+HACCEL LoadAcceleratorsW(HINSTANCE inst, LPCWSTR name) {
+    (void)inst;
+    if (!is_intres(name)) return NULL;
+    uint32_t sz;
+    const uint8_t *d = res_find(RT_ACCEL_K, (int)(UINT_PTR)name, &sz);
+    if (!d || sz < 2) return NULL;
+    int n = (int)rd16(d);
+    if (n < 0 || n > 64 || sz < 2 + (uint32_t)n * 5) return NULL;
+    AccelTbl *t = (AccelTbl *)calloc(1, sizeof(AccelTbl));
+    if (!t) return NULL;
+    t->n = n;
+    for (int i = 0; i < n; i++) {
+        const uint8_t *p = d + 2 + i * 5;
+        t->e[i].flags = p[0];
+        t->e[i].key = (uint16_t)rd16(p + 1);
+        t->e[i].cmd = (uint16_t)rd16(p + 3);
+    }
+    return (HACCEL)t;
+}
+
+BOOL DestroyAcceleratorTable(HACCEL acc) {
+    free(acc);
+    return acc != NULL;
+}
+
+int TranslateAcceleratorW(HWND hwnd, HACCEL acc, MSG *msg) {
+    if (!hwnd || !acc || !msg || msg->message != WM_KEYDOWN) return 0;
+    AccelTbl *t = (AccelTbl *)acc;
+    int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    int alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    for (int i = 0; i < t->n; i++) {
+        if (!(t->e[i].flags & 0x01)) continue;   /* VIRTKEY entries only */
+        if ((int)msg->wParam != t->e[i].key) continue;
+        if (((t->e[i].flags & 0x04) != 0) != shift) continue;
+        if (((t->e[i].flags & 0x08) != 0) != ctrl) continue;
+        if (((t->e[i].flags & 0x10) != 0) != alt) continue;
+        SendMessage(hwnd, WM_COMMAND, MAKEWPARAM(t->e[i].cmd, 1), 0);
+        return 1;
+    }
+    return 0;
+}
+
+/* ============================================================ menus
+ * The HMENU model (0068): an item tree. The BAR renders into the top
+ * MENU_BAR_H pixels of the top-level surface at every present
+ * (menu_overlay_draw from ReleaseDC); an open popup renders below its bar
+ * title, INSIDE the surface (a surface cannot overflow its kernel
+ * window — tall popups clip). Mouse-driven + ESC; items are also agent
+ * targets (the tree dump lists them; AQ_CLICK posts WM_COMMAND). */
+
+typedef struct __MENUITEM {
+    int kind;                   /* 0 item, 1 popup, 2 separator */
+    int id;
+    UINT state;                 /* MF_CHECKED | MF_GRAYED | MF_DISABLED */
+    char *text;                 /* UTF-8; '&' mnemonic kept, '\t' splits accel */
+    HMENU sub;
+} MenuItem;
+
+typedef struct {
+    int n, cap;
+    MenuItem *items;
+} MenuTbl;
+
+#define MENU_T(m) ((MenuTbl *)(m))
+#define MENU_ITEM_H 18
+#define MENU_SEP_H 8
+#define MENU_GUTTER 16
+
+static void strip_amp(const char *in, char *out, int cap);   /* agent section */
+
+HMENU CreateMenu(void) { return (HMENU)calloc(1, sizeof(MenuTbl)); }
+HMENU CreatePopupMenu(void) { return CreateMenu(); }
+
+static MenuItem *menu_append(MenuTbl *m, int kind, int id, const char *text, HMENU sub) {
+    if (!m) return NULL;
+    if (m->n >= m->cap) {
+        int nc = m->cap ? m->cap * 2 : 8;
+        MenuItem *ni = (MenuItem *)realloc(m->items, (size_t)nc * sizeof(MenuItem));
+        if (!ni) return NULL;
+        m->items = ni;
+        m->cap = nc;
+    }
+    MenuItem *it = &m->items[m->n++];
+    memset(it, 0, sizeof *it);
+    it->kind = kind;
+    it->id = id;
+    it->sub = sub;
+    if (text) {
+        size_t len = strlen(text);
+        it->text = (char *)malloc(len + 1);
+        if (it->text) memcpy(it->text, text, len + 1);
+    }
+    return it;
+}
+
+BOOL DestroyMenu(HMENU menu) {
+    MenuTbl *m = MENU_T(menu);
+    if (!m) return FALSE;
+    for (int i = 0; i < m->n; i++) {
+        free(m->items[i].text);
+        if (m->items[i].sub) DestroyMenu(m->items[i].sub);
+    }
+    free(m->items);
+    free(m);
+    return TRUE;
+}
+
+BOOL AppendMenuW(HMENU menu, UINT flags, UINT_PTR id, LPCWSTR text) {
+    if (!menu) return FALSE;
+    char *t = (text && !is_intres(text)) ? w2a_dup(text) : NULL;
+    MenuItem *it;
+    if (flags & MF_SEPARATOR) it = menu_append(MENU_T(menu), 2, 0, NULL, NULL);
+    else if (flags & MF_POPUP) it = menu_append(MENU_T(menu), 1, 0, t ? t : "", (HMENU)id);
+    else it = menu_append(MENU_T(menu), 0, (int)id, t ? t : "", NULL);
+    free(t);
+    if (it) it->state = flags & (MF_CHECKED | MF_GRAYED | MF_DISABLED);
+    return it != NULL;
+}
+
+/* WRES type 4 (recursive): u16 n, then items — see tools/win32rc.js. */
+static const uint8_t *menu_parse(const uint8_t *p, const uint8_t *end, MenuTbl *m) {
+    if (!p || p + 2 > end) return NULL;
+    int n = (int)rd16(p);
+    p += 2;
+    for (int i = 0; i < n; i++) {
+        if (p >= end) return NULL;
+        int kind = *p++;
+        if (kind == 2) { menu_append(m, 2, 0, NULL, NULL); continue; }
+        int id = 0;
+        if (kind == 0) {
+            if (p + 2 > end) return NULL;
+            id = (int)rd16(p);
+            p += 2;
+        }
+        if (p + 2 > end) return NULL;
+        int tl = (int)rd16(p);
+        p += 2;
+        if (p + tl > end) return NULL;
+        char *t = (char *)malloc((size_t)tl + 1);
+        if (!t) return NULL;
+        memcpy(t, p, (size_t)tl);
+        t[tl] = 0;
+        p += tl;
+        if (kind == 1) {
+            HMENU sub = CreateMenu();
+            menu_append(m, 1, 0, t, sub);
+            p = menu_parse(p, end, MENU_T(sub));
+            if (!p) { free(t); return NULL; }
+        } else {
+            menu_append(m, 0, id, t, NULL);
+        }
+        free(t);
+    }
+    return p;
+}
+
+HMENU LoadMenuW(HINSTANCE inst, LPCWSTR name) {
+    (void)inst;
+    if (!is_intres(name)) return NULL;
+    uint32_t sz;
+    const uint8_t *d = res_find(RT_MENU_K, (int)(UINT_PTR)name, &sz);
+    if (!d) return NULL;
+    HMENU m = CreateMenu();
+    if (!m) return NULL;
+    if (!menu_parse(d, d + sz, MENU_T(m))) { DestroyMenu(m); return NULL; }
+    return m;
+}
+
+HMENU GetMenu(HWND h) { return h ? h->top->menu : NULL; }
+
+BOOL SetMenu(HWND h, HMENU menu) {
+    if (!h || !is_top(h)) return FALSE;
+    h->menu = menu;
+    InvalidateRect(h, NULL, TRUE);
+    return TRUE;
+}
+
+HMENU GetSubMenu(HMENU menu, int pos) {
+    MenuTbl *m = MENU_T(menu);
+    if (!m || pos < 0 || pos >= m->n) return NULL;
+    return m->items[pos].sub;
+}
+
+/* Label lookup for the agent (0068): '&' stripped, accel tab cut. */
+static MenuItem *menu_find_label(MenuTbl *m, const char *label) {
+    if (!m) return NULL;
+    for (int i = 0; i < m->n; i++) {
+        MenuItem *it = &m->items[i];
+        if (it->kind == 0 && it->text) {
+            char stripped[128];
+            strip_amp(it->text, stripped, sizeof stripped);
+            char *tab = strchr(stripped, '\t');
+            if (tab) *tab = 0;
+            if (strcmp(stripped, label) == 0) return it;
+        }
+        if (it->sub) {
+            MenuItem *f = menu_find_label(MENU_T(it->sub), label);
+            if (f) return f;
+        }
+    }
+    return NULL;
+}
+
+static MenuItem *menu_find_cmd(MenuTbl *m, int id) {
+    if (!m) return NULL;
+    for (int i = 0; i < m->n; i++) {
+        if (m->items[i].kind == 0 && m->items[i].id == id) return &m->items[i];
+        if (m->items[i].sub) {
+            MenuItem *f = menu_find_cmd(MENU_T(m->items[i].sub), id);
+            if (f) return f;
+        }
+    }
+    return NULL;
+}
+
+static MenuItem *menu_item_of(HMENU menu, UINT id, UINT flags) {
+    MenuTbl *m = MENU_T(menu);
+    if (!m) return NULL;
+    if (flags & MF_BYPOSITION)
+        return (int)id < m->n ? &m->items[id] : NULL;
+    return menu_find_cmd(m, (int)id);
+}
+
+DWORD CheckMenuItem(HMENU menu, UINT id, UINT check) {
+    MenuItem *it = menu_item_of(menu, id, check);
+    if (!it) return (DWORD)-1;
+    DWORD prev = it->state & MF_CHECKED;
+    if (check & MF_CHECKED) it->state |= MF_CHECKED;
+    else it->state &= ~MF_CHECKED;
+    return prev;
+}
+
+BOOL EnableMenuItem(HMENU menu, UINT id, UINT enable) {
+    MenuItem *it = menu_item_of(menu, id, enable);
+    if (!it) return -1;
+    UINT prev = it->state & (MF_GRAYED | MF_DISABLED);
+    it->state &= ~(MF_GRAYED | MF_DISABLED);
+    it->state |= enable & (MF_GRAYED | MF_DISABLED);
+    return (BOOL)prev;
+}
+
+BOOL DrawMenuBar(HWND h) {
+    if (!h) return FALSE;
+    InvalidateRect(h->top, NULL, TRUE);
+    return TRUE;
+}
+
+/* ---- menu geometry + drawing (bar and popup share the measuring DC) ---- */
+
+static struct {
+    HWND top;
+    int open;                   /* a popup is showing */
+    int barIdx;                 /* which bar item's popup */
+    int hot;                    /* hot popup row, -1 none */
+} g_menu;
+
+static HDC menu_mdc(void) {
+    static HDC dc;
+    if (!dc) dc = CreateCompatibleDC(NULL);
+    return dc;
+}
+
+static int menu_text_w(const char *text) {      /* up to the accel tab */
+    char label[128];
+    strip_amp(text ? text : "", label, sizeof label);
+    char *tab = strchr(label, '\t');
+    if (tab) *tab = 0;
+    SIZE sz;
+    GetTextExtentPoint32(menu_mdc(), label, (int)strlen(label), &sz);
+    return sz.cx;
+}
+
+/* Bar item i's rect in SURFACE coords; returns 0 past the end. */
+static int menu_bar_rect(HWND top, int i, RECT *r) {
+    MenuTbl *m = MENU_T(top->menu);
+    if (!m || i < 0 || i >= m->n) return 0;
+    int x = 2;
+    for (int k = 0; k < i; k++) x += menu_text_w(m->items[k].text) + 16;
+    SetRect(r, x, 0, x + menu_text_w(m->items[i].text) + 16, MENU_BAR_H);
+    return 1;
+}
+
+static int menu_bar_at(HWND top, int x, int y) {
+    if (y < 0 || y >= MENU_BAR_H) return -1;
+    MenuTbl *m = MENU_T(top->menu);
+    for (int i = 0; m && i < m->n; i++) {
+        RECT r;
+        if (menu_bar_rect(top, i, &r) && x >= r.left && x < r.right) return i;
+    }
+    return -1;
+}
+
+static int menu_row_h(const MenuItem *it) {
+    return it->kind == 2 ? MENU_SEP_H : MENU_ITEM_H;
+}
+
+/* Popup rect for the open bar item, clamped inside the surface. */
+static void menu_popup_rect(HWND top, RECT *out) {
+    MenuTbl *bar = MENU_T(top->menu);
+    MenuTbl *m = MENU_T(bar->items[g_menu.barIdx].sub);
+    SDL_Surface *s = SDL_GetWindowSurface(top->win);
+    int w = 60, h = 2;
+    for (int i = 0; m && i < m->n; i++) {
+        const MenuItem *it = &m->items[i];
+        h += menu_row_h(it);
+        if (it->kind != 2) {
+            int tw = menu_text_w(it->text) + MENU_GUTTER + 20;
+            const char *tab = it->text ? strchr(it->text, '\t') : NULL;
+            if (tab) {
+                SIZE az;
+                GetTextExtentPoint32(menu_mdc(), tab + 1, (int)strlen(tab + 1), &az);
+                tw += az.cx + 12;
+            }
+            if (tw > w) w = tw;
+        }
+    }
+    h += 2;
+    RECT br;
+    menu_bar_rect(top, g_menu.barIdx, &br);
+    int x = br.left;
+    if (s && x + w > s->w) x = s->w - w;
+    if (x < 0) x = 0;
+    int maxH = s ? s->h - MENU_BAR_H : h;
+    SetRect(out, x, MENU_BAR_H, x + w, MENU_BAR_H + (h > maxH ? maxH : h));
+}
+
+/* Popup row index at surface (x, y); -1 outside/none. */
+static int menu_popup_at(HWND top, int x, int y) {
+    if (!g_menu.open) return -1;
+    RECT pr;
+    menu_popup_rect(top, &pr);
+    POINT p = { x, y };
+    if (!PtInRect(&pr, p)) return -1;
+    MenuTbl *m = MENU_T(MENU_T(top->menu)->items[g_menu.barIdx].sub);
+    int ry = pr.top + 1;
+    for (int i = 0; m && i < m->n; i++) {
+        int rh = menu_row_h(&m->items[i]);
+        if (y >= ry && y < ry + rh) return i;
+        ry += rh;
+    }
+    return -1;
+}
+
+static void draw_raised(HDC dc, RECT r, int sunken);         /* controls section */
+
+static void menu_draw_bar_into(HWND top, HDC dc, int surfW) {
+    RECT bar;
+    SetRect(&bar, 0, 0, surfW, MENU_BAR_H);
+    FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
+    RECT edge;
+    SetRect(&edge, 0, MENU_BAR_H - 1, surfW, MENU_BAR_H);
+    FillRect(dc, &edge, GetSysColorBrush(COLOR_BTNSHADOW));
+    SetBkMode(dc, TRANSPARENT);
+    MenuTbl *m = MENU_T(top->menu);
+    for (int i = 0; m && i < m->n; i++) {
+        RECT r;
+        if (!menu_bar_rect(top, i, &r)) break;
+        int open = g_menu.open && g_menu.top == top && g_menu.barIdx == i;
+        if (open) FillRect(dc, &r, GetSysColorBrush(COLOR_HIGHLIGHT));
+        SetTextColor(dc, GetSysColor(open ? COLOR_HIGHLIGHTTEXT : COLOR_BTNTEXT));
+        char label[128];
+        strip_amp(m->items[i].text ? m->items[i].text : "", label, sizeof label);
+        TextOut(dc, r.left + 8, 2, label, (int)strlen(label));
+    }
+}
+
+static void menu_draw_popup_into(HWND top, HDC dc) {
+    RECT pr;
+    menu_popup_rect(top, &pr);
+    FillRect(dc, &pr, GetSysColorBrush(COLOR_MENU));
+    draw_raised(dc, pr, 0);
+    SetBkMode(dc, TRANSPARENT);
+    MenuTbl *m = MENU_T(MENU_T(top->menu)->items[g_menu.barIdx].sub);
+    int y = pr.top + 1;
+    for (int i = 0; m && i < m->n; i++) {
+        const MenuItem *it = &m->items[i];
+        int rh = menu_row_h(it);
+        if (y + rh > pr.bottom) break;                       /* clipped tail */
+        if (it->kind == 2) {
+            RECT s1;
+            SetRect(&s1, pr.left + 2, y + rh / 2 - 1, pr.right - 2, y + rh / 2);
+            FillRect(dc, &s1, GetSysColorBrush(COLOR_BTNSHADOW));
+            SetRect(&s1, pr.left + 2, y + rh / 2, pr.right - 2, y + rh / 2 + 1);
+            FillRect(dc, &s1, GetSysColorBrush(COLOR_BTNHIGHLIGHT));
+        } else {
+            int grayed = (it->state & (MF_GRAYED | MF_DISABLED)) != 0;
+            int hot = g_menu.hot == i && !grayed;
+            if (hot) {
+                RECT hr;
+                SetRect(&hr, pr.left + 1, y, pr.right - 1, y + rh);
+                FillRect(dc, &hr, GetSysColorBrush(COLOR_HIGHLIGHT));
+            }
+            SetTextColor(dc, GetSysColor(grayed ? COLOR_GRAYTEXT
+                                                : hot ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
+            char label[128];
+            strip_amp(it->text ? it->text : "", label, sizeof label);
+            char *tab = strchr(label, '\t');
+            if (tab) *tab = 0;
+            TextOut(dc, pr.left + MENU_GUTTER, y + 2, label, (int)strlen(label));
+            if (tab)                                          /* accel column */
+                TextOut(dc, pr.right - 8 - menu_text_w(tab + 1) - 0, y + 2,
+                        tab + 1, (int)strlen(tab + 1));
+            if (it->state & MF_CHECKED) {                     /* check mark */
+                HPEN p = CreatePen(PS_SOLID, 1,
+                                   GetSysColor(hot ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
+                HGDIOBJ op = SelectObject(dc, (HGDIOBJ)p);
+                for (int k = 0; k < 2; k++) {
+                    MoveToEx(dc, pr.left + 4, y + 8 + k, NULL);
+                    LineTo(dc, pr.left + 6, y + 10 + k);
+                    LineTo(dc, pr.left + 11, y + 5 + k);
+                }
+                SelectObject(dc, op);
+                DeleteObject((HGDIOBJ)p);
+            }
+        }
+        y += rh;
+    }
+}
+
+static void menu_overlay_draw(HWND top) {
+    SDL_Surface *s = SDL_GetWindowSurface(top->win);
+    if (!s) return;
+    HDC dc = __gdi_dc_wrap(s->pixels, s->w, s->h, s->pitch / 4);
+    if (!dc) return;
+    menu_draw_bar_into(top, dc, s->w);
+    if (g_menu.open && g_menu.top == top) menu_draw_popup_into(top, dc);
+    __gdi_dc_unwrap(dc);                        /* present is the caller's */
+}
+
+static void menu_present(HWND top) {            /* overlay-only refresh */
+    menu_overlay_draw(top);
+    SDL_UpdateWindowSurface(top->win);
+}
+
+static void menu_close(void) {
+    if (!g_menu.open) return;
+    HWND t = g_menu.top;
+    g_menu.open = 0;
+    g_menu.top = NULL;
+    /* the popup overwrote client pixels: have the app repaint them */
+    if (t) InvalidateRect(t, NULL, TRUE);
+}
+
+static void menu_open_popup(HWND top, int idx) {
+    MenuTbl *m = MENU_T(top->menu);
+    if (!m || idx < 0 || idx >= m->n) return;
+    if (m->items[idx].kind != 1 || !m->items[idx].sub) return;   /* bar popups only */
+    g_menu.top = top;
+    g_menu.open = 1;
+    g_menu.barIdx = idx;
+    g_menu.hot = -1;
+    menu_present(top);
+}
+
+static void menu_fire(HWND top, int row) {
+    MenuTbl *m = MENU_T(MENU_T(top->menu)->items[g_menu.barIdx].sub);
+    if (!m || row < 0 || row >= m->n) return;
+    MenuItem *it = &m->items[row];
+    if (it->kind != 0 || (it->state & (MF_GRAYED | MF_DISABLED))) return;
+    menu_close();
+    PostMessage(top, WM_COMMAND, MAKEWPARAM(it->id, 0), 0);
+}
+
+/* Mouse in SURFACE coords. Returns 1 if the menu consumed the event. */
+static int menu_route_mouse(HWND top, UINT msg, int x, int y) {
+    if (!top->menu) return 0;
+    if (g_menu.open && g_menu.top == top) {
+        int row = menu_popup_at(top, x, y);
+        int bi = menu_bar_at(top, x, y);
+        switch (msg) {
+        case WM_MOUSEMOVE:
+            if (bi >= 0 && bi != g_menu.barIdx &&
+                MENU_T(top->menu)->items[bi].kind == 1) {
+                g_menu.barIdx = bi;              /* hover-switch, Windows-style */
+                g_menu.hot = -1;
+                InvalidateRect(top, NULL, TRUE); /* old popup pixels differ */
+                menu_present(top);
+            } else if (row != g_menu.hot) {
+                g_menu.hot = row;
+                menu_present(top);
+            }
+            return 1;
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDBLCLK:
+            if (row >= 0) { menu_fire(top, row); return 1; }
+            if (bi >= 0) {
+                if (bi == g_menu.barIdx) menu_close();
+                else menu_open_popup(top, bi);
+                return 1;
+            }
+            menu_close();                        /* click outside swallowed */
+            return 1;
+        case WM_LBUTTONUP:
+            if (row >= 0) menu_fire(top, row);   /* press-drag-release */
+            return 1;
+        default:
+            return 1;                            /* modal while open */
+        }
+    }
+    if (y >= 0 && y < MENU_BAR_H) {
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK)
+            menu_open_popup(top, menu_bar_at(top, x, y));
+        return 1;                                /* the bar is user32's */
+    }
+    return 0;
+}
+
+/* ============================================================ timers
+ * (0068). Delivered like WM_PAINT: only when the queue is dry — the
+ * GetMessage/PeekMessage scan below. TIMERPROC callbacks are not
+ * supported (corpus passes NULL); the park ceiling (25ms) bounds jitter. */
+
+#define MAX_TIMERS 16
+
+static struct {
+    HWND hwnd;
+    UINT_PTR id;
+    UINT interval;
+    DWORD next;
+    int used;
+} g_timers[MAX_TIMERS];
+
+UINT_PTR SetTimer(HWND hwnd, UINT_PTR id, UINT elapse, void *proc) {
+    if (proc) return 0;                          /* fail loud: no TIMERPROC */
+    if (!hwnd && !id) return 0;
+    if (elapse < 10) elapse = 10;
+    int slot = -1;
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (g_timers[i].used && g_timers[i].hwnd == hwnd && g_timers[i].id == id) { slot = i; break; }
+        if (!g_timers[i].used && slot < 0) slot = i;
+    }
+    if (slot < 0) return 0;
+    g_timers[slot].hwnd = hwnd;
+    g_timers[slot].id = id;
+    g_timers[slot].interval = elapse;
+    g_timers[slot].next = (DWORD)SDL_GetTicks() + elapse;
+    g_timers[slot].used = 1;
+    return id ? id : (UINT_PTR)(slot + 1);
+}
+
+BOOL KillTimer(HWND hwnd, UINT_PTR id) {
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (g_timers[i].used && g_timers[i].hwnd == hwnd && g_timers[i].id == id) {
+            g_timers[i].used = 0;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void timer_purge(HWND hwnd) {
+    for (int i = 0; i < MAX_TIMERS; i++)
+        if (g_timers[i].used && g_timers[i].hwnd == hwnd) g_timers[i].used = 0;
+}
+
+static int timer_scan(MSG *out, HWND hf, UINT mn, UINT mx) {
+    if (mx && (WM_TIMER < mn || WM_TIMER > mx)) return 0;
+    DWORD now = (DWORD)SDL_GetTicks();
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (!g_timers[i].used) continue;
+        if (hf && g_timers[i].hwnd != hf) continue;
+        if ((int)(now - g_timers[i].next) < 0) continue;
+        g_timers[i].next = now + g_timers[i].interval;   /* skip missed beats */
+        memset(out, 0, sizeof *out);
+        out->hwnd = g_timers[i].hwnd;
+        out->message = WM_TIMER;
+        out->wParam = (WPARAM)g_timers[i].id;
+        out->time = now;
+        out->pt = g_lastPt;
+        return 1;
+    }
+    return 0;
 }
 
 /* ============================================================ hit test */
@@ -473,6 +1420,11 @@ static WPARAM mk_of_state(Uint32 sdlState) {
 static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
                         int clicks, Uint32 state) {
     int x = (int)fx, y = (int)fy;
+    if (top->menu) {                             /* the bar owns its strip (0068) */
+        if (menu_route_mouse(top, downMsg, x, y)) return;
+        y -= MENU_BAR_H;                         /* below: client space */
+        if (y < 0) return;
+    }
     g_lastPt.x = x;
     g_lastPt.y = y;
     g_activeTop = top;
@@ -502,6 +1454,10 @@ static void pump_sdl(void) {
             if (!top) break;
             g_activeTop = top;
             g_mod = (int)e.key.mod;
+            if (g_menu.open && e.type == SDL_EVENT_KEY_DOWN && e.key.key == 27) {
+                menu_close();                    /* ESC dismisses the popup */
+                break;
+            }
             HWND target = top->focus ? top->focus : top;
             if (!hwnd_able(target)) break;
             int vk = vk_of((int)e.key.key, (int)e.key.scancode);
@@ -539,6 +1495,10 @@ static void pump_sdl(void) {
             HWND top = top_by_windowid(e.wheel.windowID);
             if (!top) break;
             int x = (int)e.wheel.mouse_x, y = (int)e.wheel.mouse_y;
+            if (top->menu) {                     /* bar strip: not the app's */
+                y -= MENU_BAR_H;
+                if (y < 0) break;
+            }
             HWND target = hit_test(top, x, y);
             if (!hwnd_able(target)) break;
             int ox, oy;
@@ -553,8 +1513,9 @@ static void pump_sdl(void) {
             if (!top) break;
             top->w = e.window.data1;
             top->h = e.window.data2;
-            q_push(top, WM_SIZE, SIZE_RESTORED,
-                   MAKELPARAM(e.window.data1, e.window.data2), 0);
+            if (g_menu.open && g_menu.top == top) menu_close();
+            q_push(top, WM_SIZE, SIZE_RESTORED,   /* client size: bar excluded */
+                   MAKELPARAM(e.window.data1, e.window.data2 - bar_h(top)), 0);
             InvalidateRect(top, NULL, TRUE);
             break;
         }
@@ -647,6 +1608,35 @@ static void sb_add(StrBuf *sb, const char *s) {
     sb->len += n;
 }
 
+/* Menu lines in the dump (0068): items are agent targets like windows —
+ * `wmctl click "New"` posts the WM_COMMAND with no pixels. Labels strip
+ * '&' and cut at the accel tab. */
+static void menu_label(const MenuItem *it, char *out, int cap) {
+    strip_amp(it->text ? it->text : "", out, cap);
+    char *tab = strchr(out, '\t');
+    if (tab) *tab = 0;
+}
+
+static void menu_dump(MenuTbl *m, int depth, StrBuf *sb) {
+    char line[256], label[128];
+    for (int i = 0; m && i < m->n; i++) {
+        const MenuItem *it = &m->items[i];
+        if (it->kind == 2) continue;
+        menu_label(it, label, sizeof label);
+        if (it->kind == 1) {
+            snprintf(line, sizeof line, "%*smenu popup text='%s'\n", depth * 2, "", label);
+            sb_add(sb, line);
+            menu_dump(MENU_T(it->sub), depth + 1, sb);
+        } else {
+            snprintf(line, sizeof line, "%*smenuitem id=%d text='%s'%s%s\n",
+                     depth * 2, "", it->id, label,
+                     (it->state & MF_CHECKED) ? " checked" : "",
+                     (it->state & (MF_GRAYED | MF_DISABLED)) ? " grayed" : "");
+            sb_add(sb, line);
+        }
+    }
+}
+
 static void tree_dump(HWND h, int depth, StrBuf *sb) {
     char line[512], text[160], shown[200];
     int ox, oy;
@@ -669,6 +1659,7 @@ static void tree_dump(HWND h, int depth, StrBuf *sb) {
              hwnd_shown(h), hwnd_able(h),
              (h->top->focus == h) ? " focus" : "", shown);
     sb_add(sb, line);
+    if (is_top(h) && h->menu) menu_dump(MENU_T(h->menu), depth + 1, sb);
     for (HWND c = h->child; c; c = c->next) tree_dump(c, depth + 1, sb);
 }
 
@@ -753,6 +1744,17 @@ static void agent_serve(int cfd) {
     }
     case AQ_CLICK: {
         HWND h = agent_find(payload);
+        if (!h) {                                /* menu items are targets too */
+            for (int i = 0; i < g_nTops; i++) {
+                HWND t = g_tops[i];
+                MenuItem *it = t && t->menu ? menu_find_label(MENU_T(t->menu), payload) : NULL;
+                if (it && !(it->state & (MF_GRAYED | MF_DISABLED))) {
+                    PostMessage(t, WM_COMMAND, MAKEWPARAM(it->id, 0), 0);
+                    aq_send(cfd, AQ_R_OK, NULL, 0);
+                    goto click_done;
+                }
+            }
+        }
         if (!h || !hwnd_shown(h) || !hwnd_able(h)) { aq_send(cfd, AQ_R_ERR, NULL, 0); break; }
         if (h->cls && ci_eq(h->cls->name, "BUTTON")) {
             PostMessage(h, BM_CLICK, 0, 0);
@@ -762,6 +1764,7 @@ static void agent_serve(int cfd) {
             PostMessage(h, WM_LBUTTONUP, 0, at);
         }
         aq_send(cfd, AQ_R_OK, NULL, 0);
+    click_done:
         break;
     }
     case AQ_GETTEXT: {
@@ -821,6 +1824,7 @@ BOOL GetMessage(MSG *out, HWND hf, UINT mn, UINT mx) {
         if (q_get(out, hf, mn, mx, 1))
             return out->message != WM_QUIT ? TRUE : FALSE;
         if (paint_scan(out, hf, mn, mx)) return TRUE;
+        if (timer_scan(out, hf, mn, mx)) return TRUE;   /* queue-dry, like paint */
         if (g_quitPosted) {
             memset(out, 0, sizeof *out);
             out->message = WM_QUIT;
@@ -845,6 +1849,7 @@ BOOL PeekMessage(MSG *out, HWND hf, UINT mn, UINT mx, UINT remove) {
         if (!(remove & PM_REMOVE)) return TRUE;
         return TRUE;                             /* WM_PAINT clears at BeginPaint */
     }
+    if (timer_scan(out, hf, mn, mx)) return TRUE;
     if (g_quitPosted && (remove & PM_REMOVE)) {
         memset(out, 0, sizeof *out);
         out->message = WM_QUIT;
@@ -881,9 +1886,14 @@ LRESULT DispatchMessage(const MSG *m) {
 
 static void ensure_builtin_classes(void);
 
-HWND CreateWindowEx(DWORD exStyle, LPCSTR className, LPCSTR windowName,
-                    DWORD style, int x, int y, int w, int h,
-                    HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
+/* The one create path (0068 refactor): both charsets funnel here with
+ * UTF-8 internals; csName/csClass override the CREATESTRUCT string
+ * pointers for W-class windows (same struct layout — only the pointee
+ * width differs, and only the app's wndproc reads them). */
+static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowName,
+                               DWORD style, int x, int y, int w, int h,
+                               HWND parent, HMENU menu, HINSTANCE inst, LPVOID param,
+                               const void *csName, const void *csClass) {
     ensure_builtin_classes();
     Class *cls = class_find(className);
     if (!cls) return NULL;
@@ -899,6 +1909,7 @@ HWND CreateWindowEx(DWORD exStyle, LPCSTR className, LPCSTR windowName,
     if (!hw) return NULL;
     hw->cls = cls;
     hw->proc = cls->proc;
+    hw->isW = cls->isW;
     hw->style = style;
     hw->exStyle = exStyle;
     hw->x = x;
@@ -931,6 +1942,10 @@ HWND CreateWindowEx(DWORD exStyle, LPCSTR className, LPCSTR windowName,
             g_tops[g_nTops++] = hw;
         if (!g_activeTop) g_activeTop = hw;
         hw->visible = 1;                         /* a kernel surface is visible */
+        /* menus attach BEFORE WM_CREATE — apps call GetMenu there (0068);
+         * an explicit hMenu wins over the class menu, Windows-style */
+        if (menu) hw->menu = menu;
+        else if (cls->menuId) hw->menu = LoadMenuW(NULL, MAKEINTRESOURCEW(cls->menuId));
         agent_ensure();
     }
 
@@ -942,16 +1957,37 @@ HWND CreateWindowEx(DWORD exStyle, LPCSTR className, LPCSTR windowName,
     cs.hwndParent = parent;
     cs.cx = w; cs.cy = h; cs.x = x; cs.y = y;
     cs.style = (LONG)style;
-    cs.lpszName = windowName;
-    cs.lpszClass = className;
+    cs.lpszName = csName ? (LPCSTR)csName : windowName;
+    cs.lpszClass = csClass ? (LPCSTR)csClass : className;
     cs.dwExStyle = exStyle;
     if ((int)SendMessage(hw, WM_CREATE, 0, (LPARAM)&cs) == -1) {
         DestroyWindow(hw);
         return NULL;
     }
-    SendMessage(hw, WM_SIZE, SIZE_RESTORED, MAKELPARAM(w, h));
+    SendMessage(hw, WM_SIZE, SIZE_RESTORED,
+                MAKELPARAM(w, is_top(hw) ? h - bar_h(hw) : h));
     SendMessage(hw, WM_MOVE, 0, MAKELPARAM(x, y));
     if (hw->visible) InvalidateRect(hw, NULL, TRUE);
+    return hw;
+}
+
+HWND CreateWindowEx(DWORD exStyle, LPCSTR className, LPCSTR windowName,
+                    DWORD style, int x, int y, int w, int h,
+                    HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
+    return create_window_impl(exStyle, className, windowName, style, x, y, w, h,
+                              parent, menu, inst, param, NULL, NULL);
+}
+
+HWND CreateWindowExW(DWORD exStyle, LPCWSTR className, LPCWSTR windowName,
+                     DWORD style, int x, int y, int w, int h,
+                     HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
+    char *cls8 = is_intres(className) ? NULL : w2a_dup(className);
+    char *name8 = windowName ? w2a_dup(windowName) : NULL;
+    HWND hw = create_window_impl(exStyle, cls8, name8, style, x, y, w, h,
+                                 parent, menu, inst, param,
+                                 windowName, className);
+    free(cls8);
+    free(name8);
     return hw;
 }
 
@@ -975,6 +2011,9 @@ BOOL DestroyWindow(HWND h) {
         DestroyWindow(c);
     }
     q_purge(h);
+    timer_purge(h);
+    if (g_menu.top == h) { g_menu.open = 0; g_menu.top = NULL; }
+    if (is_top(h) && h->menu) { DestroyMenu(h->menu); h->menu = NULL; }
     if (g_capture == h) g_capture = NULL;
     if (h->top && h->top->focus == h) h->top->focus = NULL;
     if (g_activeTop == h) g_activeTop = NULL;
@@ -1035,6 +2074,26 @@ LRESULT DefWindowProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
 }
 
+/* DefWindowProc for W-class windows: text messages carry UTF-16 (the
+ * window IS W — callers were translated toward it by send_msg), internal
+ * storage stays UTF-8. Everything else is charset-free. */
+LRESULT DefWindowProcW(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (!h) return 0;
+    if (msg == WM_SETTEXT && lp) {
+        char *a = w2a_dup((LPCWSTR)lp);
+        LRESULT r = DefWindowProc(h, msg, wp, (LPARAM)a);
+        free(a);
+        return r;
+    }
+    if (msg == WM_GETTEXT && lp && (int)wp > 0)
+        return a2w_trunc(text_get(h), (LPWSTR)lp, (int)wp);
+    if (msg == WM_GETTEXTLENGTH) {
+        int wn = MultiByteToWideChar(CP_UTF8, 0, text_get(h), -1, NULL, 0);
+        return wn > 0 ? wn - 1 : 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
 /* ============================================================ show/paint */
 
 BOOL ShowWindow(HWND h, int cmd) {
@@ -1077,7 +2136,20 @@ BOOL InvalidateRect(HWND h, const RECT *r, BOOL erase) {
 }
 
 BOOL MoveWindow(HWND h, int x, int y, int w, int h2, BOOL repaint) {
-    if (!h || is_top(h)) return FALSE;           /* kernel owns top geometry */
+    if (!h) return FALSE;
+    if (is_top(h)) {
+        /* Top-level: POSITION stays the WM's (x,y echo back via WM_MOVE so
+         * saved-geometry round-trips), SIZE is the app's — an owner-
+         * initiated kernel resize (0068, SDL_SetWindowSize -> SURFACE_
+         * RESIZE). The new size lands asynchronously as the usual RESIZED
+         * event -> WM_SIZE; same-size calls are a no-op kernel-side. */
+        if (w < 1) w = 1;
+        if (h2 < 1) h2 = 1;
+        SDL_SetWindowSize(h->win, w, h2);
+        SendMessage(h, WM_MOVE, 0, MAKELPARAM(x, y));
+        (void)repaint;
+        return TRUE;
+    }
     h->x = x;
     h->y = y;
     if (w < 1) w = 1;
@@ -2261,15 +3333,34 @@ static void ensure_builtin_classes(void) {
     class_add("SCROLLBAR", sb_proc, 0, NULL);
 }
 
-/* ============================================================ MessageBox
- * The one modal dialog (DialogBox templates are 0060 growth): its own
- * top-level window + a STATIC + buttons, a nested message loop, and the
- * owner disabled for the duration — the Windows shape. */
+/* ============================================================ dialogs
+ * "#32770" hosts BOTH shapes (0068): MessageBox windows (no DlgState in
+ * h->ctl — the 0058 behavior verbatim) and template dialogs
+ * (DialogBoxParamW below — a DlgState carries the app DLGPROC, which gets
+ * first crack at every message, the DefDlgProc way). */
 
 static int g_mbResult;
 
-static LRESULT mb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
+typedef struct {
+    DLGPROC proc;
+    LPARAM param;
+    int ended;                  /* EndDialog called */
+    INT_PTR result;
+    int modal;
+} DlgState;
+
+static LRESULT dlg_proc_32770(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    DlgState *st = (DlgState *)h->ctl;
+    if (st) {                                    /* template dialog */
+        if (st->proc && st->proc(h, msg, wp, lp)) return 0;
+        if (msg == WM_CLOSE) {                   /* DefDlgProc: 'x' = cancel */
+            EndDialog(h, IDCANCEL);
+            return 0;
+        }
+        if (msg == WM_DESTROY) return 0;
+        return DefWindowProc(h, msg, wp, lp);
+    }
+    switch (msg) {                               /* MessageBox (0058) */
     case WM_COMMAND:
         g_mbResult = (int)LOWORD(wp);
         DestroyWindow(h);
@@ -2282,10 +3373,14 @@ static LRESULT mb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
+static void ensure_dialog_class(void) {
     ensure_builtin_classes();
     if (!class_find("#32770"))
-        class_add("#32770", mb_proc, 0, (HBRUSH)(COLOR_BTNFACE + 1));
+        class_add("#32770", dlg_proc_32770, 0, (HBRUSH)(COLOR_BTNFACE + 1));
+}
+
+int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
+    ensure_dialog_class();
 
     /* Measure the text on a memory DC (the image font). */
     HDC mdc = CreateCompatibleDC(NULL);
@@ -2354,4 +3449,312 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     if (!result)                                 /* closed via 'x' */
         result = (type & MB_YESNO) ? IDNO : (type & MB_OKCANCEL) ? IDCANCEL : IDOK;
     return result;
+}
+
+/* ============================================================ template
+ * dialogs (0068): DialogBoxParamW instantiates the WRES RT_DIALOG record
+ * — a "#32770" top-level + child controls, dialog units scaled by the
+ * stock font (Windows' base-unit rule: px = du*avgCharW/4 horizontally,
+ * du*charH/8 vertically). Modal = the MessageBox loop + owner-disable
+ * shape; EndDialog marks the state and the loop exits and destroys. */
+
+typedef struct {                                 /* WRES cursor */
+    const uint8_t *p, *end;
+    int bad;
+} ResRd;
+
+static uint32_t rr16(ResRd *r) {
+    if (r->p + 2 > r->end) { r->bad = 1; return 0; }
+    uint32_t v = rd16(r->p);
+    r->p += 2;
+    return v;
+}
+
+static uint32_t rr32(ResRd *r) {
+    if (r->p + 4 > r->end) { r->bad = 1; return 0; }
+    uint32_t v = rd32(r->p);
+    r->p += 4;
+    return v;
+}
+
+static char *rrstr(ResRd *r) {                   /* malloc'd UTF-8 */
+    int n = (int)rr16(r);
+    if (r->bad || r->p + n > r->end) { r->bad = 1; return NULL; }
+    char *s = (char *)malloc((size_t)n + 1);
+    if (!s) { r->bad = 1; return NULL; }
+    memcpy(s, r->p, (size_t)n);
+    s[n] = 0;
+    r->p += n;
+    return s;
+}
+
+static const char *DLG_CLASSES[] = { NULL, "BUTTON", "EDIT", "STATIC",
+                                     "LISTBOX", "SCROLLBAR", "COMBOBOX" };
+
+static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
+                       DLGPROC proc, LPARAM param, int modal) {
+    (void)inst;
+    ensure_dialog_class();
+    if (!is_intres(tmpl)) return NULL;
+    uint32_t sz;
+    const uint8_t *d = res_find(RT_DIALOG_K, (int)(UINT_PTR)tmpl, &sz);
+    if (!d) return NULL;
+    ResRd r = { d, d + sz, 0 };
+
+    /* base units from the stock font */
+    TEXTMETRIC tm;
+    tm.tmAveCharWidth = 8;
+    tm.tmHeight = 16;
+    GetTextMetrics(menu_mdc(), &tm);
+    int bx = tm.tmAveCharWidth > 0 ? tm.tmAveCharWidth : 8;
+    int by = tm.tmHeight > 0 ? tm.tmHeight : 16;
+
+    rr16(&r); rr16(&r);                          /* x, y: the WM places us */
+    int dw = (int)(short)rr16(&r), dh = (int)(short)rr16(&r);
+    rr32(&r);                                    /* dialog style: geometry is ours */
+    char *caption = rrstr(&r);
+    rr16(&r);                                    /* font size */
+    char *face = rrstr(&r);
+    free(face);
+    int nCtl = (int)rr16(&r);
+    if (r.bad || nCtl < 0 || nCtl > 256) { free(caption); return NULL; }
+
+    HWND dlg = CreateWindowEx(0, "#32770", caption ? caption : "",
+                              WS_POPUP | WS_VISIBLE,
+                              0, 0, dw * bx / 4, dh * by / 8,
+                              NULL, NULL, NULL, NULL);
+    free(caption);
+    if (!dlg) return NULL;
+    DlgState *st = (DlgState *)calloc(1, sizeof(DlgState));
+    if (!st) { DestroyWindow(dlg); return NULL; }
+    st->proc = proc;
+    st->param = param;
+    st->modal = modal;
+    dlg->ctl = st;                               /* freed by DestroyWindow */
+
+    HWND firstTab = NULL;
+    for (int i = 0; i < nCtl && !r.bad; i++) {
+        if (r.p >= r.end) { r.bad = 1; break; }
+        int cls = *r.p < 7 ? *r.p : 0;
+        r.p++;
+        int id = (int)(short)rr16(&r);
+        int cx = (int)(short)rr16(&r), cy = (int)(short)rr16(&r);
+        int cw = (int)(short)rr16(&r), ch = (int)(short)rr16(&r);
+        uint32_t style = rr32(&r);
+        char *text = rrstr(&r);
+        if (r.bad) { free(text); break; }
+        if (!DLG_CLASSES[cls] || !class_find(DLG_CLASSES[cls])) {
+            free(text);                          /* COMBOBOX etc: not grown yet */
+            continue;
+        }
+        HWND c = CreateWindowEx(0, DLG_CLASSES[cls], text ? text : "",
+                                style, cx * bx / 4, cy * by / 8,
+                                cw * bx / 4, ch * by / 8,
+                                dlg, (HMENU)(UINT_PTR)(id & 0xFFFF), NULL, NULL);
+        if (c && !firstTab && (style & WS_TABSTOP)) firstTab = c;
+        free(text);
+    }
+    if (proc) proc(dlg, WM_INITDIALOG, (WPARAM)firstTab, param);
+    if (firstTab) SetFocus(firstTab);
+    InvalidateRect(dlg, NULL, TRUE);
+    return dlg;
+}
+
+BOOL EndDialog(HWND dlg, INT_PTR result) {
+    if (!dlg || !dlg->ctl || !dlg->cls || !ci_eq(dlg->cls->name, "#32770")) return FALSE;
+    DlgState *st = (DlgState *)dlg->ctl;
+    st->ended = 1;
+    st->result = result;
+    if (!st->modal) DestroyWindow(dlg);          /* modeless: gone at once */
+    return TRUE;
+}
+
+INT_PTR DialogBoxParamW(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
+                        DLGPROC proc, LPARAM param) {
+    HWND dlg = dlg_create(inst, tmpl, owner, proc, param, 1);
+    if (!dlg) return -1;
+    DlgState *st = (DlgState *)dlg->ctl;
+    HWND ownerTop = owner ? owner->top : NULL;
+    int reenable = 0;
+    if (ownerTop && ownerTop->enabled) {
+        EnableWindow(ownerTop, FALSE);
+        reenable = 1;
+    }
+    MSG m;
+    memset(&m, 0, sizeof m);
+    while (!st->ended && IsWindow(dlg) && GetMessage(&m, NULL, 0, 0)) {
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
+    if (!st->ended && m.message == WM_QUIT)
+        PostQuitMessage((int)m.wParam);          /* raced: re-post for the outer loop */
+    INT_PTR result = st->result;
+    if (reenable && IsWindow(ownerTop)) EnableWindow(ownerTop, TRUE);
+    if (IsWindow(dlg)) DestroyWindow(dlg);       /* frees st */
+    return result;
+}
+
+HWND CreateDialogParamW(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
+                        DLGPROC proc, LPARAM param) {
+    return dlg_create(inst, tmpl, owner, proc, param, 0);
+}
+
+/* ---- dialog item helpers (charset-neutral where the payload is) ---- */
+
+UINT GetDlgItemTextW(HWND dlg, int id, LPWSTR buf, int max) {
+    if (buf && max > 0) buf[0] = 0;
+    HWND c = GetDlgItem(dlg, id);
+    if (!c || !buf || max < 1) return 0;
+    return (UINT)SendMessageW(c, WM_GETTEXT, (WPARAM)max, (LPARAM)buf);
+}
+
+BOOL SetDlgItemTextW(HWND dlg, int id, LPCWSTR text) {
+    HWND c = GetDlgItem(dlg, id);
+    if (!c) return FALSE;
+    SendMessageW(c, WM_SETTEXT, 0, (LPARAM)text);
+    return TRUE;
+}
+
+BOOL SetDlgItemInt(HWND dlg, int id, UINT value, BOOL signed_) {
+    HWND c = GetDlgItem(dlg, id);
+    if (!c) return FALSE;
+    char buf[16];
+    if (signed_) snprintf(buf, sizeof buf, "%d", (int)value);
+    else snprintf(buf, sizeof buf, "%u", value);
+    SendMessage(c, WM_SETTEXT, 0, (LPARAM)buf);
+    return TRUE;
+}
+
+UINT GetDlgItemInt(HWND dlg, int id, BOOL *translated, BOOL signed_) {
+    if (translated) *translated = FALSE;
+    HWND c = GetDlgItem(dlg, id);
+    if (!c) return 0;
+    char buf[32];
+    if (SendMessage(c, WM_GETTEXT, sizeof buf, (LPARAM)buf) < 1) return 0;
+    char *endp;
+    long v = strtol(buf, &endp, 10);
+    if (endp == buf) return 0;
+    if (translated) *translated = TRUE;
+    return signed_ ? (UINT)(int)v : (UINT)v;
+}
+
+LRESULT SendDlgItemMessageW(HWND dlg, int id, UINT msg, WPARAM wp, LPARAM lp) {
+    HWND c = GetDlgItem(dlg, id);
+    return c ? SendMessageW(c, msg, wp, lp) : 0;
+}
+
+BOOL CheckDlgButton(HWND dlg, int id, UINT check) {
+    HWND c = GetDlgItem(dlg, id);
+    if (!c) return FALSE;
+    SendMessage(c, BM_SETCHECK, check, 0);
+    return TRUE;
+}
+
+UINT IsDlgButtonChecked(HWND dlg, int id) {
+    HWND c = GetDlgItem(dlg, id);
+    return c ? (UINT)SendMessage(c, BM_GETCHECK, 0, 0) : 0;
+}
+
+BOOL CheckRadioButton(HWND dlg, int first, int last, int check) {
+    for (int i = first; i <= last; i++) {
+        HWND c = GetDlgItem(dlg, i);
+        if (c) SendMessage(c, BM_SETCHECK, i == check, 0);
+    }
+    return TRUE;
+}
+
+/* ============================================================ W wrappers
+ * (0068): the queue/message APIs carry no text — aliases; the text APIs
+ * ride the send_msg translation. */
+
+BOOL GetMessageW(MSG *m, HWND hf, UINT mn, UINT mx) { return GetMessage(m, hf, mn, mx); }
+BOOL PeekMessageW(MSG *m, HWND hf, UINT mn, UINT mx, UINT remove) { return PeekMessage(m, hf, mn, mx, remove); }
+LRESULT DispatchMessageW(const MSG *m) { return DispatchMessage(m); }
+
+int GetWindowTextW(HWND h, LPWSTR buf, int max) {
+    if (!h || !buf || max < 1) return 0;
+    return (int)SendMessageW(h, WM_GETTEXT, (WPARAM)max, (LPARAM)buf);
+}
+
+BOOL SetWindowTextW(HWND h, LPCWSTR text) {
+    if (!h) return FALSE;
+    SendMessageW(h, WM_SETTEXT, 0, (LPARAM)text);
+    return TRUE;
+}
+
+int GetWindowTextLengthW(HWND h) {
+    return h ? (int)SendMessage(h, WM_GETTEXTLENGTH, 0, 0) : 0;
+}
+
+LONG_PTR GetWindowLongPtrW(HWND h, int index) { return GetWindowLongPtr(h, index); }
+LONG_PTR SetWindowLongPtrW(HWND h, int index, LONG_PTR value) { return SetWindowLongPtr(h, index, value); }
+
+int MessageBoxW(HWND owner, LPCWSTR text, LPCWSTR caption, UINT type) {
+    char *t = w2a_dup(text), *c = w2a_dup(caption);
+    int r = MessageBox(owner, t, c, type);
+    free(t);
+    free(c);
+    return r;
+}
+
+int GetClassNameW(HWND h, LPWSTR buf, int max) {
+    if (!h || !buf || max < 1) return 0;
+    return a2w_trunc(h->cls ? h->cls->name : "", buf, max);
+}
+
+/* ============================================================ misc (0068) */
+
+int GetSystemMetrics(int index) {
+    switch (index) {
+    /* SYNTHETIC screen numbers: a process can't see the real screen (the
+     * WM can — EV_SCREEN); these exist so ports' clamping math runs. */
+    case SM_CXSCREEN: return 800;
+    case SM_CYSCREEN: return 500;
+    case SM_CXFULLSCREEN: return 800;
+    case SM_CYFULLSCREEN: return 480;
+    case SM_CYCAPTION: return 20;
+    case SM_CYMENU: return MENU_BAR_H;
+    case SM_CXBORDER: case SM_CYBORDER: return 1;
+    case SM_CXVSCROLL: case SM_CYHSCROLL:
+    case SM_CYVSCROLL: case SM_CXHSCROLL: return 16;
+    case SM_CXICON: case SM_CYICON: return 32;
+    case SM_CXSMICON: case SM_CYSMICON: return 16;
+    }
+    return 0;
+}
+
+/* The synthetic single monitor: work area == screen (the taskbar is the
+ * WM's business, invisible to processes). */
+HMONITOR MonitorFromRect(const RECT *r, DWORD flags) { (void)r; (void)flags; return (HMONITOR)1; }
+HMONITOR MonitorFromWindow(HWND h, DWORD flags) { (void)h; (void)flags; return (HMONITOR)1; }
+HMONITOR MonitorFromPoint(POINT p, DWORD flags) { (void)p; (void)flags; return (HMONITOR)1; }
+
+BOOL GetMonitorInfoW(HMONITOR mon, MONITORINFO *mi) {
+    if (!mon || !mi) return FALSE;
+    SetRect(&mi->rcMonitor, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    mi->rcWork = mi->rcMonitor;
+    mi->dwFlags = 1;                             /* MONITORINFOF_PRIMARY */
+    return TRUE;
+}
+
+/* Caption/borders are KERNEL chrome (outside the surface) — only the
+ * user32-drawn menu bar widens the window rect. */
+BOOL AdjustWindowRect(RECT *r, DWORD style, BOOL menu) {
+    (void)style;
+    if (!r) return FALSE;
+    if (menu) r->top -= MENU_BAR_H;
+    return TRUE;
+}
+
+BOOL AdjustWindowRectEx(RECT *r, DWORD style, BOOL menu, DWORD exStyle) {
+    (void)exStyle;
+    return AdjustWindowRect(r, style, menu);
+}
+
+BOOL RedrawWindow(HWND h, const RECT *r, HRGN rgn, UINT flags) {
+    (void)rgn;
+    if (!h) return FALSE;
+    if (flags & RDW_INVALIDATE) InvalidateRect(h, r, (flags & RDW_ERASE) != 0);
+    if (flags & (RDW_UPDATENOW | RDW_ERASENOW)) UpdateWindow(h);
+    return TRUE;
 }

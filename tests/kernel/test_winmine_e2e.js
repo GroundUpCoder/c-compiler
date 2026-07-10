@@ -1,0 +1,281 @@
+#!/usr/bin/env node
+// 0068 acceptance, headless: winmine (the ReactOS/Wine Minesweeper port)
+// playable in-OS through os/boot.js. Covers the whole user32/resource tail:
+//   - the sidecar resource pack: LoadStringW titles the class/window
+//     ("WineMine"), LoadBitmapW feeds the board BitBlts, LoadMenuW attaches
+//     the class menu, LoadAcceleratorsW arms F2
+//   - the menu bar: geometry (surface = board + MENU_BAR_H), popup opens on
+//     a bar click (pixels appear), ESC closes, items are agent targets
+//     (`wmctl click Advanced` — no pixels), CheckMenuItem state in the tree
+//   - owner-initiated resize end to end (SDL_SetWindowSize -> kernel
+//     SURFACE_RESIZE -> RESIZED -> configure): difficulty switches change
+//     the surface geometry
+//   - gameplay: a cell click reveals (pixel diff in the mines rect), the
+//     WM_TIMER second counter runs (timer LED pixels change), F2 (the
+//     accelerator) resets the board to its unrevealed pixels
+//   - DialogBoxParamW from the RT_DIALOG template: the Custom Game dialog
+//     is a second surface with live EDITs (agent settext) + OK applies
+//     (GetDlgItemInt path) and resizes the board; Fastest Times shows the
+//     LoadStringW default "Nobody"
+//   - registry persistence: Exit (menu) -> WM_DESTROY SaveBoard; a second
+//     boot restores the custom geometry (LoadBoard over advapi32)
+//
+// Geometry mirrors vendor/winmine/main.h: MINE_WIDTH/HEIGHT 16, LED_HEIGHT
+// 23, BOARD_W/HMARGIN 5 — beginner 9x9 board => client 154x182, surface
+// 154x202 (MENU_BAR_H 20). Change together with os/win32/user32.c.
+//
+// Run: node tests/kernel/test_winmine_e2e.js
+'use strict';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const cp = require('child_process');
+
+const ROOT = path.resolve(__dirname, '../..');
+const BOOT = path.join(ROOT, 'os/boot.js');
+
+let failures = 0;
+function check(name, cond, extra) {
+  if (cond) { console.log('  ok   ' + name); }
+  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
+}
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-winmine-'));
+const image = path.join(tmp, 'os.img');
+
+function boot(script) {
+  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw r.error;
+  return r.stdout;
+}
+
+function section(out, name) {
+  return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
+}
+
+/* Shots are written in-OS under /root; a follow-up boot session cats the
+ * concatenation to stdout (the test_gdi32_e2e pattern) and we split the
+ * P6 stream back into images here. */
+const SHOTS = ['base', 'popup', 'closed', 'fresh', 'revealed', 'ticking', 'reset'];
+const shots = {};
+
+function extractShots() {
+  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: 'cat ' + SHOTS.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
+      timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw r.error;
+  const buf = r.stdout;
+  let off = 0;
+  for (const name of SHOTS) {
+    const head = buf.toString('latin1', off, off + 32);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) throw new Error('bad ppm stream at ' + name + ': ' + JSON.stringify(head));
+    const w = +m[1], h = +m[2];
+    const data = off + m[0].length;
+    shots[name] = { w, h, data: buf.slice(data, data + w * h * 3) };
+    off = data + w * h * 3;
+  }
+}
+
+function crop(img, x, y, w, h) {
+  const out = Buffer.alloc(w * h * 3);
+  for (let r = 0; r < h; r++)
+    img.data.copy(out, r * w * 3, ((y + r) * img.w + x) * 3, ((y + r) * img.w + x + w) * 3);
+  return out;
+}
+
+function readShot(name) { return shots[name.replace('.ppm', '')]; }
+
+/* Geometry (main.h mirror). Client coords + the 20px menu bar on top. */
+const BAR = 20;
+const BEG_W = 9 * 16 + 10, BEG_H = 9 * 16 + 23 + 15;        /* 154 x 182 */
+const ADV_W = 16 * 16 + 10, ADV_H = 16 * 16 + 23 + 15;      /* 266 x 294 */
+const CUS_W = 11 * 16 + 10, CUS_H = 12 * 16 + 23 + 15;      /* 186 x 215 */
+/* mines rect: left 5, top 33 (2*5 + 23); cell (1,1) center in surface coords */
+const CELL_X = 5 + 8, CELL_Y = 33 + 8 + BAR;
+/* timer LEDs: right-aligned counter is mines-left; TIMER is bottom-left..
+ * DrawBoard: counter at left? -- main.c: counter_rect is RIGHT (width -
+ * margin - 3 LEDs), timer_rect is LEFT (x=5). Timer region below. */
+const TIMER = { x: 5, y: 5 + BAR, w: 36, h: 23 };
+
+/* ---- session A: the whole interactive story in one boot ---- */
+const out = boot([
+  'winmine &',
+  'sleep 4',
+  'SID=$(wmctl list | grep "WineMine$" | sed "s/[^0-9].*//")',
+  'echo ==list1',
+  'wmctl list',
+  'echo ==cut',
+  'echo ==tree1',
+  'wmctl tree',
+  'echo ==cut',
+  // menu popup visuals: shot, open via a bar click, shot, ESC, shot
+  'wmctl shot $SID /root/base.ppm',
+  'wmctl click $SID 10 10',
+  'sleep 1',
+  'wmctl shot $SID /root/popup.ppm',
+  'wmctl key $SID 41 27',                        // ESC closes the popup
+  'sleep 1',
+  'wmctl shot $SID /root/closed.ppm',
+  // difficulty via the agent path (menu items by label, no pixels)
+  'wmctl click Advanced',
+  'sleep 2',
+  'echo ==list2',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl click Beginner',
+  'sleep 2',
+  'echo ==list3',
+  'wmctl list',
+  'echo ==cut',
+  // gameplay: reveal a cell, timer runs, F2 resets
+  'wmctl shot $SID /root/fresh.ppm',
+  `wmctl click $SID ${CELL_X} ${CELL_Y}`,
+  'sleep 1',
+  'wmctl shot $SID /root/revealed.ppm',
+  'sleep 2',                                     // >= 1 full timer tick
+  'wmctl shot $SID /root/ticking.ppm',
+  'wmctl key $SID 59 1073741883',                // F2 = New (accelerator)
+  'sleep 1',
+  'wmctl shot $SID /root/reset.ppm',
+  // Fastest Times dialog: template + LoadStringW default names
+  'wmctl click "Fastest Times..."',
+  'sleep 2',
+  'echo ==timestree',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click OK',
+  'sleep 1',
+  // Custom Game dialog: settext the EDITs, OK applies + resizes
+  'wmctl click "Custom..."',
+  'sleep 2',
+  'echo ==customtree',
+  'wmctl tree',
+  'echo ==cut',
+  'echo ==customlist',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl settext EDIT:0 12',                     // rows
+  'wmctl settext EDIT:1 11',                     // cols
+  'wmctl settext EDIT:2 20',                     // mines
+  'wmctl click OK',
+  'sleep 2',
+  'echo ==list4',
+  'wmctl list',
+  'echo ==cut',
+  // Exit via the menu; SaveBoard -> the registry hive
+  'wmctl click Exit',
+  'sleep 2',
+  'echo ==list5',
+  'wmctl list',
+  'echo ==cut',
+  'echo ==reg',
+  'cat /root/.win32reg',
+  'echo ==cut',
+  '',
+].join('\n'));
+
+/* window + tree */
+const list1 = section(out, 'list1');
+const row1 = list1.split('\n').find(l => l.endsWith('\tWineMine')) || '';
+check('window titled "WineMine" (LoadStringW)', row1 !== '', JSON.stringify(list1.slice(0, 300)));
+check(`beginner surface is ${BEG_W}x${BEG_H + BAR} (board + menu bar)`,
+  row1.includes(`${BEG_W}x${BEG_H + BAR}`), row1);
+check('window is fixed-size (no R flag)', !(row1.split('\t')[5] || '').includes('R'), row1);
+
+const tree1 = section(out, 'tree1');
+check('tree dumps the WineMine class window', /class=WineMine .*text='WineMine'/.test(tree1), tree1.slice(0, 300));
+check('tree lists the Options popup', /menu popup text='Options'/.test(tree1), tree1);
+check('tree lists the Info popup', /menu popup text='Info'/.test(tree1), tree1);
+check('menu item New (accel tab cut)', /menuitem id=1001 text='New'/.test(tree1), tree1);
+check('Beginner starts checked (CheckMenuItem)', /menuitem id=1005 text='Beginner' checked/.test(tree1), tree1);
+check('Mark Question starts checked', /menuitem id=1009 text='Mark Question' checked/.test(tree1), tree1);
+check('Exit item present (label cut at tab)', /menuitem id=1002 text='Exit'/.test(tree1), tree1);
+
+/* popup pixels */
+extractShots();
+{
+  const base = readShot('base.ppm'), popup = readShot('popup.ppm'), closed = readShot('closed.ppm');
+  // popup area: below the bar at the Options title; 60x60 probe
+  const a = crop(base, 4, BAR + 2, 60, 60), b = crop(popup, 4, BAR + 2, 60, 60), c = crop(closed, 4, BAR + 2, 60, 60);
+  check('bar click opens the popup (pixels change)', !a.equals(b));
+  check('ESC closes the popup (pixels restore)', a.equals(c));
+}
+
+/* difficulty switching = owner-initiated resize end to end */
+const list2 = section(out, 'list2');
+check(`Advanced resizes the surface to ${ADV_W}x${ADV_H + BAR} (SURFACE_RESIZE)`,
+  list2.split('\n').some(l => l.endsWith('\tWineMine') && l.includes(`${ADV_W}x${ADV_H + BAR}`)), list2);
+const list3 = section(out, 'list3');
+check('Beginner resizes back',
+  list3.split('\n').some(l => l.endsWith('\tWineMine') && l.includes(`${BEG_W}x${BEG_H + BAR}`)), list3);
+
+/* gameplay pixels */
+{
+  const fresh = readShot('fresh.ppm'), revealed = readShot('revealed.ppm');
+  const ticking = readShot('ticking.ppm'), reset = readShot('reset.ppm');
+  const cellRect = [CELL_X - 8, CELL_Y - 8, 16, 16];
+  const f = crop(fresh, ...cellRect), r = crop(revealed, ...cellRect), z = crop(reset, ...cellRect);
+  check('cell click reveals (mines-rect pixels change)', !f.equals(r));
+  check('F2 accelerator resets the board (cell pixels restore)', f.equals(z));
+  const t1 = crop(revealed, TIMER.x, TIMER.y, TIMER.w, TIMER.h);
+  const t2 = crop(ticking, TIMER.x, TIMER.y, TIMER.w, TIMER.h);
+  check('WM_TIMER runs the second counter (timer LEDs change)', !t1.equals(t2));
+}
+
+/* Fastest Times dialog */
+const timestree = section(out, 'timestree');
+check('Times dialog is a #32770 window titled "Fastest Times"',
+  /class=#32770 .*text='Fastest Times'/.test(timestree), timestree.slice(0, 400));
+check('LoadStringW default name "Nobody" shows',
+  (timestree.match(/text='Nobody'/g) || []).length === 3, timestree);
+check('times default 999 (SetDlgItemInt)', /text='999'/.test(timestree), timestree);
+
+/* Custom Game dialog */
+const customtree = section(out, 'customtree');
+check('Custom dialog with three EDITs', /class=#32770 .*text='Custom Game'/.test(customtree) &&
+  (customtree.match(/class=EDIT/g) || []).length === 3, customtree.slice(0, 500));
+check('EDITs preloaded from the board (9 rows)', /class=EDIT [^\n]*text='9'/.test(customtree), customtree);
+const customlist = section(out, 'customlist');
+check('dialog is a second kernel surface',
+  customlist.split('\n').filter(l => /\t(WineMine|Custom Game)$/.test(l)).length === 2, customlist);
+check('modal disables the owner', /class=WineMine [^\n]*en=0/.test(customtree), customtree.slice(0, 300));
+
+const list4 = section(out, 'list4');
+check(`Custom 11x12 applies (GetDlgItemInt) — surface ${CUS_W}x${CUS_H + BAR}`,
+  list4.split('\n').some(l => l.endsWith('\tWineMine') && l.includes(`${CUS_W}x${CUS_H + BAR}`)), list4);
+
+/* exit + registry */
+const list5 = section(out, 'list5');
+check('Exit closes the app (window gone)', !list5.includes('WineMine'), list5);
+const reg = section(out, 'reg');
+check('SaveBoard wrote the registry hive', /WinMine/.test(reg) && /Height/.test(reg), reg.slice(0, 300));
+check('custom geometry persisted (Height=12, Width=11, Mines=20)',
+  /Height\|4\|0c000000/.test(reg) && /Width\|4\|0b000000/.test(reg) &&
+  /Mines\|4\|14000000/.test(reg), reg);   /* hive: REG_DWORD as LE hex */
+
+/* ---- session B: LoadBoard restores the custom board across boots ---- */
+const out2 = boot([
+  'winmine &',
+  'sleep 4',
+  'echo ==list1',
+  'wmctl list',
+  'echo ==cut',
+  'echo ==tree1',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click Exit',
+  'sleep 1',
+  '',
+].join('\n'));
+
+const blist = section(out2, 'list1');
+check('second boot restores the custom geometry (registry LoadBoard)',
+  blist.split('\n').some(l => l.endsWith('\tWineMine') && l.includes(`${CUS_W}x${CUS_H + BAR}`)), blist);
+const btree = section(out2, 'tree1');
+check('Custom is now the checked difficulty', /menuitem id=1008 text='Custom...' checked/.test(btree), btree);
+
+fs.rmSync(tmp, { recursive: true, force: true });
+console.log(failures ? `\nwinmine e2e: ${failures} FAILED` : '\nwinmine e2e: PASS');
+process.exit(failures ? 1 : 0);

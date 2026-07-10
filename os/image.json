@@ -1,5 +1,5 @@
 {
-  "version": 37,
+  "version": 38,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -25,11 +25,16 @@
       },
       "/usr/bin/wm": {
         "c": "wm.c",
-        "hdrs": ["wm_proto.h"]
+        "hdrs": [
+          "wm_proto.h"
+        ]
       },
       "/usr/bin/wmctl": {
         "c": "wmctl.c",
-        "hdrs": ["wm_proto.h", "wm_agent.h"]
+        "hdrs": [
+          "wm_proto.h",
+          "wm_agent.h"
+        ]
       },
       "/usr/bin/doom": {
         "project": "vendor/doom/bin.json"
@@ -54,6 +59,12 @@
       },
       "/usr/bin/k32demo": {
         "project": "os/win32/k32demo.json"
+      },
+      "/usr/bin/winmine": {
+        "project": "vendor/winmine/bin.json"
+      },
+      "/usr/bin/winmine.res": {
+        "bin": "vendor/winmine/winmine.res"
       },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"

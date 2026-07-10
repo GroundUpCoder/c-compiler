@@ -18238,6 +18238,7 @@ SDL_WindowID SDL_GetWindowID(SDL_Window *window);
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
+bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
 bool SDL_PollEvent(SDL_Event *event);
 void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
@@ -22195,6 +22196,7 @@ __import int __sdl_create_window(const char *title, int x, int y, int w, int h, 
 __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
 __import void __sdl_set_relative_mouse_mode(int handle, int enabled);
+__import int __sdl_set_window_size(int handle, int w, int h);
 __import int __sdl_update_window_surface(int handle, const void *pixels, int w, int h, int pitch);
 __import void __sdl_delay(int ms);
 /* ms since SDL_Init as an f64 (exact for integer ms up to 2^53 — ~285k years),
@@ -22341,6 +22343,20 @@ bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
     /* The surface tracks the window size (resize events re-derive it). */
     if (w) *w = window->surface.w;
     if (h) *h = window->surface.h;
+    return 1;
+}
+
+/* Ask the window system for a new size (todos/0068). ASYNC like upstream
+   SDL3 under a real WM: success means the request was accepted; the actual
+   size change arrives as SDL_EVENT_WINDOW_RESIZED (which re-derives the
+   window surface in place — see __sdl_push_window_event). Only the
+   kernel-surface runtime honours it; elsewhere this fails loud. */
+bool SDL_SetWindowSize(SDL_Window *window, int w, int h) {
+    if (!window) return SDL_InvalidParamError("window");
+    if (w < 1 || h < 1)
+        return SDL_SetError("SDL_SetWindowSize: invalid size %dx%d", w, h);
+    if (__sdl_set_window_size(window->handle, w, h) != 0)
+        return SDL_SetError("SDL_SetWindowSize: this runtime cannot resize the window");
     return 1;
 }
 

@@ -5,37 +5,37 @@
       "name": "gdidemo",
       "project": "os/win32/gdidemo.json",
       "expect": "links",
-      "notes": "control target — the 0057 acceptance app must stay fully covered"
+      "notes": "control target \u2014 the 0057 acceptance app must stay fully covered"
     },
     {
       "name": "ctldemo",
       "project": "os/win32/ctldemo.json",
       "expect": "links",
-      "notes": "control target — the 0058 acceptance app must stay fully covered"
+      "notes": "control target \u2014 the 0058 acceptance app must stay fully covered"
     },
     {
       "name": "k32demo",
       "project": "os/win32/k32demo.json",
       "expect": "links",
-      "notes": "control target — the 0059 acceptance app must stay fully covered"
+      "notes": "control target \u2014 the 0059 acceptance app must stay fully covered"
     },
     {
       "name": "winmine",
       "project": "vendor/winmine/bin.json",
-      "expect": "missing-symbols",
-      "notes": "ReactOS/Wine Minesweeper — the identity port"
+      "expect": "links",
+      "notes": "ReactOS/Wine Minesweeper \u2014 the identity port, playable since 0068 (seeded as /bin/winmine)"
     },
     {
       "name": "notepad",
       "project": "vendor/notepad/bin.json",
       "expect": "missing-symbols",
-      "notes": "ReactOS notepad — EDIT + menus + comdlg32"
+      "notes": "ReactOS notepad \u2014 EDIT + menus + comdlg32"
     },
     {
       "name": "calc",
       "project": "vendor/calc/bin.json",
       "expect": "missing-symbols",
-      "notes": "ReactOS calc — dense control/dialog exercise"
+      "notes": "ReactOS calc \u2014 dense control/dialog exercise"
     }
   ]
 }

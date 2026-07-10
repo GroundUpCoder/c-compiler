@@ -1,7 +1,7 @@
 {
   "type": "lib",
   "name": "win32",
-  "description": "The Win32 veneer (todos/WIN32.md): gdi32 CPU drawing (0057) + user32 windowing/controls/agent-tree (0058) + kernel32/advapi32/wide-CRT over POSIX (0059)",
+  "description": "The Win32 veneer (todos/WIN32.md): gdi32 CPU drawing (0057) + user32 windowing/controls/agent-tree (0058) + kernel32/advapi32/wide-CRT over POSIX (0059) + W entries/menus/dialogs/resources/shell32/winmm (0068)",
   "deps": [
     "../../vendor/freetype/lib.json"
   ],
@@ -15,6 +15,8 @@
     "user32.c",
     "kernel32.c",
     "advapi32.c",
-    "crt16.c"
+    "crt16.c",
+    "shell32.c",
+    "winmm.c"
   ]
 }

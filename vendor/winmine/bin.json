@@ -15,6 +15,7 @@
   ],
   "sources": [
     "main.c",
-    "dialog.c"
+    "dialog.c",
+    "../../os/win32/wwinmain.c"
   ]
 }
