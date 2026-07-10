@@ -983,12 +983,28 @@ HBRUSH   GetSysColorBrush(int index);
 
 #define ERROR_SUCCESS              0
 #define ERROR_FILE_NOT_FOUND       2
+#define ERROR_PATH_NOT_FOUND       3
+#define ERROR_TOO_MANY_OPEN_FILES  4
 #define ERROR_ACCESS_DENIED        5
 #define ERROR_INVALID_HANDLE       6
 #define ERROR_NOT_ENOUGH_MEMORY    8
+#define ERROR_NO_MORE_FILES        18
+#define ERROR_WRITE_PROTECT        19
+#define ERROR_SEEK                 25
+#define ERROR_GEN_FAILURE          31
+#define ERROR_HANDLE_EOF           38
+#define ERROR_NOT_SUPPORTED        50
 #define ERROR_INVALID_PARAMETER    87
+#define ERROR_BROKEN_PIPE          109
+#define ERROR_DISK_FULL            112
 #define ERROR_CALL_NOT_IMPLEMENTED 120
 #define ERROR_INSUFFICIENT_BUFFER  122
+#define ERROR_INVALID_NAME         123
+#define ERROR_PROC_NOT_FOUND       127
+#define ERROR_NEGATIVE_SEEK        131
+#define ERROR_DIR_NOT_EMPTY        145
+#define ERROR_ALREADY_EXISTS       183
+#define ERROR_FILENAME_EXCED_RANGE 206
 #define ERROR_FILE_TOO_LARGE       223
 #define ERROR_MORE_DATA            234
 #define ERROR_NO_MORE_ITEMS        259
@@ -1117,7 +1133,11 @@ LONG_PTR SetWindowLongPtrW(HWND hwnd, int index, LONG_PTR value);
 int  MessageBoxW(HWND owner, LPCWSTR text, LPCWSTR caption, UINT type);
 BOOL IsDialogMessageW(HWND hDlg, MSG *msg);
 
-/* ---------------- kernel32 (0059 owns the implementation) ------------ */
+/* ---------------- kernel32 (implemented by kernel32.c, todos/0059) ----
+ * kernel32 is W-NATIVE, unlike gdi32/user32: it arrived with the UNICODE
+ * port corpus, so the W names are the implemented symbols and there are
+ * no ANSI generic entries (they grow if an ANSI corpus app ever demands
+ * one). The UNICODE generic->W maps sit right after each block. -------- */
 
 typedef struct _SYSTEMTIME {
     WORD wYear;
@@ -1319,7 +1339,113 @@ void   OutputDebugStringW(LPCWSTR s);
 #define GetFullPathName GetFullPathNameW
 #endif
 
-/* ---------------- winreg (advapi32; 0059) ---------------- */
+/* ---------------- kernel32 growth: dirs/find/process/timing (0059) --- */
+
+#define TRUNCATE_EXISTING 5
+#define FILE_ATTRIBUTE_READONLY  0x00000001u
+#define FILE_ATTRIBUTE_HIDDEN    0x00000002u
+#define FILE_ATTRIBUTE_SYSTEM    0x00000004u
+#define FILE_ATTRIBUTE_DIRECTORY 0x00000010u
+#define FILE_ATTRIBUTE_ARCHIVE   0x00000020u
+
+typedef struct _FILETIME {          /* 100ns ticks since 1601-01-01 */
+    DWORD dwLowDateTime;
+    DWORD dwHighDateTime;
+} FILETIME, *PFILETIME, *LPFILETIME;
+
+typedef union _LARGE_INTEGER {
+    struct { DWORD LowPart; LONG HighPart; };
+    LONGLONG QuadPart;
+} LARGE_INTEGER, *PLARGE_INTEGER;
+
+typedef struct _WIN32_FIND_DATAW {
+    DWORD dwFileAttributes;
+    FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+    DWORD nFileSizeHigh, nFileSizeLow;
+    DWORD dwReserved0, dwReserved1;
+    WCHAR cFileName[MAX_PATH];
+    WCHAR cAlternateFileName[14];
+} WIN32_FIND_DATAW, *PWIN32_FIND_DATAW, *LPWIN32_FIND_DATAW;
+
+HANDLE FindFirstFileW(LPCWSTR pattern, WIN32_FIND_DATAW *fd);
+BOOL   FindNextFileW(HANDLE h, WIN32_FIND_DATAW *fd);
+BOOL   FindClose(HANDLE h);
+BOOL   CreateDirectoryW(LPCWSTR path, void *sa);
+BOOL   RemoveDirectoryW(LPCWSTR path);
+BOOL   MoveFileW(LPCWSTR from, LPCWSTR to);
+BOOL   SetFileAttributesW(LPCWSTR path, DWORD attrs);
+DWORD  GetCurrentDirectoryW(DWORD n, LPWSTR buf);
+BOOL   SetCurrentDirectoryW(LPCWSTR path);
+
+#define STD_INPUT_HANDLE  ((DWORD)-10)
+#define STD_OUTPUT_HANDLE ((DWORD)-11)
+#define STD_ERROR_HANDLE  ((DWORD)-12)
+HANDLE GetStdHandle(DWORD which);
+
+/* CreateProcess -> the owner-brokered posix_spawn (WIN32.md: kernel32
+ * over POSIX, no kernel change). lpEnvironment must be NULL (children
+ * inherit); STARTF_USESTDHANDLES maps to spawn fd-actions. */
+typedef struct _STARTUPINFOW {
+    DWORD  cb;
+    LPWSTR lpReserved, lpDesktop, lpTitle;
+    DWORD  dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars;
+    DWORD  dwFillAttribute, dwFlags;
+    WORD   wShowWindow, cbReserved2;
+    LPBYTE lpReserved2;
+    HANDLE hStdInput, hStdOutput, hStdError;
+} STARTUPINFOW, *LPSTARTUPINFOW;
+typedef struct _PROCESS_INFORMATION {
+    HANDLE hProcess, hThread;
+    DWORD dwProcessId, dwThreadId;
+} PROCESS_INFORMATION, *PPROCESS_INFORMATION, *LPPROCESS_INFORMATION;
+#define STARTF_USESHOWWINDOW 0x00000001u
+#define STARTF_USESTDHANDLES 0x00000100u
+#define CREATE_NEW_CONSOLE    0x00000010u
+#define CREATE_NO_WINDOW      0x08000000u
+#define NORMAL_PRIORITY_CLASS 0x00000020u
+BOOL CreateProcessW(LPCWSTR app, LPWSTR cmdLine, void *psa, void *tsa,
+                    BOOL inheritHandles, DWORD flags, LPVOID env,
+                    LPCWSTR cwd, STARTUPINFOW *si, PROCESS_INFORMATION *pi);
+void GetStartupInfoW(STARTUPINFOW *si);
+#define INFINITE      0xFFFFFFFFu
+#define WAIT_OBJECT_0 0
+#define WAIT_TIMEOUT  258
+#define WAIT_FAILED   0xFFFFFFFFu
+#define STILL_ACTIVE  259
+DWORD  WaitForSingleObject(HANDLE h, DWORD ms);
+BOOL   GetExitCodeProcess(HANDLE h, LPDWORD code);
+BOOL   TerminateProcess(HANDLE h, UINT code);
+HANDLE GetCurrentProcess(void);
+DWORD  GetCurrentProcessId(void);
+
+BOOL QueryPerformanceCounter(LARGE_INTEGER *out);
+BOOL QueryPerformanceFrequency(LARGE_INTEGER *out);
+
+#define MEM_COMMIT   0x1000
+#define MEM_RESERVE  0x2000
+#define MEM_DECOMMIT 0x4000
+#define MEM_RELEASE  0x8000
+LPVOID VirtualAlloc(LPVOID addr, SIZE_T size, DWORD type, DWORD protect);
+BOOL   VirtualFree(LPVOID addr, SIZE_T size, DWORD type);
+
+#ifdef UNICODE
+#define WIN32_FIND_DATA WIN32_FIND_DATAW
+#define LPWIN32_FIND_DATA LPWIN32_FIND_DATAW
+#define FindFirstFile FindFirstFileW
+#define FindNextFile FindNextFileW
+#define CreateDirectory CreateDirectoryW
+#define RemoveDirectory RemoveDirectoryW
+#define MoveFile MoveFileW
+#define SetFileAttributes SetFileAttributesW
+#define GetCurrentDirectory GetCurrentDirectoryW
+#define SetCurrentDirectory SetCurrentDirectoryW
+#define STARTUPINFO STARTUPINFOW
+#define LPSTARTUPINFO LPSTARTUPINFOW
+#define CreateProcess CreateProcessW
+#define GetStartupInfo GetStartupInfoW
+#endif
+
+/* ---------------- winreg (advapi32; implemented by advapi32.c, 0059) - */
 
 typedef HANDLE HKEY;
 typedef HKEY *PHKEY;

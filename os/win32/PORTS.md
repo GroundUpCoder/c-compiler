@@ -8,9 +8,10 @@ port, and keep it committed (`--check` verifies freshness).
 |--------|--------|---------|
 | gdidemo | links | 0 |
 | ctldemo | links | 0 |
-| winmine | missing-symbols | 38 |
-| notepad | missing-symbols | 118 |
-| calc | missing-symbols | 74 |
+| k32demo | links | 0 |
+| winmine | missing-symbols | 29 |
+| notepad | missing-symbols | 64 |
+| calc | missing-symbols | 45 |
 
 ## gdidemo — links
 
@@ -20,11 +21,15 @@ Project: `os/win32/gdidemo.json` — control target — the 0057 acceptance app 
 
 Project: `os/win32/ctldemo.json` — control target — the 0058 acceptance app must stay fully covered
 
+## k32demo — links
+
+Project: `os/win32/k32demo.json` — control target — the 0059 acceptance app must stay fully covered
+
 ## winmine — missing-symbols
 
 Project: `vendor/winmine/bin.json` — ReactOS/Wine Minesweeper — the identity port
 
-Missing symbols (38):
+Missing symbols (29):
 
 ```
 AdjustWindowRect
@@ -34,7 +39,6 @@ DefWindowProcW
 DialogBoxParamW
 DispatchMessageW
 EndDialog
-ExitProcess
 GetDlgItemInt
 GetDlgItemTextW
 GetMenu
@@ -50,11 +54,6 @@ LoadStringW
 MonitorFromRect
 PlaySoundW
 RedrawWindow
-RegCloseKey
-RegCreateKeyExW
-RegOpenKeyExW
-RegQueryValueExW
-RegSetValueExW
 RegisterClassExW
 SendMessageW
 SetDlgItemInt
@@ -62,27 +61,20 @@ SetDlgItemTextW
 SetTimer
 ShellAboutW
 TranslateAcceleratorW
-lstrcpynW
-lstrlenW
-wsprintfW
 ```
 
 ## notepad — missing-symbols
 
 Project: `vendor/notepad/bin.json` — ReactOS notepad — EDIT + menus + comdlg32
 
-Missing symbols (118):
+Missing symbols (64):
 
 ```
 AbortDoc
 CheckMenuItem
 ChooseFontW
-CloseHandle
-CreateFileMappingW
-CreateFileW
 CreateFontIndirectW
 CreateStatusWindowW
-CreateThread
 CreateWindowExW
 DefWindowProcW
 DestroyAcceleratorTable
@@ -97,57 +89,30 @@ EndDialog
 EndDoc
 EndPage
 FindTextW
-FormatMessageW
-GetDateFormatW
 GetDlgItemInt
 GetDlgItemTextW
-GetFileAttributesW
-GetFileSize
 GetFileTitleW
-GetFullPathNameW
-GetLastError
-GetLocalTime
 GetMenu
 GetMessageW
-GetModuleFileNameW
 GetOpenFileNameW
-GetProcessHeap
 GetSaveFileNameW
 GetSystemMetrics
 GetTextExtentPoint32W
 GetTextMetricsW
-GetTimeFormatW
-GetUserDefaultLangID
-GetUserDefaultUILanguage
 GetWindowPlacement
 GetWindowTextLengthW
 GetWindowTextW
-GlobalFree
-HeapAlloc
-HeapFree
 IsClipboardFormatAvailable
 IsDialogMessageW
-IsTextUnicode
 LoadAcceleratorsW
 LoadCursorW
 LoadIconW
 LoadImageW
 LoadStringW
-LocalAlloc
-LocalFree
-LocalLock
-LocalUnlock
-MapViewOfFile
 MessageBoxW
-MultiByteToWideChar
 PageSetupDlgW
 PostMessageW
 PrintDlgW
-RegCloseKey
-RegCreateKeyExW
-RegOpenKeyW
-RegQueryValueExW
-RegSetValueExW
 RegisterClassExW
 RegisterWindowMessageW
 ReplaceTextW
@@ -157,8 +122,6 @@ SendMessageW
 SetCursor
 SetDlgItemInt
 SetDlgItemTextW
-SetEndOfFile
-SetLastError
 SetMapMode
 SetProcessDefaultLayout
 SetWindowLongPtrW
@@ -168,37 +131,16 @@ ShellAboutW
 ShellExecuteW
 StartDocW
 StartPage
-StringCbPrintfW
-StringCchCatNW
-StringCchCatW
-StringCchCopyNW
-StringCchCopyW
-StringCchPrintfW
 TextOutW
 TranslateAcceleratorW
-UnmapViewOfFile
-WideCharToMultiByte
 WinHelpW
-WriteFile
-_istalnum
-_tcscat
-_tcscmp
-_tcscpy
-_tcslen
-_tcsncmp
-_tcsncpy
-_tcsnicmp
-_tcsrchr
-_totupper
-lstrlenW
-wsprintfW
 ```
 
 ## calc — missing-symbols
 
 Project: `vendor/calc/bin.json` — ReactOS calc — dense control/dialog exercise
 
-Missing symbols (74):
+Missing symbols (45):
 
 ```
 AppendMenuW
@@ -214,42 +156,28 @@ DrawFrameControl
 DrawStateW
 EmptyClipboard
 EnableMenuItem
-FreeLibrary
 GetAsyncKeyState
 GetClassNameW
 GetClipboardData
 GetDlgItemTextW
 GetKeyboardLayout
 GetKeyboardState
-GetLocaleInfoW
 GetMenu
 GetMessageW
-GetProcAddress
-GetProfileIntW
 GetSubMenu
 GetSystemMetrics
 GetTextExtentPoint32W
-GetVersionExW
 GetWindowLongPtrW
 GetWindowTextW
-GlobalAlloc
-GlobalLock
-GlobalUnlock
 InitCommonControls
 IsClipboardFormatAvailable
 IsDlgButtonChecked
 LoadImageW
-LoadLibraryW
 LoadMenuW
 LoadStringW
 MapVirtualKeyExW
 OpenClipboard
 PostMessageW
-RegCloseKey
-RegCreateKeyExW
-RegOpenKeyExW
-RegQueryValueExW
-RegSetValueExW
 SendDlgItemMessageW
 SendMessageW
 SetClipboardData
@@ -257,29 +185,14 @@ SetDlgItemTextW
 SetMenu
 SetWindowLongPtrW
 ShellAboutW
-StringCbCatW
-StringCbCopyExW
-StringCbCopyW
-StringCbPrintfExW
-StringCbPrintfW
-StringCchPrintfExW
-StringCchPrintfW
 ToAsciiEx
 TrackMouseEvent
 TrackPopupMenu
-WriteProfileStringW
-_strdup
-_strupr
-_stscanf
-_tcschr
-_tcscmp
-_tcsicmp
-_tcslen
 ```
 
 ## Aggregate demand (the order of attack)
 
-175 distinct symbols across 5 targets.
+98 distinct symbols across 6 targets.
 
 | symbol | apps |
 |--------|------|
@@ -291,10 +204,6 @@ _tcslen
 | GetSystemMetrics | winmine notepad calc |
 | LoadImageW | winmine notepad calc |
 | LoadStringW | winmine notepad calc |
-| RegCloseKey | winmine notepad calc |
-| RegCreateKeyExW | winmine notepad calc |
-| RegQueryValueExW | winmine notepad calc |
-| RegSetValueExW | winmine notepad calc |
 | SendMessageW | winmine notepad calc |
 | SetDlgItemTextW | winmine notepad calc |
 | ShellAboutW | winmine notepad calc |
@@ -311,18 +220,11 @@ _tcslen
 | LoadCursorW | winmine notepad |
 | LoadIconW | winmine notepad |
 | PostMessageW | notepad calc |
-| RegOpenKeyExW | winmine calc |
 | RegisterClassExW | winmine notepad |
 | SendDlgItemMessageW | notepad calc |
 | SetDlgItemInt | winmine notepad |
 | SetWindowLongPtrW | notepad calc |
-| StringCbPrintfW | notepad calc |
-| StringCchPrintfW | notepad calc |
 | TranslateAcceleratorW | winmine notepad |
-| _tcscmp | notepad calc |
-| _tcslen | notepad calc |
-| lstrlenW | winmine notepad |
-| wsprintfW | winmine notepad |
 | AbortDoc | notepad |
 | AdjustWindowRect | winmine |
 | AppendMenuW | calc |
@@ -330,14 +232,10 @@ _tcslen
 | CheckRadioButton | calc |
 | ChooseFontW | notepad |
 | CloseClipboard | calc |
-| CloseHandle | notepad |
 | CreateDialogParamW | calc |
-| CreateFileMappingW | notepad |
-| CreateFileW | notepad |
 | CreateFontIndirectW | notepad |
 | CreatePopupMenu | calc |
 | CreateStatusWindowW | notepad |
-| CreateThread | notepad |
 | DestroyAcceleratorTable | notepad |
 | DestroyMenu | calc |
 | DragAcceptFiles | notepad |
@@ -349,74 +247,39 @@ _tcslen
 | EmptyClipboard | calc |
 | EndDoc | notepad |
 | EndPage | notepad |
-| ExitProcess | winmine |
 | FindTextW | notepad |
-| FormatMessageW | notepad |
-| FreeLibrary | calc |
 | GetAsyncKeyState | calc |
 | GetClassNameW | calc |
 | GetClipboardData | calc |
-| GetDateFormatW | notepad |
-| GetFileAttributesW | notepad |
-| GetFileSize | notepad |
 | GetFileTitleW | notepad |
-| GetFullPathNameW | notepad |
 | GetKeyboardLayout | calc |
 | GetKeyboardState | calc |
-| GetLastError | notepad |
-| GetLocalTime | notepad |
-| GetLocaleInfoW | calc |
-| GetModuleFileNameW | notepad |
 | GetMonitorInfoW | winmine |
 | GetOpenFileNameW | notepad |
-| GetProcAddress | calc |
-| GetProcessHeap | notepad |
-| GetProfileIntW | calc |
 | GetSaveFileNameW | notepad |
 | GetSubMenu | calc |
 | GetTextMetricsW | notepad |
-| GetTimeFormatW | notepad |
-| GetUserDefaultLangID | notepad |
-| GetUserDefaultUILanguage | notepad |
-| GetVersionExW | calc |
 | GetWindowLongPtrW | calc |
 | GetWindowPlacement | notepad |
 | GetWindowTextLengthW | notepad |
-| GlobalAlloc | calc |
-| GlobalFree | notepad |
-| GlobalLock | calc |
-| GlobalUnlock | calc |
-| HeapAlloc | notepad |
-| HeapFree | notepad |
 | InitCommonControls | calc |
 | IsDialogMessageW | notepad |
 | IsDlgButtonChecked | calc |
-| IsTextUnicode | notepad |
 | LoadBitmapW | winmine |
-| LoadLibraryW | calc |
 | LoadMenuW | calc |
-| LocalAlloc | notepad |
-| LocalFree | notepad |
-| LocalLock | notepad |
-| LocalUnlock | notepad |
-| MapViewOfFile | notepad |
 | MapVirtualKeyExW | calc |
 | MessageBoxW | notepad |
 | MonitorFromRect | winmine |
-| MultiByteToWideChar | notepad |
 | OpenClipboard | calc |
 | PageSetupDlgW | notepad |
 | PlaySoundW | winmine |
 | PrintDlgW | notepad |
 | RedrawWindow | winmine |
-| RegOpenKeyW | notepad |
 | RegisterWindowMessageW | notepad |
 | ReplaceTextW | notepad |
 | SHAddToRecentDocs | notepad |
 | SetClipboardData | calc |
 | SetCursor | notepad |
-| SetEndOfFile | notepad |
-| SetLastError | notepad |
 | SetMapMode | notepad |
 | SetMenu | calc |
 | SetProcessDefaultLayout | notepad |
@@ -426,35 +289,8 @@ _tcslen
 | ShellExecuteW | notepad |
 | StartDocW | notepad |
 | StartPage | notepad |
-| StringCbCatW | calc |
-| StringCbCopyExW | calc |
-| StringCbCopyW | calc |
-| StringCbPrintfExW | calc |
-| StringCchCatNW | notepad |
-| StringCchCatW | notepad |
-| StringCchCopyNW | notepad |
-| StringCchCopyW | notepad |
-| StringCchPrintfExW | calc |
 | TextOutW | notepad |
 | ToAsciiEx | calc |
 | TrackMouseEvent | calc |
 | TrackPopupMenu | calc |
-| UnmapViewOfFile | notepad |
-| WideCharToMultiByte | notepad |
 | WinHelpW | notepad |
-| WriteFile | notepad |
-| WriteProfileStringW | calc |
-| _istalnum | notepad |
-| _strdup | calc |
-| _strupr | calc |
-| _stscanf | calc |
-| _tcscat | notepad |
-| _tcschr | calc |
-| _tcscpy | notepad |
-| _tcsicmp | calc |
-| _tcsncmp | notepad |
-| _tcsncpy | notepad |
-| _tcsnicmp | notepad |
-| _tcsrchr | notepad |
-| _totupper | notepad |
-| lstrcpynW | winmine |

@@ -14,6 +14,12 @@
       "notes": "control target — the 0058 acceptance app must stay fully covered"
     },
     {
+      "name": "k32demo",
+      "project": "os/win32/k32demo.json",
+      "expect": "links",
+      "notes": "control target — the 0059 acceptance app must stay fully covered"
+    },
+    {
       "name": "winmine",
       "project": "vendor/winmine/bin.json",
       "expect": "missing-symbols",

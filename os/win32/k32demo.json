@@ -1,0 +1,15 @@
+{
+  "bin": true,
+  "name": "k32demo",
+  "description": "0059 kernel32 acceptance app: file/dir/find/mapping/memory/time/registry/spawn selftest, built UNICODE like the port corpus",
+  "deps": [
+    "lib.json"
+  ],
+  "compilerArgs": [
+    "-DUNICODE",
+    "-D_UNICODE"
+  ],
+  "sources": [
+    "k32demo.c"
+  ]
+}

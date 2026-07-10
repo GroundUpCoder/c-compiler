@@ -1,6 +1,17 @@
 # 0059 — win32: kernel32 subset over POSIX
 
-- **Status**: open
+- **Status**: done (2026-07-10) — `os/win32/kernel32.c` (handles/files/find/
+  mapping/memory/time/CreateProcess-over-__spawn/NLS/UTF-16 boundary) +
+  `advapi32.c` (file-backed hive at `$HOME/.win32reg`) + `crt16.c` (the
+  16-bit wide CRT: `_tcs*`, strsafe, `wsprintfW`). kernel32 is W-native
+  (no ANSI generics — the demanding corpus is UNICODE-only; documented in
+  windows.h). Acceptance: `/bin/k32demo` (UNICODE build, 87 self-checks
+  incl. both POSIX-twin directions and a real spawn through a redirected
+  std handle) + `tests/kernel/test_kernel32_e2e.js` (adds registry
+  persistence across boots). PORTS.md tail: winmine 38→29, notepad
+  118→64, calc 74→45 — every kernel32/advapi32/CRT symbol cleared; the
+  remainder is user32-W/menus/dialogs/comdlg32/shell32/winmm. Image v37.
+  Dev log: `logs/2026-07-10/win32-kernel32.md`.
 - **Design**: `todos/WIN32.md` (coexistence section)
 
 ## Goal

@@ -300,7 +300,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v36**.
+Image version is **v37**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
@@ -341,9 +341,27 @@ CRT = the `_tcs*` names as real symbols) — `node tools/win32ports.js`
 regenerates `os/win32/PORTS.md`, the authoritative 0059+ demand log
 (top of the table: W message pump, registry, LoadString/LoadImage
 resources, menus, dialogs, GetSystemMetrics); `--check` is
-`tests/kernel/test_win32_ports.js`. Implement to that log — DialogBox
-templates, menus, accelerators, SetTimer/caret blink, clipboard, Tab
-navigation, WinMain shim, and a resource (.rc) story all live there.
+`tests/kernel/test_win32_ports.js`. 0059 landed kernel32 over POSIX
+(`kernel32.c` + `advapi32.c` + `crt16.c` in lib.json — all app-side, no
+kernel change): handle table (HANDLE↔fd, magic-tagged), CreateFile→open,
+FindFirstFile→opendir+wildcard, file mapping as read-copy views
+(write-back on unmap), Global/Local/Heap as ONE headered malloc,
+CreateProcess→the `__spawn` spec (cmdline tokenizer, PATH search,
+STARTF_USESTDHANDLES→fd-actions — DUP2's `fd` is the CHILD fd, `arg` the
+source), module identity via /proc/<pid>/cmdline, registry = a text hive
+at `$HOME/.win32reg` (tmp+rename write-through; GetProfileIntW maps
+win.ini onto it), the 16-bit wide CRT (`_tcs*`/strsafe/wsprintfW over
+one wide formatter that renders numerics via narrow snprintf), and
+loud-failure stubs (CreateThread/LoadLibrary →
+ERROR_CALL_NOT_IMPLEMENTED — single-threaded static-link world). NB
+kernel32 is W-NATIVE (no ANSI generics — the corpus is UNICODE-only;
+windows.h section note is canonical). `/bin/k32demo` (UNICODE build, 87
+self-checks incl. POSIX-twin identity + a redirected spawn) is the
+acceptance app; `tests/kernel/test_kernel32_e2e.js` adds
+registry-persistence-across-boots. Implement the rest to the demand
+log — DialogBox templates, menus, accelerators, SetTimer/caret blink,
+clipboard, Tab navigation, WinMain shim, and a resource (.rc) story all
+live there.
 `/bin/gpubox` (todos/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the

@@ -94,6 +94,14 @@ corpus; a compile-test harness whose missing-symbol log drives 0057–0059).
 Parallel drawing track: `0061` Cairo. Compositor track: `0062` zero-copy
 present, `0063` Aero effects.
 
+0059 landed 2026-07-10 (log: `logs/2026-07-10/win32-kernel32.md`):
+`kernel32.c` + `advapi32.c` (the `$HOME/.win32reg` hive) + `crt16.c` (the
+16-bit wide CRT + strsafe + wsprintfW). kernel32 is W-native — no ANSI
+generic entries; the demanding corpus is UNICODE-only (windows.h section
+note records it). Threads/LoadLibrary fail loudly per friction #1/#4.
+After 0059 the PORTS.md demand is purely user32-W/menus/dialogs/
+resources/comdlg32/shell32/winmm (winmine 29, notepad 64, calc 45).
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

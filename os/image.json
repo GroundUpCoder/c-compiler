@@ -1,5 +1,5 @@
 {
-  "version": 36,
+  "version": 37,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -51,6 +51,9 @@
       },
       "/usr/bin/ctldemo": {
         "project": "os/win32/ctldemo.json"
+      },
+      "/usr/bin/k32demo": {
+        "project": "os/win32/k32demo.json"
       },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
