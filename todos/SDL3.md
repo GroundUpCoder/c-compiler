@@ -260,9 +260,13 @@ API. Priority P0 (needed for most apps) → P3 (niche).
 (Landed 2026-07-08, todos/0019: WM-initiated window resize —
 `SDL_EVENT_WINDOW_RESIZED` delivered with in-place surface re-derivation,
 the 0x202–0x207 window-event block defined, `SDL_WindowEvent` in the union —
-plus `SDL_GetWindowSize`.)
-Missing: multiple windows; the other `SDL_EVENT_WINDOW_*` deliveries (focus
-gained/lost, exposed, close-requested);
+plus `SDL_GetWindowSize`. Landed 2026-07-11, todos/0089:
+`SDL_EVENT_WINDOW_CLOSE_REQUESTED` delivered per-window when the process
+has >1 live windows — the only/last window keeps process-wide
+`SDL_EVENT_QUIT`, deliberately ONE event per close request, never
+upstream's CLOSE_REQUESTED+QUIT pair.)
+Missing: the other `SDL_EVENT_WINDOW_*` deliveries (focus
+gained/lost, exposed);
 `SDL_SetWindowSize` (app-initiated resize) / `GetWindowSizeInPixels` / position / min/max; fullscreen
 toggle at runtime; `SDL_GetWindowPixelDensity`/display scale (HiDPI);
 `SDL_SetWindowResizable`/`Bordered`; display enumeration (`SDL_GetDisplays`,

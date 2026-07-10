@@ -64,6 +64,15 @@ carries the 0063 aero aesthetics + glass perf eyeball.
 - **0089 NEW: hub keyboard headless = `wmctl key SID 79 1073741903`
   (Right) / `wmctl key SID 40 13` (Enter)** — user32 vk_of maps by SDL
   keysym.
+- **0089 NEW, browser-test traps (cost two os-shell runs):** (1) a
+  `waitForFunction(__osOut.includes('MARKER'))` fires on the TYPED
+  COMMAND'S ECHO, not the output — emit markers with a split quote
+  (`echo CP-U""P`) so the echo never contains the marker; earlier legs
+  only survived because their commands finished instantly. (2) Typing a
+  long line right after launching a job with `&` races hush's async
+  `[1] pid name` notice — the redraw mangles the in-flight input and
+  hush lands at a `>` continuation prompt; `waitForTimeout(800)` after
+  the `&` line before typing more.
 - **0077: the icon tile's white ring is 6px; probe `(ix+2, iy+2)`**, not
   the tile center. Successive `wmctl click`s on the SAME desktop icon can
   pair into a double-click (500ms); `sleep 0.6` between same-icon
