@@ -125,6 +125,17 @@ Per-file timings from the new runner's `summary.json` (first full run,
 - `tests/blockfs/run.js` converted to the engine (parallel, `--long`
   preserved).
 - CLAUDE.md + tests/browser/README.md updated.
+- DECLINED (measured away): the plan's "one serve.js + one Chromium
+  instance" sweep shape — with the prebaked blob the whole 15-file
+  sweep is ~70s, so per-test server/browser launch is noise; shared
+  trace-on-fail likewise superseded by the per-file logs. Don't
+  re-propose without new measurements.
+- Interrupt semantics audited post-close: SIGINT/SIGTERM group-kill +
+  checkpoint; runner SIGKILL (untrappable) keeps the partial summary
+  but orphans in-flight children — they self-exit with their test, so
+  the only true leak is a SIGKILLed runner over a hung test (caveat in
+  the engine header). `--resume` after a mid-run SIGKILL re-ran exactly
+  the missing file.
 
 ## Acceptance
 

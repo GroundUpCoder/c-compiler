@@ -16,6 +16,13 @@
 //   - --resume (skip files that passed in the previous summary), --filter,
 //     --fail-fast, --timeout, -j, --list
 //
+// Interrupt semantics (audited 2026-07-10): SIGINT/SIGTERM kill every
+// in-flight process group and keep the checkpoint; a SIGKILL of the runner
+// (untrappable) still leaves a valid partial summary but ORPHANS in-flight
+// children — they self-exit when their test completes, so the only true
+// leak is a SIGKILLed runner whose test was itself hung. `pkill -f
+// tests/kernel` cleans up after that rare case.
+//
 // Callers provide the file table and defaults; see tests/kernel/run.js and
 // tests/browser/os-sweep.mjs.
 const { spawn } = require('child_process');
