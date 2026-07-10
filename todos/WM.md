@@ -518,6 +518,38 @@ Recreate on EV_SCREEN like the taskbar; re-read the folder on a coarse
 frame-tick timer (~1s — one readdir RPC/s, no watch API exists or is
 needed). Minimize already reveals it; nothing kernel-side changes.
 
+*Selection & manipulation (todos/0077, landed 2026-07-11).* All
+client-side in wm.c's desktop surface — zero protocol/kernel change.
+Selection is a 64-bit mask over the entries (MAX_DESK is 64 by
+design): click selects one, ctrl-click toggles, shift-click ranges
+from the anchor in ENTRY (sorted) order, empty-click clears,
+press-drag from empty desktop is a marquee (white 1px outline;
+selects icons whose TILES intersect; ctrl adds, plain replaces),
+Ctrl+A/Esc/arrows/Enter drive it from the keyboard (arrows pick the
+nearest icon in the pressed direction — least perpendicular offset
+first; Enter launches only an unambiguous SINGLE selection — the
+multi-launch guard: Enter on a multi-selection is a deliberate
+no-op). Press-drag on a selected icon moves the WHOLE set by the
+snapped cell delta, all-or-nothing (any target out of bounds or on an
+unselected icon reverts the move), drawn as cell-outline ghosts.
+Positions persist in `/root/Desktop/.icons` (`col row name` lines,
+whole layout rewritten on each drop); entries absent from the file
+auto-flow column-major into free cells, so a virgin Desktop renders
+the exact 0029 grid, and an out-of-bounds saved cell (transient small
+screen) falls back to auto-flow WITHOUT rewriting the file. Two
+load-bearing wm-policy decisions: **a desktop left-click sends
+WMP_FOCUS on the desktop sid** (the kernel's borderless click-to-focus
+exemption stays; policy asks explicitly) so modifier/navigation keys
+reach the grid — and modifiers are tracked from key events BY KEYSYM
+(pointer records carry no mod word), reset when the desktop loses
+focus. The kernel hit-tests per event (no capture), so a drag whose
+mouseup lands off-surface finishes via the next motion's cleared
+button bit. Right-button routing is deliberately untouched (reserved:
+todos/0091/0101). wmctl grew `keydown`/`keyup` (one key edge — hold a
+modifier across an injected click), `down`/`up` (one pointer edge) and
+`drag X1 Y1 X2 Y2` (press-move-move-release on one connection) so
+agents can drive all of it headless.
+
 **Title-bar buttons (todos/0030).** Today the bar has ONE box (close).
 Add minimize and maximize boxes left of it — Win95 order
 [min][max][close], the close box's 16px metrics. The mechanism/policy
@@ -590,6 +622,15 @@ graduate to queue items when a fix is scheduled.
   (`todos/0064`, which numbers this so it cannot slip a third time).
 - **snake needs two paced `q`s to quit** (vendor exit-prompt loop spins
   on EOF; documented since 0015). Vendor quirk, not worth patching.
+- **A modifier held BEFORE the desktop ever holds focus is invisible to
+  the first desktop click** (todos/0077): pointer records carry no mod
+  word, so wm.c tracks ctrl/shift from key events — which only reach it
+  once the desktop has kernel focus (the click itself grants it). Repro:
+  focus an app, hold Ctrl, ctrl-click a desktop icon → plain-select, not
+  toggle; the SECOND ctrl-click toggles. Vanishingly rare in practice
+  and self-healing; the fix would be threading a mod word through the
+  pointer path (ring record word is free) — schedule only if it ever
+  bites a real flow.
 - **Dawn + SIGKILL abort (S3 caveat) — SHRUNK, keep watching**: rounds 1
   AND 2 (storm leg + isolated retest each, webgpu 0.4.x) survived
   `kill -9` of a live gpubox with no Node abort. The drain discipline

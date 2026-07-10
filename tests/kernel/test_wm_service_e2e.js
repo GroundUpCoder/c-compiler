@@ -371,6 +371,64 @@ const script = [
   'echo ==sm8',
   'wmctl list',
   'rm -rf /etc/menu',
+  // ---- desktop icon selection & manipulation (todos/0077) ----
+  // /root/Desktop is DESK_ACT here (9 entries, column 0 rows 0-8). Click
+  // coordinates ride deskY; label-strip pixels are asserted from surface
+  // shots after the run. The first click also focuses the desktop (wm.c
+  // policy), so the later keyboard legs land on the grid.
+  `wmctl click $DSID 58 ${deskY(DESK_ACT, 'gameboy')}`,       // plain select
+  'sleep 0.5',
+  'wmctl shot $DSID /root/s1.ppm && echo s1-ok',
+  // ctrl+click doom: additive toggle (keydown/keyup hold the modifier
+  // across the separate click injection — todos/0077 wmctl growth)
+  'wmctl keydown $DSID 224 1073742048 64',                    // LCTRL down
+  `wmctl click $DSID 58 ${deskY(DESK_ACT, 'doom')}`,
+  'wmctl keyup $DSID 224 1073742048 0',
+  'sleep 0.5',
+  'wmctl shot $DSID /root/s2.ppm && echo s2-ok',
+  // shift+click mario: range from the anchor (doom, entry order 1..4)
+  'wmctl keydown $DSID 225 1073742049 1',                     // LSHIFT down
+  `wmctl click $DSID 58 ${deskY(DESK_ACT, 'mario')}`,
+  'wmctl keyup $DSID 225 1073742049 0',
+  'sleep 0.5',
+  'wmctl shot $DSID /root/s2b.ppm && echo s2b-ok',
+  // marquee from empty desktop over the tiles of rows 0-2: REPLACES the set
+  'wmctl drag $DSID 150 10 40 200',
+  'sleep 0.5',
+  'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
+  // drag-move: press term (0,8) and drop 2 cols right, 7 rows up -> (2,1);
+  // the plain press on the unselected icon first collapses the set to it
+  `wmctl drag $DSID 58 ${deskY(DESK_ACT, 'term')} 226 112`,
+  'sleep 2.5',                                   // survive the re-read tick
+  'echo ==sel1',
+  'cat /root/Desktop/.icons',
+  'echo ==sel2',
+  'wmctl shot $DSID /root/s4.ppm && echo s4-ok',
+  'N1=$(wmctl list | grep -c winbox$)',
+  // Ctrl+A selects all; Enter on a multi-selection is the multi-launch
+  // guard no-op (never silently spawn N windows)
+  'wmctl keydown $DSID 224 1073742048 64',
+  'wmctl key $DSID 4 97 64',                     // a
+  'wmctl keyup $DSID 224 1073742048 0',
+  'sleep 0.5',
+  'wmctl shot $DSID /root/s5.ppm && echo s5-ok',
+  'wmctl key $DSID 40 13',                       // Enter: multi -> no-op
+  'sleep 2',
+  'N2=$(wmctl list | grep -c winbox$)',
+  'echo NOOP-DELTA-$((N2-N1))',
+  'wmctl key $DSID 41 27',                       // Esc clears
+  'sleep 0.5',
+  'wmctl shot $DSID /root/s6.ppm && echo s6-ok',
+  // arrows: Right with nothing selected takes the top-left icon
+  // (alauncher); Enter on the single selection launches it (-> winbox)
+  'wmctl key $DSID 79 1073741903',               // Right
+  'sleep 0.3',
+  'wmctl key $DSID 40 13',                       // Enter
+  'sleep 3',
+  'N3=$(wmctl list | grep -c winbox$)',
+  'echo LAUNCH-DELTA-$((N3-N2))',
+  'echo ==sel3',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -740,6 +798,75 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     out.includes('glass-on-ok') && out.includes('glass-off-ok'));
   check('glass never changes the headless composite',
     out.includes('glass-headless-invariant'));
+}
+
+// ---- desktop icon selection & manipulation (todos/0077) ----
+// Selection = the navy label strip under an icon (the 0029 highlight,
+// per-set since 0077). Sample 1px left of the label text: navy when
+// selected, teal when not. Cells are (col, row); term moves to (2,1).
+{
+  const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
+  const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const bytes = fs.readFileSync(path.join(tmp, 'os-root.img'));
+  const store = new BLOCK_FS.MemoryByteStore(bytes.length);
+  store.setBytes(0, bytes);
+  const ufs = BLOCK_FS.createV4(store);
+  const readPpm = (name) => {
+    const ppm = COMMON.readFileBytes(ufs, '/root/' + name);
+    const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
+    const off = head.indexOf('255\n') + 4;
+    return (x, y) => String(Array.from(
+      ppm.subarray(off + (y * 1024 + x) * 3, off + (y * 1024 + x) * 3 + 3)));
+  };
+  const NAVY = '0,0,128', TEAL = '0,128,128', WHITE = '255,255,255';
+  const strip = (px, name, c, r) => {
+    const len = Math.min(13, name.length);
+    const lx = 16 + c * 84 + Math.floor((84 - len * 6) / 2);
+    return px(lx - 1, 16 + r * 64 + 34 + 3);
+  };
+  const at = (name) => [name, 0, DESK_ACT.indexOf(name)];   // pre-move cells
+  for (const s of ['s1', 's2', 's2b', 's3', 's4', 's5', 's6'])
+    check(`${s} shot written`, out.includes(s + '-ok'));
+  const p1 = readPpm('s1.ppm');
+  check('plain click selects one (gameboy navy, doom teal)',
+    strip(p1, ...at('gameboy')) === NAVY && strip(p1, ...at('doom')) === TEAL,
+    [strip(p1, ...at('gameboy')), strip(p1, ...at('doom'))]);
+  const p2 = readPpm('s2.ppm');
+  check('ctrl+click adds (gameboy AND doom navy)',
+    strip(p2, ...at('gameboy')) === NAVY && strip(p2, ...at('doom')) === NAVY,
+    [strip(p2, ...at('gameboy')), strip(p2, ...at('doom'))]);
+  const p2b = readPpm('s2b.ppm');
+  check('shift+click ranges from the anchor (doom..mario navy, ends teal)',
+    strip(p2b, ...at('doom')) === NAVY && strip(p2b, ...at('drmario')) === NAVY &&
+    strip(p2b, ...at('gameboy')) === NAVY && strip(p2b, ...at('mario')) === NAVY &&
+    strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('quake')) === TEAL,
+    [strip(p2b, ...at('doom')), strip(p2b, ...at('mario')), strip(p2b, ...at('quake'))]);
+  const p3 = readPpm('s3.ppm');
+  check('marquee REPLACES with the intersected tiles (rows 0-2)',
+    strip(p3, ...at('alauncher')) === NAVY && strip(p3, ...at('doom')) === NAVY &&
+    strip(p3, ...at('drmario')) === NAVY && strip(p3, ...at('gameboy')) === TEAL &&
+    strip(p3, ...at('mario')) === TEAL,
+    [strip(p3, ...at('alauncher')), strip(p3, ...at('gameboy'))]);
+  const icons = section('sel1');
+  check('.icons persists the whole layout (term at 2,1; alauncher pinned 0,0)',
+    icons.includes('2 1 term') && icons.includes('0 0 alauncher'), icons);
+  const p4 = readPpm('s4.ppm');
+  check('drag-move relocated term to (2,1): tile there, old cell teal, still selected',
+    p4(216, 88) === WHITE && p4(58, 546) === TEAL && strip(p4, 'term', 2, 1) === NAVY,
+    [p4(216, 88), p4(58, 546), strip(p4, 'term', 2, 1)]);
+  const p5 = readPpm('s5.ppm');
+  check('Ctrl+A selects all (alauncher, notes.txt, moved term navy)',
+    strip(p5, ...at('alauncher')) === NAVY && strip(p5, ...at('notes.txt')) === NAVY &&
+    strip(p5, 'term', 2, 1) === NAVY,
+    [strip(p5, ...at('alauncher')), strip(p5, ...at('notes.txt'))]);
+  check('Enter on the multi-selection is a no-op (the multi-launch guard)',
+    out.includes('NOOP-DELTA-0'), out.slice(out.indexOf('NOOP-DELTA')).slice(0, 20));
+  const p6 = readPpm('s6.ppm');
+  check('Esc clears the selection',
+    strip(p6, ...at('gameboy')) === TEAL && strip(p6, 'term', 2, 1) === TEAL,
+    [strip(p6, ...at('gameboy')), strip(p6, 'term', 2, 1)]);
+  check('Right selects the top-left icon; Enter launches it (winbox +1)',
+    out.includes('LAUNCH-DELTA-1'), out.slice(out.indexOf('LAUNCH-DELTA')).slice(0, 20));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

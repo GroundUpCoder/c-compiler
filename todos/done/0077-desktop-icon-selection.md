@@ -1,6 +1,20 @@
 # 0077 — desktop icon selection & manipulation
 
-- **Status**: open
+- **Status**: DONE 2026-07-11 — landed wm.c-only (zero kernel/protocol
+  change), image v49. Selection bitmask (click/ctrl/shift-range/marquee,
+  navy label strips), drag-move with all-or-nothing cell snapping +
+  `/root/Desktop/.icons` persistence (absent entries auto-flow — a
+  virgin Desktop keeps the 0029 layout), keyboard (arrows/Enter/Esc/
+  Ctrl+A; **decided: Enter on a multi-selection is a no-op** — the
+  multi-launch guard). Desktop left-click now takes kernel focus via
+  WMP_FOCUS (wm policy; the kernel borderless exemption stands);
+  modifiers tracked by keysym from key events (pointer records carry no
+  mod word) — the held-before-first-focus nuance is recorded in WM.md
+  "Known issues". wmctl grew keydown/keyup/down/up/drag. Tests:
+  test_wm_service_e2e.js 0077 tail + os-shell.mjs legs. Residue owners:
+  rename-in-place → 0103 (already queued after this), right-click menus
+  → 0091/0101 (non-goals here by design). Dev log
+  `logs/2026-07-11/0077-desktop-icon-selection.md`.
 - **Design**: `todos/WM.md` "The desktop shell" (desktop-icons block,
   todos/done/0029). Extends the icon grid in `os/wm.c` (grid draw ~L484,
   double-click hit-test ~L521–526).

@@ -53,7 +53,13 @@
  * Double-click (SDL event timestamps) launches. Free side effect:
  * desktop clicks — invisible to the WM before (kernel hit-test returned
  * 'desktop' to the embedder only) — are ordinary client clicks on this
- * layer now, so they dismiss the Start menu.
+ * layer now, so they dismiss the Start menu. Icons are selectable and
+ * movable (todos/0077): click / ctrl-click / shift-range / marquee build
+ * a selection set, drags move it snapped to the grid with positions
+ * persisted in /root/Desktop/.icons, and arrows/Enter/Esc/Ctrl+A drive
+ * it from the keyboard — the desktop takes kernel focus on click to make
+ * that possible (the kernel's borderless exemption is policy-overridable
+ * by the WM asking).
  *
  * Launching is ONE mechanism (activate(), todos/0066), shared by the menu
  * and the desktop (and fileman): a file the kernel can exec — wasm magic
@@ -116,6 +122,8 @@
 #define ICON_W       24
 #define MAX_DESK     64
 #define DBLCLICK_NS  500000000ULL   /* 500ms, the SDL click-count window */
+#define DRAG_SLOP    4      /* px of button-held travel before a press
+                               becomes a marquee or icon drag (todos/0077) */
 
 #define PEEK_W       160    /* Aero Peek popup (todos/0063) */
 #define PEEK_H       120
@@ -187,18 +195,45 @@ static int32_t run_sid = 0;        /* EV_CREATED echo ("startrun") */
 static char run_buf[RUN_MAX + 1];
 static int run_len = 0;
 
-/* Desktop layer state (todos/0029): fullscreen, bottom of z, recreated on
- * EV_SCREEN like the taskbar. menu_ent is the same shape (name + is_link). */
+/* Desktop layer state (todos/0029, selection & manipulation todos/0077):
+ * fullscreen, bottom of z, recreated on EV_SCREEN like the taskbar.
+ * menu_ent is the same shape (name + is_link). Icons live in grid CELLS
+ * (column-major auto-flow, todos/0029); todos/0077 adds free placement —
+ * a cell per icon, persisted in /root/Desktop/.icons ("col row name"
+ * lines, rewritten on every drag-drop; entries absent from the file
+ * auto-flow into the free cells, so a fresh Desktop looks exactly like
+ * the pre-0077 grid). Selection is a bitmask over desk[] (MAX_DESK is
+ * 64 by design); the desktop takes kernel focus on click so modifier
+ * and navigation keys reach it. */
 static SDL_Window *desk_win;
 static SDL_Surface *desk_surf;
 static int32_t desk_sid = 0;
 static menu_ent desk[MAX_DESK];
+static int desk_col[MAX_DESK], desk_row[MAX_DESK];   /* grid cells (0077) */
 static int desk_n = 0;
-static int desk_sel = -1;          /* single-click selection highlight */
+static uint64_t desk_selmask = 0;  /* selection set, bit i = desk[i] (0077) */
+static int desk_anchor = -1;       /* shift-range anchor + keyboard cursor */
+static int desk_focused = 0;       /* the desktop holds kernel focus (0077) */
 static int desk_dirty = 1;         /* redraw only when contents change */
 static int desk_last_idx = -1;     /* double-click tracking (event timestamps) */
 static uint64_t desk_last_ns = 0;
 static int desk_tick = 0;          /* coarse /root/Desktop re-read timer */
+static int mod_ctrl = 0, mod_shift = 0;   /* held modifiers, tracked from
+                                             key events by KEYSYM — pointer
+                                             records carry no mod word; reset
+                                             when the desktop loses focus so
+                                             a keyup that went elsewhere can't
+                                             wedge them (todos/0077) */
+/* Press/drag state (todos/0077). desk_drag: 0 idle, 1 marquee (press began
+ * on empty desktop), 2 icon-move (press began on a selected icon). */
+static int desk_press = 0;         /* left button is down on the desktop */
+static int desk_press_idx = -1;    /* icon under the press, -1 = empty */
+static int desk_press_x, desk_press_y;
+static int desk_cur_x, desk_cur_y; /* latest drag point */
+static int desk_drag = 0;
+static int desk_collapse = 0;      /* plain press on an already-selected icon:
+                                      collapse the set to it on a drag-less
+                                      release (the Win95 mouseup rule) */
 static uint32_t zctr = 0;          /* focus-recency counter (todos/0032) */
 
 /* Aero Peek state (todos/0063): hovering a taskbar button raises a live
@@ -800,7 +835,7 @@ static void draw_menu_col(int depth) {
     SDL_UpdateWindowSurface(c->win);
 }
 
-/* ---- the desktop layer (todos/0029) ---- */
+/* ---- the desktop layer (todos/0029; selection & drag todos/0077) ---- */
 
 /* Icons flow down the left edge, column-major (Win95), clear of the
  * taskbar strip. */
@@ -809,13 +844,85 @@ static int desk_per_col(void) {
     return rows < 1 ? 1 : rows;
 }
 
+static int desk_cols(void) {
+    int cols = (scr_w - DESK_MARGIN) / CELL_W;
+    return cols < 1 ? 1 : cols;
+}
+
+/* Resolve entry cells (todos/0077): saved positions from .icons win when
+ * they exist, are in bounds for the CURRENT grid, and don't collide;
+ * everything else auto-flows column-major into the free cells — with no
+ * .icons file this reproduces the 0029 layout exactly. Display-only: an
+ * out-of-bounds saved cell (transient small screen) falls back to
+ * auto-flow without rewriting the file. */
+static void desk_place(const menu_ent *ents, int n, int *col, int *row) {
+    int rows = desk_per_col(), cols = desk_cols();
+    uint8_t used[4096];
+    int cap = cols * rows;
+    if (cap > (int)sizeof used) cap = (int)sizeof used;
+    memset(used, 0, (size_t)cap);
+    for (int i = 0; i < n; i++) col[i] = -1;
+    FILE *f = fopen("/root/Desktop/.icons", "r");
+    if (f) {
+        char line[320];
+        while (fgets(line, sizeof line, f)) {
+            int c, r, off = -1;
+            if (sscanf(line, "%d %d %n", &c, &r, &off) < 2 || off < 0) continue;
+            char *name = line + off;
+            size_t l = strlen(name);
+            while (l > 0 && (name[l - 1] == '\n' || name[l - 1] == '\r')) name[--l] = 0;
+            if (c < 0 || c >= cols || r < 0 || r >= rows) continue;
+            if (c * rows + r >= cap || used[c * rows + r]) continue;
+            for (int i = 0; i < n; i++)
+                if (col[i] < 0 && strcmp(ents[i].name, name) == 0) {
+                    col[i] = c; row[i] = r;
+                    used[c * rows + r] = 1;
+                    break;
+                }
+        }
+        fclose(f);
+    }
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        if (col[i] >= 0) continue;
+        while (k < cap && used[k]) k++;
+        if (k >= cap) { col[i] = 0; row[i] = 0; continue; }   /* grid full: pile */
+        col[i] = k / rows; row[i] = k % rows;
+        used[k++] = 1;
+    }
+}
+
+/* Persist the whole layout (todos/0077): every current entry gets a line,
+ * pinning the on-screen arrangement; files added later still auto-flow
+ * (they're not in the file). Stale lines for removed files just stop
+ * matching. Rewritten only on an actual drag-drop. */
+static void desk_save(void) {
+    FILE *f = fopen("/root/Desktop/.icons", "w");
+    if (!f) return;
+    for (int i = 0; i < desk_n; i++)
+        fprintf(f, "%d %d %s\n", desk_col[i], desk_row[i], desk[i].name);
+    fclose(f);
+}
+
 static void desk_load(void) {
+    if (desk_press) return;            /* never reshuffle under a drag (0077) */
     menu_ent fresh[MAX_DESK];
+    int fcol[MAX_DESK], frow[MAX_DESK];
     int n = load_entries("/root/Desktop", fresh, MAX_DESK);
-    if (n == desk_n && memcmp(fresh, desk, (size_t)n * sizeof fresh[0]) == 0) return;
+    desk_place(fresh, n, fcol, frow);
+    if (n == desk_n && memcmp(fresh, desk, (size_t)n * sizeof fresh[0]) == 0 &&
+        memcmp(fcol, desk_col, (size_t)n * sizeof fcol[0]) == 0 &&
+        memcmp(frow, desk_row, (size_t)n * sizeof frow[0]) == 0) return;
     memcpy(desk, fresh, (size_t)n * sizeof fresh[0]);
+    memcpy(desk_col, fcol, (size_t)n * sizeof fcol[0]);
+    memcpy(desk_row, frow, (size_t)n * sizeof frow[0]);
     desk_n = n;
-    if (desk_sel >= desk_n) desk_sel = -1;
+    /* The entry set (or layout) changed under us: selection indexes are
+     * stale — clear rather than mis-highlight (todos/0077). Our own
+     * .icons rewrite resolves to the cells already shown, so the memcmp
+     * above keeps the selection across the post-drag re-read tick. */
+    desk_selmask = 0;
+    desk_anchor = -1;
     desk_dirty = 1;
 }
 
@@ -824,6 +931,8 @@ static void desk_load(void) {
  * The compositor's own background never shows again while the wm lives —
  * which is the point: every "desktop" click is a client click now. */
 static int make_desk(void) {
+    desk_press = 0;                    /* a recreate drops any drag (0077) */
+    desk_drag = 0;
     desk_load();
     desk_win = SDL_CreateWindow("desktop", scr_w, scr_h, SDL_WINDOW_BORDERLESS);
     if (!desk_win) return -1;
@@ -832,14 +941,16 @@ static int make_desk(void) {
     return 0;
 }
 
-/* Cell under a desktop click, or -1. The whole cell is the click target. */
+/* Icon under a desktop point, or -1. The whole cell is the click target;
+ * cells are per-icon since free placement (todos/0077). */
 static int desk_hit(int x, int y) {
     if (x < DESK_MARGIN || y < DESK_MARGIN || y >= scr_h - BAR_H) return -1;
     int col = (x - DESK_MARGIN) / CELL_W;
     int row = (y - DESK_MARGIN) / CELL_H;
     if (row >= desk_per_col()) return -1;
-    int idx = col * desk_per_col() + row;
-    return idx < desk_n ? idx : -1;
+    for (int i = 0; i < desk_n; i++)
+        if (desk_col[i] == col && desk_row[i] == row) return i;
+    return -1;
 }
 
 /* Double-click: the same activate() the Start menu uses (todos/0066) —
@@ -852,13 +963,19 @@ static void desk_launch(int idx) {
     activate(path);
 }
 
-/* Desktop mousedown: select on one click, launch on a quick second click
- * on the SAME icon (own timestamp check — the global SDL click counter
- * accumulates across windows, so it can't be trusted alone). Empty-area
- * clicks clear the selection. */
+/* Desktop mousedown (todos/0029 double-click, todos/0077 selection):
+ * launch on a quick second click on the SAME icon (own timestamp check —
+ * the global SDL click counter accumulates across windows, so it can't
+ * be trusted alone; a held modifier suppresses the pair, so ctrl-click
+ * ctrl-click toggles twice). Otherwise build the selection set: plain
+ * click selects one (a click on an already-selected icon defers to
+ * mouseup so a drag can move the whole set), ctrl-click toggles,
+ * shift-click ranges from the anchor (entry order — the sorted order,
+ * documented), empty-area press clears and arms the marquee. */
 static void desk_down(float fx, float fy, uint64_t t) {
-    int idx = desk_hit((int)fx, (int)fy);
-    if (idx >= 0 && idx == desk_last_idx &&
+    int x = (int)fx, y = (int)fy;
+    int idx = desk_hit(x, y);
+    if (idx >= 0 && idx == desk_last_idx && !mod_ctrl && !mod_shift &&
         t >= desk_last_ns && t - desk_last_ns <= DBLCLICK_NS) {
         desk_last_idx = -1;            /* a third click starts over */
         desk_launch(idx);
@@ -866,7 +983,187 @@ static void desk_down(float fx, float fy, uint64_t t) {
     }
     desk_last_idx = idx;
     desk_last_ns = t;
-    if (desk_sel != idx) { desk_sel = idx; desk_dirty = 1; }
+    desk_press = 1;
+    desk_press_idx = idx;
+    desk_press_x = desk_cur_x = x;
+    desk_press_y = desk_cur_y = y;
+    desk_drag = 0;
+    desk_collapse = 0;
+    if (idx < 0) {
+        if (!mod_ctrl && !mod_shift && desk_selmask) {
+            desk_selmask = 0;
+            desk_anchor = -1;
+            desk_dirty = 1;
+        }
+        return;                        /* marquee arms past DRAG_SLOP */
+    }
+    uint64_t bit = 1ULL << idx;
+    if (mod_ctrl) {
+        desk_selmask ^= bit;
+        desk_anchor = (desk_selmask & bit) ? idx : -1;
+    } else if (mod_shift) {
+        int a = desk_anchor >= 0 ? desk_anchor : idx;
+        int lo = a < idx ? a : idx, hi = a < idx ? idx : a;
+        desk_selmask = 0;
+        for (int i = lo; i <= hi; i++) desk_selmask |= 1ULL << i;
+        desk_anchor = a;
+    } else if (!(desk_selmask & bit)) {
+        desk_selmask = bit;
+        desk_anchor = idx;
+    } else {
+        desk_collapse = 1;             /* collapse on a drag-less mouseup */
+        desk_anchor = idx;
+    }
+    desk_dirty = 1;
+}
+
+/* Button-held travel past DRAG_SLOP turns the press into a marquee (from
+ * empty desktop) or an icon move (from an icon). Motion with the button
+ * bit CLEAR means the mouseup happened off this surface (the kernel
+ * hit-tests per event — no capture): finish at the last point. */
+static void desk_up(float fx, float fy);
+static void desk_motion(float fx, float fy, uint32_t state) {
+    if (!desk_press) return;
+    if (!(state & 1)) { desk_up(fx, fy); return; }
+    desk_cur_x = (int)fx;
+    desk_cur_y = (int)fy;
+    if (!desk_drag) {
+        int dx = desk_cur_x - desk_press_x, dy = desk_cur_y - desk_press_y;
+        if (dx * dx + dy * dy < DRAG_SLOP * DRAG_SLOP) return;
+        desk_drag = desk_press_idx < 0 ? 1 : 2;
+        if (desk_drag == 2)            /* a ctrl-toggle-off then drag still
+                                          moves the pressed icon */
+            desk_selmask |= 1ULL << desk_press_idx;
+        desk_collapse = 0;
+    }
+    desk_dirty = 1;
+}
+
+/* Release: marquee intersects icon TILES into the set (ctrl adds, plain
+ * replaces); an icon drag moves the whole selected set by the snapped
+ * CELL delta — all-or-nothing (any target out of bounds or occupied by an
+ * unselected icon reverts the whole move, so a drop never overlaps or
+ * silently reflows) — and persists the layout; a drag-less release on an
+ * already-selected icon collapses the set to it (the Win95 rule). */
+static void desk_up(float fx, float fy) {
+    if (!desk_press) return;
+    desk_press = 0;
+    int x = (int)fx, y = (int)fy;
+    if (desk_drag == 1) {
+        int x0 = x < desk_press_x ? x : desk_press_x;
+        int x1 = x < desk_press_x ? desk_press_x : x;
+        int y0 = y < desk_press_y ? y : desk_press_y;
+        int y1 = y < desk_press_y ? desk_press_y : y;
+        uint64_t m = 0;
+        for (int i = 0; i < desk_n; i++) {
+            int ix = DESK_MARGIN + desk_col[i] * CELL_W + (CELL_W - ICON_W) / 2;
+            int iy = DESK_MARGIN + desk_row[i] * CELL_H + 6;
+            if (x0 < ix + ICON_W && x1 > ix && y0 < iy + ICON_W && y1 > iy)
+                m |= 1ULL << i;
+        }
+        desk_selmask = mod_ctrl ? desk_selmask | m : m;
+        desk_anchor = -1;
+        for (int i = 0; i < desk_n; i++)
+            if (desk_selmask >> i & 1) { desk_anchor = i; break; }
+    } else if (desk_drag == 2) {
+        float fdc = (float)(x - desk_press_x) / CELL_W;
+        float fdr = (float)(y - desk_press_y) / CELL_H;
+        int dc = (int)(fdc + (fdc >= 0 ? 0.5f : -0.5f));
+        int dr = (int)(fdr + (fdr >= 0 ? 0.5f : -0.5f));
+        if (dc != 0 || dr != 0) {
+            int rows = desk_per_col(), cols = desk_cols(), ok = 1;
+            for (int i = 0; i < desk_n && ok; i++) {
+                if (!(desk_selmask >> i & 1)) continue;
+                int nc = desk_col[i] + dc, nr = desk_row[i] + dr;
+                if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) { ok = 0; break; }
+                for (int j = 0; j < desk_n; j++)
+                    if (!(desk_selmask >> j & 1) &&
+                        desk_col[j] == nc && desk_row[j] == nr) { ok = 0; break; }
+            }
+            if (ok) {
+                for (int i = 0; i < desk_n; i++)
+                    if (desk_selmask >> i & 1) {
+                        desk_col[i] += dc;
+                        desk_row[i] += dr;
+                    }
+                desk_save();
+            }
+        }
+    } else if (desk_collapse && desk_press_idx >= 0) {
+        desk_selmask = 1ULL << desk_press_idx;
+        desk_anchor = desk_press_idx;
+    }
+    desk_drag = 0;
+    desk_collapse = 0;
+    desk_dirty = 1;
+}
+
+/* Keyboard on the focused desktop (todos/0077): arrows walk the grid
+ * (nearest icon in the pressed direction — least perpendicular offset,
+ * then least forward distance), Enter launches an unambiguous SINGLE
+ * selection (Enter on a multi-selection is a deliberate no-op: never
+ * silently spawn N windows — the multi-launch guard), Esc clears,
+ * Ctrl+A selects all. */
+static void desk_arrow(int dx, int dy) {
+    if (desk_n == 0) return;
+    int cur = desk_anchor, best = -1, bp = 0, bs = 0;
+    if (cur < 0 || !(desk_selmask >> cur & 1)) {
+        for (int i = 0; i < desk_n; i++)       /* nothing current: top-left */
+            if (best < 0 || desk_col[i] < desk_col[best] ||
+                (desk_col[i] == desk_col[best] && desk_row[i] < desk_row[best]))
+                best = i;
+    } else {
+        for (int i = 0; i < desk_n; i++) {
+            if (i == cur) continue;
+            int pc = (desk_col[i] - desk_col[cur]) * dx +
+                     (desk_row[i] - desk_row[cur]) * dy;
+            int sc = (desk_col[i] - desk_col[cur]) * dy +
+                     (desk_row[i] - desk_row[cur]) * dx;
+            if (sc < 0) sc = -sc;
+            if (pc <= 0) continue;
+            if (best < 0 || sc < bs || (sc == bs && pc < bp)) {
+                best = i; bp = pc; bs = sc;
+            }
+        }
+        if (best < 0) return;          /* nothing that way: stay put */
+    }
+    desk_selmask = 1ULL << best;
+    desk_anchor = best;
+    desk_dirty = 1;
+}
+
+static void desk_key(int sym) {
+    if (sym == SDLK_ESCAPE) {
+        if (desk_selmask) { desk_selmask = 0; desk_anchor = -1; desk_dirty = 1; }
+        return;
+    }
+    if (sym == SDLK_RETURN) {
+        if (desk_selmask && !(desk_selmask & (desk_selmask - 1))) {
+            int i = 0;
+            while (!(desk_selmask >> i & 1)) i++;
+            desk_launch(i);
+        }
+        return;
+    }
+    if (mod_ctrl && (sym == 'a' || sym == 'A')) {
+        desk_selmask = desk_n >= 64 ? ~0ULL : (1ULL << desk_n) - 1;
+        if (desk_n > 0 && desk_anchor < 0) desk_anchor = 0;
+        desk_dirty = 1;
+        return;
+    }
+    if (sym == SDLK_LEFT) desk_arrow(-1, 0);
+    else if (sym == SDLK_RIGHT) desk_arrow(1, 0);
+    else if (sym == SDLK_UP) desk_arrow(0, -1);
+    else if (sym == SDLK_DOWN) desk_arrow(0, 1);
+}
+
+/* 1px outline (marquee + drag ghosts, todos/0077). */
+static void rect_s(uint32_t *px, int sw, int sh, int x, int y, int w, int h,
+                   uint32_t col) {
+    fill_s(px, sw, sh, x, y, w, 1, col);
+    fill_s(px, sw, sh, x, y + h - 1, w, 1, col);
+    fill_s(px, sw, sh, x, y, 1, h, col);
+    fill_s(px, sw, sh, x + w - 1, y, 1, h, col);
 }
 
 static void draw_desk(void) {
@@ -877,10 +1174,9 @@ static void draw_desk(void) {
     uint32_t teal = rgb(0, 128, 128), white = rgb(255, 255, 255),
              navy = rgb(0, 0, 128), black = rgb(0, 0, 0);
     fill_s(px, w, h, 0, 0, w, h, teal);
-    int per_col = desk_per_col();
     for (int i = 0; i < desk_n; i++) {
-        int cx = DESK_MARGIN + (i / per_col) * CELL_W;
-        int cy = DESK_MARGIN + (i % per_col) * CELL_H;
+        int cx = DESK_MARGIN + desk_col[i] * CELL_W;
+        int cy = DESK_MARGIN + desk_row[i] * CELL_H;
         int ix = cx + (CELL_W - ICON_W) / 2, iy = cy + 6;
         /* Flat-rect glyph: white tile, navy center block; links get a
          * black launcher notch at the bottom-left (the Win95 arrow). */
@@ -891,12 +1187,28 @@ static void draw_desk(void) {
         int len = (int)strlen(desk[i].name);
         if (len > 13) len = 13;
         int lx = cx + (CELL_W - len * 6) / 2, ly = cy + ICON_W + 10;
-        if (i == desk_sel)
+        /* Selection highlight: the 0029 navy label strip, per-set (0077). */
+        if (desk_selmask >> i & 1)
             fill_s(px, w, h, lx - 2, ly - 2, len * 6 + 3, 11, navy);
         char label[14];
         memcpy(label, desk[i].name, (size_t)len);
         label[len] = 0;
         draw_text_s(px, w, h, lx, ly, label, white);
+    }
+    if (desk_drag == 1) {              /* the marquee rubber-band (0077) */
+        int x0 = desk_cur_x < desk_press_x ? desk_cur_x : desk_press_x;
+        int y0 = desk_cur_y < desk_press_y ? desk_cur_y : desk_press_y;
+        int rw = desk_cur_x - desk_press_x, rh = desk_cur_y - desk_press_y;
+        if (rw < 0) rw = -rw;
+        if (rh < 0) rh = -rh;
+        rect_s(px, w, h, x0, y0, rw + 1, rh + 1, white);
+    } else if (desk_drag == 2) {       /* drop ghosts: cell outlines (0077) */
+        int pdx = desk_cur_x - desk_press_x, pdy = desk_cur_y - desk_press_y;
+        for (int i = 0; i < desk_n; i++)
+            if (desk_selmask >> i & 1)
+                rect_s(px, w, h, DESK_MARGIN + desk_col[i] * CELL_W + pdx,
+                       DESK_MARGIN + desk_row[i] * CELL_H + pdy,
+                       CELL_W, CELL_H, white);
     }
     SDL_UpdateWindowSurface(desk_win);
 }
@@ -1146,6 +1458,7 @@ static void handle_event(wmp_hdr *h) {
             if (p[0] == mcol[d].sid) mcol[d].sid = 0;
         if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
+        if (p[0] == desk_sid) { desk_sid = 0; desk_focused = 0; }   /* (0077) */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
          * across any close (todos/0031 — the Win95 behavior). */
         for (int i = 0; i < nwins; i++)
@@ -1167,6 +1480,13 @@ static void handle_event(wmp_hdr *h) {
          * the menu teardown must not kill it (todos/0078). */
         if (mdepth > 0 && !menu_owns_sid(p[0])) menu_dismiss();
         if (run_win && run_sid && p[0] != run_sid) run_dismiss();
+        /* Desktop focus tracking (todos/0077): keys route to the icon grid
+         * only while it holds focus; losing it also resets the tracked
+         * modifiers (their keyups would land elsewhere). */
+        if (desk_sid) {
+            desk_focused = p[0] == desk_sid;
+            if (!desk_focused) mod_ctrl = mod_shift = 0;
+        }
         for (int i = 0; i < nwins; i++) {
             wins[i].focused = wins[i].sid == p[0];
             if (wins[i].focused) {
@@ -1370,30 +1690,56 @@ static void frame_cb(void) {
                 menu_dismiss();        /* a desktop click dismisses (0029) */
                 run_dismiss();         /* likewise (todos/0078) */
                 peek_dismiss();        /* likewise (todos/0063) */
-                desk_down(e.button.x, e.button.y, e.button.timestamp);
+                if (e.button.button == 1) {
+                    /* Click-to-focus for the desktop (todos/0077): the
+                     * kernel exempts borderless surfaces, so the policy
+                     * asks — modifier keyups and grid navigation keys
+                     * must reach this process. Right-button routing is
+                     * reserved for the context menus (todos/0091/0101). */
+                    if (desk_sid) {
+                        int32_t f[1] = { desk_sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                    }
+                    desk_down(e.button.x, e.button.y, e.button.timestamp);
+                }
             } else if (peek_win && e.button.windowID == pkid) {
                 int32_t f[1] = { peek_for };   /* click the preview: activate */
                 wmp_send(sock, WMP_FOCUS, f, 1);
                 peek_dismiss();
             } else bar_click(e.button.x);
             pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;   /* may drop */
+        } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+            if (desk_win && e.button.windowID == did && e.button.button == 1)
+                desk_up(e.button.x, e.button.y);   /* marquee/drag end (0077) */
         } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
             int md = menu_col_for(e.motion.windowID);
             if (md >= 0) menu_motion(md, e.motion.y);
             else if (desk_win && e.motion.windowID == did) {
                 peek_dismiss();        /* pointer left the bar (0063) */
+                desk_motion(e.motion.x, e.motion.y, e.motion.state);
             } else if (peek_win && e.motion.windowID == pkid) {
                 peek_idle = 0;         /* hovering the preview holds it */
             } else if (!(run_win && e.motion.windowID == SDL_GetWindowID(run_win))) {
                 bar_motion(e.motion.x);
                 pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
             }
-        } else if (e.type == SDL_EVENT_KEY_DOWN) {
+        } else if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
+            /* Modifier tracking (todos/0077): by keysym, both edges —
+             * pointer records carry no mod word, so ctrl/shift-click
+             * reads these. */
+            int down = e.type == SDL_EVENT_KEY_DOWN;
+            int k = (int)e.key.key;
+            if (k == SDLK_LCTRL || k == SDLK_RCTRL) mod_ctrl = down;
+            else if (k == SDLK_LSHIFT || k == SDLK_RSHIFT) mod_shift = down;
             /* Keyboard (todos/0078): while the menu is open every key is
              * menu navigation (the root column holds focus); otherwise
-             * the run dialog, if up, owns the keyboard. */
-            if (mdepth > 0) menu_key((int)e.key.key);
-            else if (run_win) run_key((int)e.key.key);
+             * the run dialog, if up, owns the keyboard; otherwise the
+             * focused desktop's icon grid does (todos/0077). */
+            if (down) {
+                if (mdepth > 0) menu_key(k);
+                else if (run_win) run_key(k);
+                else if (desk_focused) desk_key(k);
+            }
         } else if (e.type == SDL_EVENT_QUIT) exit(0);
     }
     /* Aero Peek housekeeping (todos/0063): keep the thumbnail live while

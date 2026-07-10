@@ -381,7 +381,19 @@ type-ahead/Esc — only the ROOT column ever holds focus; flyouts hand it
 back at their create echo, the peek precedent). Ctrl+Esc toggles it via
 WMP EV_MENU 0x8C / MENU 0x1C / `wmctl menu` — the EV_CYCLE pattern
 exactly (subscriber-gated, keyup swallowed).
-Image version is **v48**.
+Desktop icons are selectable & movable (todos/0077, wm.c-only): click/
+ctrl-click/shift-range/marquee build a 64-bit selection set (navy label
+strips; marquee intersects TILES, ctrl adds), drag moves the whole set
+grid-snapped all-or-nothing with positions persisted in
+`/root/Desktop/.icons` (`col row name`; absent entries auto-flow — a
+virgin Desktop keeps the 0029 layout), arrows/Enter/Esc/Ctrl+A drive it
+from the keyboard (Enter on a multi-selection is a deliberate no-op —
+the multi-launch guard); a desktop left-click sends WMP_FOCUS on the
+desktop sid (kernel's borderless exemption stands; policy asks) and
+modifiers are tracked by KEYSYM from key events since pointer records
+carry no mod word; wmctl grew keydown/keyup/down/up/drag for headless
+gestures; right-button routing stays reserved for 0091/0101.
+Image version is **v49**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

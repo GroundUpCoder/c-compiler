@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-11; 0076 parity sweep closed)
+# Handoff — start of thread (updated 2026-07-11; 0077 icon selection closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,57 +7,54 @@
 
 ## Where the repo stands
 
-**0076 (desktop polish parity sweep) is CLOSED** — a curation-only turn,
-NO code changed. Dev log `logs/2026-07-11/0076-desktop-polish-parity.md`
-holds the room-by-room have/partial/missing table + the rejection
-ledger; item at `todos/done/0076-desktop-polish-parity-sweep.md`.
+**0077 (desktop icon selection & manipulation) is CLOSED** — landed
+wm.c-only, zero kernel/protocol change; image bumped **v48 → v49**
+(wm.c + wmctl.c are baked sources). Dev log
+`logs/2026-07-11/0077-desktop-icon-selection.md`; item at
+`todos/done/0077-desktop-icon-selection.md`. What landed:
 
-The sweep filed **seven new items, 0101–0107**, slotted right behind
-0098 at the tail of the desktop-polish cluster:
+- Selection = a 64-bit mask over the icon entries: click / ctrl-click /
+  shift-range (entry order) / empty-desktop marquee (white outline,
+  intersects TILES, ctrl adds, plain replaces); highlight = the 0029
+  navy label strip per selected icon — unselected rendering is
+  byte-identical to pre-0077, which kept every coordinate-pinned test
+  green.
+- Free placement: icons live in explicit cells; `/root/Desktop/.icons`
+  (`col row name` lines) persists the WHOLE layout on each drag-drop;
+  absent entries auto-flow column-major, so a virgin Desktop reproduces
+  the 0029 grid exactly. Drag moves the whole selected set by the
+  snapped cell delta, all-or-nothing (out-of-bounds/occupied target
+  reverts the move). Out-of-bounds saved cells (small screen) fall back
+  to auto-flow WITHOUT rewriting the file.
+- Keyboard: arrows (nearest icon in direction), Enter (SINGLE selection
+  only — **decided: multi-selection Enter is a no-op**, the multi-launch
+  guard), Esc clears, Ctrl+A selects all.
+- Two load-bearing policy decisions: **a desktop left-click sends
+  WMP_FOCUS on the desktop sid** (kernel borderless exemption stands;
+  the wm asks explicitly — that's how keys reach the grid), and
+  **modifiers are tracked by KEYSYM from key events** (pointer records
+  carry no mod word), reset when the desktop loses focus. The
+  modifier-held-before-first-focus nuance is a WM.md "Known issues"
+  entry (self-healing; fix = mod word in the pointer ring record, only
+  if it ever bites).
+- wmctl grew `keydown`/`keyup` (one key edge — hold a modifier across an
+  injected click), `down`/`up` (one pointer edge), `drag X1 Y1 X2 Y2`
+  (press-move-move-release on one connection). Pure INJECT_* wrappers.
+- Right-button routing deliberately untouched (`button != 1` now
+  short-circuits before selection) — **0101 owns right-click**; rename-
+  in-place is **0103** (queued after 0077, now unblocked).
 
-- **0101** taskbar polish — empty-bar right-click menu (Cascade/Tile/
-  Min-All/Properties), Show Desktop strip, clock date popup (after 0091).
-  NB wm.c currently ignores `e.button.button` — right-click routing is
-  part of this item.
-- **0102** window system menu — Alt+Space via the EV_CYCLE chord pattern
-  (new WMP EV_SYSMENU → MUST-MATCH trio grows), wm.c popup, arrow-key
-  Move/Size modes (after 0091).
-- **0103** desktop icon rename-in-place — F2/click-pause inline label
-  editor over /root/Desktop (after 0077, which non-goaled it).
-- **0104** user32 dialog keyboard — the 0058 descope coming due: real
-  IsDialogMessage (Tab order), Alt+mnemonics + underline, default-button
-  Enter, Esc in the modal loop, LISTBOX PageUp/Down.
-- **0105** pointer cursor shapes — chrome resize cursors from the
-  kernel hit test + per-surface CSS-cursor state for SDL/user32
-  (promotes the SDL3.md Mouse backlog line; the "native browser cursor"
-  deviation stands).
-- **0106** fileman navigator v2 — details columns, multi-select LISTBOX,
-  Enter-opens, F5/external refresh, status bar, sort/hidden toggles,
-  Back history (after 0092).
-- **0107** Paint accessory — native gdi32 `paint.c` (ReactOS mspaint is
-  C++ → excluded), shapes/fill/palette, BMP via comdlg32, .bmp openwith.
+**Tests**: `test_wm_service_e2e.js` grew a 0077 tail (selection matrix,
+marquee, drag-move + `.icons` persistence across the re-read tick, the
+Enter no-op, arrow+Enter launch) — full PASS headless. `os-shell.mjs`
+grew the browser twins (DOM ctrl+click, mouse marquee, drag-reposition
+quake (0,5)→(2,5), Esc). Check the latest suite results in
+`build/test-kernel/summary.json` / `build/test-browser/` if in doubt.
 
-Notable rejections (full ledger in the dev log): quick-launch strip,
-notification tray (no producers), taskbar grouping, shake-to-minimize,
-tooltips control (PORTS.md demand is ZERO), WordPad/CharMap/Clock-app,
-GUI task manager, Solitaire/FreeCell (C++), Win-key-as-Start (browsers
-eat Meta — Ctrl+Esc stands). Fileman drag-and-drop deliberately waits
-for 0092 to land and shape it.
-
-**Load-bearing survey facts** (verified in code this turn, reusable):
-comdlg32.c EXISTS (file dialogs work — the gap is only dialog keyboard);
-EDIT already has selection + WM_COPY/CUT/PASTE over the file clipboard
-(0090's job is the cross-process store, not the control); 0067's
-drag-drop is host→desktop INGEST only (wm.c has no drop code — the ~1s
-readdir watch makes icons appear); kernel owns window drag entirely,
-wm.c only consumes EV_MOVED; the taskbar clock has no hit test at all.
-
-**No tests were run this turn** — nothing executable changed (todos/,
-logs/, HANDOFF only). Image version stays **v48**; no bake inputs
-touched.
-
-**Next in queue**: run `node todos/queue.js list` — 0077 (icon
-selection) now leads, then 0089–0096, 0098, then the new 0101–0107.
+**Next in queue**: run `node todos/queue.js list` — 0089 (control panel
+v2) leads now, then 0090–0096, 0098, 0101–0107 (0103 icon rename is
+unblocked by this close). **Do NOT pipe `queue.js list` through
+`head`** — EPIPE crash (known; harmless but noisy).
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
 sweep rounds so far, a MUST for WM sweep round 3 (`0064`), which also
@@ -65,30 +62,35 @@ carries the 0063 aero aesthetics + glass perf eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **CONFIRMED this turn: `queue.js done` staged a PRE-EDIT blob** of the
-  done file (the memory/HANDOFF warning is real) — after `done`, check
-  `git show :todos/done/<file>` and re-`git add` if the Status edit is
-  missing. Also stage ONLY your own files; concurrent sessions exist.
+- **0077 NEW: the icon tile's white ring is 6px; the center block is
+  navy.** A "tile present" pixel probe must sample `(ix+2, iy+2)`, not
+  the tile center — the first e2e run failed exactly there.
+- **0077 NEW: successive `wmctl click`s on the SAME icon can pair into
+  a double-click** (500ms window, timestamps are drain-time). Distinct
+  icons never pair; a held modifier suppresses the pair; when in doubt
+  `sleep 0.6` between same-icon gestures.
+- **0077 NEW: browser desktop tests that click icons leave selection
+  strips + possibly an `.icons` layout behind** for later legs in the
+  SAME session — clear with Escape / pick target cells clear of later
+  pixel asserts (os-shell moves quake to (2,5) deliberately).
+- **CONFIRMED AGAIN 0076: `queue.js done` can stage a PRE-EDIT blob** of
+  the done file — after `done`, check `git show :todos/done/<file>` and
+  re-`git add` if the Status edit is missing. Stage ONLY your own files;
+  concurrent sessions exist.
 - **0078: x < 18 on the root menu column is the sidebar band** — entry
   clicks/samples in tests must use x ≥ ~20 (the e2e uses 60).
-- **0078: flyout settle pixels must DISCRIMINATE** — wait for the OLD
-  column's exclusive top strip to go teal before the next click
-  (dev log 2026-07-10/0078 has the story).
 - **0078: don't dismiss the menu from EV_FOCUS on column sids** — exempt
   new wm furniture that can be open WITH the menu, or it tears down.
 - **0041: all global imports before any defined global** — register new
   imported-global features in generateCode's pre-scan region, or
   `addGlobalImport` throws. `__gcstr` literals must be valid UTF-8.
-- **0046: trace asserts must match the child's KERNEL fd numbers.**
 - **0063: drop shadows are real desktop pixels** — sample TEAL ≥ ~25px
   out from a chromed frame. `wmctl list` FLAGS is 7 chars.
-- 0075: SameBoy compiles with `-DGB_INTERNAL`; don't pixel-match uninit
-  CGB palette RAM.
 - **0070: browser tests land on VT2 at ready.** Type on the tty only
   after `setVt(1)`; assert boot-time VT1 facts only BEFORE `ready`.
 - **Don't edit bake inputs while a suite runs** (0082): `.md` and
   `tests/` are NOT inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`,
-  `vendor/` are. Bump `image.json` `version` (now **48**) when an
+  `vendor/` are. Bump `image.json` `version` (now **49**) when an
   interactive browser tab must pick up seeded-source edits.
 - **New-runner habits**: check `build/test-*/summary.json` (field is
   `status: 'pass'`, not `ok`) + per-file logs after an interrupted run;
@@ -96,7 +98,9 @@ carries the 0063 aero aesthetics + glass perf eyeball.
 - **Menu/desktop entry lists** image.json ↔ test_wm_service_e2e.js ↔
   os-shell.mjs must move together (incl. the menu TREE; headless menu
   goldens: root `168x116+0+624`, Demos flyout `150x108+165+632`, run
-  dialog `240x70+6+664` on a 1024×768 screen).
+  dialog `240x70+6+664` on a 1024×768 screen; the 0077 tail also pins
+  the DESK_ACT list + label-strip geometry — label x derives from
+  name length, `lx = cellx + (84 - len*6)/2`).
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. **`queue.js add --help` is NOT a help flag** — it ADDS an
   item named "untitled" (the fix is queued as 0099).
@@ -133,16 +137,21 @@ pipe; drop-don't-block); 0041's calls (GC_STR intrinsic; imports-first
 enforced by throw; UTF-8 at parse; `"#"` module; cache unification is
 0097); 0078's calls (Ctrl+Esc as the chord; root-column-only focus with
 flyout hand-back; timer-free hover; RUN… = sh -c; Shut Down deferred to
-0051; ctlpanel via the fixed row; Win7 pane = 0098); **0076's calls
-(the rejection ledger in logs/2026-07-11/0076-desktop-polish-parity.md
-— rejected affordances stay rejected until the recorded precondition
-changes, e.g. tray needs a producer app, tooltips need port demand;
-re-triggering a parity sweep is a human call, never self-queued)**.
+0051; ctlpanel via the fixed row; Win7 pane = 0098); 0076's calls (the
+rejection ledger in logs/2026-07-11/0076-desktop-polish-parity.md —
+rejected affordances stay rejected until the recorded precondition
+changes; re-triggering a parity sweep is a human call, never
+self-queued); **0077's calls (selection is wm.c-CLIENT state, no
+protocol addition; desktop click takes focus via WMP_FOCUS — policy
+asks, the kernel exemption stands; Enter-on-multi is a no-op; `.icons`
+is whole-layout-on-drop with auto-flow fallback; modifier tracking by
+keysym, no mod word in pointer records unless the Known-issues entry
+ever bites)**.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I
 want to tackle — `node todos/queue.js list` for the order of attack
-(0077 icon selection leads, then the 0089–0096 QoL cluster, 0098, and
-the new 0101–0107 polish items from the 0076 sweep; 0064 WM sweep
-round 3 still owes the pointer-lock human check)."
+(0089 control-panel v2 leads, then the 0090–0096 QoL cluster, 0098,
+and the 0101–0107 polish items; 0103 icon rename is now unblocked;
+0064 WM sweep round 3 still owes the pointer-lock human check)."

@@ -299,6 +299,58 @@ try {
   await waitPixel(45, 16 + TROW * 64 + 24 + 10 + 3, NAVY);   // label bg, left of text
   check('single click selects (navy label strip)', true);
 
+  // ---- selection & manipulation (todos/0077) ----
+  // The click above also focused the desktop (wm.c policy), so modifier
+  // and navigation keys reach the icon grid from here on.
+  // Ctrl+click mario (row 3, clear of the winbox): additive — term stays.
+  const MROW = DESK_ENTRIES.indexOf('mario');
+  const MSTRIP = [42, 16 + MROW * 64 + 37];      // mario len 5 -> label x 43
+  await page.keyboard.down('Control');
+  await clickAt(58, 16 + MROW * 64 + 30);
+  await page.keyboard.up('Control');
+  await waitPixel(MSTRIP[0], MSTRIP[1], NAVY);
+  check('ctrl+click adds to the selection (mario strip navy)', true);
+  check('...and term stays selected', near(await sample(45, 16 + TROW * 64 + 37), NAVY),
+    await sample(45, 16 + TROW * 64 + 37));
+
+  // Marquee from empty desktop over the row 4-6 tiles (pokemon, quake,
+  // term): REPLACES the set — mario drops out.
+  const PROW = DESK_ENTRIES.indexOf('pokemon'), QROW = DESK_ENTRIES.indexOf('quake');
+  await page.mouse.move(rect.x + 150, rect.y + 300);
+  await page.mouse.down();
+  await page.mouse.move(rect.x + 95, rect.y + 360, { steps: 4 });
+  await page.mouse.move(rect.x + 40, rect.y + 430, { steps: 4 });
+  await page.mouse.up();
+  await waitPixel(36, 16 + PROW * 64 + 37, NAVY);    // pokemon len 7 -> x 37
+  check('marquee selects the intersected icons (pokemon strip navy)', true);
+  check('quake caught by the marquee too', near(await sample(42, 16 + QROW * 64 + 37), NAVY),
+    await sample(42, 16 + QROW * 64 + 37));
+  check('marquee replaces: mario deselected', near(await sample(MSTRIP[0], MSTRIP[1]), TEAL),
+    await sample(MSTRIP[0], MSTRIP[1]));
+
+  // Drag-move: a plain click on the selected quake collapses the set to it
+  // (mouseup rule); past the 500ms double-click window, drag it two columns
+  // right — (0,5) -> (2,5), snapped and persisted (.icons).
+  await clickAt(58, 16 + QROW * 64 + 30);
+  await new Promise(r => setTimeout(r, 600));
+  await page.mouse.move(rect.x + 58, rect.y + (16 + QROW * 64 + 30));
+  await page.mouse.down();
+  await page.mouse.move(rect.x + 140, rect.y + (16 + QROW * 64 + 30), { steps: 3 });
+  await page.mouse.move(rect.x + 226, rect.y + (16 + QROW * 64 + 30), { steps: 3 });
+  await page.mouse.up();
+  await waitPixel(216, 16 + QROW * 64 + 8, WHITE);   // tile ring at the new cell
+  check('drag repositions the icon (tile at col 2)', true);
+  check('the old cell is teal again', near(await sample(58, 16 + QROW * 64 + 18), TEAL),
+    await sample(58, 16 + QROW * 64 + 18));
+  check('moved icon stays selected (strip navy at the new cell)',
+    near(await sample(210, 16 + QROW * 64 + 37), NAVY),
+    await sample(210, 16 + QROW * 64 + 37));
+
+  // Esc clears the selection (the desktop holds focus).
+  await page.keyboard.press('Escape');
+  await waitPixel(210, 16 + QROW * 64 + 37, TEAL);
+  check('Esc clears the selection', true);
+
   // Double-click launches term (640x432 at the cascade slot). Sample a
   // point inside term but outside winbox; wait for it to leave teal.
   await page.mouse.dblclick(rect.x + 58, rect.y + I3Y + 10);

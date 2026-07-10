@@ -75,8 +75,11 @@ static int usage(void) {
         "       wmctl menu\n"
         "       wmctl layer SID -1|0|1\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
+        "       wmctl keydown|keyup SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl dblclick SID X Y [BUTTON]\n"
+        "       wmctl down|up SID X Y [BUTTON]\n"
+        "       wmctl drag SID X1 Y1 X2 Y2 [BUTTON]\n"
         "       wmctl hover SID X Y\n"
         "       wmctl relmove SID DX DY\n"
         "       wmctl shot SID|screen [FILE]\n"
@@ -383,13 +386,16 @@ int main(int argc, char **argv) {
         else if (argc == 4) file = argv[3];
         return do_thumb(fd, sid, mw, mh, file);
     }
-    if (!strcmp(cmd, "key")) {
+    if (!strcmp(cmd, "key") || !strcmp(cmd, "keydown") || !strcmp(cmd, "keyup")) {
         if (argc < 4) return usage();
         int32_t sc = atoi(argv[3]);
         int32_t sym = argc > 4 ? atoi(argv[4]) : 0;
         int32_t mod = argc > 5 ? atoi(argv[5]) : 0;
-        int32_t a[5] = { sid, 1, sc, sym, mod };
+        int32_t a[5] = { sid, cmd[3] != 'u', sc, sym, mod };
+        /* keydown/keyup (todos/0077): one edge only — a HELD modifier for
+         * a following click/drag needs the down without the up. */
         if (wmp_cmd(fd, WMP_INJECT_KEY, a, 5)) return fail("no such window");
+        if (cmd[3]) return 0;                    /* keydown / keyup: done */
         a[1] = 0;
         return wmp_cmd(fd, WMP_INJECT_KEY, a, 5) ? fail("no such window") : 0;
     }
@@ -418,6 +424,32 @@ int main(int argc, char **argv) {
             if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
         }
         return 0;
+    }
+    if (!strcmp(cmd, "down") || !strcmp(cmd, "up")) {   /* one edge (0077) */
+        if (argc < 5) return usage();
+        int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
+        int32_t btn = argc > 5 ? atoi(argv[5]) : 1;
+        int32_t a[6] = { sid, cmd[0] == 'd' ? 1 : 2, x, y, btn, 0 };
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+    }
+    if (!strcmp(cmd, "drag")) {         /* press-move-release (todos/0077):
+                                           down at (X1,Y1), button-held motion
+                                           through the midpoint to (X2,Y2), up
+                                           there — the desktop marquee / icon-
+                                           move gesture on one connection. */
+        if (argc < 7) return usage();
+        int32_t x1 = atoi(argv[3]), y1 = atoi(argv[4]);
+        int32_t x2 = atoi(argv[5]), y2 = atoi(argv[6]);
+        int32_t btn = argc > 7 ? atoi(argv[7]) : 1;
+        int32_t mask = 1 << (btn - 1);
+        int32_t a[6] = { sid, 1, f32bits((float)x1), f32bits((float)y1), btn, 0 };
+        if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
+        int32_t m[6] = { sid, 0, f32bits((x1 + x2) / 2.0f), f32bits((y1 + y2) / 2.0f), mask, 0 };
+        if (wmp_cmd(fd, WMP_INJECT_POINTER, m, 6)) return fail("no such window");
+        m[2] = f32bits((float)x2); m[3] = f32bits((float)y2);
+        if (wmp_cmd(fd, WMP_INJECT_POINTER, m, 6)) return fail("no such window");
+        a[1] = 2; a[2] = m[2]; a[3] = m[3];
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
     }
     return usage();
 }
