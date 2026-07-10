@@ -1,5 +1,5 @@
 {
-  "version": 42,
+  "version": 43,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -50,6 +50,9 @@
       },
       "/usr/bin/term": {
         "project": "os/term/bin.json"
+      },
+      "/usr/bin/cairodemo": {
+        "project": "vendor/cairo/demo/bin.json"
       },
       "/usr/bin/gdidemo": {
         "project": "os/win32/gdidemo.json"
@@ -110,6 +113,9 @@
       },
       "/usr/share/menu/gpubox": {
         "link": "/usr/bin/gpubox"
+      },
+      "/usr/share/menu/cairodemo": {
+        "link": "/usr/bin/cairodemo"
       },
       "/usr/share/menu/gdidemo": {
         "link": "/usr/bin/gdidemo"
