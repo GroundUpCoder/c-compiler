@@ -133,9 +133,12 @@ popup-menu-tracking/clipboard/keyboard-layout (calc).
 0048 (desktop apps wave 1) is landing the app tail on top: **calc links,
 is seeded as `/bin/calc`, and is usable** (log:
 `logs/2026-07-10/desktop-apps-wave1.md`). The veneer grew: ONE text
-clipboard as a file at `$HOME/.clipboard` (the advapi32 hive pattern —
-cross-process for free; CF_TEXT/CF_UNICODETEXT are two views of the same
-UTF-8 bytes; GetClipboardData handles are clipboard-owned and cached),
+clipboard (originally a file at `$HOME/.clipboard`; since todos/0090 the
+KERNEL's clipboard slot via SDL_SetClipboardText/SDL_GetClipboardText —
+cross-process, survives the writer exiting, shared with term's
+Ctrl+Shift+C/V and `/bin/clip`; CF_TEXT/CF_UNICODETEXT are two views of
+the same UTF-8 bytes; GetClipboardData handles are clipboard-owned and
+cached),
 keyboard translation (GetKeyboardState over the SDL modifier word +
 MapVirtualKeyExW/ToAsciiEx against the one synthetic US layout — VKs for
 punctuation ARE the modifier-applied keysyms, so only the US shift pairs
@@ -160,8 +163,8 @@ EM_SETHANDLE (the buffer as an HLOCAL of WCHARs — internal storage
 stays UTF-8, the external view materializes on demand with the app
 owning replaced handles), EM_REPLACESEL (translated at the send_msg
 choke like WM_SETTEXT), EM_LINEFROMCHAR/EM_LINEINDEX/EM_SCROLLCARET,
-EM_GETMODIFY/EM_SETMODIFY, WM_CUT/COPY/PASTE/WM_CLEAR over the file
-clipboard (+ the ^C/^X/^V/^A chords in the control), and no-undo
+EM_GETMODIFY/EM_SETMODIFY, WM_CUT/COPY/PASTE/WM_CLEAR over the system
+clipboard (0090) (+ the ^C/^X/^V/^A chords in the control), and no-undo
 honesty (EM_CANUNDO FALSE keeps the menu item grayed). New veneer
 slices: `comdlg32.c` — GetOpen/GetSaveFileNameW as a REAL modal
 file-browser dialog (readdir LISTBOX, dirs-first, OK-on-directory

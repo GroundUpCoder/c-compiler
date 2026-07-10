@@ -10,7 +10,8 @@
 //     "commdlg_FindReplace" message protocol end to end
 //   - comctl32: the status bar (SB_SETPARTS/SB_SETTEXTW; parts join in
 //     WM_GETTEXT), self-parking at the client bottom
-//   - the clipboard: Select All + Copy -> $HOME/.clipboard
+//   - the clipboard: Select All + Copy -> the kernel slot (todos/0090;
+//     read back via /bin/clip)
 //   - MB_YESNOCANCEL: the has-been-modified prompt shows Yes/No/Cancel
 //   - ShellExecuteW: File > New Window spawns a second notepad (the
 //     GetModuleFileName PATH-resolve fix rides this)
@@ -97,12 +98,12 @@ const out = boot([
   'echo ==cut',
   'wmctl click Cancel',
   'sleep 1',
-  // Select All + Copy -> the clipboard file
+  // Select All + Copy -> the kernel clipboard slot (0090)
   'wmctl click "Select All"',
   'wmctl click Copy',
   'sleep 1',
   'echo ==clip',
-  'cat /root/.clipboard',
+  'clip -o',
   'echo',
   'echo ==cut',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
@@ -171,7 +172,7 @@ check('Replace All rewrote both matches (FINDREPLACE protocol)',
   JSON.stringify(section(out, 'content2')));
 
 /* clipboard */
-check('Select All + Copy wrote the clipboard file',
+check('Select All + Copy filled the clipboard slot',
   section(out, 'clip').trim() === 'alpha BEE\r\ngamma BEE delta',
   JSON.stringify(section(out, 'clip')));
 

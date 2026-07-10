@@ -50,7 +50,8 @@
  *   - single-threaded by design (WIN32.md friction #1) — one queue, no
  *     PostThreadMessage; SendMessage is a direct call
  *   - invalidation is whole-window (rcPaint = the client rect)
- *   - no clipboard, no Tab-order navigation (IsDialogMessage)
+ *   - no Tab-order navigation (IsDialogMessage); the clipboard landed
+ *     with 0048 (file) and rides the kernel store since 0090
  *   - hidden top-levels: ShowWindow(SW_HIDE) on a top-level is a no-op
  *     (the kernel surface has no hide op; minimize is the WM's)
  *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) is per-
@@ -1752,20 +1753,16 @@ static int paint_scan(MSG *out, HWND hf, UINT mn, UINT mx) {
 }
 
 /* ============================================================ clipboard
- * (0048): ONE text clipboard, a file at $HOME/.clipboard holding the
- * UTF-8 bytes — cross-process for free (every process brokers to the same
- * fs), same shape as advapi32's registry hive. CF_TEXT and CF_UNICODETEXT
- * are two views of that one text; other formats don't exist. Handles
- * returned by GetClipboardData are clipboard-owned (Windows semantics):
- * cached here, freed at the next Get/Empty/Set. */
+ * (0048, re-based by 0090): ONE system clipboard held by the KERNEL —
+ * SDL_SetClipboardText/SDL_GetClipboardText over the CLIP_SET/CLIP_GET
+ * RPCs — so copy/paste crosses processes (term, /bin/clip, every win32
+ * app) and the contents survive this process exiting (Win95 semantics).
+ * CF_TEXT and CF_UNICODETEXT are two views of the one UTF-8 text; other
+ * formats don't exist yet (the kernel slot is format-tagged for 0092's
+ * file lists). Handles returned by GetClipboardData are clipboard-owned
+ * (Windows semantics): cached here, freed at the next Get/Empty/Set. */
 
 static HGLOBAL g_clipGot;                        /* last GetClipboardData result */
-
-static void clip_path(char *out, int cap) {
-    const char *home = getenv("HOME");
-    if (!home || !home[0]) home = "/root";
-    snprintf(out, (size_t)cap, "%s/.clipboard", home);
-}
 
 static void clip_drop_cache(void) {
     if (g_clipGot) { GlobalFree(g_clipGot); g_clipGot = NULL; }
@@ -1775,9 +1772,7 @@ BOOL OpenClipboard(HWND owner) { (void)owner; return TRUE; }
 BOOL CloseClipboard(void) { return TRUE; }
 
 BOOL EmptyClipboard(void) {
-    char path[300];
-    clip_path(path, sizeof path);
-    unlink(path);
+    SDL_ClearClipboardData();
     clip_drop_cache();
     return TRUE;
 }
@@ -1785,33 +1780,21 @@ BOOL EmptyClipboard(void) {
 /* Store/load the clipboard text — shared by the API surface below and
  * the EDIT control's WM_CUT/COPY/PASTE (0048). */
 static int clip_store(const char *bytes, size_t n) {
-    char path[300], tmp[310];
-    clip_path(path, sizeof path);
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) return 0;
-    int ok = fwrite(bytes, 1, n, f) == n;
-    fclose(f);
-    if (ok && rename(tmp, path) != 0) ok = 0;    /* write-through, hive-style */
-    if (!ok) unlink(tmp);
+    char *tmp = (char *)malloc(n + 1);
+    if (!tmp) return 0;
+    memcpy(tmp, bytes, n);
+    tmp[n] = 0;
+    int ok = SDL_SetClipboardText(tmp) ? 1 : 0;
+    free(tmp);
     clip_drop_cache();
     return ok;
 }
 
 static char *clip_load(void) {                   /* malloc'd UTF-8, NULL if none */
-    char path[300];
-    clip_path(path, sizeof path);
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n <= 0 || n > 4 * 1024 * 1024) { fclose(f); return NULL; }
-    char *buf = (char *)malloc((size_t)n + 1);
-    if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return NULL; }
-    fclose(f);
-    buf[n] = 0;
-    return buf;
+    char *t = SDL_GetClipboardText();            /* SDL_free == free here, so */
+    if (!t) return NULL;                         /* callers plain-free() it */
+    if (!t[0]) { SDL_free(t); return NULL; }     /* "" = empty clipboard */
+    return t;
 }
 
 HANDLE SetClipboardData(UINT format, HANDLE mem) {
@@ -1823,8 +1806,8 @@ HANDLE SetClipboardData(UINT format, HANDLE mem) {
     int ok = clip_store(bytes, strlen(bytes));
     free(utf8);
     GlobalUnlock((HGLOBAL)mem);
-    /* the handle is the clipboard's now (Windows ownership) — this
-     * clipboard is the FILE, so the handle itself is simply kept alive
+    /* the handle is the clipboard's now (Windows ownership) — the real
+     * store is the kernel slot, so the handle itself is simply kept alive
      * for the caller's residual use and never read again */
     return ok ? mem : NULL;
 }
@@ -1855,10 +1838,7 @@ HANDLE GetClipboardData(UINT format) {
 
 BOOL IsClipboardFormatAvailable(UINT format) {
     if (format != CF_TEXT && format != CF_UNICODETEXT) return FALSE;
-    char path[300];
-    clip_path(path, sizeof path);
-    struct stat st;
-    return stat(path, &st) == 0 && st.st_size > 0;
+    return SDL_HasClipboardText() ? TRUE : FALSE;
 }
 
 /* ============================================================ agent tree
@@ -3140,7 +3120,7 @@ static void edit_adopt_handle(HWND h, EditState *st, HLOCAL hl) {
     InvalidateRect(h, NULL, TRUE);
 }
 
-/* WM_CUT/COPY/PASTE (0048): straight onto the file clipboard. */
+/* WM_CUT/COPY/PASTE (0048): straight onto the system clipboard (0090). */
 static void edit_copy_sel(EditState *st) {
     int s, e;
     edit_sel(st, &s, &e);

@@ -1,5 +1,5 @@
 {
-  "version": 50,
+  "version": 51,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -41,6 +41,9 @@
       },
       "/usr/bin/strace": {
         "c": "strace.c"
+      },
+      "/usr/bin/clip": {
+        "c": "clip.c"
       },
       "/usr/bin/wmctl": {
         "c": "wmctl.c",

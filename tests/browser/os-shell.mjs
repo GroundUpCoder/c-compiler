@@ -7,7 +7,9 @@
 // icon grid (EV_SCREEN-recreated at the live size), single-click select,
 // double-click launch of term, minimize revealing the desktop; the 0089
 // Control Panel applet hub (icon-folder composite, Sound applet in its
-// own window, per-window close box, agent-tree volume/system drive).
+// own window, per-window close box, agent-tree volume/system drive); the
+// 0090 system clipboard (notepad -> notepad Ctrl+A/C/V/X over the real
+// VT2 keyboard path, cross-checked against /bin/clip on VT1).
 //
 // Usage: node os-shell.mjs   (manual tier — run the os-*.mjs sweep serially)
 import { chromium } from 'playwright';
@@ -462,6 +464,97 @@ try {
   check('close box closes only the applet: hub + System alive, Sound gone',
     /Control Panel/.test(afterClose) && /System Properties/.test(afterClose) &&
     !/Sound Properties/.test(afterClose), afterClose.slice(0, 400));
+  await setVt(2);
+
+  // ---- System clipboard (todos/0090): notepad -> notepad over the real
+  // keyboard path. Type into one notepad on VT2, Ctrl+A/Ctrl+C, Ctrl+V
+  // into a SECOND notepad process; Ctrl+X empties the source while the
+  // kernel slot keeps the text. gettext EDIT:0 is tree-order-global
+  // across processes (the 0089 gotcha), so the paste is asserted by a
+  // black-glyph histogram over the second notepad's client area and the
+  // cut through EDIT:0, which resolves to the FIRST notepad.
+  const blackIn = (x0, y0, w, h) => page.evaluate(([bx, by, bw, bh]) => {
+    const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
+    const t = document.createElement('canvas');
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
+    const ctx = t.getContext('2d');
+    ctx.drawImage(c, 0, 0);
+    const d = ctx.getImageData(bx, by, bw, bh).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4)
+      if (d[i] < 60 && d[i + 1] < 60 && d[i + 2] < 60) n++;
+    return n;
+  }, [x0, y0, w, h]);
+  const npLines = () => page.evaluate(() =>
+    window.__osOut.split('\n').filter(l => /Notepad\s*$/.test(l)));
+  await setVt(1);
+  await page.keyboard.type('notepad &\r');
+  await page.waitForTimeout(800);                // the async job-notice trap
+  await page.keyboard.type('i=0; while [ $i -lt 30 ]; do wmctl list | grep -q Notepad && break; sleep 1; i=$((i+1)); done; sleep 1; wmctl list; echo NP-U""P1\r');
+  await page.waitForFunction(() => window.__osOut.includes('NP-UP1'), { timeout: 120000, polling: 200 });
+  const np1Line = (await npLines()).pop() || '';
+  const np1 = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec(np1Line);
+  check('first notepad listed', !!np1, np1Line);
+  const [N1W, , N1X, N1Y] = np1 ? np1.slice(1).map(Number) : [0, 0, 0, 0];
+  await setVt(2);
+  // Click into the EDIT (below the 20px in-surface menu bar), type, copy.
+  // PACED input: zero-delay typing floods the per-frame pump and drops
+  // events (chars vanish, the Control keydown separates from its letter),
+  // so type with a delay and hold Control across explicitly-gapped presses.
+  const chord = async (letter) => {
+    await page.keyboard.down('Control');
+    await page.waitForTimeout(100);
+    await page.keyboard.press(letter);
+    await page.waitForTimeout(100);
+    await page.keyboard.up('Control');
+    await page.waitForTimeout(200);
+  };
+  await clickAt(N1X + Math.min(120, N1W - 20), N1Y + 60);
+  await page.waitForTimeout(300);
+  await page.keyboard.type('CLIP-ROCKS', { delay: 60 });
+  await page.waitForTimeout(400);
+  await chord('a');
+  await chord('c');
+  await setVt(1);
+  await page.keyboard.type('sleep 1; clip -o; echo " "CLIP-GO""T1\r');
+  await page.waitForFunction(() => window.__osOut.includes('CLIP-GOT1'), { timeout: 30000, polling: 200 });
+  check('Ctrl+C filled the kernel slot (clip -o)',
+    await page.evaluate(() => window.__osOut.includes('CLIP-ROCKS CLIP-GOT1')),
+    await page.evaluate(() => window.__osOut.slice(-300)));
+  // Second notepad; find ITS list line (the one that isn't notepad 1's).
+  await page.keyboard.type('notepad &\r');
+  await page.waitForTimeout(800);
+  await page.keyboard.type('i=0; while [ $i -lt 30 ]; do [ $(wmctl list | grep -c Notepad) -ge 2 ] && break; sleep 1; i=$((i+1)); done; sleep 1; wmctl list; echo NP-U""P2\r');
+  await page.waitForFunction(() => window.__osOut.includes('NP-UP2'), { timeout: 120000, polling: 200 });
+  const np2Line = (await npLines()).filter(l => !l.includes(`+${N1X}+${N1Y}`)).pop() || '';
+  const np2 = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec(np2Line);
+  check('second notepad listed at its own position', !!np2, np2Line);
+  const [N2W, , N2X, N2Y] = np2 ? np2.slice(1).map(Number) : [0, 0, 0, 0];
+  await setVt(2);
+  const npClient = [N2X + 8, N2Y + 28, Math.min(220, N2W - 16), 44];
+  const beforePaste = await blackIn(...npClient);
+  await clickAt(N2X + Math.min(120, N2W - 20), N2Y + 60);
+  await page.waitForTimeout(300);
+  await chord('v');
+  await page.waitForTimeout(1000);
+  const afterPaste = await blackIn(...npClient);
+  check('Ctrl+V renders the pasted text in the second notepad',
+    afterPaste > beforePaste + 30, `${beforePaste} -> ${afterPaste}`);
+  // Ctrl+X in the FIRST notepad: source emptied, slot still has the text.
+  // Click its LEFT edge — the second notepad cascades +28,+24 and covers
+  // the client center, and a covered click would focus THAT window.
+  await clickAt(N1X + 12, N1Y + 60);
+  await page.waitForTimeout(300);
+  await chord('a');
+  await chord('x');
+  await setVt(1);
+  await page.keyboard.type('sleep 1; echo GT-"["$(wmctl gettext EDIT:0)"]"; clip -o; echo " "CLIP-GO""T2\r');
+  await page.waitForFunction(() => window.__osOut.includes('CLIP-GOT2'), { timeout: 30000, polling: 200 });
+  check('Ctrl+X emptied the source EDIT and the slot keeps the text',
+    await page.evaluate(() => window.__osOut.includes('GT-[]') &&
+      window.__osOut.includes('CLIP-ROCKS CLIP-GOT2')),
+    await page.evaluate(() => window.__osOut.slice(-300)));
   await setVt(2);
 
   // The shell stays healthy behind the desktop (menu spawns are reaped —

@@ -9,9 +9,10 @@
 //     wmctl `click <one-arg>`-is-always-a-label rule is new in 0048)
 //   - keyboard: WM_KEYDOWN -> calc's vk2ascii -> GetKeyboardState /
 //     MapVirtualKeyEx / ToAsciiEx
-//   - the clipboard: Copy writes $HOME/.clipboard (CF_UNICODETEXT ->
-//     UTF-8 file), Paste reads it (CF_TEXT), WM_ENTERMENULOOP re-grays
-//     the Paste item from IsClipboardFormatAvailable
+//   - the clipboard: Copy fills the kernel slot (CF_UNICODETEXT -> UTF-8;
+//     todos/0090 — read back via /bin/clip), Paste reads it (CF_TEXT),
+//     WM_ENTERMENULOOP re-grays the Paste item from
+//     IsClipboardFormatAvailable
 //   - TrackPopupMenu: right-click -> WM_CONTEXTMENU -> a standalone
 //     popup that is agent-visible ("popupmenu" in the tree) and fires
 //     by label (TPM_RETURNCMD)
@@ -78,11 +79,11 @@ const out = boot([
   'echo ==disp1',
   'wmctl gettext STATIC:0',
   'echo ==cut',
-  // Copy -> the clipboard file
+  // Copy -> the kernel clipboard slot (0090)
   'wmctl click Copy',
   'sleep 0.5',
   'echo ==clip',
-  'cat /root/.clipboard',
+  'clip -o',
   'echo',
   'echo ==cut',
   // Paste enable state now that the clipboard has text
@@ -100,8 +101,8 @@ const out = boot([
   'echo ==disp2',
   'wmctl gettext STATIC:0',
   'echo ==cut',
-  // Paste replaces the entry (CF_TEXT read of what Copy wrote elsewhere)
-  'printf 250 > /root/.clipboard',
+  // Paste replaces the entry (CF_TEXT read of what the shell wrote)
+  'printf 250 | clip',
   'wmctl click Paste',
   'sleep 0.5',
   'echo ==disp3',
@@ -154,7 +155,7 @@ check('after Copy: Paste enabled',
 /* arithmetic + clipboard */
 check('7 + 3 = -> 10. (BM_CLICK by numeric label)',
   section(out, 'disp1').trim() === '10.', JSON.stringify(section(out, 'disp1')));
-check('Copy wrote the clipboard file (trailing separator trimmed)',
+check('Copy filled the clipboard slot (trailing separator trimmed)',
   section(out, 'clip').trim() === '10', JSON.stringify(section(out, 'clip')));
 check('keyboard 9,1 -> 91. (ToAsciiEx path)',
   section(out, 'disp2').trim() === '91.', JSON.stringify(section(out, 'disp2')));

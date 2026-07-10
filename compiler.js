@@ -18488,6 +18488,19 @@ bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled);
 bool SDL_GetWindowRelativeMouseMode(SDL_Window *window);
 void __setAnimationFrameFunc(void (*callback)(void));
 
+/* ---- Clipboard (SDL_clipboard.h; todos/0090) ----
+   Text only. One system-wide slot held by the OS kernel — copy/paste crosses
+   processes and survives the writer exiting; standalone runs get a
+   process-local slot with identical semantics. Usable without SDL_Init (the
+   win32 veneer's clipboard rides this from console-shaped processes).
+   SDL_GetClipboardText follows SDL3's contract: never NULL, "" when empty or
+   on error, caller frees with SDL_free. */
+bool SDL_SetClipboardText(const char *text);
+char *SDL_GetClipboardText(void);
+bool SDL_HasClipboardText(void);
+bool SDL_ClearClipboardData(void);
+void SDL_free(void *mem);
+
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid,
                                            const SDL_AudioSpec *spec,
                                            SDL_AudioStreamCallback callback,
@@ -22454,6 +22467,9 @@ __import void __sdl_delay(int ms);
    so SDL_GetTicks can return a full Uint64 without the old 32-bit wrap. */
 __import double __sdl_get_ticks(void);
 __import void __sdl_set_animation_frame_func(void (*callback)(void));
+/* System clipboard (todos/0090; host.js createClipboard). */
+__import int __clip_set(int fmt, const void *bytes, int len);
+__import int __clip_get(int fmt, void *out, int cap);
 __import int __sdl_open_audio_device(int freq, int format, int channels);
 __import int __sdl_queue_audio(int dev, const void *data, int len);
 __import int __sdl_get_queued_audio_size(int dev);
@@ -22997,6 +23013,51 @@ Uint64 SDL_GetTicks(void) {
        2^53, so the double→long long→Uint64 path is exact (no 32-bit wrap). */
     return (Uint64)(long long)__sdl_get_ticks();
 }
+
+/* ---- Clipboard (todos/0090) ----
+   Thin wrappers over the host's __clip_* primitives (kernel slot under the
+   OS, process-local slot standalone — host.js createClipboard; the imports
+   are declared with the other __sdl_* imports above). fmt 1 is UTF-8 text;
+   the kernel slot carries a format tag so richer formats can ride it
+   later. Deliberately independent of SDL_Init. */
+#define __CLIP_TEXT 1
+
+bool SDL_SetClipboardText(const char *text) {
+    int n = text ? (int)strlen(text) : 0;
+    if (__clip_set(n ? __CLIP_TEXT : 0, text, n) != 0)
+        return SDL_SetError("SDL_SetClipboardText: host clipboard failed");
+    return 1;
+}
+
+char *SDL_GetClipboardText(void) {
+    /* __clip_get returns the TOTAL length (filling at most cap): size with
+       cap 0, then read, retrying if another process grew the slot between
+       the two calls. Never returns NULL (SDL3 contract): "" when empty. */
+    int total = __clip_get(__CLIP_TEXT, 0, 0);
+    if (total < 0) total = 0;
+    for (;;) {
+        char *buf = (char *)malloc((size_t)total + 1);
+        if (!buf) { SDL_SetError("Out of memory"); return (char *)calloc(1, 1); }
+        int now = total > 0 ? __clip_get(__CLIP_TEXT, buf, total) : 0;
+        if (now < 0) now = 0;
+        if (now <= total) {
+            buf[now < total ? now : total] = 0;
+            return buf;
+        }
+        free(buf);
+        total = now;
+    }
+}
+
+bool SDL_HasClipboardText(void) {
+    return __clip_get(__CLIP_TEXT, 0, 0) > 0;
+}
+
+bool SDL_ClearClipboardData(void) {
+    return __clip_set(0, 0, 0) == 0;
+}
+
+void SDL_free(void *mem) { free(mem); }
 
 bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     if (!window) return SDL_InvalidParamError("window");

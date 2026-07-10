@@ -116,6 +116,18 @@ var OP = {
   // (OFD refcounts + FS_READ/FS_WRITE/FS_CLOSE + the doorbell).
   PIPE_CREATE: 0x0201,
   COMPILE: 0x0301,
+  // System clipboard (todos/0090): ONE kernel-held slot {fmt, bytes} so
+  // copy/paste crosses processes and survives the writer exiting (Win95
+  // semantics — one slot, no history). fmt 1 = UTF-8 text; the tag exists
+  // so CF_BITMAP / file lists (todos/0092) can ride the same slot later.
+  // Payloads chunk through the 64KB kernel page: SET is a RAW request
+  // [u32 fmt][u32 last][u32 off][bytes...] staged per-pcb and committed
+  // only on last (a dying writer never leaves a torn slot); GET is JSON
+  // {fmt, off} -> RAW [i32 total][chunk], total -1 when empty or the
+  // stored format differs. Cross-chunk reads are not snapshot-atomic by
+  // design (single slot, last-write-wins; the C side retries on growth).
+  CLIP_SET: 0x0302,
+  CLIP_GET: 0x0303,
   // 0x04xx — the brokered filesystem (KERNEL.md "fd/data-plane amendment").
   FS_OPEN: 0x0401, FS_CLOSE: 0x0402, FS_READ: 0x0403, FS_WRITE: 0x0404,
   FS_LSEEK: 0x0405, FS_STAT: 0x0406, FS_LSTAT: 0x0407, FS_FSTAT: 0x0408,
@@ -249,8 +261,16 @@ function traceVal(v, depth) {
  * past the dispatch turn). */
 function traceArgs(op, req) {
   if (req && req.raw) {
-    // The one RAW-request op is FS_WRITE: [u32 fd][bytes...].
+    // RAW-request ops: FS_WRITE [u32 fd][bytes...], CLIP_SET (todos/0090)
+    // [u32 fmt][u32 last][u32 off][bytes...].
     var raw = req.raw;
+    if (op === OP.CLIP_SET && raw.length >= 12) {
+      var cdv = new DataView(raw.buffer, raw.byteOffset, raw.length);
+      return 'fmt=' + cdv.getUint32(0, true) + ', last=' + cdv.getUint32(4, true) +
+        ', off=' + cdv.getUint32(8, true) +
+        ', data=' + traceBytes(raw.subarray(12), TRACE_DATA_MAX) +
+        ', count=' + (raw.length - 12);
+    }
     if (op === OP.FS_WRITE && raw.length >= 4) {
       var fd = raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24);
       var data = raw.subarray(4);
@@ -798,6 +818,10 @@ KernelClient.prototype.spawnHooks = function () {
     getitimer: function (which) { return self.call(OP.GETITIMER, { which: which }); },
     sigdisp: function (sig, kind) { self.call(OP.SIGDISP, { sig: sig, kind: kind }); },
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
+    // System clipboard (todos/0090): one kernel slot; host.js owns the
+    // chunking (payloads pre-framed per the OP table's RAW layouts).
+    clipSet: function (bytes) { return self.callRaw(OP.CLIP_SET, bytes); },
+    clipGet: function (fmt, off) { return self.call(OP.CLIP_GET, { fmt: fmt, off: off }); },
     sigpoll: function () { return self.sigpoll(); },
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
@@ -1157,6 +1181,9 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
+  // System clipboard (todos/0090): { fmt, bytes: Uint8Array } or null.
+  // Kernel-owned so it outlives the copying process; see OP.CLIP_SET.
+  this._clipboard = null;
   // Vsync broadcast (todos/0100): opts.vsync declares that the embedder
   // owns a real frame clock and will call vsyncTick() from it (the browser
   // compositor rAF). Advertised to every process at spawn via KP_VSYNC_EN;
@@ -1934,6 +1961,52 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       var wfd = 0; while (pcb.fds.has(wfd)) wfd++;
       pcb.fds.set(wfd, wo.id);
       this._respond(pcb, { rfd: rfd, wfd: wfd });
+      break;
+    }
+    case OP.CLIP_SET: {
+      // RAW request [u32 fmt][u32 last][u32 off][bytes...] (see the OP
+      // table). off 0 opens a fresh per-pcb staging buffer; each chunk must
+      // land exactly at the staged length; last commits to the one slot.
+      var cs = req.raw;
+      if (!cs || cs.length < 12) { this._respond(pcb, { errno: 'EFAULT' }); break; }
+      var cdv = new DataView(cs.buffer, cs.byteOffset, cs.length);
+      var cfmt = cdv.getUint32(0, true);
+      var clast = cdv.getUint32(4, true);
+      var coff = cdv.getUint32(8, true);
+      if (coff === 0) pcb.clipStage = { fmt: cfmt, parts: [], len: 0 };
+      var stage = pcb.clipStage;
+      if (!stage || stage.fmt !== cfmt || coff !== stage.len) {
+        pcb.clipStage = null;
+        this._respond(pcb, { errno: 'EINVAL' });
+        break;
+      }
+      var cbytes = cs.subarray(12);              // readPayload copied already
+      if (cbytes.length) { stage.parts.push(cbytes); stage.len += cbytes.length; }
+      if (clast) {
+        var joined = new Uint8Array(stage.len);
+        for (var cpi = 0, cpo = 0; cpi < stage.parts.length; cpi++) {
+          joined.set(stage.parts[cpi], cpo);
+          cpo += stage.parts[cpi].length;
+        }
+        // fmt 0 (or an empty commit) clears the slot — EmptyClipboard.
+        this._clipboard = (cfmt && joined.length) ? { fmt: cfmt, bytes: joined } : null;
+        pcb.clipStage = null;
+      }
+      this._respond(pcb, {});
+      break;
+    }
+    case OP.CLIP_GET: {
+      // JSON {fmt, off} -> RAW [i32 total][chunk]; total -1 = unavailable.
+      var clip = this._clipboard;
+      var gfmt = req.fmt | 0, goff = req.off | 0;
+      var total = (clip && clip.fmt === gfmt) ? clip.bytes.length : -1;
+      var chunk = (total > 0 && goff >= 0 && goff < total)
+        ? clip.bytes.subarray(goff, goff + Math.min(total - goff, KP_PAYLOAD_CAP - 4))
+        : new Uint8Array(0);
+      var gresp = new Uint8Array(4 + chunk.length);
+      new DataView(gresp.buffer).setInt32(0, total, true);
+      gresp.set(chunk, 4);
+      this._respondRaw(pcb, gresp);
       break;
     }
     case OP.COMPILE:

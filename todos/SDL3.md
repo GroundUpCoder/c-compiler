@@ -364,9 +364,14 @@ lock, plain ops) *behind the SDL API* — that's SDL's contract, not C11's,
 so it isn't the rejected `_Atomic` shim. `SDL_CreateThread` returns an
 error. Revisit only if 0006 is ever re-triggered.
 
-### Clipboard (SDL_clipboard) — ✗ missing — P3
-`SDL_SetClipboardText`/`GetClipboardText`/`HasClipboardText`. Web:
-`navigator.clipboard` (async + permission — needs the callback model).
+### Clipboard (SDL_clipboard) — ✓ landed (todos/0090, text)
+`SDL_SetClipboardText`/`GetClipboardText`/`HasClipboardText`/
+`SDL_ClearClipboardData` (+ `SDL_free`) over the kernel's one clipboard
+slot (CLIP_SET/CLIP_GET RPCs; host.js `createClipboard`) — synchronous,
+cross-process, usable without SDL_Init; standalone runs get a
+process-local slot. Host-browser `navigator.clipboard` integration
+(paste from OUTSIDE the OS) deliberately not wired — async + permission
+needs the callback model; revisit on demand.
 
 ### Properties (SDL_properties) — ✗ missing — P2
 SDL3's typed key→value store, used by `*WithProperties` constructors across

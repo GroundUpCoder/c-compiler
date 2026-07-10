@@ -393,7 +393,23 @@ desktop sid (kernel's borderless exemption stands; policy asks) and
 modifiers are tracked by KEYSYM from key events since pointer records
 carry no mod word; wmctl grew keydown/keyup/down/up/drag for headless
 gestures; right-button routing stays reserved for 0091/0101.
-Image version is **v49**.
+The system clipboard (todos/0090) is ONE kernel-held slot ({fmt, bytes};
+fmt 1 = UTF-8 text, tagged so 0092's file lists can ride later) behind
+the CLIP_SET/CLIP_GET RPCs — cross-process, survives the writer exiting
+(Win95: one slot, no history). The C surface is the real SDL3 clipboard
+API (`SDL_SetClipboardText`/`SDL_GetClipboardText`/`SDL_HasClipboardText`/
+`SDL_ClearClipboardData` in __SDL.c over host.js `createClipboard`'s
+`__clip_set`/`__clip_get` imports; usable without SDL_Init; no kernel →
+a process-local slot with the same semantics). Consumers: user32's
+clipboard API + EDIT WM_COPY/CUT/PASTE (^C/^X/^V/^A) ride it (the 0048
+`$HOME/.clipboard` file is gone), term grew drag-selection (screen-coord
+cell range, inverted render) with Ctrl+Shift+C copy / Ctrl+Shift+V paste
+(\n→CR on the wire; plain ^C stays SIGINT), and `/bin/clip` (os/clip.c)
+is the shell bridge — `cmd | clip` sets, `clip -o` prints (exit 1 when
+empty; also the test probe). Host-browser clipboard integration is
+deliberately NOT wired (SDL3.md). Tests:
+`tests/kernel/test_clipboard_e2e.js` + the os-shell.mjs notepad leg.
+Image version is **v51**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

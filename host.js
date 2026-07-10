@@ -5479,6 +5479,78 @@ function createNullSpawn(ctx) {
   } };
 }
 
+/* ---- System clipboard (todos/0090) ----
+   __clip_set(fmt, ptr, len) / __clip_get(fmt, ptr, cap): the C-visible
+   primitives under SDL_SetClipboardText/SDL_GetClipboardText (__SDL.c) and
+   the win32 veneer's clipboard API. Kernel-backed when spawnHooks carry
+   clipSet/clipGet — ONE system-wide slot, so copy/paste crosses processes
+   and survives the writer exiting. Otherwise (standalone pages, embedder
+   kernels predating the ops — detected by ENOSYS) a process-local slot with
+   identical semantics, the two-transports-one-fs pattern. fmt 1 = UTF-8
+   text; fmt 0 clears. __clip_get returns the TOTAL byte length (filling at
+   most cap bytes) or -1 when empty / stored format differs — the C side
+   sizes with cap 0, then reads, retrying if the slot grew in between. */
+function createClipboard(ctx, hooks) {
+  const CHUNK = 49152;             // well under the kernel page payload cap
+  let kernelized = !!(hooks && typeof hooks.clipSet === 'function' &&
+                      typeof hooks.clipGet === 'function');
+  let local = null;                // {fmt, bytes} fallback slot
+  return { [ENV_KEY]: {
+    __clip_set: function (fmt, ptr, len) {
+      fmt >>>= 0; len >>>= 0;
+      const bytes = new Uint8Array(ctx.getMemory().buffer).slice(ptr, ptr + len);
+      while (kernelized) {
+        let off = 0;
+        for (;;) {
+          const n = Math.min(bytes.length - off, CHUNK);
+          const last = off + n >= bytes.length ? 1 : 0;
+          const payload = new Uint8Array(12 + n);
+          const dv = new DataView(payload.buffer);
+          dv.setUint32(0, fmt, true);
+          dv.setUint32(4, last, true);
+          dv.setUint32(8, off, true);
+          payload.set(bytes.subarray(off, off + n), 12);
+          const r = hooks.clipSet(payload);
+          if (r && r.errno) {
+            if (r.errno === 'ENOSYS') { kernelized = false; break; }
+            ctx.setErrnoName(r.errno);
+            return -1;
+          }
+          off += n;
+          if (last) return 0;
+        }
+      }
+      local = (fmt && bytes.length) ? { fmt: fmt, bytes: bytes } : null;
+      return 0;
+    },
+    __clip_get: function (fmt, ptr, cap) {
+      fmt >>>= 0; cap >>>= 0;
+      while (kernelized) {
+        let off = 0;
+        for (;;) {
+          const r = hooks.clipGet(fmt, off);
+          if (r && r.errno === 'ENOSYS') { kernelized = false; break; }
+          if (!r || r.errno || !r.raw || r.raw.length < 4) return -1;
+          const dv = new DataView(r.raw.buffer, r.raw.byteOffset, r.raw.length);
+          const total = dv.getInt32(0, true);
+          if (total < 0) return -1;
+          const chunk = r.raw.subarray(4);
+          const want = Math.min(cap, total) - off;
+          if (want <= 0 || chunk.length === 0) return total;
+          const take = Math.min(want, chunk.length);
+          new Uint8Array(ctx.getMemory().buffer).set(chunk.subarray(0, take), ptr + off);
+          off += take;
+          if (off >= Math.min(cap, total)) return total;
+        }
+      }
+      if (!local || local.fmt !== fmt) return -1;
+      const n = Math.min(cap, local.bytes.length);
+      if (n > 0) new Uint8Array(ctx.getMemory().buffer).set(local.bytes.subarray(0, n), ptr);
+      return local.bytes.length;
+    },
+  } };
+}
+
 // A blocking SDL loop (while(running){ poll; render; SDL_Delay; }) can't be
 // honoured in this runtime, on ANY engine. The app runs every program through
 // the synchronous, no-JSPI block-FS model (one runtime to maintain until iOS
@@ -9935,6 +10007,10 @@ async function runModule({
      (so the imports always resolve). */
   const spawnImports = spawnHooks ? createSpawn(ctx, spawnHooks) : createNullSpawn(ctx);
   Object.assign(imports[ENV_KEY], spawnImports[ENV_KEY]);
+
+  /* ---- System clipboard (todos/0090): kernel slot via spawnHooks, or a
+     process-local slot with the same semantics when there's no kernel. */
+  Object.assign(imports[ENV_KEY], createClipboard(ctx, spawnHooks || null)[ENV_KEY]);
 
   /* ---- Emulator console/display/networking imports ---- */
   /* These are used by TinyEMU and similar emulators. They are no-ops

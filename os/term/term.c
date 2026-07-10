@@ -83,6 +83,18 @@ static int dirty = 1;
 static int mfd = -1;
 static pid_t child = -1;
 
+/* ---- selection / clipboard (todos/0090) ----
+   Mouse drag selects a linear (row-major, xterm-style) cell range on the
+   CURRENT screen; Ctrl+Shift+C copies it to the system clipboard
+   (SDL_SetClipboardText -> the kernel's one slot), Ctrl+Shift+V pastes the
+   slot into the pty master. Selection is screen coordinates — output that
+   scrolls under it moves the highlight's content, like xterm; it clears on
+   the next click or a resize. */
+static int sel_on;                 /* a selection exists (rendered inverted) */
+static int sel_drag;               /* left button held: extending */
+static int sel_ax, sel_ay;         /* anchor cell */
+static int sel_ex, sel_ey;         /* extent cell (inclusive) */
+
 /* ---- SDL / freetype ---- */
 static SDL_Window *win;
 static SDL_Surface *surf;
@@ -450,6 +462,73 @@ static void term_putc(unsigned char b) {
     }
 }
 
+/* ============================================================ selection
+ * / clipboard (todos/0090) */
+
+static int cell_clamp(int v, int lim) {
+    if (v < 0) return 0;
+    if (v >= lim) return lim - 1;
+    return v;
+}
+
+static void sel_bounds(int *s, int *e) {         /* linear cell indices */
+    int a = sel_ay * cols + sel_ax;
+    int b = sel_ey * cols + sel_ex;
+    if (a <= b) { *s = a; *e = b; } else { *s = b; *e = a; }
+}
+
+static int sel_has(int r, int c) {
+    int s, e;
+    if (!sel_on) return 0;
+    sel_bounds(&s, &e);
+    int i = r * cols + c;
+    return i >= s && i <= e;
+}
+
+static void copy_selection(void) {
+    if (!sel_on) return;
+    int s, e;
+    sel_bounds(&s, &e);
+    int r0 = s / cols, r1 = e / cols;
+    /* worst case: every cell + a newline per row + NUL */
+    char *buf = malloc((size_t)(e - s + 1) + (size_t)(r1 - r0) + 1);
+    if (!buf) return;
+    int n = 0;
+    for (int r = r0; r <= r1; r++) {
+        int c0 = r == r0 ? s % cols : 0;
+        int c1 = r == r1 ? e % cols : cols - 1;
+        int line = n;
+        for (int c = c0; c <= c1; c++) {
+            unsigned char ch = grid[r * cols + c].ch;
+            buf[n++] = (ch >= 32 && ch <= 126) ? (char)ch : ' ';
+        }
+        while (n > line && buf[n - 1] == ' ') n--;   /* trim trailing blanks */
+        if (r < r1) buf[n++] = '\n';
+    }
+    buf[n] = 0;
+    SDL_SetClipboardText(buf);
+    free(buf);
+}
+
+static void paste_clipboard(void) {
+    char *t = SDL_GetClipboardText();
+    if (!t) return;
+    /* Newlines become CR on the wire (what Enter sends; the line
+       discipline's ICRNL hands the session \n back), \r\n folds to one. */
+    size_t len = strlen(t), n = 0;
+    for (size_t i = 0; i < len; i++) {
+        char b = t[i];
+        if (b == '\r' && t[i + 1] == '\n') continue;   /* CRLF -> one CR */
+        t[n++] = b == '\n' ? '\r' : b;
+    }
+    for (size_t off = 0; off < n; ) {
+        ssize_t w = write(mfd, t + off, n - off);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    SDL_free(t);
+}
+
 /* ============================================================ input */
 
 static void send_named(int sym) {
@@ -477,6 +556,15 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     if (sym == SDLK_DELETE) { reply("\x1b[3~"); return; }
     if (sym >= 0x40000000) { send_named(sym); return; }
     if (sym < 32 || sym > 126) return;
+    /* Ctrl+Shift+C / Ctrl+Shift+V are the terminal's copy/paste chords
+       (todos/0090) — plain Ctrl+C stays the tty's SIGINT byte. Keysyms are
+       modifier-applied, so the shifted letter usually arrives uppercase. */
+    if ((mod & SDL_KMOD_CTRL) && (mod & SDL_KMOD_SHIFT)) {
+        int c = sym;
+        if (c >= 'a' && c <= 'z') c -= 32;
+        if (c == 'C') { copy_selection(); return; }
+        if (c == 'V') { paste_clipboard(); return; }
+    }
     if (mod & SDL_KMOD_CTRL) {
         /* SDL3 keycodes are modifier-applied chars; fold to the control
            code the tty expects (^A..^Z, ^@ ^[ ^\ ^] ^^ ^_). */
@@ -511,6 +599,7 @@ static void render(void) {
             int fg = cell->fg, bg = cell->bg;
             if (cell->attr & A_BOLD) { if (fg < 8) fg += 8; }
             if (cell->attr & A_REVERSE) { int t = fg; fg = bg; bg = t; }
+            if (sel_has(r, c)) { int t = fg; fg = bg; bg = t; }   /* 0090 */
             if (cursor_visible && r == cy && c == cx) { int t = fg; fg = bg; bg = t; }
             int x0 = c * cell_w, y0 = r * cell_h;
             uint32_t bgp = pack(PAL[bg]);
@@ -590,6 +679,7 @@ static void apply_resize(int ncols, int nrows) {
     clamp_cursor();
     if (saved_cx > cols - 1) saved_cx = cols - 1;
     if (saved_cy > rows - 1) saved_cy = rows - 1;
+    sel_on = sel_drag = 0;         /* stale cell coords (0090) */
     set_winsize();                 /* SIGWINCH: the session reflows */
     dirty = 1;
 }
@@ -601,6 +691,23 @@ static void frame_cb(void) {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_KEY_DOWN) {
             handle_key(&e.key);
+        } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == 1) {
+            /* Left press: clear any selection, anchor a new one (0090). */
+            sel_ax = sel_ex = cell_clamp((int)e.button.x / cell_w, cols);
+            sel_ay = sel_ey = cell_clamp((int)e.button.y / cell_h, rows);
+            sel_drag = 1;
+            if (sel_on) { sel_on = 0; dirty = 1; }
+        } else if (e.type == SDL_EVENT_MOUSE_MOTION && sel_drag) {
+            int c = cell_clamp((int)e.motion.x / cell_w, cols);
+            int r = cell_clamp((int)e.motion.y / cell_h, rows);
+            if (c != sel_ex || r != sel_ey || !sel_on) {
+                sel_ex = c;
+                sel_ey = r;
+                sel_on = c != sel_ax || r != sel_ay ? 1 : sel_on;
+                dirty = 1;
+            }
+        } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == 1) {
+            sel_drag = 0;
         } else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
             surf = SDL_GetWindowSurface(win);   /* re-derive (SDL3 contract) */
             apply_resize(surf->w / cell_w, surf->h / cell_h);

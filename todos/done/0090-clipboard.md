@@ -1,6 +1,21 @@
 # 0090 — System clipboard — cross-app copy/cut/paste
 
-- **Status**: open
+- **Status**: done (2026-07-11) — the full plan landed, no descopes: ONE
+  kernel-held slot {fmt, bytes} behind CLIP_SET/CLIP_GET (0x0302/0x0303;
+  chunked through the kernel page, per-pcb staged so a dying writer can't
+  tear it; fmt 1 = UTF-8 text, tagged for 0092's file lists); the C
+  surface is the real SDL3 clipboard API in __SDL.c over host.js
+  `createClipboard` (`__clip_set`/`__clip_get`; kernel via new spawnHooks,
+  process-local fallback standalone); user32's clipboard API + EDIT
+  WM_COPY/CUT/PASTE re-based onto it (the 0048 $HOME/.clipboard file is
+  gone); term grew drag-selection + Ctrl+Shift+C/V (plain ^C stays
+  SIGINT); `/bin/clip` (os/clip.c, seeded, image v51) is the shell
+  bridge. Non-goals stayed non-goals (recorded here + SDL3.md's clipboard
+  section: history/OLE/host-browser integration — no follow-up items
+  needed; 0092 already owns the file-list format). Acceptance green both
+  ways: tests/kernel/test_clipboard_e2e.js (15 checks incl. survives-
+  writer-exit + ~170KB chunking) and the os-shell.mjs notepad→notepad
+  Ctrl+A/C/V/X leg. Dev log: logs/2026-07-11/0090-clipboard.md.
 - **Design**: `todos/WIN32.md` (USER32 surface), `todos/KERNEL.md` (the
   cross-process control plane owns the shared clipboard state). Implements the
   Win32 clipboard API in `os/win32/user32.c` over a kernel-held buffer; wires

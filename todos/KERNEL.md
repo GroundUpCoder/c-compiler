@@ -336,7 +336,19 @@ response, sets DONE, bumps the doorbell. Node path identical via
                  TIOCSWINSZ PTY_CREATE (0020 ptys; TIOCGWINSZ stays
                  a SAB read — no RPC for hot paths)
 0x02xx pipes     PIPE_CREATE PIPE_REF PIPE_CLOSE PIPE_WAIT PIPE_NOTIFY
-0x03xx misc      COMPILE (the existing /bin/cc hook)
+0x03xx misc      COMPILE (the existing /bin/cc hook); CLIP_SET/CLIP_GET
+                 (todos/0090): ONE kernel-held clipboard slot {fmt, bytes}
+                 — cross-process, survives the writer exiting (Win95
+                 semantics: one slot, no history). fmt 1 = UTF-8 text;
+                 the tag is there so CF_BITMAP/file lists (0092) can ride
+                 later. Chunked through the 64KB page: SET is RAW
+                 [u32 fmt][u32 last][u32 off][bytes...] staged per-pcb,
+                 committed on last (a dying writer never tears the slot);
+                 GET is JSON {fmt, off} -> RAW [i32 total][chunk], total
+                 -1 = empty/format mismatch. Consumed via host.js
+                 createClipboard (__clip_set/__clip_get imports) under
+                 SDL_SetClipboardText/SDL_GetClipboardText; no kernel =
+                 a process-local slot, the two-transports pattern.
 0x04xx fs        the brokered filesystem (fd/data-plane amendment below)
 0x05xx sockets   SOCK_SOCKET/BIND/LISTEN/ACCEPT/CONNECT/PAIR/SHUTDOWN —
                  AF_UNIX control plane (todos/0008; data plane rides
