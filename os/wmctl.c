@@ -37,9 +37,10 @@
  *   wmctl gettext LABEL               print the widget's WM_GETTEXT text
  *   wmctl settext LABEL TEXT          set it (WM_SETTEXT)
  *
- * SID 0 targets the focused window (key/click/shot). `click` with one
- * non-numeric argument is the label form; with SID X Y it is the pixel
- * injection above.
+ * SID 0 targets the focused window (key/click/shot). `click` with ONE
+ * argument is always the label form — numeric labels included (calc's
+ * digit keys are buttons named "7"); there is no bare `click SID`, so
+ * nothing is lost. With SID X Y it is the pixel injection above.
  * Exit: 0 ok, 1 command failed / WM endpoint unreachable, 2 usage.
  */
 #include <dirent.h>
@@ -255,13 +256,6 @@ static int do_shot(int fd, const char *what, const char *file) {
     return 0;
 }
 
-static int all_digits(const char *s) {
-    if (!*s) return 0;
-    for (; *s; s++)
-        if (*s < '0' || *s > '9') return 0;
-    return 1;
-}
-
 int main(int argc, char **argv) {
     if (argc < 2) return usage();
     const char *cmd = argv[1];
@@ -276,8 +270,11 @@ int main(int argc, char **argv) {
         if (argc < 4) return usage();
         return do_agent(cmd, argv[2], argv[3]);
     }
-    if (!strcmp(cmd, "click") && argc == 3 && !all_digits(argv[2]))
-        return do_agent(cmd, argv[2], NULL);     /* click by LABEL, no pixels */
+    if (!strcmp(cmd, "click") && argc == 3)
+        return do_agent(cmd, argv[2], NULL);     /* click by LABEL, no pixels —
+                                                    numeric labels too (0048:
+                                                    calc's "7"); a pixel click
+                                                    always carries X Y */
 
     int fd = wmp_connect();
     if (fd < 0) return fail("cannot reach /run/wm.sock (no kernel WM endpoint?)");

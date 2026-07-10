@@ -651,6 +651,7 @@ typedef struct tagCREATESTRUCT {
 #define WM_SETICON       0x0080
 #define ICON_SMALL 0
 #define ICON_BIG   1
+#define WM_CTLCOLORMSGBOX 0x0132
 #define WM_CTLCOLOREDIT   0x0133
 #define WM_CTLCOLORLISTBOX 0x0134
 #define WM_CTLCOLORBTN    0x0135
@@ -795,6 +796,10 @@ typedef struct tagCREATESTRUCT {
 #define SS_LEFT   0x0
 #define SS_CENTER 0x1
 #define SS_RIGHT  0x2
+#define SS_WHITERECT   0x6
+#define SS_GRAYRECT    0x8
+#define SS_CENTERIMAGE 0x200
+#define SS_SUNKEN      0x1000
 
 /* Edit styles */
 #define ES_LEFT        0x0000
@@ -839,6 +844,9 @@ typedef struct tagCREATESTRUCT {
 #define EN_VSCROLL  0x0602
 
 /* Listbox messages / notifications */
+#define LBS_NOTIFY      0x0001
+#define LBS_SORT        0x0002
+#define LBS_NOINTEGRALHEIGHT 0x0100
 #define LB_ADDSTRING    0x0180
 #define LB_RESETCONTENT 0x0184
 #define LB_SETCURSEL    0x0186

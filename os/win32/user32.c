@@ -388,9 +388,11 @@ HDC GetDC(HWND h) {
 
 static void menu_overlay_draw(HWND top);         /* bar + open popup (0068) */
 
+static int menu_overlay_wanted(HWND top);        /* bar, or an open popup */
+
 int ReleaseDC(HWND h, HDC dc) {
     if (!h || !dc) return 0;
-    if (h->top->menu) menu_overlay_draw(h->top); /* bar/popup ride every present */
+    if (menu_overlay_wanted(h->top)) menu_overlay_draw(h->top);   /* rides every present */
     SDL_UpdateWindowSurface(h->top->win);        /* present: shm mailbox flip */
     __gdi_dc_unwrap(dc);
     return 1;
@@ -613,6 +615,86 @@ SHORT GetKeyState(int vk) {
 
 SHORT GetAsyncKeyState(int vk) { return GetKeyState(vk); }
 
+/* ---- keyboard state/translation (0048, calc's vk2ascii path). One
+ * synthetic US layout: processes see SDL's modifier-applied keysyms, so
+ * VK->char here only has to reproduce the shift pairs a US keyboard has —
+ * enough for ToAsciiEx-driven key mapping (calc's key2code). ---- */
+
+HKL GetKeyboardLayout(DWORD thread) {
+    (void)thread;
+    return (HKL)0x04090409;                      /* en-US, the only layout */
+}
+
+BOOL GetKeyboardState(BYTE *state) {
+    if (!state) return FALSE;
+    memset(state, 0, 256);
+    if (g_mod & 0x0003) state[VK_SHIFT] = 0x80;
+    if (g_mod & 0x00C0) state[VK_CONTROL] = 0x80;
+    if (g_mod & 0x0300) state[VK_MENU] = 0x80;
+    return TRUE;
+}
+
+UINT MapVirtualKeyExW(UINT code, UINT type, HKL layout) {
+    (void)layout;
+    switch (type) {
+    case 0: return code;        /* VK -> "scan code": a synthetic identity —
+                                   the only consumer feeds it to ToAsciiEx */
+    case 1: return code;        /* scan -> VK: same identity */
+    case 2:                     /* VK -> unshifted char */
+        if ((code >= '0' && code <= '9') || (code >= 'A' && code <= 'Z'))
+            return code;
+        return code >= 32 && code < 127 ? code : 0;
+    }
+    return 0;
+}
+
+int ToAsciiEx(UINT vk, UINT scan, const BYTE *state, LPWORD out, UINT flags, HKL layout) {
+    (void)scan; (void)flags; (void)layout;
+    if (!out) return 0;
+    int shift = state && (state[VK_SHIFT] & 0x80);
+    int ctrl = state && (state[VK_CONTROL] & 0x80);
+    int ch = 0;
+    if (ctrl && vk >= 'A' && vk <= 'Z') ch = (int)vk - 'A' + 1;  /* ^A..^Z */
+    else if (vk >= 'A' && vk <= 'Z') ch = shift ? (int)vk : (int)vk + 32;
+    else if (vk >= '0' && vk <= '9') ch = shift ? ")!@#$%^&*("[vk - '0'] : (int)vk;
+    else if (vk == VK_RETURN) ch = 13;
+    else if (vk == VK_BACK) ch = 8;
+    else if (vk == VK_ESCAPE) ch = 27;
+    else if (vk == VK_SPACE) ch = 32;
+    else if (vk >= 32 && vk < 127) ch = (int)vk;  /* punctuation VKs are the
+                                                     modifier-applied keysym */
+    if (!ch) return 0;
+    *out = (WORD)ch;
+    return 1;
+}
+
+/* ---- TrackMouseEvent (0048, calc's hot-button highlight). One tracked
+ * window (Windows tracks per-thread). HOVER is delivered at once — the
+ * caller is already under the pointer (the WM_MOUSEMOVE that asked);
+ * LEAVE auto-cancels once fired, Windows-style (route_mouse below). ---- */
+
+static struct { HWND hwnd; UINT flags; } g_tme;
+
+BOOL TrackMouseEvent(TRACKMOUSEEVENT *tme) {
+    if (!tme || tme->cbSize != sizeof *tme) return FALSE;
+    if (tme->dwFlags & TME_QUERY) {
+        tme->dwFlags = g_tme.hwnd ? g_tme.flags : 0;
+        tme->hwndTrack = g_tme.hwnd;
+        tme->dwHoverTime = 0;
+        return TRUE;
+    }
+    if (tme->dwFlags & TME_CANCEL) {
+        if (g_tme.hwnd == tme->hwndTrack) g_tme.hwnd = NULL;
+        return TRUE;
+    }
+    if (!tme->hwndTrack) return FALSE;
+    g_tme.hwnd = tme->hwndTrack;
+    g_tme.flags = tme->dwFlags & (TME_HOVER | TME_LEAVE);
+    if (g_tme.flags & TME_HOVER)
+        PostMessage(tme->hwndTrack, WM_MOUSEHOVER, 0, 0);
+    return TRUE;
+}
+
 /* ============================================================ resources
  * The sidecar pack (0068): `<argv0>.res`, compiled by tools/win32rc.js —
  * the WRES layout THERE is the spec; this loader re-declares it (MUST
@@ -644,7 +726,7 @@ static void res_try(const char *path) {
     uint8_t *buf = (uint8_t *)malloc((size_t)n);
     if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return; }
     fclose(f);
-    if (memcmp(buf, "WRES", 4) != 0 || rd32(buf + 4) != 1) { free(buf); return; }
+    if (memcmp(buf, "WRES", 4) != 0 || rd32(buf + 4) != 2) { free(buf); return; }
     g_res = buf;
     g_resSize = (uint32_t)n;
     g_resState = 1;
@@ -1047,9 +1129,20 @@ BOOL DrawMenuBar(HWND h) {
 static struct {
     HWND top;
     int open;                   /* a popup is showing */
-    int barIdx;                 /* which bar item's popup */
+    int barIdx;                 /* which bar item's popup; -1 = standalone */
     int hot;                    /* hot popup row, -1 none */
+    MenuTbl *pop;               /* the open popup's items (bar sub or standalone) */
+    int sx, sy;                 /* standalone (TrackPopupMenu) anchor, surface coords */
+    HWND owner;                 /* standalone: WM_COMMAND target */
+    UINT tpmFlags;              /* standalone: TPM_* word */
+    int retcmd;                 /* standalone TPM_RETURNCMD result */
 } g_menu;
+
+static int menu_standalone(void) { return g_menu.open && g_menu.barIdx < 0; }
+
+static int menu_overlay_wanted(HWND top) {
+    return top->menu != NULL || (g_menu.open && g_menu.top == top);
+}
 
 static HDC menu_mdc(void) {
     static HDC dc;
@@ -1091,10 +1184,10 @@ static int menu_row_h(const MenuItem *it) {
     return it->kind == 2 ? MENU_SEP_H : MENU_ITEM_H;
 }
 
-/* Popup rect for the open bar item, clamped inside the surface. */
+/* Popup rect for the open popup (bar item or standalone), clamped inside
+ * the surface. */
 static void menu_popup_rect(HWND top, RECT *out) {
-    MenuTbl *bar = MENU_T(top->menu);
-    MenuTbl *m = MENU_T(bar->items[g_menu.barIdx].sub);
+    MenuTbl *m = g_menu.pop;
     SDL_Surface *s = SDL_GetWindowSurface(top->win);
     int w = 60, h = 2;
     for (int i = 0; m && i < m->n; i++) {
@@ -1112,13 +1205,22 @@ static void menu_popup_rect(HWND top, RECT *out) {
         }
     }
     h += 2;
-    RECT br;
-    menu_bar_rect(top, g_menu.barIdx, &br);
-    int x = br.left;
+    int x, y;
+    if (menu_standalone()) {
+        x = g_menu.sx;
+        y = g_menu.sy;
+        if (s && y + h > s->h) y = s->h - h;     /* flip up against the edge */
+        if (y < 0) y = 0;
+    } else {
+        RECT br;
+        menu_bar_rect(top, g_menu.barIdx, &br);
+        x = br.left;
+        y = MENU_BAR_H;
+    }
     if (s && x + w > s->w) x = s->w - w;
     if (x < 0) x = 0;
-    int maxH = s ? s->h - MENU_BAR_H : h;
-    SetRect(out, x, MENU_BAR_H, x + w, MENU_BAR_H + (h > maxH ? maxH : h));
+    int maxH = s ? s->h - y : h;
+    SetRect(out, x, y, x + w, y + (h > maxH ? maxH : h));
 }
 
 /* Popup row index at surface (x, y); -1 outside/none. */
@@ -1128,7 +1230,7 @@ static int menu_popup_at(HWND top, int x, int y) {
     menu_popup_rect(top, &pr);
     POINT p = { x, y };
     if (!PtInRect(&pr, p)) return -1;
-    MenuTbl *m = MENU_T(MENU_T(top->menu)->items[g_menu.barIdx].sub);
+    MenuTbl *m = g_menu.pop;
     int ry = pr.top + 1;
     for (int i = 0; m && i < m->n; i++) {
         int rh = menu_row_h(&m->items[i]);
@@ -1167,7 +1269,7 @@ static void menu_draw_popup_into(HWND top, HDC dc) {
     FillRect(dc, &pr, GetSysColorBrush(COLOR_MENU));
     draw_raised(dc, pr, 0);
     SetBkMode(dc, TRANSPARENT);
-    MenuTbl *m = MENU_T(MENU_T(top->menu)->items[g_menu.barIdx].sub);
+    MenuTbl *m = g_menu.pop;
     int y = pr.top + 1;
     for (int i = 0; m && i < m->n; i++) {
         const MenuItem *it = &m->items[i];
@@ -1219,7 +1321,7 @@ static void menu_overlay_draw(HWND top) {
     if (!s) return;
     HDC dc = __gdi_dc_wrap(s->pixels, s->w, s->h, s->pitch / 4);
     if (!dc) return;
-    menu_draw_bar_into(top, dc, s->w);
+    if (top->menu) menu_draw_bar_into(top, dc, s->w);
     if (g_menu.open && g_menu.top == top) menu_draw_popup_into(top, dc);
     __gdi_dc_unwrap(dc);                        /* present is the caller's */
 }
@@ -1234,42 +1336,67 @@ static void menu_close(void) {
     HWND t = g_menu.top;
     g_menu.open = 0;
     g_menu.top = NULL;
+    g_menu.pop = NULL;
     /* the popup overwrote client pixels: have the app repaint them */
-    if (t) InvalidateRect(t, NULL, TRUE);
+    if (t) {
+        SendMessage(t, WM_EXITMENULOOP, 0, 0);
+        InvalidateRect(t, NULL, TRUE);
+        PostMessage(t, WM_NULL, 0, 0);           /* wake a modal popup pump */
+    }
 }
 
 static void menu_open_popup(HWND top, int idx) {
     MenuTbl *m = MENU_T(top->menu);
     if (!m || idx < 0 || idx >= m->n) return;
     if (m->items[idx].kind != 1 || !m->items[idx].sub) return;   /* bar popups only */
+    if (!g_menu.open) {                          /* the Windows notification pair */
+        SendMessage(top, WM_ENTERMENULOOP, 0, 0);
+        SendMessage(top, WM_INITMENU, (WPARAM)top->menu, 0);
+    }
     g_menu.top = top;
     g_menu.open = 1;
     g_menu.barIdx = idx;
+    g_menu.pop = MENU_T(m->items[idx].sub);
     g_menu.hot = -1;
+    SendMessage(top, WM_INITMENUPOPUP, (WPARAM)m->items[idx].sub,
+                MAKELPARAM(idx, FALSE));
     menu_present(top);
 }
 
 static void menu_fire(HWND top, int row) {
-    MenuTbl *m = MENU_T(MENU_T(top->menu)->items[g_menu.barIdx].sub);
+    MenuTbl *m = g_menu.pop;
     if (!m || row < 0 || row >= m->n) return;
     MenuItem *it = &m->items[row];
     if (it->kind != 0 || (it->state & (MF_GRAYED | MF_DISABLED))) return;
+    int standalone = menu_standalone();
+    HWND owner = g_menu.owner;
+    UINT tpm = g_menu.tpmFlags;
     menu_close();
-    PostMessage(top, WM_COMMAND, MAKEWPARAM(it->id, 0), 0);
+    if (standalone) {
+        if (tpm & TPM_RETURNCMD) g_menu.retcmd = it->id;
+        else if (!(tpm & TPM_NONOTIFY) && owner)
+            PostMessage(owner, WM_COMMAND, MAKEWPARAM(it->id, 0), 0);
+    } else {
+        PostMessage(top, WM_COMMAND, MAKEWPARAM(it->id, 0), 0);
+    }
 }
 
 /* Mouse in SURFACE coords. Returns 1 if the menu consumed the event. */
 static int menu_route_mouse(HWND top, UINT msg, int x, int y) {
-    if (!top->menu) return 0;
+    if (!top->menu && !(g_menu.open && g_menu.top == top)) return 0;
     if (g_menu.open && g_menu.top == top) {
         int row = menu_popup_at(top, x, y);
-        int bi = menu_bar_at(top, x, y);
+        int bi = menu_standalone() ? -1 : menu_bar_at(top, x, y);
         switch (msg) {
         case WM_MOUSEMOVE:
             if (bi >= 0 && bi != g_menu.barIdx &&
                 MENU_T(top->menu)->items[bi].kind == 1) {
                 g_menu.barIdx = bi;              /* hover-switch, Windows-style */
+                g_menu.pop = MENU_T(MENU_T(top->menu)->items[bi].sub);
                 g_menu.hot = -1;
+                SendMessage(top, WM_INITMENUPOPUP,
+                            (WPARAM)MENU_T(top->menu)->items[bi].sub,
+                            MAKELPARAM(bi, FALSE));
                 InvalidateRect(top, NULL, TRUE); /* old popup pixels differ */
                 menu_present(top);
             } else if (row != g_menu.hot) {
@@ -1294,12 +1421,50 @@ static int menu_route_mouse(HWND top, UINT msg, int x, int y) {
             return 1;                            /* modal while open */
         }
     }
-    if (y >= 0 && y < MENU_BAR_H) {
+    if (top->menu && y >= 0 && y < MENU_BAR_H) {
         if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK)
             menu_open_popup(top, menu_bar_at(top, x, y));
         return 1;                                /* the bar is user32's */
     }
     return 0;
+}
+
+/* TrackPopupMenu (0048): a STANDALONE popup at (x, y) — the same overlay
+ * machinery as the bar popups (barIdx == -1 marks it) plus its own modal
+ * pump. Coords are the owner top-level's SURFACE coords: processes can't
+ * see the screen, so the surface IS "the screen" here — WM_CONTEXTMENU
+ * (DefWindowProc below) hands out the same space, so the usual
+ * pass-the-lParam-through pattern round-trips. */
+BOOL TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int reserved,
+                    HWND hwnd, const RECT *r) {
+    (void)reserved; (void)r;
+    if (!menu || !hwnd) return FALSE;
+    if (g_menu.open) menu_close();
+    HWND top = hwnd->top;
+    SendMessage(top, WM_ENTERMENULOOP, TRUE, 0);
+    g_menu.top = top;
+    g_menu.open = 1;
+    g_menu.barIdx = -1;
+    g_menu.pop = MENU_T(menu);
+    g_menu.hot = -1;
+    g_menu.sx = x;
+    g_menu.sy = y;
+    g_menu.owner = hwnd;
+    g_menu.tpmFlags = flags;
+    g_menu.retcmd = 0;
+    SendMessage(top, WM_INITMENUPOPUP, (WPARAM)menu, MAKELPARAM(0, TRUE));
+    menu_present(top);
+    MSG m;
+    memset(&m, 0, sizeof m);
+    while (g_menu.open && GetMessage(&m, NULL, 0, 0)) {
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
+    if (m.message == WM_QUIT) {                  /* raced: re-post for the outer loop */
+        PostQuitMessage((int)m.wParam);
+        if (g_menu.open) menu_close();
+    }
+    return (flags & TPM_RETURNCMD) ? (BOOL)g_menu.retcmd : TRUE;
 }
 
 /* ============================================================ timers
@@ -1420,8 +1585,12 @@ static WPARAM mk_of_state(Uint32 sdlState) {
 static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
                         int clicks, Uint32 state) {
     int x = (int)fx, y = (int)fy;
-    if (top->menu) {                             /* the bar owns its strip (0068) */
+    if (top->menu || (g_menu.open && g_menu.top == top)) {
+        /* the bar owns its strip; an open popup (bar or TrackPopupMenu) is
+         * modal for the surface (0068) */
         if (menu_route_mouse(top, downMsg, x, y)) return;
+    }
+    if (top->menu) {
         y -= MENU_BAR_H;                         /* below: client space */
         if (y < 0) return;
     }
@@ -1429,6 +1598,12 @@ static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
     g_lastPt.y = y;
     g_activeTop = top;
     HWND target = g_capture ? g_capture : hit_test(top, x, y);
+    if (downMsg == WM_MOUSEMOVE && g_tme.hwnd && g_tme.hwnd != target) {
+        HWND was = g_tme.hwnd;                   /* left the tracked window: */
+        UINT f = g_tme.flags;                    /* fire LEAVE + auto-cancel */
+        g_tme.hwnd = NULL;
+        if (f & TME_LEAVE) PostMessage(was, WM_MOUSELEAVE, 0, 0);
+    }
     if (!hwnd_able(target)) return;              /* disabled subtree: drop */
     UINT msg = downMsg;
     if (downMsg == WM_LBUTTONDOWN || downMsg == WM_RBUTTONDOWN ||
@@ -1556,6 +1731,105 @@ static int paint_scan(MSG *out, HWND hf, UINT mn, UINT mx) {
         }
     }
     return 0;
+}
+
+/* ============================================================ clipboard
+ * (0048): ONE text clipboard, a file at $HOME/.clipboard holding the
+ * UTF-8 bytes — cross-process for free (every process brokers to the same
+ * fs), same shape as advapi32's registry hive. CF_TEXT and CF_UNICODETEXT
+ * are two views of that one text; other formats don't exist. Handles
+ * returned by GetClipboardData are clipboard-owned (Windows semantics):
+ * cached here, freed at the next Get/Empty/Set. */
+
+static HGLOBAL g_clipGot;                        /* last GetClipboardData result */
+
+static void clip_path(char *out, int cap) {
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) home = "/root";
+    snprintf(out, (size_t)cap, "%s/.clipboard", home);
+}
+
+static void clip_drop_cache(void) {
+    if (g_clipGot) { GlobalFree(g_clipGot); g_clipGot = NULL; }
+}
+
+BOOL OpenClipboard(HWND owner) { (void)owner; return TRUE; }
+BOOL CloseClipboard(void) { return TRUE; }
+
+BOOL EmptyClipboard(void) {
+    char path[300];
+    clip_path(path, sizeof path);
+    unlink(path);
+    clip_drop_cache();
+    return TRUE;
+}
+
+HANDLE SetClipboardData(UINT format, HANDLE mem) {
+    if (!mem || (format != CF_TEXT && format != CF_UNICODETEXT)) return NULL;
+    void *p = GlobalLock((HGLOBAL)mem);
+    if (!p) return NULL;
+    char *utf8 = format == CF_UNICODETEXT ? w2a_dup((LPCWSTR)p) : NULL;
+    const char *bytes = utf8 ? utf8 : (const char *)p;
+    char path[300], tmp[310];
+    clip_path(path, sizeof path);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    int ok = 0;
+    if (f) {
+        size_t n = strlen(bytes);
+        ok = fwrite(bytes, 1, n, f) == n;
+        fclose(f);
+        if (ok && rename(tmp, path) != 0) ok = 0;   /* write-through, hive-style */
+        if (!ok) unlink(tmp);
+    }
+    free(utf8);
+    GlobalUnlock((HGLOBAL)mem);
+    clip_drop_cache();
+    /* the handle is the clipboard's now (Windows ownership) — this
+     * clipboard is the FILE, so the handle itself is simply kept alive
+     * for the caller's residual use and never read again */
+    return ok ? mem : NULL;
+}
+
+HANDLE GetClipboardData(UINT format) {
+    if (format != CF_TEXT && format != CF_UNICODETEXT) return NULL;
+    char path[300];
+    clip_path(path, sizeof path);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0 || n > 4 * 1024 * 1024) { fclose(f); return NULL; }
+    char *buf = (char *)malloc((size_t)n + 1);
+    if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return NULL; }
+    fclose(f);
+    buf[n] = 0;
+    clip_drop_cache();
+    if (format == CF_TEXT) {
+        g_clipGot = GlobalAlloc(0, (SIZE_T)n + 1);
+        if (g_clipGot) memcpy(GlobalLock(g_clipGot), buf, (size_t)n + 1);
+    } else {
+        WCHAR *w = a2w_dup(buf);
+        if (w) {
+            SIZE_T wb = 0;
+            while (w[wb]) wb++;
+            g_clipGot = GlobalAlloc(0, (wb + 1) * sizeof(WCHAR));
+            if (g_clipGot) memcpy(GlobalLock(g_clipGot), w, (wb + 1) * sizeof(WCHAR));
+            free(w);
+        }
+    }
+    free(buf);
+    if (g_clipGot) GlobalUnlock(g_clipGot);
+    return (HANDLE)g_clipGot;
+}
+
+BOOL IsClipboardFormatAvailable(UINT format) {
+    if (format != CF_TEXT && format != CF_UNICODETEXT) return FALSE;
+    char path[300];
+    clip_path(path, sizeof path);
+    struct stat st;
+    return stat(path, &st) == 0 && st.st_size > 0;
 }
 
 /* ============================================================ agent tree
@@ -1738,12 +2012,26 @@ static void agent_serve(int cfd) {
         StrBuf sb = { NULL, 0, 0 };
         for (int i = 0; i < g_nTops; i++)
             if (g_tops[i]) tree_dump(g_tops[i], 0, &sb);
+        if (menu_standalone()) {                 /* TrackPopupMenu items (0048) */
+            sb_add(&sb, "popupmenu\n");
+            menu_dump(g_menu.pop, 1, &sb);
+        }
         aq_send(cfd, AQ_R_TEXT, sb.buf ? sb.buf : "", (uint32_t)sb.len);
         free(sb.buf);
         break;
     }
     case AQ_CLICK: {
         HWND h = agent_find(payload);
+        if (!h && menu_standalone()) {           /* open TrackPopupMenu (0048) */
+            MenuItem *it = menu_find_label(g_menu.pop, payload);
+            if (it && it->kind == 0 && !(it->state & (MF_GRAYED | MF_DISABLED))) {
+                MenuTbl *m = g_menu.pop;
+                for (int row = 0; row < m->n; row++)
+                    if (&m->items[row] == it) { menu_fire(g_menu.top, row); break; }
+                aq_send(cfd, AQ_R_OK, NULL, 0);
+                goto click_done;
+            }
+        }
         if (!h) {                                /* menu items are targets too */
             for (int i = 0; i < g_nTops; i++) {
                 HWND t = g_tops[i];
@@ -2012,7 +2300,9 @@ BOOL DestroyWindow(HWND h) {
     }
     q_purge(h);
     timer_purge(h);
-    if (g_menu.top == h) { g_menu.open = 0; g_menu.top = NULL; }
+    if (g_menu.top == h) { g_menu.open = 0; g_menu.top = NULL; g_menu.pop = NULL; }
+    if (g_menu.owner == h) g_menu.owner = NULL;
+    if (g_tme.hwnd == h) g_tme.hwnd = NULL;
     if (is_top(h) && h->menu) { DestroyMenu(h->menu); h->menu = NULL; }
     if (g_capture == h) g_capture = NULL;
     if (h->top && h->top->focus == h) h->top->focus = NULL;
@@ -2037,6 +2327,20 @@ LRESULT DefWindowProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CLOSE:
         DestroyWindow(h);
+        return 0;
+    case WM_RBUTTONUP: {
+        /* Windows synthesizes WM_CONTEXTMENU here; coords are the top-
+         * level's SURFACE space (the TrackPopupMenu convention above). */
+        int ox, oy;
+        hwnd_origin(h, &ox, &oy);
+        SendMessage(h, WM_CONTEXTMENU, (WPARAM)h,
+                    MAKELPARAM(GET_X_LPARAM(lp) + ox,
+                               GET_Y_LPARAM(lp) + oy + bar_h(h->top)));
+        return 0;
+    }
+    case WM_CONTEXTMENU:
+        if (h->parent)                           /* bubble, Windows-style */
+            return SendMessage(h->parent, WM_CONTEXTMENU, wp, lp);
         return 0;
     case WM_ERASEBKGND: {
         HBRUSH b = h->cls ? resolve_brush(h->cls->bg) : NULL;
@@ -2425,6 +2729,34 @@ static void btn_fire(HWND h) {
         SendMessage(h->parent, WM_COMMAND, MAKEWPARAM(h->id, BN_CLICKED), (LPARAM)h);
 }
 
+/* BS_OWNERDRAW (0048, calc's keypad): the parent paints via WM_DRAWITEM —
+ * the DRAWITEMSTRUCT's hDC is the button's client DC. */
+static void btn_paint_ownerdraw(HWND h) {
+    BtnState *st = (BtnState *)h->ctl;
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    if (!dc) return;
+    if (h->parent) {
+        DRAWITEMSTRUCT dis;
+        memset(&dis, 0, sizeof dis);
+        dis.CtlType = ODT_BUTTON;
+        dis.CtlID = (UINT)h->id;
+        dis.itemAction = ODA_DRAWENTIRE;
+        dis.itemState = (st->pressed ? ODS_SELECTED : 0)
+                      | (hwnd_able(h) ? 0 : ODS_DISABLED)
+                      | (h->top->focus == h ? ODS_FOCUS : 0);
+        dis.hwndItem = h;
+        dis.hDC = dc;
+        SetRect(&dis.rcItem, 0, 0, h->w, h->h);
+        SendMessage(h->parent, WM_DRAWITEM, (WPARAM)h->id, (LPARAM)&dis);
+    } else {
+        RECT r;
+        SetRect(&r, 0, 0, h->w, h->h);
+        FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
+    }
+    EndPaint(h, &ps);
+}
+
 static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     BtnState *st = (BtnState *)h->ctl;
     switch (msg) {
@@ -2432,7 +2764,8 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         h->ctl = calloc(1, sizeof(BtnState));
         return h->ctl ? 0 : -1;
     case WM_PAINT:
-        btn_paint(h);
+        if (btn_kind(h) == BS_OWNERDRAW) btn_paint_ownerdraw(h);
+        else btn_paint(h);
         return 0;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
@@ -2512,7 +2845,13 @@ static LRESULT static_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (!dc) return 0;
         RECT r;
         SetRect(&r, 0, 0, h->w, h->h);
-        FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
+        /* the parent picks the background, Windows-style (calc paints its
+         * display white this way); no answer -> BTNFACE */
+        HBRUSH bg = h->parent
+            ? (HBRUSH)SendMessage(h->parent, WM_CTLCOLORSTATIC, (WPARAM)dc, (LPARAM)h)
+            : NULL;
+        FillRect(dc, &r, bg ? bg : GetSysColorBrush(COLOR_BTNFACE));
+        if (h->style & SS_SUNKEN) draw_raised(dc, r, 1);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, GetSysColor(hwnd_able(h) ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
         UINT fmt = DT_LEFT;
@@ -3352,7 +3691,15 @@ typedef struct {
 static LRESULT dlg_proc_32770(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     DlgState *st = (DlgState *)h->ctl;
     if (st) {                                    /* template dialog */
-        if (st->proc && st->proc(h, msg, wp, lp)) return 0;
+        if (st->proc) {
+            LRESULT r = st->proc(h, msg, wp, lp);
+            if (r) {
+                /* the WM_CTLCOLOR* family returns the BRUSH through the
+                 * DLGPROC's return value (the classic quirk) */
+                if (msg >= WM_CTLCOLORMSGBOX && msg <= WM_CTLCOLORSTATIC) return r;
+                return 0;
+            }
+        }
         if (msg == WM_CLOSE) {                   /* DefDlgProc: 'x' = cancel */
             EndDialog(h, IDCANCEL);
             return 0;
@@ -3512,6 +3859,7 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     rr16(&r); rr16(&r);                          /* x, y: the WM places us */
     int dw = (int)(short)rr16(&r), dh = (int)(short)rr16(&r);
     rr32(&r);                                    /* dialog style: geometry is ours */
+    int menuId = (int)rr16(&r);                  /* WRES v2: template MENU */
     char *caption = rrstr(&r);
     rr16(&r);                                    /* font size */
     char *face = rrstr(&r);
@@ -3519,11 +3867,16 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     int nCtl = (int)rr16(&r);
     if (r.bad || nCtl < 0 || nCtl > 256) { free(caption); return NULL; }
 
+    /* A template menu rides the surface's top MENU_BAR_H pixels — grow the
+     * window so the CLIENT area still matches the template (calc). */
+    HMENU tmplMenu = menuId ? LoadMenuW(NULL, MAKEINTRESOURCEW(menuId)) : NULL;
     HWND dlg = CreateWindowEx(0, "#32770", caption ? caption : "",
                               WS_POPUP | WS_VISIBLE,
-                              0, 0, dw * bx / 4, dh * by / 8,
-                              NULL, NULL, NULL, NULL);
+                              0, 0, dw * bx / 4,
+                              dh * by / 8 + (tmplMenu ? MENU_BAR_H : 0),
+                              NULL, tmplMenu, NULL, NULL);
     free(caption);
+    if (!dlg && tmplMenu) DestroyMenu(tmplMenu);
     if (!dlg) return NULL;
     DlgState *st = (DlgState *)calloc(1, sizeof(DlgState));
     if (!st) { DestroyWindow(dlg); return NULL; }
@@ -3756,5 +4109,32 @@ BOOL RedrawWindow(HWND h, const RECT *r, HRGN rgn, UINT flags) {
     if (!h) return FALSE;
     if (flags & RDW_INVALIDATE) InvalidateRect(h, r, (flags & RDW_ERASE) != 0);
     if (flags & (RDW_UPDATENOW | RDW_ERASENOW)) UpdateWindow(h);
+    return TRUE;
+}
+
+/* ============================================================ frame-control
+ * drawing (0048, calc's owner-drawn keypad): the classic 3D looks over the
+ * controls section's draw_raised. Every DFC type draws as a button face —
+ * the corpus only asks for DFC_BUTTON. */
+
+BOOL DrawFrameControl(HDC dc, RECT *r, UINT type, UINT state) {
+    (void)type;
+    if (!dc || !r) return FALSE;
+    FillRect(dc, r, GetSysColorBrush(COLOR_BTNFACE));
+    draw_raised(dc, *r, (state & DFCS_PUSHED) != 0);
+    return TRUE;
+}
+
+BOOL DrawStateW(HDC dc, HBRUSH brush, DRAWSTATEPROC cb, LPARAM ldata,
+                WPARAM wdata, int x, int y, int cx, int cy, UINT flags) {
+    (void)brush; (void)cb; (void)wdata; (void)cx; (void)cy;
+    if (!dc) return FALSE;
+    if ((flags & 0x7) != DST_TEXT || !ldata) return FALSE;   /* text flavor only */
+    char *t = w2a_dup((LPCWSTR)ldata);
+    if (!t) return FALSE;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, GetSysColor((flags & DSS_DISABLED) ? COLOR_GRAYTEXT : COLOR_BTNTEXT));
+    TextOut(dc, x, y, t, (int)strlen(t));
+    free(t);
     return TRUE;
 }

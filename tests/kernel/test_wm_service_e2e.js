@@ -30,6 +30,26 @@ function check(name, cond, extra) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-wm-'));
 const image = path.join(tmp, 'os.img');
 
+// The baked /usr/share/menu (os/image.json), sorted the way load_entries
+// sorts. Geometry mirrors os/wm.c: MENU_W 150, rows 20px, 4px pad, parked
+// above the 28px taskbar on the 1024x768 headless screen. Bump the list
+// when image.json gains a menu entry; everything below derives from it.
+const MENU_ENTRIES = ['calc', 'ctldemo', 'doom', 'gameboy', 'gdidemo',
+                      'gpubox', 'quake', 'snake', 'term', 'winbox', 'winmine'];
+const MENU_H = 2 * 4 + MENU_ENTRIES.length * 20;
+const MENU_GEOM = `150x${MENU_H}+0+${768 - 28 - MENU_H}`;
+const winboxRowY = 4 + MENU_ENTRIES.indexOf('winbox') * 20 + 10;
+
+// The seeded /root/Desktop icons, sorted (os/image.json user section) —
+// same rule: bump when the image gains one. wm.c grid: column-major,
+// 16px margin, 84x64 cells, 11 rows on the 1024x768 screen; icon centers
+// in column 0 sit at x=58, y = 16 + row*64 + 32.
+const DESK_ENTRIES = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
+                      'quake', 'term'];
+const deskY = (list, name) => 16 + list.indexOf(name) * 64 + 32;
+// the activate leg drops two more files in and re-sorts
+const DESK_ACT = [...DESK_ENTRIES, 'alauncher', 'notes.txt'].sort();
+
 // One seeded session. Sids/pids are extracted IN-shell (sed) so the test
 // doesn't depend on the wm-autostart vs first-command spawn race.
 const script = [
@@ -90,7 +110,7 @@ const script = [
   'echo ==menu1',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $MSID 20 174',                    // entry 8 = winbox (sorted)
+  `wmctl click $MSID 20 ${winboxRowY}`,          // the winbox entry (sorted)
   'sleep 2.5',                                   // real wasm spawn
   'echo ==menu2',
   'wmctl list',
@@ -107,11 +127,11 @@ const script = [
   'wmctl list',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DSID /root/d.ppm && echo desk-shot-ok',
-  'wmctl click $DSID 58 112',                    // SINGLE click icon 1 (gameboy)
+  `wmctl click $DSID 58 ${deskY(DESK_ENTRIES, 'gameboy')}`,   // SINGLE click the gameboy icon
   'sleep 2.5',                                   // would-be spawn time
   'echo ==desk2',
   'wmctl list',
-  'wmctl dblclick $DSID 58 240',                 // double-click icon 3 (term)
+  `wmctl dblclick $DSID 58 ${deskY(DESK_ENTRIES, 'term')}`,   // double-click the term icon
   'sleep 4',                                     // term loads freetype
   'echo ==desk3',
   'wmctl list',
@@ -193,11 +213,11 @@ const script = [
   'sleep 2.5',                                   // desk_load re-read tick (~1s)
   'echo ==act1',
   'wmctl list',
-  'wmctl dblclick $DSID 58 48',                  // icon 0 = alauncher (sorted)
+  `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'alauncher')}`,  // the alauncher icon (sorted)
   'sleep 3',                                     // sh -> winbox spawn
   'echo ==act2',
   'wmctl list',
-  'wmctl dblclick $DSID 58 240',                 // icon 3 = notes.txt
+  `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'notes.txt')}`,  // the notes.txt icon
   'sleep 4',                                     // term loads freetype
   'echo ==act3',
   'wmctl list',
@@ -306,8 +326,8 @@ check('wm & respawns: taskbar back at the bottom edge',
 
 // ---- the Start menu (todos/0028) ----
 const menu1 = row(m1, 'startmenu');
-check('Start click opens the menu: borderless surface above the taskbar (150x188+0+552 — 9 entries)',
-  menu1.includes('150x188+0+552') && menu1.includes('b'), JSON.stringify(m1));
+check(`Start click opens the menu: borderless surface above the taskbar (${MENU_GEOM} — ${MENU_ENTRIES.length} entries)`,
+  menu1.includes(MENU_GEOM) && menu1.includes('b'), JSON.stringify(m1));
 check('menu entry click launches winbox (second instance)',
   m2.split('\n').filter(l => l.endsWith('\twinbox')).length === 2, JSON.stringify(m2));
 check('selection dismissed the menu', row(m2, 'startmenu') === '', JSON.stringify(m2));

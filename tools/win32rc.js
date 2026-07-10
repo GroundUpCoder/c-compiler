@@ -13,7 +13,7 @@
 // **the WRES format below MUST MATCH os/win32/user32.c `res_*`** (the
 // loader re-declares it; change both together):
 //
-//   header:  "WRES" u32-version(1) u32-count
+//   header:  "WRES" u32-version(2) u32-count
 //   entries: count x { u16 type, u16 id, u32 off, u32 size }   (file offsets)
 //   data:    blobs (layouts below; all little-endian, strings UTF-8)
 //
@@ -22,7 +22,8 @@
 //                     item := u8 kind (0 item | 1 popup | 2 separator)
 //                       kind 0: u16 id, u16 textLen, text
 //                       kind 1: u16 textLen, text, menu (recursive)
-//   type 5 RT_DIALOG: i16 x,y,w,h (dialog units), u32 style,
+//   type 5 RT_DIALOG: i16 x,y,w,h (dialog units), u32 style, u16 menuId
+//                     (0 = none; v2 — calc's templates carry MENU),
 //                     u16 capLen, caption, u16 fontSize, u16 faceLen, face,
 //                     u16 n, n x control
 //                     control := u8 class (1 BUTTON 2 EDIT 3 STATIC
@@ -69,6 +70,7 @@ const BUILTIN = {
   DS_CONTEXTHELP: 0x2000, DS_SHELLFONT: 0x40 | 0x08,
   // static styles
   SS_LEFT: 0x0, SS_CENTER: 0x1, SS_RIGHT: 0x2, SS_ICON: 0x3, SS_NOPREFIX: 0x80,
+  SS_WHITERECT: 0x6, SS_GRAYRECT: 0x8, SS_SUNKEN: 0x1000, SS_CENTERIMAGE: 0x200,
   // edit styles
   ES_LEFT: 0x0, ES_CENTER: 0x1, ES_RIGHT: 0x2, ES_MULTILINE: 0x4,
   ES_UPPERCASE: 0x8, ES_LOWERCASE: 0x10, ES_PASSWORD: 0x20,
@@ -78,10 +80,12 @@ const BUILTIN = {
   BS_PUSHBUTTON: 0x0, BS_DEFPUSHBUTTON: 0x1, BS_CHECKBOX: 0x2,
   BS_AUTOCHECKBOX: 0x3, BS_RADIOBUTTON: 0x4, BS_3STATE: 0x5,
   BS_AUTO3STATE: 0x6, BS_GROUPBOX: 0x7, BS_AUTORADIOBUTTON: 0x9,
-  BS_OWNERDRAW: 0xB,
+  BS_OWNERDRAW: 0xB, BS_NOTIFY: 0x4000, BS_CENTER: 0x300, BS_VCENTER: 0xC00,
   // listbox / combo styles
-  LBS_NOTIFY: 0x1, LBS_SORT: 0x2, CBS_SIMPLE: 0x1, CBS_DROPDOWN: 0x2,
-  CBS_DROPDOWNLIST: 0x3,
+  LBS_NOTIFY: 0x1, LBS_SORT: 0x2, LBS_NOINTEGRALHEIGHT: 0x100,
+  CBS_SIMPLE: 0x1, CBS_DROPDOWN: 0x2, CBS_DROPDOWNLIST: 0x3, CBS_SORT: 0x100,
+  // the DIALOGEX position sentinel (ReactOS uses it for x)
+  CW_USEDEFAULT16: 0x8000,
   // dialog ids
   IDOK: 1, IDCANCEL: 2, IDABORT: 3, IDRETRY: 4, IDIGNORE: 5, IDYES: 6,
   IDNO: 7, IDCLOSE: 8, IDHELP: 9,
@@ -99,6 +103,20 @@ const BUILTIN = {
   // misc that shows up in rc STYLE lines
   NOT: 0,           // handled by the expression parser, listed for clarity
 };
+
+// The <dlgs.h> standard control ids (rct1, cmb2, edt4, ... — the comdlg
+// template vocabulary; notepad's PAGESETUP template uses them). Values are
+// Windows' dlgs.h layout starting at ctlFirst 0x0400.
+for (const [prefix, base, count] of [
+  ['psh', 0x0400, 16], ['chx', 0x0410, 16], ['rad', 0x0420, 16],
+  ['grp', 0x0430, 4], ['frm', 0x0434, 4], ['rct', 0x0438, 4],
+  ['ico', 0x043C, 4], ['stc', 0x0440, 32], ['lst', 0x0460, 16],
+  ['cmb', 0x0470, 16], ['edt', 0x0480, 16], ['scr', 0x0490, 8],
+  ['ctl', 0x04A0, 1],
+]) {
+  for (let i = 0; i < count; i++) BUILTIN[prefix + (i + 1)] = base + i;
+}
+BUILTIN.IDC_STATIC = -1;
 
 const RT = { BITMAP: 2, ICON: 3, MENU: 4, DIALOG: 5, STRING: 6, ACCELERATOR: 9, WAVE: 10 };
 const CTL = { BUTTON: 1, EDIT: 2, STATIC: 3, LISTBOX: 4, SCROLLBAR: 5, COMBOBOX: 6 };
@@ -154,7 +172,8 @@ function stripComments(src) {
 
 function preprocess(file, depth) {
   if (depth > 8) throw new Error('include depth exceeded at ' + file);
-  const src = stripComments(fs.readFileSync(file, 'utf8'));
+  // '\'-newline splices (STRINGTABLE strings wrap this way in ReactOS).
+  const src = stripComments(fs.readFileSync(file, 'utf8')).replace(/\\\r?\n/g, '');
   const dir = path.dirname(file);
   const lines = src.split('\n');
   const out = [];
@@ -234,7 +253,10 @@ function tokenize(lines) {
         i++;
       }
     }
-    toks.push({ t: 'nl', ...loc(L) });
+    // rc continuation: a line ending in '|' or ',' continues on the next
+    // (ReactOS wraps long STYLE tails) — suppress the newline token.
+    const last = toks[toks.length - 1];
+    if (!last || (last.t !== '|' && last.t !== ',')) toks.push({ t: 'nl', ...loc(L) });
   }
   return toks;
   function loc(L) { return { file: L.file, line: L.line, dir: L.dir }; }
@@ -360,7 +382,7 @@ function bb() {
   return {
     u8(v) { parts.push(Buffer.from([v & 0xff])); },
     u16(v) { const b = Buffer.alloc(2); b.writeUInt16LE(v & 0xffff); parts.push(b); },
-    i16(v) { const b = Buffer.alloc(2); b.writeInt16LE(v | 0); parts.push(b); },
+    i16(v) { const b = Buffer.alloc(2); b.writeInt16LE(((v & 0xffff) << 16) >> 16); parts.push(b); },
     u32(v) { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0); parts.push(b); },
     str(s) { const b = Buffer.from(s, 'utf8'); this.u16(b.length); parts.push(b); },
     raw(b) { parts.push(b); },
@@ -448,7 +470,7 @@ function parseDialog(id, isEx) {
   const dw = value(); expect(',', ','); const dh = value();
   skipNl();
   let style = 0x80C80080 >>> 0;                  // WS_POPUP|WS_CAPTION|DS_MODALFRAME (default-ish)
-  let caption = '', fontSize = 8, fontFace = 'MS Shell Dlg';
+  let caption = '', fontSize = 8, fontFace = 'MS Shell Dlg', menuId = 0;
   for (;;) {
     skipNl();
     if (atId('STYLE')) { next(); style = styleExpr(); }
@@ -461,7 +483,8 @@ function parseDialog(id, isEx) {
       // DIALOGEX FONT may carry weight/italic/charset tails
       while (at(',')) { next(); if (at('num') || at('id')) next(); }
     }
-    else if (atId('MENU') || atId('CLASS') || atId('CHARACTERISTICS') || atId('VERSION')) {
+    else if (atId('MENU')) { next(); menuId = value(); }
+    else if (atId('CLASS') || atId('CHARACTERISTICS') || atId('VERSION')) {
       next();
       while (!at('nl')) next();
     }
@@ -506,6 +529,7 @@ function parseDialog(id, isEx) {
   const b = bb();
   b.i16(dx); b.i16(dy); b.i16(dw); b.i16(dh);
   b.u32(style);
+  b.u16(menuId);
   b.str(caption);
   b.u16(fontSize); b.str(fontFace);
   b.u16(controls.length);
@@ -603,7 +627,7 @@ const HDR = 12, ENT = 12;
 let off = HDR + entries.length * ENT;
 const head = Buffer.alloc(HDR + entries.length * ENT);
 head.write('WRES', 0, 'ascii');
-head.writeUInt32LE(1, 4);
+head.writeUInt32LE(2, 4);
 head.writeUInt32LE(entries.length, 8);
 entries.forEach((e, i) => {
   const base = HDR + i * ENT;

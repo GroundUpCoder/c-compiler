@@ -20,6 +20,10 @@
 
 typedef WCHAR _TCHAR;
 
+/* the CRT entry alias (Windows' tchar.h does exactly this): a port
+ * defining _tWinMain IS defining wWinMain — os/win32/wwinmain.c calls it */
+#define _tWinMain wWinMain
+
 size_t _tcslen(const WCHAR *s);
 WCHAR *_tcscpy(WCHAR *dst, const WCHAR *src);
 WCHAR *_tcsncpy(WCHAR *dst, const WCHAR *src, size_t n);

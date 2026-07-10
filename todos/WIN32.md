@@ -130,6 +130,30 @@ stub handles by design. After 0068: winmine 0 missing, notepad 64→27,
 calc 45→15 — the tail is comdlg32/clipboard/printing (notepad) and
 popup-menu-tracking/clipboard/keyboard-layout (calc).
 
+0048 (desktop apps wave 1) is landing the app tail on top: **calc links,
+is seeded as `/bin/calc`, and is usable** (log:
+`logs/2026-07-10/desktop-apps-wave1.md`). The veneer grew: ONE text
+clipboard as a file at `$HOME/.clipboard` (the advapi32 hive pattern —
+cross-process for free; CF_TEXT/CF_UNICODETEXT are two views of the same
+UTF-8 bytes; GetClipboardData handles are clipboard-owned and cached),
+keyboard translation (GetKeyboardState over the SDL modifier word +
+MapVirtualKeyExW/ToAsciiEx against the one synthetic US layout — VKs for
+punctuation ARE the modifier-applied keysyms, so only the US shift pairs
+need reproducing), TrackPopupMenu (a STANDALONE popup on the 0068 overlay
+machinery, barIdx == -1 + its own modal pump; coords are the owner's
+SURFACE space, which is also what the new DefWindowProc WM_RBUTTONUP →
+WM_CONTEXTMENU synthesis hands out, so the lParam pass-through pattern
+round-trips; open popups are agent-visible — `popupmenu` in the tree,
+items fire by label), WM_ENTERMENULOOP/WM_INITMENU/WM_INITMENUPOPUP/
+WM_EXITMENULOOP notifications from the menu overlay, BS_OWNERDRAW →
+WM_DRAWITEM with DrawFrameControl/DrawStateW, WM_CTLCOLORSTATIC (the
+DLGPROC brush-through-return quirk honored), and comctl32.c
+(InitCommonControls no-ops — one toolkit). **WRES is v2**: RT_DIALOG
+records carry a `u16 menuId` (calc's templates attach their menu bars;
+the dialog window grows by MENU_BAR_H so the template client area is
+preserved). `wmctl click` with one argument is now ALWAYS the label form
+— calc's keypad buttons are literally named "7".
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

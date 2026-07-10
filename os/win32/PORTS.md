@@ -10,8 +10,8 @@ port, and keep it committed (`--check` verifies freshness).
 | ctldemo | links | 0 |
 | k32demo | links | 0 |
 | winmine | links | 0 |
-| notepad | missing-symbols | 27 |
-| calc | missing-symbols | 15 |
+| notepad | missing-symbols | 26 |
+| calc | links | 0 |
 
 ## gdidemo — links
 
@@ -33,7 +33,7 @@ Project: `vendor/winmine/bin.json` — ReactOS/Wine Minesweeper — the identity
 
 Project: `vendor/notepad/bin.json` — ReactOS notepad — EDIT + menus + comdlg32
 
-Missing symbols (27):
+Missing symbols (26):
 
 ```
 AbortDoc
@@ -49,7 +49,6 @@ GetFileTitleW
 GetOpenFileNameW
 GetSaveFileNameW
 GetWindowPlacement
-IsClipboardFormatAvailable
 IsDialogMessageW
 PageSetupDlgW
 PrintDlgW
@@ -65,74 +64,39 @@ StartPage
 WinHelpW
 ```
 
-## calc — missing-symbols
+## calc — links
 
-Project: `vendor/calc/bin.json` — ReactOS calc — dense control/dialog exercise
-
-Missing symbols (15):
-
-```
-CloseClipboard
-DrawFrameControl
-DrawStateW
-EmptyClipboard
-GetClipboardData
-GetKeyboardLayout
-GetKeyboardState
-InitCommonControls
-IsClipboardFormatAvailable
-MapVirtualKeyExW
-OpenClipboard
-SetClipboardData
-ToAsciiEx
-TrackMouseEvent
-TrackPopupMenu
-```
+Project: `vendor/calc/bin.json` — ReactOS calc — playable since 0048 (seeded as /bin/calc; owner-draw keypad, clipboard, popup menus)
 
 ## Aggregate demand (the order of attack)
 
-41 distinct symbols across 6 targets.
+26 distinct symbols across 6 targets.
 
 | symbol | apps |
 |--------|------|
-| IsClipboardFormatAvailable | notepad calc |
 | AbortDoc | notepad |
 | ChooseFontW | notepad |
-| CloseClipboard | calc |
 | CreateStatusWindowW | notepad |
 | DragAcceptFiles | notepad |
 | DragFinish | notepad |
 | DragQueryFileW | notepad |
-| DrawFrameControl | calc |
-| DrawStateW | calc |
-| EmptyClipboard | calc |
 | EndDoc | notepad |
 | EndPage | notepad |
 | FindTextW | notepad |
-| GetClipboardData | calc |
 | GetFileTitleW | notepad |
-| GetKeyboardLayout | calc |
-| GetKeyboardState | calc |
 | GetOpenFileNameW | notepad |
 | GetSaveFileNameW | notepad |
 | GetWindowPlacement | notepad |
-| InitCommonControls | calc |
 | IsDialogMessageW | notepad |
-| MapVirtualKeyExW | calc |
-| OpenClipboard | calc |
 | PageSetupDlgW | notepad |
 | PrintDlgW | notepad |
 | RegisterWindowMessageW | notepad |
 | ReplaceTextW | notepad |
 | SHAddToRecentDocs | notepad |
-| SetClipboardData | calc |
 | SetMapMode | notepad |
 | SetProcessDefaultLayout | notepad |
 | SetWindowPlacement | notepad |
 | ShellExecuteW | notepad |
 | StartDocW | notepad |
 | StartPage | notepad |
-| ToAsciiEx | calc |
-| TrackMouseEvent | calc |
-| TrackPopupMenu | calc |
 | WinHelpW | notepad |

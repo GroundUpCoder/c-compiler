@@ -21,6 +21,7 @@
     "utl_ieee.c",
     "winmain.c",
     "htmlhelp.c",
-    "theme.c"
+    "theme.c",
+    "../../os/win32/wwinmain.c"
   ]
 }

@@ -34,8 +34,8 @@
     {
       "name": "calc",
       "project": "vendor/calc/bin.json",
-      "expect": "missing-symbols",
-      "notes": "ReactOS calc \u2014 dense control/dialog exercise"
+      "expect": "links",
+      "notes": "ReactOS calc \u2014 playable since 0048 (seeded as /bin/calc; owner-draw keypad, clipboard, popup menus)"
     }
   ]
 }
