@@ -1,0 +1,13 @@
+{
+  "name": "sameboy-supermario",
+  "description": "SameBoy running Super Mario Bros. Deluxe (place SuperMarioDeluxe.gbc in vendor/gameboy/roms/)",
+  "deps": [
+    "../bin.json"
+  ],
+  "dataFiles": {
+    "../../gameboy/roms/SuperMarioDeluxe.gbc": "/roms/SuperMarioDeluxe.gbc"
+  },
+  "runArgs": [
+    "/roms/SuperMarioDeluxe.gbc"
+  ]
+}

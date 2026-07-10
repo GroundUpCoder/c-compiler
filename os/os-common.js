@@ -195,6 +195,9 @@ function buildProject(CompilerJS, projPath, readHostFile) {
       } else if (a === '--gc-spill-locals') {
         // Same as the CLI flag (micropython's precise-GC root scanning).
         compilerOptions.gcSpillLocals = true;
+      } else if (a === '--allow-zero-length-arrays') {
+        // Same as the CLI flag (sameboy's GB_SECTION end markers).
+        compilerOptions.allowZeroLengthArrays = true;
       } else {
         throw new Error('buildProject ' + projPath + ': unsupported compilerArg ' + a);
       }

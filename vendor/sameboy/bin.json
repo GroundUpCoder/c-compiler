@@ -1,0 +1,33 @@
+{
+  "bin": true,
+  "name": "sameboy",
+  "description": "Game Boy / Game Boy Color emulator (SameBoy core — cycle-accurate)",
+  "compilerArgs": [
+    "--allow-zero-length-arrays",
+    "-DGB_INTERNAL",
+    "-DGB_DISABLE_DEBUGGER",
+    "-DGB_DISABLE_CHEATS",
+    "-DGB_DISABLE_CHEAT_SEARCH",
+    "-DGB_DISABLE_REWIND",
+    "-DGB_DISABLE_TIMEKEEPING"
+  ],
+  "includes": ["core", "src"],
+  "sources": [
+    "core/apu.c",
+    "core/camera.c",
+    "core/display.c",
+    "core/gb.c",
+    "core/joypad.c",
+    "core/mbc.c",
+    "core/memory.c",
+    "core/printer.c",
+    "core/random.c",
+    "core/rumble.c",
+    "core/sgb.c",
+    "core/sm83_cpu.c",
+    "core/timing.c",
+    "core/workboy.c",
+    "src/bootroms.c",
+    "src/main.c"
+  ]
+}

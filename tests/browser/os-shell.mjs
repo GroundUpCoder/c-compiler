@@ -107,7 +107,7 @@ try {
   // Rows are 20px + 4px pad, parked above the 28px taskbar (/etc/menu is
   // EMPTY on a virgin boot — todos/0040; the override leg below covers it).
   const MENU_ENTRIES = ['cairodemo', 'calc', 'ctldemo', 'ctlpanel', 'doom', 'fileman', 'gameboy', 'gdidemo',
-                        'gpubox', 'notepad', 'quake', 'snake', 'term', 'winbox', 'winmine'];
+                        'gpubox', 'notepad', 'quake', 'sameboy', 'snake', 'term', 'winbox', 'winmine'];
   const MENU_H = 2 * 4 + MENU_ENTRIES.length * 20;
   const MENU_Y = SH - 28 - MENU_H;
   const WINBOX_ROW_Y = 4 + MENU_ENTRIES.indexOf('winbox') * 20 + 10;

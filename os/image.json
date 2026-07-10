@@ -1,5 +1,5 @@
 {
-  "version": 44,
+  "version": 45,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -51,6 +51,9 @@
       },
       "/usr/bin/gameboy": {
         "project": "vendor/gameboy/bin.json"
+      },
+      "/usr/bin/sameboy": {
+        "project": "vendor/sameboy/bin.json"
       },
       "/usr/bin/quake": {
         "project": "vendor/quake/bin.json"
@@ -111,6 +114,9 @@
       },
       "/usr/share/menu/gameboy": {
         "link": "/usr/bin/gameboy"
+      },
+      "/usr/share/menu/sameboy": {
+        "link": "/usr/bin/sameboy"
       },
       "/usr/share/menu/term": {
         "link": "/usr/bin/term"

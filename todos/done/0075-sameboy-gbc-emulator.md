@@ -1,6 +1,18 @@
 # 0075 — SameBoy: a second, cycle-accurate GB/GBC core (`/bin/sameboy`)
 
-- **Status**: open
+- **Status**: done (2026-07-10) — SameBoy v1.0.3 Core vendored
+  (`vendor/sameboy/`, pinned 208ba4a, subset minus debugger/cheats/rewind/
+  save-state TUs), `/bin/sameboy` seeded + Start-menu entry (image v45);
+  DMG via dmg_boot + CGB via cgb_boot (official v1.0.3 release binaries
+  embedded as C arrays), Super Mario Deluxe reaches its title screen;
+  `/bin/gameboy` unchanged and still the .gb/.gbc default (e2e-asserted).
+  GB_SECTION intact via the PRE-EXISTING `--allow-zero-length-arrays`
+  (wired through os-common.js buildProject); the one compiler fix spun out
+  test-first as 0085 (multi-char char constants, done). Tests:
+  `tests/kernel/test_sameboy_e2e.js` (15 checks, kernel suite).
+  Follow-ups: 0086 (save states + core pickability), 0087 (GNU-extension
+  gap triage: offsetof-ICE, statement exprs, elvis, embedded directives,
+  constructors, vasprintf, bswap builtins).
 - **Design**: this file. Sibling of `vendor/gameboy/` (Peanut-GB). Related:
   `0072` (openwith) already routes `.gb`/`.gbc` → `/bin/gameboy`; this adds a
   second core, it does **not** replace Peanut-GB.

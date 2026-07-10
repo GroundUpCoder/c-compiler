@@ -70,7 +70,7 @@ hang-class miscompiles fail fast instead of stalling the suite.
 
 `vendor/` contains real-world C codebases already ported to this compiler — each has its own `bin.json`. **Check this list before proposing a "new" port; many obvious candidates are already done.** As of writing:
 
-- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator), `snake`
+- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the default `.gb`/`.gbc` handler), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs; patch table in `vendor/sameboy/README.md`), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
   (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
@@ -336,7 +336,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v44**.
+Image version is **v45**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
