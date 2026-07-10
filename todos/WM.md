@@ -558,6 +558,15 @@ graduate to queue items when a fix is scheduled.
 - **os-gpubox adapter flake: quiet for two rounds** (headless Chromium
   adapter came up in all runs, rounds 1 + 2). Environmental; one more
   quiet round and it can drop off the list.
+- **First-frame teleport (fix scheduled → `todos/0069`)**: every new
+  window — app windows AND the start menu — composites for a few frames
+  at the kernel's sid-cascade default before /bin/wm's `EV_CREATED` →
+  `WMP_MOVE` round trip lands, then visibly jumps to its placed spot.
+  Structural, not a race: create renders on the next compositor pass
+  while placement crosses two workers + wm's poll loop. Repro: open the
+  Start menu (parked bottom-left, flashes top-left-ish) or launch any
+  GUI app and watch the first frames. Fix = map-on-placement (surface
+  hidden until the WM's first MOVE, timeout backstop), design in 0069.
 
 Round-1 non-issues worth remembering: the 0029 icons broke os-doom/
 os-quake's "desktop restored = pure teal" asserts (test expectations,
