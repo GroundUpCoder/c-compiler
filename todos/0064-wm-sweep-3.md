@@ -32,6 +32,12 @@ third time.
   - Dawn + SIGKILL (S3 caveat) — retest on the current webgpu pkg.
   - os-gpubox adapter flake — recharacterize if seen.
   - Anything 0039 re-dated rather than retired.
+  - os-quake's desktop-restore assert still hardcodes a 5% icon
+    allowance (`nonTeal < n * 0.05` over [16,40,328,232]) — the same
+    class that broke os-doom's 2% at 0048 close-out (todos/done/0074:
+    icon-grid growth). It has margin today; repair to os-doom's
+    pre-launch-baseline pattern when it trips or when /root/Desktop
+    gains entries in that band.
 - Discipline: every finding becomes a MINIMAL repro test FIRST
   (conformance-corpus rule), fixes land as separate commits referencing
   this item; verified-but-unfixed → WM.md known-issues with a repro.

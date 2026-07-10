@@ -83,6 +83,7 @@ try {
   // The WM places the first window at (12,36); DOOM's client is 640x400
   // (native res, unscaled dst) — sample inside it with a small margin.
   const DOOM_REGION = [16, 40, 648, 432];
+  const GB_REGION = [16, 40, 488, 464];
   const waitFrame = async (reg, pred, ms) => {
     const t0 = Date.now();
     for (;;) {
@@ -93,7 +94,11 @@ try {
     }
   };
 
-  await page.keyboard.type('doom &\r');
+  // Baseline the idle desktop FIRST (icon grid included): "desktop restored"
+  // after each app close asserts the region hash returns to this signature,
+  // so the assert derives from the live icon grid instead of hardcoding an
+  // icon-pixel allowance that breaks whenever /root/Desktop gains an entry
+  // (the 758dd6e ROM launchers pushed the old 2% tolerance over the line).
   await setVt(2);
   // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the
   // resized canvas commit so rect capture / pixel geometry below is stable.
@@ -102,6 +107,23 @@ try {
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
   }, { timeout: 30000, polling: 200 });
+  // Settle: the re-mode re-lays the desktop (0023) — wait for icons to be
+  // painted and two consecutive identical snapshots before baselining.
+  const stableRegion = async (reg) => {
+    for (let last = null, t0 = Date.now();;) {
+      const s = await region(...reg);
+      if (last && s.h === last.h && s.colors >= 2) return s;
+      if (Date.now() - t0 > 30000) throw new Error('no stable baseline: ' + JSON.stringify(s));
+      last = s;
+      await new Promise(r => setTimeout(r, 400));
+    }
+  };
+  const baseDoom = await stableRegion(DOOM_REGION);
+  const baseGb = await stableRegion(GB_REGION);
+  await setVt(1);
+
+  await page.keyboard.type('doom &\r');
+  await setVt(2);
   const first = await waitFrame(DOOM_REGION,
     s => s.colors > 50 && s.nonTeal > s.n * 0.9, 90000);
   check('doom composites a real frame (rich colors over the window region)',
@@ -150,18 +172,17 @@ try {
   check('wmctl list from the shell shows DOOM Shareware', true);
   await page.keyboard.type('wmctl close $(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")\r');
   await setVt(2);
-  // "Restored" tolerates the 0029 desktop-icon pixels in the region
-  // (< 2% of it) — only the WINDOW must be gone, not the icons.
-  await waitFrame(DOOM_REGION, s => s.nonTeal < s.n * 0.02, 30000);
+  // "Restored" = the region returns to the pre-launch baseline signature
+  // (icon grid and all) — only the WINDOW must be gone, not the icons.
+  await waitFrame(DOOM_REGION, s => s.h === baseDoom.h, 30000);
   check('wmctl close quit doom; desktop restored', true);
   await setVt(1);
   await page.keyboard.type('echo DOOM-GONE-$?\r');
   await page.waitForFunction(() => window.__osOut.includes('DOOM-GONE-0'), { timeout: 20000, polling: 200 });
   check('shell alive after doom exits', true);
 
-  // Gameboy with the seeded ROM: first-slot placement (12,36), 480x432
+  // Gameboy with the seeded ROM: cascade slot 2 (doom took slot 1), 480x432
   // client — LCD frames in the visible region, then the same clean close.
-  const GB_REGION = [16, 40, 488, 464];
   await page.keyboard.type(GB_CMD + '\r');
   await setVt(2);
   const gb = await waitFrame(GB_REGION, s => s.colors >= 2 && s.nonTeal > s.n * 0.9, 60000);
@@ -171,7 +192,7 @@ try {
   await setVt(1);
   await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")\r');
   await setVt(2);
-  await waitFrame(GB_REGION, s => s.nonTeal < s.n * 0.02, 30000);   // icons stay (0029)
+  await waitFrame(GB_REGION, s => s.h === baseGb.h, 30000);   // icons stay (0029)
   check('wmctl close quit gameboy; desktop restored', true);
   await setVt(1);
   await page.keyboard.type('echo GB-GONE-$?\r');

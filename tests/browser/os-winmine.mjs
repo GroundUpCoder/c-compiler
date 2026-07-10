@@ -118,12 +118,38 @@ try {
   check('ESC closes the popup (LEDs restored)', true);
 
   // REAL mouse: reveal a board cell — mines rect starts at client (5,33)
-  // => surface (5,53); cell (1,1) center (13,61).
-  const cell = await sample(...at(13, 61));
+  // => surface (5,53); cell (1,1) center (13,61). Diff the WHOLE 16x16
+  // cell rect, not one center pixel: a blank reveal (no adjacent mines —
+  // roughly a third of random boards) flood-fills FLAT, so the center
+  // stays face gray and only the raised border changes. The headless twin
+  // asserts the same way (test_winmine_e2e.js cellRect f.equals(r)).
+  const rectSig = (x, y, w, h) => page.evaluate(([a, b, c, d]) => {
+    const cv = document.getElementById('screen');
+    const t = document.createElement('canvas');
+    t.width = cv.width; t.height = cv.height;
+    const ctx = t.getContext('2d');
+    ctx.drawImage(cv, 0, 0);
+    const img = ctx.getImageData(a, b, c, d).data;
+    let sig = 2166136261 >>> 0;
+    for (let i = 0; i < img.length; i += 4) {
+      sig ^= (img[i] << 16) | (img[i + 1] << 8) | img[i + 2];
+      sig = Math.imul(sig, 16777619) >>> 0;
+    }
+    return sig;
+  }, [x, y, w, h]);
+  const CELL_RECT = [...at(5, 53), 16, 16];
+  const cell = await rectSig(...CELL_RECT);
   await new Promise(r => setTimeout(r, 300));
   await clickAt(13, 61);
-  const revealed = await waitChange(...at(13, 61), cell, 30000);
-  check('cell click reveals (board pixels change)', true, revealed);
+  {
+    const t0 = Date.now();
+    for (;;) {
+      if (await rectSig(...CELL_RECT) !== cell) break;
+      if (Date.now() - t0 > 30000) throw new Error('cell rect never changed; sig ' + cell);
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+  check('cell click reveals (board pixels change)', true);
 
   // Agent path from the in-OS shell: difficulty by menu label — the
   // window RESIZES (SDL_SetWindowSize -> SURFACE_RESIZE end to end).

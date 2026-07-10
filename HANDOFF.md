@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0048 landed, close-out = 0074)
+# Handoff — start of thread (updated 2026-07-10; 0048 + 0074 closed, sweep 14/14)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,45 +7,39 @@
 
 ## Where the repo stands
 
-**0048 (desktop apps wave 1) landed 2026-07-10, close-out pending
-`0074`** — four commits (calc 189d956, notepad 74d7f24, fileman
-fd85358, ctlpanel 1c3febc), dev log
-`logs/2026-07-10/desktop-apps-wave1.md`. The Win95 organ set is in:
-**calc, notepad, fileman, ctlpanel seeded + Start-menu entries for all
-five wave-1 apps (winmine included — 0068's "no menu entry" call is
-superseded)**. Image is **v42**. Veneer highlights: file-backed
-clipboard (`$HOME/.clipboard`), keyboard translation, TrackPopupMenu
-(standalone popups on the 0068 overlay, agent-visible), **WRES v2**
-(RT_DIALOG carries a menuId — regenerate BOTH res packs after touching
-win32rc.js), comdlg32 (real file dialogs + find/replace protocol),
-comctl32 status bar, MB_YESNOCANCEL, kernel **AUDIO_GAIN (0x2003)**
-master volume + host.js `__audio_gain`. All six PORTS.md targets now
-`links`. Kernel suite: 39 files green at close.
+**0048 (desktop apps wave 1) is CLOSED** — all five wave-1 apps (calc,
+notepad, fileman, ctlpanel, winmine) seeded with Start-menu entries,
+image **v42**, kernel suite 39 files green, and the browser sweep now a
+real **14/14** (dev logs `logs/2026-07-10/desktop-apps-wave1.md` +
+`0048-closeout.md`).
 
-**Sweep ledger at landing (the 0048 gate)**: 13/14 — os-shell and
-os-drop hardcoded the pre-758dd6e desktop-icon grid, were repaired
-in-place (geometry now DERIVES from entry lists) and PASS; **os-doom
-fails deterministically** (identical region hash across runs — NOT the
-known load-flake). Doom itself is fine: the manual browser drive
-composites full frames and headless doom is green — the evidence
-(sampled n=50032 where the region math says 61936) points at a
-test-side canvas race with the VT2 re-mode. Full evidence + plan in
-`todos/0074`, debug scratch `tests/browser/zz-doom-debug.mjs`. 0048
-moves to done/ when 0074 lands.
+**0074 (the close-out) resolved the "deterministic os-doom failure" —
+it was never doom.** The blocking `waitFrame` stats (`n=50032`) match
+GB_REGION (472·424/4), not DOOM_REGION (61936): the failing check was
+gameboy's "desktop restored" assert, whose hardcoded 2%-of-region icon
+allowance (1000.6 samples) was outgrown by the desktop icon grid when
+758dd6e added three ROM launcher icons (1022 static samples). Same
+class as the os-shell/os-drop repairs at landing. Fix is test-side:
+os-doom.mjs baselines the idle desktop (per-region signature, settled
+via two identical snapshots) before launching anything, and each
+restore assert is now `hash === baseline` — strictly stronger, no
+tolerance constant to outgrow. Full story:
+`logs/2026-07-10/0048-closeout.md`.
 
-**0069/0068** landed earlier the same day (see their dev logs); notepad/
-calc's PORTS.md backlog is CLEARED — the next corpus demand would come
-from a new port (metapad, PuTTY per WIN32.md).
+**The os-winmine cell-reveal flake is FIXED** (same session): the check
+sampled cell (1,1)'s center pixel, which doesn't change when the reveal
+flood-fills a blank (~⅓ of random boards — it fired twice in a row this
+round). It now diffs a 16×16 cell-rect FNV signature, matching the
+headless twin's `cellRect` diff; 3/3 green. The old "re-run the leg
+alone" advice for THIS flake is retired (the os-doom load flake class
+may still exist).
 
-**Follow-up items from this thread's dogfooding** (committed 8286183):
-`0070` desktop-as-default-tab, `0071` tty VEOF transient (^D in a REPL
-kills the GUI terminal today — root cause found, kernel.js sticky-EOF),
-`0072` openwith associations (supersedes the hardcoded `term vi` in
-wm.c AND fileman.c — two copies of the policy now), `0073` desktop-apps
-behavior bug sweep (seeded findings listed in the item).
+**Follow-up items from 0048's dogfooding** (committed 8286183): `0070`
+desktop-as-default-tab, `0071` tty VEOF transient, `0072` openwith
+associations, `0073` desktop-apps behavior bug sweep.
 
-**Next in queue**: `0074` (the 0048 close-out), then `0061` (Cairo),
-`0062` (zero-copy present) — run `node todos/queue.js list`.
+**Next in queue**: `0061` (Cairo), `0062` (zero-copy present) — run
+`node todos/queue.js list`.
 
 **Still owed from 0039**: the pointer-lock HUMAN check was deferred by
 ALL sweep rounds so far. It is a MUST for WM sweep round 3 (`0064`) —
@@ -55,10 +49,9 @@ unlock, click re-lock, VT-switch release.
 **Concurrent work note**: other sessions are active on this tree
 (SS-INTEROP slices per `todos/SS-INTEROP.md`). If files show uncommitted
 changes you didn't make, that's them — verify todos/ freshness and stage
-ONLY your own files. **Cautionary tale from this thread**: 758dd6e (a
-concurrent landing) `git add`-ed os/image.json wholesale and swept
-0048's in-progress seeding + version bump into its commit, leaving HEAD
-referencing a not-yet-committed calc.res. Check `git diff --cached`
+ONLY your own files. **Cautionary tale**: 758dd6e (a concurrent landing)
+`git add`-ed os/image.json wholesale and swept 0048's in-progress
+seeding + version bump into its commit. Check `git diff --cached`
 against what you MEAN to land.
 
 ## The queue (todos/queue.json is authoritative)
@@ -68,10 +61,14 @@ this file.
 
 ## Gotchas carried forward
 
-- **0048 menu/desktop geometry in tests**: test_wm_service_e2e.js and
-  os-shell.mjs now DERIVE Start-menu and desktop-icon geometry from
-  entry lists (`MENU_ENTRIES`/`DESK_ENTRIES`) — when image.json gains a
-  menu entry or Desktop item, bump the LIST (sorted!), not coordinates.
+- **Desktop-pixel asserts must derive, not hardcode** (the 0048/0074
+  lesson, three tests deep): test_wm_service_e2e.js + os-shell.mjs
+  derive Start-menu/desktop-icon geometry from entry lists
+  (`MENU_ENTRIES`/`DESK_ENTRIES` — when image.json gains an entry, bump
+  the sorted LIST, not coordinates); os-doom.mjs derives "desktop
+  restored" from pre-launch baseline signatures. os-quake still carries
+  a hardcoded 5% icon allowance — has margin, owned by 0064's standing
+  checklist.
 - **0048 WRES v2**: the RT_DIALOG record grew `u16 menuId` after style.
   tools/win32rc.js is the spec, user32.c `res_*` re-declares (MUST
   MATCH). Regenerate winmine.res + calc.res + notepad.res together
@@ -99,9 +96,6 @@ this file.
 - **comdlg32 OFN hooks/templates are deliberately not run** — notepad's
   Save As encoding combo degrades to the current value. Growing hooks
   means the explorer-dialog notify protocol; check demand first.
-- **os-winmine cell-reveal flake (pre-existing)**: the `waitChange` at
-  cell (1,1)'s CENTER can stall when the random board reveals a blank
-  there. Same class as the os-doom load flake — re-run the leg alone.
 - **0069 unmapped semantics in tests**: a surface created WHILE a WMP
   subscriber exists is invisible to composite/hit-test until a
   MOVE/SET_LAYER/… lands (or the 200ms backstop). Injection, `wmList`,
@@ -194,9 +188,8 @@ this file.
   os-shell.mjs (0048).
 - `tests/browser/os-*.mjs` are manual — run the full sweep serially
   after touching os/, kernel.js, host.js SDL/webgpu/fd/audio/input/tty
-  paths, or anything that rebakes every binary. (0048 touched all of the
-  above — the full 14-leg serial sweep ran at landing: see the sweep
-  note below.)
+  paths, or anything that rebakes every binary. (Last full sweep:
+  2026-07-10 at the 0074 close, 14/14.)
 - Don't re-litigate: posix_spawn-not-fork, kernel-owned fds, WM.md's
   invariants, 0013–0058's decisions, DISK-IMAGE.md's settled layout,
   0045's no-steal/no-SharedWorker calls, 0036's minimal-port-mp scope,

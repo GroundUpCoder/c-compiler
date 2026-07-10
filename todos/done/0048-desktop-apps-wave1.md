@@ -1,7 +1,7 @@
 # 0048 — desktop apps wave 1
 
-- **Status**: **landed, close-out pending** (2026-07-10) — all five
-  targets landed, one commit each: calc (189d956, ReactOS port —
+- **Status**: done (2026-07-10) — all five targets landed, one commit
+  each: calc (189d956, ReactOS port —
   clipboard/keyboard/TrackPopupMenu/owner-draw veneer tail + WRES v2
   template menus), notepad (74d7f24, ReactOS port — EDIT-around-a-file,
   comdlg32 file dialogs + find/replace, comctl32 status bar), fileman
@@ -9,11 +9,12 @@
   ctlpanel (1c3febc, native + the kernel AUDIO_GAIN master-volume op),
   minesweeper (playable since 0068; this item added its Start-menu
   entry). Image v39→v42; every app has a Start-menu entry and a headless
-  e2e in the kernel suite (39 files green). Browser sweep at landing:
-  13/14 (os-shell + os-drop repaired in-place — pre-758dd6e icon-grid
-  coordinates — and PASS); **the deterministic os-doom leg failure is
-  the one blocker**, tracked with evidence in `todos/0074` — this item
-  closes when 0074 lands. Dev log:
+  e2e in the kernel suite (39 files green). Browser sweep closed at
+  **14/14** via `todos/done/0074`: os-shell + os-drop repaired at
+  landing (pre-758dd6e icon-grid coordinates), and the "os-doom"
+  blocker turned out to be the gameboy desktop-restore assert's
+  hardcoded icon tolerance — test-side, fixed with pre-launch desktop
+  baselines (root cause: `logs/2026-07-10/0048-closeout.md`). Dev log:
   `logs/2026-07-10/desktop-apps-wave1.md`.
 - **Design**: `WIN32.md`; original discussion in
   `logs/2026-07-09/roadmap-network-desktop.md`
