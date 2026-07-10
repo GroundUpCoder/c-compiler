@@ -54,6 +54,12 @@ sweep fodder to either fix or formally accept into a known-issues list:
   IsDialogMessageW is ESC-only (no Tab order — the 0058 simplification).
 - **fileman**: no rename/delete/copy — it is a navigator/launcher only;
   Enter in the LISTBOX doesn't Open (button/double-click only).
+- **notepad shows an ERROR dialog opening an existing text file**
+  (found during 0063, verified pre-existing on the unmodified tree):
+  `printf 'x\n' > /root/notes.txt; notepad /root/notes.txt` boots to
+  "Untitled - Notepad" plus a modal "ERROR" dialog — the file never
+  loads, though PORTS.md claims EDIT-around-a-file works since 0048.
+  Repro headless via os/boot.js + `wmctl list`.
 - **ctlpanel**: volume is master-only (per-source gain can grow on the
   same AUDIO_GAIN opcode if a mixer panel wants it).
 

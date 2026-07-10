@@ -53,8 +53,19 @@ enum {
                                           layer, so a raise/create can never
                                           cover the bar nor a lower sink
                                           under the desktop */
+    WMP_GLASS = 0x1B,                  /* { on }: toggle the Aero glass tier
+                                          (todos/0063) — browser-compositor-
+                                          only backdrop blur behind window
+                                          chrome. The headless composite
+                                          never reads it; default off */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
+    WMP_THUMB = 0x32,                  /* { sid, maxW, maxH }: downscaled
+                                          front-buffer thumbnail (todos/0063,
+                                          Aero Peek) -> R_SHOT { sid, w, h,
+                                          rgba }, aspect-fit inside
+                                          maxW x maxH, never upscaled;
+                                          deterministic box filter */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
     /* events */
@@ -96,6 +107,8 @@ typedef struct {
 #define WMP_F_BORDERLESS 4
 #define WMP_F_RELMOUSE   8   /* surface requested relative mouse (todos/0018) */
 #define WMP_F_RESIZABLE 16   /* SDL_WINDOW_RESIZABLE: RESIZE allowed (0021) */
+#define WMP_F_ALPHA     32   /* SDL_WINDOW_TRANSPARENT: per-pixel alpha,
+                                composited src-over (todos/0063) */
 
 /* Frame header as read off the wire (after the length word). */
 typedef struct { uint32_t type; uint32_t plen; } wmp_hdr;

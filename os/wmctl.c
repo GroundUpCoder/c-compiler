@@ -22,8 +22,16 @@
  *   wmctl dblclick SID X Y [BUTTON]            two clicks on one connection
  *                                     (fast enough for client double-click
  *                                     detection — todos/0029 desktop icons)
+ *   wmctl hover SID X Y               absolute motion injection (todos/0063
+ *                                     — drives hover UI like Aero Peek)
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
+ *   wmctl thumb SID [MAXW MAXH] [FILE]         downscaled window thumbnail
+ *                                     (todos/0063 Aero Peek; default 96x72
+ *                                     box; aspect-fit, never upscaled), PPM
+ *   wmctl glass 0|1                   Aero glass tier toggle (todos/0063) —
+ *                                     browser compositor only; the headless
+ *                                     composite/goldens never change
  *
  * The win32 agent tree (todos/0058; wm_agent.h — served per-process by
  * user32 on /run/win32/agent.<pid>.sock, discovered by directory scan):
@@ -66,8 +74,11 @@ static int usage(void) {
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl click SID X Y [BUTTON]\n"
         "       wmctl dblclick SID X Y [BUTTON]\n"
+        "       wmctl hover SID X Y\n"
         "       wmctl relmove SID DX DY\n"
         "       wmctl shot SID|screen [FILE]\n"
+        "       wmctl thumb SID [MAXW MAXH] [FILE]\n"
+        "       wmctl glass 0|1\n"
         "       wmctl tree\n"
         "       wmctl click LABEL\n"
         "       wmctl gettext LABEL\n"
@@ -216,14 +227,15 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[7] = "-----";       /* [5] only for pinned layers (0038) */
+        char flags[8] = "------";      /* [6] only for pinned layers (0038) */
         if (r.flags & WMP_F_FOCUSED)    flags[0] = 'f';
         if (r.flags & WMP_F_MINIMIZED)  flags[1] = 'm';
         if (r.flags & WMP_F_BORDERLESS) flags[2] = 'b';
         if (r.flags & WMP_F_RELMOUSE)   flags[3] = 'r';
         if (r.flags & WMP_F_RESIZABLE)  flags[4] = 'R';
-        if (r.layer > 0) flags[5] = 'T';
-        else if (r.layer < 0) flags[5] = 'B';
+        if (r.flags & WMP_F_ALPHA)      flags[5] = 'A';   /* todos/0063 */
+        if (r.layer > 0) flags[6] = 'T';
+        else if (r.layer < 0) flags[6] = 'B';
         r.title[31] = 0;
         char dst[32] = "-";            /* scaled viewport (todos/0024), or - */
         if (r.dst_w != r.w || r.dst_h != r.h)
@@ -234,15 +246,10 @@ static int do_list(int fd) {
     return 0;
 }
 
-static int do_shot(int fd, const char *what, const char *file) {
-    int screen = strcmp(what, "screen") == 0;
-    int32_t a[1] = { screen ? 0 : (int32_t)atoi(what) };
-    wmp_hdr h;
-    if (wmp_send(fd, screen ? WMP_SHOT_SCREEN : WMP_SHOT, a, screen ? 0 : 1) != 0 ||
-        wmp_next_reply(fd, &h) != 0)
-        return fail("protocol error");
-    if (h.type != WMP_R_SHOT) { wmp_skip(fd, h.plen); return fail("no such surface"); }
-    int32_t head[3];                   /* sid, w, h; then w*h*4 rgba */
+/* Read an R_SHOT payload (sid, w, h; then w*h*4 rgba) and write it as PPM
+ * (P6, alpha dropped) — shared by shot and thumb (todos/0063). */
+static int shot_to_ppm(int fd, const char *file) {
+    int32_t head[3];
     if (wmp_read_all(fd, head, 12) != 0) return fail("short reply");
     int w = head[1], hh = head[2];
     uint8_t *rgba = (uint8_t *)malloc((size_t)w * hh * 4);
@@ -254,6 +261,27 @@ static int do_shot(int fd, const char *what, const char *file) {
     if (file) fclose(out);
     free(rgba);
     return 0;
+}
+
+static int do_shot(int fd, const char *what, const char *file) {
+    int screen = strcmp(what, "screen") == 0;
+    int32_t a[1] = { screen ? 0 : (int32_t)atoi(what) };
+    wmp_hdr h;
+    if (wmp_send(fd, screen ? WMP_SHOT_SCREEN : WMP_SHOT, a, screen ? 0 : 1) != 0 ||
+        wmp_next_reply(fd, &h) != 0)
+        return fail("protocol error");
+    if (h.type != WMP_R_SHOT) { wmp_skip(fd, h.plen); return fail("no such surface"); }
+    return shot_to_ppm(fd, file);
+}
+
+/* Aero Peek thumbnail (todos/0063): a downscaled window as PPM. */
+static int do_thumb(int fd, int32_t sid, int32_t mw, int32_t mh, const char *file) {
+    int32_t a[3] = { sid, mw, mh };
+    wmp_hdr h;
+    if (wmp_send(fd, WMP_THUMB, a, 3) != 0 || wmp_next_reply(fd, &h) != 0)
+        return fail("protocol error");
+    if (h.type != WMP_R_SHOT) { wmp_skip(fd, h.plen); return fail("no such surface"); }
+    return shot_to_ppm(fd, file);
 }
 
 int main(int argc, char **argv) {
@@ -287,6 +315,11 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
         int32_t a[1] = { argc > 2 ? atoi(argv[2]) : 1 };
         return wmp_cmd(fd, WMP_CYCLE, a, 1) ? fail("cycle refused (no WM?)") : 0;
+    }
+    if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
+        if (argc < 3) return usage();
+        int32_t a[1] = { atoi(argv[2]) };
+        return wmp_cmd(fd, WMP_GLASS, a, 1) ? fail("glass refused") : 0;
     }
 
     /* Everything else leads with a SID. */
@@ -334,6 +367,16 @@ int main(int argc, char **argv) {
         int32_t a[2] = { sid, atoi(argv[3]) };
         return wmp_cmd(fd, WMP_SET_LAYER, a, 2) ? fail("layer refused") : 0;
     }
+    if (!strcmp(cmd, "thumb")) {        /* Aero Peek thumbnail (todos/0063):
+                                           thumb SID [MAXW MAXH] [FILE] —
+                                           argc 4 means FILE, argc >= 5 means
+                                           the dims lead (0 = kernel default) */
+        int32_t mw = 0, mh = 0;
+        const char *file = NULL;
+        if (argc >= 5) { mw = atoi(argv[3]); mh = atoi(argv[4]); file = argc > 5 ? argv[5] : NULL; }
+        else if (argc == 4) file = argv[3];
+        return do_thumb(fd, sid, mw, mh, file);
+    }
     if (!strcmp(cmd, "key")) {
         if (argc < 4) return usage();
         int32_t sc = atoi(argv[3]);
@@ -343,6 +386,12 @@ int main(int argc, char **argv) {
         if (wmp_cmd(fd, WMP_INJECT_KEY, a, 5)) return fail("no such window");
         a[1] = 0;
         return wmp_cmd(fd, WMP_INJECT_KEY, a, 5) ? fail("no such window") : 0;
+    }
+    if (!strcmp(cmd, "hover")) {        /* absolute motion (todos/0063) */
+        if (argc < 5) return usage();
+        int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
+        int32_t a[6] = { sid, 0 /* move */, x, y, 0, 0 };
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
     }
     if (!strcmp(cmd, "relmove")) {      /* relative motion (todos/0018) */
         if (argc < 5) return usage();

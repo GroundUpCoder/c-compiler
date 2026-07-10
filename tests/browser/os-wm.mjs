@@ -110,7 +110,9 @@ try {
   const WX = 12, WY = 36, WW = 240, WH = 160;
   await waitPixel(WX + 120, WY + 80, ORANGE, 60000);
   check('winbox window composited (orange fill)', true);
-  await waitPixel(WX - 7, WY - 7, TEAL);         // clear of the resize frame (0019)
+  // Sample BELOW the window, clear of the frame AND the 0063 drop shadow
+  // (SHADOW_EXT 14 + 3px drop below the 4px frame).
+  await waitPixel(WX + 100, WY + WH + 30, TEAL);
   check('WM placement settled (kernel cascade spot vacated)', true);
   check('white app border', near(await sample(WX + 2, WY + 2), WHITE), await sample(WX + 2, WY + 2));
   // Sample chrome AWAY from the title text and the close-box 'x' glyph.

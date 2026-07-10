@@ -329,6 +329,19 @@ at create (wm.c ignores those), subscriber-owned borderless (the
 start menu) waits for its self-park; WM_MAP_TIMEOUT_MS (200ms) and
 last-subscriber-gone map everything pending — no-WM boots are
 byte-identical to pre-0069.
+Aero effects (todos/0063, WM.md "Aero effects"): per-pixel alpha via
+`SDL_WINDOW_TRANSPARENT` → kernel flag bit3 → WMP_F_ALPHA 32 (`A` in
+the now-7-char `wmctl list` FLAGS; headless composite blends an exact
+integer src-over, `winbox alpha` = "alphabox" acceptance app); drop
+shadows (14px reach + 3px drop — browser-test TEAL samples near frames
+must clear it) + radius-7 rounded frame corners as a per-quad SDF in
+the one compositor pass; Aero Peek (kernel `wmThumbnail`/WMP THUMB
+0x32, deterministic box filter → `wmctl thumb`; wm.c hover popup,
+driven headless by `wmctl hover`); 200ms minimize/restore fly
+animations (transient kernel records, browser-visual only); glass =
+WMP GLASS 0x1B/`wmctl glass` backdrop-blur tier (browser-only —
+headless composite/goldens never read it, off = byte-identical
+pre-0063 pass).
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
 /proc is a synthetic kernel-rendered volume (todos/0043: `ProcFS` in
@@ -336,7 +349,7 @@ kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-Image version is **v45**.
+Image version is **v46**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
@@ -459,7 +472,9 @@ input, wmctl scale/unscale; + the 0025 fixed-size scale-to-fit
 maximize leg) + `os-shell.mjs` (0028/0029/0031; Start menu, desktop
 icons, clock — note: "empty desktop" pixel asserts must tolerate the
 icon grid, and the desktop layer's teal equals the compositor
-background teal) (real Chromium, manual). The whole sweep is ONE
+background teal) + `os-aero.mjs` (0063; exact src-over blend, shadow
+falloff + corner clip, live Aero Peek popup, minimize-anim settle,
+glass round-trip) (real Chromium, manual). The whole sweep is ONE
 command since todos/0081: `node tests/browser/os-sweep.mjs`
 (discovers `os-*.mjs`, serial by design — 0045 boot lock + contention;
 `--filter`/`--resume`/`--fail-fast`; per-file logs + checkpointed

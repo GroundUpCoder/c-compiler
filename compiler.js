@@ -18202,6 +18202,10 @@ typedef Uint64 SDL_WindowFlags;
    0019 renegotiation). Accepted everywhere; todos/0021 will make the WM
    offer resize ONLY to windows that declare it. */
 #define SDL_WINDOW_RESIZABLE 0x0000000000000020ULL
+/* Transparent (SDL3 value): under the OS WM the surface's per-pixel alpha
+   is honored — the compositor blends it src-over (todos/0063). Standalone
+   runtimes ignore it (the page canvas is opaque). */
+#define SDL_WINDOW_TRANSPARENT 0x0000000040000000ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
 /* SDL3: on little-endian, SDL_PIXELFORMAT_RGBA32 aliases ABGR8888

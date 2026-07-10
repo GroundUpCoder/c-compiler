@@ -93,7 +93,9 @@ try {
   const WX = 12, WY = 36, WW = 240, WH = 160;
   await waitPixel(WX + 120, WY + 80, ORANGE, 60000);
   check('fixbox window composited (orange fill)', true);
-  await waitPixel(WX - 7, WY - 7, TEAL);           // wm placement settled
+  // Sample BELOW the window, clear of the frame AND the 0063 drop shadow
+  // (SHADOW_EXT 14 + 3px drop below the 4px frame).
+  await waitPixel(WX + 100, WY + WH + 30, TEAL);   // wm placement settled
   check('WM placement settled', true);
 
   // Drag the SE frame corner out to a ~(500,330) box. The wm answers the
@@ -112,8 +114,9 @@ try {
     await sample(WX + DW + 2, WY + 150));
   check('title bar spans the dst width', near(await sample(WX + 400, WY - 12), NAVY),
     await sample(WX + 400, WY - 12));
-  check('right of the scaled window is desktop', near(await sample(WX + DW + 10, WY + 150), TEAL),
-    await sample(WX + DW + 10, WY + 150));
+  check('right of the scaled window is desktop (clear of the 0063 shadow)',
+    near(await sample(WX + DW + 30, WY + 150), TEAL),
+    await sample(WX + DW + 30, WY + 150));
 
   // Input inverse-maps: a click at screen (+100,+100) is buffer (50,50);
   // the black 8x8 buffer mark composites back around the SAME screen point.
@@ -166,10 +169,11 @@ try {
   check('title double-click maximized the fixed window (centered scale-to-fit)', true);
   check('maximized title bar above the dst', near(await sample(FX + 100, FY - 12), NAVY),
     await sample(FX + 100, FY - 12));
-  if (FY + FDH + 10 < SH - 30)                     // room for a letterbox stripe?
+  if (FY + FDH + 30 < SH - 30)                     // room for a letterbox stripe
+                                                   // clear of the 0063 shadow?
     check('letterboxed: desktop below the fitted dst',
-      near(await sample(Math.round(FX + FDW / 2), FY + FDH + 10), TEAL),
-      await sample(Math.round(FX + FDW / 2), FY + FDH + 10));
+      near(await sample(Math.round(FX + FDW / 2), FY + FDH + 30), TEAL),
+      await sample(Math.round(FX + FDW / 2), FY + FDH + 30));
   // Inverse-mapped input still lands right while maximized: click the dst
   // center -> buffer (120, 80) -> the mark composites back at the center.
   await clickAt(Math.round(FX + FDW / 2), Math.round(FY + FDH / 2));

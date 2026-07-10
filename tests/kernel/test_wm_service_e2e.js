@@ -237,6 +237,59 @@ const script = [
   'echo ==act4',
   'wmctl list',
   'rm -rf /etc/menu',
+  // ---- Aero effects (todos/0063) ----
+  // Aero Peek: injected motion over taskbar button 0 raises the "peek"
+  // thumbnail popup; motion over the Start strip drops it.
+  'wmctl hover $TSID 60 14',
+  'sleep 1',                                     // THUMB round trip + park
+  'echo ==aero1',
+  'wmctl list',
+  'PSID=$(wmctl list | grep peek$ | sed "s/[^0-9].*//")',
+  'wmctl shot $PSID /root/p.ppm && echo peek-shot-ok',
+  'wmctl hover $TSID 25 14',
+  'sleep 0.5',
+  'echo ==aero2',
+  'wmctl list',
+  // wmctl thumb: fixbox (240x160 orange, white 4px border) into 60x40 —
+  // dst(0,0) averages the pure-white border block, the center pure orange.
+  'wmctl thumb $FSID 60 40 /root/t.ppm',
+  'head -c 13 /root/t.ppm && echo =thumb-hdr',   // "P6\\n60 40\\n255\\n"
+  'tail -c +14 /root/t.ppm | head -c 3 > /root/tpx.bin',
+  "printf '\\377\\377\\377' > /root/texp.bin",
+  'cmp /root/tpx.bin /root/texp.bin && echo thumb-border-white',
+  `tail -c +${14 + ((20 * 60) + 30) * 3} /root/t.ppm | head -c 3 > /root/tpx2.bin`,
+  "printf '\\377\\214\\000' > /root/texp2.bin",  // orange 255,140,0
+  'cmp /root/tpx2.bin /root/texp2.bin && echo thumb-center-orange',
+  // Per-pixel alpha end to end: SDL_WINDOW_TRANSPARENT -> kernel bit3 ->
+  // the deterministic src-over composite. A CHROMED window's client blends
+  // over its own frame fill (the face gray drawn under title+client — same
+  // painter's order in both compositors; true see-through needs borderless,
+  // unit-tested in test_wm_aero.js): 50%-alpha blue over gray 192 is
+  // exactly (96, 96, 224).
+  'winbox alpha &',
+  'sleep 2.5',
+  'ASID=$(wmctl list | grep alphabox$ | sed "s/[^0-9].*//")',
+  'echo ==aero3',
+  'wmctl list',
+  'BSID=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//" | head -1)',
+  'wmctl restore $BSID',
+  'wmctl move $BSID 500 300',
+  'wmctl move $ASID 480 280',
+  'wmctl raise $ASID',
+  'sleep 0.3',
+  'wmctl shot screen /root/a.ppm',
+  // (560,360): inside alphabox AND the winbox interior. PPM header is 16
+  // bytes on the 1024x768 screen; tail -c is 1-based.
+  `tail -c +${17 + ((360 * 1024) + 560) * 3} /root/a.ppm | head -c 3 > /root/apx.bin`,
+  "printf '\\140\\140\\340' > /root/aexp.bin",   // 96, 96, 224
+  'cmp /root/apx.bin /root/aexp.bin && echo alpha-blend-ok',
+  // Glass is browser-only: toggling it must not change the headless
+  // composite at that pixel (nor anything else — unit-tested bit-exactly).
+  'wmctl glass 1 && echo glass-on-ok',
+  'wmctl shot screen /root/g.ppm',
+  `tail -c +${17 + ((360 * 1024) + 560) * 3} /root/g.ppm | head -c 3 > /root/gpx.bin`,
+  'cmp /root/gpx.bin /root/aexp.bin && echo glass-headless-invariant',
+  'wmctl glass 0 && echo glass-off-ok',
   '',
 ].join('\n');
 
@@ -275,7 +328,7 @@ check('taskbar is borderless, parked at the bottom edge (0,740 @1024x768)',
 check('winbox placed by the WM policy (12,36 — not the kernel cascade)',
   win1.includes('240x160+12+36'), win1);
 check('winbox focused + resizable (R flag, todos/0021)',
-  win1.includes('\tf---R\t'), win1);
+  win1.includes('\tf---R-\t'), win1);   // FLAGS grew the 0063 'A' slot
 
 // ---- minimize via wmctl -> EV to the wm ----
 const win2 = row(l2, 'winbox');
@@ -509,6 +562,41 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     check('clock digits present in the taskbar shot (black-pixel histogram)',
       clock >= 15, clock);
   }
+}
+
+// ---- Aero effects (todos/0063) ----
+{
+  const ae1 = section('aero1'), ae2 = section('aero2'), ae3 = section('aero3');
+  // Aero Peek: injected hover over button 0 raised the popup (wm furniture,
+  // borderless, 160x120, parked above the 28px bar); hover elsewhere drops it.
+  const peek = row(ae1, 'peek');
+  check('taskbar hover raises the Aero Peek popup (todos/0063)',
+    peek.includes('160x120') && peek.includes('b') && peek.includes('+616'),
+    JSON.stringify(ae1));   // parked at 768 - 28(bar) - 120 - 4
+  check('peek popup rides the TOP layer like the bar',
+    (peek.split('\t')[5] || '').includes('T'), peek);
+  check('peek popup is shot-able (pixels live)', out.includes('peek-shot-ok'));
+  check('hover off the buttons dismisses the peek', row(ae2, 'peek') === '',
+    JSON.stringify(ae2));
+  // wmctl thumb: exact box-filter goldens out of the real fixbox frame.
+  check('wmctl thumb writes the aspect-fit PPM header', out.includes('60 40'),
+    out.slice(out.indexOf('=thumb-hdr') - 20, out.indexOf('=thumb-hdr') + 12));
+  check('thumb corner averages fixbox\'s white border', out.includes('thumb-border-white'));
+  check('thumb center averages fixbox\'s orange fill', out.includes('thumb-center-orange'));
+  // Per-pixel alpha end to end (SDL_WINDOW_TRANSPARENT -> record flag 'A'
+  // -> the deterministic src-over composite).
+  const ab = row(ae3, 'alphabox');
+  check('alphabox carries the A flag (todos/0063)',
+    (ab.split('\t')[5] || '').includes('A'), ab);
+  check('winbox rows carry no A flag',
+    !((row(ae3, 'winbox').split('\t')[5] || '').includes('A')), row(ae3, 'winbox'));
+  check('50%-alpha client composites to the exact src-over blend',
+    out.includes('alpha-blend-ok'), out.slice(-2000));
+  // Glass: accepted by the endpoint, invisible to the headless composite.
+  check('wmctl glass toggles on and off',
+    out.includes('glass-on-ok') && out.includes('glass-off-ok'));
+  check('glass never changes the headless composite',
+    out.includes('glass-headless-invariant'));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

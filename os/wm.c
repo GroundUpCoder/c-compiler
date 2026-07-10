@@ -21,6 +21,15 @@
  * at startup — doom finds its WAD by cwd) and are reaped with a WNOHANG
  * poll.
  *
+ * Aero Peek (todos/0063): hovering a taskbar button raises a live
+ * thumbnail popup — another borderless window in this process, fed by
+ * kernel WMP_THUMB replies (deterministic box-filter downscale of the
+ * app's front buffer), refreshed on a frame-tick timer while hovered.
+ * Clicking the preview focuses the window; motion elsewhere on the bar,
+ * any click, EV_SCREEN, or an idle timeout dismisses it (the wm only
+ * sees motion over its own windows, so "pointer parked over an app"
+ * needs the timeout backstop).
+ *
  * The desktop layer (todos/0029) is a third borderless window: fullscreen,
  * pinned to the BOTTOM z layer at create (SET_LAYER -1, todos/0038 — the
  * taskbar and Start menu ride the TOP layer, so app windows can neither
@@ -85,6 +94,15 @@
 #define MAX_DESK     64
 #define DBLCLICK_NS  500000000ULL   /* 500ms, the SDL click-count window */
 
+#define PEEK_W       160    /* Aero Peek popup (todos/0063) */
+#define PEEK_H       120
+#define PEEK_PAD     6      /* face border around the thumbnail */
+#define PEEK_REFRESH 30     /* frame ticks between live THUMB refreshes */
+#define PEEK_IDLE    150    /* ticks without a hover before auto-dismiss —
+                               the wm only sees motion over its OWN windows,
+                               so a pointer parked over an app window can't
+                               tell us to close; this backstop does */
+
 typedef struct {
     int32_t sid, pid;
     int32_t x, y, w, h;                /* tracked geometry (EV_MOVED /
@@ -142,6 +160,22 @@ static int desk_last_idx = -1;     /* double-click tracking (event timestamps) *
 static uint64_t desk_last_ns = 0;
 static int desk_tick = 0;          /* coarse /root/Desktop re-read timer */
 static uint32_t zctr = 0;          /* focus-recency counter (todos/0032) */
+
+/* Aero Peek state (todos/0063): hovering a taskbar button raises a live
+ * thumbnail popup — a fourth borderless window in this process, fed by
+ * kernel THUMB replies (the only R_SHOT this process ever requests, so the
+ * drain can claim every R_SHOT for it). */
+static SDL_Window *peek_win;       /* NULL = closed */
+static SDL_Surface *peek_surf;
+static int32_t peek_sid = 0;       /* our popup's surface (EV_CREATED echo) */
+static int32_t peek_for = 0;       /* the previewed window */
+static int peek_x = 0;             /* popup left edge (from the hovered button) */
+static int peek_pending = 0;       /* THUMB in flight */
+static int peek_tick = 0;          /* live-refresh countdown */
+static int peek_idle = 0;          /* hover-loss auto-dismiss countdown */
+static int peek_dirty = 0;         /* fresh thumb: repaint */
+static uint8_t peek_px[(PEEK_W - 2 * PEEK_PAD) * (PEEK_H - 2 * PEEK_PAD) * 4];
+static int peek_tw = 0, peek_th = 0;
 
 /* ---- 5x7 font (classic HD44780-style patterns), A-Z 0-9 - . ---- */
 static const uint8_t F_AZ[26][7] = {
@@ -562,6 +596,82 @@ static void draw_desk(void) {
     SDL_UpdateWindowSurface(desk_win);
 }
 
+/* ---- Aero Peek (todos/0063) ---- */
+
+static void peek_dismiss(void) {
+    if (peek_win) SDL_DestroyWindow(peek_win);
+    peek_win = NULL;
+    peek_surf = NULL;
+    peek_sid = 0;
+    peek_for = 0;
+    peek_tw = peek_th = 0;
+    peek_dirty = 0;
+    /* peek_pending stays set: an in-flight THUMB reply must still be
+     * consumed off the socket (replies arrive in request order). */
+}
+
+/* Ask the kernel for a fresh thumbnail of the previewed window. */
+static void peek_request(void) {
+    if (peek_pending || !peek_for) return;
+    int32_t a[3] = { peek_for, PEEK_W - 2 * PEEK_PAD, PEEK_H - 2 * PEEK_PAD };
+    if (wmp_send(sock, WMP_THUMB, a, 3) == 0) peek_pending = 1;
+}
+
+static void draw_peek(void) {
+    if (!peek_win) return;
+    uint32_t *px = (uint32_t *)peek_surf->pixels;
+    uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255), sh = rgb(96, 96, 96);
+    fill_s(px, PEEK_W, PEEK_H, 0, 0, PEEK_W, PEEK_H, face);
+    fill_s(px, PEEK_W, PEEK_H, 0, 0, PEEK_W, 1, hi);      /* raised edge */
+    fill_s(px, PEEK_W, PEEK_H, 0, 0, 1, PEEK_H, hi);
+    fill_s(px, PEEK_W, PEEK_H, 0, PEEK_H - 1, PEEK_W, 1, sh);
+    fill_s(px, PEEK_W, PEEK_H, PEEK_W - 1, 0, 1, PEEK_H, sh);
+    for (int y = 0; y < peek_th; y++)
+        for (int x = 0; x < peek_tw; x++) {
+            const uint8_t *p = peek_px + (y * peek_tw + x) * 4;
+            px[((PEEK_H - peek_th) / 2 + y) * PEEK_W + (PEEK_W - peek_tw) / 2 + x] =
+                rgb(p[0], p[1], p[2]);
+        }
+    SDL_UpdateWindowSurface(peek_win);
+}
+
+/* A THUMB reply landed (drain_socket routes every R_SHOT here). Payload:
+ * sid, w, h, then w*h*4 rgba. Keep it only if the popup is still up for
+ * that window at a size that fits the static buffer. */
+static void peek_consume(wmp_hdr *h) {
+    peek_pending = 0;
+    int32_t head[3];
+    if (h->plen < 12 || wmp_read_all(sock, head, 12) != 0) exit(1);
+    uint32_t n = h->plen - 12;
+    int keep = peek_win && head[0] == peek_for &&
+               head[1] > 0 && head[1] <= PEEK_W - 2 * PEEK_PAD &&
+               head[2] > 0 && head[2] <= PEEK_H - 2 * PEEK_PAD &&
+               (uint32_t)(head[1] * head[2] * 4) == n;
+    if (!keep) { if (wmp_skip(sock, n) != 0) exit(1); return; }
+    if (wmp_read_all(sock, peek_px, (int)n) != 0) exit(1);
+    peek_tw = head[1];
+    peek_th = head[2];
+    peek_dirty = 1;
+}
+
+/* Raise the popup for wins[] entry `sid`, centered over its button. Its
+ * EV_CREATED echo ("peek") parks it above the bar on the TOP layer and
+ * hands focus straight back to whatever had it. */
+static void peek_show(int32_t sid, int btn_x, int bw) {
+    if (peek_win && peek_for == sid) return;     /* already up: just hold */
+    peek_dismiss();
+    peek_for = sid;
+    peek_x = btn_x + bw / 2 - PEEK_W / 2;
+    if (peek_x > scr_w - PEEK_W) peek_x = scr_w - PEEK_W;
+    if (peek_x < 0) peek_x = 0;
+    peek_win = SDL_CreateWindow("peek", PEEK_W, PEEK_H, SDL_WINDOW_BORDERLESS);
+    if (!peek_win) { peek_for = 0; return; }
+    peek_surf = SDL_GetWindowSurface(peek_win);
+    peek_tick = 0;
+    peek_request();
+    draw_peek();                       /* bare face until the thumb lands */
+}
+
 /* EV_CYCLE (todos/0032): walk focus. dir > 0 focuses the LEAST recently
  * used window — repeated presses tour the whole ring in LRU order (each
  * FOCUS echo restamps, so the walk converges instead of ping-ponging);
@@ -602,6 +712,7 @@ static int make_bar(void) {
  * don't re-cascade — no placement churn on a mere resize. */
 static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
+    peek_dismiss();                    /* likewise (todos/0063) */
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
@@ -641,6 +752,20 @@ static void handle_event(wmp_hdr *h) {
                  * the stable sort keeps the menu above it. */
                 int32_t ly[2] = { r.sid, 1 };
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
+            } else if (strncmp(r.title, "peek", 5) == 0) {   /* todos/0063 */
+                if (!peek_win) return;         /* dismissed before the echo */
+                peek_sid = r.sid;
+                int32_t a[3] = { r.sid, peek_x, scr_h - BAR_H - PEEK_H - 4 };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t ly[2] = { r.sid, 1 };  /* top layer, like the bar */
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                /* A hover preview must not steal focus from the app. */
+                for (int i = 0; i < nwins; i++)
+                    if (wins[i].focused && !wins[i].minimized) {
+                        int32_t f[1] = { wins[i].sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                        break;
+                    }
             } else if (strncmp(r.title, "desktop", 8) == 0) {   /* todos/0029 */
                 desk_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, 0 };
@@ -693,6 +818,7 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         if (p[0] == menu_sid) menu_sid = 0;               /* defensive (0028) */
+        if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
          * across any close (todos/0031 — the Win95 behavior). */
         for (int i = 0; i < nwins; i++)
@@ -790,6 +916,7 @@ static void drain_socket(void) {
         wmp_hdr h;
         if (wmp_next(sock, &h) != 0) exit(1);      /* endpoint gone: give up */
         if (h.type >= 0x80) handle_event(&h);
+        else if (h.type == WMP_R_SHOT) peek_consume(&h);   /* THUMB (0063) */
         else if (wmp_skip(sock, h.plen) != 0) exit(1);
     }
 }
@@ -808,7 +935,24 @@ static int btn_width(void) {
     return w;
 }
 
+/* Taskbar hover (todos/0063 Aero Peek): motion over a drawn button raises
+ * the live thumbnail popup for its window; anywhere else on the bar drops
+ * it. The Start menu wins conflicts — no previews while it's open. */
+static void bar_motion(float fx) {
+    if (menu_win) return;
+    int bw = btn_width();
+    int rel = (int)fx - START_W - BTN_GAP;
+    int i = rel / (bw + BTN_GAP);
+    int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
+    if (rel >= 0 && rel % (bw + BTN_GAP) < bw && i < nwins &&
+        x + bw <= bar_w - CLOCK_W) {   /* same overflow gate as draw_bar */
+        peek_show(wins[i].sid, x, bw);
+        peek_idle = 0;                 /* still hovering: hold the popup */
+    } else peek_dismiss();
+}
+
 static void bar_click(float fx) {
+    peek_dismiss();                    /* a click acts; the preview drops */
     if ((int)fx < START_W) { menu_toggle(); return; }     /* Start (0028) */
     menu_dismiss();                    /* any other taskbar click dismisses */
     int bw = btn_width();
@@ -873,28 +1017,49 @@ static void frame_cb(void) {
     /* Coarse /root/Desktop watch (todos/0029): one readdir per second-ish
      * of frame ticks — no watch API exists or is needed. */
     if (++desk_tick >= 60) { desk_tick = 0; desk_load(); }
-    /* Three windows, one queue: dispatch by windowID (todos/0028/0029). */
+    /* Four windows, one queue: dispatch by windowID (0028/0029/0063). */
     SDL_WindowID mid = menu_win ? SDL_GetWindowID(menu_win) : 0;
     SDL_WindowID did = desk_win ? SDL_GetWindowID(desk_win) : 0;
+    SDL_WindowID pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
             if (menu_win && e.button.windowID == mid) menu_click(e.button.y);
             else if (desk_win && e.button.windowID == did) {
                 menu_dismiss();        /* a desktop click dismisses (0029) */
+                peek_dismiss();        /* likewise (todos/0063) */
                 desk_down(e.button.x, e.button.y, e.button.timestamp);
+            } else if (peek_win && e.button.windowID == pkid) {
+                int32_t f[1] = { peek_for };   /* click the preview: activate */
+                wmp_send(sock, WMP_FOCUS, f, 1);
+                peek_dismiss();
             } else bar_click(e.button.x);
             mid = menu_win ? SDL_GetWindowID(menu_win) : 0;   /* may toggle */
+            pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
         } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
             if (menu_win && e.motion.windowID == mid) {
                 int idx = ((int)e.motion.y - MENU_PAD) / MENU_ENTRY_H;
                 menu_hover = ((int)e.motion.y >= MENU_PAD && idx < menu_n) ? idx : -1;
+            } else if (desk_win && e.motion.windowID == did) {
+                peek_dismiss();        /* pointer left the bar (0063) */
+            } else if (peek_win && e.motion.windowID == pkid) {
+                peek_idle = 0;         /* hovering the preview holds it */
+            } else {
+                bar_motion(e.motion.x);
+                pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
             }
         } else if (e.type == SDL_EVENT_QUIT) exit(0);
+    }
+    /* Aero Peek housekeeping (todos/0063): keep the thumbnail live while
+     * the popup is up; drop it once nothing has hovered it for a while. */
+    if (peek_win) {
+        if (++peek_idle >= PEEK_IDLE) peek_dismiss();
+        else if (++peek_tick >= PEEK_REFRESH) { peek_tick = 0; peek_request(); }
     }
     draw_bar();
     draw_menu();
     draw_desk();
+    if (peek_dirty) { peek_dirty = 0; draw_peek(); }
 }
 
 int main(void) {

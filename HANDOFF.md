@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-10; 0075 sameboy + 0085 closed)
+# Handoff — start of thread (updated 2026-07-10; 0063 aero closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,55 +7,63 @@
 
 ## Where the repo stands
 
-**0075 (SameBoy — second, cycle-accurate GB/GBC core) is CLOSED** — dev log
-`logs/2026-07-10/0075-sameboy.md`, details in
-`todos/done/0075-sameboy-gbc-emulator.md`. Load-bearing facts:
+**0063 (Aero effects on the WebGPU compositor) is CLOSED** — dev log
+`logs/2026-07-10/0063-aero-effects.md`, durable status in `todos/WM.md`
+"Implementation status — Aero effects" + `todos/done/0063-aero-effects.md`.
+Load-bearing facts:
 
-- `vendor/sameboy/` = SameBoy **v1.0.3** Core subset (no debugger/cheats/
-  rewind/save-state TUs), every local edit marked `PATCH(c-compiler)` and
-  tabled in its README. `/bin/sameboy` + Start-menu entry; **`/bin/gameboy`
-  stays the .gb/.gbc association default** (e2e-asserted).
-- Boot ROMs (SameBoy's own, MIT) are **embedded C arrays** from the
-  official v1.0.3 `sameboy_winsdl` release zip — no rgbds in this repo.
-  The boot-ROM callback must map `GB_BOOT_ROM_CGB_E` (what a CGB-E model
-  actually requests) to the CGB image — missing it = frozen random-color
-  CGB frame while DMG works (the launch bug; e2e guards it).
-- `GB_SECTION`'s `[0]` markers ride the **pre-existing**
-  `--allow-zero-length-arrays` flag (quickjs precedent) — now also wired
-  through `os-common.js` buildProject's own compilerArgs whitelist (new
-  compiler flags used by seeded projects must be added THERE too).
-- Image version is **v45**; menu entry added ⇒ the MENU_ENTRIES lists in
-  `test_wm_service_e2e.js` + `os-shell.mjs` moved together (triple-sync).
+- **All five waves landed**: per-pixel alpha (`SDL_WINDOW_TRANSPARENT` →
+  kernel flag bit3 → WMP_F_ALPHA 32; `winbox alpha` = "alphabox"
+  acceptance app), drop shadows + radius-7 rounded corners (per-quad
+  rounded-rect SDF, still ONE render pass), Aero Peek (kernel
+  `wmThumbnail`/WMP THUMB 0x32 deterministic box filter; wm.c hover
+  popup; `wmctl thumb`/`wmctl hover`), 200ms minimize/restore fly
+  animations (transient `_wmAnims` records, pruned in `wmScene()`), and
+  glass (WMP GLASS 0x1B/`wmctl glass` — segmented backdrop-blur chain,
+  browser pass only).
+- **The 0063 constraint held**: headless goldens bit-exact. Alpha is the
+  one effect implemented in the headless composite too (exact integer
+  src-over behind surface bit3); shadows/corners/anims/glass are
+  invisible to it. Glass OFF is literally the pre-0063 single-pass code
+  path (`segments.length === 1`), not an equivalent one.
+- Image version is **v46**.
 
-**0085 (multi-char char constants, GCC packing) is CLOSED** — spun out of
-0075's compile probe, landed test-first (`multichar_char_const`
-conformance golden). `'SAME'` == 0x53414D45 now; one shared
-`narrowCharConstValue` feeds the lexer CHAR→INT resolution and the PP
-`#if` evaluator.
+**Residue got owners, no new queue items**: notepad's ERROR dialog when
+opening an existing file (pre-existing — verified against the unmodified
+tree) is a seeded finding in `todos/0073`; the aero aesthetics + glass
+perf human eyeball rides `todos/0064` next to the standing pointer-lock
+check.
 
-**Follow-ups filed**: `0086` (sameboy save states + core pickability),
-`0087` (GNU-extension gap triage: offsetof-as-ICE, statement exprs, elvis,
-embedded directives in macro args, `__attribute__((constructor))`,
-vasprintf, bswap builtins — promote lines when a second port hits them).
+**Tests after the change**: kernel suite **42/42** (includes the new
+`test_wm_aero.js`), unit 702/702, browser sweep 16/16 including the new
+`os-aero.mjs` (exact GPU blend, shadow falloff + decay, corner clip,
+live peek popup, anim settle, glass round-trip).
 
-**Tests after the change**: kernel suite **41/41** (includes the new
-`test_sameboy_e2e.js`, 15 checks), unit suite 702/702, browser os-shell
-leg green (menu geometry with 16 entries).
-
-**Next in queue**: run `node todos/queue.js list` — 0063 aero leads.
+**Next in queue**: run `node todos/queue.js list` — 0046 (strace) leads.
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
-sweep rounds so far, a MUST for WM sweep round 3 (`0064`): quake lock on
-click, ESC unlock, click re-lock, VT-switch release.
+sweep rounds so far, a MUST for WM sweep round 3 (`0064`), which now
+also carries the aero eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **NEW (0075)**: SameBoy's core sources compile with `-DGB_INTERNAL` for
-  every TU (frontend included); MIN/MAX are plain ternaries in the
-  vendored defs.h — keep new call sites side-effect-free.
-- **NEW (0075)**: `GB_random` seeds lazily (no constructor attr) — frames
-  that depend on uninitialized CGB palette RAM change colors per run;
-  don't pixel-match those, assert palette structure instead.
+- **NEW (0063): drop shadows are real desktop pixels** — a chromed
+  window darkens ~17px beyond its frame (14 reach + 3 drop). Browser
+  TEAL/pixel asserts near a frame must sample ≥ ~25px out (os-wm,
+  os-scale, os-aero show the pattern). Borderless surfaces cast none.
+- **NEW (0063): a translucent client blends over the chrome frame PLATE
+  (FACE 192), not the desktop** — the frame quad spans the whole window.
+  50%-alpha blue reads [96,96,224]; e2e golden + os-aero agree.
+- **NEW (0063): `wmctl list` FLAGS is 7 chars now** (`A` = has-alpha at
+  [5], layer T/B moved to [6]) — literal FLAGS strings and regexes must
+  carry the extra column.
+- **NEW (0063): wm.c's peek keeps `peek_pending` across dismiss** — an
+  in-flight THUMB reply must still be consumed off the socket (replies
+  are in request order); don't "simplify" that away.
+- 0075: SameBoy core compiles with `-DGB_INTERNAL` everywhere; MIN/MAX
+  are plain ternaries in the vendored defs.h — keep call sites
+  side-effect-free. `GB_random` seeds lazily — don't pixel-match frames
+  that depend on uninitialized CGB palette RAM.
 - **0072**: `wmctl click LABEL`/`settext` take the FIRST win32 app that
   accepts the label — sequence agent-driven test legs so ambiguous labels
   can't land in another app.
@@ -80,7 +88,7 @@ click, ESC unlock, click re-lock, VT-switch release.
   os-shell.mjs must move together ('sameboy' is in all three now).
 - **Editing seeded sources or coreutils.json/bin.json/lib.json**: the
   headless/test/serve paths detect it by mtime (0082). Bump `image.json`
-  `version` (now 45) anyway when an interactive browser tab must pick
+  `version` (now 46) anyway when an interactive browser tab must pick
   the change up (OPFS re-fetch is version-gated only).
 - **Cairo/pixman config is hand-written** (`vendor/cairo/config.h` +
   `src/cairo-features.h`; pixman via two -D flags in lib.json). When
@@ -89,7 +97,8 @@ click, ESC unlock, click re-lock, VT-switch release.
   hard cap 16.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. After `queue.js done`, check `git status` — the internal
-  git-mv can stage a pre-edit blob (re-`git add` the done file).
+  git-mv can stage a pre-edit blob (re-`git add` the done file; it fired
+  again at 0063's close).
 - Two unit goldens encode libc internals (`switch_br_table` stderr,
   `printf` pointer line); `setjmp_unsupported_diag`'s golden encodes the
   setjmp diagnostic wording — moves if the message changes.
@@ -123,10 +132,14 @@ are argv prefixes, resolver stays header-only, seeded Desktop ROM
 launchers stay scripts); 0075's calls (Peanut-GB stays the default
 .gb/.gbc handler — SameBoy is the accuracy option; boot ROMs embedded,
 not fs-seeded; GB_SECTION kept intact rather than flattened; GNU-ism
-fixes are vendored patches until 0087 promotes them).
+fixes are vendored patches until 0087 promotes them); 0063's calls
+(deterministic-or-invisible split per effect; alpha blends over the
+frame plate; glass is kernel STATE but browser-only RENDERING; shadows/
+corners are SDF in the one pass, no extra passes; THUMB is kernel
+mechanism, the peek popup is wm.c policy).
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle: 0063 aero, 0046 strace, 0041 gcstr, 0079 dep-dedup, or 0064
-WM sweep round 3 (the pointer-lock human check is owed)."
+to tackle: 0046 strace, 0041 gcstr, 0079 dep-dedup, 0080 cairo surfaces,
+or 0064 WM sweep round 3 (the pointer-lock human check is owed)."

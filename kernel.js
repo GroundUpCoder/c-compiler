@@ -131,8 +131,10 @@ var OP = {
   // whose front buffer already holds the first frame at the new size — the
   // kernel swaps buffers atomically here, so the compositor never tears.
   // SURFACE_SET_FLAGS (todos/0018) updates the surface flag word (bit0
-  // borderless, bit1 relative-mouse, bit2 resizable); the relative-mouse
-  // bit round-trips to the UI bridge as a pointer-lock request
+  // borderless, bit1 relative-mouse, bit2 resizable, bit3 has-alpha —
+  // todos/0063: per-pixel alpha, composited src-over in both composites);
+  // the relative-mouse bit round-trips to the UI bridge as a pointer-lock
+  // request
   // (onPointerLock). The resizable bit (todos/0021, SDL3 semantics: only
   // SDL_WINDOW_RESIZABLE windows may be resized) gates every resize path
   // — wmResize, WMP RESIZE. Frame drag zones exist on BOTH kinds since
@@ -335,6 +337,15 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *     (xf32/yf32 = wheelX/wheelY, a=direction) | 4 rel (todos/0018:
  *     xf32/yf32 = dx/dy deltas, a=buttons); sid 0 = focused window
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
+ *   THUMB { sid, maxW, maxH }    -> R_SHOT { sid, w, h, rgba } | R_ERR
+ *                                   (todos/0063 Aero Peek: the front buffer
+ *                                   box-filtered down to fit maxW x maxH,
+ *                                   aspect preserved, never upscaled —
+ *                                   deterministic, CPU pixels only)
+ *   GLASS { on }                 -> R_OK   (todos/0063: toggle the Aero
+ *                                   glass tier — browser-compositor-only
+ *                                   chrome backdrop blur; headless
+ *                                   composite ignores it by design)
  * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
  *
  * Map-on-placement (todos/0069): while a subscriber exists, a new surface
@@ -383,8 +394,20 @@ var WMP = {
                                         layer (todos/0038) — -1 bottom (the
                                         desktop layer), 0 normal, +1 top (the
                                         taskbar); z ops never cross layers */
+  GLASS: 0x1B,                       /* { on }: toggle the Aero glass tier
+                                        (todos/0063) — browser-compositor-only
+                                        backdrop blur behind window chrome.
+                                        The headless composite NEVER reads it
+                                        (deterministic goldens); default off */
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   SHOT: 0x30, SHOT_SCREEN: 0x31,
+  THUMB: 0x32,                       /* { sid, maxW, maxH }: downscaled
+                                        front-buffer thumbnail (todos/0063,
+                                        Aero Peek) -> R_SHOT { sid, w, h,
+                                        rgba } aspect-fit inside maxW x maxH
+                                        (never upscaled). Deterministic box
+                                        filter — CPU pixels, so gpu-transport
+                                        surfaces thumb black like wmScreenshot */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
@@ -420,6 +443,9 @@ var WM_DBLCLICK_SLOP = 4;                    // ...and max px drift between the 
 var WM_MAP_TIMEOUT_MS = 200;                 // map-on-placement backstop (todos/0069):
                                              // a WM-managed surface the WM never
                                              // places maps anyway after this
+var WM_ANIM_MS = 200;                        // minimize/restore compositor animation
+                                             // length (todos/0063) — records older
+                                             // than this are pruned from wmScene()
 var WM_COLORS = {                            // RGBA byte tuples
   desktop: [0, 128, 128, 255],               // the teal
   titleFocused: [0, 0, 128, 255],            // navy
@@ -1037,6 +1063,15 @@ function Kernel(opts) {
   this._wmPtrLockActive = false;  // actual lock state (bridge-reported); while
                                   // true, pointer input routes RELATIVE to the
                                   // focused relative-mouse surface (no hit-test)
+  this._wmGlassOn = false;    // Aero glass tier (todos/0063): browser-
+                              // compositor-only backdrop blur behind window
+                              // chrome; toggled via WMP GLASS / wmGlass().
+                              // NEVER read by the headless composite.
+  this._wmAnims = new Map();  // sid -> transient minimize/restore animation
+                              // record (todos/0063): {kind,x,y,w,h,t0} at the
+                              // moment of the transition. Browser-compositor
+                              // visual only — pruned after WM_ANIM_MS, never
+                              // read by the headless composite or hit test.
   // Audio mixer (todos/0017; WM.md "Audio mixing"). Streams register via
   // AUDIO_OPEN; the pump mixes them into the one output ring (audioInit).
   this._audioStreams = new Map(); // aid -> stream (see _audioRpc AUDIO_OPEN)
@@ -2243,6 +2278,9 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         borderless: !!((req.flags | 0) & 1),      // bit0: no kernel chrome (taskbar-class)
         relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
         resizable: !!((req.flags | 0) & 4),       // bit2: SDL_WINDOW_RESIZABLE (0021)
+        hasAlpha: !!((req.flags | 0) & 8),        // bit3: SDL_WINDOW_TRANSPARENT
+                                                  // (todos/0063): per-pixel alpha,
+                                                  // composited src-over
         layer: 0,                 // z layer (todos/0038): -1 bottom / 0 / +1 top;
                                   // set post-create via SET_LAYER / wmSetLayer
         pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
@@ -2282,8 +2320,9 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       break;
     }
     // Update the surface flag word (todos/0018): bit0 borderless, bit1
-    // relative-mouse, bit2 resizable (0021). The pointer-lock sync below
-    // round-trips a wanted-state change to the UI bridge.
+    // relative-mouse, bit2 resizable (0021), bit3 has-alpha (0063). The
+    // pointer-lock sync below round-trips a wanted-state change to the UI
+    // bridge.
     case OP.SURFACE_SET_FLAGS: {
       var sf = this._surfaces.get(req.sid | 0);
       if (!sf || sf.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
@@ -2291,6 +2330,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       sf.borderless = !!(fl & 1);
       sf.relativeMouse = !!(fl & 2);
       sf.resizable = !!(fl & 4);
+      sf.hasAlpha = !!(fl & 8);
       // Resizable and scaled are exclusive modes (todos/0024): granting
       // bit2 snaps the viewport back to the buffer (resizable => dst == w/h).
       if (sf.resizable && (sf.dstW !== sf.w || sf.dstH !== sf.h)) {
@@ -2422,6 +2462,7 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   var s = this._surfaces.get(sid);
   if (!s) return;
   if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
+  this._wmAnims.delete(sid);    // no animating a dead surface (todos/0063)
   this._surfaces.delete(sid);
   var zi = this._zOrder.indexOf(sid);
   if (zi >= 0) this._zOrder.splice(zi, 1);
@@ -2987,6 +3028,7 @@ Kernel.prototype.wmList = function () {
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
                relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
+               hasAlpha: !!s.hasAlpha,          // per-pixel alpha (todos/0063)
                layer: s.layer | 0,
                mapped: !!s.mapped,              // map-on-placement (todos/0069)
                configurePending: !!s.pendingConfigure,
@@ -3036,6 +3078,7 @@ Kernel.prototype.wmFocus = function (sid) {
   if (!s) return false;
   if (s.minimized) {                                            // focus restores
     s.minimized = false;
+    this._wmAnimPush(s, 'restore');   // compositor animation (todos/0063)
     this._wmVersion++;
     this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 0]);
   }
@@ -3148,6 +3191,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   if (!s) return false;
   if (s.minimized) return true;
   s.minimized = true;
+  this._wmAnimPush(s, 'min');   // transient compositor animation (todos/0063)
   this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
   if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
   if (this._wmResizeDrag && this._wmResizeDrag.sid === s.sid) this._wmResizeDrag = null;
@@ -3280,7 +3324,25 @@ Kernel.prototype.wmScreenshotScreen = function () {
     var base = SH_HDR_BYTES + front * s.w * s.h * 4;
     var sx0 = Math.max(0, -s.x), sy0 = Math.max(0, -s.y);
     var sx1 = Math.min(dw, W - s.x), sy1 = Math.min(dh, H - s.y);
-    if (dw === s.w && dh === s.h) {
+    if (s.hasAlpha) {
+      // Per-pixel src-over (todos/0063), deterministic integer math:
+      // out = floor((src*a + dst*(255-a) + 127) / 255) — i.e. src/255
+      // rounded to nearest. Uses the scaled path's nearest dst->src
+      // mapping, which is the identity when unscaled.
+      for (var ay = sy0; ay < sy1; ay++) {
+        var arow = base + Math.floor(ay * s.h / dh) * s.w * 4;
+        var adrow = ((s.y + ay) * W + s.x) * 4;
+        for (var ax = sx0; ax < sx1; ax++) {
+          var asi = arow + Math.floor(ax * s.w / dw) * 4;
+          var adi = adrow + ax * 4;
+          var aa = s.u8[asi + 3], ainv = 255 - aa;
+          out[adi] = (s.u8[asi] * aa + out[adi] * ainv + 127) / 255 | 0;
+          out[adi + 1] = (s.u8[asi + 1] * aa + out[adi + 1] * ainv + 127) / 255 | 0;
+          out[adi + 2] = (s.u8[asi + 2] * aa + out[adi + 2] * ainv + 127) / 255 | 0;
+          out[adi + 3] = 255;
+        }
+      }
+    } else if (dw === s.w && dh === s.h) {
       // Unscaled: straight row blits.
       for (var sy = sy0; sy < sy1; sy++) {
         var src = base + (sy * s.w + sx0) * 4;
@@ -3331,16 +3393,81 @@ Kernel.prototype.wmSetScreen = function (w, h) {
   }
 };
 
+/* Downscaled front-buffer thumbnail (todos/0063, Aero Peek): the surface's
+ * CPU pixels box-filtered to fit maxW x maxH, aspect preserved, never
+ * upscaled. Deterministic (integer accumulate, floor divide) so agents can
+ * golden it; gpu-transport surfaces thumb black, same caveat as
+ * wmScreenshot. Serving it kernel-side keeps the WMP payload small — the
+ * WM asks for exactly the popup size instead of shipping full frames. */
+Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return null;
+  maxW = Math.max(1, Math.min((maxW | 0) || 96, 512));
+  maxH = Math.max(1, Math.min((maxH | 0) || 72, 512));
+  var scale = Math.min(maxW / s.w, maxH / s.h, 1);
+  var tw = Math.max(1, Math.round(s.w * scale));
+  var th = Math.max(1, Math.round(s.h * scale));
+  var front = Atomics.load(s.i32, SH_FLIP) & 1;
+  var base = SH_HDR_BYTES + front * s.w * s.h * 4;
+  var out = new Uint8Array(tw * th * 4);
+  for (var dy = 0; dy < th; dy++) {
+    var sy0 = Math.floor(dy * s.h / th);
+    var sy1 = Math.max(sy0 + 1, Math.floor((dy + 1) * s.h / th));
+    for (var dx = 0; dx < tw; dx++) {
+      var sx0 = Math.floor(dx * s.w / tw);
+      var sx1 = Math.max(sx0 + 1, Math.floor((dx + 1) * s.w / tw));
+      var r = 0, g = 0, b = 0;
+      for (var sy = sy0; sy < sy1; sy++) {
+        var row = base + (sy * s.w + sx0) * 4;
+        for (var sx = sx0; sx < sx1; sx++) {
+          r += s.u8[row]; g += s.u8[row + 1]; b += s.u8[row + 2];
+          row += 4;
+        }
+      }
+      var n = (sy1 - sy0) * (sx1 - sx0);
+      var di = (dy * tw + dx) * 4;
+      out[di] = (r / n) | 0; out[di + 1] = (g / n) | 0;
+      out[di + 2] = (b / n) | 0; out[di + 3] = 255;
+    }
+  }
+  return { w: tw, h: th, rgba: out };
+};
+
+/* Aero glass tier toggle (todos/0063): browser-compositor-only backdrop
+ * blur behind window chrome. Kernel state so wmctl/tests can flip it, but
+ * the headless composite NEVER reads it — goldens stay bit-exact. */
+Kernel.prototype.wmGlass = function (on) {
+  on = !!on;
+  if (this._wmGlassOn !== on) { this._wmGlassOn = on; this._wmVersion++; }
+  return true;
+};
+
+/* Record a transient minimize/restore animation (todos/0063): geometry AT
+ * the transition + a wall-clock stamp. The browser compositor interpolates
+ * from it; wmScene() prunes expired records, so headless kernels just
+ * accumulate-and-drop tiny objects. */
+Kernel.prototype._wmAnimPush = function (s, kind) {
+  this._wmAnims.set(s.sid, { sid: s.sid, kind: kind, x: s.x, y: s.y,
+                             w: s.dstW, h: s.dstH, t0: Date.now() });
+  this._wmVersion++;
+};
+
 /* Scene accessors for the browser compositor (same worker; it may hold the
  * returned surface objects and read their SABs/bitmaps directly). */
 Kernel.prototype.wmScene = function () {
   var self = this;
+  var now = Date.now();                 // prune expired animations (todos/0063)
+  this._wmAnims.forEach(function (a, sid) {
+    if (now - a.t0 > WM_ANIM_MS) self._wmAnims.delete(sid);
+  });
   return {
     version: this._wmVersion,
     screen: { w: this._wmScreen.w, h: this._wmScreen.h },
     focusSid: this._focusSid,
     pointerLockWanted: this._wmPtrLockWanted,   // relative mouse (todos/0018)
     resizeDrag: this._wmResizeDrag,   // rubber-band preview (todos/0019)
+    glass: this._wmGlassOn,           // Aero glass tier (todos/0063)
+    anims: Array.from(this._wmAnims.values()),  // minimize/restore (todos/0063)
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); }).filter(Boolean),
   };
 };
@@ -3378,7 +3505,7 @@ Kernel.prototype._wmpRecord = function (s) {
   var dv = new DataView(rec.buffer);
   var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
-              (s.resizable ? 16 : 0);
+              (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0);
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
                 s.dstW, s.dstH, s.layer | 0];
@@ -3462,6 +3589,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.ACTIVATE: ok(this.wmTitleActivate(g(0))); break;
     case WMP.CYCLE: ok(this.wmCycle(g(0))); break;
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
+    case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores
@@ -3480,12 +3608,14 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       ok(this.wmInjectPointer(g(0), kind, gf(2), gf(3), opts));
       break;
     }
-    case WMP.SHOT: case WMP.SHOT_SCREEN: {
-      var shot = type === WMP.SHOT ? this.wmScreenshot(g(0)) : this.wmScreenshotScreen();
+    case WMP.SHOT: case WMP.SHOT_SCREEN: case WMP.THUMB: {
+      var shot = type === WMP.SHOT ? this.wmScreenshot(g(0))
+        : type === WMP.THUMB ? this.wmThumbnail(g(0), g(1), g(2))   // 0063
+        : this.wmScreenshotScreen();
       if (!shot) { ok(false); break; }
       var head = new Uint8Array(12 + shot.rgba.length);
       var hdv = new DataView(head.buffer);
-      hdv.setInt32(0, type === WMP.SHOT ? g(0) : 0, true);
+      hdv.setInt32(0, type === WMP.SHOT_SCREEN ? 0 : g(0), true);
       hdv.setInt32(4, shot.w, true);
       hdv.setInt32(8, shot.h, true);
       head.set(shot.rgba, 12);
@@ -4898,6 +5028,7 @@ var KERNEL_EXPORTS = {
   WM_BOX_GAP: WM_BOX_GAP,
   WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
   WM_MAP_TIMEOUT_MS: WM_MAP_TIMEOUT_MS,
+  WM_ANIM_MS: WM_ANIM_MS,
   WM_COLORS: WM_COLORS,
   // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
   WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,

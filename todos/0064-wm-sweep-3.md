@@ -28,6 +28,12 @@ third time.
   user32 windows (0058) if landed — HWND-tree windows under
   drag/scale/maximize/kill storms alongside SDL ones; Cairo/0061
   surfaces if landed; 0062/0063 compositor paths if landed.
+- **Aero eyeball (0063 landed — needs the operator, like pointer
+  lock)**: the pixel asserts cover mechanics only. Judge shadows /
+  rounded corners / Aero Peek / the 200ms minimize fly / glass
+  AESTHETICALLY at 60fps in real Chromium, and glass perf with many
+  chromed windows (the blur chain reruns per glass window per frame —
+  no fps counter exists yet, so this is a feel check).
 - Standing checklist (re-check every WM.md known-issues entry):
   - Dawn + SIGKILL (S3 caveat) — retest on the current webgpu pkg.
   - os-gpubox adapter flake — recharacterize if seen.

@@ -5778,8 +5778,11 @@ function createSurfaceSDL({ ctx, hooks }) {
     const fb = allocFb(w, h);
     // SDL_WINDOW_BORDERLESS (0x10) -> kernel surface flags bit0 (no chrome);
     // SDL_WINDOW_RESIZABLE (0x20) -> bit2 (todos/0021: the kernel offers
-    // resize — drag zones, wmResize — only to surfaces that carry it).
-    const kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0);
+    // resize — drag zones, wmResize — only to surfaces that carry it);
+    // SDL_WINDOW_TRANSPARENT (0x40000000) -> bit3 (todos/0063: per-pixel
+    // alpha, composited src-over in both composites).
+    const kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0) |
+                   ((sdlFlags & 0x40000000) ? 8 : 0);
     const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags);
     if (!r || r.errno || !(r.sid > 0)) return null;
     kFlagsBySid.set(r.sid, kFlags);

@@ -49,6 +49,7 @@ const tests = [
   ['test_vi_e2e.js', IMG],       // 0011: busybox vi through the real tty — raw mode, edit sessions
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
   ['test_wm.js'],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
+  ['test_wm_aero.js'],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)
   ['test_wm_e2e.js'],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
   ['test_audio.js'],        // 0017: the kernel mixer — exact-value mixes, resample, lifecycle (no wasm)
   ['test_audio_e2e.js'],    // 0017: real C SDL audio streams — AUDIO_OPEN handshake, mix, SIGKILL drain

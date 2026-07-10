@@ -30,22 +30,46 @@
 
 /* global KERNEL */
 
-// Textured quads with per-vertex color (positions already in NDC; the color
-// modulates the sampled texel — a 1x1 white texture turns it into a solid
-// fill). Same shape as host.js's RENDER_WGSL; alpha-blended source-over.
+// Textured quads with per-vertex color (the color modulates the sampled
+// texel — a 1x1 white texture turns it into a solid fill), plus a per-quad
+// rounded-rect SDF (todos/0063, the Aero wave): every vertex carries its
+// offset from a MASK rect's center, the mask's half extents, a corner
+// radius, and a mode. mode 0 = plain quad (everything pre-0063); mode 1 =
+// clip to the rounded mask rect (window frame corners); mode 2 = drop
+// shadow (alpha falls off with distance OUTSIDE the mask rect). Same base
+// shape as host.js's RENDER_WGSL; alpha-blended source-over.
 var COMP_WGSL = `
-struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f };
-@vertex fn vs(@location(0) pos: vec2f, @location(1) uv: vec2f, @location(2) color: vec4f) -> VO {
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) color: vec4f,
+            @location(2) local: vec2f, @location(3) mask: vec3f, @location(4) mode: f32 };
+@vertex fn vs(@location(0) pos: vec2f, @location(1) uv: vec2f, @location(2) color: vec4f,
+              @location(3) rect: vec4f, @location(4) misc: vec2f) -> VO {
   var o: VO;
   o.pos = vec4f(pos, 0.0, 1.0);
   o.uv = uv;
   o.color = color;
+  o.local = rect.xy;                 // px offset from the mask rect's center
+  o.mask = vec3f(rect.zw, misc.x);   // half extents + corner radius
+  o.mode = misc.y;
   return o;
 }
 @group(0) @binding(0) var samp: sampler;
 @group(0) @binding(1) var tex: texture_2d<f32>;
+const SHADOW_EXT: f32 = 14.0;        // shadow reach in px — MUST MATCH the
+                                     // quad expansion in the JS below
 @fragment fn fs(v: VO) -> @location(0) vec4f {
-  return textureSample(tex, samp, v.uv) * v.color;
+  var c = textureSample(tex, samp, v.uv) * v.color;
+  if (v.mode > 0.5) {
+    // Signed distance to the rounded mask rect (negative inside).
+    let q = abs(v.local) - (v.mask.xy - vec2f(v.mask.z));
+    let d = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - v.mask.z;
+    if (v.mode > 1.5) {              // drop shadow: quadratic falloff
+      let t = clamp(1.0 - d / SHADOW_EXT, 0.0, 1.0);
+      c.a = c.a * t * t;
+    } else {                         // rounded-corner clip, 1px AA edge
+      c.a = c.a * clamp(0.5 - d, 0.0, 1.0);
+    }
+  }
+  return c;
 }
 `;
 
@@ -70,11 +94,13 @@ function startCompositor(kernel, canvas, device) {
     vertex: {
       module: shader, entryPoint: 'vs',
       buffers: [{
-        arrayStride: 32,
+        arrayStride: 56,   // pos(2) uv(2) color(4) rect(4) misc(2) f32s (0063)
         attributes: [
           { shaderLocation: 0, offset: 0, format: 'float32x2' },
           { shaderLocation: 1, offset: 8, format: 'float32x2' },
           { shaderLocation: 2, offset: 16, format: 'float32x4' },
+          { shaderLocation: 3, offset: 32, format: 'float32x4' },
+          { shaderLocation: 4, offset: 48, format: 'float32x2' },
         ],
       }],
     },
@@ -93,14 +119,18 @@ function startCompositor(kernel, canvas, device) {
     primitive: { topology: 'triangle-list' },
   });
   // Nearest sampling (todos/0024) — pixel-art correct, and the same
-  // dst-viewport mapping the headless composite uses.
+  // dst-viewport mapping the headless composite uses. The linear sampler
+  // is the glass blur chain's workhorse (todos/0063): each bilinear
+  // resample is a 2x2 box filter.
   var sampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
-  function bindFor(tex) {
+  var linSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+  function bindWith(tex, samp) {
     return device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: sampler }, { binding: 1, resource: tex.createView() }],
+      entries: [{ binding: 0, resource: samp }, { binding: 1, resource: tex.createView() }],
     });
   }
+  function bindFor(tex) { return bindWith(tex, sampler); }
 
   var whiteTex = device.createTexture({
     size: { width: 1, height: 1 }, format: 'rgba8unorm',
@@ -119,36 +149,132 @@ function startCompositor(kernel, canvas, device) {
   var COL_BORDER = norm(K.WM_COLORS.border);
   var WHITE = [1, 1, 1, 1];
   var BLACK = [0, 0, 0, 1];
+  // Glass-mode title tints (todos/0063): the same focus colors, translucent
+  // so the blurred backdrop shows through.
+  var COL_FOCUS_GLASS = [COL_FOCUS[0], COL_FOCUS[1], COL_FOCUS[2], 0.55];
+  var COL_BLUR_GLASS = [COL_BLUR[0], COL_BLUR[1], COL_BLUR[2], 0.55];
 
-  // ---- per-frame quad batch: one vertex buffer, one pass, one draw per
-  // contiguous same-texture run (chrome runs batch on the white texture).
-  var vdata = new Float32Array(8 * 6 * 256);
+  // ---- per-frame quad batch: one vertex buffer, one draw per contiguous
+  // same-texture run (chrome runs batch on the white texture). With glass
+  // OFF the whole frame is ONE segment = one render pass, exactly the 0055
+  // shape. Glass (todos/0063) splits the frame into segments: a segment
+  // whose `blur` flag is set gets the downsample/blur chain run over
+  // everything already composited before its quads draw, so its glass
+  // chrome samples what is genuinely BEHIND that window.
+  var vdata = new Float32Array(14 * 6 * 256);
   var vfloats = 0;
-  var runs = [];                 // { bind, quads }
+  var segments = [];             // { blur, runs: [{ bind, quads }] }
+  var runs = null;               // current segment's runs
   var frameW = 1, frameH = 1;
   var vbuf = null, vbufBytes = 0;   // persistent, grown — never per-frame churn
 
-  function pushQuad(bind, x, y, w, h, color, u0, v0, u1, v1) {
-    if (u0 === undefined) { u0 = 0; v0 = 0; u1 = 1; v1 = 1; }
-    if (vfloats + 48 > vdata.length) {
+  function newSegment(blur) {
+    runs = [];
+    segments.push({ blur: !!blur, runs: runs });
+  }
+
+  // opts (all optional): u0/v0/u1/v1 explicit texture coords; mode/radius +
+  // mx/my/mw/mh the SDF mask rect (defaults to the quad itself) — see the
+  // shader comment. Plain callers just omit opts.
+  function pushQuad(bind, x, y, w, h, color, opts) {
+    var u0 = 0, v0 = 0, u1 = 1, v1 = 1, mode = 0, radius = 0;
+    var mx = x, my = y, mw = w, mh = h;
+    if (opts) {
+      if (opts.u0 !== undefined) { u0 = opts.u0; v0 = opts.v0; u1 = opts.u1; v1 = opts.v1; }
+      mode = opts.mode || 0;
+      radius = opts.radius || 0;
+      if (opts.mx !== undefined) { mx = opts.mx; my = opts.my; mw = opts.mw; mh = opts.mh; }
+    }
+    if (vfloats + 84 > vdata.length) {
       var nd = new Float32Array(vdata.length * 2);
       nd.set(vdata.subarray(0, vfloats));
       vdata = nd;
     }
-    var x0 = x / frameW * 2 - 1, y0 = 1 - y / frameH * 2;
-    var x1 = (x + w) / frameW * 2 - 1, y1 = 1 - (y + h) / frameH * 2;
+    var cx = mx + mw / 2, cy = my + mh / 2, hw = mw / 2, hh = mh / 2;
     var n = vfloats, d = vdata;
-    var vert = function (px, py, pu, pv) {
-      d[n] = px; d[n + 1] = py; d[n + 2] = pu; d[n + 3] = pv;
+    var vert = function (sx, sy, pu, pv) {
+      d[n] = sx / frameW * 2 - 1; d[n + 1] = 1 - sy / frameH * 2;
+      d[n + 2] = pu; d[n + 3] = pv;
       d[n + 4] = color[0]; d[n + 5] = color[1]; d[n + 6] = color[2]; d[n + 7] = color[3];
-      n += 8;
+      d[n + 8] = sx - cx; d[n + 9] = sy - cy;
+      d[n + 10] = hw; d[n + 11] = hh;
+      d[n + 12] = radius; d[n + 13] = mode;
+      n += 14;
     };
-    vert(x0, y0, u0, v0); vert(x1, y0, u1, v0); vert(x0, y1, u0, v1);
-    vert(x0, y1, u0, v1); vert(x1, y0, u1, v0); vert(x1, y1, u1, v1);
+    vert(x, y, u0, v0); vert(x + w, y, u1, v0); vert(x, y + h, u0, v1);
+    vert(x, y + h, u0, v1); vert(x + w, y, u1, v0); vert(x + w, y + h, u1, v1);
     vfloats = n;
     var last = runs.length ? runs[runs.length - 1] : null;
     if (last && last.bind === bind) last.quads++;
     else runs.push({ bind: bind, quads: 1 });
+  }
+
+  // ---- Aero chrome constants (todos/0063) ----
+  var CORNER_R = 7;                        // frame corner radius, px
+  var SHADOW_EXT = 14;                     // MUST MATCH the shader constant
+  var SHADOW_DY = 3;                       // shadow drop below the frame
+  var SHADOW_FOCUS = [0, 0, 0, 0.5];       // focused window: deeper shadow
+  var SHADOW_BLUR = [0, 0, 0, 0.3];
+  var GLASS_TINT = [0.75, 0.8, 0.86, 0.5]; // whitish Aero frame tint
+
+  // ---- glass render targets (todos/0063), created on first use and on
+  // resize: the scene composites into sceneTex; the blur chain is three
+  // bilinear downsamples + one upsample (scene -> 1/2 -> 1/4 -> 1/8 -> 1/4),
+  // each a fullscreen blit — every resample is a 2x2 box filter, so glass
+  // chrome samples a ~cheap-Kawase blur of what's behind it.
+  var glass = null;   // { w, h, scene, sceneView, sceneBlit, texes, views, linBinds }
+  function makeTarget(w, h) {
+    return device.createTexture({
+      size: { width: Math.max(1, w), height: Math.max(1, h) }, format: format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+  }
+  function ensureGlassTargets() {
+    if (glass && glass.w === frameW && glass.h === frameH) return glass;
+    if (glass) glass.all.forEach(function (t) { t.destroy(); });
+    var scene = makeTarget(frameW, frameH);
+    var half = makeTarget(frameW >> 1, frameH >> 1);
+    var quarter = makeTarget(frameW >> 2, frameH >> 2);
+    var eighth = makeTarget(frameW >> 3, frameH >> 3);
+    glass = {
+      w: frameW, h: frameH,
+      all: [scene, half, quarter, eighth],
+      sceneView: scene.createView(),
+      halfView: half.createView(), quarterView: quarter.createView(),
+      eighthView: eighth.createView(),
+      sceneBlit: bindFor(scene),               // final 1:1 blit to the canvas
+      sceneLin: bindWith(scene, linSampler),
+      halfLin: bindWith(half, linSampler),
+      quarterLin: bindWith(quarter, linSampler),   // what glass chrome samples
+      eighthLin: bindWith(eighth, linSampler),
+    };
+    return glass;
+  }
+  // The static fullscreen quad the blit/blur passes draw (NDC corners, so
+  // it fits any target size).
+  var blitBuf = device.createBuffer({ size: 6 * 56, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  (function () {
+    var bd = new Float32Array(6 * 14);
+    var corners = [[-1, 1, 0, 0], [1, 1, 1, 0], [-1, -1, 0, 1],
+                   [-1, -1, 0, 1], [1, 1, 1, 0], [1, -1, 1, 1]];
+    for (var i = 0; i < 6; i++) {
+      var o = i * 14;
+      bd[o] = corners[i][0]; bd[o + 1] = corners[i][1];
+      bd[o + 2] = corners[i][2]; bd[o + 3] = corners[i][3];
+      bd[o + 4] = 1; bd[o + 5] = 1; bd[o + 6] = 1; bd[o + 7] = 1;
+    }
+    device.queue.writeBuffer(blitBuf, 0, bd);
+  })();
+  function blitPass(enc, view, bind) {
+    var p = enc.beginRenderPass({
+      colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store',
+                           clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+    });
+    p.setPipeline(pipeline);
+    p.setVertexBuffer(0, blitBuf);
+    p.setBindGroup(0, bind);
+    p.draw(6);
+    p.end();
   }
 
   // ---- shm surfaces: per-surface GPUTexture, upload gated on frameSeq
@@ -244,6 +370,16 @@ function startCompositor(kernel, canvas, device) {
     return c;
   }
 
+  // Where a minimizing window flies to (todos/0063): a slab at the bottom
+  // edge under the window's center — the taskbar strip, without needing to
+  // know the WM's button layout. k in [0,1] walks start -> target.
+  function animRect(a, k) {
+    var cx = Math.max(32, Math.min(a.x + a.w / 2, frameW - 32));
+    var tx = cx - 24, ty = frameH - 22, tw = 48, th = 14;
+    return { x: a.x + (tx - a.x) * k, y: a.y + (ty - a.y) * k,
+             w: a.w + (tw - a.w) * k, h: a.h + (th - a.h) * k };
+  }
+
   // Resize rubber band (todos/0019): Win95 outline semantics — 4-on/4-off
   // hairline dashes (was setLineDash([4,4]) strokeRect), outer 1px ring.
   function dashOutline(x, y, w, h) {
@@ -267,25 +403,71 @@ function startCompositor(kernel, canvas, device) {
       gctx.configure({ device: device, format: format, alphaMode: 'opaque' });
       confW = frameW; confH = frameH;
     }
-    vfloats = 0; runs.length = 0;
+    vfloats = 0; segments.length = 0; newSegment(false);
+    var now = Date.now();   // anim clock — the epoch the kernel stamps t0 with
 
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
-      if (s.minimized || !s.mapped) continue;  // off screen, still in the scene
-                                               // (unmapped: awaiting the WM's
-                                               // placement, todos/0069)
+      // Minimize/restore animation (todos/0063): a transient kernel record;
+      // the content flies to/from the taskbar strip and fades — a 200ms
+      // flourish drawn WITHOUT chrome, never hit-testable (the kernel's
+      // minimized/hit-test state is already final).
+      var anim = null, ak = 0;
+      for (var an = 0; an < scene.anims.length; an++)
+        if (scene.anims[an].sid === s.sid) { anim = scene.anims[an]; break; }
+      if (anim) {
+        var lin = (now - anim.t0) / K.WM_ANIM_MS;
+        if (lin >= 1 || lin < 0) anim = null;
+        else ak = 1 - (1 - lin) * (1 - lin);   // ease-out
+      }
+      if (s.minimized) {                       // off screen, still in the scene
+        if (anim && anim.kind === 'min') {
+          var mr = animRect(anim, ak);
+          pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s), mr.x, mr.y, mr.w, mr.h,
+                   [1, 1, 1, 1 - ak]);
+        }
+        continue;
+      }
+      if (!s.mapped) continue;                 // awaiting the WM's placement
+                                               // (todos/0069)
+      if (anim && anim.kind === 'restore') {   // fly back out of the bar
+        var rr = animRect(anim, 1 - ak);
+        pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s), rr.x, rr.y, rr.w, rr.h,
+                 [1, 1, 1, ak]);
+        continue;                              // chrome lands with the anim
+      }
       var dw = s.dstW, dh = s.dstH;            // on-screen viewport (todos/0024)
+      var focused = s.sid === scene.focusSid;
       // Chrome frame first (the resize border sits UNDER title+client),
       // then client pixels; the next window in z covers both — painter's
-      // algorithm, exactly the Canvas2D ordering.
+      // algorithm, exactly the Canvas2D ordering. Since 0063 the frame is a
+      // rounded-corner SDF quad over a drop shadow; in glass mode it is the
+      // blurred backdrop + tint instead of the flat face gray.
       if (!s.borderless) {
-        pushQuad(whiteBind, s.x - K.WM_BORDER, s.y - K.WM_TITLE_H - K.WM_BORDER,
-          dw + 2 * K.WM_BORDER, K.WM_TITLE_H + dh + 2 * K.WM_BORDER, COL_BORDER);
+        var fx = s.x - K.WM_BORDER, fy = s.y - K.WM_TITLE_H - K.WM_BORDER;
+        var fw = dw + 2 * K.WM_BORDER, fh = K.WM_TITLE_H + dh + 2 * K.WM_BORDER;
+        pushQuad(whiteBind, fx - SHADOW_EXT, fy + SHADOW_DY - SHADOW_EXT,
+          fw + 2 * SHADOW_EXT, fh + 2 * SHADOW_EXT,
+          focused ? SHADOW_FOCUS : SHADOW_BLUR,
+          { mode: 2, radius: CORNER_R, mx: fx, my: fy + SHADOW_DY, mw: fw, mh: fh });
+        if (scene.glass) {
+          // Glass (todos/0063): blur everything composited so far (= what
+          // is below this window), then draw the frame sampling it.
+          var gt = ensureGlassTargets();
+          newSegment(true);
+          pushQuad(gt.quarterLin, fx, fy, fw, fh, WHITE,
+            { mode: 1, radius: CORNER_R, u0: fx / frameW, v0: fy / frameH,
+              u1: (fx + fw) / frameW, v1: (fy + fh) / frameH });
+          pushQuad(whiteBind, fx, fy, fw, fh, GLASS_TINT, { mode: 1, radius: CORNER_R });
+        } else {
+          pushQuad(whiteBind, fx, fy, fw, fh, COL_BORDER, { mode: 1, radius: CORNER_R });
+        }
       }
       pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s), s.x, s.y, dw, dh, WHITE);
       if (s.borderless) continue;              // taskbar-class: bare pixels
       pushQuad(whiteBind, s.x, s.y - K.WM_TITLE_H, dw, K.WM_TITLE_H,
-        s.sid === scene.focusSid ? COL_FOCUS : COL_BLUR);
+        scene.glass ? (focused ? COL_FOCUS_GLASS : COL_BLUR_GLASS)
+                    : (focused ? COL_FOCUS : COL_BLUR));
       // Title-bar boxes, Win95 order [min][max][close] (todos/0030) — the
       // same offsets as the kernel hit test and the headless composite;
       // flat-rect glyphs (bar / hollow box) + the rasterized 'x'.
@@ -340,23 +522,53 @@ function startCompositor(kernel, canvas, device) {
     }
     if (vfloats) device.queue.writeBuffer(vbuf, 0, vdata, 0, vfloats);
     var enc = device.createCommandEncoder();
-    var pass = enc.beginRenderPass({
-      colorAttachments: [{
-        view: gctx.getCurrentTexture().createView(),
-        loadOp: 'clear', storeOp: 'store', clearValue: CLEAR_DESKTOP,   // the desktop fill
-      }],
-    });
-    if (vfloats) {
+    var canvasView = gctx.getCurrentTexture().createView();
+    var first = 0;   // running vertex offset — segments share the one vbuf
+    var drawSegment = function (pass, seg) {
+      if (!seg.runs.length) return;
       pass.setPipeline(pipeline);
       pass.setVertexBuffer(0, vbuf);
-      var first = 0;
-      for (var q = 0; q < runs.length; q++) {
-        pass.setBindGroup(0, runs[q].bind);
-        pass.draw(runs[q].quads * 6, 1, first);
-        first += runs[q].quads * 6;
+      for (var q = 0; q < seg.runs.length; q++) {
+        pass.setBindGroup(0, seg.runs[q].bind);
+        pass.draw(seg.runs[q].quads * 6, 1, first);
+        first += seg.runs[q].quads * 6;
       }
+    };
+    if (segments.length === 1) {
+      // No glass chrome this frame: ONE pass straight to the canvas — the
+      // 0055 shape, byte-for-byte the pre-0063 fast path.
+      var pass = enc.beginRenderPass({
+        colorAttachments: [{
+          view: canvasView,
+          loadOp: 'clear', storeOp: 'store', clearValue: CLEAR_DESKTOP,   // the desktop fill
+        }],
+      });
+      drawSegment(pass, segments[0]);
+      pass.end();
+    } else {
+      // Glass (todos/0063): composite into sceneTex segment by segment;
+      // before a blur segment's quads draw, run the downsample chain over
+      // what's already there — its glass chrome then samples exactly the
+      // content below that window. One final 1:1 blit presents the scene.
+      var gt2 = ensureGlassTargets();
+      for (var si = 0; si < segments.length; si++) {
+        if (segments[si].blur) {
+          blitPass(enc, gt2.halfView, gt2.sceneLin);
+          blitPass(enc, gt2.quarterView, gt2.halfLin);
+          blitPass(enc, gt2.eighthView, gt2.quarterLin);
+          blitPass(enc, gt2.quarterView, gt2.eighthLin);   // up: softens
+        }
+        var sp = enc.beginRenderPass({
+          colorAttachments: [{
+            view: gt2.sceneView, loadOp: si === 0 ? 'clear' : 'load',
+            storeOp: 'store', clearValue: CLEAR_DESKTOP,
+          }],
+        });
+        drawSegment(sp, segments[si]);
+        sp.end();
+      }
+      blitPass(enc, canvasView, gt2.sceneBlit);
     }
-    pass.end();
     device.queue.submit([enc.finish()]);
     requestAnimationFrame(draw);
   }

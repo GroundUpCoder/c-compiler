@@ -600,6 +600,61 @@ design, not worth policy). Storm-authoring gotchas for round 3 live in
 chrome, taskbar-button focus-then-minimize semantics, `&;` hush parse
 error, `__osScreen` only tracks the viewport on VT2).
 
+## Implementation status — Aero effects (landed 2026-07-10, todos/0063)
+
+The DWM/Aero visual wave on the 0055 WebGPU pass, in the item's dependency
+order. **The 0063 constraint held everywhere: the headless deterministic
+composite never loosened a golden — each effect is either implemented
+deterministically there too (alpha) or gated out of it entirely (shadows,
+corners, animations, glass).**
+
+- **Per-pixel alpha**: `SDL_WINDOW_TRANSPARENT` (compiler.js SDL3 header,
+  real SDL3 value) → host.js kernel-flag **bit3 `hasAlpha`** (create +
+  SET_FLAGS) → **WMP_F_ALPHA 32** in records (`A` in the wider 7-char
+  `wmctl list` FLAGS column). The browser pass always blended (straight
+  src-over pipeline); the headless `wmScreenshotScreen` now honors bit3
+  with an exact integer src-over (`(src*a + dst*(255-a) + 127)/255`,
+  nearest dst→src mapping so scaled windows blend too). `winbox alpha`
+  (title "alphabox", 50%-alpha blue) is the acceptance app.
+- **Drop shadows + rounded corners**: the compositor's vertex layout grew
+  a per-quad rounded-rect SDF (offset-from-center, half-extents, radius,
+  mode): mode 1 clips the chrome frame to radius 7, mode 2 is the shadow
+  (quadratic falloff over SHADOW_EXT 14px, +3px drop, deeper when
+  focused). Still one render pass, one vertex buffer; borderless surfaces
+  get neither.
+- **Aero Peek**: kernel-side `wmThumbnail` / **WMP THUMB 0x32** → R_SHOT
+  (deterministic box filter, aspect-fit ≤ maxW×maxH, never upscaled —
+  goldenable; gpu-transport surfaces thumb black like SHOT). wm.c raises
+  a 160×120 "peek" popup on taskbar-button hover (borderless, top layer,
+  focus handed straight back), refreshes it every 30 ticks, dismisses on
+  click/motion-elsewhere/EV_SCREEN/150-tick idle backstop (the wm only
+  sees motion over its own windows). `wmctl thumb SID [W H] [FILE]`
+  writes it as PPM; `wmctl hover SID X Y` injects absolute motion to
+  drive it headless.
+- **Minimize/restore animation**: kernel keeps transient records
+  (`_wmAnims`: geometry at transition + t0, pruned after WM_ANIM_MS
+  200ms) exposed via `wmScene().anims`; the browser compositor flies a
+  fading, chrome-less copy to/from a taskbar-strip slab (ease-out).
+  Never hit-testable, never in the headless composite — the kernel's
+  minimized state is already final when the record is born.
+- **Glass**: **WMP GLASS 0x1B** / `wmGlass()` / `wmctl glass 0|1` toggles
+  a browser-only tier: the frame plate samples a cheap-Kawase blur of
+  what is genuinely BELOW that window (scene→½→¼→⅛→¼ bilinear chain),
+  under a whitish tint + 55%-alpha title colors. Glass ON splits the
+  frame into segments (blur chain runs before each glass window's
+  quads); glass OFF is byte-identical to the pre-0063 single-pass shape.
+  `_wmGlassOn` lives in the kernel so agents can flip it, but the
+  headless composite never reads it.
+
+Tests: `tests/kernel/test_wm_aero.js` (blend goldens incl. scaled +
+extremes, thumbnail box-filter math, glass headless invariance, anim
+record lifecycle), THUMB/GLASS/F_ALPHA legs in test_wm_policy.js, real
+alphabox/thumb/glass/peek legs in test_wm_service_e2e.js (wmctl hover
+drives the popup), `tests/browser/os-aero.mjs` (GPU pixels: exact
+src-over blend, shadow falloff, corner clip, live peek popup, anim
+settle, glass round-trip). Shadow-adjacent TEAL samples in
+os-wm/os-scale/os-quake moved out of the 14px reach. Image v46.
+
 ## Implementation status — z layers (landed 2026-07-08, todos/0038)
 
 **Decision: kernel mechanism, not reactive wm.c policy.** Each surface

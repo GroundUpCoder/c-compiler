@@ -386,6 +386,32 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('screen shot pixels match the direct composite',
     String(px(f.bytes.subarray(20), 640, 320, 460)) === '10,20,30,255');
 
+  // ---- Aero effects (todos/0063): THUMB, GLASS, the F_ALPHA record bit ----
+  f = await cmd(wm, WMP.THUMB, [c1.sid, 16, 16]);
+  check('THUMB -> R_SHOT with aspect-fit dims (64x48 into 16x16 = 16x12)',
+    f.type === WMP.R_SHOT && f.g(0) === c1.sid && f.g(1) === 16 && f.g(2) === 12 &&
+    f.plen === 12 + 16 * 12 * 4, JSON.stringify([f.g(0), f.g(1), f.g(2), f.plen]));
+  check('THUMB pixels are the box-filtered present',
+    String(px(f.bytes.subarray(20), 16, 8, 6)) === '200,0,0,255');
+  f = await cmd(wm, WMP.THUMB, [999, 16, 16]);
+  check('THUMB bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  f = await cmd(wm, WMP.GLASS, [1]);
+  check('GLASS on -> R_OK + scene bit', f.type === WMP.R_OK && kernel.wmScene().glass === true);
+  f = await cmd(wm, WMP.GLASS, [0]);
+  check('GLASS off -> R_OK + scene bit', f.type === WMP.R_OK && kernel.wmScene().glass === false);
+  // Has-alpha surfaces (create flags bit3) carry record flag bit5.
+  const fbAl = makeFb(16, 16);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbAl.sab, ring: null });
+  const cAl = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 16, h: 16, title: 'glassy', flags: 8 });
+  f = await readEvent(wm);
+  check('EV_CREATED record flag bit5 = has-alpha (todos/0063)',
+    f.type === WMP.EV_CREATED && rec(f).sid === cAl.sid && (rec(f).flags & 32) === 32,
+    JSON.stringify(rec(f)));
+  await readEvent(wm);                                   // its EV_FOCUS
+  await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: cAl.sid });
+  await readEvent(wm);                                   // EV_DESTROYED
+  await readEvent(wm);                                   // the focus fall's EV_FOCUS
+
   // ---- resize: RESIZE command -> client renegotiates -> EV_CONFIGURED ----
   f = await cmd(wm, WMP.RESIZE, [c1.sid, 100, 70]);
   check('RESIZE -> R_OK', f.type === WMP.R_OK);
