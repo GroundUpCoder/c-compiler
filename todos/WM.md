@@ -313,12 +313,21 @@ and never per-pixel RPCs); compute and GPU draw calls pay nothing.
   the kernel sound server" below.
 - **`direct` transport promotion** — light it up when a fullscreen app
   measurably wants the copy back; needs the two-hop OffscreenCanvas
-  transfer spike.
+  transfer spike. **Deferred (TODO 0062, parked at the bottom of the
+  queue):** the default `gpu` transport already stays GPU→GPU, so `direct`
+  saves exactly one intra-GPU copy per frame — a net-new present codepath
+  for marginal gain. Not worth building until a fullscreen app is measured
+  to need it. The invariant it would prove (composited pixels never touch
+  CPU RAM outside `wmctl shot`) already holds on the `gpu` path.
 - ~~**wasm terminal app**~~ — landed with the pty layer (todos/done/0020);
   see "The terminal" above.
 - **Damage rects / partial present** — optimization, after correctness.
 - **Cross-agent WebGPU sharing** — if the spec ships it, `gpu` present
-  becomes zero-copy at the same seam.
+  becomes zero-copy at the same seam. **Independent of `direct`** (it is an
+  in-place upgrade of the existing `gpu` transport — swap
+  `copyExternalImageToTexture` for an import behind a capability probe, no
+  new codepath), so 0062's deferral does not touch it; tracked here on the
+  `gpu` transport, do it when the spec lands.
 - ~~**Screen geometry / VTs / scaling fixed-size clients**~~ — designed
   below ("Screen, VTs, and scaling fixed-size clients"); VT switching
   LANDED (todos/done/0022), dynamic screen resolution LANDED

@@ -1,6 +1,12 @@
 # 0062 — zero-copy present (direct transport + cross-agent seam)
 
-- **Status**: open
+- **Status**: deferred (parked at the bottom of the queue) — revisit only
+  when a fullscreen app is *measured* to need the last copy back. The
+  default `gpu` transport already stays GPU→GPU, so `direct` buys exactly
+  one intra-GPU copy per frame at the cost of a net-new present codepath.
+  The cross-agent-sharing half is **not** deferred with it: it is an
+  in-place upgrade of the `gpu` transport (see `todos/WM.md`, "Cross-agent
+  WebGPU sharing"), do it when the spec ships.
 - **Design**: `todos/WM.md` (transports; "Open questions: `direct`
   transport promotion" and "Cross-agent WebGPU sharing")
 
