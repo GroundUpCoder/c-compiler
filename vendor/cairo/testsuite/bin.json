@@ -1,0 +1,24 @@
+{
+  "bin": true,
+  "name": "cairotests",
+  "description": "upstream cairo test-suite subset vs upstream reference PNGs",
+  "deps": ["../lib.json"],
+  "includes": ["."],
+  "sources": [
+    "runner.c",
+    "fill-rule.c",
+    "caps-joins.c",
+    "paint.c",
+    "gradient-alpha.c",
+    "linear-gradient-reflect.c",
+    "rounded-rectangle-fill.c",
+    "rounded-rectangle-stroke.c",
+    "dash-curve.c",
+    "miter-precision.c",
+    "random-intersections-eo.c",
+    "mesh-pattern-overlap.c",
+    "clip-fill.c",
+    "unaligned-box.c",
+    "close-path.c"
+  ]
+}

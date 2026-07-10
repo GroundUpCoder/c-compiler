@@ -88,7 +88,9 @@ MICROPYTHON_UPSTREAM_TEST_DIR = os.path.join(MICROPYTHON_DIR, "tests")
 FAKEGIT_DIR = os.path.join(VENDOR_DIR, "fakegit")
 FAKEGIT_TEST_DIR = os.path.join(SCRIPT_DIR, "fakegit")
 
-ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "ext", "projects", "zlib", "lua", "freetype", "libpng", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz", "fakegit"]
+CAIRO_DIR = os.path.join(VENDOR_DIR, "cairo")
+
+ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "ext", "projects", "zlib", "lua", "freetype", "libpng", "cairo", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz", "fakegit"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -706,6 +708,45 @@ def run_freetype_tests(results, filter_str=None):
     finally:
         import shutil
         shutil.rmtree(work, ignore_errors=True)
+
+
+# --- cairo tests (todos/0061) ---
+#
+# Three binaries under vendor/cairo/:
+#   bin.json           — smoke test: analytic pixel asserts (gradients, AA,
+#                        clip) + cairo-ft text + PNG round-trip
+#   demo/bin.json      — /bin/cairodemo's headless selftest (anchor pixels)
+#   testsuite/bin.json — 14 UNMODIFIED upstream cairo test programs compared
+#                        against upstream reference PNGs (9 pixel-exact)
+
+def run_cairo_tests(results, filter_str=None):
+    cases = [
+        ("cairo/smoke", os.path.join(CAIRO_DIR, "bin.json"),
+         [FREETYPE_FONT], "cairo 1.18.4 ok"),
+        ("cairo/demo-selftest", os.path.join(CAIRO_DIR, "demo", "bin.json"),
+         ["selftest", FREETYPE_FONT], "cairodemo selftest ok"),
+        ("cairo/upstream-suite", os.path.join(CAIRO_DIR, "testsuite", "bin.json"),
+         [os.path.join(CAIRO_DIR, "testsuite", "reference")],
+         "14 upstream tests ok"),
+    ]
+    for test_name, bin_json, args, want in cases:
+        if filter_str and filter_str not in test_name:
+            continue
+        wasm, err = build_project(bin_json, timeout=300)
+        if wasm is None:
+            results.record(test_name, False, f"Build failed:\n{err}")
+            continue
+        r = subprocess.run(
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm, *args],
+            capture_output=True, text=True, timeout=120, cwd=ROOT_DIR,
+        )
+        if r.returncode != 0:
+            results.record(test_name, False,
+                           f"Exit code {r.returncode}\nstdout: {r.stdout}\nstderr: {r.stderr}")
+        elif want in r.stdout:
+            results.record(test_name, True)
+        else:
+            results.record(test_name, False, f"Unexpected output:\n{r.stdout}")
 
 
 # --- libpng tests ---
@@ -1766,6 +1807,10 @@ def main():
         elif cat == "libpng":
             results.section("libpng")
             run_libpng_tests(results, filter_str=args.filter)
+
+        elif cat == "cairo":
+            results.section("cairo")
+            run_cairo_tests(results, filter_str=args.filter)
 
         elif cat == "micropython":
             results.section("micropython")

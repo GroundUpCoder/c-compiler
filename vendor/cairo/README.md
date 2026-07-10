@@ -55,4 +55,30 @@ node --experimental-wasm-exnref host.js build/cairo-test.wasm vendor/freetype/de
 # -> cairo 1.18.4 ok
 ```
 
-The windowed demo seeded into the OS is `/bin/cairodemo` (`demo/`).
+The windowed demo seeded into the OS is `/bin/cairodemo` (`demo/`): the
+vector scene (radial disc, dashed ring, translucent star, bezier ribbon,
+cairo-ft label) drawn into an SDL window surface; `cairodemo selftest`
+renders it headless with anchor-pixel asserts, `cairodemo png OUT` dumps it.
+
+## Upstream test suite (`testsuite/`) — the corpus as oracle
+
+14 UNMODIFIED programs from upstream `test/` (fill-rule, caps-joins, paint,
+gradient-alpha, linear-gradient-reflect, rounded-rectangle-fill/-stroke,
+dash-curve, miter-precision, random-intersections-eo, mesh-pattern-overlap,
+clip-fill, unaligned-box, close-path) compiled against a minimal
+`cairo-test.h` shim (`CAIRO_TEST` registers a case struct; runner.c
+replicates the harness's CLEAR-init and reimplements
+`cairo_test_paint_checkered` verbatim) and compared against the UPSTREAM
+reference PNGs in `testsuite/reference/`:
+
+```bash
+node compiler.js vendor/cairo/testsuite/bin.json -o build/cairotests.wasm
+node --experimental-wasm-exnref host.js build/cairotests.wasm vendor/cairo/testsuite/reference
+# -> cairotests: 14 upstream tests ok   (9 of them pixel-EXACT)
+```
+
+Diff policy (runner.c): per-channel TOLERANCE 3 with a bounded outlier
+count for AA-seam jitter vs the pixman that rendered the refs (observed
+worst 9/255), and HARD_TOLERANCE 16 — any real rendering error produces
+high-contrast pixels and fails regardless. `tests/run.py --types cairo`
+runs the smoke test, the demo selftest, and this suite.
