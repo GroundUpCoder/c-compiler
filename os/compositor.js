@@ -271,7 +271,9 @@ function startCompositor(kernel, canvas, device) {
 
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
-      if (s.minimized) continue;               // off screen, still in the scene
+      if (s.minimized || !s.mapped) continue;  // off screen, still in the scene
+                                               // (unmapped: awaiting the WM's
+                                               // placement, todos/0069)
       var dw = s.dstW, dh = s.dstH;            // on-screen viewport (todos/0024)
       // Chrome frame first (the resize border sits UNDER title+client),
       // then client pixels; the next window in z covers both — painter's

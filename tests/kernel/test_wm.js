@@ -138,6 +138,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   let list = kernel.wmList();
   check('wmList has the window, focused', list.length === 1 && list[0].sid === 1 &&
     list[0].focused && list[0].title === 'app one', JSON.stringify(list));
+  check('no WM subscribed: created MAPPED (todos/0069 fallback is pre-0069 exact)',
+    list[0].mapped === true, JSON.stringify(list[0]));
 
   // ---- present + surface screenshot ----
   present(fb1, [255, 0, 0, 255]);                     // red frame

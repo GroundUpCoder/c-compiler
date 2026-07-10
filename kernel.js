@@ -334,6 +334,17 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *     xf32/yf32 = dx/dy deltas, a=buttons); sid 0 = focused window
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
  * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
+ *
+ * Map-on-placement (todos/0069): while a subscriber exists, a new surface
+ * is composited and hit-tested only after the WM's first geometry/stacking
+ * op on it (MOVE/RESIZE/SET_DST/SET_LAYER/RESTACK — wm.c answers every
+ * EV_CREATED with a MOVE, which doubles as the map ack), so windows never
+ * flash at the kernel cascade default. Borderless surfaces NOT owned by a
+ * subscriber process map at create (wm.c ignores them — owner-positioned
+ * taskbar-class); a WM_MAP_TIMEOUT_MS backstop and last-subscriber-gone
+ * both map everything pending, so a wedged or dead WM can't hide windows.
+ * No subscriber -> mapped at create (the pre-0069 no-WM behavior, exactly).
+ *
  * Events: EV_CREATED record | EV_DESTROYED { sid } | EV_TITLE { sid,
  * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y } |
  * EV_MINIMIZED { sid, minimized 0|1 } (restore also implies focus) |
@@ -404,6 +415,9 @@ var WM_GRIP = 16;                            // SE-corner zone (resizes both axe
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
 var WM_DBLCLICK_MS = 400;                    // title double-click window (todos/0025)
 var WM_DBLCLICK_SLOP = 4;                    // ...and max px drift between the downs
+var WM_MAP_TIMEOUT_MS = 200;                 // map-on-placement backstop (todos/0069):
+                                             // a WM-managed surface the WM never
+                                             // places maps anyway after this
 var WM_COLORS = {                            // RGBA byte tuples
   desktop: [0, 128, 128, 255],               // the teal
   titleFocused: [0, 0, 128, 255],            // navy
@@ -996,7 +1010,7 @@ function Kernel(opts) {
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure, mapped, mapTimer }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
   this._focusSid = 0;
@@ -2207,8 +2221,9 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       var sid = this._nextSid++;
       // Cascade placement (kernel default; a connected /bin/wm re-places on
-      // EV_CREATED); the client rect is (x,y,w,h) with the title bar above
-      // it, so y starts below the bar.
+      // EV_CREATED — until that lands the surface is unmapped, todos/0069);
+      // the client rect is (x,y,w,h) with the title bar above it, so y
+      // starts below the bar.
       var n = sid - 1;
       var surf = {
         sid: sid, pid: pcb.pid, sab: fb, i32: i32, u8: new Uint8Array(fb),
@@ -2226,7 +2241,29 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         layer: 0,                 // z layer (todos/0038): -1 bottom / 0 / +1 top;
                                   // set post-create via SET_LAYER / wmSetLayer
         pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
+        mapped: true,             // in the composite + hit test (todos/0069);
+                                  // see the map-on-placement decision below
+        mapTimer: null,           // the unmapped-surface backstop timeout
       };
+      // Map-on-placement (todos/0069): with a WM subscribed, the surface is
+      // created UNMAPPED — the compositor and hit test skip it until the
+      // WM's first geometry/stacking op on the sid lands (wm.c MOVEs every
+      // window it manages on EV_CREATED, so that MOVE doubles as the map
+      // ack), killing the first-frame teleport from the cascade default.
+      // Exceptions keep windows from ever being lost: no subscriber maps
+      // immediately (the no-WM fallback is byte-identical to pre-0069);
+      // borderless surfaces map immediately UNLESS a subscriber process
+      // owns them (wm.c deliberately ignores foreign borderless surfaces —
+      // taskbar-class, owner-positioned — but parks its OWN furniture, the
+      // start menu being the worst teleport case); and a WM_MAP_TIMEOUT_MS
+      // backstop maps anything a wedged WM never places.
+      if (this._wmSubs.size &&
+          (!surf.borderless || this._wmSubOwned(pcb.pid))) {
+        surf.mapped = false;
+        var mapSelf = this;
+        surf.mapTimer = setTimeout(function () { mapSelf._wmMap(sid); },
+                                   WM_MAP_TIMEOUT_MS);
+      }
       this._surfaces.set(sid, surf);
       this._zOrder.push(sid);
       this._wmZNormalize();       // create raises within the NORMAL layer only
@@ -2340,9 +2377,46 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
   }
 };
 
+/* ---- map-on-placement (todos/0069) ----
+ * An unmapped surface exists (listed, focusable, injectable, single-surface
+ * screenshots work) but is not composited and not hit-tested — the classic
+ * X11/Wayland rule: a WM-managed window isn't shown until the WM placed it.
+ * Mapping is one-way and per-surface; the map ack is the WM's first
+ * geometry/stacking op on the sid (wmMove/wmResize/wmSetDst/wmSetLayer/
+ * wmRestack — wm.c's EV_CREATED MOVE covers every window it manages). */
+
+Kernel.prototype._wmMap = function (sid) {
+  var s = this._surfaces.get(sid | 0);
+  if (!s) return;
+  if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
+  if (s.mapped) return;
+  s.mapped = true;
+  this._wmVersion++;
+};
+
+/* Does any subscribed WM connection belong to this pid? (The SURFACE_CREATE
+ * borderless exception: the WM parks its own furniture, so only ITS
+ * borderless surfaces wait for placement.) */
+Kernel.prototype._wmSubOwned = function (pid) {
+  var owned = false;
+  this._wmSubs.forEach(function (c) { if (c.pid === pid) owned = true; });
+  return owned;
+};
+
+/* Drop a WM-protocol connection. When the LAST subscriber goes (crash,
+ * close, corrupt stream), map every pending surface at once — a dead WM
+ * can never hide windows, and the kernel-chrome fallback shows the full
+ * scene immediately. */
+Kernel.prototype._wmSubDrop = function (conn) {
+  if (!this._wmSubs.delete(conn) || this._wmSubs.size) return;
+  var self = this;
+  this._surfaces.forEach(function (s) { self._wmMap(s.sid); });
+};
+
 Kernel.prototype._wmDestroySurface = function (sid) {
   var s = this._surfaces.get(sid);
   if (!s) return;
+  if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
   this._surfaces.delete(sid);
   var zi = this._zOrder.indexOf(sid);
   if (zi >= 0) this._zOrder.splice(zi, 1);
@@ -2761,11 +2835,11 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   }
   // Hit test, topmost first, against the ON-SCREEN rect — the dst viewport
   // (todos/0024; equals the buffer unless scaled): what you click is what
-  // you see. Minimized surfaces aren't on screen; borderless ones (taskbar-
-  // class) have no title-bar band and no frame.
+  // you see. Minimized and unmapped (todos/0069) surfaces aren't on screen;
+  // borderless ones (taskbar-class) have no title-bar band and no frame.
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s || s.minimized) continue;
+    if (!s || s.minimized || !s.mapped) continue;
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
@@ -2899,6 +2973,7 @@ Kernel.prototype.wmList = function () {
                minimized: s.minimized, borderless: s.borderless,
                relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
                layer: s.layer | 0,
+               mapped: !!s.mapped,              // map-on-placement (todos/0069)
                configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
@@ -2930,8 +3005,12 @@ Kernel.prototype.wmSetLayer = function (sid, layer) {
   if (!s) return false;
   layer = layer | 0;
   if (layer < -1 || layer > 1) return false;
-  if (s.layer === layer) return true;                           // no-op
+  if (s.layer === layer) {
+    this._wmMap(s.sid);         // a stacking op maps even as a no-op (0069)
+    return true;
+  }
   s.layer = layer;
+  this._wmMap(s.sid);           // stacking maps (todos/0069)
   this._wmZNormalize();
   this._wmVersion++;
   return true;
@@ -2964,6 +3043,7 @@ Kernel.prototype.wmMove = function (sid, x, y) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return false;
   s.x = x | 0; s.y = y | 0;
+  this._wmMap(s.sid);           // placement maps (todos/0069)
   this._wmVersion++;
   this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
   return true;
@@ -2983,13 +3063,17 @@ Kernel.prototype.wmResize = function (sid, w, h) {
   if (!s || !s.resizable) return false;
   w = w | 0; h = h | 0;
   if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
-  if (w === s.w && h === s.h && !s.pendingConfigure) return true;   // no-op
+  if (w === s.w && h === s.h && !s.pendingConfigure) {
+    this._wmMap(s.sid);         // a geometry op maps even as a no-op (0069)
+    return true;
+  }
   var prev = s.pendingConfigure;
   s.pendingConfigure = { w: w, h: h };
   if (!this._wmEventTo(s.sid, [WMEV.WINDOW_RESIZED, 0, w, h, 0, 0, 0, 0])) {
     s.pendingConfigure = prev;
     return false;
   }
+  this._wmMap(s.sid);           // the WM sized it: placement decided (0069)
   return true;
 };
 
@@ -3004,8 +3088,12 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
   if (!s || s.resizable) return false;
   w = w | 0; h = h | 0;
   if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
-  if (w === s.dstW && h === s.dstH) return true;    // no-op
+  if (w === s.dstW && h === s.dstH) {
+    this._wmMap(s.sid);         // a geometry op maps even as a no-op (0069)
+    return true;
+  }
   s.dstW = w; s.dstH = h;
+  this._wmMap(s.sid);           // placement maps (todos/0069)
   this._wmVersion++;
   this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
   return true;
@@ -3066,6 +3154,7 @@ Kernel.prototype.wmRestack = function (sid, place) {
   this._zOrder.splice(zi, 1);
   if ((place | 0) === 1) this._zOrder.unshift(s.sid);
   else this._zOrder.push(s.sid);
+  this._wmMap(s.sid);           // stacking maps (todos/0069)
   this._wmZNormalize();
   this._wmVersion++;
   return true;
@@ -3139,7 +3228,7 @@ Kernel.prototype.wmScreenshotScreen = function () {
   fill(0, 0, W, H, WM_COLORS.desktop);
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s || s.minimized) continue;
+    if (!s || s.minimized || !s.mapped) continue;   // unmapped: todos/0069
     var dw = s.dstW, dh = s.dstH;      // on-screen rect (todos/0024)
     // Chrome: resize frame under title bar + close box (borderless surfaces
     // draw bare). The frame is one outer fill; title + client cover its
@@ -3295,8 +3384,10 @@ Kernel.prototype._wmEmit = function (type, payload, title) {
 
 Kernel.prototype.wmServe = function (path) {
   var self = this;
-  this.sockServe(path || WM_SOCK_PATH, function (peer) {
-    var conn = { peer: peer, acc: [] };
+  this.sockServe(path || WM_SOCK_PATH, function (peer, pcb) {
+    // conn.pid: the connecting process — the map-on-placement borderless
+    // exception (todos/0069) needs to know which surfaces a subscriber owns.
+    var conn = { peer: peer, acc: [], pid: pcb ? pcb.pid : 0 };
     peer.onData = function (chunk) {
       for (var i = 0; i < chunk.length; i++) conn.acc.push(chunk[i]);
       for (;;) {
@@ -3304,7 +3395,7 @@ Kernel.prototype.wmServe = function (path) {
         var len = (conn.acc[0] | (conn.acc[1] << 8) | (conn.acc[2] << 16) |
                    (conn.acc[3] << 24)) >>> 0;
         if (len < 4 || len > (1 << 20)) {       // corrupt stream: hang up
-          self._wmSubs.delete(conn);
+          self._wmSubDrop(conn);
           peer.close();
           return;
         }
@@ -3314,7 +3405,7 @@ Kernel.prototype.wmServe = function (path) {
                           new DataView(frame.buffer), len - 4);
       }
     };
-    peer.onClose = function () { self._wmSubs.delete(conn); };
+    peer.onClose = function () { self._wmSubDrop(conn); };
   });
 };
 
@@ -4791,6 +4882,7 @@ var KERNEL_EXPORTS = {
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
   WM_BOX_GAP: WM_BOX_GAP,
   WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
+  WM_MAP_TIMEOUT_MS: WM_MAP_TIMEOUT_MS,
   WM_COLORS: WM_COLORS,
   // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
   WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,

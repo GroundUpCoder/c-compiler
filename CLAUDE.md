@@ -293,6 +293,16 @@ kernel-JS `wmSetLayer` / `wmctl layer`; record word 11, T/B chars in
 its layer — wm.c pins taskbar+menu to +1 and the desktop to -1, so
 the bar is always-on-top and nothing sinks under the desktop; the
 no-WM fallback never sets layers.
+Map-on-placement (todos/0069): with a WM subscribed, SURFACE_CREATE
+makes the surface UNMAPPED — skipped by compositor + hit test (still
+listed/focusable/injectable/SHOT-able) — until the WM's first
+geometry/stacking op on the sid (MOVE/RESIZE/SET_DST/SET_LAYER/
+RESTACK; wm.c's EV_CREATED MOVE is the map ack, zero wm.c change), so
+windows never flash at the cascade default; foreign borderless maps
+at create (wm.c ignores those), subscriber-owned borderless (the
+start menu) waits for its self-park; WM_MAP_TIMEOUT_MS (200ms) and
+last-subscriber-gone map everything pending — no-WM boots are
+byte-identical to pre-0069.
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
 /proc is a synthetic kernel-rendered volume (todos/0043: `ProcFS` in

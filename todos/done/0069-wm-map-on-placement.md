@@ -1,8 +1,17 @@
 # 0069 — WM map-on-placement: no first-frame teleport
 
-- **Status**: open
+- **Status**: DONE 2026-07-10 — kernel.js map-on-placement (+ the
+  compositor/hit-test skips), zero wm.c change; dev log
+  `logs/2026-07-10/wm-map-on-placement.md`. Decisions that stand:
+  map ack = the WM's first geometry/STACKING op (MOVE/RESIZE/SET_DST/
+  SET_LAYER/RESTACK, no-ops included; FOCUS/MINIMIZE don't map);
+  borderless dispatches on subscriber ownership (foreign → mapped at
+  create, the WM's own furniture → waits for its self-park); 200ms
+  WM_MAP_TIMEOUT_MS backstop + last-subscriber-gone map everything
+  pending; the 80-byte WMP record is UNCHANGED (`wmList` carries the
+  `mapped` flag instead); SURFACE_RESIZE (owner op) does not map.
 - **Design**: `todos/WM.md` (WMP protocol block; known-issues entry
-  added with this item)
+  retired with this item)
 
 ## Goal
 

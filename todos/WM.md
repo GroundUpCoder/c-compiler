@@ -558,15 +558,20 @@ graduate to queue items when a fix is scheduled.
 - **os-gpubox adapter flake: quiet for two rounds** (headless Chromium
   adapter came up in all runs, rounds 1 + 2). Environmental; one more
   quiet round and it can drop off the list.
-- **First-frame teleport (fix scheduled → `todos/0069`)**: every new
-  window — app windows AND the start menu — composites for a few frames
-  at the kernel's sid-cascade default before /bin/wm's `EV_CREATED` →
-  `WMP_MOVE` round trip lands, then visibly jumps to its placed spot.
-  Structural, not a race: create renders on the next compositor pass
-  while placement crosses two workers + wm's poll loop. Repro: open the
-  Start menu (parked bottom-left, flashes top-left-ish) or launch any
-  GUI app and watch the first frames. Fix = map-on-placement (surface
-  hidden until the WM's first MOVE, timeout backstop), design in 0069.
+- ~~**First-frame teleport.**~~ **FIXED in todos/0069** (2026-07-10) by
+  map-on-placement: with a WMP subscriber, `SURFACE_CREATE` makes the
+  surface UNMAPPED — skipped by both compositor flavors and the hit
+  test (still listed/focusable/injectable/SHOT-able) — until the WM's
+  first geometry/stacking op on the sid (MOVE/RESIZE/SET_DST/SET_LAYER/
+  RESTACK; wm.c's `EV_CREATED` → `WMP_MOVE` doubles as the map ack, so
+  wm.c needed zero changes). Foreign borderless surfaces (wm.c ignores
+  them — owner-positioned taskbar-class) map at create; the subscriber's
+  OWN borderless furniture (the start menu, the worst repro) waits for
+  its self-park. Backstops: `WM_MAP_TIMEOUT_MS` (200ms) maps anything a
+  wedged WM never places, and last-subscriber-gone maps all pending — a
+  dead WM can never hide windows. No subscriber → mapped at create (the
+  no-WM fallback is byte-identical to pre-0069). Legs in test_wm.js /
+  test_wm_policy.js + the os-shell.mjs first-frame burst capture.
 
 Round-1 non-issues worth remembering: the 0029 icons broke os-doom/
 os-quake's "desktop restored = pure teal" asserts (test expectations,

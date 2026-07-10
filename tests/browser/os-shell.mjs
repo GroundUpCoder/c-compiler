@@ -109,9 +109,48 @@ try {
   const MENU_Y = SH - 28 - 188;
   check('menu spot is desktop before the click', near(await sample(120, MENU_Y + 74), TEAL),
     await sample(120, MENU_Y + 74));
+  // Map-on-placement (todos/0069): burst-capture frames THROUGH the open —
+  // the menu must never composite at the kernel cascade default (the
+  // top-left band; x<=432, y<=436 covers every sid-cascade placement of a
+  // 150x188 menu) before appearing parked above the taskbar. In-page rAF
+  // sampling gives per-frame granularity that CDP round trips can't. At
+  // this point nothing face-gray is in the band (icons are white/navy,
+  // text antialiasing blends toward teal), so any gray blob there IS a
+  // teleporting window.
+  const CASC_H = Math.min(460, MENU_Y - 10);
+  const burst = page.evaluate(([px0, py0, ch]) => new Promise((resolve) => {
+    const c = document.getElementById('screen');
+    const r = c.getBoundingClientRect();
+    const t = document.createElement('canvas');
+    t.width = Math.round(r.width); t.height = Math.round(r.height);
+    const ctx = t.getContext('2d', { willReadFrequently: true });
+    const frames = [];
+    let extra = 0;
+    const grey = (d, i) => Math.abs(d[i] - 192) <= 8 &&
+      Math.abs(d[i + 1] - 192) <= 8 && Math.abs(d[i + 2] - 192) <= 8;
+    const step = () => {
+      ctx.drawImage(c, 0, 0);
+      const p = ctx.getImageData(px0, py0, 1, 1).data;
+      const parked = grey(p, 0);
+      const d = ctx.getImageData(0, 24, 460, ch - 24).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (grey(d, i)) n++;
+      frames.push([parked ? 1 : 0, n]);
+      if (parked) extra++;
+      if (extra >= 5 || frames.length >= 600) return resolve(frames);
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }), [120, MENU_Y + 74, CASC_H]);
+  await page.waitForTimeout(100);                // capture running first
   await clickAt(25, BARY);                       // Start (x < 50)
-  await waitPixel(120, MENU_Y + 74, FACE);
-  check('Start click opens the menu (face fill above the taskbar)', true);
+  const frames = await burst;
+  check('Start click opens the menu (face fill above the taskbar)',
+    frames.some(f => f[0] === 1), frames.length);
+  const maxCasc = Math.max(...frames.map(f => f[1]));
+  check('no first-frame teleport: nothing composited in the cascade band (todos/0069)',
+    maxCasc < 300, { maxCasc, frames: frames.length });
+  await waitPixel(120, MENU_Y + 74, FACE);       // settle for the hover leg
 
   // Hover the winbox entry (index 8, rows are 20px from MENU_Y+4): the
   // Win95 navy highlight tracks the pointer.

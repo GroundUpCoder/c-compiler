@@ -857,6 +857,122 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     f.type === WMP.EV_FOCUS && f.g(0) === ct.sid,
     JSON.stringify([f.type, f.g(0)]));
 
+  // ---- map-on-placement (todos/0069): with a WM subscribed, a new surface
+  // is NOT composited / hit-tested until the WM's first geometry/stacking
+  // op on it lands (wm.c answers EV_CREATED with a MOVE — the map ack), so
+  // the first visible frame is at the PLACED position, never the kernel
+  // cascade default. Unmapped surfaces stay listed, injectable, and
+  // screenshot-able (agents unaffected). Scene here: ct (the +1 bar at
+  // y 456), cl + cn minimized — everything else destroyed. ----
+  const fbM = makeFb(60, 40);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbM.sab, ring: null });
+  const cm = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 60, h: 40, title: 'mapwin' });
+  f = await readEvent(wm2);
+  const rm = rec(f);                                   // cascade default x,y
+  check('EV_CREATED still pushed for the unmapped surface', f.type === WMP.EV_CREATED &&
+    rm.sid === cm.sid, JSON.stringify(rm));
+  await readEvent(wm2);                                // EV_FOCUS echo
+  present(fbM, [222, 0, 222, 255]);
+  check('created UNMAPPED while a WM is subscribed',
+    kernel.wmList().find(s => s.sid === cm.sid).mapped === false,
+    JSON.stringify(kernel.wmList().find(s => s.sid === cm.sid)));
+  {
+    const scr = kernel.wmScreenshotScreen();
+    check('composite skips the unmapped surface (no cascade-default flash)',
+      String(px(scr.rgba, scr.w, rm.x + 5, rm.y + 5)) === '0,128,128,255',
+      JSON.stringify([rm.x, rm.y, px(scr.rgba, scr.w, rm.x + 5, rm.y + 5)]));
+  }
+  check('hit test skips the unmapped surface',
+    kernel.wmPointer('down', rm.x + 5, rm.y + 5, {}) === 'desktop');
+  kernel.wmPointer('up', rm.x + 5, rm.y + 5, {});
+  drainRing(ring1);              // leftovers (the strip-click leg shares ring1)
+  f = await cmd(wm2, WMP.INJECT_KEY, [cm.sid, 1, 44, 32, 0]);
+  {
+    const injEvs = drainRing(ring1);
+    check('injection works while unmapped (agents unaffected)',
+      f.type === WMP.R_OK && injEvs.length === 1 &&
+      injEvs[0].type === K.WMEV.KEYDOWN && injEvs[0].win === cm.sid,
+      JSON.stringify([f.type, injEvs]));
+  }
+  f = await cmd(wm2, WMP.SHOT, [cm.sid]);
+  check('single-surface SHOT works while unmapped (the app\'s own pixels)',
+    f.type === WMP.R_SHOT && f.g(1) === 60 &&
+    String(px(f.bytes.subarray(20), 60, 5, 5)) === '222,0,222,255',
+    JSON.stringify([f.type, f.g(1)]));
+  // The WM's MOVE is the map ack: the FIRST composited position is the
+  // placed one.
+  f = await cmd(wm2, WMP.MOVE, [cm.sid, 250, 150]);
+  check('placement MOVE -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MOVED echo
+  check('the WM MOVE maps the surface',
+    kernel.wmList().find(s => s.sid === cm.sid).mapped === true);
+  {
+    const scr = kernel.wmScreenshotScreen();
+    check('first composited position IS the placed position',
+      String(px(scr.rgba, scr.w, 255, 155)) === '222,0,222,255',
+      px(scr.rgba, scr.w, 255, 155));
+  }
+  check('hit test sees the mapped surface at the placed spot',
+    kernel.wmPointer('down', 255, 155, {}) === 'client');
+  kernel.wmPointer('up', 255, 155, {});
+  drainRing(ring1);
+  // Any geometry/stacking op is the ack — SET_LAYER (even a no-op one)
+  // maps too.
+  const fbM2 = makeFb(40, 30);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbM2.sab, ring: null });
+  const cm2 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 40, h: 30, title: 'mapwin2' });
+  await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
+  check('second surface also starts unmapped',
+    kernel.wmList().find(s => s.sid === cm2.sid).mapped === false);
+  f = await cmd(wm2, WMP.SET_LAYER, [cm2.sid, 0]);
+  check('SET_LAYER maps too (any geometry/stacking op is the ack)',
+    f.type === WMP.R_OK &&
+    kernel.wmList().find(s => s.sid === cm2.sid).mapped === true);
+  // The backstop: a surface the WM never places maps anyway after
+  // WM_MAP_TIMEOUT_MS — a wedged WM can't hide windows.
+  const fbM3 = makeFb(40, 30);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbM3.sab, ring: null });
+  const cm3 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 40, h: 30, title: 'mapwin3' });
+  await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
+  check('unmapped before the backstop',
+    kernel.wmList().find(s => s.sid === cm3.sid).mapped === false);
+  await new Promise((r) => setTimeout(r, K.WM_MAP_TIMEOUT_MS + 100));
+  check('the WM_MAP_TIMEOUT_MS backstop maps a never-placed surface',
+    kernel.wmList().find(s => s.sid === cm3.sid).mapped === true);
+  // Borderless dispatch: foreign borderless (wm.c ignores these — owner-
+  // positioned taskbar-class) maps AT CREATE; the subscriber's OWN
+  // borderless furniture (the start-menu case) waits for its self-park.
+  const fbB = makeFb(100, 20);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbB.sab, ring: null });
+  const cb = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 100, h: 20, title: 'foreignbar', flags: 1 });
+  await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
+  check('foreign borderless maps at create (not the WM\'s to place)',
+    kernel.wmList().find(s => s.sid === cb.sid).mapped === true);
+  const fbF = makeFb(150, 100);
+  workers.get(wmPid).msg({ type: 'wm-sabs', fb: fbF.sab, ring: makeRing(64).sab });
+  const cf = await rpc(wmPid, K.OP.SURFACE_CREATE, { w: 150, h: 100, title: 'startmenu', flags: 1 });
+  await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
+  check('subscriber-owned borderless (the start-menu case) waits unmapped',
+    kernel.wmList().find(s => s.sid === cf.sid).mapped === false);
+  f = await cmd(wm2, WMP.MOVE, [cf.sid, 0, 380]);
+  check('its self-park MOVE maps it', f.type === WMP.R_OK &&
+    kernel.wmList().find(s => s.sid === cf.sid).mapped === true);
+  await readEvent(wm2);                                // EV_MOVED echo
+  // The last subscriber going away maps everything pending at once — a
+  // dead WM can never hide windows (the kernel-chrome fallback shows the
+  // full scene immediately).
+  const fbM4 = makeFb(40, 30);
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: fbM4.sab, ring: null });
+  const cm4 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 40, h: 30, title: 'mapwin4' });
+  await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
+  check('pending unmapped before the WM dies',
+    kernel.wmList().find(s => s.sid === cm4.sid).mapped === false);
+  await rpc(wmPid, K.OP.FS_CLOSE, { fd: wmFd2 });
+  await tick();
+  check('last subscriber gone: everything pending maps at once',
+    kernel.wmList().every(s => s.mapped === true),
+    JSON.stringify(kernel.wmList().map(s => [s.sid, s.mapped])));
+
   console.log(failures ? `\ntest_wm_policy: ${failures} FAILED` : '\ntest_wm_policy: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });
