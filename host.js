@@ -10185,6 +10185,15 @@ async function runModule({
       instance.exports.__set_environ(envpPtr);
     }
 
+    // crt0 static init: run C++ global constructors (.init_array) before main.
+    // lld emits __wasm_call_ctors when a module has global ctors; command-model
+    // modules normally get it called from a synthesized _start, but this host
+    // enters at main() directly, so we invoke it here. Guarded: a no-op for the
+    // many modules that don't export it (e.g. this project's own C output).
+    if (typeof instance.exports.__wasm_call_ctors === 'function') {
+      instance.exports.__wasm_call_ctors();
+    }
+
     if (args && args.length > 0) {
       // Set up argc/argv via alloca
       const argc = args.length;
