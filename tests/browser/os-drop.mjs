@@ -109,15 +109,17 @@ try {
   await waitPixel(400, SH - 14, FACE, 60000);      // taskbar composited (wm up)
 
   // ---- drop a binary file ----
-  // Seeded /root/Desktop: doom gameboy quake term (4 links). "blob.bin"
-  // sorts FIRST, so the grid becomes 5 cells and cell 4 (term, pushed
-  // down) fills in — the fifth white tile is the "icon appeared" signal.
+  // Seeded /root/Desktop (os/image.json — bump DESK below when it gains
+  // an entry): "blob.bin" sorts FIRST, pushing every icon down one cell;
+  // the tile appearing in the LAST cell is the "icon appeared" signal.
+  const DESK = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
+                'quake', 'term'];
   const hl = await dropFile(page, 'blob.bin', BLOB);
   check('dragover lit the drop highlight', hl.lit && hl.cleared, hl);
   await waitDropLog(page, 'blob.bin -> /root/Desktop/blob.bin (256 bytes)');
   check('kernel logged the write', true);
-  await waitPixel(48, 16 + 4 * 64 + 6 + 2, WHITE, 15000);   // cell 4 tile
-  check('icon appeared without a reboot (5th grid cell)', true);
+  await waitPixel(48, 16 + DESK.length * 64 + 6 + 2, WHITE, 15000);   // last cell tile
+  check(`icon appeared without a reboot (${DESK.length + 1}-cell grid)`, true);
 
   // Byte-identity through the shell (busybox md5sum over the brokered fs).
   await shellExpect('md5sum /root/Desktop/blob.bin',
@@ -135,11 +137,12 @@ try {
   const enc = new TextEncoder().encode(LAUNCHER);
   await dropFile(page, 'run-winbox', enc);
   await waitDropLog(page, 'run-winbox -> /root/Desktop/run-winbox');
-  // Sorted grid: blob-1.bin blob.bin doom gameboy quake run-winbox term
-  // -> run-winbox is cell 5; wait for cell 6 (term) so the re-lay is done.
-  const RW_Y = 16 + 5 * 64 + 6;
-  await waitPixel(48, 16 + 6 * 64 + 6 + 2, WHITE, 15000);
-  check('launcher icon appeared (7-cell grid)', true);
+  // Sorted grid: the two blobs + the seeds + run-winbox; wait for the
+  // LAST cell (term) so the re-lay is done before clicking.
+  const GRID = ['blob-1.bin', 'blob.bin', ...DESK, 'run-winbox'].sort();
+  const RW_Y = 16 + GRID.indexOf('run-winbox') * 64 + 6;
+  await waitPixel(48, 16 + GRID.indexOf('term') * 64 + 6 + 2, WHITE, 15000);
+  check(`launcher icon appeared (${GRID.length}-cell grid)`, true);
   await page.mouse.dblclick(rect.x + 58, rect.y + RW_Y + 10);
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);   // first client window
   check('double-click ran the dropped launcher (winbox composited)', true);

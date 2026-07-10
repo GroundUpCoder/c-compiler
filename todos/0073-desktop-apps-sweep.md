@@ -32,6 +32,31 @@ covers their new behavior too. Not gated on them.
 - Verified-but-unfixed issues → the relevant known-issues list
   (`WM.md` / `WIN32.md`) with a repro, not silently dropped.
 
+## Seeded findings (known at 0048's landing — start here)
+
+Deliberate v1 shortcuts recorded in the 0048 code/dev log; each is
+sweep fodder to either fix or formally accept into a known-issues list:
+
+- **EDIT has no undo buffer**: EM_CANUNDO answers FALSE, so notepad's
+  Undo menu item is permanently grayed (honest, but a real editor wants
+  at least single-level undo).
+- **EM_GETHANDLE non-ASCII padding**: the materialized WCHAR view is
+  sized by the UTF-8 length (tail-zeroed), so notepad saves of
+  non-ASCII documents can append NUL padding — ASCII round-trips
+  exactly (user32.c edit_sync_handle comment).
+- **OFN hooks/templates are not run**: notepad's Save As encoding/EOLN
+  combos never appear; encoding silently stays at its previous value.
+  Growing this means the explorer-dialog notify protocol (comdlg32.c
+  header records the call).
+- **MessageBox knows OK/OKCANCEL/YESNOCANCEL/YESNO only** —
+  ABORTRETRYIGNORE falls back to a bare OK (user32.c BTNSETS).
+- **Status bar draws no size grip** (SBARS_SIZEGRIP accepted, ignored);
+  IsDialogMessageW is ESC-only (no Tab order — the 0058 simplification).
+- **fileman**: no rename/delete/copy — it is a navigator/launcher only;
+  Enter in the LISTBOX doesn't Open (button/double-click only).
+- **ctlpanel**: volume is master-only (per-source gain can grow on the
+  same AUDIO_GAIN opcode if a mixer panel wants it).
+
 ## Acceptance
 
 - Dev-log entry with findings and a fixed/deferred split.

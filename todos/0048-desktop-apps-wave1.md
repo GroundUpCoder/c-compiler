@@ -1,11 +1,26 @@
 # 0048 — desktop apps wave 1
 
-- **Status**: **reframed** (2026-07-09) — the Win95 organ set now arrives
-  as real ReactOS C/Win32 ports via `0060`, not hand-written microui/MVU
-  apps. See `WIN32.md`. The app *targets* below stand; the *how* is Win32
-  ports.
+- **Status**: **landed, close-out pending** (2026-07-10) — all five
+  targets landed, one commit each: calc (189d956, ReactOS port —
+  clipboard/keyboard/TrackPopupMenu/owner-draw veneer tail + WRES v2
+  template menus), notepad (74d7f24, ReactOS port — EDIT-around-a-file,
+  comdlg32 file dialogs + find/replace, comctl32 status bar), fileman
+  (fd85358, native veneer app over the 0066 activate() semantics),
+  ctlpanel (1c3febc, native + the kernel AUDIO_GAIN master-volume op),
+  minesweeper (playable since 0068; this item added its Start-menu
+  entry). Image v39→v42; every app has a Start-menu entry and a headless
+  e2e in the kernel suite (39 files green). Browser sweep at landing:
+  13/14 (os-shell + os-drop repaired in-place — pre-758dd6e icon-grid
+  coordinates — and PASS); **the deterministic os-doom leg failure is
+  the one blocker**, tracked with evidence in `todos/0074` — this item
+  closes when 0074 lands. Dev log:
+  `logs/2026-07-10/desktop-apps-wave1.md`.
 - **Design**: `WIN32.md`; original discussion in
   `logs/2026-07-09/roadmap-network-desktop.md`
+- Reframed 2026-07-09: the Win95 organ set arrives as real ReactOS
+  C/Win32 ports via `0060`, not hand-written microui/MVU apps — the app
+  targets stood, the *how* became Win32 ports (calc/notepad) + native
+  veneer apps where no port fits (fileman/ctlpanel).
 
 ## Goal
 

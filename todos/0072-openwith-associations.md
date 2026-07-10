@@ -3,7 +3,7 @@
 - **Status**: open
 - **Design**: `todos/OS.md` / `todos/WM.md` (the activate() launcher,
   todos/done/0066). Deferred from 0048 ("an `/etc/openwith` map is a
-  later idea, not v1", `todos/done/0048-desktop-apps-wave1.md`).
+  later idea, not v1", `todos/0048-desktop-apps-wave1.md`).
 
 ## Goal
 

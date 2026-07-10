@@ -222,18 +222,24 @@ try {
     }
   };
 
-  // Icons flow down the left edge (sorted: doom gameboy quake term). The
-  // winbox launched above covers rows 0-2; icon 3 (term) at cell (16,208)
-  // is clear: white 24x24 tile at (46,214), navy center, label below.
-  const I3X = 46, I3Y = 16 + 3 * 64 + 6;         // term's icon tile origin
+  // Icons flow down the left edge, sorted (the seeded /root/Desktop —
+  // bump the list with image.json, the kernel-e2e rule). The winbox
+  // launched above covers rows 0-2; term's row is clear of it: white
+  // 24x24 tile, navy center, label below. The label-strip sample at
+  // x=45 relies on term's 4-char label starting at x=46 — pick a
+  // SHORT-named entry if this ever moves.
+  const DESK_ENTRIES = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
+                        'quake', 'term'];
+  const TROW = DESK_ENTRIES.indexOf('term');
+  const I3X = 46, I3Y = 16 + TROW * 64 + 6;      // term's icon tile origin
   await waitPixel(I3X + 2, I3Y + 2, WHITE);
-  check('desktop icon tile composited (term, cell 3)', true);
+  check(`desktop icon tile composited (term, cell ${TROW})`, true);
   check('icon glyph navy center', near(await sample(I3X + 12, I3Y + 12), NAVY),
     await sample(I3X + 12, I3Y + 12));
 
   // Single click: selection highlight (navy label strip), NO launch.
   await clickAt(58, I3Y + 10);
-  await waitPixel(45, 16 + 3 * 64 + 24 + 10 + 3, NAVY);   // label bg, left of text
+  await waitPixel(45, 16 + TROW * 64 + 24 + 10 + 3, NAVY);   // label bg, left of text
   check('single click selects (navy label strip)', true);
 
   // Double-click launches term (640x432 at the cascade slot). Sample a
