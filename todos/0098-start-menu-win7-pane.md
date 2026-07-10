@@ -16,11 +16,14 @@ path); this item is purely a new layout + two small persistence bits.
 
 - **Left pane** = pinned list + MRU recents: a small persisted recents
   file (e.g. `~/.config/recent`), appended by the wm's `activate()` on
-  every launch; pinned entries a user file above it.
+  every launch; pinned entries a user file above it. (This also covers
+  the "Documents" entry from 0078's Win95 fixed-section sketch — it was
+  deliberately not built there because no recents store existed.)
 - **Right pane** = the fixed places column (the 0078 fixed section moves
   here: Settings, Run…, and Shut Down once todos/0051 lands).
 - **Search box** at the bottom of the left pane that filters the menu
-  TREE live (reuses the 0078 type-ahead matcher over a flattened walk).
+  TREE live (reuses the 0078 type-ahead matcher over a flattened walk;
+  this is also the "Find" entry from 0078's fixed-section sketch).
 - The cascading flyouts remain for "All Programs" (the 0078 columns are
   the submenu mechanism either way).
 

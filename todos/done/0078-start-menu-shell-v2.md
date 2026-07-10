@@ -7,9 +7,11 @@
   (arrows/Enter/Left/type-ahead/Esc), and the Ctrl+Esc Start chord via
   WMP EV_MENU 0x8C / MENU 0x1C / `wmctl menu` (the EV_CYCLE pattern).
   Residues, each with an owner: the optional **Win7 two-pane stage
-  (pinned+MRU left pane, search box) is todos/0098**; the **Shut Down
-  fixed row is todos/0051**'s (halt/reboot — its body carries the
-  hook). Dev log: `logs/2026-07-10/0078-start-menu-v2.md`.
+  (pinned+MRU left pane, search box — also the sketch's Documents/Find
+  rows) is todos/0098**; the **Shut Down fixed row is todos/0051**'s
+  (halt/reboot — its body carries the hook); the `queue.js add --help`
+  scaffolding trap this session tripped over is **todos/0099**. Dev
+  log: `logs/2026-07-10/0078-start-menu-v2.md`.
 - **Design**: `todos/WM.md` "The desktop shell" (Start-menu block,
   todos/done/0028; the landed "Start menu v2" block documents the
   as-built shape); `todos/WIN32.md`. Extends the Start menu in

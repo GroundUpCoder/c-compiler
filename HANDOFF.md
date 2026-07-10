@@ -100,7 +100,8 @@ carries the 0063 aero aesthetics + glass perf eyeball.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. **`queue.js add --help` is NOT a help flag** — it ADDS an
   item named "untitled" (that's how 0098 got its number this thread;
-  repurposed deliberately). After `queue.js done`, check `git status` —
+  repurposed deliberately; the fix is queued as 0099). After
+  `queue.js done`, check `git status` —
   it can stage a pre-edit blob and other sessions' untracked todos/
   files: `git reset` and stage your own set explicitly.
 - Two unit goldens encode libc internals (`switch_br_table` stderr,
