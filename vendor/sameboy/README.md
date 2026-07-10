@@ -2,8 +2,10 @@
 
 Game Boy / Game Boy Color emulator using the [SameBoy](https://github.com/LIJI32/SameBoy)
 core (MIT license, **v1.0.3**, commit 208ba4a) with an SDL frontend — the
-cycle-accurate accuracy/GBC sibling of `vendor/gameboy` (Peanut-GB), which
-stays the default `.gb`/`.gbc` handler (todos/0075). Seeded as `/bin/sameboy`.
+cycle-accurate accuracy/GBC sibling of `vendor/gameboy` (Peanut-GB). Installed
+as `/bin/sameboy` and, since it boots and runs better, the **default
+`.gb`/`.gbc` handler** (todos/0075; 0072 store points here). Peanut-GB
+(`/bin/gameboy`) remains installed as the lighter alternate core.
 
 The vendored subset is `Core/` only, minus the debugger, cheats, rewind and
 save-state translation units (built with `GB_DISABLE_DEBUGGER/CHEATS/

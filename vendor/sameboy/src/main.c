@@ -1,6 +1,7 @@
 /*
  * SameBoy frontend for the C-to-WASM compiler — the accuracy/GBC sibling of
- * vendor/gameboy (Peanut-GB, which stays the default .gb/.gbc handler).
+ * vendor/gameboy (Peanut-GB). This is the default .gb/.gbc handler (0072
+ * store points at /bin/sameboy); Peanut-GB stays as the lighter alternate.
  *
  * Usage:
  *   node compiler.js vendor/sameboy/bin.json -a compile -o sameboy.html

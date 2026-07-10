@@ -6,9 +6,10 @@
 // animates between shots), and — when the gitignored ROM is present
 // locally — the CGB path through cgb_boot (Super Mario Bros. Deluxe reaches
 // a colorful frame; boot-ROM type GB_BOOT_ROM_CGB_E must map to the CGB
-// image, the launch bug this leg guards). /bin/gameboy stays the default
-// .gb/.gbc association (0072) — asserted here so the "second core, not a
-// replacement" contract can't silently flip.
+// image, the launch bug this leg guards). SameBoy is now the default
+// .gb/.gbc association (0072 store flipped to /bin/sameboy — it boots and
+// runs better than Peanut-GB) — asserted here so the default can't silently
+// regress. /bin/gameboy remains installed as the lighter alternate core.
 //
 // Run: node tests/kernel/test_sameboy_e2e.js
 'use strict';
@@ -78,9 +79,9 @@ function sessionApps() {
   } else {
     console.log('  skip CGB leg (vendor/gameboy/roms/SuperMarioDeluxe.gbc absent)');
   }
-  check('the .gb/.gbc association still points at /bin/gameboy (0072 default unchanged)',
-    /gb\t\/bin\/gameboy/.test(out) && /gbc\t\/bin\/gameboy/.test(out) &&
-    !/gbc?\t\/bin\/sameboy/.test(out), out.split('\n').slice(-8).join('|'));
+  check('the .gb/.gbc association points at /bin/sameboy (0072 default = SameBoy)',
+    /gb\t\/bin\/sameboy/.test(out) && /gbc\t\/bin\/sameboy/.test(out) &&
+    !/gbc?\t\/bin\/gameboy/.test(out), out.split('\n').slice(-8).join('|'));
 }
 
 /* ---- session B: pixel-level proof from the PPMs ---- */
