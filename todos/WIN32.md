@@ -154,6 +154,37 @@ the dialog window grows by MENU_BAR_H so the template client area is
 preserved). `wmctl click` with one argument is now ALWAYS the label form
 — calc's keypad buttons are literally named "7".
 
+**notepad links, is seeded as `/bin/notepad`, and is usable** (0048,
+same log). The EDIT grew its around-a-file tail: EM_GETHANDLE/
+EM_SETHANDLE (the buffer as an HLOCAL of WCHARs — internal storage
+stays UTF-8, the external view materializes on demand with the app
+owning replaced handles), EM_REPLACESEL (translated at the send_msg
+choke like WM_SETTEXT), EM_LINEFROMCHAR/EM_LINEINDEX/EM_SCROLLCARET,
+EM_GETMODIFY/EM_SETMODIFY, WM_CUT/COPY/PASTE/WM_CLEAR over the file
+clipboard (+ the ^C/^X/^V/^A chords in the control), and no-undo
+honesty (EM_CANUNDO FALSE keeps the menu item grayed). New veneer
+slices: `comdlg32.c` — GetOpen/GetSaveFileNameW as a REAL modal
+file-browser dialog (readdir LISTBOX, dirs-first, OK-on-directory
+navigates, MUSTEXIST/OVERWRITEPROMPT/DefExt honored; OFN hooks and
+custom templates deliberately not run — notepad's encoding combo
+degrades to the current value), FindTextW/ReplaceTextW as modeless
+dialogs speaking the RegisterWindowMessageW("commdlg_FindReplace")
+protocol (FR_FINDNEXT/FR_REPLACE/FR_REPLACEALL/FR_DIALOGTERM; always
+FR_DOWN), and ChooseFont/PrintDlg/PageSetupDlg as honest cancels; the
+comctl32 STATUS BAR (self-bottom-parking, SB_SETPARTS/SB_SETTEXTW,
+parts joined in WM_GETTEXT for the agent). user32 grew
+RegisterWindowMessageW (per-process atoms — both protocol ends live in
+one process here), Get/SetWindowPlacement, a minimal IsDialogMessageW,
+MB_YESNOCANCEL (the save prompt; the type nibble now picks the button
+set properly), SetProcessDefaultLayout/WinHelpW no-ops; gdi32 grew
+SetMapMode (MM_TEXT only) + loud-failing StartDoc-family stubs;
+shell32 grew ShellExecuteW (spawns via CreateProcessW),
+SHAddToRecentDocs, and the DragAcceptFiles set as honest no-ops (no
+DnD transport into surfaces). kernel32 fix that rode this: a BARE
+argv0 (PATH spawn) now PATH-resolves in GetModuleFileNameW instead of
+cwd-joining — notepad's New Window respawns GetModuleFileName's
+answer, and the res_ensure sidecar probe gets the real path.
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

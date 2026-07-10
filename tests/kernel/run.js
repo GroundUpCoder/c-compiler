@@ -40,6 +40,7 @@ var tests = [
   ['test_win32_ports.js', []],  // 0060: port corpus compile-check — controls still link clean, PORTS.md (the 0059+ backlog) current
   ['test_winmine_e2e.js', []],  // 0068: winmine playable — sidecar resources, menu bar/popups, SURFACE_RESIZE, dialogs from templates, WM_TIMER, registry persistence
   ['test_calc_e2e.js', []],     // 0048: calc usable — WRES v2 template menus, owner-draw keypad, clipboard file + menu re-gray, keyboard translation, TrackPopupMenu agent path
+  ['test_notepad_e2e.js', []],  // 0048: notepad usable — EDIT-around-a-file (EM_*HANDLE), comdlg32 file dialogs + find/replace protocol, status bar, MB_YESNOCANCEL, ShellExecuteW
   ['test_term_e2e.js', []],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
   ['test_gpubox_dawn_e2e.js', []], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
 ];

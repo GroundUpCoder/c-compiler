@@ -1089,10 +1089,19 @@ static void proc_info_init(void) {
     buf[n] = 0;
     buf[n + 1] = 0;
 
-    /* argv0: absolute-ize against cwd if relative */
+    /* argv0 -> a full path, the way the exec actually resolved it: a BARE
+     * name came through a PATH search (hush, the wm's spawn_path), so
+     * GetModuleFileName must re-run that search — cwd-joining it invents
+     * a file that never existed (0048 fix: notepad's New Window spawns
+     * GetModuleFileName's answer). Relative WITH a slash is cwd-based. */
     if (buf[0] == '/') {
         snprintf(g_argv0, sizeof g_argv0, "%s", buf);
+    } else if (!strchr(buf, '/')) {
+        path_resolve(buf, g_argv0, sizeof g_argv0);
     } else {
+        snprintf(g_argv0, sizeof g_argv0, "%s", buf);
+    }
+    if (g_argv0[0] != '/') {                     /* relative or unfound */
         char cwd[256];
         if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "/");
         snprintf(g_argv0, sizeof g_argv0, "%s%s%s",

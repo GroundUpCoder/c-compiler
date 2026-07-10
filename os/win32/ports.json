@@ -28,8 +28,8 @@
     {
       "name": "notepad",
       "project": "vendor/notepad/bin.json",
-      "expect": "missing-symbols",
-      "notes": "ReactOS notepad \u2014 EDIT + menus + comdlg32"
+      "expect": "links",
+      "notes": "ReactOS notepad \u2014 usable since 0048 (seeded as /bin/notepad; EDIT-around-a-file, comdlg32 file dialogs, find/replace, status bar)"
     },
     {
       "name": "calc",

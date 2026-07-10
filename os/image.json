@@ -1,5 +1,5 @@
 {
-  "version": 39,
+  "version": 40,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -72,6 +72,12 @@
       "/usr/bin/calc.res": {
         "bin": "vendor/calc/calc.res"
       },
+      "/usr/bin/notepad": {
+        "project": "vendor/notepad/bin.json"
+      },
+      "/usr/bin/notepad.res": {
+        "bin": "vendor/notepad/notepad.res"
+      },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
       },
@@ -113,6 +119,9 @@
       },
       "/usr/share/menu/winmine": {
         "link": "/usr/bin/winmine"
+      },
+      "/usr/share/menu/notepad": {
+        "link": "/usr/bin/notepad"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"

@@ -18,6 +18,7 @@
     "dialog.c",
     "printing.c",
     "settings.c",
-    "text.c"
+    "text.c",
+    "../../os/win32/wwinmain.c"
   ]
 }

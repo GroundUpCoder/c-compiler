@@ -525,6 +525,14 @@ LRESULT CallWindowProc(WNDPROC proc, HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 static LRESULT send_msg(HWND h, UINT msg, WPARAM wp, LPARAM lp, int callerW) {
     if (!h) return 0;
     int winW = h->isW;
+    if (msg == EM_REPLACESEL && lp && callerW != winW) {   /* text in lp (0048) */
+        void *conv = callerW ? (void *)w2a_dup((LPCWSTR)lp)
+                             : (void *)a2w_dup((const char *)lp);
+        if (!conv) return FALSE;
+        LRESULT r = CallWindowProc(h->proc, h, msg, wp, (LPARAM)conv);
+        free(conv);
+        return r;
+    }
     if (msg == WM_SETTEXT && lp && callerW != winW) {
         void *conv = callerW ? (void *)w2a_dup((LPCWSTR)lp)
                              : (void *)a2w_dup((const char *)lp);
@@ -1764,35 +1772,23 @@ BOOL EmptyClipboard(void) {
     return TRUE;
 }
 
-HANDLE SetClipboardData(UINT format, HANDLE mem) {
-    if (!mem || (format != CF_TEXT && format != CF_UNICODETEXT)) return NULL;
-    void *p = GlobalLock((HGLOBAL)mem);
-    if (!p) return NULL;
-    char *utf8 = format == CF_UNICODETEXT ? w2a_dup((LPCWSTR)p) : NULL;
-    const char *bytes = utf8 ? utf8 : (const char *)p;
+/* Store/load the clipboard text — shared by the API surface below and
+ * the EDIT control's WM_CUT/COPY/PASTE (0048). */
+static int clip_store(const char *bytes, size_t n) {
     char path[300], tmp[310];
     clip_path(path, sizeof path);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = fopen(tmp, "wb");
-    int ok = 0;
-    if (f) {
-        size_t n = strlen(bytes);
-        ok = fwrite(bytes, 1, n, f) == n;
-        fclose(f);
-        if (ok && rename(tmp, path) != 0) ok = 0;   /* write-through, hive-style */
-        if (!ok) unlink(tmp);
-    }
-    free(utf8);
-    GlobalUnlock((HGLOBAL)mem);
+    if (!f) return 0;
+    int ok = fwrite(bytes, 1, n, f) == n;
+    fclose(f);
+    if (ok && rename(tmp, path) != 0) ok = 0;    /* write-through, hive-style */
+    if (!ok) unlink(tmp);
     clip_drop_cache();
-    /* the handle is the clipboard's now (Windows ownership) — this
-     * clipboard is the FILE, so the handle itself is simply kept alive
-     * for the caller's residual use and never read again */
-    return ok ? mem : NULL;
+    return ok;
 }
 
-HANDLE GetClipboardData(UINT format) {
-    if (format != CF_TEXT && format != CF_UNICODETEXT) return NULL;
+static char *clip_load(void) {                   /* malloc'd UTF-8, NULL if none */
     char path[300];
     clip_path(path, sizeof path);
     FILE *f = fopen(path, "rb");
@@ -1805,6 +1801,29 @@ HANDLE GetClipboardData(UINT format) {
     if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return NULL; }
     fclose(f);
     buf[n] = 0;
+    return buf;
+}
+
+HANDLE SetClipboardData(UINT format, HANDLE mem) {
+    if (!mem || (format != CF_TEXT && format != CF_UNICODETEXT)) return NULL;
+    void *p = GlobalLock((HGLOBAL)mem);
+    if (!p) return NULL;
+    char *utf8 = format == CF_UNICODETEXT ? w2a_dup((LPCWSTR)p) : NULL;
+    const char *bytes = utf8 ? utf8 : (const char *)p;
+    int ok = clip_store(bytes, strlen(bytes));
+    free(utf8);
+    GlobalUnlock((HGLOBAL)mem);
+    /* the handle is the clipboard's now (Windows ownership) — this
+     * clipboard is the FILE, so the handle itself is simply kept alive
+     * for the caller's residual use and never read again */
+    return ok ? mem : NULL;
+}
+
+HANDLE GetClipboardData(UINT format) {
+    if (format != CF_TEXT && format != CF_UNICODETEXT) return NULL;
+    char *buf = clip_load();
+    if (!buf) return NULL;
+    size_t n = strlen(buf);
     clip_drop_cache();
     if (format == CF_TEXT) {
         g_clipGot = GlobalAlloc(0, (SIZE_T)n + 1);
@@ -2880,6 +2899,10 @@ typedef struct {
     int caret, anchor;          /* byte indexes; anchor == caret: no selection */
     int topLine;                /* first visible line (multiline) */
     int scrollX;                /* horizontal pixel scroll (single-line) */
+    int modified;               /* EM_GETMODIFY/EM_SETMODIFY (0048) */
+    HLOCAL hlocal;              /* EM_GETHANDLE/EM_SETHANDLE (0048): the
+                                   external WCHAR buffer notepad manages —
+                                   see edit_sync_handle */
 } EditState;
 
 #define EDIT_PAD 3
@@ -3065,6 +3088,70 @@ static void edit_paint(HWND h) {
     EndPaint(h, &ps);
 }
 
+/* EM_GETHANDLE (0048): the classic edit exposes its buffer as an HLOCAL
+ * of WCHARs (ReactOS notepad reads files into one and EM_SETHANDLEs it,
+ * saves via EM_GETHANDLE + LocalLock). Internal storage stays UTF-8;
+ * this materializes/refreshes the external view on demand. Capacity is
+ * (utf8len+1) WCHARs — >= the UTF-16 need, and covers callers that size
+ * writes by GetWindowTextLength (UTF-8 units here); the tail is zeroed.
+ * Ownership: EM_SETHANDLE adopts (the APP frees the one it replaced,
+ * notepad-style); WM_DESTROY frees whatever is attached. */
+static HLOCAL edit_sync_handle(EditState *st) {
+    SIZE_T cap = ((SIZE_T)st->len + 1) * sizeof(WCHAR);
+    HLOCAL h = st->hlocal ? st->hlocal : LocalAlloc(LMEM_MOVEABLE, cap);
+    if (!h) return NULL;
+    if (st->hlocal && GlobalSize((HGLOBAL)h) < cap) {
+        LocalFree(h);
+        h = LocalAlloc(LMEM_MOVEABLE, cap);
+        if (!h) { st->hlocal = NULL; return NULL; }
+    }
+    st->hlocal = h;
+    WCHAR *w = (WCHAR *)LocalLock(h);
+    memset(w, 0, GlobalSize((HGLOBAL)h));
+    a2w_trunc(st->buf ? st->buf : "", w, (int)(GlobalSize((HGLOBAL)h) / sizeof(WCHAR)));
+    LocalUnlock(h);
+    return h;
+}
+
+static void edit_adopt_handle(HWND h, EditState *st, HLOCAL hl) {
+    st->hlocal = hl;
+    char *a = hl ? w2a_dup((LPCWSTR)LocalLock(hl)) : NULL;
+    if (hl) LocalUnlock(hl);
+    int n = a ? (int)strlen(a) : 0;
+    if (edit_ensure(st, n + 1)) {
+        if (n) memcpy(st->buf, a, (size_t)n);
+        st->len = n;
+    }
+    free(a);
+    st->caret = st->anchor = 0;
+    st->topLine = st->scrollX = 0;
+    st->modified = 0;                            /* EM_SETHANDLE resets it */
+    edit_show_caret(h, st);
+    InvalidateRect(h, NULL, TRUE);
+}
+
+/* WM_CUT/COPY/PASTE (0048): straight onto the file clipboard. */
+static void edit_copy_sel(EditState *st) {
+    int s, e;
+    edit_sel(st, &s, &e);
+    if (e > s) clip_store(st->buf + s, (size_t)(e - s));
+}
+
+static void edit_paste(HWND h, EditState *st) {
+    char *t = clip_load();
+    if (!t) return;
+    if (!edit_ml(h)) {                           /* single line: first line only */
+        char *nl = strchr(t, '\n');
+        if (nl) *nl = 0;
+    }
+    edit_insert(h, st, t, (int)strlen(t));
+    free(t);
+    st->modified = 1;
+    edit_show_caret(h, st);
+    InvalidateRect(h, NULL, TRUE);
+    edit_notify(h, EN_CHANGE);
+}
+
 static int edit_hit(HWND h, EditState *st, int px, int py) {
     HDC dc = GetDC(h);
     if (!dc) return st->caret;
@@ -3130,8 +3217,14 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (GetCapture() == h) ReleaseCapture();
         return 0;
     case WM_CHAR: {
-        if (edit_ro(h)) return 0;
         int ch = (int)wp;
+        /* the classic clipboard chords work even in accelerator-less
+         * dialogs (0048); ^A selects all */
+        if (ch == 3) { SendMessage(h, WM_COPY, 0, 0); return 0; }
+        if (ch == 24) { SendMessage(h, WM_CUT, 0, 0); return 0; }
+        if (ch == 22) { SendMessage(h, WM_PASTE, 0, 0); return 0; }
+        if (ch == 1) { SendMessage(h, EM_SETSEL, 0, -1); return 0; }
+        if (edit_ro(h)) return 0;
         if (ch == 8) {                           /* backspace */
             int s, e;
             edit_sel(st, &s, &e);
@@ -3148,6 +3241,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         } else {
             return 0;
         }
+        st->modified = 1;
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
         edit_notify(h, EN_CHANGE);
@@ -3194,6 +3288,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             edit_sel(st, &s, &e);
             if (s == e && st->caret < st->len) st->anchor = st->caret + 1;
             edit_del_sel(st);
+            st->modified = 1;
             edit_show_caret(h, st);
             InvalidateRect(h, NULL, TRUE);
             edit_notify(h, EN_CHANGE);
@@ -3229,6 +3324,78 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case EM_GETLINECOUNT:
         return edit_line_count(st);
+    case EM_LINEFROMCHAR: {                      /* (0048) wp = pos, -1 = caret */
+        int pos = (int)wp == -1 ? st->caret : (int)wp;
+        if (pos > st->len) pos = st->len;
+        int l, c;
+        edit_line_of(st, pos, &l, &c);
+        return l;
+    }
+    case EM_LINEINDEX: {                         /* (0048) wp = line, -1 = caret's */
+        int line;
+        if ((int)wp == -1) {
+            int c;
+            edit_line_of(st, st->caret, &line, &c);
+        } else {
+            line = (int)wp;
+        }
+        if (line < 0 || line >= edit_line_count(st)) return -1;
+        return edit_line_start(st, line);
+    }
+    case EM_SCROLLCARET:
+        edit_show_caret(h, st);
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    case EM_REPLACESEL: {                        /* (0048) lp = text; wp = undoable
+                                                    (no undo here — ignored) */
+        const char *t = lp ? (const char *)lp : "";
+        edit_insert(h, st, t, (int)strlen(t));
+        st->modified = 1;
+        edit_show_caret(h, st);
+        InvalidateRect(h, NULL, TRUE);
+        edit_notify(h, EN_CHANGE);
+        return 0;
+    }
+    case EM_GETMODIFY:
+        return st->modified;
+    case EM_SETMODIFY:
+        st->modified = wp ? 1 : 0;
+        return 0;
+    case EM_LIMITTEXT:                           /* unlimited already */
+        return 0;
+    case EM_CANUNDO:                             /* no undo buffer (0048 scope) */
+        return FALSE;
+    case EM_UNDO:
+        return FALSE;
+    case EM_EMPTYUNDOBUFFER:
+        return 0;
+    case EM_GETHANDLE:
+        return (LRESULT)edit_sync_handle(st);
+    case EM_SETHANDLE:
+        edit_adopt_handle(h, st, (HLOCAL)wp);
+        return 0;
+    case WM_COPY:
+        edit_copy_sel(st);
+        return 0;
+    case WM_CUT:
+        if (edit_ro(h)) return 0;
+        edit_copy_sel(st);
+        /* fall through: delete the selection */
+    case WM_CLEAR: {
+        if (edit_ro(h)) return 0;
+        int s, e;
+        edit_sel(st, &s, &e);
+        if (e <= s) return 0;
+        edit_del_sel(st);
+        st->modified = 1;
+        edit_show_caret(h, st);
+        InvalidateRect(h, NULL, TRUE);
+        edit_notify(h, EN_CHANGE);
+        return 0;
+    }
+    case WM_PASTE:
+        if (!edit_ro(h)) edit_paste(h, st);
+        return 0;
     case EM_SETREADONLY:
         if (wp) h->style |= ES_READONLY; else h->style &= ~ES_READONLY;
         InvalidateRect(h, NULL, TRUE);
@@ -3241,6 +3408,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->len = n;
         st->caret = st->anchor = n;
         st->topLine = st->scrollX = 0;
+        st->modified = 0;                        /* programmatic set (0048) */
         edit_show_caret(h, st);
         InvalidateRect(h, NULL, TRUE);
         edit_notify(h, EN_CHANGE);
@@ -3262,7 +3430,11 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(h, NULL, TRUE);
         return 0;
     case WM_DESTROY:
-        if (st) { free(st->buf); st->buf = NULL; }
+        if (st) {
+            free(st->buf);
+            st->buf = NULL;
+            if (st->hlocal) { LocalFree(st->hlocal); st->hlocal = NULL; }
+        }
         return 0;
     }
     return DefWindowProc(h, msg, wp, lp);
@@ -3740,7 +3912,18 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
         textH = DrawText(mdc, text ? text : "", -1, &tr, DT_CALCRECT | DT_WORDBREAK);
         DeleteDC(mdc);
     }
-    int nBtn = (type & MB_OKCANCEL) ? 2 : (type & MB_YESNO) ? 2 : 1;
+    /* Button set from the TYPE nibble (0048: MB_YESNOCANCEL is notepad's
+     * save prompt; the old flag tests read 0x3 as OKCANCEL). */
+    static const struct { const char *label; int id; } BTNSETS[5][3] = {
+        { { "OK", IDOK } },                                        /* MB_OK */
+        { { "OK", IDOK }, { "Cancel", IDCANCEL } },                /* MB_OKCANCEL */
+        { { "OK", IDOK } },                                        /* (abort/retry: not grown) */
+        { { "Yes", IDYES }, { "No", IDNO }, { "Cancel", IDCANCEL } },
+        { { "Yes", IDYES }, { "No", IDNO } },                      /* MB_YESNO */
+    };
+    int set = (int)(type & 0xF) <= 4 ? (int)(type & 0xF) : 0;
+    int nBtn = 1;
+    while (nBtn < 3 && BTNSETS[set][nBtn].label) nBtn++;
     int w = tr.right + 40;
     if (w < nBtn * 90 + 30) w = nBtn * 90 + 30;
     if (w < 180) w = 180;
@@ -3755,20 +3938,10 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
                    20, 14, w - 40, textH + lineH, box, NULL, NULL, NULL);
     int by = hgt - 34, bw = 80;
     int bx = (w - (nBtn * bw + (nBtn - 1) * 10)) / 2;
-    if (type & MB_YESNO) {
-        CreateWindowEx(0, "BUTTON", "Yes", WS_CHILD | WS_VISIBLE, bx, by, bw, 24,
-                       box, (HMENU)IDYES, NULL, NULL);
-        CreateWindowEx(0, "BUTTON", "No", WS_CHILD | WS_VISIBLE, bx + bw + 10, by,
-                       bw, 24, box, (HMENU)IDNO, NULL, NULL);
-    } else if (type & MB_OKCANCEL) {
-        CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE, bx, by, bw, 24,
-                       box, (HMENU)IDOK, NULL, NULL);
-        CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE, bx + bw + 10,
-                       by, bw, 24, box, (HMENU)IDCANCEL, NULL, NULL);
-    } else {
-        CreateWindowEx(0, "BUTTON", "OK", WS_CHILD | WS_VISIBLE, bx, by, bw, 24,
-                       box, (HMENU)IDOK, NULL, NULL);
-    }
+    for (int i = 0; i < nBtn; i++)
+        CreateWindowEx(0, "BUTTON", BTNSETS[set][i].label, WS_CHILD | WS_VISIBLE,
+                       bx + i * (bw + 10), by, bw, 24, box,
+                       (HMENU)(UINT_PTR)BTNSETS[set][i].id, NULL, NULL);
 
     HWND ownerTop = owner ? owner->top : NULL;
     int reenable = 0;
@@ -3794,7 +3967,7 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     g_mbResult = saved;
     if (reenable && IsWindow(ownerTop)) EnableWindow(ownerTop, TRUE);
     if (!result)                                 /* closed via 'x' */
-        result = (type & MB_YESNO) ? IDNO : (type & MB_OKCANCEL) ? IDCANCEL : IDOK;
+        result = set == 4 ? IDNO : set ? IDCANCEL : IDOK;
     return result;
 }
 
@@ -4110,6 +4283,73 @@ BOOL RedrawWindow(HWND h, const RECT *r, HRGN rgn, UINT flags) {
     if (flags & RDW_INVALIDATE) InvalidateRect(h, r, (flags & RDW_ERASE) != 0);
     if (flags & (RDW_UPDATENOW | RDW_ERASENOW)) UpdateWindow(h);
     return TRUE;
+}
+
+/* ============================================================ misc (0048,
+ * notepad's tail) */
+
+/* Registered window messages: name -> a stable id in the 0xC000 atom
+ * range. Per-PROCESS here (Windows registers system-wide) — enough for
+ * the comdlg32 FindText protocol, where both ends are this process. */
+UINT RegisterWindowMessageW(LPCWSTR name) {
+    static char *names[32];
+    static int n;
+    char *a = w2a_dup(name);
+    if (!a || !a[0]) { free(a); return 0; }
+    for (int i = 0; i < n; i++)
+        if (strcmp(names[i], a) == 0) { free(a); return 0xC000 + (UINT)i; }
+    if (n >= 32) { free(a); return 0; }
+    names[n] = a;
+    return 0xC000 + (UINT)n++;
+}
+
+/* Window placement: rcNormalPosition is the SURFACE-space client rect
+ * (position is the WM's; size round-trips through MoveWindow's owner
+ * resize). showCmd is always SW_SHOWNORMAL — minimize state lives in the
+ * WM, invisible to processes. */
+BOOL GetWindowPlacement(HWND hwnd, WINDOWPLACEMENT *wp) {
+    if (!hwnd || !wp) return FALSE;
+    RECT r;
+    if (!GetClientRect(hwnd->top, &r)) return FALSE;
+    memset(wp, 0, sizeof *wp);
+    wp->length = sizeof *wp;
+    wp->showCmd = SW_SHOWNORMAL;
+    wp->rcNormalPosition = r;
+    return TRUE;
+}
+
+BOOL SetWindowPlacement(HWND hwnd, const WINDOWPLACEMENT *wp) {
+    if (!hwnd || !wp) return FALSE;
+    int w = wp->rcNormalPosition.right - wp->rcNormalPosition.left;
+    int h = wp->rcNormalPosition.bottom - wp->rcNormalPosition.top;
+    if (w > 0 && h > 0)
+        MoveWindow(hwnd, wp->rcNormalPosition.left, wp->rcNormalPosition.top,
+                   w, h, TRUE);
+    return TRUE;
+}
+
+/* Modeless-dialog pre-translation, minimal: ESC closes, RETURN presses
+ * the first visible default-ish BUTTON. Everything else flows through
+ * the normal focus routing (no Tab order — 0058 simplification). */
+BOOL IsDialogMessageW(HWND dlg, MSG *msg) {
+    if (!dlg || !msg || !IsWindow(dlg)) return FALSE;
+    if (msg->hwnd == NULL || msg->hwnd->top != dlg->top) return FALSE;
+    if (msg->message != WM_KEYDOWN) return FALSE;
+    if (msg->wParam == VK_ESCAPE) {
+        SendMessage(dlg, WM_CLOSE, 0, 0);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL SetProcessDefaultLayout(DWORD layout) {
+    (void)layout;                                /* LTR is the only layout */
+    return TRUE;
+}
+
+BOOL WinHelpW(HWND hwnd, LPCWSTR file, UINT cmd, ULONG_PTR data) {
+    (void)hwnd; (void)file; (void)cmd; (void)data;
+    return FALSE;                                /* no .hlp viewer exists */
 }
 
 /* ============================================================ frame-control

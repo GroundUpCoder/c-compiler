@@ -35,7 +35,7 @@ const image = path.join(tmp, 'os.img');
 // above the 28px taskbar on the 1024x768 headless screen. Bump the list
 // when image.json gains a menu entry; everything below derives from it.
 const MENU_ENTRIES = ['calc', 'ctldemo', 'doom', 'gameboy', 'gdidemo',
-                      'gpubox', 'quake', 'snake', 'term', 'winbox', 'winmine'];
+                      'gpubox', 'notepad', 'quake', 'snake', 'term', 'winbox', 'winmine'];
 const MENU_H = 2 * 4 + MENU_ENTRIES.length * 20;
 const MENU_GEOM = `150x${MENU_H}+0+${768 - 28 - MENU_H}`;
 const winboxRowY = 4 + MENU_ENTRIES.indexOf('winbox') * 20 + 10;

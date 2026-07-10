@@ -1417,3 +1417,30 @@ HFONT CreateFontIndirectW(const LOGFONTW *lf) {
 int GetObjectW(HGDIOBJ obj, int size, void *out) {
     return GetObject(obj, size, out);            /* no string-bearing objects */
 }
+
+/* ============================================================ mapping +
+ * printing (0048, notepad's tail). MM_TEXT is the ONLY mapping mode — the
+ * rasterizer is 1:1 pixels by construction; other modes fail loud. The
+ * StartDoc family are honest failures: there is no printer, and notepad
+ * only reaches them past a PrintDlgW that already said "cancelled" (the
+ * -p command line). SP_ERROR per the API contract. */
+
+int SetMapMode(HDC hdc, int mode) {
+    (void)hdc;
+    if (mode != MM_TEXT) {
+        fprintf(stderr, "gdi32: SetMapMode(%d) unsupported (MM_TEXT only)\n", mode);
+        return 0;
+    }
+    return MM_TEXT;
+}
+
+static int print_stub(const char *name) {
+    fprintf(stderr, "gdi32: %s: no printing on this OS (todos/0048)\n", name);
+    return -1;                                   /* SP_ERROR */
+}
+
+int StartDocW(HDC hdc, const DOCINFOW *di) { (void)hdc; (void)di; return print_stub("StartDocW"); }
+int StartPage(HDC hdc) { (void)hdc; return print_stub("StartPage"); }
+int EndPage(HDC hdc) { (void)hdc; return print_stub("EndPage"); }
+int EndDoc(HDC hdc) { (void)hdc; return print_stub("EndDoc"); }
+int AbortDoc(HDC hdc) { (void)hdc; return print_stub("AbortDoc"); }

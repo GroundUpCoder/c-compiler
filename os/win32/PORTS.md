@@ -10,7 +10,7 @@ port, and keep it committed (`--check` verifies freshness).
 | ctldemo | links | 0 |
 | k32demo | links | 0 |
 | winmine | links | 0 |
-| notepad | missing-symbols | 26 |
+| notepad | links | 0 |
 | calc | links | 0 |
 
 ## gdidemo — links
@@ -29,40 +29,9 @@ Project: `os/win32/k32demo.json` — control target — the 0059 acceptance app 
 
 Project: `vendor/winmine/bin.json` — ReactOS/Wine Minesweeper — the identity port, playable since 0068 (seeded as /bin/winmine)
 
-## notepad — missing-symbols
+## notepad — links
 
-Project: `vendor/notepad/bin.json` — ReactOS notepad — EDIT + menus + comdlg32
-
-Missing symbols (26):
-
-```
-AbortDoc
-ChooseFontW
-CreateStatusWindowW
-DragAcceptFiles
-DragFinish
-DragQueryFileW
-EndDoc
-EndPage
-FindTextW
-GetFileTitleW
-GetOpenFileNameW
-GetSaveFileNameW
-GetWindowPlacement
-IsDialogMessageW
-PageSetupDlgW
-PrintDlgW
-RegisterWindowMessageW
-ReplaceTextW
-SHAddToRecentDocs
-SetMapMode
-SetProcessDefaultLayout
-SetWindowPlacement
-ShellExecuteW
-StartDocW
-StartPage
-WinHelpW
-```
+Project: `vendor/notepad/bin.json` — ReactOS notepad — usable since 0048 (seeded as /bin/notepad; EDIT-around-a-file, comdlg32 file dialogs, find/replace, status bar)
 
 ## calc — links
 
@@ -70,33 +39,7 @@ Project: `vendor/calc/bin.json` — ReactOS calc — playable since 0048 (seeded
 
 ## Aggregate demand (the order of attack)
 
-26 distinct symbols across 6 targets.
+0 distinct symbols across 6 targets.
 
 | symbol | apps |
 |--------|------|
-| AbortDoc | notepad |
-| ChooseFontW | notepad |
-| CreateStatusWindowW | notepad |
-| DragAcceptFiles | notepad |
-| DragFinish | notepad |
-| DragQueryFileW | notepad |
-| EndDoc | notepad |
-| EndPage | notepad |
-| FindTextW | notepad |
-| GetFileTitleW | notepad |
-| GetOpenFileNameW | notepad |
-| GetSaveFileNameW | notepad |
-| GetWindowPlacement | notepad |
-| IsDialogMessageW | notepad |
-| PageSetupDlgW | notepad |
-| PrintDlgW | notepad |
-| RegisterWindowMessageW | notepad |
-| ReplaceTextW | notepad |
-| SHAddToRecentDocs | notepad |
-| SetMapMode | notepad |
-| SetProcessDefaultLayout | notepad |
-| SetWindowPlacement | notepad |
-| ShellExecuteW | notepad |
-| StartDocW | notepad |
-| StartPage | notepad |
-| WinHelpW | notepad |
