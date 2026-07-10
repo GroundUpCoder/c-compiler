@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "ctlpanel",
+  "description": "0048 control panel: master volume over the kernel AUDIO_GAIN mixer op + system info from os-release//proc",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "ctlpanel.c"
+  ]
+}

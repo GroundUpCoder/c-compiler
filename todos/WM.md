@@ -780,9 +780,12 @@ changes is who sits on each end:
 **Format/rate normalization** happens kernel-side at mix time, per source
 frame: decode (S16/S32/F32/U8/S8 at any sane rate, mono or stereo) →
 float, linear-interpolation resample to 48k on a persistent fractional
-cursor, mono duplicated to both channels, sum across streams, clamp to
-[-1, 1], write f32 interleaved. Unsupported channel counts (>2) are
-EINVAL at open — fail loud, per house rules.
+cursor, mono duplicated to both channels, sum across streams, scale by
+the MASTER GAIN (todos/0048: `AUDIO_GAIN` 0x2003 — percent 0..200,
+gain<0 queries; system-wide by design, the control panel's slider over
+host.js `__audio_gain`), clamp to [-1, 1], write f32 interleaved.
+Unsupported channel counts (>2) are EINVAL at open — fail loud, per
+house rules.
 
 **Pacing.** `kernel.audioPump()` runs on a 20ms interval in the kernel
 worker (tests call it directly with an explicit frame budget —

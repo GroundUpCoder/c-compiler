@@ -149,8 +149,10 @@ var OP = {
   SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006, SURFACE_RESIZE: 0x1007,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
-  // one page-owned output ring — never RPCs.
-  AUDIO_OPEN: 0x2001, AUDIO_CLOSE: 0x2002,
+  // one page-owned output ring — never RPCs. AUDIO_GAIN (todos/0048, the
+  // control panel's volume): master output gain in percent, 0..200;
+  // gain < 0 queries. Applied in audioPump before the clamp.
+  AUDIO_OPEN: 0x2001, AUDIO_CLOSE: 0x2002, AUDIO_GAIN: 0x2003,
 };
 
 /* Wait options / status packing — must match <sys/wait.h>. */
@@ -668,6 +670,8 @@ KernelClient.prototype.spawnHooks = function () {
       return self.call(OP.AUDIO_OPEN, { freq: freq, format: format, channels: channels });
     },
     audioClose: function (aid) { return self.call(OP.AUDIO_CLOSE, { aid: aid }); },
+    // Master gain (todos/0048): percent 0..200, gain < 0 queries.
+    audioGain: function (gain) { return self.call(OP.AUDIO_GAIN, { gain: gain }); },
   };
 };
 
@@ -1036,6 +1040,7 @@ function Kernel(opts) {
   // Audio mixer (todos/0017; WM.md "Audio mixing"). Streams register via
   // AUDIO_OPEN; the pump mixes them into the one output ring (audioInit).
   this._audioStreams = new Map(); // aid -> stream (see _audioRpc AUDIO_OPEN)
+  this._audioGain = 1;            // master output gain (todos/0048, AUDIO_GAIN)
   this._nextAid = 1;
   this._audioOut = null;          // { sab, control, f32, cap, freq, channels }
 }
@@ -2533,6 +2538,15 @@ Kernel.prototype._audioRpc = function (pcb, op, req) {
       this._respond(pcb, {});
       break;
     }
+    case OP.AUDIO_GAIN: {
+      // Master output gain (todos/0048): percent, clamped 0..200 (unity
+      // 100). A negative request queries. Deliberately NOT per-process —
+      // the volume slider is a system control, like the physical knob.
+      var g = req.gain | 0;
+      if (g >= 0) this._audioGain = Math.min(200, g) / 100;
+      this._respond(pcb, { gain: Math.round(this._audioGain * 100) });
+      break;
+    }
     default: this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
@@ -2670,9 +2684,10 @@ Kernel.prototype.audioPump = function (maxFrames) {
   var bytes = frames * outFrameBytes;
   var chunk = new Uint8Array(bytes);
   var cdv = new DataView(chunk.buffer);
+  var gain = this._audioGain;                        // master gain (0048)
   for (var f = 0; f < frames; f++) {
-    cdv.setFloat32(f * outFrameBytes, Math.max(-1, Math.min(1, mixL[f])), true);
-    cdv.setFloat32(f * outFrameBytes + 4, Math.max(-1, Math.min(1, mixR[f])), true);
+    cdv.setFloat32(f * outFrameBytes, Math.max(-1, Math.min(1, mixL[f] * gain)), true);
+    cdv.setFloat32(f * outFrameBytes + 4, Math.max(-1, Math.min(1, mixR[f] * gain)), true);
   }
   var owpos = Atomics.load(out.control, AU_WPOS) % out.cap;
   var first = Math.min(bytes, out.cap - owpos);

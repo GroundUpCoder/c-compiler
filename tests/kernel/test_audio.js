@@ -248,6 +248,20 @@ const near = (a, b) => Math.abs(a - b) < 1e-6;
   check('negative queued (clear race) heals + idles', kernel.audioPump(4) === 0 &&
     queued(st3) === 0);
 
+  // ---- master gain (todos/0048, AUDIO_GAIN): scales the mix pre-clamp ----
+  const gq = await rpc(appPid, K.OP.AUDIO_GAIN, { gain: -1 });
+  check('gain query (gain<0) -> 100, the unity default', gq.gain === 100, JSON.stringify(gq));
+  const gs = await rpc(appPid, K.OP.AUDIO_GAIN, { gain: 50 });
+  check('gain set 50 echoes back', gs.gain === 50, JSON.stringify(gs));
+  pushS16(st1, [16384, -8192]);
+  n = kernel.audioPump(1);
+  f = out.read(1);
+  check('mix scaled by the gain (0.5 -> 0.25, -0.25 -> -0.125)',
+    n === 1 && near(f[0][0], 0.25) && near(f[0][1], -0.125), JSON.stringify(f[0]));
+  const gc = await rpc(appPid, K.OP.AUDIO_GAIN, { gain: 999 });
+  check('gain clamps to 200', gc.gain === 200, JSON.stringify(gc));
+  await rpc(appPid, K.OP.AUDIO_GAIN, { gain: 100 });   // unity for the tail below
+
   // ---- drain-on-close: queued tail finishes, then reclaim ----
   pushS16(st1, [4096, 4096, 4096, 4096]);       // 2 frames queued
   const cWrong = await rpc(1, K.OP.AUDIO_CLOSE, { aid: o1.aid });

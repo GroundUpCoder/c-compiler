@@ -1,5 +1,5 @@
 {
-  "version": 41,
+  "version": 42,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -81,6 +81,9 @@
       "/usr/bin/fileman": {
         "project": "os/win32/fileman.json"
       },
+      "/usr/bin/ctlpanel": {
+        "project": "os/win32/ctlpanel.json"
+      },
       "/usr/bin/lua": {
         "project": "vendor/lua/bin.json"
       },
@@ -128,6 +131,9 @@
       },
       "/usr/share/menu/fileman": {
         "link": "/usr/bin/fileman"
+      },
+      "/usr/share/menu/ctlpanel": {
+        "link": "/usr/bin/ctlpanel"
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"

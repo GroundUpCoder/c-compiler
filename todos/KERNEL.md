@@ -318,7 +318,10 @@ response, sets DONE, bumps the doorbell. Node path identical via
                  one; CONFIGURE = the client's resize ack, todos/0019)
 0x2xxx audio     AUDIO_OPEN/AUDIO_CLOSE (todos/0017; WM.md "Audio mixing" —
                  PCM rides the source-ring SABs and the one page-owned
-                 output ring, never RPCs)
+                 output ring, never RPCs); AUDIO_GAIN (todos/0048): master
+                 output gain in percent 0..200, gain<0 queries — applied in
+                 audioPump before the clamp, system-wide by design (the
+                 control panel's volume slider, via host.js __audio_gain)
 ```
 
 `host.js`'s existing imports (`__spawn`, `__spawn_wait`, `__spawn_kill`,

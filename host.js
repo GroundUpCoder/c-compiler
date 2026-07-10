@@ -5691,6 +5691,7 @@ function createSurfaceSDL({ ctx, hooks }) {
   const audioDevices = [];           // handle-1 -> { aid, control, ring, cap, frameBytes } | null
   function buildAudioEnv() {
     if (typeof hooks.audioOpen !== 'function') {
+      let nullGain = 100;                        // no mixer: remember-only
       return {
         __sdl_open_audio_device: function () { return 1; },
         __sdl_queue_audio: function () { return 0; },
@@ -5699,6 +5700,10 @@ function createSurfaceSDL({ ctx, hooks }) {
         __sdl_pause_audio_device: function () {},
         __sdl_close_audio_device: function () {},
         __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
+        __audio_gain: function (gain) {
+          if (gain >= 0) nullGain = Math.min(200, gain | 0);
+          return nullGain;
+        },
       };
     }
     return {
@@ -5742,6 +5747,13 @@ function createSurfaceSDL({ ctx, hooks }) {
         if (d) { hooks.audioClose(d.aid); audioDevices[dev - 1] = null; }
       },
       __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
+      // Master mixer gain (todos/0048, kernel AUDIO_GAIN): percent 0..200,
+      // negative queries. Older embedder kernels answer ENOSYS -> -1.
+      __audio_gain: function (gain) {
+        if (typeof hooks.audioGain !== 'function') return -1;
+        const r = hooks.audioGain(gain | 0);
+        return r && !r.errno && r.gain >= 0 ? r.gain : -1;
+      },
     };
   }
   const audioEnv = buildAudioEnv();
