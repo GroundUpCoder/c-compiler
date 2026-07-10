@@ -1,0 +1,6 @@
+direct: try status=0 caught 42
+eq-zero: try status=0 caught 7
+ne-zero: try caught 9
+zero-coerce: caught 1
+struct: status=5 after 3 calls
+rejump: caught 10 caught 20 done after 3 attempts
