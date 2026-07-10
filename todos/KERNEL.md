@@ -606,6 +606,40 @@ apps size to content), reusing the 0019 WINDOW_RESIZED → SURFACE_CONFIGURE
 renegotiation and deliberately not gated on the resizable bit (that bit
 protects fixed-size apps from the WM, not from themselves).
 
+## The vsync broadcast (2026-07-10, todos/0100)
+
+Process workers are NESTED workers (kernel-worker spawns them), and
+Chromium's `requestAnimationFrame` throws `NotSupportedError` there — so
+SDL frame loops historically paced off a host.js `setTimeout` fallback,
+wall-clock and unsynchronized with the compositor that samples their
+presents. But the kernel worker is first-level and already runs the one
+real frame clock (the compositor rAF, todos/0055). 0100 exports it:
+
+- Two tail words on the kernel page (see the layout comment in kernel.js —
+  the payload cap stops 8 bytes short of them): `KP_VSYNC_EN`, set once at
+  spawn when the kernel was built with `Kernel({vsync: true})`, and
+  `KP_VSYNC_SEQ`, a tick counter.
+- `kernel.vsyncTick()` — called by the embedder from its frame clock (the
+  compositor's `draw()`, before anything can early-return) — bumps + notifies
+  the word for every live pcb.
+- `KernelClient.vsyncWait()` parks on the word (`Atomics.waitAsync`),
+  tracking the last-delivered seq so ticks that land mid-frame-callback
+  resolve immediately (rAF catch-up semantics). host.js's surface backend
+  exposes it through the spawnHooks seam as the backend's
+  `requestAnimationFrame`; the frame-loop driver needs no change.
+- Headless embedders (boot.js, kernel tests) never pass `vsync`, so the
+  flag stays clear and processes keep the deadline-setTimeout pacer — the
+  only possible tier where no vsync exists. Two pacing tiers, one seam.
+
+Lifecycle is deliberately **stop-when-the-clock-stops**: a hidden tab
+stops rAF, so every SDL app parks at its next frame boundary — an honest
+pause with zero pause code. Consequences: cooperative signal delivery to
+a parked frame loop defers until the next tick (SIGKILL is unaffected —
+worker termination); an app that calls SDL_Quit right before the clock
+stops finishes its exit handshake on the next tick. A ctlpanel toggle to
+switch the kernel's tick source to a `setInterval` heartbeat
+(keep-running-when-hidden) is queued follow-up work.
+
 ## The fd/data-plane amendment (2026-07-06, todos/0009)
 
 The original settled decision — "control plane only; fs data plane stays

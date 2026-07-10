@@ -64,3 +64,30 @@ Decisions:
   modes), diverges the Node topology, and buys only per-process rAF —
   less coordinated than one broadcast from the clock the compositor
   actually samples on.
+
+## Implementation notes (the landed 0100 broadcast)
+
+- The kernel page had no free word (0-7 allocated, payload at byte 32),
+  so the two vsync words live at the page TAIL and `KP_PAYLOAD_CAP`
+  stops 8 bytes short — no existing offset moved, nothing re-learns the
+  layout. Layout comment in kernel.js + KERNEL.md section updated.
+- The advertise flag is written at spawn, before the worker exists, so
+  host.js can read it once at SDL-backend construction — no handshake,
+  no race. `Kernel({vsync: true})` is the embedder declaration;
+  kernel-worker passes it, boot.js doesn't.
+- `KernelClient.vsyncWait` tracks the last-delivered seq: a tick that
+  landed while the frame callback ran resolves the next wait
+  immediately (rAF catch-up semantics) instead of waiting a full extra
+  frame — without this, any callback longer than one vsync period would
+  halve the frame rate again, the exact bug class we just fixed.
+- The wait surfaces through the existing spawnHooks seam as the surface
+  backend's `requestAnimationFrame`, so the frame-loop driver in
+  runModule needed zero changes — the third pacing tier slotted into
+  the seam the first two already share.
+- `vsyncTick()` sits at the very top of the compositor's `draw()`,
+  before the degenerate-canvas early return, so pacing survives frames
+  the compositor itself skips.
+- Known edge (accepted): an app that clears its frame func (SDL_Quit)
+  right as the clock stops finishes its exit handshake on the next
+  tick — i.e. when the tab becomes visible again. Consistent with
+  stop-when-hidden; SIGKILL/worker-terminate is unaffected.

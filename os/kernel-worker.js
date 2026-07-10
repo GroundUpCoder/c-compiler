@@ -344,6 +344,7 @@ async function boot() {
 
   kernel = new KERNEL.Kernel({
     fs: kfs,
+    vsync: true,   // the compositor rAF calls vsyncTick() (todos/0100)
     createWorker: createWorker,
     loadImage: function (p) { return OS_COMMON.readFileBytes(kfs, p); },
     compile: ccCompile,

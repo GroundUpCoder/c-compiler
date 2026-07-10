@@ -1,6 +1,9 @@
 # 0100 — kernel vsync broadcast
 
-- **Status**: open
+- **Status**: done (2026-07-11) — both tiers landed: the deadline pacer
+  (a1cf7d2) and the kernel vsync broadcast (KP_VSYNC_EN/SEQ tail words,
+  vsyncTick from the compositor rAF, vsyncWait as the surface backend's
+  requestAnimationFrame); kernel suite 45/45, browser sweep 16/16
 - **Design**: todos/KERNEL.md (kernel-page layout), todos/WM.md (compositor)
 
 ## Goal

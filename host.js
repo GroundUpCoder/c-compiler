@@ -6047,7 +6047,17 @@ function createSurfaceSDL({ ctx, hooks }) {
   };
   return {
     getAnimationFrameFunc: function () { return animationFrameFunc; },
-    requestAnimationFrame: null,     // frame loop falls back to setTimeout
+    // Vsync broadcast (todos/0100): when the kernel advertises a real frame
+    // clock (browser compositor rAF → vsyncTick), pace the frame loop by
+    // awaiting the kernel-page tick word — phase-aligned with the composite
+    // that samples our presents, and parked for free while the tab is
+    // hidden (no ticks = no frames, the honest pause). Headless kernels
+    // never advertise, so Node keeps the deadline-setTimeout pacer.
+    requestAnimationFrame:
+      (typeof hooks.vsyncEnabled === 'function' &&
+       typeof hooks.vsyncWait === 'function' && hooks.vsyncEnabled())
+        ? function (cb) { hooks.vsyncWait().then(cb); }
+        : null,             // frame loop falls back to the deadline pacer
     drainInput: drainInput,
     /* Raw webgpu.h apps: real WebGPU headless via the lazy Dawn probe (tier 1);
      * the binding's shm present tail lands frames in the SDL window's SAB —

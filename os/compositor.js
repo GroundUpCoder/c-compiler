@@ -394,6 +394,11 @@ function startCompositor(kernel, canvas, device) {
   }
 
   function draw() {
+    // Vsync broadcast (todos/0100): this rAF IS the system frame clock —
+    // tick before anything can early-return, so SDL frame loops stay paced
+    // even on degenerate-canvas frames. Presents made while we render land
+    // in the next wmScene sample, exactly one composite behind.
+    kernel.vsyncTick();
     var scene = kernel.wmScene();
     frameW = canvas.width; frameH = canvas.height;
     if (frameW < 1 || frameH < 1) { requestAnimationFrame(draw); return; }

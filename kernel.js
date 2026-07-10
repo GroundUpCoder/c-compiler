@@ -49,8 +49,15 @@
  *   [4] KP_RPC_STATE  RPC_IDLE / RPC_REQUEST / RPC_DONE.
  *   [5] KP_RPC_OP     opcode of the in-flight request.
  *   [6] KP_RPC_LEN    payload byte length (request, then response).
- *   [7] (reserved)
- *   [8..] payload     UTF-8 JSON (request, then response, in place).
+ *   [7] KP_RPC_KIND   payload encoding: RPCK_JSON | RPCK_RAW.
+ *   [8..] payload     UTF-8 JSON (request, then response, in place),
+ *                     up to KP_PAYLOAD_CAP — the page tail past it holds:
+ *   [N-2] KP_VSYNC_EN  1 = the embedder broadcasts vsync ticks (set once
+ *                      at spawn from Kernel({vsync}); todos/0100).
+ *   [N-1] KP_VSYNC_SEQ tick counter — vsyncTick() bumps + notifies it per
+ *                      compositor frame; host.js's surface backend paces
+ *                      SDL frame loops off it. No ticks (hidden tab) =
+ *                      SDL apps park at their next frame boundary.
  *
  * One RPC in flight per process by construction: the process worker is
  * parked on the doorbell for the duration of every call.
@@ -65,7 +72,9 @@ var KP_RPC_LEN = 6;
 var KP_RPC_KIND = 7;               // payload encoding: RPCK_JSON | RPCK_RAW
 var KP_PAYLOAD_OFF = 32;           // byte offset of the payload region
 var KP_SIZE = 64 * 1024;           // fits compile stdout/stderr comfortably
-var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF;
+var KP_VSYNC_EN = (KP_SIZE >> 2) - 2;   // tail words (todos/0100): vsync
+var KP_VSYNC_SEQ = (KP_SIZE >> 2) - 1;  // advertise flag + tick counter
+var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 8;   // payload stops short of them
 
 var RPC_IDLE = 0, RPC_REQUEST = 1, RPC_DONE = 2;
 var KF_STOP = 1;                   // KP_FLAGS bit0: park at the next safe point
@@ -689,6 +698,35 @@ KernelClient.prototype.pending = function () {
   return Atomics.load(this._i32, KP_SIGPEND) & ~Atomics.load(this._i32, KP_SIGBLOCK);
 };
 
+/* Vsync broadcast (todos/0100). vsyncEnabled: the kernel advertised a real
+ * frame clock at spawn (and this engine can await a SAB word). vsyncWait:
+ * resolves on the next compositor tick. Tracks the last-delivered seq so a
+ * tick that landed while the frame callback ran resolves immediately (rAF
+ * catch-up semantics) instead of costing a whole extra frame. */
+KernelClient.prototype.vsyncEnabled = function () {
+  return typeof Atomics.waitAsync === 'function' &&
+         Atomics.load(this._i32, KP_VSYNC_EN) === 1;
+};
+
+KernelClient.prototype.vsyncWait = function () {
+  var i32 = this._i32;
+  var cur = Atomics.load(i32, KP_VSYNC_SEQ);
+  if (this._vsyncSeen === undefined) this._vsyncSeen = cur;
+  if (cur !== this._vsyncSeen) {           // missed tick(s): fire now
+    this._vsyncSeen = cur;
+    return Promise.resolve();
+  }
+  var self = this;
+  var r = Atomics.waitAsync(i32, KP_VSYNC_SEQ, cur);
+  if (!r.async) {                          // 'not-equal': tick raced the wait
+    self._vsyncSeen = Atomics.load(i32, KP_VSYNC_SEQ);
+    return Promise.resolve();
+  }
+  return r.value.then(function () {
+    self._vsyncSeen = Atomics.load(i32, KP_VSYNC_SEQ);
+  });
+};
+
 /* Job control (todos/0003): park while the kernel asserts STOP, until
  * SIGCONT clears the flag (SIGKILL terminates the worker outright). Runs at
  * the two safe-point families a process is guaranteed to hit: entry to
@@ -764,6 +802,10 @@ KernelClient.prototype.spawnHooks = function () {
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
     exit: function (status) { return self.call(OP.EXIT, { code: status }); },
+    // Vsync broadcast (todos/0100): host.js's surface backend paces SDL
+    // frame loops off the kernel's compositor clock when advertised.
+    vsyncEnabled: function () { return self.vsyncEnabled(); },
+    vsyncWait: function () { return self.vsyncWait(); },
     // Phase 3 tty control plane (line discipline lives kernel-side). The fd
     // rides along since 0020 (ptys): the kernel resolves it through the fd
     // table to THE tty it names (slave pty vs system tty), falling back to
@@ -1115,6 +1157,11 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
+  // Vsync broadcast (todos/0100): opts.vsync declares that the embedder
+  // owns a real frame clock and will call vsyncTick() from it (the browser
+  // compositor rAF). Advertised to every process at spawn via KP_VSYNC_EN;
+  // headless embedders leave it off and processes pace by deadline timer.
+  this._vsync = !!opts.vsync;
   // Boot instant — /proc/uptime's zero and the base for per-process
   // start_time (procfs, todos/0043).
   this._bootMs = Date.now();
@@ -1518,6 +1565,9 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
   pcb.page = sab;
   pcb.i32 = new Int32Array(sab);
   pcb.u8 = new Uint8Array(sab);
+  // Advertise the vsync source (todos/0100) before the worker exists —
+  // host.js reads the flag once at SDL-backend construction.
+  if (self._vsync) Atomics.store(pcb.i32, KP_VSYNC_EN, 1);
 
   // Brokered fd table: full POSIX inheritance (every parent fd, sharing
   // the open file descriptions), then the spawn file_actions in order.
@@ -2805,6 +2855,21 @@ Kernel.prototype._audioMarkDying = function (s) {
       Atomics.load(s.control, AU_QUEUED) <= 0) {
     this._audioStreams.delete(s.aid);
   }
+};
+
+/* Vsync broadcast (todos/0100): the embedder calls this from its real frame
+ * clock — the browser compositor's rAF, right where it samples the scene.
+ * One bump + notify per live process; KernelClient.vsyncWait parks on the
+ * word and host.js's surface backend paces SDL frame loops off it. No clock,
+ * no ticks: a hidden tab (rAF stopped) parks every SDL app at its next frame
+ * boundary by construction — the honest pause. Only meaningful when the
+ * kernel was built with {vsync: true} (spawn advertises KP_VSYNC_EN). */
+Kernel.prototype.vsyncTick = function () {
+  this._procs.forEach(function (pcb) {
+    if (!pcb.i32) return;
+    Atomics.add(pcb.i32, KP_VSYNC_SEQ, 1);
+    Atomics.notify(pcb.i32, KP_VSYNC_SEQ);
+  });
 };
 
 /* Allocate + install the output ring (browser kernel-worker calls this at
@@ -5235,6 +5300,9 @@ var KERNEL_EXPORTS = {
   RPC_DONE: RPC_DONE,
   KF_STOP: KF_STOP,
   KP_RPC_KIND: KP_RPC_KIND,
+  KP_VSYNC_EN: KP_VSYNC_EN,
+  KP_VSYNC_SEQ: KP_VSYNC_SEQ,
+  KP_PAYLOAD_CAP: KP_PAYLOAD_CAP,
   RPCK_JSON: RPCK_JSON,
   RPCK_RAW: RPCK_RAW,
   writePayload: writePayload,

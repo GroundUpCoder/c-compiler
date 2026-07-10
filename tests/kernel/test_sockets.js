@@ -192,12 +192,12 @@ const exitPid = async (pid) => {
   check('reverse direction still write-ready while forward is full',
     r.w.length === 1, JSON.stringify(r));
   r = await rpc(1, K.OP.FS_READ, { fd: afd, count: 65536 });
-  check('drain read (payload-cap clamped)', r.raw && r.raw.length === 65504,
+  check('drain read (payload-cap clamped)', r.raw && r.raw.length === K.KP_PAYLOAD_CAP,
     r.raw && r.raw.length);
   r = await dw.finish();
   check('parked write completes after drain', r.n === 5, JSON.stringify(r));
   r = await rpc(1, K.OP.FS_READ, { fd: afd, count: 65536 });
-  check('tail preserves order', r.raw && r.raw.length === 32 + 5 &&
+  check('tail preserves order', r.raw && r.raw.length === (65536 - K.KP_PAYLOAD_CAP) + 5 &&
     str(r.raw.subarray(r.raw.length - 5)) === 'block', r.raw && r.raw.length);
 
   // ---- shutdown(SHUT_WR): peer EOF, own writes EPIPE ----

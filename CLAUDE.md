@@ -359,6 +359,18 @@ and a full pipe drops lines + reports the count at exit (the kernel
 never blocks). `/bin/strace [-f] [-o FILE] cmd args...` (os/strace.c)
 is just the plumbing: pipe, spawn pre-traced, copy to stderr, propagate
 exit status (128+sig on a signaled child).
+SDL frame pacing is the kernel's clock (todos/0100): nested workers get
+no working rAF, so `Kernel({vsync: true})` (kernel-worker only)
+advertises the compositor rAF via two kernel-page TAIL words —
+`vsyncTick()` bumps+notifies every live pcb per composite,
+`KernelClient.vsyncWait` parks on it with rAF catch-up semantics, and
+host.js's surface backend slots that in as its `requestAnimationFrame`.
+Tab hidden = no ticks = SDL apps park (honest pause, by design;
+cooperative signals defer to the next tick, SIGKILL unaffected). No
+vsync source (boot.js, standalone) → the deadline-setTimeout pacer
+tier in host.js's frame-loop driver (fixed 0100: the old fixed
+`setTimeout(16)`-after-callback pacer silently halved presented fps —
+sameboy GBC showed 60 emulated/33 presented).
 The Start menu is Win95-classic (todos/0078): the baked menu tree has
 Games/Accessories/Demos GROUP subdirectories (cascading flyout columns,
 one borderless window per column titled "startmenu"/"startmenu2"/…;
