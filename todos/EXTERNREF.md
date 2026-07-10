@@ -61,6 +61,41 @@ Bindings declared in `guc.h`:
 
 Not bound (require Wasm GC array types): `fromCharCodeArray`, `intoCharCodeArray`.
 
+## `__gcstr("...")` — string literals as imported constants (0041)
+
+A string literal as an imported immutable `(ref extern)` global instead of a
+data-segment address: module `"#"`, import NAME = the literal's bytes,
+resolved at compile time by `importedStringConstants: '#'` (part of the
+MUST-MATCH compile-options pair in host.js `runModule` / kernel.js
+`_moduleFor`). Zero-copy, zero linear memory, one import per distinct
+literal (dedup by content). `GCSTR(s)` in `guc.h` is the friendly spelling.
+
+```c
+__externref greeting = __gcstr("hello");        // no runtime conversion
+int n = __wjs_length(__gcstr("hé" "llo"));      // concatenation applies; 5
+__refextern r = __gcstr("x");                   // file scope: global.get of an
+                                                // immutable import is a wasm
+                                                // constant expression — this is
+                                                // __refextern's ONE valid
+                                                // global initializer
+```
+
+Rules: the argument must be a narrow (or u8) string literal, and its bytes
+must be valid UTF-8 (they become a wasm import name; `\xNN` escapes that
+break UTF-8 are compile errors). Type is `__refextern` (non-nullable, per
+the js-string spec), decaying to `__externref` as usual. Prefer it over
+`__jss`/`__jsstr` whenever the string is a literal — those convert through
+linear memory on every call.
+
+Loaders that can't pass compile options satisfy the imports with
+`imports['#'] = new Proxy({}, {get: (_, name) => name})`.
+
+Internals (compiler.js): parsed as `EIntrinsic` GC_STR carrying the
+`EString`; imported globals occupy the bottom of the global index space, so
+`generateCode` pre-registers every literal before the first defined global
+(`addGlobalImport` throws otherwise — the index shift is enforced, not
+relocated). Binary-shape test: `tests/host/test_gcstr_imports.js`.
+
 ## Embedded library: guc.h / guc.c
 
 `guc.h` declares the wasm:js-string bindings and helper functions. `__guc.c` implements helpers — the compiler's dead code elimination removes unused functions.
