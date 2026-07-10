@@ -155,6 +155,7 @@ try {
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
   check('reboots to ready on the persisted image', true);
+  await setVt(1);   // 0070: ready lands on VT2; the checks below type on the tty
   await page.keyboard.type('ls /root/Desktop\r');
   await page.waitForFunction(() => window.__osOut.includes('run-winbox'), { timeout: 20000, polling: 200 });
   const ls = await page.evaluate(() => window.__osOut);

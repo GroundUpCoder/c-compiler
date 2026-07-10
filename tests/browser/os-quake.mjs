@@ -89,6 +89,7 @@ try {
 
   // First WM slot (12,36); quake's client is 320x200 native.
   const Q_REGION = [16, 40, 328, 232];
+  await setVt(1);   // 0070: ready lands on VT2; launch from the tty
   await page.keyboard.type('quake &\r');
   await setVt(2);
   // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the

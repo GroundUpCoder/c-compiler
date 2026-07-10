@@ -59,6 +59,7 @@ try {
   const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
 
   // Launch from the real shell; the WM places the first window at (12,36).
+  await setVt(1);   // 0070: ready lands on VT2; launch from the tty
   await page.keyboard.type('gpubox &\r');
   await setVt(2);
   // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the

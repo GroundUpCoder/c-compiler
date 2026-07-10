@@ -355,7 +355,9 @@ default until an embedder calls `wmSetScreen`.
 console metaphor: the xterm tty is VT1, the desktop VT2; the page shows
 exactly one (`body[data-vt]` CSS), switched with the Terminal/Desktop
 tab bar (the primary, discoverable affordance) or Ctrl+Alt+F1/F2 (+
-Ctrl+Alt+1/2) aliases on a window-capture listener; boot lands on VT1. The point is availability under
+Ctrl+Alt+1/2) aliases on a window-capture listener; boot streams on VT1,
+then a healthy `ready` auto-switches to VT2 (todos/0070 — desktop is the
+default tab; a manual switch during boot wins). The point is availability under
 partial failure, not layout: VT1's path is kernel worker + xterm only —
 no compositor, no wm, no GPU — so it stays fully usable while the
 desktop is broken or merely suspect. It remains the escape

@@ -76,13 +76,19 @@ try {
   };
   const TEAL = [0, 128, 128], FACE = [192, 192, 192], ORANGE = [255, 140, 0];
 
-  // ---- VT1: a viewport resize must NOT touch the screen (xterm-only path).
+  // ---- Boot (0070: ready lands on VT2): the auto-switch IS the first VT2
+  // entry, so the 800x500 boot default is already re-moded to the pane.
+  await settle();
   let d = await screenDims();
-  check('boot screen is the 800x500 canvas default', d.w === 800 && d.h === 500, d);
+  check('boot auto-switch re-modes the screen to the viewport pane (0070)',
+    d.w === 1100 && d.h > 500 && d.h < 900, d);
+
+  // ---- VT1: a viewport resize must NOT touch the screen (xterm-only path).
+  await setVt(1);
   await page.setViewportSize({ width: 1000, height: 800 });
   await new Promise(r => setTimeout(r, 600));            // past the debounce
   d = await screenDims();
-  check('VT1 viewport resize leaves the screen alone', d.w === 800 && d.h === 500, d);
+  check('VT1 viewport resize leaves the screen alone', d.w === 1100, d);
   await page.keyboard.type("echo VT1-RESIZE-O''K\r");
   await waitOut('VT1-RESIZE-OK');
   check('shell fine after a VT1 resize (xterm re-fit only)', true);

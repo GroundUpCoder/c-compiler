@@ -72,6 +72,11 @@ try {
   await page.waitForFunction(() => window.__osState === 'ready',
     { timeout: 120000, polling: 250 });
   check('boots to ready over OPFS', true);
+  // 0070: a healthy boot auto-switches to the Desktop tab; the shell legs
+  // below type through xterm, so hop back to VT1 first.
+  check('healthy boot lands on the Desktop tab (todos/0070)',
+    await page.evaluate(() => window.__osVt) === 2);
+  await page.evaluate(() => window.__osVtSwitch(1));
   await waitOut('# ');                       // the prompt echoes through the tty
 
   // -1: busybox ls (todos/0010) prints columns on a tty; one-per-line keeps
@@ -118,8 +123,17 @@ try {
   // Reboot the tab: same context = same OPFS; the image must be reused and
   // the compiled a.out must still be there.
   await page.reload();
+  // 0070: a manual VT choice made DURING boot must beat the ready auto-
+  // switch. Grab VT1 while the reboot streams (a reused-image boot still
+  // takes seconds; if ready wins the race this degrades to a plain post-
+  // ready switch and the check passes vacuously — no flake either way).
+  await page.waitForFunction(() => typeof window.__osVtSwitch === 'function',
+    { timeout: 30000, polling: 100 });
+  await page.evaluate(() => window.__osVtSwitch(1));
   await page.waitForFunction(() => window.__osState === 'ready',
     { timeout: 120000, polling: 250 });
+  check('manual VT choice during boot survives ready (todos/0070)',
+    await page.evaluate(() => window.__osVt) === 1);
   const mode = await page.evaluate(() => document.getElementById('status').textContent);
   // 0040 mode string: <system>/<root> — blob reused + existing v4 root volume.
   check('second boot reuses the image', /image: reused\/v4/.test(mode), mode);
@@ -165,6 +179,7 @@ try {
   check('retry boots after the first tab closes (todos/0045)', st === 'ready', st);
   const mode2 = await page2.evaluate(() => document.getElementById('status').textContent);
   check('the retried boot reuses the image', /image: reused\/v4/.test(mode2), mode2);
+  await page2.evaluate(() => window.__osVtSwitch(1));   // 0070: ready landed on VT2
   await page2.evaluate(() => { window.__osOut = ''; });
   await page2.keyboard.type('echo GUARD-SHELL-OK\r');
   await page2.waitForFunction(

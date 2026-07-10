@@ -1,13 +1,15 @@
 // 0022 browser acceptance: VT switching, Linux-console semantics — the xterm
-// tty is VT1, the desktop VT2; os.html shows exactly one at a time. Boot must
-// land on VT1 with the tty full-page; the Terminal/Desktop TAB BAR is the
-// primary affordance, with Ctrl+Alt+F1/F2 (and the Ctrl+Alt+1/2 alias) as
-// the hotkey path — both flip between them. VT1 entry refocuses (and
+// tty is VT1, the desktop VT2; os.html shows exactly one at a time. Boot
+// STREAMS on VT1 (the log visible), then a healthy boot lands on VT2 — the
+// desktop is the default tab (todos/0070); the Terminal/Desktop TAB BAR is
+// the primary affordance, with Ctrl+Alt+F1/F2 (and the Ctrl+Alt+1/2 alias)
+// as the hotkey path — both flip between them. VT1 entry refocuses (and
 // re-fits) xterm, VT2 entry focuses the canvas. The rationale
 // under test is availability under partial failure: VT1's path is kernel
 // worker + xterm only, so the shell must stay fully usable mid-app (doom
 // running) and after the wm service is killed (kernel-chrome fallback).
-// A halt (pid 1 exit) must force VT1 so the notice is visible.
+// A halt (pid 1 exit) must force VT1 so the notice is visible; a boot
+// error lands there too (the escape hatch, driven synthetically below).
 //
 // Everyday-driving coverage of the split (shell on VT1, canvas on VT2) rides
 // along in os-wm/os-doom/os-quake/os-gpubox/os-term; this test owns the VT
@@ -39,6 +41,11 @@ try {
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
 
   await page.goto(URL);
+  // 0070: the boot itself streams on VT1 — probe while still booting (a
+  // fresh-OPFS first boot takes seconds; vacuously true if ready won).
+  const early = await page.evaluate(() => ({ vt: window.__osVt, state: window.__osState }));
+  check('boot streams on VT1 (log visible during boot)',
+    early.state !== 'booting' || early.vt === 1, early);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
   check('boots to ready', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
@@ -56,22 +63,10 @@ try {
     (n) => window.__osOut && window.__osOut.includes(n), needle,
     { timeout: ms || 20000, polling: 200 });
 
-  // ---- Boot lands on VT1: tty full-page, desktop hidden.
+  // ---- 0070: a healthy boot lands on VT2 — desktop visible, canvas focused.
   let s = await vtState();
-  check('boot lands on VT1', s.vt === 1, s);
-  check('VT1: tty visible full-page, desktop hidden',
-    s.termVisible && !s.desktopVisible && s.termHeight > 0.8 * s.innerHeight, s);
-  // The quote-split keeps the needle out of the command's own tty echo, so
-  // the wait proves shell OUTPUT, not just the echo path.
-  await page.keyboard.type("echo VT1-O''K\r");
-  await waitOut('VT1-OK');
-  check('shell usable on VT1', true);
-
-  // ---- Ctrl+Alt+F2 -> VT2: desktop visible, canvas focused.
-  await page.keyboard.press('Control+Alt+F2');
-  s = await vtState();
-  check('Ctrl+Alt+F2 switches to VT2', s.vt === 2, s);
-  check('VT2: desktop visible, tty hidden, canvas focused',
+  check('healthy boot lands on VT2 (todos/0070)', s.vt === 2, s);
+  check('VT2 default: desktop visible, tty hidden, canvas focused',
     s.desktopVisible && !s.termVisible && s.canvasFocused, s);
 
   // Desktop is live on VT2: teal wallpaper + the wm's taskbar strip. With
@@ -111,7 +106,22 @@ try {
   await waitPixel(400, SH - 14, FACE, 60000);   // taskbar re-laid at the new bottom
   check('VT2 desktop composites (teal wallpaper + wm taskbar)', true);
 
-  // ---- Ctrl+Alt+F1 -> back to VT1; the switch refocuses the tty.
+  // ---- One click on the Terminal tab reaches a fully usable tty (the 0070
+  // acceptance: the terminal stays one click away).
+  await page.click('#vt1tab');
+  s = await vtState();
+  check('Terminal tab reaches VT1: tty full-page, desktop hidden',
+    s.vt === 1 && s.termVisible && !s.desktopVisible && s.termHeight > 0.8 * s.innerHeight, s);
+  // The quote-split keeps the needle out of the command's own tty echo, so
+  // the wait proves shell OUTPUT, not just the echo path.
+  await page.keyboard.type("echo VT1-O''K\r");
+  await waitOut('VT1-OK');
+  check('shell usable on VT1', true);
+
+  // ---- The hotkey aliases still flip both ways.
+  await page.keyboard.press('Control+Alt+F2');
+  s = await vtState();
+  check('Ctrl+Alt+F2 switches to VT2', s.vt === 2 && s.desktopVisible, s);
   await page.keyboard.press('Control+Alt+F1');
   s = await vtState();
   check('Ctrl+Alt+F1 switches back to VT1', s.vt === 1 && s.termVisible && !s.desktopVisible, s);
@@ -211,6 +221,19 @@ try {
   await page.waitForFunction(() => window.__osState === 'halted:3', { timeout: 30000, polling: 250 });
   s = await vtState();
   check('halt forces VT1 (escape hatch surfaces the notice)', s.vt === 1 && s.termVisible, s);
+
+  // ---- Boot error forces VT1 (0070: escape hatch preserved). A real boot
+  // failure can't be provoked from the page, so drive os.html's own handler
+  // with a synthetic worker message — the exact code path a real boot-error
+  // takes (state, __osBootErr, the forced setVt(1)). Done last: it leaves
+  // the page in the error state.
+  await page.evaluate(() => window.__osVtSwitch(2));
+  await page.evaluate(() => kernel.onmessage({ data: { type: 'boot-error', msg: 'synthetic-boot-failure' } }));
+  s = await vtState();
+  const errSt = await page.evaluate(() => ({ state: window.__osState, err: window.__osBootErr }));
+  check('boot-error forces VT1 with the failure surfaced',
+    s.vt === 1 && s.termVisible && errSt.state === 'error' && /synthetic-boot-failure/.test(errSt.err),
+    { s, errSt });
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   failures++;

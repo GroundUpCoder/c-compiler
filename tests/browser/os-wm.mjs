@@ -40,8 +40,8 @@ try {
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  // VTs (todos/0022): boot lands on VT1 (tty); the desktop is VT2 and only
-  // one is visible. Shell typing happens on VT1, canvas pixels/input on VT2
+  // VTs (todos/0022; 0070: a healthy boot lands on VT2): the tty is VT1 and
+  // only one is visible. Shell typing happens on VT1, canvas pixels/input on VT2
   // (the compositor may idle while its placeholder canvas is hidden, so
   // pixel waits on VT1 could stall on stale frames). Deep VT coverage lives
   // in os-vt.mjs.

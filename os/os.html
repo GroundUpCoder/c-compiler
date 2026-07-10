@@ -9,7 +9,10 @@
      desktop VT2 — the page shows exactly one at a time, switched with the
      Terminal/Desktop TAB BAR at the top (the discoverable, primary
      affordance; Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2 remain as aliases). Boot
-     lands on VT1. The point is availability under partial failure: VT1's
+     STREAMS on VT1 (the log stays visible), then a healthy boot lands on
+     VT2 — the desktop is the default tab (todos/0070); boot-error and
+     halt force VT1, and a manual switch during boot wins. The point is
+     availability under partial failure: VT1's
      path is kernel worker + xterm only — no compositor, no wm — so the
      shell stays usable while the desktop is broken or merely suspect.
      (Boot itself requires WebGPU since todos/0055 — the boot-nogpu guard
@@ -263,6 +266,10 @@ desktopPane.addEventListener('drop', function (e) {
 // per 0018 on the next client click.
 var vt = 1;
 window.__osVt = 1;   // agent probe
+// Desktop-by-default (todos/0070): a healthy boot auto-switches to VT2 at
+// 'ready' — but only if the user hasn't already picked a VT themselves
+// (tab click, hotkey, or the __osVtSwitch probe) while the boot streamed.
+var vtTouched = false;
 function setVt(n) {
   n = n === 2 ? 2 : 1;
   if (n === vt) return;
@@ -286,9 +293,13 @@ function setVt(n) {
   if (n === 1) { fitAddon.fit(); term.focus(); }
   else { syncScreenSize(); screen.focus(); }
 }
-window.__osVtSwitch = setVt;   // agent probe (tests/browser/os-vt.mjs)
-document.getElementById('vt1tab').addEventListener('click', function () { setVt(1); });
-document.getElementById('vt2tab').addEventListener('click', function () { setVt(2); });
+// Every USER-driven switch path goes through here so a choice made during
+// boot sticks (the 0070 auto-switch respects it). Internal forced switches
+// (boot-error, halt, the ready auto-switch) call setVt directly.
+function userSetVt(n) { vtTouched = true; setVt(n); }
+window.__osVtSwitch = userSetVt;   // agent probe (tests/browser/os-vt.mjs)
+document.getElementById('vt1tab').addEventListener('click', function () { userSetVt(1); });
+document.getElementById('vt2tab').addEventListener('click', function () { userSetVt(2); });
 window.addEventListener('keydown', function (e) {
   if (!e.ctrlKey || !e.altKey) return;
   var n = (e.code === 'F1' || e.code === 'Digit1') ? 1
@@ -296,7 +307,7 @@ window.addEventListener('keydown', function (e) {
   if (!n) return;
   e.preventDefault();
   e.stopPropagation();   // capture phase: beats xterm's and the canvas's handlers
-  setVt(n);
+  userSetVt(n);
 }, true);
 
 // Agent/test probe (OS.md "agent-friendly by construction"): every tty
@@ -355,7 +366,12 @@ kernel.onmessage = function (e) {
       status('running (image: ' + m.mode + ') — files persist in OPFS');
       window.__osState = 'ready';
       kernel.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
-      if (vt === 1) term.focus();
+      // Desktop as the default tab (todos/0070): the boot log streamed on
+      // VT1; a HEALTHY boot now lands on the desktop. boot-error/halt never
+      // race this ('ready' fires exactly once, on success), and a manual
+      // switch during boot wins — the tty stays one click away either way.
+      if (!vtTouched) setVt(2);
+      else if (vt === 1) term.focus();
       break;
     case 'halt': {
       var sig = m.status & 0x7f;

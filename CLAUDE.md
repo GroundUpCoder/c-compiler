@@ -172,7 +172,9 @@ layout comment and the tests in sync.
 build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge;
 VTs per todos/0022 — the tty is VT1, the desktop VT2, exactly ONE visible
 at a time via the Terminal/Desktop tab bar (Ctrl+Alt+F1/F2 as aliases),
-boot lands on VT1, zero kernel change; browser tests must sit on VT2 for canvas pixels/
+boot streams on VT1 then a healthy `ready` auto-switches to VT2 — the
+desktop is the default tab (todos/0070; a manual switch during boot wins,
+boot-error/halt still force VT1), zero kernel change; browser tests must sit on VT2 for canvas pixels/
 input and VT1 for shell typing — the `window.__osVtSwitch(n)` probe) →
 `kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
 /bin/cc) → `process-worker.js` per pid. One kernel per origin

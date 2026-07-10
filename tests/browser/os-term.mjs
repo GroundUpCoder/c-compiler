@@ -89,6 +89,7 @@ try {
   // coverage lives in os-vt.mjs.
   const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
 
+  await setVt(1);   // 0070: ready lands on VT2; launch from the tty
   await page.keyboard.type('term &\r');
   await setVt(2);
   // 0023: VT2 entry re-modes the screen to the viewport pane; wait for the
