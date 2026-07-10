@@ -85,7 +85,7 @@ landed) and the dev log (why and how).
 For orientation, the standing themes: the **Win32 desktop platform** is the
 primary UI toolkit and supersedes microui/MVU (`WIN32.md`); a **drawing /
 compositor** track runs alongside (`WM.md`); **networking** has its own
-tiered design (`NETWORK.md`); the **wc fork** is the side project (`WC.md`).
+tiered design (`NETWORK.md`).
 Per-item sequencing rationale lives in each item's body prose.
 
 (The compiler-conformance tail in `CONFORMANCE-REMAINING.md` and the SDL3/
