@@ -1,6 +1,21 @@
 # 0098 — start menu: Win7 two-pane stage
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). wm.c's root ("startmenu") is now a fixed
+  290×234 two-pane panel: left pane = pinned (`~/.config/pinned`) + MRU
+  recents (`~/.config/recent`, pushed by the shared `activate()` on every
+  real launch, dedup, cap 8) + an All Programs row, with a live search box
+  at its foot that filters a flat walk of the menu tree (Enter launches the
+  top hit); right pane = the fixed places (SETTINGS, RUN…). All Programs
+  cascades the tree via the unchanged 0078 flyout machinery (startmenu2 =
+  groups, startmenu3 = leaves). The Win95 sidebar band + below-programs
+  separator/fixed-section are gone. Tests: rewrote the Start-menu legs in
+  `tests/kernel/test_wm_service_e2e.js` (recent-grows, two-pane shot
+  pixels, search+Enter, Esc clear-then-close, right-pane RUN…, keyboard
+  All Programs cascade) and `tests/browser/os-shell.mjs` (two-pane render,
+  cascade launch, recents relaunch, live search, RUN…) — both PASS; kernel
+  suite 53/0. Image v59→v60. Dev log
+  `logs/2026-07-11/0098-start-menu-win7-two-pane.md`. Non-goals (jump
+  lists/tiles/fs-search/menu glass) recorded, not built; no follow-ups.
 - **Design**: `todos/WM.md` "The desktop shell" (Start menu v2 block,
   todos/done/0078 — the Win95-classic structure this builds on).
 

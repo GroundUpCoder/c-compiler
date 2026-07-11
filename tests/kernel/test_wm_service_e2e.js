@@ -30,32 +30,35 @@ function check(name, cond, extra) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-wm-'));
 const image = path.join(tmp, 'os.img');
 
-// The baked /usr/share/menu TREE (os/image.json, todos/0078): the root
-// column lists the GROUP directories (dirs-first sort) plus the fixed
-// section (SETTINGS, RUN...) below a separator groove; groups cascade
-// flyout columns. Geometry mirrors os/wm.c: 150px list + the 18px sidebar
-// band on the root (168 total), rows 20px, 4px pad, 8px separator, parked
-// above the 28px taskbar on the 1024x768 headless screen; a flyout parks
-// at parent-right - 3 with its first row aligned to the group row,
-// bottom-clamped to the work area. Bump the lists when image.json's menu
-// tree changes; everything below derives from them.
-const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
-const MENU_FIXED = 2;                            // SETTINGS, RUN...
-const MENU_H = 2 * 4 + (MENU_GROUPS.length + MENU_FIXED) * 20 + 8;
-const MENU_Y = 768 - 28 - MENU_H;
-const MENU_GEOM = `168x${MENU_H}+0+${MENU_Y}`;
-const rootRowY = (name) => 4 + MENU_GROUPS.indexOf(name) * 20 + 10;
-const SETTINGS_ROW_Y = 4 + MENU_GROUPS.length * 20 + 8 + 10;
-const RUN_ROW_Y = SETTINGS_ROW_Y + 20;
-const flyGeom = (list, group) => {
-  const h = 2 * 4 + list.length * 20;
-  const y = Math.min(MENU_Y + 4 + MENU_GROUPS.indexOf(group) * 20 - 4,
-                     768 - 28 - h);
-  return `150x${h}+165+${y}`;
+// The Win7 two-pane Start menu (os/wm.c, todos/0098): a FIXED 290x234 root
+// parked above the 28px taskbar on the 1024x768 headless screen. Left pane
+// (170px): pinned + MRU recents + an "All Programs" row, with a search box
+// at its foot (y 208); right pane (120px): SETTINGS (row 0), RUN... (row 1).
+// "All Programs" cascades the menu tree as flyout columns — startmenu2
+// lists the baked GROUPS (dirs-first sort), startmenu3 a group's leaves —
+// one level deeper than the 0078 root-lists-groups layout. Recents
+// (~/.config/recent) grow via the wm's activate() on every real launch;
+// clearing the file keeps the left pane deterministic ([All Programs] at
+// row 0). Bump the leaf lists when image.json's menu tree changes.
+const SM_W = 290, SM_H = 234, SM_LEFT_W = 170, SM_ROW_H = 20, SM_PAD = 4;
+const SM_Y = 768 - 28 - SM_H;                    // 506
+const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
+const SM_SEARCH_Y = SM_PAD + 10 * SM_ROW_H + 4;  // 208
+const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };
+// A flyout of `parent` ({x,y,w}) anchored to its 0-based `rowIndex`,
+// listing `n` rows: parent-right - 3, row-aligned, clamped to the work area
+// (mirrors sm_open_allprogs / menu_open_flyout).
+const fly = (parent, rowIndex, n) => {
+  const w = 150, h = 2 * SM_PAD + n * SM_ROW_H;
+  let x = parent.x + parent.w - 3, y = parent.y + rowIndex * SM_ROW_H;
+  if (x + w > 1024) x = 1024 - w;
+  if (y + h > 740) y = 740 - h;
+  if (y < 0) y = 0;
+  return { x, y, w, h, geom: `${w}x${h}+${x}+${y}` };
 };
+const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;    // window-local click y
+const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
 const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
-const GAMES = ['doom', 'gameboy', 'quake', 'sameboy', 'snake', 'winmine'];
-const winboxFlyY = 4 + DEMOS.indexOf('winbox') * 20 + 10;
 
 // The seeded /root/Desktop icons, sorted (os/image.json user section) —
 // same rule: bump when the image gains one. wm.c grid: column-major,
@@ -122,23 +125,35 @@ const script = [
   'echo ==list5',
   'wmctl list',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',   // new wm, new sid
-  // ---- the Start menu (todos/0028, Win95-classic v2 todos/0078) ----
-  'wmctl click $TSID 25 14',                     // Start button (x < 50)
+  // ---- the Start menu (todos/0028; Win7 two-pane todos/0098) ----
+  // Virgin recents so the left pane is just [All Programs] (row 0): open,
+  // cascade All Programs -> the tree flyout (GROUPS) -> a nested leaf, which
+  // launches winbox AND records a recent.
+  'rm -f /root/.config/recent /root/.config/pinned',
+  'wmctl click $TSID 25 14',                      // Start button (x < 50)
   'sleep 0.5',
   'echo ==menu1',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl shot $MSID /root/m.ppm && echo menu-shot-ok',
-  `wmctl hover $MSID 60 ${rootRowY('Demos')}`,   // group hover -> flyout
+  'wmctl hover $MSID 60 14',                      // All Programs (row 0) -> the tree
   'sleep 0.5',
   'echo ==menu1b',
   'wmctl list',
   'M2SID=$(wmctl list | grep startmenu2$ | sed "s/[^0-9].*//")',
-  `wmctl click $M2SID 60 ${winboxFlyY}`,         // winbox, nested (sorted)
+  `wmctl hover $M2SID 60 ${flyRowY(MENU_GROUPS.indexOf('Demos'))}`,   // Demos group -> its leaves
+  'sleep 0.5',
+  'echo ==menu1c',
+  'wmctl list',
+  'M3SID=$(wmctl list | grep startmenu3$ | sed "s/[^0-9].*//")',
+  `wmctl click $M3SID 60 ${flyRowY(DEMOS.indexOf('winbox'))}`,        // winbox, nested (sorted)
   'sleep 2.5',                                   // real wasm spawn
   'echo ==menu2',
   'wmctl list',
-  'wmctl click $TSID 25 14',                     // re-open
+  'echo ==menurec',
+  'cat /root/.config/recent',
+  'echo ==menurecend',
+  'wmctl click $TSID 25 14',                      // re-open (now lists the recent)
   'sleep 0.5',
   'echo ==menu3',
   'wmctl list',
@@ -250,15 +265,17 @@ const script = [
   // The seeded snake entry became a real launcher script (image v36; in
   // the Games group since todos/0078).
   'head -c 2 /usr/share/menu/Games/snake && echo =snake-shebang',
-  // The menu takes the same path: an /etc/menu override dir with ONE
-  // launcher-script entry (the dir existing wins, todos/0040). x=60
-  // clears the 18px sidebar band (todos/0078).
+  // The menu takes the same path via live search: an /etc/menu override dir
+  // with ONE launcher-script entry (the dir existing wins, todos/0040), so
+  // the search walk sees /etc/menu; typing its name + Enter launches it.
   'mkdir /etc/menu',
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/go",
   'wmctl click $TSID 25 14',                     // Start
   'sleep 0.5',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $MSID 60 14',                     // entry 0 (the only one)
+  'wmctl key $MSID 10 103',                      // 'g' -> search narrows to go
+  'wmctl key $MSID 18 111',                      // 'o'
+  'wmctl key $MSID 40 13',                       // Enter -> launch the top hit
   'sleep 3',
   'echo ==act4',
   'wmctl list',
@@ -316,9 +333,11 @@ const script = [
   `tail -c +${17 + ((360 * 1024) + 560) * 3} /root/g.ppm | head -c 3 > /root/gpx.bin`,
   'cmp /root/gpx.bin /root/aexp.bin && echo glass-headless-invariant',
   'wmctl glass 0 && echo glass-off-ok',
-  // ---- Start menu v2 tail (todos/0078): command path, keyboard nav,
-  // type-ahead, Esc, the RUN... builtin. Deltas only — window counts at
-  // this point are whatever the storms above left behind. ----
+  // ---- Start menu v2 tail (todos/0098): command path, live search, Esc
+  // clear-then-close, the RUN... place, and the keyboard All Programs
+  // cascade. Deltas only — window counts at this point are whatever the
+  // storms above left behind. ----
+  'rm -f /root/.config/recent /root/.config/pinned',
   'echo ==sm1',
   'wmctl list',
   'wmctl menu && echo menu-cmd-ok',              // wmctl menu = the chord
@@ -326,20 +345,42 @@ const script = [
   'echo ==sm2',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl key $MSID 10 103',                      // type-ahead: g -> Games
-  'wmctl key $MSID 79 1073741903',               // Right -> Games flyout
-  'sleep 0.5',
+  // live search: "winbox" narrows the flat tree walk; Enter launches the top hit
+  'wmctl key $MSID 26 119',                      // w
+  'wmctl key $MSID 12 105',                      // i
+  'wmctl key $MSID 17 110',                      // n
+  'wmctl key $MSID 5 98',                        // b
+  'wmctl key $MSID 18 111',                      // o
+  'wmctl key $MSID 27 120',                      // x
+  'wmctl shot $MSID /root/ms.ppm && echo search-shot-ok',
+  'N1=$(wmctl list | grep -c winbox$)',
+  'wmctl key $MSID 40 13',                       // Enter -> launch the top hit
+  'sleep 3',
   'echo ==sm3',
   'wmctl list',
-  'wmctl key $MSID 41 27',                       // Esc dismisses everything
-  'sleep 0.3',
-  'echo ==sm4',
-  'wmctl list',
-  // RUN...: open Start, click the fixed row, type "winbox", Enter.
-  'wmctl click $TSID 25 14',
+  'N2=$(wmctl list | grep -c winbox$)',
+  'echo SEARCH-DELTA-$((N2-N1))',
+  // Esc from a non-empty search clears it (menu stays); a second Esc closes.
+  'wmctl menu',
   'sleep 0.5',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $MSID 60 ${RUN_ROW_Y}`,
+  'wmctl key $MSID 26 119',                      // 'w' -> search non-empty
+  'sleep 0.2',
+  'echo ==sm4a',
+  'wmctl list',
+  'wmctl key $MSID 41 27',                       // Esc -> clears the search
+  'sleep 0.2',
+  'echo ==sm4b',
+  'wmctl list',
+  'wmctl key $MSID 41 27',                       // Esc -> closes the menu
+  'sleep 0.2',
+  'echo ==sm4c',
+  'wmctl list',
+  // RUN... (right pane, row 1): open the dialog, type "winbox", Enter.
+  'wmctl menu',
+  'sleep 0.5',
+  'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $MSID 210 ${SM_PAD + SM_ROW_H + 10}`,
   'sleep 0.5',
   'echo ==sm5',
   'wmctl list',
@@ -354,18 +395,22 @@ const script = [
   'sleep 3',
   'echo ==sm6',
   'wmctl list',
-  // Keyboard-only nested launch over an /etc/menu override tree: Down
-  // walks to the group, Right cascades, Enter runs the launcher.
+  // Keyboard All Programs cascade over an /etc/menu override tree: Down to
+  // All Programs, Right cascades the tree, Right descends the group, Enter
+  // runs the launcher.
   'mkdir -p /etc/menu/Apps',
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/Apps/go",
+  'rm -f /root/.config/recent',                  // left pane = [All Programs] only
   'wmctl menu',
   'sleep 0.5',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl key $MSID 81 1073741905',               // Down -> the Apps group
-  'wmctl key $MSID 79 1073741903',               // Right -> its flyout
+  'wmctl key $MSID 81 1073741905',               // Down -> All Programs (row 0)
+  'wmctl key $MSID 79 1073741903',               // Right -> the tree flyout (Apps)
   'sleep 0.5',
   'echo ==sm7',
   'wmctl list',
+  'wmctl key $MSID 79 1073741903',               // Right -> into the Apps group
+  'sleep 0.3',
   'wmctl key $MSID 40 13',                       // Enter -> go -> winbox
   'sleep 3',
   'echo ==sm8',
@@ -445,7 +490,7 @@ const l1 = section('list1'), l2 = section('list2'), l3 = section('list3'),
       l4 = section('list4'), l5 = section('list5'), l6 = section('list6'),
       l7 = section('list7'), l8 = section('list8'), l9 = section('list9'),
       l10 = section('list10'),
-      m1 = section('menu1'), m1b = section('menu1b'),
+      m1 = section('menu1'), m1b = section('menu1b'), m1c = section('menu1c'),
       m2 = section('menu2'), m3 = section('menu3'),
       m4 = section('menu4'),
       d1 = section('desk1'), d2 = section('desk2'), d3 = section('desk3'),
@@ -519,18 +564,28 @@ const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
   bar5.includes('1024x28+0+740'), JSON.stringify(l5));
 
-// ---- the Start menu (todos/0028; Win95-classic v2 todos/0078) ----
+// ---- the Start menu (todos/0028; Win7 two-pane todos/0098) ----
 const menu1 = row(m1, 'startmenu');
-check(`Start click opens the menu: borderless root column above the taskbar (${MENU_GEOM} — ${MENU_GROUPS.length} groups + ${MENU_FIXED} fixed rows)`,
-  menu1.includes(MENU_GEOM) && menu1.includes('b'), JSON.stringify(m1));
+check(`Start click opens the two-pane root above the taskbar (${SM_GEOM}, borderless)`,
+  menu1.includes(SM_GEOM) && menu1.includes('b'), JSON.stringify(m1));
 check('menu shot written', out.includes('menu-shot-ok'));
+const tree = fly(SM_ROOT, 0, MENU_GROUPS.length);        // All Programs at row 0
 const fly1 = row(m1b, 'startmenu2');
-check(`hovering the Demos group cascades its flyout column (${flyGeom(DEMOS, 'Demos')})`,
-  fly1.includes(flyGeom(DEMOS, 'Demos')) && fly1.includes('b'), JSON.stringify(m1b));
+check(`All Programs cascades the tree flyout of GROUPS (${tree.geom})`,
+  fly1.includes(tree.geom) && fly1.includes('b'), JSON.stringify(m1b));
+const demos = fly({ x: tree.x, y: tree.y, w: tree.w },
+                  MENU_GROUPS.indexOf('Demos'), DEMOS.length);
+check(`hovering the Demos group cascades its leaves (${demos.geom})`,
+  row(m1c, 'startmenu3').includes(demos.geom) && row(m1c, 'startmenu3').includes('b'),
+  JSON.stringify(m1c));
 check('nested flyout click launches winbox (second instance)',
   m2.split('\n').filter(l => l.endsWith('\twinbox')).length === 2, JSON.stringify(m2));
 check('selection dismissed the whole cascade',
-  row(m2, 'startmenu') === '' && row(m2, 'startmenu2') === '', JSON.stringify(m2));
+  row(m2, 'startmenu') === '' && row(m2, 'startmenu2') === '' &&
+  row(m2, 'startmenu3') === '', JSON.stringify(m2));
+const menuRec = (out.split('==menurec\n')[1] || '').split('==menurecend')[0].trim();
+check('the launch recorded an MRU recent (~/.config/recent grew)',
+  /\/winbox$/.test(menuRec), JSON.stringify(menuRec));
 check('Start click re-opens the menu', row(m3, 'startmenu') !== '', JSON.stringify(m3));
 check('focus change dismisses the menu', row(m4, 'startmenu') === '', JSON.stringify(m4));
 
@@ -648,7 +703,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('desktop dblclick on plain text opens the GUI default (notepad +1)',
     countIn(a3, 'Notepad') === countIn(a2, 'Notepad') + 1,
     JSON.stringify([countIn(a2, 'Notepad'), countIn(a3, 'Notepad')]));
-  check('menu launcher script takes the same activate path (winbox +1)',
+  check('menu search launch takes the same activate path (winbox +1)',
     count(a4, 'winbox') === count(a2, 'winbox') + 1,
     JSON.stringify([count(a2, 'winbox'), count(a4, 'winbox')]));
   check('seeded menu/snake is a real #! script now (image v36)',
@@ -708,59 +763,76 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       clock >= 15, clock);
   }
 
-  // The Start menu shot (todos/0078): the root column shows the sidebar
-  // band, group rows with flyout arrows, the separator groove, and the
-  // fixed-section text (hover is -1 — nothing injected before the shot).
+  // The Start menu shot (todos/0098): the two-pane root — a left pane whose
+  // only item (recents cleared) is All Programs with a cascade arrow, the
+  // search box with its "Search" ghost at the foot, and a right pane band
+  // carrying the fixed places (SETTINGS / RUN...). Hover is -1 before the
+  // shot, so nothing is navy-highlighted.
   const mppm = COMMON.readFileBytes(ufs, '/root/m.ppm');
   const mhead = Buffer.from(mppm.subarray(0, 20)).toString('latin1');
   const mmm = /^P6\n(\d+) (\d+)\n255\n/.exec(mhead);
-  check(`menu shot is a 168x${MENU_H} P6`,
-    !!mmm && mmm[1] === '168' && mmm[2] === String(MENU_H), mhead);
+  check(`menu shot is a ${SM_W}x${SM_H} P6`,
+    !!mmm && mmm[1] === String(SM_W) && mmm[2] === String(SM_H), mhead);
   if (mmm) {
-    const moff = mhead.indexOf('255\n') + 4, MW = 168;
+    const moff = mhead.indexOf('255\n') + 4, MW = SM_W;
     const mpx = (x, y) =>
       Array.from(mppm.subarray(moff + (y * MW + x) * 3, moff + (y * MW + x) * 3 + 3));
-    check('sidebar band is navy', String(mpx(8, 20)) === '0,0,128', mpx(8, 20));
-    const sepY = 4 + MENU_GROUPS.length * 20 + 8 / 2 - 1;
-    check('separator groove above the fixed section (dark line over light)',
-      String(mpx(80, sepY)) === '96,96,96' && String(mpx(80, sepY + 1)) === '255,255,255',
-      [mpx(80, sepY), mpx(80, sepY + 1)]);
-    check('group rows carry the flyout arrow', String(mpx(158, 13)) === '0,0,0',
-      mpx(158, 13));
-    let fixedBlack = 0;
-    for (let y = 4 + MENU_GROUPS.length * 20 + 8; y < MENU_H - 4; y++)
-      for (let x = 20; x < 120; x++)
-        if (String(mpx(x, y)) === '0,0,0') fixedBlack++;
-    check('fixed-section text present (SETTINGS / RUN...)', fixedBlack >= 40, fixedBlack);
+    check('right pane is a distinct band (176,176,176)',
+      String(mpx(230, 120)) === '176,176,176', mpx(230, 120));
+    let rBlack = 0;
+    for (let y = 4; y < 44; y++)
+      for (let x = SM_LEFT_W + 8; x < SM_W - 8; x++)
+        if (String(mpx(x, y)) === '0,0,0') rBlack++;
+    check('right-pane fixed places text present (SETTINGS / RUN...)', rBlack >= 40, rBlack);
+    check('All Programs row carries the cascade arrow',
+      String(mpx(SM_LEFT_W - 12, 12)) === '0,0,0', mpx(SM_LEFT_W - 12, 12));
+    let lBlack = 0;
+    for (let y = 4; y < 24; y++)
+      for (let x = 8; x < SM_LEFT_W - 14; x++)
+        if (String(mpx(x, y)) === '0,0,0') lBlack++;
+    check('All Programs label text present', lBlack >= 20, lBlack);
+    check('search box is a sunken white field',
+      String(mpx(40, SM_SEARCH_Y + 8)) === '255,255,255', mpx(40, SM_SEARCH_Y + 8));
+    let ghost = 0;
+    for (let y = SM_SEARCH_Y; y < SM_SEARCH_Y + 20; y++)
+      for (let x = 8; x < 60; x++)
+        if (String(mpx(x, y)) === '128,128,128') ghost++;
+    check('search box "Search" ghost text', ghost >= 8, ghost);
   }
 }
 
-// ---- Start menu v2 tail (todos/0078): the command path, keyboard nav,
-// type-ahead, Esc, and the RUN... builtin — window counts as deltas.
+// ---- Start menu v2 tail (todos/0098): the command path, live search, Esc
+// clear-then-close, the RUN... place, the keyboard All Programs cascade —
+// window counts as deltas.
 {
   const s1 = section('sm1'), s2 = section('sm2'), s3 = section('sm3'),
-        s4 = section('sm4'), s5 = section('sm5'), s6 = section('sm6'),
+        s4a = section('sm4a'), s4b = section('sm4b'), s4c = section('sm4c'),
+        s5 = section('sm5'), s6 = section('sm6'),
         s7 = section('sm7'), s8 = section('sm8');
   const count = (sec, title) =>
     sec.split('\n').filter(l => l.endsWith('\t' + title)).length;
   check('wmctl menu with no WM was refused (the menu IS policy)',
     out.includes('menu-refused'));
-  check('wmctl menu opens the Start menu (the chord path)',
+  check('wmctl menu opens the two-pane root (the chord path)',
     out.includes('menu-cmd-ok') && row(s1, 'startmenu') === '' && row(s2, 'startmenu') !== '',
     JSON.stringify(s2));
-  check(`type-ahead g + Right cascades the Games flyout (${flyGeom(GAMES, 'Games')})`,
-    row(s3, 'startmenu2').includes(flyGeom(GAMES, 'Games')), JSON.stringify(s3));
-  check('Esc dismisses the whole cascade',
-    row(s4, 'startmenu') === '' && row(s4, 'startmenu2') === '', JSON.stringify(s4));
-  check('the RUN... fixed row opens the run dialog (240x70, above the bar)',
+  check('live search + Enter launches the top hit (winbox +1)',
+    out.includes('SEARCH-DELTA-1'), out.slice(out.indexOf('SEARCH-DELTA')).slice(0, 18));
+  check('search shot written', out.includes('search-shot-ok'));
+  check('Esc clears a non-empty search but keeps the menu open',
+    row(s4a, 'startmenu') !== '' && row(s4b, 'startmenu') !== '',
+    JSON.stringify([row(s4a, 'startmenu') !== '', row(s4b, 'startmenu') !== '']));
+  check('a second Esc dismisses the menu', row(s4c, 'startmenu') === '',
+    JSON.stringify(s4c));
+  check('the RUN... place (right pane) opens the run dialog (240x70, above the bar)',
     row(s5, 'startrun').includes('240x70+6+664') && row(s5, 'startmenu') === '',
     JSON.stringify(s5));
   check('typed command + Enter launches it (sh -c winbox: +1) and closes the dialog',
     count(s6, 'winbox') === count(s5, 'winbox') + 1 && row(s6, 'startrun') === '',
     JSON.stringify([count(s5, 'winbox'), count(s6, 'winbox')]));
-  check('keyboard Down+Right cascades an /etc/menu group flyout',
+  check('keyboard Down+Right cascades the All Programs tree flyout',
     row(s7, 'startmenu2') !== '', JSON.stringify(s7));
-  check('keyboard Enter runs the nested launcher (winbox +1)',
+  check('keyboard Right+Enter runs the nested launcher (winbox +1)',
     count(s8, 'winbox') === count(s7, 'winbox') + 1,
     JSON.stringify([count(s7, 'winbox'), count(s8, 'winbox')]));
 }

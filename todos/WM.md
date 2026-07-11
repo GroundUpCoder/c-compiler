@@ -491,18 +491,35 @@ a flyout on a hover re-target would bounce focus to an app and the
 EV_FOCUS dismiss rule would tear the whole menu down. Hover policy is
 timer-free: hovering a group opens/re-targets its flyout; hovering a
 non-group row leaves an open flyout alone (forgiving diagonal travel).
-Below the programs the root column has a **separator + fixed section**
-(SETTINGS → activate("/bin/ctlpanel"); RUN… → the "startrun" dialog, a
-text field whose Enter spawns `/bin/sh -c <input>`; **Shut Down joins
-when todos/0051 lands**) and the navy **sidebar band** with a vertical
-label. **Keyboard**: arrows walk the deepest column, Right/Enter
-cascade, Left backs out, Esc closes all, printable keys type-ahead;
-keys route by menu-open state, not windowID. **The Start chord** is
-Ctrl+Esc, intercepted at the kernel wmKey seam exactly like the cycle
-chord (subscriber-gated, keyup swallowed, no-WM pass-through): **WMP
-EV_MENU 0x8C / MENU 0x1C / `wmctl menu`** — one op set, exposed twice.
-The Win7 two-pane stage (pinned + MRU left pane, search box) is
-**todos/0098**.
+**The Start chord** is Ctrl+Esc, intercepted at the kernel wmKey seam
+exactly like the cycle chord (subscriber-gated, keyup swallowed, no-WM
+pass-through): **WMP EV_MENU 0x8C / MENU 0x1C / `wmctl menu`** — one op
+set, exposed twice.
+
+**Start menu v3 — Win7 two-pane (todos/0098, landed 2026-07-11).** The
+ROOT window ("startmenu") is now a **fixed 290×234 two-pane panel** — the
+0078 cascade substrate is unchanged, only the root's layout and two
+persistence bits are new. **Left pane (170px)**: pinned entries
+(`~/.config/pinned`) + **MRU recents** (`~/.config/recent`, pushed to the
+head by the shared `activate()` on every real program launch — menu,
+desktop, or run dialog — de-duplicated, capped at RECENT_MAX 8) + an **All
+Programs** row, with a **search box** at its foot. Typing (the root holds
+kernel focus) filters a **flat recursive walk of the menu tree** into the
+left pane live, highlighting the top hit; **Enter launches it**. **All
+Programs** (hover / click / arrow-Right) cascades the tree as flyout
+columns — startmenu2 lists the GROUPS, startmenu3 a group's leaves — one
+level deeper than the 0078 root-lists-groups layout, reusing
+`menu_open_flyout` wholesale. **Right pane (120px)**: the fixed places
+(SETTINGS → activate("/bin/ctlpanel"); RUN… → the "startrun" dialog whose
+Enter spawns `/bin/sh -c <input>`; **Shut Down joins when todos/0051
+lands**). **Keyboard**: printable keys type into the search box; arrows
+walk the left pane; Enter launches the cursor row (the top hit in search
+mode); Right cascades All Programs; **Esc clears a non-empty search, then
+closes**. When a flyout is open its DEEPEST column owns the keys (the 0078
+arrows/type-ahead/Left/Esc). The Win95 sidebar band and the below-programs
+separator/fixed section are **gone** (superseded by the two panes). Non-
+goals recorded, not built: jump lists, tiles, live-filesystem search (only
+the menu tree), Aero glass on the menu.
 
 **Desktop icons (todos/0029).** A fullscreen borderless wm surface,
 pinned to the bottom z layer at create (SET_LAYER since todos/0038;
