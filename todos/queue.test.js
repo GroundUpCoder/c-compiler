@@ -256,6 +256,86 @@ test('check validates the priority field (integer 0..3 only)', () => {
   }
 });
 
+// --- difficulty (light/medium/heavy, optional; absent = untagged) ---
+
+test('add --difficulty sets the field; absent is omitted', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  let r = run(todos, ['add', '0002', '--slug', 'big', '--difficulty', 'heavy']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  r = run(todos, ['add', '0003', '--slug', 'small']); // no flag → untagged
+  assert.strictEqual(r.code, 0, r.stderr);
+  const q = readManifest(todos).queue;
+  assert.strictEqual(q.find(e => e.id === '0002').difficulty, 'heavy');
+  assert.ok(!('difficulty' in q.find(e => e.id === '0003')), 'untagged omits the field');
+  assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
+test('add rejects an invalid --difficulty loudly, writing nothing', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  for (const bad of ['hard', 'xl', 'tiny']) {
+    const r = run(todos, ['add', '0002', '--slug', 'nope', '--difficulty', bad]);
+    assert.strictEqual(r.code, 1, `--difficulty ${bad} must fail`);
+    assert.match(r.stderr, /difficulty must be one of light\/medium\/heavy/);
+  }
+  assert.ok(!fs.existsSync(path.join(todos, '0002-nope.md')), 'no scaffold written');
+  assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0001']); // unchanged
+});
+
+test('--difficulty normalizes case/whitespace (the manifest is always lowercase)', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  assert.strictEqual(run(todos, ['add', '0002', '--slug', 'ok', '--difficulty', 'Heavy']).code, 0);
+  assert.strictEqual(readManifest(todos).queue.find(e => e.id === '0002').difficulty, 'heavy');
+  assert.strictEqual(run(todos, ['set-difficulty', '0001', '  LIGHT ']).code, 0);
+  assert.strictEqual(readManifest(todos).queue[0].difficulty, 'light');
+});
+
+test('set-difficulty sets, clears with none, and errors on unknown id / bad value', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  assert.strictEqual(run(todos, ['set-difficulty', '0001', 'medium']).code, 0);
+  assert.strictEqual(readManifest(todos).queue[0].difficulty, 'medium');
+  assert.strictEqual(run(todos, ['set-difficulty', '0001', 'none']).code, 0); // clear
+  assert.ok(!('difficulty' in readManifest(todos).queue[0]), 'none removes the field');
+  let r = run(todos, ['set-difficulty', '0009', 'light']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /"0009" is not in the queue/);
+  run(todos, ['set-difficulty', '0001', 'heavy']);
+  r = run(todos, ['set-difficulty', '0001', 'bogus']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /difficulty must be one of light\/medium\/heavy/);
+  assert.strictEqual(readManifest(todos).queue[0].difficulty, 'heavy', 'failed set writes nothing');
+});
+
+test('list shows the difficulty marker; untagged stays unmarked', () => {
+  const todos = setup();
+  ['0001', '0002'].forEach(id => writeItem(todos, id, id));
+  writeManifest(todos, [{ id: '0001', difficulty: 'heavy' }, { id: '0002' }]);
+  const r = run(todos, ['list']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  assert.match(r.stdout, /0001  \[heavy\]  ready/);
+  assert.match(r.stdout, /0002  ready/); // untagged: no marker
+});
+
+test('check validates the difficulty field (known tags only)', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001', difficulty: 'light' }]);
+  assert.strictEqual(run(todos, ['check']).code, 0, 'light is valid');
+  for (const bad of ['hard', 3, '', 'HEAVY']) {
+    writeManifest(todos, [{ id: '0001', difficulty: bad }]);
+    const r = run(todos, ['check']);
+    assert.strictEqual(r.code, 1, `difficulty ${JSON.stringify(bad)} must fail`);
+    assert.match(r.stderr, /"difficulty" for "0001" must be one of light\/medium\/heavy/);
+  }
+});
+
 // --- reorder / block / done ---
 
 test('reorder --before moves an item', () => {

@@ -51,6 +51,11 @@ entry:
   bucket, and the array is never rewritten when a priority changes (the sort
   happens at read time, in `queue.js list` and the cc Todos tab, which marks
   non-P1 items `P0`/`P2`/`P3`).
+- `difficulty` — optional tag **`light` / `medium` / `heavy`** (absent =
+  untagged). It does **not** affect order or readiness; it lets a cc churn run
+  in **light mode** skip `heavy` items (and lets a difficulty-triage pass fill
+  the untagged ones in). The cc Todos tab renders a chip; `queue.js list` marks
+  it `[heavy]` etc.
 
 Everything else (title, status, body) stays in the
 `NNNN-<slug>.md` files. Mutate the queue through the CLI — the single writer +
@@ -60,6 +65,8 @@ validator — never by hand-editing `queue.json`:
 node todos/queue.js list                              # effective order + ready/blocked
 node todos/queue.js add next --slug foo [--blocked-by 0057 --after 0058] [--priority 0]
 node todos/queue.js set-priority 0064 0               # 0..3; 1 (default) removes the field
+node todos/queue.js add next --slug foo --difficulty heavy   # light|medium|heavy
+node todos/queue.js set-difficulty 0064 light         # light|medium|heavy|none (none clears)
 node todos/queue.js reorder 0064 --after 0058
 node todos/queue.js block 0048 --hard 0058,0060 --soft 0059
 node todos/queue.js done 0057                         # git-mv to done/, drop from queue
@@ -74,6 +81,7 @@ tolerates a consumer closing the pipe early (`| head` is fine).
 `node todos/queue.js check` must pass before a queue change is committed (it
 verifies every open file is listed exactly once, no ghost ids, deps reference
 real todos, no `blockedBy` cycles, any `priority` present is an integer 0–3,
+any `difficulty` present is `light`/`medium`/`heavy`,
 and that no open item carries a structured
 `Depends:` line — deps belong in the manifest, rationale in body prose). Its tests live in `todos/queue.test.js`
 (`node todos/queue.test.js`).

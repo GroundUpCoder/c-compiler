@@ -138,6 +138,10 @@ function loadManifestRaw() {
   return content;
 }
 
+// Allowed difficulty tags (optional per entry; absent = untagged). A light-mode
+// churn run in cc skips 'heavy' items. Kept in sync with cc's TODO_DIFFICULTIES.
+const DIFFICULTIES = ['light', 'medium', 'heavy'];
+
 // Parse + structurally validate the manifest JSON. Returns {manifest} or {error}.
 // `manifest` keeps entries as a plain array so writes round-trip losslessly.
 function parseManifest(content) {
@@ -166,6 +170,9 @@ function parseManifest(content) {
         && (!Number.isInteger(entry.priority) || entry.priority < 0 || entry.priority > 3)) {
       return { error: `"priority" for "${entry.id}" must be an integer 0..3 (got ${JSON.stringify(entry.priority)})` };
     }
+    if (entry.difficulty !== undefined && !DIFFICULTIES.includes(entry.difficulty)) {
+      return { error: `"difficulty" for "${entry.id}" must be one of ${DIFFICULTIES.join('/')} (got ${JSON.stringify(entry.difficulty)})` };
+    }
   }
   return { manifest: data };
 }
@@ -175,6 +182,7 @@ function formatManifest(manifest) {
   const lines = manifest.queue.map(e => {
     let s = `    { "id": ${JSON.stringify(e.id)}`;
     if (e.priority !== undefined && e.priority !== 1) s += `, "priority": ${e.priority}`; // P1 is the default — omitted
+    if (e.difficulty !== undefined) s += `, "difficulty": ${JSON.stringify(e.difficulty)}`; // untagged = field omitted
     if (e.blockedBy && e.blockedBy.length) s += `, "blockedBy": [${e.blockedBy.map(x => JSON.stringify(x)).join(', ')}]`;
     if (e.after && e.after.length) s += `, "after": [${e.after.map(x => JSON.stringify(x)).join(', ')}]`;
     s += ' }';
@@ -213,6 +221,20 @@ function parsePriorityArg(v, context) {
     die(`${context}: priority must be an integer 0..3 (P0 most urgent, P1 default, P3 background), got ${JSON.stringify(v)}`);
   }
   return n;
+}
+
+// ---------- difficulty ----------
+
+// Validate a CLI-supplied difficulty value; die loudly on anything but a known
+// tag. The literal 'none'/'' clears the field (expresses "untagged").
+function parseDifficultyArg(v, context) {
+  if (typeof v !== 'string') die(`${context}: difficulty must be one of ${DIFFICULTIES.join('/')} (or "none" to clear)`);
+  const s = v.trim().toLowerCase();
+  if (s === '' || s === 'none') return null; // clear
+  if (!DIFFICULTIES.includes(s)) {
+    die(`${context}: difficulty must be one of ${DIFFICULTIES.join('/')} (or "none" to clear), got ${JSON.stringify(v)}`);
+  }
+  return s;
 }
 
 // The EFFECTIVE order of attack: stable sort by priority (ascending, absent =
@@ -358,7 +380,8 @@ function cmdList(argv) {
     else state = 'ready';
     const prio = priorityOf(e);
     const marker = prio === DEFAULT_PRIORITY ? '' : `P${prio}  `; // P1 (default) stays unmarked
-    let line = `  ${String(i + 1).padStart(2)}. ${e.id}  ${marker}${state}`;
+    const diff = e.difficulty ? `[${e.difficulty}]  ` : ''; // untagged stays unmarked
+    let line = `  ${String(i + 1).padStart(2)}. ${e.id}  ${marker}${diff}${state}`;
     if (softUnmet.length) line += `   (after ▸ ${softUnmet.join(' ')})`;
     process.stdout.write(line + '\n');
   });
@@ -432,7 +455,7 @@ repo, then adjust it. No feature work in this item.
 
 function cmdAdd(argv) {
   const { flags, positional } = parseFlags('add', argv,
-    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'reflection']);
+    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection']);
   const fsState = scanFs();
   let id = positional[0];
   if (!id || id === 'next') id = nextId(fsState);
@@ -440,6 +463,7 @@ function cmdAdd(argv) {
   if (fsState.open.has(id) || fsState.done.has(id)) die(`add: id "${id}" already exists`);
 
   const priority = flags.priority !== undefined ? parsePriorityArg(flags.priority, 'add') : undefined;
+  const difficulty = flags.difficulty !== undefined ? parseDifficultyArg(flags.difficulty, 'add') : undefined;
 
   const isReflection = flags.reflection !== undefined;
   const title = typeof flags.title === 'string' ? flags.title
@@ -451,6 +475,7 @@ function cmdAdd(argv) {
 
   const entry = { id };
   if (priority !== undefined && priority !== DEFAULT_PRIORITY) entry.priority = priority; // P1 = default, field omitted
+  if (difficulty) entry.difficulty = difficulty; // untagged (null) = field omitted
   const hard = parseListFlag(typeof flags['blocked-by'] === 'string' ? flags['blocked-by'] : undefined);
   const soft = parseListFlag(typeof flags.after === 'string' ? flags.after : undefined);
   if (hard && hard.length) entry.blockedBy = hard;
@@ -498,6 +523,21 @@ function cmdSetPriority(argv) {
   validateOrDie(manifest, scanFs(), 'set-priority');
   writeManifest(manifest);
   process.stdout.write(`set-priority ${id} → P${priority}${priority === DEFAULT_PRIORITY ? ' (default; field removed)' : ''}\n`);
+}
+
+function cmdSetDifficulty(argv) {
+  const { positional } = parseFlags('set-difficulty', argv, []);
+  const [id, value] = positional;
+  if (!id || value === undefined) die('set-difficulty: usage: set-difficulty <ID> <light|medium|heavy|none>  (none clears the tag)');
+  const manifest = requireManifest();
+  const entry = entryFor(manifest, id);
+  if (!entry) die(`set-difficulty: "${id}" is not in the queue`);
+  const difficulty = parseDifficultyArg(value, 'set-difficulty');
+  if (difficulty === null) delete entry.difficulty; // untagged = absence
+  else entry.difficulty = difficulty;
+  validateOrDie(manifest, scanFs(), 'set-difficulty');
+  writeManifest(manifest);
+  process.stdout.write(`set-difficulty ${id} → ${difficulty === null ? 'untagged (field removed)' : difficulty}\n`);
 }
 
 function cmdReorder(argv) {
@@ -590,9 +630,12 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
           [--after A,B] [--blocked-by A,B] [--pos N]
           [--priority 0..3]                     P0 most urgent … P3 background (default P1,
                                                 field omitted at P1)
+          [--difficulty light|medium|heavy]     optional difficulty tag (light runs skip heavy)
           [--reflection]                        curation-only "queue reflection" scaffold
   set-priority <ID> <0..3>                      set an entry's priority (1 = default,
                                                 removes the field)
+  set-difficulty <ID> <light|medium|heavy|none> set an entry's difficulty tag
+                                                (none clears it)
   reorder <ID> --before <ID> | --after <ID> | --pos <N>
   done <ID>                                     git-mv to done/, drop from queue
   block <ID> [--hard A,B] [--soft C,D]          set hard/soft deps ("" clears)
@@ -614,6 +657,7 @@ function main() {
     case 'list': return cmdList(rest);
     case 'add': return cmdAdd(rest);
     case 'set-priority': return cmdSetPriority(rest);
+    case 'set-difficulty': return cmdSetDifficulty(rest);
     case 'reorder': return cmdReorder(rest);
     case 'done': return cmdDone(rest);
     case 'block': return cmdBlock(rest);
