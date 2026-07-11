@@ -27,7 +27,9 @@ third time.
   taskbar-polish browser leg (os-shell.mjs: strip-menu render + outside-
   click/Esc dismiss, clock-hover datepop, Show Desktop reveal/restore) was
   authored but NOT run in its landing session (no playwright there) — run
-  and eyeball it here.**
+  and eyeball it here. Likewise the **0151 long/spaced Desktop-icon launch
+  leg** (os-shell.mjs: two spaced launchers dblclicked, winCount +1 each)
+  authored without playwright — run it in this sweep.**
 - Free-form storms per the round-2 list, plus NEW surface since:
   user32 windows (0058) if landed — HWND-tree windows under
   drag/scale/maximize/kill storms alongside SDL ones; Cairo/0061
