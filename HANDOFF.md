@@ -48,12 +48,16 @@ todos/queue.js check` passes.
 
 ## Operator-owed (browser)
 
-No `os-mgba.mjs` written — the browser sweep leg folds into the standing **0064**
-operator-owed debt (the kernel e2e is the committed headless pixel test). 0064
-still owes the operator: the pointer-lock human check + the 0094–0107 browser
-legs (incl. the unrun `os-paint.mjs` from 0107). Run the browser sweep with
-`node tests/browser/os-sweep.mjs` when Playwright is available (not installed
-in-repo here).
+**0112 owes nothing here** — no `os-mgba.mjs`, and none is required: the kernel
+e2e (`test_mgba_e2e.js`, headless PPM pixel test through the real compositor) is
+the committed acceptance, matching the SameBoy precedent (0075 shipped
+kernel-e2e-only, no `os-sameboy.mjs`). An `os-mgba.mjs` would be optional
+parity-with-doom/quake polish, not a debt.
+
+The standing **0064** browser debt is unchanged and separate: the pointer-lock
+human check + the 0094–0107 browser legs (incl. the unrun `os-paint.mjs` from
+0107). Run the browser sweep with `node tests/browser/os-sweep.mjs` when
+Playwright is available (not installed in-repo here).
 
 ## Gotchas carried forward (trimmed to the live ones)
 

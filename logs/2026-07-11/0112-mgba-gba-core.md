@@ -95,9 +95,15 @@ The rest were missing-symbol fills:
   ROM (proves ARM core + renderer end-to-end headlessly) — the exact
   sameboy/gameboy pattern, since copyrighted ROMs aren't vendored. The
   `VFileOpen` real-ROM path is wired and covered by the same code.
-- **Browser sweep leg** (`os-mgba.mjs`) not written — folds into the standing
-  0064 operator-owed browser-leg debt (the kernel e2e is the committed
-  headless pixel test).
+- **No dedicated browser-sweep leg** (`os-mgba.mjs`) — and none is owed: the
+  acceptance's "pixel-tested like the gameboy/sameboy legs" refers to the
+  *headless PPM pixel-test pattern*, which `test_mgba_e2e.js` matches. The
+  predecessor SameBoy (0075) set the precedent — kernel e2e only, no
+  `os-sameboy.mjs`. A browser leg would be optional parity-with-doom/quake
+  polish, not a residue.
+- **No `targets/*.json`** (the Plan mentioned ROM build-targets) — SameBoy's
+  target points at its shared gitignored ROM dir; mGBA vendors no ROMs, so a
+  target would aim at nothing. `mgba <rom>` usage is in the README instead.
 - **GB/GBC via mGBA** deliberately not built (SM83 core excluded) — SameBoy is
   the more accurate GB/GBC core and stays the default, exactly as the item
   intended ("free side-effect, not the reason to vendor").
