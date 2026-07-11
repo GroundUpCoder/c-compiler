@@ -1,10 +1,25 @@
 # 0096 — Screensaver — idle-triggered, Win95 classics
 
-- **Status**: open
-- **Design**: `todos/WM.md` (the desktop/Start menu already use fullscreen
-  borderless top-layer surfaces — the same pattern a screensaver wants); an
-  idle timer in `os/wm.c`. Optional Screen Saver tab in Control Panel v2
-  (0089).
+- **Status**: done (2026-07-11) — landed in full: kernel idle clock (WMP
+  GET_IDLE/R_IDLE, `_wmLastInput` stamped at wmKey/wmPointer) + SAVER
+  gesture → EV_SAVER (`wmctl idle`/`wmctl saver`); wm.c policy — 1s config
+  poll (os/saver.h store: ~/.config/screensaver → /etc → baked /usr/share,
+  keys saver/timeout/text, default starfield/900s), fullscreen borderless
+  top-layer focus-keeping "screensaver" window raised past the timeout,
+  ANY input on it dismisses + restores focus; marquee + starfield draw
+  routines; ctlpanel Screen Saver applet (radios/Apply carry-forward
+  writes, Preview = WMP SAVER); image v57. Verified:
+  tests/kernel/test_saver_e2e.js (25 checks) + test_wm.js mechanism legs
+  + tests/browser/os-saver.mjs, full kernel suite green. Follow-ups:
+  Mystify/3D-pipes savers → todos/0115; the operator look-and-feel check
+  joined the 0064 sweep list. Recorded trims: EV_SCREEN dismisses (idle
+  re-raises) rather than re-fitting; hidden-tab vsync parking pauses the
+  animation (0100 semantics); VT1 tty typing is not wm input, so it does
+  not feed the idle clock (the saver lives on VT2 where that is moot).
+- **Design**: `todos/WM.md` "Implementation status — screensaver" (the
+  landed record); originally: the desktop/Start menu fullscreen
+  borderless top-layer pattern + an idle timer in `os/wm.c`, optional
+  Screen Saver tab in Control Panel v2 (0089).
 
 ## Goal
 

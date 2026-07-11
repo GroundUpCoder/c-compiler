@@ -100,6 +100,19 @@
  * Enter drive it. The Start strip and empty bar stay reserved for the
  * 0101 taskbar-strip menu; window title bars for 0102.
  *
+ * The screensaver (todos/0096): after the configured seconds of idle —
+ * measured by the KERNEL (WMP GET_IDLE, polled once a second off the frame
+ * tick), since this process only ever sees input over its own windows —
+ * one more fullscreen borderless window ("screensaver") raises on the TOP
+ * layer and runs a classic (marquee / starfield, drawn per frame) until
+ * any input lands on it; being fullscreen, top, and focused (the
+ * create-focus is deliberately NOT handed back — the anti-peek), every
+ * pointer and key event does land on it, so dismissal needs no kernel
+ * help. Config via saver.h (~/.config/screensaver, /etc/screensaver, the
+ * baked /usr/share/screensaver; re-read at each poll so the Control Panel
+ * applet's writes go live). `wmctl saver` / the applet's Preview button
+ * ride WMP EV_SAVER to raise it immediately (the EV_MENU pattern).
+ *
  * The kernel keeps its chrome policy (drag, close box, click-to-focus) as
  * the WM-crashed fallback — killing this process leaves the system usable,
  * and it can simply be started again (`wm &`).
@@ -124,6 +137,7 @@
 #include "openwith.h"
 #include "fileops.h"
 #include "sounds.h"
+#include "saver.h"
 
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
@@ -313,6 +327,11 @@ static int32_t ctx_target = 0;     /* taskbar menu: the acted-on window */
 static int ctx_icon = -1;          /* icon menu: desk[] index */
 static void ctx_dismiss(void);     /* defined with the rest (0091) */
 static void desk_delete(void);     /* likewise (0093 — desk_key's Del) */
+static void menu_dismiss(void);    /* these three likewise (0096 —
+                                      saver_show clears every popup
+                                      before covering the screen) */
+static void run_dismiss(void);
+static void peek_dismiss(void);
 
 /* Aero Peek state (todos/0063): hovering a taskbar button raises a live
  * thumbnail popup — a fourth borderless window in this process, fed by
@@ -339,6 +358,22 @@ static SDL_Surface *snapprev_surf;
 static int32_t snapprev_sid = 0;   /* EV_CREATED echo ("snappreview") */
 static int snapprev_edge = 0;      /* zone currently previewed */
 static int snapprev_x, snapprev_y, snapprev_w, snapprev_h;
+
+/* Screensaver state (todos/0096): one fullscreen borderless top-layer
+ * window, alive only while the saver runs; the animation redraws it per
+ * frame tick. The idle clock is the kernel's (GET_IDLE -> R_IDLE, routed
+ * off the drain like the peek's R_SHOT). */
+#define SAVER_STARS 128
+static SDL_Window *saver_win;      /* NULL = not running */
+static SDL_Surface *saver_surf;
+static int32_t saver_sid = 0;      /* EV_CREATED echo ("screensaver") */
+static int32_t saver_prev = 0;     /* the window to re-focus at dismissal */
+static int saver_kind = 0;         /* 1 marquee, 2 starfield (from config) */
+static sv_cfg saver_cfg;           /* last polled configuration */
+static int saver_tick = 0;         /* coarse once-a-second poll counter */
+static int idle_pending = 0;       /* GET_IDLE in flight */
+static int marq_x, marq_y;         /* marquee banner position */
+static float star_x[SAVER_STARS], star_y[SAVER_STARS], star_z[SAVER_STARS];
 
 /* ---- 5x7 font (classic HD44780-style patterns), A-Z 0-9 - . ---- */
 static const uint8_t F_AZ[26][7] = {
@@ -656,6 +691,151 @@ static void snapprev_show(int edge) {
                 (j < 2 || j >= snapprev_h - 2 || i < 2 || i >= snapprev_w - 2)
                     ? border : fillc;
     SDL_UpdateWindowSurface(snapprev_win);
+}
+
+/* ---- the screensaver (todos/0096) ---- */
+
+/* The marquee's glyph zoom for the current screen: the 5x7 font scaled to
+ * a banner that reads across the room, clamped sane on tiny screens. */
+static int saver_zoom(void) {
+    int z = scr_h / 64;
+    if (z < 2) z = 2;
+    if (z > 8) z = 8;
+    return z;
+}
+
+/* draw_text_s at an integer zoom — each font pixel becomes a z x z block.
+ * Off-surface glyphs clip in fill_s, so the banner can enter and leave. */
+static void draw_text_zoom(uint32_t *px, int sw, int sh, int x, int y,
+                           const char *s, int z, uint32_t col) {
+    for (; *s; s++, x += 6 * z) {
+        if (x >= sw || x + 5 * z <= 0) continue;
+        const uint8_t *g = glyph(*s);
+        if (!g) continue;
+        for (int r = 0; r < 7; r++)
+            for (int c = 0; c < 5; c++)
+                if (g[r] & (0x10 >> c))
+                    fill_s(px, sw, sh, x + c * z, y + r * z, z, z, col);
+    }
+}
+
+/* One star back to the far plane ("deep") or anywhere along the flight
+ * path (the initial fill, so the field starts populated). */
+static void star_respawn(int i, int deep) {
+    star_x[i] = (float)(rand() % 2001 - 1000) / 1000.0f;
+    star_y[i] = (float)(rand() % 2001 - 1000) / 1000.0f;
+    star_z[i] = deep ? 1.0f : (float)(rand() % 950 + 50) / 1000.0f;
+}
+
+/* Tear the saver down and put focus back where it was. If the previously
+ * focused window died meanwhile, the kernel's destroy-time focus fall
+ * already picked someone — leave it be. */
+static void saver_dismiss(void) {
+    if (!saver_win) return;
+    SDL_DestroyWindow(saver_win);
+    saver_win = NULL;
+    saver_surf = NULL;
+    saver_sid = 0;
+    if (saver_prev && find(saver_prev)) {
+        int32_t f[1] = { saver_prev };
+        wmp_send(sock, WMP_FOCUS, f, 1);
+    }
+    saver_prev = 0;
+}
+
+/* Raise the saver saver_cfg picks. Fullscreen borderless on the TOP layer
+ * (the EV_CREATED echo parks it); the create-focus is deliberately KEPT —
+ * unlike every other piece of wm furniture — so all keys land on the saver
+ * and dismiss it. Any open popup furniture goes first: its geometry (and
+ * the focus rules it relies on) must not fight the covering window. */
+static void saver_show(void) {
+    if (saver_win) return;
+    if (strcasecmp(saver_cfg.saver, "marquee") == 0) saver_kind = 1;
+    else if (strcasecmp(saver_cfg.saver, "starfield") == 0) saver_kind = 2;
+    else return;                       /* 'none' (or a typo): nothing to run */
+    menu_dismiss();
+    run_dismiss();
+    peek_dismiss();
+    ctx_dismiss();
+    snapprev_dismiss();
+    saver_prev = 0;
+    for (int i = 0; i < nwins; i++)
+        if (wins[i].focused && !wins[i].minimized) { saver_prev = wins[i].sid; break; }
+    marq_x = scr_w;
+    marq_y = (scr_h - 7 * saver_zoom()) / 2;
+    for (int i = 0; i < SAVER_STARS; i++) star_respawn(i, 0);
+    saver_win = SDL_CreateWindow("screensaver", scr_w, scr_h,
+                                 SDL_WINDOW_BORDERLESS);
+    if (!saver_win) return;
+    saver_surf = SDL_GetWindowSurface(saver_win);
+}
+
+/* The once-a-second poll (off the frame tick): re-read the config — so a
+ * Control Panel write applies without a wm restart — and ask the kernel
+ * how idle the system is. The R_IDLE reply lands in idle_consume via the
+ * drain; one request in flight at a time. */
+static void saver_poll(void) {
+    if (saver_win) return;
+    sv_get(&saver_cfg);
+    if (saver_cfg.timeout <= 0 || strcasecmp(saver_cfg.saver, "none") == 0)
+        return;
+    if (idle_pending) return;
+    if (wmp_send(sock, WMP_GET_IDLE, NULL, 0) == 0) idle_pending = 1;
+}
+
+/* An R_IDLE reply landed (drain_socket routes every one here). Compare in
+ * whole seconds — the poll is second-coarse anyway. */
+static void idle_consume(wmp_hdr *h) {
+    idle_pending = 0;
+    int32_t ms = 0;
+    if (h->plen < 4 || wmp_read_all(sock, &ms, 4) != 0) exit(1);
+    if (wmp_skip(sock, h->plen - 4) != 0) exit(1);
+    if (!saver_win && saver_cfg.timeout > 0 && ms / 1000 >= saver_cfg.timeout)
+        saver_show();
+}
+
+/* EV_SAVER (wmctl saver / the Control Panel Preview, todos/0096): raise
+ * the configured saver NOW. A 'none' config means there is nothing to
+ * preview — the gesture is a no-op then. */
+static void saver_force(void) {
+    sv_get(&saver_cfg);
+    saver_show();
+}
+
+/* One animation frame. Full black repaint every tick — the surface is the
+ * whole screen, cheap at these sizes (doom pushes more pixels). */
+static void draw_saver(void) {
+    if (!saver_win) return;
+    uint32_t *px = (uint32_t *)saver_surf->pixels;
+    uint32_t black = rgb(0, 0, 0), white = rgb(255, 255, 255);
+    fill_s(px, scr_w, scr_h, 0, 0, scr_w, scr_h, black);
+    if (saver_kind == 1) {             /* the scrolling marquee */
+        int z = saver_zoom();
+        int bw = (int)strlen(saver_cfg.text) * 6 * z;
+        draw_text_zoom(px, scr_w, scr_h, marq_x, marq_y, saver_cfg.text, z, white);
+        marq_x -= 4;
+        if (marq_x + bw < 0) {         /* wrapped: new pass, new height */
+            marq_x = scr_w;
+            int span = scr_h - 7 * z - 2 * DESK_MARGIN;
+            marq_y = DESK_MARGIN + (span > 0 ? rand() % span : 0);
+        }
+    } else {                           /* the starfield flythrough */
+        int cx = scr_w / 2, cy = scr_h / 2;
+        for (int i = 0; i < SAVER_STARS; i++) {
+            star_z[i] -= 0.008f;
+            if (star_z[i] < 0.03f) star_respawn(i, 1);
+            int sx = cx + (int)(star_x[i] / star_z[i] * (float)cx);
+            int sy = cy + (int)(star_y[i] / star_z[i] * (float)cy);
+            if (sx < 0 || sx >= scr_w || sy < 0 || sy >= scr_h) {
+                star_respawn(i, 1);    /* flew past the rim: back deep */
+                continue;
+            }
+            int size = star_z[i] < 0.15f ? 3 : star_z[i] < 0.4f ? 2 : 1;
+            int v = 255 - (int)(star_z[i] * 200.0f);
+            fill_s(px, scr_w, scr_h, sx, sy, size, size, rgb(v, v, v));
+        }
+    }
+    SDL_UpdateWindowSurface(saver_win);
 }
 
 /* ---- launching + the Start menu (todos/0028) ---- */
@@ -1989,6 +2169,9 @@ static void screen_changed(void) {
     peek_dismiss();                    /* likewise (todos/0063) */
     ctx_dismiss();                     /* likewise (todos/0091) */
     snapprev_dismiss();                /* likewise (todos/0095) */
+    saver_dismiss();                   /* geometry is stale; the idle clock
+                                          re-raises it in timeout seconds
+                                          (todos/0096) */
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
@@ -2063,6 +2246,20 @@ static void handle_event(wmp_hdr *h) {
                         wmp_send(sock, WMP_FOCUS, f, 1);
                         break;
                     }
+            } else if (strncmp(r.title, "screensaver", 12) == 0) {   /* 0096 */
+                if (!saver_win) return;        /* dismissed before the echo */
+                saver_sid = r.sid;
+                int32_t a[3] = { r.sid, 0, 0 };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t ly[2] = { r.sid, 1 };  /* top layer: over everything */
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                /* Deliberately NO focus hand-back (the one exception to the
+                 * peek pattern): the saver keeps focus so every key lands
+                 * on it and dismisses it. The explicit FOCUS also RAISES it
+                 * within the +1 band — SET_LAYER's stable normalize would
+                 * otherwise leave it under the earlier-created taskbar. */
+                int32_t f[1] = { r.sid };
+                wmp_send(sock, WMP_FOCUS, f, 1);
             } else if (strncmp(r.title, "peek", 5) == 0) {   /* todos/0063 */
                 if (!peek_win) return;         /* dismissed before the echo */
                 peek_sid = r.sid;
@@ -2150,6 +2347,7 @@ static void handle_event(wmp_hdr *h) {
             if (p[0] == ctx_sid[d]) ctx_sid[d] = 0;
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
         if (p[0] == snapprev_sid) snapprev_sid = 0;       /* defensive (0095) */
+        if (p[0] == saver_sid) saver_sid = 0;             /* defensive (0096) */
         if (p[0] == desk_sid) { desk_sid = 0; desk_focused = 0; }   /* (0077) */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
          * across any close (todos/0031 — the Win95 behavior). */
@@ -2287,6 +2485,11 @@ static void handle_event(wmp_hdr *h) {
         snap_key(p[0]);
         break;
     }
+    case WMP_EV_SAVER: {                /* wmctl saver / Preview (0096) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        saver_force();
+        break;
+    }
     case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         scr_w = p[0]; scr_h = p[1];
@@ -2311,6 +2514,7 @@ static void drain_socket(void) {
         if (wmp_next(sock, &h) != 0) exit(1);      /* endpoint gone: give up */
         if (h.type >= 0x80) handle_event(&h);
         else if (h.type == WMP_R_SHOT) peek_consume(&h);   /* THUMB (0063) */
+        else if (h.type == WMP_R_IDLE) idle_consume(&h);   /* GET_IDLE (0096) */
         else if (wmp_skip(sock, h.plen) != 0) exit(1);
     }
 }
@@ -2430,6 +2634,8 @@ static void frame_cb(void) {
     /* Coarse /root/Desktop watch (todos/0029): one readdir per second-ish
      * of frame ticks — no watch API exists or is needed. */
     if (++desk_tick >= 60) { desk_tick = 0; desk_load(); }
+    /* The screensaver's idle poll rides the same cadence (todos/0096). */
+    if (++saver_tick >= 60) { saver_tick = 0; saver_poll(); }
     /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
      * Menu columns and the run dialog come and go inside handlers, so
      * their ids are resolved per event (menu_col_for), not cached. */
@@ -2437,6 +2643,17 @@ static void frame_cb(void) {
     SDL_WindowID pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        /* A running screensaver swallows the waking input (todos/0096):
+         * fullscreen on the top layer and holding focus, it receives every
+         * pointer and key event — any of them dismisses. */
+        if (saver_win &&
+            (e.type == SDL_EVENT_MOUSE_MOTION ||
+             e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+             e.type == SDL_EVENT_MOUSE_BUTTON_UP ||
+             e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP)) {
+            saver_dismiss();
+            continue;
+        }
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
             int md = menu_col_for(e.button.windowID);
             int cd = ctx_col_for(e.button.windowID);
@@ -2538,6 +2755,7 @@ static void frame_cb(void) {
     draw_run();
     draw_desk();
     if (peek_dirty) { peek_dirty = 0; draw_peek(); }
+    draw_saver();                      /* every frame: the animation (0096) */
 }
 
 /* The Recycle Bin's desktop presence (todos/0093): the trash store dirs
@@ -2558,6 +2776,7 @@ static void ensure_recycle(void) {
 
 int main(void) {
     own_pid = getpid();
+    srand((unsigned)time(NULL));       /* starfield / marquee-pass jitter (0096) */
     chdir("/root");                    /* children inherit the cwd (0028) */
     ensure_recycle();                  /* the bin exists before desk_load (0093) */
     sock = wmp_connect();

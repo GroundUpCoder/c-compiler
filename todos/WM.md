@@ -668,6 +668,59 @@ design, not worth policy). Storm-authoring gotchas for round 3 live in
 chrome, taskbar-button focus-then-minimize semantics, `&;` hush parse
 error, `__osScreen` only tracks the viewport on VT2).
 
+## Implementation status — screensaver (landed 2026-07-11, todos/0096)
+
+The mechanism/policy split, one more time. Kernel side (mechanism only):
+`_wmLastInput` is stamped at the wmKey/wmPointer ENTRIES — the only two
+places every piece of real input crosses (the UI bridge, pointer lock,
+drags, chrome, client routing; `INJECT_SCREEN` included since it enters
+via wmPointer; per-window `INJECT_KEY`/`INJECT_POINTER` deliberately do
+NOT count, so tests can poke apps without waking or blocking the saver)
+— and read back via `GET_IDLE {} -> R_IDLE {ms}` (`wmctl idle`). R_IDLE
+is its own reply type so /bin/wm's fire-and-forget drain can route it,
+the R_SHOT precedent. `SAVER {}` (`wmctl saver`, the Control Panel
+Preview) emits `EV_SAVER` under the EV_MENU rules — subscriber-gated,
+R_ERR without a WM (the saver IS policy). The kernel keeps NO timeout,
+NO saver state, and never raises anything itself.
+
+wm.c side (all the policy): a once-a-second poll off the frame tick
+re-reads the config — store = first-existing whole-file of
+`~/.config/screensaver`, `/etc/screensaver`, `/usr/share/screensaver`
+(os/saver.h, the sounds.h shape; keys `saver none|marquee|starfield`,
+`timeout` seconds, `text`; baked default starfield/900s — 900 keeps any
+600s-capped headless test from having the saver raise mid-run) — and
+sends GET_IDLE; past the timeout it raises "screensaver": fullscreen,
+borderless, TOP layer, and — the one exception to the peek focus
+hand-back — it KEEPS focus, so every key lands on it. The explicit
+FOCUS in the echo handler also RAISES it within the +1 band: SET_LAYER's
+stable normalize would otherwise leave it UNDER the earlier-created
+taskbar (a real bug found in the first smoke — the Start menu never
+noticed because it never overlaps the bar). Being fullscreen/top/
+focused, every pointer and key event lands on the saver, so dismissal
+is pure SDL-event policy: any motion/button/key destroys it, restores
+the prior focus, and the waking input itself re-stamped the kernel
+clock. Savers are self-contained draw routines over the one surface,
+repainted per frame tick: marquee (5x7 font at an integer zoom, ~4px/
+frame right-to-left, random height per pass) and starfield (128 stars,
+z-flythrough, size/brightness by depth). EV_SCREEN dismisses (stale
+geometry; the idle clock re-raises it). The Control Panel grew a
+Screen Saver applet (radios apply on click, Apply writes the timeout —
+both via sv_set's carry-forward — Preview sends WMP SAVER).
+
+Non-goals recorded in the item: password/lock (single-user OS), .scr
+plug-ins, GPU savers. Known trim: while the saver runs, hidden-tab
+vsync parking also parks the animation (honest pause, the 0100 rule).
+
+Tests: `tests/kernel/test_saver_e2e.js` (25 checks: wmctl idle, baked
+defaults, idle raise — geometry/flags/above-the-bar — marquee shots
+differ + black corner, motion dismissal + focus restore + clock reset,
+re-raise, `saver none`, wmctl saver, the applet's store writes +
+Preview, no-WM refusal with the clock still answering) + mechanism legs
+in test_wm.js (idle stamping, wmSaver gating) +
+`tests/browser/os-saver.mjs` (real idle on VT2 → black screen + row-
+diff animation probe, real-mouse dismissal, no re-raise inside the
+interval, wmctl-saver + key dismissal).
+
 ## Implementation status — Aero Snap (landed 2026-07-11, todos/0095)
 
 The mechanism/policy split holds exactly. Kernel side: the title drag

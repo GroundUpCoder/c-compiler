@@ -538,7 +538,33 @@ EV_SCREEN re-fits snapped like maximized. Tests:
 `tests/kernel/test_snap_e2e.js` + mechanism legs in
 test_wm.js/test_wm_policy.js + `tests/browser/os-snap.mjs` (NB winbox
 flips its fill on the unswallowed Meta keydown — one toggle per chord).
-Image version is **v56**.
+The screensaver (todos/0096): idle-triggered Win95 classics, the same
+mechanism/policy split. Kernel: `_wmLastInput` stamps at the wmKey/
+wmPointer ENTRIES (all real input incl. INJECT_SCREEN; per-window
+INJECT_KEY/INJECT_POINTER deliberately don't — agents can poke apps
+without waking it), read via GET_IDLE 0x1E → R_IDLE 0x44 (`wmctl
+idle`; own reply type so wm.c's drain can route it, the R_SHOT
+precedent); SAVER 0x1F → EV_SAVER 0x90 (`wmctl saver` / ctlpanel
+Preview; the EV_MENU rules). wm.c: polls GET_IDLE once a second,
+config via os/saver.h (openwith-shaped first-existing whole-file:
+~/.config/screensaver, /etc/screensaver, baked /usr/share/screensaver;
+keys saver none|marquee|starfield, timeout seconds, text; default
+starfield/900s — 900 > the 600s test cap so no headless e2e can have
+it raise mid-run; sv_set carry-forward writes serve the ctlpanel
+Screen Saver applet's radios/Apply); past the timeout a fullscreen
+borderless TOP-layer "screensaver" window raises and — the ONE
+exception to the peek focus hand-back — KEEPS focus (the echo's
+explicit FOCUS also raises it within the +1 band: SET_LAYER's stable
+normalize would leave it UNDER the earlier-created taskbar), so every
+pointer/key event lands on it and ANY of them dismisses + restores the
+prior focus (the waking input re-stamped the clock by arriving);
+marquee (5x7 font zoomed, random height per pass) + starfield (128
+stars) repaint per frame tick; EV_SCREEN dismisses (idle re-raises);
+Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
+test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
+input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
+interval).
+Image version is **v57**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

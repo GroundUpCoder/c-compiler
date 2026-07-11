@@ -458,6 +458,18 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   chord emits; direction 0 left / 1 right
  *                                   / 2 up / 3 down; R_ERR with no
  *                                   subscriber, since snap IS policy)
+ *   GET_IDLE { }                 -> R_IDLE { ms }  (todos/0096: ms since
+ *                                   the last real input — wmKey/wmPointer,
+ *                                   INJECT_SCREEN included, per-window
+ *                                   injection excluded. Its own reply type
+ *                                   so a subscriber's fire-and-forget drain
+ *                                   can route it, the R_SHOT precedent; the
+ *                                   screensaver policy in /bin/wm polls it)
+ *   SAVER { }                    -> R_OK | R_ERR   (todos/0096: fire the
+ *                                   screensaver gesture — wmctl saver / the
+ *                                   Control Panel Preview — as EV_SAVER;
+ *                                   R_ERR with no subscriber, since the
+ *                                   saver IS policy)
  *   SET_LAYER { sid, layer }     -> R_OK | R_ERR   (todos/0038: pin the
  *                                   surface to a z LAYER — -1 below normal
  *                                   windows (the desktop layer), 0 normal,
@@ -533,7 +545,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * EV_SNAP_KEY { direction } (todos/0095: the Win+arrow chord — arrows with
  * GUI held — or a SNAP command; 0 left / 1 right / 2 up / 3 down; the same
  * no-subscriber pass-through rule as EV_CYCLE; policy snaps the focused
- * window to halves, maximizes, restores/minimizes).
+ * window to halves, maximizes, restores/minimizes) |
+ * EV_SAVER { } (todos/0096: a SAVER command — wmctl saver or the Control
+ * Panel Preview button; policy raises the configured screensaver at once;
+ * only emitted with a subscriber. Idle-triggered raising needs no event:
+ * policy polls GET_IDLE and acts on its own timeout).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
@@ -565,6 +581,17 @@ var WMP = {
                                         path into the same EV_SNAP_KEY the
                                         Win+arrow chord emits. R_ERR with no
                                         subscribed WM (snap IS policy) */
+  GET_IDLE: 0x1E,                    /* { }: ms since the last real input
+                                        (todos/0096) -> R_IDLE { ms }. The
+                                        kernel is the only one who sees ALL
+                                        input; the screensaver policy in
+                                        /bin/wm polls this */
+  SAVER: 0x1F,                       /* { }: fire the screensaver gesture
+                                        (todos/0096) — the wmctl-saver /
+                                        ctlpanel-Preview path into EV_SAVER;
+                                        policy raises the saver at once.
+                                        R_ERR with no subscribed WM (the
+                                        saver IS policy) */
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
   INJECT_SCREEN: 0x22,               /* { kind, xf32, yf32, a }: screen-coord
                                         pointer injection through the full
@@ -580,6 +607,10 @@ var WMP = {
                                         filter — CPU pixels, so gpu-transport
                                         surfaces thumb black like wmScreenshot */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
+  R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (todos/
+                                        0096) — its own type so /bin/wm's
+                                        fire-and-forget drain can route it
+                                        (the R_SHOT precedent) */
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
   EV_SCALED: 0x88, EV_SCALE_REQ: 0x89, EV_TITLE_ACTIVATE: 0x8A,
@@ -614,6 +645,11 @@ var WMP = {
                                         0 L / 1 R / 2 U / 3 D; the EV_CYCLE
                                         pass-through rule; policy acts on
                                         the focused window */
+  EV_SAVER: 0x90,                    /* { }: a SAVER command (todos/0096) —
+                                        wmctl saver / the Control Panel
+                                        Preview button; policy raises the
+                                        configured screensaver immediately;
+                                        only emitted with a subscriber */
 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -1324,6 +1360,13 @@ function Kernel(opts) {
                               // moment of the transition. Browser-compositor
                               // visual only — pruned after WM_ANIM_MS, never
                               // read by the headless composite or hit test.
+  this._wmLastInput = Date.now();  // last user input (todos/0096): stamped at
+                                   // the wmKey/wmPointer entry — the ONLY
+                                   // places all real input crosses — and read
+                                   // back via GET_IDLE/wmIdleMs(). Pure
+                                   // mechanism: the screensaver policy (its
+                                   // timeout, the saver itself) lives in
+                                   // /bin/wm, which polls this.
   // Audio mixer (todos/0017; WM.md "Audio mixing"). Streams register via
   // AUDIO_OPEN; the pump mixes them into the one output ring (audioInit).
   this._audioStreams = new Map(); // aid -> stream (see _audioRpc AUDIO_OPEN)
@@ -3211,6 +3254,7 @@ Kernel.prototype._wmEventTo = function (sid, words) {
  * policy right here. The agent inject API below shares these code paths. */
 
 Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
+  this._wmLastInput = Date.now();      // idle clock (todos/0096)
   // Window cycling (todos/0032): ONE kernel chord — Tab with Alt held
   // (Ctrl+Alt+Tab; plain Alt+Tab where the browser delivers it, e.g.
   // macOS) — is intercepted at this routing seam and emitted as WMP
@@ -3251,6 +3295,12 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
  * moves with dx/dy deltas instead of coordinates. */
 Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   opts = opts || {};
+  this._wmLastInput = Date.now();      // idle clock (todos/0096) — every real
+                                       // pointer path (lock, drags, chrome,
+                                       // client) enters here, INJECT_SCREEN
+                                       // included; per-window INJECT_POINTER
+                                       // deliberately does not (tests can
+                                       // poke apps without waking the saver)
   // Pointer lock active: everything goes to the focused relative-mouse
   // surface — motion as relative records, buttons/wheel at the client
   // center (SDL freezes the position in relative mode; apps read deltas).
@@ -3674,6 +3724,24 @@ Kernel.prototype.wmSnap = function (dir) {
   return true;
 };
 
+/* Ms since the last real user input (todos/0096) — the screensaver policy's
+ * idle clock. Mechanism only: the kernel keeps NO timeout and NO saver
+ * state; /bin/wm polls this over GET_IDLE and applies its configured
+ * timeout. Clamped into an i32 for the wire. */
+Kernel.prototype.wmIdleMs = function () {
+  return Math.min(0x7fffffff, Math.max(0, Date.now() - this._wmLastInput));
+};
+
+/* Fire the screensaver gesture (todos/0096) — wmctl saver and the Control
+ * Panel Preview button ride this into EV_SAVER, the wmMenu pattern. Policy
+ * raises the configured saver immediately. Refuses without a subscriber
+ * (the saver IS policy — nothing would ever answer). */
+Kernel.prototype.wmSaver = function () {
+  if (!this._wmSubs.size) return false;
+  this._wmEmit(WMP.EV_SAVER, []);
+  return true;
+};
+
 /* Minimize: off screen + out of hit-testing, still listed. Focus falls via
  * _wmFocusFall (topmost normal-layer window first — todos/0039). Restore =
  * wmFocus (which un-minimizes). */
@@ -4081,6 +4149,10 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.CYCLE: ok(this.wmCycle(g(0))); break;
     case WMP.MENU: ok(this.wmMenu()); break;           // Start menu (0078)
     case WMP.SNAP: ok(this.wmSnap(g(0))); break;       // Aero Snap (0095)
+    case WMP.GET_IDLE:                                 // idle clock (0096)
+      conn.peer.send(this._wmpFrame(WMP.R_IDLE, [this.wmIdleMs()]));
+      break;
+    case WMP.SAVER: ok(this.wmSaver()); break;         // screensaver (0096)
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;

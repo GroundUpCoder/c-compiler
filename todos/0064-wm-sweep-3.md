@@ -47,6 +47,14 @@ third time.
   drag-off release feel (the size restores at RELEASE, not mid-drag —
   the recorded simplification; decide whether it reads as broken or
   fine), Win+arrow ladder on a snapped vs floating window.
+- **Saver eyeball (0096 landed — operator)**: os-saver.mjs proves raise/
+  dismiss/animation mechanically; judge the SAVERS at 60fps in real
+  Chromium — starfield density/speed (128 stars, 0.008/frame — too
+  sparse? too fast?), marquee zoom/scroll rate/legibility at desktop
+  sizes, whether the black cut-in and dismissal feel instant; and the
+  ctlpanel Screen Saver applet reads sanely (radio labels, Preview).
+  Retune the wm.c constants if it feels off — they're all in one place
+  (saver_zoom, the 4px scroll, SAVER_STARS, the z step).
 - Standing checklist (re-check every WM.md known-issues entry):
   - Dawn + SIGKILL (S3 caveat) — retest on the current webgpu pkg.
   - os-gpubox adapter flake — recharacterize if seen.

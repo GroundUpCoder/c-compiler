@@ -20,6 +20,12 @@
  *                                     0095) — the Win+arrow chord's event
  *                                     (halves / maximize / restore-or-
  *                                     minimize); needs a WM
+ *   wmctl idle                        print ms since the last real input
+ *                                     (todos/0096 — the kernel's idle clock
+ *                                     the screensaver policy polls)
+ *   wmctl saver                       raise the configured screensaver now
+ *                                     (todos/0096) — the Control Panel
+ *                                     Preview's event; needs a WM
  *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
  *                                     bottom, 0 normal, 1 top; z ops never
  *                                     cross layers (list flags: T/B)
@@ -86,6 +92,8 @@ static int usage(void) {
         "       wmctl cycle [DIR]\n"
         "       wmctl menu\n"
         "       wmctl snap left|right|up|down\n"
+        "       wmctl idle\n"
+        "       wmctl saver\n"
         "       wmctl layer SID -1|0|1\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl keydown|keyup SID SCANCODE [KEYSYM [MOD]]\n"
@@ -350,6 +358,24 @@ int main(int argc, char **argv) {
         if (d < 0) return usage();
         int32_t a[1] = { d };
         return wmp_cmd(fd, WMP_SNAP, a, 1) ? fail("snap refused (no WM?)") : 0;
+    }
+    if (!strcmp(cmd, "idle")) {         /* the kernel idle clock (0096) */
+        wmp_hdr h;
+        if (wmp_send(fd, WMP_GET_IDLE, NULL, 0) != 0 ||
+            wmp_next_reply(fd, &h) != 0)
+            return fail("protocol error");
+        if (h.type != WMP_R_IDLE || h.plen < 4) {
+            wmp_skip(fd, h.plen);
+            return fail("idle refused");
+        }
+        int32_t ms;
+        if (wmp_read_all(fd, &ms, 4) != 0) return fail("short reply");
+        wmp_skip(fd, h.plen - 4);
+        printf("%d\n", ms);
+        return 0;
+    }
+    if (!strcmp(cmd, "saver")) {        /* screensaver preview (0096) */
+        return wmp_cmd(fd, WMP_SAVER, NULL, 0) ? fail("saver refused (no WM?)") : 0;
     }
     /* Screen-coordinate injection (todos/0095): the kernel's raw pointer
      * path — hit test, chrome, title drags, snap zones — so headless tests

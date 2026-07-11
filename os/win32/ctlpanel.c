@@ -28,6 +28,10 @@
  *   Display   — a stub naming todos/0049 (the wallpaper picker lands
  *               there; this window is its Control Panel home).
  *   Date/Time — live clock over SetTimer/WM_TIMER (the 0068 timer).
+ *   Screen Saver — the 0096 saver config (os/saver.h): pick None/Marquee/
+ *               Starfield (radios apply on click), set the idle timeout
+ *               (Apply), Preview raises it now (WMP SAVER — the wmctl-saver
+ *               gesture; /bin/wm answers, so no WM = silent no-op).
  * Mouse/Keyboard applets: recorded in todos/0089, build opportunistically.
  */
 
@@ -38,18 +42,22 @@
 #include <string.h>
 #include <time.h>
 #include "../sounds.h"
+#include "../saver.h"
+#include "../wm_proto.h"
 
 __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 
 /* ---------------------------------------------------------- applet table */
 
-enum { APP_SOUND, APP_SOUNDS, APP_SYSTEM, APP_DISPLAY, APP_DATETIME, APP_N };
+enum { APP_SOUND, APP_SOUNDS, APP_SYSTEM, APP_DISPLAY, APP_DATETIME,
+       APP_SAVER, APP_N };
 
 static const char *APP_NAME[APP_N] =             /* icon labels (unique!) */
-    { "Sound", "Sounds", "System", "Display", "Date/Time" };
+    { "Sound", "Sounds", "System", "Display", "Date/Time", "Screen Saver" };
 static const char *APP_TITLE[APP_N] =            /* applet window titles */
     { "Sound Properties", "Sounds Properties", "System Properties",
-      "Display Properties", "Date/Time Properties" };
+      "Display Properties", "Date/Time Properties",
+      "Screen Saver Properties" };
 
 static HWND g_hub;
 static HWND g_icon[APP_N];
@@ -266,6 +274,87 @@ static LRESULT CALLBACK datetime_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
+/* ---------------------------------- Screen Saver (the 0096 saver config) */
+
+#define ID_SVNONE  400                           /* radio ids in sv_names order */
+#define ID_SVMARQ  401
+#define ID_SVSTAR  402
+#define ID_SVWAIT  403
+#define ID_SVAPPLY 404
+#define ID_SVPREV  405
+
+static const char *SV_RADIO[3] = { "none", "marquee", "starfield" };
+
+static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE: {
+        CreateWindowEx(0, "BUTTON", "Screen Saver",
+                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                       8, 6, 264, 148, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "None",
+                       WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                       16, 26, 120, 16, h, (HMENU)ID_SVNONE, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Marquee",
+                       WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                       16, 46, 120, 16, h, (HMENU)ID_SVMARQ, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Starfield",
+                       WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                       16, 66, 120, 16, h, (HMENU)ID_SVSTAR, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "Wait (sec):", WS_CHILD | WS_VISIBLE,
+                       16, 96, 68, 16, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE,
+                       90, 92, 50, 20, h, (HMENU)ID_SVWAIT, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Apply", WS_CHILD | WS_VISIBLE,
+                       146, 92, 50, 20, h, (HMENU)ID_SVAPPLY, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Preview", WS_CHILD | WS_VISIBLE,
+                       16, 122, 70, 22, h, (HMENU)ID_SVPREV, NULL, NULL);
+        sv_cfg c;
+        sv_get(&c);
+        int sel = ID_SVNONE;
+        if (strcasecmp(c.saver, "marquee") == 0) sel = ID_SVMARQ;
+        else if (strcasecmp(c.saver, "starfield") == 0) sel = ID_SVSTAR;
+        for (int id = ID_SVNONE; id <= ID_SVSTAR; id++)
+            SendMessage(GetDlgItem(h, id), BM_SETCHECK, id == sel, 0);
+        char buf[16];
+        snprintf(buf, sizeof buf, "%d", c.timeout);
+        SetWindowText(GetDlgItem(h, ID_SVWAIT), buf);
+        return 0;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case ID_SVNONE: case ID_SVMARQ: case ID_SVSTAR:
+            /* auto-toggled; apply on click (the Sounds checkbox rule) */
+            sv_set("saver", SV_RADIO[LOWORD(wp) - ID_SVNONE]);
+            return 0;
+        case ID_SVAPPLY: {
+            char buf[16];
+            GetWindowText(GetDlgItem(h, ID_SVWAIT), buf, sizeof buf);
+            if (buf[0]) {
+                int v = atoi(buf);
+                if (v < 0) v = 0;
+                snprintf(buf, sizeof buf, "%d", v);
+                sv_set("timeout", buf);
+                SetWindowText(GetDlgItem(h, ID_SVWAIT), buf);
+            }
+            return 0;
+        }
+        case ID_SVPREV: {                        /* WMP SAVER: raise it now */
+            int fd = wmp_connect();
+            if (fd >= 0) {
+                wmp_cmd(fd, WMP_SAVER, NULL, 0);   /* no WM: silent no-op */
+                close(fd);
+            }
+            return 0;
+        }
+        }
+        return 0;
+    case WM_DESTROY:
+        g_applet[APP_SAVER] = NULL;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
 /* ------------------------------------------------------------- the hub */
 
 typedef LRESULT (CALLBACK *WndProcFn)(HWND, UINT, WPARAM, LPARAM);
@@ -277,6 +366,7 @@ APP_DEF[APP_N] = {
     { "CplSystem",   system_proc,   280, 82  },
     { "CplDisplay",  display_proc,  280, 62  },
     { "CplDateTime", datetime_proc, 232, 56  },
+    { "CplSaver",    saver_proc,    280, 162 },
 };
 
 static void open_applet(int i) {
@@ -373,6 +463,25 @@ static void draw_art(HDC dc, int i, int x, int y) {
         FillRect(dc, &g, grass);
         DeleteObject(grass);
         MoveToEx(dc, x + 8, y + 28, NULL);
+        LineTo(dc, x + 24, y + 28);
+        break;
+    }
+    case APP_SAVER: {                            /* dark monitor, stars */
+        HBRUSH b = CreateSolidBrush(RGB(0, 0, 0));
+        HGDIOBJ ob = SelectObject(dc, b);
+        Rectangle(dc, x + 2, y + 4, x + 30, y + 24);
+        SelectObject(dc, ob);
+        DeleteObject(b);
+        HBRUSH st = CreateSolidBrush(RGB(255, 255, 255));
+        static const int pts[5][2] =
+            { { 7, 9 }, { 14, 15 }, { 21, 8 }, { 24, 18 }, { 10, 19 } };
+        for (int k = 0; k < 5; k++) {
+            RECT r = { x + pts[k][0], y + pts[k][1],
+                       x + pts[k][0] + 2, y + pts[k][1] + 2 };
+            FillRect(dc, &r, st);
+        }
+        DeleteObject(st);
+        MoveToEx(dc, x + 8, y + 28, NULL);       /* the stand */
         LineTo(dc, x + 24, y + 28);
         break;
     }

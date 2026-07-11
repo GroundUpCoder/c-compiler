@@ -69,6 +69,16 @@ enum {
                                           the Win+arrow chord emits; 0 left,
                                           1 right, 2 up, 3 down. R_ERR with
                                           no subscribed WM (snap IS policy) */
+    WMP_GET_IDLE = 0x1E,               /* { }: ms since the last real input
+                                          (todos/0096) -> R_IDLE { ms }. The
+                                          kernel sees ALL input; /bin/wm's
+                                          screensaver policy polls this and
+                                          applies its own timeout */
+    WMP_SAVER = 0x1F,                  /* { }: fire the screensaver gesture
+                                          (todos/0096) — wmctl saver / the
+                                          Control Panel Preview path into
+                                          EV_SAVER. R_ERR with no subscribed
+                                          WM (the saver IS policy) */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
     WMP_INJECT_SCREEN = 0x22,          /* { kind, xf32, yf32, a }: SCREEN-
                                           coordinate pointer injection through
@@ -86,6 +96,10 @@ enum {
                                           deterministic box filter */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
+    WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (todos/
+                                          0096) — its own type so /bin/wm's
+                                          fire-and-forget drain can route it
+                                          (the R_SHOT precedent) */
     /* events */
     WMP_EV_CREATED = 0x80, WMP_EV_DESTROYED = 0x81, WMP_EV_TITLE = 0x82,
     WMP_EV_FOCUS = 0x83, WMP_EV_MOVED = 0x84, WMP_EV_MINIMIZED = 0x85,
@@ -136,6 +150,11 @@ enum {
                                           2 U / 3 D; policy snaps the focused
                                           window (halves, maximize, restore/
                                           minimize); only with a subscriber */
+    WMP_EV_SAVER = 0x90,               /* { }: a SAVER command (todos/0096) —
+                                          wmctl saver / the Control Panel
+                                          Preview; policy raises the
+                                          configured screensaver at once;
+                                          only with a subscriber */
 };
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries

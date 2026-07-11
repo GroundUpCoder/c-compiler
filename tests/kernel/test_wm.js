@@ -193,6 +193,19 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmSnap refuses with no subscriber (snap IS policy)',
     kernel.wmSnap(0) === false);
 
+  // ---- the screensaver mechanism (todos/0096): the kernel's idle clock
+  // stamps at the wmKey/wmPointer entries; the SAVER gesture is
+  // subscriber-gated like every other policy gesture ----
+  check('wmIdleMs: the key input above stamped the idle clock',
+    kernel.wmIdleMs() < 30000, kernel.wmIdleMs());
+  kernel._wmLastInput -= 60000;                       // pretend a minute idle
+  check('wmIdleMs grows without input', kernel.wmIdleMs() >= 60000, kernel.wmIdleMs());
+  kernel.wmPointer('move', 630, 470, {});             // bare desktop corner
+  check('wmPointer stamps the idle clock', kernel.wmIdleMs() < 30000, kernel.wmIdleMs());
+  check('wmSaver refuses with no subscriber (the saver IS policy)',
+    kernel.wmSaver() === false);
+  drain(ring1);                                       // shed any motion noise
+
   // ---- pointer: client hit, local coords ----
   let act = kernel.wmPointer('down', s1.x + 10, s1.y + 20, { button: 1 });
   kernel.wmPointer('up', s1.x + 10, s1.y + 20, { button: 1 });
