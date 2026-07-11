@@ -18,6 +18,11 @@
  *               negative queries). `wmctl click "Vol +"`/"Vol -" steps,
  *               settext EDIT:0 + click Set goes absolute, the label reads
  *               back via gettext — the e2e drives exactly that.
+ *   Sounds    — the event-sound scheme (todos/0094, os/sounds.h): enable/
+ *               mute checkbox (snd_set_mute writes ~/.config/sounds with
+ *               the effective table carried forward) + a Test button
+ *               (PlaySound SystemDefault). Distinct from Sound: that is
+ *               the volume knob, this is the scheme.
  *   System    — the 0048 info readout (/usr/share/os-release + the 0043
  *               synthetic /proc/uptime), plain POSIX.
  *   Display   — a stub naming todos/0049 (the wallpaper picker lands
@@ -27,21 +32,23 @@
  */
 
 #include <windows.h>
+#include <mmsystem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "../sounds.h"
 
 __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 
 /* ---------------------------------------------------------- applet table */
 
-enum { APP_SOUND, APP_SYSTEM, APP_DISPLAY, APP_DATETIME, APP_N };
+enum { APP_SOUND, APP_SOUNDS, APP_SYSTEM, APP_DISPLAY, APP_DATETIME, APP_N };
 
 static const char *APP_NAME[APP_N] =             /* icon labels (unique!) */
-    { "Sound", "System", "Display", "Date/Time" };
+    { "Sound", "Sounds", "System", "Display", "Date/Time" };
 static const char *APP_TITLE[APP_N] =            /* applet window titles */
-    { "Sound Properties", "System Properties",
+    { "Sound Properties", "Sounds Properties", "System Properties",
       "Display Properties", "Date/Time Properties" };
 
 static HWND g_hub;
@@ -125,6 +132,45 @@ static LRESULT CALLBACK sound_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         g_applet[APP_SOUND] = NULL;
         g_label = g_bar = g_edit = NULL;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
+/* ------------------------------------- Sounds (the 0094 event scheme) */
+
+#define ID_SNDCHK  200
+#define ID_SNDTEST 201
+
+static LRESULT CALLBACK sounds_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        CreateWindowEx(0, "BUTTON", "Event Sounds",
+                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                       8, 6, 264, 88, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Enable event sounds",
+                       WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                       16, 26, 200, 16, h, (HMENU)ID_SNDCHK, NULL, NULL);
+        SendMessage(GetDlgItem(h, ID_SNDCHK), BM_SETCHECK, !snd_muted(), 0);
+        CreateWindowEx(0, "BUTTON", "Test", WS_CHILD | WS_VISIBLE,
+                       16, 56, 60, 22, h, (HMENU)ID_SNDTEST, NULL, NULL);
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case ID_SNDCHK: {                        /* auto-toggled; apply it */
+            HWND chk = GetDlgItem(h, ID_SNDCHK);
+            int on = (int)SendMessage(chk, BM_GETCHECK, 0, 0);
+            if (snd_set_mute(!on) != 0)          /* store write failed: revert */
+                SendMessage(chk, BM_SETCHECK, !on, 0);
+            return 0;
+        }
+        case ID_SNDTEST:
+            PlaySoundA("SystemDefault", NULL, SND_ALIAS | SND_ASYNC);
+            return 0;
+        }
+        return 0;
+    case WM_DESTROY:
+        g_applet[APP_SOUNDS] = NULL;
         return 0;
     }
     return DefWindowProc(h, msg, wp, lp);
@@ -227,6 +273,7 @@ typedef LRESULT (CALLBACK *WndProcFn)(HWND, UINT, WPARAM, LPARAM);
 static const struct { const char *cls; WndProcFn proc; int w, h; }
 APP_DEF[APP_N] = {
     { "CplSound",    sound_proc,    280, 102 },
+    { "CplSndScheme", sounds_proc,  280, 102 },
     { "CplSystem",   system_proc,   280, 82  },
     { "CplDisplay",  display_proc,  280, 62  },
     { "CplDateTime", datetime_proc, 232, 56  },
@@ -282,6 +329,19 @@ static void draw_art(HDC dc, int i, int x, int y) {
         MoveToEx(dc, x + 26, y + 7, NULL);
         LineTo(dc, x + 30, y + 16);
         LineTo(dc, x + 26, y + 25);
+        break;
+    }
+    case APP_SOUNDS: {                           /* musical note */
+        HBRUSH b = CreateSolidBrush(RGB(0, 0, 128));
+        HGDIOBJ ob = SelectObject(dc, b);
+        Ellipse(dc, x + 6, y + 21, x + 15, y + 28);   /* note head */
+        SelectObject(dc, ob);
+        DeleteObject(b);
+        MoveToEx(dc, x + 14, y + 24, NULL);      /* stem */
+        LineTo(dc, x + 14, y + 6);
+        LineTo(dc, x + 24, y + 9);               /* flag */
+        MoveToEx(dc, x + 14, y + 12, NULL);
+        LineTo(dc, x + 24, y + 15);
         break;
     }
     case APP_SYSTEM: {                           /* monitor + base */

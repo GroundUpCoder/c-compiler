@@ -13,7 +13,9 @@ sources with
 `node tools/win32rc.js vendor/winmine/rsrc.rc -o vendor/winmine/winmine.res -D LANGUAGE_EN_US -D __REACTOS__`).
 The `rc/winemine.ico` icon, the `.wav` sound effects, and the non-English
 `lang/` translations are deliberately not vendored — LoadIcon/LoadImage
-return stub handles and PlaySoundW is a success stub (todos/0068).
+return stub handles, and PlaySound (real since todos/0094) keeps
+SND_RESOURCE as silent success: winmine's per-second timer tick must not
+fall back to the default ding.
 `CMakeLists.txt` kept for reference. Builds UNICODE, like upstream
 (`bin.json` defines `UNICODE`/`_UNICODE`/`__REACTOS__`).
 

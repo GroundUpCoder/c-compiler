@@ -34,6 +34,12 @@ third time.
   AESTHETICALLY at 60fps in real Chromium, and glass perf with many
   chromed windows (the blur chain reruns per glass window per frame —
   no fps counter exists yet, so this is a feel check).
+- **Sound listen (0094 landed — operator again)**: the event clips are
+  SYNTHESIZED (`tools/mksounds.js` — startup chime, error chord, ding,
+  exclamation chimes) and every automated assert is ring-math; nobody
+  has HEARD them. Boot with speakers on: chime once at desktop, error
+  MessageBox chord, applet Test ding — judge levels/pleasantness,
+  retune the generator if grating (re-run + commit the wavs).
 - Standing checklist (re-check every WM.md known-issues entry):
   - Dawn + SIGKILL (S3 caveat) — retest on the current webgpu pkg.
   - os-gpubox adapter flake — recharacterize if seen.

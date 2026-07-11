@@ -84,7 +84,9 @@ const out = boot([
   'echo ==v3b',
   'wmctl gettext STATIC:0',
   'echo ==cut',
-  // keyboard on the hub: Right selects System, Enter opens it
+  // keyboard on the hub: Right, Right selects System (Sounds sits between
+  // Sound and System since 0094), Enter opens it
+  'wmctl key $HSID 79 1073741903',
   'wmctl key $HSID 79 1073741903',
   'wmctl key $HSID 40 13',
   'sleep 1',
@@ -102,6 +104,25 @@ const out = boot([
   'echo ==tree5',
   'wmctl tree',
   'echo ==cut',
+  // the Sounds applet (0094): the event-scheme mute toggle writes
+  // ~/.config/sounds with the baked table carried forward
+  'wmctl click Sounds',
+  'sleep 1',
+  'echo ==tree6',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click "Enable event sounds"',   // uncheck -> mute on
+  'sleep 0.5',
+  'echo ==snd1',
+  'cat /root/.config/sounds',
+  'echo ==cut',
+  'wmctl click "Enable event sounds"',   // recheck -> mute off
+  'sleep 0.5',
+  'echo ==snd2',
+  'cat /root/.config/sounds',
+  'echo ==cut',
+  'wmctl click Test',   // plays SystemDefault (mixer asserts live in test_sounds_e2e)
+  'sleep 0.5',
   // hub close = the whole panel quits (all applet windows mid-flight)
   'wmctl close $HSID',
   'sleep 1',
@@ -121,14 +142,15 @@ const out = boot([
 
 // -- the hub folder --
 const tree1 = section(out, 'tree1');
-check('hub comes up: class=CtlPanel + four applet icons',
+check('hub comes up: class=CtlPanel + five applet icons',
   /class=CtlPanel [^\n]*text='Control Panel'/.test(tree1) &&
   /class=CplIcon [^\n]*text='Sound'/.test(tree1) &&
+  /class=CplIcon [^\n]*text='Sounds'/.test(tree1) &&
   /class=CplIcon [^\n]*text='System'/.test(tree1) &&
   /class=CplIcon [^\n]*text='Display'/.test(tree1) &&
   /class=CplIcon [^\n]*text='Date\/Time'/.test(tree1), tree1.slice(0, 600));
 check('no applet window open yet',
-  !/CplSound|CplSystem|CplDisplay|CplDateTime/.test(tree1), tree1.slice(0, 600));
+  !/CplSound |CplSndScheme|CplSystem|CplDisplay|CplDateTime/.test(tree1), tree1.slice(0, 600));
 
 // -- Sound applet (0048 controls, lifted) --
 const tree2 = section(out, 'tree2');
@@ -172,6 +194,22 @@ const clock2 = (section(out, 'tree5').match(CLOCK_RE) || [''])[0];
 check('Date/Time applet shows a clock', CLOCK_RE.test(clock1), section(out, 'tree4').slice(0, 400));
 check('the clock ticks (WM_TIMER)', clock2 !== '' && clock1 !== clock2,
   clock1 + ' -> ' + clock2);
+
+// -- Sounds applet (0094): the event-scheme mute toggle --
+const tree6 = section(out, 'tree6');
+check('Sounds applet opens with the enable checkbox + Test',
+  /class=CplSndScheme [^\n]*text='Sounds Properties'/.test(tree6) &&
+  /text='Enable event sounds'/.test(tree6) && /text='Test'/.test(tree6),
+  tree6.slice(0, 800));
+const snd1 = section(out, 'snd1');
+check('unchecking writes mute on to ~/.config/sounds',
+  /^mute\ton$/m.test(snd1), snd1);
+check('the baked table carries forward past the first write',
+  /^SystemStart\t\/usr\/share\/sounds\/startup\.wav$/m.test(snd1) &&
+  /^SystemHand\t\/usr\/share\/sounds\/chord\.wav$/m.test(snd1), snd1);
+const snd2 = section(out, 'snd2');
+check('rechecking flips it to mute off',
+  /^mute\toff$/m.test(snd2) && !/^mute\ton$/m.test(snd2), snd2);
 
 // -- hub close quits the whole panel --
 const list3 = section(out, 'list3');

@@ -77,6 +77,7 @@
 #undef UNICODE
 #undef _UNICODE
 #include <windows.h>
+#include <mmsystem.h>
 #include <SDL.h>
 #include <errno.h>
 #include <stdio.h>
@@ -4011,8 +4012,26 @@ static void ensure_dialog_class(void) {
         class_add("#32770", dlg_proc_32770, 0, (HBRUSH)(COLOR_BTNFACE + 1));
 }
 
+/* MessageBeep (todos/0094): the event-sound scheme via winmm's PlaySound
+ * (same lib — os/win32/lib.json links winmm.c into every user32 app).
+ * SND_NODEFAULT: an unknown/absent alias stays silent rather than dinging
+ * with the default — MessageBeep IS the default-sound surface. */
+BOOL MessageBeep(UINT type) {
+    const char *alias;
+    switch (type & 0xF0u) {                      /* MB_ICONMASK */
+    case MB_ICONHAND:        alias = "SystemHand"; break;
+    case MB_ICONQUESTION:    alias = "SystemQuestion"; break;
+    case MB_ICONEXCLAMATION: alias = "SystemExclamation"; break;
+    case MB_ICONASTERISK:    alias = "SystemAsterisk"; break;
+    default:                 alias = "SystemDefault"; break;   /* MB_OK, 0xFFFFFFFF */
+    }
+    PlaySoundA(alias, NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
+    return TRUE;
+}
+
 int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     ensure_dialog_class();
+    MessageBeep(type);                           /* icon sound (todos/0094) */
 
     /* Measure the text on a memory DC (the image font). */
     HDC mdc = CreateCompatibleDC(NULL);

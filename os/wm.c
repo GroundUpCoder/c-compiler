@@ -107,6 +107,7 @@
 #include "wm_proto.h"
 #include "openwith.h"
 #include "fileops.h"
+#include "sounds.h"
 
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
@@ -2358,6 +2359,11 @@ int main(void) {
     SDL_Init(SDL_INIT_VIDEO);
     if (make_desk() != 0) return 2;    /* bottom of z; created first (0029) */
     if (make_bar() != 0) return 2;
+    /* Desktop is up: the startup chime (todos/0094; sounds.h fire-and-
+     * forget — the kernel drains the clip, pumpless kernels drop it).
+     * Deliberately per wm start, not per boot: a `wm &` respawn is a new
+     * session, like a Windows logon. */
+    snd_play_event("SystemStart");
     __setAnimationFrameFunc(frame_cb);
     return 0;
 }

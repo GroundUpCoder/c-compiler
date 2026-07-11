@@ -485,7 +485,30 @@ skip the bin, cut/copy skip it too; the bin's own menu is Open/Empty
 Recycle Bin. Desktop deletes and the bin-menu Empty deliberately DON'T
 confirm (no dialog furniture in wm.c; fileman's flows do). Tests:
 `tests/kernel/test_recycle_e2e.js` + `tests/browser/os-recycle.mjs`.
-Image version is **v54**.
+The sound scheme (todos/0094): event sounds through the 0017 mixer.
+The ONE core is `os/sounds.h` (header-only — wm.c's SystemStart boot
+chime and winmm's PlaySound are the same code): scheme store =
+first-existing of `~/.config/sounds`, `/etc/sounds`,
+`/usr/share/sounds/scheme` (whole-file; `EVENT<ws>WAV-PATH` lines;
+`none` = per-event silence; reserved `mute on` = silence all), PCM
+u8/s16 WAV parse, fire-and-forget playback (open stream at the clip's
+spec, push whole, resume, destroy — AUDIO_CLOSE drains dry; pumpless
+kernels drop silently; clips must fit the 256K source ring). winmm.c
+implements the PlaySound contract over it (one current sound, alias/
+file/memory names, SystemDefault fallback vs SND_NODEFAULT, SND_SYNC =
+duration-capped usleep poll, NULL/SND_PURGE stop; SND_RESOURCE stays
+silent success — corpus .wavs not vendored, winmine must not ding
+per-second; SND_LOOP plays once); user32 grew real MessageBeep (icon
+nibble → Win95 aliases: Hand/Question/Exclamation/Asterisk/Default)
+and MessageBox beeps its icon at open; ctlpanel grew the Sounds applet
+(enable checkbox = `snd_set_mute`, effective table carried forward;
+Test button). Clips are SYNTHESIZED (`tools/mksounds.js` → committed
+`os/sounds/*.wav`, baked to `/usr/share/sounds/`). The 0017 pump grew
+spent-tail reclaim: "dry" = can't back another output frame — at
+non-integer resample ratios queued never hits 0, which leaked a dead
+stream per one-shot clip. Tests: `tests/kernel/test_sounds_e2e.js` +
+`tests/browser/os-sounds.mjs` + ctlpanel-e2e Sounds legs.
+Image version is **v55**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

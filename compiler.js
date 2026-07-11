@@ -18448,6 +18448,7 @@ typedef Uint64 SDL_WindowFlags;
 
 /* SDL3 audio format constants (SDL_AUDIO_*). Values are unchanged from SDL2. */
 typedef int SDL_AudioFormat;
+#define SDL_AUDIO_U8 0x0008
 #define SDL_AUDIO_S8 0x8008
 #define SDL_AUDIO_S16 0x8010
 #define SDL_AUDIO_S32 0x8020

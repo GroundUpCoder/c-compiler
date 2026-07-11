@@ -1,5 +1,5 @@
 {
-  "version": 54,
+  "version": 55,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -8,7 +8,8 @@
       "/usr/share/menu",
       "/usr/share/menu/Accessories",
       "/usr/share/menu/Demos",
-      "/usr/share/menu/Games"
+      "/usr/share/menu/Games",
+      "/usr/share/sounds"
     ],
     "files": {
       "/usr/bin/sh": {
@@ -31,7 +32,8 @@
         "hdrs": [
           "wm_proto.h",
           "openwith.h",
-          "fileops.h"
+          "fileops.h",
+          "sounds.h"
         ]
       },
       "/usr/bin/open": {
@@ -163,6 +165,21 @@
       },
       "/usr/share/fonts/mono.ttf": {
         "bin": "vendor/freetype/demo/robotomono.ttf"
+      },
+      "/usr/share/sounds/scheme": {
+        "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. First existing\n# file wins, whole-file (no merge): ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\n"
+      },
+      "/usr/share/sounds/startup.wav": {
+        "bin": "os/sounds/startup.wav"
+      },
+      "/usr/share/sounds/ding.wav": {
+        "bin": "os/sounds/ding.wav"
+      },
+      "/usr/share/sounds/chord.wav": {
+        "bin": "os/sounds/chord.wav"
+      },
+      "/usr/share/sounds/chimes.wav": {
+        "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
         "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"

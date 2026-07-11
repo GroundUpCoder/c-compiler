@@ -255,6 +255,35 @@ pre-0093 images grow a bin without a reseed. Non-goals kept: no quota
 dedicated bin app. Tests: `tests/kernel/test_recycle_e2e.js` +
 `tests/browser/os-recycle.mjs`.
 
+0094 (sound scheme, 2026-07-11) made WINMM's `PlaySound` REAL. The ONE
+policy core is `os/sounds.h` (header-only, the openwith/fileops
+precedent — wm.c's boot chime and winmm.c are the same code): the scheme
+store is first-existing-of `~/.config/sounds`, `/etc/sounds`,
+`/usr/share/sounds/scheme` (whole-file, `EVENT<ws>WAV-PATH` lines,
+`none` = explicit per-event silence, reserved `mute on` = silence all),
+the WAV parser takes PCM u8/s16 mono/stereo, and playback is
+fire-and-forget through the 0017 mixer via the SDL3 audio-stream veneer
+(open at the clip's spec, push whole, resume, destroy — AUDIO_CLOSE
+drains dry kernel-side; pumpless kernels drop silently). winmm.c layers
+the PlaySound contract on top: one current sound per process (new play
+stops it; SND_NOSTOP refuses), SND_ALIAS/FILENAME/MEMORY resolution,
+unknown-alias → SystemDefault unless SND_NODEFAULT, SND_SYNC as a
+duration-capped queue poll (usleep, NOT SDL_Delay — that throws by
+design), PlaySound(NULL)/SND_PURGE stop. Deliberate: SND_RESOURCE stays
+silent success (corpus .wavs not vendored; winmine ticks every second —
+no default-ding fallback), SND_LOOP plays once (looping needs a
+process-side refill pump fire-and-forget doesn't have). user32 grew a
+real `MessageBeep` (icon nibble → Win95 alias names) and MessageBox
+beeps its icon's event at open; ctlpanel grew the Sounds applet (enable
+checkbox → `snd_set_mute` writes the user store with the effective
+table carried forward + a Test button). The clips are SYNTHESIZED
+(`tools/mksounds.js`, committed under `os/sounds/`, baked to
+`/usr/share/sounds/` by image.json v55) — real Windows media is
+copyrighted. Tests: `tests/kernel/test_sounds_e2e.js` +
+`tests/browser/os-sounds.mjs` + the ctlpanel e2e Sounds legs; the
+0017 pump grew spent-tail reclaim (WM.md Lifecycle) with a
+`test_audio.js` case.
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

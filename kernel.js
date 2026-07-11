@@ -3005,15 +3005,25 @@ Kernel.prototype.audioPump = function (maxFrames) {
   // Snapshot each active stream: how many output frames can it back?
   var active = [];
   var mostAvail = 0;
+  var spent = null;   // dying streams whose tail can't back one more frame
   this._audioStreams.forEach(function (s) {
     if (!Atomics.load(s.control, AU_PLAYING)) return;   // paused: skip, keep queued
     var qb = Atomics.load(s.control, AU_QUEUED);
     if (qb < 0) { Atomics.store(s.control, AU_QUEUED, 0); qb = 0; }  // clear() race heal
     var srcFrames = Math.floor(qb / s.frameBytes);
-    if (srcFrames <= 0) return;
     var ratio = s.freq / out.freq;
-    var avail = Math.floor((srcFrames - s.frac) / ratio);
-    if (avail <= 0) return;
+    var avail = srcFrames > 0 ? Math.floor((srcFrames - s.frac) / ratio) : 0;
+    if (avail <= 0) {
+      // A dying stream that can't back another output frame is DRY: at a
+      // non-integer resample ratio the fractional cursor strands the last
+      // source frame(s) forever (floor((srcFrames - frac)/ratio) hits 0
+      // with queued > 0), so waiting for queued == 0 would leak the
+      // stream — one-shot clips (PlaySound, todos/0094) hit this on
+      // every play. Live streams keep the tail: the producer's next push
+      // makes it mixable again.
+      if (s.dying) (spent = spent || []).push(s.aid);
+      return;
+    }
     // readPos = writePos - queuedBytes (the standalone receiver's derivation).
     // Frame-aligned by construction: the surface-flavor producer only pushes
     // whole frames (host.js), consumption subtracts whole frames, and clear
@@ -3026,6 +3036,7 @@ Kernel.prototype.audioPump = function (maxFrames) {
     active.push({ s: s, srcFrames: srcFrames, ratio: ratio, readBase: readBase, avail: avail });
     if (avail > mostAvail) mostAvail = avail;
   });
+  if (spent) spent.forEach(function (aid) { self._audioStreams.delete(aid); });
   if (mostAvail === 0) return 0;
 
   var frames = Math.min(wantFrames, mostAvail);

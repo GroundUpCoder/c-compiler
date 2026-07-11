@@ -32,7 +32,10 @@
  * analog; WRES format spec in that tool, loader in user32.c res_*).
  * UNICODE GUI ports whose entry is wWinMain list os/win32/wwinmain.c in
  * their bin.json sources (the CRT entry shim). Icons/cursors are stub
- * handles; PlaySoundW is a success stub (winmm.c).
+ * handles; PlaySound is REAL since todos/0094 (winmm.c over os/sounds.h:
+ * WAVs through the 0017 kernel mixer; SND_RESOURCE stays silent success —
+ * the corpus wave assets are not vendored), and MessageBox/MessageBeep
+ * play the event-scheme sounds (user32.c).
  */
 #pragma once
 

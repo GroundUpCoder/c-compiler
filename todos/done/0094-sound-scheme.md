@@ -1,6 +1,24 @@
 # 0094 — Sound scheme — startup chime + event sounds
 
-- **Status**: open
+- **Status**: done 2026-07-11 (image v55; log
+  `logs/2026-07-11/0094-sound-scheme.md`). Landed: `os/sounds.h` (the
+  ONE header-only scheme core — store resolution, mute, WAV parse,
+  drain-dry fire-and-forget), real `PlaySoundA/W` in winmm.c,
+  `MessageBeep` + MessageBox icon beeps in user32.c, the wm.c
+  SystemStart boot chime, four synthesized clips (`tools/mksounds.js` →
+  committed `os/sounds/*.wav`, baked to `/usr/share/sounds/` + the
+  `scheme` map), the ctlpanel Sounds applet (mute checkbox writing
+  `~/.config/sounds` with carry-forward + Test), and the 0017 pump's
+  spent-tail reclaim fix (a dying stream's non-integer-ratio resample
+  tail wedged forever — one leaked table entry per one-shot clip).
+  Tests: `tests/kernel/test_sounds_e2e.js` (registered in run.js),
+  ctlpanel-e2e Sounds legs, `tests/browser/os-sounds.mjs` (the browser
+  acceptance lives there, not os-shell.mjs — the post-0081 sweep
+  shape), a `test_audio.js` stranded-tail case. Residue owned:
+  **0113** (preset schemes, per-event applet UI, SND_LOOP — v1 plays a
+  looped clip once; SND_RESOURCE stays 0068's silent success so
+  winmine's timer tick can't ding), **0064** (the operator LISTEN check
+  — the clips are synthesized and untuned by ear).
 - **Design**: `todos/WIN32.md` (WINMM `PlaySound`), the 0017 audio mixer
   (`__audio_gain` / mixer opcodes) that ctlpanel already drives. A Sounds
   applet lands in Control Panel v2 (0089).

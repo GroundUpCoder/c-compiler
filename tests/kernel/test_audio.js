@@ -281,6 +281,24 @@ const near = (a, b) => Math.abs(a - b) < 1e-6;
   await rpc(appPid, K.OP.AUDIO_CLOSE, { aid: o2.aid });
   check('paused dying stream dropped at once', !kernel.audioList().some((s) => s.aid === o2.aid));
 
+  // ---- drain-on-close at a NON-INTEGER resample ratio (todos/0094): the
+  // fractional cursor strands the last source frame (avail hits 0 with
+  // queued > 0), so "dry" for a dying stream means "can't back another
+  // output frame" — it must reclaim, not wedge (one-shot PlaySound clips
+  // would otherwise leak a stream-table entry per play). ----
+  const st5 = makeStream();
+  const o5 = await openStream(appPid, st5, 22050, K.AU_FMT_S16, 1);
+  pushS16(st5, [8192, 8192, 8192, 8192, 8192]);  // 5 mono frames
+  play(st5);
+  await rpc(appPid, K.OP.AUDIO_CLOSE, { aid: o5.aid });
+  n = kernel.audioPump(20);                      // consumes all it can back
+  check('non-integer ratio: pump mixed the clip', n === 10, n);
+  check('stranded tail still queued (the wedge shape)', queued(st5) === 2, queued(st5));
+  kernel.audioPump(20);                          // tail can't back a frame -> spent
+  check('dying stream with a stranded tail reclaims',
+    !kernel.audioList().some((s) => s.aid === o5.aid), JSON.stringify(kernel.audioList()));
+  out.read(out.queued() / 8);                    // leave the ring clean for the next legs
+
   // ---- lifecycle: SIGKILL mid-play drains then reclaims; mixer keeps running ----
   const r2 = await rpc(1, K.OP.SPAWN, { path: '/bin/app', argv: ['app'], envp: [], actions: [], flags: 0 });
   const st4 = makeStream();

@@ -998,9 +998,13 @@ page's pre-gesture behavior.
 SIGKILL all mark the stream *dying*; a dying stream keeps contributing
 until its ring is DRY (queued sfx finishes — "drain"), then is reclaimed;
 a dying ring that is paused (or when no output ring exists) is dropped
-immediately (nothing will ever drain it). Reclaim runs inside the pump,
-so a dead process can never stall the mixer — same discipline as fd and
-surface reclaim in `_exitProcess`.
+immediately (nothing will ever drain it). "Dry" is "can't back another
+output frame", not "queued == 0": at a non-integer resample ratio the
+fractional cursor strands the last source frame(s) forever, which would
+leak one dead table entry per one-shot clip (todos/0094's PlaySound
+exposed this; live streams keep their tail — the next push extends it).
+Reclaim runs inside the pump, so a dead process can never stall the
+mixer — same discipline as fd and surface reclaim in `_exitProcess`.
 
 **Headless** stays tier 0 with zero setup: `os/boot.js` doesn't call
 `audioInit`, streams still register, apps self-pace, nothing plays. The
