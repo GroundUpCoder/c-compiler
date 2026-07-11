@@ -80,24 +80,24 @@ const DESK_ACT = [...DESK_ENTRIES, 'alauncher', 'notes.txt'].sort();
 // doesn't depend on the wm-autostart vs first-command spawn race.
 const script = [
   'winbox &',
-  'sleep 2.5',                                   // wasm instantiation is real time
+  'wmctl wait win winbox',
   'echo ==list1',
   'wmctl list',
   'WSID=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//")',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',
   'WMPID=$(wmctl list | grep taskbar$ | sed "s/^[0-9]*.//;s/[^0-9].*//")',
   'wmctl min $WSID',
-  'sleep 0.3',
+  'wmctl wait flag $WSID m',
   'echo ==list2',
   'wmctl list',
   'wmctl click $TSID 60 14',                     // taskbar button 0 -> restore
-  'sleep 0.5',
+  'wmctl wait flag $WSID f',
   'echo ==list3',
   'wmctl list',
   'wmctl shot screen /root/s.ppm && head -c 2 /root/s.ppm && echo',
   'wmctl focus 999 || echo bad-sid-fails',
   'winbox fixed &',                              // viewport scaling (todos/0024)
-  'sleep 2.5',
+  'wmctl wait win fixbox',
   'FSID=$(wmctl list | grep fixbox$ | sed "s/[^0-9].*//")',
   'wmctl scale $FSID 480 320 && echo scale-ok',
   'wmctl resize $FSID 300 200 || echo resize-refused',
@@ -121,13 +121,13 @@ const script = [
   'echo ==list10',
   'wmctl list',
   'kill $WMPID',                                 // crash the WM
-  'sleep 0.5',
+  'wmctl wait nowin taskbar',
   'wmctl max $WSID || echo max-refused',         // maximize IS policy: no WM, no max
   'wmctl menu || echo menu-refused',             // likewise the menu (0078)
   'echo ==list4',
   'wmctl list',                                  // endpoint is the KERNEL's: still up
   'wm &',                                        // respawn
-  'sleep 2.5',
+  'wmctl wait win taskbar',
   'echo ==list5',
   'wmctl list',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',   // new wm, new sid
@@ -137,34 +137,34 @@ const script = [
   // launches winbox AND records a recent.
   'rm -f /root/.config/recent /root/.config/pinned',
   'wmctl click $TSID 25 14',                      // Start button (x < 50)
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'echo ==menu1',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl shot $MSID /root/m.ppm && echo menu-shot-ok',
   'wmctl hover $MSID 60 14',                      // All Programs (row 0) -> the tree
-  'sleep 0.5',
+  'wmctl wait win startmenu2',
   'echo ==menu1b',
   'wmctl list',
   'M2SID=$(wmctl list | grep startmenu2$ | sed "s/[^0-9].*//")',
   `wmctl hover $M2SID 60 ${flyRowY(MENU_GROUPS.indexOf('Demos'))}`,   // Demos group -> its leaves
-  'sleep 0.5',
+  'wmctl wait win startmenu3',
   'echo ==menu1c',
   'wmctl list',
   'M3SID=$(wmctl list | grep startmenu3$ | sed "s/[^0-9].*//")',
   `wmctl click $M3SID 60 ${flyRowY(DEMOS.indexOf('winbox'))}`,        // winbox, nested (sorted)
-  'sleep 2.5',                                   // real wasm spawn
+  'wmctl wait count winbox 2',
   'echo ==menu2',
   'wmctl list',
   'echo ==menurec',
   'cat /root/.config/recent',
   'echo ==menurecend',
   'wmctl click $TSID 25 14',                      // re-open (now lists the recent)
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'echo ==menu3',
   'wmctl list',
   'wmctl focus $WSID',                           // focus change dismisses
-  'sleep 0.5',
+  'wmctl wait nowin startmenu',
   'echo ==menu4',
   'wmctl list',
   // ---- the desktop layer (todos/0029) ----
@@ -177,19 +177,19 @@ const script = [
   'echo ==desk2',
   'wmctl list',
   `wmctl dblclick $DSID 58 ${deskY(DESK_ENTRIES, 'term')}`,   // double-click the term icon
-  'sleep 4',                                     // term loads freetype
+  'wmctl wait win term',
   'echo ==desk3',
   'wmctl list',
   // ---- taskbar polish (todos/0031) ----
   // Stable button order: 4 fresh winboxes; closing the SECOND must slide
   // the later buttons left (compaction), not swap the last into its slot.
   'winbox & winbox & winbox & winbox &',
-  'sleep 6',
+  'wmctl wait count winbox 6',
   'echo ==bar1',
   'wmctl list',
   'W2=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//" | sort -n | tail -4 | head -2 | tail -1)',
   'wmctl close $W2',
-  'sleep 0.5',
+  'wmctl wait gone $W2',
   // Buttons: [4 pre-existing][W1][W3][W4] now; button 5 (x center 650)
   // must focus W3 (compaction) — swap-remove would put W4 there.
   'wmctl click $TSID 650 14',
@@ -202,32 +202,32 @@ const script = [
   // the date tooltip instead — still no window touched; toggle it back off
   // so the lingering top-layer popup doesn't perturb the z-order legs.
   'winbox & winbox &',
-  'sleep 5',
+  'wmctl wait count winbox 7',
   'wmctl click $TSID 1000 14',
-  'sleep 0.3',
+  'wmctl wait win datepop',
   'echo ==bar3',
   'wmctl list',
   'wmctl click $TSID 1000 14',                    // toggle the date tooltip off
-  'sleep 0.2',
+  'wmctl wait nowin datepop',
   'wmctl shot $TSID /root/bar.ppm && echo bar-shot-ok',
   // ---- window cycling (todos/0032): wmctl cycle -> WMP CYCLE -> the same
   // EV_CYCLE -> wm.c policy. Focus fixbox then winbox so the recency
   // ladder's top three are known: [.., W6(create), fixbox, winbox]. ----
   'wmctl focus $FSID',
   'wmctl focus $WSID',
-  'sleep 0.3',
+  'wmctl wait flag $WSID f',
   'echo ==cyc1',
   'wmctl list',
   'wmctl cycle -1',                              // previous window
-  'sleep 0.3',
+  'wmctl wait flag $FSID f',
   'echo ==cyc2',
   'wmctl list',
   'wmctl cycle -1',                              // ...and back (the toggle)
-  'sleep 0.3',
+  'wmctl wait flag $WSID f',
   'echo ==cyc3',
   'wmctl list',
   'wmctl min $FSID',                             // minimize the 2nd-recent
-  'sleep 0.3',
+  'wmctl wait flag $FSID m',
   'wmctl cycle -1',                              // must skip it
   'sleep 0.3',
   'echo ==cyc4',
@@ -247,10 +247,10 @@ const script = [
   // focused winbox; with the real wm.c bar pinned +1 at the top of z, the
   // fall must land on another NORMAL window, never the furniture. ----
   'wmctl focus $WSID',
-  'sleep 0.3',
+  'wmctl wait flag $WSID f',
   'FPID=$(wmctl list | cut -f2,6 | grep "\tf" | cut -f1)',
   'kill -9 $FPID',
-  'sleep 1',
+  'wmctl wait gone $WSID',
   'echo ==fall1',
   'wmctl list',
   // ---- unified activate (todos/0066): the desktop and the Start menu
@@ -281,7 +281,7 @@ const script = [
   'mkdir /etc/menu',
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/go",
   'wmctl click $TSID 25 14',                     // Start
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $MSID 10 103',                      // 'g' -> search narrows to go
   'wmctl key $MSID 18 111',                      // 'o'
@@ -294,13 +294,13 @@ const script = [
   // Aero Peek: injected motion over taskbar button 0 raises the "peek"
   // thumbnail popup; motion over the Start strip drops it.
   'wmctl hover $TSID 60 14',
-  'sleep 1',                                     // THUMB round trip + park
+  'wmctl wait win peek',
   'echo ==aero1',
   'wmctl list',
   'PSID=$(wmctl list | grep peek$ | sed "s/[^0-9].*//")',
   'wmctl shot $PSID /root/p.ppm && echo peek-shot-ok',
   'wmctl hover $TSID 25 14',
-  'sleep 0.5',
+  'wmctl wait nowin peek',
   'echo ==aero2',
   'wmctl list',
   // wmctl thumb: fixbox (240x160 orange, white 4px border) into 60x40 —
@@ -320,7 +320,7 @@ const script = [
   // unit-tested in test_wm_aero.js): 50%-alpha blue over gray 192 is
   // exactly (96, 96, 224).
   'winbox alpha &',
-  'sleep 2.5',
+  'wmctl wait win alphabox',
   'ASID=$(wmctl list | grep alphabox$ | sed "s/[^0-9].*//")',
   'echo ==aero3',
   'wmctl list',
@@ -351,7 +351,7 @@ const script = [
   'echo ==sm1',
   'wmctl list',
   'wmctl menu && echo menu-cmd-ok',              // wmctl menu = the chord
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'echo ==sm2',
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
@@ -372,7 +372,7 @@ const script = [
   'echo SEARCH-DELTA-$((N2-N1))',
   // Esc from a non-empty search clears it (menu stays); a second Esc closes.
   'wmctl menu',
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $MSID 26 119',                      // 'w' -> search non-empty
   'sleep 0.2',
@@ -383,15 +383,15 @@ const script = [
   'echo ==sm4b',
   'wmctl list',
   'wmctl key $MSID 41 27',                       // Esc -> closes the menu
-  'sleep 0.2',
+  'wmctl wait nowin startmenu',
   'echo ==sm4c',
   'wmctl list',
   // RUN... (right pane, row 1): open the dialog, type "winbox", Enter.
   'wmctl menu',
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $MSID 210 ${SM_PAD + SM_ROW_H + 10}`,
-  'sleep 0.5',
+  'wmctl wait win startrun',
   'echo ==sm5',
   'wmctl list',
   'RSID=$(wmctl list | grep startrun$ | sed "s/[^0-9].*//")',
@@ -412,15 +412,15 @@ const script = [
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/Apps/go",
   'rm -f /root/.config/recent',                  // left pane = [All Programs] only
   'wmctl menu',
-  'sleep 0.5',
+  'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $MSID 81 1073741905',               // Down -> All Programs (row 0)
   'wmctl key $MSID 79 1073741903',               // Right -> the tree flyout (Apps)
-  'sleep 0.5',
+  'wmctl wait win startmenu2',
   'echo ==sm7',
   'wmctl list',
   'wmctl key $MSID 79 1073741903',               // Right -> into the Apps group
-  'sleep 0.3',
+  'wmctl wait win startmenu3',
   'wmctl key $MSID 40 13',                       // Enter -> go -> winbox
   'sleep 3',
   'echo ==sm8',
@@ -468,7 +468,7 @@ const script = [
   'sleep 0.5',
   'wmctl shot $DSID /root/s5.ppm && echo s5-ok',
   'wmctl key $DSID 40 13',                       // Enter: multi -> no-op
-  'sleep 2',
+  'sleep 2',                                     // timing subject: proves no spawn
   'N2=$(wmctl list | grep -c winbox$)',
   'echo NOOP-DELTA-$((N2-N1))',
   'wmctl key $DSID 41 27',                       // Esc clears
@@ -495,12 +495,12 @@ const script = [
   // right-click the strip in the clock cell (x=970: always past the button
   // run, whatever the window count) -> the taskbar-strip menu (0101)
   'wmctl click $TSID 970 14 3',
-  'sleep 0.4',
+  'wmctl wait win ctxmenu',
   'echo ==tp1',
   'wmctl list',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY101(2)}`,          // Minimize All (row 2)
-  'sleep 0.7',
+  'wmctl wait nowin ctxmenu',
   'echo ==tp2',
   'wmctl list',
   'wmctl click $TSID 1017 14',                    // Show Desktop: restore the stash
@@ -514,7 +514,7 @@ const script = [
   'wmctl click $TSID 1017 14',                    // ...and restore before Cascade
   'sleep 0.7',
   'wmctl click $TSID 970 14 3',
-  'sleep 0.4',
+  'wmctl wait win ctxmenu',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY101(0)}`,          // Cascade (row 0)
   'sleep 1.2',
@@ -522,13 +522,13 @@ const script = [
   'wmctl list',
   // clock date tooltip: a click in the clock cell (x=980) raises "datepop"
   'wmctl click $TSID 980 14',
-  'sleep 0.4',
+  'wmctl wait win datepop',
   'echo ==tp6',
   'wmctl list',
   'DPSID=$(wmctl list | grep datepop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DPSID /root/date.ppm && echo date-shot-ok',
   'wmctl click $TSID 980 14',                     // click again toggles it off
-  'sleep 0.4',
+  'wmctl wait nowin datepop',
   'echo ==tp7',
   'wmctl list',
 
@@ -544,11 +544,11 @@ const script = [
   'SFSID=$(wmctl list | grep fixbox$ | tail -1 | sed "s/[^0-9].*//")',
   'echo swsid=$SWSID sfsid=$SFSID',
   'wmctl focus $SWSID',
-  'sleep 0.3',
+  'wmctl wait flag $SWSID f',
   'echo ==smB',
   'wmctl list',                                   // pre-move geom
   'wmctl sysmenu && echo sysmenu-ok',
-  'sleep 0.4',
+  'wmctl wait win ctxmenu',
   'echo ==smC',
   'wmctl list',                                   // ctxmenu (sysmenu) up
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
@@ -566,13 +566,13 @@ const script = [
   'echo ==smE',
   'wmctl list',                                   // winbox moved +32,+16
   'wmctl key $SMSID 40 13',                        // Enter -> commit + dismiss
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu',
   'echo ==smF',
   'wmctl list',                                   // popup gone, at moved pos
   // Esc reverts: re-open, Move, nudge, Esc -> back to the smF position
   'wmctl focus $SWSID',
   'wmctl sysmenu',
-  'sleep 0.3',
+  'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE again
   'sleep 0.3',
@@ -583,13 +583,13 @@ const script = [
   'echo ==smG',
   'wmctl list',                                   // shows the -24 mid-move
   'wmctl key $SMSID 41 27',                        // Esc -> revert
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu',
   'echo ==smH',
   'wmctl list',                                   // back to the smF position
   // Size grows the resizable winbox
   'wmctl focus $SWSID',
   'wmctl sysmenu',
-  'sleep 0.3',
+  'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE -> keyboard-size mode
   'sleep 0.3',
@@ -603,14 +603,14 @@ const script = [
   'wmctl key $SMSID 81 1073741905',
   'sleep 0.6',                                    // RESIZE round-trips the ack
   'wmctl key $SMSID 40 13',                        // Enter -> commit
-  'sleep 0.5',
+  'wmctl wait nowin ctxmenu',
   'echo ==smSize',
   'wmctl list',                                   // winbox grew +32,+32
   // Size is disabled on the fixed-size fixbox: the row is grayed, so a click
   // never enters size mode and an arrow leaves the window untouched.
   'wmctl focus $SFSID',
   'wmctl sysmenu',
-  'sleep 0.3',
+  'wmctl wait win ctxmenu',
   'echo ==smFixPre',
   'wmctl list',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
@@ -621,14 +621,14 @@ const script = [
   'echo ==smFix',
   'wmctl list',                                   // fixbox unchanged, popup up
   'wmctl key $SMSID 41 27',                        // Esc -> dismiss the popup
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu',
   // Close via the menu tears the winbox down
   'wmctl focus $SWSID',
   'wmctl sysmenu',
-  'sleep 0.3',
+  'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $SMSID 60 ${rowYsys(6)}`,          // CLOSE (row 6, after the sep)
-  'sleep 0.6',
+  'wmctl wait gone $SWSID',
   'echo ==smClose',
   'wmctl list',                                   // winbox gone
 
@@ -698,12 +698,12 @@ const script = [
   // icon-menu Rename path (exercises the focus-race fix): right-click aab ->
   // menu -> Rename row -> editor -> rename aab -> mmm
   'wmctl click $DSID 58 48 3',                     // right-click col0 row0 = aab
-  'sleep 0.4',
+  'wmctl wait win ctxmenu',
   'echo ==rn5',
   'wmctl list',                                    // ctxmenu (icon menu) up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl click $CXSID 60 102',                     // RENAME row (row 5, after SEP)
-  'sleep 0.5',
+  'wmctl wait nowin ctxmenu',
   'wmctl key $DSID 42 8',                          // clear "aab"
   'wmctl key $DSID 42 8',
   'wmctl key $DSID 42 8',

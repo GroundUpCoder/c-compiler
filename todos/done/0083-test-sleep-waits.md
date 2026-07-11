@@ -1,6 +1,20 @@
 # 0083 — Event-based waits: retire the sleep-N sync class in e2e + browser suites
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). Landed the shared `wmctl wait` primitive
+  (`os/wmctl.c`: win/nowin/count/atleast/gone/flag/noflag/seq over the WM
+  window list, failure-deadline timeout, ~30ms poll) and retired the
+  sleep-sync class in the **pure-WM** kernel e2es — `test_wm_service_e2e.js`
+  (53 sleeps → waits, 60 justified timing-subject holds), `test_snap_e2e.js`,
+  `test_saver_e2e.js`, `test_cursor_e2e.js` — plus the browser `os-*.mjs`
+  fixed-delay sync sites (mostly already event-based post-0146; 3 real
+  conversions in os-shell, the rest annotated timing subjects). Full kernel
+  suite 58/58 green. The residue that needs NEW infrastructure got owners:
+  **0154** (agent-tree `wmctl wait label/text` + the win32-app e2e cluster —
+  fileman/ctxmenu/recycle/user32/notepad/calc/winmine/ctlpanel/clipboard/
+  openwith/paint/gdi32, whose sleeps wait on in-app control state the window
+  list can't see) and **0155** (term tty-render `wait seq` + the emulator/misc
+  timing-subject audit). Browser runtime confirmation folds into the existing
+  operator-owed **0153**/**0064** sweeps (Playwright not installed here).
 - **Design**: this file (spawned from `todos/done/0081`; counted there)
 
 ## Goal

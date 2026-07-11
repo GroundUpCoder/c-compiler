@@ -85,9 +85,9 @@ try {
   // own tty read -> own refresh -> cursor-positioned single-char render; the
   // typed string never appears contiguously. The file bytes below are the
   // real assertion.
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(600);            // timing subject: char-by-char vi typing has no contiguous needle (see note above); let it land before ESC
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300);            // timing subject: read_key resolves a lone ESC by timeout — air around it, no observable marker
   await page.keyboard.type(':wq\r');
   await waitOut('\x1b[?1049l');              // vi exited the alternate screen
   await type('cat /tmp/b.txt && echo VI-CAT-OK');
@@ -154,7 +154,7 @@ try {
     if (st === 'locked') {
       await page2.evaluate(() => document.getElementById('guardRetry').click());
     }
-    await page2.waitForTimeout(500);
+    await page2.waitForTimeout(500);   // timing subject: retry-loop poll cadence (loop breaks on __osState==='ready')
   }
   check('retry boots after the first tab closes (todos/0045)', st === 'ready', st);
   const mode2 = await page2.evaluate(() => document.getElementById('status').textContent);

@@ -30,6 +30,9 @@ try {
 
   const { setVt, sample, near, waitPixel, waitOut, waitScreen } = osHelpers(page);
   const WHITE = [255, 255, 255], NAVY = [0, 0, 128];
+  // timing subject: paces genuine no-marker settles — EV_SCREEN quiesce, the
+  // coarse desktop re-read tick, and the inter-command wmctl subcommand gaps
+  // (each call site is annotated; terminal fs effects use waitOut markers).
   const pause = (ms) => page.waitForTimeout(ms);
 
   await setVt(2);

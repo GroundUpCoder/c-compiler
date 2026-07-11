@@ -47,16 +47,16 @@ const script = [
   'mkdir -p /root/.config',
   'printf "saver marquee\\ntimeout 2\\ntext HELLO\\n" > /root/.config/screensaver',
   'winbox &',
-  'sleep 2.5',                                   // wasm instantiation is real time
+  'wmctl wait win winbox',
   // No input from here on (piped shell lines are not wm input; wmctl list
   // is a WMP query, not input) — the 2s timeout raises the saver.
-  'sleep 3.5',
+  'wmctl wait win screensaver',
   'echo ==up',
   'wmctl list',
   // ---- the animation: two shots of the saver differ; corner stays black.
   'SSID=$(wmctl list | grep screensaver$ | sed "s/[^0-9].*//")',
   'wmctl shot $SSID /root/s1.ppm && echo shot-ok',
-  'sleep 0.6',
+  'sleep 0.6',                                   // timing subject: let the marquee advance between shots
   'wmctl shot $SSID /root/s2.ppm',
   'cmp /root/s1.ppm /root/s2.ppm || echo anim-ok',
   `tail -c +${ppmOff(2, 2)} /root/s1.ppm | head -c 3 > /root/px.bin`,
@@ -65,57 +65,57 @@ const script = [
   // ---- dismissal: screen-injected motion is real input (it resets the
   // kernel clock AND lands on the saver window) ----
   'wmctl smove 500 300',
-  'sleep 1',
+  'wmctl wait nowin screensaver',
   'echo ==dismissed',
   'wmctl list',
   'wmctl idle',
   // ---- no immediate re-raise (the clock reset), then re-raise ----
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: prove no immediate re-raise
   'echo ==calm',
   'wmctl list',
-  'sleep 4',
+  'wmctl wait win screensaver',
   'echo ==again',
   'wmctl list',
   'wmctl smove 510 300',
-  'sleep 0.5',
+  'wmctl wait nowin screensaver',
   // ---- saver none: neither the idle raise nor the gesture fires ----
   'printf "saver none\\ntimeout 1\\n" > /root/.config/screensaver',
-  'sleep 4',
+  'sleep 4',                                     // timing subject: prove `saver none` never idle-raises
   'echo ==none',
   'wmctl list',
   'wmctl saver && echo gesture-accepted',
-  'sleep 1.5',
+  'sleep 1.5',                                   // timing subject: prove the gesture raised nothing under `saver none`
   'echo ==nonegesture',
   'wmctl list',
   // ---- the gesture (= the Control Panel Preview): raise NOW ----
   'printf "saver starfield\\ntimeout 300\\n" > /root/.config/screensaver',
   'wmctl saver && echo saver-cmd-ok',
-  'sleep 1',
+  'wmctl wait win screensaver',
   'echo ==forced',
   'wmctl list',
   'wmctl smove 520 300',
-  'sleep 1',
+  'wmctl wait nowin screensaver',
   // ---- the ctlpanel applet: radios/Apply write the store, Preview raises.
   'ctlpanel "Screen Saver" &',
-  'sleep 3',
+  'wmctl wait win "Screen Saver Properties"',
   'wmctl click Marquee && echo radio-clicked',
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: radio-write store settle
   'echo ==store1',
   'cat /root/.config/screensaver',
   'wmctl settext EDIT:0 7 && wmctl click Apply && echo apply-clicked',
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: Apply-write store settle
   'echo ==store2',
   'cat /root/.config/screensaver',
   'wmctl click Preview',
-  'sleep 1.5',
+  'wmctl wait win screensaver',
   'echo ==preview',
   'wmctl list',
   'wmctl smove 530 300',
-  'sleep 1',
+  'wmctl wait nowin screensaver',
   // ---- crashed-WM story: the gesture refuses, the clock keeps answering.
   'WMPID=$(wmctl list | grep taskbar$ | sed "s/^[0-9]*.//;s/[^0-9].*//")',
   'kill $WMPID',
-  'sleep 0.5',
+  'wmctl wait nowin taskbar',
   'wmctl saver || echo saver-refused',
   'wmctl idle > /root/idle1.txt && echo idle-still-ok',
   '',

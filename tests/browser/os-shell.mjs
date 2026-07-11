@@ -89,14 +89,14 @@ try {
   const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
   const winCount = async () => {
     await setVt(1);
-    await page.waitForTimeout(400);              // let the prompt settle (VT1 pacing)
+    await page.waitForTimeout(400);              // timing subject: VT1 prompt-settle pacing (no page-observable marker)
     await page.keyboard.type('echo WBQ""$(wmctl list | grep -c "winbox$")\r', { delay: 40 });
     await page.waitForFunction(() => /WBQ\d/.test(window.__osOut), { timeout: 20000, polling: 200 });
     const out = await page.evaluate(() => window.__osOut);
     const n = +(/WBQ(\d+)(?![\s\S]*WBQ\d)/.exec(out)[1]);
     await page.evaluate(() => { window.__osOut = window.__osOut.replace(/WBQ\d+/g, ''); });
     await setVt(2);
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(300);              // timing subject: post-VT2 settle before returning (no marker)
     return n;
   };
   await setVt(1);
@@ -104,7 +104,7 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('REC-CLR'), { timeout: 20000, polling: 200 });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
-  await page.waitForTimeout(500);
+  await waitPixel(120, SM_Y + 74, TEAL);         // wait on the observable the check asserts (was a blind settle)
 
   check('menu spot is desktop before the click', near(await sample(120, SM_Y + 74), TEAL),
     await sample(120, SM_Y + 74));
@@ -138,7 +138,7 @@ try {
     };
     requestAnimationFrame(step);
   }), [120, SM_Y + 74, CASC_H]);
-  await page.waitForTimeout(100);                // capture running first
+  await page.waitForTimeout(100);                // timing subject: let the rAF burst-capture start before the click (no marker)
   await clickAt(25, BARY);                       // Start (x < 50)
   const frames = await burst;
   check('Start click opens the two-pane root (face fill above the taskbar)',
@@ -180,7 +180,7 @@ try {
   await waitPixel(120, SM_Y + 74, FACE);
   check('menu re-opens', true);
   await clickAt(60, SM_Y + 14);                  // left row 0 = the winbox recent
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(500);                // timing subject: let the MRU relaunch spawn before the coordinate-free winCount snapshot
   const wb1 = await winCount();
   check('recent MRU entry relaunches the program (winbox +1)', wb1 === wb0 + 1, { wb0, wb1 });
 
@@ -203,7 +203,7 @@ try {
   await page.keyboard.type('winbox', { delay: 60 });
   await waitPixel(100, SM_Y + 14, NAVY);
   await page.keyboard.press('Enter');            // launch the top hit
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(500);                // timing subject: let the search-hit spawn before the coordinate-free winCount snapshot
   const wb3 = await winCount();
   check('Enter launches the search top hit (winbox +1)', wb3 === wb2 + 1, { wb2, wb3 });
 
@@ -254,7 +254,7 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 200 });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(800);                // timing subject: let wm pick up the new /etc/menu before the winCount baseline (no marker)
   const wo0 = await winCount();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
@@ -262,7 +262,7 @@ try {
   await waitPixel(100, SM_Y + 14, NAVY);
   check('override tree is searched (solo hit highlights)', true);
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(500);                // timing subject: let the override-search spawn before the coordinate-free winCount snapshot
   const wo1 = await winCount();
   check('override search hit launches (winbox +1)', wo1 === wo0 + 1, { wo0, wo1 });
   await setVt(1);
@@ -280,7 +280,7 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('WB-CLOSED'), { timeout: 20000, polling: 200 });
   await setVt(2);
   await waitPixel(400, BARY, FACE);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(500);                // timing subject: let the closed winboxes clear before the desktop-icon section (no marker)
 
   // ---- the desktop layer (todos/0029) ----
   const WHITE = [255, 255, 255];
@@ -423,7 +423,7 @@ try {
   // redraw mid-line mangles a long typed command. And emit markers with
   // a split quote so the TYPED echo never contains the marker string
   // (waitForFunction must fire on the output, not the input echo).
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(800);                // timing subject: async job-notice ([1] pid) has no distinct page-observable marker
   await page.keyboard.type('i=0; while [ $i -lt 30 ]; do wmctl list | grep -q "Control Panel" && break; sleep 1; i=$((i+1)); done; wmctl list; echo CP-U""P\r');
   await page.waitForFunction(() => window.__osOut.includes('CP-UP'), { timeout: 120000, polling: 200 });
   const cpLine = await page.evaluate(() => window.__osOut.split('\n').find(l => /Control Panel\s*$/.test(l)));
@@ -499,7 +499,7 @@ try {
     window.__osOut.split('\n').filter(l => /Notepad\s*$/.test(l)));
   await setVt(1);
   await page.keyboard.type('notepad &\r');
-  await page.waitForTimeout(800);                // the async job-notice trap
+  await page.waitForTimeout(800);                // timing subject: the async job-notice trap (no distinct page-observable marker)
   await page.keyboard.type('i=0; while [ $i -lt 30 ]; do wmctl list | grep -q Notepad && break; sleep 1; i=$((i+1)); done; sleep 1; wmctl list; echo NP-U""P1\r');
   await page.waitForFunction(() => window.__osOut.includes('NP-UP1'), { timeout: 120000, polling: 200 });
   const np1Line = (await npLines()).pop() || '';
@@ -512,17 +512,20 @@ try {
   // events (chars vanish, the Control keydown separates from its letter),
   // so type with a delay and hold Control across explicitly-gapped presses.
   const chord = async (letter) => {
+    // timing subject: the Ctrl chord is hand-paced — zero-delay presses flood
+    // the per-frame input pump and drop events (see the PACED-input note above);
+    // there is no page-observable marker between the down/press/up steps.
     await page.keyboard.down('Control');
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(100);             // timing subject: paced Ctrl chord (see note above)
     await page.keyboard.press(letter);
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(100);             // timing subject: paced Ctrl chord (see note above)
     await page.keyboard.up('Control');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(200);             // timing subject: paced Ctrl chord settle (see note above)
   };
   await clickAt(N1X + Math.min(120, N1W - 20), N1Y + 60);
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300);                // timing subject: EDIT focus-click settle before typing (no marker)
   await page.keyboard.type('CLIP-ROCKS', { delay: 60 });
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(400);                // timing subject: let the typed text land before the Ctrl chord (no marker)
   await chord('a');
   await chord('c');
   await setVt(1);
@@ -533,7 +536,7 @@ try {
     await page.evaluate(() => window.__osOut.slice(-300)));
   // Second notepad; find ITS list line (the one that isn't notepad 1's).
   await page.keyboard.type('notepad &\r');
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(800);                // timing subject: the async job-notice trap (no distinct page-observable marker)
   await page.keyboard.type('i=0; while [ $i -lt 30 ]; do [ $(wmctl list | grep -c Notepad) -ge 2 ] && break; sleep 1; i=$((i+1)); done; sleep 1; wmctl list; echo NP-U""P2\r');
   await page.waitForFunction(() => window.__osOut.includes('NP-UP2'), { timeout: 120000, polling: 200 });
   const np2Line = (await npLines()).filter(l => !l.includes(`+${N1X}+${N1Y}`)).pop() || '';
@@ -544,9 +547,9 @@ try {
   const npClient = [N2X + 8, N2Y + 28, Math.min(220, N2W - 16), 44];
   const beforePaste = await blackIn(...npClient);
   await clickAt(N2X + Math.min(120, N2W - 20), N2Y + 60);
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300);                // timing subject: EDIT focus-click settle before the paste chord (no marker)
   await chord('v');
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1000);               // timing subject: let the pasted glyphs render before the histogram sample (no single-pixel marker)
   const afterPaste = await blackIn(...npClient);
   check('Ctrl+V renders the pasted text in the second notepad',
     afterPaste > beforePaste + 30, `${beforePaste} -> ${afterPaste}`);
@@ -554,7 +557,7 @@ try {
   // Click its LEFT edge — the second notepad cascades +28,+24 and covers
   // the client center, and a covered click would focus THAT window.
   await clickAt(N1X + 12, N1Y + 60);
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300);                // timing subject: EDIT focus-click settle before the select-all chord (no marker)
   await chord('a');
   await chord('x');
   await setVt(1);
@@ -573,7 +576,7 @@ try {
   await setVt(1);
   await page.keyboard.type('winbox & echo TP""-WB\r', { delay: 40 });
   await page.waitForFunction(() => window.__osOut.includes('TP-WB'), { timeout: 20000, polling: 200 });
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(1200);               // timing subject: TP-WB fires at the & echo, not when winbox is up; let it spawn before wmctl targets it
   // move it to (300,300) and raise it so it owns the (350,350) sample point.
   await page.keyboard.type('TPW=$(wmctl list | grep "winbox$" | sed "s/[^0-9].*//" | sort -n | tail -1); wmctl move $TPW 300 300; wmctl raise $TPW; echo TP""-MV\r', { delay: 30 });
   await page.waitForFunction(() => window.__osOut.includes('TP-MV'), { timeout: 20000, polling: 200 });
@@ -590,14 +593,14 @@ try {
   check('right-click the taskbar strip opens the menu (face gray above the bar)', true);
   // an outside-click (on the empty desktop) dismisses it (the 0091 rule).
   await clickAt(200, 200);
-  await page.waitForTimeout(400);
+  await waitNotPixel(SW - 20, SH - 74, FACE);    // observable: wait for the menu face to clear (was a blind settle)
   check('outside-click dismisses the strip menu',
     !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
   // re-open and dismiss with Esc.
   await rclickStrip();
   await waitPixel(SW - 20, SH - 74, FACE);
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(400);
+  await waitNotPixel(SW - 20, SH - 74, FACE);    // observable: wait for the menu face to clear (was a blind settle)
   check('Esc also dismisses the strip menu',
     !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
 

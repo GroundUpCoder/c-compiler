@@ -34,6 +34,9 @@ try {
 
   const TEAL = [0, 128, 128], NAVY = [0, 0, 128], WHITE = [255, 255, 255],
         FACE = [192, 192, 192], ORANGE = [255, 140, 0];
+  // timing subject: paces genuine no-marker settles — EV_SCREEN quiesce, VT1
+  // input pacing, popup keyboard-nav gaps, and the async job-notice trap (each
+  // call site is annotated; none has a page-observable signal to wait on).
   const pause = (ms) => page.waitForTimeout(ms);
 
   // VT2 + the 0023 settle: derive geometry from the live screen.

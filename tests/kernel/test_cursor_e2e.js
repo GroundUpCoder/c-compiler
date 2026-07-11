@@ -35,12 +35,13 @@ const { dir: tmp, image } = freshImage('os-cursor-');
 const script = [
   'winbox cursor &',
   'winbox fixed &',
-  'sleep 3',                                   // real wasm instantiation
+  'wmctl wait win curbox',                      // both acceptance windows up
+  'wmctl wait win fixbox',
   'CID=$(wmctl list | grep curbox$ | sed "s/[^0-9].*//")',
   'FID=$(wmctl list | grep fixbox$ | sed "s/[^0-9].*//")',
   'wmctl move $CID 400 300 && echo cmoved',
   'wmctl move $FID 100 100 && echo fmoved',
-  'sleep 0.5',
+  'sleep 0.5',                                  // timing subject: geometry-move settle (no window observable)
   'echo ==geom',
   'wmctl list',
   // ---- the app's per-surface cursor over its client ----

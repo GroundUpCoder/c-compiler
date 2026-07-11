@@ -37,7 +37,7 @@ const ppmOff = (x, y) => 17 + (y * 1024 + x) * 3;
 
 const script = [
   'winbox &',
-  'sleep 2.5',                                   // wasm instantiation is real time
+  'wmctl wait win winbox',
   'WSID=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//")',
   'echo ==base',
   'wmctl list',
@@ -47,12 +47,12 @@ const script = [
   'wmctl sdown 100 26',
   'wmctl smove 400 300',                         // mid-screen: no zone yet
   'wmctl smove 4 300',                           // left zone -> preview up
-  'sleep 0.7',
+  'wmctl wait win snappreview',
   'echo ==mid',
   'wmctl list',
   'wmctl shot screen /root/mid.ppm && echo mid-shot-ok',
   'wmctl sup 4 300',                             // drop -> snap left
-  'sleep 1',
+  'wmctl wait nowin snappreview',
   'echo ==left',
   'wmctl list',
   // The preview pixels, read from the mid-drag shot: fill well inside the
@@ -66,71 +66,71 @@ const script = [
   // ---- drag-off: dragging the snapped window away restores its floating
   // SIZE at the drop point (down on the snapped title: y 4..28).
   'wmctl sdrag 256 14 500 300',
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (drag-off restore)
   'echo ==dragoff',
   'wmctl list',
   // ---- right-edge drag -> right half (the mirrored zone, edge 2; the
   // title now spans y 290..314 at x 244..484).
   'wmctl sdrag 300 306 1020 300',
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (right-half snap)
   'echo ==rightdrag',
   'wmctl list',
   // ---- drag back off (title spans y 4..28 at x 512..1024; drop puts the
   // floating window at 212,314), then corner drag -> top-left quarter.
   'wmctl sdrag 700 14 400 300',
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (drag back off)
   'wmctl sdown 300 306',
   'wmctl smove 3 3',
-  'sleep 0.3',
+  'wmctl wait win snappreview',
   'wmctl sup 3 3',
-  'sleep 1',
+  'wmctl wait nowin snappreview',
   'echo ==quarter',
   'wmctl list',
   // ---- the command path (= the Win+arrow chord event, todos/0095).
   'wmctl snap right && echo snap-right-ok',
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (snap right)
   'echo ==right',
   'wmctl list',
   'wmctl snap right',                            // toward its own edge: wrap
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (wrap across)
   'echo ==wrap',
   'wmctl list',
   'wmctl snap up',                               // maximize (the 0025 state)
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (maximize)
   'echo ==max',
   'wmctl list',
   'wmctl snap down',                             // restore the floating rect
-  'sleep 1',
+  'sleep 1',                                     // timing subject: geometry round-trip (restore floating)
   'echo ==floatback',
   'wmctl list',
   'wmctl snap down',                             // floating: minimize
-  'sleep 0.5',
+  'wmctl wait flag $WSID m',
   'echo ==min',
   'wmctl list',
   'wmctl restore $WSID',
-  'sleep 0.5',
+  'wmctl wait noflag $WSID m',
   // ---- fixed-size branch: letterbox into the half (aspect-fit SET_DST,
   // centered — the maximize dispatch exactly).
   'winbox fixed &',
-  'sleep 2.5',
+  'wmctl wait win fixbox',
   'FSID=$(wmctl list | grep fixbox$ | sed "s/[^0-9].*//")',
   'wmctl focus $FSID',
-  'sleep 0.3',
+  'wmctl wait flag $FSID f',
   'wmctl snap left',
-  'sleep 0.7',
+  'sleep 0.7',                                   // timing subject: geometry round-trip (fixed-size letterbox)
   'echo ==fixleft',
   'wmctl list',
   'wmctl snap down',
-  'sleep 0.7',
+  'sleep 0.7',                                   // timing subject: geometry round-trip (fixed-size restore)
   'echo ==fixrestore',
   'wmctl list',
   // ---- crashed-WM story: snap IS policy; plain drags stay kernel-chrome.
   'WMPID=$(wmctl list | grep taskbar$ | sed "s/^[0-9]*.//;s/[^0-9].*//")',
   'kill $WMPID',
-  'sleep 0.5',
+  'wmctl wait nowin taskbar',
   'wmctl snap left || echo snap-refused',
   'wmctl sdrag 300 306 4 300',                   // winbox title at y 290..314
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: geometry round-trip (kernel-chrome drag, no WM)
   'echo ==nowm',
   'wmctl list',
   '',

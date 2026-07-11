@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-12; 0146 shared test harnesses landed)
+# Handoff — start of thread (updated 2026-07-12; 0083 event-based waits landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,85 +7,87 @@
 
 ## Where the repo stands
 
-**0146 (extract shared test harnesses) is DONE and committed.** Two new
-modules remove the per-test copy-paste that made 0083 (event-wait) hard to
-land:
+**0083 (event-based waits) is DONE and committed.** The `sleep N`
+guess-wait synchronization class is retired everywhere it was observable.
 
-- **`tests/kernel/lib/drive.js`** — `driveBoot(script, opts)` is the single
-  headless boot seam: `mkdtemp`+`os.img` (or reuse `opts.image`), spawn
-  `node os/boot.js --image=<img> --quiet [...args]`, pipe the script on stdin,
-  return the `spawnSync` result (throws on spawn error → folds in the
-  `if(r.error)throw`). `freshImage(prefix)`/`section(out,name)` alongside.
-  **27 single-shot e2es → `driveBoot`; 3 more (`vi`/`jobctl_tty` async paced-tty,
-  `os_boot` bake-path) → `freshImage` so NO boot-image test mkdtemps inline;
-  full kernel suite 58/58 green.**
-- **`tests/browser/lib/os-harness.mjs`** — `startServer`/`waitForServer`/
-  `launchBrowser` (WebGPU flags; **playwright imported lazily** so pure helpers
-  load in plain Node)/`makeCheck`/`osHelpers(page)` (`setVt`/`sample`/`near`/
-  `waitPixel`/`waitOut`/`waitScreen`)/`waitFor`/`openOsSession`. **All 23
-  `os-*.mjs` converted byte-faithfully**; pure helpers unit-tested
-  (`tests/browser/lib/test-harness.js`, green).
-
-0083 now has the two seams to add `wmctl wait` (in `driveBoot`) and the browser
-`waitFor` (in the harness) once, instead of per-file.
+- **New primitive: `wmctl wait` (`os/wmctl.c`).** Polls `WMP_LIST` on the
+  open WM connection every 30ms until a condition holds, with a
+  failure-deadline timeout (default 15000ms; **exit 1 on timeout** — the ms is
+  a deadline, not a sync sleep). Conditions: `win`/`nowin TITLE`,
+  `count`/`atleast TITLE N`, `gone SID`, `flag`/`noflag SID CH`, `seq SID N`
+  (frame_seq ≥ N). TITLE = the exact TITLE column of `wmctl list` (quote
+  spaced titles); shell vars work (`wmctl wait flag $SID m`). Factored the
+  shared FLAGS builder into `rec_flags()` — `list` output is byte-identical.
+- **Converted (pure-WM kernel e2es)**: `test_wm_service_e2e.js` (53 sleeps →
+  waits, 136 ok / 0 fail), `test_snap_e2e.js`, `test_saver_e2e.js`,
+  `test_cursor_e2e.js`. Sleeps that are genuine **timing subjects** (negative
+  "nothing happened" checks, geometry round-trips on an existing window,
+  coarse desk/`.icons` re-read ticks, in-surface render settles) stayed as
+  `sleep`s with a justifying comment.
+- **Converted (browser)**: `os-shell.mjs` (3 real conversions to
+  `waitPixel`/`waitNotPixel`); the rest of the `os-*.mjs` sync sites were
+  already event-based post-0146 or are annotated timing subjects.
 
 ## Tests / verification
 
-- **Kernel: full suite 58 passed, 0 failed** (`node tests/kernel/run.js`, 384s)
-  — the verifiable half, proven end-to-end.
-- **Browser: static-verified only.** Every `os-*.mjs` + the harness
-  `node --check`s clean; no leftover `playwright`/`spawn`/`chromium.launch`/
-  bare `failures`; harness pure-helper unit test green. **The browser sweep was
-  NOT run — Playwright is not installed in this clone** (browsers cached, package
-  absent; the browser tier has always been operator-owed). Byte-faithfulness was
-  the conversion rule: files whose helpers diverge (`near` tol 12; old-form
-  `sample`/`waitPixel`; width-only or `w>800`-less screen waits; 250 ms poll;
-  extra-`tol` `waitPixel`) were **left inline** — only exact-match shapes were
-  pulled into `osHelpers`. Runtime confirmation is filed as **0153**.
+- **Full kernel suite: 58 passed, 0 failed** (`node tests/kernel/run.js`,
+  ~385s — the `os-system.img` rebake dominates `test_os_boot.js`). The
+  `wmctl.c` change is regression-free across every test that runs `wmctl`.
+- **Browser: static-verified only** (`node --check` on all edited `os-*.mjs`;
+  no bare sync `waitForTimeout` left un-annotated). **The sweep was NOT run —
+  Playwright is not installed in this clone.** Runtime confirmation is
+  operator-owed (see 0153/0064 below).
 
-Dev log: `logs/2026-07-12/0146-shared-test-harnesses.md`. Item at
-`todos/done/0146-test-harness-extract.md`.
+Dev log: `logs/2026-07-12/0083-event-based-waits.md`. Item at
+`todos/done/0083-test-sleep-waits.md`.
 
-## Follow-up filed
+## Follow-ups filed
 
-- **0153** (P1) — run `node tests/browser/os-sweep.mjs` under Playwright to
-  confirm the 0146 conversion changed no observable behaviour (goldens
-  unchanged). Overlaps 0064's WM sweep but makes the 0146-specific check
-  explicit rather than buried in 0064's WM scope.
+- **0154** (P1) — agent-tree waits: add `wmctl wait label/text` over the
+  win32 agent tree (`wmctl tree`/`gettext`, todos/0058), then convert the
+  **win32-app e2e cluster** (fileman_ops/recycle/ctxmenu/user32/notepad/calc/
+  winmine/ctlpanel/clipboard/openwith/paint/gdi32 — ~295 sleeps waiting on
+  in-app control state the WM window list can't see).
+- **0155** (P1) — `test_term_e2e.js` tty-render waits (`wait seq` off a
+  captured baseline) + audit the emulator/misc timing-subject sleeps
+  (sameboy/punes/mgba/gpubox/os_apps/cairo/os_boot) so the "no bare sync
+  sleep" invariant is clean and greppable.
+
+Slotted right after 0084 in `queue.json`.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
+- **`wmctl.c`/`os/*.c` are seeded bake inputs.** This session bumped
+  `image.json` `version` 72 → **73** and rebaked `os/os-system.img` (gitignored)
+  so warm e2e boots stay ~1-2s; a cold in-worker bake is ~90s. Any edit to a
+  seeded `os/*.c/.h/.rc` or `compiler.js`/`host.js`/`vendor/` restales the
+  fixture — the suite runner (`tests/lib/image-fixture.js`) rebakes once up
+  front. **Bump `version` on any seeded-source edit** or a persistent browser
+  OPFS image won't re-fetch.
+- **`queue.js done` stages a PRE-EDIT blob** of the done file — after `done`,
+  `git add todos/done/<file>` again (hit this session: the git-mv staged the
+  "Status: open" blob; re-adding staged the "DONE" one).
 - **Concurrent sessions exist: stage ONLY your own files**, and re-check HEAD
-  before committing — it can advance mid-session. Reconcile shared files
-  (`queue.json`, `image.json`) against the *current* HEAD.
-- **`queue.js done` can stage a PRE-EDIT blob** of the done file — after `done`,
-  `git add todos/done/<file>` again (verified this session: the git-mv staged
-  the "Status: open" blob; re-adding staged the "DONE" one).
-- **Bump `image.json` `version` when you edit a seeded bake input** (`os/*.c/.h/
-  .json/.rc`, `compiler.js`, `host.js`, `vendor/`): a persistent browser OPFS
-  image only re-fetches on a version bump. Still **v72** (0146 touched only
-  `tests/` — no bake-content inputs).
-- **Playwright is not installed here.** `node tests/browser/*` (any os-*.mjs or
-  os-sweep) needs a separate install; the browsers are cached under
-  `~/Library/Caches/ms-playwright`. The kernel suite and `node --check` run fine.
+  before committing.
+- **Playwright is not installed here.** The kernel suite and `node --check`
+  run fine; `node tests/browser/*` needs a separate install (browsers cached
+  under `~/Library/Caches/ms-playwright`).
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. List order is PRIORITY-BUCKETED (P0–P3), so P0 bugs lead.
 
 ## Next in queue
 
-`node todos/queue.js list` for the authoritative order. After 0146 the head is
-the **0083/0084 pair** (0083 was soft-`after` 0146 — now unblocked; it lands
-`wmctl wait`/browser `waitFor` in the new harness seams), then **0147**,
-**0079/0080**, **0052/0053**, **0064** (WM browser sweep round 3 — the standing
-operator debt), and the 0133–0139 notepad-EDIT set. No open P0s.
+`node todos/queue.js list` for the authoritative order. Head is **0084**
+(unified test entry point with diff-aware selection), then **0154/0155** (the
+0083 residue), **0147**, **0079/0080**, **0052/0053**, **0064**. No open P0s.
 
 ## Operator-owed (browser, Playwright required)
 
-- **0064** — the standing WM browser-sweep debt (pointer-lock human check + the
-  0094–0151 legs incl. the unrun `os-paint.mjs`).
-- **0152** — a `--clang` browser boot confirming the served overlay blob renders
-  the clang apps in real Chromium.
-- **0153** (new) — run `os-sweep.mjs` to validate the 0146 harness conversion.
+- **0064** — the standing WM browser-sweep debt (pointer-lock human check +
+  the 0094–0151 legs).
+- **0152** — a `--clang` browser boot confirming the served overlay renders.
+- **0153** — run `os-sweep.mjs` to validate the 0146 harness conversion (and
+  now the 0083 os-shell `waitPixel` conversions ride along).
 
 Launch Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan` (0055 —
 boot REQUIRES worker WebGPU). `node tests/browser/os-sweep.mjs` runs the whole
@@ -94,16 +96,16 @@ sweep serially.
 ## Don't re-litigate
 
 posix_spawn-not-fork; kernel-owned fds; WM.md invariants; DISK-IMAGE.md's
-settled layout; 0013–0152's recorded decisions (see todos/done/). **0146's
-call: `driveBoot` is the single-shot boot seam only — async paced-tty sessions
-(`cp.spawn --tty-out`) stay inline; and `osHelpers` extracts ONLY the
-exact-match helper shapes, leaving tolerance/timing-divergent inline helpers
-untouched so goldens can't shift.**
+settled layout; 0013–0155's recorded decisions (see todos/done/). **0083's
+call: `wmctl wait` polls the WM window list (30ms, failure-deadline timeout) —
+in-app control state (win32 agent tree) is a SEPARATE primitive owned by 0154;
+timing-subject sleeps that prove a negative or settle a render stay as
+annotated `sleep`s by design.**
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want to
-tackle — `node todos/queue.js list` for the order (0146 shared test harnesses
-just landed; no open P0s, head is the 0083/0084 pair, now unblocked). Browser
-sweep validation of the 0146 refactor is owed to the operator as 0153
-(Playwright not installed here)."
+tackle — `node todos/queue.js list` for the order (0083 event-based waits just
+landed; `wmctl wait` retired the sleep-sync class in the pure-WM kernel e2es +
+browser; win32-app cluster is owned by 0154, term/emulators by 0155; no open
+P0s, head is 0084)."

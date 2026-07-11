@@ -3,6 +3,17 @@
  * endpoint (wm_proto.h); unsubscribed, so the stream carries only replies.
  *
  *   wmctl list                        windows: SID PID GEOM DST Z FLAGS TITLE
+ *   wmctl wait COND ARGS... [MS]      block until an observable WM condition
+ *                                     holds (todos/0083) — replaces the
+ *                                     `sleep N` guess-waits in the e2e/browser
+ *                                     drivers; MS (default 15000) is a FAILURE
+ *                                     deadline (exit 1 on timeout), not a sync
+ *                                     point. Conditions:
+ *                                       win TITLE / nowin TITLE
+ *                                       count TITLE N / atleast TITLE N
+ *                                       gone SID
+ *                                       flag SID CH / noflag SID CH
+ *                                       seq SID N   (frame_seq >= N)
  *   wmctl focus|min|restore|close|raise|lower SID
  *   wmctl move SID X Y
  *   wmctl resize SID W H              asks the client; applies at its ack
@@ -79,6 +90,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include "wm_proto.h"
 #include "wm_agent.h"
 
@@ -87,6 +100,11 @@ static int fail(const char *msg) { fprintf(stderr, "wmctl: %s\n", msg); return 1
 static int usage(void) {
     fprintf(stderr,
         "usage: wmctl list\n"
+        "       wmctl wait win|nowin TITLE [MS]\n"
+        "       wmctl wait count|atleast TITLE N [MS]\n"
+        "       wmctl wait gone SID [MS]\n"
+        "       wmctl wait flag|noflag SID CHAR [MS]\n"
+        "       wmctl wait seq SID N [MS]\n"
         "       wmctl focus|min|restore|close|raise|lower SID\n"
         "       wmctl move SID X Y\n"
         "       wmctl resize SID W H\n"
@@ -250,6 +268,126 @@ static int do_agent(const char *cmd, const char *label, const char *text) {
 
 static int32_t f32bits(float v) { int32_t b; memcpy(&b, &v, 4); return b; }
 
+/* The 7-char FLAGS column (shared by `list` and `wait`): f m b r R A then
+ * a T/B slot for pinned z-layers (todos/0038). Kept in one place so the two
+ * readers never drift. */
+static void rec_flags(const wmp_rec *r, char flags[8]) {
+    memcpy(flags, "------", 7);
+    if (r->flags & WMP_F_FOCUSED)    flags[0] = 'f';
+    if (r->flags & WMP_F_MINIMIZED)  flags[1] = 'm';
+    if (r->flags & WMP_F_BORDERLESS) flags[2] = 'b';
+    if (r->flags & WMP_F_RELMOUSE)   flags[3] = 'r';
+    if (r->flags & WMP_F_RESIZABLE)  flags[4] = 'R';
+    if (r->flags & WMP_F_ALPHA)      flags[5] = 'A';
+    if (r->layer > 0) flags[6] = 'T';
+    else if (r->layer < 0) flags[6] = 'B';
+    flags[7] = 0;
+}
+
+/* ---- event-based waits (todos/0083) ----
+ * Poll WMP_LIST on the open connection until a condition holds, replacing
+ * the `sleep N` guess-waits that littered the e2e/browser drivers. The
+ * timeout is a FAILURE deadline (exit 1), not a sync point. */
+
+static long wm_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Fetch the current window list into recs[] (capped at max); returns the
+ * count, or -1 on protocol error. Reuses the caller's open fd. */
+static int wm_fetch(int fd, wmp_rec *recs, int max) {
+    if (wmp_send(fd, WMP_LIST, NULL, 0) != 0) return -1;
+    wmp_hdr h;
+    if (wmp_next_reply(fd, &h) != 0) return -1;
+    if (h.type != WMP_R_LIST) { wmp_skip(fd, h.plen); return -1; }
+    int32_t count;
+    if (wmp_read_all(fd, &count, 4) != 0) return -1;
+    int n = 0;
+    for (int32_t i = 0; i < count; i++) {
+        wmp_rec r;
+        if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return -1;
+        r.title[31] = 0;
+        if (n < max) recs[n++] = r;
+    }
+    return n;
+}
+
+static int wm_count_title(const wmp_rec *recs, int n, const char *title) {
+    int c = 0;
+    for (int i = 0; i < n; i++) if (!strcmp(recs[i].title, title)) c++;
+    return c;
+}
+
+static const wmp_rec *wm_by_sid(const wmp_rec *recs, int n, int32_t sid) {
+    for (int i = 0; i < n; i++) if (recs[i].sid == sid) return &recs[i];
+    return NULL;
+}
+
+/* Evaluate one wait condition against a fetched list. Returns 1 (satisfied),
+ * 0 (keep waiting). Conditions:
+ *   win TITLE      a window titled TITLE exists
+ *   nowin TITLE    no window titled TITLE
+ *   count TITLE N  exactly N windows titled TITLE
+ *   atleast T N    at least N windows titled T
+ *   gone SID       SID no longer listed
+ *   flag SID CH    SID present AND its FLAGS column contains CH
+ *   noflag SID CH  SID present AND its FLAGS column lacks CH
+ *   seq SID N      SID present AND frame_seq >= N */
+static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
+    if (!strcmp(cond, "win"))   return wm_count_title(recs, n, a[0]) > 0;
+    if (!strcmp(cond, "nowin")) return wm_count_title(recs, n, a[0]) == 0;
+    if (!strcmp(cond, "count")) return wm_count_title(recs, n, a[0]) == atoi(a[1]);
+    if (!strcmp(cond, "atleast")) return wm_count_title(recs, n, a[0]) >= atoi(a[1]);
+    if (!strcmp(cond, "gone"))  return wm_by_sid(recs, n, (int32_t)atoi(a[0])) == NULL;
+    if (!strcmp(cond, "flag") || !strcmp(cond, "noflag")) {
+        const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(a[0]));
+        if (!r) return 0;
+        char flags[8]; rec_flags(r, flags);
+        int has = strchr(flags, a[1][0]) != NULL;
+        return cond[0] == 'n' ? !has : has;
+    }
+    if (!strcmp(cond, "seq")) {
+        const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(a[0]));
+        return r && r->frame_seq >= atoi(a[1]);
+    }
+    return -1;   /* unknown condition */
+}
+
+/* wmctl wait COND ARGS... [MS]  — the trailing MS is optional (default
+ * 15000). Base arg count per condition: win/nowin/gone take 1, everything
+ * else takes 2. */
+static int do_wait(int fd, int argc, char **argv) {
+    if (argc < 4) return usage();
+    const char *cond = argv[2];
+    int base = (!strcmp(cond, "win") || !strcmp(cond, "nowin") ||
+                !strcmp(cond, "gone")) ? 1 : 2;
+    if (argc < 3 + base) return usage();
+    char *a[2] = { argv[3], base > 1 ? argv[4] : NULL };
+    long timeout = argc > 3 + base ? atol(argv[3 + base]) : 15000;
+
+    /* Validate the condition name once (a bad name must not spin). */
+    {
+        wmp_rec probe[1];
+        int rc = wm_cond_met(cond, a, probe, 0);
+        if (rc < 0) { fprintf(stderr, "wmctl: unknown wait condition '%s'\n", cond); return 2; }
+    }
+
+    long deadline = wm_now_ms() + timeout;
+    for (;;) {
+        wmp_rec recs[256];
+        int n = wm_fetch(fd, recs, 256);
+        if (n < 0) return fail("protocol error");
+        if (wm_cond_met(cond, a, recs, n) > 0) return 0;
+        if (wm_now_ms() >= deadline) {
+            fprintf(stderr, "wmctl: wait %s timed out after %ldms\n", cond, timeout);
+            return 1;
+        }
+        usleep(30000);   /* 30ms poll */
+    }
+}
+
 static int do_list(int fd) {
     wmp_hdr h;
     if (wmp_send(fd, WMP_LIST, NULL, 0) != 0 || wmp_next_reply(fd, &h) != 0)
@@ -261,15 +399,8 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[8] = "------";      /* [6] only for pinned layers (0038) */
-        if (r.flags & WMP_F_FOCUSED)    flags[0] = 'f';
-        if (r.flags & WMP_F_MINIMIZED)  flags[1] = 'm';
-        if (r.flags & WMP_F_BORDERLESS) flags[2] = 'b';
-        if (r.flags & WMP_F_RELMOUSE)   flags[3] = 'r';
-        if (r.flags & WMP_F_RESIZABLE)  flags[4] = 'R';
-        if (r.flags & WMP_F_ALPHA)      flags[5] = 'A';   /* todos/0063 */
-        if (r.layer > 0) flags[6] = 'T';
-        else if (r.layer < 0) flags[6] = 'B';
+        char flags[8];
+        rec_flags(&r, flags);          /* [6] only for pinned layers (0038) */
         r.title[31] = 0;
         char dst[32] = "-";            /* scaled viewport (todos/0024), or - */
         if (r.dst_w != r.w || r.dst_h != r.h)
@@ -342,6 +473,7 @@ int main(int argc, char **argv) {
     if (fd < 0) return fail("cannot reach /run/wm.sock (no kernel WM endpoint?)");
 
     if (!strcmp(cmd, "list")) return do_list(fd);
+    if (!strcmp(cmd, "wait")) return do_wait(fd, argc, argv);   /* todos/0083 */
     if (!strcmp(cmd, "shot")) {
         if (argc < 3) return usage();
         return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL);
