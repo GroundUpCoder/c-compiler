@@ -23,7 +23,11 @@ third time.
   grant the lock): quake lock on click, ESC unlock, click re-lock,
   VT-switch release.
 - Drive the full browser suite in real Chromium (serially, incl.
-  os-shell.mjs), noting flakes vs the 0033/0039 baselines.
+  os-shell.mjs), noting flakes vs the 0033/0039 baselines. **The 0101
+  taskbar-polish browser leg (os-shell.mjs: strip-menu render + outside-
+  click/Esc dismiss, clock-hover datepop, Show Desktop reveal/restore) was
+  authored but NOT run in its landing session (no playwright there) — run
+  and eyeball it here.**
 - Free-form storms per the round-2 list, plus NEW surface since:
   user32 windows (0058) if landed — HWND-tree windows under
   drag/scale/maximize/kill storms alongside SDL ones; Cairo/0061

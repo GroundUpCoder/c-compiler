@@ -600,41 +600,62 @@ try {
     await page.evaluate(() => window.__osOut.slice(-300)));
   await setVt(2);
 
-  // ---- taskbar polish (todos/0101): the strip menu, the clock date
-  // tooltip, and the Show Desktop sliver. Taskbar-local pixels only (no
-  // window-position dependence). Launch one winbox so Show Desktop has a
-  // window to minimize.
+  // ---- taskbar polish (todos/0101): the strip menu (render + dismiss on
+  // outside-click AND Esc), the clock date tooltip (hover), and Show Desktop
+  // (reveals the desktop, restores). Park one winbox at a KNOWN spot via
+  // wmctl so the reveal is a deterministic pixel, not window-placement luck.
   await setVt(1);
   await page.keyboard.type('winbox & echo TP""-WB\r', { delay: 40 });
   await page.waitForFunction(() => window.__osOut.includes('TP-WB'), { timeout: 20000, polling: 200 });
+  await page.waitForTimeout(1200);
+  // move it to (300,300) and raise it so it owns the (350,350) sample point.
+  await page.keyboard.type('TPW=$(wmctl list | grep "winbox$" | sed "s/[^0-9].*//" | sort -n | tail -1); wmctl move $TPW 300 300; wmctl raise $TPW; echo TP""-MV\r', { delay: 30 });
+  await page.waitForFunction(() => window.__osOut.includes('TP-MV'), { timeout: 20000, polling: 200 });
   await setVt(2);
-  await page.waitForTimeout(1500);
+  await waitPixel(350, 350, ORANGE);
+  check('a winbox is parked over the sample point (orange)', true);
+
   // Right-click the clock cell (x = SW-40: always past the button run) ->
   // the strip menu (CTX_W 120, clamped to the right edge, 96 tall above the
   // 28px bar). Sample a blank face-gray spot inside it (menu-local x~100).
-  await page.mouse.click(rect.x + SW - 40, rect.y + BARY, { button: 'right' });
+  const rclickStrip = () => page.mouse.click(rect.x + SW - 40, rect.y + BARY, { button: 'right' });
+  await rclickStrip();
   await waitPixel(SW - 20, SH - 74, FACE);
   check('right-click the taskbar strip opens the menu (face gray above the bar)', true);
+  // an outside-click (on the empty desktop) dismisses it (the 0091 rule).
+  await clickAt(200, 200);
+  await page.waitForTimeout(400);
+  check('outside-click dismisses the strip menu',
+    !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
+  // re-open and dismiss with Esc.
+  await rclickStrip();
+  await waitPixel(SW - 20, SH - 74, FACE);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
-  check('Esc dismisses the strip menu',
+  check('Esc also dismisses the strip menu',
     !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
-  // The clock date tooltip (104x22, light-yellow face above the clock): a
-  // click toggles it (the agent-parity path; hover raises it the same way).
-  await clickAt(SW - 40, BARY);
+
+  // The clock date tooltip: HOVER the clock cell -> "datepop" (104x22,
+  // light-yellow face above the clock). Sample its blank right end.
+  await page.mouse.move(rect.x + SW - 40, rect.y + BARY);
   await waitPixel(SW - 8, SH - 43, [255, 255, 225]);
-  check('clock click raises the date tooltip', true);
-  await clickAt(SW - 40, BARY);                  // toggle it back off
-  await page.waitForTimeout(300);
+  check('clock hover shows the date tooltip', true);
+  await page.mouse.move(rect.x + 200, rect.y + 300);   // off the clock: it idles out
+
   // The Show Desktop sliver ([SW-14, SW)): the first click minimizes-all and
-  // the sliver reads pressed (170,170,170); the second restores it (raised
-  // face gray). Sample the sliver body at x = SW-6.
+  // REVEALS the desktop (the covered (350,350) goes teal; the sliver reads
+  // pressed); a second click restores the windows (the point is covered
+  // again) and the sliver is raised.
   await clickAt(SW - 6, BARY);
-  await waitPixel(SW - 6, BARY, [170, 170, 170]);
-  check('Show Desktop press minimizes all (sliver reads pressed)', true);
+  await waitPixel(350, 350, TEAL);
+  check('Show Desktop reveals the desktop (covered point now teal)', true);
+  check('...and the sliver reads pressed', near(await sample(SW - 6, BARY), [170, 170, 170]),
+    await sample(SW - 6, BARY));
   await clickAt(SW - 6, BARY);
-  await waitPixel(SW - 6, BARY, FACE);
-  check('Show Desktop restores (sliver raised)', true);
+  await waitNotPixel(350, 350, TEAL);
+  check('Show Desktop restores the windows (point covered again)', true);
+  check('...and the sliver is raised', near(await sample(SW - 6, BARY), FACE),
+    await sample(SW - 6, BARY));
 
   // The shell stays healthy behind the desktop (menu spawns are reaped —
   // no zombie pileup would show here, but the VT1 round-trip proves the
