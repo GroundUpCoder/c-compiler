@@ -72,7 +72,16 @@ const script = [
   'sleep 1',
   'echo ==dragoff',
   'wmctl list',
-  // ---- corner drag -> top-left quarter (title now spans y 290..314).
+  // ---- right-edge drag -> right half (the mirrored zone, edge 2; the
+  // title now spans y 290..314 at x 244..484).
+  'wmctl sdrag 300 306 1020 300',
+  'sleep 1',
+  'echo ==rightdrag',
+  'wmctl list',
+  // ---- drag back off (title spans y 4..28 at x 512..1024; drop puts the
+  // floating window at 212,314), then corner drag -> top-left quarter.
+  'wmctl sdrag 700 14 400 300',
+  'sleep 1',
   'wmctl sdown 300 306',
   'wmctl smove 3 3',
   'sleep 0.3',
@@ -182,6 +191,11 @@ check('dragging the snapped window off restores its floating size at the drop (2
   geom(row(section('dragoff'), 'winbox')) === '240x160+244+314',
   row(section('dragoff'), 'winbox'));
 
+// ---- right-edge drag (the mirrored zone) ----
+check('right-edge drop snaps to the right half (512x712+512+28)',
+  geom(row(section('rightdrag'), 'winbox')) === '512x712+512+28',
+  row(section('rightdrag'), 'winbox'));
+
 // ---- corner quarter ----
 check('corner drop snaps to the top-left quarter (512x342+0+28)',
   geom(row(section('quarter'), 'winbox')) === '512x342+0+28',
@@ -198,8 +212,8 @@ check('snap right again wraps across to the left half',
 check('snap up maximizes to the work area (1024x712+0+28)',
   geom(row(section('max'), 'winbox')) === '1024x712+0+28',
   row(section('max'), 'winbox'));
-check('snap down restores the floating rect saved at the FIRST snap-out (240x160+244+314)',
-  geom(row(section('floatback'), 'winbox')) === '240x160+244+314',
+check('snap down restores the floating rect saved at the last snap-out (240x160+212+314)',
+  geom(row(section('floatback'), 'winbox')) === '240x160+212+314',
   row(section('floatback'), 'winbox'));
 check('snap down on a floating window minimizes it',
   flags(row(section('min'), 'winbox')).includes('m'),
@@ -219,7 +233,7 @@ check('snap down on a floating window minimizes it',
 check('wmctl snap with no WM is refused (snap IS policy)',
   out.includes('snap-refused'));
 check('plain screen-injected drag still works with no WM (moved, size kept — no snap)',
-  geom(row(section('nowm'), 'winbox')) === '240x160+-52+308',
+  geom(row(section('nowm'), 'winbox')) === '240x160+-84+308',
   row(section('nowm'), 'winbox'));
 
 fs.rmSync(tmp, { recursive: true, force: true });

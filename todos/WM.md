@@ -714,7 +714,7 @@ snapped windows like maximized ones. A border-resize of a snapped
 window deliberately does NOT clear the snap state (the RESIZE echo is
 indistinguishable from our own snap configure; recorded, minor).
 
-Tests: `tests/kernel/test_snap_e2e.js` (21 checks: drag-to-edge via
+Tests: `tests/kernel/test_snap_e2e.js` (22 checks: drag-to-edge, both edges via
 sdown/smove/sup, exact preview src-over pixels out of `wmctl shot
 screen`, drag-off, quarters, the full wmctl-snap ladder, fixed-size
 letterbox + restore, no-WM refusal + intact plain drags) + mechanism

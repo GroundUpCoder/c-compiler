@@ -109,7 +109,7 @@ across processes, which is how the e2e asserts the mid-drag preview
 
 ## Tests
 
-- `tests/kernel/test_snap_e2e.js` (NEW, 21 checks, registered in
+- `tests/kernel/test_snap_e2e.js` (NEW, 22 checks, registered in
   run.js): the full ladder over real /bin/wm + wmctl via boot.js.
 - test_wm.js / test_wm_policy.js mechanism legs: zone enter/leave/
   corner, drop payload incl. preX/preY, chord edges + RGUI + pass-

@@ -24,7 +24,7 @@ the full wmPointer chrome path — the first headless driver for title
 drags; the kernel drag state is global, so separate wmctl calls compose
 a held-open drag (mid-drag `wmctl list`/`shot screen` works).
 
-**Verified**: `test_snap_e2e` (21 checks, registered in run.js) + FULL
+**Verified**: `test_snap_e2e` (22 checks, registered in run.js) + FULL
 kernel suite green (52/52 incl. the new file), `os-snap.mjs` browser
 ALL OK (real-mouse edge drags with the preview pixel-asserted mid-drag
 via exact 0063 src-over values, Meta+arrow chords);
@@ -124,7 +124,8 @@ openwith-shaped first-existing whole-file; clips synthesized not
 vendored; SND_LOOP once until 0113); 0108 (sameboy IS the baked
 .gb/.gbc default); **0095's calls (snap is mechanism/policy split — the
 kernel keeps NO snap state and commits NO geometry; EV_SNAP_DROP on
-every drag end; top snap IS the 0025 maximized state, one shared
+every drag end that MOVED past the slop — a click is not a drag; top
+snap IS the 0025 maximized state, one shared
 floating rect; drag-off restores at release; halves/quarters only — no
 Win11 zones, no multi-monitor, shake-to-minimize stays 0076)**.
 
