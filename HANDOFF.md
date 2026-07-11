@@ -43,9 +43,11 @@ about the dirty tree, sealed. Booting that image and running the cc2wasm-built
 base inertness — registered in `tests/kernel/run.js`) ALL PASS;
 `tests/kernel/test_os_boot.js` PASS (base bake path unchanged).
 
-**Follow-up filed: 0120** (P2) — drive the *windowed* overlaid DOOM via `wmctl
-shot` (browser + e2e). Not done this session: no Playwright here, and headless
-windowed-app driving on an overlaid image wasn't wired. Named in 0118's Status.
+**Follow-ups filed** (both named in 0118's Status): **0120** (P2) — drive the
+*windowed* overlaid DOOM via `wmctl shot` (browser + e2e; no Playwright here).
+**0121** (P3) — make image bakes blob-deterministic (the baker stamps wall-clock
+inode mtimes, so Acceptance (a)'s literal "byte-identical" is unmet; 0118 asserts
+inertness instead).
 
 ## To commit (this thread's work, uncommitted in the tree)
 
@@ -89,7 +91,8 @@ Then push to main (user asked to commit + push if testing looked good — it did
 
 `node todos/queue.js list` — after 0118: **0106–0107** (desktop-icon details/
 multi-select tail), **0112**, then the P1 body (0088, 0079/0080, 0052/0053, …).
-**0120** (this thread's follow-up, P2) sits at pos ~30. The 0064 WM sweep round 3
+This thread's follow-ups **0120** (P2, pos 28) + **0121** (P3, pos 30) trail it.
+The 0064 WM sweep round 3
 still owes the operator the pointer-lock human check, the 0094 sound listen, the
 0095 snap feel, the 0096 saver eyeball, and the 0101–0105 browser legs.
 

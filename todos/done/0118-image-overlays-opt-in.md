@@ -12,7 +12,10 @@
   demo `/usr/bin/stl4` boots and runs (STL output, exit 0). Tests:
   `tests/kernel/test_overlays.js` (unit-scale bake, all fatal paths, base inertness).
   Follow-up **0120** owns the windowed-DOOM `wmctl shot` browser/e2e smoke leg (not
-  driven this session — no Playwright). Dev log `logs/2026-07-11/0118-image-overlays.md`.
+  driven this session — no Playwright). Acceptance (a)'s literal "byte-identical
+  (same seal)" is unmet — the baker stamps wall-clock inode mtimes, so no bake is
+  blob-reproducible; 0118 asserts inertness instead, and **0121** owns making bakes
+  deterministic. Dev log `logs/2026-07-11/0118-image-overlays.md`.
 - **Difficulty**: medium
 - **Design**: this file
 - **Sibling task**: `clang-simplified` repo `todos/0051-overlay-image-artifacts-publisher.md` (the *producer*). This task is the *consumer*. They share the **frozen `overlay@1` contract** reproduced verbatim below; neither task needs to read the other's repo to be done.
