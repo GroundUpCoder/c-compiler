@@ -1,6 +1,6 @@
-# 0119 — MagicPoint (mgp) presentation tool over a mini-Xlib veneer (sent = shim round)
+# 0119 — MagicPoint (mgp) + sent presentation tools, ported onto SDL (no Xlib shim)
 
-- **Status**: open (META — multi-round; sent proves the shim, mgp is the payoff)
+- **Status**: open (META — multi-round; sent is the small first port, mgp the payoff)
 - **Design**: this file. Toolkit context: `todos/WIN32.md` (Win32 is the
   primary *widget* toolkit; this is deliberately a **canvas** app, like
   doom/quake — no HWND tree, no by-label agent-drivability needed for a
@@ -27,44 +27,55 @@ Both are raw Xlib/C, so they share ONE substrate. `.pptx` interop is a
 recorded non-goal (OOXML tar pit) — our on-disk format is the `.mgp` text
 (and/or a JSON slide model a future editor could share).
 
-## Key decision (settle in Round 1)
+## Decision: patch the apps to SDL, do NOT build an Xlib shim
 
-**mini-Xlib veneer vs. render-over-SDL.** sent/mgp are raw Xlib + Xft +
-images with ZERO widgets, so a ~20–40-function **Xlib shim** over the
-existing kernel surfaces + input ring + freetype path covers them (the
-async/socket model collapses to synchronous local calls: `XFlush`→present,
-`XNextEvent`→drain the ring, reply-calls answer from local state; hardcode
-one TrueColor visual, implement `Xft`, skip colormaps/core server fonts;
-synthesize `Expose` on map/resize since our compositor already retains
-buffers). gucOS's kernel is already X-server-shaped (owner brokers
-surfaces, clients draw into shared buffers), so the shim is a natural fit.
+**Settled (2026-07-11).** sent/mgp use only the *gentle* Xlib subset —
+one window, one GC, text/rect/image drawing, KeyPress/Expose/Configure.
+NONE of the hairy Xlib that a real toolkit needs: no selections, no
+atoms/properties, no ICCCM WM handshake, no Xrm resource database, no
+Xt. Their whole display vocabulary maps 1:1 onto SDL: `XOpenDisplay`/
+`XCreateSimpleWindow` → `SDL_CreateWindow`; the GC draw calls → freetype
+text (already have it) + rects into the `SDL_Surface`; `XftDraw*` →
+freetype (Xft is client-side freetype anyway — see 0117-adjacent notes /
+WIN32.md font discussion); images → libpng; `XNextEvent`/Expose →
+`SDL_PollEvent` + a first paint on map.
 
-BUT a shim is a THIRD GUI surface (SDL, Win32, Xlib) — justified only by
-**appetite for a suckless/Xlib corpus** (st, dmenu, tabbed, xcalc,
-xeyes…). If mgp is the only Xlib app we'll ever want, porting its render
-loop directly over SDL (already present) is less total setup. **Round 1
-picks a lane**; if we build the shim, it lands as `os/xlib/` lib.json
-(the user32/gdi32 precedent) and sent is its acceptance app.
+So we **patch each app's display layer to call SDL directly** rather than
+building a mini-Xlib veneer. Rationale (the fork-vs-shim call):
+
+- A shim keeps the app pristine but is a THIRD GUI surface (SDL, Win32,
+  Xlib) to build+maintain, justified ONLY by an ongoing raw-Xlib/suckless
+  corpus we don't have.
+- Patching forks the app (we carry a diff), but for 1–2 apps that is far
+  less total work than a veneer — and the diff is small because the X
+  usage is small.
+- Broader principle (see WIN32.md / TOOLKIT.md): **Win32 owns widget
+  apps; SDL owns raw-canvas apps.** Xlib as an API buys only
+  source-compatibility, no capability the other two lack, so we don't
+  carry it.
+
+If a genuine suckless/Xlib CORPUS ever materializes (st, dmenu, tabbed,
+xeyes… enough that per-app patching hurts), revisit and build the
+`os/xlib/` veneer then — but not for this item.
 
 ## Plan (rounds)
 
-**Round 1 — the substrate + sent.** Decide shim-vs-SDL. If shim: bring up
-the mini-Xlib veneer (`os/xlib/`), port **sent** as the acceptance app,
-seed `/bin/sent` + an Accessories/Demos menu entry + a slide-file
-association. Fullscreen present via the borderless surface path; keys
-next/prev/quit.
+**Round 1 — sent on SDL.** Vendor sent (or a minimal fork), swap its
+Xlib/Xft/drw calls for SDL + freetype + libpng; seed `/bin/sent` + an
+Accessories/Demos menu entry + a slide-file association. Fullscreen
+present via the borderless surface path; keys next/prev/quit. This is
+the small proof that the "patch X→SDL" recipe works.
 
-**Round 2 — MagicPoint.** Vendor mgp (`vendor/magicpoint/bin.json`, pin
-commit + patch table in a README), port over the shim: `.mgp` parser,
-multi-size/color text via freetype, images (reuse libpng; farbfeld/its
-converters swapped out), backgrounds, alignment/indent. Seed
-`/bin/mgp` + `.mgp` openwith association → `/bin/mgp`, a Demos deck under
-`/root` (or `/usr/share`), Accessories menu entry.
+**Round 2 — MagicPoint on SDL.** Vendor mgp (`vendor/magicpoint/bin.json`,
+pin commit + patch table in a README), applying the same X→SDL patch at
+larger scale: `.mgp` parser, multi-size/color text via freetype, images
+(libpng; farbfeld/its converters swapped out), backgrounds, alignment/
+indent. Seed `/bin/mgp` + `.mgp` openwith association → `/bin/mgp`, a
+Demos deck under `/root` (or `/usr/share`), Accessories menu entry.
 
-**Round 3+ (reassess) — corpus + polish.** If the shim earned its keep,
-add more suckless/Xlib apps as demand appears. Optional: a shared JSON
-slide model so a future (bespoke, Win32) WYSIWYG editor and the mgp
-renderer agree on-disk.
+**Round 3+ (reassess).** Optional: a shared JSON slide model so a future
+(bespoke, Win32) WYSIWYG editor and the mgp renderer agree on-disk.
+Revisit the Xlib-veneer question ONLY if a real Xlib corpus appears.
 
 ## Acceptance
 

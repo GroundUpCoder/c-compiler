@@ -27,3 +27,29 @@ The one microui deliverable that carries over: the shared freetype
 text-draw helper (gdi32's `TextOut` reuses it). Everything else in 0047/0056
 is retired. `DOM.md`'s flat-buffer idea is parked (a possible future
 MVU-sugar encoding), not on the queue.
+
+## The three GUI substrates, and no Xlib shim (2026-07-11)
+
+Three surfaces sit on the one kernel display server (surfaces + input ring
++ WMP): **SDL** (framebuffer + input + audio — the primitive base),
+**Win32** (user32/gdi32 — the widget toolkit + drivable HWND tree; primary,
+per above), and — hypothetically — **Xlib**. Both Win32 and Xlib are pure
+user-space translation libs *on top of the SDL veneer* (verified: the
+kernel has zero Win32/Xlib knowledge; user32.c calls `SDL_*`). Division of
+labor:
+
+- **Win32 owns widget apps** — its corpus targets the OS's own widgets, so
+  a thin veneer suffices and every app is agent-drivable for free.
+- **SDL owns raw-canvas apps** — games, and the raw-Xlib canvas apps
+  (sent/mgp/xeyes) which use only window+draw+events.
+
+**Decision: we do NOT build an Xlib shim.** An Xlib API buys only
+source-compatibility, no capability SDL/Win32 lack, and a real Xlib shim
+would drag in the *hairy* Xlib (selections, atoms, ICCCM, Xrm) that Xt/Motif
+need but our canvas targets never touch. So raw-Xlib apps we want are
+**patched to call SDL directly** (a small per-app fork), not run over a
+shim. See `todos/0119` (sent/mgp). Revisit only if an ongoing suckless/Xlib
+corpus (st/dmenu/tabbed/…) ever makes per-app patching hurt more than a
+veneer would. Corollary for GTK/Qt/Motif apps: the *toolkit* is the porting
+unit — don't port the toolkit; port the app's portable core and re-shell it
+on Win32.
