@@ -176,12 +176,24 @@ static void build_test_rom(void) {
     /* ── GB machine code at 0x0150 ─────────────────────────────── */
     int pc = 0x0150;
 
+    /* Emit the signed operand of a relative jump. A DMG JR offset is measured
+       from the address of the byte *after* the operand, so it must use the
+       post-increment value of pc.  Writing `rom_data[pc++] = label - pc` reads
+       and modifies pc without a sequence point (C11 §6.5p2, -Wunsequenced) —
+       the evaluation order is unspecified, and compilers that read the pre-
+       increment pc emit an offset one too small, sending every backward jump
+       one byte off (the wait-VBlank loop then jumps into the middle of its own
+       LDH and spins forever).  Compute the offset in a separate statement so
+       the operand is well-defined under every compiler. */
+#define EMIT_JR_OFF(label) \
+    do { int8_t _off = (int8_t)((label) - (pc + 1)); rom_data[pc++] = (uint8_t)_off; } while (0)
+
     /* --- wait for VBlank so we can safely touch VRAM ------------ */
     int wait_vb = pc;
     rom_data[pc++] = 0xF0; rom_data[pc++] = 0x44;  /* LDH A,($44) ; LY   */
     rom_data[pc++] = 0xFE; rom_data[pc++] = 0x90;  /* CP  $90             */
     rom_data[pc++] = 0x20;                          /* JR  NZ, wait_vb    */
-    rom_data[pc++] = (uint8_t)(wait_vb - pc);
+    EMIT_JR_OFF(wait_vb);
 
     /* --- disable LCD -------------------------------------------- */
     rom_data[pc++] = 0x3E; rom_data[pc++] = 0x00;  /* LD  A, $00         */
@@ -196,7 +208,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0x22;                          /* LD  (HL+), A       */
     rom_data[pc++] = 0x05;                          /* DEC B              */
     rom_data[pc++] = 0x20;                          /* JR  NZ, f1         */
-    rom_data[pc++] = (uint8_t)(f1 - pc);
+    EMIT_JR_OFF(f1);
 
     /* --- tile 2: checkerboard (8 rows, $AA/$55 pattern) --------- */
     rom_data[pc++] = 0x06; rom_data[pc++] = 0x08;  /* LD  B, $08         */
@@ -207,7 +219,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0x22;                          /* LD  (HL+), A       */
     rom_data[pc++] = 0x05;                          /* DEC B              */
     rom_data[pc++] = 0x20;                          /* JR  NZ, ck         */
-    rom_data[pc++] = (uint8_t)(ck - pc);
+    EMIT_JR_OFF(ck);
 
     /* --- fill tilemap: border (tile 1) + inner (tile 2) --------- */
 
@@ -220,7 +232,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0x22;                          /* LD  (HL+), A       */
     rom_data[pc++] = 0x05;                          /* DEC B              */
     rom_data[pc++] = 0x20;                          /* JR  NZ, tr         */
-    rom_data[pc++] = (uint8_t)(tr - pc);
+    EMIT_JR_OFF(tr);
 
     /* skip 12 cols to next row */
     rom_data[pc++] = 0x7D;                          /* LD  A, L           */
@@ -242,7 +254,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0x22;                          /* LD  (HL+), A       */
     rom_data[pc++] = 0x05;                          /* DEC B              */
     rom_data[pc++] = 0x20;                          /* JR  NZ, cf         */
-    rom_data[pc++] = (uint8_t)(cf - pc);
+    EMIT_JR_OFF(cf);
     /* right edge */
     rom_data[pc++] = 0x3E; rom_data[pc++] = 0x01;  /* LD  A, $01         */
     rom_data[pc++] = 0x22;                          /* LD  (HL+), A       */
@@ -254,7 +266,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0x24;                          /* INC H              */
     rom_data[pc++] = 0x15;                          /* DEC D              */
     rom_data[pc++] = 0x20;                          /* JR  NZ, mr         */
-    rom_data[pc++] = (uint8_t)(mr - pc);
+    EMIT_JR_OFF(mr);
 
     /* bottom row: 20 × tile 1 */
     rom_data[pc++] = 0x06; rom_data[pc++] = 0x14;  /* LD  B, 20          */
@@ -263,7 +275,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0x22;                          /* LD  (HL+), A       */
     rom_data[pc++] = 0x05;                          /* DEC B              */
     rom_data[pc++] = 0x20;                          /* JR  NZ, br         */
-    rom_data[pc++] = (uint8_t)(br - pc);
+    EMIT_JR_OFF(br);
 
     /* --- palette & LCD enable ----------------------------------- */
     rom_data[pc++] = 0x3E; rom_data[pc++] = 0xE4;  /* LD  A, $E4 ; BGP   */
@@ -278,7 +290,7 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0xF0; rom_data[pc++] = 0x44;  /* LDH A,($44)        */
     rom_data[pc++] = 0xFE; rom_data[pc++] = 0x90;  /* CP  $90             */
     rom_data[pc++] = 0x20;                          /* JR  NZ, wv          */
-    rom_data[pc++] = (uint8_t)(wv - pc);
+    EMIT_JR_OFF(wv);
     /* increment SCX */
     rom_data[pc++] = 0xF0; rom_data[pc++] = 0x43;  /* LDH A,($43) ; SCX  */
     rom_data[pc++] = 0x3C;                          /* INC A              */
@@ -288,10 +300,11 @@ static void build_test_rom(void) {
     rom_data[pc++] = 0xF0; rom_data[pc++] = 0x44;  /* LDH A,($44)        */
     rom_data[pc++] = 0xFE; rom_data[pc++] = 0x90;  /* CP  $90             */
     rom_data[pc++] = 0x28;                          /* JR  Z, wn          */
-    rom_data[pc++] = (uint8_t)(wn - pc);
+    EMIT_JR_OFF(wn);
     /* loop */
     rom_data[pc++] = 0x18;                          /* JR  ml              */
-    rom_data[pc++] = (uint8_t)(ml - pc);
+    EMIT_JR_OFF(ml);
+#undef EMIT_JR_OFF
 }
 
 /* ── Input ───────────────────────────────────────────────────────── */
