@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-11; 0093 Recycle Bin closed)
+# Handoff — start of thread (updated 2026-07-11; 0108 openwith test rot closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,64 +7,48 @@
 
 ## Where the repo stands
 
-**0093 (Recycle Bin) is CLOSED**; image bumped **v53 → v54**. Dev log
-`logs/2026-07-11/0093-recycle-bin.md`; item at
-`todos/done/0093-recycle-bin.md`; durable notes in CLAUDE.md (os/
-section), WIN32.md ("0093 (Recycle Bin…)"), WM.md ("Recycle Bin, desktop
-side"). What landed:
+**0108 (test_openwith_e2e rot) is CLOSED**; no image change (still
+**v54** — the fix touched only tests/docs). Dev log
+`logs/2026-07-11/0108-openwith-test-rot.md`; item at
+`todos/done/0108-openwith-e2e-rot.md`. What landed:
 
-- **Trash store in `os/fileops.h`** (the shared core, 0092's rule):
-  `/root/.recycle/files/` moved entries (clashes → "x", "x 2"),
-  `/root/.recycle/info/` one sidecar per entry (line 1 original absolute
-  path, line 2 delete time). `fo_trash` refuses in-store paths and
-  SWEEPS fo_move's EXDEV partial copy on failure (EROFS under /usr
-  strands nothing); failed sidecar write rolls the move back;
-  `fo_restore` → EEXIST on occupied target; `fo_trash_forget` drops the
-  sidecar of a permanent in-store delete. shell32 re-exports
-  (`SHFileTrash`/`SHTrashEmpty`/…, veneer-local).
-- **fileman**: Del/menu Delete = confirmed trash ("send 'x' to the
-  Recycle Bin?"), Shift+Del = confirmed permanent (FVIRTKEY|FSHIFT
-  accelerator), in-store row menu Restore/Delete(permanent)/Properties
-  — Restore prompts "Replace it?" on EEXIST — pane menu Empty Recycle
-  Bin (confirmed, empty-grayed)/Refresh. **fileman now HIDES dotfiles**
-  (refill skips `.`-names; navigation by path still reaches them) —
-  the 0106-anticipated default; 0106 keeps the show-hidden toggle.
-- **wm.c desktop**: the bin icon is a REAL `/root/Desktop/Recycle Bin`
-  launcher script (`#!/bin/sh` → `fileman /root/.recycle/files`)
-  recreated by `ensure_recycle()` at every wm start (old images heal;
-  the bin can't be lost). It **pins to the grid's TAIL** (entcmp special
-  case) so every other icon keeps its sorted cell — that's what kept the
-  icon-index math in five test files valid. Basket glyph: center white
-  empty / navy full (`desk_trash_full`, coarse-tick refresh). Icon menu
-  grew DELETE (+ the Del key), both skip the bin; cut/copy skip it too;
-  the bin's own menu is OPEN / EMPTY RECYCLE BIN (empty-grayed).
+- **Realigned the test to the seed** (`os/image.json` is the truth;
+  `7f6d3c0` flipped `.gb`/`.gbc` → `/bin/sameboy` after 0075's initial
+  keep-gameboy call): the `.gb` legs expect `SameBoy`-titled windows,
+  conf1 carries `gb\t/bin/sameboy` + `gbc\t/bin/sameboy` forward. The
+  test's minimal 0x150-byte cartridge works under SameBoy unchanged
+  (logo + header checksum satisfy the embedded boot ROM; the 0xFF bank
+  pad RST $38-loops forever, so the window stays up).
+- **Registered it in the run.js MANIFEST** (`['test_openwith_e2e.js',
+  IMG]`, after test_fileman_e2e) — it was the ONLY orphan in
+  `tests/kernel/` (swept `ls test_*.js` vs the manifest).
+- **Doc drift fixed at the durable copies**: run.js's test_sameboy_e2e
+  comment (said "gameboy stays the .gb default" while that very test
+  asserts sameboy) and CLAUDE.md's two spots (vendor list, openwith
+  seed). Historical dev logs left as written.
 
-**Tests**: new `tests/kernel/test_recycle_e2e.js` (34 checks, in the
-run.js MANIFEST) + `tests/browser/os-recycle.mjs` (sweep-discovered).
-Goldens that MOVED: icon ctx menu **120x76 → 120x96** (DELETE row) in
-test_ctxmenu_e2e.js (os-ctxmenu.mjs never asserted it); the bin's own
-menu is 120x56. os-drop.mjs's "last cell" signal moved one row down
-(the BIN const). test_fileman_e2e's /root listing golden survives via
-the dotfile hiding; test_fileman_ops_e2e's delete-confirm assert now
-matches the Recycle-Bin wording. Full kernel suite green post-change;
-browser legs run: os-recycle, os-fileman, os-ctxmenu, os-shell, os-drop.
+**Verified**: baseline reproduced exactly the item's 3 failures;
+post-fix standalone ALL OK (15 checks), `run.js --filter=openwith`
+passes, **full kernel suite 50/50 green** (223.5s).
 
-**Follow-ups filed by 0093**:
-- **0110** (after 0109) — wm.c desktop confirm dialogs: bin-menu EMPTY
-  fires unconfirmed (the one destructive exception; wm.c has no dialog
-  furniture), desktop deletes don't confirm (recoverable, low stakes),
-  no desktop Shift+Del bypass. Same furniture 0109 wants.
-- 0106 already owned the fileman hidden-files toggle; its body now
-  records that the hidden-by-default half landed with 0093.
+**Follow-up filed by 0108 — 0111** (slotted after 0106, the fileman
+cluster): kernel32's `proc_info_init` quotes only cmdline args WITH
+SPACES, so notepad's `lpCmdLine` gets a bare `/root/...`; ReactOS
+`HandleCommandLine` eats `/r` as an option flag → **every openwith
+`default.gui → /bin/notepad` open shows an "does not exist / create?"
+ERROR box + an Untitled window** (verified in-source and in the window
+list). Preferred fix in the item: quote EVERY arg (Windows-canonical),
+audit CreateProcess's tokenizer round-trip, then tighten
+test_openwith_e2e's deliberately-loose `/Notepad$/` check to
+`readme.md - Notepad` + no-ERROR-window.
 
-**Next in queue**: `node todos/queue.js list` — **0108 (openwith test
-rot: unregistered test_openwith_e2e.js, expects Peanut-GB for .gb while
-the seed routes gb → sameboy)** leads, then 0094 (sound scheme), 0095
-(Aero Snap), 0096 (screensaver), 0098 (Start menu Win7 pane), 0101
-(taskbar-strip menu), 0102 (window system menu), 0103 (desktop-icon
-rename), 0106 (fileman navigator v2), 0109 (desktop icon Properties,
-after 0103), 0110 (wm confirms, after 0109). **Do NOT pipe `queue.js
-list` through `head`** — EPIPE crash (known, harmless, noisy).
+**Next in queue**: `node todos/queue.js list` — **0094 (sound scheme)**
+leads, then 0095 (Aero Snap), 0096 (screensaver), 0098 (Start menu Win7
+pane), 0101 (taskbar-strip menu), 0102 (window system menu), 0103
+(desktop-icon rename), 0104, 0105, 0106 (fileman navigator v2), 0111
+(win32 cmdline abs-path), 0107, … 0109 (after 0103), 0110 (after 0109).
+**Do NOT pipe `queue.js list` through `head`** — EPIPE crash (known,
+harmless, noisy).
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL
 sweep rounds, a MUST for WM sweep round 3 (`0064`), which also carries
@@ -72,24 +56,27 @@ the 0063 aero aesthetics + glass perf eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **0093 NEW: the Recycle Bin icon sorts LAST on the desktop** (entcmp
-  special case on the name "Recycle Bin") — desktop tests keep indexing
-  the sorted seeds as before, but any test that asserts the LAST cell or
-  a full grid must count the bin (os-drop.mjs's `BIN` const is the
-  pattern). The seeded desktop is now 8 icons (7 seeds + bin row 7).
-- **0093 NEW: fileman listings hide dotfiles** — drive tests into dot
-  dirs by `wmctl settext EDIT:0 <path>` + Go, never by clicking rows.
-- **0093 NEW: trash-vs-permanent is told by confirm WORDING** ("send
-  'x' to the Recycle Bin?" vs "delete 'x'?"); box titles stay "Confirm
-  File/Folder Delete" — os-fileman.mjs greps `Confirm` and survived.
+- **0108 NEW: `queue.js add --help` really does add an "untitled" item**
+  (I hit it this thread; undo = `git checkout todos/queue.json` + rm the
+  scaffold BEFORE anything else touches the queue; the flag fix is 0099).
+- **0108 NEW: the openwith default.gui leg is loose on purpose** —
+  `/Notepad$/` only guards launch; the file-load half is broken until
+  0111 (don't "fix" the test to pass differently, fix the veneer).
+- **0093: the Recycle Bin icon sorts LAST on the desktop** (entcmp
+  special case) — tests asserting the LAST cell or a full grid must
+  count the bin (os-drop.mjs's `BIN` const). Seeded desktop = 8 icons.
+- **0093: fileman listings hide dotfiles** — drive tests into dot dirs
+  by `wmctl settext EDIT:0 <path>` + Go, never by clicking rows.
+- **0093: trash-vs-permanent is told by confirm WORDING** ("send 'x' to
+  the Recycle Bin?" vs "delete 'x'?"); titles stay "Confirm File/Folder
+  Delete".
 - **0092: the fileman ops core is `os/fileops.h`** — a new file op goes
-  THERE, not in one consumer. Clipboard file list = format 2 on the 0090
-  slot; last-write-wins across formats.
+  THERE. Clipboard file list = format 2 on the 0090 slot;
+  last-write-wins across formats.
 - **0092: AQ_CLICK prefers an ENABLED match** — modal-over-modal is
   drivable; gettext/settext still find disabled controls.
-- **0092: real-browser right-click row selection is imprecise** — prove
-  the render with a real mouse, drive row-precise ops through
-  `wmctl click $SID x y 3` (surface coords), verify fs via the VT1 shell.
+- **0092: real-browser right-click row selection is imprecise** — drive
+  row-precise ops through `wmctl click $SID x y 3`, verify fs via VT1.
 - **0091: `wmctl list` is Z-ORDERED** — pick rows by sid. `wmctl tree`
   lists menu BARS before the `popupmenu` section.
 - **0091: browser popup tests must quiesce ~1.5s after the VT2 settle** —
@@ -99,10 +86,9 @@ the 0063 aero aesthetics + glass perf eyeball.
 - **0089 browser-test traps:** (1) `waitForFunction(__osOut.includes(…))`
   fires on the TYPED COMMAND'S ECHO — emit markers with a split quote
   (`echo CP-U""P`). (2) Typing right after a `&` job races hush's job
-  notice — `waitForTimeout(800)` first. (3) 0093 NEW: typing right after
-  ANY `$(wmctl …)` substitution races the prompt the same way (the next
-  line's leading keystroke gets eaten — `wmctl` became `mctl`); pause
-  ~800ms after every typed shell line that runs a command.
+  notice — `waitForTimeout(800)` first. (3) Typing right after ANY
+  `$(wmctl …)` substitution races the prompt the same way — pause ~800ms
+  after every typed shell line that runs a command.
 - **0077: icon tile white ring is 6px; probe `(ix+2, iy+2)`**. Successive
   same-icon `wmctl click`s pair into a double-click — `sleep 0.6` between.
 - **`queue.js done` can stage a PRE-EDIT blob** of the done file — after
@@ -120,10 +106,10 @@ the 0063 aero aesthetics + glass perf eyeball.
   'pass'`) + per-file logs after an interrupted run; `--resume` picks up.
   Sweep is serial by design (0045). The kernel runner is a MANIFEST —
   new test files must be added to `tests` in run.js or they silently
-  never run (0108's lesson).
+  never run (0108 was exactly this; the orphan sweep is now part of any
+  new-test review).
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
-  committing. **`queue.js add --help` is NOT a help flag** — it ADDS an
-  item named "untitled" (fix queued as 0099).
+  committing.
 - **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium
   with `--enable-unsafe-webgpu --enable-features=Vulkan`.
 - The IDE's clangd flags os/*.c, os/win32/*.c and vendor sources — noise;
@@ -136,24 +122,23 @@ the 0063 aero aesthetics + glass perf eyeball.
 
 ## Don't re-litigate
 
-posix_spawn-not-fork; kernel-owned fds; WM.md invariants; 0013–0092's
+posix_spawn-not-fork; kernel-owned fds; WM.md invariants; 0013–0093's
 recorded decisions (see todos/done/); DISK-IMAGE.md's settled layout;
 0090's calls (the clipboard is a KERNEL slot — one slot, no history,
 last-write-wins, format-tagged); 0091's calls (fixed item lists NOT
-directory scans; ONE flyout depth; gray rows never fire and leave the
-menu open); 0092's calls (ops core header-only + shared; format-2
-textual CF_HDROP; SHFile* veneer-local; move refuses EEXIST; copy
-preserves symlinks; DnD = non-goal); **0093's calls (the trash store is
-`/root/.recycle` files/+info/ with textual sidecars — original path +
-Unix seconds; delete-in-store is PERMANENT; the bin icon is a real
-launcher script recreated every wm start and pinned to the grid TAIL;
-no quota/auto-purge — unbounded until Empty; no /usr trashing — EROFS
-is the answer; no dedicated bin app — it opens in fileman; wm.c-side
-confirms deferred to 0110, fileman dotfile toggle to 0106)**.
+directory scans; ONE flyout depth; gray rows never fire); 0092's calls
+(ops core header-only + shared; format-2 textual CF_HDROP; SHFile*
+veneer-local; move refuses EEXIST; DnD = non-goal); 0093's calls (trash
+store = `/root/.recycle` files/+info/ textual sidecars; delete-in-store
+is PERMANENT; the bin icon is a real launcher pinned to the grid TAIL;
+no quota/auto-purge; no /usr trashing; wm.c confirms → 0110, fileman
+dotfile toggle → 0106); **0108's call (sameboy IS the baked .gb/.gbc
+default — `os/image.json` is the truth over any stale prose; gameboy
+stays installed as the lighter alternate core)**.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle — `node todos/queue.js list` for the order (0108 openwith test
-rot leads, then 0094–0096, 0098, 0101–0106, 0109–0110; 0064 WM sweep
-round 3 still owes the pointer-lock human check)."
+to tackle — `node todos/queue.js list` for the order (0094 sound scheme
+leads, then 0095/0096/0098, 0101–0106, 0111, 0107, 0109–0110; 0064 WM
+sweep round 3 still owes the pointer-lock human check)."

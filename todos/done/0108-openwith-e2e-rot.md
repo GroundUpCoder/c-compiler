@@ -1,6 +1,21 @@
 # 0108 — test_openwith_e2e: register in run.js + realign with the sameboy .gb default
 
-- **Status**: open
+- **Status**: done (2026-07-11). Realigned to the seed (the truth):
+  the `.gb` legs expect a `SameBoy` window and conf1 carries
+  `gb\t/bin/sameboy` + `gbc\t/bin/sameboy` forward — the minimal
+  0x150-byte cartridge works under SameBoy unchanged (valid logo +
+  header checksum satisfy the boot ROM; the 0xFF bank pad RST-loops, so
+  the window stays up). Registered `['test_openwith_e2e.js', IMG]` in
+  the run.js manifest; orphan sweep found NO other unregistered test.
+  Doc drift fixed at the durable copies: run.js's test_sameboy_e2e
+  comment and CLAUDE.md's two gameboy-default spots. Standalone run ALL
+  OK (15 checks), `run.js --filter=openwith` passes (28.5s), full
+  kernel suite green. Surfaced + filed **0111**: kernel32's cmdline
+  builder quotes only args with spaces, so notepad misparses absolute
+  POSIX paths as `/`-options — every default.gui open shows an ERROR
+  box; the test's default.gui check stays deliberately loose
+  (`/Notepad$/`) until 0111 tightens it. Dev log
+  `logs/2026-07-11/0108-openwith-test-rot.md`.
 - **Design**: `tests/kernel/test_openwith_e2e.js`, `todos/done/0072`,
   `todos/done/0075`. Filed by the 0092 closeout audit.
 

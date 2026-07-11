@@ -7,10 +7,10 @@
 //     extension associations and default.term resolve, the file path is
 //     appended, missing files / bad usage fail loudly
 //   - the desktop GUI context: double-clicking a .gb icon launches
-//     /bin/gameboy with that ROM (a minimal synthesized cartridge — the
-//     header recipe from vendor/gameboy's build_test_rom — so the
-//     Peanut-GB window STAYS up)
-//   - fileman: Open on a .gb goes to gameboy, Open on an unassociated
+//     /bin/sameboy (the baked default since 0072's flip) with that ROM
+//     (a minimal synthesized cartridge — the header recipe from
+//     vendor/gameboy's build_test_rom — so the SameBoy window STAYS up)
+//   - fileman: Open on a .gb goes to sameboy, Open on an unassociated
 //     extension goes to the default.gui program (notepad); the "With"
 //     picker prefills the effective command, "Always for .txt" + OK
 //     persists the pick and plain Open honors it afterwards
@@ -47,11 +47,13 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
 }
 
-/* A minimal cartridge Peanut-GB initializes happily (the build_test_rom
+/* A minimal cartridge both GB cores initialize happily (the build_test_rom
  * recipe from vendor/gameboy/src/main.c): entry JP $0150, the Nintendo
- * logo, 'TEST' title, ROM-only type, and a valid header checksum. 0x150
- * bytes is exactly the loader's minimum; execution runs zero-filled NOPs
- * forever, which is all the test needs — a window that stays up. */
+ * logo, 'TEST' title, ROM-only type, and a valid header checksum — the
+ * logo + checksum matter to SameBoy's embedded boot ROM. 0x150 bytes is
+ * exactly the loaders' minimum; SameBoy pads the rest of the bank with
+ * 0xFF, so execution NOPs to the pad and RST $38-loops forever, which is
+ * all the test needs — a window that stays up. */
 function minimalRom() {
   const rom = Buffer.alloc(0x150);
   rom[0x100] = 0x00; rom[0x101] = 0xC3; rom[0x102] = 0x50; rom[0x103] = 0x01;
@@ -74,7 +76,8 @@ const ROM_B64 = minimalRom().toString('base64');
 /* Desktop grid geometry (wm.c): column-major, 16px margin, 84x64 cells,
  * 11 rows on the 1024x768 headless screen; column-0 icon centers sit at
  * x=58, y = 16 + row*64 + 32. Seeded /root/Desktop + the test's game.gb,
- * sorted. */
+ * sorted (the 0093 Recycle Bin pins to the grid TAIL, so it never shifts
+ * these cells). */
 const DESK = ['doom', 'drmario', 'game.gb', 'gameboy', 'mario', 'pokemon',
               'quake', 'term'];
 const deskY = (name) => 16 + DESK.indexOf(name) * 64 + 32;
@@ -180,14 +183,15 @@ check('default.term is pickable and honored for extension-less files',
   JSON.stringify(section(out, 'probe2')));
 const conf1 = section(out, 'conf1');
 check('~/.config/openwith carries the baked defaults forward',
-  conf1.includes('gb\t/bin/gameboy') && conf1.includes('default.gui\t/bin/notepad'), conf1);
+  conf1.includes('gb\t/bin/sameboy') && conf1.includes('gbc\t/bin/sameboy') &&
+  conf1.includes('default.gui\t/bin/notepad'), conf1);
 check('...plus the user associations', conf1.includes('zzz\t/root/probe.sh') &&
   conf1.includes('default.term\t/root/probe.sh'), conf1);
 check('open on a missing file fails', out.includes('open-missing-fails'));
 check('open without args prints usage and fails', out.includes('open-usage-fails'));
 
-check('fileman Open on a .gb launches gameboy (Peanut-GB up)',
-  count(section(out, 'list2'), /\tPeanut-GB$/) === 1, section(out, 'list2'));
+check('fileman Open on a .gb launches sameboy (SameBoy window up)',
+  count(section(out, 'list2'), /\tSameBoy$/) === 1, section(out, 'list2'));
 const tree1 = section(out, 'tree1');
 check('With opens the picker (OpenWith window, Always + OK/Cancel)',
   /class=OpenWith/.test(tree1) && /text='Always for .txt'/.test(tree1) &&
@@ -204,8 +208,8 @@ check('plain Open honors the persisted association',
   JSON.stringify(section(out, 'probe4')));
 check('fileman Open on an unassociated extension opens the GUI default (notepad)',
   count(section(out, 'list3'), /Notepad$/) === 1, section(out, 'list3'));
-check('desktop dblclick on the .gb icon launches gameboy (Peanut-GB +1)',
-  count(section(out, 'list4'), /\tPeanut-GB$/) === 2, section(out, 'list4'));
+check('desktop dblclick on the .gb icon launches sameboy (SameBoy +1)',
+  count(section(out, 'list4'), /\tSameBoy$/) === 2, section(out, 'list4'));
 
 // ---- persistence: a second boot on the same image ----
 const out2 = boot([

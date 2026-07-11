@@ -70,7 +70,7 @@ hang-class miscompiles fail fast instead of stalling the suite.
 
 `vendor/` contains real-world C codebases already ported to this compiler — each has its own `bin.json`. **Check this list before proposing a "new" port; many obvious candidates are already done.** As of writing:
 
-- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the default `.gb`/`.gbc` handler), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs; patch table in `vendor/sameboy/README.md`), `snake`
+- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; patch table in `vendor/sameboy/README.md`), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
   (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
@@ -301,7 +301,7 @@ store = first existing of `~/.config/openwith`, `/etc/openwith`,
 `/usr/share/openwith` (whole-file, no merge; `KEY<ws>COMMAND` lines,
 KEY = lowercase extension or `default.gui`/`default.term`; path
 appended as one arg; bare words resolve via /usr/local/bin:/bin),
-baked seed: gb/gbc → `/bin/gameboy`, `default.gui → /bin/notepad`,
+baked seed: gb/gbc → `/bin/sameboy`, `default.gui → /bin/notepad`,
 `default.term → vi`; `open --set KEY CMD` and fileman's "With"
 picker ("Always" checkbox) write `~/.config/openwith` with the
 effective table carried forward; the
