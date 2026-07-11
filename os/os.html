@@ -197,7 +197,11 @@ function ptrLocked() { return document.pointerLockElement === screen; }
 // SDL_SetCursor shape) and posts {type:'cursor', shape}; we map it to a CSS
 // `cursor` name on the desktop canvas. Index is the SDL_SystemCursor wire
 // value; -1 (hidden) -> 'none'. Kept in sync with host.js's CURSOR_CSS.
-var CURSOR_CSS = [
+// NB local name CURSOR_CSS_MAP, not CURSOR_CSS: host.js is loaded as a
+// classic <script> above, so its top-level `const CURSOR_CSS` leaks into this
+// page's global scope — a bare `var CURSOR_CSS` here would be a redeclaration
+// SyntaxError that kills this whole inline block. See todos/0125.
+var CURSOR_CSS_MAP = [
   'default', 'text', 'wait', 'crosshair', 'progress',
   'nwse-resize', 'nesw-resize', 'ew-resize', 'ns-resize', 'move',
   'not-allowed', 'pointer', 'nw-resize', 'n-resize', 'ne-resize',
@@ -205,7 +209,7 @@ var CURSOR_CSS = [
 function applyCursor(shape) {
   // Never fight the browser's own cursor while the pointer is locked (there
   // is no cursor then); the kernel already sends -1, but guard anyway.
-  screen.style.cursor = shape === -1 ? 'none' : (CURSOR_CSS[shape] || 'default');
+  screen.style.cursor = shape === -1 ? 'none' : (CURSOR_CSS_MAP[shape] || 'default');
   window.__osCursor = shape;   // agent probe
 }
 document.addEventListener('pointerlockchange', function () {
