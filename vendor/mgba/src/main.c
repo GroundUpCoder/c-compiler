@@ -188,7 +188,10 @@ static void frame_callback(void) {
         for (int dy = 0; dy < SCALE; dy++) {
             uint32_t *row = &dst[(sy * SCALE + dy) * win_w];
             for (int sx = 0; sx < GBA_W; sx++) {
-                uint32_t px = (uint32_t)fb[sy * GBA_W + sx];
+                /* mGBA's color converter leaves the high (alpha) byte 0;
+                 * the WebGPU compositor blends source-over, so force opaque
+                 * alpha or the window renders transparent (empty). */
+                uint32_t px = (uint32_t)fb[sy * GBA_W + sx] | 0xFF000000u;
                 for (int dx = 0; dx < SCALE; dx++)
                     row[sx * SCALE + dx] = px;
             }
