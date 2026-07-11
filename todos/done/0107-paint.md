@@ -1,6 +1,16 @@
 # 0107 — Paint accessory (gdi32 mspaint-class app)
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). `/bin/paint` seeded (Accessories menu + `.bmp`
+  openwith); one owner-drawn window over gdi32/user32/comdlg32 — memory-DC
+  canvas, 8 tools (pencil/eraser/fill/line/rect/filled-rect/ellipse/
+  filled-ellipse), 16-colour palette (FG/BG left/right), Tools+Width menu,
+  single-level Undo, Ctrl+N/O/S/Z accelerators, 24-bit BMP save/open
+  (byte-identical round-trip). Cut/Copy/Paste GRAYED (selection region = the
+  recorded v2 non-goal, wants a bitmap clipboard). Headless acceptance
+  `tests/kernel/test_paint_e2e.js` (35 checks) PASSES; `win32ports --check` +
+  `os_boot` green; image `version` → 67. Browser leg `tests/browser/
+  os-paint.mjs` written but UNRUN (no Playwright) — folded into the 0064
+  browser-sweep debt. Dev log `logs/2026-07-11/0107-paint-accessory.md`.
 - **Design**: `todos/WIN32.md` (the veneer as an app platform — gdi32
   0057, user32 0058/0068, comdlg32 exist; this is the first *creative*
   app on them). Filed by the 0076 parity sweep.

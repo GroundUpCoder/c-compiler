@@ -20,6 +20,12 @@
       "notes": "control target \u2014 the 0059 acceptance app must stay fully covered"
     },
     {
+      "name": "paint",
+      "project": "os/win32/paint.json",
+      "expect": "links",
+      "notes": "control target \u2014 the 0107 Paint accessory (gdi32 canvas, comdlg32 BMP I/O); must stay fully covered"
+    },
+    {
       "name": "winmine",
       "project": "vendor/winmine/bin.json",
       "expect": "links",

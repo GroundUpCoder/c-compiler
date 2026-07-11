@@ -9,6 +9,7 @@ port, and keep it committed (`--check` verifies freshness).
 | gdidemo | links | 0 |
 | ctldemo | links | 0 |
 | k32demo | links | 0 |
+| paint | links | 0 |
 | winmine | links | 0 |
 | notepad | links | 0 |
 | calc | links | 0 |
@@ -25,6 +26,10 @@ Project: `os/win32/ctldemo.json` — control target — the 0058 acceptance app 
 
 Project: `os/win32/k32demo.json` — control target — the 0059 acceptance app must stay fully covered
 
+## paint — links
+
+Project: `os/win32/paint.json` — control target — the 0107 Paint accessory (gdi32 canvas, comdlg32 BMP I/O); must stay fully covered
+
 ## winmine — links
 
 Project: `vendor/winmine/bin.json` — ReactOS/Wine Minesweeper — the identity port, playable since 0068 (seeded as /bin/winmine)
@@ -39,7 +44,7 @@ Project: `vendor/calc/bin.json` — ReactOS calc — playable since 0048 (seeded
 
 ## Aggregate demand (the order of attack)
 
-0 distinct symbols across 6 targets.
+0 distinct symbols across 7 targets.
 
 | symbol | apps |
 |--------|------|

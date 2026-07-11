@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "paint",
+  "description": "0107 Paint accessory: memory-DC canvas, shape/pen tools, palette, comdlg32 open/save, 24-bit BMP round-trip over the gdi32/user32/comdlg32 veneer",
+  "deps": [
+    "lib.json"
+  ],
+  "sources": [
+    "paint.c"
+  ]
+}

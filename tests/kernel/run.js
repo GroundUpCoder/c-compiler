@@ -77,6 +77,7 @@ const tests = [
   ['test_openwith_e2e.js', IMG], // 0072: openwith associations — open(1) --set + resolver order + carry-forward, fileman Open/With picker persistence, desktop .gb dblclick → sameboy (registered by 0108)
   ['test_fileman_ops_e2e.js', IMG], // 0092: file ops — context menu, F2/Del accelerators, rename dialog, clipboard file-list cut/copy/paste (incl. the wm.c desktop menus, cross-app), delete confirm + EROFS, properties
   ['test_fileman_nav_e2e.js', IMG], // 0106: navigator v2 — details columns + status strip, LBS_EXTENDEDSEL multi-select (Ctrl-click/Shift-range/multi-delete), Enter/Backspace, F5 refresh, View sort/show-hidden, Alt+Left back
+  ['test_paint_e2e.js', IMG],    // 0107: Paint accessory — memory-DC canvas, tool menu + palette (filled rect, flood fill), single-level undo, 24-bit BMP save/open round-trip via comdlg32
   ['test_recycle_e2e.js', IMG],  // 0093: the Recycle Bin — trash/restore/empty through fileman + the wm.c desktop (bin icon glyph, icon DELETE, bin menu), sidecars, Shift+Del bypass, EROFS no-stray
   ['test_ctlpanel_e2e.js', IMG], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
   ['test_term_e2e.js', IMG],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
