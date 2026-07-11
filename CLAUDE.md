@@ -33,6 +33,19 @@ Planned work lives in `todos/` (system doc: `todos/README.md`):
 - **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that queue items reference for detail.
 
+**Priority policy (P0 bugs always come first).** `queue.js` orders by priority
+bucket then array position, so P0 items lead the queue by construction — keep it
+that way:
+
+- **P0 — correctness bugs in existing/shipped features.** Anything that already
+  works but is now broken or wrong is P0 and jumps the queue ahead of all
+  feature work. **Any bug found from anywhere — a report, a manual UX sweep, an
+  incidental discovery — is filed P0 unless the user explicitly says otherwise.**
+- **P1 (default) — feature work, new capabilities, ports, enhancements.** New
+  things and "make it better" work sit behind the bug backlog.
+- Set with `node todos/queue.js add … --priority 0` (or `set-priority <ID> 0`).
+  Don't silently demote an existing user-set priority; when in doubt, ask.
+
 Check all three before starting new work; reference items as `todos/NNNN` in
 commits and dev logs.
 
