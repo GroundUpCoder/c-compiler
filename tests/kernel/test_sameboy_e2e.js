@@ -17,9 +17,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -27,8 +27,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-sameboy-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-sameboy-');
 
 // The ROMs are gitignored (optional image entries); without the GBC ROM the
 // CGB leg skips and the DMG leg (built-in test ROM) still proves the core.
@@ -59,9 +58,7 @@ function sessionApps() {
     '',
   ]).join('\n');
 
-  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000 });
-  if (a.error) throw a.error;
+  const a = driveBoot(script, { image });
   const out = a.stdout;
   const list1 = (out.split('==list1\n')[1] || '');
   const row = list1.split('\n').find(l => l.endsWith('\tSameBoy')) || '';
@@ -87,10 +84,8 @@ function sessionApps() {
 /* ---- session B: pixel-level proof from the PPMs ---- */
 function sessionFrames() {
   const files = ['/root/sb1.ppm', '/root/sb2.ppm'].concat(HAVE_GBC ? ['/root/sbc.ppm'] : []);
-  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat ' + files.join(' ') + '\n', timeout: 120000,
-      maxBuffer: 32 * 1024 * 1024 });
-  if (b.error) throw b.error;
+  const b = driveBoot('cat ' + files.join(' ') + '\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 
   function parsePPM(buf, off) {
     const head = buf.toString('latin1', off, off + 32);

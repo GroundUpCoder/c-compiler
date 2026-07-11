@@ -8,26 +8,17 @@
 // shot`). Close box -> SDL_EVENT_QUIT -> app exits; the shell survives.
 //
 // Usage: node os-paint.mjs
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '../..');
 const PORT = 3207;
-const URL = `http://localhost:${PORT}/os/os.html`;
+const URL = osUrl(PORT);
 
-const server = spawn('node', [path.join(ROOT, 'serve.js'), ROOT, String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
-const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
-let failures = 0;
-const check = (name, cond, extra) => {
-  if (cond) console.log('  ok   ' + name);
-  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + JSON.stringify(extra) : '')); failures++; }
-};
+const server = startServer(PORT);
+const browser = await launchBrowser();
+const { check, state } = makeCheck();
 
 try {
-  for (let i = 0; i < 50; i++) { try { if ((await fetch(URL)).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
+  await waitForServer(URL);
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
@@ -37,7 +28,7 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+  const { setVt, waitScreen } = osHelpers(page);
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
     const t = document.createElement('canvas');
@@ -62,12 +53,7 @@ try {
   const TEAL = [0, 128, 128], WHITE = [255, 255, 255], RED = [255, 0, 0];
 
   await setVt(2);
-  await page.waitForFunction(() => {
-    const r = document.getElementById('screen').getBoundingClientRect();
-    return window.__osScreen && window.__osScreen.w > 800 &&
-      Math.abs(r.width - window.__osScreen.w) < 2 &&
-      Math.abs(r.height - window.__osScreen.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  await waitScreen();
 
   // Launch the seeded Paint from the shell (real tty path).
   await setVt(1);
@@ -122,10 +108,10 @@ try {
   check('shell alive after paint exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
-  failures++;
+  state.failures++;
 } finally {
   await browser.close();
   server.kill();
 }
-console.log(failures === 0 ? '\nos paint (browser): PASS' : `\nos paint (browser): ${failures} FAILED`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(state.failures === 0 ? '\nos paint (browser): PASS' : `\nos paint (browser): ${state.failures} FAILED`);
+process.exit(state.failures === 0 ? 0 : 1);

@@ -23,9 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-
-const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -33,19 +31,14 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-paint-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-paint-');
 
 function boot(script) {          // text stdout
-  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 400000, maxBuffer: 96 * 1024 * 1024 });
-  if (r.error) throw r.error;
+  const r = driveBoot(script, { image, timeout: 400000, maxBuffer: 96 * 1024 * 1024 });
   return r.stdout;
 }
 function bootBin(script) {       // binary stdout (Buffer)
-  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, timeout: 400000, maxBuffer: 96 * 1024 * 1024 });
-  if (r.error) throw r.error;
+  const r = driveBoot(script, { image, timeout: 400000, maxBuffer: 96 * 1024 * 1024, encoding: null });
   return r.stdout;
 }
 function section(out, name) { return (out.split('==' + name + '\n')[1] || '').split('==cut')[0]; }

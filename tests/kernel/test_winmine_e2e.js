@@ -30,9 +30,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -40,14 +40,10 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-winmine-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-winmine-');
 
 function boot(script) {
-  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
-  if (r.error) throw r.error;
-  return r.stdout;
+  return driveBoot(script, { image, maxBuffer: 64 * 1024 * 1024 }).stdout;
 }
 
 function section(out, name) {
@@ -61,10 +57,8 @@ const SHOTS = ['base', 'popup', 'closed', 'fresh', 'revealed', 'ticking', 'reset
 const shots = {};
 
 function extractShots() {
-  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat ' + SHOTS.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
-      timeout: 300000, maxBuffer: 64 * 1024 * 1024 });
-  if (r.error) throw r.error;
+  const r = driveBoot('cat ' + SHOTS.map(n => '/root/' + n + '.ppm').join(' ') + '\n',
+    { image, encoding: null, maxBuffer: 64 * 1024 * 1024 });
   const buf = r.stdout;
   let off = 0;
   for (const name of SHOTS) {

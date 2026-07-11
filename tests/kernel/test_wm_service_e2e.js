@@ -17,9 +17,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -27,8 +27,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-wm-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-wm-');
 
 // The Win7 two-pane Start menu (os/wm.c, todos/0098): a FIXED 290x234 root
 // parked above the 28px taskbar on the 1024x768 headless screen. Left pane
@@ -746,9 +745,7 @@ const script = [
   '',
 ].join('\n');
 
-const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-  { input: script, encoding: 'utf8', timeout: 300000 });
-if (r.error) throw r.error;
+const r = driveBoot(script, { image });
 
 const out = r.stdout;
 function section(name) {

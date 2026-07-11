@@ -23,9 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-
-const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -33,8 +31,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-saver-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-saver-');
 
 // Fullscreen saver shots are 1024x768 PPMs: "P6\n1024 768\n255\n" = 16
 // bytes of header; tail -c is 1-based.
@@ -124,9 +121,7 @@ const script = [
   '',
 ].join('\n');
 
-const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-  { input: script, encoding: 'utf8', timeout: 300000 });
-if (r.error) throw r.error;
+const r = driveBoot(script, { image });
 
 const out = r.stdout;
 function section(name) {

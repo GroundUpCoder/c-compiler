@@ -27,9 +27,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -37,14 +37,10 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-user32-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-user32-');
 
 function boot(script) {
-  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
-  if (r.error) throw r.error;
-  return r.stdout;
+  return driveBoot(script, { image, maxBuffer: 32 * 1024 * 1024 }).stdout;
 }
 
 /* ---- session A: the whole interactive story in one boot ---- */
@@ -247,13 +243,9 @@ check('agent socket unlinked at exit (only gdidemo remains)',
  * LALT). Focus is read from the agent tree's ` focus` marker, addressed by
  * control id inside the "#32770" subtree (the disabled owner also carries a
  * stale focus mark — pick by id). */
-const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-user32d-'));
-const dimage = path.join(dtmp, 'os.img');
+const { dir: dtmp, image: dimage } = freshImage('os-user32d-');
 function bootD(script) {
-  const r = cp.spawnSync('node', [BOOT, '--image=' + dimage, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
-  if (r.error) throw r.error;
-  return r.stdout;
+  return driveBoot(script, { image: dimage, maxBuffer: 32 * 1024 * 1024 }).stdout;
 }
 const outD = bootD([
   'ctldemo &',

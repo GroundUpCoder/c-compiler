@@ -12,9 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-
-const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -22,8 +20,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-strace-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-strace-');
 
 const script = [
   'echo hi > /root/f',
@@ -61,9 +58,7 @@ const script = [
   '',
 ].join('\n');
 
-const run = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-  { input: script, encoding: 'utf8', timeout: 240000 });
-if (run.error) throw run.error;
+const run = driveBoot(script, { image, timeout: 240000 });
 const out = run.stdout;
 const section = (name) => (out.split('==' + name + '\n')[1] || '').split('==' + name + 'end')[0];
 

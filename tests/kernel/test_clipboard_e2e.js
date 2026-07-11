@@ -20,9 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-
-const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -30,15 +28,10 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-clip-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-clip-');
 
 function boot(script, timeout) {
-  const r = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: timeout || 300000,
-      maxBuffer: 32 * 1024 * 1024 });
-  if (r.error) throw r.error;
-  return r.stdout;
+  return driveBoot(script, { image, timeout, maxBuffer: 32 * 1024 * 1024 }).stdout;
 }
 
 function section(out, name) {

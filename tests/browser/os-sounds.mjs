@@ -14,29 +14,23 @@
 // gesture exactly like os-doom.mjs's music leg).
 //
 // Usage: node os-sounds.mjs
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '../..');
 const PORT = 3207;
-const URL = `http://localhost:${PORT}/os/os.html`;
+const URL = osUrl(PORT);
 
-const server = spawn('node', [path.join(ROOT, 'serve.js'), ROOT, String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
-const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
-let failures = 0;
-const check = (name, cond, extra) => {
-  if (cond) console.log('  ok   ' + name);
-  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + JSON.stringify(extra) : '')); failures++; }
-};
+const server = startServer(PORT);
+const browser = await launchBrowser();
+const { check, state } = makeCheck();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 try {
   // serve.js re-bakes a stale system image BEFORE listening (0082) — allow
   // it the full bake, not just a settle.
-  for (let i = 0; i < 600; i++) { try { if ((await fetch(URL)).ok) break; } catch {} await sleep(200); }
+  await waitForServer(URL, { tries: 600, interval: 200 });
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
@@ -46,7 +40,7 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+  const { setVt } = osHelpers(page);
   const waitOut = (needle, ms) => page.waitForFunction(
     (n) => window.__osOut.includes(n), needle, { timeout: ms || 30000, polling: 200 });
   const audioCtl = () => page.evaluate(() =>
@@ -128,8 +122,8 @@ try {
   const w5 = await wposAt();
   check('unmuted: the Test button plays', w5 !== w4, { w4, w5 });
 
-  console.log(failures ? `FAILURES: ${failures}` : 'ALL OK');
-  process.exitCode = failures ? 1 : 0;
+  console.log(state.failures ? `FAILURES: ${state.failures}` : 'ALL OK');
+  process.exitCode = state.failures ? 1 : 0;
 } catch (e) {
   console.error('FATAL', e);
   try {

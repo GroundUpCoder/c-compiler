@@ -19,9 +19,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -29,8 +29,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-gdi32-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-gdi32-');
 
 /* ---- session A: selftest, then the windowed scene + two shots ---- */
 function sessionA() {
@@ -48,9 +47,7 @@ function sessionA() {
     '',
   ].join('\n');
 
-  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000 });
-  if (a.error) throw a.error;
+  const a = driveBoot(script, { image });
   const out = a.stdout;
 
   check('selftest passes in-OS', /SELFTEST: \d+\/\d+ PASS/.test(out),
@@ -71,10 +68,8 @@ function sessionA() {
 
 /* ---- session B: extract the PPMs and probe the scene ---- */
 function sessionB() {
-  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat /root/gdi1.ppm /root/gdi2.ppm\n', timeout: 120000,
-      maxBuffer: 32 * 1024 * 1024 });
-  if (b.error) throw b.error;
+  const b = driveBoot('cat /root/gdi1.ppm /root/gdi2.ppm\n',
+    { image, encoding: null, timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
   const buf = b.stdout;
 
   function parsePPM(off) {

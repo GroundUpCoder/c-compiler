@@ -14,8 +14,7 @@
 // fixed-size windows compositor-scalable); the window fits the desktop.
 //
 // Usage: node os-doom.mjs
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -28,18 +27,14 @@ const ROOT = path.resolve(__dirname, '../..');
 const HAVE_ROM = fs.existsSync(path.join(ROOT, 'vendor/gameboy/roms/PokemonBlue.gb'));
 const GB_CMD = HAVE_ROM ? 'gameboy /root/roms/PokemonBlue.gb &' : 'gameboy &';
 const PORT = 3194;
-const URL = `http://localhost:${PORT}/os/os.html`;
+const URL = osUrl(PORT);
 
-const server = spawn('node', [path.join(ROOT, 'serve.js'), ROOT, String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
-const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
-let failures = 0;
-const check = (name, cond, extra) => {
-  if (cond) console.log('  ok   ' + name);
-  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + JSON.stringify(extra) : '')); failures++; }
-};
+const server = startServer(PORT);
+const browser = await launchBrowser();
+const { check, state } = makeCheck();
 
 try {
-  for (let i = 0; i < 50; i++) { try { if ((await fetch(URL)).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
+  await waitForServer(URL);
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
@@ -58,7 +53,7 @@ try {
   // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
   // coverage lives in os-vt.mjs.
-  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
+  const { setVt } = osHelpers(page);
 
   // Region stats over the desktop canvas: FNV hash (order-sensitive) +
   // distinct-color count + non-desktop coverage of a sample grid.
@@ -200,10 +195,10 @@ try {
   check('shell alive after gameboy exits', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
-  failures++;
+  state.failures++;
 } finally {
   await browser.close();
   server.kill();
 }
-console.log(failures === 0 ? '\nos doom (browser): PASS' : `\nos doom (browser): ${failures} FAILED`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(state.failures === 0 ? '\nos doom (browser): PASS' : `\nos doom (browser): ${state.failures} FAILED`);
+process.exit(state.failures === 0 ? 0 : 1);

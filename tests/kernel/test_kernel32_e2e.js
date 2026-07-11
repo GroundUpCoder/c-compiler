@@ -20,9 +20,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -30,8 +30,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-k32-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-k32-');
 
 /* ---- session A: the selftest + the POSIX twin legs ---- */
 function sessionA() {
@@ -48,9 +47,7 @@ function sessionA() {
     '',
   ].join('\n');
 
-  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000 });
-  if (a.error) throw a.error;
+  const a = driveBoot(script, { image });
   const out = a.stdout;
 
   const m = out.match(/K32: (\d+)\/(\d+) PASS/);
@@ -88,9 +85,7 @@ function sessionB() {
     '',
   ].join('\n');
 
-  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000 });
-  if (b.error) throw b.error;
+  const b = driveBoot(script, { image });
   const out = b.stdout;
 
   check('registry persists across boots (profile shim reads 2)',

@@ -14,26 +14,17 @@
 // VT2 keyboard path, cross-checked against /bin/clip on VT1).
 //
 // Usage: node os-shell.mjs   (manual tier — run the os-*.mjs sweep serially)
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '../..');
 const PORT = 3197;
-const URL = `http://localhost:${PORT}/os/os.html`;
+const URL = osUrl(PORT);
 
-const server = spawn('node', [path.join(ROOT, 'serve.js'), ROOT, String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
-const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
-let failures = 0;
-const check = (name, cond, extra) => {
-  if (cond) console.log('  ok   ' + name);
-  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + JSON.stringify(extra) : '')); failures++; }
-};
+const server = startServer(PORT);
+const browser = await launchBrowser();
+const { check, state } = makeCheck();
 
 try {
-  for (let i = 0; i < 50; i++) { try { if ((await fetch(URL)).ok) break; } catch {} await new Promise(r => setTimeout(r, 100)); }
+  await waitForServer(URL);
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
   const page = await context.newPage();
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
@@ -43,39 +34,14 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const setVt = (n) => page.evaluate((v) => window.__osVtSwitch(v), n);
-  const sample = (x, y) => page.evaluate(([sx, sy]) => {
-    const c = document.getElementById('screen');
-    const r = c.getBoundingClientRect();
-    const t = document.createElement('canvas');
-    t.width = Math.round(r.width); t.height = Math.round(r.height);
-    const ctx = t.getContext('2d');
-    ctx.drawImage(c, 0, 0);
-    const d = ctx.getImageData(sx, sy, 1, 1).data;
-    return [d[0], d[1], d[2]];
-  }, [x, y]);
-  const near = (got, want, tol) => got && got.every((v, i) => Math.abs(v - want[i]) <= (tol || 8));
-  const waitPixel = async (x, y, want, ms) => {
-    const t0 = Date.now();
-    for (;;) {
-      const got = await sample(x, y);
-      if (near(got, want)) return got;
-      if (Date.now() - t0 > (ms || 30000)) throw new Error(`pixel (${x},${y}) never became ${want}; last ${got}`);
-      await new Promise(r => setTimeout(r, 200));
-    }
-  };
+  const { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
 
   const TEAL = [0, 128, 128], ORANGE = [255, 140, 0], NAVY = [0, 0, 128],
         FACE = [192, 192, 192];
 
   await setVt(2);
   // Derive geometry from the LIVE screen (todos/0023 rule).
-  await page.waitForFunction(() => {
-    const r = document.getElementById('screen').getBoundingClientRect();
-    return window.__osScreen && window.__osScreen.w > 800 &&
-      Math.abs(r.width - window.__osScreen.w) < 2 &&
-      Math.abs(r.height - window.__osScreen.h) < 2;
-  }, { timeout: 30000, polling: 200 });
+  await waitScreen();
   const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
   const rect = await page.evaluate(() => {
     const r = document.getElementById('screen').getBoundingClientRect();
@@ -733,10 +699,10 @@ try {
   check('VT1 shell alive after menu driving', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
-  failures++;
+  state.failures++;
 } finally {
   await browser.close();
   server.kill();
 }
-console.log(failures === 0 ? '\nos shell (browser): PASS' : `\nos shell (browser): ${failures} FAILED`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(state.failures === 0 ? '\nos shell (browser): PASS' : `\nos shell (browser): ${state.failures} FAILED`);
+process.exit(state.failures === 0 ? 0 : 1);

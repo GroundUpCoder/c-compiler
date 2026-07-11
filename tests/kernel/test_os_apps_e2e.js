@@ -18,6 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const BOOT = path.join(ROOT, 'os/boot.js');
@@ -28,8 +29,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-apps-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-apps-');
 
 // The gameboy ROMs are deliberately NOT in the repo (gitignored) — their
 // image.json entries are `optional`. With the ROM present locally we play
@@ -95,9 +95,7 @@ function sessionApps() {
     '',
   ].join('\n');
 
-  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 300000 });
-  if (a.error) throw a.error;
+  const a = driveBoot(script, { image });
   const out = a.stdout;
   const list1 = (out.split('==list1\n')[1] || '');
   const row = (title) => list1.split('\n').find(l => l.endsWith('\t' + title)) || '';
@@ -137,10 +135,8 @@ function sessionApps() {
 
 /* ---- session B: extract the PPMs byte-clean and prove they're real frames ---- */
 function sessionFrames() {
-  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat /root/doom.ppm /root/gb.ppm /root/quake.ppm\n', timeout: 120000,
-      maxBuffer: 32 * 1024 * 1024 });   // three raw PPMs ≈ 1.6MB
-  if (b.error) throw b.error;
+  const b = driveBoot('cat /root/doom.ppm /root/gb.ppm /root/quake.ppm\n',
+    { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });   // three raw PPMs ≈ 1.6MB
 
   function parsePPM(buf, off) {
     const head = buf.toString('latin1', off, off + 32);

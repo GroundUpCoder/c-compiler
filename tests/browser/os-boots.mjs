@@ -12,45 +12,25 @@
 // browser hits the loud boot-nogpu guard (todos/0055 — no fallback).
 //
 // Usage: node os-boots.mjs
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { startServer, launchBrowser, waitForServer, makeCheck, osUrl } from './lib/os-harness.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '../..');
 const PORT = 3179;
-const URL = `http://localhost:${PORT}/os/os.html`;
+const URL = osUrl(PORT);
 
-function startServer() {
-  const child = spawn('node', [path.join(ROOT, 'serve.js'), ROOT, String(PORT)],
-    { stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.on('data', (d) => process.stderr.write('[serve] ' + d));
-  child.stderr.on('data', (d) => process.stderr.write('[serve] ' + d));
-  return child;
-}
-async function waitForServer() {
-  for (let i = 0; i < 50; i++) {
-    try { const r = await fetch(URL); if (r.ok) return; } catch {}
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error('server did not come up at ' + URL);
-}
-
-let failures = 0;
-function check(name, cond, extra) {
-  if (cond) console.log('  ok   ' + name);
-  else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
-}
-
-const server = startServer();
+// os-boots streams serve output prefixed `[serve]` (a boot-debugging aid the
+// rest of the sweep doesn't bother with) — the harness startServer taps stdio
+// only when handed an onLog.
+const server = startServer(PORT, { onLog: (d) => process.stderr.write('[serve] ' + d) });
+// os-boots prints the FAIL `extra` raw (not JSON.stringified) — its extras are
+// already strings (mode lines, VT segments).
+const { check, state } = makeCheck({ stringify: false });
 // WebGPU flags: since todos/0055 the OS boot REQUIRES a worker WebGPU
 // device (the compositor has no Canvas2D fallback) — same flags as the
 // rest of the os-*.mjs sweep. The no-GPU guard leg below launches its own
 // flag-disabled browser to assert the boot-nogpu screen.
-const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan'] });
+const browser = await launchBrowser();
 try {
-  await waitForServer();
+  await waitForServer(URL);
   const context = await browser.newContext();
   const page = await context.newPage();
   page.on('console', (m) => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
@@ -191,7 +171,7 @@ try {
   // NOT boot — the compositor has no fallback, so the kernel worker stops
   // before mounting anything and the page shows the loud guard screen.
   // --disable-features=WebGPU makes requestAdapter deterministically null.
-  const noGpuBrowser = await chromium.launch({ args: ['--disable-features=WebGPU'] });
+  const noGpuBrowser = await launchBrowser(['--disable-features=WebGPU']);
   try {
     const page3 = await (await noGpuBrowser.newContext()).newPage();
     await page3.goto(URL);
@@ -208,10 +188,10 @@ try {
   }
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
-  failures++;
+  state.failures++;
 } finally {
   await browser.close();
   server.kill();
 }
-console.log(failures === 0 ? '\nos boots (browser): PASS' : `\nos boots (browser): ${failures} FAILED`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(state.failures === 0 ? '\nos boots (browser): PASS' : `\nos boots (browser): ${state.failures} FAILED`);
+process.exit(state.failures === 0 ? 0 : 1);

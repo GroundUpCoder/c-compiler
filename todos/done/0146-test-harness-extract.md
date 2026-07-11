@@ -1,6 +1,15 @@
 # 0146 — extract shared test harnesses (browser + kernel-e2e boot driver)
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). Landed both modules: `tests/kernel/lib/drive.js`
+  (`driveBoot`/`freshImage`/`section`) — 27 canonical single-shot boot e2es
+  converted, full kernel suite **58/58 green**; and `tests/browser/lib/os-harness.mjs`
+  (lazy-playwright `startServer`/`waitForServer`/`launchBrowser`/`makeCheck`/
+  `osHelpers`/`waitFor`/`openOsSession`) — all 23 `os-*.mjs` converted
+  byte-faithfully (divergent one-off helpers left inline), harness pure helpers
+  unit-tested (`tests/browser/lib/test-harness.js`, green), every file
+  `node --check`-clean. Browser files not RUN here (Playwright absent) → runtime
+  sweep validation owned by **0153**. 0083 now has the two seams (`driveBoot`
+  for `wmctl wait`, harness `waitFor`) to land in once.
 - **Design**: this file. Surfaced by the 2026-07-12 test-infra audit
   (`logs/2026-07-12/queue-hardening-and-keymap.md`). Prerequisite that makes
   0083's browser-leg conversion tractable — 0083 is soft-`after` this.

@@ -20,9 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-
-const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const { driveBoot, freshImage } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -30,8 +28,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-term-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-term-');
 
 // Inject a string as SDL key events (down+up per char). SDL3 keysyms are
 // modifier-applied characters, so term maps them straight to pty bytes;
@@ -78,9 +75,7 @@ function sessionTerm() {
     '',
   ].join('\n');
 
-  const a = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 420000 });
-  if (a.error) throw a.error;
+  const a = driveBoot(script, { image, timeout: 420000 });
   const out = a.stdout;
 
   const list1 = (out.split('==list1\n')[1] || '').split('==')[0];
@@ -108,10 +103,7 @@ function sessionTerm() {
 
 /* ---- session B: extract the PPMs byte-clean, assert rendered text ---- */
 function sessionFrames() {
-  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat /root/t1.ppm /root/t2.ppm /root/tvi.ppm /root/trs.ppm\n',
-      timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
-  if (b.error) throw b.error;
+  const b = driveBoot('cat /root/t1.ppm /root/t2.ppm /root/tvi.ppm /root/trs.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
 
   function parsePPM(buf, off) {
     const head = buf.toString('latin1', off, off + 32);
@@ -220,9 +212,7 @@ function sessionNested() {
     'wmctl list',
     '',
   ].join('\n');
-  const c = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 420000 });
-  if (c.error) throw c.error;
+  const c = driveBoot(script, { image, timeout: 420000 });
   const out = c.stdout;
   const sec = (n) => (out.split('==' + n + '\n')[1] || '').split('==')[0];
   const terms = (s) => s.split('\n').filter((l) => l.endsWith('\tterm')).length;
@@ -268,9 +258,7 @@ function sessionLess() {
     'echo ==done',
     '',
   ].join('\n');
-  const d = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: script, encoding: 'utf8', timeout: 420000 });
-  if (d.error) throw d.error;
+  const d = driveBoot(script, { image, timeout: 420000 });
   const out = d.stdout;
   check('less shot written', out.includes('shotless-ok'), out.slice(-300));
   const rc = (out.split('==rc\n')[1] || '').split('==')[0].trim();
@@ -278,10 +266,7 @@ function sessionLess() {
     rc === 'lessrc=0', JSON.stringify(rc));
 
   // Pixel pass on the in-less shot (same parser as session B).
-  const b = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
-    { input: 'cat /root/tless.ppm\n',
-      timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
-  if (b.error) throw b.error;
+  const b = driveBoot('cat /root/tless.ppm\n', { image, timeout: 120000, maxBuffer: 16 * 1024 * 1024, encoding: null });
   const head = b.stdout.toString('latin1', 0, 32);
   const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
   check('less shot parses at 640x432', !!m && +m[1] === 640 && +m[2] === 432,
