@@ -54,12 +54,18 @@ sweep fodder to either fix or formally accept into a known-issues list:
   IsDialogMessageW is ESC-only (no Tab order — the 0058 simplification).
 - **fileman**: no rename/delete/copy — it is a navigator/launcher only;
   Enter in the LISTBOX doesn't Open (button/double-click only).
-- **notepad shows an ERROR dialog opening an existing text file**
-  (found during 0063, verified pre-existing on the unmodified tree):
-  `printf 'x\n' > /root/notes.txt; notepad /root/notes.txt` boots to
-  "Untitled - Notepad" plus a modal "ERROR" dialog — the file never
-  loads, though PORTS.md claims EDIT-around-a-file works since 0048.
-  Repro headless via os/boot.js + `wmctl list`.
+- ~~**notepad shows an ERROR dialog opening an existing text file**~~
+  **FIXED / stale** (verified 2026-07-12 notepad menu audit — see
+  `logs/2026-07-12/queue-hardening-and-keymap.md`): `notepad
+  /root/notes.txt` now loads the file cleanly ("notes.txt - Notepad",
+  content in the EDIT, correct status bar, no ERROR window). Add the
+  lock-in regression test (title + EDIT content + no `#32770`) and
+  retire this line.
+- **Notepad menu audit done 2026-07-12** — full findings in
+  `todos/0145` (the silent Print/Page Setup/Font no-ops + Save-As
+  encoding combos + the About `\r\n` escape bug). Everything else in
+  notepad's menus WORKS. This sweep should still cover calc / fileman /
+  ctlpanel / term / winmine / gameboy at the same depth.
 - **ctlpanel**: volume is master-only (per-source gain can grow on the
   same AUDIO_GAIN opcode if a mixer panel wants it).
 

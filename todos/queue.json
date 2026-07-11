@@ -1,13 +1,16 @@
 {
   "version": 1,
   "queue": [
+    { "id": "0151", "priority": 0 },
     { "id": "0113", "priority": 2, "after": ["0094"] },
+    { "id": "0146", "difficulty": "medium" },
+    { "id": "0083", "after": ["0146"] },
+    { "id": "0084", "after": ["0083"] },
+    { "id": "0147", "difficulty": "light" },
     { "id": "0079" },
     { "id": "0080" },
     { "id": "0052" },
     { "id": "0053" },
-    { "id": "0083", "after": ["0079"] },
-    { "id": "0084", "after": ["0083"] },
     { "id": "0064" },
     { "id": "0049" },
     { "id": "0050" },
@@ -15,6 +18,7 @@
     { "id": "0051" },
     { "id": "0071" },
     { "id": "0073", "after": ["0071", "0072"] },
+    { "id": "0145", "difficulty": "light" },
     { "id": "0062" },
     { "id": "0086" },
     { "id": "0087" },
@@ -46,6 +50,12 @@
     { "id": "0138", "priority": 2, "difficulty": "medium" },
     { "id": "0139", "priority": 3, "difficulty": "heavy" },
     { "id": "0140", "priority": 3, "difficulty": "heavy" },
-    { "id": "0141", "priority": 0 }
+    { "id": "0141", "priority": 0 },
+    { "id": "0142", "priority": 2 },
+    { "id": "0143", "priority": 2 },
+    { "id": "0144", "priority": 2 },
+    { "id": "0148", "priority": 2, "difficulty": "light" },
+    { "id": "0149", "difficulty": "heavy" },
+    { "id": "0150", "difficulty": "medium", "after": ["0149"] }
   ]
 }
