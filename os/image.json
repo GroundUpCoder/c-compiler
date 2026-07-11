@@ -1,5 +1,5 @@
 {
-  "version": 69,
+  "version": 70,
   "overlays": [
     {
       "id": "clang-apps",
@@ -80,6 +80,9 @@
       "/usr/bin/mgba": {
         "project": "vendor/mgba/bin.json"
       },
+      "/usr/bin/punes": {
+        "project": "vendor/punes/bin.json"
+      },
       "/usr/bin/quake": {
         "project": "vendor/quake/bin.json"
       },
@@ -152,6 +155,9 @@
       "/usr/share/menu/Games/mgba": {
         "link": "/usr/bin/mgba"
       },
+      "/usr/share/menu/Games/punes": {
+        "link": "/usr/bin/punes"
+      },
       "/usr/share/menu/Games/snake": {
         "content": "#!/bin/sh\nterm snake\n"
       },
@@ -210,7 +216,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nbmp\t/bin/paint\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nnes\t/bin/punes\nbmp\t/bin/paint\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

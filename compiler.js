@@ -12501,6 +12501,12 @@ class Parser {
                   pType = pType.pointer(); // func params decay to func pointers
                 }
               }
+              // GCC allows __attribute__ trailing a parameter declarator, e.g.
+              // f(int x __attribute__((unused))). Parse and ignore it — the
+              // attribute never affects the parameter's ABI type.
+              if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
+                this.parseGCCAttributes();
+              }
               params.push(pType.decay());
               pNames.push(pName);
               if (!this.matchText(",")) break;
