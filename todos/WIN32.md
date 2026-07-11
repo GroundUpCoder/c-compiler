@@ -431,6 +431,39 @@ the `_tcs*` names as real symbols (see include/tchar.h for why not
 `wcslen`). Resources (.rc — menus/dialogs/bitmaps/strings) are vendored
 but not compiled: a resource story is part of the 0059+ demand.
 
+## The toolkit is the porting unit — re-shell foreign apps, don't port the toolkit
+
+Why Win32 apps are cheap to bring here: a Win32 app draws its buttons/
+edit boxes/lists with the **OS's own widgets**, so a thin user32/gdi32
+veneer is the whole toolkit — every ported app is self-contained AND
+agent-drivable for free (the HWND tree). That is the load-bearing reason
+Win32 is the primary toolkit.
+
+A GTK / Qt / Motif app is the opposite: it targets a **fat third-party
+toolkit** (GLib/GObject/Pango/Cairo/GdkPixbuf for GTK; Xt+Xm for Motif;
+C++/moc for Qt), NOT a display layer. So **the toolkit — not the app — is
+the unit of porting cost.** Running such an app the naive way means
+porting the whole toolkit stack (huge, and you'd land a second widget
+toolkit with a smaller, uglier, less-drivable corpus than the Win32 one
+you already have). Don't.
+
+**Principle: port the app's portable CORE, re-shell it on Win32.** Most
+apps worth having are a portable engine (a converter, codec, eval engine,
+renderer — pure C/C++ that compiles under `compiler.js`) under a thin UI.
+Port the core and write a NEW small Win32 front-end; the foreign toolkit
+never comes along. Effort ∝ (UI complexity) × (how entangled UI is with
+logic): a thin-UI-over-fat-core app (viewers, players, converters) is
+days–weeks; an app that *is* its UI (editors, IDEs, vector tools) is
+≈ a full rewrite — usually not worth it. SDL is a WORSE re-shell target
+than Win32 for these (no widgets — you'd rebuild the UI on a bare canvas),
+sensible only when the app is already canvas-shaped.
+
+This is the widget-app analog of 0119's display-layer move (raw-Xlib
+canvas apps are patched to SDL, not run over an Xlib shim): in both cases
+we refuse to drag a foreign GUI substrate in, and instead retarget the
+app onto what we already have. Substrate division of labor is recorded in
+`TOOLKIT.md` (SDL = raw canvas, Win32 = widgets, no Xlib shim).
+
 ## References
 
 ReactOS `base/applications` + `rosapps` (C Win32 apps *and* an open
