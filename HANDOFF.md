@@ -42,18 +42,24 @@ updated in test_ctxmenu_e2e.js + os-ctxmenu.mjs. Green: fileman_ops,
 ctxmenu, user32, fileman, notepad, calc, winmine, clipboard, wm_service
 kernel e2e; os-shell/os-user32/os-ctxmenu/os-fileman browser legs.
 
-**Pre-existing red (NOT mine, verified on baseline via git stash)**:
-`test_openwith_e2e.js` fails 3 — 0075 made **sameboy** the default .gb/.gbc
-handler (the test still expects gameboy) and the ROM asset is gitignored.
-Leave it or file separately; don't attribute to 0092.
+**Filed by the 0092 closeout audit** (both committed):
+- **0108** — `test_openwith_e2e.js` was NEVER in the run.js manifest (so it
+  silently never runs) and is red on baseline: it still expects Peanut-GB
+  for `.gb` while the baked seed routes `gb → /bin/sameboy` (the recorded
+  0075 call; the done-file's early Status line contradicts it — the seed
+  is the truth). Queued at pos 2, right after 0093.
+- **0109** — desktop icon Properties popup (fileman got Properties, the
+  wm.c icon menu deliberately didn't — no dialog furniture there yet).
+  Soft-dep after 0103.
 
 **Next in queue**: `node todos/queue.js list` — **0093 (Recycle Bin)** leads
 and builds directly on 0092 (delete is PERMANENT until it reroutes; the
-fileops.h delete path is the seam). Then 0094 (sound scheme), 0095 (Aero
-Snap), 0096 (screensaver), 0098 (Start menu Win7 pane), 0101 (taskbar-strip
-menu), 0102 (window system menu), 0103 (desktop-icon rename — the desktop
-menu has Cut/Copy but not Rename yet, deliberately), 0106 (fileman
-navigator v2: multi-select/details/F5 — builds on 0092's verbs). **Do NOT
+fileops.h delete path is the seam). Then 0108 (openwith test rot), 0094
+(sound scheme), 0095 (Aero Snap), 0096 (screensaver), 0098 (Start menu Win7
+pane), 0101 (taskbar-strip menu), 0102 (window system menu), 0103
+(desktop-icon rename — the desktop menu has Cut/Copy but not Rename yet,
+deliberately), 0106 (fileman navigator v2: multi-select/details/F5 — builds
+on 0092's verbs), 0109 (desktop icon Properties, after 0103). **Do NOT
 pipe `queue.js list` through `head`** — EPIPE crash (known, harmless, noisy).
 
 **Still owed from 0039**: the pointer-lock HUMAN check — deferred by ALL

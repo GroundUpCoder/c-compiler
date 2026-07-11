@@ -13,7 +13,12 @@
   list, so cut/copy/paste crosses fileman↔desktop. Delete is permanent
   until the Recycle Bin (0093) reroutes it; multi-select/details is 0106;
   desktop-icon rename is 0103; DnD is a recorded non-goal — all already
-  queued. Fell out: user32's agent AQ_CLICK now prefers an ENABLED match
+  queued. Closeout audit filed the two unowned residues: **0109**
+  (desktop icon Properties popup — fileman got Properties, the icon menu
+  deliberately didn't) and **0108** (test_openwith_e2e was never in the
+  run.js manifest and drifted red on the sameboy .gb default — surfaced
+  by this item's regression sweep, pre-existing on baseline).
+  Fell out: user32's agent AQ_CLICK now prefers an ENABLED match
   (modal-over-modal is drivable) and `AppendMenuA` / `CreateAcceleratorTableA`
   / `LB_ITEMFROMPOINT` landed. Image v52→v53. Tests: new
   `tests/kernel/test_fileman_ops_e2e.js` (22 checks) +
