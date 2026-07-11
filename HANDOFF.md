@@ -38,8 +38,11 @@ round-trip with a byte-identical re-save); `node tools/win32ports.js --check`
 (paint links, report fresh); `node tests/kernel/run.js --filter=os_boot` (full
 image bakes + boots, 194s). `node todos/queue.js check` passes.
 
-**No follow-up todos filed** — the item's intent is fully met; the only residue
-is the browser leg (below), which folds into the existing 0064 debt.
+**Follow-up filed**: **0124** (P3) — Paint v2 (selection region + bitmap
+clipboard to un-grey Cut/Copy/Paste, New-with-size dialog): the residue 0107
+deferred (0090 clipboard has since landed, so the clipboard half is now
+buildable; body flags the CF_BITMAP kernel-slot blocker). The browser leg
+(below) folds into the existing 0064 debt.
 
 ## Operator-owed (browser)
 

@@ -11,6 +11,8 @@
   `os_boot` green; image `version` → 67. Browser leg `tests/browser/
   os-paint.mjs` written but UNRUN (no Playwright) — folded into the 0064
   browser-sweep debt. Dev log `logs/2026-07-11/0107-paint-accessory.md`.
+  Deferred residue (grayed Cut/Copy/Paste + fixed-size New) owned by **0124**
+  (Paint v2: selection region + bitmap clipboard + New-with-size dialog).
 - **Design**: `todos/WIN32.md` (the veneer as an app platform — gdi32
   0057, user32 0058/0068, comdlg32 exist; this is the first *creative*
   app on them). Filed by the 0076 parity sweep.
