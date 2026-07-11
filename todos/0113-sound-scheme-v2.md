@@ -27,6 +27,11 @@ was descoped:
   support (a `loop` flag on the stream — the mixer re-reads the ring
   instead of consuming). No corpus consumer loops today, so this waits
   for one.
+- **More emitters** (the 0094 plan's "optional empty-trash / menu blips
+  later"): an EmptyRecycleBin event from fileman/wm.c's empty flows and
+  a MenuPopup blip from wm.c's Start/context menus — each is one
+  `snd_play_event` call plus a scheme line + clip; keep the set small
+  (Win95 restraint, not a per-click noise machine).
 - **Aesthetics retune**: whatever the 0064 sound listen (the operator
   human check) finds grating — regenerate + recommit the wavs.
 
