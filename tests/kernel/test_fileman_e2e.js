@@ -119,8 +119,14 @@ const out = boot([
 const tree1 = section(out, 'tree1');
 check('fileman window titled with the cwd',
   /class=FileMan [^\n]*text='File Manager - \/root'/.test(tree1), tree1.slice(0, 300));
-check('listing is dirs-first with / markers',
-  /text='Desktop\/\\nid1\/\\nroms\/\\ndoom1.wad/.test(tree1), tree1);
+// 0106: rows now carry details columns (name '/' marker, right-aligned
+// size/<DIR>, date). Assert dirs-first ordering + the '/'+<DIR> columns
+// tolerantly ([^'] spans the padding/date/\n between entries; the tree
+// dump caps the item text, so the three leading dirs are the anchor).
+check('listing is dirs-first with / markers + details columns',
+  /Desktop\/ +<DIR>[^']*id1\/ +<DIR>[^']*roms\/ +<DIR>/.test(tree1), tree1);
+check('files carry a byte size + date column (status bar counts them)',
+  /class=STATIC[^\n]*text='7 object\(s\)'/.test(tree1), tree1);
 check('path EDIT + Go/Up/Open/With buttons present',
   /class=EDIT id=100/.test(tree1) && /text='Go'/.test(tree1) &&
   /text='Up'/.test(tree1) && /text='Open'/.test(tree1) &&

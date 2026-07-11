@@ -3727,10 +3727,26 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 typedef struct {
     char **items;
+    unsigned char *marks;       /* per-item selection flag (extended-sel, 0106) */
     int n, cap;
-    int sel;                    /* -1 = none */
+    int sel;                    /* -1 = none; the caret in extended mode */
+    int anchor;                 /* shift-range pivot (extended mode, 0106) */
     int top;                    /* first visible row */
+    int multi;                  /* LBS_EXTENDEDSEL: a selection SET, not one row */
 } LbState;
+
+/* Extended-sel primitives (0106): the SET lives in st->marks; st->sel is the
+ * caret (LB_GETCURSEL) and st->anchor the shift-range pivot. */
+static void lb_clear_marks(LbState *st) {
+    if (st->marks) memset(st->marks, 0, (size_t)st->cap);
+}
+static void lb_mark_range(LbState *st, int a, int b, int on) {
+    if (!st->marks) return;
+    if (a > b) { int t = a; a = b; b = t; }
+    if (a < 0) a = 0;
+    if (b >= st->n) b = st->n - 1;
+    for (int i = a; i <= b; i++) st->marks[i] = on ? 1 : 0;
+}
 
 static int lb_row_h(HWND h) { return edit_line_h(h) + 2; }
 
@@ -3759,6 +3775,8 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st = (LbState *)calloc(1, sizeof(LbState));
         if (!st) return -1;
         st->sel = -1;
+        st->anchor = -1;
+        st->multi = (h->style & (LBS_EXTENDEDSEL | LBS_MULTIPLESEL)) != 0;
         h->ctl = st;
         return 0;
     case WM_PAINT: {
@@ -3776,7 +3794,8 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (y >= h->h - 2) break;
             RECT row;
             SetRect(&row, 2, y, h->w - 2, y + rh);
-            if (i == st->sel) {
+            int selected = st->multi ? (st->marks && st->marks[i]) : (i == st->sel);
+            if (selected) {
                 FillRect(dc, &row, GetSysColorBrush(COLOR_HIGHLIGHT));
                 SetTextColor(dc, GetSysColor(COLOR_HIGHLIGHTTEXT));
             } else {
@@ -3794,7 +3813,24 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int idx = st->top + (GET_Y_LPARAM(lp) - 2) / (rh > 0 ? rh : 1);
         if (idx >= 0 && idx < st->n) {
             int changed = st->sel != idx;
-            st->sel = idx;
+            if (st->multi) {
+                int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                if (shift) {                     /* range from the anchor */
+                    int base = st->anchor < 0 ? idx : st->anchor;
+                    if (!ctrl) lb_clear_marks(st);
+                    lb_mark_range(st, base, idx, 1);
+                } else if (ctrl) {               /* toggle one, move the anchor */
+                    if (st->marks) st->marks[idx] ^= 1;
+                    st->anchor = idx;
+                } else {                         /* plain: replace the set */
+                    lb_clear_marks(st);
+                    if (st->marks) st->marks[idx] = 1;
+                    st->anchor = idx;
+                }
+                changed = 1;
+            }
+            st->sel = idx;                       /* the caret follows the click */
             InvalidateRect(h, NULL, TRUE);
             if (changed) lb_notify(h, LBN_SELCHANGE);
             if (msg == WM_LBUTTONDBLCLK) lb_notify(h, LBN_DBLCLK);
@@ -3807,6 +3843,15 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int old = st->sel;
         int page = lb_rows(h);                   /* PageUp/Down step (0104) */
         if (page < 1) page = 1;
+        /* Ctrl+A selects all (extended mode, 0106) — Explorer's chord. */
+        if (st->multi && (wp == 'A' || wp == 'a') &&
+            (GetKeyState(VK_CONTROL) & 0x8000)) {
+            lb_mark_range(st, 0, st->n - 1, 1);
+            st->anchor = 0;
+            InvalidateRect(h, NULL, TRUE);
+            lb_notify(h, LBN_SELCHANGE);
+            return 0;
+        }
         if (wp == VK_UP && st->sel > 0) st->sel--;
         else if (wp == VK_DOWN && st->sel < st->n - 1) st->sel++;
         else if (wp == VK_HOME && st->n) st->sel = 0;
@@ -3815,7 +3860,19 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == VK_NEXT && st->n)
             st->sel = st->sel + page < st->n ? st->sel + page : st->n - 1;
         else return 0;
-        if (st->sel != old) {
+        if (st->multi) {                         /* keep the SET in step (0106) */
+            int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (shift) {
+                if (st->anchor < 0) st->anchor = old < 0 ? st->sel : old;
+                lb_clear_marks(st);
+                lb_mark_range(st, st->anchor, st->sel, 1);
+            } else {
+                lb_clear_marks(st);
+                if (st->marks && st->sel >= 0) st->marks[st->sel] = 1;
+                st->anchor = st->sel;
+            }
+        }
+        if (st->sel != old || st->multi) {
             lb_show_sel(h, st);
             InvalidateRect(h, NULL, TRUE);
             lb_notify(h, LBN_SELCHANGE);
@@ -3840,6 +3897,10 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             char **ni = (char **)realloc(st->items, (size_t)nc * sizeof(char *));
             if (!ni) return LB_ERR;
             st->items = ni;
+            unsigned char *nm = (unsigned char *)realloc(st->marks, (size_t)nc);
+            if (!nm) return LB_ERR;
+            memset(nm + st->cap, 0, (size_t)(nc - st->cap));
+            st->marks = nm;
             st->cap = nc;
         }
         size_t n = strlen(s);
@@ -3847,6 +3908,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (!copy) return LB_ERR;
         memcpy(copy, s, n + 1);
         st->items[st->n] = copy;
+        st->marks[st->n] = 0;
         InvalidateRect(h, NULL, TRUE);
         return st->n++;
     }
@@ -3856,6 +3918,8 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         free(st->items[i]);
         memmove(&st->items[i], &st->items[i + 1],
                 (size_t)(st->n - i - 1) * sizeof(char *));
+        if (st->marks)
+            memmove(&st->marks[i], &st->marks[i + 1], (size_t)(st->n - i - 1));
         st->n--;
         if (st->sel == i) st->sel = -1;
         else if (st->sel > i) st->sel--;
@@ -3864,13 +3928,48 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case LB_RESETCONTENT:
         for (int i = 0; i < st->n; i++) free(st->items[i]);
+        lb_clear_marks(st);
         st->n = 0;
         st->sel = -1;
+        st->anchor = -1;
         st->top = 0;
         InvalidateRect(h, NULL, TRUE);
         return 0;
     case LB_GETCOUNT:
         return st->n;
+    case LB_GETSEL:                              /* per-item selection (0106) */
+        if ((int)wp < 0 || (int)wp >= st->n) return LB_ERR;
+        return st->multi ? (st->marks && st->marks[(int)wp])
+                         : ((int)wp == st->sel);
+    case LB_SETSEL: {                            /* wp = on/off; lp = index (-1 all) */
+        if (!st->multi) return LB_ERR;
+        int i = (int)lp;
+        if (i == -1) lb_mark_range(st, 0, st->n - 1, (int)wp);
+        else if (i >= 0 && i < st->n && st->marks) st->marks[i] = wp ? 1 : 0;
+        else return LB_ERR;
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    }
+    case LB_SELITEMRANGE: {                      /* wp = on/off; lp = MAKELPARAM(a,b) */
+        if (!st->multi) return LB_ERR;
+        lb_mark_range(st, LOWORD(lp), HIWORD(lp), (int)wp);
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    }
+    case LB_GETSELCOUNT: {
+        if (!st->multi || !st->marks) return LB_ERR;
+        int c = 0;
+        for (int i = 0; i < st->n; i++) c += st->marks[i] ? 1 : 0;
+        return c;
+    }
+    case LB_GETSELITEMS: {                       /* wp = max; lp = int* buffer */
+        if (!st->multi || !st->marks) return LB_ERR;
+        int max = (int)wp, c = 0;
+        int *out = (int *)lp;
+        for (int i = 0; i < st->n && c < max; i++)
+            if (st->marks[i]) out[c++] = i;
+        return c;
+    }
     case LB_ITEMFROMPOINT: {
         /* lParam is CLIENT coords; LOWORD the nearest row, HIWORD 1 when
          * the point sits outside the items (Windows semantics) — 0092's
@@ -3890,6 +3989,10 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int i = (int)wp;
         if (i != -1 && (i < 0 || i >= st->n)) return LB_ERR;
         st->sel = i;
+        /* Single-select: the caret IS the selection. Extended-sel: the SET
+         * lives in st->marks (LB_SETSEL) — SETCURSEL only moves the caret,
+         * so a right-click can position it without collapsing the set. */
+        if (st->multi) st->anchor = i;
         if (i >= 0) lb_show_sel(h, st);
         InvalidateRect(h, NULL, TRUE);
         return i;
@@ -3914,8 +4017,9 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int cap = (int)wp, n = 0;
         if (!out || cap < 1) return 0;
         for (int i = 0; i < st->n && n < cap - 1; i++) {
+            int selected = st->multi ? (st->marks && st->marks[i]) : (i == st->sel);
             n += snprintf(out + n, (size_t)(cap - n), "%s%s\n",
-                          i == st->sel ? "> " : "", st->items[i]);
+                          selected ? "> " : "", st->items[i]);
             if (n >= cap) { n = cap - 1; break; }
         }
         out[n] = 0;
@@ -3929,7 +4033,9 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (st) {
             for (int i = 0; i < st->n; i++) free(st->items[i]);
             free(st->items);
+            free(st->marks);
             st->items = NULL;
+            st->marks = NULL;
             st->n = 0;
         }
         return 0;

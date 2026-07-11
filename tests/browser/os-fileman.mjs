@@ -150,6 +150,31 @@ try {
   await waitOut('LEFT-1-END');
   check('Yes deletes the selected file (renamed.txt remains)', true);
 
+  // -- 0106: multi-select (Ctrl-click) then Delete removes the SET --
+  // Seed two more files, F5 to re-list, Ctrl-click two rows, Del + Yes.
+  await page.keyboard.type('printf x > /root/fmb/ma.txt && printf y > /root/fmb/mb.txt\r', { delay: 40 });
+  await page.keyboard.type('wmctl click $SID 100 100\r', { delay: 40 });          // focus listbox
+  await page.keyboard.type('wmctl key $SID 62 1073741886\r', { delay: 40 });      // F5 re-list
+  await pause(500);
+  // rows now (name sort): ma.txt(0) mb.txt(1) renamed.txt(2). Ctrl-click
+  // row 0 (y=30) then row 1 (y=50) -> {ma.txt, mb.txt}.
+  await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });           // plain -> {row0}
+  await pause(200);
+  await page.keyboard.type('wmctl keydown $SID 224 1073742048 64\r', { delay: 40 });   // Ctrl down
+  await page.keyboard.type('wmctl click $SID 100 50\r', { delay: 40 });           // ctrl-click row1
+  await page.keyboard.type('wmctl keyup $SID 224 1073742048 0\r', { delay: 40 }); // Ctrl up
+  await pause(300);
+  await page.keyboard.type('wmctl key $SID 76 127\r', { delay: 40 });             // Del
+  await pause(500);
+  await page.keyboard.type('wmctl list | grep -q "Multiple Item" && echo MULTI-BOX-O""K\r', { delay: 40 });
+  await waitOut('MULTI-BOX-OK');
+  check('Ctrl-click multi-select + Del raises the plural confirm', true);
+  await page.keyboard.type('wmctl click Yes\r', { delay: 40 });
+  await pause(600);
+  await page.keyboard.type('test ! -e /root/fmb/ma.txt && test ! -e /root/fmb/mb.txt && echo MULTI-GONE-O""K\r', { delay: 40 });
+  await waitOut('MULTI-GONE-OK');
+  check('the whole multi-selection is deleted (renamed.txt remains)', true);
+
   await page.keyboard.type("echo FMB-SHELL-O''K\r", { delay: 50 });
   await waitOut('FMB-SHELL-OK');
   check('shell alive after the run', true);

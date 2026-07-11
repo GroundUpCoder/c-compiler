@@ -64,6 +64,7 @@
 #define ID_OPEN 103
 #define ID_LIST 104
 #define ID_WITH 105
+#define ID_STATUS 106               /* the bottom status strip (0106) */
 
 #define ID_OW_CMD    200             /* the picker window's children */
 #define ID_OW_ALWAYS 201
@@ -87,13 +88,31 @@
 #define IDM_DELPERM   310            /* Shift+Del: permanent delete (0093) */
 #define IDM_RESTORE   311            /* trash-only rows (0093) */
 #define IDM_EMPTY     312            /* trash-only pane (0093) */
+#define IDM_SORT_NAME 320            /* View: sort key + toggles (0106) */
+#define IDM_SORT_SIZE 321
+#define IDM_SORT_DATE 322
+#define IDM_REVERSE   323
+#define IDM_HIDDEN    324
+#define IDM_BACK      325            /* Alt+Left history back (0106) */
 
 #define TOP_H  26                    /* the path/button strip */
 #define BTN_W  46
+#define STATUS_H 18                  /* the bottom status strip (0106) */
 
-static HWND g_win, g_path, g_go, g_up, g_open, g_with, g_list;
+static HWND g_win, g_path, g_go, g_up, g_open, g_with, g_list, g_status;
 static char g_cwd[512] = "/root";
 static int g_nkids;
+
+/* View state (0106): the sort key, its direction, and whether dotfiles
+ * show. The details columns come off the same stat() refill already did. */
+static int g_sort;                   /* 0 name, 1 size, 2 date */
+static int g_reverse;                /* flip the sort key */
+static int g_hidden;                 /* show dotfiles (off = Explorer default) */
+
+/* Back history (0106): a small pushdown of visited dirs. Backspace stays
+ * Up (Win95); Alt+Left pops this. */
+static char g_back[32][512];
+static int g_nback;
 
 static HWND g_ow_win;                /* the "Open with" picker (one at a time) */
 static char g_ow_file[800];          /* the file it targets */
@@ -130,12 +149,45 @@ static void spawn_assoc(const char *cmd, const char *path) {
 
 /* ---- listing ---- */
 
-typedef struct { char name[240]; int isdir; } Ent;
+typedef struct { char name[240]; int isdir; long size; long mtime; } Ent;
+
+/* The live listing, index-aligned with the LISTBOX rows: a row op resolves
+ * its target through here (g_ents[row]) rather than re-parsing the display
+ * string, so the details columns never confuse path building. */
+static Ent g_ents[512];
+static int g_nent;
 
 static int entcmp(const void *a, const void *b) {
     const Ent *ea = (const Ent *)a, *eb = (const Ent *)b;
     if (ea->isdir != eb->isdir) return eb->isdir - ea->isdir;   /* dirs first */
-    return strcmp(ea->name, eb->name);
+    int c;
+    if (g_sort == 1) c = (ea->size > eb->size) - (ea->size < eb->size);
+    else if (g_sort == 2) c = (ea->mtime > eb->mtime) - (ea->mtime < eb->mtime);
+    else c = strcmp(ea->name, eb->name);
+    if (c == 0) c = strcmp(ea->name, eb->name);                 /* stable tie-break */
+    return g_reverse ? -c : c;
+}
+
+/* The status strip: item count + selected summary (0106). */
+static void status_update(void) {
+    if (!g_status) return;
+    int total = (int)SendMessage(g_list, LB_GETCOUNT, 0, 0);
+    int selc = (int)SendMessage(g_list, LB_GETSELCOUNT, 0, 0);
+    char s[256];
+    if (selc > 0) {
+        /* Sum the bytes of the selected files (dirs contribute nothing). */
+        static int idx[512];
+        int got = (int)SendMessage(g_list, LB_GETSELITEMS, 512, (LPARAM)idx);
+        long bytes = 0;
+        for (int i = 0; i < got; i++)
+            if (idx[i] >= 0 && idx[i] < g_nent && !g_ents[idx[i]].isdir)
+                bytes += g_ents[idx[i]].size;
+        snprintf(s, sizeof s, "%d object(s)   %d selected (%ld bytes)",
+                 total, selc, bytes);
+    } else {
+        snprintf(s, sizeof s, "%d object(s)", total);
+    }
+    SetWindowText(g_status, s);
 }
 
 static void refill(void) {
@@ -143,37 +195,70 @@ static void refill(void) {
     DIR *d = opendir(g_cwd);
     if (!d) {
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)"(cannot open directory)");
+        g_nent = 0;
+        status_update();
         return;
     }
-    static Ent ents[512];
-    int n = 0;
+    g_nent = 0;
     struct dirent *de;
-    while ((de = readdir(d)) && n < 512) {
-        /* Dotfiles hidden (0093 — the .recycle store must not clutter
-         * /root; Explorer-style, the wm.c desktop rule). Navigation by
-         * PATH still reaches them; the 0106 View menu grows the toggle. */
-        if (de->d_name[0] == '.') continue;
+    while ((de = readdir(d)) && g_nent < 512) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+            continue;                            /* never the self/parent dots */
+        /* Dotfiles hidden unless the View toggle is on (0093/0106 — the
+         * .recycle store must not clutter /root; Explorer-style). */
+        if (de->d_name[0] == '.' && !g_hidden) continue;
         char full[768];
         snprintf(full, sizeof full, "%s/%s", g_cwd, de->d_name);
         struct stat st;
-        Ent *e = &ents[n++];
+        int ok = stat(full, &st) == 0;
+        Ent *e = &g_ents[g_nent++];
         snprintf(e->name, sizeof e->name, "%s", de->d_name);
-        e->isdir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+        e->isdir = ok && S_ISDIR(st.st_mode);
+        e->size = ok ? (long)st.st_size : 0;
+        e->mtime = ok ? (long)st.st_mtime : 0;
     }
     closedir(d);
-    qsort(ents, (size_t)n, sizeof ents[0], entcmp);
-    for (int i = 0; i < n; i++) {
-        char row[256];
-        snprintf(row, sizeof row, "%s%s", ents[i].name, ents[i].isdir ? "/" : "");
+    qsort(g_ents, (size_t)g_nent, sizeof g_ents[0], entcmp);
+    for (int i = 0; i < g_nent; i++) {
+        /* Details columns off the same stat: a left name field, a
+         * right-aligned size (or <DIR>), then a fixed-width date. The
+         * mono font makes space-padding an honest column (LB_SETTABSTOPS-
+         * free, 0106). Agent readers key on the name prefix. */
+        char namef[264], sizef[16], datef[20];
+        snprintf(namef, sizeof namef, "%s%s", g_ents[i].name,
+                 g_ents[i].isdir ? "/" : "");
+        if (g_ents[i].isdir) snprintf(sizef, sizeof sizef, "<DIR>");
+        else snprintf(sizef, sizeof sizef, "%ld", g_ents[i].size);
+        time_t mt = (time_t)g_ents[i].mtime;
+        struct tm *tm = localtime(&mt);
+        if (tm)
+            snprintf(datef, sizeof datef, "%04d-%02d-%02d %02d:%02d",
+                     tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                     tm->tm_hour, tm->tm_min);
+        else snprintf(datef, sizeof datef, "-");
+        char row[320];
+        snprintf(row, sizeof row, "%-28s %10s  %s", namef, sizef, datef);
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)row);
     }
     SetWindowText(g_path, g_cwd);
     char title[600];
     snprintf(title, sizeof title, "File Manager - %s", g_cwd);
     SetWindowText(g_win, title);
+    status_update();
 }
 
-static void navigate(const char *path) {
+/* Record the current dir on the back stack before leaving it (0106). */
+static void push_back(void) {
+    if (g_nback >= 32) {                          /* drop the oldest */
+        memmove(g_back[0], g_back[1], 31 * sizeof g_back[0]);
+        g_nback = 31;
+    }
+    snprintf(g_back[g_nback++], sizeof g_back[0], "%s", g_cwd);
+}
+
+/* `record` distinguishes a user navigation (pushes history) from a Back
+ * pop (does not). */
+static void navigate_ex(const char *path, int record) {
     char norm[512];
     snprintf(norm, sizeof norm, "%s", path[0] ? path : "/");
     size_t len = strlen(norm);
@@ -183,31 +268,57 @@ static void navigate(const char *path) {
         SetWindowText(g_path, g_cwd);                          /* revert */
         return;
     }
+    if (strcmp(norm, g_cwd) == 0) { refill(); return; }        /* no move */
+    if (record) push_back();
     snprintf(g_cwd, sizeof g_cwd, "%s", norm);
     refill();
 }
 
+static void navigate(const char *path) { navigate_ex(path, 1); }
+
 static void go_up(void) {
-    char *slash = strrchr(g_cwd, '/');
+    char parent[512];
+    snprintf(parent, sizeof parent, "%s", g_cwd);
+    char *slash = strrchr(parent, '/');
     if (!slash) return;
-    if (slash == g_cwd) g_cwd[1] = 0;            /* parent of /x is / */
+    if (slash == parent) parent[1] = 0;          /* parent of /x is / */
     else *slash = 0;
-    refill();
+    navigate_ex(parent, 1);
 }
 
-/* The selected row's full path. Returns 0 with no selection; *isdir tells
- * a directory (the trailing-'/' marker) from a file. */
-static int sel_path(char *full, size_t sz, int *isdir) {
-    int sel = (int)SendMessage(g_list, LB_GETCURSEL, 0, 0);
-    if (sel < 0) return 0;
-    char row[256];
-    if (SendMessage(g_list, LB_GETTEXT, (WPARAM)sel, (LPARAM)row) == LB_ERR) return 0;
-    size_t len = strlen(row);
-    *isdir = len && row[len - 1] == '/';
-    if (*isdir) row[len - 1] = 0;
-    if (!strcmp(g_cwd, "/")) snprintf(full, sz, "/%s", row);
-    else snprintf(full, sz, "%s/%s", g_cwd, row);
+static void go_back(void) {
+    if (g_nback <= 0) return;
+    char dest[512];
+    snprintf(dest, sizeof dest, "%s", g_back[--g_nback]);
+    navigate_ex(dest, 0);
+}
+
+/* Build row `i`'s full path from the live listing (not the display
+ * string — the details columns would confuse a re-parse). */
+static int row_path(int i, char *full, size_t sz, int *isdir) {
+    if (i < 0 || i >= g_nent) return 0;
+    if (isdir) *isdir = g_ents[i].isdir;
+    if (!strcmp(g_cwd, "/")) snprintf(full, sz, "/%s", g_ents[i].name);
+    else snprintf(full, sz, "%s/%s", g_cwd, g_ents[i].name);
     return 1;
+}
+
+/* The caret row's full path (LB_GETCURSEL — the single-target ops). */
+static int sel_path(char *full, size_t sz, int *isdir) {
+    return row_path((int)SendMessage(g_list, LB_GETCURSEL, 0, 0), full, sz, isdir);
+}
+
+/* Gather the selected rows' indices (0106). With no extended selection
+ * (or none marked) fall back to the caret so single-select flows work. */
+static int sel_indices(int *out, int max) {
+    int n = (int)SendMessage(g_list, LB_GETSELITEMS, (WPARAM)max, (LPARAM)out);
+    if (n <= 0) {
+        int sel = (int)SendMessage(g_list, LB_GETCURSEL, 0, 0);
+        if (sel < 0) return 0;
+        out[0] = sel;
+        return 1;
+    }
+    return n;
 }
 
 static void open_selected(void) {
@@ -310,14 +421,20 @@ static void join_path(char *out, size_t sz, const char *dir, const char *name) {
     else snprintf(out, sz, "%s/%s", dir, name);
 }
 
-/* Cut/Copy: the selected row's full path onto the kernel clipboard slot
- * as a format-2 file list. */
+/* Cut/Copy: every selected row's full path onto the kernel clipboard slot
+ * as a format-2 file list (0106 — the whole multi-selection, not just the
+ * caret). */
 static void clip_selected(int cut) {
-    char full[800];
-    int isdir;
-    if (!sel_path(full, sizeof full, &isdir)) return;
-    const char *p = full;
-    if (SHClipSetFiles(cut, &p, 1) != 0) op_error("clip", full);
+    int idx[512];
+    int n = sel_indices(idx, 512);
+    if (n <= 0) return;
+    static char paths[512][800];
+    const char *pv[512];
+    int cnt = 0, isdir;
+    for (int i = 0; i < n && cnt < 512; i++)
+        if (row_path(idx[i], paths[cnt], sizeof paths[0], &isdir))
+            pv[cnt] = paths[cnt], cnt++;
+    if (cnt && SHClipSetFiles(cut, pv, cnt) != 0) op_error("clip", pv[0]);
 }
 
 /* Paste into the cwd: cut = move (slot cleared after a clean run — a cut
@@ -353,28 +470,46 @@ static int in_trash(void) { return strcmp(g_cwd, SHTrashFilesDir()) == 0; }
  * Shift+Del accelerator) — or any delete inside the store — really
  * deletes. Both confirm first, with wording that says which one this is. */
 static void delete_selected(int perm) {
+    int idx[512];
+    int n = sel_indices(idx, 512);
+    if (n <= 0) return;
+    perm = perm || in_trash();
     char full[800];
     int isdir;
-    if (!sel_path(full, sizeof full, &isdir)) return;
-    perm = perm || in_trash();
-    const char *base = strrchr(full, '/');
-    base = base ? base + 1 : full;
     char msg[900];
-    if (perm)
-        snprintf(msg, sizeof msg,
-                 "Are you sure you want to delete '%s'?", base);
-    else
-        snprintf(msg, sizeof msg,
-                 "Are you sure you want to send '%s' to the Recycle Bin?", base);
+    if (n == 1) {                        /* singular — the 0092/0093 wording */
+        row_path(idx[0], full, sizeof full, &isdir);
+        const char *base = strrchr(full, '/');
+        base = base ? base + 1 : full;
+        if (perm)
+            snprintf(msg, sizeof msg,
+                     "Are you sure you want to delete '%s'?", base);
+        else
+            snprintf(msg, sizeof msg,
+                     "Are you sure you want to send '%s' to the Recycle Bin?", base);
+    } else {
+        if (perm)
+            snprintf(msg, sizeof msg,
+                     "Are you sure you want to delete these %d items?", n);
+        else
+            snprintf(msg, sizeof msg,
+                     "Are you sure you want to send these %d items "
+                     "to the Recycle Bin?", n);
+    }
     if (MessageBox(g_win, msg,
-                   isdir ? "Confirm Folder Delete" : "Confirm File Delete",
+                   n == 1 && isdir ? "Confirm Folder Delete"
+                                   : n == 1 ? "Confirm File Delete"
+                                            : "Confirm Multiple Item Delete",
                    MB_YESNO) != IDYES)
         return;
-    if ((perm ? SHFileDelete(full) : SHFileTrash(full)) != 0)
-        op_error("delete", full);
-    else if (in_trash())               /* a deleted store entry must not
-                                          orphan its sidecar (0093) */
-        SHTrashForget(full);
+    for (int i = 0; i < n; i++) {
+        if (!row_path(idx[i], full, sizeof full, &isdir)) continue;
+        if ((perm ? SHFileDelete(full) : SHFileTrash(full)) != 0) {
+            op_error("delete", full);
+            break;                       /* stop on the first failure */
+        }
+        if (in_trash()) SHTrashForget(full);   /* don't orphan the sidecar (0093) */
+    }
     refill();
 }
 
@@ -537,8 +672,19 @@ static void ctx_menu(int sx, int sy) {
     HMENU m = CreatePopupMenu();
     if (!m) return;
     if (!outside) {
-        SendMessage(g_list, LB_SETCURSEL, (WPARAM)(int)(short)LOWORD(hit), 0);
+        /* Explorer rule (0106): right-clicking a row that isn't part of the
+         * current multi-selection replaces the set with just it; clicking
+         * inside the set keeps it (so "Delete" acts on the whole set). The
+         * caret always follows so single-target ops (Rename/Properties) hit
+         * the clicked row. */
+        int hitrow = (int)(short)LOWORD(hit);
         SetFocus(g_list);
+        if (!SendMessage(g_list, LB_GETSEL, (WPARAM)hitrow, 0)) {
+            SendMessage(g_list, LB_SETSEL, 0, (LPARAM)-1);
+            SendMessage(g_list, LB_SETSEL, 1, (LPARAM)hitrow);
+        }
+        SendMessage(g_list, LB_SETCURSEL, (WPARAM)hitrow, 0);
+        status_update();
         char full[800];
         int isdir = 0;
         sel_path(full, sizeof full, &isdir);
@@ -569,6 +715,12 @@ static void ctx_menu(int sx, int sy) {
         AppendMenuA(m, MF_SEPARATOR, 0, NULL);
         AppendMenuA(m, 0, IDM_NEWFOLDER, "New Folder");
         AppendMenuA(m, 0, IDM_REFRESH, "Refresh");
+        AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuA(m, g_sort == 0 ? MF_CHECKED : 0, IDM_SORT_NAME, "Sort by Name");
+        AppendMenuA(m, g_sort == 1 ? MF_CHECKED : 0, IDM_SORT_SIZE, "Sort by Size");
+        AppendMenuA(m, g_sort == 2 ? MF_CHECKED : 0, IDM_SORT_DATE, "Sort by Date");
+        AppendMenuA(m, g_reverse ? MF_CHECKED : 0, IDM_REVERSE, "Reverse Order");
+        AppendMenuA(m, g_hidden ? MF_CHECKED : 0, IDM_HIDDEN, "Show Hidden Files");
     }
     int cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD, sx, sy, 0, g_win, NULL);
     DestroyMenu(m);
@@ -584,7 +736,8 @@ static void relayout(HWND h) {
     MoveWindow(g_up, w - 3 * BTN_W - 12, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_open, w - 2 * BTN_W - 8, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_with, w - BTN_W - 4, 3, BTN_W, TOP_H - 6, TRUE);
-    MoveWindow(g_list, 4, TOP_H, w - 8, hgt - TOP_H - 4, TRUE);
+    MoveWindow(g_list, 4, TOP_H, w - 8, hgt - TOP_H - 4 - STATUS_H, TRUE);
+    MoveWindow(g_status, 4, hgt - STATUS_H - 1, w - 8, STATUS_H, TRUE);
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -600,8 +753,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                                 0, 0, 10, 10, h, (HMENU)ID_OPEN, NULL, NULL);
         g_with = CreateWindowEx(0, "BUTTON", "With", WS_CHILD | WS_VISIBLE,
                                 0, 0, 10, 10, h, (HMENU)ID_WITH, NULL, NULL);
-        g_list = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY,
+        g_list = CreateWindowEx(0, "LISTBOX", "",
+                                WS_CHILD | WS_VISIBLE | LBS_NOTIFY | LBS_EXTENDEDSEL,
                                 0, 0, 10, 10, h, (HMENU)ID_LIST, NULL, NULL);
+        g_status = CreateWindowEx(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+                                  0, 0, 10, 10, h, (HMENU)ID_STATUS, NULL, NULL);
         return 0;
     case WM_SIZE:
         relayout(h);
@@ -625,6 +781,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case ID_LIST:
             if (HIWORD(wp) == LBN_DBLCLK) open_selected();
+            else if (HIWORD(wp) == LBN_SELCHANGE) status_update();
             return 0;
         case IDM_OPEN:      open_selected();     return 0;
         case IDM_OPENWITH:  with_selected();     return 0;
@@ -639,6 +796,12 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_PROPS:     props_selected();    return 0;
         case IDM_NEWFOLDER: new_folder();        return 0;
         case IDM_REFRESH:   refill();            return 0;
+        case IDM_BACK:      go_back();           return 0;
+        case IDM_SORT_NAME: g_sort = 0; refill(); return 0;
+        case IDM_SORT_SIZE: g_sort = 1; refill(); return 0;
+        case IDM_SORT_DATE: g_sort = 2; refill(); return 0;
+        case IDM_REVERSE:   g_reverse = !g_reverse; refill(); return 0;
+        case IDM_HIDDEN:    g_hidden = !g_hidden; refill(); return 0;
         }
         return 0;
     case WM_CONTEXTMENU:
@@ -701,6 +864,26 @@ int main(int argc, char **argv) {
                 continue;
             }
             if (m.wParam == VK_ESCAPE) { DestroyWindow(top); continue; }
+        }
+        /* Navigator chords (0106): F5 refresh anywhere; Alt+Left back;
+         * on the listbox Enter opens and Backspace goes Up (Win95); Enter
+         * in the path bar is Go. */
+        if (m.message == WM_KEYDOWN && top == g_win) {
+            HWND focus = GetFocus();
+            if (m.wParam == VK_F5) { refill(); continue; }
+            if (m.wParam == VK_LEFT && (GetKeyState(VK_MENU) & 0x8000)) {
+                go_back();
+                continue;
+            }
+            if (focus == g_list) {
+                if (m.wParam == VK_RETURN) { open_selected(); continue; }
+                if (m.wParam == VK_BACK) { go_up(); continue; }
+            } else if (focus == g_path && m.wParam == VK_RETURN) {
+                char buf[512];
+                GetWindowText(g_path, buf, sizeof buf);
+                navigate(buf);
+                continue;
+            }
         }
         if (g_accel && GetFocus() == g_list &&
             TranslateAcceleratorW(g_win, g_accel, &m))

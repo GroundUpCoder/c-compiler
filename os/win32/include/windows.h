@@ -867,15 +867,22 @@ typedef struct tagCREATESTRUCT {
 /* Listbox messages / notifications */
 #define LBS_NOTIFY      0x0001
 #define LBS_SORT        0x0002
+#define LBS_MULTIPLESEL 0x0008
 #define LBS_NOINTEGRALHEIGHT 0x0100
+#define LBS_EXTENDEDSEL 0x0800
 #define LB_ADDSTRING    0x0180
 #define LB_RESETCONTENT 0x0184
+#define LB_SETSEL       0x0185
 #define LB_SETCURSEL    0x0186
+#define LB_GETSEL       0x0187
 #define LB_GETCURSEL    0x0188
 #define LB_GETTEXT      0x0189
 #define LB_GETTEXTLEN   0x018A
 #define LB_GETCOUNT     0x018B
 #define LB_DELETESTRING 0x0182
+#define LB_GETSELCOUNT  0x0190
+#define LB_GETSELITEMS  0x0191
+#define LB_SELITEMRANGE 0x019B
 #define LB_ITEMFROMPOINT 0x01A9
 #define LB_ERR          (-1)
 #define LBN_SELCHANGE 1

@@ -1,6 +1,21 @@
 # 0106 — fileman navigator v2: details view, multi-select, refresh
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). Landed details columns (size/<DIR> + mtime
+  off the same `refill` stat, a right-aligned mono layout) + a status strip;
+  LBS_EXTENDEDSEL in user32.c (Ctrl-click / Shift-range / Ctrl+A / the
+  LB_GETSEL/SETSEL/GETSELCOUNT/GETSELITEMS surface) with fileman's cut/copy/
+  delete acting on the whole SET; Enter opens the caret (dir navigates /
+  file associates), Backspace = Up, F5 refresh, Alt+Left back history; the
+  View toggles (Sort by Name/Size/Date, Reverse, Show Hidden Files) as
+  pane-context-menu items. Tests: `tests/kernel/test_fileman_nav_e2e.js`
+  (new, registered in run.js) + the os-fileman.mjs multi-select+Delete
+  browser leg (operator-run — no Playwright in-repo). Design note: the View
+  controls are context-menu items, NOT a window menu bar — a bar (MENU_BAR_H)
+  shifts the surface client origin and would break the 0092/0093 tests'
+  hardcoded right-click geometry; context-menu items are equally
+  agent-drivable and v1-honest (matching the "no generic listview" non-goal).
+  Residue: the *optional* unprompted auto-refresh (mtime poll) is filed as
+  **0123** (P3).
 - **Design**: `todos/WIN32.md`. Filed by the 0076 parity sweep. Sequenced
   after 0092 (file ops): ops define what a selection *does*; this item
   makes the navigator side of fileman feel like Explorer. The 0073 sweep
