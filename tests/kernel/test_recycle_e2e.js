@@ -19,7 +19,7 @@
 //   - the wm.c desktop: the bin icon is a real /root/Desktop launcher
 //     pinned to the grid's TAIL (row 7 on the seeded desktop), its glyph
 //     flips empty->full->empty with store contents (tile-center pixel),
-//     the icon menu grew DELETE (120x96), the bin's own menu is
+//     the icon menu grew DELETE + RENAME (120x116, todos/0103), the bin's own menu is
 //     OPEN/EMPTY RECYCLE BIN (120x56; EMPTY grays when empty and a
 //     grayed click leaves the menu open), the Del key trashes the
 //     selection, and double-clicking the bin opens fileman AT the store
@@ -339,8 +339,8 @@ check('a failed trash leaves NO stray store entry (the fo_trash sweep)',
 
 // ---- the wm.c desktop ----
 const im = section('iconmenu');
-check('icon menu grew DELETE (120x96)', row(im, 'ctxmenu').includes('120x96+'),
-  JSON.stringify(im));
+check('icon menu grew DELETE + RENAME (120x116, 0103)',
+  row(im, 'ctxmenu').includes('120x116+'), JSON.stringify(im));
 check('icon DELETE trashes the desktop file', out.includes('DESK-TRASH'));
 const bm = section('binmenu');
 check('the bin icon gets its own OPEN/EMPTY menu (120x56)',

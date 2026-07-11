@@ -657,6 +657,45 @@ try {
   check('...and the sliver is raised', near(await sample(SW - 6, BARY), FACE),
     await sample(SW - 6, BARY));
 
+  // ---- desktop icon rename-in-place (todos/0103): F2 opens an inline editor
+  // over the label (a solid white box); the grid relabels after Enter commits
+  // rename(2). A fresh 'aaa' that sorts before every seeded icon makes the
+  // top-left cell deterministic despite the earlier grid churn — select it by
+  // keyboard (Right from a cleared selection lands top-left), F2, retype. ----
+  await setVt(1);
+  await page.keyboard.type('rm -f /root/Desktop/.icons; printf x > /root/Desktop/aaa; echo RN-""SETUP\r', { delay: 20 });
+  await page.waitForFunction(() => window.__osOut.includes('RN-SETUP'), { timeout: 20000, polling: 200 });
+  await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
+  await setVt(2);
+  // Focus the desktop on an empty cell (col ~5), then Right selects the
+  // top-left icon (aaa). Its 3-char label strip goes navy when selected.
+  await clickAt(500, 400);
+  await new Promise(r => setTimeout(r, 400));
+  await page.keyboard.press('ArrowRight');
+  await waitPixel(49, 52, NAVY);                     // aaa label strip (row 0)
+  check('top-left icon selected (navy label strip)', true);
+  // F2 opens the inline editor: a solid white box over the label cell. Sample
+  // just above the text row — teal on the plain desktop, white with the box.
+  await page.keyboard.press('F2');
+  await waitPixel(48, 47, WHITE);
+  check('F2 opens the inline editor (white box over the label)', true);
+  // Clear "aaa" (3 Backspaces), type "bbb", Enter commits the rename.
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('bbb', { delay: 60 });
+  await page.keyboard.press('Enter');
+  await new Promise(r => setTimeout(r, 700));
+  // The editor closed (box gone) and the grid relabelled — verify on disk.
+  await waitPixel(48, 47, TEAL);
+  check('editor closes after commit (box gone)', true);
+  await setVt(1);
+  await page.keyboard.type('test -e /root/Desktop/bbb && echo RN-BBB""-YES; test -e /root/Desktop/aaa || echo RN-AAA""-GONE\r', { delay: 20 });
+  await page.waitForFunction(() => window.__osOut.includes('RN-BBB-YES') && window.__osOut.includes('RN-AAA-GONE'),
+    { timeout: 20000, polling: 200 });
+  check('inline rename committed on disk (aaa -> bbb)', true);
+  await setVt(2);
+
   // The shell stays healthy behind the desktop (menu spawns are reaped —
   // no zombie pileup would show here, but the VT1 round-trip proves the
   // system is still driveable).

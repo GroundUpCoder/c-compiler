@@ -35,7 +35,8 @@ const image = path.join(tmp, 'os.img');
 // 120, rows 20px, 4px pad, 8px separator, clamped to the 1024x768 work
 // area above the 28px bar. Desktop menu: NEW / SORT BY / REFRESH / PASTE /
 // --- / DISPLAY -> h 116; taskbar menu: RESTORE / MINIMIZE / MAXIMIZE /
-// --- / CLOSE -> h 96; icon menu: OPEN / --- / CUT / COPY / DELETE -> h 96. A
+// --- / CLOSE -> h 96; icon menu: OPEN / --- / CUT / COPY / DELETE / RENAME
+// -> h 116 (todos/0103 added RENAME). A
 // flyout parks at root-right - 3 with its first row aligned to the group
 // row (NEW: FOLDER + TEXT FILE -> h 48; SORT BY: NAME -> h 28). Row
 // centers at 4 + i*20 + 10.
@@ -318,8 +319,8 @@ check('Start toggle while the ctxmenu is open: startmenu up, ctxmenu gone',
 
 // ---- icon menu ----
 const i1 = section('icon1');
-check('right-click an icon opens the Open/Cut/Copy/Delete menu (120x96, 0093)',
-  row(i1, 'ctxmenu').includes('120x96+'), JSON.stringify(i1));
+check('right-click an icon opens the Open/Cut/Copy/Delete/Rename menu (120x116, 0103)',
+  row(i1, 'ctxmenu').includes('120x116+'), JSON.stringify(i1));
 check('icon shot written', out.includes('d2-ok'));
 check('OPEN runs the launcher through the activate path (winbox +1)',
   out.includes('OPEN-DELTA-1'),

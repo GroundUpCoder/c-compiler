@@ -366,6 +366,19 @@ static int desk_collapse = 0;      /* plain press on an already-selected icon:
                                       release (the Win95 mouseup rule) */
 static uint32_t zctr = 0;          /* focus-recency counter (todos/0032) */
 
+/* Inline rename editor (todos/0103): F2 on a single-selected icon, or the
+ * icon menu's Rename, opens an edit box over that icon's label — printable
+ * keys insert, Backspace deletes, Enter commits rename(2), Esc cancels, a
+ * click-away or focus-loss commits (the Win95 behavior). desk_edit is the
+ * desk[] index being edited, -1 = none; desk_ebuf holds the working name. */
+static int desk_edit = -1;
+static char desk_ebuf[256];
+static int desk_elen = 0;
+static int desk_edit_armed = 0;    /* the editor's desktop focus has landed —
+                                      gates focus-loss commit so the transient
+                                      focus-fall when the icon menu dismisses
+                                      (Rename path) can't close it early */
+
 /* Context menu state (todos/0091): a two-window popup — root + at most one
  * flyout (the recorded v1 depth cap) — built from fixed item lists, not a
  * directory like the Start menu. Same furniture pattern as the menu
@@ -378,6 +391,7 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_PASTE,                      /* desktop (0092: the fileops clipboard) */
     CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* flyout rows */
     CM_OPEN,                       /* icon */
+    CM_RENAME,                     /* icon (0103: the inline rename editor) */
     CM_CUT, CM_COPY,               /* icon (0092: the selection set) */
     CM_DELETE,                     /* icon (0093: to the Recycle Bin) */
     CM_EMPTY,                      /* the Recycle Bin icon (0093) */
@@ -1784,6 +1798,8 @@ static void desk_save(void) {
 
 static void desk_load(void) {
     if (desk_press) return;            /* never reshuffle under a drag (0077) */
+    if (desk_edit >= 0) return;        /* nor under an inline rename (0103) —
+                                          the edited index must stay valid */
     int tf = fo_trash_count() > 0;     /* bin glyph state (todos/0093) */
     if (tf != desk_trash_full) { desk_trash_full = tf; desk_dirty = 1; }
     menu_ent fresh[MAX_DESK];
@@ -1813,6 +1829,7 @@ static void desk_load(void) {
 static int make_desk(void) {
     desk_press = 0;                    /* a recreate drops any drag (0077) */
     desk_drag = 0;
+    desk_edit = -1;                    /* ...and any inline rename (0103) */
     desk_load();
     desk_win = SDL_CreateWindow("desktop", scr_w, scr_h, SDL_WINDOW_BORDERLESS);
     if (!desk_win) return -1;
@@ -2012,7 +2029,136 @@ static void desk_arrow(int dx, int dy) {
     desk_dirty = 1;
 }
 
+/* Carry a 0077 .icons placement across a rename (todos/0103): rewrite the
+ * matching "col row name" line's name in place so the renamed icon keeps its
+ * cell. No-op if the file or the entry is absent — the icon just auto-flows
+ * under its new name (the "if present" the 0103 plan calls for). */
+static void desk_icons_rename(const char *oldn, const char *newn) {
+    FILE *f = fopen("/root/Desktop/.icons", "r");
+    if (!f) return;
+    static char out[MAX_DESK * 320];   /* off the 64KB wasm stack */
+    size_t olen = 0;
+    char line[320];
+    int hit = 0;
+    while (fgets(line, sizeof line, f)) {
+        int c, r, off = -1;
+        char *keep = line;
+        if (sscanf(line, "%d %d %n", &c, &r, &off) >= 2 && off >= 0) {
+            char name[300];
+            snprintf(name, sizeof name, "%s", line + off);
+            size_t l = strlen(name);
+            while (l > 0 && (name[l - 1] == '\n' || name[l - 1] == '\r'))
+                name[--l] = 0;
+            if (strcmp(name, oldn) == 0) {
+                char nl[320];
+                int m = snprintf(nl, sizeof nl, "%d %d %s\n", c, r, newn);
+                if (m > 0 && olen + (size_t)m < sizeof out) {
+                    memcpy(out + olen, nl, (size_t)m);
+                    olen += (size_t)m;
+                }
+                hit = 1;
+                continue;
+            }
+        }
+        size_t l = strlen(keep);
+        if (olen + l < sizeof out) { memcpy(out + olen, keep, l); olen += l; }
+    }
+    fclose(f);
+    if (!hit) return;                  /* nothing pinned: leave the file alone */
+    f = fopen("/root/Desktop/.icons", "w");
+    if (!f) return;
+    fwrite(out, 1, olen, f);
+    fclose(f);
+}
+
+/* Open the inline rename editor on icon idx (todos/0103). The Recycle Bin is
+ * never renamable (wm.c recreates it every start). Seeds the buffer with the
+ * current name and takes desktop focus so the following keys route here. */
+static void desk_edit_start(int idx) {
+    if (idx < 0 || idx >= desk_n) return;
+    if (strcmp(desk[idx].name, "Recycle Bin") == 0) return;
+    desk_edit = idx;
+    snprintf(desk_ebuf, sizeof desk_ebuf, "%s", desk[idx].name);
+    desk_elen = (int)strlen(desk_ebuf);
+    desk_selmask = 1ULL << idx;
+    desk_anchor = idx;
+    /* F2 path: the desktop already holds focus, so no EV_FOCUS(desk) is
+     * coming — arm now. Menu path (desk_focused 0, the ctxmenu had it): arm
+     * when our WMP_FOCUS's EV_FOCUS(desk) lands, not on the dismiss fall. */
+    desk_edit_armed = desk_focused;
+    desk_focused = 1;
+    if (desk_sid) { int32_t f[1] = { desk_sid }; wmp_send(sock, WMP_FOCUS, f, 1); }
+    desk_dirty = 1;
+}
+
+static void desk_edit_cancel(void) {
+    if (desk_edit < 0) return;
+    desk_edit = -1;
+    desk_dirty = 1;
+}
+
+/* Commit the rename (todos/0103): refuse empty / '/'-bearing names and leave
+ * the editor open (the beep-equivalent — no dialog furniture here); an
+ * unchanged name just closes it. rename(2) on /root/Desktop, but refuse to
+ * clobber an existing target (both files kept, editor stays open — EEXIST),
+ * then carry the .icons placement and reload the grid. */
+static void desk_edit_commit(void) {
+    if (desk_edit < 0) return;
+    int idx = desk_edit;
+    if (idx >= desk_n) { desk_edit = -1; return; }
+    if (desk_elen == 0 || strchr(desk_ebuf, '/')) return;   /* keep open */
+    if (strcmp(desk_ebuf, desk[idx].name) == 0) {           /* no change */
+        desk_edit = -1; desk_dirty = 1; return;
+    }
+    char oldn[256];
+    snprintf(oldn, sizeof oldn, "%s", desk[idx].name);
+    char oldp[300], newp[300];
+    snprintf(oldp, sizeof oldp, "/root/Desktop/%s", oldn);
+    snprintf(newp, sizeof newp, "/root/Desktop/%s", desk_ebuf);
+    struct stat st;
+    if (lstat(newp, &st) == 0) return;   /* target exists: keep both, stay open */
+    if (rename(oldp, newp) != 0) {
+        fprintf(stderr, "wm: rename '%s' -> '%s' failed: %s\n",
+                oldp, newp, strerror(errno));
+        return;                          /* keep the editor open */
+    }
+    desk_icons_rename(oldn, desk_ebuf);
+    desk_edit = -1;
+    desk_load();                         /* picks up the new name immediately */
+    desk_dirty = 1;
+}
+
+/* Commit-if-valid, else discard — the click-away / focus-loss path where an
+ * invalid name can't just linger the editor open off-screen (todos/0103). */
+static void desk_edit_finish(void) {
+    if (desk_edit < 0) return;
+    desk_edit_commit();
+    if (desk_edit >= 0) desk_edit_cancel();
+}
+
 static void desk_key(int sym) {
+    if (desk_edit >= 0) {              /* inline rename editor owns the keys */
+        if (sym == SDLK_ESCAPE) { desk_edit_cancel(); return; }
+        if (sym == SDLK_RETURN) { desk_edit_commit(); return; }
+        if (sym == SDLK_BACKSPACE) {
+            if (desk_elen > 0) { desk_ebuf[--desk_elen] = 0; desk_dirty = 1; }
+            return;
+        }
+        if (sym >= 32 && sym < 127 && desk_elen < (int)sizeof desk_ebuf - 1) {
+            desk_ebuf[desk_elen++] = (char)sym;
+            desk_ebuf[desk_elen] = 0;
+            desk_dirty = 1;
+        }
+        return;                        /* modal: swallow everything else */
+    }
+    if (sym == SDLK_F2) {              /* rename the lone selection (0103) */
+        if (desk_selmask && !(desk_selmask & (desk_selmask - 1))) {
+            int i = 0;
+            while (!(desk_selmask >> i & 1)) i++;
+            desk_edit_start(i);
+        }
+        return;
+    }
     if (sym == SDLK_ESCAPE) {
         if (desk_selmask) { desk_selmask = 0; desk_anchor = -1; desk_dirty = 1; }
         return;
@@ -2077,6 +2223,26 @@ static void draw_desk(void) {
         }
         if (desk[i].is_link)
             fill_s(px, w, h, ix + 2, iy + ICON_W - 8, 6, 6, black);
+        if (i == desk_edit) {          /* inline rename editor (todos/0103):
+                                          a sunken white box + black text +
+                                          caret over the label cell, sized to
+                                          the tail that fits and clamped on. */
+            int vis = desk_elen > 18 ? 18 : desk_elen;
+            const char *tail = desk_elen > 18 ? desk_ebuf + (desk_elen - 18)
+                                              : desk_ebuf;
+            int bw = vis * 6 + 8;
+            int bx = cx + (CELL_W - bw) / 2, by = cy + ICON_W + 6;
+            if (bx < 0) bx = 0;
+            if (bx + bw > w) bx = w - bw;
+            fill_s(px, w, h, bx, by, bw, 13, white);
+            rect_s(px, w, h, bx, by, bw, 13, black);
+            char eb[19];
+            memcpy(eb, tail, (size_t)vis);
+            eb[vis] = 0;
+            draw_text_s(px, w, h, bx + 3, by + 3, eb, black);
+            fill_s(px, w, h, bx + 3 + vis * 6, by + 2, 2, 9, black);   /* caret */
+            continue;
+        }
         int len = (int)strlen(desk[i].name);
         if (len > 13) len = 13;
         int lx = cx + (CELL_W - len * 6) / 2, ly = cy + ICON_W + 10;
@@ -2216,7 +2382,8 @@ static void ctx_open_desktop(int x, int y) {
 
 /* Right-click a desktop icon: Open + Cut/Copy of the selection set
  * (todos/0092 — the same format-2 clipboard file list fileman pastes)
- * + Delete to the Recycle Bin (todos/0093; Rename arrives with 0103).
+ * + Delete to the Recycle Bin (todos/0093) + Rename (todos/0103, the inline
+ * label editor — dir launchers rename like any file, the link name IS label).
  * The Recycle Bin icon itself gets its own menu: Open + Empty Recycle
  * Bin (grayed when the store is empty; unconfirmed by design — this
  * process has no dialog furniture, fileman's Empty confirms). */
@@ -2235,6 +2402,7 @@ static void ctx_open_icon(int idx, int x, int y) {
         ctx_add(0, "CUT", CM_CUT, 0);
         ctx_add(0, "COPY", CM_COPY, 0);
         ctx_add(0, "DELETE", CM_DELETE, 0);
+        ctx_add(0, "RENAME", CM_RENAME, 0);        /* the inline editor (0103) */
     }
     ctx_openwin(0, x, y);
 }
@@ -2495,6 +2663,7 @@ static void ctx_activate(int d, int i) {
         break;
     }
     case CM_OPEN: desk_launch(icon); break;
+    case CM_RENAME: desk_edit_start(icon); break;   /* 0103: inline editor */
     case CM_CUT: desk_clip(1); break;            /* 0092 */
     case CM_COPY: desk_clip(0); break;
     case CM_PASTE: desk_paste(); break;
@@ -2996,7 +3165,13 @@ static void handle_event(wmp_hdr *h) {
          * modifiers (their keyups would land elsewhere). */
         if (desk_sid) {
             desk_focused = p[0] == desk_sid;
-            if (!desk_focused) mod_ctrl = mod_shift = 0;
+            if (desk_focused) {
+                if (desk_edit >= 0) desk_edit_armed = 1;   /* editor focus landed */
+            } else {
+                mod_ctrl = mod_shift = 0;
+                if (desk_edit >= 0 && desk_edit_armed)
+                    desk_edit_finish();    /* click-away/focus-loss commits (0103) */
+            }
         }
         for (int i = 0; i < nwins; i++) {
             wins[i].focused = wins[i].sid == p[0];
@@ -3371,6 +3546,7 @@ static void frame_cb(void) {
             else if (run_win && e.button.windowID == SDL_GetWindowID(run_win)) {
                 /* a click inside the run dialog: nothing to hit */
             } else if (desk_win && e.button.windowID == did) {
+                desk_edit_finish();    /* click-away commits the rename (0103) */
                 menu_dismiss();        /* a desktop click dismisses (0029) */
                 run_dismiss();         /* likewise (todos/0078) */
                 peek_dismiss();        /* likewise (todos/0063) */

@@ -632,6 +632,89 @@ const script = [
   'sleep 0.6',
   'echo ==smClose',
   'wmctl list',                                   // winbox gone
+
+  // ---- desktop icon rename-in-place (todos/0103): F2 or the icon menu's
+  // Rename opens an inline editor over the label; Enter commits rename(2),
+  // Esc cancels, renaming onto an existing name keeps both files. Two fresh
+  // 'aa*' files (sort before every seeded icon, so the top-left cell is one
+  // of them) make the leg independent of the earlier desktop churn without
+  // pixel math: clear the selection with an empty-cell click, Right selects
+  // the top-left icon, F2 edits it. ----
+  'rm -f /root/Desktop/.icons',                   // auto-flow: predictable order
+  'printf x > /root/Desktop/aaa',                 // the icon we rename
+  'printf y > /root/Desktop/aab',                 // the EEXIST target / menu target
+  'sleep 2.5',                                     // desk_load re-read tick (~1s)
+  'echo ==rn0',
+  'ls /root/Desktop | tr "\\n" " "; echo',
+  'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
+  // F2 rename: focus the desktop (empty cell col5), select top-left (aaa),
+  // F2, clear "aaa" with 3 Backspaces, type "zzz", Enter -> rename aaa->zzz
+  'wmctl click $DSID 500 400',                    // empty cell: focus + clear
+  'sleep 0.5',
+  'wmctl key $DSID 79 1073741903',                // Right -> top-left = aaa
+  'sleep 0.3',
+  'wmctl key $DSID 59 1073741883',                // F2 -> inline editor on aaa
+  'sleep 0.3',
+  'wmctl key $DSID 42 8',                         // Backspace x3 clears "aaa"
+  'wmctl key $DSID 42 8',
+  'wmctl key $DSID 42 8',
+  'wmctl key $DSID 29 122',                       // z
+  'wmctl key $DSID 29 122',                       // z
+  'wmctl key $DSID 29 122',                       // z
+  'wmctl key $DSID 40 13',                        // Enter -> commit
+  'sleep 0.6',
+  'echo ==rn2',
+  'ls /root/Desktop | tr "\\n" " "; echo',        // aaa gone, zzz present
+  // EEXIST: rename aab -> zzz (now exists) keeps both, editor stays open
+  'wmctl click $DSID 500 400',
+  'sleep 0.5',
+  'wmctl key $DSID 79 1073741903',                // top-left now aab
+  'sleep 0.3',
+  'wmctl key $DSID 59 1073741883',                // F2 on aab
+  'sleep 0.3',
+  'wmctl key $DSID 42 8',                         // clear "aab"
+  'wmctl key $DSID 42 8',
+  'wmctl key $DSID 42 8',
+  'wmctl key $DSID 29 122',                       // type "zzz" (exists)
+  'wmctl key $DSID 29 122',
+  'wmctl key $DSID 29 122',
+  'wmctl key $DSID 40 13',                        // Enter -> EEXIST: no rename
+  'sleep 0.5',
+  'echo ==rn3',
+  'ls /root/Desktop | tr "\\n" " "; echo',        // aab AND zzz both present
+  'wmctl key $DSID 41 27',                         // Esc -> drop the stuck editor
+  'sleep 0.3',
+  // Esc cancels an edit: F2 on aab, type a char, Esc -> file untouched
+  'wmctl click $DSID 500 400',
+  'sleep 0.5',
+  'wmctl key $DSID 79 1073741903',                // top-left = aab
+  'sleep 0.3',
+  'wmctl key $DSID 59 1073741883',                // F2
+  'sleep 0.3',
+  'wmctl key $DSID 29 122',                       // append 'z' -> "aabz" (pending)
+  'wmctl key $DSID 41 27',                         // Esc -> cancel, aab untouched
+  'sleep 0.5',
+  'echo ==rn4',
+  'ls /root/Desktop | tr "\\n" " "; echo',        // aab present, no aabz
+  // icon-menu Rename path (exercises the focus-race fix): right-click aab ->
+  // menu -> Rename row -> editor -> rename aab -> mmm
+  'wmctl click $DSID 58 48 3',                     // right-click col0 row0 = aab
+  'sleep 0.4',
+  'echo ==rn5',
+  'wmctl list',                                    // ctxmenu (icon menu) up
+  'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  'wmctl click $CXSID 60 102',                     // RENAME row (row 5, after SEP)
+  'sleep 0.5',
+  'wmctl key $DSID 42 8',                          // clear "aab"
+  'wmctl key $DSID 42 8',
+  'wmctl key $DSID 42 8',
+  'wmctl key $DSID 16 109',                        // m
+  'wmctl key $DSID 16 109',                        // m
+  'wmctl key $DSID 16 109',                        // m
+  'wmctl key $DSID 40 13',                         // Enter -> commit
+  'sleep 0.6',
+  'echo ==rn6',
+  'ls /root/Desktop | tr "\\n" " "; echo',         // aab gone, mmm present
   '',
 ].join('\n');
 
@@ -1202,6 +1285,23 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('Close via the sysmenu tears the window down',
     rowSid(smClose, swsid) === '', JSON.stringify(
       smClose.split('\n').filter(l => l.endsWith('\twinbox'))));
+}
+
+// ---- desktop icon rename-in-place (todos/0103) ----
+{
+  const names = (name) => section(name).trim().split(/\s+/);
+  const rn0 = names('rn0'), rn2 = names('rn2'), rn3 = names('rn3'),
+        rn4 = names('rn4'), rn6 = names('rn6');
+  check('baseline: aaa + aab seeded on the desktop',
+    rn0.includes('aaa') && rn0.includes('aab'), JSON.stringify(rn0));
+  check('F2 + typed name + Enter renames the icon (aaa -> zzz)',
+    !rn2.includes('aaa') && rn2.includes('zzz'), JSON.stringify(rn2));
+  check('rename onto an existing name keeps both files (EEXIST)',
+    rn3.includes('aab') && rn3.includes('zzz'), JSON.stringify(rn3));
+  check('Esc leaves the file untouched (no partial "aabz")',
+    rn4.includes('aab') && !rn4.includes('aabz'), JSON.stringify(rn4));
+  check('icon-menu Rename renames via the inline editor (aab -> mmm)',
+    !rn6.includes('aab') && rn6.includes('mmm'), JSON.stringify(rn6));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

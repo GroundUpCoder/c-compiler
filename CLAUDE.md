@@ -414,6 +414,15 @@ desktop sid (kernel's borderless exemption stands; policy asks) and
 modifiers are tracked by KEYSYM from key events since pointer records
 carry no mod word; wmctl grew keydown/keyup/down/up/drag for headless
 gestures; right-button routing landed with 0091 (below).
+Desktop icons rename in place (todos/0103, wm.c-only): F2 on a lone
+selection — or the icon menu's Rename row — opens an inline editor over
+the label (sunken white box + caret; printable insert, Backspace, Enter
+commits `rename(2)` on `/root/Desktop`, Esc cancels, click-away/focus-loss
+commits — the Win95 rule). Empty / `/`-bearing / EEXIST (existing target,
+both kept) leave the editor open; the `.icons` cell is carried to the new
+name (`desk_icons_rename`); the Recycle Bin is not renamable. A
+`desk_edit_armed` flag gates the focus-loss commit so the transient
+focus-fall when the icon menu dismisses can't close the editor early.
 The system clipboard (todos/0090) is ONE kernel-held slot ({fmt, bytes};
 fmt 1 = UTF-8 text, tagged so 0092's file lists can ride later) behind
 the CLIP_SET/CLIP_GET RPCs — cross-process, survives the writer exiting
@@ -585,7 +594,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v61**.
+Image version is **v63**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
