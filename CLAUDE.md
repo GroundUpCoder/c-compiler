@@ -508,7 +508,37 @@ spent-tail reclaim: "dry" = can't back another output frame — at
 non-integer resample ratios queued never hits 0, which leaked a dead
 stream per one-shot clip. Tests: `tests/kernel/test_sounds_e2e.js` +
 `tests/browser/os-sounds.mjs` + ctlpanel-e2e Sounds legs.
-Image version is **v55**.
+Aero Snap (todos/0095): drag-to-edge tiling + Win+arrow, the 0025/0032
+mechanism/policy split. Kernel: the title drag tracks the POINTER
+against 8px edge zones (WM_SNAP_MARGIN) and — subscriber-gated — emits
+WMP EV_SNAP_EDGE 0x8D {sid, edge; 0 left-the-zone, 1 L, 2 R, 3 top,
+4-7 corners} on zone change and EV_SNAP_DROP 0x8E {sid, edge, preX,
+preY} at the release of every title drag that MOVED (past the 4px
+WM_SNAP_SLOP — a click, jitter included, is NOT a drag: the dblclick's
+first click must not drag-off-restore a maximized window; after its
+EV_MOVED; preX/preY = the pre-drag position for the floating save —
+scripted-WM tests with a moving title drag must consume the extra
+frame); GUI+arrow rides EV_SNAP_KEY 0x8F under the
+EV_CYCLE chord rules (SNAP 0x1D / `wmctl snap left|right|up|down` =
+the same event; R_ERR with no WM); INJECT_SCREEN 0x22 / `wmctl
+sdown|smove|sup|sdrag` injects SCREEN coords through the full
+wmPointer chrome path — the ONLY headless driver for title drags
+(INJECT_POINTER is post-hit-test client injection; kernel drag state
+is global, so separate wmctl calls compose a held-open drag). wm.c:
+per-window snapped edge + ONE saved floating rect shared with maximize
+(top snap IS the 0025 maximized state; restore_floating serves the
+double-click toggle, Win+Down, taskbar-menu Restore); halves split the
+work area, quarters drop the bottom row one TITLE_H, fixed-size
+letterboxes via the fit_dst SET_DST; the preview is a borderless
+SDL_WINDOW_TRANSPARENT "snappreview" window (0x50-alpha white, top
+layer, peek-style focus hand-back); drag-off restores the floating
+SIZE at release (mid-drag restore = recorded simplification);
+Win+Left/Right wrap across when pressed toward the held edge;
+EV_SCREEN re-fits snapped like maximized. Tests:
+`tests/kernel/test_snap_e2e.js` + mechanism legs in
+test_wm.js/test_wm_policy.js + `tests/browser/os-snap.mjs` (NB winbox
+flips its fill on the unswallowed Meta keydown — one toggle per chord).
+Image version is **v56**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

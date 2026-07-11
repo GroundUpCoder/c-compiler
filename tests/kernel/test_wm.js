@@ -182,6 +182,17 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmCycle refuses with no subscriber (cycling IS policy)',
     kernel.wmCycle(1) === false);
 
+  // ---- the Aero Snap chord with NO subscriber (todos/0095): GUI+arrow is
+  // NOT recognized — it lands in the focused app like any other key ----
+  kernel.wmKey(true, 80, 1073741904, 0x400, false);   // Win+Left down
+  kernel.wmKey(false, 80, 1073741904, 0x400, false);
+  evs = drain(ring1);
+  check('no WM: the snap chord passes through to the app',
+    evs.length === 2 && evs[0].type === K.WMEV.KEYDOWN && evs[0].w[0] === 80 &&
+    evs[0].w[2] === 0x400 && evs[1].type === K.WMEV.KEYUP, JSON.stringify(evs));
+  check('wmSnap refuses with no subscriber (snap IS policy)',
+    kernel.wmSnap(0) === false);
+
   // ---- pointer: client hit, local coords ----
   let act = kernel.wmPointer('down', s1.x + 10, s1.y + 20, { button: 1 });
   kernel.wmPointer('up', s1.x + 10, s1.y + 20, { button: 1 });

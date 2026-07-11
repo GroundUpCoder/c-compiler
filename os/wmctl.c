@@ -16,6 +16,10 @@
  *                                     previous-window toggle); needs a WM
  *   wmctl menu                        toggle the Start menu (todos/0078) —
  *                                     the Ctrl+Esc chord's event; needs a WM
+ *   wmctl snap left|right|up|down     Aero Snap the focused window (todos/
+ *                                     0095) — the Win+arrow chord's event
+ *                                     (halves / maximize / restore-or-
+ *                                     minimize); needs a WM
  *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
  *                                     bottom, 0 normal, 1 top; z ops never
  *                                     cross layers (list flags: T/B)
@@ -27,6 +31,14 @@
  *   wmctl hover SID X Y               absolute motion injection (todos/0063
  *                                     — drives hover UI like Aero Peek)
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
+ *   wmctl sdown|smove|sup X Y [BTN]   SCREEN-coordinate injection (todos/
+ *                                     0095) through the kernel's full
+ *                                     hit-test/chrome path — what a real
+ *                                     mouse does: title drags, edge snap,
+ *                                     border resizes. No SID: the scene
+ *                                     routes the event
+ *   wmctl sdrag X1 Y1 X2 Y2           press-move-release at screen coords
+ *                                     (down, midpoint + endpoint motion, up)
  *   wmctl shot SID|screen [FILE]               PPM (P6) to FILE or stdout
  *   wmctl thumb SID [MAXW MAXH] [FILE]         downscaled window thumbnail
  *                                     (todos/0063 Aero Peek; default 96x72
@@ -73,6 +85,7 @@ static int usage(void) {
         "       wmctl max SID\n"
         "       wmctl cycle [DIR]\n"
         "       wmctl menu\n"
+        "       wmctl snap left|right|up|down\n"
         "       wmctl layer SID -1|0|1\n"
         "       wmctl key SID SCANCODE [KEYSYM [MOD]]\n"
         "       wmctl keydown|keyup SID SCANCODE [KEYSYM [MOD]]\n"
@@ -82,6 +95,8 @@ static int usage(void) {
         "       wmctl drag SID X1 Y1 X2 Y2 [BUTTON]\n"
         "       wmctl hover SID X Y\n"
         "       wmctl relmove SID DX DY\n"
+        "       wmctl sdown|smove|sup X Y [BUTTON]\n"
+        "       wmctl sdrag X1 Y1 X2 Y2 [BUTTON]\n"
         "       wmctl shot SID|screen [FILE]\n"
         "       wmctl thumb SID [MAXW MAXH] [FILE]\n"
         "       wmctl glass 0|1\n"
@@ -324,6 +339,43 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "menu")) {         /* Start menu toggle (todos/0078) */
         return wmp_cmd(fd, WMP_MENU, NULL, 0) ? fail("menu refused (no WM?)") : 0;
+    }
+    if (!strcmp(cmd, "snap")) {         /* Aero Snap (todos/0095) — the
+                                           Win+arrow chord's event on the
+                                           focused window */
+        if (argc < 3) return usage();
+        static const char *dirs[4] = { "left", "right", "up", "down" };
+        int32_t d = -1;
+        for (int i = 0; i < 4; i++) if (!strcmp(argv[2], dirs[i])) d = i;
+        if (d < 0) return usage();
+        int32_t a[1] = { d };
+        return wmp_cmd(fd, WMP_SNAP, a, 1) ? fail("snap refused (no WM?)") : 0;
+    }
+    /* Screen-coordinate injection (todos/0095): the kernel's raw pointer
+     * path — hit test, chrome, title drags, snap zones — so headless tests
+     * drive what a real mouse does. No SID argument by design. */
+    if (!strcmp(cmd, "sdown") || !strcmp(cmd, "smove") || !strcmp(cmd, "sup")) {
+        if (argc < 4) return usage();
+        int32_t kind = cmd[1] == 'm' ? 0 : cmd[1] == 'd' ? 1 : 2;
+        int32_t a[4] = { kind, f32bits((float)atoi(argv[2])),
+                         f32bits((float)atoi(argv[3])),
+                         argc > 4 ? atoi(argv[4]) : 1 };
+        return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? fail("inject refused") : 0;
+    }
+    if (!strcmp(cmd, "sdrag")) {        /* screen press-move-release (0095) */
+        if (argc < 6) return usage();
+        int32_t x1 = atoi(argv[2]), y1 = atoi(argv[3]);
+        int32_t x2 = atoi(argv[4]), y2 = atoi(argv[5]);
+        int32_t btn = argc > 6 ? atoi(argv[6]) : 1;
+        int32_t mask = 1 << (btn - 1);
+        int32_t a[4] = { 1, f32bits((float)x1), f32bits((float)y1), btn };
+        if (wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4)) return fail("inject refused");
+        int32_t m[4] = { 0, f32bits((x1 + x2) / 2.0f), f32bits((y1 + y2) / 2.0f), mask };
+        if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return fail("inject refused");
+        m[1] = f32bits((float)x2); m[2] = f32bits((float)y2);
+        if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return fail("inject refused");
+        a[0] = 2; a[1] = m[1]; a[2] = m[2];
+        return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? fail("inject refused") : 0;
     }
     if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
         if (argc < 3) return usage();

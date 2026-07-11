@@ -669,6 +669,8 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   f = await readEvent(wm2);                              // drag-end echo
   check('drag-end EV_MOVED echo', f.type === WMP.EV_MOVED && f.g(0) === c1.sid,
     JSON.stringify([f.type, f.g(0)]));
+  check('a motionless title click emits NO snap drop (0095: a click is not a drag)',
+    idle(wm2));
   dact = kernel.wmPointer('down', ws.x + 8, ws.y - 6, { t: 5200 });
   check('quick second title down: title-activate', dact === 'title-activate', dact);
   kernel.wmPointer('up', ws.x + 8, ws.y - 6, { t: 5210 });
@@ -771,6 +773,110 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   f = await readEvent(wm2);
   check('MENU rides the same EV_MENU (wmctl menu = the chord)',
     f.type === WMP.EV_MENU && idle(wm2), f.type);
+
+  // ---- Aero Snap (todos/0095): mid-drag edge zones ride EV_SNAP_EDGE
+  // (enter/leave/corners), the release rides EV_SNAP_DROP { sid, edge,
+  // preX, preY } AFTER its EV_MOVED, the Win+arrow chord rides EV_SNAP_KEY
+  // under the EV_CYCLE rules, and the SNAP command is the same event
+  // (wmctl snap = the chord). Mechanism only: the kernel commits no
+  // geometry — policy (wm.c) answers with MOVE/RESIZE/SET_DST. ----
+  f = await cmd(wm2, WMP.MOVE, [c1.sid, 200, 200]);
+  check('park c1 mid-screen for the snap drag -> R_OK', f.type === WMP.R_OK);
+  await readEvent(wm2);                                // EV_MOVED echo
+  dact = kernel.wmPointer('down', 208, 194, { t: 20000 });   // grab the title
+  check('snap leg: title down starts a drag', dact === 'drag-start', dact);
+  kernel.wmPointer('move', 320, 200, {});              // mid-screen: no zone
+  check('mid-screen motion emits no snap event', idle(wm2));
+  kernel.wmPointer('move', 3, 200, {});                // the left edge zone
+  f = await readEvent(wm2);
+  check('EV_SNAP_EDGE { sid, 1 } on entering the left zone',
+    f.type === WMP.EV_SNAP_EDGE && f.g(0) === c1.sid && f.g(1) === 1,
+    JSON.stringify([f.type, f.g(0), f.g(1)]));
+  kernel.wmPointer('move', 5, 210, {});                // still inside: silent
+  check('no re-emit while the zone is unchanged', idle(wm2));
+  kernel.wmPointer('move', 320, 240, {});              // back out
+  f = await readEvent(wm2);
+  check('EV_SNAP_EDGE { sid, 0 } on leaving the zone',
+    f.type === WMP.EV_SNAP_EDGE && f.g(1) === 0, JSON.stringify([f.type, f.g(1)]));
+  kernel.wmPointer('move', 636, 4, {});                // the top-right corner
+  f = await readEvent(wm2);
+  check('corner zone reports the quarter edge (TR = 5)',
+    f.type === WMP.EV_SNAP_EDGE && f.g(1) === 5, JSON.stringify([f.type, f.g(1)]));
+  dact = kernel.wmPointer('up', 636, 4, {});
+  check('release ends the drag', dact === 'drag-end', dact);
+  f = await readEvent(wm2);
+  check('the drag-end EV_MOVED comes first', f.type === WMP.EV_MOVED && f.g(0) === c1.sid,
+    JSON.stringify([f.type, f.g(0)]));
+  f = await readEvent(wm2);
+  check('EV_SNAP_DROP { sid, edge, preX, preY } carries the zone + pre-drag spot',
+    f.type === WMP.EV_SNAP_DROP && f.g(0) === c1.sid && f.g(1) === 5 &&
+    f.g(2) === 200 && f.g(3) === 200 && idle(wm2),
+    JSON.stringify([f.type, f.g(0), f.g(1), f.g(2), f.g(3)]));
+  check('the kernel committed no geometry itself (mechanism only)',
+    kernel.wmList().find(s => s.sid === c1.sid).w === 100);
+  // A plain drop (no zone): EV_SNAP_DROP { sid, 0 } — the drag-off signal.
+  const sw1 = kernel.wmList().find(s => s.sid === c1.sid);
+  dact = kernel.wmPointer('down', sw1.x + 20, sw1.y - 6, { t: 30000 });
+  check('second snap drag starts', dact === 'drag-start', dact);
+  kernel.wmPointer('move', 300, 300, {});
+  kernel.wmPointer('up', 300, 300, {});
+  await readEvent(wm2);                                // EV_MOVED
+  f = await readEvent(wm2);
+  check('plain drop rides EV_SNAP_DROP { sid, 0 }',
+    f.type === WMP.EV_SNAP_DROP && f.g(0) === c1.sid && f.g(1) === 0 && idle(wm2),
+    JSON.stringify([f.type, f.g(1)]));
+  // The chord: GUI+arrow (either GUI bit), keyup swallowed, plain arrows
+  // pass through — the EV_CYCLE rules exactly.
+  kact = kernel.wmKey(true, 80, 1073741904, 0x400, false);   // LGUI+Left
+  check('Win+Left intercepted', kact === 'snap', kact);
+  f = await readEvent(wm2);
+  check('EV_SNAP_KEY { 0 } for Left', f.type === WMP.EV_SNAP_KEY && f.g(0) === 0,
+    JSON.stringify([f.type, f.g(0)]));
+  kact = kernel.wmKey(false, 80, 1073741904, 0x400, false);
+  check('snap chord keyup swallowed (no half-chord to the app)',
+    kact === 'snap' && drainRing(ring1).length === 0);
+  kernel.wmKey(true, 79, 0, 0x800, false);             // RGUI+Right
+  f = await readEvent(wm2);
+  check('RGUI works too: EV_SNAP_KEY { 1 } for Right',
+    f.type === WMP.EV_SNAP_KEY && f.g(0) === 1, JSON.stringify([f.g(0)]));
+  kernel.wmKey(false, 79, 0, 0x800, false);
+  kernel.wmKey(true, 82, 0, 0x400, false);             // Up
+  f = await readEvent(wm2);
+  check('EV_SNAP_KEY { 2 } for Up', f.type === WMP.EV_SNAP_KEY && f.g(0) === 2);
+  kernel.wmKey(false, 82, 0, 0x400, false);
+  kernel.wmKey(true, 81, 0, 0x400, false);             // Down
+  f = await readEvent(wm2);
+  check('EV_SNAP_KEY { 3 } for Down', f.type === WMP.EV_SNAP_KEY && f.g(0) === 3);
+  kernel.wmKey(false, 81, 0, 0x400, false);
+  check('plain arrow (no GUI) still reaches the app', (() => {
+    kernel.wmKey(true, 80, 1073741904, 0, false);
+    kernel.wmKey(false, 80, 1073741904, 0, false);
+    const r = drainRing(ring1);
+    return r.length === 2 && r[0].w[0] === 80;
+  })());
+  f = await cmd(wm2, WMP.SNAP, [1]);
+  check('SNAP command -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('SNAP rides the same EV_SNAP_KEY (wmctl snap = the chord)',
+    f.type === WMP.EV_SNAP_KEY && f.g(0) === 1 && idle(wm2),
+    JSON.stringify([f.type, f.g(0)]));
+  // INJECT_SCREEN (todos/0095): screen coords through the full wmPointer
+  // path — a complete headless title drag, chrome included.
+  const iw = kernel.wmList().find(s => s.sid === c1.sid);
+  f = await cmd(wm2, WMP.INJECT_SCREEN, [1, f32bits(iw.x + 8), f32bits(iw.y - 6), 1]);
+  check('INJECT_SCREEN down -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.INJECT_SCREEN, [0, f32bits(iw.x + 58), f32bits(iw.y + 44), 1]);
+  check('INJECT_SCREEN move -> R_OK', f.type === WMP.R_OK);
+  f = await cmd(wm2, WMP.INJECT_SCREEN, [2, f32bits(iw.x + 58), f32bits(iw.y + 44), 1]);
+  check('INJECT_SCREEN up -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('screen-injected title drag moved the window (+50,+50)',
+    f.type === WMP.EV_MOVED && f.g(1) === iw.x + 50 && f.g(2) === iw.y + 50,
+    JSON.stringify([f.type, f.g(1), f.g(2), iw.x, iw.y]));
+  f = await readEvent(wm2);
+  check('...and rode the drop event out (edge 0)',
+    f.type === WMP.EV_SNAP_DROP && f.g(1) === 0 && idle(wm2),
+    JSON.stringify([f.type, f.g(1)]));
 
   // ---- z layers (todos/0038): SET_LAYER pins furniture above (+1, the
   // taskbar) or below (-1, the desktop layer) the normal windows; EVERY

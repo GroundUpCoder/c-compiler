@@ -668,6 +668,63 @@ design, not worth policy). Storm-authoring gotchas for round 3 live in
 chrome, taskbar-button focus-then-minimize semantics, `&;` hush parse
 error, `__osScreen` only tracks the viewport on VT2).
 
+## Implementation status — Aero Snap (landed 2026-07-11, todos/0095)
+
+The mechanism/policy split holds exactly. Kernel side: the title drag
+(which the kernel owns) tracks the POINTER against WM_SNAP_MARGIN (8px)
+screen-edge zones and, only with a WM subscribed AND once the pointer
+has traveled WM_SNAP_SLOP (4px) from the mousedown — a click, jitter
+included, is not a drag: without that gate the double-click's first
+click emitted a drop and un-maximized the window — emits WMP
+`EV_SNAP_EDGE {sid, edge}` on every zone change (edge 0 = left it;
+1 L / 2 R / 3 top / 4-7 corners) and `EV_SNAP_DROP {sid, edge, preX,
+preY}` at the release of every drag that moved, AFTER the drag-end
+EV_MOVED — preX/preY is the pre-drag position (stashed at drag-start)
+so policy can save the true floating rect. Win+arrow (arrows with either GUI bit) is a
+wmKey chord under the exact EV_CYCLE rules — subscriber-gated, both
+edges swallowed, plain arrows pass through — emitting `EV_SNAP_KEY
+{dir}`; the `SNAP {dir}` command (`wmctl snap left|right|up|down`) rides
+the same event; R_ERR with no WM (snap IS policy). New agent surface:
+`INJECT_SCREEN {kind, xf32, yf32, a}` / `wmctl sdown|smove|sup|sdrag` —
+SCREEN-coordinate injection through the full wmPointer hit-test/chrome
+path, which is what makes headless title-drag tests possible at all
+(INJECT_POINTER is post-hit-test client injection by design). The
+kernel commits NO geometry and keeps NO snap state.
+
+wm.c side: per-window `snapped` edge + the shared saved-floating-rect
+(sx/sy/sw/sh — written once on leaving the floating state, kept across
+snap-to-snap moves; maximize refactored onto the same save/restore
+helpers, so top-snap IS the 0025 maximize state and the title-bar
+toggle restores snap too). Geometry: halves split the 0025 work area;
+quarters also split the height with the bottom row dropped one TITLE_H
+(both stacked title bars stay reachable); fixed-size windows letterbox
+via the same aspect-fit `fit_dst` SET_DST maximize uses, centered in
+the half/quarter. The preview is one more piece of wm furniture: a
+borderless SDL_WINDOW_TRANSPARENT window ("snappreview") over the
+target rect painted once with 0x50-alpha white + a 0xC0 2px border —
+the 0063 per-pixel-alpha composite does the translucency in both
+compositors; parked at its EV_CREATED echo on the top layer with the
+peek-style focus hand-back. Drag-off (EV_SNAP_DROP edge 0 on a
+snapped/maximized window) restores the floating SIZE at the drop point
+— Win7 restores mid-drag; at-release keeps the kernel drag untouched (a
+recorded simplification). EV_SNAP_KEY: Left/Right snap to halves with
+wrap-across when pressing toward the held edge; Up maximizes; Down
+restores snapped/maximized, minimizes floating. EV_SCREEN re-fits
+snapped windows like maximized ones. A border-resize of a snapped
+window deliberately does NOT clear the snap state (the RESIZE echo is
+indistinguishable from our own snap configure; recorded, minor).
+
+Tests: `tests/kernel/test_snap_e2e.js` (21 checks: drag-to-edge via
+sdown/smove/sup, exact preview src-over pixels out of `wmctl shot
+screen`, drag-off, quarters, the full wmctl-snap ladder, fixed-size
+letterbox + restore, no-WM refusal + intact plain drags) + mechanism
+legs in test_wm.js/test_wm_policy.js (zone enter/leave/corner events,
+drop payload, chord edges/pass-through, SNAP + INJECT_SCREEN commands)
++ `tests/browser/os-snap.mjs` (real-mouse drags: preview pixel
+mid-drag, top = maximize, left half, Meta+arrow chords; NB winbox
+toggles its fill on ANY keydown — the unswallowed Meta down flips
+orange↔green once per chord, and the test tracks that).
+
 ## Implementation status — context menus (landed 2026-07-11, todos/0091)
 
 Right-click raises a popup on the four planned surfaces. wm.c side: a

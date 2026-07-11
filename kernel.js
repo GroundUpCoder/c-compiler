@@ -452,6 +452,12 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *                                   path into the SAME EV_MENU the Ctrl+Esc
  *                                   chord emits; R_ERR with no subscriber,
  *                                   since the menu IS policy)
+ *   SNAP { direction }           -> R_OK | R_ERR   (todos/0095: fire the
+ *                                   Aero Snap gesture — the wmctl-snap path
+ *                                   into the SAME EV_SNAP_KEY the Win+arrow
+ *                                   chord emits; direction 0 left / 1 right
+ *                                   / 2 up / 3 down; R_ERR with no
+ *                                   subscriber, since snap IS policy)
  *   SET_LAYER { sid, layer }     -> R_OK | R_ERR   (todos/0038: pin the
  *                                   surface to a z LAYER — -1 below normal
  *                                   windows (the desktop layer), 0 normal,
@@ -464,6 +470,11 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
  *     (xf32/yf32 = wheelX/wheelY, a=direction) | 4 rel (todos/0018:
  *     xf32/yf32 = dx/dy deltas, a=buttons); sid 0 = focused window
+ *   INJECT_SCREEN { kind, xf32, yf32, a }                  -> R_OK | R_ERR
+ *     (todos/0095) SCREEN-coordinate injection into wmPointer — the full
+ *     hit-test/chrome path a real mouse takes, so headless tests can drive
+ *     title drags, edge snap, border resizes; kind: 0 move (a=buttons) |
+ *     1 down | 2 up (a=button)
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
  *   THUMB { sid, maxW, maxH }    -> R_SHOT { sid, w, h, rgba } | R_ERR
  *                                   (todos/0063 Aero Peek: the front buffer
@@ -508,7 +519,21 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * passes through to the focused app; policy walks focus and sends FOCUS) |
  * EV_MENU { } (todos/0078: the Start chord — Esc with Ctrl held — or a
  * MENU command; the same no-subscriber pass-through rule; policy toggles
- * the Start menu).
+ * the Start menu) | EV_SNAP_EDGE { sid, edge } (todos/0095: mid-title-drag
+ * the pointer entered (edge > 0) or left (edge 0) a screen-edge snap zone
+ * — policy shows/hides the translucent preview; edges: 1 left, 2 right,
+ * 3 top, 4 TL, 5 TR, 6 BL, 7 BR; only emitted with a subscriber) |
+ * EV_SNAP_DROP { sid, edge, x0, y0 } (todos/0095: a title drag that MOVED
+ * — past WM_SNAP_SLOP; a motionless click emits nothing — was released;
+ * edge is the zone it dropped in, 0 for a plain drop; x0/y0 is the PRE-drag
+ * position so policy can save the true floating rect on a snap commit;
+ * policy commits the snap geometry, or restores a snapped window's floating
+ * size on a drag-off; emitted after the drag-end EV_MOVED, only with a
+ * subscriber) |
+ * EV_SNAP_KEY { direction } (todos/0095: the Win+arrow chord — arrows with
+ * GUI held — or a SNAP command; 0 left / 1 right / 2 up / 3 down; the same
+ * no-subscriber pass-through rule as EV_CYCLE; policy snaps the focused
+ * window to halves, maximizes, restores/minimizes).
  *
  * MUST MATCH the C client header (os/wm_proto.h) and the scripted client
  * in tests/kernel/test_wm_policy.js. */
@@ -535,7 +560,17 @@ var WMP = {
                                         into the same EV_MENU the Ctrl+Esc
                                         chord emits. R_ERR with no subscribed
                                         WM (the menu IS policy) */
+  SNAP: 0x1D,                        /* { direction }: fire the Aero Snap
+                                        gesture (todos/0095) — the wmctl-snap
+                                        path into the same EV_SNAP_KEY the
+                                        Win+arrow chord emits. R_ERR with no
+                                        subscribed WM (snap IS policy) */
   INJECT_KEY: 0x20, INJECT_POINTER: 0x21,
+  INJECT_SCREEN: 0x22,               /* { kind, xf32, yf32, a }: screen-coord
+                                        pointer injection through the full
+                                        wmPointer hit-test/chrome path
+                                        (todos/0095) — headless title drags,
+                                        edge snap, border resizes */
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   THUMB: 0x32,                       /* { sid, maxW, maxH }: downscaled
                                         front-buffer thumbnail (todos/0063,
@@ -560,6 +595,25 @@ var WMP = {
                                         — policy toggles the Start menu; the
                                         same no-subscriber pass-through rule
                                         as EV_CYCLE */
+  EV_SNAP_EDGE: 0x8D,                /* { sid, edge }: mid-title-drag zone
+                                        change (todos/0095) — the pointer
+                                        entered (edge 1-7) or left (0) a
+                                        screen-edge snap zone; policy raises
+                                        or drops the translucent preview */
+  EV_SNAP_DROP: 0x8E,                /* { sid, edge, x0, y0 }: title drag
+                                        released (todos/0095) — after the
+                                        EV_MOVED, and only if it MOVED past
+                                        WM_SNAP_SLOP (a click is not a
+                                        drag); edge > 0 commits a snap
+                                        (x0/y0 = the pre-drag position, the
+                                        floating rect to save), edge 0 on a
+                                        snapped window is the drag-off
+                                        restore; only with a subscriber */
+  EV_SNAP_KEY: 0x8F,                 /* { direction }: the Win+arrow chord
+                                        or a SNAP command (todos/0095) —
+                                        0 L / 1 R / 2 U / 3 D; the EV_CYCLE
+                                        pass-through rule; policy acts on
+                                        the focused window */
 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -587,6 +641,16 @@ var WM_MAP_TIMEOUT_MS = 200;                 // map-on-placement backstop (todos
 var WM_ANIM_MS = 200;                        // minimize/restore compositor animation
                                              // length (todos/0063) — records older
                                              // than this are pruned from wmScene()
+var WM_SNAP_MARGIN = 8;                      // Aero Snap edge-zone width (todos/0095):
+                                             // a mid-drag pointer within this many px
+                                             // of a screen edge is "in the zone";
+                                             // corners are within it on both axes
+var WM_SNAP_SLOP = 4;                        // ...and none of it arms until the
+                                             // pointer travels this far from the
+                                             // title mousedown — a CLICK (or its
+                                             // jitter) is not a drag: no zone
+                                             // events, no EV_SNAP_DROP (a drop on
+                                             // a maximized window would restore it)
 var WM_COLORS = {                            // RGBA byte tuples
   desktop: [0, 128, 128, 255],               // the teal
   titleFocused: [0, 0, 128, 255],            // navy
@@ -3166,6 +3230,16 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
     if (down) this._wmEmit(WMP.EV_MENU, []);
     return 'menu';
   }
+  // Aero Snap (todos/0095): arrows with GUI (Win/Cmd) held ride WMP
+  // EV_SNAP_KEY under the same rules — only with a WM subscribed (else the
+  // app gets its GUI+arrow), keyup swallowed, repeat keeps snapping.
+  // Scancodes 79-82 = Right/Left/Down/Up; direction 0 L / 1 R / 2 U / 3 D.
+  var sc95 = scancode | 0;
+  if (sc95 >= 79 && sc95 <= 82 && (mod & 0xC00) && this._wmSubs.size) {
+    if (down) this._wmEmit(WMP.EV_SNAP_KEY,
+      [sc95 === 80 ? 0 : sc95 === 79 ? 1 : sc95 === 82 ? 2 : 3]);
+    return 'snap';
+  }
   if (!this._focusSid) return false;
   return this._wmEventTo(this._focusSid,
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
@@ -3208,6 +3282,28 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       // is the dst rect, todos/0024).
       ds.x = Math.max(40 - ds.dstW, Math.min(ds.x, this._wmScreen.w - 40));
       ds.y = Math.max(WM_TITLE_H, Math.min(ds.y, this._wmScreen.h - 8));
+      // Aero Snap zones (todos/0095): the POINTER (not the window) within
+      // WM_SNAP_MARGIN of a screen edge is a snap gesture — mechanism only:
+      // the kernel tracks the zone and tells the WM on every change
+      // (EV_SNAP_EDGE, edge 0 = left the zone), policy draws the preview
+      // and commits at the drop. Nothing arms until the pointer travels
+      // WM_SNAP_SLOP from the mousedown: a click (jitter included) is not
+      // a drag. No subscriber, no zones — the drag is byte-identical to
+      // pre-0095 (kernel-chrome has no snap, by design).
+      if (!d.moved &&
+          (Math.abs(x - (d.x0 + d.dx)) > WM_SNAP_SLOP ||
+           Math.abs(y - (d.y0 + d.dy)) > WM_SNAP_SLOP))
+        d.moved = true;
+      if (this._wmSubs.size && d.moved) {
+        var sm = WM_SNAP_MARGIN, sw = this._wmScreen.w, sh = this._wmScreen.h;
+        var eL = x < sm, eR = x >= sw - sm, eT = y < sm, eB = y >= sh - sm;
+        var edge = eT && eL ? 4 : eT && eR ? 5 : eB && eL ? 6 : eB && eR ? 7
+          : eL ? 1 : eR ? 2 : eT ? 3 : 0;
+        if (edge !== (d.edge | 0)) {
+          d.edge = edge;
+          this._wmEmit(WMP.EV_SNAP_EDGE, [d.sid, edge]);
+        }
+      }
       this._wmVersion++;
       return 'drag';
     } else if (kind === 'up') {
@@ -3215,6 +3311,16 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       this._wmDrag = null;
       var dsurf = this._surfaces.get(dend.sid);
       if (dsurf) this._wmEmit(WMP.EV_MOVED, [dsurf.sid, dsurf.x, dsurf.y]);
+      // The snap drop (todos/0095): after the EV_MOVED so policy's model
+      // holds the drop position. Emitted for every drag that actually
+      // MOVED (past WM_SNAP_SLOP) with a subscriber — edge 0 is the
+      // drag-off-restore signal for a snapped/maximized window, and a
+      // motionless title click must NOT restore (the double-click's first
+      // click is exactly that). x0/y0 = the pre-drag position (see
+      // drag-start), so a snap commit can save the true floating rect.
+      if (dsurf && dend.moved && this._wmSubs.size)
+        this._wmEmit(WMP.EV_SNAP_DROP,
+          [dsurf.sid, dend.edge | 0, dend.x0 | 0, dend.y0 | 0]);
       return 'drag-end';
     }
   }
@@ -3336,7 +3442,10 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           this._wmEmit(WMP.EV_TITLE_ACTIVATE, [s.sid]);
           return 'title-activate';
         }
-        this._wmDrag = { sid: s.sid, dx: x - s.x, dy: y - s.y };
+        // x0/y0: the pre-drag position — EV_SNAP_DROP carries it so policy
+        // can save the true floating rect for a later restore (todos/0095;
+        // the drag-end EV_MOVED has already overwritten the live one).
+        this._wmDrag = { sid: s.sid, dx: x - s.x, dy: y - s.y, x0: s.x, y0: s.y };
         return 'drag-start';
       }
       return 'title';
@@ -3551,6 +3660,17 @@ Kernel.prototype.wmCycle = function (dir) {
 Kernel.prototype.wmMenu = function () {
   if (!this._wmSubs.size) return false;
   this._wmEmit(WMP.EV_MENU, []);
+  return true;
+};
+
+/* Fire the Aero Snap gesture (todos/0095) — the same EV_SNAP_KEY the
+ * Win+arrow chord emits, so wmctl snap and the keyboard share ONE policy
+ * path in /bin/wm. Mechanism only: the kernel keeps no snap state; policy
+ * holds the per-window snap edge and the saved floating rect. Refuses
+ * without a subscriber (snap IS policy — nothing would ever answer). */
+Kernel.prototype.wmSnap = function (dir) {
+  if (!this._wmSubs.size) return false;
+  this._wmEmit(WMP.EV_SNAP_KEY, [dir & 3]);
   return true;
 };
 
@@ -3960,6 +4080,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.ACTIVATE: ok(this.wmTitleActivate(g(0))); break;
     case WMP.CYCLE: ok(this.wmCycle(g(0))); break;
     case WMP.MENU: ok(this.wmMenu()); break;           // Start menu (0078)
+    case WMP.SNAP: ok(this.wmSnap(g(0))); break;       // Aero Snap (0095)
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
@@ -3978,6 +4099,17 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
         : kind === 'wheel' ? { wheelX: gf(2), wheelY: gf(3), direction: g(4) }
         : { button: g(4) };
       ok(this.wmInjectPointer(g(0), kind, gf(2), gf(3), opts));
+      break;
+    }
+    case WMP.INJECT_SCREEN: {
+      // Screen-coordinate injection (todos/0095): the raw wmPointer path —
+      // hit test, chrome, title drags, snap zones — exactly what the UI
+      // bridge feeds it. wmPointer always reports what happened, so this
+      // never fails; R_OK doubles as the sequencing barrier.
+      var sKind = ['move', 'down', 'up'][g(0)] || 'move';
+      var sOpts = sKind === 'move' ? { buttons: g(3) } : { button: g(3) || 1 };
+      this.wmPointer(sKind, gf(1), gf(2), sOpts);
+      ok(true);
       break;
     }
     case WMP.SHOT: case WMP.SHOT_SCREEN: case WMP.THUMB: {

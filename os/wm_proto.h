@@ -63,7 +63,20 @@ enum {
                                           into the same EV_MENU the Ctrl+Esc
                                           chord emits. R_ERR with no
                                           subscribed WM (the menu IS policy) */
+    WMP_SNAP = 0x1D,                   /* { direction }: fire the Aero Snap
+                                          gesture (todos/0095) — the wmctl-
+                                          snap path into the same EV_SNAP_KEY
+                                          the Win+arrow chord emits; 0 left,
+                                          1 right, 2 up, 3 down. R_ERR with
+                                          no subscribed WM (snap IS policy) */
     WMP_INJECT_KEY = 0x20, WMP_INJECT_POINTER = 0x21,
+    WMP_INJECT_SCREEN = 0x22,          /* { kind, xf32, yf32, a }: SCREEN-
+                                          coordinate pointer injection through
+                                          the kernel's full hit-test/chrome
+                                          path (todos/0095) — headless title
+                                          drags, edge snap, border resizes;
+                                          kind 0 move (a=buttons) / 1 down /
+                                          2 up (a=button) */
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     WMP_THUMB = 0x32,                  /* { sid, maxW, maxH }: downscaled
                                           front-buffer thumbnail (todos/0063,
@@ -101,6 +114,28 @@ enum {
                                           — policy toggles the Start menu;
                                           only emitted with a subscriber, else
                                           the chord passes through */
+    WMP_EV_SNAP_EDGE = 0x8D,           /* { sid, edge }: mid-title-drag the
+                                          pointer entered (edge > 0) or left
+                                          (edge 0) a screen-edge snap zone
+                                          (todos/0095) — policy shows/hides
+                                          the translucent preview. Edges:
+                                          1 L, 2 R, 3 top, 4 TL, 5 TR, 6 BL,
+                                          7 BR; only with a subscriber */
+    WMP_EV_SNAP_DROP = 0x8E,           /* { sid, edge, x0, y0 }: a title drag
+                                          that MOVED (past the kernel's 4px
+                                          slop — a click emits nothing) was
+                                          released (todos/0095), after its
+                                          EV_MOVED — edge > 0 commits the snap
+                                          (x0/y0 = the PRE-drag position, the
+                                          floating rect policy saves); edge 0
+                                          on a snapped/maximized window is the
+                                          drag-off restore */
+    WMP_EV_SNAP_KEY = 0x8F,            /* { direction }: the Win+arrow chord
+                                          (arrows with GUI held) or a SNAP
+                                          command (todos/0095) — 0 L / 1 R /
+                                          2 U / 3 D; policy snaps the focused
+                                          window (halves, maximize, restore/
+                                          minimize); only with a subscriber */
 };
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries

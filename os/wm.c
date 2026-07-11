@@ -12,6 +12,22 @@
  * RESIZABLE bit — configure vs scale-to-fit. A wm restart forgets
  * maximize state (deliberate: restarting the WM tidies the desktop).
  *
+ * Aero Snap (todos/0095) extends that: the kernel reports the pointer
+ * crossing screen-edge zones mid-title-drag (EV_SNAP_EDGE — this process
+ * raises a translucent preview window over the target rect, the 0063
+ * alpha tier) and the drop (EV_SNAP_DROP — commit: left/right halves,
+ * corner quarters, top = the 0025 maximize; edge 0 on a snapped or
+ * maximized window restores its floating SIZE at the drop point, the
+ * drag-off rule — Win7 restores mid-drag, at-release keeps the kernel
+ * drag untouched, a recorded simplification). Win+arrow rides
+ * EV_SNAP_KEY (the EV_CYCLE chord pattern; also `wmctl snap`):
+ * Left/Right snap the focused window to halves (pressing toward its own
+ * edge wraps across the screen), Up maximizes, Down restores a snapped/
+ * maximized window and minimizes a floating one. Snap state and the
+ * saved floating rect live per-window HERE — like maximize, a wm
+ * restart forgets them. Fixed-size windows letterbox into their half or
+ * quarter with the same aspect-fit SET_DST maximize uses.
+ *
  * The Start menu (todos/0028, restyled Win95-classic by todos/0078) is a
  * set of borderless SDL windows in this same process, created on
  * Start-button click (or the Ctrl+Esc chord / `wmctl menu` — WMP EV_MENU,
@@ -165,8 +181,14 @@ typedef struct {
                                           maximize dispatch bit (todos/0025) */
     int maximized;                     /* maximize state lives HERE, not in
                                           the kernel (todos/0025) */
-    int32_t sx, sy, sw, sh;            /* saved geometry for restore: x, y,
-                                          and w/h (resizable) or dst (fixed) */
+    int snapped;                       /* Aero Snap edge (todos/0095): 0
+                                          floating, 1 L, 2 R, 4-7 quarters
+                                          (top snap becomes maximized) */
+    int32_t sx, sy, sw, sh;            /* saved FLOATING geometry for
+                                          restore: x, y, and w/h (resizable)
+                                          or dst (fixed) — written once on
+                                          leaving the floating state, kept
+                                          across snap-to-snap moves */
     uint32_t stamp;                    /* focus recency (EV_FOCUS/CREATED) —
                                           the cycling order (todos/0032) */
     char title[32];
@@ -307,6 +329,16 @@ static int peek_idle = 0;          /* hover-loss auto-dismiss countdown */
 static int peek_dirty = 0;         /* fresh thumb: repaint */
 static uint8_t peek_px[(PEEK_W - 2 * PEEK_PAD) * (PEEK_H - 2 * PEEK_PAD) * 4];
 static int peek_tw = 0, peek_th = 0;
+
+/* Snap preview state (todos/0095): a translucent borderless window (the
+ * 0063 alpha tier) covering the snap target while a title drag hovers a
+ * screen-edge zone — raised/replaced/dropped on EV_SNAP_EDGE, always gone
+ * at the drop. */
+static SDL_Window *snapprev_win;   /* NULL = hidden */
+static SDL_Surface *snapprev_surf;
+static int32_t snapprev_sid = 0;   /* EV_CREATED echo ("snappreview") */
+static int snapprev_edge = 0;      /* zone currently previewed */
+static int snapprev_x, snapprev_y, snapprev_w, snapprev_h;
 
 /* ---- 5x7 font (classic HD44780-style patterns), A-Z 0-9 - . ---- */
 static const uint8_t F_AZ[26][7] = {
@@ -474,25 +506,156 @@ static void maximize(win_t *w) {
     }
 }
 
+/* ---- Aero Snap (todos/0095) ---- */
+
+/* Client rect for a snap edge in the CURRENT work area (screen minus
+ * taskbar, below the kernel title bar — the 0025 maximize metrics).
+ * Halves split the width; quarters also split the height, the bottom row
+ * shifted down one TITLE_H so both stacked title bars stay reachable.
+ * Edge 3 (top) is the full work area — used only for the preview; the
+ * commit path routes top through maximize(). */
+static void snap_rect(int edge, int32_t *x, int32_t *y, int32_t *w, int32_t *h) {
+    int32_t ww = scr_w, wh = scr_h - BAR_H - TITLE_H;
+    int32_t lw = ww / 2;
+    int32_t qh = (wh - TITLE_H) / 2;
+    int right = edge == 2 || edge == 5 || edge == 7;
+    int bottom = edge == 6 || edge == 7;
+    *x = right ? lw : 0;
+    *w = edge == 3 ? ww : (right ? ww - lw : lw);
+    *y = TITLE_H + (bottom ? qh + TITLE_H : 0);
+    *h = edge == 3 ? wh : (edge >= 4 ? (bottom ? wh - qh - TITLE_H : qh) : wh);
+}
+
+/* Stash the floating rect once, on leaving the floating state — a snap of
+ * an already-snapped/maximized window keeps the ORIGINAL rect, so any
+ * later restore lands where the user left it (Win7). */
+static void save_floating(win_t *w) {
+    if (w->maximized || w->snapped) return;
+    w->sx = w->x; w->sy = w->y;
+    w->sw = w->resizable ? w->w : w->dst_w;
+    w->sh = w->resizable ? w->h : w->dst_h;
+}
+
+/* Back to the saved floating rect — the restore half of the 0025 toggle,
+ * shared by maximize-restore, Win+Down, and unsnap. */
+static void restore_floating(win_t *w) {
+    w->maximized = 0;
+    w->snapped = 0;
+    int32_t m[3] = { w->sid, w->sx, w->sy };
+    wmp_send(sock, WMP_MOVE, m, 3);
+    int32_t g[3] = { w->sid, w->sw, w->sh };
+    wmp_send(sock, w->resizable ? WMP_RESIZE : WMP_SET_DST, g, 3);
+}
+
+/* Fill w's snap rect — the maximize() dispatch exactly: resizable gets
+ * MOVE + RESIZE, fixed-size gets the aspect-fit SET_DST centered in the
+ * box. Also re-run on EV_SCREEN while snapped (the maximize precedent). */
+static void snap_place(win_t *w) {
+    int32_t bx, by, bw, bh;
+    snap_rect(w->snapped, &bx, &by, &bw, &bh);
+    if (bw < 64 || bh < 64) return;    /* degenerate screen: skip */
+    if (w->resizable) {
+        int32_t m[3] = { w->sid, bx, by };
+        wmp_send(sock, WMP_MOVE, m, 3);
+        int32_t r[3] = { w->sid, bw, bh };
+        wmp_send(sock, WMP_RESIZE, r, 3);
+    } else {
+        int32_t d[3] = { w->sid, 0, 0 };
+        fit_dst(w, bw, bh, 0, &d[1], &d[2]);
+        int32_t m[3] = { w->sid, bx + (bw - d[1]) / 2, by + (bh - d[2]) / 2 };
+        wmp_send(sock, WMP_MOVE, m, 3);
+        wmp_send(sock, WMP_SET_DST, d, 3);
+    }
+}
+
+/* Snap w to an edge: top is the 0025 maximize (same state bit, so the
+ * title-bar toggle and Win+Down restore it identically); the rest set the
+ * per-window snap edge. The floating rect is saved on the way out of
+ * floating and survives snap-to-snap moves. */
+static void snap_to(win_t *w, int edge) {
+    if (!w || w->w <= 0 || w->h <= 0) return;
+    save_floating(w);
+    if (edge == 3) {
+        w->maximized = 1;
+        w->snapped = 0;
+        maximize(w);
+        return;
+    }
+    w->snapped = edge;
+    w->maximized = 0;
+    snap_place(w);
+}
+
 /* EV_TITLE_ACTIVATE (title double-click or wmctl max, todos/0025): toggle.
- * First activate saves geometry (w/h for resizable, dst for fixed — the
- * mode the branch will clobber) and maximizes; the second restores it. */
+ * First activate maximizes (saving the floating rect unless a snap already
+ * did); the second restores it. */
 static void title_activate(int32_t sid) {
     win_t *w = find(sid);
     if (!w || w->w <= 0 || w->h <= 0) return;
-    if (!w->maximized) {
-        w->sx = w->x; w->sy = w->y;
-        w->sw = w->resizable ? w->w : w->dst_w;
-        w->sh = w->resizable ? w->h : w->dst_h;
-        w->maximized = 1;
-        maximize(w);
-    } else {
-        w->maximized = 0;
-        int32_t m[3] = { w->sid, w->sx, w->sy };
-        wmp_send(sock, WMP_MOVE, m, 3);
-        int32_t g[3] = { w->sid, w->sw, w->sh };
-        wmp_send(sock, w->resizable ? WMP_RESIZE : WMP_SET_DST, g, 3);
+    if (!w->maximized) snap_to(w, 3);
+    else restore_floating(w);
+}
+
+/* EV_SNAP_KEY (Win+arrow, or wmctl snap — todos/0095): drive the focused
+ * window. Left/Right snap to halves — pressing toward the edge it already
+ * holds wraps to the other side ("cycle across the edge"); Up maximizes;
+ * Down restores a snapped/maximized window, minimizes a floating one. */
+static void snap_key(int dir) {
+    win_t *w = NULL;
+    for (int i = 0; i < nwins; i++)
+        if (wins[i].focused && !wins[i].minimized) { w = &wins[i]; break; }
+    if (!w || w->w <= 0 || w->h <= 0) return;
+    if (dir == 0) snap_to(w, w->snapped == 1 ? 2 : 1);
+    else if (dir == 1) snap_to(w, w->snapped == 2 ? 1 : 2);
+    else if (dir == 2) { if (!w->maximized) snap_to(w, 3); }
+    else if (dir == 3) {
+        if (w->maximized || w->snapped) restore_floating(w);
+        else {
+            int32_t a[1] = { w->sid };
+            wmp_send(sock, WMP_MINIMIZE, a, 1);
+        }
     }
+}
+
+static void snapprev_dismiss(void) {
+    if (!snapprev_win) return;
+    SDL_DestroyWindow(snapprev_win);
+    snapprev_win = NULL;
+    snapprev_surf = NULL;
+    snapprev_sid = 0;
+    snapprev_edge = 0;
+}
+
+/* Raise the snap preview for an edge zone (todos/0095): one borderless
+ * SDL_WINDOW_TRANSPARENT window over the target's outer rect (client +
+ * title band), translucent white fill under a stronger 2px border,
+ * painted ONCE — the 0063 per-pixel-alpha composite does the translucency
+ * in both compositors. Parks at its EV_CREATED echo on the top layer and
+ * hands focus straight back (the peek pattern — the dragged window must
+ * keep the focus it took at the title mousedown). */
+static void snapprev_show(int edge) {
+    if (snapprev_win && snapprev_edge == edge) return;   /* already up */
+    snapprev_dismiss();
+    int32_t bx, by, bw, bh;
+    snap_rect(edge, &bx, &by, &bw, &bh);
+    if (bw < 32 || bh < 32) return;    /* degenerate screen: no preview */
+    snapprev_x = bx;
+    snapprev_y = by - TITLE_H;         /* cover the would-be title band too */
+    snapprev_w = bw;
+    snapprev_h = bh + TITLE_H;
+    snapprev_edge = edge;
+    snapprev_win = SDL_CreateWindow("snappreview", snapprev_w, snapprev_h,
+                                    SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT);
+    if (!snapprev_win) { snapprev_edge = 0; return; }
+    snapprev_surf = SDL_GetWindowSurface(snapprev_win);
+    uint32_t *px = (uint32_t *)snapprev_surf->pixels;
+    uint32_t fillc = 0x50FFFFFFu, border = 0xC0FFFFFFu;  /* white, a=80 / a=192 */
+    for (int j = 0; j < snapprev_h; j++)
+        for (int i = 0; i < snapprev_w; i++)
+            px[j * snapprev_w + i] =
+                (j < 2 || j >= snapprev_h - 2 || i < 2 || i >= snapprev_w - 2)
+                    ? border : fillc;
+    SDL_UpdateWindowSurface(snapprev_win);
 }
 
 /* ---- launching + the Start menu (todos/0028) ---- */
@@ -1500,7 +1663,7 @@ static void ctx_open_bar(const win_t *w, int bx) {
     ctx_target = w->sid;
     ctx_nent[0] = 0;
     ctx_add(0, "RESTORE", CM_RESTORE,
-            (w->minimized || w->maximized) ? 0 : CTF_GRAY);
+            (w->minimized || w->maximized || w->snapped) ? 0 : CTF_GRAY);
     ctx_add(0, "MINIMIZE", CM_MINIMIZE, w->minimized ? CTF_GRAY : 0);
     ctx_add(0, "MAXIMIZE", CM_MAXIMIZE,
             (w->maximized || w->minimized) ? CTF_GRAY : 0);
@@ -1583,7 +1746,7 @@ static void ctx_activate(int d, int i) {
         if (w->minimized) {            /* focus restores (the 0014 rule) */
             int32_t a[1] = { target };
             wmp_send(sock, WMP_FOCUS, a, 1);
-        } else if (w->maximized) title_activate(target);
+        } else if (w->maximized || w->snapped) restore_floating(w);
         break;
     }
     case CM_MINIMIZE: {
@@ -1825,6 +1988,7 @@ static void screen_changed(void) {
     run_dismiss();                     /* likewise (todos/0078) */
     peek_dismiss();                    /* likewise (todos/0063) */
     ctx_dismiss();                     /* likewise (todos/0091) */
+    snapprev_dismiss();                /* likewise (todos/0095) */
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
@@ -1839,6 +2003,7 @@ static void screen_changed(void) {
     for (int i = 0; i < nwins; i++) {
         win_t *w = &wins[i];
         if (w->maximized) { maximize(w); continue; }   /* re-fit (todos/0025) */
+        if (w->snapped) { snap_place(w); continue; }   /* re-fit (todos/0095) */
         int nx = w->x, ny = w->y;
         if (nx > scr_w - 40) nx = scr_w - 40;
         if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
@@ -1883,6 +2048,21 @@ static void handle_event(wmp_hdr *h) {
                 wmp_send(sock, WMP_MOVE, a, 3);
                 int32_t ly[2] = { r.sid, 1 };  /* top layer, like the menu */
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
+            } else if (strncmp(r.title, "snappreview", 12) == 0) {   /* 0095 */
+                if (!snapprev_win) return;     /* dismissed before the echo */
+                snapprev_sid = r.sid;
+                int32_t a[3] = { r.sid, snapprev_x, snapprev_y };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t ly[2] = { r.sid, 1 };  /* top layer: over the drag */
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                /* The preview must not steal focus from the dragged window
+                 * (the peek hand-back). */
+                for (int i = 0; i < nwins; i++)
+                    if (wins[i].focused && !wins[i].minimized) {
+                        int32_t f[1] = { wins[i].sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                        break;
+                    }
             } else if (strncmp(r.title, "peek", 5) == 0) {   /* todos/0063 */
                 if (!peek_win) return;         /* dismissed before the echo */
                 peek_sid = r.sid;
@@ -1948,6 +2128,7 @@ static void handle_event(wmp_hdr *h) {
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
             w->resizable = (r.flags & WMP_F_RESIZABLE) ? 1 : 0;
             w->maximized = 0;          /* slots are reused: reset (0025) */
+            w->snapped = 0;            /* likewise (todos/0095) */
             w->stamp = ++zctr;         /* newest (create focuses; 0032) */
             memcpy(w->title, r.title, 32);
             w->title[31] = 0;
@@ -1968,6 +2149,7 @@ static void handle_event(wmp_hdr *h) {
         for (int d = 0; d < 2; d++)                       /* likewise (0091) */
             if (p[0] == ctx_sid[d]) ctx_sid[d] = 0;
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
+        if (p[0] == snapprev_sid) snapprev_sid = 0;       /* defensive (0095) */
         if (p[0] == desk_sid) { desk_sid = 0; desk_focused = 0; }   /* (0077) */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
          * across any close (todos/0031 — the Win95 behavior). */
@@ -2065,6 +2247,44 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_TITLE_ACTIVATE: {       /* maximize toggle (todos/0025) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         title_activate(p[0]);
+        break;
+    }
+    case WMP_EV_SNAP_EDGE: {            /* mid-drag edge zone (todos/0095) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (p[1] > 0 && find(p[0])) snapprev_show(p[1]);
+        else snapprev_dismiss();
+        break;
+    }
+    case WMP_EV_SNAP_DROP: {            /* title-drag release (todos/0095) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        snapprev_dismiss();
+        win_t *w = find(p[0]);
+        if (!w) break;
+        if (p[1] > 0) {
+            /* The drag-end EV_MOVED already put the DROP position in the
+             * model; the floating rect worth saving is the PRE-drag one
+             * the event carries. Rewind the model before snap_to saves —
+             * the snap's own MOVE echo re-syncs it right after. */
+            if (!w->snapped && !w->maximized && h->plen >= 16) {
+                w->x = p[2];
+                w->y = p[3];
+            }
+            snap_to(w, p[1]);
+        }
+        else if (w->snapped || w->maximized) {
+            /* Drag-off: restore the floating SIZE at the drop position —
+             * the preceding EV_MOVED already updated x/y in the model, so
+             * only the size goes back. */
+            w->maximized = 0;
+            w->snapped = 0;
+            int32_t g[3] = { w->sid, w->sw, w->sh };
+            wmp_send(sock, w->resizable ? WMP_RESIZE : WMP_SET_DST, g, 3);
+        }
+        break;
+    }
+    case WMP_EV_SNAP_KEY: {             /* Win+arrow / wmctl snap (0095) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        snap_key(p[0]);
         break;
     }
     case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */

@@ -40,6 +40,13 @@ third time.
   has HEARD them. Boot with speakers on: chime once at desktop, error
   MessageBox chord, applet Test ding — judge levels/pleasantness,
   retune the generator if grating (re-run + commit the wavs).
+- **Snap feel (0095 landed — operator)**: os-snap.mjs proves the
+  mechanics; judge the GESTURE at 60fps — preview appear/replace
+  latency while dragging along edges and corners, the 8px zone size
+  with a real mouse (too twitchy? too grabby near the taskbar?),
+  drag-off release feel (the size restores at RELEASE, not mid-drag —
+  the recorded simplification; decide whether it reads as broken or
+  fine), Win+arrow ladder on a snapped vs floating window.
 - Standing checklist (re-check every WM.md known-issues entry):
   - Dawn + SIGKILL (S3 caveat) — retest on the current webgpu pkg.
   - os-gpubox adapter flake — recharacterize if seen.
