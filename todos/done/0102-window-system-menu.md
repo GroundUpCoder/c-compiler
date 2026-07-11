@@ -1,6 +1,15 @@
 # 0102 — window system menu + keyboard move/resize (Alt+Space)
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). Alt+Space / `wmctl sysmenu` raise the
+  Win95 window system menu (Restore/Move/Size/Minimize/Maximize/Close) on
+  the focused window via the EV_CYCLE chord pattern (WMP EV_SYSMENU 0x91 /
+  SYSMENU 0x33, subscriber-gated, keyup swallowed, no-WM pass-through);
+  Move/Size are wm.c-side modal arrow-key states (8px nudge, Enter commits,
+  Esc reverts) with the sysmenu popup held up as the key grabber; Size
+  disabled on fixed-size windows. Image v61→v62. Dev log
+  `logs/2026-07-11/0102-window-system-menu.md`. **Deferred** (a possible
+  follow-up, filed as **todos/0116**): title-bar right-click to raise the
+  same menu (the plan's "defer to keep this keyboard-only" option).
 - **Design**: `todos/WM.md` (chrome policy: the kernel owns drag/close;
   wm.c owns policy — todos/done/0025's EV_TITLE_ACTIVATE split is the
   template). Filed by the 0076 parity sweep. Sequenced after 0091 to

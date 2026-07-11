@@ -276,6 +276,55 @@ try {
   await waitPixel(BX + 150, BY - 12, NAVY);
   check('chord again flipped back', true);
 
+  // ---- window system menu (todos/0102): Alt+Space raises the sysmenu on
+  // the focused window; keyboard-only Move commits; Close via the menu tears
+  // it down. A fresh winbox C keeps A/B (and the later legs) untouched. The
+  // chord is swallowed with a WM up, so it never toggles C's fill; keys in
+  // the mode go to the menu grabber, not the app. ----
+  await setVt(1);
+  await page.keyboard.type('winbox &\r');
+  await setVt(2);
+  const CX = 96, CY = 108;                       // cascade slot 3
+  await waitPixel(CX + 200, CY + 100, ORANGE, 60000);
+  check('third winbox (C) composited', true);
+  await clickAt(CX + 200, CY + 100);             // focus C
+  await waitPixel(CX + 150, CY - 12, NAVY);
+  const cFill = await sample(CX + 200, CY + 100);   // C's client, right of the menu
+  // Alt+Space: swallowed (C's fill unchanged) and the sysmenu appears.
+  await page.keyboard.down('Alt');
+  await page.keyboard.press('Space');
+  await page.keyboard.up('Alt');
+  await setVt(1);
+  await page.keyboard.type("wmctl list | grep -q ctxmenu$ && echo SYSMENU-U''P\r");
+  await page.waitForFunction(() => window.__osOut.includes('SYSMENU-UP'), { timeout: 20000, polling: 200 });
+  check('Alt+Space opened the window system menu', true);
+  await setVt(2);
+  check('the chord was swallowed (C fill unchanged)',
+    near(await sample(CX + 200, CY + 100), cFill), await sample(CX + 200, CY + 100));
+  // Keyboard: Down,Down -> MOVE, Enter -> move mode; arrows nudge 8px; Enter
+  // commits. Right x5 / Down x2 = +40 x, +16 y.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
+  for (let i = 0; i < 2; i++) await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');            // commit + dismiss
+  await waitPixel(CX + 240, CY + 116, ORANGE, 30000);   // window extended right
+  check('keyboard Move relocated C (+40,+16)',
+    near(await sample(CX + 5, CY + 5), TEAL), await sample(CX + 5, CY + 5));  // old corner cleared
+  // Re-open and Close via the menu (C moved to CX+40,CY+16): Down x6 -> CLOSE.
+  await page.keyboard.down('Alt');
+  await page.keyboard.press('Space');
+  await page.keyboard.up('Alt');
+  await setVt(1);
+  await page.keyboard.type("wmctl list | grep -q ctxmenu$ && echo SYSMENU2-U''P\r");
+  await page.waitForFunction(() => window.__osOut.includes('SYSMENU2-UP'), { timeout: 20000, polling: 200 });
+  await setVt(2);
+  for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');            // CLOSE
+  await waitPixel(CX + 40 + 120, CY + 16 + 80, TEAL, 30000);
+  check('Close via the sysmenu tore C down', true);
+
   // ---- taskbar always-on-top (todos/0038): drag B onto the bottom strip;
   // the bar is pinned to the TOP z layer (wm.c SET_LAYER), so it composites
   // and hit-tests ABOVE the dragged window — its buttons stay clickable. ----
@@ -332,6 +381,15 @@ try {
   await chord();
   await waitPixel(BX + 220, BY + 130, near(preToggle, ORANGE) ? GREEN : ORANGE);
   check('no WM: the chord reaches the app (fill toggled)', true);
+
+  // no WM: Alt+Space is likewise NOT recognized — the Space keydown reaches
+  // the focused app and toggles its fill back (todos/0102, the EV_CYCLE rule).
+  const preAltSpace = await sample(BX + 220, BY + 130);
+  await page.keyboard.down('Alt');
+  await page.keyboard.press('Space');
+  await page.keyboard.up('Alt');
+  await waitPixel(BX + 220, BY + 130, near(preAltSpace, ORANGE) ? GREEN : ORANGE);
+  check('no WM: Alt+Space reaches the app (fill toggled)', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   failures++;

@@ -113,6 +113,17 @@
  * clicking, for agent parity) the clock raises a "datepop" tooltip window
  * with the full date — the Aero-Peek borderless-furniture mechanism.
  *
+ * The window system menu (todos/0102): Alt+Space (WMP EV_SYSMENU, the
+ * EV_CYCLE chord pattern; also `wmctl sysmenu`) raises the Win95 sysmenu on
+ * the focused window — the taskbar-button menu (0101) plus Move/Size rows,
+ * anchored at the window's top-left, rows grayed per its state. Picking
+ * Move or Size keeps the popup up as a keyboard GRABBER (it holds kernel
+ * focus): arrows nudge the target 8px, Enter commits, Esc reverts to the
+ * stashed rect — the accessibility path to move/resize, since kernel drag
+ * is pointer-only. Size is disabled on fixed-size windows (they scale by
+ * pointer, 0024). Restore/Minimize/Maximize/Close reuse the existing
+ * chrome ops.
+ *
  * The screensaver (todos/0096): after the configured seconds of idle —
  * measured by the KERNEL (WMP GET_IDLE, polled once a second off the frame
  * tick), since this process only ever sees input over its own windows —
@@ -371,7 +382,8 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_DELETE,                     /* icon (0093: to the Recycle Bin) */
     CM_EMPTY,                      /* the Recycle Bin icon (0093) */
     CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE, /* taskbar button */
-    CM_CASCADE, CM_TILE, CM_MIN_ALL, CM_PROPERTIES  /* taskbar strip (0101) */
+    CM_CASCADE, CM_TILE, CM_MIN_ALL, CM_PROPERTIES, /* taskbar strip (0101) */
+    CM_MOVE, CM_SIZE               /* window system menu (todos/0102) */
 };
 #define CTF_SEP   1                /* separator groove row */
 #define CTF_GRAY  2                /* disabled: drawn gray, never fires */
@@ -390,6 +402,18 @@ static int ctx_child = -1;         /* root row whose flyout is open */
 static int32_t ctx_target = 0;     /* taskbar menu: the acted-on window */
 static int ctx_icon = -1;          /* icon menu: desk[] index */
 static void ctx_dismiss(void);     /* defined with the rest (0091) */
+
+/* Window system menu keyboard move/resize modes (todos/0102): after the
+ * sysmenu popup's Move/Size row fires, the popup stays up as the key
+ * grabber (its root holds kernel focus) and arrows nudge the target; Enter
+ * commits, Esc reverts to the stashed rect. sys_mode 0 none / 1 move / 2
+ * size. */
+static int sys_mode = 0;
+static int32_t sys_target = 0;
+static int32_t sys_x0, sys_y0, sys_w0, sys_h0;  /* pre-mode rect (Esc revert) */
+#define SYS_STEP 8                 /* arrow nudge, in px */
+#define SYS_MIN_W 96               /* size-mode floor (matches the tile grid) */
+#define SYS_MIN_H 96
 static void desk_delete(void);     /* likewise (0093 — desk_key's Del) */
 static void menu_dismiss(void);    /* these three likewise (0096 —
                                       saver_show clears every popup
@@ -2104,6 +2128,8 @@ static void ctx_dismiss(void) {
     ctx_depth = 0;
     ctx_target = 0;
     ctx_icon = -1;
+    sys_mode = 0;                  /* any dismiss ends a move/size (0102) */
+    sys_target = 0;
 }
 
 static void ctx_add(int d, const char *label, int id, int flags) {
@@ -2341,6 +2367,99 @@ static void ctx_new_entry(int is_dir) {
     desk_dirty = 1;
 }
 
+/* The window system menu (todos/0102): the Win95 Alt+Space menu — the
+ * taskbar-button menu (0101) plus Move/Size rows — anchored at the target
+ * window's top-left. Rows gray per the window's state: Restore only when
+ * off the floating rect, Move/Maximize disabled while minimized, Size only
+ * on a resizable window (fixed-size scales by pointer, 0024), Maximize off
+ * when already maximized. */
+static void ctx_open_sysmenu(const win_t *w) {
+    ctx_dismiss();
+    ctx_target = w->sid;
+    ctx_icon = -1;
+    ctx_nent[0] = 0;
+    ctx_add(0, "RESTORE", CM_RESTORE,
+            (w->minimized || w->maximized || w->snapped) ? 0 : CTF_GRAY);
+    ctx_add(0, "MOVE", CM_MOVE, w->minimized ? CTF_GRAY : 0);
+    ctx_add(0, "SIZE", CM_SIZE, (w->minimized || !w->resizable) ? CTF_GRAY : 0);
+    ctx_add(0, "MINIMIZE", CM_MINIMIZE, w->minimized ? CTF_GRAY : 0);
+    ctx_add(0, "MAXIMIZE", CM_MAXIMIZE,
+            (w->maximized || w->minimized) ? CTF_GRAY : 0);
+    ctx_add(0, "", CM_NONE, CTF_SEP);
+    ctx_add(0, "CLOSE", CM_CLOSE, 0);
+    /* Anchor just under the title bar's top-left; the ctx_openwin clamp
+     * keeps it on-screen (right/bottom edges). */
+    ctx_openwin(0, w->x, w->y);
+}
+
+/* End a keyboard move/size (todos/0102): optionally revert to the stashed
+ * rect, tear the popup grabber down, and hand focus back to the window we
+ * were driving (the popup took it at open). */
+static void sys_end(int revert) {
+    win_t *w = find(sys_target);
+    if (revert && w) {
+        if (sys_mode == 1) {
+            int32_t g[3] = { w->sid, sys_x0, sys_y0 };
+            wmp_send(sock, WMP_MOVE, g, 3);
+            w->x = sys_x0; w->y = sys_y0;
+        } else {
+            int32_t g[3] = { w->sid, sys_w0, sys_h0 };
+            wmp_send(sock, WMP_RESIZE, g, 3);
+            w->w = sys_w0; w->h = sys_h0;
+        }
+    }
+    int32_t tgt = sys_target;
+    sys_mode = 0;
+    sys_target = 0;
+    ctx_dismiss();
+    if (find(tgt)) {
+        int32_t f[1] = { tgt };
+        wmp_send(sock, WMP_FOCUS, f, 1);
+    }
+}
+
+/* Enter a keyboard move (1) or size (2) mode from the sysmenu (todos/0102).
+ * The popup stays up as the key grabber (do NOT dismiss); arrows nudge the
+ * target. Size is refused on a fixed-size window (its row is grayed anyway,
+ * so this is defensive). */
+static void sys_enter(int mode) {
+    win_t *w = find(ctx_target);
+    if (!w || w->w <= 0 || w->h <= 0) { ctx_dismiss(); return; }
+    if (mode == 2 && !w->resizable) return;
+    sys_mode = mode;
+    sys_target = w->sid;
+    sys_x0 = w->x; sys_y0 = w->y; sys_w0 = w->w; sys_h0 = w->h;
+}
+
+/* Arrow-key nudge while a move/size mode is live (todos/0102). Enter
+ * commits, Esc reverts; the ordinary MOVE/RESIZE ops drive it (the echo
+ * re-syncs the model). Non-arrow keys are swallowed so the mode stays
+ * modal — only Enter/Esc leave it. */
+static void sys_key(int sym) {
+    win_t *w = find(sys_target);
+    if (!w) { sys_end(0); return; }
+    if (sym == SDLK_ESCAPE) { sys_end(1); return; }
+    if (sym == SDLK_RETURN) { sys_end(0); return; }
+    int dx = 0, dy = 0;
+    if (sym == SDLK_LEFT) dx = -SYS_STEP;
+    else if (sym == SDLK_RIGHT) dx = SYS_STEP;
+    else if (sym == SDLK_UP) dy = -SYS_STEP;
+    else if (sym == SDLK_DOWN) dy = SYS_STEP;
+    else return;
+    if (sys_mode == 1) {
+        int32_t g[3] = { w->sid, w->x + dx, w->y + dy };
+        wmp_send(sock, WMP_MOVE, g, 3);
+        w->x += dx; w->y += dy;
+    } else {
+        int nw = w->w + dx, nh = w->h + dy;
+        if (nw < SYS_MIN_W) nw = SYS_MIN_W;
+        if (nh < SYS_MIN_H) nh = SYS_MIN_H;
+        int32_t g[3] = { w->sid, nw, nh };
+        wmp_send(sock, WMP_RESIZE, g, 3);
+        w->w = nw; w->h = nh;
+    }
+}
+
 /* Fire row i of column d. Grayed/separator rows never fire; sub rows
  * cascade. Real commands snapshot their argument, dismiss, then act —
  * dismissal first so a spawned child's create-focus finds no popup. */
@@ -2349,6 +2468,10 @@ static void ctx_activate(int d, int i) {
     ctx_ent *e = &ctx_ents[d][i];
     if (e->flags & (CTF_SEP | CTF_GRAY)) return;
     if (e->flags & CTF_SUB) { ctx_open_flyout(i); return; }
+    /* Move/Size keep the popup as the key grabber — enter the mode instead
+     * of dismissing (todos/0102). Everything else dismisses then acts. */
+    if (e->id == CM_MOVE) { sys_enter(1); return; }
+    if (e->id == CM_SIZE) { sys_enter(2); return; }
     int id = e->id;
     int32_t target = ctx_target;
     int icon = ctx_icon;
@@ -2438,6 +2561,10 @@ static void ctx_motion(int d, float fy) {
  * DEEPEST column, Right/Enter cascade a sub row, Left backs out of the
  * flyout, Esc dismisses — the menu_key pattern (0078). */
 static void ctx_key(int sym) {
+    /* A live move/size mode owns the keys (todos/0102): the popup is still
+     * up (ctx_depth > 0) as the grabber, but arrows drive the target and
+     * Enter/Esc end the mode — the menu nav is suspended until then. */
+    if (sys_mode) { sys_key(sym); return; }
     int d = ctx_depth - 1;
     int n = ctx_nent[d];
     if (sym == SDLK_ESCAPE) { ctx_dismiss(); return; }
@@ -2834,6 +2961,7 @@ static void handle_event(wmp_hdr *h) {
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
         if (p[0] == snapprev_sid) snapprev_sid = 0;       /* defensive (0095) */
         if (p[0] == saver_sid) saver_sid = 0;             /* defensive (0096) */
+        if (sys_mode && p[0] == sys_target) sys_end(0);   /* target gone (0102) */
         if (p[0] == desk_sid) { desk_sid = 0; desk_focused = 0; }   /* (0077) */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
          * across any close (todos/0031 — the Win95 behavior). */
@@ -2974,6 +3102,12 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_SAVER: {                /* wmctl saver / Preview (0096) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
         saver_force();
+        break;
+    }
+    case WMP_EV_SYSMENU: {              /* Alt+Space / wmctl sysmenu (0102) */
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        win_t *w = find(p[0]);          /* the focused sid it carries */
+        if (w && !w->minimized) ctx_open_sysmenu(w);
         break;
     }
     case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */

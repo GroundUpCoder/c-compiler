@@ -831,7 +831,9 @@ activate() (0092's file ops grow here); taskbar button =
 Restore/Minimize/Maximize/Close over the chrome ops this process already
 owns (grayed rows never fire and leave the menu open; Start strip stays
 reserved, the empty strip/clock/Show-Desktop region grew the 0101
-taskbar-strip menu, title bars still reserved for 0102).
+taskbar-strip menu; 0102 landed the window system menu as an Alt+Space /
+`wmctl sysmenu` chord — title-bar right-click to raise it was deferred, a
+possible follow-up).
 Fix that fell out: the START menu's EV_FOCUS dismissal is now gated on
 its root echo (`mcol[0].sid`, the 0078 run-dialog precedent) — without
 it, menu_toggle's ctx_dismiss makes focus fall to an app window and that
@@ -850,6 +852,48 @@ Tests: `tests/kernel/test_ctxmenu_e2e.js` (42 checks; geometry goldens
 `tests/browser/os-ctxmenu.mjs` (real right-clicks + keyboard nav, VT1
 shell verification). Test traps recorded in
 `logs/2026-07-11/0091-context-menus.md`.
+
+## Implementation status — window system menu (landed 2026-07-11, todos/0102)
+
+The classic Win95 Alt+Space menu, the accessibility path to move/resize a
+window (kernel drag stays pointer-only). Kernel mechanism is the EV_CYCLE
+chord pattern once more: **Space with Alt held** at the `wmKey` seam
+emits **WMP EV_SYSMENU 0x91** carrying the FOCUSED sid (subscriber-gated,
+keyup swallowed, no-WM pass-through); **`wmctl sysmenu` / WMP SYSMENU
+0x33** ride the same event (R_ERR with no subscriber — the menu IS
+policy). MUST-MATCH trio: the kernel.js WMP block ↔ os/wm_proto.h ↔
+test_wm_policy.js. Right-click on the title bar was left as a possible
+follow-up (kept keyboard + wmctl only, the plan's "defer" option).
+
+wm.c side: `ctx_open_sysmenu(w)` reuses the 0091 popup furniture — a
+"ctxmenu" root anchored at the window's top-left with rows
+Restore/Move/Size/Minimize/Maximize/[SEP]/Close, grayed per state
+(Restore only off the floating rect; Move/Maximize disabled while
+minimized; **Size only on a resizable window** — fixed-size scales by
+pointer, 0024; Maximize off when already maximized). Restore/Minimize/
+Maximize/Close reuse the existing chrome ops (`restore_floating`,
+WMP_MINIMIZE, `title_activate`, WMP_CLOSE_REQ).
+
+Move/Size are a wm.c-side modal state machine (`sys_mode` 0/1/2,
+`sys_target`, the stashed `sys_x0..h0`): picking the row does NOT dismiss
+the popup — it stays up as the **key grabber** (its root holds kernel
+focus, so injected/real keys land on it). `ctx_key` routes to `sys_key`
+while `sys_mode` is set: arrows nudge the target 8px via ordinary
+MOVE/RESIZE (echo re-syncs the model), non-arrow keys are swallowed
+(modal), **Enter commits**, **Esc reverts** to the stashed rect; `sys_end`
+tears the popup down and hands focus back to the window. Any `ctx_dismiss`
+clears the mode; a dying target (`EV_DESTROYED == sys_target`) ends it.
+Recorded v1 simplification: the popup stays VISIBLE during the mode (the
+window slides out from under it) rather than Win95's hidden-menu +
+move-outline — the grabber IS the popup, no separate outline window.
+
+Tests: `tests/kernel/test_wm_policy.js` (EV_SYSMENU chord round-trip —
+gated, keyup swallowed, plain Space passes, SYSMENU command = the chord) +
+`tests/kernel/test_wm_service_e2e.js` (real wm.c: sysmenu opens, Move+
+arrows relocate +32/+16 and Enter commits, Esc reverts, Size grows the
+resizable winbox +32/+32, Size disabled on fixbox, Close tears down) +
+`tests/browser/os-wm.mjs` (Alt+Space opens the menu, keyboard-only Move
+commits, Close via the menu, and no-WM Alt+Space reaches the app).
 
 ## Implementation status — Recycle Bin, desktop side (landed 2026-07-11, todos/0093)
 

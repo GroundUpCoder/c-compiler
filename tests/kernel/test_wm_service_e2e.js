@@ -60,6 +60,10 @@ const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;    // window-local click y
 // Context-menu row center (todos/0091 geometry: 4px pad, 20px rows) — the
 // 0101 taskbar-strip menu rows (Cascade 0, Tile 1, Minimize All 2).
 const rowY101 = (i) => 4 + i * 20 + 10;
+// Window system-menu row centers (todos/0102): RESTORE/MOVE/SIZE/MINIMIZE/
+// MAXIMIZE, an 8px SEP, then CLOSE — so rows past the sep shift down by
+// MENU_SEP_H (8). Reuses the 0091 ctx geometry (4px pad, 20px rows).
+const rowYsys = (i) => (i < 5 ? 4 + i * 20 : 4 + 5 * 20 + 8 + (i - 6) * 20) + 10;
 const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
 const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
 
@@ -528,6 +532,106 @@ const script = [
   'sleep 0.4',
   'echo ==tp7',
   'wmctl list',
+
+  // ---- window system menu (todos/0102): Alt+Space / wmctl sysmenu opens
+  // the sysmenu on the FOCUSED window; Move enters keyboard-move mode (the
+  // popup stays up as the key grabber), arrows nudge 8px, Enter commits,
+  // Esc reverts; Size grows a resizable window and is disabled on fixbox;
+  // Close via the menu tears the window down. Fresh winbox + fixbox so the
+  // leg is independent of the earlier state churn. ----
+  'winbox & winbox fixed &',
+  'sleep 4',
+  'SWSID=$(wmctl list | grep winbox$ | tail -1 | sed "s/[^0-9].*//")',
+  'SFSID=$(wmctl list | grep fixbox$ | tail -1 | sed "s/[^0-9].*//")',
+  'echo swsid=$SWSID sfsid=$SFSID',
+  'wmctl focus $SWSID',
+  'sleep 0.3',
+  'echo ==smB',
+  'wmctl list',                                   // pre-move geom
+  'wmctl sysmenu && echo sysmenu-ok',
+  'sleep 0.4',
+  'echo ==smC',
+  'wmctl list',                                   // ctxmenu (sysmenu) up
+  'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE -> keyboard-move mode
+  'sleep 0.3',
+  'echo ==smD',
+  'wmctl list',                                   // popup STILL up (grabber)
+  'wmctl key $SMSID 79 1073741903',               // Right x4 = +32 x
+  'wmctl key $SMSID 79 1073741903',
+  'wmctl key $SMSID 79 1073741903',
+  'wmctl key $SMSID 79 1073741903',
+  'wmctl key $SMSID 81 1073741905',               // Down x2 = +16 y
+  'wmctl key $SMSID 81 1073741905',
+  'sleep 0.3',
+  'echo ==smE',
+  'wmctl list',                                   // winbox moved +32,+16
+  'wmctl key $SMSID 40 13',                        // Enter -> commit + dismiss
+  'sleep 0.3',
+  'echo ==smF',
+  'wmctl list',                                   // popup gone, at moved pos
+  // Esc reverts: re-open, Move, nudge, Esc -> back to the smF position
+  'wmctl focus $SWSID',
+  'wmctl sysmenu',
+  'sleep 0.3',
+  'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE again
+  'sleep 0.3',
+  'wmctl key $SMSID 80 1073741904',               // Left x3 = -24 x (mid-mode)
+  'wmctl key $SMSID 80 1073741904',
+  'wmctl key $SMSID 80 1073741904',
+  'sleep 0.2',
+  'echo ==smG',
+  'wmctl list',                                   // shows the -24 mid-move
+  'wmctl key $SMSID 41 27',                        // Esc -> revert
+  'sleep 0.3',
+  'echo ==smH',
+  'wmctl list',                                   // back to the smF position
+  // Size grows the resizable winbox
+  'wmctl focus $SWSID',
+  'wmctl sysmenu',
+  'sleep 0.3',
+  'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE -> keyboard-size mode
+  'sleep 0.3',
+  'wmctl key $SMSID 79 1073741903',               // Right x4 = +32 w
+  'wmctl key $SMSID 79 1073741903',
+  'wmctl key $SMSID 79 1073741903',
+  'wmctl key $SMSID 79 1073741903',
+  'wmctl key $SMSID 81 1073741905',               // Down x4 = +32 h
+  'wmctl key $SMSID 81 1073741905',
+  'wmctl key $SMSID 81 1073741905',
+  'wmctl key $SMSID 81 1073741905',
+  'sleep 0.6',                                    // RESIZE round-trips the ack
+  'wmctl key $SMSID 40 13',                        // Enter -> commit
+  'sleep 0.5',
+  'echo ==smSize',
+  'wmctl list',                                   // winbox grew +32,+32
+  // Size is disabled on the fixed-size fixbox: the row is grayed, so a click
+  // never enters size mode and an arrow leaves the window untouched.
+  'wmctl focus $SFSID',
+  'wmctl sysmenu',
+  'sleep 0.3',
+  'echo ==smFixPre',
+  'wmctl list',
+  'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE (grayed) -> no-op
+  'wmctl key $SMSID 79 1073741903',               // Right -> ignored (no mode)
+  'wmctl key $SMSID 79 1073741903',
+  'sleep 0.3',
+  'echo ==smFix',
+  'wmctl list',                                   // fixbox unchanged, popup up
+  'wmctl key $SMSID 41 27',                        // Esc -> dismiss the popup
+  'sleep 0.3',
+  // Close via the menu tears the winbox down
+  'wmctl focus $SWSID',
+  'wmctl sysmenu',
+  'sleep 0.3',
+  'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $SMSID 60 ${rowYsys(6)}`,          // CLOSE (row 6, after the sep)
+  'sleep 0.6',
+  'echo ==smClose',
+  'wmctl list',                                   // winbox gone
   '',
 ].join('\n');
 
@@ -1046,6 +1150,58 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('datepop is shot-able (pixels live)', out.includes('date-shot-ok'));
   check('a second clock-cell click toggles the tooltip off',
     row(tp7, 'datepop') === '', JSON.stringify(tp7));
+}
+
+// ---- window system menu (todos/0102): Alt+Space / wmctl sysmenu, keyboard
+// move (Enter commits / Esc reverts), keyboard size, Close via the menu ----
+{
+  const smB = section('smB'), smC = section('smC'), smD = section('smD'),
+        smE = section('smE'), smF = section('smF'), smG = section('smG'),
+        smH = section('smH'), smSize = section('smSize'),
+        smFixPre = section('smFixPre'), smFix = section('smFix'),
+        smClose = section('smClose');
+  const swsid = parseInt((/swsid=(\d+)/.exec(out) || [])[1]);
+  const sfsid = parseInt((/sfsid=(\d+)/.exec(out) || [])[1]);
+  const rowSid = (sec, sid) => sec.split('\n').find(l => parseInt(l) === sid) || '';
+  const xy = (line) => {
+    const m = /(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/.exec(geom(line));
+    return m ? { w: +m[1], h: +m[2], x: +m[3], y: +m[4] } : null;
+  };
+  check('wmctl sysmenu succeeds on the focused window', out.includes('sysmenu-ok'));
+  check('sysmenu opens the popup (anchored at the window top-left)',
+    row(smC, 'ctxmenu') !== '', JSON.stringify(smC));
+  check('picking Move keeps the popup up as the key grabber',
+    row(smD, 'ctxmenu') !== '', JSON.stringify(smD));
+  const pre = xy(rowSid(smB, swsid)), moved = xy(rowSid(smE, swsid));
+  check('Move + arrows relocate the window (+32 x, +16 y)',
+    pre && moved && moved.x === pre.x + 32 && moved.y === pre.y + 16,
+    JSON.stringify([pre, moved]));
+  const committed = xy(rowSid(smF, swsid));
+  check('Enter commits the move and dismisses the popup',
+    row(smF, 'ctxmenu') === '' && committed &&
+    committed.x === moved.x && committed.y === moved.y,
+    JSON.stringify([committed, row(smF, 'ctxmenu')]));
+  const midEsc = xy(rowSid(smG, swsid)), reverted = xy(rowSid(smH, swsid));
+  check('mid-mode arrows nudge (-24 x) before Esc',
+    midEsc && committed && midEsc.x === committed.x - 24,
+    JSON.stringify([committed, midEsc]));
+  check('Esc reverts to the pre-mode position and dismisses',
+    row(smH, 'ctxmenu') === '' && reverted && committed &&
+    reverted.x === committed.x && reverted.y === committed.y,
+    JSON.stringify([committed, reverted]));
+  const sized = xy(rowSid(smSize, swsid));
+  check('Size grows the resizable winbox (+32 w, +32 h)',
+    sized && pre && sized.w === pre.w + 32 && sized.h === pre.h + 32,
+    JSON.stringify([pre, sized]));
+  const fixPre = xy(rowSid(smFixPre, sfsid)), fixPost = xy(rowSid(smFix, sfsid));
+  check('Size is disabled on the fixed-size fixbox (gray row: click + arrows are no-ops)',
+    row(smFix, 'ctxmenu') !== '' && fixPre && fixPost &&
+    fixPre.w === fixPost.w && fixPre.h === fixPost.h &&
+    fixPre.x === fixPost.x && fixPre.y === fixPost.y,
+    JSON.stringify([fixPre, fixPost, row(smFix, 'ctxmenu') !== '']));
+  check('Close via the sysmenu tears the window down',
+    rowSid(smClose, swsid) === '', JSON.stringify(
+      smClose.split('\n').filter(l => l.endsWith('\twinbox'))));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

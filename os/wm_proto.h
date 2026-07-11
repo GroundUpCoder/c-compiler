@@ -94,6 +94,12 @@ enum {
                                           rgba }, aspect-fit inside
                                           maxW x maxH, never upscaled;
                                           deterministic box filter */
+    WMP_SYSMENU = 0x33,                /* { }: fire the window system-menu
+                                          gesture (todos/0102) — wmctl sysmenu
+                                          into the same EV_SYSMENU the
+                                          Alt+Space chord emits (carries the
+                                          FOCUSED sid). R_ERR with no
+                                          subscribed WM (the menu IS policy) */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
     WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (todos/
@@ -155,6 +161,13 @@ enum {
                                           Preview; policy raises the
                                           configured screensaver at once;
                                           only with a subscriber */
+    WMP_EV_SYSMENU = 0x91,             /* { sid }: the Alt+Space chord or a
+                                          SYSMENU command (todos/0102) —
+                                          policy raises the window system menu
+                                          (Restore/Move/Size/Minimize/Maximize/
+                                          Close) on that (the focused) window;
+                                          only with a subscriber, else the
+                                          chord passes through */
 };
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries

@@ -774,6 +774,33 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('MENU rides the same EV_MENU (wmctl menu = the chord)',
     f.type === WMP.EV_MENU && idle(wm2), f.type);
 
+  // ---- the window system menu (todos/0102): Space with Alt held rides
+  // EV_SYSMENU under the exact EV_CYCLE rules — subscriber-gated, keyup
+  // swallowed, plain Space passes through; the event carries the FOCUSED
+  // sid (policy raises the menu on it); the SYSMENU command is the same
+  // event (wmctl sysmenu = the chord). ----
+  const fsid = kernel.wmScene().focusSid;
+  kact = kernel.wmKey(true, 44, 32, 0x300, false);     // Alt+Space down
+  check('Alt+Space intercepted', kact === 'sysmenu', kact);
+  f = await readEvent(wm2);
+  check('EV_SYSMENU carries the focused sid',
+    f.type === WMP.EV_SYSMENU && f.g(0) === fsid,
+    JSON.stringify([f.type, f.g(0), fsid]));
+  kact = kernel.wmKey(false, 44, 32, 0x300, false);    // keyup swallowed
+  check('sysmenu chord keyup swallowed (no half-chord to the app)',
+    kact === 'sysmenu' && drainRing(ring1).length === 0);
+  check('plain Space (no Alt) still reaches the app', (() => {
+    kernel.wmKey(true, 44, 32, 0, false);
+    kernel.wmKey(false, 44, 32, 0, false);
+    const r = drainRing(ring1);
+    return r.length === 2 && r[0].w[0] === 44;
+  })());
+  f = await cmd(wm2, WMP.SYSMENU, []);
+  check('SYSMENU command -> R_OK', f.type === WMP.R_OK);
+  f = await readEvent(wm2);
+  check('SYSMENU rides the same EV_SYSMENU (wmctl sysmenu = the chord)',
+    f.type === WMP.EV_SYSMENU && f.g(0) === fsid && idle(wm2), f.type);
+
   // ---- Aero Snap (todos/0095): mid-drag edge zones ride EV_SNAP_EDGE
   // (enter/leave/corners), the release rides EV_SNAP_DROP { sid, edge,
   // preX, preY } AFTER its EV_MOVED, the Win+arrow chord rides EV_SNAP_KEY

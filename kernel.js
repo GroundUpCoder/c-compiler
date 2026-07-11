@@ -606,6 +606,12 @@ var WMP = {
                                         (never upscaled). Deterministic box
                                         filter — CPU pixels, so gpu-transport
                                         surfaces thumb black like wmScreenshot */
+  SYSMENU: 0x33,                     /* { }: fire the window system-menu
+                                        gesture (todos/0102) — the wmctl-sysmenu
+                                        path into the same EV_SYSMENU the
+                                        Alt+Space chord emits (carries the
+                                        focused sid). R_ERR with no subscribed
+                                        WM (the menu IS policy) */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (todos/
                                         0096) — its own type so /bin/wm's
@@ -650,6 +656,12 @@ var WMP = {
                                         Preview button; policy raises the
                                         configured screensaver immediately;
                                         only emitted with a subscriber */
+  EV_SYSMENU: 0x91,                  /* { sid }: the Alt+Space chord or a
+                                        SYSMENU command (todos/0102) — policy
+                                        raises the window system menu on that
+                                        (the focused) window; the EV_CYCLE
+                                        pass-through rule (no subscriber, the
+                                        chord reaches the app unchanged) */
 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
@@ -3284,6 +3296,14 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
       [sc95 === 80 ? 0 : sc95 === 79 ? 1 : sc95 === 82 ? 2 : 3]);
     return 'snap';
   }
+  // Window system menu (todos/0102): Space with Alt held — the classic
+  // Alt+Space chord — rides WMP EV_SYSMENU under the same rules: only with
+  // a WM subscribed (else the app gets its Alt+Space), keyup swallowed. The
+  // event carries the FOCUSED sid so policy raises the menu on it.
+  if ((scancode | 0) === 44 && (mod & 0x300) && this._wmSubs.size) {
+    if (down) this._wmEmit(WMP.EV_SYSMENU, [this._focusSid | 0]);
+    return 'sysmenu';
+  }
   if (!this._focusSid) return false;
   return this._wmEventTo(this._focusSid,
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
@@ -3742,6 +3762,18 @@ Kernel.prototype.wmSaver = function () {
   return true;
 };
 
+/* Fire the window system-menu gesture (todos/0102) — the same EV_SYSMENU the
+ * Alt+Space chord emits, so wmctl sysmenu and the keyboard share ONE policy
+ * path in /bin/wm (Restore/Move/Size/Minimize/Maximize/Close). Carries the
+ * currently-focused sid; policy raises the menu on it (ignores sid 0).
+ * Mechanism only: the kernel keeps no menu state. Refuses without a
+ * subscriber (the menu IS policy — nothing would ever answer). */
+Kernel.prototype.wmSysMenu = function () {
+  if (!this._wmSubs.size) return false;
+  this._wmEmit(WMP.EV_SYSMENU, [this._focusSid | 0]);
+  return true;
+};
+
 /* Minimize: off screen + out of hit-testing, still listed. Focus falls via
  * _wmFocusFall (topmost normal-layer window first — todos/0039). Restore =
  * wmFocus (which un-minimizes). */
@@ -4153,6 +4185,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       conn.peer.send(this._wmpFrame(WMP.R_IDLE, [this.wmIdleMs()]));
       break;
     case WMP.SAVER: ok(this.wmSaver()); break;         // screensaver (0096)
+    case WMP.SYSMENU: ok(this.wmSysMenu()); break;     // window sys menu (0102)
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
     case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
