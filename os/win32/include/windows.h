@@ -667,6 +667,7 @@ typedef struct tagCREATESTRUCT {
 #define WM_CLEAR         0x0303
 #define WM_UNDO          0x0304
 #define WM_GETDLGCODE    0x0087
+#define WM_NEXTDLGCTL    0x0028
 #define WM_KEYDOWN       0x0100
 #define WM_KEYUP         0x0101
 #define WM_CHAR          0x0102
@@ -694,6 +695,23 @@ typedef struct tagCREATESTRUCT {
 #define WM_MOUSEWHEEL    0x020A
 #define WM_USER          0x0400
 #define WM_APP           0x8000
+
+/* Dialog manager (0104): default-button id + WM_GETDLGCODE reply bits. */
+#define DM_GETDEFID      (WM_USER + 0)
+#define DM_SETDEFID      (WM_USER + 1)
+#define DC_HASDEFID      0x534B      /* DM_GETDEFID HIWORD sentinel */
+
+#define DLGC_WANTARROWS      0x0001
+#define DLGC_WANTTAB         0x0002
+#define DLGC_WANTALLKEYS     0x0004
+#define DLGC_WANTMESSAGE     0x0004
+#define DLGC_HASSETSEL       0x0008
+#define DLGC_DEFPUSHBUTTON   0x0010
+#define DLGC_UNDEFPUSHBUTTON 0x0020
+#define DLGC_RADIOBUTTON     0x0040
+#define DLGC_WANTCHARS       0x0080
+#define DLGC_STATIC          0x0100
+#define DLGC_BUTTON          0x2000
 
 /* WM_SIZE wParam */
 #define SIZE_RESTORED  0
@@ -968,6 +986,8 @@ HWND GetCapture(void);
 HWND GetParent(HWND hwnd);
 HWND GetDlgItem(HWND parent, int id);
 int  GetDlgCtrlID(HWND hwnd);
+HWND GetNextDlgTabItem(HWND dlg, HWND ctl, BOOL prev);
+HWND GetNextDlgGroupItem(HWND dlg, HWND ctl, BOOL prev);
 BOOL EnumChildWindows(HWND parent, WNDENUMPROC fn, LPARAM lp);
 int  GetWindowText(HWND hwnd, LPSTR buf, int max);
 BOOL SetWindowText(HWND hwnd, LPCSTR text);

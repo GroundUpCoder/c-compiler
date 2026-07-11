@@ -85,6 +85,100 @@ Frictions, in order of pain:
 3. **Registry (`advapi32`)** — a small file-backed hive.
 4. **`OVERLAPPED`/IOCP and COM** — deferred; stub with clear failures.
 
+## Scope boundary — we take the GUI toolkit, not the rest of Windows
+
+The reason to take Win32 at all is the GUI toolkit (§"Why Win32"): a
+persistent, agent-queryable HWND tree, a 30-year battle-tested widget
+set, and a real OSS corpus. That is the *only* part of Windows we want.
+The console/shell/batch world is explicitly **not** on the roadmap, and
+this section records why so it isn't re-litigated.
+
+### The CLI-convention decision (0111, POSIX-first stands)
+
+POSIX is the first-class CLI convention everywhere in the system — hush
+is `/bin/sh`, `compiler.js` and all `tools/*.js` parse only `-`/`--`,
+and absolute paths are `/`-rooted. The only place Windows' `/`-as-flag
+convention exists is *inside* the veneer, and it stays contained there.
+
+The `/`-flag vs `/`-path ambiguity is **self-inflicted**: real Windows
+never has it, because `/` means "flag" precisely *because* `\` is the
+path separator (`dir /s` and `C:\foo` never collide). We manufactured
+the collision by presenting POSIX `/`-paths to Win32 apps. Two clean
+resolutions existed:
+
+- **(A) POSIX paths + quote every arg** — the synthesized
+  `GetCommandLineW` (`kernel32.c` `proc_info_init`) quotes every arg
+  after argv0, so a bare `/root/x` arrives as `"/root/x"` and each
+  port's option loop falls through to its standard quote-strip branch
+  instead of eating `/r` as a switch. Minimal, contained. **This is
+  what we do** (fixed 0111; notepad's `HandleCommandLine` was the
+  trigger). It bets each app's arg parser has a quote-strip fallback —
+  the MSVCRT `argv` splitter does; the GUI corpus holds.
+- **(B) Present authentic Windows paths** (`C:\...`, backslashes) to
+  Win32 apps at the boundary, killing the ambiguity with zero hacks —
+  but only worth its pervasive cost if you commit to Windows *console*
+  apps (below). Not chosen.
+
+Rule: Windows CLI conventions never leak past the veneer boundary into
+the POSIX layer. `/`-flag needs are handled **per-app, on demand**, the
+way the corpus already grows via `PORTS.md` — so far only notepad
+needed it.
+
+### The real fork: the Console API is the expensive subsystem; cmd is downstream
+
+"Port a batch shell (ReactOS `cmd`)" sounds like the way to get more
+Windows CLI, but cmd is not the cost — the subsystem *under* it is, and
+nothing in the corpus consumes it. As of 2026-07-11 the veneer has:
+
+- **No Console API at all.** All of `AllocConsole`, `WriteConsoleW`,
+  `ReadConsoleInputW`, `GetConsoleScreenBufferInfo`, `Get/SetConsoleMode`,
+  `SetConsoleCursorPosition`, `WriteConsoleOutput`,
+  `SetConsoleTextAttribute` are **absent**. `GetStdHandle`
+  (`kernel32.c`) exists but returns plain file handles over fds 0/1/2 —
+  not a console. Veneer apps do stdio via libc `printf` /
+  `WriteFile`/`ReadFile` (thin `write()`/`read()` wrappers).
+- **No console-input event channel.** stdin is a pure line-discipline
+  byte tty; there is no `INPUT_RECORD` anywhere. `term` synthesizes
+  bytes/escape sequences from SDL key events (`term.c` `handle_key`).
+  cmd's raw-mode editor (arrow-key history, F7, doskey) reads keyed
+  `INPUT_RECORD`s that would have to be synthesized back out of the
+  tty byte stream — the nasty gap.
+- **No environment-variable API.** `Get/SetEnvironmentVariableW`,
+  `GetEnvironmentStringsW` absent; `CreateProcessW` ignores its env
+  block (`(void)env`). Cheap to add, but net-new. (The process/file/
+  find surface cmd needs — `CreateProcessW`, `WaitForSingleObject`,
+  `GetExitCodeProcess`, `Get/SetCurrentDirectoryW`,
+  `FindFirstFileW`/`FindNextFileW` — is present and real.)
+
+Rough effort to get cmd actually running: env-var API ~½ day; **cooked**
+Console API (console-backed `GetStdHandle`, `Get/SetConsoleMode`,
+`WriteConsoleW`/`ReadConsoleW` over the tty) a few days; **full** Console
+API (screen buffer, cursor, `WriteConsoleOutput`, attributes→ANSI,
+`INPUT_RECORD` synthesis) 1–2 weeks; then cmd itself (ReactOS
+`base/shell/cmd`, ~15–20k LOC — batch parser + dozens of built-ins,
+most of which **re-implement busybox coreutils we already ship**) another
+1–2 weeks plus a long tail. Call it **3–5 focused weeks, ~80 % in a
+conhost-equivalent subsystem**, for **zero current consumers** and a
+shell strictly worse than the hush already running as pid 1. Against the
+almost-POSIX north star — where the Windows story is running *GUI*
+apps — that is a bad trade.
+
+### Decision
+
+- **cmd / batch is a non-goal.** Not on the queue. Don't vendor
+  `base/shell/cmd`.
+- The GUI corpus stays first-class and grows on demand (`PORTS.md`).
+- **Win32 console apps are a separate, demand-gated decision.** The
+  question is never "port cmd" — it's "do we want to run Win32 *console*
+  apps at all?" If yes, the deliberate investment is the **Console API
+  subsystem** (that's the reusable unlock for the whole console-port
+  class, and it's what would finally make option (B) authentic-paths
+  worth it). Even then, port a small self-contained console app as the
+  acceptance target first; cmd becomes an *optional* demo on top, never
+  the reason to build the subsystem. ~90 % of the "we support Windows
+  CLI" story comes from the Console API alone, without the 15k-LOC shell
+  that re-implements `ls` and `cp`.
+
 ## Staging (the queue)
 
 `0057` gdi32 (CPU→shm drawing) → `0058` user32 (windowing + standard
@@ -177,7 +271,8 @@ FR_DOWN), and ChooseFont/PrintDlg/PageSetupDlg as honest cancels; the
 comctl32 STATUS BAR (self-bottom-parking, SB_SETPARTS/SB_SETTEXTW,
 parts joined in WM_GETTEXT for the agent). user32 grew
 RegisterWindowMessageW (per-process atoms — both protocol ends live in
-one process here), Get/SetWindowPlacement, a minimal IsDialogMessageW,
+one process here), Get/SetWindowPlacement, IsDialogMessageW (Tab-order navigation
+landed with todos/0104 — see below),
 MB_YESNOCANCEL (the save prompt; the type nibble now picks the button
 set properly), SetProcessDefaultLayout/WinHelpW no-ops; gdi32 grew
 SetMapMode (MM_TEXT only) + loud-failing StartDoc-family stubs;
@@ -283,6 +378,31 @@ copyrighted. Tests: `tests/kernel/test_sounds_e2e.js` +
 `tests/browser/os-sounds.mjs` + the ctlpanel e2e Sounds legs; the
 0017 pump grew spent-tail reclaim (WM.md Lifecycle) with a
 `test_audio.js` case.
+
+0104 (dialog keyboard, 2026-07-11) made dialogs keyboard-native — the
+0058 descope ("no Tab-order navigation") coming due. `IsDialogMessageW`
+grew the full pre-translation: **Tab/Shift+Tab** walk the WS_TABSTOP
+controls (`GetNextDlgTabItem`, depth-first creation order, wrap),
+**Alt+mnemonic** jumps/presses the `&`-marked control (buttons press;
+STATIC hands focus to the next tabstop — the Win32 label rule),
+**Enter** fires the DEFPUSHBUTTON (or a focused pushbutton, or a newline
+in a multiline edit), **Esc** = IDCANCEL (else IDOK, else the legacy
+WM_CLOSE), and **arrows** move within a WS_GROUP radio run
+(`GetNextDlgGroupItem`, auto-checking). Routing is generic: every
+standard control answers `WM_GETDLGCODE` (EDIT flags WANTALLKEYS only
+for VK_RETURN when multiline, so Tab still navigates), so app custom
+controls participate. It's wired into BOTH modal loops
+(DialogBoxParamW's template path AND MessageBox's #32770), and DefDlgProc
+gained DM_GETDEFID/DM_SETDEFID/WM_NEXTDLGCTL. Rendering followed:
+pushbutton/checkbox/static labels underline the mnemonic glyph, the
+default button draws the classic black outline. LISTBOX picked up
+PageUp/PageDown along the way. The `os/win32/ctldemo.rc` → `ctldemo.res`
+sidecar seeds an Options template dialog (mnemonic'd `&Name`/`&Verbose`/
+`&OK`/`&Cancel`) as the acceptance surface. Tests:
+`tests/kernel/test_user32_e2e.js` (session B drives Tab/mnemonic/default/
+Esc via the kernel INJECT_KEY path, `wmctl key SID SC SYM MOD`, MOD 256 =
+LALT; the MessageBox leg too) + `tests/browser/os-user32.mjs` (the real
+page keyboard). winmine's custom-board dialog gained Tab/Enter for free.
 
 ## Corpus status (0060 landed 2026-07-10)
 

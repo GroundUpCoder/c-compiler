@@ -130,6 +130,35 @@ try {
   check('wmctl click OK dismisses the modal -> IDOK', true);
   await setVt(2);
 
+  // 0104 dialog keyboard: open the Options template dialog (mouse), then
+  // drive it purely with the REAL page keyboard — typing into the
+  // first-tabstop edit, Alt+V toggling the Verbose checkbox mnemonic, and
+  // Enter firing the DEFPUSHBUTTON. The shell marker carries the result.
+  await new Promise(r => setTimeout(r, 400));
+  await clickAt(140 + 38, 284 + 13);             // Options button
+  await waitPixel(40 + 80, 60 + 40, BTNFACE, 30000);
+  check('Options dialog composited', true);
+  await new Promise(r => setTimeout(r, 400));
+  await page.keyboard.type('hi', { delay: 50 }); // into the focused edit
+  await new Promise(r => setTimeout(r, 200));
+  await page.keyboard.down('Alt');               // Alt+V: mnemonic toggle
+  await new Promise(r => setTimeout(r, 60));
+  await page.keyboard.press('KeyV');
+  await new Promise(r => setTimeout(r, 60));
+  await page.keyboard.up('Alt');
+  await new Promise(r => setTimeout(r, 200));
+  await page.keyboard.press('Enter');            // default OK
+  await waitOut("ctldemo: opt-ok name='hi' verbose=1", 30000);
+  check('template dialog fully keyboard-driven (type + mnemonic + default)', true);
+  // Reopen and dismiss with Esc -> IDCANCEL.
+  await new Promise(r => setTimeout(r, 400));
+  await clickAt(140 + 38, 284 + 13);
+  await waitPixel(40 + 80, 60 + 40, BTNFACE, 30000);
+  await new Promise(r => setTimeout(r, 400));
+  await page.keyboard.press('Escape');
+  await waitOut('ctldemo: opt-cancel', 30000);
+  check('Esc cancels the dialog -> IDCANCEL', true);
+
   // Quit via a real mouse click; desktop restored, shell alive.
   await clickAt(388 + 38, 284 + 13);
   await waitOut('ctldemo: bye');

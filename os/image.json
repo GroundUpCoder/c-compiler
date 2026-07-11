@@ -1,5 +1,5 @@
 {
-  "version": 63,
+  "version": 64,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -82,6 +82,9 @@
       },
       "/usr/bin/ctldemo": {
         "project": "os/win32/ctldemo.json"
+      },
+      "/usr/bin/ctldemo.res": {
+        "bin": "os/win32/ctldemo.res"
       },
       "/usr/bin/k32demo": {
         "project": "os/win32/k32demo.json"

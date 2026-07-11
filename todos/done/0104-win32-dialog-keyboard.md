@@ -1,6 +1,19 @@
 # 0104 — user32 dialog keyboard: Tab order, mnemonics, default button
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). IsDialogMessageW became the real dialog
+  manager — Tab/Shift+Tab (GetNextDlgTabItem), Alt+mnemonic, Enter=default
+  button, Esc=IDCANCEL, radio-group arrows (GetNextDlgGroupItem), all over a
+  new WM_GETDLGCODE across the standard controls, wired into both modal loops
+  (DialogBoxParamW + MessageBox) + DefDlgProc DM_GETDEFID/SETDEFID/
+  WM_NEXTDLGCTL. Mnemonic-underline + default-button-outline rendering,
+  LISTBOX PageUp/Down. Acceptance surface: os/win32/ctldemo.rc → ctldemo.res
+  (Options template dialog). Tests: test_user32_e2e.js session B (kernel
+  INJECT_KEY path) + MessageBox leg + os-user32.mjs browser leg (page
+  keyboard, operator-run); winmine e2e stays green. Image v63→v64. Dev log
+  logs/2026-07-11/0104-dialog-keyboard.md. No follow-ups filed — full intent
+  (Tab order, mnemonics, default button, the modal-loop wiring, LISTBOX
+  PageUp/Down) landed; notepad Save As is covered by the same generic
+  IsDialogMessageW path (its comdlg32 dialog is a #32770).
 - **Design**: `todos/WIN32.md` (USER32 surface). Filed by the 0076 parity
   sweep; this is the 0058 descope ("no Tab-order navigation
   (IsDialogMessage)" — user32.c's own header) coming due, plus the two

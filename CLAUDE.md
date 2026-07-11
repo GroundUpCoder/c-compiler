@@ -594,7 +594,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v63**.
+Image version is **v64**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

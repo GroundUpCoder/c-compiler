@@ -214,6 +214,96 @@ const sock = section('sock');
 check('agent socket unlinked at exit (only gdidemo remains)',
   (sock.match(/agent\.\d+\.sock/g) || []).length === 1, JSON.stringify(sock));
 
+/* ---- session B: the 0104 dialog keyboard (Options template dialog) ----
+ * IsDialogMessageW in DialogBoxParamW's modal loop drives Tab order,
+ * mnemonics, the default button and Esc. Keys ride the kernel INJECT_KEY
+ * path (`wmctl key SID SC SYM [MOD]`, SID 0 = focused window; MOD 256 =
+ * LALT). Focus is read from the agent tree's ` focus` marker, addressed by
+ * control id inside the "#32770" subtree (the disabled owner also carries a
+ * stale focus mark — pick by id). */
+const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-user32d-'));
+const dimage = path.join(dtmp, 'os.img');
+function bootD(script) {
+  const r = cp.spawnSync('node', [BOOT, '--image=' + dimage, '--quiet'],
+    { input: script, encoding: 'utf8', timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
+  if (r.error) throw r.error;
+  return r.stdout;
+}
+const outD = bootD([
+  'ctldemo &',
+  'sleep 4',
+  'wmctl click Options',
+  'sleep 2',
+  'echo ==dtree', 'wmctl tree', 'echo ==cut',
+  'wmctl key 0 43 9', 'sleep 1',                 // Tab: edit -> Verbose
+  'echo ==tab1', 'wmctl tree', 'echo ==cut',
+  'wmctl key 0 43 9', 'sleep 1',                 // Tab: Verbose -> OK
+  'echo ==tab2', 'wmctl tree', 'echo ==cut',
+  'wmctl key 0 43 9 1', 'sleep 1',               // Shift+Tab: OK -> Verbose
+  'echo ==stab', 'wmctl tree', 'echo ==cut',
+  'wmctl key 0 17 110 256', 'sleep 1',           // Alt+N: static mnemonic -> edit
+  'echo ==altn', 'wmctl tree', 'echo ==cut',
+  'wmctl key 0 11 104', 'wmctl key 0 12 105', 'sleep 1',   // type "hi"
+  'wmctl key 0 47 118 256', 'sleep 1',           // Alt+V: toggle Verbose
+  'wmctl key 0 40 13', 'sleep 1',                // Enter: default OK
+  'echo ==afterok', 'wmctl list', 'echo ==cut',
+  'wmctl click Options', 'sleep 2',              // reopen
+  'wmctl key 0 15 27', 'sleep 1',                // Esc -> IDCANCEL
+  'echo ==afteresc', 'wmctl list', 'echo ==cut',
+  'wmctl click Options', 'sleep 2',              // reopen
+  'wmctl key 0 46 99 256', 'sleep 1',            // Alt+C: mnemonic Cancel
+  // MessageBox (the non-template #32770) inherits the same keyboard path.
+  'wmctl click About', 'sleep 2',
+  'wmctl key 0 43 9', 'sleep 1',                 // Tab: OK -> Cancel
+  'wmctl key 0 40 13', 'sleep 1',                // Enter presses focused Cancel
+  'wmctl click About', 'sleep 2',
+  'wmctl key 0 40 13', 'sleep 1',                // Enter presses default OK
+  'wmctl click Quit', 'sleep 1',
+  '',
+].join('\n'));
+
+function sectionD(name) {
+  return (outD.split('==' + name + '\n')[1] || '').split('==cut')[0];
+}
+/* focus line of the control with the given id inside the #32770 subtree */
+function dlgFocusId(sec) {
+  const m = sec.split('class=#32770')[1] || '';
+  const line = m.split('\n').find(l => / focus /.test(l)) || '';
+  const idm = line.match(/id=(\d+)/);
+  return idm ? parseInt(idm[1], 10) : -1;
+}
+
+const dtree = sectionD('dtree');
+check('Options dialog is a #32770 with a default OK button',
+  /class=#32770[^]*text='Options'/.test(dtree) && /id=1 [^\n]*text='&OK'/.test(dtree),
+  dtree.slice(0, 400));
+check('dialog opens with focus on the first tabstop (the EDIT)',
+  dlgFocusId(dtree) === 120, dlgFocusId(dtree));
+check('Tab moves focus to the Verbose checkbox', dlgFocusId(sectionD('tab1')) === 121,
+  dlgFocusId(sectionD('tab1')));
+check('Tab moves focus to the OK button', dlgFocusId(sectionD('tab2')) === 1,
+  dlgFocusId(sectionD('tab2')));
+check('Shift+Tab reverses back to Verbose', dlgFocusId(sectionD('stab')) === 121,
+  dlgFocusId(sectionD('stab')));
+check('Alt+N (static mnemonic) hands focus to the next control (EDIT)',
+  dlgFocusId(sectionD('altn')) === 120, dlgFocusId(sectionD('altn')));
+check('typed text + Alt+V toggle + Enter default fires IDOK with the state',
+  outD.includes("ctldemo: opt-ok name='hi' verbose=1") && outD.includes('ctldemo: options=1'));
+check('dialog closed after the default button', !sectionD('afterok').includes('Options'),
+  sectionD('afterok'));
+check('Esc returns IDCANCEL', /ctldemo: opt-cancel[^]*ctldemo: options=2/.test(outD));
+check('Esc closed the dialog', !sectionD('afteresc').includes('Options'), sectionD('afteresc'));
+check('Alt+C (Cancel mnemonic) also returns IDCANCEL',
+  (outD.match(/ctldemo: options=2/g) || []).length === 2,
+  (outD.match(/ctldemo: options=2/g) || []).length);
+/* MessageBox (non-template #32770) inherits IsDialogMessageW too */
+check('MessageBox Tab moves to Cancel; Enter presses it -> IDCANCEL',
+  outD.includes('ctldemo: msgbox=2'));
+check('MessageBox Enter on the default OK -> IDOK',
+  outD.includes('ctldemo: msgbox=1'));
+
+fs.rmSync(dtmp, { recursive: true, force: true });
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nuser32 e2e: ${failures} FAILED` : '\nuser32 e2e: PASS');
 process.exit(failures ? 1 : 0);

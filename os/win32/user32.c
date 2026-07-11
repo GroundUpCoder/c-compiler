@@ -50,8 +50,11 @@
  *   - single-threaded by design (WIN32.md friction #1) — one queue, no
  *     PostThreadMessage; SendMessage is a direct call
  *   - invalidation is whole-window (rcPaint = the client rect)
- *   - no Tab-order navigation (IsDialogMessage); the clipboard landed
- *     with 0048 (file) and rides the kernel store since 0090
+ *   - dialog keyboard navigation landed with 0104: IsDialogMessageW does
+ *     Tab/Shift+Tab (WS_TABSTOP walk), Alt+mnemonic, Enter=default button,
+ *     Esc=IDCANCEL, radio-group arrows, over WM_GETDLGCODE; wired into both
+ *     modal loops. The clipboard landed with 0048 (file) and rides the
+ *     kernel store since 0090
  *   - hidden top-levels: ShowWindow(SW_HIDE) on a top-level is a no-op
  *     (the kernel surface has no hide op; minimize is the WM's)
  *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) is per-
@@ -2601,6 +2604,53 @@ HWND GetDlgItem(HWND parent, int id) {
 
 int GetDlgCtrlID(HWND h) { return h ? h->id : 0; }
 
+/* Dialog navigation (0104): the controls in creation (Z) order, depth
+ * first — GetNextDlgTabItem walks WS_TABSTOP members, GetNextDlgGroupItem
+ * the WS_GROUP-bounded run around a control (radio arrows). */
+static int dlg_collect(HWND h, HWND *arr, int cap, int n) {
+    for (HWND c = h->child; c && n < cap; c = c->next) {
+        arr[n++] = c;
+        n = dlg_collect(c, arr, cap, n);
+    }
+    return n;
+}
+
+HWND GetNextDlgTabItem(HWND dlg, HWND ctl, BOOL prev) {
+    if (!dlg) return NULL;
+    HWND arr[128];
+    int n = dlg_collect(dlg, arr, 128, 0);
+    if (!n) return NULL;
+    int idx = -1;
+    for (int i = 0; i < n; i++) if (arr[i] == ctl) { idx = i; break; }
+    for (int step = 1; step <= n; step++) {
+        int i = idx < 0 ? (prev ? n - step : step - 1)
+                        : ((idx + (prev ? -step : step)) % n + n) % n;
+        HWND c = arr[i];
+        if ((c->style & WS_TABSTOP) && hwnd_shown(c) && hwnd_able(c)) return c;
+    }
+    return NULL;
+}
+
+HWND GetNextDlgGroupItem(HWND dlg, HWND ctl, BOOL prev) {
+    if (!dlg || !ctl) return ctl;
+    HWND arr[128];
+    int n = dlg_collect(dlg, arr, 128, 0);
+    int idx = -1;
+    for (int i = 0; i < n; i++) if (arr[i] == ctl) { idx = i; break; }
+    if (idx < 0) return ctl;
+    int lo = idx;                                /* group is [lo, hi) */
+    while (lo > 0 && !(arr[lo]->style & WS_GROUP)) lo--;
+    int hi = idx + 1;
+    while (hi < n && !(arr[hi]->style & WS_GROUP)) hi++;
+    int span = hi - lo;
+    for (int step = 1; step <= span; step++) {
+        int rel = (((idx - lo) + (prev ? -step : step)) % span + span) % span;
+        HWND c = arr[lo + rel];
+        if (hwnd_shown(c) && hwnd_able(c)) return c;
+    }
+    return ctl;
+}
+
 static BOOL enum_walk(HWND h, WNDENUMPROC fn, LPARAM lp) {
     for (HWND c = h->child; c; c = c->next) {
         if (!fn(c, lp)) return FALSE;
@@ -2704,6 +2754,55 @@ static void draw_well(HDC dc, RECT r) {
     FillRect(dc, &inner, GetSysColorBrush(COLOR_WINDOW));
 }
 
+/* Mnemonics (0104): strip_amp drops every '&' but keeps the following
+ * char, so a single "&X" marks X. mnemonic_index returns X's index in the
+ * STRIPPED string (matching strip_amp's output), mnemonic_char its
+ * uppercased letter; both -1/0 when the label has no live mnemonic
+ * ("&&" is a literal '&' and carries none). */
+static int mnemonic_index(const char *raw) {
+    int si = 0;
+    for (const char *p = raw; p && *p; p++) {
+        if (*p == '&') {
+            if (p[1] && p[1] != '&') return si;   /* the kept char sits at si */
+            if (p[1] == '&') p++;                 /* "&&": skip the pair, no mn */
+            continue;                             /* '&' itself is dropped */
+        }
+        si++;
+    }
+    return -1;
+}
+
+static char mnemonic_char(const char *raw) {
+    int idx = mnemonic_index(raw);
+    if (idx < 0) return 0;
+    char c = 0, si = 0;                           /* the char AT the stripped idx */
+    for (const char *p = raw; *p; p++) {
+        if (*p == '&') { if (p[1] == '&') p++; continue; }
+        if (si == idx) { c = *p; break; }
+        si++;
+    }
+    if (c >= 'a' && c <= 'z') c -= 32;
+    return c;
+}
+
+/* Draw stripped label at (x,y), underlining the mnemonic glyph — the
+ * classic Windows dialog affordance. */
+static void draw_label_mn(HDC dc, int x, int y, const char *raw, const char *stripped) {
+    TextOut(dc, x, y, stripped, (int)strlen(stripped));
+    int idx = mnemonic_index(raw);
+    if (idx < 0 || idx >= (int)strlen(stripped)) return;
+    SIZE pre, ch;
+    GetTextExtentPoint32(dc, stripped, idx, &pre);
+    GetTextExtentPoint32(dc, stripped + idx, 1, &ch);
+    HPEN pen = CreatePen(PS_SOLID, 1, GetTextColor(dc));
+    HGDIOBJ op = SelectObject(dc, (HGDIOBJ)pen);
+    int uy = y + ch.cy - 1;
+    MoveToEx(dc, x + pre.cx, uy, NULL);
+    LineTo(dc, x + pre.cx + ch.cx, uy);
+    SelectObject(dc, op);
+    DeleteObject((HGDIOBJ)pen);
+}
+
 /* ---- BUTTON ---- */
 
 typedef struct { int pressed, check; } BtnState;
@@ -2732,7 +2831,7 @@ static void btn_paint(HWND h) {
         RECT fr = r;
         fr.top += 6;
         FrameRect(dc, &fr, GetSysColorBrush(COLOR_BTNSHADOW));
-        TextOut(dc, 10, 0, label, (int)strlen(label));
+        draw_label_mn(dc, 10, 0, text_get(h), label);
     } else if (btn_is_check(kind)) {
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
         int radio = kind == BS_RADIOBUTTON || kind == BS_AUTORADIOBUTTON;
@@ -2764,15 +2863,20 @@ static void btn_paint(HWND h) {
                 DeleteObject((HGDIOBJ)p);
             }
         }
-        TextOut(dc, 18, (h->h - 14) / 2, label, (int)strlen(label));
+        draw_label_mn(dc, 18, (h->h - 14) / 2, text_get(h), label);
     } else {                                     /* push button */
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
-        draw_raised(dc, r, st->pressed);
+        RECT face = r;
+        if (kind == BS_DEFPUSHBUTTON) {          /* default: black outline (0104) */
+            FrameRect(dc, &r, GetSysColorBrush(COLOR_WINDOWFRAME));
+            InflateRect(&face, -1, -1);
+        }
+        draw_raised(dc, face, st->pressed);
         SIZE sz;
         GetTextExtentPoint32(dc, label, (int)strlen(label), &sz);
         int tx = (h->w - sz.cx) / 2 + (st->pressed ? 1 : 0);
         int ty = (h->h - sz.cy) / 2 + (st->pressed ? 1 : 0);
-        TextOut(dc, tx, ty, label, (int)strlen(label));
+        draw_label_mn(dc, tx, ty, text_get(h), label);
         if (h->top->focus == h) {                /* focus rect (solid, no dots) */
             RECT fr = r;
             InflateRect(&fr, -4, -4);
@@ -2906,6 +3010,15 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KILLFOCUS:
         InvalidateRect(h, NULL, TRUE);
         return 0;
+    case WM_GETDLGCODE: {                         /* dialog nav (0104) */
+        int k = btn_kind(h);
+        if (k == BS_DEFPUSHBUTTON) return DLGC_BUTTON | DLGC_DEFPUSHBUTTON;
+        if (k == BS_RADIOBUTTON || k == BS_AUTORADIOBUTTON)
+            return DLGC_BUTTON | DLGC_RADIOBUTTON;
+        if (k == BS_GROUPBOX) return DLGC_STATIC;
+        if (btn_is_check(k)) return DLGC_BUTTON;
+        return DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON;
+    }
     }
     return DefWindowProc(h, msg, wp, lp);
 }
@@ -2932,7 +3045,15 @@ static LRESULT static_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         UINT fmt = DT_LEFT;
         if ((h->style & 0x3) == SS_CENTER) fmt = DT_CENTER;
         else if ((h->style & 0x3) == SS_RIGHT) fmt = DT_RIGHT;
-        DrawText(dc, text_get(h), -1, &r, fmt);
+        /* mnemonic (0104): left-aligned labels underline the '&' char —
+         * strip_amp + draw_label_mn; other alignments keep raw DrawText */
+        if (fmt == DT_LEFT && mnemonic_index(text_get(h)) >= 0) {
+            char label[256];
+            strip_amp(text_get(h), label, sizeof label);
+            draw_label_mn(dc, r.left, r.top, text_get(h), label);
+        } else {
+            DrawText(dc, text_get(h), -1, &r, fmt);
+        }
         EndPaint(h, &ps);
         return 0;
     }
@@ -2941,6 +3062,8 @@ static LRESULT static_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(h, NULL, TRUE);
         return r;
     }
+    case WM_GETDLGCODE:                          /* dialog nav (0104) */
+        return DLGC_STATIC;
     }
     return DefWindowProc(h, msg, wp, lp);
 }
@@ -3250,8 +3373,6 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT:
         edit_paint(h);
         return 0;
-    case WM_GETDLGCODE:
-        return 4 /* DLGC_WANTCHARS-ish */;
     case WM_LBUTTONDOWN: {
         SetFocus(h);
         SetCapture(h);
@@ -3272,6 +3393,11 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONUP:
         if (GetCapture() == h) ReleaseCapture();
         return 0;
+    case WM_GETDLGCODE: {                         /* dialog nav (0104) */
+        int code = DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTARROWS;
+        if (edit_ml(h) && wp == VK_RETURN) code |= DLGC_WANTALLKEYS;
+        return code;
+    }
     case WM_CHAR: {
         int ch = (int)wp;
         /* the classic clipboard chords work even in accelerator-less
@@ -3619,12 +3745,19 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_GETDLGCODE:                          /* dialog nav (0104) */
+        return DLGC_WANTARROWS;
     case WM_KEYDOWN: {
         int old = st->sel;
+        int page = lb_rows(h);                   /* PageUp/Down step (0104) */
+        if (page < 1) page = 1;
         if (wp == VK_UP && st->sel > 0) st->sel--;
         else if (wp == VK_DOWN && st->sel < st->n - 1) st->sel++;
         else if (wp == VK_HOME && st->n) st->sel = 0;
         else if (wp == VK_END && st->n) st->sel = st->n - 1;
+        else if (wp == VK_PRIOR && st->n) st->sel = st->sel > page ? st->sel - page : 0;
+        else if (wp == VK_NEXT && st->n)
+            st->sel = st->sel + page < st->n ? st->sel + page : st->n - 1;
         else return 0;
         if (st->sel != old) {
             lb_show_sel(h, st);
@@ -3974,6 +4107,64 @@ typedef struct {
     int modal;
 } DlgState;
 
+/* The default pushbutton's id (BS_DEFPUSHBUTTON style, one source of
+ * truth — the drawing and DM_GETDEFID both read it), 0 if none. (0104) */
+static int dlg_default_id(HWND dlg) {
+    HWND arr[128];
+    int n = dlg_collect(dlg, arr, 128, 0);
+    for (int i = 0; i < n; i++) {
+        HWND c = arr[i];
+        if (c->cls && ci_eq(c->cls->name, "BUTTON") &&
+            (c->style & 0xF) == BS_DEFPUSHBUTTON && hwnd_shown(c) && hwnd_able(c))
+            return c->id;
+    }
+    return 0;
+}
+
+/* DM_SETDEFID: move the BS_DEFPUSHBUTTON style bit to the target button so
+ * the outline + Enter routing follow it. (0104) */
+static void dlg_set_defid(HWND dlg, int id) {
+    HWND arr[128];
+    int n = dlg_collect(dlg, arr, 128, 0);
+    for (int i = 0; i < n; i++) {
+        HWND c = arr[i];
+        if (!c->cls || !ci_eq(c->cls->name, "BUTTON")) continue;
+        int k = c->style & 0xF;
+        if (k == BS_DEFPUSHBUTTON && c->id != id) {
+            c->style = (c->style & ~0xFu) | BS_PUSHBUTTON;
+            InvalidateRect(c, NULL, TRUE);
+        } else if (c->id == id && (k == BS_PUSHBUTTON || k == BS_DEFPUSHBUTTON)) {
+            c->style = (c->style & ~0xFu) | BS_DEFPUSHBUTTON;
+            InvalidateRect(c, NULL, TRUE);
+        }
+    }
+}
+
+/* A control whose label mnemonic matches vk (an uppercased letter/digit). */
+static HWND dlg_find_mnemonic(HWND dlg, int vk) {
+    HWND arr[128];
+    int n = dlg_collect(dlg, arr, 128, 0);
+    for (int i = 0; i < n; i++) {
+        HWND c = arr[i];
+        if (hwnd_shown(c) && hwnd_able(c) && mnemonic_char(text_get(c)) == (char)vk)
+            return c;
+    }
+    return NULL;
+}
+
+/* Activate a mnemonic hit: a BUTTON presses (STATIC hands focus to the
+ * next tabstop — the Win32 label rule). (0104) */
+static void dlg_do_mnemonic(HWND dlg, HWND c) {
+    if (c->cls && ci_eq(c->cls->name, "BUTTON")) {
+        if ((c->style & 0xF) == BS_GROUPBOX) return;
+        SetFocus(c);
+        SendMessage(c, BM_CLICK, 0, 0);
+    } else {
+        HWND next = GetNextDlgTabItem(dlg, c, FALSE);
+        if (next) SetFocus(next);
+    }
+}
+
 static LRESULT dlg_proc_32770(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     DlgState *st = (DlgState *)h->ctl;
     if (st) {                                    /* template dialog */
@@ -3985,6 +4176,18 @@ static LRESULT dlg_proc_32770(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 if (msg >= WM_CTLCOLORMSGBOX && msg <= WM_CTLCOLORSTATIC) return r;
                 return 0;
             }
+        }
+        if (msg == DM_GETDEFID) {                /* DefDlgProc (0104) */
+            int id = dlg_default_id(h);
+            return id ? MAKELONG(id, DC_HASDEFID) : 0;
+        }
+        if (msg == DM_SETDEFID) { dlg_set_defid(h, (int)wp); return TRUE; }
+        if (msg == WM_NEXTDLGCTL) {
+            HWND next = wp && lp
+                ? (HWND)wp                       /* lParam TRUE: wParam is the ctl */
+                : GetNextDlgTabItem(h, h->focus, wp ? TRUE : FALSE);
+            if (next) SetFocus(next);
+            return 0;
         }
         if (msg == WM_CLOSE) {                   /* DefDlgProc: 'x' = cancel */
             EndDialog(h, IDCANCEL);
@@ -4070,10 +4273,17 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
                    20, 14, w - 40, textH + lineH, box, NULL, NULL, NULL);
     int by = hgt - 34, bw = 80;
     int bx = (w - (nBtn * bw + (nBtn - 1) * 10)) / 2;
-    for (int i = 0; i < nBtn; i++)
-        CreateWindowEx(0, "BUTTON", BTNSETS[set][i].label, WS_CHILD | WS_VISIBLE,
-                       bx + i * (bw + 10), by, bw, 24, box,
-                       (HMENU)(UINT_PTR)BTNSETS[set][i].id, NULL, NULL);
+    HWND firstBtn = NULL;
+    for (int i = 0; i < nBtn; i++) {
+        /* keyboard-navigable (0104): tabstops, the first is the default. */
+        DWORD bs = WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                   (i == 0 ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON);
+        HWND b = CreateWindowEx(0, "BUTTON", BTNSETS[set][i].label, bs,
+                                bx + i * (bw + 10), by, bw, 24, box,
+                                (HMENU)(UINT_PTR)BTNSETS[set][i].id, NULL, NULL);
+        if (i == 0) firstBtn = b;
+    }
+    if (firstBtn) SetFocus(firstBtn);
 
     HWND ownerTop = owner ? owner->top : NULL;
     int reenable = 0;
@@ -4087,6 +4297,7 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     MSG m;
     memset(&m, 0, sizeof m);
     while (IsWindow(box) && GetMessage(&m, NULL, 0, 0)) {
+        if (IsDialogMessageW(box, &m)) continue;   /* Tab/Enter/Esc (0104) */
         TranslateMessage(&m);
         DispatchMessage(&m);
     }
@@ -4241,6 +4452,7 @@ INT_PTR DialogBoxParamW(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
     MSG m;
     memset(&m, 0, sizeof m);
     while (!st->ended && IsWindow(dlg) && GetMessage(&m, NULL, 0, 0)) {
+        if (IsDialogMessageW(dlg, &m)) continue;   /* Tab/Enter/Esc/mnemonic (0104) */
         TranslateMessage(&m);
         DispatchMessage(&m);
     }
@@ -4460,16 +4672,72 @@ BOOL SetWindowPlacement(HWND hwnd, const WINDOWPLACEMENT *wp) {
     return TRUE;
 }
 
-/* Modeless-dialog pre-translation, minimal: ESC closes, RETURN presses
- * the first visible default-ish BUTTON. Everything else flows through
- * the normal focus routing (no Tab order — 0058 simplification). */
+/* Dialog keyboard pre-translation (0104): Tab/Shift+Tab walk WS_TABSTOP
+ * controls, Alt+mnemonic jumps/presses, Enter fires the default (or a
+ * focused pushbutton, or a newline in a multiline edit), Esc = IDCANCEL,
+ * arrows move within a radio group. Controls answer WM_GETDLGCODE so the
+ * routing works for app custom controls too. Wired into both modal loops
+ * (DialogBoxParamW/MessageBox) and callable from an app's own pump. */
 BOOL IsDialogMessageW(HWND dlg, MSG *msg) {
     if (!dlg || !msg || !IsWindow(dlg)) return FALSE;
     if (msg->hwnd == NULL || msg->hwnd->top != dlg->top) return FALSE;
     if (msg->message != WM_KEYDOWN) return FALSE;
-    if (msg->wParam == VK_ESCAPE) {
-        SendMessage(dlg, WM_CLOSE, 0, 0);
+    int vk = (int)msg->wParam;
+    HWND focus = dlg->top->focus;
+
+    /* Alt+letter/digit: a control mnemonic. */
+    if ((GetKeyState(VK_MENU) & 0x8000) &&
+        ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9'))) {
+        HWND m = dlg_find_mnemonic(dlg, vk);
+        if (m) { dlg_do_mnemonic(dlg, m); return TRUE; }
+        return FALSE;
+    }
+
+    LRESULT code = focus ? SendMessage(focus, WM_GETDLGCODE, (WPARAM)vk, (LPARAM)msg) : 0;
+
+    switch (vk) {
+    case VK_TAB: {
+        HWND next = GetNextDlgTabItem(dlg, focus, (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+        if (next) SetFocus(next);
         return TRUE;
+    }
+    case VK_RETURN:
+        if (code & DLGC_WANTALLKEYS) return FALSE;   /* multiline edit takes it */
+        if (code & (DLGC_DEFPUSHBUTTON | DLGC_UNDEFPUSHBUTTON)) {
+            SendMessage(focus, BM_CLICK, 0, 0);      /* the focused push button */
+            return TRUE;
+        }
+        {
+            int def = dlg_default_id(dlg);
+            HWND b = def ? GetDlgItem(dlg, def) : NULL;
+            if (b) { SendMessage(b, BM_CLICK, 0, 0); return TRUE; }
+            if (def) {
+                SendMessage(dlg, WM_COMMAND, MAKEWPARAM(def, BN_CLICKED), 0);
+                return TRUE;
+            }
+        }
+        return FALSE;
+    case VK_ESCAPE: {
+        int id = GetDlgItem(dlg, IDCANCEL) ? IDCANCEL
+               : (GetDlgItem(dlg, IDOK) ? IDOK : 0);
+        if (id)
+            SendMessage(dlg, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED),
+                        (LPARAM)GetDlgItem(dlg, id));
+        else
+            SendMessage(dlg, WM_CLOSE, 0, 0);        /* no cancel: the legacy path */
+        return TRUE;
+    }
+    case VK_LEFT: case VK_UP:
+    case VK_RIGHT: case VK_DOWN:
+        if (focus && (code & DLGC_RADIOBUTTON)) {    /* radio-group arrows */
+            HWND g = GetNextDlgGroupItem(dlg, focus, vk == VK_LEFT || vk == VK_UP);
+            if (g && g != focus) {
+                SetFocus(g);
+                SendMessage(g, BM_CLICK, 0, 0);      /* auto-radio checks it */
+            }
+            return TRUE;
+        }
+        return FALSE;
     }
     return FALSE;
 }

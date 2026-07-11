@@ -30,12 +30,48 @@
 #define IDB_GREET      201
 #define IDB_ABOUT      202
 #define IDB_QUIT       203
+#define IDB_OPTIONS    204
+
+/* the Options dialog (0104, template in ctldemo.rc -> ctldemo.res) */
+#define IDD_OPTIONS    50
+#define IDC_OPT_EDIT   120
+#define IDC_OPT_CHECK  121
 
 static int g_painted;
 
 static void mark(const char *what) {
     printf("ctldemo: %s\n", what);
     fflush(stdout);
+}
+
+/* The Options dialog (0104): keyboard-driven end to end via
+ * IsDialogMessageW in DialogBoxParamW's modal loop. On IDOK it reports the
+ * edit text + checkbox so the headless test can observe what the keyboard
+ * path produced. */
+static LRESULT CALLBACK OptProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_INITDIALOG:
+        mark("opt-init");
+        return TRUE;                             /* let the manager set focus */
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDOK: {
+            char buf[256];
+            GetWindowText(GetDlgItem(hDlg, IDC_OPT_EDIT), buf, sizeof buf);
+            printf("ctldemo: opt-ok name='%s' verbose=%d\n",
+                   buf, IsDlgButtonChecked(hDlg, IDC_OPT_CHECK) ? 1 : 0);
+            fflush(stdout);
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL:
+            mark("opt-cancel");
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    return FALSE;
 }
 
 static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -59,6 +95,8 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                        12, 176, 268, 96, hwnd, (HMENU)IDC_NOTES_EDIT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Verbose", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                        12, 284, 120, 20, hwnd, (HMENU)IDC_CHECK, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Options", WS_CHILD | WS_VISIBLE,
+                       140, 284, 76, 26, hwnd, (HMENU)IDB_OPTIONS, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "About", WS_CHILD | WS_VISIBLE,
                        300, 284, 76, 26, hwnd, (HMENU)IDB_ABOUT, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Quit", WS_CHILD | WS_VISIBLE,
@@ -111,6 +149,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 int r = MessageBox(hwnd, "ctldemo — the 0058 user32 sample.",
                                    "About ctldemo", MB_OKCANCEL);
                 printf("ctldemo: msgbox=%d\n", r);
+                fflush(stdout);
+                return 0;
+            }
+            case IDB_OPTIONS: {
+                mark("options-opening");
+                INT_PTR r = DialogBoxParamW(NULL, MAKEINTRESOURCEW(IDD_OPTIONS),
+                                            hwnd, OptProc, 0);
+                printf("ctldemo: options=%ld\n", (long)r);
                 fflush(stdout);
                 return 0;
             }
