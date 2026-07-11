@@ -277,9 +277,9 @@ for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
 
 For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
 
-## The OS (os/)
+## The OS (os/) — gucOS
 
-The repo's north star ([todos/OS.md](todos/OS.md)) is a wasm-native, almost-POSIX OS in a browser tab — every binary a real wasm module from this compiler. It boots:
+The repo's north star ([todos/OS.md](todos/OS.md)) is **gucOS** (groundupcoder OS): a wasm-native, almost-POSIX OS in a browser tab — every binary a real wasm module from this compiler. It boots:
 
 ```bash
 node serve.js .            # then open http://localhost:8080/os/os.html

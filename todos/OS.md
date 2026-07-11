@@ -1,4 +1,7 @@
-# A WebAssembly-native OS in a browser tab
+# gucOS — a WebAssembly-native OS in a browser tab
+
+The OS's name is **gucOS** (groundupcoder OS); code and boot surfaces still
+carry the wasm-os placeholder until the rebrand sweep lands (todos/0114).
 
 ## Goal (repo north star)
 
