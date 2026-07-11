@@ -206,8 +206,11 @@ check('"Always" persisted the pick (txt association written)',
 check('plain Open honors the persisted association',
   count(section(out, 'probe4'), /^opened:\/root\/owtest\/notes.txt$/) === 2,
   JSON.stringify(section(out, 'probe4')));
-check('fileman Open on an unassociated extension opens the GUI default (notepad)',
-  count(section(out, 'list3'), /Notepad$/) === 1, section(out, 'list3'));
+check('fileman Open on an unassociated extension opens the file in notepad',
+  count(section(out, 'list3'), /\treadme\.md - Notepad$/) === 1,
+  section(out, 'list3'));
+check('...and no ERROR box (0111: the abs path is not a /-option)',
+  count(section(out, 'list3'), /\tERROR$/) === 0, section(out, 'list3'));
 check('desktop dblclick on the .gb icon launches sameboy (SameBoy +1)',
   count(section(out, 'list4'), /\tSameBoy$/) === 2, section(out, 'list4'));
 

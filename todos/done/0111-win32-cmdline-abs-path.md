@@ -1,6 +1,16 @@
 # 0111 — win32 cmdline: absolute POSIX paths misparse as option flags — default.gui notepad open shows an ERROR box
 
-- **Status**: open
+- **Status**: done (2026-07-11) — the preferred plan landed: kernel32's
+  `proc_info_init` cmdline builder quotes EVERY arg after argv0 (embedded
+  `"` escaped as `\"`, matching `cmdline_split`); consumer audit clean
+  (wwinmain.c already skips a quoted argv0; winmine/calc ignore cmdline;
+  k32demo prints without format asserts; CreateProcess children re-render
+  from /proc). No notepad patch needed. test_openwith_e2e tightened to
+  `readme.md - Notepad` + no `ERROR` window. Image v58. Full kernel suite
+  53/53 + boot.js probe (`notepad /root/hello.md` → loaded title). NB the
+  terminal `open foo.md` route resolves default.term/vi by design and was
+  never exposed. Dev log `logs/2026-07-11/0111-win32-cmdline.md`. No
+  follow-ups.
 - **Design**: `os/win32/kernel32.c` (`proc_info_init` cmdline builder),
   `vendor/notepad/main.c` (`HandleCommandLine`), `todos/done/0108`
   (which surfaced it while realigning test_openwith_e2e).

@@ -1108,16 +1108,24 @@ static void proc_info_init(void) {
                  cwd, strcmp(cwd, "/") == 0 ? "" : "/", buf);
     }
 
-    /* the full line: space-joined, args with spaces quoted */
+    /* The full line: argv0 quoted only when it has spaces, every LATER
+     * arg ALWAYS quoted (0111: a bare absolute POSIX path reads as a
+     * /-option to ports that parse Windows switches — notepad's
+     * HandleCommandLine ate "/r" off "/root/…"; a "…"-first arg skips
+     * their option loop and takes the standard quote-strip path).
+     * Embedded quotes ride as \" — cmdline_split's escape. */
     char line[1024];
-    int o = 0;
-    for (long i = 0; i < n;) {
+    int o = 0, argi = 0;
+    for (long i = 0; i < n; argi++) {
         const char *arg = buf + i;
         int alen = (int)strlen(arg);
-        int quote = strchr(arg, ' ') != NULL;
+        int quote = argi > 0 || strchr(arg, ' ') != NULL;
         if (o && o < (int)sizeof line - 1) line[o++] = ' ';
         if (quote && o < (int)sizeof line - 1) line[o++] = '"';
-        for (int k = 0; k < alen && o < (int)sizeof line - 1; k++) line[o++] = arg[k];
+        for (int k = 0; k < alen && o < (int)sizeof line - 2; k++) {
+            if (arg[k] == '"') line[o++] = '\\';
+            line[o++] = arg[k];
+        }
         if (quote && o < (int)sizeof line - 1) line[o++] = '"';
         i += alen + 1;
     }
