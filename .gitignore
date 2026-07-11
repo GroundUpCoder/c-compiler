@@ -9,7 +9,9 @@ tools/disasm/index.html
 *.pyc
 os/os.img
 os/os-system.img
+os/os-system.*.img
 os/os-system.img.tmp-*
+os/os-system.*.img.tmp-*
 os/os-user.img
 media/
 os/os-root.img

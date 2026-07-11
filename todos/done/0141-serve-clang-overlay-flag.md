@@ -1,6 +1,22 @@
 # 0141 — serve.js --clang: pull in the sibling clang-simplified overlay build if available
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). serve.js gained `--clang` (and generic
+  `--overlay=`/`--overlays=`): `resolveOverlayPlan` resolves requested ids
+  against `os/image.json overlays[]`, drops a sibling-absent overlay with the
+  loud "not found — serving base image" line (never errors), and bakes enabled
+  overlays to a sidecar keyed by the overlay set (`os-system.<ids>.img`,
+  gitignored). `ensureSystemImage` became overlay-aware — new
+  `os-common.bakedOverlays()` compares the desired vs baked `OVERLAYS=` set, and
+  the sibling `overlay.json` mtime folds into the input-freshness check so a
+  re-publish re-bakes. The HTTP handler maps `/os/os-system.img` onto the
+  sidecar when active (no kernel-worker change). Loud "folded in
+  (producer@short)" line on enable. Verified: real overlay bake (doom-clang/
+  stl4/sdldemo fold in) + sidecar-served + republish-rebake + sibling-absent
+  base fallback + plain-serve-unchanged. Hermetic regression test
+  `tests/serve/test_clang_overlay.js` (in tests/host/run.js). Dev log
+  logs/2026-07-12/0141-serve-clang-overlay.md. No follow-ups (the OPFS-fixed-
+  version refresh gap is the pre-existing 0040/0082 browser-gate limitation, not
+  new residue). No image.json bump (os-common edit is additive, blob unchanged).
 - **Difficulty**: medium
 - **Design**: this file
 

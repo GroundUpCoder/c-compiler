@@ -596,6 +596,26 @@ function bakedVersion(BLOCK_FS, store) {
   }
 }
 
+/* The overlay set a blob was baked with (its /usr/share/os-release OVERLAYS=
+ * line — bakeSystemImage writes it only when overlays were applied), as a
+ * SORTED array of ids, or [] for a base blob / anything unreadable. This is
+ * the second axis of image identity (todos/0118): a base blob and a
+ * +clang-apps blob share a VERSION_ID but differ here, so a freshness gate
+ * that folds overlays in must compare this against the DESIRED set (serve.js
+ * --clang, todos/0141) — not just the version. */
+function bakedOverlays(BLOCK_FS, store) {
+  try {
+    var fs = BLOCK_FS.createV4(store, { readonly: true });
+    var t = readFileText(fs, '/share/os-release');
+    if (t === null) return [];
+    var m = /(?:^|\n)OVERLAYS=([^\n]*)/.exec(t);
+    if (!m) return [];
+    return m[1].split(',').filter(function (s) { return s; }).sort();
+  } catch (e) {
+    return [];
+  }
+}
+
 /* ---- bake-input freshness (todos/0082) ----
  *
  * newestBakeInput(fsMod, pathMod, rootDir, manifest) -> { mtimeMs, path }
@@ -736,6 +756,7 @@ var OS_COMMON = {
   plantOverlays: plantOverlays,
   nodeOverlayIo: nodeOverlayIo,
   bakedVersion: bakedVersion,
+  bakedOverlays: bakedOverlays,
   newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,
   NodeFileStore: NodeFileStore,
