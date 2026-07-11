@@ -715,6 +715,34 @@ const script = [
   'sleep 0.6',
   'echo ==rn6',
   'ls /root/Desktop | tr "\\n" " "; echo',         // aab gone, mmm present
+
+  // ---- long/spaced Desktop-icon launch (todos/0151): menu_ent.name[32]
+  // truncation. A launcher whose filename is >= 32 chars WITH spaces used to
+  // be snprintf-truncated into name[32]; desk_launch then built a path to a
+  // file that didn't exist and activate()'s stat() failed -> the icon
+  // silently never launched. Clear the Desktop to two known launchers so the
+  // sorted auto-flow grid is deterministic ('My App' row 0, the long name
+  // row 1 — Recycle Bin pins to the tail); both dblclicks must spawn winbox
+  // now (the 36-char name is the regression witness). ----
+  'rm -f /root/Desktop/.icons',
+  'for f in /root/Desktop/*; do rm -rf "$f"; done',
+  "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My Really Long Application Name Here'",
+  "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My App'",
+  'sleep 3',                                       // desk_load re-read tick (~1s)
+  'echo ==ln0',
+  'ls /root/Desktop | tr "\\n" "|"; echo',
+  'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
+  'LN0=$(wmctl list | grep -c winbox$)',
+  'wmctl dblclick $DSID 58 48',                    // row 0 = 'My App' (short spaced)
+  'sleep 3',
+  'LN1=$(wmctl list | grep -c winbox$)',
+  'echo LN-SHORT-DELTA-$((LN1-LN0))',
+  'wmctl dblclick $DSID 58 112',                   // row 1 = the 36-char spaced name
+  'sleep 3',
+  'LN2=$(wmctl list | grep -c winbox$)',
+  'echo LN-LONG-DELTA-$((LN2-LN1))',
+  'echo ==ln1',
+  'wmctl list',
   '',
 ].join('\n');
 
@@ -1302,6 +1330,23 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     rn4.includes('aab') && !rn4.includes('aabz'), JSON.stringify(rn4));
   check('icon-menu Rename renames via the inline editor (aab -> mmm)',
     !rn6.includes('aab') && rn6.includes('mmm'), JSON.stringify(rn6));
+}
+
+// ---- long/spaced Desktop-icon launch (todos/0151): the menu_ent.name[32]
+// truncation regression. Both a short spaced name and a 36-char spaced name
+// must launch on double-click; pre-fix the long one truncated and stat()'d a
+// path that didn't exist, so nothing spawned. ----
+{
+  const ln0 = section('ln0').trim();
+  check('both launchers are present on the desktop (long name not lost)',
+    ln0.includes('My App') &&
+    ln0.includes('My Really Long Application Name Here'), JSON.stringify(ln0));
+  check('short spaced Desktop name launches on dblclick (winbox +1)',
+    out.includes('LN-SHORT-DELTA-1'),
+    (out.match(/LN-SHORT-DELTA-\S*/) || ['(none)'])[0]);
+  check('36-char spaced Desktop name launches on dblclick (winbox +1) — no name[32] truncation',
+    out.includes('LN-LONG-DELTA-1'),
+    (out.match(/LN-LONG-DELTA-\S*/) || ['(none)'])[0]);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

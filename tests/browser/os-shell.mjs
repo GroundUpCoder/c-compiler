@@ -696,6 +696,34 @@ try {
   check('inline rename committed on disk (aaa -> bbb)', true);
   await setVt(2);
 
+  // ---- long/spaced Desktop-icon launch (todos/0151): a launcher whose name
+  // exceeds the old menu_ent.name[32] used to be snprintf-truncated, so
+  // desk_launch stat()'d a path that didn't exist and the icon silently never
+  // launched. Clear the desktop to a short-spaced and a 36-char-spaced
+  // launcher (sorted auto-flow: 'My App' row 0, the long name row 1) and
+  // double-click each; winCount() must rise by one both times (coordinate-free
+  // window counting, so cascade placement churn is irrelevant). ----
+  await setVt(1);
+  await page.keyboard.type(
+    'rm -f /root/Desktop/.icons; for f in /root/Desktop/*; do rm -rf "$f"; done; ' +
+    "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My App'; " +
+    "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My Really Long Application Name Here'; echo LN-\"\"SETUP\r",
+    { delay: 20 });
+  await page.waitForFunction(() => window.__osOut.includes('LN-SETUP'), { timeout: 20000, polling: 200 });
+  await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
+  await setVt(2);
+  const ln0 = await winCount();                      // winCount() ends back on VT2
+  await page.mouse.dblclick(rect.x + 58, rect.y + 16 + 0 * 64 + 32);   // row 0 = 'My App'
+  await new Promise(r => setTimeout(r, 3500));        // sh -> winbox spawn
+  const ln1 = await winCount();
+  check('short spaced Desktop name launches on dblclick (winbox +1)',
+    ln1 === ln0 + 1, { ln0, ln1 });
+  await page.mouse.dblclick(rect.x + 58, rect.y + 16 + 1 * 64 + 32);   // row 1 = 36-char name
+  await new Promise(r => setTimeout(r, 3500));
+  const ln2 = await winCount();
+  check('36-char spaced Desktop name launches on dblclick (no name[32] truncation)',
+    ln2 === ln1 + 1, { ln1, ln2 });
+
   // The shell stays healthy behind the desktop (menu spawns are reaped —
   // no zombie pileup would show here, but the VT1 round-trip proves the
   // system is still driveable).

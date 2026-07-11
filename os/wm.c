@@ -180,6 +180,10 @@
 #define MENU_PAD     4
 #define MENU_SEP_H   8      /* separator groove (kept for flyout row math) */
 #define MAX_MENU     32
+#define ENT_NAME     256    /* entry/item name buffer: a full filesystem name
+                              * (BlockFS d_name is 255 chars + NUL) fits, so a
+                              * long/spaced Desktop or menu filename is never
+                              * truncated on the launch path (todos/0151). */
 #define MENU_DEPTH   4      /* two-pane root + up to 3 cascading flyouts */
 #define MENU_FIXED   2      /* right-pane fixed rows (SETTINGS, RUN...) */
 
@@ -283,7 +287,7 @@ static int date_pinned = 0;
  * borderless window per open column, live only while open. Entries are
  * (re)read at each open from /etc/menu if present, else /usr/share/menu
  * (todos/0040); subdirectories are groups that cascade flyout columns. */
-typedef struct { char name[32]; int is_link; int is_dir; } menu_ent;
+typedef struct { char name[ENT_NAME]; int is_link; int is_dir; } menu_ent;
 typedef struct {
     SDL_Window *win;               /* NULL = column not live */
     SDL_Surface *surf;
@@ -307,7 +311,7 @@ static int nkids = 0;              /* live spawned children (reap on frame) */
  * entries, then MRU recents, then All Programs; in search mode, a flat
  * walk of the tree. Flyouts (depth >= 1) keep using menu_col wholesale. */
 enum { SMI_PIN, SMI_RECENT, SMI_ALLPROGS, SMI_RESULT };
-typedef struct { char name[32]; char path[256]; int kind; } sm_item;
+typedef struct { char name[ENT_NAME]; char path[256]; int kind; } sm_item;
 static sm_item sm_left[SM_LEFT_ROWS];
 static int sm_nleft = 0;
 static int sm_lhover = -1;         /* left-pane cursor row, -1 none */

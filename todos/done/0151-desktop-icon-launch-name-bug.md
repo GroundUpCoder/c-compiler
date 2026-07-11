@@ -1,6 +1,18 @@
 # 0151 — Desktop icon fails to launch for long/spaced filenames (menu_ent.name[32] truncation)
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). Root cause was exactly the `menu_ent.name[32]`
+  truncation: grew both `menu_ent.name` and `sm_item.name` to `ENT_NAME` (256 —
+  a full BlockFS d_name of 255 chars + NUL), so a long/spaced Desktop or Start-
+  menu filename is never truncated on the launch path. Audited every fixed-size
+  name/path buffer on that path (`desk_launch` path[300], `.icons` line[320],
+  the rename oldn/newp buffers, the flyout path[600]) — all comfortably fit a
+  255-char name, no other change needed. Confirmed there is NO spaces-only
+  failure beyond length (a SHORT spaced name launches even pre-fix), so
+  truncation was the whole bug (Plan step 3 moot). Kernel e2e leg added to
+  `test_wm_service_e2e.js` (a 36-char spaced launcher dblclick — proven
+  regression witness: fails `LN-LONG-DELTA-0` without the fix, passes with);
+  browser leg added to `os-shell.mjs` (operator-owed run under the standing
+  0064 browser-sweep debt — Playwright not installed here). Image v72.
 - **Design**: WM.md (desktop grid, todos/0028–0033, 0066 activate())
 
 ## Goal
