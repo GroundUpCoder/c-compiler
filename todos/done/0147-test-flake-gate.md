@@ -1,6 +1,15 @@
 # 0147 — test flake / under-load gate (`--repeat N`, run-under-contention)
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). `tests/lib/suite-runner.js` gained `--repeat N`
+  (per-file flake rate), `--under-load[=N]` (self-healing busy-loop CPU
+  contention), and comma-OR `--filter` (`matchesFilter`, exported); all three
+  suite-runner suites (kernel/blockfs/sweep) inherit them and `tests/run.js`
+  forwards them. `tests/flake.js` is the tripwire gate over the historically
+  sleep-sensitive set (wm_service/term/os_apps kernel e2es + os-doom/os-term
+  browser sweeps), `--repeat 3 --under-load` by default. Documented in CLAUDE.md
+  ("Flake / under-load gate"). Verified: both legs green under load ×10, no
+  leaked generators, normal (non-repeat) path unregressed. Dev log:
+  `logs/2026-07-12/0147-flake-under-load-gate.md`.
 - **Design**: this file. From the 2026-07-12 test-infra audit
   (`logs/2026-07-12/queue-hardening-and-keymap.md`). Enforces the acceptance
   0083 sets ("converted files pass under load") — nothing today runs tests

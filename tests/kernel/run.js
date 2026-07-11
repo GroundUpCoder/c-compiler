@@ -16,7 +16,7 @@
 // picks up from it).
 const path = require('path');
 const os = require('os');
-const { runSuite, parseSuiteArgs, usage } = require('../lib/suite-runner.js');
+const { runSuite, parseSuiteArgs, usage, matchesFilter } = require('../lib/suite-runner.js');
 const { ensurePrebakedImage } = require('../lib/image-fixture.js');
 
 // Rows tagged IMG spawn os/boot.js and materialize their per-test image by
@@ -101,7 +101,7 @@ const entries = tests.map(([file, ...rest]) => Object.assign({ file }, ...rest.f
 
 // 0082 pre-step: only when the (filtered) run actually contains fixture
 // consumers — a --filter=test_tlsf-style quick run never pays a bake here.
-if (!opts.list && entries.some(e => e.image && (!opts.filter || e.file.includes(opts.filter)))) {
+if (!opts.list && entries.some(e => e.image && matchesFilter(e.file, opts.filter))) {
   ensurePrebakedImage();
 }
 
@@ -111,5 +111,6 @@ runSuite(entries, {
   artifactDir: path.resolve(__dirname, '../../build/test-kernel'),
   jobs: opts.jobs, timeoutMs: opts.timeoutMs, filter: opts.filter,
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
+  repeat: opts.repeat, underLoad: opts.underLoad,
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });

@@ -73,7 +73,23 @@ invocable; this just knows how to invoke them uniformly and, the point,
   run exactly those (default: the working set vs HEAD; pass a ref to diff
   against it). `--dry-run` prints the plan and runs nothing.
 - Passthrough: `--filter=STR` (all suites), `-j N`/`--resume`/`--fail-fast`
-  (the suite-runner-backed suites).
+  (the suite-runner-backed suites), plus `--repeat N`/`--under-load[=N]`
+  (kernel/blockfs/sweep — the flake gate, below).
+
+### Flake / under-load gate (`tests/flake.js`, todos/0147)
+
+Run this **after landing any new e2e/browser test** (and as a periodic
+dogfood tripwire): `node tests/flake.js` runs the historically
+sleep-sensitive files (`wm_service`/`term`/`os_apps` kernel e2es +
+`os-doom`/`os-term` browser sweeps) `--repeat 3` under CPU contention and
+prints a per-file flake rate — a `FLAKY` verdict means a fixed-sleep/timing
+dependency regressed (the class 0083/0154/0155 retired). Flags:
+`--repeat N`, `--no-under-load`, `--under-load=N`, `--kernel-only` (where
+Playwright is absent), `--filter=S` (intersect the tripwire set). The
+mechanism is generic — any suite-runner suite takes `--repeat N`
+(per-file flake rate, comma-OR `--filter=a,b`) and `--under-load[=N]`
+(busy-loop generators that peg cores for the run, self-heal if orphaned),
+e.g. `node tests/browser/os-sweep.mjs --repeat 5 --filter=os-doom`.
 
 **The path→suite rule table lives in `tests/run.js` (the `RULES` array) and
 is the single documented source of "what does this diff need"** — replace

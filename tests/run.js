@@ -41,11 +41,11 @@ const SUITES = {
   unit:    { desc: 'compiler unit corpus (in-process worker runner)',
              cmd: ['node', 'tests/run-unit.js'], supports: ['filter', 'jobs'] },
   blockfs: { desc: 'BlockFS/MountFS filesystem suite',
-             cmd: ['node', 'tests/blockfs/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast'] },
+             cmd: ['node', 'tests/blockfs/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
   kernel:  { desc: 'kernel control plane + OS e2e suite',
-             cmd: ['node', 'tests/kernel/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast'] },
+             cmd: ['node', 'tests/kernel/run.js'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'] },
   sweep:   { desc: 'browser OS acceptance sweep (real Chromium; needs Playwright)',
-             cmd: ['node', 'tests/browser/os-sweep.mjs'], supports: ['filter', 'jobs', 'resume', 'failFast'],
+             cmd: ['node', 'tests/browser/os-sweep.mjs'], supports: ['filter', 'jobs', 'resume', 'failFast', 'repeat', 'underLoad'],
              optional: true },
   host:    { desc: 'host.js Node output path + serve.js first-run (Node-only)',
              cmd: ['node', 'tests/host/run.js'], supports: [] },
@@ -111,6 +111,7 @@ const RULES = [
   [/^tests\/host\//, ['host'], null],
   [/^tests\/serve\//, ['host'], null],
   [/^tests\/run\.js$/, [], 'the dispatcher itself — no suite of its own'],
+  [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (todos/0147) — wraps other suites, no suite of its own'],
   [/^tests\/run\.py$/, PY_CATEGORIES.concat(['unit', 'blockfs']), 'the python runner backs every py category'],
   [/^tests\/sourcemap\//, ['sourcemap'], null],
   [/^tests\/disw\//, ['disw'], null],
@@ -147,7 +148,7 @@ const RULES = [
 function parseArgs(argv) {
   const out = { suites: [], diff: false, diffRef: null, dryRun: false,
                 list: false, help: false, filter: null, jobs: null,
-                resume: false, failFast: false };
+                resume: false, failFast: false, repeat: null, underLoad: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') out.help = true;
@@ -155,6 +156,10 @@ function parseArgs(argv) {
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--resume') out.resume = true;
     else if (a === '--fail-fast') out.failFast = true;
+    else if (a === '--repeat') out.repeat = argv[++i];
+    else if (a.startsWith('--repeat=')) out.repeat = a.slice(9);
+    else if (a === '--under-load') out.underLoad = '';       // bare flag → pass through
+    else if (a.startsWith('--under-load=')) out.underLoad = a.slice(13);
     else if (a === '--diff') {
       out.diff = true;
       // Optional ref immediately following, if it isn't another flag.
@@ -224,6 +229,10 @@ function suiteArgs(suite, opts) {
   if (opts.jobs != null && sup.has('jobs')) args.push('-j', String(opts.jobs));
   if (opts.resume && sup.has('resume')) args.push('--resume');
   if (opts.failFast && sup.has('failFast')) args.push('--fail-fast');
+  if (opts.repeat != null && sup.has('repeat')) args.push('--repeat', String(opts.repeat));
+  if (opts.underLoad != null && sup.has('underLoad')) {
+    args.push(opts.underLoad === '' ? '--under-load' : `--under-load=${opts.underLoad}`);
+  }
   return args;
 }
 
@@ -396,6 +405,8 @@ Flags (forwarded to suites that accept them):
   -j N           worker count
   --resume       skip files that passed last run
   --fail-fast    stop on first failure
+  --repeat N     run each file N times; per-file flake rate (kernel/blockfs/sweep)
+  --under-load[=N]  run under CPU contention (flake gate, todos/0147)
   --dry-run      resolve + print the plan, run nothing
 
 Suites: ${ALL_SUITES.join(', ')}, all

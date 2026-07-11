@@ -47,5 +47,6 @@ runSuite(files, {
   artifactDir: path.resolve(__dirname, '../../build/test-browser'),
   jobs: 1, timeoutMs: opts.timeoutMs, filter: opts.filter,
   failFast: opts.failFast, resume: opts.resume, list: opts.list,
+  repeat: opts.repeat, underLoad: opts.underLoad,
 }).then(r => process.exit(r.failed ? 1 : 0))
   .catch(e => { process.stderr.write(`Fatal: ${e.stack || e.message}\n`); process.exit(2); });
