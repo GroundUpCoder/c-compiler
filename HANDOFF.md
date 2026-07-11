@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-11; 0107 Paint accessory closed)
+# Handoff — start of thread (updated 2026-07-11; 0112 mGBA closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,103 +7,99 @@
 
 ## Where the repo stands
 
-**0107 (Paint accessory) is CLOSED and COMMITTED.** `/bin/paint` is seeded in
-the Accessories menu and `.bmp` opens with it. It's the first *creative* app on
-the Win32 veneer (gdi32/user32/comdlg32) — a small native mspaint-class app, NOT
-a port (ReactOS mspaint is C++). Dev log
-`logs/2026-07-11/0107-paint-accessory.md`; item at
-`todos/done/0107-paint.md`.
+**0112 (mGBA GBA core) is CLOSED and COMMITTED.** `/bin/mgba` is a real
+ARM7TDMI Game Boy Advance emulator — mGBA 0.10.5's C core (MPL-2.0) with an
+Apache-2.0 SDL3 frontend written against the `mCore` interface. It's the third
+emulator leg (after 0075 SameBoy, 0088 puNES-still-open) and the platform
+`/bin/gameboy` + `/bin/sameboy` can't reach: **GBA**. Additive — `.gb`/`.gbc`
+still default to SameBoy; `.gba` → `/bin/mgba`. Seeded in the Games menu. Dev
+log `logs/2026-07-11/0112-mgba-gba-core.md`; item at
+`todos/done/0112-mgba-emulator.md`; port lives in `vendor/mgba/`
+(`README.md` has the license split + patch table + excluded-subsystem list).
 
-One breath: `os/win32/paint.c` is ONE owner-drawn window (no child controls) —
-a memory-DC canvas blitted 1:1, a left toolbox + bottom 16-colour palette, and a
-File/Edit/Image/Tools/Help menu. 8 tools (pencil/eraser/fill/line/rect/
-filled-rect/ellipse/filled-ellipse); shape tools rubber-band via a `BitBlt`-from-
-undo preview per mouse-move; Fill is an own scanline flood over GetPixel/SetPixel;
-FG=left / BG=right. Single-level Undo (one stashed canvas copy). 24-bit BMP
-save/open via comdlg32, **byte-identical round-trip**. Cut/Copy/Paste stay
-GRAYED — a selection region is the recorded v2 non-goal (wants a bitmap
-clipboard the 0090 kernel slot doesn't carry).
+One breath: GBA-only, mGBA's OpenEmu config (`M_CORE_GBA`/`MINIMAL_CORE=1`/
+`DISABLE_THREADING`, 32-bit RGBA color, HLE BIOS — no boot-ROM blob). 78 core
+`.c` files (arm + gba board/software-renderer + gb/audio + core/util subsets +
+blip_buf/inih); the SM83/GB core, C++ frontends, and all optional deps (zlib/
+png/zip/sqlite/lzma) are excluded. `MINIMAL_CORE=1` is load-bearing: it drops
+the video-logger/proxy/HLE-mixer machinery that was the undefined-symbol wall.
+Frontend `vendor/mgba/src/main.c`: `GBACoreCreate` → run frames → blip→SDL
+audio + SDL-keysym input; bare `mgba` runs a built-in MODE 3 test ROM (a dozen
+hand-assembled ARM words → red frame) as the headless pixel-test target.
 
-- `os/win32/paint.c` + `paint.json` — the app + its bin.json.
-- `os/win32/ports.json` + `PORTS.md` — paint added as a control target
-  (`expect: links`), like gdidemo/ctldemo.
-- `os/image.json` — `/usr/bin/paint`, the Accessories link, a `bmp` openwith
-  line; `version` → **67**.
-- `tests/kernel/run.js` — registered `test_paint_e2e.js`.
+**This port drove 4 compiler.js changes** (all general, unit-suite-clean):
+1. **Angle-include resolution is now standard** — `#include <string.h>` no
+   longer resolves to a same-dir sibling. `<>` searches `-I` paths + system
+   headers before the including directory (C11 6.10.2p2); `""` unchanged. This
+   was the whole ballgame: mGBA's `include/mgba-util/string.h` was shadowing
+   the real `<string.h>` for every TU → 199 undeclared-memcpy errors.
+2. `__builtin_bswap16/32/64` prelude macros.
+3. `exp2` / `exp2f` in `<math.h>`.
+4. `rewinddir` in `<dirent.h>` (re-opens by name; no host import).
 
-**Verified** (all PASS): new `tests/kernel/test_paint_e2e.js` (35 checks —
-lifecycle, menu tree incl. grayed Cut/Copy/Paste + Undo, filled-rect draw via
-`wmctl drag`, flood fill, single-level Undo, New clear, comdlg32 Save→New→Open
-round-trip with a byte-identical re-save); `node tools/win32ports.js --check`
-(paint links, report fresh); `node tests/kernel/run.js --filter=os_boot` (full
-image bakes + boots, 194s). `node todos/queue.js check` passes.
+Plus 3 `__MTOTS__`-gated mGBA patches (no-ctor-attr CONSTRUCTOR, GB-savestate
+`#pragma pack` assert off, static `version.c`) — all marked `PATCH(c-compiler)`.
 
-**Follow-up filed**: **0124** (P3) — Paint v2 (selection region + bitmap
-clipboard to un-grey Cut/Copy/Paste, New-with-size dialog): the residue 0107
-deferred (0090 clipboard has since landed, so the clipboard half is now
-buildable; body flags the CF_BITMAP kernel-slot blocker). The browser leg
-(below) folds into the existing 0064 debt.
+**Verified** (all PASS): `node tests/kernel/test_mgba_e2e.js` (8/8 — bake+boot,
+window at 480×320, `wmctl shot` ≥90%-red MODE 3 frame, `.gba`→mgba,
+`.gb`/`.gbc`→sameboy); `node tests/run-unit.js` (708/0/3); the e2e's full image
+bake compiled doom/quake/busybox/all win32 apps unbroken. `node
+todos/queue.js check` passes.
 
 ## Operator-owed (browser)
 
-`tests/browser/os-paint.mjs` is written (launch from the shell, real-mouse pick
-Filled Rectangle + a red swatch, drag a rect, assert the red interior composites
-through the WebGPU compositor, close-box exit) but **UNRUN** here — Playwright
-isn't installed in-repo. Run it in the browser sweep
-(`node tests/browser/os-sweep.mjs --filter=paint`). This joins the standing 0064
-browser-leg debt (0094 sound listen, 0095 snap feel, 0096 saver eyeball,
-0101–0106 legs, the pointer-lock human check).
+No `os-mgba.mjs` written — the browser sweep leg folds into the standing **0064**
+operator-owed debt (the kernel e2e is the committed headless pixel test). 0064
+still owes the operator: the pointer-lock human check + the 0094–0107 browser
+legs (incl. the unrun `os-paint.mjs` from 0107). Run the browser sweep with
+`node tests/browser/os-sweep.mjs` when Playwright is available (not installed
+in-repo here).
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **Win32 apps are ANSI (`#undef UNICODE`)**: macros gated on `#ifdef UNICODE`
-  (e.g. `TranslateAccelerator`) are UNDEFINED — call the explicit W entry
-  (`TranslateAcceleratorW`). comdlg32's file dialogs are W-only, so an ANSI app
-  bridges with `MultiByteToWideChar`/`WideCharToMultiByte` (paint.c `a2w`/`w2a`).
-- **Injected pointer coords are SURFACE coords**: `route_mouse` subtracts the
-  20px menu bar, so a headless test adds `BAR` to client Y (winmine/paint
-  convention). Canvas bitmap (bx,by) → surface (CANVAS_X+bx, CANVAS_Y+by+BAR).
-- **comdlg32 dialog EDIT addressing**: an app with no main EDIT sees the
-  dialog's dir EDIT as `EDIT:0` (readonly) and the name box as `EDIT:1` — set the
-  name via `wmctl settext EDIT:1 <path>`, then `wmctl click Save`/`Open` (the
-  dialog button is found ENABLED before the disabled owner's same-named menu).
 - **`queue.js done` can stage a PRE-EDIT blob** of the done file — after
-  `done`, `git add todos/done/<file>` again (hit + fixed this session).
-  **Concurrent sessions exist: stage ONLY your own files.**
-- **Don't edit bake inputs while a suite runs** (0082): `.md`/`tests/` are
-  NOT inputs; `os/*.c/.h/.json/.rc`, `compiler.js`, `host.js`, `vendor/` are.
-  Bump `image.json` `version` (now **67**) when seeded-source edits must reach a
+  `done`, `git add todos/done/<file>` again (hit + fixed this session; the
+  rename showed `RM` until re-added). **Concurrent sessions exist: stage ONLY
+  your own files.**
+- **Don't edit bake inputs while a suite runs** (0082): `.md`/`tests/` are NOT
+  inputs; `os/*.c/.h/.json/.rc`, `compiler.js`, `host.js`, `vendor/` ARE. Bump
+  `image.json` `version` (now **68**) when seeded-source edits must reach a
   persistent browser OPFS image.
 - **New kernel test files must be added to `tests` in run.js** (did so for
-  test_paint_e2e.js). Check `build/test-*/summary.json` + per-file logs after an
-  interrupted run; `--resume` picks up.
-- **`GetDIBits`/`SetDIBits` are 32bpp-only** — 24-bit BMP save/load must repack
-  rows (paint.c bmp_save/bmp_load). Colour asserts in tests sample a palette
-  swatch pixel from the same shot to stay byte-order agnostic.
+  `test_mgba_e2e.js`).
+- **Vendoring a mature C codebase**: the include-shadowing class (a project
+  header named like a system header, in the same dir as a file that includes
+  the system one) is now handled by the compiler — but watch for `#pragma pack`
+  (silently ignored → mis-sized structs; only bites packed savestate/wire
+  structs) and `__attribute__((constructor))` (no ctor pass — gate it off).
+- **mCore config tiers**: `MINIMAL_CORE=1` = OpenEmu (keeps dirs, drops
+  inputMap + video-log/proxy/mixer); `=2` = libretro (also drops dirs). Use 1
+  for a full frontend; the extra sources you *don't* want to vendor are exactly
+  the ones it `#ifndef`s out.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. List order is PRIORITY-BUCKETED (P0–P3).
-- **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium
-  with `--enable-unsafe-webgpu --enable-features=Vulkan`.
+- **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium with
+  `--enable-unsafe-webgpu --enable-features=Vulkan`.
 
 ## Next in queue
 
-`node todos/queue.js list` — after 0107: **0112** (mGBA GBA core → `/bin/mgba`),
-then **0088**, **0079/0080**, **0052/0053**, the 0083/0084 pair, **0064** (WM
-browser sweep round 3 — still owes the operator the pointer-lock check + the
-0094/0095/0096/0101–0107 browser legs). Heavier P1→P3 tail after.
+`node todos/queue.js list` — after 0112: **0088** (puNES NES core → `/bin/punes`
+— note its GPL means a repo-wide license quarantine, unlike mGBA's file-scoped
+MPL), then **0079/0080**, **0052/0053**, the 0083/0084 pair, **0064** (WM
+browser sweep round 3 — the standing operator debt). Heavier P1→P3 tail after.
 
 ## Don't re-litigate
 
 posix_spawn-not-fork; kernel-owned fds; WM.md invariants; DISK-IMAGE.md's
-settled layout; 0013–0106's recorded decisions (see todos/done/); **0107's
-calls (one owner-drawn client + no child controls; tools in BOTH the menu and
-an owner-drawn toolbox; 24-bit BMP not 32; single-level Undo; Cut/Copy/Paste
-grayed until a v2 selection region + bitmap clipboard)**.
+settled layout; 0013–0111's recorded decisions (see todos/done/); **0112's
+calls (GBA-only — SM83/GB core excluded, SameBoy stays the GB/GBC default;
+OpenEmu `MINIMAL_CORE=1` config; HLE BIOS not a boot-ROM blob; built-in MODE 3
+test ROM as the headless acceptance since commercial `.gba`s aren't vendored;
+the standard-correct angle-include resolution fix)**.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want to
-tackle — `node todos/queue.js list` for the order (0107 Paint just landed;
-next is 0112 mGBA). 0064 WM sweep round 3 still owes the operator the
-pointer-lock check and the 0094–0107 browser legs (incl. the new
-os-paint.mjs)."
+tackle — `node todos/queue.js list` for the order (0112 mGBA just landed; next
+is 0088 puNES). 0064 WM sweep round 3 still owes the operator the pointer-lock
+check and the 0094–0107 + new mgba browser legs."

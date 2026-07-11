@@ -65,6 +65,7 @@ const tests = [
   ['test_cursor_e2e.js', IMG],   // 0105: pointer cursor shapes — per-surface SDL_SetCursor readback (wmctl cursor = CURSOR_AT/R_CURSOR), chrome resize cursors on resizable frames (EW/NS/NWSE), title/desktop/fixed-frame arrow
   ['test_os_apps_e2e.js', IMG],  // 0015: seeded vendor apps windowed in-OS — bin-entry game data, real frames via wmctl shot
   ['test_sameboy_e2e.js', IMG],  // 0075: /bin/sameboy (cycle-accurate GB/GBC core) — exact DMG grey shades, animation, CGB colorful frame, sameboy is the baked .gb/.gbc default
+  ['test_mgba_e2e.js', IMG],     // 0112: /bin/mgba (mGBA 0.10.5 GBA core — ARM7TDMI, HLE BIOS) — built-in MODE3 test ROM renders a red frame at 480x320, .gba defaults to mgba, .gb/.gbc stay sameboy
   ['test_cairo_e2e.js', IMG],    // 0061: cairo image backend -> shm — in-OS selftest (gradients/AA/cairo-ft anchors), windowed scene via wmctl shot, theme repaint, vector re-render on resize
   ['test_gdi32_e2e.js', IMG],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
   ['test_user32_e2e.js', IMG],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path

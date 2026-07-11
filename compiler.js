@@ -1775,39 +1775,59 @@ function preprocess(filename, initialTokens, ppRegistry) {
   }
 
   // --- 4. INCLUDE RESOLUTION ---
-  function resolveAndLex(target, currentFile) {
+  function resolveAndLex(target, currentFile, angled) {
     const lastSlash = Math.max(currentFile.lastIndexOf("/"), currentFile.lastIndexOf("\\"));
     const baseDir = lastSlash >= 0 ? currentFile.substring(0, lastSlash + 1) : "";
 
-    const searchPaths = [baseDir + target];
+    const loadReal = (fullPath) => {
+      const content = ppRegistry.loadFile(fullPath);
+      if (content === null) return null;
+      const resolved = intern(fullPath);
+      const { spliced, lineOffsets } = spliceLines(content);
+      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+    };
+
+    // Splice line continuations like the real-file path: inline core headers
+    // (template literals) already had their backslash-newlines elided by JS,
+    // but headers loaded from libc-ext.js (via JSON.parse) keep real
+    // backslash-newline continuations (e.g. multi-line macros) that must join.
+    const loadStandard = () => {
+      if (!ppRegistry.standardHeaders.has(target)) return null;
+      const resolved = intern(target);
+      const { spliced, lineOffsets } = spliceLines(ppRegistry.standardHeaders.get(target));
+      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+    };
+
+    // Build the -I search-path list once.
+    const incPaths = [];
     for (const p of ppRegistry.includePaths) {
       let path = p;
       if (path.length > 0 && path[path.length - 1] !== "/" && path[path.length - 1] !== "\\")
         path += "/";
-      searchPaths.push(path + target);
+      incPaths.push(path + target);
     }
 
-    for (const fullPath of searchPaths) {
-      const content = ppRegistry.loadFile(fullPath);
-      if (content !== null) {
-        const resolved = intern(fullPath);
-        const { spliced, lineOffsets } = spliceLines(content);
-        return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
-      }
+    if (!angled) {
+      // Quote include (C11 6.10.2p3): the including file's own directory first,
+      // then the -I paths, then the system headers.
+      let r = loadReal(baseDir + target);
+      if (r) return r;
+      for (const fullPath of incPaths) { r = loadReal(fullPath); if (r) return r; }
+      return loadStandard();
     }
 
-    // Fallback to standard library headers. Splice line continuations like the
-    // real-file path: inline core headers (template literals) already had their
-    // backslash-newlines elided by JS, so splicing is a no-op for them, but
-    // headers loaded from libc-ext.js (via JSON.parse) keep real backslash-
-    // newline continuations (e.g. multi-line macros) that must be joined.
-    if (ppRegistry.standardHeaders.has(target)) {
-      const resolved = intern(target);
-      const { spliced, lineOffsets } = spliceLines(ppRegistry.standardHeaders.get(target));
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
-    }
-
-    return null;
+    // Angle include (C11 6.10.2p2): search only the -I paths and the system
+    // headers — NOT the including file's directory. This matters when a
+    // project ships a header whose basename collides with a system one (e.g.
+    // mGBA's include/mgba-util/string.h next to a common.h that does
+    // `#include <string.h>`): the sibling must NOT shadow the real header. As
+    // a lenient last resort we still fall back to the including directory so
+    // projects that (non-standardly) use `<local.h>` for a same-dir header
+    // whose dir isn't on the -I list keep working.
+    for (const fullPath of incPaths) { const r = loadReal(fullPath); if (r) return r; }
+    const std = loadStandard();
+    if (std) return std;
+    return loadReal(baseDir + target);
   }
 
   // rescanTrailingMacros: if expansion result ends with a function-like macro
@@ -1981,7 +2001,9 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE) state.consume();
                 if (!state.atEnd) state.consume();
                 continue;
-              } else if (tokensToUse[0].kind === TokenKind.STRING) {
+              }
+              const angledInclude = tokensToUse[0].atPunct(Punct.LT);
+              if (tokensToUse[0].kind === TokenKind.STRING) {
                 const sv = tokensToUse[0].text;
                 rawPath = sv.substring(1, sv.length - 1);
               } else if (tokensToUse[0].atPunct(Punct.LT)) {
@@ -1996,7 +2018,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                 if (!state.atEnd) state.consume();
                 continue;
               }
-              const includeRes = resolveAndLex(rawPath, state.currentFile);
+              const includeRes = resolveAndLex(rawPath, state.currentFile, angledInclude);
               if (!includeRes) {
                 let msg = "Could not find include file: " + rawPath;
                 if (ppRegistry.extProvidedHeaders &&
@@ -20450,6 +20472,7 @@ typedef struct __DIR DIR;
 DIR *opendir(const char *name);
 int closedir(DIR *dirp);
 struct dirent *readdir(DIR *dirp);
+void rewinddir(DIR *dirp);
   `,
   "dlfcn.h": `
 #pragma once
@@ -21042,6 +21065,8 @@ float asinhf(float x);
 float acoshf(float x);
 float atanhf(float x);
 float expf(float x);
+double exp2(double x);
+float exp2f(float x);
 float expm1f(float x);
 float logf(float x);
 float log2f(float x);
@@ -24366,6 +24391,7 @@ size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps) {
   "__dirent.c": `
 #include <dirent.h>
 #include <stdlib.h>
+#include <string.h>
 
 __import int __opendir(const char *name);
 __import int __readdir(int handle, void *dirent_buf);
@@ -24374,14 +24400,20 @@ __import int __closedir(int handle);
 struct __DIR {
   int fd;
   struct dirent ent;
+  char name[1024]; /* retained for rewinddir (no host rewind import) */
 };
 
 DIR *opendir(const char *name) {
   int handle = __opendir(name);
   if (handle < 0) return (DIR *)0;
   DIR *dirp = (DIR *)malloc(sizeof(DIR));
-  if (!dirp) return (DIR *)0;
+  if (!dirp) { __closedir(handle); return (DIR *)0; }
   dirp->fd = handle;
+  dirp->name[0] = 0;
+  if (name) {
+    size_t n = strlen(name);
+    if (n < sizeof(dirp->name)) memcpy(dirp->name, name, n + 1);
+  }
   return dirp;
 }
 
@@ -24397,6 +24429,16 @@ struct dirent *readdir(DIR *dirp) {
   int result = __readdir(dirp->fd, &dirp->ent);
   if (result < 0) return (struct dirent *)0;
   return &dirp->ent;
+}
+
+/* POSIX rewinddir: reset the stream to the start. With no host rewind
+   import, re-open the directory by the name captured at opendir. */
+void rewinddir(DIR *dirp) {
+  if (!dirp || !dirp->name[0]) return;
+  int handle = __opendir(dirp->name);
+  if (handle < 0) return;
+  __closedir(dirp->fd);
+  dirp->fd = handle;
 }
   `,
   "__emscripten.c": `
@@ -25503,6 +25545,8 @@ float asinhf(float x) { return (float)asinh((double)x); }
 float acoshf(float x) { return (float)acosh((double)x); }
 float atanhf(float x) { return (float)atanh((double)x); }
 float expf(float x) { return (float)exp((double)x); }
+double exp2(double x) { return exp(x * 0.6931471805599453); }
+float exp2f(float x) { return (float)exp2((double)x); }
 float expm1f(float x) { return (float)expm1((double)x); }
 float logf(float x) { return (float)log((double)x); }
 float log2f(float x) { return (float)log2((double)x); }
@@ -27897,6 +27941,12 @@ function createDefaultPPRegistry() {
     "#define __builtin_ctzl(x) __builtin_ctz(x)",
     "#define __builtin_clzll(x) ((int)__wasm(long long, (x), op 0x79))",
     "#define __builtin_ctzll(x) ((int)__wasm(long long, (x), op 0x7a))",
+    // Byte-swap builtins (GCC/Clang). wasm has no native bswap opcode, so
+    // expand to the arithmetic form. Callers pass simple values in practice;
+    // the argument is parenthesized but evaluated more than once.
+    "#define __builtin_bswap16(x) ((unsigned short)((((unsigned short)(x) & 0xff00u) >> 8) | (((unsigned short)(x) & 0x00ffu) << 8)))",
+    "#define __builtin_bswap32(x) ((unsigned int)((((unsigned int)(x) & 0xff000000u) >> 24) | (((unsigned int)(x) & 0x00ff0000u) >> 8) | (((unsigned int)(x) & 0x0000ff00u) << 8) | (((unsigned int)(x) & 0x000000ffu) << 24)))",
+    "#define __builtin_bswap64(x) ((unsigned long long)( (((unsigned long long)(x) & 0xff00000000000000ull) >> 56) | (((unsigned long long)(x) & 0x00ff000000000000ull) >> 40) | (((unsigned long long)(x) & 0x0000ff0000000000ull) >> 24) | (((unsigned long long)(x) & 0x000000ff00000000ull) >> 8) | (((unsigned long long)(x) & 0x00000000ff000000ull) << 8) | (((unsigned long long)(x) & 0x0000000000ff0000ull) << 24) | (((unsigned long long)(x) & 0x000000000000ff00ull) << 40) | (((unsigned long long)(x) & 0x00000000000000ffull) << 56) ))",
   ].join("\n") + "\n";
 
   return pp;

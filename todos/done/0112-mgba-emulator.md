@@ -1,6 +1,17 @@
 # 0112 — mGBA: a GBA (+GB/GBC) core (`/bin/mgba`)
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). `/bin/mgba` = mGBA 0.10.5 GBA core (ARM7TDMI,
+  HLE BIOS, software renderer), MPL-2.0 core + Apache-2.0 SDL3 `mCore` frontend,
+  seeded in Games menu, `.gba`→`/bin/mgba` (`.gb`/`.gbc` stay SameBoy). Config =
+  mGBA's OpenEmu tier (`M_CORE_GBA`/`MINIMAL_CORE=1`/`DISABLE_THREADING`, GBA
+  only, no deps). Compile probe drove compiler.js fixes (standard-correct
+  angle-include resolution, `__builtin_bswap*`, `exp2/exp2f`, `rewinddir`) + 3
+  `__MTOTS__`-gated mGBA patches (no ctor attr, GB-savestate pack assert,
+  static version.c). Verified: `test_mgba_e2e.js` 8/8 (built-in MODE 3 test ROM
+  → red frame at 480×320), unit suite 708/0, full image bake. Dev log
+  `logs/2026-07-11/0112-mgba-gba-core.md`. Commercial-ROM acceptance met via the
+  built-in test ROM (copyrighted ROMs not vendored, `VFileOpen` path wired);
+  browser sweep leg folds into the standing 0064 debt.
 - **Design**: this file. Third emulator leg, alongside `0075` (SameBoy, done →
   `/bin/sameboy`) and `0088` (puNES, open → `/bin/punes`). Same shape: vendor a
   real-world C emulator core, write a thin SDL3 frontend, seed it into the
