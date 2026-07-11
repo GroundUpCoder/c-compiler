@@ -704,6 +704,30 @@ Tests: `tests/kernel/test_ctxmenu_e2e.js` (42 checks; geometry goldens
 shell verification). Test traps recorded in
 `logs/2026-07-11/0091-context-menus.md`.
 
+## Implementation status — Recycle Bin, desktop side (landed 2026-07-11, todos/0093)
+
+The store + op semantics are fileops.h's (WIN32.md "0093"). wm.c owns
+the desktop surface: the bin icon is a real `/root/Desktop/Recycle Bin`
+launcher script recreated by `ensure_recycle()` at every wm start
+(double-click = the plain activate() path into
+`fileman /root/.recycle/files`; the bin can't be lost for good, and
+pre-0093 images grow one without a reseed). It PINS TO THE GRID'S TAIL
+— an entcmp special case, so every other icon keeps its pre-0093 sorted
+cell (test index math survives) and Sort-by-Name auto-flow keeps it
+last. The glyph is a basket (navy rim/walls on the white tile), center
+white when empty / navy when the store holds entries —
+`desk_trash_full` refreshed on the coarse desk tick, probe pixel = tile
+center. The icon context menu grew DELETE (trash the selection set —
+120x96 now, the moved 0092 golden), the Del key does the same from the
+keyboard, and both skip the bin itself; cut/copy also skip it (the bin
+is not a movable object). The bin's OWN menu is Open / Empty Recycle
+Bin (grayed when empty). Deliberate deviations, recorded: desktop
+deletes DON'T confirm (the result is recoverable and wm.c has no dialog
+furniture — fileman's flows confirm), the bin-menu Empty doesn't either
+(the destructive exception; fileman's Empty is the confirmed path), and
+there's no desktop Shift+Del permanent bypass. Tests:
+`tests/kernel/test_recycle_e2e.js` + `tests/browser/os-recycle.mjs`.
+
 ## Implementation status — Aero effects (landed 2026-07-10, todos/0063)
 
 The DWM/Aero visual wave on the 0055 WebGPU pass, in the item's dependency

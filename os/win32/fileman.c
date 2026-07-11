@@ -31,12 +31,18 @@
  * format-2 file list on the ONE kernel clipboard slot (0090) — so
  * cut/copy/paste crosses fileman instances AND the desktop — paste
  * moves (cut, slot cleared after) or duplicates (copy, "Copy of"
- * uniquifier on clash). Delete confirms via MessageBox and is
- * permanent until the Recycle Bin (0093) reroutes it; every op
- * surfaces failure as strerror(errno) in a MessageBox (EROFS under
- * /usr fails clean, todos/0040). Rename is a small dialog window (the
- * "Open with" picker pattern; Enter commits, Esc cancels), refusing
- * overwrite (EEXIST). Properties is a stat() MessageBox. */
+ * uniquifier on clash). Delete confirms via MessageBox and sends to the
+ * Recycle Bin (todos/0093 — shell32's SHFileTrash over the fileops.h
+ * /root/.recycle store); Shift+Del bypasses to a confirmed PERMANENT
+ * delete, and inside the store itself (browsing /root/.recycle/files)
+ * every delete is permanent. In the store the row menu swaps to
+ * Restore / Delete / Properties — Restore returns the entry to its
+ * sidecar-recorded original path, prompting to replace an occupied one —
+ * and the pane menu gains Empty Recycle Bin (confirmed; grayed when
+ * empty). Every op surfaces failure as strerror(errno) in a MessageBox
+ * (EROFS under /usr fails clean, todos/0040). Rename is a small dialog
+ * window (the "Open with" picker pattern; Enter commits, Esc cancels),
+ * refusing overwrite (EEXIST). Properties is a stat() MessageBox. */
 
 #include <windows.h>
 #include <shellapi.h>
@@ -78,6 +84,9 @@
 #define IDM_PROPS     307
 #define IDM_NEWFOLDER 308
 #define IDM_REFRESH   309
+#define IDM_DELPERM   310            /* Shift+Del: permanent delete (0093) */
+#define IDM_RESTORE   311            /* trash-only rows (0093) */
+#define IDM_EMPTY     312            /* trash-only pane (0093) */
 
 #define TOP_H  26                    /* the path/button strip */
 #define BTN_W  46
@@ -140,7 +149,10 @@ static void refill(void) {
     int n = 0;
     struct dirent *de;
     while ((de = readdir(d)) && n < 512) {
-        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        /* Dotfiles hidden (0093 — the .recycle store must not clutter
+         * /root; Explorer-style, the wm.c desktop rule). Navigation by
+         * PATH still reaches them; the 0106 View menu grows the toggle. */
+        if (de->d_name[0] == '.') continue;
         char full[768];
         snprintf(full, sizeof full, "%s/%s", g_cwd, de->d_name);
         struct stat st;
@@ -332,19 +344,74 @@ static void paste_here(void) {
     refill();
 }
 
-static void delete_selected(void) {
+/* Browsing the trash store itself? (Exactly files/ — a directory INSIDE a
+ * trashed dir is ordinary territory; per-entry restore only makes sense at
+ * the top, todos/0093.) */
+static int in_trash(void) { return strcmp(g_cwd, SHTrashFilesDir()) == 0; }
+
+/* Delete (0093): the plain path sends to the Recycle Bin; `perm` (the
+ * Shift+Del accelerator) — or any delete inside the store — really
+ * deletes. Both confirm first, with wording that says which one this is. */
+static void delete_selected(int perm) {
     char full[800];
     int isdir;
     if (!sel_path(full, sizeof full, &isdir)) return;
+    perm = perm || in_trash();
     const char *base = strrchr(full, '/');
     base = base ? base + 1 : full;
     char msg[900];
-    snprintf(msg, sizeof msg, "Are you sure you want to delete '%s'?", base);
+    if (perm)
+        snprintf(msg, sizeof msg,
+                 "Are you sure you want to delete '%s'?", base);
+    else
+        snprintf(msg, sizeof msg,
+                 "Are you sure you want to send '%s' to the Recycle Bin?", base);
     if (MessageBox(g_win, msg,
                    isdir ? "Confirm Folder Delete" : "Confirm File Delete",
                    MB_YESNO) != IDYES)
         return;
-    if (SHFileDelete(full) != 0) op_error("delete", full);
+    if ((perm ? SHFileDelete(full) : SHFileTrash(full)) != 0)
+        op_error("delete", full);
+    else if (in_trash())               /* a deleted store entry must not
+                                          orphan its sidecar (0093) */
+        SHTrashForget(full);
+    refill();
+}
+
+/* Restore a stored entry to its sidecar-recorded original path (0093).
+ * An occupied target prompts to replace (delete it, retry); a missing
+ * sidecar or parent surfaces as the usual error box. */
+static void restore_selected(void) {
+    char full[800];
+    int isdir;
+    if (!sel_path(full, sizeof full, &isdir)) return;
+    char target[800];
+    if (SHRestoreTarget(full, target, sizeof target) != 0) {
+        op_error("restore", full);
+        return;
+    }
+    if (SHFileRestore(full) != 0) {
+        if (errno == EEXIST) {
+            char msg[960];
+            snprintf(msg, sizeof msg,
+                     "A file already exists at '%s'.\nReplace it?", target);
+            if (MessageBox(g_win, msg, "Confirm Restore", MB_YESNO) != IDYES)
+                return;
+            if (SHFileDelete(target) != 0 || SHFileRestore(full) != 0)
+                op_error("restore", full);
+        } else op_error("restore", full);
+    }
+    refill();
+}
+
+/* Empty Recycle Bin (0093): confirmed, then the whole store goes. */
+static void empty_trash(void) {
+    if (MessageBox(g_win,
+                   "Are you sure you want to permanently delete all items "
+                   "in the Recycle Bin?",
+                   "Empty Recycle Bin", MB_YESNO) != IDYES)
+        return;
+    if (SHTrashEmpty() != 0) op_error("empty", "Recycle Bin");
     refill();
 }
 
@@ -475,16 +542,28 @@ static void ctx_menu(int sx, int sy) {
         char full[800];
         int isdir = 0;
         sel_path(full, sizeof full, &isdir);
-        AppendMenuA(m, 0, IDM_OPEN, "Open");
-        AppendMenuA(m, isdir ? MF_GRAYED : 0, IDM_OPENWITH, "Open With");
+        if (in_trash()) {              /* the Recycle Bin view (0093) */
+            AppendMenuA(m, 0, IDM_RESTORE, "Restore");
+            AppendMenuA(m, 0, IDM_DELETE, "Delete");
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, 0, IDM_PROPS, "Properties");
+        } else {
+            AppendMenuA(m, 0, IDM_OPEN, "Open");
+            AppendMenuA(m, isdir ? MF_GRAYED : 0, IDM_OPENWITH, "Open With");
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, 0, IDM_CUT, "Cut");
+            AppendMenuA(m, 0, IDM_COPY, "Copy");
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, 0, IDM_RENAME, "Rename");
+            AppendMenuA(m, 0, IDM_DELETE, "Delete");
+            AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(m, 0, IDM_PROPS, "Properties");
+        }
+    } else if (in_trash()) {           /* trash pane: Empty + Refresh (0093) */
+        AppendMenuA(m, SHTrashCount() > 0 ? 0 : MF_GRAYED, IDM_EMPTY,
+                    "Empty Recycle Bin");
         AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-        AppendMenuA(m, 0, IDM_CUT, "Cut");
-        AppendMenuA(m, 0, IDM_COPY, "Copy");
-        AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-        AppendMenuA(m, 0, IDM_RENAME, "Rename");
-        AppendMenuA(m, 0, IDM_DELETE, "Delete");
-        AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-        AppendMenuA(m, 0, IDM_PROPS, "Properties");
+        AppendMenuA(m, 0, IDM_REFRESH, "Refresh");
     } else {
         AppendMenuA(m, SHClipHasFiles() ? 0 : MF_GRAYED, IDM_PASTE, "Paste");
         AppendMenuA(m, MF_SEPARATOR, 0, NULL);
@@ -553,7 +632,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_COPY:      clip_selected(0);    return 0;
         case IDM_PASTE:     paste_here();        return 0;
         case IDM_RENAME:    rename_selected();   return 0;
-        case IDM_DELETE:    delete_selected();   return 0;
+        case IDM_DELETE:    delete_selected(0);  return 0;
+        case IDM_DELPERM:   delete_selected(1);  return 0;
+        case IDM_RESTORE:   restore_selected();  return 0;
+        case IDM_EMPTY:     empty_trash();       return 0;
         case IDM_PROPS:     props_selected();    return 0;
         case IDM_NEWFOLDER: new_folder();        return 0;
         case IDM_REFRESH:   refill();            return 0;
@@ -600,11 +682,12 @@ int main(int argc, char **argv) {
     ACCEL acc[] = {
         { FVIRTKEY, VK_F2, IDM_RENAME },
         { FVIRTKEY, VK_DELETE, IDM_DELETE },
+        { FVIRTKEY | FSHIFT, VK_DELETE, IDM_DELPERM },   /* permanent (0093) */
         { FVIRTKEY | FCONTROL, 'C', IDM_COPY },
         { FVIRTKEY | FCONTROL, 'X', IDM_CUT },
         { FVIRTKEY | FCONTROL, 'V', IDM_PASTE },
     };
-    g_accel = CreateAcceleratorTableA(acc, 5);
+    g_accel = CreateAcceleratorTableA(acc, 6);
     MSG m;
     while (GetMessage(&m, NULL, 0, 0)) {
         /* Enter/Esc drive the pickers (the single-line EDIT swallows

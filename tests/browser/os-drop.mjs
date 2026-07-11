@@ -112,14 +112,17 @@ try {
   // Seeded /root/Desktop (os/image.json — bump DESK below when it gains
   // an entry): "blob.bin" sorts FIRST, pushing every icon down one cell;
   // the tile appearing in the LAST cell is the "icon appeared" signal.
+  // The Recycle Bin (0093, wm.c-created) pins to the grid's TAIL below
+  // every sorted entry, so the last cell sits one row further down.
   const DESK = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
                 'quake', 'term'];
+  const BIN = 1;                                 // 'Recycle Bin', the tail cell
   const hl = await dropFile(page, 'blob.bin', BLOB);
   check('dragover lit the drop highlight', hl.lit && hl.cleared, hl);
   await waitDropLog(page, 'blob.bin -> /root/Desktop/blob.bin (256 bytes)');
   check('kernel logged the write', true);
-  await waitPixel(48, 16 + DESK.length * 64 + 6 + 2, WHITE, 15000);   // last cell tile
-  check(`icon appeared without a reboot (${DESK.length + 1}-cell grid)`, true);
+  await waitPixel(48, 16 + (DESK.length + BIN) * 64 + 6 + 2, WHITE, 15000);   // last cell tile
+  check(`icon appeared without a reboot (${DESK.length + BIN + 1}-cell grid)`, true);
 
   // Byte-identity through the shell (busybox md5sum over the brokered fs).
   await shellExpect('md5sum /root/Desktop/blob.bin',

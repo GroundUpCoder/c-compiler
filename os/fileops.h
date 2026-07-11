@@ -22,6 +22,17 @@
  * Cut-paste is a move and clears the slot on success (a cut pastes once);
  * copy-paste duplicates, uniquifying a name clash Win95-style ("Copy of X",
  * "Copy (2) of X", ...).
+ *
+ * The trash store (todos/0093) is /root/.recycle — files/ holds the moved
+ * entries (name clashes uniquified "x", "x 2", ...), info/ holds one
+ * sidecar per entry under the SAME stored name (line 1: the original
+ * absolute path; line 2: the delete time as decimal Unix seconds — the
+ * Win95 INFO2 idea kept textual). The files/info split means a trashed
+ * file can never collide with its own metadata. fo_trash refuses paths
+ * already inside the store (delete-in-trash is permanent, the caller's
+ * job); restore refuses an occupied original path with EEXIST so the
+ * caller can prompt. Unbounded until fo_trash_empty — the recorded 0093
+ * non-goal (no quota, like early Win95).
  */
 #ifndef FILEOPS_H
 #define FILEOPS_H
@@ -33,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define FO_CLIP_FMT  2               /* kernel clipboard slot format tag */
@@ -228,6 +240,141 @@ static int fo_new_dest(const char *dir, const char *base, const char *ext,
     }
     errno = EEXIST;
     return -1;
+}
+
+/* ---- the trash store (todos/0093) ---- */
+
+#define FO_TRASH       "/root/.recycle"
+#define FO_TRASH_FILES FO_TRASH "/files"
+#define FO_TRASH_INFO  FO_TRASH "/info"
+
+/* Idempotent store creation (mkdir -p by hand — two levels). */
+static void fo_trash_init(void) {
+    mkdir(FO_TRASH, 0755);
+    mkdir(FO_TRASH_FILES, 0755);
+    mkdir(FO_TRASH_INFO, 0755);
+}
+
+/* Inside the store (any level)? Trashing there is refused — deleting an
+ * already-trashed entry is permanent (the Win95 rule). */
+static int fo_in_trash(const char *path) {
+    size_t l = strlen(FO_TRASH);
+    return strncmp(path, FO_TRASH, l) == 0 && (path[l] == '/' || path[l] == 0);
+}
+
+/* Live entries in the store (the full/empty glyph + Empty gray gate). */
+static int fo_trash_count(void) {
+    DIR *d = opendir(FO_TRASH_FILES);
+    if (!d) return 0;
+    int n = 0;
+    struct dirent *de;
+    while ((de = readdir(d)))
+        if (strcmp(de->d_name, ".") && strcmp(de->d_name, "..")) n++;
+    closedir(d);
+    return n;
+}
+
+/* Move `path` (absolute) into the store with a sidecar. A failed sidecar
+ * write rolls the move back — an entry without its original path could
+ * never be restored. */
+static int fo_trash(const char *path) {
+    if (fo_in_trash(path)) { errno = EINVAL; return -1; }
+    fo_trash_init();
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    char dst[FO_PATH_MAX];
+    if (fo_new_dest(FO_TRASH_FILES, base, "", dst, sizeof dst) != 0) return -1;
+    if (fo_move(path, dst) != 0) {
+        /* fo_move's EXDEV path can leave a copied dst behind (e.g. the
+         * source delete failed EROFS): sweep it so a failed trash never
+         * strands a store entry. */
+        int e = errno;
+        struct stat st;
+        if (lstat(dst, &st) == 0) fo_delete(dst);
+        errno = e;
+        return -1;
+    }
+    char info[FO_PATH_MAX];
+    snprintf(info, sizeof info, "%s/%s", FO_TRASH_INFO,
+             strrchr(dst, '/') + 1);
+    FILE *f = fopen(info, "w");
+    if (!f || fprintf(f, "%s\n%ld\n", path, (long)time(NULL)) < 0 ||
+        fclose(f) != 0) {
+        int e = errno;
+        if (f) fclose(f);
+        unlink(info);
+        fo_move(dst, path);                      /* roll back */
+        errno = e;
+        return -1;
+    }
+    return 0;
+}
+
+/* The recorded original path of stored entry `stored` (its full path in
+ * files/), from the sidecar. */
+static int fo_restore_target(const char *stored, char *out, size_t cap) {
+    const char *base = strrchr(stored, '/');
+    base = base ? base + 1 : stored;
+    char info[FO_PATH_MAX];
+    snprintf(info, sizeof info, "%s/%s", FO_TRASH_INFO, base);
+    FILE *f = fopen(info, "r");
+    if (!f) return -1;
+    int ok = fgets(out, (int)cap, f) != NULL;
+    fclose(f);
+    if (!ok) { errno = EINVAL; return -1; }
+    size_t l = strlen(out);
+    while (l > 0 && (out[l - 1] == '\n' || out[l - 1] == '\r')) out[--l] = 0;
+    if (!l || out[0] != '/') { errno = EINVAL; return -1; }
+    return 0;
+}
+
+/* Drop the sidecar of stored entry `stored` — the permanent-delete-in-
+ * store companion (a deleted entry must not orphan its metadata). */
+static void fo_trash_forget(const char *stored) {
+    const char *base = strrchr(stored, '/');
+    base = base ? base + 1 : stored;
+    char info[FO_PATH_MAX];
+    snprintf(info, sizeof info, "%s/%s", FO_TRASH_INFO, base);
+    unlink(info);
+}
+
+/* Return `stored` to its recorded original path. An occupied target is
+ * EEXIST (fo_move's rule) — the caller prompts, deletes, retries. The
+ * sidecar goes with a clean restore. */
+static int fo_restore(const char *stored) {
+    char orig[FO_PATH_MAX];
+    if (fo_restore_target(stored, orig, sizeof orig) != 0) return -1;
+    if (fo_move(stored, orig) != 0) return -1;
+    const char *base = strrchr(stored, '/');
+    base = base ? base + 1 : stored;
+    char info[FO_PATH_MAX];
+    snprintf(info, sizeof info, "%s/%s", FO_TRASH_INFO, base);
+    unlink(info);
+    return 0;
+}
+
+/* Empty the store: every files/ entry and every info/ sidecar, the dirs
+ * themselves kept. First failure stops and reports. */
+static int fo_trash_empty(void) {
+    static const char *const dirs[2] = { FO_TRASH_FILES, FO_TRASH_INFO };
+    for (int k = 0; k < 2; k++) {
+        DIR *d = opendir(dirs[k]);
+        if (!d) continue;
+        int rc = 0;
+        struct dirent *de;
+        while (rc == 0 && (de = readdir(d))) {
+            if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+            char p[FO_PATH_MAX];
+            if (snprintf(p, sizeof p, "%s/%s", dirs[k], de->d_name) >=
+                (int)sizeof p) { errno = ENAMETOOLONG; rc = -1; break; }
+            rc = fo_delete(p);
+        }
+        int e = errno;
+        closedir(d);
+        errno = e;
+        if (rc != 0) return -1;
+    }
+    return 0;
 }
 
 #endif /* FILEOPS_H */

@@ -31,6 +31,17 @@ int SHClipHasFiles(void);
 int SHClipLoadFiles(char *buf, int cap, int *cut);
 const char *SHClipPath(const char *buf, int i);
 int SHClipClear(void);
+/* The trash store (0093, fileops.h /root/.recycle): trash moves a path
+ * into the store with an original-path sidecar; restore returns a stored
+ * entry (its full files/ path) to that original — EEXIST when occupied,
+ * so the caller can prompt-and-replace. Empty clears the whole store. */
+int SHFileTrash(const char *path);
+int SHFileRestore(const char *stored);
+int SHRestoreTarget(const char *stored, char *out, int cap);
+void SHTrashForget(const char *stored);   /* drop a sidecar (perm delete) */
+int SHTrashEmpty(void);
+int SHTrashCount(void);
+const char *SHTrashFilesDir(void);
 #define SHCLIP_MAX 8192              /* fileops.h FO_CLIP_MAX */
 #define SHARD_PIDL  1
 #define SHARD_PATHA 2

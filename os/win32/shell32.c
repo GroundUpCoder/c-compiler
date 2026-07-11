@@ -34,6 +34,18 @@ int SHNewDest(const char *dir, const char *base, const char *ext,
     return fo_new_dest(dir, base, ext, out, (size_t)cap);
 }
 
+/* The trash store (todos/0093, fileops.h /root/.recycle — files/ entries
+ * + info/ sidecars). Same veneer-local convention as the SHFile* set. */
+int SHFileTrash(const char *path) { return fo_trash(path); }
+int SHFileRestore(const char *stored) { return fo_restore(stored); }
+int SHRestoreTarget(const char *stored, char *out, int cap) {
+    return fo_restore_target(stored, out, (size_t)cap);
+}
+void SHTrashForget(const char *stored) { fo_trash_forget(stored); }
+int SHTrashEmpty(void) { return fo_trash_empty(); }
+int SHTrashCount(void) { return fo_trash_count(); }
+const char *SHTrashFilesDir(void) { return FO_TRASH_FILES; }
+
 /* The clipboard file list (fileops.h FO_CLIP_FMT over the 0090 slot). */
 int SHClipSetFiles(int cut, const char *const *paths, int n) {
     return fo_clip_set(cut, paths, n);

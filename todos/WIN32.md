@@ -225,6 +225,36 @@ same-labelled button no longer shadows the live one. Delete is
 PERMANENT until 0093 reroutes it. Tests:
 `tests/kernel/test_fileman_ops_e2e.js` + `tests/browser/os-fileman.mjs`.
 
+0093 (Recycle Bin, 2026-07-11) rerouted delete through a TRASH STORE.
+The store lives in `os/fileops.h` (the shared core, so fileman and wm.c
+behave identically): `/root/.recycle/files/` holds moved entries (name
+clashes uniquified "x", "x 2", ...), `/root/.recycle/info/` one sidecar
+per entry under the SAME stored name — line 1 the original absolute
+path, line 2 the delete time as decimal Unix seconds (the Win95 INFO2
+idea kept textual; the files/info split means an entry can't collide
+with its own metadata). `fo_trash` refuses paths already in the store
+(delete-in-store is permanent) and sweeps fo_move's EXDEV partial copy
+on failure, so a refused trash (EROFS under /usr) never strands a store
+entry; a failed sidecar write rolls the move back. `fo_restore` returns
+an entry to its recorded path — EEXIST when occupied, the caller
+prompts-and-replaces; `fo_trash_forget` drops the sidecar of a
+permanently deleted entry; `fo_trash_empty` clears both dirs. shell32
+re-exports the set as `SHFileTrash`/`SHFileRestore`/`SHRestoreTarget`/
+`SHTrashForget`/`SHTrashEmpty`/`SHTrashCount`/`SHTrashFilesDir`
+(veneer-local, the 0092 convention). fileman.c: Del/menu Delete confirm
+with Recycle-Bin wording and trash; Shift+Del (FVIRTKEY|FSHIFT
+accelerator) bypasses to a confirmed permanent delete; browsing the
+store (cwd == files/) swaps the row menu to Restore/Delete/Properties
+and the pane menu to Empty Recycle Bin (confirmed, grayed when empty) /
+Refresh, with in-store deletes permanent. The desktop side is wm.c's
+(WM.md); the bin ICON is a real `/root/Desktop/Recycle Bin` launcher
+script (`#!/bin/sh` → `fileman /root/.recycle/files`) recreated by wm.c
+at startup, so double-click rides the plain activate() path and
+pre-0093 images grow a bin without a reseed. Non-goals kept: no quota
+(unbounded until Empty), no /usr trashing (EROFS is the answer), no
+dedicated bin app. Tests: `tests/kernel/test_recycle_e2e.js` +
+`tests/browser/os-recycle.mjs`.
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

@@ -74,8 +74,10 @@
  * Context menus (todos/0091): right-click raises a two-window popup (root
  * "ctxmenu" + at most one "ctxmenu2" flyout — the v1 depth cap) built from
  * fixed item lists. Empty desktop: New >, Sort by >, Refresh, Display
- * (ctlpanel's Display applet); an icon: Open (the 0092 file ops grow
- * here); a taskbar button: Restore/Minimize/Maximize/Close over the
+ * (ctlpanel's Display applet); an icon: Open, Cut/Copy (0092) and Delete
+ * to the Recycle Bin (0093 — the bin icon itself gets Open + Empty
+ * instead, and pins to the grid's tail); a taskbar button:
+ * Restore/Minimize/Maximize/Close over the
  * chrome ops this process already owns, inapplicable rows grayed. Same
  * furniture rules as the Start menu: top layer, root holds kernel focus
  * (flyouts hand it back), focus-leave/outside-click/Esc dismiss, arrows/
@@ -233,6 +235,8 @@ static int desk_dirty = 1;         /* redraw only when contents change */
 static int desk_last_idx = -1;     /* double-click tracking (event timestamps) */
 static uint64_t desk_last_ns = 0;
 static int desk_tick = 0;          /* coarse /root/Desktop re-read timer */
+static int desk_trash_full = 0;    /* Recycle Bin glyph state (todos/0093),
+                                      refreshed on the same coarse tick */
 static int mod_ctrl = 0, mod_shift = 0;   /* held modifiers, tracked from
                                              key events by KEYSYM — pointer
                                              records carry no mod word; reset
@@ -264,6 +268,8 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* flyout rows */
     CM_OPEN,                       /* icon */
     CM_CUT, CM_COPY,               /* icon (0092: the selection set) */
+    CM_DELETE,                     /* icon (0093: to the Recycle Bin) */
+    CM_EMPTY,                      /* the Recycle Bin icon (0093) */
     CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE /* taskbar button */
 };
 #define CTF_SEP   1                /* separator groove row */
@@ -283,6 +289,7 @@ static int ctx_child = -1;         /* root row whose flyout is open */
 static int32_t ctx_target = 0;     /* taskbar menu: the acted-on window */
 static int ctx_icon = -1;          /* icon menu: desk[] index */
 static void ctx_dismiss(void);     /* defined with the rest (0091) */
+static void desk_delete(void);     /* likewise (0093 — desk_key's Del) */
 
 /* Aero Peek state (todos/0063): hovering a taskbar button raises a live
  * thumbnail popup — a fourth borderless window in this process, fed by
@@ -539,6 +546,13 @@ static void activate(const char *path) {
 
 static int entcmp(const void *a, const void *b) {
     const menu_ent *ea = (const menu_ent *)a, *eb = (const menu_ent *)b;
+    /* The Recycle Bin pins to the grid's TAIL (todos/0093): every other
+     * icon keeps its pre-0093 sorted cell, and the bin sits below/after
+     * everything the way Win95 keeps it apart. (Shared with the Start
+     * menu, where no entry carries this name.) */
+    int ra = strcmp(ea->name, "Recycle Bin") == 0;
+    int rb = strcmp(eb->name, "Recycle Bin") == 0;
+    if (ra != rb) return ra - rb;
     if (ea->is_dir != eb->is_dir) return eb->is_dir - ea->is_dir;   /* groups first (0078) */
     return strcmp(ea->name, eb->name);
 }
@@ -955,6 +969,8 @@ static void desk_save(void) {
 
 static void desk_load(void) {
     if (desk_press) return;            /* never reshuffle under a drag (0077) */
+    int tf = fo_trash_count() > 0;     /* bin glyph state (todos/0093) */
+    if (tf != desk_trash_full) { desk_trash_full = tf; desk_dirty = 1; }
     menu_ent fresh[MAX_DESK];
     int fcol[MAX_DESK], frow[MAX_DESK];
     int n = load_entries("/root/Desktop", fresh, MAX_DESK);
@@ -1200,6 +1216,7 @@ static void desk_key(int sym) {
         desk_dirty = 1;
         return;
     }
+    if (sym == SDLK_DELETE) { desk_delete(); return; }   /* to the bin (0093) */
     if (sym == SDLK_LEFT) desk_arrow(-1, 0);
     else if (sym == SDLK_RIGHT) desk_arrow(1, 0);
     else if (sym == SDLK_UP) desk_arrow(0, -1);
@@ -1228,9 +1245,21 @@ static void draw_desk(void) {
         int cy = DESK_MARGIN + desk_row[i] * CELL_H;
         int ix = cx + (CELL_W - ICON_W) / 2, iy = cy + 6;
         /* Flat-rect glyph: white tile, navy center block; links get a
-         * black launcher notch at the bottom-left (the Win95 arrow). */
+         * black launcher notch at the bottom-left (the Win95 arrow). The
+         * Recycle Bin (todos/0093) draws a basket instead — hollow when
+         * empty, contents block when the store holds entries (the probe
+         * pixel is the tile center: white empty, navy full). */
         fill_s(px, w, h, ix, iy, ICON_W, ICON_W, white);
-        fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
+        if (strcmp(desk[i].name, "Recycle Bin") == 0) {
+            fill_s(px, w, h, ix + 3, iy + 3, ICON_W - 6, 2, navy);   /* rim */
+            fill_s(px, w, h, ix + 5, iy + 5, 2, ICON_W - 10, navy);  /* walls */
+            fill_s(px, w, h, ix + ICON_W - 7, iy + 5, 2, ICON_W - 10, navy);
+            fill_s(px, w, h, ix + 5, iy + ICON_W - 7, ICON_W - 10, 2, navy);
+            if (desk_trash_full)
+                fill_s(px, w, h, ix + 8, iy + 8, ICON_W - 16, ICON_W - 16, navy);
+        } else {
+            fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
+        }
         if (desk[i].is_link)
             fill_s(px, w, h, ix + 2, iy + ICON_W - 8, 6, 6, black);
         int len = (int)strlen(desk[i].name);
@@ -1369,16 +1398,27 @@ static void ctx_open_desktop(int x, int y) {
 }
 
 /* Right-click a desktop icon: Open + Cut/Copy of the selection set
- * (todos/0092 — the same format-2 clipboard file list fileman pastes;
- * Delete arrives with the Recycle Bin, 0093, Rename with 0103). */
+ * (todos/0092 — the same format-2 clipboard file list fileman pastes)
+ * + Delete to the Recycle Bin (todos/0093; Rename arrives with 0103).
+ * The Recycle Bin icon itself gets its own menu: Open + Empty Recycle
+ * Bin (grayed when the store is empty; unconfirmed by design — this
+ * process has no dialog furniture, fileman's Empty confirms). */
 static void ctx_open_icon(int idx, int x, int y) {
     ctx_dismiss();
     ctx_icon = idx;
     ctx_nent[0] = 0;
-    ctx_add(0, "OPEN", CM_OPEN, 0);
-    ctx_add(0, "", CM_NONE, CTF_SEP);
-    ctx_add(0, "CUT", CM_CUT, 0);
-    ctx_add(0, "COPY", CM_COPY, 0);
+    if (strcmp(desk[idx].name, "Recycle Bin") == 0) {
+        ctx_add(0, "OPEN", CM_OPEN, 0);
+        ctx_add(0, "", CM_NONE, CTF_SEP);
+        ctx_add(0, "EMPTY RECYCLE BIN", CM_EMPTY,
+                desk_trash_full ? 0 : CTF_GRAY);
+    } else {
+        ctx_add(0, "OPEN", CM_OPEN, 0);
+        ctx_add(0, "", CM_NONE, CTF_SEP);
+        ctx_add(0, "CUT", CM_CUT, 0);
+        ctx_add(0, "COPY", CM_COPY, 0);
+        ctx_add(0, "DELETE", CM_DELETE, 0);
+    }
     ctx_openwin(0, x, y);
 }
 
@@ -1391,12 +1431,31 @@ static void desk_clip(int cut) {
     int n = 0;
     for (int i = 0; i < desk_n && i < MAX_DESK; i++) {
         if (!(desk_selmask >> i & 1)) continue;
+        if (strcmp(desk[i].name, "Recycle Bin") == 0) continue;   /* not a
+                                          movable object (0093) */
         snprintf(bufs[n], sizeof bufs[n], "/root/Desktop/%s", desk[i].name);
         paths[n] = bufs[n];
         n++;
     }
     if (n && fo_clip_set(cut, paths, n) != 0)
         fprintf(stderr, "wm: clipboard set failed: %s\n", strerror(errno));
+}
+
+/* Delete the selection to the Recycle Bin (todos/0093 — recoverable, so
+ * no confirm; wm.c has no dialog furniture anyway). The bin itself is
+ * skipped; errors go to the service log, the fileman precedent. */
+static void desk_delete(void) {
+    for (int i = 0; i < desk_n && i < MAX_DESK; i++) {
+        if (!(desk_selmask >> i & 1)) continue;
+        if (strcmp(desk[i].name, "Recycle Bin") == 0) continue;
+        char path[300];
+        snprintf(path, sizeof path, "/root/Desktop/%s", desk[i].name);
+        if (fo_trash(path) != 0)
+            fprintf(stderr, "wm: delete '%s' failed: %s\n", path,
+                    strerror(errno));
+    }
+    desk_load();
+    desk_dirty = 1;
 }
 
 /* Paste the clipboard file list onto the desktop: cut moves (slot
@@ -1509,6 +1568,14 @@ static void ctx_activate(int d, int i) {
     case CM_CUT: desk_clip(1); break;            /* 0092 */
     case CM_COPY: desk_clip(0); break;
     case CM_PASTE: desk_paste(); break;
+    case CM_DELETE: desk_delete(); break;        /* 0093: to the bin */
+    case CM_EMPTY:                               /* 0093: the bin's menu */
+        if (fo_trash_empty() != 0)
+            fprintf(stderr, "wm: empty recycle bin failed: %s\n",
+                    strerror(errno));
+        desk_load();
+        desk_dirty = 1;
+        break;
     case CM_RESTORE: {
         win_t *w = find(target);
         if (!w) break;
@@ -2252,9 +2319,26 @@ static void frame_cb(void) {
     if (peek_dirty) { peek_dirty = 0; draw_peek(); }
 }
 
+/* The Recycle Bin's desktop presence (todos/0093): the trash store dirs
+ * plus a /root/Desktop launcher script — double-click opens the store in
+ * fileman, the shared activate() path (a #! script IS the icon, no wm.c
+ * launch special case). Recreated every wm start, so the bin can't be
+ * lost for good and pre-0093 images grow one without a reseed. */
+static void ensure_recycle(void) {
+    fo_trash_init();
+    mkdir("/root/Desktop", 0755);
+    struct stat st;
+    if (lstat("/root/Desktop/Recycle Bin", &st) == 0) return;
+    FILE *f = fopen("/root/Desktop/Recycle Bin", "w");
+    if (!f) return;
+    fputs("#!/bin/sh\nexec /bin/fileman " FO_TRASH_FILES "\n", f);
+    fclose(f);
+}
+
 int main(void) {
     own_pid = getpid();
     chdir("/root");                    /* children inherit the cwd (0028) */
+    ensure_recycle();                  /* the bin exists before desk_load (0093) */
     sock = wmp_connect();
     if (sock < 0) { fprintf(stderr, "wm: cannot reach %s\n", WM_SOCK_PATH); return 1; }
 

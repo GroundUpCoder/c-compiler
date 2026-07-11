@@ -31,11 +31,11 @@ function check(name, cond, extra) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-ctx-'));
 const image = path.join(tmp, 'os.img');
 
-// Geometry mirrors os/wm.c (todos/0091, rows grown by 0092): CTX_W 120,
-// rows 20px, 4px pad, 8px separator, clamped to the 1024x768 work area
-// above the 28px bar. Desktop menu: NEW / SORT BY / REFRESH / PASTE /
+// Geometry mirrors os/wm.c (todos/0091, rows grown by 0092/0093): CTX_W
+// 120, rows 20px, 4px pad, 8px separator, clamped to the 1024x768 work
+// area above the 28px bar. Desktop menu: NEW / SORT BY / REFRESH / PASTE /
 // --- / DISPLAY -> h 116; taskbar menu: RESTORE / MINIMIZE / MAXIMIZE /
-// --- / CLOSE -> h 96; icon menu: OPEN / --- / CUT / COPY -> h 76. A
+// --- / CLOSE -> h 96; icon menu: OPEN / --- / CUT / COPY / DELETE -> h 96. A
 // flyout parks at root-right - 3 with its first row aligned to the group
 // row (NEW: FOLDER + TEXT FILE -> h 48; SORT BY: NAME -> h 28). Row
 // centers at 4 + i*20 + 10.
@@ -47,9 +47,10 @@ const BAR_MENU_GEOM = '120x96+56+644';             // btn 0 x, 768-28-96
 const DISPLAY_ROW_Y = 4 + 4 * 20 + 8 + 10;         // below the groove: 102
 const CLOSE_ROW_Y = 4 + 3 * 20 + 8 + 10;           // bar menu groove: 82
 
-// The desktop starts as the seeded 7 icons; the script grows it. Icons
-// auto-flow column-major sorted (no .icons), centers x=58,
-// y = 16 + row*64 + 32 (the 0077 grid).
+// The desktop starts as the seeded 7 icons (plus the Recycle Bin, which
+// wm.c pins to the grid's TAIL — 0093 — so it never shifts these
+// indices); the script grows it. Icons auto-flow column-major sorted
+// (no .icons), centers x=58, y = 16 + row*64 + 32 (the 0077 grid).
 const deskY = (list, name) => 16 + list.indexOf(name) * 64 + 32;
 const DESK0 = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon', 'quake',
                'term'];
@@ -317,8 +318,8 @@ check('Start toggle while the ctxmenu is open: startmenu up, ctxmenu gone',
 
 // ---- icon menu ----
 const i1 = section('icon1');
-check('right-click an icon opens the Open/Cut/Copy menu (120x76, 0092)',
-  row(i1, 'ctxmenu').includes('120x76+'), JSON.stringify(i1));
+check('right-click an icon opens the Open/Cut/Copy/Delete menu (120x96, 0093)',
+  row(i1, 'ctxmenu').includes('120x96+'), JSON.stringify(i1));
 check('icon shot written', out.includes('d2-ok'));
 check('OPEN runs the launcher through the activate path (winbox +1)',
   out.includes('OPEN-DELTA-1'),

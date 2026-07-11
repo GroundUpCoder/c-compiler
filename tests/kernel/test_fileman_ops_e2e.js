@@ -12,7 +12,9 @@
 //     uniquifier; cut/paste: a real move, the slot cleared after (a cut
 //     pastes once -> Paste re-grays)
 //   - delete: the Del accelerator + MessageBox confirm (No keeps, Yes
-//     deletes); EROFS under /bin fails with a clean error box (0040)
+//     removes — to the Recycle Bin since 0093, test_recycle_e2e owns the
+//     store's semantics); EROFS under /bin fails with a clean error box
+//     (0040)
 //   - properties: stat facts (type/size/location) in a MessageBox
 //   - the wm.c desktop menus (0092 rows): icon Cut/Copy of the selection,
 //     desktop Paste — the SAME format-2 clipboard file list, so desktop
@@ -57,10 +59,11 @@ const RC_PANE = 'wmctl click $SID 100 300 3';
 
 // The wm.c desktop menus (geometry from wm.c MENU_*/CTX_W — the ctxmenu
 // goldens' move-together rule): icon menu rows OPEN 4-24 / sep / CUT
-// 32-52 / COPY 52-72; desktop menu NEW / SORT BY / REFRESH / PASTE
-// 64-84 / sep / DISPLAY. Fresh desktop icons sort 'Copy of dfile.txt' <
-// 'dfile.txt' < doom... (the 0091 test's rule); icon centers x=58,
-// y = 16 + idx*64 + 32.
+// 32-52 / COPY 52-72 / DELETE 72-92 (0093); desktop menu NEW / SORT BY /
+// REFRESH / PASTE 64-84 / sep / DISPLAY. Fresh desktop icons sort
+// 'Copy of dfile.txt' < 'dfile.txt' < doom... (the 0091 test's rule; the
+// Recycle Bin pins to the tail — 0093 — so it never shifts these); icon
+// centers x=58, y = 16 + idx*64 + 32.
 const ICON_CUT_Y = 42, ICON_COPY_Y = 62, DESK_PASTE_Y = 74;
 
 const script = [
@@ -326,10 +329,11 @@ check('the slot clears after a cut-paste (Paste re-grays)',
 
 // ---- delete ----
 const d1 = section('del1');
-check('Del raises the confirm box', d1.includes('Confirm File Delete') &&
-  d1.includes("delete 'm.txt'"), d1.slice(0, 400));
+check('Del raises the confirm box (Recycle Bin wording, 0093)',
+  d1.includes('Confirm File Delete') &&
+  d1.includes("send 'm.txt' to the Recycle Bin"), d1.slice(0, 400));
 check('confirm No keeps the file', out.includes('DEL-NO-OK'));
-check('confirm Yes deletes it', out.includes('DEL-YES-OK'));
+check('confirm Yes removes it from the dir', out.includes('DEL-YES-OK'));
 check('delete under /bin fails with a clean EROFS box (0040)',
   section('erofs1').includes('Cannot delete'), section('erofs1').slice(0, 500));
 check('the read-only volume is intact', out.includes('ROFS-INTACT'));

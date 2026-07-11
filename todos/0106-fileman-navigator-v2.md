@@ -31,8 +31,9 @@ survey). 0092 gives fileman verbs; this gives it a real navigator.
 - **Status bar** — "<N> item(s)  <selected summary>" strip at the bottom
   (0073 notes the status-bar class draws no size grip — fine).
 - **Sort + hidden toggle** — View menu: sort by name/size/date +
-  reverse; Show hidden files off by default (dotfiles hidden — closer to
-  Explorer and to the eventual Recycle-Bin dotdir, 0093).
+  reverse; Show hidden files toggle. NB the hidden-by-default half
+  already landed with 0093 (refill skips dotfiles so the .recycle store
+  doesn't clutter /root) — this item adds the way to turn them back ON.
 - **Back history** — a small pushdown of visited paths; Backspace stays
   Up (Win95), Alt+Left = Back.
 

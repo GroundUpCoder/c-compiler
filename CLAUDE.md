@@ -459,11 +459,33 @@ the desktop menu grew Paste (both over fileops.h). NEW user32 surface:
 and AQ_CLICK now prefers an ENABLED match (`agent_find_ex`) so
 modal-over-modal — an error box over the rename dialog — is drivable
 (a disabled same-labelled button no longer shadows the live one).
-Delete is PERMANENT until the Recycle Bin (0093) reroutes it; multi-
-select/details = 0106, desktop-icon rename = 0103, DnD = recorded
+Multi-select/details = 0106, desktop-icon rename = 0103, DnD = recorded
 non-goal. Tests: `tests/kernel/test_fileman_ops_e2e.js` +
 `tests/browser/os-fileman.mjs`.
-Image version is **v53**.
+The Recycle Bin (todos/0093): delete is RECOVERABLE now — the trash
+store is fileops.h territory (`/root/.recycle/files/` moved entries,
+name clashes uniquified "x", "x 2"; `/root/.recycle/info/` one sidecar
+per entry, line 1 = original absolute path, line 2 = delete time; the
+split means an entry can't collide with its metadata). `fo_trash`
+refuses in-store paths (delete-in-store = permanent) and sweeps the
+EXDEV partial copy on failure (EROFS under /usr strands nothing);
+`fo_restore` → EEXIST on an occupied target (caller prompts);
+`fo_trash_forget` drops a permanently-deleted entry's sidecar;
+shell32 re-exports all of it (`SHFileTrash`/`SHTrashEmpty`/...).
+fileman: Del/menu Delete = confirmed trash, Shift+Del = confirmed
+permanent (FSHIFT accelerator), in the store the row menu becomes
+Restore/Delete/Properties + pane Empty Recycle Bin (confirmed,
+empty-grayed). wm.c: the bin icon is a REAL `/root/Desktop/Recycle
+Bin` launcher script recreated at every wm start (dblclick =
+activate() → fileman at the store), pinned to the grid's TAIL by an
+entcmp special case (other icons keep their sorted cells — test index
+math survives); basket glyph flips white/navy center by store count
+(coarse-tick refresh); icon menu grew DELETE (+ the Del key), both
+skip the bin, cut/copy skip it too; the bin's own menu is Open/Empty
+Recycle Bin. Desktop deletes and the bin-menu Empty deliberately DON'T
+confirm (no dialog furniture in wm.c; fileman's flows do). Tests:
+`tests/kernel/test_recycle_e2e.js` + `tests/browser/os-recycle.mjs`.
+Image version is **v54**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
