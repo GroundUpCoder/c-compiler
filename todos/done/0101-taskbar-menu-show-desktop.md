@@ -1,6 +1,27 @@
 # 0101 — taskbar polish: bar context menu, Show Desktop, clock date
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). All three parts landed in `os/wm.c`
+  (image v60→v61): (1) right-clicking the strip (empty run / clock /
+  Show-Desktop region — anything past the Start strip that isn't a drawn
+  button) opens a taskbar-strip menu — Cascade, Tile, Minimize All,
+  Properties (→ ctlpanel) — over the 0091 popup furniture
+  (`ctx_open_taskbar`); Cascade/Tile are wm.c policy loops (resizable →
+  MOVE+RESIZE uniform-box / near-square grid, fixed-size → cascaded
+  positions, never sheared). (2) A narrow Show Desktop sliver at the far
+  right (`SHOWDESK_W`; the clock budgets against `clock_left()`) toggles
+  minimize-all/restore, stashing the sids it minimized (`sd_stash`) so a
+  second click restores exactly that set. (3) Hovering (or clicking, for
+  agent parity) the clock raises a "datepop" date tooltip (the Aero-Peek
+  borderless mechanism — hover idle-dismisses, click pins). Right-button
+  routing added at `bar_rclick`; left-click byte-identical. Verified:
+  `node tests/kernel/run.js` 53/0 over a fresh v61 bake, with new 0101
+  legs in `test_wm_service_e2e.js` (strip-menu open, Minimize All, Show
+  Desktop toggle, Cascade uniform box, datepop) and `test_ctxmenu_e2e.js`
+  updated (empty-bar right-click now opens the strip menu; the Start strip
+  is the reserved slot). Browser leg added to `tests/browser/os-shell.mjs`
+  (manual tier — not run this session, no playwright here). Non-goals
+  (Quick Launch strip, notification tray, button grouping, moving the bar)
+  recorded, not built. No follow-ups filed.
 - **Design**: `todos/WM.md` "The desktop shell" (taskbar block, todos/done/
   0031). Filed by the 0076 parity sweep. Sequenced after 0091 because the
   right-click popup look/dismiss rules should match the context-menu

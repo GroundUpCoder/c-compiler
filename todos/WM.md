@@ -585,6 +585,25 @@ swap-remove — wm.c `wins[i] = wins[--nwins]` — reshuffles buttons on
 any close; keep launch order like Win95); **button overflow** (shrink
 button widths once they'd run past the clock, rather than off screen).
 
+**Taskbar polish round 2 (todos/0101).** Right-clicking the strip
+(empty run, clock, or the Show Desktop region — anything past the Start
+strip that isn't a drawn button) raises a **taskbar-strip menu** —
+Cascade, Tile, Minimize All, Properties (→ ctlpanel) — over the same
+0091 borderless-popup furniture (`ctx_open_taskbar`, top layer, root
+focus, outside-click/Esc dismiss). Cascade/Tile are wm.c policy loops:
+resizable windows get real MOVE+RESIZE (a uniform 3/5 cascade box or a
+near-square tile grid), fixed-size windows are cascaded positions only
+(never sheared — the 0021 rule). A narrow **Show Desktop** sliver at the
+far right (past the clock; `SHOWDESK_W`, so the clock's right budget is
+`bar_w - SHOWDESK_W - CLOCK_W` via `clock_left()`) toggles minimize-all /
+restore, stashing the sids it minimized (`sd_stash`) so a second click
+brings back exactly that set — windows minimized before the toggle stay
+down. Hovering (or clicking, for agent parity) the clock raises a
+**"datepop"** tooltip window (`DATE_W`×`DATE_H`, the Aero-Peek borderless
+mechanism) with the full date; a hover popup idle-dismisses like peek, a
+click pins it until clicked away. Right-button routing arrives at
+`bar_rclick` off `e.button.button == 3` (left-click stays byte-identical).
+
 **Window cycling (todos/0032).** The one shell piece needing new kernel
 mechanism: every key goes to the focused surface and there is no grab.
 Add a kernel-recognized chord at the key-routing seam (`wmKey`) that
@@ -810,8 +829,9 @@ sorted layout) / Refresh / Display (→ `ctlpanel Display`; ctlpanel grew
 applet-by-name argv); icon = select-alone-unless-in-set + Open through
 activate() (0092's file ops grow here); taskbar button =
 Restore/Minimize/Maximize/Close over the chrome ops this process already
-owns (grayed rows never fire and leave the menu open; Start strip +
-empty bar reserved for the 0101 taskbar menu, title bars for 0102).
+owns (grayed rows never fire and leave the menu open; Start strip stays
+reserved, the empty strip/clock/Show-Desktop region grew the 0101
+taskbar-strip menu, title bars still reserved for 0102).
 Fix that fell out: the START menu's EV_FOCUS dismissal is now gated on
 its root echo (`mcol[0].sid`, the 0078 run-dialog precedent) — without
 it, menu_toggle's ctx_dismiss makes focus fall to an app window and that

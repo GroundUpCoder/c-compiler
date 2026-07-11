@@ -100,8 +100,18 @@
  * chrome ops this process already owns, inapplicable rows grayed. Same
  * furniture rules as the Start menu: top layer, root holds kernel focus
  * (flyouts hand it back), focus-leave/outside-click/Esc dismiss, arrows/
- * Enter drive it. The Start strip and empty bar stay reserved for the
- * 0101 taskbar-strip menu; window title bars for 0102.
+ * Enter drive it. The Start strip stays reserved; window title bars for
+ * 0102.
+ *
+ * Taskbar polish (todos/0101): the empty strip (and the clock/Show Desktop
+ * region) right-clicks to a taskbar menu — Cascade, Tile, Minimize All,
+ * Properties (-> ctlpanel) — pure wm.c policy loops over the window list
+ * (resizable windows get real MOVE+RESIZE; fixed-size ones are cascaded,
+ * never sheared — the 0021 rule). A narrow Show Desktop sliver at the far
+ * right (past the clock) toggles minimize-all / restore, stashing the set
+ * it minimized so a second click brings back exactly those. Hovering (or
+ * clicking, for agent parity) the clock raises a "datepop" tooltip window
+ * with the full date — the Aero-Peek borderless-furniture mechanism.
  *
  * The screensaver (todos/0096): after the configured seconds of idle —
  * measured by the KERNEL (WMP GET_IDLE, polled once a second off the frame
@@ -148,6 +158,9 @@
 #define BTN_MIN   24    /* ...but never below a clickable floor */
 #define BTN_GAP   4
 #define CLOCK_W   45    /* right-aligned HH.MM cell: 8 + 5*6-1 + 8 (0031) */
+#define SHOWDESK_W 14   /* the Show Desktop sliver at the far right (0101) */
+#define DATE_W    104   /* the clock-hover date tooltip (0101): "SAT 2026-07-11" */
+#define DATE_H    22
 #define MAX_WIN   64
 #define TITLE_H   28    /* keep placements below the kernel title bar (>= WM_TITLE_H) */
 
@@ -237,6 +250,23 @@ static int place_k = 0;            /* cascade counter */
 static SDL_Window *bar_win;
 static SDL_Surface *bar_surf;
 static int bar_w;
+
+/* Show Desktop (todos/0101): the far-right sliver toggles minimize-all /
+ * restore. sd_stash holds the sids WE minimized on the way down (by sid,
+ * since wins[] indices aren't stable), so a second click brings back
+ * exactly those — windows minimized before the toggle stay minimized. */
+static int32_t sd_stash[MAX_WIN];
+static int sd_nstash = 0;
+
+/* The clock-hover date tooltip (todos/0101): a borderless top-layer
+ * "datepop" furniture window (the Aero-Peek mechanism). Shown on hover
+ * (unpinned: idle-dismissed) or toggled by a click (pinned: stays up). */
+static SDL_Window *date_win;
+static SDL_Surface *date_surf;
+static int32_t date_sid = 0;
+static int date_x = 0;
+static int date_idle = 0;
+static int date_pinned = 0;
 
 /* Start menu state (todos/0028, cascading columns since todos/0078): one
  * borderless window per open column, live only while open. Entries are
@@ -340,7 +370,8 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_CUT, CM_COPY,               /* icon (0092: the selection set) */
     CM_DELETE,                     /* icon (0093: to the Recycle Bin) */
     CM_EMPTY,                      /* the Recycle Bin icon (0093) */
-    CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE /* taskbar button */
+    CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE, /* taskbar button */
+    CM_CASCADE, CM_TILE, CM_MIN_ALL, CM_PROPERTIES  /* taskbar strip (0101) */
 };
 #define CTF_SEP   1                /* separator groove row */
 #define CTF_GRAY  2                /* disabled: drawn gray, never fires */
@@ -365,6 +396,7 @@ static void menu_dismiss(void);    /* these three likewise (0096 —
                                       before covering the screen) */
 static void run_dismiss(void);
 static void peek_dismiss(void);
+static void date_dismiss(void);                    /* clock tooltip (0101) */
 static void sm_record_recent(const char *path);   /* MRU recents (0098) */
 
 /* Aero Peek state (todos/0063): hovering a taskbar button raises a live
@@ -555,6 +587,96 @@ static void maximize(win_t *w) {
         wmp_send(sock, WMP_MOVE, m, 3);
         wmp_send(sock, WMP_SET_DST, d, 3);
     }
+}
+
+/* ---- taskbar-strip arrangement commands (todos/0101) ---- */
+
+/* Place one window at cascade slot k: a diagonal offset in the work area,
+ * wrapped so a long run stays on-screen. Resizable windows also resize to
+ * a uniform 3/5 box; fixed-size ones are only moved (never sheared, the
+ * 0021 rule). Cascading exits any maximize/snap state. */
+static void cascade_one(win_t *w, int k) {
+    w->maximized = 0;
+    w->snapped = 0;
+    int32_t cw = scr_w * 3 / 5, ch = (scr_h - BAR_H - TITLE_H) * 3 / 5;
+    int step = TITLE_H + 4;
+    int span_x = scr_w - cw - 8;  if (span_x < step) span_x = step;
+    int span_y = scr_h - BAR_H - ch - TITLE_H - 8; if (span_y < step) span_y = step;
+    int32_t m[3] = { w->sid, 8 + (k * step) % span_x,
+                     TITLE_H + 8 + (k * step) % span_y };
+    wmp_send(sock, WMP_MOVE, m, 3);
+    if (w->resizable) {
+        int32_t r[3] = { w->sid, cw, ch };
+        wmp_send(sock, WMP_RESIZE, r, 3);
+    }
+}
+
+/* Cascade every visible (non-minimized) window. */
+static void cascade_windows(void) {
+    int k = 0;
+    for (int i = 0; i < nwins; i++)
+        if (!wins[i].minimized) cascade_one(&wins[i], k++);
+}
+
+/* Tile the resizable visible windows into a near-square grid filling the
+ * work area; fixed-size visible windows can't fill a cell without shearing
+ * (0021), so they get cascaded positions instead. No resizable window (or a
+ * too-cramped grid) falls back to a plain cascade. */
+static void tile_windows(void) {
+    int nt = 0;
+    for (int i = 0; i < nwins; i++)
+        if (!wins[i].minimized && wins[i].resizable) nt++;
+    if (nt == 0) { cascade_windows(); return; }
+    int32_t work_w = scr_w, work_h = scr_h - BAR_H - TITLE_H;
+    int rows = 1; while ((rows + 1) * (rows + 1) <= nt) rows++;  /* isqrt */
+    int cols = (nt + rows - 1) / rows;
+    int cw = work_w / cols, chh = work_h / rows;
+    if (cw < 96 || chh < 96) { cascade_windows(); return; }
+    int ti = 0, ck = 0;
+    for (int i = 0; i < nwins; i++) {
+        win_t *w = &wins[i];
+        if (w->minimized) continue;
+        if (w->resizable) {
+            w->maximized = 0;
+            w->snapped = 0;
+            int r = ti / cols, c = ti % cols;
+            int32_t m[3] = { w->sid, c * cw, TITLE_H + r * chh };
+            wmp_send(sock, WMP_MOVE, m, 3);
+            int32_t rz[3] = { w->sid, cw, chh };
+            wmp_send(sock, WMP_RESIZE, rz, 3);
+            ti++;
+        } else cascade_one(w, ck++);   /* fixed-size: cascaded, never sheared */
+    }
+}
+
+/* Minimize All (todos/0101): stash then minimize every visible window, so
+ * Show Desktop can bring back exactly this set. */
+static void min_all(void) {
+    sd_nstash = 0;
+    for (int i = 0; i < nwins; i++)
+        if (!wins[i].minimized) {
+            if (sd_nstash < MAX_WIN) sd_stash[sd_nstash++] = wins[i].sid;
+            int32_t a[1] = { wins[i].sid };
+            wmp_send(sock, WMP_MINIMIZE, a, 1);
+        }
+}
+
+/* Show Desktop toggle (todos/0101): if we hold a stash of still-minimized
+ * windows, restore them (focus restores — the 0014 rule) and clear it;
+ * otherwise minimize-all and stash. Windows the user minimized before the
+ * toggle are never in the stash, so they stay down across a restore. */
+static void show_desktop_toggle(void) {
+    int restored = 0;
+    for (int i = 0; i < sd_nstash; i++) {
+        win_t *w = find(sd_stash[i]);
+        if (w && w->minimized) {
+            int32_t a[1] = { sd_stash[i] };
+            wmp_send(sock, WMP_FOCUS, a, 1);
+            restored = 1;
+        }
+    }
+    if (restored) { sd_nstash = 0; return; }
+    min_all();
 }
 
 /* ---- Aero Snap (todos/0095) ---- */
@@ -773,6 +895,7 @@ static void saver_show(void) {
     run_dismiss();
     peek_dismiss();
     ctx_dismiss();
+    date_dismiss();
     snapprev_dismiss();
     saver_prev = 0;
     for (int i = 0; i < nwins; i++)
@@ -2176,6 +2299,22 @@ static void ctx_open_bar(const win_t *w, int bx) {
     ctx_openwin(0, bx, scr_h);         /* clamp parks it above the bar */
 }
 
+/* Right-click the empty taskbar strip (todos/0101): the Win95 bar menu —
+ * window-arrangement policy this process owns, plus Properties -> the
+ * ctlpanel hub (todos/0089). Anchored at the click x, parked above the bar
+ * by the ctx_openwin clamp. */
+static void ctx_open_taskbar(int bx) {
+    ctx_dismiss();
+    ctx_target = 0;
+    ctx_nent[0] = 0;
+    ctx_add(0, "CASCADE", CM_CASCADE, 0);
+    ctx_add(0, "TILE", CM_TILE, 0);
+    ctx_add(0, "MINIMIZE ALL", CM_MIN_ALL, 0);
+    ctx_add(0, "", CM_NONE, CTF_SEP);
+    ctx_add(0, "PROPERTIES", CM_PROPERTIES, 0);
+    ctx_openwin(0, bx, scr_h);
+}
+
 /* New > Folder / Text File: create under /root/Desktop with a Win95-style
  * uniquifier ("New Folder", "New Folder 2", ...); the reload puts the icon
  * up without waiting for the coarse desk_tick. */
@@ -2264,6 +2403,14 @@ static void ctx_activate(int d, int i) {
     case CM_CLOSE: {                   /* request-close, like the 'x' box */
         int32_t a[1] = { target };
         wmp_send(sock, WMP_CLOSE_REQ, a, 1);
+        break;
+    }
+    case CM_CASCADE: cascade_windows(); break;   /* taskbar strip (0101) */
+    case CM_TILE: tile_windows(); break;
+    case CM_MIN_ALL: min_all(); break;
+    case CM_PROPERTIES: {               /* the ctlpanel hub (todos/0089) */
+        char *argv[2] = { (char *)"ctlpanel", 0 };
+        spawn_path("/bin/ctlpanel", argv);
         break;
     }
     }
@@ -2492,6 +2639,7 @@ static void screen_changed(void) {
     run_dismiss();                     /* likewise (todos/0078) */
     peek_dismiss();                    /* likewise (todos/0063) */
     ctx_dismiss();                     /* likewise (todos/0091) */
+    date_dismiss();                    /* likewise (todos/0101) */
     snapprev_dismiss();                /* likewise (todos/0095) */
     saver_dismiss();                   /* geometry is stale; the idle clock
                                           re-raises it in timeout seconds
@@ -2628,6 +2776,20 @@ static void handle_event(wmp_hdr *h) {
                     int32_t f[1] = { ctx_sid[0] };
                     wmp_send(sock, WMP_FOCUS, f, 1);
                 }
+            } else if (strncmp(r.title, "datepop", 7) == 0) {   /* 0101 */
+                if (!date_win) return;         /* dismissed before the echo */
+                date_sid = r.sid;
+                int32_t a[3] = { r.sid, date_x, scr_h - BAR_H - DATE_H - 4 };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t ly[2] = { r.sid, 1 };  /* top layer, like the bar */
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                /* A tooltip must not steal focus from the app. */
+                for (int i = 0; i < nwins; i++)
+                    if (wins[i].focused && !wins[i].minimized) {
+                        int32_t f[1] = { wins[i].sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                        break;
+                    }
             } else {                   /* the taskbar: bottom edge */
                 bar_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H };
@@ -2845,12 +3007,69 @@ static void drain_socket(void) {
 
 /* ---- the taskbar ---- */
 
+/* Left edge of the right-aligned clock cell (todos/0101): the Show Desktop
+ * sliver sits past it, so the button strip and clock both budget against
+ * this, not bar_w. */
+static int clock_left(void) { return bar_w - SHOWDESK_W - CLOCK_W; }
+
+/* ---- the clock-hover date tooltip (todos/0101) ---- */
+
+static void date_dismiss(void) {
+    if (date_win) SDL_DestroyWindow(date_win);
+    date_win = NULL;
+    date_surf = NULL;
+    date_sid = 0;
+    date_pinned = 0;
+}
+
+static void date_draw(void) {
+    if (!date_win) return;
+    uint32_t *px = (uint32_t *)date_surf->pixels;
+    uint32_t face = rgb(255, 255, 225), hi = rgb(255, 255, 255),
+             sh = rgb(96, 96, 96), txt = rgb(0, 0, 0);
+    fill_s(px, DATE_W, DATE_H, 0, 0, DATE_W, DATE_H, face);
+    fill_s(px, DATE_W, DATE_H, 0, 0, DATE_W, 1, hi);       /* raised edge */
+    fill_s(px, DATE_W, DATE_H, 0, 0, 1, DATE_H, hi);
+    fill_s(px, DATE_W, DATE_H, 0, DATE_H - 1, DATE_W, 1, sh);
+    fill_s(px, DATE_W, DATE_H, DATE_W - 1, 0, 1, DATE_H, sh);
+    static const char *const wday[7] = { "SUN", "MON", "TUE", "WED",
+                                         "THU", "FRI", "SAT" };
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    char s[32];
+    snprintf(s, sizeof s, "%s %04d-%02d-%02d", wday[tm->tm_wday % 7],
+             tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
+    draw_text_s(px, DATE_W, DATE_H, 8, (DATE_H - 7) / 2, s, txt);
+    SDL_UpdateWindowSurface(date_win);
+}
+
+/* Raise the date tooltip above the clock (right-aligned). pin=1 keeps it up
+ * (a click toggle); pin=0 is a hover, idle-dismissed by the frame loop. Its
+ * EV_CREATED echo ("datepop") parks it and hands focus back (the peek
+ * pattern) so it never steals focus from an app. */
+static void date_show(int pin) {
+    date_idle = 0;
+    if (date_win) { if (pin) date_pinned = 1; return; }
+    date_pinned = pin;
+    date_x = bar_w - DATE_W;
+    if (date_x < 0) date_x = 0;
+    date_win = SDL_CreateWindow("datepop", DATE_W, DATE_H, SDL_WINDOW_BORDERLESS);
+    if (!date_win) return;
+    date_surf = SDL_GetWindowSurface(date_win);
+    date_draw();
+}
+
+static void date_toggle(void) {
+    if (date_win) date_dismiss();
+    else date_show(1);
+}
+
 /* Current button width: BTN_W until the row would run past the clock,
  * then shrink to fit (Win95 overflow, todos/0031). Drawing and click
  * mapping share this. */
 static int btn_width(void) {
     if (nwins == 0) return BTN_W;
-    int avail = bar_w - START_W - BTN_GAP - 2 - CLOCK_W;
+    int avail = clock_left() - START_W - BTN_GAP - 2;
     int w = avail / nwins - BTN_GAP;
     if (w > BTN_W) w = BTN_W;
     if (w < BTN_MIN) w = BTN_MIN;
@@ -2862,12 +3081,21 @@ static int btn_width(void) {
  * it. The Start menu wins conflicts — no previews while it's open. */
 static void bar_motion(float fx) {
     if (mdepth > 0) return;
+    /* The clock cell raises the date tooltip (todos/0101) — but not over an
+     * open context menu, whose root must keep focus. */
+    int cx = clock_left();
+    if ((int)fx >= cx && (int)fx < cx + CLOCK_W && ctx_depth == 0) {
+        date_show(0);
+        peek_dismiss();
+        return;
+    }
+    if (date_win && !date_pinned) date_dismiss();   /* left the clock: drop */
     int bw = btn_width();
     int rel = (int)fx - START_W - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
     int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
     if (rel >= 0 && rel % (bw + BTN_GAP) < bw && i < nwins &&
-        x + bw <= bar_w - CLOCK_W) {   /* same overflow gate as draw_bar */
+        x + bw <= cx) {                /* same overflow gate as draw_bar */
         peek_show(wins[i].sid, x, bw);
         peek_idle = 0;                 /* still hovering: hold the popup */
     } else peek_dismiss();
@@ -2875,9 +3103,14 @@ static void bar_motion(float fx) {
 
 static void bar_click(float fx) {
     peek_dismiss();                    /* a click acts; the preview drops */
-    if ((int)fx < START_W) { menu_toggle(); return; }     /* Start (0028) */
+    if ((int)fx < START_W) { date_dismiss(); menu_toggle(); return; }  /* Start */
     menu_dismiss();                    /* any other taskbar click dismisses */
     ctx_dismiss();                     /* likewise (todos/0091) */
+    /* Show Desktop sliver, then the clock cell (todos/0101): the sliver
+     * toggles minimize-all/restore, the clock toggles the date tooltip. */
+    if ((int)fx >= bar_w - SHOWDESK_W) { date_dismiss(); show_desktop_toggle(); return; }
+    if ((int)fx >= clock_left()) { date_toggle(); return; }
+    date_dismiss();
     int bw = btn_width();
     int rel = (int)fx - START_W - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
@@ -2887,22 +3120,24 @@ static void bar_click(float fx) {
     else wmp_send(sock, WMP_FOCUS, a, 1);
 }
 
-/* Taskbar right-click (todos/0091): a drawn button raises the Win95 window
- * menu; the Start strip and the empty bar stay reserved (the taskbar-strip
- * menu is todos/0101). Same geometry math as bar_click/bar_motion. */
+/* Taskbar right-click: a drawn button raises the Win95 window menu (0091);
+ * the Start strip stays reserved; the empty strip / clock / Show Desktop
+ * region raises the taskbar-strip menu (0101). Same geometry as bar_click. */
 static void bar_rclick(float fx) {
     peek_dismiss();
     menu_dismiss();
+    date_dismiss();
+    if ((int)fx < START_W) { ctx_dismiss(); return; }   /* Start: reserved */
     int bw = btn_width();
     int rel = (int)fx - START_W - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
     int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
-    if ((int)fx < START_W || rel < 0 || rel % (bw + BTN_GAP) >= bw ||
-        i >= nwins || x + bw > bar_w - CLOCK_W) {   /* overflow gate too */
-        ctx_dismiss();
+    if (rel >= 0 && rel % (bw + BTN_GAP) < bw && i < nwins &&
+        x + bw <= clock_left()) {      /* on a drawn button */
+        ctx_open_bar(&wins[i], x);
         return;
     }
-    ctx_open_bar(&wins[i], x);
+    ctx_open_taskbar((int)fx);         /* empty strip / clock / show-desktop */
 }
 
 static void draw_bar(void) {
@@ -2922,9 +3157,10 @@ static void draw_bar(void) {
         draw_text(px, 8, (BAR_H - 7) / 2, "START", txt);
     }
     int bw = btn_width();              /* overflow shrink (todos/0031) */
+    int cx = clock_left();
     for (int i = 0; i < nwins; i++) {
         int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
-        if (x + bw > bar_w - CLOCK_W) break;   /* never under the clock */
+        if (x + bw > cx) break;                /* never under the clock */
         int down = wins[i].focused && !wins[i].minimized;
         /* Win95 button relief: raised normally, sunken when active. */
         fill(px, x, 3, bw, BAR_H - 6, down ? rgb(222, 222, 222) : face);
@@ -2941,13 +3177,27 @@ static void draw_bar(void) {
                   wins[i].minimized ? rgb(80, 80, 80) : txt);
     }
     /* The clock (todos/0031): right-aligned HH.MM, local time; draw_bar
-     * runs per frame, so it updates on the minute by construction. */
+     * runs per frame, so it updates on the minute by construction. Now left
+     * of the Show Desktop sliver (todos/0101). */
     {
         time_t now = time(NULL);
         struct tm *tm = localtime(&now);
         char hhmm[6];
         snprintf(hhmm, sizeof hhmm, "%02d.%02d", tm->tm_hour, tm->tm_min);
-        draw_text(px, bar_w - CLOCK_W + 8, (BAR_H - 7) / 2, hhmm, txt);
+        draw_text(px, cx + 8, (BAR_H - 7) / 2, hhmm, txt);
+    }
+    /* The Show Desktop sliver (todos/0101): a thin Win7 affordance at the
+     * far right edge, a raised divider then a strip that reads pressed while
+     * a stash is held (i.e. the desktop is currently shown). */
+    {
+        int sx = bar_w - SHOWDESK_W;
+        int held = sd_nstash > 0;
+        fill(px, sx, 3, SHOWDESK_W - 2, BAR_H - 6,
+             held ? rgb(170, 170, 170) : face);
+        fill(px, sx, 3, 1, BAR_H - 6, held ? sh : hi);       /* divider */
+        fill(px, sx + 1, 3, 1, BAR_H - 6, held ? face : sh);
+        fill(px, sx + 2, 3, SHOWDESK_W - 4, 1, held ? sh : hi);
+        fill(px, sx + 2, BAR_H - 4, SHOWDESK_W - 4, 1, held ? hi : sh);
     }
     SDL_UpdateWindowSurface(bar_win);
 }
@@ -3028,6 +3278,8 @@ static void frame_cb(void) {
                 int32_t f[1] = { peek_for };   /* click the preview: activate */
                 wmp_send(sock, WMP_FOCUS, f, 1);
                 peek_dismiss();
+            } else if (date_win && e.button.windowID == SDL_GetWindowID(date_win)) {
+                date_dismiss();        /* click the date tooltip: dismiss (0101) */
             } else if (e.button.button == 3) bar_rclick(e.button.x);
             else bar_click(e.button.x);
             pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;   /* may drop */
@@ -3045,6 +3297,8 @@ static void frame_cb(void) {
                 desk_motion(e.motion.x, e.motion.y, e.motion.state);
             } else if (peek_win && e.motion.windowID == pkid) {
                 peek_idle = 0;         /* hovering the preview holds it */
+            } else if (date_win && e.motion.windowID == SDL_GetWindowID(date_win)) {
+                date_idle = 0;         /* hovering the tooltip holds it (0101) */
             } else if (!(run_win && e.motion.windowID == SDL_GetWindowID(run_win))) {
                 bar_motion(e.motion.x);
                 pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
@@ -3075,6 +3329,11 @@ static void frame_cb(void) {
         if (++peek_idle >= PEEK_IDLE) peek_dismiss();
         else if (++peek_tick >= PEEK_REFRESH) { peek_tick = 0; peek_request(); }
     }
+    /* The date tooltip (todos/0101): a hover (unpinned) drops once the
+     * pointer has been off the clock for a while — the wm only sees motion
+     * over its own windows, so this backstop mirrors PEEK_IDLE. A pinned
+     * (click-opened) tooltip stays until clicked away. */
+    if (date_win && !date_pinned && ++date_idle >= PEEK_IDLE) date_dismiss();
     draw_bar();
     for (int d = 0; d < mdepth; d++) draw_menu_col(d);
     for (int d = 0; d < ctx_depth; d++) draw_ctx(d);       /* 0091 */

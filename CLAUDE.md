@@ -310,7 +310,19 @@ kernel title bar has [min][max][close] boxes (min = wmMinimize direct,
 max = EV_TITLE_ACTIVATE, each box only if it fits the title — 32px
 windows stay draggable); the taskbar has a right-aligned HH.MM clock,
 launch-order-stable buttons (memmove compaction), and overflow shrink
-left of the clock; Ctrl+Alt+Tab (Alt+Tab on macOS) is intercepted at
+left of the clock. Taskbar polish round 2 (todos/0101): right-clicking
+the strip (empty run / clock / Show-Desktop region — anything past the
+Start strip that isn't a drawn button) raises a taskbar-strip menu
+(Cascade / Tile / Minimize All / Properties→ctlpanel) over the 0091
+popup furniture; Cascade/Tile are wm.c policy loops (resizable → real
+MOVE+RESIZE, fixed-size → cascaded positions, never sheared); a narrow
+Show Desktop sliver at the far right (`SHOWDESK_W`, so the clock budgets
+against `clock_left()`) toggles minimize-all/restore, stashing the sids
+it minimized so a second click restores exactly that set; hovering or
+clicking the clock raises a "datepop" date tooltip (the Aero-Peek
+borderless mechanism — hover idle-dismisses, click pins); right-button
+routing lands at `bar_rclick`, left-click byte-identical. Ctrl+Alt+Tab
+(Alt+Tab on macOS) is intercepted at
 wmKey ONLY with a WM subscribed → WMP EV_CYCLE 0x8B / CYCLE 0x19 /
 `wmctl cycle` (wm.c walks LRU stamps forward, previous-window on
 Shift; minimized skipped) — no subscriber, the key passes through.
@@ -573,7 +585,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v60**.
+Image version is **v61**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

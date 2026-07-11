@@ -89,7 +89,8 @@ try {
   check('taskbar strip composited', true);
 
   // The clock (todos/0031): right-aligned HH.MM — histogram the black
-  // text pixels over the clock cell (exact digits depend on the time).
+  // text pixels over the clock cell (exact digits depend on the time). The
+  // cell now sits left of the 0101 Show Desktop sliver (SHOWDESK_W = 14).
   const clockBlack = await page.evaluate(([x0, y0, w, h]) => {
     const c = document.getElementById('screen');
     const r = c.getBoundingClientRect();
@@ -102,7 +103,7 @@ try {
     for (let i = 0; i < d.length; i += 4)
       if (d[i] < 40 && d[i + 1] < 40 && d[i + 2] < 40) n++;
     return n;
-  }, [SW - 45, SH - 20, 42, 12]);
+  }, [SW - 14 - 45, SH - 20, 42, 12]);
   check('taskbar clock digits present (black-pixel histogram)', clockBlack >= 15, clockBlack);
   // The Start button face, right of the "START" label glyphs (x 8..38).
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
@@ -598,6 +599,42 @@ try {
       window.__osOut.includes('CLIP-ROCKS CLIP-GOT2')),
     await page.evaluate(() => window.__osOut.slice(-300)));
   await setVt(2);
+
+  // ---- taskbar polish (todos/0101): the strip menu, the clock date
+  // tooltip, and the Show Desktop sliver. Taskbar-local pixels only (no
+  // window-position dependence). Launch one winbox so Show Desktop has a
+  // window to minimize.
+  await setVt(1);
+  await page.keyboard.type('winbox & echo TP""-WB\r', { delay: 40 });
+  await page.waitForFunction(() => window.__osOut.includes('TP-WB'), { timeout: 20000, polling: 200 });
+  await setVt(2);
+  await page.waitForTimeout(1500);
+  // Right-click the clock cell (x = SW-40: always past the button run) ->
+  // the strip menu (CTX_W 120, clamped to the right edge, 96 tall above the
+  // 28px bar). Sample a blank face-gray spot inside it (menu-local x~100).
+  await page.mouse.click(rect.x + SW - 40, rect.y + BARY, { button: 'right' });
+  await waitPixel(SW - 20, SH - 74, FACE);
+  check('right-click the taskbar strip opens the menu (face gray above the bar)', true);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  check('Esc dismisses the strip menu',
+    !near(await sample(SW - 20, SH - 74), FACE), await sample(SW - 20, SH - 74));
+  // The clock date tooltip (104x22, light-yellow face above the clock): a
+  // click toggles it (the agent-parity path; hover raises it the same way).
+  await clickAt(SW - 40, BARY);
+  await waitPixel(SW - 8, SH - 43, [255, 255, 225]);
+  check('clock click raises the date tooltip', true);
+  await clickAt(SW - 40, BARY);                  // toggle it back off
+  await page.waitForTimeout(300);
+  // The Show Desktop sliver ([SW-14, SW)): the first click minimizes-all and
+  // the sliver reads pressed (170,170,170); the second restores it (raised
+  // face gray). Sample the sliver body at x = SW-6.
+  await clickAt(SW - 6, BARY);
+  await waitPixel(SW - 6, BARY, [170, 170, 170]);
+  check('Show Desktop press minimizes all (sliver reads pressed)', true);
+  await clickAt(SW - 6, BARY);
+  await waitPixel(SW - 6, BARY, FACE);
+  check('Show Desktop restores (sliver raised)', true);
 
   // The shell stays healthy behind the desktop (menu spawns are reaped —
   // no zombie pileup would show here, but the VT1 round-trip proves the

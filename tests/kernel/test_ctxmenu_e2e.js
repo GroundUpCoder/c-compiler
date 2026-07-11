@@ -197,7 +197,7 @@ const script = [
   'wmctl key $NSID 41 27',                       // Esc closes it
   'sleep 0.3',
   // ---- taskbar-button menu (button 0 = the original winbox) ----
-  'wmctl click $TSID 800 14 3',                  // empty bar: reserved (0101)
+  'wmctl click $TSID 20 14 3',                   // Start strip: reserved (0101)
   'sleep 0.3',
   'echo ==bar1',
   'wmctl list',
@@ -360,7 +360,7 @@ check('reopened menu re-gates: Select All now enabled (field has text)',
   item(e3, 'Select All'));
 
 // ---- taskbar-button menu ----
-check('right-click the empty bar raises nothing (reserved for 0101)',
+check('right-click the Start strip raises nothing (reserved)',
   row(section('bar1'), 'ctxmenu') === '', JSON.stringify(section('bar1')));
 const b2 = section('bar2');
 check(`right-click button 0 opens the window menu (${BAR_MENU_GEOM}, above the bar)`,

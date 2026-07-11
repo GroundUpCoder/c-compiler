@@ -57,6 +57,9 @@ const fly = (parent, rowIndex, n) => {
   return { x, y, w, h, geom: `${w}x${h}+${x}+${y}` };
 };
 const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;    // window-local click y
+// Context-menu row center (todos/0091 geometry: 4px pad, 20px rows) — the
+// 0101 taskbar-strip menu rows (Cascade 0, Tile 1, Minimize All 2).
+const rowY101 = (i) => 4 + i * 20 + 10;
 const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
 const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
 
@@ -192,13 +195,17 @@ const script = [
   'wmctl list',
   // Overflow: two more windows -> 9 buttons only fit shrunk left of the
   // clock; a click in the clock cell must fall on NO button (pre-0031 it
-  // lands on button 8 and toggles it).
+  // lands on button 8 and toggles it). Since 0101 the clock cell toggles
+  // the date tooltip instead — still no window touched; toggle it back off
+  // so the lingering top-layer popup doesn't perturb the z-order legs.
   'winbox & winbox &',
   'sleep 5',
   'wmctl click $TSID 1000 14',
   'sleep 0.3',
   'echo ==bar3',
   'wmctl list',
+  'wmctl click $TSID 1000 14',                    // toggle the date tooltip off
+  'sleep 0.2',
   'wmctl shot $TSID /root/bar.ppm && echo bar-shot-ok',
   // ---- window cycling (todos/0032): wmctl cycle -> WMP CYCLE -> the same
   // EV_CYCLE -> wm.c policy. Focus fixbox then winbox so the recency
@@ -473,6 +480,53 @@ const script = [
   'N3=$(wmctl list | grep -c winbox$)',
   'echo LAUNCH-DELTA-$((N3-N2))',
   'echo ==sel3',
+  'wmctl list',
+  // ---- taskbar polish (todos/0101): strip menu, Minimize All, Show
+  // Desktop, clock date. Screen 1024x768 -> clock_left = 1024-14-45 = 965;
+  // the Show Desktop sliver is [1010,1024). Two fresh winboxes anchor the
+  // reasoning (the two highest sids). ----
+  'winbox & winbox &',
+  'sleep 5',
+  'echo ==tp0',
+  'wmctl list',
+  // right-click the strip in the clock cell (x=970: always past the button
+  // run, whatever the window count) -> the taskbar-strip menu (0101)
+  'wmctl click $TSID 970 14 3',
+  'sleep 0.4',
+  'echo ==tp1',
+  'wmctl list',
+  'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $CXSID 60 ${rowY101(2)}`,          // Minimize All (row 2)
+  'sleep 0.7',
+  'echo ==tp2',
+  'wmctl list',
+  'wmctl click $TSID 1017 14',                    // Show Desktop: restore the stash
+  'sleep 0.7',
+  'echo ==tp3',
+  'wmctl list',
+  'wmctl click $TSID 1017 14',                    // Show Desktop: minimize all again
+  'sleep 0.7',
+  'echo ==tp4',
+  'wmctl list',
+  'wmctl click $TSID 1017 14',                    // ...and restore before Cascade
+  'sleep 0.7',
+  'wmctl click $TSID 970 14 3',
+  'sleep 0.4',
+  'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  `wmctl click $CXSID 60 ${rowY101(0)}`,          // Cascade (row 0)
+  'sleep 1.2',
+  'echo ==tp5',
+  'wmctl list',
+  // clock date tooltip: a click in the clock cell (x=980) raises "datepop"
+  'wmctl click $TSID 980 14',
+  'sleep 0.4',
+  'echo ==tp6',
+  'wmctl list',
+  'DPSID=$(wmctl list | grep datepop$ | sed "s/[^0-9].*//")',
+  'wmctl shot $DPSID /root/date.ppm && echo date-shot-ok',
+  'wmctl click $TSID 980 14',                     // click again toggles it off
+  'sleep 0.4',
+  'echo ==tp7',
   'wmctl list',
   '',
 ].join('\n');
@@ -753,8 +807,10 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   if (bm) {
     const boff = bhead.indexOf('255\n') + 4, BW = 1024;
     let clock = 0;
+    // clock cell moved left of the 0101 Show Desktop sliver: left edge is
+    // clock_left()=1024-14-45=965, digits drawn at cx+8=973.
     for (let y = 8; y < 20; y++) {
-      for (let x = 979; x < 1021; x++) {
+      for (let x = 973; x < 1010; x++) {
         const i = boff + (y * BW + x) * 3;
         if (bppm[i] === 0 && bppm[i + 1] === 0 && bppm[i + 2] === 0) clock++;
       }
@@ -939,6 +995,57 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     [strip(p6, ...at('gameboy')), strip(p6, 'term', 2, 1)]);
   check('Right selects the top-left icon; Enter launches it (winbox +1)',
     out.includes('LAUNCH-DELTA-1'), out.slice(out.indexOf('LAUNCH-DELTA')).slice(0, 20));
+}
+
+// ---- taskbar polish (todos/0101): the strip menu + Minimize All + Show
+// Desktop + the clock date tooltip. The two fresh winboxes are the two
+// highest sids; Minimize All / Show Desktop must move exactly those.
+{
+  const tp1 = section('tp1'), tp2 = section('tp2'), tp3 = section('tp3'),
+        tp4 = section('tp4'), tp5 = section('tp5'), tp6 = section('tp6'),
+        tp7 = section('tp7');
+  const wsids = (sec) => sec.split('\n').filter(l => l.endsWith('\twinbox'))
+    .map(l => parseInt(l)).sort((a, b) => a - b);
+  const rowSid = (sec, sid) =>
+    sec.split('\n').find(l => parseInt(l) === sid && l.endsWith('\twinbox')) || '';
+  const flg = (sec, sid) => (rowSid(sec, sid).split('\t')[5] || '');
+  const two = wsids(section('tp0')).slice(-2);   // the two fresh winboxes
+  const [A, B] = two;
+  // right-click the clock cell -> the taskbar-strip menu (5 rows: Cascade,
+  // Tile, Minimize All, sep, Properties -> 4*20 + 8(sep) + 2*4(pad) = 96
+  // tall, CTX_W 120, clamped right (970+120>1024 -> x=904) and above the
+  // bar (740-96 = 644).
+  const cm = row(tp1, 'ctxmenu');
+  check('right-click the taskbar strip opens the menu (120x96, clamped above the bar)',
+    cm.includes('120x96+904+644') && cm.includes('b'), JSON.stringify(tp1));
+  check('the strip menu rides the TOP layer like the bar',
+    (cm.split('\t')[5] || '').includes('T'), cm);
+  check('Minimize All minimizes both fresh winboxes and dismisses the menu',
+    flg(tp2, A).includes('m') && flg(tp2, B).includes('m') && row(tp2, 'ctxmenu') === '',
+    JSON.stringify([flg(tp2, A), flg(tp2, B), row(tp2, 'ctxmenu')]));
+  check('Show Desktop click restores the minimized set',
+    !flg(tp3, A).includes('m') && !flg(tp3, B).includes('m'),
+    JSON.stringify([flg(tp3, A), flg(tp3, B)]));
+  check('Show Desktop click again re-minimizes everything',
+    flg(tp4, A).includes('m') && flg(tp4, B).includes('m'),
+    JSON.stringify([flg(tp4, A), flg(tp4, B)]));
+  // Cascade resizes every visible resizable window to the uniform 3/5 box
+  // (1024*3/5 = 614, (768-28-28)*3/5 = 427) and diagonally offsets them.
+  check('Cascade resizes the fresh winboxes to the uniform 614x427 box',
+    geom(rowSid(tp5, A)).startsWith('614x427') && geom(rowSid(tp5, B)).startsWith('614x427'),
+    JSON.stringify([geom(rowSid(tp5, A)), geom(rowSid(tp5, B))]));
+  check('Cascade offsets them (the two boxes are at different origins)',
+    geom(rowSid(tp5, A)) !== geom(rowSid(tp5, B)),
+    JSON.stringify([geom(rowSid(tp5, A)), geom(rowSid(tp5, B))]));
+  // the clock date tooltip: a click raises "datepop" (borderless, top layer,
+  // DATE_W x DATE_H = 104x22, right-aligned above the bar: 768-28-22-4 = 714).
+  const dp = row(tp6, 'datepop');
+  check('a clock-cell click raises the datepop tooltip (104x22, above the bar)',
+    dp.includes('104x22+920+714') && dp.includes('b'), JSON.stringify(tp6));
+  check('datepop rides the TOP layer', (dp.split('\t')[5] || '').includes('T'), dp);
+  check('datepop is shot-able (pixels live)', out.includes('date-shot-ok'));
+  check('a second clock-cell click toggles the tooltip off',
+    row(tp7, 'datepop') === '', JSON.stringify(tp7));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
