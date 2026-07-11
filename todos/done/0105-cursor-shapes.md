@@ -1,6 +1,14 @@
 # 0105 — pointer cursor shapes (per-surface cursor + chrome resize cursors)
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). Landed all four bullets: chrome resize
+  cursors (kernel `_wmCursorAt` overlay, resizable-only EW/NS/NWSE),
+  per-surface app cursors (real SDL3 `SDL_CreateSystemCursor`/`SetCursor`/
+  show/hide → `SURFACE_SET_CURSOR` → `onCursor` → `canvas.style.cursor` via
+  `CURSOR_CSS`), user32 EDIT I-beam on hover, and the headless-assertable
+  `WMP_CURSOR_AT`/`R_CURSOR` (`wmctl cursor X Y`). Custom pixel cursors stayed
+  out (system shapes only). Dev log `logs/2026-07-11/0105-cursor-shapes.md`;
+  design updates in SDL3.md "Mouse" + WM.md deviations. Image v64→v65. No
+  residue — intent fully achieved.
 - **Design**: `todos/SDL3.md` "Mouse" (cursor create/set listed missing,
   "Web: CSS cursors"); `todos/WM.md` deviations ("Cursor is the native
   browser cursor — no kernel sprite"). Filed by the 0076 parity sweep.
