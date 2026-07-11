@@ -35,7 +35,7 @@
                                       headless e2e can have the saver raise
                                       mid-test under it (tests that want the
                                       saver set their own short timeout) */
-#define SV_DEF_TEXT    "WASM OS"
+#define SV_DEF_TEXT    "gucOS"
 
 typedef struct {
     char saver[SV_NAME_MAX];           /* none | marquee | starfield */

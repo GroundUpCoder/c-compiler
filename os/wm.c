@@ -1217,7 +1217,7 @@ static void draw_menu_col(int depth) {
     if (depth == 0) {
         /* The Win95 sidebar band: navy strip, bottom-up label (0078). */
         fill_s(px, w, h, 1, 1, MENU_BAND_W - 1, h - 2, sel);
-        draw_vtext_s(px, w, h, 5, h - 8, "WASM OS", seltxt);
+        draw_vtext_s(px, w, h, 5, h - 8, "gucOS", seltxt);
     }
     int rows = col_rows(c, depth);
     for (int i = 0; i < rows; i++) {

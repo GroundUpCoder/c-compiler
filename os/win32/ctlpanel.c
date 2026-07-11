@@ -186,7 +186,7 @@ static LRESULT CALLBACK sounds_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 /* ------------------------------------------------ System (0048 verbatim) */
 
-/* one info line per read: "NAME=wasm-os" etc + uptime */
+/* one info line per read: "NAME=gucOS" etc + uptime */
 static void add_info(HWND parent, int *y) {
     char line[96], text[128];
     FILE *f = fopen("/usr/share/os-release", "r");

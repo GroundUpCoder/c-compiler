@@ -166,9 +166,10 @@ interrupted run keeps a usable partial verdict and `--resume` picks up
 from it. When changing the kernel-page layout or opcodes, keep KERNEL.md's
 layout comment and the tests in sync.
 
-## os/ (the reference OS build)
+## os/ (the reference OS build) — gucOS
 
-`os/` is the bootable reference build (design: `todos/OS.md` "Reference
+`os/` is **gucOS** (groundupcoder OS; named in todos/0114), the bootable
+reference build (design: `todos/OS.md` "Reference
 build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge;
 VTs per todos/0022 — the tty is VT1, the desktop VT2, exactly ONE visible
 at a time via the Terminal/Desktop tab bar (Ctrl+Alt+F1/F2 as aliases),
@@ -564,7 +565,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v57**.
+Image version is **v59**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

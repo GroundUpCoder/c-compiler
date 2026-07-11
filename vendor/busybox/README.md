@@ -77,7 +77,7 @@ Two binaries come out of this vendor tree:
   spawn either way, and the shell stays correct even on an image that
   doesn't seed coreutils.
 
-busybox 1.37.0's **hush** built as a standalone `/bin/sh` for the wasm OS
+busybox 1.37.0's **hush** built as a standalone `/bin/sh` for gucOS
 (`os/`). hush and not ash because this platform — like NOMMU Linux — has no
 `fork()`: upstream ash hard-requires fork (`shell/ash.c` Kconfig:
 `depends on !NOMMU`), while hush has lived on fork-less hardware for years

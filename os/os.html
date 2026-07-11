@@ -25,7 +25,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>wasm-os</title>
+<title>gucOS</title>
 <link rel="stylesheet" href="../vendor/xterm/xterm.css">
 <style>
   html, body { height: 100%; margin: 0; background: #0d0d1a; }
@@ -93,7 +93,7 @@
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
   <div id="guard">
-    <div id="guardMsg">wasm-os is already running in another tab.<br>
+    <div id="guardMsg">gucOS is already running in another tab.<br>
          Close that tab, then retry — the lock frees when it closes.</div>
     <button id="guardRetry">Retry</button>
   </div>
@@ -356,7 +356,7 @@ kernel.onmessage = function (e) {
       status('WebGPU unavailable — cannot boot', true);
       window.__osState = 'nogpu';    // agent probe (tests/browser/os-boots.mjs)
       document.getElementById('guardMsg').innerHTML =
-        'wasm-os requires WebGPU — the desktop compositor renders with it<br>' +
+        'gucOS requires WebGPU — the desktop compositor renders with it<br>' +
         '(no fallback). Use a browser with WebGPU available in workers,<br>' +
         'e.g. current Chrome or Edge.';
       document.getElementById('guardRetry').style.display = 'none';

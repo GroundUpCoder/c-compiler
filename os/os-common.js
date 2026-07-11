@@ -380,7 +380,8 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   return seedEntries(mfs, manifest.system, bakeIo).then(function () {
     mfs.symlink('/var/local', '/usr/local');
     writeFile(mfs, '/usr/share/os-release',
-      'NAME=wasm-os\nVERSION_ID=' + (manifest.version | 0) + '\n');
+      'NAME=gucOS\nPRETTY_NAME="gucOS (groundupcoder OS)"\n' +
+      'VERSION_ID=' + (manifest.version | 0) + '\n');
     sysStore.flush && sysStore.flush();
     return BLOCK_FS.sealVolume(sysStore);
   });

@@ -200,7 +200,7 @@ int main(void) {
     const char *home = getenv("HOME");
     if (chdir(home ? home : "/root") != 0) chdir("/");
 
-    fprintf(stderr, "wasm-os protoshell (help for builtins; the real shell is todos/0005)\n");
+    fprintf(stderr, "gucOS protoshell (help for builtins; the real shell is todos/0005)\n");
 
     char line[1024];
     for (;;) {

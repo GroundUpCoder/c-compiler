@@ -1,6 +1,15 @@
 # 0114 — Rebrand the OS as gucOS (groundupcoder OS)
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). Renamed every live surface off the wasm-os
+  placeholder to **gucOS**: os.html title + both guard screens, os-release
+  (`NAME=gucOS` + new `PRETTY_NAME`), /proc/version builder token (`cc
+  gucos`; Linux-version prefix kept), protoshell banner, boot lock
+  (`gucos:` — one-time cross-build skew noted), plus the three "WASM OS"
+  space-form sites the item's `wasm-os` grep missed (wm.c Start-menu band,
+  saver.h `SV_DEF_TEXT`, the seeded /usr/share/screensaver), and the docs
+  (OS.md/DISK-IMAGE.md/busybox README/CLAUDE.md). image.json 58→59,
+  prebaked fixture rebaked. kernel suite 53/0, browser sweep 22/0. Dev log
+  `logs/2026-07-11/0114-gucos-rebrand.md`. No follow-ups.
 - **Design**: `todos/OS.md` (north star — the thing being named);
   `todos/DISK-IMAGE.md` (os-release / image-version mechanics).
 

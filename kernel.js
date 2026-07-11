@@ -5321,7 +5321,7 @@ ProcFS.prototype._render = function (hit) {
         'procs_blocked 0\n';
     }
     case 'version':
-      return 'Linux version 6.6.0-wasm (root@localhost) (cc wasm-os) #1 ' +
+      return 'Linux version 6.6.0-wasm (root@localhost) (cc gucos) #1 ' +
         'almost-POSIX on WebAssembly\n';
   }
   return null;

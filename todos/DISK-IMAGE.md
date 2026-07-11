@@ -96,7 +96,8 @@ design exists to eliminate.
 The design above left five things to decide in-item; here is what landed:
 
 1. **Blob version location**: a FILE inside the blob —
-   `/usr/share/os-release` (`NAME=wasm-os` + `VERSION_ID=<n>`, blob-root
+   `/usr/share/os-release` (`NAME=gucOS` + `PRETTY_NAME` since todos/0114,
+   `VERSION_ID=<n>`, blob-root
    path `/share/os-release`), written LAST in the bake so a crashed
    half-bake reads as "no version" and re-materializes. Readable in-OS
    (`cat /usr/share/os-release`); the natural 0037 module-cache key.

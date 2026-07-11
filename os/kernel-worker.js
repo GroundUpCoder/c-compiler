@@ -188,7 +188,7 @@ function createWorker(procSpec) {
 // for "hold until the agent dies".
 var SYS_IMG = 'os-system.v5.img';
 var ROOT_IMG = 'os-root.v5.img';
-var BOOT_LOCK = 'wasm-os:' + SYS_IMG + '+' + ROOT_IMG;
+var BOOT_LOCK = 'gucos:' + SYS_IMG + '+' + ROOT_IMG;
 function acquireBootLock() {
   if (typeof navigator === 'undefined' || !navigator.locks) {
     return Promise.resolve(true);   // no Web Locks API — boot unguarded

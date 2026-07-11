@@ -452,7 +452,7 @@ try {
   await page.keyboard.type('wmctl click System; sleep 1; wmctl tree | grep "NAME="; echo CP-SY""S\r');
   await page.waitForFunction(() => window.__osOut.includes('CP-SYS'), { timeout: 30000, polling: 200 });
   check('System applet shows os-release',
-    await page.evaluate(() => /NAME=wasm-os/.test(window.__osOut)), true);
+    await page.evaluate(() => /NAME=gucOS/.test(window.__osOut)), true);
   await setVt(2);
   // Kernel close box on the Sound applet: per-window close (0089).
   await clickAt(SNX + SNW - 12, SNY - 12);

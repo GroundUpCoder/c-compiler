@@ -1,7 +1,9 @@
 # gucOS — a WebAssembly-native OS in a browser tab
 
-The OS's name is **gucOS** (groundupcoder OS); code and boot surfaces still
-carry the wasm-os placeholder until the rebrand sweep lands (todos/0114).
+The OS's name is **gucOS** (groundupcoder OS) — the todos/0114 sweep renamed
+every live surface (boot page, os-release, /proc/version builder token,
+protoshell banner, Start-menu band, saver marquee) off the old wasm-os
+placeholder; historical logs/done items keep the old name as the record.
 
 ## Goal (repo north star)
 

@@ -180,7 +180,7 @@ const tree3 = section(out, 'tree3');
 check('hub keyboard (Right, Enter) opens the System applet',
   /class=CplSystem [^\n]*text='System Properties'/.test(tree3), tree3.slice(0, 800));
 check('System applet reads os-release + /proc/uptime',
-  /NAME=wasm-os/.test(tree3) && /VERSION_ID=/.test(tree3) && /UPTIME=/.test(tree3),
+  /NAME=gucOS/.test(tree3) && /VERSION_ID=/.test(tree3) && /UPTIME=/.test(tree3),
   tree3);
 
 // -- Display stub + Date/Time clock --

@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-11; 0099 queue.js CLI hardening closed)
+# Handoff — start of thread (updated 2026-07-11; 0114 gucOS rebrand closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,34 +7,42 @@
 
 ## Where the repo stands
 
-**0099 (queue.js: --help must print usage, not scaffold) is CLOSED**; image
-stays **v58** (no bake inputs touched — queue.js/tests/docs only). Dev log
-`logs/2026-07-11/0099-queuejs-help-flag.md`; item at
-`todos/done/0099-queuejs-help-flag.md`. One breath: `-h`/`--help` anywhere
-in argv now prints usage and exits 0 BEFORE dispatch (an `add --help` can
-never scaffold an "untitled" item again); every subcommand parses flags
-against an allowlist, so an unknown `--flag` is a usage error — exit 2,
-nothing written (the root cause: mutation commands no longer guess); and
-`list | head` no longer crashes — EPIPE from an early-closing consumer is
-treated as normal termination. Contract in queue.js's header + README §1.
+**0114 (rebrand the OS as gucOS) is CLOSED**; image bumped **v58 → v59**
+(os-release content changed). Dev log `logs/2026-07-11/0114-gucos-rebrand.md`;
+item at `todos/done/0114-gucos-rebrand.md`. One breath: every live surface
+that shows a name now reads **gucOS** (groundupcoder OS) — os.html title +
+both guard screens, `/usr/share/os-release` (`NAME=gucOS` + a new
+`PRETTY_NAME`), the protoshell banner, the boot lock (`gucos:` — a
+pre-rebrand and post-rebrand tab no longer contend, one-time skew), and the
+three "WASM OS" space-form sites the item's `wasm-os` grep pattern missed
+(wm.c Start-menu sidebar band, `saver.h` `SV_DEF_TEXT`, the seeded
+`/usr/share/screensaver` in image.json). `/proc/version` kept its `Linux
+version 6.6.0-wasm` prefix (busybox procps compat, 0043) — only the builder
+token became `(cc gucos)`. Docs updated (OS.md, DISK-IMAGE.md, busybox
+README, CLAUDE.md os/ header). Historical `logs/` + `todos/done/` are NOT
+rewritten — the journal keeps the old name.
 
-**Verified**: `node todos/queue.test.js` 22/22 (3 new cases, each checked
-to FAIL on the pre-fix CLI — the EPIPE test needs >64KB output and stderr
-captured OUTSIDE the pipeline or it passes vacuously; the dev log records
-both traps); acceptance re-run in the real repo, `check` OK on close.
+**Verified**: `node tests/kernel/run.js` 53/0 and `node
+tests/browser/os-sweep.mjs` 22/0, both over a fresh v59 bake (prebaked
+`os/os-system.img` deleted to force it). Acceptance grep
+`grep -rn 'wasm-os\|WASM OS'` now hits only `logs/`, `todos/done/`, and the
+0114 item's own inventory prose.
 
-**Follow-ups filed by 0099**: none.
+**Follow-ups filed by 0114**: none.
 
-**Next in queue**: `node todos/queue.js list` (piping through `head` is
-fine now) — **0114 (gucOS rebrand)** leads (queued deliberately right
-after 0096), then 0098 (Start menu Win7 pane), 0101–0107, … tail: 0113,
-0112, 0115.
-0064 (WM sweep round 3) still owes the operator the pointer-lock human
-check, the 0094 sound listen, the 0095 snap feel, and the 0096 saver
-eyeball.
+**Next in queue**: `node todos/queue.js list` — **0098 (Start menu Win7
+pane)** leads now, then 0101–0107 (context-menu tail + desktop-icon rename +
+details view), 0112, … 0064 (WM sweep round 3) still owes the operator the
+pointer-lock human check, the 0094 sound listen, the 0095 snap feel, and the
+0096 saver eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
+- **0114: OPFS image filenames stayed `os-*.v5.img`** — the store format
+  didn't change, only the version-gated content, so persistent browser
+  images re-fetch on the v59 bump without orphaning root volumes. The 5x7
+  wm.c/saver font is A–Z uppercase-only, so the sidebar band + marquee
+  render "GUCOS" (Win95 all-caps look) though the source keeps brand casing.
 - **0111: `GetCommandLineW` args after argv0 are ALWAYS quoted** —
   any new port that hand-parses its command line must take the
   quote-strip path (notepad's `cmdline[0]=='"'` branch is the pattern);
@@ -84,12 +92,13 @@ eyeball.
   same-icon `wmctl click`s pair into a double-click — `sleep 0.6` between.
 - **`queue.js done` can stage a PRE-EDIT blob** of the done file — after
   `done`, `git add todos/done/<file>` again (`git show :todos/done/<file>`
-  to confirm). Stage ONLY your own files; concurrent sessions exist.
+  to confirm). Hit again on 0114. Stage ONLY your own files; concurrent
+  sessions exist.
 - **0041: all global imports before any defined global** — register new
   imported-global features in generateCode's pre-scan region.
 - **Don't edit bake inputs while a suite runs** (0082): `.md` and `tests/`
   are NOT inputs; `os/*.c/.h/.json`, `compiler.js`, `host.js`, `vendor/`
-  are. Bump `image.json` `version` (now **58**) when an interactive
+  are. Bump `image.json` `version` (now **59**) when an interactive
   browser tab must pick up seeded-source edits. Delete `os/os-system.img`
   + `os/os-root.img` to force a rebake after a shared-source change
   (user32, fileops.h, sounds.h, saver.h, kernel32.c, …) or the fixture
@@ -131,14 +140,17 @@ that's the dismissal mechanism; store is the openwith/sounds shape;
 default 900s protects the test suite; no lock screen, no .scr plug-ins,
 no GPU savers — Mystify/pipes live in 0115); 0111's call (cmdline
 quoting is the veneer's job — every arg after argv0 quoted; ports keep
-their Windows `/`-option parsers unpatched); **0099's calls (usage
+their Windows `/`-option parsers unpatched); 0099's calls (usage
 errors exit 2 vs validation's 1; help is checked before dispatch,
-"anywhere in argv" on purpose; EPIPE on stdout/stderr = exit 0)**.
+"anywhere in argv" on purpose; EPIPE on stdout/stderr = exit 0);
+**0114's calls (the OS is gucOS; /proc/version + uname sysname keep the
+Linux/wasm compat prefix — only the builder token rebrands; OPFS image
+filenames stay `os-*.v5.img`; historical logs/done keep the old name)**.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle — `node todos/queue.js list` for the order (0114 gucOS rebrand
-leads, then 0098 Start menu Win7 pane; 0064 WM sweep round 3 owes the
-pointer-lock human check, the 0094 sound listen, the 0095 snap feel, and
-the 0096 saver eyeball)."
+to tackle — `node todos/queue.js list` for the order (0098 Start menu Win7
+pane leads now that 0114 gucOS rebrand landed; 0064 WM sweep round 3 owes
+the pointer-lock human check, the 0094 sound listen, the 0095 snap feel,
+and the 0096 saver eyeball)."
