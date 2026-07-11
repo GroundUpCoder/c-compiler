@@ -134,7 +134,7 @@ async function main() {
     files: {
       '/usr/bin/doom': { bin: 'doom/doom.wasm', mode: '0755', sha256: sha256(doomBytes), size: doomBytes.length },
       '/usr/share/doom/DOOM1.WAD': { bin: 'doom/DOOM1.WAD', mode: '0644', sha256: sha256(wadBytes), size: wadBytes.length, asset: true },
-      '/usr/share/menu/Games/doom.desktop': { text: '[Desktop Entry]\nName=DOOM\nExec=/usr/bin/doom\n', mode: '0644' },
+      '/usr/share/menu/Games/doom': { link: '/usr/bin/doom' },
     },
   }, { 'doom/doom.wasm': doomBytes, 'doom/DOOM1.WAD': wadBytes });
 
@@ -146,8 +146,9 @@ async function main() {
   const wad = readBlob(applied.store, '/share/doom/DOOM1.WAD');
   check('planted /usr/share/doom/DOOM1.WAD bytes match',
     wad && Buffer.compare(Buffer.from(wad), wadBytes) === 0);
-  const desktop = readBlobText(applied.store, '/share/menu/Games/doom.desktop');
-  check('planted text entry', desktop && desktop.indexOf('Name=DOOM') >= 0);
+  const menuLst = BLOCK_FS.createV4(applied.store, { readonly: true }).lstat('/share/menu/Games/doom');
+  check('menu entry planted as a symlink (not a .desktop text file)',
+    menuLst && (menuLst.mode & 0o170000) === 0o120000, menuLst && menuLst.mode.toString(8));
   const prov = readBlobText(applied.store, '/share/overlays/clang-apps.json');
   check('provenance recorded', prov && JSON.parse(prov).repo.commitShort === 'a1b2c3d');
   const rel = readBlobText(applied.store, '/share/os-release');

@@ -412,9 +412,15 @@ function loadOverlays(specs, oio, requireClean, log) {
         throw new Error("overlay '" + spec.id + "': file path " + JSON.stringify(p) + ' must be absolute');
       if (p !== '/usr' && p.indexOf('/usr/') !== 0)
         throw new Error("overlay '" + spec.id + "': file path " + p + ' must be under /usr');
-      var hasBin = entry.bin !== undefined, hasText = entry.text !== undefined;
-      if (hasBin === hasText)
-        throw new Error("overlay '" + spec.id + "': " + p + ' must have exactly one of "bin" | "text"');
+      var hasBin = entry.bin !== undefined, hasText = entry.text !== undefined, hasLink = entry.link !== undefined;
+      if ((hasBin ? 1 : 0) + (hasText ? 1 : 0) + (hasLink ? 1 : 0) !== 1)
+        throw new Error("overlay '" + spec.id + "': " + p + ' must have exactly one of "bin" | "text" | "link"');
+      if (hasLink) {
+        if (typeof entry.link !== 'string' || entry.link.charAt(0) !== '/')
+          throw new Error("overlay '" + spec.id + "': " + p + ' "link" must be an absolute symlink target');
+        resolved.push({ path: p, link: entry.link, override: !!entry.override });
+        return;   // a symlink carries no bytes, mode, or hash
+      }
       var mode = parseOverlayMode(entry.mode, p, spec.id);
       var bytes;
       if (hasBin) {
@@ -479,9 +485,14 @@ function plantOverlays(mfs, loaded, log) {
       if (mfs.stat(f.path) !== null && !f.override)
         throw new Error("overlay '" + ov.id + "': " + f.path +
           ' already exists in the base image (set "override": true to replace)');
-      writeFile(mfs, f.path, f.bytes, f.mode);
+      if (f.link !== undefined) {
+        if (mfs.lstat(f.path) !== null) mfs.unlink(f.path);   // "override" replaces a base entry
+        mfs.symlink(f.link, f.path);
+      } else {
+        writeFile(mfs, f.path, f.bytes, f.mode);
+      }
       claimed[f.path] = ov.id;
-      total += f.bytes.length;
+      total += (f.bytes ? f.bytes.length : 0);
     });
     ensureDirPath(mfs, '/usr/share/overlays');
     writeFile(mfs, '/usr/share/overlays/' + ov.id + '.json',
