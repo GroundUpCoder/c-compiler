@@ -57,6 +57,34 @@ decisions, trade-offs, gotchas. Add an entry when landing anything
 substantial, cross-linking `todos/NNNN` items. In-repo convention doc:
 `logs/README.md`.
 
+## Running tests — `tests/run.js` (unified entry + diff-aware)
+
+`node tests/run.js` (todos/0084) is the ONE dispatcher over the whole
+estate — the individual runners (`tests/run-unit.js`, `tests/run.py`
+categories, `tests/host/run.js`, `tests/blockfs/run.js`,
+`tests/kernel/run.js`, `tests/browser/os-sweep.mjs`) stay independently
+invocable; this just knows how to invoke them uniformly and, the point,
+**which of them a given diff needs**:
+
+- `node tests/run.js all` — the entire estate, one combined exit code +
+  a merged `build/test-run/summary.json`.
+- `node tests/run.js unit kernel` — named suites (see `--list`).
+- `node tests/run.js --diff [ref]` — map the touched paths → suites and
+  run exactly those (default: the working set vs HEAD; pass a ref to diff
+  against it). `--dry-run` prints the plan and runs nothing.
+- Passthrough: `--filter=STR` (all suites), `-j N`/`--resume`/`--fail-fast`
+  (the suite-runner-backed suites).
+
+**The path→suite rule table lives in `tests/run.js` (the `RULES` array) and
+is the single documented source of "what does this diff need"** — replace
+the old "after touching X, run the Y sweep" lore with a rule there, don't
+re-encode it as prose. `node tests/run.js --list` prints the table + the
+IGNORE set (docs/todos/logs → nothing). A changed CODE path that matches no
+rule is reported as **UNMAPPED** (warned, never silently skipped) — that's
+the signal to add a rule. run.py categories are BATCHED into one python
+process; the browser `sweep` is optional (a missing-Playwright launch
+failure degrades to a skip, not a hard fail).
+
 ## Conformance tests (bug regression corpus)
 
 `tests/unit/conformance/` holds one directory per fixed conformance bug:

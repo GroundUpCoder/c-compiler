@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-12; 0083 event-based waits landed)
+# Handoff — start of thread (updated 2026-07-12; 0084 unified test entry landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,108 +7,101 @@
 
 ## Where the repo stands
 
-**0083 (event-based waits) is DONE and committed.** The `sleep N`
-guess-wait synchronization class is retired everywhere it was observable.
+**0084 (unified test entry point + diff-aware selection) is DONE and
+committed.** There is now ONE command over the whole test estate that also
+knows which suites a given diff needs.
 
-- **New primitive: `wmctl wait` (`os/wmctl.c`).** Polls `WMP_LIST` on the
-  open WM connection every 30ms until a condition holds, with a
-  failure-deadline timeout (default 15000ms; **exit 1 on timeout** — the ms is
-  a deadline, not a sync sleep). Conditions: `win`/`nowin TITLE`,
-  `count`/`atleast TITLE N`, `gone SID`, `flag`/`noflag SID CH`, `seq SID N`
-  (frame_seq ≥ N). TITLE = the exact TITLE column of `wmctl list` (quote
-  spaced titles); shell vars work (`wmctl wait flag $SID m`). Factored the
-  shared FLAGS builder into `rec_flags()` — `list` output is byte-identical.
-- **Converted (pure-WM kernel e2es)**: `test_wm_service_e2e.js` (60 sleeps →
-  waits — window/flag/count + launcher legs via pre-count + `wait atleast`;
-  136 ok / 0 fail; 53 hard-tail sleeps remain, owned by 0155),
-  `test_snap_e2e.js`, `test_saver_e2e.js`, `test_cursor_e2e.js` (fully
-  annotated). Sleeps that are genuine **timing subjects** (negative "nothing
-  happened" checks, geometry RESIZE-ack round-trips, coarse desk/`.icons`
-  re-read ticks, in-surface render settles) stayed as `sleep`s.
-- **Converted (browser)**: `os-shell.mjs` (3 real conversions to
-  `waitPixel`/`waitNotPixel`); the rest of the `os-*.mjs` sync sites were
-  already event-based post-0146 or are annotated timing subjects.
+- **New: `node tests/run.js`** — a thin `spawnSync` dispatcher over the
+  existing runners (`tests/run-unit.js`, `tests/run.py` categories,
+  `tests/host/run.js`, `tests/blockfs/run.js`, `tests/kernel/run.js`,
+  `tests/browser/os-sweep.mjs`); they all stay independently invocable.
+  - `node tests/run.js all` — whole estate, one exit code + a merged
+    `build/test-run/summary.json`.
+  - `node tests/run.js unit kernel` — named suites (`--list` enumerates).
+  - `node tests/run.js --diff [ref]` — map touched paths → suites, run
+    exactly those (default: working set vs HEAD; pass a ref to diff against
+    it). `--dry-run` prints the plan, runs nothing.
+  - Passthrough: `--filter=STR` (all), `-j N`/`--resume`/`--fail-fast`
+    (suites whose runner accepts them — a per-suite `supports` set).
+- **The path→suite rule table lives in `tests/run.js` (the `RULES` array)**
+  and is the SINGLE documented source of "what does this diff need."
+  UNION semantics (every matching rule contributes); a first IGNORE tier
+  drops docs/todos/logs; a changed CODE path matching no rule is warned as
+  UNMAPPED, never silently skipped. `node tests/run.js --list` prints the
+  table. CLAUDE.md's new "Running tests" section + README's Tests section
+  point HERE instead of carrying the old "after touching X run Y" prose.
+- run.py categories batch into ONE python process; the browser `sweep` is
+  `optional` (a can't-launch degrades to a skip, not a fail).
 
 ## Tests / verification
 
-- **Full kernel suite: 58 passed, 0 failed** (`node tests/kernel/run.js`,
-  ~385s — the `os-system.img` rebake dominates `test_os_boot.js`). The
-  `wmctl.c` change is regression-free across every test that runs `wmctl`.
-- **Browser: static-verified only** (`node --check` on all edited `os-*.mjs`;
-  no bare sync `waitForTimeout` left un-annotated). **The sweep was NOT run —
-  Playwright is not installed in this clone.** Runtime confirmation is
-  operator-owed (see 0153/0064 below).
+Each dispatch path exercised against the REAL runners (not mocked):
 
-Dev log: `logs/2026-07-12/0083-event-based-waits.md`. Item at
-`todos/done/0083-test-sleep-waits.md`.
+- **Acceptance**: `compiler.js` diff → **unit+kernel+blockfs**; `os/wm.c`
+  diff → **kernel+sweep**; `all --dry-run` == the full ordered estate. ✓
+- Real runs through the dispatcher: `unit` (filtered), `host`, `blockfs`
+  (artifact link surfaced), `kernel` (filtered to test_kernel.js), a batched
+  `ast,disw` py run — all aggregate exit codes + write the merged summary.
+- `--diff HEAD~1` resolved the last commit's paths correctly (docs ignored).
+- **The full `all` was NOT run** (multi-hour: kernel bake + libc + fuzz +
+  every vendor project). The dispatcher is a thin orchestrator; every
+  dispatch path was proven individually against known-green suites.
 
-## Follow-ups filed
-
-- **0154** (P1) — agent-tree waits: add `wmctl wait label/text` over the
-  win32 agent tree (`wmctl tree`/`gettext`, todos/0058), then convert the
-  **win32-app e2e cluster** (fileman_ops/recycle/ctxmenu/user32/notepad/calc/
-  winmine/ctlpanel/clipboard/openwith/paint/gdi32 — ~295 sleeps waiting on
-  in-app control state the WM window list can't see).
-- **0155** (P1) — the hard-tail kernel sleeps: `test_wm_service_e2e.js`'s 53
-  remaining holds (RESIZE-ack geometry round-trips + animation/in-surface
-  settles via `wait seq` baselines; annotate true subjects), `test_term_e2e.js`
-  tty-render waits (`wait seq` off a captured baseline), and the emulator/misc
-  timing-subject audit (sameboy/punes/mgba/gpubox/os_apps/cairo/os_boot) so the
-  "no bare sync sleep" invariant is clean and greppable.
-
-Slotted right after 0084 in `queue.json`.
+Dev log: `logs/2026-07-12/0084-test-entrypoint.md`. Item at
+`todos/done/0084-test-entrypoint.md`.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **`wmctl.c`/`os/*.c` are seeded bake inputs.** This session bumped
-  `image.json` `version` 72 → **73** and rebaked `os/os-system.img` (gitignored)
-  so warm e2e boots stay ~1-2s; a cold in-worker bake is ~90s. Any edit to a
-  seeded `os/*.c/.h/.rc` or `compiler.js`/`host.js`/`vendor/` restales the
-  fixture — the suite runner (`tests/lib/image-fixture.js`) rebakes once up
-  front. **Bump `version` on any seeded-source edit** or a persistent browser
-  OPFS image won't re-fetch.
+- **The `os/wm.c` acceptance touch restaled `os/os-system.img`** — this
+  session rebaked the prebaked fixture (96s) so warm e2e boots stay ~1-2s.
+  Any edit to a seeded `os/*.c/.h/.rc` or `compiler.js`/`host.js`/`vendor/`
+  restales it; the suite runners rebake once up front. Bump `image.json`
+  `version` on a seeded-source edit or a persistent browser OPFS image won't
+  re-fetch. (Image version is currently **v64** per CLAUDE.md;
+  `image.json` version was last bumped to 73.)
 - **`queue.js done` stages a PRE-EDIT blob** of the done file — after `done`,
-  `git add todos/done/<file>` again (hit this session: the git-mv staged the
-  "Status: open" blob; re-adding staged the "DONE" one).
-- **Concurrent sessions exist: stage ONLY your own files**, and re-check HEAD
+  `git add todos/done/<file>` again (done this session; verified the staged
+  blob carries the DONE Status line).
+- **Concurrent sessions exist: stage ONLY your own files**, re-check HEAD
   before committing.
-- **Playwright is not installed here.** The kernel suite and `node --check`
-  run fine; `node tests/browser/*` needs a separate install (browsers cached
-  under `~/Library/Caches/ms-playwright`).
+- **Playwright is not installed here.** The kernel/blockfs/unit/host suites
+  and `node --check` run fine; the browser `sweep` needs a separate install.
+  Via `tests/run.js` the sweep is `optional` — a can't-launch is a skip.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. List order is PRIORITY-BUCKETED (P0–P3), so P0 bugs lead.
 
 ## Next in queue
 
-`node todos/queue.js list` for the authoritative order. Head is **0084**
-(unified test entry point with diff-aware selection), then **0154/0155** (the
-0083 residue), **0147**, **0079/0080**, **0052/0053**, **0064**. No open P0s.
+`node todos/queue.js list` for the authoritative order. Head is now **0154**
+(agent-tree waits — `wmctl wait label/text` + the win32-app e2e cluster),
+then **0155** (the hard-tail kernel/term/emulator sleeps), **0147** (test
+flake gate), **0079/0080**, **0052/0053**, **0064**. No open P0s.
+
+Two natural follow-ons to 0084 already in the queue: **0147** (test flake
+gate) and **0148** (test-tightness sweep) can now build on the unified entry.
 
 ## Operator-owed (browser, Playwright required)
 
-- **0064** — the standing WM browser-sweep debt (pointer-lock human check +
-  the 0094–0151 legs).
+- **0064** — the standing WM browser-sweep debt (pointer-lock human check).
 - **0152** — a `--clang` browser boot confirming the served overlay renders.
-- **0153** — run `os-sweep.mjs` to validate the 0146 harness conversion (and
-  now the 0083 os-shell `waitPixel` conversions ride along).
+- **0153** — run `os-sweep.mjs` to validate the 0146/0083 harness conversions.
 
 Launch Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan` (0055 —
-boot REQUIRES worker WebGPU). `node tests/browser/os-sweep.mjs` runs the whole
-sweep serially.
+boot REQUIRES worker WebGPU). `node tests/run.js sweep` (or
+`node tests/browser/os-sweep.mjs`) runs the whole sweep serially.
 
 ## Don't re-litigate
 
 posix_spawn-not-fork; kernel-owned fds; WM.md invariants; DISK-IMAGE.md's
-settled layout; 0013–0155's recorded decisions (see todos/done/). **0083's
-call: `wmctl wait` polls the WM window list (30ms, failure-deadline timeout) —
-in-app control state (win32 agent tree) is a SEPARATE primitive owned by 0154;
-timing-subject sleeps that prove a negative or settle a render stay as
-annotated `sleep`s by design.**
+settled layout; 0013–0155's recorded decisions (see todos/done/). **0084's
+call: `tests/run.js` is a THIN dispatcher — the individual runners stay the
+canonical entry points; the rule table (UNION, IGNORE-first, warn-on-unmapped)
+is the single documented source of diff→suite mapping.**
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want to
-tackle — `node todos/queue.js list` for the order (0083 event-based waits just
-landed; `wmctl wait` retired the sleep-sync class in the pure-WM kernel e2es +
-browser; win32-app cluster is owned by 0154, term/emulators by 0155; no open
-P0s, head is 0084)."
+tackle — `node todos/queue.js list` for the order (0084 unified test entry +
+diff-aware selection just landed; `node tests/run.js --diff` runs what a diff
+needs, rule table in tests/run.js; head is now 0154/0155 for the 0083 sleep
+residue; no open P0s)."

@@ -378,6 +378,20 @@ Plus one new compiler flag introduced along the way: `--allow-zero-length-arrays
 
 ## Tests
 
+`node tests/run.js` is the unified entry point over the whole estate — it
+dispatches to the individual runners and, given a diff, runs exactly the
+suites that diff needs:
+
+```bash
+node tests/run.js all                    # The entire estate, one summary
+node tests/run.js unit kernel            # Named suites (--list to see them)
+node tests/run.js --diff                 # Suites the working-tree diff needs
+node tests/run.js --diff main --dry-run  # Print the plan vs `main`, run nothing
+node tests/run.js --list                 # Suites + the path→suite rule table
+```
+
+The individual runners stay independently invocable:
+
 ```bash
 python3 tests/run.py                                  # Unit tests (default)
 python3 tests/run.py --all                             # Everything

@@ -1,6 +1,16 @@
 # 0084 — Unified test entry point with diff-aware selection
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). Landed `tests/run.js` — a thin dispatcher
+  over the existing runners (run-unit, run.py categories, host, blockfs,
+  kernel, os-sweep) with `all`/named-suite/`--diff [ref]`/`--dry-run`/`--list`
+  modes, a committed UNION path→suite rule table (the single source of "what
+  does this diff need"; unmapped code paths warned, never silently skipped),
+  batched run.py invocation, per-suite passthrough flags, and a merged
+  `build/test-run/summary.json` + combined exit code. CLAUDE.md's new "Running
+  tests" section and README's Tests section point at the rule table instead of
+  prose lore. Acceptance verified: compiler.js diff → unit+kernel+blockfs,
+  os/wm.c diff → kernel+sweep, `all` == the full estate. Dev log:
+  `logs/2026-07-12/0084-test-entrypoint.md`.
 - **Design**: this file (spawned from `todos/done/0081`)
 
 ## Goal
