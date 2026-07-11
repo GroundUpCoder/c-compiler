@@ -46,7 +46,11 @@ function boot(script) {
 /* ---- session A: the whole interactive story in one boot ---- */
 const out = boot([
   'ctldemo &',
-  'sleep 4',                                     // wasm boot + first paint
+  // Boot barrier (todos/0154): the agent tree serving a resolvable label means
+  // the app created its controls and reached the GetMessage idle loop — so the
+  // WM_CREATE<SIZE<PAINT prints and `ready` are already out, and the window is
+  // listed. Replaces the old `sleep 4` guess-wait.
+  'wmctl wait label Greet 10000',
   'SID=$(wmctl list | grep "Control Demo$" | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
@@ -54,48 +58,53 @@ const out = boot([
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
-  // Label click, no pixels: BM_CLICK -> BN_CLICKED -> WM_COMMAND.
+  // Label click, no pixels: BM_CLICK -> BN_CLICKED -> WM_COMMAND. No wait: the
+  // GetMessage loop serves ONE agent request then dispatches ONE queued message
+  // per iteration, so the WM_COMMAND lands before the next agent command below.
   'wmctl click Greet',
-  'sleep 1',
-  // Focus the edit by class:index, type over the kernel key path,
-  // read it back through the agent.
+  // Focus the edit by class:index, type over the kernel key path, read it back
+  // through the agent. `wait text` polls until the typed chars land in the EDIT
+  // (WM_KEYDOWN->WM_CHAR is dispatched after the key ring drains) — the old
+  // `sleep 1`s here were guessing at that latency.
   'wmctl click EDIT:0',
-  'sleep 1',
   'wmctl key $SID 11 104',                       // h
   'wmctl key $SID 12 105',                       // i
-  'sleep 1',
+  'wmctl wait text EDIT:0 hi 4000',
   'echo ==gettext1',
   'wmctl gettext EDIT:0',
   'wmctl click Add',
-  'sleep 1',
+  'wmctl wait text LISTBOX:0 hi 4000',
   'echo ==listtext',
   'wmctl gettext LISTBOX:0',
   // settext round-trip.
   'wmctl settext EDIT:0 world',
   'echo ==gettext2',
   'wmctl gettext EDIT:0',
-  // Checkbox by label; Greet reports its state.
+  // Checkbox by label; Greet reports its state. Both agent clicks serialize
+  // (Verbose's toggle dispatches before Greet is served), then the Greet
+  // WM_COMMAND dispatches before the pixel clicks below.
   'wmctl click Verbose',
   'wmctl click Greet',
-  'sleep 1',
   // Input routing: local-coord pixel click on listbox row 0 (rect 12,44).
   'wmctl click $SID 100 54',
-  'sleep 1',
+  // A short settle before the double-click so the single selection click can't
+  // fuse with the dblclick's first click into a spurious triple (client-side
+  // double-click detection is timestamp-based — a genuine timing subject).
+  'sleep 0.3',
   'wmctl dblclick $SID 100 54',
-  'sleep 1',
-  // Scrollbar arrows (rect 264,44 16x120; the down arrow bottom square).
+  // Scrollbar arrows (rect 264,44 16x120; the down arrow bottom square). Ring
+  // injections are FIFO-dispatched, so pos=1,2 then back to 1 stays ordered
+  // without pacing sleeps.
   'wmctl click $SID 272 152',
-  'sleep 1',
   'wmctl click $SID 272 152',
-  'sleep 1',
   'wmctl click $SID 272 50',                     // up arrow
-  'sleep 1',
   // Cursor shapes (todos/0105): move the window to a known origin, then a
   // REAL screen-injected motion (wmctl smove) over the Name EDIT (client rect
   // 76,10 180x24) makes user32's update_cursor set the I-beam on the surface;
   // over the transparent "Name:" STATIC it falls to the arrow. The kernel
-  // per-surface cursor reads back via `wmctl cursor` (no menu bar here, so no
-  // client offset). A short sleep lets the app pump the motion + SetCursor.
+  // per-surface cursor reads back via `wmctl cursor`. There is no agent-visible
+  // signal for "the app pumped the motion + SetCursor" — the cursor lives in
+  // kernel per-surface state, so these stay annotated timing sleeps (0083 rule).
   'wmctl move $SID 200 200 && echo curmoved',
   'sleep 0.5',
   'wmctl smove 210 210',                         // over the STATIC -> arrow
@@ -104,9 +113,10 @@ const out = boot([
   'wmctl smove 366 222',                         // over the Name EDIT -> I-beam
   'sleep 0.8',
   'echo cur-edit=$(wmctl cursor 366 222)',
-  // MessageBox modal: Cancel first, then OK.
+  // MessageBox modal: Cancel first, then OK. The MB is a real WM window, so
+  // wait on its title appearing/going (0083 wait win/nowin) instead of guessing.
   'wmctl click About',
-  'sleep 2',
+  'wmctl wait win "About ctldemo" 6000',
   'echo ==mblist',
   'wmctl list',
   'echo ==cut',
@@ -114,20 +124,22 @@ const out = boot([
   'wmctl tree',
   'echo ==cut',
   'wmctl click Cancel',
-  'sleep 1',
+  'wmctl wait nowin "About ctldemo" 6000',
   'wmctl click About',
-  'sleep 2',
+  'wmctl wait win "About ctldemo" 6000',
   'wmctl click OK',
-  'sleep 1',
-  // A second win32 app: tree dumps BOTH processes.
+  'wmctl wait nowin "About ctldemo" 6000',
+  // A second win32 app: tree dumps BOTH processes. Wait on its window title.
   'gdidemo &',
-  'sleep 4',
+  'wmctl wait win "GDI Demo" 10000',
   'echo ==tree2',
   'wmctl tree',
   'echo ==cut',
-  // Teardown: label-click Quit; the surface and agent socket must go.
+  // Teardown: label-click Quit; the surface and agent socket must go. Waiting
+  // for the label to vanish proves the app fully exited (and, FIFO, flushed the
+  // WM_DESTROY/bye prints) before we read the list.
   'wmctl click Quit',
-  'sleep 1',
+  'wmctl wait nolabel Greet 6000',
   'echo ==list2',
   'wmctl list',
   'echo ==cut',
@@ -247,36 +259,50 @@ const { dir: dtmp, image: dimage } = freshImage('os-user32d-');
 function bootD(script) {
   return driveBoot(script, { image: dimage, maxBuffer: 32 * 1024 * 1024 }).stdout;
 }
+// The per-key `sleep 1`s below wait for a Tab/mnemonic keydown to be DISPATCHED
+// so the ` focus ` marker in the next `wmctl tree` reflects the move. That
+// marker lives per-line in the tree dump keyed by control id — the 0154
+// label/text agent-wait can't target it (it matches a widget's TEXT, not its
+// focus state), so these stay annotated timing subjects (0083 rule). Every
+// window-level wait (dialog/MessageBox open+close) IS converted.
+const FOCUS_SETTLE = 'sleep 1';   // focus-marker dispatch; tree-only, see above
 const outD = bootD([
   'ctldemo &',
-  'sleep 4',
+  'wmctl wait label Greet 10000',
   'wmctl click Options',
-  'sleep 2',
+  'wmctl wait win Options 6000',
   'echo ==dtree', 'wmctl tree', 'echo ==cut',
-  'wmctl key 0 43 9', 'sleep 1',                 // Tab: edit -> Verbose
+  'wmctl key 0 43 9', FOCUS_SETTLE,              // Tab: edit -> Verbose
   'echo ==tab1', 'wmctl tree', 'echo ==cut',
-  'wmctl key 0 43 9', 'sleep 1',                 // Tab: Verbose -> OK
+  'wmctl key 0 43 9', FOCUS_SETTLE,              // Tab: Verbose -> OK
   'echo ==tab2', 'wmctl tree', 'echo ==cut',
-  'wmctl key 0 43 9 1', 'sleep 1',               // Shift+Tab: OK -> Verbose
+  'wmctl key 0 43 9 1', FOCUS_SETTLE,            // Shift+Tab: OK -> Verbose
   'echo ==stab', 'wmctl tree', 'echo ==cut',
-  'wmctl key 0 17 110 256', 'sleep 1',           // Alt+N: static mnemonic -> edit
+  'wmctl key 0 17 110 256', FOCUS_SETTLE,        // Alt+N: static mnemonic -> edit
   'echo ==altn', 'wmctl tree', 'echo ==cut',
-  'wmctl key 0 11 104', 'wmctl key 0 12 105', 'sleep 1',   // type "hi"
-  'wmctl key 0 47 118 256', 'sleep 1',           // Alt+V: toggle Verbose
-  'wmctl key 0 40 13', 'sleep 1',                // Enter: default OK
+  // Type "hi" into the dialog EDIT, then confirm it landed before toggling.
+  'wmctl key 0 11 104', 'wmctl key 0 12 105',
+  'wmctl wait text EDIT:0 hi 4000',
+  'wmctl key 0 47 118 256', FOCUS_SETTLE,        // Alt+V: toggle Verbose
+  'wmctl key 0 40 13',                           // Enter: default OK -> closes
+  'wmctl wait nowin Options 6000',
   'echo ==afterok', 'wmctl list', 'echo ==cut',
-  'wmctl click Options', 'sleep 2',              // reopen
-  'wmctl key 0 15 27', 'sleep 1',                // Esc -> IDCANCEL
+  'wmctl click Options', 'wmctl wait win Options 6000',   // reopen
+  'wmctl key 0 15 27',                           // Esc -> IDCANCEL -> closes
+  'wmctl wait nowin Options 6000',
   'echo ==afteresc', 'wmctl list', 'echo ==cut',
-  'wmctl click Options', 'sleep 2',              // reopen
-  'wmctl key 0 46 99 256', 'sleep 1',            // Alt+C: mnemonic Cancel
+  'wmctl click Options', 'wmctl wait win Options 6000',   // reopen
+  'wmctl key 0 46 99 256',                        // Alt+C: mnemonic Cancel -> closes
+  'wmctl wait nowin Options 6000',
   // MessageBox (the non-template #32770) inherits the same keyboard path.
-  'wmctl click About', 'sleep 2',
-  'wmctl key 0 43 9', 'sleep 1',                 // Tab: OK -> Cancel
-  'wmctl key 0 40 13', 'sleep 1',                // Enter presses focused Cancel
-  'wmctl click About', 'sleep 2',
-  'wmctl key 0 40 13', 'sleep 1',                // Enter presses default OK
-  'wmctl click Quit', 'sleep 1',
+  'wmctl click About', 'wmctl wait win "About ctldemo" 6000',
+  'wmctl key 0 43 9', FOCUS_SETTLE,              // Tab: OK -> Cancel
+  'wmctl key 0 40 13',                           // Enter presses focused Cancel
+  'wmctl wait nowin "About ctldemo" 6000',
+  'wmctl click About', 'wmctl wait win "About ctldemo" 6000',
+  'wmctl key 0 40 13',                           // Enter presses default OK
+  'wmctl wait nowin "About ctldemo" 6000',
+  'wmctl click Quit', 'wmctl wait nolabel Greet 6000',
   '',
 ].join('\n'));
 

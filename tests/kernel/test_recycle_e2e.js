@@ -54,6 +54,22 @@ const sel0 = ['wmctl click $SID 100 100', HOME].join('\n');
 const RC_ROW0 = 'wmctl click $SID 100 30 3';
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
+// 0154 event-based waits. Two agent-tree polls carry most of the sync here:
+//   CONFIRM  a MessageBox (Yes/No or Replace) is up — its "No" button is an
+//            HWND that only the dialog owns (the fileman window has none), so
+//            the poll fires exactly when the modal is built and serving.
+//   SETTLED  fileman is back at its idle loop with the op finished — "Go" is
+//            always present, and after a BUTTON/dialog click (which PostMessages
+//            BM_CLICK, returned in the serving iteration) the probe is served
+//            only once the handler + refill have run, so it's a safe post-op
+//            barrier before a disk check.
+// What stays a `sleep`: fileman's context menus are in-surface TrackPopupMenus
+// — not WM windows (not in `wmctl list`) and their items aren't HWNDs, so
+// neither wait can see them; plus the wm.c desktop's coarse re-read tick, its
+// own (non-win32) disk trashes, and the negative "menu didn't close" check.
+const CONFIRM = 'wmctl wait label No 8000';
+const SETTLED = 'wmctl wait label Go 8000';
+
 const script = [
   // -- fixtures --
   'mkdir -p /root/t1 /root/t2',
@@ -62,23 +78,23 @@ const script = [
   'printf A > /root/t1/dup.txt',
   'printf B > /root/t2/dup.txt',
   'fileman /root/t1 &',
-  'sleep 5',
+  'wmctl wait label Go 10000',                    // fileman built its controls + reached the message loop
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
   // ---- Del -> Recycle Bin confirm; No keeps, Yes trashes (a.txt row 0) ----
   sel0,
   DEL,
-  'sleep 0.5',
+  CONFIRM,                                       // the "send to Recycle Bin?" dialog is up
   'echo ==del1',
   'wmctl tree',
   'echo ==cut',
   'wmctl click No',
-  'sleep 0.5',
+  'wmctl wait nolabel No 8000',                  // dialog dismissed
   'test -f /root/t1/a.txt && echo NO-KEEPS',
   sel0,
   DEL,
-  'sleep 0.5',
+  CONFIRM,
   'wmctl click Yes',
-  'sleep 0.5',
+  SETTLED,                                       // trash done, fileman idle again
   'test ! -f /root/t1/a.txt && test -f /root/.recycle/files/a.txt && echo TRASHED',
   'echo "==sidecar $(cat /root/.recycle/info/a.txt | head -1)"',
   // ---- Shift+Del: permanent (p.txt sorts after dup.txt: row 1) ----
@@ -87,179 +103,179 @@ const script = [
   'wmctl keydown $SID 225 1073742049 1',         // LSHIFT down
   'wmctl key $SID 76 127 1',
   'wmctl keyup $SID 225 1073742049 0',
-  'sleep 0.5',
+  CONFIRM,                                       // the permanent-delete confirm is up
   'echo ==perm1',
   'wmctl tree',
   'echo ==cut',
   'wmctl click Yes',
-  'sleep 0.5',
+  SETTLED,
   'test ! -f /root/t1/p.txt && test ! -e /root/.recycle/files/p.txt && echo PERM-GONE',
   // ---- same-basename uniquifier: dup.txt from t1 then t2 ----
   sel0,
   DEL,
-  'sleep 0.4',
+  CONFIRM,
   'wmctl click Yes',
-  'sleep 0.4',
+  // (no settle: the settext/Go below are agent ops, served only after the trash)
   'wmctl settext EDIT:0 /root/t2',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text "LISTBOX:0" dup.txt 8000',    // t2's listing loaded
   sel0,
   DEL,
-  'sleep 0.4',
+  CONFIRM,
   'wmctl click Yes',
-  'sleep 0.4',
+  SETTLED,
   'grep -q A /root/.recycle/files/dup.txt && grep -q B "/root/.recycle/files/dup.txt 2" && echo UNIQ-OK',
   // ---- the store view: row + pane menus ----
   'wmctl settext EDIT:0 /root/.recycle/files',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text "LISTBOX:0" a.txt 8000',      // the store listing loaded
   RC_ROW0,                                       // a.txt (sorts first)
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface TrackPopupMenu — no WM window / HWND to poll
   'echo ==trashrow',
   'wmctl tree',
   'echo ==cut',
   'wmctl key $SID 41 27',                        // Esc
-  'sleep 0.3',
+  'sleep 0.3',                                   // popup dismiss — nothing pollable
   RC_PANE,
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface popup — nothing pollable
   'echo ==trashpane',
   'wmctl tree',
   'echo ==cut',
   'wmctl key $SID 41 27',
-  'sleep 0.3',
+  'sleep 0.3',                                   // popup dismiss
   // ---- restore a.txt: back at the original, sidecar gone ----
   RC_ROW0,
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface popup — nothing pollable
   'wmctl click Restore',
-  'sleep 0.5',
+  'sleep 0.5',                                   // menu-item click posts no msg + no store-view signal for the restore — settle before the disk check
   'test -f /root/t1/a.txt && test ! -e /root/.recycle/files/a.txt && test ! -e /root/.recycle/info/a.txt && echo RESTORED',
   // ---- restore clash: dup.txt's original re-created -> Replace? ----
   'printf clash > /root/t1/dup.txt',
   RC_ROW0,                                       // dup.txt now row 0
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface popup — nothing pollable
   'wmctl click Restore',
-  'sleep 0.5',
+  CONFIRM,                                       // EEXIST -> the "Replace it?" dialog is up
   'echo ==replace',
   'wmctl tree',
   'echo ==cut',
   'wmctl click No',
-  'sleep 0.5',
+  'wmctl wait nolabel No 8000',                  // dialog dismissed
   'test -f /root/.recycle/files/dup.txt && grep -q clash /root/t1/dup.txt && echo REPLACE-NO',
   RC_ROW0,
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface popup — nothing pollable
   'wmctl click Restore',
-  'sleep 0.5',
+  CONFIRM,
   'wmctl click Yes',
-  'sleep 0.5',
+  SETTLED,
   'grep -q A /root/t1/dup.txt && echo REPLACE-YES',
   // ---- delete IN the store is permanent ("dup.txt 2" the only row) ----
   sel0,
   DEL,
-  'sleep 0.5',
+  CONFIRM,                                       // the permanent-delete confirm is up
   'echo ==permintrash',
   'wmctl tree',
   'echo ==cut',
   'wmctl click Yes',
-  'sleep 0.5',
+  SETTLED,
   'test ! -e "/root/.recycle/files/dup.txt 2" && test ! -e "/root/.recycle/info/dup.txt 2" && echo TRASH-DEL-PERM',
   // ---- Empty Recycle Bin: fill one, confirm, cleared, grayed after ----
   'printf z > /root/t1/z.txt',
   'wmctl settext EDIT:0 /root/t1',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text "LISTBOX:0" z.txt 8000',      // back at t1 with z.txt listed
   'wmctl click $SID 100 100',
   'wmctl key $SID 74 1073741898',
   'wmctl key $SID 81 1073741905',                // Down (a.txt, dup.txt, z.txt: z row 2)
   'wmctl key $SID 81 1073741905',
   DEL,
-  'sleep 0.4',
+  CONFIRM,
   'wmctl click Yes',
-  'sleep 0.4',
+  // (no settle: the settext/Go below serialize behind the trash)
   'wmctl settext EDIT:0 /root/.recycle/files',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text "LISTBOX:0" z.txt 8000',      // z.txt now in the store
   RC_PANE,
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface popup — nothing pollable
   'wmctl click "Empty Recycle Bin"',
-  'sleep 0.5',
+  CONFIRM,                                       // the Empty confirm dialog is up
   'echo ==emptybox',
   'wmctl tree',
   'echo ==cut',
   'wmctl click Yes',
-  'sleep 0.5',
+  SETTLED,
   'echo "==left F$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-I$(ls /root/.recycle/info | wc -l | tr -d \\" \\")"',
   RC_PANE,
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface popup — nothing pollable
   'echo ==panegray',
   'wmctl tree',
   'echo ==cut',
   'wmctl key $SID 41 27',
-  'sleep 0.3',
+  'sleep 0.3',                                   // popup dismiss
   // ---- EROFS: trash under /bin fails clean, no stray store entry ----
   'wmctl settext EDIT:0 /bin',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text "LISTBOX:0" awk 8000',        // /bin listing loaded
   sel0,
   DEL,
-  'sleep 0.5',
+  CONFIRM,                                       // the "send to Recycle Bin?" confirm is up
   'wmctl click Yes',
-  'sleep 0.5',
+  'wmctl wait label OK 8000',                    // the EROFS error box ("Cannot delete") is up
   'echo ==erofs',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',
-  'sleep 0.3',
+  SETTLED,
   'test -e /bin/awk && echo ROFS-INTACT',
   'echo "==stray S$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
   // ---- the wm.c desktop: glyph empty -> full -> empty ----
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DSID /root/e.ppm && echo E-SHOT',
   'printf junk > /root/Desktop/junk.txt',
-  'sleep 1.5',                                   // the coarse desk tick
+  'sleep 1.5',                                   // the coarse desk tick (wm.c re-reads Desktop on a timer — no event)
   // junk.txt sorts to row 3 (doom drmario gameboy junk.txt ...); icon menu
   'wmctl click $DSID 58 240 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                 // wm.c's ctxmenu IS a real WM window
   'echo ==iconmenu',
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl click $CXSID 60 82',                    // DELETE
-  'sleep 1.5',
+  'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
   'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
   // ---- the bin's own menu: OPEN / EMPTY RECYCLE BIN (row 7, y 494) ----
   'wmctl click $DSID 58 494 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'echo ==binmenu',
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl click $CXSID 60 42',                    // EMPTY RECYCLE BIN
-  'sleep 1.5',
+  'sleep 1.5',                                   // wm.c empties + the coarse glyph tick must flip full->empty before G-SHOT (no event)
   'echo "==binleft B$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
   'wmctl shot $DSID /root/g.ppm && echo G-SHOT',
   // grayed EMPTY: click leaves the menu open
   'wmctl click $DSID 58 494 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl click $CXSID 60 42',
-  'sleep 0.5',
+  'sleep 0.5',                                   // negative check: a grayed EMPTY click must NOT close the menu (nothing to poll for)
   'echo ==graystay',
   'wmctl list',
   'echo ==cut',
   'wmctl key $CXSID 41 27',
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 8000',               // menu dismissed
   // ---- the Del KEY on a selected icon ----
   'printf k > /root/Desktop/kdel.txt',
-  'sleep 1.5',
+  'sleep 1.5',                                   // coarse desk tick so the new icon is laid out (no event)
   'wmctl click $DSID 58 240',                    // kdel.txt row 3, select
-  'sleep 0.7',
+  'sleep 0.7',                                   // let wm.c register the single-click selection (no queryable selection state)
   'wmctl key $DSID 76 127',
-  'sleep 1.5',
+  'sleep 1.5',                                   // wm.c trashes the selection (no event; coarse tick)
   'test ! -f /root/Desktop/kdel.txt && test -f /root/.recycle/files/kdel.txt && echo KEY-DEL',
   // ---- double-click the bin: fileman opens AT the store ----
   'wmctl dblclick $DSID 58 494',
-  'sleep 6',                                     // fileman spawn + freetype
+  'wmctl wait win "File Manager - /root/.recycle/f" 10000',  // the second fileman booted (title truncated to 31 chars)
   'echo ==binopen',
   'wmctl list',
   'echo ==cut',

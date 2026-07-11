@@ -58,44 +58,67 @@ const swx = (k) => CANVAS_X + (k % 8) * 16 + 8;
 const swy = (k) => PAL_Y + Math.floor(k / 8) * 16 + 8 + BAR;
 const RED = 10, GREEN = 12;                        // palette indices
 
-/* ---- the interactive story in one boot ---- */
+/* Drawing ops (tool select, palette pick, drag, fill) are FIFO in the one input
+ * path + message loop, so they apply in order without pacing sleeps — the only
+ * genuine sync need is letting the resulting paint PRESENT to the surface before
+ * a `wmctl shot` (pixel-only, no agent/label/text signal), which stays an
+ * annotated render-settle (0083 rule). comdlg32 dialogs are real modal WM
+ * windows (open via `wait label`, close via `wait nowin`); saved files land
+ * after the handler, so poll for them (todos/0154). */
+const waitFile = (p) =>
+  `for i in $(seq 1 120); do [ -s ${p} ] && break; sleep 0.05; done`;
+
 const out = boot([
   'paint &',
-  'sleep 6',                                       // wasm boot + compile + first paint
+  // Boot barrier: the "Filled Rectangle" menu item resolving means paint built
+  // its menu and is serving (window listed for the SID grep).
+  'wmctl wait label "Filled Rectangle" 12000',
   'SID=$(wmctl list | grep -- "- Paint$" | sed "s/[^0-9].*//")',
   'echo ==list', 'wmctl list', 'echo ==cut',
   'echo ==tree', 'wmctl tree', 'echo ==cut',
   'wmctl shot $SID /root/base.ppm',
-  // filled red rectangle
-  'wmctl click "Filled Rectangle"', 'sleep 1',
-  `wmctl click $SID ${swx(RED)} ${swy(RED)}`, 'sleep 1',
-  `wmctl drag $SID ${sx(40)} ${sy(40)} ${sx(200)} ${sy(160)}`, 'sleep 1',
+  // filled red rectangle (FIFO-ordered, no inter-op sleeps)
+  'wmctl click "Filled Rectangle"',
+  `wmctl click $SID ${swx(RED)} ${swy(RED)}`,
+  `wmctl drag $SID ${sx(40)} ${sy(40)} ${sx(200)} ${sy(160)}`,
   // flood fill the white background green
-  'wmctl click Fill', 'sleep 1',
-  `wmctl click $SID ${swx(GREEN)} ${swy(GREEN)}`, 'sleep 1',
-  `wmctl click $SID ${sx(350)} ${sy(270)}`, 'sleep 1',
+  'wmctl click Fill',
+  `wmctl click $SID ${swx(GREEN)} ${swy(GREEN)}`,
+  `wmctl click $SID ${sx(350)} ${sy(270)}`,
+  'sleep 1',                                       // render-settle: fill paint presents before the SHOT (pixel-only)
   'wmctl shot $SID /root/art.ppm',
   // Save As pic.bmp (comdlg32 modal: settext the name EDIT, click Save)
-  'wmctl click "Save As..."', 'sleep 2',
+  'wmctl click "Save As..."',
+  'wmctl wait label Save 6000',
   'echo ==dlg', 'wmctl tree', 'echo ==cut',
-  'wmctl settext EDIT:1 /root/pic.bmp', 'sleep 1',
-  'wmctl click Save', 'sleep 2',
+  'wmctl settext EDIT:1 /root/pic.bmp',
+  'wmctl click Save',
+  'wmctl wait nowin "Save As" 6000',
+  waitFile('/root/pic.bmp'),
   'echo ==saved', 'ls -la /root/pic.bmp', 'echo ==cut',
   // single-level Undo reverts the fill
-  'wmctl click Undo', 'sleep 1',
+  'wmctl click Undo',
+  'sleep 1',                                       // render-settle: undo repaint presents before the SHOT (pixel-only)
   'wmctl shot $SID /root/undone.ppm',
   // New clears
-  'wmctl click New', 'sleep 1',
+  'wmctl click New',
+  'sleep 1',                                       // render-settle: cleared canvas presents before the SHOT (pixel-only)
   'wmctl shot $SID /root/cleared.ppm',
   // Open pic.bmp restores the art
-  'wmctl click "Open..."', 'sleep 2',
-  'wmctl settext EDIT:1 /root/pic.bmp', 'sleep 1',
-  'wmctl click Open', 'sleep 2',
+  'wmctl click "Open..."',
+  'wmctl wait label Open 6000',
+  'wmctl settext EDIT:1 /root/pic.bmp',
+  'wmctl click Open',
+  'wmctl wait nowin Open 6000',
+  'sleep 1',                                       // render-settle: loaded art presents before the SHOT (pixel-only)
   'wmctl shot $SID /root/reopened.ppm',
   // Save As pic2.bmp for the byte-identical check
-  'wmctl click "Save As..."', 'sleep 2',
-  'wmctl settext EDIT:1 /root/pic2.bmp', 'sleep 1',
-  'wmctl click Save', 'sleep 2',
+  'wmctl click "Save As..."',
+  'wmctl wait label Save 6000',
+  'wmctl settext EDIT:1 /root/pic2.bmp',
+  'wmctl click Save',
+  'wmctl wait nowin "Save As" 6000',
+  waitFile('/root/pic2.bmp'),
   'echo ==both', 'ls -la /root/pic.bmp /root/pic2.bmp', 'echo ==cut',
   '',
 ].join('\n'));

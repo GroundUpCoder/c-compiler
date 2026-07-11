@@ -37,12 +37,18 @@ function sessionA() {
     'gdidemo selftest',
     'echo SELFTEST-EXIT=$?',
     'gdidemo &',
-    'sleep 4',                                       // wasm boot + freetype + paint
+    // Boot barrier (todos/0154): wait for the window to be listed, then for a
+    // presented frame (seq>=1) so the shot captures a painted scene, not a blank
+    // surface — replaces the `sleep 4` guess at wasm boot + freetype + first paint.
+    'wmctl wait win "GDI Demo" 10000',
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $SID 1 6000',
     'wmctl shot $SID /root/gdi1.ppm && echo shot1-ok',
-    'sleep 1',                                       // more frames presented
+    // Wait for a genuinely LATER frame (the app repaints every frame) before the
+    // second shot, so the bit-exactness check compares two distinct presents.
+    'wmctl wait seq $SID 2 6000',
     'wmctl shot $SID /root/gdi2.ppm && echo shot2-ok',
     '',
   ].join('\n');

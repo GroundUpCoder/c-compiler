@@ -84,6 +84,14 @@ const DOWN = 'wmctl key $SID 81 1073741905';
 const sel = (row) => ['wmctl click $SID 200 100', HOME,
                       ...Array(row).fill(DOWN)].join('\n');
 
+/* fileman's picker/Open launches (activate() -> spawn, WNOHANG-reaped) run the
+ * probe launcher ASYNCHRONOUSLY, so its "opened:" line lands in probe.out after
+ * a beat with no WM/agent signal to key on. Replace the `sleep 2` guesses with a
+ * bounded poll for the expected line count (todos/0154 — a condition poll, not a
+ * fixed sync sleep; ~10s cap). */
+const waitProbe = (n) =>
+  `for i in $(seq 1 200); do [ "$(grep -c "^opened:" /root/probe.out 2>/dev/null)" -ge ${n} ] && break; sleep 0.05; done`;
+
 const out = boot([
   // -- fixtures: probe launcher, a private dir for fileman rows, the ROM --
   "printf '#!/bin/sh\\necho opened:$1 >> /root/probe.out\\n' > /root/probe.sh",
@@ -114,20 +122,22 @@ const out = boot([
 
   // ---- fileman: .gb -> gameboy, picker, default.gui ----
   'fileman /root/owtest &',
-  'sleep 5',
+  // Boot barrier: fileman serving the "Open" button label means its window is up,
+  // the dir listing is loaded, and it is pumping the agent tree (todos/0154).
+  'wmctl wait label Open 10000',
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
   'echo ==cut',
   sel(0),                                        // game.gb (no dirs in owtest)
   'wmctl click Open',
-  'sleep 4',
+  'wmctl wait win SameBoy 8000',                 // .gb -> sameboy window up
   'echo ==list2',
   'wmctl list',
   'echo ==cut',
   sel(1),                                        // notes.txt
   'wmctl click With',
-  'sleep 1',
+  'wmctl wait label "Always for .txt" 6000',     // the OpenWith picker is up
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
@@ -137,7 +147,8 @@ const out = boot([
   'wmctl settext EDIT:1 /root/probe.sh',
   'wmctl click "Always for .txt"',
   'wmctl click OK',
-  'sleep 2',
+  'wmctl wait nolabel "Always for .txt" 6000',   // picker closed
+  waitProbe(3),                                  // ...and the launch appended
   'echo ==probe3',
   'cat /root/probe.out',
   'echo ==cut',
@@ -146,22 +157,25 @@ const out = boot([
   'echo ==cut',
   sel(1),                                        // notes.txt again, plain Open
   'wmctl click Open',
-  'sleep 2',
+  waitProbe(4),
   'echo ==probe4',
   'cat /root/probe.out',
   'echo ==cut',
   sel(2),                                        // readme.md -> default.gui
   'wmctl click Open',
-  'sleep 6',                                     // notepad loads freetype
+  'wmctl wait win "readme.md - Notepad" 12000',  // notepad loads freetype + opens
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
 
   // ---- the desktop GUI context: dblclick the .gb icon ----
-  'sleep 1',                                     // desk re-read tick is coarse
+  // The desktop re-reads /root/Desktop on a coarse timer; there is no event for
+  // "the game.gb icon is now present", so this stays an annotated timing tick
+  // (0083 rule).
+  'sleep 1',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   `wmctl dblclick $DSID 58 ${deskY('game.gb')}`,
-  'sleep 4',
+  'wmctl wait count SameBoy 2 8000',             // second sameboy window up
   'echo ==list4',
   'wmctl list',
   'echo ==cut',

@@ -78,6 +78,14 @@
  *                                     window of a class in tree order
  *   wmctl gettext LABEL               print the widget's WM_GETTEXT text
  *   wmctl settext LABEL TEXT          set it (WM_SETTEXT)
+ *   wmctl wait label|nolabel LABEL [MS]   block until a widget with that
+ *                                     label exists / is gone in ANY app
+ *                                     (todos/0154 — over the agent tree, so
+ *                                     it sees in-surface control state the
+ *                                     kernel window list can't: a dialog's
+ *                                     listbox, an EDIT, a MessageBox button)
+ *   wmctl wait text LABEL SUBSTR [MS]     block until that widget's text
+ *                                     contains SUBSTR
  *
  * SID 0 targets the focused window (key/click/shot). `click` with ONE
  * argument is always the label form — numeric labels included (calc's
@@ -105,6 +113,8 @@ static int usage(void) {
         "       wmctl wait gone SID [MS]\n"
         "       wmctl wait flag|noflag SID CHAR [MS]\n"
         "       wmctl wait seq SID N [MS]\n"
+        "       wmctl wait label|nolabel LABEL [MS]\n"
+        "       wmctl wait text LABEL SUBSTR [MS]\n"
         "       wmctl focus|min|restore|close|raise|lower SID\n"
         "       wmctl move SID X Y\n"
         "       wmctl resize SID W H\n"
@@ -244,6 +254,30 @@ static int settext_one(int fd, const char *name, void *ctx) {
     if (type != AQ_R_OK) return 0;
     rq->done = 1;
     return 1;
+}
+
+/* ---- agent-tree waits (todos/0154) ----
+ * A single AQ_GETTEXT probe against one app: does LABEL resolve here, and
+ * (optionally) does its text contain SUBSTR? Reuses the label resolver that
+ * `wmctl click LABEL`/`gettext` already share, so a wait keys on the SAME
+ * string a later action will. `found` is set the moment a match lands. */
+typedef struct { const char *label; const char *substr; int found; char *text; } AgentProbe;
+
+static int probe_one(int fd, const char *name, void *ctx) {
+    (void)name;
+    AgentProbe *p = (AgentProbe *)ctx;
+    if (aq_send(fd, AQ_GETTEXT, p->label, (uint32_t)strlen(p->label)) != 0) return 0;
+    uint32_t type, plen;
+    if (aq_next(fd, &type, &plen) != 0) return 0;
+    if (type != AQ_R_TEXT) { wmp_skip(fd, plen); return 0; }   /* not in this app */
+    char *buf = (char *)malloc(plen + 1);
+    if (!buf || aq_read_all(fd, buf, (int)plen) != 0) { free(buf); return 0; }
+    buf[plen] = 0;
+    if (p->substr && !strstr(buf, p->substr)) { free(buf); return 0; }  /* text not there yet — keep scanning */
+    p->found = 1;
+    free(p->text);
+    p->text = buf;
+    return 1;                                    /* matched: stop the scan */
 }
 
 static int do_agent(const char *cmd, const char *label, const char *text) {
@@ -388,6 +422,36 @@ static int do_wait(int fd, int argc, char **argv) {
     }
 }
 
+/* wmctl wait label|nolabel LABEL [MS] / wait text LABEL SUBSTR [MS] (todos/
+ * 0154) — poll the win32 agent tree (NOT the kernel window list) until a
+ * widget with LABEL exists / is gone / contains SUBSTR. In-surface control
+ * state (a dialog's listbox, an EDIT's text, a MessageBox's buttons) that the
+ * WM window list can't see. Same failure-deadline semantics as do_wait. */
+static int do_agent_wait(int argc, char **argv) {
+    const char *cond = argv[2];
+    int isText = !strcmp(cond, "text");
+    int base = isText ? 2 : 1;                    /* text takes LABEL SUBSTR */
+    if (argc < 3 + base) return usage();
+    const char *label = argv[3];
+    const char *substr = isText ? argv[4] : NULL;
+    long timeout = argc > 3 + base ? atol(argv[3 + base]) : 15000;
+    int wantAbsent = !strcmp(cond, "nolabel");
+
+    long deadline = wm_now_ms() + timeout;
+    for (;;) {
+        AgentProbe p = { label, substr, 0, NULL };
+        agent_scan(probe_one, &p);               /* missing dir -> found stays 0 */
+        int met = wantAbsent ? !p.found : p.found;
+        free(p.text);
+        if (met) return 0;
+        if (wm_now_ms() >= deadline) {
+            fprintf(stderr, "wmctl: wait %s timed out after %ldms\n", cond, timeout);
+            return 1;
+        }
+        usleep(30000);   /* 30ms poll */
+    }
+}
+
 static int do_list(int fd) {
     wmp_hdr h;
     if (wmp_send(fd, WMP_LIST, NULL, 0) != 0 || wmp_next_reply(fd, &h) != 0)
@@ -463,6 +527,11 @@ int main(int argc, char **argv) {
         if (argc < 4) return usage();
         return do_agent(cmd, argv[2], argv[3]);
     }
+    /* Agent-tree waits (todos/0154) also talk to apps, not the kernel. */
+    if (!strcmp(cmd, "wait") && argc >= 3 &&
+        (!strcmp(argv[2], "label") || !strcmp(argv[2], "nolabel") ||
+         !strcmp(argv[2], "text")))
+        return do_agent_wait(argc, argv);
     if (!strcmp(cmd, "click") && argc == 3)
         return do_agent(cmd, argv[2], NULL);     /* click by LABEL, no pixels —
                                                     numeric labels too (0048:

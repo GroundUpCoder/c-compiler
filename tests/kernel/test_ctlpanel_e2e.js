@@ -35,46 +35,58 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
 }
 
+// The hub and each applet are real top-level WM windows, and the volume STATIC
+// is agent-queryable, so every sleep converts to a window/text wait (todos/0154)
+// — except the WM_TIMER clock tick, which is genuinely waiting for a wall-clock
+// second to pass (a timing subject, 0083 rule). Config writes land in a file
+// after the WM_COMMAND, so poll the file for the expected state.
+const waitFileHas = (p, re) =>
+  `for i in $(seq 1 120); do grep -q "${re}" ${p} 2>/dev/null && break; sleep 0.05; done`;
+
 const out = boot([
   'ctlpanel &',
-  'sleep 5',
+  // Boot barrier: the "Sound" applet icon resolving means the hub is up + serving
+  // (and listed for the SID grep).
+  'wmctl wait label Sound 10000',
   'HSID=$(wmctl list | grep "Control Panel$" | sed "s/[^0-9].*//")',
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
   // single-click activation: one agent click opens the Sound applet
   'wmctl click Sound',
-  'sleep 1',
+  'wmctl wait win "Sound Properties" 6000',
   'echo ==tree2',
   'wmctl tree',
   'echo ==cut',
-  // the 0048 volume drive, unchanged: step down, absolute set, step up
+  // the 0048 volume drive, unchanged: step down, absolute set, step up — wait
+  // for each result to land in the volume STATIC.
   'wmctl click "Vol -"',
-  'sleep 0.5',
+  'wmctl wait text STATIC:0 "90%" 4000',
   'echo ==v1',
   'wmctl gettext STATIC:0',
   'echo ==cut',
   'wmctl settext EDIT:0 55',
   'wmctl click Set',
-  'sleep 0.5',
+  'wmctl wait text STATIC:0 "55%" 4000',
   'echo ==v2',
   'wmctl gettext STATIC:0',
   'echo ==cut',
   'wmctl click "Vol +"',
-  'sleep 0.5',
+  'wmctl wait text STATIC:0 "65%" 4000',
   'echo ==v3',
   'wmctl gettext STATIC:0',
   'echo ==cut',
   // per-window close (0089): closing the applet leaves the hub alive
   'SSID=$(wmctl list | grep "Sound Properties$" | sed "s/[^0-9].*//")',
   'wmctl close $SSID',
-  'sleep 1',
+  'wmctl wait nowin "Sound Properties" 6000',
   'echo ==list2',
   'wmctl list',
   'echo ==cut',
   // reopen: the applet re-reads KERNEL state (65%)
   'wmctl click Sound',
-  'sleep 1',
+  'wmctl wait win "Sound Properties" 6000',
+  'wmctl wait text STATIC:0 "65%" 4000',
   'echo ==v3b',
   'wmctl gettext STATIC:0',
   'echo ==cut',
@@ -83,51 +95,52 @@ const out = boot([
   'wmctl key $HSID 79 1073741903',
   'wmctl key $HSID 79 1073741903',
   'wmctl key $HSID 40 13',
-  'sleep 1',
+  'wmctl wait win "System Properties" 6000',
   'echo ==tree3',
   'wmctl tree',
   'echo ==cut',
   // Display stub + Date/Time (WM_TIMER clock)
   'wmctl click Display',
+  'wmctl wait win "Display Properties" 6000',
   'wmctl click "Date/Time"',
-  'sleep 1',
+  'wmctl wait win "Date/Time Properties" 6000',
   'echo ==tree4',
   'wmctl tree',
   'echo ==cut',
-  'sleep 1.5',
+  'sleep 1.5',                              // let the WM_TIMER clock advance a real second (genuine timing subject)
   'echo ==tree5',
   'wmctl tree',
   'echo ==cut',
   // the Sounds applet (0094): the event-scheme mute toggle writes
   // ~/.config/sounds with the baked table carried forward
   'wmctl click Sounds',
-  'sleep 1',
+  'wmctl wait win "Sounds Properties" 6000',
   'echo ==tree6',
   'wmctl tree',
   'echo ==cut',
   'wmctl click "Enable event sounds"',   // uncheck -> mute on
-  'sleep 0.5',
+  waitFileHas('/root/.config/sounds', 'mute.on'),
   'echo ==snd1',
   'cat /root/.config/sounds',
   'echo ==cut',
   'wmctl click "Enable event sounds"',   // recheck -> mute off
-  'sleep 0.5',
+  waitFileHas('/root/.config/sounds', 'mute.off'),
   'echo ==snd2',
   'cat /root/.config/sounds',
   'echo ==cut',
-  'wmctl click Test',   // plays SystemDefault (mixer asserts live in test_sounds_e2e)
-  'sleep 0.5',
+  'wmctl click Test',   // plays SystemDefault (mixer asserts live in test_sounds_e2e); nothing here asserts it
   // hub close = the whole panel quits (all applet windows mid-flight)
   'wmctl close $HSID',
-  'sleep 1',
+  'wmctl wait nowin "Control Panel" 6000',   // process exit tears down every applet surface too
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
   // the gain is KERNEL state: a second ctlpanel process sees it
   'ctlpanel &',
-  'sleep 3',
+  'wmctl wait label Sound 10000',
   'wmctl click Sound',
-  'sleep 1',
+  'wmctl wait win "Sound Properties" 6000',
+  'wmctl wait text STATIC:0 "65%" 4000',
   'echo ==v4',
   'wmctl gettext STATIC:0',
   'echo ==cut',

@@ -42,6 +42,14 @@ function section(out, name) {
 // keysyms are modifier-applied chars, scancode 0 is fine).
 const keys = (s) => [...s].map((ch) => 'wmctl key $TSID 0 ' + ch.charCodeAt(0)).join('\n');
 
+// Bounded condition polls (todos/0154 — not fixed sync sleeps): wait for a
+// substring to land in the kernel clip slot, or for a file to be written by a
+// process the OS spawned asynchronously (~6–10s cap).
+const waitClipHas = (s) =>
+  `for i in $(seq 1 120); do clip -o 2>/dev/null | grep -q "${s}" && break; sleep 0.05; done`;
+const waitFile = (p) =>
+  `for i in $(seq 1 200); do [ -s ${p} ] && break; sleep 0.05; done`;
+
 /* ---- session A: /bin/clip semantics + chunking ---- */
 function sessionClip() {
   const out = boot([
@@ -83,16 +91,16 @@ function sessionClip() {
 function sessionWin32() {
   const out = boot([
     'notepad &',
-    'sleep 4',
+    'wmctl wait label EDIT:0 12000',              // notepad up + serving
     'wmctl settext EDIT:0 "COPY ME ACROSS"',
     'wmctl click "Select All"',
     'wmctl click Copy',
-    'sleep 1',
+    waitClipHas('COPY ME ACROSS'),               // Copy filled the slot
     'echo ==clip1',
     'clip -o',
     'echo ==cut',
     'wmctl click Exit',
-    'sleep 2',
+    'wmctl wait nowin "Untitled - Notepad" 6000', // first notepad gone
     'echo ==list1',
     'wmctl list',
     'echo ==cut',
@@ -102,9 +110,9 @@ function sessionWin32() {
     'echo ==cut',
     // a SECOND notepad pastes it
     'notepad &',
-    'sleep 4',
+    'wmctl wait label EDIT:0 12000',
     'wmctl click Paste',
-    'sleep 1',
+    'wmctl wait text EDIT:0 "COPY ME ACROSS" 6000',
     'echo ==pasted',
     'wmctl gettext EDIT:0',
     'echo ==cut',
@@ -112,7 +120,7 @@ function sessionWin32() {
     'wmctl settext EDIT:0 "CUT SOURCE"',
     'wmctl click "Select All"',
     'wmctl click Cut',
-    'sleep 1',
+    waitClipHas('CUT SOURCE'),                    // Cut filled the slot (and emptied the EDIT)
     'echo ==aftercut',
     'wmctl gettext EDIT:0',
     'echo ==clip3',
@@ -121,12 +129,13 @@ function sessionWin32() {
     // shell -> GUI: clip feeds WM_PASTE
     'printf "from-the-shell" | clip',
     'wmctl click Paste',
-    'sleep 1',
+    'wmctl wait text EDIT:0 "from-the-shell" 6000',
     'echo ==shellpaste',
     'wmctl gettext EDIT:0',
     'echo ==cut',
+    // Exit at end of session — nothing asserts past here; teardown reaps it (a
+    // pasted doc is modified, so Exit may raise the save prompt: don't wait on it).
     'wmctl click Exit',
-    'sleep 1',
     'echo ==done',
     '',
   ].join('\n'));
@@ -151,34 +160,38 @@ function sessionWin32() {
 /* ---- session C: term selection copy, paste, SIGINT regression ---- */
 function sessionTerm() {
   const out = boot([
+    // term is the wasm terminal (os/term) — an SDL app, NOT a win32/user32 app,
+    // so it serves no agent tree: its window converts to `wait win`, but its
+    // on-screen text and pty/hush timing have no agent/label/text signal, so
+    // those settles stay annotated timing subjects (0083 rule). Outcomes that
+    // land in the clip slot or a file DO convert (poll clip / poll the file).
     'term &',
-    'sleep 5',
+    'wmctl wait win term 12000',
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     keys('echo TERMCOPY-MARKER\r'),
-    'sleep 2',
+    'sleep 2',                                    // hush echoes + runs + renders the marker (pixel-only, no signal)
     // whole-screen drag-selection (640x432 = 80x24 at the 8x18 cell), then
     // Ctrl+Shift+C: keysym 67 ('C'), mod 65 = LSHIFT|LCTRL
     'wmctl drag $TSID 4 4 636 428',
-    'sleep 1',
+    'sleep 1',                                    // in-term selection registers (pixel-only, no signal)
     'wmctl key $TSID 0 67 65',
-    'sleep 1',
+    waitClipHas('TERMCOPY-MARKER'),              // Ctrl+Shift+C filled the slot
     'echo ==copied',
     'clip -o | grep -c TERMCOPY-MARKER',
     'echo ==cut',
     // paste: the slot goes to the pty; \n arrives as CR so hush executes
     'printf "echo pasted-over-the-pty > /tmp/pasted\\n" | clip',
     'wmctl key $TSID 0 86 65',
-    'sleep 2',
+    waitFile('/tmp/pasted'),                      // hush executed the pasted line
     'echo ==pasted',
     'cat /tmp/pasted',
     'echo ==cut',
     // plain Ctrl+C (mod 64, no shift) must still be SIGINT, not copy
     keys('sleep 100\r'),
-    'sleep 1.5',
+    'sleep 1.5',                                  // the `sleep 100` must be the running fg job before ^C (pty timing, no signal)
     'wmctl key $TSID 0 99 64',
-    'sleep 1.5',
-    keys('echo INTR-OK > /tmp/intr\r'),
-    'sleep 2',
+    keys('echo INTR-OK > /tmp/intr\r'),           // pty-buffered; hush runs it once ^C returns it to the prompt
+    waitFile('/tmp/intr'),                        // proves ^C interrupted (else `sleep 100` blocks this forever)
     'echo ==intr',
     'cat /tmp/intr',
     'echo ==done',

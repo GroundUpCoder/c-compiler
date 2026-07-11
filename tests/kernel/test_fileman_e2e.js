@@ -52,57 +52,62 @@ const out = boot([
   "printf '#!/bin/sh\\nwinbox\\n' > /root/launcher",
   "printf 'plain text, not a program\\n' > /root/plain.txt",
   'fileman &',
-  'sleep 5',
+  // Boot barrier (todos/0154): the "Go" button resolving means fileman's window,
+  // listing and agent tree are up.
+  'wmctl wait label Go 10000',
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
-  // Go navigation by settext
+  // Go navigation by settext — wait for the target dir's contents to land in the
+  // LISTBOX rather than guessing at the relist latency.
   'wmctl settext EDIT:0 /usr/share',
   'wmctl click Go',
-  'sleep 1',
+  'wmctl wait text LISTBOX:0 os-release 4000',
   'echo ==l2',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   'echo ==list2',
   'wmctl list',
   'echo ==cut',
-  // Up
+  // Up -> /usr (has bin/, distinctive of the parent)
   'wmctl click Up',
-  'sleep 1',
+  'wmctl wait text LISTBOX:0 "bin/" 4000',
   'echo ==l3',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   // back to /root, then Open on the selected DIRECTORY (row 0 = Desktop/)
   'wmctl settext EDIT:0 /root',
   'wmctl click Go',
-  'sleep 1',
+  'wmctl wait text LISTBOX:0 "Desktop/" 4000',
   sel(0),
   'echo ==selmark',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   'wmctl click Open',
-  'sleep 1',
+  'wmctl wait text LISTBOX:0 term 4000',         // navigated into Desktop/
   'echo ==l4',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   'wmctl click Up',
-  'sleep 1',
+  'wmctl wait text LISTBOX:0 launcher 4000',      // back at /root
   // activate a runnable: launcher (row 5) -> sh -> winbox
   sel(5),
   'wmctl click Open',
-  'sleep 4',
+  'wmctl wait win winbox 8000',
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
   // activate a plain file: plain.txt (row 6) -> the GUI default (notepad)
   sel(6),
   'wmctl click Open',
-  'sleep 5',
+  'wmctl wait win "plain.txt - Notepad" 12000',   // notepad loads freetype + opens
   'echo ==list4',
   'wmctl list',
   'echo ==cut',
-  // drag-resize relayout
+  // drag-resize relayout. The new LISTBOX geometry (592 wide) is tree-only —
+  // no label/text/window signal for "WM_SIZE reflow done" — so this stays an
+  // annotated relayout-settle sleep (0083 rule).
   'wmctl resize $SID 600 400',
   'sleep 1',
   'echo ==tree2',

@@ -93,10 +93,21 @@ const CELL_X = 5 + 8, CELL_Y = 33 + 8 + BAR;
  * margin - 3 LEDs), timer_rect is LEFT (x=5). Timer region below. */
 const TIMER = { x: 5, y: 5 + BAR, w: 36, h: 23 };
 
+/* Difficulty/Custom changes are owner-initiated SURFACE_RESIZEs — the new board
+ * geometry shows in `wmctl list`, so poll for it (todos/0154 — a bounded
+ * condition poll, not a fixed sync sleep). The menu-BAR dropdown and gameplay
+ * shots are pixel-only (in-surface menu, revealed cells, the WM_TIMER LED) with
+ * no window/label/text signal, so those settles stay annotated (0083 rule). */
+const waitGeom = (d) =>
+  `for i in $(seq 1 120); do wmctl list | grep -q "${d}" && break; sleep 0.05; done`;
+
 /* ---- session A: the whole interactive story in one boot ---- */
 const out = boot([
   'winmine &',
-  'sleep 4',
+  // Boot barrier: the "Advanced" menu item resolving in the agent tree means the
+  // menu (LoadMenuW) is built and winmine is pumping/serving — so the window is
+  // listed too.
+  'wmctl wait label Advanced 10000',
   'SID=$(wmctl list | grep "WineMine$" | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
@@ -104,46 +115,49 @@ const out = boot([
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
-  // menu popup visuals: shot, open via a bar click, shot, ESC, shot
+  // menu popup visuals: shot, open via a bar click, shot, ESC, shot. The bar
+  // dropdown is in-surface (not a WM window) and its items always resolve, so
+  // these are pixel render-settles with no pollable open/close marker.
   'wmctl shot $SID /root/base.ppm',
   'wmctl click $SID 10 10',
-  'sleep 1',
+  'sleep 1',                                     // in-surface popup paint (pixel-only)
   'wmctl shot $SID /root/popup.ppm',
   'wmctl key $SID 41 27',                        // ESC closes the popup
-  'sleep 1',
+  'sleep 1',                                     // in-surface popup restore (pixel-only)
   'wmctl shot $SID /root/closed.ppm',
   // difficulty via the agent path (menu items by label, no pixels)
   'wmctl click Advanced',
-  'sleep 2',
+  waitGeom(`${ADV_W}x${ADV_H + BAR}`),           // board resized (SURFACE_RESIZE)
   'echo ==list2',
   'wmctl list',
   'echo ==cut',
   'wmctl click Beginner',
-  'sleep 2',
+  waitGeom(`${BEG_W}x${BEG_H + BAR}`),           // resized back
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
-  // gameplay: reveal a cell, timer runs, F2 resets
+  // gameplay: reveal a cell, timer runs, F2 resets. All pixel-diff shots with
+  // no non-pixel observable, so the render/timer settles stay annotated.
   'wmctl shot $SID /root/fresh.ppm',
   `wmctl click $SID ${CELL_X} ${CELL_Y}`,
-  'sleep 1',
+  'sleep 1',                                     // cell reveal paint (pixel-only)
   'wmctl shot $SID /root/revealed.ppm',
-  'sleep 2',                                     // >= 1 full timer tick
+  'sleep 2',                                     // >= 1 full WM_TIMER tick (genuine timing subject)
   'wmctl shot $SID /root/ticking.ppm',
   'wmctl key $SID 59 1073741883',                // F2 = New (accelerator)
-  'sleep 1',
+  'sleep 1',                                     // board reset paint (pixel-only)
   'wmctl shot $SID /root/reset.ppm',
   // Fastest Times dialog: template + LoadStringW default names
   'wmctl click "Fastest Times..."',
-  'sleep 2',
+  'wmctl wait win "Fastest Times" 6000',
   'echo ==timestree',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',
-  'sleep 1',
+  'wmctl wait nowin "Fastest Times" 6000',
   // Custom Game dialog: settext the EDITs, OK applies + resizes
   'wmctl click "Custom..."',
-  'sleep 2',
+  'wmctl wait win "Custom Game" 6000',
   'echo ==customtree',
   'wmctl tree',
   'echo ==cut',
@@ -154,13 +168,14 @@ const out = boot([
   'wmctl settext EDIT:1 11',                     // cols
   'wmctl settext EDIT:2 20',                     // mines
   'wmctl click OK',
-  'sleep 2',
+  waitGeom(`${CUS_W}x${CUS_H + BAR}`),           // OK applied + resized the board
   'echo ==list4',
   'wmctl list',
   'echo ==cut',
-  // Exit via the menu; SaveBoard -> the registry hive
+  // Exit via the menu; SaveBoard -> the registry hive (written on WM_DESTROY,
+  // so the window being gone means the hive is on disk).
   'wmctl click Exit',
-  'sleep 2',
+  'wmctl wait nowin WineMine 6000',
   'echo ==list5',
   'wmctl list',
   'echo ==cut',
@@ -252,7 +267,7 @@ check('custom geometry persisted (Height=12, Width=11, Mines=20)',
 /* ---- session B: LoadBoard restores the custom board across boots ---- */
 const out2 = boot([
   'winmine &',
-  'sleep 4',
+  'wmctl wait label Exit 10000',                  // menu built + serving (window listed)
   'echo ==list1',
   'wmctl list',
   'echo ==cut',
@@ -260,7 +275,7 @@ const out2 = boot([
   'wmctl tree',
   'echo ==cut',
   'wmctl click Exit',
-  'sleep 1',
+  'wmctl wait nowin WineMine 6000',
   '',
 ].join('\n'));
 

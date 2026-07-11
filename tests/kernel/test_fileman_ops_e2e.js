@@ -71,46 +71,46 @@ const script = [
   'printf B > /root/optest/b.txt',
   'printf M > /root/optest2/m.txt',
   'fileman /root/optest &',
-  'sleep 5',
+  'wmctl wait label Go 10000',                   // fileman controls + msg loop up (window listed)
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
   // ---- the file menu on a DIRECTORY row (sub/ is row 0: dirs first) ----
   RC_ROW0,
-  'sleep 0.5',
+  'wmctl wait label Properties 8000',            // the row popup menu is populated
   'echo ==menu1',
   'wmctl tree',
   'echo ==cut',
   ESC,
-  'sleep 0.3',
+  'wmctl wait nolabel Properties 6000',          // menu dismissed before the next select-click
   // ---- rename via F2: a.txt (row 1) -> z.txt (settext + OK) ----
   sel(1),
   F2,
-  'sleep 0.5',
+  'wmctl wait label OK 8000',                     // rename dialog controls (EDIT:1) exist
   'echo ==rn1',
   'wmctl tree',
   'echo ==cut',
   'wmctl settext EDIT:1 z.txt',
   'wmctl click OK',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 z.txt 8000',         // rename committed + listbox refreshed
   'echo ==l1',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   // ---- rename EEXIST refusal, then the Enter commit: z.txt -> y.txt ----
   sel(2),                                        // sub/(0) b.txt(1) z.txt(2)
   F2,
-  'sleep 0.5',
+  'wmctl wait label OK 8000',                     // second rename dialog up
   'wmctl settext EDIT:1 b.txt',
   'wmctl click OK',
-  'sleep 0.5',
+  'wmctl wait count "Rename" 2 8000',             // EEXIST error box (2nd "Rename" window) up, dialog stays
   'echo ==rn2',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',                              // dismiss the error box
-  'sleep 0.3',
+  'wmctl wait count "Rename" 1 6000',             // error box gone, dialog remains
   'RSID=$(wmctl list | grep "Rename$" | sed "s/[^0-9].*//")',
   'wmctl click $RSID 100 36',                    // refocus the name EDIT
   'wmctl settext EDIT:1 y.txt',
   'wmctl key $RSID 40 13',                       // Enter commits (loop path)
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 y.txt 8000',         // retyped name committed (dialog closed)
   'echo ==l2',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
@@ -119,16 +119,16 @@ const script = [
   'echo ==cut',
   // ---- copy a DIRECTORY, paste in place -> "Copy of sub" (recursive) ----
   RC_ROW0,
-  'sleep 0.5',
+  'wmctl wait label Copy 8000',                   // row menu up
   'wmctl click Copy',
-  'sleep 0.3',
+  'wmctl wait nolabel Copy 6000',                 // Copy dispatched (clipboard set), menu closed
   RC_PANE,
-  'sleep 0.5',
+  'wmctl wait label Paste 8000',                  // pane menu up
   'echo ==menu2',
   'wmctl tree',
   'echo ==cut',
   'wmctl click Paste',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 "Copy of sub" 8000', // paste done + listbox refreshed
   'test -f "/root/optest/Copy of sub/inner.txt" && echo COPY-SUB-OK',
   'echo ==l3',
   'wmctl gettext LISTBOX:0',
@@ -136,135 +136,141 @@ const script = [
   // ---- cut/paste = move; the slot clears -> Paste re-grays ----
   'wmctl settext EDIT:0 /root/optest2',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 m.txt 8000',         // navigated to optest2 (m.txt listed)
   RC_ROW0,                                       // m.txt (the only row)
-  'sleep 0.5',
+  'wmctl wait label Cut 8000',                     // row menu up
   'wmctl click Cut',
-  'sleep 0.3',
+  'wmctl wait nolabel Cut 6000',                  // Cut dispatched (clipboard set), menu closed
   'wmctl settext EDIT:0 /root/optest/sub',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 inner.txt 8000',      // navigated to sub (inner.txt listed)
   RC_PANE,
-  'sleep 0.5',
+  'wmctl wait label Paste 8000',                  // pane menu up
   'wmctl click Paste',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 m.txt 8000',          // move landed m.txt in sub
   'test -f /root/optest/sub/m.txt && test ! -f /root/optest2/m.txt && echo MOVE-OK',
   RC_PANE,
-  'sleep 0.5',
+  'wmctl wait label Paste 8000',                  // pane menu up (Paste now grayed)
   'echo ==menu3',
   'wmctl tree',
   'echo ==cut',
   ESC,
-  'sleep 0.3',
+  'wmctl wait nolabel Paste 6000',                // menu dismissed before the select-click
   // ---- delete: confirm No keeps, Yes deletes (m.txt row 1) ----
   sel(1),                                        // inner.txt(0) m.txt(1)
   DEL,
-  'sleep 0.5',
+  'wmctl wait win "Confirm File Delete" 8000',     // confirm box up
   'echo ==del1',
   'wmctl tree',
   'echo ==cut',
   'wmctl click No',
-  'sleep 0.5',
+  'wmctl wait nowin "Confirm File Delete" 6000',   // No dismissed the box
   'test -f /root/optest/sub/m.txt && echo DEL-NO-OK',
   sel(1),
   DEL,
-  'sleep 0.5',
+  'wmctl wait win "Confirm File Delete" 8000',     // confirm box up again
   'wmctl click Yes',
-  'sleep 0.5',
+  'wmctl wait nowin "Confirm File Delete" 6000',   // Yes handled (delete done, box closed)
   'test ! -f /root/optest/sub/m.txt && echo DEL-YES-OK',
   // ---- EROFS: delete under /bin fails with a clean error box ----
   'wmctl settext EDIT:0 /bin',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 awk 8000',            // navigated to /bin (listing loaded)
   sel(0),
   DEL,
-  'sleep 0.5',
+  'wmctl wait win "Confirm File Delete" 8000',     // confirm box up
   'wmctl click Yes',
-  'sleep 0.5',
+  'wmctl wait count "File Manager" 2 8000',         // EROFS error box (2nd "File Manager" window) up
   'echo ==erofs1',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',
-  'sleep 0.3',
+  'wmctl wait count "File Manager" 1 6000',         // error box dismissed
   'test -e /bin/awk && echo ROFS-INTACT',
   // ---- New Folder x2: the "New Folder", "New Folder 2" uniquifier ----
   'wmctl settext EDIT:0 /root/optest',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 y.txt 8000',          // navigated back to optest
   RC_PANE,
-  'sleep 0.5',
+  'wmctl wait label "New Folder" 8000',            // pane menu up
   'wmctl click "New Folder"',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 "New Folder" 8000',    // first folder created + refreshed
   RC_PANE,
-  'sleep 0.5',
+  'wmctl wait label "New Folder" 8000',            // pane menu up again
   'wmctl click "New Folder"',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 "New Folder 2" 8000',  // uniquified second folder created
   'echo ==l4',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   // ---- properties: dir (sub/) and file (inner.txt, 5 bytes) ----
   RC_ROW0,                                       // "Copy of sub/" sorts first
-  'sleep 0.5',
+  'wmctl wait label Properties 8000',            // row menu up
   'wmctl click Properties',
-  'sleep 0.5',
+  'wmctl wait win "Copy of sub Properties" 8000',  // properties box up
   'echo ==props1',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',
-  'sleep 0.3',
+  'wmctl wait nowin "Copy of sub Properties" 6000',
   'wmctl settext EDIT:0 /root/optest/sub',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 inner.txt 8000',      // navigated to sub
   RC_ROW0,                                       // inner.txt (the only row)
-  'sleep 0.5',
+  'wmctl wait label Properties 8000',            // row menu up
   'wmctl click Properties',
-  'sleep 0.5',
+  'wmctl wait win "inner.txt Properties" 8000',    // properties box up
   'echo ==props2',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',
-  'sleep 0.3',
+  'wmctl wait nowin "inner.txt Properties" 6000',
   // ---- the wm.c desktop menus: text clip -> PASTE gray, never fires ----
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'printf plaintext | clip',
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                  // desktop context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${DESK_PASTE_Y}`,       // grayed: stays open
+  // KEEP: negative "action ignored" check — bounded wait to let a (wrong)
+  // dismissal happen, then assert the grayed Paste left the menu open.
   'sleep 0.5',
   'echo ==dgray',
   'wmctl list',
   'echo ==cut',
   'wmctl key $CXSID 41 27',                      // Esc
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 6000',               // menu dismissed
   // ---- desktop icon COPY -> desktop PASTE -> "Copy of dfile.txt" ----
   'printf D > /root/Desktop/dfile.txt',
-  'sleep 1.5',                                   // the coarse desk tick
+  // KEEP: coarse desktop-icon tick — wm.c re-reads the Desktop dir on a
+  // timer, so the new icon has no event to wait on before the icon click.
+  'sleep 1.5',
   'wmctl click $DSID 58 48 3',                   // dfile.txt = icon 0
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${ICON_COPY_Y}`,
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 6000',               // Copy handled, menu closed (clipboard set)
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                  // desktop context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${DESK_PASTE_Y}`,
-  'sleep 0.5',
+  'wmctl wait nowin ctxmenu 6000',               // Paste handled (file duplicated), menu closed
   'test -f "/root/Desktop/Copy of dfile.txt" && echo DESK-COPY-OK',
   // ---- desktop icon CUT -> paste in FILEMAN (cross-app move) ----
-  'sleep 1.5',                                   // let the grid pick it up
+  // KEEP: coarse desktop-icon tick — the just-pasted "Copy of dfile.txt"
+  // icon only appears after wm.c's next timed Desktop re-read.
+  'sleep 1.5',
   'wmctl click $DSID 58 48 3',                   // "Copy of dfile.txt" = icon 0
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${ICON_CUT_Y}`,
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 6000',               // Cut handled, menu closed (clipboard set)
   'wmctl settext EDIT:0 /root/optest',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 y.txt 8000',          // navigated to optest
   RC_PANE,
-  'sleep 0.5',
+  'wmctl wait label Paste 8000',                  // pane menu up
   'wmctl click Paste',
-  'sleep 0.5',
+  'wmctl wait text LISTBOX:0 "Copy of dfile.txt" 8000', // cross-app move landed + refreshed
   'test -f "/root/optest/Copy of dfile.txt" && test ! -f "/root/Desktop/Copy of dfile.txt" && echo XAPP-MOVE-OK',
   'echo ==l5',
   'wmctl gettext LISTBOX:0',

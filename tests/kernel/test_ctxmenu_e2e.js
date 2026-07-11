@@ -60,186 +60,185 @@ const DESK1 = [...DESK0, 'New Folder', 'New File.txt', 'zzz.txt',
 
 const script = [
   'winbox &',
-  'sleep 2.5',
+  'wmctl wait win winbox 10000',                 // SDL app booted + listed
   'WSID=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//")',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   // ---- desktop menu: open, geometry, shot, Esc ----
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                 // popup listed
   'echo ==ctx1',
   'wmctl list',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl shot $CXSID /root/c1.ppm && echo c1-ok',
   'wmctl key $CXSID 41 27',                      // Esc
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 8000',               // dismissed
   'echo ==ctx2',
   'wmctl list',
   // ---- outside focus dismisses ----
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'wmctl focus $WSID',
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 8000',               // focus-leave dismissed it
   'echo ==ctx3',
   'wmctl list',
   // ---- New > Folder by mouse (flyout cascade + uniquifier) ----
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(0)}`,            // NEW -> flyout
-  'sleep 0.5',
+  'wmctl wait win ctxmenu2 8000',                // flyout cascaded
   'echo ==ctx4',
   'wmctl list',
   'C2SID=$(wmctl list | grep ctxmenu2$ | sed "s/[^0-9].*//")',
   `wmctl click $C2SID 60 ${rowY(0)}`,            // FOLDER
-  'sleep 0.5',
+  'wmctl wait nowin ctxmenu 8000',               // selection created folder + dismissed whole popup
   'test -d "/root/Desktop/New Folder" && echo new-folder-ok',
   'echo ==ctx5',
   'wmctl list',
   // ---- keyboard: Down/Right/Left/Right/Down/Enter -> New File.txt ----
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $CXSID 81 1073741905',              // Down -> NEW
   'wmctl key $CXSID 79 1073741903',              // Right -> flyout
-  'sleep 0.5',
+  'wmctl wait win ctxmenu2 8000',                // flyout cascaded by keyboard
   'echo ==ctx6',
   'wmctl list',
   'wmctl key $CXSID 80 1073741904',              // Left -> flyout closes
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu2 8000',              // flyout backed out, root stays
   'echo ==ctx7',
   'wmctl list',
   'wmctl key $CXSID 79 1073741903',              // Right again
-  'sleep 0.3',
+  'wmctl wait win ctxmenu2 8000',                // flyout reopened
   'wmctl key $CXSID 81 1073741905',              // Down -> TEXT FILE
   'wmctl key $CXSID 40 13',                      // Enter
-  'sleep 0.5',
+  'wmctl wait nowin ctxmenu 8000',               // Enter created file + dismissed
   'test -f "/root/Desktop/New File.txt" && echo new-file-ok',
   'echo ==ctx8',
   'wmctl list',
   // ---- Sort by > Name forgets .icons ----
   "printf '2 1 term\\n' > /root/Desktop/.icons",
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(1)}`,            // SORT BY -> flyout
-  'sleep 0.5',
+  'wmctl wait win ctxmenu2 8000',
   'echo ==ctx9',
   'wmctl list',
   'C2SID=$(wmctl list | grep ctxmenu2$ | sed "s/[^0-9].*//")',
   `wmctl click $C2SID 60 ${rowY(0)}`,            // NAME
-  'sleep 0.5',
+  'wmctl wait nowin ctxmenu 8000',               // sort ran (.icons forgotten) + dismissed
   'test -e /root/Desktop/.icons || echo icons-gone',
   // ---- Refresh re-scans (icon up without waiting for the coarse tick) ----
   "printf 'x\\n' > /root/Desktop/zzz.txt",
   "printf '#!/bin/sh\\nwinbox\\n' > /root/Desktop/alauncher",
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(2)}`,            // REFRESH
-  'sleep 0.3',
+  'wmctl wait nowin ctxmenu 8000',               // refresh re-scanned + redrew + dismissed
   'echo ==ctx10',
   'wmctl list',
   'wmctl shot $DSID /root/d1.ppm && echo d1-ok',
   // ---- one popup at a time: Start menu and ctxmenu displace each other ----
   'wmctl menu',
-  'sleep 0.5',
+  'wmctl wait win startmenu 8000',               // Start menu up
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                 // ctx displaces the Start menu
   'echo ==mix1',
   'wmctl list',
   'wmctl menu',                                  // toggles Start -> ctx drops
-  'sleep 0.5',
+  'wmctl wait win startmenu 8000',               // Start displaces the ctxmenu
   'echo ==mix2',
   'wmctl list',
   'wmctl key 0 41 27',                           // Esc the Start menu
-  'sleep 0.3',
+  'wmctl wait nowin startmenu 8000',             // Start menu gone before the icon test
   // ---- icon menu: right-click selects + OPEN runs the activate path ----
   `wmctl click $DSID 58 ${deskY(DESK1, 'alauncher')} 3`,
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                 // icon menu up
   'echo ==icon1',
   'wmctl list',
   'wmctl shot $DSID /root/d2.ppm && echo d2-ok',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'N1=$(wmctl list | grep -c winbox$)',
   `wmctl click $CXSID 60 ${rowY(0)}`,            // OPEN -> winbox
-  'sleep 3',
+  'wmctl wait atleast winbox 2 10000',           // activate() spawned the 2nd winbox
   'N2=$(wmctl list | grep -c winbox$)',
   'echo OPEN-DELTA-$((N2-N1))',
   'echo ==icon2',
   'wmctl list',
   // ---- Display Properties -> ctlpanel argv (the 0089 applet hub) ----
   'wmctl click $DSID 400 300 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${DISPLAY_ROW_Y}`,      // DISPLAY
-  'sleep 5',                                     // ctlpanel loads freetype
+  'wmctl wait win "Display Properties" 12000',   // ctlpanel spawned w/ the applet open (freetype load)
   'echo ==disp1',
   'wmctl list',
   // ---- EDIT context menu (user32 WM_CONTEXTMENU over TrackPopupMenu) ----
   'printf CTXPASTE | clip',
   'notepad &',
-  'sleep 5',                                     // freetype + .res
+  'wmctl wait label EDIT:0 12000',               // notepad built its EDIT + reached the msg loop (freetype + .res)
   'NSID=$(wmctl list | grep Notepad$ | sed "s/[^0-9].*//")',
   'wmctl click $NSID 200 100 3',                 // right-click the EDIT
-  'sleep 0.5',
+  'sleep 0.5',                                   // KEEP: TrackPopupMenu popup is in-surface (menu_standalone) — not in wmctl list and its items aren't agent_find-able, so no wait primitive can see it; settle for the WM_CONTEXTMENU dispatch
   'echo ==edit1',
   'wmctl tree',
   'echo ==edit1end',
   'wmctl click Paste',
-  'sleep 0.5',
+  'wmctl wait text EDIT:0 CTXPASTE 8000',         // paste landed in the EDIT
   'echo "==edit2 $(wmctl gettext EDIT:0)"',
   'wmctl click $NSID 200 100 3',                 // reopen: state re-gates
-  'sleep 0.5',
+  'sleep 0.5',                                   // KEEP: same in-surface TrackPopupMenu reopen — no window-list/agent-tree marker to poll
   'echo ==edit3',
   'wmctl tree',
   'echo ==edit3end',
-  'wmctl key $NSID 41 27',                       // Esc closes it
-  'sleep 0.3',
+  'wmctl key $NSID 41 27',                       // Esc closes it (drop the settle: next op targets a different window)
   // ---- taskbar-button menu (button 0 = the original winbox) ----
   'wmctl click $TSID 20 14 3',                   // Start strip: reserved (0101)
-  'sleep 0.3',
+  'sleep 0.3',                                   // KEEP: negative check — bounded settle to prove NO menu opened (nothing to wait ON)
   'echo ==bar1',
   'wmctl list',
   'wmctl click $TSID 60 14 3',                   // button 0
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',                 // window menu up
   'echo ==bar2',
   'wmctl list',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(0)}`,            // RESTORE: grayed -> stays
-  'sleep 0.3',
+  'sleep 0.3',                                   // KEEP: negative check — grayed row does nothing; bounded settle to prove the menu stays + window untouched
   'echo ==bar3',
   'wmctl list',
   `wmctl click $CXSID 60 ${rowY(1)}`,            // MINIMIZE
-  'sleep 0.5',
+  'wmctl wait flag $WSID m 8000',                // minimized (menu dismisses in the same handler)
   'echo ==bar4',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(0)}`,            // RESTORE (now active)
-  'sleep 0.5',
+  'wmctl wait noflag $WSID m 8000',              // restored + focused
   'echo ==bar5',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(2)}`,            // MAXIMIZE
-  'sleep 1',                                     // RESIZE round-trip
+  'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle — winbox renegotiates its surface to 1024x712, no geom-match wait primitive
   'echo ==bar6',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY(0)}`,            // RESTORE from maximized
-  'sleep 1',
+  'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle back to the saved 240x160+12+36
   'echo ==bar7',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
-  'sleep 0.5',
+  'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${CLOSE_ROW_Y}`,        // CLOSE -> request-close
-  'sleep 1',
+  'wmctl wait count winbox 1 8000',              // button-0 winbox gone (the OPEN-spawned one remains)
   'echo ==bar8',
   'wmctl list',
   '',

@@ -42,10 +42,19 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
 }
 
+// The comdlg32/FindReplace/prompt dialogs are all real modal WM windows, and
+// EDIT/clipboard content is agent-queryable — so every sleep here converts to a
+// window/label/text wait or a bounded clip poll (todos/0154). clip content is
+// multi-line (CRLF), so poll for a distinctive substring landing in it.
+const waitClipHas = (s) =>
+  `for i in $(seq 1 120); do clip -o 2>/dev/null | grep -q "${s}" && break; sleep 0.05; done`;
+
 const out = boot([
   'printf "alpha beta\\ngamma beta delta\\n" > /root/readme.txt',
   'notepad &',
-  'sleep 6',
+  // Boot barrier: EDIT:0 resolving in the agent tree means notepad's window,
+  // control and agent server are all up (the window is also listed by then).
+  'wmctl wait label EDIT:0 12000',
   'SID=$(wmctl list | grep "Notepad$" | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
@@ -59,7 +68,7 @@ const out = boot([
   // seeds empty) — the name EDIT holds focus on open, type a filename over
   // the kernel key path, Enter presses the default Save button (no click).
   'wmctl click "Save As..."',
-  'sleep 2',
+  'wmctl wait label Save 6000',                  // the Save As dialog is up
   'wmctl key 0 22 107',                          // k
   'wmctl key 0 5 98',                            // b
   'wmctl key 0 7 100',                           // d
@@ -67,22 +76,22 @@ const out = boot([
   'wmctl key 0 23 116',                          // t
   'wmctl key 0 24 120',                          // x
   'wmctl key 0 34 116',                          // t
-  'sleep 1',
+  'wmctl wait text EDIT:2 "kbd.txt" 4000',       // the typed name landed in the box
   'wmctl key 0 40 13',                           // Enter -> default Save
-  'sleep 2',
+  'wmctl wait nowin "Save As" 6000',             // dialog closed (file written)
   'echo ==savedkbd',
   'cat /root/kbd.txt',
   'echo',
   'echo ==cut',
   // then the mouse/agent path (settext + click), the 0058 leg
   'wmctl click "Save As..."',
-  'sleep 2',
+  'wmctl wait label Save 6000',
   'echo ==dlgtree',
   'wmctl tree',
   'echo ==cut',
   'wmctl settext EDIT:2 note.txt',
   'wmctl click Save',
-  'sleep 2',
+  'wmctl wait nowin "Save As" 6000',
   'echo ==saved',
   'cat /root/note.txt',
   'echo',
@@ -92,10 +101,10 @@ const out = boot([
   'echo ==cut',
   // Open readme.txt through the open dialog
   'wmctl click "Open..."',
-  'sleep 2',
+  'wmctl wait label Open 6000',                  // the Open dialog is up
   'wmctl settext EDIT:2 readme.txt',
   'wmctl click Open',
-  'sleep 2',
+  'wmctl wait text EDIT:0 "gamma beta delta" 6000',   // file loaded into the EDIT
   'echo ==content1',
   'wmctl gettext EDIT:0',
   'echo ==cut',
@@ -104,43 +113,44 @@ const out = boot([
   'echo ==cut',
   // Replace All: beta -> BEE (the whole FINDREPLACE protocol)
   'wmctl click "Replace..."',
-  'sleep 2',
+  'wmctl wait label "Replace All" 6000',         // the Replace dialog is up
   'wmctl settext EDIT:1 beta',
   'wmctl settext EDIT:2 BEE',
   'wmctl click "Replace All"',
-  'sleep 1',
+  'wmctl wait text EDIT:0 "gamma BEE delta" 6000',
   'echo ==content2',
   'wmctl gettext EDIT:0',
   'echo ==cut',
   'wmctl click Cancel',
-  'sleep 1',
+  'wmctl wait nolabel "Replace All" 6000',        // Replace dialog gone
   // Select All + Copy -> the kernel clipboard slot (0090)
   'wmctl click "Select All"',
   'wmctl click Copy',
-  'sleep 1',
+  waitClipHas('gamma BEE delta'),
   'echo ==clip',
   'clip -o',
   'echo',
   'echo ==cut',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
   'wmctl click "New Window"',
-  'sleep 5',
+  'wmctl wait win "Untitled - Notepad" 8000',     // second notepad up
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
   'NSID=$(wmctl list | grep "Untitled - Notepad$" | sed "s/[^0-9].*//" | head -1)',
   'wmctl close $NSID',
-  'sleep 1',
-  // modify the original, close: the Yes/No/Cancel prompt
+  'wmctl wait nowin "Untitled - Notepad" 6000',
+  // modify the original, then close: the Yes/No/Cancel prompt. The 'a' keystroke
+  // and the close are both FIFO in the input path, so the dirty flag is set
+  // before WM_CLOSE — no settle sleep needed.
   'wmctl key $SID 4 97',
-  'sleep 0.5',
   'wmctl close $SID',
-  'sleep 1',
+  'wmctl wait label Yes 6000',                    // the MB_YESNOCANCEL prompt is up
   'echo ==prompt',
   'wmctl tree',
   'echo ==cut',
   'wmctl click No',
-  'sleep 1.5',
+  'wmctl wait nowin "readme.txt - Notepad" 6000', // No discards -> notepad exits
   'echo ==list4',
   'wmctl list',
   'echo ==cut',

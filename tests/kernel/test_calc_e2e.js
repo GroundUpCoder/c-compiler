@@ -45,11 +45,22 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
 }
 
+/* The menu-BAR dropdowns (Edit/View) draw IN-SURFACE — they are not WM windows,
+ * and their per-item enable/gray state (WM_ENTERMENULOOP) lives only in the
+ * `wmctl tree` dump keyed by item id, which the 0154 label/text wait can't
+ * target. So the open/ESC-close sleeps around them stay annotated timing
+ * subjects (0083 rule); everything with a window/label/text/clipboard signal is
+ * converted. Copy is async into the kernel clip slot — poll clip -o for it. */
+const waitClip = (v) =>
+  `for i in $(seq 1 120); do [ "$(clip -o 2>/dev/null)" = "${v}" ] && break; sleep 0.05; done`;
+
 /* One boot, the whole story. Display reads address the output STATIC as
  * STATIC:0 (first STATIC in tree order on the standard template). */
 const out = boot([
   'calc &',
-  'sleep 5',
+  // Boot barrier (todos/0154): the "7" keypad button resolving in the agent tree
+  // means the dialog + owner-draw keypad are up and calc is pumping messages.
+  'wmctl wait label 7 10000',
   'SID=$(wmctl list | grep Calculator$ | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
@@ -58,66 +69,69 @@ const out = boot([
   'wmctl tree',
   'echo ==cut',
   // menu enable state BEFORE any copy: empty clipboard grays Paste at
-  // WM_ENTERMENULOOP (the popup must actually open)
+  // WM_ENTERMENULOOP. In-surface popup, tree-only gray state -> annotated sleep.
   'wmctl click $SID 10 10',                      // Edit bar title
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface menu open (no window/label signal)
   'echo ==menotree',
   'wmctl tree',
   'echo ==cut',
   'wmctl key $SID 41 27',                        // ESC closes the popup
-  'sleep 0.5',
-  // keypad by label: 7 + 3 = -> 10.
+  'sleep 0.5',                                   // in-surface menu close (modal; no signal)
+  // keypad by label: 7 + 3 = -> 10. Agent BM_CLICKs serialize; wait for the
+  // result text to land in the display instead of guessing.
   'wmctl click 7',
   'wmctl click +',
   'wmctl click 3',
   'wmctl click =',
-  'sleep 0.5',
+  'wmctl wait text STATIC:0 "10." 4000',
   'echo ==disp1',
   'wmctl gettext STATIC:0',
   'echo ==cut',
-  // Copy -> the kernel clipboard slot (0090)
+  // Copy -> the kernel clipboard slot (0090); poll it (fills asynchronously).
   'wmctl click Copy',
-  'sleep 0.5',
+  waitClip('10'),
   'echo ==clip',
   'clip -o',
   'echo',
   'echo ==cut',
-  // Paste enable state now that the clipboard has text
+  // Paste enable state now that the clipboard has text (in-surface menu again).
   'wmctl click $SID 10 10',
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface menu open (no window/label signal)
   'echo ==meyestree',
   'wmctl tree',
   'echo ==cut',
   'wmctl key $SID 41 27',
-  'sleep 0.5',
+  'sleep 0.5',                                   // in-surface menu close (modal; no signal)
   // keyboard entry: 9 then 1 (starts a fresh operand after =)
   'wmctl key $SID 38 57',                        // '9'
   'wmctl key $SID 30 49',                        // '1'
-  'sleep 0.5',
+  'wmctl wait text STATIC:0 "91." 4000',
   'echo ==disp2',
   'wmctl gettext STATIC:0',
   'echo ==cut',
   // Paste replaces the entry (CF_TEXT read of what the shell wrote)
   'printf 250 | clip',
   'wmctl click Paste',
-  'sleep 0.5',
+  'wmctl wait text STATIC:0 "250." 4000',
   'echo ==disp3',
   'wmctl gettext STATIC:0',
   'echo ==cut',
-  // TrackPopupMenu: right-click a keypad button -> agent-visible popup
+  // TrackPopupMenu: right-click a keypad button -> agent-visible popup. Wait on
+  // the popup's own item label appearing / going (it exists only while shown).
   'wmctl click $SID 100 130 3',
-  'sleep 0.5',
+  'wmctl wait label "Quick help" 4000',
   'echo ==ctxtree',
   'wmctl tree',
   'echo ==cut',
   'wmctl click "Quick help"',
-  'sleep 0.5',
+  'wmctl wait nolabel "Quick help" 4000',
   'echo ==ctxdone',
   'wmctl tree',
   'echo ==cut',
-  // View -> Scientific: dialog recreated on the other template
+  // View -> Scientific: dialog recreated on the other template. The scientific
+  // template's "Hex" radio appearing marks the recreate complete.
   'wmctl click Scientific',
-  'sleep 4',
+  'wmctl wait label Hex 8000',
   'echo ==list2',
   'wmctl list',
   'echo ==cut',

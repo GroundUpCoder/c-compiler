@@ -1,6 +1,16 @@
 # 0154 — Agent-tree waits: wmctl wait label/text + convert the win32-app e2e sleep class (0083 residue)
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). Added `wmctl wait label|nolabel|text` over the
+  win32 agent tree (`os/wmctl.c`, reusing `agent_scan`/`AQ_GETTEXT`) and
+  converted all 14 win32-app kernel e2es: ~324 → ~73 `sleep` lines, every
+  remaining one an annotated genuine timing subject (in-surface TrackPopupMenu/
+  menu-bar dropdowns — agent tree resolves HWNDs not menu items; pixel-only
+  render settles before `wmctl shot`; the dialog ` focus ` tree marker; WM_TIMER
+  clock ticks; double-click windows; coarse wm.c desktop `.icons` ticks; negative
+  checks). Real WM windows (MessageBox/`#32770`/comdlg32/wm.c popups) use the
+  0083 `wait win`/`nowin`; async file/clip outcomes use bounded polls. Image
+  bumped v73→v74 and rebaked. Full kernel suite green (58/58, parallel = the
+  0081 contention check). Dev log: `logs/2026-07-12/0154-agent-tree-waits.md`.
 - **Design**: this file (spawned from `todos/0083`)
 
 ## Goal

@@ -70,7 +70,10 @@ const out = boot([
   "printf '#!/bin/sh\\nwinbox\\n' > /root/nav/run.sh",
   'printf here > /root/nav2/inside.txt',
   'fileman /root/nav &',
-  'sleep 5',
+  // 0154: fileman is a user32 app — waiting on its Go button proves the
+  // controls were created AND the message loop is running (so the window is
+  // listed), which is exactly what the SID grep below needs.
+  'wmctl wait label Go 10000',
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
 
   // ---- details columns + status strip ----
@@ -84,11 +87,13 @@ const out = boot([
   // ---- Ctrl-click multi-select: row 0 (sub/) + row 3 (b.txt) ----
   // rows: sub/(0) a.txt(1) b.txt(2) c.txt(3) run.sh(4)  (dirs first, name sort)
   clickRow(30),                              // plain click -> {row0}
-  'sleep 0.3',
   CTRL_DOWN,
   clickRow(78),                              // ctrl-click row2 -> add {row0,row2}
   CTRL_UP,
-  'sleep 0.3',
+  // 0154: these injects are FIFO in the one input ring, so the two guess-sleeps
+  // around the ctrl-click are redundant — poll until the multi-selection marker
+  // lands instead (which also implies every prior inject was dispatched).
+  'wmctl wait text LISTBOX:0 "> b.txt" 8000',
   'echo ==multi',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
@@ -98,21 +103,27 @@ const out = boot([
 
   // ---- multi-select Delete removes the whole set (sub/ + b.txt) ----
   DEL,
-  'sleep 0.5',
+  // 0154: the multi-delete raises a real modal MessageBox WM window — wait for
+  // it before reading the tree.
+  'wmctl wait win "Confirm Multiple Item Delete" 8000',
   'echo ==delbox',
   'wmctl tree',
   'echo ==cut',
   'wmctl click Yes',
-  'sleep 0.5',
+  // 0154: waiting on the box being gone would race the synchronous delete that
+  // runs after it closes; the status strip going to "3 object(s)" (was 5) polls
+  // exactly for delete + refill completing before the -e checks.
+  'wmctl wait text STATIC:0 "3 object(s)" 8000',
   'test ! -e /root/nav/sub && test ! -e /root/nav/b.txt && echo MULTI-DEL-OK',
   'test -f /root/nav/a.txt && test -f /root/nav/c.txt && echo MULTI-DEL-KEPT',
 
   // ---- Shift+Down extends a range (a.txt row0 + c.txt row1 now) ----
   // remaining: a.txt(0) c.txt(1) run.sh(2)
   clickRow(30),                              // {row0}
-  'sleep 0.2',
   SHIFT_DOWN_KEY,                            // extend -> {row0,row1}
-  'sleep 0.3',
+  // 0154: FIFO injects again; poll until the range's second row (c.txt) is
+  // marked (replaces both guess-sleeps).
+  'wmctl wait text LISTBOX:0 "> c.txt" 8000',
   'echo ==range',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
@@ -120,24 +131,29 @@ const out = boot([
   // ---- Enter opens: on a directory it navigates ----
   'wmctl settext EDIT:0 /root/nav2',
   'wmctl click Go',
-  'sleep 0.5',
+  // 0154: wait for each Go to actually re-title the window (SetWindowText ->
+  // surface title) before the next step; the nav2 hop must land first.
+  'wmctl wait win "File Manager - /root/nav2" 8000',
   'wmctl settext EDIT:0 /root',
   'wmctl click Go',
-  'sleep 0.5',
+  'wmctl wait win "File Manager - /root" 8000',
   clickRow(30),                              // row 0 of /root: a directory
-  'sleep 0.2',
+  // (the click -> ENTER pair is FIFO in the ring; no gap needed)
   'echo ==beforeenter',
   'wmctl tree',
   'echo ==cut',
   ENTER,                                     // navigate into it
-  'sleep 0.6',
+  // 0154: ENTER navigates into the subdir, so "File Manager - /root" (exact)
+  // disappears from the list — poll for that.
+  'wmctl wait nowin "File Manager - /root" 8000',
   'echo ==afterenter',
   'wmctl tree',
   'echo ==cut',
 
   // ---- Backspace goes Up ----
   BACK,
-  'sleep 0.5',
+  // 0154: Backspace goes Up to /root — wait for that title to reappear.
+  'wmctl wait win "File Manager - /root" 8000',
   'echo ==afterback',
   'wmctl tree',
   'echo ==cut',
@@ -145,13 +161,16 @@ const out = boot([
   // ---- Alt+Left back history: nav2 -> nav via Go leaves nav2 on the stack ----
   'wmctl settext EDIT:0 /root/nav',
   'wmctl click Go',
-  'sleep 0.4',
+  // 0154: the nav hop must complete (pushed on the back stack) before nav2, so
+  // wait on each re-title.
+  'wmctl wait win "File Manager - /root/nav" 8000',
   'wmctl settext EDIT:0 /root/nav2',
   'wmctl click Go',
-  'sleep 0.4',
+  'wmctl wait win "File Manager - /root/nav2" 8000',
   'wmctl click $SID 100 100',                // focus the listbox
   ALT_LEFT,                                  // back to /root/nav
-  'sleep 0.5',
+  // 0154: Alt+Left walks back to nav — poll for that exact title (nav2 != nav).
+  'wmctl wait win "File Manager - /root/nav" 8000',
   'echo ==altback',
   'wmctl tree',
   'echo ==cut',
@@ -163,23 +182,34 @@ const out = boot([
   'echo ==cut',
   'wmctl click $SID 100 100',                // focus listbox
   F5,
-  'sleep 0.4',
+  // 0154: F5 re-lists; poll until the externally-created file shows up.
+  'wmctl wait text LISTBOX:0 "late.txt" 8000',
   'echo ==afterf5',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
 
   // ---- View: Sort by Size reorders (b<c<a); Show Hidden reveals .secret ----
   RC_PANE,
+  // KEEP (0154): the pane context menu is an in-surface TrackPopupMenu, not a WM
+  // window, and its items resolve only via AQ_CLICK (AQ_GETTEXT — what the waits
+  // use — can't see menu items), so there's no queryable signal that the popup
+  // has opened. The right-click must open it before the agent click can resolve
+  // "Sort by Size", so this stays a small settle delay.
   'sleep 0.4',
   'wmctl click "Sort by Size"',
+  // KEEP (0154): Sort by Size only REORDERS the same rows (all names present
+  // before and after), so there is no positive substring for `wait text` to poll
+  // and a single gettext races the WM_COMMAND dispatch — keep a settle delay.
   'sleep 0.4',
   'echo ==sized',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   RC_PANE,
+  // KEEP (0154): same in-surface popup as above — no wait signal for it opening.
   'sleep 0.4',
   'wmctl click "Show Hidden Files"',
-  'sleep 0.4',
+  // 0154: unlike the sort, Show Hidden ADDS a row (.secret) — poll for it.
+  'wmctl wait text LISTBOX:0 ".secret" 8000',
   'echo ==hidden',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
