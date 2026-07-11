@@ -32,6 +32,10 @@
 //   --fresh        discard BOTH images: re-materialize + re-seed
 //   --fresh-system re-BAKE the system blob outright (user files survive;
 //                  implies --no-fixture)
+//   --overlay=<id> enable a declared image overlay (todos/0118, repeatable);
+//                  --overlays=all enables all. Forces a system re-bake (the
+//                  prebaked fixture and any reused blob are base-only).
+//   --require-clean-overlays  a dirty overlay provenance is fatal (else warns)
 //   --quiet        suppress boot progress on stderr
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -59,6 +63,9 @@ let staleOk = false;       // skip the 0082 input-freshness check
 let quiet = false;
 let dumpState = false;
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
+let requireCleanOverlays = false;
+let allOverlays = false;
+const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
   else if (a.startsWith('--fixture=')) fixturePath = path.resolve(a.slice(10));
@@ -69,6 +76,10 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--quiet') quiet = true;
   else if (a === '--dump-state') dumpState = true;
   else if (a === '--tty-out') ttyOut = true;
+  else if (a === '--overlays=all') allOverlays = true;
+  else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
+  else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
+  else if (a === '--require-clean-overlays') requireCleanOverlays = true;
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
     process.exit(2);
@@ -94,6 +105,33 @@ const seedIo = {
   log: bootLog,
 };
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'), 'utf-8'));
+
+// Optional opt-in image overlays (todos/0118): resolve requested ids against
+// image.json `overlays[]` (unknown id -> exit 2, before any work). Overlays are
+// baked into the system blob, so requesting any forces a real bake — the
+// prebaked fixture and any reused/version-current blob are base-only.
+const resolvedOverlays = (() => {
+  const declared = manifest.overlays || [];
+  const byId = new Map(declared.map((o) => [o.id, o]));
+  const ids = allOverlays ? declared.map((o) => o.id) : [...requestedOverlays];
+  for (const id of ids) {
+    if (!byId.has(id)) {
+      process.stderr.write(`boot.js: unknown overlay '${id}' (declared: ${declared.map((o) => o.id).join(', ') || 'none'})\n`);
+      process.exit(2);
+    }
+  }
+  return ids.map((id) => {
+    const o = byId.get(id);
+    return { id, manifestPath: path.isAbsolute(o.manifest) ? o.manifest : path.join(ROOT, o.manifest) };
+  });
+})();
+if (resolvedOverlays.length) {
+  freshSystem = true;   // overlays live in the system blob — bake, never reuse/install
+  fixturePath = null;
+  seedIo.overlays = resolvedOverlays;
+  seedIo.overlayIo = COMMON.nodeOverlayIo(fs, path, require('crypto'));
+  seedIo.requireCleanOverlays = requireCleanOverlays;
+}
 
 /* ---- boot ---- */
 mountAndBoot().catch((e) => {

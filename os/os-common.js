@@ -344,6 +344,169 @@ function seedEntries(kfs, section, io) {
   });
 }
 
+/* ---- optional opt-in image overlays (todos/0118) ----
+ *
+ * An overlay folds a SIBLING-published, prebuilt `overlay@1` manifest's files
+ * into the system image at bake time — real C/C++ apps cross-compiled ahead of
+ * time by ~git/clang-simplified (cc2wasm), which this repo's compiler.js can't
+ * build. This repo is only the CONSUMER: it never runs cc2wasm and never builds
+ * anything from the sibling — it reads the published JSON, VERIFIES hashes, and
+ * plants bytes. Design + the frozen `overlay@1` contract: todos/0118.
+ *
+ * Locked decisions (todos/0118, do not relitigate): prebuilt only (never trigger
+ * the sibling's build); OFF by default and flag-gated (a base bake with no
+ * overlay flag stays byte-identical to today); loud failure (a requested overlay
+ * that's missing or fails verification is FATAL — never a quiet degradation);
+ * provenance recorded into the image so it's self-describing.
+ *
+ * Two phases so a bad overlay fails BEFORE the ~minute-long bake:
+ *   loadOverlays(specs, oio, requireClean, log)  — read + parse each manifest,
+ *     enforce every content rule (schema/id/one-of/provenance/hash/size/mode),
+ *     resolve + hash-verify each `bin` payload. Throws (fatal) on any violation;
+ *     warns loudly (or fatal under requireClean) on a dirty provenance. Pure over
+ *     the injected `oio` hooks — no filesystem knowledge of its own.
+ *   plantOverlays(mfs, loaded, log)  — mkdir the dirs, enforce the placement +
+ *     conflict rules against the just-seeded base image, write bytes, plant each
+ *     overlay's provenance at /usr/share/overlays/<id>.json. Returns a summary
+ *     array the caller records into the image identity (os-release OVERLAYS=).
+ *
+ * oio (Node-only; see nodeOverlayIo): readFile(absPath)->Uint8Array (throws on
+ * missing), resolve(a,b)->abs, dirname(p)->dir, sha256(bytes)->lowercase hex.
+ * The browser never applies overlays (it fetches a prebaked blob), so os-common
+ * stays environment-neutral: the Node fs/path/crypto ride in through oio.
+ */
+function loadOverlays(specs, oio, requireClean, log) {
+  log = log || function () {};
+  var loaded = [];
+  specs.forEach(function (spec) {
+    var raw;
+    try {
+      raw = oio.readFile(spec.manifestPath);
+    } catch (e) {
+      throw new Error("overlay '" + spec.id + "' requested but " + spec.manifestPath +
+        ' not found — build it in the sibling: `node wasm/tools/mk-overlay.mjs`');
+    }
+    var m;
+    try { m = JSON.parse(new TextDecoder('utf-8').decode(raw)); }
+    catch (e) { throw new Error("overlay '" + spec.id + "': " + spec.manifestPath + ' is not valid JSON: ' + e.message); }
+    if (m.schema !== 'overlay@1')
+      throw new Error("overlay '" + spec.id + "': schema " + JSON.stringify(m.schema) + ' is not "overlay@1"');
+    if (m.id !== spec.id)
+      throw new Error('overlay id mismatch: ' + spec.manifestPath + ' declares id ' +
+        JSON.stringify(m.id) + ' but is applied as ' + JSON.stringify(spec.id));
+    var prov = m.provenance;
+    if (!prov || typeof prov !== 'object' || !prov.repo || typeof prov.repo !== 'object')
+      throw new Error("overlay '" + spec.id + "': provenance.repo is required");
+    var dirty = !!(prov.repo.dirty || (prov.compiler && prov.compiler.dirty));
+    if (dirty) {
+      if (requireClean)
+        throw new Error("overlay '" + spec.id + "' was built from a DIRTY tree and --require-clean-overlays is set");
+      log('WARNING overlay ' + spec.id + ' built from a DIRTY tree — not reproducible');
+    }
+    var artifactRoot = oio.resolve(oio.dirname(spec.manifestPath), prov.artifactRoot || '.');
+    var files = m.files || {};
+    var resolved = [];
+    Object.keys(files).forEach(function (p) {
+      var entry = files[p];
+      if (typeof p !== 'string' || p.charAt(0) !== '/')
+        throw new Error("overlay '" + spec.id + "': file path " + JSON.stringify(p) + ' must be absolute');
+      if (p !== '/usr' && p.indexOf('/usr/') !== 0)
+        throw new Error("overlay '" + spec.id + "': file path " + p + ' must be under /usr');
+      var hasBin = entry.bin !== undefined, hasText = entry.text !== undefined;
+      if (hasBin === hasText)
+        throw new Error("overlay '" + spec.id + "': " + p + ' must have exactly one of "bin" | "text"');
+      var mode = parseOverlayMode(entry.mode, p, spec.id);
+      var bytes;
+      if (hasBin) {
+        if (entry.sha256 === undefined || entry.size === undefined)
+          throw new Error("overlay '" + spec.id + "': " + p + ' (bin) requires "sha256" and "size"');
+        var binPath = oio.resolve(artifactRoot, entry.bin);
+        try { bytes = oio.readFile(binPath); }
+        catch (e) { throw new Error("overlay '" + spec.id + "': " + p + ' payload ' + entry.bin + ' not found under artifactRoot (' + binPath + ')'); }
+        var got = oio.sha256(bytes);
+        var want = String(entry.sha256).toLowerCase();
+        if (got !== want)
+          throw new Error("overlay '" + spec.id + "': " + p + ' sha256 mismatch (declared ' + want + ', computed ' + got + ')');
+        if (bytes.length !== (entry.size | 0))
+          throw new Error("overlay '" + spec.id + "': " + p + ' size mismatch (declared ' + entry.size + ', actual ' + bytes.length + ')');
+      } else {
+        if (typeof entry.text !== 'string')
+          throw new Error("overlay '" + spec.id + "': " + p + ' "text" must be a string');
+        bytes = new TextEncoder().encode(entry.text);
+      }
+      resolved.push({ path: p, bytes: bytes, mode: mode, override: !!entry.override });
+    });
+    loaded.push({ id: spec.id, provenance: prov, dirty: dirty, dirs: m.dirs || [], files: resolved });
+  });
+  return loaded;
+}
+
+function parseOverlayMode(mode, p, id) {
+  if (mode === undefined) return p.indexOf('/usr/bin/') === 0 ? 0o755 : 0o644;
+  var m = parseInt(String(mode), 8);
+  if (isNaN(m)) throw new Error("overlay '" + id + "': " + p + ' has a bad octal mode ' + JSON.stringify(mode));
+  return m;
+}
+
+function ensureDirPath(mfs, dir) {
+  var cur = '';
+  dir.split('/').forEach(function (seg) {
+    if (!seg) return;
+    cur += '/' + seg;
+    if (mfs.stat(cur) === null) mfs.mkdir(cur, 0o755);
+  });
+}
+
+function plantOverlays(mfs, loaded, log) {
+  log = log || function () {};
+  var claimed = {};   // path -> overlay id (cross-overlay conflict guard)
+  var summaries = [];
+  loaded.forEach(function (ov) {
+    ov.dirs.forEach(function (d) {
+      if (typeof d !== 'string' || (d !== '/usr' && d.indexOf('/usr/') !== 0))
+        throw new Error("overlay '" + ov.id + "': dir " + JSON.stringify(d) + ' must be under /usr');
+      ensureDirPath(mfs, d);
+    });
+    var total = 0;
+    ov.files.forEach(function (f) {
+      var parent = f.path.slice(0, f.path.lastIndexOf('/')) || '/';
+      if (mfs.stat(parent) === null)
+        throw new Error("overlay '" + ov.id + "': parent " + parent + ' of ' + f.path +
+          ' is not a base dir or listed in the overlay\'s "dirs"');
+      if (claimed[f.path])
+        throw new Error('overlay path conflict: ' + f.path + " planted by both '" +
+          claimed[f.path] + "' and '" + ov.id + "'");
+      if (mfs.stat(f.path) !== null && !f.override)
+        throw new Error("overlay '" + ov.id + "': " + f.path +
+          ' already exists in the base image (set "override": true to replace)');
+      writeFile(mfs, f.path, f.bytes, f.mode);
+      claimed[f.path] = ov.id;
+      total += f.bytes.length;
+    });
+    ensureDirPath(mfs, '/usr/share/overlays');
+    writeFile(mfs, '/usr/share/overlays/' + ov.id + '.json',
+      JSON.stringify(ov.provenance, null, 2) + '\n', 0o644);
+    var short = (ov.provenance.repo && ov.provenance.repo.commitShort) || '?';
+    var producer = ov.provenance.producer || '?';
+    log('overlay ' + ov.id + ': ' + ov.files.length + ' files, ' +
+      (total / (1 << 20)).toFixed(1) + ' MiB, ' + producer + '@' + short +
+      ' (' + (ov.dirty ? 'DIRTY' : 'clean') + ')');
+    summaries.push({ id: ov.id, files: ov.files.length, bytes: total, commitShort: short, dirty: ov.dirty });
+  });
+  return summaries;
+}
+
+/* Build the Node-side overlay io from injected modules (keeps os-common
+ * environment-neutral; only mkimage.js/boot.js — both Node — call this). */
+function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
+  return {
+    readFile: function (p) { return new Uint8Array(fsMod.readFileSync(p)); },
+    resolve: function (a, b) { return pathMod.resolve(a, b); },
+    dirname: function (p) { return pathMod.dirname(p); },
+    sha256: function (bytes) { return cryptoMod.createHash('sha256').update(bytes).digest('hex'); },
+  };
+}
+
 /* ---- baking the read-only system image (todos/0040) ----
  *
  * Bakes manifest.system into sysStore as a sealed, independently mountable
@@ -365,6 +528,14 @@ function seedEntries(kfs, section, io) {
 function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   var log = io.log || function () {};
   log('baking system image (manifest v' + manifest.version + ')');
+  // Overlays (todos/0118): read + verify BEFORE the ~minute-long bake so a bad
+  // flag fails fast. Off by default — an empty/absent io.overlays leaves the
+  // base bake byte-identical to today (no overlay dirs, files, provenance, or
+  // os-release OVERLAYS line are written).
+  var overlaySpecs = io.overlays || [];
+  var loadedOverlays = overlaySpecs.length
+    ? loadOverlays(overlaySpecs, io.overlayIo, !!io.requireCleanOverlays, log)
+    : [];
   if (sysStore.size() >= 256) sysStore.setBytes(0, new Uint8Array(256)); // force format
   var sys = BLOCK_FS.createV4(sysStore, { noDevNodes: true });
   var tmpRoot = BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(1 << 20), { noDevNodes: true });
@@ -379,9 +550,20 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   };
   return seedEntries(mfs, manifest.system, bakeIo).then(function () {
     mfs.symlink('/var/local', '/usr/local');
-    writeFile(mfs, '/usr/share/os-release',
-      'NAME=gucOS\nPRETTY_NAME="gucOS (groundupcoder OS)"\n' +
-      'VERSION_ID=' + (manifest.version | 0) + '\n');
+    var applied = loadedOverlays.length ? plantOverlays(mfs, loadedOverlays, log) : [];
+    var rel = 'NAME=gucOS\nPRETTY_NAME="gucOS (groundupcoder OS)"\n' +
+      'VERSION_ID=' + (manifest.version | 0) + '\n';
+    if (applied.length) {
+      // Additive image identity: a base blob and a +overlay blob are
+      // distinguishable at boot/CI even though bakedVersion (VERSION_ID) is
+      // authoritative for the base. Companion carries the reproducibility keys.
+      rel += 'OVERLAYS=' + applied.map(function (a) { return a.id; }).join(',') + '\n';
+      writeFile(mfs, '/usr/share/os-release.overlays',
+        JSON.stringify(applied.map(function (a) {
+          return { id: a.id, commitShort: a.commitShort, dirty: a.dirty };
+        })) + '\n');
+    }
+    writeFile(mfs, '/usr/share/os-release', rel);
     sysStore.flush && sysStore.flush();
     return BLOCK_FS.sealVolume(sysStore);
   });
@@ -539,6 +721,9 @@ var OS_COMMON = {
   buildProject: buildProject,
   seedEntries: seedEntries,
   bakeSystemImage: bakeSystemImage,
+  loadOverlays: loadOverlays,
+  plantOverlays: plantOverlays,
+  nodeOverlayIo: nodeOverlayIo,
   bakedVersion: bakedVersion,
   newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,

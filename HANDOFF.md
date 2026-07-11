@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-11; 0105 cursor shapes closed)
+# Handoff — start of thread (updated 2026-07-11; 0118 image overlays closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,133 +7,107 @@
 
 ## Where the repo stands
 
-**0105 (pointer cursor shapes) is CLOSED**; image bumped **v64 → v65**
-(seeded `winbox.c` + `user32.c` changed). Dev log
-`logs/2026-07-11/0105-cursor-shapes.md`; item at
-`todos/done/0105-cursor-shapes.md`; design updates in `todos/SDL3.md`
-"Mouse" + `todos/WM.md` deviations. Two commits: `78023c1` (impl) +
-`b369b89` (queue close). Pushed to main.
+**0118 (optional opt-in image overlays — the consumer) is CLOSED.** gucOS can
+now fold a sibling-published, prebuilt `overlay@1` manifest into the read-only
+system image at bake time, flag-gated and off by default. Dev log
+`logs/2026-07-11/0118-image-overlays.md`; item at
+`todos/done/0118-image-overlays-opt-in.md`. **Not yet committed** — commit +
+push are the next action (see below).
 
-One breath: **the desktop pointer is no longer the browser's default arrow
-everywhere.** Three drivers, ONE wire enum (`SDL_SystemCursor` values run
-end to end): (1) **chrome resize cursors** — `kernel.js` `_wmCursorAt(x,y)`
-mirrors `wmPointer`'s frame hit test (side-effect-free) → a **resizable**
-frame's E/S edges read `ew-`/`ns-resize`, the SE corner `nwse-resize`;
-fixed frames + title + desktop the arrow; (2) **app cursors** — real SDL3
-`SDL_CreateSystemCursor`/`SetCursor`/show/hide in the compiler.js SDL veneer
-→ `__sdl_set_cursor` → `SURFACE_SET_CURSOR` (0x1008) per-surface kernel
-state, overlaid under the chrome hit test; (3) **user32 EDIT** —
-`LoadCursorW(IDC_IBEAM)`+`SetCursor` over the same SDL path, `route_mouse`
-sets the I-beam on EDIT hover. The kernel posts the EFFECTIVE cursor to the
-UI bridge on every pointer-move CHANGE (`onCursor` → `{type:'cursor',
-shape}`, debounced); os.html maps it to `canvas.style.cursor` via
-`CURSOR_CSS`. The WM.md deviation (native cursor, no kernel sprite) STANDS
-— only *which* native cursor. Headless it's assertable but never drawn (the
-0063 glass rule): `WMP_CURSOR_AT` (0x34)/`R_CURSOR` (0x45) is a pure query,
-`wmctl cursor X Y` prints the shape.
+One breath: **`node tools/mkimage.js --overlay=clang-apps` cross-folds real
+C/C++/SDL apps that this repo's `compiler.js` can't build.** The sibling
+`~/git/clang-simplified` (cc2wasm) publishes `out-image/overlay.json` + hashed
+binaries + provenance; this repo is the CONSUMER only — reads the JSON,
+**recomputes + verifies sha256/size**, plants bytes, records provenance. Off by
+default: a plain bake is inert (base os-release unchanged, no overlay artifacts).
 
-**Verified**: kernel suite **54/0** (`node tests/kernel/run.js`), unit
-**708/0** (`node tests/run-unit.js`), win32 ports link check green, new
-`tests/unit/sdl_cursor` (C contract) + `tests/kernel/test_cursor_e2e.js`
-(winbox cursor client TEXT readback + EW/NS/NWSE frame + title/desktop/
-fixed-frame arrow) + a leg in `test_user32_e2e.js` (smove over ctldemo's
-Name EDIT → TEXT, STATIC → arrow).
+- `os/image.json` — new top-level `overlays[]` (the `clang-apps` entry). **Version
+  stayed 65** (the key is inert; base bake byte-content-identical).
+- `tools/mkimage.js` + `os/boot.js` — `--overlay=<id>` (repeatable),
+  `--overlays=all`, `--require-clean-overlays`. Unknown id → **exit 2 before any
+  bake**. boot.js forces a re-bake when overlays are requested.
+- `os/os-common.js` — the ONE impl: `loadOverlays` (verify BEFORE the seed —
+  fails fast), `plantOverlays` (placement/conflict rules against the seeded base,
+  then plant + provenance at `/usr/share/overlays/<id>.json`), `nodeOverlayIo`
+  (fs/path/crypto injection so os-common stays environment-neutral). Wired into
+  `bakeSystemImage`; identity stamped via os-release `OVERLAYS=` + a
+  `/usr/share/os-release.overlays` companion.
 
-**Manual browser tier NOT run this session** (no Playwright in this env):
-`tests/browser/os-wm.mjs` grew a cursor leg (ew-/nwse-resize over a
-resizable winbox frame, default over client/desktop) and
-`tests/browser/os-user32.mjs` grew one (text over ctldemo's EDIT, default
-over the button). **The operator should run `node tests/browser/os-sweep.mjs
---filter=os-wm` and `--filter=os-user32` to eyeball them.**
+**Verified end-to-end against the REAL sibling artifact** (it had already landed,
+`repo.dirty:true`): `--overlay=clang-apps` planted 7 files (its cc2wasm doom
+**overrides** the base doom, plus stl4/sdldemo/DOOM1.WAD/.desktop), warned loudly
+about the dirty tree, sealed. Booting that image and running the cc2wasm-built
+**console** C++ demo `/usr/bin/stl4` printed correct STL output and exited 0.
 
-**Concurrent sessions:** while I worked, other agents added **0117**
-(micropython upgrade) and **0118** (image overlays opt-in) to
-`todos/queue.json` + their `.md` files — those are UNSTAGED in the working
-tree and NOT mine. I staged only my own hunk of `queue.json` (the 0105
-removal). Leave 0117/0118 to their owners.
+**Verified**: `tests/kernel/test_overlays.js` (unit-scale bake, all fatal paths,
+base inertness — registered in `tests/kernel/run.js`) ALL PASS;
+`tests/kernel/test_os_boot.js` PASS (base bake path unchanged).
 
-**Next in queue**: `node todos/queue.js list` — **0118 (P0)** leads, then
-0106–0107 (desktop-icon details/multi-select tail), 0112, … The 0064 WM
-sweep round 3 still owes the operator the pointer-lock human check, the
-0094 sound listen, the 0095 snap feel, the 0096 saver eyeball, and the
-0101/0102/0103/0104/0105 browser legs.
+**Follow-up filed: 0120** (P2) — drive the *windowed* overlaid DOOM via `wmctl
+shot` (browser + e2e). Not done this session: no Playwright here, and headless
+windowed-app driving on an overlaid image wasn't wired. Named in 0118's Status.
+
+## To commit (this thread's work, uncommitted in the tree)
+
+`os/boot.js`, `os/image.json`, `os/os-common.js`, `tools/mkimage.js`,
+`tests/kernel/run.js`, `tests/kernel/test_overlays.js` (new),
+`todos/queue.json` (0118 dropped), the 0118 done-file move + Status edit
+(**already re-staged** — `queue.js done` had staged the pre-edit blob),
+`todos/0120-*.md` (new), `logs/2026-07-11/0118-image-overlays.md` (new).
+Then push to main (user asked to commit + push if testing looked good — it did).
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **0105: the compiler.js SDL veneer is ONE big template literal** — C
-  comments there must NOT contain backticks or `${` (they close the JS
-  string; bit me twice). The win32 veneer builds ANSI (`#undef UNICODE`),
-  so `IDC_*` are LPSTR — don't pass them to `LoadCursorW(…, LPCWSTR)` or
-  `==`-compare; LoadCursorW compares the ORDINAL (`ULONG_PTR`), and
-  `update_cursor` calls the internal `cursor_token(shape)` directly.
-- **0105: SetCursor debounces** (`cur == g_curCursor`) so per-move hover
-  calls only reach the kernel RPC on a real change; SDL cursor objects are
-  cached per shape. Only RESIZABLE surfaces get resize cursors (fixed
-  frames read arrow — the 0024 scale-drag isn't advertised). The kernel
-  emits a move's cursor from the CURRENT surface state then routes the
-  motion, so an app's `SetCursor` lands for the NEXT move — headless tests
-  sleep ~0.8s after an `smove` before `wmctl cursor`.
-- **0105: `CURSOR_CSS` is duplicated** in host.js (module const) AND os.html
-  (standalone HTML bridge, not a host.js importer) — keep them in sync.
-- **0104: ctldemo carries a `.res` sidecar** (`ctldemo.res`, committed;
-  seeded `/usr/bin/ctldemo.res`). Regenerate with `node tools/win32rc.js
-  os/win32/ctldemo.rc -o os/win32/ctldemo.res` after editing the `.rc`.
-- **0104: the disabled owner's stale ` focus` mark** — modal tests pick
-  focus by id inside the `#32770` subtree, not by grepping ` focus`.
-- **0104: `wmctl key` carries a 5th MOD arg** (SDL keymod; 256 = LALT) —
-  the only way to drive Alt+mnemonic headless.
-- **0103: the icon menu is 6 rows (120x116)** — OPEN / --- / CUT / COPY /
-  DELETE / RENAME. The inline editor is a `desk_edit >= 0` branch in
-  `desk_key`; `desk_edit_armed` is load-bearing for the menu-path focus race.
-- **0101: the clock moved 14px LEFT** (Show Desktop sliver). Sample against
-  `clock_left() = bar_w - SHOWDESK_W - CLOCK_W`.
-- **0114: OPFS image filenames stayed `os-*.v5.img`** — content is
-  version-gated, so persistent browser images re-fetch on a version bump.
-  The 5×7 wm.c font is A–Z uppercase-only.
-- **0096: the saver default timeout is 900s ON PURPOSE** (above the 600s
-  kernel-runner cap). Per-window INJECT_KEY/INJECT_POINTER do NOT stamp the
-  idle clock.
-- **0095: EV_SNAP_DROP fires at every title-drag end THAT MOVED** (past the
-  4px slop). Headless chrome gestures = `wmctl sdown/smove/sup` (screen
-  coords). `SDL_Delay` THROWS (no JSPI) — use `usleep`.
-- **`queue.js done` can stage a PRE-EDIT blob** of the done file — after
-  `done`, `git add todos/done/<file>` again. **Concurrent sessions exist:
-  stage ONLY your own files** — this session had to `git apply --cached`
-  just its 0105-removal hunk of `queue.json` to avoid committing 0117/0118.
-- **`--filter` is single-valued** — passing it twice keeps only the LAST.
-- **Don't edit bake inputs while a suite runs** (0082): `.md` and `tests/`
-  are NOT inputs; `os/*.c/.h/.json/.rc`, `compiler.js`, `host.js`,
-  `vendor/` are. Bump `image.json` `version` (now **65**) when an
-  interactive browser tab must pick up seeded-source edits.
-- **New-runner habits**: check `build/test-*/summary.json` + per-file logs
-  after an interrupted run; `--resume` picks up (used it this session — the
-  suite got killed at teardown mid-run, `--resume` finished it). The kernel
-  runner is a MANIFEST — new test files must be added to `tests` in run.js.
+- **0118: the bake is NOT byte-deterministic** — BlockFS stamps inode mtimes
+  from the wall clock, so two identical base bakes differ (~24 bytes, plus the
+  seal). So "byte-identical to current output" is only true at the *content*
+  level (os-release string, file set), not the raw blob — assert inertness that
+  way, never a whole-blob compare.
+- **0118: `--quiet` silences the dirty-overlay WARNING** (same `log` channel);
+  the durable record survives in `os-release.overlays` (`dirty:true`). Accepted
+  trade — don't thread a separate stderr channel through neutral os-common.
+- **0118: an overlay `bin` whose target is a base path needs `"override": true`**
+  (the sibling's cc2wasm doom does exactly this to replace the base doom). Two
+  enabled overlays hitting one path is fatal.
+- **`queue.js done` can stage a PRE-EDIT blob** of the done file — after `done`,
+  `git add todos/done/<file>` again. (Hit + fixed this session.) **Concurrent
+  sessions exist: stage ONLY your own files.**
+- **Don't edit bake inputs while a suite runs** (0082): `.md`/`tests/` are NOT
+  inputs; `os/*.c/.h/.json/.rc`, `compiler.js`, `host.js`, `vendor/` are. Bump
+  `image.json` `version` (now **65**) when an interactive browser tab must pick
+  up seeded-source edits (an inert non-baked key like `overlays[]` doesn't need
+  a bump — content is unchanged).
+- **New-runner habits**: check `build/test-*/summary.json` + per-file logs after
+  an interrupted run; `--resume` picks up. The kernel runner is a MANIFEST — new
+  test files must be added to `tests` in run.js (did so for test_overlays.js).
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. List order is PRIORITY-BUCKETED (P0–P3).
-- **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium
-  with `--enable-unsafe-webgpu --enable-features=Vulkan`.
-- The IDE's clangd flags os/*.c, os/win32/*.c and vendor sources — noise.
+- **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium with
+  `--enable-unsafe-webgpu --enable-features=Vulkan`.
+
+## Next in queue
+
+`node todos/queue.js list` — after 0118: **0106–0107** (desktop-icon details/
+multi-select tail), **0112**, then the P1 body (0088, 0079/0080, 0052/0053, …).
+**0120** (this thread's follow-up, P2) sits at pos ~30. The 0064 WM sweep round 3
+still owes the operator the pointer-lock human check, the 0094 sound listen, the
+0095 snap feel, the 0096 saver eyeball, and the 0101–0105 browser legs.
 
 ## Don't re-litigate
 
-posix_spawn-not-fork; kernel-owned fds; WM.md invariants; 0013–0104's
-recorded decisions (see todos/done/); DISK-IMAGE.md's settled layout;
-0090 (clipboard = ONE kernel slot); 0091 (fixed item lists, ONE flyout);
-0092 (ops core header-only + shared; DnD non-goal); 0093 (trash store
-layout; bin icon pinned to grid TAIL); 0098 (Start-menu two-pane panel);
-0101/0102/0103/0104's calls; **0105's calls (native cursor deviation
-STANDS — only which shape; SDL_SystemCursor is the wire enum end to end;
-chrome resize cursors are resizable-only + fixed/title/desktop=arrow;
-per-surface cursor via SURFACE_SET_CURSOR; user32 EDIT I-beam over the SDL
-path; WMP_CURSOR_AT is a pure query; custom pixel cursors are OUT — system
-shapes only; CURSOR_CSS duplicated host.js + os.html on purpose)**.
+posix_spawn-not-fork; kernel-owned fds; WM.md invariants; 0013–0105's recorded
+decisions (see todos/done/); DISK-IMAGE.md's settled layout; **0118's calls
+(prebuilt-only — never trigger the sibling build; flag-gated + off by default;
+loud FATAL on missing/bad-hash, WARN on dirty; verify-before-plant;
+`overlay@1` is the ONE frozen cross-repo contract — if it must change, both
+repos bump to `overlay@2` together; image identity is additive via os-release
+OVERLAYS=/companion, `bakedVersion` stays authoritative for the base)**.
 
 ## Suggested opening for the new thread
 
-"Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle — `node todos/queue.js list` for the order (0105 cursor shapes
-just landed; 0118 (P0 image overlays) leads now, then 0106–0107 desktop-icon
-details/multi-select; 0064 WM sweep round 3 owes the operator the
-pointer-lock check and the 0094/0095/0096/0101–0105 browser legs). Note
-0117/0118 are concurrent sessions' in-flight work in the queue."
+"Read HANDOFF.md, then give me a one-paragraph status and ask what I want to
+tackle — `node todos/queue.js list` for the order (0118 image overlays just
+landed — commit + push it first if not already done; then 0106–0107 desktop-icon
+details/multi-select, 0112; 0120 is 0118's windowed-DOOM smoke-leg follow-up).
+0064 WM sweep round 3 still owes the operator the pointer-lock check and the
+0094/0095/0096/0101–0105 browser legs."

@@ -1,5 +1,14 @@
 {
   "version": 65,
+  "overlays": [
+    {
+      "id": "clang-apps",
+      "description": "C/C++ apps cross-compiled by the sibling clang-simplified (cc2wasm) toolchain; prebuilt, opt-in via --overlay=clang-apps (todos/0118)",
+      "manifest": "../clang-simplified/out-image/overlay.json",
+      "enableFlag": "clang-apps",
+      "default": false
+    }
+  ],
   "system": {
     "dirs": [
       "/usr/bin",

@@ -12,6 +12,13 @@
 //   node tools/mkimage.js                      # -> os/os-system.img
 //   node tools/mkimage.js --out=PATH [--manifest=os/image.json] [--quiet]
 //
+// Optional opt-in image overlays (todos/0118): fold a sibling-published,
+// prebuilt `overlay@1` manifest's files into the image. OFF by default —
+// a plain bake is byte-identical to today. Loud failure on any problem.
+//   --overlay=<id>            enable one declared overlay (repeatable)
+//   --overlays=all            enable every declared overlay
+//   --require-clean-overlays  a dirty overlay provenance is fatal (else warns)
+//
 // os/boot.js bakes the same blob on demand (missing/stale image), so this
 // tool is optional for the headless dev loop; it exists to prebake the blob
 // the browser boot fetches (no compilation on the boot path) and to bake
@@ -30,10 +37,17 @@ const COMMON = require(path.join(OS_DIR, 'os-common.js'));
 let outPath = path.join(OS_DIR, 'os-system.img');
 let manifestPath = path.join(OS_DIR, 'image.json');
 let quiet = false;
+let requireCleanOverlays = false;
+let allOverlays = false;
+const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outPath = path.resolve(a.slice(6));
   else if (a.startsWith('--manifest=')) manifestPath = path.resolve(a.slice(11));
   else if (a === '--quiet') quiet = true;
+  else if (a === '--overlays=all') allOverlays = true;
+  else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
+  else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
+  else if (a === '--require-clean-overlays') requireCleanOverlays = true;
   else {
     process.stderr.write(`mkimage: unknown option ${a}\n`);
     process.exit(2);
@@ -41,6 +55,27 @@ for (const a of process.argv.slice(2)) {
 }
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkimage] ' + m + '\n');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+
+// Resolve requested overlays against image.json `overlays[]`. An unknown id is
+// a usage error (exit 2), BEFORE any bake — the whole point is an explicit,
+// acknowledged opt-in (todos/0118). The manifest `manifest` field is relative
+// to the repo root (absolute also allowed).
+const resolvedOverlays = resolveRequestedOverlays();
+function resolveRequestedOverlays() {
+  const declared = manifest.overlays || [];
+  const byId = new Map(declared.map((o) => [o.id, o]));
+  const ids = allOverlays ? declared.map((o) => o.id) : [...requestedOverlays];
+  for (const id of ids) {
+    if (!byId.has(id)) {
+      process.stderr.write(`mkimage: unknown overlay '${id}' (declared: ${declared.map((o) => o.id).join(', ') || 'none'})\n`);
+      process.exit(2);
+    }
+  }
+  return ids.map((id) => {
+    const o = byId.get(id);
+    return { id, manifestPath: path.isAbsolute(o.manifest) ? o.manifest : path.join(ROOT, o.manifest) };
+  });
+}
 
 // Bake into a temp file and publish with an atomic rename: a concurrent
 // reader (the 0082 fixture copy in os/boot.js, a browser fetch through
@@ -59,6 +94,9 @@ async function main() {
     buildProject: (proj) => COMMON.buildProject(CompilerJS, proj,
       (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
     log,
+    overlays: resolvedOverlays,
+    overlayIo: COMMON.nodeOverlayIo(fs, path, require('crypto')),
+    requireCleanOverlays,
   });
   // Verify what was just written: seal intact + the version reads back.
   const sealed = await BLOCK_FS.verifySeal(store);

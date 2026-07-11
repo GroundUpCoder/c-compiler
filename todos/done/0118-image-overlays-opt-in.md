@@ -1,6 +1,18 @@
 # 0118 — Optional opt-in image overlays: apply a sibling-published overlay@1 manifest in mkimage (flag-gated)
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). Consumer landed: `overlays[]` in `os/image.json`
+  (version kept at 65 — the key is inert, base bake byte-identical);
+  `--overlay=<id>`/`--overlays=all`/`--require-clean-overlays` in `tools/mkimage.js`
+  + `os/boot.js`; `loadOverlays`/`plantOverlays`/`nodeOverlayIo` in `os/os-common.js`
+  wired into `bakeSystemImage` (verify-before-bake, then plant + provenance at
+  `/usr/share/overlays/<id>.json` + os-release `OVERLAYS=`/`os-release.overlays`).
+  Every frozen fatal rule enforced. Verified END TO END against the REAL sibling
+  `clang-simplified` artifact: `--overlay=clang-apps` plants 7 files (doom overrides
+  the base doom, stl4, sdldemo + assets + .desktop), and the cc2wasm-built console
+  demo `/usr/bin/stl4` boots and runs (STL output, exit 0). Tests:
+  `tests/kernel/test_overlays.js` (unit-scale bake, all fatal paths, base inertness).
+  Follow-up **0120** owns the windowed-DOOM `wmctl shot` browser/e2e smoke leg (not
+  driven this session — no Playwright). Dev log `logs/2026-07-11/0118-image-overlays.md`.
 - **Difficulty**: medium
 - **Design**: this file
 - **Sibling task**: `clang-simplified` repo `todos/0051-overlay-image-artifacts-publisher.md` (the *producer*). This task is the *consumer*. They share the **frozen `overlay@1` contract** reproduced verbatim below; neither task needs to read the other's repo to be done.
