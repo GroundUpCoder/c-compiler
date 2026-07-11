@@ -25,12 +25,21 @@ returns the raw `spawnSync` result — throwing on spawn error, so the ubiquitou
 `{ dir, image }` pair for tests that keep their own image across sessions.
 `section(out, name)` is the `==marker\n … ==` grep helper several e2es carried.
 
-**27 files converted** (every one using the canonical single-shot
-`spawnSync('node', [BOOT, '--image='+image, '--quiet'], …)`). Async paced-tty
-sessions (`cp.spawn(..., '--tty-out')` in os_apps) were left byte-for-byte —
-`driveBoot` is deliberately the single-shot seam only. Opts map faithfully:
-`timeout` (default 300000, omitted when default), `maxBuffer` verbatim,
-`encoding: null` for the raw-Buffer PPM cat-backs.
+**27 files converted to `driveBoot`** (every one using the canonical
+single-shot `spawnSync('node', [BOOT, '--image='+image, '--quiet'], …)`). Async
+paced-tty sessions (`cp.spawn(..., '--tty-out')` in os_apps) were left
+byte-for-byte — `driveBoot` is deliberately the single-shot seam only. Opts map
+faithfully: `timeout` (default 300000, omitted when default), `maxBuffer`
+verbatim, `encoding: null` for the raw-Buffer PPM cat-backs.
+
+**Plus 3 files converted to `freshImage` only** (the remaining boot-image
+mkdtemp blocks the acceptance said should be gone): `test_vi_e2e` and
+`test_jobctl_tty_e2e` (async paced-tty `cp.spawn` drivers — keep their own
+`BOOT`) and `test_os_boot` (the bake-path test — deliberately non-`--quiet`
+custom spawns, reuses the dir for a second `os2.img`). After this, NO
+`os/boot.js --image=` test still `mkdtempSync`es its image inline. (The
+worker-threads / in-process-fs e2es keep their own `mkdtemp` — that's not a
+boot-image dir and is out of scope.)
 
 **Full kernel suite: 58 passed, 0 failed** (384.6s) — the verifiable half is
 proven end-to-end, not just syntax-checked.
@@ -75,6 +84,17 @@ os-sounds 600×200ms).
   **todos/0153** (P1) so the runtime confirmation is explicitly owned rather than
   silently riding 0064's WM-scoped sweep. This is the standing browser-tier gap,
   not new un-runnability introduced by 0146.
+
+## Scope boundary (audited)
+
+The item's waitForServer bullet also *named* `doom-renders.mjs`/
+`quake-renders.mjs`/`safari-renders.mjs` as duplication sites, but the Plan's
+action was "convert the os-*.mjs files." Those render tests are a DIFFERENT
+family — they spawn a per-directory static `server.mjs` (not the OS `serve.js`
+over the repo root), load non-OS SDL pages, and `safari-renders` drives Selenium
+(Safari), not Playwright. The OS harness (serve.js + os.html + WebGPU flags +
+VT/pixel helpers) deliberately doesn't fit them, so they're out of 0146's scope,
+not a residue. No follow-up filed for them.
 
 ## Notes / decisions
 

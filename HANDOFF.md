@@ -16,7 +16,9 @@ land:
   `node os/boot.js --image=<img> --quiet [...args]`, pipe the script on stdin,
   return the `spawnSync` result (throws on spawn error → folds in the
   `if(r.error)throw`). `freshImage(prefix)`/`section(out,name)` alongside.
-  **27 canonical single-shot e2es converted; full kernel suite 58/58 green.**
+  **27 single-shot e2es → `driveBoot`; 3 more (`vi`/`jobctl_tty` async paced-tty,
+  `os_boot` bake-path) → `freshImage` so NO boot-image test mkdtemps inline;
+  full kernel suite 58/58 green.**
 - **`tests/browser/lib/os-harness.mjs`** — `startServer`/`waitForServer`/
   `launchBrowser` (WebGPU flags; **playwright imported lazily** so pure helpers
   load in plain Node)/`makeCheck`/`osHelpers(page)` (`setVt`/`sample`/`near`/

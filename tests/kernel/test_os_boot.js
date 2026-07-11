@@ -27,9 +27,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const BOOT = path.join(ROOT, 'os/boot.js');   // bake-path test: custom non-quiet spawns below (not driveBoot)
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -37,8 +38,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-boot-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-boot-');
 
 function session(input, extraArgs) {
   // Not --quiet: the [boot] lines on stderr are themselves under test

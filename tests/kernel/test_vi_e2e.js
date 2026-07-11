@@ -20,9 +20,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { freshImage } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
-const BOOT = path.join(ROOT, 'os/boot.js');
+const BOOT = path.join(ROOT, 'os/boot.js');   // async paced-tty spawn below (not driveBoot's single-shot model)
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -31,8 +32,7 @@ function check(name, cond, extra) {
 }
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-vi-'));
-const image = path.join(tmp, 'os.img');
+const { dir: tmp, image } = freshImage('os-vi-');
 
 function Session() {
   this.p = cp.spawn('node', [BOOT, '--image=' + image, '--fresh', '--tty-out', '--quiet'],
