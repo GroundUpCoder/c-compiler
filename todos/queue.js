@@ -453,9 +453,46 @@ repo, then adjust it. No feature work in this item.
 `;
 }
 
+// The scaffold for `add --difficulty-triage`: a curation-only item whose whole
+// turn is assigning a difficulty tag to every currently-untagged open item.
+// Created by the netguc/cc churn engine when a project has difficulty-triage
+// enabled and untagged items exist — so a light-mode run can rely on the tags.
+function difficultyTriageScaffold(id) {
+  return `# ${id} — difficulty triage
+
+- **Status**: open
+- **Design**: —
+
+## Goal
+
+Curation-only turn: give every currently-untagged open todo a difficulty tag
+(\`light\` / \`medium\` / \`heavy\`) so the churn engine's light mode can skip the
+heavy ones. No feature work in this item.
+
+## Plan
+
+- List the queue: \`node todos/queue.js list\`. Items with no \`[light|medium|
+  heavy]\` marker are untagged.
+- For each untagged open item, read its \`todos/NNNN-*.md\` (Goal/Plan/Acceptance)
+  and judge the effort/risk, then tag it:
+  \`node todos/queue.js set-difficulty <ID> <light|medium|heavy>\`.
+    - light  — a small, well-scoped change; low risk; minutes to an hour.
+    - medium — a normal feature/fix; some unknowns; a focused session.
+    - heavy  — large/architectural/high-uncertainty; a light run should skip it.
+- Base the call on the item's own scope, not the numbering.
+- Do NOT create or retitle items and do NOT create another triage item — this
+  pass only tags. Leave already-tagged items alone unless clearly wrong.
+
+## Acceptance
+
+- Every open item has a difficulty tag; \`node todos/queue.js check\` passes.
+- Close this item the normal way (Status line, move to done, commit, push).
+`;
+}
+
 function cmdAdd(argv) {
   const { flags, positional } = parseFlags('add', argv,
-    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection']);
+    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'difficulty', 'reflection', 'difficulty-triage']);
   const fsState = scanFs();
   let id = positional[0];
   if (!id || id === 'next') id = nextId(fsState);
@@ -466,9 +503,10 @@ function cmdAdd(argv) {
   const difficulty = flags.difficulty !== undefined ? parseDifficultyArg(flags.difficulty, 'add') : undefined;
 
   const isReflection = flags.reflection !== undefined;
+  const isDiffTriage = flags['difficulty-triage'] !== undefined;
   const title = typeof flags.title === 'string' ? flags.title
     : (typeof flags.slug === 'string' ? flags.slug.replace(/-/g, ' ')
-    : (isReflection ? 'queue reflection' : 'untitled'));
+    : (isReflection ? 'queue reflection' : (isDiffTriage ? 'difficulty triage' : 'untitled')));
   const slug = typeof flags.slug === 'string' ? flags.slug : slugify(title) || 'untitled';
   const fileName = `${id}-${slug}.md`;
   const filePath = path.join(TODOS_DIR, fileName);
@@ -492,7 +530,8 @@ function cmdAdd(argv) {
 
   // Write the scaffold first so validation sees the file, then roll it back if
   // the resulting manifest doesn't validate (never leave a half-applied add).
-  fs.writeFileSync(filePath, isReflection ? reflectionScaffold(id) : scaffold(id, title));
+  fs.writeFileSync(filePath, isReflection ? reflectionScaffold(id)
+    : isDiffTriage ? difficultyTriageScaffold(id) : scaffold(id, title));
   const { errors } = validate(manifest, scanFs());
   if (errors.length) {
     fs.unlinkSync(filePath);
@@ -632,6 +671,7 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
                                                 field omitted at P1)
           [--difficulty light|medium|heavy]     optional difficulty tag (light runs skip heavy)
           [--reflection]                        curation-only "queue reflection" scaffold
+          [--difficulty-triage]                 curation-only "tag all untagged items" scaffold
   set-priority <ID> <0..3>                      set an entry's priority (1 = default,
                                                 removes the field)
   set-difficulty <ID> <light|medium|heavy|none> set an entry's difficulty tag

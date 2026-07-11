@@ -179,6 +179,19 @@ test('add rolls back the scaffold when the result would not validate', () => {
   assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0001']); // unchanged
 });
 
+test('add --difficulty-triage scaffolds a curation item at pos 1', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  const r = run(todos, ['add', 'next', '--difficulty-triage', '--pos', '1']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  const file = path.join(todos, '0002-difficulty-triage.md');
+  assert.ok(fs.existsSync(file), 'triage scaffold exists');
+  assert.match(fs.readFileSync(file, 'utf8'), /set-difficulty/);
+  assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0002', '0001']); // front
+  assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
 // --- priority (P0..P3, default P1 with the field omitted) ---
 
 test('add --priority sets the field; P1 and absent are omitted', () => {
