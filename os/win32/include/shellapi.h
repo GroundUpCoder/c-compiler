@@ -13,6 +13,25 @@ void DragFinish(HDROP drop);
 BOOL DragQueryPoint(HDROP drop, POINT *p);
 HICON ExtractIconW(HINSTANCE inst, LPCWSTR file, UINT index);
 void SHAddToRecentDocs(UINT flags, LPCVOID data);
+
+/* ---- 0092 file operations — VENEER-LOCAL (not a Windows API) ----
+ * Thin exports over the shared os/fileops.h core (see shell32.c): copy is
+ * recursive (symlinks copy as links), move refuses an existing
+ * destination (EEXIST), delete is recursive. 0 or -1 with errno set.
+ * The SHClip* set rides the 0090 kernel clipboard slot as a format-2
+ * file list ("cut\n"/"copy\n" header + one absolute path per line). */
+int SHFileCopy(const char *src, const char *dst);
+int SHFileMove(const char *src, const char *dst);
+int SHFileDelete(const char *path);
+int SHPasteDest(const char *dir, const char *name, char *out, int cap);
+int SHNewDest(const char *dir, const char *base, const char *ext,
+              char *out, int cap);
+int SHClipSetFiles(int cut, const char *const *paths, int n);
+int SHClipHasFiles(void);
+int SHClipLoadFiles(char *buf, int cap, int *cut);
+const char *SHClipPath(const char *buf, int i);
+int SHClipClear(void);
+#define SHCLIP_MAX 8192              /* fileops.h FO_CLIP_MAX */
 #define SHARD_PIDL  1
 #define SHARD_PATHA 2
 #define SHARD_PATHW 3

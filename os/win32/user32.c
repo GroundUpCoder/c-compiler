@@ -912,6 +912,21 @@ BOOL DestroyAcceleratorTable(HACCEL acc) {
     return acc != NULL;
 }
 
+/* Runtime tables (0092): the same AccelTbl as LoadAccelerators, built from
+ * an ACCEL array instead of a .res — fileman's F2/Del/^C/^X/^V. */
+HACCEL CreateAcceleratorTableA(ACCEL *entries, int n) {
+    if (!entries || n <= 0 || n > 64) return NULL;
+    AccelTbl *t = (AccelTbl *)calloc(1, sizeof(AccelTbl));
+    if (!t) return NULL;
+    t->n = n;
+    for (int i = 0; i < n; i++) {
+        t->e[i].flags = entries[i].fVirt;
+        t->e[i].key = entries[i].key;
+        t->e[i].cmd = entries[i].cmd;
+    }
+    return (HACCEL)t;
+}
+
 int TranslateAcceleratorW(HWND hwnd, HACCEL acc, MSG *msg) {
     if (!hwnd || !acc || !msg || msg->message != WM_KEYDOWN) return 0;
     AccelTbl *t = (AccelTbl *)acc;
@@ -1003,6 +1018,18 @@ BOOL AppendMenuW(HMENU menu, UINT flags, UINT_PTR id, LPCWSTR text) {
     else if (flags & MF_POPUP) it = menu_append(MENU_T(menu), 1, 0, t ? t : "", (HMENU)id);
     else it = menu_append(MENU_T(menu), 0, (int)id, t ? t : "", NULL);
     free(t);
+    if (it) it->state = flags & (MF_CHECKED | MF_GRAYED | MF_DISABLED);
+    return it != NULL;
+}
+
+/* ANSI twin (0092: fileman's runtime context menu; text is UTF-8, the
+ * internal MenuItem encoding already). */
+BOOL AppendMenuA(HMENU menu, UINT flags, UINT_PTR id, LPCSTR text) {
+    if (!menu) return FALSE;
+    MenuItem *it;
+    if (flags & MF_SEPARATOR) it = menu_append(MENU_T(menu), 2, 0, NULL, NULL);
+    else if (flags & MF_POPUP) it = menu_append(MENU_T(menu), 1, 0, text ? text : "", (HMENU)id);
+    else it = menu_append(MENU_T(menu), 0, (int)id, text ? text : "", NULL);
     if (it) it->state = flags & (MF_CHECKED | MF_GRAYED | MF_DISABLED);
     return it != NULL;
 }
@@ -1988,7 +2015,7 @@ static void strip_amp(const char *in, char *out, int cap) {
     out[n] = 0;
 }
 
-typedef struct { const char *label; const char *cls; int idx, count; HWND found; int wantButton; } Find;
+typedef struct { const char *label; const char *cls; int idx, count; HWND found; int wantButton; int wantEnabled; } Find;
 
 static void find_walk(HWND h, Find *f) {
     if (f->found) return;
@@ -1997,7 +2024,10 @@ static void find_walk(HWND h, Find *f) {
             if (f->count == f->idx) { f->found = h; return; }
             f->count++;
         }
-    } else if (hwnd_shown(h)) {
+    } else if (hwnd_shown(h) && !(f->wantEnabled && !hwnd_able(h))) {
+        /* wantEnabled skips a disabled match (a click no-ops on it anyway),
+         * so a modal-over-modal enabled button wins over a same-labelled
+         * button in the disabled owner — the AQ_CLICK path sets it. */
         int isBtn = h->cls && ci_eq(h->cls->name, "BUTTON");
         if (!f->wantButton || isBtn) {
             char stripped[256];
@@ -2008,9 +2038,10 @@ static void find_walk(HWND h, Find *f) {
     for (HWND c = h->child; c; c = c->next) find_walk(c, f);
 }
 
-static HWND agent_find(const char *label) {
+static HWND agent_find_ex(const char *label, int wantEnabled) {
     Find f;
     memset(&f, 0, sizeof f);
+    f.wantEnabled = wantEnabled;
     /* CLASS:n syntax for text-less/content-text controls. */
     const char *colon = strrchr(label, ':');
     char clsName[64];
@@ -2041,6 +2072,8 @@ static HWND agent_find(const char *label) {
     return f.found;
 }
 
+static HWND agent_find(const char *label) { return agent_find_ex(label, 0); }
+
 static void agent_serve(int cfd) {
     uint32_t type, plen;
     if (aq_next(cfd, &type, &plen) != 0 || plen > 65536) return;
@@ -2062,7 +2095,7 @@ static void agent_serve(int cfd) {
         break;
     }
     case AQ_CLICK: {
-        HWND h = agent_find(payload);
+        HWND h = agent_find_ex(payload, 1);      /* prefer an ENABLED match */
         if (!h && menu_standalone()) {           /* open TrackPopupMenu (0048) */
             MenuItem *it = menu_find_label(g_menu.pop, payload);
             if (it && it->kind == 0 && !(it->state & (MF_GRAYED | MF_DISABLED))) {
@@ -3648,6 +3681,19 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case LB_GETCOUNT:
         return st->n;
+    case LB_ITEMFROMPOINT: {
+        /* lParam is CLIENT coords; LOWORD the nearest row, HIWORD 1 when
+         * the point sits outside the items (Windows semantics) — 0092's
+         * right-click row hit (fileman maps the WM_CONTEXTMENU surface
+         * point into listbox client space itself; it knows its layout). */
+        int cy = GET_Y_LPARAM(lp), cx = GET_X_LPARAM(lp);
+        int rh = lb_row_h(h);
+        int idx = st->top + (cy - 2) / (rh > 0 ? rh : 1);
+        int outside = cx < 0 || cx >= h->w || cy < 2 || idx < 0 || idx >= st->n;
+        if (idx < 0) idx = 0;
+        if (st->n && idx >= st->n) idx = st->n - 1;
+        return MAKELPARAM(idx, outside ? 1 : 0);
+    }
     case LB_GETCURSEL:
         return st->sel < 0 ? LB_ERR : st->sel;
     case LB_SETCURSEL: {

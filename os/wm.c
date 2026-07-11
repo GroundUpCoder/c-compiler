@@ -104,6 +104,7 @@
 #include <sys/select.h>
 #include "wm_proto.h"
 #include "openwith.h"
+#include "fileops.h"
 
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
@@ -259,8 +260,10 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_NONE = 0,
     CM_SUB_NEW, CM_SUB_SORT,       /* rows that cascade the flyout */
     CM_REFRESH, CM_DISPLAY,        /* desktop */
+    CM_PASTE,                      /* desktop (0092: the fileops clipboard) */
     CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* flyout rows */
-    CM_OPEN,                       /* icon (0092 grows file ops here) */
+    CM_OPEN,                       /* icon */
+    CM_CUT, CM_COPY,               /* icon (0092: the selection set) */
     CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE /* taskbar button */
 };
 #define CTF_SEP   1                /* separator groove row */
@@ -1359,18 +1362,74 @@ static void ctx_open_desktop(int x, int y) {
     ctx_add(0, "NEW", CM_SUB_NEW, CTF_SUB);
     ctx_add(0, "SORT BY", CM_SUB_SORT, CTF_SUB);
     ctx_add(0, "REFRESH", CM_REFRESH, 0);
+    ctx_add(0, "PASTE", CM_PASTE, fo_clip_has() ? 0 : CTF_GRAY);   /* 0092 */
     ctx_add(0, "", CM_NONE, CTF_SEP);
     ctx_add(0, "DISPLAY", CM_DISPLAY, 0);
     ctx_openwin(0, x, y);
 }
 
-/* Right-click a desktop icon: Open (the 0092 file ops grow here). */
+/* Right-click a desktop icon: Open + Cut/Copy of the selection set
+ * (todos/0092 — the same format-2 clipboard file list fileman pastes;
+ * Delete arrives with the Recycle Bin, 0093, Rename with 0103). */
 static void ctx_open_icon(int idx, int x, int y) {
     ctx_dismiss();
     ctx_icon = idx;
     ctx_nent[0] = 0;
     ctx_add(0, "OPEN", CM_OPEN, 0);
+    ctx_add(0, "", CM_NONE, CTF_SEP);
+    ctx_add(0, "CUT", CM_CUT, 0);
+    ctx_add(0, "COPY", CM_COPY, 0);
     ctx_openwin(0, x, y);
+}
+
+/* Cut/Copy every selected icon's path onto the clipboard (fileops.h
+ * format-2 file list over the ONE kernel slot, todos/0090 — fileman and
+ * other wm instances paste it). */
+static void desk_clip(int cut) {
+    static char bufs[MAX_DESK][300];   /* off the 64KB wasm stack */
+    const char *paths[MAX_DESK];
+    int n = 0;
+    for (int i = 0; i < desk_n && i < MAX_DESK; i++) {
+        if (!(desk_selmask >> i & 1)) continue;
+        snprintf(bufs[n], sizeof bufs[n], "/root/Desktop/%s", desk[i].name);
+        paths[n] = bufs[n];
+        n++;
+    }
+    if (n && fo_clip_set(cut, paths, n) != 0)
+        fprintf(stderr, "wm: clipboard set failed: %s\n", strerror(errno));
+}
+
+/* Paste the clipboard file list onto the desktop: cut moves (slot
+ * cleared after a clean run — a cut pastes once), copy duplicates with
+ * the "Copy of" clash uniquifier. Errors go to the service log — this
+ * process has no dialog furniture (fileman surfaces them, 0092). */
+static void desk_paste(void) {
+    static char cl[FO_CLIP_MAX];
+    int cut = 0;
+    int n = fo_clip_load(cl, sizeof cl, &cut);
+    int ok = 1;
+    for (int i = 0; i < n; i++) {
+        const char *src = fo_clip_path(cl, i);
+        const char *base = strrchr(src, '/');
+        base = base ? base + 1 : src;
+        char dst[FO_PATH_MAX];
+        int rc;
+        if (cut) {
+            snprintf(dst, sizeof dst, "/root/Desktop/%s", base);
+            rc = fo_move(src, dst);
+        } else {
+            rc = fo_paste_dest("/root/Desktop", base, dst, sizeof dst);
+            if (rc == 0) rc = fo_copy(src, dst);
+        }
+        if (rc != 0) {
+            fprintf(stderr, "wm: paste '%s' failed: %s\n", src, strerror(errno));
+            ok = 0;
+            break;
+        }
+    }
+    if (n > 0 && cut && ok) fo_clip_clear();
+    desk_load();
+    desk_dirty = 1;
 }
 
 /* Right-click a taskbar button: the Win95 window menu over the chrome ops
@@ -1447,6 +1506,9 @@ static void ctx_activate(int d, int i) {
         break;
     }
     case CM_OPEN: desk_launch(icon); break;
+    case CM_CUT: desk_clip(1); break;            /* 0092 */
+    case CM_COPY: desk_clip(0); break;
+    case CM_PASTE: desk_paste(); break;
     case CM_RESTORE: {
         win_t *w = find(target);
         if (!w) break;

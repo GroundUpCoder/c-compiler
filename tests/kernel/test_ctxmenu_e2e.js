@@ -31,20 +31,21 @@ function check(name, cond, extra) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'os-ctx-'));
 const image = path.join(tmp, 'os.img');
 
-// Geometry mirrors os/wm.c (todos/0091): CTX_W 120, rows 20px, 4px pad,
-// 8px separator, clamped to the 1024x768 work area above the 28px bar.
-// Desktop menu: NEW / SORT BY / REFRESH / --- / DISPLAY -> h 96; taskbar
-// menu: RESTORE / MINIMIZE / MAXIMIZE / --- / CLOSE -> h 96; icon menu:
-// OPEN -> h 28. A flyout parks at root-right - 3 with its first row
-// aligned to the group row (NEW: FOLDER + TEXT FILE -> h 48; SORT BY:
-// NAME -> h 28). Row centers at 4 + i*20 + 10.
+// Geometry mirrors os/wm.c (todos/0091, rows grown by 0092): CTX_W 120,
+// rows 20px, 4px pad, 8px separator, clamped to the 1024x768 work area
+// above the 28px bar. Desktop menu: NEW / SORT BY / REFRESH / PASTE /
+// --- / DISPLAY -> h 116; taskbar menu: RESTORE / MINIMIZE / MAXIMIZE /
+// --- / CLOSE -> h 96; icon menu: OPEN / --- / CUT / COPY -> h 76. A
+// flyout parks at root-right - 3 with its first row aligned to the group
+// row (NEW: FOLDER + TEXT FILE -> h 48; SORT BY: NAME -> h 28). Row
+// centers at 4 + i*20 + 10.
 const rowY = (i) => 4 + i * 20 + 10;               // rows above the groove
-const DESK_MENU_GEOM = '120x96+400+300';
+const DESK_MENU_GEOM = '120x116+400+300';
 const NEW_FLY_GEOM = '120x48+517+300';             // 400+120-3, row 0 align
 const SORT_FLY_GEOM = '120x28+517+320';            // row 1 align
 const BAR_MENU_GEOM = '120x96+56+644';             // btn 0 x, 768-28-96
-const DISPLAY_ROW_Y = 4 + 3 * 20 + 8 + 10;         // below the groove: 82
-const CLOSE_ROW_Y = DISPLAY_ROW_Y;
+const DISPLAY_ROW_Y = 4 + 4 * 20 + 8 + 10;         // below the groove: 102
+const CLOSE_ROW_Y = 4 + 3 * 20 + 8 + 10;           // bar menu groove: 82
 
 // The desktop starts as the seeded 7 icons; the script grows it. Icons
 // auto-flow column-major sorted (no .icons), centers x=58,
@@ -316,8 +317,8 @@ check('Start toggle while the ctxmenu is open: startmenu up, ctxmenu gone',
 
 // ---- icon menu ----
 const i1 = section('icon1');
-check('right-click an icon opens the 1-row menu (120x28)',
-  row(i1, 'ctxmenu').includes('120x28+'), JSON.stringify(i1));
+check('right-click an icon opens the Open/Cut/Copy menu (120x76, 0092)',
+  row(i1, 'ctxmenu').includes('120x76+'), JSON.stringify(i1));
 check('icon shot written', out.includes('d2-ok'));
 check('OPEN runs the launcher through the activate path (winbox +1)',
   out.includes('OPEN-DELTA-1'),
@@ -400,8 +401,8 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     return (x, y) => String(Array.from(
       ppm.subarray(off + (y * w + x) * 3, off + (y * w + x) * 3 + 3)));
   };
-  // c1.ppm: the 120x96 desktop menu — raised edge, face, black item text,
-  // the separator groove at y 64..72, the flyout arrows on the sub rows.
+  // c1.ppm: the 120x116 desktop menu — raised edge, face, black item text,
+  // the separator groove at y 84..92, the flyout arrows on the sub rows.
   const p = readPpm('c1.ppm', 120);
   check('menu face is the Win95 gray with a raised edge',
     p(60, 2) === '192,192,192' && p(0, 0) === '255,255,255' &&
@@ -411,8 +412,8 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
     for (let x = 10; x < 100; x++) if (p(x, y) === '0,0,0') text++;
   check('row 0 (NEW) has black label text', text >= 10, text);
   check('separator groove present (dark over light)',
-    p(60, 67) === '96,96,96' && p(60, 68) === '255,255,255',
-    [p(60, 67), p(60, 68)].join(' | '));
+    p(60, 87) === '96,96,96' && p(60, 88) === '255,255,255',
+    [p(60, 87), p(60, 88)].join(' | '));
   check('sub rows carry the flyout arrow', p(110, 13) === '0,0,0', p(110, 13));
   // d2.ppm: right-click selected the alauncher icon alone (navy strip).
   const d = readPpm('d2.ppm', 1024);

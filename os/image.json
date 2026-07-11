@@ -1,5 +1,5 @@
 {
-  "version": 52,
+  "version": 53,
   "system": {
     "dirs": [
       "/usr/bin",
@@ -30,7 +30,8 @@
         "c": "wm.c",
         "hdrs": [
           "wm_proto.h",
-          "openwith.h"
+          "openwith.h",
+          "fileops.h"
         ]
       },
       "/usr/bin/open": {

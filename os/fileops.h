@@ -1,0 +1,233 @@
+/* fileops.h — file operations + the clipboard file list, ONE implementation
+ * in ONE place (todos/0092).
+ *
+ * Header-only by design (the openwith.h precedent): wm.c (desktop icon
+ * Cut/Copy + desktop Paste) and os/win32/shell32.c (the SHFile* veneer
+ * helpers behind fileman's ops) share these static functions by textual
+ * inclusion and must stay behaviorally identical through them.
+ *
+ * File ops are plain POSIX. fo_copy is recursive (files by a read/write
+ * loop preserving the mode; directories entry-by-entry; symlinks copied AS
+ * LINKS — a Desktop launcher copies like a Windows shortcut) and refuses
+ * to copy a directory into itself. fo_move is rename(2) with an EXDEV
+ * copy+delete fallback, refusing an existing destination (no silent
+ * overwrite — the 0103 EEXIST rule). fo_delete is recursive (what
+ * SHFileOperation FO_DELETE does). All return 0 or -1 with errno set; the
+ * caller surfaces strerror(errno) (fileman: MessageBox).
+ *
+ * The clipboard file list rides the ONE kernel slot (todos/0090) as format
+ * FO_CLIP_FMT (fmt 1 is UTF-8 text — last write wins across formats, the
+ * Windows-ish rule). Payload: a "cut\n" or "copy\n" header line, then one
+ * absolute path per '\n'-terminated line — the CF_HDROP idea kept textual.
+ * Cut-paste is a move and clears the slot on success (a cut pastes once);
+ * copy-paste duplicates, uniquifying a name clash Win95-style ("Copy of X",
+ * "Copy (2) of X", ...).
+ */
+#ifndef FILEOPS_H
+#define FILEOPS_H
+
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define FO_CLIP_FMT  2               /* kernel clipboard slot format tag */
+#define FO_CLIP_MAX  8192            /* whole-list byte cap (v1) */
+#define FO_PATH_MAX  768
+
+/* The host clipboard primitives (todos/0090, host.js createClipboard) —
+ * redeclaring the __SDL.c imports is fine, imports dedup by name. */
+__import int __clip_set(int fmt, const void *bytes, int len);
+__import int __clip_get(int fmt, void *out, int cap);
+
+/* ---- the clipboard file list ---- */
+
+/* Put `n` absolute paths on the clipboard, marked cut or copy. */
+static int fo_clip_set(int cut, const char *const *paths, int n) {
+    char buf[FO_CLIP_MAX];
+    int len = snprintf(buf, sizeof buf, "%s\n", cut ? "cut" : "copy");
+    for (int i = 0; i < n; i++) {
+        int w = snprintf(buf + len, sizeof buf - (size_t)len, "%s\n", paths[i]);
+        if (w < 0 || len + w >= (int)sizeof buf) { errno = ENOMEM; return -1; }
+        len += w;
+    }
+    return __clip_set(FO_CLIP_FMT, buf, len) == 0 ? 0 : -1;
+}
+
+static int fo_clip_clear(void) { return __clip_set(0, 0, 0); }
+
+/* True when a file list is on the clipboard (the Paste gate). */
+static int fo_clip_has(void) { return __clip_get(FO_CLIP_FMT, 0, 0) > 0; }
+
+/* Load the list into `buf`: each path NUL-terminated in place, *cut set
+ * from the header. Returns the path count, 0 when the slot holds no file
+ * list. Walk with fo_clip_path(). */
+static int fo_clip_load(char *buf, int cap, int *cut) {
+    int total = __clip_get(FO_CLIP_FMT, buf, cap - 1);
+    if (total <= 0 || total > cap - 1) return 0;
+    buf[total] = 0;
+    char *nl = strchr(buf, '\n');
+    if (!nl) return 0;
+    *nl = 0;
+    *cut = strcmp(buf, "cut") == 0;
+    int n = 0;
+    for (char *p = nl + 1; *p; ) {
+        char *e = strchr(p, '\n');
+        if (!e) break;
+        *e = 0;
+        if (*p) n++;
+        p = e + 1;
+    }
+    return n;
+}
+
+/* The i-th path of a loaded list (buf as fo_clip_load left it). */
+static const char *fo_clip_path(const char *buf, int i) {
+    const char *p = buf + strlen(buf) + 1;       /* past the header */
+    while (i-- > 0) p += strlen(p) + 1;
+    return p;
+}
+
+/* ---- file operations ---- */
+
+static int fo_copy_file(const char *src, const char *dst, mode_t mode) {
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode & 0777);
+    if (out < 0) { int e = errno; close(in); errno = e; return -1; }
+    static char buf[32768];                      /* the wasm stack is 64KB */
+    int rc = 0;
+    for (;;) {
+        ssize_t r = read(in, buf, sizeof buf);
+        if (r < 0) { rc = -1; break; }
+        if (r == 0) break;
+        for (ssize_t off = 0; off < r; ) {
+            ssize_t w = write(out, buf + off, (size_t)(r - off));
+            if (w <= 0) { rc = -1; r = 0; break; }
+            off += w;
+        }
+        if (rc) break;
+    }
+    int e = errno;
+    close(in);
+    if (close(out) != 0 && rc == 0) { rc = -1; e = errno; }
+    errno = e;
+    return rc;
+}
+
+/* Recursive copy: file, symlink (as a link), or directory tree. Refuses
+ * dst inside src (a directory pasted into itself would recurse forever). */
+static int fo_copy(const char *src, const char *dst) {
+    size_t sl = strlen(src);
+    if (strncmp(dst, src, sl) == 0 && (dst[sl] == '/' || dst[sl] == 0)) {
+        errno = EINVAL;
+        return -1;
+    }
+    struct stat st;
+    if (lstat(src, &st) != 0) return -1;
+    if (S_ISLNK(st.st_mode)) {
+        char tgt[FO_PATH_MAX];
+        ssize_t n = readlink(src, tgt, sizeof tgt - 1);
+        if (n < 0) return -1;
+        tgt[n] = 0;
+        return symlink(tgt, dst);
+    }
+    if (!S_ISDIR(st.st_mode)) return fo_copy_file(src, dst, st.st_mode);
+    if (mkdir(dst, st.st_mode & 0777) != 0) return -1;
+    DIR *d = opendir(src);
+    if (!d) return -1;
+    int rc = 0;
+    struct dirent *de;
+    while (rc == 0 && (de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char s[FO_PATH_MAX], t[FO_PATH_MAX];
+        if (snprintf(s, sizeof s, "%s/%s", src, de->d_name) >= (int)sizeof s ||
+            snprintf(t, sizeof t, "%s/%s", dst, de->d_name) >= (int)sizeof t) {
+            errno = ENAMETOOLONG;
+            rc = -1;
+            break;
+        }
+        rc = fo_copy(s, t);
+    }
+    int e = errno;
+    closedir(d);
+    errno = e;
+    return rc;
+}
+
+/* Recursive delete: unlink, or depth-first rmdir for a directory. */
+static int fo_delete(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    if (!S_ISDIR(st.st_mode)) return unlink(path);
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    int rc = 0;
+    struct dirent *de;
+    while (rc == 0 && (de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char p[FO_PATH_MAX];
+        if (snprintf(p, sizeof p, "%s/%s", path, de->d_name) >= (int)sizeof p) {
+            errno = ENAMETOOLONG;
+            rc = -1;
+            break;
+        }
+        rc = fo_delete(p);
+    }
+    int e = errno;
+    closedir(d);
+    errno = e;
+    return rc == 0 ? rmdir(path) : rc;
+}
+
+/* Move: same-path no-op, rename(2), EXDEV falls back to copy+delete.
+ * An existing destination refuses with EEXIST — no silent overwrite. */
+static int fo_move(const char *src, const char *dst) {
+    if (strcmp(src, dst) == 0) return 0;
+    struct stat st;
+    if (lstat(dst, &st) == 0) { errno = EEXIST; return -1; }
+    if (rename(src, dst) == 0) return 0;
+    if (errno != EXDEV) return -1;
+    if (fo_copy(src, dst) != 0) return -1;
+    return fo_delete(src);
+}
+
+/* A free destination for pasting `name` into `dir`: the name itself, then
+ * "Copy of name", "Copy (2) of name", ... (the Win95 clash rule). */
+static int fo_paste_dest(const char *dir, const char *name,
+                         char *out, size_t cap) {
+    struct stat st;
+    for (int k = 0; k <= 99; k++) {
+        int w;
+        if (k == 0) w = snprintf(out, cap, "%s/%s", dir, name);
+        else if (k == 1) w = snprintf(out, cap, "%s/Copy of %s", dir, name);
+        else w = snprintf(out, cap, "%s/Copy (%d) of %s", dir, k, name);
+        if (w < 0 || w >= (int)cap) { errno = ENAMETOOLONG; return -1; }
+        if (lstat(out, &st) != 0) return 0;
+    }
+    errno = EEXIST;
+    return -1;
+}
+
+/* A free "base", "base 2", "base 3", ... child of `dir` with an optional
+ * extension — the New Folder / New Text File uniquifier (the 0091 rule,
+ * wm.c ctx_new_entry is the desktop's copy). */
+static int fo_new_dest(const char *dir, const char *base, const char *ext,
+                       char *out, size_t cap) {
+    struct stat st;
+    for (int k = 1; k <= 99; k++) {
+        int w;
+        if (k == 1) w = snprintf(out, cap, "%s/%s%s", dir, base, ext);
+        else w = snprintf(out, cap, "%s/%s %d%s", dir, base, k, ext);
+        if (w < 0 || w >= (int)cap) { errno = ENAMETOOLONG; return -1; }
+        if (lstat(out, &st) != 0) return 0;
+    }
+    errno = EEXIST;
+    return -1;
+}
+
+#endif /* FILEOPS_H */

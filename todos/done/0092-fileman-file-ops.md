@@ -1,6 +1,24 @@
 # 0092 — File manager operations — rename/delete/copy/cut/paste/properties
 
-- **Status**: open
+- **Status**: DONE (2026-07-11). fileman grew the full op set over a new
+  shared `os/fileops.h` core (copy/move/delete/paste-dest/new-dest +
+  the clipboard file-list, one implementation for fileman AND wm.c) behind
+  shell32's `SHFile*` veneer exports: a right-click context menu (Open /
+  Open With / Cut / Copy / Rename / Delete / Properties on a row; Paste /
+  New Folder / Refresh on the pane) over the 0091 TrackPopupMenu, F2/Del/
+  ^C/^X/^V accelerators (listbox-focus-gated so the path EDIT keeps its
+  own text chords), a rename dialog, delete confirm + Properties
+  MessageBoxes, and clean EROFS surfacing. The wm.c desktop menus grew
+  icon Cut/Copy + desktop Paste over the SAME format-2 clipboard file
+  list, so cut/copy/paste crosses fileman↔desktop. Delete is permanent
+  until the Recycle Bin (0093) reroutes it; multi-select/details is 0106;
+  desktop-icon rename is 0103; DnD is a recorded non-goal — all already
+  queued. Fell out: user32's agent AQ_CLICK now prefers an ENABLED match
+  (modal-over-modal is drivable) and `AppendMenuA` / `CreateAcceleratorTableA`
+  / `LB_ITEMFROMPOINT` landed. Image v52→v53. Tests: new
+  `tests/kernel/test_fileman_ops_e2e.js` (22 checks) +
+  `tests/browser/os-fileman.mjs`; ctxmenu goldens moved (desktop menu
+  120x116, icon menu 120x76). Dev log `logs/2026-07-11/0092-fileman-ops.md`.
 - **Design**: `todos/WIN32.md`. Grows `os/win32/fileman.c` from a
   navigator/launcher (0048) into a real Explorer. Uses the 0090 clipboard for
   cut/copy/paste and the 0091 context menu as the primary trigger; delete

@@ -433,7 +433,37 @@ popup items stay agent targets, which is how tests drive them. Tests:
 lists menu BARS before the `popupmenu` section; browser legs must
 quiesce ~1.5s after the VT2 settle or a late EV_SCREEN dismisses the
 popup under test).
-Image version is **v52**.
+File manager operations (todos/0092): the ONE file-ops core is
+`os/fileops.h` (header-only, the openwith.h precedent — shared by
+BOTH fileman and wm.c): recursive `fo_copy` (symlinks copy AS links —
+a Desktop launcher copies like a shortcut; refuses dir-into-itself),
+`fo_move` (rename(2) + EXDEV copy-delete, refuses an existing dest =
+EEXIST, no silent overwrite), recursive `fo_delete`, the "Copy of"/
+"Copy (N) of" paste uniquifier + the "New Folder N" new-dest one, and
+the CLIPBOARD FILE LIST — a format-2 payload on the ONE 0090 kernel
+slot ("cut\n"/"copy\n" header + one absolute path per line; fmt 1 text
+still last-write-wins across formats), so cut/copy/paste crosses
+processes (fileman↔fileman↔desktop). shell32 re-exports it as the
+VENEER-LOCAL `SHFile*`/`SHClip*` helpers (NOT real SHFileOperation —
+no corpus consumer for the double-NUL struct). fileman.c grew the
+right-click menu (Open/Open With[dir-gray]/Cut/Copy/Rename/Delete/
+Properties on a row; Paste[clip-gated]/New Folder/Refresh on the pane)
+over TrackPopupMenu, F2/Del/^C/^X/^V via a runtime accelerator table
+(GetFocus()==listbox gated so the path EDIT keeps its text chords),
+a rename dialog (the "Open with" picker pattern; Enter/Esc route from
+the message loop, EEXIST keeps it open), delete confirm (MB_YESNO) +
+Properties (stat facts) MessageBoxes, and EROFS surfaced as
+strerror(errno). wm.c's icon menu grew Cut/Copy (the selection set),
+the desktop menu grew Paste (both over fileops.h). NEW user32 surface:
+`AppendMenuA`, `CreateAcceleratorTableA`+ACCEL/FVIRTKEY, `LB_ITEMFROMPOINT`,
+and AQ_CLICK now prefers an ENABLED match (`agent_find_ex`) so
+modal-over-modal — an error box over the rename dialog — is drivable
+(a disabled same-labelled button no longer shadows the live one).
+Delete is PERMANENT until the Recycle Bin (0093) reroutes it; multi-
+select/details = 0106, desktop-icon rename = 0103, DnD = recorded
+non-goal. Tests: `tests/kernel/test_fileman_ops_e2e.js` +
+`tests/browser/os-fileman.mjs`.
+Image version is **v53**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

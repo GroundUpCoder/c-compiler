@@ -90,7 +90,7 @@ try {
   // dismisses popups (screen_changed) — quiesce before the first click.
   await pause(1500);
 
-  // ---- desktop right-click: menu up (wm.c geometry: 120x96 at the click,
+  // ---- desktop right-click: menu up (wm.c geometry: 120x116 at the click,
   // rows 20px/pad 4). (400,300) clears the icon column; menu interior
   // sampled at +60,+40 (below the row texts of NEW/SORT BY), the raised
   // edge at the exact corner. ----

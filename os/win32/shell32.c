@@ -12,6 +12,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../fileops.h"
+
+/* ---- 0092: the SHFileOperation-style helpers ----
+ * VENEER-LOCAL, not a Windows API (the real SHFileOperation struct-and-
+ * double-NUL shape has no consumer in the corpus): thin exports over the
+ * shared os/fileops.h core, so fileman and wm.c (which includes fileops.h
+ * directly — it is not a win32 app) stay behaviorally identical. 0 or -1
+ * with errno set; surface strerror(errno) to the user. */
+
+int SHFileCopy(const char *src, const char *dst) { return fo_copy(src, dst); }
+int SHFileMove(const char *src, const char *dst) { return fo_move(src, dst); }
+int SHFileDelete(const char *path) { return fo_delete(path); }
+
+int SHPasteDest(const char *dir, const char *name, char *out, int cap) {
+    return fo_paste_dest(dir, name, out, (size_t)cap);
+}
+
+int SHNewDest(const char *dir, const char *base, const char *ext,
+              char *out, int cap) {
+    return fo_new_dest(dir, base, ext, out, (size_t)cap);
+}
+
+/* The clipboard file list (fileops.h FO_CLIP_FMT over the 0090 slot). */
+int SHClipSetFiles(int cut, const char *const *paths, int n) {
+    return fo_clip_set(cut, paths, n);
+}
+int SHClipHasFiles(void) { return fo_clip_has(); }
+int SHClipLoadFiles(char *buf, int cap, int *cut) {
+    return fo_clip_load(buf, cap, cut);
+}
+const char *SHClipPath(const char *buf, int i) { return fo_clip_path(buf, i); }
+int SHClipClear(void) { return fo_clip_clear(); }
 
 int ShellAboutW(HWND owner, LPCWSTR app, LPCWSTR otherStuff, HICON icon) {
     (void)icon;

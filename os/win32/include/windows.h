@@ -855,6 +855,7 @@ typedef struct tagCREATESTRUCT {
 #define LB_GETTEXTLEN   0x018A
 #define LB_GETCOUNT     0x018B
 #define LB_DELETESTRING 0x0182
+#define LB_ITEMFROMPOINT 0x01A9
 #define LB_ERR          (-1)
 #define LBN_SELCHANGE 1
 #define LBN_DBLCLK    2
@@ -1519,6 +1520,17 @@ HANDLE  LoadImageW(HINSTANCE inst, LPCWSTR name, UINT type, int cx, int cy, UINT
 int     LoadStringW(HINSTANCE inst, UINT id, LPWSTR buf, int max);
 HACCEL  LoadAcceleratorsW(HINSTANCE inst, LPCWSTR name);
 int     TranslateAcceleratorW(HWND hwnd, HACCEL acc, MSG *msg);
+/* Runtime accelerator tables (0092: fileman's F2/Del/^C/^X/^V — no .res
+ * needed). fVirt is the Windows ACCEL flag word (FVIRTKEY 1, FSHIFT 4,
+ * FCONTROL 8, FALT 16); only FVIRTKEY entries match (LoadAccelerators
+ * semantics). */
+typedef struct tagACCEL { BYTE fVirt; WORD key; WORD cmd; } ACCEL, *LPACCEL;
+#define FVIRTKEY  1
+#define FNOINVERT 2
+#define FSHIFT    4
+#define FCONTROL  8
+#define FALT      16
+HACCEL  CreateAcceleratorTableA(LPACCEL entries, int n);
 BOOL    DestroyIcon(HICON icon);
 BOOL    DestroyCursor(HCURSOR cur);
 HCURSOR SetCursor(HCURSOR cur);
@@ -1547,6 +1559,7 @@ BOOL  SetMenu(HWND hwnd, HMENU menu);
 HMENU GetSubMenu(HMENU menu, int pos);
 HMENU GetSystemMenu(HWND hwnd, BOOL revert);
 BOOL  AppendMenuW(HMENU menu, UINT flags, UINT_PTR id, LPCWSTR text);
+BOOL  AppendMenuA(HMENU menu, UINT flags, UINT_PTR id, LPCSTR text);
 BOOL  InsertMenuW(HMENU menu, UINT pos, UINT flags, UINT_PTR id, LPCWSTR text);
 BOOL  DeleteMenu(HMENU menu, UINT pos, UINT flags);
 BOOL  RemoveMenu(HMENU menu, UINT pos, UINT flags);

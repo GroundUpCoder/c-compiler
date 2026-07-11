@@ -198,6 +198,33 @@ wm.c desktop/taskbar menus are separate machinery (todos/WM.md — the
 Start-menu furniture pattern, not this overlay). fileman's path EDIT
 gets the menu for free; its file-LIST menu is 0092's.
 
+0092 (fileman file operations, 2026-07-11) turned fileman from a
+navigator into a real Explorer. The op CORE is `os/fileops.h`
+(header-only, the openwith.h precedent — ONE implementation shared by
+fileman AND wm.c, which is not a win32 app): recursive copy (symlinks
+copy AS links, refuses dir-into-itself), move (rename(2) + EXDEV
+copy-delete, refuses EEXIST — no silent overwrite), recursive delete,
+the "Copy of"/"Copy (N) of" and "New Folder N" uniquifiers, and the
+CLIPBOARD FILE LIST: a format-2 payload over the ONE 0090 kernel slot
+("cut\n"/"copy\n" + one path per line), so cut/copy/paste crosses
+processes. shell32 re-exports it as VENEER-LOCAL `SHFile*`/`SHClip*`
+(NOT the real SHFileOperation double-NUL struct — no corpus consumer).
+fileman.c: the right-click menu (Open/Open With[dir-gray]/Cut/Copy/
+Rename/Delete/Properties on a row; Paste[clip-gated]/New Folder/
+Refresh on the pane) over TrackPopupMenu, F2/Del/^C/^X/^V via a
+runtime accelerator table (listbox-focus gated so the path EDIT keeps
+its text chords), a rename DIALOG (the "Open with" picker pattern;
+Enter/Esc route from the message loop, EEXIST keeps it open), delete
+confirm (MB_YESNO) + Properties (stat) MessageBoxes, EROFS surfaced as
+strerror(errno). New user32 surface: `AppendMenuA`,
+`CreateAcceleratorTableA` + ACCEL/FVIRTKEY, `LB_ITEMFROMPOINT`, and —
+the friction that fell out — AQ_CLICK now prefers an ENABLED match
+(`agent_find_ex`, `Find.wantEnabled`) so modal-over-modal (an error
+box over the rename dialog) is agent-drivable: a disabled
+same-labelled button no longer shadows the live one. Delete is
+PERMANENT until 0093 reroutes it. Tests:
+`tests/kernel/test_fileman_ops_e2e.js` + `tests/browser/os-fileman.mjs`.
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`
