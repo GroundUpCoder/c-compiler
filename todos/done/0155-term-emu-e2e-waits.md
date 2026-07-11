@@ -1,6 +1,17 @@
 # 0155 — Retire remaining kernel e2e sleeps: term tty-render waits + audit emulator/misc timing-subjects (0083 residue)
 
-- **Status**: open
+- **Status**: DONE (2026-07-12). Added `wmctl wait dim|dst SID WxH` (RESIZE /
+  SET_DST ack round-trips) to os/wmctl.c, then swept all eight files: spawn →
+  `wait win`, teardown → `wait nowin/gone`, geometry acks → `wait dim/dst`,
+  minimize state → `wait flag/noflag m`, launch deltas → `wait atleast`, async
+  fs outcomes → bounded polls, gpubox frozen poses → `wait seq 1`; every
+  remaining sleep is an annotated timing subject (multi-frame renders, coarse
+  desk_load ticks, in-surface selection/rename settles, negatives). Sleep
+  counts: wm_service 53→38, term 22→12, sameboy 5→3, punes 5→3, mgba 2→1,
+  gpubox 5→0, os_apps 3→1, cairo 3→2 — `grep "'sleep "` shows no bare entry.
+  test_os_boot.js audited: its sleeps are the pgrep/pkill/usleep subject, not
+  sync — no change. Image v74→v75. Full kernel suite 58/58 green. No residue /
+  follow-ups. Dev log: logs/2026-07-12/0155-term-emu-e2e-waits.md.
 - **Design**: this file (spawned from `todos/0083`)
 
 ## Goal

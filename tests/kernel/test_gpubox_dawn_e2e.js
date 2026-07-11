@@ -53,28 +53,30 @@ const CLEAR = [Math.round(255 * 0.08), Math.round(255 * 0.08), Math.round(255 * 
 function sessionRender() {
   const script = [
     'gpubox -f 0 &',
-    'sleep 4',                                      // wasm boot + Dawn adapter/device
+    'wmctl wait win gpubox',                         // window spawn (0155)
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $SID 1',                         // first Dawn frame presented (device+surface ready) (0155)
     'wmctl shot $SID /root/g0.ppm && echo shot0-ok',
     // Client resize (todos/0019): configure -> gpubox reconfigures its Dawn
     // surface + depth at 320x200 -> readback ack swaps the kernel buffer.
     'wmctl resize $SID 320 200 && echo resize-ok',
-    'sleep 2',
+    'wmctl wait dim $SID 320x200',                   // reconfigure ack: readback swapped the kernel buffer (0155)
     'echo ==list1b',
     'wmctl list',
     'wmctl shot $SID /root/gr.ppm && echo shotr-ok',
     'wmctl close $SID',
-    'sleep 2',                                      // SDL_Quit -> drain -> exit
+    'wmctl wait nowin gpubox',                       // SDL_Quit -> Dawn drain -> exit -> window gone (0155)
     'echo ==list2',
     'wmctl list',
     'gpubox -f 45 &',
-    'sleep 3',
+    'wmctl wait win gpubox',                         // window spawn (0155)
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $SID 1',                         // first Dawn frame presented (0155)
     'wmctl shot $SID /root/g45.ppm && echo shot45-ok',
     'wmctl close $SID',
-    'sleep 2',
+    'wmctl wait nowin gpubox',                       // window gone (0155)
     'echo ==list3',
     'wmctl list',
     '',

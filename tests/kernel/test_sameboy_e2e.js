@@ -37,21 +37,22 @@ const HAVE_GBC = fs.existsSync(path.join(ROOT, 'vendor/gameboy/roms/SuperMarioDe
 function sessionApps() {
   const script = [
     'sameboy &',
-    'sleep 5',                                     // instantiation + dmg_boot + checkerboard
+    'wmctl wait win SameBoy',                       // window spawn (0155)
+    'sleep 3',                                      // timing subject: instantiation + dmg_boot -> checkerboard frames render
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "SameBoy$" | sed "s/[^0-9].*//")',
     'wmctl shot $SID /root/sb1.ppm && echo shot-1-ok',
-    'sleep 2.5',
+    'sleep 2.5',                                   // timing subject: the test ROM must animate (SCX scroll) between the two shots
     'wmctl shot $SID /root/sb2.ppm && echo shot-2-ok',
     'kill %1',
-    'sleep 1',
+    'wmctl wait nowin SameBoy',                     // window gone (0155)
   ].concat(HAVE_GBC ? [
     'sameboy /root/roms/SuperMarioDeluxe.gbc &',
-    'sleep 20',                                    // cgb_boot animation + game intro
+    'wmctl wait win SameBoy',                       // window spawn (0155)
+    'sleep 20',                                    // timing subject: cgb_boot animation + game intro frames render
     'CSID=$(wmctl list | grep "SameBoy$" | sed "s/[^0-9].*//")',
     'wmctl shot $CSID /root/sbc.ppm && echo shot-cgb-ok',
-    'sleep 1',
   ] : []).concat([
     'grep "^gb" /etc/openwith /usr/share/openwith 2>/dev/null || echo ==assoc',
     'cat /usr/share/openwith',

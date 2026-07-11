@@ -33,17 +33,19 @@ function sessionA() {
     'cairodemo selftest',
     'echo SELFTEST-EXIT=$?',
     'cairodemo &',
-    'sleep 4',                                       // wasm boot + freetype + first paint
+    'wmctl wait win cairodemo',                      // window spawn (0155)
+    'sleep 2',                                       // timing subject: wasm boot + freetype + first vector paint render
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "cairodemo$" | sed "s/[^0-9].*//")',
     'wmctl shot $SID /root/c1.ppm && echo shot1-ok',
     'wmctl key $SID 7 100',                          // any KEYDOWN -> dark theme
-    'sleep 2',
+    'sleep 2',                                       // timing subject: dark-theme vector redraw render
     'wmctl shot $SID /root/c2.ppm && echo shot2-ok',
     'wmctl key $SID 7 100',                          // toggle back
     'wmctl resize $SID 600 450 && echo resize-ok',
-    'sleep 3',                                       // ack + vector redraw
+    'wmctl wait dim $SID 600x450',                   // resize ack landed (0155)
+    'sleep 1',                                       // timing subject: post-resize vector redraw render
     'echo ==list2',
     'wmctl list',
     'wmctl shot $SID /root/c3.ppm && echo shot3-ok',

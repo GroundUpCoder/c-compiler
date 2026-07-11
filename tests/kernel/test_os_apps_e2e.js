@@ -75,11 +75,12 @@ function sessionApps() {
     'ls -l /root/doom1.wad',                        // bin entry seeded
     'ls -l /root/id1/pak0.pak',                     // 18MB bin entry (todos/0018)
     'doom &',
-    'sleep 5',                                      // wasm instantiation + WAD load
+    'wmctl wait win "DOOM Shareware"',              // window spawn (0155)
     GB_CMD,
-    'sleep 3.5',
+    'wmctl wait win Peanut-GB',                     // window spawn (0155)
     'quake &',
-    'sleep 6',                                      // pak load + demo start
+    'wmctl wait win Quake',                         // window spawn (0155)
+    'sleep 6',                                      // timing subject: WAD/pak load, quake VID_Init (r flag) + first frames render before the shots
     'echo ==list1',
     'wmctl list',
     'DSID=$(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")',

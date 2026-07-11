@@ -39,35 +39,36 @@ const keys = (s) => [...s].map((ch) => 'wmctl key $TSID 0 ' + ch.charCodeAt(0)).
 function sessionTerm() {
   const script = [
     'term &',
-    'sleep 5',                                     // wasm + freetype + hush spawn
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt freetype render (multi-frame)
     'echo ==list1',
     'wmctl list',
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     'wmctl shot $TSID /root/t1.ppm && echo shot1-ok',
     keys('ls /bin\r'),
-    'sleep 2',
+    'sleep 2',                                     // timing subject: pty echo + ls output freetype render (multi-frame)
     'wmctl shot $TSID /root/t2.ppm && echo shot2-ok',
     // vi inside the terminal. ESC is sent alone with air on both sides:
     // vi's read_key resolves a lone ESC by timeout.
     keys('vi /tmp/t.txt\r'),
-    'sleep 2.5',
+    'sleep 2.5',                                   // timing subject: vi alt-screen render (multi-frame)
     'wmctl shot $TSID /root/tvi.ppm && echo shotvi-ok',
     keys('ihey from term'),
-    'sleep 1.5',
+    'sleep 1.5',                                   // timing subject: insert-mode text render (multi-frame)
     keys('\x1b'),
-    'sleep 1.5',
+    'sleep 1.5',                                   // timing subject: lone-ESC resolves by vi's read_key timeout
     keys(':wq\r'),
-    'sleep 2.5',
+    'sleep 2.5',                                   // timing subject: write + return-to-shell render (multi-frame)
     // Drag-resize equivalent over the agent channel (the kernel path is
     // identical past the drag): reflow + TIOCSWINSZ + re-render.
     'wmctl resize $TSID 500 260',
-    'sleep 2.5',
+    'wmctl wait dim $TSID 500x260',                // resize ack: SURFACE_CONFIGURE + reflow landed (0155)
     'echo ==list2',
     'wmctl list',
     'wmctl shot $TSID /root/trs.ppm && echo shotrs-ok',
     // Session teardown: hush exits -> term reaps it -> window gone.
     keys('exit\r'),
-    'sleep 2.5',
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
     'echo ==list3',
     'wmctl list',
     'echo ==cat',
@@ -176,38 +177,40 @@ function sessionNested() {
   const script = [
     // A: SIGKILL the parent -> the whole nested session dies
     'term &',
-    'sleep 5',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: inner hush startup before it can read typed input
     `T1=$(${TROW} | head -n 1 | cut -f1)`,
     `P1=$(${TROW} | head -n 1 | cut -f2)`,
     keysT('T1', 'term &\r'),
-    'sleep 6',
+    'wmctl wait count term 2',                     // the nested term's window (0155)
     `T2=$(${TROW} | tail -n 1 | cut -f1)`,
     `P2=$(${TROW} | tail -n 1 | cut -f2)`,
     'echo ==nest1',
     'wmctl list',
     'kill -9 $P1',
-    'sleep 2.5',
+    'wmctl wait nowin term',                       // SIGHUP cascade tears the whole nested session down (0155)
     'echo ==nest2',
     'wmctl list',
     'kill -0 $P2 || echo nested-child-died-with-parent',
     // B: exit the parent shell -> the bg child survives, works, closes
     'term &',
-    'sleep 5',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: inner hush startup before it can read typed input
     `T1=$(${TROW} | head -n 1 | cut -f1)`,
     keysT('T1', 'term &\r'),
-    'sleep 6',
+    'wmctl wait count term 2',                     // the nested term's window (0155)
     `T2=$(${TROW} | tail -n 1 | cut -f1)`,
     `P2=$(${TROW} | tail -n 1 | cut -f2)`,
     keysT('T1', 'exit\r'),
-    'sleep 3',
+    'wmctl wait count term 1',                     // parent exits -> its window closes; the orphan child survives (0155)
     'echo ==nest3',
     'wmctl list',
     'kill -0 $P2 && echo orphan-alive',
     keysT('T2', 'mkdir /qnest\r'),
-    'sleep 3',
+    'for i in $(seq 1 120); do [ -d /qnest ] && break; sleep 0.05; done',  // orphan executes typed input (bounded poll, 0155)
     'test -d /qnest && echo orphan-responsive',
     'wmctl close $T2',
-    'sleep 2.5',
+    'wmctl wait gone $T2',                          // close box reclaims the orphan (0155)
     'echo ==nest4',
     'wmctl list',
     '',
@@ -240,19 +243,20 @@ function sessionLess() {
   const script = [
     'seq 100 > /tmp/big.txt',
     'term &',
-    'sleep 5',
+    'wmctl wait win term',                         // window spawn (0155)
+    'sleep 2',                                     // timing subject: hush banner + prompt render before it can read typed input
     'TSID=$(wmctl list | grep "\tterm$" | sed "s/[^0-9].*//")',
     keys('less /tmp/big.txt\r'),
-    'sleep 2.5',
+    'sleep 2.5',                                   // timing subject: less alt-screen render (multi-frame)
     'wmctl shot $TSID /root/tless.ppm && echo shotless-ok',
     keys(' '),                       // space: page down inside less
-    'sleep 1.5',
+    'sleep 1.5',                                   // timing subject: page-down render (multi-frame)
     keys('q'),                       // quit back to hush
-    'sleep 1.5',
+    'sleep 1.5',                                   // timing subject: return-to-shell render (multi-frame)
     keys('echo lessrc=$? > /tmp/lessrc\r'),
-    'sleep 1.5',
+    'for i in $(seq 1 120); do [ -s /tmp/lessrc ] && break; sleep 0.05; done',  // typed echo wrote the rc file (bounded poll, 0155)
     keys('exit\r'),
-    'sleep 2.5',
+    'wmctl wait nowin term',                       // hush exits -> term reaps -> window gone (0155)
     'echo ==rc',
     'cat /tmp/lessrc',
     'echo ==done',

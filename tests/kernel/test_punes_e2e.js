@@ -27,13 +27,14 @@ const { dir: tmp, image } = freshImage('os-punes-');
 function sessionApps() {
   const script = [
     'punes &',
-    'sleep 8',                                   // core init + emu_turn_on + frames
+    'wmctl wait win puNES',                       // window spawn (0155)
+    'sleep 4',                                    // timing subject: core init + emu_turn_on + PPU frames render (blue fill)
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "puNES$" | sed "s/[^0-9].*//")',
     'wmctl shot $SID /root/nes1.ppm && echo shot-1-ok',
     'kill %1',
-    'sleep 1',
+    'wmctl wait nowin puNES',                     // window gone (0155)
     'echo ==assoc',
     'grep "^nes" /etc/openwith /usr/share/openwith 2>/dev/null',
     '',
@@ -100,15 +101,16 @@ function sessionFrames() {
 function sessionInput() {
   const script = [
     'punes &',
-    'sleep 8',
+    'wmctl wait win puNES',                          // window spawn (0155)
+    'sleep 4',                                       // timing subject: core init + emu_turn_on + PPU frames render (blue fill)
     'SID=$(wmctl list | grep "puNES$" | sed "s/[^0-9].*//")',
     'wmctl shot $SID /root/ni.ppm && echo ni-ok',   // no input: blue
     'wmctl keydown $SID 0 122 0',                    // hold A
-    'sleep 1',
+    'sleep 1',                                       // timing subject: NMI polls the pad -> backdrop tints white over the next frames
     'wmctl shot $SID /root/ap.ppm && echo ap-ok',    // A held: white
     'wmctl keyup $SID 0 122 0',
     'kill %1',
-    'sleep 1',
+    'wmctl wait nowin puNES',                        // window gone (0155)
     'printf __NI__; cat /root/ni.ppm; printf __AP__; cat /root/ap.ppm; printf __END__',
     '',
   ].join('\n');

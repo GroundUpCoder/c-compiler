@@ -14,6 +14,8 @@
  *                                       gone SID
  *                                       flag SID CH / noflag SID CH
  *                                       seq SID N   (frame_seq >= N)
+ *                                       dim SID WxH (buffer geometry ==)
+ *                                       dst SID WxH (on-screen dst rect ==)
  *   wmctl focus|min|restore|close|raise|lower SID
  *   wmctl move SID X Y
  *   wmctl resize SID W H              asks the client; applies at its ack
@@ -113,6 +115,7 @@ static int usage(void) {
         "       wmctl wait gone SID [MS]\n"
         "       wmctl wait flag|noflag SID CHAR [MS]\n"
         "       wmctl wait seq SID N [MS]\n"
+        "       wmctl wait dim|dst SID WxH [MS]\n"
         "       wmctl wait label|nolabel LABEL [MS]\n"
         "       wmctl wait text LABEL SUBSTR [MS]\n"
         "       wmctl focus|min|restore|close|raise|lower SID\n"
@@ -368,7 +371,11 @@ static const wmp_rec *wm_by_sid(const wmp_rec *recs, int n, int32_t sid) {
  *   gone SID       SID no longer listed
  *   flag SID CH    SID present AND its FLAGS column contains CH
  *   noflag SID CH  SID present AND its FLAGS column lacks CH
- *   seq SID N      SID present AND frame_seq >= N */
+ *   seq SID N      SID present AND frame_seq >= N
+ *   dim SID WxH    SID present AND buffer w==W && h==H (a RESIZE ack landed —
+ *                  position-agnostic, so a WM-placed window needn't be pinned)
+ *   dst SID WxH    SID present AND on-screen dst_w==W && dst_h==H (a SET_DST /
+ *                  scale-to-fit ack landed) */
 static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
     if (!strcmp(cond, "win"))   return wm_count_title(recs, n, a[0]) > 0;
     if (!strcmp(cond, "nowin")) return wm_count_title(recs, n, a[0]) == 0;
@@ -385,6 +392,14 @@ static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
     if (!strcmp(cond, "seq")) {
         const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(a[0]));
         return r && r->frame_seq >= atoi(a[1]);
+    }
+    if (!strcmp(cond, "dim") || !strcmp(cond, "dst")) {
+        const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(a[0]));
+        if (!r) return 0;
+        int w = 0, h = 0;
+        if (sscanf(a[1], "%dx%d", &w, &h) != 2) return 0;
+        return cond[1] == 'i' ? (r->w == w && r->h == h)
+                              : (r->dst_w == w && r->dst_h == h);
     }
     return -1;   /* unknown condition */
 }

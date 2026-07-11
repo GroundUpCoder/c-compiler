@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-12; 0154 agent-tree waits landed)
+# Handoff — start of thread (updated 2026-07-12; 0155 hard-tail e2e waits landed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,53 +7,56 @@
 
 ## Where the repo stands
 
-**0154 (agent-tree waits) is DONE and committed.** The `sleep N`
-synchronization class is now retired from the **win32-app** kernel e2es too —
-0083 did the pure-WM ones over the window list; this did the in-app ones over
-the win32 agent tree.
+**0155 (hard-tail kernel e2e sleeps) is DONE and committed.** This closes the
+0083 sleep-sync sweep: the settles that were neither cleanly window-observable
+(0083) nor win32-agent-tree (0154). The `sleep N` guess-wait class is now
+retired from the whole kernel e2e estate.
 
-- **New primitive: `wmctl wait label|nolabel|text` (`os/wmctl.c`)** — polls the
-  per-process win32 agent tree (`AQ_GETTEXT`, the same resolver `wmctl click
-  LABEL`/`gettext` use) to a failure deadline (default 15000ms, exit 1 on
-  timeout):
-  - `wait label LABEL [MS]` / `wait nolabel LABEL [MS]` — a widget with that
-    label exists / is gone in ANY win32 app.
-  - `wait text LABEL SUBSTR [MS]` — that widget's `WM_GETTEXT` contains SUBSTR.
-  - LABEL resolves like `click`: window text ('&' stripped) or `CLASS:n`
-    (`EDIT:0`, `LISTBOX:0`, …). Routed before `wmp_connect` (talks to apps, not
-    the kernel).
-- **All 14 win32-app e2es converted**: ~324 → ~73 `sleep` lines. Real WM windows
-  (MessageBox / `#32770` / comdlg32 / wm.c popups) use the 0083 `wait win`/
-  `nowin`; in-app control state uses the new `wait label/text`; async file/clip
-  outcomes use bounded `[ -s ]`/`clip -o | grep` polls.
-- **Key limitation, hit in 3 files independently**: the agent tree resolves
-  HWNDs, not menu items — an in-surface `TrackPopupMenu` / menu-BAR dropdown item
-  is *clickable* (AQ_CLICK) but not *gettext-able*, so `wait label/text` can't
-  observe it. Those open/close settles stay annotated `sleep`s, alongside
-  pixel-only render settles (`wmctl shot`), the dialog ` focus ` tree marker,
-  WM_TIMER clock ticks, double-click windows, coarse wm.c desktop `.icons`
-  ticks, and negative checks. Every kept sleep carries a one-line reason.
+- **Two new `wmctl` wait primitives (`os/wmctl.c`)** for RESIZE/SET_DST ack
+  round-trips — the residue class 0083 couldn't express ("same-window geometry
+  change", not a window appearing):
+  - `wmctl wait dim SID WxH` — buffer `w==W && h==H` (a RESIZE ack landed;
+    **position-agnostic**, so a WM-placed window needn't be pinned).
+  - `wmctl wait dst SID WxH` — on-screen `dst_w==W && dst_h==H` (a SET_DST /
+    scale-to-fit ack landed).
+- **Eight e2es swept** — spawn→`wait win`, teardown→`wait nowin/gone`, geometry
+  acks→`wait dim/dst`, minimize state→`wait flag/noflag m`, launch deltas→
+  `wait atleast winbox $((N+1))`, async fs outcomes→bounded `for … [ -e … ] &&
+  break` polls, gpubox frozen poses→`wait seq $SID 1` (first Dawn present
+  subsumes the variable adapter/device init). Sleep counts: wm_service 53→38,
+  term 22→12, sameboy 5→3, punes 5→3, mgba 2→1, gpubox 5→0, os_apps 3→1,
+  cairo 3→2.
+- **Kept as annotated timing subjects** (grep `"'sleep "` shows no bare entry):
+  multi-frame content renders (pty echo + command output, vi/less alt-screen,
+  game/emulator boot-animation-to-shot — a single `wait seq +1` would
+  under-wait), coarse wm.c `desk_load` ~1s ticks, in-surface desktop
+  selection / inline-rename settles (no window observable), keyboard move/size
+  mode-engage (popup is the key grabber, no flag), and the negatives
+  (no-spawn / no-op / EEXIST-keeps-both / Esc-untouched). Every kept sleep
+  carries a one-line reason.
+- **test_os_boot.js audited, unchanged** — its "sleep" hits are the
+  pgrep/pkill/usleep *subject under test*, not synchronization.
 
-Dev log: `logs/2026-07-12/0154-agent-tree-waits.md`. Item:
-`todos/done/0154-wmctl-wait-agent-tree.md`.
+Dev log: `logs/2026-07-12/0155-term-emu-e2e-waits.md`. Item:
+`todos/done/0155-term-emu-e2e-waits.md`.
 
 ## Tests / verification
 
 - **Full kernel suite green: 58 passed, 0 failed** (`node tests/kernel/run.js`,
-  ~385s, parallel — which is also the 0081 contention / under-load check).
-- Every converted file also verified individually (the ones with dropped
-  inter-op sleeps run 2–3×). Assertions and `==markers` are byte-for-byte
-  unchanged in all 14 (only the boot-script arrays moved).
-- `os/wmctl.c` recompiles clean (`node compiler.js -I=os os/wmctl.c -o …`); the
-  new `wait` routing is additive.
+  ~1101s, parallel).
+- All eight converted files verified individually too (term, wm_service,
+  os_apps, cairo, sameboy, gpubox, punes, mgba — all PASS).
+- `os/wmctl.c` recompiles clean; the new `dim`/`dst` conditions key off the
+  existing `WMP_LIST` `wmp_rec` (`w/h/dst_w/dst_h`) — additive, default 2-arg
+  shape, no `do_wait` change.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **Image bumped v73→v74** (wmctl.c is a seeded bake input) and the prebaked
+- **Image bumped v74→v75** (wmctl.c is a seeded bake input) and the prebaked
   fixture was rebaked. Any edit to a seeded `os/*.c/.h/.rc` or `compiler.js`/
   `host.js`/`vendor/` restales `os/os-system.img`; bump `image.json` `version`
   on a seeded-source edit or a persistent browser OPFS image won't re-fetch.
-  (CLAUDE.md still says "v64" in prose — stale; `image.json` version is now 74.)
+  (CLAUDE.md still says "v64" in prose — stale; `image.json` version is now 75.)
 - **`queue.js done` stages a PRE-EDIT blob** of the done file — after `done`,
   `git add todos/done/<file>` again (done this session; verified the staged
   blob carries the DONE Status line).
@@ -67,19 +70,21 @@ Dev log: `logs/2026-07-12/0154-agent-tree-waits.md`. Item:
 
 ## Next in queue
 
-`node todos/queue.js list` for the authoritative order. Head is now **0155**
-(the hard-tail kernel/term/emulator sleeps — the last of the 0083 sleep
-residue), then **0147** (test flake gate, [light]), **0079/0080**, **0052/0053**,
-**0064**. No open P0s. **0147** (flake gate) + **0148** (test-tightness sweep)
-can now build on the unified `tests/run.js` entry (0084) plus these event waits.
+`node todos/queue.js list` for the authoritative order. Head is now **0147**
+(test flake gate, [light]), then **0079/0080**, **0052/0053**, **0064**. No open
+P0s. **0147** (flake gate) + **0148** (test-tightness sweep) can build on the
+unified `tests/run.js` entry (0084) plus the 0083/0154/0155 event waits — the
+whole kernel e2e estate is now sync-sleep-free, so a flake gate has a clean
+baseline.
 
 ## Operator-owed (browser, Playwright required)
 
 - **0064** — the standing WM browser-sweep debt (pointer-lock human check).
 - **0152** — a `--clang` browser boot confirming the served overlay renders.
 - **0153** — run `os-sweep.mjs` to validate the 0146/0083 harness conversions
-  (the browser `os-*.mjs` files were already event-based after 0083; 0154 only
-  touched the headless kernel e2es, so no new browser debt from this item).
+  (0155 only touched headless kernel e2es — no new browser debt; the new
+  `wait dim/dst` primitives are available to browser drivers if a future sweep
+  conversion wants them).
 
 Launch Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan` (0055 —
 boot REQUIRES worker WebGPU). `node tests/run.js sweep` runs the whole sweep.
@@ -87,15 +92,17 @@ boot REQUIRES worker WebGPU). `node tests/run.js sweep` runs the whole sweep.
 ## Don't re-litigate
 
 posix_spawn-not-fork; kernel-owned fds; WM.md invariants; DISK-IMAGE.md's
-settled layout; 0013–0155's recorded decisions (see todos/done/). **0154's
-call: agent-tree waits reuse the existing `agent_scan`/`AQ_GETTEXT` machinery
-(no new opcode); in-surface menu items are HWND-less so they can't be waited on
-— those settles stay annotated `sleep`s by design, not oversight.**
+settled layout; 0013–0155's recorded decisions (see todos/done/). **0155's
+call: game/emulator/term multi-frame renders and coarse wm.c ticks are genuine
+timing subjects — a single `wait seq +1` under-waits (catches the boot/echo
+frame, not the asserted content), so a generous annotated sleep is the correct
+wait, not oversight. Only static-render frozen poses (gpubox `-f`) use
+`wait seq 1`.**
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want to
-tackle — `node todos/queue.js list` for the order (0154 agent-tree waits just
-landed: `wmctl wait label/text` retired the sleep-sync class from all 14
-win32-app kernel e2es, full kernel suite 58/58; head is now 0155 for the last
-hard-tail sleeps; no open P0s)."
+tackle — `node todos/queue.js list` for the order (0155 hard-tail e2e waits just
+landed: `wmctl wait dim/dst` + a sweep of eight term/emulator/misc e2es retired
+the last of the 0083 sleep-sync class, full kernel suite 58/58; head is now 0147
+flake gate; no open P0s)."

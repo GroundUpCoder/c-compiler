@@ -27,13 +27,14 @@ const { dir: tmp, image } = freshImage('os-mgba-');
 function sessionApps() {
   const script = [
     'mgba &',
-    'sleep 6',                                   // core init + HLE BIOS + test ROM
+    'wmctl wait win mGBA',                        // window spawn (0155)
+    'sleep 4',                                    // timing subject: core init + HLE BIOS + test ROM frames render
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "mGBA$" | sed "s/[^0-9].*//")',
     'wmctl shot $SID /root/gba1.ppm && echo shot-1-ok',
     'kill %1',
-    'sleep 1',
+    'wmctl wait nowin mGBA',                      // window gone (0155)
     'grep "^gb" /etc/openwith /usr/share/openwith 2>/dev/null || echo ==assoc',
     'cat /usr/share/openwith',
     '',

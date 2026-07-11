@@ -105,19 +105,19 @@ const script = [
   'echo ==list6',
   'wmctl list',
   'wmctl max $WSID && echo max-ok',              // maximize/restore (todos/0025)
-  'sleep 1',                                     // RESIZE round-trips the client ack
+  'wmctl wait dim $WSID 1024x712',               // maximize RESIZE ack landed (0155)
   'echo ==list7',
   'wmctl list',
   'wmctl max $WSID',                             // toggle back
-  'sleep 1',
+  'wmctl wait dim $WSID 240x160',                // restore RESIZE ack landed (0155)
   'echo ==list8',
   'wmctl list',
   'wmctl max $FSID',                             // fixed-size: scale-to-fit branch
-  'sleep 0.5',
+  'wmctl wait dst $FSID 960x640',                // scale-to-fit SET_DST ack landed (0155)
   'echo ==list9',
   'wmctl list',
   'wmctl max $FSID',                             // restore the pre-max dst
-  'sleep 0.5',
+  'wmctl wait dst $FSID 480x320',                // restore SET_DST ack landed (0155)
   'echo ==list10',
   'wmctl list',
   'kill $WMPID',                                 // crash the WM
@@ -173,7 +173,7 @@ const script = [
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DSID /root/d.ppm && echo desk-shot-ok',
   `wmctl click $DSID 58 ${deskY(DESK_ENTRIES, 'gameboy')}`,   // SINGLE click the gameboy icon
-  'sleep 2.5',                                   // would-be spawn time
+  'sleep 2.5',                                   // timing subject: proves a single click does NOT spawn (the would-be spawn window)
   'echo ==desk2',
   'wmctl list',
   `wmctl dblclick $DSID 58 ${deskY(DESK_ENTRIES, 'term')}`,   // double-click the term icon
@@ -193,7 +193,7 @@ const script = [
   // Buttons: [4 pre-existing][W1][W3][W4] now; button 5 (x center 650)
   // must focus W3 (compaction) — swap-remove would put W4 there.
   'wmctl click $TSID 650 14',
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: taskbar-button focus/compaction settle (target sid computed post-hoc in JS)
   'echo ==bar2',
   'wmctl list',
   // Overflow: two more windows -> 9 buttons only fit shrunk left of the
@@ -229,18 +229,18 @@ const script = [
   'wmctl min $FSID',                             // minimize the 2nd-recent
   'wmctl wait flag $FSID m',
   'wmctl cycle -1',                              // must skip it
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: cycle-focus settle (skips the minimized window; target computed in JS)
   'echo ==cyc4',
   'wmctl list',
   'wmctl cycle',                                 // forward: the LRU window
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: forward-cycle focus settle (target computed in JS)
   'echo ==cyc5',
   'wmctl list',
   // ---- z layers (todos/0038): the real wm.c pins its furniture — the
   // taskbar rides the TOP layer, the desktop the BOTTOM one; a raise (or
   // any later create) must stop below the bar. ----
   'wmctl raise $WSID',
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: raise z-order settle (z-order verified in JS)
   'echo ==layer1',
   'wmctl list',
   // ---- the focus fall skips pinned furniture (todos/0039): SIGKILL the
@@ -261,15 +261,16 @@ const script = [
   // above). ----
   "printf '#!/bin/sh\\nwinbox\\n' > /root/Desktop/alauncher",
   "printf 'plain notes, not a program\\n' > /root/Desktop/notes.txt",
-  'sleep 2.5',                                   // desk_load re-read tick (~1s)
+  'sleep 2.5',                                   // timing subject: wm.c desk_load re-read poll (~1s tick) picks up the new icons
   'echo ==act1',
   'wmctl list',
+  'ACW=$(wmctl list | grep -c winbox$)',
   `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'alauncher')}`,  // the alauncher icon (sorted)
-  'sleep 3',                                     // sh -> winbox spawn
+  'wmctl wait atleast winbox $((ACW+1))',        // #!/bin/sh launcher -> winbox spawns (0155)
   'echo ==act2',
   'wmctl list',
   `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'notes.txt')}`,  // the notes.txt icon
-  'sleep 5',                                     // notepad loads freetype + .res
+  'for i in $(seq 1 200); do wmctl list | grep -q Notepad && break; sleep 0.05; done',  // plain text -> notepad opens (freetype + .res load) (0155)
   'echo ==act3',
   'wmctl list',
   // The seeded snake entry became a real launcher script (image v36; in
@@ -330,7 +331,7 @@ const script = [
   'wmctl move $BSID 500 300',
   'wmctl move $ASID 480 280',
   'wmctl raise $ASID',
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: move+raise composite settle before the alpha-blend screen shot
   'wmctl shot screen /root/a.ppm',
   // (560,360): inside alphabox AND the winbox interior. PPM header is 16
   // bytes on the 1024x768 screen; tail -c is 1-based.
@@ -376,11 +377,11 @@ const script = [
   'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $MSID 26 119',                      // 'w' -> search non-empty
-  'sleep 0.2',
+  'sleep 0.2',                                   // timing subject: in-surface search-box render (menu stays open, checked in JS)
   'echo ==sm4a',
   'wmctl list',
   'wmctl key $MSID 41 27',                       // Esc -> clears the search
-  'sleep 0.2',
+  'sleep 0.2',                                   // timing subject: search-clear render (menu stays open, checked in JS)
   'echo ==sm4b',
   'wmctl list',
   'wmctl key $MSID 41 27',                       // Esc -> closes the menu
@@ -435,29 +436,29 @@ const script = [
   // shots after the run. The first click also focuses the desktop (wm.c
   // policy), so the later keyboard legs land on the grid.
   `wmctl click $DSID 58 ${deskY(DESK_ACT, 'gameboy')}`,       // plain select
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (navy label strip, no window observable)
   'wmctl shot $DSID /root/s1.ppm && echo s1-ok',
   // ctrl+click doom: additive toggle (keydown/keyup hold the modifier
   // across the separate click injection — todos/0077 wmctl growth)
   'wmctl keydown $DSID 224 1073742048 64',                    // LCTRL down
   `wmctl click $DSID 58 ${deskY(DESK_ACT, 'doom')}`,
   'wmctl keyup $DSID 224 1073742048 0',
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (ctrl+click additive, no window observable)
   'wmctl shot $DSID /root/s2.ppm && echo s2-ok',
   // shift+click mario: range from the anchor (doom, entry order 1..4)
   'wmctl keydown $DSID 225 1073742049 1',                     // LSHIFT down
   `wmctl click $DSID 58 ${deskY(DESK_ACT, 'mario')}`,
   'wmctl keyup $DSID 225 1073742049 0',
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (shift+click range, no window observable)
   'wmctl shot $DSID /root/s2b.ppm && echo s2b-ok',
   // marquee from empty desktop over the tiles of rows 0-2: REPLACES the set
   'wmctl drag $DSID 150 10 40 200',
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (marquee replace, no window observable)
   'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
   // drag-move: press term (0,8) and drop 2 cols right, 7 rows up -> (2,1);
   // the plain press on the unselected icon first collapses the set to it
   `wmctl drag $DSID 58 ${deskY(DESK_ACT, 'term')} 226 112`,
-  'sleep 2.5',                                   // survive the re-read tick
+  'sleep 2.5',                                   // timing subject: wm.c desk_load re-read poll (~1s tick) persists the moved .icons
   'echo ==sel1',
   'cat /root/Desktop/.icons',
   'echo ==sel2',
@@ -468,19 +469,19 @@ const script = [
   'wmctl keydown $DSID 224 1073742048 64',
   'wmctl key $DSID 4 97 64',                     // a
   'wmctl keyup $DSID 224 1073742048 0',
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (Ctrl+A select-all, no window observable)
   'wmctl shot $DSID /root/s5.ppm && echo s5-ok',
   'wmctl key $DSID 40 13',                       // Enter: multi -> no-op
   'sleep 2',                                     // timing subject: proves no spawn
   'N2=$(wmctl list | grep -c winbox$)',
   'echo NOOP-DELTA-$((N2-N1))',
   'wmctl key $DSID 41 27',                       // Esc clears
-  'sleep 0.5',
+  'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (Esc clears, no window observable)
   'wmctl shot $DSID /root/s6.ppm && echo s6-ok',
   // arrows: Right with nothing selected takes the top-left icon
   // (alauncher); Enter on the single selection launches it (-> winbox)
   'wmctl key $DSID 79 1073741903',               // Right
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: in-surface arrow-select render before Enter (no window observable)
   'wmctl key $DSID 40 13',                       // Enter
   'wmctl wait atleast winbox $((N2+1))',         // arrow-select + Enter launches alauncher
   'N3=$(wmctl list | grep -c winbox$)',
@@ -491,10 +492,16 @@ const script = [
   // Desktop, clock date. Screen 1024x768 -> clock_left = 1024-14-45 = 965;
   // the Show Desktop sliver is [1010,1024). Two fresh winboxes anchor the
   // reasoning (the two highest sids). ----
+  'PWC0=$(wmctl list | grep -c winbox$)',
   'winbox & winbox &',
-  'sleep 5',
+  'wmctl wait atleast winbox $((PWC0+2))',        // two fresh winboxes up (0155)
   'echo ==tp0',
   'wmctl list',
+  // The two fresh winboxes are the two highest sids; TWA (the lower of them)
+  // is the flag/dim sync target for the Minimize All / Show Desktop / Cascade
+  // legs below — Minimize All & co. set every window in one wm.c pass, so once
+  // TWA's flag flips in a list snapshot, TWB's has too (checked in JS).
+  'TWA=$(wmctl list | grep winbox$ | sed "s/[^0-9].*//" | sort -n | tail -2 | head -1)',
   // right-click the strip in the clock cell (x=970: always past the button
   // run, whatever the window count) -> the taskbar-strip menu (0101)
   'wmctl click $TSID 970 14 3',
@@ -507,20 +514,20 @@ const script = [
   'echo ==tp2',
   'wmctl list',
   'wmctl click $TSID 1017 14',                    // Show Desktop: restore the stash
-  'sleep 0.7',
+  'wmctl wait noflag $TWA m',                      // both restored (0155)
   'echo ==tp3',
   'wmctl list',
   'wmctl click $TSID 1017 14',                    // Show Desktop: minimize all again
-  'sleep 0.7',
+  'wmctl wait flag $TWA m',                        // both re-minimized (0155)
   'echo ==tp4',
   'wmctl list',
   'wmctl click $TSID 1017 14',                    // ...and restore before Cascade
-  'sleep 0.7',
+  'wmctl wait noflag $TWA m',                      // both restored (0155)
   'wmctl click $TSID 970 14 3',
   'wmctl wait win ctxmenu',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${rowY101(0)}`,          // Cascade (row 0)
-  'sleep 1.2',
+  'wmctl wait dim $TWA 614x427',                   // Cascade resized to the uniform box (0155)
   'echo ==tp5',
   'wmctl list',
   // clock date tooltip: a click in the clock cell (x=980) raises "datepop"
@@ -541,8 +548,11 @@ const script = [
   // Esc reverts; Size grows a resizable window and is disabled on fixbox;
   // Close via the menu tears the window down. Fresh winbox + fixbox so the
   // leg is independent of the earlier state churn. ----
+  'PWCsm=$(wmctl list | grep -c winbox$)',
+  'PFCsm=$(wmctl list | grep -c fixbox$)',
   'winbox & winbox fixed &',
-  'sleep 4',
+  'wmctl wait atleast winbox $((PWCsm+1))',       // fresh winbox up (0155)
+  'wmctl wait atleast fixbox $((PFCsm+1))',       // fresh fixbox up (0155)
   'SWSID=$(wmctl list | grep winbox$ | tail -1 | sed "s/[^0-9].*//")',
   'SFSID=$(wmctl list | grep fixbox$ | tail -1 | sed "s/[^0-9].*//")',
   'echo swsid=$SWSID sfsid=$SFSID',
@@ -556,7 +566,7 @@ const script = [
   'wmctl list',                                   // ctxmenu (sysmenu) up
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE -> keyboard-move mode
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: keyboard-move mode engage (popup stays as key grabber, no observable)
   'echo ==smD',
   'wmctl list',                                   // popup STILL up (grabber)
   'wmctl key $SMSID 79 1073741903',               // Right x4 = +32 x
@@ -565,7 +575,7 @@ const script = [
   'wmctl key $SMSID 79 1073741903',
   'wmctl key $SMSID 81 1073741905',               // Down x2 = +16 y
   'wmctl key $SMSID 81 1073741905',
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: keyboard-move arrow nudges settle (position change, no dim observable)
   'echo ==smE',
   'wmctl list',                                   // winbox moved +32,+16
   'wmctl key $SMSID 40 13',                        // Enter -> commit + dismiss
@@ -578,11 +588,11 @@ const script = [
   'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE again
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: keyboard-move mode engage (popup stays as key grabber, no observable)
   'wmctl key $SMSID 80 1073741904',               // Left x3 = -24 x (mid-mode)
   'wmctl key $SMSID 80 1073741904',
   'wmctl key $SMSID 80 1073741904',
-  'sleep 0.2',
+  'sleep 0.2',                                   // timing subject: mid-mode arrow nudges settle (position change, no dim observable)
   'echo ==smG',
   'wmctl list',                                   // shows the -24 mid-move
   'wmctl key $SMSID 41 27',                        // Esc -> revert
@@ -595,7 +605,7 @@ const script = [
   'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE -> keyboard-size mode
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: keyboard-size mode engage (popup stays as key grabber, no observable)
   'wmctl key $SMSID 79 1073741903',               // Right x4 = +32 w
   'wmctl key $SMSID 79 1073741903',
   'wmctl key $SMSID 79 1073741903',
@@ -604,7 +614,7 @@ const script = [
   'wmctl key $SMSID 81 1073741905',
   'wmctl key $SMSID 81 1073741905',
   'wmctl key $SMSID 81 1073741905',
-  'sleep 0.6',                                    // RESIZE round-trips the ack
+  'wmctl wait dim $SWSID 272x192',                 // Size-mode RESIZE ack landed (+32,+32) (0155)
   'wmctl key $SMSID 40 13',                        // Enter -> commit
   'wmctl wait nowin ctxmenu',
   'echo ==smSize',
@@ -620,7 +630,7 @@ const script = [
   `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE (grayed) -> no-op
   'wmctl key $SMSID 79 1073741903',               // Right -> ignored (no mode)
   'wmctl key $SMSID 79 1073741903',
-  'sleep 0.3',
+  'sleep 0.3',                                   // timing subject: proves the grayed Size row + arrows are no-ops on fixbox (unchanged geometry checked in JS)
   'echo ==smFix',
   'wmctl list',                                   // fixbox unchanged, popup up
   'wmctl key $SMSID 41 27',                        // Esc -> dismiss the popup
@@ -645,18 +655,18 @@ const script = [
   'rm -f /root/Desktop/.icons',                   // auto-flow: predictable order
   'printf x > /root/Desktop/aaa',                 // the icon we rename
   'printf y > /root/Desktop/aab',                 // the EEXIST target / menu target
-  'sleep 2.5',                                     // desk_load re-read tick (~1s)
+  'sleep 2.5',                                     // timing subject: wm.c desk_load re-read poll (~1s tick) picks up aaa/aab
   'echo ==rn0',
   'ls /root/Desktop | tr "\\n" " "; echo',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   // F2 rename: focus the desktop (empty cell col5), select top-left (aaa),
   // F2, clear "aaa" with 3 Backspaces, type "zzz", Enter -> rename aaa->zzz
   'wmctl click $DSID 500 400',                    // empty cell: focus + clear
-  'sleep 0.5',
+  'sleep 0.5',                                    // timing subject: desktop focus + selection-clear render (no observable)
   'wmctl key $DSID 79 1073741903',                // Right -> top-left = aaa
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: arrow-select render (no observable)
   'wmctl key $DSID 59 1073741883',                // F2 -> inline editor on aaa
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: inline-editor-open render (no observable)
   'wmctl key $DSID 42 8',                         // Backspace x3 clears "aaa"
   'wmctl key $DSID 42 8',
   'wmctl key $DSID 42 8',
@@ -664,16 +674,16 @@ const script = [
   'wmctl key $DSID 29 122',                       // z
   'wmctl key $DSID 29 122',                       // z
   'wmctl key $DSID 40 13',                        // Enter -> commit
-  'sleep 0.6',
+  'for i in $(seq 1 120); do [ -e /root/Desktop/zzz ] && break; sleep 0.05; done',  // rename aaa->zzz landed (bounded poll, 0155)
   'echo ==rn2',
   'ls /root/Desktop | tr "\\n" " "; echo',        // aaa gone, zzz present
   // EEXIST: rename aab -> zzz (now exists) keeps both, editor stays open
   'wmctl click $DSID 500 400',
-  'sleep 0.5',
+  'sleep 0.5',                                    // timing subject: desktop focus + selection-clear render (no observable)
   'wmctl key $DSID 79 1073741903',                // top-left now aab
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: arrow-select render (no observable)
   'wmctl key $DSID 59 1073741883',                // F2 on aab
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: inline-editor-open render (no observable)
   'wmctl key $DSID 42 8',                         // clear "aab"
   'wmctl key $DSID 42 8',
   'wmctl key $DSID 42 8',
@@ -681,21 +691,21 @@ const script = [
   'wmctl key $DSID 29 122',
   'wmctl key $DSID 29 122',
   'wmctl key $DSID 40 13',                        // Enter -> EEXIST: no rename
-  'sleep 0.5',
+  'sleep 0.5',                                    // timing subject: proves EEXIST kept both files (editor stays open, checked in JS)
   'echo ==rn3',
   'ls /root/Desktop | tr "\\n" " "; echo',        // aab AND zzz both present
   'wmctl key $DSID 41 27',                         // Esc -> drop the stuck editor
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: editor-dismiss render (no observable)
   // Esc cancels an edit: F2 on aab, type a char, Esc -> file untouched
   'wmctl click $DSID 500 400',
-  'sleep 0.5',
+  'sleep 0.5',                                    // timing subject: desktop focus + selection-clear render (no observable)
   'wmctl key $DSID 79 1073741903',                // top-left = aab
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: arrow-select render (no observable)
   'wmctl key $DSID 59 1073741883',                // F2
-  'sleep 0.3',
+  'sleep 0.3',                                    // timing subject: inline-editor-open render (no observable)
   'wmctl key $DSID 29 122',                       // append 'z' -> "aabz" (pending)
   'wmctl key $DSID 41 27',                         // Esc -> cancel, aab untouched
-  'sleep 0.5',
+  'sleep 0.5',                                    // timing subject: proves Esc left the file untouched (no aabz, checked in JS)
   'echo ==rn4',
   'ls /root/Desktop | tr "\\n" " "; echo',        // aab present, no aabz
   // icon-menu Rename path (exercises the focus-race fix): right-click aab ->
@@ -714,7 +724,7 @@ const script = [
   'wmctl key $DSID 16 109',                        // m
   'wmctl key $DSID 16 109',                        // m
   'wmctl key $DSID 40 13',                         // Enter -> commit
-  'sleep 0.6',
+  'for i in $(seq 1 120); do [ -e /root/Desktop/mmm ] && break; sleep 0.05; done',  // rename aab->mmm landed (bounded poll, 0155)
   'echo ==rn6',
   'ls /root/Desktop | tr "\\n" " "; echo',         // aab gone, mmm present
 
@@ -730,7 +740,7 @@ const script = [
   'for f in /root/Desktop/*; do rm -rf "$f"; done',
   "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My Really Long Application Name Here'",
   "printf '#!/bin/sh\\nwinbox\\n' > '/root/Desktop/My App'",
-  'sleep 3',                                       // desk_load re-read tick (~1s)
+  'sleep 3',                                       // timing subject: wm.c desk_load re-read poll (~1s tick) picks up the two launchers
   'echo ==ln0',
   'ls /root/Desktop | tr "\\n" "|"; echo',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
