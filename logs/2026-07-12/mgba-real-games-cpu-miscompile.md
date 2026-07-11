@@ -92,6 +92,20 @@ deferral mechanism — there is no separate "icebox" flag; P3 is the bottom
 bucket), with the technical record in **todos/MGBA.md**. The throwaway debug
 harness stays in `~/git/c-compiler-copy` (uncommitted).
 
+## Follow-up: can clang build it? (the golden-reference question)
+
+Asked whether `~/git/clang-simplified` (cc2wasm — an in-repo clang→wasm that
+targets the same host.js and already ships `doom-clang`) could build mGBA as a
+trustworthy reference. Tried it: **yes, it compiles all 78 TUs; the only
+blockers are libc-completeness gaps — the very same ones the compiler.js port
+had to fill** (`exp2f` undeclared; `rewinddir` absent from cc2wasm's libc). That
+is itself corroborating: mGBA's C is portable and fine — what's missing is libc
+surface, not correct codegen. Didn't push through the small cc2wasm-libc port to
+a linked/running binary, so the definitive "clang passes, compiler.js fails"
+differential is captured as the top un-defer step in todos/MGBA.md rather than
+done. (zsh gotcha for whoever resumes: unquoted `$SRCS` won't word-split — use a
+zsh array.)
+
 ## Correcting the record
 
 0112's "verified working" overstated a test-ROM-only result. Left as-is

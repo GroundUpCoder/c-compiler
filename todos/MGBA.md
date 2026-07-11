@@ -114,8 +114,52 @@ repo stayed clean. Reproduce there:
   and only `WARN`/`FATAL` mLOG levels are visible (`GAME_ERROR`/`DEBUG` are
   filtered).
 
+## Golden-reference build via clang (`clang-simplified` / cc2wasm) — viable but unfinished
+
+The obvious way to *prove* the diagnosis (and maybe ship a working `/bin/mgba`
+sidestepping the compiler.js bug) is to build the same mGBA sources with the
+sibling `~/git/clang-simplified` toolchain — `cc2wasm`, an in-repo clang+wasm-ld
+that targets the SAME `host.js` runtime and already ships `doom-clang` (a full
+SDL C game) in the `clang-apps` overlay (image.json). A clang build is
+trustworthy codegen; if it passes jsmolka / boots a real ROM, that pins the bug
+on compiler.js.
+
+**Attempted 2026-07-12. It compiles — the blockers are libc completeness, not
+codegen or any fundamental incompatibility.** Invocation (from `vendor/mgba/`):
+
+```
+cc2wasm --sdl <bin.json compilerArgs, minus --allow-zero-length-arrays> \
+        -Iinclude -Isrc -Isrc/third-party/blip_buf -Isrc/third-party/inih \
+        <the 78 bin.json sources> -o mgba-clang.wasm
+```
+(NB: the driver shell here is **zsh** — unquoted `$SRCS` does NOT word-split;
+build the source list into a zsh array `SRCS=(${(f)"$(cat list)"})`.)
+
+cc2wasm chews through all 78 TUs. Every error hit so far is one of the **same
+libc gaps the compiler.js port itself had to fill** (see vendor/mgba/README.md
+"Compiler improvements this port drove"):
+
+- `exp2f`/`exp2` — undeclared in cc2wasm's libc `<math.h>`. Bridged for the
+  experiment with `-Dexp2f=__builtin_exp2f -Dexp2=__builtin_exp2`.
+- `rewinddir` — **not present at all** in cc2wasm's libc (`wasm/libc/__dirent.c`
+  has opendir/readdir/closedir over the `__opendir/__readdir/__closedir` host
+  imports; no rewinddir). Needs a real implementation (re-open by name, or an
+  `__rewinddir` host import) exactly like compiler.js's libc added.
+
+Not finished: didn't reach a linked binary or run it, so the differential
+"clang build passes, compiler.js build fails" confirmation is **not yet done** —
+it's the highest-value next step and is very likely to succeed. Remaining work
+is a small cc2wasm-libc porting pass (add `rewinddir`, confirm `exp2f`/`bswap`/
+angle-include parity), then link + run `arm.gba` and a real ROM through
+`host.js`, comparing stdout (`Jumped to invalid address` on compiler.js vs a
+clean boot on clang) — no display needed.
+
 ## Plan when un-deferred
 
-See todos/0140. Short version: land the ring-buffer dump → name the miscompiled
-handler → minimal compiler.js codegen repro → fix + conformance test → re-green
-jsmolka + one real ROM to title screen.
+See todos/0140. Two convergent tracks:
+1. **Confirm & possibly ship (clang path):** finish the cc2wasm build above →
+   golden reference proves the compiler.js bug, and could ship as an
+   `mgba-clang` in the clang-apps overlay (like doom-clang).
+2. **Fix the compiler (compiler.js path):** land the ring-buffer dump → name the
+   miscompiled handler → minimal compiler.js codegen repro → fix + conformance
+   test → re-green jsmolka + one real ROM to title screen.

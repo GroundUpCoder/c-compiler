@@ -30,13 +30,19 @@ ROM → `Jumped to invalid address` loop → blank white window.
 
 ## Plan (when un-deferred)
 
-1. Land the ring-buffer trace (last ~48 executed instrs, dumped at the bad
-   jump) to name the exact miscompiled instruction/handler. (Scaffolding exists
-   in the throwaway copy — see MGBA.md.)
-2. Reduce to a standalone compiler.js codegen repro (compile the suspect mGBA
-   handler / a minimal C analog, diff vs clang/cc2wasm output).
-3. Fix in compiler.js; add a conformance test; re-run jsmolka arm/thumb/memory
-   to green, then a real commercial ROM boots to title.
+Two convergent tracks (detail in todos/MGBA.md):
+
+- **Clang golden build (confirm + maybe ship).** Build the same mGBA sources
+  with `~/git/clang-simplified`'s `cc2wasm` (already ships `doom-clang`). Tried
+  2026-07-12: it compiles all 78 TUs; blocked only by the SAME libc gaps the
+  compiler.js port filled (`exp2f`, `rewinddir` — cc2wasm's libc lacks
+  rewinddir entirely). Finish that small libc pass → link → run `arm.gba` +
+  a real ROM through `host.js` and diff stdout. If clang boots clean where
+  compiler.js derails, the bug is pinned on compiler.js — and the clang binary
+  could ship as `mgba-clang` in the clang-apps overlay.
+- **Compiler fix (compiler.js path).** Land the ring-buffer trace (last ~48
+  instrs dumped at the bad jump) to name the miscompiled handler → minimal
+  codegen repro → fix + conformance test → re-green jsmolka + a real ROM.
 
 ## Acceptance
 
