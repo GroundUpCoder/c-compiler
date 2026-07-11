@@ -188,6 +188,16 @@ argv0 (PATH spawn) now PATH-resolves in GetModuleFileNameW instead of
 cwd-joining — notepad's New Window respawns GetModuleFileName's
 answer, and the res_ensure sidecar probe gets the real path.
 
+0091 (context menus, 2026-07-11) rode the same primitive: the EDIT
+control grew the standard WM_CONTEXTMENU menu (Undo/Cut/Copy/Paste/
+Delete/Select All, built fresh per popup with state gating — Undo stays
+grayed per the no-undo honesty above), and TrackPopupMenu grew modal
+keyboard nav (Up/Down walk enabled rows, Enter fires, Esc closes,
+everything else swallowed) plus right-button-down-outside close. The
+wm.c desktop/taskbar menus are separate machinery (todos/WM.md — the
+Start-menu furniture pattern, not this overlay). fileman's path EDIT
+gets the menu for free; its file-LIST menu is 0092's.
+
 ## Corpus status (0060 landed 2026-07-10)
 
 `tools/win32ports.js` compile-tests every target in `os/win32/ports.json`

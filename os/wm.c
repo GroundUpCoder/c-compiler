@@ -71,6 +71,17 @@
  * not a private format — the old first-line-argv menu convention is gone
  * (its seeded user, menu/snake, became a real script in image.json v36).
  *
+ * Context menus (todos/0091): right-click raises a two-window popup (root
+ * "ctxmenu" + at most one "ctxmenu2" flyout — the v1 depth cap) built from
+ * fixed item lists. Empty desktop: New >, Sort by >, Refresh, Display
+ * (ctlpanel's Display applet); an icon: Open (the 0092 file ops grow
+ * here); a taskbar button: Restore/Minimize/Maximize/Close over the
+ * chrome ops this process already owns, inapplicable rows grayed. Same
+ * furniture rules as the Start menu: top layer, root holds kernel focus
+ * (flyouts hand it back), focus-leave/outside-click/Esc dismiss, arrows/
+ * Enter drive it. The Start strip and empty bar stay reserved for the
+ * 0101 taskbar-strip menu; window title bars for 0102.
+ *
  * The kernel keeps its chrome policy (drag, close box, click-to-focus) as
  * the WM-crashed fallback — killing this process leaves the system usable,
  * and it can simply be started again (`wm &`).
@@ -124,6 +135,9 @@
 #define DBLCLICK_NS  500000000ULL   /* 500ms, the SDL click-count window */
 #define DRAG_SLOP    4      /* px of button-held travel before a press
                                becomes a marquee or icon drag (todos/0077) */
+
+#define CTX_W        120    /* context menu popup (todos/0091) */
+#define CTX_MAX      8
 
 #define PEEK_W       160    /* Aero Peek popup (todos/0063) */
 #define PEEK_H       120
@@ -235,6 +249,37 @@ static int desk_collapse = 0;      /* plain press on an already-selected icon:
                                       collapse the set to it on a drag-less
                                       release (the Win95 mouseup rule) */
 static uint32_t zctr = 0;          /* focus-recency counter (todos/0032) */
+
+/* Context menu state (todos/0091): a two-window popup — root + at most one
+ * flyout (the recorded v1 depth cap) — built from fixed item lists, not a
+ * directory like the Start menu. Same furniture pattern as the menu
+ * columns: borderless top-layer windows parked at their EV_CREATED echo
+ * ("ctxmenu"/"ctxmenu2"), dismissed when kernel focus leaves them. */
+enum {                             /* command ids (ctx_activate dispatch) */
+    CM_NONE = 0,
+    CM_SUB_NEW, CM_SUB_SORT,       /* rows that cascade the flyout */
+    CM_REFRESH, CM_DISPLAY,        /* desktop */
+    CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* flyout rows */
+    CM_OPEN,                       /* icon (0092 grows file ops here) */
+    CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE /* taskbar button */
+};
+#define CTF_SEP   1                /* separator groove row */
+#define CTF_GRAY  2                /* disabled: drawn gray, never fires */
+#define CTF_SUB   4                /* cascades the flyout (root only) */
+typedef struct { const char *label; int id; int flags; } ctx_ent;
+
+static SDL_Window *ctx_win[2];     /* [0] root, [1] flyout; NULL = closed */
+static SDL_Surface *ctx_surf[2];
+static int32_t ctx_sid[2];         /* EV_CREATED echoes */
+static ctx_ent ctx_ents[2][CTX_MAX];
+static int ctx_nent[2];
+static int ctx_hover[2];           /* pointer/keyboard cursor row, -1 none */
+static int ctx_x[2], ctx_y[2], ctx_h[2];
+static int ctx_depth = 0;          /* 0 closed, 1 root, 2 flyout open */
+static int ctx_child = -1;         /* root row whose flyout is open */
+static int32_t ctx_target = 0;     /* taskbar menu: the acted-on window */
+static int ctx_icon = -1;          /* icon menu: desk[] index */
+static void ctx_dismiss(void);     /* defined with the rest (0091) */
 
 /* Aero Peek state (todos/0063): hovering a taskbar button raises a live
  * thumbnail popup — a fourth borderless window in this process, fed by
@@ -712,6 +757,7 @@ static void menu_row_activate(int depth, int i) {
  * the baked /usr/share/menu is the default. The fixed section keeps the
  * menu useful even over an empty programs list. */
 static void menu_toggle(void) {
+    ctx_dismiss();                     /* one popup at a time (todos/0091) */
     if (mdepth > 0) { menu_dismiss(); return; }
     DIR *d = opendir("/etc/menu");
     if (d) { closedir(d); strcpy(menu_dir, "/etc/menu"); }
@@ -1213,6 +1259,323 @@ static void draw_desk(void) {
     SDL_UpdateWindowSurface(desk_win);
 }
 
+/* ---- context menus (todos/0091) ---- */
+
+static void ctx_close_flyout(void) {
+    if (ctx_depth < 2) return;
+    if (ctx_win[1]) SDL_DestroyWindow(ctx_win[1]);
+    ctx_win[1] = NULL;
+    ctx_surf[1] = NULL;
+    ctx_sid[1] = 0;
+    ctx_depth = 1;
+    ctx_child = -1;
+}
+
+static void ctx_dismiss(void) {
+    ctx_close_flyout();
+    if (ctx_depth < 1) return;
+    if (ctx_win[0]) SDL_DestroyWindow(ctx_win[0]);
+    ctx_win[0] = NULL;
+    ctx_surf[0] = NULL;
+    ctx_sid[0] = 0;
+    ctx_depth = 0;
+    ctx_target = 0;
+    ctx_icon = -1;
+}
+
+static void ctx_add(int d, const char *label, int id, int flags) {
+    if (ctx_nent[d] >= CTX_MAX) return;
+    ctx_ents[d][ctx_nent[d]].label = label;
+    ctx_ents[d][ctx_nent[d]].id = id;
+    ctx_ents[d][ctx_nent[d]].flags = flags;
+    ctx_nent[d]++;
+}
+
+static int ctx_row_y(int d, int i) {
+    int y = MENU_PAD;
+    for (int k = 0; k < i; k++)
+        y += (ctx_ents[d][k].flags & CTF_SEP) ? MENU_SEP_H : MENU_ENTRY_H;
+    return y;
+}
+
+/* Row under local y, or -1 (padding / a separator). */
+static int ctx_row_hit(int d, int y) {
+    int ry = MENU_PAD;
+    for (int i = 0; i < ctx_nent[d]; i++) {
+        int rh = (ctx_ents[d][i].flags & CTF_SEP) ? MENU_SEP_H : MENU_ENTRY_H;
+        if (y >= ry && y < ry + rh)
+            return (ctx_ents[d][i].flags & CTF_SEP) ? -1 : i;
+        ry += rh;
+    }
+    return -1;
+}
+
+/* Create the popup window for depth d anchored at (px, py), clamped to
+ * the work area (a py past the bottom — the taskbar anchor — lands the
+ * menu exactly above the bar). Parks at its EV_CREATED echo. */
+static int ctx_openwin(int d, int px, int py) {
+    int h = 2 * MENU_PAD;
+    for (int i = 0; i < ctx_nent[d]; i++)
+        h += (ctx_ents[d][i].flags & CTF_SEP) ? MENU_SEP_H : MENU_ENTRY_H;
+    ctx_h[d] = h;
+    ctx_x[d] = px;
+    ctx_y[d] = py;
+    if (ctx_x[d] + CTX_W > scr_w) ctx_x[d] = scr_w - CTX_W;
+    if (ctx_x[d] < 0) ctx_x[d] = 0;
+    if (ctx_y[d] + h > scr_h - BAR_H) ctx_y[d] = scr_h - BAR_H - h;
+    if (ctx_y[d] < 0) ctx_y[d] = 0;
+    ctx_hover[d] = -1;
+    ctx_win[d] = SDL_CreateWindow(d ? "ctxmenu2" : "ctxmenu", CTX_W, h,
+                                  SDL_WINDOW_BORDERLESS);
+    if (!ctx_win[d]) return -1;
+    ctx_surf[d] = SDL_GetWindowSurface(ctx_win[d]);
+    ctx_sid[d] = 0;
+    ctx_depth = d + 1;
+    return 0;
+}
+
+/* Cascade the flyout for root row i (NEW / SORT BY), replacing any open
+ * one. First row aligns with the group row, the Start-menu convention. */
+static void ctx_open_flyout(int i) {
+    if (ctx_child == i && ctx_depth > 1) return;   /* already up */
+    ctx_close_flyout();
+    ctx_nent[1] = 0;
+    if (ctx_ents[0][i].id == CM_SUB_NEW) {
+        ctx_add(1, "FOLDER", CM_NEW_FOLDER, 0);
+        ctx_add(1, "TEXT FILE", CM_NEW_FILE, 0);
+    } else if (ctx_ents[0][i].id == CM_SUB_SORT) {
+        ctx_add(1, "NAME", CM_SORT_NAME, 0);
+    } else return;
+    if (ctx_openwin(1, ctx_x[0] + CTX_W - 3,
+                    ctx_y[0] + ctx_row_y(0, i) - MENU_PAD) == 0)
+        ctx_child = i;
+}
+
+/* Right-click empty desktop (Win95): New >, Sort by >, Refresh, then the
+ * Display Properties shortcut into the Control Panel applet (0089). */
+static void ctx_open_desktop(int x, int y) {
+    ctx_dismiss();
+    ctx_nent[0] = 0;
+    ctx_add(0, "NEW", CM_SUB_NEW, CTF_SUB);
+    ctx_add(0, "SORT BY", CM_SUB_SORT, CTF_SUB);
+    ctx_add(0, "REFRESH", CM_REFRESH, 0);
+    ctx_add(0, "", CM_NONE, CTF_SEP);
+    ctx_add(0, "DISPLAY", CM_DISPLAY, 0);
+    ctx_openwin(0, x, y);
+}
+
+/* Right-click a desktop icon: Open (the 0092 file ops grow here). */
+static void ctx_open_icon(int idx, int x, int y) {
+    ctx_dismiss();
+    ctx_icon = idx;
+    ctx_nent[0] = 0;
+    ctx_add(0, "OPEN", CM_OPEN, 0);
+    ctx_openwin(0, x, y);
+}
+
+/* Right-click a taskbar button: the Win95 window menu over the chrome ops
+ * this process already owns. Inapplicable rows gray (state snapshot at
+ * open — the popup is transient by design). */
+static void ctx_open_bar(const win_t *w, int bx) {
+    ctx_dismiss();
+    ctx_target = w->sid;
+    ctx_nent[0] = 0;
+    ctx_add(0, "RESTORE", CM_RESTORE,
+            (w->minimized || w->maximized) ? 0 : CTF_GRAY);
+    ctx_add(0, "MINIMIZE", CM_MINIMIZE, w->minimized ? CTF_GRAY : 0);
+    ctx_add(0, "MAXIMIZE", CM_MAXIMIZE,
+            (w->maximized || w->minimized) ? CTF_GRAY : 0);
+    ctx_add(0, "", CM_NONE, CTF_SEP);
+    ctx_add(0, "CLOSE", CM_CLOSE, 0);
+    ctx_openwin(0, bx, scr_h);         /* clamp parks it above the bar */
+}
+
+/* New > Folder / Text File: create under /root/Desktop with a Win95-style
+ * uniquifier ("New Folder", "New Folder 2", ...); the reload puts the icon
+ * up without waiting for the coarse desk_tick. */
+static void ctx_new_entry(int is_dir) {
+    char path[300];
+    for (int k = 1; k <= 99; k++) {
+        if (k == 1)
+            snprintf(path, sizeof path, "/root/Desktop/%s",
+                     is_dir ? "New Folder" : "New File.txt");
+        else if (is_dir)
+            snprintf(path, sizeof path, "/root/Desktop/New Folder %d", k);
+        else
+            snprintf(path, sizeof path, "/root/Desktop/New File %d.txt", k);
+        struct stat st;
+        if (lstat(path, &st) == 0) continue;     /* taken: next suffix */
+        if (is_dir) mkdir(path, 0755);
+        else {
+            FILE *f = fopen(path, "w");
+            if (f) fclose(f);
+        }
+        break;
+    }
+    desk_load();
+    desk_dirty = 1;
+}
+
+/* Fire row i of column d. Grayed/separator rows never fire; sub rows
+ * cascade. Real commands snapshot their argument, dismiss, then act —
+ * dismissal first so a spawned child's create-focus finds no popup. */
+static void ctx_activate(int d, int i) {
+    if (i < 0 || i >= ctx_nent[d]) return;
+    ctx_ent *e = &ctx_ents[d][i];
+    if (e->flags & (CTF_SEP | CTF_GRAY)) return;
+    if (e->flags & CTF_SUB) { ctx_open_flyout(i); return; }
+    int id = e->id;
+    int32_t target = ctx_target;
+    int icon = ctx_icon;
+    ctx_dismiss();
+    switch (id) {
+    case CM_REFRESH:
+        desk_load();
+        desk_dirty = 1;
+        break;
+    case CM_SORT_NAME:                 /* forget placements: auto-flow is
+                                          the sorted 0029 layout */
+        unlink("/root/Desktop/.icons");
+        desk_load();
+        desk_dirty = 1;
+        break;
+    case CM_NEW_FOLDER: ctx_new_entry(1); break;
+    case CM_NEW_FILE: ctx_new_entry(0); break;
+    case CM_DISPLAY: {
+        char *argv[3] = { (char *)"ctlpanel", (char *)"Display", 0 };
+        spawn_path("/bin/ctlpanel", argv);
+        break;
+    }
+    case CM_OPEN: desk_launch(icon); break;
+    case CM_RESTORE: {
+        win_t *w = find(target);
+        if (!w) break;
+        if (w->minimized) {            /* focus restores (the 0014 rule) */
+            int32_t a[1] = { target };
+            wmp_send(sock, WMP_FOCUS, a, 1);
+        } else if (w->maximized) title_activate(target);
+        break;
+    }
+    case CM_MINIMIZE: {
+        int32_t a[1] = { target };
+        wmp_send(sock, WMP_MINIMIZE, a, 1);
+        break;
+    }
+    case CM_MAXIMIZE:
+        if (find(target)) title_activate(target);
+        break;
+    case CM_CLOSE: {                   /* request-close, like the 'x' box */
+        int32_t a[1] = { target };
+        wmp_send(sock, WMP_CLOSE_REQ, a, 1);
+        break;
+    }
+    }
+}
+
+static void ctx_click(int d, float fy) {
+    int i = ctx_row_hit(d, (int)fy);
+    if (i < 0) { ctx_dismiss(); return; }        /* dead-zone click */
+    if (ctx_ents[d][i].flags & CTF_GRAY) return; /* disabled: stays open */
+    ctx_hover[d] = i;
+    ctx_activate(d, i);
+}
+
+/* Hover-open like the Start menu (0078): a sub row cascades its flyout,
+ * a different sub row replaces it, plain rows leave it alone. */
+static void ctx_motion(int d, float fy) {
+    int i = ctx_row_hit(d, (int)fy);
+    ctx_hover[d] = i;
+    if (d == 0 && i >= 0 && (ctx_ents[0][i].flags & CTF_SUB) &&
+        ctx_child != i)
+        ctx_open_flyout(i);
+}
+
+/* Keyboard on the open context menu: arrows walk enabled rows of the
+ * DEEPEST column, Right/Enter cascade a sub row, Left backs out of the
+ * flyout, Esc dismisses — the menu_key pattern (0078). */
+static void ctx_key(int sym) {
+    int d = ctx_depth - 1;
+    int n = ctx_nent[d];
+    if (sym == SDLK_ESCAPE) { ctx_dismiss(); return; }
+    if (sym == SDLK_DOWN || sym == SDLK_UP) {
+        int dir = sym == SDLK_DOWN ? 1 : -1;
+        int i = ctx_hover[d];
+        for (int k = 0; k < n; k++) {
+            i = i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
+            if (!(ctx_ents[d][i].flags & CTF_SEP)) break;
+        }
+        ctx_hover[d] = i;
+        return;
+    }
+    if (sym == SDLK_RIGHT) {
+        if (d == 0 && ctx_hover[0] >= 0 &&
+            (ctx_ents[0][ctx_hover[0]].flags & CTF_SUB)) {
+            ctx_open_flyout(ctx_hover[0]);
+            if (ctx_depth > 1) ctx_hover[1] = 0;
+        }
+        return;
+    }
+    if (sym == SDLK_LEFT) {
+        if (d == 1) ctx_close_flyout();
+        return;
+    }
+    if (sym == SDLK_RETURN) {
+        int was = ctx_depth;
+        ctx_activate(d, ctx_hover[d]);
+        if (ctx_depth > was) ctx_hover[1] = 0;   /* entered the flyout */
+    }
+}
+
+static int ctx_col_for(SDL_WindowID id) {
+    for (int d = 0; d < ctx_depth; d++)
+        if (ctx_win[d] && SDL_GetWindowID(ctx_win[d]) == id) return d;
+    return -1;
+}
+
+static int ctx_owns_sid(int32_t sid) {
+    for (int d = 0; d < ctx_depth; d++) if (ctx_sid[d] == sid) return 1;
+    return 0;
+}
+
+static void draw_ctx(int d) {
+    if (d >= ctx_depth || !ctx_win[d]) return;
+    int w = CTX_W, h = ctx_h[d];
+    uint32_t *px = (uint32_t *)ctx_surf[d]->pixels;
+    uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
+             sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
+             gray = rgb(128, 128, 128),
+             sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255);
+    fill_s(px, w, h, 0, 0, w, h, face);
+    fill_s(px, w, h, 0, 0, w, 1, hi);            /* raised edge */
+    fill_s(px, w, h, 0, 0, 1, h, hi);
+    fill_s(px, w, h, 0, h - 1, w, 1, sh);
+    fill_s(px, w, h, w - 1, 0, 1, h, sh);
+    int y = MENU_PAD;
+    for (int i = 0; i < ctx_nent[d]; i++) {
+        ctx_ent *e = &ctx_ents[d][i];
+        if (e->flags & CTF_SEP) {                /* the groove */
+            fill_s(px, w, h, 4, y + MENU_SEP_H / 2 - 1, w - 8, 1, sh);
+            fill_s(px, w, h, 4, y + MENU_SEP_H / 2, w - 8, 1, hi);
+            y += MENU_SEP_H;
+            continue;
+        }
+        int grayed = e->flags & CTF_GRAY;
+        int hl = !grayed &&
+                 (i == ctx_hover[d] || (d == 0 && i == ctx_child));
+        if (hl) fill_s(px, w, h, 2, y, w - 4, MENU_ENTRY_H, sel);
+        draw_text_s(px, w, h, 10, y + (MENU_ENTRY_H - 7) / 2, e->label,
+                    grayed ? gray : hl ? seltxt : txt);
+        if (e->flags & CTF_SUB) {                /* the flyout arrow */
+            int ax = w - 10, ay = y + (MENU_ENTRY_H - 7) / 2;
+            for (int t = 0; t < 4; t++)
+                fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t,
+                       hl ? seltxt : txt);
+        }
+        y += MENU_ENTRY_H;
+    }
+    SDL_UpdateWindowSurface(ctx_win[d]);
+}
+
 /* ---- Aero Peek (todos/0063) ---- */
 
 static void peek_dismiss(void) {
@@ -1331,6 +1694,7 @@ static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
     run_dismiss();                     /* likewise (todos/0078) */
     peek_dismiss();                    /* likewise (todos/0063) */
+    ctx_dismiss();                     /* likewise (todos/0091) */
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
@@ -1419,6 +1783,20 @@ static void handle_event(wmp_hdr *h) {
                         wmp_send(sock, WMP_FOCUS, f, 1);
                         break;
                     }
+            } else if (strncmp(r.title, "ctxmenu", 7) == 0) {   /* 0091 */
+                int d = r.title[7] ? 1 : 0;
+                if (d >= ctx_depth || !ctx_win[d]) return;   /* dismissed */
+                ctx_sid[d] = r.sid;
+                int32_t a[3] = { r.sid, ctx_x[d], ctx_y[d] };
+                wmp_send(sock, WMP_MOVE, a, 3);
+                int32_t ly[2] = { r.sid, 1 };  /* top layer, like the menu */
+                wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                if (d > 0 && ctx_sid[0]) {
+                    /* The flyout must not hold focus — the root column
+                     * keeps the keyboard (the Start-menu rule, 0078). */
+                    int32_t f[1] = { ctx_sid[0] };
+                    wmp_send(sock, WMP_FOCUS, f, 1);
+                }
             } else {                   /* the taskbar: bottom edge */
                 bar_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H };
@@ -1457,6 +1835,8 @@ static void handle_event(wmp_hdr *h) {
         for (int d = 0; d < MENU_DEPTH; d++)              /* defensive (0028) */
             if (p[0] == mcol[d].sid) mcol[d].sid = 0;
         if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
+        for (int d = 0; d < 2; d++)                       /* likewise (0091) */
+            if (p[0] == ctx_sid[d]) ctx_sid[d] = 0;
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
         if (p[0] == desk_sid) { desk_sid = 0; desk_focused = 0; }   /* (0077) */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
@@ -1477,9 +1857,16 @@ static void handle_event(wmp_hdr *h) {
          * sid (EV_CREATED is emitted first, so the sid is known). The
          * run dialog follows the same rule, gated on its echo having
          * landed: between run_open() and the echo, the focus fall from
-         * the menu teardown must not kill it (todos/0078). */
-        if (mdepth > 0 && !menu_owns_sid(p[0])) menu_dismiss();
+         * the menu teardown must not kill it (todos/0078). The root-echo
+         * gate matters here too since 0091: menu_toggle's ctx_dismiss
+         * makes focus fall to an app window, and that EV_FOCUS must not
+         * kill the menu it just opened. */
+        if (mdepth > 0 && mcol[0].sid && !menu_owns_sid(p[0])) menu_dismiss();
         if (run_win && run_sid && p[0] != run_sid) run_dismiss();
+        /* Focus leaving the context menu dismisses it — outside-click on
+         * any app window lands here (todos/0091). Gated on the root echo
+         * having arrived, the run-dialog precedent. */
+        if (ctx_depth > 0 && ctx_sid[0] && !ctx_owns_sid(p[0])) ctx_dismiss();
         /* Desktop focus tracking (todos/0077): keys route to the icon grid
          * only while it holds focus; losing it also resets the tracked
          * modifiers (their keyups would land elsewhere). */
@@ -1612,6 +1999,7 @@ static void bar_click(float fx) {
     peek_dismiss();                    /* a click acts; the preview drops */
     if ((int)fx < START_W) { menu_toggle(); return; }     /* Start (0028) */
     menu_dismiss();                    /* any other taskbar click dismisses */
+    ctx_dismiss();                     /* likewise (todos/0091) */
     int bw = btn_width();
     int rel = (int)fx - START_W - BTN_GAP;
     int i = rel / (bw + BTN_GAP);
@@ -1619,6 +2007,24 @@ static void bar_click(float fx) {
     int32_t a[1] = { wins[i].sid };
     if (wins[i].focused && !wins[i].minimized) wmp_send(sock, WMP_MINIMIZE, a, 1);
     else wmp_send(sock, WMP_FOCUS, a, 1);
+}
+
+/* Taskbar right-click (todos/0091): a drawn button raises the Win95 window
+ * menu; the Start strip and the empty bar stay reserved (the taskbar-strip
+ * menu is todos/0101). Same geometry math as bar_click/bar_motion. */
+static void bar_rclick(float fx) {
+    peek_dismiss();
+    menu_dismiss();
+    int bw = btn_width();
+    int rel = (int)fx - START_W - BTN_GAP;
+    int i = rel / (bw + BTN_GAP);
+    int x = START_W + BTN_GAP + i * (bw + BTN_GAP) + 2;
+    if ((int)fx < START_W || rel < 0 || rel % (bw + BTN_GAP) >= bw ||
+        i >= nwins || x + bw > bar_w - CLOCK_W) {   /* overflow gate too */
+        ctx_dismiss();
+        return;
+    }
+    ctx_open_bar(&wins[i], x);
 }
 
 static void draw_bar(void) {
@@ -1683,7 +2089,9 @@ static void frame_cb(void) {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
             int md = menu_col_for(e.button.windowID);
+            int cd = ctx_col_for(e.button.windowID);
             if (md >= 0) menu_click(md, e.button.y);
+            else if (cd >= 0) ctx_click(cd, e.button.y);   /* 0091 */
             else if (run_win && e.button.windowID == SDL_GetWindowID(run_win)) {
                 /* a click inside the run dialog: nothing to hit */
             } else if (desk_win && e.button.windowID == did) {
@@ -1691,29 +2099,54 @@ static void frame_cb(void) {
                 run_dismiss();         /* likewise (todos/0078) */
                 peek_dismiss();        /* likewise (todos/0063) */
                 if (e.button.button == 1) {
+                    ctx_dismiss();     /* likewise (todos/0091) */
                     /* Click-to-focus for the desktop (todos/0077): the
                      * kernel exempts borderless surfaces, so the policy
                      * asks — modifier keyups and grid navigation keys
-                     * must reach this process. Right-button routing is
-                     * reserved for the context menus (todos/0091/0101). */
+                     * must reach this process. */
                     if (desk_sid) {
                         int32_t f[1] = { desk_sid };
                         wmp_send(sock, WMP_FOCUS, f, 1);
                     }
                     desk_down(e.button.x, e.button.y, e.button.timestamp);
+                } else if (e.button.button == 3) {
+                    /* Right-click (todos/0091): an icon gets its menu —
+                     * selecting it alone first unless already in the set
+                     * (the Win95 rule) — empty desktop gets the New/Sort/
+                     * Refresh/Display one. No drag, no dblclick pairing. */
+                    int x = (int)e.button.x, y = (int)e.button.y;
+                    int idx = desk_hit(x, y);
+                    if (idx >= 0) {
+                        if (!(desk_selmask >> idx & 1)) {
+                            desk_selmask = 1ULL << idx;
+                            desk_anchor = idx;
+                            desk_dirty = 1;
+                        }
+                        ctx_open_icon(idx, x, y);
+                    } else {
+                        if (desk_selmask) {
+                            desk_selmask = 0;
+                            desk_anchor = -1;
+                            desk_dirty = 1;
+                        }
+                        ctx_open_desktop(x, y);
+                    }
                 }
             } else if (peek_win && e.button.windowID == pkid) {
                 int32_t f[1] = { peek_for };   /* click the preview: activate */
                 wmp_send(sock, WMP_FOCUS, f, 1);
                 peek_dismiss();
-            } else bar_click(e.button.x);
+            } else if (e.button.button == 3) bar_rclick(e.button.x);
+            else bar_click(e.button.x);
             pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;   /* may drop */
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
             if (desk_win && e.button.windowID == did && e.button.button == 1)
                 desk_up(e.button.x, e.button.y);   /* marquee/drag end (0077) */
         } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
             int md = menu_col_for(e.motion.windowID);
+            int cd = ctx_col_for(e.motion.windowID);
             if (md >= 0) menu_motion(md, e.motion.y);
+            else if (cd >= 0) ctx_motion(cd, e.motion.y);   /* 0091 */
             else if (desk_win && e.motion.windowID == did) {
                 peek_dismiss();        /* pointer left the bar (0063) */
                 desk_motion(e.motion.x, e.motion.y, e.motion.state);
@@ -1731,12 +2164,13 @@ static void frame_cb(void) {
             int k = (int)e.key.key;
             if (k == SDLK_LCTRL || k == SDLK_RCTRL) mod_ctrl = down;
             else if (k == SDLK_LSHIFT || k == SDLK_RSHIFT) mod_shift = down;
-            /* Keyboard (todos/0078): while the menu is open every key is
-             * menu navigation (the root column holds focus); otherwise
-             * the run dialog, if up, owns the keyboard; otherwise the
-             * focused desktop's icon grid does (todos/0077). */
+            /* Keyboard (todos/0078): an open context menu owns the keys
+             * first (its root holds focus — todos/0091); then the Start
+             * menu, the run dialog, and the focused desktop's icon grid
+             * (todos/0077), in that order. */
             if (down) {
-                if (mdepth > 0) menu_key(k);
+                if (ctx_depth > 0) ctx_key(k);
+                else if (mdepth > 0) menu_key(k);
                 else if (run_win) run_key(k);
                 else if (desk_focused) desk_key(k);
             }
@@ -1750,6 +2184,7 @@ static void frame_cb(void) {
     }
     draw_bar();
     for (int d = 0; d < mdepth; d++) draw_menu_col(d);
+    for (int d = 0; d < ctx_depth; d++) draw_ctx(d);       /* 0091 */
     draw_run();
     draw_desk();
     if (peek_dirty) { peek_dirty = 0; draw_peek(); }

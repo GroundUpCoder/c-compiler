@@ -668,6 +668,42 @@ design, not worth policy). Storm-authoring gotchas for round 3 live in
 chrome, taskbar-button focus-then-minimize semantics, `&;` hush parse
 error, `__osScreen` only tracks the viewport on VT2).
 
+## Implementation status — context menus (landed 2026-07-11, todos/0091)
+
+Right-click raises a popup on the four planned surfaces. wm.c side: a
+two-window popup — root "ctxmenu" + at most ONE "ctxmenu2" flyout (the
+recorded v1 depth cap) — built from fixed `ctx_ent` item lists
+(SEP/GRAY/SUB flags), NOT the Start-menu directory columns; what is
+shared is the furniture pattern (borderless, parked at the EV_CREATED
+echo, top layer, root holds kernel focus with flyout hand-back,
+focus-leave/outside-click/Esc/EV_SCREEN dismiss, arrows/Right/Left/Enter
+nav, one popup at a time). Menus: empty desktop = New ▸ Folder/Text File
+(Win95 uniquifier) / Sort by ▸ Name (unlink `.icons` — auto-flow IS the
+sorted layout) / Refresh / Display (→ `ctlpanel Display`; ctlpanel grew
+applet-by-name argv); icon = select-alone-unless-in-set + Open through
+activate() (0092's file ops grow here); taskbar button =
+Restore/Minimize/Maximize/Close over the chrome ops this process already
+owns (grayed rows never fire and leave the menu open; Start strip +
+empty bar reserved for the 0101 taskbar menu, title bars for 0102).
+Fix that fell out: the START menu's EV_FOCUS dismissal is now gated on
+its root echo (`mcol[0].sid`, the 0078 run-dialog precedent) — without
+it, menu_toggle's ctx_dismiss makes focus fall to an app window and that
+event killed the menu being opened.
+
+user32 side: the EDIT control's standard WM_CONTEXTMENU menu
+(Undo/Cut/Copy/Paste/Delete/Select All, state-gated per popup; Undo
+always grayed — no undo buffer, the 0048 scope) over the 0068
+TrackPopupMenu primitive, which grew modal keyboard nav (Up/Down/Enter/
+Esc; the rest swallowed) and right-down-outside close. Standalone popups
+were already agent targets (`popupmenu` in `wmctl tree`, click by
+label).
+
+Tests: `tests/kernel/test_ctxmenu_e2e.js` (42 checks; geometry goldens
+120x96/120x48/120x28, dismissal matrix, state side effects, pixels) +
+`tests/browser/os-ctxmenu.mjs` (real right-clicks + keyboard nav, VT1
+shell verification). Test traps recorded in
+`logs/2026-07-11/0091-context-menus.md`.
+
 ## Implementation status — Aero effects (landed 2026-07-10, todos/0063)
 
 The DWM/Aero visual wave on the 0055 WebGPU pass, in the item's dependency

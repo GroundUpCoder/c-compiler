@@ -395,7 +395,24 @@ static LRESULT CALLBACK hub_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-int main(void) {
+/* `ctlpanel <Applet>` opens that applet alongside the hub (todos/0091 —
+ * the desktop context menu's Display Properties shortcut). Names match
+ * the icon labels, case-insensitively. */
+static int applet_by_name(const char *name) {
+    for (int i = 0; i < APP_N; i++) {
+        const char *a = APP_NAME[i], *b = name;
+        while (*a && *b) {
+            int ca = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a;
+            int cb = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*a && !*b) return i;
+    }
+    return -1;
+}
+
+int main(int argc, char **argv) {
     WNDCLASS wc;
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = hub_proc;
@@ -417,6 +434,7 @@ int main(void) {
                            16 + APP_N * CELL_W - (CELL_W - ICON_W), ICON_H + 16,
                            NULL, NULL, NULL, NULL);
     if (!g_hub) return 1;
+    if (argc > 1) open_applet(applet_by_name(argv[1]));   /* todos/0091 */
     MSG m;
     while (GetMessage(&m, NULL, 0, 0)) {
         TranslateMessage(&m);

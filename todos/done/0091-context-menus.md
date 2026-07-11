@@ -1,6 +1,28 @@
 # 0091 — Right-click context menus (popup primitive + core surfaces)
 
-- **Status**: open
+- **Status**: done (2026-07-11). All four planned surfaces landed. wm.c grew
+  a two-window popup ("ctxmenu" root + one "ctxmenu2" flyout — the recorded
+  v1 depth cap): empty desktop (New ▸ Folder/Text File with Win95
+  uniquifier, Sort by ▸ Name = forget `.icons`, Refresh, Display →
+  `ctlpanel Display` via new applet-by-name argv), icon (right-click
+  selects-alone-unless-in-set + Open through activate(); 0092 file ops grow
+  here), taskbar button (Restore/Minimize/Maximize/Close over the chrome
+  ops, inapplicable rows grayed and gray rows never fire; Start strip +
+  empty bar stay reserved for 0101, title bars for 0102). Same furniture
+  rules as the Start menu: top layer, root holds focus, focus-leave/
+  outside-click/Esc/EV_SCREEN dismiss, arrows/Right/Left/Enter navigate,
+  one popup at a time (the toggle path exposed a focus-fall race — the
+  start-menu EV_FOCUS dismissal is now gated on its root echo, the 0078
+  run-dialog precedent). user32's EDIT grew the standard WM_CONTEXTMENU
+  menu (Undo/Cut/Copy/Paste/Delete/Select All, state-gated per popup;
+  Undo stays grayed — no undo buffer, recorded 0048 scope) over the 0068
+  TrackPopupMenu primitive, which grew modal keyboard nav
+  (Up/Down/Enter/Esc, other keys swallowed) and right-down-outside close;
+  fileman's path EDIT gets the menu for free (its file-list menu is 0092).
+  Image v51 → v52. Tests: `tests/kernel/test_ctxmenu_e2e.js` (42 checks)
+  + `tests/browser/os-ctxmenu.mjs` (real right-clicks + keyboard, VT1
+  shell verification). No residue beyond what 0092/0101/0102 already
+  carry.
 - **Design**: `todos/WIN32.md` (USER32 menus), `todos/WM.md` (borderless popup
   surfaces — the Start menu 0028 and OpenWith picker 0072 are the existing
   pattern to reuse). Implements `TrackPopupMenu`/`CreatePopupMenu` in

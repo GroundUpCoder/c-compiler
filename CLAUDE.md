@@ -392,7 +392,7 @@ the multi-launch guard); a desktop left-click sends WMP_FOCUS on the
 desktop sid (kernel's borderless exemption stands; policy asks) and
 modifiers are tracked by KEYSYM from key events since pointer records
 carry no mod word; wmctl grew keydown/keyup/down/up/drag for headless
-gestures; right-button routing stays reserved for 0091/0101.
+gestures; right-button routing landed with 0091 (below).
 The system clipboard (todos/0090) is ONE kernel-held slot ({fmt, bytes};
 fmt 1 = UTF-8 text, tagged so 0092's file lists can ride later) behind
 the CLIP_SET/CLIP_GET RPCs — cross-process, survives the writer exiting
@@ -409,7 +409,31 @@ is the shell bridge — `cmd | clip` sets, `clip -o` prints (exit 1 when
 empty; also the test probe). Host-browser clipboard integration is
 deliberately NOT wired (SDL3.md). Tests:
 `tests/kernel/test_clipboard_e2e.js` + the os-shell.mjs notepad leg.
-Image version is **v51**.
+Right-click context menus (todos/0091): wm.c raises a two-window popup
+(root "ctxmenu" + at most ONE "ctxmenu2" flyout — the v1 depth cap) from
+fixed item lists with SEP/GRAY/SUB flags — empty desktop (New ▸ Folder/
+Text File with the Win95 uniquifier, Sort by ▸ Name = forget `.icons`,
+Refresh, Display → `ctlpanel Display`; ctlpanel grew applet-by-name
+argv), icon (selects-alone-unless-in-set, Open via activate(); 0092 file
+ops grow here), taskbar button (Restore/Minimize/Maximize/Close over the
+existing chrome ops, inapplicable rows grayed — gray rows never fire and
+leave the menu open; Start strip + empty bar reserved for 0101, title
+bars for 0102). Start-menu furniture rules apply (top layer, root holds
+focus, focus-leave/outside-click/Esc/EV_SCREEN dismiss, arrows/Right/
+Left/Enter, one popup at a time — the EV_FOCUS dismissal of the START
+menu is now also gated on its root echo, or menu_toggle's ctx_dismiss
+focus-fall kills the menu it just opened). user32's EDIT grew the
+standard WM_CONTEXTMENU menu (Undo/Cut/Copy/Paste/Delete/Select All,
+state-gated per popup; Undo always grayed — no undo buffer, 0048 scope)
+over the 0068 TrackPopupMenu primitive, which grew modal keyboard nav
+(Up/Down/Enter/Esc, the rest swallowed) + right-down-outside close;
+popup items stay agent targets, which is how tests drive them. Tests:
+`tests/kernel/test_ctxmenu_e2e.js` + `tests/browser/os-ctxmenu.mjs`
+(gotchas: `wmctl list` is z-ordered — pick windows by sid; `wmctl tree`
+lists menu BARS before the `popupmenu` section; browser legs must
+quiesce ~1.5s after the VT2 settle or a late EV_SCREEN dismisses the
+popup under test).
+Image version is **v52**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

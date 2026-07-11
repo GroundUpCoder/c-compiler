@@ -1428,6 +1428,9 @@ static int menu_route_mouse(HWND top, UINT msg, int x, int y) {
         case WM_LBUTTONUP:
             if (row >= 0) menu_fire(top, row);   /* press-drag-release */
             return 1;
+        case WM_RBUTTONDOWN:
+            if (row < 0 && bi < 0) menu_close(); /* outside closes (0091) */
+            return 1;
         default:
             return 1;                            /* modal while open */
         }
@@ -1476,6 +1479,34 @@ BOOL TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int reserved,
         if (g_menu.open) menu_close();
     }
     return (flags & TPM_RETURNCMD) ? (BOOL)g_menu.retcmd : TRUE;
+}
+
+/* Keyboard while a popup is open (todos/0091): Up/Down walk the enabled
+ * rows, Enter fires the hot one, Esc closes — and everything else is
+ * swallowed, because an open menu is modal for the keyboard (Windows
+ * semantics; the mouse routing above already is). SDL keysyms, raw. */
+static void menu_route_key(int key) {
+    MenuTbl *m = g_menu.pop;
+    if (key == 27) { menu_close(); return; }               /* Esc */
+    if (!m || m->n == 0) return;
+    if (key == 1073741905 || key == 1073741906) {          /* Down / Up */
+        int dir = key == 1073741905 ? 1 : -1;
+        int i = g_menu.hot;
+        for (int k = 0; k < m->n; k++) {
+            i = i < 0 ? (dir > 0 ? 0 : m->n - 1) : (i + dir + m->n) % m->n;
+            MenuItem *it = &m->items[i];
+            if (it->kind == 0 && !(it->state & (MF_GRAYED | MF_DISABLED)))
+                break;
+        }
+        g_menu.hot = i;
+        menu_present(g_menu.top);
+        return;
+    }
+    if (key == 13 || key == 1073741912) {                  /* Return / KP */
+        if (g_menu.hot >= 0) menu_fire(g_menu.top, g_menu.hot);
+        else menu_close();
+        return;
+    }
 }
 
 /* ============================================================ timers
@@ -1640,8 +1671,9 @@ static void pump_sdl(void) {
             if (!top) break;
             g_activeTop = top;
             g_mod = (int)e.key.mod;
-            if (g_menu.open && e.type == SDL_EVENT_KEY_DOWN && e.key.key == 27) {
-                menu_close();                    /* ESC dismisses the popup */
+            if (g_menu.open && e.type == SDL_EVENT_KEY_DOWN) {
+                menu_route_key((int)e.key.key);  /* modal: Esc/arrows/Enter,
+                                                    the rest swallowed (0091) */
                 break;
             }
             HWND target = top->focus ? top->focus : top;
@@ -3386,6 +3418,51 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PASTE:
         if (!edit_ro(h)) edit_paste(h, st);
         return 0;
+    case WM_CONTEXTMENU: {
+        /* The standard EDIT right-click menu (todos/0091), built fresh per
+         * popup over the 0068 primitive (TPM_RETURNCMD keeps it
+         * self-contained; the items are agent targets for free — wmctl
+         * tree/click). Undo tracks EM_CANUNDO (no undo buffer yet, 0048
+         * scope: always grayed); the rest gate on selection/readonly/
+         * clipboard state. lParam is top-level SURFACE coords (the
+         * DefWindowProc synthesis), which is what TrackPopupMenu takes. */
+        SetFocus(h);
+        int s, e;
+        edit_sel(st, &s, &e);
+        int ro = edit_ro(h);
+        char *cl = clip_load();
+        HMENU m = CreatePopupMenu();
+        MenuTbl *mt = MENU_T(m);
+        MenuItem *it;
+        it = menu_append(mt, 0, 1, "Undo", NULL);
+        if (it && !SendMessage(h, EM_CANUNDO, 0, 0)) it->state = MF_GRAYED;
+        menu_append(mt, 2, 0, NULL, NULL);
+        it = menu_append(mt, 0, 2, "Cut", NULL);
+        if (it && (e <= s || ro)) it->state = MF_GRAYED;
+        it = menu_append(mt, 0, 3, "Copy", NULL);
+        if (it && e <= s) it->state = MF_GRAYED;
+        it = menu_append(mt, 0, 4, "Paste", NULL);
+        if (it && (!cl || ro)) it->state = MF_GRAYED;
+        it = menu_append(mt, 0, 5, "Delete", NULL);
+        if (it && (e <= s || ro)) it->state = MF_GRAYED;
+        menu_append(mt, 2, 0, NULL, NULL);
+        it = menu_append(mt, 0, 6, "Select All", NULL);
+        if (it && st->len == 0) it->state = MF_GRAYED;
+        free(cl);
+        int cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD,
+                                      GET_X_LPARAM(lp), GET_Y_LPARAM(lp),
+                                      0, h, NULL);
+        DestroyMenu(m);
+        switch (cmd) {
+        case 1: SendMessage(h, EM_UNDO, 0, 0); break;
+        case 2: SendMessage(h, WM_CUT, 0, 0); break;
+        case 3: SendMessage(h, WM_COPY, 0, 0); break;
+        case 4: SendMessage(h, WM_PASTE, 0, 0); break;
+        case 5: SendMessage(h, WM_CLEAR, 0, 0); break;
+        case 6: SendMessage(h, EM_SETSEL, 0, (LPARAM)-1); break;
+        }
+        return 0;
+    }
     case EM_SETREADONLY:
         if (wp) h->style |= ES_READONLY; else h->style &= ~ES_READONLY;
         InvalidateRect(h, NULL, TRUE);
