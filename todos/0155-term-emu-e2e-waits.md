@@ -5,8 +5,18 @@
 
 ## Goal
 
-The tail of the 0083 sleep-sync sweep that is neither pure-WM (done in 0083)
-nor win32-agent-tree (0154):
+The tail of the 0083 sleep-sync sweep that is neither cleanly window-observable
+(done in 0083) nor win32-agent-tree (0154):
+
+- `test_wm_service_e2e.js` **tail** (53 held sleeps): 0083 converted its 60
+  window/flag/launch-count sync sleeps but left the hard cases — RESIZE-ack
+  geometry round-trips (`max`/`resize`/sysmenu move+size, where the settle is a
+  same-window geometry change, not a window appearing), Show-Desktop/Cascade/
+  minimize-all animation settles (convertible to per-window `wait flag m` /
+  `wait seq` baselines), in-surface desktop-selection + inline-rename settles
+  (may have no observable), and the negative "proves no spawn" timing subjects
+  (keep, annotate). Apply the same `wait seq $SID <baseline+1>` technique below
+  and annotate the true subjects so `grep "'sleep "` over the file is clean.
 
 - `test_term_e2e.js` (22 sleeps): `/bin/term` is a WM window (`wait win term`
   covers spawn), but most sleeps wait for **in-terminal freetype rendering /

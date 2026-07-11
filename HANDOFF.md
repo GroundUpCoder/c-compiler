@@ -18,12 +18,13 @@ guess-wait synchronization class is retired everywhere it was observable.
   (frame_seq ≥ N). TITLE = the exact TITLE column of `wmctl list` (quote
   spaced titles); shell vars work (`wmctl wait flag $SID m`). Factored the
   shared FLAGS builder into `rec_flags()` — `list` output is byte-identical.
-- **Converted (pure-WM kernel e2es)**: `test_wm_service_e2e.js` (53 sleeps →
-  waits, 136 ok / 0 fail), `test_snap_e2e.js`, `test_saver_e2e.js`,
-  `test_cursor_e2e.js`. Sleeps that are genuine **timing subjects** (negative
-  "nothing happened" checks, geometry round-trips on an existing window,
-  coarse desk/`.icons` re-read ticks, in-surface render settles) stayed as
-  `sleep`s with a justifying comment.
+- **Converted (pure-WM kernel e2es)**: `test_wm_service_e2e.js` (60 sleeps →
+  waits — window/flag/count + launcher legs via pre-count + `wait atleast`;
+  136 ok / 0 fail; 53 hard-tail sleeps remain, owned by 0155),
+  `test_snap_e2e.js`, `test_saver_e2e.js`, `test_cursor_e2e.js` (fully
+  annotated). Sleeps that are genuine **timing subjects** (negative "nothing
+  happened" checks, geometry RESIZE-ack round-trips, coarse desk/`.icons`
+  re-read ticks, in-surface render settles) stayed as `sleep`s.
 - **Converted (browser)**: `os-shell.mjs` (3 real conversions to
   `waitPixel`/`waitNotPixel`); the rest of the `os-*.mjs` sync sites were
   already event-based post-0146 or are annotated timing subjects.
@@ -48,10 +49,12 @@ Dev log: `logs/2026-07-12/0083-event-based-waits.md`. Item at
   **win32-app e2e cluster** (fileman_ops/recycle/ctxmenu/user32/notepad/calc/
   winmine/ctlpanel/clipboard/openwith/paint/gdi32 — ~295 sleeps waiting on
   in-app control state the WM window list can't see).
-- **0155** (P1) — `test_term_e2e.js` tty-render waits (`wait seq` off a
-  captured baseline) + audit the emulator/misc timing-subject sleeps
-  (sameboy/punes/mgba/gpubox/os_apps/cairo/os_boot) so the "no bare sync
-  sleep" invariant is clean and greppable.
+- **0155** (P1) — the hard-tail kernel sleeps: `test_wm_service_e2e.js`'s 53
+  remaining holds (RESIZE-ack geometry round-trips + animation/in-surface
+  settles via `wait seq` baselines; annotate true subjects), `test_term_e2e.js`
+  tty-render waits (`wait seq` off a captured baseline), and the emulator/misc
+  timing-subject audit (sameboy/punes/mgba/gpubox/os_apps/cairo/os_boot) so the
+  "no bare sync sleep" invariant is clean and greppable.
 
 Slotted right after 0084 in `queue.json`.
 

@@ -31,12 +31,17 @@ a failure signal, which is exactly what a flaky sleep should have been.
 ## What converted
 
 - **Pure-WM kernel e2es** — every sleep that was really "wait for a window to
-  appear / disappear / change flag" became a `wmctl wait`:
-  - `test_wm_service_e2e.js`: 53 sleeps → waits. Spawns → `wait win`/`count`,
+  appear / disappear / change flag / count" became a `wmctl wait` (the
+  wm_service geometry/in-surface tail is owned by 0155):
+  - `test_wm_service_e2e.js`: 60 sleeps → waits. Spawns → `wait win`/`count`,
     menus/popups (startmenu, ctxmenu, startrun, peek, datepop, sysmenu) →
     `wait win <title>` / `wait nowin <title>`, `min` → `wait flag m`, taskbar
-    restore/focus/cycle → `wait flag f`, `close`/`kill` → `wait gone`/`nowin`.
-    136 ok, 0 fail. Wall clock ~100s (was dominated by the 114 sleeps).
+    restore/focus/cycle → `wait flag f`, `close`/`kill` → `wait gone`/`nowin`,
+    and the launcher legs (search/RUN/desktop-dblclick) → a pre-count capture +
+    `wait atleast winbox $((N+1))` (the section-delta assertions still catch a
+    double-launch). 136 ok, 0 fail. 53 sleeps remain — the RESIZE-ack geometry
+    round-trips, animation/in-surface settles, and negative "proves no spawn"
+    subjects — the hard tail owned by **0155** (`wait seq` baselines + annotate).
   - `test_snap_e2e.js`, `test_saver_e2e.js`, `test_cursor_e2e.js`: spawn +
     screensaver/preview raise/dismiss + minimize/restore/focus flags. All green.
 - **Browser `os-*.mjs`**: mostly already event-based after 0146's `waitOut`/

@@ -285,8 +285,9 @@ const script = [
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $MSID 10 103',                      // 'g' -> search narrows to go
   'wmctl key $MSID 18 111',                      // 'o'
+  'GC=$(wmctl list | grep -c winbox$)',
   'wmctl key $MSID 40 13',                       // Enter -> launch the top hit
-  'sleep 3',
+  'wmctl wait atleast winbox $((GC+1))',         // live-search 'go' launcher spawns
   'echo ==act4',
   'wmctl list',
   'rm -rf /etc/menu',
@@ -365,7 +366,7 @@ const script = [
   'wmctl shot $MSID /root/ms.ppm && echo search-shot-ok',
   'N1=$(wmctl list | grep -c winbox$)',
   'wmctl key $MSID 40 13',                       // Enter -> launch the top hit
-  'sleep 3',
+  'wmctl wait atleast winbox $((N1+1))',         // the search top hit spawns
   'echo ==sm3',
   'wmctl list',
   'N2=$(wmctl list | grep -c winbox$)',
@@ -401,8 +402,9 @@ const script = [
   'wmctl key $RSID 5 98',                        // b
   'wmctl key $RSID 18 111',                      // o
   'wmctl key $RSID 27 120',                      // x
+  'GR=$(wmctl list | grep -c winbox$)',
   'wmctl key $RSID 40 13',                       // Enter -> sh -c winbox
-  'sleep 3',
+  'wmctl wait atleast winbox $((GR+1))',         // RUN... dialog sh -c winbox spawns
   'echo ==sm6',
   'wmctl list',
   // Keyboard All Programs cascade over an /etc/menu override tree: Down to
@@ -421,8 +423,9 @@ const script = [
   'wmctl list',
   'wmctl key $MSID 79 1073741903',               // Right -> into the Apps group
   'wmctl wait win startmenu3',
+  'GK=$(wmctl list | grep -c winbox$)',
   'wmctl key $MSID 40 13',                       // Enter -> go -> winbox
-  'sleep 3',
+  'wmctl wait atleast winbox $((GK+1))',         // keyboard All-Programs cascade launcher spawns
   'echo ==sm8',
   'wmctl list',
   'rm -rf /etc/menu',
@@ -479,7 +482,7 @@ const script = [
   'wmctl key $DSID 79 1073741903',               // Right
   'sleep 0.3',
   'wmctl key $DSID 40 13',                       // Enter
-  'sleep 3',
+  'wmctl wait atleast winbox $((N2+1))',         // arrow-select + Enter launches alauncher
   'N3=$(wmctl list | grep -c winbox$)',
   'echo LAUNCH-DELTA-$((N3-N2))',
   'echo ==sel3',
@@ -733,11 +736,11 @@ const script = [
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'LN0=$(wmctl list | grep -c winbox$)',
   'wmctl dblclick $DSID 58 48',                    // row 0 = 'My App' (short spaced)
-  'sleep 3',
+  'wmctl wait atleast winbox $((LN0+1))',          // the short-name launcher spawns
   'LN1=$(wmctl list | grep -c winbox$)',
   'echo LN-SHORT-DELTA-$((LN1-LN0))',
   'wmctl dblclick $DSID 58 112',                   // row 1 = the 36-char spaced name
-  'sleep 3',
+  'wmctl wait atleast winbox $((LN1+1))',          // the 36-char launcher spawns (0151 witness)
   'LN2=$(wmctl list | grep -c winbox$)',
   'echo LN-LONG-DELTA-$((LN2-LN1))',
   'echo ==ln1',
