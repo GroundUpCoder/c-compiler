@@ -96,8 +96,69 @@ function sessionFrames() {
     blue > sampled * 0.9, `${blue}/${sampled} blue`);
 }
 
+/* ---- session C: controller input reaches the emulated CPU ---- */
+// The built-in ROM's NMI handler polls controller 1 each frame and tints the
+// backdrop white ($30) while the A button is held, else blue ($21). Inject the
+// A key (SDL keycode 'z' = 122, which main.c maps to BUT_A) and confirm the
+// frame flips to white, then releases back to blue. This exercises the whole
+// input path — INJECT_KEY → SDL event → set_button → port[0].data.treated[] →
+// standard-controller $4016 read — which is dead unless port[].type is wired to
+// CTRL_STANDARD (the bug this leg guards).
+function sessionInput() {
+  const script = [
+    'punes &',
+    'sleep 8',
+    'SID=$(wmctl list | grep "puNES$" | sed "s/[^0-9].*//")',
+    'wmctl shot $SID /root/ni.ppm && echo ni-ok',   // no input: blue
+    'wmctl keydown $SID 0 122 0',                    // hold A
+    'sleep 1',
+    'wmctl shot $SID /root/ap.ppm && echo ap-ok',    // A held: white
+    'wmctl keyup $SID 0 122 0',
+    'kill %1',
+    'sleep 1',
+    'printf __NI__; cat /root/ni.ppm; printf __AP__; cat /root/ap.ppm; printf __END__',
+    '',
+  ].join('\n');
+  const c = cp.spawnSync('node', [BOOT, '--image=' + image, '--quiet'],
+    { input: script, timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
+  if (c.error) throw c.error;
+  const out = c.stdout;
+  const text = out.toString('latin1');
+
+  // dominant pixel of the PPM starting at the given byte offset (a P6 header
+  // may sit a few bytes past the marker; find it, then sample a sparse grid).
+  function domColor(off) {
+    const start = out.indexOf(Buffer.from('P6\n'), off);
+    if (start < 0) return null;
+    const head = out.toString('latin1', start, start + 24);
+    const m = head.match(/^P6\n(\d+) (\d+)\n255\n/);
+    if (!m) return null;
+    const w = +m[1], h = +m[2], data = start + m[0].length, end = data + w * h * 3;
+    const counts = new Map();
+    for (let p = data; p + 2 < end && p + 2 < out.length; p += 3 * 97) {
+      const key = (out[p] << 16) | (out[p + 1] << 8) | out[p + 2];
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    let best = 0, bestn = -1;
+    for (const [k, n] of counts) if (n > bestn) { bestn = n; best = k; }
+    return best.toString(16).padStart(6, '0');
+  }
+  const niOff = out.indexOf(Buffer.from('__NI__'));
+  const apOff = out.indexOf(Buffer.from('__AP__'));
+  const ni = niOff >= 0 ? domColor(niOff) : null;
+  const ap = apOff >= 0 ? domColor(apOff) : null;
+
+  check('both input shots captured',
+    text.includes('ni-ok') && text.includes('ap-ok'), text.slice(0, 120));
+  check('no-input frame is the blue backdrop ($21 = 4c9aec)',
+    ni === '4c9aec', ni);
+  check('holding A tints the frame white ($30 = eceeec) — input reached the CPU',
+    ap === 'eceeec', ap);
+}
+
 sessionApps();
 sessionFrames();
+sessionInput();
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\npunes e2e: ${failures} FAILED` : '\npunes e2e: PASS');

@@ -158,10 +158,8 @@ static size_t build_test_rom(void) {
 	h[5] = 1;
 	h[6] = 0x00;
 
-	/* reset vector → $8000 */
+	/* reset vector → $8000; IRQ → $8000 (harmless); NMI patched below */
 	prg[0x7FFC] = 0x00; prg[0x7FFD] = 0x80;
-	/* NMI/IRQ vectors → $8000 too (harmless) */
-	prg[0x7FFA] = 0x00; prg[0x7FFB] = 0x80;
 	prg[0x7FFE] = 0x00; prg[0x7FFF] = 0x80;
 
 	{
@@ -198,6 +196,36 @@ static size_t build_test_rom(void) {
 		/* forever: JMP self */
 		int self = pc;
 		EMIT(0x4C); EMIT((self + 0x8000) & 0xFF); EMIT(((self + 0x8000) >> 8) & 0xFF);
+
+		/* ── NMI handler: poll controller 1, tint the backdrop ─────────
+		 * Fires each vblank. Strobes $4016, reads the A-button bit, and
+		 * rewrites palette entry 0 = $30 (white) while A is held, else $21
+		 * (blue). This makes the built-in ROM input-responsive so the e2e
+		 * can inject a button and assert the frame reacts — the coverage the
+		 * port[].type = CTRL_STANDARD controller wiring needs. */
+		int nmi = pc;
+		LDA_IMM(0x01); EMIT(0x8D); EMIT(0x16); EMIT(0x40);   /* STA $4016 (strobe on) */
+		LDA_IMM(0x00); EMIT(0x8D); EMIT(0x16); EMIT(0x40);   /* STA $4016 (strobe off) */
+		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (A button) */
+		EMIT(0x29); EMIT(0x01);                              /* AND #$01 */
+		int beq = pc; EMIT(0xF0); EMIT(0x00);                /* BEQ notpressed (patched) */
+		LDA_IMM(0x30);                                       /* A held → white */
+		int bne = pc; EMIT(0xD0); EMIT(0x00);                /* BNE writepal (patched) */
+		int notpressed = pc;
+		prg[beq + 1] = (uint8_t)(notpressed - (beq + 2));
+		LDA_IMM(0x21);                                       /* not held → blue */
+		int writepal = pc;
+		prg[bne + 1] = (uint8_t)(writepal - (bne + 2));
+		EMIT(0x48);                                          /* PHA (save colour) */
+		LDA_IMM(0x3F); STA_PPU(0x06);
+		LDA_IMM(0x00); STA_PPU(0x06);
+		EMIT(0x68);                                          /* PLA (restore colour) */
+		STA_PPU(0x07);                                       /* → palette $3F00 */
+		LDA_IMM(0x00); STA_PPU(0x06); STA_PPU(0x06);         /* reset VRAM addr off palette */
+		EMIT(0x40);                                          /* RTI */
+
+		prg[0x7FFA] = (uint8_t)((nmi + 0x8000) & 0xFF);
+		prg[0x7FFB] = (uint8_t)(((nmi + 0x8000) >> 8) & 0xFF);
 		#undef EMIT
 		#undef LDA_IMM
 		#undef LDX_IMM
@@ -241,6 +269,15 @@ int main(int argc, char **argv) {
 	info.machine[HEADER] = info.machine[DATABASE] = DEFAULT;
 
 	pn_config_defaults();
+
+	/* Wire a standard controller onto both ports. input_init() (run inside
+	 * emu_turn_on) only installs the standard-controller read handler when
+	 * port[].type == CTRL_STANDARD; otherwise the read is input_rd_disabled and
+	 * the game sees no input. puNES's Qt shell sets this from settings — our
+	 * frontend must do it explicitly. set_button() then drives
+	 * port[0].data.treated[], which the read strobes out on $4016. */
+	port[0].type = CTRL_STANDARD;
+	port[1].type = CTRL_STANDARD;
 
 	/* point the core at our ROM (file path, or write the test ROM out) */
 	if (rom_path) {

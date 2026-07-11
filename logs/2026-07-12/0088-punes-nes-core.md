@@ -79,6 +79,32 @@ solid-fill acceptance shape as `/bin/mgba`'s MODE 3 red. e2e:
 pixel proof that the frame is the CPU-written palette-$21 blue (proves ROM load
 + mapper 0 + 6502 exec + PPU + palette + surface). Passes.
 
+## Follow-up: controller input was dead (post-merge fix)
+
+Shipped, then actually tested input with a real cart (Dr. Mario, MMC1) — and it
+did nothing. Two things came out of that:
+
+- **Real games render perfectly.** Dr. Mario's title screen, options screen and
+  live playfield (viruses, falling pills, sprites) all draw correctly — so the
+  "tile rendering didn't surface" note below was purely an artifact of the
+  *minimal* built-in ROM (blank CHR), not a rendering bug. Sprite + background
+  tile paths are fine.
+- **Input was completely broken.** `input_init()` (run inside `emu_turn_on`)
+  only installs the standard-controller `$4016` read handler when
+  `port[].type == CTRL_STANDARD`; otherwise the read is `input_rd_disabled` and
+  every button reads 0. puNES's Qt shell sets that from settings
+  (`objSettings.cpp`); our frontend dropped it. Fix: `port[0].type =
+  port[1].type = CTRL_STANDARD` before `emu_turn_on()`. Verified with Dr. Mario:
+  Start walks title → options → gameplay, A rotates, Left moves the pill.
+
+The bug had **zero coverage** — the original e2e only checked a static
+built-in-ROM frame that never reads input. Fixed test-first-in-spirit: the
+built-in ROM grew an **NMI handler that polls controller 1 and tints the
+backdrop** ($30 white while A is held, else $21 blue), and `test_punes_e2e.js`
+gained a `sessionInput` leg that injects the A key and asserts the frame flips
+blue→white→blue. That exercises the whole path (INJECT_KEY → SDL event →
+`set_button` → `port[0].data.treated[]` → `$4016` strobe read). Image → v71.
+
 ### Gotchas that cost time
 
 - **Palette indexing off-by-my-arithmetic.** `nes_pal[0x21]` = {76,154,236} =
