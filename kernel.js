@@ -170,6 +170,12 @@ var OP = {
   // snaps back to dst == buffer there, like any configure.
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
   SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006, SURFACE_RESIZE: 0x1007,
+  // SURFACE_SET_CURSOR (todos/0105): the per-surface client cursor shape (an
+  // SDL_SystemCursor value; -1 = hidden). The kernel overlays chrome cursors
+  // (resize edges) over it on hit test and posts the effective cursor to the
+  // UI bridge on every change (onCursor) — the pointer-lock wanted-state
+  // pattern, but for the native CSS cursor.
+  SURFACE_SET_CURSOR: 0x1008,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
   // one page-owned output ring — never RPCs. AUDIO_GAIN (todos/0048, the
@@ -612,11 +618,20 @@ var WMP = {
                                         Alt+Space chord emits (carries the
                                         focused sid). R_ERR with no subscribed
                                         WM (the menu IS policy) */
+  CURSOR_AT: 0x34,                   /* { xf32, yf32 }: the effective cursor
+                                        shape at a SCREEN point (todos/0105) ->
+                                        R_CURSOR { shape } (SDL_SystemCursor;
+                                        -1 hidden). Pure query — the chrome
+                                        overlay + per-surface client cursor,
+                                        side-effect-free (mechanism, assertable
+                                        headless; browser draws it) */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
   R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (todos/
                                         0096) — its own type so /bin/wm's
                                         fire-and-forget drain can route it
                                         (the R_SHOT precedent) */
+  R_CURSOR: 0x45,                    /* { shape }: the CURSOR_AT reply
+                                        (todos/0105; the R_IDLE precedent) */
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
   EV_SCALED: 0x88, EV_SCALE_REQ: 0x89, EV_TITLE_ACTIVATE: 0x8A,
@@ -967,6 +982,9 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
     // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
     surfaceSetFlags: function (sid, flags) { return self.call(OP.SURFACE_SET_FLAGS, { sid: sid, flags: flags | 0 }); },
+    // Per-surface cursor shape (todos/0105, SDL_SetCursor): SDL_SystemCursor
+    // value, or -1 to hide. The kernel overlays chrome resize cursors.
+    surfaceSetCursor: function (sid, shape) { return self.call(OP.SURFACE_SET_CURSOR, { sid: sid, shape: shape | 0 }); },
     // Owner-initiated resize (todos/0068, SDL_SetWindowSize): kernel answers
     // with a WINDOW_RESIZED ring event; the ack is surfaceConfigure below.
     surfaceResize: function (sid, w, h) { return self.call(OP.SURFACE_RESIZE, { sid: sid, w: w | 0, h: h | 0 }); },
@@ -1281,6 +1299,12 @@ function Kernel(opts) {
   // changes (focused surface requests relative mouse); it owns the actual
   // Pointer Lock API dance and reports transitions via wmPointerLockChanged.
   this._onPointerLock = opts.onPointerLock || function () {};
+  // Cursor (todos/0105): the UI bridge is told the effective cursor shape (an
+  // SDL_SystemCursor value; -1 hidden) whenever it CHANGES on a pointer move —
+  // chrome resize cursors over frames, the focused/hovered surface's client
+  // cursor over its client area, arrow elsewhere. Browser-only rendering (the
+  // page sets canvas.style.cursor); headless kernels leave it a no-op.
+  this._onCursor = opts.onCursor || function () {};
   this._log = opts.log || function () {};
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
@@ -1363,6 +1387,9 @@ function Kernel(opts) {
   this._wmPtrLockActive = false;  // actual lock state (bridge-reported); while
                                   // true, pointer input routes RELATIVE to the
                                   // focused relative-mouse surface (no hit-test)
+  this._wmCursor = 0;             // last effective cursor shape emitted to the
+                                  // bridge (todos/0105); the browser starts on
+                                  // the default arrow, so 0 is the honest init
   this._wmGlassOn = false;    // Aero glass tier (todos/0063): browser-
                               // compositor-only backdrop blur behind window
                               // chrome; toggled via WMP GLASS / wmGlass().
@@ -2727,6 +2754,10 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         hasAlpha: !!((req.flags | 0) & 8),        // bit3: SDL_WINDOW_TRANSPARENT
                                                   // (todos/0063): per-pixel alpha,
                                                   // composited src-over
+        cursor: 0,                // per-surface client cursor shape (todos/0105,
+                                  // SDL_SystemCursor; -1 hidden). SDL_SetCursor
+                                  // via SURFACE_SET_CURSOR; chrome cursors
+                                  // overlay in _wmCursorAt.
         layer: 0,                 // z layer (todos/0038): -1 bottom / 0 / +1 top;
                                   // set post-create via SET_LAYER / wmSetLayer
         pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
@@ -2786,6 +2817,19 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmVersion++;
       this._respond(pcb, {});
       this._wmSyncPointerLock();
+      break;
+    }
+    // Per-surface cursor (todos/0105): SDL_SetCursor's shape. Stored only —
+    // the effective cursor is derived on the next pointer move (chrome
+    // overlay in _wmCursorAt); a stationary pointer over this surface's
+    // client updates on the next move (Win95-ish, and it keeps this RPC
+    // cheap). Clamp to the known enum range (or -1 hidden).
+    case OP.SURFACE_SET_CURSOR: {
+      var sc2 = this._surfaces.get(req.sid | 0);
+      if (!sc2 || sc2.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      var shp = req.shape | 0;
+      sc2.cursor = (shp < 0) ? -1 : (shp > 19 ? 0 : shp);
+      this._respond(pcb, {});
       break;
     }
     // Owner-initiated resize (todos/0068): the surface's own process asks
@@ -3309,6 +3353,63 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
 };
 
+/* ---- cursor shapes (todos/0105) ----
+ * SDL_SystemCursor wire values; the CSS-name map lives host-side (CURSOR_CSS
+ * in host.js + os.html). Chrome resize cursors use the AXIS-PAIR shapes so a
+ * side frame reads ew-/ns-resize and the corner the matching diagonal. */
+var CUR_DEFAULT = 0, CUR_NWSE = 5, CUR_EW = 7, CUR_NS = 8;
+
+/* The effective cursor at a SCREEN point (todos/0105): pointer-lock hides it
+ * (-1), an in-flight resize drag shows its edge cursor, a title drag the
+ * arrow, a frame edge the matching resize cursor, a client area the surface's
+ * OWN cursor (SDL_SetCursor), else the arrow. Mirrors wmPointer's hit test
+ * — same on-screen (dst) rects, same topmost order — but side-effect-free, so
+ * it serves both the move-time emit and the WMP_CURSOR_AT query. */
+Kernel.prototype._wmCursorAt = function (x, y) {
+  if (this._wmPtrLockActive) return -1;          // no cursor while locked
+  if (this._wmResizeDrag) {
+    var rd = this._wmResizeDrag;
+    return rd.ex && rd.ey ? CUR_NWSE : rd.ex ? CUR_EW : rd.ey ? CUR_NS : CUR_DEFAULT;
+  }
+  if (this._wmDrag) return CUR_DEFAULT;          // moving a window: arrow
+  for (var i = this._zOrder.length - 1; i >= 0; i--) {
+    var s = this._surfaces.get(this._zOrder[i]);
+    if (!s || s.minimized || !s.mapped) continue;
+    var dw = s.dstW, dh = s.dstH;
+    var inTitle = !s.borderless &&
+      x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
+    var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
+    var inFrame = !s.borderless && !inTitle && !inClient &&
+      x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER &&
+      y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER;
+    if (inFrame) {
+      // Resize cursors only on RESIZABLE surfaces (fixed-size frames read the
+      // arrow, matching Windows — the 0024 scale-drag is a power gesture, not
+      // advertised). Drag zones live on the E/S/SE edges (left/top just focus);
+      // the SE corner widens by WM_GRIP, mirroring the hit test.
+      if (!s.resizable) return CUR_DEFAULT;
+      var ex = x >= s.x + dw ? 1 : 0;
+      var ey = y >= s.y + dh ? 1 : 0;
+      if (ex && y >= s.y + dh - WM_GRIP) ey = 1;
+      if (ey && x >= s.x + dw - WM_GRIP) ex = 1;
+      return ex && ey ? CUR_NWSE : ex ? CUR_EW : ey ? CUR_NS : CUR_DEFAULT;
+    }
+    if (inTitle) return CUR_DEFAULT;
+    if (inClient) return s.cursor | 0;           // the app's per-surface cursor
+  }
+  return CUR_DEFAULT;                            // desktop
+};
+
+/* Emit an effective-cursor change to the UI bridge, debounced (todos/0105).
+ * Called on every pointer MOVE; browser-only rendering, headless no-ops. */
+Kernel.prototype._wmEmitCursor = function (x, y) {
+  var shape = this._wmCursorAt(x, y);
+  if (shape !== this._wmCursor) {
+    this._wmCursor = shape;
+    this._onCursor(shape);
+  }
+};
+
 /* kind: 'move' | 'down' | 'up' | 'wheel'; opts: { button, buttons, wheelX,
  * wheelY, direction, dx, dy }. Returns what happened (for tests/bridge
  * cursors). While the pointer lock is active (todos/0018) the bridge sends
@@ -3321,6 +3422,11 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
                                        // included; per-window INJECT_POINTER
                                        // deliberately does not (tests can
                                        // poke apps without waking the saver)
+  // Cursor (todos/0105): recompute the effective cursor on every move (chrome
+  // overlay + hovered surface's client cursor), debounced. Before the lock/
+  // drag branches so it also updates mid-drag (they early-return); _wmCursorAt
+  // reads the same drag/lock state, so the shape is right in every case.
+  if (kind === 'move') this._wmEmitCursor(x, y);
   // Pointer lock active: everything goes to the focused relative-mouse
   // surface — motion as relative records, buttons/wheel at the client
   // center (SDL freezes the position in relative mode; apps read deltas).
@@ -4183,6 +4289,9 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
     case WMP.SNAP: ok(this.wmSnap(g(0))); break;       // Aero Snap (0095)
     case WMP.GET_IDLE:                                 // idle clock (0096)
       conn.peer.send(this._wmpFrame(WMP.R_IDLE, [this.wmIdleMs()]));
+      break;
+    case WMP.CURSOR_AT:                                // cursor shape (0105)
+      conn.peer.send(this._wmpFrame(WMP.R_CURSOR, [this._wmCursorAt(gf(0), gf(1))]));
       break;
     case WMP.SAVER: ok(this.wmSaver()); break;         // screensaver (0096)
     case WMP.SYSMENU: ok(this.wmSysMenu()); break;     // window sys menu (0102)

@@ -5607,6 +5607,7 @@ function createNullSDL() {
       __sdl_destroy_window: function () {},
       __sdl_set_window_title: function () {},
       __sdl_set_relative_mouse_mode: function () {},
+      __sdl_set_cursor: function () {},                   // no display (todos/0105)
       __sdl_set_window_size: function () { return -1; },  // no window system to resize
       __sdl_update_window_surface: function () { return 0; },
       __sdl_create_renderer: function () { return 1; },
@@ -5727,6 +5728,18 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
       WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
       WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
       WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
+// Cursor shape (SDL_SystemCursor) -> CSS `cursor` name (todos/0105). Index is
+// the wire shape; -1 (hidden) maps to 'none'. The kernel derives chrome
+// resize cursors and overlays them over an app's per-surface cursor; the
+// page/canvas just applies the name. os.html carries an identical map (it is
+// a standalone HTML bridge, not a host.js importer) — keep the two in sync.
+const CURSOR_CSS = [
+  'default', 'text', 'wait', 'crosshair', 'progress',
+  'nwse-resize', 'nesw-resize', 'ew-resize', 'ns-resize', 'move',
+  'not-allowed', 'pointer', 'nw-resize', 'n-resize', 'ne-resize',
+  'e-resize', 'se-resize', 's-resize', 'sw-resize', 'w-resize',
+];
+CURSOR_CSS[-1] = 'none';
 
 /* Lazy, optional Dawn probe (todos/WM.md "Headless testing tiers", tier 1):
  * the `webgpu` package (dawn-gpu/node-webgpu) is a devDependency, NEVER a hard
@@ -5877,6 +5890,16 @@ function createSurfaceSDL({ ctx, hooks }) {
         kFlagsBySid.set(sid, flags);
         hooks.surfaceSetFlags(sid, flags);
       }
+    }
+  }
+  /* SDL_SetCursor -> SURFACE_SET_CURSOR (todos/0105). The kernel keeps the
+   * per-surface cursor shape and OVERLAYS chrome cursors (resize edges) over
+   * it, then round-trips the effective cursor to the UI bridge. Pre-0105
+   * embedders lack the hook: a clean no-op (the native arrow stays). */
+  function setCursor(handle, shape) {
+    if (typeof hooks.surfaceSetCursor !== 'function') return;
+    for (const [sid, h] of handleBySid) {
+      if (h === handle) hooks.surfaceSetCursor(sid, shape | 0);
     }
   }
   /* Owner-initiated resize (todos/0068, SDL_SetWindowSize): ask the kernel
@@ -6083,6 +6106,9 @@ function createSurfaceSDL({ ctx, hooks }) {
     env.__sdl_set_relative_mouse_mode = function (handle, enabled) {
       setRelativeMouse(handle, enabled);
     };
+    // OS flavor: the cursor is the KERNEL's (per-surface state + chrome
+    // overlay), not the worker-local canvas's — override the inner path.
+    env.__sdl_set_cursor = function (handle, shape) { setCursor(handle, shape); };
     env.__sdl_set_window_size = function (handle, w, h) {
       const win = fbByHandle.get(handle);
       return win ? requestResize(win.sid, w, h) : -1;
@@ -6188,6 +6214,7 @@ function createSurfaceSDL({ ctx, hooks }) {
         if (win) hooks.surfaceSetTitle(win.sid, titlePtr ? readString(titlePtr) : '');
       },
       __sdl_set_relative_mouse_mode: setRelativeMouse,
+      __sdl_set_cursor: setCursor,          // per-surface cursor (todos/0105)
       __sdl_set_window_size: function (handle, w, h) {
         const win = windows[handle - 1];
         return win ? requestResize(win.sid, w, h) : -1;
@@ -6723,6 +6750,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       // switches mousemove to movementX/Y descriptors while locked.
       __sdl_set_relative_mouse_mode: function (handle, enabled) {
         if (notifyWindow) notifyWindow({ type: 'sdl-relative-mouse', enabled: !!enabled });
+      },
+      // SDL_SetCursor (todos/0105): the standalone page owns its canvas, so
+      // apply the CSS cursor directly (shape -1 = hide). The OS flavor
+      // overrides this to route the shape through the kernel instead.
+      __sdl_set_cursor: function (handle, shape) {
+        if (canvas && canvas.style) canvas.style.cursor = CURSOR_CSS[shape] || 'default';
       },
       // SDL_SetWindowSize (todos/0068): only the kernel-surface flavor can
       // renegotiate a buffer; the standalone page's canvas is the page's.

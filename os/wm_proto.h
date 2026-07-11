@@ -100,12 +100,20 @@ enum {
                                           Alt+Space chord emits (carries the
                                           FOCUSED sid). R_ERR with no
                                           subscribed WM (the menu IS policy) */
+    WMP_CURSOR_AT = 0x34,              /* { xf32, yf32 }: the effective cursor
+                                          shape at a SCREEN point (todos/0105)
+                                          -> R_CURSOR { shape } (SDL_SystemCursor;
+                                          -1 hidden). Pure query — chrome
+                                          overlay + per-surface client cursor,
+                                          side-effect-free */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
     WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (todos/
                                           0096) — its own type so /bin/wm's
                                           fire-and-forget drain can route it
                                           (the R_SHOT precedent) */
+    WMP_R_CURSOR = 0x45,               /* { shape }: the CURSOR_AT reply
+                                          (todos/0105; the R_IDLE precedent) */
     /* events */
     WMP_EV_CREATED = 0x80, WMP_EV_DESTROYED = 0x81, WMP_EV_TITLE = 0x82,
     WMP_EV_FOCUS = 0x83, WMP_EV_MOVED = 0x84, WMP_EV_MINIMIZED = 0x85,

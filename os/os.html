@@ -192,6 +192,22 @@ function mods(e) {
 // kernel flips between relative and absolute routing.
 var ptrLockWanted = false;
 function ptrLocked() { return document.pointerLockElement === screen; }
+// Cursor shapes (todos/0105): the kernel derives the effective cursor per
+// pointer move (chrome resize cursors overlaid on the hovered surface's own
+// SDL_SetCursor shape) and posts {type:'cursor', shape}; we map it to a CSS
+// `cursor` name on the desktop canvas. Index is the SDL_SystemCursor wire
+// value; -1 (hidden) -> 'none'. Kept in sync with host.js's CURSOR_CSS.
+var CURSOR_CSS = [
+  'default', 'text', 'wait', 'crosshair', 'progress',
+  'nwse-resize', 'nesw-resize', 'ew-resize', 'ns-resize', 'move',
+  'not-allowed', 'pointer', 'nw-resize', 'n-resize', 'ne-resize',
+  'e-resize', 'se-resize', 's-resize', 'sw-resize', 'w-resize'];
+function applyCursor(shape) {
+  // Never fight the browser's own cursor while the pointer is locked (there
+  // is no cursor then); the kernel already sends -1, but guard anyway.
+  screen.style.cursor = shape === -1 ? 'none' : (CURSOR_CSS[shape] || 'default');
+  window.__osCursor = shape;   // agent probe
+}
 document.addEventListener('pointerlockchange', function () {
   wmSend({ kind: 'lockchange', active: ptrLocked() });
   window.__osPtrLock = ptrLocked();   // agent probe
@@ -398,6 +414,11 @@ kernel.onmessage = function (e) {
           if (lockP && lockP.catch) lockP.catch(function () {});
         } catch (err) { /* no gesture yet */ }
       }
+      break;
+    // Cursor shape (todos/0105): apply the kernel's effective cursor to the
+    // desktop canvas. Ignore while pointer-locked (no cursor exists then).
+    case 'cursor':
+      if (!ptrLocked()) applyCursor(m.shape | 0);
       break;
     // The audio mixer's output ring (todos/0017): play it with host.js's
     // createAudioReceiver — one synthetic device, resumed on the first user

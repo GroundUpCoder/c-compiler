@@ -20,6 +20,11 @@
  * is 50%-alpha blue (green when toggled), so whatever is behind shows
  * through at exactly src-over weights; the white border and the black
  * click marks stay opaque.
+ *
+ * `winbox cursor` sets the I-beam via SDL_SetCursor(SDL_CreateSystemCursor(
+ * SDL_SYSTEM_CURSOR_TEXT)), titled "curbox" — the per-surface cursor
+ * acceptance app (todos/0105): the kernel reports `text` over its client and
+ * the chrome resize cursors over its (resizable) frame.
  */
 #include <SDL.h>
 #include <stdint.h>
@@ -79,12 +84,17 @@ static void frame_cb(void) {
 int main(int argc, char **argv) {
     int fixed = argc > 1 && strcmp(argv[1], "fixed") == 0;
     alpha = argc > 1 && strcmp(argv[1], "alpha") == 0;
+    int cursor = argc > 1 && strcmp(argv[1], "cursor") == 0;
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow(alpha ? "alphabox" : fixed ? "fixbox" : "winbox", W, H,
+    win = SDL_CreateWindow(alpha ? "alphabox" : fixed ? "fixbox"
+                           : cursor ? "curbox" : "winbox", W, H,
                            alpha ? SDL_WINDOW_TRANSPARENT
                                  : fixed ? 0 : SDL_WINDOW_RESIZABLE);
     if (!win) return 3;
     surf = SDL_GetWindowSurface(win);
+    /* Per-surface cursor (todos/0105): claim the I-beam for the client area.
+       The kernel overlays chrome resize cursors on the frame automatically. */
+    if (cursor) SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT));
     __setAnimationFrameFunc(frame_cb);
     return 0;
 }

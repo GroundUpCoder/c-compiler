@@ -56,6 +56,12 @@
 //                                                page reports transitions back
 //                                                as a {kind:'lockchange'}
 //                                                wm-input event
+//                   {type:'cursor', shape}       the effective pointer cursor
+//                                                changed (todos/0105) — the
+//                                                page sets canvas.style.cursor
+//                                                from an SDL_SystemCursor shape
+//                                                (-1 = hidden); chrome resize
+//                                                cursors overlay app cursors
 'use strict';
 
 importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'compositor.js');
@@ -351,6 +357,7 @@ async function boot() {
     onOutput: function (pid, fd, bytes) { post({ type: 'out', bytes: bytes }); },
     onHalt: function (status) { post({ type: 'halt', status: status }); },
     onPointerLock: function (wanted) { post({ type: 'pointer-lock', wanted: wanted }); },
+    onCursor: function (shape) { post({ type: 'cursor', shape: shape }); },
     log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
   });
   tty = kernel.createTty({

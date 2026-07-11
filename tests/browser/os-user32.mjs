@@ -103,6 +103,23 @@ try {
   // Button raised edge: Add's top-left pixel is BTNHIGHLIGHT white.
   check('button raised 3D edge', near(await sample(...at(268, 10)), WHITE), await sample(...at(268, 10)));
 
+  // Cursor shapes (todos/0105): user32's EDIT claims the I-beam on hover, so a
+  // real mouse move over the Name EDIT flips canvas.style.cursor to 'text';
+  // over the Add button it falls back to 'default'. The kernel per-surface
+  // cursor rides the SetCursor -> SDL -> RPC path; a short settle lets the app
+  // pump the motion. (The agent tree carries no pixels, so this is the page.)
+  const cursorAt = async (cx, cy) => {
+    await page.mouse.move(rect.x + WX + cx, rect.y + WY + cy);
+    await new Promise(r => setTimeout(r, 200));
+    return page.evaluate(() => document.getElementById('screen').style.cursor);
+  };
+  {
+    const overEdit = await cursorAt(166, 22);
+    check('EDIT hover -> text I-beam cursor', overEdit === 'text', overEdit);
+    const overBtn = await cursorAt(268, 12);
+    check('button hover -> default arrow', overBtn === 'default' || overBtn === '', overBtn);
+  }
+
   // REAL input path: type into the edit (page keyboard -> kernel ring ->
   // WM_CHAR), then a real mouse click on Greet. SETTLE around the VT
   // switch and between input gestures (the HANDOFF sweep rule) — the

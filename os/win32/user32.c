@@ -849,16 +849,46 @@ HBITMAP LoadBitmapW(HINSTANCE inst, LPCWSTR name) {
  * decoration and there is no free cursor (the page pointer is the
  * pointer), so apps get distinct non-NULL tokens and DrawIcon no-ops.
  * The .ico/.cur assets are deliberately not vendored (0068). */
-static int g_iconStub, g_cursorStub;
+static int g_iconStub;
 
 HICON LoadIconW(HINSTANCE inst, LPCWSTR name) {
     (void)inst; (void)name;
     return (HICON)&g_iconStub;
 }
 
+/* System cursor shapes (todos/0105): an HCURSOR token carries its
+ * SDL_SystemCursor shape so SetCursor can push it to the surface via the SDL
+ * cursor path (the kernel then shows it over this window's client, and
+ * overlays chrome resize cursors on the frame itself). System shapes only —
+ * the .cur assets stay unvendored (0068). g_cursorShape[i] == i, so its
+ * address IS a shape-tagged handle; g_sdlCursor caches the SDL objects so a
+ * per-move SetCursor doesn't leak one each call. */
+static unsigned char g_cursorShape[SDL_SYSTEM_CURSOR_COUNT];
+static SDL_Cursor *g_sdlCursor[SDL_SYSTEM_CURSOR_COUNT];
+static int g_cursorInit;
+
+static HCURSOR cursor_token(int shape) {
+    if (!g_cursorInit) {
+        for (int i = 0; i < SDL_SYSTEM_CURSOR_COUNT; i++)
+            g_cursorShape[i] = (unsigned char)i;
+        g_cursorInit = 1;
+    }
+    if (shape < 0 || shape >= SDL_SYSTEM_CURSOR_COUNT) shape = SDL_SYSTEM_CURSOR_DEFAULT;
+    return (HCURSOR)&g_cursorShape[shape];
+}
+
 HCURSOR LoadCursorW(HINSTANCE inst, LPCWSTR name) {
-    (void)inst; (void)name;
-    return (HCURSOR)&g_cursorStub;
+    (void)inst;
+    /* IDC_* are MAKEINTRESOURCE(id) — compare the ordinal value (the veneer
+     * builds ANSI, so IDC_* are LPSTR; compare as integers to sidestep the
+     * pointer-type mismatch). Map the shapes the CSS cursor set can render;
+     * the rest fall to arrow. */
+    ULONG_PTR id = (ULONG_PTR)name;
+    int shape = SDL_SYSTEM_CURSOR_DEFAULT;
+    if (id == 32513)      shape = SDL_SYSTEM_CURSOR_TEXT;       /* IDC_IBEAM */
+    else if (id == 32514) shape = SDL_SYSTEM_CURSOR_WAIT;       /* IDC_WAIT */
+    else if (id == 32515) shape = SDL_SYSTEM_CURSOR_CROSSHAIR;  /* IDC_CROSS */
+    return cursor_token(shape);
 }
 
 HANDLE LoadImageW(HINSTANCE inst, LPCWSTR name, UINT type, int cx, int cy, UINT flags) {
@@ -874,10 +904,23 @@ BOOL DestroyIcon(HICON icon) { (void)icon; return TRUE; }
 BOOL DestroyCursor(HCURSOR cur) { (void)cur; return TRUE; }
 BOOL DrawIcon(HDC hdc, int x, int y, HICON icon) { (void)hdc; (void)x; (void)y; (void)icon; return TRUE; }
 
+static HCURSOR g_curCursor;
+
 HCURSOR SetCursor(HCURSOR cur) {
-    static HCURSOR current;
-    HCURSOR old = current;
-    current = cur;
+    HCURSOR old = g_curCursor;
+    if (cur == g_curCursor) return old;         /* debounce redundant sets */
+    g_curCursor = cur;
+    /* Route to the surface (todos/0105). A cursor token is &g_cursorShape[shape]
+     * (system cursors) — read the shape back and push the cached SDL cursor;
+     * NULL hides (Win32 SetCursor(NULL)). Foreign tokens fall to the arrow. */
+    if (!cur) { SDL_HideCursor(); return old; }
+    int shape = SDL_SYSTEM_CURSOR_DEFAULT;
+    if (cur >= (HCURSOR)&g_cursorShape[0] &&
+        cur < (HCURSOR)&g_cursorShape[SDL_SYSTEM_CURSOR_COUNT])
+        shape = *(unsigned char *)cur;
+    if (!g_sdlCursor[shape]) g_sdlCursor[shape] = SDL_CreateSystemCursor(shape);
+    SDL_ShowCursor();
+    SDL_SetCursor(g_sdlCursor[shape]);
     return old;
 }
 
@@ -1655,6 +1698,18 @@ static WPARAM mk_of_state(Uint32 sdlState) {
     return mk;
 }
 
+/* Per-surface cursor on hover (todos/0105): the EDIT client wants the I-beam,
+ * every other class the arrow. Only the client area speaks here — the kernel
+ * overlays chrome resize cursors on the frame. SetCursor debounces, so the
+ * per-move calls only reach the kernel on an actual shape change. */
+static void update_cursor(HWND target) {
+    /* cursor_token() directly (not LoadCursorW): the veneer builds ANSI
+     * (#undef UNICODE), so IDC_* are LPSTR and would mistype LoadCursorW. */
+    int ibeam = target && target->cls && hwnd_able(target) &&
+                ci_eq(target->cls->name, "EDIT");
+    SetCursor(cursor_token(ibeam ? SDL_SYSTEM_CURSOR_TEXT : SDL_SYSTEM_CURSOR_DEFAULT));
+}
+
 static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
                         int clicks, Uint32 state) {
     int x = (int)fx, y = (int)fy;
@@ -1677,6 +1732,7 @@ static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
         g_tme.hwnd = NULL;
         if (f & TME_LEAVE) PostMessage(was, WM_MOUSELEAVE, 0, 0);
     }
+    if (downMsg == WM_MOUSEMOVE) update_cursor(target);   /* I-beam over EDIT (0105) */
     if (!hwnd_able(target)) return;              /* disabled subtree: drop */
     UINT msg = downMsg;
     if (downMsg == WM_LBUTTONDOWN || downMsg == WM_RBUTTONDOWN ||

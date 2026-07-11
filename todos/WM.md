@@ -1064,7 +1064,18 @@ overlap). Image v27.
   surface yet — the split layout was the honest v1; the positioned-xterm
   (clip-path) design stays queued.
 - **Cursor is the native browser cursor** (no kernel sprite; headless
-  composite has no cursor).
+  composite has no cursor). The DEVIATION stands, but which native cursor
+  shows is now driven (todos/0105): per-surface `SDL_SetCursor` shape
+  (SURFACE_SET_CURSOR RPC, an SDL_SystemCursor enum; -1 hidden) is OVERLAID
+  with chrome resize cursors derived from the kernel's own frame hit test
+  (resizable-only: EW/NS side edges, NWSE corner; fixed frames + title +
+  desktop = arrow), and the effective shape posts to the UI bridge on every
+  pointer-move CHANGE (onCursor → {type:'cursor', shape}), which the page maps
+  to `canvas.style.cursor` via CURSOR_CSS. user32's EDIT claims the I-beam on
+  hover (LoadCursorW(IDC_IBEAM) → the same SDL path). Assertable headless via
+  the WMP_CURSOR_AT query (`wmctl cursor X Y` → R_CURSOR) — a pure,
+  side-effect-free read of the same _wmCursorAt used to emit; browser draws
+  it, headless never does (the 0063 glass rule).
 - **One window per process in the browser gpu flavor** (one OffscreenCanvas
   — same as the standalone runtime); the shm flavor supports many.
 - ~~**Audio in OS processes stays null**~~ — lifted by todos/0017 (the

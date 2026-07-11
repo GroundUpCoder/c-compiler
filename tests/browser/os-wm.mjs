@@ -179,6 +179,27 @@ try {
   check('frame border flanks the resized client',
     near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
 
+  // Cursor shapes (todos/0105): the kernel derives the effective cursor per
+  // pointer move and the page maps it to canvas.style.cursor. Over a RESIZABLE
+  // frame it reads a resize cursor (ew-resize side / nwse-resize corner); over
+  // the client and the desktop it's the plain arrow (winbox sets no app
+  // cursor). Read the live CSS value on the desktop canvas.
+  const cursorAt = async (sx, sy) => {
+    await page.mouse.move(rect.x + sx, rect.y + sy);
+    await new Promise(r => setTimeout(r, 150));
+    return page.evaluate(() => document.getElementById('screen').style.cursor);
+  };
+  {
+    const east = await cursorAt(NX + RW + 2, NY + 100);
+    check('resizable right frame edge -> ew-resize', east === 'ew-resize', east);
+    const se = await cursorAt(NX + RW + 2, NY + RH + 2);
+    check('resizable SE corner -> nwse-resize', se === 'nwse-resize', se);
+    const client = await cursorAt(NX + 100, NY + 80);
+    check('client area -> default arrow', client === 'default' || client === '', client);
+    const desk = await cursorAt(WX + 4, WY + 4);
+    check('desktop -> default arrow', desk === 'default' || desk === '', desk);
+  }
+
   // Maximize (todos/0025): double-click the title bar — kernel detects the
   // gesture (EV_TITLE_ACTIVATE), /bin/wm answers with MOVE + RESIZE to the
   // work area (screen minus taskbar, client top below the kernel title

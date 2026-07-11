@@ -1,0 +1,12 @@
+default_nonnull=1
+initial_is_default=1
+bad_id_null=1
+ibeam_nonnull=1
+set_ret=1
+active_is_ibeam=1
+null_set_ret=1
+active_still_ibeam=1
+visible0=1
+visible_hidden=0
+visible_shown=1
+active_after_destroy=1

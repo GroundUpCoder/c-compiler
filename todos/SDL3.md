@@ -321,10 +321,18 @@ on-screen keyboard. Web: `KeyboardEvent.code`/`key`, `beforeinput`/composition.
 Have: motion/button/wheel events (wheel `.y` sign matches SDL: +y = away/up,
 +x = right); **relative mouse mode** (`SDL_SetWindowRelativeMouseMode` /
 `SDL_GetWindowRelativeMouseMode` → Pointer Lock; landed 2026-07-08,
-todos/0018 — quake mouse look). Missing: `SDL_GetMouseState` /
-`GetRelativeMouseState`, cursor create/set/show/hide
-(`SDL_CreateCursor`, system cursors), `SDL_WarpMouseInWindow`, mouse capture.
-Web: CSS cursors.
+todos/0018 — quake mouse look); **system cursors** (`SDL_CreateSystemCursor` /
+`SDL_SetCursor` / `SDL_GetCursor` / `SDL_GetDefaultCursor` /
+`SDL_DestroyCursor` / `SDL_ShowCursor` / `SDL_HideCursor` /
+`SDL_CursorVisible`; landed 2026-07-11, todos/0105) — the pointer is the
+native browser cursor (WM.md deviation: no kernel sprite), so a cursor is an
+SDL_SystemCursor enum the host maps to a CSS `cursor` name. Per-surface state
+lives in the kernel (SURFACE_SET_CURSOR RPC), which OVERLAYS chrome resize
+cursors (frame edges) on hit test and posts the effective shape to the UI
+bridge (onCursor) — headless it is assertable but not drawn (`wmctl cursor
+X Y`). Missing: `SDL_GetMouseState` / `GetRelativeMouseState`,
+`SDL_CreateCursor` (custom pixel cursors — out of scope, system shapes only),
+`SDL_WarpMouseInWindow`, mouse capture. Web: CSS cursors.
 
 ### Gamepad / Joystick (SDL_gamepad, SDL_joystick) — ✗ missing — P1
 Entire subsystem absent. `SDL_GetGamepads`, open, button/axis state + events,

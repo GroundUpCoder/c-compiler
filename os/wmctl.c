@@ -96,6 +96,7 @@ static int usage(void) {
         "       wmctl menu\n"
         "       wmctl snap left|right|up|down\n"
         "       wmctl idle\n"
+        "       wmctl cursor X Y\n"
         "       wmctl saver\n"
         "       wmctl sysmenu\n"
         "       wmctl layer SID -1|0|1\n"
@@ -376,6 +377,25 @@ int main(int argc, char **argv) {
         if (wmp_read_all(fd, &ms, 4) != 0) return fail("short reply");
         wmp_skip(fd, h.plen - 4);
         printf("%d\n", ms);
+        return 0;
+    }
+    if (!strcmp(cmd, "cursor")) {       /* the effective cursor at a screen
+                                           point (todos/0105) — chrome overlay
+                                           + per-surface client cursor */
+        if (argc < 4) return usage();
+        wmp_hdr h;
+        int32_t a[2] = { f32bits((float)atoi(argv[2])), f32bits((float)atoi(argv[3])) };
+        if (wmp_send(fd, WMP_CURSOR_AT, a, 2) != 0 ||
+            wmp_next_reply(fd, &h) != 0)
+            return fail("protocol error");
+        if (h.type != WMP_R_CURSOR || h.plen < 4) {
+            wmp_skip(fd, h.plen);
+            return fail("cursor refused");
+        }
+        int32_t shape;
+        if (wmp_read_all(fd, &shape, 4) != 0) return fail("short reply");
+        wmp_skip(fd, h.plen - 4);
+        printf("%d\n", shape);
         return 0;
     }
     if (!strcmp(cmd, "saver")) {        /* screensaver preview (0096) */

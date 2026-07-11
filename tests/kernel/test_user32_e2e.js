@@ -94,6 +94,20 @@ const out = boot([
   'sleep 1',
   'wmctl click $SID 272 50',                     // up arrow
   'sleep 1',
+  // Cursor shapes (todos/0105): move the window to a known origin, then a
+  // REAL screen-injected motion (wmctl smove) over the Name EDIT (client rect
+  // 76,10 180x24) makes user32's update_cursor set the I-beam on the surface;
+  // over the transparent "Name:" STATIC it falls to the arrow. The kernel
+  // per-surface cursor reads back via `wmctl cursor` (no menu bar here, so no
+  // client offset). A short sleep lets the app pump the motion + SetCursor.
+  'wmctl move $SID 200 200 && echo curmoved',
+  'sleep 0.5',
+  'wmctl smove 210 210',                         // over the STATIC -> arrow
+  'sleep 0.8',
+  'echo cur-static=$(wmctl cursor 210 210)',
+  'wmctl smove 366 222',                         // over the Name EDIT -> I-beam
+  'sleep 0.8',
+  'echo cur-edit=$(wmctl cursor 366 222)',
   // MessageBox modal: Cancel first, then OK.
   'wmctl click About',
   'sleep 2',
@@ -186,6 +200,18 @@ check('listbox double click -> LBN_DBLCLK', out.includes('ctldemo: list-dblclk')
 check('scrollbar SB_LINEDOWN x2 walks the pos', out.includes('ctldemo: vscroll pos=1') &&
   out.includes('ctldemo: vscroll pos=2'));
 check('scrollbar SB_LINEUP walks back', /vscroll pos=2[\s\S]*vscroll pos=1/.test(out));
+
+/* cursor shapes (todos/0105): hover flips the surface cursor via SetCursor */
+{
+  const curVal = (k) => {
+    const m = out.match(new RegExp('^' + k + '=(-?\\d+)', 'm'));
+    return m ? parseInt(m[1], 10) : NaN;
+  };
+  check('EDIT hover sets the I-beam (SDL_SYSTEM_CURSOR_TEXT=1)',
+    curVal('cur-edit') === 1, curVal('cur-edit'));
+  check('non-EDIT client hover falls to the arrow (0)',
+    curVal('cur-static') === 0, curVal('cur-static'));
+}
 
 /* MessageBox modal */
 const mblist = section('mblist');

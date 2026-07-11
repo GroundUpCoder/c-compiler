@@ -18489,6 +18489,48 @@ bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled);
 bool SDL_GetWindowRelativeMouseMode(SDL_Window *window);
 void __setAnimationFrameFunc(void (*callback)(void));
 
+/* ---- Cursors (SDL_mouse.h; todos/0105) ----
+   System shapes only — the pointer is the native browser cursor (WM.md
+   deviation: no kernel sprite), so a cursor is just a CSS-name enum the host
+   feeds to the canvas cursor style. SDL_CreateCursor (custom pixel cursors)
+   stays out of scope. The kernel derives chrome cursors (resize edges) from
+   its own hit test and OVERLAYS them over the client cursor an app sets here;
+   with one window per process, SDL_SetCursor targets that process's surface.
+   SDL_SetCursor(NULL) is SDL3's "redraw the current cursor" no-op. */
+typedef enum SDL_SystemCursor {
+    SDL_SYSTEM_CURSOR_DEFAULT,        /* 0  arrow */
+    SDL_SYSTEM_CURSOR_TEXT,           /* 1  I-beam */
+    SDL_SYSTEM_CURSOR_WAIT,           /* 2 */
+    SDL_SYSTEM_CURSOR_CROSSHAIR,      /* 3 */
+    SDL_SYSTEM_CURSOR_PROGRESS,       /* 4 */
+    SDL_SYSTEM_CURSOR_NWSE_RESIZE,    /* 5  \ diagonal */
+    SDL_SYSTEM_CURSOR_NESW_RESIZE,    /* 6  / diagonal */
+    SDL_SYSTEM_CURSOR_EW_RESIZE,      /* 7  horizontal */
+    SDL_SYSTEM_CURSOR_NS_RESIZE,      /* 8  vertical */
+    SDL_SYSTEM_CURSOR_MOVE,           /* 9  four-way */
+    SDL_SYSTEM_CURSOR_NOT_ALLOWED,    /* 10 */
+    SDL_SYSTEM_CURSOR_POINTER,        /* 11 hand */
+    SDL_SYSTEM_CURSOR_NW_RESIZE,      /* 12 */
+    SDL_SYSTEM_CURSOR_N_RESIZE,       /* 13 */
+    SDL_SYSTEM_CURSOR_NE_RESIZE,      /* 14 */
+    SDL_SYSTEM_CURSOR_E_RESIZE,       /* 15 */
+    SDL_SYSTEM_CURSOR_SE_RESIZE,      /* 16 */
+    SDL_SYSTEM_CURSOR_S_RESIZE,       /* 17 */
+    SDL_SYSTEM_CURSOR_SW_RESIZE,      /* 18 */
+    SDL_SYSTEM_CURSOR_W_RESIZE,       /* 19 */
+    SDL_SYSTEM_CURSOR_COUNT
+} SDL_SystemCursor;
+
+typedef struct SDL_Cursor SDL_Cursor;
+SDL_Cursor *SDL_CreateSystemCursor(SDL_SystemCursor id);
+bool SDL_SetCursor(SDL_Cursor *cursor);
+SDL_Cursor *SDL_GetCursor(void);
+SDL_Cursor *SDL_GetDefaultCursor(void);
+void SDL_DestroyCursor(SDL_Cursor *cursor);
+bool SDL_ShowCursor(void);
+bool SDL_HideCursor(void);
+bool SDL_CursorVisible(void);
+
 /* ---- Clipboard (SDL_clipboard.h; todos/0090) ----
    Text only. One system-wide slot held by the OS kernel — copy/paste crosses
    processes and survives the writer exiting; standalone runs get a
@@ -22461,6 +22503,9 @@ __import int __sdl_create_window(const char *title, int x, int y, int w, int h, 
 __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
 __import void __sdl_set_relative_mouse_mode(int handle, int enabled);
+/* Per-surface cursor (todos/0105): shape is an SDL_SystemCursor value, or
+   -1 to hide (CSS cursor:none). handle names the process's window. */
+__import void __sdl_set_cursor(int handle, int shape);
 __import int __sdl_set_window_size(int handle, int w, int h);
 __import int __sdl_update_window_surface(int handle, const void *pixels, int w, int h, int pitch);
 __import void __sdl_delay(int ms);
@@ -23084,6 +23129,74 @@ bool SDL_GetWindowRelativeMouseMode(SDL_Window *window) {
     if (!window) return SDL_InvalidParamError("window");
     return window->relative_mouse;
 }
+
+/* ---- Cursors (todos/0105) ----
+   A cursor object is just its shape id. The active cursor + visibility are
+   application-global (SDL semantics); the effective shape pushed to the host
+   is the current cursor's shape while visible, -1 (hidden) otherwise. With
+   one window per process, the host applies it to that process's surface.
+   __sdl_current_window() finds it (newest window; 0 = no window yet). */
+struct SDL_Cursor { int shape; };
+
+static SDL_Cursor __sdl_default_cursor = { SDL_SYSTEM_CURSOR_DEFAULT };
+static SDL_Cursor *__sdl_active_cursor = &__sdl_default_cursor;
+static int __sdl_cursor_shown = 1;
+
+static int __sdl_cursor_win_handle(void) {
+    for (int i = __SDL_MAX_WINDOWS - 1; i >= 0; i--)
+        if (__sdl_window_registry[i]) return __sdl_window_registry[i]->handle;
+    return 0;
+}
+
+static void __sdl_cursor_apply(void) {
+    int shape = __sdl_cursor_shown && __sdl_active_cursor
+        ? __sdl_active_cursor->shape : -1;
+    __sdl_set_cursor(__sdl_cursor_win_handle(), shape);
+}
+
+SDL_Cursor *SDL_CreateSystemCursor(SDL_SystemCursor id) {
+    if (id < 0 || id >= SDL_SYSTEM_CURSOR_COUNT) {
+        SDL_SetError("SDL_CreateSystemCursor: bad id");
+        return NULL;
+    }
+    SDL_Cursor *c = (SDL_Cursor *)malloc(sizeof(SDL_Cursor));
+    if (!c) return NULL;
+    c->shape = (int)id;
+    return c;
+}
+
+bool SDL_SetCursor(SDL_Cursor *cursor) {
+    /* SDL3: NULL just forces a redraw of the current cursor. */
+    if (cursor) __sdl_active_cursor = cursor;
+    __sdl_cursor_apply();
+    return 1;
+}
+
+SDL_Cursor *SDL_GetCursor(void) { return __sdl_active_cursor; }
+SDL_Cursor *SDL_GetDefaultCursor(void) { return &__sdl_default_cursor; }
+
+void SDL_DestroyCursor(SDL_Cursor *cursor) {
+    if (!cursor || cursor == &__sdl_default_cursor) return;
+    if (cursor == __sdl_active_cursor) {
+        __sdl_active_cursor = &__sdl_default_cursor;
+        __sdl_cursor_apply();
+    }
+    free(cursor);
+}
+
+bool SDL_ShowCursor(void) {
+    __sdl_cursor_shown = 1;
+    __sdl_cursor_apply();
+    return 1;
+}
+
+bool SDL_HideCursor(void) {
+    __sdl_cursor_shown = 0;
+    __sdl_cursor_apply();
+    return 1;
+}
+
+bool SDL_CursorVisible(void) { return __sdl_cursor_shown ? 1 : 0; }
 
 /* ---- SDL_Renderer (2D accelerated) ----
    Opaque to user code; carries the host renderer handle. SDL_Texture is a
