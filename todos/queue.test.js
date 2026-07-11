@@ -179,6 +179,83 @@ test('add rolls back the scaffold when the result would not validate', () => {
   assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0001']); // unchanged
 });
 
+// --- priority (P0..P3, default P1 with the field omitted) ---
+
+test('add --priority sets the field; P1 and absent are omitted', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  let r = run(todos, ['add', '0002', '--slug', 'urgent', '--priority', '0']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  r = run(todos, ['add', '0003', '--slug', 'normal', '--priority', '1']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  const q = readManifest(todos).queue;
+  assert.strictEqual(q.find(e => e.id === '0002').priority, 0);
+  assert.ok(!('priority' in q.find(e => e.id === '0003')), 'P1 omits the field');
+  assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
+test('add rejects an invalid --priority loudly, writing nothing', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  for (const bad of ['4', '-1', 'x', '1.5']) {
+    const r = run(todos, ['add', '0002', '--slug', 'nope', '--priority', bad]);
+    assert.strictEqual(r.code, 1, `--priority ${bad} must fail`);
+    assert.match(r.stderr, /priority must be an integer 0\.\.3/);
+  }
+  assert.ok(!fs.existsSync(path.join(todos, '0002-nope.md')), 'no scaffold written');
+  assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0001']); // unchanged
+});
+
+test('set-priority sets, clears at 1, and errors on unknown id / bad value', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  assert.strictEqual(run(todos, ['set-priority', '0001', '3']).code, 0);
+  assert.strictEqual(readManifest(todos).queue[0].priority, 3);
+  assert.strictEqual(run(todos, ['set-priority', '0001', '1']).code, 0); // back to default
+  assert.ok(!('priority' in readManifest(todos).queue[0]), 'P1 removes the field');
+  let r = run(todos, ['set-priority', '0009', '0']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /"0009" is not in the queue/);
+  r = run(todos, ['set-priority', '0001', '7']);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.stderr, /priority must be an integer 0\.\.3/);
+  assert.ok(!('priority' in readManifest(todos).queue[0]), 'failed set writes nothing');
+});
+
+test('list shows the EFFECTIVE order (priority buckets, array order within)', () => {
+  const todos = setup();
+  ['0001', '0002', '0003', '0004'].forEach(id => writeItem(todos, id, id));
+  // Array order 1,2,3,4; priorities P2,P1(absent),P0,P1(absent).
+  writeManifest(todos, [
+    { id: '0001', priority: 2 }, { id: '0002' }, { id: '0003', priority: 0 }, { id: '0004' },
+  ]);
+  const r = run(todos, ['list']);
+  assert.strictEqual(r.code, 0, r.stderr);
+  const ids = [...r.stdout.matchAll(/\b(\d{4})\b/g)].map(m => m[1]);
+  assert.deepStrictEqual(ids, ['0003', '0002', '0004', '0001'], 'P0 first, P1s in array order, P2 last');
+  assert.match(r.stdout, /0003  P0  ready/);
+  assert.match(r.stdout, /0001  P2  ready/);
+  assert.match(r.stdout, /0002  ready/); // default P1: no marker
+  // The file's array order is NOT rewritten by the read-time sort.
+  assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0001', '0002', '0003', '0004']);
+});
+
+test('check validates the priority field (integer 0..3 only)', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001', priority: 2 }]);
+  assert.strictEqual(run(todos, ['check']).code, 0, 'priority 2 is valid');
+  for (const bad of [4, -1, '2', 1.5]) {
+    writeManifest(todos, [{ id: '0001', priority: bad }]);
+    const r = run(todos, ['check']);
+    assert.strictEqual(r.code, 1, `priority ${JSON.stringify(bad)} must fail`);
+    assert.match(r.stderr, /"priority" for "0001" must be an integer 0\.\.3/);
+  }
+});
+
 // --- reorder / block / done ---
 
 test('reorder --before moves an item', () => {

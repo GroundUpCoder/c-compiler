@@ -36,21 +36,30 @@ One numbered file per unit of work we have actually committed to doing.
 
 `todos/queue.json` is the **ordering manifest** — the authoritative source for
 the order of attack and the hard-vs-soft dependency split (which prose can't
-express unambiguously). Array order *is* the order. Each entry:
+express unambiguously). Array order *is* the order within a priority. Each
+entry:
 
 - `blockedBy` — HARD deps: the item isn't ready until every listed id is in
   `todos/done/` (the cc Todos tab renders this as a ⛓ block).
 - `after` — SOFT/advisory "best sequenced after" hints; they do **not** gate
   readiness (rendered lighter, as `after ▸`). Use this for "do X before Y is
   nicer" rather than "Y is broken without X".
+- `priority` — optional integer 0–3: **P0 urgent, P1 default, P2 low, P3
+  background**. Absent means P1, and the CLI omits the field at P1 to keep
+  entries minimal. The **effective order of attack is priority first, then
+  array position** — array order remains the only order *within* a priority
+  bucket, and the array is never rewritten when a priority changes (the sort
+  happens at read time, in `queue.js list` and the cc Todos tab, which marks
+  non-P1 items `P0`/`P2`/`P3`).
 
 Everything else (title, status, body) stays in the
 `NNNN-<slug>.md` files. Mutate the queue through the CLI — the single writer +
 validator — never by hand-editing `queue.json`:
 
 ```
-node todos/queue.js list                              # resolved order + ready/blocked
-node todos/queue.js add next --slug foo [--blocked-by 0057 --after 0058]
+node todos/queue.js list                              # effective order + ready/blocked
+node todos/queue.js add next --slug foo [--blocked-by 0057 --after 0058] [--priority 0]
+node todos/queue.js set-priority 0064 0               # 0..3; 1 (default) removes the field
 node todos/queue.js reorder 0064 --after 0058
 node todos/queue.js block 0048 --hard 0058,0060 --soft 0059
 node todos/queue.js done 0057                         # git-mv to done/, drop from queue
@@ -59,7 +68,8 @@ node todos/queue.js check                             # MUST pass before committ
 
 `node todos/queue.js check` must pass before a queue change is committed (it
 verifies every open file is listed exactly once, no ghost ids, deps reference
-real todos, no `blockedBy` cycles, and that no open item carries a structured
+real todos, no `blockedBy` cycles, any `priority` present is an integer 0–3,
+and that no open item carries a structured
 `Depends:` line — deps belong in the manifest, rationale in body prose). Its tests live in `todos/queue.test.js`
 (`node todos/queue.test.js`).
 

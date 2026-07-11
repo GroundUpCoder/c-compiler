@@ -13,13 +13,22 @@
 // The netguc/cc Todos tab reads the same queue.json (design:
 // netguc/cc/docs/todos-queue-manifest.md).
 //
-//   node todos/queue.js list                         # resolved order + ready/blocked state
+//   node todos/queue.js list                         # effective order + ready/blocked state
 //   node todos/queue.js add <NNNN|next> [--slug s] [--title t] \
-//                        [--after A,B] [--blocked-by A,B] [--pos N] [--reflection]
+//                        [--after A,B] [--blocked-by A,B] [--pos N] \
+//                        [--priority 0..3] [--reflection]
+//   node todos/queue.js set-priority <ID> <0..3>     # P0 urgent … P3 background; 1 = default
 //   node todos/queue.js reorder <ID> --before <ID> | --after <ID> | --pos <N>
 //   node todos/queue.js done <ID>                    # git-mv to done/, drop from queue
 //   node todos/queue.js block <ID> [--hard A,B] [--soft C,D]
 //   node todos/queue.js check [--fix]                # validate; exit non-zero on failure
+//
+// Priority: each entry may carry an optional integer `priority` 0..3 (P0 most
+// urgent, P3 background). Absent means P1, the default; the field is omitted
+// at P1 to keep entries minimal. The EFFECTIVE order of attack is a stable
+// sort by priority then array position — array order is still the only order
+// within a bucket, and the array is never rewritten when a priority changes
+// (the sort happens at read time, here and in the cc Todos tab).
 //
 // Zero dependencies (Node built-ins only), matching the repo's tools/ ethos.
 'use strict';
@@ -133,6 +142,10 @@ function parseManifest(content) {
         return { error: `"${k}" for "${entry.id}" must be an array of strings` };
       }
     }
+    if (entry.priority !== undefined
+        && (!Number.isInteger(entry.priority) || entry.priority < 0 || entry.priority > 3)) {
+      return { error: `"priority" for "${entry.id}" must be an integer 0..3 (got ${JSON.stringify(entry.priority)})` };
+    }
   }
   return { manifest: data };
 }
@@ -141,6 +154,7 @@ function parseManifest(content) {
 function formatManifest(manifest) {
   const lines = manifest.queue.map(e => {
     let s = `    { "id": ${JSON.stringify(e.id)}`;
+    if (e.priority !== undefined && e.priority !== 1) s += `, "priority": ${e.priority}`; // P1 is the default — omitted
     if (e.blockedBy && e.blockedBy.length) s += `, "blockedBy": [${e.blockedBy.map(x => JSON.stringify(x)).join(', ')}]`;
     if (e.after && e.after.length) s += `, "after": [${e.after.map(x => JSON.stringify(x)).join(', ')}]`;
     s += ' }';
@@ -163,6 +177,32 @@ function requireManifest() {
 }
 
 function entryFor(manifest, id) { return manifest.queue.find(e => e.id === id); }
+
+// ---------- priority ----------
+
+const DEFAULT_PRIORITY = 1;
+
+function priorityOf(entry) {
+  return entry.priority === undefined ? DEFAULT_PRIORITY : entry.priority;
+}
+
+// Validate a CLI-supplied priority value; die loudly on anything but 0..3.
+function parsePriorityArg(v, context) {
+  const n = (typeof v === 'string' && v.trim() !== '') ? Number(v) : NaN;
+  if (!Number.isInteger(n) || n < 0 || n > 3) {
+    die(`${context}: priority must be an integer 0..3 (P0 most urgent, P1 default, P3 background), got ${JSON.stringify(v)}`);
+  }
+  return n;
+}
+
+// The EFFECTIVE order of attack: stable sort by priority (ascending, absent =
+// P1), array position within the same priority. Never rewrites the array.
+function effectiveQueue(manifest) {
+  return manifest.queue
+    .map((entry, i) => ({ entry, i }))
+    .sort((a, b) => (priorityOf(a.entry) - priorityOf(b.entry)) || (a.i - b.i))
+    .map(x => x.entry);
+}
 
 // ---------- validation (the lint) ----------
 
@@ -286,7 +326,7 @@ function cmdList() {
   const fsState = scanFs();
   const doneSet = new Set(fsState.done.keys());
   process.stdout.write(`Order of attack (${manifest.queue.length} open):\n`);
-  manifest.queue.forEach((e, i) => {
+  effectiveQueue(manifest).forEach((e, i) => {
     const status = statusOf(e.id, fsState.open);
     const hardUnmet = (e.blockedBy || []).filter(d => !doneSet.has(d));
     const softUnmet = (e.after || []).filter(d => !doneSet.has(d));
@@ -295,7 +335,9 @@ function cmdList() {
     else if (status === 'unknown') state = 'MISSING FILE';
     else if (hardUnmet.length) state = `blocked ⛓ ${hardUnmet.join(' ')}`;
     else state = 'ready';
-    let line = `  ${String(i + 1).padStart(2)}. ${e.id}  ${state}`;
+    const prio = priorityOf(e);
+    const marker = prio === DEFAULT_PRIORITY ? '' : `P${prio}  `; // P1 (default) stays unmarked
+    let line = `  ${String(i + 1).padStart(2)}. ${e.id}  ${marker}${state}`;
     if (softUnmet.length) line += `   (after ▸ ${softUnmet.join(' ')})`;
     process.stdout.write(line + '\n');
   });
@@ -375,6 +417,8 @@ function cmdAdd(argv) {
   if (!ID_RE.test(id)) die(`add: id must be NNNN (4 digits) or "next", got "${id}"`);
   if (fsState.open.has(id) || fsState.done.has(id)) die(`add: id "${id}" already exists`);
 
+  const priority = flags.priority !== undefined ? parsePriorityArg(flags.priority, 'add') : undefined;
+
   const isReflection = flags.reflection !== undefined;
   const title = typeof flags.title === 'string' ? flags.title
     : (typeof flags.slug === 'string' ? flags.slug.replace(/-/g, ' ')
@@ -384,6 +428,7 @@ function cmdAdd(argv) {
   const filePath = path.join(TODOS_DIR, fileName);
 
   const entry = { id };
+  if (priority !== undefined && priority !== DEFAULT_PRIORITY) entry.priority = priority; // P1 = default, field omitted
   const hard = parseListFlag(typeof flags['blocked-by'] === 'string' ? flags['blocked-by'] : undefined);
   const soft = parseListFlag(typeof flags.after === 'string' ? flags.after : undefined);
   if (hard && hard.length) entry.blockedBy = hard;
@@ -416,6 +461,21 @@ function removeFromQueue(manifest, id) {
   const idx = manifest.queue.findIndex(e => e.id === id);
   if (idx === -1) return null;
   return manifest.queue.splice(idx, 1)[0];
+}
+
+function cmdSetPriority(argv) {
+  const { positional } = parseFlags(argv);
+  const [id, value] = positional;
+  if (!id || value === undefined) die('set-priority: usage: set-priority <ID> <0..3>  (1 is the default; setting 1 removes the field)');
+  const manifest = requireManifest();
+  const entry = entryFor(manifest, id);
+  if (!entry) die(`set-priority: "${id}" is not in the queue`);
+  const priority = parsePriorityArg(value, 'set-priority');
+  if (priority === DEFAULT_PRIORITY) delete entry.priority; // default is expressed by absence
+  else entry.priority = priority;
+  validateOrDie(manifest, scanFs(), 'set-priority');
+  writeManifest(manifest);
+  process.stdout.write(`set-priority ${id} → P${priority}${priority === DEFAULT_PRIORITY ? ' (default; field removed)' : ''}\n`);
 }
 
 function cmdReorder(argv) {
@@ -502,10 +562,15 @@ function cmdBlock(argv) {
 
 const USAGE = `queue.js — the todos ordering-manifest CLI
 
-  list                                          resolved order + ready/blocked state
+  list                                          effective order (priority buckets, then
+                                                array position) + ready/blocked state
   add <NNNN|next> [--slug s] [--title t]        scaffold a todo + insert into the queue
           [--after A,B] [--blocked-by A,B] [--pos N]
+          [--priority 0..3]                     P0 most urgent … P3 background (default P1,
+                                                field omitted at P1)
           [--reflection]                        curation-only "queue reflection" scaffold
+  set-priority <ID> <0..3>                      set an entry's priority (1 = default,
+                                                removes the field)
   reorder <ID> --before <ID> | --after <ID> | --pos <N>
   done <ID>                                     git-mv to done/, drop from queue
   block <ID> [--hard A,B] [--soft C,D]          set hard/soft deps ("" clears)
@@ -517,6 +582,7 @@ function main() {
   switch (cmd) {
     case 'list': return cmdList(rest);
     case 'add': return cmdAdd(rest);
+    case 'set-priority': return cmdSetPriority(rest);
     case 'reorder': return cmdReorder(rest);
     case 'done': return cmdDone(rest);
     case 'block': return cmdBlock(rest);
