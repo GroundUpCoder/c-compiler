@@ -1,4 +1,4 @@
-# Handoff — start of thread (updated 2026-07-11; 0111 win32 cmdline closed)
+# Handoff — start of thread (updated 2026-07-11; 0099 queue.js CLI hardening closed)
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite
@@ -7,41 +7,35 @@
 
 ## Where the repo stands
 
-**0111 (win32 cmdline abs-path) is CLOSED**; image is **v58**. Dev log
-`logs/2026-07-11/0111-win32-cmdline.md`; item at
-`todos/done/0111-win32-cmdline-abs-path.md`. One breath: kernel32's
-`proc_info_init` used to space-join `/proc/<pid>/cmdline` quoting only
-args with spaces, so a bare absolute POSIX path in `GetCommandLineW`
-read as a Windows `/`-option to ports like notepad (`/r` eaten off
-`/root/…` → ERROR box + Untitled instead of the file). Fix: quote EVERY
-arg after argv0 (argv0 stays quote-if-spaces; embedded `"` rides as
-`\"`, the `cmdline_split` escape) — Windows-canonical, no port patch.
-Consumer audit clean: wwinmain.c already skips a quoted argv0,
-winmine/calc ignore cmdline, k32demo prints without format asserts,
-CreateProcess children get real argv and re-render locally.
-test_openwith_e2e's default.gui leg is TIGHT now (`readme.md - Notepad`
-title + zero `ERROR` windows — the 0108 looseness is gone).
+**0099 (queue.js: --help must print usage, not scaffold) is CLOSED**; image
+stays **v58** (no bake inputs touched — queue.js/tests/docs only). Dev log
+`logs/2026-07-11/0099-queuejs-help-flag.md`; item at
+`todos/done/0099-queuejs-help-flag.md`. One breath: `-h`/`--help` anywhere
+in argv now prints usage and exits 0 BEFORE dispatch (an `add --help` can
+never scaffold an "untitled" item again); every subcommand parses flags
+against an allowlist, so an unknown `--flag` is a usage error — exit 2,
+nothing written (the root cause: mutation commands no longer guess); and
+`list | head` no longer crashes — EPIPE from an early-closing consumer is
+treated as normal termination. Contract in queue.js's header + README §1.
 
-**Verified**: full kernel suite 53/53 green on the v58 bake; boot.js
-probes — `notepad /root/hello.md &` → `hello.md - Notepad` in `wmctl
-list`; terminal `open foo.md` resolves `default.term`/vi BY DESIGN
-(openwith terminal context) and was never exposed to this bug.
+**Verified**: `node todos/queue.test.js` 22/22 (3 new cases, each checked
+to FAIL on the pre-fix CLI — the EPIPE test needs >64KB output and stderr
+captured OUTSIDE the pipeline or it passes vacuously; the dev log records
+both traps); acceptance re-run in the real repo, `check` OK on close.
 
-**Follow-ups filed by 0111**: none.
+**Follow-ups filed by 0099**: none.
 
-**Next in queue**: `node todos/queue.js list` — **0099 (queue.js EPIPE
-quick win)** leads, then 0114 (gucOS rebrand — queued deliberately right
-after 0096), 0098 (Start menu Win7 pane), 0101–0107, … tail: 0113,
+**Next in queue**: `node todos/queue.js list` (piping through `head` is
+fine now) — **0114 (gucOS rebrand)** leads (queued deliberately right
+after 0096), then 0098 (Start menu Win7 pane), 0101–0107, … tail: 0113,
 0112, 0115.
-**Do NOT pipe `queue.js list` through `head`** — EPIPE crash (known,
-harmless, noisy; fix is 0099).
 0064 (WM sweep round 3) still owes the operator the pointer-lock human
 check, the 0094 sound listen, the 0095 snap feel, and the 0096 saver
 eyeball.
 
 ## Gotchas carried forward (trimmed to the live ones)
 
-- **0111 NEW: `GetCommandLineW` args after argv0 are ALWAYS quoted** —
+- **0111: `GetCommandLineW` args after argv0 are ALWAYS quoted** —
   any new port that hand-parses its command line must take the
   quote-strip path (notepad's `cmdline[0]=='"'` branch is the pattern);
   the wwinmain.c shim already handles a quoted argv0.
@@ -107,7 +101,8 @@ eyeball.
   is a SUBSTRING on the file name, not a regex.
 - Queue changes via `node todos/queue.js` ONLY; `check` must pass before
   committing. NB list order is PRIORITY-BUCKETED (P0–P3) — a P2 item
-  ignores `--pos` relative to P1s.
+  ignores `--pos` relative to P1s. Since 0099 an unknown `--flag` exits 2
+  and `--help` is safe on every subcommand.
 - **0055**: boot REQUIRES worker WebGPU; browser os tests launch Chromium
   with `--enable-unsafe-webgpu --enable-features=Vulkan`.
 - The IDE's clangd flags os/*.c, os/win32/*.c and vendor sources — noise;
@@ -134,14 +129,16 @@ at release; halves/quarters only); 0096's calls (the idle clock is
 kernel mechanism, the timeout is wm.c policy; the saver KEEPS focus —
 that's the dismissal mechanism; store is the openwith/sounds shape;
 default 900s protects the test suite; no lock screen, no .scr plug-ins,
-no GPU savers — Mystify/pipes live in 0115); **0111's call (cmdline
+no GPU savers — Mystify/pipes live in 0115); 0111's call (cmdline
 quoting is the veneer's job — every arg after argv0 quoted; ports keep
-their Windows `/`-option parsers unpatched)**.
+their Windows `/`-option parsers unpatched); **0099's calls (usage
+errors exit 2 vs validation's 1; help is checked before dispatch,
+"anywhere in argv" on purpose; EPIPE on stdout/stderr = exit 0)**.
 
 ## Suggested opening for the new thread
 
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want
-to tackle — `node todos/queue.js list` for the order (0099 queue.js
-EPIPE quick win leads, then 0114 gucOS rebrand, 0098; 0064 WM sweep
-round 3 owes the pointer-lock human check, the 0094 sound listen, the
-0095 snap feel, and the 0096 saver eyeball)."
+to tackle — `node todos/queue.js list` for the order (0114 gucOS rebrand
+leads, then 0098 Start menu Win7 pane; 0064 WM sweep round 3 owes the
+pointer-lock human check, the 0094 sound listen, the 0095 snap feel, and
+the 0096 saver eyeball)."

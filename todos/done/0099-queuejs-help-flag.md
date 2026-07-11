@@ -1,6 +1,14 @@
 # 0099 — queue.js: --help must print usage, not scaffold an item
 
-- **Status**: open
+- **Status**: done 2026-07-11 — `-h`/`--help` anywhere in argv prints usage and
+  exits 0 BEFORE dispatch (an `add --help` can never scaffold again); every
+  subcommand now parses flags against an allowlist and an unknown `--flag`
+  exits 2 writing nothing (the root cause — mutation commands no longer
+  guess); bonus per HANDOFF's attribution: `list | head` no longer crashes
+  with an unhandled EPIPE (early pipe close = normal termination, exit 0).
+  Contract documented in queue.js's header + README §1; 3 new tests in
+  todos/queue.test.js (22 total), each verified to fail on the pre-fix CLI.
+  Follow-ups: none.
 - **Design**: `todos/README.md` §1 (the queue CLI contract);
   `todos/queue.js` (single writer + validator).
 

@@ -66,6 +66,11 @@ node todos/queue.js done 0057                         # git-mv to done/, drop fr
 node todos/queue.js check                             # MUST pass before committing a queue change
 ```
 
+`-h`/`--help` anywhere prints usage and exits 0 — checked before dispatch, so
+`add --help` can never scaffold an item. An unknown `--flag` on any subcommand
+is a usage error (exit 2, nothing written); validation failures exit 1. `list`
+tolerates a consumer closing the pipe early (`| head` is fine).
+
 `node todos/queue.js check` must pass before a queue change is committed (it
 verifies every open file is listed exactly once, no ghost ids, deps reference
 real todos, no `blockedBy` cycles, any `priority` present is an integer 0–3,

@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const REAL_QUEUE_JS = path.join(__dirname, 'queue.js');
 let passed = 0;
@@ -294,6 +294,61 @@ test('done git-mvs the file and drops it from the queue', () => {
   assert.ok(fs.existsSync(path.join(todos, 'done', '0001-a.md')), 'moved into done/');
   assert.deepStrictEqual(readManifest(todos).queue.map(e => e.id), ['0002']);
   assert.strictEqual(run(todos, ['check']).code, 0);
+});
+
+// --- usage: --help, unknown flags, EPIPE (todos/0099) ---
+
+test('--help prints usage and exits 0 on every command, writing nothing', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  const before = fs.readFileSync(path.join(todos, 'queue.json'), 'utf8');
+  for (const args of [[], ['-h'], ['--help'], ['add', '--help'], ['add', 'next', '-h'],
+                      ['list', '--help'], ['done', '--help'], ['check', '-h']]) {
+    const r = run(todos, args);
+    assert.strictEqual(r.code, 0, `${args.join(' ')}: ${r.stderr}`);
+    assert.match(r.stdout, /ordering-manifest CLI/, `${args.join(' ')} prints usage`);
+  }
+  assert.strictEqual(fs.readFileSync(path.join(todos, 'queue.json'), 'utf8'), before, 'manifest untouched');
+  assert.deepStrictEqual(fs.readdirSync(todos).filter(f => /^\d{4}-/.test(f)),
+    ['0001-a.md'], 'no scaffold written');
+});
+
+test('an unknown --flag is a usage error (exit 2), writing nothing', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  writeManifest(todos, [{ id: '0001' }]);
+  const before = fs.readFileSync(path.join(todos, 'queue.json'), 'utf8');
+  for (const args of [['add', 'next', '--slug', 'x', '--bogus-flag'],
+                      ['add', 'next', '--sug', 'typo'],
+                      ['list', '--bogus'], ['check', '--fixx'],
+                      ['reorder', '0001', '--befor', '0001'],
+                      ['done', '0001', '--force'],
+                      ['block', '0001', '--hrd', '0002'],
+                      ['set-priority', '0001', '2', '--now']]) {
+    const r = run(todos, args);
+    assert.strictEqual(r.code, 2, `${args.join(' ')} must exit 2 (got ${r.code})`);
+    assert.match(r.stderr, /unknown flag "--/, args.join(' '));
+  }
+  assert.strictEqual(fs.readFileSync(path.join(todos, 'queue.json'), 'utf8'), before, 'manifest untouched');
+  assert.deepStrictEqual(fs.readdirSync(todos).filter(f => /^\d{4}-/.test(f)),
+    ['0001-a.md'], 'no scaffold written, nothing moved');
+});
+
+test('list survives the consumer closing the pipe early (EPIPE)', () => {
+  const todos = setup();
+  writeItem(todos, '0001', 'a');
+  // The output must overflow the OS pipe buffer (64KB) or every write lands
+  // before `head` exits and EPIPE never fires. `list` doesn't validate, so a
+  // big manifest without files (rows render "MISSING FILE") keeps this cheap.
+  writeManifest(todos, [{ id: '0001' },
+    ...Array.from({ length: 8000 }, (_, i) => ({ id: String(i + 2).padStart(4, '0') }))]);
+  // stderr is captured OUTSIDE the pipeline — the pre-fix crash trace lands
+  // there (piping it into head would truncate the trace and hide the bug).
+  const r = spawnSync('sh', ['-c', `node ${path.join(todos, 'queue.js')} list | head -3`],
+    { cwd: path.dirname(todos), encoding: 'utf8' });
+  assert.strictEqual(r.stderr, '', 'no crash trace on early pipe close');
+  assert.match(r.stdout, /Order of attack/, 'still printed the head of the list');
 });
 
 test('list reports ready / blocked / after state', () => {

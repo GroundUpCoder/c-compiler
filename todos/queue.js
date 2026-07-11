@@ -23,6 +23,10 @@
 //   node todos/queue.js block <ID> [--hard A,B] [--soft C,D]
 //   node todos/queue.js check [--fix]                # validate; exit non-zero on failure
 //
+// `-h`/`--help` anywhere prints usage and exits 0 (checked before dispatch, so
+// `add --help` can never scaffold an item); an unknown `--flag` on any
+// subcommand is a usage error (exit 2, nothing written).
+//
 // Priority: each entry may carry an optional integer `priority` 0..3 (P0 most
 // urgent, P3 background). Absent means P1, the default; the field is omitted
 // at P1 to keep entries minimal. The EFFECTIVE order of attack is a stable
@@ -52,6 +56,18 @@ function die(msg) {
   process.exit(1);
 }
 
+// Usage errors (unknown command/flag) exit 2, distinct from validation failures (1).
+function usageDie(msg) {
+  process.stderr.write(`queue.js: ${msg} (run queue.js --help for usage)\n`);
+  process.exit(2);
+}
+
+// `queue.js list | head` must not crash: the consumer closing the pipe early
+// surfaces as EPIPE on our next write — that's normal termination, not an error.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e; });
+}
+
 function parseListFlag(v) {
   // "0057,0058" / "0057, 0058" -> ['0057','0058']; "" / "-" -> []
   if (v === undefined) return undefined;
@@ -59,19 +75,23 @@ function parseListFlag(v) {
 }
 
 // Parse `add`/`reorder`/`block` style `--flag value` args into a map.
-function parseFlags(argv) {
+// `allowed` is the subcommand's flag allowlist: an unknown `--flag` is a usage
+// error (exit 2) — the mutation commands must not guess what a typo meant.
+function parseFlags(cmd, argv, allowed) {
   const flags = {};
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
+      const name = eq === -1 ? a.slice(2) : a.slice(2, eq);
+      if (!allowed.includes(name)) usageDie(`${cmd}: unknown flag "--${name}"`);
       if (eq !== -1) {
-        flags[a.slice(2, eq)] = a.slice(eq + 1);
+        flags[name] = a.slice(eq + 1);
       } else {
         const next = argv[i + 1];
-        if (next !== undefined && !next.startsWith('--')) { flags[a.slice(2)] = next; i++; }
-        else flags[a.slice(2)] = true; // bare boolean flag
+        if (next !== undefined && !next.startsWith('--')) { flags[name] = next; i++; }
+        else flags[name] = true; // bare boolean flag
       }
     } else {
       positional.push(a);
@@ -292,7 +312,7 @@ function validateOrDie(manifest, fsState, context) {
 // ---------- commands ----------
 
 function cmdCheck(argv) {
-  const { flags } = parseFlags(argv);
+  const { flags } = parseFlags('check', argv, ['fix']);
   const raw = loadManifestRaw();
   if (raw === null) die(`no ${path.relative(REPO_ROOT, QUEUE_PATH)}`);
   const res = parseManifest(raw);
@@ -321,7 +341,8 @@ function cmdCheck(argv) {
   process.stdout.write(`check OK — ${manifest.queue.length} item(s), ${fsState.done.size} done.\n`);
 }
 
-function cmdList() {
+function cmdList(argv) {
+  parseFlags('list', argv, []);
   const manifest = requireManifest();
   const fsState = scanFs();
   const doneSet = new Set(fsState.done.keys());
@@ -410,7 +431,8 @@ repo, then adjust it. No feature work in this item.
 }
 
 function cmdAdd(argv) {
-  const { flags, positional } = parseFlags(argv);
+  const { flags, positional } = parseFlags('add', argv,
+    ['slug', 'title', 'after', 'blocked-by', 'pos', 'priority', 'reflection']);
   const fsState = scanFs();
   let id = positional[0];
   if (!id || id === 'next') id = nextId(fsState);
@@ -464,7 +486,7 @@ function removeFromQueue(manifest, id) {
 }
 
 function cmdSetPriority(argv) {
-  const { positional } = parseFlags(argv);
+  const { positional } = parseFlags('set-priority', argv, []);
   const [id, value] = positional;
   if (!id || value === undefined) die('set-priority: usage: set-priority <ID> <0..3>  (1 is the default; setting 1 removes the field)');
   const manifest = requireManifest();
@@ -479,7 +501,7 @@ function cmdSetPriority(argv) {
 }
 
 function cmdReorder(argv) {
-  const { flags, positional } = parseFlags(argv);
+  const { flags, positional } = parseFlags('reorder', argv, ['before', 'after', 'pos']);
   const id = positional[0];
   if (!id) die('reorder: usage: reorder <ID> --before <ID> | --after <ID> | --pos <N>');
   const manifest = requireManifest();
@@ -510,7 +532,7 @@ function cmdReorder(argv) {
 }
 
 function cmdDone(argv) {
-  const { positional } = parseFlags(argv);
+  const { positional } = parseFlags('done', argv, []);
   const id = positional[0];
   if (!id) die('done: usage: done <ID>');
   const fsState = scanFs();
@@ -537,7 +559,7 @@ function cmdDone(argv) {
 }
 
 function cmdBlock(argv) {
-  const { flags, positional } = parseFlags(argv);
+  const { flags, positional } = parseFlags('block', argv, ['hard', 'soft']);
   const id = positional[0];
   if (!id) die('block: usage: block <ID> [--hard A,B] [--soft C,D]');
   const manifest = requireManifest();
@@ -575,10 +597,19 @@ const USAGE = `queue.js — the todos ordering-manifest CLI
   done <ID>                                     git-mv to done/, drop from queue
   block <ID> [--hard A,B] [--soft C,D]          set hard/soft deps ("" clears)
   check [--fix]                                 validate; exit non-zero on failure
+
+-h/--help anywhere prints this and exits 0. An unknown command or --flag is a
+usage error (exit 2; nothing written) — validation failures exit 1.
 `;
 
 function main() {
   const [, , cmd, ...rest] = process.argv;
+  // `-h`/`--help` ANYWHERE wins, before any command dispatch — `add --help`
+  // must print usage, never scaffold an "untitled" item.
+  if (cmd === undefined || process.argv.includes('-h') || process.argv.includes('--help')) {
+    process.stdout.write(USAGE);
+    return;
+  }
   switch (cmd) {
     case 'list': return cmdList(rest);
     case 'add': return cmdAdd(rest);
@@ -587,11 +618,6 @@ function main() {
     case 'done': return cmdDone(rest);
     case 'block': return cmdBlock(rest);
     case 'check': return cmdCheck(rest);
-    case undefined:
-    case '-h':
-    case '--help':
-      process.stdout.write(USAGE);
-      return;
     default:
       process.stderr.write(`queue.js: unknown command "${cmd}"\n\n${USAGE}`);
       process.exit(2);
