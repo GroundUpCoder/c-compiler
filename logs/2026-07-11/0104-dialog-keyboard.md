@@ -67,9 +67,31 @@ reports the keyboard-produced state.
   (not the `GetDlgItemText`→W macro) to avoid charset confusion, and calls
   `DialogBoxParamW` directly (the template is charset-neutral).
 
+## comdlg32 (the acceptance's "notepad Save As, fully keyboard-driven")
+
+An audit caught that `comdlg32`'s file dialog (`WCFileDlg`) and Find/Replace
+(`WCFindDlg`) are **bespoke** windows, not `#32770`, with controls created
+`WS_CHILD | WS_VISIBLE` (no WS_TABSTOP), no default button, and — for the
+file dialog — a modal loop that never called IsDialogMessageW. So my first
+"covered by the same generic path" claim was FALSE. Fixed it for real:
+- file dialog: WS_TABSTOP on the list/name-edit/both buttons,
+  BS_DEFPUSHBUTTON on Save/Open, `SetFocus(name)` on open, and
+  `IsDialogMessageW(g_fd.win, &m)` in the modal loop. Now: type a filename,
+  Enter → Save (the acceptance's headline case), Tab cycles, Esc cancels.
+- Find/Replace: WS_TABSTOP on the edits + buttons, BS_DEFPUSHBUTTON on "Find
+  Next", `SetFocus(what)`. It's MODELESS and notepad's main loop already
+  pumps it through `IsDialogMessage(hFindReplaceDlg)` — so the tabstops +
+  default were all it needed.
+
+The generic `IsDialogMessageW` works on any top-level (not just `#32770`):
+it walks `dlg->child`, `dlg_default_id` scans for the BS_DEFPUSHBUTTON style,
+Esc finds the IDCANCEL child. No `#32770`-specific coupling.
+
 ## Verified
 
 `node tests/kernel/run.js` → **53 passed, 0 failed** over a fresh v64 bake.
+`test_notepad_e2e.js` grew a keyboard Save As leg (type "kbd.txt" over the
+kernel key path + Enter default → `/root/kbd.txt` written, no click).
 `test_user32_e2e.js` grew a **session B**: opens the Options dialog and
 drives Tab→Verbose→OK, Shift+Tab reverse, Alt+N (static mnemonic → edit),
 type "hi" + Alt+V toggle + Enter default → `opt-ok name='hi' verbose=1`

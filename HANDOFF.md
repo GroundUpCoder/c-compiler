@@ -24,6 +24,16 @@ followed: mnemonic-underlined labels + the black default-button outline;
 LISTBOX gained PageUp/PageDown. All in `os/win32/user32.c` +
 `os/win32/include/windows.h` (the DLGC_*/DM_* defines).
 
+**comdlg32 too (the "notepad Save As" acceptance):** `WCFileDlg` (Save
+As/Open) and `WCFindDlg` (Find/Replace) are BESPOKE windows (not `#32770`)
+— an audit caught they had no WS_TABSTOP/default/loop-wiring, so the first
+"covered by the generic path" claim was FALSE. Fixed: WS_TABSTOP + a
+BS_DEFPUSHBUTTON + `IsDialogMessageW` in the file-dialog loop (Find/Replace
+is modeless — notepad already pumps `IsDialogMessage`, so it just needed the
+tabstops). **Notepad Save As is now type-name-then-Enter** (test_notepad_e2e
+keyboard leg). IsDialogMessageW is top-level-generic — it walks `dlg->child`
+and scans the BS_DEFPUSHBUTTON style, no `#32770` coupling.
+
 **The acceptance surface is a NEW template dialog in ctldemo:**
 `os/win32/ctldemo.rc` → `ctldemo.res` (WRES sidecar via `tools/win32rc.js`,
 seeded `/usr/bin/ctldemo.res` in image.json) is an "Options" dialog with
@@ -151,8 +161,9 @@ calls (F2 + icon-menu Rename cover the intent; the `desk_edit_armed` flag);
 **0104's calls (IsDialogMessageW is the real dialog manager over
 WM_GETDLGCODE, wired into BOTH modal loops; Enter=default-button /
 Esc=IDCANCEL / Alt=mnemonic; ctldemo carries its own `.res` as the dialog
-acceptance surface; notepad Save As rides the same generic path — its
-comdlg32 dialog is a #32770, no bespoke work needed)**.
+acceptance surface; comdlg32's bespoke WCFileDlg/WCFindDlg got WS_TABSTOP +
+default + loop wiring, so notepad Save As is keyboard-driven —
+IsDialogMessageW is top-level-generic, NOT #32770-coupled)**.
 
 ## Suggested opening for the new thread
 

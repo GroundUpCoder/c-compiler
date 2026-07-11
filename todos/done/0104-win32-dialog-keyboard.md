@@ -9,11 +9,16 @@
   LISTBOX PageUp/Down. Acceptance surface: os/win32/ctldemo.rc → ctldemo.res
   (Options template dialog). Tests: test_user32_e2e.js session B (kernel
   INJECT_KEY path) + MessageBox leg + os-user32.mjs browser leg (page
-  keyboard, operator-run); winmine e2e stays green. Image v63→v64. Dev log
-  logs/2026-07-11/0104-dialog-keyboard.md. No follow-ups filed — full intent
-  (Tab order, mnemonics, default button, the modal-loop wiring, LISTBOX
-  PageUp/Down) landed; notepad Save As is covered by the same generic
-  IsDialogMessageW path (its comdlg32 dialog is a #32770).
+  keyboard, operator-run); winmine e2e stays green. comdlg32's WCFileDlg
+  (Save As/Open) + WCFindDlg (Find/Replace) — bespoke, NOT #32770 — got
+  WS_TABSTOP + a default button + loop wiring, so notepad's Save As is fully
+  keyboard-driven end to end (test_notepad_e2e.js keyboard leg: type name +
+  Enter default → file written). Image v63→v64. Dev log
+  logs/2026-07-11/0104-dialog-keyboard.md. No follow-ups filed — full
+  Acceptance (Tab order, mnemonics, default button, Esc, notepad Save As,
+  winmine stays green) satisfied; the radio-group "Tab-enters-at-checked-
+  member" refinement is punted per the item's "keep v1 simple" note (no
+  radio-group dialog exists in the corpus; arrows-within-group DID land).
 - **Design**: `todos/WIN32.md` (USER32 surface). Filed by the 0076 parity
   sweep; this is the 0058 descope ("no Tab-order navigation
   (IsDialogMessage)" — user32.c's own header) coming due, plus the two

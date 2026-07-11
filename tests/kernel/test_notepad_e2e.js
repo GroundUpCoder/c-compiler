@@ -59,6 +59,26 @@ const out = boot([
   'echo ==cut',
   // type into the EDIT, then Save As through the real file dialog
   'wmctl settext EDIT:0 "hello from notepad"',
+  // 0104: FIRST drive Save As fully by KEYBOARD (Untitled => the name box
+  // seeds empty) — the name EDIT holds focus on open, type a filename over
+  // the kernel key path, Enter presses the default Save button (no click).
+  'wmctl click "Save As..."',
+  'sleep 2',
+  'wmctl key 0 22 107',                          // k
+  'wmctl key 0 5 98',                            // b
+  'wmctl key 0 7 100',                           // d
+  'wmctl key 0 55 46',                           // .
+  'wmctl key 0 23 116',                          // t
+  'wmctl key 0 24 120',                          // x
+  'wmctl key 0 34 116',                          // t
+  'sleep 1',
+  'wmctl key 0 40 13',                           // Enter -> default Save
+  'sleep 2',
+  'echo ==savedkbd',
+  'cat /root/kbd.txt',
+  'echo',
+  'echo ==cut',
+  // then the mouse/agent path (settext + click), the 0058 leg
   'wmctl click "Save As..."',
   'sleep 2',
   'echo ==dlgtree',
@@ -154,6 +174,9 @@ check('owner is disabled while the dialog is up (modal)',
   /class=EDIT id=0 [^\n]*en=0/.test(dlg), dlg);
 check('Save wrote the file', section(out, 'saved').trim() === 'hello from notepad',
   JSON.stringify(section(out, 'saved')));
+check('Save As is fully keyboard-driven (type name + Enter default) (0104)',
+  section(out, 'savedkbd').trim() === 'hello from notepad',
+  JSON.stringify(section(out, 'savedkbd')));
 check('title tracks the saved name',
   (section(out, 'list2').match(/note\.txt - Notepad/) || []).length === 1,
   section(out, 'list2'));

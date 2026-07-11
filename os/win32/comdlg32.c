@@ -276,19 +276,23 @@ static BOOL file_dialog(OPENFILENAMEW *ofn, int saving) {
                    8, 8, 70, 18, g_fd.win, NULL, NULL, NULL);
     g_fd.dir = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_READONLY,
                               80, 6, FD_W - 88, 20, g_fd.win, (HMENU)IDC_DIR, NULL, NULL);
-    g_fd.list = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY,
+    /* keyboard-navigable (0104): the list, name box and buttons are
+     * tabstops; the OK/Save button is the default (Enter accepts). */
+    g_fd.list = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_TABSTOP,
                                8, 32, FD_W - 16, FD_H - 100, g_fd.win,
                                (HMENU)IDC_LIST, NULL, NULL);
     CreateWindowEx(0, "STATIC", "File name:", WS_CHILD | WS_VISIBLE,
                    8, FD_H - 60, 70, 18, g_fd.win, NULL, NULL, NULL);
-    g_fd.name = CreateWindowEx(0, "EDIT", seedname, WS_CHILD | WS_VISIBLE,
+    g_fd.name = CreateWindowEx(0, "EDIT", seedname, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                                80, FD_H - 62, FD_W - 200, 20, g_fd.win,
                                (HMENU)IDC_NAME, NULL, NULL);
-    CreateWindowEx(0, "BUTTON", saving ? "Save" : "Open", WS_CHILD | WS_VISIBLE,
+    CreateWindowEx(0, "BUTTON", saving ? "Save" : "Open",
+                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                    FD_W - 112, FD_H - 64, 100, 24, g_fd.win, (HMENU)IDOK, NULL, NULL);
-    CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE,
+    CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                    FD_W - 112, FD_H - 34, 100, 24, g_fd.win, (HMENU)IDCANCEL, NULL, NULL);
     fd_refill();
+    SetFocus(g_fd.name);                          /* type-and-Enter to accept */
 
     /* the MessageBox modal shape: disable the owner, pump, re-enable */
     HWND owner = ofn->hwndOwner;
@@ -300,6 +304,7 @@ static BOOL file_dialog(OPENFILENAMEW *ofn, int saving) {
     MSG m;
     memset(&m, 0, sizeof m);
     while (!g_fd.done && IsWindow(g_fd.win) && GetMessage(&m, NULL, 0, 0)) {
+        if (IsDialogMessageW(g_fd.win, &m)) continue;   /* Tab/Enter/Esc (0104) */
         TranslateMessage(&m);
         DispatchMessage(&m);
     }
@@ -398,9 +403,12 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
     }
     CreateWindowEx(0, "STATIC", "Find what:", WS_CHILD | WS_VISIBLE,
                    8, 10, 80, 18, dlg, NULL, NULL, NULL);
-    CreateWindowEx(0, "EDIT", what, WS_CHILD | WS_VISIBLE,
+    /* keyboard-navigable (0104): the edits + buttons tabstop, Find Next is
+     * the default (Enter searches); notepad's main loop pumps it through
+     * IsDialogMessage already. */
+    CreateWindowEx(0, "EDIT", what, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                    92, 8, w - 210, 20, dlg, (HMENU)IDC_WHAT, NULL, NULL);
-    CreateWindowEx(0, "BUTTON", "Find Next", WS_CHILD | WS_VISIBLE,
+    CreateWindowEx(0, "BUTTON", "Find Next", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                    w - 110, 8, 100, 22, dlg, (HMENU)IDC_FIND, NULL, NULL);
     int y = 34;
     if (replace) {
@@ -411,20 +419,21 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
         }
         CreateWindowEx(0, "STATIC", "Replace with:", WS_CHILD | WS_VISIBLE,
                        8, y + 2, 80, 18, dlg, NULL, NULL, NULL);
-        CreateWindowEx(0, "EDIT", with, WS_CHILD | WS_VISIBLE,
+        CreateWindowEx(0, "EDIT", with, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                        92, y, w - 210, 20, dlg, (HMENU)IDC_WITH, NULL, NULL);
-        CreateWindowEx(0, "BUTTON", "Replace", WS_CHILD | WS_VISIBLE,
+        CreateWindowEx(0, "BUTTON", "Replace", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                        w - 110, y, 100, 22, dlg, (HMENU)IDC_REPL, NULL, NULL);
         y += 26;
-        CreateWindowEx(0, "BUTTON", "Replace All", WS_CHILD | WS_VISIBLE,
+        CreateWindowEx(0, "BUTTON", "Replace All", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                        w - 110, y, 100, 22, dlg, (HMENU)IDC_REPLALL, NULL, NULL);
         y += 26;
     }
-    CreateWindowEx(0, "BUTTON", "Match case", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+    CreateWindowEx(0, "BUTTON", "Match case", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                    8, y + 4, 110, 18, dlg, (HMENU)IDC_CASE, NULL, NULL);
     if (fr->Flags & FR_MATCHCASE) CheckDlgButton(dlg, IDC_CASE, BST_CHECKED);
-    CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE,
+    CreateWindowEx(0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                    w - 110, hgt - 32, 100, 22, dlg, (HMENU)IDCANCEL, NULL, NULL);
+    SetFocus(GetDlgItem(dlg, IDC_WHAT));          /* the find box (0104) */
     return dlg;
 }
 

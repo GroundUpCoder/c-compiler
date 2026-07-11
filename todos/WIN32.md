@@ -403,6 +403,13 @@ sidecar seeds an Options template dialog (mnemonic'd `&Name`/`&Verbose`/
 Esc via the kernel INJECT_KEY path, `wmctl key SID SC SYM MOD`, MOD 256 =
 LALT; the MessageBox leg too) + `tests/browser/os-user32.mjs` (the real
 page keyboard). winmine's custom-board dialog gained Tab/Enter for free.
+comdlg32's `WCFileDlg`/`WCFindDlg` (bespoke, not `#32770`) also got it —
+WS_TABSTOP + a default button + the loop wiring (the file dialog) or just
+the tabstops (Find/Replace is modeless, notepad's loop already pumps
+IsDialogMessage), so **notepad's Save As is fully keyboard-driven**: type a
+name, Enter saves (`test_notepad_e2e.js` keyboard leg). IsDialogMessageW is
+top-level-generic, not `#32770`-coupled — it walks `dlg->child` and scans
+for the BS_DEFPUSHBUTTON style.
 
 ## Corpus status (0060 landed 2026-07-10)
 
