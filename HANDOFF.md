@@ -88,12 +88,19 @@ filed (would duplicate the known gap).
 
 ## Operator-owed (browser)
 
-The standing **0064** browser debt (pointer-lock human check + the 0094–0151
-legs incl. the unrun `os-paint.mjs`, and now a `--clang` browser boot that
-finds `/usr/bin/doom-clang`) — **Playwright is not installed in this clone**.
-Run `node tests/browser/os-sweep.mjs` when Playwright is available; launch
-Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan` (0055 — boot
-REQUIRES worker WebGPU).
+**Playwright is not installed in this clone.** Two owners:
+- **0064** — the standing WM browser-sweep debt (pointer-lock human check + the
+  0094–0151 legs incl. the unrun `os-paint.mjs`). Run `node
+  tests/browser/os-sweep.mjs` when Playwright is available.
+- **0152** (new, filed by the 0141 audit) — a `--clang` **browser** boot that
+  confirms the served overlay blob renders the clang apps (`/usr/bin/doom-clang`
+  et al) in real Chromium. 0141's acceptance was met by the headless mount check
+  (done + passing); 0152 owns the optional browser-render confirmation so it
+  isn't lost. NOT folded into 0064 (that item is WM-scoped).
+
+Launch Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan` (0055 —
+boot REQUIRES worker WebGPU); for 0152 use a fresh OPFS profile so the browser
+fetches the `--clang` sidecar rather than a base blob already in OPFS.
 
 ## Don't re-litigate
 
@@ -109,5 +116,5 @@ guard that a sidecar carries the overlays it claims.**
 "Read HANDOFF.md, then give me a one-paragraph status and ask what I want to
 tackle — `node todos/queue.js list` for the order (0141 serve.js --clang overlay
 just landed; no open P0s, head is 0146). 0064 WM browser sweep still owes the
-operator the pointer-lock check + the 0094–0151 browser legs + a --clang browser
-boot."
+operator the pointer-lock check + the 0094–0151 browser legs; 0152 owns the
+optional --clang browser-render check."
