@@ -38,13 +38,15 @@ const { dir: tmp, image } = freshImage('os-wm-');
 // tree as flyout columns snugly off the column's right edge — startmenu2
 // lists the baked GROUPS (dirs-first sort), startmenu3 a group's leaves.
 // Recents (~/.config/recent) grow via the wm's activate() on every real
-// launch; clearing recents+pinned keeps the column deterministic ([Settings,
-// Run..., All Programs] at rows 0-2, so AP_ROW=2). Item x is offset by the
-// SM_SIDE band. Bump the leaf lists when image.json's menu tree changes.
+// launch; clearing recents+pinned puts Settings/Run... at rows 0-1 and pins
+// "All Programs" to the BOTTOM display row (SM_ROWS-1) above the search box,
+// an empty gap between (XP/Win7). Item x is offset by the SM_SIDE band. Bump
+// the leaf lists when image.json's menu tree changes.
 const SM_SIDE = 22, SM_COL = 170;
 const SM_W = SM_SIDE + SM_COL, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
 const SM_Y = 768 - 28 - SM_H;                    // 466
-const AP_ROW = 2;                                // All Programs row, recents cleared
+const AP_ROW = SM_ROWS - 1;                       // All Programs DISPLAY row: pinned
+                                                  // to the bottom (XP/Win7), above search
 const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
 const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 248
 const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };

@@ -516,9 +516,13 @@ pushed to the head by the shared `activate()` on every real program launch
 — menu, desktop, or run dialog — de-duplicated, capped at RECENT_MAX 8), a
 **groove** and the fixed places **Settings** (→ activate("/bin/ctlpanel"))
 and **Run…** (→ the "startrun" dialog whose Enter spawns `/bin/sh -c
-<input>`; **Shut Down joins when todos/0051 lands**), then a **groove** and
-— XP/Vista/7 style — the **All Programs** row at the **BOTTOM**, with a
-**search box** at its foot. Typing (the root holds kernel focus) filters a
+<input>`; **Shut Down joins when todos/0051 lands**), then — XP/Vista/7
+style — the **All Programs** row **pinned to the BOTTOM** row slot
+(`SM_ROWS-1`), directly above the **search box**, with an **empty gap and a
+groove** separating it from the places above (`sm_disp_row` maps its item
+index to the last display row; the rest stack from the top). It sits there,
+one click up from the Start button, for easy reach. Typing (the root holds
+kernel focus) filters a
 **flat recursive walk of the menu tree** into the column live (fixed places
 suppressed), highlighting the top hit; **Enter launches it**. **All
 Programs** (hover / click / arrow-Right) cascades the tree as flyout columns

@@ -451,8 +451,9 @@ the left, then ONE column of pinned entries (`~/.config/pinned`) + MRU
 recents (`~/.config/recent`, pushed by the shared `activate()` on every
 real launch, dedup, cap 8), a groove and the fixed places Settings (→
 /bin/ctlpanel) and Run… (→ the "startrun" sh -c dialog; Shut Down waits on
-0051), then — XP/Vista/7 style — the "All Programs" row at the BOTTOM, with
-a live SEARCH box at its foot that filters a flat recursive walk of the
+0051), then — XP/Vista/7 style — the "All Programs" row pinned to the BOTTOM
+row slot (`sm_disp_row` → `SM_ROWS-1`, an empty gap + groove above it),
+directly above the live SEARCH box at its foot that filters a flat recursive walk of the
 menu tree (Enter launches the top hit; the root holds kernel focus so
 typing goes to search; fixed places suppressed in search mode). 0098's
 right pane was dropped because the 0078 flyout formula (`mcol[0].x + c->w -
@@ -660,7 +661,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v77**.
+Image version is **v78**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

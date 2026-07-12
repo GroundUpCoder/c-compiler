@@ -1462,31 +1462,49 @@ static void sm_rebuild_left(void) {
     }
 }
 
-/* Cascade the menu tree as a flyout off the column's right edge, aligned
- * to the All Programs row. SM_ROOT_W spans the band + column, so the flyout
- * hangs snugly beside the row; All Programs at the bottom row makes
- * menu_open_col's work-area clamp cascade it UPWARD (Win7). The flyout
- * lists mcol[0].dir (the tree root); its groups cascade further via the
- * ordinary flyout machinery. */
+/* The "All Programs" item index (it is appended last in browse mode), or -1
+ * (search mode has no All Programs). */
+static int sm_ap_index(void) {
+    return (sm_nleft > 0 && sm_left[sm_nleft - 1].kind == SMI_ALLPROGS)
+               ? sm_nleft - 1 : -1;
+}
+
+/* The DISPLAY row of item i. XP/Vista/7: "All Programs" pins to the last
+ * row slot — the bottom of the panel, right above the search box — with an
+ * empty gap above it; every other item stacks from the top (todos/0132
+ * follow-up 2). Search mode has no All Programs, so this is the identity. */
+static int sm_disp_row(int i) {
+    return i == sm_ap_index() ? SM_ROWS - 1 : i;
+}
+
+/* Cascade the menu tree as a flyout off the column's right edge, aligned to
+ * the All Programs DISPLAY row (the bottom of the panel). SM_ROOT_W spans
+ * the band + column, so the flyout hangs snugly beside the row; anchoring at
+ * the bottom row makes menu_open_col's work-area clamp cascade it UPWARD
+ * (Win7). The flyout lists mcol[0].dir (the tree root); its groups cascade
+ * further via the ordinary flyout machinery. */
 static void sm_open_allprogs(void) {
-    int row = -1;
-    for (int i = 0; i < sm_nleft; i++)
-        if (sm_left[i].kind == SMI_ALLPROGS) { row = i; break; }
-    if (row < 0) return;
+    int ap = sm_ap_index();
+    if (ap < 0) return;
     menu_close_from(1);
     menu_open_col(1, mcol[0].dir, mcol[0].x + SM_ROOT_W - 3,
-                  mcol[0].y + row * SM_ROW_H);
+                  mcol[0].y + sm_disp_row(ap) * SM_ROW_H);
 }
 
 /* Zone/row under a root-window point (single column since 0132; the gucOS
  * band occupies x < SM_SIDE_W). Returns 0 an item row, 2 the search box,
- * -1 dead zone (incl. the band); the row index lands in *row. */
+ * -1 dead zone (incl. the band and the gap above bottom-pinned All
+ * Programs); the item index lands in *row. */
 static int sm_root_hit(int x, int y, int *row) {
     if (x < SM_SIDE_W || x >= SM_ROOT_W) return -1;
     if (y >= SM_SEARCH_Y) return 2;              /* the search box strip */
-    int i = (y - SM_PAD) / SM_ROW_H;
-    if (y >= SM_PAD && i >= 0 && i < sm_nleft) { *row = i; return 0; }
-    return -1;
+    if (y < SM_PAD) return -1;
+    int r = (y - SM_PAD) / SM_ROW_H;             /* the display row hit */
+    int ap = sm_ap_index();
+    if (r == SM_ROWS - 1 && ap >= 0) { *row = ap; return 0; }   /* bottom row */
+    int top = ap >= 0 ? sm_nleft - 1 : sm_nleft; /* top-stacked item count */
+    if (r >= 0 && r < top) { *row = r; return 0; }
+    return -1;                                   /* the empty gap */
 }
 
 /* Launch a column row: All Programs cascades, the fixed places run their
@@ -1596,16 +1614,18 @@ static void draw_root_menu(void) {
                      rgb(224, 224, 240));
     fill_s(px, w, h, SM_SIDE_W - 1, 1, 1, h - 2, sh);      /* divider shadow */
     fill_s(px, w, h, SM_SIDE_W, 1, 1, h - 2, hi);          /* divider hilite */
-    /* the single column of items (pins/recents, Settings/Run, All Programs) */
+    /* the single column of items: pins/recents then Settings/Run stacked from
+     * the top, and "All Programs" pinned to the BOTTOM row above the search
+     * box (its display row is SM_ROWS-1, with an empty gap above it) */
     for (int i = 0; i < sm_nleft; i++) {
-        int y = SM_PAD + i * SM_ROW_H;
+        int y = SM_PAD + sm_disp_row(i) * SM_ROW_H;
         int hl = i == sm_lhover;
         if (hl) fill_s(px, w, h, X0 + 2, y, SM_COL_W - 4, SM_ROW_H, sel);
         /* a groove above the fixed section (Settings) and above the bottom
          * All Programs row — the Win95 separators between the program list,
-         * the places, and the All-Programs gateway (todos/0132) */
-        if (i > 0 && (sm_left[i].kind == SMI_ALLPROGS ||
-                      sm_left[i].kind == SMI_SETTINGS))
+         * the places, and the bottom-pinned All-Programs gateway (todos/0132) */
+        if ((sm_left[i].kind == SMI_ALLPROGS ||
+             (i > 0 && sm_left[i].kind == SMI_SETTINGS)))
             fill_s(px, w, h, X0 + 6, y - 1, SM_COL_W - 12, 1, sh);
         draw_text_s(px, w, h, X0 + 10, y + (SM_ROW_H - 7) / 2, sm_left[i].name,
                     hl ? seltxt : txt);

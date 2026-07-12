@@ -88,7 +88,8 @@ try {
   const SM_SIDE = 22, SM_COL = 170;
   const SM_W = SM_SIDE + SM_COL, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
   const SM_Y = SH - 28 - SM_H;
-  const AP_ROW = 2;                              // All Programs row, recents cleared
+  const AP_ROW = SM_ROWS - 1;                    // All Programs DISPLAY row: pinned to
+                                                 // the bottom (XP/Win7), above search
   const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
   const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;
   const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
@@ -180,16 +181,22 @@ try {
     await sample(SM_SIDE + 18, SM_SEARCH_Y + 8));
 
   // All Programs (the BOTTOM row) cascades the tree flyout of groups
-  // (startmenu2 at x = SM_W - 3), then a group cascades its leaves
-  // (startmenu3). Hover All Programs, then the Demos group.
+  // (startmenu2 at x = SM_W - 3), which cascades UPWARD via the work-area
+  // clamp (bottom-anchored, Win7); then a group cascades its leaves
+  // (startmenu3, itself clamped). Hover All Programs, then the Demos group.
+  const clampY = (y, n) => {                     // menu_open_col's work-area clamp
+    const h = 2 * SM_PAD + n * SM_ROW_H;
+    return y + h > SH - 28 ? SH - 28 - h : y;
+  };
   await page.mouse.move(rect.x + 60, rect.y + SM_Y + SM_PAD + AP_ROW * SM_ROW_H + 10);
-  await waitPixel(SM_W - 3 + 40, SM_Y + AP_ROW * SM_ROW_H + 6, FACE);
+  const FLY2_Y = clampY(SM_Y + AP_ROW * SM_ROW_H, MENU_GROUPS.length);
+  await waitPixel(SM_W - 3 + 40, FLY2_Y + 6, FACE);
   check('All Programs cascades the tree flyout', true);
   const DEMOS_ROW = MENU_GROUPS.indexOf('Demos');
-  const FLY2_Y = SM_Y + AP_ROW * SM_ROW_H;
   await page.mouse.move(rect.x + SM_W - 3 + 40, rect.y + FLY2_Y + flyRowY(DEMOS_ROW));
-  // startmenu3 parks at (SM_W-3 + 150-3, FLY2_Y + DEMOS_ROW*SM_ROW_H).
-  const FLY3_X = SM_W - 3 + 150 - 3, FLY3_Y = FLY2_Y + DEMOS_ROW * SM_ROW_H;
+  // startmenu3 parks at x = SM_W-3 + 150-3, y = clamp(FLY2_Y + DEMOS_ROW*SM_ROW_H).
+  const FLY3_X = SM_W - 3 + 150 - 3;
+  const FLY3_Y = clampY(FLY2_Y + DEMOS_ROW * SM_ROW_H, DEMOS.length);
   await waitPixel(FLY3_X + 40, FLY3_Y + 6, FACE);
   check('the Demos group cascades its leaves', true);
   await clickAt(FLY3_X + 60, FLY3_Y + flyRowY(DEMOS.indexOf('winbox')));

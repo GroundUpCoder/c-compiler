@@ -60,3 +60,27 @@ Microsoft-copyright — out. Filed as 0157 rather than squeezed in here.
   serve.js it spawned. Killed them (`lsof -iTCP:3197`), boot recovered.
 - The lone os-shell failure remains the **pre-existing** todos/0156 (49,52)
   desktop-icon rename leg — unrelated, still owned by that P0.
+
+## Correction: pin All Programs to the *actual* bottom (v78)
+
+First pass put All Programs directly under Run… (top-packed) — not what the
+user wanted. XP/Win7 pins "All Programs" to the **bottom of the panel, right
+above the search box**, one click up from the Start button for reach. Added
+`sm_disp_row(i)`: All Programs (the last item in browse mode, found by
+`sm_ap_index`) maps to display row `SM_ROWS-1`; everything else stacks from
+the top, leaving an empty gap + a groove above it. `draw_root_menu`,
+`sm_root_hit` (the gap is a dead zone), and `sm_open_allprogs` (anchors at
+the bottom row, so the fanout cascades upward via the work-area clamp) all
+use the display row; the Win95 flyout fanout is unchanged. Tests: `AP_ROW`
+is now `SM_ROWS-1` and the os-shell flyout waits apply `menu_open_col`'s
+upward clamp (`clampY`). Image v78.
+
+## Cache-busting screwup (won't repeat)
+
+I overwrote the same embedded `media/startmenu-*.png` paths across several
+regenerations. The chat UI caches embedded media **by path**, so the user was
+served stale bytes and my fixes were invisible. The rule
+(`~/git/netguc/skills/media-embedding.md`): **never overwrite/rm an embedded
+media path — always a NEW versioned name in a subfolder.** Screenshots now go
+to `media/startmenu/v2/` with fresh names, verified with the Read tool before
+embedding.
