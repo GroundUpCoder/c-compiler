@@ -54,6 +54,9 @@ const script = [
   keys('$MSID', ' '),
   'sleep 2',
   'wmctl shot $MSID /root/m3.ppm && echo m3-ok',
+  keys('$MSID', ' '),
+  'sleep 2',
+  'wmctl shot $MSID /root/m4.ppm && echo m4-ok',
   keys('$MSID', 'q'),
   'sleep 1.5',
   'echo ==mgpgone',
@@ -69,11 +72,12 @@ check('sent window closed on q', section(out, 'sentgone').trim() === '0');
 check('mgp shot 1 taken', out.includes('m1-ok'));
 check('mgp shot 2 taken', out.includes('m2-ok'));
 check('mgp shot 3 taken', out.includes('m3-ok'));
+check('mgp shot 4 taken', out.includes('m4-ok'));
 check('mgp window closed on q', section(out, 'mgpgone').trim() === '0');
 check('session A completed', out.includes('ALLDONE'));
 
 /* ---- session B: read the PPMs back and assert pixels ---- */
-const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm\n',
+const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm /root/m4.ppm\n',
   { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
@@ -93,7 +97,7 @@ function parsePpms(buffer) {
   return ppms;
 }
 const ppms = parsePpms(buf);
-check('read 5 PPMs back', ppms.length === 5, 'got ' + ppms.length);
+check('read 6 PPMs back', ppms.length === 6, 'got ' + ppms.length);
 
 function count(ppm, pred) {
   let n = 0;
@@ -116,8 +120,8 @@ function differ(p1, p2) {
   return n > 50;
 }
 
-if (ppms.length === 5) {
-  const [s1, s2, m1, m2, m3] = ppms;
+if (ppms.length === 6) {
+  const [s1, s2, m1, m2, m3, m4] = ppms;
   const spix = s1.w * s1.h;
   // sent slide 1: white background, black "sent" title
   const white = count(s1, (r, g, b) => r > 240 && g > 240 && b > 240);
@@ -150,6 +154,15 @@ if (ppms.length === 5) {
   }
   check('mgp page 3 gradient: blue top band', topBlue > m3.w / 8, String(topBlue));
   check('mgp page 3 gradient: dark bottom band', botDark > m3.w / 8, String(botDark));
+
+  // mgp page 4: %newimage static GIF (200x150, left magenta / right cyan)
+  // decoded via the vendored giflib — colours on no other slide, so their
+  // presence proves the GIF loader ran and the raster mapped palette->RGB.
+  check('mgp page 4 differs from page 3', differ(m3, m4));
+  const magenta = count(m4, (r, g, b) => r > 200 && g < 80 && b > 200);
+  const cyan = count(m4, (r, g, b) => r < 80 && g > 200 && b > 200);
+  check('mgp page 4 GIF: magenta pixels', magenta > 1000, String(magenta));
+  check('mgp page 4 GIF: cyan pixels', cyan > 1000, String(cyan));
 }
 
 fs.rmSync(dir, { recursive: true, force: true });

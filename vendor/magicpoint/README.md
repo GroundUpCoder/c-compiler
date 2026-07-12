@@ -41,11 +41,14 @@ keycodes → `XK_*`; window-close arrives as a synthetic `q`). This is NOT an
 ### image/ (the xloadimage-derived loader library)
 
 Kept loaders: **PNG** (against vendored libpng 1.6 — `png_jmpbuf`,
-`png_set_expand_gray_1_2_4_to_8` renames applied), **PBM/PGM/PPM**, **XBM**,
-**XPM**, plus the zoom/rotate/clip/bright/reduce/dither/halftone/compress/
-smooth transforms. Dropped: GIF (upstream wraps giflib, not vendored), JPEG,
-RLE, XWD, PCX and friends (files not vendored; `imagetypes.c`'s table is
-trimmed to match). `zio.c` compressed-file support is off (`NO_UNCOMPRESS`);
+`png_set_expand_gray_1_2_4_to_8` renames applied), **GIF** (static; `image/
+gif.c` wraps the vendored giflib 5.2 decoder at `../giflib`, `-DUSE_GIF` —
+first frame decoded, palette→RGB into a `newTrueImage`; multi-frame/
+transparency/canvas-offset out of scope, an animated GIF shows its first
+frame as a still), **PBM/PGM/PPM**, **XBM**, **XPM**, plus the zoom/rotate/
+clip/bright/reduce/dither/halftone/compress/smooth transforms. Dropped:
+JPEG, RLE, XWD, PCX and friends (files not vendored; `imagetypes.c`'s table
+is trimmed to match). `zio.c` compressed-file support is off (`NO_UNCOMPRESS`);
 `misc.c`'s X-server info dump and `XErrorEvent` handler are gone;
 `make_gamma` is inlined into `bright.c` (its only consumer — the Utah RLE
 lib stayed behind). `zoom()`/`gammacorrect()` take `double` with a real
@@ -57,8 +60,9 @@ has real prototypes).
 ### What a deck can't do in this port (recorded descopes)
 
 `%system/%xsystem/%tsystem` (fork X clients), `%filter`, `%embed` (works
-only if a `uudecode` binary exists — none is seeded), EPS images, GIF/JPEG
-images, MNG animation, Xft/m17n/VFlib engines, 2-octet charsets (JIS),
+only if a `uudecode` binary exists — none is seeded), EPS images, JPEG
+images, animation (MNG, and multi-frame/animated GIF — the first frame
+renders as a still), Xft/m17n/VFlib engines, 2-octet charsets (JIS),
 UTF-8 text (upstream mgp is byte-oriented Latin-1 — as upstream), the
 page-list/page-guide UI, html dump (`-D`), `xwintoppm` screendumps.
 The forward cache (`-F`) draws into pixmaps and works; its idle-time

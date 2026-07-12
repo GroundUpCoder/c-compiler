@@ -36,6 +36,16 @@ Backgrounds
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
+Images
+
+%center
+%newimage "/usr/share/mgp/demo.gif"
+
+%size 3, fore "gray70", center
+static GIF decoded via giflib
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
 Pause
 
 	this line shows first

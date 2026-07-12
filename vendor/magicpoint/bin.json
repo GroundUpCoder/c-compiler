@@ -4,6 +4,7 @@
   "compilerArgs": [
     "-DFREETYPE",
     "-DUSE_PNG",
+    "-DUSE_GIF",
     "-DNO_UNCOMPRESS",
     "-DRETSIGTYPE=void",
     "-DHAVE_UNISTD_H=1",
@@ -17,13 +18,15 @@
   ],
   "deps": [
     "../freetype/lib.json",
-    "../libpng/lib.json"
+    "../libpng/lib.json",
+    "../giflib/lib.json"
   ],
   "includes": [
     ".",
     "../freetype/demo",
     "../freetype/include",
-    "../libpng"
+    "../libpng",
+    "../giflib"
   ],
   "sources": [
     "mgp.c",
@@ -56,6 +59,7 @@
     "image/compress.c",
     "image/value.c",
     "image/png.c",
+    "image/gif.c",
     "image/pbm.c",
     "image/xbitmap.c",
     "image/xpixmap.c"
