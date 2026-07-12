@@ -1,6 +1,8 @@
 # 0161 — SDL_WaitEvent over pumpWait: take idle SDL apps off the vsync wake list
 
-- **Status**: deferred (2026-07-12; deferred with its pair 0160; was: open).
+- **Status**: open (re-activated 2026-07-12 — the "pending rework" happened:
+  this item is IDLE-POWER **Stage 2**, ordered after 0167; it sat parked
+  earlier the same day alongside its pair 0160).
   **Unified framing:** see `todos/IDLE-POWER.md` — this item is piece C of the
   idle-zero design (idle apps stop producing frames); it is a prerequisite for
   the compositor ever parking, but insufficient alone. Read IDLE-POWER first.

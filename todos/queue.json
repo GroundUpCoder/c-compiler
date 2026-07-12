@@ -2,6 +2,10 @@
   "version": 1,
   "queue": [
     { "id": "0113", "priority": 2, "after": ["0094"] },
+    { "id": "0167", "difficulty": "light" },
+    { "id": "0161", "after": ["0167"] },
+    { "id": "0168", "difficulty": "heavy", "blockedBy": ["0161"] },
+    { "id": "0169", "difficulty": "heavy", "blockedBy": ["0167", "0168"] },
     { "id": "0079" },
     { "id": "0080" },
     { "id": "0052" },
@@ -54,9 +58,10 @@
     { "id": "0156", "priority": 0 },
     { "id": "0157" },
     { "id": "0160" },
-    { "id": "0161", "after": ["0160"] },
     { "id": "0158" },
     { "id": "0159" },
-    { "id": "0162", "priority": 3, "difficulty": "heavy" }
+    { "id": "0162", "priority": 3, "difficulty": "heavy" },
+    { "id": "0165", "priority": 0, "difficulty": "light" },
+    { "id": "0166", "priority": 0, "difficulty": "light" }
   ]
 }

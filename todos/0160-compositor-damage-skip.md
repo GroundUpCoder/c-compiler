@@ -1,7 +1,10 @@
 # 0160 — compositor: scene-signature damage skip (idle GPU on static screens)
 
 - **Status**: deferred (2026-07-12; an implementation was landed then reverted —
-  see the Deferral note; was: open). **Superseded framing:** see
+  see the Deferral note; was: open). **ABSORBED (2026-07-12 review):** the
+  damage-skip half lives in todos/0169 (on-demand compositor), the taskbar-gate
+  half in todos/0168 (wm.c event-driven) — close this item when 0169 lands; do
+  not work it directly. **Superseded framing:** see
   `todos/IDLE-POWER.md` — this item's "keep the 60 Hz heartbeat, skip the submit"
   goal is now understood as a half-measure; the idle-zero design folds it into
   piece A (on-demand compositor) + piece D (taskbar gate). Read IDLE-POWER first.
