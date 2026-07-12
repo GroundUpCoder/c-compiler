@@ -1,5 +1,5 @@
 {
-  "version": 81,
+  "version": 82,
   "overlays": [
     {
       "id": "clang-apps",
@@ -513,6 +513,9 @@
       },
       "/root/Desktop/term": {
         "link": "/usr/bin/term"
+      },
+      "/root/Desktop/notepad": {
+        "link": "/usr/bin/notepad"
       },
       "/root/Desktop/pokemon": {
         "content": "#!/bin/sh\nsameboy $HOME/roms/PokemonBlue.gb\n",
