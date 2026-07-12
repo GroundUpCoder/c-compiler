@@ -1,6 +1,6 @@
 # 0054 — AF_INET relay transport (arbitrary hosts)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/NETWORK.md` (tier 4 — the localhost-relay
   rationale, secure-context carve-out, PNA headers)
 

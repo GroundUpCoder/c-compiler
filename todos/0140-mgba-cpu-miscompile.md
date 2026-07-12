@@ -1,6 +1,6 @@
 # 0140 — mGBA: real GBA games derail — ARM/THUMB core miscompiled by compiler.js codegen (deferred)
 
-- **Status**: open — DEFERRED INDEFINITELY (P3/background). Root-cause is a
+- **Status**: deferred (mass-deferred 2026-07-12; was: open — DEFERRED INDEFINITELY (P3/background). Root-cause is a)
   compiler.js codegen bug in the (unmodified, upstream) mGBA ARM/THUMB
   interpreter; fixing it is an open-ended compiler correctness hunt with no
   committed timebox. Design + full evidence: `todos/MGBA.md`. Investigation

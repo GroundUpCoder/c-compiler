@@ -1,6 +1,6 @@
 # 0145 — comdlg32 silent no-ops: give feedback or document
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file. From the 2026-07-12 notepad menu audit
   (`logs/2026-07-12/queue-hardening-and-keymap.md`). Sibling of the 0073
   apps-sweep, which surfaced the class.

@@ -1,6 +1,6 @@
 # 0071 — tty VEOF is transient, not sticky (Ctrl+D in a REPL)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/KERNEL.md` (line-discipline; the "empty-line VEOF is
   sticky" v1 limit is called out there and in `kernel.js`).
 

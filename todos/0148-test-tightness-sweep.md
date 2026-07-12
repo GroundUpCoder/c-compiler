@@ -1,6 +1,6 @@
 # 0148 — test tightness sweep (recurring)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file. The test-suite analogue of the `--manual-ux` dogfood
   and `--reflection` cadence: a recurring pass that keeps the test estate tight
   — every test carries its weight, is well-written, and is not slow because of

@@ -1,6 +1,6 @@
 # 0153 — Run os-sweep.mjs under Playwright to confirm the 0146 harness conversion (goldens unchanged)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file. Surfaced closing todos/0146 (shared test harnesses).
 
 ## Goal

@@ -1,6 +1,6 @@
 # 0080 — Cairo: enable the PDF/SVG output surfaces (document export / printing)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `vendor/cairo/README.md`; this file (follow-up from 0061)
 
 ## Goal

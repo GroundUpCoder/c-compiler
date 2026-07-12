@@ -1,6 +1,6 @@
 # 0073 — desktop apps behavior bug sweep
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WM.md` / `todos/WIN32.md` bug-sweep block (the
   repeatable dogfood format established by todos/done/0033; WM rounds
   0039 / 0064 are the siblings).

@@ -1,6 +1,6 @@
 # 0113 — Sound scheme v2 — preset schemes, per-event applet UI, SND_LOOP
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (the 0094 landing paragraph records v1's
   deliberate cuts), `os/sounds.h` (the ONE policy core — everything here
   extends it, nothing forks it)

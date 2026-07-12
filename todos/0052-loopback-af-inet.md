@@ -1,6 +1,6 @@
 # 0052 — loopback AF_INET
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/NETWORK.md` (tier 1), `todos/KERNEL.md` (AF_UNIX,
   0008 — the machinery this reuses)
 

@@ -1,6 +1,6 @@
 # 0097 — ss modules join the spawn module cache (0037) — compile options unified by 0041
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/SS-INTEROP.md` §4 "Compile options unify → ss joins the
   module cache" (this item is that section's residue, unblocked by 0041).
 

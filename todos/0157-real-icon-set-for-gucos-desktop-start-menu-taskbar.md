@@ -1,6 +1,6 @@
 # 0157 — Real icon set for gucOS (desktop / Start menu / taskbar)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `os/wm.c` (`draw_desk` icon glyphs, Start-menu rows, taskbar
   buttons); a new bake-time rasterizer under `tools/`; `os/image.json` seed.
 

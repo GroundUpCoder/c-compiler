@@ -1,6 +1,6 @@
 # 0051 — halt / reboot
 
-- **Status**: open (low priority)
+- **Status**: deferred (mass-deferred 2026-07-12; was: open (low priority))
 - **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal

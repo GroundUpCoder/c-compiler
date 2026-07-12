@@ -1,6 +1,6 @@
 # 0152 — Browser boot verification of serve.js --clang (clang-apps overlay renders)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file; builds on todos/done/0141 (the serve `--clang` on-ramp)
 
 ## Background

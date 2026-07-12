@@ -1,6 +1,6 @@
 # 0087 — Compiler triage: GNU-extension gaps surfaced by the SameBoy port
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file. Follow-up of `0075`; back of the queue. Each gap
   below was worked around with a documented vendored patch (see
   `vendor/sameboy/README.md`), so nothing is urgent — this item is the

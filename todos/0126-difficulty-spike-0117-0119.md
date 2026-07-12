@@ -1,6 +1,6 @@
 # 0126 — Difficulty spike: right-size (or split) 0117 and 0119 by attempting Round 1
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Difficulty**: light (timeboxed spike — bail is a valid outcome)
 - **Design**: this file. Scoped to `todos/0117` (MicroPython upgrade) and
   `todos/0119` (sent/MagicPoint on SDL) ONLY — deliberately NOT the

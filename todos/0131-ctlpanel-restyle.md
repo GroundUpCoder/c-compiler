@@ -1,6 +1,6 @@
 # 0131 — Control Panel restyle — XP/Win7-era category hub + search
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/done/0089-control-panel-v2.md` (the Win95 applet hub
   this restyles — 0089 deliberately matched "the current Win32 look";
   this item is the next aesthetic tier), `todos/WIN32.md` (the user32/

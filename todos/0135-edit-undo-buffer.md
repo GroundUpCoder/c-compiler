@@ -1,6 +1,6 @@
 # 0135 — EDIT control undo buffer (EM_UNDO / EM_CANUNDO)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (EDIT status — the "no-undo honesty" note at
   the 0048/0091 threads is what this item retires). Umbrella 0133.
 

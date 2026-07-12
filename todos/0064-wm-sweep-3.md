@@ -1,6 +1,6 @@
 # 0064 — WM bug sweep, round 3
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WM.md` "The desktop shell" (bug-sweep block — the
   repeatable format established by todos/done/0033; round 2 =
   todos/done/0039)

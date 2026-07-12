@@ -1,6 +1,6 @@
 # 0123 — fileman: auto-refresh the listing on an external cwd change (mtime poll)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md`. The one explicitly-*optional* half of 0106
   left unbuilt: 0106 landed manual F5/refresh (and refresh-after-every-op),
   but not the "unprompted" auto-refresh. Low priority — F5 already covers

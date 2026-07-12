@@ -1,6 +1,6 @@
 # 0109 — desktop icon Properties popup (the 0092 tail)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WM.md` (desktop shell), `todos/done/0092`. Filed by
   the 0092 closeout audit: fileman got stat()-facts Properties, the
   desktop icon context menu deliberately did not (wm.c has no dialog

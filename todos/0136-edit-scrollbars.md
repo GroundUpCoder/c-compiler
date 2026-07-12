@@ -1,6 +1,6 @@
 # 0136 — EDIT control interactive scrollbars (WM_VSCROLL / WM_HSCROLL)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (EDIT status). Umbrella 0133; word-wrap
   (0137) is best sequenced after this since it shares the scroll/line model.
 

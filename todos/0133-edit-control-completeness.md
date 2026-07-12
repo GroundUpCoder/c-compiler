@@ -1,6 +1,6 @@
 # 0133 — user32 EDIT control → real multiline editor (notepad completeness)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (the user32 EDIT status thread — 0048 landed
   the around-a-file tail, 0090/0091 the clipboard + context menu). This is
   the umbrella that tracks closing the remaining EDIT-control gaps a

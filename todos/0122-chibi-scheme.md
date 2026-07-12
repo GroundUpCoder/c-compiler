@@ -1,6 +1,6 @@
 # 0122 — Chibi Scheme as the official Scheme (R7RS REPL + script runner)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file. Precedent: `todos/done/0036` seeded the REPLs
   (lua/micropython/sqlite3 as vendor `bin.json` projects); this adds
   Scheme as a peer. Port-over-build: Chibi is small, self-contained C.

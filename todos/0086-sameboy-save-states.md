@@ -1,6 +1,6 @@
 # 0086 — SameBoy save states (save_state.c) + core pickability
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file. Follow-up of `0075` (SameBoy port, done); sits at
   the back of the queue — quality-of-life, nothing depends on it.
 

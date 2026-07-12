@@ -1,6 +1,6 @@
 # 0124 — Paint v2: selection region + bitmap clipboard (Cut/Copy/Paste), New-with-size dialog
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (the veneer as an app platform). Owns the
   residue 0107 deferred: `/bin/paint` ships Edit → Cut/Copy/Paste as
   visible-but-GRAYED stubs and File → New at a FIXED size. Filed by the 0107

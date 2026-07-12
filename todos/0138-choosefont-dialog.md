@@ -1,6 +1,6 @@
 # 0138 — comdlg32 ChooseFont dialog (notepad Format → Font)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (comdlg32 status — `ChooseFont/PrintDlg/
   PageSetupDlg as honest cancels`, 0048 thread). Sibling of umbrella 0133,
   not a blocker (comdlg32/gdi32, not the EDIT control).

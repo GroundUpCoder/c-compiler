@@ -1,6 +1,6 @@
 # 0121 — Reproducible image bakes: strip wall-clock inode mtimes so os-system.img is blob-deterministic (verify overlays/base by hash)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file; surfaced by `todos/done/0118-image-overlays-opt-in.md`
 
 ## Background

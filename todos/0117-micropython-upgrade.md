@@ -1,6 +1,6 @@
 # 0117 — MicroPython: script runner + FS import (multi-round, unlocks /bin/python)
 
-- **Status**: open (META — expect multiple rounds; close each round as its
+- **Status**: deferred (mass-deferred 2026-07-12; was: open (META — expect multiple rounds; close each round as its)
   own commit, keep this item open until Round 2 lands then reassess)
 - **Design**: this file. Precedent: `todos/done/0036` seeded the REPLs
   (`/bin/micropython`, `/bin/lua`, `/bin/sqlite3`) — deliberately the

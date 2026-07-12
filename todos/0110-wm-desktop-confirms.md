@@ -1,6 +1,6 @@
 # 0110 — wm.c desktop confirm dialogs — Empty Recycle Bin, delete, Shift+Del bypass
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WM.md` ("Recycle Bin, desktop side" — the recorded
   deviations this item closes), `todos/0093` (the store semantics).
 

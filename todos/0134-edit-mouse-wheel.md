@@ -1,6 +1,6 @@
 # 0134 — EDIT control mouse-wheel scrolling (WM_MOUSEWHEEL)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (EDIT status). Umbrella 0133. The quick win
   of the EDIT-completeness set.
 

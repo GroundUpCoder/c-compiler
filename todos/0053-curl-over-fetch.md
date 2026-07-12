@@ -1,6 +1,6 @@
 # 0053 — HTTP for C: the curl easy facade over kernel fetch
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/NETWORK.md` (tier 2; tier 3 DoH noted there)
 
 ## Goal

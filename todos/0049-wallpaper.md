@@ -1,6 +1,6 @@
 # 0049 — wallpaper
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: discussion in `logs/2026-07-09/roadmap-network-desktop.md`
 
 ## Goal

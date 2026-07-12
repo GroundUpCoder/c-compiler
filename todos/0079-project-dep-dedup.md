@@ -1,6 +1,6 @@
 # 0079 — Project files: dedup diamond deps (zlib-via-two-paths = duplicate symbols)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file (found during 0061)
 
 ## Goal

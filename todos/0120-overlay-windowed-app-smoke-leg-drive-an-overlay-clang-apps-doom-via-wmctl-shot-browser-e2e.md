@@ -1,6 +1,6 @@
 # 0120 — Overlay windowed-app smoke leg: drive an --overlay=clang-apps DOOM via wmctl shot (browser + e2e)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/done/0118-image-overlays-opt-in.md` (the overlay consumer)
 
 ## Background

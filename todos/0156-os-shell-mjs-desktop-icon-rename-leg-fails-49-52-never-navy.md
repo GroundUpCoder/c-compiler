@@ -1,6 +1,6 @@
 # 0156 — os-shell.mjs desktop-icon rename leg fails: (49,52) never navy
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `tests/browser/os-shell.mjs` (the todos/0103 desktop-icon
   rename-in-place leg); wm.c desktop layer + window placement.
 

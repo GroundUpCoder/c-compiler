@@ -1,6 +1,6 @@
 # 0139 — Win32 printing pipeline (PrintDlg / PageSetup / StartDoc rendering)
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (comdlg32 + gdi32 status — the `PrintDlg/
   PageSetupDlg as honest cancels` + `StartDoc family fails loud` threads
   from 0048). Sibling of umbrella 0133, not a blocker (comdlg32/gdi32, not

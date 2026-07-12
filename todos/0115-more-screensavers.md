@@ -1,6 +1,6 @@
 # 0115 — More screensavers — Mystify + 3D pipes
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WM.md` "Implementation status — screensaver"
   (todos/done/0096 — the framework this extends)
 

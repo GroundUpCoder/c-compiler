@@ -1,6 +1,6 @@
 # 0137 — EDIT control word-wrap + horizontal-scroll rendering
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WIN32.md` (EDIT status). Umbrella 0133. Soft-after 0136
   (interactive scrollbars) — both touch the line/scroll model, and this
   builds on the `scrollX`-honouring multiline draw 0136 lands.

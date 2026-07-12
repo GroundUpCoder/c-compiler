@@ -1,6 +1,6 @@
 # 0116 — Title-bar right-click raises the window system menu
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/WM.md` ("window system menu" status). Filed by 0102,
   which landed the sysmenu as an Alt+Space / `wmctl sysmenu` chord and
   deferred this pointer affordance.

@@ -1,6 +1,6 @@
 # 0130 — Default Programs applet — GUI file-association editor in ctlpanel
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: `todos/done/0072-openwith-associations.md` (the resolver +
   store this applet edits; its closeout descoped "a full GUI
   association-list editor (ctlpanel)" — no follow-up was owed until now),

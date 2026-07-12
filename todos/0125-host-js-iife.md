@@ -1,6 +1,6 @@
 # 0125 — Wrap host.js so its top-level bindings don't leak onto the page
 
-- **Status**: open
+- **Status**: deferred (mass-deferred 2026-07-12; was: open)
 - **Design**: this file (self-contained); see the tail of `host.js` for the
   current `window.*` / `module.exports` / `self.*` export blocks.
 
