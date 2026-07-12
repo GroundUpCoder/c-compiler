@@ -2191,7 +2191,28 @@ static void agent_serve(int cfd) {
     }
     case AQ_GETTEXT: {
         HWND h = agent_find(payload);
-        if (!h) { aq_send(cfd, AQ_R_ERR, NULL, 0); break; }
+        if (!h) {
+            /* Items of the OPEN menu resolve here too (0171): AQ_CLICK
+             * could always press them, but GETTEXT — which backs `wmctl
+             * wait label`/`text` — only walked HWNDs, so every wait on a
+             * popup item silently ran out its full timeout (a fixed sleep
+             * in disguise) and `wait nolabel` on one passed instantly.
+             * OPEN only (TrackPopupMenu or a dropped bar submenu) — a
+             * CLOSED bar's items must stay unresolvable or `wait label
+             * Save` (a dialog button) would match File>Save forever. */
+            MenuItem *it = g_menu.open
+                ? menu_find_label(g_menu.pop, payload) : NULL;
+            if (it && it->text) {
+                char stripped[128];
+                strip_amp(it->text, stripped, sizeof stripped);
+                char *tab = strchr(stripped, '\t');
+                if (tab) *tab = 0;
+                aq_send(cfd, AQ_R_TEXT, stripped, (uint32_t)strlen(stripped));
+                break;
+            }
+            aq_send(cfd, AQ_R_ERR, NULL, 0);
+            break;
+        }
         int cap = 65536;
         char *buf = (char *)malloc((size_t)cap);
         if (!buf) { aq_send(cfd, AQ_R_ERR, NULL, 0); break; }
