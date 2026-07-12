@@ -1,6 +1,7 @@
 // 0093 browser acceptance: the Recycle Bin on the real compositor — the
 // headless twin is tests/kernel/test_recycle_e2e.js. Covers: the bin icon
-// composits at the grid's TAIL (row 7 on the seeded desktop) with the
+// composits at the grid's TAIL (row = #Desktop entries - 1, derived at
+// runtime — a new seed icon like Notepad shifts it down) with the
 // empty basket glyph, trashing a desktop file (the wm.c icon menu's
 // DELETE, driven through wmctl surface coords per the 0092 browser-trap
 // notes) flips the glyph full, a REAL double-click on the bin opens
@@ -35,6 +36,23 @@ try {
   // (each call site is annotated; terminal fs effects use waitOut markers).
   const pause = (ms) => page.waitForTimeout(ms);
 
+  // Derive the bin's grid row from the LIVE desktop before anything else: it
+  // tail-pins to column 0, so its row = (#Desktop entries - 1). Reading it
+  // (instead of a row-7 constant) keeps the pixel probes correct however many
+  // icons the image seeds. cellTop(row)=16+row*64; rim +10, center +18, click +30.
+  await setVt(1);
+  // Split-quote the marker (0089 trap) so `-END` appears ONLY in the command
+  // output, never the typed-line echo — otherwise waitOut fires on the echo
+  // before the count is printed.
+  await page.keyboard.type('echo "NDESK=$(ls /root/Desktop | wc -l)-EN""D"\r', { delay: 50 });
+  await waitOut('-END');
+  const ndeskOut = await page.evaluate(() => window.__osOut);
+  const ndeskM = ndeskOut.match(/NDESK=(\d+)-END/);
+  check('read the live Desktop entry count', !!ndeskM, JSON.stringify(ndeskM));
+  const binRow = (ndeskM ? Number(ndeskM[1]) : 8) - 1;
+  const cellTop = (row) => 16 + row * 64;
+  const rimY = cellTop(binRow) + 10, cenY = cellTop(binRow) + 18, clkY = cellTop(binRow) + 30;
+
   await setVt(2);
   await waitScreen();
   const rect = await page.evaluate(() => {
@@ -43,13 +61,13 @@ try {
   });
   await pause(1500);   // 0091 trap: quiesce so a late EV_SCREEN can't dismiss
 
-  // -- the bin icon: grid tail (row 7 after the 7 seeds), empty glyph --
-  // Tile origin (46,470): basket rim navy at (58,474), center (58,482)
-  // white while the store is empty, navy once it holds an entry.
-  await waitPixel(58, 474, NAVY, 60000);           // basket rim = icon drawn
+  // -- the bin icon: grid tail (derived binRow), empty glyph --
+  // basket rim navy at (58,rimY), center (58,cenY) white while the store is
+  // empty, navy once it holds an entry.
+  await waitPixel(58, rimY, NAVY, 60000);          // basket rim = icon drawn
   check('Recycle Bin icon composited at the grid tail', true);
-  check('bin glyph starts EMPTY (white center)', near(await sample(58, 482), WHITE),
-    await sample(58, 482));
+  check('bin glyph starts EMPTY (white center)', near(await sample(58, cenY), WHITE),
+    await sample(58, cenY));
 
   // -- trash a desktop file through the wm.c icon menu (wmctl coords) --
   await setVt(1);
@@ -73,11 +91,11 @@ try {
 
   // -- the glyph flips FULL on the live compositor --
   await setVt(2);
-  await waitPixel(58, 482, NAVY, 30000);
+  await waitPixel(58, cenY, NAVY, 30000);
   check('bin glyph flips FULL (navy center)', true);
 
   // -- REAL double-click opens fileman AT the store --
-  await page.mouse.dblclick(rect.x + 58, rect.y + 494);
+  await page.mouse.dblclick(rect.x + 58, rect.y + clkY);
   await setVt(1);
   await page.keyboard.type('for i in 1 2 3 4 5 6 7 8 9 10; do wmctl list | grep -q "File Manager" && break; sleep 1; done\r', { delay: 40 });
   await pause(6000);                               // fileman spawn + freetype
@@ -96,10 +114,10 @@ try {
   await waitOut('RESTORED-OK');
   check('Restore puts the file back on the desktop', true);
   await setVt(2);
-  // junk.txt is back on the desktop (8 sorted entries now), so the
-  // tail-pinned bin sits one row lower: row 8, tile center (58, 546).
-  await waitPixel(58, 546, WHITE, 30000);
-  check('bin glyph flips back EMPTY (at its new row-8 cell)', true);
+  // junk.txt is back on the desktop, so the tail-pinned bin sits one row
+  // lower now: binRow + 1, tile center at cellTop(binRow+1)+18.
+  await waitPixel(58, cellTop(binRow + 1) + 18, WHITE, 30000);
+  check('bin glyph flips back EMPTY (at its new lower cell)', true);
 
   await setVt(1);
   await page.keyboard.type("echo RB-SHELL-O''K\r", { delay: 50 });

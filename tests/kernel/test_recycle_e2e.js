@@ -26,9 +26,14 @@
 //
 // Geometry mirrors os/wm.c: icon menu rows OPEN 4-24 / sep / CUT 32-52 /
 // COPY 52-72 / DELETE 72-92; bin menu OPEN 4-24 / sep / EMPTY 32-52.
-// Desktop (1024x768): seeded icons rows 0-6, the bin row 7 (sorts last);
-// a junk.txt sorts to row 3 (after gameboy). Icon centers x=58,
-// y = 16 + row*64 + 32; the bin tile center is (58, 482).
+// Desktop (1024x768): the seeded launchers fill column 0 and the bin sorts
+// LAST (entcmp tail-pin, todos/0093), so its row = (#Desktop entries - 1) as
+// long as they fit one column (11 rows). That count is NOT a constant — a new
+// seeded desktop icon (e.g. Notepad) shifts the bin down — so the test DERIVES
+// the bin row from the live `/root/Desktop` at runtime (BINROW / BINY below,
+// echoed as ==binrow for the JS pixel math) rather than hardcoding it. A
+// junk.txt sorts to row 3 (after gameboy). Icon centers x=58, cell top
+// y = 16 + row*64; click offset +30, glyph pixels at +18 (center) / +10 (rim).
 //
 // Run: node tests/kernel/test_recycle_e2e.js
 'use strict';
@@ -229,6 +234,13 @@ const script = [
   'echo "==stray S$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
   // ---- the wm.c desktop: glyph empty -> full -> empty ----
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
+  // The bin sits at the tail cell of column 0: row = (#Desktop entries - 1).
+  // Computed here in the base state (seeded launchers + bin, no junk yet) so
+  // it stays correct however many icons the image seeds. BINY centers a click
+  // in that row (+30); the JS pixel math reads BINROW off ==binrow.
+  'BINROW=$(( $(ls /root/Desktop | wc -l) - 1 ))',
+  'BINY=$(( 16 + BINROW * 64 + 30 ))',
+  'echo "==binrow R${BINROW}-END"',
   'wmctl shot $DSID /root/e.ppm && echo E-SHOT',
   'printf junk > /root/Desktop/junk.txt',
   'sleep 1.5',                                   // the coarse desk tick (wm.c re-reads Desktop on a timer — no event)
@@ -243,8 +255,8 @@ const script = [
   'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
   'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
-  // ---- the bin's own menu: OPEN / EMPTY RECYCLE BIN (row 7, y 494) ----
-  'wmctl click $DSID 58 494 3',
+  // ---- the bin's own menu: OPEN / EMPTY RECYCLE BIN (bin row, y=$BINY) ----
+  'wmctl click $DSID 58 $BINY 3',
   'wmctl wait win ctxmenu 8000',
   'echo ==binmenu',
   'wmctl list',
@@ -255,7 +267,7 @@ const script = [
   'echo "==binleft B$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
   'wmctl shot $DSID /root/g.ppm && echo G-SHOT',
   // grayed EMPTY: click leaves the menu open
-  'wmctl click $DSID 58 494 3',
+  'wmctl click $DSID 58 $BINY 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'wmctl click $CXSID 60 42',
@@ -274,7 +286,7 @@ const script = [
   'sleep 1.5',                                   // wm.c trashes the selection (no event; coarse tick)
   'test ! -f /root/Desktop/kdel.txt && test -f /root/.recycle/files/kdel.txt && echo KEY-DEL',
   // ---- double-click the bin: fileman opens AT the store ----
-  'wmctl dblclick $DSID 58 494',
+  'wmctl dblclick $DSID 58 $BINY',
   'wmctl wait win "File Manager - /root/.recycle/f" 10000',  // the second fileman booted (title truncated to 31 chars)
   'echo ==binopen',
   'wmctl list',
@@ -384,15 +396,20 @@ check('double-clicking the bin opens fileman at the store',
   };
   for (const s of ['E', 'F', 'G']) check(`${s} shot written`, out.includes(s + '-SHOT'));
   const WHITE = '255,255,255', NAVY = '0,0,128';
-  // The bin tile at cell (0,7): origin (46,470), basket rim navy at
-  // (58,474), center (58,482) white empty / navy full.
+  // The bin sits at column-0 row BINROW (derived from the live desktop above,
+  // echoed as ==binrow), cell top y = 16 + BINROW*64; the basket rim samples
+  // at +10 (navy) and the center at +18 (white empty / navy full).
+  const binMatch = out.match(/==binrow R(\d+)-END/);
+  check('bin row was reported', !!binMatch, JSON.stringify(binMatch));
+  const binRow = binMatch ? Number(binMatch[1]) : 7;
+  const cy = (off) => 16 + binRow * 64 + off, CEN = cy(18), RIM = cy(10);
   check('bin glyph starts empty (white center, navy rim)',
-    px('e.ppm', 58, 482) === WHITE && px('e.ppm', 58, 474) === NAVY,
-    [px('e.ppm', 58, 482), px('e.ppm', 58, 474)].join(' | '));
+    px('e.ppm', 58, CEN) === WHITE && px('e.ppm', 58, RIM) === NAVY,
+    [px('e.ppm', 58, CEN), px('e.ppm', 58, RIM)].join(' | '));
   check('trashing flips the glyph full (navy center)',
-    px('f.ppm', 58, 482) === NAVY, px('f.ppm', 58, 482));
+    px('f.ppm', 58, CEN) === NAVY, px('f.ppm', 58, CEN));
   check('emptying flips it back (white center)',
-    px('g.ppm', 58, 482) === WHITE, px('g.ppm', 58, 482));
+    px('g.ppm', 58, CEN) === WHITE, px('g.ppm', 58, CEN));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
