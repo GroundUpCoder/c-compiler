@@ -1,0 +1,29 @@
+sent
+
+one slide
+per paragraph
+
+@/usr/share/sent/nyan.png
+
+depends on
+SDL
+freetype
+libpng
+
+usage:
+$ sent FILE
+
+▸ arrows / space / click: next slide
+▸ backspace / p: previous slide
+▸ r: reload, q: quit
+
+# comments are ignored
+
+decks are plain text
+(write one in vi,
+present it here)
+
+\@not_an_image.png
+⇒ backslash escapes specials
+
+@/usr/share/sent/trans.ff

@@ -1,0 +1,329 @@
+%include "default.mgp"
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%nodefault
+%size 7, font "standard", fore "white", vgap 20, back "black"
+%bquality 10
+
+%center
+
+
+How to use 
+background gradation
+(tentative)
+
+
+%size 4
+Yojiro UO
+yuo@Nui.org
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 
+
+Usage
+
+	Specify the "bgrad" keyword for background gradation
+
+	By default
+		entire screen
+		from up to down
+		from blue to black
+
+	Without arguments, displayed with these default values.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 128 90 1 "black" "blue"
+
+Principles of drawing gradation background
+
+Gradation drawing is 2-phase process:
+		generate raw material of gradaton image
+		superimpose to screen image
+
+The first five arguments to "bgrad" can be separate as follows:
+		Args. for image generation
+		Args. for superimpose method
+
+Following the above, the list of color name (to be used for gradation) \
+may be specified.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 50 50
+
+Args. for image generation 
+
+Args. to specify the size of genarated images 
+	1st arg:
+		Relative size against X axis (percentage)
+
+	2nd arg:
+		Relative size against Y axis (percentage)
+
+Args. to specify the property of genarated images 
+	3rd arg:
+		# of colors
+
+	4th arg:
+		Rotation Angle
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 50 50
+
+Args. for superimpose method
+
+Args. to specify how image should be enlarged to fit to the screen.
+
+	5th arg:
+		Zooming flag:
+			0: Tiling 
+			1: Zoom
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad
+
+Syntax of bgrad (conclusion)
+
+	1st arg: Relative size against X direction
+		Range: 1 to 100 (0 means 100%)/default: 100%
+	2nd arg: Relative size against Y direction
+		Range: 1 to 100 (0 means 100%)/default: 100%
+	3rd arg: # of colors
+		default: 128 colors
+	4th arg: Rotation Angle
+		Range: -360 to 360/default: 0
+	5th arg: Zooming flag
+		1:Zoom, 0:Repeat to the edges of screen
+		Default: 1
+	Rests are colors
+		Defualt: blue,black
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad
+
+Background gallary (Basic technics)
+
+Here are basic examples:
+
+	Vertical Stripes
+	Horizontal Stripes(1)
+	Horizontal Stripes(2)
+	Rotating with a specific angle
+	Zooming & Vertical Stripes
+	Auto adjustment
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 128 90 1 "black" "red" "black" "red" "black" "red" "black"
+
+Vertical Stripes
+
+%size 4
+bgrad 0 0 128 90 1 "black" "red" "black" "red" "black" "red" "black"
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 128 0 1 "black" "red" "black"
+
+Horizontal Stripes(1)
+
+%size 4
+bgrad 0 0 128 0 1 "black" "red" "black"
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 128 0 1 "blue2" "black" "black" "black" "blue4" "blue3" "blue4"
+
+Horizontal Stripes(2)
+
+%size 4
+bgrad 0 0 128 0 1 "blue2" "black" "black" "black" "blue4" "blue3" "blue4"
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 25 25 128 45 1 "black" "red2" "black"
+
+Rotating with a specific angle
+
+%size 4
+bgrad 25 25 128 45 1 "black" "red2" "black"
+
+	Rotation takes some time
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 100 100 128 90 1 "black" "red" "black"
+
+Zooming & Vertical Stripes
+
+%size 4
+bgrad 100 100 128 90 0 "black" "red" "black"
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 128 0 1 "blue" "cyan" "black" "black" "black" "black" "black" "green" "black" 
+
+Auto adjustment
+
+%size 3
+bgrad 0 0 128 0 1 "blue" "cyan" "black" "black" "black" "black" "black" "green" "black" 
+
+	Auto adjust with size (0,0)
+	zoomflag is necessary
+	blue/cyan/black ... black/green/black
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad
+
+Background gallary (Advanced technics)
+
+Let's see some uses of advanced technics:
+
+	Colorful
+	Traditional Japanese 
+	Effects by zooming a small pattern
+	Filling with small patterns(1)
+	Filling with small patterns(2)
+	Tricky(1)
+	Tricky(2)
+	Circle gradation(1)
+	Circle gradation(2)
+	Circle gradation(3)
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%fore "white"
+%bgrad 0 0 128 180 1 "black" "white" "black" "red" "orange" "green3" "black" "blue"
+
+Colorful
+
+
+%size 3
+bgrad 0 0 128 180 1 "black" "white" "black" "red" "orange" "green3" "black" "blue" 
+
+	You can do this!
+	Since rotated by 180, color lists are turned over.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 10 0 128 90 0 "black" "orange" "black" "black" "black" "black" "black" "green" "black" 
+
+Traditional Japanese 
+
+%size 3
+bgrad 10 0 128 90 0 "black" "orange" "black" "black" "black" "black" "black" "green" "black" 
+
+	Rotate the pattern of 10%x100% by 90 then repeat
+	black/orange/black ... black/green/black
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 10 10 128 0 1 "black" "blue" "red" "black" "black" "black" "black" "black" "green" "black" 
+
+Effects by zooming a small pattern
+
+%size 3
+bgrad 10 10 128 0 1 "black" "blue" "red" "black" "black" "black" "black" "black" "green" "black" 
+
+	Zoom the pattern of 10%x10%
+	black/blue/red/black ... black/green/black
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 10 10 128 45 1 "black" "orange" "black" "black" "black" "black" "black" "green" "black" 
+
+Filling with small patterns(1)
+
+%size 3
+bgrad 10 10 128 45 1 "black" "orange" "black" "black" "black" "black" "black" "green" "black"
+
+	Rotate the pattern of 10%x10% by 45 then repeat then zoom
+	black/orange/black ... black/green/black
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 5 5 128 60 1 "black" "orange" "black" "black" "black" "black" "black" "green" "black" 
+
+Filling with small patterns(2)
+
+%size 3
+bgrad 5 5 128 60 1 "black" "orange" "black" "black" "black" "black" "black" "green" "black" 
+
+	Rotate the pattern of 5%x5% by 60 then repeat then zoom
+	black/orange/black ... black/green/black
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 25 25 128 45 1 "blue" "blue2" "black" "black" "black" "black" "blue"
+
+Tricky(1)
+
+%size 3
+bgrad 25 25 128 45 1 "blue" "blue2" "black" "black" "black" "black" "blue"
+
+	Rotate the pattern of 25%x25% by 45 then repeat then zoom
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 12 0 128 45 0 "blue" "blue2" "black" "black" "black" "black" "blue" 
+
+Tricky(2)
+
+%size 3
+bgrad 12 0 128 45 0 "blue" "blue2" "black" "black" "black" "black" "blue" 
+
+	Rotate the pattern of 12%x100% by 45 then repeat
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 25 25 128 -45 1 "black" "red" "black"
+
+Circle gradation(1)
+
+%size 4
+bgrad 25 25 128 -45 1 "black" "red" "black"
+
+	The "easter egg" feature
+	If angle is minus, it becomes non-liner.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 25 25 128 -45 1 "red2" "black" "red2"
+
+Circle gradation(2)
+
+%size 4
+bgrad 25 25 128 -45 1 "red2" "black" "red2"
+
+	The reverse
+	List colors symmetrically
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 25 25 128 -45 0 "blue" "blue2" "black" "black" "black" "black" "blue"
+
+Circle gradation(3)
+
+%size 3
+bgrad 25 25 128 -45 1 "blue" "blue2" "black" "black" "black" "black" "blue"
+
+	Rotate the pattern of 25%x25% by 45,
+	zoom then repeat
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%	
+%page
+%bgrad 25 25 128 -45 1 "white" "blue" "black" "black" "orange" "black" "black" "orange" "black" "black" "blue" "white"
+
+Fin
+

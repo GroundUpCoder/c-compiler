@@ -1,6 +1,17 @@
 # 0119 — MagicPoint (mgp) + sent presentation tools, ported onto SDL (no Xlib shim)
 
-- **Status**: open (META — multi-round; sent is the small first port, mgp the payoff)
+- **Status**: DONE (2026-07-12) — both rounds landed: vendor/sent (R1) and
+  vendor/magicpoint (R2) on SDL, seeded (/bin/sent, /bin/mgp, demo decks,
+  Demos menu entries, .sent/.mgp openwith), tests
+  tests/kernel/test_present_e2e.js + tests/browser/os-present.mjs, image
+  v80. R3 (shared JSON slide model / Xlib-veneer reassessment) stays a
+  recorded non-goal unless an editor or Xlib corpus materializes. Compiler
+  bugs found by the port: sizeof-postfix parse FIXED in this item
+  (tests/unit/conformance/parse_sizeof_postfix); todos/0158 (implicit
+  cross-TU decl ICE) + todos/0159 (unprototyped-call promotion ABI ICE)
+  filed P0. Deck-feature descopes are recorded in
+  vendor/magicpoint/README.md. Dev log:
+  logs/2026-07-12/0119-presentation-tools-sent-mgp.md
 - **Design**: this file. Toolkit context: `todos/WIN32.md` (Win32 is the
   primary *widget* toolkit; this is deliberately a **canvas** app, like
   doom/quake — no HWND tree, no by-label agent-drivability needed for a

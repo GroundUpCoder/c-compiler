@@ -1,0 +1,6 @@
+/* this defines the version and patchlevel of this version of xloadimage
+ */
+
+#define VERSION      "3"
+#define PATCHLEVEL   "03"
+#define AUTHOR_EMAIL "jimf@centerline.com or ..!uunet!centerline!jimf"

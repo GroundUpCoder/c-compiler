@@ -10327,8 +10327,12 @@ class Parser {
           }
           return new AST.ESizeofType(sizeofLoc, Types.TULONG, sType);
         }
-        const expr = this.parseExpression();
+        let expr = this.parseExpression();
         this.expect(")");
+        // The operand is a full unary-expression (C11 6.5.3), so postfix
+        // operators keep binding to the parenthesized expression:
+        // sizeof(a)[0] is sizeof((a)[0]), not (sizeof(a))[0].
+        expr = this.parsePostfixTail(expr);
         return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
       }
       const expr = this.parseUnaryExpression();

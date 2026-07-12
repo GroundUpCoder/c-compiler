@@ -93,7 +93,7 @@ try {
   const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
   const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;
   const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
-  const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
+  const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'mgp', 'slides', 'winbox'];
   const winCount = async () => {
     await setVt(1);
     await page.waitForTimeout(400);              // timing subject: VT1 prompt-settle pacing (no page-observable marker)

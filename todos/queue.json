@@ -24,7 +24,6 @@
     { "id": "0116", "priority": 2, "after": ["0102"] },
     { "id": "0126", "difficulty": "light" },
     { "id": "0117", "difficulty": "heavy" },
-    { "id": "0119", "difficulty": "heavy" },
     { "id": "0120", "priority": 2, "after": ["0118"] },
     { "id": "0121", "priority": 3, "after": ["0118"] },
     { "id": "0122", "difficulty": "medium" },
@@ -53,6 +52,8 @@
     { "id": "0152", "priority": 2, "after": ["0064"] },
     { "id": "0153" },
     { "id": "0156", "priority": 0 },
-    { "id": "0157" }
+    { "id": "0157" },
+    { "id": "0158", "priority": 0 },
+    { "id": "0159", "priority": 0 }
   ]
 }

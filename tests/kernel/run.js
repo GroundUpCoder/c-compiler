@@ -82,6 +82,7 @@ const tests = [
   ['test_recycle_e2e.js', IMG],  // 0093: the Recycle Bin — trash/restore/empty through fileman + the wm.c desktop (bin icon glyph, icon DELETE, bin menu), sidecars, Shift+Del bypass, EROFS no-stray
   ['test_ctlpanel_e2e.js', IMG], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
   ['test_term_e2e.js', IMG],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
+  ['test_present_e2e.js', IMG],  // 0119: /bin/sent + /bin/mgp — demo decks render (glyphs, %default bg, %tab icons), paging, q quits
   ['test_clipboard_e2e.js', IMG], // 0090: the system clipboard — kernel slot via /bin/clip, notepad copy/cut/paste across processes, term drag-select + Ctrl+Shift+C/V
   ['test_ctxmenu_e2e.js', IMG],  // 0091: right-click context menus — wm.c desktop/icon/taskbar popups (geometry, dismissal, flyouts, keyboard nav), EDIT WM_CONTEXTMENU via the agent, ctlpanel argv
   ['test_gpubox_dawn_e2e.js', IMG], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg

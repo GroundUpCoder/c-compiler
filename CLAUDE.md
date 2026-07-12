@@ -129,6 +129,14 @@ hang-class miscompiles fail fast instead of stalling the suite.
 
 - **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; patch table in `vendor/sameboy/README.md`), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
+- **Presentations (0119, X→SDL ports — no Xlib shim, each fork patches its
+  display layer to SDL directly)**: `sent` (suckless, ISC; drw rebuilt over
+  SDL+freetype2+libpng, `.sent` decks), `magicpoint` (mgp 1.13a; the fork's
+  `sdlx.c` implements mgp's Xlib vocabulary over one SDL window, tfont.c
+  rewritten FT1→FT2, freetype-only text, PNG/PBM/XBM/XPM images, `.mgp`
+  decks; descopes + patch table in `vendor/magicpoint/README.md`). Both
+  seeded with demo decks + Demos menu entries + openwith associations;
+  tests: `test_present_e2e.js` + `os-present.mjs`
 - **Systems**: `tinyemu` (RISC-V 32 emulator, can boot Linux), `busybox`
   (hush as the OS's /bin/sh — NOMMU config over the vfork-on-__spawn
   journaling shim — plus 81 coreutils applets (0010, the 0034 trivial
@@ -661,7 +669,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v78**.
+Image version is **v80**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

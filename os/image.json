@@ -1,5 +1,5 @@
 {
-  "version": 78,
+  "version": 80,
   "overlays": [
     {
       "id": "clang-apps",
@@ -18,6 +18,8 @@
       "/usr/share/menu/Accessories",
       "/usr/share/menu/Demos",
       "/usr/share/menu/Games",
+      "/usr/share/mgp",
+      "/usr/share/sent",
       "/usr/share/sounds"
     ],
     "files": {
@@ -73,6 +75,24 @@
       },
       "/usr/bin/gameboy": {
         "project": "vendor/gameboy/bin.json"
+      },
+      "/usr/bin/sent": {
+        "project": "vendor/sent/bin.json"
+      },
+      "/usr/bin/mgp": {
+        "project": "vendor/magicpoint/bin.json"
+      },
+      "/usr/share/mgp/demo.mgp": {
+        "bin": "vendor/magicpoint/demo.mgp"
+      },
+      "/usr/share/sent/demo.sent": {
+        "bin": "vendor/sent/demo.sent"
+      },
+      "/usr/share/sent/nyan.png": {
+        "bin": "vendor/sent/nyan.png"
+      },
+      "/usr/share/sent/trans.ff": {
+        "bin": "vendor/sent/transparent_test.ff"
       },
       "/usr/bin/sameboy": {
         "project": "vendor/sameboy/bin.json"
@@ -179,6 +199,12 @@
       "/usr/share/menu/Accessories/paint": {
         "link": "/usr/bin/paint"
       },
+      "/usr/share/menu/Demos/slides": {
+        "content": "#!/bin/sh\nsent /usr/share/sent/demo.sent\n"
+      },
+      "/usr/share/menu/Demos/mgp": {
+        "content": "#!/bin/sh\nmgp /usr/share/mgp/demo.mgp\n"
+      },
       "/usr/share/menu/Demos/winbox": {
         "link": "/usr/bin/winbox"
       },
@@ -216,7 +242,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nnes\t/bin/punes\nbmp\t/bin/paint\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nnes\t/bin/punes\nbmp\t/bin/paint\nsent\t/bin/sent\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

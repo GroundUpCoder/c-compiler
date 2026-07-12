@@ -1,0 +1,63 @@
+{
+  "name": "mgp",
+  "description": "MagicPoint 1.13a presentation tool, display layer ported Xlib -> SDL + freetype2 + libpng (todos/0119)",
+  "compilerArgs": [
+    "-DFREETYPE",
+    "-DUSE_PNG",
+    "-DNO_UNCOMPRESS",
+    "-DRETSIGTYPE=void",
+    "-DHAVE_UNISTD_H=1",
+    "-DHAVE_SYS_WAIT_H=1",
+    "-DTIME_WITH_SYS_TIME=1",
+    "-DHAVE_USLEEP=1",
+    "-DHAVE_STDARG_H=1",
+    "-DHAVE_STRDUP=1",
+    "-DFREETYPEFONTDIR=\"/usr/share/fonts\"",
+    "--allow-old-c"
+  ],
+  "deps": [
+    "../freetype/lib.json",
+    "../libpng/lib.json"
+  ],
+  "includes": [
+    ".",
+    "../freetype/demo",
+    "../freetype/include",
+    "../libpng"
+  ],
+  "sources": [
+    "mgp.c",
+    "draw.c",
+    "parse.c",
+    "grammar.c",
+    "scanner.c",
+    "background.c",
+    "globals.c",
+    "unimap.c",
+    "tfont.c",
+    "postscript.c",
+    "embed.c",
+    "plist.c",
+    "sdlx.c",
+    "missing/strsep.c",
+    "image/imagetypes.c",
+    "image/new.c",
+    "image/zio.c",
+    "image/path.c",
+    "image/misc.c",
+    "image/zoom.c",
+    "image/rotate.c",
+    "image/clip.c",
+    "image/bright.c",
+    "image/reduce.c",
+    "image/dither.c",
+    "image/halftone.c",
+    "image/smooth.c",
+    "image/compress.c",
+    "image/value.c",
+    "image/png.c",
+    "image/pbm.c",
+    "image/xbitmap.c",
+    "image/xpixmap.c"
+  ]
+}

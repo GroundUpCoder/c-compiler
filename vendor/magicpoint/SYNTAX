@@ -1,0 +1,443 @@
+$Id: SYNTAX,v 1.46 2008/01/18 17:43:20 nishida Exp $
+
+placement restriction for directives:
+		.mgprc		preamble	main pages
+		---		---		---
+%vfcap		okay		x		okay
+%tfdir		okay		x		okay
+%tfont0		okay		x		okay
+%default	x		okay		x
+%tab		x		okay		x
+%deffont	x		okay		x
+%include	x		okay		x
+others		x		x		okay
+
+
+%%
+	Comment lines.
+
+#
+	Comment lines.
+
+\# (at the beginning of a line)
+	Shows the character #.
+
+\% (at the beginning of a line)
+	Shows the character %.
+
+\
+	Followed by an escape sequence. Currently supported:
+
+	- \\ converts to the character \.
+	- \xHH (case insensitiv), where HH are hexadecimal digits.
+	  Converts to the ASCII-character number HH.
+
+	Escaping is switched off in Unicode.
+
+\ (at the end of line)
+	Line continuation.  Spaces/tabs at the beginning of next line
+	will be ignored.
+
+%size <size>
+	<size> :: size of fonts
+
+%fore "color"
+	"color" :: color of foreground
+
+%back "color"
+	"color" :: color of background
+
+%ccolor "color"
+	"color" :: color of page guide and balloon help in bottom line
+
+%bgrad <xsize> <ysize> <nuncolor> <dir> <zoomflag> <colorlist...>
+	<xsize> :: width of generated image(0-100%)
+			0 means physical display size
+	<ysize> :: height of generated image(0-100%)
+			0 means physical display size
+	<numcolor> :: number of colors, 0 means no reduction.
+			default 256 colors(8bit)
+	<dir> :: gradation direction (0-360 degree) 
+		 0 :Top to Bottom   90 :Left to Right
+		180:Bottom to Top 270 :Right to Left
+			default 0
+		negative value means "non-liner gradation"
+	<zoomflag> :: zoom to max size
+		0 nozoom, 1 zoom
+			default 0
+	<colorlist> :: colors in the gradation image
+
+%left
+	Left justify.
+
+%leftfill
+	Left justify, with folding long line.
+
+%center
+	Centering.
+
+%right
+	Right justify.
+
+%shrink
+	(not supported at this moment)
+
+%lcutin
+	Text will be animated (flying from the leftmost edge of the page).
+
+%rcutin
+	Text will be animated (flying from the leftmost edge of the page).
+
+%cont
+	Draw without line break.
+
+%nodefault
+	Disable effect of default directive.
+
+%xfont "font"
+%xfont "font" "registry"
+	<font> :: use X11's <font> to draw characters.
+	"font" is for specifying X11 XLFD, font alias name, or
+	"family-weight-slant".
+	"registry" is for specifying "registry-encoding".
+
+	interpretation of "registry":
+	- If none specified, "iso8859-1" is assumed.
+	- If no dash inside, encoding of "*" is assumed.
+	  Therefore, you'll get "REGISTRY-*".
+	- If there's a single dash inside, use specified value.
+	  Therefore, you'll get "REGISTRY-SPECIFIED".
+
+	interpretation of "font":
+	- If it has no dash inside,
+		Try font alias, such as "8x5" or "a14".
+		If there's no font alias matched, it should be "times" or
+		something like that. In this case, try
+		"-*-FONT-*-*-*-*-SIZE-*-*-*-*-*-REGISTERY-SPECIFIED".
+	- If it has single dash inside, such as "times-medium":
+		Try "-*-FONT-NAME-*-*-*-SIZE-*-*-*-*-*-REGISTRY-SPECIFIED".
+	- If it has two dash inside, such as "times-medium-r":
+		Try "-*-FONT-NAME-SPECIFIED-*-*-SIZE-*-*-*-*-*-REGISTRY-SPECIFIED".
+	- Otherwise, try the specified string itself as XLFD.
+
+	Some exercises:
+	%xfont "times"
+		You'll get "-*-times-*-*-*-*-SIZE-*-*-*-*-*-iso8859-1".
+	%xfont "mincho" "jisx0208.1983"
+		You'll get "-*-mincho-*-*-*-*-SIZE-*-*-*-*-*-jisx0208.1983-*".
+	%xfont "mincho-medium-r" "jisx0208.1983"
+		You'll get "-*-mincho-medium-r-*-*-SIZE-*-*-*-*-*-jisx0208.1983-*".
+
+	NOTE: Only the following items are meaningful as "registry".
+		jisx0208.1983-*
+		gb2312.1980-*
+		ksc5601.1987-*
+		iso8859-1
+		iso8859-2
+		iso8859-3
+		iso8859-4
+	It would be nice if we can support "adobe-specific" for symbols,
+	however, we have no escape sequence to designate the it...
+
+
+	If you have installed magicpoint with Xft2 enabled, %xfont will accept
+	"FONTNAME", "FONTNAME:STYLE", and "FONTNAME:style=STYLE".
+	Note that if you specify "FONTNAME" and it contains '-', it will be
+	interpreted as XLFD.  In such a case, you should use "FONTNAME:STYLE"
+	or "FONTNAME:style=STYLE".
+
+%vfont "font"
+	<font> :: use VFlib's <font> to draw Kanji characters.
+
+%tfont "font"
+	<font> :: use TrueType font <font> to draw ASCII characters.
+		<font> can be full pathname, or just filename.  Use %tfdir
+		for setting default font directory.
+
+%tmfont "font"
+	<font> :: use TrueType font <font> to draw Kanji characters.
+		<font> can be full pathname, or just filename. 
+
+	you do not need it with Xft2 enabled installation.
+
+%tfont0 "font"
+	<font> :: use TrueType font <font>, if none of the font specified by
+		%tfont directive is found.  This is the last-resort for the
+		TrueType font finding code.
+		(allowed in ~/.mgprc, without "%" sign)
+
+	you do not need it with Xft2 enabled installation.
+%psfont "font"
+	<font>:: use PostScript fonts to create PostScript file
+	Suported fonts are:
+			Times-[Roman|Italic|Bold|BoldItalic]
+			Helvetica
+			Helvetica-[BoldOblique|Bold|Oblique]
+			Helvetica-Narrow
+			Helvetica-Narrow[Oblique|Bold|Oblique]
+			NewCenturySchlbk-[Roman|Bold|Italic|BoldItalic]
+			Courier
+			Courier-[Oblique|Bold|BoldOblique]
+			AvantGarde-[Book|BookOblique|Demi|DemiOblique]
+			Bookman-[Demi|DemiItalic|Light|LigtItalic]
+			Palatino-[Roman|Bold|Italic|BoldItalic]
+			ZapfChanery-MediumItalic
+			Symbol
+			ZapfDingbats
+	if none of this fonts is specified it uses the default font Helvetica.
+
+%bar <color> <width> <start> <length>
+	<color> :: color of bar, foreground color will be used as default.
+	<width> :: permill of display height. default 10.
+	<start> :: start position percent of display width. default 0.
+	<length> :: length percent of display width. default 100.
+
+%valign "top|center|bottom"
+	vertical alignment of images with current text line
+
+%image "imagefile" <numcolor> <xzoomrate> <yzoomrate> <zoomflag>
+%image "imagefile" [ [<numcolor>] <screensize> ]
+	"imagefile" :: name of image file
+	<numcolor> :: number of colors, 0 means no reduction.
+	<xzoomrate> :: height percentage against physical display or original
+			size, 0 means the original height.
+	<yzoomrate> :: width percentage against physical display or original
+			size, 0 means the original width.
+	<zoomflag> :: 0 means zoomrate is against physial display
+			others mean zoomrate is against original size	
+
+	<screensize> :: auto resizing.
+			specify the original screen size by WIDTHxHEIGHT.
+			unless screensize is the same size of the physical
+			display, zoomrate is calculated automagically.
+
+	Note that if the image is a binary image, current foreground
+	and background colors are applied to the drawn image.
+
+%newimage [options] "imagefile"
+
+	Same as %image, but it is much easier to understand.
+	options include:
+	    -colors numcolors
+	    -xysize pixel pixel
+	    -zoom percentage
+	    -xyzoom x-percentage y-percentage
+		Percentage is against the original image.
+		"100" means the original image size, "50" means
+		half the original image size.
+	    -scrzoom percentage
+	    -xscrzoom percentage
+	    -yscrzoom percentage
+	    -xyscrzoom x-percentage y-percentage
+		Percentage is against the screen. "100" means screen
+		width/height, "50" means half the screen width/height.
+		-xscrzoom and -yscrzoom scales image with aspect
+		ratio unchanged.
+        -raise percentage 
+		raise the baseline of the image in the line.	
+		Percentage is against the height of the image. 
+		"100" means the height of the image.
+        -rotate degrees
+		degrees is angle measure counter clockwise, supported values are
+		0, -90, 90, -180, 180, 270
+		-zoomonclk percentage
+		enlarge image when it is clicked. Percentage is against the screen. 
+		"100" means screen width.
+
+
+	TODO: supersede %image by %newimage?
+	TODO: option for auto resize mode (fit image into the room left on
+		the screen)
+
+%prefix "string"
+	Place "string" at the beginning of line.
+	"string" should be a set of blank characters (\040).
+
+	The effect of %prefix command in %tab command is local to
+	tab-indented line.
+
+%prefix <percentage>
+	specify prefix spacing by <percentage> of the drawing area width.
+
+	The effect of %prefix command in %tab command is local to
+	tab-indented line.
+
+%icon <arc|box|delta1|delta2|delta3|delta4|dia> <color> <size>
+%icon <imagefile> <color> <size>
+	add an icon for itemizing lines.
+	for example,
+		%tab 1 size 5, icon box green 50
+	gives you an green box on the leftmost column of line.
+	size is the percentage against the current character size.
+
+%bimage "imagefile" [ <screensize> ]
+	Specify the name of background image file
+	<screensize> :: auto resizing.
+			specify the original screen size by WIDTHxHEIGHT.
+			unless screensize is the same size of the physical
+			display, zoomrate is calculated automagically.
+
+%default <linenum> <list-of-directives>
+	Unless nodefault directive is specified, the directives in the
+	argument is prepended to the directives of the linenum'th line
+	in every page. The syntax of <list-of-directives> is a comma
+	separated directives.
+	This directive has to be placed in the preamble.
+
+%tab <tabnum> <list-of-directives>
+	Apply list of directives, if any of the lines start with tabnum
+	tabs.
+	This directive has to be placed in the preamble.
+
+%tab <id> <list-of-directives>
+	Apply list of directives, if any of the lines start with "&id".
+	This directive has to be placed in the preamble.
+
+%page
+	A new page starts
+
+%vgap <gapsize>
+	Specify vertical gap size of each line
+	<gapsize>:: percentage against current character size
+		vertical gap = vertical font size * gapsize / 100
+
+%hgap <gapsize>
+	Specify horizontal gap size of each line
+	<gapsize>:: percentage against current character size
+		horizontal gap = vertical font size * gapsize / 100
+	NOTE: horizontal gap is calculated based on vertical size,
+	because fonts are proportional (horizontal size varies by code point).
+
+%pause
+	Stop drawing until forward key or button is pressed
+
+%mark
+	Mark the current position on the screen, so that we can come back
+	later by %again.
+	NOTE: mark is local to a page.  mark will be cleared at the page
+	boundary.
+
+%again
+	Move current position to the location marked by %mark.
+
+%system "command"
+	Fork&exec the specified program.
+	NOTE: the program will be invoked every time the page is redrawn.
+	It sometimes annoy you.  it needs some rework.
+
+	Special translation for presentation-window-relative geometry:
+		Argument that starts with "%" will be translated as if
+		it was interpreted relative to presentation window.
+
+		"xeyes -geometry %50x50+25+25"  will be translated
+		so that eyes appear on the center of the presentation window.
+
+	The command has to be placed on a line alone.
+	Do not use commas.
+
+	Process will be killed when you leave the page.
+
+%system "command" <page>
+	Almost same as above.
+	Process will be killed when you leave the specified <page>.
+	If you set <page> to -1, the process will be killed when MagicPoint
+	is terminated. (of course, you can terminate the child process alone
+	by yourself)
+
+%filter "command"
+TEXT
+%endfilter
+	Fork&exec the specified program, feed TEXT into that process
+	from standard input.  use the standard output from the process
+	as presentation input.
+	Do not forget to place %endfilter.
+
+	The command has to be placed on a line alone.
+	Do not use commas.
+
+%vfcap "filename"
+	Specifies VFlib configuration filename.
+	(allowed in ~/.mgprc, without "%" sign)
+
+%tfdir "dir"
+	Specifies where to find TrueType font by default.
+	(allowed in ~/.mgprc, without "%" sign)
+
+%deffont "fontname" <list-of-directives>
+	Define a symbolic fontname, by using list-of-directives.
+	The directive must appear in the preamble.
+
+	For example, you may want to define a typewriter-like font as:
+		%deffont "typewriter" xfont "courier", tfont "cour.ttf"
+	By using the above definition, you can make your presentation file
+	less dependent to the configuration of magicpoint binary.
+	If the configuration allows the use of TrueType "cour.ttf" font,
+	"tfont" directive will be effective.  If there's no TrueType font
+	available, or FreeType library is not compiled into the magicpoint
+	binary you are currently using, "xfont" will be effective.
+
+	"%font" cannot be used in "%deffont".  this is for avoiding infinite
+	loops.
+
+%font "fontname"
+	Invoke the symbolic fontname defined by %deffont directive.
+
+%embed "filename"
+%endembed
+	Embedded image support.  uuencoded data fragment can be put between
+	the directives.
+	NOTE: this directive is not for human beings.  use "mgpembed" command.
+
+%noop
+	No operation
+
+%pcache <flag> <mode> <effect> <value>
+	<flag> :: enable or disable forward page cache
+			0 means disable forward page cache
+			1 means enable forward page cache
+	<mode> :: cache mode
+			0 means caching is executed after 2seconds idle.
+			1 means caching is executed immediately.
+	<effect> :: type of 'special effect' for the forward page cache (0-2)
+	<value> ::  speed of 'special effect'. value 1 means the highest speed.
+
+%anim "filename"
+	display animation file. (currently, only mng format is supported.)
+
+%charset "registry"
+	Specify the encoding of the document.
+	At this moment, the following charset are supported.
+		iso8859-1
+		iso8859-2
+		iso8859-3
+		iso8859-4
+
+%area <width> <height> [<xoffset> <yoffset>]
+	Specify the drawing area within the window.  All parameters are
+	translated as relative value of the window.  If offset is not
+	specified, the drawing area will be put center.
+	Note that all relative size specified in other directive after
+	"%area" will be affected, i.e. it will be relative to the
+	width/height of the drawing area instead of the window.
+
+%opaque <value>
+	<value> :: transparency of the font. (0-100) 
+	Value 0 means that the font will be drawn with full tranparency.
+	NOTE: To use this directive, you need to build mgp with Xft2.
+
+%setsup <sup offset> <sub offset> <scale>
+	Initialize values for subsequent %sup (superscript) and 
+	%sub (subscript) commands.
+	<sup offset> :: set superscript offset (percentage of font size)
+	<sub offset> :: set superscript offset (percentage of font size)
+	<scale> :: scale factor for super-/subscript font size
+	The range of all three integer values goes from 10 to 100.
+	When unset, the default value %setsup 40 15 60 is used.
+
+%sup
+	Writes the immediately following line as superscript.
+	Only works in connection with %cont.
+
+%sub
+	Writes the immediately following line as subscript.
+	Only works in connection with %cont.

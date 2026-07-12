@@ -70,7 +70,7 @@ const rowY101 = (i) => 4 + i * 20 + 10;
 // MENU_SEP_H (8). Reuses the 0091 ctx geometry (4px pad, 20px rows).
 const rowYsys = (i) => (i < 5 ? 4 + i * 20 : 4 + 5 * 20 + 8 + (i - 6) * 20) + 10;
 const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
-const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
+const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'mgp', 'slides', 'winbox'];
 
 // The seeded /root/Desktop icons, sorted (os/image.json user section) —
 // same rule: bump when the image gains one. wm.c grid: column-major,
