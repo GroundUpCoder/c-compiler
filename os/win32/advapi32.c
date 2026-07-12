@@ -48,6 +48,8 @@ typedef struct RegKey {
 static RegVal *g_vals;
 static RegKey *g_keys;
 static int g_loaded;
+static int g_dirty;              /* mutations pending flush to the hive file */
+static void hive_flush(void);    /* fwd: batched write-back (see RegCloseKey) */
 
 static void hive_path(char *out, int cap) {
     const char *home = getenv("HOME");
@@ -74,6 +76,7 @@ static void key_add(const char *path) {
 static void hive_load(void) {
     if (g_loaded) return;
     g_loaded = 1;
+    atexit(hive_flush);          /* backstop: persist deferred writes on clean exit */
     char hp[512];
     hive_path(hp, sizeof hp);
     FILE *f = fopen(hp, "r");
@@ -134,6 +137,18 @@ static void hive_save(void) {
     }
     fclose(f);
     rename(tmp, hp);
+}
+
+/* Write the hive to disk only if something changed since the last flush.
+ * Called from RegCloseKey and via atexit — collapses a burst of RegSetValueEx
+ * (e.g. notepad writing 27 settings on exit) into ONE tmp+rename instead of a
+ * full-hive rewrite per value. Windows persists lazily too; the in-memory
+ * value RegSetValueEx set is already visible to this process regardless. The
+ * rename keeps the save atomic, so the on-disk hive is never torn. */
+static void hive_flush(void) {
+    if (!g_dirty) return;
+    hive_save();
+    g_dirty = 0;
 }
 
 /* ------------------------------------------------------------- handles */
@@ -250,7 +265,7 @@ LONG RegCreateKeyExW(HKEY key, LPCWSTR sub, DWORD reserved, LPWSTR cls,
     int existed = key_exists(path);
     if (!existed) {
         key_add(path);
-        hive_save();
+        g_dirty = 1;
     }
     if (disposition)
         *disposition = existed ? REG_OPENED_EXISTING_KEY : REG_CREATED_NEW_KEY;
@@ -307,7 +322,7 @@ LONG RegSetValueExW(HKEY key, LPCWSTR name, DWORD reserved, DWORD type,
     v->data = nd;
     v->len = count;
     v->type = type;
-    hive_save();
+    g_dirty = 1;
     return ERROR_SUCCESS;
 }
 
@@ -324,7 +339,7 @@ LONG RegDeleteValueW(HKEY key, LPCWSTR name) {
             free(v->name);
             free(v->data);
             free(v);
-            hive_save();
+            g_dirty = 1;
             return ERROR_SUCCESS;
         }
     }
@@ -332,6 +347,7 @@ LONG RegDeleteValueW(HKEY key, LPCWSTR name) {
 }
 
 LONG RegCloseKey(HKEY key) {
+    hive_flush();                                /* persist any deferred writes */
     if (root_name(key)) return ERROR_SUCCESS;    /* roots are never freed */
     RegHandle *h = (RegHandle *)key;
     if (!h || h->magic != REG_HMAGIC) return ERROR_INVALID_HANDLE;
