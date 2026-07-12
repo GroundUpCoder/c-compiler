@@ -1078,7 +1078,8 @@ function Tty(kernel, opts) {
   // Ring mode (standalone pages) keeps the Phase-3 behavior.
   this._brokered = false;
   this._cooked = [];
-  this._eofFlag = false;
+  this._eofFlag = false;        // transient VEOF (^D): consumed by ONE read
+  this._hupFlag = false;        // hangup (pty master gone): latched EOF forever
   this.waiters = [];            // pids with a deferred FS_READ on THIS tty, FIFO
                                 // (per-instance since 0020: ptys mean many ttys)
   // Bridge-declared: a human terminal is attached, so std fd 1/2 should be
@@ -1188,7 +1189,7 @@ Tty.prototype.input = function (data) {
       }
       if (b === t.cc[V_EOF]) {
         if (this._line.length) { this._push(this._line); this._line = []; }
-        else this.eof();                             // sticky EOF (v1)
+        else this.eof();                             // transient one-shot EOF (0163)
         continue;
       }
       if (b === 10) {
@@ -1217,17 +1218,32 @@ Tty.prototype.resize = function (cols, rows) {
   if (changed) this._signalFg(SIG.WINCH);
 };
 
-/* End of input (agent closed stdin / user hit the page's EOF control). */
-Tty.prototype.eof = function () {
-  this._eofFlag = true;
+/* End of input. Two distinct conditions POSIX termios keeps separate (0163):
+ *   - VEOF (^D on an empty line): TRANSIENT. It makes the CURRENT read return
+ *     0, then it's gone — the next read blocks for fresh input. So a REPL
+ *     exiting on ^D must not cascade EOF into the shell reading the same tty.
+ *   - hangup (pty master close / agent closed stdin): PERMANENT. Reads latch
+ *     at EOF forever (the session is over; SIGHUP fired separately).
+ * Pass permanent=true for the hangup path; VEOF omits it. */
+Tty.prototype.eof = function (permanent) {
+  if (permanent) this._hupFlag = true; else this._eofFlag = true;
   Atomics.store(this._i32, SI_EOF, 1);
   if (this._brokered) { this._kernel._ttyNotify(this); return; }
   this.wakeReaders();
 };
 
+/* Consume the transient VEOF as a read delivers its 0-byte EOF — the hangup
+ * flag stays latched. Called by the brokered read-service sites right before
+ * they respond with an empty buffer. */
+Tty.prototype._consumeEof = function () {
+  if (this._hupFlag) return;
+  this._eofFlag = false;
+  Atomics.store(this._i32, SI_EOF, 0);
+};
+
 /* Brokered readiness (select) and read service. */
 Tty.prototype.readable = function () {
-  return this._cooked.length > 0 || this._eofFlag;
+  return this._cooked.length > 0 || this._eofFlag || this._hupFlag;
 };
 Tty.prototype.take = function (count) {
   var n = Math.min(count, this._cooked.length);
@@ -1434,7 +1450,7 @@ Kernel.prototype._ofdUnref = function (id) {
     pt.out.rOpen = false;
     this._pipeNotify(pt.out);
     if (pt.tty.fgPgid > 0) this._killPgid(pt.tty.fgPgid, SIG.HUP);
-    pt.tty.eof();
+    pt.tty.eof(true);                            // hangup: latched EOF (0163)
   } else if (o.kind === 'tty') {
     // A pty slave gone everywhere (0020) — the system tty's std OFDs keep
     // living in _std, so only pty slaves carry o.pty here: master reads
@@ -2269,7 +2285,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
           return;
         }
         if (tty._cooked.length > 0) { this._respondRaw(pcb, tty.take(count)); return; }
-        if (tty._eofFlag) { this._respondRaw(pcb, new Uint8Array(0)); return; }
+        if (tty._eofFlag || tty._hupFlag) { tty._consumeEof(); this._respondRaw(pcb, new Uint8Array(0)); return; }
         pcb.waiter = { op: 'ttyread', tty: tty, count: count };   // served by _ttyNotify
         tty.waiters.push(pcb.pid);
         return;
@@ -4418,7 +4434,8 @@ Kernel.prototype._ttyNotify = function (tty) {
       var count = pcb.waiter.count;
       this._cancelWaiter(pcb);                           // splices index i out
       this._respondRaw(pcb, tty.take(count));
-    } else if (tty._eofFlag) {
+    } else if (tty._eofFlag || tty._hupFlag) {
+      tty._consumeEof();
       this._cancelWaiter(pcb);
       this._respondRaw(pcb, new Uint8Array(0));
     } else {

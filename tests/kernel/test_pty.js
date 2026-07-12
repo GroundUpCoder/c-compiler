@@ -261,6 +261,22 @@ async function drain(pid, fd) {
   check('parked whole-write completes after drain', r.n === 60000, JSON.stringify(r));
   check('…delivering exactly its bytes', (await drain(1, mfd)).length === 60000);
 
+  // ---- VEOF (^D) is a TRANSIENT one-shot EOF, not a latched state (0163) ----
+  // Real termios delivers 0 to the CURRENT read only; the tty is immediately
+  // readable again. So a REPL exiting on ^D must NOT cascade EOF into the shell
+  // that reads the same pty next (the term->lua->^D "whole window closes" bug).
+  r = await wRpc(1, mfd, Buffer.from('\x04'));         // ^D on an empty line
+  check('VEOF on an empty line accepted', r.n === 1, JSON.stringify(r));
+  r = await rpc(sh, K.OP.FS_READ, { fd: 0, count: 100 });
+  check('VEOF makes the current read return 0 (EOF)', r.raw && r.raw.length === 0, JSON.stringify(r));
+  const veofNext = submit(sh, K.OP.FS_READ, { fd: 0, count: 100 });
+  await tick();
+  check('the NEXT read after VEOF parks (EOF did not latch)', veofNext.pending());
+  await wRpc(1, mfd, Buffer.from('go\r'));
+  r = await veofNext.finish();
+  check('the parked post-VEOF read wakes on fresh input', r.raw && str(r.raw) === 'go\n', JSON.stringify(r));
+  await drain(1, mfd);                                 // discard the 'go' echo
+
   // ---- master close: SIGHUP to the pty fg, slave EOF, slave write EIO ----
   await rpc(sh, K.OP.SIGDISP, { sig: 1, kind: 2 });   // survive SIGHUP for the checks
   r = await rpc(1, K.OP.FS_CLOSE, { fd: mfd });
