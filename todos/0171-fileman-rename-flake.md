@@ -55,6 +55,27 @@ gesture, Escape-to-VT2-doom, ~20s demo runtime — is part of the repro):
   `wmctl close ...` (it currently fires close and immediately VT2s away —
   a lost close is indistinguishable from a stuck app).
 
+## Scope additions (2026-07-13, approved): the driver tool + leg conversion
+
+The 0167 investigation hand-built four throwaway boot-type-probe scripts
+and stepped on every rake (forgotten `setVt(1)`, needle matching its own
+typed echo, `waitForServer` too short across a rebake). That tooling is
+needed to root-cause THIS item, so it lands here as a committed artifact:
+
+- **`tools/os-drive.mjs`** — boot the OS page once (reusing
+  `tests/browser/lib/os-harness.mjs`; rebake-tolerant server wait), then
+  expose the driving primitives: `type` (VT-aware, split-needle helper),
+  `waitOut`, `vt`, `sample`/`shot`, `wmctl` passthrough, plus an
+  under-load toggle (the flake.js generators). Two modes: **REPL** (manual
+  poking — "drive commands to see that it works") and **scripted** (a .mjs
+  that gets the session handle — what debug loops and future flake
+  investigations reuse). Keep it thin: no assertion framework, no runner
+  integration; it's a driving layer, not a test tier.
+- **Convert the two flaky legs off fixed sleeps**: os-fileman's
+  `pause(400/500)` chains and os-doom's fire-and-VT2-away close onto
+  marker waits (split-needle echoes, `wmctl list` state), per the new
+  selectivity/house-rules section in `tests/browser/README.md`.
+
 ## Acceptance
 
 - `node tests/browser/os-sweep.mjs --repeat 5 --filter=os-fileman` 5/5 on
@@ -62,3 +83,5 @@ gesture, Escape-to-VT2-doom, ~20s demo runtime — is part of the repro):
 - `node tests/flake.js` fully green (os-doom stable under load ×3).
 - Root cause named: either a kernel/tty fix with a regression test, or the
   harness race fixed in the page/test layer with the mechanism documented.
+- `tools/os-drive.mjs` committed; the 0167-style launch/close/probe loop
+  reproducible as a short script over it (no more bespoke scratch files).

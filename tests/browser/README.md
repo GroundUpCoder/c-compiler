@@ -10,6 +10,36 @@ See **"Real Safari"** below for the safaridriver setup and the two Safari
 gotchas (an asleep display ⇒ black screenshots; canvas content isn't captured by
 WebDriver screenshots at all — read it back with `convertToBlob` instead).
 
+## What earns a persistent browser leg (the selectivity rule)
+
+Browser sweep files are the slowest, flakiest tier in the estate — each leg
+must pay for the page it drags in. **A new `os-*.mjs` leg is justified only
+by something a headless kernel e2e (`tests/kernel/*_e2e.js`) cannot
+observe:**
+
+- composited pixels (the WebGPU compositor's actual output);
+- the page input path (typing through the real xterm, keyboard/pointer
+  through os.html's bridge, pointer lock);
+- audio reaching the page (`window.__osAudio`, the output-ring SAB);
+- OPFS persistence / reload / boot-lock / VT semantics — page lifecycle.
+
+Everything else — process/fs/tty semantics, WM *policy*, win32 app logic,
+file ops — belongs in the kernel suite: deterministic, parallel, no browser.
+When a flow needs both (e.g. fileman ops), the kernel e2e carries the full
+matrix and the browser leg asserts only the thin visual/input slice on top.
+
+House rules for the legs that do qualify (the 0083/0171 lessons):
+
+- **No fixed sleeps** — wait on markers: `waitOut` tty needles, `wmctl
+  list`/`tree`/agent state, `waitPixel`. A `pause(400)` is a latent flake.
+- **Shell-typed needles must use the split-string trick** (`echo S""NT-1`,
+  wait for `SNT-1`) or the wait matches its own typed echo instantly.
+- After any typed command whose *effect* you assert later, wait for its
+  completion marker before moving on — a lost line under load is otherwise
+  indistinguishable from a product hang (the 0171 class).
+- Derive geometry/lists from live state (`__osScreen`, `wmctl list`,
+  image.json), never constants (0166 rule; kernel-cascaded dialogs).
+
 ## What's here
 
 | Path | What |
