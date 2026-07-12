@@ -3748,6 +3748,7 @@ Kernel.prototype.wmFocus = function (sid) {
     this._zOrder.splice(zi, 1);
     this._zOrder.push(s.sid);
     this._wmZNormalize();                       // raise stays within the layer
+    this._wmVersion++;      // z changed even if focus doesn't below (todos/0165)
   }
   if (this._focusSid !== s.sid) {
     this._focusSid = s.sid;

@@ -279,6 +279,21 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     String(px(screen, moved.x + 2, moved.y + 2)) === '0,255,0,255', px(screen, moved.x + 2, moved.y + 2));
   check('blurred title bar gray behind', kernel.wmList().find(s => s.sid === c2.sid).focused === false);
 
+  // ---- raise-only focus must bump the scene version (todos/0165) ----
+  // wmRestack deliberately doesn't move focus, so lowering the FOCUSED
+  // window then focusing it again exercises wmFocus's reorder branch with
+  // focus unchanged: z changes, and a version-delta consumer (the damage
+  // gate) must see it or it composites a stale stacking order.
+  kernel.wmRestack(1, 1);                       // lower window 1; bumps itself
+  check('restack-lower leaves focus alone', kernel.wmScene().focusSid === 1);
+  const v165 = kernel.wmScene().version;
+  kernel.wmFocus(1);                            // raise-only: already focused
+  const sc165 = kernel.wmScene();
+  check('raise-only focus reorders z (window 1 back on top)',
+    sc165.surfaces[sc165.surfaces.length - 1].sid === 1);
+  check('raise-only focus bumps the scene version (todos/0165)',
+    sc165.version > v165, JSON.stringify([v165, sc165.version]));
+
   // ---- close box -> SDL_EVENT_QUIT ----
   const w1 = kernel.wmList().find(s => s.sid === 1);
   act = kernel.wmPointer('down', w1.x + w1.w - K.WM_CLOSE_PAD - 2, w1.y - K.WM_TITLE_H + K.WM_CLOSE_PAD + 2, {});
