@@ -99,7 +99,10 @@ static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 FillRect(dc, &ln, hi);
             }
             const char *t = st && st->text[i] ? st->text[i] : "";
-            TextOut(dc, left + 6, 3, t, (int)strlen(t));
+            /* Clip each part's text to its own cell — a readout wider than
+             * its part (e.g. "Windows (CR + LF)" in a narrow window) must
+             * cut at the border, not bleed into the next part. */
+            ExtTextOut(dc, left + 6, 3, ETO_CLIPPED, &part, t, (int)strlen(t), NULL);
             left = right;
         }
         EndPaint(h, &ps);

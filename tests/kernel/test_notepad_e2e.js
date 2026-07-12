@@ -62,6 +62,14 @@ const out = boot([
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
+  // Status-bar part clipping (regression): shot the untitled window while
+  // the EOLN pane still reads the wide "Windows (CR + LF)" — at the default
+  // 400px width that text overflows its 120px cell and MUST clip at the
+  // border, not bleed into the "UTF-8" pane (comctl32 ExtTextOut ETO_CLIPPED).
+  'wmctl shot $SID /root/sbar.ppm && echo sbar-shot-ok',
+  'echo ==sbarshot',
+  'base64 /root/sbar.ppm',
+  'echo ==cut',
   // type into the EDIT, then Save As through the real file dialog
   'wmctl settext EDIT:0 "hello from notepad"',
   // 0104: FIRST drive Save As fully by KEYBOARD (Untitled => the name box
@@ -171,6 +179,37 @@ check('status bar parked at the client bottom with parts',
   /class=msctls_statusbar32 [^\n]*text='Line 1, column 1 \| /.test(tree1), tree1);
 check('Find grayed while the document is empty',
   /menuitem id=288 text='Find\.\.\.' grayed/.test(tree1), tree1);
+
+/* status-bar part clipping (regression): the wide "Windows (CR + LF)" pane
+ * must clip at its cell border, not overflow into the fixed "UTF-8" pane.
+ * Pre-fix this band held the bled "LF)" glyphs (~14 dark px); clipped it's 0. */
+function parsePpm(b64) {
+  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
+  let p = 0;
+  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
+                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
+                      return buf.slice(s, p).toString(); };
+  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
+  return { buf, w, h, data: p, magic };
+}
+function darkCount(P, x0, x1, y0, y1) {
+  let n = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = P.data + (y * P.w + x) * 3;
+    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) n++;
+  }
+  return n;
+}
+const sp = parsePpm(section(out, 'sbarshot'));
+check('status-bar shot is a P6 frame', sp.magic === 'P6', sp.magic);
+// notepad's pane 3 ("UTF-8") is a fixed 120px cell, so the pane2|pane3 border
+// sits at width-120; the status bar is the surface's bottom 20px.
+const bx = sp.w - 120, by = sp.h - 20;
+const bleed = darkCount(sp, bx - 1, bx + 6, by + 2, by + 18);   // 6px past the border
+const utf8 = darkCount(sp, bx + 6, bx + 40, by + 2, by + 18);   // the "UTF-8" glyphs
+check('status-bar middle pane clips at its cell (no bleed into UTF-8 pane)',
+  bleed <= 2, 'bleed=' + bleed);
+check('status-bar UTF-8 pane still renders its own text', utf8 >= 10, 'utf8ink=' + utf8);
 
 /* Save As through the file dialog */
 const dlg = section(out, 'dlgtree');
