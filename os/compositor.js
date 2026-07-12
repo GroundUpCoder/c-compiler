@@ -393,6 +393,47 @@ function startCompositor(kernel, canvas, device) {
     }
   }
 
+  // ---- Damage skip (todos/0160): the compositor used to run one full WebGPU
+  // render pass EVERY rAF (~60fps) even on a wholly static screen — an idle
+  // desktop or a settled slide burned a fixed 60fps of GPU compositing for
+  // zero visible change. vsyncTick() stays unconditional (it IS the system
+  // frame clock every SDL app parks on, todos/0100), but the render-pass
+  // SUBMIT is now gated on a cheap per-frame scene signature: when the scene
+  // is provably identical to the last submitted frame, we requestAnimationFrame
+  // and return WITHOUT touching the swap chain, so the GPU idles and the canvas
+  // keeps presenting the last frame. `scene.version` (kernel.js `_wmVersion`)
+  // already bumps on EVERY geometry/z/focus/map/create/destroy/resize/DST/
+  // layer/glass/title/resizeDrag change, so the signature only folds in what
+  // the version does NOT cover: the canvas size, the count of active
+  // compositor animations, and each DRAWN surface's PIXEL content (shm SH_SEQ
+  // or gpu bitmap identity — an app's present bumps neither the WM version nor
+  // any geometry). Compositor-driven minimize/restore animations repaint on the
+  // wall clock with no version/content change, so any active anim FORCES a
+  // submit every frame (and the count in the signature makes the settle frame,
+  // when the last anim expires, differ from the final flying frame). When
+  // unsure we submit — a stale frame is the classic damage-tracking bug; a
+  // redundant submit is merely wasted, never wrong.
+  var stats = { frames: 0, submits: 0, skipped: 0 };
+  self.__compositorStats = stats;   // test probe (tests/browser/os-compositor.mjs)
+  var lastSig = null;
+
+  function sceneSignature(scene) {
+    var sig = [scene.version, frameW, frameH, scene.anims.length];
+    for (var i = 0; i < scene.surfaces.length; i++) {
+      var s = scene.surfaces[i];
+      if (!s.mapped || s.minimized) continue;   // not sampled this frame
+      // gpu: the ImageBitmap identity (=== compares by ref); shm: the frameSeq
+      // the seq-gated upload already reads.
+      sig.push(s.sid, s.bitmap ? s.bitmap : Atomics.load(s.i32, K.SH_SEQ));
+    }
+    return sig;
+  }
+  function sigEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
   function draw() {
     // Vsync broadcast (todos/0100): this rAF IS the system frame clock —
     // tick before anything can early-return, so SDL frame loops stay paced
@@ -402,6 +443,16 @@ function startCompositor(kernel, canvas, device) {
     var scene = kernel.wmScene();
     frameW = canvas.width; frameH = canvas.height;
     if (frameW < 1 || frameH < 1) { requestAnimationFrame(draw); return; }
+    stats.frames++;
+    // Damage skip (todos/0160, see the block comment above): identical scene
+    // and no active animation → keep ticking, but don't re-submit the pass.
+    var sig = sceneSignature(scene);
+    if (lastSig !== null && scene.anims.length === 0 && sigEqual(sig, lastSig)) {
+      stats.skipped++;
+      requestAnimationFrame(draw);
+      return;
+    }
+    lastSig = sig;
     // Reconfigure on screen-resize (todos/0023) — the canonical dance;
     // resizing the OffscreenCanvas invalidates the swap chain size.
     if (frameW !== confW || frameH !== confH) {
@@ -575,6 +626,7 @@ function startCompositor(kernel, canvas, device) {
       blitPass(enc, canvasView, gt2.sceneBlit);
     }
     device.queue.submit([enc.finish()]);
+    stats.submits++;
     requestAnimationFrame(draw);
   }
   requestAnimationFrame(draw);

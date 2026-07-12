@@ -337,6 +337,23 @@ window.addEventListener('keydown', function (e) {
 window.__osOut = '';
 window.__osState = 'booting';
 window.__osLogs = [];   // boot-log/kernel lines (agent probe)
+window.__osCompositor = null;   // agent probe: latest compositor damage-skip stats
+// Request a fresh compositor-stats snapshot from the worker and resolve with
+// it (todos/0160). Used by tests/browser/os-compositor.mjs to measure GPU
+// submits before/after the scene settles.
+window.__osCompositorStats = function () {
+  return new Promise(function (resolve) {
+    function h(e) {
+      if (e.data && e.data.type === 'compositor-stats') {
+        kernel.removeEventListener('message', h);
+        window.__osCompositor = e.data.stats;
+        resolve(e.data.stats);
+      }
+    }
+    kernel.addEventListener('message', h);
+    kernel.postMessage({ type: 'compositor-stats' });
+  });
+};
 var outDecoder = new TextDecoder();
 
 kernel.onmessage = function (e) {
@@ -345,6 +362,11 @@ kernel.onmessage = function (e) {
     case 'out':
       term.write(m.bytes);
       window.__osOut += outDecoder.decode(m.bytes, { stream: true });
+      break;
+    // Compositor damage-skip probe (todos/0160): the worker replies to a
+    // {type:'compositor-stats'} request with the frame/submit/skip counters.
+    case 'compositor-stats':
+      window.__osCompositor = m.stats;   // agent probe (tests/browser/os-compositor.mjs)
       break;
     case 'boot-log':
       status(m.msg);
