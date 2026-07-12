@@ -1,7 +1,23 @@
 # 0161 — SDL_WaitEvent over pumpWait: take idle SDL apps off the vsync wake list
 
-- **Status**: deferred (2026-07-12; deferred with its pair 0160; was: open)
-- **Design**: this file (found profiling the 0119 mgp present path)
+- **Status**: deferred (2026-07-12; deferred with its pair 0160; was: open).
+  **Unified framing:** see `todos/IDLE-POWER.md` — this item is piece C of the
+  idle-zero design (idle apps stop producing frames); it is a prerequisite for
+  the compositor ever parking, but insufficient alone. Read IDLE-POWER first.
+- **Review notes (2026-07-12, verified against code):** (1) the seam checks
+  out — `pumpWait` drains the input ring into the same wasm-side event queue
+  `SDL_PollEvent` pops (host.js `__sdl_push_*` ~5963-6018), so
+  `WaitEventTimeout` is `loop { PollEvent || __sdl_pump_wait(remaining) }`;
+  the `Atomics.wait` timeout form is already in use (host.js ~6036). (2) The
+  Goal's premise needs one correction: apps are NOT vsync-woken today —
+  0100's vsyncWait shim was never wired into the browser SDL flavor, so app
+  workers self-wake on the deadline-setTimeout pacer (IDLE-POWER Stage 1
+  wires the shim first). (3) **wm.c is a REQUIRED adopter, not incremental**
+  (IDLE-POWER piece W): without it nothing ever parks, and its conversion
+  needs kernel WMP-socket→input-ring notify plumbing (`pumpWait` parks on
+  the ring only; wm's events arrive on the socket).
+- **Design**: this file + `todos/IDLE-POWER.md` (found profiling the 0119 mgp
+  present path)
 
 ## Goal
 

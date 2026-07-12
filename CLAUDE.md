@@ -443,7 +443,13 @@ advertises the compositor rAF via two kernel-page TAIL words —
 `vsyncTick()` bumps+notifies every live pcb per composite,
 `KernelClient.vsyncWait` parks on it with rAF catch-up semantics, and
 host.js's surface backend slots that in as its `requestAnimationFrame`.
-Tab hidden = no ticks = SDL apps park (honest pause, by design;
+**CAVEAT (verified 2026-07-12, todos/IDLE-POWER.md):** that last slotting
+only exists in host.js's HEADLESS flavor (which never has vsync) — the
+browser flavor returns without it, so in practice no process parks on
+`KP_VSYNC_SEQ`, `vsyncTick()` notifies nobody, and browser SDL apps pace
+on the deadline-setTimeout tier; "tab hidden = SDL apps park" is the
+design intent, not yet shipped behavior (IDLE-POWER Stage 1 wires it).
+As designed: tab hidden = no ticks = SDL apps park (honest pause;
 cooperative signals defer to the next tick, SIGKILL unaffected). No
 vsync source (boot.js, standalone) → the deadline-setTimeout pacer
 tier in host.js's frame-loop driver (fixed 0100: the old fixed

@@ -1,8 +1,12 @@
 # 0160 — compositor: scene-signature damage skip (idle GPU on static screens)
 
 - **Status**: deferred (2026-07-12; an implementation was landed then reverted —
-  see the Deferral note; was: open)
-- **Design**: this file (found profiling the 0119 mgp present path)
+  see the Deferral note; was: open). **Superseded framing:** see
+  `todos/IDLE-POWER.md` — this item's "keep the 60 Hz heartbeat, skip the submit"
+  goal is now understood as a half-measure; the idle-zero design folds it into
+  piece A (on-demand compositor) + piece D (taskbar gate). Read IDLE-POWER first.
+- **Design**: this file + `todos/IDLE-POWER.md` (found profiling the 0119 mgp
+  present path)
 
 ## Goal
 
@@ -83,12 +87,14 @@ next pass doesn't rediscover it:
   identical to the front buffer" skip in `shmPresent` (benefits all apps but
   changes present semantics for every process/test), or (c) fold it into 0161
   (park idle poll-loop apps so they stop presenting at all).
-- **Open triage before re-landing:** the v85-fixture kernel run flagged
-  `test_recycle_e2e` (6) and `test_wm_service_e2e` (3) failures on legs
-  (bin-glyph count, icon-menu size, double-click, launch legs) that are
-  UNRELATED to the taskbar-present path (`draw_desk`/icon-menu code untouched) —
-  likely parallel-load flakes, but a serial rerun was interrupted before
-  confirming. Confirm flake-vs-regression against pre-change `wm.c` first.
+- **Triage RESOLVED (2026-07-12 review, not flake, not a 0160 regression):**
+  both failure sets were the `785eca2` (notepad desktop icon) hardcode class.
+  `test_recycle_e2e` (6) was fixed by todos/0164 (commit `33d836b`, derive the
+  bin's grid row from live state). `test_wm_service_e2e` (3: dblclick-on-term,
+  `.icons` layout, Ctrl+A) **still fails on clean main**: `DESK_ENTRIES`
+  (tests/kernel/test_wm_service_e2e.js:79-80) lists 7 launchers and omits
+  `notepad`. Fix the same way as 0164 (P0, land before any re-land here or the
+  same 3 failures re-muddy the verdict).
 - Boundary that stands regardless: an app presenting identical frames every rAF
   (the `winbox` acceptance app) correctly keeps the GPU busy under 0160 alone —
   that's 0161's domain.
