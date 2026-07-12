@@ -270,11 +270,18 @@ async function mountAndBoot() {
   /* ---- debug: periodic kernel-state dump (development aid) ---- */
   if (dumpState) {
     setInterval(() => {
+      // fgPgid vs each pcb's pgid: the 0171 wedge class is a foreground
+      // pgid pointing at a dead/wrong pgroup (tty reads then die SIGTTIN/EIO).
+      process.stderr.write(`[state] tty fgPgid=${tty.fgPgid}` +
+        ` cooked=${JSON.stringify(String.fromCharCode.apply(null, tty._cooked.slice(0, 80)))}` +
+        ` line=${JSON.stringify(String.fromCharCode.apply(null, tty._line.slice(0, 80)))}` +
+        ` lflag=0x${tty.termios.lflag.toString(16)} waiters=[${tty.waiters}]\n`);
       kernel._procs.forEach((pcb) => {
         const st = Atomics.load(pcb.i32, 4 /* KP_RPC_STATE */);
         const op = Atomics.load(pcb.i32, 5 /* KP_RPC_OP */);
-        process.stderr.write(`[state] pid ${pcb.pid} ${pcb.state} rpc=${st}/op=0x${op.toString(16)}` +
-          ` waiter=${pcb.waiter ? pcb.waiter.op : '-'} ttyq=${kernel._ttyWaiters}\n`);
+        process.stderr.write(`[state] pid ${pcb.pid} pgid ${pcb.pgid} ${pcb.state}` +
+          ` rpc=${st}/op=0x${op.toString(16)}` +
+          ` waiter=${pcb.waiter ? pcb.waiter.op : '-'}\n`);
       });
     }, 3000).unref();
   }

@@ -102,6 +102,10 @@ const RULES = [
   // Shared test engine → every suite-runner-backed suite.
   [/^tests\/lib\//, ['unit', 'blockfs', 'kernel', 'sweep'], 'the shared suite-runner/image-fixture engine'],
 
+  // The OS-page driving tool (0171) rides the browser harness seam — the
+  // sweep is what proves that seam still boots and types.
+  [/^tools\/os-drive/, ['sweep'], 'drives os.html via tests/browser/lib/os-harness.mjs'],
+
   // Test trees map to their own suite.
   [/^tests\/unit\//, ['unit'], null],
   [/^tests\/run-unit\.js$/, ['unit'], null],

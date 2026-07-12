@@ -49,10 +49,11 @@ export async function waitForServer(url, { tries = 50, interval = 100, fetchFn =
 }
 
 // The one WebGPU-flagged Chromium the whole sweep launches. Playwright is
-// pulled in here, lazily, so the module loads without it.
-export async function launchBrowser(args = ['--enable-unsafe-webgpu', '--enable-features=Vulkan']) {
+// pulled in here, lazily, so the module loads without it. `opts` merges into
+// chromium.launch (tools/os-drive.mjs passes { headless: false }).
+export async function launchBrowser(args = ['--enable-unsafe-webgpu', '--enable-features=Vulkan'], opts = {}) {
   const { chromium } = await import('playwright');
-  return chromium.launch({ args });
+  return chromium.launch({ args, ...opts });
 }
 
 // The `check`/`failures` scoreboard. `stringify` controls the FAIL tail: the
@@ -141,11 +142,12 @@ export async function openOsSession(opts = {}) {
     stringify = true,
     serverTries = 50, serverInterval = 100,
     browserArgs,
+    browserOpts,
     onServerLog,
   } = opts;
   const url = osUrl(port);
   const server = startServer(port, { onLog: onServerLog });
-  const browser = await launchBrowser(browserArgs);
+  const browser = await launchBrowser(browserArgs, browserOpts);
   const { check, state } = makeCheck({ stringify });
   try {
     await waitForServer(url, { tries: serverTries, interval: serverInterval });
