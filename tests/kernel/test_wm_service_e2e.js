@@ -72,12 +72,18 @@ const rowYsys = (i) => (i < 5 ? 4 + i * 20 : 4 + 5 * 20 + 8 + (i - 6) * 20) + 10
 const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
 const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'mgp', 'slides', 'winbox'];
 
-// The seeded /root/Desktop icons, sorted (os/image.json user section) —
-// same rule: bump when the image gains one. wm.c grid: column-major,
-// 16px margin, 84x64 cells, 11 rows on the 1024x768 screen; icon centers
-// in column 0 sit at x=58, y = 16 + row*64 + 32.
-const DESK_ENTRIES = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
-                      'quake', 'term'];
+// The seeded /root/Desktop icons, DERIVED from os/image.json's user section
+// (the manifest that seeds a fresh root volume — these e2es always boot one),
+// so a new seeded icon can't silently shift every row like 785eca2's notepad
+// did (todos/0166; the 0164 rule: derive geometry, never hardcode). wm.c
+// grid: column-major, 16px margin, 84x64 cells, 11 rows on the 1024x768
+// screen; icon centers in column 0 sit at x=58, y = 16 + row*64 + 32; the
+// Recycle Bin pins to the tail (entcmp) so sorted seeds fill rows 0..n-1.
+const DESK_ENTRIES = Object.keys(
+  JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user.files)
+  .filter((p) => p.startsWith('/root/Desktop/'))
+  .map((p) => p.slice('/root/Desktop/'.length))
+  .sort();
 const deskY = (list, name) => 16 + list.indexOf(name) * 64 + 32;
 // the activate leg drops two more files in and re-sorts
 const DESK_ACT = [...DESK_ENTRIES, 'alauncher', 'notes.txt'].sort();
@@ -440,7 +446,7 @@ const script = [
   'wmctl list',
   'rm -rf /etc/menu',
   // ---- desktop icon selection & manipulation (todos/0077) ----
-  // /root/Desktop is DESK_ACT here (9 entries, column 0 rows 0-8). Click
+  // /root/Desktop is DESK_ACT here (seeds + 2 dropped files, column 0). Click
   // coordinates ride deskY; label-strip pixels are asserted from surface
   // shots after the run. The first click also focuses the desktop (wm.c
   // policy), so the later keyboard legs land on the grid.
@@ -464,8 +470,8 @@ const script = [
   'wmctl drag $DSID 150 10 40 200',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (marquee replace, no window observable)
   'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
-  // drag-move: press term (0,8) and drop 2 cols right, 7 rows up -> (2,1);
-  // the plain press on the unselected icon first collapses the set to it
+  // drag-move: press term (column 0, its sorted DESK_ACT row) and drop at
+  // (2,1); the plain press on the unselected icon first collapses the set
   `wmctl drag $DSID 58 ${deskY(DESK_ACT, 'term')} 226 112`,
   'sleep 2.5',                                   // timing subject: wm.c desk_load re-read poll (~1s tick) persists the moved .icons
   'echo ==sel1',
@@ -1221,8 +1227,10 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     icons.includes('2 1 term') && icons.includes('0 0 alauncher'), icons);
   const p4 = readPpm('s4.ppm');
   check('drag-move relocated term to (2,1): tile there, old cell teal, still selected',
-    p4(216, 88) === WHITE && p4(58, 546) === TEAL && strip(p4, 'term', 2, 1) === NAVY,
-    [p4(216, 88), p4(58, 546), strip(p4, 'term', 2, 1)]);
+    p4(216, 88) === WHITE &&
+    p4(58, 16 + DESK_ACT.indexOf('term') * 64 + 18) === TEAL &&   // old cell, derived (todos/0166)
+    strip(p4, 'term', 2, 1) === NAVY,
+    [p4(216, 88), p4(58, 16 + DESK_ACT.indexOf('term') * 64 + 18), strip(p4, 'term', 2, 1)]);
   const p5 = readPpm('s5.ppm');
   check('Ctrl+A selects all (alauncher, notes.txt, moved term navy)',
     strip(p5, ...at('alauncher')) === NAVY && strip(p5, ...at('notes.txt')) === NAVY &&
