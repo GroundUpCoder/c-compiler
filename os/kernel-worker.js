@@ -108,12 +108,6 @@ self.onmessage = function (e) {
     OS_COMPOSITOR.routeInput(kernel, SDL_WEB, m.ev);
   } else if (m.type === 'drop-file') {
     dropFile(m);
-  } else if (m.type === 'compositor-stats') {
-    // Damage-skip probe (todos/0160): the compositor counts frames/submits/
-    // skipped in self.__compositorStats; the page reads them via this
-    // round-trip (tests/browser/os-compositor.mjs).
-    post({ type: 'compositor-stats',
-           stats: self.__compositorStats ? Object.assign({}, self.__compositorStats) : null });
   }
 };
 
