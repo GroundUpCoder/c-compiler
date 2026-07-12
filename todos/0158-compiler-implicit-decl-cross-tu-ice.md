@@ -1,6 +1,6 @@
 # 0158 — compiler: call via implicit function decl defined in another TU crashes codegen (emitExpr: function not found)
 
-- **Status**: open (filed from the 0119 MagicPoint port)
+- **Status**: deferred 2026-07-12 (focus shifted to 0160/0161; was: open — filed from the 0119 MagicPoint port; already worked around in the mgp port, so nothing ships broken)
 - **Priority**: P0 (internal compiler error on accepted input)
 
 ## Repro
