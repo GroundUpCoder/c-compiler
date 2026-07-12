@@ -638,13 +638,8 @@ real frame clock (the compositor rAF, todos/0055). 0100 exports it:
   tracking the last-delivered seq so ticks that land mid-frame-callback
   resolve immediately (rAF catch-up semantics). host.js's surface backend
   exposes it through the spawnHooks seam as the backend's
-  `requestAnimationFrame`; the frame-loop driver needs no change.
-  **GAP (verified 2026-07-12, todos/IDLE-POWER.md):** the exposure landed
-  only in the headless/shm flavor's return object — the browser flavor
-  returns earlier and inherits the deadline-setTimeout pacer, and headless
-  kernels never advertise vsync, so today the shim is dead code everywhere:
-  no process parks on `KP_VSYNC_SEQ` and `vsyncTick()` notifies nobody.
-  IDLE-POWER Stage 1 wires the browser flavor and makes this section true.
+  `requestAnimationFrame` — BOTH flavors (the browser flavor since
+  todos/0167, IDLE-POWER Stage 1); the frame-loop driver needs no change.
 - Headless embedders (boot.js, kernel tests) never pass `vsync`, so the
   flag stays clear and processes keep the deadline-setTimeout pacer — the
   only possible tier where no vsync exists. Two pacing tiers, one seam.

@@ -313,7 +313,8 @@ revision adds what it omitted:
 
 - **Stage 0** (now, P0s): wmFocus bump fix; DESK_ENTRIES derive-from-live.
 - **Stage 1**: browser vsync-shim wiring (makes 0100/KERNEL.md true; hidden-
-  tab park becomes real and testable). Flake gate.
+  tab park becomes real and testable). Flake gate. **DONE 2026-07-13
+  (todos/0167).**
 - **Stage 2**: C1 (WaitEvent/WaitEventTimeout) + C2 (mgp). Real wakeup
   reduction on its own; no compositor risk.
 - **Stage 3**: W (wm.c conversion + socket→ring notify) + D (bar gate).

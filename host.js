@@ -6129,6 +6129,16 @@ function createSurfaceSDL({ ctx, hooks }) {
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
     out.drainInput = drainInput;
+    // Vsync broadcast (todos/0100, wired by todos/0167): when the kernel
+    // advertises a real frame clock (compositor rAF → vsyncTick), pace the
+    // frame loop by awaiting the kernel-page tick word — phase-aligned with
+    // the composite that samples our presents, and parked for free while
+    // the tab is hidden (no ticks = no frames, the honest pause). Without
+    // the advertisement (standalone pages) keep inner's deadline pacer.
+    if (typeof hooks.vsyncEnabled === 'function' &&
+        typeof hooks.vsyncWait === 'function' && hooks.vsyncEnabled()) {
+      out.requestAnimationFrame = function (cb) { hooks.vsyncWait().then(cb); };
+    }
     // Raw webgpu.h apps share the same canvas + present tail (runModule builds
     // the webgpu binding from this instead of the standalone canvas path).
     out.webgpuConfig = { canvas: canvas, onPresent: presentFrame };

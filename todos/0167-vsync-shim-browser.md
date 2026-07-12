@@ -40,5 +40,16 @@ must be live code).
 - Hidden-tab park is now real: with the desktop tab hidden, app workers stop
   waking (probe-able via the 0169 wake counters later; for now assert no
   presented-frame progress while hidden, resumes on show).
+  **AMENDED 2026-07-13: the "for now" assert is impossible in this
+  harness** — measured with worker-rAF probes against BOTH Playwright
+  flavors (headless shell and `channel: 'chromium'` new headless): a
+  backgrounded tab (`page.bringToFront()` on a sibling) stays
+  `document.visibilityState === 'visible'` and worker rAF keeps ticking
+  ~67/s (Playwright launches Chromium with background throttling/occlusion
+  disabled by design). Park is structural — `vsyncWait` is a no-timeout
+  futex wait, so no rAF tick = no wake, there is no fallback path — and
+  the automated observable lands with 0169's wake counters. A headed-
+  browser manual check (hide the real tab, doom freezes; reshow, resumes)
+  joins the per-round human checks (WM.md "Known issues" precedent).
 - `node tests/flake.js` — frame-loop change, the gate is mandatory.
 - Kernel suite unaffected (headless path untouched by construction).
