@@ -261,8 +261,11 @@ try {
   // ---- window system menu (todos/0102): Alt+Space raises the sysmenu on
   // the focused window; keyboard-only Move commits; Close via the menu tears
   // it down. A fresh winbox C keeps A/B (and the later legs) untouched. The
-  // chord is swallowed with a WM up, so it never toggles C's fill; keys in
-  // the mode go to the menu grabber, not the app. ----
+  // bare Alt KEYDOWN reaches the app (the os-snap "one toggle per chord"
+  // rule — winbox flips green on it); only the Space-with-Alt chord is
+  // swallowed, so C ends EXACTLY one toggle from orange: green. A leaked
+  // Space would toggle it straight back to orange, so green IS the swallow
+  // proof. Keys in the mode go to the menu grabber, not the app. ----
   await setVt(1);
   await page.keyboard.type('winbox &\r');
   await setVt(2);
@@ -271,8 +274,8 @@ try {
   check('third winbox (C) composited', true);
   await clickAt(CX + 200, CY + 100);             // focus C
   await waitPixel(CX + 150, CY - 12, NAVY);
-  const cFill = await sample(CX + 200, CY + 100);   // C's client, right of the menu
-  // Alt+Space: swallowed (C's fill unchanged) and the sysmenu appears.
+  // Alt+Space: the sysmenu appears and the Space keydown is swallowed —
+  // C shows exactly the one Alt toggle (orange -> green).
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
@@ -281,19 +284,23 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('SYSMENU-UP'), { timeout: 20000, polling: 200 });
   check('Alt+Space opened the window system menu', true);
   await setVt(2);
-  check('the chord was swallowed (C fill unchanged)',
-    near(await sample(CX + 200, CY + 100), cFill), await sample(CX + 200, CY + 100));
+  await waitPixel(CX + 200, CY + 100, GREEN);
+  check('the Space keydown was swallowed (fill = exactly the Alt toggle)', true);
   // Keyboard: Down,Down -> MOVE, Enter -> move mode; arrows nudge 8px; Enter
-  // commits. Right x5 / Down x2 = +40 x, +16 y.
+  // commits. Right x5 / Down x2 = +40 x, +16 y. Arrows/Enter go to the menu
+  // grabber, not C, so the fill stays green through the move.
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
   for (let i = 0; i < 2; i++) await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');            // commit + dismiss
-  await waitPixel(CX + 240, CY + 116, ORANGE, 30000);   // window extended right
+  await waitPixel(CX + 240, CY + 116, GREEN, 30000);    // window extended right
+  // C's old corner is NOT teal when exposed — B (orange, net-zero chord
+  // toggles) sits underneath it; C's green fill vacating to B's orange is
+  // the move proof.
   check('keyboard Move relocated C (+40,+16)',
-    near(await sample(CX + 5, CY + 5), TEAL), await sample(CX + 5, CY + 5));  // old corner cleared
+    near(await sample(CX + 5, CY + 5), ORANGE), await sample(CX + 5, CY + 5));
   // Re-open and Close via the menu (C moved to CX+40,CY+16): Down x6 -> CLOSE.
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
@@ -304,7 +311,9 @@ try {
   await setVt(2);
   for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');            // CLOSE
-  await waitPixel(CX + 40 + 120, CY + 16 + 80, TEAL, 30000);
+  // Probe a moved-C point clear of A, B AND their drop shadows (B's client
+  // ends at x=308; +4 frame +14/+3 shadow reach ~329) so teardown = teal.
+  await waitPixel(350, 200, TEAL, 30000);
   check('Close via the sysmenu tore C down', true);
 
   // ---- taskbar always-on-top (todos/0038): drag B onto the bottom strip;
@@ -364,14 +373,19 @@ try {
   await waitPixel(BX + 220, BY + 130, near(preToggle, ORANGE) ? GREEN : ORANGE);
   check('no WM: the chord reaches the app (fill toggled)', true);
 
-  // no WM: Alt+Space is likewise NOT recognized — the Space keydown reaches
-  // the focused app and toggles its fill back (todos/0102, the EV_CYCLE rule).
+  // no WM: Alt+Space is likewise NOT recognized — BOTH keydowns reach the
+  // app (todos/0102, the EV_CYCLE rule): the Alt flips the fill, the Space
+  // flips it back. Wait for each flip in turn so the two toggles can't
+  // cancel into an indistinguishable no-op.
   const preAltSpace = await sample(BX + 220, BY + 130);
+  const flipOf = c => (near(c, ORANGE) ? GREEN : ORANGE);
   await page.keyboard.down('Alt');
+  await waitPixel(BX + 220, BY + 130, flipOf(preAltSpace));
+  check('no WM: the Alt keydown reaches the app (fill toggled)', true);
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
-  await waitPixel(BX + 220, BY + 130, near(preAltSpace, ORANGE) ? GREEN : ORANGE);
-  check('no WM: Alt+Space reaches the app (fill toggled)', true);
+  await waitPixel(BX + 220, BY + 130, flipOf(flipOf(preAltSpace)));
+  check('no WM: Alt+Space is not a chord — the Space toggles it back', true);
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   state.failures++;

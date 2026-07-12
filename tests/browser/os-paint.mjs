@@ -29,6 +29,8 @@ try {
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
   const { setVt, waitScreen } = osHelpers(page);
+  // sample takes PAGE coords (the same space page.mouse uses — scr()/bmp()
+  // below include the canvas origin), so subtract the canvas rect here.
   const sample = (x, y) => page.evaluate(([sx, sy]) => {
     const c = document.getElementById('screen');
     const t = document.createElement('canvas');
@@ -36,7 +38,7 @@ try {
     t.width = Math.round(r.width); t.height = Math.round(r.height);
     const ctx = t.getContext('2d');
     ctx.drawImage(c, 0, 0);
-    const d = ctx.getImageData(sx, sy, 1, 1).data;
+    const d = ctx.getImageData(Math.round(sx - r.x), Math.round(sy - r.y), 1, 1).data;
     return [d[0], d[1], d[2]];
   }, [x, y]);
   const near = (got, want, tol) => got && got.every((v, i) => Math.abs(v - want[i]) <= (tol || 12));
@@ -69,8 +71,9 @@ try {
   });
   const scr = (spx, spy) => [rect.x + WX + spx, rect.y + WY + spy];        // surface -> screen
   const bmp = (bx, by) => scr(CANVAS_X + bx, CANVAS_Y + by + BAR);         // canvas bitmap -> screen
-  // toolbox cell centre (surface): filled-rect is index 5 (col 1, row 2).
-  const tbCell = (i) => scr(4 + (i % 2) * 22 + 10, 4 + Math.floor(i / 2) * 22 + 10);
+  // toolbox cell centre (paint.c hit-tests in CLIENT coords, below the menu
+  // bar — so surface y needs +BAR): filled-rect is index 5 (col 1, row 2).
+  const tbCell = (i) => scr(4 + (i % 2) * 22 + 10, 4 + Math.floor(i / 2) * 22 + 10 + BAR);
   // palette swatch centre (surface): k = row*8 + col.
   const swatch = (k) => scr(CANVAS_X + (k % 8) * 16 + 8, (6 + 300 + 12) + Math.floor(k / 8) * 16 + 8 + BAR);
 
@@ -78,11 +81,19 @@ try {
   await waitPixel(...bmp(120, 100), WHITE, 60000);
   check('canvas composits white', true);
 
-  // Pick Filled Rectangle (toolbox) + a red swatch (palette), then drag.
+  // Park a click on the dead client strip under the toolbox first (hits no
+  // toolbox/palette/canvas region), so any focus-click semantics are spent
+  // before the clicks that must reach the app.
+  await page.mouse.click(...scr(20, 200 + BAR));
+  // Pick Filled Rectangle (toolbox) + a red swatch (palette); paint.c prints
+  // `paint: tool=N` / `paint: fg=...` to its tty on each pick — wait on
+  // __osOut instead of pacing blind (todos/0083).
   await page.mouse.click(...tbCell(5));
-  await new Promise(r => setTimeout(r, 200));
+  await page.waitForFunction(() => window.__osOut.includes('paint: tool=5'), { timeout: 20000, polling: 200 });
+  check('toolbox click selected Filled Rectangle (tool=5)', true);
   await page.mouse.click(...swatch(10));                 // k=10 -> red
-  await new Promise(r => setTimeout(r, 200));
+  await page.waitForFunction(() => window.__osOut.includes('paint: fg='), { timeout: 20000, polling: 200 });
+  check('palette click set the red foreground', true);
   const [dx0, dy0] = bmp(40, 40), [dx1, dy1] = bmp(200, 160);
   await page.mouse.move(dx0, dy0);
   await page.mouse.down();

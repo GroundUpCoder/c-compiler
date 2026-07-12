@@ -15,8 +15,12 @@
 // VT2 keyboard path, cross-checked against /bin/clip on VT1).
 //
 // Usage: node os-shell.mjs   (manual tier — run the os-*.mjs sweep serially)
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = 3197;
 const URL = osUrl(PORT);
 
@@ -327,14 +331,19 @@ try {
     }
   };
 
-  // Icons flow down the left edge, sorted (the seeded /root/Desktop —
-  // bump the list with image.json, the kernel-e2e rule). The winbox
-  // launched above covers rows 0-2; term's row is clear of it: white
-  // 24x24 tile, navy center, label below. The label-strip sample at
-  // x=45 relies on term's 4-char label starting at x=46 — pick a
-  // SHORT-named entry if this ever moves.
-  const DESK_ENTRIES = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
-                        'quake', 'term'];
+  // Icons flow down the left edge, sorted. The entry list is DERIVED from
+  // os/image.json's user section (the todos/0166 rule: a new seeded icon —
+  // 785eca2's notepad — must not silently shift every row under hardcoded
+  // indices; the Recycle Bin pins to the tail via entcmp, so sorted seeds
+  // fill rows 0..n-1). The winbox launched above covers rows 0-2; term's
+  // row is clear of it: white 24x24 tile, navy center, label below. The
+  // label-strip sample at x=45 relies on term's 4-char label starting at
+  // x=46 — pick a SHORT-named entry if this ever moves.
+  const DESK_ENTRIES = Object.keys(
+    JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user.files)
+    .filter((p) => p.startsWith('/root/Desktop/'))
+    .map((p) => p.slice('/root/Desktop/'.length))
+    .sort();
   const TROW = DESK_ENTRIES.indexOf('term');
   const I3X = 46, I3Y = 16 + TROW * 64 + 6;      // term's icon tile origin
   await waitPixel(I3X + 2, I3Y + 2, WHITE);

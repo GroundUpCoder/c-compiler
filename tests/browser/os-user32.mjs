@@ -34,6 +34,33 @@ try {
 
   const TEAL = [0, 128, 128], WHITE = [255, 255, 255], BTNFACE = [192, 192, 192];
 
+  // Modal dialogs (MessageBox, the Options template) are kernel-cascaded
+  // windows — each open lands one cascade slot further, so a hardcoded
+  // screen point drifts into a later dialog's navy title bar. Derive the
+  // ACTUAL geometry from wmctl (VT1) and wait for BTNFACE at a client-
+  // interior point (+40y clears the ~20px chrome title bar for any slot).
+  const dialogGeom = async (title, ms = 30000) => {
+    const t0 = Date.now();
+    for (;;) {
+      await setVt(1);
+      await page.evaluate(() => { window.__osOut = ''; });
+      await page.keyboard.type('wmctl list\r');
+      await new Promise(r => setTimeout(r, 400));
+      const out = await page.evaluate(() => window.__osOut);
+      await setVt(2);
+      const row = out.split('\n').find(l => l.split('\t').slice(6).join('\t').trim() === title);
+      const m = row && row.match(/(\d+)x(\d+)\+(-?\d+)\+(-?\d+)/);
+      if (m) return { w: +m[1], h: +m[2], x: +m[3], y: +m[4] };
+      if (Date.now() - t0 > ms) throw new Error(`dialog "${title}" never appeared in wmctl list`);
+      await new Promise(r => setTimeout(r, 300));
+    }
+  };
+  const waitDialogFace = async (title, ms) => {
+    const g = await dialogGeom(title, ms);
+    await waitPixel(g.x + Math.round(g.w / 2), g.y + 40, BTNFACE, 30000);
+    return g;
+  };
+
   await setVt(2);
   await waitScreen();
 
@@ -74,15 +101,26 @@ try {
   // over the Add button it falls back to 'default'. The kernel per-surface
   // cursor rides the SetCursor -> SDL -> RPC path; a short settle lets the app
   // pump the motion. (The agent tree carries no pixels, so this is the page.)
-  const cursorAt = async (cx, cy) => {
-    await page.mouse.move(rect.x + WX + cx, rect.y + WY + cy);
-    await new Promise(r => setTimeout(r, 200));
-    return page.evaluate(() => document.getElementById('screen').style.cursor);
+  // The per-surface cursor rides SetCursor -> SDL -> RPC -> the page's
+  // canvas.style.cursor; the style updates only when the motion's RPC lands,
+  // so a fixed sleep races it (the value read is one gesture stale). Poll:
+  // jiggle inside the target and wait for the style to settle to `want`.
+  const cursorSettle = async (cx, cy, want, ms = 8000) => {
+    const t0 = Date.now();
+    let last = '';
+    for (;;) {
+      await page.mouse.move(rect.x + WX + cx, rect.y + WY + cy);
+      await page.mouse.move(rect.x + WX + cx + 1, rect.y + WY + cy + 1);
+      last = await page.evaluate(() => document.getElementById('screen').style.cursor);
+      if (want.includes(last)) return last;
+      if (Date.now() - t0 > ms) return last;
+      await new Promise(r => setTimeout(r, 150));
+    }
   };
   {
-    const overEdit = await cursorAt(166, 22);
+    const overEdit = await cursorSettle(166, 22, ['text']);
     check('EDIT hover -> text I-beam cursor', overEdit === 'text', overEdit);
-    const overBtn = await cursorAt(268, 12);
+    const overBtn = await cursorSettle(268, 12, ['default', '']);
     check('button hover -> default arrow', overBtn === 'default' || overBtn === '', overBtn);
   }
 
@@ -104,8 +142,7 @@ try {
   await page.keyboard.type('wmctl click About\r');
   await waitOut('ctldemo: about-opening');
   await setVt(2);
-  // The modal MessageBox cascades to (40,60); its face is BTNFACE.
-  await waitPixel(40 + 100, 60 + 40, BTNFACE, 30000);
+  await waitDialogFace('About ctldemo');
   check('MessageBox modal composited', true);
   await setVt(1);
   await page.keyboard.type('wmctl click OK\r');
@@ -119,7 +156,7 @@ try {
   // Enter firing the DEFPUSHBUTTON. The shell marker carries the result.
   await new Promise(r => setTimeout(r, 400));
   await clickAt(140 + 38, 284 + 13);             // Options button
-  await waitPixel(40 + 80, 60 + 40, BTNFACE, 30000);
+  await waitDialogFace('Options');
   check('Options dialog composited', true);
   await new Promise(r => setTimeout(r, 400));
   await page.keyboard.type('hi', { delay: 50 }); // into the focused edit
@@ -133,10 +170,12 @@ try {
   await page.keyboard.press('Enter');            // default OK
   await waitOut("ctldemo: opt-ok name='hi' verbose=1", 30000);
   check('template dialog fully keyboard-driven (type + mnemonic + default)', true);
-  // Reopen and dismiss with Esc -> IDCANCEL.
+  // Reopen and dismiss with Esc -> IDCANCEL. The reopen cascades to a
+  // fresh slot (each dialog CREATE bumps the kernel cascade), so derive
+  // its geometry instead of assuming the first open's position.
   await new Promise(r => setTimeout(r, 400));
   await clickAt(140 + 38, 284 + 13);
-  await waitPixel(40 + 80, 60 + 40, BTNFACE, 30000);
+  await waitDialogFace('Options');
   await new Promise(r => setTimeout(r, 400));
   await page.keyboard.press('Escape');
   await waitOut('ctldemo: opt-cancel', 30000);

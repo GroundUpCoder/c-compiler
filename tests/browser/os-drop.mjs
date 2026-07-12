@@ -9,8 +9,12 @@
 // activate), and OPFS persistence across a page reload.
 //
 // Usage: node os-drop.mjs   (manual tier — run the os-*.mjs sweep serially)
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 import { createHash } from 'node:crypto';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = 3199;
 const URL = osUrl(PORT);
 const server = startServer(PORT);
@@ -51,7 +55,11 @@ try {
   check('boots to ready', true);
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 
-  const { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
+  // `let` so the persistence-reload leg can rebind these to the NEW page —
+  // osHelpers closes over the page it was handed, and the reload below
+  // reassigns `page` (a stale capture here would call evaluate() on the
+  // closed original: "Target page has been closed").
+  let { setVt, sample, near, waitPixel, waitScreen } = osHelpers(page);
   const shellExpect = async (cmd, pred, name, ms) => {
     await setVt(1);
     await page.evaluate(() => { window.__osOut = ''; });
@@ -73,13 +81,17 @@ try {
   await waitPixel(400, SH - 14, FACE, 60000);      // taskbar composited (wm up)
 
   // ---- drop a binary file ----
-  // Seeded /root/Desktop (os/image.json — bump DESK below when it gains
-  // an entry): "blob.bin" sorts FIRST, pushing every icon down one cell;
-  // the tile appearing in the LAST cell is the "icon appeared" signal.
-  // The Recycle Bin (0093, wm.c-created) pins to the grid's TAIL below
-  // every sorted entry, so the last cell sits one row further down.
-  const DESK = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon',
-                'quake', 'term'];
+  // Seeded /root/Desktop, DERIVED from os/image.json's user section (the
+  // todos/0166 rule — a new seeded icon must not shift every row under a
+  // hardcoded list): "blob.bin" sorts FIRST, pushing every icon down one
+  // cell; the tile appearing in the LAST cell is the "icon appeared"
+  // signal. The Recycle Bin (0093, wm.c-created) pins to the grid's TAIL
+  // below every sorted entry, so the last cell sits one row further down.
+  const DESK = Object.keys(
+    JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user.files)
+    .filter((p) => p.startsWith('/root/Desktop/'))
+    .map((p) => p.slice('/root/Desktop/'.length))
+    .sort();
   const BIN = 1;                                 // 'Recycle Bin', the tail cell
   const hl = await dropFile(page, 'blob.bin', BLOB);
   check('dragover lit the drop highlight', hl.lit && hl.cleared, hl);
@@ -117,6 +129,7 @@ try {
   // ---- persistence: the files survive a page reload (OPFS flush) ----
   await page.close();                    // frees the 0045 boot lock
   page = await context.newPage();        // same context = same OPFS
+  ({ setVt, sample, near, waitPixel, waitScreen } = osHelpers(page));  // rebind to the new page
   page.on('console', m => { if (m.type() === 'error') process.stderr.write('[page] ' + m.text() + '\n'); });
   await page.goto(URL);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 180000, polling: 250 });
