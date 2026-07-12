@@ -1,11 +1,12 @@
 // Desktop-shell browser acceptance (todos/0028 start menu, Win7 two-pane
-// restyle todos/0098, todos/0029 desktop icons): boot the reference OS page
-// in headless Chromium and drive the /bin/wm shell furniture through the
-// real UI-bridge path — canvas clicks -> kernel hit-test/rings -> wm.c
-// policy — asserting composited pixels. Covers: the Start button, the
-// two-pane root (left pinned/recents/All-Programs + search box, right
-// places), the All Programs cascade, MRU recents relaunch, live search +
-// Enter, right-pane RUN..., menu open/dismiss; the desktop
+// restyle todos/0098 reverted to one Win95 column by todos/0132, todos/0029
+// desktop icons): boot the reference OS page in headless Chromium and drive
+// the /bin/wm shell furniture through the real UI-bridge path — canvas
+// clicks -> kernel hit-test/rings -> wm.c policy — asserting composited
+// pixels. Covers: the Start button, the single-column root (pinned/recents/
+// All-Programs + a groove + the fixed places Settings/Run... + search box),
+// the All Programs cascade, MRU recents relaunch, live search +
+// Enter, the Run... place, menu open/dismiss; the desktop
 // icon grid (EV_SCREEN-recreated at the live size), single-click select,
 // double-click launch of term, minimize revealing the desktop; the 0089
 // Control Panel applet hub (icon-folder composite, Sound applet in its
@@ -75,15 +76,16 @@ try {
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
     await sample(44, BARY));
 
-  // The Win7 two-pane root (os/wm.c, todos/0098): a fixed 290x234 panel
-  // above the 28px taskbar. LEFT pane (170px) = pinned + MRU recents + an
-  // "All Programs" row, with a search box at its foot; RIGHT pane (120px) =
-  // SETTINGS then RUN... . Clear recents/pins first so the left pane is
-  // deterministic ([All Programs] at row 0); "All Programs" cascades the
-  // menu tree — startmenu2 lists the GROUPS, startmenu3 a group's leaves.
-  const SM_W = 290, SM_LEFT_W = 170, SM_H = 234, SM_ROW_H = 20, SM_PAD = 4;
+  // The single-column root (os/wm.c, todos/0098+0132): a fixed 170x274 panel
+  // above the 28px taskbar. ONE column = pinned + MRU recents + an "All
+  // Programs" row, then a groove and the fixed places Settings then Run...,
+  // with a search box at its foot. Clear recents/pins first so the column is
+  // deterministic ([All Programs, Settings, Run...] at rows 0-2); "All
+  // Programs" cascades the tree snugly off the column's right edge —
+  // startmenu2 lists the GROUPS, startmenu3 a group's leaves.
+  const SM_W = 170, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
   const SM_Y = SH - 28 - SM_H;
-  const SM_SEARCH_Y = SM_Y + SM_PAD + 10 * SM_ROW_H + 4;
+  const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
   const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;
   const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
   const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'winbox'];
@@ -99,6 +101,18 @@ try {
     await page.waitForTimeout(300);              // timing subject: post-VT2 settle before returning (no marker)
     return n;
   };
+  // Clear recents+pinned from VT1 so the column is deterministic — the fixed
+  // places (Settings/Run...) sit right after All Programs at known rows (0132:
+  // Run... moved from a fixed right-pane row into the column, so its row now
+  // depends on the recents count).
+  let clrN = 0;
+  const clearRecents = async () => {
+    const tag = `RCLR${++clrN}`;
+    await setVt(1);
+    await page.keyboard.type(`rm -f /root/.config/recent /root/.config/pinned && echo ${tag}\r`, { delay: 40 });
+    await page.waitForFunction((t) => window.__osOut.includes(t), tag, { timeout: 20000, polling: 200 });
+    await setVt(2);
+  };
   await setVt(1);
   await page.keyboard.type('rm -f /root/.config/recent /root/.config/pinned && echo REC""-CLR\r', { delay: 40 });
   await page.waitForFunction(() => window.__osOut.includes('REC-CLR'), { timeout: 20000, polling: 200 });
@@ -111,8 +125,8 @@ try {
   // Map-on-placement (todos/0069): burst-capture frames THROUGH the open —
   // the menu must never composite at the kernel cascade default (the
   // top-left band) before appearing parked above the taskbar. (120, SM_Y+74)
-  // is an empty left-pane row (recents cleared -> only All Programs at row
-  // 0), so it is face gray only once the panel is parked.
+  // is an empty column row (recents cleared -> rows 0-2 are All Programs +
+  // Settings + Run..., so row 3 at y+74 is blank), face gray only once parked.
   const CASC_H = Math.min(460, SM_Y - 10);
   const burst = page.evaluate(([px0, py0, ch]) => new Promise((resolve) => {
     const c = document.getElementById('screen');
@@ -141,18 +155,15 @@ try {
   await page.waitForTimeout(100);                // timing subject: let the rAF burst-capture start before the click (no marker)
   await clickAt(25, BARY);                       // Start (x < 50)
   const frames = await burst;
-  check('Start click opens the two-pane root (face fill above the taskbar)',
+  check('Start click opens the single-column root (face fill above the taskbar)',
     frames.some(f => f[0] === 1), frames.length);
   const maxCasc = Math.max(...frames.map(f => f[1]));
   check('no first-frame teleport: nothing composited in the cascade band (todos/0069)',
     maxCasc < 300, { maxCasc, frames: frames.length });
   await waitPixel(120, SM_Y + 74, FACE);         // settle
 
-  // The right pane is a distinct band (176,176,176) split from the left by
-  // a divider; the search box is a sunken white field at the foot.
-  check('right pane renders as a distinct band', near(await sample(230, SM_Y + 120), [176, 176, 176]),
-    await sample(230, SM_Y + 120));
-  check('search box is a white field at the foot of the left pane',
+  // The search box is a sunken white field at the foot of the column.
+  check('search box is a white field at the foot of the column',
     near(await sample(40, SM_SEARCH_Y + 8), [255, 255, 255]), await sample(40, SM_SEARCH_Y + 8));
 
   // All Programs (left row 0) cascades the tree flyout of groups
@@ -207,14 +218,16 @@ try {
   const wb3 = await winCount();
   check('Enter launches the search top hit (winbox +1)', wb3 === wb2 + 1, { wb2, wb3 });
 
-  // The RUN... place is in the RIGHT pane (row 1): click it, the dialog
-  // opens (see the builtin leg below). Here just confirm the right-pane
-  // click routing dismisses the menu into the dialog.
+  // The Run... place is column row 2 (after All Programs + Settings): click
+  // it, the dialog opens (see the builtin leg below). Clear recents first so
+  // the row is deterministic, then confirm the click dismisses the menu into
+  // the dialog.
+  await clearRecents();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
-  await clickAt(210, SM_Y + SM_PAD + SM_ROW_H + 10);   // right pane, RUN row 1
+  await clickAt(60, SM_Y + SM_PAD + 2 * SM_ROW_H + 10);   // column row 2 = Run...
   await waitPixel(120, SM_Y + 74, TEAL);
-  check('right-pane RUN... click dismisses the menu (opens the dialog)', true);
+  check('Run... click dismisses the menu (opens the dialog)', true);
   await page.keyboard.press('Escape');           // close the run dialog
 
   // Focus change dismisses: re-open, click the winbox window.
@@ -271,7 +284,7 @@ try {
   await setVt(2);
   check('override removed: back to the baked default', true);
 
-  // The two-pane legs above launched several winboxes (recents, search, the
+  // The Start-menu legs above launched several winboxes (recents, search, the
   // override); close them all so the desktop section starts from a clean
   // taskbar (the icon legs avoid the top-left cascade regardless, but the
   // minimize leg below expects term to be the sole button).
@@ -390,17 +403,18 @@ try {
   await waitPixel(500, 300, TEAL);
   check('minimize reveals the desktop', true);
 
-  // ---- the RUN... builtin (todos/0078; a right-pane place since 0098) ----
-  // Start -> the RUN... place (right pane, row 1) opens the dialog (240x70
-  // bottom-left, white input box); typed command + Enter spawns via
+  // ---- the Run... builtin (todos/0078; folded into the column by 0132) ----
+  // Start -> the Run... place (column row 2, recents cleared) opens the dialog
+  // (240x70 bottom-left, white input box); typed command + Enter spawns via
   // /bin/sh -c.
   const WHITE2 = [255, 255, 255];
   const rb0 = await winCount();
+  await clearRecents();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
-  await clickAt(210, SM_Y + SM_PAD + SM_ROW_H + 10);   // RUN... (right pane row 1)
+  await clickAt(60, SM_Y + SM_PAD + 2 * SM_ROW_H + 10);   // Run... (column row 2)
   await waitPixel(200, SH - 28 - 70 - 6 + 35, WHITE2);   // the input box
-  check('RUN... place opens the run dialog', true);
+  check('Run... place opens the run dialog', true);
   check('the menu closed behind it', near(await sample(120, SM_Y + 74), TEAL),
     await sample(120, SM_Y + 74));
   await page.keyboard.type('winbox');

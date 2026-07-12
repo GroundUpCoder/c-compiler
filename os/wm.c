@@ -28,21 +28,22 @@
  * restart forgets them. Fixed-size windows letterbox into their half or
  * quarter with the same aspect-fit SET_DST maximize uses.
  *
- * The Start menu (todos/0028, Win95-classic by todos/0078, restyled into
- * the Win7 TWO-PANE stage by todos/0098) is a set of borderless SDL
- * windows in this same process, created on Start-button click (or the
- * Ctrl+Esc chord / `wmctl menu` — WMP EV_MENU, the EV_CYCLE pattern) and
- * destroyed on selection or dismiss — SDL events dispatch per window by
- * e.*.windowID. The ROOT window ("startmenu") is a fixed-size two-pane
- * panel: a LEFT pane of pinned entries (~/.config/pinned) + MRU recents
- * (~/.config/recent, pushed by activate() on every real launch, capped at
- * RECENT_MAX) + an "All Programs" row, with a live SEARCH box at its foot;
- * a RIGHT pane holding the fixed places (SETTINGS -> /bin/ctlpanel,
- * RUN... -> the run dialog; Shut Down joins when todos/0051 lands). Typing
- * (the root holds keyboard focus) filters a flat walk of the menu tree
- * into the left pane live; Enter launches the top hit. "All Programs"
- * (hover, click, or arrow-Right) cascades the menu tree as flyout columns
- * to the right — each its own window titled "startmenu2"/"startmenu3"/...
+ * The Start menu (todos/0028, Win95-classic by todos/0078, given the Win7
+ * two-pane facelift by todos/0098, then reverted to ONE Win95 column by
+ * todos/0132) is a set of borderless SDL windows in this same process,
+ * created on Start-button click (or the Ctrl+Esc chord / `wmctl menu` —
+ * WMP EV_MENU, the EV_CYCLE pattern) and destroyed on selection or dismiss
+ * — SDL events dispatch per window by e.*.windowID. The ROOT window
+ * ("startmenu") is a fixed-size single column: pinned entries
+ * (~/.config/pinned) + MRU recents (~/.config/recent, pushed by activate()
+ * on every real launch, capped at RECENT_MAX) + an "All Programs" row, then
+ * a groove and the fixed places (Settings -> /bin/ctlpanel, Run... -> the
+ * run dialog; Shut Down joins when todos/0051 lands), with a live SEARCH
+ * box at its foot. Typing (the root holds keyboard focus) filters a flat
+ * walk of the menu tree into the column live (fixed places suppressed);
+ * Enter launches the top hit. "All Programs" (hover, click, or arrow-Right)
+ * cascades the menu tree as flyout columns snugly off the column's right
+ * edge — each its own window titled "startmenu2"/"startmenu3"/...
  * so the EV_CREATED park can tell them apart, listing /etc/menu if that
  * directory exists else the baked /usr/share/menu (todos/0040 —
  * systemd-style /etc: user overrides only, first-existing-dir wins), with
@@ -187,21 +188,25 @@
 #define MENU_DEPTH   4      /* two-pane root + up to 3 cascading flyouts */
 #define MENU_FIXED   2      /* right-pane fixed rows (SETTINGS, RUN...) */
 
-/* Win7 two-pane root (todos/0098). Left pane: pinned entries + MRU
- * recents + an "All Programs" row (which cascades the tree flyout), with
- * a live search box at its foot; right pane: the fixed places column.
- * Flyouts (depth >= 1) stay single-column entry lists (the 0078
- * substrate). The root is a FIXED size so its geometry doesn't shift with
- * the recents count. */
-#define SM_LEFT_W    170
-#define SM_RIGHT_W   120
+/* Win95 single-column root (todos/0132, restyling the 0098 two-pane).
+ * ONE column: pinned entries + MRU recents + an "All Programs" row (which
+ * cascades the tree flyout), then a groove and the fixed places
+ * (Settings, Run...), with a live search box at its foot. Flyouts
+ * (depth >= 1) are the same single-column entry lists (the 0078
+ * substrate) — dropping the right pane makes the cascade formula
+ * (mcol[0].x + SM_ROOT_W - 3) hang the flyout snugly off the column's
+ * right edge, where 0098's two-pane root threw it PAST the second pane.
+ * The root is a FIXED size so its geometry doesn't shift with the
+ * recents count. */
+#define SM_COL_W     170
 #define SM_ROW_H     20
 #define SM_PAD       4
-#define SM_LEFT_ROWS 10     /* left-pane row slots (also the item cap) */
-#define SM_SEARCH_H  22     /* the search box at the foot of the left pane */
-#define SM_ROOT_W    (SM_LEFT_W + SM_RIGHT_W)
-#define SM_ROOT_H    (SM_PAD + SM_LEFT_ROWS * SM_ROW_H + 4 + SM_SEARCH_H + SM_PAD)
-#define SM_SEARCH_Y  (SM_PAD + SM_LEFT_ROWS * SM_ROW_H + 4)
+#define SM_ROWS      12     /* column row slots (also the item cap) */
+#define SM_FIXED     2      /* trailing fixed rows: Settings, Run... */
+#define SM_SEARCH_H  22     /* the search box at the foot of the column */
+#define SM_ROOT_W    SM_COL_W
+#define SM_ROOT_H    (SM_PAD + SM_ROWS * SM_ROW_H + 4 + SM_SEARCH_H + SM_PAD)
+#define SM_SEARCH_Y  (SM_PAD + SM_ROWS * SM_ROW_H + 4)
 #define RECENT_MAX   8      /* MRU cap in ~/.config/recent */
 
 #define RUN_W        240    /* the RUN... dialog (todos/0078) */
@@ -305,17 +310,18 @@ static char menu_dir[32];          /* which directory the root open picked */
 static const char *menu_fixed[MENU_FIXED] = { "SETTINGS", "RUN..." };
 static int nkids = 0;              /* live spawned children (reap on frame) */
 
-/* Win7 two-pane root state (todos/0098): mcol[0] still owns the root
- * WINDOW (sid/geometry/parking through the shared plumbing), but its left
- * pane is this heterogeneous item list rather than mcol[0].ents — pinned
- * entries, then MRU recents, then All Programs; in search mode, a flat
- * walk of the tree. Flyouts (depth >= 1) keep using menu_col wholesale. */
-enum { SMI_PIN, SMI_RECENT, SMI_ALLPROGS, SMI_RESULT };
+/* Single-column root state (todos/0098, right pane dropped in 0132):
+ * mcol[0] still owns the root WINDOW (sid/geometry/parking through the
+ * shared plumbing), but its column is this heterogeneous item list rather
+ * than mcol[0].ents — pinned entries, then MRU recents, then All Programs,
+ * then a groove and the fixed places (Settings, Run...); in search mode, a
+ * flat walk of the tree (fixed rows suppressed). Flyouts (depth >= 1) keep
+ * using menu_col wholesale. */
+enum { SMI_PIN, SMI_RECENT, SMI_ALLPROGS, SMI_RESULT, SMI_SETTINGS, SMI_RUN };
 typedef struct { char name[ENT_NAME]; char path[256]; int kind; } sm_item;
-static sm_item sm_left[SM_LEFT_ROWS];
+static sm_item sm_left[SM_ROWS];
 static int sm_nleft = 0;
-static int sm_lhover = -1;         /* left-pane cursor row, -1 none */
-static int sm_rhover = -1;         /* right-pane (fixed) cursor row, -1 none */
+static int sm_lhover = -1;         /* column cursor row, -1 none */
 static char sm_search[64];         /* the live search query */
 static int sm_search_len = 0;
 
@@ -1180,12 +1186,12 @@ static void draw_run(void) {
     SDL_UpdateWindowSurface(run_win);
 }
 
-/* ---- the Start menu flyout columns (todos/0078; the two-pane root that
- * anchors them is todos/0098, further down) ---- */
+/* ---- the Start menu flyout columns (todos/0078; the single-column root
+ * that anchors them is todos/0098+0132, further down) ---- */
 
 /* Row bookkeeping for a flyout column (depth >= 1: pure entry lists). The
- * depth==0 arithmetic is retained but dead — the two-pane root does its
- * own hit-testing (sm_root_hit). */
+ * depth==0 arithmetic is retained but dead — the root column does its own
+ * hit-testing (sm_root_hit). */
 static int col_rows(const menu_col *c, int depth) {
     return c->n + (depth == 0 ? MENU_FIXED : 0);
 }
@@ -1225,20 +1231,20 @@ static void menu_dismiss(void) { menu_close_from(0); }
 
 static void sm_rebuild_left(void);        /* build the root's left pane (0098) */
 
-/* Open the column at `depth` listing `dir`. Depth 0 is the Win7 two-pane
- * root (fixed size, parked bottom-left above the taskbar; its left pane
- * comes from sm_rebuild_left, and `dir` is remembered as the tree root
- * for search / All Programs); depth >= 1 are single-column flyouts parked
- * at (px, py) clamped on-screen. The window parks when its EV_CREATED echo
+/* Open the column at `depth` listing `dir`. Depth 0 is the single-column
+ * root (fixed size, parked bottom-left above the taskbar; its column comes
+ * from sm_rebuild_left, and `dir` is remembered as the tree root for
+ * search / All Programs); depth >= 1 are the cascading flyouts parked at
+ * (px, py) clamped on-screen. The window parks when its EV_CREATED echo
  * arrives (title "startmenu" for the root, "startmenu<depth+1>" deeper —
  * see handle_event). Returns 1 if live. */
 static int menu_open_col(int depth, const char *dir, int px, int py) {
     if (depth >= MENU_DEPTH) return 0;
     menu_col *c = &mcol[depth];
-    if (depth == 0) {                          /* the two-pane root (0098) */
+    if (depth == 0) {                          /* the single-column root (0132) */
         snprintf(c->dir, sizeof c->dir, "%s", dir);   /* the tree root */
         sm_search[0] = 0; sm_search_len = 0;
-        sm_lhover = -1; sm_rhover = -1;
+        sm_lhover = -1;
         sm_rebuild_left();
         c->w = SM_ROOT_W;
         c->h = SM_ROOT_H;
@@ -1289,7 +1295,7 @@ static void menu_open_flyout(int depth, int i) {
         c->open_child = i;
 }
 
-/* ---- Win7 two-pane root: recents, pins, live search (todos/0098) ---- */
+/* ---- single-column root: recents, pins, live search (todos/0098+0132) ---- */
 
 static const char *sm_home(void) {
     const char *h = getenv("HOME");
@@ -1342,14 +1348,14 @@ static void sm_record_recent(const char *path) {
     fclose(w);
 }
 
-/* Add existing one-path-per-line entries of `file` as left-pane items of
- * `kind` (topmost first), reserving the final slot for All Programs.
- * Missing files / vanished paths are skipped silently. */
+/* Add existing one-path-per-line entries of `file` as column items of
+ * `kind` (topmost first), reserving the trailing slots for All Programs +
+ * the fixed places. Missing files / vanished paths are skipped silently. */
 static void sm_load_list(const char *file, int kind) {
     FILE *f = fopen(file, "r");
     if (!f) return;
     char line[256];
-    while (fgets(line, sizeof line, f) && sm_nleft < SM_LEFT_ROWS - 1) {
+    while (fgets(line, sizeof line, f) && sm_nleft < SM_ROWS - SM_FIXED - 1) {
         size_t l = strlen(line);
         while (l > 0 && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
         if (!line[0]) continue;
@@ -1369,11 +1375,11 @@ static void sm_load_list(const char *file, int kind) {
  * filename matches the query. Fills in readdir order, capped at the pane;
  * groups (dirs / links to dirs) recurse. */
 static void sm_search_walk(const char *dir, const char *q, int depth) {
-    if (depth > MENU_DEPTH || sm_nleft >= SM_LEFT_ROWS) return;
+    if (depth > MENU_DEPTH || sm_nleft >= SM_ROWS) return;
     DIR *d = opendir(dir);
     if (!d) return;
     struct dirent *de;
-    while ((de = readdir(d)) && sm_nleft < SM_LEFT_ROWS) {
+    while ((de = readdir(d)) && sm_nleft < SM_ROWS) {
         if (de->d_name[0] == '.') continue;
         char path[512];
         snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
@@ -1394,9 +1400,11 @@ static void sm_search_walk(const char *dir, const char *q, int depth) {
     closedir(d);
 }
 
-/* Rebuild the left-pane item list. Search mode (query non-empty): the flat
- * tree walk (and the tree flyout is meaningless, so close it). Browse mode:
- * pinned entries, then MRU recents, then the All Programs row. */
+/* Rebuild the column item list. Search mode (query non-empty): the flat
+ * tree walk (the fixed places + All Programs are suppressed, and the tree
+ * flyout is meaningless, so close it). Browse mode: pinned entries, then
+ * MRU recents, then the All Programs row, then a groove and the fixed
+ * places (Settings, Run...) folded in from the retired right pane (0132). */
 static void sm_rebuild_left(void) {
     sm_nleft = 0;
     if (sm_search_len > 0) {
@@ -1409,17 +1417,28 @@ static void sm_rebuild_left(void) {
     snprintf(rec, sizeof rec, "%s/.config/recent", sm_home());
     sm_load_list(pin, SMI_PIN);
     sm_load_list(rec, SMI_RECENT);
-    if (sm_nleft < SM_LEFT_ROWS) {
+    if (sm_nleft < SM_ROWS - SM_FIXED) {
         sm_item *it = &sm_left[sm_nleft++];
         snprintf(it->name, sizeof it->name, "%s", "All Programs");
         it->path[0] = 0;
         it->kind = SMI_ALLPROGS;
     }
+    static const struct { const char *name; int kind; } fixed[SM_FIXED] = {
+        { "Settings", SMI_SETTINGS }, { "Run...", SMI_RUN },
+    };
+    for (int i = 0; i < SM_FIXED && sm_nleft < SM_ROWS; i++) {
+        sm_item *it = &sm_left[sm_nleft++];
+        snprintf(it->name, sizeof it->name, "%s", fixed[i].name);
+        it->path[0] = 0;
+        it->kind = fixed[i].kind;
+    }
 }
 
-/* Cascade the menu tree as a flyout to the right of the two-pane root,
- * aligned to the All Programs row. The flyout lists mcol[0].dir (the tree
- * root); its groups cascade further via the ordinary flyout machinery. */
+/* Cascade the menu tree as a flyout off the column's right edge, aligned
+ * to the All Programs row. With the right pane gone (0132) SM_ROOT_W is
+ * the column width, so the flyout hangs snugly beside the row. The flyout
+ * lists mcol[0].dir (the tree root); its groups cascade further via the
+ * ordinary flyout machinery. */
 static void sm_open_allprogs(void) {
     int row = -1;
     for (int i = 0; i < sm_nleft; i++)
@@ -1430,59 +1449,51 @@ static void sm_open_allprogs(void) {
                   mcol[0].y + row * SM_ROW_H);
 }
 
-/* Pane/row under a root-window point. Returns 0 left item, 1 right fixed
- * item, 2 the search box, -1 dead zone; the row index lands in *row. */
+/* Zone/row under a root-window point (single column since 0132). Returns 0
+ * an item row, 2 the search box, -1 dead zone; the row index lands in
+ * *row. */
 static int sm_root_hit(int x, int y, int *row) {
-    if (x < SM_LEFT_W) {
-        if (y >= SM_SEARCH_Y) return 2;          /* the search box strip */
-        int i = (y - SM_PAD) / SM_ROW_H;
-        if (y >= SM_PAD && i >= 0 && i < sm_nleft) { *row = i; return 0; }
-        return -1;
-    }
+    if (x < 0 || x >= SM_COL_W) return -1;
+    if (y >= SM_SEARCH_Y) return 2;              /* the search box strip */
     int i = (y - SM_PAD) / SM_ROW_H;
-    if (y >= SM_PAD && i >= 0 && i < MENU_FIXED) { *row = i; return 1; }
+    if (y >= SM_PAD && i >= 0 && i < sm_nleft) { *row = i; return 0; }
     return -1;
 }
 
-/* Launch a left-pane row: All Programs cascades; everything else is a path
- * through the shared activate() (which records the recent). */
+/* Launch a column row: All Programs cascades, the fixed places run their
+ * builtin (Settings -> ctlpanel, Run... -> the run dialog); everything else
+ * is a path through the shared activate() (which records the recent). */
 static void sm_left_activate(int row) {
     if (row < 0 || row >= sm_nleft) return;
     sm_item *it = &sm_left[row];
     if (it->kind == SMI_ALLPROGS) { sm_open_allprogs(); return; }
+    if (it->kind == SMI_SETTINGS) { menu_dismiss(); activate("/bin/ctlpanel"); return; }
+    if (it->kind == SMI_RUN)      { menu_dismiss(); run_open(); return; }
     char path[256];
     snprintf(path, sizeof path, "%s", it->path);
     menu_dismiss();
     activate(path);
 }
 
-static void sm_right_activate(int row) {
-    menu_dismiss();
-    if (row == 0) activate("/bin/ctlpanel");     /* SETTINGS */
-    else run_open();                             /* RUN... */
-}
-
 static void sm_root_click(int x, int y) {
     int row = -1;
-    int pane = sm_root_hit(x, y, &row);
-    if (pane == 0) { sm_lhover = row; sm_left_activate(row); }
-    else if (pane == 1) sm_right_activate(row);
-    /* pane 2 (search box) / -1 (dead zone): a click INSIDE the menu keeps
+    int zone = sm_root_hit(x, y, &row);
+    if (zone == 0) { sm_lhover = row; sm_left_activate(row); }
+    /* zone 2 (search box) / -1 (dead zone): a click INSIDE the menu keeps
      * it open — only an outside click / focus loss dismisses (Win7). */
 }
 
 static void sm_root_motion(int x, int y) {
     int row = -1;
-    int pane = sm_root_hit(x, y, &row);
-    sm_lhover = pane == 0 ? row : -1;
-    sm_rhover = pane == 1 ? row : -1;
-    if (pane == 0 && sm_left[row].kind == SMI_ALLPROGS && mdepth < 2)
+    int zone = sm_root_hit(x, y, &row);
+    sm_lhover = zone == 0 ? row : -1;
+    if (zone == 0 && sm_left[row].kind == SMI_ALLPROGS && mdepth < 2)
         sm_open_allprogs();
 }
 
 /* Keyboard while only the root is open (todos/0098): printable keys type
- * into the search box (filtering the tree live), arrows walk the left
- * pane, Enter launches the cursor row (the top hit in search mode), Right
+ * into the search box (filtering the tree live), arrows walk the column,
+ * Enter launches the cursor row (the top hit in search mode), Right
  * cascades All Programs, Esc clears the search then closes. When a flyout
  * is open the deeper column owns the keys (menu_key routes there). */
 static void sm_root_key(int sym) {
@@ -1537,36 +1548,34 @@ static void draw_root_menu(void) {
     uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
              sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
              sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255),
-             rband = rgb(176, 176, 176), white = rgb(255, 255, 255),
-             ghost = rgb(128, 128, 128);
+             white = rgb(255, 255, 255), ghost = rgb(128, 128, 128);
     fill_s(px, w, h, 0, 0, w, h, face);
     /* raised outer edge (Win95 chrome carried over) */
     fill_s(px, w, h, 0, 0, w, 1, hi);
     fill_s(px, w, h, 0, 0, 1, h, hi);
     fill_s(px, w, h, 0, h - 1, w, 1, sh);
     fill_s(px, w, h, w - 1, 0, 1, h, sh);
-    /* right pane band + the divider between the panes */
-    fill_s(px, w, h, SM_LEFT_W, 1, SM_RIGHT_W - 1, h - 2, rband);
-    fill_s(px, w, h, SM_LEFT_W, 1, 1, h - 2, sh);
-    fill_s(px, w, h, SM_LEFT_W + 1, 1, 1, h - 2, hi);
-    /* left pane items */
+    /* the single column of items (pins/recents, All Programs, Settings/Run) */
     for (int i = 0; i < sm_nleft; i++) {
         int y = SM_PAD + i * SM_ROW_H;
         int hl = i == sm_lhover;
-        if (hl) fill_s(px, w, h, 2, y, SM_LEFT_W - 4, SM_ROW_H, sel);
-        if (sm_left[i].kind == SMI_ALLPROGS && i > 0) {   /* groove above it */
-            fill_s(px, w, h, 6, y - 1, SM_LEFT_W - 12, 1, sh);
-        }
+        if (hl) fill_s(px, w, h, 2, y, SM_COL_W - 4, SM_ROW_H, sel);
+        /* a groove above the All Programs row and above the fixed section
+         * (Settings), the Win95 separator between the program list and the
+         * places (todos/0132) */
+        if (i > 0 && (sm_left[i].kind == SMI_ALLPROGS ||
+                      sm_left[i].kind == SMI_SETTINGS))
+            fill_s(px, w, h, 6, y - 1, SM_COL_W - 12, 1, sh);
         draw_text_s(px, w, h, 10, y + (SM_ROW_H - 7) / 2, sm_left[i].name,
                     hl ? seltxt : txt);
         if (sm_left[i].kind == SMI_ALLPROGS) {            /* cascade arrow */
-            int ax = SM_LEFT_W - 12, ay = y + (SM_ROW_H - 7) / 2;
+            int ax = SM_COL_W - 12, ay = y + (SM_ROW_H - 7) / 2;
             for (int t = 0; t < 4; t++)
                 fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t, hl ? seltxt : txt);
         }
     }
-    /* the search box (sunken white field) at the foot of the left pane */
-    int bx = SM_PAD, by = SM_SEARCH_Y, bw = SM_LEFT_W - 2 * SM_PAD,
+    /* the search box (sunken white field) at the foot of the column */
+    int bx = SM_PAD, by = SM_SEARCH_Y, bw = SM_COL_W - 2 * SM_PAD,
         bh = SM_SEARCH_H - 2;
     fill_s(px, w, h, bx, by, bw, bh, white);
     fill_s(px, w, h, bx, by, bw, 1, sh);
@@ -1579,14 +1588,6 @@ static void draw_root_menu(void) {
         fill_s(px, w, h, bx + 4 + (int)strlen(s) * 6, by + (bh - 9) / 2, 2, 9, txt);
     } else {
         draw_text_s(px, w, h, bx + 4, by + (bh - 7) / 2, "Search", ghost);
-    }
-    /* right pane: the fixed places column */
-    for (int i = 0; i < MENU_FIXED; i++) {
-        int y = SM_PAD + i * SM_ROW_H;
-        int hl = i == sm_rhover;
-        if (hl) fill_s(px, w, h, SM_LEFT_W + 4, y, SM_RIGHT_W - 8, SM_ROW_H, sel);
-        draw_text_s(px, w, h, SM_LEFT_W + 12, y + (SM_ROW_H - 7) / 2,
-                    menu_fixed[i], hl ? seltxt : txt);
     }
     SDL_UpdateWindowSurface(c->win);
 }

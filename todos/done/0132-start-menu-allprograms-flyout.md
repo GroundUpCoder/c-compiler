@@ -1,6 +1,18 @@
 # 0132 — Start menu: All Programs flyout skips over the right pane
 
-- **Status**: open
+- **Status**: DONE (2026-07-12) — shipped **option C**: dropped the 0098 Win7
+  two-pane root back to ONE Win95 column (170×274), folding Settings/Run… into
+  the column below a groove. The 0078 cascade formula (`mcol[0].x + SM_ROOT_W
+  - 3`) is now correct for free — the All-Programs flyout hangs snugly off the
+  column's right edge instead of past a second pane. Pins/recents/live-search
+  kept. Option A (Win7 in-place slide) declined: layout-correct only with a
+  scrollable pane (the fixed row budget truncates the tree), i.e. the "too
+  heavy" case the user flagged as the trigger for C. os/wm.c + WM.md + CLAUDE.md
+  + image.json v76; re-geometried `test_wm_service_e2e.js` (green) +
+  `os-shell.mjs` (Start-menu legs green). A pre-existing, unrelated os-shell.mjs
+  failure (the todos/0103 desktop-icon rename leg, `(49,52)` never navy — fails
+  byte-identically on HEAD) was carved off to **todos/0156** (P0) so this could
+  close clean. Dev log: `logs/2026-07-12/0132-startmenu-single-column.md`.
 - **Design**: `todos/WM.md` "Start menu v3 — Win7 two-pane (todos/0098)";
   `os/wm.c` `sm_open_allprogs()` / `menu_open_flyout()`.
 

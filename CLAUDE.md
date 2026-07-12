@@ -441,22 +441,26 @@ vsync source (boot.js, standalone) → the deadline-setTimeout pacer
 tier in host.js's frame-loop driver (fixed 0100: the old fixed
 `setTimeout(16)`-after-callback pacer silently halved presented fps —
 sameboy GBC showed 60 emulated/33 presented).
-The Start menu is Win7 two-pane (todos/0098, restyling the Win95-classic
-0078 substrate): the ROOT window ("startmenu") is a fixed 290×234 panel —
-a LEFT pane of pinned entries (`~/.config/pinned`) + MRU recents
+The Start menu is a single Win95 column (todos/0098's Win7 two-pane
+reverted to one column by todos/0132, over the 0078 Win95-classic
+substrate): the ROOT window ("startmenu") is a fixed 170×274 panel — ONE
+column of pinned entries (`~/.config/pinned`) + MRU recents
 (`~/.config/recent`, pushed by the shared `activate()` on every real
-launch, dedup, cap 8) + an "All Programs" row, with a live SEARCH box at
-its foot that filters a flat recursive walk of the menu tree (Enter
-launches the top hit; the root holds kernel focus so typing goes to
-search); a RIGHT pane of fixed places (SETTINGS → /bin/ctlpanel, RUN… →
-the "startrun" sh -c dialog; Shut Down waits on 0051). "All Programs"
-cascades the baked Games/Accessories/Demos GROUP tree as flyout columns
+launch, dedup, cap 8) + an "All Programs" row, then a groove and the fixed
+places Settings (→ /bin/ctlpanel) and Run… (→ the "startrun" sh -c dialog;
+Shut Down waits on 0051), with a live SEARCH box at its foot that filters a
+flat recursive walk of the menu tree (Enter launches the top hit; the root
+holds kernel focus so typing goes to search; fixed places suppressed in
+search mode). 0098's right pane was dropped because the 0078 flyout formula
+(`mcol[0].x + c->w - 3`) only hangs the "All Programs" cascade snugly
+beside its row when the root is one column wide — with a second pane it
+threw the flyout PAST it. "All Programs" cascades the baked Games/
+Accessories/Demos GROUP tree as flyout columns off the column's right edge
 (startmenu2 lists the groups, startmenu3 a group's leaves; `/etc/menu`
 subdirs cascade the same, and the search walks /etc/menu when it wins);
 flyouts keep the 0078 rules (borderless per-column windows, only the root
 holds focus, hand-back at the create echo, arrows/type-ahead/Left/Esc on
-the deepest column). The Win95 sidebar band and below-programs separator/
-fixed-section are GONE. Ctrl+Esc toggles it via WMP EV_MENU 0x8C / MENU
+the deepest column). Ctrl+Esc toggles it via WMP EV_MENU 0x8C / MENU
 0x1C / `wmctl menu` — the EV_CYCLE pattern (subscriber-gated, keyup
 swallowed).
 Desktop icons are selectable & movable (todos/0077, wm.c-only): click/
@@ -651,7 +655,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v64**.
+Image version is **v76**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

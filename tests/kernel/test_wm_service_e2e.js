@@ -29,20 +29,22 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-wm-');
 
-// The Win7 two-pane Start menu (os/wm.c, todos/0098): a FIXED 290x234 root
-// parked above the 28px taskbar on the 1024x768 headless screen. Left pane
-// (170px): pinned + MRU recents + an "All Programs" row, with a search box
-// at its foot (y 208); right pane (120px): SETTINGS (row 0), RUN... (row 1).
-// "All Programs" cascades the menu tree as flyout columns — startmenu2
+// The single-column Start menu (os/wm.c, todos/0098+0132): a FIXED 170x274
+// root parked above the 28px taskbar on the 1024x768 headless screen. ONE
+// column (170px): pinned + MRU recents + an "All Programs" row, then a
+// groove and the fixed places Settings (row after All Programs) and Run...,
+// with a search box at its foot (y 248). "All Programs" cascades the menu
+// tree as flyout columns snugly off the column's right edge — startmenu2
 // lists the baked GROUPS (dirs-first sort), startmenu3 a group's leaves —
 // one level deeper than the 0078 root-lists-groups layout. Recents
 // (~/.config/recent) grow via the wm's activate() on every real launch;
-// clearing the file keeps the left pane deterministic ([All Programs] at
-// row 0). Bump the leaf lists when image.json's menu tree changes.
-const SM_W = 290, SM_H = 234, SM_LEFT_W = 170, SM_ROW_H = 20, SM_PAD = 4;
-const SM_Y = 768 - 28 - SM_H;                    // 506
+// clearing recents+pinned keeps the column deterministic ([All Programs,
+// Settings, Run...] at rows 0-2). Bump the leaf lists when image.json's menu
+// tree changes.
+const SM_W = 170, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
+const SM_Y = 768 - 28 - SM_H;                    // 466
 const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
-const SM_SEARCH_Y = SM_PAD + 10 * SM_ROW_H + 4;  // 208
+const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 248
 const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };
 // A flyout of `parent` ({x,y,w}) anchored to its 0-based `rowIndex`,
 // listing `n` rows: parent-right - 3, row-aligned, clamped to the work area
@@ -131,8 +133,8 @@ const script = [
   'echo ==list5',
   'wmctl list',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',   // new wm, new sid
-  // ---- the Start menu (todos/0028; Win7 two-pane todos/0098) ----
-  // Virgin recents so the left pane is just [All Programs] (row 0): open,
+  // ---- the Start menu (todos/0028; single-column todos/0098+0132) ----
+  // Virgin recents so the column starts [All Programs, Settings, Run...] (rows 0-2): open,
   // cascade All Programs -> the tree flyout (GROUPS) -> a nested leaf, which
   // launches winbox AND records a recent.
   'rm -f /root/.config/recent /root/.config/pinned',
@@ -388,11 +390,14 @@ const script = [
   'wmctl wait nowin startmenu',
   'echo ==sm4c',
   'wmctl list',
-  // RUN... (right pane, row 1): open the dialog, type "winbox", Enter.
+  // Run... (column row 2, below All Programs + Settings): clear recents+pinned
+  // so the column is deterministic [All Programs, Settings, Run...], open the
+  // dialog, type "winbox", Enter.
+  'rm -f /root/.config/recent /root/.config/pinned',
   'wmctl menu',
   'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $MSID 210 ${SM_PAD + SM_ROW_H + 10}`,
+  `wmctl click $MSID 60 ${SM_PAD + 2 * SM_ROW_H + 10}`,
   'wmctl wait win startrun',
   'echo ==sm5',
   'wmctl list',
@@ -413,7 +418,7 @@ const script = [
   // runs the launcher.
   'mkdir -p /etc/menu/Apps',
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/Apps/go",
-  'rm -f /root/.config/recent',                  // left pane = [All Programs] only
+  'rm -f /root/.config/recent',                  // column starts [All Programs, Settings, Run...]
   'wmctl menu',
   'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
@@ -843,9 +848,9 @@ const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
   bar5.includes('1024x28+0+740'), JSON.stringify(l5));
 
-// ---- the Start menu (todos/0028; Win7 two-pane todos/0098) ----
+// ---- the Start menu (todos/0028; single-column todos/0098+0132) ----
 const menu1 = row(m1, 'startmenu');
-check(`Start click opens the two-pane root above the taskbar (${SM_GEOM}, borderless)`,
+check(`Start click opens the single-column root above the taskbar (${SM_GEOM}, borderless)`,
   menu1.includes(SM_GEOM) && menu1.includes('b'), JSON.stringify(m1));
 check('menu shot written', out.includes('menu-shot-ok'));
 const tree = fly(SM_ROOT, 0, MENU_GROUPS.length);        // All Programs at row 0
@@ -1044,11 +1049,11 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       clock >= 15, clock);
   }
 
-  // The Start menu shot (todos/0098): the two-pane root — a left pane whose
-  // only item (recents cleared) is All Programs with a cascade arrow, the
-  // search box with its "Search" ghost at the foot, and a right pane band
-  // carrying the fixed places (SETTINGS / RUN...). Hover is -1 before the
-  // shot, so nothing is navy-highlighted.
+  // The Start menu shot (todos/0098+0132): the single-column root — with
+  // recents+pinned cleared the column is [All Programs (row 0, cascade
+  // arrow), Settings (row 1), Run... (row 2)], a groove above Settings, and
+  // the search box with its "Search" ghost at the foot. Hover is -1 before
+  // the shot, so nothing is navy-highlighted.
   const mppm = COMMON.readFileBytes(ufs, '/root/m.ppm');
   const mhead = Buffer.from(mppm.subarray(0, 20)).toString('latin1');
   const mmm = /^P6\n(\d+) (\d+)\n255\n/.exec(mhead);
@@ -1058,20 +1063,19 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     const moff = mhead.indexOf('255\n') + 4, MW = SM_W;
     const mpx = (x, y) =>
       Array.from(mppm.subarray(moff + (y * MW + x) * 3, moff + (y * MW + x) * 3 + 3));
-    check('right pane is a distinct band (176,176,176)',
-      String(mpx(230, 120)) === '176,176,176', mpx(230, 120));
-    let rBlack = 0;
-    for (let y = 4; y < 44; y++)
-      for (let x = SM_LEFT_W + 8; x < SM_W - 8; x++)
-        if (String(mpx(x, y)) === '0,0,0') rBlack++;
-    check('right-pane fixed places text present (SETTINGS / RUN...)', rBlack >= 40, rBlack);
     check('All Programs row carries the cascade arrow',
-      String(mpx(SM_LEFT_W - 12, 12)) === '0,0,0', mpx(SM_LEFT_W - 12, 12));
+      String(mpx(SM_W - 12, 12)) === '0,0,0', mpx(SM_W - 12, 12));
     let lBlack = 0;
     for (let y = 4; y < 24; y++)
-      for (let x = 8; x < SM_LEFT_W - 14; x++)
+      for (let x = 8; x < SM_W - 14; x++)
         if (String(mpx(x, y)) === '0,0,0') lBlack++;
     check('All Programs label text present', lBlack >= 20, lBlack);
+    // the fixed places fold into the column as rows 1-2 (Settings, Run...)
+    let fBlack = 0;
+    for (let y = SM_PAD + SM_ROW_H; y < SM_PAD + 3 * SM_ROW_H; y++)
+      for (let x = 8; x < 70; x++)
+        if (String(mpx(x, y)) === '0,0,0') fBlack++;
+    check('fixed places text present in the column (Settings / Run...)', fBlack >= 30, fBlack);
     check('search box is a sunken white field',
       String(mpx(40, SM_SEARCH_Y + 8)) === '255,255,255', mpx(40, SM_SEARCH_Y + 8));
     let ghost = 0;
@@ -1094,7 +1098,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     sec.split('\n').filter(l => l.endsWith('\t' + title)).length;
   check('wmctl menu with no WM was refused (the menu IS policy)',
     out.includes('menu-refused'));
-  check('wmctl menu opens the two-pane root (the chord path)',
+  check('wmctl menu opens the single-column root (the chord path)',
     out.includes('menu-cmd-ok') && row(s1, 'startmenu') === '' && row(s2, 'startmenu') !== '',
     JSON.stringify(s2));
   check('live search + Enter launches the top hit (winbox +1)',
@@ -1105,7 +1109,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     JSON.stringify([row(s4a, 'startmenu') !== '', row(s4b, 'startmenu') !== '']));
   check('a second Esc dismisses the menu', row(s4c, 'startmenu') === '',
     JSON.stringify(s4c));
-  check('the RUN... place (right pane) opens the run dialog (240x70, above the bar)',
+  check('the Run... place (column row 2) opens the run dialog (240x70, above the bar)',
     row(s5, 'startrun').includes('240x70+6+664') && row(s5, 'startmenu') === '',
     JSON.stringify(s5));
   check('typed command + Enter launches it (sh -c winbox: +1) and closes the dialog',

@@ -496,30 +496,37 @@ exactly like the cycle chord (subscriber-gated, keyup swallowed, no-WM
 pass-through): **WMP EV_MENU 0x8C / MENU 0x1C / `wmctl menu`** — one op
 set, exposed twice.
 
-**Start menu v3 — Win7 two-pane (todos/0098, landed 2026-07-11).** The
-ROOT window ("startmenu") is now a **fixed 290×234 two-pane panel** — the
-0078 cascade substrate is unchanged, only the root's layout and two
-persistence bits are new. **Left pane (170px)**: pinned entries
-(`~/.config/pinned`) + **MRU recents** (`~/.config/recent`, pushed to the
-head by the shared `activate()` on every real program launch — menu,
-desktop, or run dialog — de-duplicated, capped at RECENT_MAX 8) + an **All
-Programs** row, with a **search box** at its foot. Typing (the root holds
-kernel focus) filters a **flat recursive walk of the menu tree** into the
-left pane live, highlighting the top hit; **Enter launches it**. **All
-Programs** (hover / click / arrow-Right) cascades the tree as flyout
-columns — startmenu2 lists the GROUPS, startmenu3 a group's leaves — one
-level deeper than the 0078 root-lists-groups layout, reusing
-`menu_open_flyout` wholesale. **Right pane (120px)**: the fixed places
-(SETTINGS → activate("/bin/ctlpanel"); RUN… → the "startrun" dialog whose
-Enter spawns `/bin/sh -c <input>`; **Shut Down joins when todos/0051
-lands**). **Keyboard**: printable keys type into the search box; arrows
-walk the left pane; Enter launches the cursor row (the top hit in search
+**Start menu v3 — single Win95 column (todos/0098 two-pane, reverted to
+one column by todos/0132, landed 2026-07-12).** The ROOT window
+("startmenu") is a **fixed 170×274 single-column panel**. The 0098 Win7
+two-pane facelift threw the "All Programs" flyout past its 120px right
+pane — the cascade formula (`mcol[0].x + c->w - 3`) hangs the flyout off
+the root's right edge, which only sits snugly beside the row when the root
+is one column wide (the 0078 assumption). Rather than half-fix the overlap
+(user decision 2026-07-12, options in todos/0132), the **right pane is
+dropped** and the fixed places fold back into the column: the 0078 cascade
+substrate is unchanged, and the geometry defect is gone by construction.
+**The column**: pinned entries (`~/.config/pinned`) + **MRU recents**
+(`~/.config/recent`, pushed to the head by the shared `activate()` on every
+real program launch — menu, desktop, or run dialog — de-duplicated, capped
+at RECENT_MAX 8) + an **All Programs** row, then a **groove** and the fixed
+places **Settings** (→ activate("/bin/ctlpanel")) and **Run…** (→ the
+"startrun" dialog whose Enter spawns `/bin/sh -c <input>`; **Shut Down joins
+when todos/0051 lands**), with a **search box** at its foot. Typing (the
+root holds kernel focus) filters a **flat recursive walk of the menu tree**
+into the column live (fixed places suppressed), highlighting the top hit;
+**Enter launches it**. **All Programs** (hover / click / arrow-Right)
+cascades the tree as flyout columns snugly off the column's right edge —
+startmenu2 lists the GROUPS, startmenu3 a group's leaves — one level deeper
+than the 0078 root-lists-groups layout, reusing `menu_open_flyout`
+wholesale. **Keyboard**: printable keys type into the search box; arrows
+walk the column; Enter launches the cursor row (the top hit in search
 mode); Right cascades All Programs; **Esc clears a non-empty search, then
 closes**. When a flyout is open its DEEPEST column owns the keys (the 0078
-arrows/type-ahead/Left/Esc). The Win95 sidebar band and the below-programs
-separator/fixed section are **gone** (superseded by the two panes). Non-
-goals recorded, not built: jump lists, tiles, live-filesystem search (only
-the menu tree), Aero glass on the menu.
+arrows/type-ahead/Left/Esc). Non-goals recorded, not built: jump lists,
+tiles, live-filesystem search (only the menu tree), Aero glass on the menu,
+and the Win7 in-place All-Programs slide (option A in todos/0132 — dropped
+as too heavy for a fixed-height pane without scrolling).
 
 **Desktop icons (todos/0029).** A fullscreen borderless wm surface,
 pinned to the bottom z layer at create (SET_LAYER since todos/0038;

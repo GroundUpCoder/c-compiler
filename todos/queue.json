@@ -36,7 +36,6 @@
     { "id": "0129", "priority": 2 },
     { "id": "0130", "priority": 2, "difficulty": "medium" },
     { "id": "0131", "priority": 3, "difficulty": "heavy" },
-    { "id": "0132", "priority": 0, "difficulty": "medium" },
     { "id": "0133", "priority": 2, "difficulty": "light", "blockedBy": ["0134", "0135", "0136", "0137"] },
     { "id": "0134", "difficulty": "light" },
     { "id": "0135", "difficulty": "medium" },
@@ -52,6 +51,7 @@
     { "id": "0149", "difficulty": "heavy" },
     { "id": "0150", "difficulty": "medium", "after": ["0149"] },
     { "id": "0152", "priority": 2, "after": ["0064"] },
-    { "id": "0153" }
+    { "id": "0153" },
+    { "id": "0156", "priority": 0 }
   ]
 }
