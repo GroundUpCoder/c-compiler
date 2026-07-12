@@ -1,6 +1,6 @@
 # 0161 — SDL_WaitEvent over pumpWait: take idle SDL apps off the vsync wake list
 
-- **Status**: open
+- **Status**: deferred (2026-07-12; deferred with its pair 0160; was: open)
 - **Design**: this file (found profiling the 0119 mgp present path)
 
 ## Goal

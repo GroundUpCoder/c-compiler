@@ -1,6 +1,7 @@
 # 0160 — compositor: scene-signature damage skip (idle GPU on static screens)
 
-- **Status**: open
+- **Status**: deferred (2026-07-12; an implementation was landed then reverted —
+  see the Deferral note; was: open)
 - **Design**: this file (found profiling the 0119 mgp present path)
 
 ## Goal
@@ -53,3 +54,41 @@ Standard compositor damage tracking. GPU idles on a static screen; the honest
   flake gate (`tests/flake.js`) since this touches the frame loop.
 - Pairs with 0161 (idle apps off the vsync wake list) for a fully idle system;
   0160 is the safe, self-contained first step (GPU only, no SDL-contract change).
+
+## Deferral note (2026-07-12)
+
+A full implementation was written, verified in the browser, then **reverted**
+per direction — preserved in history at commit `659902d` (revert `2d8433a`).
+Deferred alongside 0161 pending rework. What the attempt established, so the
+next pass doesn't rediscover it:
+
+- **The compositor half works and is cheap.** After the unconditional
+  `vsyncTick()`, `draw()` builds a per-frame signature `[version, frameW,
+  frameH, anims.length, (sid, contentId)*]` where `contentId` is the shm
+  surface's `SH_SEQ` or the gpu surface's `ImageBitmap` identity, and skips the
+  submit (no `getCurrentTexture()`, GPU idles) when it matches the last frame.
+  `_wmVersion` (kernel.js) already covers all geometry/z/focus/map/glass/title/
+  resizeDrag changes; content is the only thing it misses. An active anim forces
+  a submit every frame. A browser test (`tests/browser/os-compositor.mjs`, 11/11)
+  confirmed the desktop idles, the clock keeps ticking, and every real change
+  repaints.
+- **"Pure compositor.js" is NOT sufficient — and that's the crux to resolve.**
+  `wm.c`'s `draw_bar()` presents the taskbar EVERY frame, and host.js
+  `shmPresent` bumps `SH_SEQ` unconditionally, so the taskbar churns the
+  signature every frame and the skip never engages on a real desktop. The
+  attempt added a `bar_present()` content-memcmp gate in wm.c (present only on
+  change) as the companion. That works, but it means the item can't be
+  compositor-only; decide the right shape: (a) the wm.c taskbar gate (localized,
+  taxes nobody, but an app change), (b) a general host.js "don't present a frame
+  identical to the front buffer" skip in `shmPresent` (benefits all apps but
+  changes present semantics for every process/test), or (c) fold it into 0161
+  (park idle poll-loop apps so they stop presenting at all).
+- **Open triage before re-landing:** the v85-fixture kernel run flagged
+  `test_recycle_e2e` (6) and `test_wm_service_e2e` (3) failures on legs
+  (bin-glyph count, icon-menu size, double-click, launch legs) that are
+  UNRELATED to the taskbar-present path (`draw_desk`/icon-menu code untouched) —
+  likely parallel-load flakes, but a serial rerun was interrupted before
+  confirming. Confirm flake-vs-regression against pre-change `wm.c` first.
+- Boundary that stands regardless: an app presenting identical frames every rAF
+  (the `winbox` acceptance app) correctly keeps the GPU busy under 0160 alone —
+  that's 0161's domain.
