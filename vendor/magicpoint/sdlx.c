@@ -664,13 +664,15 @@ void XDrawString16(Display *d, Drawable t, GC gc, int x, int y, XChar2b *s, int 
 
 /* ---- send.c replacements (truecolor only) ---- */
 XImageInfo *imageToXImage(Display *disp, int scrn, Visual *vis, unsigned int ddepth,
-                          Image *image, int private_cmap, int fit, int verbose)
+                          Image *image, unsigned int private_cmap, unsigned int fit,
+                          unsigned int back, unsigned int verbose)
 {
 	XImageInfo *info;
 	XImage *xi;
 	unsigned int x, y;
 	byte *p;
-	(void)scrn; (void)vis; (void)ddepth; (void)private_cmap; (void)fit; (void)verbose;
+	(void)scrn; (void)vis; (void)ddepth; (void)private_cmap; (void)fit;
+	(void)back; (void)verbose;
 
 	info = calloc(1, sizeof(*info));
 	if (!info) return NULL;

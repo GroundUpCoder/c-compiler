@@ -51,6 +51,9 @@ const script = [
   keys('$MSID', ' '),
   'sleep 2',
   'wmctl shot $MSID /root/m2.ppm && echo m2-ok',
+  keys('$MSID', ' '),
+  'sleep 2',
+  'wmctl shot $MSID /root/m3.ppm && echo m3-ok',
   keys('$MSID', 'q'),
   'sleep 1.5',
   'echo ==mgpgone',
@@ -65,11 +68,12 @@ check('sent shot 2 taken', out.includes('s2-ok'));
 check('sent window closed on q', section(out, 'sentgone').trim() === '0');
 check('mgp shot 1 taken', out.includes('m1-ok'));
 check('mgp shot 2 taken', out.includes('m2-ok'));
+check('mgp shot 3 taken', out.includes('m3-ok'));
 check('mgp window closed on q', section(out, 'mgpgone').trim() === '0');
 check('session A completed', out.includes('ALLDONE'));
 
 /* ---- session B: read the PPMs back and assert pixels ---- */
-const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm\n',
+const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm\n',
   { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
@@ -89,7 +93,7 @@ function parsePpms(buffer) {
   return ppms;
 }
 const ppms = parsePpms(buf);
-check('read 4 PPMs back', ppms.length === 4, 'got ' + ppms.length);
+check('read 5 PPMs back', ppms.length === 5, 'got ' + ppms.length);
 
 function count(ppm, pred) {
   let n = 0;
@@ -112,8 +116,8 @@ function differ(p1, p2) {
   return n > 50;
 }
 
-if (ppms.length === 4) {
-  const [s1, s2, m1, m2] = ppms;
+if (ppms.length === 5) {
+  const [s1, s2, m1, m2, m3] = ppms;
   const spix = s1.w * s1.h;
   // sent slide 1: white background, black "sent" title
   const white = count(s1, (r, g, b) => r > 240 && g > 240 && b > 240);
@@ -133,6 +137,19 @@ if (ppms.length === 4) {
   // mgp page 2: %tab 1 "icon box green 50" bullets — pure green boxes
   const green = count(m2, (r, g, b) => r < 80 && g > 200 && b < 80);
   check('mgp page 2 has green box icons', green > 100, String(green));
+
+  // mgp page 3: %bgrad blue->black — the imageToXImage/background-pixmap
+  // path (this page CRASHED before the 9-arg imageToXImage arity fix)
+  check('mgp page 3 differs from page 2', differ(m2, m3));
+  let topBlue = 0, botDark = 0;
+  for (let x = 0; x < m3.w; x += 4) {
+    let i = m3.data + (10 * m3.w + x) * 3;
+    if (m3.buf[i] < 90 && m3.buf[i + 1] < 90 && m3.buf[i + 2] > 120) topBlue++;
+    i = m3.data + ((m3.h - 10) * m3.w + x) * 3;
+    if (m3.buf[i] < 50 && m3.buf[i + 1] < 50 && m3.buf[i + 2] < 70) botDark++;
+  }
+  check('mgp page 3 gradient: blue top band', topBlue > m3.w / 8, String(topBlue));
+  check('mgp page 3 gradient: dark bottom band', botDark > m3.w / 8, String(botDark));
 }
 
 fs.rmSync(dir, { recursive: true, force: true });
