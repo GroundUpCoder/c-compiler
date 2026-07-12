@@ -1,4 +1,21 @@
-# Handoff — start of thread (updated 2026-07-12; 0132 Start-menu single-column landed)
+# Handoff — start of thread (updated 2026-07-12; 0132 single-column + gucOS-band/bottom-All-Programs follow-up landed)
+
+## Latest: 0132 Start-menu follow-up (gucOS band + bottom All Programs)
+
+On top of the single-column revert below, a user-requested visual pass landed
+(same commit stream): a **gucOS branding band** down the left of the Start menu
+(root now **192×274**; vertical navy→blue gradient + "gucOS" via the new
+`draw_text_vert_s`, the 5×7 font rotated 90° CCW reading bottom-to-top) and
+**All Programs moved to the BOTTOM** of the column (XP/Vista/7 layout; cascades
+upward via the work-area clamp). Tests re-geometried to 192×274 (`AP_ROW`, band
+pixel assert, Run… at column row 1, keyboard Up→bottom All-Programs); kernel
+wm_service + all os-shell Start-menu legs green. Image **v77**. Dev log:
+`logs/2026-07-12/0132-startmenu-branding-and-bottom-allprograms.md`.
+**Icons**: filed **todos/0157** (P1) — a real permissively-licensed icon set
+(recommend Pixelarticons/MIT); there's no icon-image path in wm.c today, so it's
+a pipeline, not an asset swap. **Gotcha**: `git worktree remove` leaves its
+detached `serve.js` running — a zombie on port 3197 made os-shell boot the stale
+worktree; `lsof -iTCP:<port>` + kill if a browser test won't boot.
 
 > For the next Claude session: read this, orient, then **ask the user what
 > to work on** — don't start anything without direction. Delete or rewrite

@@ -34,14 +34,16 @@
  * created on Start-button click (or the Ctrl+Esc chord / `wmctl menu` —
  * WMP EV_MENU, the EV_CYCLE pattern) and destroyed on selection or dismiss
  * — SDL events dispatch per window by e.*.windowID. The ROOT window
- * ("startmenu") is a fixed-size single column: pinned entries
- * (~/.config/pinned) + MRU recents (~/.config/recent, pushed by activate()
- * on every real launch, capped at RECENT_MAX) + an "All Programs" row, then
- * a groove and the fixed places (Settings -> /bin/ctlpanel, Run... -> the
- * run dialog; Shut Down joins when todos/0051 lands), with a live SEARCH
- * box at its foot. Typing (the root holds keyboard focus) filters a flat
- * walk of the menu tree into the column live (fixed places suppressed);
- * Enter launches the top hit. "All Programs" (hover, click, or arrow-Right)
+ * ("startmenu") is a fixed-size single column with a gucOS branding band
+ * down the left (the Win95 sidebar): pinned entries (~/.config/pinned) + MRU
+ * recents (~/.config/recent, pushed by activate() on every real launch,
+ * capped at RECENT_MAX), a groove and the fixed places (Settings ->
+ * /bin/ctlpanel, Run... -> the run dialog; Shut Down joins when todos/0051
+ * lands), then — XP/Vista/7 style — the "All Programs" row at the BOTTOM,
+ * with a live SEARCH box at its foot. Typing (the root holds keyboard
+ * focus) filters a flat walk of the menu tree into the column live (fixed
+ * places suppressed); Enter launches the top hit. "All Programs" (hover,
+ * click, or arrow-Right)
  * cascades the menu tree as flyout columns snugly off the column's right
  * edge — each its own window titled "startmenu2"/"startmenu3"/...
  * so the EV_CREATED park can tell them apart, listing /etc/menu if that
@@ -188,23 +190,27 @@
 #define MENU_DEPTH   4      /* two-pane root + up to 3 cascading flyouts */
 #define MENU_FIXED   2      /* right-pane fixed rows (SETTINGS, RUN...) */
 
-/* Win95 single-column root (todos/0132, restyling the 0098 two-pane).
- * ONE column: pinned entries + MRU recents + an "All Programs" row (which
- * cascades the tree flyout), then a groove and the fixed places
- * (Settings, Run...), with a live search box at its foot. Flyouts
- * (depth >= 1) are the same single-column entry lists (the 0078
- * substrate) — dropping the right pane makes the cascade formula
- * (mcol[0].x + SM_ROOT_W - 3) hang the flyout snugly off the column's
- * right edge, where 0098's two-pane root threw it PAST the second pane.
- * The root is a FIXED size so its geometry doesn't shift with the
- * recents count. */
-#define SM_COL_W     170
+/* Win95 single-column root (todos/0132, restyling the 0098 two-pane; the
+ * gucOS branding band + bottom "All Programs" are the 0132 follow-up).
+ * A vertical gucOS BAND runs down the left (the Win95 sidebar), then ONE
+ * column: pinned entries + MRU recents, a groove, the fixed places
+ * (Settings, Run...), a groove, and — XP/Vista/7 style — the "All
+ * Programs" row at the BOTTOM (which cascades the tree flyout), with a
+ * live search box at its foot. Flyouts (depth >= 1) are the same
+ * single-column entry lists (the 0078 substrate) — dropping the right pane
+ * makes the cascade formula (mcol[0].x + SM_ROOT_W - 3) hang the flyout
+ * snugly off the column's right edge, where 0098's two-pane root threw it
+ * PAST the second pane; a bottom All-Programs cascades UPWARD via the
+ * work-area clamp (menu_open_col), exactly like Win7. The root is a FIXED
+ * size so its geometry doesn't shift with the recents count. */
+#define SM_SIDE_W    22     /* the gucOS branding band down the left */
+#define SM_COL_W     170    /* the item column, right of the band */
 #define SM_ROW_H     20
 #define SM_PAD       4
 #define SM_ROWS      12     /* column row slots (also the item cap) */
-#define SM_FIXED     2      /* trailing fixed rows: Settings, Run... */
+#define SM_FIXED     2      /* fixed rows folded into the column: Settings, Run... */
 #define SM_SEARCH_H  22     /* the search box at the foot of the column */
-#define SM_ROOT_W    SM_COL_W
+#define SM_ROOT_W    (SM_SIDE_W + SM_COL_W)
 #define SM_ROOT_H    (SM_PAD + SM_ROWS * SM_ROW_H + 4 + SM_SEARCH_H + SM_PAD)
 #define SM_SEARCH_Y  (SM_PAD + SM_ROWS * SM_ROW_H + 4)
 #define RECENT_MAX   8      /* MRU cap in ~/.config/recent */
@@ -541,6 +547,27 @@ static void draw_text_s(uint32_t *px, int sw, int sh, int x, int y,
             for (int c = 0; c < 5; c++)
                 if (g[r] & (0x10 >> c)) px[(y + r) * sw + x + c] = col;
         }
+    }
+}
+
+/* draw_text_s rotated 90° CCW as a vertical label reading BOTTOM-to-TOP —
+ * the Win95 sidebar title (todos/0132 follow-up): upright and correctly
+ * ordered when the head tilts left. (bx, by) is the bottom-left of the
+ * 7px-wide strip; the first char sits at the bottom and each advances UP by
+ * 6px. A glyph pixel (row r, col c) maps to horizontal r and vertical -c, a
+ * true (non-mirrored) rotation. */
+static void draw_text_vert_s(uint32_t *px, int sw, int sh, int bx, int by,
+                             const char *s, uint32_t col) {
+    for (; *s; s++, by -= 6) {
+        const uint8_t *g = glyph(*s);
+        if (!g) continue;
+        for (int r = 0; r < 7; r++)
+            for (int c = 0; c < 5; c++)
+                if (g[r] & (0x10 >> c)) {
+                    int xx = bx + r, yy = by - c;
+                    if (xx >= 0 && xx < sw && yy >= 0 && yy < sh)
+                        px[yy * sw + xx] = col;
+                }
     }
 }
 
@@ -1402,9 +1429,10 @@ static void sm_search_walk(const char *dir, const char *q, int depth) {
 
 /* Rebuild the column item list. Search mode (query non-empty): the flat
  * tree walk (the fixed places + All Programs are suppressed, and the tree
- * flyout is meaningless, so close it). Browse mode: pinned entries, then
- * MRU recents, then the All Programs row, then a groove and the fixed
- * places (Settings, Run...) folded in from the retired right pane (0132). */
+ * flyout is meaningless, so close it). Browse mode (XP/Vista/7 order,
+ * 0132 follow-up): pinned entries, then MRU recents, a groove and the
+ * fixed places (Settings, Run...), then a groove and the "All Programs"
+ * row LAST — at the bottom of the column, above the search box. */
 static void sm_rebuild_left(void) {
     sm_nleft = 0;
     if (sm_search_len > 0) {
@@ -1417,26 +1445,27 @@ static void sm_rebuild_left(void) {
     snprintf(rec, sizeof rec, "%s/.config/recent", sm_home());
     sm_load_list(pin, SMI_PIN);
     sm_load_list(rec, SMI_RECENT);
-    if (sm_nleft < SM_ROWS - SM_FIXED) {
-        sm_item *it = &sm_left[sm_nleft++];
-        snprintf(it->name, sizeof it->name, "%s", "All Programs");
-        it->path[0] = 0;
-        it->kind = SMI_ALLPROGS;
-    }
     static const struct { const char *name; int kind; } fixed[SM_FIXED] = {
         { "Settings", SMI_SETTINGS }, { "Run...", SMI_RUN },
     };
-    for (int i = 0; i < SM_FIXED && sm_nleft < SM_ROWS; i++) {
+    for (int i = 0; i < SM_FIXED && sm_nleft < SM_ROWS - 1; i++) {
         sm_item *it = &sm_left[sm_nleft++];
         snprintf(it->name, sizeof it->name, "%s", fixed[i].name);
         it->path[0] = 0;
         it->kind = fixed[i].kind;
     }
+    if (sm_nleft < SM_ROWS) {                 /* All Programs anchors the bottom */
+        sm_item *it = &sm_left[sm_nleft++];
+        snprintf(it->name, sizeof it->name, "%s", "All Programs");
+        it->path[0] = 0;
+        it->kind = SMI_ALLPROGS;
+    }
 }
 
 /* Cascade the menu tree as a flyout off the column's right edge, aligned
- * to the All Programs row. With the right pane gone (0132) SM_ROOT_W is
- * the column width, so the flyout hangs snugly beside the row. The flyout
+ * to the All Programs row. SM_ROOT_W spans the band + column, so the flyout
+ * hangs snugly beside the row; All Programs at the bottom row makes
+ * menu_open_col's work-area clamp cascade it UPWARD (Win7). The flyout
  * lists mcol[0].dir (the tree root); its groups cascade further via the
  * ordinary flyout machinery. */
 static void sm_open_allprogs(void) {
@@ -1449,11 +1478,11 @@ static void sm_open_allprogs(void) {
                   mcol[0].y + row * SM_ROW_H);
 }
 
-/* Zone/row under a root-window point (single column since 0132). Returns 0
- * an item row, 2 the search box, -1 dead zone; the row index lands in
- * *row. */
+/* Zone/row under a root-window point (single column since 0132; the gucOS
+ * band occupies x < SM_SIDE_W). Returns 0 an item row, 2 the search box,
+ * -1 dead zone (incl. the band); the row index lands in *row. */
 static int sm_root_hit(int x, int y, int *row) {
-    if (x < 0 || x >= SM_COL_W) return -1;
+    if (x < SM_SIDE_W || x >= SM_ROOT_W) return -1;
     if (y >= SM_SEARCH_Y) return 2;              /* the search box strip */
     int i = (y - SM_PAD) / SM_ROW_H;
     if (y >= SM_PAD && i >= 0 && i < sm_nleft) { *row = i; return 0; }
@@ -1549,33 +1578,45 @@ static void draw_root_menu(void) {
              sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
              sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255),
              white = rgb(255, 255, 255), ghost = rgb(128, 128, 128);
+    const int X0 = SM_SIDE_W;              /* item column starts right of the band */
     fill_s(px, w, h, 0, 0, w, h, face);
     /* raised outer edge (Win95 chrome carried over) */
     fill_s(px, w, h, 0, 0, w, 1, hi);
     fill_s(px, w, h, 0, 0, 1, h, hi);
     fill_s(px, w, h, 0, h - 1, w, 1, sh);
     fill_s(px, w, h, w - 1, 0, 1, h, sh);
-    /* the single column of items (pins/recents, All Programs, Settings/Run) */
+    /* the gucOS branding band down the left (the Win95 sidebar): a vertical
+     * navy->blue gradient with "gucOS" rotated reading bottom-to-top, and a
+     * sunken divider between the band and the item column (todos/0132). */
+    for (int j = 1; j < h - 1; j++) {
+        int b = 72 + (j * 140) / h;        /* darker at top, brighter at foot */
+        fill_s(px, w, h, 1, j, SM_SIDE_W - 2, 1, rgb(0, 16, b));
+    }
+    draw_text_vert_s(px, w, h, (SM_SIDE_W - 7) / 2, (h + 28) / 2, "gucOS",
+                     rgb(224, 224, 240));
+    fill_s(px, w, h, SM_SIDE_W - 1, 1, 1, h - 2, sh);      /* divider shadow */
+    fill_s(px, w, h, SM_SIDE_W, 1, 1, h - 2, hi);          /* divider hilite */
+    /* the single column of items (pins/recents, Settings/Run, All Programs) */
     for (int i = 0; i < sm_nleft; i++) {
         int y = SM_PAD + i * SM_ROW_H;
         int hl = i == sm_lhover;
-        if (hl) fill_s(px, w, h, 2, y, SM_COL_W - 4, SM_ROW_H, sel);
-        /* a groove above the All Programs row and above the fixed section
-         * (Settings), the Win95 separator between the program list and the
-         * places (todos/0132) */
+        if (hl) fill_s(px, w, h, X0 + 2, y, SM_COL_W - 4, SM_ROW_H, sel);
+        /* a groove above the fixed section (Settings) and above the bottom
+         * All Programs row — the Win95 separators between the program list,
+         * the places, and the All-Programs gateway (todos/0132) */
         if (i > 0 && (sm_left[i].kind == SMI_ALLPROGS ||
                       sm_left[i].kind == SMI_SETTINGS))
-            fill_s(px, w, h, 6, y - 1, SM_COL_W - 12, 1, sh);
-        draw_text_s(px, w, h, 10, y + (SM_ROW_H - 7) / 2, sm_left[i].name,
+            fill_s(px, w, h, X0 + 6, y - 1, SM_COL_W - 12, 1, sh);
+        draw_text_s(px, w, h, X0 + 10, y + (SM_ROW_H - 7) / 2, sm_left[i].name,
                     hl ? seltxt : txt);
         if (sm_left[i].kind == SMI_ALLPROGS) {            /* cascade arrow */
-            int ax = SM_COL_W - 12, ay = y + (SM_ROW_H - 7) / 2;
+            int ax = X0 + SM_COL_W - 12, ay = y + (SM_ROW_H - 7) / 2;
             for (int t = 0; t < 4; t++)
                 fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t, hl ? seltxt : txt);
         }
     }
     /* the search box (sunken white field) at the foot of the column */
-    int bx = SM_PAD, by = SM_SEARCH_Y, bw = SM_COL_W - 2 * SM_PAD,
+    int bx = X0 + SM_PAD, by = SM_SEARCH_Y, bw = SM_COL_W - 2 * SM_PAD,
         bh = SM_SEARCH_H - 2;
     fill_s(px, w, h, bx, by, bw, bh, white);
     fill_s(px, w, h, bx, by, bw, 1, sh);

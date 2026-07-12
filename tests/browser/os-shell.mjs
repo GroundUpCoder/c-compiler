@@ -76,15 +76,19 @@ try {
   check('Start button face at the taskbar left', near(await sample(44, BARY), FACE),
     await sample(44, BARY));
 
-  // The single-column root (os/wm.c, todos/0098+0132): a fixed 170x274 panel
-  // above the 28px taskbar. ONE column = pinned + MRU recents + an "All
-  // Programs" row, then a groove and the fixed places Settings then Run...,
-  // with a search box at its foot. Clear recents/pins first so the column is
-  // deterministic ([All Programs, Settings, Run...] at rows 0-2); "All
-  // Programs" cascades the tree snugly off the column's right edge —
-  // startmenu2 lists the GROUPS, startmenu3 a group's leaves.
-  const SM_W = 170, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
+  // The single-column root (os/wm.c, todos/0098+0132 + follow-up): a fixed
+  // 192x274 panel above the 28px taskbar. A 22px gucOS branding BAND runs down
+  // the left, then a 170px column = pinned + MRU recents, a groove, the fixed
+  // places Settings/Run..., a groove, and — XP/Vista/7 style — the "All
+  // Programs" row at the BOTTOM, with a search box at its foot. Clear
+  // recents/pins first so the column is deterministic ([Settings, Run...,
+  // All Programs] at rows 0-2, AP_ROW=2); "All Programs" cascades the tree
+  // snugly off the column's right edge — startmenu2 lists the GROUPS,
+  // startmenu3 a group's leaves. Item x is offset past the SM_SIDE band.
+  const SM_SIDE = 22, SM_COL = 170;
+  const SM_W = SM_SIDE + SM_COL, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
   const SM_Y = SH - 28 - SM_H;
+  const AP_ROW = 2;                              // All Programs row, recents cleared
   const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
   const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;
   const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
@@ -125,8 +129,8 @@ try {
   // Map-on-placement (todos/0069): burst-capture frames THROUGH the open —
   // the menu must never composite at the kernel cascade default (the
   // top-left band) before appearing parked above the taskbar. (120, SM_Y+74)
-  // is an empty column row (recents cleared -> rows 0-2 are All Programs +
-  // Settings + Run..., so row 3 at y+74 is blank), face gray only once parked.
+  // is an empty column row (recents cleared -> rows 0-2 are Settings + Run... +
+  // All Programs, so row 3 at y+74 is blank), face gray only once parked.
   const CASC_H = Math.min(460, SM_Y - 10);
   const burst = page.evaluate(([px0, py0, ch]) => new Promise((resolve) => {
     const c = document.getElementById('screen');
@@ -162,20 +166,30 @@ try {
     maxCasc < 300, { maxCasc, frames: frames.length });
   await waitPixel(120, SM_Y + 74, FACE);         // settle
 
-  // The search box is a sunken white field at the foot of the column.
+  // The gucOS branding band down the left (x < SM_SIDE): a blue gradient
+  // (blue channel high, red low).
+  {
+    const b = await sample(10, SM_Y + Math.floor(SM_H / 2));
+    check('gucOS branding band is a blue gradient down the left',
+      b && b[2] > 60 && b[0] < 40, b);
+  }
+  // The search box is a sunken white field at the foot of the column (right
+  // of the band).
   check('search box is a white field at the foot of the column',
-    near(await sample(40, SM_SEARCH_Y + 8), [255, 255, 255]), await sample(40, SM_SEARCH_Y + 8));
+    near(await sample(SM_SIDE + 18, SM_SEARCH_Y + 8), [255, 255, 255]),
+    await sample(SM_SIDE + 18, SM_SEARCH_Y + 8));
 
-  // All Programs (left row 0) cascades the tree flyout of groups
+  // All Programs (the BOTTOM row) cascades the tree flyout of groups
   // (startmenu2 at x = SM_W - 3), then a group cascades its leaves
   // (startmenu3). Hover All Programs, then the Demos group.
-  await page.mouse.move(rect.x + 60, rect.y + SM_Y + 14);
-  await waitPixel(SM_W - 3 + 40, SM_Y + 6, FACE);
+  await page.mouse.move(rect.x + 60, rect.y + SM_Y + SM_PAD + AP_ROW * SM_ROW_H + 10);
+  await waitPixel(SM_W - 3 + 40, SM_Y + AP_ROW * SM_ROW_H + 6, FACE);
   check('All Programs cascades the tree flyout', true);
   const DEMOS_ROW = MENU_GROUPS.indexOf('Demos');
-  await page.mouse.move(rect.x + SM_W - 3 + 40, rect.y + SM_Y + flyRowY(DEMOS_ROW));
-  // startmenu3 parks at (SM_W-3 + 150-3, SM_Y + DEMOS_ROW*SM_ROW_H).
-  const FLY3_X = SM_W - 3 + 150 - 3, FLY3_Y = SM_Y + DEMOS_ROW * SM_ROW_H;
+  const FLY2_Y = SM_Y + AP_ROW * SM_ROW_H;
+  await page.mouse.move(rect.x + SM_W - 3 + 40, rect.y + FLY2_Y + flyRowY(DEMOS_ROW));
+  // startmenu3 parks at (SM_W-3 + 150-3, FLY2_Y + DEMOS_ROW*SM_ROW_H).
+  const FLY3_X = SM_W - 3 + 150 - 3, FLY3_Y = FLY2_Y + DEMOS_ROW * SM_ROW_H;
   await waitPixel(FLY3_X + 40, FLY3_Y + 6, FACE);
   check('the Demos group cascades its leaves', true);
   await clickAt(FLY3_X + 60, FLY3_Y + flyRowY(DEMOS.indexOf('winbox')));
@@ -218,14 +232,13 @@ try {
   const wb3 = await winCount();
   check('Enter launches the search top hit (winbox +1)', wb3 === wb2 + 1, { wb2, wb3 });
 
-  // The Run... place is column row 2 (after All Programs + Settings): click
-  // it, the dialog opens (see the builtin leg below). Clear recents first so
-  // the row is deterministic, then confirm the click dismisses the menu into
-  // the dialog.
+  // The Run... place is column row 1 (after Settings): click it, the dialog
+  // opens (see the builtin leg below). Clear recents first so the row is
+  // deterministic, then confirm the click dismisses the menu into the dialog.
   await clearRecents();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
-  await clickAt(60, SM_Y + SM_PAD + 2 * SM_ROW_H + 10);   // column row 2 = Run...
+  await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 10);   // column row 1 = Run...
   await waitPixel(120, SM_Y + 74, TEAL);
   check('Run... click dismisses the menu (opens the dialog)', true);
   await page.keyboard.press('Escape');           // close the run dialog
@@ -404,7 +417,7 @@ try {
   check('minimize reveals the desktop', true);
 
   // ---- the Run... builtin (todos/0078; folded into the column by 0132) ----
-  // Start -> the Run... place (column row 2, recents cleared) opens the dialog
+  // Start -> the Run... place (column row 1, recents cleared) opens the dialog
   // (240x70 bottom-left, white input box); typed command + Enter spawns via
   // /bin/sh -c.
   const WHITE2 = [255, 255, 255];
@@ -412,7 +425,7 @@ try {
   await clearRecents();
   await clickAt(25, BARY);
   await waitPixel(120, SM_Y + 74, FACE);
-  await clickAt(60, SM_Y + SM_PAD + 2 * SM_ROW_H + 10);   // Run... (column row 2)
+  await clickAt(60, SM_Y + SM_PAD + 1 * SM_ROW_H + 10);   // Run... (column row 1)
   await waitPixel(200, SH - 28 - 70 - 6 + 35, WHITE2);   // the input box
   check('Run... place opens the run dialog', true);
   check('the menu closed behind it', near(await sample(120, SM_Y + 74), TEAL),

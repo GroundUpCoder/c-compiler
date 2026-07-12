@@ -29,20 +29,22 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-wm-');
 
-// The single-column Start menu (os/wm.c, todos/0098+0132): a FIXED 170x274
-// root parked above the 28px taskbar on the 1024x768 headless screen. ONE
-// column (170px): pinned + MRU recents + an "All Programs" row, then a
-// groove and the fixed places Settings (row after All Programs) and Run...,
+// The single-column Start menu (os/wm.c, todos/0098+0132 + follow-up): a
+// FIXED 192x274 root parked above the 28px taskbar on the 1024x768 headless
+// screen. A 22px gucOS branding BAND runs down the left, then a 170px
+// column: pinned + MRU recents, a groove and the fixed places Settings/Run...,
+// a groove, and — XP/Vista/7 style — the "All Programs" row at the BOTTOM,
 // with a search box at its foot (y 248). "All Programs" cascades the menu
 // tree as flyout columns snugly off the column's right edge — startmenu2
-// lists the baked GROUPS (dirs-first sort), startmenu3 a group's leaves —
-// one level deeper than the 0078 root-lists-groups layout. Recents
-// (~/.config/recent) grow via the wm's activate() on every real launch;
-// clearing recents+pinned keeps the column deterministic ([All Programs,
-// Settings, Run...] at rows 0-2). Bump the leaf lists when image.json's menu
-// tree changes.
-const SM_W = 170, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
+// lists the baked GROUPS (dirs-first sort), startmenu3 a group's leaves.
+// Recents (~/.config/recent) grow via the wm's activate() on every real
+// launch; clearing recents+pinned keeps the column deterministic ([Settings,
+// Run..., All Programs] at rows 0-2, so AP_ROW=2). Item x is offset by the
+// SM_SIDE band. Bump the leaf lists when image.json's menu tree changes.
+const SM_SIDE = 22, SM_COL = 170;
+const SM_W = SM_SIDE + SM_COL, SM_H = 274, SM_ROW_H = 20, SM_PAD = 4, SM_ROWS = 12;
 const SM_Y = 768 - 28 - SM_H;                    // 466
+const AP_ROW = 2;                                // All Programs row, recents cleared
 const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
 const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 248
 const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };
@@ -134,9 +136,9 @@ const script = [
   'wmctl list',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',   // new wm, new sid
   // ---- the Start menu (todos/0028; single-column todos/0098+0132) ----
-  // Virgin recents so the column starts [All Programs, Settings, Run...] (rows 0-2): open,
-  // cascade All Programs -> the tree flyout (GROUPS) -> a nested leaf, which
-  // launches winbox AND records a recent.
+  // Virgin recents so the column is [Settings, Run..., All Programs] (rows 0-2,
+  // All Programs at the bottom): open, cascade All Programs -> the tree flyout
+  // (GROUPS) -> a nested leaf, which launches winbox AND records a recent.
   'rm -f /root/.config/recent /root/.config/pinned',
   'wmctl click $TSID 25 14',                      // Start button (x < 50)
   'wmctl wait win startmenu',
@@ -144,7 +146,7 @@ const script = [
   'wmctl list',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl shot $MSID /root/m.ppm && echo menu-shot-ok',
-  'wmctl hover $MSID 60 14',                      // All Programs (row 0) -> the tree
+  `wmctl hover $MSID 60 ${AP_ROW * SM_ROW_H + 14}`,   // All Programs (bottom row) -> the tree
   'wmctl wait win startmenu2',
   'echo ==menu1b',
   'wmctl list',
@@ -390,14 +392,14 @@ const script = [
   'wmctl wait nowin startmenu',
   'echo ==sm4c',
   'wmctl list',
-  // Run... (column row 2, below All Programs + Settings): clear recents+pinned
-  // so the column is deterministic [All Programs, Settings, Run...], open the
-  // dialog, type "winbox", Enter.
+  // Run... (column row 1, after Settings): clear recents+pinned so the column
+  // is deterministic [Settings, Run..., All Programs], open the dialog, type
+  // "winbox", Enter.
   'rm -f /root/.config/recent /root/.config/pinned',
   'wmctl menu',
   'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $MSID 60 ${SM_PAD + 2 * SM_ROW_H + 10}`,
+  `wmctl click $MSID 60 ${SM_PAD + 1 * SM_ROW_H + 10}`,
   'wmctl wait win startrun',
   'echo ==sm5',
   'wmctl list',
@@ -413,16 +415,16 @@ const script = [
   'wmctl wait atleast winbox $((GR+1))',         // RUN... dialog sh -c winbox spawns
   'echo ==sm6',
   'wmctl list',
-  // Keyboard All Programs cascade over an /etc/menu override tree: Down to
-  // All Programs, Right cascades the tree, Right descends the group, Enter
-  // runs the launcher.
+  // Keyboard All Programs cascade over an /etc/menu override tree: Up wraps to
+  // All Programs (the bottom row), Right cascades the tree, Right descends the
+  // group, Enter runs the launcher.
   'mkdir -p /etc/menu/Apps',
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/Apps/go",
-  'rm -f /root/.config/recent',                  // column starts [All Programs, Settings, Run...]
+  'rm -f /root/.config/recent /root/.config/pinned',   // column = [Settings, Run..., All Programs]
   'wmctl menu',
   'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
-  'wmctl key $MSID 81 1073741905',               // Down -> All Programs (row 0)
+  'wmctl key $MSID 82 1073741906',               // Up -> All Programs (bottom row)
   'wmctl key $MSID 79 1073741903',               // Right -> the tree flyout (Apps)
   'wmctl wait win startmenu2',
   'echo ==sm7',
@@ -853,7 +855,7 @@ const menu1 = row(m1, 'startmenu');
 check(`Start click opens the single-column root above the taskbar (${SM_GEOM}, borderless)`,
   menu1.includes(SM_GEOM) && menu1.includes('b'), JSON.stringify(m1));
 check('menu shot written', out.includes('menu-shot-ok'));
-const tree = fly(SM_ROOT, 0, MENU_GROUPS.length);        // All Programs at row 0
+const tree = fly(SM_ROOT, AP_ROW, MENU_GROUPS.length);   // All Programs at the bottom row
 const fly1 = row(m1b, 'startmenu2');
 check(`All Programs cascades the tree flyout of GROUPS (${tree.geom})`,
   fly1.includes(tree.geom) && fly1.includes('b'), JSON.stringify(m1b));
@@ -1049,11 +1051,11 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       clock >= 15, clock);
   }
 
-  // The Start menu shot (todos/0098+0132): the single-column root — with
-  // recents+pinned cleared the column is [All Programs (row 0, cascade
-  // arrow), Settings (row 1), Run... (row 2)], a groove above Settings, and
-  // the search box with its "Search" ghost at the foot. Hover is -1 before
-  // the shot, so nothing is navy-highlighted.
+  // The Start menu shot (todos/0098+0132 + follow-up): a gucOS branding band
+  // down the left (x < SM_SIDE), then the column — with recents+pinned cleared
+  // it is [Settings (row 0), Run... (row 1), All Programs (row 2, cascade
+  // arrow)] with grooves, and the search box with its "Search" ghost at the
+  // foot. Hover is -1 before the shot, so nothing is navy-highlighted.
   const mppm = COMMON.readFileBytes(ufs, '/root/m.ppm');
   const mhead = Buffer.from(mppm.subarray(0, 20)).toString('latin1');
   const mmm = /^P6\n(\d+) (\d+)\n255\n/.exec(mhead);
@@ -1063,24 +1065,32 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     const moff = mhead.indexOf('255\n') + 4, MW = SM_W;
     const mpx = (x, y) =>
       Array.from(mppm.subarray(moff + (y * MW + x) * 3, moff + (y * MW + x) * 3 + 3));
-    check('All Programs row carries the cascade arrow',
-      String(mpx(SM_W - 12, 12)) === '0,0,0', mpx(SM_W - 12, 12));
+    // the gucOS branding band: a blue gradient (blue channel high, red low)
+    const band = mpx(10, Math.floor(SM_H / 2));
+    check('gucOS branding band is a blue gradient down the left',
+      band[2] > 60 && band[0] < 40, band);
+    // All Programs is the BOTTOM row (row 2) and carries the cascade arrow at
+    // the column's right edge
+    const apY = SM_PAD + AP_ROW * SM_ROW_H;
+    check('All Programs (bottom row) carries the cascade arrow',
+      String(mpx(SM_W - 12, apY + 9)) === '0,0,0', mpx(SM_W - 12, apY + 9));
     let lBlack = 0;
-    for (let y = 4; y < 24; y++)
-      for (let x = 8; x < SM_W - 14; x++)
+    for (let y = apY; y < apY + SM_ROW_H; y++)
+      for (let x = SM_SIDE + 8; x < SM_W - 14; x++)
         if (String(mpx(x, y)) === '0,0,0') lBlack++;
-    check('All Programs label text present', lBlack >= 20, lBlack);
-    // the fixed places fold into the column as rows 1-2 (Settings, Run...)
+    check('All Programs label text present (bottom row)', lBlack >= 20, lBlack);
+    // the fixed places sit in the column above it, rows 0-1 (Settings, Run...)
     let fBlack = 0;
-    for (let y = SM_PAD + SM_ROW_H; y < SM_PAD + 3 * SM_ROW_H; y++)
-      for (let x = 8; x < 70; x++)
+    for (let y = SM_PAD; y < SM_PAD + 2 * SM_ROW_H; y++)
+      for (let x = SM_SIDE + 8; x < SM_SIDE + 70; x++)
         if (String(mpx(x, y)) === '0,0,0') fBlack++;
     check('fixed places text present in the column (Settings / Run...)', fBlack >= 30, fBlack);
     check('search box is a sunken white field',
-      String(mpx(40, SM_SEARCH_Y + 8)) === '255,255,255', mpx(40, SM_SEARCH_Y + 8));
+      String(mpx(SM_SIDE + 18, SM_SEARCH_Y + 8)) === '255,255,255',
+      mpx(SM_SIDE + 18, SM_SEARCH_Y + 8));
     let ghost = 0;
     for (let y = SM_SEARCH_Y; y < SM_SEARCH_Y + 20; y++)
-      for (let x = 8; x < 60; x++)
+      for (let x = SM_SIDE + 8; x < SM_SIDE + 60; x++)
         if (String(mpx(x, y)) === '128,128,128') ghost++;
     check('search box "Search" ghost text', ghost >= 8, ghost);
   }
@@ -1109,13 +1119,13 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     JSON.stringify([row(s4a, 'startmenu') !== '', row(s4b, 'startmenu') !== '']));
   check('a second Esc dismisses the menu', row(s4c, 'startmenu') === '',
     JSON.stringify(s4c));
-  check('the Run... place (column row 2) opens the run dialog (240x70, above the bar)',
+  check('the Run... place (column row 1) opens the run dialog (240x70, above the bar)',
     row(s5, 'startrun').includes('240x70+6+664') && row(s5, 'startmenu') === '',
     JSON.stringify(s5));
   check('typed command + Enter launches it (sh -c winbox: +1) and closes the dialog',
     count(s6, 'winbox') === count(s5, 'winbox') + 1 && row(s6, 'startrun') === '',
     JSON.stringify([count(s5, 'winbox'), count(s6, 'winbox')]));
-  check('keyboard Down+Right cascades the All Programs tree flyout',
+  check('keyboard Up+Right cascades the All Programs tree flyout',
     row(s7, 'startmenu2') !== '', JSON.stringify(s7));
   check('keyboard Right+Enter runs the nested launcher (winbox +1)',
     count(s8, 'winbox') === count(s7, 'winbox') + 1,
