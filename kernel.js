@@ -1256,6 +1256,7 @@ Tty.prototype.getattr = function () {
 };
 
 Tty.prototype.setattr = function (actions, t) {
+  var wasCanon = (this.termios.lflag & T_ICANON) !== 0;
   this.termios.iflag = t.iflag >>> 0;
   this.termios.oflag = t.oflag >>> 0;
   this.termios.cflag = t.cflag >>> 0;
@@ -1269,6 +1270,16 @@ Tty.prototype.setattr = function (actions, t) {
     Atomics.store(this._i32, SI_READPOS, Atomics.load(this._i32, SI_WRITEPOS));
     Atomics.store(this._i32, SI_AVAIL, 0);
     this._line = [];
+    this._cooked = [];              // brokered-mode queue (the ring is unused there)
+  } else if (wasCanon && !(this.termios.lflag & T_ICANON) && this._line.length) {
+    // Leaving canonical mode mid-line (Linux n_tty semantics, the 0171 wedge
+    // class): the un-terminated edit buffer becomes readable NOW. Stranding
+    // it splits a typed line straddling a shell's cooked window -> its line
+    // editor's raw switch — the head is lost and the surviving tail executes
+    // (or opens an unbalanced quote and wedges the shell in PS2 forever).
+    var part = this._line;
+    this._line = [];
+    this._push(part);
   }
   this._publishModeWord();
   this.wakeReaders();

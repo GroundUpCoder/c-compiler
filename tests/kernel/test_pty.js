@@ -209,6 +209,24 @@ async function drain(pid, fd) {
   r = await rpc(sh, K.OP.TCGETATTR, { fd: 0 });
   await rpc(sh, K.OP.TCSETATTR, { fd: 0, actions: 0, iflag: 0x100, oflag: 0x3, cflag: r.cflag, lflag: 0x18E, cc: r.cc });
 
+  // ---- canonical -> raw mid-line over the BROKERED path (0171): the
+  // edit buffer flushes to the reader; TCSAFLUSH discards the brokered
+  // cooked queue (test_tty.js covers the ring mode twins) ----
+  const tio = await rpc(sh, K.OP.TCGETATTR, { fd: 0 });
+  await wRpc(1, mfd, Buffer.from('head '));      // canonical, no newline: edit buffer
+  await rpc(sh, K.OP.TCSETATTR, { fd: 0, actions: 0, iflag: 0, oflag: tio.oflag, cflag: tio.cflag, lflag: 0, cc: tio.cc });
+  await wRpc(1, mfd, Buffer.from('tail\r'));     // raw tail of the same line
+  r = await rpc(sh, K.OP.FS_READ, { fd: 0, count: 100 });
+  check('canonical->raw flushes the edit buffer to the reader (brokered)',
+    r.raw && str(r.raw) === 'head tail\r', JSON.stringify(r));
+  await wRpc(1, mfd, Buffer.from('stale'));      // raw, queued unread
+  await rpc(sh, K.OP.TCSETATTR, { fd: 0, actions: 2 /* TCSAFLUSH */, iflag: 0x100, oflag: 0x3, cflag: tio.cflag, lflag: 0x18E, cc: tio.cc });
+  await wRpc(1, mfd, Buffer.from('fresh\r'));
+  r = await rpc(sh, K.OP.FS_READ, { fd: 0, count: 100 });
+  check('TCSAFLUSH discards the brokered cooked queue',
+    r.raw && str(r.raw) === 'fresh\n', JSON.stringify(r));
+  await drain(1, mfd);
+
   // ---- tcgetpgrp/tcsetpgrp resolve per-fd ----
   r = await rpc(sh, K.OP.TCGETPGRP, { fd: 0 });
   check('tcgetpgrp on the slave reads the pty fg', r.pgid === sh, JSON.stringify(r));

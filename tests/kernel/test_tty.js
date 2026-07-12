@@ -149,6 +149,29 @@ const bit = (sig) => 1 << (sig - 1);
   check('TCSAFLUSH discards unread input', ringAvail() === 0);
   takeEcho();
 
+  // ---- canonical -> raw mid-line: the edit buffer must become readable
+  // (Linux n_tty semantics; the 0171 wedge class). Bytes typed while a
+  // shell is BETWEEN reads (cooked window) go into the canonical edit
+  // buffer; when the shell's line editor then switches the tty raw, those
+  // bytes must flow to the reader — stranding them splits the typed line
+  // (head lost, tail executed: 'echo X' arrives as 'cho X', or an
+  // unbalanced quote locks the shell into PS2 continuation forever). ----
+  tty.input('head ');                    // canonical, no newline: edit buffer
+  r = await rpc(1, K.OP.TCGETATTR, {});
+  await rpc(1, K.OP.TCSETATTR, { actions: 0, iflag: 0, oflag: r.oflag, cflag: r.cflag, lflag: 0, cc: r.cc });
+  tty.input('tail\r');                   // raw tail of the same typed line
+  check('canonical->raw flushes the edit buffer to the reader (no stranding)',
+    ringTake() === 'head tail\r');
+  // and TCSAFLUSH across the same switch still discards BOTH halves
+  await rpc(1, K.OP.TCSETATTR, { actions: 0, iflag: 0x100, oflag: r.oflag, cflag: r.cflag, lflag: 0x18E, cc: r.cc });
+  tty.input('doomed');                   // canonical edit buffer again
+  await rpc(1, K.OP.TCSETATTR, { actions: 2 /* TCSAFLUSH */, iflag: 0, oflag: r.oflag, cflag: r.cflag, lflag: 0, cc: r.cc });
+  tty.input('x');
+  check('TCSAFLUSH across canonical->raw discards the edit buffer too',
+    ringTake() === 'x');
+  await rpc(1, K.OP.TCSETATTR, { actions: 0, iflag: 0x100, oflag: r.oflag, cflag: r.cflag, lflag: 0x18E, cc: r.cc });
+  takeEcho();
+
   // ---- SIGWINCH on resize (fg pgroup, handler disposition) ----
   await rpc(2, K.OP.SIGDISP, { sig: 28, kind: 2 });
   tty.resize(100, 50);

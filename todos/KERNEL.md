@@ -448,7 +448,11 @@ the kernel's line discipline:
   replaced).
 - Canonical mode: kernel-side line buffer with erase/kill/EOF handling and
   echo; raw mode: bytes pass straight through. Echo renders by sending bytes
-  back out the UI bridge.
+  back out the UI bridge. Leaving canonical mode mid-line flushes the
+  un-terminated edit buffer to the readers (Linux n_tty semantics; 0171 —
+  stranding it split any typed line that straddled a shell's cooked window
+  and its line editor's raw switch), and `TCSAFLUSH` discards queued input
+  in BOTH transports (ring and brokered cooked queue).
 - **Control chars route as signals to the foreground pgroup**: VINTR→SIGINT,
   VQUIT→SIGQUIT, VSUSP→SIGTSTP. This is the payoff of tty-in-kernel: Ctrl-C
   finally means something.
