@@ -1,8 +1,35 @@
 # 0171 — VT1-typed command flows flake under load (os-fileman ~33%, os-doom ~12-37%; pre-existing at 23315f1)
 
-- **Status**: open
-- **Design**: — (found during 0167's gates, 2026-07-13; full evidence in
-  logs/2026-07-13/0167-vsync-shim-browser.md)
+- **Status**: done (2026-07-13)
+- **Design**: — (found during 0167's gates, 2026-07-13; evidence in
+  logs/2026-07-13/0167-vsync-shim-browser.md; root cause + fix in
+  logs/2026-07-13/0171-tty-stranding.md)
+
+## Resolution (2026-07-13) — TWO product bugs
+
+1. **Kernel tty: canonical edit-buffer stranding** (the wedge class),
+   reproduced headless (browser exonerated): `Tty.setattr` STRANDED the
+   canonical `_line` edit buffer across a cooked→raw switch, so a typed
+   line straddling hush's between-reads cooked window and lineedit's raw
+   entry lost its head — the tail executed alone, and an unbalanced-quote
+   tail wedged hush in PS2 continuation forever (the captured "echo alive,
+   reader dead"). Fixed in kernel.js: ICANON on→off flushes `_line` to the
+   reader path (Linux n_tty semantics), and TCSAFLUSH now clears the
+   brokered `_cooked` queue too. Regression tests: test_tty.js (ring) +
+   test_pty.js (brokered) legs, failing pre-fix. Post-fix paced repro:
+   200/200 clean under full-core load.
+2. **user32 agent protocol: popup items invisible to waits** (surfaced by
+   the leg conversion): AQ_GETTEXT — behind `wmctl wait label`/`text` —
+   only walked HWNDs, so every kernel-e2e wait on a popup item silently
+   ran out its full timeout (a fixed sleep in disguise). Now resolves the
+   OPEN menu's items (g_menu.open gated; closed bar items stay invisible
+   by design — `wait label Save` must keep meaning the dialog button).
+   test_fileman_ops_e2e: 117s → 27s. image.json → v85.
+
+Both flaky legs converted off fixed sleeps (shLine markers / wmctl wait
+guards; CLOSE-SENT echoes before VT2-away). tools/os-drive.mjs +
+tools/os-drive-scripts/doom-close-probe.mjs landed per the scope addition.
+Full story: logs/2026-07-13/0171-tty-stranding.md.
 
 ## Goal
 

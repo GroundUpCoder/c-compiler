@@ -165,7 +165,11 @@ try {
   await page.keyboard.type('wmctl list\r');
   await page.waitForFunction(() => window.__osOut.includes('DOOM Shareware'), { timeout: 20000, polling: 200 });
   check('wmctl list from the shell shows DOOM Shareware', true);
-  await page.keyboard.type('wmctl close $(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//")\r');
+  // Wait for the close to be TYPED + EXECUTED before leaving VT1 (0171: a
+  // line lost under load is otherwise indistinguishable from a stuck app);
+  // split needle so the typed echo can't satisfy the wait.
+  await page.keyboard.type('wmctl close $(wmctl list | grep "DOOM Shareware$" | sed "s/[^0-9].*//") && echo CLOSE-S""ENT-1\r');
+  await page.waitForFunction(() => window.__osOut.includes('CLOSE-SENT-1'), { timeout: 20000, polling: 200 });
   await setVt(2);
   // "Restored" = the region returns to the pre-launch baseline signature
   // (icon grid and all) — only the WINDOW must be gone, not the icons.
@@ -185,7 +189,8 @@ try {
     (HAVE_ROM ? ' (ROM from /root/roms)' : ' (built-in test ROM; local ROM absent)'),
     true, { colors: gb.colors });
   await setVt(1);
-  await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//")\r');
+  await page.keyboard.type('wmctl close $(wmctl list | grep "Peanut-GB$" | sed "s/[^0-9].*//") && echo CLOSE-S""ENT-2\r');
+  await page.waitForFunction(() => window.__osOut.includes('CLOSE-SENT-2'), { timeout: 20000, polling: 200 });
   await setVt(2);
   await waitFrame(GB_REGION, s => s.h === baseGb.h, 30000);   // icons stay (0029)
   check('wmctl close quit gameboy; desktop restored', true);

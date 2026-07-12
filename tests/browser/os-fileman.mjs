@@ -30,10 +30,19 @@ try {
 
   const { setVt, sample, near, waitPixel, waitOut, waitScreen } = osHelpers(page);
   const FACE = [192, 192, 192], WHITE = [255, 255, 255];
-  // timing subject: paces genuine no-marker settles — EV_SCREEN quiesce, the
-  // async job-notice trap, and the inter-command wmctl menu/render gaps (each
-  // call site is annotated; terminal fs effects use waitOut markers).
+  // The ONE remaining fixed settle is the 0091 EV_SCREEN quiesce below (a
+  // genuine no-marker window). Everything else waits on markers (0171):
+  // `wmctl wait …` guards every tree lookup (click-by-label/settext see the
+  // popup only after the app processed the raising event), fs effects gate
+  // on `wmctl wait text` + `test -f` echoes; sid/coord injections need no
+  // pacing — the per-app input ring orders them.
   const pause = (ms) => page.waitForTimeout(ms);
+  // Type a shell line + wait for a split-needle marker it echoes.
+  const shLine = async (cmd, mark, ms) => {
+    await page.keyboard.type(`${cmd} && echo ${mark[0]}""${mark.slice(1)}\r`, { delay: 40 });
+    try { await waitOut(mark, ms); }
+    catch { throw new Error(`shLine: ${mark} never echoed (after: ${cmd})`); }
+  };
 
   await setVt(2);
   await waitScreen();
@@ -47,9 +56,9 @@ try {
 
   // -- fixtures + launch fileman on a private dir via the VT1 shell --
   await setVt(1);
-  await page.keyboard.type('mkdir -p /root/fmb && printf hi > /root/fmb/note.txt\r', { delay: 50 });
+  await shLine('mkdir -p /root/fmb && printf hi > /root/fmb/note.txt', 'FIX-OK');
   await page.keyboard.type('fileman /root/fmb &\r', { delay: 50 });
-  await pause(800);
+  await shLine('wmctl wait label Go 15000', 'FM-UP-OK', 20000);   // controls + msg loop up
   await setVt(2);
   // fileman's window: wm cascades it; the LISTBOX client area is white.
   // Sample a stable interior point once the frame is up.
@@ -69,43 +78,45 @@ try {
   await setVt(1);
   await page.keyboard.type('SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")\r', { delay: 40 });
   await page.keyboard.type('wmctl key $SID 41 27\r', { delay: 40 });             // Esc the popup
+  // The blind-coord right-click hit either the row menu (Properties) or the
+  // pane menu (Refresh) — wait BOTH labels gone (each trivially holds for
+  // the menu that never opened).
+  await shLine('wmctl wait nolabel Properties 6000', 'ESC1-OK');
+  await shLine('wmctl wait nolabel Refresh 6000', 'ESC2-OK');
 
-  // -- Copy row 0 then Paste in the pane (wmctl surface coords) --
+  // -- Copy row 0 then Paste in the pane (wmctl surface coords). Every
+  // click-by-label waits for the popup to be POPULATED first (the label
+  // lookup races the app's event processing otherwise). --
   await page.keyboard.type('wmctl click $SID 100 30 3\r', { delay: 40 });        // right-click row 0
-  await pause(400);
+  await shLine('wmctl wait label Copy 8000', 'RM1-OK');
   await page.keyboard.type('wmctl click Copy\r', { delay: 40 });
-  await pause(400);
+  await shLine('wmctl wait nolabel Copy 6000', 'RM2-OK');        // Copy dispatched, menu closed
   await page.keyboard.type('wmctl click $SID 100 300 3\r', { delay: 40 });       // right-click the pane
-  await pause(400);
+  await shLine('wmctl wait label Paste 8000', 'PM1-OK');
   await page.keyboard.type('wmctl click Paste\r', { delay: 40 });
-  await pause(600);
-  await page.keyboard.type('test -f "/root/fmb/Copy of note.txt" && echo PASTE-O""K\r', { delay: 50 });
-  await waitOut('PASTE-OK');
+  await shLine('wmctl wait text LISTBOX:0 "Copy of note.txt" 8000', 'PL1-OK');   // paste done + re-listed
+  await shLine('test -f "/root/fmb/Copy of note.txt"', 'PASTE-OK');
   check('Copy + Paste duplicated the file ("Copy of note.txt")', true);
 
   // -- F2 rename dialog renders + commits --
+  // Rows (name sort): "Copy of note.txt"(0), note.txt(1). Select row 0.
   await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });          // focus + select row 0
   await page.keyboard.type('wmctl key $SID 59 1073741883\r', { delay: 40 });     // F2
-  await pause(500);
-  await page.keyboard.type('wmctl list | grep -q Rename && echo RENAME-DLG-O""K\r', { delay: 40 });
-  await waitOut('RENAME-DLG-OK');
+  await shLine('wmctl wait label OK 8000', 'RENAME-DLG-OK');     // dialog controls exist
   check('F2 opens the rename dialog', true);
   await page.keyboard.type('wmctl settext EDIT:1 renamed.txt\r', { delay: 40 });
   await page.keyboard.type('wmctl click OK\r', { delay: 40 });
-  await pause(500);
-  await page.keyboard.type('test -f /root/fmb/renamed.txt && echo RENAMED-O""K\r', { delay: 40 });
-  await waitOut('RENAMED-OK');
+  await shLine('wmctl wait text LISTBOX:0 renamed.txt 8000', 'RN1-OK');          // committed + re-listed
+  await shLine('test -f /root/fmb/renamed.txt', 'RENAMED-OK');
   check('rename commits (renamed.txt on disk)', true);
 
   // -- Del confirm box appears; Yes deletes --
   await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });          // select row 0
   await page.keyboard.type('wmctl key $SID 76 127\r', { delay: 40 });            // Del
-  await pause(500);
-  await page.keyboard.type('wmctl list | grep -q Confirm && echo DEL-BOX-O""K\r', { delay: 40 });
-  await waitOut('DEL-BOX-OK');
+  await shLine('wmctl wait win "Confirm File Delete" 8000', 'DEL-BOX-OK');
   check('Del raises the confirm MessageBox', true);
   await page.keyboard.type('wmctl click Yes\r', { delay: 40 });
-  await pause(500);
+  await shLine('wmctl wait nowin "Confirm File Delete" 6000', 'DEL-DONE-OK');    // delete handled
   // After Copy+Paste (note.txt, Copy of note.txt) then rename of row 0
   // ("Copy of note.txt" -> renamed.txt), the dir holds note.txt +
   // renamed.txt; Del of row 0 (note.txt) leaves renamed.txt alone.
@@ -115,27 +126,23 @@ try {
 
   // -- 0106: multi-select (Ctrl-click) then Delete removes the SET --
   // Seed two more files, F5 to re-list, Ctrl-click two rows, Del + Yes.
-  await page.keyboard.type('printf x > /root/fmb/ma.txt && printf y > /root/fmb/mb.txt\r', { delay: 40 });
+  await shLine('printf x > /root/fmb/ma.txt && printf y > /root/fmb/mb.txt', 'SEED-OK');
   await page.keyboard.type('wmctl click $SID 100 100\r', { delay: 40 });          // focus listbox
   await page.keyboard.type('wmctl key $SID 62 1073741886\r', { delay: 40 });      // F5 re-list
-  await pause(500);
+  await shLine('wmctl wait text LISTBOX:0 ma.txt 8000', 'F5-OK');                 // re-listed
   // rows now (name sort): ma.txt(0) mb.txt(1) renamed.txt(2). Ctrl-click
-  // row 0 (y=30) then row 1 (y=50) -> {ma.txt, mb.txt}.
+  // row 0 (y=30) then row 1 (y=50) -> {ma.txt, mb.txt}. The injections ride
+  // the app's input ring in order — no pacing needed between them.
   await page.keyboard.type('wmctl click $SID 100 30\r', { delay: 40 });           // plain -> {row0}
-  await pause(200);
   await page.keyboard.type('wmctl keydown $SID 224 1073742048 64\r', { delay: 40 });   // Ctrl down
   await page.keyboard.type('wmctl click $SID 100 50\r', { delay: 40 });           // ctrl-click row1
   await page.keyboard.type('wmctl keyup $SID 224 1073742048 0\r', { delay: 40 }); // Ctrl up
-  await pause(300);
   await page.keyboard.type('wmctl key $SID 76 127\r', { delay: 40 });             // Del
-  await pause(500);
-  await page.keyboard.type('wmctl list | grep -q "Multiple Item" && echo MULTI-BOX-O""K\r', { delay: 40 });
-  await waitOut('MULTI-BOX-OK');
+  await shLine('wmctl wait win "Confirm Multiple Item Delete" 8000', 'MULTI-BOX-OK');
   check('Ctrl-click multi-select + Del raises the plural confirm', true);
   await page.keyboard.type('wmctl click Yes\r', { delay: 40 });
-  await pause(600);
-  await page.keyboard.type('test ! -e /root/fmb/ma.txt && test ! -e /root/fmb/mb.txt && echo MULTI-GONE-O""K\r', { delay: 40 });
-  await waitOut('MULTI-GONE-OK');
+  await shLine('wmctl wait nowin "Confirm Multiple Item Delete" 6000', 'MULTI-DONE-OK');
+  await shLine('test ! -e /root/fmb/ma.txt && test ! -e /root/fmb/mb.txt', 'MULTI-GONE-OK');
   check('the whole multi-selection is deleted (renamed.txt remains)', true);
 
   await page.keyboard.type("echo FMB-SHELL-O''K\r", { delay: 50 });
