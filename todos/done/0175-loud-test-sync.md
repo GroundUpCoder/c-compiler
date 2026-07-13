@@ -1,7 +1,37 @@
 # 0175 — Loud-symptom test sync: fail on wmctl-wait timeout + waitForServer death (0171 follow-up)
 
-- **Status**: in progress (landing with 0171's follow-up, 2026-07-13)
+- **Status**: done (2026-07-13)
 - **Design**: — (principle codified in CLAUDE.md "Test-sync discipline")
+
+## Resolution
+
+Gates landed (commit 78d5c93) and the blast-radius hunt ran: full kernel
+suite + browser sweep at HEAD under the new `driveBoot` gate. **The gate
+caught 5 kernel e2es whose green was hiding dead waits** — every one a
+wait on a condition that could never be satisfied, burning its full
+timeout since birth:
+
+- `test_winmine_e2e` (×2) + `test_paint_e2e`: boot barriers waited on
+  CLOSED-menu items ("Advanced"/"Exit"/"Filled Rectangle") — deliberately
+  not GETTEXT-resolvable since 0171. Fixed: wait on the top-level window's
+  TEXT (resolves exactly when the app serves the agent socket).
+- `test_gdi32_e2e`: `wait seq $SID 2` — gdidemo paints ONCE per instance
+  (nothing re-invalidates it), so the "second present" never came and the
+  same-boot bit-exact check compared one present with itself. Fixed: the
+  second shot comes from a second boot (independent paint — stronger
+  determinism claim).
+- `test_user32_e2e`: `wait text EDIT:0` — CLASS:n indexes the whole tree;
+  the dialog's edit is EDIT:2 (main window's two EDITs enumerate first).
+- `test_fileman_ops_e2e` (×2): `wait count "File Manager" 2/1` — the main
+  window is titled "File Manager - <cwd>" since 0106 and wait-count
+  matches EXACTLY, so the counts never left 1/0. Fixed: `wait win`/`wait
+  nowin` on the error box's exact title.
+
+Fixing the dead clock also bought real time: gdi32 7.0→1.5s, winmine
+18.8→9.4s, paint 18.7→7.1s, fileman 26.6→12.8s. The sweep re-run also
+re-surfaced the known 0156 os-shell red; the same headless pixel-map
+technique root-caused and FIXED it (closed with this batch — see 0156's
+Resolution). Post-fix: kernel suite 63/63, browser sweep 24/24.
 
 ## Goal
 
