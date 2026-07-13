@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "smoke",
+  "description": "0173 differential acceptance program: status/headers/body through the three callbacks, timeout/refused error mapping, escape/unescape — built native (clang -lcurl) AND for gucOS from this json, outputs diffed by tests/kernel/test_curl_e2e.js",
+  "deps": [
+    "../lib.json"
+  ],
+  "sources": [
+    "smoke.c"
+  ]
+}

@@ -1,7 +1,36 @@
 # 0173 — libcurl easy-interface veneer over the kernel HTTP transport
 
-- **Status**: open (hard-dep: 0172)
+- **Status**: done (2026-07-13)
 - **Design**: rationale in logs/2026-07-13/0172-http-stack-plan.md
+
+## Resolution
+
+Landed as `os/curl/` (lib.json + `include/curl/curl.h` + `libcurl.c`, the
+win32 app-side-library pattern; no kernel change). Full write-up:
+logs/2026-07-13/0173-libcurl-veneer.md.
+
+- Easy interface subset with **upstream ABI values** (option classes,
+  CURLINFO nibbles, CURLcode numbers) so one consumer source builds against
+  both the veneer and real libcurl without ifdefs.
+- perform = `__http_open` → `__http_status` (synthesized status line +
+  CRLF header lines to HEADERFUNCTION; content-type/length captured for
+  getinfo) → `__http_read` loop → `__http_close`.
+- Timeouts (TIMEOUT[_MS] total, CONNECTTIMEOUT[_MS] headers-arrival) via
+  setitimer(ITIMER_REAL)+SIGALRM (0044): a posted signal EINTRs the parked
+  HTTP RPC; deadline-passed → CURLE_OPERATION_TIMEDOUT, foreign-signal
+  EINTRs re-park. Handler stays installed (real libcurl sans NOSIGNAL).
+- Errno mapping: open fail → COULDNT_CONNECT (ENOSYS →
+  UNSUPPORTED_PROTOCOL), status EIO → COULDNT_CONNECT (7), read -1 →
+  RECV_ERROR; unknown options → CURLE_UNKNOWN_OPTION (+ VERBOSE stderr).
+- READFUNCTION buffered; redirects follow silently (EFFECTIVE_URL =
+  request url); descoped as planned: multi, cookies, TLS knobs, proxies,
+  non-HTTP, upload streaming, PROGRESSFUNCTION.
+- Acceptance: `tests/kernel/test_curl_e2e.js` (in the run.js manifest) —
+  the differential smoke `os/curl/test/smoke.c` built BOTH ways against one
+  local server; native output matched gucOS on the first full run after
+  normalizing only the documented header order/casing divergences. Cases:
+  streamed GET, POSTFIELDS + READFUNCTION POSTs, 404 (rc=0 + code 404),
+  refused (7), stalled-body timeout (28), escape/unescape.
 
 ## Goal
 

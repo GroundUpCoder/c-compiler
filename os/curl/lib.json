@@ -1,0 +1,11 @@
+{
+  "type": "lib",
+  "name": "curl",
+  "description": "libcurl easy-interface veneer over the kernel HTTP transport (todos/0173): curl_easy_* mapped onto the 0172 __http_* host imports; same consumer source builds natively with clang -lcurl (the reference oracle)",
+  "includes": [
+    "include"
+  ],
+  "sources": [
+    "libcurl.c"
+  ]
+}
