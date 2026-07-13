@@ -356,6 +356,38 @@ check('shebang session exits clean', r.status === 0, String(r.status) + ' ' + (r
   }
 }
 
+// ---- login-shell $() re-exec must not re-source profiles (todos/0177) ----
+// pid 1 is a login shell (argv[0] "-sh", todos/0174). Every $() runs via the
+// NOMMU re-exec-self machinery, which carries argv[0] into the subshell; the
+// dash must be STRIPPED there, or the subshell also looks like a login shell
+// and re-sources ~/.profile. Two symptoms if it does: (1) profile stdout
+// leaks into the substitution result, (2) a $() INSIDE the profile recurses
+// forever (each subshell sources the profile, whose $() spawns another). We
+// write ~/.profile AFTER pid 1's own login sourcing (so only the subshells
+// would re-read it) and rm it before exit so it can't bleed into later legs.
+r = session([
+  "printf 'echo PROFMARK\\n' > /root/.profile",     // profile prints a marker
+  'echo purity: A $(echo hi) B',                    // marker must NOT be captured
+  "printf 'RP=$(echo deep)\\n' > /root/.profile",   // profile contains a $()
+  'echo recur: $(echo top)',                        // must terminate, not hang
+  'rm -f /root/.profile',
+  'echo cleaned',
+  'exit',
+  '',
+].join('\n'));
+check('profile-reexec session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
+{
+  const pl = r.stdout.split('\n');
+  // Without the dash-strip: 'purity: A PROFMARK hi B' (profile stdout leaked).
+  check('$() result unpolluted by profile stdout', pl.includes('purity: A hi B'),
+    JSON.stringify(pl.filter((l) => l.startsWith('purity'))));
+  // Without the dash-strip: this line's $() recurses and the session hangs to
+  // the boot timeout (a loud failure, correctly attributed to this leg).
+  check('$() in ~/.profile does not recurse', pl.includes('recur: top'),
+    JSON.stringify(pl.filter((l) => l.startsWith('recur'))));
+  check('test profile removed', pl.includes('cleaned'), JSON.stringify(pl.slice(-4)));
+}
+
 // ---- second boot, same image: persistence + no re-seed ----
 r = session('ls\nexit\n');
 check('second boot exits clean', r.status === 0, String(r.status));

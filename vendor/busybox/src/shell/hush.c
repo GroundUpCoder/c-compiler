@@ -10398,7 +10398,15 @@ int hush_main(int argc, char **argv)
 		full_write1_str(argv[2]);
 		_exit(0);
 	}
-	G.argv0_for_re_execing = argv[0];
+	/* WASM PORT (todos/0177): strip a leading login-shell dash from the
+	 * argv[0] carried into NOMMU re-exec. Shells spawn login (argv[0]="-sh",
+	 * todos/0174); without this every $()/pipe/builtin re-exec inherits the
+	 * dash, hush_main's `argv[0][0]=='-'` login test fires, and the subshell
+	 * re-sources /etc/profile + ~/.profile — a $() in a profile recurses
+	 * forever, and profile stdout leaks into every substitution result. $0 is
+	 * passed separately; the re-exec always execve's /bin/sh, so argv[0] here
+	 * only feeds login detection. */
+	G.argv0_for_re_execing = (argv[0] && argv[0][0] == '-') ? argv[0] + 1 : argv[0];
 #endif
 #if ENABLE_HUSH_TRAP
 # if ENABLE_HUSH_FUNCTIONS
