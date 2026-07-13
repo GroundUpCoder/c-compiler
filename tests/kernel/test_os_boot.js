@@ -303,7 +303,11 @@ r = session([
 check('procps session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
 {
   const pp = r.stdout.split('\n');
-  check('ps lists pid 1 as sh', pp.includes('1 sh'), JSON.stringify(pp.slice(0, 6)));
+  // pid 1 is a LOGIN shell since todos/0174 (argv[0] "-sh"): ps's COMMAND
+  // column renders the argv dash (Linux shows "-bash" the same way), while
+  // /proc/1/comm stays "sh" (ProcFS strips the login dash — Linux comm
+  // comes from the exec'd file, so pgrep/pkill by name keep matching).
+  check('ps lists pid 1 as a login sh', pp.includes('1 -sh'), JSON.stringify(pp.slice(0, 6)));
   check('ps lists itself', pp.some((l) => /^\d+ ps$/.test(l)), JSON.stringify(pp.slice(0, 6)));
   const rest = pp.slice(pp.findIndex((l) => / sleep$/.test(l)));
   check('pgrep -l finds the bg sleep', /^\d+ sleep$/.test(rest[0] || ''), JSON.stringify(rest[0]));

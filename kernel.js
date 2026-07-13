@@ -5695,6 +5695,11 @@ ProcFS.prototype._lookup = function (path) {
 
 ProcFS.prototype._comm = function (pcb) {
   var a0 = (pcb.argv && pcb.argv[0]) || pcb.path || '?';
+  // A leading '-' is the login-shell argv[0] convention (todos/0174 spawns
+  // pid 1 / term shells as "-sh"), not part of the name: Linux comm comes
+  // from the exec'd FILE, so a login sh still reads "sh" (and pgrep/pkill
+  // by name keep matching).
+  if (a0.charCodeAt(0) === 45 && a0.length > 1) a0 = a0.slice(1);
   var base = a0.slice(a0.lastIndexOf('/') + 1);
   return base.slice(0, 15) || '?';
 };
