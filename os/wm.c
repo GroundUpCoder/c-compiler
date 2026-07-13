@@ -166,6 +166,13 @@
 #include "sounds.h"
 #include "saver.h"
 
+/* The blocking input park (host.js pumpWait — the seam under SDL_WaitEvent,
+ * todos/0161): drain the input ring into the SDL queue and, if dry, park
+ * until the kernel's next push/kick or timeoutMs. Called directly (not via
+ * SDL_WaitEventTimeout) because the WMP socket's wake is a pure notify —
+ * see the main-loop comment (todos/0168). */
+__import int __sdl_pump_wait(int timeoutMs);
+
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
 #define BTN_W     104   /* preferred button width; shrinks on overflow (0031) */
@@ -234,11 +241,13 @@
 #define PEEK_W       160    /* Aero Peek popup (todos/0063) */
 #define PEEK_H       120
 #define PEEK_PAD     6      /* face border around the thumbnail */
-#define PEEK_REFRESH 30     /* frame ticks between live THUMB refreshes */
-#define PEEK_IDLE    150    /* ticks without a hover before auto-dismiss —
-                               the wm only sees motion over its OWN windows,
-                               so a pointer parked over an app window can't
-                               tell us to close; this backstop does */
+#define PEEK_REFRESH_MS 500  /* ms between live THUMB refreshes */
+#define PEEK_IDLE_MS   2500  /* ms without a hover before auto-dismiss —
+                                the wm only sees motion over its OWN windows,
+                                so a pointer parked over an app window can't
+                                tell us to close; this backstop does (wall
+                                clock since todos/0168: the loop wakes ~1/s
+                                idle, not per frame) */
 
 typedef struct {
     int32_t sid, pid;
@@ -291,7 +300,7 @@ static SDL_Window *date_win;
 static SDL_Surface *date_surf;
 static int32_t date_sid = 0;
 static int date_x = 0;
-static int date_idle = 0;
+static uint64_t date_hover_ms = 0; /* last raise/hover stamp (0101; 0168 wall clock) */
 static int date_pinned = 0;
 
 /* Start menu state (todos/0028, cascading columns since todos/0078): one
@@ -361,7 +370,7 @@ static int desk_focused = 0;       /* the desktop holds kernel focus (0077) */
 static int desk_dirty = 1;         /* redraw only when contents change */
 static int desk_last_idx = -1;     /* double-click tracking (event timestamps) */
 static uint64_t desk_last_ns = 0;
-static int desk_tick = 0;          /* coarse /root/Desktop re-read timer */
+static uint64_t desk_poll_ms = 0;  /* coarse /root/Desktop re-read stamp */
 static int desk_trash_full = 0;    /* Recycle Bin glyph state (todos/0093),
                                       refreshed on the same coarse tick */
 static int mod_ctrl = 0, mod_shift = 0;   /* held modifiers, tracked from
@@ -463,8 +472,8 @@ static int32_t peek_sid = 0;       /* our popup's surface (EV_CREATED echo) */
 static int32_t peek_for = 0;       /* the previewed window */
 static int peek_x = 0;             /* popup left edge (from the hovered button) */
 static int peek_pending = 0;       /* THUMB in flight */
-static int peek_tick = 0;          /* live-refresh countdown */
-static int peek_idle = 0;          /* hover-loss auto-dismiss countdown */
+static uint64_t peek_refresh_ms = 0; /* last live-refresh stamp */
+static uint64_t peek_hover_ms = 0;   /* last raise/hover stamp (auto-dismiss) */
 static int peek_dirty = 0;         /* fresh thumb: repaint */
 static uint8_t peek_px[(PEEK_W - 2 * PEEK_PAD) * (PEEK_H - 2 * PEEK_PAD) * 4];
 static int peek_tw = 0, peek_th = 0;
@@ -490,7 +499,7 @@ static int32_t saver_sid = 0;      /* EV_CREATED echo ("screensaver") */
 static int32_t saver_prev = 0;     /* the window to re-focus at dismissal */
 static int saver_kind = 0;         /* 1 marquee, 2 starfield (from config) */
 static sv_cfg saver_cfg;           /* last polled configuration */
-static int saver_tick = 0;         /* coarse once-a-second poll counter */
+static uint64_t saver_poll_ms = 0; /* coarse once-a-second poll stamp */
 static int idle_pending = 0;       /* GET_IDLE in flight */
 static int marq_x, marq_y;         /* marquee banner position */
 static float star_x[SAVER_STARS], star_y[SAVER_STARS], star_z[SAVER_STARS];
@@ -2953,7 +2962,7 @@ static void peek_show(int32_t sid, int btn_x, int bw) {
     peek_win = SDL_CreateWindow("peek", PEEK_W, PEEK_H, SDL_WINDOW_BORDERLESS);
     if (!peek_win) { peek_for = 0; return; }
     peek_surf = SDL_GetWindowSurface(peek_win);
-    peek_tick = 0;
+    peek_refresh_ms = peek_hover_ms = SDL_GetTicks();
     peek_request();
     draw_peek();                       /* bare face until the thumb lands */
 }
@@ -3363,20 +3372,24 @@ static void handle_event(wmp_hdr *h) {
 }
 
 /* Drain the socket: replies (fire-and-forget acks) are skipped, events
- * update the model. select() keeps the frame loop non-blocking. */
-static void drain_socket(void) {
+ * update the model. select() keeps the loop non-blocking. Returns the
+ * frame count consumed — the event loop's "did anything happen" signal
+ * (todos/0168). */
+static int drain_socket(void) {
+    int n = 0;
     for (;;) {
         fd_set rf;
         struct timeval tv = { 0, 0 };
         FD_ZERO(&rf);
         FD_SET(sock, &rf);
-        if (select(sock + 1, &rf, NULL, NULL, &tv) <= 0) return;
+        if (select(sock + 1, &rf, NULL, NULL, &tv) <= 0) return n;
         wmp_hdr h;
         if (wmp_next(sock, &h) != 0) exit(1);      /* endpoint gone: give up */
         if (h.type >= 0x80) handle_event(&h);
         else if (h.type == WMP_R_SHOT) peek_consume(&h);   /* THUMB (0063) */
         else if (h.type == WMP_R_IDLE) idle_consume(&h);   /* GET_IDLE (0096) */
         else if (wmp_skip(sock, h.plen) != 0) exit(1);
+        n++;
     }
 }
 
@@ -3423,7 +3436,7 @@ static void date_draw(void) {
  * EV_CREATED echo ("datepop") parks it and hands focus back (the peek
  * pattern) so it never steals focus from an app. */
 static void date_show(int pin) {
-    date_idle = 0;
+    date_hover_ms = SDL_GetTicks();
     if (date_win) { if (pin) date_pinned = 1; return; }
     date_pinned = pin;
     date_x = bar_w - DATE_W;
@@ -3472,7 +3485,7 @@ static void bar_motion(float fx) {
     if (rel >= 0 && rel % (bw + BTN_GAP) < bw && i < nwins &&
         x + bw <= cx) {                /* same overflow gate as draw_bar */
         peek_show(wins[i].sid, x, bw);
-        peek_idle = 0;                 /* still hovering: hold the popup */
+        peek_hover_ms = SDL_GetTicks();   /* still hovering: hold the popup */
     } else peek_dismiss();
 }
 
@@ -3577,14 +3590,19 @@ static void draw_bar(void) {
     SDL_UpdateWindowSurface(bar_win);
 }
 
+/* One iteration of the event loop (todos/0168 renamed this from a per-rAF
+ * frame callback — it now runs per WAKE: input, socket data, or the park
+ * timeout, ~1/s idle). Returns nothing; main() parks between calls. */
 static void frame_cb(void) {
-    drain_socket();
+    int activity = drain_socket();
     reap_kids();
-    /* Coarse /root/Desktop watch (todos/0029): one readdir per second-ish
-     * of frame ticks — no watch API exists or is needed. */
-    if (++desk_tick >= 60) { desk_tick = 0; desk_load(); }
+    uint64_t now_ms = SDL_GetTicks();
+    /* Coarse /root/Desktop watch (todos/0029): one readdir per second of
+     * wall clock — the loop wakes at least that often (the 1s park), and
+     * no watch API exists or is needed. */
+    if (now_ms - desk_poll_ms >= 1000) { desk_poll_ms = now_ms; desk_load(); }
     /* The screensaver's idle poll rides the same cadence (todos/0096). */
-    if (++saver_tick >= 60) { saver_tick = 0; saver_poll(); }
+    if (now_ms - saver_poll_ms >= 1000) { saver_poll_ms = now_ms; saver_poll(); }
     /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
      * Menu columns and the run dialog come and go inside handlers, so
      * their ids are resolved per event (menu_col_for), not cached. */
@@ -3592,6 +3610,7 @@ static void frame_cb(void) {
     SDL_WindowID pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        activity = 1;
         /* A running screensaver swallows the waking input (todos/0096):
          * fullscreen on the top layer and holding focus, it receives every
          * pointer and key event — any of them dismisses. */
@@ -3672,9 +3691,9 @@ static void frame_cb(void) {
                 peek_dismiss();        /* pointer left the bar (0063) */
                 desk_motion(e.motion.x, e.motion.y, e.motion.state);
             } else if (peek_win && e.motion.windowID == pkid) {
-                peek_idle = 0;         /* hovering the preview holds it */
+                peek_hover_ms = SDL_GetTicks();  /* hovering the preview holds it */
             } else if (date_win && e.motion.windowID == SDL_GetWindowID(date_win)) {
-                date_idle = 0;         /* hovering the tooltip holds it (0101) */
+                date_hover_ms = SDL_GetTicks();  /* hovering the tooltip holds it (0101) */
             } else if (!(run_win && e.motion.windowID == SDL_GetWindowID(run_win))) {
                 bar_motion(e.motion.x);
                 pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
@@ -3702,21 +3721,31 @@ static void frame_cb(void) {
     /* Aero Peek housekeeping (todos/0063): keep the thumbnail live while
      * the popup is up; drop it once nothing has hovered it for a while. */
     if (peek_win) {
-        if (++peek_idle >= PEEK_IDLE) peek_dismiss();
-        else if (++peek_tick >= PEEK_REFRESH) { peek_tick = 0; peek_request(); }
+        if (now_ms - peek_hover_ms >= PEEK_IDLE_MS) peek_dismiss();
+        else if (now_ms - peek_refresh_ms >= PEEK_REFRESH_MS) {
+            peek_refresh_ms = now_ms;
+            peek_request();
+        }
     }
     /* The date tooltip (todos/0101): a hover (unpinned) drops once the
      * pointer has been off the clock for a while — the wm only sees motion
-     * over its own windows, so this backstop mirrors PEEK_IDLE. A pinned
+     * over its own windows, so this backstop mirrors PEEK_IDLE_MS. A pinned
      * (click-opened) tooltip stays until clicked away. */
-    if (date_win && !date_pinned && ++date_idle >= PEEK_IDLE) date_dismiss();
+    if (date_win && !date_pinned && now_ms - date_hover_ms >= PEEK_IDLE_MS)
+        date_dismiss();
     draw_bar();
-    for (int d = 0; d < mdepth; d++) draw_menu_col(d);
-    for (int d = 0; d < ctx_depth; d++) draw_ctx(d);       /* 0091 */
-    draw_run();
+    /* Popup furniture redraws on ACTIVITY only (todos/0168): its content
+     * changes exclusively in the event/socket handlers above — an idle
+     * 1s-tick wake must not re-present a static menu (present churn keeps
+     * the 0169 compositor awake). */
+    if (activity) {
+        for (int d = 0; d < mdepth; d++) draw_menu_col(d);
+        for (int d = 0; d < ctx_depth; d++) draw_ctx(d);   /* 0091 */
+        draw_run();
+    }
     draw_desk();
     if (peek_dirty) { peek_dirty = 0; draw_peek(); }
-    draw_saver();                      /* every frame: the animation (0096) */
+    draw_saver();                      /* every wake: frame-paced while live (0096) */
 }
 
 /* The Recycle Bin's desktop presence (todos/0093): the trash store dirs
@@ -3764,6 +3793,32 @@ int main(void) {
      * Deliberately per wm start, not per boot: a `wm &` respawn is a new
      * session, like a Windows logon. */
     snd_play_event("SystemStart");
-    __setAnimationFrameFunc(frame_cb);
-    return 0;
+    /* Event-driven main loop (todos/0168, IDLE-POWER piece W): wm was a
+     * frame-callback app — 60 wakes/s whether or not anything happened,
+     * and the one app that would forever keep the 0169 compositor from
+     * parking. Each iteration handles whatever woke it (frame_cb drains
+     * the socket AND the SDL queue), then parks on __sdl_pump_wait — the
+     * raw seam under SDL_WaitEvent (0161) — because wm has TWO event
+     * sources: the input ring and the WMP socket. The kernel's socket
+     * kick (0168 1/3) is a PURE ring notify; SDL_WaitEventTimeout would
+     * re-park over it (no SDL event appears), so the seam is called
+     * directly and every return re-runs the drains, per the 0161
+     * spurious-wake contract. Import returns are cooperative-signal safe
+     * points, exactly like SDL_WaitEvent's chunks.
+     * While the screensaver animates it paces ~60Hz; otherwise 1s parks
+     * (the clock / saver-idle / Desktop-watch cadence).
+     * Lost-wakeup guard: the kick doesn't change IR_WPOS, so socket data
+     * landing between frame_cb's drain and the park entry would sleep a
+     * full chunk — re-check readability just before parking (the residual
+     * select→park gap costs at most one 1s chunk, and only until the next
+     * event re-kicks). */
+    for (;;) {
+        frame_cb();
+        fd_set rf;
+        struct timeval tv = { 0, 0 };
+        FD_ZERO(&rf);
+        FD_SET(sock, &rf);
+        if (select(sock + 1, &rf, NULL, NULL, &tv) > 0) continue;
+        __sdl_pump_wait(saver_win ? 16 : 1000);
+    }
 }
