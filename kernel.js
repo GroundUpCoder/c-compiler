@@ -1361,6 +1361,13 @@ function Kernel(opts) {
   // cursor over its client area, arrow elsewhere. Browser-only rendering (the
   // page sets canvas.style.cursor); headless kernels leave it a no-op.
   this._onCursor = opts.onCursor || function () {};
+  // Audio pump gate (todos/IDLE-POWER.md "audioPump gate"): fired on every
+  // AUDIO_OPEN so an embedder that parks its pump interval while the stream
+  // table is empty can re-arm it. Disarm is the embedder's call — poll
+  // audioStreamCount() after a pump (opens are the only RPC-visible
+  // transition; pause/resume is SAB-only, so ANY table entry must keep the
+  // pump running or an unpause could never be noticed).
+  this._onAudioStream = opts.onAudioStream || function () {};
   this._log = opts.log || function () {};
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
@@ -3125,6 +3132,7 @@ Kernel.prototype._audioRpc = function (pcb, op, req) {
         dying: false,   // close/exit marked; drains dry, then reclaimed
       });
       pcb.audios.add(aid);
+      this._onAudioStream();
       this._respond(pcb, { aid: aid });
       break;
     }
@@ -3189,6 +3197,12 @@ Kernel.prototype.audioInit = function (opts) {
   };
   return { sab: sab, bufferSize: cap, freq: AU_OUT_FREQ,
            channels: AU_OUT_CHANNELS, format: AU_FMT_F32 };
+};
+
+/* Live stream count — the embedder's pump-disarm probe (dying streams
+ * count: they still need pumps to drain). */
+Kernel.prototype.audioStreamCount = function () {
+  return this._audioStreams.size;
 };
 
 /* Test/debug view of the stream table. */

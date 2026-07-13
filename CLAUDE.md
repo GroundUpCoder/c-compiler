@@ -251,7 +251,9 @@ WM.md "Audio mixing"): per-process source rings register via AUDIO_OPEN
 handshake), `audioInit()` allocates the one page-owned f32/48k output
 ring, `audioPump()` mixes (linear-interp resample, mono fan-out, sum,
 clamp — pure deterministic math; the embedder schedules it, 20ms in
-kernel-worker). Lifecycle: close/exit/SIGKILL mark streams dying → drain
+kernel-worker, parked while `audioStreamCount()` is 0 and re-armed by the
+`onAudioStream` hook at AUDIO_OPEN — the IDLE-POWER audioPump gate).
+Lifecycle: close/exit/SIGKILL mark streams dying → drain
 dry → reclaim (paused/no-output drop at once — never wedge). Tests:
 `node tests/kernel/run.js` — `test_kernel.js`/`test_tty.js`/`test_pipes.js`
 drive the real SAB protocol against fake workers (deterministic, no

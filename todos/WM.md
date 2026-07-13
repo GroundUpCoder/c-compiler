@@ -1205,8 +1205,13 @@ Unsupported channel counts (>2) are EINVAL at open — fail loud, per
 house rules.
 
 **Pacing.** `kernel.audioPump()` runs on a 20ms interval in the kernel
-worker (tests call it directly with an explicit frame budget —
-deterministic, no timers). Each pump tops the output ring up to a fixed
+worker, gated on live streams (IDLE-POWER audioPump gate): the interval
+parks while the stream table is empty, the `onAudioStream` ctor hook
+re-arms it at AUDIO_OPEN, and it disarms itself after a pump that sees
+`audioStreamCount() === 0` — dying streams count until reclaimed, and
+pause/resume is SAB-only so ANY table entry keeps it armed (tests call
+the pump directly with an explicit frame budget — deterministic, no
+timers). Each pump tops the output ring up to a fixed
 target depth (~80ms), bounded by the MOST-available active stream — so
 one starved app pads with silence rather than stalling another's audio,
 and a lone app never has silence manufactured ahead of its data. Apps

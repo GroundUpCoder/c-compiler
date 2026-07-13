@@ -358,6 +358,7 @@ async function boot() {
     onHalt: function (status) { post({ type: 'halt', status: status }); },
     onPointerLock: function (wanted) { post({ type: 'pointer-lock', wanted: wanted }); },
     onCursor: function (shape) { post({ type: 'cursor', shape: shape }); },
+    onAudioStream: function () { audioArm(); },   // pump gate, below
     log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
   });
   tty = kernel.createTty({
@@ -373,10 +374,22 @@ async function boot() {
   // The audio mixer (todos/0017): one page-owned output ring, kernel-side
   // mixing on a 20ms pump. The page plays it with host.js's
   // createAudioReceiver (resumed on first user gesture — autoplay policy).
+  // The pump is gated on live streams (IDLE-POWER audioPump gate): parked
+  // while the stream table is empty, armed by the AUDIO_OPEN hook, and it
+  // disarms itself after a pump that observes an empty table — dying
+  // streams drain first, and pause/resume is SAB-only, so any table entry
+  // keeps it armed (an unpause is otherwise invisible to the kernel).
   var audioOut = kernel.audioInit({});
   post({ type: 'audio', sab: audioOut.sab, bufferSize: audioOut.bufferSize,
          freq: audioOut.freq, channels: audioOut.channels, format: audioOut.format });
-  setInterval(function () { kernel.audioPump(); }, 20);
+  var audioTimer = null;
+  function audioArm() {
+    if (audioTimer !== null) return;
+    audioTimer = setInterval(function () {
+      kernel.audioPump();
+      if (kernel.audioStreamCount() === 0) { clearInterval(audioTimer); audioTimer = null; }
+    }, 20);
+  }
   await kernel.boot({
     path: '/bin/sh',
     // "-sh": login shell — sources /etc/profile then ~/.profile (todos/0174)

@@ -329,6 +329,26 @@ const near = (a, b) => Math.abs(a - b) < 1e-6;
     JSON.stringify(kernel.audioList()));
   check('pump on an empty table stays a no-op', kernel.audioPump() === 0);
 
+  // ---- embedder pump gate (IDLE-POWER audioPump gate): AUDIO_OPEN fires
+  // the onAudioStream hook (the kernel-worker's interval re-arm),
+  // audioStreamCount() is the disarm probe, and dying streams keep
+  // counting until reclaimed (they still need pumps to drain). ----
+  check('empty table -> audioStreamCount 0', kernel.audioStreamCount() === 0);
+  let armed = 0;
+  kernel._onAudioStream = () => { armed++; };
+  const r6 = await rpc(1, K.OP.SPAWN, { path: '/bin/app', argv: ['app'], envp: [], actions: [], flags: 0 });
+  const st6 = makeStream();
+  const o6 = await openStream(r6.pid, st6, 48000, K.AU_FMT_S16, 2);
+  check('AUDIO_OPEN fires the onAudioStream hook', armed === 1 && o6.aid > 0, armed);
+  check('open stream counts', kernel.audioStreamCount() === 1);
+  pushS16(st6, [4096, 4096]);
+  play(st6);
+  await rpc(r6.pid, K.OP.AUDIO_CLOSE, { aid: o6.aid });
+  check('dying stream still counts (drain needs pumps)', kernel.audioStreamCount() === 1);
+  kernel.audioPump(10); kernel.audioPump(10);    // drain, then reclaim sweep
+  check('count falls to 0 after reclaim (the disarm condition)',
+    kernel.audioStreamCount() === 0, kernel.audioStreamCount());
+
   console.log(failures ? `\ntest_audio: ${failures} FAILED` : '\ntest_audio: all passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });
