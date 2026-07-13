@@ -348,6 +348,21 @@ Each stage is a coherent commit with its own green gate; the risky piece (W)
 lands before the piece that depends on it (parking), so a Stage-3 revert
 doesn't take the architecture down.
 
+## Follow-on: the unified wait (todos/0178, post-Stage-4)
+
+Decided 2026-07-14 (Stage-3 design review): wake *production* is fully
+kernel-owned, but wait *multiplexing* is not — wm.c sleeps on two sources
+via a bespoke kick + pre-park select (benign residual race), and user32's
+GetMessage still chunks at 25ms because a process→process socket write has
+no pcb to kick (shared OFDs; only a blocked reader is known). The
+principled fix is ONE deferred WAIT RPC over {fds…} ⊕ input-ring ⊕
+timeout ⊕ SIGPEND — readiness-check and park atomic kernel-side, signal
+delivery just another wake source. Deliberately sequenced AFTER Stage 4:
+0169's ARMED/PARKED protocol and wake table are written against the
+existing channels and survived their adversarial review as-is; the Stage-4
+wake counters then become the proof surface that the consolidation
+regresses nothing. Scope, plan, acceptance: todos/0178.
+
 ## References (verified 2026-07-12)
 
 - host.js: `shmPresent` 5940-5960 (SAB-only; `ackConfigure` exception 5958);

@@ -3,6 +3,7 @@
   "queue": [
     { "id": "0113", "priority": 2, "after": ["0094"] },
     { "id": "0169", "difficulty": "heavy", "blockedBy": ["0167", "0168"] },
+    { "id": "0178", "difficulty": "heavy", "blockedBy": ["0169"], "after": ["0169"] },
     { "id": "0079" },
     { "id": "0080" },
     { "id": "0052" },
