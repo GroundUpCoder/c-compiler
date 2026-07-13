@@ -1,0 +1,15 @@
+{
+  "bin": true,
+  "name": "code",
+  "description": "/bin/code (todos/0174): line-oriented agentic coding assistant — Anthropic Messages API over the 0173 libcurl veneer, cJSON, posix_spawn bash tool; dual-target with the native clang -lcurl build (os/code/build-native.sh)",
+  "deps": [
+    "../curl/lib.json"
+  ],
+  "includes": [
+    "../../vendor/cjson"
+  ],
+  "sources": [
+    "code.c",
+    "../../vendor/cjson/cJSON.c"
+  ]
+}

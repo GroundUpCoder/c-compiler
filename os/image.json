@@ -1,5 +1,5 @@
 {
-  "version": 85,
+  "version": 86,
   "overlays": [
     {
       "id": "clang-apps",
@@ -59,6 +59,9 @@
       },
       "/usr/bin/clip": {
         "c": "clip.c"
+      },
+      "/usr/bin/code": {
+        "project": "os/code/bin.json"
       },
       "/usr/bin/wmctl": {
         "c": "wmctl.c",
@@ -502,6 +505,9 @@
       "/root/roms"
     ],
     "files": {
+      "/etc/profile": {
+        "content": "# gucOS default profile — sourced by login shells (hush spawned as \"-sh\",\n# todos/0174). hush itself sources ~/.profile right after this file, so put\n# per-user settings there (e.g. ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL exports\n# for /bin/code) — do NOT source ~/.profile here or it runs twice.\n"
+      },
       "/root/hello.c": {
         "text": "hello.c"
       },

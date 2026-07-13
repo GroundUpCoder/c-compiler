@@ -7,9 +7,10 @@
  * or a chatty command can't blow up the context.
  *
  * Dual-target by construction: this same source builds native with
- * `clang code.c cJSON.c -lcurl` (the reference oracle) and, once the 0173
- * veneer lands, for gucOS against it unchanged. The ONE platform seam is
- * run_command() (process spawn for the bash tool) — see the PLATFORM block.
+ * `clang code.c cJSON.c -lcurl` (the reference oracle) and for gucOS
+ * against the 0173 veneer (os/code/bin.json) unchanged. The ONE platform
+ * seam is run_command() (process spawn for the bash tool) — see the
+ * PLATFORM block: posix_spawn in-OS (no fork by design), fork/exec native.
  *
  * Config (env, overridable by flags):
  *   ANTHROPIC_BASE_URL   default https://api.anthropic.com
@@ -71,13 +72,94 @@ static const char *C(const char *code) { return g_color ? code : ""; }
 
 /* ===================================================================== */
 /*  PLATFORM SEAM: run a shell command, merge stdout+stderr, cap+timeout  */
-/*  Native impl below (fork/exec/poll). gucOS swaps this for __spawn.      */
+/*  gucOS (__MTOTS__): posix_spawn — the owner-brokered model has no       */
+/*  fork(). Native: fork/exec/poll. Same contract both sides.             */
 /* ===================================================================== */
 #include <unistd.h>
 #include <sys/wait.h>
-#include <poll.h>
 #include <time.h>
 #include <signal.h>
+
+#ifdef __MTOTS__
+#include <spawn.h>
+#include <sys/time.h>
+
+/* Timeout: setitimer(ITIMER_REAL)+SIGALRM (todos/0044). The parked pipe
+ * read EINTRs when the signal lands (kernel krpc-intr); we SIGKILL the
+ * child and keep draining to EOF. */
+static volatile int g_bash_alarm;
+static void bash_on_alarm(int sig) { (void)sig; g_bash_alarm = 1; }
+
+/* Returns malloc'd captured output (truncation-marked if over cap).
+ * *exit_code set to the child's exit status (or -1 killed by timeout). */
+static char *run_command(const char *cmd, int *exit_code) {
+    int pfd[2];
+    if (pipe(pfd) != 0) { *exit_code = -1; return strdup("code: pipe() failed\n"); }
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, pfd[1], 1);
+    posix_spawn_file_actions_adddup2(&fa, pfd[1], 2);
+    posix_spawn_file_actions_addclose(&fa, pfd[0]);
+    posix_spawn_file_actions_addclose(&fa, pfd[1]);
+    char *sh_argv[] = { "sh", "-c", (char *)cmd, 0 };
+    pid_t pid;
+    int e = posix_spawn(&pid, "/bin/sh", &fa, 0, sh_argv, 0 /* inherit env */);
+    posix_spawn_file_actions_destroy(&fa);
+    if (e != 0) {
+        close(pfd[0]); close(pfd[1]);
+        *exit_code = -1; return strdup("code: posix_spawn(/bin/sh) failed\n");
+    }
+    close(pfd[1]);
+    sb out = {0};
+    int truncated = 0, timedout = 0;
+    g_bash_alarm = 0;
+    signal(SIGALRM, bash_on_alarm);
+    struct itimerval itv;
+    itv.it_interval.tv_sec = 0; itv.it_interval.tv_usec = 0;
+    itv.it_value.tv_sec = CAP_BASH_SECS; itv.it_value.tv_usec = 0;
+    setitimer(ITIMER_REAL, &itv, 0);
+    for (;;) {
+        char buf[4096];
+        ssize_t n = read(pfd[0], buf, sizeof buf);
+        if (n == 0) break;                   /* EOF: child (tree) is done */
+        if (n < 0) {
+            if (errno == EINTR) {
+                if (g_bash_alarm && !timedout) { kill(pid, SIGKILL); timedout = 1; }
+                continue;                    /* drain to EOF after the kill */
+            }
+            break;
+        }
+        if (out.len < CAP_BASH_BYTES) {
+            size_t room = CAP_BASH_BYTES - out.len;
+            size_t take = (size_t)n < room ? (size_t)n : room;
+            sb_add(&out, buf, take);
+            if (take < (size_t)n) truncated = 1;
+        } else {
+            truncated = 1;                   /* keep draining so the child can exit */
+        }
+    }
+    itv.it_value.tv_sec = 0;
+    setitimer(ITIMER_REAL, &itv, 0);         /* disarm */
+    close(pfd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (timedout) {
+        *exit_code = -1;
+        sb_puts(&out, "\n[command killed: exceeded 120s timeout]");
+    } else {
+        *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+        if (truncated) {
+            char m[64];
+            snprintf(m, sizeof m, "\n[output truncated at %d bytes]", CAP_BASH_BYTES);
+            sb_puts(&out, m);
+        }
+    }
+    if (!out.p) out.p = strdup("");
+    return out.p;
+}
+
+#else /* native */
+#include <poll.h>
 
 /* Returns malloc'd captured output (truncation-marked if over cap).
  * *exit_code set to the child's exit status (or -1 killed by timeout). */
@@ -135,6 +217,7 @@ static char *run_command(const char *cmd, int *exit_code) {
     if (!out.p) out.p = strdup("");
     return out.p;
 }
+#endif /* platform */
 /* ===================== end platform seam ============================== */
 
 /* ---- file tools ------------------------------------------------------- */

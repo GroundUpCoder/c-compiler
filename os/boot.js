@@ -292,7 +292,9 @@ async function mountAndBoot() {
   kernel.wmServe();
   await kernel.boot({
     path: '/bin/sh',
-    argv: ['sh'],
+    // "-sh": login shell — hush sources /etc/profile then ~/.profile, where
+    // per-user exports (ANTHROPIC_* for /bin/code) live (todos/0174)
+    argv: ['-sh'],
     envp: ['PATH=/usr/local/bin:/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
   });

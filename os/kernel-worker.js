@@ -379,7 +379,8 @@ async function boot() {
   setInterval(function () { kernel.audioPump(); }, 20);
   await kernel.boot({
     path: '/bin/sh',
-    argv: ['sh'],
+    // "-sh": login shell — sources /etc/profile then ~/.profile (todos/0174)
+    argv: ['-sh'],
     envp: ['PATH=/usr/local/bin:/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
   });

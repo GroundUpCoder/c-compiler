@@ -48,6 +48,7 @@ const tests = [
   ['test_http.js'],         // 0172: HTTP transport (0x06xx) over the SAB protocol with a fake fetch — deferred status, streaming, backpressure, EOF/error split, teardown (no wasm)
   ['test_http_e2e.js'],     // 0172: real C over the full stack — Node fetch to a local server: streamed GET, POST echo, 512K integrity, 404, mid-stream drop
   ['test_curl_e2e.js'],     // 0173: the libcurl veneer differential smoke — ONE C program built gucOS (veneer) AND native (clang -lcurl, the oracle), outputs diffed after documented normalization; callbacks, getinfo, refused=7, timeout=28
+  ['test_code_e2e.js', IMG],     // 0174: /bin/code in-OS vs a scripted fake SSE server — login-shell /etc/profile+~/.profile env plumbing, streamed text, write_file-on-BlockFS + posix_spawn bash tool round-trips
   ['test_jobctl_e2e.js'],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
   ['test_jobctl_tty_e2e.js', IMG], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
   ['test_os_boot.js'],      // 0004: headless OS boot — seed, protoshell, cc, persistence

@@ -810,7 +810,7 @@ int main(int argc, char **argv) {
         sh_argv[n] = 0;
         path = argv[1];
     } else {
-        sh_argv[0] = "sh";
+        sh_argv[0] = "-sh";   /* login shell: /etc/profile + ~/.profile (0174) */
         sh_argv[1] = 0;
         path = "/bin/sh";
     }
