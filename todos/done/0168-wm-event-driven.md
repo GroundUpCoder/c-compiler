@@ -1,6 +1,6 @@
 # 0168 — wm.c goes event-driven: WaitEventTimeout loop + WMP-socket wake + taskbar present gate (IDLE-POWER Stage 3)
 
-- **Status**: open
+- **Status**: done (2026-07-14) — landed as three commits: afc1b76 (socket→ring wake + the b136b72 pumpWait no-park fix it surfaced), 1ad13b0 (wm.c event-driven loop, image v89), 1a128fa (bar_present gate, image v90)
 - **Design**: `todos/IDLE-POWER.md` (pieces W + D). Absorbs the taskbar-gate
   half of todos/0160 (the reverted attempt's `bar_present()` memcmp,
   recoverable from commit `659902d`).
