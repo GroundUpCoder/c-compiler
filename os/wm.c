@@ -3747,11 +3747,19 @@ static void frame_cb(void) {
         } else if (e.type == SDL_EVENT_QUIT) exit(0);
     }
     /* Aero Peek housekeeping (todos/0063): keep the thumbnail live while
-     * the popup is up; drop it once nothing has hovered it for a while. */
+     * the popup is up; drop it once nothing has hovered it for a while.
+     * RE-READ the clock here: now_ms is from frame entry, but the hover/
+     * refresh stamps are written DURING the event handling above
+     * (peek_show / bar_motion / date_show) — against an entry-time now a
+     * fresh stamp sits in the future and the unsigned delta wraps huge,
+     * dismissing a popup the same frame it was shown (the 60%-flaky
+     * os-aero peek leg that caught this). A fresh read is >= any stamp
+     * taken this iteration. */
+    uint64_t hk_ms = SDL_GetTicks();
     if (peek_win) {
-        if (now_ms - peek_hover_ms >= PEEK_IDLE_MS) peek_dismiss();
-        else if (now_ms - peek_refresh_ms >= PEEK_REFRESH_MS) {
-            peek_refresh_ms = now_ms;
+        if (hk_ms - peek_hover_ms >= PEEK_IDLE_MS) peek_dismiss();
+        else if (hk_ms - peek_refresh_ms >= PEEK_REFRESH_MS) {
+            peek_refresh_ms = hk_ms;
             peek_request();
         }
     }
@@ -3759,7 +3767,7 @@ static void frame_cb(void) {
      * pointer has been off the clock for a while — the wm only sees motion
      * over its own windows, so this backstop mirrors PEEK_IDLE_MS. A pinned
      * (click-opened) tooltip stays until clicked away. */
-    if (date_win && !date_pinned && now_ms - date_hover_ms >= PEEK_IDLE_MS)
+    if (date_win && !date_pinned && hk_ms - date_hover_ms >= PEEK_IDLE_MS)
         date_dismiss();
     draw_bar();
     /* Popup furniture redraws on ACTIVITY only (todos/0168): its content
