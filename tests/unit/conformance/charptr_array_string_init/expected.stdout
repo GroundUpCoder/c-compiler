@@ -1,0 +1,13 @@
+auto_unsized: auto-unsized
+auto_sized: auto-sized
+nonconst: nonconst
+local_static: local-static
+file_static: file-static
+two: two-a two-b
+file_static2: fs-a fs-b
+sizeof: 1 2
+through1: 7
+through2: 11
+chararr: bytes braced 6 8
+cl_char: cl-bytes
+cl_ptr: cl-ptr
