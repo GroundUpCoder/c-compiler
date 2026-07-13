@@ -101,6 +101,40 @@ the signal to add a rule. run.py categories are BATCHED into one python
 process; the browser `sweep` is optional (a missing-Playwright launch
 failure degrades to a skip, not a hard fail).
 
+### Test-sync discipline — root cause over quiet symptom (todos/0171)
+
+The estate's timing bugs share one anti-pattern: a **silent symptom**. Hold
+the line on these when writing or converting tests:
+
+- **A wait that can't be satisfied must FAIL LOUD, never nap out its
+  clock.** `wmctl wait` already prints `wmctl: wait X timed out after Nms`
+  to stderr and exits 1 — but a driver that ignores that just burns the full
+  timeout and sails on (this is how the 0171 `AQ_GETTEXT`-can't-see-popup
+  bug hid: every `wait label <popup item>` ran its whole timeout and the
+  test passed anyway on a later assertion; `test_fileman_ops_e2e` was 117s
+  of mostly-dead waits, now 27s). **`driveBoot` fails the test on any
+  `wmctl: wait ... timed out` in the captured output** — don't defeat it,
+  and never add a `wmctl wait` you expect to time out (use `nowin`/`nolabel`
+  absence conditions, which SUCCEED on absence, not on the clock).
+- **No fixed `sleep`/`pause` as a sync primitive.** Wait on a marker: a
+  `wmctl wait` condition, a split-needle shell echo (`echo S""ENT`, wait for
+  `SENT` — or the typed echo satisfies its own wait), a `waitPixel`. A
+  `pause(400)` is a latent flake; the only allowed fixed sleeps are genuine
+  no-marker settles (EV_SCREEN quiesce, coarse wm.c `.icons` re-read tick),
+  and each must carry an annotation saying so.
+- **After a typed command whose *effect* you assert later, wait for its
+  completion marker before moving on** — under load a lost line is otherwise
+  indistinguishable from a product hang (the whole 0171 class).
+- **A server/boot that never came up must say so, not surface as a
+  downstream mystery.** `waitForServer` returning false is fatal — the
+  harness throws "server on :PORT never answered (stale serve.js squatting
+  the port?)" instead of letting `page.goto` fail with a bare
+  `ERR_CONNECTION_REFUSED`. Kill stray `serve.js`/`node -e` procs before a
+  sweep.
+- When a symptom is confusing, fix the DIAGNOSTIC too — make the failure
+  point at its cause. Quieting a red test to green without naming the root
+  cause is the bug, not the fix.
+
 ## Conformance tests (bug regression corpus)
 
 `tests/unit/conformance/` holds one directory per fixed conformance bug:
@@ -670,7 +704,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v85**.
+Image version is **v86**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

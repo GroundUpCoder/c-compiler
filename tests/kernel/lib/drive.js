@@ -66,6 +66,25 @@ function driveBoot(script, opts = {}) {
   const r = cp.spawnSync('node', args, spawnOpts);
   if (r.error) throw r.error;
   r.image = image;   // let a follow-up session reuse the same image
+  // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
+  // prints `wmctl: wait X timed out after Nms` and exits 1 — but a script
+  // with no `set -e` just burns the full timeout and sails on, so a wait on
+  // an unreachable condition passes SLOWLY instead of failing. (That is how
+  // the AQ_GETTEXT-can't-see-popup bug hid: fileman_ops was 117s of dead
+  // waits.) Any real timeout is a bug — no e2e legitimately expects one
+  // (absence checks use nowin/nolabel, which succeed on absence). Surface it
+  // as a hard failure naming every timed-out condition. Opt out with
+  // opts.allowWaitTimeout for a deliberate negative wait test.
+  if (!opts.allowWaitTimeout) {
+    const hay = String(r.stdout || '') + '\n' + String(r.stderr || '');
+    const hits = hay.match(/wmctl: wait .* timed out after \d+ms/g);
+    if (hits) {
+      const uniq = Array.from(new Set(hits));
+      throw new Error('driveBoot: wmctl wait timed out (a wait on an ' +
+        'unreachable condition — root-cause it, do not lengthen the timeout):\n  ' +
+        uniq.join('\n  '));
+    }
+  }
   return r;
 }
 

@@ -35,17 +35,23 @@ export function startServer(port, { root = ROOT, onLog } = {}) {
   return child;
 }
 
-// Poll the URL until it answers 200 (or the tries run out — the caller then
-// hits page.goto, which fails loudly and is caught by its own try). Returns
-// true once the server answers, false on timeout — matching the inline
-// break-on-success loop the sweep files carry. `fetchFn` is injectable for
-// unit tests.
-export async function waitForServer(url, { tries = 50, interval = 100, fetchFn = fetch } = {}) {
+// Poll the URL until it answers 200. Returns true once it does. On exhausting
+// the tries it THROWS a clear, actionable error by default (todos/0171 — the
+// loud-symptom rule): a server that never came up used to be discarded here
+// and surface downstream as a bare `page.goto: net::ERR_CONNECTION_REFUSED`,
+// which reads like a product failure but is almost always a stale `serve.js`
+// squatting this file's fixed port (or a rebake that outran the wait). Name
+// the real cause at the source instead. Pass `{ soft: true }` for the boolean
+// return (the unit test). `fetchFn` is injectable for unit tests.
+export async function waitForServer(url, { tries = 50, interval = 100, fetchFn = fetch, soft = false } = {}) {
   for (let i = 0; i < tries; i++) {
     try { if ((await fetchFn(url)).ok) return true; } catch {}
     await new Promise((r) => setTimeout(r, interval));
   }
-  return false;
+  if (soft) return false;
+  throw new Error(`waitForServer: ${url} never answered after ${tries}×${interval}ms ` +
+    `— a stale serve.js may be squatting the port (kill stray serve.js/'node -e' procs), ` +
+    `or an image rebake outran the wait (raise tries, or prebake with node tools/mkimage.js).`);
 }
 
 // The one WebGPU-flagged Chromium the whole sweep launches. Playwright is

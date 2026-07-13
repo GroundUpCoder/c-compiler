@@ -62,8 +62,14 @@ check('near: null got is falsy', !near(null, [0, 0, 0]));
   const up = await waitForServer('x', { tries: 10, interval: 1, fetchFn: okAfter3 });
   check('waitForServer returns true once the server answers', up === true && calls === 3);
 
-  const neverUp = await waitForServer('x', { tries: 4, interval: 1, fetchFn: async () => ({ ok: false }) });
-  check('waitForServer returns false after tries exhausted', neverUp === false);
+  const neverUp = await waitForServer('x', { tries: 4, interval: 1, soft: true, fetchFn: async () => ({ ok: false }) });
+  check('waitForServer returns false after tries exhausted (soft)', neverUp === false);
+
+  // Default (non-soft): exhaustion THROWS a loud, actionable error (0171).
+  let threw = false;
+  try { await waitForServer('x', { tries: 3, interval: 1, fetchFn: async () => ({ ok: false }) }); }
+  catch (e) { threw = /never answered/.test(e.message); }
+  check('waitForServer throws on exhaustion by default', threw);
 
   console.log(failures === 0 ? '\nos-harness unit: PASS' : `\nos-harness unit: ${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
