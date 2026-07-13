@@ -104,10 +104,11 @@ const waitGeom = (d) =>
 /* ---- session A: the whole interactive story in one boot ---- */
 const out = boot([
   'winmine &',
-  // Boot barrier: the "Advanced" menu item resolving in the agent tree means the
-  // menu (LoadMenuW) is built and winmine is pumping/serving — so the window is
-  // listed too.
-  'wmctl wait label Advanced 10000',
+  // Boot barrier: the top-level window's TEXT resolving through the agent
+  // socket means winmine is pumping/serving (LoadMenuW ran before the loop) —
+  // so the window is listed too. NB items of a CLOSED menu ("Advanced") are
+  // deliberately not GETTEXT-resolvable (0171) — waiting on one is a dead wait.
+  'wmctl wait label WineMine 10000',
   'SID=$(wmctl list | grep "WineMine$" | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
@@ -267,7 +268,7 @@ check('custom geometry persisted (Height=12, Width=11, Mines=20)',
 /* ---- session B: LoadBoard restores the custom board across boots ---- */
 const out2 = boot([
   'winmine &',
-  'wmctl wait label Exit 10000',                  // menu built + serving (window listed)
+  'wmctl wait label WineMine 10000',              // serving (title text resolves; closed-menu "Exit" wouldn't — 0171)
   'echo ==list1',
   'wmctl list',
   'echo ==cut',

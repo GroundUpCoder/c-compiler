@@ -10,8 +10,8 @@
 //   - windowed `gdidemo`: WM placement + title, fixed size (no R flag),
 //     and a `wmctl shot` frame probed against the scene's exact geometry
 //     (coordinates mirror os/win32/gdidemo.c draw_scene — change together).
-//   - bit-exactness: two shots a second apart (the app repaints every
-//     frame) are byte-identical — the CPU rasterizer is deterministic.
+//   - bit-exactness: shots of two INDEPENDENT boots' paints are
+//     byte-identical — the CPU rasterizer is deterministic.
 //
 // Run: node tests/kernel/test_gdi32_e2e.js
 'use strict';
@@ -31,7 +31,7 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-gdi32-');
 
-/* ---- session A: selftest, then the windowed scene + two shots ---- */
+/* ---- session A: selftest, then the windowed scene + a shot ---- */
 function sessionA() {
   const script = [
     'gdidemo selftest',
@@ -46,10 +46,6 @@ function sessionA() {
     'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1 6000',
     'wmctl shot $SID /root/gdi1.ppm && echo shot1-ok',
-    // Wait for a genuinely LATER frame (the app repaints every frame) before the
-    // second shot, so the bit-exactness check compares two distinct presents.
-    'wmctl wait seq $SID 2 6000',
-    'wmctl shot $SID /root/gdi2.ppm && echo shot2-ok',
     '',
   ].join('\n');
 
@@ -69,7 +65,24 @@ function sessionA() {
   check('gdidemo is fixed-size (no R flag — scaled, not configured)',
     !(row.split('\t')[5] || '').includes('R'), row);
   check('painted marker reached stdout', out.includes('gdidemo: painted'));
-  check('both shots written', out.includes('shot1-ok') && out.includes('shot2-ok'));
+  check('first shot written', out.includes('shot1-ok'));
+}
+
+/* ---- session A2: a SECOND boot paints the scene again for the determinism
+ * shot. gdidemo paints once per instance (WM_PAINT when the queue is dry,
+ * nothing ever re-invalidates it), so an in-boot `wait seq $SID 2` was a dead
+ * wait and a same-boot second shot just re-read the SAME present. A fresh boot
+ * is a genuinely independent paint — a STRONGER bit-exactness claim. ---- */
+function sessionA2() {
+  const out = driveBoot([
+    'gdidemo &',
+    'wmctl wait win "GDI Demo" 10000',
+    'SID=$(wmctl list | grep "GDI Demo$" | sed "s/[^0-9].*//")',
+    'wmctl wait seq $SID 1 6000',
+    'wmctl shot $SID /root/gdi2.ppm && echo shot2-ok',
+    '',
+  ].join('\n'), { image }).stdout;
+  check('second boot shot written', out.includes('shot2-ok'));
 }
 
 /* ---- session B: extract the PPMs and probe the scene ---- */
@@ -153,17 +166,18 @@ function sessionB() {
   probe('StretchBlt 2x top-right white', 130, 320, 255, 255, 255);
   probe('StretchBlt 2x bottom-right blue', 130, 340, 0, 120, 215);
 
-  /* Bit-exactness: two shots of the repainted scene are byte-identical. */
+  /* Bit-exactness: two independent boots' paints are byte-identical. */
   const p2 = parsePPM(p1.end);
   check('second shot parses at 480x360',
     p2 !== null && p2.w === 480 && p2.h === 360, p2 && `${p2.w}x${p2.h}`);
   if (p2) {
-    check('repeated paints are bit-exact (shot1 == shot2)',
+    check('independent boots paint bit-exact (shot1 == shot2)',
       buf.subarray(p1.data, p1.end).equals(buf.subarray(p2.data, p2.end)));
   }
 }
 
 sessionA();
+sessionA2();
 sessionB();
 
 fs.rmSync(tmp, { recursive: true, force: true });

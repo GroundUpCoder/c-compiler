@@ -281,8 +281,11 @@ const outD = bootD([
   'wmctl key 0 17 110 256', FOCUS_SETTLE,        // Alt+N: static mnemonic -> edit
   'echo ==altn', 'wmctl tree', 'echo ==cut',
   // Type "hi" into the dialog EDIT, then confirm it landed before toggling.
+  // CLASS:n indexes the WHOLE tree: the main window's single-line (0) and
+  // multiline (1) EDITs enumerate first, so the dialog's EDIT is EDIT:2 —
+  // waiting on EDIT:0 here is a dead wait (the keys go to the dialog).
   'wmctl key 0 11 104', 'wmctl key 0 12 105',
-  'wmctl wait text EDIT:0 hi 4000',
+  'wmctl wait text EDIT:2 hi 4000',
   'wmctl key 0 47 118 256', FOCUS_SETTLE,        // Alt+V: toggle Verbose
   'wmctl key 0 40 13',                           // Enter: default OK -> closes
   'wmctl wait nowin Options 6000',

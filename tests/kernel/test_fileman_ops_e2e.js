@@ -180,12 +180,16 @@ const script = [
   DEL,
   'wmctl wait win "Confirm File Delete" 8000',     // confirm box up
   'wmctl click Yes',
-  'wmctl wait count "File Manager" 2 8000',         // EROFS error box (2nd "File Manager" window) up
+  // The main window is titled "File Manager - <cwd>" (0106) and wait-count
+  // matches titles EXACTLY, so the EROFS MessageBox is the ONLY window titled
+  // exactly "File Manager" — wait for its presence/absence, not a count of 2/1
+  // (those were dead waits: the count never left 1/0).
+  'wmctl wait win "File Manager" 8000',             // EROFS error box up
   'echo ==erofs1',
   'wmctl tree',
   'echo ==cut',
   'wmctl click OK',
-  'wmctl wait count "File Manager" 1 6000',         // error box dismissed
+  'wmctl wait nowin "File Manager" 6000',           // error box dismissed
   'test -e /bin/awk && echo ROFS-INTACT',
   // ---- New Folder x2: the "New Folder", "New Folder 2" uniquifier ----
   'wmctl settext EDIT:0 /root/optest',

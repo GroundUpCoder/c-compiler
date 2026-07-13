@@ -70,9 +70,11 @@ const waitFile = (p) =>
 
 const out = boot([
   'paint &',
-  // Boot barrier: the "Filled Rectangle" menu item resolving means paint built
-  // its menu and is serving (window listed for the SID grep).
-  'wmctl wait label "Filled Rectangle" 12000',
+  // Boot barrier: the top-level window TEXT resolving through the agent socket
+  // means paint is pumping/serving (menus built before the loop). NB items of a
+  // CLOSED menu ("Filled Rectangle") are deliberately not GETTEXT-resolvable
+  // (0171) — AQ_CLICK still fires them, but waiting on one is a dead wait.
+  'wmctl wait label "untitled - Paint" 12000',
   'SID=$(wmctl list | grep -- "- Paint$" | sed "s/[^0-9].*//")',
   'echo ==list', 'wmctl list', 'echo ==cut',
   'echo ==tree', 'wmctl tree', 'echo ==cut',
