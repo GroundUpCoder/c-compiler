@@ -2640,7 +2640,7 @@ Kernel.prototype._sockRpc = function (pcb, op, req) {
       if (ksrv) {
         var ka = sockDir(), kb = sockDir();        // ka: client->kernel, kb: kernel->client
         oc.st = 'conn'; oc.rx = kb; oc.tx = ka;
-        var kpeer = this._kernelPeer(ka, kb);
+        var kpeer = this._kernelPeer(ka, kb, pcb);
         this._respond(pcb, {});
         try { ksrv(kpeer, pcb); } catch (e) { this._log('sockServe handler: ' + (e && e.message)); kpeer.close(); }
         return;
@@ -2745,7 +2745,7 @@ Kernel.prototype.sockServe = function (path, onConnect) {
   this._kernelSockServers.set(resolved || path, onConnect);
 };
 
-Kernel.prototype._kernelPeer = function (recvDir, sendDir) {
+Kernel.prototype._kernelPeer = function (recvDir, sendDir, clientPcb) {
   var self = this;
   var peer = {
     onData: null,               // (Uint8Array) — set by the endpoint handler
@@ -2754,6 +2754,13 @@ Kernel.prototype._kernelPeer = function (recvDir, sendDir) {
       if (!sendDir.rOpen || !sendDir.wOpen) return false;
       for (var i = 0; i < bytes.length; i++) sendDir.buf.push(bytes[i]);
       self._pipeNotify(sendDir);                  // serve the client's park
+      // Kernel-socket→input-ring wake (todos/0168, IDLE-POWER piece W):
+      // a client parked on its input ring (__sdl_pump_wait — SDL_WaitEvent
+      // or wm.c's event loop) must wake when kernel-peer data lands, or a
+      // WMP event (EV_CREATED, EV_SNAP_EDGE, EV_SCREEN, R_IDLE…) sits until
+      // the park's timeout. Pure Atomics.notify, no ring record — wakes are
+      // spurious by contract (0161): the caller re-polls its queues.
+      if (clientPcb && clientPcb.wmRing) Atomics.notify(clientPcb.wmRing.i32, IR_WPOS);
       return true;
     },
     close: function () {

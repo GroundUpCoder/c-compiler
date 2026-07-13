@@ -560,6 +560,11 @@ but the kernel never parks: arriving bytes fire `peer.onData` via a
 replies buffer whole, the client reads in chunks). First user: the WM
 protocol server on `/run/wm.sock` (framed spec: the `WMP` block in
 kernel.js; MUST MATCH `os/wm_proto.h` + `tests/kernel/test_wm_policy.js`).
+Since todos/0168 `peer.send()` also KICKS the client's input ring
+(`Atomics.notify` on IR_WPOS, no record — a spurious wake under the 0161
+contract): a client parked in `__sdl_pump_wait` (SDL_WaitEvent, wm.c's
+event loop) wakes promptly on kernel-peer data instead of sleeping out
+its park chunk past a WMP event (`tests/kernel/test_sockwake_e2e.js`).
 
 `Kernel.service(spec)` spawns kernel-owned service processes (the /bin/wm
 autostart): parentless (ppid 0), own session, auto-reaped on exit —
