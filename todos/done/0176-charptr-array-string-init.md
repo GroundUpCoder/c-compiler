@@ -1,7 +1,25 @@
 # 0176 — P0: {"str"} initializer for a char* array copies bytes, not the pointer
 
-- **Status**: open
+- **Status**: done (2026-07-13)
 - **Design**: —
+
+## Resolution
+
+Fixed with ONE shared predicate, `stringLiteralCanInitArray(arrayType,
+strExpr)` (compiler.js, top-level between the WASM helpers and the Parser
+module so both scopes see it): element type must be a non-pointer,
+non-aggregate, non-array scalar whose width matches the string's element
+width — the same guard sema's `normalizeInitList` already had. Applied at
+all six `{ "str" }` shortcut sites: the three compound-literal parse paths
+(which previously ADOPTED the string's char[N] type, so
+`(const char *[]){"x"}` didn't even parse), `populateInitListStatic`
+(static locals + file-scope statics), the local frame-slot init path, and
+file-scope compound-literal initialization. When the guard refuses, each
+site falls through to the ordinary per-element path, which handles the
+string-literal-decays-to-pointer case correctly.
+
+Conformance test committed red first (c34ef31), green after; full unit
+suite 711/711. Dev log: logs/2026-07-13/0176-charptr-array-init-bug.md.
 
 ## Goal
 

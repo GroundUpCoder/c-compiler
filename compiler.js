@@ -7587,6 +7587,23 @@ function lebI64(out, value) {
   }
 }
 
+// C11 6.7.9p14: a string literal may (brace-optionally) initialize an array
+// whose ELEMENT is a matching-width character/integer type — and nothing
+// else. Every `{ "str" }` byte-copy shortcut must gate on this, or an array
+// of char* with a single string-literal initializer gets the string's BYTES
+// written into the pointer slot (todos/0176: `const char *r[] = {"cmd"}`
+// yielded r[0] == "cmd\0" read as an address). Top-level on purpose: both
+// the Parser (compound-literal paths) and the codegen (static/frame/file-
+// scope init paths) gate on it.
+function stringLiteralCanInitArray(arrayType, strExpr) {
+  if (!arrayType.isArray()) return false;
+  const abt = arrayType.baseType.removeQualifiers();
+  if (abt.isAggregate() || abt.isPointer() || abt.isArray()) return false;
+  const st = strExpr && strExpr.type && strExpr.type.isArray()
+    ? strExpr.type.baseType.removeQualifiers() : null;
+  return !st || abt.size === st.size;
+}
+
 // ====================
 // Parser
 // ====================
@@ -10261,7 +10278,8 @@ class Parser {
           let initList = this.parseInitList(castType);
           // Handle string-initialized char array (e.g., `(char[]){"hi"}`).
           if (castType.isArray() && castType.arraySize === 0 &&
-              initList.elements.length === 1 && initList.elements[0] instanceof AST.EString) {
+              initList.elements.length === 1 && initList.elements[0] instanceof AST.EString &&
+              stringLiteralCanInitArray(castType, initList.elements[0])) {
             castType = initList.elements[0].type;
             initList = new AST.EInitList(initList.loc, castType,
               initList.elements, initList.designators, initList.unionMemberIndex);
@@ -10312,7 +10330,8 @@ class Parser {
             let litType = sType;
             let initList = this.parseInitList(litType);
             if (litType.isArray() && litType.arraySize === 0 &&
-                initList.elements.length === 1 && initList.elements[0] instanceof AST.EString) {
+                initList.elements.length === 1 && initList.elements[0] instanceof AST.EString &&
+                stringLiteralCanInitArray(litType, initList.elements[0])) {
               litType = initList.elements[0].type;
               initList = new AST.EInitList(initList.loc, litType,
                 initList.elements, initList.designators, initList.unionMemberIndex);
@@ -11131,7 +11150,8 @@ class Parser {
             // Compound literal: (type){...}
             let initList = this.parseInitList(castType);
             if (castType.isArray() && castType.arraySize === 0 &&
-                initList.elements.length === 1 && initList.elements[0] instanceof AST.EString) {
+                initList.elements.length === 1 && initList.elements[0] instanceof AST.EString &&
+                stringLiteralCanInitArray(castType, initList.elements[0])) {
               castType = initList.elements[0].type;
               initList = new AST.EInitList(initList.loc, castType,
                 initList.elements, initList.designators, initList.unionMemberIndex);
@@ -14922,7 +14942,7 @@ class CodeGenerator {
       // like `char m[][6] = {"ab","cd"}`, a different case.)
       if (initList.elements.length === 1 &&
           initList.elements[0] instanceof AST.EString &&
-          !elemType.isArray() && !elemType.isAggregate()) {
+          stringLiteralCanInitArray(type, initList.elements[0])) {
         this.writeStringLiteralToStatic(initList.elements[0].value, type, baseOffset);
         return;
       }
@@ -15147,7 +15167,8 @@ class CodeGenerator {
     }
     if (type.isAggregate() && initExpr instanceof AST.EInitList) {
       const il = initExpr;
-      if (type.isArray() && il.elements.length === 1 && il.elements[0] instanceof AST.EString) {
+      if (type.isArray() && il.elements.length === 1 && il.elements[0] instanceof AST.EString &&
+          stringLiteralCanInitArray(type, il.elements[0])) {
         this.emitStringToFrameSlot(il.elements[0].value, type, frameOffset);
         return;
       }
@@ -17783,7 +17804,8 @@ function generateCode(units, outputFile, options) {
       const addr = cg.fileScopeCompoundLiteralAddrs.get(cl);
       if (addr === undefined) continue; // already initialized in another TU pass
       const baseOffset = addr - (cg.stackPages * 65536);
-      if (cl.type.isArray() && cl.initList.elements.length === 1 && cl.initList.elements[0] instanceof AST.EString) {
+      if (cl.type.isArray() && cl.initList.elements.length === 1 && cl.initList.elements[0] instanceof AST.EString &&
+          stringLiteralCanInitArray(cl.type, cl.initList.elements[0])) {
         cg.writeStringLiteralToStatic(cl.initList.elements[0].value, cl.type, baseOffset);
       } else if (cl.type.isAggregate() || cl.type.isArray()) {
         cg.populateInitListStatic(cl.initList, cl.type, baseOffset);
