@@ -1,8 +1,33 @@
 # 0156 — os-shell.mjs desktop-icon rename leg fails: (49,52) never navy
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-13)
 - **Design**: `tests/browser/os-shell.mjs` (the todos/0103 desktop-icon
   rename-in-place leg); wm.c desktop layer + window placement.
+
+## Resolution
+
+TWO stacked test bugs; **wm.c exonerated** (a headless `wmctl shot` pixel
+map of the exact gesture shows the selection working and the strip drawn
+correctly — the 0175 loud-gate battery re-surfaced this file and the map
+did the root-causing):
+
+1. **The sample pixel sat on glyph ink.** The selected 3-char label strip
+   spans x=47..67, y=48..58 with the white 'aaa' glyphs at y>=50 —
+   `(49,52)` is the first 'a''s own white pixel, so the check could NEVER
+   pass, occluded or not (both hypotheses in this item were beside the
+   point for the pixel itself). Fixed: sample the strip's all-navy top
+   padding row `(49,48)`.
+2. **The desktop-focus click landed on the window soup** (the hypothesis-
+   (b) part, confirmed on a fresh boot passing where the full run failed):
+   the earlier legs' ctlpanel hub + notepads + winbox stay open, so
+   `clickAt(500,400)` hit a window and ArrowRight never reached the
+   desktop. Fixed: `pkill -9` the leftovers first — NOT `wmctl close`,
+   whose close box on a MODIFIED notepad raises a modal save prompt that
+   keeps focus (and cooperative SIGTERM can't wake a process parked in
+   GetMessage).
+
+`node tests/browser/os-sweep.mjs --filter=os-shell` green end-to-end
+(106.5s), including the downstream 0151 spaced-name dblclick legs.
 
 ## Goal
 

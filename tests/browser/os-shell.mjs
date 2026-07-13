@@ -675,16 +675,27 @@ try {
   // top-left cell deterministic despite the earlier grid churn — select it by
   // keyboard (Right from a cleared selection lands top-left), F2, retype. ----
   await setVt(1);
+  // Kill every leftover app (hub/applet/notepads/winbox) first — the
+  // desktop-focus click below must land on the DESKTOP, not on the window
+  // soup the earlier legs accumulated (todos/0156: the click hit a window, so
+  // ArrowRight never selected anything). SIGKILL, not `wmctl close`: a close
+  // box on a modified notepad raises a modal save prompt that keeps focus
+  // (and SIGTERM can't wake a process parked in GetMessage).
+  await page.keyboard.type('pkill -9 notepad; pkill -9 ctlpanel; pkill -9 winbox; pkill -9 term; echo WCL""-DONE\r', { delay: 20 });
+  await page.waitForFunction(() => window.__osOut.includes('WCL-DONE'), { timeout: 20000, polling: 200 });
   await page.keyboard.type('rm -f /root/Desktop/.icons; printf x > /root/Desktop/aaa; echo RN-""SETUP\r', { delay: 20 });
   await page.waitForFunction(() => window.__osOut.includes('RN-SETUP'), { timeout: 20000, polling: 200 });
   await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
   await setVt(2);
   // Focus the desktop on an empty cell (col ~5), then Right selects the
   // top-left icon (aaa). Its 3-char label strip goes navy when selected.
+  // The strip spans x=47..67, y=48..58 with the 'aaa' glyphs at y>=50 —
+  // (49,52) sat ON the first 'a' glyph's white ink (todos/0156, could never
+  // pass); sample the strip's all-navy top padding row instead.
   await clickAt(500, 400);
   await new Promise(r => setTimeout(r, 400));
   await page.keyboard.press('ArrowRight');
-  await waitPixel(49, 52, NAVY);                     // aaa label strip (row 0)
+  await waitPixel(49, 48, NAVY);                     // aaa label strip padding (row 0)
   check('top-left icon selected (navy label strip)', true);
   // F2 opens the inline editor: a solid white box over the label cell. Sample
   // just above the text row — teal on the plain desktop, white with the box.
