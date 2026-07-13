@@ -5736,6 +5736,9 @@ function createNullSDL() {
       // model paces frames via rAF and must not call SDL_Delay. See
       // sdlDelayUnsupported() for the restructure guidance.
       __sdl_delay: function () { sdlDelayUnsupported(); },
+      // No OS input ring in this flavor — SDL_WaitEvent* falls back to a
+      // nanosleep pace on a 0 return (todos/0161).
+      __sdl_pump_wait: function () { return 0; },
     },
   };
 }
@@ -7051,6 +7054,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       // must not call SDL_Delay. The error surfaces in the graphical sheet's
       // on-screen debug overlay.
       __sdl_delay: function () { sdlDelayUnsupported(); },
+      // No OS input ring in this flavor (events are pushed by page listeners,
+      // and the main thread must never block) — SDL_WaitEvent* falls back to
+      // a nanosleep pace on a 0 return (todos/0161), which itself fails loud
+      // on a main thread that cannot Atomics.wait.
+      __sdl_pump_wait: function () { return 0; },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if ticks are read before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return Math.floor(performance.now() - sdlTicksBase); },

@@ -18534,6 +18534,8 @@ bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
 bool SDL_PollEvent(SDL_Event *event);
+bool SDL_WaitEvent(SDL_Event *event);
+bool SDL_WaitEventTimeout(SDL_Event *event, Sint32 timeoutMS);
 void SDL_DestroyWindow(SDL_Window *window);
 void SDL_Quit(void);
 void SDL_Delay(Uint32 ms);
@@ -22566,6 +22568,15 @@ __import void __sdl_set_cursor(int handle, int shape);
 __import int __sdl_set_window_size(int handle, int w, int h);
 __import int __sdl_update_window_surface(int handle, const void *pixels, int w, int h, int pitch);
 __import void __sdl_delay(int ms);
+/* Blocking input park (todos/0161; host.js pumpWait — the same seam user32's
+   GetMessage uses): drain the OS input ring into the wasm event queue and, if
+   dry, park on the ring until the kernel's next push or timeoutMs. Returns 1
+   if a ring exists (a window was created), 0 otherwise (caller paces itself).
+   Wakes can be spurious; callers re-poll their queues. */
+__import int __sdl_pump_wait(int timeoutMs);
+/* libc's sleep import (this unit doesn't include time.h) — the no-ring
+   fallback pace in SDL_WaitEventTimeout. */
+__import int __nanosleep(long sec, long nsec);
 /* ms since SDL_Init as an f64 (exact for integer ms up to 2^53 — ~285k years),
    so SDL_GetTicks can return a full Uint64 without the old 32-bit wrap. */
 __import double __sdl_get_ticks(void);
@@ -22983,6 +22994,42 @@ bool SDL_PollEvent(SDL_Event *event) {
     e->next = __sdl_eq_free;
     __sdl_eq_free = e;
     return 1;
+}
+
+/* SDL_WaitEvent / SDL_WaitEventTimeout (todos/0161, IDLE-POWER Stage 2 —
+   the real SDL idiom for event-driven apps: block, don't poll).
+   Parks on the OS input ring via __sdl_pump_wait (host.js pumpWait, the seam
+   user32's blocking GetMessage has used since 0058), so a waiting app is off
+   the vsync heartbeat entirely: the kernel wakes it on routed input, resize,
+   quit — never 60x/s for nothing. The park is CHUNKED at 1s per import call
+   because an env-import RETURN is the cooperative-signal safe point; one
+   unbounded park would defer SIGTERM and friends forever. Each chunk wake
+   re-polls and re-parks, so an idle waiter costs ~1 wakeup/s.
+   SDL3 semantics kept: a NULL event peeks (the event stays queued for the
+   next SDL_PollEvent); timeoutMS < 0 waits forever; returns false on timeout.
+   Without an input ring (no window yet, or a flavor with no kernel behind
+   it) there is nothing to park on — nanosleep the chunk so the timeout
+   semantics hold instead of a hot spin. */
+bool SDL_WaitEventTimeout(SDL_Event *event, Sint32 timeoutMS) {
+    Uint64 deadline = 0;
+    if (timeoutMS > 0) deadline = SDL_GetTicks() + (Uint64)timeoutMS;
+    for (;;) {
+        if (SDL_PollEvent(event)) return 1;
+        if (timeoutMS == 0) return 0;
+        int chunk = 1000;
+        if (timeoutMS > 0) {
+            Uint64 now = SDL_GetTicks();
+            if (now >= deadline) return 0;
+            Uint64 left = deadline - now;
+            if (left < (Uint64)chunk) chunk = (int)left;
+        }
+        if (!__sdl_pump_wait(chunk))
+            __nanosleep(chunk / 1000, (long)(chunk % 1000) * 1000000L);
+    }
+}
+
+bool SDL_WaitEvent(SDL_Event *event) {
+    return SDL_WaitEventTimeout(event, -1);
 }
 
 /* ---- Audio ----

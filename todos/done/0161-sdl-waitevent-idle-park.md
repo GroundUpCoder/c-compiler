@@ -1,8 +1,6 @@
 # 0161 — SDL_WaitEvent over pumpWait: take idle SDL apps off the vsync wake list
 
-- **Status**: open (re-activated 2026-07-12 — the "pending rework" happened:
-  this item is IDLE-POWER **Stage 2**, ordered after 0167; it sat parked
-  earlier the same day alongside its pair 0160).
+- **Status**: done (2026-07-13)
   **Unified framing:** see `todos/IDLE-POWER.md` — this item is piece C of the
   idle-zero design (idle apps stop producing frames); it is a prerequisite for
   the compositor ever parking, but insufficient alone. Read IDLE-POWER first.
@@ -20,6 +18,23 @@
   the ring only; wm's events arrive on the socket).
 - **Design**: this file + `todos/IDLE-POWER.md` (found profiling the 0119 mgp
   present path)
+
+## Resolution
+
+Landed 2026-07-13 (dev log: `logs/2026-07-13/waitevent-idle-park.md`):
+`SDL_WaitEvent`/`SDL_WaitEventTimeout` in the SDL veneer as
+`loop { PollEvent || __sdl_pump_wait(chunk) }` over the user32-GetMessage
+seam — parked waiters are off the vsync heartbeat for free (they wait on
+`IR_WPOS`, not `KP_VSYNC_SEQ`), chunked at 1s so env-import returns stay
+cooperative-signal safe points; no-ring flavors get a `__nanosleep` fallback
+pace (host.js stubs in createNullSDL/createBrowserSDL). mgp is the first
+adopter: `sdlx_wait_event(2000)` parks a settled slide (peek-only, events
+still flow through the one XCheckMaskEvent path). Image v86→v87. Test:
+`tests/kernel/test_waitevent_e2e.js` (timeout, chunk-crossing wake,
+signal-while-parked, NULL peek) — 3/3 stable under load; `tests/flake.js`
+green; `test_present_e2e` 3/3 under load. Scope split per the review notes:
+wm.c's conversion (socket→ring notify plumbing) is 0168, wake-counter
+probes + compositor parking 0169.
 
 ## Goal
 

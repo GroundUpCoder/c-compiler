@@ -483,7 +483,15 @@ cooperative signals defer to the next tick, SIGKILL unaffected). No
 vsync source (boot.js, standalone) → the deadline-setTimeout pacer
 tier in host.js's frame-loop driver (fixed 0100: the old fixed
 `setTimeout(16)`-after-callback pacer silently halved presented fps —
-sameboy GBC showed 60 emulated/33 presented).
+sameboy GBC showed 60 emulated/33 presented). Idle SDL apps can leave
+the frame race entirely (todos/0161, IDLE-POWER Stage 2):
+`SDL_WaitEvent`/`SDL_WaitEventTimeout` REALLY block on the OS input
+ring via `__sdl_pump_wait` (user32's GetMessage seam) in 1s chunks
+(import return = cooperative-signal safe point), waking on routed
+input/resize/quit instead of 60×/s — mgp parks its settled slides this
+way (`sdlx_wait_event`); wm.c's conversion is 0168, wake-counter probes
++ compositor parking 0169. Test: `test_waitevent_e2e.js`; design:
+`todos/IDLE-POWER.md`.
 The Start menu is a single Win95 column with a gucOS sidebar band
 (todos/0098's Win7 two-pane reverted to one column by todos/0132, the
 22px gucOS band + bottom All-Programs its follow-up, over the 0078
@@ -704,7 +712,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v86**.
+Image version is **v87**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

@@ -889,3 +889,15 @@ void reset_cache_pixmap(void) {
 void sdlx_frame_hook(void (*cb)(void)) {
 	__setAnimationFrameFunc(cb);
 }
+
+/* Idle park (todos/0161, IDLE-POWER Stage 2), wrapped so mgp.c needs no
+ * SDL include: block until an SDL event arrives or ms elapse. Peek-only —
+ * a waking event stays queued for the next sx_pump(), so every event
+ * still flows through the one XCheckMaskEvent path. Safe to call only
+ * when the X-side queue is dry (a settled XCheckMaskEvent matched
+ * ~NoEventMask, so anything queued was already consumed); sx_pump drains
+ * every SDL event type, matched or not, so nothing can linger SDL-side
+ * and turn the peek into a hot spin. */
+void sdlx_wait_event(int ms) {
+	SDL_WaitEventTimeout(NULL, ms);
+}

@@ -180,6 +180,15 @@ the external embedder and deployed). Done:
   `malloc` failure) failure paths set the error too. Test: `sdl_null_guards`.
 - **`SDL_PollEvent(NULL)` peeks** — returns true if an event is queued without
   removing it, never derefs the NULL. Test: `sdl_null_guards`.
+- **`SDL_WaitEvent` / `SDL_WaitEventTimeout` are a REAL block** (todos/0161,
+  IDLE-POWER Stage 2) — OS processes run in workers, so the veneer parks on
+  the input ring via `__sdl_pump_wait` (host.js `pumpWait`, user32's
+  GetMessage seam) in 1s chunks (each import return is the cooperative-signal
+  safe point). A waiting app is off the vsync heartbeat: it wakes on routed
+  input/resize/quit, not 60×/s. NULL peeks; timeout <0 = forever; without a
+  ring (no window / standalone flavors) a nanosleep pace keeps the timeout
+  semantics. First adopter: mgp's settled-page park (`sdlx_wait_event`).
+  Test: `tests/kernel/test_waitevent_e2e.js`.
 - **`SDL_CreateTexture` default blend mode is alpha-aware** — `BLEND` for an
   alpha format, `NONE` otherwise (added the real `SDL_ISPIXELFORMAT_*` macros +
   `SDL_GetTextureBlendMode`). Test: `sdl_texture_blend_default`, `sdl-blend-renders`.
@@ -302,8 +311,10 @@ SPIR-V/DXIL/MSL; on web we'd require WGSL (or a translator) — decide the shade
 ingestion path.
 
 ### Events (SDL_events) — ◑ partial — P0
-Missing: `SDL_PushEvent`, `SDL_WaitEvent`/`WaitEventTimeout` (no-JSPI: must be
-the callback model, not a true block), `SDL_PeepEvents`, event filters/watchers
+Have (since todos/0161): `SDL_WaitEvent`/`SDL_WaitEventTimeout` as a REAL
+block over the OS input ring (see "SDL_WaitEvent … are a REAL block" above —
+processes are workers, so no JSPI needed). Missing: `SDL_PushEvent`,
+`SDL_PeepEvents`, event filters/watchers
 (`SetEventFilter`), `SDL_FlushEvents`, and event *types*: window events, text
 input/editing (IME), gamepad/joystick, touch, pen, drop (file drag-drop),
 clipboard-update, render-targets-reset. Web: DOM event listeners already feed the
@@ -427,8 +438,12 @@ SDL_mixer (on top of audio). Note as future, separate docs.
 
 ## Constraints to honor (carried from the rest of the project)
 
-- **No JSPI:** anything that "blocks" (WaitEvent, Delay, device await, clipboard
-  read) must be expressed through the frame-callback model, not a real block.
+- **No JSPI:** anything that "blocks" (Delay, device await, clipboard read)
+  must be expressed through the frame-callback model, not a real block —
+  EXCEPT waits that can park on a SAB futex from a worker: `SDL_WaitEvent`/
+  `WaitEventTimeout` really block on the OS input ring (todos/0161), the same
+  way user32's GetMessage always has. The frame-callback rule still governs
+  standalone main-thread pages.
 - **Fail loud** on unsupported calls (don't silently no-op) — match the WebGPU
   binding's stance.
 - **Tests:** each subsystem lands with a `tests/browser/` sample + Playwright

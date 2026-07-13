@@ -873,6 +873,14 @@ frame_loop()
 						fl_reload();
 				}
 			}
+			/* IDLE-POWER Stage 2 (todos/0161): a settled page has
+			 * nothing to draw until input arrives — park on the OS
+			 * input ring instead of returning into a 60Hz frame
+			 * callback that re-enters just to find no event. The 2s
+			 * cap keeps the timebar/wantreload idle duties above on
+			 * their upstream cadence; a waking event stays queued
+			 * (peek) for the XCheckMaskEvent in draw_one. */
+			sdlx_wait_event(2000);
 			return;
 		}
 
