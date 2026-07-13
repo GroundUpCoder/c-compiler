@@ -6039,13 +6039,16 @@ function createSurfaceSDL({ ctx, hooks }) {
     return 0;
   }
   /* Drain the input ring into the wasm event queue. Runs before every frame
-   * tick (and is exposed for embedder pumps). Single consumer by design. */
+   * tick (and is exposed for embedder pumps). Single consumer by design.
+   * Returns the record count drained — pumpWait's no-park signal (0168). */
   function drainInput() {
-    if (!ring) return;
+    if (!ring) return 0;
     const ex = getExports();
     const cap2 = ring.cap * 2;
+    let drained = 0;
     let rpos = Atomics.load(ring.i32, WMIR_RPOS);
     while (rpos !== Atomics.load(ring.i32, WMIR_WPOS)) {
+      drained++;
       const base = (WMIR_HDR_BYTES >> 2) + (rpos % ring.cap) * WMIR_RECORD_WORDS;
       const type = ring.i32[base];
       const handle = handleBySid.get(ring.i32[base + 1]) || 1;
@@ -6096,6 +6099,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       rpos = (rpos + 1) % cap2;
       Atomics.store(ring.i32, WMIR_RPOS, rpos);
     }
+    return drained;
   }
   /* Blocking message-loop park (todos/0058 — user32's GetMessage): drain,
    * and if the ring is dry park on IR_WPOS until the kernel's push
@@ -6106,9 +6110,16 @@ function createSurfaceSDL({ ctx, hooks }) {
    * if a ring exists (a window was created), 0 otherwise so the caller
    * can pace itself instead of spinning. Wakes can be spurious; the
    * caller re-checks its queues. Processes run in workers, where
-   * Atomics.wait is allowed. */
+   * Atomics.wait is allowed.
+   * NO PARK WHEN THE ENTRY DRAIN PRODUCED EVENTS (todos/0168): events that
+   * landed between the caller's last queue check and this call used to be
+   * moved into the wasm queue and then slept past for the full timeout —
+   * under a 25ms GetMessage chunk that was a bounded hiccup, under wm.c's
+   * 1s event-loop park it lost a drag's tail events for a visible second
+   * (the marquee regression that found this). Return instead; the caller's
+   * contract is already re-poll-on-any-return. */
   function pumpWait(timeoutMs) {
-    drainInput();
+    if (drainInput() > 0) return 1;
     if (!ring) return 0;
     if (timeoutMs > 0) {
       const wpos = Atomics.load(ring.i32, WMIR_WPOS);
