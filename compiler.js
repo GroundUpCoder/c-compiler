@@ -22551,6 +22551,13 @@ __import void __sdl_set_animation_frame_func(void (*callback)(void));
 /* System clipboard (todos/0090; host.js createClipboard). */
 __import int __clip_set(int fmt, const void *bytes, int len);
 __import int __clip_get(int fmt, void *out, int cap);
+/* HTTP transport (todos/0172; host.js createHttp). The libcurl veneer
+   (0173) and /bin/code (0174) sit on these. headers is a NUL-terminated
+   blob of "Name: Value" lines joined by newlines (or empty). */
+__import int __http_open(const char *method, const char *url, const char *headers, const void *body, int blen);
+__import int __http_status(int id, int *status_out, char *hdr, int hdrcap);
+__import int __http_read(int id, void *buf, int cap);
+__import int __http_close(int id);
 __import int __sdl_open_audio_device(int freq, int format, int channels);
 __import int __sdl_queue_audio(int dev, const void *data, int len);
 __import int __sdl_get_queued_audio_size(int dev);

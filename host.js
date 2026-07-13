@@ -5551,6 +5551,83 @@ function createClipboard(ctx, hooks) {
   } };
 }
 
+/* ---- HTTP transport (todos/0172) ----
+   The C-visible primitive under the libcurl veneer (0173) and /bin/code
+   (0174). Kernel-backed via spawnHooks (fetch runs kernel-side; the process
+   streams the body through the doorbell under backpressure). No kernel (a
+   standalone page, or an embedder predating the 0x06xx ops — detected by
+   ENOSYS) means no network: __http_open returns -1/ENOSYS, fail-loud, the
+   two-transports-one-fs precedent. Blocking by construction — every call
+   parks the worker on the doorbell like any other RPC.
+
+   Surface (all pointers are into wasm memory; strings are NUL-terminated):
+     __http_open(method, url, headers, body, blen) -> id>0 | -1
+        headers: "Name: Value\n"-joined lines (or ""); body/blen optional.
+     __http_status(id, status_out, hdr, hdr_cap) -> total header bytes | -1
+        writes the numeric status to *status_out; copies min(total,hdr_cap).
+     __http_read(id, buf, cap) -> n>0 | 0 (EOF) | -1 (error)
+     __http_close(id) -> 0
+   The veneer maps curl_easy_perform onto open -> status (feeds
+   HEADERFUNCTION) -> read loop (feeds WRITEFUNCTION) -> close. */
+function createHttp(ctx, hooks) {
+  const CHUNK = 49152;             // under the kernel page payload cap
+  const have = !!(hooks && typeof hooks.httpOpen === 'function');
+  const enc = new TextEncoder();
+  return { [ENV_KEY]: {
+    __http_open: function (methodPtr, urlPtr, headersPtr, bodyPtr, blen) {
+      if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
+      const method = methodPtr ? ctx.readString(methodPtr) : 'GET';
+      const url = urlPtr ? ctx.readString(urlPtr) : '';
+      const hdrRaw = headersPtr ? ctx.readString(headersPtr) : '';
+      const headers = hdrRaw.split('\n').map((s) => s.trim()).filter((s) => s.length);
+      blen = blen >>> 0;
+      // Stage the request body in page-sized chunks (contiguous, off 0 first).
+      if (blen) {
+        const body = new Uint8Array(ctx.getMemory().buffer).slice(bodyPtr, bodyPtr + blen);
+        let off = 0;
+        while (off < blen) {
+          const n = Math.min(blen - off, CHUNK);
+          const payload = new Uint8Array(4 + n);
+          new DataView(payload.buffer).setUint32(0, off, true);
+          payload.set(body.subarray(off, off + n), 4);
+          const r = hooks.httpBody(payload);
+          if (r && r.errno) { ctx.setErrnoName(r.errno === 'ENOSYS' ? 'ENOSYS' : r.errno); return -1; }
+          off += n;
+        }
+      }
+      const r = hooks.httpOpen({ method, url, headers });
+      if (r && r.errno) { ctx.setErrnoName(r.errno === 'ENOSYS' ? 'ENOSYS' : r.errno); return -1; }
+      return r && r.id ? r.id : -1;
+    },
+    __http_status: function (id, statusOut, hdrPtr, hdrCap) {
+      if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
+      const r = hooks.httpStatus(id | 0);
+      if (!r || r.errno) { ctx.setErrnoName((r && r.errno) || 'EIO'); return -1; }
+      if (statusOut) new DataView(ctx.getMemory().buffer).setInt32(statusOut, r.status | 0, true);
+      const hb = enc.encode(r.headers || '');
+      const n = Math.min(hdrCap >>> 0, hb.length);
+      if (n > 0 && hdrPtr) new Uint8Array(ctx.getMemory().buffer).set(hb.subarray(0, n), hdrPtr);
+      return hb.length;
+    },
+    __http_read: function (id, buf, cap) {
+      if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
+      const r = hooks.httpRead(id | 0, cap >>> 0);
+      if (r && r.errno) {
+        if (r.errno === 'EINTR') { ctx.setErrnoName('EINTR'); return -1; }
+        ctx.setErrnoName(r.errno); return -1;
+      }
+      const raw = r && r.raw ? r.raw : new Uint8Array(0);
+      const n = Math.min(cap >>> 0, raw.length);
+      if (n > 0 && buf) new Uint8Array(ctx.getMemory().buffer).set(raw.subarray(0, n), buf);
+      return n;                        // 0 = clean EOF
+    },
+    __http_close: function (id) {
+      if (have) hooks.httpClose(id | 0);
+      return 0;
+    },
+  } };
+}
+
 // A blocking SDL loop (while(running){ poll; render; SDL_Delay; }) can't be
 // honoured in this runtime, on ANY engine. The app runs every program through
 // the synchronous, no-JSPI block-FS model (one runtime to maintain until iOS
@@ -10054,6 +10131,10 @@ async function runModule({
   /* ---- System clipboard (todos/0090): kernel slot via spawnHooks, or a
      process-local slot with the same semantics when there's no kernel. */
   Object.assign(imports[ENV_KEY], createClipboard(ctx, spawnHooks || null)[ENV_KEY]);
+
+  /* ---- HTTP transport (todos/0172): kernel fetch via spawnHooks; ENOSYS
+     (fail-loud) with no kernel. Under the libcurl veneer (0173) + /bin/code. */
+  Object.assign(imports[ENV_KEY], createHttp(ctx, spawnHooks || null)[ENV_KEY]);
 
   /* ---- Emulator console/display/networking imports ---- */
   /* These are used by TinyEMU and similar emulators. They are no-ops

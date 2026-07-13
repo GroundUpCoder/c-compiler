@@ -1,8 +1,25 @@
 # 0172 — Kernel HTTP transport: fetch-shaped 0x06xx RPC family
 
-- **Status**: open
-- **Design**: this file (semantics below); KERNEL.md gets its section when
-  the transport lands. Plan/context in logs/2026-07-13/0172-http-stack-plan.md.
+- **Status**: done (2026-07-13)
+- **Design**: this file (semantics below) + KERNEL.md "HTTP transport
+  (0x06xx)". Plan in logs/2026-07-13/0172-http-stack-plan.md; landing notes
+  in logs/2026-07-13/0172-kernel-http-landed.md.
+
+## Resolution (2026-07-13)
+
+Landed the 0x06xx transport: `HTTP_BODY`/`HTTP_OPEN`/`HTTP_STATUS`/
+`HTTP_READ`/`HTTP_CLOSE` in kernel.js (fetch driver + chunk-queue with
+backpressure, `_cancelWaiter`/`_exitProcess` reclaim), the `__http_*` C
+primitive in host.js `createHttp` + the compiler prelude `__import` decls,
+and spawnHooks wiring. Injectable `opts.fetch` (`fetch: null` = offline →
+ENOSYS). Tests green: `test_http.js` (27 checks, fake worker + fake fetch —
+every path deterministic) + `test_http_e2e.js` (real C over the full stack:
+Node fetch → local server; streamed GET, POST echo, 512K integrity through
+the streaming reader, 404, mid-stream drop = error≠EOF, no dangling
+transfers after halt). All acceptance criteria met; the Node (boot.js)
+flavor is the e2e, the browser kernel-worker flavor shares the identical
+code path (same global fetch) with no browser-specific transport code, so
+it's covered by construction (unlike the compositor's CPU/GPU split).
 
 ## Goal
 

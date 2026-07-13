@@ -602,6 +602,65 @@ only alongside other format work. Future mitigation, when wanted: orphan
 list + boot-time sweep. Recorded here so nobody "fixes" it casually with a
 broker round-trip per open().
 
+## HTTP transport (0x06xx; implemented, todos/0172)
+
+Processes get HTTP(S) through the kernel, backed by the **embedder's
+`fetch`** (the browser kernel-worker global; Node ≥18's global under
+boot.js). The kernel owns the network; processes reach it via five 0x06xx
+RPCs. TLS comes free from the fetch stack. This is deliberately **not a
+socket layer** — the browser cannot do raw TCP, so a socket-shaped API would
+be a lie; fetch-shaped is forced by the platform. First consumers: the
+libcurl veneer (todos/0173) and `/bin/code` (todos/0174); the primitive is
+also the substrate for any future networked port (git's HTTP transport, a
+package fetcher).
+
+The wire format is a **private contract** between kernel.js and host.js
+(both in-repo, version-locked) — refactorable at will; only the semantics
+leak, so those are what's pinned:
+
+- **Fetch-shaped, one transfer per handle.** `HTTP_BODY` stages an optional
+  request body (RAW `[u32 off][bytes...]`, contiguous like `CLIP_SET`);
+  `HTTP_OPEN` (JSON `{method, url, headers[]}`) consumes it, kicks off the
+  fetch, and returns `{id}` **at once** (non-blocking). `HTTP_STATUS`
+  (JSON `{id}`) parks until response headers arrive → `{status, headers}`
+  (a flattened `name: value\n` blob; order/casing are whatever fetch yields
+  — NOT wire-faithful, documented). `HTTP_READ` (JSON `{id, count}`) is a
+  pipe-shaped deferred drain of the streamed body → RAW bytes; **0 bytes =
+  clean EOF**, `{errno: EIO, error}` = mid-stream failure. `HTTP_CLOSE`
+  aborts + frees.
+- **Streaming body with backpressure.** The body queues kernel-side as a
+  chunk list (`xfer.chunks`, `xfer.bytes`); the async fetch reader **pauses**
+  (stops calling `reader.read()`) once `xfer.bytes >= HTTP_BUF_CAP` (256K)
+  and resumes when an `HTTP_READ` drains below it. Bounded kernel memory
+  regardless of network-vs-consumer speed — the same discipline as pipes,
+  and proven live in `test_http_e2e.js` (512K body over the real stack).
+- **EOF vs error are distinct.** A clean stream end is an empty `HTTP_READ`;
+  a connect failure surfaces on `HTTP_STATUS` (before headers), a mid-stream
+  drop on `HTTP_READ` (after some bytes) — both carry the error string for
+  `curl_easy_strerror` fidelity.
+- **Abort from the C side, and on teardown.** `HTTP_CLOSE` and process
+  exit/SIGKILL both `AbortController.abort()` + `reader.cancel()` every live
+  transfer (`_exitProcess`, alongside fds/surfaces/audio) — no dangling
+  fetch. `reader.cancel()` rejects on an already-errored stream, so its
+  promise is `.catch`-swallowed or it crashes the embedder.
+- **At most one HTTP op parked per process** (the worker is parked for every
+  RPC), so `statusWaiter`/`readWaiter` are single pids; `_cancelWaiter`
+  clears them on EINTR/teardown like `piperead`.
+- **No policy in v1.** Any process may fetch any URL (the browser flavor is
+  already CORS-constrained by the platform); `fetch: null` at construction
+  disables network entirely (`HTTP_OPEN` → ENOSYS — standalone pages stay
+  offline). The kernel choke point is where per-process policy would land
+  later — a reason FOR brokering, not v1 scope.
+
+Request bodies are whole-buffer in v1; streaming uploads (fetch
+`duplex:'half'`, Chromium-only) and WebSockets would be NEW op kinds added
+alongside, not changes to these. host.js's `createHttp` surfaces the C
+primitive (`__http_open/status/read/close`); the veneer maps
+`curl_easy_perform` onto open → status (feeds HEADERFUNCTION) → read loop
+(feeds WRITEFUNCTION) → close. Tests: `test_http.js` (fake worker + fake
+fetch, every path deterministic) + `test_http_e2e.js` (real C, Node fetch,
+local server).
+
 ## WM extension (designed: `todos/WM.md`, 2026-07-07; WM client landed, todos/0014)
 
 Per `todos/OS.md` Phase 3, the compositor rides this same control plane:
