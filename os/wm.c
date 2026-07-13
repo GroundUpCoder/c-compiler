@@ -3528,6 +3528,34 @@ static void bar_rclick(float fx) {
     ctx_open_taskbar((int)fx);         /* empty strip / clock / show-desktop */
 }
 
+/* Present the taskbar only when its pixels actually changed (todos/0168
+ * piece D, recovered from the reverted 0160 attempt). frame_cb redraws the
+ * bar every wake, but SDL_UpdateWindowSurface bumps the surface's frame-seq
+ * UNCONDITIONALLY — so an unconditional present churned the compositor's
+ * damage signature on every wake and would defeat the 0169 idle-GPU skip
+ * (the bar was the one surface never going quiet on a static desktop; the
+ * desktop layer is already desk_dirty-gated, the popups activity-gated). A
+ * cheap memcmp against the last-presented bytes keeps the bar off the
+ * present path while it is visually static and still catches everything
+ * draw_bar renders — the clock's per-minute tick, focus relief, overflow
+ * shrink, the Show Desktop press state. */
+static uint32_t *bar_snap = NULL;   /* last-presented bar pixels */
+static int bar_snap_w = 0;          /* its width (mismatch => force a present) */
+static void bar_present(void) {
+    size_t bytes = (size_t)bar_w * BAR_H * 4;
+    if (bar_snap_w != bar_w || !bar_snap) {   /* first present or a resize */
+        free(bar_snap);
+        bar_snap = malloc(bytes);
+        bar_snap_w = bar_snap ? bar_w : 0;
+        if (bar_snap) memcpy(bar_snap, bar_surf->pixels, bytes);
+        SDL_UpdateWindowSurface(bar_win);
+        return;
+    }
+    if (memcmp(bar_snap, bar_surf->pixels, bytes) == 0) return;   /* static */
+    memcpy(bar_snap, bar_surf->pixels, bytes);
+    SDL_UpdateWindowSurface(bar_win);
+}
+
 static void draw_bar(void) {
     uint32_t *px = (uint32_t *)bar_surf->pixels;
     uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
@@ -3587,7 +3615,7 @@ static void draw_bar(void) {
         fill(px, sx + 2, 3, SHOWDESK_W - 4, 1, held ? sh : hi);
         fill(px, sx + 2, BAR_H - 4, SHOWDESK_W - 4, 1, held ? hi : sh);
     }
-    SDL_UpdateWindowSurface(bar_win);
+    bar_present();                     /* present only on change (0168/0160) */
 }
 
 /* One iteration of the event loop (todos/0168 renamed this from a per-rAF
