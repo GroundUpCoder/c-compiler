@@ -18,6 +18,13 @@ content change.
 
 ## Plan
 
+**Land as THREE commits** (2026-07-14 sequencing decision, mirrored in
+IDLE-POWER.md's staging plan): (1) the kernel socket→ring wake + test,
+(2) the wm.c conversion, (3) `bar_present()`. Each independently
+revertable/bisectable; the kernel plumbing has value beyond wm (user32's
+GetMessage chunking) and shouldn't share a commit with the 3.8k-line-file
+risk concentration.
+
 - **Kernel prerequisite (in no earlier item): WMP-socket→input-ring wake.**
   `pumpWait` parks on the input ring only (host.js ~6036); wm's events
   (EV_CREATED, EV_SNAP_EDGE during a foreign title drag, EV_SCREEN, R_IDLE)

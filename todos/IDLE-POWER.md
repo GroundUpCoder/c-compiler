@@ -269,7 +269,7 @@ revision adds what it omitted:
 | W. wm.c event-driven conversion + WMP-socket→input-ring notify | os/wm.c, kernel.js | 170–300 | ✅ (the risk concentration: wm.c is 3.8k lines behind the most timing-sensitive e2e surface in the repo) |
 | D. Taskbar present gate | os/wm.c | ~25 | ✅ |
 | E. Tests: resurrect `os-compositor.mjs` + submit/wake counters (probe surface is product code) + flake gate | tests, kernel.js/host.js probes | 180–210 | correctness |
-| audioPump live-stream gate | os/kernel-worker.js | ~10 | honest-zero |
+| audioPump live-stream gate (pulled forward — lands pre-Stage-3, standalone) | os/kernel-worker.js | ~10 | honest-zero |
 | Incremental adopters (term, fileman, notepad; doom/quake/gpubox stay poll-loop) | per app | 10–30 each | polish |
 
 ## Acceptance
@@ -284,7 +284,15 @@ revision adds what it omitted:
   (winmine counter ticking while parked), drop-file, every compositor and
   wm-rendered animation, **and the screensaver still raises after idle
   timeout on a fully-parked desktop** (the W acceptance case).
-- Hidden tab parks everything — now actually true (Stage 1) and asserted.
+- Hidden tab parks everything — now actually true (Stage 1). **Assertion
+  strategy (decided up front, 2026-07-14): probe-based, not a real hidden
+  tab.** Playwright disables background throttling/occlusion in both
+  headless flavors — a backgrounded tab stays `visibilityState==='visible'`
+  with worker rAF ticking ~67/s, so no automated leg can hide the tab for
+  real. The automated assertion is the Stage-4 wake/submit counters plus a
+  synthetic vsync-stop (test flag stops `vsyncTick()`; assert app-worker
+  wake counters go flat); the true hidden-tab behavior stays a
+  headed-browser manual check on the WM.md "Known issues" per-round list.
 - Browser os-sweep visual legs unchanged. Run `tests/flake.js` at Stages 1,
   3, 4 (frame loop + input-wake path).
 - Measure idle CPU%/GPU + worker-wakeups/sec before/after (static VT2
@@ -316,12 +324,25 @@ revision adds what it omitted:
   tab park becomes real and testable). Flake gate. **DONE 2026-07-13
   (todos/0167).**
 - **Stage 2**: C1 (WaitEvent/WaitEventTimeout) + C2 (mgp). Real wakeup
-  reduction on its own; no compositor risk.
+  reduction on its own; no compositor risk. **DONE 2026-07-13 (todos/0161).**
+- **Baseline (before Stage 3)**: capture the idle CPU%/wake numbers NOW —
+  Stages 1–2 already moved the "before", so measuring only at Stage 4 loses
+  per-stage attribution. Record: static VT2 desktop, then 3–4 settled
+  windows; committed dev log. Re-measure after Stage 3 and after Stage 4.
+- **audioPump gate (pulled forward, standalone commit)**: gate the 20 ms
+  `setInterval` on a live-stream count. ~10 LOC, fully independent of the
+  parking protocol, and it is the largest *permanent* wake floor on the
+  kernel worker — no reason to make it wait for Stage 4.
 - **Stage 3**: W (wm.c conversion + socket→ring notify) + D (bar gate).
-  Flake gate; the full wm e2e surface is the gate here.
+  Land as THREE commits inside the item: (1) the kernel WMP-socket→
+  input-ring wake, independently testable and useful beyond wm (the same
+  plumbing eventually lets user32's GetMessage stop chunking at 25 ms);
+  (2) the wm.c event-driven conversion; (3) `bar_present()`. A Stage-3
+  problem then bisects to one commit, not one branch. Flake gate; the full
+  wm e2e surface is the gate here.
 - **Stage 4**: A + B (park + Dekker + doorbell-on-present + handler wires) +
-  E (os-compositor.mjs resurrected with wake counters) + audioPump gate +
-  the before/after measurements. Flake gate.
+  E (os-compositor.mjs resurrected with wake counters) + the after
+  measurements. Flake gate.
 
 Each stage is a coherent commit with its own green gate; the risky piece (W)
 lands before the piece that depends on it (parking), so a Stage-3 revert

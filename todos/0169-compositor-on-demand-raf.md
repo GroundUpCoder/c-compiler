@@ -35,11 +35,20 @@ Per IDLE-POWER piece B, summarizing (the doc is normative):
   `wm-frame` handlers. Park decisions read the post-prune anim scene of an
   already-drawn frame. Do NOT add a vsyncWait timeout (breaks the
   hidden-tab honest pause).
-- audioPump interval gated on live-stream count (the last idle wake floor).
+- ~~audioPump interval gated on live-stream count~~ — pulled forward,
+  landed as a standalone pre-Stage-3 commit (2026-07-14).
 - Tests: resurrect os-compositor.mjs from `659902d`, extend with submit AND
   app-worker-wake counters (probe surface in kernel.js/host.js); add to
-  tests/flake.js; measure idle CPU%/GPU/wakeups before vs after (static
-  desktop; 3–4 windows) — the thermal claim must be shown.
+  tests/flake.js; measure idle CPU%/GPU/wakeups after (static desktop;
+  3–4 windows) against the committed pre-Stage-3 baseline dev log — the
+  thermal claim must be shown.
+- **Hidden-tab assertion strategy (decided up front, 2026-07-14):**
+  Playwright can't hide a tab for real (background throttling/occlusion
+  disabled in both headless flavors — a backgrounded tab stays
+  `visibilityState==='visible'`, worker rAF ~67/s). Assert park via the
+  wake/submit counters plus a synthetic vsync-stop (test flag stops
+  `vsyncTick()`; app-worker wake counters go flat); the true hidden-tab
+  behavior stays a headed manual check (WM.md "Known issues" list).
 
 ## Acceptance
 
