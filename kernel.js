@@ -384,6 +384,9 @@ var S_IFSOCK_MODE = 0o140000;
  *     [3] IR_DROPPED  events dropped on overflow (drop-newest)
  *   then IR_CAP records x 32 bytes: 8 Int32 words
  *     [0] SDL event type          [1] windowId (sid)
+ *     type 0 = kernel kick (all-zero record): socket-data wake pushed by
+ *     _wmKick so the WPOS futex word changes (a bare notify can be lost);
+ *     host.js drainInput counts-and-skips it, no SDL event surfaces.
  *     key:    [2] scancode [3] keysym [4] mod [5] repeat
  *     motion: [2] x(f32 bits) [3] y(f32 bits) [4] button state mask
  *             [5] relative flag (todos/0018): 1 = [2]/[3] are dx/dy deltas
@@ -2814,9 +2817,9 @@ Kernel.prototype._kernelPeer = function (recvDir, sendDir, clientPcb) {
       // a client parked on its input ring (__sdl_pump_wait — SDL_WaitEvent
       // or wm.c's event loop) must wake when kernel-peer data lands, or a
       // WMP event (EV_CREATED, EV_SNAP_EDGE, EV_SCREEN, R_IDLE…) sits until
-      // the park's timeout. Pure Atomics.notify, no ring record — wakes are
-      // spurious by contract (0161): the caller re-polls its queues.
-      if (clientPcb && clientPcb.wmRing) Atomics.notify(clientPcb.wmRing.i32, IR_WPOS);
+      // the park's timeout. _wmKick pushes a type-0 ring record so the
+      // futex word itself changes — see the lost-notify note there.
+      if (clientPcb && clientPcb.wmRing) self._wmKick(clientPcb);
       return true;
     },
     close: function () {
@@ -3478,6 +3481,35 @@ Kernel.prototype._wmFrame = function (pcb, sid, bmp) {
 };
 
 /* ---- input ring (kernel = single producer) ---- */
+
+/* Socket→ring wake (todos/0168; race closed in the 0169 gate): wake a
+ * client parked on its input ring because kernel-peer socket data landed.
+ * This was a bare Atomics.notify(IR_WPOS), but a notify on an unchanged
+ * word wakes nobody — one landing between the client's last ring check and
+ * its Atomics.wait entry (the __sdl_pump_wait park, whose 0169 frame-idle
+ * post sits exactly in that window) slept out the full park chunk: wm.c's
+ * 1s, and test_wm_service_e2e's placement legs started losing the
+ * EV_CREATED race to it. Push a type-0 record instead: WPOS — the futex
+ * word — changes, so a parker either sees a non-empty ring at its entry
+ * drain or its wait resolves; a lost wake is impossible. host.js's
+ * drainInput skips unknown types but counts them as drained (return-on-
+ * drained re-polls, the 0168 contract), so the record is invisible to the
+ * app's SDL queue. Full ring: no record needed — WPOS≠RPOS already denies
+ * any park (and a waiter inside Atomics.wait entered on empty, so WPOS has
+ * since changed under it); notify anyway as a belt. */
+Kernel.prototype._wmKick = function (pcb) {
+  var ring = pcb.wmRing;
+  if (!ring) return;
+  var cap2 = ring.cap * 2;
+  var wpos = Atomics.load(ring.i32, IR_WPOS);
+  var rpos = Atomics.load(ring.i32, IR_RPOS);
+  if (((wpos - rpos + cap2) % cap2) < ring.cap) {
+    var base = (IR_HDR_BYTES >> 2) + (wpos % ring.cap) * IR_RECORD_WORDS;
+    for (var k = 0; k < IR_RECORD_WORDS; k++) ring.i32[base + k] = 0;
+    Atomics.store(ring.i32, IR_WPOS, (wpos + 1) % cap2);
+  }
+  Atomics.notify(ring.i32, IR_WPOS);
+};
 
 Kernel.prototype._wmPushEvent = function (pcb, words) {
   var ring = pcb.wmRing;

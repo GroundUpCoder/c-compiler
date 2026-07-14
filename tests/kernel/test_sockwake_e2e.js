@@ -35,6 +35,7 @@ function check(name, cond, extra) {
 const APP_C = `
 #include <SDL.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <sys/select.h>
 #include "wm_proto.h"
 
@@ -74,10 +75,14 @@ int main(void) {
 
     /* Drain the subscribe snapshot (EV_CREATED per surface + EV_FOCUS) and
        any queued SDL events, so the park below starts from DRY queues on
-       both channels — a leftover would return the park immediately. */
+       both channels — a leftover would return the park immediately. The
+       zero-timeout pump_wait sweeps the input ring itself: each snapshot
+       frame's kick left a type-0 record there (kernel.js _wmKick), which
+       SDL_PollEvent never consumes. */
     drain_dry(sock);
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {}
+    __sdl_pump_wait(0);
 
     printf("PARKED\\n");
     fflush(stdout);
@@ -96,6 +101,31 @@ int main(void) {
         wmp_skip(sock, h.plen);
     }
     printf("WOKE dt=%d type=%d\\n", dt, type);
+    fflush(stdout);
+
+    /* Phase 2 (the 0169-gate lost-notify interleave): the kick lands while
+       NOBODY is parked — between a parker's last queue check and its
+       Atomics.wait entry, a bare notify wakes no one and the event sleeps
+       out the whole chunk. The kernel's kick pushes a type-0 ring record
+       instead (kernel.js _wmKick), so a park entered AFTER the kick drains
+       it and returns at once. The usleep is deliberate mechanism, not a
+       sync nap: it holds the app OUT of the park while the test emits, so
+       the kick provably precedes the park entry. */
+    printf("PHASE2\\n");
+    fflush(stdout);
+    usleep(600 * 1000);
+    t0 = SDL_GetTicks();
+    __sdl_pump_wait(4000);
+    dt = (int)(SDL_GetTicks() - t0);
+    type = 0;
+    FD_ZERO(&rf);
+    tv.tv_sec = 0; tv.tv_usec = 0;
+    FD_SET(sock, &rf);
+    if (select(sock + 1, &rf, NULL, NULL, &tv) > 0 && wmp_next(sock, &h) == 0) {
+        type = (int)h.type;
+        wmp_skip(sock, h.plen);
+    }
+    printf("WOKE2 dt=%d type=%d\\n", dt, type);
     fflush(stdout);
     SDL_Quit();
     return 0;
@@ -155,6 +185,18 @@ const watchdog = setTimeout(() => {
   check('wake observed fast wall-clock too', wakeMs < 1500, wakeMs + 'ms');
   check('the EV_SCREEN frame was on the socket (0x87)',
     field('WOKE', 'type') === 0x87, '0x' + field('WOKE', 'type').toString(16));
+
+  // Phase 2: the kick fires while the app is deliberately NOT parked (it's
+  // inside the 600ms delay) — the lost-notify interleave the 0169 gate hit.
+  // The type-0 ring record must satisfy the park's entry drain, so the
+  // subsequent __sdl_pump_wait(4000) returns at once instead of napping.
+  await waitOut('PHASE2');
+  kernel.wmSetScreen(1280, 800);                   // larger again: still no clamp
+  await waitOut('WOKE2 ', 8000);
+  check('a kick landing BEFORE the park entry is not lost (<500ms of a 4000ms park)',
+    field('WOKE2', 'dt') < 500, field('WOKE2', 'dt') + 'ms');
+  check('phase-2 EV_SCREEN frame was on the socket (0x87)',
+    field('WOKE2', 'type') === 0x87, '0x' + field('WOKE2', 'type').toString(16));
 
   clearTimeout(watchdog);
   fs.rmSync(tmp, { recursive: true, force: true });
