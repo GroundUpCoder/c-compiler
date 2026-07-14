@@ -52,6 +52,27 @@
  *   [7] KP_RPC_KIND   payload encoding: RPCK_JSON | RPCK_RAW.
  *   [8..] payload     UTF-8 JSON (request, then response, in place),
  *                     up to KP_PAYLOAD_CAP — the page tail past it holds:
+ *   [N-16..N-5] the vDSO block (todos/0179) — kernel-written, process-read
+ *                      state PUBLISHED instead of served (KERNEL.md "What
+ *                      may leave the kernel"). One seqlock word guards the
+ *                      rest: the kernel (the single writer, one thread by
+ *                      construction) bumps KP_VD_SEQ odd, stores the
+ *                      fields, bumps it even; readers retry on odd or
+ *                      changed seq (KernelClient._vdsoRead) and fall back
+ *                      to the RPC — still the source of truth — after a
+ *                      bounded spin. Republished at spawn, SETPGID, SETSID,
+ *                      reparent-to-init, and wmSetScreen (fan-out).
+ *     [N-16] KP_VD_SEQ        seqlock version (even = stable)
+ *     [N-15] KP_VD_PID        own pid
+ *     [N-14] KP_VD_PPID       parent pid (tracks reparenting, unlike the
+ *                             spawn-time static)
+ *     [N-13] KP_VD_PGID       process-group id
+ *     [N-12] KP_VD_SID        session id
+ *     [N-11] KP_VD_BOOT_LO    boot instant (kernel _bootMs, ms since epoch,
+ *     [N-10] KP_VD_BOOT_HI    unsigned lo/hi halves) — uptime with no RPC
+ *     [N-9]  KP_VD_SCREEN_W   screen dims (ctor default, then wmSetScreen)
+ *     [N-8]  KP_VD_SCREEN_H
+ *     [N-7..N-5] reserved (published zero)
  *   [N-4] KP_VSYNC_ARMED  vsync-waiter count (todos/0169): the process side
  *                      Atomics.add's it BEFORE parking on KP_VSYNC_SEQ and
  *                      subtracts on resolve; the compositor's park decision
@@ -86,7 +107,18 @@ var KP_VSYNC_ARMED = (KP_SIZE >> 2) - 4;   // tail words (todos/0169): vsync
 var KP_COMP_PARKED = (KP_SIZE >> 2) - 3;   // waiter count + compositor-parked flag
 var KP_VSYNC_EN = (KP_SIZE >> 2) - 2;   // tail words (todos/0100): vsync
 var KP_VSYNC_SEQ = (KP_SIZE >> 2) - 1;  // advertise flag + tick counter
-var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 16;   // payload stops short of them
+// vDSO block (todos/0179): seqlock-published kernel state, see layout above.
+var KP_VD_SEQ      = (KP_SIZE >> 2) - 16;
+var KP_VD_PID      = (KP_SIZE >> 2) - 15;
+var KP_VD_PPID     = (KP_SIZE >> 2) - 14;
+var KP_VD_PGID     = (KP_SIZE >> 2) - 13;
+var KP_VD_SID      = (KP_SIZE >> 2) - 12;
+var KP_VD_BOOT_LO  = (KP_SIZE >> 2) - 11;
+var KP_VD_BOOT_HI  = (KP_SIZE >> 2) - 10;
+var KP_VD_SCREEN_W = (KP_SIZE >> 2) - 9;
+var KP_VD_SCREEN_H = (KP_SIZE >> 2) - 8;
+var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 64;   // payload stops short of the
+                                   // 16 tail words (vDSO block + vsync words)
 
 var RPC_IDLE = 0, RPC_REQUEST = 1, RPC_DONE = 2;
 var KF_STOP = 1;                   // KP_FLAGS bit0: park at the next safe point
@@ -959,6 +991,49 @@ KernelClient.prototype.sigmask = function (mask) {
   Atomics.store(this._i32, KP_SIGBLOCK, mask | 0);
 };
 
+/* ---- vDSO block (todos/0179): seqlock reader ---- */
+
+/* Read the kernel-page words `indices` as ONE consistent snapshot: retry
+ * while the seq word is odd (write in progress) or moved across the reads.
+ * Returns the values array, or null when the page is unpublished (seq 0 —
+ * a KernelClient over a page no kernel ever stamped) or after a bounded
+ * spin — callers fall back to the RPC, which stays the source of truth. */
+KernelClient.prototype._vdsoRead = function (indices) {
+  var i32 = this._i32;
+  for (var tries = 0; tries < 64; tries++) {
+    var s1 = Atomics.load(i32, KP_VD_SEQ);
+    if (s1 === 0) return null;
+    if (s1 & 1) continue;
+    var out = [];
+    for (var k = 0; k < indices.length; k++) out.push(Atomics.load(i32, indices[k]));
+    if (Atomics.load(i32, KP_VD_SEQ) === s1) return out;
+  }
+  return null;
+};
+
+/* Live parent pid — tracks orphan reparenting to init, unlike the static
+ * ppid minted at spawn. null on an unpublished page (caller keeps its
+ * static). */
+KernelClient.prototype.getppid = function () {
+  var r = this._vdsoRead([KP_VD_PPID]);
+  return r ? r[0] : null;
+};
+
+/* Milliseconds since the kernel booted, computed against the published
+ * boot instant — no RPC. null on an unpublished page. */
+KernelClient.prototype.uptimeMs = function () {
+  var r = this._vdsoRead([KP_VD_BOOT_LO, KP_VD_BOOT_HI]);
+  if (!r) return null;
+  return Date.now() - ((r[1] >>> 0) * 4294967296 + (r[0] >>> 0));
+};
+
+/* The real screen dims (ctor default, then wmSetScreen) — what the WM sees
+ * via EV_SCREEN, readable by any process. null on an unpublished page. */
+KernelClient.prototype.screen = function () {
+  var r = this._vdsoRead([KP_VD_SCREEN_W, KP_VD_SCREEN_H]);
+  return r ? { w: r[0], h: r[1] } : null;
+};
+
 /* Park on the doorbell until a signal is deliverable ('signal') or the
  * timeout elapses ('timeout'). ms undefined/null → wait forever. */
 KernelClient.prototype.park = function (ms) {
@@ -987,8 +1062,23 @@ KernelClient.prototype.spawnHooks = function () {
     wait: function (pid, options) { return self.call(OP.WAIT, { pid: pid, options: options }, true); },
     kill: function (pid, sig) { return self.call(OP.KILL, { pid: pid, sig: sig }); },
     setpgid: function (pid, pgid) { return self.call(OP.SETPGID, { pid: pid, pgid: pgid }); },
-    getpgid: function (pid) { return self.call(OP.GETPGID, { pid: pid }); },
-    getsid: function (pid) { return self.call(OP.GETSID, { pid: pid }); },
+    setsid: function () { return self.call(OP.SETSID, {}); },
+    // vDSO fast path (todos/0179): the caller's OWN pgid/sid are published
+    // on the kernel page, so getpgrp()/getpgid(0)/getsid(0) make zero RPCs.
+    // Foreign pids — and a failed seqlock read — still ask the kernel, the
+    // source of truth. The self-pid check rides the same snapshot as the
+    // value, so a mid-read setpgid can't pair one field with the other's
+    // past.
+    getpgid: function (pid) {
+      var v = self._vdsoRead([KP_VD_PID, KP_VD_PGID]);
+      if (v && ((pid | 0) === 0 || (pid | 0) === v[0])) return { pgid: v[1] };
+      return self.call(OP.GETPGID, { pid: pid });
+    },
+    getsid: function (pid) {
+      var v = self._vdsoRead([KP_VD_PID, KP_VD_SID]);
+      if (v && ((pid | 0) === 0 || (pid | 0) === v[0])) return { sid: v[1] };
+      return self.call(OP.GETSID, { pid: pid });
+    },
     // Interval timers (todos/0044): ms over the wire; the libc converts
     // timeval <-> ms and owns the sub-ms round-up.
     setitimer: function (which, valueMs, intervalMs) {
@@ -1876,6 +1966,9 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
   // and the compositor's park run on the same worker thread, so the stamp
   // can't race a park loop mid-iteration.
   if (self._compParked) Atomics.store(pcb.i32, KP_COMP_PARKED, 1);
+  // vDSO block (todos/0179): publish before the worker exists so the first
+  // process-side read never sees the zero-filled page.
+  self._vdsoPublish(pcb);
 
   // Brokered fd table: full POSIX inheritance (every parent fd, sharing
   // the open file descriptions), then the spawn file_actions in order.
@@ -2149,6 +2242,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
     case OP.SETSID:
       if (pcb.pgid === pcb.pid) { this._respond(pcb, { errno: 'EPERM' }); break; }
       pcb.pgid = pcb.pid; pcb.sid = pcb.pid;
+      this._vdsoPublish(pcb);
       this._respond(pcb, { sid: pcb.sid });
       break;
     case OP.GETSID: {
@@ -4388,6 +4482,12 @@ Kernel.prototype.wmSetScreen = function (w, h) {
   if (w <= 0 || h <= 0) return;
   if (w === this._wmScreen.w && h === this._wmScreen.h) return;
   this._wmScreen.w = w; this._wmScreen.h = h;
+  // Fan the new dims out to every live page (todos/0179) — per-process cost
+  // is a handful of atomic stores, and resizes are human-rate.
+  var self = this;
+  this._procs.forEach(function (p) {
+    if (p.state !== STATE_ZOMBIE) self._vdsoPublish(p);
+  });
   this._bumpWm();
   this._wmEmit(WMP.EV_SCREEN, [w, h]);
   for (var i = 0; i < this._zOrder.length; i++) {
@@ -5147,6 +5247,27 @@ Kernel.prototype._httpDestroy = function (xfer) {
   this._httpXfers.delete(xfer.id);
 };
 
+/* ---- vDSO block (todos/0179) ----
+ * Publish the kernel-written, process-read words on a pcb's page under the
+ * seqlock (odd = write in progress). The kernel event loop is the single
+ * writer by construction, so two Atomics.add bumps are the whole protocol;
+ * the seqlock only protects READERS on the process thread from a torn
+ * multi-word view. Call after ANY mutation of a published field. */
+Kernel.prototype._vdsoPublish = function (pcb) {
+  var i32 = pcb.i32;
+  if (!i32) return;
+  Atomics.add(i32, KP_VD_SEQ, 1);          // odd: readers back off
+  Atomics.store(i32, KP_VD_PID, pcb.pid);
+  Atomics.store(i32, KP_VD_PPID, pcb.ppid);
+  Atomics.store(i32, KP_VD_PGID, pcb.pgid);
+  Atomics.store(i32, KP_VD_SID, pcb.sid);
+  Atomics.store(i32, KP_VD_BOOT_LO, this._bootMs >>> 0);
+  Atomics.store(i32, KP_VD_BOOT_HI, Math.floor(this._bootMs / 4294967296));
+  Atomics.store(i32, KP_VD_SCREEN_W, this._wmScreen.w);
+  Atomics.store(i32, KP_VD_SCREEN_H, this._wmScreen.h);
+  Atomics.add(i32, KP_VD_SEQ, 1);          // even: stable
+};
+
 /* ---- process groups ----
  * setpgid(pid, pgid): pid 0 = the caller, pgid 0 = "target's own pid".
  * POSIX scoping kept simple for one user: the target must be the caller or
@@ -5159,6 +5280,7 @@ Kernel.prototype._setpgid = function (pcb, pid, pgid) {
   if (t !== pcb && !pcb.children.has(t.pid)) return { errno: 'ESRCH' };
   if (t.sid !== pcb.sid) return { errno: 'EPERM' };
   t.pgid = (pgid > 0) ? pgid : t.pid;
+  this._vdsoPublish(t);
   return {};
 };
 
@@ -5290,6 +5412,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
     var c = self._procs.get(cpid);
     if (!c) return;
     c.ppid = 1;
+    self._vdsoPublish(c);        // getppid tracks the reparent (todos/0179)
     if (init && init !== pcb) {
       init.children.add(cpid);
       // A reparented zombie may satisfy init's pending wait immediately.
@@ -5811,6 +5934,8 @@ var BOOT_SOURCE = [
   "  spawnHooks: client.spawnHooks(),",
   "  pid: wd.pid,",
   "  ppid: wd.ppid,",
+  "  // Live ppid off the vDSO page (todos/0179): tracks reparent-to-init.",
+  "  getppid: function () { return client.getppid(); },",
   "}).then(function (code) {",
   "  wt.parentPort.postMessage({ type: 'exited', code: code });",
   "}, function (e) {",
@@ -6294,6 +6419,11 @@ var KERNEL_EXPORTS = {
   KP_VSYNC_ARMED: KP_VSYNC_ARMED,
   KP_COMP_PARKED: KP_COMP_PARKED,
   KP_PAYLOAD_CAP: KP_PAYLOAD_CAP,
+  // vDSO block (todos/0179) — seqlock-published kernel state.
+  KP_VD_SEQ: KP_VD_SEQ, KP_VD_PID: KP_VD_PID, KP_VD_PPID: KP_VD_PPID,
+  KP_VD_PGID: KP_VD_PGID, KP_VD_SID: KP_VD_SID,
+  KP_VD_BOOT_LO: KP_VD_BOOT_LO, KP_VD_BOOT_HI: KP_VD_BOOT_HI,
+  KP_VD_SCREEN_W: KP_VD_SCREEN_W, KP_VD_SCREEN_H: KP_VD_SCREEN_H,
   RPCK_JSON: RPCK_JSON,
   RPCK_RAW: RPCK_RAW,
   writePayload: writePayload,
