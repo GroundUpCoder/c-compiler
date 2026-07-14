@@ -3171,6 +3171,22 @@ static void handle_event(wmp_hdr *h) {
                  * slide UNDER the bar; its buttons stay clickable. */
                 int32_t ly[2] = { r.sid, 1 };
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                /* Creating furniture steals focus (create-focus is kernel
+                 * mechanism); hand it back like the desktop branch does.
+                 * The bar was the ONE furniture echo without this, which
+                 * only shows at the EV_SCREEN re-lay: a window whose
+                 * EV_CREATED interleaves the destroy+recreate arrives in
+                 * the stream between our two creates, so screen_changed's
+                 * own hand-back ran before that window was in the model
+                 * and the recreated bar kept the stolen focus (found by
+                 * the 0181 gate: os-term's title went grey when faster
+                 * pipes flipped the race). */
+                for (int i = 0; i < nwins; i++)
+                    if (wins[i].focused && !wins[i].minimized) {
+                        int32_t f[1] = { wins[i].sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                        break;
+                    }
             }
             return;
         }
