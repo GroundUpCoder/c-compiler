@@ -6,9 +6,11 @@
  * Shape:
  *   - openpty() -> posix_spawnp the session leader on the slave (fd 0/1/2,
  *     own pgroup; the kernel claims it as the pty's foreground).
- *   - Frame callback: SDL key events -> bytes -> master; master bytes ->
- *     escape-sequence state machine -> cell grid -> freetype glyph blits ->
- *     SDL_UpdateWindowSurface (shm present; bit-exact headless).
+ *   - Event-driven loop (unified WAIT on {master, input ring}, todos/0178;
+ *     an idle term wakes zero times a second): SDL key events -> bytes ->
+ *     master; master bytes -> escape-sequence state machine -> cell grid ->
+ *     freetype glyph blits -> SDL_UpdateWindowSurface (shm present;
+ *     bit-exact headless).
  *   - The escape parser is scoped to what hush lineedit + busybox vi emit
  *     (TERM=xterm-256color): CUP/CUU..CUB/CHA/VPA, ED/EL, IL/DL/ICH/DCH/
  *     ECH, SU/SD, DECSTBM, SGR (16/256-color, bold, reverse), alt screen
@@ -82,6 +84,14 @@ static int dirty = 1;
 /* ---- pty / child ---- */
 static int mfd = -1;
 static pid_t child = -1;
+
+/* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
+ * park until an fd in rfds is readable (1), the input ring has records —
+ * already drained into the SDL queue at return (2), timeout_ms elapses
+ * (0; < 0 waits forever), or a signal was posted (-1). term's two event
+ * sources are the pty master and the input ring, so an idle term wakes
+ * ZERO times a second instead of polling the master at 60Hz. */
+__import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 /* ---- selection / clipboard (todos/0090) ----
    Mouse drag selects a linear (row-major, xterm-style) cell range on the
@@ -686,6 +696,16 @@ static void apply_resize(int ncols, int nrows) {
 
 /* ============================================================ main loop */
 
+/* SIGCHLD is only a WAKE: the state change is observed by frame_cb's
+ * waitpid(WNOHANG). The flag closes the app-level check→park gap: if the
+ * signal is CLAIMED at an import return inside frame_cb (after its waitpid
+ * ran), SIGPEND is clear and the next __wait would park past the zombie —
+ * the main loop re-runs frame_cb instead. Signals dispatch ONLY at import
+ * returns (cooperative delivery), so a pure-wasm flag check directly
+ * before the park has no gap a handler can slip into. */
+static volatile int chld_seen = 0;
+static void on_chld(int sig) { (void)sig; chld_seen = 1; }
+
 static void frame_cb(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -841,6 +861,20 @@ int main(int argc, char **argv) {
     surf = SDL_GetWindowSurface(win);
     render();
     SDL_UpdateWindowSurface(win);
-    __setAnimationFrameFunc(frame_cb);
-    return 0;
+    /* Event-driven main loop (todos/0178): term was a frame-callback app —
+     * 60 wakes/s polling the master even when nothing moved. Each
+     * iteration handles whatever woke it (frame_cb drains the SDL queue,
+     * the master, and reaps the child), then parks in the kernel's
+     * unified WAIT on term's TWO sources: the pty master and the input
+     * ring. Child death normally surfaces as master EOF (last slave fd
+     * closed); the no-op SIGCHLD handler covers the direct child dying
+     * while grandchildren still hold the slave — the EINTR wake runs
+     * frame_cb's waitpid promptly instead of at the next output. */
+    signal(SIGCHLD, on_chld);
+    for (;;) {
+        frame_cb();
+        if (chld_seen) { chld_seen = 0; continue; }   /* claimed mid-frame:
+                                                         re-run the waitpid */
+        __wait(&mfd, 1, 1, -1);
+    }
 }

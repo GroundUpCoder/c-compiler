@@ -166,12 +166,14 @@
 #include "sounds.h"
 #include "saver.h"
 
-/* The blocking input park (host.js pumpWait — the seam under SDL_WaitEvent,
- * todos/0161): drain the input ring into the SDL queue and, if dry, park
- * until the kernel's next push/kick or timeoutMs. Called directly (not via
- * SDL_WaitEventTimeout) because the WMP socket's wake is a pure notify —
- * see the main-loop comment (todos/0168). */
-__import int __sdl_pump_wait(int timeoutMs);
+/* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
+ * park until an fd in rfds is readable (1), the input ring has records —
+ * already drained into the SDL queue at return (2), timeout_ms elapses
+ * (0; < 0 waits forever), or a signal was posted (-1, handler already ran).
+ * Readiness-check and park are atomic KERNEL-side — this is what retired
+ * the 0168 socket kick + pre-park select pair. Every return re-runs the
+ * drains (the 0161 spurious-wake contract). */
+__import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 #define BAR_H     28
 #define START_W   50    /* the Start button strip at the taskbar's left (0028) */
@@ -3829,32 +3831,21 @@ int main(void) {
      * Deliberately per wm start, not per boot: a `wm &` respawn is a new
      * session, like a Windows logon. */
     snd_play_event("SystemStart");
-    /* Event-driven main loop (todos/0168, IDLE-POWER piece W): wm was a
-     * frame-callback app — 60 wakes/s whether or not anything happened,
-     * and the one app that would forever keep the 0169 compositor from
-     * parking. Each iteration handles whatever woke it (frame_cb drains
-     * the socket AND the SDL queue), then parks on __sdl_pump_wait — the
-     * raw seam under SDL_WaitEvent (0161) — because wm has TWO event
-     * sources: the input ring and the WMP socket. The kernel's socket
-     * kick (0168 1/3) is a PURE ring notify; SDL_WaitEventTimeout would
-     * re-park over it (no SDL event appears), so the seam is called
-     * directly and every return re-runs the drains, per the 0161
-     * spurious-wake contract. Import returns are cooperative-signal safe
-     * points, exactly like SDL_WaitEvent's chunks.
-     * While the screensaver animates it paces ~60Hz; otherwise 1s parks
-     * (the clock / saver-idle / Desktop-watch cadence).
-     * Lost-wakeup guard: the kick doesn't change IR_WPOS, so socket data
-     * landing between frame_cb's drain and the park entry would sleep a
-     * full chunk — re-check readability just before parking (the residual
-     * select→park gap costs at most one 1s chunk, and only until the next
-     * event re-kicks). */
+    /* Event-driven main loop (todos/0168, IDLE-POWER piece W; unified
+     * wait todos/0178): wm was a frame-callback app — 60 wakes/s whether
+     * or not anything happened, and the one app that would forever keep
+     * the 0169 compositor from parking. Each iteration handles whatever
+     * woke it (frame_cb drains the socket AND the SDL queue), then parks
+     * in the kernel's unified WAIT on wm's TWO event sources — the WMP
+     * socket and the input ring. Readiness-check and park are atomic
+     * kernel-side, so nothing can land in a check→park gap (the 0168
+     * ring kick + pre-park select this replaced). Import returns are
+     * cooperative-signal safe points, and a posted signal completes the
+     * park promptly as -1. While the screensaver animates it paces
+     * ~60Hz; otherwise 1s parks (the clock / saver-idle / Desktop-watch
+     * cadence). */
     for (;;) {
         frame_cb();
-        fd_set rf;
-        struct timeval tv = { 0, 0 };
-        FD_ZERO(&rf);
-        FD_SET(sock, &rf);
-        if (select(sock + 1, &rf, NULL, NULL, &tv) > 0) continue;
-        __sdl_pump_wait(saver_win ? 16 : 1000);
+        __wait(&sock, 1, 1, saver_win ? 16 : 1000);
     }
 }

@@ -12,11 +12,11 @@
  * The message loop is the CLASSIC blocking shape — while (GetMessage)
  * { TranslateMessage; DispatchMessage; } — even though main() never
  * returns to the host's frame scheduler: GetMessage parks in the
- * __sdl_pump_wait host import, which drains the kernel input ring into
- * the SDL event queue in place and Atomics.waits on the ring until the
- * kernel's push notifies (kernel.js _wmPushEvent). Message priority is
- * Windows': posted messages first, WM_PAINT only when the queue is dry,
- * WM_QUIT after everything.
+ * kernel's unified WAIT (__wait, todos/0178) over the input ring, the
+ * agent listen socket, and the next timer deadline — readiness-check
+ * and park atomic kernel-side, wakes drained into the SDL event queue
+ * at the import's return. Message priority is Windows': posted messages
+ * first, WM_PAINT only when the queue is dry, WM_QUIT after everything.
  *
  * The agent tree (OS.md's agent-target pillar): the first CreateWindowEx
  * binds /run/win32/agent.<pid>.sock (wm_agent.h) and the GetMessage idle
@@ -99,6 +99,15 @@
  * input ring into the SDL event queue; timeoutMs > 0 parks on the ring
  * until the kernel's push notifies. Returns 1 if a ring exists. */
 __import int __sdl_pump_wait(int timeoutMs);
+
+/* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
+ * park until an fd in rfds is readable (1), the input ring has records —
+ * already drained into the SDL queue at return (2), timeout_ms elapses
+ * (0; < 0 waits forever), or a signal was posted (-1). -2 = no kernel
+ * WAIT in this flavor (fall back to the chunked poll). GetMessage parks
+ * here indefinitely instead of chunking at 25ms — an idle app's wake
+ * counter goes flat while wmctl (agent socket) and WM_TIMER stay prompt. */
+__import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
 /* ============================================================ sys colors */
 
@@ -1586,7 +1595,8 @@ static void menu_route_key(int key) {
 /* ============================================================ timers
  * (0068). Delivered like WM_PAINT: only when the queue is dry — the
  * GetMessage/PeekMessage scan below. TIMERPROC callbacks are not
- * supported (corpus passes NULL); the park ceiling (25ms) bounds jitter. */
+ * supported (corpus passes NULL); GetMessage's unified WAIT (0178) uses
+ * the next eligible deadline as its park timeout, so expiry is prompt. */
 
 #define MAX_TIMERS 16
 
@@ -1629,6 +1639,24 @@ BOOL KillTimer(HWND hwnd, UINT_PTR id) {
 static void timer_purge(HWND hwnd) {
     for (int i = 0; i < MAX_TIMERS; i++)
         if (g_timers[i].used && g_timers[i].hwnd == hwnd) g_timers[i].used = 0;
+}
+
+/* Milliseconds until the next armed timer is due (0 = due now), or -1 if
+ * none — GetMessage's unified-WAIT deadline (todos/0178). MUST apply the
+ * same hwnd/range eligibility as timer_scan below: a due-but-filtered
+ * timer would otherwise pin the deadline at 0 and spin the park. */
+static int timer_next_ms(HWND hf, UINT mn, UINT mx) {
+    if (mx && (WM_TIMER < mn || WM_TIMER > mx)) return -1;
+    DWORD now = (DWORD)SDL_GetTicks();
+    int best = -1;
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (!g_timers[i].used) continue;
+        if (hf && g_timers[i].hwnd != hf) continue;
+        int d = (int)(g_timers[i].next - now);
+        if (d < 0) d = 0;
+        if (best < 0 || d < best) best = d;
+    }
+    return best;
 }
 
 static int timer_scan(MSG *out, HWND hf, UINT mn, UINT mx) {
@@ -2261,7 +2289,7 @@ static void sleep_ms(int ms) {                   /* kernel-timed park */
 BOOL GetMessage(MSG *out, HWND hf, UINT mn, UINT mx) {
     if (!out) return FALSE;
     for (;;) {
-        __sdl_pump_wait(0);                      /* ring -> SDL event queue */
+        int have_ring = __sdl_pump_wait(0);      /* ring -> SDL event queue */
         pump_sdl();                              /* SDL queue -> message queue */
         agent_poll();
         if (q_get(out, hf, mn, mx, 1))
@@ -2275,10 +2303,22 @@ BOOL GetMessage(MSG *out, HWND hf, UINT mn, UINT mx) {
             g_quitPosted = 0;
             return FALSE;
         }
-        /* Park: instant wake on kernel input (ring notify); the 25ms
-         * ceiling bounds agent-socket latency. Before the first window
-         * there is no ring — pace on a kernel timer instead. */
-        if (!__sdl_pump_wait(25)) sleep_ms(10);
+        /* Unified park (todos/0178): ONE kernel WAIT over the agent listen
+         * socket ⊕ the input ring ⊕ the next eligible timer deadline —
+         * the 25ms chunk poll is gone, an idle app parks until something
+         * real happens. Signals complete the park promptly (-1; the
+         * handler ran at the import's return). With NO wake source at all
+         * (pre-window, no agent socket, no timer) pace coarsely instead
+         * of parking forever; -2 = no kernel WAIT in this flavor, keep
+         * the old chunked poll. */
+        int fds[1];
+        int nfd = 0;
+        if (g_agentFd >= 0) fds[nfd++] = g_agentFd;
+        int t = timer_next_ms(hf, mn, mx);
+        if (!have_ring && nfd == 0 && t < 0) t = 50;
+        if (__wait(fds, nfd, 1, t) == -2) {
+            if (!__sdl_pump_wait(25)) sleep_ms(10);
+        }
     }
 }
 
