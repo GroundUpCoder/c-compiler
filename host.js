@@ -5134,10 +5134,14 @@ function createPosix({ ctx }) {
   const pid = (ctx && ctx.pid != null) ? ctx.pid : process.pid;
   const ppid = (ctx && ctx.ppid != null) ? ctx.ppid
     : (typeof process.ppid === 'number' ? process.ppid : 0);
+  const livePpid = ctx && ctx.getppid;   // vDSO read (todos/0179): reparent-aware
   return {
     [ENV_KEY]: {
       getpid: function () { return pid; },
-      getppid: function () { return ppid; },
+      getppid: function () {
+        if (livePpid) { const v = livePpid(); if (v != null) return v; }
+        return ppid;
+      },
     },
   };
 }
@@ -5156,10 +5160,14 @@ function createBrowserPosix({ ctx }) {
   // callers that don't thread ids working.
   const pid = (ctx && ctx.pid != null) ? ctx.pid : 1;
   const ppid = (ctx && ctx.ppid != null) ? ctx.ppid : 0;
+  const livePpid = ctx && ctx.getppid;   // vDSO read (todos/0179): reparent-aware
   return {
     [ENV_KEY]: {
       getpid: function () { return pid; },
-      getppid: function () { return ppid; },
+      getppid: function () {
+        if (livePpid) { const v = livePpid(); if (v != null) return v; }
+        return ppid;
+      },
     },
   };
 }
@@ -5284,6 +5292,14 @@ function createSpawn(ctx, hooks) {
         const r = hooks.getpgid(pid);
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return r.pgid | 0;
+      },
+      // libc setsid() (todos/0179 — the SETSID RPC existed since Phase 1;
+      // the C surface landed with the vDSO page's mutation-visibility test).
+      __spawn_setsid: function () {
+        if (!hooks.setsid) { ctx.setErrnoName('ENOSYS'); return -1; }
+        const r = hooks.setsid();
+        if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
+        return r.sid | 0;
       },
       // libc getsid() (todos/0043 — pgrep -s 0 resolves its own session).
       __spawn_getsid: function (pid) {
@@ -5473,6 +5489,7 @@ function createNullSpawn(ctx) {
   return { [ENV_KEY]: {
     __spawn: enosys, __spawn_wait: enosys, __spawn_kill: enosys,
     __spawn_setpgid: enosys, __spawn_getpgid: enosys, __spawn_getsid: enosys,
+    __spawn_setsid: enosys,
     __on_sigdisp: function () {}, __on_sigmask: function () {},
     __sig_pause: enosys, __compile: enosys,
     __setitimer: enosys, __getitimer: enosys,   // timers live in the kernel (0044)
@@ -8805,6 +8822,10 @@ async function runModule({
   // Absent → falls back to process.pid (Node) / 1 (browser).
   pid,
   ppid,
+  // Optional LIVE ppid getter (todos/0179): kernel-spawned processes pass a
+  // vDSO-page read so getppid() tracks orphan reparenting to init; a null
+  // return falls back to the static ppid above.
+  getppid,
   sharedAudioBuffer,
   notifyAudio,
   notifyWindow,
@@ -10138,6 +10159,7 @@ async function runModule({
     // createBrowserPosix). Undefined → host default.
     pid: pid,
     ppid: ppid,
+    getppid: getppid,
   };
 
   if (fsModule) {

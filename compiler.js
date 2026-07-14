@@ -22023,11 +22023,13 @@ __import int __spawn_kill(int pid, int sig);                  /* -> 0   | -1+err
 __import int __spawn_setpgid(int pid, int pgid);              /* -> 0   | -1+errno */
 __import int __spawn_getpgid(int pid);                        /* -> pgid| -1+errno */
 __import int __spawn_getsid(int pid);                         /* -> sid | -1+errno */
+__import int __spawn_setsid(void);                            /* -> sid | -1+errno */
 /* plain int like the imports above: pid_t's typedef comes later */
 static inline int setpgid(int pid, int pgid) { return __spawn_setpgid(pid, pgid); }
 static inline int getpgid(int pid)           { return __spawn_getpgid(pid); }
 static inline int getpgrp(void)              { return __spawn_getpgid(0); }
 static inline int getsid(int pid)            { return __spawn_getsid(pid); }
+static inline int setsid(void)               { return __spawn_setsid(); }
 /* Run the host's in-browser C compiler (it has no wasm image to exec). Packs the
    result into buf as: int exitCode, int outLen, int errLen, then outLen stdout
    bytes, then errLen stderr bytes. Returns total bytes written, or -1+errno

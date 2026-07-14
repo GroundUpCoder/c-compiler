@@ -56,6 +56,8 @@ self.onmessage = function (e) {
     spawnHooks: client.spawnHooks(),
     pid: wd.pid,
     ppid: wd.ppid,
+    // Live ppid off the vDSO page (todos/0179): tracks reparent-to-init.
+    getppid: function () { return client.getppid(); },
   }).then(function (code) {
     self.postMessage({ type: 'exited', code: code });
   }, function (err) {
