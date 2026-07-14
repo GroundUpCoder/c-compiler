@@ -51,7 +51,7 @@ const tests = [
   ['test_code_e2e.js', IMG],     // 0174: /bin/code in-OS vs a scripted fake SSE server — login-shell /etc/profile+~/.profile env plumbing, streamed text, write_file-on-BlockFS + posix_spawn bash tool round-trips
   ['test_jobctl_e2e.js'],   // Phase 4: real C stop/cont — WUNTRACED/WCONTINUED, output halts
   ['test_jobctl_tty_e2e.js', IMG], // interactive Ctrl-Z/fg/bg/kill %1 through hush + the kernel tty
-  ['test_os_boot.js'],      // 0004: headless OS boot — seed, protoshell, cc, persistence
+  ['test_os_boot.js', { timeoutMs: 900000 }], // 0004: headless OS boot — seed, protoshell, cc, persistence; deliberately --no-fixture (the bake path IS under test), so 3+ full ~100s bakes put it right at the 600s default under -j4 load (333s solo)
   ['test_overlays.js'],     // 0118: opt-in image overlays — overlay@1 verify/plant/provenance over a tiny synthetic bake, every fatal rule, base-bake inertness (no wasm)
   ['test_vi_e2e.js', IMG],       // 0011: busybox vi through the real tty — raw mode, edit sessions
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
@@ -63,7 +63,8 @@ const tests = [
   ['test_sounds_e2e.js'],   // 0094: the event-sound scheme — PlaySound aliases/flags/mute store, MessageBeep + MessageBox beep, SYNC drain-dry reclaim
   ['test_vsync.js'],        // 0100: vsync broadcast — spawn-time advertise flag, vsyncTick bump/notify per live pcb, vsyncWait park + rAF catch-up semantics (no wasm)
   ['test_waitevent_e2e.js'], // 0161: SDL_WaitEvent(Timeout) parks on the input ring via __sdl_pump_wait — no-ring nanosleep fallback, full-timeout park, chunk-crossing wake on injected input, signal-while-parked, NULL peek
-  ['test_sockwake_e2e.js'],  // 0168: kernel-socket→input-ring wake — a WMP subscriber parked in __sdl_pump_wait wakes promptly on kernel-peer socket data (EV_SCREEN), not on the park timeout
+  ['test_sockwake_e2e.js'],  // 0168: kernel-socket→input-ring wake — a WMP subscriber parked in __sdl_pump_wait wakes promptly on kernel-peer socket data (EV_SCREEN), not on the park timeout; + the 0169-gate lost-notify interleave (kick lands BEFORE the park entry)
+  ['test_comp_park_e2e.js'], // 0169: on-demand compositor wake protocol e2e — real C presents vs a test-played compositor: doorbell-on-present only while PARKED, WaitEvent entry drops the wantFrame pin, SIGKILL mid-pin clears it
   ['test_wm_policy.js'],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
   ['test_wm_service_e2e.js', IMG], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
   ['test_snap_e2e.js', IMG],     // 0095: Aero Snap — drag-to-edge tiling via wmctl sdown/smove/sup, translucent preview pixels, drag-off restore, quarters, wmctl snap (= Win+arrow), fixed-size letterbox, no-WM refusal
