@@ -193,6 +193,8 @@ function createWorker(procSpec) {
     brokered: !!procSpec.brokered,
     // Read-only volume (todos/0180): { prefix, sab } — the SAB shares.
     ro: procSpec.ro || null,
+    // SPSC pipe rings (todos/0181): [{fd, end, sab}] — the SABs share.
+    pipeRings: procSpec.pipeRings || null,
   });
   return {
     postMessage: function (m) { w.postMessage(m); },

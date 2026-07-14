@@ -27,6 +27,9 @@ self.onmessage = function (e) {
     ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })
     : null;
   var rfs = new KERNEL.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix } : null);
+  // SPSC pipe rings for inherited fds (todos/0181): fast ops gate on the
+  // ring's PR_MODE word, so registering a still-brokered ring is free.
+  (wd.pipeRings || []).forEach(function (p) { rfs.registerPipeRing(p.fd, p.end, p.sab); });
   var fsFactory = function (ctx) {
     var env = BLOCK_FS.BlockFS.prototype.toWasmEnv.call(rfs, ctx);
     env.__select_impl = rfs.selectImpl(ctx);

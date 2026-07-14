@@ -160,6 +160,12 @@ var OP = {
   // PIPE_REF/CLOSE/WAIT/NOTIFY are subsumed by the kernel-owned fd layer
   // (OFD refcounts + FS_READ/FS_WRITE/FS_CLOSE + the doorbell).
   PIPE_CREATE: 0x0201,
+  // SPSC fast-path doorbell (todos/0181): a fast end that committed a ring
+  // op while the peer's PR_RWAIT/PR_WWAIT flag was up rings the kernel so
+  // the parked peer (FS_WAIT / a brokered stream op) is re-served. With
+  // {epipe:1} the caller hit PRF_RGONE locally and asks for its own
+  // SIGPIPE (write-to-closed-pipe semantics, one RPC on the error path).
+  PIPE_KICK: 0x0202,
   COMPILE: 0x0301,
   // System clipboard (todos/0090): ONE kernel-held slot {fmt, bytes} so
   // copy/paste crosses processes and survives the writer exiting (Win95
@@ -271,6 +277,85 @@ var W_CONTINUED_STATUS = 0xffff;
  * they defer whole rather than land partially). */
 var PIPE_CAP = 64 * 1024;
 var PIPE_ATOMIC = 512;
+
+/* ---- SPSC pipe rings (todos/0181; KERNEL.md "single-writer rule") ----
+ * A pipe whose creator posted a ring SAB ({type:'pipe-sab'}, the audio-sab
+ * handshake) keeps its bytes in that ring IN EVERY MODE — the kernel's own
+ * stream ops read/write the ring through the _pipeAvail/_pipeTake/_pipePut
+ * accessors, so promotion and demotion move no data and need no locks (a
+ * demotion-time ring→buf drain would race a mid-flight fast reader).
+ *
+ * Header words (32-byte header, data area after; every word has ONE writer):
+ *   PR_MODE   kernel-owned   the one-way ladder LATENT → FAST → DEMOTED.
+ *                            FAST = both ends single-holder: the holders
+ *                            memcpy + Atomics locally, zero data RPCs.
+ *   PR_HEAD   consumer-owned free-running u32 byte index (reader end).
+ *   PR_TAIL   producer-owned free-running u32 byte index (writer end).
+ *   PR_FLAGS  kernel-owned   PRF_RGONE/PRF_WGONE — close/exit are always
+ *                            brokered, so the kernel latches peer-gone here
+ *                            and the fast peer discovers EOF/EPIPE locally.
+ *   PR_RWAIT/ kernel-owned   "a waiter is parked interested in this end"
+ *   PR_WWAIT                 (any mode; set BEFORE the park's readiness
+ *                            rescan, cleared by _cancelWaiter). A fast peer
+ *                            that commits while the flag is up sends
+ *                            PIPE_KICK — the suppressed-doorbell protocol:
+ *                            flag-then-rescan vs commit-then-check-flag
+ *                            cross under SC atomics, so a wake can be
+ *                            redundant but never lost (the 0168 lesson).
+ *
+ * Mode moves only while every process that could fast-op the flipped role
+ * is parked in the very RPC doing the flip: promotion fires on a holder
+ * REMOVAL (the closer/exiter is parked; not at create — the creator's
+ * spawns would demote a promoted pipe and burn the one-way ladder, so
+ * same-process self-pipes deliberately stay brokered), demotion fires on
+ * spawn inheritance (the only event that adds a holder; the spawner is
+ * parked). A straggler fast op that loaded FAST just before a demotion
+ * commits harmlessly: its role's end stayed single-holder, so the kernel
+ * only exercises that role while the same process is parked in an RPC —
+ * at most one producer and one consumer touch the ring at any instant. */
+var PIPE_RING_HDR = 32;
+var PR_MODE = 0, PR_HEAD = 1, PR_TAIL = 2, PR_FLAGS = 3, PR_RWAIT = 4, PR_WWAIT = 5;
+var PR_LATENT = 0, PR_FAST = 1, PR_DEMOTED = 2;
+var PRF_RGONE = 1, PRF_WGONE = 2;
+// A ringed pipe's capacity IS its ring (pipe.cap follows the SAB the
+// creator allocated): 256K, 4× the brokered PIPE_CAP — every park/kick
+// cycle moves a whole ring, so a bigger elastic buffer means fewer wake
+// RPCs per MB. POSIX only mandates PIPE_BUF (512) atomicity, not a size.
+var PIPE_RING_BYTES = PIPE_RING_HDR + 256 * 1024;
+
+function pipeRingViews(sab) {
+  return { sab: sab, i32: new Int32Array(sab, 0, PIPE_RING_HDR >> 2),
+           u8: new Uint8Array(sab, PIPE_RING_HDR),
+           cap: sab.byteLength - PIPE_RING_HDR };
+}
+function pipeRingAvail(ring) {
+  return (Atomics.load(ring.i32, PR_TAIL) - Atomics.load(ring.i32, PR_HEAD)) >>> 0;
+}
+/* Producer side: copy `bytes` in at TAIL (caller checked the space) and
+ * commit. Free-running indices; the data area wraps. */
+function pipeRingPut(ring, bytes) {
+  var tail = Atomics.load(ring.i32, PR_TAIL) >>> 0;
+  var off = tail % ring.cap;
+  var first = Math.min(bytes.length, ring.cap - off);
+  ring.u8.set(bytes.subarray(0, first), off);
+  if (first < bytes.length) ring.u8.set(bytes.subarray(first), 0);
+  Atomics.store(ring.i32, PR_TAIL, (tail + bytes.length) | 0);
+}
+/* Consumer side: copy `n` bytes out from HEAD into `dst` (caller checked
+ * avail; dst.length >= n) and commit. */
+function pipeRingTakeInto(ring, dst, n) {
+  var head = Atomics.load(ring.i32, PR_HEAD) >>> 0;
+  var off = head % ring.cap;
+  var first = Math.min(n, ring.cap - off);
+  dst.set(ring.u8.subarray(off, off + first), 0);
+  if (first < n) dst.set(ring.u8.subarray(0, n - first), first);
+  Atomics.store(ring.i32, PR_HEAD, (head + n) | 0);
+}
+function pipeRingTake(ring, n) {
+  var out = new Uint8Array(n);
+  pipeRingTakeInto(ring, out, n);
+  return out;
+}
 
 /* HTTP transport (todos/0172): per-transfer body backpressure threshold.
  * The async fetch reader pauses once this many bytes are queued and resumes
@@ -1644,9 +1729,73 @@ Kernel.prototype._makeOfd = function (kind, extra) {
   return o;
 };
 
-Kernel.prototype._ofdUnref = function (id) {
+/* Ref an OFD for a process. For ringed pipe ends this also maintains the
+ * per-end holder map (pid → fd count) that drives the SPSC mode ladder
+ * (todos/0181): the moment an end gains a SECOND holder process — spawn
+ * inheritance is the only event that can (the spawner is parked in the
+ * spawn RPC, so the flip races nothing) — a FAST pipe demotes, finally.
+ * pid 0 is the kernel pseudo-holder (the strace write-end ref): it blocks
+ * promotion, keeping traced pipes brokered so every byte shows in the
+ * trace (todos/0181's documented strace rule). */
+Kernel.prototype._ofdRef = function (o, pid) {
+  o.refs++;
+  if (o.kind !== 'pipe' || !o.holders) return;
+  o.holders.set(pid, (o.holders.get(pid) || 0) + 1);
+  var ring = o.pipe.ring;
+  if (ring && o.holders.size > 1 && Atomics.load(ring.i32, PR_MODE) === PR_FAST) {
+    Atomics.store(ring.i32, PR_MODE, PR_DEMOTED);   // one-way; bytes stay in the ring
+  }
+};
+
+/* Promotion check (todos/0181), run when a pipe end LOSES a holder: with
+ * exactly one holder process per end (and no kernel pseudo-holder, no
+ * traced holder, both ends open) the pipe is single-producer/single-
+ * consumer and the holders may move bytes through the ring themselves.
+ * Deliberately NOT run at create: the creator's spawns would demote the
+ * fresh promotion and burn the one-way ladder — so a pipeline promotes at
+ * the parent's post-spawn closes, and a same-process self-pipe (no spawn,
+ * no close) stays brokered for life (documented limit). */
+Kernel.prototype._pipeMaybePromote = function (pipe) {
+  var ring = pipe.ring;
+  if (!ring || pipe.drain || !pipe.rOpen || !pipe.wOpen) return;
+  if (Atomics.load(ring.i32, PR_MODE) !== PR_LATENT) return;
+  var ro = pipe.rofd, wo = pipe.wofd;
+  if (!ro || !wo || ro.holders.size !== 1 || wo.holders.size !== 1) return;
+  var pids = [];
+  ro.holders.forEach(function (n, pid) { pids.push(pid); });
+  wo.holders.forEach(function (n, pid) { pids.push(pid); });
+  for (var i = 0; i < pids.length; i++) {
+    var hp = this._procs.get(pids[i]);
+    if (!hp || hp.trace) return;   // pid 0 (kernel) or a traced holder: stay brokered
+  }
+  // Waiters parked from the brokered era keep waiting — raise their end's
+  // flag so the peer's first FAST commit kicks them (the flag joins the
+  // waiter's flagged list for _cancelWaiter's cleanup).
+  var self = this;
+  var flagQueued = function (pidList, op, word) {
+    for (var qi = 0; qi < pidList.length; qi++) {
+      var qp = self._procs.get(pidList[qi]);
+      if (qp && qp.waiter && qp.waiter.op === op && qp.waiter.pipe === pipe) {
+        self._pipeFlagWait(qp.waiter, pipe, word);
+      }
+    }
+  };
+  flagQueued(pipe.readWaiters, 'piperead', PR_RWAIT);
+  flagQueued(pipe.writeWaiters, 'pipewrite', PR_WWAIT);
+  Atomics.store(ring.i32, PR_MODE, PR_FAST);
+};
+
+Kernel.prototype._ofdUnref = function (id, pid) {
   var o = this._ofds.get(id);
-  if (!o || --o.refs > 0) return;
+  if (!o) return;
+  if (o.kind === 'pipe' && o.holders && pid !== undefined) {
+    var hc = o.holders.get(pid);
+    if (hc !== undefined) {
+      if (hc <= 1) o.holders.delete(pid); else o.holders.set(pid, hc - 1);
+    }
+    if (o.refs > 1) this._pipeMaybePromote(o.pipe);   // end survives: SPSC check
+  }
+  if (--o.refs > 0) return;
   this._ofds.delete(id);
   if (o.kind === 'file') this._fs.close(o.bfsFd);
   else if (o.kind === 'ptm') {
@@ -1666,8 +1815,13 @@ Kernel.prototype._ofdUnref = function (id) {
   }
   else if (o.kind === 'pipe') {
     // Last reference to this end anywhere in the system: the peers must
-    // learn (readers see EOF, writers see EPIPE + SIGPIPE).
+    // learn (readers see EOF, writers see EPIPE + SIGPIPE). Ringed pipes
+    // ALSO latch the flag word — close is always brokered, so a FAST peer
+    // discovers EOF/EPIPE at its next local ring op with zero RPCs.
     if (o.end === 'read') o.pipe.rOpen = false; else o.pipe.wOpen = false;
+    if (o.pipe.ring) {
+      Atomics.or(o.pipe.ring.i32, PR_FLAGS, o.end === 'read' ? PRF_RGONE : PRF_WGONE);
+    }
     this._pipeNotify(o.pipe);
   } else if (o.kind === 'socket') {
     if (o.st === 'conn') {
@@ -1988,13 +2142,37 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     if (inherit) {
       inherit.forEach(function (ofdId, fd) {
         var o = self._ofds.get(ofdId);
-        if (o) { o.refs++; pcb.fds.set(fd, ofdId); }
+        if (o) { self._ofdRef(o, pid); pcb.fds.set(fd, ofdId); }
       });
     } else {
       var std = self._stdOfds();
       std.in_.refs++; pcb.fds.set(0, std.in_.id);
       std.out.refs++; pcb.fds.set(1, std.out.id);
       std.err.refs++; pcb.fds.set(2, std.err.id);
+    }
+    // strace (todos/0046): spec.trace names a pipe WRITE end in the PARENT's
+    // fd table (host.js only forwards it under spawn flags bit1, so old
+    // binaries with the 32-byte spec can't set it by accident). The kernel
+    // takes its own ref — the tracer's read end sees EOF exactly at tracee
+    // teardown. flags bit2 = follow: descendants inherit the same pipe and
+    // every line gets a [pid N] prefix. Attached BEFORE the fd-actions run
+    // (todos/0181): an action-close can shrink a pipe end to single-holder
+    // and fire the SPSC promotion check — the kernel pseudo-holder ref must
+    // already be there so a traced pipe never even transiently promotes.
+    if (typeof spec.trace === 'number' && spec.trace >= 0) {
+      var trId = parent ? parent.fds.get(spec.trace | 0) : undefined;
+      var trO = trId === undefined ? null : self._ofds.get(trId);
+      if (!trO || trO.kind !== 'pipe' || trO.end !== 'write') {
+        pcb.fds.forEach(function (id) { self._ofdUnref(id, pid); });
+        return { errno: 'EBADF' };
+      }
+      self._ofdRef(trO, 0);   // kernel pseudo-holder: a traced pipe never promotes
+      pcb.trace = { ofdId: trO.id, pipe: trO.pipe,
+                    follow: (spec.flags & 4) !== 0, drops: 0, cur: null };
+    } else if (parent && parent.trace && parent.trace.follow) {
+      self._ofdRef(self._ofds.get(parent.trace.ofdId), 0);
+      pcb.trace = { ofdId: parent.trace.ofdId, pipe: parent.trace.pipe,
+                    follow: true, drops: 0, cur: null };
     }
     var actions = spec.actions || [];
     for (var ai = 0; ai < actions.length; ai++) {
@@ -2004,9 +2182,9 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
         var srcId = pcb.fds.get(a.arg);
         if (srcId === undefined) fail = 'EBADF';
         else {
-          self._ofds.get(srcId).refs++;
+          self._ofdRef(self._ofds.get(srcId), pid);
           var oldId = pcb.fds.get(a.fd);
-          if (oldId !== undefined) self._ofdUnref(oldId);
+          if (oldId !== undefined) self._ofdUnref(oldId, pid);
           pcb.fds.set(a.fd, srcId);
         }
       } else if (a.op === 1) {    // OPEN path at fd (arg = oflag)
@@ -2016,15 +2194,18 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
           var no = self._makeOfd('file', { bfsFd: bfsFd });
           no.refs++;
           var prevId = pcb.fds.get(a.fd);
-          if (prevId !== undefined) self._ofdUnref(prevId);
+          if (prevId !== undefined) self._ofdUnref(prevId, pid);
           pcb.fds.set(a.fd, no.id);
         }
       } else if (a.op === 2) {    // CLOSE
         var cId = pcb.fds.get(a.fd);
-        if (cId !== undefined) { self._ofdUnref(cId); pcb.fds.delete(a.fd); }
+        if (cId !== undefined) { self._ofdUnref(cId, pid); pcb.fds.delete(a.fd); }
       }
       if (fail) {
-        pcb.fds.forEach(function (id) { self._ofdUnref(id); });
+        pcb.fds.forEach(function (id) { self._ofdUnref(id, pid); });
+        // The trace ref attached above (pre-actions since todos/0181) is
+        // not in pcb.fds — release it or the kernel's write-end ref leaks.
+        if (pcb.trace) { self._ofdUnref(pcb.trace.ofdId, 0); pcb.trace = null; }
         return { errno: fail };
       }
     }
@@ -2039,31 +2220,24 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
       pcb.tty = o0.tty;
       if (!pcb.tty.fgPgid) pcb.tty.fgPgid = pcb.pgid;
     }
-    // strace (todos/0046): spec.trace names a pipe WRITE end in the PARENT's
-    // fd table (host.js only forwards it under spawn flags bit1, so old
-    // binaries with the 32-byte spec can't set it by accident). The kernel
-    // takes its own ref — the tracer's read end sees EOF exactly at tracee
-    // teardown. flags bit2 = follow: descendants inherit the same pipe and
-    // every line gets a [pid N] prefix.
-    if (typeof spec.trace === 'number' && spec.trace >= 0) {
-      var trId = parent ? parent.fds.get(spec.trace | 0) : undefined;
-      var trO = trId === undefined ? null : self._ofds.get(trId);
-      if (!trO || trO.kind !== 'pipe' || trO.end !== 'write') {
-        pcb.fds.forEach(function (id) { self._ofdUnref(id); });
-        return { errno: 'EBADF' };
-      }
-      trO.refs++;
-      pcb.trace = { ofdId: trO.id, pipe: trO.pipe,
-                    follow: (spec.flags & 4) !== 0, drops: 0, cur: null };
-    } else if (parent && parent.trace && parent.trace.follow) {
-      self._ofds.get(parent.trace.ofdId).refs++;
-      pcb.trace = { ofdId: parent.trace.ofdId, pipe: parent.trace.pipe,
-                    follow: true, drops: 0, cur: null };
-    }
   }
 
   self._procs.set(pid, pcb);
   if (parent) parent.children.add(pid);
+  // SPSC pipe rings (todos/0181): every ringed pipe fd in the child's
+  // FINAL table (post-actions) ships its ring SAB, whatever the current
+  // mode — the PR_MODE word, not process-local knowledge, gates fast ops,
+  // so a pipe promoted AFTER this spawn (the parent's closes) just starts
+  // moving bytes locally.
+  var pipeRings = null;
+  if (self._brokered) {
+    pcb.fds.forEach(function (ofdId, fd) {
+      var po = self._ofds.get(ofdId);
+      if (po && po.kind === 'pipe' && po.pipe.ring) {
+        (pipeRings = pipeRings || []).push({ fd: fd, end: po.end, sab: po.pipe.ring.sab });
+      }
+    });
+  }
   var procSpec = {
     pid: pid, ppid: pcb.ppid, pgid: pcb.pgid,
     path: spec.path,
@@ -2081,6 +2255,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     ttySab: pcb.tty ? pcb.tty.sab : null,
     brokered: self._brokered,
     ro: self._roImage,   // process-side read-only volume (todos/0180)
+    pipeRings: pipeRings,   // SPSC pipe rings for inherited fds (todos/0181)
   };
   try {
     pcb.worker = self._createWorker(procSpec);
@@ -2126,6 +2301,10 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
     case 'audio-sab':
       if (msg.sab) pcb._audioPendingSab = msg.sab;
       break;
+    // SPSC pipe ring (todos/0181): precedes its PIPE_CREATE, same handshake.
+    case 'pipe-sab':
+      if (msg.sab) pcb._pipePendingSab = msg.sab;
+      break;
     case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp); break;
     // On-demand compositor doorbells (todos/0169): want-frame = this pcb
     // presented / armed a vsync wait while the compositor was parked —
@@ -2161,10 +2340,23 @@ Kernel.prototype._traceLine = function (pcb, line, force) {
   // the line and says so at exit rather than growing without bound. The
   // exit markers ride `force` — bounded, and the drop notice must not
   // itself drop.
-  if (!force && pipe.buf.length > pipe.cap) { tr.drops++; return; }
+  if (!force && this._pipeAvail(pipe) > pipe.cap) { tr.drops++; return; }
   if (tr.follow) line = '[pid ' + pcb.pid + '] ' + line;
   var bytes = textEncoder.encode(line + '\n');
-  for (var i = 0; i < bytes.length; i++) pipe.buf.push(bytes[i]);
+  if (pipe.ring) {
+    // A ring is a hard cap (the JS buf could overshoot for `force` lines):
+    // truncate the final markers rather than corrupt the ring. Trace pipes
+    // never promote (the kernel's write-end ref is a pseudo-holder), so
+    // this stays the kernel's single-producer lane.
+    var rfree = this._pipeFree(pipe);
+    if (bytes.length > rfree) {
+      if (!force) { tr.drops++; return; }
+      bytes = bytes.subarray(0, rfree);
+    }
+    if (bytes.length) pipeRingPut(pipe.ring, bytes);
+  } else {
+    for (var i = 0; i < bytes.length; i++) pipe.buf.push(bytes[i]);
+  }
   this._pipeNotify(pipe);
 };
 
@@ -2195,7 +2387,7 @@ Kernel.prototype._traceExit = function (pcb, status) {
     this._traceLine(pcb, '+++ exited with ' + ((status >> 8) & 0xff) + ' +++', true);
   }
   pcb.trace = null;
-  this._ofdUnref(tr.ofdId);
+  this._ofdUnref(tr.ofdId, 0);
 };
 
 Kernel.prototype._respond = function (pcb, resp) {
@@ -2347,14 +2539,41 @@ Kernel.prototype._dispatchRpc = function (pcb) {
         buf: [], cap: PIPE_CAP, rOpen: true, wOpen: true,
         readWaiters: [], writeWaiters: [],   // pids with a deferred RPC, FIFO
       };
-      var ro = this._makeOfd('pipe', { pipe: pipe, end: 'read' });
-      var wo = this._makeOfd('pipe', { pipe: pipe, end: 'write' });
-      ro.refs++; wo.refs++;
+      // SPSC ring (todos/0181): the creator posts the ring SAB immediately
+      // before this RPC ({type:'pipe-sab'} — the audio-sab handshake; the
+      // kernel can't hand an SAB to a parked worker). A ringed pipe keeps
+      // its bytes in the ring in every mode; no SAB (fake workers, old
+      // embedders) = the JS buf and permanent brokered service.
+      var prSab = pcb._pipePendingSab || null;
+      pcb._pipePendingSab = null;
+      if (prSab && prSab.byteLength > PIPE_RING_HDR) {
+        pipe.ring = pipeRingViews(prSab);
+        pipe.cap = pipe.ring.cap;
+      }
+      var ro = this._makeOfd('pipe', { pipe: pipe, end: 'read', holders: new Map() });
+      var wo = this._makeOfd('pipe', { pipe: pipe, end: 'write', holders: new Map() });
+      pipe.rofd = ro; pipe.wofd = wo;   // the promotion check reads both ends
+      this._ofdRef(ro, pcb.pid); this._ofdRef(wo, pcb.pid);
       var rfd = 0; while (pcb.fds.has(rfd)) rfd++;
       pcb.fds.set(rfd, ro.id);
       var wfd = 0; while (pcb.fds.has(wfd)) wfd++;
       pcb.fds.set(wfd, wo.id);
       this._respond(pcb, { rfd: rfd, wfd: wfd });
+      break;
+    }
+    case OP.PIPE_KICK: {
+      // The SPSC doorbell (todos/0181): a fast end committed a ring op
+      // while the peer's parked flag was up — re-serve parked waiters and
+      // rescan selects. {epipe:1} = the caller hit PRF_RGONE locally and
+      // wants its own SIGPIPE (deliver BEFORE responding so the pending
+      // bit is up when the write's import returns — brokered ordering).
+      var ko = null;
+      var kid = pcb.fds.get(req.fd | 0);
+      if (kid !== undefined) ko = this._ofds.get(kid);
+      if (!ko || ko.kind !== 'pipe') { this._respond(pcb, { errno: 'EBADF' }); break; }
+      if (req.epipe) this._deliver(pcb, SIG.PIPE);
+      this._respond(pcb, {});
+      this._pipeNotify(ko.pipe);
       break;
     }
     case OP.CLIP_SET: {
@@ -2468,7 +2687,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_CLOSE: {
       var id = pcb.fds.get(req.fd | 0);
       if (id === undefined) { this._respond(pcb, { errno: 'EBADF' }); return; }
-      this._ofdUnref(id);
+      this._ofdUnref(id, pcb.pid);
       pcb.fds.delete(req.fd | 0);
       this._respond(pcb, {});
       return;
@@ -2585,7 +2804,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         r = fs.fstat(o4.bfsFd);
         this._respond(pcb, r === null ? eFs() : { st: r });
       } else if (o4.kind === 'pipe') {
-        this._respond(pcb, { st: { ino: 0, mode: 0x1000 | 0o600, nlink: 1, size: o4.pipe.buf.length, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
+        this._respond(pcb, { st: { ino: 0, mode: 0x1000 | 0o600, nlink: 1, size: this._pipeAvail(o4.pipe), atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       } else if (o4.kind === 'socket') {
         this._respond(pcb, { st: { ino: 0, mode: S_IFSOCK_MODE | 0o777, nlink: 1, size: o4.st === 'conn' ? o4.rx.buf.length : 0, atime: 0, mtime: 0, ctime: 0, rdev: 0 } });
       } else {
@@ -2662,7 +2881,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_DUP: {
       var o8 = ofdOf(req.fd);
       if (!o8) { this._respond(pcb, { errno: 'EBADF' }); return; }
-      o8.refs++;
+      this._ofdRef(o8, pcb.pid);
       var dfd = allocFd(0);
       pcb.fds.set(dfd, o8.id);
       this._respond(pcb, { fd: dfd });
@@ -2672,9 +2891,9 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       var o9 = ofdOf(req.fd);
       if (!o9) { this._respond(pcb, { errno: 'EBADF' }); return; }
       if ((req.fd | 0) !== (req.newfd | 0)) {
-        o9.refs++;
+        this._ofdRef(o9, pcb.pid);
         var prev = pcb.fds.get(req.newfd | 0);
-        if (prev !== undefined) this._ofdUnref(prev);
+        if (prev !== undefined) this._ofdUnref(prev, pcb.pid);
         pcb.fds.set(req.newfd | 0, o9.id);
       }
       this._respond(pcb, { fd: req.newfd | 0 });
@@ -2683,7 +2902,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_FCNTL_DUPFD: {
       var oA = ofdOf(req.fd);
       if (!oA) { this._respond(pcb, { errno: 'EBADF' }); return; }
-      oA.refs++;
+      this._ofdRef(oA, pcb.pid);
       var mfd = allocFd(req.min | 0);
       pcb.fds.set(mfd, oA.id);
       this._respond(pcb, { fd: mfd });
@@ -2714,9 +2933,18 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       return;
     }
     case OP.FS_SELECT: {
-      var ready = this._selectScan(pcb, req.r || [], req.w || []);
-      if (ready.count > 0 || req.timeoutMs === 0) { this._respond(pcb, ready); return; }
+      // Flag-BEFORE-scan (todos/0181): raise the ring parked-peer flags,
+      // THEN scan. A fast commit that the scan missed loads the flag after
+      // its commit (SC order) and kicks — the orders cross, so the wake is
+      // never lost. An immediate answer drops the flags via _clearFlags.
       var w = { op: 'select', r: req.r || [], w: req.w || [], timer: null };
+      this._waitFlagRings(pcb, w);
+      var ready = this._selectScan(pcb, w.r, w.w);
+      if (ready.count > 0 || req.timeoutMs === 0) {
+        this._clearFlags(w);
+        this._respond(pcb, ready);
+        return;
+      }
       if (req.timeoutMs !== null && req.timeoutMs !== undefined) {
         w.timer = setTimeout(function () {
           if (pcb.waiter === w) {
@@ -2738,16 +2966,19 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       // No-fs kernels answer ENOSYS like every 0x04xx op (the fd layer is
       // the point); single-source ring waits stay on the raw pumpWait
       // futex tier and don't come through here.
-      var wReady = this._selectScan(pcb, req.r || [], req.w || []);
+      // NB waiter op is 'uwait' — 'wait' is taken by a parked waitpid
+      // (OP.WAIT, answered by _exitProcess). Ring flags go up BEFORE the
+      // readiness scan (the FS_SELECT comment above — same lost-wake rule).
+      var uw = { op: 'uwait', r: req.r || [], w: req.w || [], ring: !!req.ring, timer: null };
+      this._waitFlagRings(pcb, uw);
+      var wReady = this._selectScan(pcb, uw.r, uw.w);
       var ringReady = !!req.ring && this._wmRingReady(pcb);
       if (wReady.count > 0 || ringReady || req.timeoutMs === 0) {
+        this._clearFlags(uw);
         this._respond(pcb, wReady.count > 0 ? { why: 1, r: wReady.r, w: wReady.w }
           : { why: ringReady ? 2 : 0 });
         return;
       }
-      // NB waiter op is 'uwait' — 'wait' is taken by a parked waitpid
-      // (OP.WAIT, answered by _exitProcess).
-      var uw = { op: 'uwait', r: req.r || [], w: req.w || [], ring: !!req.ring, timer: null };
       if (req.timeoutMs !== null && req.timeoutMs !== undefined) {
         uw.timer = setTimeout(function () {
           if (pcb.waiter === uw) {
@@ -4781,7 +5012,7 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
       if (o.pty.out.buf.length > 0 || !o.pty.out.wOpen) r.push(fd);
     }
     else if (o.kind === 'pipe') {
-      if (o.end !== 'read' || o.pipe.buf.length > 0 || !o.pipe.wOpen) r.push(fd);
+      if (o.end !== 'read' || self._pipeAvail(o.pipe) > 0 || !o.pipe.wOpen) r.push(fd);
     }
     else if (o.kind === 'socket') {
       // conn: data or peer-gone EOF; listening: a queued connection;
@@ -4796,7 +5027,7 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
     var id = pcb.fds.get(fd | 0);
     var o = id === undefined ? null : self._ofds.get(id);
     if (o && o.kind === 'pipe' && o.end === 'write' &&
-        o.pipe.buf.length >= o.pipe.cap && o.pipe.rOpen) return;   // full: not ready
+        self._pipeFree(o.pipe) === 0 && o.pipe.rOpen) return;      // full: not ready
     if (o && o.kind === 'socket' && o.st === 'conn' &&
         o.tx.buf.length >= o.tx.cap && o.tx.rOpen) return;         // full: not ready
     w.push(fd);
@@ -4920,19 +5151,78 @@ Kernel.prototype._ptySlaveWrite = function (pcb, pty, data) {
   dir.writeWaiters.push(pcb.pid);
 };
 
+/* Pipe storage accessors (todos/0181): a ringed pipe keeps its bytes in
+ * the shared ring IN EVERY MODE (see the PR_* block); everything else
+ * (sockets, ptys, ring-less pipes — fake-worker tests) keeps the JS buf.
+ * Every kernel touch point goes through these so the two storages can't
+ * diverge. */
+Kernel.prototype._pipeAvail = function (dir) {
+  return dir.ring ? pipeRingAvail(dir.ring) : dir.buf.length;
+};
+Kernel.prototype._pipeFree = function (dir) {
+  return dir.ring ? dir.ring.cap - pipeRingAvail(dir.ring) : dir.cap - dir.buf.length;
+};
+Kernel.prototype._pipeTake = function (dir, n) {
+  if (dir.ring) return pipeRingTake(dir.ring, n);
+  return Uint8Array.from(dir.buf.splice(0, n));
+};
+Kernel.prototype._pipePut = function (dir, data) {
+  if (dir.ring) { pipeRingPut(dir.ring, data); return; }
+  for (var i = 0; i < data.length; i++) dir.buf.push(data[i]);
+};
+
+/* Park-side half of the suppressed-doorbell protocol: latch "someone is
+ * parked on this end" in the ring header BEFORE the caller's readiness
+ * rescan, and record the word on the waiter so _cancelWaiter (the single
+ * wake choke point — serve, EINTR, timeout, kill) clears it. Flag order vs
+ * the fast peer's commit-then-check is what makes wakes lossless. */
+Kernel.prototype._pipeFlagWait = function (waiter, dir, word) {
+  if (!dir.ring) return;
+  Atomics.store(dir.ring.i32, word, 1);
+  (waiter.flagged = waiter.flagged || []).push({ i32: dir.ring.i32, word: word });
+};
+
+/* Raise parked-peer flags for every ringed pipe end a select/uwait names
+ * (mode-independent: a brokered-mode flag is just never read). Runs BEFORE
+ * the readiness scan; _clearFlags/_cancelWaiter drop them. */
+Kernel.prototype._waitFlagRings = function (pcb, waiter) {
+  var self = this;
+  var flagList = function (fds, end, word) {
+    for (var i = 0; i < fds.length; i++) {
+      var id = pcb.fds.get(fds[i] | 0);
+      var o = id === undefined ? null : self._ofds.get(id);
+      if (o && o.kind === 'pipe' && o.end === end) self._pipeFlagWait(waiter, o.pipe, word);
+    }
+  };
+  flagList(waiter.r || [], 'read', PR_RWAIT);
+  flagList(waiter.w || [], 'write', PR_WWAIT);
+};
+
+Kernel.prototype._clearFlags = function (waiter) {
+  if (!waiter.flagged) return;
+  for (var i = 0; i < waiter.flagged.length; i++) {
+    Atomics.store(waiter.flagged[i].i32, waiter.flagged[i].word, 0);
+  }
+  waiter.flagged = null;
+};
+
 /* Blocking stream ops shared by pipes and connected sockets — `dir` is one
  * pipe-shaped direction. Deferred waiters register under the pipe op names
  * so _pipeNotify/_cancelWaiter serve both kinds unchanged. */
 Kernel.prototype._streamRead = function (pcb, dir, count) {
-  if (dir.buf.length > 0) {
-    var n = Math.min(count, dir.buf.length);
-    this._respondRaw(pcb, Uint8Array.from(dir.buf.splice(0, n)));
+  var avail = this._pipeAvail(dir);
+  if (avail > 0) {
+    this._respondRaw(pcb, this._pipeTake(dir, Math.min(count, avail)));
     this._pipeNotify(dir);                        // space freed: writers may proceed
     return;
   }
   if (!dir.wOpen) { this._respondRaw(pcb, new Uint8Array(0)); return; }  // EOF
   pcb.waiter = { op: 'piperead', pipe: dir, count: count };  // served by _pipeNotify
+  this._pipeFlagWait(pcb.waiter, dir, PR_RWAIT);
   dir.readWaiters.push(pcb.pid);
+  // Flag-then-rescan: a fast writer that committed between the avail check
+  // above and the flag store sees no flag — so look again now that it's up.
+  if (dir.ring && pipeRingAvail(dir.ring) > 0) this._pipeNotify(dir);
 };
 
 Kernel.prototype._streamWrite = function (pcb, dir, data) {
@@ -4945,16 +5235,18 @@ Kernel.prototype._streamWrite = function (pcb, dir, data) {
     this._deliver(pcb, SIG.PIPE);
     return;
   }
-  var free = dir.cap - dir.buf.length;
+  var free = this._pipeFree(dir);
   if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free)) {
     // Full (or a PIPE_ATOMIC-small write that would split): block.
     // Copy the bytes OUT of the SAB payload region — it's reused.
     pcb.waiter = { op: 'pipewrite', pipe: dir, data: data.slice() };
+    this._pipeFlagWait(pcb.waiter, dir, PR_WWAIT);
     dir.writeWaiters.push(pcb.pid);
+    if (dir.ring && dir.ring.cap - pipeRingAvail(dir.ring) > free) this._pipeNotify(dir);
     return;
   }
   var n = Math.min(free, data.length);
-  for (var i = 0; i < n; i++) dir.buf.push(data[i]);
+  this._pipePut(dir, data.subarray(0, n));
   this._respond(pcb, { n: n });
   this._pipeNotify(dir);                          // data arrived: readers may proceed
 };
@@ -4982,10 +5274,11 @@ Kernel.prototype._pipeNotify = function (pipe) {
         pipe.readWaiters.shift();
         continue;
       }
-      if (pipe.buf.length > 0) {
+      var ravail = this._pipeAvail(pipe);
+      if (ravail > 0) {
         var count = rpcb.waiter.count;
         this._cancelWaiter(rpcb);
-        this._respondRaw(rpcb, Uint8Array.from(pipe.buf.splice(0, Math.min(count, pipe.buf.length))));
+        this._respondRaw(rpcb, this._pipeTake(pipe, Math.min(count, ravail)));
         progress = true;
       } else if (!pipe.wOpen) {
         this._cancelWaiter(rpcb);
@@ -5015,12 +5308,12 @@ Kernel.prototype._pipeNotify = function (pipe) {
         continue;
       }
       var data = ww.data;
-      var free = pipe.cap - pipe.buf.length;
+      var free = this._pipeFree(pipe);
       if (free === 0 || (data.length <= PIPE_ATOMIC && data.length > free) ||
           (ww.whole && data.length > free)) break;
       this._cancelWaiter(wpcb);
       var n = ww.whole ? data.length : Math.min(free, data.length);
-      for (var i = 0; i < n; i++) pipe.buf.push(data[i]);
+      this._pipePut(pipe, data.subarray(0, n));
       this._respond(wpcb, { n: ww.n !== undefined ? ww.n : n });
       progress = true;
     }
@@ -5346,6 +5639,11 @@ Kernel.prototype._cancelWaiter = function (pcb) {
   pcb.waiter = null;
   if (!w) return;
   if (w.timer) clearTimeout(w.timer);
+  // SPSC rings (todos/0181): drop the parked-peer flags this wait raised.
+  // Every wake path funnels here (serve, EINTR, timeout, exit), so a flag
+  // can't outlive its waiter; a fast peer that already read it just sends
+  // one redundant PIPE_KICK.
+  this._clearFlags(w);
   if (w.op === 'ttyread') {
     var i = w.tty.waiters.indexOf(pcb.pid);
     if (i >= 0) w.tty.waiters.splice(i, 1);
@@ -5384,7 +5682,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   // brokered fs: the kernel, not the dead worker, owns the descriptions,
   // so unlink-while-open lifetimes complete even on a hard kill.
   var self0 = this;
-  pcb.fds.forEach(function (ofdId) { self0._ofdUnref(ofdId); });
+  pcb.fds.forEach(function (ofdId) { self0._ofdUnref(ofdId, pcb.pid); });
   pcb.fds.clear();
   // Reclaim WM surfaces (same discipline as fds: the kernel, not the dead
   // worker, owns the scene — SIGKILL leaves no ghost windows).
@@ -5721,6 +6019,7 @@ function RemoteFS(client, opts) {
   this._stdinSab = null;        // never set: stdin flows via FS_READ RPCs
   this._stdinCtrl = null;       // winsize words only (TIOCGWINSZ)
   this._pipeBroker = null;      // unused: brokered pipes are kernel OFDs (PIPE_CREATE)
+  this._pipes = new Map();      // fd -> ring views {i32,u8,cap,sab,end} (todos/0181)
   this._sigcheck = null;        // assigned by toWasmEnv; unused (no ring waits)
   // The read-only fast path (todos/0180; header comment above).
   this._ro = null;
@@ -5883,6 +6182,7 @@ RemoteFS.prototype.close = function (fd) {
   var r = this._ok(this._c.call(OP.FS_CLOSE, { fd: fd }));
   if (r === null) return null;
   delete this._fdTable[fd];
+  this._pipes.delete(fd);
   return 0;
 };
 RemoteFS.prototype.read = function (fd, buf, count) {
@@ -5893,6 +6193,25 @@ RemoteFS.prototype.read = function (fd, buf, count) {
     var n0 = this._ro.fs.read(fd - RO_FD_BASE, buf, count);
     if (n0 === null) return this._setErr(this._ro.fs._lastError || 'EIO');
     return n0;
+  }
+  // SPSC fast path (todos/0181): consume the shared ring locally while the
+  // kernel says FAST. Drain-before-EOF (POSIX); empty parks in FS_WAIT.
+  var pr = this._pipes.get(fd);
+  if (pr && pr.end === 'read') {
+    while (Atomics.load(pr.i32, PR_MODE) === PR_FAST) {
+      var avail = pipeRingAvail(pr);
+      if (avail > 0) {
+        var rn = Math.min(count, avail);
+        pipeRingTakeInto(pr, buf, rn);
+        if (Atomics.load(pr.i32, PR_WWAIT)) this._c.call(OP.PIPE_KICK, { fd: fd });
+        return rn;
+      }
+      if (Atomics.load(pr.i32, PR_FLAGS) & PRF_WGONE) return 0;   // EOF
+      var rw = this._c.call(OP.FS_WAIT, { r: [fd], timeoutMs: null }, true);
+      if (rw.errno) return this._setErr(rw.errno);   // EINTR: libc retries post-dispatch
+    }
+    // Demoted mid-stream (or never promoted): fall through brokered — the
+    // kernel serves the very same ring, so nothing is lost.
   }
   // Interruptible: a tty read defers kernel-side; a posted signal turns it
   // into EINTR (regular files respond immediately, so it never fires).
@@ -5908,6 +6227,30 @@ RemoteFS.prototype.write = function (fd, buf, count) {
     var lw = this._ro.fs.write(fd - RO_FD_BASE, buf, count);
     if (lw === null) return this._setErr(this._ro.fs._lastError || 'EIO');
     return lw;
+  }
+  // SPSC fast path (todos/0181): produce into the shared ring while FAST.
+  // Whole-or-block for PIPE_ATOMIC-small writes (POSIX PIPE_BUF), partial
+  // landings above it — the brokered _streamWrite rules, verbatim.
+  var pw = this._pipes.get(fd);
+  if (pw && pw.end === 'write') {
+    while (Atomics.load(pw.i32, PR_MODE) === PR_FAST) {
+      if (Atomics.load(pw.i32, PR_FLAGS) & PRF_RGONE) {
+        // Reader gone: EPIPE, and the kernel deals us our SIGPIPE (the
+        // {epipe:1} kick) so default-action death matches brokered runs.
+        this._c.call(OP.PIPE_KICK, { fd: fd, epipe: 1 });
+        return this._setErr('EPIPE');
+      }
+      var free = pw.cap - pipeRingAvail(pw);
+      if (free === 0 || (count <= PIPE_ATOMIC && count > free)) {
+        var ww = this._c.call(OP.FS_WAIT, { w: [fd], timeoutMs: null }, true);
+        if (ww.errno) return this._setErr(ww.errno);
+        continue;
+      }
+      var wn = Math.min(free, count);
+      pipeRingPut(pw, buf.subarray(0, wn));
+      if (Atomics.load(pw.i32, PR_RWAIT)) this._c.call(OP.PIPE_KICK, { fd: fd });
+      return wn;
+    }
   }
   var n = Math.min(count, 60000);
   var payload = new Uint8Array(4 + n);
@@ -6018,6 +6361,8 @@ RemoteFS.prototype.dup = function (fd) {
   var r = this._ok(this._c.call(OP.FS_DUP, { fd: fd }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
+  var dupRing = this._pipes.get(fd);
+  if (dupRing) this._pipes.set(r.fd, dupRing);   // same end, same ring (todos/0181)
   return r.fd;
 };
 RemoteFS.prototype.dup2 = function (oldfd, newfd) {
@@ -6039,6 +6384,7 @@ RemoteFS.prototype.dup2 = function (oldfd, newfd) {
     delete this._fdTable[k];
     if (pr === null) return null;
     this._fdTable[pr.fd] = { type: 'remote' };
+    this._pipes.delete(newfd);   // newfd is the promoted file now (todos/0181)
     return pr.fd;
   }
   if (this._roFd(newfd)) {   // remote source lands on a local number
@@ -6047,6 +6393,12 @@ RemoteFS.prototype.dup2 = function (oldfd, newfd) {
   var r = this._ok(this._c.call(OP.FS_DUP2, { fd: oldfd, newfd: newfd }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
+  // Pipe-ring bookkeeping (todos/0181): newfd now names oldfd's OFD.
+  if (oldfd !== newfd) {
+    var d2Ring = this._pipes.get(oldfd);
+    if (d2Ring) this._pipes.set(newfd, d2Ring);
+    else this._pipes.delete(newfd);
+  }
   return r.fd;
 };
 RemoteFS.prototype.fcntl_dupfd = function (fd, min) {
@@ -6060,6 +6412,8 @@ RemoteFS.prototype.fcntl_dupfd = function (fd, min) {
   var r = this._ok(this._c.call(OP.FS_FCNTL_DUPFD, { fd: fd, min: min }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
+  var fdRing = this._pipes.get(fd);
+  if (fdRing) this._pipes.set(r.fd, fdRing);     // same end, same ring (todos/0181)
   return r.fd;
 };
 RemoteFS.prototype.opendir = function (p) {
@@ -6100,11 +6454,38 @@ RemoteFS.prototype.isatty = function (fd) {
   var r = this._c.call(OP.FS_ISATTY, { fd: fd });
   return r.errno ? 0 : r.tty;
 };
+/* SPSC pipe fast path (todos/0181) — the process side.
+ *
+ * pipe() allocates the ring SAB and posts it ahead of PIPE_CREATE (the
+ * audio-sab handshake); inherited fds arrive pre-registered via
+ * procSpec.pipeRings. Every data op gates on the ring's PR_MODE word:
+ * FAST (the kernel promoted — both ends single-holder) means read/write
+ * are a local memcpy + index commit, ZERO RPCs in steady state; anything
+ * else falls through to the brokered RPC, which the kernel serves FROM
+ * THE SAME RING, so a stale mode read is never wrong, only slower.
+ * Blocking rides the 0178 unified FS_WAIT naming this fd (no bespoke
+ * park); after a commit the peer's PR_RWAIT/PR_WWAIT flag says whether to
+ * ring the PIPE_KICK doorbell. Reader-gone EPIPE raises SIGPIPE through
+ * PIPE_KICK{epipe:1} — the kernel delivers to the caller, matching the
+ * brokered write's EPIPE+signal ordering. */
+RemoteFS.prototype.registerPipeRing = function (fd, end, sab) {
+  var v = pipeRingViews(sab);
+  v.end = end;
+  this._pipes.set(fd, v);
+  if (!this._fdTable[fd]) this._fdTable[fd] = { type: 'remote' };
+};
 RemoteFS.prototype.pipe = function () {
+  var sab = null;
+  try { sab = new SharedArrayBuffer(PIPE_RING_BYTES); } catch (e) { sab = null; }
+  if (sab) this._c._post({ type: 'pipe-sab', sab: sab });
   var r = this._ok(this._c.call(OP.PIPE_CREATE, {}));
   if (r === null) return null;
   this._fdTable[r.rfd] = { type: 'remote' };
   this._fdTable[r.wfd] = { type: 'remote' };
+  if (sab) {
+    this.registerPipeRing(r.rfd, 'read', sab);
+    this.registerPipeRing(r.wfd, 'write', sab);
+  }
   return [r.rfd, r.wfd];
 };
 /* Ptys (todos/0020): kernel pty pair -> [masterFd, slaveFd]; the terminal
@@ -6221,6 +6602,9 @@ var BOOT_SOURCE = [
   "    ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })",
   "    : null;",
   "  rfs = new K.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix } : null);",
+  "  // SPSC pipe rings for inherited fds (todos/0181): fast ops gate on the",
+  "  // ring's PR_MODE word, so registering a still-brokered ring is free.",
+  "  (wd.pipeRings || []).forEach(function (p) { rfs.registerPipeRing(p.fd, p.end, p.sab); });",
   "  fsFactory = function (ctx) {",
   "    var env = BLOCK_FS.BlockFS.prototype.toWasmEnv.call(rfs, ctx);",
   "    env.__select_impl = rfs.selectImpl(ctx);",
@@ -6293,6 +6677,8 @@ function nodeCreateWorker(config) {
         brokered: !!procSpec.brokered,
         // Read-only volume (todos/0180): { prefix, sab } — the SAB shares.
         ro: procSpec.ro || null,
+        // SPSC pipe rings (todos/0181): [{fd, end, sab}] — the SABs share.
+        pipeRings: procSpec.pipeRings || null,
       },
       // Program stdout/stderr flow through {type:'out'} messages (writeOut/
       // writeErr are overridden in BOOT_SOURCE); the worker's own process
@@ -6746,6 +7132,14 @@ var KERNEL_EXPORTS = {
   KP_VD_BOOT_LO: KP_VD_BOOT_LO, KP_VD_BOOT_HI: KP_VD_BOOT_HI,
   KP_VD_SCREEN_W: KP_VD_SCREEN_W, KP_VD_SCREEN_H: KP_VD_SCREEN_H,
   RO_FD_BASE: RO_FD_BASE,   // process-served read-only fd space (todos/0180)
+  // SPSC pipe rings (todos/0181) — header layout + mode ladder for tests.
+  PIPE_RING_HDR: PIPE_RING_HDR, PIPE_RING_BYTES: PIPE_RING_BYTES,
+  PR_MODE: PR_MODE, PR_HEAD: PR_HEAD, PR_TAIL: PR_TAIL, PR_FLAGS: PR_FLAGS,
+  PR_RWAIT: PR_RWAIT, PR_WWAIT: PR_WWAIT,
+  PR_LATENT: PR_LATENT, PR_FAST: PR_FAST, PR_DEMOTED: PR_DEMOTED,
+  PRF_RGONE: PRF_RGONE, PRF_WGONE: PRF_WGONE,
+  pipeRingViews: pipeRingViews, pipeRingAvail: pipeRingAvail,
+  pipeRingPut: pipeRingPut, pipeRingTake: pipeRingTake,
   RPCK_JSON: RPCK_JSON,
   RPCK_RAW: RPCK_RAW,
   writePayload: writePayload,
