@@ -1,6 +1,6 @@
 # 0169 — on-demand compositor: dirty-gated submit, parked rAF, damage doorbells (IDLE-POWER Stage 4)
 
-- **Status**: open
+- **Status**: done (2026-07-14) — landed as four commits: c0481d1 (kernel ARMED/PARKED wake protocol + KP_VSYNC_ARMED/KP_COMP_PARKED tail words), 2eeaf21 (host doorbell-on-present + frame-idle), 06a6cba (compositor dirty-gated submit + parked rAF), 0625cc0 (os-compositor.mjs + flake tripwire); close-out gate caught and fixed the socket→ring lost-notify race (e23d1f7 — the kick pushes a type-0 ring record now) and registered comp_park in the suite table (22d7c12). Idle desktop: 350% → 8.8% total CPU (gpu 340.6% → 0.2%); story in logs/2026-07-14/idle-power-stage4.md
 - **Design**: `todos/IDLE-POWER.md` (pieces A + B + E — read it first; the
   wake-coverage table and the ARMED/PARKED Dekker protocol there are
   normative). Absorbs the damage-skip half of todos/0160 (signature/skip

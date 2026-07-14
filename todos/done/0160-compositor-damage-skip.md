@@ -1,7 +1,10 @@
 # 0160 — compositor: scene-signature damage skip (idle GPU on static screens)
 
-- **Status**: deferred (2026-07-12; an implementation was landed then reverted —
-  see the Deferral note; was: open). **ABSORBED (2026-07-12 review):** the
+- **Status**: done (2026-07-14) — closed with todos/0169's landing per the
+  absorption note below; the dirty-gated submit + parked rAF subsume the
+  scene-signature skip (was: deferred 2026-07-12; an implementation was
+  landed then reverted — see the Deferral note). **ABSORBED (2026-07-12
+  review):** the
   damage-skip half lives in todos/0169 (on-demand compositor), the taskbar-gate
   half in todos/0168 (wm.c event-driven) — close this item when 0169 lands; do
   not work it directly. **Superseded framing:** see
