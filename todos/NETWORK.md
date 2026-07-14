@@ -2,7 +2,11 @@
 
 Status: designed 2026-07-09 (discussion log
 `logs/2026-07-09/roadmap-network-desktop.md`); queue items `0052`
-(loopback AF_INET), `0053` (curl-over-fetch), `0054` (relay transport).
+(loopback AF_INET), `0054` (relay transport), `0182` (/bin/curl CLI).
+**Tier 2 is LANDED** (2026-07-13): the kernel HTTP transport is
+`todos/done/0172`, the curl easy veneer is `todos/done/0173` (which
+superseded the original `0053` item — closed 2026-07-15); only the
+`/bin/curl` tool remains (`0182`).
 
 ## Platform truth (don't re-litigate the constraint)
 
@@ -26,21 +30,22 @@ headless. Unlocks the large class of client/server software that never
 leaves the machine (httpd→client, nc, anything "listen on a port").
 Non-loopback destinations fail `ENETUNREACH` until Tier 4 is configured.
 
-## Tier 2 — HTTP via fetch, behind a curl facade (`0053`)
+## Tier 2 — HTTP via fetch, behind a curl facade (LANDED — `done/0172` + `done/0173`)
 
 POSIX has no HTTP API; the de-facto standard C API is **libcurl's easy
 interface**. We own the libc, so we do NOT port real libcurl (it wants
-sockets underneath) — we implement a `<curl/curl.h>` easy-API subset
-natively, backed by a kernel fetch RPC (proposed opcode space 0x06xx —
-verify against KERNEL.md's table when implementing). `curl_easy_perform`
-blocks via the existing deferred-RPC machinery; the kernel worker does
-the actual `fetch()`. A `/bin/curl` falls out for free.
+sockets underneath) — the shipped shape is a `<curl/curl.h>` easy-API
+subset as an app-side library (`os/curl/`, todos/done/0173) backed by the
+kernel fetch RPC family (opcode space 0x06xx, todos/done/0172; see
+KERNEL.md "HTTP transport"). `curl_easy_perform` blocks via the deferred-RPC
+machinery; the kernel worker does the actual `fetch()`. The `/bin/curl`
+CLI did not fall out for free — it is `todos/0182`.
 
 Asymmetry: in the browser this is **CORS-gated** (same-origin +
 CORS-permissive hosts only); headless Node fetch is unrestricted.
 Documented, not hidden.
 
-## Tier 3 — DNS via DoH (folds into `0053`, on demand)
+## Tier 3 — DNS via DoH (folds into the HTTP stack `done/0172`/`0173`, on demand)
 
 `getaddrinfo` backed by DNS-over-HTTPS (the public DoH endpoints are
 CORS-permissive) — plain fetch, no relay. Until then: static

@@ -5,7 +5,6 @@
     { "id": "0079" },
     { "id": "0080" },
     { "id": "0052" },
-    { "id": "0053" },
     { "id": "0064" },
     { "id": "0049" },
     { "id": "0050" },
@@ -51,6 +50,7 @@
     { "id": "0152", "priority": 2, "after": ["0064"] },
     { "id": "0153" },
     { "id": "0157" },
-    { "id": "0162", "priority": 3, "difficulty": "heavy" }
+    { "id": "0162", "priority": 3, "difficulty": "heavy" },
+    { "id": "0182", "priority": 2, "difficulty": "light" }
   ]
 }

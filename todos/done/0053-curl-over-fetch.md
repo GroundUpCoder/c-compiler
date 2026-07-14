@@ -1,6 +1,14 @@
 # 0053 — HTTP for C: the curl easy facade over kernel fetch
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-15) — superseded by `todos/done/0172-kernel-http.md`
+  (the kernel fetch RPC family, 0x06xx — this item's "kernel fetch RPC" half)
+  + `todos/done/0173-libcurl-veneer.md` (the `<curl/curl.h>` easy-interface
+  subset, landed as the app-side `os/curl/` lib rather than "natively in the
+  libc" — a strictly better shape: upstream ABI values, native-clang
+  differential testing via `os/curl/test/smoke.c`). The one sliver 0172/0173
+  did NOT ship is the `/bin/curl` CLI tool — re-filed as `todos/0182`
+  (curl-cli). Closed by the 2026-07-15 queue reconciliation; no new work
+  done under this id.
 - **Design**: `todos/NETWORK.md` (tier 2; tier 3 DoH noted there)
 
 ## Goal
