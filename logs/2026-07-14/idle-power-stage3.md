@@ -52,10 +52,47 @@ Also this morning, ahead of Stage 3 (per the revised staging plan):
   kernel hook (pause/resume is SAB-only, so any table entry keeps it
   armed; dying streams count until reclaimed).
 
-Gates: full wm e2e surface green (wm_service, snap, saver, ctxmenu,
-recycle, fileman_ops, term, os_apps, cursor, user32, waitevent, sockwake,
-audio×3); flake gate + browser sweep + the idlemeter re-measure run at the
-end of the day's batch (see the push notes).
+## The gate run earned its keep — a second timing bug
+
+The first full browser sweep came back 23/24: os-aero's Aero Peek leg
+red, and `--repeat 5` measured it 60% flaky — a live regression. The
+mechanism (isolated with `tools/peek-repro.mjs`, wm stderr → `__osOut` +
+a polled popup pixel): the counter→wall-clock conversion compared the
+peek/date hover stamps against a `now_ms` captured at frame_cb ENTRY,
+but `peek_show`/`bar_motion` write those stamps DURING event handling —
+whenever the ms clock ticked in between, the unsigned delta wrapped huge
+and the popup was **dismissed the same frame it was shown** (then
+nothing retries: the pointer sits still, so no event ever re-raises it —
+a 30s-stuck teal pixel, not a transient). Fix (`49069dd`): re-read the
+clock at the housekeeping point — a fresh read is ≥ any stamp taken this
+iteration. os-aero went 5/5.
+
+Repro-writing gotcha for the record: a healthy popup idle-dismisses at
+2.5s with a motionless pointer, so a sleep-then-sample repro calls
+healthy runs broken — poll like the real test does.
+
+Gates, all green on the final tree: unit/host/blockfs/kernel via
+`tests/run.js` (65 kernel files), full browser sweep 24/24,
+`tests/flake.js` (kernel + browser tripwires, 3× under load — one
+earlier FAIL was contamination from my own concurrent rebakes, clean
+re-run green), wm-surface kernel e2es re-run post-fix 6/6, and a headed-
+style visual check (screenshots: idle desktop + peek popup on real mouse
+hover).
+
+## Stage-3 idlemeter delta (same method as the baseline)
+
+| scenario | total | gpu | renderer |
+|---|---|---|---|
+| idle desktop (pre) | 350.0% | 340.6% | 3.3% |
+| idle desktop (post-Stage-3) | 349.1% | 342.4% | **2.3%** |
+| 4 windows (pre) | 456.9% | 444.8% | 5.9% |
+| 4 windows (post-Stage-3) | 455.5% | 446.8% | **4.5%** |
+
+The renderer bucket (kernel worker + all app workers — where wm lives)
+dropped ~30% idle / ~24% with windows; the gpu bucket is untouched, as
+predicted — the 60 Hz compositor submit is Stage 4's (0169's) target and
+~97% of the bill.
 
 Next: todos/0169 (Stage 4 — compositor parking) is unblocked and top of
-queue.
+queue, with todos/0178 (kernel unified wait — filed from the 2026-07-14
+design review) hard-blocked behind it as the consolidation.
