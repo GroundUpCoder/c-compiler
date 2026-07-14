@@ -1,6 +1,6 @@
 # 0129 — manual UX bug sweep
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-15) — CONSOLIDATED into `todos/0127-manual-ux-sweep.md` by the queue reconciliation: this was one of five byte-identical scaffold copies stockpiled by the old "top up to 3-4" reseed rule (now: exactly ONE open copy, successor seeded at close). No sweep was executed under this id.
 - **Design**: `todos/OS.md` (the agent-target pillar + `wmctl`), the
   `tests/browser/os-*.mjs` sweep, and the 0073 desktop-apps dogfood format.
 

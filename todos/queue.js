@@ -495,9 +495,11 @@ heavy ones. No feature work in this item.
 // menus, play the games, take screenshots, and eyeball them for anything that
 // looks or behaves wrong. Unlike the golden browser legs (which assert known
 // pixels), this pass hunts for the unknown. It is the ONE queue item that
-// deliberately reseeds itself: on kickoff it tops the pipeline back up to a few
-// upcoming copies, so the dogfood never runs dry (contrast the reflection item,
-// whose cadence is system-owned and must NOT self-perpetuate).
+// deliberately reseeds itself — exactly ONE successor, seeded AT CLOSE, so
+// exactly one open copy exists at a time (the 2026-07-15 reconciliation
+// retired the old top-up-to-3-4 kickoff rule after it piled seven overlapping
+// sweep copies into the queue; contrast the reflection item, whose cadence is
+// system-owned and must NOT self-perpetuate).
 function manualUxScaffold(id) {
   return `# ${id} — manual UX bug sweep
 
@@ -514,19 +516,20 @@ wrong. The automated \`os-*.mjs\` legs only assert pixels they already know to
 expect; this turn hunts the bugs no golden covers. Output is repro tests +
 fixes + an updated known-issues list, NOT a new feature.
 
-## Step 0 — reseed the pipeline (do this FIRST)
+## Reseed rule — ONE open copy, successor seeded at close
 
-This item keeps itself alive. On kickoff, count the OPEN copies:
+This item keeps the cadence alive, but there must only ever be **one open
+copy** (the 2026-07-15 reconciliation consolidated seven overlapping sweep
+copies into one — don't rebuild the pile). At CLOSE time, as part of the
+closing commit:
 
-    ls todos/*-manual-ux-sweep.md 2>/dev/null | wc -l   # includes THIS file
+    ls todos/*-manual-ux-sweep.md   # must list ONLY this file
+    node todos/queue.js add next --manual-ux --priority 2   # exactly once
 
-If fewer than **2** remain, add **3** more so 3–4 always sit further down the
-queue (each at low priority so it never blocks feature work):
-
-    node todos/queue.js add next --manual-ux --priority 2   # repeat x3
-
-Then \`node todos/queue.js check\` and carry on. (\`add next --manual-ux\`
-scaffolds a byte-identical copy of this item and appends it to the tail.)
+Then \`node todos/queue.js check\` and close this one. (\`add next
+--manual-ux\` scaffolds a fresh copy of this item and appends it to the
+tail — note in ITS body which slices this run covered, so the rotation
+advances.)
 
 ## Plan
 
@@ -560,7 +563,8 @@ scaffolds a byte-identical copy of this item and appends it to the tail.)
 
 ## Acceptance
 
-- Step 0 done: 3–4 open \`manual-ux-sweep\` items exist; \`queue.js check\` passes.
+- Exactly ONE fresh \`manual-ux-sweep\` successor seeded at close (with the
+  covered-slices note); \`queue.js check\` passes.
 - A dev-log entry (\`logs/YYYY-MM-DD/manual-ux-sweep.md\`) listing what was
   driven, the screenshots taken, and a fixed/deferred split of findings.
 - New regression tests committed for everything fixed; known-issues lists

@@ -1,6 +1,13 @@
 # 0073 — desktop apps behavior bug sweep
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-15) — MERGED into `todos/0127-manual-ux-sweep.md`
+  by the queue reconciliation (seven overlapping human-sweep items → one).
+  0127 carries this item's app-behavior checklist as its "0073 slice" and
+  the still-live seeded findings (EM_GETHANDLE padding, OFN hooks,
+  MessageBox BTNSETS, size grip, the notepad-open lock-in test, ctlpanel
+  master-only volume); the EDIT-undo line is owned by todos/0135 and the
+  fileman gaps shipped in done/0092/0106. No sweep was executed under this
+  id.
 - **Design**: `todos/WM.md` / `todos/WIN32.md` bug-sweep block (the
   repeatable dogfood format established by todos/done/0033; WM rounds
   0039 / 0064 are the siblings).
