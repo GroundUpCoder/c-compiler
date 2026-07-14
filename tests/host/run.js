@@ -5,6 +5,14 @@
 //   node tests/host/run.js
 var { spawnSync } = require('child_process');
 var path = require('path');
+var { ensurePrebakedImage } = require('../lib/image-fixture.js');
+
+// serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
+// test_first_run's 5s URL deadline needs the fixture fresh up front — the
+// same prebake the kernel/browser runners do. Without this, the first host
+// run after touching any bake input (host.js, compiler.js, os/) fails on
+// the bake, not on anything serve.js did wrong.
+ensurePrebakedImage();
 
 var tests = [
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
