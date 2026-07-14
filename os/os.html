@@ -337,6 +337,23 @@ window.addEventListener('keydown', function (e) {
 window.__osOut = '';
 window.__osState = 'booting';
 window.__osLogs = [];   // boot-log/kernel lines (agent probe)
+window.__osCompositor = null;   // agent probe: latest on-demand-compositor stats
+// Request a fresh compositor-stats snapshot from the worker and resolve
+// with it (todos/0169: frames/submits/skipped/parks/wakes/vsyncNotifies).
+// tests/browser/os-compositor.mjs measures park + wake behavior with it.
+window.__osCompositorStats = function () {
+  return new Promise(function (resolve) {
+    function h(e) {
+      if (e.data && e.data.type === 'compositor-stats') {
+        kernel.removeEventListener('message', h);
+        window.__osCompositor = e.data.stats;
+        resolve(e.data.stats);
+      }
+    }
+    kernel.addEventListener('message', h);
+    kernel.postMessage({ type: 'compositor-stats' });
+  });
+};
 var outDecoder = new TextDecoder();
 
 kernel.onmessage = function (e) {
@@ -345,6 +362,10 @@ kernel.onmessage = function (e) {
     case 'out':
       term.write(m.bytes);
       window.__osOut += outDecoder.decode(m.bytes, { stream: true });
+      break;
+    // On-demand-compositor probe replies (todos/0169) are consumed by the
+    // one-shot listeners __osCompositorStats adds; nothing to do here.
+    case 'compositor-stats':
       break;
     case 'boot-log':
       status(m.msg);

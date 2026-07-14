@@ -393,7 +393,98 @@ function startCompositor(kernel, canvas, device) {
     }
   }
 
+  // ---- on-demand compositing (todos/0169, IDLE-POWER pieces A+B; absorbs
+  // the reverted 0160 damage skip). The compositor used to run one full
+  // WebGPU pass every rAF forever. Now each frame computes DIRTY = (scene
+  // signature changed) OR (a minimize/restore fly anim is active); a clean
+  // frame skips the submit, and once nothing needs the frame CLOCK either
+  // (no pcb wantFrame pin, no vsync waiter — kernel.compKeepAlive) and a
+  // short GRACE coast has drained, the rAF itself parks: zero ticks, zero
+  // submits, zero app-worker wakeups on a settled screen.
+  //
+  // The signature folds in what `scene.version` (kernel _wmVersion) does
+  // NOT cover: canvas size, active-anim count, and each drawn surface's
+  // PIXEL content (shm SH_SEQ / gpu bitmap identity — presents bump
+  // neither version nor geometry). When unsure we submit: a stale frame is
+  // the classic damage bug; a redundant submit is merely wasted.
+  //
+  // Parking is safe because every wake source rings back in (the
+  // IDLE-POWER wake table): _bumpWm routes ALL version bumps through
+  // scheduleFrame (kernel.wmOnDamage below); gpu presents already message
+  // the kernel (_wmFrame arms); shm presents and vsync arms re-read the
+  // per-pcb KP_COMP_PARKED word host-side and post want-frame (the Dekker
+  // pair — compSetParked stores PARKED on every page FIRST, then this
+  // park re-reads every ARMED/wantFrame/seq, so a racing waiter or present
+  // is either seen here or sees the flag and rings). GRACE is an armed-
+  // frame counter, not wall-clock (it suspends cleanly with a stopped
+  // rAF), and an optimization only — correctness holds at GRACE=0.
+  //
+  // `frozen` is the synthetic vsync-stop test probe (os-compositor.mjs):
+  // Playwright cannot really hide a tab (background throttling is
+  // disabled), so the hidden-tab honest pause is asserted by freezing the
+  // clock and watching the wake counters go flat.
+  var stats = { frames: 0, submits: 0, skipped: 0, parks: 0, wakes: 0 };
+  self.__compositorStats = stats;   // test probe (tests/browser/os-compositor.mjs)
+  var lastSig = null;
+  var armed = true;                 // the boot rAF at the bottom
+  var frozen = false;
+  var GRACE_FRAMES = 3;             // clean frames to coast before parking
+  var grace = 0;
+
+  function sceneSignature(scene) {
+    var sig = [scene.version, frameW, frameH, scene.anims.length];
+    for (var i = 0; i < scene.surfaces.length; i++) {
+      var s = scene.surfaces[i];
+      if (!s.mapped || s.minimized) continue;   // not sampled this frame
+      // gpu: the ImageBitmap identity (=== compares by ref); shm: the
+      // frameSeq the seq-gated upload already reads.
+      sig.push(s.sid, s.bitmap ? s.bitmap : Atomics.load(s.i32, K.SH_SEQ));
+    }
+    return sig;
+  }
+  function sigEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // Re-arm the parked rAF — the single wake entry point: kernel damage
+  // (wmOnDamage), want-frame doorbells, and the kernel-worker's raw input/
+  // resize/drop handlers all land here. No-op while armed or frozen.
+  function scheduleFrame() {
+    if (frozen || armed) return;
+    armed = true;
+    stats.wakes++;
+    kernel.compSetParked(false);
+    requestAnimationFrame(draw);
+  }
+
+  // Synthetic vsync-stop (test-only, the hidden-tab stand-in): stop the
+  // clock — the next draw() drops its rAF without ticking, exactly what a
+  // really-hidden tab does to us.
+  function setFrozen(on) {
+    frozen = !!on;
+    if (!frozen) { armed = false; scheduleFrame(); }
+  }
+
+  // Park decision, from the post-prune scene of the frame just drawn or
+  // skipped: coast out the GRACE, keep armed while anyone needs the clock,
+  // else Dekker store-then-check and stop the rAF chain.
+  function maybePark() {
+    if (grace > 0 || kernel.compKeepAlive()) { requestAnimationFrame(draw); return; }
+    kernel.compSetParked(true);
+    if (kernel.compKeepAlive() ||
+        !sigEqual(sceneSignature(kernel.wmScene()), lastSig)) {
+      kernel.compSetParked(false);        // a waiter/present raced in: stay armed
+      requestAnimationFrame(draw);
+      return;
+    }
+    armed = false;
+    stats.parks++;
+  }
+
   function draw() {
+    if (frozen) { armed = false; return; }   // synthetic vsync-stop (probe)
     // Vsync broadcast (todos/0100): this rAF IS the system frame clock —
     // tick before anything can early-return, so SDL frame loops stay paced
     // even on degenerate-canvas frames. Presents made while we render land
@@ -402,6 +493,18 @@ function startCompositor(kernel, canvas, device) {
     var scene = kernel.wmScene();
     frameW = canvas.width; frameH = canvas.height;
     if (frameW < 1 || frameH < 1) { requestAnimationFrame(draw); return; }
+    stats.frames++;
+    // Damage skip: identical scene and no active animation — keep ticking
+    // (or park via maybePark), but don't re-submit the pass.
+    var sig = sceneSignature(scene);
+    if (lastSig !== null && scene.anims.length === 0 && sigEqual(sig, lastSig)) {
+      stats.skipped++;
+      if (grace > 0) grace--;
+      maybePark();
+      return;
+    }
+    lastSig = sig;
+    grace = GRACE_FRAMES;
     // Reconfigure on screen-resize (todos/0023) — the canonical dance;
     // resizing the OffscreenCanvas invalidates the swap chain size.
     if (frameW !== confW || frameH !== confH) {
@@ -575,9 +678,14 @@ function startCompositor(kernel, canvas, device) {
       blitPass(enc, canvasView, gt2.sceneBlit);
     }
     device.queue.submit([enc.finish()]);
-    requestAnimationFrame(draw);
+    stats.submits++;
+    requestAnimationFrame(draw);   // a dirty frame always re-arms (GRACE fresh)
   }
+  // Every kernel-side scene change (all _bumpWm sites, gpu presents,
+  // want-frame doorbells) re-arms the parked rAF through this hook.
+  kernel.wmOnDamage(scheduleFrame);
   requestAnimationFrame(draw);
+  return { scheduleFrame: scheduleFrame, setFrozen: setFrozen, stats: stats };
 }
 
 /* Raw UI-bridge input -> kernel routing. `ev` is the plain object os.html

@@ -77,6 +77,8 @@ var kernel = null;
 var tty = null;
 var kfs = null;        // the kernel's MountFS (drop-file writes; todos/0067)
 var wmCanvas = null;   // the desktop OffscreenCanvas (screen-resize target)
+var compositor = null; // {scheduleFrame,setFrozen,stats} once wm-canvas
+                       // arrives (todos/0169 — the on-demand rAF)
 var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
@@ -94,7 +96,7 @@ self.onmessage = function (e) {
   else if (m.type === 'wm-canvas') {
     wmCanvas = m.canvas;
     kernel.wmSetScreen(m.canvas.width, m.canvas.height);
-    OS_COMPOSITOR.startCompositor(kernel, m.canvas, gpuDevice);
+    compositor = OS_COMPOSITOR.startCompositor(kernel, m.canvas, gpuDevice);
   } else if (m.type === 'screen-resize') {
     // Dynamic screen resolution (todos/0023): the page tracks the viewport;
     // the OffscreenCanvas is resized HERE (a transferred canvas can't be
@@ -103,11 +105,30 @@ self.onmessage = function (e) {
       wmCanvas.width = m.w | 0;
       wmCanvas.height = m.h | 0;
       kernel.wmSetScreen(m.w | 0, m.h | 0);
+      if (compositor) compositor.scheduleFrame();   // wake table (todos/0169)
     }
   } else if (m.type === 'wm-input') {
     OS_COMPOSITOR.routeInput(kernel, SDL_WEB, m.ev);
+    // Wake table (todos/0169): raw input re-arms the parked rAF even when
+    // no kernel state changed — the routed app may only now start drawing.
+    if (compositor) compositor.scheduleFrame();
   } else if (m.type === 'drop-file') {
     dropFile(m);
+    if (compositor) compositor.scheduleFrame();     // wake table (todos/0169)
+  } else if (m.type === 'compositor-stats') {
+    // On-demand-compositor probe (todos/0169): frames/submits/skipped/
+    // parks/wakes from the compositor + the kernel's cumulative per-pcb
+    // vsync-notify count (the app-worker-wake proof — flat while parked).
+    post({ type: 'compositor-stats',
+           stats: compositor
+             ? Object.assign({ vsyncNotifies: kernel.vsyncNotifyCount() },
+                             compositor.stats)
+             : null });
+  } else if (m.type === 'compositor-freeze') {
+    // Synthetic vsync-stop (test-only, todos/0169): the hidden-tab honest
+    // pause is not automatable in Playwright — freeze the clock instead
+    // and let the test watch every wake counter go flat.
+    if (compositor) compositor.setFrozen(!!m.on);
   }
 };
 
