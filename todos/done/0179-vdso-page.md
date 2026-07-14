@@ -1,6 +1,26 @@
 # 0179 — vDSO page: seqlock-published kernel state readable process-side (no RPC)
 
-- **Status**: open
+- **Status**: done (2026-07-14) — a 12-word seqlock block on the kernel
+  page tail (words N-16..N-5, `KP_VD_*`; payload cap now 64 bytes short of
+  the page end): pid/ppid/pgid/sid + boot instant (lo/hi) + screen dims,
+  published by `_vdsoPublish` at spawn/SETPGID/SETSID/reparent-to-init/
+  wmSetScreen (fan-out). `KernelClient._vdsoRead` = bounded-spin seqlock
+  reader → RPC fallback; spawnHooks getpgid/getsid answer self-queries
+  from the page (foreign pids still RPC), `getppid()` is LIVE (tracks
+  reparenting — the spawn-time static went stale; threaded as an optional
+  `getppid` fn through runModule→ctx→createPosix, passed by
+  process-worker.js and BOOT_SOURCE), `uptimeMs()`/`screen()` accessors.
+  libc grew `setsid()` (the Phase-1 RPC finally got a C surface). Decided:
+  per-process tail extension, NOT a separate system page (every field is
+  per-process or trivially fanned out). Not taken, recorded: fd-flag
+  queries (variable-size table, low traffic), fg pgid (per-TTY — tty SAB
+  header territory, where winsize already publishes TIOCGWINSZ zero-RPC),
+  multi-memory. GetSystemMetrics keeps its synthetic 800×500 by design.
+  Tests: `test_vdso.js` (37 checks; the fake-worker harness makes zero-RPC
+  structural — a fallthrough would deadlock), `test_vdso_e2e.js` (real
+  4-process C run; `_dispatchRpc` op counter shows zero GETPGID/GETSID
+  across setsid + orphan reparent). Dev log:
+  `logs/2026-07-14/vdso-page.md`.
 - **Design**: KERNEL.md "What may leave the kernel — the single-writer rule"
   (added with this item; the 2026-07-14 design-review lineage: IDLE-POWER →
   0178 unified wait → this tier growth). Sibling items: todos/0180

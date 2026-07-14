@@ -601,7 +601,18 @@ bright line for moving work out of the RPC path is:
 Sanctioned forms (queue items in parens):
 - **Publish, don't serve** — seqlock vDSO page for kernel-written,
   process-read state; the `KP_*` words are the existing ad-hoc version
-  (todos/0179).
+  (todos/0179, landed 2026-07-14): a 12-word tail block on the kernel page
+  (`KP_VD_*`, layout comment in kernel.js) behind ONE seqlock word — the
+  kernel bumps odd → stores → bumps even at spawn/SETPGID/SETSID/reparent/
+  wmSetScreen; `KernelClient._vdsoRead` retries on odd or moved seq and
+  falls back to the RPC (still the source of truth) after a bounded spin.
+  Zero-RPC now: getpgid(0)/getpgrp/getsid(0)/self-pid variants, getppid
+  (LIVE — tracks orphan reparenting, which the spawn-time static never
+  did), uptimeMs (published boot instant), screen dims. Foreign-pid
+  queries still RPC. libc grew setsid() alongside (the RPC existed since
+  Phase 1; nothing declared it C-side). Tests: `test_vdso.js` (the wedge →
+  fallback + fan-out legs), `test_vdso_e2e.js` (an RPC-op counter proves
+  zero GETPGID/GETSID across the mutations).
 - **Immutable data serves itself** — the sealed /usr volume read
   process-side by host.js's own BlockFS reader (todos/0180).
 - **SPSC data planes** — one-producer/one-consumer rings (input ring,
@@ -745,7 +756,9 @@ presents. But the kernel worker is first-level and already runs the one
 real frame clock (the compositor rAF, todos/0055). 0100 exports it:
 
 - Four tail words on the kernel page (see the layout comment in kernel.js —
-  the payload cap stops 16 bytes short of them): `KP_VSYNC_EN`, set once at
+  the payload cap stops 64 bytes short of the page end since todos/0179
+  grew the tail to 16 words: these four vsync words plus the 12-word
+  seqlock vDSO block below them): `KP_VSYNC_EN`, set once at
   spawn when the kernel was built with `Kernel({vsync: true})`;
   `KP_VSYNC_SEQ`, a tick counter; and — since todos/0169 (the on-demand
   compositor, IDLE-POWER piece B) — `KP_VSYNC_ARMED`, a vsync-waiter count
