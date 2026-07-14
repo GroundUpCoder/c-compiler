@@ -561,18 +561,22 @@ replies buffer whole, the client reads in chunks). First user: the WM
 protocol server on `/run/wm.sock` (framed spec: the `WMP` block in
 kernel.js; MUST MATCH `os/wm_proto.h` + `tests/kernel/test_wm_policy.js`).
 Since todos/0168 `peer.send()` also KICKS the client's input ring
-(`_wmKick`): a client parked in `__sdl_pump_wait` (SDL_WaitEvent, wm.c's
-event loop) wakes promptly on kernel-peer data instead of sleeping out
-its park chunk past a WMP event (`tests/kernel/test_sockwake_e2e.js`).
-The kick pushes a TYPE-0 RING RECORD (all-zero; drainInput counts-and-
-skips it), not a bare `Atomics.notify` — a notify on an unchanged word
-is LOST if it lands between the parker's last ring check and its
-`Atomics.wait` entry, and 0169's frame-idle post at pumpWait entry
-widened that window enough for wm.c to sleep out EV_CREATED for a full
-1s chunk (test_wm_service_e2e's placement legs caught it). With the
-record, WPOS — the futex word — changes, so the parker either drains a
-non-empty ring at entry or its wait resolves; wm.c's pre-park socket
-select survives only as a redundant belt until 0178 retires the loop.
+(`_wmKick`): a client parked in `__sdl_pump_wait` (SDL_WaitEvent) wakes
+promptly on kernel-peer data instead of sleeping out its park chunk past
+a WMP event (`tests/kernel/test_sockwake_e2e.js`). The kick pushes a
+TYPE-0 RING RECORD (all-zero; drainInput counts-and-skips it), not a
+bare `Atomics.notify` — a notify on an unchanged word is LOST if it
+lands between the parker's last ring check and its `Atomics.wait` entry,
+and 0169's frame-idle post at pumpWait entry widened that window enough
+for wm.c to sleep out EV_CREATED for a full 1s chunk
+(test_wm_service_e2e's placement legs caught it). With the record,
+WPOS — the futex word — changes, so the parker either drains a non-empty
+ring at entry or its wait resolves. Since todos/0178 the kick serves the
+raw-futex tier only: a client parked in the unified WAIT (or a plain
+select) is woken by its RPC completion — `peer.send()` captures the
+waiter kind before notifying and skips the kick for fd-parked clients,
+so wm.c (a WAIT parker since 0178; its pre-park select and the
+lost-wakeup era are retired) gets exactly one wake per event.
 
 `Kernel.service(spec)` spawns kernel-owned service processes (the /bin/wm
 autostart): parentless (ppid 0), own session, auto-reaped on exit —

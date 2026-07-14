@@ -363,6 +363,27 @@ existing channels and survived their adversarial review as-is; the Stage-4
 wake counters then become the proof surface that the consolidation
 regresses nothing. Scope, plan, acceptance: todos/0178.
 
+**LANDED 2026-07-14** (todos/0178): kernel `FS_WAIT` (0x0420, FS_SELECT's
+readiness + waiter plumbing + a ring-wake hook in `_wmPushEvent`/`_wmKick`;
+signals ride the ordinary interruptible-RPC EINTR), host.js `__wait`
+import in the surface backend (keeps pumpWait's frame-idle release and the
+b136b72 no-park-on-entry-drain rule; `__sdl_pump_wait` stays the raw
+single-source futex tier per KERNEL.md's two-tier wait rule). wm.c parks
+in WAIT{sock ⊕ ring} — the pre-park select and its residual-race comment
+are gone, and `peer.send()` skips the ring kick for fd-parked clients
+(one wake per event). user32's GetMessage parks in WAIT{agent socket ⊕
+ring ⊕ next-eligible-timer-deadline} — the 25ms chunk is dead; the
+deadline honours GetMessage's hwnd/range filters (a due-but-filtered
+timer must not spin the park). term converted opportunistically
+(frame-loop 60Hz master-poll → own main loop on WAIT{master ⊕ ring};
+its SIGCHLD rides a handler FLAG checked in pure wasm before the park —
+a signal claimed at an import return inside the frame pass clears
+SIGPEND, so the park would otherwise sleep past the zombie; signals
+dispatch only at import returns, making flag-then-park gap-free).
+Vsync stays a raw futex (the recorded escape hatch stays recorded —
+neither trigger fired). Test: `tests/kernel/test_wait_e2e.js`; the
+term story: `logs/2026-07-14/unified-wait.md`.
+
 ## References (verified 2026-07-12)
 
 - host.js: `shmPresent` 5940-5960 (SAB-only; `ackConfigure` exception 5958);

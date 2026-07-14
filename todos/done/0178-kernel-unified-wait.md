@@ -1,6 +1,18 @@
 # 0178 — kernel unified wait: one blocking primitive over fds + input ring + signal wakes
 
-- **Status**: open
+- **Status**: done (2026-07-14) — landed as four commits: 6fde95d (kernel
+  FS_WAIT 0x0420: selectScan ∪ ring readiness, 'uwait' waiter, ring-wake
+  hook, EINTR via the interruptible-RPC path, peer.send kick-skip for
+  fd-parked clients), 9c2325d (host __wait import — frame-idle +
+  entry-drain rules kept, __sdl_pump_wait stays the raw futex tier),
+  dd219a4 (test_wait_e2e, 18 legs, registered), 828689f (consumers:
+  wm.c WAIT{sock⊕ring} pre-park-select deleted; user32 GetMessage
+  WAIT{agent⊕ring⊕timer-deadline}, 25ms chunk dead; term converted
+  opportunistically with the SIGCHLD flag-then-park pattern; image v91).
+  Gates: kernel/host/blockfs suites, flake gate ×3 under load, full
+  25-file browser sweep — all green; idlemeter A unchanged at 8.8%
+  (idle-zero holds). Vsync stays a raw futex — neither escape-hatch
+  trigger fired. Story: logs/2026-07-14/unified-wait.md
 - **Design**: `todos/IDLE-POWER.md` "Follow-on: the unified wait" (and the
   KERNEL.md "Kernel-owned endpoints" wake note). The post-Stage-4
   consolidation of the wake channels 0161/0168/0169 built piecemeal —

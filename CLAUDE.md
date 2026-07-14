@@ -488,12 +488,22 @@ tier in host.js's frame-loop driver (fixed 0100: the old fixed
 sameboy GBC showed 60 emulated/33 presented). Idle SDL apps can leave
 the frame race entirely (todos/0161, IDLE-POWER Stage 2):
 `SDL_WaitEvent`/`SDL_WaitEventTimeout` REALLY block on the OS input
-ring via `__sdl_pump_wait` (user32's GetMessage seam) in 1s chunks
+ring via `__sdl_pump_wait` in 1s chunks
 (import return = cooperative-signal safe point), waking on routed
 input/resize/quit instead of 60×/s — mgp parks its settled slides this
 way (`sdlx_wait_event`); wm.c's conversion is 0168, wake-counter probes
 + compositor parking 0169. Test: `test_waitevent_e2e.js`; design:
-`todos/IDLE-POWER.md`.
+`todos/IDLE-POWER.md`. Multi-source sleeps are the kernel's unified
+WAIT since todos/0178 (`FS_WAIT` + the `__wait` import — fds ⊕ input
+ring ⊕ timeout ⊕ signal-EINTR, readiness-check+park atomic
+kernel-side; KERNEL.md's two-tier wait rule is normative): wm.c parks
+in WAIT{sock ⊕ ring} (pre-park select gone), user32's GetMessage in
+WAIT{agent socket ⊕ ring ⊕ next timer deadline} (the 25ms chunk is
+dead — idle win32 apps park indefinitely, WM_TIMER/wmctl stay prompt),
+term in WAIT{pty master ⊕ ring} (frame-loop poll gone; its SIGCHLD
+sets a handler flag checked in pure wasm before the park — a signal
+claimed mid-frame clears SIGPEND, and dispatch only happens at import
+returns, so flag-then-park is gap-free). Test: `test_wait_e2e.js`.
 The Start menu is a single Win95 column with a gucOS sidebar band
 (todos/0098's Win7 two-pane reverted to one column by todos/0132, the
 22px gucOS band + bottom All-Programs its follow-up, over the 0078
@@ -714,7 +724,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v90**.
+Image version is **v91**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
@@ -727,9 +737,9 @@ surface; child controls drawn IN-PROCESS into the top-level's surface,
 Wine-style — a child DC is the surface span offset to its client
 origin via the `win32_internal.h` `__gdi_dc_wrap` seam, which replaced
 0057's `__gdi_bind_hwnd` scaffold), the CLASSIC blocking message loop
-(GetMessage parks in host.js's `__sdl_pump_wait` import, which drains
-the input ring in place and Atomics.waits on IR_WPOS — kernel.js
-notifies it in `_wmPushEvent`; WM_PAINT only when the queue is dry,
+(GetMessage parks in the kernel's unified WAIT since todos/0178 —
+agent socket ⊕ input ring ⊕ next timer deadline, drained into the SDL
+queue at the import's return; WM_PAINT only when the queue is dry,
 WM_QUIT last), input routing (hit-test/capture/focus; SDL3 keysyms are
 modifier-applied so TranslateMessage→WM_CHAR is table-free), the
 standard controls (BUTTON incl. check/radio/groupbox, STATIC, EDIT
