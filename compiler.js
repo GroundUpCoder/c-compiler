@@ -10250,9 +10250,18 @@ class Parser {
       // Gated behind --allow-implicit-function-decl / --allow-old-c. We
       // create the decl ourselves here so makeIdent's lookup succeeds.
       if (!this.varScope.get(name) && this._allowImplicitFunctionDecl && this.atText("(")) {
-        const ftype = Types.functionType(Types.TINT, [], false);
+        // C89 semantics: the implicit declaration is `extern int name()` —
+        // return int, UNSPECIFIED params (calls get the default argument
+        // promotions, not a ()-means-(void) arity check). Register it with
+        // the enclosing function like a block-scope `extern` declaration so
+        // it reaches the unit's declared-function list — the linker stitches
+        // `.definition` to a cross-TU definition there (or reports a real
+        // undefined-symbol error); an unregistered decl skipped linking
+        // entirely and codegen ICE'd on the unstitched node (todos/0158).
+        const ftype = Types.functionType(Types.TINT, [], false, true);
         const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], Types.StorageClass.EXTERN, false, null);
         this.varScope.set(name, fdecl);
+        if (this.currentParsingFunc) this.currentParsingFunc.externLocalFuncs.push(fdecl);
       }
       return AST.makeIdent(loc, name, this.varScope);
     }
