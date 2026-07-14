@@ -1515,6 +1515,15 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
+  // Process-side read-only /usr (todos/0180): the embedder ships the sealed
+  // system image as ONE SharedArrayBuffer plus its mount prefix
+  // (opts.roImage = { prefix: '/usr', sab }); every spawn forwards it and
+  // the process worker mounts it locally (host.js SabByteStore + createV4
+  // readonly), so reads under the prefix never cross the RPC boundary —
+  // immutable data serves itself (KERNEL.md single-writer rule). Brokered
+  // only: standalone processes already own a private in-process fs.
+  this._roImage = (this._brokered && opts.roImage && opts.roImage.sab &&
+                   opts.roImage.prefix) ? opts.roImage : null;
   // System clipboard (todos/0090): { fmt, bytes: Uint8Array } or null.
   // Kernel-owned so it outlives the copying process; see OP.CLIP_SET.
   this._clipboard = null;
@@ -2071,6 +2080,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     kernelPage: sab,
     ttySab: pcb.tty ? pcb.tty.sab : null,
     brokered: self._brokered,
+    ro: self._roImage,   // process-side read-only volume (todos/0180)
   };
   try {
     pcb.worker = self._createWorker(procSpec);
@@ -5658,8 +5668,47 @@ Kernel.prototype._jobNotifyParent = function (pcb, kind) {
  * env entries need overriding afterwards (isatty and __select_impl — their
  * toWasmEnv versions consult in-process state that doesn't exist here);
  * everything else flows through these methods as RPCs.
+ *
+ * Process-side read-only volume (todos/0180): with opts.roFs (a LOCAL
+ * BlockFS over the kernel-shipped system-image SAB, createV4 readonly) +
+ * opts.roPrefix, absolute paths that lexically resolve under the prefix
+ * are served IN-PROCESS — zero RPCs for the chattiest startup traffic
+ * (fonts, configs, assets under /usr/share). Correctness rules:
+ * - A symlink escaping the sealed volume (the /usr/local -> /var/local
+ *   class) aborts the local walk (__mountEscape via the MountFS hooks) and
+ *   the op retries brokered — the fast path only serves walks that stay
+ *   inside the sealed volume. Local errors otherwise are FINAL (the sealed
+ *   volume is complete: ENOENT under /usr is real).
+ * - Write-intent opens and all path mutators stay brokered: the kernel's
+ *   walk owns the EROFS-after-walk rule (todos/0040).
+ * - Relative paths stay brokered (the kernel owns the cwd).
+ * - Local fds live at RO_FD_BASE+ so they can't collide with kernel fds;
+ *   the kernel never sees them. The two places one must become
+ *   kernel-visible — dup2 to a low fd, spawn DUP2 file-actions (hush's
+ *   `cmd < /usr/...` redirect journal) — promote it: a temporary brokered
+ *   O_RDONLY twin of the same file at the same offset (_roPromote).
+ * - Documented limits: a local fd not named in any spawn action behaves
+ *   as if close-on-exec (children inherit kernel fds only); select/WAIT
+ *   can't name a local fd (the fd number exceeds FD_SETSIZE — regular
+ *   files are always ready anyway). dup/dup2 within the local space share
+ *   the offset like kernel OFDs (BlockFS _dupEntry reuses the entry).
  * ============================================================ */
-function RemoteFS(client) {
+var RO_FD_BASE = 0x100000;   // local (process-served) fd/dir-handle space
+
+/* Lexical collapse of an ABSOLUTE path (the MountFS._resolvePath algorithm
+ * without a cwd — relative paths never reach the fast path). */
+function roNormalize(path) {
+  var parts = path.split('/'), out = [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (p === '' || p === '.') continue;
+    if (p === '..') { out.pop(); continue; }
+    out.push(p);
+  }
+  return '/' + out.join('/');
+}
+
+function RemoteFS(client, opts) {
   this._c = client;
   this._lastError = null;
   // Markers so toWasmEnv's fd-1/2 console fast path sees "redirectable
@@ -5673,7 +5722,123 @@ function RemoteFS(client) {
   this._stdinCtrl = null;       // winsize words only (TIOCGWINSZ)
   this._pipeBroker = null;      // unused: brokered pipes are kernel OFDs (PIPE_CREATE)
   this._sigcheck = null;        // assigned by toWasmEnv; unused (no ring waits)
+  // The read-only fast path (todos/0180; header comment above).
+  this._ro = null;
+  if (opts && opts.roFs && opts.roPrefix) {
+    var roFs = opts.roFs, prefix = opts.roPrefix;
+    var owns = function (full) {
+      if (full === prefix) return '/';
+      if (full.lastIndexOf(prefix + '/', 0) === 0) return full.slice(prefix.length);
+      return null;
+    };
+    // Mount hooks (the MountFS wiring, todos/0026): in-volume symlink
+    // targets resolve in the FULL namespace; foreign ones throw
+    // __mountEscape, which _roLocal turns into the brokered fallback.
+    roFs._mountPrefix = prefix;
+    roFs._mountOwns = owns;
+    this._ro = { fs: roFs, prefix: prefix, owns: owns,
+                 fds: new Map() };   // localFd -> { path } (full-namespace)
+  }
 }
+
+/* The fast-path gate: volume-relative path when `path` is absolute and
+ * lexically under the prefix, else null (brokered). A '..' climbing out
+ * ('/usr/../etc') collapses first and correctly fails the prefix test. */
+RemoteFS.prototype._roRel = function (path) {
+  if (this._ro === null || typeof path !== 'string' || path.charAt(0) !== '/') return null;
+  return this._ro.owns(roNormalize(path));
+};
+
+RemoteFS.prototype._roFd = function (fd) {
+  return this._ro !== null && this._ro.fds.has(fd);
+};
+
+/* Run a local-volume path op; a cross-volume symlink escape retries
+ * brokered. Local errors are final — propagate via _lastError. */
+RemoteFS.prototype._roLocal = function (fn, brokered) {
+  try {
+    var r = fn();
+    if (r === null) this._lastError = this._ro.fs._lastError || 'EIO';
+    return r;
+  } catch (e) {
+    if (e && e.__mountEscape) return brokered();
+    throw e;
+  }
+};
+
+/* Dispatch a path op: local when the path gates in, else brokered. */
+RemoteFS.prototype._roPath = function (path, localFn, brokeredFn) {
+  var rel = this._roRel(path);
+  if (rel === null) return brokeredFn();
+  var self = this;
+  return this._roLocal(function () { return localFn(self._ro.fs, rel); }, brokeredFn);
+};
+
+/* Materialize a kernel-side twin of a local fd (same file, same offset) —
+ * the one place a local fd becomes kernel-visible (dup2 to a low fd, spawn
+ * DUP2 file-actions). O_RDONLY re-open of the recorded full-namespace
+ * path: the volume is immutable, so the twin is the same file by
+ * construction. Caller closes the twin when done. */
+RemoteFS.prototype._roPromote = function (fd) {
+  var meta = this._ro.fds.get(fd);
+  var pos = this._ro.fs.lseek(fd - RO_FD_BASE, 0, 1 /* SEEK_CUR */);
+  var r = this._ok(this._c.call(OP.FS_OPEN, { path: meta.path, flags: 0, mode: 0 }));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  if (pos) {
+    var s = this._ok(this._c.call(OP.FS_LSEEK, { fd: r.fd, offset: pos, whence: 0 }));
+    if (s === null) { this.close(r.fd); return null; }
+  }
+  return r.fd;
+};
+
+/* Wrap the spawnHooks spawn() so DUP2 file-actions whose SOURCE is a local
+ * fd (hush's `cmd < /usr/...` redirect journal — pv_open3 really opened in
+ * the parent, locally) cross into the kernel's fd table: each such fd gets
+ * a temporary brokered twin the child inherits, the action is rewritten to
+ * name it, and the parent closes the twin after the spawn returns (the
+ * child holds its own refs). The twin is also closed CHILD-side by an
+ * appended CLOSE action — unless some action already targets that fd
+ * number, in which case the fd there is no longer the twin and closing it
+ * would destroy the caller's redirect. Identity without the RO volume. */
+RemoteFS.prototype.wrapSpawnHooks = function (hooks) {
+  if (this._ro === null) return hooks;
+  var self = this;
+  var inner = hooks.spawn;
+  hooks.spawn = function (spec) {
+    var actions = spec.actions || [];
+    if (self._ro.fds.size === 0 || actions.length === 0) return inner(spec);
+    var temps = null;   // localFd -> kernel twin
+    for (var i = 0; i < actions.length; i++) {
+      var a = actions[i];
+      if (a.op !== 0 || !self._roFd(a.arg)) continue;
+      if (temps === null) temps = new Map();
+      var k = temps.get(a.arg);
+      if (k === undefined) {
+        k = self._roPromote(a.arg);
+        if (k === null) {
+          var err = self._lastError || 'EBADF';
+          temps.forEach(function (tfd) { self.close(tfd); });
+          return { errno: err };
+        }
+        temps.set(a.arg, k);
+      }
+      actions[i] = { op: a.op, fd: a.fd, arg: k, path: a.path, mode: a.mode };
+    }
+    if (temps !== null) {
+      temps.forEach(function (tfd) {
+        var taken = actions.some(function (a) {
+          return (a.op === 0 || a.op === 1) && a.fd === tfd;
+        });
+        if (!taken) actions.push({ op: 2, fd: tfd, arg: 0, path: null, mode: 0 });
+      });
+    }
+    var r = inner(spec);
+    if (temps !== null) temps.forEach(function (tfd) { self.close(tfd); });
+    return r;
+  };
+  return hooks;
+};
 
 RemoteFS.prototype._setErr = function (name) { this._lastError = name; return null; };
 RemoteFS.prototype._ok = function (resp) {
@@ -5685,18 +5850,50 @@ RemoteFS.prototype.setStdinSab = function (sab) {
 };
 
 RemoteFS.prototype.open = function (path, flags, mode) {
+  // RO fast path (todos/0180): read-only opens of paths under the sealed
+  // volume open locally. Write intent — access mode, O_CREAT|O_TRUNC|
+  // O_APPEND (0x640) — stays brokered: the kernel's walk owns the
+  // EROFS-after-walk rule and the /usr/local escape (todos/0040).
+  var rel = this._roRel(path);
+  if (rel !== null && (flags & 3) === 0 && (flags & 0x640) === 0) {
+    var self = this;
+    return this._roLocal(function () {
+      var volFd = self._ro.fs.open(rel, flags, mode);
+      if (volFd === null) return null;
+      self._ro.fds.set(RO_FD_BASE + volFd,
+        { path: self._ro.prefix + (rel === '/' ? '' : rel) });
+      return RO_FD_BASE + volFd;
+    }, function () { return self._openBrokered(path, flags, mode); });
+  }
+  return this._openBrokered(path, flags, mode);
+};
+RemoteFS.prototype._openBrokered = function (path, flags, mode) {
   var r = this._ok(this._c.call(OP.FS_OPEN, { path: path, flags: flags, mode: mode }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
   return r.fd;
 };
 RemoteFS.prototype.close = function (fd) {
+  if (this._roFd(fd)) {
+    this._ro.fds.delete(fd);
+    var lr = this._ro.fs.close(fd - RO_FD_BASE);
+    if (lr === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    return 0;
+  }
   var r = this._ok(this._c.call(OP.FS_CLOSE, { fd: fd }));
   if (r === null) return null;
   delete this._fdTable[fd];
   return 0;
 };
 RemoteFS.prototype.read = function (fd, buf, count) {
+  if (this._roFd(fd)) {
+    // Local regular-file read: whole count in one shot (no RPC chunk cap),
+    // never parks (no EINTR concern — imports return promptly and the
+    // env-import probe stays the signal safe point).
+    var n0 = this._ro.fs.read(fd - RO_FD_BASE, buf, count);
+    if (n0 === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    return n0;
+  }
   // Interruptible: a tty read defers kernel-side; a posted signal turns it
   // into EINTR (regular files respond immediately, so it never fires).
   var r = this._c.call(OP.FS_READ, { fd: fd, count: Math.min(count, 60000) }, true);
@@ -5706,6 +5903,12 @@ RemoteFS.prototype.read = function (fd, buf, count) {
   return r.raw.length;
 };
 RemoteFS.prototype.write = function (fd, buf, count) {
+  if (this._roFd(fd)) {
+    // Same volume class the kernel serves for /usr fds: EROFS.
+    var lw = this._ro.fs.write(fd - RO_FD_BASE, buf, count);
+    if (lw === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    return lw;
+  }
   var n = Math.min(count, 60000);
   var payload = new Uint8Array(4 + n);
   payload[0] = fd & 0xff; payload[1] = (fd >> 8) & 0xff;
@@ -5717,13 +5920,40 @@ RemoteFS.prototype.write = function (fd, buf, count) {
   return r === null ? null : r.n;
 };
 RemoteFS.prototype.lseek = function (fd, offset, whence) {
+  if (this._roFd(fd)) {
+    var lr = this._ro.fs.lseek(fd - RO_FD_BASE, offset, whence);
+    if (lr === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    return lr;
+  }
   var r = this._ok(this._c.call(OP.FS_LSEEK, { fd: fd, offset: offset, whence: whence }));
   return r === null ? null : r.offset;
 };
-RemoteFS.prototype.stat = function (p) { var r = this._ok(this._c.call(OP.FS_STAT, { path: p })); return r && r.st; };
-RemoteFS.prototype.lstat = function (p) { var r = this._ok(this._c.call(OP.FS_LSTAT, { path: p })); return r && r.st; };
-RemoteFS.prototype.fstat = function (fd) { var r = this._ok(this._c.call(OP.FS_FSTAT, { fd: fd })); return r && r.st; };
-RemoteFS.prototype.access = function (p, mode) { return this._ok(this._c.call(OP.FS_ACCESS, { path: p, mode: mode })) && 0; };
+RemoteFS.prototype.stat = function (p) {
+  var self = this;
+  return this._roPath(p,
+    function (fs, rel) { return fs.stat(rel); },
+    function () { var r = self._ok(self._c.call(OP.FS_STAT, { path: p })); return r && r.st; });
+};
+RemoteFS.prototype.lstat = function (p) {
+  var self = this;
+  return this._roPath(p,
+    function (fs, rel) { return fs.lstat(rel); },
+    function () { var r = self._ok(self._c.call(OP.FS_LSTAT, { path: p })); return r && r.st; });
+};
+RemoteFS.prototype.fstat = function (fd) {
+  if (this._roFd(fd)) {
+    var lr = this._ro.fs.fstat(fd - RO_FD_BASE);
+    if (lr === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    return lr;
+  }
+  var r = this._ok(this._c.call(OP.FS_FSTAT, { fd: fd })); return r && r.st;
+};
+RemoteFS.prototype.access = function (p, mode) {
+  var self = this;
+  return this._roPath(p,
+    function (fs, rel) { return fs.access(rel, mode); },
+    function () { return self._ok(self._c.call(OP.FS_ACCESS, { path: p, mode: mode })) && 0; });
+};
 RemoteFS.prototype.unlink = function (p) { return this._ok(this._c.call(OP.FS_UNLINK, { path: p })) && 0; };
 RemoteFS.prototype.rename = function (a, b) { return this._ok(this._c.call(OP.FS_RENAME, { from: a, to: b })) && 0; };
 RemoteFS.prototype.mkdir = function (p, mode) { return this._ok(this._c.call(OP.FS_MKDIR, { path: p, mode: mode })) && 0; };
@@ -5733,59 +5963,140 @@ RemoteFS.prototype.symlink = function (target, p) { return this._ok(this._c.call
 /* Buffer-style like BlockFS.readlink — toWasmEnv is reused over RemoteFS,
  * so the signatures must match (the RPC itself carries a string). */
 RemoteFS.prototype.readlink = function (p, buf, bufsize) {
-  var r = this._ok(this._c.call(OP.FS_READLINK, { path: p }));
-  if (r === null) return null;
-  var bytes = new TextEncoder().encode(r.target);
-  var n = Math.min(bytes.length, bufsize);
-  for (var i = 0; i < n; i++) buf[i] = bytes[i];
-  return n;
+  var self = this;
+  return this._roPath(p,
+    function (fs, rel) { return fs.readlink(rel, buf, bufsize); },
+    function () {
+      var r = self._ok(self._c.call(OP.FS_READLINK, { path: p }));
+      if (r === null) return null;
+      var bytes = new TextEncoder().encode(r.target);
+      var n = Math.min(bytes.length, bufsize);
+      for (var i = 0; i < n; i++) buf[i] = bytes[i];
+      return n;
+    });
 };
-RemoteFS.prototype.ftruncate = function (fd, size) { return this._ok(this._c.call(OP.FS_FTRUNCATE, { fd: fd, size: size })) && 0; };
-RemoteFS.prototype.fsync = function (fd) { return this._ok(this._c.call(OP.FS_FSYNC, { fd: fd })) && 0; };
+RemoteFS.prototype.ftruncate = function (fd, size) {
+  if (this._roFd(fd)) {   // same volume class the kernel serves: EROFS
+    var lr = this._ro.fs.ftruncate(fd - RO_FD_BASE, size);
+    return lr === null ? this._setErr(this._ro.fs._lastError || 'EIO') : 0;
+  }
+  return this._ok(this._c.call(OP.FS_FTRUNCATE, { fd: fd, size: size })) && 0;
+};
+RemoteFS.prototype.fsync = function (fd) {
+  if (this._roFd(fd)) return 0;   // read-only volume: nothing to flush
+  return this._ok(this._c.call(OP.FS_FSYNC, { fd: fd })) && 0;
+};
 RemoteFS.prototype.chmod = function (p, mode) { return this._ok(this._c.call(OP.FS_CHMOD, { path: p, mode: mode })) && 0; };
-RemoteFS.prototype.fchmod = function (fd, mode) { return this._ok(this._c.call(OP.FS_FCHMOD, { fd: fd, mode: mode })) && 0; };
+RemoteFS.prototype.fchmod = function (fd, mode) {
+  if (this._roFd(fd)) {
+    var lr = this._ro.fs.fchmod(fd - RO_FD_BASE, mode);
+    return lr === null ? this._setErr(this._ro.fs._lastError || 'EIO') : 0;
+  }
+  return this._ok(this._c.call(OP.FS_FCHMOD, { fd: fd, mode: mode })) && 0;
+};
 RemoteFS.prototype.utime = function (p, a, m) { return this._ok(this._c.call(OP.FS_UTIME, { path: p, atime: a, mtime: m })) && 0; };
-RemoteFS.prototype.futime = function (fd, a, m) { return this._ok(this._c.call(OP.FS_FUTIME, { fd: fd, atime: a, mtime: m })) && 0; };
+RemoteFS.prototype.futime = function (fd, a, m) {
+  if (this._roFd(fd)) {
+    var lr = this._ro.fs.futime(fd - RO_FD_BASE, a, m);
+    return lr === null ? this._setErr(this._ro.fs._lastError || 'EIO') : 0;
+  }
+  return this._ok(this._c.call(OP.FS_FUTIME, { fd: fd, atime: a, mtime: m })) && 0;
+};
 RemoteFS.prototype.chdir = function (p) { return this._ok(this._c.call(OP.FS_CHDIR, { path: p })) && 0; };
 RemoteFS.prototype.getcwd = function () {
   var r = this._ok(this._c.call(OP.FS_GETCWD, {}));
   return r === null ? null : r.cwd;
 };
 RemoteFS.prototype.dup = function (fd) {
+  if (this._roFd(fd)) {
+    var meta = this._ro.fds.get(fd);
+    var nf = this._ro.fs.dup(fd - RO_FD_BASE);
+    if (nf === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    this._ro.fds.set(RO_FD_BASE + nf, { path: meta.path });
+    return RO_FD_BASE + nf;
+  }
   var r = this._ok(this._c.call(OP.FS_DUP, { fd: fd }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
   return r.fd;
 };
 RemoteFS.prototype.dup2 = function (oldfd, newfd) {
+  if (this._roFd(oldfd)) {
+    if (newfd === oldfd) return newfd;
+    if (newfd >= RO_FD_BASE) {   // stays in the local space
+      if (this._roFd(newfd)) this._ro.fds.delete(newfd);   // implicit close
+      var ln = this._ro.fs.dup2(oldfd - RO_FD_BASE, newfd - RO_FD_BASE);
+      if (ln === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+      this._ro.fds.set(newfd, { path: this._ro.fds.get(oldfd).path });
+      return newfd;
+    }
+    // Crossing into the kernel fd space (redirect onto stdio & co): promote
+    // a brokered twin, land it at newfd, drop the twin.
+    var k = this._roPromote(oldfd);
+    if (k === null) return null;
+    var pr = this._ok(this._c.call(OP.FS_DUP2, { fd: k, newfd: newfd }));
+    this._ok(this._c.call(OP.FS_CLOSE, { fd: k }));
+    delete this._fdTable[k];
+    if (pr === null) return null;
+    this._fdTable[pr.fd] = { type: 'remote' };
+    return pr.fd;
+  }
+  if (this._roFd(newfd)) {   // remote source lands on a local number
+    this.close(newfd);       // POSIX implicit close of newfd
+  }
   var r = this._ok(this._c.call(OP.FS_DUP2, { fd: oldfd, newfd: newfd }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
   return r.fd;
 };
 RemoteFS.prototype.fcntl_dupfd = function (fd, min) {
+  if (this._roFd(fd)) {
+    var meta = this._ro.fds.get(fd);
+    var nf = this._ro.fs.fcntl_dupfd(fd - RO_FD_BASE, Math.max(0, min - RO_FD_BASE));
+    if (nf === null) return this._setErr(this._ro.fs._lastError || 'EIO');
+    this._ro.fds.set(RO_FD_BASE + nf, { path: meta.path });
+    return RO_FD_BASE + nf;
+  }
   var r = this._ok(this._c.call(OP.FS_FCNTL_DUPFD, { fd: fd, min: min }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
   return r.fd;
 };
 RemoteFS.prototype.opendir = function (p) {
+  // Local dir handles share the RO_FD_BASE offset discipline (the volume's
+  // own handle table allocates small ints, remote snapshots index _dirs).
+  var rel = this._roRel(p);
+  if (rel !== null) {
+    var self = this;
+    return this._roLocal(function () {
+      var h = self._ro.fs.opendir(rel);
+      return h === null ? null : RO_FD_BASE + h;
+    }, function () { return self._opendirBrokered(p); });
+  }
+  return this._opendirBrokered(p);
+};
+RemoteFS.prototype._opendirBrokered = function (p) {
   var r = this._ok(this._c.call(OP.FS_OPENDIR, { path: p }));
   if (r === null) return null;
   this._dirs.push({ entries: r.entries, pos: 0 });
   return this._dirs.length - 1;
 };
 RemoteFS.prototype.readdir = function (h) {
+  if (this._ro !== null && h >= RO_FD_BASE) return this._ro.fs.readdir(h - RO_FD_BASE);
   var d = this._dirs[h];
   if (!d || d.pos >= d.entries.length) return null;
   return d.entries[d.pos++];
 };
-RemoteFS.prototype.closedir = function (h) { this._dirs[h] = undefined; return 0; };
+RemoteFS.prototype.closedir = function (h) {
+  if (this._ro !== null && h >= RO_FD_BASE) { this._ro.fs.closedir(h - RO_FD_BASE); return 0; }
+  this._dirs[h] = undefined; return 0;
+};
 RemoteFS.prototype._resolvePath = function (p) {
   var r = this._c.call(OP.FS_REALPATH, { path: p });
   return r.errno ? p : r.path;   // best effort, like the lexical resolver
 };
 RemoteFS.prototype.isatty = function (fd) {
+  if (this._roFd(fd)) return 0;   // a sealed-volume regular file
   var r = this._c.call(OP.FS_ISATTY, { fd: fd });
   return r.errno ? 0 : r.tty;
 };
@@ -5899,11 +6210,17 @@ var BOOT_SOURCE = [
   "var BLOCK_FS = runModule.BLOCK_FS;",
   "var client = new K.KernelClient(wd.kernelPage, function (m, t) { wt.parentPort.postMessage(m, t); });",
   "var fsFactory;",
+  "var rfs = null;",
   "if (wd.brokered) {",
   "  // The brokered filesystem: the kernel serves every fs syscall; the env",
   "  // is toWasmEnv REUSED over a RemoteFS (same method surface), with the",
-  "  // two in-process-state entries overridden.",
-  "  var rfs = new K.RemoteFS(client);",
+  "  // two in-process-state entries overridden. wd.ro (todos/0180) is the",
+  "  // sealed system image as an SAB — mounted locally so reads under its",
+  "  // prefix never RPC.",
+  "  var roFs = wd.ro",
+  "    ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })",
+  "    : null;",
+  "  rfs = new K.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix } : null);",
   "  fsFactory = function (ctx) {",
   "    var env = BLOCK_FS.BlockFS.prototype.toWasmEnv.call(rfs, ctx);",
   "    env.__select_impl = rfs.selectImpl(ctx);",
@@ -5931,7 +6248,9 @@ var BOOT_SOURCE = [
   "  blockFsFactory: fsFactory,",
   "  writeOut: ship(1),",
   "  writeErr: ship(2),",
-  "  spawnHooks: client.spawnHooks(),",
+  "  // rfs wraps spawn() so DUP2 file-actions naming local /usr fds promote",
+  "  // to kernel twins (todos/0180); identity when the RO volume is off.",
+  "  spawnHooks: rfs ? rfs.wrapSpawnHooks(client.spawnHooks()) : client.spawnHooks(),",
   "  pid: wd.pid,",
   "  ppid: wd.ppid,",
   "  // Live ppid off the vDSO page (todos/0179): tracks reparent-to-init.",
@@ -5972,6 +6291,8 @@ function nodeCreateWorker(config) {
         kernelPage: procSpec.kernelPage,
         ttySab: procSpec.ttySab || null,
         brokered: !!procSpec.brokered,
+        // Read-only volume (todos/0180): { prefix, sab } — the SAB shares.
+        ro: procSpec.ro || null,
       },
       // Program stdout/stderr flow through {type:'out'} messages (writeOut/
       // writeErr are overridden in BOOT_SOURCE); the worker's own process
@@ -6424,6 +6745,7 @@ var KERNEL_EXPORTS = {
   KP_VD_PGID: KP_VD_PGID, KP_VD_SID: KP_VD_SID,
   KP_VD_BOOT_LO: KP_VD_BOOT_LO, KP_VD_BOOT_HI: KP_VD_BOOT_HI,
   KP_VD_SCREEN_W: KP_VD_SCREEN_W, KP_VD_SCREEN_H: KP_VD_SCREEN_H,
+  RO_FD_BASE: RO_FD_BASE,   // process-served read-only fd space (todos/0180)
   RPCK_JSON: RPCK_JSON,
   RPCK_RAW: RPCK_RAW,
   writePayload: writePayload,

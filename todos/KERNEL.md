@@ -614,7 +614,32 @@ Sanctioned forms (queue items in parens):
   fallback + fan-out legs), `test_vdso_e2e.js` (an RPC-op counter proves
   zero GETPGID/GETSID across the mutations).
 - **Immutable data serves itself** — the sealed /usr volume read
-  process-side by host.js's own BlockFS reader (todos/0180).
+  process-side by host.js's own BlockFS reader (todos/0180, landed
+  2026-07-14): the embedder copies the baked image into ONE SAB
+  (`BLOCK_FS.storeToSab`) and hands it to `Kernel({roImage: {prefix:
+  '/usr', sab}})`; every spawn forwards it and the worker mounts it
+  locally (`SabByteStore` + `createV4 readonly` — getBytes copies out
+  since TextDecoder rejects SAB views). RemoteFS serves absolute paths
+  lexically under the prefix in-process — zero RPCs for the chattiest
+  startup traffic (`strace cat /usr/share/os-release` is now just
+  FS_WRITE + EXIT); measured 496→1345 MB/s reads, 71k→602k open+read+stat
+  ops/s (bench_fs.js RO leg). Correctness rules (full list in the
+  RemoteFS header comment): cross-volume symlink escapes (`/usr/local` →
+  `/var/local`) abort the local walk via the MountFS `__mountEscape`
+  hooks and retry brokered; write-intent opens and all mutators stay
+  brokered (the kernel owns EROFS-after-the-walk, todos/0040); relative
+  paths stay brokered (the kernel owns the cwd); local errors are final
+  (the sealed volume is complete). Local fds live at `RO_FD_BASE`
+  (0x100000) and cross into the kernel table only by PROMOTION — a
+  temporary brokered O_RDONLY twin at the same offset — at dup2-to-low-fd
+  and spawn DUP2 file-actions (hush's `cmd < /usr/...` vfork journal:
+  pv_open3 really opens in the parent, so the journaled dup2 names a
+  local fd). Documented limits: a local fd not named in a spawn action is
+  effectively close-on-exec; select/WAIT can't name one (the number
+  exceeds FD_SETSIZE — regular files are always ready anyway). Tests:
+  `test_rofs.js` (fast-path mechanics vs a fake RPC recorder),
+  `test_rofs_e2e.js` (real C, zero-fs-RPC acceptance + mixed-workload
+  identity + the promotion feeding a child's stdin).
 - **SPSC data planes** — one-producer/one-consumer rings (input ring,
   audio rings, framebuffers today; pipes in todos/0181), kernel only for
   wakeups and demotion to the brokered path when the SPSC precondition

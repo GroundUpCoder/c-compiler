@@ -223,7 +223,14 @@ MountFS over two volumes — the kernel treats it identically), with fs
 syscalls as 0x04xx RPCs served to host.js's
 RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
 in-process fs (standalone pages keep that path forever — two transports,
-one fs; see KERNEL.md "fd/data-plane amendment"). Spawn caches compiled
+one fs; see KERNEL.md "fd/data-plane amendment"). The sealed /usr serves
+itself process-side (todos/0180): the embedder ships the system image as
+ONE SAB (`Kernel({roImage})`, `BLOCK_FS.storeToSab`), every worker mounts
+it locally, and RemoteFS answers absolute /usr paths with ZERO RPCs —
+symlink escapes (`/usr/local`) retry brokered, write-intent/mutators/
+relative paths stay brokered, local fds live at RO_FD_BASE and promote to
+brokered twins at dup2/spawn-action crossings (rules + limits: the
+RemoteFS header and KERNEL.md's single-writer section). Spawn caches compiled
 Modules (todos/0037): read-only-volume binaries (fs `immutableKey` —
 prefix:ino after symlink resolution) compile once kernel-side and the
 `WebAssembly.Module` structured-clones in the spawn message (`procSpec.

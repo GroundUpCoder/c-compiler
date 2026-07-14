@@ -203,6 +203,10 @@ async function mountAndBoot() {
     sysMode = 'baked';
   }
   const sysFs = BLOCK_FS.createV4(store, { readonly: true });
+  // Process-side read-only /usr (todos/0180): ONE SAB copy of the sealed
+  // system image, shipped to every process worker at spawn — /usr reads
+  // (fonts, configs, assets) stop crossing the RPC boundary.
+  const roSab = BLOCK_FS.storeToSab(store);
 
   /* Root (writable) volume: fresh files get the skeleton + the manifest's
    * `user` section, exactly once. Later boots (and system re-bakes) never
@@ -227,6 +231,7 @@ async function mountAndBoot() {
 
   const kernel = new K.Kernel({
     fs: kfs,
+    roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
     loadImage: (p) => COMMON.readFileBytes(kfs, p),
     compile: ccCompile,

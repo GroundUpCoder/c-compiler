@@ -1113,6 +1113,47 @@ var BLOCK_FS = (function () {
   ReadOnlyStore.prototype.resize = function () { throw new Error('EROFS: read-only filesystem'); };
   ReadOnlyStore.prototype.flush = function () {};
 
+  // Read-only store over a SharedArrayBuffer — the process-side view of the
+  // sealed system volume (todos/0180): the kernel embedder copies the baked
+  // image into ONE SAB at boot (storeToSab below) and every process worker
+  // mounts it locally (createV4 {readonly:true}), so reads under the
+  // read-only mount prefix never cross the RPC boundary. Immutable by
+  // contract (KERNEL.md single-writer rule): the copy completes before any
+  // worker sees the SAB and nothing ever writes it, so plain non-atomic
+  // reads are coherent. getBytes returns COPIES — TextDecoder (directory
+  // name decode) rejects SharedArrayBuffer-backed views, and callers may
+  // hold results across ops.
+  function SabByteStore(sab) {
+    this._u8 = new Uint8Array(sab);
+    this._dv = new DataView(sab);
+  }
+  SabByteStore.prototype.getUint32 = function (off) {
+    return this._dv.getUint32(off, true);
+  };
+  SabByteStore.prototype.getBytes = function (off, len) {
+    var out = new Uint8Array(len);
+    out.set(this._u8.subarray(off, off + len));
+    return out;
+  };
+  SabByteStore.prototype.size = function () { return this._u8.byteLength; };
+  SabByteStore.prototype.setUint32 = function () { throw new Error('EROFS: read-only filesystem'); };
+  SabByteStore.prototype.setBytes = function () { throw new Error('EROFS: read-only filesystem'); };
+  SabByteStore.prototype.resize = function () { throw new Error('EROFS: read-only filesystem'); };
+  SabByteStore.prototype.flush = function () {};
+
+  // Copy a store's whole image into a SharedArrayBuffer (chunked so the
+  // copy never transiently doubles the image in one getBytes allocation).
+  function storeToSab(store) {
+    var n = store.size();
+    var sab = new SharedArrayBuffer(n);
+    var out = new Uint8Array(sab);
+    var CHUNK = 8 << 20;
+    for (var off = 0; off < n; off += CHUNK) {
+      out.set(store.getBytes(off, Math.min(CHUNK, n - off)), off);
+    }
+    return sab;
+  }
+
   // =================================================================
   // TLSFAllocator — O(1) segregated-fit allocator
   // =================================================================
@@ -5115,6 +5156,8 @@ var BLOCK_FS = (function () {
     MountFS: MountFS,
     MemoryByteStore: MemoryByteStore,
     ReadOnlyStore: ReadOnlyStore,
+    SabByteStore: SabByteStore,
+    storeToSab: storeToSab,
     SyncAccessHandleStore: SyncAccessHandleStore,
     TLSFAllocator: TLSFAllocator,
     TLSF64Allocator: TLSF64Allocator,

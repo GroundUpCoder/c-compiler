@@ -191,6 +191,8 @@ function createWorker(procSpec) {
     kernelPage: procSpec.kernelPage,
     ttySab: procSpec.ttySab || null,
     brokered: !!procSpec.brokered,
+    // Read-only volume (todos/0180): { prefix, sab } — the SAB shares.
+    ro: procSpec.ro || null,
   });
   return {
     postMessage: function (m) { w.postMessage(m); },
@@ -350,6 +352,10 @@ async function boot() {
     }
   }
   var sysFs = BLOCK_FS.createV4(sysStore, { readonly: true });
+  // Process-side read-only /usr (todos/0180): ONE SAB copy of the sealed
+  // system image, shipped to every process worker at spawn — /usr reads
+  // (fonts, configs, assets) stop crossing the RPC boundary.
+  var roSab = BLOCK_FS.storeToSab(sysStore);
 
   // The root (writable) volume owns '/' — /etc, /var, /tmp, /root, /dev,
   // /run. Seeded (skeleton + the manifest's `user` section) exactly once,
@@ -371,6 +377,7 @@ async function boot() {
 
   kernel = new KERNEL.Kernel({
     fs: kfs,
+    roImage: { prefix: '/usr', sab: roSab },   // todos/0180
     vsync: true,   // the compositor rAF calls vsyncTick() (todos/0100)
     createWorker: createWorker,
     loadImage: function (p) { return OS_COMMON.readFileBytes(kfs, p); },

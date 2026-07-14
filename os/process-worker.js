@@ -21,7 +21,12 @@ self.onmessage = function (e) {
   // The brokered filesystem: the kernel serves every fs syscall; the wasm
   // env is toWasmEnv REUSED over a RemoteFS (same method surface), with the
   // two in-process-state entries overridden (see kernel.js BOOT_SOURCE).
-  var rfs = new KERNEL.RemoteFS(client);
+  // wd.ro (todos/0180) is the sealed system image as an SAB — mounted
+  // locally so reads under its prefix (/usr) never cross the RPC boundary.
+  var roFs = wd.ro
+    ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })
+    : null;
+  var rfs = new KERNEL.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix } : null);
   var fsFactory = function (ctx) {
     var env = BLOCK_FS.BlockFS.prototype.toWasmEnv.call(rfs, ctx);
     env.__select_impl = rfs.selectImpl(ctx);
@@ -53,7 +58,9 @@ self.onmessage = function (e) {
     blockFsFactory: fsFactory,
     writeOut: ship(1),
     writeErr: ship(2),
-    spawnHooks: client.spawnHooks(),
+    // rfs wraps spawn() so DUP2 file-actions naming local /usr fds promote
+    // to kernel twins (todos/0180); identity when the RO volume is off.
+    spawnHooks: rfs.wrapSpawnHooks(client.spawnHooks()),
     pid: wd.pid,
     ppid: wd.ppid,
     // Live ppid off the vDSO page (todos/0179): tracks reparent-to-init.
