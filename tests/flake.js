@@ -33,9 +33,9 @@ const ROOT = path.resolve(__dirname, '..');
 // SKIP when the runner can't launch (Playwright absent), never a hard fail.
 const LEGS = [
   { name: 'kernel', cmd: ['tests/kernel/run.js'],
-    filter: 'wm_service_e2e,term_e2e,os_apps_e2e', optional: false },
+    filter: 'wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e', optional: false },
   { name: 'browser', cmd: ['tests/browser/os-sweep.mjs'],
-    filter: 'os-doom,os-term', optional: true },
+    filter: 'os-doom,os-term,os-compositor', optional: true },
 ];
 
 function parse(argv) {
@@ -68,7 +68,8 @@ function usage() {
   --kernel-only     skip the browser leg (use where Playwright is absent)
   --filter=S        intersect the tripwire set with S (comma = OR)
 
-Legs: kernel (wm_service/term/os_apps e2es), browser (os-doom/os-term).
+Legs: kernel (wm_service/term/os_apps/comp_park e2es), browser
+(os-doom/os-term/os-compositor).
 A FLAKY verdict = a fixed-sleep/timing dependency regressed.
 `);
 }
