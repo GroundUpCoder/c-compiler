@@ -5617,7 +5617,17 @@ function tryInline(callExpr) {
   }
   const paramMap = new Map();
   for (let i = 0; i < params.length; i++) {
-    paramMap.set(params[i], callExpr.arguments[i]);
+    let arg = callExpr.arguments[i];
+    // Through an unprototyped decl the args carry their default-PROMOTED
+    // types (double for a float arg — C89 6.5.2.2p6) while the definition's
+    // param may be narrower; substituting the promoted expr verbatim would
+    // splice an f64 where the body expects f32 (todos/0159). Convert back
+    // to the param's declared type when they differ.
+    const pt = params[i].type.removeQualifiers();
+    if (arg.type.removeQualifiers() !== pt && pt.isScalar() && arg.type.isScalar()) {
+      arg = new AST.EImplicitCast(arg.loc, params[i].type, arg);
+    }
+    paramMap.set(params[i], arg);
   }
   // Push self onto the stack while substituting & re-folding the body,
   // so a recursive call to `decl` inside the body sees its callee as
@@ -12086,6 +12096,18 @@ class Parser {
           } while (this.matchText(","));
           this.expect(";");
         }
+        // C89 6.5.2.2p6: the unprototyped-call ABI is in DEFAULT-PROMOTED
+        // terms — callers through empty-parens decls promote float args to
+        // double, so a K&R `float` parameter is RECEIVED as double. Promote
+        // the function type's param slot (the wasm signature) to match those
+        // call sites; the parameter variable keeps its declared float type
+        // via _knrDeclaredTypes and codegen demotes the incoming double at
+        // function entry (todos/0159). Sub-int params need no promotion
+        // here — char/short/int share the i32 wasm type.
+        decl._knrDeclaredTypes = [...knrParamTypes];
+        for (let i = 0; i < knrParamTypes.length; i++) {
+          if (knrParamTypes[i].removeQualifiers() === Types.TFLOAT) knrParamTypes[i] = Types.TDOUBLE;
+        }
         type = Types.functionType(type.returnType, knrParamTypes, type.isVarArg, false);
         decl.type = type;
       }
@@ -12145,7 +12167,13 @@ class Parser {
         if (decl._paramNames) {
           for (let i = 0; i < decl._paramNames.length; i++) {
             const pname = decl._paramNames[i] || ("__param" + i);
-            const ptype = i < paramTypes.length ? paramTypes[i] : Types.TINT;
+            // K&R defs: the variable keeps its DECLARED type (float) while
+            // the function type carries the promoted ABI slot (double) —
+            // sizeof/&param semantics stay C89-correct; codegen converts at
+            // entry (todos/0159).
+            const ptype = (decl._knrDeclaredTypes && i < decl._knrDeclaredTypes.length)
+              ? decl._knrDeclaredTypes[i]
+              : (i < paramTypes.length ? paramTypes[i] : Types.TINT);
             const pvar = new AST.DVar(loc, pname, ptype, Types.StorageClass.AUTO, null);
             if (ptype.isAggregate()) pvar.allocClass = Types.AllocClass.MEMORY;
             pvar.definition = pvar; // parameters are always definitions
@@ -15234,6 +15262,7 @@ class CodeGenerator {
     this.vaParamInfos = [];
     this.vaStartOffset = 0;
     this.vaRetSlotSize = 0;
+    this.paramEntryConversions = [];
 
     if (this.hasVaArgs) {
       // New variadic convention: single WASM parameter = arg block pointer.
@@ -15265,6 +15294,26 @@ class CodeGenerator {
         localIdx++;
       }
       this.nextLocalIdx = localIdx;
+      // K&R promoted-ABI params (todos/0159): the signature slot carries the
+      // default-promoted type (double for a declared float — C89 6.5.2.2p6)
+      // while the parameter VARIABLE keeps its declared type. When the wasm
+      // types differ, give the param its own local of the declared type; the
+      // prologue converts the incoming promoted value into it.
+      const sigParamTypes = funcDef.type.getParamTypes();
+      const paramBase = this.hasStructReturn ? 1 : 0;
+      for (let i = 0; i < funcDef.parameters.length && i < sigParamTypes.length; i++) {
+        const param = funcDef.parameters[i];
+        if (isStructOrUnion(param.type) || isStructOrUnion(sigParamTypes[i])) continue;
+        const wtDecl = cToWasmType(param.type, this.wmod);
+        if (wtEquals(wtDecl, cToWasmType(sigParamTypes[i], this.wmod))) continue;
+        const declLocal = this.allocLocal(wtDecl);
+        this.paramEntryConversions.push({
+          sigLocal: paramBase + i, declLocal,
+          fromType: sigParamTypes[i], toType: param.type,
+        });
+        this.localVarToWasmLocalIdx.set(param, declLocal);
+        this._trackLocalName(declLocal, param.name);
+      }
     }
 
     // Collect MEMORY vars
@@ -15428,6 +15477,16 @@ class CodeGenerator {
       this.body.localGet(this.argBlockLocalIdx);
       if (this.vaStartOffset > 0) { this.body.i32Const(this.vaStartOffset); this.body.aop(WT_I32, ALU.OP_ADD); }
       this.body.localSet(this.vaArgsLocalIdx);
+    }
+
+    // K&R promoted-ABI entry conversions (todos/0159, see assignLocals):
+    // move each promoted signature param into its declared-type local —
+    // before the frame prologue, so MEMORY-param copies read the converted
+    // local.
+    for (const pc of this.paramEntryConversions) {
+      this.body.localGet(pc.sigLocal);
+      this.emitConversion(pc.fromType, pc.toType);
+      this.body.localSet(pc.declLocal);
     }
 
     // Stack frame prologue
@@ -17019,6 +17078,28 @@ class CodeGenerator {
           } else {
             // Non-variadic direct call
             const callRetType = funcType.getReturnType();
+            const callParamTypes = funcType.getParamTypes();
+            // Calls bound through an UNPROTOTYPED decl (`int f();`, implicit
+            // decls): sema pushed default-promoted args with no arity check,
+            // but the wasm call must match the DEFINITION's signature
+            // exactly. Diagnose arg-count skew (C89 UB — an invalid module
+            // is never the right outcome) and reconcile promoted scalar
+            // types per-arg below (todos/0159).
+            const viaUnprototyped = !!funcDecl.type.removeQualifiers().hasUnspecifiedParams;
+            if (viaUnprototyped && expr.arguments.length !== callParamTypes.length) {
+              const what = funcDef.body
+                ? `the definition takes ${callParamTypes.length}`
+                : `no visible definition types the call`;
+              this.gotoErrors.push({
+                message: `call to unprototyped function '${funcDef.name}' with ` +
+                         `${expr.arguments.length} argument(s), but ${what} ` +
+                         `(in function '${this.currentFuncDef?.name || '?'}')`,
+                filename: expr.loc?.filename || '?',
+                line: expr.loc?.line || 0,
+              });
+              this.body.unreachable();
+              break;
+            }
             const structRet = isStructOrUnion(callRetType);
             let structRetAllocSize = 0;
             this.callNesting++;
@@ -17031,9 +17112,21 @@ class CodeGenerator {
               this.body.globalSet(this.stackPointerGlobalIdx);
               this.body.globalGet(this.stackPointerGlobalIdx);
             }
-            const callParamTypes = funcType.getParamTypes();
             for (let i = 0; i < expr.arguments.length; i++) {
               this.emitExpr(expr.arguments[i]);
+              if (viaUnprototyped && i < callParamTypes.length &&
+                  !isStructOrUnion(expr.arguments[i].type) && !isStructOrUnion(callParamTypes[i])) {
+                // Promoted arg vs the definition's declared param: demote
+                // f64 back to a prototyped f32 param, widen/wrap int sizes.
+                // Same-wasm-type pairs are a no-op inside emitConversion
+                // except sub-int narrowing, which the callee's own loads
+                // already handle — so gate on a real wasm-type difference.
+                const wtArg = this.getBinaryWasmType(expr.arguments[i].type);
+                const wtParam = this.getBinaryWasmType(callParamTypes[i]);
+                if (!wtEquals(wtArg, wtParam)) {
+                  this.emitConversion(expr.arguments[i].type, callParamTypes[i], expr.arguments[i]);
+                }
+              }
             }
             this.body.call(funcIdx);
             if (structRet) this.structRetDeferred += structRetAllocSize;
@@ -17051,7 +17144,20 @@ class CodeGenerator {
           // (see parsePostfixTail: ECall callee path), so callee.type is
           // a plain pointer-to-function (or function type itself).
           const calleeType = expr.callee.type;
-          const funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
+          let funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
+          funcType = funcType.removeQualifiers();
+          // Empty-parens function-pointer call (todos/0159): the pointer
+          // type carries no params, but sema default-promoted the args
+          // (C89 6.5.2.2p6). Type the call_indirect off the promoted
+          // ARGUMENT types — the C89 contract is that a matching callee
+          // (prototyped in promoted types, or K&R whose signature is
+          // promoted, see the K&R param promotion) agrees exactly; a
+          // non-matching callee is UB and traps at the call_indirect
+          // signature check instead of producing an invalid module.
+          if (funcType.hasUnspecifiedParams && !funcType.isVarArg) {
+            funcType = Types.functionType(funcType.getReturnType(),
+              expr.arguments.map(a => a.type), false);
+          }
           const callRetType = funcType.getReturnType();
           const typeId = getWasmFunctionTypeIdForCFunctionType(this.wmod, funcType);
           if (funcType.isVarArg) {
