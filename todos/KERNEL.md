@@ -570,6 +570,43 @@ its park chunk past a WMP event (`tests/kernel/test_sockwake_e2e.js`).
 autostart): parentless (ppid 0), own session, auto-reaped on exit —
 `_exitProcess` reaps ppid-0 zombies since no one will ever wait on them.
 
+### What may leave the kernel — the single-writer rule (2026-07-14)
+
+The expensive part of a syscall in this system is the cross-WORKER hop
+into the single-lane kernel event loop (head-of-line behind compiles/fs),
+NOT the wasm→JS import — host.js is process-local and imports cost
+nanoseconds. Our cost profile is a paravirtualized guest's (VM-exit-
+shaped), and the industry answer there is virtio's: data planes and
+high-frequency signals in shared memory with SUPPRESSED doorbells;
+control plane through the server. The kernel's single-threadedness is
+the correctness architecture (zero locks; the BlockFS read-through/
+dual-instance-fuzzer history shows what shared mutation costs), so the
+bright line for moving work out of the RPC path is:
+
+**Single-writer or immutable ⇒ eligible to leave the kernel. Multi-writer
+⇒ never.**
+
+Sanctioned forms (queue items in parens):
+- **Publish, don't serve** — seqlock vDSO page for kernel-written,
+  process-read state; the `KP_*` words are the existing ad-hoc version
+  (todos/0179).
+- **Immutable data serves itself** — the sealed /usr volume read
+  process-side by host.js's own BlockFS reader (todos/0180).
+- **SPSC data planes** — one-producer/one-consumer rings (input ring,
+  audio rings, framebuffers today; pipes in todos/0181), kernel only for
+  wakeups and demotion to the brokered path when the SPSC precondition
+  breaks.
+- **Waits**: two tiers by rule — raw SAB futex for single-source waits
+  (vsync, sleeps, the input ring); the kernel WAIT RPC (todos/0178) is
+  the ONLY place a process may sleep on multiple sources. Nobody
+  hand-rolls a multiplexer (the 0168 kick + pre-park-select races are
+  the cautionary tale).
+
+The general form — userland executing mutating ops against shared kernel
+structures — is an SMP kernel with locks in every table. Rejected;
+re-litigate only with a written design that prices the whole correctness
+story.
+
 ## Exit and teardown — an ordered handshake
 
 `CONFORMANCE-REMAINING.md` already records the symptom class: stdout

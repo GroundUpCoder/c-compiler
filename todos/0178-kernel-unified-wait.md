@@ -60,6 +60,15 @@ atomic kernel-side, so the lost-wakeup class disappears structurally.
 - Keep the 0161 SDL_WaitEvent veneer on `__sdl_pump_wait` (single-source
   apps don't need the RPC round trip); the shim keeps its no-park-on-
   entry-drain rule (b136b72).
+- **Escape hatch, recorded up front**: vsync deliberately stays a raw
+  futex (60Hz × N apps through kernel RPC dispatch = head-of-line behind
+  compiles; the 0100 broadcast is our io_uring ring / virtio suppressed
+  doorbell). Two triggers would flip that decision — (a) 0169's
+  ARMED/PARKED Dekker protocol proves race-prone in practice (its
+  complexity was the price of keeping vsync kernel-invisible), or
+  (b) kernel entry gets cheap (RPC lane split off the compositor/compile
+  loop). Then "vsync as a WAIT source" is the Wayland configuration and
+  the ARMED word dissolves into kernel bookkeeping.
 
 ## Acceptance
 
