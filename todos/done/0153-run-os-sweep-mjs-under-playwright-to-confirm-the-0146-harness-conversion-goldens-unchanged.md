@@ -1,6 +1,16 @@
 # 0153 — Run os-sweep.mjs under Playwright to confirm the 0146 harness conversion (goldens unchanged)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-15) — overtaken by events: the "Playwright never
+  ran here" premise no longer holds. The full converted sweep has since run
+  repeatedly on this machine: the 2026-07-12/13 triage of
+  `todos/done/0170-browser-sweep-five-files-red.md` ran it end-to-end (all
+  5 red legs were STALE TEST asserts — desk-entry/geometry hardcodes — not
+  0146 conversion bugs; a harness bug would have failed many files at once,
+  and 20/25 files ran green through the shared harness), and the idle-power
+  Stage-4 close-out gate recorded a full **25/25** browser sweep
+  (`logs/2026-07-14/idle-power-stage4.md`). That is strictly more evidence
+  than this item's one-sweep acceptance asked for. Closed by the 2026-07-15
+  queue reconciliation; no new work done under this id.
 - **Design**: this file. Surfaced closing todos/0146 (shared test harnesses).
 
 ## Goal
