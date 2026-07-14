@@ -6013,6 +6013,18 @@ function createSurfaceSDL({ ctx, hooks }) {
     // old buffer; a fresh WINDOW_RESIZED event re-negotiates if wanted.
     if (r && !r.errno) { win.fb = cfg.fb; win.w = cfg.w; win.h = cfg.h; }
   }
+  /* Doorbell-on-present (todos/0169): an shm present is SAB-only, so a
+   * parked compositor cannot see it — after every WMSH_SEQ bump, re-read
+   * the kernel-page parked flag and post want-frame if set. Cost while
+   * armed: one atomic load per present; the message only when parked. Also
+   * records that a present happened so pumpWait's next entry can tell the
+   * kernel this app is back to waiting (frame-idle — clears the kernel-side
+   * wantFrame pin without a per-park message from quiet pollers). */
+  let presentedSinceIdle = false;
+  function ringIfParked() {
+    presentedSinceIdle = true;
+    if (hooks.compParked && hooks.compParked()) hooks.wantFrame();
+  }
   /* SDL_UpdateWindowSurface -> shm mailbox present (write the back buffer,
    * flip, never block). Used by BOTH flavors: CPU-present apps ride the shm
    * transport even in the browser (no GPU dependency; the compositor
@@ -6035,6 +6047,7 @@ function createSurfaceSDL({ ctx, hooks }) {
     }
     Atomics.store(fb.i32, WMSH_FLIP, back);
     Atomics.add(fb.i32, WMSH_SEQ, 1);
+    ringIfParked();                         // doorbell-on-present (todos/0169)
     if (fb !== win.fb) ackConfigure(win);   // first new-size frame: ack + swap
     return 0;
   }
@@ -6119,6 +6132,15 @@ function createSurfaceSDL({ ctx, hooks }) {
    * (the marquee regression that found this). Return instead; the caller's
    * contract is already re-poll-on-any-return. */
   function pumpWait(timeoutMs) {
+    // WaitEvent/GetMessage entry = this app is back to waiting on events
+    // (todos/0169): release the kernel-side wantFrame pin so the compositor
+    // may park. Gated on a present since the last release — an idle 25ms
+    // GetMessage chunker posts nothing, an app that just presented posts
+    // exactly once.
+    if (presentedSinceIdle) {
+      presentedSinceIdle = false;
+      if (hooks.frameIdle) hooks.frameIdle();
+    }
     if (drainInput() > 0) return 1;
     if (!ring) return 0;
     if (timeoutMs > 0) {
@@ -6288,6 +6310,7 @@ function createSurfaceSDL({ ctx, hooks }) {
           }
           Atomics.store(fb.i32, WMSH_FLIP, back);
           Atomics.add(fb.i32, WMSH_SEQ, 1);
+          ringIfParked();                   // doorbell-on-present (todos/0169)
           if (fb !== win.fb) ackConfigure(win);
         },
       },
