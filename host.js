@@ -5737,8 +5737,10 @@ function createNullSDL() {
       // sdlDelayUnsupported() for the restructure guidance.
       __sdl_delay: function () { sdlDelayUnsupported(); },
       // No OS input ring in this flavor — SDL_WaitEvent* falls back to a
-      // nanosleep pace on a 0 return (todos/0161).
+      // nanosleep pace on a 0 return (todos/0161); no kernel WAIT either —
+      // __wait callers fall back to their chunked poll on -2 (todos/0178).
       __sdl_pump_wait: function () { return 0; },
+      __wait: function () { return -2; },
     },
   };
 }
@@ -6152,6 +6154,41 @@ function createSurfaceSDL({ ctx, hooks }) {
     }
     return 1;
   }
+  /* Unified multi-source wait (todos/0178) — the __wait import. One
+   * kernel FS_WAIT RPC over {read fds} ⊕ the input ring ⊕ a timeout;
+   * readiness-check and park are atomic KERNEL-side, which is the whole
+   * point: this is the only sanctioned way to sleep on more than one
+   * source (KERNEL.md's two-tier wait rule — single-source ring/vsync
+   * parks stay raw futexes like pumpWait above). Returns why: 0 timeout,
+   * 1 fd readable, 2 ring (records already drained into the wasm event
+   * queue), -1 signal (EINTR; the handler ran at this import's return),
+   * -2 no kernel WAIT in this flavor. Wakes may be spurious-shaped
+   * (why=2 with the record already consumed by an entry drain) — the
+   * caller's contract is re-poll-on-any-return, same as pumpWait.
+   * Keeps pumpWait's two entry rules: frame-idle release (0169), and
+   * NO PARK WHEN THE ENTRY DRAIN PRODUCED EVENTS (todos/0168, b136b72) —
+   * events moved into the wasm queue before the kernel scan would
+   * otherwise be slept past. */
+  function waitMulti(rfdsPtr, nr, ringInterest, timeoutMs) {
+    if (typeof hooks.waitMulti !== 'function') return -2;
+    if (presentedSinceIdle) {
+      presentedSinceIdle = false;
+      if (hooks.frameIdle) hooks.frameIdle();
+    }
+    if (ringInterest && drainInput() > 0) return 2;
+    const mem = new DataView(getMemory().buffer);
+    const r = [];
+    for (let i = 0; i < nr && i < 64; i++) r.push(mem.getInt32(rfdsPtr + i * 4, true));
+    const resp = hooks.waitMulti({
+      r,
+      ring: ring && ringInterest ? 1 : 0,     // no ring yet: fds/timeout only
+      timeoutMs: timeoutMs < 0 ? null : timeoutMs,
+    });
+    if (resp.errno === 'EINTR') return -1;
+    if (resp.errno) return -2;                // ENOSYS: embedder kernel predates 0178
+    if (ringInterest) drainInput();           // ring wake visible at import return
+    return resp.why | 0;
+  }
 
   /* ---- browser flavor: the real WebGPU SDL backend on a worker-local
    * OffscreenCanvas, presents handed to the kernel as ImageBitmaps ---- */
@@ -6227,6 +6264,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       return win ? requestResize(win.sid, w, h) : -1;
     };
     env.__sdl_pump_wait = pumpWait;   // user32 blocking GetMessage (0058)
+    env.__wait = waitMulti;           // unified multi-source wait (0178)
     // Resize request (todos/0019): allocate the new shm SAB and resize the
     // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
     // draws at canvas size, and a webgpu.h app's own wgpuSurfaceConfigure
@@ -6388,6 +6426,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
       __sdl_delay: function () { sdlDelayUnsupported(); },
       __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
+      __wait: waitMulti,           // unified multi-source wait (0178)
       // Audio: real source rings into the kernel mixer in both flavors
       // (todos/0017) — see buildAudioEnv above.
     }, audioEnv),
@@ -7091,8 +7130,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       // No OS input ring in this flavor (events are pushed by page listeners,
       // and the main thread must never block) — SDL_WaitEvent* falls back to
       // a nanosleep pace on a 0 return (todos/0161), which itself fails loud
-      // on a main thread that cannot Atomics.wait.
+      // on a main thread that cannot Atomics.wait. No kernel WAIT either —
+      // __wait callers fall back to their chunked poll on -2 (todos/0178).
       __sdl_pump_wait: function () { return 0; },
+      __wait: function () { return -2; },
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if ticks are read before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return Math.floor(performance.now() - sdlTicksBase); },
