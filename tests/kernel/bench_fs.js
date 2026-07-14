@@ -66,6 +66,82 @@ int main(void) {
 }
 `;
 
+// The SPSC pipe leg (todos/0181): a writer|reader pipeline moves 16 MB;
+// the reader times first-byte -> EOF (spawn/compile overhead excluded).
+// "fast" lets the parent close both ends (promotion -> ring transport);
+// "brokered" parks a second holder on the READ end (the parent keeps its
+// rfd) so the pipe never promotes — same program, RPC transport.
+const PIPE_BENCH_C = `
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <spawn.h>
+#include <time.h>
+#include <sys/wait.h>
+static double now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+enum { CHUNK = 65536 };
+static unsigned char buf[CHUNK];
+int main(int argc, char **argv) {
+    const char *role = argc > 1 ? argv[1] : "";
+    const long MB = 16;
+    if (!strcmp(role, "pipew")) {
+        usleep(300000);                     /* let the promotion land first */
+        memset(buf, 0xA5, CHUNK);
+        long left = MB * 1024 * 1024;
+        while (left > 0) {
+            int n = write(1, buf, left < CHUNK ? (int)left : CHUNK);
+            if (n <= 0) return 1;
+            left -= n;
+        }
+        return 0;
+    }
+    if (!strcmp(role, "piper")) {
+        long total = 0; int n;
+        double t0 = 0;
+        while ((n = read(0, buf, CHUNK)) > 0) {
+            if (total == 0) t0 = now();
+            total += n;
+        }
+        double t1 = now();
+        printf("pipe %.1f MB/s (%ld bytes)\\n",
+            total / (1024.0 * 1024.0) / (t1 - t0), total);
+        fflush(stdout);
+        return 0;
+    }
+    /* parent: MODE=fast closes both ends (SPSC promotion); MODE=brokered
+       keeps the read end so a second holder pins the pipe brokered. */
+    int fast = !strcmp(getenv("MODE") ? getenv("MODE") : "fast", "fast");
+    int p[2], st; pid_t w, r;
+    if (pipe(p)) return 1;
+    posix_spawn_file_actions_t fa;
+    char *wargv[] = { "bench", "pipew", 0 };
+    char *rargv[] = { "bench", "piper", 0 };
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, p[1], 1);
+    posix_spawn_file_actions_addclose(&fa, p[0]);
+    posix_spawn_file_actions_addclose(&fa, p[1]);
+    if (posix_spawn(&w, "/bin/bench", &fa, 0, (char *const *)wargv, 0)) return 2;
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, p[0], 0);
+    posix_spawn_file_actions_addclose(&fa, p[0]);
+    posix_spawn_file_actions_addclose(&fa, p[1]);
+    if (posix_spawn(&r, "/bin/bench", &fa, 0, (char *const *)rargv, 0)) return 3;
+    posix_spawn_file_actions_destroy(&fa);
+    close(p[1]);
+    if (fast) close(p[0]);
+    waitpid(w, &st, 0);
+    waitpid(r, &st, 0);
+    if (!fast) close(p[0]);
+    return 0;
+}
+`;
+
 // The RO leg's workload: pure reads + metadata against a sealed /usr file.
 const RO_BENCH_C = `
 #include <stdio.h>
@@ -121,6 +197,29 @@ const roWasmFile = path.join(tmp, 'robench.wasm');
 fs.writeFileSync(roCFile, RO_BENCH_C);
 cp.execFileSync('node', [COMPILER, roCFile, '-o', roWasmFile], { stdio: 'pipe' });
 const roImage = fs.readFileSync(roWasmFile);
+const pipeCFile = path.join(tmp, 'pipebench.c');
+const pipeWasmFile = path.join(tmp, 'pipebench.wasm');
+fs.writeFileSync(pipeCFile, PIPE_BENCH_C);
+cp.execFileSync('node', [COMPILER, pipeCFile, '-o', pipeWasmFile], { stdio: 'pipe' });
+const pipeImage = fs.readFileSync(pipeWasmFile);
+
+// The pipe leg (todos/0181): same pipeline, ring vs pinned-brokered.
+function runPipeOnce(fast) {
+  return new Promise((resolve, reject) => {
+    let out = '';
+    const kernel = new K.Kernel({
+      fs: BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(4 << 20)),
+      createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
+      loadImage: (p) => (p === '/bin/bench' ? pipeImage : null),
+      onOutput: (pid, fd, bytes) => { out += Buffer.from(bytes).toString(); },
+      onHalt: () => resolve(out.trim()),
+      log: () => {},
+    });
+    kernel.boot({ path: '/bin/bench', argv: ['bench'],
+      envp: ['MODE=' + (fast ? 'fast' : 'brokered')], cwd: '/' }).catch(reject);
+    setTimeout(() => reject(new Error('pipe bench timeout\n' + out)), 120000);
+  });
+}
 
 function runOnce(brokered) {
   return new Promise((resolve, reject) => {
@@ -177,6 +276,10 @@ function runRoOnce(local) {
   const roLocal = await runRoOnce(true);
   console.log('/usr brokered (RPC)  : ' + roBrokered);
   console.log('/usr local (0180 SAB): ' + roLocal);
+  const pipeBrokered = await runPipeOnce(false);
+  const pipeFast = await runPipeOnce(true);
+  console.log('pipe brokered (RPC)  : ' + pipeBrokered);
+  console.log('pipe SPSC (0181 ring): ' + pipeFast);
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

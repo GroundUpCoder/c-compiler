@@ -39,6 +39,8 @@ const tests = [
   ['test_procfs.js'],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)
   ['test_pipes.js'],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js'],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
+  ['test_pipes_spsc.js'],   // 0181: SPSC ring mechanics over the SAB protocol — pipe-sab handshake, LATENT->FAST->DEMOTED ladder (promotion on removal, spawn-inherit demotion, strace pseudo-holder, in-process dup stays FAST), stale-mode ring service, PR_RWAIT/PR_WWAIT doorbell + PIPE_KICK, ring EOF/EPIPE flags (no wasm)
+  ['test_spsc_e2e.js'],     // 0181: real C pipelines — RPC-op counter shows 8MB moving with ZERO pipe data RPCs (wakes counted separately), fast-writer SIGPIPE via kick{epipe}, mid-stream demotion byte-identical
   ['test_strace.js'],       // 0046: per-pid RPC trace — spec.trace validation, decode, deferred/unfinished, -f inheritance, drop policy (no wasm)
   ['test_strace_e2e.js', IMG],   // 0046: /bin/strace in-OS — cat's fd stream, exit/signal status propagation, -f, -o
   ['test_pty.js'],          // 0020: pty pair semantics over the SAB protocol (no wasm)
