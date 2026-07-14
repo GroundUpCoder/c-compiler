@@ -1,6 +1,12 @@
 # 0071 — tty VEOF is transient, not sticky (Ctrl+D in a REPL)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-15) — superseded by `todos/done/0163-tty-veof-transient.md`
+  (the same fix, re-filed and landed 2026-07-12: transient VEOF `_eofFlag`
+  split from latched hangup `_hupFlag` in kernel.js, both brokered
+  read-service sites consume the one-shot; regression in
+  `tests/kernel/test_pty.js`; manual term→lua→^D verified). This entry
+  predated the re-file and was never closed — closed by the 2026-07-15
+  queue reconciliation, no new work done under this id.
 - **Design**: `todos/KERNEL.md` (line-discipline; the "empty-line VEOF is
   sticky" v1 limit is called out there and in `kernel.js`).
 
