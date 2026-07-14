@@ -8,6 +8,14 @@
 // resolves immediately when a tick landed since the last wait (rAF catch-up
 // semantics), and parks until the NEXT tick otherwise.
 //
+// 0169 (IDLE-POWER piece B — the on-demand compositor's wake protocol):
+// KP_VSYNC_ARMED waiter accounting around vsyncWait, the PARKED-gated
+// want-frame doorbell (arm-while-parked posts; arm-while-armed doesn't),
+// compSetParked's page stamping + spawn-while-parked stamp, the
+// want-frame/frame-idle pcb.wantFrame lifecycle + damage-hook wake,
+// compKeepAlive over wantFrame/ARMED/zombies, and the spawnHooks
+// compParked/wantFrame/frameIdle adapters.
+//
 // Run: node tests/kernel/test_vsync.js
 'use strict';
 const path = require('path');
@@ -134,6 +142,113 @@ async function main() {
   kv.vsyncTick();
   await w2;
   check('and wakes on the next tick', woke2 === true);
+
+  // ---- 0169: ARMED waiter accounting --------------------------------
+  console.log('ARMED/PARKED (todos/0169):');
+  check('ARMED is 0 with no waiter', Atomics.load(p1, K.KP_VSYNC_ARMED) === 0);
+  let woke3 = false;
+  const w3 = client.vsyncWait().then(() => { woke3 = true; });
+  await tick();
+  check('a parked wait publishes ARMED=1',
+    Atomics.load(p1, K.KP_VSYNC_ARMED) === 1);
+  kv.vsyncTick();
+  await w3;
+  check('resolve subtracts ARMED back to 0',
+    woke3 && Atomics.load(p1, K.KP_VSYNC_ARMED) === 0);
+  // The rAF catch-up fast path (missed tick) never touches ARMED.
+  kv.vsyncTick();
+  await client.vsyncWait();
+  check('catch-up resolve leaves ARMED balanced',
+    Atomics.load(p1, K.KP_VSYNC_ARMED) === 0);
+
+  // ---- 0169: the want-frame doorbell on arm-while-parked -------------
+  const posts = [];
+  const clientP = new K.KernelClient(kv.process(pid1).page, (m) => posts.push(m));
+  // Prime clientP's seen-seq (a fresh client's first wait parks): one full
+  // park+tick cycle while unparked.
+  const wInit = clientP.vsyncWait();
+  await tick();
+  kv.vsyncTick();
+  await wInit;
+  check('arm while UNPARKED posts no doorbell', posts.length === 0);
+  kv.compSetParked(true);
+  check('compSetParked stamps every live page',
+    Atomics.load(p1, K.KP_COMP_PARKED) === 1);
+  const w4 = clientP.vsyncWait();
+  check('arm while PARKED posts want-frame',
+    posts.length === 1 && posts[0].type === 'want-frame');
+  kv.compSetParked(false);
+  check('unpark clears the page flag', Atomics.load(p1, K.KP_COMP_PARKED) === 0);
+  kv.vsyncTick();
+  await w4;   // balance the waiter before the keepAlive legs below
+
+  // ---- 0169: spawn-while-parked stamps the new page -------------------
+  kv.compSetParked(true);
+  const rs = await rpc(kv, pid1, K.OP.SPAWN,
+    { path: '/bin/a', argv: ['a'], envp: [], cwd: '/' });
+  const pS = new Int32Array(kv.process(rs.pid).page);
+  check('spawn while parked stamps KP_COMP_PARKED on the new page',
+    Atomics.load(pS, K.KP_COMP_PARKED) === 1);
+  kv.compSetParked(false);
+  check('unpark clears the spawned page too',
+    Atomics.load(pS, K.KP_COMP_PARKED) === 0);
+
+  // ---- 0169: wantFrame lifecycle + the damage hook --------------------
+  let damage = 0;
+  kv.wmOnDamage(() => damage++);
+  check('keepAlive false when everyone is idle', kv.compKeepAlive() === false);
+  const h1 = kv._testWorkers.get(pid1);
+  h1.msg({ type: 'want-frame' });
+  check('want-frame pins the pcb (keepAlive true)',
+    kv.process(pid1).wantFrame === true && kv.compKeepAlive() === true);
+  check('want-frame fires the damage hook (compositor wake)', damage === 1);
+  h1.msg({ type: 'frame-idle' });
+  check('frame-idle releases the pin',
+    kv.process(pid1).wantFrame === false && kv.compKeepAlive() === false);
+  const preDamage = damage;
+  kv.wmScene && kv.wmSetScreen(801, 500);   // any _bumpWm site
+  check('every WM version bump routes through the damage hook', damage === preDamage + 1);
+
+  // ---- 0169: keepAlive over ARMED + zombies ---------------------------
+  await client.vsyncWait();   // absorb ticks missed since w3 (catch-up path)
+  const w5 = client.vsyncWait();
+  await tick();
+  check('a live vsync waiter keeps the compositor alive (ARMED)',
+    kv.compKeepAlive() === true);
+  kv.vsyncTick();
+  await w5;
+  check('...and releases it on resolve', kv.compKeepAlive() === false);
+  // A killed app must not pin the compositor: leave ARMED set on the spawned
+  // pcb's page, kill it, and check both wantFrame and ARMED are ignored.
+  const pcbS = kv.process(rs.pid);
+  Atomics.store(pS, K.KP_VSYNC_ARMED, 1);   // simulate a stranded waiter
+  kv._testWorkers.get(rs.pid).msg({ type: 'want-frame' });
+  check('pre-kill: the doomed pcb pins', kv.compKeepAlive() === true);
+  kv._testWorkers.get(rs.pid).msg({ type: 'exited', code: 0 });
+  await tick();
+  check('a zombie pins nothing (stranded ARMED + wantFrame ignored)',
+    pcbS.state === 'zombie' && kv.compKeepAlive() === false);
+  await rpc(kv, pid1, K.OP.WAIT, { pid: -1, options: 0 });
+
+  // ---- 0169: spawnHooks adapters --------------------------------------
+  const hookPosts = [];
+  const clientH = new K.KernelClient(kv.process(pid1).page, (m) => hookPosts.push(m));
+  const hooks = clientH.spawnHooks();
+  check('hooks.compParked false while unparked', hooks.compParked() === false);
+  kv.compSetParked(true);
+  check('hooks.compParked true while parked', hooks.compParked() === true);
+  kv.compSetParked(false);
+  hooks.wantFrame();
+  hooks.frameIdle();
+  check('hooks.wantFrame/frameIdle post the doorbell messages',
+    hookPosts.length === 2 && hookPosts[0].type === 'want-frame' &&
+    hookPosts[1].type === 'frame-idle');
+
+  // ---- 0169: the notify counter (the app-worker-wake probe) -----------
+  const n0 = kv.vsyncNotifyCount();
+  kv.vsyncTick();
+  check('vsyncNotifyCount counts per-pcb notifies',
+    kv.vsyncNotifyCount() === n0 + 1);   // one live pcb (pid1)
 
   console.log(failures ? `\nvsync: ${failures} FAILURE(S)` : '\nvsync: PASS');
   process.exit(failures ? 1 : 0);

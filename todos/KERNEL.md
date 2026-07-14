@@ -732,10 +732,24 @@ wall-clock and unsynchronized with the compositor that samples their
 presents. But the kernel worker is first-level and already runs the one
 real frame clock (the compositor rAF, todos/0055). 0100 exports it:
 
-- Two tail words on the kernel page (see the layout comment in kernel.js —
-  the payload cap stops 8 bytes short of them): `KP_VSYNC_EN`, set once at
-  spawn when the kernel was built with `Kernel({vsync: true})`, and
-  `KP_VSYNC_SEQ`, a tick counter.
+- Four tail words on the kernel page (see the layout comment in kernel.js —
+  the payload cap stops 16 bytes short of them): `KP_VSYNC_EN`, set once at
+  spawn when the kernel was built with `Kernel({vsync: true})`;
+  `KP_VSYNC_SEQ`, a tick counter; and — since todos/0169 (the on-demand
+  compositor, IDLE-POWER piece B) — `KP_VSYNC_ARMED`, a vsync-waiter count
+  the process side adds to BEFORE parking on the seq word and subtracts on
+  resolve, and `KP_COMP_PARKED`, the compositor-parked flag the process
+  side re-reads AFTER publishing ARMED or a present's `WMSH_SEQ` bump,
+  posting `{type:'want-frame'}` when set. ARMED/PARKED are a Dekker pair:
+  the compositor stores PARKED on every pcb page FIRST, then re-reads every
+  ARMED/wantFrame/seq (seq-cst atomics — a lost waiter or lost present is
+  impossible). Kernel-side, `pcb.wantFrame` pins the compositor armed: set
+  by the want-frame doorbell, cleared ONLY by `{type:'frame-idle'}`
+  (host.js's pumpWait entry, gated on a present since the last idle) and by
+  process exit. `compSetParked()`/`compKeepAlive()`/`wmOnDamage()` are the
+  kernel half of the protocol; every `_wmVersion` bump routes through
+  `_bumpWm()` → the damage hook. Spawn stamps KP_COMP_PARKED on the new
+  page when parked (the KP_VSYNC_EN precedent).
 - `kernel.vsyncTick()` — called by the embedder from its frame clock (the
   compositor's `draw()`, before anything can early-return) — bumps + notifies
   the word for every live pcb.

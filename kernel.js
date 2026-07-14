@@ -52,6 +52,16 @@
  *   [7] KP_RPC_KIND   payload encoding: RPCK_JSON | RPCK_RAW.
  *   [8..] payload     UTF-8 JSON (request, then response, in place),
  *                     up to KP_PAYLOAD_CAP — the page tail past it holds:
+ *   [N-4] KP_VSYNC_ARMED  vsync-waiter count (todos/0169): the process side
+ *                      Atomics.add's it BEFORE parking on KP_VSYNC_SEQ and
+ *                      subtracts on resolve; the compositor's park decision
+ *                      re-reads it AFTER publishing KP_COMP_PARKED — the
+ *                      Dekker pair that makes a lost waiter impossible.
+ *   [N-3] KP_COMP_PARKED  1 = the compositor's rAF is parked, no ticks are
+ *                      coming (todos/0169). The process side re-reads it
+ *                      after publishing ARMED / a present's seq bump and
+ *                      posts {type:'want-frame'} when set — the doorbell
+ *                      that wakes the on-demand compositor.
  *   [N-2] KP_VSYNC_EN  1 = the embedder broadcasts vsync ticks (set once
  *                      at spawn from Kernel({vsync}); todos/0100).
  *   [N-1] KP_VSYNC_SEQ tick counter — vsyncTick() bumps + notifies it per
@@ -72,9 +82,11 @@ var KP_RPC_LEN = 6;
 var KP_RPC_KIND = 7;               // payload encoding: RPCK_JSON | RPCK_RAW
 var KP_PAYLOAD_OFF = 32;           // byte offset of the payload region
 var KP_SIZE = 64 * 1024;           // fits compile stdout/stderr comfortably
+var KP_VSYNC_ARMED = (KP_SIZE >> 2) - 4;   // tail words (todos/0169): vsync
+var KP_COMP_PARKED = (KP_SIZE >> 2) - 3;   // waiter count + compositor-parked flag
 var KP_VSYNC_EN = (KP_SIZE >> 2) - 2;   // tail words (todos/0100): vsync
 var KP_VSYNC_SEQ = (KP_SIZE >> 2) - 1;  // advertise flag + tick counter
-var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 8;   // payload stops short of them
+var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 16;   // payload stops short of them
 
 var RPC_IDLE = 0, RPC_REQUEST = 1, RPC_DONE = 2;
 var KF_STOP = 1;                   // KP_FLAGS bit0: park at the next safe point
@@ -884,12 +896,22 @@ KernelClient.prototype.vsyncWait = function () {
     return Promise.resolve();
   }
   var self = this;
+  // On-demand compositor (todos/0169): publish the waiter FIRST, then
+  // re-read the parked flag and ring the doorbell if set. This is one half
+  // of the Dekker pair — the compositor stores PARKED before re-reading
+  // ARMED — so either it sees our count and stays armed, or we see its
+  // flag and post the wake; a silent strand (waitAsync registration is
+  // passive, the kernel can't see it) is impossible either way.
+  Atomics.add(i32, KP_VSYNC_ARMED, 1);
+  if (Atomics.load(i32, KP_COMP_PARKED) === 1) this._post({ type: 'want-frame' });
   var r = Atomics.waitAsync(i32, KP_VSYNC_SEQ, cur);
   if (!r.async) {                          // 'not-equal': tick raced the wait
+    Atomics.sub(i32, KP_VSYNC_ARMED, 1);
     self._vsyncSeen = Atomics.load(i32, KP_VSYNC_SEQ);
     return Promise.resolve();
   }
   return r.value.then(function () {
+    Atomics.sub(i32, KP_VSYNC_ARMED, 1);
     self._vsyncSeen = Atomics.load(i32, KP_VSYNC_SEQ);
   });
 };
@@ -986,6 +1008,14 @@ KernelClient.prototype.spawnHooks = function () {
     // frame loops off the kernel's compositor clock when advertised.
     vsyncEnabled: function () { return self.vsyncEnabled(); },
     vsyncWait: function () { return self.vsyncWait(); },
+    // On-demand compositor doorbells (todos/0169): shm presents are
+    // SAB-only, so host.js re-reads the parked flag after every seq bump
+    // and rings want-frame when set; frame-idle is pumpWait's entry saying
+    // the app went back to waiting on events (host.js gates it on a
+    // present since the last idle so quiet pollers post nothing).
+    compParked: function () { return Atomics.load(self._i32, KP_COMP_PARKED) === 1; },
+    wantFrame: function () { self._post({ type: 'want-frame' }); },
+    frameIdle: function () { self._post({ type: 'frame-idle' }); },
     // Phase 3 tty control plane (line discipline lives kernel-side). The fd
     // rides along since 0020 (ptys): the kernel resolves it through the fd
     // table to THE tty it names (slave pty vs system tty), falling back to
@@ -1388,6 +1418,14 @@ function Kernel(opts) {
   // compositor rAF). Advertised to every process at spawn via KP_VSYNC_EN;
   // headless embedders leave it off and processes pace by deadline timer.
   this._vsync = !!opts.vsync;
+  // On-demand compositor (todos/0169): the embedder's damage hook (the
+  // browser compositor's scheduleFrame — registered late via wmOnDamage,
+  // after the canvas arrives), the mirrored parked flag (single writer:
+  // compSetParked, kernel worker only), and the cumulative vsync-notify
+  // count (the app-worker-wake probe — flat while parked).
+  this._onWmDamage = null;
+  this._compParked = false;
+  this._vsyncNotifies = 0;
   // Boot instant — /proc/uptime's zero and the base for per-process
   // start_time (procfs, todos/0043).
   this._bootMs = Date.now();
@@ -1800,6 +1838,9 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     tty: self._tty,                // v1: the one system tty (or null)
     surfaces: new Set(),           // sids owned by this process (WM.md)
     wmRing: null,                  // input ring: { i32, f32, cap }
+    wantFrame: false,              // compositor pin (todos/0169): set on the
+                                   // want-frame doorbell, cleared ONLY by
+                                   // frame-idle (pumpWait entry) and exit
     _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
     audios: new Set(),             // aids owned by this process (todos/0017)
     _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
@@ -1814,6 +1855,12 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
   // Advertise the vsync source (todos/0100) before the worker exists —
   // host.js reads the flag once at SDL-backend construction.
   if (self._vsync) Atomics.store(pcb.i32, KP_VSYNC_EN, 1);
+  // Spawn-while-parked (todos/0169, the KP_VSYNC_EN precedent): stamp the
+  // parked flag so the new process's first present/vsync-arm rings the
+  // doorbell instead of trusting a page word that was never written. Spawn
+  // and the compositor's park run on the same worker thread, so the stamp
+  // can't race a park loop mid-iteration.
+  if (self._compParked) Atomics.store(pcb.i32, KP_COMP_PARKED, 1);
 
   // Brokered fd table: full POSIX inheritance (every parent fd, sharing
   // the open file descriptions), then the spawn file_actions in order.
@@ -1962,6 +2009,15 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
       if (msg.sab) pcb._audioPendingSab = msg.sab;
       break;
     case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp); break;
+    // On-demand compositor doorbells (todos/0169): want-frame = this pcb
+    // presented / armed a vsync wait while the compositor was parked —
+    // pin it awake (hard state, never heuristic) and wake it; frame-idle =
+    // host.js's pumpWait entry, the app is back to waiting on events.
+    case 'want-frame':
+      pcb.wantFrame = true;
+      if (this._onWmDamage) this._onWmDamage();
+      break;
+    case 'frame-idle': pcb.wantFrame = false; break;
     case 'exited': this._exitProcess(pcb, W_EXITCODE(msg.code | 0)); break;
     case 'crashed':
       this._log('pid ' + pcb.pid + ' crashed: ' + msg.error);
@@ -2870,7 +2926,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmZNormalize();       // create raises within the NORMAL layer only
       pcb.surfaces.add(sid);
       this._focusSid = sid;       // new window takes focus (v1 policy)
-      this._wmVersion++;
+      this._bumpWm();
       this._respond(pcb, { sid: sid, x: surf.x, y: surf.y });
       this._wmEmit(WMP.EV_CREATED, this._wmpRecord(surf));
       this._wmEmit(WMP.EV_FOCUS, [sid]);
@@ -2895,7 +2951,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         sf.dstW = sf.w; sf.dstH = sf.h;
         this._wmEmit(WMP.EV_SCALED, [sf.sid, sf.dstW, sf.dstH]);
       }
-      this._wmVersion++;
+      this._bumpWm();
       this._respond(pcb, {});
       this._wmSyncPointerLock();
       break;
@@ -2947,7 +3003,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var st = this._surfaces.get(req.sid | 0);
       if (!st || st.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       st.title = typeof req.title === 'string' ? req.title.slice(0, 128) : '';
-      this._wmVersion++;
+      this._bumpWm();
       this._respond(pcb, {});
       this._wmEmit(WMP.EV_TITLE, [st.sid], st.title);
       break;
@@ -2984,7 +3040,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       } else {
         sc.pendingConfigure = null;
       }
-      this._wmVersion++;
+      this._bumpWm();
       this._respond(pcb, { sid: sc.sid, w: cw, h: ch });
       this._wmEmit(WMP.EV_CONFIGURED, [sc.sid, cw, ch]);
       break;
@@ -3007,7 +3063,7 @@ Kernel.prototype._wmMap = function (sid) {
   if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
   if (s.mapped) return;
   s.mapped = true;
-  this._wmVersion++;
+  this._bumpWm();
 };
 
 /* Does any subscribed WM connection belong to this pid? (The SURFACE_CREATE
@@ -3043,7 +3099,7 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   if (this._wmDrag && this._wmDrag.sid === sid) this._wmDrag = null;
   if (this._wmResizeDrag && this._wmResizeDrag.sid === sid) this._wmResizeDrag = null;
   if (this._focusSid === sid) this._wmFocusFall();
-  this._wmVersion++;
+  this._bumpWm();
   this._wmEmit(WMP.EV_DESTROYED, [sid]);
   this._wmSyncPointerLock();
 };
@@ -3081,7 +3137,7 @@ Kernel.prototype._wmSyncPointerLock = function () {
     this._wmPtrLockWanted = wanted;
     if (!wanted) this._wmPtrLockActive = false;   // routing reverts immediately;
                                                   // the bridge exit is async
-    this._wmVersion++;
+    this._bumpWm();
     this._onPointerLock(wanted);
   }
 };
@@ -3183,11 +3239,71 @@ Kernel.prototype._audioMarkDying = function (s) {
  * boundary by construction — the honest pause. Only meaningful when the
  * kernel was built with {vsync: true} (spawn advertises KP_VSYNC_EN). */
 Kernel.prototype.vsyncTick = function () {
+  var n = 0;
   this._procs.forEach(function (pcb) {
     if (!pcb.i32) return;
     Atomics.add(pcb.i32, KP_VSYNC_SEQ, 1);
     Atomics.notify(pcb.i32, KP_VSYNC_SEQ);
+    n++;
   });
+  this._vsyncNotifies += n;   // app-worker-wake probe (todos/0169)
+};
+
+/* Cumulative count of per-pcb vsync notifies — the test/measurement probe
+ * for "app workers stop waking when the compositor parks" (todos/0169). */
+Kernel.prototype.vsyncNotifyCount = function () {
+  return this._vsyncNotifies;
+};
+
+/* ---- on-demand compositor park protocol (todos/0169; IDLE-POWER piece B).
+ * The compositor shares this worker: when its scene goes clean it parks the
+ * rAF (no ticks, no submits) and these are the kernel half of the handshake.
+ * Wake paths back in are (a) _bumpWm — every WM state change, (b) _wmFrame —
+ * every gpu present's message, (c) the want-frame doorbell — a process that
+ * presented or armed a vsync wait while KP_COMP_PARKED was up, and (d) the
+ * embedder's own handler wires (input/resize/drop). */
+
+/* Register the embedder's damage hook (the compositor's scheduleFrame).
+ * Late-bound: the browser canvas arrives after boot. Null when headless. */
+Kernel.prototype.wmOnDamage = function (fn) {
+  this._onWmDamage = fn || null;
+};
+
+/* Version bump + damage: EVERY scene change routes through here so a parked
+ * compositor is always re-armed (the map-timeout setTimeout path included —
+ * no message accompanies it, the hook is the only wake). */
+Kernel.prototype._bumpWm = function () {
+  this._wmVersion++;
+  if (this._onWmDamage) this._onWmDamage();
+};
+
+/* Publish/clear the parked flag on every pcb page. MUST be stored before
+ * the caller re-reads ARMED/wantFrame/seqs (Dekker store-then-check): with
+ * seq-cst atomics a process either observes PARKED=1 and posts want-frame,
+ * or its ARMED add / present seq bump happens-before our re-read — a lost
+ * wake is impossible. Single writer: the kernel worker (compositor). */
+Kernel.prototype.compSetParked = function (on) {
+  on = !!on;
+  this._compParked = on;
+  var v = on ? 1 : 0;
+  this._procs.forEach(function (pcb) {
+    if (pcb.i32) Atomics.store(pcb.i32, KP_COMP_PARKED, v);
+  });
+};
+
+/* Any reason the compositor must keep its rAF armed: a pcb that rang the
+ * doorbell and hasn't re-entered its event wait (wantFrame), or a live
+ * vsync waiter (KP_VSYNC_ARMED > 0 — parking would strand it: no ticks, no
+ * resolve, a FROZEN app, not just a stale screen). Zombies are skipped: a
+ * SIGKILLed app can leave ARMED set forever. Stopped pcbs still count —
+ * SIGCONT has no compositor hook, so they must not be parked away from. */
+Kernel.prototype.compKeepAlive = function () {
+  var alive = false;
+  this._procs.forEach(function (pcb) {
+    if (pcb.state === STATE_ZOMBIE || !pcb.i32) return;
+    if (pcb.wantFrame || Atomics.load(pcb.i32, KP_VSYNC_ARMED) > 0) alive = true;
+  });
+  return alive;
 };
 
 /* Allocate + install the output ring (browser kernel-worker calls this at
@@ -3355,6 +3471,10 @@ Kernel.prototype._wmFrame = function (pcb, sid, bmp) {
   if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
   s.bitmap = bmp;
   Atomics.add(s.i32, SH_SEQ, 1);   // frameSeq accounting rides the header either way
+  // On-demand compositor (todos/0169): every gpu present already messages
+  // this worker, so the message IS the doorbell — arm unconditionally
+  // (free insurance; a no-op while armed).
+  if (this._onWmDamage) this._onWmDamage();
 };
 
 /* ---- input ring (kernel = single producer) ---- */
@@ -3568,7 +3688,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           this._wmEmit(WMP.EV_SNAP_EDGE, [d.sid, edge]);
         }
       }
-      this._wmVersion++;
+      this._bumpWm();
       return 'drag';
     } else if (kind === 'up') {
       var dend = this._wmDrag;
@@ -3598,12 +3718,12 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     else if (kind === 'move') {
       if (rd.ex) rd.curW = Math.max(WM_MIN_SIZE, Math.min(8192, rd.baseW + Math.round(x - rd.x0)));
       if (rd.ey) rd.curH = Math.max(WM_MIN_SIZE, Math.min(8192, rd.baseH + Math.round(y - rd.y0)));
-      this._wmVersion++;
+      this._bumpWm();
       return 'resize';
     } else if (kind === 'up') {
       var rdend = this._wmResizeDrag;
       this._wmResizeDrag = null;
-      this._wmVersion++;
+      this._bumpWm();
       if (rdend.curW !== rdend.baseW || rdend.curH !== rdend.baseH) {
         if (rs.resizable) {
           this.wmResize(rdend.sid, rdend.curW, rdend.curH);
@@ -3802,7 +3922,7 @@ Kernel.prototype.wmSetLayer = function (sid, layer) {
   s.layer = layer;
   this._wmMap(s.sid);           // stacking maps (todos/0069)
   this._wmZNormalize();
-  this._wmVersion++;
+  this._bumpWm();
   return true;
 };
 
@@ -3812,7 +3932,7 @@ Kernel.prototype.wmFocus = function (sid) {
   if (s.minimized) {                                            // focus restores
     s.minimized = false;
     this._wmAnimPush(s, 'restore');   // compositor animation (todos/0063)
-    this._wmVersion++;
+    this._bumpWm();
     this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 0]);
   }
   var zi = this._zOrder.indexOf(s.sid);
@@ -3820,11 +3940,11 @@ Kernel.prototype.wmFocus = function (sid) {
     this._zOrder.splice(zi, 1);
     this._zOrder.push(s.sid);
     this._wmZNormalize();                       // raise stays within the layer
-    this._wmVersion++;      // z changed even if focus doesn't below (todos/0165)
+    this._bumpWm();      // z changed even if focus doesn't below (todos/0165)
   }
   if (this._focusSid !== s.sid) {
     this._focusSid = s.sid;
-    this._wmVersion++;
+    this._bumpWm();
     this._wmEmit(WMP.EV_FOCUS, [s.sid]);
   }
   this._wmSyncPointerLock();
@@ -3836,7 +3956,7 @@ Kernel.prototype.wmMove = function (sid, x, y) {
   if (!s) return false;
   s.x = x | 0; s.y = y | 0;
   this._wmMap(s.sid);           // placement maps (todos/0069)
-  this._wmVersion++;
+  this._bumpWm();
   this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
   return true;
 };
@@ -3886,7 +4006,7 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
   }
   s.dstW = w; s.dstH = h;
   this._wmMap(s.sid);           // placement maps (todos/0069)
-  this._wmVersion++;
+  this._bumpWm();
   this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
   return true;
 };
@@ -3982,7 +4102,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
   if (this._wmResizeDrag && this._wmResizeDrag.sid === s.sid) this._wmResizeDrag = null;
   if (this._focusSid === s.sid) this._wmFocusFall();
-  this._wmVersion++;
+  this._bumpWm();
   this._wmSyncPointerLock();
   return true;
 };
@@ -4001,7 +4121,7 @@ Kernel.prototype.wmRestack = function (sid, place) {
   else this._zOrder.push(s.sid);
   this._wmMap(s.sid);           // stacking maps (todos/0069)
   this._wmZNormalize();
-  this._wmVersion++;
+  this._bumpWm();
   return true;
 };
 
@@ -4166,7 +4286,7 @@ Kernel.prototype.wmSetScreen = function (w, h) {
   if (w <= 0 || h <= 0) return;
   if (w === this._wmScreen.w && h === this._wmScreen.h) return;
   this._wmScreen.w = w; this._wmScreen.h = h;
-  this._wmVersion++;
+  this._bumpWm();
   this._wmEmit(WMP.EV_SCREEN, [w, h]);
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
@@ -4224,7 +4344,7 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
  * the headless composite NEVER reads it — goldens stay bit-exact. */
 Kernel.prototype.wmGlass = function (on) {
   on = !!on;
-  if (this._wmGlassOn !== on) { this._wmGlassOn = on; this._wmVersion++; }
+  if (this._wmGlassOn !== on) { this._wmGlassOn = on; this._bumpWm(); }
   return true;
 };
 
@@ -4235,7 +4355,7 @@ Kernel.prototype.wmGlass = function (on) {
 Kernel.prototype._wmAnimPush = function (s, kind) {
   this._wmAnims.set(s.sid, { sid: s.sid, kind: kind, x: s.x, y: s.y,
                              w: s.dstW, h: s.dstH, t0: Date.now() });
-  this._wmVersion++;
+  this._bumpWm();
 };
 
 /* Scene accessors for the browser compositor (same worker; it may hold the
@@ -5036,6 +5156,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   }
   pcb.wmRing = null;
   pcb._wmPendingFb = null;
+  pcb.wantFrame = false;   // a dead app must not pin the compositor (0169)
   // Audio streams (todos/0017): same discipline — mark dying; the pump
   // drains queued tails then reclaims (paused/no-output drop immediately).
   if (pcb.audios.size) {
@@ -6065,6 +6186,8 @@ var KERNEL_EXPORTS = {
   KP_RPC_KIND: KP_RPC_KIND,
   KP_VSYNC_EN: KP_VSYNC_EN,
   KP_VSYNC_SEQ: KP_VSYNC_SEQ,
+  KP_VSYNC_ARMED: KP_VSYNC_ARMED,
+  KP_COMP_PARKED: KP_COMP_PARKED,
   KP_PAYLOAD_CAP: KP_PAYLOAD_CAP,
   RPCK_JSON: RPCK_JSON,
   RPCK_RAW: RPCK_RAW,
