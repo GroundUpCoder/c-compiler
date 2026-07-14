@@ -243,7 +243,20 @@ ENOEXEC), checked BEFORE the module cache; `./foo` on a `#!/bin/sh`
 script just runs.
 Pipes are just
 another OFD kind (PIPE_CREATE; kernel-side buffers + wait queues; blocking
-read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness). Job
+read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness) — and
+since todos/0181 they serve themselves through an SPSC ring: RemoteFS.pipe()
+posts a 256K ring SAB ahead of PIPE_CREATE (the audio-sab handshake), the
+ring is the pipe's buffer in EVERY mode (kernel stream ops use the
+_pipeAvail/Take/Put accessors — no demotion drain, no locks), and the
+kernel-owned PR_MODE word walks LATENT → FAST (holder-removal promotion:
+the hush pipeline goes fast at the parent's post-spawn closes; self-pipes
+stay brokered) → DEMOTED (spawn inheritance adds a second holder — one-way).
+FAST ends memcpy locally (zero data RPCs; 272→443 MB/s), block via the 0178
+FS_WAIT naming the fd, and ring the PIPE_KICK doorbell only when the
+kernel-raised PR_RWAIT/PR_WWAIT flag says the peer is parked; close/exit
+latch PRF_RGONE/WGONE for local EOF and kicked SIGPIPE; strace pipes never
+promote (kernel pseudo-holder). Rules + rationale: KERNEL.md's
+single-writer section and the PR_* block in kernel.js. Job
 control is cooperative like signals: STOP sets KP_FLAGS bit0 and the
 process parks at its next safe point (RPC entry or sigpoll), SIGCONT
 clears it; waitpid takes WUNTRACED/WCONTINUED; background brokered tty
@@ -731,7 +744,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v91**.
+Image version is **v92**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

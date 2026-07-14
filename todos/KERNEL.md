@@ -641,9 +641,43 @@ Sanctioned forms (queue items in parens):
   `test_rofs_e2e.js` (real C, zero-fs-RPC acceptance + mixed-workload
   identity + the promotion feeding a child's stdin).
 - **SPSC data planes** — one-producer/one-consumer rings (input ring,
-  audio rings, framebuffers today; pipes in todos/0181), kernel only for
-  wakeups and demotion to the brokered path when the SPSC precondition
-  breaks.
+  audio rings, framebuffers; pipes since todos/0181, landed 2026-07-14):
+  kernel only for wakeups and arbitration when the SPSC precondition
+  breaks. Pipes: `RemoteFS.pipe()` allocates a 256K ring SAB and posts it
+  ahead of PIPE_CREATE (the audio-sab handshake); the ring is the pipe's
+  buffer IN EVERY MODE (the kernel's own stream ops read the same ring
+  via the `_pipeAvail/_pipeTake/_pipePut` accessors — deliberately NO
+  demotion drain and no locks: a drain would race a mid-flight fast
+  reader into double-delivery), and the kernel-owned PR_MODE word walks a
+  one-way ladder: LATENT at create → FAST when a holder REMOVAL leaves
+  one process per end (the hush pipeline promotes at the parent's
+  post-spawn closes; self-pipes never promote — a create-time promotion
+  would be demoted by the very spawns that build the pipeline, burning
+  the ladder; documented limit) → DEMOTED when spawn inheritance adds a
+  second holder (the ONLY holder-adding event). Every flip happens while
+  the only process that could fast-op the flipped role is parked in the
+  flipping RPC — that is the whole correctness story: at most one
+  producer + one consumer touch a ring at any instant, and a stale mode
+  read is never wrong, only slower (the kernel serves brokered ops on a
+  FAST pipe from the same ring). FAST ends memcpy + commit locally (zero
+  data RPCs: the 8MB e2e pipeline runs FS_READ=0/FS_WRITE=4 vs ~280
+  brokered; bench 272→443 MB/s) and block via the 0178 WAIT naming the
+  fd; the kernel raises PR_RWAIT/PR_WWAIT BEFORE its readiness rescan
+  (cleared at `_cancelWaiter`, the one wake choke point) and a fast
+  commit that reads the flag rings the PIPE_KICK doorbell — flag-then-
+  rescan vs commit-then-check cross under SC atomics, so a wake can be
+  redundant but never lost (the 0168 lesson, structural). Close/exit stay
+  brokered and latch PRF_RGONE/WGONE in the ring: fast EOF is local,
+  fast EPIPE rides PIPE_KICK{epipe:1} so the kernel deals the writer its
+  SIGPIPE. procSpec.pipeRings ships the SAB to children at their
+  post-action fds (the PR_MODE word, not process-local knowledge, gates
+  fast ops); strace's write-end ref is a kernel pseudo-holder (pid 0,
+  attached BEFORE spawn fd-actions) so traced pipes never promote and
+  every byte stays trace-visible; select()/FS_WAIT needed no fallback —
+  `_selectScan` reads ring occupancy directly. Layout: the PR_* comment
+  block in kernel.js. Tests: `test_pipes_spsc.js` (mechanics, no wasm),
+  `test_spsc_e2e.js` (RPC-op counter, SIGPIPE identity, mid-stream
+  demotion byte-identical).
 - **Waits**: two tiers by rule — raw SAB futex for single-source waits
   (vsync, sleeps, the input ring); the kernel WAIT RPC (todos/0178) is
   the ONLY place a process may sleep on multiple sources. Nobody
