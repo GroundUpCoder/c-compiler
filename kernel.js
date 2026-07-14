@@ -150,6 +150,13 @@ var OP = {
   FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
   FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
   FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E, FS_FSYNC: 0x041F,
+  // Unified wait (todos/0178): ONE deferred park over fds ⊕ the input ring
+  // ⊕ a timeout, interruptible by signals (krpc-intr → EINTR) — the only
+  // sanctioned way to sleep on multiple sources (KERNEL.md single-writer
+  // rule). Readiness-check and park are atomic kernel-side, so the
+  // check→park lost-wakeup class (the 0168 kick + pre-park select era)
+  // is structurally impossible.
+  FS_WAIT: 0x0420,
   // 0x05xx — AF_UNIX sockets (todos/0008). Stream-only; data flows through
   // FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT like every other OFD kind.
   SOCK_SOCKET: 0x0501, SOCK_BIND: 0x0502, SOCK_LISTEN: 0x0503,
@@ -1006,6 +1013,11 @@ KernelClient.prototype.spawnHooks = function () {
     sigpoll: function () { return self.sigpoll(); },
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
+    // Unified wait (todos/0178): { r: [fds], ring: 0/1, timeoutMs } →
+    // { why: 0 timeout / 1 fd / 2 ring } or { errno: 'EINTR' } on a posted
+    // signal (interruptible like FS_SELECT). host.js's __wait import and
+    // the surface backend own the ring drain around it.
+    waitMulti: function (req) { return self.call(OP.FS_WAIT, req, true); },
     exit: function (status) { return self.call(OP.EXIT, { code: status }); },
     // Vsync broadcast (todos/0100): host.js's surface backend paces SDL
     // frame loops off the kernel's compositor clock when advertised.
@@ -1991,9 +2003,9 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
   if (!msg || pcb.state === STATE_ZOMBIE) return;
   switch (msg.type) {
     case 'krpc': this._dispatchRpc(pcb); break;
-    // A parked interruptible RPC (WAIT / tty FS_READ / FS_SELECT / pipe
-    // FS_READ/FS_WRITE) noticed a deliverable signal: answer EINTR if it's
-    // still registered. If the real
+    // A parked interruptible RPC (WAIT / tty FS_READ / FS_SELECT / the
+    // unified FS_WAIT / pipe FS_READ/FS_WRITE) noticed a deliverable
+    // signal: answer EINTR if it's still registered. If the real
     // result raced in first, the waiter is already gone — ignore, the signal
     // delivers at the caller's next safe point anyway.
     case 'krpc-intr':
@@ -2612,6 +2624,37 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       pcb.waiter = w;                                   // completed by _ttyNotify
       return;
     }
+    case OP.FS_WAIT: {
+      // Unified wait (todos/0178): FS_SELECT readiness over req.r/req.w,
+      // PLUS the process's input ring as a wake source (req.ring). Response
+      // { why } — 0 timeout, 1 fd (r/w lists attached), 2 ring; a posted
+      // signal completes the park as EINTR through the ordinary
+      // interruptible-RPC path. The caller's contract is re-poll-on-any-
+      // return, so a wake never has to be exact — only never lost.
+      // No-fs kernels answer ENOSYS like every 0x04xx op (the fd layer is
+      // the point); single-source ring waits stay on the raw pumpWait
+      // futex tier and don't come through here.
+      var wReady = this._selectScan(pcb, req.r || [], req.w || []);
+      var ringReady = !!req.ring && this._wmRingReady(pcb);
+      if (wReady.count > 0 || ringReady || req.timeoutMs === 0) {
+        this._respond(pcb, wReady.count > 0 ? { why: 1, r: wReady.r, w: wReady.w }
+          : { why: ringReady ? 2 : 0 });
+        return;
+      }
+      // NB waiter op is 'uwait' — 'wait' is taken by a parked waitpid
+      // (OP.WAIT, answered by _exitProcess).
+      var uw = { op: 'uwait', r: req.r || [], w: req.w || [], ring: !!req.ring, timer: null };
+      if (req.timeoutMs !== null && req.timeoutMs !== undefined) {
+        uw.timer = setTimeout(function () {
+          if (pcb.waiter === uw) {
+            self._cancelWaiter(pcb);
+            self._respond(pcb, { why: 0 });
+          }
+        }, req.timeoutMs);
+      }
+      pcb.waiter = uw;     // fd side: _recheckSelects; ring side: _waitRingWake
+      return;
+    }
     default: this._respond(pcb, { errno: 'ENOSYS' });
   }
 };
@@ -2811,15 +2854,24 @@ Kernel.prototype._kernelPeer = function (recvDir, sendDir, clientPcb) {
     onClose: null,              // () — client hung up (fires once)
     send: function (bytes) {
       if (!sendDir.rOpen || !sendDir.wOpen) return false;
+      // A client parked in a kernel fd-waiter (unified WAIT / select,
+      // todos/0178) is woken by the _pipeNotify below — its RPC completion
+      // IS the wake, atomically. Only the raw ring-futex tier
+      // (__sdl_pump_wait — SDL_WaitEvent) still needs the ring kick, so
+      // capture the waiter kind BEFORE notifying and skip the kick when
+      // the RPC path served it (the record would only buy a spurious
+      // extra wake at the client's next entry drain).
+      var fdParked = clientPcb && clientPcb.waiter &&
+        (clientPcb.waiter.op === 'uwait' || clientPcb.waiter.op === 'select');
       for (var i = 0; i < bytes.length; i++) sendDir.buf.push(bytes[i]);
       self._pipeNotify(sendDir);                  // serve the client's park
       // Kernel-socket→input-ring wake (todos/0168, IDLE-POWER piece W):
-      // a client parked on its input ring (__sdl_pump_wait — SDL_WaitEvent
-      // or wm.c's event loop) must wake when kernel-peer data lands, or a
-      // WMP event (EV_CREATED, EV_SNAP_EDGE, EV_SCREEN, R_IDLE…) sits until
-      // the park's timeout. _wmKick pushes a type-0 ring record so the
-      // futex word itself changes — see the lost-notify note there.
-      if (clientPcb && clientPcb.wmRing) self._wmKick(clientPcb);
+      // a client parked on its input ring (__sdl_pump_wait — SDL_WaitEvent)
+      // must wake when kernel-peer data lands, or a WMP event
+      // (EV_CREATED, EV_SNAP_EDGE, EV_SCREEN, R_IDLE…) sits until the
+      // park's timeout. _wmKick pushes a type-0 ring record so the futex
+      // word itself changes — see the lost-notify note there.
+      if (clientPcb && clientPcb.wmRing && !fdParked) self._wmKick(clientPcb);
       return true;
     },
     close: function () {
@@ -3509,6 +3561,23 @@ Kernel.prototype._wmKick = function (pcb) {
     Atomics.store(ring.i32, IR_WPOS, (wpos + 1) % cap2);
   }
   Atomics.notify(ring.i32, IR_WPOS);
+  this._waitRingWake(pcb);      // a WAIT park counts the ring as a source
+};
+
+/* Ring readiness / ring wake for the unified WAIT (todos/0178). The parked
+ * process cannot move RPOS (it is inside the RPC), so an entry scan that
+ * sees an empty ring stays true until a push lands — and every push calls
+ * back here. That pairing is what makes check-and-park atomic. */
+Kernel.prototype._wmRingReady = function (pcb) {
+  var ring = pcb.wmRing;
+  return !!ring && Atomics.load(ring.i32, IR_WPOS) !== Atomics.load(ring.i32, IR_RPOS);
+};
+
+Kernel.prototype._waitRingWake = function (pcb) {
+  if (pcb.waiter && pcb.waiter.op === 'uwait' && pcb.waiter.ring) {
+    this._cancelWaiter(pcb);
+    this._respond(pcb, { why: 2 });
+  }
 };
 
 Kernel.prototype._wmPushEvent = function (pcb, words) {
@@ -3528,6 +3597,7 @@ Kernel.prototype._wmPushEvent = function (pcb, words) {
   // blocking GetMessage, todos/0058) and the doorbell parks alike.
   Atomics.notify(ring.i32, IR_WPOS);
   this._ring(pcb);                                          // wake SDL_WaitEvent parks
+  this._waitRingWake(pcb);                                  // complete a unified WAIT (0178)
   return true;
 };
 
@@ -4670,16 +4740,19 @@ Kernel.prototype._ttyNotify = function (tty) {
   this._recheckSelects();
 };
 
-/* Re-scan every deferred select after any readiness change (tty bytes,
- * pipe data/space, pipe end closed). */
+/* Re-scan every deferred select — and the fd side of every unified WAIT
+ * (todos/0178) — after any readiness change (tty bytes, pipe data/space,
+ * pipe end closed, a connection queued on a listener). */
 Kernel.prototype._recheckSelects = function () {
   var self = this;
   this._procs.forEach(function (pcb) {
-    if (pcb.waiter && pcb.waiter.op === 'select') {
+    if (!pcb.waiter) return;
+    if (pcb.waiter.op === 'select' || pcb.waiter.op === 'uwait') {
       var ready = self._selectScan(pcb, pcb.waiter.r, pcb.waiter.w);
       if (ready.count > 0) {
+        var isWait = pcb.waiter.op === 'uwait';
         self._cancelWaiter(pcb);
-        self._respond(pcb, ready);
+        self._respond(pcb, isWait ? { why: 1, r: ready.r, w: ready.w } : ready);
       }
     }
   });
