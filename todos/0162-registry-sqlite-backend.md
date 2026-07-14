@@ -1,6 +1,6 @@
 # 0162 — registry backend: consider SQLite (shared, consistent hive)
 
-- **Status**: open (idea; not committed to — a design question, not a bug)
+- **Status**: deferred (parked design option, no current consumer; defer until a live cross-process registry consumer exists)
 - **Design**: this file (spun out of the registry batched-flush fix,
   `logs/2026-07-12/registry-batched-flush.md`)
 
