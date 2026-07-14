@@ -66,6 +66,8 @@ const tests = [
   ['test_sockwake_e2e.js'],  // 0168: kernel-socket→input-ring wake — a WMP subscriber parked in __sdl_pump_wait wakes promptly on kernel-peer socket data (EV_SCREEN), not on the park timeout; + the 0169-gate lost-notify interleave (kick lands BEFORE the park entry)
   ['test_comp_park_e2e.js'], // 0169: on-demand compositor wake protocol e2e — real C presents vs a test-played compositor: doorbell-on-present only while PARKED, WaitEvent entry drops the wantFrame pin, SIGKILL mid-pin clears it
   ['test_wait_e2e.js'],      // 0178: unified wait (FS_WAIT via __wait) — fd wake, entry-scan atomicity, pure timeout, ring wake out of an infinite park, prompt signal-EINTR with the handler run, post-EINTR re-park
+  ['test_vdso.js'],          // 0179: the seqlock vDSO block — spawn publish, zero-RPC getpgid/getsid/getppid/uptime/screen, SETPGID/SETSID/reparent/wmSetScreen republish, wedge -> RPC fallback, payload-cap arithmetic (no wasm)
+  ['test_vdso_e2e.js'],      // 0179: real C reads pid/ppid/pgrp/sid off the page — RPC-op counter shows ZERO GETPGID/GETSID across setsid + orphan-reparent mutations; the libc setsid() acceptance
   ['test_wm_policy.js'],    // 0014: the WM protocol over the kernel-owned /run/wm.sock (no wasm)
   ['test_wm_service_e2e.js', IMG], // 0014: real /bin/wm + wmctl through os/boot.js — autostart, taskbar, crash+respawn
   ['test_snap_e2e.js', IMG],     // 0095: Aero Snap — drag-to-edge tiling via wmctl sdown/smove/sup, translucent preview pixels, drag-off restore, quarters, wmctl snap (= Win+arrow), fixed-size letterbox, no-WM refusal
