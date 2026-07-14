@@ -1,6 +1,35 @@
 # 0180 — serve the sealed /usr volume process-side — read-only fs fast path, no RPC
 
-- **Status**: open
+- **Status**: done (2026-07-14) — the embedder copies the sealed system
+  image into ONE SAB (`BLOCK_FS.storeToSab`; new `SabByteStore` — getBytes
+  copies out, TextDecoder rejects SAB views) and hands it to
+  `Kernel({roImage: {prefix: '/usr', sab}})`; every spawn forwards it
+  (`procSpec.ro`) and the worker mounts it locally (createV4 readonly).
+  RemoteFS serves absolute paths lexically under the prefix in-process:
+  zero RPCs for open/read/lseek/fstat/close, stat/lstat/access/readlink,
+  opendir/readdir — `strace cat /usr/share/os-release` is now FS_WRITE +
+  EXIT. Cross-volume symlink escapes reuse the MountFS `__mountEscape`
+  hooks and retry brokered; write-intent opens, mutators, and relative
+  paths stay brokered (the kernel keeps EROFS-after-the-walk and the cwd);
+  local errors are final. Local fds live at `RO_FD_BASE` (0x100000, Map
+  membership routing) and PROMOTE to a temporary brokered O_RDONLY twin at
+  the same offset at the two kernel crossings: in-process dup2-to-low-fd
+  and spawn DUP2 file-actions (`wrapSpawnHooks` — hush's `cmd < /usr/...`
+  vfork journal; the child-side twin gets an appended CLOSE action unless
+  another action targets that fd number). Documented limits: un-actioned
+  local fds are effectively close-on-exec; select/WAIT can't name one
+  (number exceeds FD_SETSIZE; regular files always ready). Found & fixed
+  en route: nothing — but recorded that BlockFS `_dupEntry` SHARES the fd
+  entry (POSIX OFD offset sharing), contrary to first assumption. Perf
+  (bench_fs.js's new RO leg): /usr reads 496→1345 MB/s, open+read+stat
+  71k→602k ops/s. Wired everywhere: kernel-worker.js, boot.js,
+  process-worker.js, BOOT_SOURCE — the whole existing estate now runs over
+  the fast path. Not taken, recorded: a kernel hint on FS_OPEN replies so
+  root-volume symlinks INTO /usr (e.g. a hypothetical /etc/fonts link)
+  could fast-path after one RPC — the default font/config paths are
+  already direct /usr/share paths, so it buys little today. Tests:
+  `test_rofs.js` + `test_rofs_e2e.js`. Dev log:
+  `logs/2026-07-14/rofs-fastpath.md`.
 - **Design**: KERNEL.md "What may leave the kernel — the single-writer rule".
   Sibling items: todos/0179 (vDSO page), todos/0181 (SPSC pipes).
 

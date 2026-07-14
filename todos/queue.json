@@ -2,7 +2,6 @@
   "version": 1,
   "queue": [
     { "id": "0113", "priority": 2, "after": ["0094"] },
-    { "id": "0180", "difficulty": "medium", "after": ["0178"] },
     { "id": "0181", "difficulty": "heavy", "after": ["0180"] },
     { "id": "0079" },
     { "id": "0080" },
