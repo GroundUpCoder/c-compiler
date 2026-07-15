@@ -418,6 +418,7 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_PASTE,                      /* desktop (0092: the fileops clipboard) */
     CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* flyout rows */
     CM_OPEN,                       /* icon */
+    CM_EDIT,                       /* icon (0202: document → GUI text editor) */
     CM_RENAME,                     /* icon (0103: the inline rename editor) */
     CM_CUT, CM_COPY,               /* icon (0092: the selection set) */
     CM_DELETE,                     /* icon (0093: to the Recycle Bin) */
@@ -2491,6 +2492,15 @@ static void ctx_open_icon(int idx, int x, int y) {
                 desk_trash_full ? 0 : CTF_GRAY);
     } else {
         ctx_add(0, "OPEN", CM_OPEN, 0);
+        /* EDIT (0202): documents only — regular files whose OPEN routes
+         * through the openwith VIEWER (a .mgp deck). Launchers/binaries
+         * and folders keep the pre-0202 rows, so their menu geometry (a
+         * test-pinned contract) is unchanged. */
+        char path[300];
+        struct stat st;
+        snprintf(path, sizeof path, "/root/Desktop/%s", desk[idx].name);
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode) && !ow_is_runnable(path))
+            ctx_add(0, "EDIT", CM_EDIT, 0);
         ctx_add(0, "", CM_NONE, CTF_SEP);
         ctx_add(0, "CUT", CM_CUT, 0);
         ctx_add(0, "COPY", CM_COPY, 0);
@@ -2756,6 +2766,16 @@ static void ctx_activate(int d, int i) {
         break;
     }
     case CM_OPEN: desk_launch(icon); break;
+    case CM_EDIT: {                    /* 0202: open in the GUI text editor */
+        if (icon < 0 || icon >= desk_n) break;
+        char path[300], cmd[OW_CMD_MAX], buf[512], prog[300];
+        char *argv[10];
+        snprintf(path, sizeof path, "/root/Desktop/%s", desk[icon].name);
+        ow_editor(cmd, sizeof cmd);
+        if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
+            spawn_path(prog, argv);
+        break;
+    }
     case CM_RENAME: desk_edit_start(icon); break;   /* 0103: inline editor */
     case CM_CUT: desk_clip(1); break;            /* 0092 */
     case CM_COPY: desk_clip(0); break;

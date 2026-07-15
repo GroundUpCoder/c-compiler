@@ -62,13 +62,14 @@ const RC_ROW0 = 'wmctl click $SID 100 30 3';
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
 // The wm.c desktop menus (geometry from wm.c MENU_*/CTX_W — the ctxmenu
-// goldens' move-together rule): icon menu rows OPEN 4-24 / sep / CUT
-// 32-52 / COPY 52-72 / DELETE 72-92 (0093); desktop menu NEW / SORT BY /
-// REFRESH / PASTE 64-84 / sep / DISPLAY. Desktop cells are derived from
-// the drive.js grid model (deskEntries/deskCell — dirs first, Recycle Bin
-// tail-pinned, column wrap at 11 rows; todos/0184/0185), never "icon 0"
-// row math.
-const ICON_CUT_Y = 42, ICON_COPY_Y = 62, DESK_PASTE_Y = 74;
+// goldens' move-together rule): on a DOCUMENT icon (regular, not runnable
+// — both targets here are .txt) the menu rows are OPEN 4-24 / EDIT 24-44
+// (0202) / sep / CUT 52-72 / COPY 72-92 / DELETE 92-112; desktop menu NEW
+// / SORT BY / REFRESH / PASTE 64-84 / sep / DISPLAY. Desktop cells are
+// derived from the drive.js grid model (deskEntries/deskCell — dirs
+// first, Recycle Bin tail-pinned, column wrap at 11 rows; todos/
+// 0184/0185), never "icon 0" row math.
+const ICON_CUT_Y = 62, ICON_COPY_Y = 82, DESK_PASTE_Y = 74;
 
 const script = [
   // -- fixtures --
@@ -308,6 +309,8 @@ check('right-click a row raises the file menu (agent-visible popup)',
   section('menu1').slice(0, 400));
 check('Open With is grayed on a directory',
   item(m1, 'Open With').includes('grayed'), item(m1, 'Open With'));
+check('Edit is grayed on a directory (0202)',
+  item(m1, 'Edit').includes('grayed'), item(m1, 'Edit'));
 
 // ---- rename ----
 const rn1 = section('rn1');

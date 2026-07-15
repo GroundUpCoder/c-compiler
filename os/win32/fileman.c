@@ -88,6 +88,7 @@
 #define IDM_DELPERM   310            /* Shift+Del: permanent delete (0093) */
 #define IDM_RESTORE   311            /* trash-only rows (0093) */
 #define IDM_EMPTY     312            /* trash-only pane (0093) */
+#define IDM_EDIT      313            /* open in the GUI text editor (0202) */
 #define IDM_SORT_NAME 320            /* View: sort key + toggles (0106) */
 #define IDM_SORT_SIZE 321
 #define IDM_SORT_DATE 322
@@ -336,6 +337,18 @@ static void open_selected(void) {
     }
     char cmd[OW_CMD_MAX];
     ow_resolve(full, 1 /* GUI context */, cmd, sizeof cmd);
+    spawn_assoc(cmd, full);
+}
+
+/* Edit (0202): Open follows the association — for a document that's its
+ * VIEWER (a .mgp deck raises the presentation) — so this row opens the
+ * file's text in the GUI editor instead (the openwith default.gui entry). */
+static void edit_selected(void) {
+    char full[800];
+    int isdir;
+    if (!sel_path(full, sizeof full, &isdir) || isdir) return;
+    char cmd[OW_CMD_MAX];
+    ow_editor(cmd, sizeof cmd);
     spawn_assoc(cmd, full);
 }
 
@@ -696,6 +709,7 @@ static void ctx_menu(int sx, int sy) {
         } else {
             AppendMenuA(m, 0, IDM_OPEN, "Open");
             AppendMenuA(m, isdir ? MF_GRAYED : 0, IDM_OPENWITH, "Open With");
+            AppendMenuA(m, isdir ? MF_GRAYED : 0, IDM_EDIT, "Edit");
             AppendMenuA(m, MF_SEPARATOR, 0, NULL);
             AppendMenuA(m, 0, IDM_CUT, "Cut");
             AppendMenuA(m, 0, IDM_COPY, "Copy");
@@ -785,6 +799,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case IDM_OPEN:      open_selected();     return 0;
         case IDM_OPENWITH:  with_selected();     return 0;
+        case IDM_EDIT:      edit_selected();     return 0;
         case IDM_CUT:       clip_selected(1);    return 0;
         case IDM_COPY:      clip_selected(0);    return 0;
         case IDM_PASTE:     paste_here();        return 0;

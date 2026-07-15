@@ -127,6 +127,16 @@ static void ow_resolve(const char *path, int gui, char *cmd, size_t sz) {
     snprintf(cmd, sz, "%s", gui ? "term vi" : "vi");
 }
 
+/* The GUI text-EDITOR command (the context menus' "Edit" row, todos/0202):
+ * always the `default.gui` entry — deliberately NOT the extension
+ * association, which is the VIEWER (Edit on a .mgp deck must open the text
+ * editor, not the presentation). Same no-store fallback as ow_resolve. */
+static void ow_editor(char *cmd, size_t sz) {
+    char text[OW_STORE_MAX];
+    if (ow_load(text, sizeof text) && ow_find(text, "default.gui", cmd, sz)) return;
+    snprintf(cmd, sz, "term vi");
+}
+
 /* Write an association: rewrite the EFFECTIVE table with `key` set to
  * `cmd` into $HOME/.config/openwith (tmp + rename), so baked defaults
  * carry forward past the first user write. Returns 0, or -1. */

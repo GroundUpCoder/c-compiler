@@ -14,6 +14,10 @@
 //     extension goes to the default.gui program (notepad); the "With"
 //     picker prefills the effective command, "Always for .txt" + OK
 //     persists the pick and plain Open honors it afterwards
+//   - .mgp (todos/0202): desktop dblclick AND fileman Open raise the mgp
+//     VIEWER (the baked association), while the fileman row menu's Edit
+//     and the desktop icon menu's EDIT open the deck TEXT in notepad
+//     (openwith.h ow_editor — always default.gui, never the viewer)
 //   - persistence: a second boot on the same image still resolves the
 //     user associations
 //
@@ -73,6 +77,7 @@ const ROM_B64 = minimalRom().toString('base64');
  * rows on 1024x768; todos/0184/0185). game.gb's cell is derived from the
  * seeded set + the test's own drop. */
 const GB = deskCell(deskEntries(['game.gb']), 'game.gb');
+const DECK = deskCell(deskEntries(['game.gb', 'deck.mgp']), 'deck.mgp');
 
 /* fileman row selection (the test_fileman_e2e idiom): click focuses the
  * listbox, HOME selects row 0, VK_DOWN steps — no row-height pixel math. */
@@ -176,6 +181,40 @@ const out = boot([
   'echo ==list4',
   'wmctl list',
   'echo ==cut',
+
+  // ---- .mgp (todos/0202): dblclick/Open = the VIEWER, Edit = the EDITOR ----
+  'cp /usr/share/mgp/tutorial/01-welcome.mgp /root/Desktop/deck.mgp',
+  // Same coarse desk re-read tick as game.gb above (0083 rule, annotated).
+  'sleep 1',
+  `wmctl dblclick $DSID ${DECK.x + 42} ${DECK.y + 32}`,
+  'wmctl wait win MagicPoint 15000 && echo MGP-DESK-OK', // desktop dblclick -> viewer
+  'MSID=$(wmctl list | grep MagicPoint | sed "s/[^0-9].*//")',
+  'wmctl key $MSID 0 113',                       // q quits the viewer
+  'wmctl wait nowin MagicPoint 8000',
+  // fileman at the Presentations folder: Open (the dblclick path) on deck 01
+  'wmctl settext EDIT:0 /root/Desktop/Presentations',
+  'wmctl click Go',
+  'wmctl wait text LISTBOX:0 01-welcome.mgp 8000',  // navigated (tutorial links)
+  sel(0),                                        // 01-welcome.mgp sorts first
+  'wmctl click Open',
+  'wmctl wait win MagicPoint 15000 && echo MGP-FM-OK', // fileman Open -> viewer
+  'MSID=$(wmctl list | grep MagicPoint | sed "s/[^0-9].*//")',
+  'wmctl key $MSID 0 113',
+  'wmctl wait nowin MagicPoint 8000',
+  // the fileman row menu's Edit: the deck TEXT in notepad, not the viewer
+  'wmctl click $SID 100 30 3',                   // right-click row 0
+  'wmctl wait label Edit 8000',                  // row menu up (Edit row, 0202)
+  'echo ==editmenu',
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl click Edit',
+  'wmctl wait win "01-welcome.mgp - Notepad" 15000 && echo EDIT-FM-OK',
+  // the desktop icon menu's EDIT row (documents only, row 1 under OPEN)
+  `wmctl click $DSID ${DECK.x + 42} ${DECK.y + 32} 3`,
+  'wmctl wait win ctxmenu 8000',                 // icon menu up
+  'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
+  'wmctl click $CXSID 60 34',                    // EDIT (row 1 on a document, 0202)
+  'wmctl wait win "deck.mgp - Notepad" 15000 && echo EDIT-DESK-OK',
   '',
 ].join('\n'));
 
@@ -219,6 +258,20 @@ check('...and no ERROR box (0111: the abs path is not a /-option)',
   count(section(out, 'list3'), /\tERROR$/) === 0, section(out, 'list3'));
 check('desktop dblclick on the .gb icon launches sameboy (SameBoy +1)',
   count(section(out, 'list4'), /\tSameBoy$/) === 2, section(out, 'list4'));
+
+// ---- .mgp: view vs edit (todos/0202) ----
+check('desktop dblclick on a .mgp icon raises the mgp viewer',
+  out.includes('MGP-DESK-OK'));
+check('fileman Open on a .mgp raises the mgp viewer',
+  out.includes('MGP-FM-OK'));
+const editmenu = section(out, 'editmenu');
+const editItem = editmenu.split('\n').find(l => l.includes("text='Edit'")) || '';
+check('the fileman row menu has an enabled Edit item',
+  editItem !== '' && !editItem.includes('grayed'), editmenu.slice(0, 400));
+check('fileman Edit opens the deck TEXT in notepad',
+  out.includes('EDIT-FM-OK'));
+check('the desktop icon EDIT opens the deck TEXT in notepad',
+  out.includes('EDIT-DESK-OK'));
 
 // ---- persistence: a second boot on the same image ----
 const out2 = boot([

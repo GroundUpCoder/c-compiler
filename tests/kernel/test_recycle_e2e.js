@@ -24,8 +24,9 @@
 //     grayed click leaves the menu open), the Del key trashes the
 //     selection, and double-clicking the bin opens fileman AT the store
 //
-// Geometry mirrors os/wm.c: icon menu rows OPEN 4-24 / sep / CUT 32-52 /
-// COPY 52-72 / DELETE 72-92; bin menu OPEN 4-24 / sep / EMPTY 32-52.
+// Geometry mirrors os/wm.c: on a DOCUMENT icon (junk.txt) the menu rows
+// are OPEN 4-24 / EDIT 24-44 (0202) / sep / CUT 52-72 / COPY 72-92 /
+// DELETE 92-112; bin menu OPEN 4-24 / sep / EMPTY 32-52.
 // Desktop (1024x768): the seeded set wraps past column 0 (11 rows/col since
 // todos/0184) and the bin sorts LAST (entcmp tail-pin, todos/0093) into
 // column 1 — every bin/junk/kdel cell is DERIVED from the drive.js grid
@@ -255,7 +256,7 @@ const script = [
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 60 82',                    // DELETE
+  'wmctl click $CXSID 60 102',                   // DELETE (EDIT shifted it, 0202)
   'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
   'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
@@ -368,8 +369,8 @@ check('a failed trash leaves NO stray store entry (the fo_trash sweep)',
 
 // ---- the wm.c desktop ----
 const im = section('iconmenu');
-check('icon menu grew DELETE + RENAME (120x116, 0103)',
-  row(im, 'ctxmenu').includes('120x116+'), JSON.stringify(im));
+check('icon menu grew DELETE + RENAME + EDIT (120x136 on a document, 0103/0202)',
+  row(im, 'ctxmenu').includes('120x136+'), JSON.stringify(im));
 check('icon DELETE trashes the desktop file', out.includes('DESK-TRASH'));
 const bm = section('binmenu');
 check('the bin icon gets its own OPEN/EMPTY menu (120x56)',

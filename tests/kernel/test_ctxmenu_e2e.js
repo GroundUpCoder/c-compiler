@@ -34,8 +34,9 @@ const { dir: tmp, image } = freshImage('os-ctx-');
 // 120, rows 20px, 4px pad, 8px separator, clamped to the 1024x768 work
 // area above the 28px bar. Desktop menu: NEW / SORT BY / REFRESH / PASTE /
 // --- / DISPLAY -> h 116; taskbar menu: RESTORE / MINIMIZE / MAXIMIZE /
-// --- / CLOSE -> h 96; icon menu: OPEN / --- / CUT / COPY / DELETE / RENAME
-// -> h 116 (todos/0103 added RENAME). A
+// --- / CLOSE -> h 96; icon menu on a RUNNABLE icon: OPEN / --- / CUT /
+// COPY / DELETE / RENAME -> h 116 (todos/0103 added RENAME; documents grow
+// an EDIT row after OPEN -> h 136, todos/0202 — alauncher stays 116). A
 // flyout parks at root-right - 3 with its first row aligned to the group
 // row (NEW: FOLDER + TEXT FILE -> h 48; SORT BY: NAME -> h 28). Row
 // centers at 4 + i*20 + 10.
