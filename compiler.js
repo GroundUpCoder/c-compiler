@@ -9465,6 +9465,26 @@ function normalizeInitList(initList, containerType) {
   return initList;
 }
 
+// Does this (normalized) struct init list provide elements for a trailing
+// flexible array member? Mirrors computeFAMExtraSize's non-zero condition:
+// static-storage FAM init sizes the object with that extra; automatic
+// storage cannot (the frame slot is plain sizeOf), so callers reject it.
+function initListInitializesFAM(type, initList) {
+  if (!(initList instanceof AST.EInitList)) return false;
+  const uq = type.removeQualifiers();
+  if (!uq.isTag() || !uq.tagDecl || uq.tagDecl.tagKind !== Types.TagKind.STRUCT) return false;
+  const members = uq.tagDecl.members.filter(m => m instanceof AST.DVar);
+  let famIdx = -1;
+  for (let i = 0; i < members.length; i++) {
+    if (members[i].type.isArray() && members[i].type.arraySize === 0) famIdx = i;
+  }
+  if (famIdx < 0 || famIdx >= initList.elements.length) return false;
+  const famElem = initList.elements[famIdx];
+  if (famElem == null) return false;
+  if (famElem instanceof AST.EInitList) return famElem.elements.some(e => e != null);
+  return true; // EString or a scalar expression
+}
+
 // ====================
 // Parser — Main Parser Class
 // ====================
@@ -12187,6 +12207,17 @@ class Parser {
             dvar.type = type;
           } else if (type.isAggregate()) {
             dvar.initExpr = normalizeInitList(dvar.initExpr, type);
+            // C11 6.7.2.1: a flexible array member is ignored by
+            // initialization; the gcc/clang extension allows FAM init only
+            // for STATIC storage, where the object is sized with the extra
+            // (computeInitAllocSize). An automatic slot is plain sizeOf, so
+            // the FAM element stores would run past the frame slot — gcc
+            // and clang both reject this (todos/0205).
+            if (specs.storageClass !== Types.StorageClass.STATIC &&
+                initListInitializesFAM(type, dvar.initExpr)) {
+              this.recoverableError(eqTok,
+                "initialization of a flexible array member in an automatic-storage object");
+            }
           } else {
             // C99 §6.7.8p11: a scalar may be brace-initialized.
             // `int x = {0}` is legal; unwrap to the single element
