@@ -1,0 +1,57 @@
+%% bullets.mgp - gucOS MagicPoint showcase (todos/0185): tab-depth lists
+%% and %icon shapes. Body lines below start with REAL tab characters.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 5, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 4, vgap 40, prefix "      ", icon arc "gold" 50, left
+%tab 3 size 3, vgap 40, prefix "          ", icon delta3 "white" 40, left
+%tab 4 size 3, vgap 40, prefix "              ", icon dia "orchid" 40, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Bullets
+
+lists by tab depth
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Four depths
+
+	one tab: a green box
+	another top-level point
+		two tabs: a gold arc
+		arcs mark the second level
+			three: a white delta
+				four: an orchid diamond
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+A real outline
+
+	what mgp gives you
+		plain-text decks
+		one page per page
+	what this port keeps
+		freetype text
+		PNG / GIF / PBM / XBM / XPM images
+	what it drops
+		X child windows
+		forked helpers
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Icon shapes
+
+	box
+		arc
+			delta3
+				dia
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: images.mgp

@@ -1,0 +1,50 @@
+%% align.mgp - gucOS MagicPoint showcase (todos/0185): justification & areas.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "DarkSlateGray", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Alignment
+
+left, center, right, fill
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Three justifications
+
+%size 5, fore "white"
+%left
+\%left hugs this edge
+%center
+\%center splits the difference
+%right
+\%right hugs the other edge
+%size 3, fore "gray70", center
+
+(each line carries its own directive)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Left-fill folding
+
+%size 4, fore "white", leftfill
+leftfill left-justifies AND folds a long paragraph onto the next line instead of running off the page edge, which is what this sentence is here to demonstrate.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Drawing areas
+
+%size 4, fore "white", center
+the full 90% area (the deck default)
+%area 50 50 45 40
+%size 5, fore "gold", leftfill
+\%area 50 50 45 40 confines everything after it to a half-size box offset toward the corner - sizes go relative to the area.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: bullets.mgp

@@ -1,0 +1,64 @@
+%% images.mgp - gucOS MagicPoint showcase (todos/0185): %newimage options
+%% over the one seeded image (/usr/share/mgp/demo.gif; giflib first-frame).
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "gray20", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Images
+
+zoom, stretch, rotate
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Natural size
+
+%center
+%newimage "/usr/share/mgp/demo.gif"
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Zoomed
+
+%center
+%newimage -zoom 60 "/usr/share/mgp/demo.gif"
+%size 3, fore "gray70", center
+-zoom 60: both axes to 60% of the original
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Stretched
+
+%center
+%newimage -xyzoom 160 50 "/usr/share/mgp/demo.gif"
+%size 3, fore "gray70", center
+-xyzoom 160 50: axes scale independently
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Rotated
+
+%center
+%newimage -rotate 90 "/usr/share/mgp/demo.gif"
+%size 3, fore "gray70", center
+-rotate 90: quarter turns (0, 90, 180, 270)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Inline with text
+
+%size 4, fore "white", left
+images sit in the text flow:
+%center
+%newimage -zoom 40 "/usr/share/mgp/demo.gif"
+%size 4, fore "white", left
+so captions read naturally around them
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: backgrounds.mgp

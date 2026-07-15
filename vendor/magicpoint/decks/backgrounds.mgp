@@ -1,0 +1,60 @@
+%% backgrounds.mgp - gucOS MagicPoint showcase (todos/0185): %bgrad
+%% gradients (directions, palettes). The parameter walk-through follows
+%% upstream sample/gradation.mgp; the pages here are ours.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "black", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Backgrounds
+
+gradients in four directions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad
+
+Default
+
+%size 4
+\%bgrad with no arguments: blue to black, top down
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 256 90 1 "black" "DeepSkyBlue"
+
+Sideways
+
+%size 4
+direction 90: left to right
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 256 180 1 "DarkGreen" "black"
+
+Bottom up
+
+%size 4
+direction 180 climbs instead
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 0 0 256 45 1 "MidnightBlue" "orchid" "gold"
+
+Three stops
+
+%size 4
+any color list works: MidnightBlue, orchid, gold
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+%bgrad 30 30 256 0 0 "gray40" "black"
+
+Tiles
+
+%size 4
+xsize/ysize below 100 tile the pattern
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: effects.mgp

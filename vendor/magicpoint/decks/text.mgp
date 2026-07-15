@@ -1,0 +1,81 @@
+%% text.mgp - gucOS MagicPoint showcase (todos/0185): text sizing & spacing.
+%% Every deck in this set is ours (not upstream), written against the 0119
+%% port: freetype-only text, mono.ttf is the one seeded face.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "DarkSlateBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Text
+
+sizes, gaps, prefixes
+
+%center
+%size 3, fore "gray70"
+space / click: next   b: back   q: quit
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The size ladder
+
+%left, fore "white"
+%size 8
+size 8
+%size 6
+size 6
+%size 5
+size 5
+%size 4
+size 4
+%size 3
+size 3
+%size 2
+size 2 - %size is percent of screen height
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Vertical gaps
+
+%left, size 4, fore "white", vgap 10
+vgap 10 packs lines tightly
+like this
+and this
+%vgap 80
+vgap 80 spreads them out
+like this
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Prefix indent
+
+%left, size 4, fore "white"
+%prefix "  "
+prefix "  " - two spaces
+%prefix "        "
+prefix "        " - eight
+%prefix 30
+prefix 30 - 30% of the area width
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+One line, many styles
+
+%left, size 5
+%fore "white"
+one line
+%cont, fore "orange"
+ in three
+%cont, fore "cyan"
+ colors
+%size 3, fore "gray70"
+
+each segment above came from its own source line (%cont)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: colors.mgp

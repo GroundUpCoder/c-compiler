@@ -1,0 +1,81 @@
+%% colors.mgp - gucOS MagicPoint showcase (todos/0185): color names & bars.
+%% The port's sdlx.c carries the X11 color-name table (140 names + grayNN).
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "gray10", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Colors
+
+X11 names, gray ramps, bars
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Named colors
+
+%size 5, center
+%fore "red"
+red
+%fore "orange"
+orange
+%fore "gold"
+gold
+%fore "SpringGreen"
+SpringGreen
+%fore "DeepSkyBlue"
+DeepSkyBlue
+%fore "orchid"
+orchid
+%fore "LightSalmon"
+LightSalmon
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The gray ramp
+
+%size 5, center
+%fore "gray90"
+gray90
+%fore "gray75"
+gray75
+%fore "gray60"
+gray60
+%fore "gray45"
+gray45
+%fore "gray30"
+gray30
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Bars
+
+%size 4, fore "white", left
+full-width, default thickness
+%bar "white"
+thicker, inset - width 30, start 10, length 80
+%bar "orange" 30 10 80
+stacked accents
+%bar "red" 15 0 33
+%bar "gold" 15 33 34
+%bar "SpringGreen" 15 67 33
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Foreground on background
+
+%size 5, center
+%back "MidnightBlue"
+%fore "white"
+white on MidnightBlue
+%size 3, fore "gray70"
+
+\%back swaps the page background mid-deck
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: align.mgp

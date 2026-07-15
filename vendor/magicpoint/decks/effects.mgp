@@ -1,0 +1,65 @@
+%% effects.mgp - gucOS MagicPoint showcase (todos/0185): %pause builds and
+%% %mark/%again column layout. (The cutin fly-ins need X child windows,
+%% which this port drops - see vendor/magicpoint/README.md descopes.)
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 5, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Effects
+
+builds and columns
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Builds
+
+	each click reveals one point
+%pause
+	this one arrived second
+%pause
+	this one third
+%pause
+%size 4, fore "orange", center
+
+(that is all %pause does - simple and effective)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Two columns
+
+%size 4, fore "white", left
+%mark
+%prefix 5
+left column
+sits here
+on these lines
+%again
+%prefix 55
+right column
+via mark/again
+same vertical spot
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Build + color
+
+%size 5, center
+%fore "red"
+ready
+%pause
+%fore "gold"
+steady
+%pause
+%fore "SpringGreen"
+go
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+that is the tour - press q

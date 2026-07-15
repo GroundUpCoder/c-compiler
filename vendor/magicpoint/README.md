@@ -37,6 +37,7 @@ keycodes → `XK_*`; window-close arrives as a synthetic `q`). This is NOT an
 | `missing/strsep.c` | verbatim upstream (this libc has no strsep) |
 | `sdlx.h`, `sdlx.c` | ours: the X-vocabulary backend described above, plus truecolor replacements for xloadimage's `send.c` (`imageToXImage`/`freeXImage`/`ximageToPixmap`) and an X11 color-name table (140 names + `grayNN`) |
 | `demo.mgp` | ours (the seeded demo deck) |
+| `decks/*.mgp` | ours (todos/0185): the Presentations showcase decks — text/colors/align/bullets/images/backgrounds/effects, one capability slice each, seeded to `/usr/share/mgp/` and linked from `/root/Desktop/Presentations/` |
 
 ### image/ (the xloadimage-derived loader library)
 
