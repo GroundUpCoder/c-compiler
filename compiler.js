@@ -5614,6 +5614,44 @@ function foldStmt(stmt) {
 // folded we can read its bag to see what it transitively references.
 const _inliningStack = new Set();
 
+// Instrumentation (todos/0188): successful inlines and refusals charged
+// to the expansion budget, cumulative across the per-TU passes and the
+// post-link round. `optimizeLinked` snapshots its own share into
+// `stats.postLink`.
+const stats = { inlined: 0, budgetRefused: 0, postLink: null };
+
+// Bounded expansion (todos/0188). Substitution duplicates each argument
+// once per parameter use, and foldExpr re-folds substituted bodies, so a
+// chain of nested pure helpers (sq(sq(sq(x)))) grows multiplicatively.
+// The budget is on GROWTH per call site: the substituted expression may
+// exceed the nodes already present at the site (the arguments) by at
+// most INLINE_GROWTH_CAP effective nodes. A parameter used once inlines
+// regardless of argument size (no duplication — pure win); duplication
+// of large arguments is what gets refused. Sizes are EFFECTIVE (shared
+// substituted subtrees counted once per occurrence), because the
+// tree-walking codegen re-emits shared nodes — effective size is the
+// honest code-size metric, and capping it also bounds fold/codegen time.
+const INLINE_GROWTH_CAP = 64;
+// Per-argument scan ceiling: bounds the cost of the budget check itself
+// on pathologically large argument trees (which can be DAG-shared and
+// exponentially larger effectively than physically).
+const INLINE_ARG_SCAN_CAP = 4096;
+
+// Effective node count of `expr`, early-exiting once the count exceeds
+// `cap` (returns cap+1-or-more, meaning "too big").
+function effSize(expr, cap) {
+  let n = 0;
+  const stack = [expr];
+  while (stack.length > 0) {
+    const e = stack.pop();
+    if (!e) continue;
+    if (++n > cap) return n;
+    const kids = e.children;
+    if (kids) for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
+  }
+  return n;
+}
+
 // Predicate: is this body a single `return EXPR;`? Returns the return
 // expression, or null if the body is anything more complex.
 function singleReturnBody(body) {
@@ -5638,8 +5676,8 @@ function singleReturnBody(body) {
 function tryInline(callExpr) {
   const decl = callExpr.funcDecl;
   if (!decl) return null;
-  if (_inliningStack.has(decl)) return null;
   const def = decl.definition || decl;
+  if (_inliningStack.has(def)) return null;
   if (!def.body) return null;
   const returnExpr = singleReturnBody(def.body);
   if (!returnExpr) return null;
@@ -5665,12 +5703,27 @@ function tryInline(callExpr) {
   }
   // Push self onto the stack while substituting & re-folding the body,
   // so a recursive call to `decl` inside the body sees its callee as
-  // already-being-inlined and bails.
-  _inliningStack.add(decl);
+  // already-being-inlined and bails. Keyed on the body-bearing def so
+  // cross-TU decl aliases of one function can't slip past (todos/0188).
+  _inliningStack.add(def);
   try {
-    return AST.substituteParams(returnExpr, paramMap);
+    const sub = AST.substituteParams(returnExpr, paramMap);
+    // Expansion budget: allow the substituted expression to exceed the
+    // material already at the site (the arguments) by at most
+    // INLINE_GROWTH_CAP effective nodes. See the constant's comment.
+    let argSize = 0;
+    for (const arg of callExpr.arguments) {
+      argSize += effSize(arg, INLINE_ARG_SCAN_CAP);
+    }
+    const budget = argSize + INLINE_GROWTH_CAP;
+    if (effSize(sub, budget) > budget) {
+      stats.budgetRefused++;
+      return null;
+    }
+    stats.inlined++;
+    return sub;
   } finally {
-    _inliningStack.delete(decl);
+    _inliningStack.delete(def);
   }
 }
 
@@ -5778,7 +5831,94 @@ function optimize(unit, options) {
   return unit;
 }
 
-return { optimize, foldExpr, foldStmt, tryInline };
+// Whole-program inline+fold round (todos/0188). Runs AFTER
+// linkTranslationUnits has wired decl.definition across TUs, so
+// tryInline's `decl.definition || decl` now resolves callee bodies that
+// live in OTHER translation units — the dominant refusal of the per-TU
+// pass ("callee body not visible"). Additive: the per-TU optimize()
+// already ran (it feeds per-TU tree-shaking and keeps link inputs
+// small); this round only re-folds function bodies under the same
+// single-return-expression inlining rule.
+//
+// Order is CALLEE-BEFORE-CALLER (post-order over the call graph, cycles
+// broken arbitrarily by the visited set): tryInline inspects the
+// callee's CURRENT body, so folding callees first exposes bodies that
+// only become single-return after their own dead branches fold away
+// (e.g. `if (1) return x; else return y;`).
+//
+// Liveness is untouched here — no tree-shake. The bags are computed on
+// demand from current children, so a body whose calls all inlined
+// simply stops referencing the callee; gcSectionsPass (which runs after
+// this, before codegen) reaps what genuinely became unreachable while
+// keeping exports / main / address-taken functions rooted.
+function optimizeLinked(units) {
+  _inliningStack.clear();
+  const inlinedBefore = stats.inlined;
+  const refusedBefore = stats.budgetRefused;
+
+  // Collect the canonical (body-bearing) definition set. Non-canonical
+  // duplicates (C11 inline definitions superseded by an external one)
+  // are skipped — codegen never emits them.
+  const defs = [];
+  const defSet = new Set();
+  for (const unit of units) {
+    for (const f of [...unit.definedFunctions, ...unit.staticFunctions]) {
+      const def = f.definition || f;
+      if (def.body && !defSet.has(def)) {
+        defSet.add(def);
+        defs.push(def);
+      }
+    }
+  }
+
+  // Iterative post-order DFS. Edges come from the body's bubble-up bag
+  // (which already canonicalizes through decl.definition), restricted
+  // to defined functions. Address-taken references ride the bag too —
+  // harmless for ordering, which is a heuristic, not a soundness need.
+  function calleesOf(f) {
+    const out = [];
+    for (const g of f.body.referencedFunctions) {
+      if (defSet.has(g) && g !== f) out.push(g);
+    }
+    return out;
+  }
+  const order = [];
+  const visited = new Set();
+  for (const root of defs) {
+    if (visited.has(root)) continue;
+    visited.add(root);
+    const stack = [[root, calleesOf(root), 0]];
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      const kids = top[1];
+      let advanced = false;
+      while (top[2] < kids.length) {
+        const child = kids[top[2]++];
+        if (!visited.has(child)) {
+          visited.add(child);
+          stack.push([child, calleesOf(child), 0]);
+          advanced = true;
+          break;
+        }
+      }
+      if (!advanced) {
+        order.push(top[0]);
+        stack.pop();
+      }
+    }
+  }
+
+  for (const f of order) {
+    f.body = foldStmt(f.body);
+  }
+
+  stats.postLink = {
+    inlined: stats.inlined - inlinedBefore,
+    budgetRefused: stats.budgetRefused - refusedBefore,
+  };
+}
+
+return { optimize, optimizeLinked, foldExpr, foldStmt, tryInline, stats };
 })();
 
 // ====================
@@ -8871,6 +9011,17 @@ function linkTranslationUnits(units, compilerOptions) {
   // Link extern symbols
   for (const unit of units) {
     linkSymbols(externScope, unit, false);
+  }
+
+  // Whole-program inline+fold round (todos/0188): now that every decl's
+  // `.definition` points at its body-bearing instance, re-fold bodies so
+  // cross-TU single-return callees become inline candidates. Placed here
+  // (rather than in each driver) so every consumer of the linker — the
+  // CLI, the in-OS cc driver, tests — gets whole-program inlining
+  // uniformly. Skipped on link errors (definitions may be missing) and
+  // under --no-fold, matching the per-TU pass gate.
+  if (errors.length === 0 && !compilerOptions?.noFold) {
+    INLINER.optimizeLinked(units);
   }
 
   return { errors };

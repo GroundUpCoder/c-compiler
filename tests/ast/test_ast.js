@@ -665,6 +665,82 @@ test('INLINER diamond worklist: A→D, B→D, main→A and main→B (no inlining
 });
 
 // =============================================================================
+// Whole-program (post-link) inlining + expansion budget (todos/0188)
+// =============================================================================
+// linkTranslationUnits runs INLINER.optimizeLinked after wiring
+// decl.definition across TUs, so cross-TU single-return callees inline
+// under the same rule the per-TU pass uses. Order is callee-before-caller
+// (post-order over the call graph) so bodies that only become
+// single-return after their own calls inline are folded before their
+// callers are visited.
+
+// Parse each source as its own TU (running the per-TU pass, as
+// parseAllUnits does), then link — which runs the post-link round.
+function compileLinkOptimize(sources) {
+  const units = sources.map(([name, src]) => {
+    const r = C.parseSource(name, src);
+    if (r.errors.length > 0) throw new Error('parse errors: ' + r.errors.map(e => e.message).join('; '));
+    INLINER.optimize(r.translationUnit);
+    return r.translationUnit;
+  });
+  const link = C.linkTranslationUnits(units, {});
+  if (link.errors.length > 0) throw new Error('link errors: ' + link.errors.map(e => e.message).join('; '));
+  return units;
+}
+
+test('INLINER post-link round inlines a cross-TU single-return callee', () => {
+  const units = compileLinkOptimize([
+    ['a.c', 'extern int sq(int n); int main(void) { return sq(5); }'],
+    ['b.c', 'int sq(int n) { return n * n; }'],
+  ]);
+  const main = units[0].definedFunctions.find(f => f.name === 'main');
+  const ret = main.body.statements[0];
+  // Per-TU, sq's body was invisible (no definition wired); post-link it
+  // inlines and folds: sq(5) → 5 * 5 → 25.
+  assert(ret.expr instanceof AST.EInt, 'cross-TU call should inline post-link');
+  assertEq(Number(ret.expr.value), 25);
+});
+test('INLINER post-link round folds callees before callers (call-graph post-order)', () => {
+  // pick's body only becomes a single UNRESTRICTED return after its own
+  // cross-TU call to one() inlines and the ternary folds. main can then
+  // inline pick — but only if pick was folded first.
+  const units = compileLinkOptimize([
+    ['a.c', 'extern int pick(int x); int main(void) { return pick(5); }'],
+    ['b.c', 'extern int one(void); int pick(int x) { return one() ? x * 2 : x * 3; }'],
+    ['c.c', 'int one(void) { return 1; }'],
+  ]);
+  const main = units[0].definedFunctions.find(f => f.name === 'main');
+  const ret = main.body.statements[0];
+  assert(ret.expr instanceof AST.EInt, 'caller should see the already-folded callee body');
+  assertEq(Number(ret.expr.value), 10);
+});
+test('INLINER expansion budget refuses duplication of a large argument', () => {
+  // twice() uses its parameter twice; the argument is a large pure
+  // expression, so substitution would grow the site past
+  // INLINE_GROWTH_CAP effective nodes. The call must stay a call, and
+  // the refusal must be charged to the budget counter.
+  const arg = Array(40).fill('a').join(' + ');  // 40 idents + 39 adds
+  const before = INLINER.stats.budgetRefused;
+  const u = compileAndOptimize(
+    'static int twice(int n) { return n + n; }\n' +
+    `int f(int a) { return twice(${arg}); }`);
+  const ret = u.definedFunctions[0].body.statements[0];
+  assert(ret.expr instanceof AST.ECall, 'budget-refused call should stay a call');
+  assert(INLINER.stats.budgetRefused > before, 'refusal should be counted');
+});
+test('INLINER expansion budget allows single-use params regardless of argument size', () => {
+  // once() uses its parameter once — no duplication, so growth is just
+  // the body overhead and even a large (non-constant) argument inlines.
+  const arg = Array(40).fill('a').join(' + ');  // same 79-node arg as above
+  const u = compileAndOptimize(
+    'static int once(int n) { return n + 1; }\n' +
+    `int f(int a) { return once(${arg}); }`);
+  const ret = u.definedFunctions[0].body.statements[0];
+  assert(!(ret.expr instanceof AST.ECall), 'single-use param should inline past the budget');
+  assert(ret.expr instanceof AST.EBinary, 'inlined body is the substituted n + 1');
+});
+
+// =============================================================================
 // Volatile access linearity (todos/0187)
 // =============================================================================
 // C11 5.1.2.3: accesses to volatile objects are observable behavior — the
