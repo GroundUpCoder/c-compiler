@@ -1,6 +1,6 @@
 # 0188 — Stage A: whole-program inlining by post-link pass placement
 
-- **Status**: open
+- **Status**: done (2026-07-15; post-link INLINER.optimizeLinked landed — cross-TU inlining under the unchanged rule, callee-before-caller order, 64-effective-node growth budget + stats. Checksums unchanged, full corpus green. HEADLINE NOT MET: no measurable SameBoy ms/frame drop (+137 inlines are all cold — the hot path is multi-statement, rule-bound not visibility-bound; Stage C is where the win is). Log: logs/2026-07-15/whole-program-inlining-0188.md)
 - **Design**: logs/2026-07-15/compiler-perf-bench-0186.md (baseline), todos/OS.md (north star)
 
 ## Goal
