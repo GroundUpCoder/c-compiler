@@ -1,6 +1,6 @@
 # 0202 — MagicPoint: learn-mgp tutorial series + double-click view + right-click edit
 
-- **Status**: open
+- **Status**: done (2026-07-15) — ten-deck tutorial series seeded (masters /usr/share/mgp/tutorial + rw copies in Desktop/Presentations, image v96), dblclick->viewer verified both surfaces, Edit rows landed (ow_editor; fileman + document desktop icons), kernel32 OPEN_ALWAYS RO-volume fix; log: logs/2026-07-15/magicpoint-tutorials-0202.md
 - **Design**: vendor/magicpoint/README.md (0119 port + descopes), todos/0185 (Presentations showcase)
 
 ## Goal
