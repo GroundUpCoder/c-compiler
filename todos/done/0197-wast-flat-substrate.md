@@ -1,7 +1,7 @@
 # 0197 — WAST flat substrate (Stage 1, byte-identical)
 
-- **Status**: open
-- **Design**: —
+- **Status**: done (2026-07-15; WAST substrate landed — flat node sequence + symbolic labels + WastBuilder mirroring WasmCode's surface, function bodies serialize through it BYTE-IDENTICAL: 654 unit/vendor wasm hashes + 162 baked-image entries match the pre-change baseline, disw/sourcemap goldens untouched, full estate green, mkimage v93 seals. No optimization passes — those are later stages. Log: logs/2026-07-15/wast-flat-substrate-0197.md)
+- **Design**: logs/2026-07-15/wast-flat-substrate-0197.md
 
 ## Goal
 
