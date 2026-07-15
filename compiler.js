@@ -14110,6 +14110,17 @@ function validate(fnNodes, funcLabel) {
   }
 }
 
+// ---- Pass hook ----
+//
+// The post-codegen, pre-serialize seam (todos/0198). When this runs, every
+// emitted function's node list sits complete on wmod.funcDefs[i].wast (all
+// func/global/type indices were assigned in the pre-pass) and nothing has
+// been serialized yet, so cross-function transforms (inlining) and local
+// ones (peephole) both belong here. A pass that rewrites a function must
+// re-run validate() on it. Stage 2 deliberately runs no passes.
+function runPasses(wmod) {
+}
+
 return {
   // Relocated target-side tables and encoders (consumed by Codegen)
   WasmNumType, WT_I32, WT_I64, WT_F32, WT_F64, WT_EXTERNREF, WT_REFEXTERN,
@@ -14118,7 +14129,7 @@ return {
   MOP, ALU, getaop, appendF32, appendF64,
   WasmCode,
   // WAST proper
-  WastBuilder, serialize, validate,
+  WastBuilder, serialize, validate, runPasses,
   WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
   WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
   WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
@@ -14240,7 +14251,10 @@ class WasmModule {
 
   addFunctionDefinition(typeId) {
     const id = this.funcImports.length + this.funcDefs.length;
-    this.funcDefs.push({ typeId, locals: [], body: [] });
+    // body: serialized bytes; wast: the function's WAST node list, set by
+    // emitFunctionBody and serialized into body by emit()'s code-section
+    // writer (todos/0198).
+    this.funcDefs.push({ typeId, locals: [], body: [], wast: null });
     return id;
   }
 
@@ -14340,6 +14354,11 @@ class WasmModule {
 
   // Emit full WASM binary as a Uint8Array
   emit() {
+    // WAST pass seam (todos/0198): must run before ANY section is written —
+    // passes may add locals or types, and sections 1/3 precede the code
+    // section that serializes the trees.
+    WAST.runPasses(this);
+
     const out = [];
     // WASM magic + version
     out.push(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00);
@@ -14582,6 +14601,24 @@ class WasmModule {
         wtEmit(loc.type, funcBody);
       }
       var preambleSize = funcBody.length;
+      // Function bodies arrive as WAST node lists (todos/0198); serialize
+      // here — after runPasses — appending into def.body. Source-map
+      // entries are recorded now (byte offsets exist only at serialize
+      // time); the rebasing below sorts by absolute offset, so push order
+      // doesn't matter. def.body without a tree is the raw-bytes path
+      // (kept for hand-built bodies).
+      if (def.wast) {
+        const smEntries = [];
+        WAST.serialize(def.wast, def.body, {
+          onSrcLoc: (offset, fileIdx, line) => {
+            smEntries.push({ offset: offset, fileIdx: fileIdx, line: line });
+          },
+        });
+        def.wast = null;
+        if (smEntries.length > 0) {
+          this.sourceMapEntries.push({ funcIdx: fi, entries: smEntries });
+        }
+      }
       for (const b of def.body) funcBody.push(b);
       funcBody.push(0x0B); // end
       var sizeFieldStart = buf.length;
@@ -15359,24 +15396,27 @@ class CodeGenerator {
     this.structRetPtrLocalIdx = 0;
     this.hasStructReturn = false;
     this.localIdxNames = new Map();
-    // Source map tracking: per-function arrays of {offset, fileIdx, line}
+    // Source map tracking. sourceMapEntries ({funcIdx, entries}) are
+    // produced by the code-section writer when it serializes each
+    // function's WAST tree (todos/0198); codegen only places WSrcLoc
+    // markers, gated on emitSrcLocMarkers.
     this.sourceMapEntries = [];
     this.sourceMapFiles = [];
     this.sourceMapFileIndex = new Map();
-    this.currentFuncSourceMap = null;
+    this.emitSrcLocMarkers = false;
   }
 
   // --- Local allocator ---
   _recordSourceLoc(loc) {
-    if (!loc || !this.currentFuncSourceMap || !this.body) return;
+    if (!loc || !this.emitSrcLocMarkers || !this.body) return;
     var fileIdx = this.sourceMapFileIndex.get(loc.filename);
     if (fileIdx === undefined) {
       fileIdx = this.sourceMapFiles.length;
       this.sourceMapFiles.push(loc.filename);
       this.sourceMapFileIndex.set(loc.filename, fileIdx);
     }
-    // Zero-width WAST marker; the serializer reports its byte offset into
-    // currentFuncSourceMap via the onSrcLoc callback (todos/0197).
+    // Zero-width WAST marker; serialization reports its byte offset via
+    // the onSrcLoc callback (todos/0197).
     this.body.srcLoc(fileIdx, loc.line);
   }
 
@@ -16072,12 +16112,13 @@ class CodeGenerator {
     this.assignLocals(funcDef);
     const defIdx = funcIdx - this.wmod.funcImports.length;
     // Function bodies build WAST nodes (todos/0197); the sequence is
-    // validated + serialized into wmod.funcDefs[defIdx].body at the end of
-    // this method, so bytes still land there exactly once per emit attempt
-    // (the driver's goto-rollback truncation keeps working).
+    // validated at the end of this method and stored on
+    // wmod.funcDefs[defIdx].wast — serialization is deferred to
+    // WasmModule.emit's code-section writer so the WAST pass hook can run
+    // over the finished trees first (todos/0198).
     this.body = new WAST.WastBuilder();
     this.currentFuncDef = funcDef;
-    this.currentFuncSourceMap = this.compilerOptions.emitNames ? [] : null;
+    this.emitSrcLocMarkers = !!this.compilerOptions.emitNames;
     this.structRetDeferred = 0;
     this.callNesting = 0;
     this.blockDepth = 0;
@@ -16177,34 +16218,27 @@ class CodeGenerator {
       this.body.ret();
     }
 
-    // Serialize the WAST node sequence into the module's body byte array.
-    // Source-map entries are recorded HERE (byte offsets exist only now),
-    // so the flush below must stay after this call.
+    // Validate and store the WAST node sequence on the funcDef; the
+    // code-section writer serializes it (and records source-map entries —
+    // byte offsets exist only there) after the pass hook runs.
     if (this.gotoErrors.length > gotoErrLenAtEntry) {
       // This structured attempt hit out-of-scope gotos: the driver either
       // rolls it back and re-emits through the loop-switch lowering, or
-      // surfaces the errors and exits — the bytes are discarded either
+      // surfaces the errors and exits — the nodes are discarded either
       // way. The node sequence may be legitimately unbalanced here
       // (forward-label blocks opened but never closed), so don't
-      // validate or serialize it.
+      // validate or store it.
     } else {
-      const fnSourceMap = this.currentFuncSourceMap;
       try {
         WAST.validate(this.body.nodes, this.body.funcLabel);
-        WAST.serialize(this.body.nodes, this.wmod.funcDefs[defIdx].body,
-          fnSourceMap
-            ? { onSrcLoc: (offset, fileIdx, line) => { fnSourceMap.push({ offset: offset, fileIdx: fileIdx, line: line }); } }
-            : null);
       } catch (e) {
         e.message = `in function '${funcDef.name}': ` + e.message;
         throw e;
       }
+      this.wmod.funcDefs[defIdx].wast = this.body.nodes;
     }
 
-    if (this.currentFuncSourceMap && this.currentFuncSourceMap.length > 0) {
-      this.sourceMapEntries.push({ funcIdx: defIdx, entries: this.currentFuncSourceMap });
-    }
-    this.currentFuncSourceMap = null;
+    this.emitSrcLocMarkers = false;
     this.body = null;
 
     if (this.compilerOptions.emitNames && this.localIdxNames.size > 0) {
@@ -18781,23 +18815,24 @@ function generateCode(units, outputFile, options) {
       // Per-function CodeGenerator state (locals, frame layout, scope
       // maps) is cleared at the start of every emitFunctionBody, so it
       // doesn't need rollback — only these module-level arrays do.
-      const bodyLen = wd.body.length;
+      // (Bytes and source-map entries no longer need snapshots: both are
+      // produced from the WAST tree at serialize time, todos/0198.)
       const localsLen = wd.locals.length;
       const errLen = cg.gotoErrors.length;
-      const smLen = cg.sourceMapEntries.length;
       const lnLen = wmod.localNames.length;
 
       cg.emitFunctionBody(fdef);
 
       if (!noLowering && cg.gotoErrors.length > errLen) {
-        // Structured emit hit out-of-scope gotos. Roll back everything
-        // we just appended, lower the function body into a loop-switch
-        // state machine, and re-emit. The lowered body has only
-        // structured control flow, so the second emit won't error.
-        wd.body.length = bodyLen;
+        // Structured emit hit out-of-scope gotos. Discard this function's
+        // node list (emitFunctionBody already skipped storing one for the
+        // unbalanced attempt), roll back the side arrays, lower the
+        // function body into a loop-switch state machine, and re-emit.
+        // The lowered body has only structured control flow, so the
+        // second emit won't error.
+        wd.wast = null;
         wd.locals.length = localsLen;
         cg.gotoErrors.length = errLen;
-        cg.sourceMapEntries.length = smLen;
         wmod.localNames.length = lnLen;
         if (verbose) {
           writeErr(`[irreducible] lowering '${fdef.name}' (retry after structured emit failed)\n`);
