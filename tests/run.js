@@ -115,6 +115,7 @@ const RULES = [
   [/^tests\/host\//, ['host'], null],
   [/^tests\/serve\//, ['host'], null],
   [/^tests\/run\.js$/, [], 'the dispatcher itself — no suite of its own'],
+  [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
   [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (todos/0147) — wraps other suites, no suite of its own'],
   [/^tests\/run\.py$/, PY_CATEGORIES.concat(['unit', 'blockfs']), 'the python runner backs every py category'],
   [/^tests\/sourcemap\//, ['sourcemap'], null],
