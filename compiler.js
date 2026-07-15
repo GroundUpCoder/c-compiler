@@ -13403,27 +13403,28 @@ return {
 })();
 
 // ====================
-// WASM
+// WAST — target-side wasm instruction layer (todos/0197)
 // ====================
+//
+// A FLAT instruction sequence below the C AST: one node per wasm
+// instruction, operands implicit on the wasm value stack. Control
+// constructs are delimiter nodes (WBlock/WLoop/WIf/WTryTable ... WEnd) in
+// the per-function array — no operand-expression tree, no nested body
+// arrays. Branch nodes hold a LABEL IDENTITY (the structural node they
+// target, or the per-function FUNC label), never a baked numeric depth:
+// WastBuilder resolves br(depth) against its live control stack at build
+// time (while the depth is valid), and serialize() re-derives the relative
+// depth from its own walk stack — which is what makes later splice-based
+// transforms (inlining, peephole) safe. Nodes are inert data (opcode
+// family + immediates), dispatched by node.constructor like the AST.
+//
+// Stage 1 (todos/0197) is substrate only: WasmCode's byte encoders are
+// RELOCATED here (byte-identical by construction) and Codegen's function
+// bodies route through nodes. WasmCode itself is demoted to the tiny
+// constant-expression byte arrays (global inits, data-segment offsets)
+// and stays exported.
 
-const Codegen = (() => {
-
-function alwaysReturns(stmt) {
-  switch (stmt.constructor) {
-    case AST.SReturn:
-    case AST.SThrow:
-      return true;
-    case AST.SCompound:
-      if (stmt.labels && stmt.labels.length > 0) return false;
-      return stmt.statements.some(alwaysReturns);
-    case AST.SIf:
-      return stmt.elseBranch !== null
-        && alwaysReturns(stmt.thenBranch)
-        && alwaysReturns(stmt.elseBranch);
-    default:
-      return false;
-  }
-}
+const WAST = (() => {
 
 function appendF32(out, value) {
   const buf = new ArrayBuffer(4);
@@ -13448,15 +13449,6 @@ const WT_F32 = { tag: "num", num: WasmNumType.F32 };
 const WT_F64 = { tag: "num", num: WasmNumType.F64 };
 const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F, heapIsIdx: false };
 const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F, heapIsIdx: false };
-
-// __gcstr dedup key: the literal's content bytes (NUL terminator dropped)
-// decoded as UTF-8. The parser already validated the bytes with a fatal
-// decoder, and strict UTF-8 decode is injective, so key equality is exactly
-// content-byte equality.
-const _gcstrUtf8Decoder = new TextDecoder("utf-8");
-function gcstrKey(estr) {
-  return _gcstrUtf8Decoder.decode(new Uint8Array(estr.value.slice(0, -1)));
-}
 const WT_EQREF = { tag: "ref", nullable: true, heap: 0x6D, heapIsIdx: false };
 const WT_EMPTY = { tag: "empty" };
 
@@ -13469,9 +13461,14 @@ function wtIsNum(wt) { return wt.tag === "num"; }
 function wtIsRef(wt) { return wt.tag === "ref"; }
 function wtIsIntegral(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.I32 || wt.num === WasmNumType.I64); }
 function wtIsFloating(wt) { return wtIsNum(wt) && (wt.num === WasmNumType.F32 || wt.num === WasmNumType.F64); }
+// Block types are a 3-way union: EMPTY | single valtype | function-type
+// index (multi-value, e.g. a catch clause with >=2 tag params). The
+// typeidx arm is encoded as a SIGNED LEB per the spec's blocktype rule;
+// it only ever appears as a block type, never as a plain valtype.
 function wtEmit(wt, buf) {
   if (wt.tag === "empty") buf.push(0x40);
   else if (wt.tag === "num") buf.push(wt.num);
+  else if (wt.tag === "typeidx") lebI(buf, wt.idx);
   else if (wt.tag === "ref") {
     if (wt.heapIsIdx) {
       // Encoded as ref[null] (typeidx-as-signed-LEB)
@@ -13489,6 +13486,7 @@ function wtEquals(a, b) {
   if (a.tag !== b.tag) return false;
   if (a.tag === "empty") return true;
   if (a.tag === "num") return a.num === b.num;
+  if (a.tag === "typeidx") return a.idx === b.idx;
   if (a.tag === "ref") return a.nullable === b.nullable && a.heap === b.heap && !!a.heapIsIdx === !!b.heapIsIdx;
   return false;
 }
@@ -13590,7 +13588,23 @@ function getaop(wt, op, sign) {
   throw new Error(`Invalid type/op combination: num=${n} op=${op}`);
 }
 
-// WasmCode builder - convenience utility for building WASM bytecode
+// The trunc_sat subop table (WASM 2.0 §5.4.5, 0xFC prefix + LEB subop):
+//   0: i32.trunc_sat_f32_s   1: i32.trunc_sat_f32_u
+//   2: i32.trunc_sat_f64_s   3: i32.trunc_sat_f64_u
+//   4: i64.trunc_sat_f32_s   5: i64.trunc_sat_f32_u
+//   6: i64.trunc_sat_f64_s   7: i64.trunc_sat_f64_u
+function truncSatSubop(dstWt, srcWt, sign) {
+  if (wtEquals(dstWt, WT_I32) && wtEquals(srcWt, WT_F32)) return sign ? 0 : 1;
+  if (wtEquals(dstWt, WT_I32) && wtEquals(srcWt, WT_F64)) return sign ? 2 : 3;
+  if (wtEquals(dstWt, WT_I64) && wtEquals(srcWt, WT_F32)) return sign ? 4 : 5;
+  if (wtEquals(dstWt, WT_I64) && wtEquals(srcWt, WT_F64)) return sign ? 6 : 7;
+  throw new Error("truncSat: unsupported src/dst pair");
+}
+
+// WasmCode builder — DEMOTED (todos/0197): direct byte emission, kept for
+// the tiny 2-instruction constant expressions (global inits, data-segment
+// offsets) where a node layer has zero value. Function bodies build WAST
+// nodes via WastBuilder instead.
 class WasmCode {
   constructor(bytes) { this.bytes = bytes; }
   push(byte) { this.bytes.push(byte); }
@@ -13646,23 +13660,9 @@ class WasmCode {
   memoryFill() { this.push(0xFC); lebU(this.bytes, 11); this.push(0x00); }
 
   // Non-trapping float→int conversion (WASM 2.0 §5.4.5). NaN→0,
-  // out-of-range saturates to IMIN/IMAX. Encoded as the 0xFC misc
-  // prefix + LEB128 subop 0..7.
-  //   subop 0: i32.trunc_sat_f32_s
-  //   subop 1: i32.trunc_sat_f32_u
-  //   subop 2: i32.trunc_sat_f64_s
-  //   subop 3: i32.trunc_sat_f64_u
-  //   subop 4: i64.trunc_sat_f32_s
-  //   subop 5: i64.trunc_sat_f32_u
-  //   subop 6: i64.trunc_sat_f64_s
-  //   subop 7: i64.trunc_sat_f64_u
+  // out-of-range saturates to IMIN/IMAX.
   truncSat(dstWt, srcWt, sign) {
-    let subop;
-    if (wtEquals(dstWt, WT_I32) && wtEquals(srcWt, WT_F32)) subop = sign ? 0 : 1;
-    else if (wtEquals(dstWt, WT_I32) && wtEquals(srcWt, WT_F64)) subop = sign ? 2 : 3;
-    else if (wtEquals(dstWt, WT_I64) && wtEquals(srcWt, WT_F32)) subop = sign ? 4 : 5;
-    else if (wtEquals(dstWt, WT_I64) && wtEquals(srcWt, WT_F64)) subop = sign ? 6 : 7;
-    else throw new Error("truncSat: unsupported src/dst pair");
+    const subop = truncSatSubop(dstWt, srcWt, sign);
     this.push(0xFC); lebU(this.bytes, subop);
   }
 
@@ -13731,6 +13731,443 @@ class WasmCode {
     this.push(0xFB); lebU(this.bytes, 0x11);
     lebU(this.bytes, dstTypeIdx); lebU(this.bytes, srcTypeIdx);
   }
+}
+
+// ---- WAST node classes ----
+//
+// Thin family nodes: one class per instruction FAMILY, not per opcode —
+// WAop/WMop/WGCOp lean on the getaop/MOP/subop tables above. Immediates
+// only; result types are implied by the opcode tables. `target` fields on
+// branch/catch entries are label identities: the WBlock/WLoop/WIf/
+// WTryTable node they branch to, or the builder's per-function FUNC label
+// sentinel ({ isFuncLabel: true }, depth == full nesting).
+
+class WBlock { constructor(bt) { this.bt = bt; } }
+class WLoop { constructor(bt) { this.bt = bt; } }
+class WIf { constructor(bt) { this.bt = bt; } }
+class WElse { }
+class WEnd { }
+// catches: [{ kind, tagIdx, target }] — kind/tagIdx as in the binary
+// format (0x00 catch / 0x01 catch_ref take a tag; 0x02/0x03 don't).
+class WTryTable { constructor(bt, catches) { this.bt = bt; this.catches = catches; } }
+class WBr { constructor(target) { this.target = target; } }
+class WBrIf { constructor(target) { this.target = target; } }
+class WBrTable { constructor(targets, defaultTarget) { this.targets = targets; this.defaultTarget = defaultTarget; } }
+class WReturn { }
+class WCall { constructor(funcIdx) { this.funcIdx = funcIdx; } }
+class WCallIndirect { constructor(typeIdx, tableIdx) { this.typeIdx = typeIdx; this.tableIdx = tableIdx; } }
+class WConst { constructor(wt, value) { this.wt = wt; this.value = value; } }
+class WLocalGet { constructor(idx) { this.idx = idx; } }
+class WLocalSet { constructor(idx) { this.idx = idx; } }
+class WLocalTee { constructor(idx) { this.idx = idx; } }
+class WGlobalGet { constructor(idx) { this.idx = idx; } }
+class WGlobalSet { constructor(idx) { this.idx = idx; } }
+class WAop { constructor(wt, op, sign) { this.wt = wt; this.op = op; this.sign = sign; } }
+class WMop { constructor(opcode, offset, align) { this.opcode = opcode; this.offset = offset; this.align = align; } }
+class WTruncSat { constructor(subop) { this.subop = subop; } }
+class WMemorySize { }
+class WMemoryGrow { }
+class WMemoryCopy { }
+class WMemoryFill { }
+class WDrop { }
+class WNop { }
+class WUnreachable { }
+class WThrow { constructor(tagIdx) { this.tagIdx = tagIdx; } }
+// Reference-type long tail. kind selects the encoding (they mix raw-byte,
+// signed-LEB and 0xFB-prefixed forms, so they can't share WGCOp's shape):
+// "null" | "nullIdx" | "isNull" | "eq" | "test" | "testNull" | "cast" |
+// "castNull" | "castNullEq" | "anyExtern" | "externAny"
+class WRefOp { constructor(kind, imm) { this.kind = kind; this.imm = imm; } }
+// GC ops: 0xFB prefix + LEB subop + unsigned-LEB immediates, uniformly.
+class WGCOp { constructor(subop, imms) { this.subop = subop; this.imms = imms; } }
+// The EWasm escape hatch: pre-encoded bytes emitted verbatim. Stack-opaque
+// — an optimization BARRIER in later stages. Real __wasm() carriers are
+// flat single instructions (no control flow), so it is structurally safe.
+class WRaw { constructor(bytes) { this.bytes = bytes; } }
+// Zero-width source-map marker: serialize() reports the body-relative byte
+// offset it lands on via the onSrcLoc callback.
+class WSrcLoc { constructor(fileIdx, line) { this.fileIdx = fileIdx; this.line = line; } }
+
+// ---- WastBuilder ----
+//
+// Same method surface as WasmCode — the ~545 Codegen `this.body.*` call
+// sites change zero characters — but appends nodes instead of bytes.
+// block/loop/if_/tryTable push their node onto a live control stack,
+// end() pops it, and br(depth) resolves the numeric depth against that
+// stack AT BUILD TIME (the only moment it is valid) into a label identity.
+// The stack bottom is the FUNC label: br to depth == nesting targets the
+// function body itself.
+class WastBuilder {
+  constructor() {
+    this.nodes = [];
+    this.funcLabel = { isFuncLabel: true };
+    this.ctrl = [this.funcLabel];
+    this._lastLoc = null;
+  }
+  _append(n) { this.nodes.push(n); }
+
+  // Raw byte escape hatch (EWasm): consecutive pushes coalesce into one
+  // WRaw node, emitted verbatim by serialize().
+  push(byte) {
+    const last = this.nodes[this.nodes.length - 1];
+    if (last instanceof WRaw) last.bytes.push(byte);
+    else this._append(new WRaw([byte]));
+  }
+
+  // Subsumes WasmCode._checkBrDepth: a depth that doesn't land on the live
+  // control stack is the same class of internal bug, caught at the same
+  // moment (the emit site), with the label resolution as a bonus.
+  _resolveDepth(d, opName) {
+    if (typeof d !== "number" || !Number.isInteger(d) || d < 0 || d >= this.ctrl.length) {
+      throw new Error(
+        `internal codegen error: ${opName} depth ${d} is out of range ` +
+        `(likely a stale entry in gotoLabelDepths / breakTarget / continueTarget)`);
+    }
+    return this.ctrl[this.ctrl.length - 1 - d];
+  }
+
+  // Control flow
+  unreachable() { this._append(new WUnreachable()); }
+  nop() { this._append(new WNop()); }
+  block(bt) { const n = new WBlock(bt || WT_EMPTY); this._append(n); this.ctrl.push(n); }
+  loop(bt) { const n = new WLoop(bt || WT_EMPTY); this._append(n); this.ctrl.push(n); }
+  if_(bt) { const n = new WIf(bt); this._append(n); this.ctrl.push(n); }
+  else_() { this._append(new WElse()); }
+  end() {
+    if (this.ctrl.length <= 1) {
+      throw new Error("internal codegen error: end() with no open control construct");
+    }
+    this._append(new WEnd());
+    this.ctrl.pop();
+  }
+  br(labelIdx) { this._append(new WBr(this._resolveDepth(labelIdx, "br"))); }
+  brIf(labelIdx) { this._append(new WBrIf(this._resolveDepth(labelIdx, "brIf"))); }
+  brTable(labels, defaultLabel) {
+    this._append(new WBrTable(
+      labels.map((l) => this._resolveDepth(l, "brTable entry")),
+      this._resolveDepth(defaultLabel, "brTable default")));
+  }
+  ret() { this._append(new WReturn()); }
+  call(funcIdx) { this._append(new WCall(funcIdx)); }
+  callIndirect(typeIdx) { this._append(new WCallIndirect(typeIdx, 0)); }
+
+  // Locals and globals
+  localGet(idx) { this._append(new WLocalGet(idx)); }
+  localSet(idx) { this._append(new WLocalSet(idx)); }
+  localTee(idx) { this._append(new WLocalTee(idx)); }
+  globalGet(idx) { this._append(new WGlobalGet(idx)); }
+  globalSet(idx) { this._append(new WGlobalSet(idx)); }
+
+  // Memory operations
+  mop(opcode, offset, align) { this._append(new WMop(opcode, offset, align)); }
+  memorySize() { this._append(new WMemorySize()); }
+  memoryGrow() { this._append(new WMemoryGrow()); }
+  memoryCopy() { this._append(new WMemoryCopy()); }
+  memoryFill() { this._append(new WMemoryFill()); }
+  truncSat(dstWt, srcWt, sign) { this._append(new WTruncSat(truncSatSubop(dstWt, srcWt, sign))); }
+
+  // Numeric constants
+  i32Const(value) { this._append(new WConst(WT_I32, value)); }
+  i64Const(value) { this._append(new WConst(WT_I64, value)); }
+  f32Const(value) { this._append(new WConst(WT_F32, value)); }
+  f64Const(value) { this._append(new WConst(WT_F64, value)); }
+
+  // ALU operations
+  aop(wt, op, sign) { this._append(new WAop(wt, op, sign)); }
+
+  // Exception handling. tryTable's catch label indices are relative to the
+  // context OUTSIDE the try_table (codegen computes them before the
+  // try_table's own label exists), so resolve first, then open the label.
+  throw_(tagIdx) { this._append(new WThrow(tagIdx)); }
+  tryTable(blockType, catches) {
+    const resolved = catches.map(([kind, tagIdx, labelIdx]) =>
+      ({ kind, tagIdx, target: this._resolveDepth(labelIdx, "tryTable catch") }));
+    const n = new WTryTable(blockType, resolved);
+    this._append(n);
+    this.ctrl.push(n);
+  }
+
+  // Drop
+  drop() { this._append(new WDrop()); }
+
+  // Reference types
+  refNull(heapType) { this._append(new WRefOp("null", heapType)); }
+  refNullIdx(typeIdx) { this._append(new WRefOp("nullIdx", typeIdx)); }
+  refIsNull() { this._append(new WRefOp("isNull")); }
+  refEq() { this._append(new WRefOp("eq")); }
+  refTest(typeIdx) { this._append(new WRefOp("test", typeIdx)); }
+  refTestNull(typeIdx) { this._append(new WRefOp("testNull", typeIdx)); }
+  refCast(typeIdx) { this._append(new WRefOp("cast", typeIdx)); }
+  refCastNull(typeIdx) { this._append(new WRefOp("castNull", typeIdx)); }
+  refCastNullEq() { this._append(new WRefOp("castNullEq")); }
+  anyConvertExtern() { this._append(new WRefOp("anyExtern")); }
+  externConvertAny() { this._append(new WRefOp("externAny")); }
+
+  // GC opcodes (0xFB ...)
+  structNew(typeIdx) { this._append(new WGCOp(0x00, [typeIdx])); }
+  structNewDefault(typeIdx) { this._append(new WGCOp(0x01, [typeIdx])); }
+  structGet(typeIdx, fieldIdx) { this._append(new WGCOp(0x02, [typeIdx, fieldIdx])); }
+  structGetS(typeIdx, fieldIdx) { this._append(new WGCOp(0x03, [typeIdx, fieldIdx])); }
+  structGetU(typeIdx, fieldIdx) { this._append(new WGCOp(0x04, [typeIdx, fieldIdx])); }
+  structSet(typeIdx, fieldIdx) { this._append(new WGCOp(0x05, [typeIdx, fieldIdx])); }
+  arrayNew(typeIdx) { this._append(new WGCOp(0x06, [typeIdx])); }
+  arrayNewDefault(typeIdx) { this._append(new WGCOp(0x07, [typeIdx])); }
+  arrayNewFixed(typeIdx, n) { this._append(new WGCOp(0x08, [typeIdx, n])); }
+  arrayGet(typeIdx) { this._append(new WGCOp(0x0B, [typeIdx])); }
+  arrayGetS(typeIdx) { this._append(new WGCOp(0x0C, [typeIdx])); }
+  arrayGetU(typeIdx) { this._append(new WGCOp(0x0D, [typeIdx])); }
+  arraySet(typeIdx) { this._append(new WGCOp(0x0E, [typeIdx])); }
+  arrayLen() { this._append(new WGCOp(0x0F, [])); }
+  arrayFill(typeIdx) { this._append(new WGCOp(0x10, [typeIdx])); }
+  arrayCopy(dstTypeIdx, srcTypeIdx) { this._append(new WGCOp(0x11, [dstTypeIdx, srcTypeIdx])); }
+
+  // Source-map marker (zero-width). Consecutive same-(file,line) records
+  // dedup here, mirroring the old _recordSourceLoc last-entry check.
+  srcLoc(fileIdx, line) {
+    if (this._lastLoc && this._lastLoc.fileIdx === fileIdx && this._lastLoc.line === line) return;
+    const n = new WSrcLoc(fileIdx, line);
+    this._lastLoc = n;
+    this._append(n);
+  }
+}
+
+// ---- Serializer ----
+//
+// The byte-encoding logic RELOCATED from WasmCode into one
+// switch(node.constructor) walk. The active-label stack re-derives every
+// branch depth from label identity (subsuming _checkBrDepth: an unknown
+// label throws at the offending node), and WSrcLoc markers report their
+// body-relative byte offset through opts.onSrcLoc.
+function serialize(fnNodes, out, opts) {
+  const onSrcLoc = opts && opts.onSrcLoc;
+  const base = out.length;
+  const stack = []; // active label identities, innermost last (FUNC label implicit)
+
+  function depthOf(target, opName) {
+    if (target && target.isFuncLabel) return stack.length;
+    const i = stack.lastIndexOf(target);
+    if (i < 0) {
+      throw new Error(`internal codegen error: ${opName} targets a label that is not on the active control stack`);
+    }
+    return stack.length - 1 - i;
+  }
+
+  for (const n of fnNodes) {
+    switch (n.constructor) {
+      case WLocalGet: out.push(0x20); lebU(out, n.idx); break;
+      case WLocalSet: out.push(0x21); lebU(out, n.idx); break;
+      case WLocalTee: out.push(0x22); lebU(out, n.idx); break;
+      case WGlobalGet: out.push(0x23); lebU(out, n.idx); break;
+      case WGlobalSet: out.push(0x24); lebU(out, n.idx); break;
+      case WConst:
+        switch (n.wt.num) {
+          case WasmNumType.I32: out.push(0x41); lebI(out, Number(n.value) | 0); break;
+          case WasmNumType.I64:
+            out.push(0x42);
+            if (typeof n.value === "bigint") lebI64(out, n.value);
+            else lebI64(out, BigInt(n.value));
+            break;
+          case WasmNumType.F32: out.push(0x43); appendF32(out, n.value); break;
+          case WasmNumType.F64: out.push(0x44); appendF64(out, n.value); break;
+          default: throw new Error("WAST serialize: WConst with non-numeric type");
+        }
+        break;
+      case WAop: out.push(getaop(n.wt, n.op, n.sign)); break;
+      case WMop: out.push(n.opcode); lebU(out, n.align); lebU(out, n.offset); break;
+      case WBlock: out.push(0x02); wtEmit(n.bt, out); stack.push(n); break;
+      case WLoop: out.push(0x03); wtEmit(n.bt, out); stack.push(n); break;
+      case WIf: out.push(0x04); wtEmit(n.bt, out); stack.push(n); break;
+      case WElse: out.push(0x05); break;
+      case WEnd:
+        if (stack.length === 0) throw new Error("WAST serialize: end with no open control construct");
+        out.push(0x0B);
+        stack.pop();
+        break;
+      case WBr: out.push(0x0C); lebU(out, depthOf(n.target, "br")); break;
+      case WBrIf: out.push(0x0D); lebU(out, depthOf(n.target, "brIf")); break;
+      case WBrTable:
+        out.push(0x0E);
+        lebU(out, n.targets.length);
+        for (const t of n.targets) lebU(out, depthOf(t, "brTable entry"));
+        lebU(out, depthOf(n.defaultTarget, "brTable default"));
+        break;
+      case WReturn: out.push(0x0F); break;
+      case WCall: out.push(0x10); lebU(out, n.funcIdx); break;
+      case WCallIndirect: out.push(0x11); lebU(out, n.typeIdx); out.push(n.tableIdx); break;
+      case WTryTable:
+        // Catch labels resolve in the context OUTSIDE the try_table's own
+        // label — push it only after the handler entries are encoded.
+        out.push(0x1F);
+        wtEmit(n.bt, out);
+        lebU(out, n.catches.length);
+        for (const c of n.catches) {
+          out.push(c.kind);
+          if (c.kind === 0x00 || c.kind === 0x01) lebU(out, c.tagIdx);
+          lebU(out, depthOf(c.target, "tryTable catch"));
+        }
+        stack.push(n);
+        break;
+      case WThrow: out.push(0x08); lebU(out, n.tagIdx); break;
+      case WUnreachable: out.push(0x00); break;
+      case WNop: out.push(0x01); break;
+      case WDrop: out.push(0x1A); break;
+      case WMemorySize: out.push(0x3F); out.push(0x00); break;
+      case WMemoryGrow: out.push(0x40); out.push(0x00); break;
+      case WMemoryCopy: out.push(0xFC); lebU(out, 10); out.push(0x00); out.push(0x00); break;
+      case WMemoryFill: out.push(0xFC); lebU(out, 11); out.push(0x00); break;
+      case WTruncSat: out.push(0xFC); lebU(out, n.subop); break;
+      case WRefOp:
+        switch (n.kind) {
+          case "null": out.push(0xD0); out.push(n.imm); break;
+          case "nullIdx": out.push(0xD0); lebI(out, n.imm); break;
+          case "isNull": out.push(0xD1); break;
+          case "eq": out.push(0xD3); break;
+          case "test": out.push(0xFB); lebU(out, 0x14); lebI(out, n.imm); break;
+          case "testNull": out.push(0xFB); lebU(out, 0x15); lebI(out, n.imm); break;
+          case "cast": out.push(0xFB); lebU(out, 0x16); lebI(out, n.imm); break;
+          case "castNull": out.push(0xFB); lebU(out, 0x17); lebI(out, n.imm); break;
+          case "castNullEq": out.push(0xFB); lebU(out, 0x17); out.push(0x6D); break;
+          case "anyExtern": out.push(0xFB); lebU(out, 0x1A); break;
+          case "externAny": out.push(0xFB); lebU(out, 0x1B); break;
+          default: throw new Error(`WAST serialize: unknown WRefOp kind '${n.kind}'`);
+        }
+        break;
+      case WGCOp:
+        out.push(0xFB);
+        lebU(out, n.subop);
+        for (const imm of n.imms) lebU(out, imm);
+        break;
+      case WRaw:
+        for (const b of n.bytes) out.push(b);
+        break;
+      case WSrcLoc:
+        if (onSrcLoc) onSrcLoc(out.length - base, n.fileIdx, n.line);
+        break;
+      default:
+        throw new Error(`WAST serialize: unknown node ${n.constructor && n.constructor.name}`);
+    }
+  }
+  if (stack.length !== 0) {
+    throw new Error(`WAST serialize: ${stack.length} unclosed control construct(s)`);
+  }
+}
+
+// ---- Flat validator ----
+//
+// Cheap structural insurance, run after building each function body in
+// Stage 1 (and after every transform in later stages): control balance,
+// else only inside if, every branch target on the active control stack
+// (or this function's FUNC label), block types shaped like the 3-way
+// EMPTY | valtype | typeidx union. Arity/stack typing is deliberately NOT
+// checked here — the engine-level WebAssembly.validate backstop covers it.
+function validate(fnNodes, funcLabel) {
+  const stack = [];
+  function checkTarget(t, what) {
+    if (t && t.isFuncLabel) {
+      if (funcLabel && t !== funcLabel) {
+        throw new Error(`WAST validate: ${what} targets a foreign function's label`);
+      }
+      return;
+    }
+    if (stack.lastIndexOf(t) < 0) {
+      throw new Error(`WAST validate: ${what} targets a label that is not on the active control stack`);
+    }
+  }
+  function checkBt(bt, what) {
+    if (!bt || (bt.tag !== "empty" && bt.tag !== "num" && bt.tag !== "ref" && bt.tag !== "typeidx")) {
+      throw new Error(`WAST validate: ${what} has an invalid block type`);
+    }
+  }
+  for (const n of fnNodes) {
+    switch (n.constructor) {
+      case WBlock: checkBt(n.bt, "block"); stack.push(n); break;
+      case WLoop: checkBt(n.bt, "loop"); stack.push(n); break;
+      case WIf: checkBt(n.bt, "if"); stack.push(n); break;
+      case WTryTable:
+        checkBt(n.bt, "try_table");
+        for (const c of n.catches) checkTarget(c.target, "try_table catch");
+        stack.push(n);
+        break;
+      case WElse:
+        if (!(stack[stack.length - 1] instanceof WIf)) {
+          throw new Error("WAST validate: else outside an if");
+        }
+        break;
+      case WEnd:
+        if (stack.length === 0) throw new Error("WAST validate: end with no open control construct");
+        stack.pop();
+        break;
+      case WBr: checkTarget(n.target, "br"); break;
+      case WBrIf: checkTarget(n.target, "brIf"); break;
+      case WBrTable:
+        for (const t of n.targets) checkTarget(t, "brTable entry");
+        checkTarget(n.defaultTarget, "brTable default");
+        break;
+    }
+  }
+  if (stack.length !== 0) {
+    throw new Error(`WAST validate: ${stack.length} unclosed control construct(s)`);
+  }
+}
+
+return {
+  // Relocated target-side tables and encoders (consumed by Codegen)
+  WasmNumType, WT_I32, WT_I64, WT_F32, WT_F64, WT_EXTERNREF, WT_REFEXTERN,
+  WT_EQREF, WT_EMPTY, WT_GCREF,
+  wtIsNum, wtIsRef, wtIsIntegral, wtIsFloating, wtEmit, wtEquals,
+  MOP, ALU, getaop, appendF32, appendF64,
+  WasmCode,
+  // WAST proper
+  WastBuilder, serialize, validate,
+  WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
+  WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
+  WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
+  WMemoryCopy, WMemoryFill, WDrop, WNop, WUnreachable, WThrow, WRefOp,
+  WGCOp, WRaw, WSrcLoc,
+};
+
+})();
+
+// ====================
+// WASM
+// ====================
+
+const Codegen = (() => {
+
+// Target-side wasm type/opcode tables, byte encoders and the demoted
+// WasmCode byte builder were relocated into the WAST module (todos/0197);
+// Codegen consumes them unchanged.
+const {
+  WasmNumType, WT_I32, WT_I64, WT_F32, WT_F64, WT_EXTERNREF, WT_REFEXTERN,
+  WT_EQREF, WT_EMPTY, WT_GCREF, wtIsNum, wtIsRef, wtIsIntegral,
+  wtIsFloating, wtEmit, wtEquals, MOP, ALU, getaop, appendF32, appendF64,
+  WasmCode, WastBuilder,
+} = WAST;
+
+function alwaysReturns(stmt) {
+  switch (stmt.constructor) {
+    case AST.SReturn:
+    case AST.SThrow:
+      return true;
+    case AST.SCompound:
+      if (stmt.labels && stmt.labels.length > 0) return false;
+      return stmt.statements.some(alwaysReturns);
+    case AST.SIf:
+      return stmt.elseBranch !== null
+        && alwaysReturns(stmt.thenBranch)
+        && alwaysReturns(stmt.elseBranch);
+    default:
+      return false;
+  }
+}
+
+// __gcstr dedup key: the literal's content bytes (NUL terminator dropped)
+// decoded as UTF-8. The parser already validated the bytes with a fatal
+// decoder, and strict UTF-8 decode is injective, so key equality is exactly
+// content-byte equality.
+const _gcstrUtf8Decoder = new TextDecoder("utf-8");
+function gcstrKey(estr) {
+  return _gcstrUtf8Decoder.decode(new Uint8Array(estr.value.slice(0, -1)));
 }
 
 // ====================
@@ -14938,9 +15375,9 @@ class CodeGenerator {
       this.sourceMapFiles.push(loc.filename);
       this.sourceMapFileIndex.set(loc.filename, fileIdx);
     }
-    var last = this.currentFuncSourceMap[this.currentFuncSourceMap.length - 1];
-    if (last && last.fileIdx === fileIdx && last.line === loc.line) return;
-    this.currentFuncSourceMap.push({ offset: this.body.bytes.length, fileIdx: fileIdx, line: loc.line });
+    // Zero-width WAST marker; the serializer reports its byte offset into
+    // currentFuncSourceMap via the onSrcLoc callback (todos/0197).
+    this.body.srcLoc(fileIdx, loc.line);
   }
 
   _trackLocalName(idx, name) {
@@ -15634,14 +16071,18 @@ class CodeGenerator {
     const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
     this.assignLocals(funcDef);
     const defIdx = funcIdx - this.wmod.funcImports.length;
-    const wasmCode = new WasmCode(this.wmod.funcDefs[defIdx].body);
-    this.body = wasmCode;
+    // Function bodies build WAST nodes (todos/0197); the sequence is
+    // validated + serialized into wmod.funcDefs[defIdx].body at the end of
+    // this method, so bytes still land there exactly once per emit attempt
+    // (the driver's goto-rollback truncation keeps working).
+    this.body = new WAST.WastBuilder();
     this.currentFuncDef = funcDef;
     this.currentFuncSourceMap = this.compilerOptions.emitNames ? [] : null;
     this.structRetDeferred = 0;
     this.callNesting = 0;
     this.blockDepth = 0;
     this.gotoLabelDepths.clear();
+    const gotoErrLenAtEntry = this.gotoErrors.length;
 
     this._recordSourceLoc(funcDef.loc);
 
@@ -15735,6 +16176,31 @@ class CodeGenerator {
       }
       this.body.ret();
     }
+
+    // Serialize the WAST node sequence into the module's body byte array.
+    // Source-map entries are recorded HERE (byte offsets exist only now),
+    // so the flush below must stay after this call.
+    if (this.gotoErrors.length > gotoErrLenAtEntry) {
+      // This structured attempt hit out-of-scope gotos: the driver either
+      // rolls it back and re-emits through the loop-switch lowering, or
+      // surfaces the errors and exits — the bytes are discarded either
+      // way. The node sequence may be legitimately unbalanced here
+      // (forward-label blocks opened but never closed), so don't
+      // validate or serialize it.
+    } else {
+      const fnSourceMap = this.currentFuncSourceMap;
+      try {
+        WAST.validate(this.body.nodes, this.body.funcLabel);
+        WAST.serialize(this.body.nodes, this.wmod.funcDefs[defIdx].body,
+          fnSourceMap
+            ? { onSrcLoc: (offset, fileIdx, line) => { fnSourceMap.push({ offset: offset, fileIdx: fileIdx, line: line }); } }
+            : null);
+      } catch (e) {
+        e.message = `in function '${funcDef.name}': ` + e.message;
+        throw e;
+      }
+    }
+
     if (this.currentFuncSourceMap && this.currentFuncSourceMap.length > 0) {
       this.sourceMapEntries.push({ funcIdx: defIdx, entries: this.currentFuncSourceMap });
     }
@@ -16258,9 +16724,12 @@ class CodeGenerator {
           if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
           else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0], this.wmod));
           else {
+            // Multi-value catch payload: block type = function-type index
+            // (the 3-way blocktype union's third arm, first-class since
+            // todos/0197 — this was a raw byte push before).
             const results = cc.tag.paramTypes.map(pt => cToWasmType(pt, this.wmod));
             const typeIdx = this.wmod.addFunctionTypeId([], results);
-            this.body.push(0x02); lebI(this.body.bytes, typeIdx);
+            this.body.block({ tag: "typeidx", idx: typeIdx });
           }
           this.blockDepth++;
           catchBlockDepths[i] = this.blockDepth;
