@@ -14110,6 +14110,73 @@ function validate(fnNodes, funcLabel) {
   }
 }
 
+// ---- Passes ----
+
+function mopIsLoad(opcode) { return opcode >= MOP.I32_LOAD && opcode <= MOP.I64_LOAD32_U; }
+function mopIsStore(opcode) { return opcode >= MOP.I32_STORE && opcode <= MOP.I64_STORE32; }
+
+// Offset-fold peephole (todos/0200). Codegen materializes every address
+// displacement as an explicit `i32.const k; i32.add` and emits ALL loads/
+// stores with memarg offset 0, so the offset immediate is free real estate.
+// Collapse the adjacent pair into it:
+//
+//   loads:  [.., WConst i32 k, WAop i32.add,    WMop load  off=0]
+//        -> [..,                               WMop load  off=k]
+//   stores: [.., WConst i32 k, WAop i32.add, V, WMop store off=0]
+//        -> [..,                            V, WMop store off=k]
+//
+// A load pops exactly its address, so an immediately-preceding add IS the
+// address producer. A store pops [value, addr] with the VALUE on top: the
+// node just before the WMop produced the value, and the address's const+add
+// sits one node further back — folding the adjacent triple on a store would
+// rewrite the value, not the address. So the store form only fires when V
+// is ONE pure single-push producer (WConst/WLocalGet/WGlobalGet); complex
+// value sequences would need stack-effect analysis to locate the address
+// producer, out of scope for an adjacency peephole.
+//
+// k is normalized exactly as serialize() emits it (Number(v) | 0) and must
+// be >= 0: a negative displacement relies on i32.add's mod-2^32 wrap, which
+// the non-wrapping (33-bit effective address) memarg offset would turn into
+// a trap. For k >= 0 the fold assumes base+k doesn't wrap — only wrapped/UB
+// pointer arithmetic could make it (no object spans the top of the 4GB
+// space), the same assumption every production wasm compiler makes.
+//
+// Matching exact class sequences makes every barrier automatic: WRaw
+// (opaque stack effect), control/label nodes, and WSrcLoc markers all fail
+// the match, so nothing folds across them. Nothing MOVES — two nodes are
+// deleted and an immediate rewritten — so label identities and the
+// relative order of all surviving nodes are untouched. The fold site loops
+// only while k == 0 left the offset foldable again (a chain of `+0` adds),
+// which is what makes a SECOND run of the pass a guaranteed no-op.
+function foldMemOffsets(nodes) {
+  let folds = 0;
+  const out = [];
+  for (const n of nodes) {
+    out.push(n);
+    if (!(n instanceof WMop) || n.offset !== 0) continue;
+    const isLoad = mopIsLoad(n.opcode);
+    if (!isLoad && !mopIsStore(n.opcode)) continue;
+    for (;;) {
+      const ai = out.length - 2 - (isLoad ? 0 : 1); // WAop position
+      if (ai < 1) break;
+      if (!isLoad) {
+        const v = out[out.length - 2];
+        if (!(v instanceof WConst || v instanceof WLocalGet || v instanceof WGlobalGet)) break;
+      }
+      const a = out[ai], c = out[ai - 1];
+      if (!(a instanceof WAop) || a.op !== ALU.OP_ADD || !wtEquals(a.wt, WT_I32)) break;
+      if (!(c instanceof WConst) || !wtEquals(c.wt, WT_I32)) break;
+      const k = Number(c.value) | 0; // serialize()'s own normalization
+      if (k < 0) break;
+      out.splice(ai - 1, 2); // drop WConst + WAop; base producer (and V) stay put
+      n.offset = k;
+      folds++;
+      if (k !== 0) break;
+    }
+  }
+  return { nodes: out, folds };
+}
+
 // ---- Pass hook ----
 //
 // The post-codegen, pre-serialize seam (todos/0198). When this runs, every
@@ -14117,9 +14184,26 @@ function validate(fnNodes, funcLabel) {
 // func/global/type indices were assigned in the pre-pass) and nothing has
 // been serialized yet, so cross-function transforms (inlining) and local
 // ones (peephole) both belong here. A pass that rewrites a function must
-// re-run validate() on it. Stage 2 deliberately runs no passes.
+// re-run validate() on it (the per-function funcLabel isn't persisted on
+// the funcDef, so the re-validation passes null — every structural check
+// except the foreign-func-label one still runs).
+// Telemetry lands on wmod.passStats and mirrors to WAST.lastPassStats
+// (read by benches/tests after a compile; the compiler itself stays quiet).
 function runPasses(wmod) {
+  let offsetFolds = 0;
+  for (const def of wmod.funcDefs) {
+    if (!def.wast) continue;
+    const r = foldMemOffsets(def.wast);
+    if (r.folds > 0) {
+      def.wast = r.nodes;
+      validate(def.wast, null);
+      offsetFolds += r.folds;
+    }
+  }
+  wmod.passStats = { offsetFolds };
+  lastPassStats.offsetFolds = offsetFolds;
 }
+const lastPassStats = { offsetFolds: 0 };
 
 return {
   // Relocated target-side tables and encoders (consumed by Codegen)
@@ -14129,7 +14213,7 @@ return {
   MOP, ALU, getaop, appendF32, appendF64,
   WasmCode,
   // WAST proper
-  WastBuilder, serialize, validate, runPasses,
+  WastBuilder, serialize, validate, runPasses, lastPassStats,
   WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
   WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
   WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
@@ -30184,6 +30268,9 @@ var _exports = {
   // CFG (basic-block decomposition) view of every function without
   // having to re-implement the segment walker.
   IRREDUCIBLE_LOWERING,
+  // WAST target layer — exposed for pass telemetry (WAST.lastPassStats,
+  // updated per emit) and node-level pass tests.
+  WAST,
   // Parser
   parseTokens: Parser.parseTokens,
   parseSource: Parser.parseSource,
