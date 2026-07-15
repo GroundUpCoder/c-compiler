@@ -1,6 +1,6 @@
 # 0079 — Project files: dedup diamond deps (zlib-via-two-paths = duplicate symbols)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-15; fix in compiler.js expandProjectJson + os-common.js buildProject, cairo honest dep restored, tests/projects/diamond fixture; log: logs/2026-07-15/0079-project-dep-dedup.md)
 - **Design**: this file (found during 0061)
 
 ## Goal
