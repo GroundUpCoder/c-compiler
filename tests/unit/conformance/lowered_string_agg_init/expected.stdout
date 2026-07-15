@@ -1,0 +1,8 @@
+plain: plain
+braced: 6 brace
+padded: pad 0 0
+w16: 3 88 89 0
+w16b: 65 66 0
+w32: 90 233 0
+nm: 7 gucOS 0
+twod: ab cdef

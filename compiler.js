@@ -6756,6 +6756,17 @@ function hoistDeclarations(funcDef) {
     if (init instanceof AST.EInitList) {
       const t = target.type.removeQualifiers();
       if (t.isArray()) {
+        // C11 6.7.9p14 brace-wrapped string: normalizeInitList keeps the
+        // literal as the SOLE element (the EInitList{char[N],[EString]}
+        // shape) — it initializes the WHOLE array, not element 0. Without
+        // this, `char B[] = {"brace"}` fell to the scalar leaf below as
+        // B[0] = <string> and stored the literal's address low byte.
+        if (init.elements.length === 1 && init.elements[0] instanceof AST.EString &&
+            !t.baseType.removeQualifiers().isArray() &&
+            !t.baseType.removeQualifiers().isAggregate()) {
+          emitAggregateInitAssigns(target, init.elements[0], out);
+          return;
+        }
         for (let i = 0; i < init.elements.length; i++) {
           const el = init.elements[i];
           if (!el) continue;
@@ -6792,8 +6803,14 @@ function hoistDeclarations(funcDef) {
       // bytes include the NUL; remaining elements zero-fill).
       const arrType = target.type.removeQualifiers();
       const n = arrType.arraySize || 0;
+      // The literal's value is little-endian BYTES; decode element-sized
+      // units — u"XY" is [88,0, 89,0, 0,0], so indexing raw bytes by the
+      // ELEMENT index interleaved the NULs (`{88,0,89}` not `{88,89,0}`).
+      const es = (init.type && init.type.removeQualifiers().isArray())
+        ? init.type.removeQualifiers().baseType.removeQualifiers().size : 1;
       for (let i = 0; i < n; i++) {
-        const b = i < init.value.length ? init.value[i] : 0;
+        let b = 0;
+        for (let k = 0; k < es; k++) b += (init.value[i * es + k] || 0) * 2 ** (8 * k);
         const idx = new AST.EInt(init.loc, Types.TINT, BigInt(i));
         const lhs = AST.makeSubscript(init.loc, target, idx);
         const rhs = new AST.EInt(init.loc, Types.TINT, BigInt(b));
