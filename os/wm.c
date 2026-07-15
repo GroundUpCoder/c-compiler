@@ -1094,11 +1094,22 @@ static void reap_kids(void) {
  * desktop grid (fileman keeps its copy in step): anything runnable after
  * symlink resolution — ow_is_runnable peeks through links, so a menu link
  * to a binary still spawns via the link path — runs directly (launchers
- * are ordinary #!/bin/sh scripts); anything else opens through the
- * openwith associations in the GUI context (todos/0072). */
+ * are ordinary #!/bin/sh scripts); directories open in fileman
+ * (todos/0185); anything else opens through the openwith associations in
+ * the GUI context (todos/0072). */
 static void activate(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return;            /* gone, or a dangling link */
+    if (S_ISDIR(st.st_mode)) {                   /* a folder opens in fileman
+                                                    (todos/0185; stat follows
+                                                    links, matching the grid's
+                                                    is_dir). Start-menu dirs
+                                                    are flyout groups and
+                                                    never reach here. */
+        char *argv[3] = { "fileman", (char *)path, 0 };
+        spawn_path("/bin/fileman", argv);
+        return;
+    }
     if (S_ISREG(st.st_mode) && ow_is_runnable(path)) {
         const char *name = strrchr(path, '/');
         name = name ? name + 1 : path;
@@ -2295,6 +2306,11 @@ static void draw_desk(void) {
             fill_s(px, w, h, ix + 5, iy + ICON_W - 7, ICON_W - 10, 2, navy);
             if (desk_trash_full)
                 fill_s(px, w, h, ix + 8, iy + 8, ICON_W - 16, ICON_W - 16, navy);
+        } else if (desk[i].is_dir) {
+            /* Folder (todos/0185): navy tab + body; the tile center stays
+             * navy, so center-pixel probes see launchers and folders alike. */
+            fill_s(px, w, h, ix + 5, iy + 5, (ICON_W - 10) / 2, 3, navy);
+            fill_s(px, w, h, ix + 5, iy + 8, ICON_W - 10, ICON_W - 13, navy);
         } else {
             fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
         }
