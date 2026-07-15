@@ -1,6 +1,6 @@
 # 0183 — fakegit test goldens pin HEAD — the category is permanently red
 
-- **Status**: open
+- **Status**: done (2026-07-15; tests now run against the deterministic fixture repo from tests/fakegit/make-fixture.sh, goldens recaptured — 9/9 green, commit-invariant; log: logs/2026-07-15/fakegit-hermetic-0183.md)
 - **Design**: this file (found during the 0079 gate, 2026-07-15)
 
 ## Goal
