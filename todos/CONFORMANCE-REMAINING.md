@@ -76,11 +76,16 @@ get a spike + `*-check.mjs`/`*-renders.mjs` there, same as the unit corpus.
   (allocateStatic), locals > 16 get an over-aligned frame (prologue masks the
   base into a dedicated local); non-power-of-2 now diagnosed like gcc/clang.
   The busybox ALIGN* workaround patch was reverted.
-- **Volatile accesses vs the inliner**: `twice(mmio)` inlines to two volatile
-  reads, `ignore(mmio)` to zero (C11 5.1.2.3 — access count is observable).
-  Fix: EIdent/deref of volatile-qualified type must not be UNRESTRICTED
-  linearity. Matters for tinyemu-class MMIO code; unobservable in the default
-  host, which is why it was deferred.
+- ~~**Volatile accesses vs the inliner**: `twice(mmio)` inlines to two volatile
+  reads, `ignore(mmio)` to zero (C11 5.1.2.3 — access count is observable).~~ —
+  FIXED 2026-07-15 (todos/0187): EIdent / `*p` / `a[i]` / `s.f` / `p->f`
+  classify LINEAR when the accessed object's type is volatile-qualified
+  (member accesses also check the base aggregate/pointee; makeSubscript
+  pushes a volatile array-type qualifier onto the element per C11 6.7.3p9),
+  so tryInline's UNRESTRICTED guards refuse the call. Pinned by the
+  volatile-linearity block in `tests/ast/test_ast.js` (the linearity +
+  inliner home — the dup/drop is invisible to stdout goldens, so no
+  conformance-corpus dir).
 - **Residual `longjmp` in non-statement position** (`x ? longjmp(b,1) : ...`,
   for-increment, return-expression) still crashes with a raw JS stack trace;
   the setjmp side has a proper diagnostic — add the longjmp counterpart.

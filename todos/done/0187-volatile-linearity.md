@@ -1,6 +1,6 @@
 # 0187 — volatile accesses must not be linearity-UNRESTRICTED (inliner duplicates/drops volatile reads)
 
-- **Status**: open
+- **Status**: done (2026-07-15; volatile accesses classify LINEAR at EIdent/OP_DEREF/ESubscript/EMember/EArrow — inliner refuses, reads back to exactly-once (was 2 dup / 0 drop); bench code section byte-identical; log: logs/2026-07-15/volatile-linearity-0187.md)
 - **Design**: —
 
 ## Goal
