@@ -3456,6 +3456,16 @@ const _LINEARITY_RANK = { UNRESTRICTED: 0, AFFINE: 1, LINEAR: 2 };
 function _rankToLinearity(r) {
   return r === 2 ? 'LINEAR' : r === 1 ? 'AFFINE' : 'UNRESTRICTED';
 }
+// Linearity of a memory-access expression, keyed on the accessed object's
+// type (todos/0187). C11 5.1.2.3: accesses to volatile objects are
+// observable behavior — their count and order must survive optimization —
+// so a volatile access is LINEAR (evaluate exactly once, in order), never
+// UNRESTRICTED (the inliner would duplicate a >1×-used argument or drop an
+// unused one). Non-volatile accesses stay UNRESTRICTED: the load itself
+// has no side effects and reading twice yields the same value.
+function _accessLinearity(type) {
+  return (type && type.isVolatile) ? Linearity.LINEAR : Linearity.UNRESTRICTED;
+}
 // Join an op's intrinsic linearity with the linearity of children. The
 // result is the strictest of (opLinearity, child1.linearity, ...) — a
 // node is UNRESTRICTED iff its op is pure AND every child is too.
@@ -3689,14 +3699,15 @@ class Expr {
   }
   // Variable / function / enum constant reference. Pure UNRESTRICTED at
   // this AST level: the load itself has no side effects, and reading a
-  // named decl twice in adjacent positions yields the same value (we
-  // don't model volatile, signal handlers, or threads). `decl` is
-  // required (use makeIdent for name-based lookup) — get the source
-  // identifier via `this.decl.name`.
+  // named decl twice in adjacent positions yields the same value — unless
+  // the decl is volatile-qualified, which makes the access LINEAR
+  // (todos/0187; we still don't model signal handlers or threads).
+  // `decl` is required (use makeIdent for name-based lookup) — get the
+  // source identifier via `this.decl.name`.
   class EIdent extends Expr {
     constructor(loc, type, decl) {
       if (!decl) throw new Error(`EIdent: decl is required (use makeIdent for name-based lookup)`);
-      super(loc, type, [], Linearity.UNRESTRICTED);
+      super(loc, type, [], _accessLinearity(type));
       this.decl = decl;
       Object.freeze(this);
     }
@@ -3766,7 +3777,8 @@ class Expr {
     OP_POST_DEC: { text: "--",  linearity: Linearity.LINEAR,       isIncDec: true,  isAddr: false, isDeref: false },
     // Address-take produces identity (the address is observable).
     OP_ADDR:     { text: "&",   linearity: Linearity.AFFINE,       isIncDec: false, isAddr: true,  isDeref: false },
-    // Memory read; treated as pure at this level (no volatile model).
+    // Memory read; pure at this level UNLESS the pointee is volatile —
+    // EUnary's constructor upgrades a volatile deref to LINEAR (0187).
     OP_DEREF:    { text: "*",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: true },
     OP_POS:      { text: "+",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: false },
     OP_NEG:      { text: "-",   linearity: Linearity.UNRESTRICTED, isIncDec: false, isAddr: false, isDeref: false },
@@ -3788,7 +3800,11 @@ class Expr {
     constructor(loc, type, op, operand) {
       const meta = UnOp[op];
       if (!meta) throw new Error(`EUnary: unknown op '${op}' (typo? known: ${Object.keys(UnOp).join(", ")})`);
-      super(loc, type, [operand], meta.linearity);
+      // `*p` where p points to volatile: the result type IS the accessed
+      // object's type (computeUnaryType returns the pointee), so a
+      // volatile deref classifies LINEAR (todos/0187).
+      super(loc, type, [operand],
+        meta.isDeref ? _accessLinearity(type) : meta.linearity);
       this.op = op; this.operand = operand;
       Object.freeze(this);
     }
@@ -3838,8 +3854,10 @@ class Expr {
   }
   class ESubscript extends Expr {
     constructor(loc, type, array, index) {
-      // Pure indexed read at this level — no side effect, deterministic.
-      super(loc, type, [array, index], Linearity.UNRESTRICTED);
+      // Pure indexed read — unless the element type is volatile (0187).
+      // makeSubscript pushes a volatile qualifier on the array TYPE down
+      // onto the element type (C11 6.7.3p9), so checking `type` suffices.
+      super(loc, type, [array, index], _accessLinearity(type));
       this.array = array; this.index = index;
       Object.freeze(this);
     }
@@ -3848,8 +3866,12 @@ class Expr {
   class EMember extends Expr {
     constructor(loc, type, base, memberDecl) {
       if (!memberDecl) throw new Error(`EMember: memberDecl is required (use makeMember to look up by name)`);
-      // Pure field read.
-      super(loc, type, [base], Linearity.UNRESTRICTED);
+      // Pure field read — unless the member is volatile, or the base
+      // aggregate is volatile-qualified (member types do NOT inherit the
+      // base's qualifiers in makeMember, so look at both; 0187).
+      super(loc, type, [base],
+        (base && base.type && base.type.isVolatile)
+          ? Linearity.LINEAR : _accessLinearity(type));
       this.base = base;
       this.memberDecl = memberDecl;
       Object.freeze(this);
@@ -3859,8 +3881,12 @@ class Expr {
   class EArrow extends Expr {
     constructor(loc, type, base, memberDecl) {
       if (!memberDecl) throw new Error(`EArrow: memberDecl is required (use makeArrow to look up by name)`);
-      // Pure indirect field read.
-      super(loc, type, [base], Linearity.UNRESTRICTED);
+      // Pure indirect field read — unless the member is volatile, or the
+      // base points to a volatile-qualified aggregate (member types do
+      // NOT inherit the pointee's qualifiers in makeArrow; 0187).
+      super(loc, type, [base],
+        (base && base.type && base.type.isPointer() && base.type.baseType.isVolatile)
+          ? Linearity.LINEAR : _accessLinearity(type));
       this.base = base;
       this.memberDecl = memberDecl;
       Object.freeze(this);
@@ -4937,6 +4963,14 @@ function makeSubscript(loc, base, index) {
   }
   let elemType = Types.TINT;
   if (baseIsIndexable) elemType = baseUt.baseType;
+  // C11 6.7.3p9: qualifying an array type qualifies the ELEMENT type.
+  // Direct declarations already carry the qualifier on the element
+  // (`volatile int a[4]`), but through a typedef (`typedef int A[4];
+  // volatile A a;`) it lands on the array TypeInfo itself — push it
+  // down so the access classifies volatile (todos/0187).
+  if (base.type.isVolatile && base.type.removeQualifiers().isArray()) {
+    elemType = elemType.addVolatile();
+  }
   // GC arrays don't decay; keep them as the array operand.
   const arrayOperand = baseUt.isGCArray() ? base : maybeDecay(base);
   return new ESubscript(loc, elemType, arrayOperand, index);
