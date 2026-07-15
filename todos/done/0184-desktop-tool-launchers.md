@@ -1,6 +1,6 @@
 # 0184 — Desktop launchers for the everyday tools (fileman/calc/paint/ctlpanel)
 
-- **Status**: open
+- **Status**: done (2026-07-15; image.json v93 desktop links — code deliberately left off; log: logs/2026-07-15/desktop-content-0184-0185.md)
 - **Design**: —
 
 ## Goal

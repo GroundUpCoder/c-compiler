@@ -1,6 +1,6 @@
 # 0185 — MagicPoint showcase: Presentations desktop folder + sample decks
 
-- **Status**: open
+- **Status**: done (2026-07-15; wm.c activate() S_ISDIR->fileman + folder glyph, 7 decks vendor/magicpoint/decks/, Presentations folder, image v93; log: logs/2026-07-15/desktop-content-0184-0185.md)
 - **Design**: vendor/magicpoint/README.md (the 0119 port + its descopes), todos/SDL3.md
 
 ## Goal
