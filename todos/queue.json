@@ -43,6 +43,14 @@
     { "id": "0152", "priority": 2, "after": ["0064"] },
     { "id": "0157" },
     { "id": "0162", "priority": 3, "difficulty": "heavy" },
-    { "id": "0182", "priority": 2, "difficulty": "light" }
+    { "id": "0182", "priority": 2, "difficulty": "light" },
+    { "id": "0189" },
+    { "id": "0190" },
+    { "id": "0191" },
+    { "id": "0192" },
+    { "id": "0193", "priority": 2 },
+    { "id": "0194", "priority": 2 },
+    { "id": "0195", "priority": 2 },
+    { "id": "0196", "priority": 3 }
   ]
 }
