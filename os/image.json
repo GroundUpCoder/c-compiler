@@ -1,5 +1,5 @@
 {
-  "version": 92,
+  "version": 93,
   "overlays": [
     {
       "id": "clang-apps",
@@ -90,6 +90,27 @@
       },
       "/usr/share/mgp/demo.gif": {
         "bin": "vendor/magicpoint/demo.gif"
+      },
+      "/usr/share/mgp/text.mgp": {
+        "bin": "vendor/magicpoint/decks/text.mgp"
+      },
+      "/usr/share/mgp/colors.mgp": {
+        "bin": "vendor/magicpoint/decks/colors.mgp"
+      },
+      "/usr/share/mgp/align.mgp": {
+        "bin": "vendor/magicpoint/decks/align.mgp"
+      },
+      "/usr/share/mgp/bullets.mgp": {
+        "bin": "vendor/magicpoint/decks/bullets.mgp"
+      },
+      "/usr/share/mgp/images.mgp": {
+        "bin": "vendor/magicpoint/decks/images.mgp"
+      },
+      "/usr/share/mgp/backgrounds.mgp": {
+        "bin": "vendor/magicpoint/decks/backgrounds.mgp"
+      },
+      "/usr/share/mgp/effects.mgp": {
+        "bin": "vendor/magicpoint/decks/effects.mgp"
       },
       "/usr/share/sent/demo.sent": {
         "bin": "vendor/sent/demo.sent"
@@ -501,6 +522,7 @@
   "user": {
     "dirs": [
       "/root/Desktop",
+      "/root/Desktop/Presentations",
       "/root/id1",
       "/root/roms"
     ],
@@ -525,6 +547,42 @@
       },
       "/root/Desktop/notepad": {
         "link": "/usr/bin/notepad"
+      },
+      "/root/Desktop/fileman": {
+        "link": "/usr/bin/fileman"
+      },
+      "/root/Desktop/calc": {
+        "link": "/usr/bin/calc"
+      },
+      "/root/Desktop/paint": {
+        "link": "/usr/bin/paint"
+      },
+      "/root/Desktop/ctlpanel": {
+        "link": "/usr/bin/ctlpanel"
+      },
+      "/root/Desktop/Presentations/demo.mgp": {
+        "link": "/usr/share/mgp/demo.mgp"
+      },
+      "/root/Desktop/Presentations/text.mgp": {
+        "link": "/usr/share/mgp/text.mgp"
+      },
+      "/root/Desktop/Presentations/colors.mgp": {
+        "link": "/usr/share/mgp/colors.mgp"
+      },
+      "/root/Desktop/Presentations/align.mgp": {
+        "link": "/usr/share/mgp/align.mgp"
+      },
+      "/root/Desktop/Presentations/bullets.mgp": {
+        "link": "/usr/share/mgp/bullets.mgp"
+      },
+      "/root/Desktop/Presentations/images.mgp": {
+        "link": "/usr/share/mgp/images.mgp"
+      },
+      "/root/Desktop/Presentations/backgrounds.mgp": {
+        "link": "/usr/share/mgp/backgrounds.mgp"
+      },
+      "/root/Desktop/Presentations/effects.mgp": {
+        "link": "/usr/share/mgp/effects.mgp"
       },
       "/root/Desktop/pokemon": {
         "content": "#!/bin/sh\nsameboy $HOME/roms/PokemonBlue.gb\n",
