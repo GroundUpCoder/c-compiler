@@ -500,6 +500,23 @@ def run_projects(results, filter_str=None):
         else:
             results.record(test_name, True)
 
+    # todos/0079: diamond dep dedup — base.json reached directly, via
+    # mid.json's dep, and via a symlinked path must compile ONCE (pre-fix:
+    # duplicate definition of base_value at link, twice).
+    test_name = "projects/diamond-dedup"
+    if not filter_str or filter_str in test_name:
+        pj = os.path.join(SCRIPT_DIR, "projects", "diamond", "bin.json")
+        wasm, err = build_project(pj)
+        if wasm is None:
+            results.record(test_name, False, f"Build failed:\n{err}")
+        else:
+            r = subprocess.run(
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                capture_output=True, text=True, timeout=30)
+            ok = r.returncode == 0 and r.stdout == "diamond: 63\n"
+            results.record(test_name, ok, "" if ok else
+                           f"exit {r.returncode}\nstdout: {r.stdout}stderr: {r.stderr}")
+
 
 # --- Zlib tests ---
 

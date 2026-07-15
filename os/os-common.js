@@ -173,8 +173,14 @@ function buildProject(CompilerJS, projPath, readHostFile) {
     return out.join('/');
   }
   /* Expand a bin.json, depth-first over its deps (type "lib" projects —
-   * e.g. the busybox applets all dep on vendor/busybox/libbb-core.json). */
+   * e.g. the busybox applets all dep on vendor/busybox/libbb-core.json).
+   * Diamond deps dedup on normalized path (todos/0079, matching
+   * compiler.js's expandProjectJson — no realpath here, XHR context). */
+  var seenProjects = {};
   (function expand(p) {
+    var key = normalize(p);
+    if (seenProjects[key]) return;
+    seenProjects[key] = true;
     var dir = p.slice(0, p.lastIndexOf('/'));
     var proj = JSON.parse(readHostFile(p));
     (proj.deps || []).forEach(function (d) { expand(normalize(dir + '/' + d)); });

@@ -1,0 +1,6 @@
+{
+  "type": "lib",
+  "name": "diamond-mid",
+  "deps": ["base.json"],
+  "sources": ["mid.c"]
+}

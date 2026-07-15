@@ -1,0 +1,5 @@
+{
+  "type": "lib",
+  "name": "diamond-base",
+  "sources": ["base.c"]
+}

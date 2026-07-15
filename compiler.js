@@ -29031,7 +29031,15 @@ return { generate };
 function main() {
   const fs = require("fs");
   const path = require("path");
-  function expandProjectJson(jsonPath, isInclude) {
+  function expandProjectJson(jsonPath, isInclude, seen) {
+    // Dedup diamond deps (todos/0079): a project reached twice (A deps zlib
+    // AND libpng; libpng deps zlib) must compile once — the first occurrence
+    // wins, later ones no-op (the -I flags it contributes are
+    // position-independent). Key on the realpath so a symlinked route to the
+    // same lib.json also collapses.
+    const realPath = fs.realpathSync(path.resolve(jsonPath));
+    if (seen.has(realPath)) return [];
+    seen.add(realPath);
     const proj = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
     const projDir = path.dirname(path.resolve(jsonPath));
     const projType = proj.type || "bin";
@@ -29046,7 +29054,7 @@ function main() {
     const result = [];
     if (proj.deps) {
       for (const dep of proj.deps) {
-        result.push(...expandProjectJson(path.resolve(projDir, dep), true));
+        result.push(...expandProjectJson(path.resolve(projDir, dep), true, seen));
       }
     }
     if (proj.includes) {
@@ -29079,10 +29087,11 @@ function main() {
 
   const rawArgs = process.argv.slice(2);
   const args = [];
+  const seenProjects = new Set();
   for (const arg of rawArgs) {
     if (!arg.startsWith("-") && arg.endsWith(".json")) {
       try {
-        args.push(...expandProjectJson(arg, false));
+        args.push(...expandProjectJson(arg, false, seenProjects));
       } catch (e) {
         process.stderr.write(`Error reading project file ${arg}: ${e.message}\n`);
         process.exit(1);

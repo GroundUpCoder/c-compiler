@@ -4,6 +4,7 @@
   "description": "cairo 1.18.4 — 2D vector graphics (image surface + FreeType fonts + PNG)",
   "deps": [
     "../pixman/lib.json",
+    "../zlib/lib.json",
     "../libpng/lib.json",
     "../freetype/lib.json"
   ],

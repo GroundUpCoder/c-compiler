@@ -125,6 +125,7 @@ const RULES = [
   [/^tests\/ast\//, ['ast'], null],
   [/^tests\/ext\//, ['ext'], null],
   [/^tests\/extra\//, ['extra'], null],
+  [/^tests\/projects\//, ['projects'], null],
   [/^tests\/micropython\//, ['micropython', 'micropython-upstream'], null],
 
   // Vendored projects → their run.py category + the projects build check.

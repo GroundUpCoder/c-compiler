@@ -1,0 +1,7 @@
+{
+  "type": "bin",
+  "name": "diamond-dedup",
+  "description": "todos/0079 regression fixture: base.json is reached directly, through mid.json's dep, and through the base-link.json symlink — all three must collapse to one compile or the link fails with duplicate symbols",
+  "deps": ["base.json", "base-link.json", "mid.json"],
+  "sources": ["main.c"]
+}
