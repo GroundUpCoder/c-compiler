@@ -1,0 +1,82 @@
+%% 07-images.mgp - learn MagicPoint on gucOS, deck 7 of 10 (todos/0202).
+%% %newimage and its transforms, formats this port decodes, %valign.
+%% The one seeded sample image is /usr/share/mgp/demo.gif.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "gray20", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Images
+
+deck 7 of 10: newimage and friends
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%newimage
+
+%size 4, fore "white", left
+one directive, the file in quotes:
+
+%size 4, fore "gray70", prefix "   "
+newimage "/usr/share/mgp/demo.gif"
+
+%center
+%newimage "/usr/share/mgp/demo.gif"
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Scaling
+
+%center
+%newimage -zoom 60 "/usr/share/mgp/demo.gif"
+%size 3, fore "gray70", center
+-zoom 60: both axes to 60% of the original
+%center
+%newimage -xyzoom 150 50 "/usr/share/mgp/demo.gif"
+%size 3, fore "gray70", center
+-xyzoom 150 50: width and height independently;
+-scrzoom 50 scales against the SCREEN instead
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Rotation
+
+%center
+%newimage -rotate 90 -zoom 70 "/usr/share/mgp/demo.gif"
+%size 3, fore "gray70", center
+-rotate takes quarter turns: 90, 180, 270
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+In the text flow
+
+%size 4, fore "white", left
+an image is drawn as a line of its own, so
+alignment applies to it exactly like text:
+%right
+%newimage -zoom 40 "/usr/share/mgp/demo.gif"
+%size 4, fore "white", left
+-raise N lifts an image against the baseline;
+\%valign "top", "center" or "bottom" sets how
+text sits beside a taller image on its line
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Formats in this port
+
+	decoded: PNG, GIF, PBM/PGM/PPM, XBM, XPM
+		an animated GIF shows its FIRST frame
+	not here: JPEG, EPS - convert to PNG first
+	icons can be images too:
+		tab 1 icon "star.xbm" "white" 50
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 08-backgrounds.mgp

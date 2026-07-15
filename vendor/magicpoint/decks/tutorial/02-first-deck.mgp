@@ -1,0 +1,109 @@
+%% 02-first-deck.mgp - learn MagicPoint on gucOS, deck 2 of 10 (todos/0202).
+%% Deck anatomy: pages, text lines, directive lines, comments, escaping.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "DarkSlateGray", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Your first deck
+
+deck 2 of 10: anatomy of a .mgp file
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Three kinds of line
+
+	directive lines start with %
+		they style what comes after them
+	comment lines start with %% or #
+		mgp ignores them completely
+	every other line is DRAWN, as-is
+		a blank line draws as vertical space
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The smallest deck
+
+%size 4, left, fore "gray70"
+two lines in a text file:
+
+%size 5, fore "white", prefix "    "
+\%page
+hello, world
+
+%size 4, fore "gray70", prefix " "
+\%page starts a slide; the plain line is its text.
+save as hello.mgp, double-click it - that is a deck.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Directives are state
+
+%size 4, left, fore "gray70"
+a directive line sets state; text lines then use it:
+
+%size 5, fore "white", prefix "    "
+\%size 6, fore "red"
+this line is big and red
+so is this one
+
+%size 4, fore "gray70", prefix " "
+state holds until another directive changes it,
+or the next page resets to the deck defaults.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Combining directives
+
+%size 4, left, fore "gray70"
+one line may carry several, separated by commas:
+
+%size 5, fore "white", prefix "    "
+\%size 5, fore "gold", center
+
+%size 4, fore "gray70", prefix " "
+that is exactly how this tutorial styles itself -
+press ctrl-r after editing to see changes live.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The preamble
+
+	directives BEFORE the first %page are the preamble
+	they set deck-wide machinery:
+		%deffont names a font
+		%default styles every page's Nth line
+		%tab styles bullet levels
+	deck 10 returns to these in depth
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Escapes
+
+	to DRAW a literal % at line start, write \\%
+	same for a literal # : write \\#
+	end a line with a single \\ to continue it
+	\\xHH inserts the character with hex code HH
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Try it now
+
+	right-click this deck, Edit
+	find this page, change this text
+	save, then press ctrl-r here
+%pause
+%size 4, center, fore "SpringGreen"
+
+if you just did that: you know the core of mgp
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 03-text.mgp

@@ -1,5 +1,5 @@
 {
-  "version": 95,
+  "version": 96,
   "overlays": [
     {
       "id": "clang-apps",
@@ -19,6 +19,7 @@
       "/usr/share/menu/Demos",
       "/usr/share/menu/Games",
       "/usr/share/mgp",
+      "/usr/share/mgp/tutorial",
       "/usr/share/sent",
       "/usr/share/sounds"
     ],
@@ -111,6 +112,39 @@
       },
       "/usr/share/mgp/effects.mgp": {
         "bin": "vendor/magicpoint/decks/effects.mgp"
+      },
+      "/usr/share/mgp/SYNTAX": {
+        "bin": "vendor/magicpoint/SYNTAX"
+      },
+      "/usr/share/mgp/tutorial/01-welcome.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/01-welcome.mgp"
+      },
+      "/usr/share/mgp/tutorial/02-first-deck.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/02-first-deck.mgp"
+      },
+      "/usr/share/mgp/tutorial/03-text.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/03-text.mgp"
+      },
+      "/usr/share/mgp/tutorial/04-color.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/04-color.mgp"
+      },
+      "/usr/share/mgp/tutorial/05-alignment.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/05-alignment.mgp"
+      },
+      "/usr/share/mgp/tutorial/06-lists.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/06-lists.mgp"
+      },
+      "/usr/share/mgp/tutorial/07-images.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/07-images.mgp"
+      },
+      "/usr/share/mgp/tutorial/08-backgrounds.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/08-backgrounds.mgp"
+      },
+      "/usr/share/mgp/tutorial/09-builds.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/09-builds.mgp"
+      },
+      "/usr/share/mgp/tutorial/10-mastery.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp"
       },
       "/usr/share/sent/demo.sent": {
         "bin": "vendor/sent/demo.sent"
@@ -231,6 +265,9 @@
       },
       "/usr/share/menu/Demos/mgp": {
         "content": "#!/bin/sh\nmgp /usr/share/mgp/demo.mgp\n"
+      },
+      "/usr/share/menu/Demos/learn-mgp": {
+        "content": "#!/bin/sh\nmgp /usr/share/mgp/tutorial/01-welcome.mgp\n"
       },
       "/usr/share/menu/Demos/winbox": {
         "link": "/usr/bin/winbox"
@@ -560,29 +597,35 @@
       "/root/Desktop/ctlpanel": {
         "link": "/usr/bin/ctlpanel"
       },
-      "/root/Desktop/Presentations/demo.mgp": {
-        "link": "/usr/share/mgp/demo.mgp"
+      "/root/Desktop/Presentations/01-welcome.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/01-welcome.mgp"
       },
-      "/root/Desktop/Presentations/text.mgp": {
-        "link": "/usr/share/mgp/text.mgp"
+      "/root/Desktop/Presentations/02-first-deck.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/02-first-deck.mgp"
       },
-      "/root/Desktop/Presentations/colors.mgp": {
-        "link": "/usr/share/mgp/colors.mgp"
+      "/root/Desktop/Presentations/03-text.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/03-text.mgp"
       },
-      "/root/Desktop/Presentations/align.mgp": {
-        "link": "/usr/share/mgp/align.mgp"
+      "/root/Desktop/Presentations/04-color.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/04-color.mgp"
       },
-      "/root/Desktop/Presentations/bullets.mgp": {
-        "link": "/usr/share/mgp/bullets.mgp"
+      "/root/Desktop/Presentations/05-alignment.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/05-alignment.mgp"
       },
-      "/root/Desktop/Presentations/images.mgp": {
-        "link": "/usr/share/mgp/images.mgp"
+      "/root/Desktop/Presentations/06-lists.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/06-lists.mgp"
       },
-      "/root/Desktop/Presentations/backgrounds.mgp": {
-        "link": "/usr/share/mgp/backgrounds.mgp"
+      "/root/Desktop/Presentations/07-images.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/07-images.mgp"
       },
-      "/root/Desktop/Presentations/effects.mgp": {
-        "link": "/usr/share/mgp/effects.mgp"
+      "/root/Desktop/Presentations/08-backgrounds.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/08-backgrounds.mgp"
+      },
+      "/root/Desktop/Presentations/09-builds.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/09-builds.mgp"
+      },
+      "/root/Desktop/Presentations/10-mastery.mgp": {
+        "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp"
       },
       "/root/Desktop/pokemon": {
         "content": "#!/bin/sh\nsameboy $HOME/roms/PokemonBlue.gb\n",

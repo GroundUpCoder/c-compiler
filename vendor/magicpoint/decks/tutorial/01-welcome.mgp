@@ -1,0 +1,90 @@
+%% 01-welcome.mgp - learn MagicPoint on gucOS, deck 1 of 10 (todos/0202).
+%% What mgp is, where it came from, how to drive the viewer, and how this
+%% tutorial series works. Teaches only directives the 0119 port renders.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Learn MagicPoint
+
+deck 1 of 10: welcome
+
+%center
+%size 3, fore "gray70"
+space / click: next page    b: back    q: quit
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+What is MagicPoint?
+
+	a presentation tool for the X Window System
+	written by the WIDE Project in Japan, late 1990s
+	a fixture of unix and networking conferences
+	its one big idea:
+		a slide deck is a PLAIN TEXT file
+		styled by lines that start with %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Why plain text?
+
+	write slides in any text editor
+	diff them, script them, keep them in git
+	no binary format, no lock-in
+	this whole tutorial is itself a set of .mgp files
+		open any of them in an editor and peek
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+mgp on gucOS
+
+	the viewer is /bin/mgp (the classic mgp 1.13a)
+	double-click a .mgp file to present it
+	right-click it, pick Edit: the TEXT opens
+		that pair is the whole workflow
+	freetype text; PNG, GIF and more for images
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Driving the viewer
+
+	next page: space, f, n, click, PageDown
+	back: b, p, BackSpace, PageUp
+	jump: type a page number, then g
+		g alone jumps to the last page
+	l redraws, q or Escape quits
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The edit loop
+
+	1. right-click this deck, choose Edit
+	2. change some text, save
+	3. back in the viewer, press ctrl-r
+		mgp reloads the file in place
+	that loop is how every deck here was written
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The series
+
+	02 your first deck        03 sizing text
+	04 color                  05 alignment and areas
+	06 lists and bullets      07 images
+	08 backgrounds            09 builds and columns
+	10 templates and mastery
+%size 3, fore "gray70", center
+
+work through them in order - each builds on the last
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 02-first-deck.mgp

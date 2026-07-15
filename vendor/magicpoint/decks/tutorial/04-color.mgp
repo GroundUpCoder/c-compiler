@@ -1,0 +1,89 @@
+%% 04-color.mgp - learn MagicPoint on gucOS, deck 4 of 10 (todos/0202).
+%% %fore, %back, the color vocabulary (X11 names, grayNN, #hex), %bar.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "gray10", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Color
+
+deck 4 of 10: fore, back, names, bars
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Two directives
+
+	%fore "color" - the text color from here on
+	%back "color" - the page background
+		set %back at the TOP of a page,
+		before anything is drawn
+	this deck's defaults: white on gray10
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Three ways to name a color
+
+%left, size 5
+%fore "SpringGreen"
+"SpringGreen" - an X11 color name
+%fore "gray70"
+"gray70" - gray0 (black) to gray100 (white)
+%fore "#ff8c00"
+"#ff8c00" - hex RRGGBB, any color at all
+%size 4, fore "gray70"
+
+names are case-insensitive; #f80 shorthand works too
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+A useful palette
+
+%size 5, center
+%fore "red"
+red
+%fore "orange"
+orange
+%fore "gold"
+gold
+%fore "SpringGreen"
+SpringGreen
+%fore "DeepSkyBlue"
+DeepSkyBlue
+%fore "orchid"
+orchid
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%bar - horizontal rules
+
+%size 4, fore "white", left
+a bar under a heading:
+%bar "gold"
+four arguments: color, thickness, start, length
+%bar "SpringGreen" 20 10 80
+thickness is permille of screen height;
+start and length are percent of screen width
+%bar "red" 15 0 33
+%bar "gold" 15 33 34
+%bar "SpringGreen" 15 67 33
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Contrast rules
+
+	light text on a dark ground projects best
+	keep ONE accent color for emphasis
+	test with the gray ramp:
+		gray70 on gray10 reads fine
+		gray30 on gray10 disappears
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 05-alignment.mgp

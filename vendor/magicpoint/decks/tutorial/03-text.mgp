@@ -1,0 +1,110 @@
+%% 03-text.mgp - learn MagicPoint on gucOS, deck 3 of 10 (todos/0202).
+%% Sizing and spacing: %size, %vgap, %hgap, %prefix, %cont.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "DarkSlateBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Sizing text
+
+deck 3 of 10: size, gaps, prefixes, joins
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%size
+
+%left, fore "white"
+%size 7
+size 7 draws this big
+%size 5
+size 5 draws this big
+%size 3
+size 3 draws this big
+%size 4, fore "gray70"
+
+the unit is percent of SCREEN HEIGHT, so a deck
+looks the same at any window size - size 7 means
+about 14 lines would fill the screen
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%vgap - line spacing
+
+%left, size 4, fore "white", vgap 10
+vgap 10 packs lines
+tight like this
+%vgap 100
+vgap 100 doubles the space
+%vgap 10
+%size 4, fore "gray70"
+
+the number is percent of the current char size,
+ADDED between lines: 0 touches, 100 = one line
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%hgap - letter spacing
+
+%left, size 4, fore "white"
+%hgap 0
+normal spacing
+%hgap 30
+s p r e a d  o u t
+%hgap 0
+%size 4, fore "gray70"
+
+hgap pads between characters - use sparingly,
+titles and logos only
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%prefix - indent
+
+%left, size 4, fore "white"
+%prefix "  "
+prefix "  " - indent by two spaces
+%prefix "        "
+prefix "        " - eight
+%prefix 25
+prefix 25 - a QUOTED prefix is literal text;
+a BARE NUMBER is percent of the page width
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%cont - joining lines
+
+%left, size 5
+%fore "white"
+one drawn line
+%cont, fore "orange"
+ from three
+%cont, fore "cyan"
+ source lines
+%size 4, fore "gray70"
+
+\%cont glues a source line onto the previous one,
+so each PIECE can carry its own size and color
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Put together
+
+	big titles: size 8 or 9
+	body text: size 4 or 5
+	fine print: size 3
+	let vgap breathe: 20 to 40 for body
+%pause
+%size 4, center, fore "SpringGreen"
+
+readable beats clever - when in doubt, go bigger
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 04-color.mgp

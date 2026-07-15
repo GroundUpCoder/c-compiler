@@ -1,0 +1,84 @@
+%% 06-lists.mgp - learn MagicPoint on gucOS, deck 6 of 10 (todos/0202).
+%% Tab-depth lists: %tab preamble styles, %icon shapes. Body list lines
+%% below start with REAL tab characters.
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 5, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 4, vgap 40, prefix "      ", icon arc "gold" 50, left
+%tab 3 size 3, vgap 40, prefix "          ", icon delta3 "white" 40, left
+%tab 4 size 3, vgap 40, prefix "              ", icon dia "orchid" 40, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Lists
+
+deck 6 of 10: tabs, bullets, icons
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The mechanism
+
+	a line starting with TABs is a list item
+	its DEPTH is simply the tab count
+		two tabs, second level
+			three tabs, third level
+	each level's look is set in the preamble
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%tab - level styles
+
+%size 4, fore "white", left
+this deck's preamble says:
+
+%size 3, fore "gray70", prefix "   "
+tab 1 size 5, prefix "  ", icon box "SpringGreen" 50, left
+tab 2 size 4, prefix "      ", icon arc "gold" 50, left
+
+%size 4, fore "white"
+any directive list works: size, color, prefix,
+vgap, an icon - applied whenever a line has N tabs
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%icon - the bullets
+
+	box - a filled square
+		arc - a filled circle
+			delta3 - a small triangle
+				dia - a diamond
+	shapes: box, arc, delta1..delta4, dia
+	color and size (% of char size) follow:
+		icon box "SpringGreen" 50
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+A real outline
+
+	why plain-text lists win
+		reorder = move a line
+		promote = delete a tab
+	what to keep in mind
+		parallel wording per level
+		three levels is usually the ceiling
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+List craft
+
+	one thought per bullet
+	six bullets per page, tops
+	sub-bullets support, never repeat
+%pause
+%size 4, center, fore "SpringGreen"
+
+if a bullet needs two lines, it wants its own page
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 07-images.mgp

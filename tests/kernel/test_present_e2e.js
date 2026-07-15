@@ -78,9 +78,24 @@ const DECKS = [
   { n: 'backgrounds', back: [0, 0, 0],     steps: 7 },   // black
   { n: 'effects',     back: [25, 25, 112], steps: 10 },  // MidnightBlue (+5 pauses)
 ];
-for (const d of DECKS) {
+/* ---- the 0202 learn-mgp tutorial series (Presentations folder): same
+ * launch/page-through/alive gate; steps = %page count + %pause count. */
+const TUTORIAL = [
+  { n: '01-welcome',     back: [25, 25, 112], steps: 8 },   // MidnightBlue
+  { n: '02-first-deck',  back: [47, 79, 79],  steps: 10 },  // DarkSlateGray
+  { n: '03-text',        back: [72, 61, 139], steps: 9 },   // DarkSlateBlue
+  { n: '04-color',       back: [26, 26, 26],  steps: 7 },   // gray10
+  { n: '05-alignment',   back: [0, 100, 0],   steps: 8 },   // DarkGreen
+  { n: '06-lists',       back: [25, 25, 112], steps: 8 },   // MidnightBlue
+  { n: '07-images',      back: [51, 51, 51],  steps: 7 },   // gray20
+  { n: '08-backgrounds', back: [0, 0, 0],     steps: 8 },   // black
+  { n: '09-builds',      back: [25, 25, 112], steps: 11 },  // MidnightBlue (+4 pauses)
+  { n: '10-mastery',     back: [16, 32, 64],  steps: 9 },   // #102040 hex
+].map((d) => ({ ...d, sub: 'tutorial/' }));
+const ALL = DECKS.concat(TUTORIAL);
+for (const d of ALL) {
   script.push(
-    `mgp /usr/share/mgp/${d.n}.mgp &`,
+    `mgp /usr/share/mgp/${d.sub || ''}${d.n}.mgp &`,
     'wmctl wait win MagicPoint',
     'sleep 2.5',                   // title page render (freetype at several sizes)
     'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',
@@ -99,7 +114,7 @@ for (const d of DECKS) {
     'wmctl wait nowin MagicPoint');
 }
 script.push('echo ALLDONE');
-const a = driveBoot(script, { image, timeout: 600000 });
+const a = driveBoot(script, { image, timeout: 900000 });
 const out = a.stdout || '';
 check('sent shot 1 taken', out.includes('s1-ok'));
 check('sent shot 2 taken', out.includes('s2-ok'));
@@ -109,7 +124,7 @@ check('mgp shot 2 taken', out.includes('m2-ok'));
 check('mgp shot 3 taken', out.includes('m3-ok'));
 check('mgp shot 4 taken', out.includes('m4-ok'));
 check('mgp window closed on q', section(out, 'mgpgone').trim() === '0');
-for (const d of DECKS) {
+for (const d of ALL) {
   check(`${d.n} shots taken`,
     out.includes(d.n + '1-ok') && out.includes(d.n + '2-ok'));
   check(`${d.n} survived every page (no draw-time crash)`,
@@ -119,10 +134,10 @@ for (const d of DECKS) {
 check('session A completed', out.includes('ALLDONE'));
 
 /* ---- session B: read the PPMs back and assert pixels ---- */
-const DECK_PPMS = DECKS.flatMap((d) => [`/root/${d.n}1.ppm`, `/root/${d.n}2.ppm`]);
+const DECK_PPMS = ALL.flatMap((d) => [`/root/${d.n}1.ppm`, `/root/${d.n}2.ppm`]);
 const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm /root/m4.ppm ' +
   DECK_PPMS.join(' ') + '\n',
-  { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
+  { image, timeout: 120000, maxBuffer: 160 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
 // Parse concatenated binary P6 PPMs.
@@ -209,11 +224,11 @@ if (ppms.length === NPPM) {
   check('mgp page 4 GIF: magenta pixels', magenta > 1000, String(magenta));
   check('mgp page 4 GIF: cyan pixels', cyan > 1000, String(cyan));
 
-  // ---- the 0185 showcase decks (title + page-2 shots per deck) ----
+  // ---- the 0185 showcase + 0202 tutorial decks (title + page-2 shots) ----
   const deck = {};
-  DECKS.forEach((d, i) => { deck[d.n] = [ppms[6 + i * 2], ppms[6 + i * 2 + 1]]; });
+  ALL.forEach((d, i) => { deck[d.n] = [ppms[6 + i * 2], ppms[6 + i * 2 + 1]]; });
   const nearC = (p, q, tol = 14) => Math.abs(p - q) <= tol;
-  for (const d of DECKS) {
+  for (const d of ALL) {
     const [t, p2] = deck[d.n];
     const tpix = t.w * t.h;
     const bg = count(t, (r, g, b) =>

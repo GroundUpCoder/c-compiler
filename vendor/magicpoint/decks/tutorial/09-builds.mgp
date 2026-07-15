@@ -1,0 +1,94 @@
+%% 09-builds.mgp - learn MagicPoint on gucOS, deck 9 of 10 (todos/0202).
+%% Progressive reveal (%pause), column layout (%mark/%again), super/
+%% subscripts (%sup/%sub/%setsup).
+%deffont "standard" tfont "/usr/share/fonts/mono.ttf"
+%default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"
+%default 2 size 9, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Builds and columns
+
+deck 9 of 10: pause, mark, again, sup, sub
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+\%pause - reveal in steps
+
+	drawing STOPS at each %pause
+%pause
+	the forward key continues it
+%pause
+	the back key backs up one step
+%pause
+%size 4, fore "orange", center
+
+use it to keep eyes on the point being made
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Two columns: mark, again
+
+%size 4, fore "white", left
+%mark
+%prefix 8
+the LEFT column:
+mark remembers this
+vertical position
+%again
+%prefix 55
+the RIGHT column:
+again jumps back up,
+prefix moves it over
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Columns, step by step
+
+	put %mark where the columns start
+	draw column one, prefix at the left
+	%again rewinds to the mark
+	draw column two, prefix further right
+		marks are per-page; they clear at %page
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Super and subscripts
+
+%size 5, fore "white", left
+E = mc
+%cont, sup
+2
+%size 5
+H
+%cont, sub
+2
+%cont
+O
+%size 4, fore "gray70"
+
+each rides a %cont continuation: the sup/sub
+line is drawn raised or lowered, and smaller
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+Tuning scripts
+
+	%setsup 40 15 60 sets the geometry:
+		raise offset, drop offset, scale
+	values are percent of the char size
+	the default suits formulas - leave it be
+%pause
+%size 4, center, fore "SpringGreen"
+
+one build idea per page; two is a magic trick
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+The end
+
+%size 4, center
+next: 10-mastery.mgp
