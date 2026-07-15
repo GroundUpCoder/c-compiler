@@ -17805,7 +17805,7 @@ class CodeGenerator {
     const wt = this.getBinaryWasmType(type);
     const emitDelta = () => {
       if (type.isPointer()) {
-        const d = this.sizeOf(type.baseType);
+        const d = this.ptrArithElemSize(type.baseType);
         if (wtEquals(wt, WT_I32)) this.body.i32Const(d); else this.body.i64Const(BigInt(d));
       } else if (wtEquals(wt, WT_F32)) this.body.f32Const(1.0);
       else if (wtEquals(wt, WT_F64)) this.body.f64Const(1.0);
