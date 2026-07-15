@@ -1661,10 +1661,12 @@ def run_blockfs_tests(results, filter_str=None):
 
 # --- fakegit tests ---
 #
-# Builds vendor/fakegit/bin.json once, then runs each tests/fakegit/<name>/
-# test. Each directory contains:
-#   args.txt     — one argument per line (the repo path is prepended automatically)
-#   expected.txt — required, exact stdout match
+# Builds vendor/fakegit/bin.json once, materializes the deterministic
+# fixture repo (tests/fakegit/make-fixture.sh — todos/0183), then runs each
+# tests/fakegit/<name>/ test against it. Each directory contains:
+#   args.txt     — one argument per line (the fixture repo path is prepended
+#                  automatically)
+#   expected.txt — required, exact stdout match (captured from the fixture)
 
 def run_fakegit_tests(results, filter_str=None):
     bin_json = os.path.join(FAKEGIT_DIR, "bin.json")
@@ -1672,10 +1674,23 @@ def run_fakegit_tests(results, filter_str=None):
         results.record("fakegit/build", False, f"Not found: {bin_json}")
         return
 
-    # The repo to test against
-    # We run tests against the c-compiler repo itself — it's always available
-    # and has a known state.
-    test_repo = os.path.abspath(ROOT_DIR)
+    # The repo to test against: a deterministic fixture materialized fresh
+    # each run (todos/0183 — goldens against the live checkout pinned one
+    # HEAD and were permanently red). make-fixture.sh fixes author/
+    # committer/date/tz and masks host git config, so the hashes in the
+    # goldens reproduce on any machine at any HEAD.
+    test_repo = os.path.join(TEST_TMPDIR, "fakegit-fixture")
+    try:
+        fx = subprocess.run(
+            ["sh", os.path.join(FAKEGIT_TEST_DIR, "make-fixture.sh"), test_repo],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        results.record("fakegit/fixture", False, "Fixture build timed out (60s)")
+        return
+    if fx.returncode != 0:
+        results.record("fakegit/fixture", False, f"Fixture build failed:\n{fx.stderr.strip()}")
+        return
 
     # Fakegit needs a longer build timeout (libgit2 is large)
     wasm, err = build_project(bin_json, timeout=600)

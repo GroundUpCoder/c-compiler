@@ -1,5 +1,3 @@
- ?? tests/fakegit/
-  M tests/run.py
- ?? vendor/fakegit/
- ?? xp/libgit2_ro_test.c
- ?? xp/libgit2_ro_test.json
+  M docs/guide.txt
+ ?? notes.txt
+ ?? scratch/

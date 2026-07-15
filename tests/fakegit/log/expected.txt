@@ -1,219 +1,44 @@
-commit fbc85224422dcfe2a9a748cc52c8f194156449cd
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782109433 +0900
-tree 7db97e9d29e92d9665e0e7e35189f653b0ee8ac0
-parent b627c7c8b306534a40903ebf11157a26d8cae843
+commit 313f42bca46f235084aba373c366a64e311c8501
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000300 +0000
+tree 18934d6c1a0e12a5cdafd6d951a94248b76f319d
+parent c8b0af6c3f2246cdf4c5229ca51c7f7e946badb4
 
-    host/blockfs: flush to durable storage on fsync/fdatasync
-
-OPFS FileSystemSyncAccessHandle.write() does not guarantee durability
-until flush() is called â¬ acknowledged writes could be lost on a tab
-crash/kill. Add flush() to the ByteStore types (SyncAccessHandleStore
-forwards to the handle; MemoryByteStore/ReadOnlyStore are no-ops) and
-wire the fsync/fdatasync syscalls to call it, so a program explicitly
-asking for durability gets it. The store is one handle, so the flush is
-whole-image (permitted â¬ fsync may flush more than requested); cost is
-incurred only when programs ask, which is rare.
-
-fdatasync is also newly provided (declared in libc). Runtime-verified:
-fsync/fdatasync return 0 and data round-trips; full suite green.
+    c5: final README touch
 
 
-commit b627c7c8b306534a40903ebf11157a26d8cae843
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782108304 +0900
-tree 39ae6de7e028482131e6b0e0bdc3c0f22cba970c
-parent f132c8993c54d6f1ef25faf58a5122c399882123
+commit c8b0af6c3f2246cdf4c5229ca51c7f7e946badb4
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000240 +0000
+tree 012cc29a4e1bd8ee3a6ea02b3eef57dd40dd5168
+parent 9a47d6ed8dd2d63bf726fb924c1e901849e03d80
 
-    sema: reject non-constant initializers for static-storage objects
-
-C11 6.7.9p4 requires static/thread-storage initializers to be constant
-expressions or string literals; gcc/clang both error on violations
-(verified). This compiler instead const-evaluated and, on failure,
-silently emitted a zero â¬ so a dynamic file-scope initializer like
-`static int x = atexit(f);` never ran and the object was silently 0.
-
-Now codegen collects every static-storage scalar/aggregate leaf whose
-initializer is not a compile-time constant and fails with clang's
-diagnostic ('initializer element is not a compile-time constant')
-before emitting any function body. Initializers the const-evaluator can
-fold (incl. inlined trivial calls) still compile and are correct â¬ only
-genuinely non-constant ones (real calls, runtime reads) are rejected,
-so no currently-valid program regresses. The sink is scoped to the
-static-init window so the local-aggregate runtime path is unaffected.
-
-Also removes the dead libc `__stdio_cleanup`/atexit registration, which
-relied on this never-supported behavior (it never registered; the host
-flushes via exit()) and would not compile under the new check.
-
-Tests: new negative test (atexit static init -> compiler exit 1);
-unit+extra+lua 677 green; box applet suite 80/80 under --gc-sections.
+    c4: rework main, add util
 
 
-commit f132c8993c54d6f1ef25faf58a5122c399882123
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782091775 +0900
-tree a8d78719bb81e2c229fa18b57f19e5af625c1061
-parent 580cd5e3f7067504e04c3c4f393016a4d7a72f4b
+commit 9a47d6ed8dd2d63bf726fb924c1e901849e03d80
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000180 +0000
+tree 9c2a4797b0f827677175dd43eeebc959e296917d
+parent ae9875870427a9568a4f8f94fedb113411c80c2e
 
-    codegen: gc-sections must root the export-directive *definition*
-
-An export directive may name a forward declaration (no body); its
-.definition is the real function, linked in by linkTranslationUnits.
-The gc-sections root loop enqueued the declaration node, which has no
-body â¬ so visitRefs never ran and the definition node was never marked
-live, dropping the exported function. The canonical victim is libc
-'exit': the host runtime calls exports.exit after main to flush stdio,
-so dropping it silently lost unflushed, non-newline-terminated output
-(e.g. `printf("x")` with no newline, `echo -n`). Root func.definition||func.
-
-Verified: a no-newline printf now flushes under --gc-sections; box
-applet suite 80/80 with gc; unit+extra+lua 676 green.
+    c3: add docs/guide.txt, drop hello.txt
 
 
-commit 580cd5e3f7067504e04c3c4f393016a4d7a72f4b
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782090060 +0900
-tree 3ed5e4565ea015c560531893d725e1163db77bc7
-parent 035e07d7940dcf517ef00262783ac0fc1bb6b4b1
+commit ae9875870427a9568a4f8f94fedb113411c80c2e
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000120 +0000
+tree ed856ced7bed5d5842ec9e3e9a4a7d02f35d834d
+parent 7bc5f7fad7e6cc20441b8f68deaaec2b88d27223
 
-    libc: add POSIX dprintf/vdprintf
-
-Formatted output written unbuffered directly to a file descriptor via
-write(), mirroring vfprintf with write() as the sink instead of a FILE.
-Reuses the existing host vsnprintf import â¬ no new host binding / ABI
-surface. Verified stdout/stderr/va_list forms and the >256-byte
-malloc-overflow fallback; unit+extra suites green.
+    c2: add src/main.c, grow README
 
 
-commit 035e07d7940dcf517ef00262783ac0fc1bb6b4b1
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782088714 +0900
-tree 4a7e7241257cb570465483a3abcb840513c43bb0
-parent f1e9c450c5309fa43a24e4b7a0376e740c49a284
+commit 7bc5f7fad7e6cc20441b8f68deaaec2b88d27223
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000060 +0000
+tree 0d7ccf6770f902fd42a9a9d6dddbf023aa6faff0
 
-    codegen: bss-optimize static data (sparse data segments)
-
-Emit static data as multiple active segments that skip long runs of
-zeros instead of one segment containing every byte. WASM zero-inits
-linear memory, so omitted zeros read back as 0 â¬ a zeroed global (stdio
-buffers, uninitialized arrays, struct zero-tails) now costs no binary
-bytes. Short zero runs (< 64) stay inline since each extra segment
-costs ~6-10 header bytes; trailing zeros in a span are dropped; all-zero
-static data emits no segments.
-
-Verified byte-identical runtime output on a zero-pattern battery
-(data 15590 -> 610), plus unit+extra (650) and Lua (26) suites green.
-A printf/snprintf binary's data section drops ~1.2KB (the BUFSIZ FILE
-buffer becomes bss).
-
-
-commit f1e9c450c5309fa43a24e4b7a0376e740c49a284
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782052930 +0900
-tree 468f7d23955b89320a2ed681f69130405324e95d
-parent 9e12249144055d16d91ca613e89b5eb0e3003a03
-
-    BlockFS TLSF: in-place realloc growth (v3 + v4 allocators)
-
-Both TLSFAllocator and TLSF64Allocator's realloc always did
-malloc+copy+free on growth, diverging from the reference TLSF
-tlsf_realloc which extends a block in place when the next physical
-block is free and the combined size satisfies the request. Restore
-that path using the existing _mergeNext/_splitBlock/_blockMarkUsed
-primitives (the same ones malloc uses), and reject sizes each
-allocator's malloc would reject (v3 > 0xFFFFFF00, v4 > 0xFFFFFFFFFFFF).
-
-Adds focused same-pointer in-place tests to test_tlsf.js (grow into
-freed neighbor; move when neighbor too small) and test_tlsf64.js
-(in-place grow + remainder reuse, fsck-clean). Mirrors the
-self-hosting Allocator.ss and libc compiler.js changes.
-
-(tests/browser/www/host.js is a stale build artifact regenerated from
-host.js by build-quake.mjs; left untouched.)
-
-
-commit 9e12249144055d16d91ca613e89b5eb0e3003a03
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782052521 +0900
-tree 57fcbfe4b1be372816df1c84e9dce52fb95d8e3c
-parent 79dacb4587b823cfee6f849d5c7bd87e56e0d101
-
-    libc malloc: in-place realloc growth (absorb next free block)
-
-realloc always did malloc+copy+free on growth, diverging from the
-reference TLSF tlsf_realloc which extends a block in place when the next
-physical block is free and the combined size satisfies the request.
-Restore that path using the existing merge_next/split_block/
-block_mark_used primitives (the same ones malloc uses). Also reject
-new_size > 0x40000000 to match malloc and to guard adjust_request from
-collapsing a huge request to MIN_BLOCK_SIZE.
-
-Adds tests/unit/stdlib/malloc_realloc_inplace: in-place grow with
-remainder split + reuse, fallbacks (neighbor too small / used), a
-realloc chain, and edge cases. Mirrors the self-hosting Allocator.ss
-change.
-
-
-commit 79dacb4587b823cfee6f849d5c7bd87e56e0d101
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1781918981 +0900
-tree b11ec9f94d88bf47f1e9e94f0d35e30c9cb021a9
-parent 5258faa6477c33760a12b3264cf84891a5d8026c
-
-    todos/SDL3: mark the audited strays fixed; list deferred work
-
-All conformance strays from the 2026-06-20 audit are fixed (SetError/NULL guards,
-PollEvent(NULL) peek, alpha-aware texture blend default, UpdateTexture sub-rect,
-unbounded audio queue, full event-field population, defer mid-frame texture free,
-pixel-format/surface fidelity), behind sdl_* unit tests + the sdl-* Chromium
-suite. Remaining items (HiDPI, Pointer-Lock relative mode, line pixel-exactness,
-retained backbuffer, surface formats, audio stream-converter) are deferred
-feature/within-spec work, not silent deviations.
-
-
-commit 5258faa6477c33760a12b3264cf84891a5d8026c
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1781918296 +0900
-tree d40707139dbbacb815f0403015de05b22fbb4108
-parent 615c6b29d96e4209d4f784e9aaa6279acb8cf295
-
-    SDL3: populate all event fields (timestamp, mod, repeat, state, clicks, xrel/yrel, which, wheel)
-
-Event-field conformance + push ABI redesign. Events were memset-zeroed shells;
-now they carry the fields SDL populates:
-- key: mod (SDL_Keymod from DOM getModifierState), repeat (DOM e.repeat), which.
-- mouse motion: xrel/yrel (relative deltas, host-tracked), state (button mask
-  remapped from DOM e.buttons), float coords (no longer int-rounded), which.
-- mouse button: clicks (double/triple-click count, 500ms/32px), which, float coords.
-- mouse wheel: float x/y, direction, mouse_x/mouse_y (current mouse pos), which.
-- every event: timestamp = SDL_GetTicksNS()-equivalent (ms*1e6).
-New __sdl_push_* ABI carries the DOM-only fields (mod/repeat/state/direction);
-C derives timestamp/which/xrel/yrel/clicks/mouse_x-y. Added SDL_KMOD_*,
-SDL_MOUSEWHEEL_*, SDL_BUTTON_MASK, SDL_CommonEvent. Numeric-keypad keys now
-report SDLK_KP_* keycodes (not the ASCII digit). SDL_WEB mappers + dispatch +
-push wrappers updated. New headless test: sdl_event_fields. Full unit suite green.
-
-
-commit 615c6b29d96e4209d4f784e9aaa6279acb8cf295
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1781917845 +0900
-tree 0fe9ea35e1c92849dbce9a0c4c8e85779e49873c
-parent f7e03e9e033c53764de2297e709ee9eb20d13675
-
-    SDL3: UpdateTexture sub-rect, unbounded audio queue, defer mid-frame texture free
-
-- SDL_UpdateTexture honours rect: patches the sub-region into a full cpuPixels
-  buffer + dirty bbox, uploads only that region. Fixes the OOB read + wrong-data
-  for sub-rect callers AND makes a 1px update O(1) (was O(texture)). Rect bounds
-  validated. __sdl_update_texture now carries (x,y,w,h).
-- SDL_AudioStream is now an unbounded queue: __sdl_queue_audio returns bytes
-  ACCEPTED (partial fill); the C stream holds the remainder in a growable backlog
-  and re-pumps it each Put. Never silently drops, always returns true,
-  GetAudioStreamQueued = ring + backlog. Fixed the no-SAB GetQueued sentinel.
-- Mid-frame SDL_DestroyTexture defers the GPU free until after the next present;
-  batch entries capture the texture object (not the slot) so the in-flight frame
-  still renders (matches SDL keeping the texture alive for the frame).
-- New headless tests: sdl_update_texture_rect, sdl_audio_queue.
+    c1: seed README and hello
 
 

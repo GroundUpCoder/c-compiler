@@ -1,33 +1,10 @@
-commit b627c7c8b306534a40903ebf11157a26d8cae843
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782108304 +0900
+commit c8b0af6c3f2246cdf4c5229ca51c7f7e946badb4
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000240 +0000
 
-    sema: reject non-constant initializers for static-storage objects
-
-C11 6.7.9p4 requires static/thread-storage initializers to be constant
-expressions or string literals; gcc/clang both error on violations
-(verified). This compiler instead const-evaluated and, on failure,
-silently emitted a zero â¬ so a dynamic file-scope initializer like
-`static int x = atexit(f);` never ran and the object was silently 0.
-
-Now codegen collects every static-storage scalar/aggregate leaf whose
-initializer is not a compile-time constant and fails with clang's
-diagnostic ('initializer element is not a compile-time constant')
-before emitting any function body. Initializers the const-evaluator can
-fold (incl. inlined trivial calls) still compile and are correct â¬ only
-genuinely non-constant ones (real calls, runtime reads) are rejected,
-so no currently-valid program regresses. The sink is scoped to the
-static-init window so the local-aggregate runtime path is unaffected.
-
-Also removes the dead libc `__stdio_cleanup`/atexit registration, which
-relied on this never-supported behavior (it never registered; the host
-flushes via exit()) and would not compile under the new check.
-
-Tests: new negative test (atexit static init -> compiler exit 1);
-unit+extra+lua 677 green; box applet suite 80/80 under --gc-sections.
+    c4: rework main, add util
 
 
-3 file(s) changed:
-  M	compiler.js
-  A	tests/unit/static_init_not_constant/expected.compiler.exitcode
-  A	tests/unit/static_init_not_constant/main.c
+2 file(s) changed:
+  M	src/main.c
+  A	src/util.c

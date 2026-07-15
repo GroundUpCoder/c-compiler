@@ -1,21 +1,9 @@
-commit fbc85224422dcfe2a9a748cc52c8f194156449cd
-Author: josephkimgpt <josephkimgpt@gmail.com>
-Date:   1782109433 +0900
-tree 7db97e9d29e92d9665e0e7e35189f653b0ee8ac0
-parent b627c7c8b306534a40903ebf11157a26d8cae843
+commit 313f42bca46f235084aba373c366a64e311c8501
+Author: Fixture Author <author@fakegit.test>
+Date:   1700000300 +0000
+tree 18934d6c1a0e12a5cdafd6d951a94248b76f319d
+parent c8b0af6c3f2246cdf4c5229ca51c7f7e946badb4
 
-    host/blockfs: flush to durable storage on fsync/fdatasync
-
-OPFS FileSystemSyncAccessHandle.write() does not guarantee durability
-until flush() is called â¬ acknowledged writes could be lost on a tab
-crash/kill. Add flush() to the ByteStore types (SyncAccessHandleStore
-forwards to the handle; MemoryByteStore/ReadOnlyStore are no-ops) and
-wire the fsync/fdatasync syscalls to call it, so a program explicitly
-asking for durability gets it. The store is one handle, so the flush is
-whole-image (permitted â¬ fsync may flush more than requested); cost is
-incurred only when programs ask, which is rare.
-
-fdatasync is also newly provided (declared in libc). Runtime-verified:
-fsync/fdatasync return 0 and data round-trips; full suite green.
+    c5: final README touch
 
 
