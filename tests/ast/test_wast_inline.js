@@ -411,6 +411,37 @@ refusalCase('budgetCallee', 'budgetCallee', (w) => {
   ok('disabled-noop', st.inlined === 0 && callsIn(w.funcDefs[g].wast, f) === 1);
 }
 
+// budgetLocals: each site adds k params + ALL callee locals to the
+// caller — a tiny-BODY callee with a big locals vector must be refused
+// before the caller crosses localCap (the wasm engine hard-fails at
+// 50,000 locals: "local count too large" — todos/0209). Body-size
+// budgets alone can't see this (ext_regex's ~12.5k-local helper).
+refusalCase('budgetLocals', 'budgetLocals', (w) => {
+  const f = addFn(w, { params: [], results: [WT_I32], locals: [{ type: WT_I32, count: 200 }] },
+    b => { b.i32Const(1); b.ret(); });
+  const caller = addFn(w, { params: [], results: [] }, b => { b.call(f); b.drop(); b.ret(); });
+  return { callee: f, caller };
+}, { localCap: 100 });
+
+// budgetLocals accumulates site by site: with room for two copies of the
+// callee's locals but not three, the first two sites inline and the
+// third is refused — and the caller's final local count stays under cap.
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [WT_I32], results: [WT_I32], locals: [{ type: WT_I32, count: 40 }] },
+    b => { b.localGet(0); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => {
+    b.i32Const(1); b.call(f); b.drop();
+    b.i32Const(2); b.call(f); b.drop();
+    b.i32Const(3); b.call(f); b.ret();
+  });
+  const st = WAST.inlineFunctions(w, { localCap: 100 });
+  const gLocals = w.funcDefs[g].locals.reduce((a, l) => a + l.count, 0);
+  ok('budget-locals-accumulates', st.inlined === 2 && st.refused.budgetLocals === 1
+     && callsIn(w.funcDefs[g].wast, f) === 1 && gLocals <= 100,
+     `inlined=${st.inlined} budgetLocals=${st.refused.budgetLocals} gLocals=${gLocals}`);
+}
+
 // ---- J. runPasses ordering: inline first, THEN fold inside the clone ----
 {
   const w = mkWmod();

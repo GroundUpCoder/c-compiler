@@ -14327,6 +14327,13 @@ const inlineDefaults = {
   enabled: true,
   calleeCap: 64,      // max real (non-WSrcLoc) nodes in an inlinable callee
   callerGrowth: 1000, // max real nodes a caller may GAIN from inlining
+  // Max locals (params + declared) a caller may REACH via inlining. Each
+  // site adds k params + ALL the callee's declared locals — body-size
+  // budgets don't see that (a tiny body can declare thousands of locals:
+  // ext_regex has a ~12.5k-local helper), and wasm engines hard-fail a
+  // function at 50,000 locals ("local count too large"). 45000 leaves
+  // margin while changing no current-corpus decision (todos/0209).
+  localCap: 45000,
 };
 
 function realNodeCount(nodes) {
@@ -14412,7 +14419,7 @@ function inlineFunctions(wmod, optsIn) {
     inlined: 0,
     refused: { self: 0, imported: 0, noBody: 0, variadic: 0, alloca: 0,
                overAligned: 0, structRet: 0, eh: 0, raw: 0, multiResult: 0,
-               budgetCallee: 0, budgetCaller: 0 },
+               budgetCallee: 0, budgetCaller: 0, budgetLocals: 0 },
   };
   if (!opts.enabled) return stats;
   const defs = wmod.funcDefs;
@@ -14530,6 +14537,13 @@ function inlineFunctions(wmod, optsIn) {
       const k = ct.params.length;
       const added = k + 2 + scan.real - 1; // sets + block/end, minus the call
       if (cur + added > budget) { refuse('budgetCaller'); continue; }
+      // Local budget: this site grows the caller by k params + every
+      // callee local. Refuse it if the caller would cross localCap —
+      // the hard guard that keeps the emitted function under the wasm
+      // 50,000-local engine limit no matter how the node-count budgets
+      // are tuned (todos/0209).
+      const calleeLocals = callee.locals.reduce((a, l) => a + l.count, 0);
+      if (localCount + k + calleeLocals > opts.localCap) { refuse('budgetLocals'); continue; }
 
       const offset = localCount;
       for (const p of ct.params) pushLocalRLE(def.locals, p, 1);
