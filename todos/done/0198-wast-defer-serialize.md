@@ -1,6 +1,6 @@
 # 0198 — WAST Stage 2: defer serialization, open pass hook (byte-identical)
 
-- **Status**: open
+- **Status**: done (2026-07-15; serialization deferred to WasmModule.emit's code-section writer — node lists persist on funcDefs[].wast, identity WAST.runPasses(wmod) seam opened at the top of emit(), source-map entries produced at serialize time, goto-retry rollback is a node discard. BYTE-IDENTICAL: 726 unit records/629 wasm + 25 vendor wasm + 162 baked-image entries match the Stage-1 baseline, disw/sourcemap goldens untouched, full estate green (os-wm sweep flake pre-existing, filed separately), mkimage v93 seals. No passes — those are later stages. Log: logs/2026-07-15/wast-defer-serialize-0198.md)
 - **Design**: logs/2026-07-15/wast-flat-substrate-0197.md (Stage 1), todos/done/0197
 
 ## Goal
