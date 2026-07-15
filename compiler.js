@@ -14177,6 +14177,294 @@ function foldMemOffsets(nodes) {
   return { nodes: out, folds };
 }
 
+// ---- Whole-body inliner (todos/0201) ----
+//
+// Replace an eligible direct WCall with the callee's body spliced into the
+// caller. The substrate's symbolic label identities are what make this a
+// LOCAL transform: a cloned branch resolves against its own cloned
+// block/loop/if, a WReturn (or a branch to the callee's FUNC label)
+// becomes a WBr to the fresh wrapper block, and the serializer re-derives
+// every depth on its walk — no depth arithmetic anywhere.
+//
+// Per site, with k = callee param count and offset = the caller's current
+// local count (params + declared):
+//   [args..., WCall f]  ->  [args...,
+//                            WLocalSet(offset+k-1) ... WLocalSet(offset+0),
+//                            WBlock(f's wasm result type),
+//                              <f's body: local idx +offset,
+//                               WReturn -> WBr(L),
+//                               funcLabel branch targets -> L>,
+//                            WEnd]
+// The reverse-order drain binds the already-evaluated args (exactly once,
+// in source order — they were emitted as the WCall's preceding siblings)
+// into the renumbered param locals; the caller's locals vector grows by
+// f's param types + its declared RLE locals (params share the callee's
+// local index space but live in the signature, not the decl vector, so
+// the renumber base is params+declared, not declared alone). A callee
+// with the STANDARD fixed frame (fixed frameSize + savedSp save/restore;
+// savedSp renumbered like any local) splices VERBATIM: its self-contained
+// prologue/epilogue produces a correctly NESTED dynamic frame per inline
+// site — correct, not merged (frame merging is a later optimization).
+// Every cloned node is a FRESH instance: node lists share no elements, so
+// a later per-function pass that mutates an immediate (foldMemOffsets
+// writes WMop.offset) can never corrupt a sibling copy.
+//
+// Ordering: Tarjan SCC completion order over the WCall-derived call graph
+// = callees before callers on the DAG part, so nested inlines compose (a
+// spliced callee body already contains ITS inlines). Recursion is refused
+// only at the SITE level (caller == callee); a same-SCC callee splices a
+// SINGLE snapshot of its current body — its internal calls stay real
+// calls, so each splice is semantics-preserving regardless of recursion,
+// and termination is structural (one walk over each caller's original
+// nodes; spliced content is never re-scanned). The relaxation is
+// deliberate (todos/0201): SameBoy's whole main loop is one SCC closed by
+// the run-once SGB-border boot edge (GB_borrow_sgb_border->GB_run_frame),
+// so an SCC-wide refusal would exclude every hot callee.
+//
+// Refusals (silent per-site skip — the WCall stays a call; counted in
+// stats.refused by reason): imported target, missing wast/fnMeta (raw
+// hand-built bodies), self-recursion, variadic (dynamic arg-block ABI),
+// alloca (dynamic stack growth), over-aligned/masked frameBase,
+// struct-by-value return (sret ABI + caller-deferred SP restoration),
+// exception constructs (WTryTable/WThrow), WRaw (opaque bytes embed
+// un-relocatable local indices), multi-value results, and the two budget
+// caps. Budgets are DELIBERATELY CONSERVATIVE (coordinator decision,
+// todos/0201): inline the small callees that fall out of the
+// representation cleanly; do NOT chase the big SameBoy hot callees
+// (GB_read_memory ~397 real nodes, GB_advance_cycles ~534, cycle_write
+// ~1211) at dozens of sites — documented deferred work with real V8
+// tier-up risk, not a bug. Inlined-away functions are never deleted:
+// their indices are baked into call immediates and the element section.
+const inlineDefaults = {
+  enabled: true,
+  calleeCap: 64,      // max real (non-WSrcLoc) nodes in an inlinable callee
+  callerGrowth: 1000, // max real nodes a caller may GAIN from inlining
+};
+
+function realNodeCount(nodes) {
+  let c = 0;
+  for (const n of nodes) if (!(n instanceof WSrcLoc)) c++;
+  return c;
+}
+
+// Append a local run to a caller's RLE locals vector, merging with the
+// tail entry when the type matches (pure encoding compactness).
+function pushLocalRLE(locals, type, count) {
+  const last = locals[locals.length - 1];
+  if (last && wtEquals(last.type, type)) last.count += count;
+  else locals.push({ type, count });
+}
+
+// Clone a callee body for splicing: fresh node instances throughout,
+// local indices shifted by `offset`, control-node label identities mapped
+// original->clone (a branch target is always an ENCLOSING construct, so
+// it precedes the branch in the flat list and the map is populated by the
+// time a branch needs it), WReturn and funcLabel-targeted branches
+// retargeted to `wrapLabel`. WRaw / WTryTable / WThrow never reach here
+// (refused by eligibility); an unknown node class fails loud.
+// WSrcLoc markers are DROPPED from the clone: the c.sourcemap format is a
+// flat offset->line table with no inline-frame concept, so a callee line
+// inside the caller's byte range would read as cross-function leakage
+// (tests/sourcemap/line_numbers pins that invariant). Inlined
+// instructions therefore attribute to the CALL SITE — the caller's last
+// marker before the splice.
+function cloneInlineBody(nodes, offset, wrapLabel) {
+  const map = new Map();
+  const mapT = (t) => {
+    if (t && t.isFuncLabel) return wrapLabel;
+    const c = map.get(t);
+    if (!c) throw new Error("WAST inline: branch targets a label outside the callee body");
+    return c;
+  };
+  const out = [];
+  for (const n of nodes) {
+    let c;
+    switch (n.constructor) {
+      case WLocalGet: c = new WLocalGet(n.idx + offset); break;
+      case WLocalSet: c = new WLocalSet(n.idx + offset); break;
+      case WLocalTee: c = new WLocalTee(n.idx + offset); break;
+      case WBlock: c = new WBlock(n.bt); map.set(n, c); break;
+      case WLoop: c = new WLoop(n.bt); map.set(n, c); break;
+      case WIf: c = new WIf(n.bt); map.set(n, c); break;
+      case WElse: c = new WElse(); break;
+      case WEnd: c = new WEnd(); break;
+      case WBr: c = new WBr(mapT(n.target)); break;
+      case WBrIf: c = new WBrIf(mapT(n.target)); break;
+      case WBrTable: c = new WBrTable(n.targets.map(mapT), mapT(n.defaultTarget)); break;
+      case WReturn: c = new WBr(wrapLabel); break;
+      case WCall: c = new WCall(n.funcIdx); break;
+      case WCallIndirect: c = new WCallIndirect(n.typeIdx, n.tableIdx); break;
+      case WConst: c = new WConst(n.wt, n.value); break;
+      case WGlobalGet: c = new WGlobalGet(n.idx); break;
+      case WGlobalSet: c = new WGlobalSet(n.idx); break;
+      case WAop: c = new WAop(n.wt, n.op, n.sign); break;
+      case WMop: c = new WMop(n.opcode, n.offset, n.align); break;
+      case WTruncSat: c = new WTruncSat(n.subop); break;
+      case WMemorySize: c = new WMemorySize(); break;
+      case WMemoryGrow: c = new WMemoryGrow(); break;
+      case WMemoryCopy: c = new WMemoryCopy(); break;
+      case WMemoryFill: c = new WMemoryFill(); break;
+      case WDrop: c = new WDrop(); break;
+      case WNop: c = new WNop(); break;
+      case WUnreachable: c = new WUnreachable(); break;
+      case WRefOp: c = new WRefOp(n.kind, n.imm); break;
+      case WGCOp: c = new WGCOp(n.subop, n.imms.slice()); break;
+      case WSrcLoc: continue; // call-site attribution (see header comment)
+      default:
+        throw new Error(`WAST inline: cannot clone node ${n.constructor && n.constructor.name}`);
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+function inlineFunctions(wmod, optsIn) {
+  const opts = Object.assign({}, inlineDefaults, optsIn || {});
+  const stats = {
+    inlined: 0,
+    refused: { self: 0, imported: 0, noBody: 0, variadic: 0, alloca: 0,
+               overAligned: 0, structRet: 0, eh: 0, raw: 0, multiResult: 0,
+               budgetCallee: 0, budgetCaller: 0 },
+  };
+  if (!opts.enabled) return stats;
+  const defs = wmod.funcDefs;
+  const nImp = wmod.funcImports ? wmod.funcImports.length : 0;
+  const N = defs.length;
+
+  // Call-graph adjacency over defined-function indices.
+  const adj = [];
+  let anySite = false;
+  for (let i = 0; i < N; i++) {
+    const s = new Set();
+    if (defs[i].wast) {
+      for (const n of defs[i].wast) {
+        if (n instanceof WCall) {
+          anySite = true;
+          if (n.funcIdx >= nImp) s.add(n.funcIdx - nImp);
+        }
+      }
+    }
+    adj.push(s);
+  }
+  if (!anySite) return stats;
+
+  // Iterative Tarjan. An SCC completes only after every SCC it points to
+  // (its callees) has completed, so concatenating members in completion
+  // order yields the callee-before-caller processing order.
+  const order = [];
+  {
+    const idx = new Int32Array(N).fill(-1);
+    const low = new Int32Array(N);
+    const onstk = new Uint8Array(N);
+    const stk = [];
+    let counter = 0;
+    for (let s = 0; s < N; s++) {
+      if (idx[s] !== -1) continue;
+      const work = [[s, null, 0]]; // [node, adjacency array, cursor]
+      while (work.length) {
+        const fr = work[work.length - 1];
+        const v = fr[0];
+        if (fr[1] === null) {
+          idx[v] = low[v] = counter++;
+          stk.push(v); onstk[v] = 1;
+          fr[1] = [...adj[v]];
+        }
+        let advanced = false;
+        while (fr[2] < fr[1].length) {
+          const w = fr[1][fr[2]++];
+          if (idx[w] === -1) { work.push([w, null, 0]); advanced = true; break; }
+          if (onstk[w] && idx[w] < low[v]) low[v] = idx[w];
+        }
+        if (advanced) continue;
+        if (low[v] === idx[v]) {
+          for (;;) { const w = stk.pop(); onstk[w] = 0; order.push(w); if (w === v) break; }
+        }
+        work.pop();
+        if (work.length) {
+          const p = work[work.length - 1][0];
+          if (low[v] < low[p]) low[p] = low[v];
+        }
+      }
+    }
+  }
+
+  // Per-callee hazard scan, cached by body identity (a body rewritten by
+  // an earlier iteration gets a fresh scan).
+  const scanCache = new Map();
+  function scanCallee(ei) {
+    const def = defs[ei];
+    let s = scanCache.get(ei);
+    if (s && s.wast === def.wast) return s;
+    let real = 0, eh = false, raw = false;
+    for (const n of def.wast) {
+      if (n instanceof WSrcLoc) continue;
+      real++;
+      if (n instanceof WTryTable || n instanceof WThrow) eh = true;
+      else if (n instanceof WRaw) raw = true;
+    }
+    s = { wast: def.wast, real, eh, raw };
+    scanCache.set(ei, s);
+    return s;
+  }
+
+  for (const di of order) {
+    const def = defs[di];
+    if (!def.wast) continue;
+    let hasSite = false;
+    for (const n of def.wast) if (n instanceof WCall) { hasSite = true; break; }
+    if (!hasSite) continue;
+    const callerReal = realNodeCount(def.wast);
+    const budget = callerReal + opts.callerGrowth;
+    let cur = callerReal;
+    let localCount = wmod.typeDefs[def.typeId].params.length +
+                     def.locals.reduce((a, l) => a + l.count, 0);
+    const out = [];
+    let rewrote = false;
+    for (const n of def.wast) {
+      if (!(n instanceof WCall)) { out.push(n); continue; }
+      const refuse = (why) => { stats.refused[why]++; out.push(n); };
+      if (n.funcIdx < nImp) { refuse('imported'); continue; }
+      const ei = n.funcIdx - nImp;
+      if (ei === di) { refuse('self'); continue; }
+      const callee = defs[ei];
+      const meta = callee.fnMeta;
+      if (!callee.wast || !meta) { refuse('noBody'); continue; }
+      if (meta.variadic) { refuse('variadic'); continue; }
+      if (meta.usesAlloca) { refuse('alloca'); continue; }
+      if (meta.overAligned) { refuse('overAligned'); continue; }
+      if (meta.structRet) { refuse('structRet'); continue; }
+      const ct = wmod.typeDefs[callee.typeId];
+      if (ct.results.length > 1) { refuse('multiResult'); continue; }
+      const scan = scanCallee(ei);
+      if (scan.eh) { refuse('eh'); continue; }
+      if (scan.raw) { refuse('raw'); continue; }
+      if (scan.real > opts.calleeCap) { refuse('budgetCallee'); continue; }
+      const k = ct.params.length;
+      const added = k + 2 + scan.real - 1; // sets + block/end, minus the call
+      if (cur + added > budget) { refuse('budgetCaller'); continue; }
+
+      const offset = localCount;
+      for (const p of ct.params) pushLocalRLE(def.locals, p, 1);
+      for (const l of callee.locals) pushLocalRLE(def.locals, l.type, l.count);
+      localCount += k;
+      for (const l of callee.locals) localCount += l.count;
+      const wrap = new WBlock(ct.results.length === 1 ? ct.results[0] : WT_EMPTY);
+      for (let j = k - 1; j >= 0; j--) out.push(new WLocalSet(offset + j));
+      out.push(wrap);
+      for (const cn of cloneInlineBody(callee.wast, offset, wrap)) out.push(cn);
+      out.push(new WEnd());
+      cur += added;
+      stats.inlined++;
+      rewrote = true;
+    }
+    if (rewrote) {
+      def.wast = out;
+      validate(out, null);
+    }
+  }
+  return stats;
+}
+
 // ---- Pass hook ----
 //
 // The post-codegen, pre-serialize seam (todos/0198). When this runs, every
@@ -14187,9 +14475,12 @@ function foldMemOffsets(nodes) {
 // re-run validate() on it (the per-function funcLabel isn't persisted on
 // the funcDef, so the re-validation passes null — every structural check
 // except the foreign-func-label one still runs).
+// Order matters (todos/0201): the INLINER runs first, then foldMemOffsets,
+// so const+add displacements newly exposed inside inlined bodies fold too.
 // Telemetry lands on wmod.passStats and mirrors to WAST.lastPassStats
 // (read by benches/tests after a compile; the compiler itself stays quiet).
 function runPasses(wmod) {
+  const inline = inlineFunctions(wmod);
   let offsetFolds = 0;
   for (const def of wmod.funcDefs) {
     if (!def.wast) continue;
@@ -14200,10 +14491,11 @@ function runPasses(wmod) {
       offsetFolds += r.folds;
     }
   }
-  wmod.passStats = { offsetFolds };
+  wmod.passStats = { offsetFolds, inline };
   lastPassStats.offsetFolds = offsetFolds;
+  lastPassStats.inline = inline;
 }
-const lastPassStats = { offsetFolds: 0 };
+const lastPassStats = { offsetFolds: 0, inline: null };
 
 return {
   // Relocated target-side tables and encoders (consumed by Codegen)
@@ -14214,6 +14506,7 @@ return {
   WasmCode,
   // WAST proper
   WastBuilder, serialize, validate, runPasses, lastPassStats,
+  inlineFunctions, inlineDefaults,
   WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
   WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
   WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
@@ -14337,8 +14630,9 @@ class WasmModule {
     const id = this.funcImports.length + this.funcDefs.length;
     // body: serialized bytes; wast: the function's WAST node list, set by
     // emitFunctionBody and serialized into body by emit()'s code-section
-    // writer (todos/0198).
-    this.funcDefs.push({ typeId, locals: [], body: [], wast: null });
+    // writer (todos/0198); fnMeta: ABI facts for the inliner, stamped with
+    // the tree (todos/0201).
+    this.funcDefs.push({ typeId, locals: [], body: [], wast: null, fnMeta: null });
     return id;
   }
 
@@ -16204,6 +16498,7 @@ class CodeGenerator {
     this.currentFuncDef = funcDef;
     this.emitSrcLocMarkers = !!this.compilerOptions.emitNames;
     this.structRetDeferred = 0;
+    this.usesAlloca = false;
     this.callNesting = 0;
     this.blockDepth = 0;
     this.gotoLabelDepths.clear();
@@ -16320,6 +16615,16 @@ class CodeGenerator {
         throw e;
       }
       this.wmod.funcDefs[defIdx].wast = this.body.nodes;
+      // ABI facts the WAST inliner can't reconstruct from nodes alone
+      // (todos/0201) — stamped only alongside a stored tree, so a raw or
+      // discarded body never carries stale metadata.
+      this.wmod.funcDefs[defIdx].fnMeta = {
+        variadic: this.hasVaArgs,
+        frameSize: this.frameSize,
+        overAligned: this.frameBaseLocalIdx >= 0,
+        structRet: this.hasStructReturn,
+        usesAlloca: this.usesAlloca,
+      };
     }
 
     this.emitSrcLocMarkers = false;
@@ -18178,6 +18483,7 @@ class CodeGenerator {
           case Types.IntrinsicKind.HEAP_BASE:
             this.body.globalGet(this.heapBaseGlobalIdx); break;
           case Types.IntrinsicKind.ALLOCA:
+            this.usesAlloca = true; // dynamic frame: excluded from WAST inlining (todos/0201)
             this.body.globalGet(this.stackPointerGlobalIdx);
             this.emitExpr(expr.args[0]);
             this.body.i32Const(15); this.body.aop(WT_I32, ALU.OP_ADD);
