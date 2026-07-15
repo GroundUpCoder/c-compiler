@@ -17479,6 +17479,32 @@ class CodeGenerator {
     else if (wtEquals(wt, WT_F64)) this.body.mop(MOP.F64_STORE, 0, 3);
   }
 
+  // Release a variadic call's arg block: SP = base + blockSize, which also
+  // reclaims the tracked struct-return temps deferred while evaluating the
+  // arguments (deferredDelta of them sit directly below the block). The
+  // release is CONDITIONAL on SP sitting exactly at base - deferredDelta —
+  // i.e. only tracked movement happened during argument evaluation. A
+  // callee that used alloca() returns with an UNTRACKED retained SP bump
+  // (the caller-frees contract: the alloca'd region below the block must
+  // survive this whole call), so on mismatch we leave SP alone and the
+  // block leaks until the function epilogue — the alloca contract's
+  // designated free point (todos/0208).
+  emitVaBlockRelease(argBlockBase, blockSize, deferredDelta) {
+    this.body.globalGet(this.stackPointerGlobalIdx);
+    this.body.localGet(argBlockBase);
+    if (deferredDelta > 0) {
+      this.body.i32Const(deferredDelta);
+      this.body.aop(WT_I32, ALU.OP_SUB);
+    }
+    this.body.aop(WT_I32, ALU.OP_EQ);
+    this.body.if_(WT_EMPTY); this.blockDepth++;
+    this.body.localGet(argBlockBase);
+    this.body.i32Const(blockSize);
+    this.body.aop(WT_I32, ALU.OP_ADD);
+    this.body.globalSet(this.stackPointerGlobalIdx);
+    this.blockDepth--; this.body.end();
+  }
+
   emitVaArgLoad(type) {
     type = type.removeQualifiers();
     if (isStructOrUnion(type)) return; // struct: address IS the value
@@ -18193,10 +18219,12 @@ class CodeGenerator {
                 this.emitVaArgStore(storeType);
               }
 
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              const deferredDelta = this.structRetDeferred - deferredAtVaAlloc;
-              if (deferredDelta > 0) { this.body.i32Const(deferredDelta); this.body.aop(WT_I32, ALU.OP_ADD); }
-              this.body.localSet(argBlockBase);
+              // NB: argBlockBase stays FIXED — the block never moves, and
+              // per-arg store addresses are pushed before each evaluation.
+              // (It used to be recomputed from live SP here, which went
+              // stale when a callee's alloca() retained an untracked SP
+              // bump — the callee then got a garbage block pointer,
+              // todos/0208.)
             }
 
             // Push arg block pointer and call
@@ -18210,21 +18238,16 @@ class CodeGenerator {
             } else if (varRetType !== Types.TVOID) {
               this.body.localGet(argBlockBase);
               this.emitVaArgLoad(varRetType);
-              this.body.localGet(argBlockBase);
-              this.body.i32Const(blockSize);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              // SP = argBlockBase + blockSize also reclaimed any struct-return
-              // temps deferred while evaluating the arguments (argBlockBase was
-              // recomputed upward by deferredDelta after each store) — drop them
-              // from the counter so the callNesting==0 fixup doesn't restore
-              // them a second time and leak SP upward.
+              this.emitVaBlockRelease(argBlockBase, blockSize,
+                this.structRetDeferred - deferredAtVaAlloc);
+              // The release also reclaims the struct-return temps deferred
+              // while evaluating the arguments — drop them from the counter
+              // so the callNesting==0 fixup doesn't restore them a second
+              // time and leak SP upward.
               this.structRetDeferred = deferredAtVaAlloc;
             } else {
-              this.body.localGet(argBlockBase);
-              this.body.i32Const(blockSize);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.emitVaBlockRelease(argBlockBase, blockSize,
+                this.structRetDeferred - deferredAtVaAlloc);
               this.body.i32Const(0);
               // See scalar-return branch above.
               this.structRetDeferred = deferredAtVaAlloc;
@@ -18365,10 +18388,12 @@ class CodeGenerator {
                 this.emitExpr(expr.arguments[i]);
                 this.emitVaArgStore(storeType);
               }
-              this.body.globalGet(this.stackPointerGlobalIdx);
-              const deferredDelta = this.structRetDeferred - deferredAtVaAlloc;
-              if (deferredDelta > 0) { this.body.i32Const(deferredDelta); this.body.aop(WT_I32, ALU.OP_ADD); }
-              this.body.localSet(argBlockBase);
+              // NB: argBlockBase stays FIXED — the block never moves, and
+              // per-arg store addresses are pushed before each evaluation.
+              // (It used to be recomputed from live SP here, which went
+              // stale when a callee's alloca() retained an untracked SP
+              // bump — the callee then got a garbage block pointer,
+              // todos/0208.)
             }
             this.body.localGet(argBlockBase);
             this.emitExpr(expr.callee);
@@ -18379,19 +18404,13 @@ class CodeGenerator {
             } else if (varRetType !== Types.TVOID) {
               this.body.localGet(argBlockBase);
               this.emitVaArgLoad(varRetType);
-              this.body.localGet(argBlockBase);
-              this.body.i32Const(blockSize);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
-              // SP = argBlockBase + blockSize also reclaimed any struct-return
-              // temps deferred while evaluating the arguments — see the direct
-              // variadic call path.
+              this.emitVaBlockRelease(argBlockBase, blockSize,
+                this.structRetDeferred - deferredAtVaAlloc);
+              // See the direct variadic call path for the counter reset.
               this.structRetDeferred = deferredAtVaAlloc;
             } else {
-              this.body.localGet(argBlockBase);
-              this.body.i32Const(blockSize);
-              this.body.aop(WT_I32, ALU.OP_ADD);
-              this.body.globalSet(this.stackPointerGlobalIdx);
+              this.emitVaBlockRelease(argBlockBase, blockSize,
+                this.structRetDeferred - deferredAtVaAlloc);
               this.body.i32Const(0);
               // See scalar-return branch above.
               this.structRetDeferred = deferredAtVaAlloc;
