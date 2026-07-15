@@ -5123,8 +5123,18 @@ function constEvalItem(expr) {
         return new ConstEval.Item(expr.decl.value, expr.type);
       return null;
     case AST.EBinary: {
-      const l = constEvalItem(expr.left), r = constEvalItem(expr.right);
-      if (l === null || r === null) return null;
+      const l = constEvalItem(expr.left);
+      if (l === null) return null;
+      // && / || short-circuit in constant expressions too (C11 6.6p3 via
+      // 6.5.13/6.5.14): `1 || 1/0` is a valid integer constant expression
+      // — the unevaluated operand must not make the eval fail (which used
+      // to silently fall back, e.g. to the running enum counter).
+      if (expr.op === "LAND" && !ConstEval.isTruthy(l))
+        return new ConstEval.Item(0n, Types.TINT);
+      if (expr.op === "LOR" && ConstEval.isTruthy(l))
+        return new ConstEval.Item(1n, Types.TINT);
+      const r = constEvalItem(expr.right);
+      if (r === null) return null;
       return ConstEval.binary(expr.op, l, r);
     }
     case AST.EUnary: {
@@ -10325,7 +10335,17 @@ class Parser {
         let val = nextVal;
         if (this.matchText("=")) {
           const valExpr = this.parseAssignmentExpression();
-          val = constEvalInt(valExpr) ?? nextVal;
+          const cv = constEvalInt(valExpr);
+          if (cv === null) {
+            // C11 6.7.2.2p2: the expression SHALL be an integer constant
+            // expression — a failed eval used to silently fall back to
+            // the running counter (miscompile, not just accepts-invalid).
+            this.recoverableError(eNameTok,
+              `enumerator '${eName}' value is not an integer constant expression`);
+            val = nextVal; // keep parsing coherently
+          } else {
+            val = cv;
+          }
         }
         // C11 6.7.2.2p2 wants each enumerator representable as int; this
         // project follows the gcc/clang extension where values up to
