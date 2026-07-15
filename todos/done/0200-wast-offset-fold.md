@@ -1,6 +1,6 @@
 # 0200 — WAST Stage 3a: load/store offset-fold peephole
 
-- **Status**: open
+- **Status**: done (2026-07-15; foldMemOffsets landed in WAST.runPasses — loads fold the adjacent const+add into the memarg offset, stores match across one pure value node (the adjacent-triple store form is a miscompile, pinned in tests/ast/test_wast_passes.js), k >= 0 only via serialize()'s own Number|0 normalization, greedy +0 chains, second pass a no-op, rewritten functions re-validated. SameBoy: 3931 folds, −6.5% instructions, −4.4% wasm bytes, framebuffer checksums IDENTICAL (the interlock gate); ms/frame flat (V8 already folds addressing — the inliner remains the perf candidate, todos/0186). Full estate green: unit 715+8 xfail, ast 2/2, run.py 274, kernel 73/73, sweep 25/25 first try, mkimage v94 seals; mp-upstream at the same 3 pre-existing float failures (verified vs clean HEAD). disw/sourcemap goldens legitimately unchanged (the only compiler-built golden has zero memory ops); spot-check done against a real binary instead. Log: logs/2026-07-15/wast-offset-fold-0200.md)
 - **Design**: logs/2026-07-15/wast-defer-serialize-0198.md (substrate), this item (pass)
 
 ## Goal
