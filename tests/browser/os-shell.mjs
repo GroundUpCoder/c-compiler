@@ -690,7 +690,10 @@ try {
   // (and SIGTERM can't wake a process parked in GetMessage).
   await page.keyboard.type('pkill -9 notepad; pkill -9 ctlpanel; pkill -9 winbox; pkill -9 term; echo WCL""-DONE\r', { delay: 20 });
   await page.waitForFunction(() => window.__osOut.includes('WCL-DONE'), { timeout: 20000, polling: 200 });
-  await page.keyboard.type('rm -f /root/Desktop/.icons; printf x > /root/Desktop/aaa; echo RN-""SETUP\r', { delay: 20 });
+  // Drop the seeded Presentations DIR too: dirs sort first (todos/0185),
+  // so it would steal the top-left cell from aaa — the long-name leg
+  // below wipes the whole Desktop anyway.
+  await page.keyboard.type('rm -f /root/Desktop/.icons; rm -rf /root/Desktop/Presentations; printf x > /root/Desktop/aaa; echo RN-""SETUP\r', { delay: 20 });
   await page.waitForFunction(() => window.__osOut.includes('RN-SETUP'), { timeout: 20000, polling: 200 });
   await new Promise(r => setTimeout(r, 2500));       // desk_load re-read tick
   await setVt(2);

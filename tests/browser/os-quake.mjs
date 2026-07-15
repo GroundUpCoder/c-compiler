@@ -179,9 +179,11 @@ try {
   // Clean quit via the WM close request.
   await page.keyboard.type('wmctl close $(wmctl list | grep "Quake$" | sed "s/[^0-9].*//")\r');
   await setVt(2);
-  // "Restored" tolerates the 0029 desktop-icon pixels (this region holds
-  // three icon cells, ~3% of it) — only the WINDOW must be gone.
-  await waitFrame([16, 40, 328, 232], s => s.nonTeal < s.n * 0.05, 30000);
+  // "Restored" tolerates the 0029 desktop-icon pixels — since the
+  // 0184/0185 seeds this region holds parts of TWO icon columns (tiles +
+  // labels, ~5-8% of it) — only the WINDOW must be gone (quake live is
+  // ~90% non-teal here).
+  await waitFrame([16, 40, 328, 232], s => s.nonTeal < s.n * 0.12, 30000);
   check('wmctl close quit quake; desktop restored', true);
   check('lock request withdrawn when quake died',
     (await page.evaluate(() => window.__osPtrLockWanted)) === false);
