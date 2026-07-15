@@ -145,6 +145,17 @@ the message wording is free to change). **Fix bugs test-first: add the failing
 test here, commit it, then fix.** Verified-but-unfixed findings are tracked in
 `todos/CONFORMANCE-REMAINING.md`.
 
+**Pinned known bugs (xfail).** A confirmed-but-unfixed bug can be committed as a
+*green* conformance test with `config.json` `"knownBug": "NNNN"` (the open
+todo id). The `.c`/`expected.stdout` encode the CORRECT (clang) answer, so the
+diff still runs and records expected-vs-actual — but a pinned failure reports as
+`xfail` (green, not counted as a failure), so the suite is never permanently red
+(the fakegit/0183 anti-pattern). When the bug is fixed the test starts passing:
+that's `xpass`, a LOUD failure telling the fixer to delete the `knownBug` tag and
+convert the test into a permanent regression guard. Mechanism: `applyKnownBug`
+in `tests/run-unit.js` (run.py maps `xfail`→skip, `xpass`→fail). Prefer this over
+`CONFORMANCE-REMAINING.md` prose when you have an executable repro.
+
 Semantics decisions already made (don't re-litigate without cause):
 - Enum constants in `(INT_MAX, UINT_MAX]` get type `unsigned int` (gcc
   extension, per the `unsigned_consteval` golden); outside 32 bits errors.

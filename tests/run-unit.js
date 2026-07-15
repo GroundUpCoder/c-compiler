@@ -341,6 +341,28 @@ function workerMain() {
     return { name: td.name, status: runErrors.length ? 'fail' : 'pass', msg: runErrors.join('\n') };
   }
 
+  // Known-bug / expected-fail (xfail) transform. A test tagged
+  // `"knownBug": "NNNN"` in its config.json pins a CONFIRMED-but-unfixed
+  // compiler bug: its expected.stdout encodes the CORRECT (clang) answer, so
+  // it currently FAILS. We still compile+run+diff it (real proof, recorded in
+  // the msg), but a pinned failure is reported as `xfail` — GREEN, so the
+  // suite is not permanently red (the fakegit/0183 anti-pattern). If the test
+  // unexpectedly PASSES the bug is fixed: that's `xpass`, a LOUD failure
+  // telling the fixer to drop the tag and convert this into a hard regression
+  // guard.
+  function applyKnownBug(td, result) {
+    if (!result || (result.status !== 'fail' && result.status !== 'pass')) return result;
+    const id = td.config.knownBug;
+    if (result.status === 'fail') {
+      return { name: td.name, status: 'xfail', knownBug: id,
+               msg: `XFAIL KNOWN-BUG ${id} (todos/${id}) — pinned; expected-vs-actual below:\n${result.msg || ''}` };
+    }
+    return { name: td.name, status: 'xpass', knownBug: id,
+             msg: `XPASS: KNOWN-BUG ${id} now PASSES — the bug appears FIXED. Remove ` +
+                  `"knownBug" from ${td.name}/config.json to convert this into a permanent ` +
+                  `regression guard (todos/${id}).` };
+  }
+
   parentPort.on('message', async (td) => {
     let result;
     try {
@@ -348,6 +370,7 @@ function workerMain() {
     } catch (e) {
       result = { name: td.name, status: 'fail', msg: `Runner error: ${e.message}\n${e.stack || ''}` };
     }
+    if (td.config && td.config.knownBug) result = applyKnownBug(td, result);
     parentPort.postMessage(result);
   });
 }
@@ -399,7 +422,7 @@ async function mainMain() {
 
   const queue = descriptors.slice();
   let nextIdx = 0;
-  let passed = 0, failed = 0, skipped = 0;
+  let passed = 0, failed = 0, skipped = 0, xfailed = 0;
   const failures = [];
 
   function reportJsonl(result) {
@@ -412,6 +435,9 @@ async function mainMain() {
     if (result.status === 'pass') {
       if (opts.verbose) process.stdout.write(`  PASS  ${result.name}\n`);
       else if (!opts.quiet) process.stdout.write('.');
+    } else if (result.status === 'xfail') {
+      if (opts.verbose) process.stdout.write(`  XFAIL ${result.name}${result.msg ? ' — ' + result.msg : ''}\n`);
+      else if (!opts.quiet) process.stdout.write('x');
     } else if (result.status === 'skip') {
       if (opts.verbose) process.stdout.write(`  SKIP  ${result.name}${result.msg ? ' — ' + result.msg : ''}\n`);
     } else {
@@ -437,8 +463,9 @@ async function mainMain() {
 
       function report(result) {
         if (result.status === 'pass') passed++;
+        else if (result.status === 'xfail') xfailed++;
         else if (result.status === 'skip') skipped++;
-        else { failed++; failures.push(result); }
+        else { failed++; failures.push(result); }  // 'fail' and 'xpass' both fail loud
 
         if (opts.jsonl) reportJsonl(result);
         else reportHuman(result);
@@ -498,6 +525,7 @@ async function mainMain() {
       }
     }
     const parts = [`${passed} passed`, `${failed} failed`];
+    if (xfailed) parts.push(`${xfailed} xfailed`);
     if (skipped) parts.push(`${skipped} skipped`);
     process.stdout.write(`\n${parts.join(', ')}  (${elapsed.toFixed(1)}s)\n`);
   }

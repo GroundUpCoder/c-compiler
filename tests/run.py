@@ -445,6 +445,12 @@ def run_unit_node(results, filter_str=None):
             results.record(name, True)
         elif status == "fail":
             results.record(name, False, obj.get("msg", ""))
+        elif status == "xfail":
+            # Pinned known-bug (todos NNNN): expected failure, stays GREEN.
+            results.skip(name)
+        elif status == "xpass":
+            # A pinned bug started passing — loud failure: drop the tag.
+            results.record(name, False, obj.get("msg", ""))
         elif status == "skip":
             if obj.get("fallback"):
                 fallback_names.append(name)
