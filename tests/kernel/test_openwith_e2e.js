@@ -23,7 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -68,14 +68,11 @@ function minimalRom() {
 }
 const ROM_B64 = minimalRom().toString('base64');
 
-/* Desktop grid geometry (wm.c): column-major, 16px margin, 84x64 cells,
- * 11 rows on the 1024x768 headless screen; column-0 icon centers sit at
- * x=58, y = 16 + row*64 + 32. Seeded /root/Desktop + the test's game.gb,
- * sorted (the 0093 Recycle Bin pins to the grid TAIL, so it never shifts
- * these cells). */
-const DESK = ['doom', 'drmario', 'game.gb', 'gameboy', 'mario', 'pokemon',
-              'quake', 'term'];
-const deskY = (name) => 16 + DESK.indexOf(name) * 64 + 32;
+/* Desktop grid geometry: the drive.js model (deskEntries/deskCell over
+ * os/image.json — dirs first, Recycle Bin tail-pinned, column wrap at 11
+ * rows on 1024x768; todos/0184/0185). game.gb's cell is derived from the
+ * seeded set + the test's own drop. */
+const GB = deskCell(deskEntries(['game.gb']), 'game.gb');
 
 /* fileman row selection (the test_fileman_e2e idiom): click focuses the
  * listbox, HOME selects row 0, VK_DOWN steps — no row-height pixel math. */
@@ -174,7 +171,7 @@ const out = boot([
   // (0083 rule).
   'sleep 1',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
-  `wmctl dblclick $DSID 58 ${deskY('game.gb')}`,
+  `wmctl dblclick $DSID ${GB.x + 42} ${GB.y + 32}`,
   'wmctl wait count SameBoy 2 8000',             // second sameboy window up
   'echo ==list4',
   'wmctl list',

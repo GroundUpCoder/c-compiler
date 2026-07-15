@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -47,16 +47,17 @@ const BAR_MENU_GEOM = '120x96+56+644';             // btn 0 x, 768-28-96
 const DISPLAY_ROW_Y = 4 + 4 * 20 + 8 + 10;         // below the groove: 102
 const CLOSE_ROW_Y = 4 + 3 * 20 + 8 + 10;           // bar menu groove: 82
 
-// The desktop starts as the seeded 7 icons (plus the Recycle Bin, which
-// wm.c pins to the grid's TAIL — 0093 — so it never shifts these
-// indices); the script grows it. Icons auto-flow column-major sorted
-// (no .icons), centers x=58, y = 16 + row*64 + 32 (the 0077 grid).
-const deskY = (list, name) => 16 + list.indexOf(name) * 64 + 32;
-const DESK0 = ['doom', 'drmario', 'gameboy', 'mario', 'pokemon', 'quake',
-               'term'];
-// after New Folder + New File.txt + zzz.txt + alauncher (11 entries, one column)
-const DESK1 = [...DESK0, 'New Folder', 'New File.txt', 'zzz.txt',
-               'alauncher'].sort();
+// The desktop starts as the seeded set (drive.js deskEntries: files + the
+// Presentations dir + the tail-pinned Recycle Bin); the script grows it by
+// New Folder (a dir — dirs sort FIRST per entcmp) + three files. Icons
+// auto-flow column-major sorted (no .icons), wrapping past column 0 at 11
+// rows (todos/0184) — cells come from deskCell, never bare row math.
+const DESK1 = deskEntries([{ name: 'New Folder', dir: true },
+                           'New File.txt', 'zzz.txt', 'alauncher']);
+const desk = (list, name) => {
+  const c = deskCell(list, name);
+  return `${c.x + 42} ${c.y + 32}`;
+};
 
 const script = [
   'winbox &',
@@ -155,7 +156,7 @@ const script = [
   'wmctl key 0 41 27',                           // Esc the Start menu
   'wmctl wait nowin startmenu 8000',             // Start menu gone before the icon test
   // ---- icon menu: right-click selects + OPEN runs the activate path ----
-  `wmctl click $DSID 58 ${deskY(DESK1, 'alauncher')} 3`,
+  `wmctl click $DSID ${desk(DESK1, 'alauncher')} 3`,
   'wmctl wait win ctxmenu 8000',                 // icon menu up
   'echo ==icon1',
   'wmctl list',
@@ -415,23 +416,22 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
   check('sub rows carry the flyout arrow', p(110, 13) === '0,0,0', p(110, 13));
   // d2.ppm: right-click selected the alauncher icon alone (navy strip).
   const d = readPpm('d2.ppm', 1024);
-  const strip = (name, r) => {
+  const strip = (name) => {
+    const c = deskCell(DESK1, name);
     const len = Math.min(13, name.length);
-    const lx = 16 + Math.floor((84 - len * 6) / 2);
-    return d(lx - 1, 16 + r * 64 + 34 + 3);
+    const lx = c.x + Math.floor((84 - len * 6) / 2);
+    return d(lx - 1, c.y + 34 + 3);
   };
   check('right-click selected the icon alone (alauncher navy, doom teal)',
-    strip('alauncher', DESK1.indexOf('alauncher')) === '0,0,128' &&
-    strip('doom', DESK1.indexOf('doom')) === '0,128,128',
-    [strip('alauncher', DESK1.indexOf('alauncher')),
-     strip('doom', DESK1.indexOf('doom'))].join(' | '));
+    strip('alauncher') === '0,0,128' && strip('doom') === '0,128,128',
+    [strip('alauncher'), strip('doom')].join(' | '));
   // d1.ppm: zzz.txt's icon tile is up right after REFRESH (white tile
   // histogram in its cell; the coarse tick alone would allow ~1s).
   const d1 = readPpm('d1.ppm', 1024);
   let white = 0;
-  const zr = DESK1.indexOf('zzz.txt');
-  for (let y = 16 + zr * 64; y < 16 + zr * 64 + 48; y++)
-    for (let x = 16; x < 100; x++) if (d1(x, y) === '255,255,255') white++;
+  const zc = deskCell(DESK1, 'zzz.txt');
+  for (let y = zc.y; y < zc.y + 48; y++)
+    for (let x = zc.x; x < zc.x + 84; x++) if (d1(x, y) === '255,255,255') white++;
   check('zzz.txt icon tile present right after REFRESH', white > 250, white);
 }
 

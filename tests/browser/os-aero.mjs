@@ -66,8 +66,8 @@ try {
   const WX = 12, WY = 36, WW = 240, WH = 160;    // first-window wm placement
   // The client must be the EXACT src-over blend of 50%-alpha blue over
   // what's behind it — an opaque-blue or gray sample means the alpha path
-  // regressed. (132,116) sits clear of the desktop icon column.
-  await waitPixel(WX + 120, WY + 80, ABLEND, 60000);
+  // regressed. probe x sits past the two-column icon band (x>184, todos/0184).
+  await waitPixel(WX + 200, WY + 80, ABLEND, 60000);
   check('50%-alpha blue client composites src-over (exact blend)', true);
   check('opaque white app border stays opaque',
     near(await sample(WX + 2, WY + 2), WHITE), await sample(WX + 2, WY + 2));
@@ -115,10 +115,10 @@ try {
   // copy to the bar for 200ms (kernel anim records). End states must
   // settle — a wedge or a render-pass crash here is the regression.
   await clickAt(100, BARY);
-  await waitPixel(WX + 120, WY + 80, TEAL);
+  await waitPixel(WX + 200, WY + 80, TEAL);
   check('taskbar click minimized (window + shadow gone after the fly-down)', true);
   await clickAt(100, BARY);
-  await waitPixel(WX + 120, WY + 80, ABLEND);
+  await waitPixel(WX + 200, WY + 80, ABLEND);
   check('second click restored through the fly-up (alpha client back)', true);
 
   // ---- the glass tier (wmctl glass; browser-only backdrop blur) ----
@@ -138,7 +138,7 @@ try {
   await waitPixel(WX + 150, WY - 12, NAVY);
   check('glass off restores the flat navy title', true);
   check('client blend unchanged by the glass round-trip',
-    near(await sample(WX + 120, WY + 80), ABLEND), await sample(WX + 120, WY + 80));
+    near(await sample(WX + 200, WY + 80), ABLEND), await sample(WX + 200, WY + 80));
 
   await setVt(1);
   await page.keyboard.type("echo AERO-SHELL-O''K\r");

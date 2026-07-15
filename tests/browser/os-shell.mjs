@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell } from './lib/os-harness.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = 3197;
@@ -331,86 +331,93 @@ try {
     }
   };
 
-  // Icons flow down the left edge, sorted. The entry list is DERIVED from
-  // os/image.json's user section (the todos/0166 rule: a new seeded icon —
-  // 785eca2's notepad — must not silently shift every row under hardcoded
-  // indices; the Recycle Bin pins to the tail via entcmp, so sorted seeds
-  // fill rows 0..n-1). The winbox launched above covers rows 0-2; term's
-  // row is clear of it: white 24x24 tile, navy center, label below. The
-  // label-strip sample at x=45 relies on term's 4-char label starting at
-  // x=46 — pick a SHORT-named entry if this ever moves.
-  const DESK_ENTRIES = Object.keys(
-    JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user.files)
-    .filter((p) => p.startsWith('/root/Desktop/'))
-    .map((p) => p.slice('/root/Desktop/'.length))
-    .sort();
-  const TROW = DESK_ENTRIES.indexOf('term');
-  const I3X = 46, I3Y = 16 + TROW * 64 + 6;      // term's icon tile origin
+  // Icons flow down the left edge, sorted. The grid model is the harness's
+  // deskEntries/deskCell (the todos/0166 rule: derived from os/image.json,
+  // never hardcoded — and since 0184/0185 the seeded set wraps into column
+  // 1 and leads with the Presentations DIR, so cells are looked up at the
+  // LIVE screen height). Probes below use doom (a 4-char label like the
+  // old term probe: label starts at cell x+30) in column 0; term now sits
+  // in column 1 and keeps the double-click-launch role.
+  const DESK_ENTRIES = deskEntries();
+  const cell = (name) => deskCell(DESK_ENTRIES, name, SH);
+  const DC = cell('doom');
+  const I3X = DC.x + 30, I3Y = DC.y + 6;         // doom's icon tile origin
   await waitPixel(I3X + 2, I3Y + 2, WHITE);
-  check(`desktop icon tile composited (term, cell ${TROW})`, true);
+  check(`desktop icon tile composited (doom, cell ${DC.col},${DC.row})`, true);
   check('icon glyph navy center', near(await sample(I3X + 12, I3Y + 12), NAVY),
     await sample(I3X + 12, I3Y + 12));
+  // The Presentations folder icon (todos/0185): tab+body glyph — the tab
+  // notch leaves (+16,+6) of the tile white where a launcher block is navy.
+  const FC = cell('Presentations');
+  check('folder glyph on the Presentations icon (white tab notch, navy body)',
+    near(await sample(FC.x + 30 + 16, FC.y + 6 + 6), WHITE) &&
+    near(await sample(FC.x + 30 + 8, FC.y + 6 + 12), NAVY),
+    [await sample(FC.x + 30 + 16, FC.y + 6 + 6), await sample(FC.x + 30 + 8, FC.y + 6 + 12)]);
 
   // Single click: selection highlight (navy label strip), NO launch.
-  await clickAt(58, I3Y + 10);
-  await waitPixel(45, 16 + TROW * 64 + 24 + 10 + 3, NAVY);   // label bg, left of text
+  await clickAt(DC.x + 42, I3Y + 10);
+  await waitPixel(DC.x + 29, DC.y + 24 + 10 + 3, NAVY);   // label bg, left of text
   check('single click selects (navy label strip)', true);
 
   // ---- selection & manipulation (todos/0077) ----
   // The click above also focused the desktop (wm.c policy), so modifier
   // and navigation keys reach the icon grid from here on.
-  // Ctrl+click mario (row 3, clear of the winbox): additive — term stays.
-  const MROW = DESK_ENTRIES.indexOf('mario');
-  const MSTRIP = [42, 16 + MROW * 64 + 37];      // mario len 5 -> label x 43
+  // Ctrl+click mario: additive — doom stays.
+  const MC = cell('mario');
+  const MSTRIP = [MC.x + 26, MC.y + 37];         // mario len 5 -> label x 43
   await page.keyboard.down('Control');
-  await clickAt(58, 16 + MROW * 64 + 30);
+  await clickAt(MC.x + 42, MC.y + 30);
   await page.keyboard.up('Control');
   await waitPixel(MSTRIP[0], MSTRIP[1], NAVY);
   check('ctrl+click adds to the selection (mario strip navy)', true);
-  check('...and term stays selected', near(await sample(45, 16 + TROW * 64 + 37), NAVY),
-    await sample(45, 16 + TROW * 64 + 37));
+  check('...and doom stays selected', near(await sample(DC.x + 29, DC.y + 37), NAVY),
+    await sample(DC.x + 29, DC.y + 37));
 
-  // Marquee from empty desktop over the row 4-6 tiles (pokemon, quake,
-  // term): REPLACES the set — mario drops out.
-  const PROW = DESK_ENTRIES.indexOf('pokemon'), QROW = DESK_ENTRIES.indexOf('quake');
-  await page.mouse.move(rect.x + 150, rect.y + 300);
+  // Marquee from empty desktop over the column-0 row 5-6 tiles (fileman,
+  // gameboy — column 1's few icons sit above row 3, clear of the sweep):
+  // REPLACES the set — mario drops out.
+  const FMC = cell('fileman'), GC = cell('gameboy');
+  await page.mouse.move(rect.x + 150, rect.y + 310);
   await page.mouse.down();
   await page.mouse.move(rect.x + 95, rect.y + 360, { steps: 4 });
   await page.mouse.move(rect.x + 40, rect.y + 430, { steps: 4 });
   await page.mouse.up();
-  await waitPixel(36, 16 + PROW * 64 + 37, NAVY);    // pokemon len 7 -> x 37
-  check('marquee selects the intersected icons (pokemon strip navy)', true);
-  check('quake caught by the marquee too', near(await sample(42, 16 + QROW * 64 + 37), NAVY),
-    await sample(42, 16 + QROW * 64 + 37));
+  await waitPixel(FMC.x + 20, FMC.y + 37, NAVY);     // fileman len 7 -> x 37
+  check('marquee selects the intersected icons (fileman strip navy)', true);
+  check('gameboy caught by the marquee too', near(await sample(GC.x + 20, GC.y + 37), NAVY),
+    await sample(GC.x + 20, GC.y + 37));
   check('marquee replaces: mario deselected', near(await sample(MSTRIP[0], MSTRIP[1]), TEAL),
     await sample(MSTRIP[0], MSTRIP[1]));
 
-  // Drag-move: a plain click on the selected quake collapses the set to it
-  // (mouseup rule); past the 500ms double-click window, drag it two columns
-  // right — (0,5) -> (2,5), snapped and persisted (.icons).
-  await clickAt(58, 16 + QROW * 64 + 30);
+  // Drag-move: a plain click on the selected pokemon collapses the set to
+  // it (mouseup rule); past the 500ms double-click window, drag it two
+  // columns right — (0,r) -> (2,r), snapped and persisted (.icons).
+  const PC = cell('pokemon');
+  await clickAt(PC.x + 42, PC.y + 30);
   await new Promise(r => setTimeout(r, 600));
-  await page.mouse.move(rect.x + 58, rect.y + (16 + QROW * 64 + 30));
+  await page.mouse.move(rect.x + (PC.x + 42), rect.y + (PC.y + 30));
   await page.mouse.down();
-  await page.mouse.move(rect.x + 140, rect.y + (16 + QROW * 64 + 30), { steps: 3 });
-  await page.mouse.move(rect.x + 226, rect.y + (16 + QROW * 64 + 30), { steps: 3 });
+  await page.mouse.move(rect.x + (PC.x + 42 + 84), rect.y + (PC.y + 30), { steps: 3 });
+  await page.mouse.move(rect.x + (PC.x + 42 + 168), rect.y + (PC.y + 30), { steps: 3 });
   await page.mouse.up();
-  await waitPixel(216, 16 + QROW * 64 + 8, WHITE);   // tile ring at the new cell
+  await waitPixel(PC.x + 168 + 32, PC.y + 8, WHITE);   // tile ring at the new cell
   check('drag repositions the icon (tile at col 2)', true);
-  check('the old cell is teal again', near(await sample(58, 16 + QROW * 64 + 18), TEAL),
-    await sample(58, 16 + QROW * 64 + 18));
+  check('the old cell is teal again', near(await sample(PC.x + 42, PC.y + 18), TEAL),
+    await sample(PC.x + 42, PC.y + 18));
   check('moved icon stays selected (strip navy at the new cell)',
-    near(await sample(210, 16 + QROW * 64 + 37), NAVY),
-    await sample(210, 16 + QROW * 64 + 37));
+    near(await sample(PC.x + 168 + 20, PC.y + 37), NAVY),
+    await sample(PC.x + 168 + 20, PC.y + 37));
 
   // Esc clears the selection (the desktop holds focus).
   await page.keyboard.press('Escape');
-  await waitPixel(210, 16 + QROW * 64 + 37, TEAL);
+  await waitPixel(PC.x + 168 + 20, PC.y + 37, TEAL);
   check('Esc clears the selection', true);
 
-  // Double-click launches term (640x432 at the cascade slot). Sample a
-  // point inside term but outside winbox; wait for it to leave teal.
-  await page.mouse.dblclick(rect.x + 58, rect.y + I3Y + 10);
+  // Double-click launches term (640x432 at the cascade slot; term's live
+  // cell — column 1 since the wrap). Sample a point inside term but
+  // outside winbox; wait for it to leave teal.
+  const TC = cell('term');
+  await page.mouse.dblclick(rect.x + (TC.x + 42), rect.y + (TC.y + 16));
   await waitNotPixel(500, 300, TEAL, 90000);     // freetype startup is slow
   check('double-click launched term (window composited)', true);
 

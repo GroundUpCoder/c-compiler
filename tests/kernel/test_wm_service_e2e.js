@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -75,18 +75,18 @@ const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'mgp', 'slides', 'wi
 // The seeded /root/Desktop icons, DERIVED from os/image.json's user section
 // (the manifest that seeds a fresh root volume — these e2es always boot one),
 // so a new seeded icon can't silently shift every row like 785eca2's notepad
-// did (todos/0166; the 0164 rule: derive geometry, never hardcode). wm.c
-// grid: column-major, 16px margin, 84x64 cells, 11 rows on the 1024x768
-// screen; icon centers in column 0 sit at x=58, y = 16 + row*64 + 32; the
-// Recycle Bin pins to the tail (entcmp) so sorted seeds fill rows 0..n-1.
-const DESK_ENTRIES = Object.keys(
-  JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user.files)
-  .filter((p) => p.startsWith('/root/Desktop/'))
-  .map((p) => p.slice('/root/Desktop/'.length))
-  .sort();
-const deskY = (list, name) => 16 + list.indexOf(name) * 64 + 32;
+// did (todos/0166; the 0164 rule: derive geometry, never hardcode). The
+// grid model lives in drive.js (deskEntries/deskCell) since 0184 pushed the
+// seeded set past one column at 1024x768 (11 rows/col) and 0185 seeded a
+// DIRECTORY (Presentations, dirs-first per entcmp) — column-0 y math alone
+// is no longer safe. desk() renders a name's icon-center click coords.
+const DESK_ENTRIES = deskEntries();      // files + dirs + the Recycle Bin
+const desk = (list, name) => {
+  const c = deskCell(list, name);
+  return `${c.x + 42} ${c.y + 32}`;
+};
 // the activate leg drops two more files in and re-sorts
-const DESK_ACT = [...DESK_ENTRIES, 'alauncher', 'notes.txt'].sort();
+const DESK_ACT = deskEntries(['alauncher', 'notes.txt']);
 
 // One seeded session. Sids/pids are extracted IN-shell (sed) so the test
 // doesn't depend on the wm-autostart vs first-command spawn race.
@@ -184,14 +184,25 @@ const script = [
   'wmctl list',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DSID /root/d.ppm && echo desk-shot-ok',
-  `wmctl click $DSID 58 ${deskY(DESK_ENTRIES, 'gameboy')}`,   // SINGLE click the gameboy icon
+  `wmctl click $DSID ${desk(DESK_ENTRIES, 'gameboy')}`,   // SINGLE click the gameboy icon
   'sleep 2.5',                                   // timing subject: proves a single click does NOT spawn (the would-be spawn window)
   'echo ==desk2',
   'wmctl list',
-  `wmctl dblclick $DSID 58 ${deskY(DESK_ENTRIES, 'term')}`,   // double-click the term icon
+  `wmctl dblclick $DSID ${desk(DESK_ENTRIES, 'term')}`,   // double-click the term icon
   'wmctl wait win term',
   'echo ==desk3',
   'wmctl list',
+  // ---- desktop folder opens in fileman (todos/0185): dblclick the seeded
+  // Presentations dir -> activate()'s S_ISDIR branch spawns fileman AT the
+  // folder (title truncated to 31 chars); close it so the taskbar legs
+  // below start from the same button set as before. ----
+  `wmctl dblclick $DSID ${desk(DESK_ENTRIES, 'Presentations')}`,
+  'wmctl wait win "File Manager - /root/Desktop/Pr"',
+  'echo ==desk4',
+  'wmctl list',
+  'FMSID=$(wmctl list | grep "File Manager - /root/Desktop/Pr$" | sed "s/[^0-9].*//")',
+  'wmctl close $FMSID',
+  'wmctl wait nowin "File Manager - /root/Desktop/Pr"',
   // ---- taskbar polish (todos/0031) ----
   // Stable button order: 4 fresh winboxes; closing the SECOND must slide
   // the later buttons left (compaction), not swap the last into its slot.
@@ -277,11 +288,11 @@ const script = [
   'echo ==act1',
   'wmctl list',
   'ACW=$(wmctl list | grep -c winbox$)',
-  `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'alauncher')}`,  // the alauncher icon (sorted)
+  `wmctl dblclick $DSID ${desk(DESK_ACT, 'alauncher')}`,      // the alauncher icon (sorted)
   'wmctl wait atleast winbox $((ACW+1))',        // #!/bin/sh launcher -> winbox spawns (0155)
   'echo ==act2',
   'wmctl list',
-  `wmctl dblclick $DSID 58 ${deskY(DESK_ACT, 'notes.txt')}`,  // the notes.txt icon
+  `wmctl dblclick $DSID ${desk(DESK_ACT, 'notes.txt')}`,      // the notes.txt icon
   'for i in $(seq 1 200); do wmctl list | grep -q Notepad && break; sleep 0.05; done',  // plain text -> notepad opens (freetype + .res load) (0155)
   'echo ==act3',
   'wmctl list',
@@ -446,33 +457,35 @@ const script = [
   'wmctl list',
   'rm -rf /etc/menu',
   // ---- desktop icon selection & manipulation (todos/0077) ----
-  // /root/Desktop is DESK_ACT here (seeds + 2 dropped files, column 0). Click
-  // coordinates ride deskY; label-strip pixels are asserted from surface
-  // shots after the run. The first click also focuses the desktop (wm.c
-  // policy), so the later keyboard legs land on the grid.
-  `wmctl click $DSID 58 ${deskY(DESK_ACT, 'gameboy')}`,       // plain select
+  // /root/Desktop is DESK_ACT here (seeds + 2 dropped files, wrapping into
+  // column 1 since 0184). Click coordinates ride desk(); label-strip pixels
+  // are asserted from surface shots after the run. The first click also
+  // focuses the desktop (wm.c policy), so the later keyboard legs land on
+  // the grid.
+  `wmctl click $DSID ${desk(DESK_ACT, 'gameboy')}`,           // plain select
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (navy label strip, no window observable)
   'wmctl shot $DSID /root/s1.ppm && echo s1-ok',
   // ctrl+click doom: additive toggle (keydown/keyup hold the modifier
   // across the separate click injection — todos/0077 wmctl growth)
   'wmctl keydown $DSID 224 1073742048 64',                    // LCTRL down
-  `wmctl click $DSID 58 ${deskY(DESK_ACT, 'doom')}`,
+  `wmctl click $DSID ${desk(DESK_ACT, 'doom')}`,
   'wmctl keyup $DSID 224 1073742048 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (ctrl+click additive, no window observable)
   'wmctl shot $DSID /root/s2.ppm && echo s2-ok',
-  // shift+click mario: range from the anchor (doom, entry order 1..4)
+  // shift+click mario: range from the anchor (doom, entry order)
   'wmctl keydown $DSID 225 1073742049 1',                     // LSHIFT down
-  `wmctl click $DSID 58 ${deskY(DESK_ACT, 'mario')}`,
+  `wmctl click $DSID ${desk(DESK_ACT, 'mario')}`,
   'wmctl keyup $DSID 225 1073742049 0',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (shift+click range, no window observable)
   'wmctl shot $DSID /root/s2b.ppm && echo s2b-ok',
-  // marquee from empty desktop over the tiles of rows 0-2: REPLACES the set
-  'wmctl drag $DSID 150 10 40 200',
+  // marquee from empty desktop over the column-0 tiles of rows 0-2:
+  // REPLACES the set (x stays short of column 1's tiles at x>=130)
+  'wmctl drag $DSID 128 10 40 200',
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (marquee replace, no window observable)
   'wmctl shot $DSID /root/s3.ppm && echo s3-ok',
-  // drag-move: press term (column 0, its sorted DESK_ACT row) and drop at
+  // drag-move: press term (its sorted DESK_ACT cell, column 1) and drop at
   // (2,1); the plain press on the unselected icon first collapses the set
-  `wmctl drag $DSID 58 ${deskY(DESK_ACT, 'term')} 226 112`,
+  `wmctl drag $DSID ${desk(DESK_ACT, 'term')} 226 112`,
   'sleep 2.5',                                   // timing subject: wm.c desk_load re-read poll (~1s tick) persists the moved .icons
   'echo ==sel1',
   'cat /root/Desktop/.icons',
@@ -493,9 +506,12 @@ const script = [
   'wmctl key $DSID 41 27',                       // Esc clears
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (Esc clears, no window observable)
   'wmctl shot $DSID /root/s6.ppm && echo s6-ok',
-  // arrows: Right with nothing selected takes the top-left icon
-  // (alauncher); Enter on the single selection launches it (-> winbox)
-  'wmctl key $DSID 79 1073741903',               // Right
+  // arrows: Right with nothing selected takes the top-left icon (the
+  // Presentations dir since 0185 — dirs sort first), Down steps to
+  // alauncher at (0,1); Enter on the single selection launches it
+  // (-> winbox)
+  'wmctl key $DSID 79 1073741903',               // Right -> top-left (Presentations)
+  'wmctl key $DSID 81 1073741905',               // Down -> alauncher
   'sleep 0.3',                                   // timing subject: in-surface arrow-select render before Enter (no window observable)
   'wmctl key $DSID 40 13',                       // Enter
   'wmctl wait atleast winbox $((N2+1))',         // arrow-select + Enter launches alauncher
@@ -663,11 +679,14 @@ const script = [
   // ---- desktop icon rename-in-place (todos/0103): F2 or the icon menu's
   // Rename opens an inline editor over the label; Enter commits rename(2),
   // Esc cancels, renaming onto an existing name keeps both files. Two fresh
-  // 'aa*' files (sort before every seeded icon, so the top-left cell is one
-  // of them) make the leg independent of the earlier desktop churn without
-  // pixel math: clear the selection with an empty-cell click, Right selects
-  // the top-left icon, F2 edits it. ----
+  // 'aa*' files (sort before every seeded FILE icon) make the leg
+  // independent of the earlier desktop churn without pixel math: clear the
+  // selection with an empty-cell click, Right selects the top-left icon,
+  // F2 edits it. The seeded Presentations DIR would sort ahead of them
+  // (entcmp dirs-first, todos/0185), so drop it first — the later
+  // long-name leg wipes the whole Desktop anyway. ----
   'rm -f /root/Desktop/.icons',                   // auto-flow: predictable order
+  'rm -rf /root/Desktop/Presentations',           // dirs-first would steal top-left
   'printf x > /root/Desktop/aaa',                 // the icon we rename
   'printf y > /root/Desktop/aab',                 // the EEXIST target / menu target
   'sleep 2.5',                                     // timing subject: wm.c desk_load re-read poll (~1s tick) picks up aaa/aab
@@ -896,6 +915,9 @@ check('single click does NOT launch (no gameboy window)',
   d2.split('\n').every(l => !l.endsWith('\tgameboy')), JSON.stringify(d2));
 check('injected double-click on the term icon spawns term',
   row(d3, 'term') !== '', JSON.stringify(d3));
+check('dblclick on the Presentations folder opens fileman AT it (todos/0185)',
+  row(section('desk4'), 'File Manager - /root/Desktop/Pr') !== '',
+  JSON.stringify(section('desk4')));
 
 // ---- taskbar polish (todos/0031) ----
 // wins[] order is creation order (sids ascend); the wmctl-list winbox rows
@@ -1032,10 +1054,24 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
         else if (s === '0,128,128') teal++;
       }
     }
-    check('icon cell 0 histogram: tile + glyph + notch + ground',
-      white > 250 && navy > 100 && black > 20 && teal > 3000,
+    // Cell 0 is the Presentations DIR (0185): white tile + navy folder
+    // glyph on teal, and NO black link notch (labels are white text).
+    check('icon cell 0 histogram: tile + glyph + ground (no notch on a dir)',
+      white > 250 && navy > 100 && black === 0 && teal > 3000,
       JSON.stringify({ white, navy, black, teal }));
+    // Cell 1 is calc, a symlink: the black launcher notch sits at the
+    // tile's bottom-left (ix+2..7, iy+16..21).
+    check('link notch on the calc symlink icon (cell 1)',
+      String(px(46 + 4, 22 + 64 + 18)) === '0,0,0', px(46 + 4, 22 + 64 + 18));
     check('empty desktop area is pure teal', String(px(500, 400)) === '0,128,128', px(500, 400));
+    // Folder glyph (todos/0185): cell 0 is the Presentations dir — tab +
+    // body leave (ix+16, iy+6) WHITE where a launcher's solid block is
+    // navy (cell 1 = calc); the folder body itself is navy.
+    check('folder glyph distinct from launcher block (Presentations vs calc)',
+      String(px(46 + 16, 22 + 6)) === '255,255,255' &&
+      String(px(46 + 8, 22 + 12)) === '0,0,128' &&
+      String(px(46 + 16, 22 + 64 + 6)) === '0,0,128',
+      [px(46 + 16, 22 + 6), px(46 + 8, 22 + 12), px(46 + 16, 22 + 64 + 6)].join(' | '));
   }
 
   // The taskbar shot (todos/0031): clock digits render in the right-aligned
@@ -1199,7 +1235,10 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     const lx = 16 + c * 84 + Math.floor((84 - len * 6) / 2);
     return px(lx - 1, 16 + r * 64 + 34 + 3);
   };
-  const at = (name) => [name, 0, DESK_ACT.indexOf(name)];   // pre-move cells
+  const at = (name) => {                                    // pre-move cells
+    const c = deskCell(DESK_ACT, name);
+    return [name, c.col, c.row];
+  };
   for (const s of ['s1', 's2', 's2b', 's3', 's4', 's5', 's6'])
     check(`${s} shot written`, out.includes(s + '-ok'));
   const p1 = readPpm('s1.ppm');
@@ -1213,24 +1252,27 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const p2b = readPpm('s2b.ppm');
   check('shift+click ranges from the anchor (doom..mario navy, ends teal)',
     strip(p2b, ...at('doom')) === NAVY && strip(p2b, ...at('drmario')) === NAVY &&
-    strip(p2b, ...at('gameboy')) === NAVY && strip(p2b, ...at('mario')) === NAVY &&
+    strip(p2b, ...at('fileman')) === NAVY && strip(p2b, ...at('gameboy')) === NAVY &&
+    strip(p2b, ...at('mario')) === NAVY &&
     strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('quake')) === TEAL,
     [strip(p2b, ...at('doom')), strip(p2b, ...at('mario')), strip(p2b, ...at('quake'))]);
   const p3 = readPpm('s3.ppm');
-  check('marquee REPLACES with the intersected tiles (rows 0-2)',
-    strip(p3, ...at('alauncher')) === NAVY && strip(p3, ...at('doom')) === NAVY &&
-    strip(p3, ...at('drmario')) === NAVY && strip(p3, ...at('gameboy')) === TEAL &&
-    strip(p3, ...at('mario')) === TEAL,
-    [strip(p3, ...at('alauncher')), strip(p3, ...at('gameboy'))]);
+  check('marquee REPLACES with the intersected tiles (col 0 rows 0-2)',
+    strip(p3, ...at('Presentations')) === NAVY && strip(p3, ...at('alauncher')) === NAVY &&
+    strip(p3, ...at('calc')) === NAVY && strip(p3, ...at('ctlpanel')) === TEAL &&
+    strip(p3, ...at('gameboy')) === TEAL && strip(p3, ...at('mario')) === TEAL,
+    [strip(p3, ...at('Presentations')), strip(p3, ...at('gameboy'))]);
   const icons = section('sel1');
-  check('.icons persists the whole layout (term at 2,1; alauncher pinned 0,0)',
-    icons.includes('2 1 term') && icons.includes('0 0 alauncher'), icons);
+  check('.icons persists the whole layout (term at 2,1; Presentations pinned 0,0)',
+    icons.includes('2 1 term') && icons.includes('0 0 Presentations') &&
+    icons.includes('0 1 alauncher'), icons);
+  const termCell = deskCell(DESK_ACT, 'term');
   const p4 = readPpm('s4.ppm');
   check('drag-move relocated term to (2,1): tile there, old cell teal, still selected',
     p4(216, 88) === WHITE &&
-    p4(58, 16 + DESK_ACT.indexOf('term') * 64 + 18) === TEAL &&   // old cell, derived (todos/0166)
+    p4(termCell.x + 42, termCell.y + 18) === TEAL &&   // old cell, derived (todos/0166)
     strip(p4, 'term', 2, 1) === NAVY,
-    [p4(216, 88), p4(58, 16 + DESK_ACT.indexOf('term') * 64 + 18), strip(p4, 'term', 2, 1)]);
+    [p4(216, 88), p4(termCell.x + 42, termCell.y + 18), strip(p4, 'term', 2, 1)]);
   const p5 = readPpm('s5.ppm');
   check('Ctrl+A selects all (alauncher, notes.txt, moved term navy)',
     strip(p5, ...at('alauncher')) === NAVY && strip(p5, ...at('notes.txt')) === NAVY &&

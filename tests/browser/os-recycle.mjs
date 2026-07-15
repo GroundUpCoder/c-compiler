@@ -1,7 +1,7 @@
 // 0093 browser acceptance: the Recycle Bin on the real compositor — the
 // headless twin is tests/kernel/test_recycle_e2e.js. Covers: the bin icon
-// composits at the grid's TAIL (row = #Desktop entries - 1, derived at
-// runtime — a new seed icon like Notepad shifts it down) with the
+// composits at the grid's TAIL (cell derived from the harness grid model —
+// column 1 since the 0184/0185 seeds wrapped the grid) with the
 // empty basket glyph, trashing a desktop file (the wm.c icon menu's
 // DELETE, driven through wmctl surface coords per the 0092 browser-trap
 // notes) flips the glyph full, a REAL double-click on the bin opens
@@ -10,7 +10,7 @@
 // shell (test -f markers with split-quote echoes, the 0089 trap).
 //
 // Usage: node os-recycle.mjs
-import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell } from './lib/os-harness.mjs';
 const PORT = 3233;
 const URL = osUrl(PORT);
 const server = startServer(PORT);
@@ -36,25 +36,19 @@ try {
   // (each call site is annotated; terminal fs effects use waitOut markers).
   const pause = (ms) => page.waitForTimeout(ms);
 
-  // Derive the bin's grid row from the LIVE desktop before anything else: it
-  // tail-pins to column 0, so its row = (#Desktop entries - 1). Reading it
-  // (instead of a row-7 constant) keeps the pixel probes correct however many
-  // icons the image seeds. cellTop(row)=16+row*64; rim +10, center +18, click +30.
-  await setVt(1);
-  // Split-quote the marker (0089 trap) so `-END` appears ONLY in the command
-  // output, never the typed-line echo — otherwise waitOut fires on the echo
-  // before the count is printed.
-  await page.keyboard.type('echo "NDESK=$(ls /root/Desktop | wc -l)-EN""D"\r', { delay: 50 });
-  await waitOut('-END');
-  const ndeskOut = await page.evaluate(() => window.__osOut);
-  const ndeskM = ndeskOut.match(/NDESK=(\d+)-END/);
-  check('read the live Desktop entry count', !!ndeskM, JSON.stringify(ndeskM));
-  const binRow = (ndeskM ? Number(ndeskM[1]) : 8) - 1;
-  const cellTop = (row) => 16 + row * 64;
-  const rimY = cellTop(binRow) + 10, cenY = cellTop(binRow) + 18, clkY = cellTop(binRow) + 30;
-
+  // The bin's grid cell comes from the harness grid model (deskEntries/
+  // deskCell over os/image.json — the 0166 rule): the bin tail-pins into
+  // COLUMN 1 since the 0184/0185 seeds wrapped the grid, and it shifts one
+  // index when junk.txt is on the desktop, so both cells are derived at
+  // the live screen height. rim +10, center +18, click +30 from cell top.
   await setVt(2);
   await waitScreen();
+  const { h: SH } = await page.evaluate(() => window.__osScreen);
+  const BIN0 = deskCell(deskEntries(), 'Recycle Bin', SH);
+  const BINJ = deskCell(deskEntries(['junk.txt']), 'Recycle Bin', SH);
+  const JUNK = deskCell(deskEntries(['junk.txt']), 'junk.txt', SH);
+  const binX = BIN0.x + 42;
+  const rimY = BIN0.y + 10, cenY = BIN0.y + 18, clkY = BIN0.y + 30;
   const rect = await page.evaluate(() => {
     const r = document.getElementById('screen').getBoundingClientRect();
     return { x: r.x, y: r.y };
@@ -64,10 +58,10 @@ try {
   // -- the bin icon: grid tail (derived binRow), empty glyph --
   // basket rim navy at (58,rimY), center (58,cenY) white while the store is
   // empty, navy once it holds an entry.
-  await waitPixel(58, rimY, NAVY, 60000);          // basket rim = icon drawn
+  await waitPixel(binX, rimY, NAVY, 60000);        // basket rim = icon drawn
   check('Recycle Bin icon composited at the grid tail', true);
-  check('bin glyph starts EMPTY (white center)', near(await sample(58, cenY), WHITE),
-    await sample(58, cenY));
+  check('bin glyph starts EMPTY (white center)', near(await sample(binX, cenY), WHITE),
+    await sample(binX, cenY));
 
   // -- trash a desktop file through the wm.c icon menu (wmctl coords) --
   await setVt(1);
@@ -78,8 +72,8 @@ try {
   // saw 'mctl'); pause after each shell line that runs a command.
   await page.keyboard.type('DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")\r', { delay: 40 });
   await pause(800);
-  // junk.txt sorts to row 3 (doom drmario gameboy junk.txt ...)
-  await page.keyboard.type('wmctl click $DSID 58 240 3\r', { delay: 40 });
+  // junk.txt's derived cell (dirs first + the 0184 launchers shift it)
+  await page.keyboard.type(`wmctl click $DSID ${JUNK.x + 42} ${JUNK.y + 32} 3\r`, { delay: 40 });
   await pause(800);
   await page.keyboard.type('CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")\r', { delay: 40 });
   await pause(800);
@@ -91,11 +85,11 @@ try {
 
   // -- the glyph flips FULL on the live compositor --
   await setVt(2);
-  await waitPixel(58, cenY, NAVY, 30000);
+  await waitPixel(binX, cenY, NAVY, 30000);
   check('bin glyph flips FULL (navy center)', true);
 
   // -- REAL double-click opens fileman AT the store --
-  await page.mouse.dblclick(rect.x + 58, rect.y + clkY);
+  await page.mouse.dblclick(rect.x + binX, rect.y + clkY);
   await setVt(1);
   await page.keyboard.type('for i in 1 2 3 4 5 6 7 8 9 10; do wmctl list | grep -q "File Manager" && break; sleep 1; done\r', { delay: 40 });
   await pause(6000);                               // fileman spawn + freetype
@@ -114,9 +108,9 @@ try {
   await waitOut('RESTORED-OK');
   check('Restore puts the file back on the desktop', true);
   await setVt(2);
-  // junk.txt is back on the desktop, so the tail-pinned bin sits one row
-  // lower now: binRow + 1, tile center at cellTop(binRow+1)+18.
-  await waitPixel(58, cellTop(binRow + 1) + 18, WHITE, 30000);
+  // junk.txt is back on the desktop, so the tail-pinned bin sits one cell
+  // further along (BINJ — derived, column-aware).
+  await waitPixel(BINJ.x + 42, BINJ.y + 18, WHITE, 30000);
   check('bin glyph flips back EMPTY (at its new lower cell)', true);
 
   await setVt(1);

@@ -62,9 +62,44 @@ const script = [
   'echo ==mgpgone',
   'wmctl list | grep -c "MagicPoint" || true',
   'echo ==',
-  'echo ALLDONE',
 ];
-const a = driveBoot(script, { image, timeout: 420000 });
+
+/* ---- the 0185 Presentations showcase decks: each launches, renders its
+ * title page (shot 1) and its second page (shot 2), then pages through the
+ * REST of the deck (`steps` covers every %page + %pause stop) so a
+ * draw-time crash on any page can't hide — the window must still be alive
+ * before q. Backgrounds are per-deck distinct; pixel asserts in session B. */
+const DECKS = [
+  { n: 'text',        back: [72, 61, 139], steps: 6 },   // DarkSlateBlue
+  { n: 'colors',      back: [26, 26, 26],  steps: 6 },   // gray10
+  { n: 'align',       back: [47, 79, 79],  steps: 5 },   // DarkSlateGray
+  { n: 'bullets',     back: [25, 25, 112], steps: 5 },   // MidnightBlue
+  { n: 'images',      back: [51, 51, 51],  steps: 7 },   // gray20
+  { n: 'backgrounds', back: [0, 0, 0],     steps: 7 },   // black
+  { n: 'effects',     back: [25, 25, 112], steps: 10 },  // MidnightBlue (+5 pauses)
+];
+for (const d of DECKS) {
+  script.push(
+    `mgp /usr/share/mgp/${d.n}.mgp &`,
+    'wmctl wait win MagicPoint',
+    'sleep 2.5',                   // title page render (freetype at several sizes)
+    'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',
+    `wmctl shot $MSID /root/${d.n}1.ppm && echo ${d.n}1-ok`,
+    keys('$MSID', ' '),
+    'sleep 1.5',                   // page 2 render (images/bgrad decode)
+    `wmctl shot $MSID /root/${d.n}2.ppm && echo ${d.n}2-ok`);
+  for (let i = 2; i < d.steps; i++)
+    script.push(keys('$MSID', ' '), 'sleep 0.6');   // page-N draw settle before the next advance (no marker)
+  script.push(
+    'sleep 1',                     // last page draw settle (no marker)
+    `echo ==${d.n}alive`,
+    'wmctl list | grep -c "MagicPoint" || true',
+    'echo ==',
+    keys('$MSID', 'q'),
+    'wmctl wait nowin MagicPoint');
+}
+script.push('echo ALLDONE');
+const a = driveBoot(script, { image, timeout: 600000 });
 const out = a.stdout || '';
 check('sent shot 1 taken', out.includes('s1-ok'));
 check('sent shot 2 taken', out.includes('s2-ok'));
@@ -74,11 +109,20 @@ check('mgp shot 2 taken', out.includes('m2-ok'));
 check('mgp shot 3 taken', out.includes('m3-ok'));
 check('mgp shot 4 taken', out.includes('m4-ok'));
 check('mgp window closed on q', section(out, 'mgpgone').trim() === '0');
+for (const d of DECKS) {
+  check(`${d.n} shots taken`,
+    out.includes(d.n + '1-ok') && out.includes(d.n + '2-ok'));
+  check(`${d.n} survived every page (no draw-time crash)`,
+    section(out, d.n + 'alive').trim() === '1',
+    JSON.stringify(section(out, d.n + 'alive')));
+}
 check('session A completed', out.includes('ALLDONE'));
 
 /* ---- session B: read the PPMs back and assert pixels ---- */
-const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm /root/m4.ppm\n',
-  { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
+const DECK_PPMS = DECKS.flatMap((d) => [`/root/${d.n}1.ppm`, `/root/${d.n}2.ppm`]);
+const b = driveBoot('cat /root/s1.ppm /root/s2.ppm /root/m1.ppm /root/m2.ppm /root/m3.ppm /root/m4.ppm ' +
+  DECK_PPMS.join(' ') + '\n',
+  { image, timeout: 120000, maxBuffer: 64 * 1024 * 1024, encoding: null });
 const buf = b.stdout;
 
 // Parse concatenated binary P6 PPMs.
@@ -97,7 +141,8 @@ function parsePpms(buffer) {
   return ppms;
 }
 const ppms = parsePpms(buf);
-check('read 6 PPMs back', ppms.length === 6, 'got ' + ppms.length);
+const NPPM = 6 + DECK_PPMS.length;
+check(`read ${NPPM} PPMs back`, ppms.length === NPPM, 'got ' + ppms.length);
 
 function count(ppm, pred) {
   let n = 0;
@@ -120,7 +165,7 @@ function differ(p1, p2) {
   return n > 50;
 }
 
-if (ppms.length === 6) {
+if (ppms.length === NPPM) {
   const [s1, s2, m1, m2, m3, m4] = ppms;
   const spix = s1.w * s1.h;
   // sent slide 1: white background, black "sent" title
@@ -163,6 +208,52 @@ if (ppms.length === 6) {
   const cyan = count(m4, (r, g, b) => r < 80 && g > 200 && b > 200);
   check('mgp page 4 GIF: magenta pixels', magenta > 1000, String(magenta));
   check('mgp page 4 GIF: cyan pixels', cyan > 1000, String(cyan));
+
+  // ---- the 0185 showcase decks (title + page-2 shots per deck) ----
+  const deck = {};
+  DECKS.forEach((d, i) => { deck[d.n] = [ppms[6 + i * 2], ppms[6 + i * 2 + 1]]; });
+  const nearC = (p, q, tol = 14) => Math.abs(p - q) <= tol;
+  for (const d of DECKS) {
+    const [t, p2] = deck[d.n];
+    const tpix = t.w * t.h;
+    const bg = count(t, (r, g, b) =>
+      nearC(r, d.back[0]) && nearC(g, d.back[1]) && nearC(b, d.back[2]));
+    check(`${d.n} title: dominant deck background`, bg > tpix * 0.55,
+      bg + '/' + tpix);
+    const glyph = count(t, (r, g, b) => r > 200 && g > 200 && b > 200);
+    check(`${d.n} title: white title glyphs`, glyph > 150, String(glyph));
+    check(`${d.n} advances on space`, differ(t, p2));
+  }
+  // per-deck capability witnesses on page 2:
+  //   colors — the named-color column (pure red among them)
+  check('colors page 2: red pixels', count(deck.colors[1],
+    (r, g, b) => r > 200 && g < 60 && b < 60) > 80, undefined);
+  //   bullets — %icon box SpringGreen + arc gold at tab depths
+  check('bullets page 2: SpringGreen box icons', count(deck.bullets[1],
+    (r, g, b) => r < 80 && g > 200 && b > 60 && b < 180) > 60, undefined);
+  check('bullets page 2: gold arc icons', count(deck.bullets[1],
+    (r, g, b) => r > 200 && g > 170 && b < 80) > 40, undefined);
+  //   images — the natural-size demo.gif (magenta/cyan halves)
+  check('images page 2: GIF magenta pixels', count(deck.images[1],
+    (r, g, b) => r > 200 && g < 80 && b > 200) > 1000, undefined);
+  check('images page 2: GIF cyan pixels', count(deck.images[1],
+    (r, g, b) => r < 80 && g > 200 && b > 200) > 1000, undefined);
+  //   backgrounds — the bare %bgrad default (blue top -> black bottom)
+  {
+    const g2 = deck.backgrounds[1];
+    let topBlue = 0, botDark = 0;
+    for (let x = 0; x < g2.w; x += 4) {
+      let i = g2.data + (10 * g2.w + x) * 3;
+      if (g2.buf[i] < 90 && g2.buf[i + 1] < 90 && g2.buf[i + 2] > 120) topBlue++;
+      i = g2.data + ((g2.h - 10) * g2.w + x) * 3;
+      if (g2.buf[i] < 50 && g2.buf[i + 1] < 50 && g2.buf[i + 2] < 70) botDark++;
+    }
+    check('backgrounds page 2 gradient: blue top band', topBlue > g2.w / 8, String(topBlue));
+    check('backgrounds page 2 gradient: dark bottom band', botDark > g2.w / 8, String(botDark));
+  }
+  //   effects — the first %pause stop shows the tab-1 SpringGreen box
+  check('effects page 2: SpringGreen box icon', count(deck.effects[1],
+    (r, g, b) => r < 80 && g > 200 && b > 60 && b < 180) > 30, undefined);
 }
 
 fs.rmSync(dir, { recursive: true, force: true });

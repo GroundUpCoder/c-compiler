@@ -80,9 +80,16 @@ function driveBoot(script, opts = {}) {
     const hits = hay.match(/wmctl: wait .* timed out after \d+ms/g);
     if (hits) {
       const uniq = Array.from(new Set(hits));
+      // Locate the failure: the stdout tail up to (and including) the first
+      // timeout line shows which script leg was running — without it the
+      // error names the symptom but not the site.
+      const so = String(r.stdout || '');
+      const at = so.search(/wmctl: wait .* timed out after \d+ms/);
+      const tail = (at >= 0 ? so.slice(0, at) : so).split('\n').slice(-12);
       throw new Error('driveBoot: wmctl wait timed out (a wait on an ' +
         'unreachable condition — root-cause it, do not lengthen the timeout):\n  ' +
-        uniq.join('\n  '));
+        uniq.join('\n  ') +
+        '\n--- stdout tail before the first timeout ---\n' + tail.join('\n'));
     }
   }
   return r;
@@ -97,4 +104,59 @@ function section(out, name) {
   return parts.length > 1 ? parts[1].split('==')[0] : '';
 }
 
-module.exports = { ROOT, BOOT, freshImage, driveBoot, section };
+// ---- the seeded desktop grid model (todos/0184/0185) ----
+// The seeded /root/Desktop set is DERIVED from os/image.json's user section
+// (the todos/0166 rule: a new seeded icon must not silently shift hardcoded
+// rows) — FILES and DIRS, direct children only (the deck links inside
+// Presentations/ are not icons), plus wm.c's always-recreated Recycle Bin.
+// deskSort replicates wm.c entcmp exactly: Recycle Bin last, dirs first,
+// byte-order strcmp. deskCell maps a name to its column-major cell — 0184
+// pushed the seeded set past one column at 1024x768 (11 rows/col), so
+// column-0 math is no longer safe. Entries are {name, dir}; `extras` folds
+// in a test's runtime-created entries (string = plain file) before sorting.
+function deskEntries(extras = []) {
+  const u = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user;
+  const child = (p) => {
+    if (!p.startsWith('/root/Desktop/')) return null;
+    const n = p.slice('/root/Desktop/'.length);
+    return n && !n.includes('/') ? n : null;
+  };
+  const ents = [];
+  for (const p of Object.keys(u.files)) {
+    const n = child(p);
+    if (n) ents.push({ name: n, dir: false });
+  }
+  for (const p of u.dirs || []) {
+    const n = child(p);
+    if (n) ents.push({ name: n, dir: true });
+  }
+  ents.push({ name: 'Recycle Bin', dir: false });   // wm.c ensure_recycle
+  return deskSort(ents.concat(
+    extras.map((e) => typeof e === 'string' ? { name: e, dir: false } : e)));
+}
+function deskSort(ents) {
+  return ents.slice().sort((a, b) => {
+    const ra = a.name === 'Recycle Bin' ? 1 : 0,
+          rb = b.name === 'Recycle Bin' ? 1 : 0;
+    if (ra !== rb) return ra - rb;
+    const da = a.dir ? 1 : 0, db = b.dir ? 1 : 0;
+    if (da !== db) return db - da;
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  }).map((e) => e.name);
+}
+// wm.c geometry: 16px margin, 84x64 cells, 28px taskbar; rows/col =
+// (scrH - 60) / 64 (11 at the e2es' 1024x768). x/y are the cell origin;
+// cx/cy the icon-click center (old column-0 tests clicked x=58 = 16+42).
+function deskCell(list, name, scrH = 768) {
+  const rows = Math.max(1, Math.floor((scrH - 28 - 32) / 64));
+  const i = list.indexOf(name);
+  if (i < 0) throw new Error('deskCell: "' + name + '" not on the desktop');
+  const col = Math.floor(i / rows), row = i % rows;
+  return { index: i, col, row, rows,
+           x: 16 + col * 84, y: 16 + row * 64,
+           cx: 16 + col * 84 + 42, cy: 16 + row * 64 + 30 };
+}
+
+module.exports = { ROOT, BOOT, freshImage, driveBoot, section,
+                   deskEntries, deskSort, deskCell };

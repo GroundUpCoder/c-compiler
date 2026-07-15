@@ -32,7 +32,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const cp = require('child_process');
-const { driveBoot, freshImage } = require('./lib/drive.js');
+const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
+
+// The seeded desktop grid (drive.js model, todos/0184/0185): dirs sort
+// first and the set wraps past column 0, so the test's dropped files land
+// at derived cells, not "icon 0".
+const DFILE = deskCell(deskEntries(['dfile.txt']), 'dfile.txt');
+const DCOPY = deskCell(deskEntries(['dfile.txt', 'Copy of dfile.txt']),
+                       'Copy of dfile.txt');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -57,10 +64,10 @@ const RC_PANE = 'wmctl click $SID 100 300 3';
 // The wm.c desktop menus (geometry from wm.c MENU_*/CTX_W — the ctxmenu
 // goldens' move-together rule): icon menu rows OPEN 4-24 / sep / CUT
 // 32-52 / COPY 52-72 / DELETE 72-92 (0093); desktop menu NEW / SORT BY /
-// REFRESH / PASTE 64-84 / sep / DISPLAY. Fresh desktop icons sort
-// 'Copy of dfile.txt' < 'dfile.txt' < doom... (the 0091 test's rule; the
-// Recycle Bin pins to the tail — 0093 — so it never shifts these); icon
-// centers x=58, y = 16 + idx*64 + 32.
+// REFRESH / PASTE 64-84 / sep / DISPLAY. Desktop cells are derived from
+// the drive.js grid model (deskEntries/deskCell — dirs first, Recycle Bin
+// tail-pinned, column wrap at 11 rows; todos/0184/0185), never "icon 0"
+// row math.
 const ICON_CUT_Y = 42, ICON_COPY_Y = 62, DESK_PASTE_Y = 74;
 
 const script = [
@@ -248,7 +255,7 @@ const script = [
   // KEEP: coarse desktop-icon tick — wm.c re-reads the Desktop dir on a
   // timer, so the new icon has no event to wait on before the icon click.
   'sleep 1.5',
-  'wmctl click $DSID 58 48 3',                   // dfile.txt = icon 0
+  `wmctl click $DSID ${DFILE.x + 42} ${DFILE.y + 32} 3`,   // dfile.txt's sorted cell
   'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${ICON_COPY_Y}`,
@@ -263,7 +270,7 @@ const script = [
   // KEEP: coarse desktop-icon tick — the just-pasted "Copy of dfile.txt"
   // icon only appears after wm.c's next timed Desktop re-read.
   'sleep 1.5',
-  'wmctl click $DSID 58 48 3',                   // "Copy of dfile.txt" = icon 0
+  `wmctl click $DSID ${DCOPY.x + 42} ${DCOPY.y + 32} 3`,   // "Copy of dfile.txt"'s cell
   'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   `wmctl click $CXSID 60 ${ICON_CUT_Y}`,

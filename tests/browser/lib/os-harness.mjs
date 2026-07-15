@@ -15,6 +15,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '../../..');
@@ -184,4 +185,58 @@ export async function openOsSession(opts = {}) {
     server.kill();
     throw e;
   }
+}
+
+// ---- the seeded desktop grid model (todos/0184/0185) ----
+// Twin of tests/kernel/lib/drive.js deskEntries/deskSort/deskCell — one
+// behavior, two module systems. The seeded /root/Desktop set derives from
+// os/image.json's user section (the todos/0166 rule) — FILES and DIRS,
+// direct children only (the deck links inside Presentations/ are not
+// icons), plus wm.c's always-recreated Recycle Bin. deskSort replicates
+// wm.c entcmp (Recycle Bin last, dirs first, byte-order strcmp); deskCell
+// maps a name to its column-major cell at the LIVE screen height — 0184
+// pushed the seeded set past one column, so column-0 y math alone is
+// no longer safe.
+export function deskEntries(extras = []) {
+  const u = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user;
+  const child = (p) => {
+    if (!p.startsWith('/root/Desktop/')) return null;
+    const n = p.slice('/root/Desktop/'.length);
+    return n && !n.includes('/') ? n : null;
+  };
+  const ents = [];
+  for (const p of Object.keys(u.files)) {
+    const n = child(p);
+    if (n) ents.push({ name: n, dir: false });
+  }
+  for (const p of u.dirs || []) {
+    const n = child(p);
+    if (n) ents.push({ name: n, dir: true });
+  }
+  ents.push({ name: 'Recycle Bin', dir: false });   // wm.c ensure_recycle
+  return deskSort(ents.concat(
+    extras.map((e) => typeof e === 'string' ? { name: e, dir: false } : e)));
+}
+export function deskSort(ents) {
+  return ents.slice().sort((a, b) => {
+    const ra = a.name === 'Recycle Bin' ? 1 : 0,
+          rb = b.name === 'Recycle Bin' ? 1 : 0;
+    if (ra !== rb) return ra - rb;
+    const da = a.dir ? 1 : 0, db = b.dir ? 1 : 0;
+    if (da !== db) return db - da;
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  }).map((e) => e.name);
+}
+// wm.c geometry: 16px margin, 84x64 cells, 28px taskbar; rows/col =
+// (scrH - 60) / 64. x/y are the cell origin; cx/cy the icon-click center
+// (old column-0 tests clicked x=58 = 16+42).
+export function deskCell(list, name, scrH) {
+  const rows = Math.max(1, Math.floor((scrH - 28 - 32) / 64));
+  const i = list.indexOf(name);
+  if (i < 0) throw new Error('deskCell: "' + name + '" not on the desktop');
+  const col = Math.floor(i / rows), row = i % rows;
+  return { index: i, col, row, rows,
+           x: 16 + col * 84, y: 16 + row * 64,
+           cx: 16 + col * 84 + 42, cy: 16 + row * 64 + 30 };
 }

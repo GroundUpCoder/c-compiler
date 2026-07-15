@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
+import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl, deskEntries, deskCell } from './lib/os-harness.mjs';
 import { createHash } from 'node:crypto';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PORT = 3199;
@@ -81,24 +81,18 @@ try {
   await waitPixel(400, SH - 14, FACE, 60000);      // taskbar composited (wm up)
 
   // ---- drop a binary file ----
-  // Seeded /root/Desktop, DERIVED from os/image.json's user section (the
-  // todos/0166 rule — a new seeded icon must not shift every row under a
-  // hardcoded list): "blob.bin" sorts FIRST, pushing every icon down one
-  // cell; the tile appearing in the LAST cell is the "icon appeared"
-  // signal. The Recycle Bin (0093, wm.c-created) pins to the grid's TAIL
-  // below every sorted entry, so the last cell sits one row further down.
-  const DESK = Object.keys(
-    JSON.parse(fs.readFileSync(path.join(ROOT, 'os/image.json'), 'utf8')).user.files)
-    .filter((p) => p.startsWith('/root/Desktop/'))
-    .map((p) => p.slice('/root/Desktop/'.length))
-    .sort();
-  const BIN = 1;                                 // 'Recycle Bin', the tail cell
+  // Seeded /root/Desktop from the harness grid model (deskEntries/deskCell,
+  // the todos/0166 rule — files + the Presentations dir + the Recycle Bin,
+  // wrapping into column 1 since 0184/0185): the tail-pinned bin's tile
+  // appearing at its post-drop cell is the "icon appeared" signal.
+  const GRID1 = deskEntries(['blob.bin']);
+  const B1 = deskCell(GRID1, 'Recycle Bin', SH);
   const hl = await dropFile(page, 'blob.bin', BLOB);
   check('dragover lit the drop highlight', hl.lit && hl.cleared, hl);
   await waitDropLog(page, 'blob.bin -> /root/Desktop/blob.bin (256 bytes)');
   check('kernel logged the write', true);
-  await waitPixel(48, 16 + (DESK.length + BIN) * 64 + 6 + 2, WHITE, 15000);   // last cell tile
-  check(`icon appeared without a reboot (${DESK.length + BIN + 1}-cell grid)`, true);
+  await waitPixel(B1.x + 32, B1.y + 6 + 2, WHITE, 15000);   // the bin's post-drop tile
+  check(`icon appeared without a reboot (${GRID1.length}-cell grid)`, true);
 
   // Byte-identity through the shell (busybox md5sum over the brokered fs).
   await shellExpect('md5sum /root/Desktop/blob.bin',
@@ -117,12 +111,13 @@ try {
   await dropFile(page, 'run-winbox', enc);
   await waitDropLog(page, 'run-winbox -> /root/Desktop/run-winbox');
   // Sorted grid: the two blobs + the seeds + run-winbox; wait for the
-  // LAST cell (term) so the re-lay is done before clicking.
-  const GRID = ['blob-1.bin', 'blob.bin', ...DESK, 'run-winbox'].sort();
-  const RW_Y = 16 + GRID.indexOf('run-winbox') * 64 + 6;
-  await waitPixel(48, 16 + GRID.indexOf('term') * 64 + 6 + 2, WHITE, 15000);
+  // tail-pinned bin's cell so the re-lay is done before clicking.
+  const GRID = deskEntries(['blob.bin', 'blob-1.bin', 'run-winbox']);
+  const RW = deskCell(GRID, 'run-winbox', SH);
+  const B2 = deskCell(GRID, 'Recycle Bin', SH);
+  await waitPixel(B2.x + 32, B2.y + 6 + 2, WHITE, 15000);
   check(`launcher icon appeared (${GRID.length}-cell grid)`, true);
-  await page.mouse.dblclick(rect.x + 58, rect.y + RW_Y + 10);
+  await page.mouse.dblclick(rect.x + (RW.x + 42), rect.y + (RW.y + 6 + 10));
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);   // first client window
   check('double-click ran the dropped launcher (winbox composited)', true);
 
