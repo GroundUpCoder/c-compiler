@@ -341,7 +341,14 @@ HANDLE CreateFileW(LPCWSTR name, DWORD acc, DWORD share, void *sa,
     case CREATE_NEW:        fl |= O_CREAT | O_EXCL; break;
     case CREATE_ALWAYS:     fl |= O_CREAT | O_TRUNC; break;
     case OPEN_EXISTING:     break;
-    case OPEN_ALWAYS:       fl |= O_CREAT; break;
+    case OPEN_ALWAYS:                /* create only when MISSING: POSIX
+                                      * open(O_CREAT) on an existing file on
+                                      * a read-only volume is EROFS, but
+                                      * Windows OPEN_ALWAYS opens existing
+                                      * files on write-protected media fine
+                                      * (notepad viewing /usr, todos/0202) */
+        if (!existed) fl |= O_CREAT;
+        break;
     case TRUNCATE_EXISTING: fl |= O_TRUNC; break;
     default:
         g_lastError = ERROR_INVALID_PARAMETER;

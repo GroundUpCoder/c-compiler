@@ -100,6 +100,15 @@ static void test_files(void) {
           h != INVALID_HANDLE_VALUE && GetLastError() == ERROR_ALREADY_EXISTS);
     CloseHandle(h);
     check("DeleteFile", DeleteFile(TEXT("/root/k32-trunc.txt")));
+
+    /* OPEN_ALWAYS on an EXISTING file must not carry O_CREAT: on the
+     * read-only /usr volume that was EROFS ("write protected") even for
+     * GENERIC_READ — the notepad-views-a-/usr-deck regression (0202). */
+    h = CreateFile(TEXT("/usr/share/os-release"), GENERIC_READ,
+                   FILE_SHARE_READ, NULL, OPEN_ALWAYS, 0, NULL);
+    check("OPEN_ALWAYS existing on the RO volume opens (ERROR_ALREADY_EXISTS)",
+          h != INVALID_HANDLE_VALUE && GetLastError() == ERROR_ALREADY_EXISTS);
+    CloseHandle(h);
 }
 
 static void test_dirs_find(void) {
