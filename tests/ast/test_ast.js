@@ -665,6 +665,137 @@ test('INLINER diamond worklist: A→D, B→D, main→A and main→B (no inlining
 });
 
 // =============================================================================
+// Volatile access linearity (todos/0187)
+// =============================================================================
+// C11 5.1.2.3: accesses to volatile objects are observable behavior — the
+// count and order of volatile reads must survive optimization. A memory
+// access whose accessed object is volatile-qualified is LINEAR, never
+// UNRESTRICTED; tryInline's UNRESTRICTED guards then keep the call a real
+// call (exactly one read, in order). Non-volatile accesses MUST stay
+// UNRESTRICTED — these tests pin both directions.
+
+// Parse and return the expression of the first `return EXPR;` in function
+// `fname` (unwrapping nothing — callers assert on the node as built).
+function returnExprOf(src, fname) {
+  const r = C.parseSource('test.c', src);
+  if (r.errors.length > 0) throw new Error('parse errors: ' + r.errors.map(e => e.message).join('; '));
+  const f = r.translationUnit.definedFunctions.find(fn => fn.name === fname);
+  const ret = f.body.statements.find(s => s instanceof AST.SReturn);
+  return ret.expr;
+}
+// Count reads of variable `name` (EIdent references) under `node`.
+function countIdentReads(node, name) {
+  let n = 0;
+  (function walk(e) {
+    if (!e || typeof e !== 'object') return;
+    if (e instanceof AST.EIdent && e.name === name) n++;
+    for (const c of (e.children || [])) walk(c);
+  })(node);
+  return n;
+}
+
+test('volatile global read is LINEAR; non-volatile stays UNRESTRICTED', () => {
+  assertEq(returnExprOf('volatile int g; int f(void) { return g; }', 'f').linearity,
+    AST.Linearity.LINEAR, 'volatile global read');
+  assertEq(returnExprOf('int g; int f(void) { return g; }', 'f').linearity,
+    AST.Linearity.UNRESTRICTED, 'plain global read');
+});
+test('deref of pointer-to-volatile is LINEAR; plain deref stays UNRESTRICTED', () => {
+  assertEq(returnExprOf('int f(volatile int *p) { return *p; }', 'f').linearity,
+    AST.Linearity.LINEAR, '*p, p: volatile int *');
+  assertEq(returnExprOf('int f(int *p) { return *p; }', 'f').linearity,
+    AST.Linearity.UNRESTRICTED, '*p, p: int *');
+});
+test('MMIO idiom *(volatile int *)ADDR is LINEAR', () => {
+  assertEq(returnExprOf('int f(void) { return *(volatile int *)0x1000; }', 'f').linearity,
+    AST.Linearity.LINEAR);
+});
+test('volatile array element is LINEAR (direct and typedef-qualified)', () => {
+  assertEq(returnExprOf('volatile int a[4]; int f(void) { return a[1]; }', 'f').linearity,
+    AST.Linearity.LINEAR, 'volatile int a[4]');
+  // C11 6.7.3p9: qualifying an array type qualifies the ELEMENT type —
+  // reachable only through a typedef, where the qualifier lands on the
+  // array TypeInfo itself and makeSubscript must push it down.
+  assertEq(returnExprOf('typedef int A[4]; volatile A a; int f(void) { return a[1]; }', 'f').linearity,
+    AST.Linearity.LINEAR, 'volatile A a (typedef int A[4])');
+  assertEq(returnExprOf('int a[4]; int f(void) { return a[1]; }', 'f').linearity,
+    AST.Linearity.UNRESTRICTED, 'plain array element');
+});
+test('volatile member is LINEAR: s.f, volatile struct, p->f through pointee', () => {
+  assertEq(returnExprOf(
+    'struct S { volatile int f; int g; }; struct S s; int f(void) { return s.f; }', 'f').linearity,
+    AST.Linearity.LINEAR, 's.f with volatile member');
+  assertEq(returnExprOf(
+    'struct S { volatile int f; int g; }; struct S s; int f(void) { return s.g; }', 'f').linearity,
+    AST.Linearity.UNRESTRICTED, 's.g non-volatile member of same struct');
+  assertEq(returnExprOf(
+    'struct S { int f; }; volatile struct S s; int f(void) { return s.f; }', 'f').linearity,
+    AST.Linearity.LINEAR, 's.f with volatile-qualified s');
+  assertEq(returnExprOf(
+    'struct S { int f; }; int f(volatile struct S *p) { return p->f; }', 'f').linearity,
+    AST.Linearity.LINEAR, 'p->f with p: volatile struct S *');
+  assertEq(returnExprOf(
+    'struct S { int f; }; int f(struct S *p) { return p->f; }', 'f').linearity,
+    AST.Linearity.UNRESTRICTED, 'p->f plain');
+});
+test('INLINER does not duplicate a volatile read: twice(mmio) stays a call', () => {
+  // Pre-0187 this inlined to `mmio + mmio` — TWO volatile reads where
+  // C requires the argument be read exactly once.
+  const u = compileAndOptimize(
+    'static volatile int mmio;\n' +
+    'static int twice(int x) { return x + x; }\n' +
+    'int main(void) { return twice(mmio); }');
+  const ret = u.definedFunctions.find(f => f.name === 'main').body.statements[0];
+  assert(ret.expr instanceof AST.ECall, 'twice(mmio) must remain a call');
+  assertEq(countIdentReads(ret.expr, 'mmio'), 1, 'exactly one mmio read');
+});
+test('INLINER does not drop a volatile read: ignore-shape stays a call', () => {
+  // Pre-0187 this folded to EInt(0) — ZERO volatile reads where C
+  // requires the argument be evaluated (exactly one read).
+  const u = compileAndOptimize(
+    'static volatile int mmio;\n' +
+    'static int ignore(int x) { return 0; }\n' +
+    'int main(void) { return ignore(mmio); }');
+  const ret = u.definedFunctions.find(f => f.name === 'main').body.statements[0];
+  assert(ret.expr instanceof AST.ECall, 'ignore(mmio) must remain a call');
+  assertEq(countIdentReads(ret.expr, 'mmio'), 1, 'exactly one mmio read');
+});
+test('INLINER does not inline through a volatile deref argument', () => {
+  const u = compileAndOptimize(
+    'static int twice(int x) { return x + x; }\n' +
+    'int f(volatile int *vp) { return twice(*vp); }');
+  const ret = u.definedFunctions.find(f => f.name === 'f').body.statements[0];
+  assert(ret.expr instanceof AST.ECall, 'twice(*vp) must remain a call');
+});
+test('INLINER refuses a body that READS a volatile (would drop/reorder it)', () => {
+  // The body-side guard: returnExpr containing a volatile read is LINEAR,
+  // so `getmmio()` never inlines (substitution could drop or reorder the
+  // read relative to other volatile accesses at the call site).
+  const u = compileAndOptimize(
+    'static volatile int mmio;\n' +
+    'static int getmmio(void) { return mmio; }\n' +
+    'int main(void) { return getmmio(); }');
+  const ret = u.definedFunctions.find(f => f.name === 'main').body.statements[0];
+  assert(ret.expr instanceof AST.ECall, 'getmmio() must remain a call');
+});
+test('INLINER still inlines non-volatile memory args (no blanket downgrade)', () => {
+  // The fix keys strictly on the volatile qualifier: a plain global read
+  // and a plain deref stay UNRESTRICTED and keep inlining.
+  let u = compileAndOptimize(
+    'static int g;\n' +
+    'static int twice(int x) { return x + x; }\n' +
+    'int main(void) { return twice(g); }');
+  let ret = u.definedFunctions.find(f => f.name === 'main').body.statements[0];
+  assert(!(ret.expr instanceof AST.ECall), 'twice(g) must still inline');
+  assertEq(countIdentReads(ret.expr, 'g'), 2, 'inlined to g + g');
+  u = compileAndOptimize(
+    'static int id(int x) { return x; }\n' +
+    'int f(int *p) { return id(*p); }');
+  ret = u.definedFunctions.find(f => f.name === 'f').body.statements[0];
+  assert(!(ret.expr instanceof AST.ECall), 'id(*p) must still inline');
+});
+
+// =============================================================================
 // Tree-shake: drop unreached static functions
 // =============================================================================
 
