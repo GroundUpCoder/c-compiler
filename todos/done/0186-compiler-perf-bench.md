@@ -1,6 +1,6 @@
 # 0186 — compiler codegen perf bench harness
 
-- **Status**: open
+- **Status**: done (2026-07-15; tests/bench landed + pre-inlining baseline captured — cc 5.70 ms/frame vs clang 1.05 (5.4x), 281051 B / 120084 instrs, sums baselined; log: logs/2026-07-15/compiler-perf-bench-0186.md)
 - **Design**: —
 
 ## Goal
