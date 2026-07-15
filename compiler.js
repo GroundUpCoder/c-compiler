@@ -9013,6 +9013,26 @@ function linkTranslationUnits(units, compilerOptions) {
     linkSymbols(externScope, unit, false);
   }
 
+  // C11 6.9.2p2 (EXAMPLE 2): a tentative definition whose array type is
+  // still incomplete at end of translation unit is completed to ONE
+  // element with the implicit zero initializer (gcc/clang, both warn).
+  // Without this the object sized to 0 bytes at allocateStatic and the
+  // NEXT global overlapped it (todos/0204). Runs after definition merge
+  // so an initialized (size-bearing) definition has already won.
+  const completeTentativeArray = (decl) => {
+    if (!(decl instanceof AST.DVar)) return;
+    const def = decl.definition || decl;
+    if (!isTentativeDefinition(def)) return;
+    const t = def.type.removeQualifiers();
+    if (t.isArray() && (t.arraySize || 0) === 0) {
+      def.type = Types.arrayOf(t.baseType, 1);
+    }
+  };
+  for (const unit of units) {
+    forEachDecl(unit, false, completeTentativeArray);
+    forEachDecl(unit, true, completeTentativeArray);
+  }
+
   // Whole-program inline+fold round (todos/0188): now that every decl's
   // `.definition` points at its body-bearing instance, re-fold bodies so
   // cross-TU single-return callees become inline candidates. Placed here

@@ -1,6 +1,6 @@
 # 0203 — ++/-- on void* is a silent no-op (stride 0)
 
-- **Status**: open
+- **Status**: done (2026-07-16) — emitIncDec pointer delta routed through the ptrArithElemSize clamp; conformance test void_ptr_incdec pins all four operators; full gate green
 - **Design**: tests/unit/conformance/void_ptr_arith (the existing +/- clamp), CLAUDE.md "Conformance tests"
 
 ## Goal
