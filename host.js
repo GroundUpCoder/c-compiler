@@ -223,7 +223,14 @@ function createFileSystem({ fs, ctx }) {
           try {
             const stat = fs.fstatSync(fd);
             entry.position = stat.size;
-          } catch (e) { }
+          } catch (e) {
+            /* Swallowing this left position = 0: an "append" fd that
+               reads/seeks from offset 0 — silent wrong data. Fail the
+               open instead. */
+            setErrno(e);
+            try { fs.closeSync(fd); } catch (e2) { /* fd already dead */ }
+            return -1;
+          }
         }
         return allocFd(entry);
       },
@@ -280,9 +287,12 @@ function createFileSystem({ fs, ctx }) {
           if (entry.append) {
             /* O_APPEND: every write lands at current EOF, regardless of any
                seek. The fd was opened with O_APPEND, so an unpositioned
-               write lets the kernel append; resync our position to EOF. */
+               write lets the kernel append; resync our position to EOF.
+               A resync failure falls through to the outer catch (errno,
+               -1): the bytes landed but the fd is broken — a silently
+               stale position corrupts every later read/SEEK_CUR. */
             n = fs.writeSync(entry.nativeFd, buf, 0, count);
-            try { entry.position = fs.fstatSync(entry.nativeFd).size; } catch (e) { }
+            entry.position = fs.fstatSync(entry.nativeFd).size;
           } else {
             n = fs.writeSync(entry.nativeFd, buf, 0, count, entry.position);
             if (entry.position !== null) entry.position += n;
@@ -10906,6 +10916,8 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports = runModule;
   // Test exports: BLOCK_FS components
   module.exports.BLOCK_FS = BLOCK_FS;
+  // Test export: the native-fs env (tests inject a NodeFS-shaped fake fs)
+  module.exports.createFileSystem = createFileSystem;
   module.exports.SDL_WEB = SDL_WEB;
   module.exports.createBrowserWebGPU = createBrowserWebGPU;
   // Test exports: SAB ring endpoints (console + audio)
