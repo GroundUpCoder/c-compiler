@@ -4792,6 +4792,13 @@ function makeBinary(loc, op, left, right) {
         `${lu.isArray() ? "array" : "function"} type '${left.type.toString()}' is not assignable`);
       return new EBinary(loc, Types.TDIVERGENT, op, left, right);
     }
+    // C11 6.3.2.1p1: const-qualified (or const-member-bearing) lvalues
+    // are not modifiable (todos/0227 G22).
+    const constViol = exprConstWriteViolation(left);
+    if (constViol) {
+      reportError(loc, `cannot assign to ${constViol}`);
+      return new EBinary(loc, Types.TDIVERGENT, op, left, right);
+    }
   }
   // Decay array/function operands. ASSIGN/compound's left is the lvalue
   // target — never decayed. ASSIGN's right decays only if the left is a
@@ -4881,6 +4888,74 @@ function isLvalueExpr(e) {
   return false;
 }
 
+// C11 6.3.2.1p1: a modifiable lvalue additionally is not const-qualified
+// and, for a struct/union, has no const-qualified member (recursively,
+// through nested aggregates and array elements — a pointer TO const stops
+// the walk: the pointer itself is still writable). Returns a description
+// for the diagnostic, or null if the type is writable (todos/0227 G22).
+function constWriteViolation(type, seen) {
+  if (type.isConst) return `const-qualified type '${type.toString()}'`;
+  const uq = type.removeQualifiers();
+  if (uq.isArray()) return constWriteViolation(uq.baseType, seen);
+  if ((uq.isStruct() || uq.isUnion()) && uq.tagDecl && uq.tagDecl.members) {
+    if (!seen) seen = new Set();
+    if (seen.has(uq.tagDecl)) return null;
+    seen.add(uq.tagDecl);
+    for (const m of uq.tagDecl.members) {
+      if (m.type && constWriteViolation(m.type, seen)) {
+        return `type '${type.toString()}' with const-qualified member` +
+               (m.name ? ` '${m.name}'` : "");
+      }
+    }
+  }
+  return null;
+}
+
+// C11 6.5.2.3p3: a member access is qualified with its BASE's qualifiers,
+// but EMember/EArrow carry the member's declared type — walk the access
+// path so `const struct S s; s.m = ..` and writes through a pointer to a
+// const struct are caught too. The walk checks only QUALIFIER propagation:
+// the aggregate const-MEMBER rule applies to the assigned type itself
+// (whole-aggregate assignment), NOT to bases — writing a non-const member
+// of a struct/union that merely CONTAINS a const member is legal (clang
+// agrees; the csmith corpus is full of that shape). A dereference stops
+// the walk (a const POINTER member still points at writable storage).
+function exprConstWriteViolation(e) {
+  const viol = e.type && constWriteViolation(e.type);
+  if (viol) return viol;
+  return basePathConstViolation(e);
+}
+function basePathConstViolation(e) {
+  const memberDesc = (m) => `member${m && m.name ? ` '${m.name}'` : ""}`;
+  if (e instanceof EMember) {
+    const bt = e.base.type;
+    if (bt && bt.isConst) {
+      return `${memberDesc(e.memberDecl)} of const-qualified type '${bt.toString()}'`;
+    }
+    return basePathConstViolation(e.base);
+  }
+  if (e instanceof EArrow) {
+    const pt = e.base.type && e.base.type.removeQualifiers();
+    const pointee = pt && pt.isPointer() ? pt.baseType : null;
+    if (pointee && pointee.isConst) {
+      return `${memberDesc(e.memberDecl)} of pointer to const-qualified type '${pointee.toString()}'`;
+    }
+    return null;
+  }
+  if (e instanceof ESubscript) {
+    // A real array base propagates its enclosing aggregate's qualifiers;
+    // a pointer subscript's const-ness already lives on the element type.
+    // makeSubscript decays the array base behind an EDecay — look through
+    // it, or a member array of a const struct (`const struct S s;
+    // s.a[0] = ..`) walks a pointer-typed node and the check goes blind.
+    const arr = e.array instanceof EDecay ? e.array.operand : e.array;
+    const at = arr.type && arr.type.removeQualifiers();
+    if (at && at.isArray()) return basePathConstViolation(arr);
+    return null;
+  }
+  return null;
+}
+
 // Mark `expr` as having its address taken — promotes the underlying
 // DVar from REGISTER to MEMORY allocation. Walks through EMember and
 // (for array elements) ESubscript to find the root storage.
@@ -4913,7 +4988,12 @@ function makeUnary(loc, op, operand) {
     const u = operand.type && operand.type.removeQualifiers();
     if (!isLvalueExpr(operand) || (u && (u.isArray() || u.isFunction()))) {
       reportError(loc, `lvalue required as ${what} operand`);
+      return;
     }
+    // C11 6.3.2.1p1: const-qualified operands aren't modifiable
+    // (todos/0227 G22).
+    const constViol = operand.type && exprConstWriteViolation(operand);
+    if (constViol) reportError(loc, `cannot ${what} ${constViol}`);
   };
   switch (op) {
     case "OP_PRE_INC": case "OP_POST_INC":
@@ -5202,6 +5282,12 @@ function makeSubscript(loc, base, index) {
   // down so the access classifies volatile (todos/0187).
   if (base.type.isVolatile && base.type.removeQualifiers().isArray()) {
     elemType = elemType.addVolatile();
+  }
+  // Same push-down for const (todos/0227 G22): `typedef int A[4];
+  // const A a;` must make `a[0]` a const lvalue, or the 6.3.2.1p1
+  // modifiable-lvalue check misses it.
+  if (base.type.isConst && base.type.removeQualifiers().isArray()) {
+    elemType = elemType.addConst();
   }
   // GC arrays don't decay; keep them as the array operand.
   const arrayOperand = baseUt.isGCArray() ? base : maybeDecay(base);
