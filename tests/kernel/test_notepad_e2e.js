@@ -45,7 +45,7 @@ function section(out, name) {
 // The comdlg32/FindReplace/prompt dialogs are all real modal WM windows, and
 // EDIT/clipboard content is agent-queryable — so every sleep here converts to a
 // window/label/text wait or a bounded clip poll (todos/0154). clip content is
-// multi-line (CRLF), so poll for a distinctive substring landing in it.
+// multi-line, so poll for a distinctive substring landing in it.
 const waitClipHas = (s) =>
   `for i in $(seq 1 120); do clip -o 2>/dev/null | grep -q "${s}" && break; sleep 0.05; done`;
 
@@ -139,6 +139,38 @@ const out = boot([
   'clip -o',
   'echo',
   'echo ==cut',
+  // CRLF round-trip (todos/0210): gucOS is POSIX — the EDIT strips \r at
+  // every text-in path (EM_SETHANDLE is notepad's load), and a pure-LF
+  // buffer makes notepad's WriteText a verbatim write (its \r\n scan never
+  // fires), so save keeps LF. The buffer is modified (BEE): the save prompt
+  // fires AFTER the file dialog's Open button (DoOpenFile -> DoCloseFile) —
+  // No discards.
+  'printf "cr one\\r\\ncr two\\r\\ncr three\\r\\n" > /root/crlf.txt',
+  'wmctl click "Open..."',
+  'wmctl wait label Open 6000',
+  'wmctl settext EDIT:2 crlf.txt',
+  'wmctl click Open',
+  'wmctl wait label No 6000',                     // save-changes prompt
+  'wmctl click No',
+  'wmctl wait text EDIT:0 "cr three" 6000',
+  'echo ==crlfload',
+  'wmctl gettext EDIT:0',
+  'echo ==cut',
+  // dirty the buffer, Save (no dialog: the file has a name), read the file
+  'wmctl click EDIT:0',
+  'wmctl key $SID 29 122',                        // z
+  'wmctl wait text EDIT:0 z 4000',
+  'wmctl click Save',
+  'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q z /root/crlf.txt && break; sleep 0.25; done',
+  'echo ==crlfsaved',
+  'cat /root/crlf.txt',
+  'echo',
+  'echo ==cut',
+  // the WM_SETTEXT text-in path strips \r too (agent settext)
+  "wmctl settext EDIT:0 \"$(printf 'st one\\r\\nst two\\rst three')\"",
+  'echo ==setcr',
+  'wmctl gettext EDIT:0',
+  'echo ==cut',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
   'wmctl click "New Window"',
   'wmctl wait win "Untitled - Notepad" 8000',     // second notepad up
@@ -158,7 +190,7 @@ const out = boot([
   'wmctl tree',
   'echo ==cut',
   'wmctl click No',
-  'wmctl wait nowin "readme.txt - Notepad" 6000', // No discards -> notepad exits
+  'wmctl wait nowin "crlf.txt - Notepad" 6000',   // No discards -> notepad exits
   'echo ==list4',
   'wmctl list',
   'echo ==cut',
@@ -227,22 +259,37 @@ check('title tracks the saved name',
   section(out, 'list2'));
 
 /* Open + status bar */
-// notepad NORMALIZES to CRLF internally (the Windows EDIT contract)
-check('Open loaded readme.txt into the EDIT (CRLF-normalized)',
-  section(out, 'content1').trim() === 'alpha beta\r\ngamma beta delta',
+// gucOS is POSIX (todos/0210): the EDIT strips the \r notepad's loader
+// re-adds (ReplaceNewLines normalizes to CRLF before EM_SETHANDLE), so the
+// buffer — and everything downstream of WM_GETTEXT — is pure LF.
+check('Open loaded readme.txt into the EDIT (LF, \\r stripped)',
+  section(out, 'content1').trim() === 'alpha beta\ngamma beta delta',
   JSON.stringify(section(out, 'content1')));
 check('status bar shows the detected EOLN (Unix LF)',
   /Unix \(LF\)/.test(section(out, 'bar1')), section(out, 'bar1'));
 
 /* Replace All */
 check('Replace All rewrote both matches (FINDREPLACE protocol)',
-  section(out, 'content2').trim() === 'alpha BEE\r\ngamma BEE delta',
+  section(out, 'content2').trim() === 'alpha BEE\ngamma BEE delta',
   JSON.stringify(section(out, 'content2')));
 
 /* clipboard */
 check('Select All + Copy filled the clipboard slot',
-  section(out, 'clip').trim() === 'alpha BEE\r\ngamma BEE delta',
+  section(out, 'clip').trim() === 'alpha BEE\ngamma BEE delta',
   JSON.stringify(section(out, 'clip')));
+
+/* CRLF round-trip (todos/0210) */
+const crlfLoad = section(out, 'crlfload');
+check('CRLF file loads with every \\r stripped (EM_SETHANDLE path)',
+  !crlfLoad.includes('\r') && crlfLoad.trim() === 'cr one\ncr two\ncr three',
+  JSON.stringify(crlfLoad));
+const crlfSaved = section(out, 'crlfsaved');
+check('save keeps LF: no \\r written back to the filesystem',
+  !crlfSaved.includes('\r') && crlfSaved.replace('z', '').trim() === 'cr one\ncr two\ncr three',
+  JSON.stringify(crlfSaved));
+check('WM_SETTEXT strips \\r\\n and lone \\r (agent settext path)',
+  section(out, 'setcr').trim() === 'st one\nst two\nst three',
+  JSON.stringify(section(out, 'setcr')));
 
 /* New Window */
 check('New Window spawned a second notepad (ShellExecuteW)',

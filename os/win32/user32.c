@@ -3206,6 +3206,24 @@ typedef struct {
 static int edit_ml(HWND h) { return (h->style & ES_MULTILINE) != 0; }
 static int edit_ro(HWND h) { return (h->style & ES_READONLY) != 0; }
 
+/* gucOS is POSIX — the EDIT buffer is pure LF (todos/0210). Every text-in
+ * path normalizes CRLF and lone CR to '\n': the text path has no 0x0D glyph
+ * (a stray \r rendered "?"), and WM_GETTEXT/EM_GETHANDLE hand the buffer
+ * back out, so the win32 layer never re-imposes CRLF on the filesystem.
+ * dst may alias s (in-place shrink: o never passes i). */
+static int edit_normalize(char *dst, const char *s, int n) {
+    int o = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i] == '\r') {
+            if (i + 1 < n && s[i + 1] == '\n') continue;
+            dst[o++] = '\n';
+        } else {
+            dst[o++] = s[i];
+        }
+    }
+    return o;
+}
+
 static int edit_ensure(EditState *st, int need) {
     if (st->cap >= need) return 1;
     int nc = st->cap ? st->cap * 2 : 64;
@@ -3289,9 +3307,12 @@ static void edit_insert(HWND h, EditState *st, const char *s, int n) {
     if (!edit_ensure(st, st->len + n + 1)) return;
     memmove(st->buf + st->caret + n, st->buf + st->caret,
             (size_t)(st->len - st->caret));
-    memcpy(st->buf + st->caret, s, (size_t)n);
-    st->len += n;
-    st->caret += n;
+    int m = edit_normalize(st->buf + st->caret, s, n);
+    if (m < n)                                   /* close the CR shrinkage gap */
+        memmove(st->buf + st->caret + m, st->buf + st->caret + n,
+                (size_t)(st->len - st->caret));
+    st->len += m;
+    st->caret += m;
     st->anchor = st->caret;
     (void)h;
 }
@@ -3414,10 +3435,8 @@ static void edit_adopt_handle(HWND h, EditState *st, HLOCAL hl) {
     char *a = hl ? w2a_dup((LPCWSTR)LocalLock(hl)) : NULL;
     if (hl) LocalUnlock(hl);
     int n = a ? (int)strlen(a) : 0;
-    if (edit_ensure(st, n + 1)) {
-        if (n) memcpy(st->buf, a, (size_t)n);
-        st->len = n;
-    }
+    if (edit_ensure(st, n + 1))
+        st->len = n ? edit_normalize(st->buf, a, n) : 0;
     free(a);
     st->caret = st->anchor = 0;
     st->topLine = st->scrollX = 0;
@@ -3436,10 +3455,8 @@ static void edit_copy_sel(EditState *st) {
 static void edit_paste(HWND h, EditState *st) {
     char *t = clip_load();
     if (!t) return;
-    if (!edit_ml(h)) {                           /* single line: first line only */
-        char *nl = strchr(t, '\n');
-        if (nl) *nl = 0;
-    }
+    if (!edit_ml(h))                             /* single line: first line only */
+        t[strcspn(t, "\r\n")] = 0;
     edit_insert(h, st, t, (int)strlen(t));
     free(t);
     st->modified = 1;
@@ -3481,10 +3498,8 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         h->ctl = st;
         const char *t = text_get(h);
         int n = (int)strlen(t);
-        if (n && edit_ensure(st, n + 1)) {
-            memcpy(st->buf, t, (size_t)n);
-            st->len = n;
-        }
+        if (n && edit_ensure(st, n + 1))
+            st->len = edit_normalize(st->buf, t, n);
         return 0;
     }
     case WM_PAINT:
@@ -3748,9 +3763,8 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         const char *t = lp ? (const char *)lp : "";
         int n = (int)strlen(t);
         if (!edit_ensure(st, n + 1)) return FALSE;
-        memcpy(st->buf, t, (size_t)n);
-        st->len = n;
-        st->caret = st->anchor = n;
+        st->len = edit_normalize(st->buf, t, n);
+        st->caret = st->anchor = st->len;
         st->topLine = st->scrollX = 0;
         st->modified = 0;                        /* programmatic set (0048) */
         edit_show_caret(h, st);
