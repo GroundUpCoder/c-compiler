@@ -98,7 +98,7 @@
 
 #define TOP_H  26                    /* the path/button strip */
 #define BTN_W  46
-#define STATUS_H 18                  /* the bottom status strip (0106) */
+#define STATUS_H 18                  /* status-strip fontless fallback (0106) */
 
 static HWND g_win, g_path, g_go, g_up, g_open, g_with, g_list, g_status;
 static char g_cwd[512] = "/root";
@@ -750,17 +750,36 @@ static void ctx_menu(int sx, int sy) {
     if (cmd) SendMessage(g_win, WM_COMMAND, MAKEWPARAM(cmd, 0), 0);
 }
 
+/* The strip's height derives from the stock font's glyph cell (0230, the
+ * 0229 disease at this site): STATIC top-aligns its text, so a cell taller
+ * than the strip loses its descender rows — the hardcoded 18 was Win95
+ * MS-Sans-Serif arithmetic and clipped the 19px stock cell's `j`/parens.
+ * Cell + 2px breathing; cached after the first successful derivation. */
+static int status_h(void) {
+    static int h;
+    if (h) return h;
+    int v = STATUS_H;                /* fontless fallback */
+    HDC dc = g_status ? GetDC(g_status) : NULL;
+    if (dc) {
+        TEXTMETRIC tm;
+        if (GetTextMetrics(dc, &tm)) v = tm.tmHeight + 2;
+        ReleaseDC(g_status, dc);
+        h = v;
+    }
+    return v;
+}
+
 static void relayout(HWND h) {
     RECT r;
     GetClientRect(h, &r);
-    int w = r.right, hgt = r.bottom;
+    int w = r.right, hgt = r.bottom, sh = status_h();
     MoveWindow(g_path, 4, 3, w - 4 * BTN_W - 24, TOP_H - 6, TRUE);
     MoveWindow(g_go, w - 4 * BTN_W - 16, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_up, w - 3 * BTN_W - 12, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_open, w - 2 * BTN_W - 8, 3, BTN_W, TOP_H - 6, TRUE);
     MoveWindow(g_with, w - BTN_W - 4, 3, BTN_W, TOP_H - 6, TRUE);
-    MoveWindow(g_list, 4, TOP_H, w - 8, hgt - TOP_H - 4 - STATUS_H, TRUE);
-    MoveWindow(g_status, 4, hgt - STATUS_H - 1, w - 8, STATUS_H, TRUE);
+    MoveWindow(g_list, 4, TOP_H, w - 8, hgt - TOP_H - 4 - sh, TRUE);
+    MoveWindow(g_status, 4, hgt - sh - 1, w - 8, sh, TRUE);
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
