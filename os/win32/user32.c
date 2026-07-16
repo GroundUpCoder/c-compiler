@@ -1226,6 +1226,8 @@ static struct {
     int barIdx;                 /* which bar item's popup; -1 = standalone */
     int hot;                    /* hot popup row, -1 none */
     MenuTbl *pop;               /* the open popup's items (bar sub or standalone) */
+    MenuTbl *sub;               /* open cascade of pop's row subRow (0211) */
+    int subRow, subHot;         /*   one nested level, the paint Tools case */
     int sx, sy;                 /* standalone (TrackPopupMenu) anchor, surface coords */
     HWND owner;                 /* standalone: WM_COMMAND target */
     UINT tpmFlags;              /* standalone: TPM_* word */
@@ -1278,11 +1280,8 @@ static int menu_row_h(const MenuItem *it) {
     return it->kind == 2 ? MENU_SEP_H : MENU_ITEM_H;
 }
 
-/* Popup rect for the open popup (bar item or standalone), clamped inside
- * the surface. */
-static void menu_popup_rect(HWND top, RECT *out) {
-    MenuTbl *m = g_menu.pop;
-    SDL_Surface *s = SDL_GetWindowSurface(top->win);
+/* Measured size of a popup table (0211: shared by root + cascade). */
+static void menu_tbl_size(MenuTbl *m, int *wOut, int *hOut) {
     int w = 60, h = 2;
     for (int i = 0; m && i < m->n; i++) {
         const MenuItem *it = &m->items[i];
@@ -1298,7 +1297,16 @@ static void menu_popup_rect(HWND top, RECT *out) {
             if (tw > w) w = tw;
         }
     }
-    h += 2;
+    *wOut = w;
+    *hOut = h + 2;
+}
+
+/* Popup rect for the open popup (bar item or standalone), clamped inside
+ * the surface. */
+static void menu_popup_rect(HWND top, RECT *out) {
+    SDL_Surface *s = SDL_GetWindowSurface(top->win);
+    int w, h;
+    menu_tbl_size(g_menu.pop, &w, &h);
     int x, y;
     if (menu_standalone()) {
         x = g_menu.sx;
@@ -1317,21 +1325,52 @@ static void menu_popup_rect(HWND top, RECT *out) {
     SetRect(out, x, y, x + w, y + (h > maxH ? maxH : h));
 }
 
-/* Popup row index at surface (x, y); -1 outside/none. */
-static int menu_popup_at(HWND top, int x, int y) {
-    if (!g_menu.open) return -1;
+/* The open cascade's rect (0211): hung off its anchor row's right edge,
+ * flipped left when it would overflow the surface. */
+static void menu_sub_rect(HWND top, RECT *out) {
     RECT pr;
     menu_popup_rect(top, &pr);
+    int y = pr.top + 1;
+    for (int i = 0; i < g_menu.subRow && i < g_menu.pop->n; i++)
+        y += menu_row_h(&g_menu.pop->items[i]);
+    SDL_Surface *s = SDL_GetWindowSurface(top->win);
+    int w, h;
+    menu_tbl_size(g_menu.sub, &w, &h);
+    int x = pr.right - 3;
+    if (s && x + w > s->w) x = pr.left - w + 3;
+    if (x < 0) x = 0;
+    if (s && y + h > s->h) y = s->h - h;
+    if (y < 0) y = 0;
+    int maxH = s ? s->h - y : h;
+    SetRect(out, x, y, x + w, y + (h > maxH ? maxH : h));
+}
+
+/* Row index of table m (drawn at pr) at surface (x, y); -1 outside. */
+static int menu_tbl_at(MenuTbl *m, const RECT *pr, int x, int y) {
     POINT p = { x, y };
-    if (!PtInRect(&pr, p)) return -1;
-    MenuTbl *m = g_menu.pop;
-    int ry = pr.top + 1;
-    for (int i = 0; m && i < m->n; i++) {
+    if (!m || !PtInRect(pr, p)) return -1;
+    int ry = pr->top + 1;
+    for (int i = 0; i < m->n; i++) {
         int rh = menu_row_h(&m->items[i]);
         if (y >= ry && y < ry + rh) return i;
         ry += rh;
     }
     return -1;
+}
+
+/* Popup row index at surface (x, y); -1 outside/none. */
+static int menu_popup_at(HWND top, int x, int y) {
+    if (!g_menu.open) return -1;
+    RECT pr;
+    menu_popup_rect(top, &pr);
+    return menu_tbl_at(g_menu.pop, &pr, x, y);
+}
+
+static int menu_sub_at(HWND top, int x, int y) {
+    if (!g_menu.open || !g_menu.sub) return -1;
+    RECT sr;
+    menu_sub_rect(top, &sr);
+    return menu_tbl_at(g_menu.sub, &sr, x, y);
 }
 
 static void draw_raised(HDC dc, RECT r, int sunken);         /* controls section */
@@ -1357,13 +1396,11 @@ static void menu_draw_bar_into(HWND top, HDC dc, int surfW) {
     }
 }
 
-static void menu_draw_popup_into(HWND top, HDC dc) {
-    RECT pr;
-    menu_popup_rect(top, &pr);
+static void menu_draw_tbl(HDC dc, MenuTbl *m, const RECT *prp, int hotRow) {
+    RECT pr = *prp;
     FillRect(dc, &pr, GetSysColorBrush(COLOR_MENU));
     draw_raised(dc, pr, 0);
     SetBkMode(dc, TRANSPARENT);
-    MenuTbl *m = g_menu.pop;
     int y = pr.top + 1;
     for (int i = 0; m && i < m->n; i++) {
         const MenuItem *it = &m->items[i];
@@ -1377,7 +1414,7 @@ static void menu_draw_popup_into(HWND top, HDC dc) {
             FillRect(dc, &s1, GetSysColorBrush(COLOR_BTNHIGHLIGHT));
         } else {
             int grayed = (it->state & (MF_GRAYED | MF_DISABLED)) != 0;
-            int hot = g_menu.hot == i && !grayed;
+            int hot = hotRow == i && !grayed;
             if (hot) {
                 RECT hr;
                 SetRect(&hr, pr.left + 1, y, pr.right - 1, y + rh);
@@ -1393,6 +1430,21 @@ static void menu_draw_popup_into(HWND top, HDC dc) {
             if (tab)                                          /* accel column */
                 TextOut(dc, pr.right - 8 - menu_text_w(tab + 1) - 0, y + 2,
                         tab + 1, (int)strlen(tab + 1));
+            if (it->kind == 1) {                              /* cascade ► (0211) */
+                POINT tri[3];
+                int cx = pr.right - 8, cy = y + rh / 2;
+                tri[0].x = cx + 3; tri[0].y = cy;
+                tri[1].x = cx - 2; tri[1].y = cy - 4;
+                tri[2].x = cx - 2; tri[2].y = cy + 4;
+                HBRUSH tb = CreateSolidBrush(
+                    GetSysColor(hot ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
+                HGDIOBJ ob = SelectObject(dc, (HGDIOBJ)tb);
+                HGDIOBJ op = SelectObject(dc, GetStockObject(NULL_PEN));
+                Polygon(dc, tri, 3);
+                SelectObject(dc, op);
+                SelectObject(dc, ob);
+                DeleteObject((HGDIOBJ)tb);
+            }
             if (it->state & MF_CHECKED) {                     /* check mark */
                 HPEN p = CreatePen(PS_SOLID, 1,
                                    GetSysColor(hot ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
@@ -1407,6 +1459,17 @@ static void menu_draw_popup_into(HWND top, HDC dc) {
             }
         }
         y += rh;
+    }
+}
+
+static void menu_draw_popup_into(HWND top, HDC dc) {
+    RECT pr;
+    menu_popup_rect(top, &pr);
+    menu_draw_tbl(dc, g_menu.pop, &pr, g_menu.hot);
+    if (g_menu.sub) {                            /* the open cascade (0211) */
+        RECT sr;
+        menu_sub_rect(top, &sr);
+        menu_draw_tbl(dc, g_menu.sub, &sr, g_menu.subHot);
     }
 }
 
@@ -1428,15 +1491,47 @@ static void menu_present(HWND top) {            /* overlay-only refresh */
 static void menu_close(void) {
     if (!g_menu.open) return;
     HWND t = g_menu.top;
+    int standalone = menu_standalone();
     g_menu.open = 0;
     g_menu.top = NULL;
     g_menu.pop = NULL;
+    g_menu.sub = NULL;
+    g_menu.subHot = -1;
     /* the popup overwrote client pixels: have the app repaint them */
     if (t) {
-        SendMessage(t, WM_EXITMENULOOP, 0, 0);
+        /* wParam TRUE for a TrackPopupMenu loop, like Windows (0211) */
+        SendMessage(t, WM_EXITMENULOOP, standalone ? TRUE : FALSE, 0);
         InvalidateRect(t, NULL, TRUE);
         PostMessage(t, WM_NULL, 0, 0);           /* wake a modal popup pump */
     }
+}
+
+/* Cascade open/close (0211): ONE nested level — the corpus (paint's
+ * Tools ▸ Width) needs exactly one; a sub-sub popup reports unsupported. */
+static void menu_sub_close(HWND top) {
+    if (!g_menu.sub) return;
+    g_menu.sub = NULL;
+    g_menu.subHot = -1;
+    InvalidateRect(top, NULL, TRUE);             /* cascade pixels differ */
+    menu_present(top);
+}
+
+static void menu_sub_open(HWND top, int row) {
+    MenuTbl *m = g_menu.pop;
+    if (!m || row < 0 || row >= m->n) return;
+    MenuItem *it = &m->items[row];
+    if (it->kind != 1 || !it->sub || (it->state & (MF_GRAYED | MF_DISABLED)))
+        return;
+    if (g_menu.sub && g_menu.subRow == row) return;          /* already open */
+    for (int i = 0; i < MENU_T(it->sub)->n; i++)
+        if (MENU_T(it->sub)->items[i].kind == 1)
+            WIN32_UNSUPPORTED("menu cascade deeper than one level");
+    g_menu.sub = MENU_T(it->sub);
+    g_menu.subRow = row;
+    g_menu.subHot = -1;
+    SendMessage(top, WM_INITMENUPOPUP, (WPARAM)it->sub, MAKELPARAM(row, FALSE));
+    InvalidateRect(top, NULL, TRUE);
+    menu_present(top);
 }
 
 static void menu_open_popup(HWND top, int idx) {
@@ -1452,13 +1547,14 @@ static void menu_open_popup(HWND top, int idx) {
     g_menu.barIdx = idx;
     g_menu.pop = MENU_T(m->items[idx].sub);
     g_menu.hot = -1;
+    g_menu.sub = NULL;
+    g_menu.subHot = -1;
     SendMessage(top, WM_INITMENUPOPUP, (WPARAM)m->items[idx].sub,
                 MAKELPARAM(idx, FALSE));
     menu_present(top);
 }
 
-static void menu_fire(HWND top, int row) {
-    MenuTbl *m = g_menu.pop;
+static void menu_fire_in(HWND top, MenuTbl *m, int row) {
     if (!m || row < 0 || row >= m->n) return;
     MenuItem *it = &m->items[row];
     if (it->kind != 0 || (it->state & (MF_GRAYED | MF_DISABLED))) return;
@@ -1480,27 +1576,53 @@ static int menu_route_mouse(HWND top, UINT msg, int x, int y) {
     if (!top->menu && !(g_menu.open && g_menu.top == top)) return 0;
     if (g_menu.open && g_menu.top == top) {
         int row = menu_popup_at(top, x, y);
+        int srow = menu_sub_at(top, x, y);       /* cascade rows (0211) */
         int bi = menu_standalone() ? -1 : menu_bar_at(top, x, y);
         switch (msg) {
         case WM_MOUSEMOVE:
+            if (srow >= 0) {                     /* inside the cascade */
+                if (srow != g_menu.subHot) {
+                    g_menu.subHot = srow;
+                    menu_present(top);
+                }
+                return 1;
+            }
             if (bi >= 0 && bi != g_menu.barIdx &&
                 MENU_T(top->menu)->items[bi].kind == 1) {
                 g_menu.barIdx = bi;              /* hover-switch, Windows-style */
                 g_menu.pop = MENU_T(MENU_T(top->menu)->items[bi].sub);
                 g_menu.hot = -1;
+                g_menu.sub = NULL;
+                g_menu.subHot = -1;
                 SendMessage(top, WM_INITMENUPOPUP,
                             (WPARAM)MENU_T(top->menu)->items[bi].sub,
                             MAKELPARAM(bi, FALSE));
                 InvalidateRect(top, NULL, TRUE); /* old popup pixels differ */
                 menu_present(top);
-            } else if (row != g_menu.hot) {
+            } else if (row >= 0 && row != g_menu.hot) {
                 g_menu.hot = row;
+                if (g_menu.pop->items[row].kind == 1)
+                    menu_sub_open(top, row);     /* hover opens the cascade */
+                else if (g_menu.sub)
+                    menu_sub_close(top);
+                menu_present(top);
+            } else if (row != g_menu.hot && !g_menu.sub) {
+                g_menu.hot = row;                /* left the popup: unhot */
                 menu_present(top);
             }
             return 1;
         case WM_LBUTTONDOWN:
         case WM_LBUTTONDBLCLK:
-            if (row >= 0) { menu_fire(top, row); return 1; }
+            if (srow >= 0) { menu_fire_in(top, g_menu.sub, srow); return 1; }
+            if (row >= 0) {
+                if (g_menu.pop->items[row].kind == 1) {
+                    g_menu.hot = row;
+                    menu_sub_open(top, row);     /* click opens the cascade */
+                } else {
+                    menu_fire_in(top, g_menu.pop, row);
+                }
+                return 1;
+            }
             if (bi >= 0) {
                 if (bi == g_menu.barIdx) menu_close();
                 else menu_open_popup(top, bi);
@@ -1509,10 +1631,12 @@ static int menu_route_mouse(HWND top, UINT msg, int x, int y) {
             menu_close();                        /* click outside swallowed */
             return 1;
         case WM_LBUTTONUP:
-            if (row >= 0) menu_fire(top, row);   /* press-drag-release */
-            return 1;
+            if (srow >= 0) menu_fire_in(top, g_menu.sub, srow);
+            else if (row >= 0) menu_fire_in(top, g_menu.pop, row);
+            return 1;                            /* press-drag-release */
         case WM_RBUTTONDOWN:
-            if (row < 0 && bi < 0) menu_close(); /* outside closes (0091) */
+            if (row < 0 && srow < 0 && bi < 0)
+                menu_close();                    /* outside closes (0091) */
             return 1;
         default:
             return 1;                            /* modal while open */
@@ -1549,7 +1673,9 @@ BOOL TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int reserved,
     g_menu.owner = hwnd;
     g_menu.tpmFlags = flags;
     g_menu.retcmd = 0;
-    SendMessage(top, WM_INITMENUPOPUP, (WPARAM)menu, MAKELPARAM(0, TRUE));
+    /* fSystemMenu FALSE: an app popup, not the system menu (0211 — apps
+     * gate their enable/check logic on HIWORD(lParam)==0, the real rule) */
+    SendMessage(top, WM_INITMENUPOPUP, (WPARAM)menu, MAKELPARAM(0, FALSE));
     menu_present(top);
     MSG m;
     memset(&m, 0, sizeof m);
@@ -1565,29 +1691,55 @@ BOOL TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int reserved,
 }
 
 /* Keyboard while a popup is open (todos/0091): Up/Down walk the enabled
- * rows, Enter fires the hot one, Esc closes — and everything else is
- * swallowed, because an open menu is modal for the keyboard (Windows
- * semantics; the mouse routing above already is). SDL keysyms, raw. */
+ * rows of the DEEPEST level, Enter fires the hot one, Right opens a hot
+ * cascade / Left closes it (0211), Esc closes the deepest level — and
+ * everything else is swallowed, because an open menu is modal for the
+ * keyboard (Windows semantics; the mouse routing above already is). */
 static void menu_route_key(int key) {
-    MenuTbl *m = g_menu.pop;
-    if (key == 27) { menu_close(); return; }               /* Esc */
+    HWND top = g_menu.top;
+    MenuTbl *m = g_menu.sub ? g_menu.sub : g_menu.pop;
+    int *hot = g_menu.sub ? &g_menu.subHot : &g_menu.hot;
+    if (key == 27) {                                       /* Esc */
+        if (g_menu.sub) menu_sub_close(top);
+        else menu_close();
+        return;
+    }
     if (!m || m->n == 0) return;
     if (key == 1073741905 || key == 1073741906) {          /* Down / Up */
         int dir = key == 1073741905 ? 1 : -1;
-        int i = g_menu.hot;
+        int i = *hot;
         for (int k = 0; k < m->n; k++) {
             i = i < 0 ? (dir > 0 ? 0 : m->n - 1) : (i + dir + m->n) % m->n;
             MenuItem *it = &m->items[i];
-            if (it->kind == 0 && !(it->state & (MF_GRAYED | MF_DISABLED)))
+            if (it->kind != 2 && !(it->state & (MF_GRAYED | MF_DISABLED)))
                 break;
         }
-        g_menu.hot = i;
-        menu_present(g_menu.top);
+        *hot = i;
+        menu_present(top);
+        return;
+    }
+    if (key == 1073741903) {                               /* Right: cascade */
+        if (!g_menu.sub && g_menu.hot >= 0 &&
+            g_menu.pop->items[g_menu.hot].kind == 1) {
+            menu_sub_open(top, g_menu.hot);
+            menu_route_key(1073741905);                    /* hot first row */
+        }
+        return;
+    }
+    if (key == 1073741904) {                               /* Left: back out */
+        if (g_menu.sub) menu_sub_close(top);
         return;
     }
     if (key == 13 || key == 1073741912) {                  /* Return / KP */
-        if (g_menu.hot >= 0) menu_fire(g_menu.top, g_menu.hot);
-        else menu_close();
+        if (*hot >= 0) {
+            MenuItem *it = &m->items[*hot];
+            if (it->kind == 1 && !g_menu.sub)
+                menu_sub_open(top, *hot);                  /* Enter opens too */
+            else
+                menu_fire_in(top, m, *hot);
+        } else {
+            menu_close();
+        }
         return;
     }
 }
@@ -2187,9 +2339,23 @@ static void agent_serve(int cfd) {
         if (!h && menu_standalone()) {           /* open TrackPopupMenu (0048) */
             MenuItem *it = menu_find_label(g_menu.pop, payload);
             if (it && it->kind == 0 && !(it->state & (MF_GRAYED | MF_DISABLED))) {
+                /* the item may live one cascade down (0211) */
                 MenuTbl *m = g_menu.pop;
-                for (int row = 0; row < m->n; row++)
-                    if (&m->items[row] == it) { menu_fire(g_menu.top, row); break; }
+                int fired = 0;
+                for (int row = 0; row < m->n && !fired; row++) {
+                    if (&m->items[row] == it) {
+                        menu_fire_in(g_menu.top, m, row);
+                        fired = 1;
+                    } else if (m->items[row].kind == 1 && m->items[row].sub) {
+                        MenuTbl *sm = MENU_T(m->items[row].sub);
+                        for (int r2 = 0; r2 < sm->n; r2++)
+                            if (&sm->items[r2] == it) {
+                                menu_fire_in(g_menu.top, sm, r2);
+                                fired = 1;
+                                break;
+                            }
+                    }
+                }
                 aq_send(cfd, AQ_R_OK, NULL, 0);
                 goto click_done;
             }

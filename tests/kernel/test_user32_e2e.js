@@ -368,6 +368,46 @@ check('fail-loud: unsupported scrollbar target says so on stderr',
   (outE.split('selftest-rc=')[1] || '').slice(0, 200));
 fs.rmSync(etmp, { recursive: true, force: true });
 
+/* ---- session F: `ctldemo menudemo` (0211) — the nested-popup CASCADE
+ * (paint's Tools ▸ Width shape) driven through the REAL menu UI: a bar
+ * click opens the popup, arrows walk it, Right opens the cascade, Enter
+ * fires — and Esc closes only the deepest level. All input rides the
+ * kernel ring (FIFO), so the command prints order with the keys. */
+const { dir: ftmp, image: fimage } = freshImage('os-user32f-');
+const KEY = (scan, sym) => `wmctl key $SID ${scan} ${sym}`;
+const DOWN = KEY(81, 1073741905), RIGHT = KEY(79, 1073741903);
+const ENTER = KEY(40, 13), ESC = KEY(41, 27);
+const outF = driveBoot([
+  'ctldemo menudemo &',
+  'wmctl wait win "Menu Demo" 10000',
+  'SID=$(wmctl list | grep "Menu Demo$" | sed "s/[^0-9].*//")',
+  'wmctl click $SID 12 10',                     // bar "Menu" -> popup opens
+  DOWN,                                          // hot Alpha
+  DOWN,                                          // hot More (a cascade row)
+  RIGHT,                                         // open cascade, hot Beta
+  DOWN,                                          // hot Gamma
+  ENTER,                                         // fire 302
+  'wmctl click $SID 12 10',                     // reopen
+  DOWN, DOWN,                                    // hot More
+  RIGHT,                                         // cascade open
+  ESC,                                           // closes ONLY the cascade
+  DOWN,                                          // skips the separator -> Delta
+  ENTER,                                         // fire 303
+  // Genuine no-marker settle (0171 rule): the fired WM_COMMAND prints to
+  // the boot console, which the shell can't observe — give the app's loop
+  // one second to drain the queued keys before the close tears it down.
+  'sleep 1',
+  'wmctl close $SID',
+], { image: fimage, maxBuffer: 32 * 1024 * 1024 }).stdout;
+check('menu cascade opens and fires by keyboard (Gamma=302)',
+  outF.includes('ctldemo: cmd=302'), outF.match(/cmd=\d+/g));
+check('Esc closes only the cascade; popup nav continues (Delta=303)',
+  outF.includes('ctldemo: cmd=303'), outF.match(/cmd=\d+/g));
+check('no stray menu commands fired',
+  !outF.includes('cmd=300') && !outF.includes('cmd=301'),
+  outF.match(/cmd=\d+/g));
+fs.rmSync(ftmp, { recursive: true, force: true });
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nuser32 e2e: ${failures} FAILED` : '\nuser32 e2e: PASS');
 process.exit(failures ? 1 : 0);

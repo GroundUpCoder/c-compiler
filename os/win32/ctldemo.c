@@ -338,8 +338,65 @@ static int selftest(void) {
     return st_fails ? 1 : 0;
 }
 
+/* ---- `ctldemo menudemo` (0211): a bar menu with a NESTED popup, the
+ * cascade acceptance surface (paint's Tools ▸ Width shape). The e2e opens
+ * the popup with a bar click and walks it by keyboard (Down/Right/Enter/
+ * Esc); every WM_COMMAND prints its id. */
+
+static LRESULT CALLBACK MenuDemoProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        if (dc) EndPaint(hwnd, &ps);
+        if (!g_painted) { g_painted = 1; mark("ready"); }
+        return 0;
+    }
+    case WM_COMMAND:
+        printf("ctldemo: cmd=%d\n", (int)LOWORD(wp));
+        fflush(stdout);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+static int menudemo(void) {
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = MenuDemoProc;
+    wc.lpszClassName = "menudemo";
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    if (!RegisterClass(&wc)) return 3;
+    HMENU sub = CreatePopupMenu();
+    AppendMenuA(sub, MF_STRING, 301, "Beta");
+    AppendMenuA(sub, MF_STRING, 302, "Gamma");
+    HMENU pop = CreatePopupMenu();
+    AppendMenuA(pop, MF_STRING, 300, "Alpha");
+    AppendMenuA(pop, MF_POPUP, (UINT_PTR)sub, "More");
+    AppendMenuA(pop, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(pop, MF_STRING, 303, "Delta");
+    HMENU bar = CreateMenu();
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)pop, "Menu");
+    HWND hwnd = CreateWindowEx(0, "menudemo", "Menu Demo",
+                               WS_OVERLAPPED | WS_VISIBLE,
+                               CW_USEDEFAULT, CW_USEDEFAULT, 300, 200,
+                               NULL, NULL, NULL, NULL);
+    if (!hwnd) return 3;
+    SetMenu(hwnd, bar);
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "selftest") == 0) return selftest();
+    if (argc > 1 && strcmp(argv[1], "menudemo") == 0) return menudemo();
     WNDCLASS wc;
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = MainProc;
