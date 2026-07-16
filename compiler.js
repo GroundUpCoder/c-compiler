@@ -1017,6 +1017,48 @@ function parseHexFloat(text) {
   return bigIntTimesPow2ToDouble(M, exp - 4 * fracLen);
 }
 
+// C11 6.4.4.1: decode an integer-constant pp-number into its value. Strips
+// the u/U/l/L suffixes, then dispatches on prefix: 0x/0X hex, 0b/0B binary
+// (C23 / GCC extension), leading-0 octal, else decimal. Returns
+// { value: BigInt, unsigned: bool, decimal: bool } or null on a malformed
+// constant (e.g. "08") — the caller diagnoses. This is the ONE integer
+// decoder: both the lexer's PP_NUMBER→INT resolution and the #if evaluator
+// (ConstEval.itemFromPPNumber) funnel through it, so the two contexts can
+// never drift (a diverged #if-side copy used to reject 0b constants).
+function decodeIntegerLiteral(text) {
+  let unsigned = false;
+  let end = text.length;
+  for (let i = text.length - 1; i > 0; --i) {
+    const c = text[i];
+    if (c === "u" || c === "U") { unsigned = true; end = i; }
+    else if (c === "l" || c === "L") { end = i; }
+    else break;
+  }
+  const numText = text.substring(0, end);
+  let value;
+  let decimal = false;
+  try {
+    if (numText === "0") {
+      value = 0n;
+    } else if (
+      numText.length >= 2 &&
+      numText[0] === "0" &&
+      (numText[1] === "x" || numText[1] === "X" ||
+       numText[1] === "b" || numText[1] === "B")
+    ) {
+      value = BigInt(numText); // hex or binary — BigInt parses both natively
+    } else if (numText[0] === "0" && numText.length > 1) {
+      value = BigInt("0o" + numText.substring(1)); // octal (throws on 8/9)
+    } else {
+      value = BigInt(numText);
+      decimal = true;
+    }
+  } catch {
+    return null;
+  }
+  return { value, unsigned, decimal };
+}
+
 // Post-process a LexResult: strip newlines, resolve keywords, convert numbers/chars.
 // In the full compiler this also runs the preprocessor between lex() and post-processing.
 // For now, the preprocessor step is omitted — call postProcess(lex(...)) directly.
@@ -1103,47 +1145,8 @@ function postProcess(lexResult) {
         }
       } else {
         t.kind = TokenKind.INT;
-        // Parse integer: handles 0x (hex), 0o/0 (octal), decimal
-        let numText = text;
-        // Strip suffixes
-        while (numText.length > 0) {
-          const last = numText[numText.length - 1];
-          if (
-            last === "u" ||
-            last === "U" ||
-            last === "l" ||
-            last === "L"
-          ) {
-            numText = numText.substring(0, numText.length - 1);
-          } else {
-            break;
-          }
-        }
-        try {
-          if (numText === "0") {
-            t.integer = 0n;
-          } else if (
-            numText.length >= 2 &&
-            numText[0] === "0" &&
-            (numText[1] === "x" || numText[1] === "X")
-          ) {
-            // Hex
-            t.integer = BigInt(numText);
-          } else if (
-            numText.length >= 2 &&
-            numText[0] === "0" &&
-            (numText[1] === "b" || numText[1] === "B")
-          ) {
-            // Binary (C23 / GCC extension)
-            t.integer = BigInt(numText);
-          } else if (numText[0] === "0" && numText.length > 1) {
-            // Octal (C-style: leading 0)
-            t.integer = BigInt("0o" + numText.substring(1));
-          } else {
-            t.integer = BigInt(numText);
-            t.flags.isDecimal = true;
-          }
-        } catch {
+        const dec = decodeIntegerLiteral(text);
+        if (dec === null) {
           lexResult.errors.push(
             new LexError(
               "Invalid numeric literal: " + text,
@@ -1151,6 +1154,9 @@ function postProcess(lexResult) {
               t.line
             )
           );
+        } else {
+          t.integer = dec.value;
+          t.flags.isDecimal = dec.decimal;
         }
       }
     }
@@ -2394,8 +2400,8 @@ function formatToken(t) {
 return {
   intern, TokenKind, Keyword, Punct, StringPrefix, TokenFlags, Token, Loc, LexError, LexResult,
   lex, unescape, decodeCodepoint, unescapeCodepoint, encodeUtf16LE, encodeUtf32LE,
-  parseHexFloat, postProcess, spliceLines, PPRegistry, preprocess, cloneToken,
-  tokenize, formatToken, encodeUtf8,
+  parseHexFloat, decodeIntegerLiteral, postProcess, spliceLines, PPRegistry,
+  preprocess, cloneToken, tokenize, formatToken, encodeUtf8,
 };
 })();
 
@@ -3355,31 +3361,16 @@ function convert(item, type) {
 }
 
 function itemFromPPNumber(text) {
-  let unsigned = false;
-  let end = text.length;
-  for (let i = text.length - 1; i > 0; --i) {
-    const c = text[i];
-    if (c === "u" || c === "U") { unsigned = true; end = i; }
-    else if (c === "l" || c === "L") { if (i > 1 && (text[i-1] === "l" || text[i-1] === "L")) { end = --i; } else { end = i; } }
-    else break;
-  }
-  const numText = text.substring(0, end);
-  let value;
-  try {
-    if (numText.length >= 2 && numText[0] === "0" && (numText[1] === "x" || numText[1] === "X"))
-      value = BigInt(numText);
-    else if (numText[0] === "0" && numText.length >= 2)
-      value = /^[0-7]+$/.test(numText) ? BigInt("0o" + numText) : null;
-    else
-      value = BigInt(numText);
-  } catch { value = null; }
-  if (value === null) return null; // malformed constant (e.g. "08") — caller diagnoses
+  // The canonical decoder (shared with the lexer's PP_NUMBER→INT
+  // resolution) — #if accepts exactly the forms normal code does.
+  const dec = Lexer.decodeIntegerLiteral(text);
+  if (dec === null) return null; // malformed constant (e.g. "08") — caller diagnoses
   // C11 6.10.1p4: #if operands evaluate as intmax_t/uintmax_t (64-bit),
   // regardless of suffix width. Unsuffixed constants are signed; they
   // escalate to uintmax_t only when the value doesn't fit intmax_t
-  // (possible for hex/octal constants per 6.4.4.1's type progression).
-  const type = (unsigned || BigInt.asIntN(64, value) !== value) ? TULLONG : TLLONG;
-  return new Item(value, type);
+  // (possible for non-decimal constants per 6.4.4.1's type progression).
+  const type = (dec.unsigned || BigInt.asIntN(64, dec.value) !== dec.value) ? TULLONG : TLLONG;
+  return new Item(dec.value, type);
 }
 
 function promote(item) {
