@@ -10806,7 +10806,19 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       // flush back on exit.  For large files we'd want mmap-style
       // paging, but this is fine for tests.
       var fileBuf = new Uint8Array(0);
-      try { fileBuf = fs.readFileSync(blockFSPath); } catch (e) {}
+      try {
+        fileBuf = fs.readFileSync(blockFSPath);
+      } catch (e) {
+        // ENOENT is the one legitimate "create a new image" case. Any
+        // other read failure (EACCES, EIO, ...) must NOT fall through to
+        // a fresh empty image: the writeFileSync at exit would overwrite
+        // the original — a transient error on startup would silently
+        // destroy the user's image.
+        if (e.code !== 'ENOENT') {
+          process.stderr.write('BlockFS: cannot read image ' + blockFSPath + ': ' + e.message + '\n');
+          process.exit(1);
+        }
+      }
       // MemoryByteStore needs an ArrayBuffer — copy in
       // Start with 1MB initial store; TLSF grows via _growPool as needed.
       var store = new BLOCK_FS.MemoryByteStore(Math.max(fileBuf.length, 1024 * 1024));
