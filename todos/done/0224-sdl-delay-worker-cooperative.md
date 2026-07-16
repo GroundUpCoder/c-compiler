@@ -1,6 +1,6 @@
 # 0224 — CS5: SDL_Delay cooperative in worker flavors
 
-- **Status**: open
+- **Status**: done (2026-07-16) — SDL_Delay cooperative pumpWait sleep in worker flavors, blocking sleep in null flavor, loud throw kept for the standalone-browser flavor; `tests/kernel/test_sdl_delay_e2e.js`; the stale unit golden was closed as todos/0226
 - **Design**: todos/SDL3.md (timer section), todos/IDLE-POWER.md (parking discipline)
 
 ## Goal

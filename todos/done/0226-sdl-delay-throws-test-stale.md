@@ -1,6 +1,6 @@
 # 0226 — unit/sdl_delay_throws red at HEAD: 0224 made SDL_Delay really sleep in worker runners
 
-- **Status**: open
+- **Status**: done (2026-07-16) — test renamed to `unit/sdl_delay_sleeps`, pins the 0224 sleep-succeeds contract (both lines print, SDL_GetTicks-measured duration honoured, exit 0); the throw contract stays pinned by `tests/kernel/test_sdl_delay_e2e.js`
 - **Design**: `todos/done/0224-sdl-delay-worker-cooperative.md`
 
 ## Goal
