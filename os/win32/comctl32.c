@@ -65,8 +65,10 @@ static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         SetWindowLongPtr(h, GWLP_USERDATA, (LONG_PTR)st);
         return 0;
     case WM_SIZE:
-        /* notepad's protocol: WM_SIZE 0,0 = "re-park yourself" */
-        if (wp == 0 && lp == 0) sb_park(h);
+        /* real status bars re-park on ANY WM_SIZE — the universal port
+         * idiom forwards the parent's real wParam/lParam (0211; notepad
+         * happens to send 0,0) */
+        sb_park(h);
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;

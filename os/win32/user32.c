@@ -519,6 +519,12 @@ static void q_purge(HWND h) {                    /* window destroyed */
 
 BOOL PostMessage(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (h && !IsWindow(h)) return FALSE;
+    if (!h && msg != WM_NULL) {
+        /* thread messages: NULL hwnd is this queue's tombstone marker, so
+         * the message would silently vanish (0211) — fail loud instead */
+        WIN32_UNSUPPORTED("PostMessage(NULL, 0x%04X) thread message", msg);
+        return FALSE;
+    }
     q_push(h, msg, wp, lp, 0);
     return TRUE;
 }
@@ -1960,6 +1966,12 @@ static void pump_sdl(void) {
                         e.motion.state);
             break;
         }
+        /* NB (0211 audit, still open): the pointer leaving the SURFACE
+         * delivers no SDL event in this world (the kernel routes input
+         * per-window and simply goes quiet), so a TME_LEAVE armed window
+         * only gets WM_MOUSELEAVE via intra-surface movement — calc's
+         * hot button stays lit until re-entry. Needs a kernel leave
+         * event; recorded in WIN32.md. */
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             HWND top = top_by_windowid(e.button.windowID);
@@ -2545,7 +2557,11 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
                                const void *csName, const void *csClass) {
     ensure_builtin_classes();
     Class *cls = class_find(className);
-    if (!cls) return NULL;
+    if (!cls) {
+        WIN32_UNSUPPORTED("window class \"%s\" (not registered/implemented)",
+                          className ? className : "?");
+        return NULL;
+    }
     if ((style & WS_CHILD) && !parent) return NULL;
     if (w == CW_USEDEFAULT) w = 400;
     if (h == CW_USEDEFAULT) h = 300;
@@ -2685,6 +2701,26 @@ BOOL DestroyWindow(HWND h) {
 
 LRESULT DefWindowProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (!h) return 0;
+    /* Fail-loud (0211): a control-contract message (EM_/BM_/LB_/CB_/SBM_
+     * ranges) that falls all the way through to DefWindowProc is an
+     * UNIMPLEMENTED control feature, not a benign unknown — a silent 0
+     * reads as fake success (e.g. LB_ERR never surfacing). Report once
+     * per message number, keep returning 0. */
+    if ((msg >= 0x00B0 && msg <= 0x00EF) ||      /* EM_* / SBM_* */
+        (msg >= 0x0140 && msg <= 0x0165) ||      /* CB_* */
+        (msg >= 0x0180 && msg <= 0x01B0) ||      /* LB_* */
+        (msg >= 0x00F0 && msg <= 0x00FF)) {      /* BM_* */
+        static unsigned reported[32];
+        static int nRep;
+        int seen = 0;
+        for (int i = 0; i < nRep; i++)
+            if (reported[i] == msg) { seen = 1; break; }
+        if (!seen) {
+            if (nRep < 32) reported[nRep++] = msg;
+            __win32_unsupported("control message 0x%04X on class %s",
+                                msg, h->cls ? h->cls->name : "?");
+        }
+    }
     switch (msg) {
     case WM_CLOSE:
         DestroyWindow(h);
@@ -2764,6 +2800,10 @@ LRESULT DefWindowProcW(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 BOOL ShowWindow(HWND h, int cmd) {
     if (!h) return FALSE;
     BOOL was = h->visible;
+    if (cmd == SW_MINIMIZE || cmd == SW_SHOWMINIMIZED ||
+        cmd == SW_SHOWMAXIMIZED)
+        WIN32_UNSUPPORTED("ShowWindow(SW_%d) minimize/maximize (the WM owns "
+                          "window state; shown normal)", cmd);
     if (cmd == SW_HIDE) {
         if (is_top(h)) return was;               /* no kernel surface hide */
         h->visible = 0;
@@ -2846,7 +2886,15 @@ BOOL IsWindowEnabled(HWND h) { return h ? hwnd_able(h) : FALSE; }
 /* ============================================================ focus/capture */
 
 HWND SetFocus(HWND h) {
-    if (!h) return NULL;
+    if (!h) {                                    /* clear focus (0211) */
+        HWND top = g_activeTop ? g_activeTop : first_live_top();
+        HWND old = top ? top->focus : NULL;
+        if (old) {
+            SendMessage(old, WM_KILLFOCUS, 0, 0);
+            top->focus = NULL;
+        }
+        return old;
+    }
     HWND top = h->top;
     HWND old = top->focus;
     if (old == h) return old;
@@ -3177,12 +3225,21 @@ static void btn_fire(HWND h) {
         InvalidateRect(h, NULL, TRUE);
     } else if (kind == BS_AUTORADIOBUTTON) {
         if (h->parent) {
-            for (HWND c = h->parent->child; c; c = c->next)
+            /* the radio GROUP is bounded by WS_GROUP markers (0211): walk
+             * back to the group start, uncheck forward until the next one */
+            HWND start = h->parent->child;
+            for (HWND c = h->parent->child; c; c = c->next) {
+                if (c->style & WS_GROUP) start = c;
+                if (c == h) break;
+            }
+            for (HWND c = start; c; c = c->next) {
+                if (c != start && (c->style & WS_GROUP)) break;
                 if (c != h && c->cls == h->cls && btn_kind(c) == BS_AUTORADIOBUTTON &&
                     c->ctl && ((BtnState *)c->ctl)->check) {
                     ((BtnState *)c->ctl)->check = 0;
                     InvalidateRect(c, NULL, TRUE);
                 }
+            }
         }
         st->check = 1;
         InvalidateRect(h, NULL, TRUE);
@@ -3280,6 +3337,14 @@ static LRESULT btn_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->check = wp ? 1 : 0;
         InvalidateRect(h, NULL, TRUE);
         return 0;
+    case BM_GETSTATE: {                          /* 0211 */
+        BtnState *bst = (BtnState *)h->ctl;
+        LRESULT r = 0;
+        if (bst && bst->check) r |= 1;           /* BST_CHECKED */
+        if (bst && bst->pressed) r |= 0x0004;    /* BST_PUSHED */
+        if (h->top->focus == h) r |= 0x0008;     /* BST_FOCUS */
+        return r;
+    }
     case BM_SETSTATE:
         st->pressed = wp ? 1 : 0;
         InvalidateRect(h, NULL, TRUE);
@@ -4362,7 +4427,13 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int idx = st->top + (GET_Y_LPARAM(lp) - 2) / (rh > 0 ? rh : 1);
         if (idx >= 0 && idx < st->n) {
             int changed = st->sel != idx;
-            if (st->multi) {
+            if (st->multi && !(h->style & LBS_EXTENDEDSEL)) {
+                /* plain LBS_MULTIPLESEL (0211): a click TOGGLES the item —
+                 * the old code gave it extended replace-the-set semantics */
+                if (st->marks) st->marks[idx] ^= 1;
+                st->anchor = idx;
+                changed = 1;
+            } else if (st->multi) {
                 int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
                 int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
                 if (shift) {                     /* range from the anchor */
@@ -5116,14 +5187,16 @@ int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     }
     /* Button set from the TYPE nibble (0048: MB_YESNOCANCEL is notepad's
      * save prompt; the old flag tests read 0x3 as OKCANCEL). */
-    static const struct { const char *label; int id; } BTNSETS[5][3] = {
+    static const struct { const char *label; int id; } BTNSETS[6][3] = {
         { { "OK", IDOK } },                                        /* MB_OK */
         { { "OK", IDOK }, { "Cancel", IDCANCEL } },                /* MB_OKCANCEL */
-        { { "OK", IDOK } },                                        /* (abort/retry: not grown) */
+        { { "Abort", IDABORT }, { "Retry", IDRETRY },              /* 0211 */
+          { "Ignore", IDIGNORE } },                                /* MB_ABORTRETRYIGNORE */
         { { "Yes", IDYES }, { "No", IDNO }, { "Cancel", IDCANCEL } },
         { { "Yes", IDYES }, { "No", IDNO } },                      /* MB_YESNO */
+        { { "Retry", IDRETRY }, { "Cancel", IDCANCEL } },          /* MB_RETRYCANCEL */
     };
-    int set = (int)(type & 0xF) <= 4 ? (int)(type & 0xF) : 0;
+    int set = (int)(type & 0xF) <= 5 ? (int)(type & 0xF) : 0;
     int nBtn = 1;
     while (nBtn < 3 && BTNSETS[set][nBtn].label) nBtn++;
     int w = tr.right + 40;
@@ -5280,7 +5353,11 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
         char *text = rrstr(&r);
         if (r.bad) { free(text); break; }
         if (!DLG_CLASSES[cls] || !class_find(DLG_CLASSES[cls])) {
-            free(text);                          /* COMBOBOX etc: not grown yet */
+            /* COMBOBOX etc: not grown yet (0211) — a template control the
+             * veneer can't create is a MISSING control, not a quiet gap */
+            WIN32_UNSUPPORTED("dialog-template control class %u "
+                              "(control skipped)", (unsigned)cls);
+            free(text);
             continue;
         }
         HWND c = CreateWindowEx(0, DLG_CLASSES[cls], text ? text : "",
@@ -5290,8 +5367,10 @@ static HWND dlg_create(HINSTANCE inst, LPCWSTR tmpl, HWND owner,
         if (c && !firstTab && (style & WS_TABSTOP)) firstTab = c;
         free(text);
     }
-    if (proc) proc(dlg, WM_INITDIALOG, (WPARAM)firstTab, param);
-    if (firstTab) SetFocus(firstTab);
+    /* WM_INITDIALOG returning FALSE means "I set focus myself" (0211) */
+    BOOL wantFocus = TRUE;
+    if (proc) wantFocus = (BOOL)proc(dlg, WM_INITDIALOG, (WPARAM)firstTab, param);
+    if (firstTab && wantFocus) SetFocus(firstTab);
     InvalidateRect(dlg, NULL, TRUE);
     return dlg;
 }

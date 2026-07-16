@@ -805,7 +805,10 @@ typedef struct tagCREATESTRUCT {
 /* Button messages / notifications */
 #define BM_GETCHECK  0x00F0
 #define BM_SETCHECK  0x00F1
+#define BM_GETSTATE  0x00F2
 #define BM_SETSTATE  0x00F3
+#define BST_PUSHED   0x0004
+#define BST_FOCUS    0x0008
 #define BM_CLICK     0x00F5
 #define BST_UNCHECKED 0
 #define BST_CHECKED   1
