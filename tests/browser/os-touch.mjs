@@ -145,13 +145,13 @@ try {
   list = await shellList();
   const np = geomOf(list, 'Untitled - Notepad');
 
-  // ---- two-finger pan wheels the notepad EDIT (0210): 40 filler lines
-  // then 3 dense M lines LAST. The EDIT's WM_SETTEXT puts the caret at the
-  // END and scrolls it into view (user32 semantics since 0048), so the
-  // dense lines are visible right after settext; panning the fingers DOWN
-  // (natural scroll toward line 0) moves them out of view. ----
+  // ---- two-finger pan wheels the notepad EDIT (0210): 3 dense M lines
+  // FIRST, then 40 filler lines. WM_SETTEXT resets caret AND view to the
+  // START (real-EDIT contract since the 0222 audit), so the dense lines
+  // are visible right after settext; panning the fingers UP (natural
+  // scroll toward the tail) moves them out of view. ----
   await shellRun(
-    `wmctl settext EDIT:0 "$(printf '.\\n%.0s' $(seq 1 40); printf 'MMMMMMMMMMMMMMMM\\n%.0s' 1 2 3)"`,
+    `wmctl settext EDIT:0 "$(printf 'MMMMMMMMMMMMMMMM\\n%.0s' 1 2 3; printf '.\\n%.0s' $(seq 1 40))"`,
     'TEXT-SET');
   // Dark-glyph census over the EDIT body in ONE evaluate: x past the '.'
   // filler glyphs (they hug the left pad), y below the 20px user32 menu
@@ -175,22 +175,22 @@ try {
   let before = 0;
   while ((before = await darkCount()) === 0 && Date.now() - t0 < 20000)
     await pause(300);          // waiting on the settext repaint (pixel marker)
-  check('EDIT shows the dense tail lines after settext', before > 0, before);
-  // Two strokes, fingers moving DOWN, midpoint inside the EDIT the whole
-  // way (wheel routes by hover position): ~2 notches each = 12 lines up.
-  const panDown = async () => {
+  check('EDIT shows the dense head lines after settext (view at start)', before > 0, before);
+  // Two strokes, fingers moving UP, midpoint inside the EDIT the whole
+  // way (wheel routes by hover position): ~2 notches each = 12 lines down.
+  const panUp = async () => {
     const px = np.x + Math.floor(np.w / 2);
-    await tStart([pt(px - 30, np.y + 40, 1)]);
-    await tStart([pt(px - 30, np.y + 40, 1), pt(px + 30, np.y + 40, 2)]);
+    await tStart([pt(px - 30, np.y + np.h - 40, 1)]);
+    await tStart([pt(px - 30, np.y + np.h - 40, 1), pt(px + 30, np.y + np.h - 40, 2)]);
     for (let i = 1; i <= 10; i++) {
-      const yy = np.y + 40 + (np.h - 80) * i / 10;
+      const yy = np.y + np.h - 40 - (np.h - 80) * i / 10;
       await tMove([pt(px - 30, yy, 1), pt(px + 30, yy, 2)]);
       await pause(20);         // gesture timing: pan cadence
     }
     await tEnd();
   };
-  await panDown();
-  await panDown();
+  await panUp();
+  await panUp();
   const t1 = Date.now();
   let after = -1;
   while ((after = await darkCount()) !== 0 && Date.now() - t1 < 20000)
