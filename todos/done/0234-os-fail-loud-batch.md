@@ -1,6 +1,8 @@
 # 0234 — gucOS fail-loud batch: registry hive, wm.c die(), config-store writes, spawn logging
 
-- **Status**: open
+- **Status**: done (2026-07-17 — image v105; kernel 75/0, browser sweep 27/27;
+  CD2 launch-path DEDUP deferred as a separate item, only the logging landed;
+  dev log: logs/2026-07-17/os-fail-loud-0234.md)
 - **Design**: —
 
 ## Goal
