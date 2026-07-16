@@ -1,6 +1,6 @@
 # 0211 — win32/user32 compliance + fail-loud pass
 
-- **Status**: open
+- **Status**: done (2026-07-16) — six fix commits: gdi32 UTF-8 text (per-code-point glyphs + synthesized tofu), EDIT WS_HSCROLL bar + UTF-8 caret + EN_*SCROLL + Get/SetScrollInfo (SCROLLINFO/SIF_PAGE), menu popup cascade (paint Tools▸Width was unreachable — the P0), gdi32 ROP/blit/DIB-stride/DrawText-prefix/TMPF batch, comdlg32 defExt/PATHMUSTEXIST + shell32 quoting + winmm fallback + kernel32 *.*/GetModuleHandle/map-protect + strsafe flags, user32 MB button sets/WM_INITDIALOG focus/WS_GROUP radios/LBS_MULTIPLESEL/BM_GETSTATE/SetFocus(NULL) + comctl32 re-park; fail-loud substrate __win32_unsupported/WIN32_UNSUPPORTED applied estate-wide (zero reports from the working app suite); audit remainder in WIN32.md §0211; image v98, kernel suite 73/73 + full sweep green; log: logs/2026-07-16/win32-compliance.md
 - **Design**: todos/WIN32.md
 
 ## Goal

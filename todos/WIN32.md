@@ -431,6 +431,70 @@ the `_tcs*` names as real symbols (see include/tchar.h for why not
 `wcslen`). Resources (.rc — menus/dialogs/bitmaps/strings) are vendored
 but not compiled: a resource story is part of the 0059+ demand.
 
+## 0211 compliance audit — the fail-loud policy + remaining divergences
+
+**Policy (landed 2026-07-16):** the veneer never silently no-ops. An
+unimplemented API / window message / style flag reports ONCE per call
+site to stderr as `win32: unsupported <what>` (`__win32_unsupported` in
+kernel32.c, `WIN32_UNSUPPORTED` macro in win32_internal.h; the env var
+`WIN32_STRICT=1` escalates to abort). Grep the estate for
+`WIN32_UNSUPPORTED` to inventory what's stubbed. Applied at: unknown
+window classes + skipped dialog-template controls (CreateWindowEx /
+dlg_create), control-contract messages falling through to DefWindowProc
+(EM_/BM_/LB_/CB_/SBM_ ranges, deduped per message), PostMessage(NULL)
+thread messages, ShowWindow's minimize family, scroll APIs on windows
+without that bar, gdi32's refused blits/pen styles/font styles/missing
+glyphs (drawn as a synthesized tofu box, never '?'), comdlg32's
+too-small lpstrFile, kernel32's named GetModuleHandle/named mappings/
+failed unmap write-backs, menu cascades deeper than one level. The
+booted app suite (winmine/notepad/fileman/ctlpanel/paint/ctldemo) emits
+ZERO reports — a report firing is a real gap, not noise.
+
+**Verified-but-unfixed divergences (the 0211 audit's remainder, in
+rough priority order — full details in logs/2026-07-16/win32-compliance.md):**
+
+- **EDIT word wrap**: ES_MULTILINE without WS_HSCROLL should wrap long
+  lines (real notepad's "Wrap long lines" mode); ours clips them. The
+  0210/0211 EDIT is LF-native by design (POSIX) — wrap needs a
+  logical-line -> visual-row layout layer.
+- **LISTBOX WS_VSCROLL**: no scrollbar is drawn (wheel/keys still
+  scroll). calc's stats box declares it.
+- **WM_MOUSELEAVE on surface exit**: the kernel routes input per-window
+  and goes quiet when the pointer leaves — no SDL leave event exists, so
+  TME_LEAVE only fires via intra-surface movement (calc's hot button
+  stays lit until re-entry). Needs a kernel leave event. Related:
+  WM_MOUSEHOVER posts immediately, ignoring dwHoverTime.
+- **advapi32 hive**: per-process whole-file last-writer-wins — two live
+  win32 apps flush at exit and the second exiter reverts the first's
+  registry writes wholesale; writes since the last flush are lost on
+  SIGKILL. Fix shape: reload-merge dirty values at flush.
+- **No WM_SYSKEYDOWN/WM_SYSCOMMAND/activation protocol** (WM_ACTIVATE
+  family never sent); menus have no Alt/F10 activation and no
+  WM_MENUSELECT; TranslateMessage returns FALSE for non-char keys.
+- **MSG.pt / wheel lParam are client coords** (real: screen), wheel
+  routes to the hovered window (real: focus); GetWindowRect is
+  parent-client space (documented convention, watch the MENU_BAR_H
+  offset trap vs WM_CONTEXTMENU's surface coords).
+- **comdlg32**: lpstrFilter/nFilterIndex ignored (no filtering, no
+  write-back), nFileOffset is UTF-8 bytes not WCHARs, no
+  lpstrFileTitle/nFileExtension, CommDlgExtendedError() is 0 (error ==
+  cancel), OFN hooks/templates stay documented-deliberate stubs
+  (notepad's encoding combo never shows).
+- **gdi32**: wide-pen ellipse/roundrect outlines stay 1px; dashed pen
+  styles draw solid (reported); no SetTextAlign/SaveDC/regions/mono
+  bitmaps/SetStretchBltMode (undeclared — loud link failures);
+  DT_VCENTER/BOTTOM honored without DT_SINGLELINE; Rectangle
+  fill-then-outline overdraw differs under mixing ROP2s; GetDeviceCaps
+  unlisted indexes are 0.
+- **kernel32**: DOS `?`/`*.` wildcard metachar subtleties (only `*.*`
+  fixed); dotfiles aren't FILE_ATTRIBUTE_HIDDEN; DeleteFile ignores the
+  readonly bit; CreateFile opens directories; share modes unenforced;
+  EEXIST maps to ERROR_ALREADY_EXISTS even for CREATE_NEW
+  (ERROR_FILE_EXISTS undeclared); GetModuleFileNameW truncation returns
+  n-1 not nSize; w2u8's >1KB truncation leaves a garbage tail.
+- **crt16**: wsprintfA's %S/%ls read 4-byte wchar_t (the W side is
+  correct); wide ctype is ASCII-only.
+
 ## The toolkit is the porting unit — re-shell foreign apps, don't port the toolkit
 
 Why Win32 apps are cheap to bring here: a Win32 app draws its buttons/
