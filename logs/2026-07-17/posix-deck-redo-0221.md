@@ -39,3 +39,15 @@ image version was bumped, and the talk page-through count was updated for its
   built, before any browser assertion ran.
 - `node tests/run.js --diff` — 3/3 suites PASS: projects 26/26, kernel 75/75,
   browser sweep 27/27.
+
+## Visual-review correction
+
+The first post-commit contact sheet exposed a failure the automated gates did
+not: the default size-8 headings wrapped mid-word across much of the deck, and
+several long payoff lines overflowed too. The parser and page-through tests
+correctly proved that the deck rendered, but they did not prove that it was
+presentable. Headings now use a size-5 budget that fits the longest title;
+long rhetorical lines use size 4 or 5, and the one over-budget WASIX bullet was
+shortened. Image v109 carries the corrected seeded source. A fresh 22-slide
+render and manual contact-sheet review confirmed that headings, bullets, and
+the final payoff slides now stay inside their intended areas.

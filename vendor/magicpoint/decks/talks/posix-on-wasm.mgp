@@ -2,7 +2,7 @@
 %% What remains of an operating system when WebAssembly runs in a browser?
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "#301848", font "standard"
-%default 2 size 8, vgap 20, prefix " ", center
+%default 2 size 5, vgap 20, prefix " ", center
 %default 3 size 5, fore "gold", vgap 30
 %tab 1 size 4, vgap 35, prefix "  ", icon box "SpringGreen" 45, left
 %tab 2 size 3, vgap 35, prefix "      ", icon arc "gold" 45, left
@@ -60,10 +60,10 @@ It is a contract between programs and a system.
 
 "Isn't Emscripten already POSIX?"
 
-%size 6, fore "SpringGreen", center
+%size 5, fore "SpringGreen", center
 Yes: it helps one Unix-shaped program run.
 %pause
-%size 6, fore "orange", center
+%size 5, fore "orange", center
 No: it does not hand you a whole OS.
 %size 4, fore "gray70", center
 
@@ -76,12 +76,12 @@ The browser changes the question
 
 %size 5, center
 Not:
-%size 6, fore "orange"
+%size 5, fore "orange"
 "How do we copy Unix into WebAssembly?"
 %size 5, fore "white"
 
 Instead:
-%size 6, fore "SpringGreen"
+%size 5, fore "SpringGreen"
 "Which OS jobs still belong to us?"
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
@@ -244,7 +244,7 @@ Fidelity to another machine is the product there.
 This is a design space, not a race
 
 	Browsix explored browser processes and fork
-	WASIX extends the wasm system interface toward POSIX
+	WASIX pushes WASI toward POSIX
 	TinyEMU and v86 run full machines
 	WebVM and CheerpX use JIT translation
 %size 4, center, fore "gold"
@@ -255,13 +255,13 @@ Each project buys different semantics at a price.
 
 The gucOS rule
 
-%size 6, center, fore "white"
+%size 4, center, fore "white"
 Keep the contract when it helps programs.
 %pause
-%size 6, fore "orange"
+%size 4, fore "orange"
 Drop the mechanism when the substrate rejects it.
 %pause
-%size 6, fore "SpringGreen"
+%size 4, fore "SpringGreen"
 Build the missing system around the result.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
@@ -270,11 +270,11 @@ So what is the operating system?
 
 %size 5, center, fore "gray70"
 Not the first code to touch the hardware.
-%size 6, center, fore "white"
+%size 4, center, fore "white"
 
 It is the layer that turns available machinery
 into a coherent world for programs and people.
-%size 5, center, fore "DeepSkyBlue"
+%size 4, center, fore "DeepSkyBlue"
 
 In gucOS, the browser is the HAL - not the OS.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -286,7 +286,7 @@ The source is part of the talk
 	right-click it and choose Edit
 	change the argument, the examples, the ending
 	save; ctrl-r reloads it in the viewer
-%size 5, center, fore "SpringGreen"
+%size 4, center, fore "SpringGreen"
 
 An operating system is editable infrastructure.
 So is this presentation.
