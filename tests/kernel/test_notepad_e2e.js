@@ -180,14 +180,21 @@ const out = boot([
   'wmctl gettext EDIT:0',
   'echo ==cut',
   // ---- the built-in WS_VSCROLL scrollbar (todos/0210) ----
-  // Known geometry: at 400x300 the EDIT is surface y=20..280 minus the
-  // 20px status bar -> client 400x260; the bar is the right 16px inside
-  // the 2px well (surface x 382..398), arrows 16px tall at its ends.
+  // Geometry: at 400x300 the EDIT fills surface y=20 (under the menu)
+  // down to the status bar's top edge; the status-bar height is
+  // FONT-DERIVED (0229 — 28px for the 14px stock font), so SBY (the
+  // bar's surface top == the EDIT's surface bottom) is read from the
+  // live tree, never hardcoded. The vbar is the right 16px inside the
+  // 2px well (surface x 382..398), arrows 16px tall at its ends; the
+  // hbar strip is the bottom 16px of the EDIT interior (SBY-18..SBY-2),
+  // so the down arrow spans SBY-34..SBY-18 (center SBY-26).
   // Scroll position is probed by CLICKING the top text row (surface y=25
   // -> EDIT row 0 -> caret = topLine) and reading the status bar's
   // "Line N" — scrollbar/wheel scrolling itself must NOT move the caret.
   'wmctl resize $SID 400 300',
   'wmctl wait dim $SID 400x300 4000',
+  'SBH=$(wmctl tree | sed -n "s/.*class=msctls_statusbar32 .*rect=[0-9-]*,[0-9-]* [0-9]*x\\([0-9]*\\) vis.*/\\1/p" | head -1)',
+  'SBY=$((300-SBH))',
   'i=1; while [ $i -le 100 ]; do echo "line $i"; i=$((i+1)); done > /root/long.txt',
   'wmctl click "Open..."',
   'wmctl wait label Open 6000',
@@ -198,26 +205,27 @@ const out = boot([
   'echo ==sbshot',
   'base64 /root/sb.ppm',
   'echo ==cut',
-  // Scrollbar furniture coords (0211): the EDIT now shows its WS_HSCROLL
-  // bar too, so the vbar ends 16px higher — surface y: down arrow 246..262,
-  // hbar strip 262..278 (window 400x300, menu 20, status 20, EDIT h=260).
+  // Scrollbar furniture coords (0211): the EDIT shows its WS_HSCROLL bar
+  // too, so the vbar ends 16px higher — all y offsets hang off SBY (the
+  // tree-derived EDIT bottom) so a status-bar height change can't shear
+  // the clicks onto the wrong furniture.
   'wmctl click $SID 30 25',                       // probe: caret on top row
   'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
-  'wmctl click $SID 390 254',                     // down arrow: +1 line
-  'wmctl click $SID 390 254',                     // +1 more
+  'wmctl click $SID 390 $((SBY-26))',             // down arrow: +1 line
+  'wmctl click $SID 390 $((SBY-26))',             // +1 more
   'wmctl click $SID 30 25',
   'wmctl wait text msctls_statusbar32:0 "Line 3," 4000',
   'wmctl click $SID 390 30',                      // up arrow: -1 line
   'wmctl click $SID 30 25',
   'wmctl wait text msctls_statusbar32:0 "Line 2," 4000',
-  'wmctl click $SID 390 238',                     // channel below thumb: +page
+  'wmctl click $SID 390 $((SBY-42))',             // channel below thumb: +page
   'wmctl click $SID 30 25',
   'n=0; while [ $n -lt 40 ]; do wmctl gettext msctls_statusbar32:0 | grep -q "Line 2," || break; sleep 0.1; n=$((n+1)); done',
   'echo ==pgdn',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
   'PG="$(wmctl gettext msctls_statusbar32:0)"',
-  'wmctl drag $SID 390 80 390 244',               // thumb drag to the bottom
+  'wmctl drag $SID 390 80 390 $((SBY-36))',       // thumb drag to the bottom
   'wmctl click $SID 30 25',
   'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$PG" ] || break; sleep 0.1; n=$((n+1)); done',
   'echo ==thumbdrag',
@@ -305,13 +313,36 @@ function darkCount(P, x0, x1, y0, y1) {
   }
   return n;
 }
+function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
+  let m = y0 - 1;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = P.data + (y * P.w + x) * 3;
+    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+  }
+  return m;
+}
 const sp = parsePpm(section(out, 'sbarshot'));
 check('status-bar shot is a P6 frame', sp.magic === 'P6', sp.magic);
-// notepad's pane 3 ("UTF-8") is a fixed 120px cell, so the pane2|pane3 border
-// sits at width-120; the status bar is the surface's bottom 20px.
-const bx = sp.w - 120, by = sp.h - 20;
-const bleed = darkCount(sp, bx - 1, bx + 6, by + 2, by + 18);   // 6px past the border
-const utf8 = darkCount(sp, bx + 6, bx + 40, by + 2, by + 18);   // the "UTF-8" glyphs
+// The status-bar height is FONT-DERIVED (0229), so every pixel check anchors
+// on the live rect from the tree dump (never a hardcoded 20): the bar parks
+// at the client bottom == the surface bottom, so its surface top is h-H.
+const sbTreeRow = tree1.split('\n').find(l => /class=msctls_statusbar32/.test(l)) || '';
+const sbH = +((sbTreeRow.match(/rect=-?\d+,-?\d+ \d+x(\d+) /) || [])[1] || 0);
+const bx = sp.w - 120, by = sp.h - sbH;   // pane2|pane3 border sits at width-120
+/* 0229 red->green pins: the old SB_H 20 + y=3 Win95 arithmetic sat the 19px
+ * stock-font cell 3px low — baseline ON the well's border row, descenders
+ * clipped by ETO_CLIPPED. Font-derived height + DT_VCENTER fixes all three. */
+check('status-bar height derives from the stock font cell (0229)',
+  sbH >= 23, 'H=' + sbH + ' row=' + JSON.stringify(sbTreeRow.slice(0, 120)));
+check('no text ink on the well bottom border row (part 1)',
+  darkCount(sp, 2, 110, by + sbH - 2, by + sbH - 1) === 0,
+  'ink=' + darkCount(sp, 2, 110, by + sbH - 2, by + sbH - 1));
+const eolnMax = maxInkRow(sp, sp.w - 238, sp.w - 125, by + 1, by + sbH - 1);
+const utf8Max = maxInkRow(sp, sp.w - 118, sp.w - 80, by + 1, by + sbH - 1);
+check('descenders survive: EOLN "(" reaches >=3 rows below the UTF-8 caps',
+  eolnMax - utf8Max >= 3, 'eoln=' + eolnMax + ' utf8=' + utf8Max);
+const bleed = darkCount(sp, bx - 1, bx + 6, by + 2, by + sbH - 2);   // 6px past the border
+const utf8 = darkCount(sp, bx + 6, bx + 40, by + 2, by + sbH - 2);   // the "UTF-8" glyphs
 check('status-bar middle pane clips at its cell (no bleed into UTF-8 pane)',
   bleed <= 2, 'bleed=' + bleed);
 check('status-bar UTF-8 pane still renders its own text', utf8 >= 10, 'utf8ink=' + utf8);
@@ -369,8 +400,11 @@ const sbp = parsePpm(section(out, 'sbshot'));
 check('EDIT scrollbar shot is a P6 frame', sbp.magic === 'P6', sbp.magic);
 // The channel paints COLOR_SCROLLBAR gray (192,192,192) where an unscrolled
 // pre-0210 EDIT was white text area: sample the bar column below the thumb.
+// All rows hang off the tree-derived EDIT bottom (EB = surface bottom minus
+// the font-derived status bar, 0229) — never a hardcoded 20px bar.
+const EB = sbp.h - sbH;                       // EDIT surface bottom
 let sbGray = 0;
-for (let y = 120; y < 250; y++) {
+for (let y = 120; y < EB - 44; y++) {         // channel, above the down arrow
   for (let x = 386; x < 396; x++) {
     const i = sbp.data + (y * sbp.w + x) * 3;
     if (Math.abs(sbp.buf[i] - 192) < 12 && Math.abs(sbp.buf[i + 1] - 192) < 12 &&
@@ -378,11 +412,11 @@ for (let y = 120; y < 250; y++) {
   }
 }
 check('WS_VSCROLL draws the right-edge scrollbar channel', sbGray > 400,
-  'gray=' + sbGray + ' of 1300');
+  'gray=' + sbGray + ' of ' + (EB - 44 - 120) * 10);
 // The WS_HSCROLL bar (0211): a gray strip along the EDIT's bottom edge
-// (surface y 262..278) where pre-0211 was white text area.
+// (the interior's bottom 16px, EB-18..EB-2) where pre-0211 was white text.
 let hbGray = 0;
-for (let y = 264; y < 276; y++) {
+for (let y = EB - 16; y < EB - 4; y++) {
   for (let x = 60; x < 320; x++) {
     const i = sbp.data + (y * sbp.w + x) * 3;
     if (Math.abs(sbp.buf[i] - 192) < 12 && Math.abs(sbp.buf[i + 1] - 192) < 12 &&

@@ -153,11 +153,13 @@ try {
   await shellRun(
     `wmctl settext EDIT:0 "$(printf 'MMMMMMMMMMMMMMMM\\n%.0s' 1 2 3; printf '.\\n%.0s' $(seq 1 40))"`,
     'TEXT-SET');
-  // Dark-glyph census over the EDIT body in ONE evaluate: x past the '.'
-  // filler glyphs (they hug the left pad), y below the 20px user32 menu
-  // bar and above the WS_HSCROLL bar strip at the EDIT's bottom edge
-  // (notepad's no-wrap styles, 0211) — only the M blocks can put dark
-  // pixels there.
+  // Dark-glyph census over the EDIT's TOP text rows in ONE evaluate: x past
+  // the '.' filler glyphs (they hug the left pad), y below the 20px user32
+  // menu bar and bounded to the M block's own three 19px rows — only the M
+  // blocks can put dark pixels there, and the band stays clear of the
+  // WS_HSCROLL strip and the status bar however tall the font-derived bar
+  // is (0229: the old np.h-26 bottom cropped the strip's dark edge only
+  // under a 20px bar and sampled it once the bar grew).
   const darkCount = () => page.evaluate(([a, b, c, d]) => {
     const cv = document.getElementById('screen');
     const r = cv.getBoundingClientRect();
@@ -170,7 +172,7 @@ try {
     for (let i = 0; i < img.length; i += 4)
       if (img[i] < 100 && img[i + 1] < 100 && img[i + 2] < 100) n++;
     return n;
-  }, [np.x + 40, np.y + 24, np.x + 130, np.y + np.h - 26]);
+  }, [np.x + 40, np.y + 24, np.x + 130, np.y + 24 + 3 * 19 + 5]);
   const t0 = Date.now();
   let before = 0;
   while ((before = await darkCount()) === 0 && Date.now() - t0 < 20000)
