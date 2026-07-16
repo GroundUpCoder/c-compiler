@@ -1,6 +1,14 @@
 # 0220 — static-init address constant: member-array decay + offset (G15)
 
-- **Status**: open
+- **Status**: done (2026-07-16) — two commits (conformance repro
+  test-first, then the shared-const-eval fix: EDecay falls back to
+  constEvalAddr, and raw array-typed EMember/EArrow/ESubscript lvalues —
+  init-list elements carry no EDecay wrapper — decay the same way, so
+  `s.b + 2` and `&s.b[2]` fold through the one addr path); fast gate
+  green (739/0, 8 xfail unchanged), SameBoy interlock BYTE-IDENTICAL
+  wasm (237095 B) + checksums equal to clang, no bake/kernel/sweep
+  needed (front-end const-eval only). Dev log:
+  `logs/2026-07-16/member-array-decay-0220.md`
 - **Design**: CLAUDE.md "Conformance tests"; found in the 2026-07-16
   read-only bug hunt (finding G15, confirmed against clang)
 
