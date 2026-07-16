@@ -16357,20 +16357,22 @@ function constEvalExpr(expr, policy) {
         // addr + int, addr - int (pointer arithmetic: scale by pointee size)
         if (l.kind === "addr" && r.kind === "int" && (expr.op === "ADD" || expr.op === "SUB")) {
           const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
-          const elemSize = elemType ? (elemType.size || 1) : 1;  // void*: gcc ext, 1
+          const elemSize = elemType ? elemType.sizeofResult() : 1;  // void*: gcc ext, 1; empty struct: 0
           const offset = Number(r.intVal) * elemSize;
           return { kind: "addr", addrVal: expr.op === "ADD" ? l.addrVal + offset : l.addrVal - offset };
         }
         // int + addr
         if (r.kind === "addr" && l.kind === "int" && expr.op === "ADD") {
           const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
-          const elemSize = elemType ? (elemType.size || 1) : 1;  // void*: gcc ext, 1
+          const elemSize = elemType ? elemType.sizeofResult() : 1;  // void*: gcc ext, 1; empty struct: 0
           return { kind: "addr", addrVal: r.addrVal + Number(l.intVal) * elemSize };
         }
         // addr - addr (pointer difference)
         if (l.kind === "addr" && r.kind === "addr" && expr.op === "SUB") {
           const elemType = AST.pointerArithElemType(expr.left.type, expr.right.type);
-          const elemSize = elemType ? (elemType.size || 1) : 1;  // void*: gcc ext, 1
+          const elemSize = elemType ? elemType.sizeofResult() : 1;  // void*: gcc ext, 1
+          // Stride 0 (empty-struct pointee): the difference is 0 (gcc/clang).
+          if (elemSize === 0) return { kind: "int", intVal: 0n };
           return { kind: "int", intVal: BigInt(Math.trunc((l.addrVal - r.addrVal) / elemSize)) };
         }
         // addr comparisons
@@ -18039,9 +18041,12 @@ class CodeGenerator {
   // scale by 1 — the gcc/clang extension (sizeof(void)==1). Without the
   // clamp, void* + n multiplied by 0 (silent no-op) and void* difference
   // divided by 0 (trap) — see tests/unit/conformance/void_ptr_arith.
+  // A COMPLETE zero-size pointee (GNU empty struct) is NOT clamped: gcc
+  // and clang keep the genuine stride 0 there — `p + n` stays put and a
+  // pointer difference is 0 (todos/0227 G23, empty_struct_ptr_arith).
+  // That makes the stride exactly the sizeof-operator result.
   ptrArithElemSize(elemType) {
-    const size = this.sizeOf(elemType);
-    return size > 0 ? size : 1;
+    return elemType.sizeofResult();
   }
   // Multiply the i32 value already on top of the stack by sizeof(elemType).
   emitScaleByElemSize(elemType) {
@@ -18051,10 +18056,15 @@ class CodeGenerator {
       this.body.aop(WT_I32, ALU.OP_MUL);
     }
   }
-  // Divide the i32 value already on top of the stack by sizeof(elemType) (signed).
+  // Divide the i32 value already on top of the stack by sizeof(elemType)
+  // (signed). Stride 0 (empty-struct pointee) can't divide — the result
+  // is 0 regardless of the byte difference, so multiply by 0 instead.
   emitDivByElemSize(elemType) {
     const elemSize = this.ptrArithElemSize(elemType);
-    if (elemSize !== 1) {
+    if (elemSize === 0) {
+      this.body.i32Const(0);
+      this.body.aop(WT_I32, ALU.OP_MUL);
+    } else if (elemSize !== 1) {
       this.body.i32Const(elemSize);
       this.body.aop(WT_I32, ALU.OP_DIV, true);
     }
