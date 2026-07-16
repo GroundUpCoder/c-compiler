@@ -92,7 +92,12 @@ const TUTORIAL = [
   { n: '09-builds',      back: [25, 25, 112], steps: 11 },  // MidnightBlue (+4 pauses)
   { n: '10-mastery',     back: [16, 32, 64],  steps: 9 },   // #102040 hex
 ].map((d) => ({ ...d, sub: 'tutorial/' }));
-const ALL = DECKS.concat(TUTORIAL);
+/* ---- the 0221 talk decks (Presentations/POSIX on WebAssembly): same
+ * launch/page-through/alive gate. */
+const TALKS = [
+  { n: 'posix-on-wasm', back: [48, 24, 72], steps: 13, sub: 'talks/' },  // #301848
+];
+const ALL = DECKS.concat(TUTORIAL, TALKS);
 for (const d of ALL) {
   script.push(
     `mgp /usr/share/mgp/${d.sub || ''}${d.n}.mgp &`,

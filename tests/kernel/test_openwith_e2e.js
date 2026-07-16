@@ -206,6 +206,20 @@ const out = boot([
   'MSID=$(wmctl list | grep MagicPoint | sed "s/[^0-9].*//")',
   'wmctl key $MSID 0 113',
   'wmctl wait nowin MagicPoint 8000',
+  // the 0221 talk deck opens from its own subfolder too
+  'wmctl settext EDIT:0 "/root/Desktop/Presentations/POSIX on WebAssembly"',
+  'wmctl click Go',
+  'wmctl wait text LISTBOX:0 posix-on-wasm.mgp 8000',
+  sel(0),
+  'wmctl click Open',
+  'wmctl wait win MagicPoint 15000 && echo MGP-TALK-OK',
+  'MSID=$(wmctl list | grep MagicPoint | sed "s/[^0-9].*//")',
+  'wmctl key $MSID 0 113',
+  'wmctl wait nowin MagicPoint 8000',
+  // back to the tutorial folder so the Edit leg below rides row 0 = deck 01
+  'wmctl settext EDIT:0 "/root/Desktop/Presentations/MagicPoint Tutorial"',
+  'wmctl click Go',
+  'wmctl wait text LISTBOX:0 01-welcome.mgp 8000',
   // the fileman row menu's Edit: the deck TEXT in notepad, not the viewer
   'wmctl click $SID 100 30 3',                   // right-click row 0
   'wmctl wait label Edit 8000',                  // row menu up (Edit row, 0202)
@@ -271,6 +285,8 @@ check('Presentations lists the tutorial subfolder (todos/0221 nesting)',
   out.includes('SUBDIRS-OK'));
 check('fileman Open on a .mgp raises the mgp viewer',
   out.includes('MGP-FM-OK'));
+check('the 0221 talk deck opens from its subfolder (fileman Open)',
+  out.includes('MGP-TALK-OK'));
 const editmenu = section(out, 'editmenu');
 const editItem = editmenu.split('\n').find(l => l.includes("text='Edit'")) || '';
 check('the fileman row menu has an enabled Edit item',

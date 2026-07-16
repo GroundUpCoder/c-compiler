@@ -19,6 +19,7 @@
       "/usr/share/menu/Demos",
       "/usr/share/menu/Games",
       "/usr/share/mgp",
+      "/usr/share/mgp/talks",
       "/usr/share/mgp/tutorial",
       "/usr/share/sent",
       "/usr/share/sounds"
@@ -145,6 +146,9 @@
       },
       "/usr/share/mgp/tutorial/10-mastery.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp"
+      },
+      "/usr/share/mgp/talks/posix-on-wasm.mgp": {
+        "bin": "vendor/magicpoint/decks/talks/posix-on-wasm.mgp"
       },
       "/usr/share/sent/demo.sent": {
         "bin": "vendor/sent/demo.sent"
@@ -628,6 +632,9 @@
       },
       "/root/Desktop/Presentations/MagicPoint Tutorial/10-mastery.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp"
+      },
+      "/root/Desktop/Presentations/POSIX on WebAssembly/posix-on-wasm.mgp": {
+        "bin": "vendor/magicpoint/decks/talks/posix-on-wasm.mgp"
       },
       "/root/Desktop/pokemon": {
         "content": "#!/bin/sh\nsameboy $HOME/roms/PokemonBlue.gb\n",
