@@ -1,6 +1,11 @@
 # 0217 — ICE cluster: compound-literal lvalues, non-lvalue diagnostics, irreducible catch-all
 
-- **Status**: open
+- **Status**: done (2026-07-16) — G9+G10 in one commit (emitLValue
+  ECompoundLiteral case + sema isLvalueExpr checks), G11 in a second
+  (catch_all_ref/throw_ref dispatcher — first exnref use); eight tests added;
+  fast gate green, SameBoy checksum interlock byte-identical (sum OK), no
+  bake/kernel/sweep needed (compiler.js + tests only). Dev log:
+  `logs/2026-07-16/ice-cluster-0217.md`
 - **Design**: CLAUDE.md "Conformance tests"; found in the 2026-07-16 read-only
   bug hunt (findings G9/G10/G11, all confirmed raw internal-compiler-error
   throws — two on valid C11, one on invalid code that must diagnose)
