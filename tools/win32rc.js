@@ -230,12 +230,17 @@ function tokenize(lines) {
           if (s[j] === '"') break;
           if (s[j] === '\\') {
             const e = s[j + 1];
-            v += e === 't' ? '\t' : e === 'n' ? '\n' : e === '\\' ? '\\' : e === '"' ? '"' : e;
+            v += e === 't' ? '\t' : e === 'n' ? '\n' : e === 'r' ? '\r'
+               : e === '\\' ? '\\' : e === '"' ? '"' : e;
             j += 2;
             continue;
           }
           v += s[j++];
         }
+        // gucOS text is LF-native (todos/0210): the res pack is a text-in
+        // path, so \r\n / lone \r normalize to \n at compile time (\r used
+        // to leak a literal 'r' into the string).
+        v = v.replace(/\r\n?/g, '\n');
         toks.push({ t: 'str', v, ...loc(L) });
         i = j + 1;
       } else if (/[A-Za-z_]/.test(c)) {
