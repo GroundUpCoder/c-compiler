@@ -492,7 +492,10 @@ function lex(filename, source, lineOffsets) {
       advance();
       advanceLine();
       bol = true;
-      space = false;
+      // A newline is whitespace: the next token must carry hasSpace so `#`
+      // stringization renders one space between tokens split across lines
+      // (C11 6.10.3.2p2).
+      space = true;
       continue;
     }
     if (isSpaceB(bytes[i])) {
@@ -501,10 +504,14 @@ function lex(filename, source, lineOffsets) {
       space = true;
       continue;
     }
+    // A comment counts as whitespace (C11 5.1.1.2p1 phase 3): the token
+    // after it must carry hasSpace — `#x` stringizes `a/**/b` as "a b",
+    // and `#define f/**/(x)` is an object-like macro.
     if (peek() === SLASH && peek(1) === SLASH) {
       while (i < n && bytes[i] !== NL) {
         advance();
       }
+      space = true;
       continue;
     }
     if (peek() === SLASH && peek(1) === STAR) {
@@ -520,6 +527,7 @@ function lex(filename, source, lineOffsets) {
           new LexError("Unterminated comment", filename, line)
         );
       }
+      space = true;
       continue;
     }
 
