@@ -1616,7 +1616,14 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   const merged = left.text + right.text;
                   const mergedSym = intern(merged);
                   const lexed = lex(left.filename, mergedSym);
-                  if (lexed.tokens.length > 0 && lexed.tokens[0].kind !== TokenKind.EOS) {
+                  // C11 6.10.3.3p3: the concatenation must form ONE valid
+                  // preprocessing token. It used to take the FIRST lexed
+                  // token and silently DROP the rest (`x ## ++` became
+                  // plain `x`) — diagnose instead (todos/0227 G22).
+                  const isOneToken = lexed.errors.length === 0 &&
+                    lexed.tokens.length > 0 && lexed.tokens[0].kind !== TokenKind.EOS &&
+                    (lexed.tokens.length < 2 || lexed.tokens[1].kind === TokenKind.EOS);
+                  if (isOneToken) {
                     const newTok = cloneToken(lexed.tokens[0]);
                     newTok.filename = left.filename;
                     newTok.line = left.line;
@@ -1628,7 +1635,11 @@ function preprocess(filename, initialTokens, ppRegistry) {
                     substituted[si - 1] = newTok;
                     substituted.splice(si, 2);
                   } else {
-                    si++;
+                    result.errors.push(new LexError(
+                      `pasting formed '${merged}', an invalid preprocessing token`,
+                      left.filename, left.line));
+                    // Recover: drop the '##' and keep both operands.
+                    substituted.splice(si, 1);
                   }
                 }
               } else {
@@ -2065,6 +2076,35 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
               while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE)
                 m.replacement.push(state.consume());
+              // C11 6.10.3.2p1 (todos/0227 G22): in a FUNCTION-LIKE macro
+              // every '#' must be followed by a parameter (or, C23,
+              // __VA_OPT__). A trailing/misapplied '#' used to be accepted
+              // and expand as a literal '#'. Object-like macros keep '#'
+              // as an ordinary token (`#define HASH #`).
+              if (m.isFunctionLike) {
+                const stringizable = (tok) => tok && tok.kind === TokenKind.IDENT &&
+                  (m.params.includes(tok.text) ||
+                   (m.isVariadic && (tok.text === "__VA_ARGS__" ||
+                                     tok.text === "__VA_OPT__" ||
+                                     (m.variadicName && tok.text === m.variadicName))));
+                for (let ri = 0; ri < m.replacement.length; ri++) {
+                  if (m.replacement[ri].atPunct(Punct.HASH) && !stringizable(m.replacement[ri + 1])) {
+                    result.errors.push(new LexError(
+                      "'#' is not followed by a macro parameter",
+                      state.currentFile, dir.line));
+                    break;
+                  }
+                }
+              }
+              // C11 6.10.3.3p1: '##' shall not be the first or last token
+              // of any replacement list.
+              if (m.replacement.length > 0 &&
+                  (m.replacement[0].atPunct(Punct.HASH_HASH) ||
+                   m.replacement[m.replacement.length - 1].atPunct(Punct.HASH_HASH))) {
+                result.errors.push(new LexError(
+                  "'##' cannot appear at either end of a macro expansion",
+                  state.currentFile, dir.line));
+              }
               macros.set(nameTok.text, m);
             }
           } else if (dir.atIdent("undef")) {
@@ -2170,8 +2210,19 @@ function preprocess(filename, initialTokens, ppRegistry) {
             while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE)
               lineTokens.push(state.consume());
             applyPragma(lineTokens, state.currentFile);
+          } else if (dir.kind === TokenKind.IDENT) {
+            // C11 6.10p1: a '#' line whose first token names no directive
+            // is a non-directive — a constraint violation clang/gcc
+            // diagnose; it used to be silently ignored (todos/0227 G22).
+            // Non-IDENT forms stay accepted: `# 1 "file.c"` GNU line
+            // markers (PP_NUMBER) appear in preprocessed input, and the
+            // null directive (`#` alone) was consumed above. Only fires
+            // in ACTIVE groups — unknown directives in skipped
+            // conditional blocks are ignored per 6.10p6.
+            result.errors.push(new LexError(
+              `invalid preprocessing directive '#${dir.text}'`,
+              state.currentFile, dir.line));
           }
-          // else: unknown directive (silently ignored, per C standard)
         }
 
         // Skip until end of line to finish processing the directive
