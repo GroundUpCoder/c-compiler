@@ -1,6 +1,6 @@
 # 0233 — host.js fs fail-loud: --block-fs read clobber, O_APPEND fstat swallow, pipe spurious EOF
 
-- **Status**: open
+- **Status**: done (2026-07-17) — 9999481 (CD1) + a80949d (CD4) + ae775da (CD5); three regression tests in the host suite; unit/host/blockfs/ast green, xfail preserved
 - **Design**: —
 
 ## Goal
