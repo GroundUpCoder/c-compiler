@@ -51,6 +51,30 @@
   .vttab.active {
     color: #e0e0f0; background: #22223a; border-color: #4a4a77;
   }
+  /* VT1 font-size steps (todos/0212): right-aligned in the tab bar, only
+     meaningful while the tty is visible. */
+  #fontctl { display: flex; gap: 2px; margin-left: auto; }
+  body[data-vt="2"] #fontctl { display: none; }
+  .fontbtn {
+    font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
+    cursor: pointer; user-select: none; -webkit-user-select: none;
+    padding: 5px 12px; background: #16162a; border: 1px solid #333355;
+    border-bottom: none; border-radius: 6px 6px 0 0;
+    position: relative; top: 1px;
+  }
+  .fontbtn:hover { color: #c0c0d8; }
+  /* Mobile key strip (todos/0212): tty keys a soft keyboard lacks. Shown
+     only on VT1 and only on a touch/narrow UI (data-touchui, set by JS). */
+  #keystrip { display: none; gap: 4px; padding: 4px 8px 6px; flex-wrap: wrap; }
+  body[data-vt="1"][data-touchui] #keystrip { display: flex; }
+  .stripkey {
+    font: 13px 'Menlo', 'Consolas', monospace; color: #c0c0d8;
+    background: #16162a; border: 1px solid #333355; border-radius: 5px;
+    padding: 7px 0; width: 44px; text-align: center; cursor: pointer;
+    user-select: none; -webkit-user-select: none;
+  }
+  .stripkey:hover { color: #e0e0f0; border-color: #4a4a77; }
+  .stripkey.armed { background: #4a4a77; color: #ffffff; }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. Natural-size
      canvas (no CSS scaling) keeps event offsets == screen coordinates.
@@ -91,9 +115,13 @@
   <div id="vtbar">
     <span id="vt1tab" class="vttab active" title="the tty, VT1 (Ctrl+Alt+F1)">Terminal</span>
     <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (todos/0032); Ctrl+Esc opens the Start menu (todos/0078)">Desktop</span>
+    <span id="fontctl" title="terminal font size">
+      <span id="fontminus" class="fontbtn">A&minus;</span><span id="fontplus" class="fontbtn">A+</span>
+    </span>
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
   <div id="terminal"></div>
+  <div id="keystrip"></div>
   <div id="guard">
     <div id="guardMsg">gucOS is already running in another tab.<br>
          Close that tab, then retry — the lock frees when it closes.</div>
@@ -121,12 +149,25 @@ if (typeof SharedArrayBuffer === 'undefined') {
   throw new Error('no SAB');
 }
 
+// VT1 font-size steps (todos/0212): an explicit choice persists in
+// localStorage; with nothing stored, a narrow (phone-shaped) viewport
+// defaults one step larger than the desktop's 14.
+var VT1_FONTS = [12, 14, 18, 22, 26];
+var vt1FontIdx = (function () {
+  var saved = 0;
+  try { saved = parseInt(localStorage.getItem('gucos.vt1.fontSize'), 10) || 0; } catch (e) {}
+  var px = saved || (Math.min(window.innerWidth, window.innerHeight) <= 700 ? 18 : 14);
+  var i = VT1_FONTS.indexOf(px);
+  return i >= 0 ? i : 1;
+})();
+window.__osVt1Font = VT1_FONTS[vt1FontIdx];   // agent probe
+
 var term = new Terminal({
   cursorBlink: true,
   // Program stdout arrives raw (the kernel stays out of the output data
   // plane — no OPOST pass), so let xterm treat bare \n as \r\n.
   convertEol: true,
-  fontSize: 14,
+  fontSize: VT1_FONTS[vt1FontIdx],
   fontFamily: "'Menlo', 'Consolas', 'Courier New', monospace",
   theme: { background: '#0d0d1a', foreground: '#c0c0d8', cursor: '#c0c0d8' },
 });
@@ -137,12 +178,86 @@ fitAddon.fit();
 
 var kernel = new Worker('kernel-worker.js');
 
-term.onData(function (data) { kernel.postMessage({ type: 'input', data: data }); });
+// ALL tty input funnels through vt1Input so the key strip's sticky Ctrl
+// (todos/0212, below) composes with the soft keyboard too.
+term.onData(function (data) { vt1Input(data); });
 term.onResize(function (sz) { kernel.postMessage({ type: 'resize', cols: sz.cols, rows: sz.rows }); });
 window.addEventListener('resize', function () {
+  touchUiSync();               // narrow-viewport key strip (todos/0212)
   if (vt === 1) fitAddon.fit();
   else scheduleScreenSync();   // dynamic screen resolution (todos/0023)
 });
+window.addEventListener('orientationchange', function () {
+  // The pane gets its post-rotation size a beat after the event.
+  setTimeout(function () {
+    touchUiSync();
+    if (vt === 1) fitAddon.fit();
+    else syncScreenSize();
+  }, 120);
+});
+
+// VT1 mobile affordances (todos/0212): the tab bar's A−/A+ steps
+// term.options.fontSize through VT1_FONTS (live refit; the choice
+// persists), and #keystrip offers the keys a soft keyboard lacks. Ctrl is
+// a STICKY modifier: it transforms the next single-char input — whether
+// from the strip or the keyboard — into its control character. The strip
+// only shows on VT1 of a touch/narrow UI (body[data-touchui], kept fresh
+// by touchUiSync on resize/orientation). Everything here is VT1/page-side
+// only — the desktop path is untouched.
+function vt1SetFont(idx) {
+  if (idx < 0 || idx >= VT1_FONTS.length || idx === vt1FontIdx) return;
+  vt1FontIdx = idx;
+  var px = VT1_FONTS[idx];
+  term.options.fontSize = px;
+  window.__osVt1Font = px;     // agent probe
+  try { localStorage.setItem('gucos.vt1.fontSize', String(px)); } catch (e) {}
+  if (vt === 1) { fitAddon.fit(); term.focus(); }
+}
+document.getElementById('fontminus').addEventListener('click', function () { vt1SetFont(vt1FontIdx - 1); });
+document.getElementById('fontplus').addEventListener('click', function () { vt1SetFont(vt1FontIdx + 1); });
+
+var vt1CtrlArmed = false;
+var vt1CtrlEl = null;
+function vt1CtrlSet(on) {
+  vt1CtrlArmed = on;
+  window.__osVt1Ctrl = on;     // agent probe
+  if (vt1CtrlEl) vt1CtrlEl.className = 'stripkey' + (on ? ' armed' : '');
+}
+function vt1Input(data) {
+  if (vt1CtrlArmed && data.length === 1) {
+    var c = data.toUpperCase().charCodeAt(0);
+    if (c >= 64 && c < 128) data = String.fromCharCode(c & 0x1f);
+    vt1CtrlSet(false);
+  }
+  kernel.postMessage({ type: 'input', data: data });
+}
+[
+  ['Esc', '\x1b'], ['Tab', '\t'], ['Ctrl', null],
+  ['←', '\x1b[D'], ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['→', '\x1b[C'],
+  ['|', '|'], ['~', '~'], ['/', '/'], ['-', '-'],
+].forEach(function (k) {
+  var b = document.createElement('span');
+  b.className = 'stripkey';
+  b.textContent = k[0];
+  b.setAttribute('data-key', k[0]);
+  if (!k[1]) vt1CtrlEl = b;
+  // pointerdown, not click: preventDefault keeps xterm's hidden textarea
+  // focused, so the soft keyboard never flickers away.
+  b.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    if (!k[1]) { vt1CtrlSet(!vt1CtrlArmed); return; }
+    vt1Input(k[1]);
+    term.focus();
+  });
+  document.getElementById('keystrip').appendChild(b);
+});
+function touchUiSync() {
+  var on = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 ||
+           window.innerWidth <= 768;
+  if (on) document.body.setAttribute('data-touchui', '1');
+  else document.body.removeAttribute('data-touchui');
+}
+touchUiSync();
 
 // The desktop (todos/WM.md): hand the canvas to the kernel worker (the
 // compositor runs THERE — this page stays a dumb bridge) and forward raw
