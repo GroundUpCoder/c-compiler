@@ -25,7 +25,12 @@ let failures = 0;
 function mk(build) { const b = new WastBuilder(); build(b); return b.nodes; }
 
 function runOn(nodes) {
-  const wmod = { funcDefs: [{ wast: nodes }] };
+  // Export the lone function: since todos/0214 runPasses tree-shakes,
+  // and an unrooted function would simply be deleted.
+  const wmod = {
+    funcDefs: [{ wast: nodes }],
+    exports: [{ name: 'f', kind: 0x00, index: 0 }],
+  };
   WAST.runPasses(wmod);
   return { nodes: wmod.funcDefs[0].wast, folds: wmod.passStats.offsetFolds };
 }

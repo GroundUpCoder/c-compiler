@@ -5,41 +5,33 @@ Sections:
 
       Type start=0x0000000a end=0x00000020 (size=0x00000016) count: 3
     Import start=0x00000022 end=0x00000023 (size=0x00000001) count: 0
-  Function start=0x00000025 end=0x00000029 (size=0x00000004) count: 3
-     Table start=0x0000002b end=0x0000002f (size=0x00000004) count: 1
-    Memory start=0x00000031 end=0x00000034 (size=0x00000003) count: 1
-    Global start=0x00000036 end=0x00000045 (size=0x0000000f) count: 2
-    Export start=0x00000047 end=0x0000008b (size=0x00000044) count: 5
-   Element start=0x0000008d end=0x00000096 (size=0x00000009) count: 1
-      Code start=0x00000098 end=0x000000be (size=0x00000026) count: 3
-      Data start=0x000000c0 end=0x000000c1 (size=0x00000001) count: 0
+  Function start=0x00000025 end=0x00000028 (size=0x00000003) count: 2
+     Table start=0x0000002a end=0x0000002e (size=0x00000004) count: 1
+    Memory start=0x00000030 end=0x00000033 (size=0x00000003) count: 1
+    Global start=0x00000035 end=0x00000044 (size=0x0000000f) count: 2
+    Export start=0x00000046 end=0x0000008a (size=0x00000044) count: 5
+   Element start=0x0000008c end=0x00000094 (size=0x00000008) count: 1
+      Code start=0x00000096 end=0x000000b2 (size=0x0000001c) count: 2
+      Data start=0x000000b4 end=0x000000b5 (size=0x00000001) count: 0
 
 Code Disassembly:
 
-00009a func[0] (i32, i32) -> i32:
- 00009b:  local.get 0
- 00009d:  local.get 1
- 00009f:  i32.add
- 0000a0:  return
- 0000a1:  unreachable
- 0000a2:  end
+000098 func[0] <main> () -> i32:
+ 000099:  i32.const 3
+ 00009b:  return
+ 00009c:  unreachable
+ 00009d:  end
 
-0000a4 func[1] <main> () -> i32:
- 0000a5:  i32.const 3
- 0000a7:  return
- 0000a8:  unreachable
- 0000a9:  end
-
-0000ab func[2] <alloca> (i32) -> i32:
- 0000ac:  global.get 0
- 0000ae:  local.get 0
- 0000b0:  i32.const 15
- 0000b2:  i32.add
- 0000b3:  i32.const -16
- 0000b5:  i32.and
- 0000b6:  i32.sub
- 0000b7:  global.set 0
- 0000b9:  global.get 0
- 0000bb:  return
- 0000bc:  unreachable
- 0000bd:  end
+00009f func[1] <alloca> (i32) -> i32:
+ 0000a0:  global.get 0
+ 0000a2:  local.get 0
+ 0000a4:  i32.const 15
+ 0000a6:  i32.add
+ 0000a7:  i32.const -16
+ 0000a9:  i32.and
+ 0000aa:  i32.sub
+ 0000ab:  global.set 0
+ 0000ad:  global.get 0
+ 0000af:  return
+ 0000b0:  unreachable
+ 0000b1:  end

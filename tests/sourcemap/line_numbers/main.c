@@ -1,10 +1,10 @@
-int add(int a, int b) { return a + b; }
+__attribute__((noinline)) int add(int a, int b) { return a + b; }
 
-int sub(int a, int b) {
+__attribute__((noinline)) int sub(int a, int b) {
     return a - b;
 }
 
-int use_stack(int x) {
+__attribute__((noinline)) int use_stack(int x) {
     int arr[4] = {1, 2, 3, 4};
     return arr[x] + add(x, 1);
 }

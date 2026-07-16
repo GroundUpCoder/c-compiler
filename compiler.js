@@ -3601,6 +3601,9 @@ class Expr {
       this.parameters = params || [];
       this.storageClass = storageClass || Types.StorageClass.NONE;
       this.isInline = isInline || false;
+      // Inline-policy attributes ({noinline, alwaysInline} or null),
+      // threaded parser → codegen fnMeta → WAST inliner (todos/0214).
+      this.fnAttrs = null;
       this.body = body || null;
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
       this.definition = null;
@@ -5628,7 +5631,7 @@ const _inliningStack = new Set();
 // to the expansion budget, cumulative across the per-TU passes and the
 // post-link round. `optimizeLinked` snapshots its own share into
 // `stats.postLink`.
-const stats = { inlined: 0, budgetRefused: 0, postLink: null };
+const stats = { inlined: 0, budgetRefused: 0, noinlineRefused: 0, postLink: null };
 
 // Bounded expansion (todos/0188). Substitution duplicates each argument
 // once per parameter use, and foldExpr re-folds substituted bodies, so a
@@ -5689,6 +5692,10 @@ function tryInline(callExpr) {
   const def = decl.definition || decl;
   if (_inliningStack.has(def)) return null;
   if (!def.body) return null;
+  // __attribute__((noinline)) is a hard refusal at every inlining layer
+  // (todos/0214) — the AST rule would otherwise fold tiny accessors the
+  // user explicitly pinned.
+  if (def.fnAttrs && def.fnAttrs.noinline) { stats.noinlineRefused++; return null; }
   const returnExpr = singleReturnBody(def.body);
   if (!returnExpr) return null;
   if (returnExpr.linearity !== AST.Linearity.UNRESTRICTED) return null;
@@ -9715,11 +9722,67 @@ class Parser {
     return attrs;
   }
 
+  // --- C23 [[...]] attribute specifiers (todos/0214) ---
+  // Deliberately minimal: recognized only in the declaration-specifier
+  // position (the placement the corpus uses — `[[gnu::noinline]] void f()`).
+  // gnu::-prefixed names map onto the same flag bag parseGCCAttributes
+  // fills; standard/unknown attributes are skipped (C23 6.7.12.1 makes
+  // unknown attributes ignorable).
+  atC23AttrStart() {
+    return this.atText("[") && this.peek(1).text === "[";
+  }
+  parseC23Attributes(attrs) {
+    while (this.atC23AttrStart()) {
+      this.advance(); this.advance(); // [ [
+      for (;;) {
+        if (this.matchText(",")) continue;
+        if (this.atText("]") || this.atEnd()) break;
+        let name = this.advance().text;
+        // attribute-token may be prefixed: `gnu::noinline` (`::` lexes as
+        // one token or two `:` depending on adjacency — accept both).
+        let prefixed = false;
+        if (this.matchText("::")) prefixed = true;
+        else if (this.atText(":") && this.peek(1).text === ":") {
+          this.advance(); this.advance();
+          prefixed = true;
+        }
+        if (prefixed) {
+          const prefix = name;
+          name = this.advance().text;
+          if (prefix === "gnu") attrs.flags.add(name);
+        }
+        if (this.matchText("(")) this.skipBalancedParens();
+      }
+      this.expect("]"); this.expect("]");
+    }
+  }
+
+  // Distill attribute flag bags into a DFunc.fnAttrs record — only the
+  // inline-policy attributes are consumed today; null when none apply
+  // (the common case, so most decls carry no extra object).
+  _mkFnAttrs(specFlags, declFlags) {
+    const has = (n) => (specFlags && specFlags.has(n)) ||
+                       (declFlags && declFlags.has(n));
+    const noinline = !!has("noinline");
+    const alwaysInline = !!has("always_inline");
+    return (noinline || alwaysInline) ? { noinline, alwaysInline } : null;
+  }
+  _mergeFnAttrs(a, b) {
+    if (!b) return a;
+    if (!a) return { noinline: b.noinline, alwaysInline: b.alwaysInline };
+    if ((b.noinline && !a.noinline) || (b.alwaysInline && !a.alwaysInline)) {
+      return { noinline: a.noinline || b.noinline,
+               alwaysInline: a.alwaysInline || b.alwaysInline };
+    }
+    return a;
+  }
+
   // --- parseDeclSpecifiers ---
   parseDeclSpecifiers() {
     let type = null;
     let storageClass = Types.StorageClass.NONE;
     let isInline = false;
+    let attrFlags = null; // attribute flag names (noinline, always_inline, …)
     let requestedAlignment = 0;
     let importModule = null, importName = null;
     let isConst = false, isVolatile = false;
@@ -9780,6 +9843,16 @@ class Parser {
       if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
         const attrs = this.parseGCCAttributes();
         if (attrs.aligned > requestedAlignment) requestedAlignment = attrs.aligned;
+        for (const f of attrs.flags) (attrFlags || (attrFlags = new Set())).add(f);
+        continue;
+      }
+      // C23 [[...]] attribute specifiers in the declaration-specifier
+      // position ([[gnu::noinline]] void f(...)) — todos/0214. gnu::-
+      // prefixed names land in the same flag bag as __attribute__.
+      if (this.atC23AttrStart()) {
+        const attrs = { packed: false, aligned: 0, flags: new Set() };
+        this.parseC23Attributes(attrs);
+        for (const f of attrs.flags) (attrFlags || (attrFlags = new Set())).add(f);
         continue;
       }
 
@@ -9899,6 +9972,7 @@ class Parser {
       if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
         const attrs = this.parseGCCAttributes();
         if (attrs.aligned > requestedAlignment) requestedAlignment = attrs.aligned;
+        for (const f of attrs.flags) (attrFlags || (attrFlags = new Set())).add(f);
         continue;
       }
 
@@ -9941,7 +10015,7 @@ class Parser {
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
 
-    return { type, storageClass, isInline, requestedAlignment, importModule, importName };
+    return { type, storageClass, isInline, attrFlags, requestedAlignment, importModule, importName };
   }
 
   // --- Tag specifier (struct/union) ---
@@ -11135,8 +11209,21 @@ class Parser {
       while (this.matchText(",")) {
         const instrTok = this.advance();
         if (instrTok.text === "op") {
+          let first = true;
           while (this.atKind(Lexer.TokenKind.INT)) {
-            bytes.push(Number(this.advance().integer) & 0xff);
+            const bv = Number(this.advance().integer) & 0xff;
+            // Function-index-bearing opcodes (call / return_call /
+            // ref.func) are refused at the head of an op group: raw
+            // bytes are emitted VERBATIM, and the WAST tree-shake
+            // (todos/0214) renumbers function indices — it can neither
+            // see nor rewrite a reference hidden in bytes. Loud refusal
+            // beats a silent miscompile. (A function index was never a
+            // stable, source-knowable quantity anyway.)
+            if (first && (bv === 0x10 || bv === 0x12 || bv === 0xD2)) {
+              this.error(instrTok, "__wasm op: opcodes that reference a function index (call/return_call/ref.func) are not supported in raw bytes");
+            }
+            first = false;
+            bytes.push(bv);
           }
         } else if (instrTok.text === "lebU") {
           const numTok = this.advance();
@@ -12420,6 +12507,7 @@ class Parser {
           [], specs.storageClass, specs.isInline, null);
         funcDecl.importModule = specs.importModule;
         funcDecl.importName = specs.importName;
+        funcDecl.fnAttrs = this._mkFnAttrs(specs.attrFlags, declAttrs.flags);
 
         // Update previous declaration's definition pointer
         const prev = this.varScope.get(name);
@@ -12428,6 +12516,9 @@ class Parser {
             this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prev.type.toString()}', now defined as '${funcDecl.type.toString()}')`);
           }
           prev.definition = funcDecl;
+          // Attributes on an earlier prototype apply to the definition
+          // (gcc semantics, per-TU) — todos/0214.
+          funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prev.fnAttrs);
         }
 
         // Register function in scope before pushing param scope (so it persists globally)
@@ -12501,6 +12592,7 @@ class Parser {
           [], specs.storageClass, specs.isInline, null);
         funcDecl.importModule = specs.importModule;
         funcDecl.importName = specs.importName;
+        funcDecl.fnAttrs = this._mkFnAttrs(specs.attrFlags, declAttrs.flags);
 
         // Build parameter list
         const paramTypes = type.paramTypes || [];
@@ -12523,6 +12615,14 @@ class Parser {
         const prevFunc = this.varScope.get(name);
         if (prevFunc && prevFunc instanceof AST.DFunc && !prevFunc.type.isCompatibleWith(funcDecl.type)) {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
+        }
+        if (prevFunc && prevFunc instanceof AST.DFunc) {
+          // Redeclarations accumulate attributes (gcc semantics); a decl
+          // AFTER the definition also back-propagates onto it.
+          funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prevFunc.fnAttrs);
+          const def = prevFunc.definition ||
+            (prevFunc.body ? prevFunc : null);
+          if (def) def.fnAttrs = this._mergeFnAttrs(def.fnAttrs, funcDecl.fnAttrs);
         }
         // Plain re-declaration of an existing import: keep the original
         // import decl in scope. Otherwise the new EXTERN would shadow
@@ -13871,6 +13971,11 @@ class WGCOp { constructor(subop, imms) { this.subop = subop; this.imms = imms; }
 // The EWasm escape hatch: pre-encoded bytes emitted verbatim. Stack-opaque
 // — an optimization BARRIER in later stages. Real __wasm() carriers are
 // flat single instructions (no control flow), so it is structurally safe.
+// INVARIANT (todos/0214): raw bytes never encode a FUNCTION INDEX
+// (call/return_call/ref.func) — the tree-shake renumbers function indices
+// and treats WRaw as reference-free; the __wasm parser rejects those
+// opcodes at op-group heads. Local indices in raw bytes are fine (function-
+// local; the inliner refuses raw-bearing callees for exactly that reason).
 class WRaw { constructor(bytes) { this.bytes = bytes; } }
 // Zero-width source-map marker: serialize() reports the body-relative byte
 // offset it lands on via the onSrcLoc callback.
@@ -14321,11 +14426,29 @@ function foldMemOffsets(nodes) {
 // representation cleanly; do NOT chase the big SameBoy hot callees
 // (GB_read_memory ~397 real nodes, GB_advance_cycles ~534, cycle_write
 // ~1211) at dozens of sites — documented deferred work with real V8
-// tier-up risk, not a bug. Inlined-away functions are never deleted:
-// their indices are baked into call immediates and the element section.
+// tier-up risk, not a bug. Inlined-away functions are deleted by the
+// tree-shake pass that follows (todos/0214) — never by the inliner itself.
+//
+// Policy extensions (todos/0214):
+// - fnMeta.noinline (__attribute__((noinline))) is a hard per-callee
+//   refusal, counted in stats.refused.noinline — even single-use.
+// - fnMeta.alwaysInline (__attribute__((always_inline))) bypasses the
+//   two SIZE budgets (calleeCap/callerGrowth). The soundness refusals and
+//   localCap (a wasm ENGINE limit, not a tuning knob) still apply.
+// - fnMeta.inlineHint (the plain `inline` keyword) raises the effective
+//   callee cap to hintCalleeCap — a bias, not a mandate.
+// - SINGLE-USE bypass: a callee whose only reference in the whole module
+//   is this one WCall site (not exported, not address-taken — i.e. the
+//   shake can delete it afterwards) inlines regardless of the size
+//   budgets: its body MOVES rather than duplicates, so net module size
+//   can only shrink. Site counts are maintained live — a splice adds the
+//   clone's calls to their targets' counts, a consumed site decrements —
+//   so later decisions see the true post-rewrite reference counts.
 const inlineDefaults = {
   enabled: true,
   calleeCap: 64,      // max real (non-WSrcLoc) nodes in an inlinable callee
+  hintCalleeCap: 256, // effective calleeCap for `inline`-hinted callees
+  singleUse: true,    // budget bypass for deletable single-site callees
   callerGrowth: 1000, // max real nodes a caller may GAIN from inlining
   // Max locals (params + declared) a caller may REACH via inlining. Each
   // site adds k params + ALL the callee's declared locals — body-size
@@ -14417,17 +14540,34 @@ function inlineFunctions(wmod, optsIn) {
   const opts = Object.assign({}, inlineDefaults, optsIn || {});
   const stats = {
     inlined: 0,
-    refused: { self: 0, imported: 0, noBody: 0, variadic: 0, alloca: 0,
-               overAligned: 0, structRet: 0, eh: 0, raw: 0, multiResult: 0,
-               budgetCallee: 0, budgetCaller: 0, budgetLocals: 0 },
+    singleUse: 0,     // budget-bypassed single-site inlines (subset of inlined)
+    alwaysInline: 0,  // budget-bypassed always_inline inlines (subset of inlined)
+    refused: { self: 0, imported: 0, noBody: 0, noinline: 0, variadic: 0,
+               alloca: 0, overAligned: 0, structRet: 0, eh: 0, raw: 0,
+               multiResult: 0, budgetCallee: 0, budgetCaller: 0,
+               budgetLocals: 0 },
   };
   if (!opts.enabled) return stats;
   const defs = wmod.funcDefs;
   const nImp = wmod.funcImports ? wmod.funcImports.length : 0;
   const N = defs.length;
 
-  // Call-graph adjacency over defined-function indices.
+  // Roots the tree-shake can never delete: function exports and
+  // address-taken functions (table index escaped as a value). A rooted
+  // callee gets no single-use bypass — inlining it would DUPLICATE the
+  // body, not move it. Hand-built test modules may lack both fields.
+  const rooted = new Set();
+  for (const e of (wmod.exports || [])) {
+    if (e.kind === 0x00 && e.index >= nImp) rooted.add(e.index - nImp);
+  }
+  for (const fi of (wmod.addrTakenFuncs || [])) {
+    if (fi >= nImp) rooted.add(fi - nImp);
+  }
+
+  // Call-graph adjacency over defined-function indices, plus the global
+  // per-callee site count that feeds the single-use bypass.
   const adj = [];
+  const siteCount = new Int32Array(N);
   let anySite = false;
   for (let i = 0; i < N; i++) {
     const s = new Set();
@@ -14435,7 +14575,10 @@ function inlineFunctions(wmod, optsIn) {
       for (const n of defs[i].wast) {
         if (n instanceof WCall) {
           anySite = true;
-          if (n.funcIdx >= nImp) s.add(n.funcIdx - nImp);
+          if (n.funcIdx >= nImp) {
+            s.add(n.funcIdx - nImp);
+            siteCount[n.funcIdx - nImp]++;
+          }
         }
       }
     }
@@ -14524,6 +14667,7 @@ function inlineFunctions(wmod, optsIn) {
       const callee = defs[ei];
       const meta = callee.fnMeta;
       if (!callee.wast || !meta) { refuse('noBody'); continue; }
+      if (meta.noinline) { refuse('noinline'); continue; }
       if (meta.variadic) { refuse('variadic'); continue; }
       if (meta.usesAlloca) { refuse('alloca'); continue; }
       if (meta.overAligned) { refuse('overAligned'); continue; }
@@ -14533,10 +14677,19 @@ function inlineFunctions(wmod, optsIn) {
       const scan = scanCallee(ei);
       if (scan.eh) { refuse('eh'); continue; }
       if (scan.raw) { refuse('raw'); continue; }
-      if (scan.real > opts.calleeCap) { refuse('budgetCallee'); continue; }
+      // Size budgets — bypassed for a deletable single-site callee (the
+      // body moves, net size shrinks) and for always_inline (user
+      // mandate). Soundness refusals above and localCap below are never
+      // bypassed.
+      const singleUse = opts.singleUse && siteCount[ei] === 1 && !rooted.has(ei);
+      const bypass = singleUse || meta.alwaysInline;
       const k = ct.params.length;
       const added = k + 2 + scan.real - 1; // sets + block/end, minus the call
-      if (cur + added > budget) { refuse('budgetCaller'); continue; }
+      if (!bypass) {
+        const cap = meta.inlineHint ? opts.hintCalleeCap : opts.calleeCap;
+        if (scan.real > cap) { refuse('budgetCallee'); continue; }
+        if (cur + added > budget) { refuse('budgetCaller'); continue; }
+      }
       // Local budget: this site grows the caller by k params + every
       // callee local. Refuse it if the caller would cross localCap —
       // the hard guard that keeps the emitted function under the wasm
@@ -14553,10 +14706,17 @@ function inlineFunctions(wmod, optsIn) {
       const wrap = new WBlock(ct.results.length === 1 ? ct.results[0] : WT_EMPTY);
       for (let j = k - 1; j >= 0; j--) out.push(new WLocalSet(offset + j));
       out.push(wrap);
-      for (const cn of cloneInlineBody(callee.wast, offset, wrap)) out.push(cn);
+      for (const cn of cloneInlineBody(callee.wast, offset, wrap)) {
+        // Live site-count maintenance: the clone's calls are NEW sites.
+        if (cn instanceof WCall && cn.funcIdx >= nImp) siteCount[cn.funcIdx - nImp]++;
+        out.push(cn);
+      }
       out.push(new WEnd());
+      siteCount[ei]--; // this site is consumed
       cur += added;
       stats.inlined++;
+      if (singleUse) stats.singleUse++;
+      else if (meta.alwaysInline) stats.alwaysInline++;
       rewrote = true;
     }
     if (rewrote) {
@@ -14564,6 +14724,150 @@ function inlineFunctions(wmod, optsIn) {
       validate(out, null);
     }
   }
+  return stats;
+}
+
+// ---- Tree-shake (todos/0214) ----
+//
+// Delete defined functions unreachable from the roots over the WCall
+// graph, then remap every function index the deletion renumbered. Runs
+// after the inliner (which is what strands bodies), and also collects
+// functions that were ALREADY dead at this level — extern-linkage but
+// never referenced (the per-TU AST shake keeps those; codegen is the
+// first whole-program view).
+//
+// ROOTS: function exports and address-taken functions. Address-taken is
+// the load-bearing one — a C function pointer is the function's TABLE
+// slot (funcIdx+1) baked as a plain i32 constant into code and DATA
+// SEGMENTS (vtables, callback arrays), unfindable post-hoc. Codegen
+// records every escape (emitAddressOf, function-designator-as-value, the
+// constEval address policy that bakes static initializers) into
+// wmod.addrTakenFuncs; speculative constEval attempts over-approximate,
+// which only KEEPS functions — safe. A function reached only through
+// call_indirect is therefore rooted by construction.
+//
+// THE REMAP RULE — table slots are immutable. Deleting function i shifts
+// every defined function above i down in the FUNCTION index space; the
+// baked pointer constants make the TABLE index space unshiftable. So:
+// survivors keep their ORIGINAL slot (the element section goes from one
+// identity run to skip-the-holes runs via wmod.tableLayout, and the
+// table keeps its pre-shake size); deleted functions leave NULL slots,
+// unreachable because anything address-taken is a root. The function-
+// index rewrite then covers, exhaustively: WCall immediates (the only
+// WAST node class carrying a function index — WCallIndirect carries
+// type/table indices, WRefOp/WGCOp imms are type indices), the export
+// section, and the name section (funcNames + localNames). No start
+// section exists; sourcemap entries are recorded at serialize time,
+// after this pass. A live WCall that would map to a deleted target
+// throws — reachability makes it impossible; never emit a wrong index.
+//
+// REFUSAL OVER CLEVERNESS: the whole pass aborts (stats.aborted, loud in
+// passStats) if any funcDef lacks a wast tree — a raw BYTE body could
+// embed call immediates we can neither enumerate for reachability nor
+// rewrite (never occurs in the current pipeline; belt-and-braces for
+// future hand-built bodies). In-tree WRaw nodes are NOT a hazard: the
+// EWasm escape hatch guarantees raw bytes never encode a function index
+// (see the WRaw class comment — enforced at __wasm parse time), so a
+// WRaw-bearing function has no hidden edges and nothing in it needs the
+// remap.
+const shakeDefaults = {
+  enabled: true,
+};
+
+function treeShakeFunctions(wmod, optsIn) {
+  const opts = Object.assign({}, shakeDefaults, optsIn || {});
+  const stats = { deleted: 0, kept: wmod.funcDefs.length, aborted: null };
+  if (!opts.enabled) { stats.aborted = 'disabled'; return stats; }
+  const defs = wmod.funcDefs;
+  const nImp = wmod.funcImports ? wmod.funcImports.length : 0;
+  const N = defs.length;
+  for (const def of defs) {
+    if (!def.wast) { stats.aborted = 'rawBody'; return stats; }
+  }
+
+  // Roots: function exports + address-taken functions.
+  const live = new Uint8Array(N);
+  const q = [];
+  const root = (defIdx) => {
+    if (defIdx >= 0 && defIdx < N && !live[defIdx]) { live[defIdx] = 1; q.push(defIdx); }
+  };
+  for (const e of (wmod.exports || [])) {
+    if (e.kind === 0x00 && e.index >= nImp) root(e.index - nImp);
+  }
+  for (const fi of (wmod.addrTakenFuncs || [])) {
+    if (fi >= nImp) root(fi - nImp);
+  }
+  // Reachability over WCall edges (transitively dead chains fall out of
+  // the one sweep — no fixpoint needed).
+  while (q.length) {
+    const di = q.pop();
+    for (const n of defs[di].wast) {
+      if (n instanceof WCall && n.funcIdx >= nImp) root(n.funcIdx - nImp);
+    }
+  }
+
+  const newIdx = new Int32Array(N).fill(-1);
+  let nn = 0;
+  for (let i = 0; i < N; i++) if (live[i]) newIdx[i] = nn++;
+  if (nn === N) return stats; // nothing dead — emit stays byte-identical
+
+  // Single rewrite pass over every index-bearing site.
+  for (let i = 0; i < N; i++) {
+    if (!live[i]) continue;
+    for (const n of defs[i].wast) {
+      if (n instanceof WCall && n.funcIdx >= nImp) {
+        const t = newIdx[n.funcIdx - nImp];
+        if (t < 0) throw new Error("WAST shake: live function calls a deleted function");
+        n.funcIdx = nImp + t;
+      }
+    }
+  }
+  if (wmod.exports) {
+    for (const e of wmod.exports) {
+      if (e.kind === 0x00 && e.index >= nImp) {
+        const t = newIdx[e.index - nImp];
+        if (t < 0) throw new Error("WAST shake: export references a deleted function");
+        e.index = nImp + t;
+      }
+    }
+  }
+  if (wmod.funcNames) {
+    wmod.funcNames = wmod.funcNames.filter(
+      (en) => en.idx < nImp || newIdx[en.idx - nImp] >= 0);
+    for (const en of wmod.funcNames) {
+      if (en.idx >= nImp) en.idx = nImp + newIdx[en.idx - nImp];
+    }
+  }
+  if (wmod.localNames) {
+    wmod.localNames = wmod.localNames.filter(
+      (en) => en.funcIdx < nImp || newIdx[en.funcIdx - nImp] >= 0);
+    for (const en of wmod.localNames) {
+      if (en.funcIdx >= nImp) en.funcIdx = nImp + newIdx[en.funcIdx - nImp];
+    }
+  }
+
+  // Table layout: survivors at their original slots, holes where deleted
+  // functions sat, size unchanged (slot values are baked constants).
+  const oldTotal = nImp + N;
+  const segments = [];
+  let run = null;
+  for (let oldFi = 0; oldFi < oldTotal; oldFi++) {
+    let nfi;
+    if (oldFi < nImp) {
+      nfi = oldFi;
+    } else {
+      const t = newIdx[oldFi - nImp];
+      if (t < 0) { run = null; continue; }
+      nfi = nImp + t;
+    }
+    if (!run) { run = { slot: 1 + oldFi, funcs: [] }; segments.push(run); }
+    run.funcs.push(nfi);
+  }
+  wmod.tableLayout = { size: oldTotal + 1, segments };
+
+  wmod.funcDefs = defs.filter((_, i) => live[i]);
+  stats.deleted = N - nn;
+  stats.kept = nn;
   return stats;
 }
 
@@ -14577,12 +14881,20 @@ function inlineFunctions(wmod, optsIn) {
 // re-run validate() on it (the per-function funcLabel isn't persisted on
 // the funcDef, so the re-validation passes null — every structural check
 // except the foreign-func-label one still runs).
-// Order matters (todos/0201): the INLINER runs first, then foldMemOffsets,
-// so const+add displacements newly exposed inside inlined bodies fold too.
+// Order matters (todos/0201/0214): the INLINER runs first (it's what
+// strands dead bodies), then the tree-shake deletes + remaps, then
+// foldMemOffsets — so const+add displacements newly exposed inside
+// inlined bodies fold too. The shake re-validates every survivor it
+// rewrote (WCall immediates only — structure untouched, but the pass
+// convention is rewrite ⇒ re-validate).
 // Telemetry lands on wmod.passStats and mirrors to WAST.lastPassStats
 // (read by benches/tests after a compile; the compiler itself stays quiet).
 function runPasses(wmod) {
   const inline = inlineFunctions(wmod);
+  const shake = treeShakeFunctions(wmod);
+  if (shake.deleted > 0) {
+    for (const def of wmod.funcDefs) validate(def.wast, null);
+  }
   let offsetFolds = 0;
   for (const def of wmod.funcDefs) {
     if (!def.wast) continue;
@@ -14593,11 +14905,12 @@ function runPasses(wmod) {
       offsetFolds += r.folds;
     }
   }
-  wmod.passStats = { offsetFolds, inline };
+  wmod.passStats = { offsetFolds, inline, shake };
   lastPassStats.offsetFolds = offsetFolds;
   lastPassStats.inline = inline;
+  lastPassStats.shake = shake;
 }
-const lastPassStats = { offsetFolds: 0, inline: null };
+const lastPassStats = { offsetFolds: 0, inline: null, shake: null };
 
 return {
   // Relocated target-side tables and encoders (consumed by Codegen)
@@ -14609,6 +14922,7 @@ return {
   // WAST proper
   WastBuilder, serialize, validate, runPasses, lastPassStats,
   inlineFunctions, inlineDefaults,
+  treeShakeFunctions, shakeDefaults,
   WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
   WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
   WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
@@ -14692,6 +15006,16 @@ class WasmModule {
     this.sourceMapFiles = [];   // for c.sourcemap custom section
     this.sourceMapEntries = []; // [{funcIdx (def-relative), entries: [{offset, fileIdx, line}]}]
     this.embeddedSources = null; // for c.sources custom section (-g2)
+    // Function indices whose TABLE index (funcIdx+1) escaped as a value —
+    // baked into code or data segments. Roots for the WAST tree-shake
+    // (todos/0214): these can be reached via call_indirect and their
+    // table slots must survive.
+    this.addrTakenFuncs = new Set();
+    // Set by the tree-shake when it deletes functions: {size, segments:
+    // [{slot, funcs}]} — survivors at their ORIGINAL table slots, holes
+    // where deleted functions sat. null → the identity table/element
+    // emission below, byte-identical to pre-0214 output.
+    this.tableLayout = null;
   }
 
   addFunctionTypeId(params, results) {
@@ -15010,10 +15334,12 @@ class WasmModule {
     for (const def of this.funcDefs) lebU(buf, def.typeId);
     emitSection(3, buf);
 
-    // Table section (4)
+    // Table section (4). With a tree-shake tableLayout the size is the
+    // PRE-shake function count + 1 — baked function-pointer constants
+    // (old slots) must stay in range even though the slots are null.
     buf = [];
     const totalFuncs = this.funcImports.length + this.funcDefs.length;
-    const tableSize = totalFuncs + 1;
+    const tableSize = this.tableLayout ? this.tableLayout.size : totalFuncs + 1;
     lebU(buf, 1); buf.push(0x70); buf.push(0x00); lebU(buf, tableSize);
     emitSection(4, buf);
 
@@ -15056,9 +15382,21 @@ class WasmModule {
     }
     emitSection(7, buf);
 
-    // Element section (9)
+    // Element section (9). Identity map (table[i+1] = func i) — or, after
+    // a tree-shake, one active segment per surviving run: original slots,
+    // remapped function indices, holes (null slots) where deleted
+    // functions sat (todos/0214).
     buf = [];
-    if (totalFuncs > 0) {
+    if (this.tableLayout) {
+      const segs = this.tableLayout.segments;
+      lebU(buf, segs.length);
+      for (const seg of segs) {
+        lebU(buf, 0);
+        buf.push(0x41); lebI(buf, seg.slot); buf.push(0x0B);
+        lebU(buf, seg.funcs.length);
+        for (const fi of seg.funcs) lebU(buf, fi);
+      }
+    } else if (totalFuncs > 0) {
       lebU(buf, 1); lebU(buf, 0);
       buf.push(0x41); lebI(buf, 1); buf.push(0x0B);
       lebU(buf, totalFuncs);
@@ -16069,6 +16407,16 @@ class CodeGenerator {
     for (let i = 0; i < len; i++) this.staticData[offset + i] = strValue[i];
   }
 
+  // A function's table index escaping as a VALUE (into code or a data
+  // segment) makes it reachable via call_indirect — record it as a
+  // tree-shake root (todos/0214). Speculative constEval attempts
+  // over-approximate; that only keeps functions alive, which is safe.
+  _funcAddrEscape(func) {
+    const tIdx = this.funcDefToTableIdx.get(func);
+    if (tIdx !== undefined) this.wmod.addrTakenFuncs.add(tIdx - 1);
+    return tIdx;
+  }
+
   // Build the address-resolution policy used by the shared module-scope
   // `constEvalExpr` / `constEvalAddr` evaluators. Caches per-instance so we
   // don't reallocate the policy object on every constant evaluation.
@@ -16081,7 +16429,7 @@ class CodeGenerator {
           return a !== undefined ? a : null;
         },
         getFuncAddr: (fn) => {
-          const a = this.funcDefToTableIdx.get(fn);
+          const a = this._funcAddrEscape(fn);
           return a !== undefined ? a : null;
         },
         getCompoundLitAddr: (e) => {
@@ -16726,6 +17074,12 @@ class CodeGenerator {
         overAligned: this.frameBaseLocalIdx >= 0,
         structRet: this.hasStructReturn,
         usesAlloca: this.usesAlloca,
+        // Inline-policy hints (todos/0214): noinline = hard refusal,
+        // alwaysInline = bypass the size budgets, inlineHint = the plain
+        // `inline` keyword (raised effective calleeCap).
+        noinline: !!(funcDef.fnAttrs && funcDef.fnAttrs.noinline),
+        alwaysInline: !!(funcDef.fnAttrs && funcDef.fnAttrs.alwaysInline),
+        inlineHint: !!funcDef.isInline,
       };
     }
 
@@ -17790,7 +18144,7 @@ class CodeGenerator {
     if (expr instanceof AST.EIdent) {
       if (expr.decl instanceof AST.DFunc) {
         const func = expr.decl.definition || expr.decl;
-        const tIdx = this.funcDefToTableIdx.get(func);
+        const tIdx = this._funcAddrEscape(func);
         this.body.i32Const(tIdx);
         return;
       }
@@ -18027,7 +18381,7 @@ class CodeGenerator {
           this.body.i32Const(expr.decl.value);
         } else if (expr.decl instanceof AST.DFunc) {
           const func = expr.decl.definition || expr.decl;
-          const tIdx = this.funcDefToTableIdx.get(func);
+          const tIdx = this._funcAddrEscape(func);
           this.body.i32Const(tIdx);
         }
         break;

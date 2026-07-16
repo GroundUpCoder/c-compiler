@@ -26,10 +26,23 @@
 //     node instances make the two independent — no shared-WMop double
 //     fold)
 // Refusals covered (site left as a call, stats bucket incremented):
-//   self, imported, noBody, variadic, alloca, overAligned, structRet,
-//   eh (WTryTable/WThrow), raw (WRaw), multiResult, budgetCallee
-//   (real-node cap, WSrcLoc excluded), budgetCaller (growth ceiling),
-//   and enabled:false.
+//   self, imported, noBody, noinline, variadic, alloca, overAligned,
+//   structRet, eh (WTryTable/WThrow), raw (WRaw), multiResult,
+//   budgetCallee (real-node cap, WSrcLoc excluded), budgetCaller
+//   (growth ceiling), and enabled:false.
+//
+// Stage 3c additions (todos/0214):
+//   - inline hints: fnMeta.noinline hard refusal (beats always_inline),
+//     fnMeta.alwaysInline size-budget bypass (localCap still applies),
+//     fnMeta.inlineHint -> hintCalleeCap
+//   - single-use bypass: a deletable callee (one global site, not
+//     exported, not address-taken) inlines over the size budgets; a
+//     ROOTED callee gets no bypass — budget tests pin that by rooting
+//     their callees via wmod.exports
+//   - treeShakeFunctions: reachability from exports+addrTakenFuncs over
+//     WCall, deletion + full index remap (WCall immediates, exports,
+//     funcNames/localNames, tableLayout with original slots preserved),
+//     abort on raw byte bodies
 //
 // Each case prints PASS/FAIL; exits non-zero on any failure.
 
@@ -363,6 +376,9 @@ refusalCase('budgetCallee', 'budgetCallee', (w) => {
     b.i32Const(0); b.ret();
   });
   const caller = addFn(w, { params: [], results: [] }, b => { b.call(f); b.drop(); b.ret(); });
+  // Rooting the callee disables the single-use bypass (todos/0214) so
+  // the budget mechanics stay pinned here; the bypass has its own cases.
+  w.exports = [{ name: 'f', kind: 0x00, index: f }];
   return { callee: f, caller };
 }, { calleeCap: 8 });
 
@@ -387,6 +403,7 @@ refusalCase('budgetCallee', 'budgetCallee', (w) => {
 }
 
 // budgetCaller: first site fits, second exceeds the growth ceiling
+// (callee rooted — an unrooted callee's LAST site would bypass, below)
 {
   const w = mkWmod();
   const f = addFn(w, { params: [], results: [WT_I32] }, b => {
@@ -396,10 +413,29 @@ refusalCase('budgetCallee', 'budgetCallee', (w) => {
   const g = addFn(w, { params: [], results: [WT_I32] }, b => {
     b.call(f); b.drop(); b.call(f); b.ret();
   });
+  w.exports = [{ name: 'f', kind: 0x00, index: f }];
   const st = WAST.inlineFunctions(w, { calleeCap: 64, callerGrowth: 15 });
   ok('budget-caller-ceiling', st.inlined === 1 && st.refused.budgetCaller === 1
      && callsIn(w.funcDefs[g].wast, f) === 1,
      `inlined=${st.inlined} budgetCaller=${st.refused.budgetCaller}`);
+}
+
+// ...and the SAME module unrooted: after the first site inlines, the
+// second is the callee's last reference — the single-use bypass lifts
+// the growth ceiling because the body MOVES (the shake then deletes it).
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [], results: [WT_I32] }, b => {
+    for (let i = 0; i < 4; i++) { b.i32Const(i); b.drop(); }
+    b.i32Const(0); b.ret();
+  });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => {
+    b.call(f); b.drop(); b.call(f); b.ret();
+  });
+  const st = WAST.inlineFunctions(w, { calleeCap: 64, callerGrowth: 15 });
+  ok('single-use-last-site', st.inlined === 2 && st.singleUse === 1
+     && callsIn(w.funcDefs[g].wast, f) === 0,
+     `inlined=${st.inlined} singleUse=${st.singleUse}`);
 }
 
 // enabled:false is a global no-op
@@ -442,7 +478,170 @@ refusalCase('budgetLocals', 'budgetLocals', (w) => {
      `inlined=${st.inlined} budgetLocals=${st.refused.budgetLocals} gLocals=${gLocals}`);
 }
 
+// ---- L. inline hints (todos/0214) ----
+
+// noinline: hard refusal — even for a deletable single-use callee.
+refusalCase('noinline', 'noinline', (w) => {
+  const f = addFn(w, { params: [], results: [WT_I32], meta: { noinline: true } },
+    b => { b.i32Const(7); b.ret(); });
+  const caller = addFn(w, { params: [], results: [] }, b => { b.call(f); b.drop(); b.ret(); });
+  return { callee: f, caller };
+});
+
+// noinline beats always_inline when both are stamped.
+refusalCase('noinline-beats-always', 'noinline', (w) => {
+  const f = addFn(w, { params: [], results: [WT_I32],
+                       meta: { noinline: true, alwaysInline: true } },
+    b => { b.i32Const(7); b.ret(); });
+  const caller = addFn(w, { params: [], results: [] }, b => { b.call(f); b.drop(); b.ret(); });
+  return { callee: f, caller };
+});
+
+// always_inline bypasses BOTH size budgets (rooted callee, so the
+// single-use bypass can't be what lifted them).
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [], results: [WT_I32], meta: { alwaysInline: true } }, b => {
+    for (let i = 0; i < 10; i++) { b.i32Const(i); b.drop(); }
+    b.i32Const(0); b.ret();
+  }); // 22 real nodes
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+  w.exports = [{ name: 'f', kind: 0x00, index: f }];
+  const st = WAST.inlineFunctions(w, { calleeCap: 4, callerGrowth: 5 });
+  ok('always-inline-over-budget', st.inlined === 1 && st.alwaysInline === 1
+     && callsIn(w.funcDefs[g].wast, f) === 0,
+     `inlined=${st.inlined} alwaysInline=${st.alwaysInline}`);
+}
+
+// always_inline does NOT bypass localCap (a wasm engine limit) or the
+// soundness refusals.
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [], results: [WT_I32],
+                       meta: { alwaysInline: true },
+                       locals: [{ type: WT_I32, count: 200 }] },
+    b => { b.i32Const(1); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+  w.exports = [{ name: 'f', kind: 0x00, index: f }];
+  const st = WAST.inlineFunctions(w, { localCap: 100 });
+  ok('always-inline-localcap-holds', st.inlined === 0 && st.refused.budgetLocals === 1,
+     `inlined=${st.inlined} budgetLocals=${st.refused.budgetLocals}`);
+}
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [], results: [WT_I32],
+                       meta: { alwaysInline: true, variadic: true } },
+    b => { b.i32Const(1); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+  const st = WAST.inlineFunctions(w);
+  ok('always-inline-soundness-holds', st.inlined === 0 && st.refused.variadic === 1,
+     `inlined=${st.inlined} variadic=${st.refused.variadic}`);
+}
+
+// inlineHint (plain `inline`): raised effective calleeCap, not a mandate
+// — over hintCalleeCap still refuses.
+{
+  const w = mkWmod();
+  const mkBig = (b) => {
+    for (let i = 0; i < 10; i++) { b.i32Const(i); b.drop(); }
+    b.i32Const(0); b.ret();
+  }; // 22 real nodes
+  const fPlain = addFn(w, { params: [], results: [WT_I32] }, mkBig);
+  const fHint = addFn(w, { params: [], results: [WT_I32], meta: { inlineHint: true } }, mkBig);
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => {
+    b.call(fPlain); b.drop(); b.call(fHint); b.ret();
+  });
+  w.exports = [
+    { name: 'a', kind: 0x00, index: fPlain },
+    { name: 'b', kind: 0x00, index: fHint },
+  ];
+  const st = WAST.inlineFunctions(w, { calleeCap: 8, hintCalleeCap: 64 });
+  ok('hint-raises-callee-cap', st.inlined === 1 && st.refused.budgetCallee === 1
+     && callsIn(w.funcDefs[g].wast, fPlain) === 1
+     && callsIn(w.funcDefs[g].wast, fHint) === 0,
+     `inlined=${st.inlined} budgetCallee=${st.refused.budgetCallee}`);
+  const st2 = (() => {
+    const w2 = mkWmod();
+    const f2 = addFn(w2, { params: [], results: [WT_I32], meta: { inlineHint: true } }, mkBig);
+    const g2 = addFn(w2, { params: [], results: [WT_I32] }, b => { b.call(f2); b.ret(); });
+    w2.exports = [{ name: 'f', kind: 0x00, index: f2 }];
+    return WAST.inlineFunctions(w2, { calleeCap: 8, hintCalleeCap: 16 });
+  })();
+  ok('hint-is-not-a-mandate', st2.inlined === 0 && st2.refused.budgetCallee === 1,
+     `inlined=${st2.inlined}`);
+}
+
+// single-use bypass needs a DELETABLE callee: over-budget + one site
+// inlines when unrooted, refuses when exported or address-taken.
+{
+  const build = (root) => {
+    const w = mkWmod();
+    const f = addFn(w, { params: [], results: [WT_I32] }, b => {
+      for (let i = 0; i < 10; i++) { b.i32Const(i); b.drop(); }
+      b.i32Const(0); b.ret();
+    });
+    const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+    if (root === 'export') w.exports = [{ name: 'f', kind: 0x00, index: f }];
+    if (root === 'addr') w.addrTakenFuncs = new Set([f]);
+    return { w, f, g };
+  };
+  {
+    const { w, f, g } = build(null);
+    const st = WAST.inlineFunctions(w, { calleeCap: 4 });
+    ok('single-use-over-budget', st.inlined === 1 && st.singleUse === 1
+       && callsIn(w.funcDefs[g].wast, f) === 0,
+       `inlined=${st.inlined} singleUse=${st.singleUse}`);
+  }
+  {
+    const { w } = build('export');
+    const st = WAST.inlineFunctions(w, { calleeCap: 4 });
+    ok('single-use-rooted-export-refused', st.inlined === 0 && st.refused.budgetCallee === 1);
+  }
+  {
+    const { w } = build('addr');
+    const st = WAST.inlineFunctions(w, { calleeCap: 4 });
+    ok('single-use-addr-taken-refused', st.inlined === 0 && st.refused.budgetCallee === 1);
+  }
+  {
+    // two sites in one caller: neither is single-use up front; only the
+    // LAST one bypasses (covered by single-use-last-site) — with the
+    // budget too small for even the first, both refuse.
+    const w = mkWmod();
+    const f = addFn(w, { params: [], results: [WT_I32] }, b => {
+      for (let i = 0; i < 10; i++) { b.i32Const(i); b.drop(); }
+      b.i32Const(0); b.ret();
+    });
+    const g = addFn(w, { params: [], results: [WT_I32] }, b => {
+      b.call(f); b.drop(); b.call(f); b.ret();
+    });
+    const st = WAST.inlineFunctions(w, { calleeCap: 4 });
+    ok('single-use-two-sites-refused', st.inlined === 0 && st.refused.budgetCallee === 2,
+       `inlined=${st.inlined} budgetCallee=${st.refused.budgetCallee}`);
+  }
+  {
+    // splicing a callee body ADDS its calls to their targets' counts: h
+    // is called once by f and once by g; after f splices into g, h has
+    // two live sites — no single-use bypass for it.
+    const w = mkWmod();
+    const h = addFn(w, { params: [], results: [WT_I32] }, b => {
+      for (let i = 0; i < 10; i++) { b.i32Const(i); b.drop(); }
+      b.i32Const(0); b.ret();
+    }); // over calleeCap 4
+    const f = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(h); b.ret(); });
+    const g = addFn(w, { params: [], results: [WT_I32] }, b => {
+      b.call(f); b.drop(); b.call(h); b.ret();
+    });
+    const st = WAST.inlineFunctions(w, { calleeCap: 4 });
+    // f (small, single-use) inlines into g; h keeps two sites, refused twice
+    ok('single-use-counts-track-splices', st.inlined === 1
+       && st.refused.budgetCallee === 2 && callsIn(w.funcDefs[g].wast, h) === 2,
+       `inlined=${st.inlined} budgetCallee=${st.refused.budgetCallee}`);
+  }
+}
+
 // ---- J. runPasses ordering: inline first, THEN fold inside the clone ----
+// (both functions exported so the tree-shake keeps the inlined-away
+// callee and BOTH folded copies can be compared)
 {
   const w = mkWmod();
   const f = addFn(w, { params: [WT_I32], results: [WT_I32] }, b => {
@@ -452,6 +651,7 @@ refusalCase('budgetLocals', 'budgetLocals', (w) => {
   const g = addFn(w, { params: [], results: [WT_I32] }, b => {
     b.i32Const(100); b.call(f); b.ret();
   });
+  w.exports = [{ name: 'f', kind: 0x00, index: f }, { name: 'g', kind: 0x00, index: g }];
   WAST.runPasses(w);
   const gn = w.funcDefs[g].wast;
   const fn = w.funcDefs[f].wast;
@@ -463,6 +663,136 @@ refusalCase('budgetLocals', 'budgetLocals', (w) => {
   ok('order-original-folded', fMop && fMop.offset === 8);
   ok('order-fresh-instances', gMop !== fMop, 'clone must not share WMop instances with the callee');
   ok('order-stats', w.passStats.inline.inlined === 1 && w.passStats.offsetFolds === 2);
+}
+
+// ---- M. tree-shake: reachability, deletion, index remap (todos/0214) ----
+
+// dead function deleted; every index-bearing site remapped: WCall
+// immediates, exports, funcNames/localNames; survivors keep their
+// ORIGINAL table slots in tableLayout.
+{
+  const w = mkWmod();
+  const dead = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(9); b.ret(); });
+  const f = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(1); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+  w.exports = [{ name: 'g', kind: 0x00, index: g }];
+  w.funcNames = [{ idx: dead, name: 'dead' }, { idx: f, name: 'f' }, { idx: g, name: 'g' }];
+  w.localNames = [{ funcIdx: g, locals: [] }];
+  const st = WAST.treeShakeFunctions(w);
+  ok('shake-deletes-dead', st.deleted === 1 && st.kept === 2 && w.funcDefs.length === 2,
+     JSON.stringify(st));
+  // dead was index 0: f 1->0, g 2->1
+  ok('shake-remaps-wcall', callsIn(w.funcDefs[1].wast, 0) === 1, shape(w.funcDefs[1].wast));
+  ok('shake-remaps-export', w.exports[0].index === 1, `export idx=${w.exports[0].index}`);
+  ok('shake-remaps-funcnames',
+     w.funcNames.length === 2 && w.funcNames[0].name === 'f' && w.funcNames[0].idx === 0
+     && w.funcNames[1].name === 'g' && w.funcNames[1].idx === 1,
+     JSON.stringify(w.funcNames));
+  ok('shake-remaps-localnames', w.localNames.length === 1 && w.localNames[0].funcIdx === 1);
+  // table: size stays pre-shake (3 funcs + 1); slot 1 (dead) is a hole,
+  // slots 2..3 hold the SURVIVORS' new indices in one run.
+  const tl = w.tableLayout;
+  ok('shake-table-slots-stable',
+     tl && tl.size === 4 && tl.segments.length === 1
+     && tl.segments[0].slot === 2
+     && tl.segments[0].funcs.join(',') === '0,1',
+     JSON.stringify(tl));
+}
+
+// address-taken keeps a call-unreachable function alive (call_indirect
+// reachability), and imports offset the index spaces.
+{
+  const w = mkWmod();
+  w.funcImports = [{ moduleName: 'c', functionName: 'imp', typeId: 0 }];
+  w.typeDefs.push({ kind: 'func', params: [], results: [] }); // typeId 0 for the import
+  const nImp = 1;
+  const fp = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(5); b.ret(); }); // def 0
+  const dead = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(6); b.ret(); }); // def 1
+  const main_ = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(0); b.ret(); }); // def 2
+  w.exports = [{ name: 'main', kind: 0x00, index: nImp + main_ }];
+  w.addrTakenFuncs = new Set([nImp + fp]);
+  const st = WAST.treeShakeFunctions(w);
+  ok('shake-addr-taken-is-root', st.deleted === 1 && w.funcDefs.length === 2,
+     JSON.stringify(st));
+  const tl = w.tableLayout;
+  // slots: 0 null, 1 import, 2 fp (kept), 3 dead (hole), 4 main
+  ok('shake-import-slots',
+     tl && tl.size === 5 && tl.segments.length === 2
+     && tl.segments[0].slot === 1 && tl.segments[0].funcs.join(',') === '0,1'
+     && tl.segments[1].slot === 4 && tl.segments[1].funcs.join(',') === '2',
+     JSON.stringify(tl));
+}
+
+// transitively dead chain goes in ONE sweep (a->b, both unrooted).
+{
+  const w = mkWmod();
+  const b_ = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(2); b.ret(); });
+  const a_ = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(b_); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(0); b.ret(); });
+  w.exports = [{ name: 'g', kind: 0x00, index: g }];
+  const st = WAST.treeShakeFunctions(w);
+  ok('shake-transitive-chain', st.deleted === 2 && w.funcDefs.length === 1,
+     JSON.stringify(st));
+}
+
+// nothing dead -> no tableLayout (the identity emit path stays
+// byte-identical), module untouched.
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(1); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+  w.exports = [{ name: 'g', kind: 0x00, index: g }];
+  const before = shape(w.funcDefs[g].wast);
+  const st = WAST.treeShakeFunctions(w);
+  ok('shake-nothing-dead', st.deleted === 0 && !w.tableLayout
+     && w.funcDefs.length === 2 && shape(w.funcDefs[g].wast) === before,
+     JSON.stringify(st));
+}
+
+// a raw BYTE body (wast === null) aborts the whole pass — call
+// immediates baked in bytes can be neither enumerated nor rewritten.
+{
+  const w = mkWmod();
+  const f = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(1); b.ret(); });
+  const raw = addFn(w, { params: [], results: [] }, null); // raw-bytes def
+  w.funcDefs[raw].body = [0x0B];
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.call(f); b.ret(); });
+  w.exports = [{ name: 'g', kind: 0x00, index: g }];
+  const st = WAST.treeShakeFunctions(w);
+  ok('shake-abort-raw-body', st.aborted === 'rawBody' && st.deleted === 0
+     && w.funcDefs.length === 3 && !w.tableLayout,
+     JSON.stringify(st));
+}
+
+// disabled -> loud no-op.
+{
+  const w = mkWmod();
+  const dead = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(1); b.ret(); });
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(0); b.ret(); });
+  w.exports = [{ name: 'g', kind: 0x00, index: g }];
+  const st = WAST.treeShakeFunctions(w, { enabled: false });
+  ok('shake-disabled', st.aborted === 'disabled' && w.funcDefs.length === 2);
+}
+
+// runPasses composition: single-use inline strands the callee, the shake
+// deletes it and remaps the survivor's other calls.
+{
+  const w = mkWmod();
+  const once = addFn(w, { params: [], results: [WT_I32] }, b => { b.i32Const(3); b.ret(); }); // def 0, inlined+deleted
+  const kept = addFn(w, { params: [], results: [WT_I32], meta: { noinline: true } },
+    b => { b.i32Const(4); b.ret(); }); // def 1 -> 0
+  const g = addFn(w, { params: [], results: [WT_I32] }, b => {
+    b.call(once); b.drop(); b.call(kept); b.ret();
+  }); // def 2 -> 1
+  w.exports = [{ name: 'g', kind: 0x00, index: g }];
+  WAST.runPasses(w);
+  ok('passes-inline-then-shake',
+     w.passStats.inline.inlined === 1 && w.passStats.shake.deleted === 1
+     && w.funcDefs.length === 2,
+     JSON.stringify(w.passStats));
+  ok('passes-remap-after-delete', callsIn(w.funcDefs[1].wast, 0) === 1
+     && w.exports[0].index === 1,
+     shape(w.funcDefs[1].wast));
 }
 
 // ---- K. end-to-end C execution (compile in-process, run under host.js) ----
@@ -490,7 +820,12 @@ function compileC(src, name) {
     fatalExit: (code) => { throw new Error('codegen fatal ' + code); },
   });
   fs.writeFileSync(path.join(TMP, name + '.wasm'), wasm);
-  return { wasmPath: path.join(TMP, name + '.wasm'), stats: C.WAST.lastPassStats.inline };
+  return {
+    wasmPath: path.join(TMP, name + '.wasm'),
+    stats: C.WAST.lastPassStats.inline,
+    shake: C.WAST.lastPassStats.shake,
+    bytes: wasm.length,
+  };
 }
 function runWasm(wasmPath) {
   return execFileSync('node', [path.join(ROOT, 'host.js'), wasmPath], { encoding: 'utf8' });
@@ -538,6 +873,85 @@ int main() { printf("%d\\n", fact(6)); return 0; }
 `, 'fact');
   ok('exec-recursion-snapshot', runWasm(wasmPath) === '720\n');
   ok('exec-recursion-self-refused', stats.refused.self >= 1);
+}
+
+// ---- N. end-to-end 0214: shake, remap-through-table, hints ----
+
+// the tree-shake runs on every compile and deletes the dead extern libc
+// weight; execution is identical.
+{
+  const { wasmPath, shake } = compileC(`
+#include <stdio.h>
+int main() { printf("ok\\n"); return 0; }
+`, 'shakebasic');
+  ok('exec-shake-runs', shake && !shake.aborted && shake.deleted > 0,
+     JSON.stringify(shake));
+  ok('exec-shake-output', runWasm(wasmPath) === 'ok\n');
+}
+
+// function pointers in static DATA (baked table slots) survive deletion
+// of their neighbours: the remap must keep original slots. deadhelper is
+// single-use-inlined and deleted; mul2/mul3 are address-taken roots.
+{
+  const { wasmPath, stats, shake } = compileC(`
+#include <stdio.h>
+static int mul2(int x) { return x * 2; }
+static int mul3(int x) { return x * 3; }
+typedef int (*fn)(int);
+static fn table[2] = { mul2, mul3 };
+static int deadhelper(int x) { int s = 0; for (int i = 0; i < x; i++) s += i * x; return s + 100 * x; }
+static int usedonce(int x) { return deadhelper(x) + 1; }
+int main(void) {
+  fn late = mul3;
+  printf("%d %d %d %d\\n", table[0](5), table[1](5), usedonce(2), late(7));
+  return 0;
+}
+`, 'fptable');
+  ok('exec-fp-table-output', runWasm(wasmPath) === '10 15 203 21\n');
+  ok('exec-fp-singleuse', stats.singleUse >= 1, JSON.stringify({ s: stats.singleUse }));
+  ok('exec-fp-shaken', shake && shake.deleted > 0, JSON.stringify(shake));
+}
+
+// noinline end-to-end (both spellings), refused at the WAST layer.
+{
+  const { wasmPath, stats } = compileC(`
+#include <stdio.h>
+__attribute__((noinline)) static int na(int x) { return x + 1; }
+[[gnu::noinline]] static int nb(int x) { return x + 2; }
+static int nc(int x) __attribute__((noinline));
+static int nc(int x) { return x + 3; }
+int main(void) { printf("%d %d %d\\n", na(1), nb(1), nc(1)); return 0; }
+`, 'noinline');
+  ok('exec-noinline-output', runWasm(wasmPath) === '2 3 4\n');
+  ok('exec-noinline-refused', stats.refused.noinline >= 3,
+     `noinline=${stats.refused.noinline}`);
+}
+
+// always_inline end-to-end: a callee over the default calleeCap with two
+// direct call sites (no single-use bypass) inlines at both; a call
+// through a function pointer executes the ORIGINAL body (address-taken
+// root), so inlined-vs-original results self-check.
+{
+  const { wasmPath, stats } = compileC(`
+#include <stdio.h>
+__attribute__((always_inline)) static int big(int x) {
+  int s = 0;
+  s += x * 3; s -= x / 2; s ^= x << 1; s += x * x; s |= x >> 2;
+  s += x * 5; s -= x / 3; s ^= x << 2; s += x + 17; s |= x >> 1;
+  s += x * 7; s -= x / 4; s ^= x << 3; s += x - 29; s |= x >> 3;
+  return s;
+}
+typedef int (*fn)(int);
+volatile fn ref = big;
+int main(void) {
+  int a = big(9), b = big(20);
+  printf("%s %s\\n", a == ref(9) ? "same" : "DIFF", b == ref(20) ? "same" : "DIFF");
+  return 0;
+}
+`, 'alwaysinline');
+  ok('exec-always-inline', stats.alwaysInline >= 1,
+     JSON.stringify({ a: stats.alwaysInline, s: stats.singleUse }));
+  ok('exec-always-inline-selfcheck', runWasm(wasmPath) === 'same same\n');
 }
 
 fs.rmSync(TMP, { recursive: true, force: true });
