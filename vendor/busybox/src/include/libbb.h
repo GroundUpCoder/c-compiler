@@ -311,7 +311,18 @@ typedef unsigned long long uoff_t;
  * Even if sizeof(off_t) == sizeof(int), off_t is typedef'ed to long anyway.
  * gcc will throw warnings on printf("%d", off_t)... Have to use %ld etc.
  */
-# if UINT_MAX == ULONG_MAX
+# if defined(__wasm__)
+/* WASM PORT: this libc's off_t is long long (64-bit) even without LFS —
+ * the upstream !LFS assumption sizeof(off_t)==sizeof(long) misdetects
+ * (BUG_off_t_size_is_misdetected below fired as soon as the compiler
+ * learned to diagnose negative array sizes, todos/0231), and OFF_FMT "l"
+ * would pop 4 bytes of an 8-byte vararg. Use the 64-bit family. */
+typedef unsigned long long uoff_t;
+#  define XATOOFF(a) xatoull_range((a), 0, LLONG_MAX)
+#  define BB_STRTOOFF bb_strtoull
+#  define STRTOOFF strtoull
+#  define OFF_FMT "ll"
+# elif UINT_MAX == ULONG_MAX
 typedef unsigned long uoff_t;
 #  define XATOOFF(a) xatoi_positive(a)
 #  define BB_STRTOOFF bb_strtou

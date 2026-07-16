@@ -29,7 +29,13 @@
 # endif
 #endif
 
-#if !__GNUC_PREREQ(2,7)
+/* WASM PORT: this compiler is not gcc (__GNUC__ undefined) but DOES parse
+ * and honor __attribute__ (packed/aligned/always_inline/noreturn/...;
+ * unknown attributes are skipped) — swallowing them here made every PACKED
+ * struct unpacked (decompress_gunzip's gz-header union was 12 bytes, its
+ * BUILD_BUG_ON compile-assert firing invisibly until the compiler learned
+ * to diagnose negative array sizes — todos/0231). */
+#if !__GNUC_PREREQ(2,7) && !defined(__wasm__)
 # ifndef __attribute__
 #  define __attribute__(x)
 # endif
