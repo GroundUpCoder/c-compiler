@@ -13,6 +13,7 @@
 #ifndef WM_PROTO_H
 #define WM_PROTO_H
 
+#include <errno.h>
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
@@ -212,7 +213,13 @@ static int wmp_read_all(int fd, void *buf, int len) {
     char *p = (char *)buf;
     while (len > 0) {
         int n = (int)read(fd, p, (size_t)len);
-        if (n <= 0) return -1;         /* EOF or error: connection gone */
+        if (n <= 0) {                  /* EOF or error: connection gone */
+            if (n == 0) errno = ECONNRESET;   /* EOF leaves errno stale —
+                                                 name the real condition so
+                                                 callers' strerror() reports
+                                                 are truthful (todos/0234) */
+            return -1;
+        }
         p += n; len -= n;
     }
     return 0;

@@ -279,6 +279,17 @@ typedef struct {
 
 static int sock = -1;
 static int scr_w = 800, scr_h = 500;
+
+/* Fatal-exit with a diagnostic (todos/0234): the wm is the desktop's
+ * central service, and the kernel-chrome fallback makes its death easy
+ * to miss — a bare exit(1) turns a protocol drift or a dead endpoint
+ * into an strace hunt. Every fatal path says WHAT failed and WHY on
+ * stderr (wmp_read_all names EOF as ECONNRESET, so the common
+ * endpoint-gone case reads truthfully). */
+static void die(const char *what) {
+    fprintf(stderr, "wm: %s: %s\n", what, strerror(errno));
+    exit(1);
+}
 static win_t wins[MAX_WIN];
 static int nwins = 0;
 static int32_t bar_sid = 0;        /* our own taskbar surface */
@@ -1014,8 +1025,8 @@ static void saver_poll(void) {
 static void idle_consume(wmp_hdr *h) {
     idle_pending = 0;
     int32_t ms = 0;
-    if (h->plen < 4 || wmp_read_all(sock, &ms, 4) != 0) exit(1);
-    if (wmp_skip(sock, h->plen - 4) != 0) exit(1);
+    if (h->plen < 4 || wmp_read_all(sock, &ms, 4) != 0) die("R_IDLE read");
+    if (wmp_skip(sock, h->plen - 4) != 0) die("R_IDLE skip");
     if (!saver_win && saver_cfg.timeout > 0 && ms / 1000 >= saver_cfg.timeout)
         saver_show();
 }
@@ -2974,14 +2985,14 @@ static void draw_peek(void) {
 static void peek_consume(wmp_hdr *h) {
     peek_pending = 0;
     int32_t head[3];
-    if (h->plen < 12 || wmp_read_all(sock, head, 12) != 0) exit(1);
+    if (h->plen < 12 || wmp_read_all(sock, head, 12) != 0) die("R_SHOT read");
     uint32_t n = h->plen - 12;
     int keep = peek_win && head[0] == peek_for &&
                head[1] > 0 && head[1] <= PEEK_W - 2 * PEEK_PAD &&
                head[2] > 0 && head[2] <= PEEK_H - 2 * PEEK_PAD &&
                (uint32_t)(head[1] * head[2] * 4) == n;
-    if (!keep) { if (wmp_skip(sock, n) != 0) exit(1); return; }
-    if (wmp_read_all(sock, peek_px, (int)n) != 0) exit(1);
+    if (!keep) { if (wmp_skip(sock, n) != 0) die("R_SHOT skip"); return; }
+    if (wmp_read_all(sock, peek_px, (int)n) != 0) die("R_SHOT read");
     peek_tw = head[1];
     peek_th = head[2];
     peek_dirty = 1;
@@ -3083,7 +3094,7 @@ static void screen_changed(void) {
 static void handle_event(wmp_hdr *h) {
     if (h->type == WMP_EV_CREATED) {
         wmp_rec r;
-        if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) exit(1);
+        if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
         if (r.pid == own_pid) {        /* our own furniture: park by title */
             if (strncmp(r.title, "startmenu", 9) == 0) {   /* 0028/0078 */
                 int depth = r.title[9] ? r.title[9] - '1' : 0;
@@ -3250,7 +3261,7 @@ static void handle_event(wmp_hdr *h) {
     if (h->plen > sizeof p && h->type != WMP_EV_TITLE) { wmp_skip(sock, h->plen); return; }
     switch (h->type) {
     case WMP_EV_DESTROYED: {
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_DESTROYED read");
         for (int d = 0; d < MENU_DEPTH; d++)              /* defensive (0028) */
             if (p[0] == mcol[d].sid) mcol[d].sid = 0;
         if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
@@ -3272,7 +3283,7 @@ static void handle_event(wmp_hdr *h) {
         break;
     }
     case WMP_EV_FOCUS: {
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_FOCUS read");
         /* Focus moving anywhere but the menu's own columns dismisses it
          * (0028). A column's create-focus echo is exempt — it may even
          * arrive in the same drain as the EV_CREATED that told us its
@@ -3312,17 +3323,17 @@ static void handle_event(wmp_hdr *h) {
         break;
     }
     case WMP_EV_CYCLE: {               /* window cycling (todos/0032) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_CYCLE read");
         cycle(p[0]);
         break;
     }
     case WMP_EV_MENU: {                /* Start chord / wmctl menu (0078) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_MENU read");
         menu_toggle();
         break;
     }
     case WMP_EV_MINIMIZED: {
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_MINIMIZED read");
         win_t *w = find(p[0]);
         if (w) { w->minimized = p[1] ? 1 : 0; if (w->minimized) w->focused = 0; }
         break;
@@ -3331,48 +3342,48 @@ static void handle_event(wmp_hdr *h) {
         int32_t sid;
         char t[32];
         if (h->plen != 4 + 32 || wmp_read_all(sock, &sid, 4) != 0 ||
-            wmp_read_all(sock, t, 32) != 0) exit(1);
+            wmp_read_all(sock, t, 32) != 0) die("EV_TITLE read");
         win_t *w = find(sid);
         if (w) { memcpy(w->title, t, 32); w->title[31] = 0; }
         break;
     }
     case WMP_EV_MOVED: {                /* tracked for the EV_SCREEN re-clamp */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_MOVED read");
         win_t *w = find(p[0]);
         if (w) { w->x = p[1]; w->y = p[2]; }
         break;
     }
     case WMP_EV_CONFIGURED: {
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_CONFIGURED read");
         win_t *w = find(p[0]);
         /* configure implies resizable: dst tracks the buffer (todos/0024) */
         if (w) { w->w = p[1]; w->h = p[2]; w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
     }
     case WMP_EV_SCALED: {               /* dst viewport changed (todos/0024) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCALED read");
         win_t *w = find(p[0]);
         if (w) { w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
     }
     case WMP_EV_SCALE_REQ: {            /* drag box -> aspect-fit SET_DST */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCALE_REQ read");
         scale_request(p[0], p[1], p[2]);
         break;
     }
     case WMP_EV_TITLE_ACTIVATE: {       /* maximize toggle (todos/0025) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_TITLE_ACTIVATE read");
         title_activate(p[0]);
         break;
     }
     case WMP_EV_SNAP_EDGE: {            /* mid-drag edge zone (todos/0095) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SNAP_EDGE read");
         if (p[1] > 0 && find(p[0])) snapprev_show(p[1]);
         else snapprev_dismiss();
         break;
     }
     case WMP_EV_SNAP_DROP: {            /* title-drag release (todos/0095) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SNAP_DROP read");
         snapprev_dismiss();
         win_t *w = find(p[0]);
         if (!w) break;
@@ -3399,29 +3410,29 @@ static void handle_event(wmp_hdr *h) {
         break;
     }
     case WMP_EV_SNAP_KEY: {             /* Win+arrow / wmctl snap (0095) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SNAP_KEY read");
         snap_key(p[0]);
         break;
     }
     case WMP_EV_SAVER: {                /* wmctl saver / Preview (0096) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SAVER read");
         saver_force();
         break;
     }
     case WMP_EV_SYSMENU: {              /* Alt+Space / wmctl sysmenu (0102) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SYSMENU read");
         win_t *w = find(p[0]);          /* the focused sid it carries */
         if (w && !w->minimized) ctx_open_sysmenu(w);
         break;
     }
     case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */
-        if (wmp_read_all(sock, p, (int)h->plen) != 0) exit(1);
+        if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCREEN read");
         scr_w = p[0]; scr_h = p[1];
         screen_changed();
         break;
     }
     default:
-        if (wmp_skip(sock, h->plen) != 0) exit(1);
+        if (wmp_skip(sock, h->plen) != 0) die("event skip");
     }
 }
 
@@ -3438,11 +3449,11 @@ static int drain_socket(void) {
         FD_SET(sock, &rf);
         if (select(sock + 1, &rf, NULL, NULL, &tv) <= 0) return n;
         wmp_hdr h;
-        if (wmp_next(sock, &h) != 0) exit(1);      /* endpoint gone: give up */
+        if (wmp_next(sock, &h) != 0) die("event stream");  /* endpoint gone: give up */
         if (h.type >= 0x80) handle_event(&h);
         else if (h.type == WMP_R_SHOT) peek_consume(&h);   /* THUMB (0063) */
         else if (h.type == WMP_R_IDLE) idle_consume(&h);   /* GET_IDLE (0096) */
-        else if (wmp_skip(sock, h.plen) != 0) exit(1);
+        else if (wmp_skip(sock, h.plen) != 0) die("reply skip");
         n++;
     }
 }
@@ -3863,12 +3874,17 @@ int main(void) {
     if (sock < 0) { fprintf(stderr, "wm: cannot reach %s\n", WM_SOCK_PATH); return 1; }
 
     /* Subscribe; the R_OK reply carries the screen dims. */
-    if (wmp_send(sock, WMP_SUBSCRIBE, NULL, 0) != 0) return 1;
+    if (wmp_send(sock, WMP_SUBSCRIBE, NULL, 0) != 0) die("subscribe send");
     wmp_hdr h;
-    if (wmp_next_reply(sock, &h) != 0 || h.type != WMP_R_OK || h.plen < 8) return 1;
+    if (wmp_next_reply(sock, &h) != 0) die("subscribe reply");
+    if (h.type != WMP_R_OK || h.plen < 8) {
+        fprintf(stderr, "wm: unexpected subscribe reply (type 0x%x, %u bytes)\n",
+                h.type, h.plen);
+        return 1;
+    }
     int32_t dims[2];
-    if (wmp_read_all(sock, dims, 8) != 0) return 1;
-    if (wmp_skip(sock, h.plen - 8) != 0) return 1;
+    if (wmp_read_all(sock, dims, 8) != 0) die("subscribe reply read");
+    if (wmp_skip(sock, h.plen - 8) != 0) die("subscribe reply skip");
     scr_w = dims[0]; scr_h = dims[1];
 
     /* The snapshot (EV_CREATED per existing surface + EV_FOCUS) follows on
@@ -3876,8 +3892,14 @@ int main(void) {
      * pre-existing windows get buttons AND get re-placed — (re)starting
      * the WM deliberately tidies the desktop. */
     SDL_Init(SDL_INIT_VIDEO);
-    if (make_desk() != 0) return 2;    /* bottom of z; created first (0029) */
-    if (make_bar() != 0) return 2;
+    if (make_desk() != 0) {            /* bottom of z; created first (0029) */
+        fprintf(stderr, "wm: cannot create the desktop window\n");
+        return 2;
+    }
+    if (make_bar() != 0) {
+        fprintf(stderr, "wm: cannot create the taskbar window\n");
+        return 2;
+    }
     /* Desktop is up: the startup chime (todos/0094; sounds.h fire-and-
      * forget — the kernel drains the clip, pumpless kernels drop it).
      * Deliberately per wm start, not per boot: a `wm &` respawn is a new
