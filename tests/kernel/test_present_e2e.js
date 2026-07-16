@@ -95,7 +95,7 @@ const TUTORIAL = [
 /* ---- the 0221 talk decks (Presentations/POSIX on WebAssembly): same
  * launch/page-through/alive gate. */
 const TALKS = [
-  { n: 'posix-on-wasm', back: [48, 24, 72], steps: 13, sub: 'talks/' },  // #301848
+  { n: 'posix-on-wasm', back: [48, 24, 72], steps: 29, sub: 'talks/' },  // #301848 (+7 pauses)
 ];
 const ALL = DECKS.concat(TUTORIAL, TALKS);
 for (const d of ALL) {
