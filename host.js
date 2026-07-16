@@ -5892,7 +5892,9 @@ function createNullSDL() {
  * Input arrives on the per-process ring (kernel = producer); the frame loop
  * drains it into the wasm event queue before every tick.
  *
- * Layout constants MUST MATCH kernel.js (SH_* / IR_* there).
+ * Layout constants MUST MATCH kernel.js (SH_* / IR_* / WMEV / AU_* there) —
+ * ENFORCED by assertWmSabLayout below (CD26): every field is cross-checked
+ * against the kernel's published copy at surface-backend setup.
  * ========================================================================== */
 /* Push bytes from wasm memory into an audio ring SAB (layout:
  * createSharedAudioBuffer — [writePos, queuedBytes, playing, reserved] +
@@ -5906,7 +5908,7 @@ function createNullSDL() {
  * 44.1kHz stereo S16) and the negative ring offset kills the run with a
  * RangeError. Single producer, so load/modify/store is race-free. */
 function audioRingPush(control, ringData, cap, memory, dataPtr, len, alignBytes) {
-  const queuedBytes = Atomics.load(control, 1);
+  const queuedBytes = Atomics.load(control, WMAU_QUEUED);
   const free = cap - Math.max(0, queuedBytes);
   if (free <= 0 || len <= 0) return 0;
   let accepted = Math.min(len, free, cap);
@@ -5917,26 +5919,79 @@ function audioRingPush(control, ringData, cap, memory, dataPtr, len, alignBytes)
     return 0;
   }
   const src = new Uint8Array(memory.buffer, dataPtr, accepted);
-  const writePos = Atomics.load(control, 0) % cap;
+  const writePos = Atomics.load(control, WMAU_WPOS) % cap;
   const firstChunk = Math.min(accepted, cap - writePos);
   ringData.set(src.subarray(0, firstChunk), writePos);
   if (firstChunk < accepted) {
     ringData.set(src.subarray(firstChunk), 0);
   }
-  Atomics.store(control, 0, (writePos + accepted) % cap);
-  Atomics.add(control, 1, accepted); /* increment queuedBytes */
+  Atomics.store(control, WMAU_WPOS, (writePos + accepted) % cap);
+  Atomics.add(control, WMAU_QUEUED, accepted); /* increment queuedBytes */
   return accepted;
 }
 
-const WMSH_MAGIC = 0, WMSH_W = 1, WMSH_H = 2, WMSH_FLIP = 4, WMSH_SEQ = 5;
+const WMSH_MAGIC = 0, WMSH_W = 1, WMSH_H = 2, WMSH_FORMAT = 3, WMSH_FLIP = 4,
+      WMSH_SEQ = 5;
 const WMSH_MAGIC_VALUE = 0x574d5346;
 const WMSH_HDR_BYTES = 64;
-const WMIR_WPOS = 0, WMIR_RPOS = 1, WMIR_CAP = 2;
+const WMIR_WPOS = 0, WMIR_RPOS = 1, WMIR_CAP = 2, WMIR_DROPPED = 3;
 const WMIR_HDR_BYTES = 32, WMIR_RECORD_WORDS = 8, WMIR_DEFAULT_CAP = 256;
+const WMAU_WPOS = 0, WMAU_QUEUED = 1, WMAU_PLAYING = 2, WMAU_HDR_BYTES = 16;
 const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
       WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
       WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
       WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
+
+/* CD26 tripwire (mirrors todos/0235's payloadChunk rule): the constants
+ * above re-declare kernel.js's SH_* / IR_* / WMEV / AU_* SAB layouts —
+ * host.js is a standalone module and cannot import them — and drift between
+ * the two copies corrupts presents/screenshots/input/audio SILENTLY. The
+ * kernel publishes its declaration as spawnHooks.wmSabLayout (kernel.js
+ * WM_SAB_LAYOUT); this cross-checks EVERY field — both key sets, exact
+ * values — at surface-backend setup, which runs for every kernel-attached
+ * process from pid 1 on, so a one-sided layout edit fails the boot loud
+ * instead of shipping wrong pixels. The field is REQUIRED (the 0235 rule:
+ * kernel.js and host.js ship from one tree, so a missing field is version
+ * skew — fail loud rather than present on a stale guess). */
+function assertWmSabLayout(hooks) {
+  const mine = {
+    shMagic: WMSH_MAGIC, shW: WMSH_W, shH: WMSH_H, shFormat: WMSH_FORMAT,
+    shFlip: WMSH_FLIP, shSeq: WMSH_SEQ,
+    shMagicValue: WMSH_MAGIC_VALUE, shHdrBytes: WMSH_HDR_BYTES,
+    irWpos: WMIR_WPOS, irRpos: WMIR_RPOS, irCap: WMIR_CAP,
+    irDropped: WMIR_DROPPED,
+    irHdrBytes: WMIR_HDR_BYTES, irRecordWords: WMIR_RECORD_WORDS,
+    auWpos: WMAU_WPOS, auQueued: WMAU_QUEUED, auPlaying: WMAU_PLAYING,
+    auHdrBytes: WMAU_HDR_BYTES,
+    ev: {
+      QUIT: WMEV_QUIT, WINDOW_RESIZED: WMEV_WINDOW_RESIZED,
+      KEYDOWN: WMEV_KEYDOWN, KEYUP: WMEV_KEYUP,
+      MOUSEMOTION: WMEV_MOUSEMOTION, MOUSEBUTTONDOWN: WMEV_MOUSEBUTTONDOWN,
+      MOUSEBUTTONUP: WMEV_MOUSEBUTTONUP, MOUSEWHEEL: WMEV_MOUSEWHEEL,
+    },
+  };
+  const theirs = hooks && hooks.wmSabLayout;
+  if (!theirs) {
+    throw new Error('spawnHooks.wmSabLayout missing — kernel.js/host.js out of sync (CD26, the todos/0235 shape)');
+  }
+  const drift = [];
+  (function cmp(a, b, prefix) {
+    const keys = new Set(Object.keys(a).concat(Object.keys(b)));
+    keys.forEach(function (k) {
+      const av = a[k], bv = b[k];
+      if (av !== null && typeof av === 'object' &&
+          bv !== null && typeof bv === 'object') {
+        cmp(av, bv, prefix + k + '.');
+      } else if (av !== bv) {
+        drift.push(prefix + k + ' (host.js ' + av + ' vs kernel.js ' + bv + ')');
+      }
+    });
+  })(mine, theirs, '');
+  if (drift.length) {
+    throw new Error('shared-SAB layout drift between host.js and kernel.js (CD26): ' +
+                    drift.join(', ') + ' — the two declarations MUST move together');
+  }
+}
 // Cursor shape (SDL_SystemCursor) -> CSS `cursor` name (todos/0105). Index is
 // the wire shape; -1 (hidden) maps to 'none'. The kernel derives chrome
 // resize cursors and overlays them over an app's per-surface cursor; the
@@ -5974,6 +6029,7 @@ function resolveDawnGpu() {
 const WMAUDIO_RING_BYTES = 256 * 1024;
 
 function createSurfaceSDL({ ctx, hooks }) {
+  assertWmSabLayout(hooks);   // CD26: fail the process spawn loud on layout drift
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
   const kFlagsBySid = new Map();     // sid -> current kernel surface flags word
@@ -6006,7 +6062,7 @@ function createSurfaceSDL({ ctx, hooks }) {
     }
     return {
       __sdl_open_audio_device: function (freq, format, channels) {
-        const sab = new SharedArrayBuffer(16 + WMAUDIO_RING_BYTES);
+        const sab = new SharedArrayBuffer(WMAU_HDR_BYTES + WMAUDIO_RING_BYTES);
         const r = hooks.audioOpen(freq, format, channels, sab);
         if (!r || r.errno || !(r.aid > 0)) return 0;   // C shim sets the SDL error
         let bytesPerSample = 2;                        // S16 default
@@ -6014,8 +6070,8 @@ function createSurfaceSDL({ ctx, hooks }) {
         else if (format === 0x8008 || format === 0x0008) bytesPerSample = 1;
         audioDevices.push({
           aid: r.aid,
-          control: new Int32Array(sab, 0, 4),
-          ring: new Uint8Array(sab, 16, WMAUDIO_RING_BYTES),
+          control: new Int32Array(sab, 0, WMAU_HDR_BYTES >> 2),
+          ring: new Uint8Array(sab, WMAU_HDR_BYTES, WMAUDIO_RING_BYTES),
           cap: WMAUDIO_RING_BYTES,
           frameBytes: bytesPerSample * channels,
         });
@@ -6030,15 +6086,15 @@ function createSurfaceSDL({ ctx, hooks }) {
       },
       __sdl_get_queued_audio_size: function (dev) {
         const d = audioDevices[dev - 1];
-        return d ? Math.max(0, Atomics.load(d.control, 1)) : 0;
+        return d ? Math.max(0, Atomics.load(d.control, WMAU_QUEUED)) : 0;
       },
       __sdl_clear_queued_audio: function (dev) {
         const d = audioDevices[dev - 1];
-        if (d) Atomics.store(d.control, 1, 0);   // mixer self-heals a racy negative
+        if (d) Atomics.store(d.control, WMAU_QUEUED, 0);   // mixer self-heals a racy negative
       },
       __sdl_pause_audio_device: function (dev, pause_on) {
         const d = audioDevices[dev - 1];
-        if (d) Atomics.store(d.control, 2, pause_on ? 0 : 1);
+        if (d) Atomics.store(d.control, WMAU_PLAYING, pause_on ? 0 : 1);
       },
       __sdl_close_audio_device: function (dev) {
         const d = audioDevices[dev - 1];
@@ -7250,19 +7306,19 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         if (!sharedAudioBuffer) return 0;   // no ring wired → C keeps it all in backlog
         const sab = sharedAudioBuffer.sharedBuffer;
         const cap = sharedAudioBuffer.bufferSize;
-        const control = new Int32Array(sab, 0, 4);
-        const ringData = new Uint8Array(sab, 16, cap);
+        const control = new Int32Array(sab, 0, WMAU_HDR_BYTES >> 2);
+        const ringData = new Uint8Array(sab, WMAU_HDR_BYTES, cap);
         return audioRingPush(control, ringData, cap, getMemory(), dataPtr, len, 1);
       },
       __sdl_get_queued_audio_size: function (dev) {
         if (!sharedAudioBuffer) return 0;   // no ring → ring holds nothing (C adds backlog)
-        const control = new Int32Array(sharedAudioBuffer.sharedBuffer, 0, 4);
-        return Atomics.load(control, 1);
+        const control = new Int32Array(sharedAudioBuffer.sharedBuffer, 0, WMAU_HDR_BYTES >> 2);
+        return Atomics.load(control, WMAU_QUEUED);
       },
       __sdl_clear_queued_audio: function (dev) {
         if (!sharedAudioBuffer) return;
-        const control = new Int32Array(sharedAudioBuffer.sharedBuffer, 0, 4);
-        Atomics.store(control, 1, 0);
+        const control = new Int32Array(sharedAudioBuffer.sharedBuffer, 0, WMAU_HDR_BYTES >> 2);
+        Atomics.store(control, WMAU_QUEUED, 0);
         if (notifyAudio) notifyAudio({ type: 'audio-clear', id: dev });
       },
       __sdl_pause_audio_device: function (dev, pause_on) {
@@ -8600,7 +8656,7 @@ function createConsoleReceiver(options) {
 
 function createSharedAudioBuffer(bufferSize) {
   bufferSize = bufferSize || (4 * 1024 * 1024);
-  const headerSize = 16; /* 4 Int32 fields */
+  const headerSize = WMAU_HDR_BYTES; /* 4 Int32 fields */
   const sab = new SharedArrayBuffer(headerSize + bufferSize);
   return { sharedBuffer: sab, bufferSize: bufferSize };
 }
@@ -8617,8 +8673,8 @@ function createSharedAudioBuffer(bufferSize) {
 function createAudioReceiver(options) {
   const sab = options.sharedBuffer;
   const bufferSize = options.bufferSize;
-  const headerSize = 16;
-  const control = new Int32Array(sab, 0, 4); /* [writePos, queuedBytes, playing, reserved] */
+  const headerSize = WMAU_HDR_BYTES;
+  const control = new Int32Array(sab, 0, headerSize >> 2); /* [writePos, queuedBytes, playing, reserved] */
   const ringData = new Uint8Array(sab, headerSize, bufferSize);
 
   let devices = {}; /* id -> { ctx, gain, freq, channels, bytesPerSample, isFloat, nextTime, ... } */
@@ -8658,15 +8714,15 @@ function createAudioReceiver(options) {
       const dev = devices[msg.id];
       if (!dev) return;
       if (msg.pause) {
-        Atomics.store(control, 2, 0);
+        Atomics.store(control, WMAU_PLAYING, 0);
         dev.ctx.suspend();
       } else {
-        Atomics.store(control, 2, 1);
+        Atomics.store(control, WMAU_PLAYING, 1);
         dev.ctx.resume();
         dev.nextTime = dev.ctx.currentTime;
       }
     } else if (msg.type === 'audio-clear') {
-      Atomics.store(control, 1, 0); /* reset queuedBytes */
+      Atomics.store(control, WMAU_QUEUED, 0); /* reset queuedBytes */
       const dev = devices[msg.id];
       if (dev) { dev.inflight = 0; dev.nextTime = dev.ctx.currentTime; }
     } else if (msg.type === 'audio-close') {
@@ -8685,14 +8741,14 @@ function createAudioReceiver(options) {
   }
 
   function _flushDevice(device) {
-    if (!Atomics.load(control, 2)) return; /* not playing */
+    if (!Atomics.load(control, WMAU_PLAYING)) return; /* not playing */
 
     const cap = bufferSize;
     while (device.inflight < device.maxInflight) {
-      const queuedBytes = Atomics.load(control, 1);
+      const queuedBytes = Atomics.load(control, WMAU_QUEUED);
       if (queuedBytes < device.batchBytes) break;
 
-      const writePos = Atomics.load(control, 0);
+      const writePos = Atomics.load(control, WMAU_WPOS);
       const len = device.batchBytes;
 
       /* Read 'len' bytes from shared ring buffer */
@@ -8704,7 +8760,7 @@ function createAudioReceiver(options) {
       if (firstChunk < len) {
         chunk.set(ringData.subarray(0, len - firstChunk), firstChunk);
       }
-      Atomics.sub(control, 1, len); /* decrement queuedBytes */
+      Atomics.sub(control, WMAU_QUEUED, len); /* decrement queuedBytes */
 
       /* Decode PCM into Web Audio buffer */
       // Floor defensively — even with batchBytes aligned to a frame,

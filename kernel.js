@@ -586,6 +586,29 @@ var AU_FMT_F32 = 0x8120, AU_FMT_S32 = 0x8020, AU_FMT_S16 = 0x8010,
 var AU_TARGET_MS = 80;                 // output queue depth the pump tops up to
 var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
 
+/* ONE published copy of the shared-SAB layout contract (the CD26 tripwire,
+ * todos/0235's payloadChunk shape): host.js declares these same offsets
+ * independently (WMSH_* / WMIR_* / WMEV_* / WMAU_* — it is a standalone
+ * module that CANNOT import kernel.js), and drift between the two copies
+ * corrupts presents/screenshots/input/audio SILENTLY — no error, just
+ * wrong pixels. So the kernel publishes its declaration on the spawnHooks
+ * seam (wmSabLayout) and host.js cross-checks EVERY field — both key sets,
+ * exact values — at surface-backend setup (assertWmSabLayout there), which
+ * runs for every kernel-attached process from pid 1 on: a one-sided edit
+ * fails the boot loud. Adding a header field on one side only trips the
+ * check until the other side matches — extend BOTH declarations AND this
+ * table together. */
+var WM_SAB_LAYOUT = {
+  shMagic: SH_MAGIC, shW: SH_W, shH: SH_H, shFormat: SH_FORMAT,
+  shFlip: SH_FLIP, shSeq: SH_SEQ,
+  shMagicValue: SH_MAGIC_VALUE, shHdrBytes: SH_HDR_BYTES,
+  irWpos: IR_WPOS, irRpos: IR_RPOS, irCap: IR_CAP, irDropped: IR_DROPPED,
+  irHdrBytes: IR_HDR_BYTES, irRecordWords: IR_RECORD_WORDS,
+  auWpos: AU_WPOS, auQueued: AU_QUEUED, auPlaying: AU_PLAYING,
+  auHdrBytes: AU_HDR_BYTES,
+  ev: WMEV,
+};
+
 /* ============================================================
  * The WM protocol (todos/0014) — the kernel-owned AF_UNIX endpoint at
  * /run/wm.sock. ONE op set exposed twice (WM.md "Agent control channel"):
@@ -1200,6 +1223,11 @@ KernelClient.prototype.spawnHooks = function () {
     // http body) — derived kernel-side from KP_PAYLOAD_CAP (todos/0235)
     // so host.js never restates the kernel-page layout.
     payloadChunk: KP_HOOK_CHUNK,
+    // Shared-SAB layout tripwire (CD26, the same 0235 shape): host.js
+    // re-declares the shm-surface / input-ring / audio-ring layouts and
+    // cross-checks every field of this table at surface-backend setup —
+    // see WM_SAB_LAYOUT.
+    wmSabLayout: WM_SAB_LAYOUT,
     clipSet: function (bytes) { return self.callRaw(OP.CLIP_SET, bytes); },
     clipGet: function (fmt, off) { return self.call(OP.CLIP_GET, { fmt: fmt, off: off }); },
     // HTTP transport (todos/0172): host.js's createHttp drives these; the
@@ -7183,6 +7211,7 @@ var KERNEL_EXPORTS = {
   IR_WPOS: IR_WPOS, IR_RPOS: IR_RPOS, IR_CAP: IR_CAP, IR_DROPPED: IR_DROPPED,
   IR_HDR_BYTES: IR_HDR_BYTES, IR_RECORD_WORDS: IR_RECORD_WORDS,
   WMEV: WMEV,
+  WM_SAB_LAYOUT: WM_SAB_LAYOUT,   // the published copy host.js checks (CD26)
   WM_TITLE_H: WM_TITLE_H, WM_CLOSE_W: WM_CLOSE_W, WM_CLOSE_PAD: WM_CLOSE_PAD,
   WM_BOX_GAP: WM_BOX_GAP,
   WM_BORDER: WM_BORDER, WM_GRIP: WM_GRIP, WM_MIN_SIZE: WM_MIN_SIZE,
