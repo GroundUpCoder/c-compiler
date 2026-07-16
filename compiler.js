@@ -16352,7 +16352,32 @@ function constEvalExpr(expr, policy) {
       if (addr !== null && addr !== undefined) return { kind: "addr", addrVal: addr };
       return null;
     }
-    case AST.EDecay: return constEvalExpr(expr.operand, policy);
+    case AST.EDecay: {
+      // Bare identifiers (globals, functions) and string literals resolve
+      // directly as values. Member/subscript array lvalues (`s.b`,
+      // `t.inner.m`, `r.rows[1]` — todos/0220) have no value case; their
+      // decay IS the address of the first element, which constEvalAddr
+      // already resolves for the &s.b[k] spelling — so both spellings fold
+      // through the same addr arithmetic.
+      const v = constEvalExpr(expr.operand, policy);
+      if (v) return v;
+      const addr = constEvalAddr(expr.operand, policy);
+      if (addr === null || addr === undefined) return null;
+      return { kind: "addr", addrVal: addr };
+    }
+    case AST.EMember:
+    case AST.EArrow:
+    case AST.ESubscript: {
+      // An ARRAY-typed lvalue used as a value is an implicit array-to-
+      // pointer decay — init-list elements carry no EDecay wrapper
+      // (normalizeInitList doesn't insert one), so `int *p[1] = {s.b};`
+      // lands here raw (todos/0220). Non-array lvalues stay non-constant:
+      // a global's STORED value is runtime state, not a constant.
+      if (!expr.type.isArray()) return null;
+      const addr = constEvalAddr(expr, policy);
+      if (addr === null || addr === undefined) return null;
+      return { kind: "addr", addrVal: addr };
+    }
     default: return null;
   }
 }
