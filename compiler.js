@@ -2923,25 +2923,53 @@ function computeStructLayout(members, isPacked = false) {
   // Bitfield packing state
   let bfBitsUsed = 0;
   let bfUnitSize = 0;
-  let bfUnitType = null;
+  let bfMaxAccess = 0;  // widest named-member access window in the run
   let inBitField = false;
+
+  // A bit-field's access window: the smallest power-of-2 byte count,
+  // anchored at the storage unit's start, that covers the member's bits.
+  // 8-byte units never narrow (the i64 access path keeps its type domain).
+  // Codegen RMWs this window instead of the declared unit so a packed
+  // struct — whose tail bytes the unit doesn't own — never touches memory
+  // past the member run.
+  const windowBytes = (m, endBit) => {
+    if (m.type.size === 8) return 8;
+    const b = (endBit + 7) >> 3;
+    return b <= 1 ? 1 : b <= 2 ? 2 : 4;
+  };
+  // Close the open unit: advance past the USED bytes only — a following
+  // member packs into the unit's unused tail bytes exactly as clang wasm32
+  // does (todos/0216; the old `size += bfUnitSize` advance diverged from
+  // clang on sizeof AND on the offset of every following member). Packed
+  // structs advance past the widest access window instead, so no member's
+  // RMW load/store can reach beyond the struct.
+  const closeBfUnit = () => {
+    const usedBytes = (bfBitsUsed + 7) >> 3;
+    size += isPacked ? Math.max(usedBytes, bfMaxAccess) : usedBytes;
+    inBitField = false; bfBitsUsed = 0; bfMaxAccess = 0;
+  };
 
   for (const m of members) {
     const naturalAlign = isPacked ? 1 : (m.type.align || 1);
     const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
     const mSize = m.type.size;
+
+    if (m.bitWidth === 0) {
+      // Zero-width bitfield: finish the current unit and realign to the
+      // declared type's boundary. Two clang/GCC subtleties (todos/0216):
+      // `:0` keeps its force-to-boundary effect inside a PACKED struct,
+      // and it contributes NOTHING to the struct's alignment (clang:
+      // struct {char a:3; int :0; char c;} is sizeof 5, align 1).
+      if (inBitField) closeBfUnit();
+      const zAlign = m.type.align || 1;
+      size = (size + zAlign - 1) & ~(zAlign - 1);
+      continue;
+    }
     if (mAlign > maxAlign) maxAlign = mAlign;
 
     if (m.bitWidth >= 0) {
       const bw = m.bitWidth;
       const unitBits = mSize * 8;
-
-      if (bw === 0) {
-        // Zero-width bitfield: finish current unit
-        if (inBitField) { size += bfUnitSize; inBitField = false; bfBitsUsed = 0; }
-        size = (size + mAlign - 1) & ~(mAlign - 1);
-        continue;
-      }
 
       // Bit-fields share a storage unit when their declared types have the
       // same size and the bits fit. Signedness does NOT split the unit —
@@ -2956,26 +2984,29 @@ function computeStructLayout(members, isPacked = false) {
         bfBitsUsed += bw;
       } else {
         // Finish previous unit if any
-        if (inBitField) size += bfUnitSize;
+        if (inBitField) closeBfUnit();
         // Start new storage unit
         size = (size + mAlign - 1) & ~(mAlign - 1);
         m.bitOffset = 0;
         m.byteOffset = size;
         bfBitsUsed = bw;
         bfUnitSize = mSize;
-        bfUnitType = m.type;
         inBitField = true;
       }
+      m.bfAccessBytes = windowBytes(m, m.bitOffset + bw);
+      // Anonymous bit-fields reserve bits but are never accessed, so they
+      // don't widen the packed advance past their used bytes.
+      if (m.name && m.bfAccessBytes > bfMaxAccess) bfMaxAccess = m.bfAccessBytes;
     } else {
       // Regular (non-bitfield) member: finish any pending bitfield unit
-      if (inBitField) { size += bfUnitSize; inBitField = false; bfBitsUsed = 0; }
+      if (inBitField) closeBfUnit();
       size = (size + mAlign - 1) & ~(mAlign - 1);
       m.byteOffset = size;
       size += mSize;
     }
   }
   // Finish any trailing bitfield unit
-  if (inBitField) size += bfUnitSize;
+  if (inBitField) closeBfUnit();
   // Final struct size aligned to struct alignment
   if (maxAlign > 0) size = (size + maxAlign - 1) & ~(maxAlign - 1);
   return { size, align: maxAlign };
@@ -2987,7 +3018,11 @@ function computeUnionLayout(members, isPacked = false) {
   for (const m of members) {
     m.byteOffset = 0;
     if (m.type.size > maxSize) maxSize = m.type.size;
-    const mAlign = isPacked ? 1 : (m.type.align || 1);
+    // Per-member _Alignas/__attribute__((aligned)) raises the union's
+    // alignment exactly as the struct path does (todos/0216 — it was
+    // silently ignored here, diverging from clang on align AND size).
+    const naturalAlign = isPacked ? 1 : (m.type.align || 1);
+    const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
     if (mAlign > maxAlign) maxAlign = mAlign;
   }
   if (maxAlign > 0) maxSize = Math.ceil(maxSize / maxAlign) * maxAlign;
@@ -3590,6 +3625,7 @@ class Expr {
       this.initExpr = initExpr || null;
       this.definition = null;
       this.bitWidth = -1; this.bitOffset = 0; this.byteOffset = 0;
+      this.bfAccessBytes = 0;  // bit-field RMW window, set by computeStructLayout
       this.requestedAlignment = 0;
       Object.seal(this);
     }
@@ -10190,6 +10226,17 @@ class Parser {
         tagType.size = layout.size;
         tagType.align = layout.align;
       }
+      // Tag-level __attribute__((aligned(N))) — either position (after the
+      // struct/union keyword or after the closing brace) — raises the TYPE's
+      // alignment, with sizeof padded up to it (todos/0216: it used to land
+      // only on the declaration's requestedAlignment, so _Alignof/sizeof of
+      // the type ignored it). aligned() can only increase alignment; a
+      // reduction needs packed (GCC semantics, matches clang).
+      const tagAligned = Math.max(tagAttrs.aligned, postTagAttrs.aligned);
+      if (tagAligned > tagType.align) {
+        tagType.align = tagAligned;
+        tagType.size = (tagType.size + tagAligned - 1) & ~(tagAligned - 1);
+      }
       tagType.isComplete = true;
       tagType.tagDecl = tagDecl;
       tagDecl.members = members;
@@ -16507,7 +16554,10 @@ class CodeGenerator {
                 // masks exact. (The runtime store path already does this.)
                 const bw = BigInt(member.bitWidth);
                 const bo = BigInt(member.bitOffset);
-                const unitSize = this.sizeOf(member.type);
+                // RMW only the layout-assigned access window (todos/0216):
+                // in a packed struct the declared unit's tail bytes can
+                // belong to the NEXT object in static data.
+                const unitSize = member.bfAccessBytes > 0 ? member.bfAccessBytes : this.sizeOf(member.type);
                 const mask = (1n << bw) - 1n;
                 const bits = BigInt.asUintN(64, val.intVal) & mask;
                 let unit = 0n;
@@ -17752,12 +17802,35 @@ class CodeGenerator {
   }
 
   // --- Bitfield load/store ---
+  // The unit access width is the layout-assigned window (bfAccessBytes:
+  // the narrowest power-of-2 span from the unit start covering the
+  // member's bits — todos/0216), falling back to the declared type's
+  // size (union members, older layouts). The window is what keeps a
+  // packed struct's RMW inside the struct. Loads are zero-extending;
+  // the mask/shift math below owns signedness.
+  _bfUnitBytes(field) {
+    return field.bfAccessBytes > 0 ? field.bfAccessBytes : field.type.size;
+  }
+  _bfUnitLoad(bytes) {
+    if (bytes === 1) this.body.mop(MOP.I32_LOAD8_U, 0, 0);
+    else if (bytes === 2) this.body.mop(MOP.I32_LOAD16_U, 0, 1);
+    else if (bytes === 8) this.body.mop(MOP.I64_LOAD, 0, 3);
+    else this.body.mop(MOP.I32_LOAD, 0, 2);
+  }
+  _bfUnitStore(bytes) {
+    if (bytes === 1) this.body.mop(MOP.I32_STORE8, 0, 0);
+    else if (bytes === 2) this.body.mop(MOP.I32_STORE16, 0, 1);
+    else if (bytes === 8) this.body.mop(MOP.I64_STORE, 0, 3);
+    else this.body.mop(MOP.I32_STORE, 0, 2);
+  }
   emitBitFieldLoad(field) {
     const bw = field.bitWidth, bo = field.bitOffset;
     const isUnsigned = this.isUnsignedType(field.type);
-    // i32 path covers 1/2/4-byte storage; i64 path covers 8-byte storage.
-    const use64 = field.type.size === 8;
-    this.emitLoad(field.type);
+    const unitBytes = this._bfUnitBytes(field);
+    // i32 path covers 1/2/4-byte windows; i64 path covers 8-byte storage
+    // (8-byte units never narrow, so the value domain matches the type).
+    const use64 = unitBytes === 8;
+    this._bfUnitLoad(unitBytes);
     if (!use64) {
       if (bo !== 0) { this.body.i32Const(bo); this.body.aop(WT_I32, ALU.OP_SHR_U); }
       if (bw < 32) { this.body.i32Const((1 << bw) - 1); this.body.aop(WT_I32, ALU.OP_AND); }
@@ -17783,10 +17856,11 @@ class CodeGenerator {
 
   emitBitFieldStore(field) {
     const bw = field.bitWidth, bo = field.bitOffset;
-    const unitBits = field.type.size * 8;  // 8, 16, 32, or 64
-    const use64 = field.type.size === 8;
+    const unitBytes = this._bfUnitBytes(field);
+    const unitBits = unitBytes * 8;  // 8, 16, 32, or 64
+    const use64 = unitBytes === 8;
     // Full-width store: no read-modify-write needed.
-    if (bw >= unitBits) { this.emitStore(field.type); return; }
+    if (bw >= unitBits) { this._bfUnitStore(unitBytes); return; }
 
     if (!use64) {
       const mask = ((1 << bw) - 1) << bo;
@@ -17796,7 +17870,7 @@ class CodeGenerator {
       this.body.localSet(valLocal);
       this.body.localSet(addrLocal);
       this.body.localGet(addrLocal);
-      this.emitLoad(field.type);
+      this._bfUnitLoad(unitBytes);
       this.body.i32Const(~mask);
       this.body.aop(WT_I32, ALU.OP_AND);
       this.body.localGet(valLocal);
@@ -17807,7 +17881,7 @@ class CodeGenerator {
       this.body.localSet(valLocal);
       this.body.localGet(addrLocal);
       this.body.localGet(valLocal);
-      this.emitStore(field.type);
+      this._bfUnitStore(unitBytes);
       this.popLocalScope();
     } else {
       // 64-bit storage unit. Same shape as the i32 path but with i64 ops
@@ -17822,7 +17896,7 @@ class CodeGenerator {
       this.body.localSet(valLocal);
       this.body.localSet(addrLocal);
       this.body.localGet(addrLocal);
-      this.emitLoad(field.type);
+      this._bfUnitLoad(unitBytes);
       this.body.i64Const(notMask);
       this.body.aop(WT_I64, ALU.OP_AND);
       this.body.localGet(valLocal);
@@ -17833,7 +17907,7 @@ class CodeGenerator {
       this.body.localSet(valLocal);
       this.body.localGet(addrLocal);
       this.body.localGet(valLocal);
-      this.emitStore(field.type);
+      this._bfUnitStore(unitBytes);
       this.popLocalScope();
     }
   }
