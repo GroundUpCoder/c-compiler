@@ -1,6 +1,12 @@
 # 0227 — Bug-hunt close-out: G21/G22/G23/W2 (sizeof semantics, accepts-invalid batch, empty-struct stride, WAST double-else)
 
-- **Status**: open
+- **Status**: done (2026-07-16) — G21/G23/W2 one commit each; G22 in three
+  (pp / const-assignment sema / parser diagnostics), corpus-safe: the
+  const check matches clang case-for-case (22-case differential oracle),
+  fuzz corpus 105/105, SameBoy interlock byte-identical. Literal
+  writability evaluated → deferred as todos/0228. **This completes the
+  2026-07 bug-hunt agenda: G1–G23 + W1/W2 all landed.** Dev log:
+  `logs/2026-07-16/bughunt-close-0227.md`.
 - **Design**: —
 
 ## Goal
