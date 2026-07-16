@@ -130,9 +130,15 @@ var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 64;   // payload stops short of 
  *  - KP_HOOK_CHUNK — the host.js-owned clipboard/http staging lanes
  *    (frame headers ≤ 12 bytes; granule 16K → 49152 today). Published
  *    across the process boundary as spawnHooks().payloadChunk, so host.js
- *    never restates the kernel-page layout. */
+ *    never restates the kernel-page layout.
+ *  - KP_DIR_PAGE — FS_OPENDIR/FS_READDIR entry pages (todos/0241). A JSON
+ *    lane, so the budget bounds the MEASURED per-entry bytes (UTF-8 of
+ *    each entry's JSON, +1 for the array comma); 64 bytes reserves the
+ *    {"entries":[…],"more":N} reply envelope. Kernel-internal — the
+ *    client just drains `more` cursors, it never needs the number. */
 var KP_FS_CHUNK = Math.floor((KP_PAYLOAD_CAP - 4) / 10000) * 10000;
 var KP_HOOK_CHUNK = Math.floor((KP_PAYLOAD_CAP - 16) / 16384) * 16384;
+var KP_DIR_PAGE = KP_PAYLOAD_CAP - 64;
 if (KP_FS_CHUNK < 4096 || KP_HOOK_CHUNK < 4096) {
   throw new Error('kernel page too small for the bulk-lane chunk derivations');
 }
@@ -205,6 +211,13 @@ var OP = {
   FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
   FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
   FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E, FS_FSYNC: 0x041F,
+  // FS_READDIR (todos/0241): the big-directory page fetch. FS_OPENDIR
+  // returns the first page of entries under KP_DIR_PAGE; when more remain
+  // it parks the open backend handle behind a per-process cursor id
+  // (reply `more`), and FS_READDIR {dir} drains it page by page — the
+  // final page carries no `more` and closes the handle. 0x0421 because
+  // FS_WAIT below predates it at 0x0420.
+  FS_READDIR: 0x0421,
   // Unified wait (todos/0178): ONE deferred park over fds ⊕ the input ring
   // ⊕ a timeout, interruptible by signals (krpc-intr → EINTR) — the only
   // sanctioned way to sleep on multiple sources (KERNEL.md single-writer
@@ -2155,6 +2168,9 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     // | {op:'piperead',pipe,count} | {op:'pipewrite',pipe,data}
     waiter: null,
     fds: new Map(),                // procFd -> ofdId (brokered mode)
+    dirRpc: null,                  // cursor -> {dh, pending} parked FS_OPENDIR
+                                   // pages mid-drain (todos/0241)
+    dirRpcNext: 1,
     page: null, i32: null, u8: null,
     worker: null,
     tty: self._tty,                // v1: the one system tty (or null)
@@ -2710,6 +2726,43 @@ Kernel.prototype._respondRaw = function (pcb, bytes) {
  * BlockFS fd of the kernel instance — its position IS the shared offset, so
  * dup/inheritance get POSIX open-file-description semantics for free, and
  * BlockFS's tested unlink-while-open refcounts become system-global. */
+/* One page of directory entries under the payload cap (todos/0241).
+ * FS_OPENDIR reads the first page; when the NEXT entry would push the
+ * measured JSON bytes past KP_DIR_PAGE, the open backend handle parks in
+ * pcb.dirRpc behind a cursor id (reply `more`) with that entry carried as
+ * `pending` — nothing is re-read or lost — and FS_READDIR {dir} continues
+ * it. The final page carries no `more` and closes the handle, so the
+ * ENOMEM degrade at _respond is unreachable for directory listings while
+ * the general oversize guard stays for every other op. Handles are held
+ * per-backend (BlockFS/ProcFS/MountFS all keep stateful dir handles), so
+ * pagination covers every volume kind with zero backend change. Release
+ * points: exhaustion here, a bad-cursor EBADF, and _exitProcess (a client
+ * that dies mid-drain leaks nothing — the fd discipline). */
+Kernel.prototype._readdirPage = function (pcb, dh, pending) {
+  var fs = this._fs;
+  var entries = [], bytes = 0;
+  var ent = pending !== null ? pending : fs.readdir(dh);
+  while (ent !== null) {
+    var e = { ino: ent.ino, type: ent.type, name: ent.name };
+    // Measured, not estimated: names are UTF-8 and JSON-escaped. The
+    // entries.length guard keeps forward progress if a single entry ever
+    // exceeded the budget (impossible at NAME_MAX-scale names, but a wedge
+    // is worse than one oversize page attempt).
+    var cost = textEncoder.encode(JSON.stringify(e)).length + 1;
+    if (bytes + cost > KP_DIR_PAGE && entries.length > 0) {
+      if (pcb.dirRpc === null) pcb.dirRpc = new Map();
+      var cur = pcb.dirRpcNext++;
+      pcb.dirRpc.set(cur, { dh: dh, pending: e });
+      return { entries: entries, more: cur };
+    }
+    entries.push(e);
+    bytes += cost;
+    ent = fs.readdir(dh);
+  }
+  fs.closedir(dh);
+  return { entries: entries };
+};
+
 Kernel.prototype._fsRpc = function (pcb, op, req) {
   var self = this;
   var fs = this._fs;
@@ -2965,14 +3018,14 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_OPENDIR: {
       var dh = fs.opendir(P(req.path));
       if (dh === null) { this._respond(pcb, eFs()); return; }
-      var entries = [];
-      for (;;) {
-        var ent = fs.readdir(dh);
-        if (ent === null) break;
-        entries.push({ ino: ent.ino, type: ent.type, name: ent.name });
-      }
-      fs.closedir(dh);
-      this._respond(pcb, { entries: entries });
+      this._respond(pcb, this._readdirPage(pcb, dh, null));
+      return;
+    }
+    case OP.FS_READDIR: {
+      var dcur = pcb.dirRpc !== null ? pcb.dirRpc.get(req.dir | 0) : undefined;
+      if (dcur === undefined) { this._respond(pcb, { errno: 'EBADF' }); return; }
+      pcb.dirRpc.delete(req.dir | 0);
+      this._respond(pcb, this._readdirPage(pcb, dcur.dh, dcur.pending));
       return;
     }
     case OP.FS_REALPATH: {
@@ -5738,6 +5791,12 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   var self0 = this;
   pcb.fds.forEach(function (ofdId) { self0._ofdUnref(ofdId, pcb.pid); });
   pcb.fds.clear();
+  // Parked readdir cursors (todos/0241): a client that died mid-pagination
+  // must not leak the backend dir handle — same discipline as fds.
+  if (pcb.dirRpc !== null) {
+    pcb.dirRpc.forEach(function (d) { self0._fs.closedir(d.dh); });
+    pcb.dirRpc = null;
+  }
   // Reclaim WM surfaces (same discipline as fds: the kernel, not the dead
   // worker, owns the scene — SIGKILL leaves no ghost windows).
   if (pcb.surfaces.size) {
@@ -6486,7 +6545,16 @@ RemoteFS.prototype.opendir = function (p) {
 RemoteFS.prototype._opendirBrokered = function (p) {
   var r = this._ok(this._c.call(OP.FS_OPENDIR, { path: p }));
   if (r === null) return null;
-  this._dirs.push({ entries: r.entries, pos: 0 });
+  var entries = r.entries;
+  // Big-dir pagination (todos/0241): a `more` cursor means the kernel
+  // parked the open handle — drain it page by page before snapshotting,
+  // so readdir/closedir/pos semantics are unchanged for every caller.
+  while (r.more !== undefined) {
+    r = this._ok(this._c.call(OP.FS_READDIR, { dir: r.more }));
+    if (r === null) return null;
+    for (var i = 0; i < r.entries.length; i++) entries.push(r.entries[i]);
+  }
+  this._dirs.push({ entries: entries, pos: 0 });
   return this._dirs.length - 1;
 };
 RemoteFS.prototype.readdir = function (h) {

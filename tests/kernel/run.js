@@ -37,6 +37,7 @@ const tests = [
   ['test_mounts.js'],       // 0026: MountFS — prefix routing, EXDEV/EBUSY, symlink escapes (no wasm)
   ['test_module_cache.js'], // 0037: compiled-Module cache on spawn — RO-volume policy, ss/rw exclusions, real clone e2e
   ['test_procfs.js'],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)
+  ['test_readdir_page.js'], // 0241: paginated FS_OPENDIR/FS_READDIR — 3000-entry dir lists fully in order (raw RPC + RemoteFS drain), small dirs single-page, stale cursor EBADF, handle release on exhaustion AND death mid-drain (no wasm)
   ['test_pipes.js'],        // Phase 4: pipe OFD semantics over the SAB protocol (no wasm)
   ['test_pipes_e2e.js'],    // Phase 4: real C pipelines — blocking wake, EOF, SIGPIPE death
   ['test_pipes_spsc.js'],   // 0181: SPSC ring mechanics over the SAB protocol — pipe-sab handshake, LATENT->FAST->DEMOTED ladder (promotion on removal, spawn-inherit demotion, strace pseudo-holder, in-process dup stays FAST), stale-mode ring service, PR_RWAIT/PR_WWAIT doorbell + PIPE_KICK, ring EOF/EPIPE flags (no wasm)
