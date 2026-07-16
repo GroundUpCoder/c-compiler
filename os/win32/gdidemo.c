@@ -362,6 +362,46 @@ static void selftest(void) {
         }
     check("utf8_notdef_ink", inkN > 0 && diffN);
 
+    /* --- 0211 compliance: refused blits leave pixels alone --- */
+    PatBlt(dc, 0, 0, 40, 30, WHITENESS);
+    check("unknown_rop_refused",                 /* MERGECOPY: not implemented */
+          BitBlt(dc, 0, 0, 10, 10, dc2, 0, 0, 0x00C000CA) == FALSE &&
+          GetPixel(dc, 5, 5) == RGB(255, 255, 255));
+    /* out-of-source pixels stay untouched (no fabricated black) */
+    SetPixel(dc, 0, 0, RGB(1, 2, 3));
+    BitBlt(dc, 0, 0, 10, 10, dc2, 60, 60, SRCCOPY);   /* src is 16x16 */
+    check("oob_source_leaves_dest", GetPixel(dc, 0, 0) == RGB(1, 2, 3));
+    /* PatBlt negative extents extend left/up (Petzold rule) */
+    PatBlt(dc, 0, 0, 40, 30, WHITENESS);
+    PatBlt(dc, 20, 20, -10, -10, BLACKNESS);
+    check("patblt_negative_extents",
+          GetPixel(dc, 15, 15) == RGB(0, 0, 0) &&
+          GetPixel(dc, 20, 20) == RGB(255, 255, 255));
+    /* DrawText strips '&' and underlines the mnemonic (no DT_NOPREFIX) */
+    RECT ar;
+    SetRect(&ar, 0, 0, 100, 30);
+    int wA, wB;
+    DrawText(dc, "&File", -1, &ar, DT_CALCRECT | DT_SINGLELINE);
+    wA = ar.right;
+    SetRect(&ar, 0, 0, 100, 30);
+    DrawText(dc, "File", -1, &ar, DT_CALCRECT | DT_SINGLELINE);
+    wB = ar.right;
+    check("drawtext_prefix_stripped_width", wA == wB);
+    PatBlt(dc, 0, 0, 40, 30, WHITENESS);
+    SetRect(&ar, 0, 0, 40, 30);
+    DrawText(dc, "&F", -1, &ar, DT_SINGLELINE);
+    int ulInk = 0;                               /* underline row: ascent+1 */
+    for (int yy = tm.tmAscent; yy < tm.tmAscent + 3; yy++)
+        for (int xx = 0; xx < 12; xx++)
+            if (GetPixel(dc, xx, yy) == RGB(0, 0, 0)) ulInk++;
+    check("drawtext_prefix_underline", ulInk >= 3);
+    /* deleting a SELECTED pen refuses (real DeleteObject contract) */
+    HPEN selPen = CreatePen(PS_SOLID, 1, RGB(9, 9, 9));
+    HGDIOBJ prevPen = SelectObject(dc, (HGDIOBJ)selPen);
+    check("delete_selected_pen_refused", DeleteObject((HGDIOBJ)selPen) == FALSE);
+    SelectObject(dc, prevPen);
+    check("delete_deselected_pen_ok", DeleteObject((HGDIOBJ)selPen) == TRUE);
+
     /* --- Object management --- */
     check("delete_selected_bitmap_refused", DeleteObject((HGDIOBJ)bm) == FALSE);
     check("stock_delete_noop", DeleteObject(GetStockObject(BLACK_PEN)) == TRUE);

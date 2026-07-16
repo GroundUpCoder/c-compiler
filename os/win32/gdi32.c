@@ -93,6 +93,31 @@ struct __DC {
 static int g_objCount;          /* live non-stock GDI objects */
 static int g_dcCount;           /* live DCs */
 
+/* Live-DC registry (0211): DeleteObject on a pen/brush/font still
+ * selected into a DC returned TRUE and freed it — a use-after-free on
+ * the next draw. Real GDI returns FALSE there; now we can too. */
+#define MAX_LIVE_DCS 128
+static HDC g_liveDcs[MAX_LIVE_DCS];
+
+static void dc_track(HDC dc) {
+    for (int i = 0; i < MAX_LIVE_DCS; i++)
+        if (!g_liveDcs[i]) { g_liveDcs[i] = dc; return; }
+}
+
+static void dc_untrack(HDC dc) {
+    for (int i = 0; i < MAX_LIVE_DCS; i++)
+        if (g_liveDcs[i] == dc) { g_liveDcs[i] = NULL; return; }
+}
+
+static int obj_selected_somewhere(HGDIOBJ o) {
+    for (int i = 0; i < MAX_LIVE_DCS; i++) {
+        HDC dc = g_liveDcs[i];
+        if (dc && (dc->pen == o || dc->brush == o || dc->font == o))
+            return 1;
+    }
+    return 0;
+}
+
 int __gdi_object_count(void) { return g_objCount; }
 int __gdi_dc_count(void) { return g_dcCount; }
 
@@ -112,6 +137,8 @@ static COLORREF cr_of(uint32_t p) { return p & 0x00FFFFFFu; }
 /* ============================================================ pens/brushes */
 
 HPEN CreatePen(int style, int width, COLORREF color) {
+    if (style != PS_SOLID && style != PS_NULL)
+        WIN32_UNSUPPORTED("pen style %d (drawn PS_SOLID)", style);
     HGDIOBJ o = obj_new(OBJ_PEN);
     if (!o) return NULL;
     o->penStyle = style;
@@ -256,10 +283,12 @@ HFONT CreateFont(int height, int width, int escapement, int orientation,
                  int weight, DWORD italic, DWORD underline, DWORD strikeout,
                  DWORD charset, DWORD outPrecision, DWORD clipPrecision,
                  DWORD quality, DWORD pitchAndFamily, LPCSTR faceName) {
-    (void)width; (void)escapement; (void)orientation; (void)weight;
-    (void)italic; (void)underline; (void)strikeout; (void)charset;
-    (void)outPrecision; (void)clipPrecision; (void)quality;
+    (void)width; (void)escapement; (void)orientation;
+    (void)charset; (void)outPrecision; (void)clipPrecision; (void)quality;
     (void)pitchAndFamily; (void)faceName;
+    if (weight >= FW_BOLD || italic || underline || strikeout)
+        WIN32_UNSUPPORTED("font styles (bold/italic/underline — one face, "
+                          "drawn regular)");
     HGDIOBJ o = obj_new(OBJ_FONT);
     if (!o) return NULL;
     o->fontPx = font_px_for_height(height);
@@ -396,6 +425,13 @@ BOOL DeleteObject(HGDIOBJ obj) {
     if (!obj) return FALSE;
     if (obj->stock) return TRUE;                 /* no-op, like Windows */
     if (obj->type == OBJ_BITMAP && obj->selCount > 0) return FALSE;
+    if ((obj->type == OBJ_PEN || obj->type == OBJ_BRUSH ||
+         obj->type == OBJ_FONT) && obj_selected_somewhere(obj)) {
+        /* real DeleteObject refuses while selected into a DC (0211) */
+        WIN32_UNSUPPORTED("DeleteObject on a selected pen/brush/font "
+                          "(refused — select it out first)");
+        return FALSE;
+    }
     if (obj->type == OBJ_BITMAP) free(obj->bits);
     if (obj->type == OBJ_FONT) {
         if (obj->glyphs) {
@@ -458,12 +494,14 @@ HDC __gdi_dc_wrap(void *bits, int w, int h, int stridePx) {
     dc->stride = stridePx;
     dc->isScreen = 1;
     dc_defaults(dc);
+    dc_track(dc);
     g_dcCount++;
     return dc;
 }
 
 void __gdi_dc_unwrap(HDC dc) {
     if (!dc || !dc->isScreen) return;
+    dc_untrack(dc);
     free(dc);
     g_dcCount--;
 }
@@ -483,12 +521,14 @@ HDC CreateCompatibleDC(HDC ref) {
     dc->h = def->bmH;
     dc->stride = def->bmW;
     dc_defaults(dc);
+    dc_track(dc);
     g_dcCount++;
     return dc;
 }
 
 BOOL DeleteDC(HDC dc) {
     if (!dc || dc->isScreen) return FALSE;
+    dc_untrack(dc);
     if (dc->bitmap) dc->bitmap->selCount--;
     if (dc->defBitmap) { free(dc->defBitmap->bits); free(dc->defBitmap); }
     free(dc);
@@ -1028,14 +1068,56 @@ BOOL GetTextMetrics(HDC dc, TEXTMETRIC *tm) {
     tm->tmLastChar = 126;
     tm->tmDefaultChar = '?';
     tm->tmBreakChar = ' ';
-    tm->tmPitchAndFamily = FIXED_PITCH;
+    /* TEXTMETRIC's TMPF_FIXED_PITCH bit is famously INVERTED: a fixed
+     * (mono) font reports the bit CLEAR (0211 audit D11). The old
+     * FIXED_PITCH here was the LOGFONT-sense constant — wrong side. */
+    tm->tmPitchAndFamily = 0;
     return TRUE;
 }
 
 /* DrawText: '\n' splits lines; DT_WORDBREAK wraps at spaces; alignment
  * per DT_* flags; DT_CALCRECT measures without drawing. Line pitch is
- * tmHeight (ascent+descent), like Windows. */
+ * tmHeight (ascent+descent), like Windows. '&' prefixes strip and
+ * underline the next code point unless DT_NOPREFIX (0211 audit D12). */
 #define DT_MAX_LINES 128
+
+/* Strip '&' prefixes ("&&" = literal '&'); *ulPos/*ulLen mark the
+ * underlined code point in the OUTPUT (byte pos/len; -1 = none). */
+static int dt_strip(const char *s, int len, char *out, int cap,
+                    int *ulPos, int *ulLen) {
+    int o = 0;
+    *ulPos = -1;
+    *ulLen = 0;
+    for (int i = 0; i < len && o < cap - 1; i++) {
+        if (s[i] == '&') {
+            if (i + 1 < len && s[i + 1] == '&') { out[o++] = '&'; i++; }
+            else if (i + 1 < len && *ulPos < 0) {
+                int k = i + 1;
+                __u8_next(s, len, &k);           /* one code point */
+                *ulPos = o;
+                *ulLen = k - (i + 1);
+            }
+            continue;                            /* drop the '&' itself */
+        }
+        out[o++] = s[i];
+    }
+    out[o] = 0;
+    return o;
+}
+
+/* Effective text of one DrawText line: strips prefixes into buf when
+ * needed. Returns the length; *txt points at the bytes to draw. */
+static int dt_line(const char *s, int len, UINT format, char *buf, int cap,
+                   const char **txt, int *ulPos, int *ulLen) {
+    *ulPos = -1;
+    *ulLen = 0;
+    if ((format & DT_NOPREFIX) || !memchr(s, '&', (size_t)len)) {
+        *txt = s;
+        return len;
+    }
+    *txt = buf;
+    return dt_strip(s, len, buf, cap, ulPos, ulLen);
+}
 
 int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     if (!dc || !str || !r) return 0;
@@ -1089,11 +1171,17 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
         if (nl == 0) { ls[0] = str; ll[0] = 0; nl = 1; }
     }
 
+    char sbuf[256];                              /* one shared strip buffer */
+    const char *txt;
+    int ulPos, ulLen;
+
     int maxW = 0;
     for (int i = 0; i < nl; i++) {
+        int tl = dt_line(ls[i], ll[i], format, sbuf, sizeof sbuf,
+                         &txt, &ulPos, &ulLen);
         int w = 0;
-        for (int j = 0; j < ll[i]; )
-            w += font_glyph(f, __u8_next(ls[i], ll[i], &j))->advance;
+        for (int j = 0; j < tl; )
+            w += font_glyph(f, __u8_next(txt, tl, &j))->advance;
         if (w > maxW) maxW = w;
     }
     int totalH = nl * lineH;
@@ -1110,15 +1198,35 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     else y = r->top;
 
     for (int i = 0; i < nl; i++) {
+        int tl = dt_line(ls[i], ll[i], format, sbuf, sizeof sbuf,
+                         &txt, &ulPos, &ulLen);
         int w = 0;
-        for (int j = 0; j < ll[i]; )
-            w += font_glyph(f, __u8_next(ls[i], ll[i], &j))->advance;
+        for (int j = 0; j < tl; )
+            w += font_glyph(f, __u8_next(txt, tl, &j))->advance;
         int x;
         if (format & DT_CENTER) x = r->left + (rectW - w) / 2;
         else if (format & DT_RIGHT) x = r->right - w;
         else x = r->left;
-        text_run(dc, x, y, ls[i], ll[i], NULL,
+        text_run(dc, x, y, txt, tl, NULL,
                  (format & DT_NOCLIP) ? NULL : r);
+        if (ulPos >= 0) {                        /* mnemonic underline */
+            int wb = 0, j = 0;
+            while (j < ulPos)
+                wb += font_glyph(f, __u8_next(txt, ulPos, &j))->advance;
+            int wc = 0;
+            j = ulPos;
+            while (j < ulPos + ulLen)
+                wc += font_glyph(f, __u8_next(txt, ulPos + ulLen, &j))->advance;
+            int uy = y + f->ascent + 1;
+            uint32_t px = px_of(dc->textColor);
+            for (int xx = x + wb; xx < x + wb + wc; xx++) {
+                if (!in_clip(dc, xx, uy)) continue;
+                if (!(format & DT_NOCLIP) &&
+                    (xx < r->left || xx >= r->right || uy < r->top ||
+                     uy >= r->bottom)) continue;
+                dc->bits[uy * dc->stride + xx] = px;
+            }
+        }
         y += lineH;
     }
     return totalH;
@@ -1132,6 +1240,23 @@ static int rop_needs_src(DWORD rop) {
     case SRCERASE: case NOTSRCCOPY: case NOTSRCERASE: case MERGEPAINT:
         return 1;
     default:
+        return 0;
+    }
+}
+
+/* The implemented ROP3 subset — exactly rop3_mix's cases. An unknown rop
+ * used to fall through as "copy S", and for a rop rop_needs_src didn't
+ * know, S was never fetched: the blit SILENTLY PAINTED BLACK (0211 audit
+ * D1). Now it refuses loudly instead of destroying pixels. */
+static int rop_known(DWORD rop) {
+    switch (rop) {
+    case SRCCOPY: case SRCPAINT: case SRCAND: case SRCINVERT:
+    case SRCERASE: case NOTSRCCOPY: case NOTSRCERASE: case MERGEPAINT:
+    case PATCOPY: case PATINVERT: case DSTINVERT: case BLACKNESS:
+    case WHITENESS:
+        return 1;
+    default:
+        WIN32_UNSUPPORTED("ROP3 0x%08X (blit refused)", (unsigned)rop);
         return 0;
     }
 }
@@ -1158,11 +1283,13 @@ static uint32_t rop3_mix(DWORD rop, uint32_t src, uint32_t dst, uint32_t pat) {
 }
 
 BOOL BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, DWORD rop) {
-    if (!dst || w <= 0 || h <= 0) return FALSE;
+    if (!dst || w <= 0 || h <= 0 || !rop_known(rop)) return FALSE;
     int needSrc = rop_needs_src(rop);
     if (needSrc && !src) return FALSE;
 
-    /* Overlapping same-buffer blit: stage the source region. */
+    /* Overlapping same-buffer blit: stage the source region. A=0 marks
+     * out-of-source pixels (ours are always A=0xFF): real GDI leaves the
+     * dest untouched there instead of fabricating black (0211 audit D2). */
     uint32_t *staged = NULL;
     int stagedW = 0;
     if (needSrc && src->bits == dst->bits) {
@@ -1174,7 +1301,7 @@ BOOL BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, DWORD 
                 int xx = sx + col, yy = sy + row;
                 staged[row * w + col] =
                     (xx >= 0 && xx < src->w && yy >= 0 && yy < src->h)
-                        ? src->bits[yy * src->stride + xx] : 0xFF000000u;
+                        ? src->bits[yy * src->stride + xx] : 0u;
             }
     }
 
@@ -1187,10 +1314,12 @@ BOOL BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, DWORD 
             if (needSrc) {
                 if (staged) {
                     S = staged[row * stagedW + col];
+                    if ((S & 0xFF000000u) == 0) continue;    /* no source */
                 } else {
                     int xx = sx + col, yy = sy + row;
-                    if (xx >= 0 && xx < src->w && yy >= 0 && yy < src->h)
-                        S = src->bits[yy * src->stride + xx];
+                    if (xx < 0 || xx >= src->w || yy < 0 || yy >= src->h)
+                        continue;                            /* no source */
+                    S = src->bits[yy * src->stride + xx];
                 }
             }
             uint32_t P = 0xFF000000u;
@@ -1207,10 +1336,18 @@ BOOL BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, DWORD 
 
 BOOL StretchBlt(HDC dst, int x, int y, int w, int h,
                 HDC src, int sx, int sy, int sw, int sh, DWORD rop) {
-    if (!dst || w <= 0 || h <= 0 || sw <= 0 || sh <= 0) return FALSE;
+    if (!dst || !rop_known(rop)) return FALSE;
+    if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0) {
+        /* real GDI mirrors on negative extents — not grown yet (0211) */
+        WIN32_UNSUPPORTED("StretchBlt non-positive extents (mirroring)");
+        return FALSE;
+    }
     int needSrc = rop_needs_src(rop);
     if (needSrc && !src) return FALSE;
-    if (needSrc && src->bits == dst->bits) return FALSE;   /* not in 0057 */
+    if (needSrc && src->bits == dst->bits) {
+        WIN32_UNSUPPORTED("StretchBlt within one surface");
+        return FALSE;
+    }
     for (int row = 0; row < h; row++) {
         int dy2 = y + row;
         int syy = sy + (int)(((long long)row * sh) / h);
@@ -1220,8 +1357,9 @@ BOOL StretchBlt(HDC dst, int x, int y, int w, int h,
             uint32_t S = 0xFF000000u;
             if (needSrc) {
                 int sxx = sx + (int)(((long long)col * sw) / w);
-                if (sxx >= 0 && sxx < src->w && syy >= 0 && syy < src->h)
-                    S = src->bits[syy * src->stride + sxx];
+                if (sxx < 0 || sxx >= src->w || syy < 0 || syy >= src->h)
+                    continue;                                /* no source */
+                S = src->bits[syy * src->stride + sxx];
             }
             uint32_t P = 0xFF000000u;
             if (rop == PATCOPY || rop == PATINVERT) {
@@ -1235,11 +1373,15 @@ BOOL StretchBlt(HDC dst, int x, int y, int w, int h,
 }
 
 BOOL PatBlt(HDC dc, int x, int y, int w, int h, DWORD rop) {
-    if (!dc || w <= 0 || h <= 0) return FALSE;
+    if (!dc) return FALSE;
+    if (w < 0) { x += w; w = -w; }               /* negative extents are */
+    if (h < 0) { y += h; h = -h; }               /*   legal: extend left/up */
+    if (w == 0 || h == 0) return FALSE;
     switch (rop) {
     case PATCOPY: case PATINVERT: case DSTINVERT: case BLACKNESS: case WHITENESS:
         return BitBlt(dc, x, y, w, h, NULL, 0, 0, rop);
     default:
+        WIN32_UNSUPPORTED("PatBlt rop 0x%08X", (unsigned)rop);
         return FALSE;
     }
 }
@@ -1273,16 +1415,20 @@ int GetDIBits(HDC hdc, HBITMAP hbm, UINT start, UINT lines, void *bits,
     if (!dib_check(bmi)) return 0;
     int topDown = bmi->bmiHeader.biHeight < 0;
     int h = hbm->bmH, w = hbm->bmW;
+    /* The DIB's row stride is biWidth, NOT the bitmap width (0211 audit
+     * D15) — a mismatched caller got skewed rows / a buffer over-read. */
+    int stride = bmi->bmiHeader.biWidth > 0 ? bmi->bmiHeader.biWidth : w;
+    int cw = w < stride ? w : stride;
     uint32_t *out = (uint32_t *)bits;
     int done = 0;
     for (UINT i = 0; i < lines; i++) {
         int dibRow = (int)(start + i);
         if (dibRow >= h) break;
         int bmRow = topDown ? dibRow : h - 1 - dibRow;
-        for (int xcol = 0; xcol < w; xcol++) {
+        for (int xcol = 0; xcol < cw; xcol++) {
             uint32_t px = hbm->bits[bmRow * w + xcol];
             uint32_t r = px & 0xFF, g = (px >> 8) & 0xFF, b = (px >> 16) & 0xFF;
-            out[i * (UINT)w + (UINT)xcol] = b | (g << 8) | (r << 16);
+            out[i * (UINT)stride + (UINT)xcol] = b | (g << 8) | (r << 16);
         }
         done++;
     }
@@ -1295,14 +1441,16 @@ int SetDIBits(HDC hdc, HBITMAP hbm, UINT start, UINT lines, const void *bits,
     if (!hbm || hbm->type != OBJ_BITMAP || !bits || !dib_check(bmi)) return 0;
     int topDown = bmi->bmiHeader.biHeight < 0;
     int h = hbm->bmH, w = hbm->bmW;
+    int stride = bmi->bmiHeader.biWidth > 0 ? bmi->bmiHeader.biWidth : w;
+    int cw = w < stride ? w : stride;            /* biWidth stride (0211) */
     const uint32_t *in = (const uint32_t *)bits;
     int done = 0;
     for (UINT i = 0; i < lines; i++) {
         int dibRow = (int)(start + i);
         if (dibRow >= h) break;
         int bmRow = topDown ? dibRow : h - 1 - dibRow;
-        for (int xcol = 0; xcol < w; xcol++) {
-            uint32_t d = in[i * (UINT)w + (UINT)xcol];
+        for (int xcol = 0; xcol < cw; xcol++) {
+            uint32_t d = in[i * (UINT)stride + (UINT)xcol];
             uint32_t b = d & 0xFF, g = (d >> 8) & 0xFF, r = (d >> 16) & 0xFF;
             hbm->bits[bmRow * w + xcol] = r | (g << 8) | (b << 16) | 0xFF000000u;
         }
