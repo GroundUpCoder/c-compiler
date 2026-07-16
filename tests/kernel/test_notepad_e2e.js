@@ -212,6 +212,27 @@ const out = boot([
   'echo ==thumbdrag',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
+  // ---- WM_MOUSEWHEEL scrolls the EDIT (todos/0210): 3 lines/notch ----
+  // The wheel event carries the LAST tracked mouse position — hover over
+  // the EDIT first so user32's pump hit-tests the wheel to it.
+  'TD="$(wmctl gettext msctls_statusbar32:0)"',
+  'wmctl hover $SID 200 150',
+  'wmctl wheel $SID 2',                           // 2 notches up = -6 lines
+  'wmctl click $SID 30 25',
+  'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$TD" ] || break; sleep 0.1; n=$((n+1)); done',
+  'echo ==wheelup',
+  'wmctl gettext msctls_statusbar32:0',
+  'echo ==cut',
+  'WU="$(wmctl gettext msctls_statusbar32:0)"',
+  'wmctl wheel $SID -1',                          // 1 notch down = +3 lines
+  'wmctl click $SID 30 25',
+  'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$WU" ] || break; sleep 0.1; n=$((n+1)); done',
+  'echo ==wheeldn',
+  'wmctl gettext msctls_statusbar32:0',
+  'echo ==cut',
+  'wmctl wheel $SID 99',                          // clamp at the top
+  'wmctl click $SID 30 25',
+  'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
   'wmctl click "New Window"',
   'wmctl wait win "Untitled - Notepad" 8000',     // second notepad up
@@ -353,6 +374,14 @@ check('channel click below the thumb pages down (caret probe on the top row)',
 const dragLine = +((section(out, 'thumbdrag').match(/Line (\d+),/) || [])[1] || 0);
 check('thumb drag scrolls to the bottom of the document',
   dragLine >= 60, 'line=' + dragLine + ' pgdn=' + pgdnLine);
+
+/* WM_MOUSEWHEEL scrolls the EDIT (todos/0210) */
+const wheelUp = +((section(out, 'wheelup').match(/Line (\d+),/) || [])[1] || 0);
+check('wheel scrolls 3 lines per notch (2 notches up = -6 lines)',
+  wheelUp === dragLine - 6, 'wheelup=' + wheelUp + ' drag=' + dragLine);
+const wheelDn = +((section(out, 'wheeldn').match(/Line (\d+),/) || [])[1] || 0);
+check('wheel down scrolls back (+3 lines)',
+  wheelDn === wheelUp + 3, 'wheeldn=' + wheelDn + ' wheelup=' + wheelUp);
 
 /* New Window */
 check('New Window spawned a second notepad (ShellExecuteW)',

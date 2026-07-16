@@ -718,9 +718,12 @@ function routeInput(kernel, sdlWeb, ev) {
     // detection (todos/0025) — real inter-click gap, not worker latency.
     kernel.wmPointer(ev.kind, ev.x, ev.y, { button: (ev.button | 0) + 1, t: ev.t });
   } else if (ev.kind === 'wheel') {
-    var scale = ev.deltaMode === 1 ? 20 : ev.deltaMode === 2 ? 600 : 1;
+    // SDL wheel units are NOTCHES (±1 per detent), not pixels — consumers
+    // scale by WHEEL_DELTA (user32) or count events. Convert DOM deltas per
+    // mode: pixels ~100/notch (Chrome), lines 3/notch, pages ~3 notches.
+    var notch = ev.deltaMode === 1 ? 1 / 3 : ev.deltaMode === 2 ? 3 : 1 / 100;
     kernel.wmPointer('wheel', ev.x, ev.y,
-      { wheelX: ev.deltaX * scale, wheelY: -ev.deltaY * scale, direction: 0 });
+      { wheelX: ev.deltaX * notch, wheelY: -ev.deltaY * notch, direction: 0 });
   }
 }
 

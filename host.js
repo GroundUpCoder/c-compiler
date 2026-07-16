@@ -8386,11 +8386,14 @@ const SDL_WEB = (function () {
       return { kind: 'mousemoverel', dx: (e.movementX || 0) * scale, dy: (e.movementY || 0) * scale, state: buttonMask(e) };
     },
     wheelMsg: function (e) {
-      const scale = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 600 : 1; /* lines/pages → ~px */
-      const dx = e.deltaX * scale, dy = e.deltaY * scale;
+      // SDL wheel units are NOTCHES (±1 per detent), not pixels: convert DOM
+      // deltas per mode — pixels ~100/notch (Chrome), lines 3/notch, pages
+      // ~3 notches each.
+      const notch = e.deltaMode === 1 ? 1 / 3 : e.deltaMode === 2 ? 3 : 1 / 100;
+      const dx = e.deltaX * notch, dy = e.deltaY * notch;
       // SDL_MouseWheelEvent: +y is AWAY from the user (scroll up), +x is to the
       // right. DOM WheelEvent.deltaY is +down and deltaX is +right, so negate Y
-      // and keep X. Values are float (sub-line precision); direction is NORMAL.
+      // and keep X. Values are float (sub-notch precision); direction is NORMAL.
       return { kind: 'wheel', x: dx, y: -dy, direction: 0 };
     },
 

@@ -3196,6 +3196,7 @@ typedef struct {
     int topLine;                /* first visible line (multiline) */
     int scrollX;                /* horizontal pixel scroll (single-line) */
     int sbDrag, sbDragOff;      /* built-in vscroll thumb drag (0210) */
+    int wheelAcc;               /* fractional WM_MOUSEWHEEL carry (0210) */
     int modified;               /* EM_GETMODIFY/EM_SETMODIFY (0048) */
     HLOCAL hlocal;              /* EM_GETHANDLE/EM_SETHANDLE (0048): the
                                    external WCHAR buffer notepad manages —
@@ -3625,6 +3626,19 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         st->sbDrag = 0;
         if (GetCapture() == h) ReleaseCapture();
         return 0;
+    case WM_MOUSEWHEEL: {                        /* 3 lines per notch (0210);
+                                                    deltas accumulate so
+                                                    sub-notch trackpad events
+                                                    still add up */
+        if (!edit_ml(h)) return 0;
+        st->wheelAcc += GET_WHEEL_DELTA_WPARAM(wp);
+        int lines = st->wheelAcc / (WHEEL_DELTA / 3);
+        if (lines) {
+            st->wheelAcc -= lines * (WHEEL_DELTA / 3);
+            edit_vscroll(h, st, st->topLine - lines);
+        }
+        return 0;
+    }
     case WM_VSCROLL: {                           /* the classic EDIT contract */
         if (!edit_ml(h)) return 0;
         int rows = edit_rows(h, edit_line_h(h));

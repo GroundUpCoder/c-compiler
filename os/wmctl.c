@@ -52,6 +52,10 @@
  *                                     detection — todos/0029 desktop icons)
  *   wmctl hover SID X Y               absolute motion injection (todos/0063
  *                                     — drives hover UI like Aero Peek)
+ *   wmctl wheel SID DY                mouse-wheel injection (todos/0210):
+ *                                     DY in NOTCHES, + scrolls up; the
+ *                                     event's position is the last tracked
+ *                                     motion, so hover first
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
  *   wmctl sdown|smove|sup X Y [BTN]   SCREEN-coordinate injection (todos/
  *                                     0095) through the kernel's full
@@ -138,6 +142,7 @@ static int usage(void) {
         "       wmctl down|up SID X Y [BUTTON]\n"
         "       wmctl drag SID X1 Y1 X2 Y2 [BUTTON]\n"
         "       wmctl hover SID X Y\n"
+        "       wmctl wheel SID DY\n"
         "       wmctl relmove SID DX DY\n"
         "       wmctl sdown|smove|sup X Y [BUTTON]\n"
         "       wmctl sdrag X1 Y1 X2 Y2 [BUTTON]\n"
@@ -726,6 +731,14 @@ int main(int argc, char **argv) {
         if (argc < 5) return usage();
         int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
         int32_t a[6] = { sid, 0 /* move */, x, y, 0, 0 };
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+    }
+    if (!strcmp(cmd, "wheel")) {        /* wheel notches (todos/0210): +up.
+                                           The wheel event's position is the
+                                           LAST tracked motion — hover first. */
+        if (argc < 4) return usage();
+        int32_t dy = f32bits((float)atof(argv[3]));
+        int32_t a[6] = { sid, 3 /* wheel */, f32bits(0.0f), dy, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
     }
     if (!strcmp(cmd, "relmove")) {      /* relative motion (todos/0018) */
