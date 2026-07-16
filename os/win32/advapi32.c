@@ -23,6 +23,7 @@
 #undef UNICODE
 #undef _UNICODE
 #include <windows.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,13 +65,18 @@ static int hex_nib(char c) {
     return -1;
 }
 
-static void key_add(const char *path) {
+/* Record a key path (idempotent). Returns 0, or -1 on OOM — the caller
+ * decides whether that's ERROR_NOT_ENOUGH_MEMORY or best-effort. */
+static int key_add(const char *path) {
     for (RegKey *k = g_keys; k; k = k->next)
-        if (strcasecmp(k->key, path) == 0) return;
+        if (strcasecmp(k->key, path) == 0) return 0;
     RegKey *k = (RegKey *)malloc(sizeof *k);
+    if (!k) return -1;
     k->key = strdup(path);
+    if (!k->key) { free(k); return -1; }
     k->next = g_keys;
     g_keys = k;
+    return 0;
 }
 
 static void hive_load(void) {
@@ -109,8 +115,13 @@ static void hive_load(void) {
             }
             if (bad) { free(data); continue; }
             RegVal *v = (RegVal *)malloc(sizeof *v);
+            if (!v) { free(data); break; }       /* OOM: keep the partial load */
             v->key = strdup(key);
             v->name = strdup(name);
+            if (!v->key || !v->name) {
+                free(v->key); free(v->name); free(v); free(data);
+                break;
+            }
             v->type = (DWORD)strtoul(typs, NULL, 10);
             v->data = data;
             v->len = len;
@@ -122,12 +133,15 @@ static void hive_load(void) {
     fclose(f);
 }
 
-static void hive_save(void) {
+/* Write the whole hive out (tmp + rename). Returns 0 only when every
+ * byte reached the store AND the rename landed — a short write on a full
+ * disk or an EROFS home must not report success (todos/0234). */
+static int hive_save(void) {
     char hp[512], tmp[520];
     hive_path(hp, sizeof hp);
     snprintf(tmp, sizeof tmp, "%s.tmp", hp);
     FILE *f = fopen(tmp, "w");
-    if (!f) return;
+    if (!f) return -1;
     for (RegKey *k = g_keys; k; k = k->next)
         fprintf(f, "k %s\n", k->key);
     for (RegVal *v = g_vals; v; v = v->next) {
@@ -135,8 +149,15 @@ static void hive_save(void) {
         for (DWORD i = 0; i < v->len; i++) fprintf(f, "%02x", v->data[i]);
         fprintf(f, "\n");
     }
-    fclose(f);
-    rename(tmp, hp);
+    int bad = ferror(f);
+    if (fclose(f) != 0) bad = 1;
+    if (bad || rename(tmp, hp) != 0) {
+        int e = errno;
+        remove(tmp);                 /* sweep the partial; keep the old hive */
+        errno = e;
+        return -1;
+    }
+    return 0;
 }
 
 /* Write the hive to disk only if something changed since the last flush.
@@ -147,7 +168,20 @@ static void hive_save(void) {
  * rename keeps the save atomic, so the on-disk hive is never torn. */
 static void hive_flush(void) {
     if (!g_dirty) return;
-    hive_save();
+    if (hive_save() != 0) {
+        /* Keep g_dirty: the next flush retries. Report once, not per
+         * RegCloseKey — losing the user's settings silently is the bug
+         * this guards against (todos/0234). */
+        static int warned;
+        if (!warned) {
+            warned = 1;
+            char hp[512];
+            hive_path(hp, sizeof hp);
+            fprintf(stderr, "advapi32: cannot save registry hive %s: %s\n",
+                    hp, strerror(errno));
+        }
+        return;
+    }
     g_dirty = 0;
 }
 
@@ -264,7 +298,7 @@ LONG RegCreateKeyExW(HKEY key, LPCWSTR sub, DWORD reserved, LPWSTR cls,
     if (!key_path(key, sub, path, sizeof path)) return ERROR_INVALID_HANDLE;
     int existed = key_exists(path);
     if (!existed) {
-        key_add(path);
+        if (key_add(path) != 0) return ERROR_NOT_ENOUGH_MEMORY;
         g_dirty = 1;
     }
     if (disposition)
@@ -310,10 +344,14 @@ LONG RegSetValueExW(HKEY key, LPCWSTR name, DWORD reserved, DWORD type,
         if (!v) return ERROR_NOT_ENOUGH_MEMORY;
         v->key = strdup(path);
         v->name = strdup(nm);
+        if (!v->key || !v->name) {
+            free(v->key); free(v->name); free(v);
+            return ERROR_NOT_ENOUGH_MEMORY;
+        }
         v->data = NULL;
         v->next = g_vals;
         g_vals = v;
-        key_add(path);
+        key_add(path);              /* best-effort: the value itself is live */
     }
     BYTE *nd = (BYTE *)malloc(count ? count : 1);
     if (!nd) return ERROR_NOT_ENOUGH_MEMORY;
