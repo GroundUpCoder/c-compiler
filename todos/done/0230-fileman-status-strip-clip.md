@@ -1,6 +1,18 @@
 # 0230 — fileman status strip clip
 
-- **Status**: done (2026-07-17) — fileman f836abf, tests 08eebcd; strip 18px→font-derived 21px (status_h() over GetTextMetrics, fileman-local lever), red→green pins in test_fileman_ops_e2e.js; the old geometry was an exact-fit razor edge (no visible clip at the current stock font — see the dev log); image v106
+- **Status**: done (2026-07-17, REDONE same day) — the first fix (fileman
+  f836abf: a private `status_h()` over GetTextMetrics) was a SHORTCUT — a
+  second, weaker copy of height-derivation (tmHeight+2, dropping the
+  internal-leading + border terms) beside the real one already in
+  comctl32's STATUSBAR (`sb_height`, the Win95/Wine formula). Reopened and
+  redone: fileman's strip is now the shared STATUSBAR control itself
+  (CreateStatusWindow/CCS_BOTTOM exactly as notepad — comctl32 grew the
+  ANSI `CreateStatusWindowA` entry; SB_SETTEXT for the readout; the
+  notepad WM_SIZE self-park idiom in relayout), STATUS_H/status_h()/the
+  manual MoveWindow parking all deleted — zero private strip geometry left
+  in fileman. Descender pixel leg retargeted to the bar (ink clearance,
+  no magic heights) in test_fileman_ops_e2e.js; the root STATIC top-align
+  disease is filed as its own corpus-wide item, todos/0236. Image v107.
 - **Design**: —
 
 ## Goal

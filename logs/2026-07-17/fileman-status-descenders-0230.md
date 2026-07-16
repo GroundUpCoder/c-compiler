@@ -1,5 +1,9 @@
 # 0230 — fileman status strip: font-derived height (the 0229 disease, next site)
 
+> **SUPERSEDED same day** — this fix was a shortcut (a private copy of
+> height-derivation) and was redone onto comctl32's shared STATUSBAR:
+> see [fileman-statusbar-0230-redo.md](fileman-statusbar-0230-redo.md).
+
 Same disease family as [0229](statusbar-font-height-0229.md), different
 control and layer: fileman's status strip is a plain STATIC sized by a
 hardcoded `STATUS_H 18` (Win95 MS-Sans-Serif arithmetic), and user32's
