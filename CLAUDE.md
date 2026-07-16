@@ -8,6 +8,26 @@ persistence (BlockFS), a shell, and eventually a compositor/window manager.
 "Almost" because `fork()` is deliberately replaced by the owner-brokered
 `posix_spawn` model (decision + rationale in `todos/OS.md` — don't re-litigate).
 
+## CORE PRINCIPLE — build to the goal, not to the demo (NO "not used yet" shortcuts)
+
+**If a capability naturally pertains to the goal and scope, IMPLEMENT it —
+properly, elegantly, cleanly, at the right (extended) level of generality. NOT
+the minimum needed to make a demo pass.** "There's no current customer",
+"nothing uses it yet", "all current apps happen to be CPU-rendered", "we can
+revisit later" are NOT valid reasons to cut scope, drop generality, special-case
+the easy path, or recommend against a clean design. Build the general case:
+GPU-surface apps are FIRST-CLASS, not a CPU path with a GPU asterisk; transport
+(shm vs GPU/ImageBitmap), rendering backend, and similar axes must be handled
+uniformly, not assumed away.
+
+The escape hatch is narrow and explicit: if the complexity is **genuinely high
+AND it does not actually align with the north-star goals**, then don't do it. If
+you are **unsure** whether it's in scope or worth the cost, **surface it and
+discuss** — do not silently cut it or ship the minimal-to-hide-a-demo version.
+When something obviously should be implemented, implement it cleanly. This
+applies to design reviews too: do not justify a recommendation with "no current
+customer" — that is the exact anti-pattern being rejected here.
+
 ## Portability
 
 `compiler.js` MUST work in both browser and Node.js environments. Never use `process.env`, `process.stderr`, `process.exit`, `process.hrtime`, or any other Node.js-specific API without a `typeof process !== 'undefined'` guard and a browser-compatible fallback. No environment variables — use compiler options and CLI flags instead.
