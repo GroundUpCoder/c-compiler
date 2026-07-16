@@ -218,7 +218,128 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-int main(void) {
+/* ---- `ctldemo selftest` (0211): headless message-level asserts for the
+ * EDIT scroll/UTF-8 contracts — WS_HSCROLL bar state, EN_VSCROLL/
+ * EN_HSCROLL notifications, Get/SetScrollInfo routing, code-point caret.
+ * Everything is SendMessage-synchronous: no pump needed. The kernel e2e
+ * (test_user32_e2e.js) runs it and also asserts the fail-loud stderr. */
+
+static int st_fails, st_checks;
+static int st_envscroll, st_enhscroll;
+
+static void st_check(const char *name, int cond) {
+    st_checks++;
+    if (cond) printf("ok %s\n", name);
+    else { printf("FAIL %s\n", name); st_fails++; }
+}
+
+static LRESULT CALLBACK StProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_COMMAND) {
+        if (HIWORD(wp) == EN_VSCROLL) st_envscroll++;
+        if (HIWORD(wp) == EN_HSCROLL) st_enhscroll++;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+static int selftest(void) {
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = StProc;
+    wc.lpszClassName = "ctlselftest";
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    if (!RegisterClass(&wc)) return 3;
+    HWND top = CreateWindowEx(0, "ctlselftest", "selftest",
+                              WS_OVERLAPPED | WS_VISIBLE,
+                              0, 0, 320, 200, NULL, NULL, NULL, NULL);
+    if (!top) return 3;
+    HWND ed = CreateWindowEx(0, "EDIT", "",
+                             WS_CHILD | WS_VISIBLE | ES_MULTILINE |
+                             WS_VSCROLL | WS_HSCROLL | ES_AUTOHSCROLL,
+                             10, 10, 200, 100, top, (HMENU)900, NULL, NULL);
+    st_check("edit created", ed != NULL);
+
+    /* 30 lines, first one wide (hscroll extent) */
+    char text[4096];
+    int n = 0;
+    for (int i = 0; i < 60; i++) text[n++] = (char)('0' + i % 10);
+    for (int i = 1; i < 30; i++)
+        n += sprintf(text + n, "\nline %d", i);
+    text[n] = 0;
+    SetWindowText(ed, text);
+    st_check("line count", SendMessage(ed, EM_GETLINECOUNT, 0, 0) == 30);
+
+    /* vertical bar state: WM_SETTEXT parked the caret at the end, so the
+     * view scrolled to the last page — pos == max - page + 1 */
+    SCROLLINFO si;
+    memset(&si, 0, sizeof si);
+    si.cbSize = sizeof si;
+    si.fMask = SIF_ALL;
+    st_check("GetScrollInfo(SB_VERT)", GetScrollInfo(ed, SB_VERT, &si));
+    st_check("vbar range", si.nMin == 0 && si.nMax == 29);
+    st_check("vbar page", si.nPage > 0 && si.nPage < 30);
+    st_check("vbar pos at end", si.nPos == 30 - (int)si.nPage);
+
+    /* WM_VSCROLL scrolls and notifies EN_VSCROLL */
+    st_envscroll = 0;
+    SendMessage(ed, WM_VSCROLL, SB_TOP, 0);
+    st_check("SB_TOP scrolled", GetScrollPos(ed, SB_VERT) == 0);
+    st_check("EN_VSCROLL fired", st_envscroll == 1);
+    SendMessage(ed, WM_VSCROLL, SB_LINEDOWN, 0);
+    st_check("SB_LINEDOWN", GetScrollPos(ed, SB_VERT) == 1);
+
+    /* WM_HSCROLL scrolls and notifies EN_HSCROLL */
+    st_enhscroll = 0;
+    SendMessage(ed, WM_HSCROLL, SB_RIGHT, 0);
+    int sx = GetScrollPos(ed, SB_HORZ);
+    st_check("SB_RIGHT scrolled", sx > 0);
+    st_check("EN_HSCROLL fired", st_enhscroll == 1);
+    SendMessage(ed, WM_HSCROLL, SB_LEFT, 0);
+    st_check("SB_LEFT rewinds", GetScrollPos(ed, SB_HORZ) == 0);
+
+    /* SetScrollInfo is programmatic: positions, no notification */
+    st_envscroll = 0;
+    memset(&si, 0, sizeof si);
+    si.cbSize = sizeof si;
+    si.fMask = SIF_POS;
+    si.nPos = 5;
+    st_check("SetScrollInfo pos", SetScrollInfo(ed, SB_VERT, &si, TRUE) == 5);
+    st_check("SetScrollInfo took", GetScrollPos(ed, SB_VERT) == 5);
+    st_check("SetScrollInfo silent", st_envscroll == 0);
+    st_check("SetScrollRange on EDIT refused",
+             SetScrollRange(ed, SB_VERT, 0, 10, FALSE) == FALSE);
+
+    /* UTF-8 caret discipline: chars insert as code points, arrows and
+     * backspace step whole code points */
+    SetWindowText(ed, "AB");
+    SendMessage(ed, EM_SETSEL, 2, 2);
+    SendMessage(ed, WM_CHAR, 0xE9, 0);           /* é -> "ABé" */
+    char buf[64];
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("WM_CHAR utf8 insert",
+             strcmp(buf, "AB\xC3\xA9") == 0 && strlen(buf) == 4);
+    SendMessage(ed, WM_KEYDOWN, VK_LEFT, 0);     /* caret before é */
+    SendMessage(ed, WM_CHAR, 'x', 0);            /* "ABxé" */
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("VK_LEFT steps a whole cp", strcmp(buf, "ABx\xC3\xA9") == 0);
+    SendMessage(ed, WM_KEYDOWN, VK_RIGHT, 0);    /* caret past é */
+    SendMessage(ed, WM_CHAR, 8, 0);              /* backspace -> "ABx" */
+    GetWindowText(ed, buf, sizeof buf);
+    st_check("backspace deletes a whole cp", strcmp(buf, "ABx") == 0);
+
+    /* fail-loud probe: a LISTBOX has no SB_VERT plumbing — the call must
+     * fail AND say so on stderr (the e2e asserts the stderr line) */
+    HWND lb = CreateWindowEx(0, "LISTBOX", "", WS_CHILD | WS_VISIBLE,
+                             10, 120, 100, 60, top, (HMENU)901, NULL, NULL);
+    st_check("GetScrollPos on LISTBOX fails", GetScrollPos(lb, SB_VERT) == 0);
+
+    printf("ctldemo selftest: %d checks, %d failed\n", st_checks, st_fails);
+    fflush(stdout);
+    DestroyWindow(top);
+    return st_fails ? 1 : 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "selftest") == 0) return selftest();
     WNDCLASS wc;
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc = MainProc;

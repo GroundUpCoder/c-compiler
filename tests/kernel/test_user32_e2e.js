@@ -351,6 +351,23 @@ check('MessageBox Enter on the default OK -> IDOK',
 
 fs.rmSync(dtmp, { recursive: true, force: true });
 
+/* ---- session E: `ctldemo selftest` (0211) — EDIT scroll/UTF-8 contracts
+ * (WS_HSCROLL bar state, EN_VSCROLL/EN_HSCROLL, Get/SetScrollInfo, code-
+ * point caret) as in-app asserts, plus the fail-loud stderr contract:
+ * GetScrollPos on a bar-less LISTBOX must SAY it's unsupported. */
+const { dir: etmp, image: eimage } = freshImage('os-user32e-');
+const outE = driveBoot(
+  ['ctldemo selftest 2>/tmp/st.err; echo selftest-rc=$?', 'cat /tmp/st.err'],
+  { image: eimage, maxBuffer: 32 * 1024 * 1024 }).stdout;
+check('ctldemo selftest passes in-OS',
+  /ctldemo selftest: \d+ checks, 0 failed/.test(outE),
+  (outE.match(/FAIL [^\n]*/g) || []).join(' | '));
+check('selftest exits 0', outE.includes('selftest-rc=0'));
+check('fail-loud: unsupported scrollbar target says so on stderr',
+  /win32: unsupported GetScrollPos: no SB_VERT scrollbar[^\n]*LISTBOX/.test(outE),
+  (outE.split('selftest-rc=')[1] || '').slice(0, 200));
+fs.rmSync(etmp, { recursive: true, force: true });
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(failures ? `\nuser32 e2e: ${failures} FAILED` : '\nuser32 e2e: PASS');
 process.exit(failures ? 1 : 0);

@@ -190,23 +190,26 @@ const out = boot([
   'echo ==sbshot',
   'base64 /root/sb.ppm',
   'echo ==cut',
+  // Scrollbar furniture coords (0211): the EDIT now shows its WS_HSCROLL
+  // bar too, so the vbar ends 16px higher — surface y: down arrow 246..262,
+  // hbar strip 262..278 (window 400x300, menu 20, status 20, EDIT h=260).
   'wmctl click $SID 30 25',                       // probe: caret on top row
   'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
-  'wmctl click $SID 390 270',                     // down arrow: +1 line
-  'wmctl click $SID 390 270',                     // +1 more
+  'wmctl click $SID 390 254',                     // down arrow: +1 line
+  'wmctl click $SID 390 254',                     // +1 more
   'wmctl click $SID 30 25',
   'wmctl wait text msctls_statusbar32:0 "Line 3," 4000',
   'wmctl click $SID 390 30',                      // up arrow: -1 line
   'wmctl click $SID 30 25',
   'wmctl wait text msctls_statusbar32:0 "Line 2," 4000',
-  'wmctl click $SID 390 250',                     // channel below thumb: +page
+  'wmctl click $SID 390 238',                     // channel below thumb: +page
   'wmctl click $SID 30 25',
   'n=0; while [ $n -lt 40 ]; do wmctl gettext msctls_statusbar32:0 | grep -q "Line 2," || break; sleep 0.1; n=$((n+1)); done',
   'echo ==pgdn',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
   'PG="$(wmctl gettext msctls_statusbar32:0)"',
-  'wmctl drag $SID 390 90 390 260',               // thumb drag to the bottom
+  'wmctl drag $SID 390 80 390 244',               // thumb drag to the bottom
   'wmctl click $SID 30 25',
   'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$PG" ] || break; sleep 0.1; n=$((n+1)); done',
   'echo ==thumbdrag',
@@ -368,6 +371,18 @@ for (let y = 120; y < 250; y++) {
 }
 check('WS_VSCROLL draws the right-edge scrollbar channel', sbGray > 400,
   'gray=' + sbGray + ' of 1300');
+// The WS_HSCROLL bar (0211): a gray strip along the EDIT's bottom edge
+// (surface y 262..278) where pre-0211 was white text area.
+let hbGray = 0;
+for (let y = 264; y < 276; y++) {
+  for (let x = 60; x < 320; x++) {
+    const i = sbp.data + (y * sbp.w + x) * 3;
+    if (Math.abs(sbp.buf[i] - 192) < 12 && Math.abs(sbp.buf[i + 1] - 192) < 12 &&
+        Math.abs(sbp.buf[i + 2] - 192) < 12) hbGray++;
+  }
+}
+check('WS_HSCROLL draws the bottom-edge scrollbar', hbGray > 1500,
+  'gray=' + hbGray + ' of 3120');
 const pgdnLine = +((section(out, 'pgdn').match(/Line (\d+),/) || [])[1] || 0);
 check('channel click below the thumb pages down (caret probe on the top row)',
   pgdnLine >= 10 && pgdnLine <= 30, 'line=' + pgdnLine);

@@ -3204,12 +3204,16 @@ typedef struct {
 } EditState;
 
 #define EDIT_PAD 3
-#define EDIT_SB_W 16            /* built-in vertical scrollbar width (0210) */
+#define EDIT_SB_W 16            /* built-in scrollbar thickness (0210/0211) */
+#define EDIT_HSTEP 8            /* hscroll arrow step, ~one char cell (0211) */
 
 static int edit_ml(HWND h) { return (h->style & ES_MULTILINE) != 0; }
 static int edit_ro(HWND h) { return (h->style & ES_READONLY) != 0; }
 static int edit_sb(HWND h) {
     return edit_ml(h) && (h->style & WS_VSCROLL) != 0;
+}
+static int edit_hsb(HWND h) {                    /* built-in hscroll (0211) */
+    return edit_ml(h) && (h->style & WS_HSCROLL) != 0;
 }
 
 static void sb_tri(HDC dc, int cx, int cy, int dir);   /* scrollbar section */
@@ -3285,8 +3289,53 @@ static int edit_line_h(HWND h) {
 }
 
 static int edit_rows(HWND h, int lh) {          /* visible whole rows */
-    int rows = (h->h - 2 * EDIT_PAD - 4) / (lh > 0 ? lh : 1);
+    int avail = h->h - 2 * EDIT_PAD - 4 - (edit_hsb(h) ? EDIT_SB_W : 0);
+    int rows = avail / (lh > 0 ? lh : 1);
     return rows < 1 ? 1 : rows;
+}
+
+static void edit_notify(HWND h, int code);
+
+static int edit_view_w(HWND h) {                /* text viewport width */
+    int w = h->w - 2 * EDIT_PAD - 4 - (edit_sb(h) ? EDIT_SB_W : 0);
+    return w > 1 ? w : 1;
+}
+
+/* Widest line in pixels (multiline hscroll extent). O(len) measure per
+ * call — fine at the sizes the in-OS apps edit. */
+static int edit_content_w(HWND h, EditState *st) {
+    HDC dc = GetDC(h);
+    if (!dc) return 0;
+    int maxW = 0, i = 0;
+    while (i <= st->len) {
+        int end = edit_line_end(st, i);
+        SIZE sz;
+        if (end > i && GetTextExtentPoint32(dc, st->buf + i, end - i, &sz) &&
+            sz.cx > maxW)
+            maxW = sz.cx;
+        if (end >= st->len) break;
+        i = end + 1;
+    }
+    __gdi_dc_unwrap(dc);
+    return maxW;
+}
+
+static int edit_max_sx(HWND h, EditState *st) {
+    int m = edit_content_w(h, st) + 2 - edit_view_w(h);
+    return m > 0 ? m : 0;
+}
+
+/* Scroll horizontally without moving the caret (0211). EN_HSCROLL fires
+ * on a real change — scrollbar/wheel scrolling, per the Win32 contract
+ * (caret-follow goes through edit_show_caret and stays silent). */
+static void edit_hscroll(HWND h, EditState *st, int x) {
+    int m = edit_max_sx(h, st);
+    if (x < 0) x = 0;
+    if (x > m) x = m;
+    if (x == st->scrollX) return;
+    st->scrollX = x;
+    InvalidateRect(h, NULL, TRUE);
+    edit_notify(h, EN_HSCROLL);
 }
 
 static int edit_max_top(HWND h, EditState *st) {
@@ -3294,7 +3343,8 @@ static int edit_max_top(HWND h, EditState *st) {
     return m > 0 ? m : 0;
 }
 
-/* Scroll without moving the caret (wheel/scrollbar semantics). */
+/* Scroll without moving the caret (wheel/scrollbar semantics). EN_VSCROLL
+ * fires on a real change, per the Win32 contract (0211). */
 static void edit_vscroll(HWND h, EditState *st, int top) {
     int m = edit_max_top(h, st);
     if (top < 0) top = 0;
@@ -3302,13 +3352,15 @@ static void edit_vscroll(HWND h, EditState *st, int top) {
     if (top == st->topLine) return;
     st->topLine = top;
     InvalidateRect(h, NULL, TRUE);
+    edit_notify(h, EN_VSCROLL);
 }
 
 /* The built-in WS_VSCROLL bar (0210): [up arrow][channel with proportional
  * thumb][down arrow], inside the 2px well on the right edge. */
 static void edit_sb_geom(HWND h, EditState *st, RECT *bar,
                          int *btn, int *thumbY, int *thumbH) {
-    SetRect(bar, h->w - 2 - EDIT_SB_W, 2, h->w - 2, h->h - 2);
+    SetRect(bar, h->w - 2 - EDIT_SB_W, 2, h->w - 2,
+            h->h - 2 - (edit_hsb(h) ? EDIT_SB_W : 0));
     int len = bar->bottom - bar->top;
     int b = EDIT_SB_W;
     if (b * 2 > len) b = len / 2;
@@ -3323,6 +3375,28 @@ static void edit_sb_geom(HWND h, EditState *st, RECT *bar,
     *thumbH = th;
     *thumbY = bar->top + b +
         (maxTop > 0 ? (chan - th) * st->topLine / maxTop : 0);
+}
+
+/* The built-in WS_HSCROLL bar (0211): the 0210 vbar mirrored horizontal,
+ * along the bottom edge, stopping short of the vbar when both exist. */
+static void edit_hsb_geom(HWND h, EditState *st, RECT *bar,
+                          int *btn, int *thumbX, int *thumbW) {
+    SetRect(bar, 2, h->h - 2 - EDIT_SB_W,
+            h->w - 2 - (edit_sb(h) ? EDIT_SB_W : 0), h->h - 2);
+    int len = bar->right - bar->left;
+    int b = EDIT_SB_W;
+    if (b * 2 > len) b = len / 2;
+    *btn = b;
+    int chan = len - 2 * b;
+    int cw = edit_content_w(h, st) + 2, vw = edit_view_w(h);
+    int maxSx = cw - vw;
+    if (maxSx < 0) maxSx = 0;
+    int tw = maxSx > 0 ? chan * vw / cw : chan;  /* proportional */
+    if (tw < 8) tw = 8;
+    if (tw > chan) tw = chan;
+    *thumbW = tw;
+    *thumbX = bar->left + b +
+        (maxSx > 0 ? (chan - tw) * st->scrollX / maxSx : 0);
 }
 
 static int edit_x_of(HWND h, EditState *st, HDC dc, int lineStart, int pos) {
@@ -3366,25 +3440,30 @@ static void edit_insert(HWND h, EditState *st, const char *s, int n) {
     (void)h;
 }
 
-/* Keep the caret in view: multiline scrolls topLine, single-line scrollX. */
+/* Keep the caret in view: topLine vertically (multiline), scrollX
+ * horizontally (single-line always; multiline under ES_AUTOHSCROLL /
+ * WS_HSCROLL — the notepad no-wrap styles, 0211). Silent scrolls: the
+ * EN_*SCROLL notifications are for user scrollbar/wheel action only. */
 static void edit_show_caret(HWND h, EditState *st) {
     int lh = edit_line_h(h);
+    int lineStart = 0;
     if (edit_ml(h)) {
         int line, col;
         edit_line_of(st, st->caret, &line, &col);
         int rows = edit_rows(h, lh);
         if (line < st->topLine) st->topLine = line;
         if (line >= st->topLine + rows) st->topLine = line - rows + 1;
-    } else {
-        HDC dc = GetDC(h);
-        if (!dc) return;
-        int cx = edit_x_of(h, st, dc, 0, st->caret);
-        __gdi_dc_unwrap(dc);
-        int vw = h->w - 2 * EDIT_PAD - 4;
-        if (cx - st->scrollX > vw - 2) st->scrollX = cx - vw + 2;
-        if (cx - st->scrollX < 0) st->scrollX = cx;
-        if (st->scrollX < 0) st->scrollX = 0;
+        if (!edit_hsb(h) && !(h->style & ES_AUTOHSCROLL)) return;
+        lineStart = edit_line_start(st, line);
     }
+    HDC dc = GetDC(h);
+    if (!dc) return;
+    int cx = edit_x_of(h, st, dc, lineStart, st->caret);
+    __gdi_dc_unwrap(dc);
+    int vw = edit_view_w(h);
+    if (cx - st->scrollX > vw - 2) st->scrollX = cx - vw + 2;
+    if (cx - st->scrollX < 0) st->scrollX = cx;
+    if (st->scrollX < 0) st->scrollX = 0;
 }
 
 static void edit_paint(HWND h) {
@@ -3417,8 +3496,31 @@ static void edit_paint(HWND h) {
         FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
         draw_raised(dc, th, 0);
     }
+    if (edit_hsb(h)) {                           /* built-in hscroll (0211) */
+        RECT bar, a1, a2, th;
+        int btn, tx, thw;
+        edit_hsb_geom(h, st, &bar, &btn, &tx, &thw);
+        FillRect(dc, &bar, GetSysColorBrush(COLOR_SCROLLBAR));
+        SetRect(&a1, bar.left, bar.top, bar.left + btn, bar.bottom);
+        SetRect(&a2, bar.right - btn, bar.top, bar.right, bar.bottom);
+        FillRect(dc, &a1, GetSysColorBrush(COLOR_BTNFACE));
+        draw_raised(dc, a1, 0);
+        FillRect(dc, &a2, GetSysColorBrush(COLOR_BTNFACE));
+        draw_raised(dc, a2, 0);
+        sb_tri(dc, (a1.left + a1.right) / 2, (a1.top + a1.bottom) / 2, 2);
+        sb_tri(dc, (a2.left + a2.right) / 2, (a2.top + a2.bottom) / 2, 3);
+        SetRect(&th, tx, bar.top, tx + thw, bar.bottom);
+        FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
+        draw_raised(dc, th, 0);
+        if (edit_sb(h)) {                        /* dead corner square */
+            RECT cnr;
+            SetRect(&cnr, h->w - 2 - EDIT_SB_W, h->h - 2 - EDIT_SB_W,
+                    h->w - 2, h->h - 2);
+            FillRect(dc, &cnr, GetSysColorBrush(COLOR_BTNFACE));
+        }
+    }
     IntersectClipRect(dc, 2, 2, h->w - 2 - (edit_sb(h) ? EDIT_SB_W : 0),
-                      h->h - 2);
+                      h->h - 2 - (edit_hsb(h) ? EDIT_SB_W : 0));
     SetBkMode(dc, TRANSPARENT);
     TEXTMETRIC tm;
     GetTextMetrics(dc, &tm);
@@ -3430,7 +3532,7 @@ static void edit_paint(HWND h) {
     while (i <= st->len) {
         int end = edit_line_end(st, i);
         if (y + lh > 2 && y < h->h - 2) {
-            int x = EDIT_PAD - (edit_ml(h) ? 0 : st->scrollX);
+            int x = EDIT_PAD - st->scrollX;      /* hscroll: all flavors (0211) */
             /* selection band on this line */
             if (focused && e > s && s < end + 1 && e > i) {
                 int ss = s > i ? s : i, se = e < end ? e : end;
@@ -3543,13 +3645,14 @@ static int edit_hit(HWND h, EditState *st, int px, int py) {
     if (line >= nl) line = nl - 1;
     int start = edit_line_start(st, line);
     int end = edit_line_end(st, start);
-    int x = EDIT_PAD - (edit_ml(h) ? 0 : st->scrollX);
+    int x = EDIT_PAD - st->scrollX;
     int pos = start;
-    while (pos < end) {
-        int nx = x + edit_x_of(h, st, dc, start, pos + 1);
+    while (pos < end) {                          /* step code points (0211) */
+        int np = __u8_fwd(st->buf, end, pos);
+        int nx = x + edit_x_of(h, st, dc, start, np);
         int cx = x + edit_x_of(h, st, dc, start, pos);
         if (px < (cx + nx) / 2) break;
-        pos++;
+        pos = np;
     }
     __gdi_dc_unwrap(dc);
     return pos;
@@ -3578,7 +3681,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             RECT bar;
             int btn, ty, th;
             edit_sb_geom(h, st, &bar, &btn, &ty, &th);
-            if (px >= bar.left) {
+            if (px >= bar.left && py < bar.bottom) {
                 int rows = edit_rows(h, edit_line_h(h));
                 if (py < bar.top + btn)
                     edit_vscroll(h, st, st->topLine - 1);
@@ -3594,6 +3697,28 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                     edit_vscroll(h, st, st->topLine + rows);
                 return 0;
             }
+            if (px >= bar.left) return 0;        /* dead corner square */
+        }
+        if (edit_hsb(h)) {                       /* built-in hscroll (0211) */
+            RECT bar;
+            int btn, tx, tw;
+            edit_hsb_geom(h, st, &bar, &btn, &tx, &tw);
+            if (py >= bar.top) {
+                int vw = edit_view_w(h);
+                if (px < bar.left + btn)
+                    edit_hscroll(h, st, st->scrollX - EDIT_HSTEP);
+                else if (px >= bar.right - btn)
+                    edit_hscroll(h, st, st->scrollX + EDIT_HSTEP);
+                else if (px >= tx && px < tx + tw) {
+                    st->sbDrag = 2;
+                    st->sbDragOff = px - tx;
+                    SetCapture(h);
+                } else if (px < tx)              /* channel: page */
+                    edit_hscroll(h, st, st->scrollX - vw);
+                else
+                    edit_hscroll(h, st, st->scrollX + vw);
+                return 0;
+            }
         }
         SetCapture(h);
         int pos = edit_hit(h, st, px, py);
@@ -3604,7 +3729,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_MOUSEMOVE:
-        if (st->sbDrag && GetCapture() == h) {   /* thumb drag (0210) */
+        if (st->sbDrag == 1 && GetCapture() == h) {   /* vthumb drag (0210) */
             RECT bar;
             int btn, ty, th;
             edit_sb_geom(h, st, &bar, &btn, &ty, &th);
@@ -3613,6 +3738,18 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (travel > 0 && m > 0) {
                 int ny = GET_Y_LPARAM(lp) - st->sbDragOff - (bar.top + btn);
                 edit_vscroll(h, st, (ny * m + travel / 2) / travel);
+            }
+            return 0;
+        }
+        if (st->sbDrag == 2 && GetCapture() == h) {   /* hthumb drag (0211) */
+            RECT bar;
+            int btn, tx, tw;
+            edit_hsb_geom(h, st, &bar, &btn, &tx, &tw);
+            int travel = (bar.right - bar.left) - 2 * btn - tw;
+            int m = edit_max_sx(h, st);
+            if (travel > 0 && m > 0) {
+                int nx = GET_X_LPARAM(lp) - st->sbDragOff - (bar.left + btn);
+                edit_hscroll(h, st, (nx * m + travel / 2) / travel);
             }
             return 0;
         }
@@ -3654,6 +3791,21 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_HSCROLL: {                           /* mirror contract (0211) */
+        if (!edit_ml(h)) return 0;
+        int vw = edit_view_w(h);
+        switch (LOWORD(wp)) {
+        case SB_LINELEFT:  edit_hscroll(h, st, st->scrollX - EDIT_HSTEP); break;
+        case SB_LINERIGHT: edit_hscroll(h, st, st->scrollX + EDIT_HSTEP); break;
+        case SB_PAGELEFT:  edit_hscroll(h, st, st->scrollX - vw); break;
+        case SB_PAGERIGHT: edit_hscroll(h, st, st->scrollX + vw); break;
+        case SB_LEFT:      edit_hscroll(h, st, 0); break;
+        case SB_RIGHT:     edit_hscroll(h, st, edit_max_sx(h, st)); break;
+        case SB_THUMBTRACK: case SB_THUMBPOSITION:
+            edit_hscroll(h, st, HIWORD(wp)); break;
+        }
+        return 0;
+    }
     case WM_GETDLGCODE: {                         /* dialog nav (0104) */
         int code = DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTARROWS;
         if (edit_ml(h) && wp == VK_RETURN) code |= DLGC_WANTALLKEYS;
@@ -3668,19 +3820,42 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (ch == 22) { SendMessage(h, WM_PASTE, 0, 0); return 0; }
         if (ch == 1) { SendMessage(h, EM_SETSEL, 0, -1); return 0; }
         if (edit_ro(h)) return 0;
-        if (ch == 8) {                           /* backspace */
+        if (ch == 8) {                           /* backspace: whole cp (0211) */
             int s, e;
             edit_sel(st, &s, &e);
-            if (s == e && st->caret > 0) st->anchor = st->caret - 1;
+            if (s == e && st->caret > 0)
+                st->anchor = __u8_prev(st->buf, st->caret);
             edit_del_sel(st);
         } else if (ch == '\r' || ch == '\n') {
             if (!edit_ml(h)) return 0;
             edit_insert(h, st, "\n", 1);
         } else if (ch == 9 && edit_ml(h)) {
             edit_insert(h, st, "\t", 1);
-        } else if (ch >= 32 && ch < 127) {
-            char c = (char)ch;
-            edit_insert(h, st, &c, 1);
+        } else if (ch >= 32 && ch != 127 && ch < 0x110000 &&
+                   !(ch >= 0xD800 && ch <= 0xDFFF)) {
+            /* Any code point, UTF-8-encoded (0211). WM_CHAR carries UTF-16
+             * units on the W side; a stray surrogate half is dropped. */
+            char u[4];
+            int n;
+            unsigned cp = (unsigned)ch;
+            if (cp < 0x80) { u[0] = (char)cp; n = 1; }
+            else if (cp < 0x800) {
+                u[0] = (char)(0xC0 | (cp >> 6));
+                u[1] = (char)(0x80 | (cp & 0x3F));
+                n = 2;
+            } else if (cp < 0x10000) {
+                u[0] = (char)(0xE0 | (cp >> 12));
+                u[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                u[2] = (char)(0x80 | (cp & 0x3F));
+                n = 3;
+            } else {
+                u[0] = (char)(0xF0 | (cp >> 18));
+                u[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                u[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                u[3] = (char)(0x80 | (cp & 0x3F));
+                n = 4;
+            }
+            edit_insert(h, st, u, n);
         } else {
             return 0;
         }
@@ -3694,11 +3869,11 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int extend = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         int oldCaret = st->caret;
         switch (wp) {
-        case VK_LEFT:
-            if (st->caret > 0) st->caret--;
+        case VK_LEFT:                            /* step code points (0211) */
+            st->caret = __u8_prev(st->buf, st->caret);
             break;
         case VK_RIGHT:
-            if (st->caret < st->len) st->caret++;
+            st->caret = __u8_fwd(st->buf, st->len, st->caret);
             break;
         case VK_HOME: {
             int l, c;
@@ -3723,13 +3898,15 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             int start = edit_line_start(st, tl);
             int end = edit_line_end(st, start);
             st->caret = start + c > end ? end : start + c;
+            st->caret = __u8_snap(st->buf, st->caret);   /* boundary (0211) */
             break;
         }
         case VK_DELETE: {
             if (edit_ro(h)) return 0;
             int s, e;
             edit_sel(st, &s, &e);
-            if (s == e && st->caret < st->len) st->anchor = st->caret + 1;
+            if (s == e && st->caret < st->len)
+                st->anchor = __u8_fwd(st->buf, st->len, st->caret);
             edit_del_sel(st);
             st->modified = 1;
             edit_show_caret(h, st);
@@ -4253,33 +4430,52 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 typedef struct {
     int min, max, pos;
+    int page;                   /* SIF_PAGE (0211): 0 = classic square thumb */
     int dragging, dragOff;
     int dragPos;                /* thumb position while dragging (visual) */
 } SbState;
 
 static int sb_vert(HWND h) { return (h->style & 1) == SBS_VERT; }
 
-/* Geometry: [arrow][channel with thumb][arrow]; the thumb is a square. */
-static void sb_geom(HWND h, SbState *st, int *btn, int *track, int *thumbPos) {
+/* Highest reachable pos: max - page + 1 when a page is set (the Windows
+ * SIF_PAGE rule), else max. */
+static int sb_max_pos(SbState *st) {
+    int m = st->page > 0 ? st->max - st->page + 1 : st->max;
+    return m < st->min ? st->min : m;
+}
+
+/* Geometry: [arrow][channel with thumb][arrow]; the thumb is a square
+ * classically, proportional once SIF_PAGE set a page size (0211). */
+static void sb_geom(HWND h, SbState *st, int *btn, int *track, int *thumbPos,
+                    int *thumbLen) {
     int len = sb_vert(h) ? h->h : h->w;
     int b = sb_vert(h) ? h->w : h->h;
     if (b * 2 > len) b = len / 2;
     *btn = b;
-    *track = len - 2 * b - b;                    /* travel of the thumb's top */
+    int chan = len - 2 * b;
+    int tl = b;
+    int span = st->max - st->min + 1;
+    if (st->page > 0 && span > 0) {
+        tl = chan * st->page / span;
+        if (tl < 8) tl = 8;
+        if (tl > chan) tl = chan;
+    }
+    *thumbLen = tl;
+    *track = chan - tl;                          /* travel of the thumb's top */
     if (*track < 0) *track = 0;
-    int range = st->max - st->min;
+    int posRange = sb_max_pos(st) - st->min;
     int pos = st->dragging ? st->dragPos : st->pos;
-    *thumbPos = b + (range > 0 ? (pos - st->min) * *track / range : 0);
+    *thumbPos = b + (posRange > 0 ? (pos - st->min) * *track / posRange : 0);
 }
 
 static int sb_pos_of(HWND h, SbState *st, int pix) {
-    int btn, track, tp;
-    sb_geom(h, st, &btn, &track, &tp);
-    int range = st->max - st->min;
-    if (track <= 0 || range <= 0) return st->min;
-    int p = st->min + (pix - btn) * range / track;
+    int btn, track, tp, tl;
+    sb_geom(h, st, &btn, &track, &tp, &tl);
+    int posRange = sb_max_pos(st) - st->min;
+    if (track <= 0 || posRange <= 0) return st->min;
+    int p = st->min + (pix - btn) * posRange / track;
     if (p < st->min) p = st->min;
-    if (p > st->max) p = st->max;
+    if (p > sb_max_pos(st)) p = sb_max_pos(st);
     return p;
 }
 
@@ -4320,8 +4516,8 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
         if (!dc) return 0;
-        int btn, track, tp;
-        sb_geom(h, st, &btn, &track, &tp);
+        int btn, track, tp, tl;
+        sb_geom(h, st, &btn, &track, &tp, &tl);
         RECT r;
         /* channel */
         SetRect(&r, 0, 0, h->w, h->h);
@@ -4344,8 +4540,8 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         sb_tri(dc, (a2.left + a2.right) / 2, (a2.top + a2.bottom) / 2, v ? 1 : 3);
         /* thumb */
         RECT th;
-        if (v) SetRect(&th, 0, tp, h->w, tp + btn);
-        else SetRect(&th, tp, 0, tp + btn, h->h);
+        if (v) SetRect(&th, 0, tp, h->w, tp + tl);
+        else SetRect(&th, tp, 0, tp + tl, h->h);
         FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
         draw_raised(dc, th, 0);
         EndPaint(h, &ps);
@@ -4355,15 +4551,15 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int v = sb_vert(h);
         int p = v ? GET_Y_LPARAM(lp) : GET_X_LPARAM(lp);
         int len = v ? h->h : h->w;
-        int btn, track, tp;
-        sb_geom(h, st, &btn, &track, &tp);
+        int btn, track, tp, tl;
+        sb_geom(h, st, &btn, &track, &tp, &tl);
         /* Windows semantics: the control only NOTIFIES — the app moves
          * the position (SetScrollPos) in its WM_VSCROLL handler. */
         if (p < btn) {
             sb_notify(h, SB_LINEUP, 0);
         } else if (p >= len - btn) {
             sb_notify(h, SB_LINEDOWN, 0);
-        } else if (p >= tp && p < tp + btn) {
+        } else if (p >= tp && p < tp + tl) {
             st->dragging = 1;
             st->dragOff = p - tp;
             st->dragPos = st->pos;
@@ -4402,40 +4598,177 @@ static LRESULT sb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-int SetScrollPos(HWND h, int bar, int pos, BOOL redraw) {
-    (void)bar;
-    if (!h || !h->ctl) return 0;
-    SbState *st = (SbState *)h->ctl;
-    int old = st->pos;
-    if (pos < st->min) pos = st->min;
-    if (pos > st->max) pos = st->max;
-    st->pos = pos;
-    if (redraw) InvalidateRect(h, NULL, TRUE);
+/* ---- window scroll-info plumbing (0211) ----
+ * The Get/SetScroll* APIs route by target: SB_CTL requires a SCROLLBAR
+ * control (they used to poke h->ctl blindly — SetScrollPos(hEdit, ...)
+ * type-confused the EDIT's state); SB_VERT/SB_HORZ resolve to an EDIT's
+ * built-in bars, where the bar state IS the view state (pos = topLine /
+ * scrollX px — one source of truth, so a programmatic Set scrolls the
+ * text; the EN_*SCROLL notifications stay user-action-only). Any other
+ * combination is unsupported and says so. */
+
+enum { SBTGT_NONE, SBTGT_CTL, SBTGT_EDIT_V, SBTGT_EDIT_H };
+
+static int sb_target(HWND h, int bar, const char *api) {
+    if (h && h->cls && h->ctl) {
+        if (bar == SB_CTL && ci_eq(h->cls->name, "SCROLLBAR"))
+            return SBTGT_CTL;
+        if (ci_eq(h->cls->name, "EDIT")) {
+            if (bar == SB_VERT && edit_sb(h)) return SBTGT_EDIT_V;
+            if (bar == SB_HORZ && edit_hsb(h)) return SBTGT_EDIT_H;
+        }
+    }
+    WIN32_UNSUPPORTED("%s: no %s scrollbar on this window (class %s)",
+                      api, bar == SB_CTL ? "SB_CTL" :
+                           bar == SB_VERT ? "SB_VERT" : "SB_HORZ",
+                      h && h->cls ? h->cls->name : "?");
+    return SBTGT_NONE;
+}
+
+/* EDIT built-in bar views for the scroll APIs. */
+static void edit_bar_get(HWND h, int vert, int *min, int *max, int *page,
+                         int *pos) {
+    EditState *st = (EditState *)h->ctl;
+    *min = 0;
+    if (vert) {
+        *max = edit_line_count(st) - 1;
+        *page = edit_rows(h, edit_line_h(h));
+        *pos = st->topLine;
+    } else {
+        *max = edit_content_w(h, st) + 1;        /* px, matches edit_max_sx */
+        *page = edit_view_w(h);
+        *pos = st->scrollX;
+    }
+}
+
+static int edit_bar_set_pos(HWND h, int vert, int pos) {
+    EditState *st = (EditState *)h->ctl;
+    int old = vert ? st->topLine : st->scrollX;
+    if (pos < 0) pos = 0;
+    if (vert) {
+        int m = edit_max_top(h, st);
+        st->topLine = pos > m ? m : pos;         /* silent: no EN_VSCROLL */
+    } else {
+        int m = edit_max_sx(h, st);
+        st->scrollX = pos > m ? m : pos;
+    }
+    InvalidateRect(h, NULL, TRUE);
     return old;
 }
 
+int SetScrollPos(HWND h, int bar, int pos, BOOL redraw) {
+    switch (sb_target(h, bar, "SetScrollPos")) {
+    case SBTGT_CTL: {
+        SbState *st = (SbState *)h->ctl;
+        int old = st->pos;
+        if (pos < st->min) pos = st->min;
+        if (pos > sb_max_pos(st)) pos = sb_max_pos(st);
+        st->pos = pos;
+        if (redraw) InvalidateRect(h, NULL, TRUE);
+        return old;
+    }
+    case SBTGT_EDIT_V: return edit_bar_set_pos(h, 1, pos);
+    case SBTGT_EDIT_H: return edit_bar_set_pos(h, 0, pos);
+    }
+    return 0;
+}
+
 int GetScrollPos(HWND h, int bar) {
-    (void)bar;
-    return h && h->ctl ? ((SbState *)h->ctl)->pos : 0;
+    int mn, mx, pg, pos;
+    switch (sb_target(h, bar, "GetScrollPos")) {
+    case SBTGT_CTL: return ((SbState *)h->ctl)->pos;
+    case SBTGT_EDIT_V: edit_bar_get(h, 1, &mn, &mx, &pg, &pos); return pos;
+    case SBTGT_EDIT_H: edit_bar_get(h, 0, &mn, &mx, &pg, &pos); return pos;
+    }
+    return 0;
 }
 
 BOOL SetScrollRange(HWND h, int bar, int min, int max, BOOL redraw) {
-    (void)bar;
-    if (!h || !h->ctl || min > max) return FALSE;
-    SbState *st = (SbState *)h->ctl;
-    st->min = min;
-    st->max = max;
-    if (st->pos < min) st->pos = min;
-    if (st->pos > max) st->pos = max;
-    if (redraw) InvalidateRect(h, NULL, TRUE);
-    return TRUE;
+    if (min > max) return FALSE;
+    switch (sb_target(h, bar, "SetScrollRange")) {
+    case SBTGT_CTL: {
+        SbState *st = (SbState *)h->ctl;
+        st->min = min;
+        st->max = max;
+        if (st->pos < min) st->pos = min;
+        if (st->pos > sb_max_pos(st)) st->pos = sb_max_pos(st);
+        if (redraw) InvalidateRect(h, NULL, TRUE);
+        return TRUE;
+    }
+    case SBTGT_EDIT_V:
+    case SBTGT_EDIT_H:
+        /* the EDIT owns its range (line count / content width) */
+        WIN32_UNSUPPORTED("SetScrollRange on an EDIT built-in bar");
+        return FALSE;
+    }
+    return FALSE;
 }
 
 BOOL GetScrollRange(HWND h, int bar, LPINT min, LPINT max) {
-    (void)bar;
-    if (!h || !h->ctl) return FALSE;
-    if (min) *min = ((SbState *)h->ctl)->min;
-    if (max) *max = ((SbState *)h->ctl)->max;
+    int mn, mx, pg, pos;
+    switch (sb_target(h, bar, "GetScrollRange")) {
+    case SBTGT_CTL:
+        mn = ((SbState *)h->ctl)->min;
+        mx = ((SbState *)h->ctl)->max;
+        break;
+    case SBTGT_EDIT_V: edit_bar_get(h, 1, &mn, &mx, &pg, &pos); break;
+    case SBTGT_EDIT_H: edit_bar_get(h, 0, &mn, &mx, &pg, &pos); break;
+    default: return FALSE;
+    }
+    if (min) *min = mn;
+    if (max) *max = mx;
+    return TRUE;
+}
+
+/* SetScrollInfo/GetScrollInfo (0211): the modern API over the same
+ * targets. Returns the resulting position, like Windows. */
+int SetScrollInfo(HWND h, int bar, const SCROLLINFO *si, BOOL redraw) {
+    if (!si) return 0;
+    switch (sb_target(h, bar, "SetScrollInfo")) {
+    case SBTGT_CTL: {
+        SbState *st = (SbState *)h->ctl;
+        if (si->fMask & SIF_RANGE) { st->min = si->nMin; st->max = si->nMax; }
+        if (si->fMask & SIF_PAGE) st->page = (int)si->nPage;
+        if (si->fMask & SIF_POS) st->pos = si->nPos;
+        if (st->max < st->min) st->max = st->min;
+        if (st->pos < st->min) st->pos = st->min;
+        if (st->pos > sb_max_pos(st)) st->pos = sb_max_pos(st);
+        if (redraw) InvalidateRect(h, NULL, TRUE);
+        return st->pos;
+    }
+    case SBTGT_EDIT_V:
+    case SBTGT_EDIT_H: {
+        int vert = bar == SB_VERT;
+        if (si->fMask & (SIF_RANGE | SIF_PAGE))
+            WIN32_UNSUPPORTED("SetScrollInfo range/page on an EDIT bar");
+        if (si->fMask & SIF_POS) edit_bar_set_pos(h, vert, si->nPos);
+        int mn, mx, pg, pos;
+        edit_bar_get(h, vert, &mn, &mx, &pg, &pos);
+        return pos;
+    }
+    }
+    return 0;
+}
+
+BOOL GetScrollInfo(HWND h, int bar, SCROLLINFO *si) {
+    if (!si) return FALSE;
+    int mn, mx, pg, pos, track;
+    switch (sb_target(h, bar, "GetScrollInfo")) {
+    case SBTGT_CTL: {
+        SbState *st = (SbState *)h->ctl;
+        mn = st->min; mx = st->max; pg = st->page;
+        pos = st->pos;
+        track = st->dragging ? st->dragPos : st->pos;
+        break;
+    }
+    case SBTGT_EDIT_V: edit_bar_get(h, 1, &mn, &mx, &pg, &pos); track = pos; break;
+    case SBTGT_EDIT_H: edit_bar_get(h, 0, &mn, &mx, &pg, &pos); track = pos; break;
+    default: return FALSE;
+    }
+    if (si->fMask & SIF_RANGE) { si->nMin = mn; si->nMax = mx; }
+    if (si->fMask & SIF_PAGE) si->nPage = (UINT)pg;
+    if (si->fMask & SIF_POS) si->nPos = pos;
+    if (si->fMask & SIF_TRACKPOS) si->nTrackPos = track;
     return TRUE;
 }
 

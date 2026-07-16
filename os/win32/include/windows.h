@@ -1015,6 +1015,24 @@ int  GetScrollPos(HWND hwnd, int bar);
 BOOL SetScrollRange(HWND hwnd, int bar, int min, int max, BOOL redraw);
 BOOL GetScrollRange(HWND hwnd, int bar, LPINT min, LPINT max);
 
+/* SetScrollInfo/GetScrollInfo (0211) */
+typedef struct tagSCROLLINFO {
+    UINT cbSize;
+    UINT fMask;
+    int  nMin, nMax;
+    UINT nPage;
+    int  nPos, nTrackPos;
+} SCROLLINFO, *LPSCROLLINFO;
+typedef const SCROLLINFO *LPCSCROLLINFO;
+#define SIF_RANGE           0x0001
+#define SIF_PAGE            0x0002
+#define SIF_POS             0x0004
+#define SIF_DISABLENOSCROLL 0x0008
+#define SIF_TRACKPOS        0x0010
+#define SIF_ALL (SIF_RANGE | SIF_PAGE | SIF_POS | SIF_TRACKPOS)
+int  SetScrollInfo(HWND hwnd, int bar, const SCROLLINFO *si, BOOL redraw);
+BOOL GetScrollInfo(HWND hwnd, int bar, SCROLLINFO *si);
+
 int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type);
 
 DWORD    GetSysColor(int index);
