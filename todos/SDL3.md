@@ -75,7 +75,11 @@ Host ops implemented (32) and the `SDL.h`/`__SDL.c` C API on top of them:
   `SDL_PauseAudioStreamDevice`/`Resume`, `SDL_ClearAudioStream`,
   `SDL_GetAudioStreamQueued`, `SDL_DestroyAudioStream` (Web Audio backed).
 - **Timer:** `SDL_GetTicks` (true `Uint64` ms since `SDL_Init`), `SDL_Delay`
-  (always throws — a blocking sleep can't yield without JSPI; use the callback).
+  (a real sleep wherever blocking is legal — OS worker processes get a
+  cooperative pumpWait sleep that keeps draining input and lets the compositor
+  park, headless Node blocks like usleep (todos/0224); ONLY the standalone
+  browser callback-model runtime throws, where a blocking loop would freeze
+  the page).
 - **Errors:** `SDL_GetError`/`SDL_SetError`/`SDL_ClearError` (single global
   string; set on the failure paths of Init/CreateWindow/Renderer/Texture/audio).
 - **Frame loop:** `__sdl_set_animation_frame_func` (rAF; the no-JSPI loop).
@@ -90,8 +94,12 @@ Fixed a batch of stray-from-SDL behaviors found in an audit (all tested, headles
 - **Error API** is real now (was entirely absent — `SDL_GetError()` didn't even
   compile).
 - **`SDL_GetTicks`** returns a full `Uint64` (was 32-bit-truncated, wrapped ~49d).
-- **`SDL_Delay`** always throws (was a silent no-op when a frame callback was
-  registered) — no shipping demo calls it; Doom routes around it.
+- **`SDL_Delay`** fails loud instead of silently no-opping (was a silent no-op
+  when a frame callback was registered) — no shipping demo calls it; Doom
+  routes around it. (Since todos/0224 the throw is scoped to the standalone
+  browser runtime only — under the OS and headless it's a real blocking sleep,
+  so the classic `while(running){poll; draw; SDL_Delay(16);}` corpus loop
+  ports unmodified.)
 - **Blend modes are honored per draw** (`SDL_SetTextureBlendMode`/
   `SetRenderDrawBlendMode` were no-op stubs; everything was force-alpha-blended).
   One WebGPU pipeline per mode; SDL-correct defaults (renderer draw + CreateTexture

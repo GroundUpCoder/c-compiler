@@ -5161,6 +5161,13 @@ var BLOCK_FS = (function () {
     SyncAccessHandleStore: SyncAccessHandleStore,
     TLSFAllocator: TLSFAllocator,
     TLSF64Allocator: TLSF64Allocator,
+    // The synchronous sleep primitive (Atomics.wait on a never-notified
+    // cell) + its availability probe. The SDL flavors reuse it for
+    // SDL_Delay wherever blocking is legal (workers, Node) — see
+    // createNullSDL / createSurfaceSDL — so there is ONE blocking-sleep
+    // implementation, shared with usleep/nanosleep above.
+    blockingSleepMs: blockingSleepMs,
+    canBlockSync: function () { return _canBlock; },
   };
 })();
 
@@ -5689,27 +5696,32 @@ function createHttp(ctx, hooks) {
 }
 
 // A blocking SDL loop (while(running){ poll; render; SDL_Delay; }) can't be
-// honoured in this runtime, on ANY engine. The app runs every program through
-// the synchronous, no-JSPI block-FS model (one runtime to maintain until iOS
-// ships JSPI), and such a loop fundamentally cannot yield to the browser without
-// JSPI: the window never repaints and input never arrives — it just hangs. So
-// rather than a silent no-op (an unexplained freeze) the no-JSPI SDL_Delay paths
-// throw this — UNIFORMLY: every SDL_Delay call throws, on every engine, whether
-// or not a main-loop callback was registered. SDL_Delay simply has no honourable
-// implementation here, so it fails loud rather than silently doing nothing. The
-// callback model never needs it (rAF paces frames); programs that called it for
-// frame-limiting just delete the call. The throw unwinds out of main() and the
-// run pipeline surfaces it (shell stderr → Term/agent tool result, and the
-// graphical sheet's on-screen debug overlay).
+// honoured in the STANDALONE BROWSER runtime (createBrowserSDL): the app runs
+// every program through the synchronous, no-JSPI block-FS model, the frame
+// loop is rAF-driven (main() must return so the callback model can pace it),
+// and input/presents ride the worker's message loop — a main() that never
+// returns starves them no matter how SDL_Delay itself is implemented. So that
+// flavor throws this rather than freezing silently, and the same throw backs
+// any context where the thread genuinely cannot block (a browser main
+// thread — Atomics.wait is illegal there).
+//
+// Everywhere blocking IS legal the classic loop is FIRST-CLASS (todos/0224):
+// OS processes run in workers, where SDL_Delay is a cooperative pumpWait
+// sleep — input keeps draining into the wasm event queue and the compositor
+// may park while the app dawdles (createSurfaceSDL's sdlDelay); headless
+// standalone runs block outright like usleep (createNullSDL). Only the
+// standalone-browser callback model keeps the restructure requirement,
+// because there the constraint is real.
 function sdlDelayUnsupported() {
   throw new Error(
-    'SDL_Delay() is not supported in this runtime (no JSPI). A blocking SDL ' +
-    'loop cannot yield to the browser, so the window never updates and input ' +
-    'never arrives. Restructure to the callback model: move your per-frame work ' +
-    'into a function and register it with emscripten_set_main_loop(frame, 0, 1) ' +
-    '(or __setAnimationFrameFunc(frame)), then return from main(). The host ' +
-    'drives that via requestAnimationFrame — no JSPI, works on every engine ' +
-    'including Safari/iOS.'
+    'SDL_Delay() is not supported in this runtime (no JSPI, cannot block). A ' +
+    'blocking SDL loop cannot yield to the browser here, so the window never ' +
+    'updates and input never arrives. Restructure to the callback model: move ' +
+    'your per-frame work into a function and register it with ' +
+    'emscripten_set_main_loop(frame, 0, 1) (or __setAnimationFrameFunc(frame)), ' +
+    'then return from main(). The host drives that via requestAnimationFrame — ' +
+    'no JSPI, works on every engine including Safari/iOS. (Under the OS, ' +
+    'SDL_Delay works: processes run in workers where blocking is legal.)'
   );
 }
 
@@ -5790,12 +5802,17 @@ function createNullSDL() {
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if a program reads ticks before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
-      // SDL_Delay cannot be honoured without JSPI on ANY engine: a blocking sleep
-      // never yields to the browser, so the window never repaints and input never
-      // arrives. We throw UNIFORMLY (no callback-model exception) — the callback
-      // model paces frames via rAF and must not call SDL_Delay. See
-      // sdlDelayUnsupported() for the restructure guidance.
-      __sdl_delay: function () { sdlDelayUnsupported(); },
+      // SDL_Delay (todos/0224): headless contexts CAN block — the same
+      // primitive as usleep/nanosleep (Atomics.wait on a never-notified
+      // cell) — so the classic while(running){ poll; draw; SDL_Delay(16); }
+      // loop runs unmodified under Node CLI / headless tests. No display and
+      // no input ring in this flavor, so a plain blocking sleep is the whole
+      // contract. Where the thread cannot block (a browser main thread) the
+      // loud throw remains — see sdlDelayUnsupported().
+      __sdl_delay: function (ms) {
+        if (!BLOCK_FS.canBlockSync()) sdlDelayUnsupported();
+        BLOCK_FS.blockingSleepMs(ms);
+      },
       // No OS input ring in this flavor — SDL_WaitEvent* falls back to a
       // nanosleep pace on a 0 return (todos/0161); no kernel WAIT either —
       // __wait callers fall back to their chunked poll on -2 (todos/0178).
@@ -6249,6 +6266,29 @@ function createSurfaceSDL({ ctx, hooks }) {
     if (ringInterest) drainInput();           // ring wake visible at import return
     return resp.why | 0;
   }
+  /* SDL_Delay (todos/0224): OS processes run in workers, where blocking is
+   * legal — the classic while(running){ poll; draw; SDL_Delay(16); } corpus
+   * loop is FIRST-CLASS here, no restructure-to-callback tax (that tax is
+   * real only in the standalone browser runtime; see sdlDelayUnsupported).
+   * Sleep in pumpWait parks so the OS input ring keeps draining into the
+   * wasm event queue while we sleep: an event arriving mid-delay is queued
+   * for the app's next SDL_PollEvent but does NOT shorten the sleep (SDL
+   * semantics — Delay sleeps its full duration; the deadline loop below
+   * re-parks for the remainder after every early wake). pumpWait's entry
+   * rules carry over: the 0169 frame-idle release lets the compositor park
+   * while an app dawdles between presents (the next present's doorbell
+   * re-wakes it — the IDLE-POWER discipline), and cooperative signals run
+   * at this import's return, matching usleep/nanosleep. Pre-window there is
+   * no ring yet (pumpWait returns 0 without sleeping) — fall back to the
+   * raw blocking sleep, never a spin. */
+  function sdlDelay(ms) {
+    const end = Date.now() + (ms | 0);
+    for (;;) {
+      const left = end - Date.now();
+      if (left <= 0) return;
+      if (pumpWait(left) === 0) { BLOCK_FS.blockingSleepMs(left); return; }
+    }
+  }
 
   /* ---- browser flavor: the real WebGPU SDL backend on a worker-local
    * OffscreenCanvas, presents handed to the kernel as ImageBitmaps ---- */
@@ -6325,6 +6365,8 @@ function createSurfaceSDL({ ctx, hooks }) {
     };
     env.__sdl_pump_wait = pumpWait;   // user32 blocking GetMessage (0058)
     env.__wait = waitMulti;           // unified multi-source wait (0178)
+    env.__sdl_delay = sdlDelay;       // cooperative worker sleep (0224) —
+                                      // overrides inner's standalone-page throw
     // Resize request (todos/0019): allocate the new shm SAB and resize the
     // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
     // draws at canvas size, and a webgpu.h app's own wgpuSurfaceConfigure
@@ -6484,7 +6526,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       __sdl_push_mouse_wheel_event: function () {},
       __sdl_push_quit_event: function () {},
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = Date.now(); return Date.now() - sdlTicksBase; },
-      __sdl_delay: function () { sdlDelayUnsupported(); },
+      __sdl_delay: sdlDelay,       // cooperative worker sleep (0224)
       __sdl_pump_wait: pumpWait,   // user32 blocking GetMessage (0058)
       __wait: waitMulti,           // unified multi-source wait (0178)
       // Audio: real source rings into the kernel mixer in both flavors
@@ -7181,11 +7223,14 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       __sdl_audio_callback_unsupported: function () { sdlAudioGetCallbackUnsupported(); },
 
-      // No JSPI branch — uniform with the headless null-SDL path. SDL_Delay
-      // cannot yield to the browser without JSPI, so it ALWAYS throws (no
-      // callback-model exception): the callback model paces frames via rAF and
-      // must not call SDL_Delay. The error surfaces in the graphical sheet's
-      // on-screen debug overlay.
+      // The ONE flavor where SDL_Delay genuinely can't be honoured
+      // (todos/0224 scoped the old uniform throw down to here): the
+      // standalone-browser callback model paces frames via rAF, main() must
+      // return, and input/presents ride the message loop — blocking would
+      // freeze the page even where Atomics.wait is technically legal. Fails
+      // loud; the error surfaces in the graphical sheet's on-screen debug
+      // overlay. OS worker processes (createSurfaceSDL) and headless runs
+      // (createNullSDL) implement it as a real sleep instead.
       __sdl_delay: function () { sdlDelayUnsupported(); },
       // No OS input ring in this flavor (events are pushed by page listeners,
       // and the main thread must never block) — SDL_WaitEvent* falls back to
@@ -10856,6 +10901,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.createConsoleReceiver = createConsoleReceiver;
   module.exports.createSharedAudioBuffer = createSharedAudioBuffer;
   module.exports.createBrowserSDL = createBrowserSDL;
+  module.exports.createNullSDL = createNullSDL;
 }
 
 // Browser global exports

@@ -363,8 +363,9 @@ drains dry kernel-side; pumpless kernels drop silently). winmm.c layers
 the PlaySound contract on top: one current sound per process (new play
 stops it; SND_NOSTOP refuses), SND_ALIAS/FILENAME/MEMORY resolution,
 unknown-alias → SystemDefault unless SND_NODEFAULT, SND_SYNC as a
-duration-capped queue poll (usleep, NOT SDL_Delay — that throws by
-design), PlaySound(NULL)/SND_PURGE stop. Deliberate: SND_RESOURCE stays
+duration-capped queue poll (usleep; predates SDL_Delay working under the
+OS — todos/0224 — and both block the same way now),
+PlaySound(NULL)/SND_PURGE stop. Deliberate: SND_RESOURCE stays
 silent success (corpus .wavs not vendored; winmine ticks every second —
 no default-ding fallback), SND_LOOP plays once (looping needs a
 process-side refill pump fire-and-forget doesn't have). user32 grew a

@@ -92,7 +92,8 @@ BOOL PlaySoundA(LPCSTR sound, HMODULE mod, DWORD flags) {
     if (!(flags & SND_ASYNC)) {
         /* SND_SYNC: poll the queue, capped at the clip duration + slack —
          * a pumpless kernel (headless boot.js) never drains the ring.
-         * usleep, not SDL_Delay: the latter throws by design (no JSPI). */
+         * usleep and SDL_Delay block identically here since todos/0224;
+         * usleep keeps this unit SDL-video-agnostic. */
         int waited = 0;
         while (SDL_GetAudioStreamQueued(s) > 0 && waited < dur_ms + 250) {
             usleep(20000);
