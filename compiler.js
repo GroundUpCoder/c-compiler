@@ -14326,13 +14326,29 @@ class WastBuilder {
   block(bt) { const n = new WBlock(bt || WT_EMPTY); this._append(n); this.ctrl.push(n); }
   loop(bt) { const n = new WLoop(bt || WT_EMPTY); this._append(n); this.ctrl.push(n); }
   if_(bt) { const n = new WIf(bt); this._append(n); this.ctrl.push(n); }
-  else_() { this._append(new WElse()); }
+  // else must sit directly inside an if that hasn't taken one yet — a
+  // second else_() on the same if is an emitter bug; catch it here at the
+  // producing site instead of as V8's opaque module rejection
+  // (todos/0227 W2; validate() enforces the same rule for pass output).
+  else_() {
+    const top = this.ctrl[this.ctrl.length - 1];
+    if (!(top instanceof WIf)) {
+      throw new Error("internal codegen error: else_() outside an if");
+    }
+    if (!this._elseTaken) this._elseTaken = new Set();
+    if (this._elseTaken.has(top)) {
+      throw new Error("internal codegen error: second else_() in one if");
+    }
+    this._elseTaken.add(top);
+    this._append(new WElse());
+  }
   end() {
     if (this.ctrl.length <= 1) {
       throw new Error("internal codegen error: end() with no open control construct");
     }
     this._append(new WEnd());
-    this.ctrl.pop();
+    const closed = this.ctrl.pop();
+    if (this._elseTaken) this._elseTaken.delete(closed);
   }
   br(labelIdx) { this._append(new WBr(this._resolveDepth(labelIdx, "br"))); }
   brIf(labelIdx) { this._append(new WBrIf(this._resolveDepth(labelIdx, "brIf"))); }
@@ -14558,6 +14574,7 @@ function serialize(fnNodes, out, opts) {
 // checked here — the engine-level WebAssembly.validate backstop covers it.
 function validate(fnNodes, funcLabel) {
   const stack = [];
+  const elseSeen = new Set();
   function checkTarget(t, what) {
     if (t && t.isFuncLabel) {
       if (funcLabel && t !== funcLabel) {
@@ -14584,14 +14601,22 @@ function validate(fnNodes, funcLabel) {
         for (const c of n.catches) checkTarget(c.target, "try_table catch");
         stack.push(n);
         break;
-      case WElse:
-        if (!(stack[stack.length - 1] instanceof WIf)) {
+      case WElse: {
+        const top = stack[stack.length - 1];
+        if (!(top instanceof WIf)) {
           throw new Error("WAST validate: else outside an if");
         }
+        // One else per if (todos/0227 W2): a duplicate would otherwise
+        // surface as V8's opaque rejection of the serialized module.
+        if (elseSeen.has(top)) {
+          throw new Error("WAST validate: second else in one if");
+        }
+        elseSeen.add(top);
         break;
+      }
       case WEnd:
         if (stack.length === 0) throw new Error("WAST validate: end with no open control construct");
-        stack.pop();
+        elseSeen.delete(stack.pop());
         break;
       case WBr: checkTarget(n.target, "br"); break;
       case WBrIf: checkTarget(n.target, "brIf"); break;
