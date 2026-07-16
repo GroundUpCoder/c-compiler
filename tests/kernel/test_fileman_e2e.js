@@ -126,7 +126,7 @@ check('fileman window titled with the cwd',
 check('listing is dirs-first with / markers + details columns',
   /Desktop\/ +<DIR>[^']*id1\/ +<DIR>[^']*roms\/ +<DIR>/.test(tree1), tree1);
 check('files carry a byte size + date column (status bar counts them)',
-  /class=STATIC[^\n]*text='7 object\(s\)'/.test(tree1), tree1);
+  /class=msctls_statusbar32[^\n]*text='7 object\(s\)'/.test(tree1), tree1);
 check('path EDIT + Go/Up/Open/With buttons present',
   /class=EDIT id=100/.test(tree1) && /text='Go'/.test(tree1) &&
   /text='Up'/.test(tree1) && /text='Open'/.test(tree1) &&

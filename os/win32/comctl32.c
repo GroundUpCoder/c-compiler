@@ -184,7 +184,7 @@ static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-HWND CreateStatusWindowW(LONG style, LPCWSTR text, HWND parent, UINT id) {
+static HWND sb_create(LONG style, const char *text, HWND parent, UINT id) {
     static int registered;
     if (!registered) {
         WNDCLASS wc;
@@ -194,12 +194,21 @@ HWND CreateStatusWindowW(LONG style, LPCWSTR text, HWND parent, UINT id) {
         RegisterClass(&wc);
         registered = 1;
     }
-    char *t = text ? sb_w2a(text) : NULL;
-    HWND h = CreateWindowEx(0, STATUSCLASSNAMEA, t ? t : "",
+    HWND h = CreateWindowEx(0, STATUSCLASSNAMEA, text ? text : "",
                             (DWORD)style | WS_CHILD | WS_VISIBLE,
                             0, 0, 10, 10, parent, (HMENU)(UINT_PTR)id,
                             NULL, NULL);
-    free(t);
     if (h) sb_park(h);                           /* real size: font-derived */
+    return h;
+}
+
+HWND CreateStatusWindowA(LONG style, LPCSTR text, HWND parent, UINT id) {
+    return sb_create(style, text, parent, id);
+}
+
+HWND CreateStatusWindowW(LONG style, LPCWSTR text, HWND parent, UINT id) {
+    char *t = text ? sb_w2a(text) : NULL;
+    HWND h = sb_create(style, t, parent, id);
+    free(t);
     return h;
 }

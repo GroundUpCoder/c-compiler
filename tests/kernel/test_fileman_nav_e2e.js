@@ -113,7 +113,7 @@ const out = boot([
   // 0154: waiting on the box being gone would race the synchronous delete that
   // runs after it closes; the status strip going to "3 object(s)" (was 5) polls
   // exactly for delete + refill completing before the -e checks.
-  'wmctl wait text STATIC:0 "3 object(s)" 8000',
+  'wmctl wait text msctls_statusbar32:0 "3 object(s)" 8000',
   'test ! -e /root/nav/sub && test ! -e /root/nav/b.txt && echo MULTI-DEL-OK',
   'test -f /root/nav/a.txt && test -f /root/nav/c.txt && echo MULTI-DEL-KEPT',
 
@@ -225,7 +225,7 @@ check('file rows carry an mtime date column',
   /a\.txt +100 +\d{4}-\d\d-\d\d \d\d:\d\d/.test(l1), l1);
 const tree1 = section(out, 'tree1');
 check('status strip counts objects (sub a b c run.sh shown; .secret hidden)',
-  /class=STATIC[^\n]*text='5 object\(s\)'/.test(tree1), tree1);
+  /class=msctls_statusbar32[^\n]*text='5 object\(s\)'/.test(tree1), tree1);
 
 // multi-select
 const multi = section(out, 'multi');
@@ -233,7 +233,7 @@ check('Ctrl-click builds a multi-selection (sub/ + b.txt both marked)',
   /> sub\//.test(multi) && /> b\.txt/.test(multi) &&
   !/> a\.txt/.test(multi) && !/> c\.txt/.test(multi), multi);
 check('status strip reports the selected count (2 selected)',
-  /class=STATIC[^\n]*2 selected/.test(section(out, 'multistat')),
+  /class=msctls_statusbar32[^\n]*2 selected/.test(section(out, 'multistat')),
   section(out, 'multistat'));
 check('multi-select Delete confirms with a plural wording',
   /Confirm Multiple Item Delete/.test(section(out, 'delbox')) ||

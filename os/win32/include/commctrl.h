@@ -46,8 +46,11 @@ typedef struct tagNMHDR {
 #define SB_SETTEXT SB_SETTEXTA
 #endif
 HWND CreateStatusWindowW(LONG style, LPCWSTR text, HWND parent, UINT id);
+HWND CreateStatusWindowA(LONG style, LPCSTR text, HWND parent, UINT id);
 #ifdef UNICODE
 #define CreateStatusWindow CreateStatusWindowW
+#else
+#define CreateStatusWindow CreateStatusWindowA
 #endif
 
 /* Common-control class names */
