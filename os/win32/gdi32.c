@@ -1193,7 +1193,15 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     }
 
     int y;
-    if (format & DT_VCENTER) y = r->top + (r->bottom - r->top - totalH) / 2;
+    if (format & DT_VCENTER) {
+        /* FLOOR the centering (0236): when the text is taller than the
+         * rect the spare space is negative, and C truncation would keep
+         * the cell flush-top — clipping the descender row at the bottom
+         * while the blank leading row at the cell top survives. Floor
+         * biases the loss upward. Positive space is unaffected. */
+        int space = r->bottom - r->top - totalH;
+        y = r->top + (space >> 1);
+    }
     else if (format & DT_BOTTOM) y = r->bottom - totalH;
     else y = r->top;
 

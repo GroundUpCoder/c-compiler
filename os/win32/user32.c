@@ -3393,14 +3393,31 @@ static LRESULT static_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         UINT fmt = DT_LEFT;
         if ((h->style & 0x3) == SS_CENTER) fmt = DT_CENTER;
         else if ((h->style & 0x3) == SS_RIGHT) fmt = DT_RIGHT;
+        /* Single-line labels vcenter in the control (0236): Win95
+         * arithmetic sizes labels shorter than the stock glyph cell, so
+         * top-aligned text clips descenders at the bottom edge. Multiline
+         * text keeps the top-aligned multi-line DrawText path unchanged
+         * (DT_SINGLELINE would collapse its '\n's). */
+        const char *txt = text_get(h);
+        int oneline = !strchr(txt, '\n');
         /* mnemonic (0104): left-aligned labels underline the '&' char —
          * strip_amp + draw_label_mn; other alignments keep raw DrawText */
-        if (fmt == DT_LEFT && mnemonic_index(text_get(h)) >= 0) {
+        if (fmt == DT_LEFT && mnemonic_index(txt) >= 0) {
             char label[256];
-            strip_amp(text_get(h), label, sizeof label);
-            draw_label_mn(dc, r.left, r.top, text_get(h), label);
+            strip_amp(txt, label, sizeof label);
+            int ty = r.top;
+            if (oneline) {                       /* centered cell top (0236):
+                 * floored like DrawText's DT_VCENTER — a cell taller than
+                 * the control loses its blank leading row at the top, not
+                 * the descender row (the child DC clips both edges). */
+                TEXTMETRIC tm;
+                if (GetTextMetrics(dc, &tm))
+                    ty = r.top + ((h->h - tm.tmHeight) >> 1);
+            }
+            draw_label_mn(dc, r.left, ty, txt, label);
         } else {
-            DrawText(dc, text_get(h), -1, &r, fmt);
+            if (oneline) fmt |= DT_SINGLELINE | DT_VCENTER;
+            DrawText(dc, txt, -1, &r, fmt);
         }
         EndPaint(h, &ps);
         return 0;

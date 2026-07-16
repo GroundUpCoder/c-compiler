@@ -1,6 +1,8 @@
 # 0236 — user32 STATIC vcenter (corpus-wide label descender clip)
 
-- **Status**: open
+- **Status**: done (2026-07-17 — image v110; kernel 75/0, browser sweep 27/27;
+  red→green descender legs in test_user32_e2e.js over ctldemo's three
+  acceptance STATICs; dev log: logs/2026-07-17/0236-static-vcenter.md)
 - **Design**: —
 
 ## Goal

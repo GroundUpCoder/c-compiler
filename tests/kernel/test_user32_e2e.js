@@ -58,6 +58,13 @@ const out = boot([
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
+  // ---- STATIC vcenter descender legs (0236): shot before anything moves.
+  // The tree round-trip above is the paint barrier (agent socket served
+  // from the GetMessage idle loop, WM_PAINT delivered before it idles).
+  'wmctl shot $SID /root/cd.ppm && echo cd-shot-ok',
+  'echo ==dshot',
+  'base64 /root/cd.ppm',
+  'echo ==cut',
   // Label click, no pixels: BM_CLICK -> BN_CLICKED -> WM_COMMAND. No wait: the
   // GetMessage loop serves ONE agent request then dispatches ONE queued message
   // per iteration, so the WM_COMMAND lands before the next agent command below.
@@ -179,6 +186,61 @@ for (const probe of [
   ["multiline EDIT with escaped newline", /class=EDIT id=102 .*text='line one\\nline two'/],
   ["checkbox", /class=BUTTON id=105 .*text='Verbose'/],
 ]) check('tree shows ' + probe[0], probe[1].test(tree1), tree1);
+
+/* ---- STATIC vcenter descender clip (0236) ----
+ * The 0229/0230 disease at its root: static_proc used to TOP-align
+ * single-line text, so a Win95-sized (18px) STATIC clipped the stock
+ * cell's descender row at its bottom edge. ctldemo carries three "No gyp"
+ * STATICs at 288,44/70/96 — plain-DrawText 18px, mnemonic ('&') 18px, and
+ * a 30px tall UNCLIPPED reference. In the 8px-advance mono stock font 'o'
+ * spans cols x+8..16 (x-height, the baseline anchor) and 'gyp' cols
+ * x+24..48 (descenders): dj = maxInk(gyp) - maxInk(o) is the descender
+ * extent, invariant under vertical placement — it only shrinks when the
+ * bottom edge CLIPS. Each short static must show the reference's full dj. */
+function parsePpm(b64) {
+  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
+  let p = 0;
+  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
+                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
+                      return buf.slice(s, p).toString(); };
+  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
+  return { buf, w, h, data: p, magic };
+}
+function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
+  let m = y0 - 1;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = P.data + (y * P.w + x) * 3;
+    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+  }
+  return m;
+}
+const dP = parsePpm(section('dshot'));
+check('ctldemo shot is a P6 frame', dP.magic === 'P6', dP.magic);
+const dj = (sy, sh) => {
+  const o = maxInkRow(dP, 288 + 8, 288 + 16, sy, sy + sh);
+  const g = maxInkRow(dP, 288 + 24, 288 + 48, sy, sy + sh);
+  return { o, g, dj: g - o };
+};
+const ref = dj(96, 30), plain = dj(44, 18), mn = dj(70, 18);
+check('reference STATIC shows real descenders (dj >= 3)',
+  ref.dj >= 3, JSON.stringify(ref));
+/* 0236 red->green pins. Pre-fix, top-aligned text sat the 19px stock cell
+ * flush-top in the 18px control: the descenders' bottom row landed ON the
+ * control's last row (the 0230 razor edge — ink at the clip edge is what
+ * a clipped render looks like, one hinting change from visible loss) and
+ * the mnemonic underline one row below it was ALREADY clipped off.
+ * Vcentered (floored, so the deficit lands on the cell's blank leading
+ * row) the full extent renders WITH clearance. Both draw branches. */
+check("plain-branch 18px STATIC: full descender extent, >=1 clear row",
+  plain.dj === ref.dj && plain.g <= 44 + 18 - 2,
+  JSON.stringify({ plain, ref }));
+check("mnemonic-branch 18px STATIC: full descender extent, >=1 clear row",
+  mn.dj === ref.dj && mn.g <= 70 + 18 - 2, JSON.stringify({ mn, ref }));
+/* the mnemonic underline (under 'N', cols x..x+8) draws one row below the
+ * glyph bottoms — pre-fix it fell off the clip edge; vcentered it renders. */
+const mnUl = maxInkRow(dP, 288, 288 + 8, 70, 70 + 18);
+check("mnemonic underline survives the clip edge",
+  mnUl > mn.g, JSON.stringify({ mnUl, mn }));
 
 /* label click -> WM_COMMAND */
 check('wmctl click Greet fires WM_COMMAND (no pixels)',

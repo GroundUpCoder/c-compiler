@@ -26,6 +26,9 @@
 #define IDC_LIST       103
 #define IDC_SCROLL     104
 #define IDC_CHECK      105
+#define IDC_DESC_PLAIN 106
+#define IDC_DESC_MN    107
+#define IDC_DESC_REF   108
 #define IDB_ADD        200
 #define IDB_GREET      201
 #define IDB_ABOUT      202
@@ -90,6 +93,17 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                        12, 44, 244, 120, hwnd, (HMENU)IDC_LIST, NULL, NULL);
         CreateWindowEx(0, "SCROLLBAR", "", WS_CHILD | WS_VISIBLE | SBS_VERT,
                        264, 44, 16, 120, hwnd, (HMENU)IDC_SCROLL, NULL, NULL);
+        /* STATIC vcenter acceptance (0236): two Win95-sized (18px, shorter
+         * than the stock glyph cell) single-line labels with descenders —
+         * one per static_proc draw branch (plain DrawText vs the '&'
+         * mnemonic draw_label_mn path) — plus a tall unclipped reference
+         * the pixel test measures the true descender extent against. */
+        CreateWindowEx(0, "STATIC", "No gyp", WS_CHILD | WS_VISIBLE,
+                       288, 44, 96, 18, hwnd, (HMENU)IDC_DESC_PLAIN, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "&No gyp", WS_CHILD | WS_VISIBLE,
+                       288, 70, 96, 18, hwnd, (HMENU)IDC_DESC_MN, NULL, NULL);
+        CreateWindowEx(0, "STATIC", "No gyp", WS_CHILD | WS_VISIBLE,
+                       288, 96, 96, 30, hwnd, (HMENU)IDC_DESC_REF, NULL, NULL);
         CreateWindowEx(0, "EDIT", "line one\nline two",
                        WS_CHILD | WS_VISIBLE | ES_MULTILINE,
                        12, 176, 268, 96, hwnd, (HMENU)IDC_NOTES_EDIT, NULL, NULL);
