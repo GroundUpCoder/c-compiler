@@ -1,0 +1,5 @@
+twins: 1 1 1 1 1
+neg: 1
+agg: 1 1
+static_local: 1  runtime: 1
+deref: 12 10 23 31 41 11 12
