@@ -13135,6 +13135,17 @@ class Parser {
 
       // Check for previous declaration and update scope
       const prevDecl = this.varScope.get(name);
+      // C11 6.2.2p7 (todos/0227 G22): a static (internal-linkage)
+      // declaration after a visible declaration with EXTERNAL linkage
+      // conflicts — the p4 inheritance only runs the other way
+      // (static first, extern after — the divert below).
+      if (specs.storageClass === Types.StorageClass.STATIC &&
+          prevDecl instanceof AST.DVar &&
+          (prevDecl.storageClass === Types.StorageClass.EXTERN ||
+           prevDecl.storageClass === Types.StorageClass.NONE)) {
+        this.recoverableError(this.peek(-1),
+          `static declaration of '${name}' follows non-static declaration`);
+      }
       if (prevDecl && prevDecl instanceof AST.DVar && specs.storageClass !== Types.StorageClass.EXTERN) {
         prevDecl.definition = dvar;
         // Propagate address-taken (MEMORY) allocation forward to the new
@@ -13246,6 +13257,12 @@ class Parser {
               // silently compiling with size 0 (sizeof 0, row stride 0).
               this.error(sizeTok, "variable-length arrays are not supported");
             }
+            // C11 6.7.6.2p1: the size must be greater than zero. Explicit
+            // [0] stays accepted (GNU zero-length array); negative used to
+            // silently produce a negative-size type (todos/0227 G22).
+            if (sz < 0n) {
+              this.error(sizeTok, `declared as an array with a negative size (${sz})`);
+            }
             size = Number(sz);
           }
           this.expect("]");
@@ -13344,6 +13361,11 @@ class Parser {
                       if (sz == null && !firstDim) {
                         this.error(sizeTok, "variable-length arrays are not supported");
                       }
+                      // C11 6.7.6.2p1 (todos/0227 G22) — a decaying first
+                      // dim's size is still a constraint violation if negative.
+                      if (sz != null && sz < 0n) {
+                        this.error(sizeTok, `declared as an array with a negative size (${sz})`);
+                      }
                       arrSize = Number(sz ?? 0n); // null only when firstDim (decays)
                     }
                     this.expect("]");
@@ -13371,6 +13393,21 @@ class Parser {
               // attribute never affects the parameter's ABI type.
               if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
                 this.parseGCCAttributes();
+              }
+              // C11 6.7.6.3p10 (todos/0227 G22): `void` is only valid as
+              // the SOLE unnamed unqualified parameter. The literal
+              // `f(void)` spelling was consumed before this loop; a
+              // TYPEDEF'd void that satisfies the same constraints is the
+              // same zero-parameter form (clang/gcc accept it). Anything
+              // else — named, qualified, or alongside other parameters —
+              // is a constraint violation.
+              if (pType.removeQualifiers().isVoid()) {
+                if (params.length === 0 && pName === null &&
+                    !pType.isConst && !pType.isVolatile && this.atText(")")) {
+                  break; // f(VOIDT) == f(void): zero parameters
+                }
+                this.error(this.peek(-1),
+                  "parameter may not have 'void' type ('void' must be the sole unnamed parameter)");
               }
               params.push(pType.decay());
               pNames.push(pName);
