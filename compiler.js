@@ -1641,6 +1641,14 @@ function preprocess(filename, initialTokens, ppRegistry) {
   // expression then poisons to 0 rather than crashing the compiler.
   function evaluateExpression(line, onError) {
     const ZERO = new ConstEval.Item(0n, ConstEval.SIGNED);
+    // C11 6.10.1p4: EVERY value in a #if expression is intmax_t/uintmax_t.
+    // ConstEval types comparison and logical-! results as int — correct for
+    // expression semantics, but here a 32-bit-typed `(1<2)` would wrap a
+    // following `<< 31` and reject `<< 35` outright. Retype such results to
+    // intmax_t (they are always 0/1, so the retype is exact).
+    const asIntmax = (item) =>
+      (item.type === ConstEval.SIGNED || item.type === ConstEval.UNSIGNED)
+        ? item : new ConstEval.Item(item.value, ConstEval.SIGNED);
     let pos = 0;
     let errored = false;
     function evalFail(msg, evaluating) {
@@ -1693,7 +1701,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
           left = evalFail(`invalid integer constant '${t.text}' in preprocessor expression`, evaluating);
         }
       } else if (t.atPunct(Punct.BANG)) {
-        left = ConstEval.unary("!", parseBinary(12, evaluating));
+        left = asIntmax(ConstEval.unary("!", parseBinary(12, evaluating)));
       } else if (t.atPunct(Punct.MINUS)) {
         left = ConstEval.unary("-", parseBinary(12, evaluating));
       } else if (t.atPunct(Punct.PLUS)) {
@@ -1744,7 +1752,13 @@ function preprocess(filename, initialTokens, ppRegistry) {
           // arm with minPrec BELOW '?' so a nested `a ? b : c ? d : e`
           // groups as `a ? b : (c ? d : e)`.
           const elseVal = parseBinary(prec - 1, evaluating && !cond);
-          left = cond ? thenVal : elseVal;
+          // 6.5.15p5 via 6.10.1p4: the arms undergo the usual arithmetic
+          // conversions in intmax space — either arm unsigned makes the
+          // result uintmax_t (the Item ctor re-truncates, so a negative
+          // signed arm converts to its huge unsigned value).
+          const ternType = (thenVal.type === ConstEval.UNSIGNED || elseVal.type === ConstEval.UNSIGNED)
+            ? ConstEval.UNSIGNED : ConstEval.SIGNED;
+          left = new ConstEval.Item((cond ? thenVal : elseVal).value, ternType);
           continue;
         }
 
@@ -1763,7 +1777,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
         const right = parseBinary(prec, evaluating);
         const r = ConstEval.binary(opStr, left, right);
-        left = r !== null ? r
+        left = r !== null ? asIntmax(r)
           : evalFail((opStr === "/" || opStr === "%")
               ? "division by zero in preprocessor expression"
               : `invalid operands to '${opStr}' in preprocessor expression`, evaluating);
