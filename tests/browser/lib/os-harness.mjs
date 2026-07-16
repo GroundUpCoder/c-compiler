@@ -99,12 +99,15 @@ export function osHelpers(page) {
     return [d[0], d[1], d[2]];
   }, [x, y]);
 
-  const waitPixel = async (x, y, want, ms) => {
+  // Optional `what` names WHAT the pixel is (0171: the diagnostic points at
+  // its cause) — "pixel (x,y) never became c (C's focused title); last g".
+  const waitPixel = async (x, y, want, ms, what) => {
     const t0 = Date.now();
     for (;;) {
       const got = await sample(x, y);
       if (near(got, want)) return got;
-      if (Date.now() - t0 > (ms || 30000)) throw new Error(`pixel (${x},${y}) never became ${want}; last ${got}`);
+      if (Date.now() - t0 > (ms || 30000))
+        throw new Error(`pixel (${x},${y}) never became ${want}${what ? ` (${what})` : ''}; last ${got}`);
       await new Promise(r => setTimeout(r, 200));
     }
   };

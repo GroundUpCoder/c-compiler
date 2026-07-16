@@ -1,6 +1,6 @@
 # 0215 — os-wm.mjs sysmenu leg flakes 100% under load (pre-existing)
 
-- **Status**: open
+- **Status**: done (2026-07-17)
 - **Design**: tests/browser/os-wm.mjs (the 0102 window-system-menu legs),
   tests/flake.js mechanism (todos/0147), test-sync discipline (todos/0171)
 
@@ -39,3 +39,33 @@ diagnostic should name the cause on failure.
 - `node tests/browser/os-sweep.mjs --repeat 3 --under-load
   --filter=os-wm` 3/3 green.
 - Full sweep stays 27/27.
+
+## Resolution (2026-07-17) — test choreography bug, OS semantics correct
+
+A pixel-grid dump at the timeout showed an exact 8x8 BLACK square spanning
+(292,204)–(299,211) with GREEN on all four sides: winbox's persistent
+click mark, painted at client (200,100) by the leg's own "focus C" click —
+i.e. the Space really was swallowed (the fill was green everywhere), and
+the probe was reading the test's own click paint.
+
+Root cause: the "C composited" wait probed (CX+200, CY+100), a point that
+lies inside B's client too, so it was satisfied by B before C even mapped
+(map-on-placement, todos/0069 — unmapped surfaces are skipped by the hit
+test). The follow-up focus click therefore RACED C's map: serially the
+click usually arrived before C existed and landed harmlessly on B (mark
+later hidden under C); under load the Playwright CDP round-trips starve
+while the kernel worker proceeds, C maps first, the click landed on C,
+and the mark sat exactly on the later green-swallow probe pixel.
+
+Fix (per the 0171 discipline — sync on an observable event, no sleeps),
+mirroring the already-correct A/B chord leg's ordering:
+- wait for C's FOCUSED NAVY TITLE first (composited only once mapped;
+  create-focus is kernel mechanism, so it is C's) — the map/focus proof;
+- then confirm C's orange fill at the probe point (now genuinely C's);
+- then send the canvas focus click, moved to (CX+30, CY+30) — on C but
+  clear of every later probe, since a winbox click paints where it lands.
+`waitPixel` grew an optional `what` label so the failure names its cause.
+Test-only fix: no bake, no image bump.
+
+Gate: filter=os-wm --repeat 3 --under-load 3/3 stable (flake 0%);
+full browser sweep 27/27.

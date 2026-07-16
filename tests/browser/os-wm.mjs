@@ -270,10 +270,21 @@ try {
   await page.keyboard.type('winbox &\r');
   await setVt(2);
   const CX = 96, CY = 108;                       // cascade slot 3
-  await waitPixel(CX + 200, CY + 100, ORANGE, 60000);
-  check('third winbox (C) composited', true);
-  await clickAt(CX + 200, CY + 100);             // focus C
-  await waitPixel(CX + 150, CY - 12, NAVY);
+  // Wait for C's FOCUSED TITLE before touching anything (the 0215 flake):
+  // the probe point (CX+200, CY+100) lies inside B's client too, so an
+  // orange wait there is satisfied before C even maps (map-on-placement,
+  // todos/0069) — and a canvas focus click sent while C's map is in flight
+  // lands on whichever window the hit test finds THAT moment. Under load C
+  // maps first, the click landed on C, and winbox's persistent 8x8 black
+  // click mark sat exactly on the green-swallow probe below. The navy
+  // title composites only once C is mapped, and create-focus (kernel
+  // mechanism) makes it C's — after it the geometry is settled.
+  await waitPixel(CX + 150, CY - 12, NAVY, 60000, "C's focused title — C mapped + focused");
+  await waitPixel(CX + 200, CY + 100, ORANGE, 30000, "C's fill at the swallow-probe point");
+  check('third winbox (C) composited and focused', true);
+  // Focus click for the canvas — on C, but AWAY from every later probe:
+  // the click paints winbox's black mark wherever it lands.
+  await clickAt(CX + 30, CY + 30);
   // Alt+Space: the sysmenu appears and the Space keydown is swallowed —
   // C shows exactly the one Alt toggle (orange -> green).
   await page.keyboard.down('Alt');
@@ -284,7 +295,8 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('SYSMENU-UP'), { timeout: 20000, polling: 200 });
   check('Alt+Space opened the window system menu', true);
   await setVt(2);
-  await waitPixel(CX + 200, CY + 100, GREEN);
+  await waitPixel(CX + 200, CY + 100, GREEN, 30000,
+    'the Alt-toggled fill; black = a click mark landed on the probe (0215)');
   check('the Space keydown was swallowed (fill = exactly the Alt toggle)', true);
   // Keyboard: Down,Down -> MOVE, Enter -> move mode; arrows nudge 8px; Enter
   // commits. Right x5 / Down x2 = +40 x, +16 y. Arrows/Enter go to the menu
