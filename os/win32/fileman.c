@@ -131,7 +131,9 @@ static void spawn_path(const char *path, char *const argv[]) {
     posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
     posix_spawnattr_setpgroup(&at, 0);
     pid_t pid;
-    if (posix_spawn(&pid, path, 0, &at, (char *const *)argv, envp) == 0) g_nkids++;
+    int rc = posix_spawn(&pid, path, 0, &at, (char *const *)argv, envp);
+    if (rc == 0) g_nkids++;
+    else fprintf(stderr, "fileman: spawn %s: %s\n", path, strerror(rc));
     posix_spawnattr_destroy(&at);
 }
 
