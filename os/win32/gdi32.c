@@ -10,8 +10,12 @@
  *
  * Text goes through freetype (the vendored lib /bin/term uses), font at
  * /etc/fonts/mono.ttf with the baked /usr/share/fonts/mono.ttf fallback;
- * faceName is ignored (one font in the image). ASCII 32..126, anything
- * else renders as '?' (term's rule). Glyphs cache lazily per HFONT.
+ * faceName is ignored (one font in the image). Strings are UTF-8 (0211):
+ * draw/measure step by code point; a code point the face lacks renders
+ * the .notdef tofu box (a LOUD gap, never a '?' that reads as data
+ * corruption) and reports once via WIN32_UNSUPPORTED. Control chars draw
+ * '?' (term's rule). Glyphs cache lazily per HFONT (ASCII flat array +
+ * a code-point side cache).
  *
  * Deliberate 0057 simplifications (grow under 0060's missing-symbol log):
  *   - pens: PS_SOLID/PS_NULL honored, other styles draw solid; wide pens
@@ -70,6 +74,9 @@ struct __GDIOBJ {
     int fontPx, fontLoaded, fontFailed;
     int ascent, descent, lineH, maxAdv;
     GlyphG *glyphs;             /* [95], ASCII 32..126 */
+    GlyphG *xglyphs;            /* non-ASCII code points (0211), paired */
+    unsigned *xcps;             /*   with their cp; linear-scan cache */
+    int xn, xcap;
 };
 
 struct __DC {
@@ -165,12 +172,34 @@ static int font_ensure(HGDIOBJ f) {
     return 0;
 }
 
-static GlyphG *font_glyph(HGDIOBJ f, int ch) {
-    if (ch < 32 || ch > 126) ch = '?';
-    GlyphG *g = &f->glyphs[ch - 32];
-    if (g->loaded) return g;
+/* Synthesized tofu box for a code point the face lacks (0211): a LOUD
+ * visible gap marker, never a '?' that reads as data corruption. (Roboto
+ * Mono's own .notdef is EMPTY — rendering glyph 0 would be invisible.) */
+static void glyph_tofu(HGDIOBJ f, GlyphG *g) {
+    int w = f->maxAdv > 4 ? f->maxAdv - 2 : 6;
+    int h = f->ascent > 4 ? f->ascent - 1 : 8;
+    g->advance = f->maxAdv > 0 ? f->maxAdv : w + 2;
+    g->left = 1;
+    g->top = f->ascent - 1;                      /* box base sits on baseline */
+    g->bmp = (unsigned char *)calloc((size_t)w * h, 1);
+    if (!g->bmp) return;
+    g->w = w;
+    g->h = h;
+    for (int x = 0; x < w; x++)
+        g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
+    for (int y = 0; y < h; y++)
+        g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
+}
+
+static GlyphG *glyph_render(HGDIOBJ f, GlyphG *g, unsigned cp) {
     g->loaded = 1;
-    FT_UInt gi = FT_Get_Char_Index(f->face, (FT_ULong)ch);
+    FT_UInt gi = FT_Get_Char_Index(f->face, (FT_ULong)cp);
+    if (gi == 0 && cp > 126) {
+        WIN32_UNSUPPORTED("font glyph U+%04X (face lacks it; drawing tofu)",
+                          cp);
+        glyph_tofu(f, g);
+        return g;
+    }
     if (FT_Load_Glyph(f->face, gi, FT_LOAD_DEFAULT)) return g;
     g->advance = (int)(f->face->glyph->advance.x >> 6);
     if (FT_Render_Glyph(f->face->glyph, FT_RENDER_MODE_NORMAL)) return g;
@@ -186,6 +215,33 @@ static GlyphG *font_glyph(HGDIOBJ f, int ch) {
             memcpy(&g->bmp[y * g->w], &bm->buffer[y * bm->pitch], (size_t)g->w);
     }
     return g;
+}
+
+/* Glyph for one CODE POINT (0211: the text loops decode UTF-8 and pass
+ * code points here). ASCII stays the flat [95] array; everything else
+ * lands in a linear-scan side cache. NB the returned pointer is only
+ * stable until the next font_glyph call (the side cache reallocs). */
+static GlyphG *font_glyph(HGDIOBJ f, unsigned cp) {
+    if (cp < 32) cp = '?';                       /* control chars, term's rule */
+    if (cp <= 126) {
+        GlyphG *g = &f->glyphs[cp - 32];
+        return g->loaded ? g : glyph_render(f, g, cp);
+    }
+    for (int i = 0; i < f->xn; i++)
+        if (f->xcps[i] == cp) return &f->xglyphs[i];
+    if (f->xn == f->xcap) {
+        int nc = f->xcap ? f->xcap * 2 : 16;
+        GlyphG *ng = (GlyphG *)realloc(f->xglyphs, (size_t)nc * sizeof(GlyphG));
+        unsigned *np = (unsigned *)realloc(f->xcps, (size_t)nc * sizeof(unsigned));
+        if (ng) f->xglyphs = ng;
+        if (np) f->xcps = np;
+        if (!ng || !np) return font_glyph(f, '?');     /* OOM: keep drawing */
+        f->xcap = nc;
+    }
+    f->xcps[f->xn] = cp;
+    GlyphG *g = &f->xglyphs[f->xn++];
+    memset(g, 0, sizeof *g);
+    return glyph_render(f, g, cp);
 }
 
 /* lfHeight < 0: character (em) height in px. lfHeight > 0: cell height —
@@ -346,6 +402,9 @@ BOOL DeleteObject(HGDIOBJ obj) {
             for (int i = 0; i < 95; i++) free(obj->glyphs[i].bmp);
             free(obj->glyphs);
         }
+        for (int i = 0; i < obj->xn; i++) free(obj->xglyphs[i].bmp);
+        free(obj->xglyphs);
+        free(obj->xcps);
         if (obj->face) FT_Done_Face(obj->face);
     }
     free(obj);
@@ -861,7 +920,8 @@ static HGDIOBJ dc_font(HDC dc) {
 }
 
 /* Draw one run at (x, y-top-of-cell). extraClip further restricts glyphs
- * (ETO_CLIPPED / DrawText). dx: per-char advance overrides. */
+ * (ETO_CLIPPED / DrawText). dx: per-CODE-POINT advance overrides. The
+ * byte string decodes as UTF-8 (0211). */
 static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
                      const RECT *extraClip) {
     HGDIOBJ f = dc_font(dc);
@@ -869,8 +929,10 @@ static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
     int cellH = f->ascent + f->descent;
     if (dc->bkMode == OPAQUE) {
         int w = 0;
-        for (int i = 0; i < len; i++)
-            w += dx ? dx[i] : font_glyph(f, (unsigned char)s[i])->advance;
+        for (int i = 0, n = 0; i < len; n++) {
+            unsigned cp = __u8_next(s, len, &i);
+            w += dx ? dx[n] : font_glyph(f, cp)->advance;
+        }
         uint32_t bk = px_of(dc->bkColor);
         int r = x + w, b = y + cellH;
         for (int yy = y; yy < b; yy++)
@@ -884,8 +946,9 @@ static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
     int fr = GetRValue(dc->textColor), fg = GetGValue(dc->textColor),
         fb = GetBValue(dc->textColor);
     int penX = x, baseline = y + f->ascent;
-    for (int i = 0; i < len; i++) {
-        GlyphG *g = font_glyph(f, (unsigned char)s[i]);
+    for (int i = 0, n = 0; i < len; n++) {
+        unsigned cp = __u8_next(s, len, &i);
+        GlyphG *g = font_glyph(f, cp);
         if (g->bmp) {
             int gx0 = penX + g->left, gy0 = baseline - g->top;
             for (int gy = 0; gy < g->h; gy++) {
@@ -908,7 +971,7 @@ static BOOL text_run(HDC dc, int x, int y, LPCSTR s, int len, const INT *dx,
                 }
             }
         }
-        penX += dx ? dx[i] : g->advance;
+        penX += dx ? dx[n] : g->advance;
     }
     return TRUE;
 }
@@ -939,8 +1002,8 @@ BOOL GetTextExtentPoint32(HDC dc, LPCSTR str, int len, SIZE *size) {
     HGDIOBJ f = dc_font(dc);
     if (!f) return FALSE;
     int w = 0;
-    for (int i = 0; i < len; i++)
-        w += font_glyph(f, (unsigned char)str[i])->advance;
+    for (int i = 0; i < len; )
+        w += font_glyph(f, __u8_next(str, len, &i))->advance;
     size->cx = w;
     size->cy = f->ascent + f->descent;
     return TRUE;
@@ -1000,11 +1063,13 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
                 while (s < end && nl < DT_MAX_LINES) {
                     int w = 0, lastSp = -1, e = s;
                     while (e < end) {
-                        int adv = font_glyph(f, (unsigned char)str[e])->advance;
+                        int ne = e;
+                        unsigned cp = __u8_next(str, end, &ne);
+                        int adv = font_glyph(f, cp)->advance;
                         if (w + adv > rectW && e > s) break;
                         w += adv;
-                        if (str[e] == ' ') lastSp = e;
-                        e++;
+                        if (cp == ' ') lastSp = e;
+                        e = ne;
                     }
                     int cut = (e < end && lastSp > s) ? lastSp : e;
                     ls[nl] = &str[s];
@@ -1027,8 +1092,8 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
     int maxW = 0;
     for (int i = 0; i < nl; i++) {
         int w = 0;
-        for (int j = 0; j < ll[i]; j++)
-            w += font_glyph(f, (unsigned char)ls[i][j])->advance;
+        for (int j = 0; j < ll[i]; )
+            w += font_glyph(f, __u8_next(ls[i], ll[i], &j))->advance;
         if (w > maxW) maxW = w;
     }
     int totalH = nl * lineH;
@@ -1046,8 +1111,8 @@ int DrawText(HDC dc, LPCSTR str, int len, RECT *r, UINT format) {
 
     for (int i = 0; i < nl; i++) {
         int w = 0;
-        for (int j = 0; j < ll[i]; j++)
-            w += font_glyph(f, (unsigned char)ls[i][j])->advance;
+        for (int j = 0; j < ll[i]; )
+            w += font_glyph(f, __u8_next(ls[i], ll[i], &j))->advance;
         int x;
         if (format & DT_CENTER) x = r->left + (rectW - w) / 2;
         else if (format & DT_RIGHT) x = r->right - w;

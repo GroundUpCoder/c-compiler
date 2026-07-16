@@ -18,3 +18,58 @@ HDC __gdi_dc_wrap(void *bits, int w, int h, int stridePx);
 
 /* Free a wrapped DC (no present — that is user32's job). */
 void __gdi_dc_unwrap(HDC dc);
+
+/* ---- fail-loud (todos/0211) ----------------------------------------
+ * The veneer never silently no-ops: an unimplemented API, window message,
+ * or style flag reports ONCE per call site to stderr as
+ *     win32: unsupported <what>
+ * so a missing feature reads as a missing feature, not a mystery app bug.
+ * WIN32_STRICT=1 in the environment turns the report into an abort()
+ * (the "assert in debug builds" tier). Implementation in kernel32.c. */
+void __win32_unsupported(const char *fmt, ...);
+
+#define WIN32_UNSUPPORTED(...) do {                                     \
+        static int __w32_once;                                          \
+        if (!__w32_once) { __w32_once = 1; __win32_unsupported(__VA_ARGS__); } \
+    } while (0)
+
+/* ---- UTF-8 stepping (todos/0211) -----------------------------------
+ * The veneer's ANSI charset is UTF-8 (kernel32's CP_UTF8 boundary); text
+ * draw/measure/edit steps by CODE POINT while all indices stay BYTES.
+ * Malformed bytes decode as U+FFFD advancing past the bad lead byte only,
+ * so byte-indexed callers (EDIT selection math) never desync.
+ * Plain-static by textual inclusion (the openwith.h precedent). */
+
+static unsigned __u8_next(const char *s, int len, int *i) {
+    unsigned char c = (unsigned char)s[(*i)++];
+    if (c < 0x80) return c;
+    int cont = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : -1;
+    if (cont < 0) return 0xFFFD;                 /* stray continuation byte */
+    unsigned cp = c & (unsigned)(0x3F >> cont);
+    for (int k = 0; k < cont; k++) {
+        if (*i >= len || ((unsigned char)s[*i] & 0xC0) != 0x80)
+            return 0xFFFD;                       /* truncated sequence */
+        cp = (cp << 6) | ((unsigned char)s[(*i)++] & 0x3Fu);
+    }
+    return cp;
+}
+
+/* Byte index of the code point that ENDS at pos (caret-left step). */
+static int __u8_prev(const char *s, int pos) {
+    if (pos <= 0) return 0;
+    pos--;
+    while (pos > 0 && ((unsigned char)s[pos] & 0xC0) == 0x80) pos--;
+    return pos;
+}
+
+/* Byte index just past the code point starting at pos (caret-right step). */
+static int __u8_fwd(const char *s, int len, int pos) {
+    if (pos < len) __u8_next(s, len, &pos);
+    return pos;
+}
+
+/* Snap a byte index back onto a code-point boundary. */
+static int __u8_snap(const char *s, int pos) {
+    while (pos > 0 && ((unsigned char)s[pos] & 0xC0) == 0x80) pos--;
+    return pos;
+}

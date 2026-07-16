@@ -329,6 +329,39 @@ static void selftest(void) {
     check("drawtext_calcrect", th == tm.tmHeight && cr.bottom == th &&
                                cr.right > 0 && cr.right <= 100);
 
+    /* --- UTF-8 text (0211): measure/draw step by CODE POINT, not byte.
+     * Mono font: "é" (2 bytes) is ONE glyph advance, "λ…" (5 bytes) two.
+     * A code point the face lacks renders .notdef (still one advance). */
+    SIZE szA, szU, szL;
+    int u8Ok = GetTextExtentPoint32(dc, "e", 1, &szA) &&
+               GetTextExtentPoint32(dc, "\xC3\xA9", 2, &szU) &&        /* é */
+               GetTextExtentPoint32(dc, "\xCE\xBB\xE2\x80\xA6", 5, &szL); /* λ… */
+    check("utf8_extent_cp", u8Ok && szU.cx == szA.cx && szL.cx == 2 * szA.cx);
+    /* "é?" side by side: the two mono cells must have ink AND differ —
+     * pre-0211 every non-ASCII byte drew '?', making the cells identical. */
+    PatBlt(dc, 0, 0, 40, 30, WHITENESS);
+    TextOut(dc, 1, 1, "\xC3\xA9?", 3);
+    int inkU = 0, diffU = 0;
+    for (int y = 0; y < 30; y++)
+        for (int x = 1; x < 1 + szA.cx; x++) {
+            if (GetPixel(dc, x, y) != RGB(255, 255, 255)) inkU++;
+            if (GetPixel(dc, x, y) != GetPixel(dc, x + szA.cx, y)) diffU = 1;
+        }
+    check("utf8_draws_real_glyph", inkU > 0 && diffU);
+    /* face lacks U+55E8 → .notdef tofu box: one advance, ink, not '?' */
+    SIZE szX;
+    check("utf8_notdef_extent",
+          GetTextExtentPoint32(dc, "\xE5\x97\xA8", 3, &szX) && szX.cx > 0);
+    PatBlt(dc, 0, 0, 40, 30, WHITENESS);
+    TextOut(dc, 1, 1, "\xE5\x97\xA8?", 4);
+    int inkN = 0, diffN = 0;
+    for (int y = 0; y < 30; y++)
+        for (int x = 1; x < 1 + szX.cx; x++) {
+            if (GetPixel(dc, x, y) != RGB(255, 255, 255)) inkN++;
+            if (GetPixel(dc, x, y) != GetPixel(dc, x + szX.cx, y)) diffN = 1;
+        }
+    check("utf8_notdef_ink", inkN > 0 && diffN);
+
     /* --- Object management --- */
     check("delete_selected_bitmap_refused", DeleteObject((HGDIOBJ)bm) == FALSE);
     check("stock_delete_noop", DeleteObject(GetStockObject(BLACK_PEN)) == TRUE);
