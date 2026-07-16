@@ -57,6 +57,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include "../launch.h"
 #include "../openwith.h"
 
 #define ID_PATH 100
@@ -122,32 +123,16 @@ static HWND g_rn_win;                /* the rename dialog (one at a time, 0092) 
 static char g_rn_file[800];          /* the file it targets */
 static HACCEL g_accel;               /* F2/Del/^C/^X/^V (listbox focus only) */
 
-/* ---- the 0066 activate() shape (wm.c is the reference copy) ---- */
-
-static void spawn_path(const char *path, char *const argv[]) {
-    static char *const envp[] = { "PATH=/usr/local/bin:/bin", "HOME=/root", 0 };
-    posix_spawnattr_t at;
-    posix_spawnattr_init(&at);
-    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
-    posix_spawnattr_setpgroup(&at, 0);
-    pid_t pid;
-    int rc = posix_spawn(&pid, path, 0, &at, (char *const *)argv, envp);
-    if (rc == 0) g_nkids++;
-    else fprintf(stderr, "fileman: spawn %s: %s\n", path, strerror(rc));
-    posix_spawnattr_destroy(&at);
-}
-
-static void reap_kids(void) {
-    int st;
-    while (g_nkids > 0 && waitpid(-1, &st, WNOHANG) > 0) g_nkids--;
-}
+/* ---- the 0066 activate() shape (wm.c is the reference copy; the spawn
+ * primitive itself comes from ../launch.h — fileman passes its own kid
+ * counter and "fileman" as the diagnostic prefix) ---- */
 
 /* Open `path` with a resolved association command (`cmd path`). */
 static void spawn_assoc(const char *cmd, const char *path) {
     char buf[512], prog[300];
     char *argv[10];
     if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
-        spawn_path(prog, argv);
+        spawn_path(prog, argv, &g_nkids, "fileman");
 }
 
 /* ---- listing ---- */
@@ -337,7 +322,7 @@ static void open_selected(void) {
     if (stat(full, &st) == 0 && S_ISREG(st.st_mode) && ow_is_runnable(full)) {
         const char *name = strrchr(full, '/');
         char *argv[2] = { (char *)(name ? name + 1 : full), 0 };
-        spawn_path(full, argv);
+        spawn_path(full, argv, &g_nkids, "fileman");
         return;
     }
     char cmd[OW_CMD_MAX];
@@ -844,7 +829,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         ctx_menu(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         return 0;
     case WM_TIMER:
-        reap_kids();
+        reap_kids(&g_nkids);
         return 0;
     case WM_CLOSE:
         DestroyWindow(h);

@@ -1,5 +1,5 @@
 {
-  "version": 108,
+  "version": 109,
   "overlays": [
     {
       "id": "clang-apps",
@@ -44,6 +44,7 @@
         "c": "wm.c",
         "hdrs": [
           "wm_proto.h",
+          "launch.h",
           "openwith.h",
           "fileops.h",
           "sounds.h",

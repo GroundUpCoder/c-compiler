@@ -36,6 +36,7 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/wait.h>
+#include "../launch.h"   /* LAUNCH_ENV_PATH/HOME — the canonical env strings */
 
 /* User-override font first, then the baked vendor default (todos/0040 —
  * systemd-style /etc: an empty /etc must boot). */
@@ -834,7 +835,7 @@ int main(int argc, char **argv) {
         sh_argv[1] = 0;
         path = "/bin/sh";
     }
-    char *envp[] = { "PATH=/usr/local/bin:/bin", "HOME=/root", "TERM=xterm-256color", 0 };
+    char *envp[] = { LAUNCH_ENV_PATH, LAUNCH_ENV_HOME, "TERM=xterm-256color", 0 };
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, sfd, 0);

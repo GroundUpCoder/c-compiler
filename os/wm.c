@@ -161,6 +161,7 @@
 #include <sys/wait.h>
 #include <sys/select.h>
 #include "wm_proto.h"
+#include "launch.h"
 #include "openwith.h"
 #include "fileops.h"
 #include "sounds.h"
@@ -1077,37 +1078,14 @@ static void draw_saver(void) {
     SDL_UpdateWindowSurface(saver_win);
 }
 
-/* ---- launching + the Start menu (todos/0028) ---- */
-
-/* Spawn an app the desktop way: own pgroup, PATH/HOME env, cwd inherited
- * from the wm (/root — doom finds its WAD by cwd). Children get the wm's
- * std fds (the kernel gives parentless services the system std OFDs, and
- * spawn inherits them), so startup printf's land on the console.
- * PATH puts /usr/local/bin first (todos/0040): user-installed binaries
- * deliberately win over system ones. */
-static void spawn_path(const char *path, char *const argv[]) {
-    static char *const envp[] = { "PATH=/usr/local/bin:/bin", "HOME=/root", 0 };
-    posix_spawnattr_t at;
-    posix_spawnattr_init(&at);
-    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
-    posix_spawnattr_setpgroup(&at, 0);           /* 0 = child's own pid */
-    pid_t pid;
-    int rc = posix_spawn(&pid, path, 0, &at, (char *const *)argv, envp);
-    if (rc == 0) nkids++;
-    else fprintf(stderr, "wm: spawn %s: %s\n", path, strerror(rc));
-    posix_spawnattr_destroy(&at);
-}
-
-/* The wm never blocks in wait: children are polled off the frame tick.
- * (Only ppid-0 processes auto-reap; wm children would zombie otherwise.
- * If the wm dies first, orphans reparent to pid 1, which reaps.) */
-static void reap_kids(void) {
-    int st;
-    while (nkids > 0 && waitpid(-1, &st, WNOHANG) > 0) nkids--;
-}
+/* ---- launching + the Start menu (todos/0028) ----
+ * The spawn primitive itself (spawn_path/reap_kids) is shared with fileman
+ * via launch.h; the wm passes its own kid counter and "wm" as the
+ * diagnostic prefix. */
 
 /* One "activate a path" (todos/0066), shared by the Start menu and the
- * desktop grid (fileman keeps its copy in step): anything runnable after
+ * desktop grid (fileman keeps its policy copy in step — unifying the two
+ * is todos/0240): anything runnable after
  * symlink resolution — ow_is_runnable peeks through links, so a menu link
  * to a binary still spawns via the link path — runs directly (launchers
  * are ordinary #!/bin/sh scripts); directories open in fileman
@@ -1123,7 +1101,7 @@ static void activate(const char *path) {
                                                     are flyout groups and
                                                     never reach here. */
         char *argv[3] = { "fileman", (char *)path, 0 };
-        spawn_path("/bin/fileman", argv);
+        spawn_path("/bin/fileman", argv, &nkids, "wm");
         return;
     }
     if (S_ISREG(st.st_mode) && ow_is_runnable(path)) {
@@ -1131,14 +1109,14 @@ static void activate(const char *path) {
         name = name ? name + 1 : path;
         char *argv[2] = { (char *)name, 0 };
         sm_record_recent(path);                  /* MRU recents (0098) */
-        spawn_path(path, argv);
+        spawn_path(path, argv, &nkids, "wm");
         return;
     }
     char cmd[OW_CMD_MAX], buf[512], prog[300];
     char *argv[10];
     ow_resolve(path, 1 /* GUI context */, cmd, sizeof cmd);
     if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
-        spawn_path(prog, argv);
+        spawn_path(prog, argv, &nkids, "wm");
 }
 
 static int entcmp(const void *a, const void *b) {
@@ -1213,7 +1191,7 @@ static void run_key(int sym) {
     if (sym == SDLK_RETURN) {
         if (run_len > 0) {
             char *argv[4] = { (char *)"sh", (char *)"-c", run_buf, 0 };
-            spawn_path("/bin/sh", argv);
+            spawn_path("/bin/sh", argv, &nkids, "wm");
         }
         run_dismiss();
         return;
@@ -2777,7 +2755,7 @@ static void ctx_activate(int d, int i) {
     case CM_NEW_FILE: ctx_new_entry(0); break;
     case CM_DISPLAY: {
         char *argv[3] = { (char *)"ctlpanel", (char *)"Display", 0 };
-        spawn_path("/bin/ctlpanel", argv);
+        spawn_path("/bin/ctlpanel", argv, &nkids, "wm");
         break;
     }
     case CM_OPEN: desk_launch(icon); break;
@@ -2788,7 +2766,7 @@ static void ctx_activate(int d, int i) {
         snprintf(path, sizeof path, "/root/Desktop/%s", desk[icon].name);
         ow_editor(cmd, sizeof cmd);
         if (ow_build(cmd, path, argv, 10, buf, sizeof buf, prog, sizeof prog) > 0)
-            spawn_path(prog, argv);
+            spawn_path(prog, argv, &nkids, "wm");
         break;
     }
     case CM_RENAME: desk_edit_start(icon); break;   /* 0103: inline editor */
@@ -2830,7 +2808,7 @@ static void ctx_activate(int d, int i) {
     case CM_MIN_ALL: min_all(); break;
     case CM_PROPERTIES: {               /* the ctlpanel hub (todos/0089) */
         char *argv[2] = { (char *)"ctlpanel", 0 };
-        spawn_path("/bin/ctlpanel", argv);
+        spawn_path("/bin/ctlpanel", argv, &nkids, "wm");
         break;
     }
     }
@@ -3692,7 +3670,7 @@ static void draw_bar(void) {
  * timeout, ~1/s idle). Returns nothing; main() parks between calls. */
 static void frame_cb(void) {
     int activity = drain_socket();
-    reap_kids();
+    reap_kids(&nkids);
     uint64_t now_ms = SDL_GetTicks();
     /* Coarse /root/Desktop watch (todos/0029): one readdir per second of
      * wall clock — the loop wakes at least that often (the 1s park), and
