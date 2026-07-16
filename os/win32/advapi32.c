@@ -107,6 +107,7 @@ static void hive_load(void) {
             char *hex = p3 + 1;
             DWORD len = (DWORD)(strlen(hex) / 2);
             BYTE *data = (BYTE *)malloc(len ? len : 1);
+            if (!data) break;                    /* OOM: keep the partial load */
             int bad = 0;
             for (DWORD i = 0; i < len; i++) {
                 int hi = hex_nib(hex[i * 2]), lo = hex_nib(hex[i * 2 + 1]);

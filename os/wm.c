@@ -282,14 +282,16 @@ static int scr_w = 800, scr_h = 500;
 
 /* Fatal-exit with a diagnostic (todos/0234): the wm is the desktop's
  * central service, and the kernel-chrome fallback makes its death easy
- * to miss — a bare exit(1) turns a protocol drift or a dead endpoint
+ * to miss — a bare exit turns a protocol drift or a dead endpoint
  * into an strace hunt. Every fatal path says WHAT failed and WHY on
  * stderr (wmp_read_all names EOF as ECONNRESET, so the common
- * endpoint-gone case reads truthfully). */
-static void die(const char *what) {
+ * endpoint-gone case reads truthfully). fatal() carries the exit code
+ * so the exit(2) window-creation paths get the same treatment. */
+static void fatal(int code, const char *what) {
     fprintf(stderr, "wm: %s: %s\n", what, strerror(errno));
-    exit(1);
+    exit(code);
 }
+static void die(const char *what) { fatal(1, what); }
 static win_t wins[MAX_WIN];
 static int nwins = 0;
 static int32_t bar_sid = 0;        /* our own taskbar surface */
@@ -3069,8 +3071,8 @@ static void screen_changed(void) {
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
-    if (make_desk() != 0) exit(2);
-    if (make_bar() != 0) exit(2);
+    if (make_desk() != 0) fatal(2, "cannot recreate the desktop window");
+    if (make_bar() != 0) fatal(2, "cannot recreate the taskbar window");
     for (int i = 0; i < nwins; i++)
         if (wins[i].focused && !wins[i].minimized) {
             int32_t a[1] = { wins[i].sid };
