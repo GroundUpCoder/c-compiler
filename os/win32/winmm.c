@@ -64,15 +64,28 @@ BOOL PlaySoundA(LPCSTR sound, HMODULE mod, DWORD flags) {
         s = snd_play_mem(img, n, &dur_ms);
     } else if (flags & SND_FILENAME) {
         s = snd_play_path(sound, &dur_ms);
-    } else {                                     /* alias (scheme event) */
+        if (!s && !(flags & SND_NODEFAULT)) {    /* real: default ding (0211) */
+            char path[SND_PATH_MAX];
+            if (snd_lookup("SystemDefault", path, sizeof path) == 1)
+                s = snd_play_path(path, &dur_ms);
+        }
+    } else {                                     /* alias (scheme event) —
+                                                    real also retries the name
+                                                    as a path (0211) */
         char path[SND_PATH_MAX];
         int r = snd_lookup(sound, path, sizeof path);
         if (r == -1) return TRUE;                /* explicit silence */
         if (r == 0) {                            /* unknown alias */
-            if (flags & SND_NODEFAULT) return FALSE;
-            if (snd_lookup("SystemDefault", path, sizeof path) != 1) return TRUE;
+            s = snd_play_path(sound, &dur_ms);   /* the name as a filename */
+            if (!s) {
+                if (flags & SND_NODEFAULT) return FALSE;
+                if (snd_lookup("SystemDefault", path, sizeof path) != 1)
+                    return TRUE;
+                s = snd_play_path(path, &dur_ms);
+            }
+        } else {
+            s = snd_play_path(path, &dur_ms);
         }
-        s = snd_play_path(path, &dur_ms);
     }
     if (!s) return FALSE;
 

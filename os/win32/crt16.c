@@ -523,29 +523,41 @@ static void ex_fill(LPWSTR dst, size_t c, LPWSTR *end, size_t *remaining) {
     if (remaining) *remaining = c - used;
 }
 
+/* STRSAFE Ex flags (0211): FILL_ON_FAILURE floods the whole buffer with
+ * the low-byte fill char (byte-wise, per real strsafe), NULL_ON_FAILURE
+ * empties it — calc passes FILL_ON_FAILURE and it silently no-oped. */
+static void ex_fail_fill(void *dst, size_t bytes, DWORD flags) {
+    if (!dst || !bytes) return;
+    if (flags & STRSAFE_FILL_ON_FAILURE) memset(dst, (int)(flags & 0xFF), bytes);
+    else if (flags & STRSAFE_NULL_ON_FAILURE) memset(dst, 0, bytes >= 2 ? 2 : bytes);
+}
+
 HRESULT StringCchPrintfExW(LPWSTR dst, size_t c, LPWSTR *end,
                            size_t *remaining, DWORD flags, LPCWSTR fmt, ...) {
-    (void)flags;
     va_list ap;
     va_start(ap, fmt);
     HRESULT hr = cch_vprintfW(dst, c, fmt, ap);
     va_end(ap);
+    if (hr != S_OK) ex_fail_fill(dst, c * sizeof(WCHAR), flags);
     if (hr == S_OK || hr == STRSAFE_E_INSUFFICIENT_BUFFER) ex_fill(dst, c, end, remaining);
     return hr;
 }
 
 HRESULT StringCchPrintfExA(LPSTR dst, size_t c, LPSTR *end,
                            size_t *remaining, DWORD flags, LPCSTR fmt, ...) {
-    (void)flags;
     if (!dst || c == 0) return STRSAFE_E_INVALID_PARAMETER;
     va_list ap;
     va_start(ap, fmt);
     int r = vsnprintf(dst, c, fmt, ap);
     va_end(ap);
+    if (r < 0 || (size_t)r >= c) {
+        ex_fail_fill(dst, c, flags);
+        return STRSAFE_E_INSUFFICIENT_BUFFER;
+    }
     size_t used = strlen(dst);
     if (end) *end = dst + used;
     if (remaining) *remaining = c - used;
-    return (r < 0 || (size_t)r >= c) ? STRSAFE_E_INSUFFICIENT_BUFFER : S_OK;
+    return S_OK;
 }
 
 /* Cb variants: byte counts -> element counts */
@@ -582,12 +594,12 @@ HRESULT StringCbPrintfA(LPSTR dst, size_t cb, LPCSTR fmt, ...) {
 
 HRESULT StringCbPrintfExW(LPWSTR dst, size_t cb, LPWSTR *end,
                           size_t *remaining, DWORD flags, LPCWSTR fmt, ...) {
-    (void)flags;
     size_t c = cb / sizeof(WCHAR);
     va_list ap;
     va_start(ap, fmt);
     HRESULT hr = cch_vprintfW(dst, c, fmt, ap);
     va_end(ap);
+    if (hr != S_OK) ex_fail_fill(dst, cb, flags);
     if (hr == S_OK || hr == STRSAFE_E_INSUFFICIENT_BUFFER) {
         size_t used = 0;
         while (used < c && dst[used]) used++;
@@ -599,9 +611,10 @@ HRESULT StringCbPrintfExW(LPWSTR dst, size_t cb, LPWSTR *end,
 
 HRESULT StringCbCopyExW(LPWSTR dst, size_t cb, LPCWSTR src, LPWSTR *end,
                         size_t *remaining, DWORD flags) {
-    (void)flags;
     size_t c = cb / sizeof(WCHAR);
+    if (!src && (flags & STRSAFE_IGNORE_NULLS)) src = u"";
     HRESULT hr = StringCchCopyW(dst, c, src);
+    if (hr != S_OK) ex_fail_fill(dst, cb, flags);
     if (hr == S_OK || hr == STRSAFE_E_INSUFFICIENT_BUFFER) {
         size_t used = 0;
         while (used < c && dst[used]) used++;

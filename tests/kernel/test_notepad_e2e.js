@@ -107,6 +107,14 @@ const out = boot([
   'echo ==list2',
   'wmctl list',
   'echo ==cut',
+  // Open an EXTENSIONLESS file through the dialog (0211: the defExt
+  // append used to turn "Makefile" into "Makefile.txt" -> not found)
+  'printf "extensionless payload\\n" > /root/Makefile',
+  'wmctl click "Open..."',
+  'wmctl wait label Open 6000',
+  'wmctl settext EDIT:2 Makefile',
+  'wmctl click Open',
+  'wmctl wait text EDIT:0 "extensionless payload" 6000',
   // Open readme.txt through the open dialog
   'wmctl click "Open..."',
   'wmctl wait label Open 6000',                  // the Open dialog is up

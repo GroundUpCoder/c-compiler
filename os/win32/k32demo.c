@@ -148,6 +148,19 @@ static void test_dirs_find(void) {
     check("FindFirstFile no match -> ERROR_FILE_NOT_FOUND",
           FindFirstFile(TEXT("/root/k32-dir/*.nope"), &fd) == INVALID_HANDLE_VALUE &&
           GetLastError() == ERROR_FILE_NOT_FOUND);
+    /* "*.*" is the DOS-heritage EVERYTHING pattern (0211): it must also
+     * match extensionless names */
+    HANDLE hx = CreateFileW(u"/root/k32-dir/Makefile", GENERIC_WRITE, 0, NULL,
+                            CREATE_ALWAYS, 0, NULL);
+    CloseHandle(hx);
+    int all = 0;
+    HANDLE fa = FindFirstFile(TEXT("/root/k32-dir/*.*"), &fd);
+    if (fa != INVALID_HANDLE_VALUE) {
+        do { all++; } while (FindNextFile(fa, &fd));
+        FindClose(fa);
+    }
+    check("FindFirstFile *.* matches everything incl. extensionless", all == 4);
+    DeleteFile(TEXT("/root/k32-dir/Makefile"));
 
     /* MoveFile + RemoveDirectory */
     check("MoveFile", MoveFile(TEXT("/root/k32-dir/gamma.dat"),
@@ -183,8 +196,19 @@ static void test_mapping(void) {
     check("MapViewOfFile content", view != NULL &&
           memcmp(view, "kernel32 wrote", 14) == 0);
     check("view spans the file", view != NULL && view[size - 1] == '\n');
+    /* a WRITE view of a PAGE_READONLY mapping must refuse (0211) — the
+     * old copy-view silently DROPPED the writes at unmap */
+    check("FILE_MAP_WRITE on PAGE_READONLY refused",
+          MapViewOfFile(map, FILE_MAP_WRITE, 0, 0, 0) == NULL &&
+          GetLastError() == ERROR_ACCESS_DENIED);
     check("UnmapViewOfFile", UnmapViewOfFile(view));
     CloseHandle(map);
+    /* single-module world: a NAMED GetModuleHandle is honest NULL (0211;
+     * it used to hand a fake "loaded" handle for any DLL name) */
+    check("GetModuleHandleW(name) -> NULL",
+          GetModuleHandleW(u"uxtheme.dll") == NULL);
+    check("GetModuleHandleW(NULL) -> exe base",
+          GetModuleHandleW(NULL) != NULL);
 }
 
 static void test_memory(void) {

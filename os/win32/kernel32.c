@@ -33,6 +33,7 @@
 #undef UNICODE
 #undef _UNICODE
 #include <windows.h>
+#include "win32_internal.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -567,7 +568,9 @@ DWORD GetFullPathNameW(LPCWSTR name, DWORD n, LPWSTR buf, LPWSTR *filePart) {
 
 /* ========================================================= find (glob) */
 
-/* Case-insensitive ASCII wildcard match: '*' any run, '?' any one char. */
+/* Case-insensitive ASCII wildcard match: '*' any run, '?' any one char.
+ * The DOS-heritage rule (0211): "*.*" means ALL files, dot or not —
+ * callers normalize it to "*" before matching. */
 static int wild_match(const char *pat, const char *s) {
     if (!*pat) return !*s;
     if (*pat == '*') {
@@ -634,6 +637,7 @@ HANDLE FindFirstFileW(LPCWSTR pattern, WIN32_FIND_DATAW *fd) {
         dir[0] = 0;
         snprintf(pat, sizeof pat, "%s", p);
     }
+    if (strcmp(pat, "*.*") == 0) snprintf(pat, sizeof pat, "*");   /* DOS rule (0211) */
     DIR *d = opendir(dir[0] ? dir : ".");
     if (!d) { set_err_errno(); return INVALID_HANDLE_VALUE; }
     K32Obj *o = h_alloc(HK_FIND);
@@ -687,7 +691,9 @@ static struct {
 
 HANDLE CreateFileMappingW(HANDLE file, void *sa, DWORD protect,
                           DWORD sizeHigh, DWORD sizeLow, LPCWSTR name) {
-    (void)sa; (void)sizeHigh; (void)sizeLow; (void)name;
+    (void)sa; (void)sizeHigh; (void)sizeLow;
+    if (name)
+        WIN32_UNSUPPORTED("named file mappings (created PRIVATE, never shared)");
     K32Obj *f = h_get(file, HK_FILE);
     if (!f) return NULL;                          /* NB: NULL, not IHV */
     int fd = dup(f->fd);
@@ -703,6 +709,12 @@ LPVOID MapViewOfFile(HANDLE mapping, DWORD acc, DWORD offHigh,
                      DWORD offLow, SIZE_T bytes) {
     K32Obj *o = h_get(mapping, HK_MAP);
     if (!o) return NULL;
+    if ((acc & FILE_MAP_WRITE) && o->mapProtect == PAGE_READONLY) {
+        /* real MapViewOfFile refuses a write view of a read-only mapping;
+         * we silently DROPPED the data at unmap instead (0211). */
+        g_lastError = ERROR_ACCESS_DENIED;
+        return NULL;
+    }
     long long off = ((long long)offHigh << 32) | offLow;
     struct stat st;
     if (fstat(o->fd, &st) != 0) { set_err_errno(); return NULL; }
@@ -742,7 +754,13 @@ BOOL UnmapViewOfFile(LPCVOID base) {
                 while (done < g_views[i].len) {
                     long r = write(g_views[i].fd, (const char *)base + done,
                                    g_views[i].len - done);
-                    if (r <= 0) break;
+                    if (r <= 0) {
+                        __win32_unsupported("UnmapViewOfFile write-back "
+                                            "failed at %u/%u bytes",
+                                            (unsigned)done,
+                                            (unsigned)g_views[i].len);
+                        break;
+                    }
                     done += (DWORD)r;
                 }
             }
@@ -1159,7 +1177,14 @@ static void proc_info_init(void) {
 }
 
 HMODULE GetModuleHandleW(LPCWSTR name) {
-    (void)name;
+    if (name) {
+        /* single-module world: a NAMED lookup faked success and handed a
+         * "loaded" handle for any DLL name (0211) — now honest: NULL +
+         * ERROR_MOD_NOT_FOUND, with a loud note. */
+        __win32_unsupported("GetModuleHandleW(name) — no DLLs; returning NULL");
+        g_lastError = 126;                        /* ERROR_MOD_NOT_FOUND */
+        return NULL;
+    }
     return (HMODULE)0x400000;                     /* the classic exe base */
 }
 

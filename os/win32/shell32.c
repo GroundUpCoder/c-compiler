@@ -63,12 +63,14 @@ int ShellAboutW(HWND owner, LPCWSTR app, LPCWSTR otherStuff, HICON icon) {
     if (app) WideCharToMultiByte(CP_UTF8, 0, app, -1, a, sizeof a, NULL, NULL);
     if (otherStuff)
         WideCharToMultiByte(CP_UTF8, 0, otherStuff, -1, o, sizeof o, NULL, NULL);
-    /* Windows: "App#OtherName" — the part before '#' titles the box. */
+    /* Windows: "App#OtherName" — the part before '#' titles the box and
+     * the part after is the FIRST LINE (0211: it used to be dropped). */
     char *hash = strchr(a, '#');
-    if (hash) *hash = 0;
+    const char *first = a;
+    if (hash) { *hash = 0; first = hash + 1; }
     char caption[300], text[800];
     snprintf(caption, sizeof caption, "About %s", a);
-    snprintf(text, sizeof text, "%s\n\n%s", a, o);
+    snprintf(text, sizeof text, "%s\n\n%s", first, o);
     return MessageBox(owner, text, caption, MB_OK) != 0;
 }
 
@@ -83,7 +85,14 @@ HINSTANCE ShellExecuteW(HWND hwnd, LPCWSTR op, LPCWSTR file, LPCWSTR params,
     if (!file) return (HINSTANCE)2;              /* SE_ERR_FNF-ish */
     WCHAR cmd[1024];
     int n = 0;
-    for (; file[n] && n < 1000; n++) cmd[n] = file[n];
+    /* lpFile is ONE opaque path — quote it so kernel32's cmdline split
+     * can't break a path with spaces into argv pieces (0211). */
+    int quote = 0;
+    for (int i = 0; file[i]; i++)
+        if (file[i] == u' ') { quote = 1; break; }
+    if (quote) cmd[n++] = u'"';
+    for (int i = 0; file[i] && n < 1000; i++) cmd[n++] = file[i];
+    if (quote && n < 1000) cmd[n++] = u'"';
     if (params && params[0] && n < 1000) {
         cmd[n++] = u' ';
         for (int i = 0; params[i] && n < 1020; i++) cmd[n++] = params[i];

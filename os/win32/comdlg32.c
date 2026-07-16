@@ -27,6 +27,7 @@
 #undef _UNICODE
 #include <windows.h>
 #include <commdlg.h>
+#include "win32_internal.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,10 +151,14 @@ static void fd_accept(void) {
         SetWindowText(g_fd.name, "");
         return;
     }
-    /* default extension: basename without a dot gets lpstrDefExt */
+    /* Default extension (0211, the Windows rule): a dotless basename
+     * gets lpstrDefExt only when the name AS TYPED doesn't already name
+     * an existing file — appending unconditionally made extensionless
+     * files (Makefile, README) unopenable by typed name OR dbl-click. */
+    int exists = stat(full, &st) == 0;
     const char *base = strrchr(full, '/');
     base = base ? base + 1 : full;
-    if (!strchr(base, '.') && g_fd.ofn->lpstrDefExt) {
+    if (!exists && !strchr(base, '.') && g_fd.ofn->lpstrDefExt) {
         char *ext = cd_w2a(g_fd.ofn->lpstrDefExt);
         if (ext && ext[0]) {
             strncat(full, ".", sizeof full - strlen(full) - 1);
@@ -161,16 +166,37 @@ static void fd_accept(void) {
         }
         free(ext);
         if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) return;
+        exists = stat(full, &st) == 0;
     }
-    int exists = stat(full, &st) == 0;
     if (!g_fd.saving && (g_fd.ofn->Flags & OFN_FILEMUSTEXIST) && !exists) {
         MessageBox(g_fd.win, "File not found.", "Open", MB_OK);
         return;
+    }
+    if (g_fd.saving && (g_fd.ofn->Flags & OFN_PATHMUSTEXIST)) {
+        /* the parent directory must exist (0211) */
+        char dir[1024];
+        snprintf(dir, sizeof dir, "%s", full);
+        char *slash = strrchr(dir, '/');
+        if (slash) {
+            if (slash == dir) dir[1] = 0; else *slash = 0;
+            struct stat ds;
+            if (stat(dir, &ds) != 0 || !S_ISDIR(ds.st_mode)) {
+                MessageBox(g_fd.win, "Path does not exist.", "Save As", MB_OK);
+                return;
+            }
+        }
     }
     if (g_fd.saving && (g_fd.ofn->Flags & OFN_OVERWRITEPROMPT) && exists) {
         char q[600];
         snprintf(q, sizeof q, "%s already exists.\nOverwrite?", full);
         if (MessageBox(g_fd.win, q, "Save As", MB_YESNO) != IDYES) return;
+    }
+    if (strlen(full) + 1 > g_fd.ofn->nMaxFile) {
+        /* real: FALSE + FNERR_BUFFERTOOSMALL, never silent truncation */
+        WIN32_UNSUPPORTED("GetOpen/SaveFileName: lpstrFile too small "
+                          "(need %d)", (int)strlen(full) + 1);
+        g_fd.done = -1;
+        return;
     }
     cd_a2w(full, g_fd.ofn->lpstrFile, (int)g_fd.ofn->nMaxFile);
     /* nFileOffset: the basename's WCHAR offset (ASCII paths: == bytes) */
