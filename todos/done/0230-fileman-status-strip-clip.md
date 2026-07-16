@@ -1,6 +1,6 @@
 # 0230 — fileman status strip clip
 
-- **Status**: open
+- **Status**: done (2026-07-17) — fileman f836abf, tests 08eebcd; strip 18px→font-derived 21px (status_h() over GetTextMetrics, fileman-local lever), red→green pins in test_fileman_ops_e2e.js; the old geometry was an exact-fit razor edge (no visible clip at the current stock font — see the dev log); image v106
 - **Design**: —
 
 ## Goal
