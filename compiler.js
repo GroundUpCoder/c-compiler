@@ -12400,6 +12400,17 @@ class Parser {
           name, type, [], specs.storageClass, false, null);
         funcDecl.importModule = specs.importModule;
         funcDecl.importName = specs.importName;
+        // C11 6.2.2p4 (via p5 for no-storage-class): a block-scope
+        // re-declaration of a visible static function inherits its
+        // internal linkage — keep the existing binding, drop the
+        // redundant decl (todos/0219).
+        const prevFn = this.varScope.get(name);
+        if (prevFn instanceof AST.DFunc &&
+            prevFn.storageClass === Types.StorageClass.STATIC &&
+            specs.storageClass !== Types.StorageClass.STATIC &&
+            specs.storageClass !== Types.StorageClass.IMPORT) {
+          continue;
+        }
         this.varScope.set(name, funcDecl);
         if (this.currentParsingFunc) {
           this.currentParsingFunc.externLocalFuncs.push(funcDecl);
@@ -12426,6 +12437,23 @@ class Parser {
       if (type.isAggregate()) dvar.allocClass = Types.AllocClass.MEMORY;
       else if (specs.storageClass === Types.StorageClass.EXTERN) dvar.allocClass = Types.AllocClass.MEMORY;
 
+      // C11 6.2.2p4: a block-scope `extern` re-declaration of a visible
+      // FILE-scope static inherits its internal linkage and denotes that
+      // same object — capture the prior binding before this declarator
+      // shadows it (consumed at the extern divert below, todos/0219).
+      // Identity with the level-0 binding, not a level check: an earlier
+      // extern in an enclosing block re-bound the SAME file-scope decl at
+      // its own level, while a static LOCAL (no linkage, 6.2.2p6 — not
+      // inherited) is a different node.
+      let priorFileStatic = null;
+      if (specs.storageClass === Types.StorageClass.EXTERN) {
+        const vis = this.varScope.get(name);
+        if (vis instanceof AST.DVar &&
+            vis.storageClass === Types.StorageClass.STATIC &&
+            this.varScope.stack[0].get(name) === vis) {
+          priorFileStatic = vis;
+        }
+      }
       // Add to scope before parsing initializer (C11 §6.2.1p7: scope begins
       // after the declarator, so sizeof(*p) in `T *p = malloc(sizeof(*p))` is valid).
       this.varScope.set(name, dvar);
@@ -12517,7 +12545,14 @@ class Parser {
           this.currentParsingFunc.staticLocals.push(dvar);
           // Don't include in declaration statement
         } else if (specs.storageClass === Types.StorageClass.EXTERN) {
-          this.currentParsingFunc.externLocals.push(dvar);
+          if (priorFileStatic instanceof AST.DVar &&
+              priorFileStatic.storageClass === Types.StorageClass.STATIC) {
+            // C11 6.2.2p4: re-binds the visible file-scope static; not an
+            // external-linkage declaration at all (todos/0219).
+            this.varScope.replaceInCurrentScope(name, priorFileStatic);
+          } else {
+            this.currentParsingFunc.externLocals.push(dvar);
+          }
         } else {
           declarations.push(dvar);
         }
@@ -12776,6 +12811,18 @@ class Parser {
             specs.storageClass !== Types.StorageClass.STATIC) {
           continue;  // drop redundant re-declaration, keep import binding
         }
+        // C11 6.2.2p4 (via p5 for no-storage-class): a re-declaration of
+        // an internal-linkage (static) function inherits internal linkage
+        // — it names the SAME function, not a new external one. Keep the
+        // static decl in scope and drop the redundant re-declaration so
+        // callers keep binding the internal definition (`static int
+        // f(void) {...} extern int f(void);` must link — todos/0219).
+        if (prevFunc && prevFunc instanceof AST.DFunc &&
+            prevFunc.storageClass === Types.StorageClass.STATIC &&
+            specs.storageClass !== Types.StorageClass.STATIC &&
+            specs.storageClass !== Types.StorageClass.IMPORT) {
+          continue;
+        }
         this.varScope.replace(name, funcDecl);
         if (specs.storageClass === Types.StorageClass.IMPORT) unit.importedFunctions.push(funcDecl);
         else unit.declaredFunctions.push(funcDecl);
@@ -12878,6 +12925,25 @@ class Parser {
             prevDecl.storageClass !== Types.StorageClass.EXTERN) {
           dvar.allocClass = Types.AllocClass.MEMORY;
         }
+      }
+      // C11 6.2.2p4: an `extern` re-declaration after a visible prior
+      // declaration with internal linkage inherits that linkage — `static
+      // int x = 4; extern int x;` re-declares the SAME static object, not
+      // a new external one. Keep the static decl as the binding and drop
+      // the redundant re-declaration (the import-re-declaration precedent
+      // in the function path). With an initializer it is a second
+      // DEFINITION of that internal object: give it internal linkage and
+      // route it to the TU link scope — one object either way (the
+      // redefinition diagnostic itself is a pre-existing gap shared with
+      // `static int x = 4; static int x = 5;`, which clang rejects and
+      // this compiler silently accepts).
+      if (specs.storageClass === Types.StorageClass.EXTERN &&
+          prevDecl instanceof AST.DVar &&
+          prevDecl.storageClass === Types.StorageClass.STATIC) {
+        if (dvar.initExpr == null) continue;
+        dvar.storageClass = Types.StorageClass.STATIC;
+        unit.definedVariables.push(dvar);
+        continue;
       }
       // Use replace to update the scope entry (varScope.set fails if name already exists)
       this.varScope.replace(name, dvar);

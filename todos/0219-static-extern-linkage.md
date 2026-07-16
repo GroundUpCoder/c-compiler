@@ -32,8 +32,11 @@ decl — never a linker special case):
 - File-scope var: `extern` after a prior file-scope `static` DVar → the
   re-declaration is a no-op (binding stays the static decl); with an
   initializer it converts to internal linkage and lands in
-  `definedVariables` so the linker reports the duplicate definition
-  (clang: redefinition error).
+  `definedVariables` — one object either way. (The redefinition
+  diagnostic clang emits for that initializer form is a pre-existing gap
+  shared with `static int x = 4; static int x = 5;`, which this compiler
+  also silently accepts — a future diagnostics item, same family as the
+  hunt's G22.)
 - File-scope function decl: `extern`/no-storage-class re-declaration of a
   static DFunc → drop after the existing attribute back-propagation, keep
   the static binding.
