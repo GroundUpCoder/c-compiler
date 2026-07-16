@@ -268,8 +268,8 @@ static int selftest(void) {
     SetWindowText(ed, text);
     st_check("line count", SendMessage(ed, EM_GETLINECOUNT, 0, 0) == 30);
 
-    /* vertical bar state: WM_SETTEXT parked the caret at the end, so the
-     * view scrolled to the last page — pos == max - page + 1 */
+    /* vertical bar state: WM_SETTEXT resets caret AND view to the start
+     * (real-EDIT contract, fixed in the 0222 notepad menu audit) */
     SCROLLINFO si;
     memset(&si, 0, sizeof si);
     si.cbSize = sizeof si;
@@ -277,13 +277,15 @@ static int selftest(void) {
     st_check("GetScrollInfo(SB_VERT)", GetScrollInfo(ed, SB_VERT, &si));
     st_check("vbar range", si.nMin == 0 && si.nMax == 29);
     st_check("vbar page", si.nPage > 0 && si.nPage < 30);
-    st_check("vbar pos at end", si.nPos == 30 - (int)si.nPage);
+    st_check("vbar pos at top", si.nPos == 0);
 
     /* WM_VSCROLL scrolls and notifies EN_VSCROLL */
     st_envscroll = 0;
+    SendMessage(ed, WM_VSCROLL, SB_BOTTOM, 0);
+    st_check("SB_BOTTOM scrolled", GetScrollPos(ed, SB_VERT) == 30 - (int)si.nPage);
+    st_check("EN_VSCROLL fired", st_envscroll == 1);
     SendMessage(ed, WM_VSCROLL, SB_TOP, 0);
     st_check("SB_TOP scrolled", GetScrollPos(ed, SB_VERT) == 0);
-    st_check("EN_VSCROLL fired", st_envscroll == 1);
     SendMessage(ed, WM_VSCROLL, SB_LINEDOWN, 0);
     st_check("SB_LINEDOWN", GetScrollPos(ed, SB_VERT) == 1);
 

@@ -466,9 +466,25 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
 HWND FindTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 0); }
 HWND ReplaceTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 1); }
 
-/* ---- the honest cancels ---- */
+/* ---- the honest cancels ----
+ * Each reports loudly (0211 fail-loud policy) so a menu item landing here
+ * reads as a missing feature, not a dead click: there is no printing
+ * subsystem (Print/Page Setup), and a real ChooseFont needs per-HWND font
+ * plumbing through the control paint paths (todos/0223). */
 
-BOOL ChooseFontW(CHOOSEFONTW *cf) { (void)cf; return FALSE; }
-BOOL PrintDlgW(PRINTDLGW *pd) { (void)pd; return FALSE; }
-BOOL PageSetupDlgW(PAGESETUPDLGW *psd) { (void)psd; return FALSE; }
+BOOL ChooseFontW(CHOOSEFONTW *cf) {
+    (void)cf;
+    WIN32_UNSUPPORTED("ChooseFontW: no font dialog yet (returns cancel)");
+    return FALSE;
+}
+BOOL PrintDlgW(PRINTDLGW *pd) {
+    (void)pd;
+    WIN32_UNSUPPORTED("PrintDlgW: no printing subsystem (returns cancel)");
+    return FALSE;
+}
+BOOL PageSetupDlgW(PAGESETUPDLGW *psd) {
+    (void)psd;
+    WIN32_UNSUPPORTED("PageSetupDlgW: no printing subsystem (returns cancel)");
+    return FALSE;
+}
 DWORD CommDlgExtendedError(void) { return 0; }

@@ -4219,6 +4219,9 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case EM_CANUNDO:                             /* no undo buffer (0048 scope) */
         return FALSE;
     case EM_UNDO:
+        /* apps normally gate on EM_CANUNDO (menu grayed); an accelerator
+         * (^Z) still lands here — say so instead of a dead keypress */
+        WIN32_UNSUPPORTED("EDIT EM_UNDO: no undo buffer (todos/0135)");
         return FALSE;
     case EM_EMPTYUNDOBUFFER:
         return 0;
@@ -4303,7 +4306,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int n = (int)strlen(t);
         if (!edit_ensure(st, n + 1)) return FALSE;
         st->len = edit_normalize(st->buf, t, n);
-        st->caret = st->anchor = st->len;
+        st->caret = st->anchor = 0;              /* real EDIT: caret to start */
         st->topLine = st->scrollX = 0;
         st->modified = 0;                        /* programmatic set (0048) */
         edit_show_caret(h, st);

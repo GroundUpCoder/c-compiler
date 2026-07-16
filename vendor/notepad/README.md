@@ -19,10 +19,11 @@ Status: fully linked against the veneer since todos/0048 (EDIT-around-a-file
 via EM_GETHANDLE/EM_SETHANDLE, comdlg32 file dialogs + find/replace, the
 comctl32 status bar, the clipboard) and seeded into the OS image as
 `/bin/notepad` — usable, with a Start menu entry. Printing stays an honest
-cancel (PrintDlgW/PageSetupDlgW return FALSE; the StartDoc family fails
-loud), ChooseFontW cancels (one image font), and the Save As encoding combo
-degrades to the current value (OFN hooks/templates not run — grow on
-demand). `tools/win32ports.js` keeps compile-testing it (`expect: links`);
+cancel (PrintDlgW/PageSetupDlgW return FALSE **with a loud
+`win32: unsupported` report** since the 0222 menu audit; the StartDoc family
+fails loud), ChooseFontW cancels loudly the same way (a real font dialog is
+todos/0223), and the Save As encoding combo degrades to the current value
+(OFN hooks/templates not run — grow on demand). `tools/win32ports.js` keeps compile-testing it (`expect: links`);
 `tests/kernel/test_notepad_e2e.js` is the acceptance test.
 
 ## Local patches (keep this table complete)
