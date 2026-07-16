@@ -1,6 +1,13 @@
 # 0219 — static→extern re-declaration linkage inheritance (G12)
 
-- **Status**: open
+- **Status**: done (2026-07-16) — two commits (conformance repros
+  test-first, then the four-site sema fix: extern re-declarations after a
+  visible static inherit its internal linkage per C11 6.2.2p4, file and
+  block scope, vars and functions; `extern_local_shadow`'s golden encoded
+  the old wrong semantics and was re-pinned against clang); fast gate
+  green (738/0, 8 xfail unchanged), SameBoy interlock BYTE-IDENTICAL
+  wasm + checksums equal to clang, no bake/kernel/sweep needed
+  (front-end-only). Dev log: `logs/2026-07-16/static-extern-linkage-0219.md`
 - **Design**: CLAUDE.md "Conformance tests"; found in the 2026-07-16
   read-only bug hunt (finding G12, confirmed against clang)
 
