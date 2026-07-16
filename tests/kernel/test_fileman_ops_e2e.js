@@ -20,6 +20,8 @@
 //     desktop Paste — the SAME format-2 clipboard file list, so desktop
 //     copy pastes into fileman and vice versa; a text-only clipboard
 //     leaves desktop PASTE grayed (gray rows never fire, 0091)
+//   - the status strip's height derives from the stock font cell (0230,
+//     the 0229 disease at the fileman STATIC site) — shot leg below
 //
 // Row-0 discipline: right-click selection is coordinate-driven, so every
 // context-menu op targets ROW 0 (y=30 hits it for any row height); the
@@ -81,6 +83,19 @@ const script = [
   'fileman /root/optest &',
   'wmctl wait label Go 10000',                   // fileman controls + msg loop up (window listed)
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
+  // ---- status-strip descender clip (0230): shot before anything moves ----
+  'wmctl wait text STATIC:0 "3 object(s)" 8000', // status text set (3 fixture rows)
+  'echo ==sstree',
+  // The tree round-trip is also the paint barrier: the agent socket is
+  // served from the GetMessage IDLE loop, and WM_PAINT delivers before the
+  // loop idles — so by the time this dump answers, the strip's repaint has
+  // landed in the surface and the shot below can't catch a pre-paint frame.
+  'wmctl tree',
+  'echo ==cut',
+  'wmctl shot $SID /root/ss.ppm && echo ss-shot-ok',
+  'echo ==ssshot',
+  'base64 /root/ss.ppm',
+  'echo ==cut',
   // ---- the file menu on a DIRECTORY row (sub/ is row 0: dirs first) ----
   RC_ROW0,
   'wmctl wait label Properties 8000',            // the row popup menu is populated
@@ -299,6 +314,55 @@ function section(name) {
 const popOf = (dump) => dump.split('popupmenu\n')[1] || '';
 const item = (dump, label) =>
   dump.split('\n').find(l => l.includes(`text='${label}'`)) || '';
+
+// ---- the status strip's font-derived height (0230) ----
+// The strip is a STATIC and user32's STATIC paint top-aligns its text, so
+// the strip must be at least one full glyph cell tall or the descender rows
+// clip at its bottom edge (the 0229 disease at this site). Every pixel
+// check anchors on the live rect from the tree dump, never a hardcoded 18.
+function parsePpm(b64) {
+  const buf = Buffer.from(String(b64).replace(/\s+/g, ''), 'base64');
+  let p = 0;
+  const tok = () => { while ([32, 10, 9, 13].includes(buf[p])) p++;
+                      let s = p; while (![32, 10, 9, 13].includes(buf[p])) p++;
+                      return buf.slice(s, p).toString(); };
+  const magic = tok(); const w = +tok(), h = +tok(); tok(); p++;
+  return { buf, w, h, data: p, magic };
+}
+function maxInkRow(P, x0, x1, y0, y1) {          // last row with any dark px
+  let m = y0 - 1;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = P.data + (y * P.w + x) * 3;
+    if (P.buf[i] < 100 && P.buf[i + 1] < 100 && P.buf[i + 2] < 100) { m = y; break; }
+  }
+  return m;
+}
+const ssRow = section('sstree').split('\n')
+  .find(l => /class=STATIC/.test(l) && /object\(s\)/.test(l)) || '';
+const ssM = ssRow.match(/rect=(-?\d+),(-?\d+) (\d+)x(\d+)/) || [];
+const [ssX, ssY, , ssH] = ssM.slice(1).map(Number);
+check('status strip located in the agent tree', ssM.length > 0, ssRow);
+const ssP = parsePpm(section('ssshot'));
+check('status-strip shot is a P6 frame', ssP.magic === 'P6', ssP.magic);
+/* 0230 red->green pin: the old STATUS_H 18 vs the 19px stock cell. */
+check('status-strip height derives from the stock font cell (0230)',
+  ssH >= 21, 'H=' + ssH + ' row=' + JSON.stringify(ssRow.slice(0, 120)));
+// "3 object(s)" in the 8px-advance mono stock font, drawn DT_LEFT at the
+// strip origin: 'j' occupies cell cols x+32..40, 'ect' (no descenders)
+// cols x+40..64 — the descender must reach >=3 rows below the x-height.
+const jMax = maxInkRow(ssP, ssX + 32, ssX + 40, ssY, ssY + ssH);
+const ectMax = maxInkRow(ssP, ssX + 40, ssX + 64, ssY, ssY + ssH);
+check("descenders render: 'j' reaches >=3 rows below the x-height glyphs",
+  jMax - ectMax >= 3, 'j=' + jMax + ' ect=' + ectMax);
+/* Unclipped means CLEARANCE: ink ON the strip's bottom row is exactly what
+ * a clipped render looks like, so "reaches the edge" proves nothing — the
+ * descender bottom must sit >=2 clear rows above the clip edge. Under the
+ * old hardcoded-18 geometry the deepest 'j' row WAS the strip's last row
+ * (an exact-fit razor edge, one font-hinting change from visible loss) —
+ * this is the pixel half of the red->green. */
+check('descender bottom clears the strip clip edge by >=2 rows',
+  jMax >= ssY && jMax <= ssY + ssH - 3,
+  'jMax=' + jMax + ' strip=' + ssY + '+' + ssH);
 
 // ---- the file menu (a directory row) ----
 const m1 = popOf(section('menu1'));
