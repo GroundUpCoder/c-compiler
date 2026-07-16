@@ -1,6 +1,6 @@
 # 0235 — arch CS6: dedup the kernel-page payload chunk constants onto derived KP_PAYLOAD_CAP
 
-- **Status**: open
+- **Status**: done (2026-07-17)
 - **Design**: —
 
 ## Goal
