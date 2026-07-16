@@ -27,6 +27,10 @@ repo's "failure must point at its cause" doctrine.
   truncates its stream (the 0171 bug class). Fix: mirror the stdin waiter
   pattern — block on a per-pipe waiter list resolved on write/close;
   return 0 only when `pipe.closed.write`.
+  - Scrub note (2026-07-17): the same-instance non-brokered pipe path
+    (BlockFS.prototype.read, host.js ~2903) is EXEMPT from this fix —
+    reader and writer share one synchronous JSPI-free context, so blocking
+    there would deadlock; documented in-line. Class closed.
 
 ## Plan
 

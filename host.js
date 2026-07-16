@@ -2899,6 +2899,11 @@ var BLOCK_FS = (function () {
         for (var pk = 0; pk < got.length; pk++) buf[pk] = got[pk];
         return got.length;
       }
+      // Same-instance (non-brokered): reader and writer live in THIS one
+      // synchronous, JSPI-free context, so blocking for a live writer (the
+      // CD5 fail-loud treatment above) could never let that writer run — a
+      // structural deadlock. 0-on-empty is the ONLY correct behavior here;
+      // this is a deliberate exemption from CD5, not a spurious EOF.
       var pipe = entry.pipe;
       if (pipe.buffer.length === 0) return 0;
       var n = Math.min(count, pipe.buffer.length);
