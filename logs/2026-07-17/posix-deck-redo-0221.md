@@ -51,3 +51,19 @@ long rhetorical lines use size 4 or 5, and the one over-budget WASIX bullet was
 shortened. Image v109 carries the corrected seeded source. A fresh 22-slide
 render and manual contact-sheet review confirmed that headings, bullets, and
 the final payoff slides now stay inside their intended areas.
+
+## Round 3 — the speaker's-voice rewrite (final)
+
+The round-1/2 decks (codex executor) fixed the structural problems but read
+like generated prose: full-sentence arguments on every page, an aphorism
+closer per slide. The user's verdict: slides are cue cards — the speaker
+carries the argument, the deck holds titles, facts and numbers. Rewritten by
+hand to that spec: 22 pages -> 17, no %pause builds, every title <= 23 chars
+(under the observed ~26-char char-level wrap limit at size 8), bodies are
+short declaratives. Content kept from the earlier rounds + the 2026-07-17
+architecture survey: the multiplexer frame, the POSIX definition, the
+WSL1/WSL2 fork precedent, the no-scheduler-yet-preemptive point, the
+syscall-cost numbers (10us RPC; /usr 496->1345 MB/s; pipes 272->443 MB/s;
+8MB pipeline 280->4 RPCs), the emulation trade-off, prior-art one-liners.
+Dropped: the aspirational "network" HAL row, all invented taglines.
+test_present_e2e steps 29 -> 17.

@@ -1,292 +1,178 @@
-%% posix-on-wasm.mgp - a gucOS talk (todos/0221, rewritten 2026-07-17).
-%% What remains of an operating system when WebAssembly runs in a browser?
+%% posix-on-wasm.mgp - POSIX on WebAssembly (or: what is an OS anyway?)
+%% A gucOS talk (todos/0221). Slides are cue cards - the speaker carries
+%% the argument. Uses only directives the 0119 port renders (the 0202
+%% whitelist).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "#301848", font "standard"
-%default 2 size 5, vgap 20, prefix " ", center
-%default 3 size 5, fore "gold", vgap 30
-%tab 1 size 4, vgap 35, prefix "  ", icon box "SpringGreen" 45, left
-%tab 2 size 3, vgap 35, prefix "      ", icon arc "gold" 45, left
+%default 2 size 8, vgap 20, prefix " ", center
+%default 3 size 5, fore "yellow", vgap 30
+%tab 1 size 4, vgap 40, prefix "  ", icon box "SpringGreen" 50, left
+%tab 2 size 3, vgap 40, prefix "      ", icon arc "gold" 50, left
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
 POSIX on WebAssembly
 
-%size 5, fore "gold", center
-or: what is an operating system anyway?
-%size 3, fore "gray70", center
+or: what is an OS anyway?
 
-a tour through gucOS
+%center
+%size 3, fore "gray70"
+space / click: next    b: back    q: quit
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-The familiar picture
+What is an OS anyway?
 
-%size 5, center, fore "white"
-applications
-%bar "gray70" 10 30 40
-operating system
-%bar "gray70" 10 30 40
-hardware
-%size 4, fore "gray70", center
-
-The OS talks to the machine on our behalf.
-True - but radically incomplete.
+	"it talks to the hardware for you"
+	true. one job of many.
+	an OS multiplexes the machine:
+		CPU - scheduler
+		screen - compositor
+		audio - mixer
+		disk - filesystem
+		input - focus
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-An OS is a bundle of promises
+What is POSIX?
 
-	start programs and keep them apart
-	give them files, terminals, sound and windows
-	let them communicate - and survive failure
-	turn one machine into a shared environment
-%size 4, center, fore "gold"
-
-Hardware control is one job in that bundle.
+	the Unix contract. IEEE 1003, 1988.
+	files, processes, signals, pipes, terminals
+	an API and its semantics
+	not a kernel. not a desktop.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-POSIX names the promises
+Isn't emscripten POSIX?
 
-	files and file descriptors
-	processes, signals, pipes and terminals
-	a C interface programs can be written against
-%size 4, fore "gray70", center
-
-POSIX is not a kernel, a desktop, or hardware.
-It is a contract between programs and a system.
+	yes: one Unix program, compiled for the browser
+	no: one program is not a system
+		no processes, no shell, no desktop
+	building that is the actual work
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-"Isn't Emscripten already POSIX?"
+gucOS
 
-%size 5, fore "SpringGreen", center
-Yes: it helps one Unix-shaped program run.
-%pause
-%size 5, fore "orange", center
-No: it does not hand you a whole OS.
-%size 4, fore "gray70", center
-
-Process ownership, a shared desktop, persistent
-state and system-wide services are still real work.
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-The browser changes the question
-
-%size 5, center
-Not:
-%size 5, fore "orange"
-"How do we copy Unix into WebAssembly?"
-%size 5, fore "white"
-
-Instead:
-%size 5, fore "SpringGreen"
-"Which OS jobs still belong to us?"
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-Triage the job description
-
-%size 7, fore "SpringGreen", center
+	an operating system in a browser tab
+	every binary is a wasm module
+	built by its own compiler, inside it
+	the OS job list, three ways:
+%size 6, center, fore "SpringGreen"
 DO
-%pause
-%size 7, fore "orange"
+%size 6, center, fore "orange"
 DON'T
-%pause
-%size 7, fore "DeepSkyBlue"
+%size 6, center, fore "DeepSkyBlue"
 DON'T NEED TO
-%size 4, fore "gray70"
-
-Three buckets. Three different reasons.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DO: make processes real
+DO: processes
 
-	each program is its own WebAssembly instance
-	each gets isolated linear memory and a worker
-	the kernel owns pids, fds, wait and kill
-	posix_spawn starts children declaratively
-%size 4, center, fore "gold"
-
-Many apps run concurrently - as processes.
+	one worker per process. own memory.
+	pids, pipes, ptys, wait, kill, job control
+	spawn, not fork
+	pid 1 is busybox hush
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DO: provide a world programs share
+DO: a shared world
 
-	BlockFS makes files persistent across boots
-	BusyBox hush is a real interactive shell
-	pipes, ptys and job control compose programs
-	/bin/cc builds new WebAssembly inside the OS
-%size 4, center, fore "gold"
-
-An environment is more than a runtime shim.
+	BlockFS - files survive the tab
+	a compositor and a window manager
+	a sound server - N processes, one output
+	cc hello.c inside the OS. it runs.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DO: own the shared services
+DON'T: threads
 
-	a compositor combines process surfaces
-	a client window manager supplies policy
-	a sound server mixes every process into one output
-	AF_UNIX gives system services local IPC
-%size 4, center, fore "gold"
-
-The browser supplies primitives, not the desktop.
+	no pthreads. no atomics for programs.
+	processes are the unit of parallelism
+	the kernel underneath is built on both
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DO: define the failure boundaries
+DON'T: fork
 
-	separate instances provide address isolation
-	file descriptors and resources have owners
-	signals arrive cooperatively at safe points
-	SIGKILL can still terminate a worker outright
-%size 4, center, fore "gold"
-
-The semantics are OS semantics, adapted honestly.
+	fork clones a live process. wasm can't.
+	gucOS: posix_spawn
+		WSL1 built real fork on NT - its slowest part
+		Microsoft's fix was WSL2: a whole VM
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DON'T: add threads by reflex
+DON'T: preemption
 
-	WebAssembly threads require shared memory
-	then come TLS, locks and thread-safe libc state
-	processes already use multiple browser workers
-	no current gucOS port requires pthreads
-%size 4, center, fore "orange"
-
-Parallelism does not have to mean pthreads.
+	signals land at safe points
+	a busy loop cannot be interrupted
+	SIGKILL still works - the worker dies
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DON'T: pretend fork is cheap
+DON'T NEED TO: schedule
 
-%size 5, center, fore "white"
-fork asks for a live process to become two.
-%size 4, center, fore "gray70"
-That means memory snapshots, stack tricks, and
-reconciling resources that live outside memory.
-%bar "orange" 12 15 70
-%size 5, center, fore "SpringGreen"
-gucOS chooses owner-brokered spawn instead.
+	gucOS has no scheduler
+	each process is a real OS thread
+	the machine preempts them. all cores.
+	lost: priorities, nice, CPU accounting
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DON'T: promise preemption we lack
+DON'T NEED TO: the rest
 
-	no timer interrupt can seize arbitrary wasm code
-	signals are observed at safe points
-	blocking work yields through kernel operations
-	pure compute can be killed, not gently interrupted
-%size 4, center, fore "orange"
-
-A precise limitation beats a fake abstraction.
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-DON'T NEED TO: share the machine
-
-	SMP is already below us
-	the browser schedules workers across cores
-	its sandbox isolates tabs from physical memory
-	its security model mediates devices
-%size 4, center, fore "DeepSkyBlue"
-
-We schedule OS processes, not CPU cores.
+	drivers - the browser has them
+	MMU - wasm cannot make a bad address
+	boot - the tab is the boot
+	ext4 - there is no disk
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
 The browser is the HAL
 
-%size 4, fore "gray70", center
-HAL = hardware abstraction layer
-%pause
-%size 6, fore "white", left, prefix 20
-display     WebGPU / canvas
+%size 3, fore "gray70", center
+hardware abstraction layer
+%size 5, fore "white", left, prefix 20
+
+display     WebGPU
 audio       Web Audio
 storage     OPFS
 input       browser events
-network     web transports
-%pause
-%size 5, fore "DeepSkyBlue", center, prefix " "
-
-The web APIs are our device-driver boundary.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-DON'T NEED TO: reenact boot
+How slow is it?
 
-	no BIOS, UEFI or bootloader
-	no page tables or hardware MMU to program
-	no ext4 layout tuned for a raw spinning disk
-	no kernel driver for each physical device
-%size 4, center, fore "DeepSkyBlue"
-
-Those solved problems at a layer we do not own.
+	a syscall is a message to the kernel worker
+	~10us. Linux: ~0.5us.
+	so hot paths leave the kernel:
+		getpid - a vDSO page, no syscall
+		/usr reads - local, 496 -> 1345 MB/s
+		pipes - shared rings, 272 -> 443 MB/s
+		an 8MB pipe job: 280 syscalls down to 4
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-Emulation takes the other bargain
+Why not emulate?
 
-	TinyEMU and v86 emulate a complete CPU
-	a guest OS can preempt after virtual instructions
-	it can boot Linux and keep its existing drivers
-	but every guest instruction pays translation cost
-%size 4, center, fore "orange"
-
-Fidelity to another machine is the product there.
+	tinyemu and v86 emulate a whole CPU
+	they can preempt at any instruction
+	they pay at every instruction
+	gucOS pays only at syscalls
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-This is a design space, not a race
+Prior art
 
-	Browsix explored browser processes and fork
-	WASIX pushes WASI toward POSIX
-	TinyEMU and v86 run full machines
-	WebVM and CheerpX use JIT translation
-%size 4, center, fore "gold"
-
-Each project buys different semantics at a price.
+	Browsix - same idea. has fork. no desktop.
+	WASIX - full POSIX on wasm. pays for it.
+	tinyemu / v86 - emulators. boot real Linux.
+	WebVM / CheerpX - x86 JIT in a tab
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-The gucOS rule
+The end
 
-%size 4, center, fore "white"
-Keep the contract when it helps programs.
-%pause
-%size 4, fore "orange"
-Drop the mechanism when the substrate rejects it.
-%pause
-%size 4, fore "SpringGreen"
-Build the missing system around the result.
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-So what is the operating system?
-
-%size 5, center, fore "gray70"
-Not the first code to touch the hardware.
-%size 4, center, fore "white"
-
-It is the layer that turns available machinery
-into a coherent world for programs and people.
-%size 4, center, fore "DeepSkyBlue"
-
-In gucOS, the browser is the HAL - not the OS.
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-The source is part of the talk
-
-	this deck is a plain-text .mgp file
-	right-click it and choose Edit
-	change the argument, the examples, the ending
-	save; ctrl-r reloads it in the viewer
-%size 4, center, fore "SpringGreen"
-
-An operating system is editable infrastructure.
-So is this presentation.
+	this deck is a text file on the OS it describes
+	right-click it, pick Edit
+	ctrl-r reloads
