@@ -62,7 +62,9 @@
   /* Host-file drop target highlight (todos/0067): while a drag hovers the
      desktop pane, an inset ring says "this lands in ~/Desktop". */
   #desktop.droptarget { box-shadow: inset 0 0 0 3px #5599dd; }
-  #screen { outline: none; display: block; }
+  /* touch-action none (todos/0212): the touch layer below owns every touch
+     gesture on the desktop canvas — no browser scroll/double-tap-zoom. */
+  #screen { outline: none; display: block; touch-action: none; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
   /* VTs: exactly one of tty/desktop is visible (todos/0022). */
   body[data-vt="1"] #desktop { display: none; }
@@ -238,6 +240,125 @@ screen.addEventListener('wheel', function (e) {
   e.preventDefault();
 }, { passive: false });
 screen.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+// Touch input (todos/0212): synthesize the SAME wm-input records the mouse
+// handlers above send, so the kernel/WM never learns touch exists. Page-side
+// ONLY, and additive — touch events don't fire for a mouse, and preventDefault
+// on touchstart suppresses the browser's compatibility mouse events, so the
+// mouse paths above are untouched. Single-finger state machine:
+//   - the initial DOWN is DEFERRED (an immediate down would commit app state
+//     — e.g. start a title drag — before we know the gesture);
+//   - move past the slop before the timer -> DRAG: flush the deferred left
+//     down at the ORIGINAL point, then live moves, up on touchend (title
+//     drags, marquee select, scrollbar drags ride the existing paths);
+//   - touchend before the timer -> TAP: left down+up at the press point
+//     (t = the touchstart timestamp, so two taps within 400ms read as the
+//     kernel double-click, which is desired);
+//   - timer (500ms) fires unmoved -> LONG-PRESS: right down+up (the UP
+//     matters — win32 opens WM_CONTEXTMENU on RBUTTONUP), then swallow the
+//     rest of the gesture (Windows-tablet convention: long-press-then-move
+//     on an icon is a menu, not a drag).
+// A second finger while still pending flips to two-finger SCROLL: the pair's
+// midpoint pans as {kind:'wheel'} pixel deltas (natural direction — content
+// follows the fingers). Pinch is deliberately not interpreted: opposing
+// fingers cancel in the midpoint, and page pinch-zoom stays native off-canvas.
+var TOUCH_SLOP = 10, TOUCH_LONGPRESS_MS = 500;
+var touch = null;         // active single-finger gesture
+var touchScroll = null;   // active two-finger scroll (midpoint of the pair)
+function touchXY(t) {
+  var r = screen.getBoundingClientRect();   // touch events have no offsetX
+  return { x: Math.round(t.clientX - r.left), y: Math.round(t.clientY - r.top) };
+}
+function touchById(list, id) {
+  for (var i = 0; i < list.length; i++) if (list[i].identifier === id) return list[i];
+  return null;
+}
+screen.addEventListener('touchstart', function (e) {
+  e.preventDefault();     // no compat mouse events, no double-tap zoom
+  screen.focus();
+  if (touchScroll) return;                       // 3rd+ finger: ignore
+  if (e.touches.length === 2 && touch && touch.mode === 'pending') {
+    clearTimeout(touch.timer);                   // deferred down never flushed
+    touch = null;
+    var a = touchXY(e.touches[0]), b = touchXY(e.touches[1]);
+    touchScroll = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    // Establish hover at the midpoint: SDL fills a wheel event's mouse
+    // position from the app's last mouse MOTION, and a touch-only session
+    // never produced one — without this the wheel would land at (0,0).
+    wmSend({ kind: 'move', x: Math.round(touchScroll.x),
+             y: Math.round(touchScroll.y), buttons: 0 });
+    return;
+  }
+  if (e.touches.length !== 1 || touch) return;   // extra finger mid-drag/menu
+  var p = touchXY(e.touches[0]);
+  touch = {
+    id: e.touches[0].identifier, x: p.x, y: p.y, t: e.timeStamp, mode: 'pending',
+    timer: setTimeout(function () {
+      if (!touch || touch.mode !== 'pending') return;
+      touch.mode = 'menu';
+      wmSend({ kind: 'down', x: touch.x, y: touch.y, button: 2, t: performance.now() });
+      wmSend({ kind: 'up', x: touch.x, y: touch.y, button: 2 });
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, TOUCH_LONGPRESS_MS),
+  };
+}, { passive: false });
+screen.addEventListener('touchmove', function (e) {
+  e.preventDefault();
+  if (touchScroll) {
+    if (e.touches.length < 2) return;
+    var a = touchXY(e.touches[0]), b = touchXY(e.touches[1]);
+    var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    var dx = touchScroll.x - mx, dy = touchScroll.y - my;
+    if (dx || dy) {
+      // Hover tracks the midpoint (see the touchstart note), then the pan
+      // delta rides a wheel record — natural direction, content follows.
+      wmSend({ kind: 'move', x: Math.round(mx), y: Math.round(my), buttons: 0 });
+      wmSend({ kind: 'wheel', x: Math.round(mx), y: Math.round(my),
+               deltaX: dx, deltaY: dy, deltaMode: 0 });
+      touchScroll = { x: mx, y: my };
+    }
+    return;
+  }
+  if (!touch) return;
+  var t0 = touchById(e.touches, touch.id);
+  if (!t0) return;
+  var p = touchXY(t0);
+  if (touch.mode === 'pending') {
+    if (Math.abs(p.x - touch.x) <= TOUCH_SLOP &&
+        Math.abs(p.y - touch.y) <= TOUCH_SLOP) return;
+    clearTimeout(touch.timer);
+    touch.mode = 'drag';
+    // Flush the deferred down at the ORIGINAL point — the drag anchors where
+    // the finger first landed, not where it crossed the slop.
+    wmSend({ kind: 'down', x: touch.x, y: touch.y, button: 0, t: touch.t });
+  }
+  if (touch.mode === 'drag') {
+    wmSend({ kind: 'move', x: p.x, y: p.y, buttons: 1 });
+    touch.x = p.x; touch.y = p.y;   // the down is flushed; track for the up
+  }
+  // mode 'menu': swallowed — the long-press already delivered its click
+}, { passive: false });
+function touchEnd(e) {
+  e.preventDefault();
+  if (touchScroll) {
+    if (e.touches.length === 0) touchScroll = null;
+    return;
+  }
+  if (!touch || touchById(e.touches, touch.id)) return;   // our finger still down
+  clearTimeout(touch.timer);
+  var wasCancel = e.type === 'touchcancel';
+  if (touch.mode === 'pending' && !wasCancel) {            // TAP
+    wmSend({ kind: 'down', x: touch.x, y: touch.y, button: 0, t: touch.t });
+    wmSend({ kind: 'up', x: touch.x, y: touch.y, button: 0 });
+  } else if (touch.mode === 'drag') {                      // drop (or bail)
+    wmSend({ kind: 'up', x: touch.x, y: touch.y, button: 0 });
+  }
+  // 'menu' (and a canceled pending) end silently
+  touch = null;
+}
+screen.addEventListener('touchend', touchEnd, { passive: false });
+screen.addEventListener('touchcancel', touchEnd, { passive: false });
+
 screen.addEventListener('keydown', function (e) {
   wmSend({ kind: 'key', down: true, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
   e.preventDefault();
