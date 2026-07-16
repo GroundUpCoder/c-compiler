@@ -29,11 +29,12 @@ BOOL InitCommonControlsEx(const INITCOMMONCONTROLSEX *icc) {
 
 /* ---- status bar ---- */
 
-#define SB_H      20
-#define SB_PARTS  16
+#define SB_VBORDER 2            /* Wine VERT_BORDER: breathing room above+below the wells */
+#define SB_PARTS   16
 
 typedef struct {
     int n;                      /* part count (0 = one implicit part) */
+    int h;                      /* bar height, font-derived (0 = not yet computed) */
     int edges[SB_PARTS];        /* right edges; -1 = to the right border */
     char *text[SB_PARTS];
 } SbarState;
@@ -48,12 +49,36 @@ static char *sb_w2a(LPCWSTR w) {                 /* malloc'd UTF-8 */
     return out;
 }
 
+/* Bar height from the DC's font, the Win95/Wine STATUSBAR_ComputeHeight
+ * formula: tmHeight + max(tmInternalLeading, 2) + 2*SM_CYBORDER, plus the
+ * vertical border — so the well interior fits a whole glyph cell for ANY
+ * stock font (a hardcoded 20 was Win95 MS Sans Serif arithmetic; the 19px
+ * stock cell here sat 3px low with its descenders clipped). Cached in
+ * SbarState; a future WM_SETFONT honors it by zeroing st->h and re-parking. */
+static int sb_height(HWND h, SbarState *st) {
+    if (st && st->h) return st->h;
+    int bar = 20;                                /* fontless fallback */
+    HDC dc = GetDC(h);
+    if (dc) {
+        TEXTMETRIC tm;
+        if (GetTextMetrics(dc, &tm)) {
+            int lead = tm.tmInternalLeading > 2 ? tm.tmInternalLeading : 2;
+            bar = tm.tmHeight + lead + 2 * GetSystemMetrics(SM_CYBORDER)
+                  + SB_VBORDER;
+        }
+        ReleaseDC(h, dc);
+    }
+    if (st) st->h = bar;
+    return bar;
+}
+
 static void sb_park(HWND h) {                    /* bottom of the parent client */
     HWND parent = GetParent(h);
     if (!parent) return;
+    int bh = sb_height(h, (SbarState *)GetWindowLongPtr(h, GWLP_USERDATA));
     RECT pr;
     GetClientRect(parent, &pr);
-    MoveWindow(h, 0, pr.bottom - SB_H, pr.right, SB_H, TRUE);
+    MoveWindow(h, 0, pr.bottom - bh, pr.right, bh, TRUE);
 }
 
 static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -79,13 +104,14 @@ static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         FillRect(dc, &r, GetSysColorBrush(COLOR_BTNFACE));
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        int bh = sb_height(h, st);
         int n = st && st->n ? st->n : 1;
         int left = 0;
         for (int i = 0; i < n; i++) {
             int right = (st && st->n && st->edges[i] >= 0) ? st->edges[i] : r.right;
             if (right > r.right) right = r.right;
             RECT part;
-            SetRect(&part, left, 1, right - 2, SB_H - 1);
+            SetRect(&part, left, 2, right - 2, bh - 2);
             if (part.right > part.left + 2) {
                 /* sunken well edge */
                 HBRUSH sh = GetSysColorBrush(COLOR_BTNSHADOW);
@@ -101,10 +127,15 @@ static LRESULT CALLBACK sbar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 FillRect(dc, &ln, hi);
             }
             const char *t = st && st->text[i] ? st->text[i] : "";
-            /* Clip each part's text to its own cell — a readout wider than
-             * its part (e.g. "Windows (CR + LF)" in a narrow window) must
-             * cut at the border, not bleed into the next part. */
-            ExtTextOut(dc, left + 6, 3, ETO_CLIPPED, &part, t, (int)strlen(t), NULL);
+            /* Center the text in the well and clip it to its own cell — a
+             * readout wider than its part (e.g. "Windows (CR + LF)" in a
+             * narrow window) must cut at the border, not bleed into the
+             * next part (DrawText clips to its rect unless DT_NOCLIP). */
+            RECT tr;
+            SetRect(&tr, part.left + 6, part.top + 1,
+                    part.right - 1, part.bottom - 1);
+            DrawText(dc, t, -1, &tr,
+                     DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
             left = right;
         }
         EndPaint(h, &ps);
@@ -166,9 +197,9 @@ HWND CreateStatusWindowW(LONG style, LPCWSTR text, HWND parent, UINT id) {
     char *t = text ? sb_w2a(text) : NULL;
     HWND h = CreateWindowEx(0, STATUSCLASSNAMEA, t ? t : "",
                             (DWORD)style | WS_CHILD | WS_VISIBLE,
-                            0, 0, 10, SB_H, parent, (HMENU)(UINT_PTR)id,
+                            0, 0, 10, 10, parent, (HMENU)(UINT_PTR)id,
                             NULL, NULL);
     free(t);
-    if (h) sb_park(h);
+    if (h) sb_park(h);                           /* real size: font-derived */
     return h;
 }
