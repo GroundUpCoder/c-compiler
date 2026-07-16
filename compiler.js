@@ -1295,10 +1295,25 @@ function preprocess(filename, initialTokens, ppRegistry) {
   const pad2 = n => n < 10 ? "0" + n : "" + n;
   const timeStr = `"${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}"`;
 
+  // __COUNTER__ (GNU extension): one counter per preprocess run (= per
+  // translation unit, matching gcc), bumped at each expansion.
+  let counterValue = 0;
+
+  function isBuiltinMacro(tok) {
+    return tok.atIdent("__LINE__") || tok.atIdent("__FILE__") ||
+           tok.atIdent("__DATE__") || tok.atIdent("__TIME__") ||
+           tok.atIdent("__COUNTER__");
+  }
+
   function tryExpandBuiltinMacro(tok) {
     if (tok.atIdent("__LINE__")) {
       tok.kind = TokenKind.PP_NUMBER;
       tok.text = intern(String(tok.line));
+      return true;
+    }
+    if (tok.atIdent("__COUNTER__")) {
+      tok.kind = TokenKind.PP_NUMBER;
+      tok.text = intern(String(counterValue++));
       return true;
     }
     if (tok.atIdent("__FILE__")) {
@@ -1317,6 +1332,30 @@ function preprocess(filename, initialTokens, ppRegistry) {
       return true;
     }
     return false;
+  }
+
+  // ONE pragma handler for both spellings: the #pragma directive and the
+  // _Pragma("...") operator (C11 6.10.9 processes the destringized contents
+  // as if they were a #pragma directive). `once` is the only pragma with
+  // semantics here; anything else is silently ignored either way.
+  function applyPragma(toks, currentFile) {
+    if (toks.length > 0 && toks[0].atIdent("once")) {
+      ppRegistry.onceGuards.add(currentFile);
+    }
+  }
+
+  // C11 6.10.9p1 destringize: drop any encoding prefix and the quotes,
+  // then \" -> " and \\ -> \.
+  function destringize(text) {
+    const open = text.indexOf('"');
+    return text.substring(open + 1, text.length - 1).replace(/\\(["\\])/g, "$1");
+  }
+
+  function executePragmaOperator(strTok, currentFile) {
+    const lexed = lex(currentFile, destringize(strTok.text));
+    const toks = lexed.tokens.filter(tk =>
+      tk.kind !== TokenKind.EOS && tk.kind !== TokenKind.NEWLINE);
+    applyPragma(toks, currentFile);
   }
 
   // --- 2. CENTRALIZED EXPANSION HELPER ---
@@ -1348,9 +1387,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
         }
       }
 
-      // Handle __FILE__ / __LINE__ / __DATE__ / __TIME__
-      if (t.atIdent("__LINE__") || t.atIdent("__FILE__") ||
-          t.atIdent("__DATE__") || t.atIdent("__TIME__")) {
+      // Handle __FILE__ / __LINE__ / __DATE__ / __TIME__ / __COUNTER__
+      if (isBuiltinMacro(t)) {
         const tok = cloneToken(t);
         tryExpandBuiltinMacro(tok);
         expanded.push(tok);
@@ -1896,6 +1934,24 @@ function preprocess(filename, initialTokens, ppRegistry) {
       output.push(tok);
     }
 
+    // _Pragma produced by macro expansion still takes effect (C11 6.10.9 —
+    // it operates wherever it appears in the token stream): intercept
+    // `_Pragma ( "..." )` sequences in expansion output instead of emitting.
+    function emitExpandedTokens(toks) {
+      for (let k = 0; k < toks.length; ++k) {
+        const et = toks[k];
+        if (et.atIdent("_Pragma") && k + 3 < toks.length &&
+            toks[k + 1].atPunct(Punct.LPAREN) &&
+            toks[k + 2].kind === TokenKind.STRING &&
+            toks[k + 3].atPunct(Punct.RPAREN)) {
+          executePragmaOperator(toks[k + 2], state.currentFile);
+          k += 3;
+          continue;
+        }
+        emitToken(et);
+      }
+    }
+
     while (!state.atEnd) {
       const t = state.peek();
 
@@ -2110,11 +2166,10 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
             }
           } else if (dir.atIdent("pragma")) {
-            if (!state.atEnd && state.peek().atIdent("once")) {
-              state.consume();
-              ppRegistry.onceGuards.add(state.currentFile);
-            }
-            // Other pragmas silently ignored
+            const lineTokens = [];
+            while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE)
+              lineTokens.push(state.consume());
+            applyPragma(lineTokens, state.currentFile);
           }
           // else: unknown directive (silently ignored, per C standard)
         }
@@ -2126,9 +2181,8 @@ function preprocess(filename, initialTokens, ppRegistry) {
       }
 
       if (isActive()) {
-        // Handle __FILE__ / __LINE__ / __DATE__ / __TIME__
-        if (t.atIdent("__LINE__") || t.atIdent("__FILE__") ||
-            t.atIdent("__DATE__") || t.atIdent("__TIME__")) {
+        // Handle __FILE__ / __LINE__ / __DATE__ / __TIME__ / __COUNTER__
+        if (isBuiltinMacro(t)) {
           let tok = cloneToken(state.consume());
           if (lineOffset) tok.line = tok.line + lineOffset;
           if (fileOverride) tok.filename = fileOverride;
@@ -2142,15 +2196,9 @@ function preprocess(filename, initialTokens, ppRegistry) {
           if (state.peek().atPunct(Punct.LPAREN)) {
             state.consume();
             if (!state.atEnd && state.peek().kind === TokenKind.STRING) {
-              let content = state.consume().text;
-              if (content.length >= 2 && content[0] === '"' && content[content.length - 1] === '"') {
-                content = content.substring(1, content.length - 1);
-              }
+              executePragmaOperator(state.consume(), state.currentFile);
               if (!state.atEnd && state.peek().atPunct(Punct.RPAREN)) {
                 state.consume();
-              }
-              if (content === "once") {
-                ppRegistry.onceGuards.add(state.currentFile);
               }
             }
           }
@@ -2178,7 +2226,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
               const expandedTokens = expand(invocation, new Set());
               rescanTrailingMacros(expandedTokens, state);
-              for (const et of expandedTokens) emitToken(et);
+              emitExpandedTokens(expandedTokens);
             } else {
               emitToken(invocation[0]);
             }
@@ -2187,7 +2235,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             state.consume();
             const expandedTokens = expand([t], new Set());
             rescanTrailingMacros(expandedTokens, state);
-            for (const et of expandedTokens) emitToken(et);
+            emitExpandedTokens(expandedTokens);
           }
         } else if (t.kind !== TokenKind.NEWLINE) {
           emitToken(state.consume());
@@ -29993,6 +30041,7 @@ function createDefaultPPRegistry() {
     "__MTOTS__": "1",
     "__STDC__": "1",
     "__STDC_VERSION__": "201112L",
+    "__STDC_HOSTED__": "1",
     "__STDC_NO_ATOMICS__": "1",
     "__STDC_NO_COMPLEX__": "1",
     "__STDC_NO_THREADS__": "1",
