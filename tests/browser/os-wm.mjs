@@ -307,12 +307,15 @@ try {
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
   for (let i = 0; i < 2; i++) await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');            // commit + dismiss
-  await waitPixel(CX + 240, CY + 116, GREEN, 30000);    // window extended right
   // C's old corner is NOT teal when exposed — B (orange, net-zero chord
   // toggles) sits underneath it; C's green fill vacating to B's orange is
-  // the move proof.
-  check('keyboard Move relocated C (+40,+16)',
-    near(await sample(CX + 5, CY + 5), ORANGE), await sample(CX + 5, CY + 5));
+  // the move proof. It must be a marker WAIT, not an instant sample: the
+  // old "window extended right" waitPixel (CX+240, CY+116) sat inside C's
+  // PRE-move footprint too, so it passed before the move composited and
+  // the instant corner sample raced the frame (33% flake under --repeat).
+  await waitPixel(CX + 5, CY + 5, ORANGE, 30000,
+    "C's old corner vacated to B's orange — the move composited");
+  check('keyboard Move relocated C (+40,+16)', true);
   // Re-open and Close via the menu (C moved to CX+40,CY+16): Down x6 -> CLOSE.
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
