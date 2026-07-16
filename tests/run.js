@@ -106,6 +106,10 @@ const RULES = [
   // sweep is what proves that seam still boots and types.
   [/^tools\/os-drive/, ['sweep'], 'drives os.html via tests/browser/lib/os-harness.mjs'],
 
+  // The .res compiler (0068): its output packs feed the win32 apps' menus/
+  // dialogs/strings — the kernel win32 e2es are what consume them.
+  [/^tools\/win32rc\.js$/, ['kernel'], 'compiles the win32 .res sidecar packs'],
+
   // Test trees map to their own suite.
   [/^tests\/unit\//, ['unit'], null],
   [/^tests\/run-unit\.js$/, ['unit'], null],
