@@ -121,6 +121,16 @@ function createFileSystem({ fs, ctx }) {
     return nodeFlags;
   }
 
+  /* Wake readers parked on an empty pipe (the pipe-aware read patch at
+     the bottom of this function): called whenever bytes arrive or an
+     end's last duplicate closes. */
+  function pipeWake(pipe) {
+    if (!pipe.waiters || pipe.waiters.length === 0) return;
+    const ws = pipe.waiters;
+    pipe.waiters = [];
+    for (const w of ws) w();
+  }
+
   /* Directory handle table for opendir/readdir/closedir */
   const dirTable = [];
   const dirEncoder = new TextEncoder();
@@ -629,7 +639,7 @@ function createFileSystem({ fs, ctx }) {
            reference-counted so a dup'd end closes only when the LAST
            duplicate is closed. */
         const pipe = { buffer: [], closed: { read: false, write: false },
-                       refs: { read: 1, write: 1 } };
+                       refs: { read: 1, write: 1 }, waiters: [] };
         const readFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null });
         const writeFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'write', position: null });
         const memory = getMemory();
@@ -693,7 +703,10 @@ function createFileSystem({ fs, ctx }) {
         if (newfd < fdTable.length && fdTable[newfd]) {
           const entry = fdTable[newfd];
           if (entry.type === 'pipe') {
-            if (--entry.pipe.refs[entry.pipeEnd] <= 0) entry.pipe.closed[entry.pipeEnd] = true;
+            if (--entry.pipe.refs[entry.pipeEnd] <= 0) {
+              entry.pipe.closed[entry.pipeEnd] = true;
+              pipeWake(entry.pipe);
+            }
           } else if (entry.nativeFd !== undefined
                      && !(entry.isStdin || entry.isStdout || entry.isStderr)) {
             if (entry.refs && entry.refs > 1) entry.refs--;
@@ -883,9 +896,13 @@ function createFileSystem({ fs, ctx }) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
       const entry = fdTable[fd];
       const pipe = entry.pipe;
-      if (pipe.buffer.length === 0) {
-        if (pipe.closed.write) return 0; /* EOF */
-        return 0; /* No data available (non-blocking for now) */
+      while (pipe.buffer.length === 0) {
+        if (pipe.closed.write) return 0; /* EOF: writers gone, buffer drained */
+        /* Writer still open: BLOCK until data arrives or the write end
+           closes (the readImpl stdin pattern — pipeWake resolves us).
+           Returning 0 here was a spurious EOF: a reader racing its
+           writer silently truncated the stream (the 0171 bug class). */
+        await new Promise(resolve => { pipe.waiters.push(resolve); });
       }
       const n = Math.min(count, pipe.buffer.length);
       const memory = getMemory();
@@ -905,6 +922,7 @@ function createFileSystem({ fs, ctx }) {
       const memory = getMemory();
       const src = new Uint8Array(memory.buffer, buf_ptr, count);
       for (let i = 0; i < count; i++) pipe.buffer.push(src[i]);
+      pipeWake(pipe);
       return count;
     }
     return origWrite(fd, buf_ptr, count);
@@ -916,6 +934,7 @@ function createFileSystem({ fs, ctx }) {
       /* Per-end refcount: the end closes when its LAST duplicate goes. */
       if (--entry.pipe.refs[entry.pipeEnd] <= 0) {
         entry.pipe.closed[entry.pipeEnd] = true;
+        pipeWake(entry.pipe); /* parked readers must see EOF, not hang */
       }
       fdTable[fd] = null;
       return 0;
