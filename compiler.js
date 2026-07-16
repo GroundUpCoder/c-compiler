@@ -2477,6 +2477,14 @@ class TypeInfo {
   // dispatch to `getOrCreateGCWasmTypeIdx`.
   isWasmGCType() { return false; }
 
+  // The value of the sizeof OPERATOR applied to this type (todos/0227 G21):
+  // void and function types yield 1 — the GNU extension, matching the
+  // void*-arithmetic stride-1 choice — while `.size` stays 0 for them
+  // because layout math relies on that. Incomplete types are a constraint
+  // violation diagnosed in the parser before any reader gets here; a
+  // COMPLETE zero-size type (GNU empty struct) genuinely yields 0.
+  sizeofResult() { return this.isVoid() || this.isFunction() ? 1 : this.size; }
+
   // ------------- Qualifiers ---------------------------------------------
   // Per-subclass clone — used by toggleConst/toggleVolatile to construct a
   // sibling with flipped qualifier. Each subclass implements this so the
@@ -5337,8 +5345,8 @@ function constEvalItem(expr) {
       if (c === null) return null;
       return constEvalItem(ConstEval.isTruthy(c) ? expr.thenExpr : expr.elseExpr);
     }
-    case AST.ESizeofExpr: return new ConstEval.Item(BigInt(expr.expr.type.size), Types.TUINT);
-    case AST.ESizeofType: return new ConstEval.Item(BigInt(expr.operandType.size), Types.TUINT);
+    case AST.ESizeofExpr: return new ConstEval.Item(BigInt(expr.expr.type.sizeofResult()), Types.TUINT);
+    case AST.ESizeofType: return new ConstEval.Item(BigInt(expr.operandType.sizeofResult()), Types.TUINT);
     case AST.EAlignofExpr: return new ConstEval.Item(BigInt(expr.expr.type.align), Types.TUINT);
     case AST.EAlignofType: return new ConstEval.Item(BigInt(expr.operandType.align), Types.TUINT);
     default: return null;
@@ -9776,6 +9784,16 @@ class Parser {
   recoverableError(tok, msg) { reportError(Lexer.Loc.fromTok(tok), msg); }
   warning(tok, msg) { reportWarning(Lexer.Loc.fromTok(tok), msg); }
 
+  // C11 6.5.3.4p1 constraint: sizeof shall not be applied to an incomplete
+  // type (todos/0227 G21). void and function types pass — GNU accepts them
+  // with result 1 (TypeInfo.sizeofResult). Divergent operands come from a
+  // prior recovered error; don't cascade a second diagnostic onto them.
+  checkSizeofOperand(tok, type) {
+    const uq = type.removeQualifiers();
+    if (uq.isVoid() || uq.isFunction() || uq.isDivergent() || uq.isComplete) return;
+    this.recoverableError(tok, `invalid application of 'sizeof' to an incomplete type '${uq.toString()}'`);
+  }
+
   // --- isTypeName ---
   isTypeName() {
     const t = this.peek();
@@ -10903,8 +10921,10 @@ class Parser {
               initList = normalizeInitList(initList, litType);
             }
             const lit = new AST.ECompoundLiteral(sizeofLoc, litType, initList);
+            this.checkSizeofOperand(t, lit.type);
             return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, lit);
           }
+          this.checkSizeofOperand(t, sType);
           return new AST.ESizeofType(sizeofLoc, Types.TULONG, sType);
         }
         let expr = this.parseExpression();
@@ -10913,9 +10933,11 @@ class Parser {
         // operators keep binding to the parenthesized expression:
         // sizeof(a)[0] is sizeof((a)[0]), not (sizeof(a))[0].
         expr = this.parsePostfixTail(expr);
+        this.checkSizeofOperand(t, expr.type);
         return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
       }
       const expr = this.parseUnaryExpression();
+      this.checkSizeofOperand(t, expr.type);
       return new AST.ESizeofExpr(sizeofLoc, Types.TULONG, expr);
     }
 
@@ -16404,8 +16426,8 @@ function constEvalExpr(expr, policy) {
       }
       return v;
     }
-    case AST.ESizeofExpr: return { kind: "int", intVal: BigInt(expr.expr.type.size) };
-    case AST.ESizeofType: return { kind: "int", intVal: BigInt(expr.operandType.size) };
+    case AST.ESizeofExpr: return { kind: "int", intVal: BigInt(expr.expr.type.sizeofResult()) };
+    case AST.ESizeofType: return { kind: "int", intVal: BigInt(expr.operandType.sizeofResult()) };
     case AST.EAlignofExpr: return { kind: "int", intVal: BigInt(expr.expr.type.align) };
     case AST.EAlignofType: return { kind: "int", intVal: BigInt(expr.operandType.align) };
     case AST.ECompoundLiteral: {
@@ -19249,9 +19271,9 @@ class CodeGenerator {
         break;
       }
       case AST.ESizeofExpr:
-        this.body.i32Const(this.sizeOf(expr.expr.type)); break;
+        this.body.i32Const(expr.expr.type.sizeofResult()); break;
       case AST.ESizeofType:
-        this.body.i32Const(this.sizeOf(expr.operandType)); break;
+        this.body.i32Const(expr.operandType.sizeofResult()); break;
       case AST.EAlignofExpr:
         this.body.i32Const(this.alignOf(expr.expr.type)); break;
       case AST.EAlignofType:
