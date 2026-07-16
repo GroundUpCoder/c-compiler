@@ -1929,6 +1929,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
           }
           const parentActive = isActive();
           ifStack.push({ active: parentActive && condition, anyBranchRan: condition,
+                         sawElse: false,
                          dirName: "#" + dir.text, file: state.currentFile, line: dir.line });
         } else if (dir.atIdent("elif")) {
           if (ifStack.length === 0) {
@@ -1939,6 +1940,12 @@ function preprocess(filename, initialTokens, ppRegistry) {
               lineTokens.push(state.consume());
             }
             const top = ifStack[ifStack.length - 1];
+            // The grammar (C11 6.10.1) puts every elif-group BEFORE the
+            // else-group — an #elif after #else is ill-formed even inside a
+            // skipped enclosing group (clang/gcc diagnose it there too).
+            if (top.sawElse) {
+              result.errors.push(new LexError("#elif after #else", state.currentFile, dir.line));
+            }
             const parentActive = ifStack.length > 1 ? ifStack[ifStack.length - 2].active : true;
             // Evaluate only when this #elif can actually select a branch:
             // an earlier branch already taken (or a skipped enclosing group)
@@ -1957,6 +1964,10 @@ function preprocess(filename, initialTokens, ppRegistry) {
             result.errors.push(new LexError("#else without #if", state.currentFile, dir.line));
           } else {
             const top = ifStack[ifStack.length - 1];
+            if (top.sawElse) {
+              result.errors.push(new LexError("#else after #else", state.currentFile, dir.line));
+            }
+            top.sawElse = true;
             const parentActive = ifStack.length > 1 ? ifStack[ifStack.length - 2].active : true;
             top.active = parentActive && !top.anyBranchRan;
             top.anyBranchRan = true;
