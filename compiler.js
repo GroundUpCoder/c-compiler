@@ -7286,7 +7286,10 @@ function buildSegments(body, tryCtx) {
       const regionId = tryCtx.regions.length;
       const joinId = allocId();
       const catchInfos = node.catches.map(cc => {
-        tryCtx.tags.set(cc.tag.name, cc.tag);
+        // A tag-less clause (catch-all) has no tag to key by — it gets
+        // its own physical catch_all_ref dispatcher in the wrapper.
+        if (cc.tag) tryCtx.tags.set(cc.tag.name, cc.tag);
+        else tryCtx.hasCatchAll = true;
         return {
           tag: cc.tag,
           userBindingVars: cc.bindingVars || [],
@@ -7353,7 +7356,12 @@ function findDispatchEntry(regionId, tag, regions) {
   while (id >= 0) {
     const r = regions[id];
     for (const ci of r.catches) {
-      if (ci.tag === tag) return ci;
+      // A tag-less catch (catch-all) matches ANY tag. Within a region a
+      // specific catch wins by clause order — catch-all is constrained
+      // to be last. `tag === null` (the physical catch_all_ref
+      // dispatcher asking for an unknown-tag exception's handler) only
+      // matches a catch-all.
+      if (ci.tag === tag || ci.tag === null) return ci;
     }
     id = r.parentId;
   }
@@ -7374,8 +7382,13 @@ function findDispatchEntry(regionId, tag, regions) {
 // After the catch body falls off, the while loop iterates and the
 // switch re-enters at the new state (whose case prefix stamps a new
 // handler id — typically the dispatched-to handler's parent region).
+// `tag === null` builds the catch-all dispatcher: a physical
+// catch_all_ref clause (no payload bindings — the C-level catch-all has
+// none) whose else arm re-raises the captured exnref via throw_ref, so
+// an exception no active region handles propagates with tag and payload
+// intact.
 function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
-  const paramTypes = tag.paramTypes || [];
+  const paramTypes = (tag && tag.paramTypes) || [];
   const tempBindings = paramTypes.map((t, idx) => {
     const dv = new AST.DVar(loc,
       Lexer.intern(`__irreducible_caught_${idx}`),
@@ -7421,6 +7434,10 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
     tag,
     bindings: tempBindingNames,
     bindingVars: tempBindings,
+    // Codegen lowers this clause as catch_all_ref (capturing the
+    // in-flight exception as an exnref) so the SThrow(null) rethrow in
+    // the else arm can throw_ref it.
+    catchAllRethrow: tag === null,
     body: new AST.SCompound(loc, [chain]),
   };
 }
@@ -7608,6 +7625,13 @@ function synthesizeWrapper(funcDef, hoistedDecls, segments, tryCtx) {
   if (haveRegions) {
     const tagsList = [...tryCtx.tags.values()];
     const physicalCatches = tagsList.map(tag => makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState));
+    // Catch-all last: try_table matches clauses in order, so tagged
+    // exceptions dispatch through their own clause (which itself routes
+    // to a region's catch-all when that's the innermost handler) and
+    // only unknown tags — thrown by callees — reach the catch_all_ref.
+    if (tryCtx.hasCatchAll) {
+      physicalCatches.push(makeDispatcherCatch(null, tryCtx, loc, handlerVar, setState));
+    }
     switchOrTry = new AST.STryCatch(loc, switchStmt, physicalCatches);
   }
 
@@ -7650,6 +7674,7 @@ function lower(funcDef, dumpSegments) {
     regionStack: [],      // segmentizer-time stack of active region ids
     segmentHandlerIds: new Map(),  // segmentId → innermost regionId (-1 if none)
     tags: new Map(),      // distinct tags appearing in any catch (by name)
+    hasCatchAll: false,   // any tag-less (catch-all) clause in the function
   };
 
   const { decls, rewrittenBody } = hoistDeclarations(funcDef);
@@ -13738,6 +13763,11 @@ const WT_F64 = { tag: "num", num: WasmNumType.F64 };
 const WT_EXTERNREF = { tag: "ref", nullable: true, heap: 0x6F, heapIsIdx: false };
 const WT_REFEXTERN = { tag: "ref", nullable: false, heap: 0x6F, heapIsIdx: false };
 const WT_EQREF = { tag: "ref", nullable: true, heap: 0x6D, heapIsIdx: false };
+// exnref (wasm EH proposal, same one as try_table): the in-flight
+// exception captured by a catch_all_ref clause, re-raisable via
+// throw_ref. Only the irreducible try-lowering's catch-all dispatcher
+// uses it; it never surfaces as a C type.
+const WT_EXNREF = { tag: "ref", nullable: true, heap: 0x69, heapIsIdx: false };
 const WT_EMPTY = { tag: "empty" };
 
 // GC ref to a defined struct/array type. heap = type index (positive integer).
@@ -13969,6 +13999,7 @@ class WasmCode {
 
   // Exception handling
   throw_(tagIdx) { this.push(0x08); lebU(this.bytes, tagIdx); }
+  throwRef() { this.push(0x0A); }
   tryTable(blockType, catches) {
     this.push(0x1F);
     wtEmit(blockType, this.bytes);
@@ -14061,6 +14092,7 @@ class WDrop { }
 class WNop { }
 class WUnreachable { }
 class WThrow { constructor(tagIdx) { this.tagIdx = tagIdx; } }
+class WThrowRef { }
 // Reference-type long tail. kind selects the encoding (they mix raw-byte,
 // signed-LEB and 0xFB-prefixed forms, so they can't share WGCOp's shape):
 // "null" | "nullIdx" | "isNull" | "eq" | "test" | "testNull" | "cast" |
@@ -14172,6 +14204,7 @@ class WastBuilder {
   // context OUTSIDE the try_table (codegen computes them before the
   // try_table's own label exists), so resolve first, then open the label.
   throw_(tagIdx) { this._append(new WThrow(tagIdx)); }
+  throwRef() { this._append(new WThrowRef()); }
   tryTable(blockType, catches) {
     const resolved = catches.map(([kind, tagIdx, labelIdx]) =>
       ({ kind, tagIdx, target: this._resolveDepth(labelIdx, "tryTable catch") }));
@@ -14301,6 +14334,7 @@ function serialize(fnNodes, out, opts) {
         stack.push(n);
         break;
       case WThrow: out.push(0x08); lebU(out, n.tagIdx); break;
+      case WThrowRef: out.push(0x0A); break;
       case WUnreachable: out.push(0x00); break;
       case WNop: out.push(0x01); break;
       case WDrop: out.push(0x1A); break;
@@ -14737,7 +14771,7 @@ function inlineFunctions(wmod, optsIn) {
     for (const n of def.wast) {
       if (n instanceof WSrcLoc) continue;
       real++;
-      if (n instanceof WTryTable || n instanceof WThrow) eh = true;
+      if (n instanceof WTryTable || n instanceof WThrow || n instanceof WThrowRef) eh = true;
       else if (n instanceof WRaw) raw = true;
     }
     s = { wast: def.wast, real, eh, raw };
@@ -15015,7 +15049,7 @@ const lastPassStats = { offsetFolds: 0, inline: null, shake: null };
 return {
   // Relocated target-side tables and encoders (consumed by Codegen)
   WasmNumType, WT_I32, WT_I64, WT_F32, WT_F64, WT_EXTERNREF, WT_REFEXTERN,
-  WT_EQREF, WT_EMPTY, WT_GCREF,
+  WT_EQREF, WT_EXNREF, WT_EMPTY, WT_GCREF,
   wtIsNum, wtIsRef, wtIsIntegral, wtIsFloating, wtEmit, wtEquals,
   MOP, ALU, getaop, appendF32, appendF64,
   WasmCode,
@@ -15026,7 +15060,7 @@ return {
   WBlock, WLoop, WIf, WElse, WEnd, WTryTable, WBr, WBrIf, WBrTable,
   WReturn, WCall, WCallIndirect, WConst, WLocalGet, WLocalSet, WLocalTee,
   WGlobalGet, WGlobalSet, WAop, WMop, WTruncSat, WMemorySize, WMemoryGrow,
-  WMemoryCopy, WMemoryFill, WDrop, WNop, WUnreachable, WThrow, WRefOp,
+  WMemoryCopy, WMemoryFill, WDrop, WNop, WUnreachable, WThrow, WThrowRef, WRefOp,
   WGCOp, WRaw, WSrcLoc,
 };
 
@@ -15043,7 +15077,7 @@ const Codegen = (() => {
 // Codegen consumes them unchanged.
 const {
   WasmNumType, WT_I32, WT_I64, WT_F32, WT_F64, WT_EXTERNREF, WT_REFEXTERN,
-  WT_EQREF, WT_EMPTY, WT_GCREF, wtIsNum, wtIsRef, wtIsIntegral,
+  WT_EQREF, WT_EXNREF, WT_EMPTY, WT_GCREF, wtIsNum, wtIsRef, wtIsIntegral,
   wtIsFloating, wtEmit, wtEquals, MOP, ALU, getaop, appendF32, appendF64,
   WasmCode, WastBuilder,
 } = WAST;
@@ -17686,6 +17720,18 @@ class CodeGenerator {
       case AST.SCase: break;  // dispatch marker, handled in SSwitch
       case AST.SEmpty: break;
       case AST.SThrow: {
+        if (!stmt.tag) {
+          // Tag-less rethrow, synthesized only by the irreducible
+          // catch-all dispatcher: re-raise the exnref captured by the
+          // enclosing catch_all_ref clause.
+          if (this._catchAllExnrefLocal === undefined) {
+            throw new Error("internal: tag-less SThrow outside a catch_all_ref clause");
+          }
+          this.body.localGet(this._catchAllExnrefLocal);
+          this.body.throwRef();
+          this.body.unreachable();
+          break;
+        }
         const tagIdx = this.exceptionToWasmTagIdx.get(stmt.tag);
         for (let i = 0; i < stmt.args.length; i++) this.emitExpr(stmt.args[i]);
         this.body.throw_(tagIdx);
@@ -17703,7 +17749,8 @@ class CodeGenerator {
         const catchBlockDepths = [];
         for (let i = numCatches - 1; i >= 0; i--) {
           const cc = tc.catches[i];
-          if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
+          if (cc.catchAllRethrow) this.body.block(WT_EXNREF);
+          else if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
           else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0], this.wmod));
           else {
             // Multi-value catch payload: block type = function-type index
@@ -17720,7 +17767,8 @@ class CodeGenerator {
         for (let i = 0; i < numCatches; i++) {
           const cc = tc.catches[i];
           const labelIdx = this.blockDepth - catchBlockDepths[i];
-          if (!cc.tag) catches.push([0x02, 0, labelIdx]);
+          if (cc.catchAllRethrow) catches.push([0x03, 0, labelIdx]);       // catch_all_ref
+          else if (!cc.tag) catches.push([0x02, 0, labelIdx]);             // catch_all
           else catches.push([0x00, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
         }
         this.body.tryTable(WT_EMPTY, catches);
@@ -17732,6 +17780,16 @@ class CodeGenerator {
           this.blockDepth--; this.body.end();
           const cc = tc.catches[i];
           this.pushLocalScope();
+          let savedExnrefLocal;
+          if (cc.catchAllRethrow) {
+            // catch_all_ref delivered the in-flight exception as an
+            // exnref on the stack — but BEFORE the stack-pointer
+            // restore below can run, so capture it first.
+            const exnLocal = this.allocLocal(WT_EXNREF);
+            this.body.localSet(exnLocal);
+            savedExnrefLocal = this._catchAllExnrefLocal;
+            this._catchAllExnrefLocal = exnLocal;
+          }
           this.body.localGet(savedSpLocal);
           this.body.globalSet(this.stackPointerGlobalIdx);
           if (cc.tag && cc.tag.paramTypes.length > 0) {
@@ -17745,6 +17803,7 @@ class CodeGenerator {
             for (let j = bindLocals.length - 1; j >= 0; j--) this.body.localSet(bindLocals[j]);
           }
           this.emitStmt(cc.body);
+          if (cc.catchAllRethrow) this._catchAllExnrefLocal = savedExnrefLocal;
           this.popLocalScope();
           if (i + 1 < numCatches) this.body.br(this.blockDepth - endDepth);
         }
