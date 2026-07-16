@@ -4637,6 +4637,22 @@ function makeBinary(loc, op, left, right) {
   if (lIsRef && meta.isAssign && op !== "ASSIGN") {
     fatalError(loc, `'${opText}' on reference type is not allowed`);
   }
+  // C11 6.5.16p2: assignment requires a modifiable lvalue on the left.
+  // Non-lvalues (`5 = 3`, `f() = x`, `(int)x = 5`) used to fall through
+  // to codegen and die in emitLValue's internal throw — diagnose here.
+  // Array/function-typed lvalues are never modifiable (6.3.2.1p1).
+  if (meta.isAssign) {
+    if (!isLvalueExpr(left)) {
+      reportError(loc, `expression is not assignable`);
+      return new EBinary(loc, Types.TDIVERGENT, op, left, right);
+    }
+    const lu = left.type.removeQualifiers();
+    if (lu.isArray() || lu.isFunction()) {
+      reportError(loc,
+        `${lu.isArray() ? "array" : "function"} type '${left.type.toString()}' is not assignable`);
+      return new EBinary(loc, Types.TDIVERGENT, op, left, right);
+    }
+  }
   // Decay array/function operands. ASSIGN/compound's left is the lvalue
   // target — never decayed. ASSIGN's right decays only if the left is a
   // pointer (so `p = arr` works).
@@ -4702,6 +4718,29 @@ function makeBinary(loc, op, left, right) {
   return new EBinary(loc, resType, op, left, right);
 }
 
+// C11 6.3.2.1p1: lvalue-ness is structural — an identifier bound to an
+// object, a member/subscript/deref access, a string literal, or a
+// compound literal (6.5.2.5p4: a compound literal IS an lvalue). This
+// mirrors exactly the shapes codegen's emitLValue can address; anything
+// else is an rvalue and must be rejected in sema, not crash codegen.
+// `.member` propagates the base's lvalue-ness (`f().m` is NOT an
+// lvalue) — except a GC-struct base, where field access is
+// reference-like and assignable through any ref-valued expression.
+function isLvalueExpr(e) {
+  if (e instanceof EIdent) return !!(e.decl && e.decl instanceof DVar);
+  if (e instanceof EMember) {
+    const bt = e.base.type && e.base.type.removeQualifiers();
+    if (bt && bt.isGCStruct()) return true;
+    return isLvalueExpr(e.base);
+  }
+  if (e instanceof EArrow) return true;
+  if (e instanceof ESubscript) return true;
+  if (e instanceof EUnary && e.op === "OP_DEREF") return true;
+  if (e instanceof ECompoundLiteral) return true;
+  if (e instanceof EString) return true;
+  return false;
+}
+
 // Mark `expr` as having its address taken — promotes the underlying
 // DVar from REGISTER to MEMORY allocation. Walks through EMember and
 // (for array elements) ESubscript to find the root storage.
@@ -4729,12 +4768,21 @@ function markAddressTaken(expr) {
 //   OP_LNOT: ref allowed (boolean coercion sugar = __ref_is_null)
 function makeUnary(loc, op, operand) {
   const isRef = operand.type && operand.type.removeQualifiers().isRef();
+  // C11 6.5.3.1p1 / 6.5.2.4p1: ++/-- require a modifiable lvalue.
+  const checkIncDecOperand = (what) => {
+    const u = operand.type && operand.type.removeQualifiers();
+    if (!isLvalueExpr(operand) || (u && (u.isArray() || u.isFunction()))) {
+      reportError(loc, `lvalue required as ${what} operand`);
+    }
+  };
   switch (op) {
     case "OP_PRE_INC": case "OP_POST_INC":
       if (isRef) fatalError(loc, `'++' on reference type is not allowed`);
+      checkIncDecOperand("increment");
       break;
     case "OP_PRE_DEC": case "OP_POST_DEC":
       if (isRef) fatalError(loc, `'--' on reference type is not allowed`);
+      checkIncDecOperand("decrement");
       break;
     case "OP_ADDR":
       if ((operand instanceof EMember || operand instanceof EArrow) &&
@@ -4751,6 +4799,11 @@ function makeUnary(loc, op, operand) {
       if (operand instanceof ESubscript && operand.array && operand.array.type &&
           operand.array.type.removeQualifiers().isGCArray()) {
         fatalError(loc, `cannot take address of GC array element`);
+      }
+      // C11 6.5.3.2p1: `&` requires an lvalue or a function designator.
+      if (!isLvalueExpr(operand) &&
+          !(operand.type && operand.type.removeQualifiers().isFunction())) {
+        reportError(loc, `lvalue required as unary '&' operand`);
       }
       markAddressTaken(operand);
       break;
@@ -18160,7 +18213,24 @@ class CodeGenerator {
       this.body.localSet(lv.savedLocal);
       return lv;
     }
-    throw new Error(`emitLValue: unsupported expression ${expr.constructor.name}`);
+    if (expr instanceof AST.ECompoundLiteral) {
+      // C11 6.5.2.5p4: a compound literal IS an lvalue. Its backing
+      // storage is the same slot emitAddressOf uses — a static
+      // allocation at file scope, a frame slot at block scope.
+      // Materialize the initializer into the slot, then hand back the
+      // slot's address; `&`, assignment and ++/-- all flow through the
+      // normal lvalue paths from here.
+      const fsAddr = this.fileScopeCompoundLiteralAddrs.get(expr);
+      if (fsAddr !== undefined) {
+        return { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_STATIC, addrImmediate: fsAddr };
+      }
+      this.emitCompoundLiteralInit(expr);
+      return { kind: LV_MEMORY, type: expr.type, addrSource: LV_ADDR_FRAME, addrImmediate: this.compoundLiteralOffsets.get(expr) };
+    }
+    // Sema's lvalue checks (makeBinary/makeUnary) reject every non-lvalue
+    // before codegen — reaching here is a compiler invariant violation,
+    // not a user error.
+    throw new Error(`internal: emitLValue on non-lvalue expression ${expr.constructor.name} (sema should have rejected this)`);
   }
 
   lvaluePush(lv) {
