@@ -119,6 +119,23 @@ var KP_VD_SCREEN_W = (KP_SIZE >> 2) - 9;
 var KP_VD_SCREEN_H = (KP_SIZE >> 2) - 8;
 var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 64;   // payload stops short of the
                                    // 16 tail words (vDSO block + vsync words)
+/* Bulk-lane chunk sizes — DERIVED from KP_PAYLOAD_CAP, never restated
+ * (todos/0235). Byte-stream RPCs move at most one payload per round trip;
+ * each lane reserves framing headroom under the cap and rounds down to its
+ * historical granule, so a future page-size change reaches every chunking
+ * site from this one line:
+ *  - KP_FS_CHUNK — RemoteFS read/write (FS_WRITE frames a 4-byte fd;
+ *    granule 10000 → 60000 today). The pty ONLCR whole-or-block proof
+ *    asserts against it at PTY_OUT_CAP below.
+ *  - KP_HOOK_CHUNK — the host.js-owned clipboard/http staging lanes
+ *    (frame headers ≤ 12 bytes; granule 16K → 49152 today). Published
+ *    across the process boundary as spawnHooks().payloadChunk, so host.js
+ *    never restates the kernel-page layout. */
+var KP_FS_CHUNK = Math.floor((KP_PAYLOAD_CAP - 4) / 10000) * 10000;
+var KP_HOOK_CHUNK = Math.floor((KP_PAYLOAD_CAP - 16) / 16384) * 16384;
+if (KP_FS_CHUNK < 4096 || KP_HOOK_CHUNK < 4096) {
+  throw new Error('kernel page too small for the bulk-lane chunk derivations');
+}
 
 var RPC_IDLE = 0, RPC_REQUEST = 1, RPC_DONE = 2;
 var KF_STOP = 1;                   // KP_FLAGS bit0: park at the next safe point
@@ -462,10 +479,15 @@ function traceResult(resp, rawBytes) {
 
 /* Ptys (todos/0020): the slave→master output direction. Sized so a whole
  * worst-case slave write always fits EVENTUALLY: RemoteFS caps writes at
- * 60000 bytes and OPOST/ONLCR at most doubles them (120000 < cap), so the
+ * KP_FS_CHUNK bytes and OPOST/ONLCR at most doubles them, so the
  * whole-or-block discipline (a \r\n must never split across a full buffer)
- * can always be satisfied by a draining master. */
+ * can always be satisfied by a draining master. The proof is enforced, not
+ * prose (todos/0235): a page-layout change that grows KP_FS_CHUNK past the
+ * margin fails loud at load instead of silently rotting the discipline. */
 var PTY_OUT_CAP = 256 * 1024;
+if (KP_FS_CHUNK * 2 > PTY_OUT_CAP) {
+  throw new Error('PTY_OUT_CAP must hold one ONLCR-doubled RemoteFS write chunk (2*KP_FS_CHUNK)');
+}
 
 /* AF_UNIX sockets (todos/0008): a connection is two pipe-shaped directions
  * (same fields, same waiter queues), so the entire blocking/EOF/EPIPE/
@@ -1174,6 +1196,10 @@ KernelClient.prototype.spawnHooks = function () {
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
     // System clipboard (todos/0090): one kernel slot; host.js owns the
     // chunking (payloads pre-framed per the OP table's RAW layouts).
+    // payloadChunk is the max chunk for those staging lanes (clipboard +
+    // http body) — derived kernel-side from KP_PAYLOAD_CAP (todos/0235)
+    // so host.js never restates the kernel-page layout.
+    payloadChunk: KP_HOOK_CHUNK,
     clipSet: function (bytes) { return self.callRaw(OP.CLIP_SET, bytes); },
     clipGet: function (fmt, off) { return self.call(OP.CLIP_GET, { fmt: fmt, off: off }); },
     // HTTP transport (todos/0172): host.js's createHttp drives these; the
@@ -6215,7 +6241,7 @@ RemoteFS.prototype.read = function (fd, buf, count) {
   }
   // Interruptible: a tty read defers kernel-side; a posted signal turns it
   // into EINTR (regular files respond immediately, so it never fires).
-  var r = this._c.call(OP.FS_READ, { fd: fd, count: Math.min(count, 60000) }, true);
+  var r = this._c.call(OP.FS_READ, { fd: fd, count: Math.min(count, KP_FS_CHUNK) }, true);
   if (r.errno) return this._setErr(r.errno);
   if (!r.raw) return this._setErr('EIO');
   buf.set(r.raw);
@@ -6252,7 +6278,7 @@ RemoteFS.prototype.write = function (fd, buf, count) {
       return wn;
     }
   }
-  var n = Math.min(count, 60000);
+  var n = Math.min(count, KP_FS_CHUNK);
   var payload = new Uint8Array(4 + n);
   payload[0] = fd & 0xff; payload[1] = (fd >> 8) & 0xff;
   payload[2] = (fd >> 16) & 0xff; payload[3] = (fd >> 24) & 0xff;
@@ -7126,6 +7152,8 @@ var KERNEL_EXPORTS = {
   KP_VSYNC_ARMED: KP_VSYNC_ARMED,
   KP_COMP_PARKED: KP_COMP_PARKED,
   KP_PAYLOAD_CAP: KP_PAYLOAD_CAP,
+  KP_FS_CHUNK: KP_FS_CHUNK,       // bulk-lane chunks, derived (todos/0235)
+  KP_HOOK_CHUNK: KP_HOOK_CHUNK,
   // vDSO block (todos/0179) — seqlock-published kernel state.
   KP_VD_SEQ: KP_VD_SEQ, KP_VD_PID: KP_VD_PID, KP_VD_PPID: KP_VD_PPID,
   KP_VD_PGID: KP_VD_PGID, KP_VD_SID: KP_VD_SID,

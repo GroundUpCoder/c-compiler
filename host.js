@@ -5575,6 +5575,22 @@ function createNullSpawn(ctx) {
   } };
 }
 
+/* Bulk chunk for the hook-framed RAW staging lanes (clipboard __clip_set,
+   http request bodies). The kernel owns its page layout, so the value is
+   derived THERE (kernel.js KP_HOOK_CHUNK, from KP_PAYLOAD_CAP) and rides the
+   spawnHooks seam as hooks.payloadChunk — host.js deliberately does not
+   restate the kernel-page layout (todos/0235). Only consulted when a kernel
+   lane is actually live, and then the field is REQUIRED: kernel.js and
+   host.js ship from one tree, so a missing field is version skew — fail
+   loud rather than chunk on a stale guess. */
+function hookPayloadChunk(hooks) {
+  const n = hooks && hooks.payloadChunk;
+  if (!(n > 0)) {
+    throw new Error('spawnHooks.payloadChunk missing — kernel.js/host.js out of sync (todos/0235)');
+  }
+  return n | 0;
+}
+
 /* ---- System clipboard (todos/0090) ----
    __clip_set(fmt, ptr, len) / __clip_get(fmt, ptr, cap): the C-visible
    primitives under SDL_SetClipboardText/SDL_GetClipboardText (__SDL.c) and
@@ -5587,9 +5603,9 @@ function createNullSpawn(ctx) {
    most cap bytes) or -1 when empty / stored format differs — the C side
    sizes with cap 0, then reads, retrying if the slot grew in between. */
 function createClipboard(ctx, hooks) {
-  const CHUNK = 49152;             // well under the kernel page payload cap
   let kernelized = !!(hooks && typeof hooks.clipSet === 'function' &&
                       typeof hooks.clipGet === 'function');
+  const CHUNK = kernelized ? hookPayloadChunk(hooks) : 0;   // unused local-slot side
   let local = null;                // {fmt, bytes} fallback slot
   return { [ENV_KEY]: {
     __clip_set: function (fmt, ptr, len) {
@@ -5666,8 +5682,8 @@ function createClipboard(ctx, hooks) {
    The veneer maps curl_easy_perform onto open -> status (feeds
    HEADERFUNCTION) -> read loop (feeds WRITEFUNCTION) -> close. */
 function createHttp(ctx, hooks) {
-  const CHUNK = 49152;             // under the kernel page payload cap
   const have = !!(hooks && typeof hooks.httpOpen === 'function');
+  const CHUNK = have ? hookPayloadChunk(hooks) : 0;   // unused on the ENOSYS side
   const enc = new TextEncoder();
   return { [ENV_KEY]: {
     __http_open: function (methodPtr, urlPtr, headersPtr, bodyPtr, blen) {
