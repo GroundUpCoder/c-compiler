@@ -1,6 +1,22 @@
 # 0214 — WAST Stage 3c: tree-shake, single-use inline-and-delete, inline hints
 
-- **Status**: open
+- **Status**: done (2026-07-16 — treeShakeFunctions + tableLayout remap
+  (slots immutable, survivors at original slots, addr-taken roots via
+  `_funcAddrEscape` at the three escape sites), single-use budget bypass
+  with live site counts, attributes threaded parser→fnAttrs→fnMeta→WAST
+  policy (noinline hard / always_inline bypass / inline→hintCalleeCap
+  256, minimal [[gnu::…]] in the decl-specifier position), __wasm op
+  groups refuse call/return_call/ref.func heads so WRaw stays
+  reference-free. SameBoy: sums IDENTICAL vs baselines + clang;
+  296707→237095 B (−20.1%), 127064→97486 instrs, ms/frame flat
+  6.367→6.346 — −12.6% below even the pre-0201 baseline. Differential
+  knob `tests/run-unit.js --wast-inline=off|on|max`, corpus green under
+  all three. Estate green: unit 723+8xfail, ast, run.py cats, blockfs,
+  host, kernel 73/73 (fresh v100 bake), sweep 27/27; disw + sourcemap
+  goldens updated for the new module shape (line_numbers dogfoods
+  noinline). os-wm under-load flake found during the sweep is
+  PRE-EXISTING (identical on pristine main) → filed P0 todos/0215.
+  Log: logs/2026-07-16/wast-tree-shake-0214.md)
 - **Design**: WAST substrate + inliner (todos/done/0197/0198/0200/0201/0209),
   pass seam `WAST.runPasses`; tests/ast/test_wast_inline.js (0201 style)
 
