@@ -12,6 +12,7 @@
  * extension (`gb`) or `default.gui` / `default.term`; the write lands in
  * $HOME/.config/openwith with the effective table carried forward.
  */
+#include <errno.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,8 +36,13 @@ int main(int argc, char **argv) {
         size_t k = 0;
         for (int i = 3; i < argc; i++)
             k += (size_t)snprintf(cmd + k, sizeof cmd - k, "%s%s", i > 3 ? " " : "", argv[i]);
-        if (k >= sizeof cmd || ow_set(argv[2], cmd) != 0) {
-            fprintf(stderr, "open: cannot write the association\n");
+        if (k >= sizeof cmd) {
+            fprintf(stderr, "open: association command too long\n");
+            return 1;
+        }
+        if (ow_set(argv[2], cmd) != 0) {
+            fprintf(stderr, "open: cannot write the association: %s\n",
+                    strerror(errno));
             return 1;
         }
         return 0;

@@ -37,6 +37,7 @@
 
 #include <windows.h>
 #include <mmsystem.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,16 @@
 #include "../sounds.h"
 #include "../saver.h"
 #include "../wm_proto.h"
+
+/* A config-store write failed — read-only or full $HOME (todos/0234).
+ * Every applet uses this one discipline: revert the control to the
+ * stored state, then say WHY, so the UI never shows a setting that
+ * didn't actually stick. */
+static void store_fail(HWND owner, const char *what) {
+    char msg[160];
+    snprintf(msg, sizeof msg, "Cannot save %s:\n%s", what, strerror(errno));
+    MessageBox(owner, msg, "Control Panel", MB_OK | MB_ICONEXCLAMATION);
+}
 
 __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 
@@ -168,8 +179,10 @@ static LRESULT CALLBACK sounds_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_SNDCHK: {                        /* auto-toggled; apply it */
             HWND chk = GetDlgItem(h, ID_SNDCHK);
             int on = (int)SendMessage(chk, BM_GETCHECK, 0, 0);
-            if (snd_set_mute(!on) != 0)          /* store write failed: revert */
+            if (snd_set_mute(!on) != 0) {        /* store write failed: revert */
                 SendMessage(chk, BM_SETCHECK, !on, 0);
+                store_fail(h, "the sound setting");
+            }
             return 0;
         }
         case ID_SNDTEST:
@@ -285,6 +298,22 @@ static LRESULT CALLBACK datetime_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 static const char *SV_RADIO[3] = { "none", "marquee", "starfield" };
 
+/* Sync the radios + timeout edit to the STORED config — shared by
+ * WM_CREATE and the write-failure reverts (the UI must fall back to what
+ * the store really holds, todos/0234). */
+static void saver_sync(HWND h) {
+    sv_cfg c;
+    sv_get(&c);
+    int sel = ID_SVNONE;
+    if (strcasecmp(c.saver, "marquee") == 0) sel = ID_SVMARQ;
+    else if (strcasecmp(c.saver, "starfield") == 0) sel = ID_SVSTAR;
+    for (int id = ID_SVNONE; id <= ID_SVSTAR; id++)
+        SendMessage(GetDlgItem(h, id), BM_SETCHECK, id == sel, 0);
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d", c.timeout);
+    SetWindowText(GetDlgItem(h, ID_SVWAIT), buf);
+}
+
 static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
@@ -308,23 +337,17 @@ static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                        146, 92, 50, 20, h, (HMENU)ID_SVAPPLY, NULL, NULL);
         CreateWindowEx(0, "BUTTON", "Preview", WS_CHILD | WS_VISIBLE,
                        16, 122, 70, 22, h, (HMENU)ID_SVPREV, NULL, NULL);
-        sv_cfg c;
-        sv_get(&c);
-        int sel = ID_SVNONE;
-        if (strcasecmp(c.saver, "marquee") == 0) sel = ID_SVMARQ;
-        else if (strcasecmp(c.saver, "starfield") == 0) sel = ID_SVSTAR;
-        for (int id = ID_SVNONE; id <= ID_SVSTAR; id++)
-            SendMessage(GetDlgItem(h, id), BM_SETCHECK, id == sel, 0);
-        char buf[16];
-        snprintf(buf, sizeof buf, "%d", c.timeout);
-        SetWindowText(GetDlgItem(h, ID_SVWAIT), buf);
+        saver_sync(h);
         return 0;
     }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case ID_SVNONE: case ID_SVMARQ: case ID_SVSTAR:
             /* auto-toggled; apply on click (the Sounds checkbox rule) */
-            sv_set("saver", SV_RADIO[LOWORD(wp) - ID_SVNONE]);
+            if (sv_set("saver", SV_RADIO[LOWORD(wp) - ID_SVNONE]) != 0) {
+                saver_sync(h);                   /* store write failed: revert */
+                store_fail(h, "the screen saver setting");
+            }
             return 0;
         case ID_SVAPPLY: {
             char buf[16];
@@ -333,8 +356,11 @@ static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 int v = atoi(buf);
                 if (v < 0) v = 0;
                 snprintf(buf, sizeof buf, "%d", v);
-                sv_set("timeout", buf);
-                SetWindowText(GetDlgItem(h, ID_SVWAIT), buf);
+                if (sv_set("timeout", buf) != 0) {
+                    saver_sync(h);               /* store write failed: revert */
+                    store_fail(h, "the screen saver timeout");
+                } else
+                    SetWindowText(GetDlgItem(h, ID_SVWAIT), buf);
             }
             return 0;
         }

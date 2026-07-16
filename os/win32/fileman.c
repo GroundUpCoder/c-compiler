@@ -359,6 +359,8 @@ static void edit_selected(void) {
  * default.gui for extension-less files — and OK/Cancel. One picker at a
  * time; OK spawns `command file` the same way Open does. */
 
+static void op_error(const char *verb, const char *path);   /* fwd (file ops) */
+
 static LRESULT CALLBACK ow_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
@@ -387,7 +389,12 @@ static LRESULT CALLBACK ow_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (cmd[0]) {
                 if (IsDlgButtonChecked(h, ID_OW_ALWAYS)) {
                     char key[32];
-                    ow_set(ow_key_for(g_ow_file, key, sizeof key) ? key : "default.gui", cmd);
+                    /* "Always" must not silently not-persist (todos/0234):
+                     * report a store-write failure, then still do the
+                     * one-shot open — that part works regardless. */
+                    if (ow_set(ow_key_for(g_ow_file, key, sizeof key)
+                               ? key : "default.gui", cmd) != 0)
+                        op_error("save the association for", g_ow_file);
                 }
                 spawn_assoc(cmd, g_ow_file);
             }
