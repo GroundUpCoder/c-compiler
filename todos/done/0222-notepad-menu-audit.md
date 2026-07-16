@@ -1,6 +1,17 @@
 # 0222 — notepad menu audit: every item exercised, silent no-ops made loud, regression e2e
 
-- **Status**: open
+- **Status**: done (2026-07-16) — all 24 menu items exercised in the booted
+  OS: functional surface PASSES end to end; the three silent no-ops
+  (Font.../Page Setup.../Print...) are loud `win32: unsupported` cancels
+  now; EDIT WM_SETTEXT caret/view reset to START (real-EDIT contract —
+  ctldemo selftest + os-touch pan leg updated off the old behavior); ^Z
+  lands a loud EM_UNDO report (0135 stays the real fix); win32rc `\r`
+  escape fixed + rc strings LF-normalized (About's "Palamarchukr");
+  `tools/win32rc.js` mapped in the RULES table;
+  `tests/kernel/test_notepad_menu_e2e.js` (68 checks, registered, stable
+  3/3 under load) is the every-item regression sweep. Follow-up filed:
+  0223 (ChooseFontW + WM_SETFONT). Image v102; kernel 74/74, sweep 27/27,
+  projects 26/26; log: logs/2026-07-16/notepad-menu-audit.md
 - **Design**: `todos/WIN32.md` (0211 fail-loud policy; EDIT status thread)
 
 ## Goal
