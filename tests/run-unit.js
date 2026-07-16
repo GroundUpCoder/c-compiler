@@ -13,7 +13,7 @@
 
 'use strict';
 
-const { Worker, isMainThread, parentPort } = require('worker_threads');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -117,6 +117,18 @@ function workerMain() {
   const compiler = require(path.join(ROOT, 'compiler.js'));
   const runModule = require(path.join(ROOT, 'host.js'));
   const BLOCK_FS = runModule.BLOCK_FS;
+
+  // --wast-inline differential mode (todos/0214): mutate the pass
+  // defaults once per worker, before any compile.
+  const wastMode = workerData && workerData.wastInline;
+  if (wastMode === 'off') {
+    compiler.WAST.inlineDefaults.enabled = false;
+    compiler.WAST.shakeDefaults.enabled = false;
+  } else if (wastMode === 'max') {
+    compiler.WAST.inlineDefaults.calleeCap = 2048;
+    compiler.WAST.inlineDefaults.hintCalleeCap = 2048;
+    compiler.WAST.inlineDefaults.callerGrowth = 16000;
+  }
 
   function configureCompilerArgs(args, pp, compilerOptions, warningFlags) {
     for (let i = 0; i < args.length; i++) {
@@ -378,7 +390,7 @@ function workerMain() {
 // ---------- Main ----------
 
 function parseArgs(argv) {
-  const opts = { verbose: false, quiet: false, jsonl: false, filter: null, jobs: os.cpus().length, timeoutMs: 30000 };
+  const opts = { verbose: false, quiet: false, jsonl: false, filter: null, jobs: os.cpus().length, timeoutMs: 30000, wastInline: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-v' || a === '--verbose') opts.verbose = true;
@@ -390,9 +402,16 @@ function parseArgs(argv) {
     else if (a.startsWith('--timeout=')) opts.timeoutMs = parseInt(a.substring('--timeout='.length), 10);
     else if (a === '-j') opts.jobs = parseInt(argv[++i], 10);
     else if (a.startsWith('-j')) opts.jobs = parseInt(a.substring(2), 10);
+    else if (a.startsWith('--wast-inline=')) {
+      opts.wastInline = a.substring('--wast-inline='.length);
+      if (!['off', 'on', 'max'].includes(opts.wastInline)) {
+        process.stderr.write(`--wast-inline: expected off|on|max, got '${opts.wastInline}'\n`);
+        process.exit(2);
+      }
+    }
     else if (a === '-h' || a === '--help') {
       process.stdout.write(
-        'Usage: node tests/run-unit.js [-v] [--jsonl] [--filter=<substr>] [-j N] [--timeout=MS]\n' +
+        'Usage: node tests/run-unit.js [-v] [--jsonl] [--filter=<substr>] [-j N] [--timeout=MS] [--wast-inline=off|on|max]\n' +
         '\n' +
         '  --timeout Per-test deadline in ms (default 30000). A test that\n' +
         '            exceeds it fails with "Timed out" and its worker is\n' +
@@ -401,7 +420,15 @@ function parseArgs(argv) {
         '\n' +
         '  --jsonl   Emit one JSON line per test result to stdout. Suppresses\n' +
         '            human-readable banners and the trailing summary. Intended\n' +
-        '            for consumption by other tools (e.g. tests/run.py).\n'
+        '            for consumption by other tools (e.g. tests/run.py).\n' +
+        '\n' +
+        '  --wast-inline=off|on|max\n' +
+        '            The WAST inliner+tree-shake differential knob\n' +
+        '            (todos/0201/0214): off = both passes disabled, on = the\n' +
+        '            shipped defaults (same as omitting the flag), max =\n' +
+        '            aggressive budgets (calleeCap/hintCalleeCap 2048,\n' +
+        '            callerGrowth 16000). The corpus must be green under all\n' +
+        '            three — any divergence is an inliner/shake miscompile.\n'
       );
       process.exit(0);
     }
@@ -492,7 +519,7 @@ async function mainMain() {
       }
 
       function startWorker() {
-        w = new Worker(__filename);
+        w = new Worker(__filename, { workerData: { wastInline: opts.wastInline } });
         w.on('message', (result) => {
           clearTimeout(timer);
           timer = null;
