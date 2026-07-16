@@ -3195,6 +3195,7 @@ typedef struct {
     int caret, anchor;          /* byte indexes; anchor == caret: no selection */
     int topLine;                /* first visible line (multiline) */
     int scrollX;                /* horizontal pixel scroll (single-line) */
+    int sbDrag, sbDragOff;      /* built-in vscroll thumb drag (0210) */
     int modified;               /* EM_GETMODIFY/EM_SETMODIFY (0048) */
     HLOCAL hlocal;              /* EM_GETHANDLE/EM_SETHANDLE (0048): the
                                    external WCHAR buffer notepad manages —
@@ -3202,9 +3203,15 @@ typedef struct {
 } EditState;
 
 #define EDIT_PAD 3
+#define EDIT_SB_W 16            /* built-in vertical scrollbar width (0210) */
 
 static int edit_ml(HWND h) { return (h->style & ES_MULTILINE) != 0; }
 static int edit_ro(HWND h) { return (h->style & ES_READONLY) != 0; }
+static int edit_sb(HWND h) {
+    return edit_ml(h) && (h->style & WS_VSCROLL) != 0;
+}
+
+static void sb_tri(HDC dc, int cx, int cy, int dir);   /* scrollbar section */
 
 /* gucOS is POSIX — the EDIT buffer is pure LF (todos/0210). Every text-in
  * path normalizes CRLF and lone CR to '\n': the text path has no 0x0D glyph
@@ -3276,6 +3283,47 @@ static int edit_line_h(HWND h) {
     return lh;
 }
 
+static int edit_rows(HWND h, int lh) {          /* visible whole rows */
+    int rows = (h->h - 2 * EDIT_PAD - 4) / (lh > 0 ? lh : 1);
+    return rows < 1 ? 1 : rows;
+}
+
+static int edit_max_top(HWND h, EditState *st) {
+    int m = edit_line_count(st) - edit_rows(h, edit_line_h(h));
+    return m > 0 ? m : 0;
+}
+
+/* Scroll without moving the caret (wheel/scrollbar semantics). */
+static void edit_vscroll(HWND h, EditState *st, int top) {
+    int m = edit_max_top(h, st);
+    if (top < 0) top = 0;
+    if (top > m) top = m;
+    if (top == st->topLine) return;
+    st->topLine = top;
+    InvalidateRect(h, NULL, TRUE);
+}
+
+/* The built-in WS_VSCROLL bar (0210): [up arrow][channel with proportional
+ * thumb][down arrow], inside the 2px well on the right edge. */
+static void edit_sb_geom(HWND h, EditState *st, RECT *bar,
+                         int *btn, int *thumbY, int *thumbH) {
+    SetRect(bar, h->w - 2 - EDIT_SB_W, 2, h->w - 2, h->h - 2);
+    int len = bar->bottom - bar->top;
+    int b = EDIT_SB_W;
+    if (b * 2 > len) b = len / 2;
+    *btn = b;
+    int chan = len - 2 * b;
+    int n = edit_line_count(st), rows = edit_rows(h, edit_line_h(h));
+    int maxTop = n - rows;
+    if (maxTop < 0) maxTop = 0;
+    int th = maxTop > 0 ? chan * rows / n : chan;   /* proportional */
+    if (th < 8) th = 8;
+    if (th > chan) th = chan;
+    *thumbH = th;
+    *thumbY = bar->top + b +
+        (maxTop > 0 ? (chan - th) * st->topLine / maxTop : 0);
+}
+
 static int edit_x_of(HWND h, EditState *st, HDC dc, int lineStart, int pos) {
     SIZE sz;
     if (pos <= lineStart) return 0;
@@ -3323,8 +3371,7 @@ static void edit_show_caret(HWND h, EditState *st) {
     if (edit_ml(h)) {
         int line, col;
         edit_line_of(st, st->caret, &line, &col);
-        int rows = (h->h - 2 * EDIT_PAD - 4) / (lh > 0 ? lh : 1);
-        if (rows < 1) rows = 1;
+        int rows = edit_rows(h, lh);
         if (line < st->topLine) st->topLine = line;
         if (line >= st->topLine + rows) st->topLine = line - rows + 1;
     } else {
@@ -3352,7 +3399,25 @@ static void edit_paint(HWND h) {
         InflateRect(&inner, -2, -2);
         FillRect(dc, &inner, GetSysColorBrush(COLOR_BTNFACE));
     }
-    IntersectClipRect(dc, 2, 2, h->w - 2, h->h - 2);
+    if (edit_sb(h)) {                            /* built-in vscroll (0210) */
+        RECT bar, a1, a2, th;
+        int btn, ty, thh;
+        edit_sb_geom(h, st, &bar, &btn, &ty, &thh);
+        FillRect(dc, &bar, GetSysColorBrush(COLOR_SCROLLBAR));
+        SetRect(&a1, bar.left, bar.top, bar.right, bar.top + btn);
+        SetRect(&a2, bar.left, bar.bottom - btn, bar.right, bar.bottom);
+        FillRect(dc, &a1, GetSysColorBrush(COLOR_BTNFACE));
+        draw_raised(dc, a1, 0);
+        FillRect(dc, &a2, GetSysColorBrush(COLOR_BTNFACE));
+        draw_raised(dc, a2, 0);
+        sb_tri(dc, (a1.left + a1.right) / 2, (a1.top + a1.bottom) / 2, 0);
+        sb_tri(dc, (a2.left + a2.right) / 2, (a2.top + a2.bottom) / 2, 1);
+        SetRect(&th, bar.left, ty, bar.right, ty + thh);
+        FillRect(dc, &th, GetSysColorBrush(COLOR_BTNFACE));
+        draw_raised(dc, th, 0);
+    }
+    IntersectClipRect(dc, 2, 2, h->w - 2 - (edit_sb(h) ? EDIT_SB_W : 0),
+                      h->h - 2);
     SetBkMode(dc, TRANSPARENT);
     TEXTMETRIC tm;
     GetTextMetrics(dc, &tm);
@@ -3506,9 +3571,31 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         edit_paint(h);
         return 0;
     case WM_LBUTTONDOWN: {
+        int px = GET_X_LPARAM(lp), py = GET_Y_LPARAM(lp);
         SetFocus(h);
+        if (edit_sb(h)) {                        /* built-in vscroll (0210) */
+            RECT bar;
+            int btn, ty, th;
+            edit_sb_geom(h, st, &bar, &btn, &ty, &th);
+            if (px >= bar.left) {
+                int rows = edit_rows(h, edit_line_h(h));
+                if (py < bar.top + btn)
+                    edit_vscroll(h, st, st->topLine - 1);
+                else if (py >= bar.bottom - btn)
+                    edit_vscroll(h, st, st->topLine + 1);
+                else if (py >= ty && py < ty + th) {
+                    st->sbDrag = 1;
+                    st->sbDragOff = py - ty;
+                    SetCapture(h);
+                } else if (py < ty)              /* channel: page */
+                    edit_vscroll(h, st, st->topLine - rows);
+                else
+                    edit_vscroll(h, st, st->topLine + rows);
+                return 0;
+            }
+        }
         SetCapture(h);
-        int pos = edit_hit(h, st, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+        int pos = edit_hit(h, st, px, py);
         st->caret = pos;
         if (!(GetKeyState(VK_SHIFT) & 0x8000)) st->anchor = pos;
         edit_show_caret(h, st);
@@ -3516,6 +3603,18 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_MOUSEMOVE:
+        if (st->sbDrag && GetCapture() == h) {   /* thumb drag (0210) */
+            RECT bar;
+            int btn, ty, th;
+            edit_sb_geom(h, st, &bar, &btn, &ty, &th);
+            int travel = (bar.bottom - bar.top) - 2 * btn - th;
+            int m = edit_max_top(h, st);
+            if (travel > 0 && m > 0) {
+                int ny = GET_Y_LPARAM(lp) - st->sbDragOff - (bar.top + btn);
+                edit_vscroll(h, st, (ny * m + travel / 2) / travel);
+            }
+            return 0;
+        }
         if (GetCapture() == h && (wp & MK_LBUTTON)) {
             st->caret = edit_hit(h, st, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             edit_show_caret(h, st);
@@ -3523,8 +3622,24 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_LBUTTONUP:
+        st->sbDrag = 0;
         if (GetCapture() == h) ReleaseCapture();
         return 0;
+    case WM_VSCROLL: {                           /* the classic EDIT contract */
+        if (!edit_ml(h)) return 0;
+        int rows = edit_rows(h, edit_line_h(h));
+        switch (LOWORD(wp)) {
+        case SB_LINEUP:   edit_vscroll(h, st, st->topLine - 1); break;
+        case SB_LINEDOWN: edit_vscroll(h, st, st->topLine + 1); break;
+        case SB_PAGEUP:   edit_vscroll(h, st, st->topLine - rows); break;
+        case SB_PAGEDOWN: edit_vscroll(h, st, st->topLine + rows); break;
+        case SB_TOP:      edit_vscroll(h, st, 0); break;
+        case SB_BOTTOM:   edit_vscroll(h, st, edit_max_top(h, st)); break;
+        case SB_THUMBTRACK: case SB_THUMBPOSITION:
+            edit_vscroll(h, st, HIWORD(wp)); break;
+        }
+        return 0;
+    }
     case WM_GETDLGCODE: {                         /* dialog nav (0104) */
         int code = DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTARROWS;
         if (edit_ml(h) && wp == VK_RETURN) code |= DLGC_WANTALLKEYS;
@@ -3638,6 +3753,8 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case EM_GETLINECOUNT:
         return edit_line_count(st);
+    case EM_GETFIRSTVISIBLELINE:
+        return st->topLine;
     case EM_LINEFROMCHAR: {                      /* (0048) wp = pos, -1 = caret */
         int pos = (int)wp == -1 ? st->caret : (int)wp;
         if (pos > st->len) pos = st->len;

@@ -171,6 +171,47 @@ const out = boot([
   'echo ==setcr',
   'wmctl gettext EDIT:0',
   'echo ==cut',
+  // ---- the built-in WS_VSCROLL scrollbar (todos/0210) ----
+  // Known geometry: at 400x300 the EDIT is surface y=20..280 minus the
+  // 20px status bar -> client 400x260; the bar is the right 16px inside
+  // the 2px well (surface x 382..398), arrows 16px tall at its ends.
+  // Scroll position is probed by CLICKING the top text row (surface y=25
+  // -> EDIT row 0 -> caret = topLine) and reading the status bar's
+  // "Line N" — scrollbar/wheel scrolling itself must NOT move the caret.
+  'wmctl resize $SID 400 300',
+  'wmctl wait dim $SID 400x300 4000',
+  'i=1; while [ $i -le 100 ]; do echo "line $i"; i=$((i+1)); done > /root/long.txt',
+  'wmctl click "Open..."',
+  'wmctl wait label Open 6000',
+  'wmctl settext EDIT:2 long.txt',
+  'wmctl click Open',
+  'wmctl wait text EDIT:0 "line 100" 6000',
+  'wmctl shot $SID /root/sb.ppm && echo sb-shot-ok',
+  'echo ==sbshot',
+  'base64 /root/sb.ppm',
+  'echo ==cut',
+  'wmctl click $SID 30 25',                       // probe: caret on top row
+  'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
+  'wmctl click $SID 390 270',                     // down arrow: +1 line
+  'wmctl click $SID 390 270',                     // +1 more
+  'wmctl click $SID 30 25',
+  'wmctl wait text msctls_statusbar32:0 "Line 3," 4000',
+  'wmctl click $SID 390 30',                      // up arrow: -1 line
+  'wmctl click $SID 30 25',
+  'wmctl wait text msctls_statusbar32:0 "Line 2," 4000',
+  'wmctl click $SID 390 250',                     // channel below thumb: +page
+  'wmctl click $SID 30 25',
+  'n=0; while [ $n -lt 40 ]; do wmctl gettext msctls_statusbar32:0 | grep -q "Line 2," || break; sleep 0.1; n=$((n+1)); done',
+  'echo ==pgdn',
+  'wmctl gettext msctls_statusbar32:0',
+  'echo ==cut',
+  'PG="$(wmctl gettext msctls_statusbar32:0)"',
+  'wmctl drag $SID 390 90 390 260',               // thumb drag to the bottom
+  'wmctl click $SID 30 25',
+  'n=0; while [ $n -lt 40 ]; do [ "$(wmctl gettext msctls_statusbar32:0)" = "$PG" ] || break; sleep 0.1; n=$((n+1)); done',
+  'echo ==thumbdrag',
+  'wmctl gettext msctls_statusbar32:0',
+  'echo ==cut',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
   'wmctl click "New Window"',
   'wmctl wait win "Untitled - Notepad" 8000',     // second notepad up
@@ -290,6 +331,28 @@ check('save keeps LF: no \\r written back to the filesystem',
 check('WM_SETTEXT strips \\r\\n and lone \\r (agent settext path)',
   section(out, 'setcr').trim() === 'st one\nst two\nst three',
   JSON.stringify(section(out, 'setcr')));
+
+/* the built-in WS_VSCROLL scrollbar (todos/0210) */
+const sbp = parsePpm(section(out, 'sbshot'));
+check('EDIT scrollbar shot is a P6 frame', sbp.magic === 'P6', sbp.magic);
+// The channel paints COLOR_SCROLLBAR gray (192,192,192) where an unscrolled
+// pre-0210 EDIT was white text area: sample the bar column below the thumb.
+let sbGray = 0;
+for (let y = 120; y < 250; y++) {
+  for (let x = 386; x < 396; x++) {
+    const i = sbp.data + (y * sbp.w + x) * 3;
+    if (Math.abs(sbp.buf[i] - 192) < 12 && Math.abs(sbp.buf[i + 1] - 192) < 12 &&
+        Math.abs(sbp.buf[i + 2] - 192) < 12) sbGray++;
+  }
+}
+check('WS_VSCROLL draws the right-edge scrollbar channel', sbGray > 400,
+  'gray=' + sbGray + ' of 1300');
+const pgdnLine = +((section(out, 'pgdn').match(/Line (\d+),/) || [])[1] || 0);
+check('channel click below the thumb pages down (caret probe on the top row)',
+  pgdnLine >= 10 && pgdnLine <= 30, 'line=' + pgdnLine);
+const dragLine = +((section(out, 'thumbdrag').match(/Line (\d+),/) || [])[1] || 0);
+check('thumb drag scrolls to the bottom of the document',
+  dragLine >= 60, 'line=' + dragLine + ' pgdn=' + pgdnLine);
 
 /* New Window */
 check('New Window spawned a second notepad (ShellExecuteW)',

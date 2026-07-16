@@ -904,6 +904,10 @@ typedef struct tagCREATESTRUCT {
 #define SB_PAGERIGHT     3
 #define SB_THUMBPOSITION 4
 #define SB_THUMBTRACK    5
+#define SB_TOP           6
+#define SB_LEFT          6
+#define SB_BOTTOM        7
+#define SB_RIGHT         7
 #define SB_ENDSCROLL     8
 
 /* MessageBox */
