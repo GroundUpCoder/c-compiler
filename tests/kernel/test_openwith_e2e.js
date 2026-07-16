@@ -191,8 +191,13 @@ const out = boot([
   'MSID=$(wmctl list | grep MagicPoint | sed "s/[^0-9].*//")',
   'wmctl key $MSID 0 113',                       // q quits the viewer
   'wmctl wait nowin MagicPoint 8000',
-  // fileman at the Presentations folder: Open (the dblclick path) on deck 01
+  // fileman at the Presentations folder: the decks live in SUBFOLDERS since
+  // todos/0221 (MagicPoint Tutorial / POSIX on WebAssembly) — the folder
+  // itself lists them, then Open (the dblclick path) on tutorial deck 01
   'wmctl settext EDIT:0 /root/Desktop/Presentations',
+  'wmctl click Go',
+  'wmctl wait text LISTBOX:0 "MagicPoint Tutorial" 8000 && echo SUBDIRS-OK',
+  'wmctl settext EDIT:0 "/root/Desktop/Presentations/MagicPoint Tutorial"',
   'wmctl click Go',
   'wmctl wait text LISTBOX:0 01-welcome.mgp 8000',  // navigated (tutorial links)
   sel(0),                                        // 01-welcome.mgp sorts first
@@ -262,6 +267,8 @@ check('desktop dblclick on the .gb icon launches sameboy (SameBoy +1)',
 // ---- .mgp: view vs edit (todos/0202) ----
 check('desktop dblclick on a .mgp icon raises the mgp viewer',
   out.includes('MGP-DESK-OK'));
+check('Presentations lists the tutorial subfolder (todos/0221 nesting)',
+  out.includes('SUBDIRS-OK'));
 check('fileman Open on a .mgp raises the mgp viewer',
   out.includes('MGP-FM-OK'));
 const editmenu = section(out, 'editmenu');

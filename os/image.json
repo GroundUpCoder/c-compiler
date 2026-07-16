@@ -560,6 +560,8 @@
     "dirs": [
       "/root/Desktop",
       "/root/Desktop/Presentations",
+      "/root/Desktop/Presentations/MagicPoint Tutorial",
+      "/root/Desktop/Presentations/POSIX on WebAssembly",
       "/root/id1",
       "/root/roms"
     ],
@@ -597,34 +599,34 @@
       "/root/Desktop/ctlpanel": {
         "link": "/usr/bin/ctlpanel"
       },
-      "/root/Desktop/Presentations/01-welcome.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/01-welcome.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/01-welcome.mgp"
       },
-      "/root/Desktop/Presentations/02-first-deck.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/02-first-deck.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/02-first-deck.mgp"
       },
-      "/root/Desktop/Presentations/03-text.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/03-text.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/03-text.mgp"
       },
-      "/root/Desktop/Presentations/04-color.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/04-color.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/04-color.mgp"
       },
-      "/root/Desktop/Presentations/05-alignment.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/05-alignment.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/05-alignment.mgp"
       },
-      "/root/Desktop/Presentations/06-lists.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/06-lists.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/06-lists.mgp"
       },
-      "/root/Desktop/Presentations/07-images.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/07-images.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/07-images.mgp"
       },
-      "/root/Desktop/Presentations/08-backgrounds.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/08-backgrounds.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/08-backgrounds.mgp"
       },
-      "/root/Desktop/Presentations/09-builds.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/09-builds.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/09-builds.mgp"
       },
-      "/root/Desktop/Presentations/10-mastery.mgp": {
+      "/root/Desktop/Presentations/MagicPoint Tutorial/10-mastery.mgp": {
         "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp"
       },
       "/root/Desktop/pokemon": {
