@@ -18,13 +18,18 @@
  *   ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer (takes precedence)
  *   ANTHROPIC_MODEL      default claude-opus-4-8
  * Flags: -p PROMPT (one-shot), --model, --system-prompt, --max-turns,
- *   --max-tokens, --verbose, --no-color.
+ *   --max-tokens, --resume, --continue, --no-persist, --verbose, --no-color.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <signal.h>
 #include <curl/curl.h>
 #include "cJSON.h"
 
@@ -61,6 +66,53 @@ typedef struct {
     int  verbose, color;
 } config;
 
+#define GCODE_VERSION "2"
+#define LOG_SCHEMA_VERSION 1
+
+typedef struct {
+    long long input_tokens, output_tokens;
+    long long cache_creation_input_tokens, cache_read_input_tokens;
+} usage;
+
+typedef struct {
+    int fd, persist;
+    char id[33];
+    char *path;
+    char *last_stop;
+    long long seq, turn_index;
+    usage total;
+} session;
+
+static void usage_add(usage *a, const usage *b) {
+    a->input_tokens += b->input_tokens;
+    a->output_tokens += b->output_tokens;
+    a->cache_creation_input_tokens += b->cache_creation_input_tokens;
+    a->cache_read_input_tokens += b->cache_read_input_tokens;
+}
+
+static cJSON *usage_json(const usage *u) {
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "input_tokens", (double)u->input_tokens);
+    cJSON_AddNumberToObject(o, "output_tokens", (double)u->output_tokens);
+    cJSON_AddNumberToObject(o, "cache_creation_input_tokens", (double)u->cache_creation_input_tokens);
+    cJSON_AddNumberToObject(o, "cache_read_input_tokens", (double)u->cache_read_input_tokens);
+    return o;
+}
+
+static long long json_count(cJSON *o, const char *key) {
+    cJSON *v = o ? cJSON_GetObjectItemCaseSensitive(o, key) : NULL;
+    return cJSON_IsNumber(v) && v->valuedouble >= 0 ? (long long)v->valuedouble : 0;
+}
+
+static usage usage_from_json(cJSON *o) {
+    usage u = {0};
+    u.input_tokens = json_count(o, "input_tokens");
+    u.output_tokens = json_count(o, "output_tokens");
+    u.cache_creation_input_tokens = json_count(o, "cache_creation_input_tokens");
+    u.cache_read_input_tokens = json_count(o, "cache_read_input_tokens");
+    return u;
+}
+
 /* ---- ANSI (SGR only; guarded by cfg->color) --------------------------- */
 static int  g_color = 1;
 static const char *C(const char *code) { return g_color ? code : ""; }
@@ -69,6 +121,12 @@ static const char *C(const char *code) { return g_color ? code : ""; }
 #define CGRN  C("\033[32m")
 #define CRED  C("\033[31m")
 #define CRST  C("\033[0m")
+
+static volatile sig_atomic_t g_interrupted;
+static void on_interrupt(int sig) { (void)sig; g_interrupted = 1; }
+static int curl_progress(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl_off_t d) {
+    (void)p; (void)a; (void)b; (void)c; (void)d; return g_interrupted ? 1 : 0;
+}
 
 /* ===================================================================== */
 /*  PLATFORM SEAM: run a shell command, merge stdout+stderr, cap+timeout  */
@@ -384,6 +442,112 @@ static cJSON *build_tools(void) {
     return tools;
 }
 
+/* ---- durable JSONL sessions ------------------------------------------ */
+static void utc_time(char out[32], int basic) {
+    time_t now = time(NULL); struct tm tm;
+    gmtime_r(&now, &tm);
+    strftime(out, 32, basic ? "%Y%m%dT%H%M%SZ" : "%Y-%m-%dT%H:%M:%SZ", &tm);
+}
+
+static char *system_hash(const char *s) {
+    uint64_t h = UINT64_C(1469598103934665603);
+    for (; s && *s; s++) { h ^= (unsigned char)*s; h *= UINT64_C(1099511628211); }
+    char *out = malloc(17); snprintf(out, 17, "%016llx", (unsigned long long)h); return out;
+}
+
+static int mkdirs(const char *path) {
+    char *p = strdup(path); if (!p) return -1;
+    for (char *q = p + 1; *q; q++) if (*q == '/') {
+        *q = 0; if (mkdir(p, 0700) && errno != EEXIST) { free(p); return -1; } *q = '/';
+    }
+    int r = mkdir(p, 0700); if (r && errno == EEXIST) r = 0;
+    free(p); return r;
+}
+
+static char *sessions_dir(void) {
+    const char *override = getenv("GCODE_STATE_DIR");
+    if (override && *override) { sb b = {0}; sb_puts(&b, override); sb_puts(&b, "/sessions"); return b.p; }
+    const char *xdg = getenv("XDG_STATE_HOME");
+    if (xdg && *xdg) { sb b = {0}; sb_puts(&b, xdg); sb_puts(&b, "/gcode/sessions"); return b.p; }
+    const char *home = getenv("HOME");
+#ifdef __MTOTS__
+    if (!home || !*home) home = "/root";
+#endif
+    if (!home || !*home) return NULL;
+    sb b = {0}; sb_puts(&b, home); sb_puts(&b, "/.local/state/gcode/sessions"); return b.p;
+}
+
+static void make_session_id(char out[33]) {
+    unsigned char bytes[16]; int fd = open("/dev/urandom", O_RDONLY); ssize_t got = -1;
+    if (fd >= 0) { got = read(fd, bytes, sizeof bytes); close(fd); }
+    if (got != (ssize_t)sizeof bytes) {
+        uint64_t x = (uint64_t)time(NULL) ^ ((uint64_t)getpid() << 32) ^ (uintptr_t)out;
+        for (int i = 0; i < 16; i++) { x ^= x << 13; x ^= x >> 7; x ^= x << 17; bytes[i] = (unsigned char)x; }
+    }
+    for (int i = 0; i < 16; i++) snprintf(out + i * 2, 3, "%02x", bytes[i]);
+}
+
+static cJSON *record_new(session *s, const char *type) {
+    char ts[32]; utc_time(ts, 0);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "schema_version", LOG_SCHEMA_VERSION);
+    cJSON_AddStringToObject(r, "type", type);
+    cJSON_AddStringToObject(r, "session_id", s->id);
+    cJSON_AddNumberToObject(r, "seq", (double)++s->seq);
+    cJSON_AddStringToObject(r, "timestamp", ts);
+    return r;
+}
+
+static int record_write(session *s, cJSON *r) {
+    if (!s->persist) { cJSON_Delete(r); return 0; }
+    char *line = cJSON_PrintUnformatted(r); cJSON_Delete(r);
+    if (!line) return -1;
+    size_t n = strlen(line), off = 0; int ok = 0;
+    while (off < n) { ssize_t w = write(s->fd, line + off, n - off); if (w < 0) { if (errno == EINTR) continue; ok = -1; break; } off += (size_t)w; }
+    if (!ok && write(s->fd, "\n", 1) != 1) ok = -1;
+    if (!ok && fsync(s->fd)) ok = -1;
+    if (ok) fprintf(stderr, "gcode: session log write failed: %s\n", strerror(errno));
+    free(line); return ok;
+}
+
+static int session_meta(session *s, config *cfg) {
+    cJSON *r = record_new(s, "session_meta");
+    char cwd[4096]; if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "");
+    char *hash = system_hash(cfg->system_prompt);
+    cJSON_AddStringToObject(r, "program", "gcode"); cJSON_AddStringToObject(r, "version", GCODE_VERSION);
+#ifdef __MTOTS__
+    cJSON_AddStringToObject(r, "target", "gucos");
+#else
+    cJSON_AddStringToObject(r, "target", "native");
+#endif
+    cJSON_AddStringToObject(r, "model", cfg->model); cJSON_AddStringToObject(r, "base_url", cfg->base_url);
+    cJSON_AddStringToObject(r, "system_prompt_hash", hash); cJSON_AddStringToObject(r, "cwd", cwd);
+    cJSON_AddNumberToObject(r, "max_tokens", cfg->max_tokens); cJSON_AddNumberToObject(r, "max_turns", cfg->max_turns);
+    free(hash); return record_write(s, r);
+}
+
+static int session_create(session *s, config *cfg) {
+    memset(s, 0, sizeof *s); s->fd = -1; s->persist = 1; make_session_id(s->id);
+    char *dir = sessions_dir(); if (!dir || mkdirs(dir)) { fprintf(stderr, "gcode: cannot create state directory: %s\n", strerror(errno)); free(dir); return -1; }
+    char stamp[32]; utc_time(stamp, 1); sb p = {0}; sb_puts(&p, dir); sb_puts(&p, "/"); sb_puts(&p, stamp); sb_puts(&p, "_"); sb_puts(&p, s->id); sb_puts(&p, ".jsonl"); free(dir);
+    s->fd = open(p.p, O_WRONLY | O_CREAT | O_APPEND, 0600); s->path = p.p;
+    if (s->fd < 0) { fprintf(stderr, "gcode: cannot open session log %s: %s\n", s->path, strerror(errno)); return -1; }
+    if (session_meta(s, cfg)) return -1;
+    fprintf(stderr, "%ssession %s: %s%s\n", CDIM, s->id, s->path, CRST); return 0;
+}
+
+static int persist_message(session *s, cJSON *m, const char *source) {
+    cJSON *r = record_new(s, "message"); cJSON *role = cJSON_GetObjectItem(m, "role"), *content = cJSON_GetObjectItem(m, "content");
+    cJSON_AddStringToObject(r, "role", cJSON_IsString(role) ? role->valuestring : "user"); cJSON_AddStringToObject(r, "source", source);
+    cJSON_AddItemToObject(r, "content", cJSON_Duplicate(content, 1)); return record_write(s, r);
+}
+
+static void session_end(session *s, const char *reason) {
+    if (!s->persist || s->fd < 0) return;
+    cJSON *r = record_new(s, "session_end"); cJSON_AddStringToObject(r, "reason", reason); cJSON_AddItemToObject(r, "totals", usage_json(&s->total));
+    record_write(s, r); close(s->fd); s->fd = -1;
+}
+
 /* ---- SSE stream state ------------------------------------------------- */
 typedef struct {
     int active; char type;          /* 't'ext or 'u'se */
@@ -394,9 +558,21 @@ typedef struct {
     sb raw;                         /* everything, for non-200 error reporting */
     cblock blocks[MAX_BLOCKS];
     int  nblocks, color;
-    char *stop_reason;
+    char *stop_reason, *message_id, *response_model;
+    usage round_usage;
+    cJSON *raw_usage;
     int  api_error; sb errmsg;
 } stream_ctx;
+
+static void merge_usage(stream_ctx *ctx, cJSON *src) {
+    if (!cJSON_IsObject(src)) return;
+    if (!ctx->raw_usage) ctx->raw_usage = cJSON_CreateObject();
+    for (cJSON *v = src->child; v; v = v->next) {
+        cJSON_DeleteItemFromObjectCaseSensitive(ctx->raw_usage, v->string);
+        cJSON_AddItemToObject(ctx->raw_usage, v->string, cJSON_Duplicate(v, 1));
+    }
+    ctx->round_usage = usage_from_json(ctx->raw_usage);
+}
 
 static void dispatch_json(stream_ctx *ctx, const char *json) {
     cJSON *e = cJSON_Parse(json);
@@ -404,7 +580,15 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
     cJSON *jt = cJSON_GetObjectItem(e, "type");
     const char *type = cJSON_IsString(jt) ? jt->valuestring : "";
 
-    if (!strcmp(type, "content_block_start")) {
+    if (!strcmp(type, "message_start")) {
+        cJSON *m = cJSON_GetObjectItem(e, "message");
+        if (cJSON_IsObject(m)) {
+            cJSON *id = cJSON_GetObjectItem(m, "id"), *model = cJSON_GetObjectItem(m, "model");
+            if (cJSON_IsString(id)) { free(ctx->message_id); ctx->message_id = strdup(id->valuestring); }
+            if (cJSON_IsString(model)) { free(ctx->response_model); ctx->response_model = strdup(model->valuestring); }
+            merge_usage(ctx, cJSON_GetObjectItem(m, "usage"));
+        }
+    } else if (!strcmp(type, "content_block_start")) {
         int idx = (int)cJSON_GetObjectItem(e, "index")->valuedouble;
         cJSON *cb = cJSON_GetObjectItem(e, "content_block");
         if (idx >= 0 && idx < MAX_BLOCKS && cb) {
@@ -447,6 +631,7 @@ static void dispatch_json(stream_ctx *ctx, const char *json) {
             cJSON *sr = cJSON_GetObjectItem(d, "stop_reason");
             if (cJSON_IsString(sr)) { free(ctx->stop_reason); ctx->stop_reason = strdup(sr->valuestring); }
         }
+        merge_usage(ctx, cJSON_GetObjectItem(e, "usage"));
     } else if (!strcmp(type, "error")) {
         ctx->api_error = 1;
         cJSON *er = cJSON_GetObjectItem(e, "error");
@@ -499,7 +684,7 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
 
 /* ---- one API round-trip ----------------------------------------------- */
 /* Returns 0 to stop, 1 to continue (tool_use). On error returns -1. */
-static int do_turn(config *cfg, cJSON *messages, cJSON *tools) {
+static int do_turn(config *cfg, session *sess, cJSON *messages, cJSON *tools, usage *turn_usage) {
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", cfg->model);
     cJSON_AddNumberToObject(body, "max_tokens", (double)cfg->max_tokens);
@@ -531,6 +716,8 @@ static int do_turn(config *cfg, cJSON *messages, cJSON *tools) {
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, curl_progress);
     if (cfg->verbose) { fprintf(stderr, "%s> POST %s%s\n%s\n", CDIM, url.p, CRST, payload); }
 
     CURLcode rc = curl_easy_perform(h);
@@ -540,8 +727,9 @@ static int do_turn(config *cfg, cJSON *messages, cJSON *tools) {
 
     int ret = 0;
     if (rc != CURLE_OK) {
-        fprintf(stderr, "\n%scode: transport error: %s%s\n", CRED, curl_easy_strerror(rc), CRST);
-        ret = -1; goto done;
+        if (g_interrupted && rc == CURLE_ABORTED_BY_CALLBACK) { fprintf(stderr, "\n%sgcode: interrupted%s\n", CDIM, CRST); ret = -2; }
+        else { fprintf(stderr, "\n%sgcode: transport error: %s%s\n", CRED, curl_easy_strerror(rc), CRST); ret = -1; }
+        goto done;
     }
     if (code != 200) {
         fprintf(stderr, "\n%scode: HTTP %ld%s\n%.*s\n", CRED, code, CRST,
@@ -552,6 +740,7 @@ static int do_turn(config *cfg, cJSON *messages, cJSON *tools) {
         fprintf(stderr, "\n%scode: API error: %s%s\n", CRED, ctx.errmsg.p ? ctx.errmsg.p : "?", CRST);
         ret = -1; goto done;
     }
+    free(sess->last_stop); sess->last_stop = strdup(ctx.stop_reason ? ctx.stop_reason : "");
     fputc('\n', stdout);
 
     /* build the assistant message from accumulated blocks */
@@ -590,11 +779,23 @@ static int do_turn(config *cfg, cJSON *messages, cJSON *tools) {
     cJSON_AddItemToObject(amsg, "content", acontent);
     cJSON_AddItemToArray(messages, amsg);
 
+    cJSON *round = record_new(sess, "api_round");
+    cJSON_AddStringToObject(round, "request_model", cfg->model);
+    cJSON_AddStringToObject(round, "response_model", ctx.response_model ? ctx.response_model : "");
+    cJSON_AddStringToObject(round, "provider_message_id", ctx.message_id ? ctx.message_id : "");
+    cJSON_AddStringToObject(round, "stop_reason", ctx.stop_reason ? ctx.stop_reason : "");
+    cJSON_AddItemToObject(round, "usage", usage_json(&ctx.round_usage));
+    cJSON_AddItemToObject(round, "raw_usage", ctx.raw_usage ? cJSON_Duplicate(ctx.raw_usage, 1) : cJSON_CreateObject());
+    if (record_write(sess, round)) { ret = -1; goto done; }
+    usage_add(turn_usage, &ctx.round_usage); usage_add(&sess->total, &ctx.round_usage);
+    if (persist_message(sess, amsg, "model")) { ret = -1; goto done; }
+
     if (ctx.stop_reason && !strcmp(ctx.stop_reason, "tool_use")) {
         cJSON *umsg = cJSON_CreateObject();
         cJSON_AddStringToObject(umsg, "role", "user");
         cJSON_AddItemToObject(umsg, "content", tool_results);
         cJSON_AddItemToArray(messages, umsg);
+        if (persist_message(sess, umsg, "tool")) { ret = -1; goto done; }
         ret = 1;
     } else {
         cJSON_Delete(tool_results);
@@ -608,29 +809,136 @@ done:
         free(ctx.blocks[i].id); free(ctx.blocks[i].name);
         sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json);
     }
-    free(ctx.stop_reason); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
+    free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage);
+    sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
     return ret;
 }
 
 /* run the agent loop for one user message already appended to `messages` */
-static void agent_loop(config *cfg, cJSON *messages, cJSON *tools) {
-    for (long turn = 0; turn < cfg->max_turns; turn++) {
-        int r = do_turn(cfg, messages, tools);
-        if (r <= 0) return;                 /* stop or error */
-    }
-    fprintf(stderr, "%scode: hit max-turns (%ld)%s\n", CDIM, cfg->max_turns, CRST);
+static void report_usage(const char *label, const usage *u) {
+    fprintf(stderr, "%s%s usage: input=%lld output=%lld cache-create=%lld cache-read=%lld%s\n", CDIM, label,
+            u->input_tokens, u->output_tokens, u->cache_creation_input_tokens, u->cache_read_input_tokens, CRST);
 }
 
-static void append_user_text(cJSON *messages, const char *text) {
+static int agent_loop(config *cfg, session *sess, cJSON *messages, cJSON *tools) {
+    usage turn = {0}; int rounds = 0, last = 0; const char *status = "done";
+    g_interrupted = 0;
+    char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", sess->id, sess->turn_index);
+    for (long round = 0; round < cfg->max_turns; round++) {
+        last = do_turn(cfg, sess, messages, tools, &turn); if (last >= 0) rounds++;
+        if (last <= 0) break;
+    }
+    if (last == -2) status = "interrupted";
+    else if (last < 0) status = "error";
+    else if (last > 0) { status = "max_turns"; fprintf(stderr, "%sgcode: hit max-turns (%ld)%s\n", CDIM, cfg->max_turns, CRST); }
+    else { cJSON *lastmsg = cJSON_GetArrayItem(messages, cJSON_GetArraySize(messages) - 1); (void)lastmsg; }
+    cJSON *end = record_new(sess, "turn_end"); cJSON_AddStringToObject(end, "turn_id", turn_id); cJSON_AddStringToObject(end, "status", status);
+    cJSON_AddStringToObject(end, "stop_reason", last > 0 ? "max_turns" : (sess->last_stop ? sess->last_stop : "")); cJSON_AddNumberToObject(end, "api_rounds", rounds);
+    cJSON_AddItemToObject(end, "usage", usage_json(&turn)); cJSON_AddItemToObject(end, "session_usage", usage_json(&sess->total));
+    if (record_write(sess, end)) return -1;
+    report_usage("turn", &turn); report_usage("session", &sess->total); return last == -2 ? 0 : (last < 0 ? -1 : 0);
+}
+
+static cJSON *make_user_text(const char *text) {
     cJSON *m = cJSON_CreateObject();
     cJSON_AddStringToObject(m, "role", "user");
-    cJSON_AddStringToObject(m, "content", text);
-    cJSON_AddItemToArray(messages, m);
+    cJSON *a = cJSON_CreateArray(), *b = cJSON_CreateObject();
+    cJSON_AddStringToObject(b, "type", "text"); cJSON_AddStringToObject(b, "text", text); cJSON_AddItemToArray(a, b); cJSON_AddItemToObject(m, "content", a);
+    return m;
+}
+
+static int append_user_text(session *s, cJSON *messages, const char *text) {
+    s->turn_index++; char turn_id[80]; snprintf(turn_id, sizeof turn_id, "%s-%lld", s->id, s->turn_index);
+    cJSON *start = record_new(s, "turn_start"); cJSON_AddStringToObject(start, "turn_id", turn_id); cJSON_AddNumberToObject(start, "turn_index", (double)s->turn_index);
+    if (record_write(s, start)) return -1;
+    cJSON *m = make_user_text(text); cJSON_AddItemToArray(messages, m); return persist_message(s, m, "human");
 }
 
 static const char *getenv_or(const char *k, const char *dflt) {
     const char *v = getenv(k);
     return (v && *v) ? v : dflt;
+}
+
+static char *find_resume_path(const char *arg) {
+    if (arg && (strchr(arg, '/') || access(arg, F_OK) == 0)) return strdup(arg);
+    char *dir = sessions_dir(); if (!dir) return NULL; DIR *d = opendir(dir); if (!d) { free(dir); return NULL; }
+    char *best = NULL; time_t best_time = 0; struct dirent *de;
+    while ((de = readdir(d))) {
+        size_t n = strlen(de->d_name); if (n < 7 || strcmp(de->d_name + n - 6, ".jsonl")) continue;
+        if (arg) { sb suffix = {0}; sb_puts(&suffix, "_"); sb_puts(&suffix, arg); sb_puts(&suffix, ".jsonl"); int match = n >= suffix.len && !strcmp(de->d_name + n - suffix.len, suffix.p); sb_free(&suffix); if (!match) continue; }
+        sb p = {0}; sb_puts(&p, dir); sb_puts(&p, "/"); sb_puts(&p, de->d_name); struct stat st;
+        if (!stat(p.p, &st) && (!best || st.st_mtime > best_time)) { free(best); best = p.p; best_time = st.st_mtime; } else sb_free(&p);
+    }
+    closedir(d); free(dir); return best;
+}
+
+static const char *jstr(cJSON *o, const char *key) { cJSON *v = cJSON_GetObjectItem(o, key); return cJSON_IsString(v) ? v->valuestring : ""; }
+
+static int session_resume(session *s, config *cfg, cJSON *messages, const char *arg) {
+    memset(s, 0, sizeof *s); s->fd = -1; s->persist = 1; s->path = find_resume_path(arg);
+    if (!s->path) { fprintf(stderr, "gcode: no matching session found\n"); return -1; }
+    FILE *f = fopen(s->path, "r"); if (!f) { fprintf(stderr, "gcode: cannot read %s: %s\n", s->path, strerror(errno)); return -1; }
+    char *line = NULL; size_t cap = 0; ssize_t n; int saw_meta = 0, had_fragment = 0;
+    while ((n = getline(&line, &cap, f)) >= 0) {
+        if (!n || line[n - 1] != '\n') { had_fragment = 1; break; } /* ignore crash fragment */
+        cJSON *r = cJSON_ParseWithLength(line, (size_t)n); if (!r) continue;
+        long long seq = json_count(r, "seq"); if (seq > s->seq) s->seq = seq;
+        const char *type = jstr(r, "type");
+        if (!strcmp(type, "session_meta")) {
+            saw_meta = 1; snprintf(s->id, sizeof s->id, "%s", jstr(r, "session_id"));
+            char cwd[4096]; if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, ""); char *hash = system_hash(cfg->system_prompt);
+            if (strcmp(jstr(r, "model"), cfg->model)) fprintf(stderr, "gcode: warning: resumed model differs (%s -> %s)\n", jstr(r, "model"), cfg->model);
+            if (strcmp(jstr(r, "base_url"), cfg->base_url)) fprintf(stderr, "gcode: warning: resumed base_url differs\n");
+            if (strcmp(jstr(r, "system_prompt_hash"), hash)) fprintf(stderr, "gcode: warning: resumed system prompt differs\n");
+            if (strcmp(jstr(r, "cwd"), cwd)) fprintf(stderr, "gcode: warning: resumed cwd differs (%s -> %s)\n", jstr(r, "cwd"), cwd); free(hash);
+        } else if (!strcmp(type, "message")) {
+            cJSON *m = cJSON_CreateObject(); cJSON_AddStringToObject(m, "role", jstr(r, "role"));
+            cJSON *content = cJSON_GetObjectItem(r, "content"); cJSON_AddItemToObject(m, "content", cJSON_Duplicate(content, 1)); cJSON_AddItemToArray(messages, m);
+        } else if (!strcmp(type, "api_round")) {
+            usage u = usage_from_json(cJSON_GetObjectItem(r, "usage")); usage_add(&s->total, &u);
+        } else if (!strcmp(type, "turn_start")) {
+            long long idx = json_count(r, "turn_index"); if (idx > s->turn_index) s->turn_index = idx;
+        }
+        cJSON_Delete(r);
+    }
+    free(line); fclose(f);
+    if (!saw_meta || !s->id[0]) { fprintf(stderr, "gcode: invalid session log %s\n", s->path); return -1; }
+    s->fd = open(s->path, O_WRONLY | O_CREAT | O_APPEND, 0600); if (s->fd < 0) { fprintf(stderr, "gcode: cannot append %s: %s\n", s->path, strerror(errno)); return -1; }
+    if (had_fragment && (write(s->fd, "\n", 1) != 1 || fsync(s->fd))) { fprintf(stderr, "gcode: cannot repair session fragment: %s\n", strerror(errno)); close(s->fd); s->fd = -1; return -1; }
+    fprintf(stderr, "%sresumed %s (%d messages): %s%s\n", CDIM, s->id, cJSON_GetArraySize(messages), s->path, CRST); return 0;
+}
+
+static int self_test(void) {
+    const char *fixture =
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"model\":\"fixture-model\",\"usage\":{\"input_tokens\":12,\"output_tokens\":1,\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":4,\"future_counter\":9}}}\n\n"
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n"
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"fixture\"}}\n\n"
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n";
+    stream_ctx ctx; memset(&ctx, 0, sizeof ctx); write_cb((char *)fixture, 1, strlen(fixture), &ctx);
+    int ok = ctx.round_usage.input_tokens == 12 && ctx.round_usage.output_tokens == 7 &&
+        ctx.round_usage.cache_creation_input_tokens == 3 && ctx.round_usage.cache_read_input_tokens == 4 &&
+        json_count(ctx.raw_usage, "future_counter") == 9;
+    char tmp[] = "/tmp/gcode-step2-test-XXXXXX"; if (!mkdtemp(tmp)) return 1; setenv("GCODE_STATE_DIR", tmp, 1);
+    config cfg = { "https://example.invalid", NULL, NULL, "fixture-model", "fixture-system", 123, 4, 0, 0 };
+    session s; cJSON *messages = cJSON_CreateArray();
+    if (session_create(&s, &cfg)) return 1;
+    struct stat logst; ok &= !stat(s.path, &logst) && (logst.st_mode & 0777) == 0600;
+    ok &= append_user_text(&s, messages, "hello") == 0;
+    cJSON *round = record_new(&s, "api_round"); cJSON_AddStringToObject(round, "request_model", cfg.model); cJSON_AddStringToObject(round, "response_model", "fixture-model");
+    cJSON_AddStringToObject(round, "provider_message_id", "msg_fixture"); cJSON_AddStringToObject(round, "stop_reason", "end_turn");
+    cJSON_AddItemToObject(round, "usage", usage_json(&ctx.round_usage)); cJSON_AddItemToObject(round, "raw_usage", cJSON_Duplicate(ctx.raw_usage, 1)); ok &= record_write(&s, round) == 0;
+    cJSON *assistant = cJSON_CreateObject(), *content = cJSON_CreateArray(), *text = cJSON_CreateObject(); cJSON_AddStringToObject(assistant, "role", "assistant");
+    cJSON_AddStringToObject(text, "type", "text"); cJSON_AddStringToObject(text, "text", "fixture"); cJSON_AddItemToArray(content, text); cJSON_AddItemToObject(assistant, "content", content); cJSON_AddItemToArray(messages, assistant);
+    ok &= persist_message(&s, assistant, "model") == 0; char *path = strdup(s.path); close(s.fd); s.fd = -1; cJSON_Delete(messages);
+    int partial = open(path, O_WRONLY | O_APPEND); if (partial >= 0) { ok &= write(partial, "{crash", 6) == 6; close(partial); } else ok = 0;
+    cJSON *loaded = cJSON_CreateArray(); session resumed; ok &= session_resume(&resumed, &cfg, loaded, path) == 0;
+    ok &= cJSON_GetArraySize(loaded) == 2 && resumed.total.input_tokens == 12 && resumed.total.output_tokens == 7 && resumed.seq == 5 && resumed.turn_index == 1;
+    FILE *f = fopen(path, "r"); const char *want[] = {"session_meta", "turn_start", "message", "api_round", "message"}; char *line = NULL; size_t cap = 0;
+    for (int i = 0; i < 5; i++) { if (!f || getline(&line, &cap, f) < 0) { ok = 0; break; } cJSON *r = cJSON_Parse(line); ok &= r && !strcmp(jstr(r, "type"), want[i]) && json_count(r, "seq") == i + 1; cJSON_Delete(r); }
+    if (f) fclose(f); free(line); close(resumed.fd); free(resumed.path); free(resumed.last_stop); cJSON_Delete(loaded); free(path);
+    for (int i = 0; i < MAX_BLOCKS; i++) { sb_free(&ctx.blocks[i].text); sb_free(&ctx.blocks[i].json); free(ctx.blocks[i].id); free(ctx.blocks[i].name); }
+    free(ctx.stop_reason); free(ctx.message_id); free(ctx.response_model); cJSON_Delete(ctx.raw_usage); sb_free(&ctx.accum); sb_free(&ctx.raw); sb_free(&ctx.errmsg);
+    fprintf(stderr, "gcode self-test: %s\n", ok ? "PASS" : "FAIL"); return ok ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
@@ -648,7 +956,7 @@ int main(int argc, char **argv) {
     cfg.verbose = 0;
     cfg.color = 1;
 
-    const char *prompt = NULL;
+    const char *prompt = NULL, *resume = NULL; int persist = 1, do_continue = 0, do_self_test = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-p") && i + 1 < argc)                 prompt = argv[++i];
         else if (!strcmp(argv[i], "--model") && i + 1 < argc)       cfg.model = argv[++i];
@@ -657,42 +965,60 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--max-tokens") && i + 1 < argc)  cfg.max_tokens = atol(argv[++i]);
         else if (!strcmp(argv[i], "--verbose"))                     cfg.verbose = 1;
         else if (!strcmp(argv[i], "--no-color"))                    cfg.color = 0;
+        else if (!strcmp(argv[i], "--no-persist"))                  persist = 0;
+        else if (!strcmp(argv[i], "--resume") && i + 1 < argc)      resume = argv[++i];
+        else if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--continue")) do_continue = 1;
+        else if (!strcmp(argv[i], "--self-test"))                   do_self_test = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             printf("usage: gcode [-p PROMPT] [--model M] [--system-prompt S]\n"
-                   "            [--max-turns N] [--max-tokens N] [--verbose] [--no-color]\n"
-                   "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL\n");
+                   "            [--max-turns N] [--max-tokens N] [--resume ID|PATH] [-c|--continue]\n"
+                   "            [--no-persist] [--verbose] [--no-color]\n"
+                   "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL,\n"
+                   "     GCODE_STATE_DIR, XDG_STATE_HOME\n");
             return 0;
         }
     }
     g_color = cfg.color;
+    signal(SIGINT, on_interrupt);
+    if (do_self_test) return self_test();
+    if (!persist && (resume || do_continue)) { fprintf(stderr, "gcode: --no-persist cannot be used with resume\n"); return 2; }
     if (!cfg.api_key && !cfg.auth_token)
         fprintf(stderr, "%sgcode: warning: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN set%s\n", CDIM, CRST);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     cJSON *messages = cJSON_CreateArray();
     cJSON *tools = build_tools();
+    session sess; memset(&sess, 0, sizeof sess); sess.fd = -1; sess.persist = persist;
+    if (persist) {
+        if ((resume || do_continue) ? session_resume(&sess, &cfg, messages, resume) : session_create(&sess, &cfg)) {
+            cJSON_Delete(messages); cJSON_Delete(tools); curl_global_cleanup(); return 1;
+        }
+    } else make_session_id(sess.id);
 
     if (prompt) {
-        append_user_text(messages, prompt);
-        agent_loop(&cfg, messages, tools);
+        if (append_user_text(&sess, messages, prompt) || agent_loop(&cfg, &sess, messages, tools)) { session_end(&sess, "eof"); return 1; }
+        session_end(&sess, "eof");
     } else {
         fprintf(stderr, "%scode — type a request, /quit to exit%s\n", CDIM, CRST);
         char line[8192];
         for (;;) {
             fputs("\n> ", stderr); fflush(stderr);
-            if (!fgets(line, sizeof line, stdin)) break;
+            if (!fgets(line, sizeof line, stdin)) { session_end(&sess, "eof"); break; }
             size_t n = strlen(line);
             while (n && (line[n-1] == '\n' || line[n-1] == '\r')) line[--n] = 0;
             if (!n) continue;
-            if (!strcmp(line, "/quit") || !strcmp(line, "/exit")) break;
+            if (!strcmp(line, "/quit") || !strcmp(line, "/exit")) { session_end(&sess, "quit"); break; }
             if (!strcmp(line, "/clear")) {
+                session_end(&sess, "clear"); free(sess.path); free(sess.last_stop);
                 cJSON_Delete(messages); messages = cJSON_CreateArray();
+                if (persist && session_create(&sess, &cfg)) { cJSON_Delete(messages); cJSON_Delete(tools); curl_global_cleanup(); return 1; }
+                if (!persist) { memset(&sess, 0, sizeof sess); sess.fd = -1; make_session_id(sess.id); }
                 fprintf(stderr, "%s[history cleared]%s\n", CDIM, CRST); continue;
             }
-            append_user_text(messages, line);
-            agent_loop(&cfg, messages, tools);
+            if (append_user_text(&sess, messages, line) || agent_loop(&cfg, &sess, messages, tools)) break;
         }
     }
+    if (sess.fd >= 0) close(sess.fd); free(sess.path); free(sess.last_stop);
     cJSON_Delete(messages); cJSON_Delete(tools);
     curl_global_cleanup();
     return 0;
