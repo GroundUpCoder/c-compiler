@@ -582,6 +582,14 @@ typedef struct tagCREATESTRUCT {
 #define CS_VREDRAW  0x0001
 #define CS_HREDRAW  0x0002
 #define CS_DBLCLKS  0x0008
+/* gucOS extension (todos/0258, menu-arch §3.7/A6): the app presents its
+ * own CLIENT plane (webgpu.h, or any self-presented transport) — user32
+ * never synthesizes WM_PAINT for such a window and never touches its
+ * window surface; GetDC on it fails loud (no CPU plane to wrap). The
+ * name is transport-neutral on purpose: GPU is one instance of an
+ * app-presented client, not the definition. Menus, input, dialogs and
+ * the agent tree work unchanged — they never touch client pixels. */
+#define CS_OWNCLIENT 0x00040000
 
 /* Window styles (the honored subset; others parse and are ignored) */
 #define WS_OVERLAPPED   0x00000000u
@@ -1677,6 +1685,14 @@ BOOL IsClipboardFormatAvailable(UINT format);
 #define CF_TEXT        1
 #define CF_BITMAP      2
 #define CF_UNICODETEXT 13
+
+/* gucOS extension (todos/0258, menu-arch §3.7a): the SDL window under a
+ * top-level HWND, so a CS_OWNCLIENT app can bind its own present path to
+ * it (SDL_GetWGPUSurface). Any HWND resolves to its top-level's window;
+ * NULL for a destroyed window. SDL_Window is a named-struct typedef in
+ * <SDL.h>, so this forward declaration is the same type. */
+struct SDL_Window;
+struct SDL_Window *GetWindowSDL(HWND hwnd);
 
 int  GetSystemMetrics(int index);
 #define SM_CXSCREEN 0

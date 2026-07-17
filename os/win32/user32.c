@@ -347,6 +347,17 @@ struct __HWND {
  * in-surface era. */
 static int bar_h(HWND top) { return top->menu ? MENU_BAR_H : 0; }
 
+/* CS_OWNCLIENT (todos/0258, menu-arch §3.7/A6): the app presents its own
+ * client plane — user32 must never synthesize WM_PAINT for the window and
+ * never touch its window surface (a GetWindowSurface/UpdateWindowSurface
+ * present would fight the app's transport). Everything above the client —
+ * menus (own child surfaces), input, dialogs, the agent tree — is
+ * client-pixel-free already and works unchanged. Transport-neutral by
+ * decision A6: a self-presenting CPU app takes the identical path. */
+static int own_client(HWND h) {
+    return h && h->top->cls && (h->top->cls->style & CS_OWNCLIENT) != 0;
+}
+
 static void menu_bar_sync(HWND top);    /* create/resize/destroy the strip */
 static void menu_close(void);           /* dismiss the whole open chain */
 
@@ -403,6 +414,13 @@ static uint32_t g_scratchPx[1];  /* degenerate rects draw here, discarded */
 HDC GetDC(HWND h) {
     if (!h) return NULL;                 /* no whole-screen DC in this OS */
     HWND top = h->top;
+    if (own_client(h)) {
+        /* No CPU plane to wrap: GDI on an app-presented client is out of
+         * scope by definition (§3.7c) — pixels belong to exactly one
+         * renderer per window. Fail loud, never wrap the dead buffer. */
+        WIN32_UNSUPPORTED("GetDC on a CS_OWNCLIENT window (no CPU client plane)");
+        return NULL;
+    }
     SDL_Surface *s = SDL_GetWindowSurface(top->win);
     if (!s) return NULL;
     int ox, oy;
@@ -422,8 +440,11 @@ int ReleaseDC(HWND h, HDC dc) {
     if (!h || !dc) return 0;
     /* Menu pixels live on their own child surfaces (todos/0257): an app
      * present never touches them and vice versa — the every-present
-     * overlay draw (coupling #1) is gone, not disabled. */
-    SDL_UpdateWindowSurface(h->top->win);        /* present: shm mailbox flip */
+     * overlay draw (coupling #1) is gone, not disabled. CS_OWNCLIENT:
+     * never present the window surface (the app owns the client plane;
+     * unreachable via GetDC, but a stray DC must not flip the mailbox). */
+    if (!own_client(h))
+        SDL_UpdateWindowSurface(h->top->win);    /* present: shm mailbox flip */
     __gdi_dc_unwrap(dc);
     return 1;
 }
@@ -454,15 +475,25 @@ BOOL EndPaint(HWND h, const PAINTSTRUCT *ps) {
 
 BOOL GetClientRect(HWND h, RECT *r) {
     if (!h || !r) return FALSE;
-    if (is_top(h)) {                     /* live surface size: resizes seen */
-        SDL_Surface *s = SDL_GetWindowSurface(h->win);
-        if (!s) return FALSE;
-        int ch = s->h - bar_h(h);
-        SetRect(r, 0, 0, s->w, ch < 0 ? 0 : ch);
+    if (is_top(h)) {                     /* live window size: resizes seen
+                                          * (size query, not a surface touch
+                                          * — CS_OWNCLIENT-safe, 0258) */
+        int sw, sh;
+        if (!SDL_GetWindowSize(h->win, &sw, &sh)) return FALSE;
+        int ch = sh - bar_h(h);
+        SetRect(r, 0, 0, sw, ch < 0 ? 0 : ch);
         return TRUE;
     }
     SetRect(r, 0, 0, h->w, h->h);
     return TRUE;
+}
+
+/* gucOS extension (0258, menu-arch §3.7a): the SDL window under a
+ * top-level HWND — the seam a CS_OWNCLIENT app binds its own present
+ * path to (SDL_GetWGPUSurface(instance, GetWindowSDL(hwnd))). Plain
+ * accessor, no ownership transfer: DestroyWindow still tears it down. */
+SDL_Window *GetWindowSDL(HWND h) {
+    return h ? h->top->win : NULL;
 }
 
 BOOL GetWindowRect(HWND h, RECT *r) {
@@ -1562,10 +1593,12 @@ static void menu_bar_sync(HWND top) {
         }
         return;
     }
-    SDL_Surface *ps = SDL_GetWindowSurface(top->win);
-    if (!ps) return;
+    int pw, ph;                          /* size query, not a surface touch —
+                                          * a CS_OWNCLIENT parent's surface
+                                          * is the app's alone (0258) */
+    if (!SDL_GetWindowSize(top->win, &pw, &ph)) return;
     if (!top->barWin) {
-        top->barWin = SDL_CreatePopupWindow(top->win, 0, 0, ps->w, MENU_BAR_H,
+        top->barWin = SDL_CreatePopupWindow(top->win, 0, 0, pw, MENU_BAR_H,
                                             SDL_WINDOW_TOOLTIP);
         if (!top->barWin) {
             WIN32_UNSUPPORTED("menu bar strip window (%s)", SDL_GetError());
@@ -1574,8 +1607,8 @@ static void menu_bar_sync(HWND top) {
         SDL_SetWindowTitle(top->barWin, "menubar");
     } else {
         SDL_Surface *bs = SDL_GetWindowSurface(top->barWin);
-        if (bs && bs->w != ps->w) {
-            SDL_SetWindowSize(top->barWin, ps->w, MENU_BAR_H);
+        if (bs && bs->w != pw) {
+            SDL_SetWindowSize(top->barWin, pw, MENU_BAR_H);
             return;                              /* repaint at the ack */
         }
     }
@@ -3048,9 +3081,13 @@ BOOL InvalidateRect(HWND h, const RECT *r, BOOL erase) {
     (void)r; (void)erase;                        /* whole-window granularity */
     if (!h) {                                    /* NULL: everything */
         for (int i = 0; i < g_nTops; i++)
-            if (g_tops[i]) invalidate_tree(g_tops[i]);
+            if (g_tops[i] && !own_client(g_tops[i])) invalidate_tree(g_tops[i]);
         return TRUE;
     }
+    /* CS_OWNCLIENT (0258): WM_PAINT synthesis is suppressed at its one
+     * source — the app presents the client itself; a user32 paint pass
+     * would need a DC that deliberately does not exist. */
+    if (own_client(h)) return TRUE;
     invalidate_tree(h);
     return TRUE;
 }

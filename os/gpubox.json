@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "gpubox",
+  "description": "GPU demo (0016), since 0258 a minimal win32 app: CS_OWNCLIENT window + File/Options menu over the webgpu.h cube — the M2 uniform-menu acceptance app",
+  "deps": [
+    "win32/lib.json"
+  ],
+  "sources": [
+    "gpubox.c"
+  ]
+}

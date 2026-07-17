@@ -8,6 +8,15 @@
 // (todos/0019: canvas + surface + depth reconfigure, bitmap-size ack), and
 // `wmctl close` quits the app cleanly.
 //
+// Since todos/0258 (menu arch M2) gpubox is a win32 app (CS_OWNCLIENT) and
+// this file is the REAL-CUBE HALF OF THE M2 ACCEPTANCE GATE (design note,
+// honest-limitation #2): the headless no-Dawn e2e proves the menu machinery
+// over a black client; only this leg proves the menu renders correctly over
+// a LIVE GPU present — the "menubar" strip composites COLOR_MENU above the
+// animating ImageBitmap client, a bar click drops a "#32768" popup child
+// over the cube, and Options > Spin actually freezes the rotation
+// (time-separated frame probes go equal).
+//
 // Usage: node os-gpubox.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osHelpers, osUrl } from './lib/os-harness.mjs';
 
@@ -60,6 +69,11 @@ try {
     const s = window.__osScreen;
     return s && Math.abs(r.width - s.w) < 2 && Math.abs(r.height - s.h) < 2;
   }, { timeout: 30000, polling: 200 });
+  // 0258: the top MENU_BAR_H(20)px of the window are the "menubar" anchored
+  // child strip — client probes sit BELOW it (the clear-color corner moved
+  // from +4 to BAR+4).
+  const BAR = 20;
+  const MENUFACE = [192, 192, 192];           // COLOR_MENU, gdi32 SYSCOLORS
   const WX = 12, WY = 36, CX = WX + 128, CY = WY + 128;
 
   // Cube covers the window center from every rotation angle; wait for ANY
@@ -71,14 +85,20 @@ try {
   let center = null;
   for (;;) {
     center = await sample(CX, CY);
-    const corner = await sample(WX + 4, WY + 4);
+    const corner = await sample(WX + 4, WY + BAR + 4);
     if (center && !near(center, TEAL) && !near(center, CLEAR) && near(corner, CLEAR)) break;
     if (Date.now() - t0 > 90000) throw new Error(`cube never composited at center; last ${center}`);
     await new Promise(r => setTimeout(r, 250));
   }
   check('gpubox cube composited (GPU frame through the gpu transport)', true, center);
   check('client corner is the render-pass clear color (real 3D scene, not a fill)',
-    near(await sample(WX + 4, WY + 4), CLEAR), await sample(WX + 4, WY + 4));
+    near(await sample(WX + 4, WY + BAR + 4), CLEAR), await sample(WX + 4, WY + BAR + 4));
+
+  // M2 gate: the menu bar strip child composites ABOVE the live GPU client —
+  // COLOR_MENU at the strip's right end (past the File/Options titles),
+  // where the parent's own frame underneath is the animating cube/clear.
+  check('menu bar strip composites over the LIVE cube (COLOR_MENU)',
+    near(await sample(WX + 250, WY + 10), MENUFACE), await sample(WX + 250, WY + 10));
 
   // Animation: an off-center probe crosses face/background boundaries as the
   // cube rotates — two samples far apart in time must differ.
@@ -93,6 +113,55 @@ try {
     animated = b.some((v, j) => Math.abs(v - a[j]) > 12);
   }
   check('cube animates (webgpu.h present loop is live)', animated);
+
+  // ---- M2 gate: the menu WORKS over the live cube ----
+  // A bar click drops a real "#32768" popup child over the animating client:
+  // the probe point just under the bar flips from scene pixels to COLOR_MENU
+  // (the popup's row-0 gutter), and ESC restores it.
+  await setVt(1);
+  await page.keyboard.type('SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//"); wmctl click $SID 12 10\r');
+  await setVt(2);
+  const tP = Date.now();
+  for (;;) {
+    const got = await sample(WX + 2 + 8, WY + BAR + 9);   // popup-rel (8,9): row-0 gutter
+    if (near(got, MENUFACE)) break;
+    if (Date.now() - tP > 30000) throw new Error(`popup never composited over the cube; probe ${got}`);
+    await new Promise(r => setTimeout(r, 250));
+  }
+  check('bar click opened a popup child over the live GPU client', true);
+  await setVt(1);
+  await page.keyboard.type('wmctl key $SID 41 27\r');   // ESC closes the popup
+  await setVt(2);
+  const tE = Date.now();
+  for (;;) {
+    const got = await sample(WX + 2 + 8, WY + BAR + 9);
+    if (!near(got, MENUFACE)) break;
+    if (Date.now() - tE > 30000) throw new Error(`popup never dismissed; probe ${got}`);
+    await new Promise(r => setTimeout(r, 250));
+  }
+  check('ESC dismissed the popup; client pixels back', true);
+
+  // Options > Spin via the agent path (label click, menu closed — A12): the
+  // rotation freezes, so time-separated probes that just proved animation
+  // now come back IDENTICAL. gpubox's marker on the tty is the sync point
+  // (a posted WM_COMMAND lands on the next pump tick — never race it).
+  await setVt(1);
+  await page.keyboard.type('wmctl click Spin\r');
+  await page.waitForFunction(() => window.__osOut.includes('gpubox: spin off'), { timeout: 20000, polling: 200 });
+  await setVt(2);
+  const s0 = await probe();
+  let frozen = true;
+  for (let i = 0; i < 6; i++) {
+    await new Promise(r => setTimeout(r, 400));
+    const s1 = await probe();
+    if (s1.some((v, j) => Math.abs(v - s0[j]) > 4)) { frozen = false; break; }
+  }
+  check('Options>Spin froze the cube (time-separated frame probes equal)', frozen);
+  // spin back on: the demo keeps animating for the resize/close legs below
+  await setVt(1);
+  await page.keyboard.type('wmctl click Spin\r');
+  await page.waitForFunction(() => window.__osOut.includes('gpubox: spin on'), { timeout: 20000, polling: 200 });
+  await setVt(2);
 
   // Client resize through the gpu transport (todos/0019): configure event ->
   // gpubox reconfigures its canvas surface + depth at 320x200 -> the first

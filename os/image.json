@@ -1,5 +1,5 @@
 {
-  "version": 117,
+  "version": 118,
   "overlays": [
     {
       "id": "clang-apps",
@@ -38,7 +38,7 @@
         "c": "winbox.c"
       },
       "/usr/bin/gpubox": {
-        "c": "gpubox.c"
+        "project": "os/gpubox.json"
       },
       "/usr/bin/wm": {
         "c": "wm.c",

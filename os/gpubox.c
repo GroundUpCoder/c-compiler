@@ -1,6 +1,8 @@
-/* gpubox.c — the seeded GPU demo (todos/0016): a real SDL window rendered
- * with direct webgpu.h calls — the first end-to-end consumer of the WM's
- * `gpu` transport. Run it from the shell:  gpubox &
+/* gpubox.c — the seeded GPU demo (todos/0016), since todos/0258 a minimal
+ * WIN32 app with a real menu: the M2 acceptance app of the uniform-menu
+ * architecture (menu arch §4.a) — a GPU app's File/Options menu riding the
+ * SAME user32 engine, anchored-child surfaces and agent tree as notepad's.
+ * Run it from the shell:  gpubox &
  *
  * A lambert-shaded cube, each face a distinct color, rotating one fixed step
  * per frame (frame-indexed, not wall-clock — pose N is deterministic):
@@ -8,19 +10,41 @@
  *   gpubox -f N     frozen at pose N (what the tier-1 Dawn suite screenshots:
  *                   pose 0 shows the red +Z face head-on; tolerance-diff safe)
  *
+ * The win32 shape (§4.a): RegisterClass with CS_OWNCLIENT ("app presents
+ * its own client plane" — user32 synthesizes no WM_PAINT and never touches
+ * the window surface; transport-neutral by decision A6), CreateWindowEx,
+ * then the WebGPU path binds to the SAME window via GetWindowSDL ->
+ * SDL_GetWGPUSurface. The frame callback pumps PeekMessage (the agent
+ * socket and menu tracking ride it) and then renders exactly as before.
+ * Menu: File > Open Scene... (grayed — no scene format exists; honest
+ * disable, not a dead item) / Quit; Options > Spin (checked) / Wireframe.
+ * WM_COMMAND toggles really act: Spin freezes the rotation next frame,
+ * Wireframe swaps the pipeline to the cube's edge lines.
+ *
+ * No-GPU survival (decision A14): when adapter/device/surface acquisition
+ * fails, gpubox does NOT exit — the window, menu and message pump stay
+ * alive over a dead (black) client. That is honest degradation AND what
+ * lets the headless no-Dawn acceptance e2e drive the menu
+ * (tests/kernel/test_gpubox_menu_e2e.js).
+ *
  * Environment is negotiated entirely below webgpu.h (todos/WM.md invariant 1):
  * browser = per-process WebGPU device + ImageBitmap handoff; headless + the
  * optional `webgpu` (Dawn) package = render to a plain texture + readback into
- * the shm SAB; stock Node = clean adapter-unavailable, exit 2.
+ * the shm SAB; stock Node = adapter-unavailable -> the A14 survival mode.
  *
- * Quit: close box / 'q'. Quits via SDL_Quit() (stops the frame loop; the
- * runtime drains pending Dawn readbacks before the EXIT handshake) — Dawn-tier
- * apps must NOT call exit() from a frame callback (WM.md spike S3 caveat).
+ * Quit: close box / menu Quit / 'q' -> WM_CLOSE -> PostQuitMessage -> the
+ * pump calls SDL_Quit() (stops the frame loop; the runtime drains pending
+ * Dawn readbacks before the EXIT handshake). Dawn-tier apps must NOT call
+ * exit() from a frame callback, and must NOT tear the window down while a
+ * readback may be in flight — quit goes through SDL_Quit alone (WM.md
+ * spike S3 caveat).
  *
- * Resize (todos/0019): SDL_EVENT_WINDOW_RESIZED reconfigures the surface at
- * the new size and rebuilds the depth buffer — the canonical webgpu.h
- * resize dance, same in the browser and under Dawn.
+ * Resize (todos/0019): kernel RESIZED -> user32 WM_SIZE -> reconfigure the
+ * surface at the new FULL window size (the swapchain covers the whole
+ * surface; the menu bar strip child overlays its top MENU_BAR_H pixels)
+ * and rebuild the depth buffer — the canonical webgpu.h resize dance.
  */
+#include <windows.h>
 #include <sdl3webgpu.h>
 #include <math.h>
 #include <stdio.h>
@@ -30,21 +54,29 @@
 #define W 256
 #define H 256
 
-static SDL_Window *win;
+#define ID_OPEN 101
+#define ID_QUIT 102
+#define ID_SPIN 201
+#define ID_WIRE 202
+
+static HWND hwnd;
+static SDL_Window *win;          /* the user32 window's SDL window (GetWindowSDL) */
 static WGPUInstance instance;
 static WGPUSurface surface;
 static WGPUAdapter adapter;
 static WGPUDevice device;
 static WGPUQueue queue;
-static WGPURenderPipeline pipeline;
-static WGPUBuffer vbuf, ibuf, ubuf;
+static WGPURenderPipeline pipeline, pipelineWire;
+static WGPUBuffer vbuf, ibuf, ibufWire, ubuf;
 static WGPUBindGroup bindGroup;
 static WGPUTexture depthTex;
 static WGPUTextureView depthView;
 static WGPUTextureFormat format;
-static int gw = W, gh = H;       /* current size (resize events update it) */
+static int gw = W, gh = H;       /* current FULL window size (WM_SIZE updates it) */
 static int ready = 0;
-static int failed = 0;
+static int failed = 0;           /* A14: no-GPU survival flag, never an exit */
+static int spin = 1;             /* Options > Spin */
+static int wire = 0;             /* Options > Wireframe */
 static long frame_no = 0;
 static int fixed_pose = -1;      /* -f N: freeze the rotation at pose N */
 
@@ -107,6 +139,7 @@ static void mat_rot_y(float *m, float a) {
 
 static float verts[6 * 4 * 9];
 static unsigned short indices[36];
+static unsigned short edges[48];         /* wireframe: 4 outline lines per face */
 
 static void build_cube(void) {
     /* per face: normal, tangent u, bitangent v (u x v == n), color */
@@ -135,6 +168,11 @@ static void build_cube(void) {
         indices[j + 2] = (unsigned short)(b + 2);
         indices[j + 3] = (unsigned short)b;     indices[j + 4] = (unsigned short)(b + 2);
         indices[j + 5] = (unsigned short)(b + 3);
+        int e = f * 8;                           /* face outline as a line list */
+        for (int k = 0; k < 4; k++) {
+            edges[e + k * 2] = (unsigned short)(b + k);
+            edges[e + k * 2 + 1] = (unsigned short)(b + (k + 1) % 4);
+        }
     }
 }
 
@@ -185,54 +223,10 @@ static void configure_surface(void) {
     wgpuSurfaceConfigure(surface, &cfg);
 }
 
-static void build(void) {
-    WGPUShaderSourceWGSL wgsl;
-    wgsl.chain.next = NULL; wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgsl.code.data = shader; wgsl.code.length = WGPU_STRLEN;
-    WGPUShaderModuleDescriptor sd;
-    sd.nextInChain = (const WGPUChainedStruct *)&wgsl; sd.label.data = NULL; sd.label.length = 0;
-    WGPUShaderModule sm = wgpuDeviceCreateShaderModule(device, &sd);
-
-    build_cube();
-    WGPUBufferDescriptor bd;
-    memset(&bd, 0, sizeof(bd));
-    bd.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-    bd.size = sizeof(verts);
-    vbuf = wgpuDeviceCreateBuffer(device, &bd);
-    wgpuQueueWriteBuffer(queue, vbuf, 0, verts, sizeof(verts));
-    bd.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
-    bd.size = sizeof(indices);
-    ibuf = wgpuDeviceCreateBuffer(device, &bd);
-    wgpuQueueWriteBuffer(queue, ibuf, 0, indices, sizeof(indices));
-    bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-    bd.size = 32 * sizeof(float);
-    ubuf = wgpuDeviceCreateBuffer(device, &bd);
-
-    WGPUBindGroupLayoutEntry ble;
-    memset(&ble, 0, sizeof(ble));
-    ble.binding = 0;
-    ble.visibility = WGPUShaderStage_Vertex;
-    ble.buffer.type = WGPUBufferBindingType_Uniform;
-    WGPUBindGroupLayoutDescriptor bld;
-    memset(&bld, 0, sizeof(bld));
-    bld.entryCount = 1; bld.entries = &ble;
-    WGPUBindGroupLayout bgl = wgpuDeviceCreateBindGroupLayout(device, &bld);
-
-    WGPUBindGroupEntry be;
-    memset(&be, 0, sizeof(be));
-    be.binding = 0; be.buffer = ubuf; be.offset = 0; be.size = 32 * sizeof(float);
-    WGPUBindGroupDescriptor bgd;
-    memset(&bgd, 0, sizeof(bgd));
-    bgd.layout = bgl; bgd.entryCount = 1; bgd.entries = &be;
-    bindGroup = wgpuDeviceCreateBindGroup(device, &bgd);
-
-    WGPUPipelineLayoutDescriptor pld;
-    memset(&pld, 0, sizeof(pld));
-    pld.bindGroupLayoutCount = 1; pld.bindGroupLayouts = &bgl;
-    WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(device, &pld);
-
-    make_depth();
-
+/* One pipeline builder, two topologies: the solid cube and its edge-line
+ * wireframe share the shader, layouts and depth state. */
+static WGPURenderPipeline make_pipeline(WGPUShaderModule sm, WGPUPipelineLayout pl,
+                                        int lines) {
     WGPUVertexAttribute attrs[3];
     attrs[0].format = WGPUVertexFormat_Float32x3; attrs[0].offset = 0;  attrs[0].shaderLocation = 0;
     attrs[1].format = WGPUVertexFormat_Float32x3; attrs[1].offset = 12; attrs[1].shaderLocation = 1;
@@ -263,40 +257,93 @@ static void build(void) {
     pd.vertex.module = sm;
     pd.vertex.entryPoint.data = "vs"; pd.vertex.entryPoint.length = WGPU_STRLEN;
     pd.vertex.bufferCount = 1; pd.vertex.buffers = &vbl;
-    pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pd.primitive.topology = lines ? WGPUPrimitiveTopology_LineList
+                                  : WGPUPrimitiveTopology_TriangleList;
     pd.primitive.stripIndexFormat = WGPUIndexFormat_Undefined;
     pd.primitive.frontFace = WGPUFrontFace_CCW;
-    pd.primitive.cullMode = WGPUCullMode_Back;
+    pd.primitive.cullMode = lines ? WGPUCullMode_None : WGPUCullMode_Back;
     pd.depthStencil = &ds;
     pd.multisample.count = 1; pd.multisample.mask = 0xFFFFFFFF;
     pd.fragment = &fs;
-    pipeline = wgpuDeviceCreateRenderPipeline(device, &pd);
+    return wgpuDeviceCreateRenderPipeline(device, &pd);
+}
+
+static void build(void) {
+    WGPUShaderSourceWGSL wgsl;
+    wgsl.chain.next = NULL; wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code.data = shader; wgsl.code.length = WGPU_STRLEN;
+    WGPUShaderModuleDescriptor sd;
+    sd.nextInChain = (const WGPUChainedStruct *)&wgsl; sd.label.data = NULL; sd.label.length = 0;
+    WGPUShaderModule sm = wgpuDeviceCreateShaderModule(device, &sd);
+
+    build_cube();
+    WGPUBufferDescriptor bd;
+    memset(&bd, 0, sizeof(bd));
+    bd.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+    bd.size = sizeof(verts);
+    vbuf = wgpuDeviceCreateBuffer(device, &bd);
+    wgpuQueueWriteBuffer(queue, vbuf, 0, verts, sizeof(verts));
+    bd.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
+    bd.size = sizeof(indices);
+    ibuf = wgpuDeviceCreateBuffer(device, &bd);
+    wgpuQueueWriteBuffer(queue, ibuf, 0, indices, sizeof(indices));
+    bd.size = sizeof(edges);
+    ibufWire = wgpuDeviceCreateBuffer(device, &bd);
+    wgpuQueueWriteBuffer(queue, ibufWire, 0, edges, sizeof(edges));
+    bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+    bd.size = 32 * sizeof(float);
+    ubuf = wgpuDeviceCreateBuffer(device, &bd);
+
+    WGPUBindGroupLayoutEntry ble;
+    memset(&ble, 0, sizeof(ble));
+    ble.binding = 0;
+    ble.visibility = WGPUShaderStage_Vertex;
+    ble.buffer.type = WGPUBufferBindingType_Uniform;
+    WGPUBindGroupLayoutDescriptor bld;
+    memset(&bld, 0, sizeof(bld));
+    bld.entryCount = 1; bld.entries = &ble;
+    WGPUBindGroupLayout bgl = wgpuDeviceCreateBindGroupLayout(device, &bld);
+
+    WGPUBindGroupEntry be;
+    memset(&be, 0, sizeof(be));
+    be.binding = 0; be.buffer = ubuf; be.offset = 0; be.size = 32 * sizeof(float);
+    WGPUBindGroupDescriptor bgd;
+    memset(&bgd, 0, sizeof(bgd));
+    bgd.layout = bgl; bgd.entryCount = 1; bgd.entries = &be;
+    bindGroup = wgpuDeviceCreateBindGroup(device, &bgd);
+
+    WGPUPipelineLayoutDescriptor pld;
+    memset(&pld, 0, sizeof(pld));
+    pld.bindGroupLayoutCount = 1; pld.bindGroupLayouts = &bgl;
+    WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(device, &pld);
+
+    make_depth();
+
+    pipeline = make_pipeline(sm, pl, 0);
+    pipelineWire = make_pipeline(sm, pl, 1);
     wgpuShaderModuleRelease(sm);
 }
 
 static void frame(void) {
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_EVENT_QUIT ||
-            (e.type == SDL_EVENT_KEY_DOWN && e.key.key == 'q')) {
-            SDL_Quit();          /* stop the frame loop; runtime drains + exits */
+    /* The win32 pump (§4.a.3): posted messages, menu tracking, WM_TIMERs
+     * and the agent socket all ride PeekMessage. WM_QUIT is the one exit
+     * path — SDL_Quit stops the frame loop and the runtime drains pending
+     * Dawn work before the EXIT handshake (never exit() from here). */
+    MSG m;
+    while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE)) {
+        if (m.message == WM_QUIT) {
+            SDL_Quit();
             return;
         }
-        if (e.type == SDL_EVENT_WINDOW_RESIZED && ready) {
-            gw = e.window.data1;
-            gh = e.window.data2;
-            configure_surface();     /* swapchain at the new size */
-            make_depth();            /* depth must match the color target */
-        }
+        TranslateMessage(&m);
+        DispatchMessage(&m);
     }
-    /* GPU init failed: no Dawn work is in flight, so a direct exit is safe
-     * here (the SDL_Quit-then-drain discipline only matters once rendering
-     * has started). Nonzero so scripts can tell "no GPU" from a clean quit. */
-    if (failed) { SDL_Quit(); exit(2); }
+    /* A14 no-GPU survival: acquisition failed -> ready never rises; the
+     * window, menu and pump above stay fully alive over the dead client. */
     if (!ready) return;
 
     update_uniforms(fixed_pose >= 0 ? fixed_pose : frame_no);
-    frame_no++;
+    if (spin && fixed_pose < 0) frame_no++;      /* Spin off = pose frozen */
 
     WGPUSurfaceTexture st;
     wgpuSurfaceGetCurrentTexture(surface, &st);
@@ -323,11 +370,12 @@ static void frame(void) {
     rp.depthStencilAttachment = &depthAtt;
 
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
-    wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    wgpuRenderPassEncoderSetPipeline(pass, wire ? pipelineWire : pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, bindGroup, 0, NULL);
     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vbuf, 0, WGPU_WHOLE_SIZE);
-    wgpuRenderPassEncoderSetIndexBuffer(pass, ibuf, WGPUIndexFormat_Uint16, 0, WGPU_WHOLE_SIZE);
-    wgpuRenderPassEncoderDrawIndexed(pass, 36, 1, 0, 0, 0);
+    wgpuRenderPassEncoderSetIndexBuffer(pass, wire ? ibufWire : ibuf,
+                                        WGPUIndexFormat_Uint16, 0, WGPU_WHOLE_SIZE);
+    wgpuRenderPassEncoderDrawIndexed(pass, wire ? 48 : 36, 1, 0, 0, 0);
     wgpuRenderPassEncoderEnd(pass);
 
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, NULL);
@@ -346,7 +394,7 @@ static void on_device(WGPURequestDeviceStatus status, WGPUDevice dev,
     (void)msg; (void)u1; (void)u2;
     if (status != WGPURequestDeviceStatus_Success) {
         fprintf(stderr, "gpubox: requestDevice failed\n");
-        failed = 1;              /* the next frame tick quits cleanly */
+        failed = 1;              /* A14: report it, keep window + menu alive */
         return;
     }
     device = dev;
@@ -363,7 +411,7 @@ static void on_adapter(WGPURequestAdapterStatus status, WGPUAdapter ad,
     (void)msg; (void)u1; (void)u2;
     if (status != WGPURequestAdapterStatus_Success) {
         fprintf(stderr, "gpubox: WebGPU unavailable (no adapter)\n");
-        failed = 1;
+        failed = 1;              /* A14: report it, keep window + menu alive */
         return;
     }
     adapter = ad;
@@ -371,6 +419,73 @@ static void on_adapter(WGPURequestAdapterStatus status, WGPUAdapter ad,
     ci.nextInChain = NULL; ci.mode = WGPUCallbackMode_AllowSpontaneous;
     ci.callback = on_device; ci.userdata1 = NULL; ci.userdata2 = NULL;
     wgpuAdapterRequestDevice(adapter, NULL, ci);
+}
+
+/* Menu (§4.a.2, runtime-built like fileman's): File / Options. "Open
+ * Scene..." is GRAYED — no scene format exists in this demo, and an
+ * honestly-disabled item beats one that silently no-ops. */
+static void build_menu(HWND h) {
+    HMENU bar = CreateMenu();
+    HMENU file = CreatePopupMenu();
+    HMENU opts = CreatePopupMenu();
+    AppendMenuA(file, MF_STRING | MF_GRAYED, ID_OPEN, "&Open Scene...");
+    AppendMenuA(file, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(file, MF_STRING, ID_QUIT, "&Quit");
+    AppendMenuA(opts, MF_STRING | MF_CHECKED, ID_SPIN, "&Spin");
+    AppendMenuA(opts, MF_STRING, ID_WIRE, "&Wireframe");
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)file, "&File");
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)opts, "&Options");
+    SetMenu(h, bar);
+}
+
+static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        build_menu(h);
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case ID_SPIN:
+            spin = !spin;
+            CheckMenuItem(GetMenu(h), ID_SPIN,
+                          MF_BYCOMMAND | (spin ? MF_CHECKED : MF_UNCHECKED));
+            printf("gpubox: spin %s\n", spin ? "on" : "off");
+            fflush(stdout);
+            return 0;
+        case ID_WIRE:
+            wire = !wire;
+            CheckMenuItem(GetMenu(h), ID_WIRE,
+                          MF_BYCOMMAND | (wire ? MF_CHECKED : MF_UNCHECKED));
+            printf("gpubox: wireframe %s\n", wire ? "on" : "off");
+            fflush(stdout);
+            return 0;
+        case ID_QUIT:
+            PostMessage(h, WM_CLOSE, 0, 0);
+            return 0;
+        }
+        return 0;
+    case WM_CHAR:
+        if (wp == 'q') PostMessage(h, WM_CLOSE, 0, 0);
+        return 0;
+    case WM_SIZE: {
+        /* Track the FULL window size (WM_SIZE's lParam is the client, i.e.
+         * minus the bar strip); the swapchain covers the whole surface. */
+        SDL_Window *sw = GetWindowSDL(h);
+        if (sw) SDL_GetWindowSize(sw, &gw, &gh);
+        if (ready) {
+            configure_surface();     /* swapchain at the new size */
+            make_depth();            /* depth must match the color target */
+        }
+        return 0;
+    }
+    case WM_CLOSE:
+        /* NOT DestroyWindow: the window must outlive any in-flight Dawn
+         * readback — SDL_Quit (from the pump, on WM_QUIT) is the one
+         * teardown path and drains first (the S3 caveat). */
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
 }
 
 int main(int argc, char **argv) {
@@ -381,20 +496,33 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("gpubox", W, H, SDL_WINDOW_RESIZABLE);
-    if (!win) { fprintf(stderr, "gpubox: no window\n"); return 3; }
-    instance = wgpuCreateInstance(NULL);
-    surface = SDL_GetWGPUSurface(instance, win);
-    if (!surface) { fprintf(stderr, "gpubox: no surface\n"); return 3; }
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.style = CS_OWNCLIENT;         /* the app presents the client plane */
+    wc.lpfnWndProc = wndproc;
+    wc.lpszClassName = "gpubox";
+    RegisterClass(&wc);
+    hwnd = CreateWindowEx(0, "gpubox", "gpubox", WS_THICKFRAME,
+                          0, 0, W, H, NULL, NULL, NULL, NULL);
+    if (!hwnd) { fprintf(stderr, "gpubox: no window\n"); return 3; }
+    win = GetWindowSDL(hwnd);        /* §3.7a: bind WebGPU to user32's window */
 
-    WGPURequestAdapterOptions opts;
-    opts.nextInChain = NULL; opts.compatibleSurface = surface;
-    opts.powerPreference = WGPUPowerPreference_Undefined; opts.forceFallbackAdapter = 0;
-    WGPURequestAdapterCallbackInfo ci;
-    ci.nextInChain = NULL; ci.mode = WGPUCallbackMode_AllowSpontaneous;
-    ci.callback = on_adapter; ci.userdata1 = NULL; ci.userdata2 = NULL;
-    wgpuInstanceRequestAdapter(instance, &opts, ci);
+    instance = wgpuCreateInstance(NULL);
+    surface = win ? SDL_GetWGPUSurface(instance, win) : NULL;
+    if (!surface) {
+        /* A14: no surface -> no adapter request, but NO exit — the window,
+         * menu and pump run over a dead client. */
+        fprintf(stderr, "gpubox: WebGPU unavailable (no surface)\n");
+        failed = 1;
+    } else {
+        WGPURequestAdapterOptions opts;
+        opts.nextInChain = NULL; opts.compatibleSurface = surface;
+        opts.powerPreference = WGPUPowerPreference_Undefined; opts.forceFallbackAdapter = 0;
+        WGPURequestAdapterCallbackInfo ci;
+        ci.nextInChain = NULL; ci.mode = WGPUCallbackMode_AllowSpontaneous;
+        ci.callback = on_adapter; ci.userdata1 = NULL; ci.userdata2 = NULL;
+        wgpuInstanceRequestAdapter(instance, &opts, ci);
+    }
     wgpuSetMainLoopCallback(frame);
     return 0;
 }

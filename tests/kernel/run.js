@@ -109,6 +109,7 @@ const tests = [
   ['test_clipboard_e2e.js', IMG], // 0090: the system clipboard — kernel slot via /bin/clip, notepad copy/cut/paste across processes, term drag-select + Ctrl+Shift+C/V
   ['test_ctxmenu_e2e.js', IMG],  // 0091: right-click context menus — wm.c desktop/icon/taskbar popups (geometry, dismissal, flyouts, keyboard nav), EDIT WM_CONTEXTMENU via the agent, ctlpanel argv
   ['test_gpubox_dawn_e2e.js', IMG], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
+  ['test_gpubox_menu_e2e.js', IMG], // 0258 M2 acceptance: gpubox's win32 menu WITHOUT Dawn — A14 no-GPU survival, bar/popup children over the black client, Spin/Wireframe via the agent; forces tier 0 via lib/nodawn-require.js
   ['test_gpu_multiwin_dawn_e2e.js'], // menu item 0 / A4: TWO GPU windows, per-window present binding — each shows ITS color, no newest-wins clobber; SKIPs without the webgpu pkg
 ];
 
