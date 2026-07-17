@@ -34,6 +34,7 @@ const tests = [
   ['test_tty.js'],          // Phase 3: line discipline semantics (kernel-side, no wasm)
   ['test_tty_e2e.js'],      // Phase 3: real C driven by a scripted UI bridge
   ['test_fs_e2e.js'],       // 0009: brokered fs — shared offsets, fd_actions, SIGKILL+fsck, winsize
+  ['test_cfgstore_e2e.js'], // 0254: cfgstore.h never silently truncates — >8K user file survives cfg_set (the R3 data-loss regression), streaming replace/append/dedupe, cfg_load3 -1/EFBIG loud cap, errno on every failure path
   ['test_mounts.js'],       // 0026: MountFS — prefix routing, EXDEV/EBUSY, symlink escapes (no wasm)
   ['test_module_cache.js'], // 0037: compiled-Module cache on spawn — RO-volume policy, ss/rw exclusions, real clone e2e
   ['test_procfs.js'],       // 0043: synthetic /proc — Linux formats, snapshot-at-open, zombies, EROFS, GETSID (no wasm)

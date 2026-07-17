@@ -47,7 +47,8 @@ typedef struct {
 } sv_cfg;
 
 /* Load the effective store (per-key overlay of the existing layers).
- * Returns 1 and the NUL-terminated text, or 0 with text[0] == 0. */
+ * Returns 1 and the NUL-terminated text, 0 with text[0] == 0, or -1 with
+ * errno (cfgstore.h: overflow/read error; text keeps the valid prefix). */
 static int sv_load(char *text, size_t sz) {
     char user[300];
     cfg_user_path(user, sizeof user, "screensaver");
