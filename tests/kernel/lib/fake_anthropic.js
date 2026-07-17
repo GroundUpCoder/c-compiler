@@ -1,6 +1,6 @@
 'use strict';
 // A scripted fake Anthropic /v1/messages SSE server (todos/0174) — the
-// standalone-process twin of the inline server in os/code/test/smoke.mjs.
+// standalone-process twin of the inline server in os/gcode/test/smoke.mjs.
 // The kernel e2e drives os/boot.js with spawnSync, which would deadlock an
 // in-process server (the smoke.mjs lesson, inverted) — so this runs as its
 // own child: `node fake_anthropic.js <script.json> <bodies.jsonl>` prints

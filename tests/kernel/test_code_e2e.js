@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// /bin/code e2e (todos/0174): the agentic coding assistant IN the booted OS
+// /bin/gcode e2e (todos/0174): the agentic coding assistant IN the booted OS
 // against a scripted fake Anthropic SSE server (tests/kernel/lib/
-// fake_anthropic.js — the standalone twin of os/code/test/smoke.mjs's
+// fake_anthropic.js — the standalone twin of os/gcode/test/smoke.mjs's
 // server; the native smoke stays the reference oracle). Deterministic, no
 // network beyond localhost, no API key.
 //
@@ -80,7 +80,9 @@ fs.writeFileSync(scriptPath, JSON.stringify([
       'echo ==probe2',
       'echo v=[$ANTHROPIC_BASE_URL]',
       'echo ==t1',
-      'code -p "say hi" --no-color',
+      // t1 invokes the real binary by its name (gcode); t2/t3 go through the
+      // back-compat /usr/bin/code -> gcode symlink, so both resolve paths run.
+      'gcode -p "say hi" --no-color',
       'echo rc1=$?',
       'echo ==t2',
       'code -p "create the file" --no-color',

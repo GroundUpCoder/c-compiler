@@ -1,10 +1,10 @@
-// Native smoke test for /bin/code (todos/0174) — no network, no API key.
-// Starts a scripted fake /v1/messages SSE server, builds code.c natively
+// Native smoke test for /bin/gcode (todos/0174) — no network, no API key.
+// Starts a scripted fake /v1/messages SSE server, builds gcode.c natively
 // (real libcurl + cJSON), and drives it through a text turn and a tool-use
 // round-trip. This is the reference-oracle harness; test_code_e2e.js will
 // reuse the same server shape against the in-OS build.
 //
-// Run: node os/code/test/smoke.mjs   (exit 0 = pass)
+// Run: node os/gcode/test/smoke.mjs   (exit 0 = pass)
 
 import http from 'node:http';
 import { execFileSync, execFile } from 'node:child_process';

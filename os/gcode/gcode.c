@@ -1,5 +1,5 @@
 /*
- * code — a minimal, line-oriented agentic coding assistant (todos/0174).
+ * gcode — a minimal, line-oriented agentic coding assistant (todos/0174).
  *
  * Speaks the Anthropic Messages API (streaming SSE + tool use) over libcurl.
  * No fullscreen ANSI — just SGR colors — so it behaves the same on VT1 and
@@ -7,8 +7,8 @@
  * or a chatty command can't blow up the context.
  *
  * Dual-target by construction: this same source builds native with
- * `clang code.c cJSON.c -lcurl` (the reference oracle) and for gucOS
- * against the 0173 veneer (os/code/bin.json) unchanged. The ONE platform
+ * `clang gcode.c cJSON.c -lcurl` (the reference oracle) and for gucOS
+ * against the 0173 veneer (os/gcode/bin.json) unchanged. The ONE platform
  * seam is run_command() (process spawn for the bash tool) — see the
  * PLATFORM block: posix_spawn in-OS (no fork by design), fork/exec native.
  *
@@ -44,7 +44,7 @@ static void sb_ensure(sb *b, size_t extra) {
         size_t nc = b->cap ? b->cap : 256;
         while (nc < b->len + extra + 1) nc *= 2;
         b->p = realloc(b->p, nc);
-        if (!b->p) { fprintf(stderr, "code: out of memory\n"); exit(1); }
+        if (!b->p) { fprintf(stderr, "gcode: out of memory\n"); exit(1); }
         b->cap = nc;
     }
 }
@@ -94,7 +94,7 @@ static void bash_on_alarm(int sig) { (void)sig; g_bash_alarm = 1; }
  * *exit_code set to the child's exit status (or -1 killed by timeout). */
 static char *run_command(const char *cmd, int *exit_code) {
     int pfd[2];
-    if (pipe(pfd) != 0) { *exit_code = -1; return strdup("code: pipe() failed\n"); }
+    if (pipe(pfd) != 0) { *exit_code = -1; return strdup("gcode: pipe() failed\n"); }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, pfd[1], 1);
@@ -107,7 +107,7 @@ static char *run_command(const char *cmd, int *exit_code) {
     posix_spawn_file_actions_destroy(&fa);
     if (e != 0) {
         close(pfd[0]); close(pfd[1]);
-        *exit_code = -1; return strdup("code: posix_spawn(/bin/sh) failed\n");
+        *exit_code = -1; return strdup("gcode: posix_spawn(/bin/sh) failed\n");
     }
     close(pfd[1]);
     sb out = {0};
@@ -165,9 +165,9 @@ static char *run_command(const char *cmd, int *exit_code) {
  * *exit_code set to the child's exit status (or -1 killed by timeout). */
 static char *run_command(const char *cmd, int *exit_code) {
     int pfd[2];
-    if (pipe(pfd) != 0) { *exit_code = -1; return strdup("code: pipe() failed\n"); }
+    if (pipe(pfd) != 0) { *exit_code = -1; return strdup("gcode: pipe() failed\n"); }
     pid_t pid = fork();
-    if (pid < 0) { *exit_code = -1; return strdup("code: fork() failed\n"); }
+    if (pid < 0) { *exit_code = -1; return strdup("gcode: fork() failed\n"); }
     if (pid == 0) {
         dup2(pfd[1], 1); dup2(pfd[1], 2);
         close(pfd[0]); close(pfd[1]);
@@ -513,7 +513,7 @@ static int do_turn(config *cfg, cJSON *messages, cJSON *tools) {
     stream_ctx ctx; memset(&ctx, 0, sizeof ctx); ctx.color = cfg->color;
 
     CURL *h = curl_easy_init();
-    if (!h) { free(payload); fprintf(stderr, "code: curl init failed\n"); return -1; }
+    if (!h) { free(payload); fprintf(stderr, "gcode: curl init failed\n"); return -1; }
     sb url = {0}; sb_puts(&url, cfg->base_url); sb_puts(&url, "/v1/messages");
     struct curl_slist *hdr = NULL;
     hdr = curl_slist_append(hdr, "content-type: application/json");
@@ -639,7 +639,7 @@ int main(int argc, char **argv) {
     cfg.api_key       = getenv("ANTHROPIC_API_KEY");
     cfg.auth_token    = getenv("ANTHROPIC_AUTH_TOKEN");
     cfg.model         = getenv_or("ANTHROPIC_MODEL", "claude-opus-4-8");
-    cfg.system_prompt = "You are `code`, a terminal coding assistant running inside gucOS, "
+    cfg.system_prompt = "You are `gcode`, a terminal coding assistant running inside gucOS, "
                         "a small POSIX-like OS. Use the tools to explore, create, and edit "
                         "files and run shell commands. Be concise. Prefer small, verifiable "
                         "steps. The C compiler is `cc`.";
@@ -658,7 +658,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--verbose"))                     cfg.verbose = 1;
         else if (!strcmp(argv[i], "--no-color"))                    cfg.color = 0;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("usage: code [-p PROMPT] [--model M] [--system-prompt S]\n"
+            printf("usage: gcode [-p PROMPT] [--model M] [--system-prompt S]\n"
                    "            [--max-turns N] [--max-tokens N] [--verbose] [--no-color]\n"
                    "env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL\n");
             return 0;
@@ -666,7 +666,7 @@ int main(int argc, char **argv) {
     }
     g_color = cfg.color;
     if (!cfg.api_key && !cfg.auth_token)
-        fprintf(stderr, "%scode: warning: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN set%s\n", CDIM, CRST);
+        fprintf(stderr, "%sgcode: warning: no ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN set%s\n", CDIM, CRST);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     cJSON *messages = cJSON_CreateArray();
