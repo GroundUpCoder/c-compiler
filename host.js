@@ -2458,10 +2458,18 @@ var BLOCK_FS = (function () {
     // pages). The broker is { pipeCreate, pipeRead, pipeWrite, pipeClose,
     // pipeRef }; ends are 0=read, 1=write.
     this._pipeBroker = null;
+    // The three default console entries — the ONLY place `console: true` is
+    // set. Console routing is a POSITIVE capability (code-debt CD27): the
+    // stdio fast paths (close/read/write below, toWasmEnv's fd-1/2 write
+    // import, __select_impl's stdin scan) test `entry.console === true`,
+    // never the absence of type/inoId — so a foreign backend's entry (or a
+    // forgotten one) can never be mistaken for the console; absence means
+    // "not console", the safe default. dup/dup2/F_DUPFD share the entry
+    // object (_dupEntry), so the marker survives hush's fd-save dance.
     this._fdTable = [
-      { position: null }, // 0 = stdin
-      { position: null }, // 1 = stdout
-      { position: null }, // 2 = stderr
+      { console: true, position: null }, // 0 = stdin
+      { console: true, position: null }, // 1 = stdout
+      { console: true, position: null }, // 2 = stderr
     ];
     this._dirTable = [];
     // Open-reference counts (inoId -> number of fd-table slots holding it).
@@ -2911,7 +2919,7 @@ var BLOCK_FS = (function () {
     // Closing a never-redirected stdin/stdout/stderr is a no-op that keeps the
     // slot for the console path (the prior behavior). A real (file/dev/pipe)
     // entry on any fd, including a redirected 0/1/2, is closed normally.
-    if (fd < 3 && entry.type === undefined && entry.inoId === undefined) return 0;
+    if (fd < 3 && entry.console === true) return 0;
     this._releaseEntry(entry);
     this._fdTable[fd] = null;
     return 0;
@@ -2940,7 +2948,7 @@ var BLOCK_FS = (function () {
       return pipe.buffer.read(buf, count);
     }
     if (entry.type === 'dev') return this._readDev(entry, buf, count);
-    if (entry.position === null) {
+    if (entry.console === true) {
       // stdin — drain any pre-buffered bytes first (Node CLI setStdin path),
       // then block on the live-stdin sab ring if one is wired (interactive
       // page), else return 0 (EOF) as before.
@@ -2990,7 +2998,7 @@ var BLOCK_FS = (function () {
     // Default (non-redirected) stdout/stderr go to the console (handled
     // externally). A dup2'd pipe/file/dev entry on fd 1/2 falls through so the
     // redirection actually takes effect.
-    if ((fd === 1 || fd === 2) && entry.type === undefined && entry.inoId === undefined) {
+    if ((fd === 1 || fd === 2) && entry.console === true) {
       return count;
     }
 
@@ -4109,11 +4117,14 @@ var BLOCK_FS = (function () {
         var memory = getMemory();
         var buf = new Uint8Array(memory.buffer, buf_ptr, count);
         if (fd === 1 || fd === 2) {
-          // Default (non-redirected) stdout/stderr go to the console. A dup2'd
-          // pipe/file/dev entry on fd 1/2 falls through to BlockFS.write so the
-          // redirection takes effect (the pipeline / `>` cases).
+          // Default (non-redirected) stdout/stderr go to the console — gated
+          // on the POSITIVE `console` capability that only BlockFS's default
+          // 0/1/2 entries carry (CD27). Everything else — a dup2'd
+          // pipe/file/dev entry, a foreign backend's entry (RemoteFS needs
+          // no decoy), even a missing one — falls through to this.write so
+          // the real routing (redirection, the FS_WRITE RPC) takes effect.
           var e = self._fdTable[fd];
-          if (!e || (e.type === undefined && e.inoId === undefined)) {
+          if (e && e.console === true) {
             if (fd === 1) writeOut(buf);
             else writeErr(buf);
             return count;
@@ -4370,7 +4381,7 @@ var BLOCK_FS = (function () {
               var rready;
               if (entry.type === 'pipe') {
                 rready = entry.pipe.buffer.length > 0 || entry.pipe.closed.write;
-              } else if (entry.position === null) {
+              } else if (entry.console === true) {
                 // stdin: with a live sab, ready only when it has bytes or EOF;
                 // without one, always ready (pre-buffer/EOF, old behaviour).
                 rready = hasSab ? self._stdinSabReady() : true;

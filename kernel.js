@@ -6153,18 +6153,19 @@ function roNormalize(path) {
 function RemoteFS(client, opts) {
   this._c = client;
   this._lastError = null;
-  // Markers so toWasmEnv's fd-1/2 console fast path sees "redirectable
-  // entries" and routes writes through this.write (i.e. the kernel).
+  // Presence markers for kernel fds ({type:'remote'}, set as fds are handed
+  // out). fds 0-2 need NO entry: toWasmEnv's console fast path is gated on
+  // the POSITIVE `console` capability only BlockFS's own default entries
+  // carry (code-debt CD27), so stdio here falls through to this.write /
+  // this.read — the FS_WRITE/FS_READ RPCs — with no decoy to plant.
   this._fdTable = [];
-  this._fdTable[0] = { type: 'remote' };
-  this._fdTable[1] = { type: 'remote' };
-  this._fdTable[2] = { type: 'remote' };
   this._dirs = [];              // opendir snapshots: {entries, pos}
-  this._stdinSab = null;        // never set: stdin flows via FS_READ RPCs
+  // Read (as an always-null guard) by toWasmEnv's tty imports over this
+  // object (__tcsetattr, isatty pre-override) — stdin flows via FS_READ
+  // RPCs, so no ring path may ever engage (todos/0011).
+  this._stdinSab = null;
   this._stdinCtrl = null;       // winsize words only (TIOCGWINSZ)
-  this._pipeBroker = null;      // unused: brokered pipes are kernel OFDs (PIPE_CREATE)
   this._pipes = new Map();      // fd -> ring views {i32,u8,cap,sab,end} (todos/0181)
-  this._sigcheck = null;        // assigned by toWasmEnv; unused (no ring waits)
   // The read-only fast path (todos/0180; header comment above).
   this._ro = null;
   if (opts && opts.roFs && opts.roPrefix) {
