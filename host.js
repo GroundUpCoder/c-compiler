@@ -14,6 +14,43 @@ function wrapLseekI64(impl) {
   };
 }
 
+// ByteQueue — the ONE stream byte buffer for stdin/pipe paths (CD28).
+// A chunk deque: whole Uint8Array chunks in, subarray/set copies out (the
+// kernel.js ring idiom) — O(1) amortized per byte on both sides. This
+// replaced the plain-array push-per-byte + splice(0,n) buffers, whose
+// drain shifted the whole tail every read → O(n²) on bulk input.
+// `length` mirrors Array#length so `.length > 0` readiness checks read
+// identically at every former call site.
+function ByteQueue() {
+  this._chunks = []; // Uint8Array chunks, FIFO
+  this._head = 0;    // consumed bytes of _chunks[0]
+  this.length = 0;   // total bytes queued
+}
+// Append a chunk (Uint8Array/Buffer or plain array of byte values). Always
+// COPIES: callers push views over wasm memory, which the writer may reuse
+// (and memory.buffer detaches on grow) — the queue must own its bytes.
+ByteQueue.prototype.push = function (chunk) {
+  if (chunk.length === 0) return;
+  this._chunks.push(chunk instanceof Uint8Array ? new Uint8Array(chunk)
+                                                : Uint8Array.from(chunk));
+  this.length += chunk.length;
+};
+// Copy up to n bytes into dst (a Uint8Array, from offset 0); returns the
+// count actually copied — min(n, queued), the callers' clamp.
+ByteQueue.prototype.read = function (dst, n) {
+  var want = Math.min(n, this.length), got = 0;
+  while (got < want) {
+    var front = this._chunks[0];
+    var take = Math.min(front.length - this._head, want - got);
+    dst.set(front.subarray(this._head, this._head + take), got);
+    got += take;
+    this._head += take;
+    if (this._head === front.length) { this._chunks.shift(); this._head = 0; }
+  }
+  this.length -= got;
+  return got;
+};
+
 /**
  * @typedef {object} NodeFS
  * @property {function(string, number, number): number} openSync
@@ -79,7 +116,7 @@ function createFileSystem({ fs, ctx }) {
     { nativeFd: 1, position: null, isStdout: true }, /* fd 1 = stdout (not seekable) */
     { nativeFd: 2, position: null, isStderr: true }, /* fd 2 = stderr (not seekable) */
   ];
-  const stdinBuf = [];
+  const stdinBuf = new ByteQueue();
   let stdinEOF = false;
   let stdinWaiters = [];
   let stdinListening = false;
@@ -87,7 +124,7 @@ function createFileSystem({ fs, ctx }) {
     if (stdinListening || typeof process === 'undefined' || !process.stdin) return;
     stdinListening = true;
     process.stdin.on('data', (chunk) => {
-      for (let i = 0; i < chunk.length; i++) stdinBuf.push(chunk[i]);
+      stdinBuf.push(chunk);
       for (const w of stdinWaiters) w();
       stdinWaiters = [];
     });
@@ -158,10 +195,7 @@ function createFileSystem({ fs, ctx }) {
         if (stdinBuf.length === 0 && !stdinEOF) {
           await new Promise(resolve => { stdinWaiters.push(resolve); });
         }
-        n = Math.min(count, stdinBuf.length);
-        for (let i = 0; i < n; i++) buf[i] = stdinBuf[i];
-        stdinBuf.splice(0, n);
-        return n;
+        return stdinBuf.read(buf, count);
       } else if (entry.position === null) {
         if (entry.nativeFd === undefined) throw new Error("read: fd " + fd + " has no nativeFd");
         n = fs.readSync(entry.nativeFd, buf);
@@ -638,7 +672,7 @@ function createFileSystem({ fs, ctx }) {
         /* Create an in-memory pipe: two fds sharing a buffer. Each end is
            reference-counted so a dup'd end closes only when the LAST
            duplicate is closed. */
-        const pipe = { buffer: [], closed: { read: false, write: false },
+        const pipe = { buffer: new ByteQueue(), closed: { read: false, write: false },
                        refs: { read: 1, write: 1 }, waiters: [] };
         const readFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null });
         const writeFd = allocFd({ type: 'pipe', pipe: pipe, pipeEnd: 'write', position: null });
@@ -904,12 +938,9 @@ function createFileSystem({ fs, ctx }) {
            writer silently truncated the stream (the 0171 bug class). */
         await new Promise(resolve => { pipe.waiters.push(resolve); });
       }
-      const n = Math.min(count, pipe.buffer.length);
       const memory = getMemory();
-      const dest = new Uint8Array(memory.buffer, buf_ptr, n);
-      for (let i = 0; i < n; i++) dest[i] = pipe.buffer[i];
-      pipe.buffer.splice(0, n);
-      return n;
+      const dest = new Uint8Array(memory.buffer, buf_ptr, count);
+      return pipe.buffer.read(dest, count);
     }
     return readImpl(fd, buf_ptr, count);
   });
@@ -921,7 +952,7 @@ function createFileSystem({ fs, ctx }) {
       if (pipe.closed.read) { setErrnoName('EPIPE'); return -1; }
       const memory = getMemory();
       const src = new Uint8Array(memory.buffer, buf_ptr, count);
-      for (let i = 0; i < count; i++) pipe.buffer.push(src[i]);
+      pipe.buffer.push(src); /* ByteQueue copies — src is a wasm-memory view */
       pipeWake(pipe);
       return count;
     }
@@ -2411,7 +2442,7 @@ var BLOCK_FS = (function () {
     // (symlink walk behavior unchanged — the single-volume fast path).
     this._mountPrefix = '/';
     this._mountOwns = null;
-    this._stdinBuffer = [];
+    this._stdinBuffer = new ByteQueue();
     this._stdinEOF = false;
     // Optional live-stdin SAB ring (main-thread producer → this worker
     // consumer). Null unless wired by setStdinSab()/toWasmEnv(). See the
@@ -2906,10 +2937,7 @@ var BLOCK_FS = (function () {
       // this is a deliberate exemption from CD5, not a spurious EOF.
       var pipe = entry.pipe;
       if (pipe.buffer.length === 0) return 0;
-      var n = Math.min(count, pipe.buffer.length);
-      for (var i = 0; i < n; i++) buf[i] = pipe.buffer[i];
-      pipe.buffer.splice(0, n);
-      return n;
+      return pipe.buffer.read(buf, count);
     }
     if (entry.type === 'dev') return this._readDev(entry, buf, count);
     if (entry.position === null) {
@@ -2917,10 +2945,7 @@ var BLOCK_FS = (function () {
       // then block on the live-stdin sab ring if one is wired (interactive
       // page), else return 0 (EOF) as before.
       if (this._stdinBuffer.length > 0) {
-        var n = Math.min(count, this._stdinBuffer.length);
-        for (var i = 0; i < n; i++) buf[i] = this._stdinBuffer[i];
-        this._stdinBuffer.splice(0, n);
-        return n;
+        return this._stdinBuffer.read(buf, count);
       }
       if (this._stdinSab) return this._readStdinSab(buf, count);
       return 0;
@@ -2976,7 +3001,7 @@ var BLOCK_FS = (function () {
         return w;
       }
       if (entry.pipe.closed.read) return this._setErr('EPIPE');
-      for (var pi = 0; pi < count; pi++) entry.pipe.buffer.push(buf[pi]);
+      entry.pipe.buffer.push(buf.subarray(0, count)); // ByteQueue copies
       return count;
     }
     if (entry.type === 'dev') return this._writeDev(entry, buf, count);
@@ -3514,7 +3539,7 @@ var BLOCK_FS = (function () {
     }
     // Per-end reference counts so dup'd ends close only when the LAST
     // duplicate goes (see _dupEntry/_releaseEntry). In-memory only.
-    var pipe = { buffer: [], closed: { read: false, write: false },
+    var pipe = { buffer: new ByteQueue(), closed: { read: false, write: false },
                  refs: { read: 1, write: 1 } };
     var readFd = this._allocFd({
       type: 'pipe', pipe: pipe, pipeEnd: 'read', position: null
@@ -3911,9 +3936,11 @@ var BLOCK_FS = (function () {
   };
 
   // setStdin(data) — feed stdin bytes for the WASM program to consume
-  // from fd 0.  data is an array of byte values.  Call before runModule.
+  // from fd 0.  data is a Uint8Array/Buffer (or an array of byte values,
+  // the legacy shape).  Call before runModule; may be called repeatedly
+  // to append chunks.
   BlockFS.prototype.setStdin = function (data) {
-    for (var i = 0; i < data.length; i++) this._stdinBuffer.push(data[i]);
+    this._stdinBuffer.push(data);
     this._stdinEOF = true;
   };
 
@@ -10955,18 +10982,14 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
     // will get an empty stdin, which is correct for interactive use.
     if (!process.stdin.isTTY) {
       try {
-        var stdinChunks = [];
         var stdinBuf = Buffer.alloc(65536);
         while (true) {
           var nr = fs.readSync(0, stdinBuf, 0, stdinBuf.length);
           if (nr === 0) break;
-          for (var si = 0; si < nr; si++) stdinChunks.push(stdinBuf[si]);
+          blockFS.setStdin(stdinBuf.subarray(0, nr)); // setStdin appends; ByteQueue copies
         }
       } catch (e) {
         // fd 0 might be closed or a TTY after all — fine.
-      }
-      if (stdinChunks.length > 0) {
-        blockFS.setStdin(stdinChunks);
       }
     }
 

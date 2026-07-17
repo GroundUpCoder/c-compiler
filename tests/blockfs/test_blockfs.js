@@ -441,6 +441,86 @@ test('pipe EPIPE when read end closed', function () {
   r.fs.close(fds[1]);
 });
 
+// Deterministic byte pattern for the bulk-stream tests: value depends only
+// on the GLOBAL stream offset, so any misordering/duplication/loss shows up
+// as a mismatch at a precise offset.
+function patByte(i) {
+  return (i * 31 + ((i >> 8) * 17) + ((i >> 16) * 7) + 5) & 0xff;
+}
+function fillPat(buf, base) {
+  for (var i = 0; i < buf.length; i++) buf[i] = patByte(base + i);
+}
+function checkPat(buf, n, base) {
+  for (var i = 0; i < n; i++) {
+    if (buf[i] !== patByte(base + i)) {
+      throw new Error('byte mismatch at stream offset ' + (base + i) +
+        ': got ' + buf[i] + ' want ' + patByte(base + i));
+    }
+  }
+}
+
+// CD28 regression: bulk pipe traffic must be byte-exact at MB scale (the
+// old array buffer was push-per-byte + splice(0,n) — O(n²); this sat in
+// wall-clock forever long before it corrupted anything, so the test is the
+// SCALE plus exactness, with chunk sizes chosen to be mutually prime so
+// reads straddle the ByteQueue's chunk boundaries and head offset).
+test('pipe bulk passthrough is byte-exact at MB scale (CD28)', function () {
+  var r = makeFS();
+  var fds = r.fs.pipe();
+  var TOTAL = 4 * 1024 * 1024, WCHUNK = 65536, RCHUNK = 50021; // prime
+  var wbuf = new Uint8Array(WCHUNK), rbuf = new Uint8Array(RCHUNK);
+  var wrote = 0, got = 0;
+  while (wrote < TOTAL || got < wrote) {
+    if (wrote < TOTAL) { // interleave: 2 writes, then drain a read
+      for (var k = 0; k < 2 && wrote < TOTAL; k++) {
+        var wn = Math.min(WCHUNK, TOTAL - wrote);
+        fillPat(wbuf.subarray(0, wn), wrote);
+        assertEq(r.fs.write(fds[1], wbuf, wn), wn, 'pipe write');
+        wrote += wn;
+      }
+    }
+    var n = r.fs.read(fds[0], rbuf, RCHUNK);
+    if (n === 0) { assert(got === wrote, 'empty pipe only when drained'); continue; }
+    checkPat(rbuf, n, got);
+    got += n;
+  }
+  assertEq(got, TOTAL, 'total bytes through the pipe');
+  r.fs.close(fds[1]);
+  assertEq(r.fs.read(fds[0], rbuf, RCHUNK), 0, 'EOF after writer close + drain');
+  r.fs.close(fds[0]);
+});
+
+// CD28 regression, stdin flavor: setStdin at MB scale (chunked Uint8Array
+// pushes — the Node CLI shape) drains byte-exact through fd 0, and the
+// legacy plain-array-of-byte-values shape still works.
+test('setStdin bulk drains byte-exact at MB scale (CD28)', function () {
+  var r = makeFS();
+  var TOTAL = 4 * 1024 * 1024, WCHUNK = 65536, RCHUNK = 50021;
+  var wbuf = new Uint8Array(WCHUNK);
+  for (var off = 0; off < TOTAL; off += WCHUNK) {
+    fillPat(wbuf, off);
+    r.fs.setStdin(wbuf); // appends; ByteQueue copies, so reuse is safe
+  }
+  var rbuf = new Uint8Array(RCHUNK), got = 0;
+  while (got < TOTAL) {
+    var n = r.fs.read(0, rbuf, RCHUNK);
+    assert(n > 0, 'stdin drained early at ' + got);
+    checkPat(rbuf, n, got);
+    got += n;
+  }
+  assertEq(got, TOTAL, 'total stdin bytes');
+  assertEq(r.fs.read(0, rbuf, RCHUNK), 0, 'EOF after the pre-buffer drains');
+});
+
+test('setStdin legacy array-of-bytes shape still works', function () {
+  var r = makeFS();
+  r.fs.setStdin([104, 105, 33]); // "hi!"
+  var buf = new Uint8Array(8);
+  assertEq(r.fs.read(0, buf, 8), 3, 'read pre-buffered bytes');
+  assertEq(decode(buf.subarray(0, 3)), 'hi!');
+  assertEq(r.fs.read(0, buf, 8), 0, 'then EOF');
+});
+
 // ---------------------------------------------------------------
 // dup / dup2
 // ---------------------------------------------------------------

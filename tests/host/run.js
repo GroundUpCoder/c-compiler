@@ -23,6 +23,7 @@ var tests = [
   ['test_blockfs_cli_clobber.js', []],   // --block-fs read error fails loud, never clobbers the image (0233/CD1)
   ['test_append_fstat_fail.js', []],     // O_APPEND fstat failure fails the open — no offset-0 "append" (0233/CD4)
   ['test_pipe_read_block.js', []],       // pipe read blocks on a live writer; EOF only at write-end close (0233/CD5)
+  ['test_stream_bulk.js', []],           // stdin/pipe ByteQueue: MB-scale byte-exact passthrough (CD28)
   ['test_singlefile_emit.js', []],       // .js/.html emit cuts host.js at @cc-strip-below; missing sentinel fails loud (CD15)
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)
