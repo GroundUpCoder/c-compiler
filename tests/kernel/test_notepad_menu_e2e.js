@@ -61,6 +61,16 @@ const r = driveBoot([
   'wmctl tree',
   'echo ==cut',
 
+  // ---- coupling #6 (A5, 0257): the persistent bar STRIP child exists and
+  // width-follows a parent resize (user32 owner-resizes it on WM_SIZE; a
+  // resize is not a menu-state change, so this is its own designed hook)
+  'wmctl wait win menubar 8000',
+  'BARSID=$(wmctl list | grep "menubar$" | sed "s/[^0-9].*//")',
+  'wmctl resize $SID 720 420',
+  'wmctl wait dim $SID 720x420 8000',
+  'wmctl wait dim $BARSID 720x20 8000',          // the strip followed
+  'echo BAR-FOLLOW-OK',
+
   // ---- WM_SETTEXT caret contract: caret at START after a programmatic set
   'wmctl settext EDIT:0 abc',
   'wmctl key $SID 27 120',                       // x -> lands BEFORE abc
@@ -328,6 +338,12 @@ for (const it of ['New', 'New Window', 'Open...', 'Save', 'Save As...',
     new RegExp(`menuitem id=\\d+ text='${it.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`).test(tree0), it);
 check('View Help grayed at startup (no HTML Help)',
   /text='View Help' grayed/.test(tree0), tree0);
+
+/* ---- coupling #6 (A5, 0257): the bar strip child width-followed the resize
+ * (the script's `wmctl wait dim $BARSID 720x20` is the real gate — a timeout
+ * there fails the boot loud; this check pins the marker reached) */
+check('bar strip child width-follows the parent resize (A5)',
+  out.includes('BAR-FOLLOW-OK'), out.slice(-500));
 
 /* ---- WM_SETTEXT caret contract */
 check('WM_SETTEXT puts the caret at the START (typed x prepends)',

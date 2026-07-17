@@ -95,9 +95,9 @@ const TIMER = { x: 5, y: 5 + BAR, w: 36, h: 23 };
 
 /* Difficulty/Custom changes are owner-initiated SURFACE_RESIZEs — the new board
  * geometry shows in `wmctl list`, so poll for it (todos/0154 — a bounded
- * condition poll, not a fixed sync sleep). The menu-BAR dropdown and gameplay
- * shots are pixel-only (in-surface menu, revealed cells, the WM_TIMER LED) with
- * no window/label/text signal, so those settles stay annotated (0083 rule). */
+ * condition poll, not a fixed sync sleep). Menu open/close is waitable since
+ * 0257 (the popup is a real "#32768" child window); only the gameplay shots
+ * (revealed cells, the WM_TIMER LED) remain pixel-only annotated settles. */
 const waitGeom = (d) =>
   `for i in $(seq 1 120); do wmctl list | grep -q "${d}" && break; sleep 0.05; done`;
 
@@ -116,15 +116,16 @@ const out = boot([
   'echo ==tree1',
   'wmctl tree',
   'echo ==cut',
-  // menu popup visuals: shot, open via a bar click, shot, ESC, shot. The bar
-  // dropdown is in-surface (not a WM window) and its items always resolve, so
-  // these are pixel render-settles with no pollable open/close marker.
+  // menu popup (0257): a bar click opens a REAL anchored child window
+  // ("#32768" in wmctl list — a waitable marker; the old in-surface popup
+  // needed blind pixel settles). The parent's own buffer must NOT change:
+  // the popup never overwrites client pixels anymore (couplings #1/#4).
   'wmctl shot $SID /root/base.ppm',
   'wmctl click $SID 10 10',
-  'sleep 1',                                     // in-surface popup paint (pixel-only)
-  'wmctl shot $SID /root/popup.ppm',
+  'wmctl wait win "#32768" 8000',                // popup child window is up
+  'wmctl shot $SID /root/popup.ppm',             // parent buffer: untouched
   'wmctl key $SID 41 27',                        // ESC closes the popup
-  'sleep 1',                                     // in-surface popup restore (pixel-only)
+  'wmctl wait nowin "#32768" 8000',              // and its window is gone
   'wmctl shot $SID /root/closed.ppm',
   // difficulty via the agent path (menu items by label, no pixels)
   'wmctl click Advanced',
@@ -203,14 +204,17 @@ check('Beginner starts checked (CheckMenuItem)', /menuitem id=1005 text='Beginne
 check('Mark Question starts checked', /menuitem id=1009 text='Mark Question' checked/.test(tree1), tree1);
 check('Exit item present (label cut at tab)', /menuitem id=1002 text='Exit'/.test(tree1), tree1);
 
-/* popup pixels */
+/* popup isolation (0257): the popup lives on its own anchored child window
+ * (the `wait win "#32768"` markers in the script are the open/close proof);
+ * the parent's client pixels must be BYTE-IDENTICAL across open and close —
+ * menu pixels never touch the app's surface anymore. */
 extractShots();
 {
   const base = readShot('base.ppm'), popup = readShot('popup.ppm'), closed = readShot('closed.ppm');
   // popup area: below the bar at the Options title; 60x60 probe
   const a = crop(base, 4, BAR + 2, 60, 60), b = crop(popup, 4, BAR + 2, 60, 60), c = crop(closed, 4, BAR + 2, 60, 60);
-  check('bar click opens the popup (pixels change)', !a.equals(b));
-  check('ESC closes the popup (pixels restore)', a.equals(c));
+  check('open popup never touches the parent buffer (pixels identical)', a.equals(b));
+  check('ESC: parent buffer still identical', a.equals(c));
 }
 
 /* difficulty switching = owner-initiated resize end to end */

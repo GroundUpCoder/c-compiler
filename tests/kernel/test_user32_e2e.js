@@ -430,11 +430,17 @@ check('fail-loud: unsupported scrollbar target says so on stderr',
   (outE.split('selftest-rc=')[1] || '').slice(0, 200));
 fs.rmSync(etmp, { recursive: true, force: true });
 
-/* ---- session F: `ctldemo menudemo` (0211) — the nested-popup CASCADE
- * (paint's Tools ▸ Width shape) driven through the REAL menu UI: a bar
- * click opens the popup, arrows walk it, Right opens the cascade, Enter
- * fires — and Esc closes only the deepest level. All input rides the
- * kernel ring (FIFO), so the command prints order with the keys. */
+/* ---- session F: `ctldemo menudemo` (0211, rebuilt on the 0257 anchored-
+ * child backend) — the popup CHAIN driven through the REAL menu UI: a bar
+ * click opens the popup (now a real "#32768" child window — waitable),
+ * arrows walk it, Right opens cascades to ANY depth (A12: three levels,
+ * unreachable under the old one-nested-level cap), Enter fires, Esc
+ * closes only the deepest level. Also pinned here: the chain OVERFLOWS
+ * the parent window (the fidelity upgrade — menudemo is 180x120 on
+ * purpose) and composites headlessly; the kernel GRAB dismisses on an
+ * outside press and CONSUMES it (the press never focuses the outside
+ * window). All input rides the kernel ring (FIFO), so the command prints
+ * order with the keys. */
 const { dir: ftmp, image: fimage } = freshImage('os-user32f-');
 const KEY = (scan, sym) => `wmctl key $SID ${scan} ${sym}`;
 const DOWN = KEY(81, 1073741905), RIGHT = KEY(79, 1073741903);
@@ -443,31 +449,117 @@ const outF = driveBoot([
   'ctldemo menudemo &',
   'wmctl wait win "Menu Demo" 10000',
   'SID=$(wmctl list | grep "Menu Demo$" | sed "s/[^0-9].*//")',
+  'wmctl move $SID 100 100',                    // deterministic geometry base
   'wmctl click $SID 12 10',                     // bar "Menu" -> popup opens
+  'wmctl wait win "#32768" 8000',               // a REAL child window (0257)
   DOWN,                                          // hot Alpha
   DOWN,                                          // hot More (a cascade row)
   RIGHT,                                         // open cascade, hot Beta
   DOWN,                                          // hot Gamma
   ENTER,                                         // fire 302
+  'wmctl wait nowin "#32768" 8000',             // firing closed the chain
   'wmctl click $SID 12 10',                     // reopen
   DOWN, DOWN,                                    // hot More
   RIGHT,                                         // cascade open
   ESC,                                           // closes ONLY the cascade
   DOWN,                                          // skips the separator -> Delta
   ENTER,                                         // fire 303
-  // Genuine no-marker settle (0171 rule): the fired WM_COMMAND prints to
-  // the boot console, which the shell can't observe — give the app's loop
-  // one second to drain the queued keys before the close tears it down.
-  'sleep 1',
+  'wmctl wait nowin "#32768" 8000',
+  // ---- A12: the THIRD level (the old engine capped nesting at one) ----
+  'wmctl click $SID 12 10',                     // reopen
+  DOWN, DOWN,                                    // hot More
+  RIGHT,                                         // level 2, hot Beta
+  DOWN, DOWN,                                    // Gamma -> Deeper
+  RIGHT,                                         // level 3 opens, hot Epsilon
+  'wmctl wait atleast "#32768" 3 8000',         // THREE popup windows live
+  'echo ==deep',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl shot screen /root/deep.ppm && echo DEEP-OK',
+  ENTER,                                         // fire 304
+  'wmctl wait nowin "#32768" 8000',             // whole chain closed
+  // ---- the grab (A2 via user32): outside press dismisses + is consumed ----
+  'winbox &',
+  'wmctl wait win winbox 10000',
+  'WSID=$(wmctl list | grep "winbox$" | sed "s/[^0-9].*//")',
+  'wmctl move $WSID 600 300',
+  'wmctl focus $SID',
+  'wmctl wait flag $SID f 8000',
+  'wmctl click $SID 12 10',                     // open the menu
+  'wmctl wait win "#32768" 8000',
+  'wmctl sdown 650 350',                        // press on winbox: OUTSIDE the tree
+  'wmctl sup 650 350',
+  'wmctl wait nowin "#32768" 8000',             // grab dismissed the chain
+  'echo ==grab',
+  'wmctl list',
+  'echo ==cut',
+  'wmctl sdown 650 350',                        // the NEXT press is allowed
+  'wmctl sup 650 350',
+  'wmctl wait flag $WSID f 8000',               // ...and focuses winbox normally
+  'echo GRAB-OK',
   'wmctl close $SID',
 ], { image: fimage, maxBuffer: 32 * 1024 * 1024 }).stdout;
 check('menu cascade opens and fires by keyboard (Gamma=302)',
   outF.includes('ctldemo: cmd=302'), outF.match(/cmd=\d+/g));
 check('Esc closes only the cascade; popup nav continues (Delta=303)',
   outF.includes('ctldemo: cmd=303'), outF.match(/cmd=\d+/g));
+check('3-deep cascade fires (Epsilon=304, A12)',
+  outF.includes('ctldemo: cmd=304'), outF.match(/cmd=\d+/g));
 check('no stray menu commands fired',
   !outF.includes('cmd=300') && !outF.includes('cmd=301'),
   outF.match(/cmd=\d+/g));
+
+/* geometry: parse `wmctl list` rows (sid \t pid \t WxH+X+Y \t ... \t title) */
+function section2(o, name) {
+  return (String(o).split('==' + name + '\n')[1] || '').split('==cut')[0];
+}
+function rowsOf(listOut, title) {
+  const out2 = [];
+  for (const line of String(listOut).split('\n')) {
+    const cols = line.split('\t');
+    if (cols.length >= 7 && cols[6] === title) {
+      const m = cols[2].match(/^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$/);
+      if (m) out2.push({ sid: +cols[0], w: +m[1], h: +m[2], x: +m[3], y: +m[4],
+                         flags: cols[5] });
+    }
+  }
+  return out2;
+}
+const deepList = section2(outF, 'deep');
+const pops = rowsOf(deepList, '#32768').sort((a, b) => a.x - b.x);
+const parent = rowsOf(deepList, 'Menu Demo')[0];
+check('three chain levels listed as anchored child windows', pops.length === 3, deepList);
+check('each level anchors off the one before it (x strictly advances)',
+  pops.length === 3 && pops[0].x < pops[1].x && pops[1].x < pops[2].x,
+  JSON.stringify(pops));
+check('the chain OVERFLOWS the parent window (fidelity upgrade)',
+  parent && pops.length === 3 && pops[2].x + pops[2].w > parent.x + parent.w,
+  JSON.stringify({ parent, deep: pops[2] }));
+/* the deepest level composites headlessly: its hot row is HIGHLIGHT navy */
+{
+  const bytes = fs.readFileSync(path.join(ftmp, 'os-root.img'));
+  const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
+  const COMMON = require(path.join(ROOT, 'os/os-common.js'));
+  const store = new BLOCK_FS.MemoryByteStore(bytes.length);
+  store.setBytes(0, bytes);
+  const ufs = BLOCK_FS.createV4(store);
+  const ppm = COMMON.readFileBytes(ufs, '/root/deep.ppm');
+  const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
+  const off = head.indexOf('255\n') + 4;
+  const px = (x, y) => String(Array.from(
+    ppm.subarray(off + (y * 1024 + x) * 3, off + (y * 1024 + x) * 3 + 3)));
+  const p = pops.length === 3 ? px(pops[2].x + 10, pops[2].y + 10) : 'no-shot';
+  check('deepest level composites in the headless shot (hot row navy)',
+    p === '0,0,128', p);
+}
+check('grab: outside press dismissed the chain and was consumed', outF.includes('GRAB-OK'));
+const grabList = section2(outF, 'grab');
+{
+  const md = rowsOf(grabList, 'Menu Demo')[0], wb = rowsOf(grabList, 'winbox')[0];
+  check('consumed press left the menu owner focused (winbox untouched)',
+    md && wb && md.flags.includes('f') && !wb.flags.includes('f'),
+    JSON.stringify({ md, wb }));
+}
 fs.rmSync(ftmp, { recursive: true, force: true });
 
 fs.rmSync(tmp, { recursive: true, force: true });

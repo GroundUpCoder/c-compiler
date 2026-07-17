@@ -354,10 +354,11 @@ static int selftest(void) {
     return st_fails ? 1 : 0;
 }
 
-/* ---- `ctldemo menudemo` (0211): a bar menu with a NESTED popup, the
- * cascade acceptance surface (paint's Tools ▸ Width shape). The e2e opens
- * the popup with a bar click and walks it by keyboard (Down/Right/Enter/
- * Esc); every WM_COMMAND prints its id. */
+/* ---- `ctldemo menudemo` (0211, deepened by 0257): a bar menu with a
+ * cascade INSIDE a cascade — three popup levels, the A12 chain acceptance
+ * surface (the old engine's one-nested-level cap made level 3
+ * unreachable). The e2e opens the popup with a bar click and walks it by
+ * keyboard (Down/Right/Enter/Esc); every WM_COMMAND prints its id. */
 
 static LRESULT CALLBACK MenuDemoProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -386,9 +387,12 @@ static int menudemo(void) {
     wc.lpszClassName = "menudemo";
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     if (!RegisterClass(&wc)) return 3;
+    HMENU sub2 = CreatePopupMenu();              /* level 3 (A12) */
+    AppendMenuA(sub2, MF_STRING, 304, "Epsilon");
     HMENU sub = CreatePopupMenu();
     AppendMenuA(sub, MF_STRING, 301, "Beta");
     AppendMenuA(sub, MF_STRING, 302, "Gamma");
+    AppendMenuA(sub, MF_POPUP, (UINT_PTR)sub2, "Deeper");
     HMENU pop = CreatePopupMenu();
     AppendMenuA(pop, MF_STRING, 300, "Alpha");
     AppendMenuA(pop, MF_POPUP, (UINT_PTR)sub, "More");
@@ -396,9 +400,12 @@ static int menudemo(void) {
     AppendMenuA(pop, MF_STRING, 303, "Delta");
     HMENU bar = CreateMenu();
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)pop, "Menu");
+    /* Small on purpose (0257): the 3-deep cascade must OVERFLOW the
+     * window's right edge — the anchored-child fidelity upgrade the e2e
+     * pins (the old in-surface engine folded popups back inside). */
     HWND hwnd = CreateWindowEx(0, "menudemo", "Menu Demo",
                                WS_OVERLAPPED | WS_VISIBLE,
-                               CW_USEDEFAULT, CW_USEDEFAULT, 300, 200,
+                               CW_USEDEFAULT, CW_USEDEFAULT, 180, 120,
                                NULL, NULL, NULL, NULL);
     if (!hwnd) return 3;
     SetMenu(hwnd, bar);

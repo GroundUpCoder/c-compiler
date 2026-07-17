@@ -184,7 +184,7 @@ const script = [
   'wmctl wait label EDIT:0 12000',               // notepad built its EDIT + reached the msg loop (freetype + .res)
   'NSID=$(wmctl list | grep Notepad$ | sed "s/[^0-9].*//")',
   'wmctl click $NSID 200 100 3',                 // right-click the EDIT
-  'sleep 0.5',                                   // KEEP: TrackPopupMenu popup is in-surface (menu_standalone) — not in wmctl list and its items aren't agent_find-able, so no wait primitive can see it; settle for the WM_CONTEXTMENU dispatch
+  'wmctl wait win "#32768" 8000',                // 0257: the popup is a REAL child window — a waitable marker replaced the old blind settle
   'echo ==edit1',
   'wmctl tree',
   'echo ==edit1end',
@@ -192,11 +192,12 @@ const script = [
   'wmctl wait text EDIT:0 CTXPASTE 8000',         // paste landed in the EDIT
   'echo "==edit2 $(wmctl gettext EDIT:0)"',
   'wmctl click $NSID 200 100 3',                 // reopen: state re-gates
-  'sleep 0.5',                                   // KEEP: same in-surface TrackPopupMenu reopen — no window-list/agent-tree marker to poll
+  'wmctl wait win "#32768" 8000',                // reopen marker (0257)
   'echo ==edit3',
   'wmctl tree',
   'echo ==edit3end',
-  'wmctl key $NSID 41 27',                       // Esc closes it (drop the settle: next op targets a different window)
+  'wmctl key $NSID 41 27',                       // Esc closes it
+  'wmctl wait nowin "#32768" 8000',              // and the popup window is gone
   // ---- taskbar-button menu (button 0 = the original winbox) ----
   'wmctl click $TSID 20 14 3',                   // Start strip: reserved (0101)
   'sleep 0.3',                                   // KEEP: negative check — bounded settle to prove NO menu opened (nothing to wait ON)
