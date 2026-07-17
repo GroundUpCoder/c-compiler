@@ -215,8 +215,14 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('connect to the kernel endpoint (no listener process)', !r.errno, JSON.stringify(r));
   const wm = mkConn(wmPid, wmFd);
 
+  // ---- distinct R_ERR errnos (todos/0242): a policy gesture refuses
+  // with ENODEV while no WM is subscribed — the cause, not a generic 22 ----
+  let f = await cmd(wm, WMP.MENU);
+  check('MENU with no subscriber -> R_ERR ENODEV (todos/0242)',
+    f.type === WMP.R_ERR && f.g(0) === 19, JSON.stringify([f.type, f.g(0)]));
+
   // ---- subscribe on an empty scene: R_OK + focus-0 snapshot ----
-  let f = await cmd(wm, WMP.SUBSCRIBE);
+  f = await cmd(wm, WMP.SUBSCRIBE);
   check('SUBSCRIBE -> R_OK with screen dims', f.type === WMP.R_OK &&
     f.g(0) === 640 && f.g(1) === 480, JSON.stringify([f.g(0), f.g(1)]));
   f = await readEvent(wm);
@@ -394,7 +400,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('THUMB pixels are the box-filtered present',
     String(px(f.bytes.subarray(20), 16, 8, 6)) === '200,0,0,255');
   f = await cmd(wm, WMP.THUMB, [999, 16, 16]);
-  check('THUMB bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  check('THUMB bogus sid -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
   f = await cmd(wm, WMP.GLASS, [1]);
   check('GLASS on -> R_OK + scene bit', f.type === WMP.R_OK && kernel.wmScene().glass === true);
   f = await cmd(wm, WMP.GLASS, [0]);
@@ -431,13 +437,23 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('kernel geometry follows the ack',
     kernel.wmList().find(s => s.sid === c1.sid).w === 100);
   f = await cmd(wm, WMP.RESIZE, [999, 64, 64]);
-  check('RESIZE bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  check('RESIZE bogus sid -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
   f = await cmd(wm, WMP.RESIZE, [c1.sid, 8, 8]);
-  check('RESIZE below the size floor -> R_ERR', f.type === WMP.R_ERR);
+  check('RESIZE below the size floor -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
+  // Ring-full delivery (todos/0242): the kernel knew EAGAIN and threw it
+  // away pre-fix — flood the client's cap-64 ring, then ask for a resize.
+  for (let i = 0; i < 70; i++) kernel.wmInjectKey(c1.sid, true, 4, 97, 0);
+  f = await cmd(wm, WMP.RESIZE, [c1.sid, 90, 60]);
+  check('RESIZE into a full client ring -> R_ERR EAGAIN (todos/0242)',
+    f.type === WMP.R_ERR && f.g(0) === 11, JSON.stringify([f.type, f.g(0)]));
+  check('ring-full RESIZE left nothing pending',
+    kernel.wmList().find(s => s.sid === c1.sid).configurePending === false);
+  drainRing(ring1);                                    // shed the flood
   // Non-resizable gating (todos/0021): the taskbar was created without
   // flags bit2, so RESIZE is refused and its record carries no bit4.
   f = await cmd(wm, WMP.RESIZE, [ct.sid, 100, 24]);
-  check('RESIZE a non-resizable surface -> R_ERR (todos/0021)', f.type === WMP.R_ERR);
+  check('RESIZE a non-resizable surface -> R_ERR EPERM (todos/0021, 0242)',
+    f.type === WMP.R_ERR && f.g(0) === 1, JSON.stringify([f.type, f.g(0)]));
   check('non-resizable stays unchanged, nothing pending',
     kernel.wmList().find(s => s.sid === ct.sid).w === 640 &&
     kernel.wmList().find(s => s.sid === ct.sid).configurePending === false);
@@ -463,10 +479,10 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     rec(f).dstW === 40 && rec(f).dstH === 30, JSON.stringify(rec(f)));
   await readEvent(wm);                                   // its EV_FOCUS
   f = await cmd(wm, WMP.SET_DST, [c1.sid, 200, 140]);
-  check('SET_DST on a RESIZABLE surface -> R_ERR (it configures, never scales)',
-    f.type === WMP.R_ERR);
+  check('SET_DST on a RESIZABLE surface -> R_ERR EPERM (it configures, never scales)',
+    f.type === WMP.R_ERR && f.g(0) === 1, JSON.stringify([f.type, f.g(0)]));
   f = await cmd(wm, WMP.SET_DST, [cx.sid, 8, 8]);
-  check('SET_DST below the size floor -> R_ERR', f.type === WMP.R_ERR);
+  check('SET_DST below the size floor -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
   f = await cmd(wm, WMP.SET_DST, [cx.sid, 80, 60]);
   check('SET_DST -> R_OK', f.type === WMP.R_OK);
   f = await readEvent(wm);
@@ -685,10 +701,10 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     f.type === WMP.EV_TITLE_ACTIVATE && f.g(0) === c1.sid && idle(wm2),
     JSON.stringify([f.type, f.g(0)]));
   f = await cmd(wm2, WMP.ACTIVATE, [999]);
-  check('ACTIVATE bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  check('ACTIVATE bogus sid -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
   f = await cmd(wm2, WMP.ACTIVATE, [ct.sid]);
-  check('ACTIVATE on a borderless surface -> R_ERR (no title bar, no gesture)',
-    f.type === WMP.R_ERR);
+  check('ACTIVATE on a borderless surface -> R_ERR EPERM (no title bar, no gesture)',
+    f.type === WMP.R_ERR && f.g(0) === 1, JSON.stringify([f.type, f.g(0)]));
 
   // ---- title-bar boxes (todos/0030) with a subscriber: the max box rides
   // the SAME EV_TITLE_ACTIVATE (one policy path — box, double-click, and
@@ -985,9 +1001,9 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   f = await cmd(wm2, WMP.SET_LAYER, [cl.sid, 0]);
   check('SET_LAYER back to normal -> R_OK', f.type === WMP.R_OK);
   f = await cmd(wm2, WMP.SET_LAYER, [999, 1]);
-  check('SET_LAYER bogus sid -> R_ERR', f.type === WMP.R_ERR);
+  check('SET_LAYER bogus sid -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
   f = await cmd(wm2, WMP.SET_LAYER, [c1.sid, 2]);
-  check('SET_LAYER out-of-range layer -> R_ERR', f.type === WMP.R_ERR);
+  check('SET_LAYER out-of-range layer -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
 
   // ---- the focus fall skips pinned furniture (todos/0039 storm find):
   // after 0038 the top of raw z is ALWAYS the +1-pinned taskbar, so a

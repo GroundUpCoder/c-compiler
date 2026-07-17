@@ -111,6 +111,16 @@
 
 static int fail(const char *msg) { fprintf(stderr, "wmctl: %s\n", msg); return 1; }
 
+/* A refused command: name the kernel's REAL cause (todos/0242 — wmp_cmd /
+ * wmp_consume_err put the R_ERR errno in errno). ENODEV keeps the old
+ * "needs a WM" hint: policy gestures refuse when no WM is subscribed. */
+static int failop(const char *op) {
+    int e = errno;
+    fprintf(stderr, "wmctl: %s: %s%s\n", op, strerror(e),
+            e == ENODEV ? " (no WM subscribed)" : "");
+    return 1;
+}
+
 static int usage(void) {
     fprintf(stderr,
         "usage: wmctl list\n"
@@ -519,7 +529,10 @@ static int do_shot(int fd, const char *what, const char *file) {
     if (wmp_send(fd, screen ? WMP_SHOT_SCREEN : WMP_SHOT, a, screen ? 0 : 1) != 0 ||
         wmp_next_reply(fd, &h) != 0)
         return fail("protocol error");
-    if (h.type != WMP_R_SHOT) { wmp_skip(fd, h.plen); return fail("no such surface"); }
+    if (h.type != WMP_R_SHOT) {
+        if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected type */
+        return failop("shot");
+    }
     return shot_to_ppm(fd, file);
 }
 
@@ -529,7 +542,10 @@ static int do_thumb(int fd, int32_t sid, int32_t mw, int32_t mh, const char *fil
     wmp_hdr h;
     if (wmp_send(fd, WMP_THUMB, a, 3) != 0 || wmp_next_reply(fd, &h) != 0)
         return fail("protocol error");
-    if (h.type != WMP_R_SHOT) { wmp_skip(fd, h.plen); return fail("no such surface"); }
+    if (h.type != WMP_R_SHOT) {
+        if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected type */
+        return failop("thumb");
+    }
     return shot_to_ppm(fd, file);
 }
 
@@ -569,10 +585,10 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
         int32_t a[1] = { argc > 2 ? atoi(argv[2]) : 1 };
-        return wmp_cmd(fd, WMP_CYCLE, a, 1) ? fail("cycle refused (no WM?)") : 0;
+        return wmp_cmd(fd, WMP_CYCLE, a, 1) ? failop("cycle") : 0;
     }
     if (!strcmp(cmd, "menu")) {         /* Start menu toggle (todos/0078) */
-        return wmp_cmd(fd, WMP_MENU, NULL, 0) ? fail("menu refused (no WM?)") : 0;
+        return wmp_cmd(fd, WMP_MENU, NULL, 0) ? failop("menu") : 0;
     }
     if (!strcmp(cmd, "snap")) {         /* Aero Snap (todos/0095) — the
                                            Win+arrow chord's event on the
@@ -583,7 +599,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 4; i++) if (!strcmp(argv[2], dirs[i])) d = i;
         if (d < 0) return usage();
         int32_t a[1] = { d };
-        return wmp_cmd(fd, WMP_SNAP, a, 1) ? fail("snap refused (no WM?)") : 0;
+        return wmp_cmd(fd, WMP_SNAP, a, 1) ? failop("snap") : 0;
     }
     if (!strcmp(cmd, "idle")) {         /* the kernel idle clock (0096) */
         wmp_hdr h;
@@ -620,12 +636,12 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(cmd, "saver")) {        /* screensaver preview (0096) */
-        return wmp_cmd(fd, WMP_SAVER, NULL, 0) ? fail("saver refused (no WM?)") : 0;
+        return wmp_cmd(fd, WMP_SAVER, NULL, 0) ? failop("saver") : 0;
     }
     if (!strcmp(cmd, "sysmenu")) {      /* window system menu (0102) — the
                                            Alt+Space path; opens on the
                                            FOCUSED window */
-        return wmp_cmd(fd, WMP_SYSMENU, NULL, 0) ? fail("sysmenu refused (no WM?)") : 0;
+        return wmp_cmd(fd, WMP_SYSMENU, NULL, 0) ? failop("sysmenu") : 0;
     }
     /* Screen-coordinate injection (todos/0095): the kernel's raw pointer
      * path — hit test, chrome, title drags, snap zones — so headless tests
@@ -636,7 +652,7 @@ int main(int argc, char **argv) {
         int32_t a[4] = { kind, f32bits((float)atoi(argv[2])),
                          f32bits((float)atoi(argv[3])),
                          argc > 4 ? atoi(argv[4]) : 1 };
-        return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? fail("inject refused") : 0;
+        return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "sdrag")) {        /* screen press-move-release (0095) */
         if (argc < 6) return usage();
@@ -645,18 +661,18 @@ int main(int argc, char **argv) {
         int32_t btn = argc > 6 ? atoi(argv[6]) : 1;
         int32_t mask = 1 << (btn - 1);
         int32_t a[4] = { 1, f32bits((float)x1), f32bits((float)y1), btn };
-        if (wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4)) return fail("inject refused");
+        if (wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4)) return failop(cmd);
         int32_t m[4] = { 0, f32bits((x1 + x2) / 2.0f), f32bits((y1 + y2) / 2.0f), mask };
-        if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return fail("inject refused");
+        if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return failop(cmd);
         m[1] = f32bits((float)x2); m[2] = f32bits((float)y2);
-        if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return fail("inject refused");
+        if (wmp_cmd(fd, WMP_INJECT_SCREEN, m, 4)) return failop(cmd);
         a[0] = 2; a[1] = m[1]; a[2] = m[2];
-        return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? fail("inject refused") : 0;
+        return wmp_cmd(fd, WMP_INJECT_SCREEN, a, 4) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
         if (argc < 3) return usage();
         int32_t a[1] = { atoi(argv[2]) };
-        return wmp_cmd(fd, WMP_GLASS, a, 1) ? fail("glass refused") : 0;
+        return wmp_cmd(fd, WMP_GLASS, a, 1) ? failop("glass") : 0;
     }
 
     /* Everything else leads with a SID. */
@@ -666,43 +682,43 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "focus") || !strcmp(cmd, "restore")) {
         int32_t a[1] = { sid };
         return wmp_cmd(fd, !strcmp(cmd, "focus") ? WMP_FOCUS : WMP_RESTORE, a, 1)
-            ? fail("no such window") : 0;
+            ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "min")) {
         int32_t a[1] = { sid };
-        return wmp_cmd(fd, WMP_MINIMIZE, a, 1) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_MINIMIZE, a, 1) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "close")) {
         int32_t a[1] = { sid };
-        return wmp_cmd(fd, WMP_CLOSE_REQ, a, 1) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_CLOSE_REQ, a, 1) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "raise") || !strcmp(cmd, "lower")) {
         int32_t a[2] = { sid, !strcmp(cmd, "lower") };
-        return wmp_cmd(fd, WMP_RESTACK, a, 2) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_RESTACK, a, 2) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "move")) {
         if (argc < 5) return usage();
         int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
-        return wmp_cmd(fd, WMP_MOVE, a, 3) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_MOVE, a, 3) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "resize")) {
         if (argc < 5) return usage();
         int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
-        return wmp_cmd(fd, WMP_RESIZE, a, 3) ? fail("resize refused") : 0;
+        return wmp_cmd(fd, WMP_RESIZE, a, 3) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "scale")) {        /* viewport scaling (todos/0024) */
         if (argc < 5) return usage();
         int32_t a[3] = { sid, atoi(argv[3]), atoi(argv[4]) };
-        return wmp_cmd(fd, WMP_SET_DST, a, 3) ? fail("scale refused") : 0;
+        return wmp_cmd(fd, WMP_SET_DST, a, 3) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "max")) {          /* maximize toggle (todos/0025) */
         int32_t a[1] = { sid };
-        return wmp_cmd(fd, WMP_ACTIVATE, a, 1) ? fail("max refused (no WM?)") : 0;
+        return wmp_cmd(fd, WMP_ACTIVATE, a, 1) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "layer")) {        /* z-layer pin (todos/0038) */
         if (argc < 4) return usage();
         int32_t a[2] = { sid, atoi(argv[3]) };
-        return wmp_cmd(fd, WMP_SET_LAYER, a, 2) ? fail("layer refused") : 0;
+        return wmp_cmd(fd, WMP_SET_LAYER, a, 2) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "thumb")) {        /* Aero Peek thumbnail (todos/0063):
                                            thumb SID [MAXW MAXH] [FILE] —
@@ -722,16 +738,16 @@ int main(int argc, char **argv) {
         int32_t a[5] = { sid, cmd[3] != 'u', sc, sym, mod };
         /* keydown/keyup (todos/0077): one edge only — a HELD modifier for
          * a following click/drag needs the down without the up. */
-        if (wmp_cmd(fd, WMP_INJECT_KEY, a, 5)) return fail("no such window");
+        if (wmp_cmd(fd, WMP_INJECT_KEY, a, 5)) return failop(cmd);
         if (cmd[3]) return 0;                    /* keydown / keyup: done */
         a[1] = 0;
-        return wmp_cmd(fd, WMP_INJECT_KEY, a, 5) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_INJECT_KEY, a, 5) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "hover")) {        /* absolute motion (todos/0063) */
         if (argc < 5) return usage();
         int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
         int32_t a[6] = { sid, 0 /* move */, x, y, 0, 0 };
-        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "wheel")) {        /* wheel notches (todos/0210): +up.
                                            The wheel event's position is the
@@ -739,13 +755,13 @@ int main(int argc, char **argv) {
         if (argc < 4) return usage();
         int32_t dy = f32bits((float)atof(argv[3]));
         int32_t a[6] = { sid, 3 /* wheel */, f32bits(0.0f), dy, 0, 0 };
-        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "relmove")) {      /* relative motion (todos/0018) */
         if (argc < 5) return usage();
         int32_t dx = f32bits((float)atoi(argv[3])), dy = f32bits((float)atoi(argv[4]));
         int32_t a[6] = { sid, 4 /* rel */, dx, dy, 0, 0 };
-        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "click") || !strcmp(cmd, "dblclick")) {
         if (argc < 5) return usage();
@@ -755,9 +771,9 @@ int main(int argc, char **argv) {
                                                connection, ms apart (0029) */
         for (int i = 0; i < reps; i++) {
             int32_t a[6] = { sid, 1 /* down */, x, y, btn, 0 };
-            if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
+            if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return failop(cmd);
             a[1] = 2;                   /* up */
-            if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
+            if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return failop(cmd);
         }
         return 0;
     }
@@ -766,7 +782,7 @@ int main(int argc, char **argv) {
         int32_t x = f32bits((float)atoi(argv[3])), y = f32bits((float)atoi(argv[4]));
         int32_t btn = argc > 5 ? atoi(argv[5]) : 1;
         int32_t a[6] = { sid, cmd[0] == 'd' ? 1 : 2, x, y, btn, 0 };
-        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     if (!strcmp(cmd, "drag")) {         /* press-move-release (todos/0077):
                                            down at (X1,Y1), button-held motion
@@ -779,13 +795,13 @@ int main(int argc, char **argv) {
         int32_t btn = argc > 7 ? atoi(argv[7]) : 1;
         int32_t mask = 1 << (btn - 1);
         int32_t a[6] = { sid, 1, f32bits((float)x1), f32bits((float)y1), btn, 0 };
-        if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return fail("no such window");
+        if (wmp_cmd(fd, WMP_INJECT_POINTER, a, 6)) return failop(cmd);
         int32_t m[6] = { sid, 0, f32bits((x1 + x2) / 2.0f), f32bits((y1 + y2) / 2.0f), mask, 0 };
-        if (wmp_cmd(fd, WMP_INJECT_POINTER, m, 6)) return fail("no such window");
+        if (wmp_cmd(fd, WMP_INJECT_POINTER, m, 6)) return failop(cmd);
         m[2] = f32bits((float)x2); m[3] = f32bits((float)y2);
-        if (wmp_cmd(fd, WMP_INJECT_POINTER, m, 6)) return fail("no such window");
+        if (wmp_cmd(fd, WMP_INJECT_POINTER, m, 6)) return failop(cmd);
         a[1] = 2; a[2] = m[2]; a[3] = m[3];
-        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? fail("no such window") : 0;
+        return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
     return usage();
 }

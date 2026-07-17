@@ -179,8 +179,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('no WM: the cycle chord passes through to the app',
     evs.length === 2 && evs[0].type === K.WMEV.KEYDOWN && evs[0].w[0] === 43 &&
     evs[0].w[2] === 0x140 && evs[1].type === K.WMEV.KEYUP, JSON.stringify(evs));
-  check('wmCycle refuses with no subscriber (cycling IS policy)',
-    kernel.wmCycle(1) === false);
+  check('wmCycle refuses with no subscriber: ENODEV (cycling IS policy)',
+    kernel.wmCycle(1) === 'ENODEV');
 
   // ---- the Aero Snap chord with NO subscriber (todos/0095): GUI+arrow is
   // NOT recognized — it lands in the focused app like any other key ----
@@ -190,8 +190,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('no WM: the snap chord passes through to the app',
     evs.length === 2 && evs[0].type === K.WMEV.KEYDOWN && evs[0].w[0] === 80 &&
     evs[0].w[2] === 0x400 && evs[1].type === K.WMEV.KEYUP, JSON.stringify(evs));
-  check('wmSnap refuses with no subscriber (snap IS policy)',
-    kernel.wmSnap(0) === false);
+  check('wmSnap refuses with no subscriber: ENODEV (snap IS policy)',
+    kernel.wmSnap(0) === 'ENODEV');
 
   // ---- the screensaver mechanism (todos/0096): the kernel's idle clock
   // stamps at the wmKey/wmPointer entries; the SAVER gesture is
@@ -202,8 +202,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmIdleMs grows without input', kernel.wmIdleMs() >= 60000, kernel.wmIdleMs());
   kernel.wmPointer('move', 630, 470, {});             // bare desktop corner
   check('wmPointer stamps the idle clock', kernel.wmIdleMs() < 30000, kernel.wmIdleMs());
-  check('wmSaver refuses with no subscriber (the saver IS policy)',
-    kernel.wmSaver() === false);
+  check('wmSaver refuses with no subscriber: ENODEV (the saver IS policy)',
+    kernel.wmSaver() === 'ENODEV');
   drain(ring1);                                       // shed any motion noise
 
   // ---- pointer: client hit, local coords ----
@@ -352,7 +352,9 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('set title', kernel.wmList().find(s => s.sid === 1).title === 'renamed');
 
   // ---- ring overflow: drop-newest + counter ----
-  for (let i = 0; i < 300; i++) kernel.wmInjectKey(1, true, i, 0, 0);
+  let lastInject = 0;
+  for (let i = 0; i < 300; i++) lastInject = kernel.wmInjectKey(1, true, i, 0, 0);
+  check('inject into a full ring reports EAGAIN (todos/0242)', lastInject === 'EAGAIN');
   const dropped = Atomics.load(ring1.i32, K.IR_DROPPED);
   evs = drain(ring1);
   check('overflow drops newest, keeps cap, counts drops',
@@ -370,7 +372,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('10k-event storm: every event delivered in order', ok && seen === 10000, seen);
 
   // ---- client resize: SURFACE_CONFIGURE renegotiation (todos/0019) ----
-  check('wmResize asks the client', kernel.wmResize(1, 96, 80) === true);
+  check('wmResize asks the client', kernel.wmResize(1, 96, 80) === 0);
   let s1r = kernel.wmList().find(s => s.sid === 1);
   check('geometry unchanged while pending', s1r.w === 64 && s1r.h === 48 &&
     s1r.configurePending === true, JSON.stringify(s1r));
@@ -484,8 +486,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     JSON.stringify([px(screen, 198, 210), px(screen, 200 + K.WM_MIN_SIZE + 2, 319)]));
 
   // wmResize input validation + a dead-ring request leaves nothing pending.
-  check('wmResize below the floor is refused', kernel.wmResize(1, 8, 8) === false);
-  check('wmResize on a bogus sid is refused', kernel.wmResize(999, 64, 64) === false);
+  check('wmResize below the floor is refused: EINVAL', kernel.wmResize(1, 8, 8) === 'EINVAL');
+  check('wmResize on a bogus sid is refused: EINVAL', kernel.wmResize(999, 64, 64) === 'EINVAL');
 
   // ---- SDL_WINDOW_RESIZABLE gating (todos/0021) + viewport scaling
   // (todos/0024): a window created without flags bit2 is fixed-size —
@@ -503,8 +505,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     const s = kernel.wmList().find(s => s.sid === cFix.sid);
     return s.dstW === 50 && s.dstH === 40;
   })());
-  check('wmResize on a non-resizable surface is refused',
-    kernel.wmResize(cFix.sid, 100, 90) === false);
+  check('wmResize on a non-resizable surface is refused: EPERM (todos/0242)',
+    kernel.wmResize(cFix.sid, 100, 90) === 'EPERM');
   check('refusal leaves nothing pending, no event to the client',
     kernel.wmList().find(s => s.sid === cFix.sid).configurePending === false &&
     drain(ring1).length === 0);
@@ -583,9 +585,9 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
 
   // wmSetDst validation: resizable surfaces refuse (they configure), floors/
   // caps like wmResize, bogus sids refuse.
-  check('wmSetDst on a RESIZABLE surface is refused', kernel.wmSetDst(1, 200, 100) === false);
-  check('wmSetDst below the floor is refused', kernel.wmSetDst(cFix.sid, 8, 8) === false);
-  check('wmSetDst on a bogus sid is refused', kernel.wmSetDst(999, 64, 64) === false);
+  check('wmSetDst on a RESIZABLE surface is refused: EPERM', kernel.wmSetDst(1, 200, 100) === 'EPERM');
+  check('wmSetDst below the floor is refused: EINVAL', kernel.wmSetDst(cFix.sid, 8, 8) === 'EINVAL');
+  check('wmSetDst on a bogus sid is refused: EINVAL', kernel.wmSetDst(999, 64, 64) === 'EINVAL');
 
   // The wmSetScreen one-shot clamp (todos/0023) measures the SCALED size.
   kernel.wmMove(cFix.sid, -90, 100);       // dst is 100 wide: floor is 40-100
@@ -609,7 +611,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});
   check('SE grip works after the grant', fact === 'resize-start', fact);
   kernel.wmPointer('up', 400 + 50 + 1, 100 + 40 + 1, {});   // no-move: no configure
-  check('wmResize works after the grant', kernel.wmResize(cFix.sid, 60, 50) === true);
+  check('wmResize works after the grant', kernel.wmResize(cFix.sid, 60, 50) === 0);
   drain(ring1);                                        // its WINDOW_RESIZED
   await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: cFix.sid });
   kernel.wmFocus(1);                                   // restore for later legs

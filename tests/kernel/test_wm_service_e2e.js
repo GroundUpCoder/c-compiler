@@ -795,6 +795,7 @@ const script = [
 const r = driveBoot(script, { image });
 
 const out = r.stdout;
+const err = String(r.stderr || '');   // guest fd2 rides boot.js's stderr
 function section(name) {
   const m = out.split('==' + name + '\n');
   return m.length > 1 ? m[1].split('==')[0] : '';
@@ -839,11 +840,19 @@ check('taskbar click restores + focuses winbox', win3.includes('f---'), win3);
 // ---- shot + errors ----
 check('wmctl shot screen writes a PPM', out.includes('P6'), out.slice(0, 400));
 check('wmctl focus on a bogus sid fails', out.includes('bad-sid-fails'));
+// Distinct causes end-to-end (todos/0242): the R_ERR errno reaches wmctl's
+// stderr as strerror text — a bad sid and a mode-refusal read DIFFERENTLY.
+check('wmctl focus bogus sid names the cause (EINVAL)',
+  err.includes('wmctl: focus: Invalid argument'), err.slice(-400));
 
 // ---- viewport scaling (todos/0024): wmctl scale on the real binaries ----
 check('wmctl scale on a fixed-size window succeeds', out.includes('scale-ok'));
 check('wmctl resize on a fixed-size window is refused', out.includes('resize-refused'));
 check('wmctl scale on a RESIZABLE window is refused', out.includes('scale-refused'));
+check('wmctl resize on a fixed-size window names the cause (EPERM, todos/0242)',
+  err.includes('wmctl: resize: Operation not permitted'), err.slice(-400));
+check('wmctl scale on a RESIZABLE window names the cause (EPERM, todos/0242)',
+  err.includes('wmctl: scale: Operation not permitted'), err.slice(-400));
 const fix6 = row(l6, 'fixbox');
 check('fixbox scaled: buffer geometry intact, DST column shows 480x320',
   fix6.includes('240x160+') && fix6.includes('\t480x320\t'), fix6);
@@ -873,6 +882,8 @@ check('WM killed: taskbar gone, endpoint still serves wmctl',
   row(l4, 'taskbar') === '' && row(l4, 'winbox') !== '', JSON.stringify(l4));
 check('wmctl max with no WM is refused (maximize IS policy)',
   out.includes('max-refused'));
+check('wmctl max with no WM names the cause (ENODEV, todos/0242)',
+  err.includes('wmctl: max: No such device (no WM subscribed)'), err.slice(-400));
 const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
   bar5.includes('1024x28+0+740'), JSON.stringify(l5));

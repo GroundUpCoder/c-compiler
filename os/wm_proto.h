@@ -280,14 +280,40 @@ static int wmp_next_reply(int fd, wmp_hdr *h) {
     }
 }
 
-/* One-shot command -> R_OK/R_ERR. Returns 0 on R_OK, -1 otherwise. */
+/* Consume a reply frame's payload, surfacing the kernel's cause (todos/
+ * 0242). An R_ERR reply carries one i32 errno naming the REAL failure —
+ * EINVAL bad/unknown sid or args, EPERM the surface's mode forbids the op
+ * (resize a non-resizable / scale a resizable / maximize a borderless),
+ * ENODEV no WM subscribed, ESRCH the target's process is gone, EAGAIN its
+ * event ring is full, ENOSYS unknown op (MUST MATCH kernel.js WMP_ERRNO).
+ * That value lands in errno and -1 comes back; any other reply type is just
+ * skipped (returns 0). Lets every caller — wmp_cmd and the typed-reply
+ * paths (R_SHOT, R_LIST, ...) — report strerror(errno) on refusal. */
+static int wmp_consume_err(int fd, const wmp_hdr *h) {
+    if (h->type != WMP_R_ERR) return wmp_skip(fd, h->plen);
+    int32_t e = 0;
+    uint32_t left = h->plen;
+    if (left >= 4) {
+        if (wmp_read_all(fd, &e, 4) != 0) return -1;
+        left -= 4;
+    }
+    if (wmp_skip(fd, left) != 0) return -1;
+    errno = e > 0 ? (int)e : EIO;      /* payload-less R_ERR: unknowable */
+    return -1;
+}
+
+/* One-shot command -> R_OK/R_ERR. Returns 0 on R_OK, -1 otherwise — the
+ * legacy contract, unchanged. Additionally (todos/0242) a failure sets
+ * errno to the cause: the R_ERR payload errno (see wmp_consume_err above),
+ * EIO on a non-OK/non-ERR reply, or the transport errno from read/write
+ * (ECONNRESET on EOF, the 0234 shape). */
 static int wmp_cmd(int fd, uint32_t type, const int32_t *args, int nargs) {
     wmp_hdr h;
     if (wmp_send(fd, type, args, nargs) != 0) return -1;
     if (wmp_next_reply(fd, &h) != 0) return -1;
-    int ok = h.type == WMP_R_OK ? 0 : -1;
-    if (wmp_skip(fd, h.plen) != 0) return -1;
-    return ok;
+    if (h.type == WMP_R_OK) return wmp_skip(fd, h.plen);
+    if (wmp_consume_err(fd, &h) == 0) errno = EIO;   /* unexpected reply type */
+    return -1;
 }
 
 #endif /* WM_PROTO_H */

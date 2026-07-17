@@ -720,7 +720,15 @@ var WM_SAB_LAYOUT = {
  *                                   glass tier — browser-compositor-only
  *                                   chrome backdrop blur; headless
  *                                   composite ignores it by design)
- * R_ERR payload: one i32 (errno, always 22/EINVAL in v1).
+ * R_ERR payload: one i32 errno naming the REAL cause (arch CS7, todos/0242;
+ * v1 sent 22 for everything). The values come from WMP_ERRNO below —
+ * EINVAL 22 bad/unknown sid or out-of-range args; EPERM 1 the surface's
+ * declared mode forbids the op (RESIZE on a non-resizable surface, SET_DST
+ * on a resizable one, ACTIVATE on borderless); ENODEV 19 the op needs a
+ * subscribed WM and none is; ESRCH 3 the target surface's process is gone;
+ * EAGAIN 11 the target's event ring is full (delivery would drop);
+ * ENOSYS 38 unknown op. Additive: legacy callers that treat any R_ERR as
+ * failure keep working; wm_proto.h's wmp_cmd surfaces the value in errno.
  *
  * Map-on-placement (todos/0069): while a subscriber exists, a new surface
  * is composited and hit-tested only after the WM's first geometry/stacking
@@ -895,6 +903,13 @@ var WMP = {
                                         pass-through rule (no subscriber, the
                                         chord reaches the app unchanged) */
 };
+
+/* R_ERR errno values (arch CS7, todos/0242). The wm* command methods below
+ * return 0 on success or one of these NAMES on failure; _wmpDispatch maps
+ * the name to its libc <errno.h> number for the R_ERR payload (numbers MUST
+ * MATCH host.js's errnoMap / the libc errno.h). Semantics are documented at
+ * the "R_ERR payload" line of the protocol comment above. */
+var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EAGAIN: 11, ENODEV: 19, EINVAL: 22, ENOSYS: 38 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
 
@@ -3482,9 +3497,10 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       var srPrev = sr.pendingConfigure;
       sr.pendingConfigure = { w: rw, h: rh };
-      if (!this._wmEventTo(sr.sid, [WMEV.WINDOW_RESIZED, 0, rw, rh, 0, 0, 0, 0])) {
+      var srErr = this._wmEventTo(sr.sid, [WMEV.WINDOW_RESIZED, 0, rw, rh, 0, 0, 0, 0]);
+      if (srErr) {         // EAGAIN in practice: the caller owns the surface
         sr.pendingConfigure = srPrev;
-        this._respond(pcb, { errno: 'EAGAIN' }); break;
+        this._respond(pcb, { errno: srErr }); break;
       }
       this._respond(pcb, {});
       break;
@@ -4047,13 +4063,16 @@ var _wmF32Scratch = new Float32Array(1);
 var _wmI32Scratch = new Int32Array(_wmF32Scratch.buffer);
 function f32bits(v) { _wmF32Scratch[0] = v; return _wmI32Scratch[0]; }
 
+/* Deliver one event to a surface's owner. Returns 0, or the errno NAME for
+ * the real failure (todos/0242): EINVAL unknown sid, ESRCH the owning
+ * process is gone, EAGAIN no ring / ring full (delivery would drop). */
 Kernel.prototype._wmEventTo = function (sid, words) {
   var s = this._surfaces.get(sid);
-  if (!s) return false;
+  if (!s) return 'EINVAL';
   var pcb = this._procs.get(s.pid);
-  if (!pcb || pcb.state !== STATE_RUNNING) return false;
+  if (!pcb || pcb.state !== STATE_RUNNING) return 'ESRCH';
   words[1] = sid;
-  return this._wmPushEvent(pcb, words);
+  return this._wmPushEvent(pcb, words) ? 0 : 'EAGAIN';
 };
 
 /* ---- raw input from the UI bridge (SCREEN coordinates) ----
@@ -4101,8 +4120,10 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
     return 'sysmenu';
   }
   if (!this._focusSid) return false;
+  // Boolean by contract (the raw UI-bridge seam, not a WMP op): true =
+  // delivered, false = dropped — _wmEventTo's errno name is a 0242 shape.
   return this._wmEventTo(this._focusSid,
-    [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]);
+    [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]) === 0;
 };
 
 /* ---- cursor shapes (todos/0105) ----
@@ -4339,7 +4360,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
             // Maximize = the 0025 gesture: EV_TITLE_ACTIVATE to the WM
             // (policy owns the toggle); no subscriber -> the same no-op
             // as wmctl max (kernel-chrome has no maximize, by design).
-            return this.wmTitleActivate(s.sid) ? 'title-activate' : 'title-box';
+            return this.wmTitleActivate(s.sid) === 0 ? 'title-activate' : 'title-box';
           }
           if (nx0 >= s.x && x >= nx0 && x < nx0 + WM_CLOSE_W) {
             // Minimize is kernel MECHANISM already — the box calls it
@@ -4454,25 +4475,27 @@ Kernel.prototype._wmZNormalize = function () {
  * surfaces are furniture is WM policy (/bin/wm pins its own windows); the
  * no-WM fallback never sets layers, so kernel-chrome behavior is untouched.
  * No event: the window record carries the layer (word 11). */
+/* The wm* command methods return 0 on success or an errno NAME on failure
+ * (todos/0242) — see WMP_ERRNO and the R_ERR payload contract above. */
 Kernel.prototype.wmSetLayer = function (sid, layer) {
   var s = this._surfaces.get(sid | 0);
-  if (!s) return false;
+  if (!s) return 'EINVAL';
   layer = layer | 0;
-  if (layer < -1 || layer > 1) return false;
+  if (layer < -1 || layer > 1) return 'EINVAL';
   if (s.layer === layer) {
     this._wmMap(s.sid);         // a stacking op maps even as a no-op (0069)
-    return true;
+    return 0;
   }
   s.layer = layer;
   this._wmMap(s.sid);           // stacking maps (todos/0069)
   this._wmZNormalize();
   this._bumpWm();
-  return true;
+  return 0;
 };
 
 Kernel.prototype.wmFocus = function (sid) {
   var s = this._surfaces.get(sid | 0);
-  if (!s) return false;
+  if (!s) return 'EINVAL';
   if (s.minimized) {                                            // focus restores
     s.minimized = false;
     this._wmAnimPush(s, 'restore');   // compositor animation (todos/0063)
@@ -4492,45 +4515,48 @@ Kernel.prototype.wmFocus = function (sid) {
     this._wmEmit(WMP.EV_FOCUS, [s.sid]);
   }
   this._wmSyncPointerLock();
-  return true;
+  return 0;
 };
 
 Kernel.prototype.wmMove = function (sid, x, y) {
   var s = this._surfaces.get(sid | 0);
-  if (!s) return false;
+  if (!s) return 'EINVAL';
   s.x = x | 0; s.y = y | 0;
   this._wmMap(s.sid);           // placement maps (todos/0069)
   this._bumpWm();
   this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
-  return true;
+  return 0;
 };
 
 /* Ask the client to resize (todos/0019). Geometry does NOT change here —
  * the surface keeps its old buffer and size until the SURFACE_CONFIGURE
  * ack lands (so a slow client shows its last frame, never a torn one).
  * Latest wins: a new request while one is pending replaces it, and the ack
- * path re-issues the configure if the client acked a stale size. Returns
- * false when the request can't reach the client (dead process, full ring):
- * nothing would ever ack, so no pending state is left behind. Non-resizable
- * surfaces (no SDL_WINDOW_RESIZABLE, todos/0021) refuse outright — same
- * no-pending-state rule: the app would never renegotiate. */
+ * path re-issues the configure if the client acked a stale size. Fails with
+ * the delivery errno (ESRCH dead process, EAGAIN full ring) when the request
+ * can't reach the client: nothing would ever ack, so no pending state is
+ * left behind. Non-resizable surfaces (no SDL_WINDOW_RESIZABLE, todos/0021)
+ * refuse outright with EPERM — same no-pending-state rule: the app would
+ * never renegotiate. */
 Kernel.prototype.wmResize = function (sid, w, h) {
   var s = this._surfaces.get(sid | 0);
-  if (!s || !s.resizable) return false;
+  if (!s) return 'EINVAL';
+  if (!s.resizable) return 'EPERM';
   w = w | 0; h = h | 0;
-  if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
+  if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return 'EINVAL';
   if (w === s.w && h === s.h && !s.pendingConfigure) {
     this._wmMap(s.sid);         // a geometry op maps even as a no-op (0069)
-    return true;
+    return 0;
   }
   var prev = s.pendingConfigure;
   s.pendingConfigure = { w: w, h: h };
-  if (!this._wmEventTo(s.sid, [WMEV.WINDOW_RESIZED, 0, w, h, 0, 0, 0, 0])) {
+  var err = this._wmEventTo(s.sid, [WMEV.WINDOW_RESIZED, 0, w, h, 0, 0, 0, 0]);
+  if (err) {
     s.pendingConfigure = prev;
-    return false;
+    return err;
   }
   this._wmMap(s.sid);           // the WM sized it: placement decided (0069)
-  return true;
+  return 0;
 };
 
 /* Set the on-screen dst viewport of a FIXED-SIZE surface (todos/0024 —
@@ -4541,18 +4567,19 @@ Kernel.prototype.wmResize = function (sid, w, h) {
  * maximize (todos/0025) dispatches on the same bit. Echoes EV_SCALED. */
 Kernel.prototype.wmSetDst = function (sid, w, h) {
   var s = this._surfaces.get(sid | 0);
-  if (!s || s.resizable) return false;
+  if (!s) return 'EINVAL';
+  if (s.resizable) return 'EPERM';
   w = w | 0; h = h | 0;
-  if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return false;
+  if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return 'EINVAL';
   if (w === s.dstW && h === s.dstH) {
     this._wmMap(s.sid);         // a geometry op maps even as a no-op (0069)
-    return true;
+    return 0;
   }
   s.dstW = w; s.dstH = h;
   this._wmMap(s.sid);           // placement maps (todos/0069)
   this._bumpWm();
   this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
-  return true;
+  return 0;
 };
 
 /* Fire the title-activate (maximize) gesture for a surface — the same
@@ -4564,10 +4591,11 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
  * borderless surfaces (no title bar, no gesture). */
 Kernel.prototype.wmTitleActivate = function (sid) {
   var s = this._surfaces.get(sid | 0);
-  if (!s || s.borderless) return false;
-  if (!this._wmSubs.size) return false;
+  if (!s) return 'EINVAL';
+  if (s.borderless) return 'EPERM';
+  if (!this._wmSubs.size) return 'ENODEV';
   this._wmEmit(WMP.EV_TITLE_ACTIVATE, [s.sid]);
-  return true;
+  return 0;
 };
 
 /* Fire the window-cycling gesture (todos/0032) — the same EV_CYCLE the
@@ -4576,9 +4604,9 @@ Kernel.prototype.wmTitleActivate = function (sid) {
  * state; policy picks the next window and sends FOCUS. Refuses without a
  * subscriber (cycling IS policy — nothing would ever answer). */
 Kernel.prototype.wmCycle = function (dir) {
-  if (!this._wmSubs.size) return false;
+  if (!this._wmSubs.size) return 'ENODEV';
   this._wmEmit(WMP.EV_CYCLE, [(dir | 0) < 0 ? -1 : 1]);
-  return true;
+  return 0;
 };
 
 /* Fire the Start-menu gesture (todos/0078) — the same EV_MENU the
@@ -4587,9 +4615,9 @@ Kernel.prototype.wmCycle = function (dir) {
  * menu state; policy owns the columns. Refuses without a subscriber (the
  * menu IS policy — nothing would ever answer). */
 Kernel.prototype.wmMenu = function () {
-  if (!this._wmSubs.size) return false;
+  if (!this._wmSubs.size) return 'ENODEV';
   this._wmEmit(WMP.EV_MENU, []);
-  return true;
+  return 0;
 };
 
 /* Fire the Aero Snap gesture (todos/0095) — the same EV_SNAP_KEY the
@@ -4598,9 +4626,9 @@ Kernel.prototype.wmMenu = function () {
  * holds the per-window snap edge and the saved floating rect. Refuses
  * without a subscriber (snap IS policy — nothing would ever answer). */
 Kernel.prototype.wmSnap = function (dir) {
-  if (!this._wmSubs.size) return false;
+  if (!this._wmSubs.size) return 'ENODEV';
   this._wmEmit(WMP.EV_SNAP_KEY, [dir & 3]);
-  return true;
+  return 0;
 };
 
 /* Ms since the last real user input (todos/0096) — the screensaver policy's
@@ -4616,9 +4644,9 @@ Kernel.prototype.wmIdleMs = function () {
  * raises the configured saver immediately. Refuses without a subscriber
  * (the saver IS policy — nothing would ever answer). */
 Kernel.prototype.wmSaver = function () {
-  if (!this._wmSubs.size) return false;
+  if (!this._wmSubs.size) return 'ENODEV';
   this._wmEmit(WMP.EV_SAVER, []);
-  return true;
+  return 0;
 };
 
 /* Fire the window system-menu gesture (todos/0102) — the same EV_SYSMENU the
@@ -4628,9 +4656,9 @@ Kernel.prototype.wmSaver = function () {
  * Mechanism only: the kernel keeps no menu state. Refuses without a
  * subscriber (the menu IS policy — nothing would ever answer). */
 Kernel.prototype.wmSysMenu = function () {
-  if (!this._wmSubs.size) return false;
+  if (!this._wmSubs.size) return 'ENODEV';
   this._wmEmit(WMP.EV_SYSMENU, [this._focusSid | 0]);
-  return true;
+  return 0;
 };
 
 /* Minimize: off screen + out of hit-testing, still listed. Focus falls via
@@ -4638,8 +4666,8 @@ Kernel.prototype.wmSysMenu = function () {
  * wmFocus (which un-minimizes). */
 Kernel.prototype.wmMinimize = function (sid) {
   var s = this._surfaces.get(sid | 0);
-  if (!s) return false;
-  if (s.minimized) return true;
+  if (!s) return 'EINVAL';
+  if (s.minimized) return 0;
   s.minimized = true;
   this._wmAnimPush(s, 'min');   // transient compositor animation (todos/0063)
   this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
@@ -4648,7 +4676,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   if (this._focusSid === s.sid) this._wmFocusFall();
   this._bumpWm();
   this._wmSyncPointerLock();
-  return true;
+  return 0;
 };
 
 /* place: 0 = raise to top (without stealing focus), 1 = lower to bottom —
@@ -4657,16 +4685,16 @@ Kernel.prototype.wmMinimize = function (sid) {
  * a raise never covers a pinned taskbar. */
 Kernel.prototype.wmRestack = function (sid, place) {
   var s = this._surfaces.get(sid | 0);
-  if (!s) return false;
+  if (!s) return 'EINVAL';
   var zi = this._zOrder.indexOf(s.sid);
-  if (zi < 0) return false;
+  if (zi < 0) return 'EINVAL';
   this._zOrder.splice(zi, 1);
   if ((place | 0) === 1) this._zOrder.unshift(s.sid);
   else this._zOrder.push(s.sid);
   this._wmMap(s.sid);           // stacking maps (todos/0069)
   this._wmZNormalize();
   this._bumpWm();
-  return true;
+  return 0;
 };
 
 /* Synthetic input TARGETED at a window id (post-hit-test injection into the
@@ -4697,7 +4725,7 @@ Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
     return this._wmEventTo(target, [WMEV.MOUSEWHEEL, 0, f32bits(opts.wheelX || 0),
       f32bits(opts.wheelY || 0), opts.direction | 0, 0, 0, 0]);
   }
-  return false;
+  return 'EINVAL';              // unknown kind
 };
 
 /* Screenshot one surface: a copy of its front (shm) framebuffer, at BUFFER
@@ -4895,7 +4923,7 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
 Kernel.prototype.wmGlass = function (on) {
   on = !!on;
   if (this._wmGlassOn !== on) { this._wmGlassOn = on; this._bumpWm(); }
-  return true;
+  return 0;                     // no failure mode: a pure state toggle
 };
 
 /* Record a transient minimize/restore animation (todos/0063): geometry AT
@@ -5011,8 +5039,11 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
   var self = this;
   var g = function (i) { return (i + 1) * 4 <= plen ? dv.getInt32(8 + i * 4, true) : 0; };
   var gf = function (i) { return (i + 1) * 4 <= plen ? dv.getFloat32(8 + i * 4, true) : 0; };
-  var ok = function (r) {
-    conn.peer.send(r ? self._wmpFrame(WMP.R_OK, []) : self._wmpFrame(WMP.R_ERR, [22]));
+  // e: 0 = R_OK; an errno NAME (a wm* method's return) = R_ERR carrying the
+  // real cause as its distinct i32 (todos/0242; see the WMP_ERRNO table).
+  var ok = function (e) {
+    conn.peer.send(e ? self._wmpFrame(WMP.R_ERR, [WMP_ERRNO[e] || WMP_ERRNO.EINVAL])
+                     : self._wmpFrame(WMP.R_OK, []));
   };
   switch (type) {
     case WMP.SUBSCRIBE: {
@@ -5082,14 +5113,14 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       var sKind = ['move', 'down', 'up'][g(0)] || 'move';
       var sOpts = sKind === 'move' ? { buttons: g(3) } : { button: g(3) || 1 };
       this.wmPointer(sKind, gf(1), gf(2), sOpts);
-      ok(true);
+      ok(0);
       break;
     }
     case WMP.SHOT: case WMP.SHOT_SCREEN: case WMP.THUMB: {
       var shot = type === WMP.SHOT ? this.wmScreenshot(g(0))
         : type === WMP.THUMB ? this.wmThumbnail(g(0), g(1), g(2))   // 0063
         : this.wmScreenshotScreen();
-      if (!shot) { ok(false); break; }
+      if (!shot) { ok('EINVAL'); break; }          // null = unknown sid
       var head = new Uint8Array(12 + shot.rgba.length);
       var hdv = new DataView(head.buffer);
       hdv.setInt32(0, type === WMP.SHOT_SCREEN ? 0 : g(0), true);
@@ -5099,7 +5130,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       conn.peer.send(this._wmpFrame(WMP.R_SHOT, null, head));
       break;
     }
-    default: conn.peer.send(this._wmpFrame(WMP.R_ERR, [38]));   // ENOSYS
+    default: ok('ENOSYS');                         // unknown op
   }
 };
 

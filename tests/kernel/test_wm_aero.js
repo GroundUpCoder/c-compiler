@@ -152,7 +152,7 @@ const over = (s, d, a) => (s * a + d * (255 - a) + 127) / 255 | 0;
     String(px(shot, 60, 90)) === '0,255,0,255', px(shot, 60, 90));
 
   // ---- scaled alpha surface: nearest map + the same blend ----
-  check('scale the alpha surface 2x', kernel.wmSetDst(cB.sid, 128, 96));
+  check('scale the alpha surface 2x', kernel.wmSetDst(cB.sid, 128, 96) === 0);
   shot = kernel.wmScreenshotScreen();
   // dst (100, 40) -> src (50, 20): right half, alpha-0 band -> transparent.
   check('scaled alpha-0 pixel transparent over desktop',
