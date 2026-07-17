@@ -1,0 +1,17 @@
+{
+  "type": "lib",
+  "name": "menucore",
+  "description": "The ONE menu engine (todos/0259, arch A13): model + geometry + tracking + raster over HDC in menucore.c, plus its raster base gdi32.c (freetype text). Consumed by BOTH front-ends: the win32 veneer (lib.json deps this) and os/wm.c (links this WITHOUT the rest of the veneer).",
+  "deps": [
+    "../../vendor/freetype/lib.json"
+  ],
+  "includes": [
+    "include",
+    "../../vendor/freetype/demo",
+    "../../vendor/freetype/include"
+  ],
+  "sources": [
+    "menucore.c",
+    "gdi32.c"
+  ]
+}

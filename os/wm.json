@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "wm",
+  "description": "The window-management policy client (0014...); since 0259 its Start-menu flyouts + context menus ride the ONE menu engine (win32/menucore.json: menucore.c + gdi32.c + freetype) — customer #2 of the engine, no user32/kernel32",
+  "deps": [
+    "win32/menucore.json"
+  ],
+  "sources": [
+    "wm.c"
+  ]
+}

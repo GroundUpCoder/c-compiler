@@ -1,8 +1,9 @@
 {
   "type": "lib",
   "name": "win32",
-  "description": "The Win32 veneer (todos/WIN32.md): gdi32 CPU drawing (0057) + user32 windowing/controls/agent-tree (0058) + kernel32/advapi32/wide-CRT over POSIX (0059) + W entries/menus/dialogs/resources/shell32/winmm (0068) + clipboard/keyboard/popup-menus/comctl32/comdlg32 (0048)",
+  "description": "The Win32 veneer (todos/WIN32.md): user32 windowing/controls/agent-tree (0058) + kernel32/advapi32/wide-CRT over POSIX (0059) + W entries/menus/dialogs/resources/shell32/winmm (0068) + clipboard/keyboard/popup-menus/comctl32/comdlg32 (0048). gdi32 CPU drawing (0057) + the menu engine ride in via menucore.json (0259) so wm.c can share them without the rest of the veneer.",
   "deps": [
+    "menucore.json",
     "../../vendor/freetype/lib.json"
   ],
   "includes": [
@@ -11,8 +12,8 @@
     "../../vendor/freetype/include"
   ],
   "sources": [
-    "gdi32.c",
     "user32.c",
+    "gdi32w.c",
     "kernel32.c",
     "advapi32.c",
     "crt16.c",

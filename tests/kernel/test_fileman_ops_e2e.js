@@ -63,15 +63,16 @@ const sel = (row) => ['wmctl click $SID 100 100', HOME,
 const RC_ROW0 = 'wmctl click $SID 100 30 3';
 const RC_PANE = 'wmctl click $SID 100 300 3';
 
-// The wm.c desktop menus (geometry from wm.c MENU_*/CTX_W — the ctxmenu
-// goldens' move-together rule): on a DOCUMENT icon (regular, not runnable
-// — both targets here are .txt) the menu rows are OPEN 4-24 / EDIT 24-44
-// (0202) / sep / CUT 52-72 / COPY 72-92 / DELETE 92-112; desktop menu NEW
-// / SORT BY / REFRESH / PASTE 64-84 / sep / DISPLAY. Desktop cells are
-// derived from the drive.js grid model (deskEntries/deskCell — dirs
-// first, Recycle Bin tail-pinned, column wrap at 11 rows; todos/
-// 0184/0185), never "icon 0" row math.
-const ICON_CUT_Y = 62, ICON_COPY_Y = 82, DESK_PASTE_Y = 74;
+// The wm.c desktop menus (menucore engine geometry since 0259: 18px
+// rows, 8px sep, 1px border — the ctxmenu goldens' move-together rule):
+// on a DOCUMENT icon (regular, not runnable — both targets here are
+// .txt) the rows are Open 1-19 / Edit 19-37 (0202) / sep / Cut 45-63 /
+// Copy 63-81 / Delete 81-99; desktop menu New / Sort by / Refresh /
+// Paste 55-73 / sep / Display. Desktop cells are derived from the
+// drive.js grid model (deskEntries/deskCell — dirs first, Recycle Bin
+// tail-pinned, column wrap at 11 rows; todos/0184/0185), never "icon 0"
+// row math.
+const ICON_CUT_Y = 54, ICON_COPY_Y = 72, DESK_PASTE_Y = 64;
 
 const script = [
   // -- fixtures --
@@ -257,7 +258,7 @@ const script = [
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',                  // desktop context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${DESK_PASTE_Y}`,       // grayed: stays open
+  `wmctl click $CXSID 30 ${DESK_PASTE_Y}`,       // grayed: stays open
   // KEEP: negative "action ignored" check — bounded wait to let a (wrong)
   // dismissal happen, then assert the grayed Paste left the menu open.
   'sleep 0.5',
@@ -274,12 +275,12 @@ const script = [
   `wmctl click $DSID ${DFILE.x + 42} ${DFILE.y + 32} 3`,   // dfile.txt's sorted cell
   'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${ICON_COPY_Y}`,
+  `wmctl click $CXSID 30 ${ICON_COPY_Y}`,
   'wmctl wait nowin ctxmenu 6000',               // Copy handled, menu closed (clipboard set)
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',                  // desktop context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${DESK_PASTE_Y}`,
+  `wmctl click $CXSID 30 ${DESK_PASTE_Y}`,
   'wmctl wait nowin ctxmenu 6000',               // Paste handled (file duplicated), menu closed
   'test -f "/root/Desktop/Copy of dfile.txt" && echo DESK-COPY-OK',
   // ---- desktop icon CUT -> paste in FILEMAN (cross-app move) ----
@@ -289,7 +290,7 @@ const script = [
   `wmctl click $DSID ${DCOPY.x + 42} ${DCOPY.y + 32} 3`,   // "Copy of dfile.txt"'s cell
   'wmctl wait win ctxmenu 8000',                  // icon context menu up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${ICON_CUT_Y}`,
+  `wmctl click $CXSID 30 ${ICON_CUT_Y}`,
   'wmctl wait nowin ctxmenu 6000',               // Cut handled, menu closed (clipboard set)
   'wmctl settext EDIT:0 /root/optest',
   'wmctl click Go',

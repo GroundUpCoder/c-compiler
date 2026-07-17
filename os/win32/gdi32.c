@@ -42,9 +42,28 @@
 #include "win32_internal.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ============================================================ fail-loud
+ * (todos/0211, declared in win32_internal.h; moved here from kernel32.c
+ * by M4/0259 — gdi32 is the base layer every veneer link set shares, so
+ * wm.c can link gdi32+menucore without kernel32). One line to stderr per
+ * call site — grep for "win32: unsupported" to inventory what's stubbed.
+ * WIN32_STRICT=1 escalates to abort() so tests can trap on any hit. */
+
+void __win32_unsupported(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[256];
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "win32: unsupported %s\n", buf);
+    const char *strict = getenv("WIN32_STRICT");
+    if (strict && strict[0] == '1') abort();
+}
 
 #define FONT_PATH     "/etc/fonts/mono.ttf"
 #define FONT_FALLBACK "/usr/share/fonts/mono.ttf"
@@ -1519,125 +1538,9 @@ int MulDiv(int a, int b, int c) {
     return (int)(v / c);
 }
 
-/* ============================================================ W text (0068)
- * Mechanical UTF-16 wrappers over the implemented ANSI entries (WIN32.md
- * friction #2: implement A here, convert at the boundary — kernel32.c
- * owns MultiByteToWideChar/WideCharToMultiByte). Metrics and object
- * queries are charset-free apart from LOGFONT's face name. */
-
-static char *gdi_w2a(LPCWSTR s, int len, int *outLen) {  /* len: chars or -1 */
-    if (!s) return NULL;
-    int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
-    if (n < 0) n = 0;
-    char *out = (char *)malloc((size_t)n + 1);
-    if (!out) return NULL;
-    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, s, len, out, n, NULL, NULL);
-    out[n] = 0;
-    if (outLen) *outLen = len < 0 ? n - 1 : n;   /* -1 counted the NUL */
-    return out;
-}
-
-BOOL TextOutW(HDC dc, int x, int y, LPCWSTR str, int len) {
-    int alen;
-    char *a = gdi_w2a(str, len, &alen);
-    if (!a) return FALSE;
-    BOOL r = TextOut(dc, x, y, a, alen);
-    free(a);
-    return r;
-}
-
-BOOL ExtTextOutW(HDC dc, int x, int y, UINT options, const RECT *r,
-                 LPCWSTR str, UINT len, const INT *dx) {
-    int alen;
-    char *a = gdi_w2a(str, (int)len, &alen);
-    if (!a) return FALSE;
-    BOOL ok = ExtTextOut(dc, x, y, options, r, a, (UINT)alen, dx);
-    free(a);
-    return ok;
-}
-
-int DrawTextW(HDC dc, LPCWSTR str, int len, RECT *r, UINT format) {
-    int alen;
-    char *a = gdi_w2a(str, len, &alen);
-    if (!a) return 0;
-    int out = DrawText(dc, a, alen, r, format);
-    free(a);
-    return out;
-}
-
-BOOL GetTextExtentPoint32W(HDC dc, LPCWSTR str, int len, SIZE *size) {
-    int alen;
-    char *a = gdi_w2a(str, len, &alen);
-    if (!a) return FALSE;
-    BOOL r = GetTextExtentPoint32(dc, a, alen, size);
-    free(a);
-    return r;
-}
-
-BOOL GetTextMetricsW(HDC dc, TEXTMETRICW *tmw) {
-    TEXTMETRIC tm;
-    if (!tmw || !GetTextMetrics(dc, &tm)) return FALSE;
-    memset(tmw, 0, sizeof *tmw);
-    tmw->tmHeight = tm.tmHeight;
-    tmw->tmAscent = tm.tmAscent;
-    tmw->tmDescent = tm.tmDescent;
-    tmw->tmInternalLeading = tm.tmInternalLeading;
-    tmw->tmExternalLeading = tm.tmExternalLeading;
-    tmw->tmAveCharWidth = tm.tmAveCharWidth;
-    tmw->tmMaxCharWidth = tm.tmMaxCharWidth;
-    tmw->tmWeight = tm.tmWeight;
-    tmw->tmOverhang = tm.tmOverhang;
-    tmw->tmDigitizedAspectX = tm.tmDigitizedAspectX;
-    tmw->tmDigitizedAspectY = tm.tmDigitizedAspectY;
-    tmw->tmFirstChar = (WCHAR)tm.tmFirstChar;
-    tmw->tmLastChar = (WCHAR)tm.tmLastChar;
-    tmw->tmDefaultChar = (WCHAR)tm.tmDefaultChar;
-    tmw->tmBreakChar = (WCHAR)tm.tmBreakChar;
-    tmw->tmItalic = tm.tmItalic;
-    tmw->tmUnderlined = tm.tmUnderlined;
-    tmw->tmStruckOut = tm.tmStruckOut;
-    tmw->tmPitchAndFamily = tm.tmPitchAndFamily;
-    tmw->tmCharSet = tm.tmCharSet;
-    return TRUE;
-}
-
-HFONT CreateFontW(int height, int width, int escapement, int orientation,
-                  int weight, DWORD italic, DWORD underline, DWORD strikeout,
-                  DWORD charset, DWORD outPrecision, DWORD clipPrecision,
-                  DWORD quality, DWORD pitchAndFamily, LPCWSTR faceName) {
-    char *face = faceName ? gdi_w2a(faceName, -1, NULL) : NULL;
-    HFONT f = CreateFont(height, width, escapement, orientation, weight,
-                         italic, underline, strikeout, charset, outPrecision,
-                         clipPrecision, quality, pitchAndFamily, face);
-    free(face);
-    return f;
-}
-
-HFONT CreateFontIndirectW(const LOGFONTW *lf) {
-    if (!lf) return NULL;
-    LOGFONT a;
-    memset(&a, 0, sizeof a);
-    a.lfHeight = lf->lfHeight;
-    a.lfWidth = lf->lfWidth;
-    a.lfEscapement = lf->lfEscapement;
-    a.lfOrientation = lf->lfOrientation;
-    a.lfWeight = lf->lfWeight;
-    a.lfItalic = lf->lfItalic;
-    a.lfUnderline = lf->lfUnderline;
-    a.lfStrikeOut = lf->lfStrikeOut;
-    a.lfCharSet = lf->lfCharSet;
-    a.lfOutPrecision = lf->lfOutPrecision;
-    a.lfClipPrecision = lf->lfClipPrecision;
-    a.lfQuality = lf->lfQuality;
-    a.lfPitchAndFamily = lf->lfPitchAndFamily;
-    WideCharToMultiByte(CP_UTF8, 0, lf->lfFaceName, -1, a.lfFaceName,
-                        sizeof a.lfFaceName - 1, NULL, NULL);
-    return CreateFontIndirect(&a);
-}
-
-int GetObjectW(HGDIOBJ obj, int size, void *out) {
-    return GetObject(obj, size, out);            /* no string-bearing objects */
-}
+/* The W text/font wrappers (0068) live in gdi32w.c since M4 (0259):
+ * they need kernel32's UTF-16 boundary, and the menucore link set (wm.c)
+ * carries gdi32 WITHOUT kernel32 — the W layer is veneer-side. */
 
 /* ============================================================ mapping +
  * printing (0048, notepad's tail). MM_TEXT is the ONLY mapping mode — the

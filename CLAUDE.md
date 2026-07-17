@@ -621,9 +621,9 @@ is the shell bridge — `cmd | clip` sets, `clip -o` prints (exit 1 when
 empty; also the test probe). Host-browser clipboard integration is
 deliberately NOT wired (SDL3.md). Tests:
 `tests/kernel/test_clipboard_e2e.js` + the os-shell.mjs notepad leg.
-Right-click context menus (todos/0091): wm.c raises a two-window popup
-(root "ctxmenu" + at most ONE "ctxmenu2" flyout — the v1 depth cap) from
-fixed item lists with SEP/GRAY/SUB flags — empty desktop (New ▸ Folder/
+Right-click context menus (todos/0091; on the menucore engine since
+todos/0259 — "ctxmenu"/"ctxmenu2"/... chain levels to MENU_MAX_DEPTH,
+the old one-flyout cap gone) built per open from fixed item lists — empty desktop (New ▸ Folder/
 Text File with the Win95 uniquifier, Sort by ▸ Name = forget `.icons`,
 Refresh, Display → `ctlpanel Display`; ctlpanel grew applet-by-name
 argv), icon (selects-alone-unless-in-set, Open via activate(); 0092 file
@@ -776,7 +776,17 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v112**.
+The menu ENGINE is ONE facility (todos/0259, arch A13):
+`os/win32/menucore.c` (model + geometry + tracking + freetype raster
+over HDC, behind the menucore.h MenuCoreOps vtable) is consumed by BOTH
+user32 (HMENU API/bar/agent front-end) and wm.c (Start-menu flyouts +
+ctx menus over its own focus-holding furniture windows; the Start ROOT
+panel — search/pins/band — stays wm-drawn). wm.c links
+`os/win32/menucore.json` (menucore.c + gdi32.c + freetype, NO
+user32/kernel32 — gdi32's W wrappers live in gdi32w.c, veneer-side);
+the Start tree is the UNION of /etc/menu and /usr/share/menu (/etc wins
+same-name clashes — the gucman prerequisite, ex-0244/0250).
+Image version is **v119**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

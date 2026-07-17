@@ -50,25 +50,28 @@ const AP_ROW = SM_ROWS - 1;                       // All Programs DISPLAY row: p
 const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
 const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 248
 const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };
-// A flyout of `parent` ({x,y,w}) anchored to its 0-based `rowIndex`,
-// listing `n` rows: parent-right - 3, row-aligned, clamped to the work area
-// (mirrors sm_open_allprogs / menu_open_flyout).
-const fly = (parent, rowIndex, n) => {
-  const w = 150, h = 2 * SM_PAD + n * SM_ROW_H;
-  let x = parent.x + parent.w - 3, y = parent.y + rowIndex * SM_ROW_H;
-  if (x + w > 1024) x = 1024 - w;
-  if (y + h > 740) y = 740 - h;
-  if (y < 0) y = 0;
-  return { x, y, w, h, geom: `${w}x${h}+${x}+${y}` };
+// Flyout columns are menucore chain levels since todos/0259: 18px rows,
+// 1px border (h = 4 + 18n), WIDTH MEASURED from freetype (asserted
+// structurally, never as a literal); a level parks at parent-right - 3
+// with row 0 aligned to the anchor row's drawn top, clamped to the work
+// area by the wm's win_create op. flyH/flyY compute the deterministic
+// parts; x/w come from the live `wmctl list` rows.
+const MC_ROW = 18, MC_SEP = 8;
+const flyH = (n) => 4 + n * MC_ROW;
+const flyClampY = (y, h) => Math.max(0, Math.min(y, 740 - h));
+const flyRowY = (i) => 1 + i * MC_ROW + 9;            // window-local click y
+// Parse "WxH+X+Y" out of a wmctl list row.
+const g4 = (line) => {
+  const m = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec((line.split('\t')[2] || ''));
+  return m ? { w: +m[1], h: +m[2], x: +m[3], y: +m[4] } : null;
 };
-const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;    // window-local click y
-// Context-menu row center (todos/0091 geometry: 4px pad, 20px rows) — the
-// 0101 taskbar-strip menu rows (Cascade 0, Tile 1, Minimize All 2).
-const rowY101 = (i) => 4 + i * 20 + 10;
-// Window system-menu row centers (todos/0102): RESTORE/MOVE/SIZE/MINIMIZE/
-// MAXIMIZE, an 8px SEP, then CLOSE — so rows past the sep shift down by
-// MENU_SEP_H (8). Reuses the 0091 ctx geometry (4px pad, 20px rows).
-const rowYsys = (i) => (i < 5 ? 4 + i * 20 : 4 + 5 * 20 + 8 + (i - 6) * 20) + 10;
+// Context-menu row center (menucore geometry since 0259) — the 0101
+// taskbar-strip menu rows (Cascade 0, Tile 1, Minimize All 2).
+const rowY101 = (i) => 1 + i * MC_ROW + 9;
+// Window system-menu row centers (todos/0102): Restore/Move/Size/Minimize/
+// Maximize, an 8px sep, then Close — rows past the sep shift down by 8.
+const rowYsys = (i) => (i < 5 ? 1 + i * MC_ROW
+                              : 1 + 5 * MC_ROW + MC_SEP + (i - 6) * MC_ROW) + 9;
 const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
 const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'learn-mgp', 'mgp', 'slides', 'winbox'];
 
@@ -159,12 +162,12 @@ const script = [
   'echo ==menu1b',
   'wmctl list',
   'M2SID=$(wmctl list | grep startmenu2$ | sed "s/[^0-9].*//")',
-  `wmctl hover $M2SID 60 ${flyRowY(MENU_GROUPS.indexOf('Demos'))}`,   // Demos group -> its leaves
+  `wmctl hover $M2SID 30 ${flyRowY(MENU_GROUPS.indexOf('Demos'))}`,   // Demos group -> its leaves
   'wmctl wait win startmenu3',
   'echo ==menu1c',
   'wmctl list',
   'M3SID=$(wmctl list | grep startmenu3$ | sed "s/[^0-9].*//")',
-  `wmctl click $M3SID 60 ${flyRowY(DEMOS.indexOf('winbox'))}`,        // winbox, nested (sorted)
+  `wmctl click $M3SID 30 ${flyRowY(DEMOS.indexOf('winbox'))}`,        // winbox, nested (sorted)
   'wmctl wait count winbox 2',
   'echo ==menu2',
   'wmctl list',
@@ -444,16 +447,55 @@ const script = [
   'wmctl wait win startmenu',
   'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
   'wmctl key $MSID 82 1073741906',               // Up -> All Programs (bottom row)
-  'wmctl key $MSID 79 1073741903',               // Right -> the tree flyout (Apps)
+  'wmctl key $MSID 79 1073741903',               // Right -> the tree flyout (the
+                                                 // UNION since 0259: /etc/menu's
+                                                 // Apps ALONGSIDE the baked
+                                                 // Accessories/Demos/Games —
+                                                 // pre-union /etc SHADOWED the
+                                                 // whole baked tree)
   'wmctl wait win startmenu2',
   'echo ==sm7',
   'wmctl list',
+  'wmctl key $MSID 81 1073741905',               // Down -> Apps (sorted after
+                                                 // Accessories)
   'wmctl key $MSID 79 1073741903',               // Right -> into the Apps group
   'wmctl wait win startmenu3',
   'GK=$(wmctl list | grep -c winbox$)',
   'wmctl key $MSID 40 13',                       // Enter -> go -> winbox
   'wmctl wait atleast winbox $((GK+1))',         // keyboard All-Programs cascade launcher spawns
   'echo ==sm8',
+  'wmctl list',
+  'rm -rf /etc/menu',
+  // ---- depth-cap CURE (todos/0259 red→green): a 4-dir-deep tree
+  // cascades to startmenu6 — SIX open Start windows (root + 5 chain
+  // levels). The old fork engine's MENU_DEPTH 4 refused past startmenu4,
+  // so the `wait win startmenu5` here times out RED on the pre-0259 wm.
+  'mkdir -p /etc/menu/D1/D2/D3/D4',
+  "printf '#!/bin/sh\nwinbox\n' > /etc/menu/D1/D2/D3/D4/deepgo",
+  'chmod +x /etc/menu/D1/D2/D3/D4/deepgo',
+  'wmctl menu',
+  'wmctl wait win startmenu',
+  'MSID=$(wmctl list | grep startmenu$ | sed "s/[^0-9].*//")',
+  'wmctl key $MSID 82 1073741906',               // Up -> All Programs
+  'wmctl key $MSID 79 1073741903',               // Right -> the tree (union:
+                                                 // Accessories, D1, Demos, Games)
+  'wmctl wait win startmenu2',
+  'wmctl key $MSID 81 1073741905',               // Down -> D1
+  'wmctl key $MSID 79 1073741903',               // Right -> D1 leaves
+  'wmctl wait win startmenu3',
+  'wmctl key $MSID 79 1073741903',               // -> D2 leaves
+  'wmctl wait win startmenu4',
+  'wmctl key $MSID 79 1073741903',               // -> D3 leaves (PAST the old cap)
+  'wmctl wait win startmenu5',
+  'wmctl key $MSID 79 1073741903',               // -> D4 leaves
+  'wmctl wait win startmenu6',
+  'echo ==deep1',
+  'wmctl list',
+  'DK=$(wmctl list | grep -c winbox$)',
+  'wmctl key $MSID 40 13',                       // Enter -> deepgo -> winbox
+  'wmctl wait atleast winbox $((DK+1))',
+  'wmctl wait nowin startmenu2',
+  'echo ==deep2',
   'wmctl list',
   'rm -rf /etc/menu',
   // ---- desktop icon selection & manipulation (todos/0077) ----
@@ -540,7 +582,7 @@ const script = [
   'echo ==tp1',
   'wmctl list',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY101(2)}`,          // Minimize All (row 2)
+  `wmctl click $CXSID 30 ${rowY101(2)}`,          // Minimize All (row 2)
   'wmctl wait nowin ctxmenu',
   'echo ==tp2',
   'wmctl list',
@@ -557,7 +599,7 @@ const script = [
   'wmctl click $TSID 970 14 3',
   'wmctl wait win ctxmenu',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY101(0)}`,          // Cascade (row 0)
+  `wmctl click $CXSID 30 ${rowY101(0)}`,          // Cascade (row 0)
   'wmctl wait dim $TWA 614x427',                   // Cascade resized to the uniform box (0155)
   'echo ==tp5',
   'wmctl list',
@@ -596,7 +638,7 @@ const script = [
   'echo ==smC',
   'wmctl list',                                   // ctxmenu (sysmenu) up
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE -> keyboard-move mode
+  `wmctl click $SMSID 30 ${rowYsys(1)}`,          // MOVE -> keyboard-move mode
   'sleep 0.3',                                   // timing subject: keyboard-move mode engage (popup stays as key grabber, no observable)
   'echo ==smD',
   'wmctl list',                                   // popup STILL up (grabber)
@@ -618,7 +660,7 @@ const script = [
   'wmctl sysmenu',
   'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $SMSID 60 ${rowYsys(1)}`,          // MOVE again
+  `wmctl click $SMSID 30 ${rowYsys(1)}`,          // MOVE again
   'sleep 0.3',                                   // timing subject: keyboard-move mode engage (popup stays as key grabber, no observable)
   'wmctl key $SMSID 80 1073741904',               // Left x3 = -24 x (mid-mode)
   'wmctl key $SMSID 80 1073741904',
@@ -635,7 +677,7 @@ const script = [
   'wmctl sysmenu',
   'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE -> keyboard-size mode
+  `wmctl click $SMSID 30 ${rowYsys(2)}`,          // SIZE -> keyboard-size mode
   'sleep 0.3',                                   // timing subject: keyboard-size mode engage (popup stays as key grabber, no observable)
   'wmctl key $SMSID 79 1073741903',               // Right x4 = +32 w
   'wmctl key $SMSID 79 1073741903',
@@ -658,7 +700,7 @@ const script = [
   'echo ==smFixPre',
   'wmctl list',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $SMSID 60 ${rowYsys(2)}`,          // SIZE (grayed) -> no-op
+  `wmctl click $SMSID 30 ${rowYsys(2)}`,          // SIZE (grayed) -> no-op
   'wmctl key $SMSID 79 1073741903',               // Right -> ignored (no mode)
   'wmctl key $SMSID 79 1073741903',
   'sleep 0.3',                                   // timing subject: proves the grayed Size row + arrows are no-ops on fixbox (unchanged geometry checked in JS)
@@ -671,7 +713,7 @@ const script = [
   'wmctl sysmenu',
   'wmctl wait win ctxmenu',
   'SMSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $SMSID 60 ${rowYsys(6)}`,          // CLOSE (row 6, after the sep)
+  `wmctl click $SMSID 30 ${rowYsys(6)}`,          // CLOSE (row 6, after the sep)
   'wmctl wait gone $SWSID',
   'echo ==smClose',
   'wmctl list',                                   // winbox gone
@@ -749,7 +791,7 @@ const script = [
   'echo ==rn5',
   'wmctl list',                                    // ctxmenu (icon menu) up
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 60 122',                     // RENAME row (row 6 on a document — EDIT precedes, 0202)
+  'wmctl click $CXSID 30 108',                     // Rename row (row 6 on a document — Edit precedes, 0202; 1 + 2*18 + 8 + 3*18 + 9)
   'wmctl wait nowin ctxmenu',
   'wmctl key $DSID 42 8',                          // clear "aab"
   'wmctl key $DSID 42 8',
@@ -893,15 +935,23 @@ const menu1 = row(m1, 'startmenu');
 check(`Start click opens the single-column root above the taskbar (${SM_GEOM}, borderless)`,
   menu1.includes(SM_GEOM) && menu1.includes('b'), JSON.stringify(m1));
 check('menu shot written', out.includes('menu-shot-ok'));
-const tree = fly(SM_ROOT, AP_ROW, MENU_GROUPS.length);   // All Programs at the bottom row
+// All Programs at the bottom row: level 0 anchors at root-right - 3,
+// y = rooty + AP_ROW * SM_ROW_H, clamped; h = 4 + 18 * groups.
+const treeH = flyH(MENU_GROUPS.length);
+const treeY = flyClampY(SM_Y + AP_ROW * SM_ROW_H, treeH);
 const fly1 = row(m1b, 'startmenu2');
-check(`All Programs cascades the tree flyout of GROUPS (${tree.geom})`,
-  fly1.includes(tree.geom) && fly1.includes('b'), JSON.stringify(m1b));
-const demos = fly({ x: tree.x, y: tree.y, w: tree.w },
-                  MENU_GROUPS.indexOf('Demos'), DEMOS.length);
-check(`hovering the Demos group cascades its leaves (${demos.geom})`,
-  row(m1c, 'startmenu3').includes(demos.geom) && row(m1c, 'startmenu3').includes('b'),
-  JSON.stringify(m1c));
+const fg1 = g4(fly1);
+check(`All Programs cascades the tree flyout of GROUPS (h ${treeH} at root-right - 3, y ${treeY})`,
+  fg1 && fg1.h === treeH && fg1.x === SM_ROOT.x + SM_ROOT.w - 3 &&
+  fg1.y === treeY && fly1.includes('b'), JSON.stringify(m1b));
+const demosH = flyH(DEMOS.length);
+const demosY = flyClampY(fg1 ? fg1.y + 1 + MENU_GROUPS.indexOf('Demos') * MC_ROW
+                             : 0, demosH);
+const fly2 = row(m1c, 'startmenu3');
+const fg2 = g4(fly2);
+check(`hovering the Demos group cascades its leaves (h ${demosH}, parent-right - 3)`,
+  fg1 && fg2 && fg2.h === demosH && fg2.x === fg1.x + fg1.w - 3 &&
+  fg2.y === demosY && fly2.includes('b'), JSON.stringify(m1c));
 check('nested flyout click launches winbox (second instance)',
   m2.split('\n').filter(l => l.endsWith('\twinbox')).length === 2, JSON.stringify(m2));
 check('selection dismissed the whole cascade',
@@ -1180,11 +1230,36 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('typed command + Enter launches it (sh -c winbox: +1) and closes the dialog',
     count(s6, 'winbox') === count(s5, 'winbox') + 1 && row(s6, 'startrun') === '',
     JSON.stringify([count(s5, 'winbox'), count(s6, 'winbox')]));
-  check('keyboard Up+Right cascades the All Programs tree flyout',
-    row(s7, 'startmenu2') !== '', JSON.stringify(s7));
+  // The 0259 menu-tree UNION red→green: with /etc/menu/Apps present the
+  // tree flyout lists it ALONGSIDE the baked groups — pre-union,
+  // first-existing-dir made /etc/menu shadow the ENTIRE baked tree, so
+  // the flyout would have held ONLY Apps (h 22, one row) and this height
+  // assert fails on the old wm.c.
+  const s7g = (() => {
+    const l = row(s7, 'startmenu2');
+    const m = /(\d+)x(\d+)\+/.exec(l.split('\t')[2] || '');
+    return m ? +m[2] : 0;
+  })();
+  check('keyboard Up+Right cascades the All Programs tree flyout, and the ' +
+        'union lists /etc/menu Apps ALONGSIDE the baked groups (0259)',
+    row(s7, 'startmenu2') !== '' && s7g === flyH(MENU_GROUPS.length + 1),
+    JSON.stringify(s7));
   check('keyboard Right+Enter runs the nested launcher (winbox +1)',
     count(s8, 'winbox') === count(s7, 'winbox') + 1,
     JSON.stringify([count(s7, 'winbox'), count(s8, 'winbox')]));
+  // ---- the 0259 depth-cap cure ----
+  const d1 = section('deep1'), d2 = section('deep2');
+  check('a 4-dir tree cascades to startmenu6 — past the old MENU_DEPTH-4 cap (0259)',
+    row(d1, 'startmenu2') !== '' && row(d1, 'startmenu3') !== '' &&
+    row(d1, 'startmenu4') !== '' && row(d1, 'startmenu5') !== '' &&
+    row(d1, 'startmenu6') !== '', JSON.stringify(d1));
+  const d6 = row(d1, 'startmenu6'), d5 = row(d1, 'startmenu5');
+  check('each deeper level advances x (a real cascade, not a re-park)',
+    g4(d6) && g4(d5) && g4(d6).x > g4(d5).x, JSON.stringify([d5, d6]));
+  check('Enter at depth 5 fires the leaf (winbox +1) and closes the chain',
+    count(d2, 'winbox') === count(d1, 'winbox') + 1 &&
+    row(d2, 'startmenu2') === '' && row(d2, 'startmenu6') === '',
+    JSON.stringify(d2));
 }
 
 // ---- Aero effects (todos/0063) ----
@@ -1313,13 +1388,15 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const flg = (sec, sid) => (rowSid(sec, sid).split('\t')[5] || '');
   const two = wsids(section('tp0')).slice(-2);   // the two fresh winboxes
   const [A, B] = two;
-  // right-click the clock cell -> the taskbar-strip menu (5 rows: Cascade,
-  // Tile, Minimize All, sep, Properties -> 4*20 + 8(sep) + 2*4(pad) = 96
-  // tall, CTX_W 120, clamped right (970+120>1024 -> x=904) and above the
-  // bar (740-96 = 644).
+  // right-click the clock cell -> the taskbar-strip menu (Cascade, Tile,
+  // Minimize All, sep, Properties -> h = 4 + 4*18 + 8 = 84 on the engine
+  // rows, 0259; width measured), clamped right (x = 1024 - w) and above
+  // the bar (y = 740 - 84 = 656).
   const cm = row(tp1, 'ctxmenu');
-  check('right-click the taskbar strip opens the menu (120x96, clamped above the bar)',
-    cm.includes('120x96+904+644') && cm.includes('b'), JSON.stringify(tp1));
+  const cmg = g4(cm);
+  check('right-click the taskbar strip opens the menu (h 84, clamped above the bar)',
+    cmg && cmg.h === 84 && cmg.x === 1024 - cmg.w && cmg.y === 740 - 84 &&
+    cm.includes('b'), JSON.stringify(tp1));
   check('the strip menu rides the TOP layer like the bar',
     (cm.split('\t')[5] || '').includes('T'), cm);
   check('Minimize All minimizes both fresh winboxes and dismisses the menu',

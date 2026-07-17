@@ -256,7 +256,8 @@ const script = [
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 60 102',                   // DELETE (EDIT shifted it, 0202)
+  'wmctl click $CXSID 30 90',                    // Delete (Edit shifted it, 0202;
+                                                 // engine rows 0259: 1+2*18+8+2*18+9)
   'sleep 1.5',                                   // wm.c trashes + the coarse glyph tick must flip empty->full before F-SHOT (no event)
   'test ! -f /root/Desktop/junk.txt && test -f /root/.recycle/files/junk.txt && echo DESK-TRASH',
   'wmctl shot $DSID /root/f.ppm && echo F-SHOT',
@@ -267,7 +268,7 @@ const script = [
   'wmctl list',
   'echo ==cut',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 60 42',                    // EMPTY RECYCLE BIN
+  'wmctl click $CXSID 30 36',                    // Empty Recycle Bin (1+18+8+9)
   'sleep 1.5',                                   // wm.c empties + the coarse glyph tick must flip full->empty before G-SHOT (no event)
   'echo "==binleft B$(ls /root/.recycle/files | wc -l | tr -d \\" \\")-END"',
   'wmctl shot $DSID /root/g.ppm && echo G-SHOT',
@@ -275,7 +276,7 @@ const script = [
   'wmctl click $DSID $BINX $BINY 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  'wmctl click $CXSID 60 42',
+  'wmctl click $CXSID 30 36',
   'sleep 0.5',                                   // negative check: a grayed EMPTY click must NOT close the menu (nothing to poll for)
   'echo ==graystay',
   'wmctl list',
@@ -369,12 +370,12 @@ check('a failed trash leaves NO stray store entry (the fo_trash sweep)',
 
 // ---- the wm.c desktop ----
 const im = section('iconmenu');
-check('icon menu grew DELETE + RENAME + EDIT (120x136 on a document, 0103/0202)',
-  row(im, 'ctxmenu').includes('120x136+'), JSON.stringify(im));
+check('icon menu grew Delete + Rename + Edit (h 120 on a document, 0103/0202)',
+  /x120\+/.test(row(im, 'ctxmenu')), JSON.stringify(im));
 check('icon DELETE trashes the desktop file', out.includes('DESK-TRASH'));
 const bm = section('binmenu');
-check('the bin icon gets its own OPEN/EMPTY menu (120x56)',
-  row(bm, 'ctxmenu').includes('120x56+'), JSON.stringify(bm));
+check('the bin icon gets its own Open/Empty menu (h 48)',
+  /x48\+/.test(row(bm, 'ctxmenu')), JSON.stringify(bm));
 check('EMPTY RECYCLE BIN empties the store', out.includes('==binleft B0-END'),
   out.slice(out.indexOf('==binleft')).slice(0, 24));
 check('grayed EMPTY leaves the menu open (0091 rule)',

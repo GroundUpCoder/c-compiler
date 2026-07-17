@@ -47,21 +47,9 @@
 
 #include <stdarg.h>
 
-/* ============================================================ fail-loud
- * (todos/0211, declared in win32_internal.h). One line to stderr per call
- * site — grep for "win32: unsupported" to inventory what's stubbed.
- * WIN32_STRICT=1 escalates to abort() so tests can trap on any hit. */
-
-void __win32_unsupported(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    char buf[256];
-    vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    fprintf(stderr, "win32: unsupported %s\n", buf);
-    const char *strict = getenv("WIN32_STRICT");
-    if (strict && strict[0] == '1') abort();
-}
+/* __win32_unsupported (the 0211 fail-loud sink) lives in gdi32.c since
+ * M4 (0259): gdi32 is the base layer every veneer link set shares — wm.c
+ * links gdi32+menucore without kernel32. */
 
 /* ============================================================ last error */
 

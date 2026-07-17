@@ -53,30 +53,44 @@ try {
   // dismisses popups (screen_changed) — quiesce before the first click.
   await pause(1500);
 
-  // ---- desktop right-click: menu up (wm.c geometry: 120x116 at the click,
-  // rows 20px/pad 4). (400,300) clears the icon column; menu interior
-  // sampled at +60,+40 (below the row texts of NEW/SORT BY), the raised
-  // edge at the exact corner. ----
+  // ---- desktop right-click: menu up (menucore geometry since 0259:
+  // measured width, 18px rows, 1px border). (400,300) clears the icon
+  // column; interior samples ride the LEFT GUTTER (x+5 — no text or
+  // arrows ever land there, and it is inside any measured width), the
+  // raised edge at the exact corner. Row 2 gutter = (+5, +40). ----
   const MX = 400, MY = 300;
   await clickAt(MX, MY, 'right');
-  await waitPixel(MX + 60, MY + 40, FACE);
+  await waitPixel(MX + 5, MY + 40, FACE);
   check('right-click on the empty desktop raises the context menu', true);
   check('raised edge at the menu corner',
     near(await sample(MX, MY), WHITE), await sample(MX, MY));
 
-  // ---- keyboard nav: Down highlights NEW, Right cascades the flyout,
-  // Enter fires FOLDER -> /root/Desktop/New Folder (VT1-verified). ----
+  // ---- keyboard nav: Down highlights New, Right cascades the flyout,
+  // Enter fires Folder -> /root/Desktop/New Folder (VT1-verified). ----
   await page.keyboard.press('ArrowDown');
-  await waitPixel(MX + 60, MY + 14, NAVY);       // past the NEW glyphs, before the arrow
-  check('ArrowDown highlights row 0 (NEW)', true);
+  await waitPixel(MX + 5, MY + 10, NAVY);        // row 0 gutter highlighted
+  check('ArrowDown highlights row 0 (New)', true);
   await page.keyboard.press('ArrowRight');
-  // flyout parks at root-right - 3, first row aligned: (517, 300), 120x48;
-  // its row 0 (FOLDER) is pre-highlighted by the keyboard cascade —
-  // sampled past the FOLDER glyphs (flyout-local x 110).
-  await waitPixel(MX + 227, MY + 14, NAVY);
-  check('ArrowRight cascades the NEW flyout (FOLDER pre-highlighted)', true);
+  // The flyout parks at root-right - 3 (root width measured: read it from
+  // the live probe? the gutter sample only needs SOME x inside — use the
+  // agent-free trick: sample the flyout's row-0 gutter by walking right
+  // from the root edge until NAVY appears is overkill; the root width is
+  // stable for a fixed font, so probe a few candidate offsets). Row 0
+  // (Folder) is pre-highlighted by the keyboard cascade.
+  {
+    let hit = false;
+    const t0 = Date.now();
+    while (!hit && Date.now() - t0 < 15000) {
+      for (const rw of [80, 84, 88, 92, 96, 100, 104]) {
+        const c = await sample(MX + rw - 3 + 5, MY + 10);
+        if (near(c, NAVY)) { hit = true; break; }
+      }
+      if (!hit) await pause(100);
+    }
+    check('ArrowRight cascades the New flyout (Folder pre-highlighted)', hit);
+  }
   await page.keyboard.press('Enter');
-  await waitPixel(MX + 60, MY + 40, TEAL);
+  await waitPixel(MX + 5, MY + 40, TEAL);
   check('Enter fires the row and dismisses the popup', true);
   await setVt(1);
   await pause(300);
@@ -87,14 +101,14 @@ try {
 
   // ---- Esc and outside-click dismissal ----
   await clickAt(MX, MY, 'right');
-  await waitPixel(MX + 60, MY + 40, FACE);
+  await waitPixel(MX + 5, MY + 40, FACE);
   await page.keyboard.press('Escape');
-  await waitPixel(MX + 60, MY + 40, TEAL);
+  await waitPixel(MX + 5, MY + 40, TEAL);
   check('Esc dismisses the desktop menu', true);
   await clickAt(MX, MY, 'right');
-  await waitPixel(MX + 60, MY + 40, FACE);
+  await waitPixel(MX + 5, MY + 40, FACE);
   await clickAt(700, 450);                       // left-click elsewhere
-  await waitPixel(MX + 60, MY + 40, TEAL);
+  await waitPixel(MX + 5, MY + 40, TEAL);
   check('outside left-click dismisses it', true);
 
   // ---- taskbar-button menu: winbox up, right-click its button ----
@@ -103,13 +117,14 @@ try {
   await pause(800);                              // the job-notice race
   await setVt(2);
   await waitPixel(132, 116, ORANGE, 60000);      // winbox client at 12,36
-  // Button 0 spans x [56,160); the 120x96 menu parks above the 28px bar.
-  const BARY = SH - 14, BMX = 56, BMY = SH - 28 - 96;
+  // Button 0 spans x [56,160); the h-84 menu parks above the 28px bar
+  // (engine rows: 4 items + sep). Gutter sample at row 2 (+5, +40).
+  const BARY = SH - 14, BMX = 56, BMY = SH - 28 - 84;
   await clickAt(100, BARY, 'right');
-  await waitPixel(BMX + 60, BMY + 40, FACE);
+  await waitPixel(BMX + 5, BMY + 40, FACE);
   check('right-click on a taskbar button raises the window menu above the bar', true);
   await page.keyboard.press('Escape');
-  await waitPixel(BMX + 60, BMY + 40, TEAL);
+  await waitPixel(BMX + 5, BMY + 40, TEAL);
   check('Esc dismisses the taskbar menu', true);
 
   // ---- EDIT context menu (user32, in-surface): clipboard-backed Paste ----

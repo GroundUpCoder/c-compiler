@@ -30,23 +30,31 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-ctx-');
 
-// Geometry mirrors os/wm.c (todos/0091, rows grown by 0092/0093): CTX_W
-// 120, rows 20px, 4px pad, 8px separator, clamped to the 1024x768 work
-// area above the 28px bar. Desktop menu: NEW / SORT BY / REFRESH / PASTE /
-// --- / DISPLAY -> h 116; taskbar menu: RESTORE / MINIMIZE / MAXIMIZE /
-// --- / CLOSE -> h 96; icon menu on a RUNNABLE icon: OPEN / --- / CUT /
-// COPY / DELETE / RENAME -> h 116 (todos/0103 added RENAME; documents grow
-// an EDIT row after OPEN -> h 136, todos/0202 — alauncher stays 116). A
-// flyout parks at root-right - 3 with its first row aligned to the group
-// row (NEW: FOLDER + TEXT FILE -> h 48; SORT BY: NAME -> h 28). Row
-// centers at 4 + i*20 + 10.
-const rowY = (i) => 4 + i * 20 + 10;               // rows above the groove
-const DESK_MENU_GEOM = '120x116+400+300';
-const NEW_FLY_GEOM = '120x48+517+300';             // 400+120-3, row 0 align
-const SORT_FLY_GEOM = '120x28+517+320';            // row 1 align
-const BAR_MENU_GEOM = '120x96+56+644';             // btn 0 x, 768-28-96
-const DISPLAY_ROW_Y = 4 + 4 * 20 + 8 + 10;         // below the groove: 102
-const CLOSE_ROW_Y = 4 + 3 * 20 + 8 + 10;           // bar menu groove: 82
+// Geometry mirrors the ONE menu engine (menucore, todos/0259 — wm.c's
+// fork rows are gone): MENU_ITEM_H 18, MENU_SEP_H 8, 1px raised border on
+// each side (h = 4 + rows), WIDTH MEASURED from freetype text (not a
+// constant — asserted structurally, never as a literal), clamped to the
+// 1024x768 work area above the 28px bar. Desktop menu: New / Sort by /
+// Refresh / Paste / --- / Display -> h 102; taskbar-button menu: Restore /
+// Minimize / Maximize / --- / Close -> h 84; icon menu on a RUNNABLE icon:
+// Open / --- / Cut / Copy / Delete / Rename -> h 102 (documents grow an
+// Edit row after Open -> h 120, todos/0202 — alauncher stays 102). A
+// cascade parks at parent-right - 3 with its first row aligned to the
+// anchor row's drawn top (New: Folder + Text File -> h 40; Sort by:
+// Name -> h 22). Row centers at 1 + sum(prev rows) + 9.
+const rowY = (i) => 1 + i * 18 + 9;                // rows above the groove
+const DESK_MENU_H = 4 + 5 * 18 + 8;                // 102
+const NEW_FLY_H = 4 + 2 * 18;                      // 40
+const SORT_FLY_H = 4 + 1 * 18;                     // 22
+const BAR_MENU_H = 4 + 4 * 18 + 8;                 // 84
+const ICON_MENU_H = 4 + 5 * 18 + 8;                // 102
+const DISPLAY_ROW_Y = 1 + 4 * 18 + 8 + 9;          // below the groove: 90
+const CLOSE_ROW_Y = 1 + 3 * 18 + 8 + 9;            // bar menu groove: 72
+// Parse "WxH+X+Y" out of a wmctl list row.
+const g4 = (line) => {
+  const m = /(\d+)x(\d+)\+(\d+)\+(\d+)/.exec((line.split('\t')[2] || ''));
+  return m ? { w: +m[1], h: +m[2], x: +m[3], y: +m[4] } : null;
+};
 
 // The desktop starts as the seeded set (drive.js deskEntries: files + the
 // Presentations dir + the tail-pinned Recycle Bin); the script grows it by
@@ -88,12 +96,12 @@ const script = [
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(0)}`,            // NEW -> flyout
+  `wmctl click $CXSID 30 ${rowY(0)}`,            // NEW -> flyout
   'wmctl wait win ctxmenu2 8000',                // flyout cascaded
   'echo ==ctx4',
   'wmctl list',
   'C2SID=$(wmctl list | grep ctxmenu2$ | sed "s/[^0-9].*//")',
-  `wmctl click $C2SID 60 ${rowY(0)}`,            // FOLDER
+  `wmctl click $C2SID 30 ${rowY(0)}`,            // FOLDER
   'wmctl wait nowin ctxmenu 8000',               // selection created folder + dismissed whole popup
   'test -d "/root/Desktop/New Folder" && echo new-folder-ok',
   'echo ==ctx5',
@@ -124,12 +132,12 @@ const script = [
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(1)}`,            // SORT BY -> flyout
+  `wmctl click $CXSID 30 ${rowY(1)}`,            // SORT BY -> flyout
   'wmctl wait win ctxmenu2 8000',
   'echo ==ctx9',
   'wmctl list',
   'C2SID=$(wmctl list | grep ctxmenu2$ | sed "s/[^0-9].*//")',
-  `wmctl click $C2SID 60 ${rowY(0)}`,            // NAME
+  `wmctl click $C2SID 30 ${rowY(0)}`,            // NAME
   'wmctl wait nowin ctxmenu 8000',               // sort ran (.icons forgotten) + dismissed
   'test -e /root/Desktop/.icons || echo icons-gone',
   // ---- Refresh re-scans (icon up without waiting for the coarse tick) ----
@@ -138,7 +146,7 @@ const script = [
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(2)}`,            // REFRESH
+  `wmctl click $CXSID 30 ${rowY(2)}`,            // REFRESH
   'wmctl wait nowin ctxmenu 8000',               // refresh re-scanned + redrew + dismissed
   'echo ==ctx10',
   'wmctl list',
@@ -164,7 +172,7 @@ const script = [
   'wmctl shot $DSID /root/d2.ppm && echo d2-ok',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
   'N1=$(wmctl list | grep -c winbox$)',
-  `wmctl click $CXSID 60 ${rowY(0)}`,            // OPEN -> winbox
+  `wmctl click $CXSID 30 ${rowY(0)}`,            // OPEN -> winbox
   'wmctl wait atleast winbox 2 10000',           // activate() spawned the 2nd winbox
   'N2=$(wmctl list | grep -c winbox$)',
   'echo OPEN-DELTA-$((N2-N1))',
@@ -174,7 +182,7 @@ const script = [
   'wmctl click $DSID 400 300 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${DISPLAY_ROW_Y}`,      // DISPLAY
+  `wmctl click $CXSID 30 ${DISPLAY_ROW_Y}`,      // DISPLAY
   'wmctl wait win "Display Properties" 12000',   // ctlpanel spawned w/ the applet open (freetype load)
   'echo ==disp1',
   'wmctl list',
@@ -208,39 +216,39 @@ const script = [
   'echo ==bar2',
   'wmctl list',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(0)}`,            // RESTORE: grayed -> stays
+  `wmctl click $CXSID 30 ${rowY(0)}`,            // RESTORE: grayed -> stays
   'sleep 0.3',                                   // KEEP: negative check — grayed row does nothing; bounded settle to prove the menu stays + window untouched
   'echo ==bar3',
   'wmctl list',
-  `wmctl click $CXSID 60 ${rowY(1)}`,            // MINIMIZE
+  `wmctl click $CXSID 30 ${rowY(1)}`,            // MINIMIZE
   'wmctl wait flag $WSID m 8000',                // minimized (menu dismisses in the same handler)
   'echo ==bar4',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(0)}`,            // RESTORE (now active)
+  `wmctl click $CXSID 30 ${rowY(0)}`,            // RESTORE (now active)
   'wmctl wait noflag $WSID m 8000',              // restored + focused
   'echo ==bar5',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(2)}`,            // MAXIMIZE
+  `wmctl click $CXSID 30 ${rowY(2)}`,            // MAXIMIZE
   'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle — winbox renegotiates its surface to 1024x712, no geom-match wait primitive
   'echo ==bar6',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${rowY(0)}`,            // RESTORE from maximized
+  `wmctl click $CXSID 30 ${rowY(0)}`,            // RESTORE from maximized
   'sleep 1',                                     // KEEP: RESIZE round-trip geometry settle back to the saved 240x160+12+36
   'echo ==bar7',
   'wmctl list',
   'wmctl click $TSID 60 14 3',
   'wmctl wait win ctxmenu 8000',
   'CXSID=$(wmctl list | grep ctxmenu$ | sed "s/[^0-9].*//")',
-  `wmctl click $CXSID 60 ${CLOSE_ROW_Y}`,        // CLOSE -> request-close
+  `wmctl click $CXSID 30 ${CLOSE_ROW_Y}`,        // CLOSE -> request-close
   'wmctl wait count winbox 1 8000',              // button-0 winbox gone (the OPEN-spawned one remains)
   'echo ==bar8',
   'wmctl list',
@@ -266,8 +274,10 @@ const wrow = (sec) => sec.split('\n').filter(l => l.endsWith('\twinbox'))
 // ---- desktop menu open / dismissal ----
 const c1 = section('ctx1');
 const cm1 = row(c1, 'ctxmenu');
-check(`right-click empty desktop opens the menu (${DESK_MENU_GEOM}, borderless)`,
-  cm1.includes(DESK_MENU_GEOM) && flags(cm1).includes('b'), JSON.stringify(c1));
+const cg1 = g4(cm1);
+check(`right-click empty desktop opens the menu (h ${DESK_MENU_H} at 400,300, borderless)`,
+  cg1 && cg1.h === DESK_MENU_H && cg1.x === 400 && cg1.y === 300 &&
+  flags(cm1).includes('b'), JSON.stringify(c1));
 check('the menu rides the TOP layer like the bar', flags(cm1).includes('T'), cm1);
 check('menu shot written', out.includes('c1-ok'));
 check('Esc dismisses it', row(section('ctx2'), 'ctxmenu') === '',
@@ -277,8 +287,10 @@ check('focus leaving dismisses it (outside-click rule)',
 
 // ---- New > flyout by mouse ----
 const c4 = section('ctx4');
-check(`clicking NEW cascades the flyout (${NEW_FLY_GEOM})`,
-  row(c4, 'ctxmenu2').includes(NEW_FLY_GEOM) && row(c4, 'ctxmenu') !== '',
+const c4root = g4(row(c4, 'ctxmenu')), c4fly = g4(row(c4, 'ctxmenu2'));
+check(`clicking New cascades the flyout (h ${NEW_FLY_H} at root-right - 3, row-0 top)`,
+  c4root && c4fly && c4fly.h === NEW_FLY_H &&
+  c4fly.x === c4root.x + c4root.w - 3 && c4fly.y === c4root.y + 1,
   JSON.stringify(c4));
 check('flyout FOLDER click creates /root/Desktop/New Folder',
   out.includes('new-folder-ok'));
@@ -287,9 +299,9 @@ check('selection dismissed the whole popup',
   JSON.stringify(section('ctx5')));
 
 // ---- keyboard nav ----
-check('keyboard Down+Right cascades the NEW flyout',
-  row(section('ctx6'), 'ctxmenu2').includes(NEW_FLY_GEOM),
-  JSON.stringify(section('ctx6')));
+const c6fly = g4(row(section('ctx6'), 'ctxmenu2'));
+check('keyboard Down+Right cascades the New flyout',
+  c6fly && c6fly.h === NEW_FLY_H, JSON.stringify(section('ctx6')));
 check('Left backs out of the flyout (root stays)',
   row(section('ctx7'), 'ctxmenu2') === '' && row(section('ctx7'), 'ctxmenu') !== '',
   JSON.stringify(section('ctx7')));
@@ -298,9 +310,12 @@ check('keyboard Enter on TEXT FILE creates New File.txt and dismisses',
   JSON.stringify(section('ctx8')));
 
 // ---- Sort by > Name ----
-check(`SORT BY cascades its flyout (${SORT_FLY_GEOM})`,
-  row(section('ctx9'), 'ctxmenu2').includes(SORT_FLY_GEOM),
-  JSON.stringify(section('ctx9')));
+const c9 = section('ctx9');
+const c9root = g4(row(c9, 'ctxmenu')), c9fly = g4(row(c9, 'ctxmenu2'));
+check(`Sort by cascades its flyout (h ${SORT_FLY_H}, row-1 aligned)`,
+  c9root && c9fly && c9fly.h === SORT_FLY_H &&
+  c9fly.x === c9root.x + c9root.w - 3 && c9fly.y === c9root.y + 1 + 18,
+  JSON.stringify(c9));
 check('Sort by Name forgets the .icons placements', out.includes('icons-gone'));
 
 // ---- Refresh ----
@@ -318,8 +333,9 @@ check('Start toggle while the ctxmenu is open: startmenu up, ctxmenu gone',
 
 // ---- icon menu ----
 const i1 = section('icon1');
-check('right-click an icon opens the Open/Cut/Copy/Delete/Rename menu (120x116, 0103)',
-  row(i1, 'ctxmenu').includes('120x116+'), JSON.stringify(i1));
+const ig = g4(row(i1, 'ctxmenu'));
+check(`right-click an icon opens the Open/Cut/Copy/Delete/Rename menu (h ${ICON_MENU_H}, 0103)`,
+  ig && ig.h === ICON_MENU_H, JSON.stringify(i1));
 check('icon shot written', out.includes('d2-ok'));
 check('OPEN runs the launcher through the activate path (winbox +1)',
   out.includes('OPEN-DELTA-1'),
@@ -363,8 +379,10 @@ check('reopened menu re-gates: Select All now enabled (field has text)',
 check('right-click the Start strip raises nothing (reserved)',
   row(section('bar1'), 'ctxmenu') === '', JSON.stringify(section('bar1')));
 const b2 = section('bar2');
-check(`right-click button 0 opens the window menu (${BAR_MENU_GEOM}, above the bar)`,
-  row(b2, 'ctxmenu').includes(BAR_MENU_GEOM), JSON.stringify(b2));
+const bg = g4(row(b2, 'ctxmenu'));
+check(`right-click button 0 opens the window menu (h ${BAR_MENU_H}, above the bar)`,
+  bg && bg.h === BAR_MENU_H && bg.x === 56 && bg.y === 768 - 28 - BAR_MENU_H,
+  JSON.stringify(b2));
 const b3 = section('bar3');
 check('grayed RESTORE click: menu stays open, window untouched',
   row(b3, 'ctxmenu') !== '' && !flags(wrow(b3)).includes('m'),
@@ -397,25 +415,32 @@ check('CLOSE request-closes the window (button 0 winbox gone)',
   const ufs = BLOCK_FS.createV4(store);
   const readPpm = (name, w) => {
     const ppm = COMMON.readFileBytes(ufs, '/root/' + name);
-    const head = Buffer.from(ppm.subarray(0, 20)).toString('latin1');
+    const head = Buffer.from(ppm.subarray(0, 32)).toString('latin1');
+    if (w == null) w = parseInt(/P6\s+(\d+)/.exec(head)[1], 10);
     const off = head.indexOf('255\n') + 4;
     return (x, y) => String(Array.from(
       ppm.subarray(off + (y * w + x) * 3, off + (y * w + x) * 3 + 3)));
   };
-  // c1.ppm: the 120x116 desktop menu — raised edge, face, black item text,
-  // the separator groove at y 84..92, the flyout arrows on the sub rows.
-  const p = readPpm('c1.ppm', 120);
+  // c1.ppm: the measured-width x 102 desktop menu on the ENGINE raster
+  // (menucore, 0259): Win95 raised edge (outer white/black, inner
+  // face/shadow), face, black freetype item text, the separator groove at
+  // y 73..81, the flyout arrows on the sub rows at the right gutter.
+  const p = readPpm('c1.ppm', null);
+  const W = cg1.w;                     // the listed menu width
   check('menu face is the Win95 gray with a raised edge',
-    p(60, 2) === '192,192,192' && p(0, 0) === '255,255,255' &&
-    p(119, 50) === '96,96,96', [p(60, 2), p(0, 0), p(119, 50)].join(' | '));
-  let text = 0;
-  for (let y = 4; y < 24; y++)
-    for (let x = 10; x < 100; x++) if (p(x, y) === '0,0,0') text++;
-  check('row 0 (NEW) has black label text', text >= 10, text);
+    p(5, 40) === '192,192,192' && p(0, 0) === '255,255,255' &&
+    p(W - 1, 50) === '0,0,0' && p(W - 2, 50) === '128,128,128',
+    [p(5, 40), p(0, 0), p(W - 1, 50), p(W - 2, 50)].join(' | '));
+  let text = 0;                        /* freetype antialiases: count DARK */
+  for (let y = 3; y < 17; y++)
+    for (let x = 16; x < W - 12; x++)
+      if (parseInt(p(x, y), 10) < 100) text++;
+  check('row 0 (New) has dark label text', text >= 10, text);
   check('separator groove present (dark over light)',
-    p(60, 87) === '96,96,96' && p(60, 88) === '255,255,255',
-    [p(60, 87), p(60, 88)].join(' | '));
-  check('sub rows carry the flyout arrow', p(110, 13) === '0,0,0', p(110, 13));
+    p(30, 76) === '128,128,128' && p(30, 77) === '255,255,255',
+    [p(30, 76), p(30, 77)].join(' | '));
+  check('sub rows carry the flyout arrow', p(W - 8, 10) === '0,0,0',
+    p(W - 8, 10));
   // d2.ppm: right-click selected the alauncher icon alone (navy strip).
   const d = readPpm('d2.ppm', 1024);
   const strip = (name) => {

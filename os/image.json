@@ -1,5 +1,5 @@
 {
-  "version": 118,
+  "version": 119,
   "overlays": [
     {
       "id": "clang-apps",
@@ -41,16 +41,7 @@
         "project": "os/gpubox.json"
       },
       "/usr/bin/wm": {
-        "c": "wm.c",
-        "hdrs": [
-          "wm_proto.h",
-          "launch.h",
-          "openwith.h",
-          "cfgstore.h",
-          "fileops.h",
-          "sounds.h",
-          "saver.h"
-        ]
+        "project": "os/wm.json"
       },
       "/usr/bin/open": {
         "c": "open.c",

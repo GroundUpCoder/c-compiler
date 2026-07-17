@@ -298,10 +298,11 @@ try {
   await waitPixel(CX + 200, CY + 100, GREEN, 30000,
     'the Alt-toggled fill; black = a click mark landed on the probe (0215)');
   check('the Space keydown was swallowed (fill = exactly the Alt toggle)', true);
-  // Keyboard: Down,Down -> MOVE, Enter -> move mode; arrows nudge 8px; Enter
-  // commits. Right x5 / Down x2 = +40 x, +16 y. Arrows/Enter go to the menu
-  // grabber, not C, so the fill stays green through the move.
-  await page.keyboard.press('ArrowDown');
+  // Keyboard: Down -> Move (the engine's nav SKIPS grayed rows since 0259
+  // — Restore is disabled on a floating window, so the first Down lands
+  // on Move directly), Enter -> move mode; arrows nudge 8px; Enter
+  // commits. Right x5 / Down x2 = +40 x, +16 y. Arrows/Enter go to the
+  // menu grabber, not C, so the fill stays green through the move.
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
@@ -316,7 +317,8 @@ try {
   await waitPixel(CX + 5, CY + 5, ORANGE, 30000,
     "C's old corner vacated to B's orange — the move composited");
   check('keyboard Move relocated C (+40,+16)', true);
-  // Re-open and Close via the menu (C moved to CX+40,CY+16): Down x6 -> CLOSE.
+  // Re-open and Close via the menu (C moved to CX+40,CY+16): Down x5 ->
+  // Close (grayed Restore skipped by the engine nav, 0259).
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
@@ -324,8 +326,8 @@ try {
   await page.keyboard.type("wmctl list | grep -q ctxmenu$ && echo SYSMENU2-U''P\r");
   await page.waitForFunction(() => window.__osOut.includes('SYSMENU2-UP'), { timeout: 20000, polling: 200 });
   await setVt(2);
-  for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter');            // CLOSE
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');            // Close
   // Probe a moved-C point clear of A, B AND their drop shadows (B's client
   // ends at x=308; +4 frame +14/+3 shadow reach ~329) so teardown = teal.
   await waitPixel(350, 200, TEAL, 30000);

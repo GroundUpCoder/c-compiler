@@ -114,18 +114,19 @@ try {
   await pause(1500);
 
   // ---- long-press on the empty desktop -> wm.c context menu (the exact
-  // pixel geometry the mouse test os-ctxmenu proves: FACE interior at
-  // +60,+40, raised WHITE edge at the corner) ----
+  // pixel geometry the mouse test os-ctxmenu proves: FACE at the row-2
+  // left gutter +5,+40 — engine rows since 0259 — raised WHITE edge at
+  // the corner) ----
   const MX = 400, MY = 300;
   await longPress(MX, MY);
-  await waitPixel(MX + 60, MY + 40, FACE);
+  await waitPixel(MX + 5, MY + 40, FACE);
   check('long-press on the empty desktop raises the context menu', true);
   check('raised edge at the menu corner',
     near(await sample(MX, MY), WHITE), await sample(MX, MY));
 
   // ---- tap elsewhere = left click: dismisses the popup ----
   await tap(700, 450);
-  await waitPixel(MX + 60, MY + 40, TEAL);
+  await waitPixel(MX + 5, MY + 40, TEAL);
   check('tap outside dismisses it (tap = left click)', true);
 
   // ---- long-press on a desktop icon -> the icon menu ----
@@ -216,12 +217,13 @@ try {
     near(await sample(wb.x + 4, wb.y + 4), TEAL), await sample(wb.x + 4, wb.y + 4));
 
   // ---- long-press on its taskbar button -> window menu above the bar ----
-  const BMX = 56, BMY = SH - 28 - 96;   // button 0 spans x [56,160); 120x96 menu
+  const BMX = 56, BMY = SH - 28 - 84;   // button 0 spans x [56,160); h-84 menu
+                                        // (engine rows since 0259)
   await longPress(100, SH - 14);
-  await waitPixel(BMX + 60, BMY + 40, FACE);
+  await waitPixel(BMX + 5, BMY + 40, FACE);
   check('long-press on the taskbar button raises the window menu', true);
   await page.keyboard.press('Escape');
-  await waitPixel(BMX + 60, BMY + 40, TEAL);
+  await waitPixel(BMX + 5, BMY + 40, TEAL);
   check('Esc dismisses the taskbar menu', true);
 
   await setVt(1);

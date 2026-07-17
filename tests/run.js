@@ -111,6 +111,10 @@ const RULES = [
   // dialogs/strings — the kernel win32 e2es are what consume them.
   [/^tools\/win32rc\.js$/, ['kernel'], 'compiles the win32 .res sidecar packs'],
 
+  // The port compile-harness (0060): its --check IS a kernel-suite test
+  // (test_win32_ports.js).
+  [/^tools\/win32ports\.js$/, ['kernel'], 'the win32 port compile harness'],
+
   // Test trees map to their own suite.
   [/^tests\/unit\//, ['unit'], null],
   [/^tests\/run-unit\.js$/, ['unit'], null],

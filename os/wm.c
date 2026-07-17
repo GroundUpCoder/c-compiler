@@ -166,6 +166,14 @@
 #include "fileops.h"
 #include "sounds.h"
 #include "saver.h"
+/* The ONE menu engine (todos/0259, arch A13): wm.c is menu-engine
+ * customer #2 — its Start-menu flyouts and context menus track/measure/
+ * raster through menucore (model + chain + gdi32/freetype raster), with
+ * this process supplying the window substrate (borderless top-layer
+ * furniture windows that HOLD kernel focus — the WM has no parent app
+ * window for keys to land on) through the MenuCoreOps vtable. */
+#include "win32/menucore.h"
+#include "win32/win32_internal.h"
 
 /* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
  * park until an fd in rfds is readable (1), the input ring has records —
@@ -188,17 +196,16 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 #define MAX_WIN   64
 #define TITLE_H   28    /* keep placements below the kernel title bar (>= WM_TITLE_H) */
 
-#define MENU_W       150    /* a flyout column's full width */
-#define MENU_ENTRY_H 20
-#define MENU_PAD     4
-#define MENU_SEP_H   8      /* separator groove (kept for flyout row math) */
+/* Flyout/ctx geometry (MENU_W/MENU_ENTRY_H/MENU_PAD/MENU_SEP_H/CTX_W) and
+ * the MENU_DEPTH-4 cap are GONE since todos/0259: popup columns are
+ * menucore chain levels (MENU_ITEM_H rows, measured widths, arbitrary
+ * depth to MENU_MAX_DEPTH). */
 #define MAX_MENU     32
 #define ENT_NAME     256    /* entry/item name buffer: a full filesystem name
                               * (BlockFS d_name is 255 chars + NUL) fits, so a
                               * long/spaced Desktop or menu filename is never
                               * truncated on the launch path (todos/0151). */
-#define MENU_DEPTH   4      /* two-pane root + up to 3 cascading flyouts */
-#define MENU_FIXED   2      /* right-pane fixed rows (SETTINGS, RUN...) */
+#define SM_WALK_MAX  8      /* search-walk recursion cap (was MENU_DEPTH) */
 
 /* Win95 single-column root (todos/0132, restyling the 0098 two-pane; the
  * gucOS branding band + bottom "All Programs" are the 0132 follow-up).
@@ -208,10 +215,10 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
  * Programs" row at the BOTTOM (which cascades the tree flyout), with a
  * live search box at its foot. Flyouts (depth >= 1) are the same
  * single-column entry lists (the 0078 substrate) — dropping the right pane
- * makes the cascade formula (mcol[0].x + SM_ROOT_W - 3) hang the flyout
+ * makes the cascade formula (smroot.x + SM_ROOT_W - 3) hang the flyout
  * snugly off the column's right edge, where 0098's two-pane root threw it
  * PAST the second pane; a bottom All-Programs cascades UPWARD via the
- * work-area clamp (menu_open_col), exactly like Win7. The root is a FIXED
+ * work-area clamp (the win_create op), exactly like Win7. The root is a FIXED
  * size so its geometry doesn't shift with the recents count. */
 #define SM_SIDE_W    22     /* the gucOS branding band down the left */
 #define SM_COL_W     170    /* the item column, right of the band */
@@ -238,8 +245,6 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 #define DRAG_SLOP    4      /* px of button-held travel before a press
                                becomes a marquee or icon drag (todos/0077) */
 
-#define CTX_W        120    /* context menu popup (todos/0091) */
-#define CTX_MAX      8
 
 #define PEEK_W       160    /* Aero Peek popup (todos/0063) */
 #define PEEK_H       120
@@ -334,32 +339,59 @@ static int date_x = 0;
 static uint64_t date_hover_ms = 0; /* last raise/hover stamp (0101; 0168 wall clock) */
 static int date_pinned = 0;
 
-/* Start menu state (todos/0028, cascading columns since todos/0078): one
- * borderless window per open column, live only while open. Entries are
- * (re)read at each open from /etc/menu if present, else /usr/share/menu
- * (todos/0040); subdirectories are groups that cascade flyout columns. */
+/* Start menu state (todos/0028; single-column root 0098/0132; flyouts on
+ * the menucore chain since todos/0259). The ROOT panel (branding band +
+ * pins/recents/search) stays this process's own window and drawing — its
+ * shape (search box, fixed places, bottom All Programs) is shell policy,
+ * not an item-tree menu, and deliberately did NOT reseat onto the
+ * engine. The flyout columns (All Programs and every subdirectory
+ * cascade) ARE engine chain levels: entries union-read from /etc/menu
+ * AND /usr/share/menu (todos/0259, ex-0244/0250 — /etc wins same-name
+ * clashes) at each popup_opening. */
 typedef struct { char name[ENT_NAME]; int is_link; int is_dir; } menu_ent;
-typedef struct {
-    SDL_Window *win;               /* NULL = column not live */
+static struct {                    /* the root panel window; NULL = closed */
+    SDL_Window *win;
     SDL_Surface *surf;
-    int32_t sid;                   /* EV_CREATED echo ("startmenu[N]") */
-    char dir[300];                 /* the directory this column lists */
-    menu_ent ents[MAX_MENU];
-    int n;
-    int hover;                     /* pointer/keyboard cursor row, -1 none */
-    int open_child;                /* row whose flyout is open, -1 none */
-    int x, y, w, h;                /* screen geometry (the park target) */
-} menu_col;
-static menu_col mcol[MENU_DEPTH];
-static int mdepth = 0;             /* live columns; 0 = menu closed */
-static char menu_dir[32];          /* which directory the root open picked */
-static const char *menu_fixed[MENU_FIXED] = { "SETTINGS", "RUN..." };
+    int32_t sid;                   /* EV_CREATED echo ("startmenu") */
+    int x, y;                      /* screen geometry (the park target) */
+} smroot;
 static int nkids = 0;              /* live spawned children (reap on frame) */
 
+/* ---- the menucore front-end (todos/0259) --------------------------
+ * One tracking at a time (menus are modal): mc_kind says which consumer
+ * owns the open chain; ov[] is the overlay-window substrate — one
+ * borderless top-layer furniture window per open chain level, parked at
+ * its EV_CREATED echo like every other wm popup ("ctxmenu"/"ctxmenu2"/
+ * ... for context menus, "startmenu2"/... for Start flyouts, so tests
+ * and the 0091/0078 furniture rules keep their handles). Level 0 of a
+ * ctx tracking HOLDS kernel focus (the create steal) so keyboard nav
+ * reaches this process even over a foreign focused window; Start
+ * flyouts hand focus back to the root panel (the 0078 rule). */
+enum { MK_NONE = 0, MK_START, MK_CTX };
+static int mc_kind = MK_NONE;
+static struct {
+    SDL_Window *win;               /* NULL = level not live */
+    int32_t sid;                   /* EV_CREATED echo */
+    int x, y;                      /* clamped screen position (park target) */
+} ov[MENU_MAX_DEPTH];
+
+/* Start-chain model: tables are lazily (re)populated per popup_opening
+ * from the menu-tree union; assoc maps each live table to its path
+ * RELATIVE to the tree roots, and a leaf's command id is
+ * (assoc-index << 8 | row) — resolved back to an absolute path at fire
+ * time (tables outlive the chain; they are freed at the next open). */
+#define SM_ASSOC_MAX 128
+static struct { MenuTbl *tbl; char rel[288]; } sm_assoc[SM_ASSOC_MAX];
+static MenuTbl *sm_tbl;            /* the chain's root table (all subs hang
+                                      off it; destroyed at the next open) */
+static MenuTbl *ctx_tbl;           /* the ctx tracking's root table */
+static void ctx_command(int id);   /* the CM-id dispatch (defined with the
+                                      ctx builders) */
+
 /* Single-column root state (todos/0098, right pane dropped in 0132):
- * mcol[0] still owns the root WINDOW (sid/geometry/parking through the
+ * smroot still owns the root WINDOW (sid/geometry/parking through the
  * shared plumbing), but its column is this heterogeneous item list rather
- * than mcol[0].ents — pinned entries, then MRU recents, then All Programs,
+ * than a directory listing — pinned entries, then MRU recents, then All Programs,
  * then a groove and the fixed places (Settings, Run...); in search mode, a
  * flat walk of the tree (fixed rows suppressed). Flyouts (depth >= 1) keep
  * using menu_col wholesale. */
@@ -435,17 +467,16 @@ static int desk_edit_armed = 0;    /* the editor's desktop focus has landed —
                                       focus-fall when the icon menu dismisses
                                       (Rename path) can't close it early */
 
-/* Context menu state (todos/0091): a two-window popup — root + at most one
- * flyout (the recorded v1 depth cap) — built from fixed item lists, not a
- * directory like the Start menu. Same furniture pattern as the menu
- * columns: borderless top-layer windows parked at their EV_CREATED echo
- * ("ctxmenu"/"ctxmenu2"), dismissed when kernel focus leaves them. */
-enum {                             /* command ids (ctx_activate dispatch) */
+/* Context menu state (todos/0091; on the menucore chain since 0259 —
+ * the "at most one ctxmenu2" v1 depth cap is gone with the fork engine):
+ * item tables built per open from fixed lists, tracked/measured/rastered
+ * by the engine over the ov[] furniture windows ("ctxmenu"/"ctxmenu2"/
+ * ...), dismissed when kernel focus leaves them. */
+enum {                             /* command ids (ctx_command dispatch) */
     CM_NONE = 0,
-    CM_SUB_NEW, CM_SUB_SORT,       /* rows that cascade the flyout */
     CM_REFRESH, CM_DISPLAY,        /* desktop */
     CM_PASTE,                      /* desktop (0092: the fileops clipboard) */
-    CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* flyout rows */
+    CM_NEW_FOLDER, CM_NEW_FILE, CM_SORT_NAME,      /* New/Sort by cascades */
     CM_OPEN,                       /* icon */
     CM_EDIT,                       /* icon (0202: document → GUI text editor) */
     CM_RENAME,                     /* icon (0103: the inline rename editor) */
@@ -456,20 +487,7 @@ enum {                             /* command ids (ctx_activate dispatch) */
     CM_CASCADE, CM_TILE, CM_MIN_ALL, CM_PROPERTIES, /* taskbar strip (0101) */
     CM_MOVE, CM_SIZE               /* window system menu (todos/0102) */
 };
-#define CTF_SEP   1                /* separator groove row */
-#define CTF_GRAY  2                /* disabled: drawn gray, never fires */
-#define CTF_SUB   4                /* cascades the flyout (root only) */
-typedef struct { const char *label; int id; int flags; } ctx_ent;
 
-static SDL_Window *ctx_win[2];     /* [0] root, [1] flyout; NULL = closed */
-static SDL_Surface *ctx_surf[2];
-static int32_t ctx_sid[2];         /* EV_CREATED echoes */
-static ctx_ent ctx_ents[2][CTX_MAX];
-static int ctx_nent[2];
-static int ctx_hover[2];           /* pointer/keyboard cursor row, -1 none */
-static int ctx_x[2], ctx_y[2], ctx_h[2];
-static int ctx_depth = 0;          /* 0 closed, 1 root, 2 flyout open */
-static int ctx_child = -1;         /* root row whose flyout is open */
 static int32_t ctx_target = 0;     /* taskbar menu: the acted-on window */
 static int ctx_icon = -1;          /* icon menu: desk[] index */
 static void ctx_dismiss(void);     /* defined with the rest (0091) */
@@ -1177,6 +1195,217 @@ static int load_entries(const char *dir, menu_ent *dst, int max) {
     return n;
 }
 
+/* ---- the menu-tree UNION (todos/0259, resolving the 0244 "4th class
+ * member" + the 0250 deferral): a Start-menu directory is the union of
+ * /etc/menu/<rel> and /usr/share/menu/<rel>, an /etc entry winning a
+ * same-NAME clash (so a package or the admin can drop one entry into the
+ * writable /etc/menu without hiding the whole baked tree — the gucman
+ * prerequisite). One merged groups-first/alpha sort. ---- */
+static int menu_load_union(const char *rel, menu_ent *dst, int max) {
+    char dir[320];
+    snprintf(dir, sizeof dir, "/etc/menu%s%s", *rel ? "/" : "", rel);
+    int n = load_entries(dir, dst, max);
+    static menu_ent baked[MAX_MENU];   /* off the 64KB wasm stack */
+    snprintf(dir, sizeof dir, "/usr/share/menu%s%s", *rel ? "/" : "", rel);
+    int m = load_entries(dir, baked, MAX_MENU);
+    for (int i = 0; i < m && n < max; i++) {
+        int dup = 0;
+        for (int k = 0; k < n && !dup; k++)
+            dup = strcmp(dst[k].name, baked[i].name) == 0;
+        if (!dup) dst[n++] = baked[i];
+    }
+    qsort(dst, n, sizeof dst[0], entcmp);
+    return n;
+}
+
+/* Resolve a union-relative path to the layer that owns it (/etc first —
+ * the precedence rule — else the baked tree). */
+static void menu_union_abs(const char *rel, const char *name,
+                           char *out, int cap) {
+    struct stat st;
+    snprintf(out, cap, "/etc/menu%s%s%s%s", *rel ? "/" : "", rel,
+             "/", name);
+    if (lstat(out, &st) == 0) return;
+    snprintf(out, cap, "/usr/share/menu%s%s%s%s", *rel ? "/" : "", rel,
+             "/", name);
+}
+
+/* ---- the menucore ops (todos/0259): the window substrate + command
+ * sinks this process supplies to the engine ---- */
+
+static int ov_index(SDL_Window *win) {
+    for (int k = 0; k < MENU_MAX_DEPTH; k++)
+        if (ov[k].win == win) return k;
+    return -1;
+}
+
+static int ov_level_for(SDL_WindowID id) {
+    for (int k = 0; k < MENU_MAX_DEPTH; k++)
+        if (ov[k].win && SDL_GetWindowID(ov[k].win) == id) return k;
+    return -1;
+}
+
+static int ov_owns_sid(int32_t sid) {
+    if (!sid) return 0;
+    for (int k = 0; k < MENU_MAX_DEPTH; k++)
+        if (ov[k].win && ov[k].sid == sid) return 1;
+    return 0;
+}
+
+static int sm_assoc_index(MenuTbl *tbl) {
+    for (int i = 0; i < SM_ASSOC_MAX; i++)
+        if (sm_assoc[i].tbl == tbl) return i;
+    return -1;
+}
+
+static int sm_assoc_add(MenuTbl *tbl, const char *rel) {
+    for (int i = 0; i < SM_ASSOC_MAX; i++)
+        if (!sm_assoc[i].tbl) {
+            sm_assoc[i].tbl = tbl;
+            snprintf(sm_assoc[i].rel, sizeof sm_assoc[i].rel, "%s", rel);
+            return i;
+        }
+    fprintf(stderr, "wm: menu-tree assoc table full (%d)\n", SM_ASSOC_MAX);
+    return -1;
+}
+
+/* Forget a sub-table subtree the owning table is about to destroy. */
+static void sm_assoc_forget(MenuTbl *tbl) {
+    if (!tbl) return;
+    for (int i = 0; i < tbl->n; i++)
+        if (tbl->items[i].sub) sm_assoc_forget(tbl->items[i].sub);
+    int idx = sm_assoc_index(tbl);
+    if (idx >= 0) sm_assoc[idx].tbl = NULL;
+}
+
+/* (Re)populate a Start-chain table from its union directory — fired by
+ * the engine's popup_opening BEFORE the level is measured, so lazy disk
+ * reads land in the paint (the WM_INITMENUPOPUP analogue). */
+static void sm_populate(MenuTbl *tbl) {
+    int ti = sm_assoc_index(tbl);
+    if (ti < 0) return;
+    for (int i = 0; i < tbl->n; i++)
+        if (tbl->items[i].sub) sm_assoc_forget(tbl->items[i].sub);
+    mc_menu_clear(tbl);
+    const char *rel = sm_assoc[ti].rel;
+    static menu_ent ents[MAX_MENU];    /* off the wasm stack */
+    int n = menu_load_union(rel, ents, MAX_MENU);
+    for (int i = 0; i < n; i++) {
+        if (ents[i].is_dir) {
+            MenuTbl *sub = mc_menu_create();
+            char sr[288];
+            snprintf(sr, sizeof sr, "%s%s%s", rel, *rel ? "/" : "",
+                     ents[i].name);
+            sm_assoc_add(sub, sr);
+            mc_append(tbl, 1, 0, ents[i].name, sub);
+        } else {
+            mc_append(tbl, 0, (ti << 8) | i, ents[i].name, NULL);
+        }
+    }
+}
+
+/* Free the previous tracking's tables (deferred to the NEXT open: a
+ * fired item's id resolves against them AFTER the chain closed). */
+static void sm_free_tables(void) {
+    if (sm_tbl) { mc_menu_destroy(sm_tbl); sm_tbl = NULL; }
+    memset(sm_assoc, 0, sizeof sm_assoc);
+}
+
+static void wmmc_post_command(void *owner, int id) {
+    (void)owner;
+    if (mc_kind == MK_START) {
+        int ti = id >> 8, row = id & 255;
+        if (ti < 0 || ti >= SM_ASSOC_MAX || !sm_assoc[ti].tbl) return;
+        MenuTbl *t = sm_assoc[ti].tbl;
+        if (row >= t->n || !t->items[row].text) return;
+        char path[600];
+        menu_union_abs(sm_assoc[ti].rel, t->items[row].text,
+                       path, sizeof path);
+        activate(path);                /* records the MRU recent (0098) */
+        menu_dismiss();                /* the root panel closes too */
+    } else {
+        ctx_command(id);
+    }
+}
+
+static void wmmc_track_state(void *owner, int entering, int standalone) {
+    (void)owner; (void)standalone;
+    if (!entering) {
+        sys_mode = 0;                  /* any dismissal ends a keyboard
+                                          move/size (0102) */
+        sys_target = 0;
+    }
+}
+
+static void wmmc_popup_opening(void *owner, void *tbl, int idx) {
+    (void)owner; (void)idx;
+    if (mc_kind == MK_START) sm_populate((MenuTbl *)tbl);
+}
+
+static MCWIN wmmc_win_create(MCWIN parent, int dx, int dy, int w, int h,
+                             int grab) {
+    (void)grab;                        /* wm popups hold kernel focus for
+                                          keyboard nav instead; dismissal is
+                                          the 0091 focus-leave rule */
+    int lvl = __mc.nlev;
+    if (lvl < 0 || lvl >= MENU_MAX_DEPTH) return NULL;
+    int px = dx, py = dy;
+    if (parent) {                      /* deeper level: parent-relative */
+        int pi = ov_index((SDL_Window *)parent);
+        if (pi >= 0) { px += ov[pi].x; py += ov[pi].y; }
+    }
+    /* Work-area clamp (the 0091 rules: a py at/past the bottom — the
+     * taskbar anchor — lands the menu exactly above the bar). */
+    if (px + w > scr_w) px = scr_w - w;
+    if (px < 0) px = 0;
+    if (py + h > scr_h - BAR_H) py = scr_h - BAR_H - h;
+    if (py < 0) py = 0;
+    char title[16];
+    if (mc_kind == MK_CTX) {
+        if (lvl == 0) snprintf(title, sizeof title, "ctxmenu");
+        else snprintf(title, sizeof title, "ctxmenu%d", lvl + 1);
+    } else {
+        snprintf(title, sizeof title, "startmenu%d", lvl + 2);
+    }
+    SDL_Window *win = SDL_CreateWindow(title, w, h, SDL_WINDOW_BORDERLESS);
+    if (!win) return NULL;
+    ov[lvl].win = win;
+    ov[lvl].sid = 0;
+    ov[lvl].x = px;
+    ov[lvl].y = py;
+    return (MCWIN)win;
+}
+
+static void wmmc_win_destroy(MCWIN win) {
+    int k = ov_index((SDL_Window *)win);
+    if (k >= 0) { ov[k].win = NULL; ov[k].sid = 0; }
+    SDL_DestroyWindow((SDL_Window *)win);
+}
+
+static HDC wmmc_win_begin(MCWIN win, int *wOut, int *hOut) {
+    SDL_Surface *sf = SDL_GetWindowSurface((SDL_Window *)win);
+    if (!sf) return NULL;
+    if (wOut) *wOut = sf->w;
+    if (hOut) *hOut = sf->h;
+    return __gdi_dc_wrap(sf->pixels, sf->w, sf->h, sf->pitch / 4);
+}
+
+static void wmmc_win_present(MCWIN win, HDC dc) {
+    __gdi_dc_unwrap(dc);
+    SDL_UpdateWindowSurface((SDL_Window *)win);
+}
+
+static void wmmc_screen_size(int *wOut, int *hOut) {
+    *wOut = scr_w;
+    *hOut = scr_h - BAR_H;             /* the work area caps a level's size */
+}
+
+static const MenuCoreOps wm_mc = {
+    wmmc_post_command, wmmc_track_state, wmmc_popup_opening,
+    wmmc_win_create, wmmc_win_destroy, wmmc_win_begin, wmmc_win_present,
+    wmmc_screen_size,
+};
+
 /* ---- the RUN... dialog (todos/0078) ---- */
 
 static void run_dismiss(void) {
@@ -1244,113 +1473,38 @@ static void draw_run(void) {
     SDL_UpdateWindowSurface(run_win);
 }
 
-/* ---- the Start menu flyout columns (todos/0078; the single-column root
- * that anchors them is todos/0098+0132, further down) ---- */
+/* ---- the Start menu flyout columns (todos/0078; menucore chain levels
+ * since todos/0259 — the MENU_DEPTH-4 cap is gone; the single-column
+ * root that anchors them is todos/0098+0132, further down) ---- */
 
-/* Row bookkeeping for a flyout column (depth >= 1: pure entry lists). The
- * depth==0 arithmetic is retained but dead — the root column does its own
- * hit-testing (sm_root_hit). */
-static int col_rows(const menu_col *c, int depth) {
-    return c->n + (depth == 0 ? MENU_FIXED : 0);
-}
-
-static int menu_row_y(const menu_col *c, int depth, int i) {
-    int y = MENU_PAD + i * MENU_ENTRY_H;
-    if (depth == 0 && i >= c->n) y += MENU_SEP_H;
-    return y;
-}
-
-/* Row under local y, or -1 (padding / the separator groove). */
-static int menu_row_hit(const menu_col *c, int depth, int y) {
-    int base = y - MENU_PAD;
-    if (base < 0) return -1;
-    int i = base / MENU_ENTRY_H;
-    if (depth == 0 && base >= c->n * MENU_ENTRY_H) {
-        if (base < c->n * MENU_ENTRY_H + MENU_SEP_H) return -1;
-        i = c->n + (base - c->n * MENU_ENTRY_H - MENU_SEP_H) / MENU_ENTRY_H;
+/* Close the whole Start menu: the flyout chain, then the root panel.
+ * (The chain alone closes level-wise via the engine's Esc/Left.) */
+static void menu_dismiss(void) {
+    if (__mc.open && mc_kind == MK_START) mc_close();
+    if (smroot.win) {
+        SDL_DestroyWindow(smroot.win);
+        smroot.win = NULL;
+        smroot.surf = NULL;
+        smroot.sid = 0;
     }
-    return i < col_rows(c, depth) ? i : -1;
 }
-
-/* Close columns depth.. (deepest first). Flyouts never hold kernel focus
- * (see the EV_CREATED hand-back), so this can't bounce focus to an app. */
-static void menu_close_from(int depth) {
-    for (int d = mdepth - 1; d >= depth; d--) {
-        if (mcol[d].win) SDL_DestroyWindow(mcol[d].win);
-        mcol[d].win = NULL;
-        mcol[d].surf = NULL;
-        mcol[d].sid = 0;
-    }
-    if (mdepth > depth) mdepth = depth;
-    if (depth > 0) mcol[depth - 1].open_child = -1;
-}
-
-static void menu_dismiss(void) { menu_close_from(0); }
 
 static void sm_rebuild_left(void);        /* build the root's left pane (0098) */
 
-/* Open the column at `depth` listing `dir`. Depth 0 is the single-column
- * root (fixed size, parked bottom-left above the taskbar; its column comes
- * from sm_rebuild_left, and `dir` is remembered as the tree root for
- * search / All Programs); depth >= 1 are the cascading flyouts parked at
- * (px, py) clamped on-screen. The window parks when its EV_CREATED echo
- * arrives (title "startmenu" for the root, "startmenu<depth+1>" deeper —
- * see handle_event). Returns 1 if live. */
-static int menu_open_col(int depth, const char *dir, int px, int py) {
-    if (depth >= MENU_DEPTH) return 0;
-    menu_col *c = &mcol[depth];
-    if (depth == 0) {                          /* the single-column root (0132) */
-        snprintf(c->dir, sizeof c->dir, "%s", dir);   /* the tree root */
-        sm_search[0] = 0; sm_search_len = 0;
-        sm_lhover = -1;
-        sm_rebuild_left();
-        c->w = SM_ROOT_W;
-        c->h = SM_ROOT_H;
-        c->x = 0;
-        c->y = scr_h - BAR_H - c->h;
-        c->win = SDL_CreateWindow("startmenu", c->w, c->h, SDL_WINDOW_BORDERLESS);
-        if (!c->win) return 0;
-        c->surf = SDL_GetWindowSurface(c->win);
-        c->sid = 0;
-        mdepth = 1;
-        return 1;
-    }
-    c->n = load_entries(dir, c->ents, MAX_MENU);
-    if (c->n == 0) return 0;                    /* an empty group: nothing */
-    snprintf(c->dir, sizeof c->dir, "%s", dir);
-    c->hover = -1;
-    c->open_child = -1;
-    c->w = MENU_W;
-    c->h = 2 * MENU_PAD + c->n * MENU_ENTRY_H;
-    c->x = px;
-    c->y = py;
-    if (c->x + c->w > scr_w) c->x = scr_w - c->w;
-    if (c->y + c->h > scr_h - BAR_H) c->y = scr_h - BAR_H - c->h;
-    if (c->y < 0) c->y = 0;
-    char title[16];
-    snprintf(title, sizeof title, "startmenu%d", depth + 1);
-    c->win = SDL_CreateWindow(title, c->w, c->h, SDL_WINDOW_BORDERLESS);
-    if (!c->win) return 0;
-    c->surf = SDL_GetWindowSurface(c->win);
-    c->sid = 0;
-    mdepth = depth + 1;
+/* Open the single-column root panel (0132), parked bottom-left above the
+ * taskbar at its EV_CREATED echo (title "startmenu" — see handle_event). */
+static int menu_open_root(void) {
+    sm_search[0] = 0; sm_search_len = 0;
+    sm_lhover = -1;
+    sm_rebuild_left();
+    smroot.x = 0;
+    smroot.y = scr_h - BAR_H - SM_ROOT_H;
+    smroot.win = SDL_CreateWindow("startmenu", SM_ROOT_W, SM_ROOT_H,
+                                  SDL_WINDOW_BORDERLESS);
+    if (!smroot.win) return 0;
+    smroot.surf = SDL_GetWindowSurface(smroot.win);
+    smroot.sid = 0;
     return 1;
-}
-
-/* Cascade the flyout for group row i of column `depth` open, replacing
- * any open sibling flyout. The first flyout row aligns with the group
- * row's text (Win95), clamped to the work area. */
-static void menu_open_flyout(int depth, int i) {
-    menu_col *c = &mcol[depth];
-    if (depth + 1 >= MENU_DEPTH) return;
-    if (c->open_child == i && depth + 1 < mdepth) return;   /* already up */
-    menu_close_from(depth + 1);
-    char path[600];
-    snprintf(path, sizeof path, "%s/%s", c->dir, c->ents[i].name);
-    if (menu_open_col(depth + 1, path,
-                      c->x + c->w - 3,
-                      c->y + menu_row_y(c, depth, i) - MENU_PAD))
-        c->open_child = i;
 }
 
 /* ---- single-column root: recents, pins, live search (todos/0098+0132) ---- */
@@ -1429,11 +1583,19 @@ static void sm_load_list(const char *file, int kind) {
     fclose(f);
 }
 
-/* Recursive flat walk of the menu tree, collecting leaf launchers whose
- * filename matches the query. Fills in readdir order, capped at the pane;
- * groups (dirs / links to dirs) recurse. */
+/* Recursive flat walk of ONE menu-tree root, collecting leaf launchers
+ * whose filename matches the query. Fills in readdir order, capped at
+ * the pane; groups (dirs / links to dirs) recurse. Since 0259 the
+ * search spans the UNION (both roots walked, /etc first — sm_have_name
+ * dedups, so an /etc entry shadows its baked same-name twin). */
+static int sm_have_name(const char *name) {
+    for (int i = 0; i < sm_nleft; i++)
+        if (strcmp(sm_left[i].name, name) == 0) return 1;
+    return 0;
+}
+
 static void sm_search_walk(const char *dir, const char *q, int depth) {
-    if (depth > MENU_DEPTH || sm_nleft >= SM_ROWS) return;
+    if (depth > SM_WALK_MAX || sm_nleft >= SM_ROWS) return;
     DIR *d = opendir(dir);
     if (!d) return;
     struct dirent *de;
@@ -1450,6 +1612,7 @@ static void sm_search_walk(const char *dir, const char *q, int depth) {
         }
         if (isdir) { sm_search_walk(path, q, depth + 1); continue; }
         if (!sm_name_matches(de->d_name, q)) continue;
+        if (sm_have_name(de->d_name)) continue;      /* union dedup (0259) */
         sm_item *it = &sm_left[sm_nleft++];
         snprintf(it->name, sizeof it->name, "%s", de->d_name);
         snprintf(it->path, sizeof it->path, "%s", path);
@@ -1467,8 +1630,10 @@ static void sm_search_walk(const char *dir, const char *q, int depth) {
 static void sm_rebuild_left(void) {
     sm_nleft = 0;
     if (sm_search_len > 0) {
-        menu_close_from(1);
-        sm_search_walk(mcol[0].dir, sm_search, 0);
+        if (__mc.open && mc_kind == MK_START) mc_close();   /* tree flyout
+                                                               meaningless */
+        sm_search_walk("/etc/menu", sm_search, 0);          /* union (0259) */
+        sm_search_walk("/usr/share/menu", sm_search, 0);
         return;
     }
     char pin[320], rec[320];
@@ -1511,15 +1676,21 @@ static int sm_disp_row(int i) {
 /* Cascade the menu tree as a flyout off the column's right edge, aligned to
  * the All Programs DISPLAY row (the bottom of the panel). SM_ROOT_W spans
  * the band + column, so the flyout hangs snugly beside the row; anchoring at
- * the bottom row makes menu_open_col's work-area clamp cascade it UPWARD
- * (Win7). The flyout lists mcol[0].dir (the tree root); its groups cascade
+ * the bottom row makes the win_create work-area clamp cascade it UPWARD
+ * (Win7). The flyout lists the union tree root; its groups cascade
  * further via the ordinary flyout machinery. */
 static void sm_open_allprogs(void) {
     int ap = sm_ap_index();
-    if (ap < 0) return;
-    menu_close_from(1);
-    menu_open_col(1, mcol[0].dir, mcol[0].x + SM_ROOT_W - 3,
-                  mcol[0].y + sm_disp_row(ap) * SM_ROW_H);
+    if (ap < 0 || !smroot.win) return;
+    if (__mc.open) mc_close();         /* one tracking at a time */
+    sm_free_tables();                  /* the PREVIOUS tracking's tables die
+                                          now (fired ids resolved already) */
+    sm_tbl = mc_menu_create();
+    sm_assoc_add(sm_tbl, "");          /* the union tree root */
+    mc_kind = MK_START;
+    mc_track_begin(&wm_mc, (void *)&wm_mc, (void *)&wm_mc, 1, 0);
+    mc_level_open(sm_tbl, 0, NULL, smroot.x + SM_ROOT_W - 3,
+                  smroot.y + sm_disp_row(ap) * SM_ROW_H);
 }
 
 /* Zone/row under a root-window point (single column since 0132; the gucOS
@@ -1565,7 +1736,8 @@ static void sm_root_motion(int x, int y) {
     int row = -1;
     int zone = sm_root_hit(x, y, &row);
     sm_lhover = zone == 0 ? row : -1;
-    if (zone == 0 && sm_left[row].kind == SMI_ALLPROGS && mdepth < 2)
+    if (zone == 0 && sm_left[row].kind == SMI_ALLPROGS &&
+        !(__mc.open && mc_kind == MK_START))
         sm_open_allprogs();
 }
 
@@ -1593,7 +1765,8 @@ static void sm_root_key(int sym) {
         if (sm_lhover >= 0 && sm_lhover < sm_nleft &&
             sm_left[sm_lhover].kind == SMI_ALLPROGS) {
             sm_open_allprogs();
-            if (mdepth > 1) mcol[1].hover = 0;
+            if (__mc.open && __mc.nlev > 0)
+                mc_route_key(1073741905);   /* Down: hot the first row */
         }
         return;
     }
@@ -1619,10 +1792,9 @@ static void sm_root_key(int sym) {
 }
 
 static void draw_root_menu(void) {
-    menu_col *c = &mcol[0];
-    if (!c->win) return;
+    if (!smroot.win) return;
     int w = SM_ROOT_W, h = SM_ROOT_H;
-    uint32_t *px = (uint32_t *)c->surf->pixels;
+    uint32_t *px = (uint32_t *)smroot.surf->pixels;
     uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
              sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
              sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255),
@@ -1681,147 +1853,38 @@ static void draw_root_menu(void) {
     } else {
         draw_text_s(px, w, h, bx + 4, by + (bh - 7) / 2, "Search", ghost);
     }
-    SDL_UpdateWindowSurface(c->win);
-}
-
-/* Activate row i of column `depth`: groups cascade, the fixed section
- * runs its builtin, everything else is the shared activate() (todos/0066)
- * — a menu entry is a symlink or an executable launcher script; a stray
- * non-runnable file just opens through its association. */
-static void menu_row_activate(int depth, int i) {
-    menu_col *c = &mcol[depth];
-    if (i < 0 || i >= col_rows(c, depth)) return;
-    if (depth == 0 && i >= c->n) {             /* the fixed section (0078) */
-        int j = i - c->n;
-        menu_dismiss();
-        if (j == 0) activate("/bin/ctlpanel"); /* SETTINGS */
-        else run_open();                       /* RUN... */
-        return;
-    }
-    if (c->ents[i].is_dir) { menu_open_flyout(depth, i); return; }
-    char path[600];
-    snprintf(path, sizeof path, "%s/%s", c->dir, c->ents[i].name);
-    activate(path);
-    menu_dismiss();
+    SDL_UpdateWindowSurface(smroot.win);
 }
 
 /* Toggle from the Start button, the Ctrl+Esc chord, or `wmctl menu` (all
- * ride EV_MENU or call here directly). /etc/menu wins if the DIRECTORY
- * exists (even empty — first-existing-dir, no union merge; todos/0040);
- * the baked /usr/share/menu is the default. The fixed section keeps the
- * menu useful even over an empty programs list. */
+ * ride EV_MENU or call here directly). The programs tree is the UNION of
+ * /etc/menu and /usr/share/menu since 0259 (menu_load_union — no more
+ * first-existing-dir shadowing); the fixed section keeps the menu useful
+ * even over an empty programs list. */
 static void menu_toggle(void) {
     ctx_dismiss();                     /* one popup at a time (todos/0091) */
-    if (mdepth > 0) { menu_dismiss(); return; }
-    DIR *d = opendir("/etc/menu");
-    if (d) { closedir(d); strcpy(menu_dir, "/etc/menu"); }
-    else strcpy(menu_dir, "/usr/share/menu");
-    menu_open_col(0, menu_dir, 0, 0);
-}
-
-static int menu_col_for(SDL_WindowID id) {
-    for (int d = 0; d < mdepth; d++)
-        if (mcol[d].win && SDL_GetWindowID(mcol[d].win) == id) return d;
-    return -1;
+    if (smroot.win) { menu_dismiss(); return; }
+    menu_open_root();
 }
 
 static int menu_owns_sid(int32_t sid) {
-    for (int d = 0; d < mdepth; d++) if (mcol[d].sid == sid) return 1;
-    return 0;
+    if (sid && sid == smroot.sid) return 1;
+    return mc_kind == MK_START && ov_owns_sid(sid);
 }
 
-static void menu_click(int depth, float fy) {
-    int i = menu_row_hit(&mcol[depth], depth, (int)fy);
-    if (i < 0) { menu_dismiss(); return; }     /* a dead-zone click */
-    mcol[depth].hover = i;
-    menu_row_activate(depth, i);
-}
-
-/* Hover-open (0078): a group row cascades its flyout; hovering a
- * DIFFERENT group replaces it. Non-group hovers leave an open flyout
- * alone — forgiving diagonal travel toward the flyout, no timers. */
-static void menu_motion(int depth, float fy) {
-    menu_col *c = &mcol[depth];
-    int i = menu_row_hit(c, depth, (int)fy);
-    c->hover = i;
-    if (i >= 0 && i < c->n && c->ents[i].is_dir && c->open_child != i)
-        menu_open_flyout(depth, i);
-}
-
-/* Keyboard navigation (todos/0078): arrows walk the DEEPEST column,
- * Right/Enter cascade into a group, Left backs out one level, Esc closes
- * everything, printable keys type-ahead to the next matching row. The
- * root column holds kernel focus the whole time, so every key while the
- * menu is open lands here regardless of pointer position. */
+/* Keyboard while the Start menu is open (todos/0078): with a flyout
+ * chain up the engine owns the keys (arrows/Right/Enter/Esc walk the
+ * DEEPEST level; Esc and Left close level-wise, Win95-style — Left at
+ * the first flyout returns to the root panel), plus the 0078 first-
+ * letter type-ahead; with only the root open, sm_root_key (search box,
+ * column nav). The focus holder makes every key land here. */
 static void menu_key(int sym) {
-    int depth = mdepth - 1;
-    if (depth == 0) { sm_root_key(sym); return; }   /* the two-pane root (0098) */
-    menu_col *c = &mcol[depth];
-    int rows = col_rows(c, depth);
-    if (sym == SDLK_ESCAPE) { menu_dismiss(); return; }
-    if (sym == SDLK_DOWN || sym == SDLK_UP) {
-        int d = sym == SDLK_DOWN ? 1 : -1;
-        c->hover = c->hover < 0 ? (d > 0 ? 0 : rows - 1)
-                                : (c->hover + d + rows) % rows;
+    if (__mc.open && mc_kind == MK_START) {
+        if (sym == SDLK_LEFT && __mc.nlev <= 1) { mc_close(); return; }
+        if (!mc_route_key(sym)) mc_typeahead(sym);
         return;
     }
-    if (sym == SDLK_LEFT) {
-        if (depth > 0) menu_close_from(depth);
-        return;
-    }
-    if (sym == SDLK_RIGHT) {
-        if (c->hover >= 0 && c->hover < c->n && c->ents[c->hover].is_dir) {
-            menu_open_flyout(depth, c->hover);
-            if (mdepth > depth + 1) mcol[depth + 1].hover = 0;
-        }
-        return;
-    }
-    if (sym == SDLK_RETURN) {
-        int was = mdepth;
-        menu_row_activate(depth, c->hover);
-        if (mdepth > was) mcol[mdepth - 1].hover = 0;   /* entered a group */
-        return;
-    }
-    if (sym >= 32 && sym < 127) {              /* type-ahead */
-        char lc = (char)(sym >= 'A' && sym <= 'Z' ? sym + 32 : sym);
-        for (int k = 1; k <= rows; k++) {
-            int i = (c->hover + k + rows) % rows;      /* hover -1 starts at 0 */
-            char f = i < c->n ? c->ents[i].name[0] : menu_fixed[i - c->n][0];
-            if (f >= 'A' && f <= 'Z') f = (char)(f + 32);
-            if (f == lc) { c->hover = i; break; }
-        }
-    }
-}
-
-static void draw_menu_col(int depth) {
-    if (depth == 0) { draw_root_menu(); return; }   /* the two-pane root (0098) */
-    menu_col *c = &mcol[depth];
-    if (!c->win) return;
-    int w = c->w, h = c->h;
-    uint32_t *px = (uint32_t *)c->surf->pixels;
-    uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
-             sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
-             sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255);
-    fill_s(px, w, h, 0, 0, w, h, face);
-    /* Win95 raised edge: light top/left, dark bottom/right. */
-    fill_s(px, w, h, 0, 0, w, 1, hi);
-    fill_s(px, w, h, 0, 0, 1, h, hi);
-    fill_s(px, w, h, 0, h - 1, w, 1, sh);
-    fill_s(px, w, h, w - 1, 0, 1, h, sh);
-    for (int i = 0; i < c->n; i++) {
-        int y = MENU_PAD + i * MENU_ENTRY_H;
-        int hl = i == c->hover || i == c->open_child;
-        if (hl) fill_s(px, w, h, 2, y, w - 4, MENU_ENTRY_H, sel);
-        draw_text_s(px, w, h, 10, y + (MENU_ENTRY_H - 7) / 2, c->ents[i].name,
-                    hl ? seltxt : txt);
-        if (c->ents[i].is_dir) {   /* the flyout arrow */
-            int ax = w - 10, ay = y + (MENU_ENTRY_H - 7) / 2;
-            for (int t = 0; t < 4; t++)
-                fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t,
-                       hl ? seltxt : txt);
-        }
-    }
-    SDL_UpdateWindowSurface(c->win);
+    sm_root_key(sym);
 }
 
 /* ---- the desktop layer (todos/0029; selection & drag todos/0077) ---- */
@@ -2376,110 +2439,56 @@ static void draw_desk(void) {
 
 /* ---- context menus (todos/0091) ---- */
 
-static void ctx_close_flyout(void) {
-    if (ctx_depth < 2) return;
-    if (ctx_win[1]) SDL_DestroyWindow(ctx_win[1]);
-    ctx_win[1] = NULL;
-    ctx_surf[1] = NULL;
-    ctx_sid[1] = 0;
-    ctx_depth = 1;
-    ctx_child = -1;
-}
-
+/* Dismiss the ctx tracking (the engine tears the ov[] chain down; the
+ * leaving track_state resets any keyboard move/size, 0102). */
 static void ctx_dismiss(void) {
-    ctx_close_flyout();
-    if (ctx_depth < 1) return;
-    if (ctx_win[0]) SDL_DestroyWindow(ctx_win[0]);
-    ctx_win[0] = NULL;
-    ctx_surf[0] = NULL;
-    ctx_sid[0] = 0;
-    ctx_depth = 0;
-    ctx_target = 0;
-    ctx_icon = -1;
-    sys_mode = 0;                  /* any dismiss ends a move/size (0102) */
-    sys_target = 0;
+    if (__mc.open && mc_kind == MK_CTX) mc_close();
 }
 
-static void ctx_add(int d, const char *label, int id, int flags) {
-    if (ctx_nent[d] >= CTX_MAX) return;
-    ctx_ents[d][ctx_nent[d]].label = label;
-    ctx_ents[d][ctx_nent[d]].id = id;
-    ctx_ents[d][ctx_nent[d]].flags = flags;
-    ctx_nent[d]++;
+/* Begin a fresh ctx tracking: one popup at a time (0091), fresh tables
+ * (the previous tracking's tables were kept alive for its fired id —
+ * they die here). */
+static MenuTbl *ctx_begin(void) {
+    menu_dismiss();
+    ctx_dismiss();
+    if (ctx_tbl) { mc_menu_destroy(ctx_tbl); ctx_tbl = NULL; }
+    ctx_tbl = mc_menu_create();
+    mc_kind = MK_CTX;
+    return ctx_tbl;
 }
 
-static int ctx_row_y(int d, int i) {
-    int y = MENU_PAD;
-    for (int k = 0; k < i; k++)
-        y += (ctx_ents[d][k].flags & CTF_SEP) ? MENU_SEP_H : MENU_ENTRY_H;
-    return y;
+static void ctx_grayable(MenuTbl *t, int id, const char *label, int grayed) {
+    MenuItem *it = mc_append(t, 0, id, label, NULL);
+    if (it && grayed) it->state = MF_GRAYED;
 }
 
-/* Row under local y, or -1 (padding / a separator). */
-static int ctx_row_hit(int d, int y) {
-    int ry = MENU_PAD;
-    for (int i = 0; i < ctx_nent[d]; i++) {
-        int rh = (ctx_ents[d][i].flags & CTF_SEP) ? MENU_SEP_H : MENU_ENTRY_H;
-        if (y >= ry && y < ry + rh)
-            return (ctx_ents[d][i].flags & CTF_SEP) ? -1 : i;
-        ry += rh;
-    }
-    return -1;
-}
-
-/* Create the popup window for depth d anchored at (px, py), clamped to
- * the work area (a py past the bottom — the taskbar anchor — lands the
- * menu exactly above the bar). Parks at its EV_CREATED echo. */
-static int ctx_openwin(int d, int px, int py) {
-    int h = 2 * MENU_PAD;
-    for (int i = 0; i < ctx_nent[d]; i++)
-        h += (ctx_ents[d][i].flags & CTF_SEP) ? MENU_SEP_H : MENU_ENTRY_H;
-    ctx_h[d] = h;
-    ctx_x[d] = px;
-    ctx_y[d] = py;
-    if (ctx_x[d] + CTX_W > scr_w) ctx_x[d] = scr_w - CTX_W;
-    if (ctx_x[d] < 0) ctx_x[d] = 0;
-    if (ctx_y[d] + h > scr_h - BAR_H) ctx_y[d] = scr_h - BAR_H - h;
-    if (ctx_y[d] < 0) ctx_y[d] = 0;
-    ctx_hover[d] = -1;
-    ctx_win[d] = SDL_CreateWindow(d ? "ctxmenu2" : "ctxmenu", CTX_W, h,
-                                  SDL_WINDOW_BORDERLESS);
-    if (!ctx_win[d]) return -1;
-    ctx_surf[d] = SDL_GetWindowSurface(ctx_win[d]);
-    ctx_sid[d] = 0;
-    ctx_depth = d + 1;
-    return 0;
-}
-
-/* Cascade the flyout for root row i (NEW / SORT BY), replacing any open
- * one. First row aligns with the group row, the Start-menu convention. */
-static void ctx_open_flyout(int i) {
-    if (ctx_child == i && ctx_depth > 1) return;   /* already up */
-    ctx_close_flyout();
-    ctx_nent[1] = 0;
-    if (ctx_ents[0][i].id == CM_SUB_NEW) {
-        ctx_add(1, "FOLDER", CM_NEW_FOLDER, 0);
-        ctx_add(1, "TEXT FILE", CM_NEW_FILE, 0);
-    } else if (ctx_ents[0][i].id == CM_SUB_SORT) {
-        ctx_add(1, "NAME", CM_SORT_NAME, 0);
-    } else return;
-    if (ctx_openwin(1, ctx_x[0] + CTX_W - 3,
-                    ctx_y[0] + ctx_row_y(0, i) - MENU_PAD) == 0)
-        ctx_child = i;
+/* Track the built table anchored at screen (px, py) — the engine opens
+ * level 0 through the wm ops (work-area clamp + "ctxmenu" title there). */
+static void ctx_show(int px, int py) {
+    /* the owner/cmd tokens are opaque engine currency; non-NULL so the
+     * standalone fire path posts (the engine guards a NULL cmd) */
+    mc_track_begin(&wm_mc, (void *)&wm_mc, (void *)&wm_mc, 1, 0);
+    mc_level_open(ctx_tbl, 0, NULL, px, py);
 }
 
 /* Right-click empty desktop (Win95): New >, Sort by >, Refresh, then the
  * Display Properties shortcut into the Control Panel applet (0089). */
 static void ctx_open_desktop(int x, int y) {
-    ctx_dismiss();
-    ctx_nent[0] = 0;
-    ctx_add(0, "NEW", CM_SUB_NEW, CTF_SUB);
-    ctx_add(0, "SORT BY", CM_SUB_SORT, CTF_SUB);
-    ctx_add(0, "REFRESH", CM_REFRESH, 0);
-    ctx_add(0, "PASTE", CM_PASTE, fo_clip_has() ? 0 : CTF_GRAY);   /* 0092 */
-    ctx_add(0, "", CM_NONE, CTF_SEP);
-    ctx_add(0, "DISPLAY", CM_DISPLAY, 0);
-    ctx_openwin(0, x, y);
+    MenuTbl *t = ctx_begin();
+    ctx_target = 0;
+    ctx_icon = -1;
+    MenuTbl *nw = mc_menu_create();
+    mc_append(nw, 0, CM_NEW_FOLDER, "Folder", NULL);
+    mc_append(nw, 0, CM_NEW_FILE, "Text File", NULL);
+    mc_append(t, 1, 0, "New", nw);
+    MenuTbl *sb = mc_menu_create();
+    mc_append(sb, 0, CM_SORT_NAME, "Name", NULL);
+    mc_append(t, 1, 0, "Sort by", sb);
+    mc_append(t, 0, CM_REFRESH, "Refresh", NULL);
+    ctx_grayable(t, CM_PASTE, "Paste", !fo_clip_has());   /* 0092 */
+    mc_append(t, 2, 0, NULL, NULL);
+    mc_append(t, 0, CM_DISPLAY, "Display", NULL);
+    ctx_show(x, y);
 }
 
 /* Right-click a desktop icon: Open + Cut/Copy of the selection set
@@ -2490,16 +2499,15 @@ static void ctx_open_desktop(int x, int y) {
  * Bin (grayed when the store is empty; unconfirmed by design — this
  * process has no dialog furniture, fileman's Empty confirms). */
 static void ctx_open_icon(int idx, int x, int y) {
-    ctx_dismiss();
+    MenuTbl *t = ctx_begin();
+    ctx_target = 0;
     ctx_icon = idx;
-    ctx_nent[0] = 0;
     if (strcmp(desk[idx].name, "Recycle Bin") == 0) {
-        ctx_add(0, "OPEN", CM_OPEN, 0);
-        ctx_add(0, "", CM_NONE, CTF_SEP);
-        ctx_add(0, "EMPTY RECYCLE BIN", CM_EMPTY,
-                desk_trash_full ? 0 : CTF_GRAY);
+        mc_append(t, 0, CM_OPEN, "Open", NULL);
+        mc_append(t, 2, 0, NULL, NULL);
+        ctx_grayable(t, CM_EMPTY, "Empty Recycle Bin", !desk_trash_full);
     } else {
-        ctx_add(0, "OPEN", CM_OPEN, 0);
+        mc_append(t, 0, CM_OPEN, "Open", NULL);
         /* EDIT (0202): documents only — regular files whose OPEN routes
          * through the openwith VIEWER (a .mgp deck). Launchers/binaries
          * and folders keep the pre-0202 rows, so their menu geometry (a
@@ -2508,14 +2516,14 @@ static void ctx_open_icon(int idx, int x, int y) {
         struct stat st;
         snprintf(path, sizeof path, "/root/Desktop/%s", desk[idx].name);
         if (stat(path, &st) == 0 && S_ISREG(st.st_mode) && !ow_is_runnable(path))
-            ctx_add(0, "EDIT", CM_EDIT, 0);
-        ctx_add(0, "", CM_NONE, CTF_SEP);
-        ctx_add(0, "CUT", CM_CUT, 0);
-        ctx_add(0, "COPY", CM_COPY, 0);
-        ctx_add(0, "DELETE", CM_DELETE, 0);
-        ctx_add(0, "RENAME", CM_RENAME, 0);        /* the inline editor (0103) */
+            mc_append(t, 0, CM_EDIT, "Edit", NULL);
+        mc_append(t, 2, 0, NULL, NULL);
+        mc_append(t, 0, CM_CUT, "Cut", NULL);
+        mc_append(t, 0, CM_COPY, "Copy", NULL);
+        mc_append(t, 0, CM_DELETE, "Delete", NULL);
+        mc_append(t, 0, CM_RENAME, "Rename", NULL);   /* the inline editor (0103) */
     }
-    ctx_openwin(0, x, y);
+    ctx_show(x, y);
 }
 
 /* Cut/Copy every selected icon's path onto the clipboard (fileops.h
@@ -2591,33 +2599,32 @@ static void desk_paste(void) {
  * this process already owns. Inapplicable rows gray (state snapshot at
  * open — the popup is transient by design). */
 static void ctx_open_bar(const win_t *w, int bx) {
-    ctx_dismiss();
+    MenuTbl *t = ctx_begin();
     ctx_target = w->sid;
-    ctx_nent[0] = 0;
-    ctx_add(0, "RESTORE", CM_RESTORE,
-            (w->minimized || w->maximized || w->snapped) ? 0 : CTF_GRAY);
-    ctx_add(0, "MINIMIZE", CM_MINIMIZE, w->minimized ? CTF_GRAY : 0);
-    ctx_add(0, "MAXIMIZE", CM_MAXIMIZE,
-            (w->maximized || w->minimized) ? CTF_GRAY : 0);
-    ctx_add(0, "", CM_NONE, CTF_SEP);
-    ctx_add(0, "CLOSE", CM_CLOSE, 0);
-    ctx_openwin(0, bx, scr_h);         /* clamp parks it above the bar */
+    ctx_icon = -1;
+    ctx_grayable(t, CM_RESTORE, "Restore",
+                 !(w->minimized || w->maximized || w->snapped));
+    ctx_grayable(t, CM_MINIMIZE, "Minimize", w->minimized);
+    ctx_grayable(t, CM_MAXIMIZE, "Maximize", w->maximized || w->minimized);
+    mc_append(t, 2, 0, NULL, NULL);
+    mc_append(t, 0, CM_CLOSE, "Close", NULL);
+    ctx_show(bx, scr_h);               /* clamp parks it above the bar */
 }
 
 /* Right-click the empty taskbar strip (todos/0101): the Win95 bar menu —
  * window-arrangement policy this process owns, plus Properties -> the
  * ctlpanel hub (todos/0089). Anchored at the click x, parked above the bar
- * by the ctx_openwin clamp. */
+ * by the win_create clamp. */
 static void ctx_open_taskbar(int bx) {
-    ctx_dismiss();
+    MenuTbl *t = ctx_begin();
     ctx_target = 0;
-    ctx_nent[0] = 0;
-    ctx_add(0, "CASCADE", CM_CASCADE, 0);
-    ctx_add(0, "TILE", CM_TILE, 0);
-    ctx_add(0, "MINIMIZE ALL", CM_MIN_ALL, 0);
-    ctx_add(0, "", CM_NONE, CTF_SEP);
-    ctx_add(0, "PROPERTIES", CM_PROPERTIES, 0);
-    ctx_openwin(0, bx, scr_h);
+    ctx_icon = -1;
+    mc_append(t, 0, CM_CASCADE, "Cascade", NULL);
+    mc_append(t, 0, CM_TILE, "Tile", NULL);
+    mc_append(t, 0, CM_MIN_ALL, "Minimize All", NULL);
+    mc_append(t, 2, 0, NULL, NULL);
+    mc_append(t, 0, CM_PROPERTIES, "Properties", NULL);
+    ctx_show(bx, scr_h);
 }
 
 /* New > Folder / Text File: create under /root/Desktop with a Win95-style
@@ -2653,22 +2660,20 @@ static void ctx_new_entry(int is_dir) {
  * on a resizable window (fixed-size scales by pointer, 0024), Maximize off
  * when already maximized. */
 static void ctx_open_sysmenu(const win_t *w) {
-    ctx_dismiss();
+    MenuTbl *t = ctx_begin();
     ctx_target = w->sid;
     ctx_icon = -1;
-    ctx_nent[0] = 0;
-    ctx_add(0, "RESTORE", CM_RESTORE,
-            (w->minimized || w->maximized || w->snapped) ? 0 : CTF_GRAY);
-    ctx_add(0, "MOVE", CM_MOVE, w->minimized ? CTF_GRAY : 0);
-    ctx_add(0, "SIZE", CM_SIZE, (w->minimized || !w->resizable) ? CTF_GRAY : 0);
-    ctx_add(0, "MINIMIZE", CM_MINIMIZE, w->minimized ? CTF_GRAY : 0);
-    ctx_add(0, "MAXIMIZE", CM_MAXIMIZE,
-            (w->maximized || w->minimized) ? CTF_GRAY : 0);
-    ctx_add(0, "", CM_NONE, CTF_SEP);
-    ctx_add(0, "CLOSE", CM_CLOSE, 0);
-    /* Anchor just under the title bar's top-left; the ctx_openwin clamp
+    ctx_grayable(t, CM_RESTORE, "Restore",
+                 !(w->minimized || w->maximized || w->snapped));
+    ctx_grayable(t, CM_MOVE, "Move", w->minimized);
+    ctx_grayable(t, CM_SIZE, "Size", w->minimized || !w->resizable);
+    ctx_grayable(t, CM_MINIMIZE, "Minimize", w->minimized);
+    ctx_grayable(t, CM_MAXIMIZE, "Maximize", w->maximized || w->minimized);
+    mc_append(t, 2, 0, NULL, NULL);
+    mc_append(t, 0, CM_CLOSE, "Close", NULL);
+    /* Anchor just under the title bar's top-left; the win_create clamp
      * keeps it on-screen (right/bottom edges). */
-    ctx_openwin(0, w->x, w->y);
+    ctx_show(w->x, w->y);
 }
 
 /* End a keyboard move/size (todos/0102): optionally revert to the stashed
@@ -2739,23 +2744,20 @@ static void sys_key(int sym) {
     }
 }
 
-/* Fire row i of column d. Grayed/separator rows never fire; sub rows
- * cascade. Real commands snapshot their argument, dismiss, then act —
- * dismissal first so a spawned child's create-focus finds no popup. */
-static void ctx_activate(int d, int i) {
-    if (i < 0 || i >= ctx_nent[d]) return;
-    ctx_ent *e = &ctx_ents[d][i];
-    if (e->flags & (CTF_SEP | CTF_GRAY)) return;
-    if (e->flags & CTF_SUB) { ctx_open_flyout(i); return; }
-    /* Move/Size keep the popup as the key grabber — enter the mode instead
-     * of dismissing (todos/0102). Everything else dismisses then acts. */
-    if (e->id == CM_MOVE) { sys_enter(1); return; }
-    if (e->id == CM_SIZE) { sys_enter(2); return; }
-    int id = e->id;
+/* Fire a ctx command id — the engine's post_command sink (0259): the
+ * chain has already closed before this runs, preserving the 0091
+ * dismiss-then-act order (a spawned child's create-focus finds no
+ * popup). Grayed/separator rows never fired (engine rule); sub rows
+ * cascaded in the engine; Move/Size never reach here (intercepted
+ * BEFORE the engine fire so the popup stays up as the key grabber —
+ * ctx_press/ctx_key below). */
+static void ctx_command(int id) {
     int32_t target = ctx_target;
     int icon = ctx_icon;
-    ctx_dismiss();
     switch (id) {
+    case CM_MOVE:
+    case CM_SIZE:
+        break;                         /* defensive: interception owns these */
     case CM_REFRESH:
         desk_load();
         desk_dirty = 1;
@@ -2829,112 +2831,63 @@ static void ctx_activate(int d, int i) {
     }
 }
 
-static void ctx_click(int d, float fy) {
-    int i = ctx_row_hit(d, (int)fy);
-    if (i < 0) { ctx_dismiss(); return; }        /* dead-zone click */
-    if (ctx_ents[d][i].flags & CTF_GRAY) return; /* disabled: stays open */
-    ctx_hover[d] = i;
-    ctx_activate(d, i);
+/* The deepest open level's hot item, or NULL — the Move/Size
+ * interception reads it (both mouse and keyboard paths). */
+static MenuItem *mc_hot_item(void) {
+    if (!__mc.open || __mc.nlev == 0) return NULL;
+    MenuLevel *L = &__mc.lev[__mc.nlev - 1];
+    if (!L->m || L->hot < 0 || L->hot >= L->m->n) return NULL;
+    return &L->m->items[L->hot];
 }
 
-/* Hover-open like the Start menu (0078): a sub row cascades its flyout,
- * a different sub row replaces it, plain rows leave it alone. */
-static void ctx_motion(int d, float fy) {
-    int i = ctx_row_hit(d, (int)fy);
-    ctx_hover[d] = i;
-    if (d == 0 && i >= 0 && (ctx_ents[0][i].flags & CTF_SUB) &&
-        ctx_child != i)
-        ctx_open_flyout(i);
+/* A press on chain level k (popup-local coords). Two front-end policies
+ * ride ahead of the engine: (a) a dead-zone press inside the popup
+ * dismisses (the 0091 rule; the engine alone would ignore it), and (b)
+ * the sysmenu's Move/Size enter their keyboard mode WITHOUT firing —
+ * the popup stays up as the key grabber (0102; the engine's fire path
+ * would close it). */
+static void ov_press(int k, int x, int y) {
+    MenuLevel *L = &__mc.lev[k];
+    RECT pr;
+    SetRect(&pr, 0, 0, L->w, L->h);
+    int row = mc_tbl_at(L->m, &pr, x, y);
+    if (row < 0) {                     /* dead-zone press */
+        if (mc_kind == MK_CTX) ctx_dismiss();
+        else menu_dismiss();
+        return;
+    }
+    MenuItem *it = &L->m->items[row];
+    if (mc_kind == MK_CTX && it->kind == 0 &&
+        !(it->state & (MF_GRAYED | MF_DISABLED)) &&
+        (it->id == CM_MOVE || it->id == CM_SIZE)) {
+        L->hot = row;
+        mc_level_paint(k);
+        sys_enter(it->id == CM_MOVE ? 1 : 2);
+        return;
+    }
+    mc_level_mouse(k, WM_LBUTTONDOWN, x, y);
 }
 
-/* Keyboard on the open context menu: arrows walk enabled rows of the
- * DEEPEST column, Right/Enter cascade a sub row, Left backs out of the
- * flyout, Esc dismisses — the menu_key pattern (0078). */
+/* Keyboard on the open context menu: the engine walks/casades/fires
+ * (arrows/Right/Left/Enter/Esc — arbitrary depth since 0259); a live
+ * move/size mode owns the keys first (0102), and Enter on the Move/Size
+ * rows enters the mode without firing (the popup stays up as the key
+ * grabber — the click path's twin). */
 static void ctx_key(int sym) {
-    /* A live move/size mode owns the keys (todos/0102): the popup is still
-     * up (ctx_depth > 0) as the grabber, but arrows drive the target and
-     * Enter/Esc end the mode — the menu nav is suspended until then. */
     if (sys_mode) { sys_key(sym); return; }
-    int d = ctx_depth - 1;
-    int n = ctx_nent[d];
-    if (sym == SDLK_ESCAPE) { ctx_dismiss(); return; }
-    if (sym == SDLK_DOWN || sym == SDLK_UP) {
-        int dir = sym == SDLK_DOWN ? 1 : -1;
-        int i = ctx_hover[d];
-        for (int k = 0; k < n; k++) {
-            i = i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
-            if (!(ctx_ents[d][i].flags & CTF_SEP)) break;
-        }
-        ctx_hover[d] = i;
-        return;
-    }
-    if (sym == SDLK_RIGHT) {
-        if (d == 0 && ctx_hover[0] >= 0 &&
-            (ctx_ents[0][ctx_hover[0]].flags & CTF_SUB)) {
-            ctx_open_flyout(ctx_hover[0]);
-            if (ctx_depth > 1) ctx_hover[1] = 0;
-        }
-        return;
-    }
-    if (sym == SDLK_LEFT) {
-        if (d == 1) ctx_close_flyout();
-        return;
-    }
     if (sym == SDLK_RETURN) {
-        int was = ctx_depth;
-        ctx_activate(d, ctx_hover[d]);
-        if (ctx_depth > was) ctx_hover[1] = 0;   /* entered the flyout */
+        MenuItem *it = mc_hot_item();
+        if (it && it->kind == 0 && !(it->state & (MF_GRAYED | MF_DISABLED)) &&
+            (it->id == CM_MOVE || it->id == CM_SIZE)) {
+            sys_enter(it->id == CM_MOVE ? 1 : 2);
+            return;
+        }
     }
-}
-
-static int ctx_col_for(SDL_WindowID id) {
-    for (int d = 0; d < ctx_depth; d++)
-        if (ctx_win[d] && SDL_GetWindowID(ctx_win[d]) == id) return d;
-    return -1;
+    mc_route_key(sym);
 }
 
 static int ctx_owns_sid(int32_t sid) {
-    for (int d = 0; d < ctx_depth; d++) if (ctx_sid[d] == sid) return 1;
-    return 0;
-}
-
-static void draw_ctx(int d) {
-    if (d >= ctx_depth || !ctx_win[d]) return;
-    int w = CTX_W, h = ctx_h[d];
-    uint32_t *px = (uint32_t *)ctx_surf[d]->pixels;
-    uint32_t face = rgb(192, 192, 192), hi = rgb(255, 255, 255),
-             sh = rgb(96, 96, 96), txt = rgb(0, 0, 0),
-             gray = rgb(128, 128, 128),
-             sel = rgb(0, 0, 128), seltxt = rgb(255, 255, 255);
-    fill_s(px, w, h, 0, 0, w, h, face);
-    fill_s(px, w, h, 0, 0, w, 1, hi);            /* raised edge */
-    fill_s(px, w, h, 0, 0, 1, h, hi);
-    fill_s(px, w, h, 0, h - 1, w, 1, sh);
-    fill_s(px, w, h, w - 1, 0, 1, h, sh);
-    int y = MENU_PAD;
-    for (int i = 0; i < ctx_nent[d]; i++) {
-        ctx_ent *e = &ctx_ents[d][i];
-        if (e->flags & CTF_SEP) {                /* the groove */
-            fill_s(px, w, h, 4, y + MENU_SEP_H / 2 - 1, w - 8, 1, sh);
-            fill_s(px, w, h, 4, y + MENU_SEP_H / 2, w - 8, 1, hi);
-            y += MENU_SEP_H;
-            continue;
-        }
-        int grayed = e->flags & CTF_GRAY;
-        int hl = !grayed &&
-                 (i == ctx_hover[d] || (d == 0 && i == ctx_child));
-        if (hl) fill_s(px, w, h, 2, y, w - 4, MENU_ENTRY_H, sel);
-        draw_text_s(px, w, h, 10, y + (MENU_ENTRY_H - 7) / 2, e->label,
-                    grayed ? gray : hl ? seltxt : txt);
-        if (e->flags & CTF_SUB) {                /* the flyout arrow */
-            int ax = w - 10, ay = y + (MENU_ENTRY_H - 7) / 2;
-            for (int t = 0; t < 4; t++)
-                fill_s(px, w, h, ax + t, ay + t, 1, 7 - 2 * t,
-                       hl ? seltxt : txt);
-        }
-        y += MENU_ENTRY_H;
-    }
-    SDL_UpdateWindowSurface(ctx_win[d]);
+    return mc_kind == MK_CTX && ov_owns_sid(sid);
 }
 
 /* ---- Aero Peek (todos/0063) ---- */
@@ -3094,24 +3047,33 @@ static void handle_event(wmp_hdr *h) {
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
         if (r.pid == own_pid) {        /* our own furniture: park by title */
             if (strncmp(r.title, "startmenu", 9) == 0) {   /* 0028/0078 */
-                int depth = r.title[9] ? r.title[9] - '1' : 0;
-                if (depth < 0 || depth >= mdepth || !mcol[depth].win) return;
-                menu_col *c = &mcol[depth];
-                c->sid = r.sid;
-                int32_t a[3] = { r.sid, c->x, c->y };
-                wmp_send(sock, WMP_MOVE, a, 3);
-                /* Top layer like the bar (todos/0038) — created later, so
-                 * the stable sort keeps the menu above it. */
-                int32_t ly[2] = { r.sid, 1 };
-                wmp_send(sock, WMP_SET_LAYER, ly, 2);
-                if (depth > 0 && mcol[0].sid) {
-                    /* Flyouts must not hold focus: closing one on a
-                     * hover re-target would bounce focus to an app and
-                     * the EV_FOCUS rule would dismiss the whole menu.
-                     * The ROOT column keeps the keyboard (the Aero-Peek
-                     * hand-back precedent, todos/0078). */
-                    int32_t f[1] = { mcol[0].sid };
-                    wmp_send(sock, WMP_FOCUS, f, 1);
+                if (!r.title[9]) {                 /* the root panel */
+                    if (!smroot.win) return;       /* dismissed pre-echo */
+                    smroot.sid = r.sid;
+                    int32_t a[3] = { r.sid, smroot.x, smroot.y };
+                    wmp_send(sock, WMP_MOVE, a, 3);
+                    /* Top layer like the bar (todos/0038) — created later,
+                     * so the stable sort keeps the menu above it. */
+                    int32_t ly[2] = { r.sid, 1 };
+                    wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                } else {           /* a chain level: "startmenu<lvl+2>" (0259) */
+                    int lvl = atoi(r.title + 9) - 2;
+                    if (mc_kind != MK_START || lvl < 0 ||
+                        lvl >= MENU_MAX_DEPTH || !ov[lvl].win) return;
+                    ov[lvl].sid = r.sid;
+                    int32_t a[3] = { r.sid, ov[lvl].x, ov[lvl].y };
+                    wmp_send(sock, WMP_MOVE, a, 3);
+                    int32_t ly[2] = { r.sid, 1 };
+                    wmp_send(sock, WMP_SET_LAYER, ly, 2);
+                    if (smroot.sid) {
+                        /* Flyouts must not hold focus: closing one on a
+                         * hover re-target would bounce focus to an app and
+                         * the EV_FOCUS rule would dismiss the whole menu.
+                         * The ROOT panel keeps the keyboard (the Aero-Peek
+                         * hand-back precedent, todos/0078). */
+                        int32_t f[1] = { smroot.sid };
+                        wmp_send(sock, WMP_FOCUS, f, 1);
+                    }
                 }
             } else if (strncmp(r.title, "startrun", 9) == 0) {   /* 0078 */
                 if (!run_win) return;          /* dismissed before the echo */
@@ -3180,17 +3142,18 @@ static void handle_event(wmp_hdr *h) {
                         break;
                     }
             } else if (strncmp(r.title, "ctxmenu", 7) == 0) {   /* 0091 */
-                int d = r.title[7] ? 1 : 0;
-                if (d >= ctx_depth || !ctx_win[d]) return;   /* dismissed */
-                ctx_sid[d] = r.sid;
-                int32_t a[3] = { r.sid, ctx_x[d], ctx_y[d] };
+                int lvl = r.title[7] ? atoi(r.title + 7) - 1 : 0;
+                if (mc_kind != MK_CTX || lvl < 0 ||
+                    lvl >= MENU_MAX_DEPTH || !ov[lvl].win) return;
+                ov[lvl].sid = r.sid;
+                int32_t a[3] = { r.sid, ov[lvl].x, ov[lvl].y };
                 wmp_send(sock, WMP_MOVE, a, 3);
                 int32_t ly[2] = { r.sid, 1 };  /* top layer, like the menu */
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
-                if (d > 0 && ctx_sid[0]) {
-                    /* The flyout must not hold focus — the root column
+                if (lvl > 0 && ov[0].sid) {
+                    /* Flyout levels must not hold focus — the root level
                      * keeps the keyboard (the Start-menu rule, 0078). */
-                    int32_t f[1] = { ctx_sid[0] };
+                    int32_t f[1] = { ov[0].sid };
                     wmp_send(sock, WMP_FOCUS, f, 1);
                 }
             } else if (strncmp(r.title, "datepop", 7) == 0) {   /* 0101 */
@@ -3259,11 +3222,10 @@ static void handle_event(wmp_hdr *h) {
     switch (h->type) {
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_DESTROYED read");
-        for (int d = 0; d < MENU_DEPTH; d++)              /* defensive (0028) */
-            if (p[0] == mcol[d].sid) mcol[d].sid = 0;
+        if (p[0] == smroot.sid) smroot.sid = 0;           /* defensive (0028) */
         if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
-        for (int d = 0; d < 2; d++)                       /* likewise (0091) */
-            if (p[0] == ctx_sid[d]) ctx_sid[d] = 0;
+        for (int d = 0; d < MENU_MAX_DEPTH; d++)          /* likewise (0091) */
+            if (ov[d].win && p[0] == ov[d].sid) ov[d].sid = 0;
         if (p[0] == peek_for) peek_dismiss();             /* preview target gone */
         if (p[0] == snapprev_sid) snapprev_sid = 0;       /* defensive (0095) */
         if (p[0] == saver_sid) saver_sid = 0;             /* defensive (0096) */
@@ -3291,12 +3253,13 @@ static void handle_event(wmp_hdr *h) {
          * gate matters here too since 0091: menu_toggle's ctx_dismiss
          * makes focus fall to an app window, and that EV_FOCUS must not
          * kill the menu it just opened. */
-        if (mdepth > 0 && mcol[0].sid && !menu_owns_sid(p[0])) menu_dismiss();
+        if (smroot.win && smroot.sid && !menu_owns_sid(p[0])) menu_dismiss();
         if (run_win && run_sid && p[0] != run_sid) run_dismiss();
         /* Focus leaving the context menu dismisses it — outside-click on
          * any app window lands here (todos/0091). Gated on the root echo
          * having arrived, the run-dialog precedent. */
-        if (ctx_depth > 0 && ctx_sid[0] && !ctx_owns_sid(p[0])) ctx_dismiss();
+        if (__mc.open && mc_kind == MK_CTX && ov[0].sid &&
+            !ctx_owns_sid(p[0])) ctx_dismiss();
         /* Desktop focus tracking (todos/0077): keys route to the icon grid
          * only while it holds focus; losing it also resets the tracked
          * modifiers (their keyups would land elsewhere). */
@@ -3530,11 +3493,12 @@ static int btn_width(void) {
  * the live thumbnail popup for its window; anywhere else on the bar drops
  * it. The Start menu wins conflicts — no previews while it's open. */
 static void bar_motion(float fx) {
-    if (mdepth > 0) return;
+    if (smroot.win) return;
     /* The clock cell raises the date tooltip (todos/0101) — but not over an
      * open context menu, whose root must keep focus. */
     int cx = clock_left();
-    if ((int)fx >= cx && (int)fx < cx + CLOCK_W && ctx_depth == 0) {
+    if ((int)fx >= cx && (int)fx < cx + CLOCK_W &&
+        !(__mc.open && mc_kind == MK_CTX)) {
         date_show(0);
         peek_dismiss();
         return;
@@ -3626,7 +3590,7 @@ static void draw_bar(void) {
     fill(px, 0, 0, bar_w, 1, hi);                       /* top edge highlight */
     /* The Start button (todos/0028): raised normally, sunken while open. */
     {
-        int down = mdepth > 0;
+        int down = smroot.win != NULL;
         fill(px, 2, 3, START_W - 4, BAR_H - 6, down ? rgb(222, 222, 222) : face);
         fill(px, 2, 3, START_W - 4, 1, down ? sh : hi);
         fill(px, 2, 3, 1, BAR_H - 6, down ? sh : hi);
@@ -3695,7 +3659,7 @@ static void frame_cb(void) {
     if (now_ms - saver_poll_ms >= 1000) { saver_poll_ms = now_ms; saver_poll(); }
     /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
      * Menu columns and the run dialog come and go inside handlers, so
-     * their ids are resolved per event (menu_col_for), not cached. */
+     * their ids are resolved per event (ov_level_for), not cached. */
     SDL_WindowID did = desk_win ? SDL_GetWindowID(desk_win) : 0;
     SDL_WindowID pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
     SDL_Event e;
@@ -3713,11 +3677,13 @@ static void frame_cb(void) {
             continue;
         }
         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-            int md = menu_col_for(e.button.windowID);
-            int cd = ctx_col_for(e.button.windowID);
-            if (md == 0) sm_root_click((int)e.button.x, (int)e.button.y);   /* 0098 */
-            else if (md > 0) menu_click(md, e.button.y);
-            else if (cd >= 0) ctx_click(cd, e.button.y);   /* 0091 */
+            int lv = ov_level_for(e.button.windowID);
+            if (smroot.win && e.button.windowID == SDL_GetWindowID(smroot.win))
+                sm_root_click((int)e.button.x, (int)e.button.y);   /* 0098 */
+            else if (lv >= 0) {        /* a chain level (0091/0259) */
+                if (e.button.button == 1)
+                    ov_press(lv, (int)e.button.x, (int)e.button.y);
+            }
             else if (run_win && e.button.windowID == SDL_GetWindowID(run_win)) {
                 /* a click inside the run dialog: nothing to hit */
             } else if (desk_win && e.button.windowID == did) {
@@ -3769,14 +3735,25 @@ static void frame_cb(void) {
             else bar_click(e.button.x);
             pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;   /* may drop */
         } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-            if (desk_win && e.button.windowID == did && e.button.button == 1)
+            int lv = ov_level_for(e.button.windowID);
+            if (lv >= 0 && e.button.button == 1) {
+                /* press-drag-release (0259) — but not while a keyboard
+                 * move/size holds the popup as its grabber: the Move/Size
+                 * press was intercepted (never fired), and its release
+                 * must not fire the row through the engine either */
+                if (!sys_mode)
+                    mc_level_mouse(lv, WM_LBUTTONUP,
+                                   (int)e.button.x, (int)e.button.y);
+            }
+            else if (desk_win && e.button.windowID == did && e.button.button == 1)
                 desk_up(e.button.x, e.button.y);   /* marquee/drag end (0077) */
         } else if (e.type == SDL_EVENT_MOUSE_MOTION) {
-            int md = menu_col_for(e.motion.windowID);
-            int cd = ctx_col_for(e.motion.windowID);
-            if (md == 0) sm_root_motion((int)e.motion.x, (int)e.motion.y);   /* 0098 */
-            else if (md > 0) menu_motion(md, e.motion.y);
-            else if (cd >= 0) ctx_motion(cd, e.motion.y);   /* 0091 */
+            int lv = ov_level_for(e.motion.windowID);
+            if (smroot.win && e.motion.windowID == SDL_GetWindowID(smroot.win))
+                sm_root_motion((int)e.motion.x, (int)e.motion.y);   /* 0098 */
+            else if (lv >= 0)          /* hover-track a chain level (0259) */
+                mc_level_mouse(lv, WM_MOUSEMOVE,
+                               (int)e.motion.x, (int)e.motion.y);
             else if (desk_win && e.motion.windowID == did) {
                 peek_dismiss();        /* pointer left the bar (0063) */
                 desk_motion(e.motion.x, e.motion.y, e.motion.state);
@@ -3801,8 +3778,8 @@ static void frame_cb(void) {
              * menu, the run dialog, and the focused desktop's icon grid
              * (todos/0077), in that order. */
             if (down) {
-                if (ctx_depth > 0) ctx_key(k);
-                else if (mdepth > 0) menu_key(k);
+                if (sys_mode || (__mc.open && mc_kind == MK_CTX)) ctx_key(k);
+                else if (smroot.win) menu_key(k);
                 else if (run_win) run_key(k);
                 else if (desk_focused) desk_key(k);
             }
@@ -3837,8 +3814,8 @@ static void frame_cb(void) {
      * 1s-tick wake must not re-present a static menu (present churn keeps
      * the 0169 compositor awake). */
     if (activity) {
-        for (int d = 0; d < mdepth; d++) draw_menu_col(d);
-        for (int d = 0; d < ctx_depth; d++) draw_ctx(d);   /* 0091 */
+        draw_root_menu();              /* chain levels paint themselves in
+                                          the engine on state change (0259) */
         draw_run();
     }
     draw_desk();

@@ -37,12 +37,11 @@ function check(name, cond, extra) {
 
 const SDL_CAUSE = 'SDL_CreateWindow: host failed to create a window';
 
-// ---- compile the real wm.c ----
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-wmfatal-'));
-const wmWasmPath = path.join(tmp, 'wm.wasm');
-cp.execFileSync('node', [COMPILER, path.join(ROOT, 'os/wm.c'),
-  '-I' + path.join(ROOT, 'os'), '-o', wmWasmPath], { stdio: 'pipe' });
-const wmWasm = fs.readFileSync(wmWasmPath);
+// ---- compile the real wm (a PROJECT since 0259: wm.c + menucore.c +
+// gdi32.c + freetype — the single-file cc invocation is gone) ----
+const OC = require(path.join(ROOT, 'os/os-common.js'));
+const wmWasm = Buffer.from(OC.buildProject(require(COMPILER), 'os/wm.json',
+  (p) => fs.readFileSync(path.join(ROOT, p), 'utf8')));
 
 function until(cond, ms, what) {
   const t0 = Date.now();
@@ -101,7 +100,6 @@ function bootWm(screen) {
       line.includes('cannot create the desktop window: ' + SDL_CAUSE), line);
   }
 
-  fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failures === 0 ? '\nwm fatal e2e: PASS' : `\nwm fatal e2e: ${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

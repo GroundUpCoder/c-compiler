@@ -95,7 +95,18 @@ try {
   const AP_ROW = SM_ROWS - 1;                    // All Programs DISPLAY row: pinned to
                                                  // the bottom (XP/Win7), above search
   const SM_SEARCH_Y = SM_Y + SM_PAD + SM_ROWS * SM_ROW_H + 4;
-  const flyRowY = (i) => SM_PAD + i * SM_ROW_H + 10;
+  // Flyout columns are menucore chain levels since 0259: 18px rows, 1px
+  // border, measured widths (edge-scanned below, never a constant).
+  const MC_ROW = 18;
+  const flyRowY = (i) => 1 + i * MC_ROW + 9;
+  const flyH = (n) => 4 + n * MC_ROW;
+  // Walk right from x0 along y until the desktop TEAL reappears — the
+  // menu's measured right edge (its outer border is dark, never teal).
+  const menuRightEdge = async (x0, y) => {
+    for (let x = x0 + 59; x < x0 + 220; x++)
+      if (near(await sample(x, y), TEAL)) return x;
+    return -1;
+  };
   const MENU_GROUPS = ['Accessories', 'Demos', 'Games'];
   const DEMOS = ['cairodemo', 'ctldemo', 'gdidemo', 'gpubox', 'learn-mgp', 'mgp', 'slides', 'winbox'];
   const winCount = async () => {
@@ -188,22 +199,27 @@ try {
   // (startmenu2 at x = SM_W - 3), which cascades UPWARD via the work-area
   // clamp (bottom-anchored, Win7); then a group cascades its leaves
   // (startmenu3, itself clamped). Hover All Programs, then the Demos group.
-  const clampY = (y, n) => {                     // menu_open_col's work-area clamp
-    const h = 2 * SM_PAD + n * SM_ROW_H;
+  const clampY = (y, n) => {                     // the win_create work-area clamp
+    const h = flyH(n);
     return y + h > SH - 28 ? SH - 28 - h : y;
   };
   await page.mouse.move(rect.x + 60, rect.y + SM_Y + SM_PAD + AP_ROW * SM_ROW_H + 10);
+  const FLY2_X = SM_W - 3;
   const FLY2_Y = clampY(SM_Y + AP_ROW * SM_ROW_H, MENU_GROUPS.length);
-  await waitPixel(SM_W - 3 + 40, FLY2_Y + 6, FACE);
+  await waitPixel(FLY2_X + 5, FLY2_Y + 6, FACE);   // row-0 left gutter
   check('All Programs cascades the tree flyout', true);
   const DEMOS_ROW = MENU_GROUPS.indexOf('Demos');
-  await page.mouse.move(rect.x + SM_W - 3 + 40, rect.y + FLY2_Y + flyRowY(DEMOS_ROW));
-  // startmenu3 parks at x = SM_W-3 + 150-3, y = clamp(FLY2_Y + DEMOS_ROW*SM_ROW_H).
-  const FLY3_X = SM_W - 3 + 150 - 3;
-  const FLY3_Y = clampY(FLY2_Y + DEMOS_ROW * SM_ROW_H, DEMOS.length);
-  await waitPixel(FLY3_X + 40, FLY3_Y + 6, FACE);
+  // The tree column's width is measured (freetype) — scan its right edge,
+  // then hover the Demos row inside it.
+  const FLY2_R = await menuRightEdge(FLY2_X, FLY2_Y + 6);
+  check('tree flyout right edge found', FLY2_R > 0, FLY2_R);
+  await page.mouse.move(rect.x + FLY2_X + 30, rect.y + FLY2_Y + flyRowY(DEMOS_ROW));
+  // startmenu3 parks at tree-right - 3, anchored to the Demos row's top.
+  const FLY3_X = FLY2_R - 3;
+  const FLY3_Y = clampY(FLY2_Y + 1 + DEMOS_ROW * MC_ROW, DEMOS.length);
+  await waitPixel(FLY3_X + 5, FLY3_Y + 6, FACE);
   check('the Demos group cascades its leaves', true);
-  await clickAt(FLY3_X + 60, FLY3_Y + flyRowY(DEMOS.indexOf('winbox')));
+  await clickAt(FLY3_X + 30, FLY3_Y + flyRowY(DEMOS.indexOf('winbox')));
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);
   check('nested flyout click launched winbox (orange fill at the WM placement)', true);
   await waitPixel(120, SM_Y + 74, TEAL);
@@ -283,9 +299,9 @@ try {
   await waitPixel(120, SM_Y + 74, TEAL);
   check('Ctrl+Esc toggles it closed again', true);
 
-  // ---- /etc/menu override is searched (todos/0040: first-existing-dir) ----
-  // With /etc/menu present, menu_dir points there, so the live search walks
-  // IT: create a single launcher, search its name, Enter launches it.
+  // ---- /etc/menu is searched (the 0259 UNION: both trees walked, /etc
+  // first — pre-0259 first-existing-dir made it a shadowing override) ----
+  // Create a single launcher, search its name, Enter launches it.
   await setVt(1);
   await page.keyboard.type('mkdir /etc/menu && ln -s /usr/bin/winbox /etc/menu/solo && echo MENU""-SET\r', { delay: 40 });
   await page.waitForFunction(() => window.__osOut.includes('MENU-SET'), { timeout: 20000, polling: 200 });

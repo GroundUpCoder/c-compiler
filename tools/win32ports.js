@@ -55,7 +55,13 @@ function compileTarget(projPath) {
     }
     return out.join('/');
   }
+  const seen = new Set();                /* diamond-dep dedup (0079, matching
+                                            os-common buildProject — freetype
+                                            rides under both menucore.json
+                                            and lib.json since 0259) */
   (function expand(p) {
+    if (seen.has(p)) return;
+    seen.add(p);
     const dir = p.slice(0, p.lastIndexOf('/'));
     const proj = JSON.parse(fs.readFileSync(path.join(ROOT, p), 'utf8'));
     for (const d of proj.deps || []) expand(normalize(dir + '/' + d));
