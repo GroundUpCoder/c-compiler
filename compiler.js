@@ -30432,13 +30432,42 @@ return { getStdlibHeaders, getStdlibSources, createDefaultPPRegistry, parseAllUn
 })();
 
 // ====================
+// Embedded host.js (shared by HTML + JS output)
+// ====================
+//
+// Both single-file emitters inline host.js's source, and the inlined copy
+// must end BEFORE host.js's standalone tail (the run-if-main CLI, the
+// module.exports block, the window/worker global re-exports): an emitted
+// Node .js bundle IS require.main, so an unstripped tail double-executes;
+// the HTML output's page/worker scripts reference host.js's top-level
+// declarations directly, so the tail is dead weight there. The cut keys on
+// the structural `// @cc-strip-below` sentinel line that host.js owns — and
+// throws if the sentinel is missing, so rewording a prose comment in host.js
+// can never again turn the strip into a silent no-op (CD15).
+
+const HOSTJS_STRIP_SENTINEL = '// @cc-strip-below';
+
+function prepareEmbeddedHostJs(hostJsSource) {
+  const stripped = hostJsSource.replace(/^#!.*\n/, '');
+  const cut = stripped.search(/^\/\/ @cc-strip-below\b/m);
+  if (cut < 0) {
+    throw new Error(
+      `host.js is missing the "${HOSTJS_STRIP_SENTINEL}" sentinel line that ` +
+      `marks the start of its standalone run-if-main/export tail; refusing to ` +
+      `emit a single-file bundle that would double-execute. Restore the ` +
+      `sentinel in host.js just above the dual-purpose tail.`);
+  }
+  return stripped.slice(0, cut);
+}
+
+// ====================
 // HTML Output
 // ====================
 
 const HtmlOutput = (() => {
 
 function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, xtermSources }) {
-  const strippedHostJs = hostJsSource.replace(/^#!.*\n/, '');
+  const strippedHostJs = prepareEmbeddedHostJs(hostJsSource);
   const safeHostJs = strippedHostJs.replace(/<\/script>/gi, '<\\/script>');
   const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
   const opfsEntries = opfsFiles.map(f => ({
@@ -31126,14 +31155,12 @@ return { generate };
 const JsOutput = (() => {
 
 function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName }) {
-  const strippedHostJs = hostJsSource.replace(/^#!.*\n/, '');
+  const hostBody = prepareEmbeddedHostJs(hostJsSource);
   const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
   const opfsEntries = opfsFiles.map(f => ({
     path: f.destPath,
     data: Buffer.from(f.bytes).toString('base64'),
   }));
-
-  const hostBody = strippedHostJs.replace(/\/\/\s*-+\s*\n\/\/\s*Dual-purpose logic[\s\S]*$/, '');
 
   let dataFileSetup = '';
   if (opfsEntries.length > 0) {

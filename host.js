@@ -10865,6 +10865,13 @@ async function runModule({
   return exitCode;
 }
 
+// @cc-strip-below — single-file emit boundary. compiler.js's emitters
+// (prepareEmbeddedHostJs) inline host.js's source into .js/.html output and
+// cut it at this EXACT marker line: everything below is the STANDALONE tail
+// (run-if-main CLI, module/window/worker exports) that would double-execute
+// inside a Node bundle. The strip keys on the marker, not prose, and the
+// compiler FAILS LOUD if the marker vanishes — reword the comments freely,
+// but keep the `// @cc-strip-below` line itself intact (CD15).
 // --------------------------------------------------------------------------
 // Dual-purpose logic: Run if Main (Node), Export if Module (Node/Browser)
 // --------------------------------------------------------------------------

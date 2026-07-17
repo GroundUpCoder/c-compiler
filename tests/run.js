@@ -86,7 +86,8 @@ const IGNORE = [
 // concern for readability.
 const RULES = [
   // Core compiler — the whole language surface + every consumer of it.
-  [/^compiler\.js$/, ['unit', 'kernel', 'blockfs'], 'the compiler drives every wasm binary'],
+  // (host: the single-file .js/.html emitters live in compiler.js — CD15.)
+  [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host'], 'the compiler drives every wasm binary + the single-file emit'],
 
   // host.js carries BOTH BlockFS/MountFS AND the per-process SDL/fd runtime.
   [/^host\.js$/, ['blockfs', 'kernel', 'sweep', 'host'], 'BlockFS + the process runtime live here'],
