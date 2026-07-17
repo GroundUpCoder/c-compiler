@@ -47,7 +47,6 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
-#include <dirent.h>
 #include <errno.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -58,6 +57,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "../launch.h"
+#include "../listdir.h"
 #include "../openwith.h"
 
 #define ID_PATH 100
@@ -137,7 +137,7 @@ static void spawn_assoc(const char *cmd, const char *path) {
 
 /* ---- listing ---- */
 
-typedef struct { char name[240]; int isdir; long size; long mtime; } Ent;
+typedef ld_ent Ent;             /* the shared listing shape (os/listdir.h) */
 
 /* The live listing, index-aligned with the LISTBOX rows: a row op resolves
  * its target through here (g_ents[row]) rather than re-parsing the display
@@ -147,7 +147,7 @@ static int g_nent;
 
 static int entcmp(const void *a, const void *b) {
     const Ent *ea = (const Ent *)a, *eb = (const Ent *)b;
-    if (ea->isdir != eb->isdir) return eb->isdir - ea->isdir;   /* dirs first */
+    if (ea->is_dir != eb->is_dir) return eb->is_dir - ea->is_dir;   /* dirs first */
     int c;
     if (g_sort == 1) c = (ea->size > eb->size) - (ea->size < eb->size);
     else if (g_sort == 2) c = (ea->mtime > eb->mtime) - (ea->mtime < eb->mtime);
@@ -171,7 +171,7 @@ static void status_update(void) {
         int got = (int)SendMessage(g_list, LB_GETSELITEMS, 512, (LPARAM)idx);
         long bytes = 0;
         for (int i = 0; i < got; i++)
-            if (idx[i] >= 0 && idx[i] < g_nent && !g_ents[idx[i]].isdir)
+            if (idx[i] >= 0 && idx[i] < g_nent && !g_ents[idx[i]].is_dir)
                 bytes += g_ents[idx[i]].size;
         snprintf(s, sizeof s, "%d object(s)   %d selected (%ld bytes)",
                  total, selc, bytes);
@@ -183,32 +183,17 @@ static void status_update(void) {
 
 static void refill(void) {
     SendMessage(g_list, LB_RESETCONTENT, 0, 0);
-    DIR *d = opendir(g_cwd);
-    if (!d) {
+    /* The walk is os/listdir.h's shared list_dir (CD34). Dotfiles hidden
+     * unless the View toggle is on (0093/0106 — the .recycle store must
+     * not clutter /root; Explorer-style). */
+    g_nent = list_dir(g_cwd, g_ents, 512,
+                      LIST_FOLLOW_LINKS | (g_hidden ? 0u : LIST_HIDE_DOTFILES));
+    if (g_nent < 0) {
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)"(cannot open directory)");
         g_nent = 0;
         status_update();
         return;
     }
-    g_nent = 0;
-    struct dirent *de;
-    while ((de = readdir(d)) && g_nent < 512) {
-        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
-            continue;                            /* never the self/parent dots */
-        /* Dotfiles hidden unless the View toggle is on (0093/0106 — the
-         * .recycle store must not clutter /root; Explorer-style). */
-        if (de->d_name[0] == '.' && !g_hidden) continue;
-        char full[768];
-        snprintf(full, sizeof full, "%s/%s", g_cwd, de->d_name);
-        struct stat st;
-        int ok = stat(full, &st) == 0;
-        Ent *e = &g_ents[g_nent++];
-        snprintf(e->name, sizeof e->name, "%s", de->d_name);
-        e->isdir = ok && S_ISDIR(st.st_mode);
-        e->size = ok ? (long)st.st_size : 0;
-        e->mtime = ok ? (long)st.st_mtime : 0;
-    }
-    closedir(d);
     qsort(g_ents, (size_t)g_nent, sizeof g_ents[0], entcmp);
     for (int i = 0; i < g_nent; i++) {
         /* Details columns off the same stat: a left name field, a
@@ -217,8 +202,8 @@ static void refill(void) {
          * free, 0106). Agent readers key on the name prefix. */
         char namef[264], sizef[16], datef[20];
         snprintf(namef, sizeof namef, "%s%s", g_ents[i].name,
-                 g_ents[i].isdir ? "/" : "");
-        if (g_ents[i].isdir) snprintf(sizef, sizeof sizef, "<DIR>");
+                 g_ents[i].is_dir ? "/" : "");
+        if (g_ents[i].is_dir) snprintf(sizef, sizeof sizef, "<DIR>");
         else snprintf(sizef, sizeof sizef, "%ld", g_ents[i].size);
         time_t mt = (time_t)g_ents[i].mtime;
         struct tm *tm = localtime(&mt);
@@ -288,7 +273,7 @@ static void go_back(void) {
  * string — the details columns would confuse a re-parse). */
 static int row_path(int i, char *full, size_t sz, int *isdir) {
     if (i < 0 || i >= g_nent) return 0;
-    if (isdir) *isdir = g_ents[i].isdir;
+    if (isdir) *isdir = g_ents[i].is_dir;
     if (!strcmp(g_cwd, "/")) snprintf(full, sz, "/%s", g_ents[i].name);
     else snprintf(full, sz, "%s/%s", g_cwd, g_ents[i].name);
     return 1;

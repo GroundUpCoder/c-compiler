@@ -28,7 +28,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include "win32_internal.h"
-#include <dirent.h>
+#include "../listdir.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,42 +78,31 @@ static struct {
     char cwd[512];
 } g_fd;
 
+/* dirs first, then files, both sorted by name */
+static int fd_entcmp(const void *a, const void *b) {
+    const ld_ent *ea = (const ld_ent *)a, *eb = (const ld_ent *)b;
+    if (ea->is_dir != eb->is_dir) return eb->is_dir - ea->is_dir;
+    return strcmp(ea->name, eb->name);
+}
+
 static void fd_refill(void) {
     SendMessage(g_fd.list, LB_RESETCONTENT, 0, 0);
     SendMessage(g_fd.list, LB_ADDSTRING, 0, (LPARAM)"../");
-    DIR *d = opendir(g_fd.cwd);
-    if (d) {
-        /* dirs first, then files, both sorted — two passes over a snapshot */
-        static char names[512][240];
-        static unsigned char isdir[512];
-        int n = 0;
-        struct dirent *de;
-        while ((de = readdir(d)) && n < 512) {
-            if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
-            char full[768];
-            snprintf(full, sizeof full, "%s/%s", g_fd.cwd, de->d_name);
-            struct stat st;
-            snprintf(names[n], sizeof names[n], "%s", de->d_name);
-            isdir[n] = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
-            n++;
+    /* The walk is os/listdir.h's shared list_dir (CD34); the snapshot is
+     * heap-scoped to the refill — the old static names[512][240] put
+     * 120 KB of BSS in every app linking the veneer, dialog opened or
+     * not (and it's too big for the wasm stack). */
+    ld_ent *ents = (ld_ent *)malloc(512 * sizeof *ents);
+    if (ents) {
+        int n = list_dir(g_fd.cwd, ents, 512, LIST_FOLLOW_LINKS);
+        if (n > 0) qsort(ents, (size_t)n, sizeof *ents, fd_entcmp);
+        for (int i = 0; i < n; i++) {
+            char row[LD_NAME + 4];
+            snprintf(row, sizeof row, "%s%s", ents[i].name,
+                     ents[i].is_dir ? "/" : "");
+            SendMessage(g_fd.list, LB_ADDSTRING, 0, (LPARAM)row);
         }
-        closedir(d);
-        for (int pass = 1; pass >= 0; pass--) {  /* 1 = dirs, 0 = files */
-            /* insertion by qsort would lose the isdir pairing; a simple
-             * selection over the small snapshot keeps it obvious */
-            for (;;) {
-                int best = -1;
-                for (int i = 0; i < n; i++) {
-                    if (isdir[i] != pass || !names[i][0]) continue;
-                    if (best < 0 || strcmp(names[i], names[best]) < 0) best = i;
-                }
-                if (best < 0) break;
-                char row[256];
-                snprintf(row, sizeof row, "%s%s", names[best], pass ? "/" : "");
-                SendMessage(g_fd.list, LB_ADDSTRING, 0, (LPARAM)row);
-                names[best][0] = 0;
-            }
-        }
+        free(ents);
     }
     SetWindowText(g_fd.dir, g_fd.cwd);
 }
