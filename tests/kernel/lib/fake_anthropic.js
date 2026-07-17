@@ -12,6 +12,11 @@
 //   { "kind": "text", "text": "..." }
 //   { "kind": "tool", "preface": "...", "id": "toolu_x", "name": "bash",
 //     "input": {...} }   (input json split in two partials on the wire)
+// Either kind takes an optional "usage": {input_tokens, output_tokens,
+// cache_creation_input_tokens, cache_read_input_tokens} — input+cache ride
+// message_start, the final output_tokens rides message_delta (the real API
+// shape, which is what gcode's accounting combines). Absent -> no usage on
+// the wire, byte-identical to the pre-usage server.
 const fs = require('fs');
 const http = require('http');
 
@@ -23,17 +28,20 @@ function sse(type, obj) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...obj })}\n\n`;
 }
 function render(s) {
+  const msg = { id: 'msg', role: 'assistant', content: [] };
+  if (s.usage) msg.usage = { ...s.usage, output_tokens: 1 };
+  const deltaExtra = s.usage ? { usage: { output_tokens: s.usage.output_tokens } } : {};
   if (s.kind === 'text') {
-    return sse('message_start', { message: { id: 'msg', role: 'assistant', content: [] } })
+    return sse('message_start', { message: msg })
       + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
       + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: s.text } })
       + sse('content_block_stop', { index: 0 })
-      + sse('message_delta', { delta: { stop_reason: 'end_turn' } })
+      + sse('message_delta', { delta: { stop_reason: 'end_turn' }, ...deltaExtra })
       + sse('message_stop', {});
   }
   const json = JSON.stringify(s.input);
   const mid = Math.floor(json.length / 2);
-  return sse('message_start', { message: { id: 'msg', role: 'assistant', content: [] } })
+  return sse('message_start', { message: msg })
     + sse('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
     + sse('content_block_delta', { index: 0, delta: { type: 'text_delta', text: s.preface } })
     + sse('content_block_stop', { index: 0 })
@@ -41,7 +49,7 @@ function render(s) {
     + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(0, mid) } })
     + sse('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: json.slice(mid) } })
     + sse('content_block_stop', { index: 1 })
-    + sse('message_delta', { delta: { stop_reason: 'tool_use' } })
+    + sse('message_delta', { delta: { stop_reason: 'tool_use' }, ...deltaExtra })
     + sse('message_stop', {});
 }
 

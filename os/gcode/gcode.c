@@ -139,6 +139,24 @@ static int curl_progress(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl
 #include <signal.h>
 
 #ifdef __MTOTS__
+/* compiler.js's libc has gmtime but not gmtime_r/getline; gucOS processes
+ * are single-threaded, so wrapping the static-buffer gmtime is safe. */
+static struct tm *gmtime_r(const time_t *t, struct tm *out) { *out = *gmtime(t); return out; }
+static ssize_t getline(char **buf, size_t *cap, FILE *f) {
+    if (!*buf) { *cap = 256; *buf = malloc(*cap); if (!*buf) return -1; }
+    size_t n = 0; int c = EOF;
+    while ((c = fgetc(f)) != EOF) {
+        if (n + 2 > *cap) { char *nb = realloc(*buf, *cap * 2); if (!nb) return -1; *buf = nb; *cap *= 2; }
+        (*buf)[n++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (!n && c == EOF) return -1;
+    (*buf)[n] = 0;
+    return (ssize_t)n;
+}
+#endif
+
+#ifdef __MTOTS__
 #include <spawn.h>
 #include <sys/time.h>
 
