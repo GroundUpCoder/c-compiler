@@ -160,6 +160,9 @@ int findImage(name, fullname)
      char *name, *fullname;
 { unsigned int   p, e;
   struct stat    sbuf;
+#ifdef MGP_NATIVE
+  const char *assetdir;
+#endif
 
   strcpy(fullname, name);
   if (!strcmp(name, "stdin")) /* stdin is special name */
@@ -169,6 +172,16 @@ int findImage(name, fullname)
    */
   if (! stat(fullname, &sbuf))
       return(fileIsOk(fullname, &sbuf));
+#ifdef MGP_NATIVE
+  /* Seeded decks use their installed gucOS path.  A native oracle can point
+   * that stable deck spelling at the same bundled asset without editing it. */
+  assetdir= getenv("MGP_ASSET_DIR");
+  if (assetdir && !strncmp(name, "/usr/share/mgp/", 15)) {
+    snprintf(fullname, BUFSIZ, "%s/%s", assetdir, name + 15);
+    if (! stat(fullname, &sbuf))
+      return(fileIsOk(fullname, &sbuf));
+  }
+#endif
 #ifndef NO_COMPRESS
   strcat(fullname, ".Z");
   if (! stat(fullname, &sbuf))

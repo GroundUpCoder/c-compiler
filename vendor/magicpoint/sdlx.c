@@ -11,6 +11,9 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#ifdef MGP_NATIVE
+#include <png.h>
+#endif
 
 #include "mgp.h"   /* pulls in sdlx.h + image/xloadimage.h + the externs */
 
@@ -41,20 +44,66 @@ static Drawable dnew(int w, int h) {
 }
 
 void XFlush(Display *d) {
-	int n, i;
-	uint32_t *dst, *src;
+	int x, y;
+	uint32_t *src;
 	(void)d;
 	if (!sx_surf || !window) return;
-	n = sx_windraw.w * sx_windraw.h;
 	if (sx_surf->w != sx_windraw.w || sx_surf->h != sx_windraw.h) return;
 	src = sx_windraw.px;
-	dst = (uint32_t *)sx_surf->pixels;
-	for (i = 0; i < n; i++) {
-		uint32_t p = src[i];
-		dst[i] = ((p >> 16) & 0xff) | (p & 0x00ff00) |
-		         ((p & 0xff) << 16) | 0xff000000u;
+	if (sx_surf->pitch == sx_surf->w * 2) {
+		for (y = 0; y < sx_surf->h; y++) {
+			uint16_t *dst = (uint16_t *)((unsigned char *)sx_surf->pixels +
+			                              (size_t)y * sx_surf->pitch);
+			for (x = 0; x < sx_surf->w; x++) {
+				uint32_t p = src[(size_t)y * sx_surf->w + x];
+				dst[x] = (uint16_t)(((p >> 8) & 0xf800) |
+				                    ((p >> 5) & 0x07e0) | ((p >> 3) & 0x001f));
+			}
+		}
+	} else if (sx_surf->pitch >= sx_surf->w * 4) {
+		for (y = 0; y < sx_surf->h; y++) {
+			uint32_t *dst = (uint32_t *)((unsigned char *)sx_surf->pixels +
+			                              (size_t)y * sx_surf->pitch);
+			for (x = 0; x < sx_surf->w; x++) {
+				uint32_t p = src[(size_t)y * sx_surf->w + x];
+				dst[x] = ((p >> 16) & 0xff) | (p & 0x00ff00) |
+				         ((p & 0xff) << 16) | 0xff000000u;
+			}
+		}
 	}
 	SDL_UpdateWindowSurface(sx_win);
+#ifdef MGP_NATIVE
+	{
+		const char *path = getenv("MGP_NATIVE_SHOT");
+		if (path && path[0]) {
+			FILE *fp = fopen(path, "wb");
+			png_structp png = fp ? png_create_write_struct(PNG_LIBPNG_VER_STRING,
+			                                                NULL, NULL, NULL) : NULL;
+			png_infop info = png ? png_create_info_struct(png) : NULL;
+			if (fp && png && info && !setjmp(png_jmpbuf(png))) {
+				png_init_io(png, fp);
+				png_set_IHDR(png, info, sx_windraw.w, sx_windraw.h, 8,
+				             PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+				             PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+				png_write_info(png, info);
+				for (y = 0; y < sx_windraw.h; y++) {
+					png_bytep row = malloc((size_t)sx_windraw.w * 3);
+					for (x = 0; x < sx_windraw.w; x++) {
+						uint32_t p = src[(size_t)y * sx_windraw.w + x];
+						row[x * 3] = (png_byte)(p >> 16);
+						row[x * 3 + 1] = (png_byte)(p >> 8);
+						row[x * 3 + 2] = (png_byte)p;
+					}
+					png_write_row(png, row);
+					free(row);
+				}
+				png_write_end(png, info);
+			}
+			if (png) png_destroy_write_struct(&png, info ? &info : NULL);
+			if (fp) fclose(fp);
+		}
+	}
+#endif
 }
 
 void XSync(Display *d, Bool b) { (void)b; XFlush(d); }
@@ -849,7 +898,14 @@ void toggle_fullscreen(void) {
 	/* no fullscreen protocol here; the WM's maximize is the analog */
 }
 
-void finish_win(void) { }
+void finish_win(void) {
+#ifdef MGP_NATIVE
+	if (sx_win) SDL_DestroyWindow(sx_win);
+	sx_win = NULL;
+	sx_surf = NULL;
+	SDL_Quit();
+#endif
+}
 
 int get_color(char *colorname, unsigned long *value) {
 	unsigned long v;
@@ -887,7 +943,14 @@ void reset_cache_pixmap(void) {
 /* frame-callback registration (the runtime's __setAnimationFrameFunc,
  * wrapped so mgp.c needs no SDL include) */
 void sdlx_frame_hook(void (*cb)(void)) {
+#ifdef MGP_NATIVE
+	for (;;) {
+		cb();
+		SDL_Delay(16);
+	}
+#else
 	__setAnimationFrameFunc(cb);
+#endif
 }
 
 /* Idle park (todos/0161, IDLE-POWER Stage 2), wrapped so mgp.c needs no

@@ -766,7 +766,7 @@ command:
 			 */
 			if (buf[0] == 0x5c && (buf[1] == 0x23 ||
 						buf[1] == 0x25))
-				memcpy(&buf[0], &buf[1], strlen(buf));
+				memmove(&buf[0], &buf[1], strlen(buf));
 
 			/*
 			 * clear escape sequences

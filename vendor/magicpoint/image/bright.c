@@ -255,6 +255,7 @@ Image *normalize(image, verbose)
 
 void gray(image, verbose)
      Image *image;
+     int verbose;
 { int a;
   unsigned int size;
   Intensity intensity, red, green, blue;

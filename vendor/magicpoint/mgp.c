@@ -224,6 +224,10 @@ main(argc, argv)
 	setlocale(LC_CTYPE, "");
 #endif
 	progname = argv[0];
+#ifdef MGP_NATIVE
+	if ((p = getenv("MGP_FONT")) != NULL && p[0])
+		freetypefont0 = p;
+#endif
 
 	/* secure by default.  If you need fork/exec, use -U */
 	mgp_flag |= FL_NOFORK;

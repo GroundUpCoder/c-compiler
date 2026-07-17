@@ -74,6 +74,7 @@ static Image *doSmooth(image)
 
 Image *smooth(image, iterations, verbose)
      Image *image;
+     int    iterations;
      int    verbose;
 { int a;
   Image *old, *new;

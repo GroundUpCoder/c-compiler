@@ -40,6 +40,7 @@ int *new_pos;				/* Destination bit position */
 Image *rotate(simage, degrees, verbose)
 Image *simage;				/* Image to rotate             */
 int    degrees;				/* Number of degrees to rotate */
+int    verbose;
 { 
   char buf[BUFSIZ];			/* New title                   */
   Image    *image1;			/* Source image                */
@@ -142,4 +143,3 @@ int    degrees;				/* Number of degrees to rotate */
     fprintf(stderr, "done\n");
   return(image1);
 }
-
