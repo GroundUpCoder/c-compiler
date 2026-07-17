@@ -21,6 +21,48 @@ space / click: next    b: back    q: quit
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
+The dream is old
+
+	2009: Xcerion "icloud" - a desktop in a tab
+		file manager, mail, media player, DOS prompt
+	the vision ran ahead of the runtime
+	16 years later, the runtime caught up
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+OS in a browser, 4 ways
+
+%size 4, left, prefix "  ", vgap 60
+%fore "yellow"
+JS desktop      
+%cont, fore "white"
+daedalOS - 4 years, solo
+%fore "yellow"
+x86 emulator    
+%cont, fore "white"
+v86 - Win95 in a tab
+%fore "yellow"
+kernel port     
+%cont, fore "white"
+linux-wasm - 2025
+%fore "yellow"
+remote stream   
+%cont, fore "white"
+pixels from a cloud VM
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
+gucOS: a fifth way
+
+	an operating system in a browser tab
+	no emulator, no JS desktop, no kernel port
+	every binary: real C -> a real wasm module
+	built by its own compiler, inside it
+		emulators pay at every instruction
+		gucOS pays only at syscalls
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
 What is an OS anyway?
 
 	"it talks to the hardware for you"
@@ -52,18 +94,47 @@ Isn't emscripten POSIX?
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
-gucOS
+The job list, three ways
 
-	an operating system in a browser tab
-	every binary is a wasm module
-	built by its own compiler, inside it
-	the OS job list, three ways:
-%size 6, center, fore "SpringGreen"
-DO
-%size 6, center, fore "orange"
-DON'T
-%size 6, center, fore "DeepSkyBlue"
+%size 4, left, prefix "  ", vgap 45
+%fore "SpringGreen"
+DO              
+%cont, fore "orange"
+DON'T           
+%cont, fore "DeepSkyBlue"
 DON'T NEED TO
+%fore "SpringGreen"
+--------------  
+%cont, fore "orange"
+--------------  
+%cont, fore "DeepSkyBlue"
+--------------
+%fore "SpringGreen"
+processes       
+%cont, fore "orange"
+threads         
+%cont, fore "DeepSkyBlue"
+a scheduler
+%fore "SpringGreen"
+pipes, ptys     
+%cont, fore "orange"
+fork            
+%cont, fore "DeepSkyBlue"
+drivers
+%fore "SpringGreen"
+signals         
+%cont, fore "orange"
+preemption      
+%cont, fore "DeepSkyBlue"
+an MMU
+%fore "SpringGreen"
+a filesystem    
+%cont, fore "DeepSkyBlue"
+                boot
+%fore "SpringGreen"
+a desktop       
+%cont, fore "DeepSkyBlue"
+                ext4
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
@@ -141,6 +212,58 @@ input       browser events
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
+What runs today
+
+%size 4, left, prefix "  ", vgap 45
+%fore "yellow"
+Unix            
+%cont, fore "yellow"
+games           
+%cont, fore "yellow"
+Windows
+%fore "white"
+--------------  
+%cont, fore "white"
+--------------  
+%cont, fore "white"
+--------------
+%fore "white"
+busybox hush    
+%cont, fore "white"
+DOOM            
+%cont, fore "white"
+winmine
+%fore "white"
+81 applets      
+%cont, fore "white"
+Quake           
+%cont, fore "white"
+notepad
+%fore "white"
+vi              
+%cont, fore "white"
+SameBoy GB/GBC  
+%cont, fore "white"
+calc
+%fore "white"
+cc, strace      
+%cont, fore "white"
+snake           
+%cont, fore "white"
+ReactOS sources
+%fore "white"
+lua, sqlite3    
+%cont, fore "white"
+                the Win32 veneer
+%fore "white"
+micropython
+%fore "yellow", center
+%size 4
+
+all of it real C. all of it wasm. demo time.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%page
+
 How slow is it?
 
 	a syscall is a message to the kernel worker
@@ -150,24 +273,6 @@ How slow is it?
 		/usr reads - local, 496 -> 1345 MB/s
 		pipes - shared rings, 272 -> 443 MB/s
 		an 8MB pipe job: 280 syscalls down to 4
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-Why not emulate?
-
-	tinyemu and v86 emulate a whole CPU
-	they can preempt at any instruction
-	they pay at every instruction
-	gucOS pays only at syscalls
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%page
-
-Prior art
-
-	Browsix - same idea. has fork. no desktop.
-	WASIX - full POSIX on wasm. pays for it.
-	tinyemu / v86 - emulators. boot real Linux.
-	WebVM / CheerpX - x86 JIT in a tab
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
