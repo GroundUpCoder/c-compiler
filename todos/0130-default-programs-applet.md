@@ -21,26 +21,29 @@ applet hub (0089) with a `default.gui` stub already, so this slots in as
 a 7th applet over a stable, already-shipped backend (`os/openwith.h`) —
 zero new mechanism.
 
-The backend is 100% done: `ow_load` (first-existing store:
-`~/.config/openwith` → `/etc/openwith` → `/usr/share/openwith`),
-`ow_find`/`ow_resolve` (extension key → `default.gui`/`default.term`),
-`ow_set` (rewrites the effective table forward into
-`~/.config/openwith` via tmp+rename). This item is UI + a small CLI
-read path, nothing else.
+The backend is 100% done: `ow_load` (since todos/0244 a PER-KEY overlay
+of `~/.config/openwith` > `/etc/openwith` > `/usr/share/openwith` —
+os/cfgstore.h), `ow_find`/`ow_resolve` (extension key →
+`default.gui`/`default.term`), `ow_set` (delta-writes just the changed
+key to `~/.config/openwith` via tmp+rename). This item is UI + a small
+CLI read path, nothing else.
 
 ## Plan
 
 - **A `open --list` read path** (`os/open.c` + a tiny `ow_each`/iterator
   in `os/openwith.h`): print the effective `KEY<ws>COMMAND` table
   (extension keys + `default.gui`/`default.term`), so the applet and the
-  shell share one enumeration of the store. Keep it whole-table (the
-  first-existing-file, no-merge model — don't invent per-key merge here).
+  shell share one enumeration of the store. NB since todos/0244 the store
+  is a per-key three-layer overlay: the iterator must dedup keys over the
+  merged text (first occurrence wins — the cfg_find rule).
 - **A Default Programs applet** in `ctlpanel.c` (new `APP_*` enum entry,
   `APP_DEF[]` row, `draw_art()` pictogram, own `*_proc`): a LISTBOX of
   current associations (extension → command, plus the two `default.*`
   rows), an EDIT for the command of the selected key, and Set / Remove
-  buttons that call `ow_set` (Remove = write the key out of the effective
-  table, same rewrite path). An "Add…" affordance to associate a new
+  buttons that call `ow_set` (Remove under the 0244 delta model = drop the
+  key from the USER file, so resolution reverts to the /etc//usr/share
+  layer; removing a BAKED key outright would need a tombstone — decide
+  there whether that's wanted). An "Add…" affordance to associate a new
   extension. All writes land in `~/.config/openwith` exactly like the CLI
   and fileman picker — three editors, one store, one format.
 - Keep it agent-drivable per the OS.md pillar: label-addressable buttons,

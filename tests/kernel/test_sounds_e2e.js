@@ -121,8 +121,26 @@ int main(void) {
     phase("P12", PlaySoundA(NULL, NULL, 0));
     /* P13: SND_SYNC returns only after the clip's duration cap */
     phase("P13", PlaySoundA("/usr/share/sounds/c.wav", NULL, SND_FILENAME));
-    /* P14 (blocks): MessageBox with the error icon beeps SystemHand */
-    printf("P14\\n");
+    /* P15-P18 (CS3, cfgstore.h overlay): a user store holding ONLY one
+       override key. Pre-CS3 the mere existence of ~/.config/sounds hid the
+       baked scheme whole-file; the per-key overlay must keep serving every
+       baked key the user didn't override, while the override wins. */
+    {
+        FILE *f = fopen("/root/.config/sounds", "w");
+        fprintf(f, "SystemQuestion\\t/usr/share/sounds/c.wav\\n");
+        fclose(f);
+    }
+    /* P15: a baked-only alias still reaches through the user file
+       (SND_NODEFAULT so a miss is FALSE, not a SystemDefault fallback —
+       which would ALSO miss pre-CS3, but keep the verdict sharp) */
+    phase("P15", PlaySoundA("SystemStart", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT));
+    phase("P16", PlaySoundA(NULL, NULL, 0));
+    /* P17: the user override WINS over the baked value (baked says none,
+       the user maps it to c.wav) */
+    phase("P17", PlaySoundA("SystemQuestion", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT));
+    phase("P18", PlaySoundA(NULL, NULL, 0));
+    /* P19 (blocks): MessageBox with the error icon beeps SystemHand */
+    printf("P19\\n");
     fflush(stdout);
     MessageBox(NULL, "boom", "Error", MB_OK | MB_ICONHAND);
     return 0;
@@ -229,7 +247,7 @@ const watchdog = setTimeout(() => {
   await waitOut('P13=1');
   // SND_SYNC destroyed its stream after the duration cap: it is dying with
   // the clip still queued (nothing pumped) — pump drains it dry, reclaim.
-  // P14's MessageBox beep may already be a NEW live stream by now, so the
+  // P15's overlay play may already be a NEW live stream by now, so the
   // condition is "no dying streams left", not an empty list.
   await waitFor(() => {
     kernel.audioPump(4096);
@@ -238,11 +256,27 @@ const watchdog = setTimeout(() => {
   });
   check('P13 SND_SYNC returned; dying stream drains dry + reclaims', true);
 
-  await waitOut('P14');
-  // A LIVE stream stays listed however much the P13 drain loop pumped from
+  // -- CS3 (cfgstore.h): per-key overlay through a user-override-only store --
+  await waitOut('P15=1');
+  // The P13 drain loop may have pumped from it — presence at 22050 is the
+  // assertion, not the queued byte count.
+  await waitFor(() => kernel.audioList().some((s) => !s.dying && s.freq === 22050));
+  check('P15 baked-only alias reaches through a customized user store (22050)', true);
+  await waitOut('P16=1');
+  await waitFor(() => kernel.audioList().length === 0);
+  check('P16 stop reclaims', true);
+  await waitOut('P17=1');
+  await waitFor(() => kernel.audioList().some((s) => !s.dying && s.freq === 11025));
+  check('P17 user override wins over the baked `none` (11025)', true);
+  await waitOut('P18=1');
+  await waitFor(() => kernel.audioList().length === 0);
+  check('P18 stop reclaims', true);
+
+  await waitOut('P19');
+  // A LIVE stream stays listed however much earlier drain loops pumped from
   // it — presence at 32000 is the assertion, not the queued byte count.
   await waitFor(() => kernel.audioList().some((s) => !s.dying && s.freq === 32000));
-  check('P14 MessageBox(MB_ICONHAND) beeps SystemHand (32000)', true);
+  check('P19 MessageBox(MB_ICONHAND) beeps SystemHand (32000)', true);
 
   kernel.kill(1, 9, null);
   await waitFor(() => {

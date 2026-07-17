@@ -450,14 +450,15 @@ ordinary `#!/bin/sh` scripts; the old first-line-argv menu format
 is gone, menu/snake became a real script); anything else opens
 through the openwith associations (todos/0072, `os/openwith.h` —
 ONE header-only resolver shared by wm.c, fileman and `/bin/open`):
-store = first existing of `~/.config/openwith`, `/etc/openwith`,
-`/usr/share/openwith` (whole-file, no merge; `KEY<ws>COMMAND` lines,
+store = `~/.config/openwith` > `/etc/openwith` >
+`/usr/share/openwith` overlaid PER KEY (`os/cfgstore.h`, arch CS3 —
+highest layer defining a key wins; `KEY<ws>COMMAND` lines,
 KEY = lowercase extension or `default.gui`/`default.term`; path
 appended as one arg; bare words resolve via /usr/local/bin:/bin),
 baked seed: gb/gbc → `/bin/sameboy`, `default.gui → /bin/notepad`,
 `default.term → vi`; `open --set KEY CMD` and fileman's "With"
-picker ("Always" checkbox) write `~/.config/openwith` with the
-effective table carried forward; the
+picker ("Always" checkbox) delta-write just the changed key to
+`~/.config/openwith`, so new baked defaults keep reaching; the
 kernel title bar has [min][max][close] boxes (min = wmMinimize direct,
 max = EV_TITLE_ACTIVATE, each box only if it fits the title — 32px
 windows stay draggable); the taskbar has a right-aligned HH.MM clock,
@@ -699,8 +700,8 @@ confirm (no dialog furniture in wm.c; fileman's flows do). Tests:
 The sound scheme (todos/0094): event sounds through the 0017 mixer.
 The ONE core is `os/sounds.h` (header-only — wm.c's SystemStart boot
 chime and winmm's PlaySound are the same code): scheme store =
-first-existing of `~/.config/sounds`, `/etc/sounds`,
-`/usr/share/sounds/scheme` (whole-file; `EVENT<ws>WAV-PATH` lines;
+`~/.config/sounds` > `/etc/sounds` > `/usr/share/sounds/scheme`
+overlaid per key (cfgstore.h; `EVENT<ws>WAV-PATH` lines;
 `none` = per-event silence; reserved `mute on` = silence all), PCM
 u8/s16 WAV parse, fire-and-forget playback (open stream at the clip's
 spec, push whole, resume, destroy — AUDIO_CLOSE drains dry; pumpless
@@ -712,7 +713,7 @@ silent success — corpus .wavs not vendored, winmine must not ding
 per-second; SND_LOOP plays once); user32 grew real MessageBeep (icon
 nibble → Win95 aliases: Hand/Question/Exclamation/Asterisk/Default)
 and MessageBox beeps its icon at open; ctlpanel grew the Sounds applet
-(enable checkbox = `snd_set_mute`, effective table carried forward;
+(enable checkbox = `snd_set_mute`, a mute-key-only delta write;
 Test button). Clips are SYNTHESIZED (`tools/mksounds.js` → committed
 `os/sounds/*.wav`, baked to `/usr/share/sounds/`). The 0017 pump grew
 spent-tail reclaim: "dry" = can't back another output frame — at
@@ -757,11 +758,11 @@ without waking it), read via GET_IDLE 0x1E → R_IDLE 0x44 (`wmctl
 idle`; own reply type so wm.c's drain can route it, the R_SHOT
 precedent); SAVER 0x1F → EV_SAVER 0x90 (`wmctl saver` / ctlpanel
 Preview; the EV_MENU rules). wm.c: polls GET_IDLE once a second,
-config via os/saver.h (openwith-shaped first-existing whole-file:
-~/.config/screensaver, /etc/screensaver, baked /usr/share/screensaver;
+config via os/saver.h (openwith-shaped cfgstore.h per-key overlay:
+~/.config/screensaver > /etc/screensaver > baked /usr/share/screensaver;
 keys saver none|marquee|starfield, timeout seconds, text; default
 starfield/900s — 900 > the 600s test cap so no headless e2e can have
-it raise mid-run; sv_set carry-forward writes serve the ctlpanel
+it raise mid-run; sv_set delta-writes serve the ctlpanel
 Screen Saver applet's radios/Apply); past the timeout a fullscreen
 borderless TOP-layer "screensaver" window raises and — the ONE
 exception to the peek focus hand-back — KEEPS focus (the echo's
@@ -775,7 +776,7 @@ Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-Image version is **v111**.
+Image version is **v112**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

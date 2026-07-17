@@ -19,8 +19,8 @@
  *               settext EDIT:0 + click Set goes absolute, the label reads
  *               back via gettext — the e2e drives exactly that.
  *   Sounds    — the event-sound scheme (todos/0094, os/sounds.h): enable/
- *               mute checkbox (snd_set_mute writes ~/.config/sounds with
- *               the effective table carried forward) + a Test button
+ *               mute checkbox (snd_set_mute writes just the mute key to
+ *               ~/.config/sounds — cfgstore.h delta) + a Test button
  *               (PlaySound SystemDefault). Distinct from Sound: that is
  *               the volume knob, this is the scheme.
  *   System    — the 0048 info readout (/usr/share/os-release + the 0043

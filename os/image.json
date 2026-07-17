@@ -1,5 +1,5 @@
 {
-  "version": 111,
+  "version": 112,
   "overlays": [
     {
       "id": "clang-apps",
@@ -46,6 +46,7 @@
           "wm_proto.h",
           "launch.h",
           "openwith.h",
+          "cfgstore.h",
           "fileops.h",
           "sounds.h",
           "saver.h"
@@ -54,7 +55,8 @@
       "/usr/bin/open": {
         "c": "open.c",
         "hdrs": [
-          "openwith.h"
+          "openwith.h",
+          "cfgstore.h"
         ]
       },
       "/usr/bin/strace": {
@@ -293,10 +295,10 @@
         "bin": "vendor/freetype/demo/robotomono.ttf"
       },
       "/usr/share/sounds/scheme": {
-        "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. First existing\n# file wins, whole-file (no merge): ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\n"
+        "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\n"
       },
       "/usr/share/screensaver": {
-        "content": "# Screensaver configuration (todos/0096), consulted by /bin/wm (the idle\n# raise) and the Control Panel Screen Saver applet through os/saver.h.\n# First existing file wins, whole-file (no merge): ~/.config/screensaver,\n# /etc/screensaver, /usr/share/screensaver. Keys: saver (none | marquee |\n# starfield), timeout (idle seconds; 0 disables), text (marquee banner).\nsaver\tstarfield\ntimeout\t900\ntext\tgucOS\n"
+        "content": "# Screensaver configuration (todos/0096), consulted by /bin/wm (the idle\n# raise) and the Control Panel Screen Saver applet through os/saver.h.\n# Three layers overlaid per key, highest wins: ~/.config/screensaver,\n# /etc/screensaver, /usr/share/screensaver. Keys: saver (none | marquee |\n# starfield), timeout (idle seconds; 0 disables), text (marquee banner).\nsaver\tstarfield\ntimeout\t900\ntext\tgucOS\n"
       },
       "/usr/share/sounds/startup.wav": {
         "bin": "os/sounds/startup.wav"
@@ -311,7 +313,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). First existing file wins, whole-file (no merge):\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nnes\t/bin/punes\nbmp\t/bin/paint\nsent\t/bin/sent\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nnes\t/bin/punes\nbmp\t/bin/paint\nsent\t/bin/sent\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

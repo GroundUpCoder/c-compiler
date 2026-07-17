@@ -111,8 +111,9 @@ const out = boot([
   'echo ==tree5',
   'wmctl tree',
   'echo ==cut',
-  // the Sounds applet (0094): the event-scheme mute toggle writes
-  // ~/.config/sounds with the baked table carried forward
+  // the Sounds applet (0094): the event-scheme mute toggle writes just the
+  // mute key to ~/.config/sounds (CS3 cfgstore delta — baked events keep
+  // reaching through the per-key overlay)
   'wmctl click Sounds',
   'wmctl wait win "Sounds Properties" 6000',
   'echo ==tree6',
@@ -211,9 +212,8 @@ check('Sounds applet opens with the enable checkbox + Test',
 const snd1 = section(out, 'snd1');
 check('unchecking writes mute on to ~/.config/sounds',
   /^mute\ton$/m.test(snd1), snd1);
-check('the baked table carries forward past the first write',
-  /^SystemStart\t\/usr\/share\/sounds\/startup\.wav$/m.test(snd1) &&
-  /^SystemHand\t\/usr\/share\/sounds\/chord\.wav$/m.test(snd1), snd1);
+check('the user store is a pure override delta (CS3: no baked-table snapshot)',
+  !/SystemStart/.test(snd1) && !/SystemHand/.test(snd1), snd1);
 const snd2 = section(out, 'snd2');
 check('rechecking flips it to mute off',
   /^mute\toff$/m.test(snd2) && !/^mute\ton$/m.test(snd2), snd2);

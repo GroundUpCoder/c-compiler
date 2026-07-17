@@ -188,10 +188,10 @@ check('wmctl saver raises the configured saver immediately',
 check('Marquee radio clicked via the agent tree', out.includes('radio-clicked'));
 {
   const store1 = section('store1');
-  check('the radio wrote saver=marquee with the timeout carried forward',
+  check('the radio wrote saver=marquee, preserving the other USER key (CS3 delta)',
     /saver\tmarquee/.test(store1) && /timeout[ \t]300/.test(store1), JSON.stringify(store1));
   const store2 = section('store2');
-  check('Apply wrote timeout=7 with the saver choice carried forward',
+  check('Apply wrote timeout=7, preserving the saver choice (CS3 delta)',
     /timeout\t7\n/.test(store2) && /saver\tmarquee/.test(store2), JSON.stringify(store2));
 }
 check('the applet Preview raises the saver (WMP SAVER)',

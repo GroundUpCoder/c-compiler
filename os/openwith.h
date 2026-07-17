@@ -6,10 +6,10 @@
  * with" picker) and open.c (the terminal-context CLI) all include this and
  * must stay behaviorally identical through it.
  *
- * The store is a plain text map; the first existing file wins, whole-file
- * (no per-key merge — the /etc/menu first-existing-dir precedent,
- * todos/0040; ow_set copies the effective table forward so defaults
- * survive the first user write):
+ * The store is a plain text map in three layers, overlaid PER KEY — a
+ * key's value comes from the highest-precedence layer that defines it
+ * (cfgstore.h, arch CS3; ow_set writes only the changed key to the user
+ * layer, so new baked defaults keep reaching customized users):
  *   $HOME/.config/openwith   per-user (what ow_set writes)
  *   /etc/openwith            admin override
  *   /usr/share/openwith      baked default (os/image.json)
@@ -32,7 +32,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define OW_STORE_MAX 4096
+#include "cfgstore.h"
+
+#define OW_STORE_MAX CFG_STORE_MAX
 #define OW_CMD_MAX   256
 
 /* "Runnable" = the kernel can exec it: a wasm binary (`\0asm`) or a `#!`
@@ -49,15 +51,6 @@ static int ow_is_runnable(const char *path) {
     return 0;
 }
 
-static const char *ow_home(void) {
-    const char *h = getenv("HOME");
-    return (h && *h) ? h : "/root";   /* kernel services run env-less */
-}
-
-static void ow_user_path(char *out, size_t sz) {
-    snprintf(out, sz, "%s/.config/openwith", ow_home());
-}
-
 /* The association key for a path: its lowercase extension (basename only;
  * a leading dot is a dotfile, not an extension). Returns 1 if there is
  * one. */
@@ -72,47 +65,17 @@ static int ow_key_for(const char *path, char *key, size_t sz) {
     return 1;
 }
 
-/* Load the effective store (first existing file wins). Returns 1 and the
- * NUL-terminated text, or 0 with text[0] == 0. */
+/* Load the effective store (per-key overlay of the existing layers).
+ * Returns 1 and the NUL-terminated text, or 0 with text[0] == 0. */
 static int ow_load(char *text, size_t sz) {
     char user[300];
-    ow_user_path(user, sizeof user);
-    const char *paths[3] = { user, "/etc/openwith", "/usr/share/openwith" };
-    text[0] = 0;
-    for (int i = 0; i < 3; i++) {
-        FILE *f = fopen(paths[i], "r");
-        if (!f) continue;
-        size_t n = fread(text, 1, sz - 1, f);
-        fclose(f);
-        text[n] = 0;
-        return 1;
-    }
-    return 0;
+    cfg_user_path(user, sizeof user, "openwith");
+    return cfg_load3(text, sz, user, "/etc/openwith", "/usr/share/openwith");
 }
 
 /* Find `key` in store text; copies its command into cmd. */
 static int ow_find(const char *text, const char *key, char *cmd, size_t sz) {
-    size_t klen = strlen(key);
-    const char *p = text;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        if (*p != '#' && len > klen &&
-            strncasecmp(p, key, klen) == 0 && (p[klen] == ' ' || p[klen] == '\t')) {
-            const char *v = p + klen;
-            while (v < p + len && (*v == ' ' || *v == '\t')) v++;
-            size_t vlen = (size_t)(p + len - v);
-            while (vlen && (v[vlen - 1] == ' ' || v[vlen - 1] == '\t' || v[vlen - 1] == '\r')) vlen--;
-            if (vlen && vlen < sz) {
-                memcpy(cmd, v, vlen);
-                cmd[vlen] = 0;
-                return 1;
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    return 0;
+    return cfg_find(text, key, cmd, sz);
 }
 
 /* The command that opens `path` in this context (gui: the desktop/fileman
@@ -137,45 +100,11 @@ static void ow_editor(char *cmd, size_t sz) {
     snprintf(cmd, sz, "term vi");
 }
 
-/* Write an association: rewrite the EFFECTIVE table with `key` set to
- * `cmd` into $HOME/.config/openwith (tmp + rename), so baked defaults
- * carry forward past the first user write. Returns 0, or -1. */
+/* Write an association: set `key` to `cmd` in the USER layer only
+ * (cfgstore.h delta-write — the admin/baked layers keep serving every
+ * other key through the overlay). Returns 0, or -1. */
 static int ow_set(const char *key, const char *cmd) {
-    char text[OW_STORE_MAX], out[OW_STORE_MAX + 512];
-    size_t klen = strlen(key), k = 0;
-    int replaced = 0;
-    ow_load(text, sizeof text);
-    const char *p = text;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        int is_key = *p != '#' && len > klen &&
-            strncasecmp(p, key, klen) == 0 && (p[klen] == ' ' || p[klen] == '\t');
-        if (is_key && !replaced) {
-            k += (size_t)snprintf(out + k, sizeof out - k, "%s\t%s\n", key, cmd);
-            replaced = 1;
-        } else if (!is_key && k + len + 1 < sizeof out) {
-            memcpy(out + k, p, len);
-            out[k + len] = '\n';
-            k += len + 1;
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    if (!replaced) k += (size_t)snprintf(out + k, sizeof out - k, "%s\t%s\n", key, cmd);
-    if (k >= sizeof out) return -1;
-
-    char dir[300], tmp[300], dst[300];
-    snprintf(dir, sizeof dir, "%s/.config", ow_home());
-    mkdir(dir, 0755);   /* EEXIST is fine */
-    snprintf(tmp, sizeof tmp, "%s/.openwith.tmp", dir);
-    snprintf(dst, sizeof dst, "%s/openwith", dir);
-    FILE *f = fopen(tmp, "w");
-    if (!f) return -1;
-    size_t w = fwrite(out, 1, k, f);
-    if (fclose(f) != 0 || w != k) { remove(tmp); return -1; }
-    if (rename(tmp, dst) != 0) { remove(tmp); return -1; }
-    return 0;
+    return cfg_set("openwith", key, cmd);
 }
 
 /* Build the argv for `cmd path`: split cmd into at most maxargs-2 words

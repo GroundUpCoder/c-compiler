@@ -5,8 +5,8 @@
  * os/win32/winmm.c (PlaySound, which user32's MessageBeep rides) include
  * this and must stay behaviorally identical through it.
  *
- * The store is a plain text map from event names to WAV paths; the first
- * existing file wins, whole-file (no per-key merge — the openwith rule):
+ * The store is a plain text map from event names to WAV paths in three
+ * layers, overlaid PER KEY (cfgstore.h, arch CS3 — the openwith rule):
  *   $HOME/.config/sounds     per-user (what snd_set_mute writes)
  *   /etc/sounds              admin override
  *   /usr/share/sounds/scheme baked default (os/image.json; clips are the
@@ -14,9 +14,10 @@
  * Lines: EVENT<ws>PATH; '#' starts a comment; matching is case-insensitive.
  * PATH `none` silences that event explicitly (no default fallback). The
  * reserved key `mute` with value `on` silences EVERY event — the Control
- * Panel Sounds applet toggles it, carrying the effective table forward so
- * baked mappings survive the first user write. No store at all = silence
- * (standalone processes outside the OS image keep the pre-0094 quiet).
+ * Panel Sounds applet toggles it via snd_set_mute, which writes ONLY the
+ * mute key to the user layer, so baked mappings keep reaching the user
+ * through the overlay. No store at all = silence (standalone processes
+ * outside the OS image keep the pre-0094 quiet).
  *
  * Events shipped in the baked scheme (Win95-canonical alias names):
  *   SystemStart, SystemDefault, SystemHand (error), SystemQuestion,
@@ -41,56 +42,23 @@
 #include <strings.h>
 #include <sys/stat.h>
 
-#define SND_STORE_MAX 4096
+#include "cfgstore.h"
+
+#define SND_STORE_MAX CFG_STORE_MAX
 #define SND_PATH_MAX  256
 #define SND_WAV_MAX   (512 * 1024)
 
-static const char *snd_home(void) {
-    const char *h = getenv("HOME");
-    return (h && *h) ? h : "/root";   /* kernel services run env-less */
-}
-
-/* Load the effective store (first existing file wins). Returns 1 and the
- * NUL-terminated text, or 0 with text[0] == 0. */
+/* Load the effective store (per-key overlay of the existing layers).
+ * Returns 1 and the NUL-terminated text, or 0 with text[0] == 0. */
 static int snd_load(char *text, size_t sz) {
     char user[300];
-    snprintf(user, sizeof user, "%s/.config/sounds", snd_home());
-    const char *paths[3] = { user, "/etc/sounds", "/usr/share/sounds/scheme" };
-    text[0] = 0;
-    for (int i = 0; i < 3; i++) {
-        FILE *f = fopen(paths[i], "r");
-        if (!f) continue;
-        size_t n = fread(text, 1, sz - 1, f);
-        fclose(f);
-        text[n] = 0;
-        return 1;
-    }
-    return 0;
+    cfg_user_path(user, sizeof user, "sounds");
+    return cfg_load3(text, sz, user, "/etc/sounds", "/usr/share/sounds/scheme");
 }
 
-/* Find `key` in store text; copies its value into val. (ow_find, verbatim.) */
+/* Find `key` in store text; copies its value into val. */
 static int snd_find(const char *text, const char *key, char *val, size_t sz) {
-    size_t klen = strlen(key);
-    const char *p = text;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        if (*p != '#' && len > klen &&
-            strncasecmp(p, key, klen) == 0 && (p[klen] == ' ' || p[klen] == '\t')) {
-            const char *v = p + klen;
-            while (v < p + len && (*v == ' ' || *v == '\t')) v++;
-            size_t vlen = (size_t)(p + len - v);
-            while (vlen && (v[vlen - 1] == ' ' || v[vlen - 1] == '\t' || v[vlen - 1] == '\r')) vlen--;
-            if (vlen && vlen < sz) {
-                memcpy(val, v, vlen);
-                val[vlen] = 0;
-                return 1;
-            }
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    return 0;
+    return cfg_find(text, key, val, sz);
 }
 
 /* Is the whole scheme muted? (the reserved `mute` key) */
@@ -114,45 +82,11 @@ static int snd_lookup(const char *event, char *path, size_t sz) {
     return 1;
 }
 
-/* Set or clear the mute flag: rewrite the EFFECTIVE table with `mute` set
- * into $HOME/.config/sounds (tmp + rename — the ow_set shape), so baked
- * mappings carry forward past the first user write. Returns 0, or -1. */
+/* Set or clear the mute flag in the USER layer only (cfgstore.h
+ * delta-write — the baked event mappings keep reaching the user through
+ * the overlay). Returns 0, or -1. */
 static int snd_set_mute(int on) {
-    char text[SND_STORE_MAX], out[SND_STORE_MAX + 64];
-    size_t k = 0;
-    int replaced = 0;
-    snd_load(text, sizeof text);
-    const char *p = text;
-    while (*p) {
-        const char *eol = strchr(p, '\n');
-        size_t len = eol ? (size_t)(eol - p) : strlen(p);
-        int is_key = *p != '#' && len > 4 &&
-            strncasecmp(p, "mute", 4) == 0 && (p[4] == ' ' || p[4] == '\t');
-        if (is_key && !replaced) {
-            k += (size_t)snprintf(out + k, sizeof out - k, "mute\t%s\n", on ? "on" : "off");
-            replaced = 1;
-        } else if (!is_key && k + len + 1 < sizeof out) {
-            memcpy(out + k, p, len);
-            out[k + len] = '\n';
-            k += len + 1;
-        }
-        if (!eol) break;
-        p = eol + 1;
-    }
-    if (!replaced) k += (size_t)snprintf(out + k, sizeof out - k, "mute\t%s\n", on ? "on" : "off");
-    if (k >= sizeof out) return -1;
-
-    char dir[300], tmp[300], dst[300];
-    snprintf(dir, sizeof dir, "%s/.config", snd_home());
-    mkdir(dir, 0755);   /* EEXIST is fine */
-    snprintf(tmp, sizeof tmp, "%s/.sounds.tmp", dir);
-    snprintf(dst, sizeof dst, "%s/sounds", dir);
-    FILE *f = fopen(tmp, "w");
-    if (!f) return -1;
-    size_t w = fwrite(out, 1, k, f);
-    if (fclose(f) != 0 || w != k) { remove(tmp); return -1; }
-    if (rename(tmp, dst) != 0) { remove(tmp); return -1; }
-    return 0;
+    return cfg_set("sounds", "mute", on ? "on" : "off");
 }
 
 /* ------------------------------------------------------------- playback */

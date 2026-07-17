@@ -10,7 +10,8 @@
  *
  * `open --set KEY CMD...` is the minimal association editor: KEY is an
  * extension (`gb`) or `default.gui` / `default.term`; the write lands in
- * $HOME/.config/openwith with the effective table carried forward.
+ * $HOME/.config/openwith as a per-key user override (cfgstore.h delta —
+ * the admin/baked layers keep serving every other key).
  */
 #include <errno.h>
 #include <spawn.h>

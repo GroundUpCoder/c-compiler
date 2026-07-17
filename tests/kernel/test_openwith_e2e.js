@@ -3,7 +3,8 @@
 // open app (os/openwith.h, one resolver shared by wm.c activate(),
 // fileman and /bin/open). Covers:
 //   - open(1), the terminal context: `--set` writes ~/.config/openwith
-//     (effective table carried forward from the baked /usr/share seed),
+//     as a pure per-key user delta (CS3 cfgstore overlay — the /etc and
+//     /usr/share layers keep serving every key the user didn't override),
 //     extension associations and default.term resolve, the file path is
 //     appended, missing files / bad usage fail loudly
 //   - the desktop GUI context: double-clicking a .gb icon launches
@@ -121,6 +122,21 @@ const out = boot([
   'echo ==cut',
   'open /root/missing.q || echo open-missing-fails',
   'open || echo open-usage-fails',
+
+  // ---- CS3 (cfgstore.h): lower-layer keys reach a customized user ----
+  // conf1 above is a pure user delta (zzz + default.term only), so the
+  // /etc and /usr/share layers keep serving every other key per-key.
+  // Pre-CS3 the user file's existence hid them whole-file: data.yyy would
+  // fall to the user default.term (probe.sh -> an `opened:` line), never
+  // /etc's probeB. (probe2 above is the override-wins twin: the user
+  // default.term shadows the baked `vi` line in the merged store.)
+  "printf '#!/bin/sh\\necho openedB:$1 >> /root/probe.out\\n' > /root/probeB.sh",
+  "printf 'yyy\\t/root/probeB.sh\\n' > /etc/openwith",
+  "printf 'w\\n' > /root/data.yyy",
+  'open /root/data.yyy && echo open-yyy-ok',
+  'echo ==ovl1',
+  'cat /root/probe.out',
+  'echo ==cut',
 
   // ---- fileman: .gb -> gameboy, picker, default.gui ----
   'fileman /root/owtest &',
@@ -246,13 +262,15 @@ check('default.term is pickable and honored for extension-less files',
   section(out, 'probe2').trim().split('\n')[1] === 'opened:/root/noext',
   JSON.stringify(section(out, 'probe2')));
 const conf1 = section(out, 'conf1');
-check('~/.config/openwith carries the baked defaults forward',
-  conf1.includes('gb\t/bin/sameboy') && conf1.includes('gbc\t/bin/sameboy') &&
-  conf1.includes('default.gui\t/bin/notepad'), conf1);
-check('...plus the user associations', conf1.includes('zzz\t/root/probe.sh') &&
-  conf1.includes('default.term\t/root/probe.sh'), conf1);
+check('~/.config/openwith is a pure user delta (CS3: no baked snapshot)',
+  conf1.includes('zzz\t/root/probe.sh') &&
+  conf1.includes('default.term\t/root/probe.sh') &&
+  !/^gb\t/m.test(conf1) && !conf1.includes('default.gui'), conf1);
 check('open on a missing file fails', out.includes('open-missing-fails'));
 check('open without args prints usage and fails', out.includes('open-usage-fails'));
+check('an /etc-layer key reaches through a customized user store (CS3 overlay)',
+  section(out, 'ovl1').includes('openedB:/root/data.yyy') &&
+  out.includes('open-yyy-ok'), JSON.stringify(section(out, 'ovl1')));
 
 check('fileman Open on a .gb launches sameboy (SameBoy window up)',
   count(section(out, 'list2'), /\tSameBoy$/) === 1, section(out, 'list2'));
