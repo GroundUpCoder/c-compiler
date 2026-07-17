@@ -1,11 +1,24 @@
 # SameBoy
 
 Game Boy / Game Boy Color emulator using the [SameBoy](https://github.com/LIJI32/SameBoy)
-core (MIT license, **v1.0.3**, commit 208ba4a) with an SDL frontend — the
-cycle-accurate accuracy/GBC sibling of `vendor/gameboy` (Peanut-GB). Installed
-as `/bin/sameboy` and, since it boots and runs better, the **default
+core (MIT license, **v1.0.3**, commit 208ba4a) — the cycle-accurate
+accuracy/GBC sibling of `vendor/gameboy` (Peanut-GB). Installed as
+`/bin/sameboy` and, since it boots and runs better, the **default
 `.gb`/`.gbc` handler** (todos/0075; 0072 store points here). Peanut-GB
 (`/bin/gameboy`) remains installed as the lighter alternate core.
+
+Since todos/0260 (menu-arch **M3**) the frontend (`src/main.c`, port glue
+only — the core is untouched) is a **win32 app** on the uniform menu
+facility: `RegisterClass`/`CreateWindowEx`/WndProc, GB buttons via
+`WM_KEYDOWN/UP`, the framebuffer presented through GDI
+(`SetDIBits`/`StretchBlt` ×3 into the client — the normal CPU bitmap
+transport, *not* CS_OWNCLIENT), and a PeekMessage pump inside the
+`__setAnimationFrameFunc` callback around the unchanged `GB_run_frame`
+cadence. Menu: File ▸ Open ROM… (real comdlg32 `GetOpenFileNameW` into a
+live ROM reload) / Quit; Emulation ▸ Pause / Reset / Auto Model / Force
+DMG / Force CGB (`GB_switch_model_and_reset`); Options ▸ Palette ▸
+Greyscale / DMG Green / MGB / GB Light (`GB_set_palette`) / Mute. Save
+states are deliberately absent (save_state.c is not in this build).
 
 The vendored subset is `Core/` only, minus the debugger, cheats, rewind and
 save-state translation units (built with `GB_DISABLE_DEBUGGER/CHEATS/
@@ -33,8 +46,9 @@ image, everything else to DMG. With no ROM argument a built-in test ROM
 
 ## Controls
 
-- Arrow keys = D-pad, Z = A, X = B, Enter = Start, Right Shift = Select
-- Battery saves land next to the ROM as `<rom>.sav` on window close.
+- Arrow keys = D-pad, Z = A, X = B, Enter = Start, Shift = Select
+- Battery saves land next to the ROM as `<rom>.sav` on window close (and
+  when Open ROM… swaps carts).
 
 ## Usage
 

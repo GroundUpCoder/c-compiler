@@ -192,7 +192,7 @@ hang-class miscompiles fail fast instead of stalling the suite.
 
 `vendor/` contains real-world C codebases already ported to this compiler — each has its own `bin.json`. **Check this list before proposing a "new" port; many obvious candidates are already done.** As of writing:
 
-- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; patch table in `vendor/sameboy/README.md`), `snake`
+- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; since todos/0260 a win32 app on the uniform menu facility — GDI-blitted client, File▸Open ROM… via comdlg32, Pause/model/palette menu; patch table in `vendor/sameboy/README.md`), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Presentations (0119, X→SDL ports — no Xlib shim, each fork patches its
   display layer to SDL directly)**: `sent` (suckless, ISC; drw rebuilt over
@@ -786,7 +786,7 @@ panel — search/pins/band — stays wm-drawn). wm.c links
 user32/kernel32 — gdi32's W wrappers live in gdi32w.c, veneer-side);
 the Start tree is the UNION of /etc/menu and /usr/share/menu (/etc wins
 same-name clashes — the gucman prerequisite, ex-0244/0250).
-Image version is **v119**.
+Image version is **v120**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

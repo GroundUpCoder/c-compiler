@@ -1,7 +1,10 @@
 {
   "bin": true,
   "name": "sameboy",
-  "description": "Game Boy / Game Boy Color emulator (SameBoy core — cycle-accurate)",
+  "description": "Game Boy / Game Boy Color emulator (SameBoy core — cycle-accurate; win32 frontend on the uniform menu facility since todos/0260)",
+  "deps": [
+    "../../os/win32/lib.json"
+  ],
   "compilerArgs": [
     "--allow-zero-length-arrays",
     "-DGB_INTERNAL",
