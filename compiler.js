@@ -4535,6 +4535,14 @@ function isBoolContextType(t) {
 // Compound assigns (X_ASSIGN) defer to the underlying op's rules.
 // Ref operands are tolerated here — the caller's ref-specific block
 // handles them with its own per-op messages.
+
+// Compound-assign op → its base binary op ("SHR_ASSIGN" → "SHR"). The ONE
+// _ASSIGN-stripping site — both sema (typesAreOperandCompatible) and codegen
+// (emitAssignment → emitBinaryAluOp) derive the base op through here.
+function baseOpOfCompound(op) {
+  return op.endsWith("_ASSIGN") ? op.slice(0, -"_ASSIGN".length) : op;
+}
+
 function typesAreOperandCompatible(op, leftType, rightType) {
   const meta = AST.BinOp[op];
   if (!meta) return true;
@@ -4549,7 +4557,7 @@ function typesAreOperandCompatible(op, leftType, rightType) {
   if (op === "ASSIGN") return true;
   // Compound assigns: evaluate as the underlying arithmetic/bitwise op.
   if (meta.isAssign) {
-    return typesAreOperandCompatible(op.replace("_ASSIGN", ""), leftType, rightType);
+    return typesAreOperandCompatible(baseOpOfCompound(op), leftType, rightType);
   }
   // Bitwise / shift: integer operands only.
   if (meta.isBitwise || meta.isShift) {
@@ -5407,7 +5415,7 @@ return {
   // Linearity tagging for optimizer correctness checks
   Linearity, joinLinearity,
   // Op metadata registries (text, linearity, classification flags)
-  BinOp, UnOp,
+  BinOp, UnOp, baseOpOfCompound,
   // Generic traversal / substitution for AST→AST passes
   walkExpr, substituteParams,
   // Bubble-up metadata container
@@ -18793,19 +18801,32 @@ class CodeGenerator {
     throw new Error(`emitAddressOf: unsupported expression ${expr.constructor.name}`);
   }
 
-  // --- Compound op ---
-  emitCompoundOp(wt, op, isUnsigned) {
+  // --- Binary ALU op ---
+  // THE op → ALU opcode+signedness table: the sole place a C binary op
+  // picks a wasm ALU opcode. Plain binaries pass their op directly;
+  // compound assigns route through baseOpOfCompound (so a signedness fix
+  // here covers both forms — compares never arrive from the compound
+  // path). SHR selects OP_SHR_U/OP_SHR_S explicitly because ALU has no
+  // flag-form OP_SHR; DIV/MOD/compares pass signedness as aop's flag.
+  emitBinaryAluOp(op, wt, isUnsigned) {
     switch (op) {
-      case "ADD_ASSIGN": this.body.aop(wt, ALU.OP_ADD); break;
-      case "SUB_ASSIGN": this.body.aop(wt, ALU.OP_SUB); break;
-      case "MUL_ASSIGN": this.body.aop(wt, ALU.OP_MUL); break;
-      case "DIV_ASSIGN": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
-      case "MOD_ASSIGN": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
-      case "BAND_ASSIGN": this.body.aop(wt, ALU.OP_AND); break;
-      case "BOR_ASSIGN": this.body.aop(wt, ALU.OP_OR); break;
-      case "BXOR_ASSIGN": this.body.aop(wt, ALU.OP_XOR); break;
-      case "SHL_ASSIGN": this.body.aop(wt, ALU.OP_SHL); break;
-      case "SHR_ASSIGN": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
+      case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
+      case "SUB": this.body.aop(wt, ALU.OP_SUB); break;
+      case "MUL": this.body.aop(wt, ALU.OP_MUL); break;
+      case "DIV": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
+      case "MOD": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
+      case "EQ": this.body.aop(wt, ALU.OP_EQ); break;
+      case "NE": this.body.aop(wt, ALU.OP_NE); break;
+      case "LT": this.body.aop(wt, ALU.OP_LT, !isUnsigned); break;
+      case "GT": this.body.aop(wt, ALU.OP_GT, !isUnsigned); break;
+      case "LE": this.body.aop(wt, ALU.OP_LE, !isUnsigned); break;
+      case "GE": this.body.aop(wt, ALU.OP_GE, !isUnsigned); break;
+      case "BAND": this.body.aop(wt, ALU.OP_AND); break;
+      case "BOR": this.body.aop(wt, ALU.OP_OR); break;
+      case "BXOR": this.body.aop(wt, ALU.OP_XOR); break;
+      case "SHL": this.body.aop(wt, ALU.OP_SHL); break;
+      case "SHR": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
+      default: throw new Error(`emitBinaryAluOp: unsupported op ${op}`);
     }
   }
 
@@ -18853,7 +18874,7 @@ class CodeGenerator {
       if (lhsType.isPointer() && (op === "ADD_ASSIGN" || op === "SUB_ASSIGN")) {
         this.emitScaleByElemSize(lhsType.baseType);
       }
-      this.emitCompoundOp(opWt, op, isUnsigned);
+      this.emitBinaryAluOp(AST.baseOpOfCompound(op), opWt, isUnsigned);
       if (opType !== lhsType) this.emitConversion(opType, lhsType);
       // Same rule as emitIncDec: the assignment's value has the lvalue's
       // type after conversion (6.5.16p3) — narrow/_Bool-normalize for
@@ -19051,24 +19072,7 @@ class CodeGenerator {
           break;
         }
         this.emitExpr(expr.left); this.emitExpr(expr.right);
-        switch (expr.op) {
-          case "ADD": this.body.aop(wt, ALU.OP_ADD); break;
-          case "SUB": this.body.aop(wt, ALU.OP_SUB); break;
-          case "MUL": this.body.aop(wt, ALU.OP_MUL); break;
-          case "DIV": this.body.aop(wt, ALU.OP_DIV, !isUnsigned); break;
-          case "MOD": this.body.aop(wt, ALU.OP_REM, !isUnsigned); break;
-          case "EQ": this.body.aop(wt, ALU.OP_EQ); break;
-          case "NE": this.body.aop(wt, ALU.OP_NE); break;
-          case "LT": this.body.aop(wt, ALU.OP_LT, !isUnsigned); break;
-          case "GT": this.body.aop(wt, ALU.OP_GT, !isUnsigned); break;
-          case "LE": this.body.aop(wt, ALU.OP_LE, !isUnsigned); break;
-          case "GE": this.body.aop(wt, ALU.OP_GE, !isUnsigned); break;
-          case "BAND": this.body.aop(wt, ALU.OP_AND); break;
-          case "BOR": this.body.aop(wt, ALU.OP_OR); break;
-          case "BXOR": this.body.aop(wt, ALU.OP_XOR); break;
-          case "SHL": this.body.aop(wt, ALU.OP_SHL); break;
-          case "SHR": this.body.aop(wt, isUnsigned ? ALU.OP_SHR_U : ALU.OP_SHR_S); break;
-        }
+        this.emitBinaryAluOp(expr.op, wt, isUnsigned);
         break;
       }
       case AST.EUnary: {
