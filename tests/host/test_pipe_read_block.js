@@ -83,6 +83,25 @@ async function main() {
   check('drain: buffered bytes first', (await env.read(rd2, BUF, 16)) === 3);
   check('drain: then EOF', (await env.read(rd2, BUF, 16)) === 0);
 
+  // --- R1 (todos/0252): a zero-length read NEVER blocks ------------------
+  // POSIX: read(fd, buf, 0) returns 0 IMMEDIATELY. The CD5 blocking fix
+  // over-reached: an empty pipe with a LIVE writer parked a count===0 read
+  // on the waiter list — a deadlock until some unrelated write/close. The
+  // stdin path in readImpl had the same gap (parked on stdinWaiters).
+  const P3 = 192;
+  env.pipe(P3);
+  const rd3 = view.getInt32(P3, true), wr3 = view.getInt32(P3 + 4, true);
+  const zr = await Promise.race([env.read(rd3, BUF, 0), tick(300).then(() => 'HUNG')]);
+  check('zero-length read on empty pipe with live writer returns 0', zr === 0, 'got ' + zr);
+  // Non-empty pipe: still 0, and the buffered data stays for the next read.
+  env.write(wr3, SRC, 3);
+  check('zero-length read on non-empty pipe returns 0', (await env.read(rd3, BUF, 0)) === 0);
+  check('data intact after zero-length read', (await env.read(rd3, BUF, 16)) === 3);
+  // stdin (readImpl): returns 0 without parking on stdinWaiters (or even
+  // touching process.stdin — pre-fix this hung when stdin had no data).
+  const zs = await Promise.race([env.read(0, BUF, 0), tick(300).then(() => 'HUNG')]);
+  check('zero-length stdin read returns 0', zs === 0, 'got ' + zs);
+
   console.log(failures ? failures + ' check(s) FAILED' : 'test_pipe_read_block: all checks passed');
   process.exit(failures ? 1 : 0);
 }

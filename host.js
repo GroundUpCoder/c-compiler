@@ -168,6 +168,28 @@ function createFileSystem({ fs, ctx }) {
     for (const w of ws) w();
   }
 
+  /* O_APPEND resync-failure recovery: write's post-commit EOF fstat can
+     throw AFTER writeSync landed the bytes. The write still reports its
+     committed count (returning -1 there invited a caller retry — duplicate
+     append) and marks the entry positionUnknown. Every consumer of
+     entry.position calls this first: lazily re-fstat (an append fd's
+     tracked position is EOF-synced by definition, so a transient failure
+     self-heals), else fail loud with that errno (false) — never a silently
+     stale offset. Distinct from the position === null "not seekable"
+     sentinel, which would wrongly turn a regular file into a pipe-shaped
+     fd (ESPIPE seeks, unpositioned reads). */
+  function ensurePosition(entry) {
+    if (!entry.positionUnknown) return true;
+    try {
+      entry.position = fs.fstatSync(entry.nativeFd).size;
+      entry.positionUnknown = false;
+      return true;
+    } catch (e) {
+      setErrno(e);
+      return false;
+    }
+  }
+
   /* Directory handle table for opendir/readdir/closedir */
   const dirTable = [];
   const dirEncoder = new TextEncoder();
@@ -185,6 +207,10 @@ function createFileSystem({ fs, ctx }) {
 
   async function readImpl(fd, buf_ptr, count) {
     if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
+    /* POSIX: a zero-length read returns 0 IMMEDIATELY. It must never park
+       on stdinWaiters (a feature-probe read(fd, buf, 0) would otherwise
+       hang until unrelated input) or touch the buffer pointer. */
+    if (count === 0) return 0;
     const memory = getMemory();
     const buf = new Uint8Array(memory.buffer, buf_ptr, count);
     const entry = fdTable[fd];
@@ -200,6 +226,7 @@ function createFileSystem({ fs, ctx }) {
         if (entry.nativeFd === undefined) throw new Error("read: fd " + fd + " has no nativeFd");
         n = fs.readSync(entry.nativeFd, buf);
       } else {
+        if (!ensurePosition(entry)) return -1;
         n = fs.readSync(entry.nativeFd, buf, 0, count, entry.position);
         entry.position += n;
       }
@@ -331,13 +358,20 @@ function createFileSystem({ fs, ctx }) {
           if (entry.append) {
             /* O_APPEND: every write lands at current EOF, regardless of any
                seek. The fd was opened with O_APPEND, so an unpositioned
-               write lets the kernel append; resync our position to EOF.
-               A resync failure falls through to the outer catch (errno,
-               -1): the bytes landed but the fd is broken — a silently
-               stale position corrupts every later read/SEEK_CUR. */
+               write lets the kernel append; resync our position to EOF. */
             n = fs.writeSync(entry.nativeFd, buf, 0, count);
-            entry.position = fs.fstatSync(entry.nativeFd).size;
+            try {
+              entry.position = fs.fstatSync(entry.nativeFd).size;
+              entry.positionUnknown = false;
+            } catch (e2) {
+              /* The bytes are COMMITTED — reporting -1 now tells the caller
+                 the write failed and invites a retry (duplicate append).
+                 Keep the success; the tracked position is UNKNOWN until
+                 ensurePosition resyncs it or fails loud. */
+              entry.positionUnknown = true;
+            }
           } else {
+            if (!ensurePosition(entry)) return -1;
             n = fs.writeSync(entry.nativeFd, buf, 0, count, entry.position);
             if (entry.position !== null) entry.position += n;
           }
@@ -357,6 +391,7 @@ function createFileSystem({ fs, ctx }) {
             newPos = offset;
             break;
           case 1: /* SEEK_CUR */
+            if (!ensurePosition(entry)) return -1;
             newPos = entry.position + offset;
             break;
           case 2: /* SEEK_END */
@@ -374,6 +409,7 @@ function createFileSystem({ fs, ctx }) {
         }
         if (newPos < 0) { setErrnoName('EINVAL'); return -1; }
         entry.position = newPos;
+        entry.positionUnknown = false; /* a completed seek IS a known position */
         return newPos;
       }),
       mkdir: function (path_ptr, mode) {
@@ -928,6 +964,11 @@ function createFileSystem({ fs, ctx }) {
 
   result[ENV_KEY].read = new WebAssembly.Suspending(async function (fd, buf_ptr, count) {
     if (fd >= 0 && fd < fdTable.length && fdTable[fd] && fdTable[fd].type === 'pipe') {
+      /* POSIX: a zero-length read returns 0 IMMEDIATELY — even on an empty
+         pipe with a live writer. Entering the wait loop here parked the
+         reader until an unrelated write/close (regression on the CD5
+         blocking fix). */
+      if (count === 0) return 0;
       const entry = fdTable[fd];
       const pipe = entry.pipe;
       while (pipe.buffer.length === 0) {
