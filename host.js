@@ -6439,25 +6439,45 @@ function createSurfaceSDL({ ctx, hooks }) {
   if (typeof OffscreenCanvas !== 'undefined' &&
       typeof navigator !== 'undefined' && navigator.gpu &&
       typeof hooks.surfaceFrame === 'function') {
+    /* Per-window GPU present binding (menu build item 0, design amendment A4):
+     * every GPU-presenting window owns its own OffscreenCanvas, keyed by sid —
+     * symmetric with the shm path's fbByHandle/handleBySid. The binding is
+     * established at SDL_GetWGPUSurface time (the window handle crosses on the
+     * __wgpu_instance_create_surface_for_window import), NOT at window-create,
+     * so creating a second window can never repoint an existing surface's
+     * presents. */
+    const canvasBySid = new Map();     // sid -> that window's OffscreenCanvas
+    /* The shared inner canvas serves the SDL_Renderer flush (which passes its
+     * window handle per-present) and pre-A4 binaries' webgpu surfaces (the
+     * handle-less wgpuInstanceCreateSurface import), whose tail keeps the old
+     * last-created-window semantics — old baked binaries behave exactly as
+     * before. */
     const canvas = new OffscreenCanvas(1, 1);
-    let currentSid = 0;
-    /* The gpu-transport present tail (shared by the SDL renderer's flush and a
-     * raw webgpu.h app's wgpuSurfacePresent): snapshot the worker-local canvas
-     * and hand the frame to the kernel (todos/WM.md, spike S1). */
-    const presentFrame = function () {
-      if (!currentSid) return;
+    let legacySid = 0;                 // last-created window (legacy tail only)
+    /* The gpu-transport present tail (raw webgpu.h wgpuSurfacePresent and the
+     * SDL renderer's flush land here): snapshot the given canvas and hand the
+     * frame to the kernel (todos/WM.md, spike S1). */
+    const presentTo = function (sid, cnv) {
+      if (!handleBySid.has(sid)) return;   // window already destroyed
       try {
-        const bmp = canvas.transferToImageBitmap();
+        const bmp = cnv.transferToImageBitmap();
         // gpu-transport resize ack (todos/0019): the first bitmap at the
         // pending size acks FIRST, so the kernel geometry is already the
         // new size when this frame lands (no one-frame scaled draw).
-        const win = fbByHandle.get(handleBySid.get(currentSid));
+        const win = fbByHandle.get(handleBySid.get(sid));
         if (win && win.pendingCfg &&
             bmp.width === win.pendingCfg.w && bmp.height === win.pendingCfg.h) {
           ackConfigure(win);
         }
-        hooks.surfaceFrame(currentSid, bmp);
+        hooks.surfaceFrame(sid, bmp);
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
+    };
+    // Shared-canvas tail: the SDL_Renderer flush passes its window handle; a
+    // pre-A4 webgpu surface passes nothing and resolves to the legacy sid.
+    const presentFrame = function (windowHandle) {
+      const win = windowHandle ? fbByHandle.get(windowHandle) : null;
+      const sid = win ? win.sid : legacySid;
+      if (sid) presentTo(sid, canvas);
     };
     const inner = createBrowserSDL({ canvas, ctx, onPresent: presentFrame });
     // Audio goes to the kernel mixer, not the page: override the inner
@@ -6471,7 +6491,7 @@ function createSurfaceSDL({ ctx, hooks }) {
       const s = surfaceCreate(titlePtr, w, h, flags);
       if (!s) return 0;
       const handle = innerCreate(titlePtr, x, y, w, h, flags);
-      currentSid = s.sid;                      // one window per process (one canvas)
+      legacySid = s.sid;                       // legacy handle-less tail only
       handleBySid.set(s.sid, handle);
       fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
       return handle;
@@ -6486,7 +6506,11 @@ function createSurfaceSDL({ ctx, hooks }) {
       innerDestroy(handle);
       fbByHandle.delete(handle);
       for (const [sid, h] of handleBySid) {
-        if (h === handle) { hooks.surfaceDestroy(sid); handleBySid.delete(sid); kFlagsBySid.delete(sid); if (currentSid === sid) currentSid = 0; }
+        if (h === handle) {
+          hooks.surfaceDestroy(sid); handleBySid.delete(sid); kFlagsBySid.delete(sid);
+          canvasBySid.delete(sid);             // tear down only this sid's canvas
+          if (legacySid === sid) legacySid = 0;
+        }
       }
     };
     env.__sdl_set_window_title = function (handle, titlePtr) {
@@ -6512,16 +6536,18 @@ function createSurfaceSDL({ ctx, hooks }) {
     env.__sdl_delay = sdlDelay;       // cooperative worker sleep (0224) —
                                       // overrides inner's standalone-page throw
     // Resize request (todos/0019): allocate the new shm SAB and resize the
-    // worker-local canvas (mirrors __sdl_create_window) — the SDL renderer
-    // draws at canvas size, and a webgpu.h app's own wgpuSurfaceConfigure
-    // re-sizes it again (idempotent). The ack rides the next matching-size
-    // present (shmPresent or presentFrame above).
+    // canvas that presents THIS sid (per-window binding, A4) — the SDL
+    // renderer draws at canvas size, and a webgpu.h app's own
+    // wgpuSurfaceConfigure re-sizes it again (idempotent). Unbound sids keep
+    // resizing the shared inner canvas (renderer + legacy tails). The ack
+    // rides the next matching-size present (shmPresent or presentTo above).
     onConfigure = function (sid, w, h) {
       const win = fbByHandle.get(handleBySid.get(sid));
       if (!win) return;
       beginConfigure(win, w, h);
-      canvas.width = w;
-      canvas.height = h;
+      const c = canvasBySid.get(sid) || canvas;
+      c.width = w;
+      c.height = h;
     };
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
@@ -6536,9 +6562,22 @@ function createSurfaceSDL({ ctx, hooks }) {
         typeof hooks.vsyncWait === 'function' && hooks.vsyncEnabled()) {
       out.requestAnimationFrame = function (cb) { hooks.vsyncWait().then(cb); };
     }
-    // Raw webgpu.h apps share the same canvas + present tail (runModule builds
-    // the webgpu binding from this instead of the standalone canvas path).
-    out.webgpuConfig = { canvas: canvas, onPresent: presentFrame };
+    // Raw webgpu.h apps (runModule builds the webgpu binding from this):
+    // bindWindow hands out the PER-WINDOW canvas + present tail at
+    // SDL_GetWGPUSurface time (A4); canvas/onPresent remain the legacy
+    // shared-canvas tail for pre-A4 binaries' handle-less surfaces.
+    out.webgpuConfig = {
+      canvas: canvas,
+      onPresent: presentFrame,
+      bindWindow: function (handle) {
+        const win = fbByHandle.get(handle);
+        if (!win) return null;
+        const sid = win.sid;
+        let c = canvasBySid.get(sid);
+        if (!c) { c = new OffscreenCanvas(1, 1); canvasBySid.set(sid, c); }
+        return { canvas: c, present: function () { presentTo(sid, c); } };
+      },
+    };
     return out;
   }
 
@@ -6573,7 +6612,12 @@ function createSurfaceSDL({ ctx, hooks }) {
     webgpuConfig: {
       resolveGpu: resolveDawnGpu,
       shmSurface: {
-        getTarget: function () {   /* one window per process (v1); newest wins */
+        /* Per-window binding (A4): a surface created through
+         * SDL_GetWGPUSurface names its window — presents land on IT. */
+        byHandle: function (handle) { return windows[handle - 1] || null; },
+        /* Legacy tail for pre-A4 binaries (handle-less
+         * wgpuInstanceCreateSurface): newest live window, the old behavior. */
+        getTarget: function () {
           for (let i = windows.length - 1; i >= 0; i--) if (windows[i]) return windows[i];
           return null;
         },
@@ -6806,11 +6850,11 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         primitive: { topology: 'triangle-list' },
       });
       blit.ready = true;
-      if (blit.pending) { const p = blit.pending; blit.pending = null; blitPresent(p.ptr, p.w, p.h, p.pitch); }
+      if (blit.pending) { const p = blit.pending; blit.pending = null; blitPresent(p.win, p.ptr, p.w, p.h, p.pitch); }
     });
   }
-  function blitPresent(ptr, w, h, pitch) {
-    if (!blit.ready) { blit.pending = { ptr: ptr, w: w, h: h, pitch: pitch }; blitEnsure(); return; }
+  function blitPresent(win, ptr, w, h, pitch) {
+    if (!blit.ready) { blit.pending = { win: win, ptr: ptr, w: w, h: h, pitch: pitch }; blitEnsure(); return; }
     const dev = cgpu.device;
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
@@ -6838,7 +6882,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     });
     pass.setPipeline(blit.pipeline); pass.setBindGroup(0, blit.bindGroup); pass.draw(3, 1, 0, 0); pass.end();
     dev.queue.submit([enc.finish()]);
-    if (onPresent) onPresent();
+    if (onPresent) onPresent(win);   // per-window tail: name the presented window (A4)
   }
 
   // --- SDL_Renderer (batched 2D quads on WebGPU) ----------------------------
@@ -7114,7 +7158,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     }
     dev.queue.submit([enc.finish()]);
     if (didReadback) rdrStartReadbackMap();
-    if (onPresent) onPresent();
+    if (onPresent) onPresent(rd.window);   // per-window tail: the renderer's window (A4)
     rdrResetBatch(rd);
     // Now that this frame's draws are submitted, free any textures destroyed since
     // the last present (their GPU resources are no longer referenced by a batch).
@@ -7173,7 +7217,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
         const winInfo = sdlWindows[handle - 1];
         if (!winInfo) return -1;
-        blitPresent(pixelsPtr, w, h, pitch);
+        blitPresent(handle, pixelsPtr, w, h, pitch);
         return 0;
       },
 
@@ -7187,7 +7231,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         // SDL renderers default to SDL_BLENDMODE_NONE for draw ops. verts is a
         // growable CPU scratch (pixel-space vertices for the current frame);
         // vertCount tracks how many are written; batch records draw ranges into it.
-        sdlRenderers.push({ drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [], verts: null, vertCount: 0 });
+        sdlRenderers.push({ window: window, drawColor: [1, 1, 1, 1], drawBlendMode: 0, clear: { r: 0, g: 0, b: 0, a: 1 }, batch: [], verts: null, vertCount: 0 });
         return sdlRenderers.length;
       },
       __sdl_destroy_renderer: function (r) {
@@ -7590,7 +7634,7 @@ function wgpuFormat(v, name) {
 const WGPU_REQ_SUCCESS = 1, WGPU_REQ_UNAVAILABLE = 2, WGPU_REQ_ERROR = 3;
 const WGPU_MAP_SUCCESS = 1, WGPU_MAP_ERROR = 3;
 
-function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface, onPresent }) {
+function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface, onPresent, bindWindow }) {
   const { readString, getMemory, getExports } = ctx;
   /* GPU acquisition: navigator.gpu synchronously when present (browser);
    * otherwise an injected async resolver — the OS headless flavor's lazy Dawn
@@ -7665,7 +7709,10 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
    * WebGPU spec constants (Dawn's globals are not installed). */
   function shmPresentTail(s) {
     if (!s.tex || !s.device || s.pending) return;  /* mailbox: drop while a readback is in flight */
-    const target = shmSurface.getTarget();
+    /* Per-window binding (A4): a window-bound surface presents into ITS
+     * window; only legacy handle-less surfaces fall back to newest-wins. */
+    const target = s.winHandle ? shmSurface.byHandle(s.winHandle)
+                               : shmSurface.getTarget();
     if (!target) return;                           /* no SDL window to present into */
     const enc = s.device.createCommandEncoder();
     enc.copyTextureToBuffer(
@@ -7721,11 +7768,16 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
     [ENV_KEY]: {
       __wgpu_create_instance: function () { return alloc({ kind: 'instance' }); },
 
+      /* Handle-less surface (wgpuInstanceCreateSurface — pre-A4 binaries and
+       * direct webgpu.h callers): the LEGACY tail. Headless presents into the
+       * newest window (getTarget); browser draws on the shared canvas whose
+       * present resolves to the last-created window. */
       __wgpu_instance_create_surface: function (instance) {
         if (shmSurface) {
           /* Canvas-less surface (Dawn/headless): the swapchain texture is
            * created at configure time; present is the readback tail. */
-          return alloc({ kind: 'surface', shm: true, tex: null, w: 0, h: 0,
+          return alloc({ kind: 'surface', shm: true, winHandle: 0, tex: null,
+                         w: 0, h: 0,
                          format: null, device: null, readBuf: null, bytesPerRow: 0,
                          pending: false, scratch: null });
         }
@@ -7735,6 +7787,39 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
         catch (e) { console.error('wgpuInstanceCreateSurface: getContext(webgpu) failed', e); }
         if (!gpuCtx) { console.error('wgpuInstanceCreateSurface: no webgpu canvas context'); return 0; }
         return alloc({ kind: 'surface', gpuCtx: gpuCtx, format: null });
+      },
+
+      /* Window-bound surface (SDL_GetWGPUSurface — menu build item 0 / A4):
+       * the SDL window handle crosses the import so THIS surface's presents
+       * land on THAT window, per-window like the shm path. Headless stores
+       * the handle for the readback tail; the browser flavor gets the
+       * window's own OffscreenCanvas + present closure from bindWindow.
+       * Standalone pages (one real canvas, no bindWindow) use the shared
+       * canvas exactly like the handle-less import. */
+      __wgpu_instance_create_surface_for_window: function (instance, window) {
+        if (shmSurface) {
+          if (!shmSurface.byHandle(window)) {
+            console.error('SDL_GetWGPUSurface: no such window ' + window);
+            return 0;
+          }
+          return alloc({ kind: 'surface', shm: true, winHandle: window | 0,
+                         tex: null, w: 0, h: 0,
+                         format: null, device: null, readBuf: null, bytesPerRow: 0,
+                         pending: false, scratch: null });
+        }
+        const b = bindWindow ? bindWindow(window) : null;
+        const cnv = b ? b.canvas : canvas;
+        if (!cnv) {
+          if (bindWindow) console.error('SDL_GetWGPUSurface: no such window ' + window);
+          return 0;
+        }
+        let gpuCtx = null;
+        try { gpuCtx = cnv.getContext('webgpu'); }
+        catch (e) { console.error('SDL_GetWGPUSurface: getContext(webgpu) failed', e); }
+        if (!gpuCtx) { console.error('SDL_GetWGPUSurface: no webgpu canvas context'); return 0; }
+        return alloc({ kind: 'surface', gpuCtx: gpuCtx, format: null,
+                       canvas: b ? b.canvas : null,
+                       present: b ? b.present : null });
       },
 
       __wgpu_instance_request_adapter: function (instance, cb, ud1, ud2) {
@@ -7804,8 +7889,10 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
         s.format = fmt;
         /* WebGPU's configure() takes no size — the canvas drawing buffer size IS
          * the surface size. Honor the requested width/height by sizing the
-         * (Offscreen)canvas, mirroring __sdl_create_window. */
-        if (canvas && width > 0 && height > 0) { canvas.width = width; canvas.height = height; }
+         * surface's OWN canvas (window-bound, A4) or the shared one (legacy),
+         * mirroring __sdl_create_window. */
+        const cfgCanvas = s.canvas || canvas;
+        if (cfgCanvas && width > 0 && height > 0) { cfgCanvas.width = width; cfgCanvas.height = height; }
         // OR in COPY_SRC so the canvas is always read-back-able (snapshots,
         // external surface probes + camera capture); harmless if unused.
         const cfg = { device: d, format: fmt, usage: (usage >>> 0) | GPUTextureUsage.COPY_SRC, alphaMode: wgpuEnumReq(WGPU_ALPHA, alphaMode, 'alphaMode') };
@@ -7842,7 +7929,13 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
         if (s && s.shm) { shmPresentTail(s); return; }
         /* Canvas: presentation is implicit (the browser presents the configured
          * context after the frame). Under the OS the gpu transport hands the
-         * finished frame to the kernel here (ImageBitmap handoff). */
+         * finished frame to the kernel here (ImageBitmap handoff) — a
+         * window-bound surface (A4) through its own per-window tail, a legacy
+         * surface through the shared last-window tail. */
+        if (s && s.present) {
+          try { s.present(); } catch (e) { console.error('wgpu present handoff failed', e); }
+          return;
+        }
         if (onPresent) {
           try { onPresent(); } catch (e) { console.error('wgpu present handoff failed', e); }
         }
@@ -8346,6 +8439,7 @@ function createNullWebGPU(ctx) {
     [ENV_KEY]: {
       __wgpu_create_instance: function () { return 0; },
       __wgpu_instance_create_surface: function () { return 0; },
+      __wgpu_instance_create_surface_for_window: function () { return 0; },
       __wgpu_instance_request_adapter: function (instance, cb, ud1, ud2) {
         Promise.resolve().then(function () { failAdapter(cb, ud1, ud2); });
       },
@@ -10456,7 +10550,8 @@ async function runModule({
   const wCfg = (sdl && sdl.webgpuConfig) || null;
   const webgpu = wCfg
     ? createBrowserWebGPU({ canvas: wCfg.canvas || null, ctx: ctx, notifyWindow: notifyWindow,
-                            resolveGpu: wCfg.resolveGpu, shmSurface: wCfg.shmSurface, onPresent: wCfg.onPresent })
+                            resolveGpu: wCfg.resolveGpu, shmSurface: wCfg.shmSurface, onPresent: wCfg.onPresent,
+                            bindWindow: wCfg.bindWindow })
     : (getBrowserSDL || hasGpu)
       ? createBrowserWebGPU({ canvas: getBrowserSDL || null, ctx: ctx, notifyWindow: notifyWindow })
       : createNullWebGPU(ctx);
@@ -11063,6 +11158,8 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.createSharedAudioBuffer = createSharedAudioBuffer;
   module.exports.createBrowserSDL = createBrowserSDL;
   module.exports.createNullSDL = createNullSDL;
+  // Test export: the OS kernel-surface SDL flavor (per-window GPU present, A4)
+  module.exports.createSurfaceSDL = createSurfaceSDL;
 }
 
 // Browser global exports
