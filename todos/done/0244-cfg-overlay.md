@@ -1,6 +1,6 @@
 # 0244 — per-key three-layer config overlay (openwith / saver / sounds)
 
-- **Status**: open
+- **Status**: done (2026-07-17; header flipped late — the work landed but the frontmatter was left saying open, corrected in the 0255 batch)
 - **Design**: arch-debt scan CS3
 
 ## Goal

@@ -1,0 +1,11 @@
+{
+  "bin": true,
+  "name": "oomdlg",
+  "description": "0255 R4 test fixture: heap-ballast host for GetOpenFileNameW so fd_refill's snapshot malloc really fails (compiled by tests/kernel/test_comdlg_diag_e2e.js, never baked into the image)",
+  "deps": [
+    "../../../../os/win32/lib.json"
+  ],
+  "sources": [
+    "main.c"
+  ]
+}

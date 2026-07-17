@@ -285,11 +285,26 @@ static int scr_w = 800, scr_h = 500;
  * central service, and the kernel-chrome fallback makes its death easy
  * to miss — a bare exit turns a protocol drift or a dead endpoint
  * into an strace hunt. Every fatal path says WHAT failed and WHY on
- * stderr (wmp_read_all names EOF as ECONNRESET, so the common
- * endpoint-gone case reads truthfully). fatal() carries the exit code
- * so the exit(2) window-creation paths get the same treatment. */
+ * stderr — and the WHY must come from the layer that actually failed
+ * (todos/0255). Two intents:
+ *   fatal()      appends strerror(errno) — the socket/wmp_read callers,
+ *                where errno IS the cause (wmp_read_all names EOF as
+ *                ECONNRESET, so the common endpoint-gone case reads
+ *                truthfully).
+ *   fatal_sdl()  appends SDL_GetError() — the SDL window-creation
+ *                paths, where errno is unset or stale noise (pre-0255
+ *                the EV_SCREEN recreate printed "cannot recreate the
+ *                desktop window: Success").
+ * Both carry the exit code so the exit(2) window-creation paths get
+ * the same treatment. */
 static void fatal(int code, const char *what) {
     fprintf(stderr, "wm: %s: %s\n", what, strerror(errno));
+    exit(code);
+}
+static void fatal_sdl(int code, const char *what) {
+    const char *why = SDL_GetError();
+    if (why && why[0]) fprintf(stderr, "wm: %s: %s\n", what, why);
+    else fprintf(stderr, "wm: %s\n", what);
     exit(code);
 }
 static void die(const char *what) { fatal(1, what); }
@@ -3049,8 +3064,8 @@ static void screen_changed(void) {
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
-    if (make_desk() != 0) fatal(2, "cannot recreate the desktop window");
-    if (make_bar() != 0) fatal(2, "cannot recreate the taskbar window");
+    if (make_desk() != 0) fatal_sdl(2, "cannot recreate the desktop window");
+    if (make_bar() != 0) fatal_sdl(2, "cannot recreate the taskbar window");
     for (int i = 0; i < nwins; i++)
         if (wins[i].focused && !wins[i].minimized) {
             int32_t a[1] = { wins[i].sid };
@@ -3874,14 +3889,10 @@ int main(void) {
      * pre-existing windows get buttons AND get re-placed — (re)starting
      * the WM deliberately tidies the desktop. */
     SDL_Init(SDL_INIT_VIDEO);
-    if (make_desk() != 0) {            /* bottom of z; created first (0029) */
-        fprintf(stderr, "wm: cannot create the desktop window\n");
-        return 2;
-    }
-    if (make_bar() != 0) {
-        fprintf(stderr, "wm: cannot create the taskbar window\n");
-        return 2;
-    }
+    if (make_desk() != 0)              /* bottom of z; created first (0029) */
+        fatal_sdl(2, "cannot create the desktop window");
+    if (make_bar() != 0)
+        fatal_sdl(2, "cannot create the taskbar window");
     /* Desktop is up: the startup chime (todos/0094; sounds.h fire-and-
      * forget — the kernel drains the clip, pumpless kernels drop it).
      * Deliberately per wm start, not per boot: a `wm &` respawn is a new

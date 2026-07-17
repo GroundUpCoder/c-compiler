@@ -52,7 +52,12 @@ deferral, recorded in todos/0250 with the adoption recipe (flags
 ## Proof
 
 Behavior-preservation is a byte-identical pre/post diff of the rendered
-listings over a fixture exercising every axis (dirs, files, a dotfile, a
+listings over a fixture — NOT a general byte-identical claim (0255
+correction): outside the fixture axes the new walk deliberately differs,
+skipping an entry whose lstat fails (the old walks showed the vanished
+name) and rendering names to 255 chars where the old buffers cut at 240;
+better behavior, not preservation. The fixture exercised every OTHER
+axis (dirs, files, a dotfile, a
 link-to-dir, a link-to-file, a dangling link; mtimes pinned with
 `touch -d "… 03:04:05"` — a bare `touch -d DATE` under busybox keeps
 wall-clock minutes and defeated the first diff): fileman default view,

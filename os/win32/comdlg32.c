@@ -69,6 +69,8 @@ static int cd_a2w(const char *s, LPWSTR out, int cap) {
 
 #define FD_W 380
 #define FD_H 300
+#define FD_MAX_ENT 512   /* listing snapshot capacity; past it fd_refill
+                            renders an explicit "(N more...)" row (0255) */
 
 static struct {
     HWND win, dir, list, name;
@@ -91,16 +93,34 @@ static void fd_refill(void) {
     /* The walk is os/listdir.h's shared list_dir (CD34); the snapshot is
      * heap-scoped to the refill — the old static names[512][240] put
      * 120 KB of BSS in every app linking the veneer, dialog opened or
-     * not (and it's too big for the wasm stack). */
-    ld_ent *ents = (ld_ent *)malloc(512 * sizeof *ents);
-    if (ents) {
-        int n = list_dir(g_fd.cwd, ents, 512, LIST_FOLLOW_LINKS);
-        if (n > 0) qsort(ents, (size_t)n, sizeof *ents, fd_entcmp);
-        for (int i = 0; i < n; i++) {
-            char row[LD_NAME + 4];
-            snprintf(row, sizeof row, "%s%s", ents[i].name,
-                     ents[i].is_dir ? "/" : "");
-            SendMessage(g_fd.list, LB_ADDSTRING, 0, (LPARAM)row);
+     * not (and it's too big for the wasm stack). Every way the listing
+     * can come up short is a VISIBLE row (todos/0255): an OOM or an
+     * unopenable directory must not read as an empty one, and a
+     * capacity-clipped listing must not read as complete. */
+    ld_ent *ents = (ld_ent *)malloc(FD_MAX_ENT * sizeof *ents);
+    if (!ents) {
+        SendMessage(g_fd.list, LB_ADDSTRING, 0,
+                    (LPARAM)"(cannot allocate directory listing)");
+    } else {
+        int n = list_dir(g_fd.cwd, ents, FD_MAX_ENT, LIST_FOLLOW_LINKS);
+        if (n < 0) {
+            SendMessage(g_fd.list, LB_ADDSTRING, 0,
+                        (LPARAM)"(cannot open directory)");
+        } else {
+            int shown = n < FD_MAX_ENT ? n : FD_MAX_ENT;
+            if (shown > 0) qsort(ents, (size_t)shown, sizeof *ents, fd_entcmp);
+            for (int i = 0; i < shown; i++) {
+                char row[LD_NAME + 4];
+                snprintf(row, sizeof row, "%s%s", ents[i].name,
+                         ents[i].is_dir ? "/" : "");
+                SendMessage(g_fd.list, LB_ADDSTRING, 0, (LPARAM)row);
+            }
+            if (n > shown) {
+                char row[48];
+                snprintf(row, sizeof row, "(%d more entries not shown)",
+                         n - shown);
+                SendMessage(g_fd.list, LB_ADDSTRING, 0, (LPARAM)row);
+            }
         }
         free(ents);
     }

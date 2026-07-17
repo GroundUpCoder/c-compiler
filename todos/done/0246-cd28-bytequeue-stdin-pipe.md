@@ -49,6 +49,14 @@ host.js should share one idiom, not four ad-hoc arrays.
   drain, byte-exact; legacy setStdin array shape still works.
 - Existing pipe/stdin tests unchanged and green; full unit + host + blockfs
   + kernel + browser-sweep suites green.
+- Known non-blocker (0255 note): `ByteQueue` still `Array.shift()`s its
+  chunk list, so a queue fed many tiny writes drains in O(chunks²) —
+  correctness is fine (the bulk paths coalesce into few large chunks; the
+  worst case is per-byte feeding, which the CD28 rewrite already removed
+  from the hot paths). The optional improvement is a head index +
+  periodic compaction instead of shift(). Recorded here, not changed —
+  host.js is a JS-runtime surface with its own test gate, wrong to ride
+  an os/C bake commit.
 - Out of scope, surfaced: kernel.js's own small array `splice(0,n)` buffers
   (tty `_cooked` line buffer, sock-conn frame accumulator, kernel-pipe
   LATENT-mode `pipe.buf` — all bounded/small or being demoted); CD29 (the

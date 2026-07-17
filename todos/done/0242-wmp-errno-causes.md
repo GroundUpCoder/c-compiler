@@ -1,6 +1,6 @@
 # 0242 — WMP failures express their real cause (distinct R_ERR errnos, end to end)
 
-- **Status**: open
+- **Status**: done (2026-07-17; header flipped late — the work landed but the frontmatter was left saying open, corrected in the 0255 batch)
 - **Design**: todos/WM.md ("Agent control channel"), kernel.js WMP block
 
 ## Goal

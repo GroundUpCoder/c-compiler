@@ -143,7 +143,8 @@ typedef ld_ent Ent;             /* the shared listing shape (os/listdir.h) */
  * its target through here (g_ents[row]) rather than re-parsing the display
  * string, so the details columns never confuse path building. */
 static Ent g_ents[512];
-static int g_nent;
+static int g_nent;    /* entries actually snapshotted (<= 512) */
+static int g_ntotal;  /* the directory's true entry count (0255) */
 
 static int entcmp(const void *a, const void *b) {
     const Ent *ea = (const Ent *)a, *eb = (const Ent *)b;
@@ -162,7 +163,9 @@ static int entcmp(const void *a, const void *b) {
  * so fileman owns none of its geometry or paint. */
 static void status_update(void) {
     if (!g_status) return;
-    int total = (int)SendMessage(g_list, LB_GETCOUNT, 0, 0);
+    /* g_ntotal, not LB_GETCOUNT: the count must be the directory's truth,
+     * never inflated by a diagnostic/"(N more...)" row (0255). */
+    int total = g_ntotal;
     int selc = (int)SendMessage(g_list, LB_GETSELCOUNT, 0, 0);
     char s[256];
     if (selc > 0) {
@@ -185,15 +188,22 @@ static void refill(void) {
     SendMessage(g_list, LB_RESETCONTENT, 0, 0);
     /* The walk is os/listdir.h's shared list_dir (CD34). Dotfiles hidden
      * unless the View toggle is on (0093/0106 — the .recycle store must
-     * not clutter /root; Explorer-style). */
-    g_nent = list_dir(g_cwd, g_ents, 512,
-                      LIST_FOLLOW_LINKS | (g_hidden ? 0u : LIST_HIDE_DOTFILES));
-    if (g_nent < 0) {
+     * not clutter /root; Explorer-style). list_dir returns the TOTAL
+     * count (may exceed the 512-entry snapshot); a clipped listing gets
+     * an explicit trailing "(N more...)" row instead of silently reading
+     * as complete (0255). That row sits at index g_nent, past every
+     * `idx < g_nent` guard, so it is inert to selection/open/ops. */
+    int total = list_dir(g_cwd, g_ents, 512,
+                         LIST_FOLLOW_LINKS | (g_hidden ? 0u : LIST_HIDE_DOTFILES));
+    if (total < 0) {
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)"(cannot open directory)");
         g_nent = 0;
+        g_ntotal = 0;
         status_update();
         return;
     }
+    g_ntotal = total;
+    g_nent = total < 512 ? total : 512;
     qsort(g_ents, (size_t)g_nent, sizeof g_ents[0], entcmp);
     for (int i = 0; i < g_nent; i++) {
         /* Details columns off the same stat: a left name field, a
@@ -214,6 +224,12 @@ static void refill(void) {
         else snprintf(datef, sizeof datef, "-");
         char row[320];
         snprintf(row, sizeof row, "%-28s %10s  %s", namef, sizef, datef);
+        SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)row);
+    }
+    if (g_ntotal > g_nent) {
+        char row[64];
+        snprintf(row, sizeof row, "(%d more entries not shown)",
+                 g_ntotal - g_nent);
         SendMessage(g_list, LB_ADDSTRING, 0, (LPARAM)row);
     }
     SetWindowText(g_path, g_cwd);

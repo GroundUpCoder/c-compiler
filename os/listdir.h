@@ -1,14 +1,19 @@
-/* listdir.h — ONE directory-listing walk (code-debt CD34).
+/* listdir.h — the shared directory-listing walk (code-debt CD34) for
+ * comdlg32.c's file dialog and fileman.c's pane. NOT (yet) all three
+ * drifted copies: wm.c's load_entries is the tracked 3rd member,
+ * deliberately deferred to the menu redesign (recipe in
+ * todos/done/0250) — don't cite this header as covering it.
  *
  * Header-only by design (the openwith.h / cfgstore.h / fileops.h
  * precedent): the image manifest's `c` entries are single-source
  * compiles, so the walk is a static function shared by textual
  * inclusion.
  *
- * list_dir() is the ONE "opendir → readdir → stat per entry → fill"
+ * list_dir() is the one "opendir → readdir → stat per entry → fill"
  * loop that was hand-written (and drifting: dotfile policy, link
- * handling, caps) in comdlg32.c's file dialog, fileman.c's pane, and
- * wm.c's menu/desktop loader. It fills a CALLER-PROVIDED ld_ent buffer
+ * handling, caps) in comdlg32.c's file dialog and fileman.c's pane
+ * (and still is in wm.c's menu/desktop loader, per the deferral
+ * above). It fills a CALLER-PROVIDED ld_ent buffer
  * — every field comes off ONE lstat per entry (plus one stat when a
  * link is followed), so is_dir / is_link / size / mtime are all free —
  * and returns the count. SORTING IS CALLER POLICY: each caller qsorts
@@ -55,20 +60,25 @@ typedef struct {
 } ld_ent;
 
 /* Fill `out` (capacity `max`) with `path`'s entries, unsorted. Returns
- * the count, or -1 when the directory can't be opened (callers tell an
- * unreadable dir from an empty one). */
+ * the TOTAL entry count — which may exceed `max`: only the first `max`
+ * entries are filled, and the walk keeps counting past the cap so a
+ * caller seeing count > max KNOWS the listing was clipped and can say
+ * so (a silently-short list reads as "that's everything" — the R4/0255
+ * fail-loud rule). Returns -1 when the directory can't be opened
+ * (callers tell an unreadable dir from an empty one). */
 static int list_dir(const char *path, ld_ent *out, int max, unsigned flags) {
     DIR *d = opendir(path);
     if (!d) return -1;
     int n = 0;
     struct dirent *de;
-    while ((de = readdir(d)) && n < max) {
+    while ((de = readdir(d))) {
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
         if ((flags & LIST_HIDE_DOTFILES) && de->d_name[0] == '.') continue;
         char full[1024];
         snprintf(full, sizeof full, "%s/%s", path, de->d_name);
         struct stat st;
         if (lstat(full, &st) != 0) continue;
+        if (n >= max) { n++; continue; }   /* count past the cap, don't fill */
         ld_ent *e = &out[n++];
         memset(e, 0, sizeof *e);
         snprintf(e->name, sizeof e->name, "%s", de->d_name);

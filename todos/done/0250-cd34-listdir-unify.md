@@ -42,9 +42,15 @@ entcmp view keys, wm.c's Recycle-Bin tail pin).
 ## Acceptance
 
 - comdlg32 + fileman both walk through `list_dir`; no static listing
-  buffer remains; behavior exactly preserved (`../` row, `/` suffix,
-  dirs-first, 512 cap, dotfile toggle, size/mtime columns) — proven by a
-  byte-identical pre/post listing diff.
+  buffer remains; behavior preserved on the fixture axes (`../` row, `/`
+  suffix, dirs-first, 512 cap, dotfile toggle, size/mtime columns) — the
+  pre/post listing diff over that fixture was byte-identical.
+  NUANCE (0255 correction): "byte-identical" was overstated as a general
+  claim — two deliberate behavior deltas exist outside the fixture:
+  (a) an entry whose lstat fails (vanished mid-refill) is SKIPPED where
+  the old walks still showed the stale name, and (b) names render up to
+  255 chars (LD_NAME, the BlockFS cap) where the old buffers truncated
+  at 240. Both are improvements, not preservation.
 - Bake green (v113), kernel suite + browser sweep green.
 
 ## Deferred 3rd class member — wm.c load_entries (surfaced, tracked)

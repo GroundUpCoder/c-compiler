@@ -62,7 +62,12 @@ function driveBoot(script, opts = {}) {
   if (enc != null && enc !== 'buffer') spawnOpts.encoding = enc;   // else raw Buffer
   if (opts.maxBuffer) spawnOpts.maxBuffer = opts.maxBuffer;
 
-  const args = [BOOT, '--image=' + image, '--quiet', ...(opts.args || [])];
+  // opts.nodeArgs: node/V8 flags BEFORE the script (e.g.
+  // `--wasm-max-mem-pages=N` to bound every wasm instance's heap — the
+  // deterministic-OOM knob for the comdlg-diag test; worker_threads
+  // inherit the process's V8 flags).
+  const args = [...(opts.nodeArgs || []), BOOT, '--image=' + image,
+                '--quiet', ...(opts.args || [])];
   const r = cp.spawnSync('node', args, spawnOpts);
   if (r.error) throw r.error;
   r.image = image;   // let a follow-up session reuse the same image
