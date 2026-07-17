@@ -1,6 +1,8 @@
 # 0251 — menu build item 0 / A4: per-window GPU present binding (canvasBySid, bind at SDL_GetWGPUSurface)
 
-- **Status**: open
+- **Status**: done (2026-07-17) — landed in one commit with the red→green
+  tests; both flavors per-window, veneer binds at SDL_GetWGPUSurface via
+  SDL_GetWindowID, legacy handle-less import kept for pre-A4 binaries
 - **Design**: the menu-uniform architecture note (external), §1.5/§3.6 + amendment A4
 
 ## Goal
