@@ -1,0 +1,13 @@
+{
+  "name": "punes",
+  "version": "2025.12.31",
+  "summary": "puNES — cycle-accurate NES/Famicom emulator (upstream punesemu/puNES @2ed5b1b)",
+  "files": {
+    "punes": { "project": "vendor/punes/bin.json" }
+  },
+  "bin": { "punes": "punes" },
+  "openwith": { "nes": "punes" },
+  "menu": [
+    { "group": "Games", "entry": "punes", "cmd": "punes" }
+  ]
+}

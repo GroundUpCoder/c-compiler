@@ -1,0 +1,17 @@
+{
+  "bin": true,
+  "name": "gucman",
+  "description": "/bin/gucman (gucman Slice 1): the gucOS package manager — fetch a same-origin package index + tar+gzip payloads over the 0173 libcurl veneer, sha256-verify BEFORE extraction, stage under /opt/.staging.<name>, atomic-rename to /opt/<name>, plant declarative bin/openwith/menu entries, record the exact planted list in /var/lib/gucman/<name>.json (written LAST, crash-safe); remove replays the record in reverse. zlib inflates the payload in-process; cJSON parses index/control/DB.",
+  "deps": [
+    "../curl/lib.json",
+    "../../vendor/zlib/lib.json"
+  ],
+  "includes": [
+    "..",
+    "../../vendor/cjson"
+  ],
+  "sources": [
+    "gucman.c",
+    "../../vendor/cjson/cJSON.c"
+  ]
+}

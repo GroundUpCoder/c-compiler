@@ -81,25 +81,37 @@ function ensureSystemImage(dir, plan) {
   const manifestPath = path.join(dir, 'os', 'image.json');
   const mkimagePath = path.join(dir, 'tools', 'mkimage.js');
   if (!fs.existsSync(manifestPath) || !fs.existsSync(mkimagePath)) return;
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  const { BLOCK_FS } = require(path.join(dir, 'host.js'));
+  const COMMON = require(path.join(dir, 'os', 'os-common.js'));
+  // The dev serve always serves the FAT image: every packages/<name>.json
+  // folded back into the blob (gucman pulls them out of a plain bake), so
+  // the in-browser estate matches the kernel-test fixture. A future deploy
+  // build serves the minimal blob + the packages pool instead.
+  const folded = COMMON.foldPackages(fs, path, dir,
+    JSON.parse(fs.readFileSync(manifestPath, 'utf-8')), 'all');
+  const manifest = folded.manifest;
+  const wantPkgs = folded.names;
   const wanted = manifest.version | 0;
   const imageName = plan ? plan.imageName : 'os-system.img';
   const imgPath = path.join(dir, 'os', imageName);
   const wantOverlays = plan ? plan.ids : [];
   const overlayArgs = plan ? plan.enabled.map((e) => `--overlay=${e.id}`) : [];
-  const { BLOCK_FS } = require(path.join(dir, 'host.js'));
-  const COMMON = require(path.join(dir, 'os', 'os-common.js'));
+  const packagesArgs = wantPkgs.length ? ['--packages=all'] : [];
   let baked = -1;
   let why = null;
   if (fs.existsSync(imgPath)) {
     const store = new COMMON.NodeFileStore(fs, imgPath, false);
     baked = COMMON.bakedVersion(BLOCK_FS, store);
     const bakedOv = COMMON.bakedOverlays(BLOCK_FS, store);
+    const bakedPk = COMMON.bakedPackages(BLOCK_FS, store);
     store.close();
     const overlaysMatch = bakedOv.length === wantOverlays.length &&
       bakedOv.every((id, i) => id === wantOverlays[i]);
+    const packagesMatch = bakedPk.join(',') === wantPkgs.join(',');
     if (baked >= wanted && !overlaysMatch) {
       why = `overlay set [${bakedOv.join(',') || 'base'}] != wanted [${wantOverlays.join(',') || 'base'}]`;
+    } else if (baked >= wanted && !packagesMatch) {
+      why = `package set [${bakedPk.join(',') || 'none'}] != wanted [${wantPkgs.join(',') || 'none'}]`;
     } else if (baked >= wanted) {
       const inp = COMMON.newestBakeInput(fs, path, dir, manifest);
       let newestMs = inp.mtimeMs, newestPath = inp.path;
@@ -113,7 +125,7 @@ function ensureSystemImage(dir, plan) {
   if (!why) why = `${baked < 0 ? 'missing' : 'is v' + baked} < manifest v${wanted}`;
   console.log(`os/${imageName} ${why} — baking${wantOverlays.length ? ' (+' + wantOverlays.join(',') + ')' : ''}…`);
   const r = require('child_process').spawnSync(process.execPath,
-    [mkimagePath, `--out=${imgPath}`, ...overlayArgs], { stdio: 'inherit' });
+    [mkimagePath, `--out=${imgPath}`, ...overlayArgs, ...packagesArgs], { stdio: 'inherit' });
   if (r.status !== 0) {
     console.error('mkimage failed — not serving a stale system image');
     process.exit(1);
@@ -147,6 +159,13 @@ const MIME = {
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
   let file = singleFile && url === '/' ? singleFile : path.join(root, url === '/' ? 'index.html' : url);
+  // The package repo (gucman): /packages/* serves tools/mkpkg.js output from
+  // dist/packages/* — the same layout the Pages deploy publishes, so the
+  // baked origin-relative repo default (/usr/share/gucman/repos) works
+  // against the dev serve too.
+  if (url === '/packages/index.json' || url.startsWith('/packages/pool/')) {
+    file = path.join(root, 'dist', url.slice(1));
+  }
   if (!file.startsWith(root)) { res.writeHead(403); res.end(); return; }
   if (overlayImgFile && path.resolve(file) === baseImgFile) file = overlayImgFile;
   fs.readFile(file, (err, data) => {

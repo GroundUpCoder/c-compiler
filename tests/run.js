@@ -100,6 +100,11 @@ const RULES = [
   [/^image\.json$/, ['kernel', 'sweep'], 'the bake manifest'],
   [/^serve\.js$/, ['sweep', 'host'], 'the browser test server + its first-run/overlay checks'],
 
+  // gucman packages: definitions fold into the fat fixture (--packages=all)
+  // AND feed tools/mkpkg.js payloads; test_gucman_e2e consumes both.
+  [/^packages\//, ['kernel', 'sweep'], 'package definitions restale the fat fixture + the mkpkg pool'],
+  [/^tools\/mkpkg\.js$/, ['kernel'], 'builds the gucman package pool test_gucman_e2e installs from'],
+
   // Shared test engine → every suite-runner-backed suite.
   [/^tests\/lib\//, ['unit', 'blockfs', 'kernel', 'sweep'], 'the shared suite-runner/image-fixture engine'],
 

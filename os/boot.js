@@ -36,6 +36,14 @@
 //                  --overlays=all enables all. Forces a system re-bake (the
 //                  prebaked fixture and any reused blob are base-only).
 //   --require-clean-overlays  a dirty overlay provenance is fatal (else warns)
+//   --packages=all|none|a,b   the package set the system blob must carry
+//                  (gucman: apps pulled out of the base image into
+//                  packages/<name>.json). Default `all` — headless dev/test
+//                  boots keep the full estate baked in, matching the fixture.
+//                  The gate compares the blob's os-release PACKAGES= line
+//                  (os-common.bakedPackages) against this set, so a minimal
+//                  blob is only reused under --packages=none (the
+//                  test_gucman_e2e mode) and a bake folds exactly this set.
 //   --quiet        suppress boot progress on stderr
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -65,6 +73,7 @@ let dumpState = false;
 let ttyOut = false;   // force fd1/2 tty-kind under pipes (drive interactive shells)
 let requireCleanOverlays = false;
 let allOverlays = false;
+let packagesWant = 'all';   // the package set the blob must carry (see header)
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--image=')) imagePath = path.resolve(a.slice(8));
@@ -80,6 +89,9 @@ for (const a of process.argv.slice(2)) {
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
   else if (a === '--require-clean-overlays') requireCleanOverlays = true;
+  else if (a === '--packages=all') packagesWant = 'all';
+  else if (a.startsWith('--packages='))
+    packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
   else {
     process.stderr.write(`boot.js: unknown option ${a}\n`);
     process.exit(2);
@@ -104,7 +116,21 @@ const seedIo = {
     (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8')),
   log: bootLog,
 };
-const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'), 'utf-8'));
+const rawManifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'image.json'), 'utf-8'));
+
+// Fold the wanted package set into the bake manifest (gucman): the folded
+// manifest drives the bake AND the input-freshness scan (a fat blob depends
+// on the folded packages' vendor closure too); wantPkgs is what the
+// identity gates compare against the blob's PACKAGES= line.
+let manifest, wantPkgs;
+try {
+  const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant);
+  manifest = folded.manifest;
+  wantPkgs = folded.names;
+} catch (e) {
+  process.stderr.write(`boot.js: ${e.message}\n`);
+  process.exit(2);
+}
 
 // Optional opt-in image overlays (todos/0118): resolve requested ids against
 // image.json `overlays[]` (unknown id -> exit 2, before any work). Overlays are
@@ -158,10 +184,16 @@ async function mountAndBoot() {
   const newestInput = () => inputScan ||
     (inputScan = COMMON.newestBakeInput(fs, path, ROOT, manifest));
   let sysMode = null;   // 'reused' | 'installed' | 'baked'
+  const wantPkgKey = wantPkgs.join(',');
+  const pkgsMatch = (st) => COMMON.bakedPackages(BLOCK_FS, st).join(',') === wantPkgKey;
   const bv = COMMON.bakedVersion(BLOCK_FS, store);
   if (bv > mfVersion) sysMode = 'reused';           // an upgrade blob is kept
   else if (bv === mfVersion) {
-    if (staleOk || fs.statSync(imagePath).mtimeMs >= newestInput().mtimeMs) {
+    if (!pkgsMatch(store)) {
+      bootLog('system blob package set [' +
+        COMMON.bakedPackages(BLOCK_FS, store).join(',') + '] != wanted [' +
+        wantPkgKey + '] — re-materializing');
+    } else if (staleOk || fs.statSync(imagePath).mtimeMs >= newestInput().mtimeMs) {
       sysMode = 'reused';
     } else {
       bootLog('system blob is input-stale (' + path.relative(ROOT, newestInput().path) +
@@ -176,7 +208,11 @@ async function mountAndBoot() {
       const mem = new BLOCK_FS.MemoryByteStore(bytes.length);
       mem.setBytes(0, bytes);
       const fv = COMMON.bakedVersion(BLOCK_FS, mem);
-      if (fv >= mfVersion && (staleOk || fSt.mtimeMs >= newestInput().mtimeMs)) {
+      if (fv >= mfVersion && !pkgsMatch(mem)) {
+        bootLog('prebaked ' + fixturePath + ' package set [' +
+          COMMON.bakedPackages(BLOCK_FS, mem).join(',') + '] != wanted [' +
+          wantPkgKey + '] — baking instead');
+      } else if (fv >= mfVersion && (staleOk || fSt.mtimeMs >= newestInput().mtimeMs)) {
         bootLog('installing prebaked system image ' + fixturePath + ' (v' + fv + ')');
         // Superblock LAST (the kernel-worker discipline): a crash mid-copy
         // reads version -1 next boot and re-materializes.

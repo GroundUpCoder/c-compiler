@@ -1,5 +1,5 @@
 {
-  "version": 120,
+  "version": 121,
   "overlays": [
     {
       "id": "clang-apps",
@@ -14,6 +14,7 @@
       "/usr/bin",
       "/usr/share",
       "/usr/share/fonts",
+      "/usr/share/gucman",
       "/usr/share/menu",
       "/usr/share/menu/Accessories",
       "/usr/share/menu/Demos",
@@ -58,6 +59,12 @@
       },
       "/usr/bin/gcode": {
         "project": "os/gcode/bin.json"
+      },
+      "/usr/bin/gucman": {
+        "project": "os/gucman/bin.json"
+      },
+      "/usr/share/gucman/repos": {
+        "content": "# gucman package repository (gucman Slice 1). One base URL per line;\n# the first non-comment line wins. Overridable at /etc/gucman/repos.\n# The default is origin-relative: the browser fetches /packages/index.json\n# from the same deploy that served the OS (serve.js maps /packages/* to\n# dist/packages/*, tools/mkpkg.js output). Headless boots write an\n# absolute http://... URL into /etc/gucman/repos instead.\n/packages\n"
       },
       "/usr/bin/code": {
         "link": "/usr/bin/gcode"
@@ -162,9 +169,6 @@
       "/usr/bin/mgba": {
         "project": "vendor/mgba/bin.json"
       },
-      "/usr/bin/punes": {
-        "project": "vendor/punes/bin.json"
-      },
       "/usr/bin/quake": {
         "project": "vendor/quake/bin.json"
       },
@@ -237,9 +241,6 @@
       "/usr/share/menu/Games/mgba": {
         "link": "/usr/bin/mgba"
       },
-      "/usr/share/menu/Games/punes": {
-        "link": "/usr/bin/punes"
-      },
       "/usr/share/menu/Games/snake": {
         "content": "#!/bin/sh\nterm snake\n"
       },
@@ -307,7 +308,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nnes\t/bin/punes\nbmp\t/bin/paint\nsent\t/bin/sent\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nbmp\t/bin/paint\nsent\t/bin/sent\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"

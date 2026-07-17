@@ -513,6 +513,125 @@ function plantOverlays(mfs, loaded, log) {
   return summaries;
 }
 
+/* ---- optional packages folded back into the bake (gucman Slice 1) ----
+ *
+ * gucman (the package manager) pulls optional apps OUT of the baked /usr
+ * blob into runtime-installable packages under packages/<name>.json (file
+ * entries use the same vocab as image.json; bin/openwith/menu are the
+ * declarative surface gucman plants at install time). A plain bake is the
+ * MINIMAL image (the deploy artifact); dev/test bakes fold the packages
+ * back in with --packages=all so the existing estate sees the same /usr it
+ * always did (the todos/0118 overlay precedent: opt-in, identity-recorded).
+ *
+ * Baked-mode layout (derived mechanically from the package definition — no
+ * per-package special cases): the package tree plants under
+ * /usr/opt/<name>/, each bin command becomes /usr/bin/<cmd> ->
+ * /usr/opt/<name>/<rel>, each menu entry becomes
+ * /usr/share/menu/<group>/<entry> -> /usr/bin/<cmd>, and each openwith key
+ * appends "<ext>\t/bin/<cmd>" to the baked /usr/share/openwith seed — the
+ * exact shapes these entries had when they lived in image.json. The
+ * installed-mode twin (gucman install) is /opt/<name> +
+ * /usr/local/bin/<cmd> + /etc/menu + /etc/openwith.
+ *
+ * The folded set is recorded in os-release as PACKAGES=<a,b,...> — the
+ * second identity axis (bakedPackages, mirroring bakedOverlays): a minimal
+ * blob and a fat blob share a VERSION_ID, so freshness gates that want a
+ * specific set must compare it, not just the version. Node-only (reads
+ * packages/ from the repo), like newestBakeInput. */
+function listPackages(fsMod, pathMod, rootDir) {
+  var names = [];
+  try {
+    fsMod.readdirSync(pathMod.join(rootDir, 'packages')).forEach(function (f) {
+      if (/\.json$/.test(f)) names.push(f.slice(0, -5));
+    });
+  } catch (e) { /* no packages/ dir — nothing to fold */ }
+  return names.sort();
+}
+
+function validRelPath(rel) {
+  if (typeof rel !== 'string' || !rel.length || rel.charAt(0) === '/') return false;
+  var parts = rel.split('/');
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] === '' || parts[i] === '.' || parts[i] === '..') return false;
+  }
+  return true;
+}
+
+/* which: 'all' | array of names | [] (fold nothing). Returns
+ * { manifest, names } — `manifest` is a deep copy with the packages folded
+ * into the system section and `packagesBaked` set (which bakeSystemImage
+ * records as the os-release PACKAGES= line); with an empty fold the input
+ * manifest is returned untouched. Throws on unknown names and on any
+ * malformed package definition (loud, before a ~minute-long bake — the
+ * overlay discipline). */
+function foldPackages(fsMod, pathMod, rootDir, manifest, which) {
+  var avail = listPackages(fsMod, pathMod, rootDir);
+  var names = which === 'all' ? avail : (which || []).slice().sort();
+  names.forEach(function (n) {
+    if (avail.indexOf(n) < 0)
+      throw new Error("unknown package '" + n + "' (declared in packages/: " + (avail.join(', ') || 'none') + ')');
+  });
+  if (!names.length) return { manifest: manifest, names: [] };
+  var m = JSON.parse(JSON.stringify(manifest));
+  m.system = m.system || {};
+  m.system.dirs = m.system.dirs || [];
+  m.system.files = m.system.files || {};
+  var dirSeen = {};
+  m.system.dirs.forEach(function (d) { dirSeen[d] = true; });
+  function pushDir(d) {
+    if (!dirSeen[d]) { dirSeen[d] = true; m.system.dirs.push(d); }
+  }
+  function claim(pkgName, p, entry) {
+    if (m.system.files[p])
+      throw new Error("package '" + pkgName + "': " + p + ' conflicts with an existing image entry');
+    m.system.files[p] = entry;
+  }
+  names.forEach(function (name) {
+    var pkg = JSON.parse(fsMod.readFileSync(
+      pathMod.join(rootDir, 'packages', name + '.json'), 'utf-8'));
+    if (pkg.name !== name)
+      throw new Error('packages/' + name + '.json declares name ' + JSON.stringify(pkg.name));
+    var bin = pkg.bin || {};
+    var base = '/usr/opt/' + name;
+    pushDir('/usr/opt');
+    pushDir(base);
+    Object.keys(pkg.files || {}).sort().forEach(function (rel) {
+      if (!validRelPath(rel))
+        throw new Error("package '" + name + "': bad file path " + JSON.stringify(rel));
+      var entry = pkg.files[rel];
+      if (entry.link !== undefined)
+        throw new Error("package '" + name + "': " + rel + ' — link entries are not supported in packages (v1 tar+gzip payloads carry files and dirs only)');
+      var parts = rel.split('/'), cur = base;
+      for (var i = 0; i < parts.length - 1; i++) { cur += '/' + parts[i]; pushDir(cur); }
+      claim(name, base + '/' + rel, entry);
+    });
+    Object.keys(bin).sort().forEach(function (cmd) {
+      var rel = bin[cmd];
+      if (!(pkg.files || {})[rel])
+        throw new Error("package '" + name + "': bin " + cmd + ' -> ' + rel + ' names no package file');
+      claim(name, '/usr/bin/' + cmd, { link: base + '/' + rel });
+    });
+    (pkg.menu || []).forEach(function (me) {
+      if (!validRelPath(me.group) || me.group.indexOf('/') >= 0 ||
+          !validRelPath(me.entry) || me.entry.indexOf('/') >= 0 || !bin[me.cmd])
+        throw new Error("package '" + name + "': bad menu entry " + JSON.stringify(me));
+      pushDir('/usr/share/menu/' + me.group);
+      claim(name, '/usr/share/menu/' + me.group + '/' + me.entry, { link: '/usr/bin/' + me.cmd });
+    });
+    Object.keys(pkg.openwith || {}).sort().forEach(function (ext) {
+      var cmd = pkg.openwith[ext];
+      if (!bin[cmd])
+        throw new Error("package '" + name + "': openwith " + ext + ' -> ' + cmd + ' names no bin command');
+      var ow = m.system.files['/usr/share/openwith'];
+      if (!ow || ow.content === undefined)
+        throw new Error('folding package openwith keys needs an inline-content /usr/share/openwith seed');
+      ow.content += ext + '\t/bin/' + cmd + '\n';
+    });
+  });
+  m.packagesBaked = names;
+  return { manifest: m, names: names };
+}
+
 /* Build the Node-side overlay io from injected modules (keeps os-common
  * environment-neutral; only mkimage.js/boot.js — both Node — call this). */
 function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
@@ -580,6 +699,12 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
           return { id: a.id, commitShort: a.commitShort, dirty: a.dirty };
         })) + '\n');
     }
+    if (manifest.packagesBaked && manifest.packagesBaked.length) {
+      // Second identity axis (see foldPackages): a fat and a minimal blob
+      // share a VERSION_ID; gates that want a specific set read this back
+      // through bakedPackages.
+      rel += 'PACKAGES=' + manifest.packagesBaked.join(',') + '\n';
+    }
     writeFile(mfs, '/usr/share/os-release', rel);
     sysStore.flush && sysStore.flush();
     return BLOCK_FS.sealVolume(sysStore);
@@ -615,6 +740,23 @@ function bakedOverlays(BLOCK_FS, store) {
     var t = readFileText(fs, '/share/os-release');
     if (t === null) return [];
     var m = /(?:^|\n)OVERLAYS=([^\n]*)/.exec(t);
+    if (!m) return [];
+    return m[1].split(',').filter(function (s) { return s; }).sort();
+  } catch (e) {
+    return [];
+  }
+}
+
+/* The package set a blob was baked with (its os-release PACKAGES= line —
+ * written only when foldPackages folded any in), as a SORTED array of
+ * names, or [] for a minimal blob / anything unreadable. The packages twin
+ * of bakedOverlays. */
+function bakedPackages(BLOCK_FS, store) {
+  try {
+    var fs = BLOCK_FS.createV4(store, { readonly: true });
+    var t = readFileText(fs, '/share/os-release');
+    if (t === null) return [];
+    var m = /(?:^|\n)PACKAGES=([^\n]*)/.exec(t);
     if (!m) return [];
     return m[1].split(',').filter(function (s) { return s; }).sort();
   } catch (e) {
@@ -696,6 +838,10 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
   statFile(pathMod.join(rootDir, 'compiler.js'));
   statFile(pathMod.join(rootDir, 'host.js'));
   walk(pathMod.join(rootDir, 'os'), BAKE_INPUT_SKIP);
+  // Package definitions are bake inputs whenever packages fold in (a fat
+  // fixture must restale on a packages/*.json edit); scanned unconditionally
+  // — over-invalidating a minimal bake is the cheap direction.
+  walk(pathMod.join(rootDir, 'packages'), null);
   var files = (manifest.system && manifest.system.files) || {};
   Object.keys(files).forEach(function (fp) {
     var entry = files[fp];
@@ -761,8 +907,11 @@ var OS_COMMON = {
   loadOverlays: loadOverlays,
   plantOverlays: plantOverlays,
   nodeOverlayIo: nodeOverlayIo,
+  listPackages: listPackages,
+  foldPackages: foldPackages,
   bakedVersion: bakedVersion,
   bakedOverlays: bakedOverlays,
+  bakedPackages: bakedPackages,
   newestBakeInput: newestBakeInput,
   initRootVolume: initRootVolume,
   NodeFileStore: NodeFileStore,

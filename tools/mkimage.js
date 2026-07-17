@@ -19,6 +19,15 @@
 //   --overlays=all            enable every declared overlay
 //   --require-clean-overlays  a dirty overlay provenance is fatal (else warns)
 //
+// Optional packages (gucman): a plain bake is the MINIMAL image — apps
+// pulled out into packages/<name>.json are ABSENT (installable at runtime
+// by /bin/gucman). Fixture/dev bakes fold them back in so the existing test
+// estate sees the same /usr it always did; the folded set is recorded in
+// os-release as PACKAGES= (os-common.bakedPackages — the identity axis
+// freshness gates compare, since a fat and a minimal blob share a version).
+//   --packages=all            fold every packages/<name>.json into the bake
+//   --packages=a,b            fold specific packages
+//
 // os/boot.js bakes the same blob on demand (missing/stale image), so this
 // tool is optional for the headless dev loop; it exists to prebake the blob
 // the browser boot fetches (no compilation on the boot path) and to bake
@@ -39,6 +48,7 @@ let manifestPath = path.join(OS_DIR, 'image.json');
 let quiet = false;
 let requireCleanOverlays = false;
 let allOverlays = false;
+let packagesWant = [];   // [] = minimal bake; 'all' | names = fold back in
 const requestedOverlays = new Set();
 for (const a of process.argv.slice(2)) {
   if (a.startsWith('--out=')) outPath = path.resolve(a.slice(6));
@@ -48,13 +58,29 @@ for (const a of process.argv.slice(2)) {
   else if (a.startsWith('--overlay=')) requestedOverlays.add(a.slice(10));
   else if (a.startsWith('--overlays=')) a.slice(11).split(',').forEach((id) => id && requestedOverlays.add(id));
   else if (a === '--require-clean-overlays') requireCleanOverlays = true;
+  else if (a === '--packages=all') packagesWant = 'all';
+  else if (a.startsWith('--packages='))
+    packagesWant = a.slice(11) === 'none' ? [] : a.slice(11).split(',').filter(Boolean);
   else {
     process.stderr.write(`mkimage: unknown option ${a}\n`);
     process.exit(2);
   }
 }
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkimage] ' + m + '\n');
-const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+const rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+
+// Fold requested packages back into the bake (gucman fixture mode). An
+// unknown name is a usage error, BEFORE any bake.
+let manifest, foldedPackages;
+try {
+  const folded = COMMON.foldPackages(fs, path, ROOT, rawManifest, packagesWant);
+  manifest = folded.manifest;
+  foldedPackages = folded.names;
+} catch (e) {
+  process.stderr.write(`mkimage: ${e.message}\n`);
+  process.exit(2);
+}
+if (foldedPackages.length) log('folding packages: ' + foldedPackages.join(', '));
 
 // Resolve requested overlays against image.json `overlays[]`. An unknown id is
 // a usage error (exit 2), BEFORE any bake — the whole point is an explicit,
@@ -98,11 +124,14 @@ async function main() {
     overlayIo: COMMON.nodeOverlayIo(fs, path, require('crypto')),
     requireCleanOverlays,
   });
-  // Verify what was just written: seal intact + the version reads back.
+  // Verify what was just written: seal intact + version and package set
+  // read back.
   const sealed = await BLOCK_FS.verifySeal(store);
   const version = COMMON.bakedVersion(BLOCK_FS, store);
-  if (sealed !== true || version !== (manifest.version | 0)) {
-    throw new Error(`post-bake verification failed (seal=${sealed}, version=${version})`);
+  const pkgs = COMMON.bakedPackages(BLOCK_FS, store);
+  if (sealed !== true || version !== (manifest.version | 0) ||
+      pkgs.join(',') !== foldedPackages.join(',')) {
+    throw new Error(`post-bake verification failed (seal=${sealed}, version=${version}, packages=[${pkgs}])`);
   }
   store.flush();
   const size = store.size();

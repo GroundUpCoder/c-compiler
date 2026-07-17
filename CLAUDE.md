@@ -786,7 +786,26 @@ panel — search/pins/band — stays wm-drawn). wm.c links
 user32/kernel32 — gdi32's W wrappers live in gdi32w.c, veneer-side);
 the Start tree is the UNION of /etc/menu and /usr/share/menu (/etc wins
 same-name clashes — the gucman prerequisite, ex-0244/0250).
-Image version is **v120**.
+gucman (todos/0261, Slice 1) is the package manager: optional apps live
+OUT of the baked blob as `packages/<name>.json` definitions →
+`tools/mkpkg.js` builds deterministic tar+gzip payloads + `index.json`
+into `dist/packages/` (gitignored; served at `/packages/*` by serve.js,
+built by the SAME seedEntries/buildProject pipeline as the bake — bytes
+identical). `/bin/gucman` (os/gucman/, curl veneer + zlib + cJSON)
+install/remove/list: sha256 verified BEFORE extraction, tar members
+validated (no `..`/absolute/outside-`opt/<name>/`), staged extract →
+atomic rename to `/opt/<name>` → plant declarative bin (/usr/local/bin
+symlinks) / openwith (/etc delta keys) / menu (/etc/menu) → DB record
+`/var/lib/gucman/<name>.json` written LAST (crash-safe); remove replays
+the DB in reverse. A plain mkimage bake is MINIMAL (punes absent);
+`--packages=all` folds packages back in (os-release `PACKAGES=` is the
+identity axis, os-common bakedPackages) — image-fixture/serve.js/boot.js
+default to the FAT image so the estate needs no test changes;
+`boot.js --packages=none` is the minimal-boot mode (test_gucman_e2e).
+Repo URL: /etc/gucman/repos > baked /usr/share/gucman/repos
+(origin-relative `/packages`). punes is the first package (Slice 1);
+deploy leg + pulling the other apps are follow-ons.
+Image version is **v121**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

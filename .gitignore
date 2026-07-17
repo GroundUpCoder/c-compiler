@@ -15,3 +15,4 @@ os/os-system.*.img.tmp-*
 os/os-user.img
 media/
 os/os-root.img
+dist/

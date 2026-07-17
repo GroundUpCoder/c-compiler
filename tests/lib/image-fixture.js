@@ -23,14 +23,26 @@ const IMG = path.join(ROOT, 'os', 'os-system.img');
 function fixtureState() {
   const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
   const COMMON = require(path.join(ROOT, 'os', 'os-common.js'));
-  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'os', 'image.json'), 'utf-8'));
+  const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'os', 'image.json'), 'utf-8'));
+  // The fixture is the FAT image: every packages/<name>.json folded back in
+  // (gucman pulls them out of the plain bake), so the estate's punes/etc.
+  // tests see the same /usr they always did. The folded manifest also
+  // drives the input scan (a fat blob depends on the packages' closure);
+  // the blob's PACKAGES= line is the identity axis (a minimal blob at the
+  // same version is NOT this fixture).
+  const folded = COMMON.foldPackages(fs, path, ROOT, raw, 'all');
+  const manifest = folded.manifest;
   let st;
   try { st = fs.statSync(IMG); } catch (e) { return { fresh: false, reason: 'missing' }; }
   const store = new COMMON.NodeFileStore(fs, IMG, false);
   const v = COMMON.bakedVersion(BLOCK_FS, store);
+  const pkgs = COMMON.bakedPackages(BLOCK_FS, store);
   store.close();
   if (v < (manifest.version | 0)) {
     return { fresh: false, reason: `${v < 0 ? 'unreadable' : 'v' + v} < manifest v${manifest.version}` };
+  }
+  if (pkgs.join(',') !== folded.names.join(',')) {
+    return { fresh: false, reason: `package set [${pkgs.join(',') || 'none'}] != wanted [${folded.names.join(',')}]` };
   }
   const inp = COMMON.newestBakeInput(fs, path, ROOT, manifest);
   if (st.mtimeMs < inp.mtimeMs) {
@@ -47,9 +59,10 @@ function ensurePrebakedImage(log) {
   log = log || ((m) => process.stderr.write(m + '\n'));
   const st = fixtureState();
   if (st.fresh) { log(`[fixture] os/os-system.img fresh (v${st.version})`); return true; }
-  log(`[fixture] os/os-system.img ${st.reason} — baking once (node tools/mkimage.js)…`);
+  log(`[fixture] os/os-system.img ${st.reason} — baking once (node tools/mkimage.js --packages=all)…`);
   const t0 = Date.now();
-  const r = cp.spawnSync(process.execPath, [path.join(ROOT, 'tools', 'mkimage.js'), '--quiet'],
+  const r = cp.spawnSync(process.execPath,
+    [path.join(ROOT, 'tools', 'mkimage.js'), '--quiet', '--packages=all'],
     { stdio: ['ignore', 'inherit', 'inherit'] });
   if (r.status !== 0) {
     log('[fixture] mkimage FAILED — e2e boots will bake privately (expect slow failures)');
