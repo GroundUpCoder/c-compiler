@@ -88,6 +88,14 @@ int main(void) {
     SDL_Window *w = SDL_CreateWindow("waitbox", 64, 48, 0);
     if (!w) { printf("NOWIN\\n"); return 3; }
     signal(SIGUSR1, on_usr1);
+    /* todos/0256: creating the window takes focus and the owner focus pair
+       rides the ring — consume the initial FOCUS_GAINED (and pin that it
+       arrives) so the park legs below start from a drained queue. */
+    why = __wait(NULL, 0, 1, 2000);
+    int fgpoll = SDL_PollEvent(&ev);
+    printf("FG why=%d isfg=%d\\n", why,
+           fgpoll && ev.type == SDL_EVENT_WINDOW_FOCUS_GAINED);
+    fflush(stdout);
     printf("PARK4\\n"); fflush(stdout);
     t0 = SDL_GetTicks();
     why = __wait(NULL, 0, 1, -1);
@@ -193,6 +201,8 @@ const watchdog = setTimeout(() => {
 
   // L4: ring wake out of an infinite park.
   await waitOut('PARK4');
+  check('create-steal FOCUS_GAINED arrived (todos/0256) and was consumed',
+    field('FG', 'why') === 2 && field('FG', 'isfg') === 1, line('FG'));
   const sid = kernel.wmList().find((s) => s.title === 'waitbox').sid;
   await sleep(1200);                              // quiet interval: no phantom wake
   check('L4: still parked after 1.2s of nothing', !out.includes('L4 '), out);

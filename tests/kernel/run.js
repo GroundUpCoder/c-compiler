@@ -60,8 +60,10 @@ const tests = [
   ['test_vi_e2e.js', IMG],       // 0011: busybox vi through the real tty — raw mode, edit sessions
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
   ['test_wm.js'],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
+  ['test_wm_anchored.js'],  // 0256 Spike 1: anchored child surfaces (A1 tree, A11 materialized dst, A5 owner child resize, clamp, cascade, thumbnail compositing) + the grab (A2) + the focus-funnel owner pair (A9) — kernel seam, no wasm
   ['test_wm_aero.js'],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)
   ['test_wm_e2e.js'],       // WM.md: real C SDL app windowed — shm present, ring input, QUIT
+  ['test_menubox_e2e.js', IMG], // 0256 Spike 1 e2e: SDL_CreatePopupWindow through the real veneer — subtree drag-follow (2-deep chain), hide/show, composited child text + popup overflow, grab dismiss+consume, A5 strip resize, the owner focus pair, cascade close
   ['test_audio.js'],        // 0017: the kernel mixer — exact-value mixes, resample, lifecycle (no wasm)
   ['test_audio_e2e.js'],    // 0017: real C SDL audio streams — AUDIO_OPEN handshake, mix, SIGKILL drain
   ['test_sounds_e2e.js'],   // 0094: the event-sound scheme — PlaySound aliases/flags/mute store, MessageBeep + MessageBox beep, SYNC drain-dry reclaim

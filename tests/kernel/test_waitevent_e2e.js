@@ -56,6 +56,14 @@ int main(void) {
     if (!w) { printf("NOWIN\\n"); return 3; }
     signal(SIGUSR1, on_usr1);
 
+    /* todos/0256: creating the window takes focus and the owner focus pair
+       rides the ring — consume the initial FOCUS_GAINED (and pin that it
+       arrives) so the park legs below start from a drained queue. */
+    got = SDL_WaitEventTimeout(&ev, 2000);
+    printf("FG got=%d isfg=%d\\n", got,
+           ev.type == SDL_EVENT_WINDOW_FOCUS_GAINED);
+    fflush(stdout);
+
     /* Leg 1: real ring, no input — park the full timeout, return false.
        Zero-timeout first: pure poll, must return immediately. */
     got = SDL_WaitEventTimeout(&ev, 0);
@@ -144,6 +152,8 @@ const watchdog = setTimeout(() => {
 
   // Leg 1: zero-timeout poll + full-timeout park.
   await waitOut('L1 ');
+  check('create-steal FOCUS_GAINED arrived (todos/0256) and was consumed',
+    field('FG', 'got') === 1 && field('FG', 'isfg') === 1, line('FG'));
   check('poll0: zero timeout returns immediately, false', /poll0=0/.test(out), line('READY'));
   check('L1: timeout park returns false', field('L1', 'got') === 0, line('L1'));
   check('L1: parked the full timeout (>=250ms)', field('L1', 'dt') >= 250, line('L1'));

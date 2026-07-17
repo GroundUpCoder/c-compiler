@@ -568,8 +568,14 @@ var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
 /* SDL event type numbers (MUST MATCH <SDL3/SDL_events.h> / host.js
  * sdlEvents): the ring carries them verbatim. WINDOW_RESIZED is the resize
  * request (todos/0019): record words [2]=w [3]=h; the client acks with the
- * SURFACE_CONFIGURE RPC once it has a frame at the new size. */
-var WMEV = { QUIT: 0x100, WINDOW_RESIZED: 0x206, KEYDOWN: 0x300, KEYUP: 0x301,
+ * SURFACE_CONFIGURE RPC once it has a frame at the new size.
+ * FOCUS_GAINED/FOCUS_LOST are the owner focus pair (todos/0256, menu arch
+ * A9): every kernel focus TRANSITION emits LOST to the old owner and GAINED
+ * to the new one — by construction, since all _focusSid writes flow through
+ * the ONE _wmSetFocus choke point. */
+var WMEV = { QUIT: 0x100, WINDOW_RESIZED: 0x206,
+             FOCUS_GAINED: 0x20E, FOCUS_LOST: 0x20F,
+             KEYDOWN: 0x300, KEYUP: 0x301,
              MOUSEMOTION: 0x400, MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402,
              MOUSEWHEEL: 0x403 };
 
@@ -1305,10 +1311,17 @@ KernelClient.prototype.spawnHooks = function () {
     // can't hand one to a parked worker) and posts them on the same FIFO
     // channel immediately before the RPC that names them.
     // flags bit0: borderless (no kernel chrome — taskbar-class surfaces).
-    surfaceCreate: function (w, h, title, fbSab, ringSab, flags) {
+    // flags bit6: anchored child (todos/0256) — parentSid names the parent
+    // surface, dx/dy the anchor offset in parent buffer coords; bit7 adds
+    // the press-outside-dismisses grab (menu arch A2). Old callers omit the
+    // trailing args (|0 -> 0 = a plain top-level).
+    surfaceCreate: function (w, h, title, fbSab, ringSab, flags, parentSid, dx, dy) {
       self._post({ type: 'wm-sabs', fb: fbSab, ring: ringSab || null });
-      return self.call(OP.SURFACE_CREATE, { w: w, h: h, title: title || '', flags: flags | 0 });
+      return self.call(OP.SURFACE_CREATE, { w: w, h: h, title: title || '', flags: flags | 0,
+        parentSid: parentSid | 0, dx: dx | 0, dy: dy | 0 });
     },
+    // The published screen dims (vDSO read, zero RPCs) — SDL_GetDisplayBounds.
+    screen: function () { return self.screen(); },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
     // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
@@ -1746,10 +1759,24 @@ function Kernel(opts) {
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
-  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure, mapped, mapTimer }
+  this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure, mapped, mapTimer, parentSid, dx, dy, children, grab }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
-  this._focusSid = 0;
+  this._focusSid = 0;         // written ONLY through _wmSetFocus (todos/0256,
+                              // menu arch A9) — the one choke point that emits
+                              // the owner FOCUS_GAINED/LOST pair + EV_FOCUS
+  this._wmAnchoredN = 0;      // live anchored-child count (todos/0256) — the
+                              // zero-cost fast path for the _wmZNormalize
+                              // subtree post-pass on anchor-free scenes
+  this._wmGrabs = [];         // active grab holders, oldest -> newest (todos/
+                              // 0256, menu arch A2): while the newest holder
+                              // lives, a press OUTSIDE its root's client tree
+                              // dismisses it (WMEV.QUIT to the holder) and is
+                              // CONSUMED — Win95 menu-mode capture. Pushed at
+                              // an anchored create with flag bit 7, popped at
+                              // destroy or at the dismissing press.
+  this._wmGrabSwallowUp = false;  // consume the release matching a consumed
+                                  // press (a click is eaten whole)
   this._wmDrag = null;        // { sid, dx, dy } during a title-bar drag
   this._wmTitleDown = null;   // { sid, x, y, t } — last title-bar mousedown,
                               // for double-click detection (todos/0025)
@@ -3381,6 +3408,21 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
           Atomics.load(i32, SH_W) !== w || Atomics.load(i32, SH_H) !== h) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
+      // Anchored child surface (todos/0256, menu arch §3.1): creation-flag
+      // bit 6 pins the new surface to a same-process parent at a fixed
+      // (dx, dy) offset from the parent's client origin. parentSid forms an
+      // arbitrary-depth TREE (amendment A1 — a popup may parent another
+      // popup); the kernel moves/hides/raises/destroys/scales the subtree
+      // with its root and never learns what the child is FOR (menus,
+      // tooltips, dropdowns — the anchored-popup family, A8). Bit 7 adds
+      // the GRAB (A2): press-outside-dismisses, see _wmGrabs above.
+      var parent = null;
+      if ((req.flags | 0) & 64) {
+        parent = this._surfaces.get(req.parentSid | 0);
+        if (!parent || parent.pid !== pcb.pid) {
+          this._respond(pcb, { errno: 'EINVAL' }); break;
+        }
+      }
       var sid = this._nextSid++;
       // Cascade placement (kernel default; a connected /bin/wm re-places on
       // EV_CREATED — until that lands the surface is unmapped, todos/0069);
@@ -3413,7 +3455,28 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         mapped: true,             // in the composite + hit test (todos/0069);
                                   // see the map-on-placement decision below
         mapTimer: null,           // the unmapped-surface backstop timeout
+        parentSid: 0,             // anchored child (todos/0256): the parent
+                                  // surface this one is pinned to (0 = a
+                                  // top-level); forms a tree (A1)
+        dx: 0, dy: 0,             // the anchor offset, in PARENT BUFFER
+                                  // coordinates — on-screen geometry is
+                                  // MATERIALIZED from these (A11), see
+                                  // _wmAnchorApply
+        children: [],             // anchored children, creation-ordered sids
+        grab: false,              // this child holds a grab (flag bit 7, A2)
       };
+      if (parent) {
+        surf.parentSid = parent.sid;
+        surf.dx = req.dx | 0;
+        surf.dy = req.dy | 0;
+        surf.borderless = true;   // children are chrome-free in every rendering
+        surf.grab = !!((req.flags | 0) & 128);
+        // Materialize the on-screen rect from the parent (A11) — position,
+        // inherited scale, and the into-the-screen clamp all land in the
+        // stored x/y/dstW/dstH, so the scene walk / composite / hit test
+        // read a plain per-surface rect and stay anchor-blind.
+        this._wmAnchorApply(surf, parent);
+      }
       // Map-on-placement (todos/0069): with a WM subscribed, the surface is
       // created UNMAPPED — the compositor and hit test skip it until the
       // WM's first geometry/stacking op on the sid lands (wm.c MOVEs every
@@ -3435,13 +3498,24 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       this._surfaces.set(sid, surf);
       this._zOrder.push(sid);
+      if (parent) {
+        parent.children.push(sid);
+        this._wmAnchoredN++;
+        if (surf.grab) this._wmGrabs.push(sid);
+      }
       this._wmZNormalize();       // create raises within the NORMAL layer only
+                                  // (and re-slots anchored subtrees, A1)
       pcb.surfaces.add(sid);
-      this._focusSid = sid;       // new window takes focus (v1 policy)
       this._bumpWm();
       this._respond(pcb, { sid: sid, x: surf.x, y: surf.y });
       this._wmEmit(WMP.EV_CREATED, this._wmpRecord(surf));
-      this._wmEmit(WMP.EV_FOCUS, [sid]);
+      // New window takes focus (v1 policy) — EXCEPT anchored children, which
+      // never steal focus (§3.1: a menu must not deactivate its own window
+      // as it opens; this also kills the wm.c-style hand-back dance for
+      // popups). The funnel emits the owner FOCUS pair + EV_FOCUS; it runs
+      // AFTER EV_CREATED because wm.c's dismissal gating relies on the
+      // create echo naming the sid before its EV_FOCUS arrives (wm.c:3284).
+      if (!parent) this._wmSetFocus(sid);
       this._wmSyncPointerLock();
       break;
     }
@@ -3453,7 +3527,9 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var sf = this._surfaces.get(req.sid | 0);
       if (!sf || sf.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       var fl = req.flags | 0;
-      sf.borderless = !!(fl & 1);
+      // Anchored children stay chrome-free invariantly (todos/0256, §3.1):
+      // a flag update can never grow a popup a title bar.
+      sf.borderless = sf.parentSid ? true : !!(fl & 1);
       sf.relativeMouse = !!(fl & 2);
       sf.resizable = !!(fl & 4);
       sf.hasAlpha = !!(fl & 8);
@@ -3489,7 +3565,11 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var sr = this._surfaces.get(req.sid | 0);
       if (!sr || sr.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       var rw = req.w | 0, rh = req.h | 0;
-      if (rw < WM_MIN_SIZE || rh < WM_MIN_SIZE || rw > 8192 || rh > 8192) {
+      // WM_MIN_SIZE keeps a framed window's title reachable; an anchored
+      // child is chrome-free and owner-managed, and menu-bar-class strips
+      // are legitimately thinner (todos/0256) — only >0 applies there.
+      var srMin = sr.parentSid ? 1 : WM_MIN_SIZE;
+      if (rw < srMin || rh < srMin || rw > 8192 || rh > 8192) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
       if (rw === sr.w && rh === sr.h && !sr.pendingConfigure) {
@@ -3543,8 +3623,19 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       sc.sab = fb2; sc.i32 = ci32; sc.u8 = new Uint8Array(fb2);
       sc.w = cw; sc.h = ch;
-      sc.dstW = cw; sc.dstH = ch;   // configure implies resizable: dst tracks
+      if (sc.parentSid) {
+        // Anchored child (todos/0256, A5/A11): dst is INHERITED — re-derive
+        // position + scale from the parent instead of resetting dst to the
+        // buffer, so an owner-resized strip child keeps riding the parent's
+        // scale and anchor.
+        var cpar = this._surfaces.get(sc.parentSid);
+        if (cpar) this._wmAnchorApply(sc, cpar);
+      } else {
+        sc.dstW = cw; sc.dstH = ch; // configure implies resizable: dst tracks
                                     // the buffer (never scaled, todos/0024)
+      }
+      if (sc.children.length) this._wmAnchorLayout(sc);  // subtree follows the
+                                                         // new geometry (A1)
       if (sc.pendingConfigure.w !== cw || sc.pendingConfigure.h !== ch) {
         // Superseded while the client was renegotiating: latest wins — keep
         // the (valid, newer-than-old) buffer and re-issue the configure.
@@ -3601,6 +3692,20 @@ Kernel.prototype._wmSubDrop = function (conn) {
 Kernel.prototype._wmDestroySurface = function (sid) {
   var s = this._surfaces.get(sid);
   if (!s) return;
+  // Destroy-cascade (todos/0256, A1): anchored children die first,
+  // recursively — a popup never outlives its anchor. Each child's own
+  // destroy unlinks it from s.children, so the loop drains the list.
+  while (s.children.length) this._wmDestroySurface(s.children[0]);
+  if (s.parentSid) {
+    var dpar = this._surfaces.get(s.parentSid);
+    if (dpar) {
+      var dci = dpar.children.indexOf(sid);
+      if (dci >= 0) dpar.children.splice(dci, 1);
+    }
+    this._wmAnchoredN--;
+    var dgi = this._wmGrabs.indexOf(sid);      // a dead holder releases its
+    if (dgi >= 0) this._wmGrabs.splice(dgi, 1); // grab (A2)
+  }
   if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
   this._wmAnims.delete(sid);    // no animating a dead surface (todos/0063)
   this._surfaces.delete(sid);
@@ -3627,11 +3732,128 @@ Kernel.prototype._wmFocusFall = function () {
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var t = this._surfaces.get(this._zOrder[i]);
     if (!t || t.minimized) continue;
+    if (t.parentSid) continue;            // anchored children never take focus
     if (t.layer === 0) { fall = t.sid; break; }
     if (!fall) fall = t.sid;              // remember the topmost furniture
   }
-  this._focusSid = fall;
-  this._wmEmit(WMP.EV_FOCUS, [fall]);
+  this._wmSetFocus(fall);
+};
+
+/* ---- the focus funnel (todos/0256, menu arch A9) ----
+ * The ONE writer of _focusSid. Every focus TRANSITION — the surface-create
+ * steal, wmFocus, and the destroy/minimize focus fall — lands here, so the
+ * owner focus pair (WMEV.FOCUS_LOST to the old owner, FOCUS_GAINED to the
+ * new — SDL3's stock SDL_EVENT_WINDOW_FOCUS_GAINED/LOST) and the
+ * WM-subscriber EV_FOCUS fire at all of them BY CONSTRUCTION. Half-wired
+ * focus events are worse than none: an app can't pause-on-deactivate off an
+ * event that only fires for one of three transitions. */
+Kernel.prototype._wmSetFocus = function (sid) {
+  sid = sid | 0;
+  var prev = this._focusSid | 0;
+  if (prev === sid) return;
+  this._focusSid = sid;
+  // Best-effort delivery (a dying prev surface or a ringless owner just
+  // drops its event — same contract as every ring push).
+  if (prev) this._wmEventTo(prev, [WMEV.FOCUS_LOST, 0, 0, 0, 0, 0, 0, 0]);
+  if (sid) this._wmEventTo(sid, [WMEV.FOCUS_GAINED, 0, 0, 0, 0, 0, 0, 0]);
+  this._wmEmit(WMP.EV_FOCUS, [sid]);
+  this._bumpWm();
+};
+
+/* ---- anchored-child geometry (todos/0256, menu arch §3.1/A1/A11) ---- */
+
+/* Materialize an anchored child's on-screen rect from its parent: position
+ * = the parent origin + the (dx, dy) anchor offset scaled by the parent's
+ * dst/buffer ratio; size = the child's own buffer scaled the same way —
+ * scale INHERITS down the tree, so a dst-scaled fixed-size window (todos/
+ * 0024) carries its popups exactly like its client pixels. Runs at every
+ * MUTATION site (create, parent move/drag/screen-clamp, wmSetDst, either
+ * side's configure) and STORES the result (A11), so the scene walk, the
+ * headless composite and the hit test read a plain per-surface rect and
+ * stay anchor-blind — the consumers genuinely cost zero lines. The final
+ * clamp slides the child into the screen (the xdg-positioner "slide"
+ * shape): edge-avoiding popups without the app knowing screen dims, and
+ * since geometry is re-derived from dx/dy each time, clamps never
+ * accumulate. */
+Kernel.prototype._wmAnchorApply = function (c, p) {
+  c.dstW = Math.max(1, Math.round(c.w * p.dstW / p.w));
+  c.dstH = Math.max(1, Math.round(c.h * p.dstH / p.h));
+  c.x = p.x + Math.round(c.dx * p.dstW / p.w);
+  c.y = p.y + Math.round(c.dy * p.dstH / p.h);
+  c.x = Math.max(0, Math.min(c.x, this._wmScreen.w - c.dstW));
+  c.y = Math.max(0, Math.min(c.y, this._wmScreen.h - c.dstH));
+};
+
+/* Re-materialize every anchored DESCENDANT of s — the recursive subtree
+ * walk (A1: arbitrary depth, never depth-1). s itself is not touched. */
+Kernel.prototype._wmAnchorLayout = function (s) {
+  for (var i = 0; i < s.children.length; i++) {
+    var c = this._surfaces.get(s.children[i]);
+    if (!c) continue;
+    this._wmAnchorApply(c, s);
+    this._wmAnchorLayout(c);
+  }
+};
+
+/* The ONE funnel for top-level x/y writes (§3.1 move-with-parent): wmMove,
+ * the interactive title drag (clamp included) and the EV_SCREEN one-shot
+ * clamp all land here, so the anchored subtree follows by construction. */
+Kernel.prototype._wmMoveWithChildren = function (s, nx, ny) {
+  s.x = nx | 0;
+  s.y = ny | 0;
+  if (s.children.length) this._wmAnchorLayout(s);
+};
+
+/* Hide/show with parent (§3.1): an anchored child is hidden when ANY
+ * ancestor is minimized or unmapped — asked on the fly by the hit test,
+ * the headless composite, the cursor walk and the scene accessor (no state
+ * fan-out; the walk only runs for surfaces that HAVE a parent). */
+Kernel.prototype._wmAnchorHidden = function (s) {
+  for (var p = this._surfaces.get(s.parentSid); p;
+       p = p.parentSid ? this._surfaces.get(p.parentSid) : null) {
+    if (p.minimized || !p.mapped) return true;
+  }
+  return false;
+};
+
+/* The top-level ancestor of an anchored child (itself for a top-level). */
+Kernel.prototype._wmAnchorRoot = function (s) {
+  while (s.parentSid) {
+    var p = this._surfaces.get(s.parentSid);
+    if (!p) break;
+    s = p;
+  }
+  return s;
+};
+
+/* ---- the grab (todos/0256, menu arch A2) ----
+ * Called on every pointer PRESS while a grab is active, with the hit-test
+ * result (target surface or null for the desktop, and whether the press
+ * landed in its client area). A press in the client area of any surface in
+ * the grab holder's root tree routes normally (slide between menu levels,
+ * clicks on the owning window — the in-process engine handles in-window
+ * dismissal itself, exactly as today). ANY other press — other windows,
+ * chrome (own included: Win95 eats the title click that closes a menu),
+ * the desktop — dismisses the holder (WMEV.QUIT -> the veneer's per-window
+ * SDL_EVENT_WINDOW_CLOSE_REQUESTED, since a popup implies >= 2 live
+ * windows) and is CONSUMED, matching release included. The grab pops at
+ * the dismissing press, not at the holder's destroy ack, so a wedged owner
+ * can never turn one stuck popup into a system-wide input eater. Keyboard
+ * needs no grab: children never take focus, so keys already flow to the
+ * popup's own process via the focused parent. Pointer lock outranks the
+ * grab by branch order in wmPointer (locked routing never hit-tests). */
+Kernel.prototype._wmGrabConsume = function (target, isClient) {
+  var hSid = this._wmGrabs[this._wmGrabs.length - 1];
+  var holder = this._surfaces.get(hSid);
+  if (!holder) { this._wmGrabs.pop(); return null; }   // stale entry: no grab
+  if (target && isClient &&
+      this._wmAnchorRoot(target) === this._wmAnchorRoot(holder)) {
+    return null;                                       // inside: route normally
+  }
+  this._wmGrabs.pop();
+  this._wmGrabSwallowUp = true;
+  this._wmEventTo(hSid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
+  return 'grab-dismiss';
 };
 
 /* ---- pointer lock (todos/0018) ----
@@ -4148,6 +4370,7 @@ Kernel.prototype._wmCursorAt = function (x, y) {
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped) continue;
+    if (s.parentSid && this._wmAnchorHidden(s)) continue;   // (todos/0256)
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
@@ -4220,17 +4443,26 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       return 'locked';
     }
   }
+  // The release matching a grab-consumed press is consumed too (todos/0256,
+  // A2): a dismissing click is eaten WHOLE — no stray button-up lands on
+  // whatever was under it.
+  if (this._wmGrabSwallowUp && kind === 'up') {
+    this._wmGrabSwallowUp = false;
+    return 'grab-swallow';
+  }
   // An in-flight title drag captures the pointer (kernel-enforced capture).
   if (this._wmDrag) {
     var d = this._wmDrag, ds = this._surfaces.get(d.sid);
     if (!ds) { this._wmDrag = null; }
     else if (kind === 'move') {
-      ds.x = Math.round(x - d.dx);
-      ds.y = Math.round(y - d.dy);
       // Keep the title bar reachable: clamp to the screen (on-screen size
-      // is the dst rect, todos/0024).
-      ds.x = Math.max(40 - ds.dstW, Math.min(ds.x, this._wmScreen.w - 40));
-      ds.y = Math.max(WM_TITLE_H, Math.min(ds.y, this._wmScreen.h - 8));
+      // is the dst rect, todos/0024). The move funnels through
+      // _wmMoveWithChildren so the anchored subtree follows (todos/0256).
+      var dnx = Math.round(x - d.dx);
+      var dny = Math.round(y - d.dy);
+      dnx = Math.max(40 - ds.dstW, Math.min(dnx, this._wmScreen.w - 40));
+      dny = Math.max(WM_TITLE_H, Math.min(dny, this._wmScreen.h - 8));
+      this._wmMoveWithChildren(ds, dnx, dny);
       // Aero Snap zones (todos/0095): the POINTER (not the window) within
       // WM_SNAP_MARGIN of a screen edge is a snap gesture — mechanism only:
       // the kernel tracks the zone and tells the WM on every change
@@ -4311,6 +4543,8 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped) continue;
+    if (s.parentSid && this._wmAnchorHidden(s)) continue;   // hides with its
+                                                            // parent (0256)
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
@@ -4319,6 +4553,15 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     var inFrame = !s.borderless && !inTitle && !inClient &&
       x >= s.x - WM_BORDER && x < s.x + dw + WM_BORDER &&
       y >= s.y - WM_TITLE_H - WM_BORDER && y < s.y + dh + WM_BORDER;
+    // The grab gate (todos/0256, A2): this surface is the topmost hit — with
+    // a grab active, a press anywhere but the client area of the holder's
+    // own window tree dismisses the holder and is consumed (chrome included:
+    // Win95 eats the title click that closes a menu).
+    if ((inTitle || inClient || inFrame) && kind === 'down' &&
+        this._wmGrabs.length) {
+      var gd = this._wmGrabConsume(s, inClient);
+      if (gd) return gd;
+    }
     if (inFrame) {
       if (kind === 'down') {
         this.wmFocus(s.sid);
@@ -4404,7 +4647,13 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       // receive the click but never steal focus: a taskbar click must see
       // the focus state it's acting ON (minimize-toggle), and Win95 agrees.
       // A borderless surface gets focus only via the WM protocol.
-      if (kind === 'down' && !s.borderless) this.wmFocus(s.sid);
+      // An anchored child focuses its top-level ROOT instead (todos/0256,
+      // §3.1): clicking a background window's popup activates that window,
+      // matching Windows — the child itself never takes focus.
+      if (kind === 'down') {
+        if (s.parentSid) this.wmFocus(this._wmAnchorRoot(s).sid);
+        else if (!s.borderless) this.wmFocus(s.sid);
+      }
       // A client click on the focused relative-mouse surface IS the lock
       // gesture (todos/0018): re-offer the wanted state so the UI bridge
       // requests the pointer lock inside the click's transient activation.
@@ -4429,6 +4678,12 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       return 'client';
     }
   }
+  // A press on the bare desktop while a grab is active dismisses + consumes
+  // too (todos/0256, A2) — the classic click-away-closes-the-menu.
+  if (kind === 'down' && this._wmGrabs.length) {
+    var gdd = this._wmGrabConsume(null, false);
+    if (gdd) return gdd;
+  }
   return 'desktop';
 };
 
@@ -4449,6 +4704,7 @@ Kernel.prototype.wmList = function () {
                hasAlpha: !!s.hasAlpha,          // per-pixel alpha (todos/0063)
                layer: s.layer | 0,
                mapped: !!s.mapped,              // map-on-placement (todos/0069)
+               parent: s.parentSid | 0,         // anchored child (todos/0256)
                configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
@@ -4468,6 +4724,35 @@ Kernel.prototype._wmZNormalize = function () {
     var sa = self._surfaces.get(a), sb = self._surfaces.get(b);
     return (sa ? sa.layer : 0) - (sb ? sb.layer : 0);
   });
+  // Anchored-child post-pass (todos/0256, A1): re-slot each child subtree
+  // immediately above its parent, creation-ordered depth-first, so children
+  // can never interleave with foreign windows in ANY rendering — z-order
+  // leaves the kernel already correct and the compositor / headless
+  // composite / hit test stay anchor-blind (zero lines there, §3.0).
+  // Children ride their root's layer by construction; normalization runs
+  // after every z mutation, which is the whole raise-as-subtree mechanism.
+  if (!this._wmAnchoredN) return;
+  var out = [], seen = new Set();
+  var emit = function (sid) {
+    if (seen.has(sid)) return;
+    seen.add(sid);
+    out.push(sid);
+    var s = self._surfaces.get(sid);
+    if (!s) return;
+    for (var i = 0; i < s.children.length; i++) {
+      var c = self._surfaces.get(s.children[i]);
+      if (c) { c.layer = s.layer; emit(c.sid); }
+    }
+  };
+  for (var i = 0; i < this._zOrder.length; i++) {
+    var t = this._surfaces.get(this._zOrder[i]);
+    if (t && t.parentSid) continue;      // children are emitted by their parent
+    emit(this._zOrder[i]);
+  }
+  for (var j = 0; j < this._zOrder.length; j++) {  // defensive: never drop a sid
+    if (!seen.has(this._zOrder[j])) out.push(this._zOrder[j]);
+  }
+  this._zOrder = out;
 };
 
 /* Pin a surface to a z layer (todos/0038): -1 below normal windows (the
@@ -4480,6 +4765,7 @@ Kernel.prototype._wmZNormalize = function () {
 Kernel.prototype.wmSetLayer = function (sid, layer) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  if (s.parentSid) return 'EPERM';   // children ride the parent's layer (0256)
   layer = layer | 0;
   if (layer < -1 || layer > 1) return 'EINVAL';
   if (s.layer === layer) {
@@ -4496,6 +4782,10 @@ Kernel.prototype.wmSetLayer = function (sid, layer) {
 Kernel.prototype.wmFocus = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  // Anchored children never take focus (todos/0256, §3.1) — focusing one
+  // focuses (and raises, restores) its top-level root instead, the same
+  // policy as a client click on the child.
+  if (s.parentSid) s = this._wmAnchorRoot(s);
   if (s.minimized) {                                            // focus restores
     s.minimized = false;
     this._wmAnimPush(s, 'restore');   // compositor animation (todos/0063)
@@ -4507,13 +4797,10 @@ Kernel.prototype.wmFocus = function (sid) {
     this._zOrder.splice(zi, 1);
     this._zOrder.push(s.sid);
     this._wmZNormalize();                       // raise stays within the layer
+                                                // (subtree re-slots with it)
     this._bumpWm();      // z changed even if focus doesn't below (todos/0165)
   }
-  if (this._focusSid !== s.sid) {
-    this._focusSid = s.sid;
-    this._bumpWm();
-    this._wmEmit(WMP.EV_FOCUS, [s.sid]);
-  }
+  this._wmSetFocus(s.sid);          // the A9 funnel: owner pair + EV_FOCUS
   this._wmSyncPointerLock();
   return 0;
 };
@@ -4521,7 +4808,12 @@ Kernel.prototype.wmFocus = function (sid) {
 Kernel.prototype.wmMove = function (sid, x, y) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
-  s.x = x | 0; s.y = y | 0;
+  // Anchored geometry derives from the parent (todos/0256, A11): the
+  // materializer would clobber a direct move on the next relayout, so the
+  // op refuses loud instead of lying. Same rule for the other WM geometry/
+  // stacking/minimize ops below — the WM never manages children (§3.1).
+  if (s.parentSid) return 'EPERM';
+  this._wmMoveWithChildren(s, x | 0, y | 0);   // subtree follows (A1)
   this._wmMap(s.sid);           // placement maps (todos/0069)
   this._bumpWm();
   this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
@@ -4541,6 +4833,7 @@ Kernel.prototype.wmMove = function (sid, x, y) {
 Kernel.prototype.wmResize = function (sid, w, h) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  if (s.parentSid) return 'EPERM';   // children resize owner-side only (0256)
   if (!s.resizable) return 'EPERM';
   w = w | 0; h = h | 0;
   if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return 'EINVAL';
@@ -4568,6 +4861,7 @@ Kernel.prototype.wmResize = function (sid, w, h) {
 Kernel.prototype.wmSetDst = function (sid, w, h) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  if (s.parentSid) return 'EPERM';   // child dst is INHERITED (0256, A11)
   if (s.resizable) return 'EPERM';
   w = w | 0; h = h | 0;
   if (w < WM_MIN_SIZE || h < WM_MIN_SIZE || w > 8192 || h > 8192) return 'EINVAL';
@@ -4576,6 +4870,8 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
     return 0;
   }
   s.dstW = w; s.dstH = h;
+  if (s.children.length) this._wmAnchorLayout(s);  // scale inheritance (A11):
+                                                   // popups ride the new dst
   this._wmMap(s.sid);           // placement maps (todos/0069)
   this._bumpWm();
   this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
@@ -4667,6 +4963,7 @@ Kernel.prototype.wmSysMenu = function () {
 Kernel.prototype.wmMinimize = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  if (s.parentSid) return 'EPERM';   // visibility derives from the parent (0256)
   if (s.minimized) return 0;
   s.minimized = true;
   this._wmAnimPush(s, 'min');   // transient compositor animation (todos/0063)
@@ -4686,6 +4983,7 @@ Kernel.prototype.wmMinimize = function (sid) {
 Kernel.prototype.wmRestack = function (sid, place) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  if (s.parentSid) return 'EPERM';   // children re-slot with the parent (0256)
   var zi = this._zOrder.indexOf(s.sid);
   if (zi < 0) return 'EINVAL';
   this._zOrder.splice(zi, 1);
@@ -4766,6 +5064,8 @@ Kernel.prototype.wmScreenshotScreen = function () {
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped) continue;   // unmapped: todos/0069
+    if (s.parentSid && this._wmAnchorHidden(s)) continue;   // hides with its
+                                                            // parent (0256)
     var dw = s.dstW, dh = s.dstH;      // on-screen rect (todos/0024)
     // Chrome: resize frame under title bar + close box (borderless surfaces
     // draw bare). The frame is one outer fill; title + client cover its
@@ -4872,8 +5172,18 @@ Kernel.prototype.wmSetScreen = function (w, h) {
     var nx = Math.max(40 - s.dstW, Math.min(s.x, w - 40));
     var ny = Math.max(WM_TITLE_H, Math.min(s.y, h - 8));
     if (nx === s.x && ny === s.y) continue;
-    s.x = nx; s.y = ny;
+    this._wmMoveWithChildren(s, nx, ny);   // subtree follows the clamp (0256)
     this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
+  }
+  // Re-materialize every anchored subtree against the NEW screen bounds
+  // (todos/0256): the child's into-the-screen clamp depends on the screen
+  // dims even when its top-level didn't move (borderless roots are skipped
+  // by the loop above but their popups must still slide back on-screen).
+  if (this._wmAnchoredN) {
+    for (var j = 0; j < this._zOrder.length; j++) {
+      var t = this._surfaces.get(this._zOrder[j]);
+      if (t && !t.parentSid && t.children.length) this._wmAnchorLayout(t);
+    }
   }
 };
 
@@ -4893,6 +5203,40 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
   var th = Math.max(1, Math.round(s.h * scale));
   var front = Atomics.load(s.i32, SH_FLIP) & 1;
   var base = SH_HDR_BYTES + front * s.w * s.h * 4;
+  // Anchored children composite INTO the thumbnail (todos/0256, menu arch
+  // A10): a window's thumbnail is the window as composited — the parent's
+  // buffer plus its mapped anchored subtree at anchor positions, clipped to
+  // the parent rect. Without this, a persistent child (the M1 menu bar)
+  // would leave a stale strip in every Aero-Peek thumb. Child pixels blit
+  // opaquely (the thumb is a box-filtered preview, not the exact composite).
+  var srcU8 = s.u8, srcBase = base;
+  if (s.children.length) {
+    var comp = new Uint8Array(s.w * s.h * 4);
+    comp.set(s.u8.subarray(base, base + s.w * s.h * 4));
+    var self = this;
+    var blitKids = function (p) {
+      for (var i = 0; i < p.children.length; i++) {
+        var c = self._surfaces.get(p.children[i]);
+        if (!c || !c.mapped) continue;
+        // Materialized screen coords -> parent BUFFER space; the child's
+        // buffer size maps 1:1 there (its dst rides the same ratio, A11).
+        var bx = Math.round((c.x - s.x) * s.w / s.dstW);
+        var by = Math.round((c.y - s.y) * s.h / s.dstH);
+        var cf = Atomics.load(c.i32, SH_FLIP) & 1;
+        var cbase = SH_HDR_BYTES + cf * c.w * c.h * 4;
+        var x0 = Math.max(0, -bx), y0 = Math.max(0, -by);
+        var x1 = Math.min(c.w, s.w - bx), y1 = Math.min(c.h, s.h - by);
+        for (var yy = y0; yy < y1; yy++) {
+          var srow = cbase + (yy * c.w + x0) * 4;
+          comp.set(c.u8.subarray(srow, srow + (x1 - x0) * 4),
+                   ((by + yy) * s.w + (bx + x0)) * 4);
+        }
+        blitKids(c);
+      }
+    };
+    blitKids(s);
+    srcU8 = comp; srcBase = 0;
+  }
   var out = new Uint8Array(tw * th * 4);
   for (var dy = 0; dy < th; dy++) {
     var sy0 = Math.floor(dy * s.h / th);
@@ -4902,9 +5246,9 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH) {
       var sx1 = Math.max(sx0 + 1, Math.floor((dx + 1) * s.w / tw));
       var r = 0, g = 0, b = 0;
       for (var sy = sy0; sy < sy1; sy++) {
-        var row = base + (sy * s.w + sx0) * 4;
+        var row = srcBase + (sy * s.w + sx0) * 4;
         for (var sx = sx0; sx < sx1; sx++) {
-          r += s.u8[row]; g += s.u8[row + 1]; b += s.u8[row + 2];
+          r += srcU8[row]; g += srcU8[row + 1]; b += srcU8[row + 2];
           row += 4;
         }
       }
@@ -4952,7 +5296,12 @@ Kernel.prototype.wmScene = function () {
     resizeDrag: this._wmResizeDrag,   // rubber-band preview (todos/0019)
     glass: this._wmGlassOn,           // Aero glass tier (todos/0063)
     anims: Array.from(this._wmAnims.values()),  // minimize/restore (todos/0063)
-    surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); }).filter(Boolean),
+    surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); })
+      .filter(function (s) {
+        // Anchored children hidden by an ancestor leave the scene entirely
+        // (todos/0256) — the browser compositor stays anchor-blind.
+        return s && !(s.parentSid && self._wmAnchorHidden(s));
+      }),
   };
 };
 
@@ -4989,7 +5338,8 @@ Kernel.prototype._wmpRecord = function (s) {
   var dv = new DataView(rec.buffer);
   var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
-              (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0);
+              (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0) |
+              (s.parentSid ? 64 : 0);   // WMP_F_ANCHORED (todos/0256)
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
                 s.dstW, s.dstH, s.layer | 0];

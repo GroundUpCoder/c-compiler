@@ -95,6 +95,10 @@ function present(fb, rgba) {
   Atomics.add(fb.i32, K.SH_SEQ, 1);
 }
 function drain(ring) {
+  // The owner focus pair (todos/0256, FOCUS_GAINED/LOST) interleaves with
+  // input at every focus transition by design; this file asserts INPUT
+  // routing sequences, so the pair is filtered here — its own coverage
+  // lives in test_wm_anchored.js.
   const out = [];
   const cap2 = ring.cap * 2;
   let rpos = Atomics.load(ring.i32, K.IR_RPOS);
@@ -107,7 +111,7 @@ function drain(ring) {
     rpos = (rpos + 1) % cap2;
     Atomics.store(ring.i32, K.IR_RPOS, rpos);
   }
-  return out;
+  return out.filter((e) => e.type !== K.WMEV.FOCUS_GAINED && e.type !== K.WMEV.FOCUS_LOST);
 }
 const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (y * shot.w + x) * 4 + 4));
 

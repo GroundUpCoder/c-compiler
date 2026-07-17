@@ -5887,6 +5887,10 @@ function createNullSDL() {
       __sdl_set_relative_mouse_mode: function () {},
       __sdl_set_cursor: function () {},                   // no display (todos/0105)
       __sdl_set_window_size: function () { return -1; },  // no window system to resize
+      // Anchored popups + display bounds are OS-WM concepts (todos/0256):
+      // no window system here -> clean failure, the C side sets SDL errors.
+      __sdl_create_popup_window: function () { return 0; },
+      __sdl_get_display_bounds: function () { return 0; },
       __sdl_update_window_surface: function () { return 0; },
       __sdl_create_renderer: function () { return 1; },
       __sdl_destroy_renderer: function () {},
@@ -6017,6 +6021,7 @@ const WMIR_WPOS = 0, WMIR_RPOS = 1, WMIR_CAP = 2, WMIR_DROPPED = 3;
 const WMIR_HDR_BYTES = 32, WMIR_RECORD_WORDS = 8, WMIR_DEFAULT_CAP = 256;
 const WMAU_WPOS = 0, WMAU_QUEUED = 1, WMAU_PLAYING = 2, WMAU_HDR_BYTES = 16;
 const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
+      WMEV_FOCUS_GAINED = 0x20E, WMEV_FOCUS_LOST = 0x20F,
       WMEV_KEYDOWN = 0x300, WMEV_KEYUP = 0x301,
       WMEV_MOUSEMOTION = 0x400, WMEV_MOUSEBUTTONDOWN = 0x401,
       WMEV_MOUSEBUTTONUP = 0x402, WMEV_MOUSEWHEEL = 0x403;
@@ -6044,6 +6049,7 @@ function assertWmSabLayout(hooks) {
     auHdrBytes: WMAU_HDR_BYTES,
     ev: {
       QUIT: WMEV_QUIT, WINDOW_RESIZED: WMEV_WINDOW_RESIZED,
+      FOCUS_GAINED: WMEV_FOCUS_GAINED, FOCUS_LOST: WMEV_FOCUS_LOST,
       KEYDOWN: WMEV_KEYDOWN, KEYUP: WMEV_KEYUP,
       MOUSEMOTION: WMEV_MOUSEMOTION, MOUSEBUTTONDOWN: WMEV_MOUSEBUTTONDOWN,
       MOUSEBUTTONUP: WMEV_MOUSEBUTTONUP, MOUSEWHEEL: WMEV_MOUSEWHEEL,
@@ -6206,7 +6212,7 @@ function createSurfaceSDL({ ctx, hooks }) {
     ring = { sab, i32, f32: new Float32Array(sab), cap: WMIR_DEFAULT_CAP };
     return ring;
   }
-  function surfaceCreate(titlePtr, w, h, sdlFlags) {
+  function surfaceCreate(titlePtr, w, h, sdlFlags, popup) {
     const title = titlePtr ? readString(titlePtr) : '';
     const fb = allocFb(w, h);
     // SDL_WINDOW_BORDERLESS (0x10) -> kernel surface flags bit0 (no chrome);
@@ -6214,12 +6220,36 @@ function createSurfaceSDL({ ctx, hooks }) {
     // resize — drag zones, wmResize — only to surfaces that carry it);
     // SDL_WINDOW_TRANSPARENT (0x40000000) -> bit3 (todos/0063: per-pixel
     // alpha, composited src-over in both composites).
-    const kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0) |
-                   ((sdlFlags & 0x40000000) ? 8 : 0);
-    const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags);
+    let kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0) |
+                 ((sdlFlags & 0x40000000) ? 8 : 0);
+    // SDL_CreatePopupWindow (todos/0256): an anchored child surface — kernel
+    // flag bit6 + parentSid/dx/dy, implicitly borderless (bit0), and
+    // SDL_WINDOW_POPUP_MENU (0x80000) carries the kernel GRAB (bit7, menu
+    // arch A2: press-outside-dismisses); SDL_WINDOW_TOOLTIP (0x40000) does
+    // not grab. Kernels predating 0256 ignore the extra fields and create a
+    // plain borderless top-level.
+    let parentSid = 0, dx = 0, dy = 0;
+    if (popup) {
+      kFlags |= 1 | 64 | ((sdlFlags & 0x80000) ? 128 : 0);
+      parentSid = popup.parentSid | 0;
+      dx = popup.dx | 0;
+      dy = popup.dy | 0;
+    }
+    const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags,
+                                  parentSid, dx, dy);
     if (!r || r.errno || !(r.sid > 0)) return null;
     kFlagsBySid.set(r.sid, kFlags);
     return { sid: r.sid, fb };
+  }
+  /* SDL_GetDisplayBounds (todos/0256): the kernel screen dims off the vDSO
+   * page (zero RPCs). Packed (w << 16) | h — dims are capped at 8192 kernel-
+   * side, so the pack always fits a positive i32; 0 = no display authority
+   * in this flavor (the C side surfaces a clean SDL error). */
+  function displayBounds() {
+    if (typeof hooks.screen !== 'function') return 0;
+    const scr = hooks.screen();
+    if (!scr || !(scr.w > 0) || !(scr.h > 0)) return 0;
+    return (scr.w << 16) | scr.h;
   }
   /* SDL_SetWindowRelativeMouseMode -> SURFACE_SET_FLAGS bit1 (todos/0018).
    * The kernel round-trips the flag to the UI bridge (pointer lock) and
@@ -6370,6 +6400,13 @@ function createSurfaceSDL({ ctx, hooks }) {
           if (onConfigure) onConfigure(ring.i32[base + 1], ring.i32[base + 2], ring.i32[base + 3]);
           if (ex.__sdl_push_window_event) {
             ex.__sdl_push_window_event(handle, type, ring.i32[base + 2], ring.i32[base + 3]);
+          }
+          break;
+        case WMEV_FOCUS_GAINED: case WMEV_FOCUS_LOST:
+          // The owner focus pair (todos/0256, menu arch A9): SDL3's stock
+          // SDL_EVENT_WINDOW_FOCUS_GAINED/LOST, delivered per-window.
+          if (ex.__sdl_push_window_event) {
+            ex.__sdl_push_window_event(handle, type, 0, 0);
           }
           break;
       }
@@ -6537,6 +6574,23 @@ function createSurfaceSDL({ ctx, hooks }) {
       fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
       return handle;
     };
+    // SDL_CreatePopupWindow (todos/0256): an anchored child of an existing
+    // window — registered in the SAME per-handle tables, so presents,
+    // events, destroy and owner-resize all ride the ordinary per-window
+    // paths. Deliberately does NOT repoint legacySid (a popup is never the
+    // GPU legacy present target).
+    env.__sdl_create_popup_window = function (parentHandle, dx, dy, w, h, flags) {
+      const pwin = fbByHandle.get(parentHandle);
+      if (!pwin) return 0;
+      const s = surfaceCreate(0, w, h, flags,
+                              { parentSid: pwin.sid, dx: dx, dy: dy });
+      if (!s) return 0;
+      const handle = innerCreate(0, 0, 0, w, h, flags);
+      handleBySid.set(s.sid, handle);
+      fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
+      return handle;
+    };
+    env.__sdl_get_display_bounds = displayBounds;   // (todos/0256)
     // CPU software-present path: shm transport, no GPU dependency (see
     // shmPresent). The WebGPU renderer keeps the bitmap path via onPresent.
     env.__sdl_update_window_surface = function (handle, pixelsPtr, w, h, pitch) {
@@ -6694,6 +6748,20 @@ function createSurfaceSDL({ ctx, hooks }) {
         handleBySid.set(s.sid, windows.length);
         return windows.length;
       },
+      // SDL_CreatePopupWindow (todos/0256): anchored child, same per-handle
+      // tables — presents/events/destroy/owner-resize ride the ordinary
+      // per-window paths (see the browser flavor's twin above).
+      __sdl_create_popup_window: function (parentHandle, dx, dy, w, h, flags) {
+        const pwin = windows[parentHandle - 1];
+        if (!pwin) return 0;
+        const s = surfaceCreate(0, w, h, flags,
+                                { parentSid: pwin.sid, dx: dx, dy: dy });
+        if (!s) return 0;
+        windows.push({ sid: s.sid, w: w, h: h, fb: s.fb });
+        handleBySid.set(s.sid, windows.length);
+        return windows.length;
+      },
+      __sdl_get_display_bounds: displayBounds,   // (todos/0256)
       __sdl_destroy_window: function (handle) {
         const win = windows[handle - 1];
         if (!win) return;
@@ -7254,6 +7322,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       // SDL_SetWindowSize (todos/0068): only the kernel-surface flavor can
       // renegotiate a buffer; the standalone page's canvas is the page's.
       __sdl_set_window_size: function () { return -1; },
+      // Anchored popups + display bounds are OS-WM concepts (todos/0256):
+      // the standalone page has ONE canvas -> clean failure, C sets errors.
+      __sdl_create_popup_window: function () { return 0; },
+      __sdl_get_display_bounds: function () { return 0; },
 
       __sdl_update_window_surface: function (handle, pixelsPtr, w, h, pitch) {
         const winInfo = sdlWindows[handle - 1];

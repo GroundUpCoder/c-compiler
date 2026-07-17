@@ -1,0 +1,8 @@
+{
+  "bin": true,
+  "name": "menubox",
+  "description": "0256 Spike-1 anchored-child acceptance fixture: SDL_CreatePopupWindow strip/popup/grandchild windows + grab + owner focus events (compiled and injected by tests/kernel/test_menubox_e2e.js, never baked into the image)",
+  "sources": [
+    "main.c"
+  ]
+}

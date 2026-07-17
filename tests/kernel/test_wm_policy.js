@@ -181,6 +181,10 @@ function present(fb, rgba) {
   Atomics.add(fb.i32, K.SH_SEQ, 1);
 }
 function drainRing(ring) {
+  // The owner focus pair (todos/0256, FOCUS_GAINED/LOST) interleaves with
+  // input at every focus transition by design; these legs assert INPUT
+  // routing, so the pair is filtered here — its own coverage lives in
+  // test_wm_anchored.js.
   const out = [];
   const cap2 = ring.cap * 2;
   let rpos = Atomics.load(ring.i32, K.IR_RPOS);
@@ -192,7 +196,7 @@ function drainRing(ring) {
     rpos = (rpos + 1) % cap2;
     Atomics.store(ring.i32, K.IR_RPOS, rpos);
   }
-  return out;
+  return out.filter((e) => e.type !== K.WMEV.FOCUS_GAINED && e.type !== K.WMEV.FOCUS_LOST);
 }
 const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x) * 4 + 4));
 
@@ -239,9 +243,13 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one', flags: 4 });
   f = await readEvent(wm);
   const w1 = rec(f);
+  // Since todos/0256 the create-steal flows through the focus funnel AFTER
+  // the EV_CREATED emit (wm.c's dismissal gating needs the create echo to
+  // name the sid before its EV_FOCUS arrives), so the record reports
+  // focused=0 and the EV_FOCUS that follows carries the steal.
   check('EV_CREATED pushed with the full record',
     f.type === WMP.EV_CREATED && w1.sid === c1.sid && w1.pid === appPid &&
-    w1.w === 64 && w1.h === 48 && w1.title === 'app one' && (w1.flags & 1) === 1,
+    w1.w === 64 && w1.h === 48 && w1.title === 'app one' && (w1.flags & 1) === 0,
     JSON.stringify(w1));
   check('record flag bit4 = resizable (todos/0021)', (w1.flags & 16) === 16,
     JSON.stringify(w1));

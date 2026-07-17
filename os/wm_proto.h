@@ -195,6 +195,12 @@ typedef struct {
 #define WMP_F_RESIZABLE 16   /* SDL_WINDOW_RESIZABLE: RESIZE allowed (0021) */
 #define WMP_F_ALPHA     32   /* SDL_WINDOW_TRANSPARENT: per-pixel alpha,
                                 composited src-over (todos/0063) */
+#define WMP_F_ANCHORED  64   /* anchored child surface (todos/0256): pinned
+                                to a same-process parent, moved/hidden/
+                                raised/destroyed/scaled with it, never
+                                focused; always borderless. WM geometry/
+                                stacking/minimize ops refuse it (EPERM) —
+                                policy never manages popups. */
 
 /* Frame header as read off the wire (after the length word). */
 typedef struct { uint32_t type; uint32_t plen; } wmp_hdr;

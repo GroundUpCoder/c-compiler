@@ -20668,6 +20668,15 @@ typedef Uint64 SDL_WindowFlags;
    is honored — the compositor blends it src-over (todos/0063). Standalone
    runtimes ignore it (the page canvas is opaque). */
 #define SDL_WINDOW_TRANSPARENT 0x0000000040000000ULL
+/* Popup windows (SDL3 values; todos/0256): created via SDL_CreatePopupWindow
+   as kernel ANCHORED CHILD surfaces — borderless, pinned to their parent at
+   a fixed offset, moved/hidden/raised/destroyed/scaled with it, never
+   focused. POPUP_MENU additionally holds the kernel GRAB while it lives: a
+   press outside its window tree dismisses it (the popup's window gets
+   SDL_EVENT_WINDOW_CLOSE_REQUESTED) and the press is consumed — Win95
+   menu-mode capture. TOOLTIP does not grab. */
+#define SDL_WINDOW_TOOLTIP 0x0000000000040000ULL
+#define SDL_WINDOW_POPUP_MENU 0x0000000000080000ULL
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
 /* SDL3: on little-endian, SDL_PIXELFORMAT_RGBA32 aliases ABGR8888
@@ -20686,6 +20695,11 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_EVENT_WINDOW_MOVED 0x205
 #define SDL_EVENT_WINDOW_RESIZED 0x206
 #define SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED 0x207
+/* The owner focus pair (todos/0256): the kernel emits these at EVERY focus
+   transition — another window's create-steal, a click/WM focus, and the
+   focus fall after a destroy/minimize — via its single focus choke point. */
+#define SDL_EVENT_WINDOW_FOCUS_GAINED 0x20E
+#define SDL_EVENT_WINDOW_FOCUS_LOST 0x20F
 /* Delivered when the kernel's close request ('x' / wmctl close) names a
    window and OTHER windows are still live (todos/0089) — a multi-window
    process closes just that window. A single (or last) window keeps the
@@ -20798,6 +20812,10 @@ bool SDL_InitSubSystem(SDL_InitFlags flags);
 void SDL_QuitSubSystem(SDL_InitFlags flags);
 SDL_InitFlags SDL_WasInit(SDL_InitFlags flags);
 SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags);
+/* SDL_CreatePopupWindow / SDL_GetDisplayBounds (todos/0256) live in
+   <SDL_popup.h> — a subsidiary header on the sdl3webgpu.h precedent, so the
+   popup TU (and its host imports) links only into binaries that use popups
+   instead of growing every SDL binary's import table. */
 SDL_WindowID SDL_GetWindowID(SDL_Window *window);
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
@@ -21934,6 +21952,57 @@ void wgpuCommandBufferRelease(WGPUCommandBuffer v);
 /* Frame loop (shared rAF; NO JSPI). Register a callback; it is called once per
    animation frame. Pass NULL to stop. Works with or without SDL. */
 void wgpuSetMainLoopCallback(void (*callback)(void));
+
+  `,
+  "SDL_popup.h": `
+#pragma once
+/* Stock SDL3 popup windows + display bounds (todos/0256, the menu-uniform
+   architecture's kernel anchored-child primitive). A subsidiary header on
+   the sdl3webgpu.h precedent: the API is bone-stock SDL3 (in upstream it
+   sits in SDL_video.h), but gucOS links veneer TUs whole, so the popup
+   implementation and its two host imports live in their own TU — a binary
+   that never creates popups keeps a byte-identical import table. */
+#include <SDL.h>
+__require_source("__SDL_popup.c");
+
+/* A borderless child window anchored to the parent at (offset_x, offset_y)
+   in parent client coordinates. Under the OS WM this is a kernel anchored
+   child surface: moved/hidden/raised/destroyed/scaled with its parent
+   (arbitrary nesting depth — a popup may parent another popup), never
+   focused, clamped into the screen. Flags must include SDL_WINDOW_POPUP_MENU
+   (holds the kernel grab while it lives: a press outside the popup's window
+   tree dismisses it via SDL_EVENT_WINDOW_CLOSE_REQUESTED and the press is
+   consumed) or SDL_WINDOW_TOOLTIP (no grab). Standalone runtimes have no
+   window system for popups and return NULL. */
+SDL_Window *SDL_CreatePopupWindow(SDL_Window *parent, int offset_x, int offset_y,
+                                  int w, int h, SDL_WindowFlags flags);
+
+/* Display bounds: the OS screen dims, origin always 0,0; displayID is
+   ignored (one synthetic display). False where no window system exists. */
+bool SDL_GetDisplayBounds(Uint32 displayID, SDL_Rect *rect);
+
+  `,
+  "__SDL_internal.h": `
+#pragma once
+/* __SDL.c's private window record + registry, shared with the popup TU
+   (__SDL_popup.c, todos/0256). NOT for app code — the public headers keep
+   SDL_Window opaque. 'handle' is a 1-based index into the host's window
+   table, reused as the SDL window ID; the registry array lets
+   __sdl_push_window_event re-derive a window's surface on RESIZED — popup
+   windows slot into it directly (the register/unregister helpers stay
+   static in __SDL.c: a cross-TU reference would defeat their single-use
+   inlining and change every SDL binary's bytes). */
+#include <SDL.h>
+
+struct SDL_Window {
+    int handle;
+    SDL_Surface surface;
+    int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
+    bool relative_mouse; /* requested relative-mouse mode (todos/0018) */
+};
+
+#define __SDL_MAX_WINDOWS 32
+extern SDL_Window *__sdl_window_registry[__SDL_MAX_WINDOWS];
 
   `,
   "sdl3webgpu.h": `
@@ -24791,20 +24860,20 @@ __externref __jss(const char *s) {
    We reuse it as the SDL window ID (SDL_GetWindowID returns it,
    and event windowID fields carry it). This is fine because we
    control the entire stack — the real @kmamal/sdl window ID
-   never leaks to C code. */
-struct SDL_Window {
-    int handle;
-    SDL_Surface surface;
-    int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
-    bool relative_mouse; /* requested relative-mouse mode (todos/0018) */
-};
+   never leaks to C code. The struct + registry decl live in
+   __SDL_internal.h since todos/0256 (shared with __SDL_popup.c). */
+#include <__SDL_internal.h>
 
 /* Window registry: __sdl_push_window_event must find the SDL_Window by
    handle to re-derive its surface on RESIZED (todos/0019). Windows are
    few; a small fixed table with linear scans is fine. A window past the
-   cap still works — it just never re-derives on resize. */
-#define __SDL_MAX_WINDOWS 32
-static SDL_Window *__sdl_window_registry[__SDL_MAX_WINDOWS];
+   cap still works — it just never re-derives on resize. The ARRAY is
+   non-static since todos/0256 (declared in __SDL_internal.h): the popup TU
+   registers its windows by slotting into it directly, so RESIZED
+   re-derivation covers popups too — while the register/unregister/lookup
+   helpers stay static (a second reference would defeat their single-use
+   inlining and change every SDL binary's bytes; the interlock forbids it). */
+SDL_Window *__sdl_window_registry[__SDL_MAX_WINDOWS];
 
 static void __sdl_window_register(SDL_Window *w) {
     for (int i = 0; i < __SDL_MAX_WINDOWS; i++) {
@@ -26452,6 +26521,83 @@ void wgpuComputePassEncoderRelease(WGPUComputePassEncoder v) { __wgpu_release((i
 void wgpuSetMainLoopCallback(void (*callback)(void)) {
     __sdl_set_animation_frame_func(callback);
 }
+  `,
+  "__SDL_popup.c": `
+#include <SDL_popup.h>
+#include <__SDL_internal.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Stock SDL3 popup windows + display bounds (todos/0256) — its own TU (see
+   SDL_popup.h) so these two imports never land in a non-popup binary's
+   import table. */
+
+/* Anchored popup window: parent_handle names the parent window, dx/dy the
+   anchor offset in parent client coords; flags carry POPUP_MENU/TOOLTIP so
+   the host maps the kernel grab. Returns a handle in the SAME space as
+   __sdl_create_window (one per-handle table), 0 on failure. */
+__import int __sdl_create_popup_window(int parent_handle, int dx, int dy, int w, int h, int flags);
+/* Screen dims packed (w << 16) | h, 0 = no display authority. */
+__import int __sdl_get_display_bounds(void);
+
+/* An anchored child surface under the OS WM — pinned to the parent,
+   chrome-free, never focused, dismissed via SDL_EVENT_WINDOW_CLOSE_REQUESTED
+   when a POPUP_MENU grab is broken by an outside press. The returned
+   SDL_Window is ordinary in every other way (GetWindowSurface /
+   UpdateWindowSurface / SetWindowSize / DestroyWindow all work per-handle;
+   registration below keeps RESIZED surface re-derivation working). */
+SDL_Window *SDL_CreatePopupWindow(SDL_Window *parent, int offset_x, int offset_y,
+                                  int w, int h, SDL_WindowFlags flags) {
+    if (!parent) { SDL_SetError("SDL_CreatePopupWindow: parent is NULL"); return NULL; }
+    if (!(flags & (SDL_WINDOW_POPUP_MENU | SDL_WINDOW_TOOLTIP))) {
+        /* SDL3 contract: a popup must declare which kind it is. */
+        SDL_SetError("SDL_CreatePopupWindow: flags must include SDL_WINDOW_POPUP_MENU or SDL_WINDOW_TOOLTIP");
+        return NULL;
+    }
+    int handle = __sdl_create_popup_window(parent->handle, offset_x, offset_y, w, h, (int)flags);
+    if (handle <= 0) { SDL_SetError("SDL_CreatePopupWindow: this runtime cannot create popup windows"); return NULL; }
+    int pitch = w * 4;
+    SDL_Window *win = (SDL_Window *)malloc(sizeof(SDL_Window));
+    if (!win) { SDL_SetError("Out of memory"); return NULL; }
+    win->handle = handle;
+    win->surface.flags = 0;
+    win->surface.format = SDL_PIXELFORMAT_RGBA32;
+    win->surface.w = w;
+    win->surface.h = h;
+    win->surface.pitch = pitch;
+    win->surface.refcount = 1;
+    win->surface.reserved = NULL;
+    win->surface.pixels = malloc(pitch * h);
+    if (!win->surface.pixels) { free(win); SDL_SetError("Out of memory"); return NULL; }
+    memset(win->surface.pixels, 0, pitch * h);
+    win->pixels_cap = pitch * h;
+    win->relative_mouse = 0;
+    /* Slot into __SDL.c's registry directly (see __SDL_internal.h): RESIZED
+       re-derivation and per-window close routing then cover popups exactly
+       like top-levels. Past the cap the window still works, it just never
+       re-derives on resize — the __SDL.c rule, verbatim. */
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++) {
+        if (!__sdl_window_registry[i]) { __sdl_window_registry[i] = win; break; }
+    }
+    return win;
+}
+
+/* The OS screen as ONE synthetic display at origin 0,0 (displayID ignored).
+   Reads the kernel-published dims with zero RPCs; fails loud where no
+   window system exists. */
+bool SDL_GetDisplayBounds(Uint32 displayID, SDL_Rect *rect) {
+    (void)displayID;
+    if (!rect) return SDL_SetError("SDL_GetDisplayBounds: rect is NULL");
+    int packed = __sdl_get_display_bounds();
+    if (packed <= 0)
+        return SDL_SetError("SDL_GetDisplayBounds: no display authority in this runtime");
+    rect->x = 0;
+    rect->y = 0;
+    rect->w = (packed >> 16) & 0xFFFF;
+    rect->h = packed & 0xFFFF;
+    return 1;
+}
+
   `,
   "__sdl3webgpu.c": `
 #include <sdl3webgpu.h>
