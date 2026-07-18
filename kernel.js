@@ -3224,8 +3224,11 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       return;
     }
     case OP.FS_REALPATH: {
+      // PHYSICAL realpath — every symlink component resolved against the real
+      // kernel-side fs (todos/0263). Chattiness is nil: the walk's lstat/
+      // readlink hops stay kernel-local, so a brokered realpath is ONE RPC.
       var rp;
-      try { rp = fs._resolvePath(P(req.path)); } catch (e) { rp = null; }
+      try { rp = fs.realpathPhysical(P(req.path)); } catch (e) { rp = null; }
       this._respond(pcb, rp ? { path: rp } : { errno: fs._lastError || 'ENOENT' });
       return;
     }
@@ -7278,6 +7281,15 @@ RemoteFS.prototype.closedir = function (h) {
 RemoteFS.prototype._resolvePath = function (p) {
   var r = this._c.call(OP.FS_REALPATH, { path: p });
   return r.errno ? p : r.path;   // best effort, like the lexical resolver
+};
+/* realpath(3) — the FS_REALPATH RPC now resolves symlinks PHYSICALLY
+ * kernel-side (todos/0263). Unlike _resolvePath above (best-effort, swallows
+ * errors for lexical callers), this surfaces the failure: null + _lastError so
+ * the toWasmEnv realpath import can return NULL like glibc/the standalone
+ * flavor. One RPC — the per-component walk stays inside the kernel. */
+RemoteFS.prototype.realpathPhysical = function (p) {
+  var r = this._c.call(OP.FS_REALPATH, { path: p });
+  return r.errno ? this._setErr(r.errno) : r.path;
 };
 RemoteFS.prototype.isatty = function (fd) {
   if (this._roFd(fd)) return 0;   // a sealed-volume regular file
