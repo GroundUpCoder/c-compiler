@@ -101,6 +101,7 @@
 
 #include "win32_internal.h"
 #include "menucore.h"
+#include "../keys.h"
 #include "../wm_agent.h"
 
 /* Host import (host.js createSurfaceSDL, both flavors): drain the kernel
@@ -1043,7 +1044,13 @@ int TranslateAcceleratorW(HWND hwnd, HACCEL acc, MSG *msg) {
     if (!hwnd || !acc || !msg || msg->message != WM_KEYDOWN) return 0;
     AccelTbl *t = (AccelTbl *)acc;
     int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    /* THE scheme choke (todos/0149): under the macos keymap FCONTROL means
+     * the ⌘/GUI modifier — every accelerator table in the corpus (fileman's
+     * runtime table, the .rc-compiled ones) swaps with zero per-app work,
+     * and Ctrl is freed for the EDIT readline rows. g_mod is the raw SDL
+     * modifier word (GUI = 0x0C00; GetKeyState has no GUI VK). */
+    int ctrl = ks_scheme() == KS_MACOS ? (g_mod & 0x0C00) != 0
+                                       : (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     int alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     for (int i = 0; i < t->n; i++) {
         if (!(t->e[i].flags & 0x01)) continue;   /* VIRTKEY entries only */
@@ -2381,6 +2388,9 @@ BOOL PeekMessage(MSG *out, HWND hf, UINT mn, UINT mx, UINT remove) {
 BOOL TranslateMessage(const MSG *m) {
     if (!m || m->message != WM_KEYDOWN) return FALSE;
     int sym = g_lastSym, ch = 0;
+    if (g_mod & 0x0C00) return FALSE;            /* GUI is never a text modifier:
+                                                    a ⌘chord must not type its
+                                                    letter (todos/0149) */
     if (g_mod & 0x00C0) {                        /* Ctrl+letter -> control char */
         if (sym >= 'a' && sym <= 'z') ch = sym - 96;
         else if (sym >= 'A' && sym <= 'Z') ch = sym - 64;
@@ -3745,6 +3755,140 @@ static int edit_hit(HWND h, EditState *st, int px, int py) {
     return pos;
 }
 
+/* ---- the keymap verbs (todos/0149/0150, os/keys.h) ----
+ * ONE dispatcher for every chord-bound EDIT action; the WM_KEYDOWN handler
+ * resolves the chord through key_action() and lands here — no per-key
+ * special cases anywhere else. Word boundaries are whitespace-delimited
+ * (the bash-WORD rule; one rule serves Ctrl+arrow nav AND the ^W kill). */
+
+static int edit_is_wordch(char c) {
+    return !(c == ' ' || c == '\t' || c == '\n');
+}
+
+static int edit_word_left(EditState *st, int pos) {
+    while (pos > 0) {                            /* skip separators */
+        int q = __u8_prev(st->buf, pos);
+        if (edit_is_wordch(st->buf[q])) break;
+        pos = q;
+    }
+    while (pos > 0) {                            /* then the word itself */
+        int q = __u8_prev(st->buf, pos);
+        if (!edit_is_wordch(st->buf[q])) break;
+        pos = q;
+    }
+    return pos;
+}
+
+static int edit_word_right(EditState *st, int pos) {
+    while (pos < st->len && edit_is_wordch(st->buf[pos]))
+        pos = __u8_fwd(st->buf, st->len, pos);
+    while (pos < st->len && !edit_is_wordch(st->buf[pos]))
+        pos = __u8_fwd(st->buf, st->len, pos);
+    return pos;
+}
+
+/* Perform one KA_* action. Movement honors `extend` (Shift held — the
+ * caret-extension modifier belongs to the context, not the chord); the
+ * kill/delete actions operate from the CARET (emacs semantics: an active
+ * selection collapses — the readline rows have no selection concept). */
+static LRESULT edit_do_action(HWND h, EditState *st, int act, int extend) {
+    int del = 0;                                 /* target anchor for a kill */
+    switch (act) {
+    case KA_COPY:       return SendMessage(h, WM_COPY, 0, 0);
+    case KA_PASTE:      return SendMessage(h, WM_PASTE, 0, 0);
+    case KA_CUT:        return SendMessage(h, WM_CUT, 0, 0);
+    case KA_SELECT_ALL: return SendMessage(h, EM_SETSEL, 0, (LPARAM)-1);
+    case KA_UNDO:       return SendMessage(h, EM_UNDO, 0, 0);
+    /* movement */
+    case KA_CHAR_LEFT:  st->caret = __u8_prev(st->buf, st->caret); break;
+    case KA_CHAR_RIGHT: st->caret = __u8_fwd(st->buf, st->len, st->caret); break;
+    case KA_WORD_LEFT:  st->caret = edit_word_left(st, st->caret); break;
+    case KA_WORD_RIGHT: st->caret = edit_word_right(st, st->caret); break;
+    case KA_LINE_START: case KA_LINE_END: {
+        int l, c;
+        edit_line_of(st, st->caret, &l, &c);
+        int start = edit_line_start(st, l);
+        st->caret = act == KA_LINE_START ? start : edit_line_end(st, start);
+        break;
+    }
+    case KA_DOC_START:  st->caret = 0; break;
+    case KA_DOC_END:    st->caret = st->len; break;
+    case KA_LINE_UP: case KA_LINE_DOWN: {        /* the VK_UP/DOWN walk */
+        if (!edit_ml(h)) return 0;
+        int l, c;
+        edit_line_of(st, st->caret, &l, &c);
+        int tl = act == KA_LINE_UP ? l - 1 : l + 1;
+        if (tl < 0 || tl >= edit_line_count(st)) break;
+        int start = edit_line_start(st, tl);
+        int end = edit_line_end(st, start);
+        st->caret = start + c > end ? end : start + c;
+        st->caret = __u8_snap(st->buf, st->caret);
+        break;
+    }
+    /* kills/deletes: place the anchor at the target, delete the span */
+    case KA_DEL_CHAR:
+        if (edit_ro(h)) return 0;
+        if (st->caret >= st->len) return 0;
+        st->anchor = __u8_fwd(st->buf, st->len, st->caret);
+        del = 1;
+        break;
+    case KA_DEL_WORD:
+        if (edit_ro(h)) return 0;
+        st->anchor = edit_word_left(st, st->caret);
+        del = 1;
+        break;
+    case KA_KILL_EOL: {
+        if (edit_ro(h)) return 0;
+        int l, c;
+        edit_line_of(st, st->caret, &l, &c);
+        int end = edit_line_end(st, edit_line_start(st, l));
+        /* emacs ^K at line end eats the newline instead */
+        st->anchor = (st->caret == end && st->caret < st->len)
+                         ? st->caret + 1 : end;
+        del = 1;
+        break;
+    }
+    case KA_KILL_BOL: {
+        if (edit_ro(h)) return 0;
+        int l, c;
+        edit_line_of(st, st->caret, &l, &c);
+        st->anchor = edit_line_start(st, l);
+        del = 1;
+        break;
+    }
+    default:
+        return 0;
+    }
+    if (del) {
+        if (st->anchor == st->caret) return 0;   /* nothing to kill */
+        edit_del_sel(st);
+        st->modified = 1;
+        edit_show_caret(h, st);
+        InvalidateRect(h, NULL, TRUE);
+        edit_notify(h, EN_CHANGE);
+        return 0;
+    }
+    if (!extend) st->anchor = st->caret;
+    edit_show_caret(h, st);
+    InvalidateRect(h, NULL, TRUE);
+    return 0;
+}
+
+/* Fold a win32 VK to the keys.h canonical vocabulary (letters lowercase,
+ * arrows/Home/End as KK_*; 0 = no possible binding). */
+static int kk_from_vk(int vk) {
+    switch (vk) {
+    case VK_LEFT:  return KK_LEFT;
+    case VK_RIGHT: return KK_RIGHT;
+    case VK_UP:    return KK_UP;
+    case VK_DOWN:  return KK_DOWN;
+    case VK_HOME:  return KK_HOME;
+    case VK_END:   return KK_END;
+    }
+    if (vk >= 'A' && vk <= 'Z') return vk + 32;
+    return 0;
+}
+
 static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     EditState *st = (EditState *)h->ctl;
     switch (msg) {
@@ -3900,12 +4044,10 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CHAR: {
         int ch = (int)wp;
-        /* the classic clipboard chords work even in accelerator-less
-         * dialogs (0048); ^A selects all */
-        if (ch == 3) { SendMessage(h, WM_COPY, 0, 0); return 0; }
-        if (ch == 24) { SendMessage(h, WM_CUT, 0, 0); return 0; }
-        if (ch == 22) { SendMessage(h, WM_PASTE, 0, 0); return 0; }
-        if (ch == 1) { SendMessage(h, EM_SETSEL, 0, -1); return 0; }
+        /* chords don't live here anymore: WM_KEYDOWN resolves them through
+         * key_action (todos/0149) — a control char that still arrives via
+         * the TranslateMessage Ctrl fold is an UNBOUND chord and drops in
+         * the else arm below */
         if (edit_ro(h)) return 0;
         if (ch == 8) {                           /* backspace: whole cp (0211) */
             int s, e;
@@ -3954,6 +4096,12 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_KEYDOWN: {
         int extend = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        /* THE chord dispatch (todos/0149/0150): resolve against the
+         * configured scheme; unbound chords fall through to the plain-key
+         * handling below (which the mods can't reach: bound rows returned,
+         * and the WM_CHAR fold owns typing). */
+        int act = key_action(KCTX_EDIT, km_from_sdl(g_mod), kk_from_vk((int)wp));
+        if (act != KA_NONE) return edit_do_action(h, st, act, extend);
         int oldCaret = st->caret;
         switch (wp) {
         case VK_LEFT:                            /* step code points (0211) */
@@ -4322,9 +4470,11 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int old = st->sel;
         int page = lb_rows(h);                   /* PageUp/Down step (0104) */
         if (page < 1) page = 1;
-        /* Ctrl+A selects all (extended mode, 0106) — Explorer's chord. */
-        if (st->multi && (wp == 'A' || wp == 'a') &&
-            (GetKeyState(VK_CONTROL) & 0x8000)) {
+        /* select-all (extended mode, 0106) — Explorer's chord, resolved
+         * through the scheme table (^A / ⌘A, todos/0149) */
+        if (st->multi &&
+            key_action(KCTX_LIST, km_from_sdl(g_mod),
+                       kk_from_vk((int)wp)) == KA_SELECT_ALL) {
             lb_mark_range(st, 0, st->n - 1, 1);
             st->anchor = 0;
             InvalidateRect(h, NULL, TRUE);

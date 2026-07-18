@@ -1,5 +1,5 @@
 {
-  "version": 123,
+  "version": 124,
   "overlays": [
     {
       "id": "clang-apps",
@@ -164,6 +164,9 @@
       },
       "/usr/share/sounds/scheme": {
         "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\n"
+      },
+      "/usr/share/keys": {
+        "content": "# Keyboard scheme (todos/0149), consulted by user32 (EDIT/LISTBOX verbs +\n# accelerators), term (copy/paste chord), the wm desktop and the Control\n# Panel Keyboard applet through os/keys.h. Three layers overlaid per key,\n# highest wins: ~/.config/keys, /etc/keys, /usr/share/keys. Keys:\n# scheme (windows | macos \u2014 which keymap; windows = Ctrl verbs, macos =\n# Cmd verbs + the emacs Ctrl rows in GUI text fields), readline (on |\n# off \u2014 those emacs rows; only meaningful under the macos scheme).\nscheme\twindows\nreadline\ton\n"
       },
       "/usr/share/screensaver": {
         "content": "# Screensaver configuration (todos/0096), consulted by /bin/wm (the idle\n# raise) and the Control Panel Screen Saver applet through os/saver.h.\n# Three layers overlaid per key, highest wins: ~/.config/screensaver,\n# /etc/screensaver, /usr/share/screensaver. Keys: saver (none | marquee |\n# starfield), timeout (idle seconds; 0 disables), text (marquee banner).\nsaver\tstarfield\ntimeout\t900\ntext\tgucOS\n"
