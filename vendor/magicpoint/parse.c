@@ -57,6 +57,118 @@ extern int yyparse (void);
 
 static int filterval = 0;
 
+struct mgp_page_source {
+	char *filename;
+	u_int lineno;
+};
+
+static struct mgp_page_source page_source[MAXPAGE];
+static u_int page_source_count;
+static char *page_source_json;
+static size_t page_source_json_size;
+
+static void
+page_source_reset()
+{
+	u_int i;
+
+	for (i = 0; i < page_source_count; i++) {
+		free(page_source[i].filename);
+		page_source[i].filename = NULL;
+		page_source[i].lineno = 0;
+	}
+	page_source_count = 0;
+	free(page_source_json);
+	page_source_json = NULL;
+	page_source_json_size = 0;
+}
+
+static void
+page_source_set(page, filename, lineno)
+	u_int page;
+	char *filename;
+	u_int lineno;
+{
+	u_int index;
+
+	if (page == 0 || page >= MAXPAGE)
+		return;
+	index = page - 1;
+	free(page_source[index].filename);
+	page_source[index].filename = strdup(filename);
+	page_source[index].lineno = lineno;
+	if (page_source_count <= index)
+		page_source_count = index + 1;
+}
+
+static size_t
+page_source_json_length()
+{
+	u_int i;
+	size_t n;
+	char *p;
+
+	n = 3;
+	for (i = 0; i < page_source_count; i++) {
+		n += 64;
+		for (p = page_source[i].filename; p && *p; p++) {
+			unsigned char c = (unsigned char)*p;
+			if (c == '"' || c == '\\')
+				n += 2;
+			else if (c < 0x20 || c >= 0x80)
+				n += 6;
+			else
+				n++;
+		}
+	}
+	return n;
+}
+
+char *
+mgp_page_table_json()
+{
+	u_int i;
+	size_t needed;
+	char *out;
+	char *p;
+
+	needed = page_source_json_length();
+	if (page_source_json_size < needed) {
+		out = realloc(page_source_json, needed);
+		if (!out)
+			return NULL;
+		page_source_json = out;
+		page_source_json_size = needed;
+	}
+	out = page_source_json;
+	*out++ = '[';
+	for (i = 0; i < page_source_count; i++) {
+		if (i)
+			*out++ = ',';
+		out += sprintf(out, "{\"page\":%u,\"line\":%u,\"file\":\"",
+		    i, page_source[i].lineno);
+		for (p = page_source[i].filename; p && *p; p++) {
+			unsigned char c = (unsigned char)*p;
+			static char hex[] = "0123456789abcdef";
+			if (c == '"' || c == '\\') {
+				*out++ = '\\';
+				*out++ = c;
+			} else if (c < 0x20 || c >= 0x80) {
+				*out++ = '\\'; *out++ = 'u'; *out++ = '0'; *out++ = '0';
+				*out++ = hex[c >> 4]; *out++ = hex[c & 15];
+			} else {
+				*out++ = c;
+			}
+		}
+		*out++ = '"'; *out++ = '}';
+	}
+	*out++ = ']';
+	*out = '\0';
+	return page_source_json;
+}
+
+__export mgp_page_table_json = mgp_page_table_json;
+
 void
 load_file(filename)
 	char *filename;
@@ -69,6 +181,7 @@ load_file(filename)
 
 	page = 1;
 	line = 0;
+	page_source_reset();
 
 	if((dir = getenv("MGPRC"))!=0) {
 		fp = fopen(dir,"r");
@@ -383,6 +496,7 @@ read_file(fp, filename, page, line, preamble)
 	pid_t filterpid = -1;
 	void (*filtersig)() = (void (*)())NULL;
 	int lineno;
+	int source_lineno;
 	static char *searchpath[] = {
 		"",	/*mgp_fname*/
 #ifdef MGPLIBDIR
@@ -396,6 +510,7 @@ read_file(fp, filename, page, line, preamble)
 
 	filtername[0] = '\0';
 	lineno = 0;
+	source_lineno = 0;
 
 	if (!preamble)
 		goto page;
@@ -405,6 +520,7 @@ read_file(fp, filename, page, line, preamble)
 	 */
 	while (fgets(buf, sizeof(buf), fp) != NULL) {
 		lineno++;
+		source_lineno++;
 		if (buf[strlen(buf) - 1] == '\n')
 			buf[strlen(buf) - 1] = '\0';
 
@@ -436,6 +552,7 @@ read_file(fp, filename, page, line, preamble)
 
 		switch (root->ct_op) {
 		case CTL_PAGE:
+			page_source_set(*page, filename, source_lineno);
 			goto page;
 
 		case CTL_INCLUDE:
@@ -543,6 +660,7 @@ page:
 command:
 	while (fgets(buf, sizeof(buf), fp) != NULL) {
 		lineno++;
+		source_lineno++;
 		if (filtermode && strncmp(buf, "%endfilter", 10) != 0) {
 			write(filterfd, buf, strlen(buf));
 			continue;
@@ -576,6 +694,7 @@ command:
 			p--;
 			if (fgets(buf2, sizeof(buf) - (p - buf), fp) == NULL)
 				break;
+			source_lineno++;
 			q = buf2;
 			/* ignore blanks */
 			while (*q && isspace(*q))
@@ -643,8 +762,12 @@ command:
 					filtermode = NULL;
 					break;
 				case CTL_EMBED:
+				{
+					int before_embed = lineno;
 					embed_file(fp, p, &lineno);
+					source_lineno += lineno - before_embed;
 					goto command;
+				}
 				}
 			}
 
@@ -713,6 +836,7 @@ command:
 				/* Seen pagebreak. */
 				page_attribute[*page].pg_linenum = *line;
 				*page = *page + 1;
+				page_source_set(*page, filename, source_lineno);
 				*line = 0;
 				continue;
 			}
