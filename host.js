@@ -9333,7 +9333,19 @@ async function runModule({
 
   /* Import object providing host functions */
   const utf8Decoder = new TextDecoder('utf-8');
-  const latin1Decoder = new TextDecoder('latin1');
+  /* True ISO-8859-1: byte N -> char code N for ALL 256 values. NOT
+   * TextDecoder('latin1'), which per the WHATWG encoding standard is
+   * windows-1252 and remaps 0x80-0x9F (0x80 -> U+20AC, 0x94 -> U+201D,
+   * ...) — the byte writer's charCodeAt&0xFF then corrupts exactly that
+   * range, so one printf %s pass mangled UTF-8 continuation bytes (the
+   * em dash e2 80 94 became e2 ac 1d; conformance
+   * snprintf_highbyte_roundtrip pins this). */
+  function latin1Decode(bytes) {
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 4096)
+      out += String.fromCharCode.apply(null, bytes.subarray(i, i + 4096));
+    return out;
+  }
   const heapEnd = 0; /* Will be initialized after instance creation */
   /* Helper to read a null-terminated string from WASM memory (UTF-8) */
   function readString(ptr) {
@@ -9358,7 +9370,7 @@ async function runModule({
     const bytes = new Uint8Array(memory.buffer);
     let end = ptr;
     while (bytes[end] !== 0) end++;
-    return latin1Decoder.decode(bytes.subarray(ptr, end));
+    return latin1Decode(bytes.subarray(ptr, end));
   }
 
   /* Read a bounded byte string as Latin-1. Use for scanf input, where
@@ -9366,7 +9378,7 @@ async function runModule({
   function readLatin1Bounded(ptr, endPtr) {
     const memory = instance.exports.memory;
     const bytes = new Uint8Array(memory.buffer);
-    return latin1Decoder.decode(bytes.subarray(ptr, endPtr));
+    return latin1Decode(bytes.subarray(ptr, endPtr));
   }
 
   /* Correctly-rounded construction of a float from an exact value
