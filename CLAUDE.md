@@ -556,6 +556,25 @@ term in WAIT{pty master ⊕ ring} (frame-loop poll gone; its SIGCHLD
 sets a handler flag checked in pure wasm before the park — a signal
 claimed mid-frame clears SIGPEND, and dispatch only happens at import
 returns, so flag-then-park is gap-free). Test: `test_wait_e2e.js`.
+FS_WATCH (ticket #75) is kernel file watching as a new OFD kind:
+FS_WATCH_OPEN 0x0422 returns a PATH-KEYED watch fd (one watch per fd,
+close = removal) fed from the _fsRpc mutation choke — settled writes
+(FSW_CLOSE_WRITE = dirty OFD's last release OR a rename landing content
+at the path, so an editor's tmp+rename-over save notifies and the watch
+SURVIVES — the inotify per-inode trap is absent), names on dir events,
+same-dir rename as ONE two-name record, FSW_MODIFY opt-in, overflow =
+clear+latch one FSW_OVERFLOW (writer never blocked). Drains via FS_READ
+(packed records, EAGAIN when dry — WAIT-first), readable in
+FS_SELECT/FS_WAIT like any fd; C surface os/fswatch.h (__fs_watch
+import; must match kernel.js's FSW table). Consumers: mgp live-reload
+(the deck watch IS wantreload's source now — upstream's ctime poll
+removed; the settled park composes the fd via sdlx_wait_event_fd) and
+fileman auto-refresh (todos/0123: watch_cwd re-armed per navigation
+over user32's general RegisterFdWake seam — registered fds join
+GetMessage's WAIT, drained raw on wake, one posted message per
+episode; selection carried by NAME across the refill). Tests:
+`test_fswatch_e2e.js` + `test_mgp_livereload_e2e.js` +
+`test_fileman_watch_e2e.js`.
 The Start menu is a single Win95 column with a gucOS sidebar band
 (todos/0098's Win7 two-pane reverted to one column by todos/0132, the
 22px gucOS band + bottom All-Programs its follow-up, over the 0078
@@ -805,7 +824,7 @@ default to the FAT image so the estate needs no test changes;
 Repo URL: /etc/gucman/repos > baked /usr/share/gucman/repos
 (origin-relative `/packages`). punes is the first package (Slice 1);
 deploy leg + pulling the other apps are follow-ons.
-Image version is **v121**.
+Image version is **v123**.
 The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,

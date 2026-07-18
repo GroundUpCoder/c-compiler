@@ -74,6 +74,7 @@ const tests = [
   ['test_sockwake_e2e.js'],  // 0168: kernel-socket→input-ring wake — a WMP subscriber parked in __sdl_pump_wait wakes promptly on kernel-peer socket data (EV_SCREEN), not on the park timeout; + the 0169-gate lost-notify interleave (kick lands BEFORE the park entry)
   ['test_comp_park_e2e.js'], // 0169: on-demand compositor wake protocol e2e — real C presents vs a test-played compositor: doorbell-on-present only while PARKED, WaitEvent entry drops the wantFrame pin, SIGKILL mid-pin clears it
   ['test_wait_e2e.js'],      // 0178: unified wait (FS_WAIT via __wait) — fd wake, entry-scan atomicity, pure timeout, ring wake out of an infinite park, prompt signal-EINTR with the handler run, post-EINTR re-park
+  ['test_fswatch_e2e.js'],   // #75/0264: FS_WATCH — path-keyed watch fds fed from the _fsRpc choke: cross-process settle-on-close, FS_WAIT park wake, the rename-over settle (the inotify-trap case), EAGAIN contract, SELF_GONE + re-arm, dir names, one-record rename, O_TRUNC settle, overflow clear+latch with the writer unblocked, MODIFY opt-in, EINVAL/ENOENT
   ['test_vdso.js'],          // 0179: the seqlock vDSO block — spawn publish, zero-RPC getpgid/getsid/getppid/uptime/screen, SETPGID/SETSID/reparent/wmSetScreen republish, wedge -> RPC fallback, payload-cap arithmetic (no wasm)
   ['test_vdso_e2e.js'],      // 0179: real C reads pid/ppid/pgrp/sid off the page — RPC-op counter shows ZERO GETPGID/GETSID across setsid + orphan-reparent mutations; the libc setsid() acceptance
   ['test_rofs.js'],          // 0180: process-side read-only /usr — RemoteFS fast-path mechanics vs a fake RPC recorder: zero-RPC reads (incl. in-volume symlinks), final local errors, brokered fallbacks (relative / '..' / write-intent / escapes), RO_FD_BASE dup family, dup2/spawn-action twin promotion (no wasm)
@@ -106,6 +107,8 @@ const tests = [
   ['test_ctlpanel_e2e.js', IMG], // 0048: control panel — AUDIO_GAIN control plane end to end (__audio_gain import, kernel state across processes), os-release//proc info panel
   ['test_term_e2e.js', IMG],     // 0020: /bin/term — hush on a pty in a window, vi inside, resize reflow, shot pixels
   ['test_present_e2e.js', IMG],  // 0119: /bin/sent + /bin/mgp — demo decks render (glyphs, %default bg, %tab icons), paging, q quits
+  ['test_mgp_livereload_e2e.js', IMG], // #75/0264: mgp live-reload — the deck watch is wantreload()'s ONE source (ctime poll gone): external tmp+rename-over and truncate-rewrite saves re-render, background-color-proven
+  ['test_fileman_watch_e2e.js', IMG],  // #75/0264 (closes 0123): fileman auto-refresh — external create/rename-over/delete re-list unprompted via RegisterFdWake→WM_FSCHANGE, selection carried by name, navigation re-arms
   ['test_clipboard_e2e.js', IMG], // 0090: the system clipboard — kernel slot via /bin/clip, notepad copy/cut/paste across processes, term drag-select + Ctrl+Shift+C/V
   ['test_ctxmenu_e2e.js', IMG],  // 0091: right-click context menus — wm.c desktop/icon/taskbar popups (geometry, dismissal, flyouts, keyboard nav), EDIT WM_CONTEXTMENU via the agent, ctlpanel argv
   ['test_gpubox_dawn_e2e.js', IMG], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg

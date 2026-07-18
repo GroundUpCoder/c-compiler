@@ -1,6 +1,8 @@
 # 0123 — fileman: auto-refresh the listing on an external cwd change (mtime poll)
 
-- **Status**: deferred (mass-deferred 2026-07-12; was: open)
+- **Status**: done (2026-07-18, absorbed by todos/0264 — FS_WATCH push-wake
+  superseded the planned mtime poll; selection carried by name as specced;
+  acceptance moved to tests/kernel/test_fileman_watch_e2e.js)
 - **Design**: `todos/WIN32.md`. The one explicitly-*optional* half of 0106
   left unbuilt: 0106 landed manual F5/refresh (and refresh-after-every-op),
   but not the "unprompted" auto-refresh. Low priority — F5 already covers

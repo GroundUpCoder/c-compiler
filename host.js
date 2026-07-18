@@ -3610,6 +3610,10 @@ var BLOCK_FS = (function () {
   BlockFS.prototype.sockConnect = function () { return this._setErr('ENOSYS'); };
   BlockFS.prototype.sockPair = function () { return this._setErr('ENOSYS'); };
   BlockFS.prototype.sockShutdown = function () { return this._setErr('ENOSYS'); };
+  // FS_WATCH (ticket #75) exists only under the brokered kernel — the
+  // in-process fs has no second process whose mutations could be watched.
+  // RemoteFS overrides this with the FS_WATCH_OPEN RPC (the sock pattern).
+  BlockFS.prototype.fsWatch = function () { return this._setErr('ENOSYS'); };
 
   BlockFS.prototype.dup = function (oldfd) {
     if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
@@ -4290,6 +4294,11 @@ var BLOCK_FS = (function () {
       }),
       __sock_shutdown: wrap(function (fd, how) {
         return this.sockShutdown(fd, how);
+      }),
+      // FS_WATCH (ticket #75): the C-visible primitive under os/fswatch.h
+      // — real over RemoteFS (kernel FS_WATCH_OPEN), ENOSYS in-process.
+      __fs_watch: wrap(function (path_ptr, mask, flags) {
+        return this.fsWatch(readString(path_ptr), mask >>> 0, flags >>> 0);
       }),
       dup: wrap(function (oldfd) {
         var nfd = this.dup(oldfd);

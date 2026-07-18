@@ -349,7 +349,28 @@ response, sets DONE, bumps the doorbell. Node path identical via
                  createClipboard (__clip_set/__clip_get imports) under
                  SDL_SetClipboardText/SDL_GetClipboardText; no kernel =
                  a process-local slot, the two-transports pattern.
-0x04xx fs        the brokered filesystem (fd/data-plane amendment below)
+0x04xx fs        the brokered filesystem (fd/data-plane amendment below).
+                 FS_WATCH_OPEN 0x0422 (ticket #75) is file watching as a
+                 new OFD kind: {path, mask, flags} -> a PATH-KEYED watch
+                 fd — one watch per fd, close is removal. Every runtime
+                 mutation flows through the _fsRpc choke with the path as
+                 a string, so watches key on the lexically-canonical path
+                 (events carry names; a rename is ONE record with both
+                 names; an editor's tmp+rename-over save lands
+                 FSW_CLOSE_WRITE on the watched path and the watch
+                 SURVIVES — the inotify per-inode trap is structurally
+                 absent). The settled write (FSW_CLOSE_WRITE) fires at a
+                 dirty open-file-description's LAST release or a
+                 rename-onto; FSW_MODIFY (per-write chatter) is opt-in.
+                 Readable via the normal FS_READ (packed fsw_event
+                 records, os/fswatch.h MUST MATCH kernel.js's FSW table;
+                 EAGAIN when dry — WAIT-first contract), readiness via
+                 the ordinary _selectScan branch (FS_SELECT/FS_WAIT — no
+                 new blocking mechanism). Overflow = clear + latch one
+                 FSW_OVERFLOW (consumer rescans); the kernel never blocks
+                 a mutating RPC on a slow watcher. flags reserved
+                 (FSWF_RECURSIVE spec'd as a watch-path prefix compare;
+                 EINVAL until the first consumer wires it)
 0x05xx sockets   SOCK_SOCKET/BIND/LISTEN/ACCEPT/CONNECT/PAIR/SHUTDOWN —
                  AF_UNIX control plane (todos/0008; data plane rides
                  FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT, see below)

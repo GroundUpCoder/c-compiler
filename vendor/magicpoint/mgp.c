@@ -38,6 +38,7 @@ static char *mgp_version = "1.13a (20080214)";
 #endif
 #endif
 #include <fcntl.h>
+#include "fswatch.h"	/* gucOS FS_WATCH (ticket #75): deck live-reload */
 #ifdef TTY_KEYINPUT
 #include <termios.h>
 #endif
@@ -67,6 +68,7 @@ static char *rakugaki_backcolors[] = {
 	"black", "black", "black", "black", "gray", "gray",
 };
 static int demointerval = 0;	/* XXX define option for this */
+static int fsw_deck_fd = -1;	/* FS_WATCH fd on the deck (ticket #75) */
 
 u_long depth_mask;
 
@@ -93,7 +95,6 @@ static char *dumpdir = NULL;
 char *gsdevice = DEFAULT_GSDEV;
 char *htmlimage;
 
-static time_t srctimestamp;
 
 static char *xgeometry = NULL;	/*default: full screen*/
 #ifdef TTY_KEYINPUT
@@ -439,12 +440,17 @@ main(argc, argv)
 		/*NOTREACHED*/
 	}
 	mgp_fname = argv[0];
-    {
-	struct stat sb;
-	srctimestamp = (time_t) 0;
-	if (0 <= stat(mgp_fname, &sb))
-		srctimestamp = sb.st_ctime;
-    }
+
+	/* FS_WATCH live-reload (ticket #75): a PATH-keyed watch on the deck
+	 * — the ONE auto-reload source (wantreload() drains it; the upstream
+	 * ctime poll is gone). Path-keyed means an editor's tmp+rename-over
+	 * save still lands on this watch and the watch survives the
+	 * replacement; the settled park in frame_loop wakes and reloads
+	 * immediately, on ANY page. -R skips the watch entirely; no kernel
+	 * watch (ENOSYS) leaves the fd at -1 = no auto-reload (ctrl-r
+	 * still reloads by hand). */
+	if (!(mgp_flag & FL_NOAUTORELOAD))
+		fsw_deck_fd = fsw_open(mgp_fname, 0);
 
 	init_win1(xgeometry);
 	strlcpy(buf, mgp_fname, sizeof(buf));
@@ -879,8 +885,14 @@ frame_loop()
 			 * callback that re-enters just to find no event. The 2s
 			 * cap keeps the timebar/wantreload idle duties above on
 			 * their upstream cadence; a waking event stays queued
-			 * (peek) for the XCheckMaskEvent in draw_one. */
-			sdlx_wait_event(2000);
+			 * (peek) for the XCheckMaskEvent in draw_one. The deck
+			 * watch fd (FS_WATCH, ticket #75) joins the park: a
+			 * settled save — including a tmp+rename-over — wakes
+			 * it and reloads right here, on any page (wantreload()
+			 * drains the same fd). */
+			sdlx_wait_event_fd(fsw_deck_fd, 2000);
+			if (wantreload())
+				fl_reload();
 			return;
 		}
 
@@ -1465,22 +1477,22 @@ waitkids(sig)
 	}
 }
 
+/* gucOS port (ticket #75): the upstream ctime poll is REPLACED by the
+ * FS_WATCH drain — the kernel's path-keyed watch is the ONE reload
+ * source, so every upstream call site (idle tick, Expose, ConfigureNotify)
+ * now reacts to a settled save (including a tmp+rename-over, which the
+ * path key survives) instead of stat()ing the deck per tick. The park in
+ * frame_loop composes the same fd into the unified WAIT, so a save WAKES
+ * a settled slide instead of waiting out the 2s idle cadence. -R keeps
+ * its meaning (no watch is opened at all); no kernel watch (ENOSYS)
+ * degrades to no auto-reload — ctrl-r still works. */
 static int
 wantreload()
 {
-	struct stat sb;
-
-	if (mgp_flag & FL_NOAUTORELOAD)
+	if (fsw_deck_fd < 0)
 		return 0;
-
-	if (0 <= stat(mgp_fname, &sb)) {
-		if (srctimestamp < sb.st_ctime) {
-			srctimestamp = sb.st_ctime;
-			return 1;
-		}
-	}
-
-	return 0;
+	return (fsw_drain(fsw_deck_fd) &
+	    (FSW_BIT(FSW_CLOSE_WRITE) | FSW_BIT(FSW_OVERFLOW))) != 0;
 }
 
 /*

@@ -1694,6 +1694,17 @@ BOOL IsClipboardFormatAvailable(UINT format);
 struct SDL_Window;
 struct SDL_Window *GetWindowSDL(HWND hwnd);
 
+/* gucOS extension (ticket #75, the FS_WATCH consumer seam): register an fd
+ * with the message loop — it joins GetMessage's unified kernel WAIT, and
+ * when a park wake finds it readable, user32 drains it raw (read() to
+ * EAGAIN — format-agnostic) and posts `msg` to hwnd (wParam = fd,
+ * lParam = bytes drained), one message per readable episode. Made for
+ * FS_WATCH fds (never-blocking by contract); any registered fd must share
+ * that property. Notification-grade: the drained bytes are discarded — a
+ * consumer that needs the record payloads should own its park instead. */
+BOOL RegisterFdWake(HWND hwnd, int fd, UINT msg);
+BOOL UnregisterFdWake(int fd);
+
 int  GetSystemMetrics(int index);
 #define SM_CXSCREEN 0
 #define SM_CYSCREEN 1

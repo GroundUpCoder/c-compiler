@@ -2263,6 +2263,58 @@ static void sleep_ms(int ms) {                   /* kernel-timed park */
     select(0, NULL, NULL, NULL, &tv);
 }
 
+/* ---- fd-wake registrations (ticket #75, the FS_WATCH consumer seam) ----
+ * Registered fds join GetMessage's unified WAIT below; after an fd-flavored
+ * wake every registered fd is drained raw (read() to EAGAIN — the
+ * registration contract requires never-blocking fds, which watch fds are by
+ * construction) and a message is posted per fd that had bytes. Draining
+ * HERE is what keeps the loop spin-free: a level-readable fd left undrained
+ * would turn every subsequent WAIT into an immediate return. */
+#define FDWAKE_MAX 8
+static struct { int fd; HWND hwnd; UINT msg; } g_fdwake[FDWAKE_MAX];
+static int g_nfdwake = 0;
+
+BOOL RegisterFdWake(HWND hwnd, int fd, UINT msg) {
+    if (fd < 0 || !hwnd || g_nfdwake >= FDWAKE_MAX) return FALSE;
+    for (int i = 0; i < g_nfdwake; i++)
+        if (g_fdwake[i].fd == fd) {              /* re-register: retarget */
+            g_fdwake[i].hwnd = hwnd;
+            g_fdwake[i].msg = msg;
+            return TRUE;
+        }
+    g_fdwake[g_nfdwake].fd = fd;
+    g_fdwake[g_nfdwake].hwnd = hwnd;
+    g_fdwake[g_nfdwake].msg = msg;
+    g_nfdwake++;
+    return TRUE;
+}
+
+BOOL UnregisterFdWake(int fd) {
+    for (int i = 0; i < g_nfdwake; i++)
+        if (g_fdwake[i].fd == fd) {
+            g_fdwake[i] = g_fdwake[--g_nfdwake];
+            return TRUE;
+        }
+    return FALSE;
+}
+
+static int fdwake_collect(int *fds, int nfd) {
+    for (int i = 0; i < g_nfdwake; i++) fds[nfd++] = g_fdwake[i].fd;
+    return nfd;
+}
+
+static void fdwake_scan(void) {
+    char b[512];
+    for (int i = 0; i < g_nfdwake; i++) {
+        long total = 0;
+        int n;
+        while ((n = (int)read(g_fdwake[i].fd, b, sizeof b)) > 0) total += n;
+        if (total > 0)
+            PostMessage(g_fdwake[i].hwnd, g_fdwake[i].msg,
+                        (WPARAM)g_fdwake[i].fd, (LPARAM)total);
+    }
+}
+
 BOOL GetMessage(MSG *out, HWND hf, UINT mn, UINT mx) {
     if (!out) return FALSE;
     for (;;) {
@@ -2281,20 +2333,26 @@ BOOL GetMessage(MSG *out, HWND hf, UINT mn, UINT mx) {
             return FALSE;
         }
         /* Unified park (todos/0178): ONE kernel WAIT over the agent listen
-         * socket ⊕ the input ring ⊕ the next eligible timer deadline —
-         * the 25ms chunk poll is gone, an idle app parks until something
-         * real happens. Signals complete the park promptly (-1; the
-         * handler ran at the import's return). With NO wake source at all
-         * (pre-window, no agent socket, no timer) pace coarsely instead
-         * of parking forever; -2 = no kernel WAIT in this flavor, keep
-         * the old chunked poll. */
-        int fds[1];
+         * socket ⊕ the input ring ⊕ registered wake fds (ticket #75) ⊕
+         * the next eligible timer deadline — the 25ms chunk poll is gone,
+         * an idle app parks until something real happens. Signals complete
+         * the park promptly (-1; the handler ran at the import's return).
+         * With NO wake source at all (pre-window, no agent socket, no
+         * timer) pace coarsely instead of parking forever; -2 = no kernel
+         * WAIT in this flavor, keep the old chunked poll. */
+        int fds[1 + FDWAKE_MAX];
         int nfd = 0;
         if (g_agentFd >= 0) fds[nfd++] = g_agentFd;
+        nfd = fdwake_collect(fds, nfd);
         int t = timer_next_ms(hf, mn, mx);
         if (!have_ring && nfd == 0 && t < 0) t = 50;
-        if (__wait(fds, nfd, 1, t) == -2) {
+        int wr = __wait(fds, nfd, 1, t);
+        if (wr == -2) {
             if (!__sdl_pump_wait(25)) sleep_ms(10);
+        } else if (wr == 1 && g_nfdwake) {
+            fdwake_scan();       /* drain + post; the agent fd (also why=1)
+                                  * just reads EAGAIN here — agent_poll at
+                                  * the loop top owns it */
         }
     }
 }

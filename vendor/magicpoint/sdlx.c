@@ -901,3 +901,17 @@ void sdlx_frame_hook(void (*cb)(void)) {
 void sdlx_wait_event(int ms) {
 	SDL_WaitEventTimeout(NULL, ms);
 }
+
+/* FS_WATCH composition (ticket #75): the same idle park, but ALSO waking
+ * on a readable fd — the kernel's unified WAIT (todos/0178) composes fds
+ * with the input ring, so a deck edit wakes a settled slide immediately.
+ * Peek semantics match sdlx_wait_event: a waking ring event is drained
+ * into the SDL event queue at the import's return and stays queued for
+ * the next sx_pump(). Flavors without the kernel WAIT (-2) fall back to
+ * the plain park (no watches exist there either — the fd never arms). */
+__import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
+void sdlx_wait_event_fd(int fd, int ms) {
+	if (fd >= 0 && __wait(&fd, 1, 1, ms) != -2)
+		return;
+	SDL_WaitEventTimeout(NULL, ms);
+}

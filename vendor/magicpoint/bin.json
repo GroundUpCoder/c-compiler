@@ -26,7 +26,8 @@
     "../freetype/demo",
     "../freetype/include",
     "../libpng",
-    "../giflib"
+    "../giflib",
+    "../../os"
   ],
   "sources": [
     "mgp.c",

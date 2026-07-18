@@ -175,14 +175,17 @@ const out = boot([
   'wmctl tree',
   'echo ==cut',
 
-  // ---- F5 shows a file created outside fileman ----
+  // ---- an externally-created file appears UNPROMPTED (FS_WATCH
+  // auto-refresh, todos/0123/0264 — this used to require F5; the
+  // dedicated legs live in test_fileman_watch_e2e.js) and F5 still
+  // re-lists on demand ----
   'printf late > /root/nav/late.txt',
-  'echo ==beforef5',
+  'wmctl wait text LISTBOX:0 "late.txt" 8000',
+  'echo ==autorefresh',
   'wmctl gettext LISTBOX:0',
   'echo ==cut',
   'wmctl click $SID 100 100',                // focus listbox
   F5,
-  // 0154: F5 re-lists; poll until the externally-created file shows up.
   'wmctl wait text LISTBOX:0 "late.txt" 8000',
   'echo ==afterf5',
   'wmctl gettext LISTBOX:0',
@@ -260,8 +263,8 @@ check('Alt+Left walks the back history (nav2 -> nav)',
   section(out, 'altback').slice(0, 200));
 
 // F5
-check('the late file is absent before F5',
-  !/late\.txt/.test(section(out, 'beforef5')), section(out, 'beforef5'));
+check('the external file appears with NO F5 (FS_WATCH auto-refresh, 0123)',
+  /late\.txt/.test(section(out, 'autorefresh')), section(out, 'autorefresh'));
 check('F5 re-lists so the externally-created file appears',
   /late\.txt/.test(section(out, 'afterf5')), section(out, 'afterf5'));
 

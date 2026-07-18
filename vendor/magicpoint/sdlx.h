@@ -302,5 +302,6 @@ void XDrawString16(Display *, Drawable, GC, int, int, XChar2b *, int);
 /* ---- the SDL side (sdlx.c internals the fork calls directly) ---- */
 void sdlx_frame_hook(void (*cb)(void));   /* __setAnimationFrameFunc wrap */
 void sdlx_wait_event(int ms);             /* SDL_WaitEventTimeout peek (0161) */
+void sdlx_wait_event_fd(int fd, int ms);  /* + wake on a readable fd (FS_WATCH) */
 
 #endif /* SDLX_H */

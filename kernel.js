@@ -218,6 +218,17 @@ var OP = {
   // final page carries no `more` and closes the handle. 0x0421 because
   // FS_WAIT below predates it at 0x0420.
   FS_READDIR: 0x0421,
+  // FS_WATCH (file watching): create a PATH-KEYED watch fd — one watch per
+  // fd, close is removal. { path, mask, flags } -> { fd }. The fd reads
+  // packed fsw_event records (os/fswatch.h MUST MATCH the FSW table below),
+  // is readable in FS_SELECT/FS_WAIT like any other OFD kind, and answers
+  // EAGAIN when the queue is dry (WAIT-first contract — watch fds never
+  // block). Watches key on the LEXICALLY-canonical absolute path, so an
+  // editor's tmp+rename-over save lands on the watched path as one
+  // settled-write event and the watch SURVIVES — the inotify per-inode
+  // rename-over-save trap is structurally absent. flags is reserved
+  // (FSWF_RECURSIVE spec'd as a prefix compare; wired on first consumer).
+  FS_WATCH_OPEN: 0x0422,
   // Unified wait (todos/0178): ONE deferred park over fds ⊕ the input ring
   // ⊕ a timeout, interruptible by signals (krpc-intr → EINTR) — the only
   // sanctioned way to sleep on multiple sources (KERNEL.md single-writer
@@ -289,6 +300,29 @@ var OP = {
  * from the constants above, so a new opcode traces by construction. */
 var OP_NAMES = {};
 for (var opName in OP) OP_NAMES[OP[opName]] = opName;
+
+/* FS_WATCH event vocabulary — MUST MATCH os/fswatch.h. The record stream a
+ * watch fd reads is packed little-endian:
+ *   [u16 len][u8 type][u8 flags][name... NUL, padded so len % 4 == 0]
+ * `name` is the watch-relative child name for dir-watch events (RENAME:
+ * "old\0new\0" — ONE record, both names, no inotify cookie protocol),
+ * empty for self events. FSW_MODIFY (every write/ftruncate — mid-write
+ * chatter) is OPT-IN: the default mask is the settled set, inverting
+ * inotify's trap where IN_MODIFY is the obvious-looking wrong choice.
+ * FSW_CLOSE_WRITE is the settled write: a dirty open-file-description's
+ * LAST release, or a rename landing complete content at the path. */
+var FSW_CLOSE_WRITE = 1;   // content at the path is complete — safe to react
+var FSW_CREATE = 2;        // entry appeared (create/mkdir/symlink/link/move-in of a dir)
+var FSW_DELETE = 3;        // entry disappeared (unlink/rmdir/move-out)
+var FSW_RENAME = 4;        // same-dir rename under a dir watch (both names)
+var FSW_SELF_GONE = 5;     // the watched path itself unlinked/renamed away (watch stays armed)
+var FSW_MODIFY = 6;        // each write/ftruncate — opt-in
+var FSW_OVERFLOW = 7;      // queue overflowed: the consumer must rescan
+var FSWF_ISDIR = 1;        // record flag: the subject is a directory
+var FSW_MASK_DEFAULT =     // everything except MODIFY (the settled set)
+  (1 << FSW_CLOSE_WRITE) | (1 << FSW_CREATE) | (1 << FSW_DELETE) |
+  (1 << FSW_RENAME) | (1 << FSW_SELF_GONE) | (1 << FSW_OVERFLOW);
+var FSW_QUEUE_CAP = 128;   // per-watch-fd bound; overflow = clear + latch
 
 /* Wait options / status packing — must match <sys/wait.h>. */
 var WNOHANG = 0x01, WUNTRACED = 0x02, WCONTINUED = 0x08;
@@ -1751,6 +1785,9 @@ function Kernel(opts) {
                              // 'ptm' = a pty master.
   this._nextOfd = 1;
   this._std = null;          // lazy singleton OFDs for default stdio
+  this._watches = new Map(); // FS_WATCH: ofdId -> 'watch' OFD. size === 0 is
+                             // the whole subsystem's cost gate — an
+                             // unwatched system pays nothing per mutation.
   this._sockBinds = new Map(); // resolved path -> listener/bound socket ofdId
   this._kernelSockServers = new Map(); // resolved path -> onConnect(peer, pcb)
                              // — KERNEL-owned AF_UNIX endpoints (sockServe;
@@ -1906,7 +1943,18 @@ Kernel.prototype._ofdUnref = function (id, pid) {
   }
   if (--o.refs > 0) return;
   this._ofds.delete(id);
-  if (o.kind === 'file') this._fs.close(o.bfsFd);
+  if (o.kind === 'file') {
+    // FS_WATCH settled write: a dirty open file description's LAST release
+    // means the writer is done with it — write-then-close settles exactly
+    // once here, and dup'd/spawn-inherited descriptors can't fire a
+    // premature settle (strictly better than inotify's any-close-of-a-
+    // write-fd IN_CLOSE_WRITE).
+    if (o.dirty && this._watches.size) {
+      this._watchEmit(o.path, FSW_CLOSE_WRITE, FSW_CLOSE_WRITE, false);
+    }
+    this._fs.close(o.bfsFd);
+  }
+  else if (o.kind === 'watch') this._watches.delete(o.id);
   else if (o.kind === 'ptm') {
     // The terminal is gone (0020): SIGHUP to the pty's fg pgroup (POSIX —
     // this is how closing the terminal window ends the session), parked
@@ -2300,10 +2348,18 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
           pcb.fds.set(a.fd, srcId);
         }
       } else if (a.op === 1) {    // OPEN path at fd (arg = oflag)
-        var bfsFd = self._fs.open(self._pathFor(pcb, a.path), a.arg | 0, a.mode | 0);
+        var aAbs = self._pathFor(pcb, a.path);
+        var aExisted = true;
+        if (self._watches.size && (a.arg & 0x40)) aExisted = self._fs.stat(aAbs) !== null;
+        var bfsFd = self._fs.open(aAbs, a.arg | 0, a.mode | 0);
         if (bfsFd === null) fail = self._fs._lastError || 'EIO';
         else {
-          var no = self._makeOfd('file', { bfsFd: bfsFd });
+          // FS_WATCH: a shell redirect (`cmd > file`) is a write like any
+          // other — record the path and the truncate/create dirty bit so
+          // the close settles (same rules as the FS_OPEN arm).
+          var no = self._makeOfd('file', { bfsFd: bfsFd, path: aAbs });
+          if ((a.arg & 0x200) || !aExisted) no.dirty = true;
+          if (!aExisted) self._watchEmit(aAbs, FSW_CREATE, FSW_CREATE, false);
           no.refs++;
           var prevId = pcb.fds.get(a.fd);
           if (prevId !== undefined) self._ofdUnref(prevId, pid);
@@ -2824,12 +2880,23 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
 
   switch (op) {
     case OP.FS_OPEN: {
-      var bfsFd = fs.open(P(req.path), req.flags | 0, req.mode | 0);
+      // FS_WATCH bookkeeping: record the path on every file OFD (cheap —
+      // a string; the settle emit canonicalizes lazily, gated on live
+      // watches), pre-stat O_CREAT existence only when watches are live
+      // (the parent-dir CREATE event), and mark O_TRUNC / fresh-create
+      // dirty so `echo -n > file` — truncate or create, zero writes —
+      // still settles at close.
+      var oAbs = P(req.path);
+      var oExisted = true;
+      if (this._watches.size && (req.flags & 0x40)) oExisted = fs.stat(oAbs) !== null;
+      var bfsFd = fs.open(oAbs, req.flags | 0, req.mode | 0);
       if (bfsFd === null) { this._respond(pcb, eFs()); return; }
-      var o = this._makeOfd('file', { bfsFd: bfsFd });
+      var o = this._makeOfd('file', { bfsFd: bfsFd, path: oAbs });
+      if ((req.flags & 0x200) || !oExisted) o.dirty = true;
       o.refs++;
       var fd = allocFd(0);
       pcb.fds.set(fd, o.id);
+      if (!oExisted) this._watchEmit(oAbs, FSW_CREATE, FSW_CREATE, false);
       this._respond(pcb, { fd: fd });
       return;
     }
@@ -2853,6 +2920,16 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         return;
       }
       if (o1.kind === 'null') { this._respondRaw(pcb, new Uint8Array(0)); return; }
+      if (o1.kind === 'watch') {
+        // FS_WATCH drain: whole packed records only. Empty queue is EAGAIN
+        // — watch fds are inherently non-blocking; the contract is
+        // WAIT/select first, then drain until EAGAIN, then act once.
+        var wrec = this._watchDrain(o1, count);
+        if (wrec === null) { this._respond(pcb, { errno: 'EAGAIN' }); return; }
+        if (wrec === false) { this._respond(pcb, { errno: 'EINVAL' }); return; }
+        this._respondRaw(pcb, wrec);
+        return;
+      }
       if (o1.kind === 'pipe') {
         if (o1.end !== 'read') { this._respond(pcb, { errno: 'EBADF' }); return; }
         this._streamRead(pcb, o1.pipe, count);
@@ -2905,9 +2982,14 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (o2.kind === 'file') {
         var wn = fs.write(o2.bfsFd, data, data.length);
         if (wn === null) { this._respond(pcb, eFs()); return; }
+        if (wn > 0) {
+          o2.dirty = true;               // FS_WATCH: settles at last close
+          if (this._watches.size) this._watchEmit(o2.path, FSW_MODIFY, FSW_MODIFY, false);
+        }
         this._respond(pcb, { n: wn });
         return;
       }
+      if (o2.kind === 'watch') { this._respond(pcb, { errno: 'EBADF' }); return; }
       if (o2.kind === 'pipe') {
         if (o2.end !== 'write') { this._respond(pcb, { errno: 'EBADF' }); return; }
         this._streamWrite(pcb, o2.pipe, data);
@@ -2963,12 +3045,52 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       return;
     }
     case OP.FS_ACCESS: r = fs.access(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_UNLINK: r = fs.unlink(P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_RENAME: r = fs.rename(P(req.from), P(req.to)); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_MKDIR: r = fs.mkdir(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_RMDIR: r = fs.rmdir(P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_LINK: r = fs.link(P(req.from), P(req.to)); this._respond(pcb, r === null ? eFs() : {}); return;
-    case OP.FS_SYMLINK: r = fs.symlink(req.target, P(req.path)); this._respond(pcb, r === null ? eFs() : {}); return;
+    // The mutating arms below feed FS_WATCH after success — every runtime
+    // fs mutation flows through this dispatch (the choke point), so one
+    // emit per arm covers the whole system. All emits are gated on live
+    // watches inside the helpers; an unwatched system pays nothing.
+    case OP.FS_UNLINK: {
+      var ulAbs = P(req.path);
+      r = fs.unlink(ulAbs);
+      if (r !== null) this._watchEmit(ulAbs, FSW_SELF_GONE, FSW_DELETE, false);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_RENAME: {
+      var rnFrom = P(req.from), rnTo = P(req.to);
+      r = fs.rename(rnFrom, rnTo);
+      if (r !== null) this._watchRename(rnFrom, rnTo);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_MKDIR: {
+      var mkAbs = P(req.path);
+      r = fs.mkdir(mkAbs, req.mode | 0);
+      if (r !== null) this._watchEmit(mkAbs, FSW_CREATE, FSW_CREATE, true);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_RMDIR: {
+      var rdAbs = P(req.path);
+      r = fs.rmdir(rdAbs);
+      if (r !== null) this._watchEmit(rdAbs, FSW_SELF_GONE, FSW_DELETE, true);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_LINK: {
+      var lnTo = P(req.to);
+      r = fs.link(P(req.from), lnTo);
+      if (r !== null) this._watchEmit(lnTo, FSW_CREATE, FSW_CREATE, false);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
+    case OP.FS_SYMLINK: {
+      var slAbs = P(req.path);
+      r = fs.symlink(req.target, slAbs);
+      if (r !== null) this._watchEmit(slAbs, FSW_CREATE, FSW_CREATE, false);
+      this._respond(pcb, r === null ? eFs() : {});
+      return;
+    }
     case OP.FS_READLINK: {
       // BlockFS.readlink is buffer-style (POSIX shape); the RPC carries the
       // target as a string. PATH_MAX here is BlockFS's path component budget.
@@ -2982,6 +3104,10 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       var o5 = ofdOf(req.fd);
       if (!o5 || o5.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
       r = fs.ftruncate(o5.bfsFd, req.size | 0);
+      if (r !== null) {
+        o5.dirty = true;                 // FS_WATCH: settles at last close
+        if (this._watches.size) this._watchEmit(o5.path, FSW_MODIFY, FSW_MODIFY, false);
+      }
       this._respond(pcb, r === null ? eFs() : {});
       return;
     }
@@ -3139,8 +3265,174 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       pcb.waiter = uw;     // fd side: _recheckSelects; ring side: _waitRingWake
       return;
     }
+    case OP.FS_WATCH_OPEN: {
+      // FS_WATCH: one watch per fd (inotify's wd layer deliberately
+      // dropped — fds are cheap here and FS_WAIT takes fd lists, so
+      // "several watches" is several fds; with the wd goes its whole
+      // failure cluster: wd→path maps, wd reuse, the IN_IGNORED race).
+      // The path must exist at creation (catches typos loudly) but the
+      // watch tolerates later absence: SELF_GONE fires and the watch
+      // stays ARMED — a delete-and-recreate or rename-over editor save
+      // keeps notifying, because the PATH is the identity, not the inode.
+      if (req.flags | 0) { this._respond(pcb, { errno: 'EINVAL' }); return; }
+      var wCanon = this._watchCanon(P(req.path));
+      var wSt = fs.stat(wCanon);
+      if (wSt === null) { this._respond(pcb, eFs()); return; }
+      var wOfd = this._makeOfd('watch', {
+        path: wCanon,
+        isDir: (wSt.mode & 0xF000) === 0x4000,
+        mask: (req.mask | 0) || FSW_MASK_DEFAULT,
+        queue: [],
+        overflowed: false,
+      });
+      wOfd.refs++;
+      this._watches.set(wOfd.id, wOfd);
+      var wNewFd = allocFd(0);
+      pcb.fds.set(wNewFd, wOfd.id);
+      this._respond(pcb, { fd: wNewFd });
+      return;
+    }
     default: this._respond(pcb, { errno: 'ENOSYS' });
   }
+};
+
+/* ---- FS_WATCH (path-keyed file watching; ticket #75) ----
+ * The primitive inotify structurally couldn't be: gucOS's single-writer
+ * kernel sees EVERY runtime fs mutation as one RPC in the _fsRpc dispatch
+ * above, with the path present as a string — so watches key on canonical
+ * PATHS, events carry names, a rename is one record with both names, and
+ * the editor rename-over-save trap (write tmp + rename onto the target —
+ * a per-inode watch dies with the old inode) is gone: the rename lands
+ * FSW_CLOSE_WRITE on the watched destination path and the watch survives.
+ * Delivery is the existing OFD machinery — a 'watch' OFD is readable in
+ * _selectScan (FS_SELECT / the 0178 unified FS_WAIT), drains via FS_READ,
+ * dies via FS_CLOSE/_ofdUnref. No new blocking mechanism.
+ *
+ * Canonicalization is LEXICAL (cwd-join + dot-collapse — fs._resolvePath):
+ * the fs surface has no physical resolver (realpath is lexical-only in
+ * this flavor, todos/0263), so a write through a symlink alias attributes
+ * to the alias's path — the documented residual twin of inotify's
+ * hardlink-alias case, harmless to path-consistent consumers. When 0263
+ * lands a physical resolver, _watchCanon is the ONE seam to upgrade. */
+Kernel.prototype._watchCanon = function (abs) {
+  try { var p = this._fs._resolvePath(abs); if (p) return p; } catch (e) {}
+  return abs;
+};
+
+/* Queue one record on one watch (mask-gated, tail-coalesced). Overflow
+ * policy: CLEAR the queue and latch — after a loss the survivors would be
+ * a misleading partial prefix; one honest FSW_OVERFLOW ("rescan") beats a
+ * plausible-looking lie. The kernel never blocks a mutating RPC on a slow
+ * watcher (the strace 0046 principle). Returns true if readiness changed
+ * in a way the caller should _recheckSelects for. */
+Kernel.prototype._watchQueue = function (w, type, flags, name) {
+  if (!(w.mask & (1 << type))) return false;
+  if (w.overflowed) return false;              // latched: one OVERFLOW pending
+  var q = w.queue;
+  var tail = q.length ? q[q.length - 1] : null;
+  if (tail && tail.t === type && tail.f === flags && tail.n === name) return false;
+  if (q.length >= FSW_QUEUE_CAP) {
+    q.length = 0;
+    w.overflowed = true;
+    return true;
+  }
+  q.push({ t: type, f: flags, n: name });
+  return true;
+};
+
+/* Fan a mutation at `absPath` out to the live watches: selfType lands on
+ * an exact-path watch (empty name), childType on a watch of the parent
+ * directory (the leaf as the record name). Gated on _watches.size — no
+ * canonicalization, no iteration on an unwatched system. */
+Kernel.prototype._watchEmit = function (absPath, selfType, childType, isDir) {
+  if (this._watches.size === 0 || !absPath) return;
+  var p = this._watchCanon(absPath);
+  var cut = p.lastIndexOf('/');
+  var parent = cut <= 0 ? '/' : p.slice(0, cut);
+  var leaf = p.slice(cut + 1);
+  var fl = isDir ? FSWF_ISDIR : 0;
+  var woke = false;
+  var self = this;
+  this._watches.forEach(function (w) {
+    if (w.path === p) { if (self._watchQueue(w, selfType, fl, '')) woke = true; }
+    else if (w.isDir && w.path === parent) { if (self._watchQueue(w, childType, fl, leaf)) woke = true; }
+  });
+  if (woke) this._recheckSelects();
+};
+
+/* Rename arrives as ONE RPC carrying both names, so it emits as one story
+ * per watcher — no inotify cookie pairing, no unpaired halves:
+ *  - exact watch on the source        -> FSW_SELF_GONE (watch stays armed)
+ *  - exact watch on the destination   -> FSW_CLOSE_WRITE (rename publishes
+ *    COMPLETE content by definition — the rename-over-save settle; a dir
+ *    renamed in is FSW_CREATE + ISDIR instead)
+ *  - dir watch seeing both sides      -> ONE FSW_RENAME record "old\0new\0"
+ *  - dir watch seeing one side        -> FSW_DELETE (out) or the settle/
+ *    CREATE (in) — each watcher gets a coherent story for ITS directory. */
+Kernel.prototype._watchRename = function (fromAbs, toAbs) {
+  if (this._watches.size === 0) return;
+  var from = this._watchCanon(fromAbs), to = this._watchCanon(toAbs);
+  var st = this._fs.lstat(to);
+  var isDir = !!st && (st.mode & 0xF000) === 0x4000;
+  var fl = isDir ? FSWF_ISDIR : 0;
+  var fc = from.lastIndexOf('/'), tc = to.lastIndexOf('/');
+  var fParent = fc <= 0 ? '/' : from.slice(0, fc), fLeaf = from.slice(fc + 1);
+  var tParent = tc <= 0 ? '/' : to.slice(0, tc), tLeaf = to.slice(tc + 1);
+  var woke = false;
+  var self = this;
+  this._watches.forEach(function (w) {
+    var hit = false;
+    if (w.path === from) hit = self._watchQueue(w, FSW_SELF_GONE, fl, '') || hit;
+    if (w.path === to) {
+      hit = self._watchQueue(w, isDir ? FSW_CREATE : FSW_CLOSE_WRITE, fl, '') || hit;
+    }
+    if (w.isDir) {
+      var f = w.path === fParent, t = w.path === tParent;
+      if (f && t) hit = self._watchQueue(w, FSW_RENAME, fl, fLeaf + '\u0000' + tLeaf) || hit;
+      else if (f) hit = self._watchQueue(w, FSW_DELETE, fl, fLeaf) || hit;
+      else if (t) hit = self._watchQueue(w, isDir ? FSW_CREATE : FSW_CLOSE_WRITE, fl, tLeaf) || hit;
+    }
+    if (hit) woke = true;
+  });
+  if (woke) this._recheckSelects();
+};
+
+/* Drain queued records into one packed FS_READ reply (whole records only).
+ * null = nothing pending (EAGAIN); false = the first record doesn't fit
+ * the caller's buffer (EINVAL, the inotify rule — callers size for
+ * 4 + NAME_MAX). An overflow latch drains as a single FSW_OVERFLOW record
+ * and clears (the queue was already cleared at latch time). */
+Kernel.prototype._watchDrain = function (w, cap) {
+  var pack = function (t, f, n) {
+    var nb = new TextEncoder().encode(n);
+    var len = (4 + nb.length + 1 + 3) & ~3;    // header + name + NUL, 4-aligned
+    var rec = new Uint8Array(len);
+    rec[0] = len & 0xff; rec[1] = (len >> 8) & 0xff;
+    rec[2] = t; rec[3] = f;
+    rec.set(nb, 4);
+    return rec;
+  };
+  if (w.overflowed) {
+    var orec = pack(FSW_OVERFLOW, 0, '');
+    if (orec.length > cap) return false;
+    w.overflowed = false;
+    w.queue.length = 0;
+    return orec;
+  }
+  if (w.queue.length === 0) return null;
+  var chunks = [], total = 0;
+  while (w.queue.length) {
+    var e = w.queue[0];
+    var rec = pack(e.t, e.f, e.n);
+    if (total + rec.length > cap) break;
+    w.queue.shift();
+    chunks.push(rec);
+    total += rec.length;
+  }
+  if (chunks.length === 0) return false;
+  var out = new Uint8Array(total), off = 0;
+  for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; }
+  return out;
 };
 
 /* ---- AF_UNIX sockets (0x05xx; todos/0008) ----
@@ -5509,6 +5801,13 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
       else if (o.st === 'listening') { if (o.pending.length > 0) r.push(fd); }
       else r.push(fd);
     }
+    else if (o.kind === 'watch') {
+      // FS_WATCH: readable iff records (or the overflow latch) are
+      // pending. This branch is mandatory, not an optimization — the
+      // default arm below reports unknown kinds always-readable, which
+      // would spuriously wake every parked watcher forever.
+      if (o.queue.length > 0 || o.overflowed) r.push(fd);
+    }
     else if (o.kind !== 'out') r.push(fd);
   });
   wfds.forEach(function (fd) {
@@ -7030,6 +7329,16 @@ RemoteFS.prototype.sockPair = function () {
   return [r.fd0, r.fd1];
 };
 RemoteFS.prototype.sockShutdown = function (fd, how) { return this._ok(this._c.call(OP.SOCK_SHUTDOWN, { fd: fd, how: how })) && 0; };
+/* FS_WATCH (ticket #75): a path-keyed watch fd. mask 0 = the kernel's
+ * settled default; flags reserved (EINVAL when nonzero). The fd reads
+ * packed fsw_event records (os/fswatch.h), EAGAIN when dry, and is
+ * readable in select()/__wait like any other fd. Close removes the watch. */
+RemoteFS.prototype.fsWatch = function (path, mask, flags) {
+  var r = this._ok(this._c.call(OP.FS_WATCH_OPEN, { path: path, mask: mask | 0, flags: flags | 0 }));
+  if (r === null) return null;
+  this._fdTable[r.fd] = { type: 'remote' };
+  return r.fd;
+};
 
 /* The brokered __select_impl (replaces toWasmEnv's in-process scanner):
  * fd-set bitmaps <-> fd lists; readiness, blocking, and timeout are all

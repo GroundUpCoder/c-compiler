@@ -842,6 +842,23 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest) {
   // fixture must restale on a packages/*.json edit); scanned unconditionally
   // — over-invalidating a minimal bake is the cheap direction.
   walk(pathMod.join(rootDir, 'packages'), null);
+  // ...and so are the SOURCES those definitions build: since the 0262
+  // split a packaged app's project tree (vendor/...) is no longer in the
+  // manifest closure below, so without this an mgp.c edit leaves a fat
+  // fixture 'fresh' (found by the ticket #75 consumer red run). Same
+  // over-invalidation rule: scanned unconditionally.
+  var pkgDir = pathMod.join(rootDir, 'packages');
+  var pkgNames = [];
+  try { pkgNames = fsMod.readdirSync(pkgDir).filter(function (n) { return /\.json$/.test(n); }); } catch (e) {}
+  pkgNames.forEach(function (n) {
+    var pj;
+    try { pj = JSON.parse(fsMod.readFileSync(pathMod.join(pkgDir, n), 'utf-8')); } catch (e) { return; }
+    var pf = pj.files || {};
+    Object.keys(pf).forEach(function (fp) {
+      if (pf[fp].project !== undefined) addProject(pf[fp].project);
+      if (pf[fp].bin !== undefined) statFile(pathMod.join(rootDir, pf[fp].bin));
+    });
+  });
   var files = (manifest.system && manifest.system.files) || {};
   Object.keys(files).forEach(function (fp) {
     var entry = files[fp];

@@ -56,6 +56,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include "../fswatch.h"
 #include "../launch.h"
 #include "../listdir.h"
 #include "../openwith.h"
@@ -98,12 +99,15 @@
 #define IDM_HIDDEN    324
 #define IDM_BACK      325            /* Alt+Left history back (0106) */
 
+#define WM_FSCHANGE (WM_APP + 1)     /* cwd changed on disk (FS_WATCH wake) */
+
 #define TOP_H  26                    /* the path/button strip */
 #define BTN_W  46
 
 static HWND g_win, g_path, g_go, g_up, g_open, g_with, g_list, g_status;
 static char g_cwd[512] = "/root";
 static int g_nkids;
+static int g_watch = -1;             /* FS_WATCH fd on the cwd (ticket #75) */
 
 /* View state (0106): the sort key, its direction, and whether dotfiles
  * show. The details columns come off the same stat() refill already did. */
@@ -248,6 +252,43 @@ static void push_back(void) {
     snprintf(g_back[g_nback++], sizeof g_back[0], "%s", g_cwd);
 }
 
+/* FS_WATCH auto-refresh (ticket #75 / todos/0123): ONE watch fd on the
+ * cwd, re-armed per navigation, riding user32's RegisterFdWake seam — the
+ * fd joins GetMessage's unified WAIT and a readable episode posts
+ * WM_FSCHANGE. External create/delete/rename in the cwd — including an
+ * editor's tmp+rename-over save, which a per-inode watch would miss —
+ * refresh the listing with no keystroke. No kernel watch (ENOSYS) leaves
+ * the fd at -1: manual F5 semantics, as before 0123. */
+static void watch_cwd(void) {
+    if (g_watch >= 0) {
+        UnregisterFdWake(g_watch);
+        close(g_watch);
+        g_watch = -1;
+    }
+    g_watch = fsw_open(g_cwd, 0);
+    if (g_watch >= 0) RegisterFdWake(g_win, g_watch, WM_FSCHANGE);
+}
+
+/* An UNPROMPTED refill must not eat the user's selection (0123): indexes
+ * shift when entries come and go, so carry the marked NAMES across the
+ * rebuild and re-mark the survivors. */
+static void refill_keep_selection(void) {
+    char keep[64][264];
+    int nkeep = 0;
+    int idx[512];
+    int n = (int)SendMessage(g_list, LB_GETSELITEMS, 512, (LPARAM)idx);
+    for (int i = 0; i < n && nkeep < 64; i++)
+        if (idx[i] >= 0 && idx[i] < g_nent)
+            snprintf(keep[nkeep++], sizeof keep[0], "%s", g_ents[idx[i]].name);
+    refill();
+    for (int i = 0; i < nkeep; i++)
+        for (int j = 0; j < g_nent; j++)
+            if (!strcmp(keep[i], g_ents[j].name)) {
+                SendMessage(g_list, LB_SETSEL, 1, (LPARAM)j);
+                break;
+            }
+}
+
 /* `record` distinguishes a user navigation (pushes history) from a Back
  * pop (does not). */
 static void navigate_ex(const char *path, int record) {
@@ -264,6 +305,7 @@ static void navigate_ex(const char *path, int record) {
     if (record) push_back();
     snprintf(g_cwd, sizeof g_cwd, "%s", norm);
     refill();
+    watch_cwd();                                 /* re-arm on the new cwd */
 }
 
 static void navigate(const char *path) { navigate_ex(path, 1); }
@@ -829,6 +871,12 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CONTEXTMENU:
         ctx_menu(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         return 0;
+    case WM_FSCHANGE:
+        /* FS_WATCH wake (ticket #75): user32 already drained the watch fd
+         * and coalesced the episode into one message — just re-list, with
+         * the selection carried by name (todos/0123). */
+        refill_keep_selection();
+        return 0;
     case WM_TIMER:
         reap_kids(&g_nkids);
         return 0;
@@ -860,6 +908,7 @@ int main(int argc, char **argv) {
                            NULL, NULL, NULL, NULL);
     if (!g_win) return 1;
     refill();
+    watch_cwd();                                 /* FS_WATCH auto-refresh (0123) */
     relayout(g_win);
     SetTimer(g_win, 1, 500, NULL);               /* the reap tick */
     /* The op keys (0092), listbox focus only — the path EDIT keeps its
