@@ -62,6 +62,32 @@ try {
   await waitOut('LUA-VIA-HTTP', 30000);
   check('installed binary runs via the planted symlink', true);
 
+  // #83: the human catalog + per-package info ride the same browser realm.
+  // The FAT image bakes package twins under /usr/opt with NO install-DB
+  // records, so only the live-installed lua reads "installed" here.
+  await page.keyboard.type('gucman list --all; echo CAT-""RC=$?\r');
+  await waitOut('CAT-RC=', 60000);
+  const cat = await page.evaluate(() => window.__osOut);
+  check('catalog exits 0', /CAT-RC=0/.test(cat));
+  check('catalog table has AVAILABLE + INSTALLED columns',
+    /NAME\s+AVAILABLE\s+INSTALLED\s+SUMMARY/.test(cat));
+  check('catalog row shows lua installed at the available version',
+    /^lua\s+(\S+)\s+\1\s/m.test(cat));
+  check('catalog row shows punes not installed', /^punes\s+\S+\s+no\s/m.test(cat));
+
+  await page.keyboard.type('gucman info lua; echo INFO-""RC=$?\r');
+  await waitOut('INFO-RC=', 60000);
+  await page.keyboard.type('gucman info punes; echo INFO2-""RC=$?\r');
+  await waitOut('INFO2-RC=', 60000);
+  const inf = await page.evaluate(() => window.__osOut);
+  const luaInfo = inf.slice(inf.indexOf('CAT-RC='), inf.indexOf('INFO-RC='));
+  const punesInfo = inf.slice(inf.indexOf('INFO-RC='));
+  check('info lua exits 0', /INFO-RC=0/.test(inf));
+  check('info shows lua installed', /installed:\s+yes/.test(luaInfo));
+  check('info2 punes exits 0', /INFO2-RC=0/.test(inf));
+  check('info shows punes not installed',
+    /package:\s+punes/.test(punesInfo) && /installed:\s+no\b/.test(punesInfo));
+
   // Clean removal replays the DB (also proves the install recorded one).
   await page.keyboard.type('gucman remove lua; echo RM-RC""=$?\r');
   await waitOut('RM-RC=', 30000);

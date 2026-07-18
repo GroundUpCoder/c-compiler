@@ -127,7 +127,8 @@ async function main() {
 
   const db = sect(out, 'db');
   check('DB records the payload sha256', db.includes(idx.packages.quake.payload.sha256), db.slice(0, 300));
-  check('gucman list shows quake', db.includes('quake\t' + idx.packages.quake.version), db);
+  check('gucman list shows quake (aligned human row)',
+    new RegExp('^quake\\s+' + idx.packages.quake.version.replace(/\./g, '\\.') + '\\s', 'm').test(db), db);
 
   const launch = sect(out, 'launch');
   check('installed quake opens its window off the installed pak',

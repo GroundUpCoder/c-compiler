@@ -84,6 +84,13 @@ async function main() {
     'echo ==list2',
     'gucman list',
     'gucman install punes; echo RC2=$?',      // idempotent no-op
+    'echo ==catalog',
+    'gucman list --all',                      // #83: human catalog, DB cross-ref
+    'echo ==infoinst',
+    'gucman info punes; echo IRC=$?',         // #83: installed package detail
+    'echo ==infoavail',
+    'gucman info lua; echo IRC2=$?',          // #83: available-only package
+    'gucman info nosuchpkg; echo IRC3=$?',    // #83: unknown -> loud exit 1
     'echo ==launch',
     'punes &',
     'wmctl wait win puNES',
@@ -96,11 +103,14 @@ async function main() {
   const aout = String(a.stdout || '');
   const aall = aout + '\n' + String(a.stderr || '');
 
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pv = idx.packages.punes.version;
+
   const minimal = section(aout, 'minimal');
   check('minimal image has no baked /bin/punes', minimal.includes('NO-BAKED-BIN'), minimal);
   check('minimal image has no baked Games/punes menu entry', minimal.includes('NO-BAKED-MENU'));
   check('minimal image has no baked nes openwith key', minimal.includes('NO-BAKED-NES-KEY'));
-  check('gucman list starts empty', !minimal.includes('punes\t'), minimal);
+  check('gucman list starts empty', minimal.includes('no packages installed'), minimal);
 
   const bad = section(aout, 'badrepo');
   check('corrupted payload is refused (exit 1)', bad.includes('RC=1'), bad);
@@ -128,9 +138,47 @@ async function main() {
   check('DB records the menu entry', db.includes('/etc/menu/Games/punes'));
 
   const list2 = section(aout, 'list2');
-  check('gucman list shows punes', list2.includes('punes\t' + idx.packages.punes.version), list2);
+  check('gucman list shows punes (aligned human row)',
+    new RegExp('^punes\\s+' + esc(pv) + '\\s', 'm').test(list2), list2);
+  check('gucman list prints the header', /^NAME\s+VERSION\s+SUMMARY/m.test(list2), list2);
   check('reinstall is an already-installed no-op', list2.includes('RC2=0') &&
     /already installed/.test(list2), list2);
+
+  /* ---- #83: the human catalog (list --all) + per-package info ---- */
+  const cat = section(aout, 'catalog');
+  check('catalog header has AVAILABLE + INSTALLED columns',
+    /^NAME\s+AVAILABLE\s+INSTALLED\s+SUMMARY/m.test(cat), cat);
+  check('catalog shows punes installed at its version',
+    new RegExp('^punes\\s+' + esc(pv) + '\\s+' + esc(pv) + '\\s', 'm').test(cat), cat);
+  check('catalog shows lua available but not installed',
+    /^lua\s+\S+\s+no\s/m.test(cat), cat);
+  check('catalog raw surface untouched: no JSON braces in the human table',
+    !cat.includes('"packages"'), cat);
+
+  const infoInst = section(aout, 'infoinst');
+  check('info exits 0 for an installed package', infoInst.includes('IRC=0'), infoInst);
+  check('info names the package', /^package:\s+punes/m.test(infoInst), infoInst);
+  check('info shows available version', new RegExp('^available:\\s+' + esc(pv), 'm').test(infoInst));
+  check('info shows installed yes + version',
+    new RegExp('^installed:\\s+yes \\(' + esc(pv) + '\\)', 'm').test(infoInst), infoInst);
+  check('info reports up-to-date (no update)', /^update:\s+no \(up to date\)/m.test(infoInst), infoInst);
+  check('info lists the planted /opt binary',
+    /^planted files:$/m.test(infoInst) && infoInst.includes('/opt/punes/punes'), infoInst);
+  check('info lists the planted bin symlink',
+    /^planted symlinks:$/m.test(infoInst) && infoInst.includes('/usr/local/bin/punes'), infoInst);
+  check('info lists the openwith key', /^openwith keys:$/m.test(infoInst) && /^  nes$/m.test(infoInst));
+  check('info lists the menu entry', infoInst.includes('/etc/menu/Games/punes'), infoInst);
+  check('info shows the payload size', /^size:\s+\S+/m.test(infoInst), infoInst);
+
+  const infoAvail = section(aout, 'infoavail');
+  check('info exits 0 for a not-installed package', infoAvail.includes('IRC2=0'), infoAvail);
+  check('info shows installed: no for a not-installed package',
+    /^installed:\s+no$/m.test(infoAvail), infoAvail);
+  check('info shows lua available version',
+    new RegExp('^available:\\s+' + esc(idx.packages.lua.version), 'm').test(infoAvail), infoAvail);
+  check('info on an unknown package fails loud', infoAvail.includes('IRC3=1'), infoAvail);
+  check('unknown-package error names the cause',
+    /not installed and not in the repository index/.test(aall), 'stderr missing');
 
   const launch = section(aout, 'launch');
   check('installed punes boots the built-in test ROM', aall.includes('using built-in test ROM'));
@@ -163,7 +211,8 @@ async function main() {
   const bout = String(b.stdout || '');
 
   const persist = section(bout, 'persist');
-  check('install persists across reboot (DB)', persist.includes('punes\t' + idx.packages.punes.version), persist);
+  check('install persists across reboot (DB)',
+    new RegExp('^punes\\s+' + esc(pv) + '\\s', 'm').test(persist), persist);
   check('install persists across reboot (/opt)', persist.includes('OPT-PERSISTS'));
 
   const rem = section(bout, 'remove');
@@ -173,7 +222,8 @@ async function main() {
   check('openwith key removed', rem.includes('NES-KEY-GONE'));
   check('menu entry AND gucman-created menu dirs removed', rem.includes('MENU-DIRS-GONE'));
   check('DB record removed last', rem.includes('DB-GONE'));
-  check('gucman list empty after remove', !rem.includes('punes\t'), rem);
+  check('gucman list empty after remove',
+    rem.includes('no packages installed') && !/^punes\s/m.test(rem), rem);
 
   const rerun = section(bout, 'rerun');
   check('removing a non-installed package fails loud', rerun.includes('RC=1'), rerun);

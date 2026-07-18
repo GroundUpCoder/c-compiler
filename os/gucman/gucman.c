@@ -1,5 +1,15 @@
 /*
- * gucman — the gucOS package manager (Slice 1: install / remove / list).
+ * gucman — the gucOS package manager (Slice 1: install / remove / list;
+ * ticket #83 grew the human-readable catalog: `list [--all]` + `info`).
+ *
+ * CLI surface split (locked): `gucman index` prints the repository
+ * index.json RAW — the machine-readable catalog for front-ends (the
+ * storefront GUI parses it; never reformat those bytes). The HUMAN
+ * surfaces are `list` (installed packages, aligned table, no network),
+ * `list --all` (the full catalog cross-referenced with the install DB,
+ * so every row shows installed y/n and at which version) and
+ * `info <name>` (catalog fields + install state + the planted lists
+ * from the DB record).
  *
  * Design (locked, ~git/meta gucman roadmap + design thread): optional apps
  * live OUT of the baked /usr blob as tar+gzip payloads on the same deploy
@@ -961,16 +971,17 @@ static int cmd_remove(const char *name) {
     return 0;
 }
 
-/* =============================== list ================================== */
+/* ============================ list / info ============================== */
 
-static int cmd_list(void) {
+#define GM_LIST_MAX 128
+
+/* Collect installed package names (sorted) from the DB dir. */
+static int gm_installed_names(char names[][GM_NAME_MAX], int max) {
     DIR *d = opendir(GM_DB_DIR);
     if (!d) return 0;                                            /* nothing installed yet */
-    /* collect + sort for stable output */
-    char names[64][GM_NAME_MAX];
     int n = 0;
     struct dirent *de;
-    while ((de = readdir(d)) && n < 64) {
+    while ((de = readdir(d)) && n < max) {
         size_t l = strlen(de->d_name);
         if (l > 5 && strcmp(de->d_name + l - 5, ".json") == 0 && l - 5 < GM_NAME_MAX) {
             memcpy(names[n], de->d_name, l - 5);
@@ -986,15 +997,215 @@ static int cmd_list(void) {
             memcpy(names[j - 1], names[j], sizeof t);
             memcpy(names[j], t, sizeof t);
         }
+    return n;
+}
+
+struct gm_row {
+    char name[GM_NAME_MAX];
+    char ver[64];               /* list: installed version; --all: available */
+    char inst[96];              /* --all only: "no" | "<ver>" | "<ver> (update)" */
+    char summary[512];
+};
+
+static int gm_row_cmp(const void *a, const void *b) {
+    return strcmp(((const struct gm_row *)a)->name, ((const struct gm_row *)b)->name);
+}
+
+/* Aligned human table. have_inst distinguishes the catalog layout
+ * (NAME AVAILABLE INSTALLED SUMMARY) from the installed-only one
+ * (NAME VERSION SUMMARY). Summary is last so it never needs padding. */
+static void gm_row_print(struct gm_row *rows, int n, int have_inst) {
+    const char *h2 = have_inst ? "AVAILABLE" : "VERSION";
+    size_t wn = strlen("NAME"), wv = strlen(h2), wi = strlen("INSTALLED");
     for (int i = 0; i < n; i++) {
+        if (strlen(rows[i].name) > wn) wn = strlen(rows[i].name);
+        if (strlen(rows[i].ver) > wv) wv = strlen(rows[i].ver);
+        if (have_inst && strlen(rows[i].inst) > wi) wi = strlen(rows[i].inst);
+    }
+    if (have_inst)
+        printf("%-*s  %-*s  %-*s  %s\n", (int)wn, "NAME", (int)wv, h2, (int)wi, "INSTALLED", "SUMMARY");
+    else
+        printf("%-*s  %-*s  %s\n", (int)wn, "NAME", (int)wv, h2, "SUMMARY");
+    for (int i = 0; i < n; i++) {
+        if (have_inst)
+            printf("%-*s  %-*s  %-*s  %s\n", (int)wn, rows[i].name, (int)wv, rows[i].ver,
+                   (int)wi, rows[i].inst, rows[i].summary);
+        else
+            printf("%-*s  %-*s  %s\n", (int)wn, rows[i].name, (int)wv, rows[i].ver, rows[i].summary);
+    }
+}
+
+static void gm_db_fields(cJSON *db, char *ver, size_t vcap, char *sum, size_t scap) {
+    cJSON *v = db ? cJSON_GetObjectItemCaseSensitive(db, "version") : NULL;
+    cJSON *s = db ? cJSON_GetObjectItemCaseSensitive(db, "summary") : NULL;
+    if (ver) snprintf(ver, vcap, "%s", cJSON_IsString(v) ? v->valuestring : "?");
+    if (sum) snprintf(sum, scap, "%s", cJSON_IsString(s) ? s->valuestring : "");
+}
+
+static int cmd_list(int all) {
+    char names[GM_LIST_MAX][GM_NAME_MAX];
+    int ninst = gm_installed_names(names, GM_LIST_MAX);
+
+    if (!all) {
+        if (!ninst) { printf("no packages installed\n"); return 0; }
+        struct gm_row *rows = calloc((size_t)ninst, sizeof *rows);
+        if (!rows) return 1;
+        for (int i = 0; i < ninst; i++) {
+            cJSON *db = gm_db_load(names[i]);
+            snprintf(rows[i].name, sizeof rows[i].name, "%s", names[i]);
+            gm_db_fields(db, rows[i].ver, sizeof rows[i].ver, rows[i].summary, sizeof rows[i].summary);
+            cJSON_Delete(db);
+        }
+        gm_row_print(rows, ninst, 0);
+        free(rows);
+        return 0;
+    }
+
+    /* --all: the repository catalog, every row cross-referenced with the
+     * install DB — installed y/n, at which version, update marker. */
+    char base[GM_PATH_MAX];
+    if (gm_repo_base(base, sizeof base) != 0) return 1;
+    cJSON *index = gm_fetch_index(base);
+    if (!index) return 1;
+    cJSON *pkgs = cJSON_GetObjectItemCaseSensitive(index, "packages");
+    int navail = 0;
+    cJSON *e;
+    cJSON_ArrayForEach(e, pkgs) navail++;
+    struct gm_row *rows = calloc((size_t)(navail + ninst) + 1, sizeof *rows);
+    if (!rows) { cJSON_Delete(index); return 1; }
+    int n = 0;
+    cJSON_ArrayForEach(e, pkgs) {
+        struct gm_row *r = &rows[n++];
+        snprintf(r->name, sizeof r->name, "%s", e->string);
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(e, "version");
+        cJSON *s = cJSON_GetObjectItemCaseSensitive(e, "summary");
+        snprintf(r->ver, sizeof r->ver, "%s", cJSON_IsString(v) ? v->valuestring : "?");
+        snprintf(r->summary, sizeof r->summary, "%s", cJSON_IsString(s) ? s->valuestring : "");
+        cJSON *db = gm_db_load(e->string);
+        if (!db) {
+            snprintf(r->inst, sizeof r->inst, "no");
+        } else {
+            char iv[64];
+            gm_db_fields(db, iv, sizeof iv, NULL, 0);
+            if (strcmp(iv, r->ver) == 0) snprintf(r->inst, sizeof r->inst, "%s", iv);
+            else snprintf(r->inst, sizeof r->inst, "%s (update)", iv);
+            cJSON_Delete(db);
+        }
+    }
+    /* installed packages the index no longer carries stay honest rows */
+    for (int i = 0; i < ninst; i++) {
+        if (pkgs && cJSON_GetObjectItemCaseSensitive(pkgs, names[i])) continue;
+        struct gm_row *r = &rows[n++];
+        snprintf(r->name, sizeof r->name, "%s", names[i]);
+        snprintf(r->ver, sizeof r->ver, "-");
         cJSON *db = gm_db_load(names[i]);
-        cJSON *v = db ? cJSON_GetObjectItemCaseSensitive(db, "version") : NULL;
-        cJSON *s = db ? cJSON_GetObjectItemCaseSensitive(db, "summary") : NULL;
-        printf("%s\t%s\t%s\n", names[i],
-               cJSON_IsString(v) ? v->valuestring : "?",
-               cJSON_IsString(s) ? s->valuestring : "");
+        char iv[64];
+        gm_db_fields(db, iv, sizeof iv, r->summary, sizeof r->summary);
+        snprintf(r->inst, sizeof r->inst, "%s (not in repository)", iv);
         cJSON_Delete(db);
     }
+    cJSON_Delete(index);
+    qsort(rows, (size_t)n, sizeof *rows, gm_row_cmp);
+    gm_row_print(rows, n, 1);
+    free(rows);
+    return 0;
+}
+
+/* Integer-math human size — "473.1 KiB (484467 bytes)". */
+static void gm_human_size(long b, char *out, size_t cap) {
+    if (b >= 1024 * 1024) {
+        long x10 = (b * 10 + 524288) / 1048576;
+        snprintf(out, cap, "%ld.%ld MiB (%ld bytes)", x10 / 10, x10 % 10, b);
+    } else if (b >= 1024) {
+        long x10 = (b * 10 + 512) / 1024;
+        snprintf(out, cap, "%ld.%ld KiB (%ld bytes)", x10 / 10, x10 % 10, b);
+    } else {
+        snprintf(out, cap, "%ld bytes", b);
+    }
+}
+
+static void gm_info_strings(cJSON *db, const char *key, const char *label) {
+    cJSON *arr = db ? cJSON_GetObjectItemCaseSensitive(db, key) : NULL;
+    if (!arr || cJSON_GetArraySize(arr) == 0) return;
+    printf("%s\n", label);
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr)
+        if (cJSON_IsString(it)) printf("  %s\n", it->valuestring);
+}
+
+static int cmd_info(const char *name) {
+    if (!gm_valid_name(name)) {
+        fprintf(stderr, "gucman: '%s' is not a valid package name\n", name);
+        return 1;
+    }
+    cJSON *db = gm_db_load(name);
+
+    /* catalog side: the same fetch path install uses — nothing new */
+    cJSON *index = NULL;
+    char base[GM_PATH_MAX];
+    if (gm_repo_base(base, sizeof base) == 0) index = gm_fetch_index(base);
+    cJSON *pkgs = index ? cJSON_GetObjectItemCaseSensitive(index, "packages") : NULL;
+    cJSON *ent = pkgs ? cJSON_GetObjectItemCaseSensitive(pkgs, name) : NULL;
+    if (!ent && !db) {
+        if (index)
+            fprintf(stderr, "gucman: package '%s' is not installed and not in the repository index\n", name);
+        cJSON_Delete(index);
+        return 1;
+    }
+    if (!index && db)
+        fprintf(stderr, "gucman: repository unavailable — showing local install state only\n");
+
+    printf("%-11s%s\n", "package:", name);
+    cJSON *esum = ent ? cJSON_GetObjectItemCaseSensitive(ent, "summary") : NULL;
+    cJSON *dsum = db ? cJSON_GetObjectItemCaseSensitive(db, "summary") : NULL;
+    if (cJSON_IsString(esum)) printf("%-11s%s\n", "summary:", esum->valuestring);
+    else if (cJSON_IsString(dsum)) printf("%-11s%s\n", "summary:", dsum->valuestring);
+
+    char avail[64] = "";
+    if (ent) {
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(ent, "version");
+        snprintf(avail, sizeof avail, "%s", cJSON_IsString(v) ? v->valuestring : "?");
+        printf("%-11s%s\n", "available:", avail);
+        cJSON *pay = cJSON_GetObjectItemCaseSensitive(ent, "payload");
+        cJSON *sz = pay ? cJSON_GetObjectItemCaseSensitive(pay, "size") : NULL;
+        if (cJSON_IsNumber(sz)) {
+            char hs[80];
+            gm_human_size((long)sz->valuedouble, hs, sizeof hs);
+            printf("%-11s%s\n", "size:", hs);
+        }
+        cJSON *deps = cJSON_GetObjectItemCaseSensitive(ent, "deps");
+        char dl[256] = "";
+        size_t o = 0;
+        cJSON *d;
+        cJSON_ArrayForEach(d, deps) {
+            if (!cJSON_IsString(d)) continue;
+            o += (size_t)snprintf(dl + o, sizeof dl - o, "%s%s", o ? ", " : "", d->valuestring);
+            if (o >= sizeof dl - 1) break;
+        }
+        printf("%-11s%s\n", "deps:", o ? dl : "(none)");
+        cJSON *mb = cJSON_GetObjectItemCaseSensitive(ent, "minBase");
+        if (cJSON_IsNumber(mb)) printf("%-11s%d\n", "minBase:", (int)mb->valuedouble);
+    } else if (index) {
+        printf("%-11s%s\n", "available:", "- (not in repository)");
+    }
+
+    if (!db) {
+        printf("%-11s%s\n", "installed:", "no");
+    } else {
+        char iv[64];
+        gm_db_fields(db, iv, sizeof iv, NULL, 0);
+        printf("%-11syes (%s)\n", "installed:", iv);
+        if (ent) {
+            if (strcmp(iv, avail) == 0) printf("%-11s%s\n", "update:", "no (up to date)");
+            else printf("%-11syes (%s -> %s)\n", "update:", iv, avail);
+        }
+        gm_info_strings(db, "files", "planted files:");
+        gm_info_strings(db, "symlinks", "planted symlinks:");
+        gm_info_strings(db, "openwith_keys", "openwith keys:");
+        gm_info_strings(db, "menu_entries", "menu entries:");
+    }
+    cJSON_Delete(db);
+    cJSON_Delete(index);
     return 0;
 }
 
@@ -1033,13 +1244,28 @@ int main(int argc, char **argv) {
         return rc;
     }
     if (argc >= 3 && strcmp(argv[1], "remove") == 0) return cmd_remove(argv[2]);
-    if (argc == 2 && strcmp(argv[1], "list") == 0) return cmd_list();
+    if (argc == 2 && strcmp(argv[1], "list") == 0) return cmd_list(0);
+    if (argc == 3 && strcmp(argv[1], "list") == 0 &&
+        (strcmp(argv[2], "--all") == 0 || strcmp(argv[2], "-a") == 0)) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        int rc = cmd_list(1);
+        curl_global_cleanup();
+        return rc;
+    }
+    if (argc >= 3 && strcmp(argv[1], "info") == 0) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        int rc = cmd_info(argv[2]);
+        curl_global_cleanup();
+        return rc;
+    }
     if (argc == 2 && strcmp(argv[1], "index") == 0) {
         curl_global_init(CURL_GLOBAL_DEFAULT);
         int rc = cmd_index();
         curl_global_cleanup();
         return rc;
     }
-    fprintf(stderr, "usage: gucman install <name> | gucman remove <name> | gucman list | gucman index\n");
+    fprintf(stderr,
+            "usage: gucman install <name> | gucman remove <name> | gucman info <name>\n"
+            "       gucman list [--all]   | gucman index (raw catalog JSON)\n");
     return 2;
 }
