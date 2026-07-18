@@ -166,6 +166,14 @@
 #include "fileops.h"
 #include "sounds.h"
 #include "saver.h"
+#include "keys.h"
+
+#ifndef SDLK_LGUI               /* not yet in the veneer SDL.h: the modifier
+                                   keysym block stops at RALT. 0x40000000 |
+                                   scancode, scancodes 227/231 (SDL3). */
+#define SDLK_LGUI 1073742051
+#define SDLK_RGUI 1073742055
+#endif
 /* The ONE menu engine (todos/0259, arch A13): wm.c is menu-engine
  * customer #2 — its Start-menu flyouts and context menus track/measure/
  * raster through menucore (model + chain + gdi32/freetype raster), with
@@ -436,12 +444,14 @@ static uint64_t desk_last_ns = 0;
 static uint64_t desk_poll_ms = 0;  /* coarse /root/Desktop re-read stamp */
 static int desk_trash_full = 0;    /* Recycle Bin glyph state (todos/0093),
                                       refreshed on the same coarse tick */
-static int mod_ctrl = 0, mod_shift = 0;   /* held modifiers, tracked from
+static int mod_ctrl = 0, mod_shift = 0,   /* held modifiers, tracked from
                                              key events by KEYSYM — pointer
                                              records carry no mod word; reset
                                              when the desktop loses focus so
                                              a keyup that went elsewhere can't
                                              wedge them (todos/0077) */
+           mod_gui = 0;                   /* ⌘/GUI likewise (todos/0149 —
+                                             the macos-scheme select-all) */
 /* Press/drag state (todos/0077). desk_drag: 0 idle, 1 marquee (press began
  * on empty desktop), 2 icon-move (press began on a selected icon). */
 static int desk_press = 0;         /* left button is down on the desktop */
@@ -2304,6 +2314,7 @@ static void desk_key(int sym) {
             if (desk_elen > 0) { desk_ebuf[--desk_elen] = 0; desk_dirty = 1; }
             return;
         }
+        if (mod_ctrl || mod_gui) return;   /* chords are not text (0149) */
         if (sym >= 32 && sym < 127 && desk_elen < (int)sizeof desk_ebuf - 1) {
             desk_ebuf[desk_elen++] = (char)sym;
             desk_ebuf[desk_elen] = 0;
@@ -2331,7 +2342,13 @@ static void desk_key(int sym) {
         }
         return;
     }
-    if (mod_ctrl && (sym == 'a' || sym == 'A')) {
+    /* select-all — Explorer's chord, resolved through the scheme table
+     * (^A / ⌘A, todos/0149; keys.h case-folds the shifted keysym) */
+    if (sym >= 32 && sym < 127 &&
+        key_action(KCTX_LIST,
+                   (mod_ctrl ? KM_CTRL : 0) | (mod_shift ? KM_SHIFT : 0) |
+                       (mod_gui ? KM_GUI : 0),
+                   sym) == KA_SELECT_ALL) {
         desk_selmask = desk_n >= 64 ? ~0ULL : (1ULL << desk_n) - 1;
         if (desk_n > 0 && desk_anchor < 0) desk_anchor = 0;
         desk_dirty = 1;
@@ -3268,7 +3285,7 @@ static void handle_event(wmp_hdr *h) {
             if (desk_focused) {
                 if (desk_edit >= 0) desk_edit_armed = 1;   /* editor focus landed */
             } else {
-                mod_ctrl = mod_shift = 0;
+                mod_ctrl = mod_shift = mod_gui = 0;
                 if (desk_edit >= 0 && desk_edit_armed)
                     desk_edit_finish();    /* click-away/focus-loss commits (0103) */
             }
@@ -3773,6 +3790,7 @@ static void frame_cb(void) {
             int k = (int)e.key.key;
             if (k == SDLK_LCTRL || k == SDLK_RCTRL) mod_ctrl = down;
             else if (k == SDLK_LSHIFT || k == SDLK_RSHIFT) mod_shift = down;
+            else if (k == SDLK_LGUI || k == SDLK_RGUI) mod_gui = down;
             /* Keyboard (todos/0078): an open context menu owns the keys
              * first (its root holds focus — todos/0091); then the Start
              * menu, the run dialog, and the focused desktop's icon grid

@@ -36,6 +36,7 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/wait.h>
+#include "../keys.h"     /* the system keyboard scheme (todos/0149) */
 #include "../launch.h"   /* LAUNCH_ENV_PATH/HOME — the canonical env strings */
 
 /* User-override font first, then the baked vendor default (todos/0040 —
@@ -560,6 +561,19 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     int sym = (int)k->key;
     int mod = (int)k->mod;
     char b;
+    /* The terminal's copy/paste chords resolve through the scheme table
+       (todos/0149, os/keys.h): Ctrl+Shift+C/V under the windows keymap,
+       ⌘C/V under macos — plain Ctrl+C stays the tty's SIGINT byte either
+       way. Keysyms are modifier-applied, so the shifted letter usually
+       arrives uppercase (key_action case-folds). */
+    if (sym >= 32 && sym <= 126) {
+        int act = key_action(KCTX_TERM, km_from_sdl(mod), sym);
+        if (act == KA_COPY) { copy_selection(); return; }
+        if (act == KA_PASTE) { paste_clipboard(); return; }
+    }
+    /* GUI is never a text modifier: an unbound ⌘chord DROPS here instead
+       of typing its letter (the ⌘C-typed-'c' bug, folded into 0149). */
+    if (mod & SDL_KMOD_GUI) return;
     if (sym == SDLK_RETURN) { b = '\r'; write(mfd, &b, 1); return; }
     if (sym == SDLK_BACKSPACE) { b = 0x7f; write(mfd, &b, 1); return; }  /* VERASE */
     if (sym == SDLK_TAB) { b = '\t'; write(mfd, &b, 1); return; }
@@ -567,15 +581,6 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     if (sym == SDLK_DELETE) { reply("\x1b[3~"); return; }
     if (sym >= 0x40000000) { send_named(sym); return; }
     if (sym < 32 || sym > 126) return;
-    /* Ctrl+Shift+C / Ctrl+Shift+V are the terminal's copy/paste chords
-       (todos/0090) — plain Ctrl+C stays the tty's SIGINT byte. Keysyms are
-       modifier-applied, so the shifted letter usually arrives uppercase. */
-    if ((mod & SDL_KMOD_CTRL) && (mod & SDL_KMOD_SHIFT)) {
-        int c = sym;
-        if (c >= 'a' && c <= 'z') c -= 32;
-        if (c == 'C') { copy_selection(); return; }
-        if (c == 'V') { paste_clipboard(); return; }
-    }
     if (mod & SDL_KMOD_CTRL) {
         /* SDL3 keycodes are modifier-applied chars; fold to the control
            code the tty expects (^A..^Z, ^@ ^[ ^\ ^] ^^ ^_). */

@@ -44,6 +44,7 @@
 #include <time.h>
 #include "../sounds.h"
 #include "../saver.h"
+#include "../keys.h"
 #include "../wm_proto.h"
 
 /* A config-store write failed — read-only or full $HOME (todos/0234).
@@ -61,14 +62,15 @@ __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 /* ---------------------------------------------------------- applet table */
 
 enum { APP_SOUND, APP_SOUNDS, APP_SYSTEM, APP_DISPLAY, APP_DATETIME,
-       APP_SAVER, APP_N };
+       APP_SAVER, APP_KEYBOARD, APP_N };
 
 static const char *APP_NAME[APP_N] =             /* icon labels (unique!) */
-    { "Sound", "Sounds", "System", "Display", "Date/Time", "Screen Saver" };
+    { "Sound", "Sounds", "System", "Display", "Date/Time", "Screen Saver",
+      "Keyboard" };
 static const char *APP_TITLE[APP_N] =            /* applet window titles */
     { "Sound Properties", "Sounds Properties", "System Properties",
       "Display Properties", "Date/Time Properties",
-      "Screen Saver Properties" };
+      "Screen Saver Properties", "Keyboard Properties" };
 
 static HWND g_hub;
 static HWND g_icon[APP_N];
@@ -381,6 +383,72 @@ static LRESULT CALLBACK saver_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
+/* ------------------------------ Keyboard (the 0149 keyboard scheme) */
+
+#define ID_KBWIN 500                             /* radios in KS_* order */
+#define ID_KBMAC 501
+#define ID_KBRL  502
+
+static const char *KB_RADIO[2] = { "windows", "macos" };
+
+/* Sync the radios + checkbox to the STORED config — WM_CREATE and the
+ * write-failure reverts (the saver_sync discipline, todos/0234). */
+static void kb_sync(HWND h) {
+    ks_cfg c;
+    ks_get(&c);
+    SendMessage(GetDlgItem(h, ID_KBWIN), BM_SETCHECK, c.scheme == KS_WINDOWS, 0);
+    SendMessage(GetDlgItem(h, ID_KBMAC), BM_SETCHECK, c.scheme == KS_MACOS, 0);
+    SendMessage(GetDlgItem(h, ID_KBRL), BM_SETCHECK, c.readline != 0, 0);
+}
+
+static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        CreateWindowEx(0, "BUTTON", "Keyboard Scheme",
+                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                       8, 6, 264, 118, h, NULL, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "Windows (Ctrl)",
+                       WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                       16, 26, 200, 16, h, (HMENU)ID_KBWIN, NULL, NULL);
+        CreateWindowEx(0, "BUTTON", "macOS (Cmd)",
+                       WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+                       16, 46, 200, 16, h, (HMENU)ID_KBMAC, NULL, NULL);
+        /* the 0150 axis: only the macos table HAS the emacs rows (in the
+         * windows table Ctrl is the verb modifier), so this is a
+         * macos-scheme refinement — running apps pick either change up
+         * within ~1s (the keys.h cached revalidate) */
+        CreateWindowEx(0, "BUTTON", "Emacs editing in text fields (macOS)",
+                       WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                       16, 76, 244, 16, h, (HMENU)ID_KBRL, NULL, NULL);
+        kb_sync(h);
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case ID_KBWIN: case ID_KBMAC:
+            /* auto-toggled; apply on click (the Sounds checkbox rule) */
+            if (ks_set("scheme", KB_RADIO[LOWORD(wp) - ID_KBWIN]) != 0) {
+                kb_sync(h);                      /* store write failed: revert */
+                store_fail(h, "the keyboard scheme");
+            }
+            return 0;
+        case ID_KBRL: {
+            HWND chk = GetDlgItem(h, ID_KBRL);
+            int on = (int)SendMessage(chk, BM_GETCHECK, 0, 0);
+            if (ks_set("readline", on ? "on" : "off") != 0) {
+                kb_sync(h);                      /* store write failed: revert */
+                store_fail(h, "the keyboard setting");
+            }
+            return 0;
+        }
+        }
+        return 0;
+    case WM_DESTROY:
+        g_applet[APP_KEYBOARD] = NULL;
+        return 0;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
 /* ------------------------------------------------------------- the hub */
 
 typedef LRESULT (CALLBACK *WndProcFn)(HWND, UINT, WPARAM, LPARAM);
@@ -393,6 +461,7 @@ APP_DEF[APP_N] = {
     { "CplDisplay",  display_proc,  280, 62  },
     { "CplDateTime", datetime_proc, 232, 56  },
     { "CplSaver",    saver_proc,    280, 162 },
+    { "CplKeyboard", keyboard_proc, 280, 132 },
 };
 
 static void open_applet(int i) {
@@ -509,6 +578,22 @@ static void draw_art(HDC dc, int i, int x, int y) {
         DeleteObject(st);
         MoveToEx(dc, x + 8, y + 28, NULL);       /* the stand */
         LineTo(dc, x + 24, y + 28);
+        break;
+    }
+    case APP_KEYBOARD: {                         /* keyboard: body + keys */
+        HBRUSH b = CreateSolidBrush(RGB(160, 160, 160));
+        HGDIOBJ ob = SelectObject(dc, b);
+        Rectangle(dc, x + 2, y + 9, x + 30, y + 24);
+        SelectObject(dc, ob);
+        DeleteObject(b);
+        HBRUSH k = CreateSolidBrush(RGB(255, 255, 255));
+        for (int r = 0; r < 2; r++)
+            for (int col = 0; col < 6; col++) {
+                RECT key = { x + 5 + col * 4 + r * 2, y + 12 + r * 5,
+                             x + 8 + col * 4 + r * 2, y + 15 + r * 5 };
+                FillRect(dc, &key, k);
+            }
+        DeleteObject(k);
         break;
     }
     case APP_DATETIME: {                         /* clock face + hands */

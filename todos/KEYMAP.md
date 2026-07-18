@@ -3,7 +3,37 @@
 Design doc for the Windows ⁄ macOS keyboard schemes. Queue items:
 `todos/0149` (the scheme + verb remap) and `todos/0150` (emacs bindings in GUI
 text fields). Decided 2026-07-12 (log:
-`logs/2026-07-12/queue-hardening-and-keymap.md`).
+`logs/2026-07-12/queue-hardening-and-keymap.md`); **built 2026-07-18** on
+branch `shortcuts-0149` (log `logs/2026-07-18/keymap-scheme-0149.md`) — the
+"As built" section below is normative for the shipped behavior. The
+⌘-passthrough spike (below) is still a placeholder awaiting the human
+real-macOS-Chrome run; nothing was bound on its say-so — the table already
+excludes every chord the spike is expected to find eaten.
+
+## As built — deviations from the original table (5 decisions, all shipped)
+
+1. **Cmd+arrows stay Aero Snap**, unchanged, kernel-side (`kernel.js:4623`
+   intercepts GUI+arrow before any app sees it). The macOS keymap therefore
+   has **no ⌘←/→/↑/↓ bindings at all** — line/doc nav is ^A/^E (readline) and
+   the native Home/End VKs in both schemes. This supersedes the original
+   table's "Line start/end: ⌘← / →, and ^A / ^E" and "Doc start/end: ⌘↑ / ↓"
+   rows below — read KA_LINE_START/END and KA_DOC_START/END in `os/keys.h`
+   as the authoritative binding, not the table.
+2. **Redo (⌘⇧Z / Ctrl+Y) is not implemented** — `os/keys.h` binds KA_UNDO only,
+   consistent with EDIT having no undo buffer yet (`todos/0135`); the
+   original table's Redo cell is aspirational, not shipped.
+3. The accelerator swap (`TranslateAcceleratorW`, `os/win32/user32.c`) is
+   **global at the one choke point** — FCONTROL means GUI under the macos
+   scheme, Ctrl under windows, no per-app exceptions.
+4. Readline rows are **GUI-EDIT-only, default ON, macos-scheme-only** (the
+   `readline off` key is the escape hatch); they are structurally absent from
+   the windows table, not merely unbound.
+5. Config is **cached with a 1 Hz revalidate** (`os/keys.h` `ks_cached`, the
+   `wm.c saver_poll` precedent) — no new notify/broadcast mechanism; a
+   Control Panel Apply reaches running apps within ~1s.
+6. term's Cmd+C-types-'c' bug is fixed as a consequence of (3)+(4): GUI is
+   never a text modifier in either `user32.c TranslateMessage` or
+   `term.c handle_key` — an unbound ⌘ chord drops instead of typing.
 
 ## The idea
 
