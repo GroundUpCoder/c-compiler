@@ -1862,8 +1862,12 @@ function Kernel(opts) {
   // worker or Node ≥18 global); opts.fetch overrides (a fake fetch in tests).
   // Passing `fetch: null` EXPLICITLY disables network — HTTP_OPEN answers
   // ENOSYS (standalone pages stay offline); omitting it uses the global.
+  // NB fetch must be BOUND: browsers brand-check fetch's receiver, so calling
+  // it as this._fetch(...) with the Kernel as `this` throws Illegal invocation
+  // before any request (Node's undici doesn't check — the Node suite can't
+  // catch this; the browser HTTP e2e does).
   this._fetch = ('fetch' in opts) ? opts.fetch
-    : (typeof fetch !== 'undefined' ? fetch : null);
+    : (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null);
   this._httpXfers = new Map();    // id -> transfer (see _httpRpc)
   this._nextHttp = 1;
 }

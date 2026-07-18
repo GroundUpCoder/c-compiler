@@ -5807,7 +5807,12 @@ function createHttp(ctx, hooks) {
     __http_status: function (id, statusOut, hdrPtr, hdrCap) {
       if (!have) { ctx.setErrnoName('ENOSYS'); return -1; }
       const r = hooks.httpStatus(id | 0);
-      if (!r || r.errno) { ctx.setErrnoName((r && r.errno) || 'EIO'); return -1; }
+      if (!r || r.errno) {
+        // The C surface only sees errno; keep the transport's real error text
+        // visible (a bare CURLE_COULDNT_CONNECT hid the ticket-#78 TypeError).
+        if (r && r.error) console.error('__http_status: transfer failed:', r.error);
+        ctx.setErrnoName((r && r.errno) || 'EIO'); return -1;
+      }
       if (statusOut) new DataView(ctx.getMemory().buffer).setInt32(statusOut, r.status | 0, true);
       const hb = enc.encode(r.headers || '');
       const n = Math.min(hdrCap >>> 0, hb.length);
@@ -5819,6 +5824,7 @@ function createHttp(ctx, hooks) {
       const r = hooks.httpRead(id | 0, cap >>> 0);
       if (r && r.errno) {
         if (r.errno === 'EINTR') { ctx.setErrnoName('EINTR'); return -1; }
+        if (r.error) console.error('__http_read: transfer failed:', r.error);
         ctx.setErrnoName(r.errno); return -1;
       }
       const raw = r && r.raw ? r.raw : new Uint8Array(0);
