@@ -356,7 +356,19 @@ static int date_pinned = 0;
  * cascade) ARE engine chain levels: entries union-read from /etc/menu
  * AND /usr/share/menu (todos/0259, ex-0244/0250 — /etc wins same-name
  * clashes) at each popup_opening. */
-typedef struct { char name[ENT_NAME]; int is_link; int is_dir; } menu_ent;
+/* Desktop icon glyph kinds (ticket #82): the normalized filetype the desk
+ * render loop dispatches on. Computed per entry by desk_kind() (desktop
+ * only — Start-menu loads leave it 0/unused). */
+enum {
+    DK_FILE = 0,                   /* generic document: dog-eared page */
+    DK_DIR,                        /* folder: tab + body (todos/0185) */
+    DK_EXEC,                       /* runnable (\0asm / #!): solid block */
+    DK_TEXT,                       /* text/config: page + text lines */
+    DK_IMAGE,                      /* image: framed sun + ridge */
+    DK_DECK,                       /* presentation deck: screen on stand */
+    DK_BIN,                        /* the Recycle Bin basket (todos/0093) */
+};
+typedef struct { char name[ENT_NAME]; int is_link; int is_dir; int kind; } menu_ent;
 static struct {                    /* the root panel window; NULL = closed */
     SDL_Window *win;
     SDL_Surface *surf;
@@ -1966,6 +1978,38 @@ static void desk_save(void) {
     fclose(f);
 }
 
+/* Per-filetype glyph dispatch (ticket #82): normalize one desktop entry to
+ * its DK_ kind. Runnability wins over extension — the same order as
+ * activate(), so an icon looks like what double-click DOES (a `#!` script
+ * named build.sh is a launcher, not a text file). The extension map is
+ * the ONE table below; anything unmatched is a generic document. */
+static const struct { const char *ext; int kind; } desk_ext_map[] = {
+    { "txt", DK_TEXT },  { "md", DK_TEXT },    { "log", DK_TEXT },
+    { "cfg", DK_TEXT },  { "conf", DK_TEXT },  { "ini", DK_TEXT },
+    { "json", DK_TEXT }, { "c", DK_TEXT },     { "h", DK_TEXT },
+    { "png", DK_IMAGE }, { "ppm", DK_IMAGE },  { "pgm", DK_IMAGE },
+    { "pbm", DK_IMAGE }, { "bmp", DK_IMAGE },  { "gif", DK_IMAGE },
+    { "jpg", DK_IMAGE }, { "jpeg", DK_IMAGE }, { "xpm", DK_IMAGE },
+    { "xbm", DK_IMAGE }, { "ico", DK_IMAGE },
+    { "mgp", DK_DECK },  { "sent", DK_DECK },
+};
+
+static int desk_kind(const menu_ent *e) {
+    if (strcmp(e->name, "Recycle Bin") == 0) return DK_BIN;
+    if (e->is_dir) return DK_DIR;
+    char path[300];
+    snprintf(path, sizeof path, "/root/Desktop/%s", e->name);
+    if (ow_is_runnable(path)) return DK_EXEC;  /* follows symlinks (0066) */
+    char key[32];
+    if (ow_key_for(e->name, key, sizeof key))
+        for (size_t i = 0; i < sizeof desk_ext_map / sizeof desk_ext_map[0]; i++)
+            if (strcmp(key, desk_ext_map[i].ext) == 0)
+                return desk_ext_map[i].kind;
+    return DK_FILE;
+}
+
+static int desk_resniff = 0;           /* Refresh drops the kind carry-over */
+
 static void desk_load(void) {
     if (desk_press) return;            /* never reshuffle under a drag (0077) */
     if (desk_edit >= 0) return;        /* nor under an inline rename (0103) —
@@ -1975,6 +2019,23 @@ static void desk_load(void) {
     menu_ent fresh[MAX_DESK];
     int fcol[MAX_DESK], frow[MAX_DESK];
     int n = load_entries("/root/Desktop", fresh, MAX_DESK);
+    /* Glyph kinds (ticket #82): the sniff opens the file (ow_is_runnable),
+     * so carry the kind over from the live grid for unchanged entries —
+     * the idle 1s re-read tick stays I/O-free. New names sniff; the ctx
+     * menu's Refresh re-sniffs everything (desk_resniff). */
+    for (int i = 0; i < n; i++) {
+        int carried = 0;
+        if (!desk_resniff)
+            for (int k = 0; k < desk_n && !carried; k++)
+                if (strcmp(fresh[i].name, desk[k].name) == 0 &&
+                    fresh[i].is_link == desk[k].is_link &&
+                    fresh[i].is_dir == desk[k].is_dir) {
+                    fresh[i].kind = desk[k].kind;
+                    carried = 1;
+                }
+        if (!carried) fresh[i].kind = desk_kind(&fresh[i]);
+    }
+    desk_resniff = 0;
     desk_place(fresh, n, fcol, frow);
     if (n == desk_n && memcmp(fresh, desk, (size_t)n * sizeof fresh[0]) == 0 &&
         memcmp(fcol, desk_col, (size_t)n * sizeof fcol[0]) == 0 &&
@@ -2370,6 +2431,64 @@ static void rect_s(uint32_t *px, int sw, int sh, int x, int y, int w, int h,
     fill_s(px, sw, sh, x + w - 1, y, 1, h, col);
 }
 
+/* One icon glyph on its white tile, dispatched on the entry's DK_ kind
+ * (ticket #82). All flat fill_s/rect_s rects in the two desktop inks.
+ *
+ * CENTER-PIXEL CONTRACT (probed by kernel + browser tests — updated
+ * deliberately by #82, keep new glyphs inside it): the tile center
+ * (ix+12, iy+12) is NAVY for anything that launches or opens a container
+ * — programs (DK_EXEC solid block), folders (DK_DIR tab+body) and the
+ * FULL Recycle Bin — and WHITE for every data-file glyph and the empty
+ * bin. Pre-#82 all files drew the solid block; the exec/dir/bin pixels
+ * are unchanged, only non-runnable files moved to white-center glyphs. */
+static void draw_icon_glyph(uint32_t *px, int w, int h, int ix, int iy,
+                            int kind) {
+    uint32_t white = rgb(255, 255, 255), navy = rgb(0, 0, 128);
+    fill_s(px, w, h, ix, iy, ICON_W, ICON_W, white);
+    switch (kind) {
+    case DK_BIN:                       /* basket (todos/0093): hollow when
+                                          empty, contents block when full */
+        fill_s(px, w, h, ix + 3, iy + 3, ICON_W - 6, 2, navy);   /* rim */
+        fill_s(px, w, h, ix + 5, iy + 5, 2, ICON_W - 10, navy);  /* walls */
+        fill_s(px, w, h, ix + ICON_W - 7, iy + 5, 2, ICON_W - 10, navy);
+        fill_s(px, w, h, ix + 5, iy + ICON_W - 7, ICON_W - 10, 2, navy);
+        if (desk_trash_full)
+            fill_s(px, w, h, ix + 8, iy + 8, ICON_W - 16, ICON_W - 16, navy);
+        break;
+    case DK_DIR:                       /* folder tab + body (todos/0185) */
+        fill_s(px, w, h, ix + 5, iy + 5, (ICON_W - 10) / 2, 3, navy);
+        fill_s(px, w, h, ix + 5, iy + 8, ICON_W - 10, ICON_W - 13, navy);
+        break;
+    case DK_EXEC:                      /* the pre-#82 solid block */
+        fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
+        break;
+    case DK_TEXT:                      /* page outline + text lines */
+        rect_s(px, w, h, ix + 5, iy + 3, 14, 18, navy);
+        fill_s(px, w, h, ix + 8, iy + 7, 8, 1, navy);
+        fill_s(px, w, h, ix + 8, iy + 10, 8, 1, navy);
+        fill_s(px, w, h, ix + 8, iy + 13, 8, 1, navy);
+        fill_s(px, w, h, ix + 8, iy + 16, 5, 1, navy);
+        break;
+    case DK_IMAGE:                     /* frame, sun, mountain ridge */
+        rect_s(px, w, h, ix + 4, iy + 5, 16, 14, navy);
+        fill_s(px, w, h, ix + 7, iy + 8, 3, 3, navy);            /* sun */
+        fill_s(px, w, h, ix + 6, iy + 15, 12, 3, navy);          /* ridge */
+        fill_s(px, w, h, ix + 10, iy + 13, 4, 2, navy);          /* peak */
+        break;
+    case DK_DECK:                      /* presentation screen on a stand */
+        rect_s(px, w, h, ix + 4, iy + 4, 16, 11, navy);
+        fill_s(px, w, h, ix + 6, iy + 6, 10, 2, navy);           /* title */
+        fill_s(px, w, h, ix + 7, iy + 10, 7, 1, navy);           /* bullet */
+        fill_s(px, w, h, ix + 11, iy + 15, 2, 3, navy);          /* stand */
+        fill_s(px, w, h, ix + 8, iy + 18, 8, 2, navy);           /* base */
+        break;
+    default:                           /* DK_FILE: dog-eared page */
+        rect_s(px, w, h, ix + 5, iy + 3, 14, 18, navy);
+        fill_s(px, w, h, ix + 14, iy + 3, 5, 5, navy);           /* fold */
+        break;
+    }
+}
+
 static void draw_desk(void) {
     if (!desk_win || !desk_dirty) return;
     desk_dirty = 0;
@@ -2382,27 +2501,9 @@ static void draw_desk(void) {
         int cx = DESK_MARGIN + desk_col[i] * CELL_W;
         int cy = DESK_MARGIN + desk_row[i] * CELL_H;
         int ix = cx + (CELL_W - ICON_W) / 2, iy = cy + 6;
-        /* Flat-rect glyph: white tile, navy center block; links get a
-         * black launcher notch at the bottom-left (the Win95 arrow). The
-         * Recycle Bin (todos/0093) draws a basket instead — hollow when
-         * empty, contents block when the store holds entries (the probe
-         * pixel is the tile center: white empty, navy full). */
-        fill_s(px, w, h, ix, iy, ICON_W, ICON_W, white);
-        if (strcmp(desk[i].name, "Recycle Bin") == 0) {
-            fill_s(px, w, h, ix + 3, iy + 3, ICON_W - 6, 2, navy);   /* rim */
-            fill_s(px, w, h, ix + 5, iy + 5, 2, ICON_W - 10, navy);  /* walls */
-            fill_s(px, w, h, ix + ICON_W - 7, iy + 5, 2, ICON_W - 10, navy);
-            fill_s(px, w, h, ix + 5, iy + ICON_W - 7, ICON_W - 10, 2, navy);
-            if (desk_trash_full)
-                fill_s(px, w, h, ix + 8, iy + 8, ICON_W - 16, ICON_W - 16, navy);
-        } else if (desk[i].is_dir) {
-            /* Folder (todos/0185): navy tab + body; the tile center stays
-             * navy, so center-pixel probes see launchers and folders alike. */
-            fill_s(px, w, h, ix + 5, iy + 5, (ICON_W - 10) / 2, 3, navy);
-            fill_s(px, w, h, ix + 5, iy + 8, ICON_W - 10, ICON_W - 13, navy);
-        } else {
-            fill_s(px, w, h, ix + 6, iy + 6, ICON_W - 12, ICON_W - 12, navy);
-        }
+        /* Per-filetype glyph (#82, dispatch above); links keep the black
+         * launcher notch at the bottom-left (the Win95 arrow). */
+        draw_icon_glyph(px, w, h, ix, iy, desk[i].kind);
         if (desk[i].is_link)
             fill_s(px, w, h, ix + 2, iy + ICON_W - 8, 6, 6, black);
         if (i == desk_edit) {          /* inline rename editor (todos/0103):
@@ -2776,6 +2877,7 @@ static void ctx_command(int id) {
     case CM_SIZE:
         break;                         /* defensive: interception owns these */
     case CM_REFRESH:
+        desk_resniff = 1;              /* re-sniff glyph kinds too (#82) */
         desk_load();
         desk_dirty = 1;
         break;

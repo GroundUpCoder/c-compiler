@@ -6,6 +6,13 @@
 
 ## Goal
 
+> **Baseline update (2026-07-18, ticket #82):** the desktop now has a
+> per-filetype FLAT-glyph dispatch (`desk_kind`/`draw_icon_glyph` in wm.c —
+> exec/text/image/deck/generic/dir/bin, center-pixel contract documented
+> there; `logs/2026-07-18/desk-icons.md`). This item remains the bitmap
+> upgrade: swap the flat glyphs for a real icon set behind that same
+> dispatch, and extend to Start menu / taskbar.
+
 Replace the placeholder icon glyph — a generic white tile with a navy square
 (`draw_desk`, os/wm.c ~2218; the Recycle Bin's hand-coded basket is the lone
 exception) — with a **real, permissively-licensed icon set**, and give the

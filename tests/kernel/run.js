@@ -113,6 +113,7 @@ const tests = [
   ['test_hostclip_e2e.js'], // ticket #79: host-clipboard bridge kernel seam — onClipboard fires at CLIP_SET commit (real C copy), embedder clipSet feeds SDL_GetClipboardText without firing the hook (loop guard), clear reports null
   ['test_keymap_e2e.js', IMG],   // 0149/0150: the keyboard scheme (os/keys.h) — windows/macos verb tables in EDIT, the FCONTROL accel swap (fileman), term ⌘V/⌘C vs Ctrl+Shift, readline rows + off-switch, 1Hz live revalidate, ctlpanel Keyboard applet delta-writes
   ['test_ctxmenu_e2e.js', IMG],  // 0091: right-click context menus — wm.c desktop/icon/taskbar popups (geometry, dismissal, flyouts, keyboard nav), EDIT WM_CONTEXTMENU via the agent, ctlpanel argv
+  ['test_desk_icons_e2e.js', IMG], // ticket #82: per-filetype desktop icon glyphs — desk_kind dispatch (exec/text/image/deck/generic/dir/bin), center-pixel contract: navy = program/folder/full-bin, white = data files/empty bin
   ['test_gpubox_dawn_e2e.js', IMG], // 0016 tier 1: gpubox (webgpu.h) under Dawn — readback->shm shots, tolerance-diff; SKIPs without the webgpu pkg
   ['test_gpubox_menu_e2e.js', IMG], // 0258 M2 acceptance: gpubox's win32 menu WITHOUT Dawn — A14 no-GPU survival, bar/popup children over the black client, Spin/Wireframe via the agent; forces tier 0 via lib/nodawn-require.js
   ['test_gpu_multiwin_dawn_e2e.js'], // menu item 0 / A4: TWO GPU windows, per-window present binding — each shows ITS color, no newest-wins clobber; SKIPs without the webgpu pkg
