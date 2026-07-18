@@ -78,6 +78,11 @@ static void build_test_rom(void) {
     rom_data[0xB2] = 0x96; /* second GBA ROM magic byte */
 
     /* code @ 0xC0 (ARM state, cond AL):
+         CMP  r0, r0, Rd=pc      ; invalid Rd field is ignored; no PC flush
+         B    setup
+       fail:
+         B    fail               ; a bad CMP pipeline flush skips to here
+       setup:
          MOV  r0, #0x04000000   ; REG base
          MOV  r1, #0x0400
          ADD  r1, r1, #3        ; DISPCNT = 0x0403 (mode 3, BG2 on)
@@ -94,6 +99,9 @@ static void build_test_rom(void) {
        done:
          B    done */
     size_t pc = 0xC0;
+    emit32(rom_data, pc, 0xE150F000); pc += 4; /* CMP r0,r0 with ignored Rd=pc */
+    emit32(rom_data, pc, 0xEA000000); pc += 4; /* B setup                       */
+    emit32(rom_data, pc, 0xEAFFFFFE); pc += 4; /* fail: B fail                   */
     emit32(rom_data, pc, 0xE3A00404); pc += 4; /* MOV r0,#0x04000000 */
     emit32(rom_data, pc, 0xE3A01C04); pc += 4; /* MOV r1,#0x0400     */
     emit32(rom_data, pc, 0xE2811003); pc += 4; /* ADD r1,r1,#3       */

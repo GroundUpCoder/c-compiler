@@ -89,7 +89,7 @@ function sessionFrames() {
       if (r > 0x80 && g < 0x40 && bl < 0x40) red++;
     }
   }
-  check('frame is a red MODE 3 fill (ARM core ran + software renderer painted)',
+  check('frame is red (bad CMP Rd=PC did not flush + ARM core/software renderer ran)',
     red > sampled * 0.9, `${red}/${sampled} red`);
 }
 

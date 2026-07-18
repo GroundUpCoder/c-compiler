@@ -67,14 +67,15 @@ target, mirroring `/bin/gameboy` and `/bin/sameboy`'s bare mode. Kernel e2e:
 
 ## Patches to mGBA sources (all marked `PATCH(c-compiler)` in-source)
 
-The compiler predefines `__MTOTS__`; every patch is gated on it, so the vendored
-tree still builds unmodified elsewhere.
+The compiler predefines `__MTOTS__`; port-compatibility patches are gated on it.
+The upstream CPU-correctness backport applies to every build.
 
 | File | Patch | Why |
 | --- | --- | --- |
 | `include/mgba-util/common.h` | `CONSTRUCTOR(FN)` drops `__attribute__((constructor))` under `__MTOTS__` | the compiler has no ctor-attribute / pre-main pass. The only users are `mLOG_DEFINE_CATEGORY` log-category registrars; without the ctor every category id stays 0 (all logs share the default category — a cosmetic loss, emulation unaffected) |
 | `include/mgba/internal/gb/serialize.h` | GB-savestate `static_assert(sizeof == 0x11800)` gated off under `__MTOTS__` | the compiler ignores `#pragma pack`, so the packed **Game Boy** savestate struct sizes differently. Unused in this GBA-only build (pulled in only transitively via `gb/audio.c`; `GBASerializedState` uses natural alignment + explicit padding and its own assert holds). No savestate API is called by the frontend |
 | `src/core/version.c` | vendored static (not CMake-generated) | no CMake in this build |
+| `src/arm/isa-arm.c` | backport upstream `d031892e55` | v0.10.5 incorrectly flushes the ARM pipeline for CMP/CMN/TST/TEQ when the architecturally ignored `Rd` field encodes PC; jsmolka ARM test 235 catches this |
 
 ### Compiler improvements this port drove (in `compiler.js`, not mGBA patches)
 
