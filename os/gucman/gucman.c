@@ -998,6 +998,31 @@ static int cmd_list(void) {
     return 0;
 }
 
+/* =============================== index ================================= */
+
+/* Print the repository index RAW to stdout (the catalog surface for
+ * front-ends — the storefront GUI spawns `gucman index` instead of
+ * growing its own network stack; gucman stays the one engine). The bytes
+ * are exactly what the repo served: front-ends parse, this never
+ * reformats. Errors keep the CLI contract — stderr + exit 1. */
+static int cmd_index(void) {
+    char base[GM_PATH_MAX];
+    if (gm_repo_base(base, sizeof base) != 0) return 1;
+    struct gm_buf buf;
+    if (gm_http_get(base, "index.json", &buf) != 0) return 1;
+    /* validate before echoing: a broken repo fails loud, not downstream */
+    cJSON *idx = cJSON_Parse(buf.p);
+    if (!idx) {
+        fprintf(stderr, "gucman: index.json is not valid JSON\n");
+        free(buf.p);
+        return 1;
+    }
+    cJSON_Delete(idx);
+    fwrite(buf.p, 1, buf.len, stdout);
+    free(buf.p);
+    return 0;
+}
+
 /* =============================== main ================================== */
 
 int main(int argc, char **argv) {
@@ -1009,6 +1034,12 @@ int main(int argc, char **argv) {
     }
     if (argc >= 3 && strcmp(argv[1], "remove") == 0) return cmd_remove(argv[2]);
     if (argc == 2 && strcmp(argv[1], "list") == 0) return cmd_list();
-    fprintf(stderr, "usage: gucman install <name> | gucman remove <name> | gucman list\n");
+    if (argc == 2 && strcmp(argv[1], "index") == 0) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        int rc = cmd_index();
+        curl_global_cleanup();
+        return rc;
+    }
+    fprintf(stderr, "usage: gucman install <name> | gucman remove <name> | gucman list | gucman index\n");
     return 2;
 }

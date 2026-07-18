@@ -1,0 +1,15 @@
+{
+  "bin": true,
+  "name": "software",
+  "description": "ticket #81 storefront: graphical front-end over gucman — catalog cards from `gucman index`, one-click install/remove via spawned gucman with captured output, install state from /var/lib/gucman + FS_WATCH live refresh",
+  "deps": [
+    "lib.json"
+  ],
+  "includes": [
+    "../../vendor/cjson"
+  ],
+  "sources": [
+    "software.c",
+    "../../vendor/cjson/cJSON.c"
+  ]
+}

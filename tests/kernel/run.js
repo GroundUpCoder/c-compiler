@@ -118,6 +118,7 @@ const tests = [
   ['test_gpu_multiwin_dawn_e2e.js'], // menu item 0 / A4: TWO GPU windows, per-window present binding — each shows ITS color, no newest-wins clobber; SKIPs without the webgpu pkg
   ['test_gucman_e2e.js', { timeoutMs: 900000 }], // gucman Slice 1: install/remove/list on the MINIMAL image (punes as a package) — sha256 refusal before extraction, staged atomic install, launch from /usr/local/bin, reboot persistence, exact DB-replay removal; bakes its own no-packages blob + runs mkpkg (both cached), so a cold run is bake-heavy like test_os_boot
   ['test_gucman_quake_e2e.js', { timeoutMs: 900000 }], // gucman fat-data leg: the ~8.6 MiB quake package (18.7 MB pak0) installs on the minimal image — in-OS sha256sum proves the pak byte-exact through fetch→inflate→untar→BlockFS, the self-locating launcher boots the game, remove reclaims the tree; shares the cached minimal blob + mkpkg pool with test_gucman_e2e
+  ['test_software_e2e.js', { timeoutMs: 900000 }], // #81 storefront GUI over gucman: dead-repo honest error, catalog cards from the live index (`gucman index`), one-click install/remove with REAL fs asserts (install DB + /opt binary + symlink), FS_WATCH liveness for CLI installs beside the open window; shares the cached minimal blob + mkpkg pool with the gucman e2es
 ];
 
 const defaults = {
