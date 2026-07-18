@@ -339,6 +339,18 @@ async function main() {
   const tmp = path.join(outDir, 'index.json.tmp-' + process.pid);
   fs.writeFileSync(tmp, JSON.stringify(index, null, 2) + '\n');
   fs.renameSync(tmp, path.join(outDir, 'index.json'));
+  // Prune orphans: a package REMOVED from packages/ drops out of the index
+  // above, but its old payload would sit in pool/ forever (and deploys copy
+  // the whole pool dir). Anything the fresh index doesn't reference goes.
+  const live = new Set(Object.values(index.packages).map((p) => path.basename(p.payload.url)));
+  if (fs.existsSync(poolDir)) {
+    for (const f of fs.readdirSync(poolDir)) {
+      if (!live.has(f)) {
+        fs.unlinkSync(path.join(poolDir, f));
+        log(`pruned orphan pool payload ${f}`);
+      }
+    }
+  }
   log(`index.json: ${Object.keys(index.packages).length} package(s), baseVersion ${index.baseVersion}`);
 }
 let cachedIndex = null, cachedIndexRead = false;

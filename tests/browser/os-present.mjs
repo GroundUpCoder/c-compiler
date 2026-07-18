@@ -73,7 +73,7 @@ try {
 
   /* ---- mgp ---- */
   await setVt(1);
-  await page.keyboard.type('mgp-demo &\r');   // the mgp package's demo launcher (cd's to its share/)
+  await page.keyboard.type('mgp /usr/share/mgp/demo.mgp &\r');   // baked mgp (ticket #80): absolute-ref decks launch from any cwd
   const mp = await windowPos('MagicPoint');
 
   // page 1: the deck's %default MidnightBlue background (25,25,112)
