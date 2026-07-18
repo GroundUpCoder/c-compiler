@@ -63,6 +63,15 @@
     position: relative; top: 1px;
   }
   .fontbtn:hover { color: #c0c0d8; }
+  /* VT2 desktop zoom (integer downscale): only meaningful while the desktop
+     is visible, and touch-gated (a non-touch desktop keeps Z=1). */
+  #zoomctl { display: none; gap: 2px; margin-left: auto; }
+  body[data-vt="2"][data-touchui] #zoomctl { display: flex; }
+  .fontlabel {
+    font: 12px 'Menlo', 'Consolas', monospace; color: #8888a8;
+    padding: 5px 6px; user-select: none; -webkit-user-select: none;
+    align-self: center; min-width: 20px; text-align: center;
+  }
   /* Mobile key strip (todos/0212): tty keys a soft keyboard lacks. Shown
      only on VT1 and only on a touch/narrow UI (data-touchui, set by JS). */
   #keystrip { display: none; gap: 4px; padding: 4px 8px 6px; flex-wrap: wrap; }
@@ -76,11 +85,16 @@
   .stripkey:hover { color: #e0e0f0; border-color: #4a4a77; }
   .stripkey.armed { background: #4a4a77; color: #ffffff; }
   /* The desktop (todos/WM.md): the kernel composites windows onto this
-     canvas in its worker; the page only forwards raw input. Natural-size
-     canvas (no CSS scaling) keeps event offsets == screen coordinates.
-     The screen tracks the pane (todos/0023: full-viewport VT2, 1 CSS px =
-     1 screen px); overflow hidden covers the resize transient while the
-     worker's canvas commit lags the layout. */
+     canvas in its worker; the page only forwards raw input. At zoom Z=1 the
+     canvas is natural-size (backing store == pane == CSS size), so event
+     offsets equal screen coordinates. At Z>1 (VT2 desktop zoom) the backing
+     store shrinks to floor(pane/Z) while the CSS display size is pinned to
+     the full pane, so the render stays 1 logical px = 1 screen px and only
+     the page's pointer seam divides CSS coords by Z (see syncScreenSize /
+     mapX). image-rendering:pixelated makes the integer upscale crisp NxN
+     blocks (nearest-neighbor) — integer scale + pixelated = zero blur, which
+     is the whole reason zoom is integer-only. overflow hidden covers the
+     resize transient while the worker's canvas commit lags the layout. */
   #desktop { flex: 1; min-height: 0; display: flex; justify-content: center;
              align-items: center; background: #06131a; overflow: hidden; }
   /* Host-file drop target highlight (todos/0067): while a drag hovers the
@@ -88,7 +102,8 @@
   #desktop.droptarget { box-shadow: inset 0 0 0 3px #5599dd; }
   /* touch-action none (todos/0212): the touch layer below owns every touch
      gesture on the desktop canvas — no browser scroll/double-tap-zoom. */
-  #screen { outline: none; display: block; touch-action: none; }
+  #screen { outline: none; display: block; touch-action: none;
+            image-rendering: pixelated; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
   /* VTs: exactly one of tty/desktop is visible (todos/0022). */
   body[data-vt="1"] #desktop { display: none; }
@@ -117,6 +132,9 @@
     <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (todos/0032); Ctrl+Esc opens the Start menu (todos/0078)">Desktop</span>
     <span id="fontctl" title="terminal font size">
       <span id="fontminus" class="fontbtn">A&minus;</span><span id="fontplus" class="fontbtn">A+</span>
+    </span>
+    <span id="zoomctl" title="desktop zoom (integer, crisp)">
+      <span id="zoomminus" class="fontbtn">&minus;</span><span id="zoomlabel" class="fontlabel">1&times;</span><span id="zoomplus" class="fontbtn">+</span>
     </span>
   </div>
   <div id="desktop"><canvas id="screen" width="800" height="500" tabindex="0"></canvas></div>
@@ -152,11 +170,11 @@ if (typeof SharedArrayBuffer === 'undefined') {
 // VT1 font-size steps (todos/0212): an explicit choice persists in
 // localStorage; with nothing stored, a narrow (phone-shaped) viewport
 // defaults one step larger than the desktop's 14.
-var VT1_FONTS = [12, 14, 18, 22, 26];
+var VT1_FONTS = [12, 14, 18, 22, 26, 30, 34];
 var vt1FontIdx = (function () {
   var saved = 0;
   try { saved = parseInt(localStorage.getItem('gucos.vt1.fontSize'), 10) || 0; } catch (e) {}
-  var px = saved || (Math.min(window.innerWidth, window.innerHeight) <= 700 ? 18 : 14);
+  var px = saved || (Math.min(window.innerWidth, window.innerHeight) <= 700 ? 26 : 14);
   var i = VT1_FONTS.indexOf(px);
   return i >= 0 ? i : 1;
 })();
@@ -268,22 +286,77 @@ var offscreen = screen.transferControlToOffscreen();
 kernel.postMessage({ type: 'wm-canvas', canvas: offscreen }, [offscreen]);
 function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
 
+// VT2 desktop zoom (integer downscale). The clean decoupled approach:
+// render FEWER pixels (backing store = floor(pane/Z)) but DISPLAY at the
+// full pane (CSS size pinned below) with image-rendering:pixelated, so the
+// wm lays everything out on a smaller screen that upscales Z× and stays
+// crisp. Integer-only ON PURPOSE: integer scale + nearest-neighbor = zero
+// blur, and c/Z is an integer-clean pointer map; a fractional Z would
+// reintroduce bilinear blur AND non-integer pointer drift. The render/wm
+// path is UNTOUCHED (still 1 logical px = 1 screen px, todos/0023's ruling
+// holds) — the ONLY thing zoom taints is the page's pointer seam, confined
+// to mapX/mapY (absolute coords) and the /vt2Zoom delta divides below.
+var VT2_ZOOMS = [1, 2, 3];
+var vt2Zoom = (function () {
+  var z = 1;
+  try { z = parseInt(localStorage.getItem('gucos.vt2.zoom'), 10) || 1; } catch (e) {}
+  return (z >= VT2_ZOOMS[0] && z <= VT2_ZOOMS[VT2_ZOOMS.length - 1]) ? z : 1;
+})();
+window.__osVt2Zoom = vt2Zoom;   // agent probe
+// The pointer seam: a CSS-pixel coord maps to logical (backing) px. With the
+// CSS display size pinned to the pane and the backing store at floor(pane/Z),
+// dividing by Z is that map (correct to within edge rounding; the kernel
+// clamps positions to the screen anyway).
+function mapX(c) { return Math.round(c / vt2Zoom); }
+function mapY(c) { return Math.round(c / vt2Zoom); }
+function updateZoomLabel() {
+  var el = document.getElementById('zoomlabel');
+  if (el) el.textContent = vt2Zoom + '×';
+}
+function vt2SetZoom(z) {
+  z = z | 0;
+  if (z < VT2_ZOOMS[0]) z = VT2_ZOOMS[0];
+  else if (z > VT2_ZOOMS[VT2_ZOOMS.length - 1]) z = VT2_ZOOMS[VT2_ZOOMS.length - 1];
+  if (z === vt2Zoom) return;
+  vt2Zoom = z;
+  window.__osVt2Zoom = z;   // agent probe
+  try { localStorage.setItem('gucos.vt2.zoom', String(z)); } catch (e) {}
+  updateZoomLabel();
+  // Re-pin the CSS display size and resend the (now different) logical dims.
+  // A Z change keeps the pane px but changes floor(pane/Z), so the screenSent
+  // dedupe passes and the worker gets a real screen-resize (VT2 only — the
+  // pane is measurable only while visible; VT2 entry re-syncs otherwise).
+  syncScreenSize();
+}
+updateZoomLabel();
+document.getElementById('zoomminus').addEventListener('click', function () { vt2SetZoom(vt2Zoom - 1); });
+document.getElementById('zoomplus').addEventListener('click', function () { vt2SetZoom(vt2Zoom + 1); });
+window.__osVt2SetZoom = vt2SetZoom;   // agent probe (tests drive zoom without a click)
+
 // Dynamic screen resolution (todos/0023): on VT2 the screen tracks the
-// #desktop pane — natural canvas size only (1 CSS px = 1 screen px, DPR
-// deliberately ignored: a scale factor would taint every coordinate path).
-// A transferred canvas can't be resized from the page, so the pane size
-// rides {type:'screen-resize'} and the WORKER resizes the OffscreenCanvas +
-// re-calls wmSetScreen (-> EV_SCREEN to the wm, kernel position clamp).
-// VT2 entry syncs immediately (the pane is measurable only while visible);
-// live window resizes are debounced — every send costs a wm taskbar re-lay.
-var screenSent = { w: 800, h: 500 };   // the boot-time canvas attributes
-window.__osScreen = { w: 800, h: 500 };   // agent probe: last size sent
+// #desktop pane (1 CSS px = 1 screen px at Z=1; DPR deliberately ignored).
+// A transferred canvas can't be resized from the page, so the LOGICAL pane
+// size (floor(pane/Z)) rides {type:'screen-resize'} and the WORKER resizes
+// the OffscreenCanvas backing store + re-calls wmSetScreen (-> EV_SCREEN to
+// the wm, kernel position clamp). The CSS display size is pinned here to the
+// FULL pane so a shrunken backing store upscales (pixelated) to fill it —
+// everything Z× bigger and crisp. VT2 entry syncs immediately (the pane is
+// measurable only while visible); live window resizes are debounced — every
+// send costs a wm taskbar re-lay.
+var screenSent = { w: 800, h: 500 };   // last LOGICAL size sent to the worker
+window.__osScreen = { w: 800, h: 500 };   // agent probe: last logical size sent
 var screenSyncTimer = null;
 function syncScreenSize() {
   if (vt !== 2) return;
   var pane = document.getElementById('desktop');
-  var w = pane.clientWidth, h = pane.clientHeight;
-  if (w <= 0 || h <= 0) return;                          // hidden/degenerate
+  var pw = pane.clientWidth, ph = pane.clientHeight;
+  if (pw <= 0 || ph <= 0) return;                        // hidden/degenerate
+  // Pin the canvas DISPLAY size to the full pane (idempotent) — the backing
+  // store (worker-owned) shrinks to floor(pane/Z) and upscales into this.
+  screen.style.width = pw + 'px';
+  screen.style.height = ph + 'px';
+  var w = Math.floor(pw / vt2Zoom), h = Math.floor(ph / vt2Zoom);
+  if (w <= 0 || h <= 0) return;
   if (w === screenSent.w && h === screenSent.h) return;
   screenSent = { w: w, h: h };
   window.__osScreen = { w: w, h: h };
@@ -337,21 +410,23 @@ screen.addEventListener('mousedown', function (e) {
   screen.focus();
   // t: the event timestamp — the kernel's title double-click detection
   // (todos/0025) measures the real inter-click gap, not worker latency.
-  wmSend({ kind: 'down', x: e.offsetX, y: e.offsetY, button: e.button, t: e.timeStamp });
+  wmSend({ kind: 'down', x: mapX(e.offsetX), y: mapY(e.offsetY), button: e.button, t: e.timeStamp });
   e.preventDefault();
 });
 screen.addEventListener('mouseup', function (e) {
-  wmSend({ kind: 'up', x: e.offsetX, y: e.offsetY, button: e.button });
+  wmSend({ kind: 'up', x: mapX(e.offsetX), y: mapY(e.offsetY), button: e.button });
 });
 screen.addEventListener('mousemove', function (e) {
   if (ptrLocked()) {
-    wmSend({ kind: 'move', locked: 1, dx: e.movementX, dy: e.movementY, buttons: e.buttons });
+    // Relative deltas scale too: a lock drag of N CSS px = N/Z logical px.
+    wmSend({ kind: 'move', locked: 1, dx: e.movementX / vt2Zoom, dy: e.movementY / vt2Zoom, buttons: e.buttons });
     return;
   }
-  wmSend({ kind: 'move', x: e.offsetX, y: e.offsetY, buttons: e.buttons });
+  wmSend({ kind: 'move', x: mapX(e.offsetX), y: mapY(e.offsetY), buttons: e.buttons });
 });
 screen.addEventListener('wheel', function (e) {
-  wmSend({ kind: 'wheel', x: e.offsetX, y: e.offsetY, deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode });
+  // deltaX/Y are scroll amounts, not coords — only the position divides by Z.
+  wmSend({ kind: 'wheel', x: mapX(e.offsetX), y: mapY(e.offsetY), deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode });
   e.preventDefault();
 }, { passive: false });
 screen.addEventListener('contextmenu', function (e) { e.preventDefault(); });
@@ -382,7 +457,10 @@ var touch = null;         // active single-finger gesture
 var touchScroll = null;   // active two-finger scroll (midpoint of the pair)
 function touchXY(t) {
   var r = screen.getBoundingClientRect();   // touch events have no offsetX
-  return { x: Math.round(t.clientX - r.left), y: Math.round(t.clientY - r.top) };
+  // Divide by the zoom here so EVERY synthesized touch coord — taps, drags,
+  // and the two-finger scroll midpoints (which are computed from these
+  // outputs) — lands in logical (backing) px, the one touch coord seam.
+  return { x: mapX(t.clientX - r.left), y: mapY(t.clientY - r.top) };
 }
 function touchById(list, id) {
   for (var i = 0; i < list.length; i++) if (list[i].identifier === id) return list[i];
