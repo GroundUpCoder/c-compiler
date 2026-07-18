@@ -784,6 +784,31 @@ static void res_try(const char *path) {
     g_resState = 1;
 }
 
+/* The sidecar lives beside the REAL binary (the PE resource-section
+ * analog), but argv0 may be a symlink into it — /usr/local/bin/<cmd> ->
+ * /opt/<name>/<cmd> for a gucman-installed app, /usr/bin/<cmd> ->
+ * /usr/opt/<name>/<cmd> on a fat --packages=all bake — so appending
+ * ".res" to the unresolved path would probe the symlink dir instead.
+ * Chase trailing-component links before appending (dir symlinks like
+ * /bin resolve in the path walk at open time; hop cap breaks cycles). */
+static void res_chase(char *p, size_t cap) {
+    for (int hop = 0; hop < 8; hop++) {
+        char tgt[512];
+        long n = readlink(p, tgt, sizeof tgt - 1);
+        if (n <= 0) return;                      /* not a symlink: done */
+        tgt[n] = 0;
+        if (tgt[0] == '/') {
+            snprintf(p, cap, "%s", tgt);
+        } else {
+            char joined[600];
+            const char *slash = strrchr(p, '/');
+            snprintf(joined, sizeof joined, "%.*s/%s",
+                     slash ? (int)(slash - p) : 1, slash ? p : ".", tgt);
+            snprintf(p, cap, "%s", joined);
+        }
+    }
+}
+
 static void res_ensure(void) {
     if (g_resState) return;
     g_resState = -1;
@@ -791,12 +816,15 @@ static void res_ensure(void) {
     if (!GetModuleFileNameW(NULL, wpath, 512)) return;
     char *p8 = w2a_dup(wpath);
     if (!p8) return;
+    char real[512];
+    snprintf(real, sizeof real, "%s", p8);
+    res_chase(real, sizeof real);
     char path[600];
-    snprintf(path, sizeof path, "%s.res", p8);
+    snprintf(path, sizeof path, "%s.res", real);
     res_try(path);
     if (g_resState != 1) {                       /* PATH-spawned bare name */
-        const char *base = strrchr(p8, '/');
-        snprintf(path, sizeof path, "/bin/%s.res", base ? base + 1 : p8);
+        const char *base = strrchr(real, '/');
+        snprintf(path, sizeof path, "/bin/%s.res", base ? base + 1 : real);
         res_try(path);
     }
     free(p8);

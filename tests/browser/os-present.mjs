@@ -53,7 +53,7 @@ try {
 
   /* ---- sent ---- */
   await setVt(1);
-  await page.keyboard.type('sent /usr/share/sent/demo.sent &\r');
+  await page.keyboard.type('slides &\r');   // the sent package's demo launcher (cd's to its share/)
   const sp = await windowPos('sent');
 
   // slide 1: white background with the black "sent" title
@@ -73,7 +73,7 @@ try {
 
   /* ---- mgp ---- */
   await setVt(1);
-  await page.keyboard.type('mgp /usr/share/mgp/demo.mgp &\r');
+  await page.keyboard.type('mgp-demo &\r');   // the mgp package's demo launcher (cd's to its share/)
   const mp = await windowPos('MagicPoint');
 
   // page 1: the deck's %default MidnightBlue background (25,25,112)

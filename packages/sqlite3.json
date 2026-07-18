@@ -1,0 +1,9 @@
+{
+  "name": "sqlite3",
+  "version": "3.53.1",
+  "summary": "SQLite 3.53.1 — the sqlite3 shell (file-backed DBs on the writable volume, piped and interactive/pty use)",
+  "files": {
+    "sqlite3": { "project": "vendor/sqlite/bin.json" }
+  },
+  "bin": { "sqlite3": "sqlite3" }
+}

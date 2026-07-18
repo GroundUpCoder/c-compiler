@@ -1,7 +1,7 @@
 // 0018 browser acceptance: quake windowed in the real OS page with the
 // relative-mouse/pointer-lock surface flag. Boot os.html in headless
 // Chromium (first boot compiles quake from vendor sources and lands the
-// 18MB pak0.pak via the image.json `bin` entry), launch `quake &`, and
+// 18MB pak0.pak inside the folded quake package, fat fixture), launch `quake &`, and
 // assert the pointer-lock round trip on the live page:
 //   quake's SDL_SetWindowRelativeMouseMode -> SURFACE_SET_FLAGS -> kernel
 //   wanted-state -> {type:'pointer-lock'} to the page (__osPtrLockWanted);
@@ -41,7 +41,7 @@ try {
 
   await page.goto(URL);
   await page.waitForFunction(() => window.__osState === 'ready', { timeout: 240000, polling: 250 });
-  check('boots to ready (quake + pak0.pak seeded)', true);
+  check('boots to ready (quake package folded into the fat image)', true);
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 200 });
 

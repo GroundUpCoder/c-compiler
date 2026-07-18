@@ -1,0 +1,18 @@
+{
+  "name": "quake",
+  "version": "1.09",
+  "summary": "Quake (1996) — id Software's software-rendered engine + shareware episode 1 data (WinQuake subset, GPL v2)",
+  "files": {
+    "quake-bin": { "project": "vendor/quake/bin.json" },
+    "id1/pak0.pak": { "bin": "vendor/quake/data/id1/pak0.pak" },
+    "id1/autoexec.cfg": { "bin": "vendor/quake/data/id1/autoexec.cfg" },
+    "quake": {
+      "content": "#!/bin/sh\n# Quake resolves its data (./id1/pak0.pak) and writes config.cfg relative\n# to the CWD (sys_sdl.c basedir \".\"), so run it from wherever this package\n# actually lives — /opt/quake installed, /usr/opt/quake baked (fat image).\n# $0 arrives through symlinks (/usr/local/bin or /usr/bin); chase them with\n# readlink — the libc realpath is logical-only and keeps the link path.\np=\"$0\"\nwhile t=\"$(readlink \"$p\")\"; do\n  case \"$t\" in /*) p=\"$t\" ;; *) p=\"$(dirname \"$p\")/$t\" ;; esac\ndone\ncd \"$(dirname \"$p\")\" && ./quake-bin \"$@\"\n",
+      "mode": 493
+    }
+  },
+  "bin": { "quake": "quake" },
+  "menu": [
+    { "group": "Games", "entry": "quake", "cmd": "quake" }
+  ]
+}

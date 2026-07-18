@@ -1340,8 +1340,8 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     strip(p2b, ...at('doom')) === NAVY && strip(p2b, ...at('drmario')) === NAVY &&
     strip(p2b, ...at('fileman')) === NAVY && strip(p2b, ...at('gameboy')) === NAVY &&
     strip(p2b, ...at('mario')) === NAVY &&
-    strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('quake')) === TEAL,
-    [strip(p2b, ...at('doom')), strip(p2b, ...at('mario')), strip(p2b, ...at('quake'))]);
+    strip(p2b, ...at('alauncher')) === TEAL && strip(p2b, ...at('notepad')) === TEAL,
+    [strip(p2b, ...at('doom')), strip(p2b, ...at('mario')), strip(p2b, ...at('notepad'))]);
   const p3 = readPpm('s3.ppm');
   check('marquee REPLACES with the intersected tiles (col 0 rows 0-2)',
     strip(p3, ...at('Presentations')) === NAVY && strip(p3, ...at('alauncher')) === NAVY &&

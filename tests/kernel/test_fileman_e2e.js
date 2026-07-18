@@ -41,8 +41,9 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==cut')[0];
 }
 
-/* /root fresh listing: Desktop/ id1/ roms/ | doom1.wad hello.c launcher
- * plain.txt — launcher is row 5, plain.txt row 6 (dirs-first sorted). */
+/* /root fresh listing: Desktop/ roms/ | doom1.wad hello.c launcher
+ * plain.txt — launcher is row 4, plain.txt row 5 (dirs-first sorted; /root/id1
+ * left with the quake package in the deploy-leg split). */
 const HOME = 'wmctl key $SID 74 1073741898';
 const DOWN = 'wmctl key $SID 81 1073741905';
 const sel = (row) => ['wmctl click $SID 200 100', HOME,
@@ -91,15 +92,15 @@ const out = boot([
   'echo ==cut',
   'wmctl click Up',
   'wmctl wait text LISTBOX:0 launcher 4000',      // back at /root
-  // activate a runnable: launcher (row 5) -> sh -> winbox
-  sel(5),
+  // activate a runnable: launcher (row 4) -> sh -> winbox
+  sel(4),
   'wmctl click Open',
   'wmctl wait win winbox 8000',
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
-  // activate a plain file: plain.txt (row 6) -> the GUI default (notepad)
-  sel(6),
+  // activate a plain file: plain.txt (row 5) -> the GUI default (notepad)
+  sel(5),
   'wmctl click Open',
   'wmctl wait win "plain.txt - Notepad" 12000',   // notepad loads freetype + opens
   'echo ==list4',
@@ -124,9 +125,9 @@ check('fileman window titled with the cwd',
 // tolerantly ([^'] spans the padding/date/\n between entries; the tree
 // dump caps the item text, so the three leading dirs are the anchor).
 check('listing is dirs-first with / markers + details columns',
-  /Desktop\/ +<DIR>[^']*id1\/ +<DIR>[^']*roms\/ +<DIR>/.test(tree1), tree1);
+  /Desktop\/ +<DIR>[^']*roms\/ +<DIR>/.test(tree1), tree1);
 check('files carry a byte size + date column (status bar counts them)',
-  /class=msctls_statusbar32[^\n]*text='7 object\(s\)'/.test(tree1), tree1);
+  /class=msctls_statusbar32[^\n]*text='6 object\(s\)'/.test(tree1), tree1);
 check('path EDIT + Go/Up/Open/With buttons present',
   /class=EDIT id=100/.test(tree1) && /text='Go'/.test(tree1) &&
   /text='Up'/.test(tree1) && /text='Open'/.test(tree1) &&

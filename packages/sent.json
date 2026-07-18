@@ -1,0 +1,20 @@
+{
+  "name": "sent",
+  "version": "1",
+  "summary": "sent — suckless plain-text presentation tool (drw rebuilt over SDL+freetype2+libpng; .sent decks) + the demo deck",
+  "files": {
+    "sent": { "project": "vendor/sent/bin.json" },
+    "share/demo.sent": { "bin": "vendor/sent/demo.sent" },
+    "share/nyan.png": { "bin": "vendor/sent/nyan.png" },
+    "share/trans.ff": { "bin": "vendor/sent/transparent_test.ff" },
+    "slides": {
+      "content": "#!/bin/sh\n# sent opens deck image refs relative to the CWD, so present the bundled\n# demo from the package's share/ dir (works installed at /opt/sent and\n# baked at /usr/opt/sent alike). $0 arrives through symlinks; chase them\n# with readlink — the libc realpath is logical-only.\np=\"$0\"\nwhile t=\"$(readlink \"$p\")\"; do\n  case \"$t\" in /*) p=\"$t\" ;; *) p=\"$(dirname \"$p\")/$t\" ;; esac\ndone\ncd \"$(dirname \"$p\")/share\" && ../sent demo.sent\n",
+      "mode": 493
+    }
+  },
+  "bin": { "sent": "sent", "slides": "slides" },
+  "openwith": { "sent": "sent" },
+  "menu": [
+    { "group": "Demos", "entry": "slides", "cmd": "slides" }
+  ]
+}

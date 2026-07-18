@@ -3,7 +3,7 @@ sent
 one slide
 per paragraph
 
-@/usr/share/sent/nyan.png
+@nyan.png
 
 depends on
 SDL
@@ -26,4 +26,4 @@ present it here)
 \@not_an_image.png
 ⇒ backslash escapes specials
 
-@/usr/share/sent/trans.ff
+@trans.ff

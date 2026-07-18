@@ -1,0 +1,9 @@
+{
+  "name": "micropython",
+  "version": "1.28",
+  "summary": "MicroPython 1.28 — minimal REPL-only port (argv ignored, no open()/import by design)",
+  "files": {
+    "micropython": { "project": "vendor/micropython/bin.json" }
+  },
+  "bin": { "micropython": "micropython" }
+}

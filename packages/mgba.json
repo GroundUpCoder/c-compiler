@@ -1,0 +1,13 @@
+{
+  "name": "mgba",
+  "version": "0.10.5",
+  "summary": "mGBA — Game Boy Advance emulator (mGBA core v0.10.5 @26b7884, SDL3 frontend; the default .gba handler)",
+  "files": {
+    "mgba": { "project": "vendor/mgba/bin.json" }
+  },
+  "bin": { "mgba": "mgba" },
+  "openwith": { "gba": "mgba" },
+  "menu": [
+    { "group": "Games", "entry": "mgba", "cmd": "mgba" }
+  ]
+}

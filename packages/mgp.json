@@ -1,0 +1,43 @@
+{
+  "name": "mgp",
+  "version": "1.13a",
+  "summary": "MagicPoint 1.13a — X-to-SDL presentation tool (freetype-only text, PNG/GIF/PBM/XBM/XPM images; .mgp decks) + the showcase/tutorial decks",
+  "files": {
+    "mgp": { "project": "vendor/magicpoint/bin.json" },
+    "share/demo.mgp": { "bin": "vendor/magicpoint/demo.mgp" },
+    "share/demo.gif": { "bin": "vendor/magicpoint/demo.gif" },
+    "share/SYNTAX": { "bin": "vendor/magicpoint/SYNTAX" },
+    "share/text.mgp": { "bin": "vendor/magicpoint/decks/text.mgp" },
+    "share/colors.mgp": { "bin": "vendor/magicpoint/decks/colors.mgp" },
+    "share/align.mgp": { "bin": "vendor/magicpoint/decks/align.mgp" },
+    "share/bullets.mgp": { "bin": "vendor/magicpoint/decks/bullets.mgp" },
+    "share/images.mgp": { "bin": "vendor/magicpoint/decks/images.mgp" },
+    "share/backgrounds.mgp": { "bin": "vendor/magicpoint/decks/backgrounds.mgp" },
+    "share/effects.mgp": { "bin": "vendor/magicpoint/decks/effects.mgp" },
+    "share/tutorial/01-welcome.mgp": { "bin": "vendor/magicpoint/decks/tutorial/01-welcome.mgp" },
+    "share/tutorial/02-first-deck.mgp": { "bin": "vendor/magicpoint/decks/tutorial/02-first-deck.mgp" },
+    "share/tutorial/03-text.mgp": { "bin": "vendor/magicpoint/decks/tutorial/03-text.mgp" },
+    "share/tutorial/04-color.mgp": { "bin": "vendor/magicpoint/decks/tutorial/04-color.mgp" },
+    "share/tutorial/05-alignment.mgp": { "bin": "vendor/magicpoint/decks/tutorial/05-alignment.mgp" },
+    "share/tutorial/06-lists.mgp": { "bin": "vendor/magicpoint/decks/tutorial/06-lists.mgp" },
+    "share/tutorial/07-images.mgp": { "bin": "vendor/magicpoint/decks/tutorial/07-images.mgp" },
+    "share/tutorial/08-backgrounds.mgp": { "bin": "vendor/magicpoint/decks/tutorial/08-backgrounds.mgp" },
+    "share/tutorial/09-builds.mgp": { "bin": "vendor/magicpoint/decks/tutorial/09-builds.mgp" },
+    "share/tutorial/10-mastery.mgp": { "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp" },
+    "share/talks/posix-on-wasm.mgp": { "bin": "vendor/magicpoint/decks/talks/posix-on-wasm.mgp" },
+    "mgp-demo": {
+      "content": "#!/bin/sh\n# mgp opens deck image refs (%newimage \"demo.gif\") relative to the CWD, so\n# present the bundled decks from the package's share/ dir (works installed\n# at /opt/mgp and baked at /usr/opt/mgp alike). $0 arrives through\n# symlinks; chase them with readlink — the libc realpath is logical-only.\np=\"$0\"\nwhile t=\"$(readlink \"$p\")\"; do\n  case \"$t\" in /*) p=\"$t\" ;; *) p=\"$(dirname \"$p\")/$t\" ;; esac\ndone\ncd \"$(dirname \"$p\")/share\" && ../mgp demo.mgp\n",
+      "mode": 493
+    },
+    "learn-mgp": {
+      "content": "#!/bin/sh\n# The tutorial decks reference demo.gif relative to share/ — run from there\n# (see mgp-demo).\np=\"$0\"\nwhile t=\"$(readlink \"$p\")\"; do\n  case \"$t\" in /*) p=\"$t\" ;; *) p=\"$(dirname \"$p\")/$t\" ;; esac\ndone\ncd \"$(dirname \"$p\")/share\" && ../mgp tutorial/01-welcome.mgp\n",
+      "mode": 493
+    }
+  },
+  "bin": { "mgp": "mgp", "mgp-demo": "mgp-demo", "learn-mgp": "learn-mgp" },
+  "openwith": { "mgp": "mgp" },
+  "menu": [
+    { "group": "Demos", "entry": "mgp", "cmd": "mgp-demo" },
+    { "group": "Demos", "entry": "learn-mgp", "cmd": "learn-mgp" }
+  ]
+}

@@ -73,7 +73,7 @@ async function testOptionalSeeding() {
 function sessionApps() {
   const script = [
     'ls -l /root/doom1.wad',                        // bin entry seeded
-    'ls -l /root/id1/pak0.pak',                     // 18MB bin entry (todos/0018)
+    'ls -l /usr/opt/quake/id1/pak0.pak',            // 18MB, folded quake package (fat fixture)
     'doom &',
     'wmctl wait win "DOOM Shareware"',              // window spawn (0155)
     GB_CMD,
@@ -114,9 +114,11 @@ function sessionApps() {
     gbRow !== '', JSON.stringify(list1));
   check('gameboy window is 480x432 (160x144 tripled)', gbRow.includes('480x432'), gbRow);
 
-  // Quake (todos/0018): the 18MB pak seeds, the game boots into its demo
+  // Quake (todos/0018; a gucman package since the deploy-leg split — the
+  // fat fixture folds it to /usr/opt/quake, /usr/bin/quake is the launcher
+  // script): the 18MB pak rides the package, the game boots into its demo
   // loop, and its VID_Init relative-mouse request shows as the 'r' flag.
-  check('pak0.pak seeded via the bin entry (18689235 bytes)',
+  check('pak0.pak folded with the quake package (18689235 bytes)',
     out.includes('18689235'), out.split('\n')[1]);
   const qRow = row('Quake');
   check('quake opens a window titled "Quake"', qRow !== '', JSON.stringify(list1));

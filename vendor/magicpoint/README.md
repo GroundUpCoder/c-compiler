@@ -7,9 +7,12 @@ sha256 `205e6752e3cb024bcce0583b43dafc9b89490c0016daa91d2486891edcf2cfc1`).
 License: BSD-style (see `COPYRIGHT`).
 
 The classic Unix presentation tool: plain-text `.mgp` decks with
-`%`-directives (`SYNTAX` documents the format). Seeded as `/bin/mgp` with a
-demo deck at `/usr/share/mgp/demo.mgp` (Start menu ▸ Demos ▸ mgp); `.mgp`
-files open with it via the openwith table.
+`%`-directives (`SYNTAX` documents the format). Ships as the `mgp` gucman
+package (binary + decks under the package's `share/`; `/opt/mgp` installed,
+`/usr/opt/mgp` on a fat `--packages=all` bake) with a demo deck launcher
+(Start menu ▸ Demos ▸ mgp); `.mgp` files open with it via the openwith
+table. Decks reference `demo.gif` relative to `share/` — the menu launchers
+run mgp from there.
 
 ## The port (round 2 of the 0119 X→SDL recipe)
 
@@ -37,9 +40,9 @@ keycodes → `XK_*`; window-close arrives as a synthetic `q`). This is NOT an
 | `missing/strsep.c` | verbatim upstream (this libc has no strsep) |
 | `sdlx.h`, `sdlx.c` | ours: the X-vocabulary backend described above, plus truecolor replacements for xloadimage's `send.c` (`imageToXImage`/`freeXImage`/`ximageToPixmap`) and an X11 color-name table (140 names + `grayNN`) |
 | `demo.mgp` | ours (the seeded demo deck) |
-| `decks/*.mgp` | ours (todos/0185): the showcase decks — text/colors/align/bullets/images/backgrounds/effects, one capability slice each, seeded to `/usr/share/mgp/` (the present-e2e page-through pins them) |
-| `decks/tutorial/NN-*.mgp` | ours (todos/0202): the learn-mgp TUTORIAL series, ten numbered decks (welcome → first deck → text → color → alignment → lists → images → backgrounds → builds → mastery) teaching only directives this port renders. Seeded to `/usr/share/mgp/tutorial/` (masters, launched by Start ▸ Demos ▸ learn-mgp) AND as writable COPIES in `/root/Desktop/Presentations/MagicPoint Tutorial/` (their own subfolder since todos/0221) — the decks teach a right-click-Edit → ctrl-r reload loop, which needs rw files (a /usr deck opens read-only in notepad and saves fail EROFS, honestly). `SYNTAX` is seeded to `/usr/share/mgp/SYNTAX` as the upstream reference the last deck points at. Line-width budgets: tab-1 at size 4 fits ~50 chars, size 5 only ~42 (mgp folds overflow to column 0, no hanging indent); `\%` escapes are LINE-START ONLY — mid-line it is "unknown escape sequence" and mgp exits (bare `%` is fine mid-line) |
-| `decks/talks/posix-on-wasm.mgp` | ours (todos/0221): "POSIX on WebAssembly (or: what is an OS anyway?)" — a real gucOS talk deck (what an OS does; the DO / DON'T / DON'T-NEED-TO split; emulation trade-off; prior art), tutorial house style, supported directives only. Master at `/usr/share/mgp/talks/`, rw copy in `/root/Desktop/Presentations/POSIX on WebAssembly/` (the 0202 masters+copies rule); page-through pinned by present-e2e's TALKS list |
+| `decks/*.mgp` | ours (todos/0185): the showcase decks — text/colors/align/bullets/images/backgrounds/effects, one capability slice each, shipped in the mgp package's `share/` (the present-e2e page-through pins them) |
+| `decks/tutorial/NN-*.mgp` | ours (todos/0202): the learn-mgp TUTORIAL series, ten numbered decks (welcome → first deck → text → color → alignment → lists → images → backgrounds → builds → mastery) teaching only directives this port renders. Shipped in the mgp package's `share/tutorial/` (masters, launched by Start ▸ Demos ▸ learn-mgp) AND as writable COPIES in `/root/Desktop/Presentations/MagicPoint Tutorial/` (their own subfolder since todos/0221) — the decks teach a right-click-Edit → ctrl-r reload loop, which needs rw files (a /usr deck opens read-only in notepad and saves fail EROFS, honestly). `SYNTAX` ships as the package's `share/SYNTAX`, the upstream reference the last deck points at. Line-width budgets: tab-1 at size 4 fits ~50 chars, size 5 only ~42 (mgp folds overflow to column 0, no hanging indent); `\%` escapes are LINE-START ONLY — mid-line it is "unknown escape sequence" and mgp exits (bare `%` is fine mid-line) |
+| `decks/talks/posix-on-wasm.mgp` | ours (todos/0221): "POSIX on WebAssembly (or: what is an OS anyway?)" — a real gucOS talk deck (what an OS does; the DO / DON'T / DON'T-NEED-TO split; emulation trade-off; prior art), tutorial house style, supported directives only. Master ships as the package's `share/talks/`, rw copy in `/root/Desktop/Presentations/POSIX on WebAssembly/` (the 0202 masters+copies rule); page-through pinned by present-e2e's TALKS list |
 
 ### image/ (the xloadimage-derived loader library)
 

@@ -1,0 +1,13 @@
+{
+  "name": "winmine",
+  "version": "1a706d7",
+  "summary": "WineMine — ReactOS/Wine Minesweeper (reactos @1a706d7, LGPL-2.1+; win32 veneer port with .res resource sidecar)",
+  "files": {
+    "winmine": { "project": "vendor/winmine/bin.json" },
+    "winmine.res": { "bin": "vendor/winmine/winmine.res" }
+  },
+  "bin": { "winmine": "winmine" },
+  "menu": [
+    { "group": "Games", "entry": "winmine", "cmd": "winmine" }
+  ]
+}

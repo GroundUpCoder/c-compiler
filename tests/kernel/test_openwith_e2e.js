@@ -199,7 +199,7 @@ const out = boot([
   'echo ==cut',
 
   // ---- .mgp (todos/0202): dblclick/Open = the VIEWER, Edit = the EDITOR ----
-  'cp /usr/share/mgp/tutorial/01-welcome.mgp /root/Desktop/deck.mgp',
+  'cp /usr/opt/mgp/share/tutorial/01-welcome.mgp /root/Desktop/deck.mgp',
   // Same coarse desk re-read tick as game.gb above (0083 rule, annotated).
   'sleep 1',
   `wmctl dblclick $DSID ${DECK.x + 42} ${DECK.y + 32}`,

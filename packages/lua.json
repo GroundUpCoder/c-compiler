@@ -1,0 +1,9 @@
+{
+  "name": "lua",
+  "version": "5.5.0",
+  "summary": "Lua 5.5.0 — the stock lua REPL/interpreter (unmodified upstream, MIT)",
+  "files": {
+    "lua": { "project": "vendor/lua/bin.json" }
+  },
+  "bin": { "lua": "lua" }
+}

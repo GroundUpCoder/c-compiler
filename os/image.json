@@ -1,5 +1,5 @@
 {
-  "version": 121,
+  "version": 122,
   "overlays": [
     {
       "id": "clang-apps",
@@ -19,10 +19,6 @@
       "/usr/share/menu/Accessories",
       "/usr/share/menu/Demos",
       "/usr/share/menu/Games",
-      "/usr/share/mgp",
-      "/usr/share/mgp/talks",
-      "/usr/share/mgp/tutorial",
-      "/usr/share/sent",
       "/usr/share/sounds"
     ],
     "files": {
@@ -85,98 +81,11 @@
       "/usr/bin/gameboy": {
         "project": "vendor/gameboy/bin.json"
       },
-      "/usr/bin/sent": {
-        "project": "vendor/sent/bin.json"
-      },
-      "/usr/bin/mgp": {
-        "project": "vendor/magicpoint/bin.json"
-      },
-      "/usr/share/mgp/demo.mgp": {
-        "bin": "vendor/magicpoint/demo.mgp"
-      },
-      "/usr/share/mgp/demo.gif": {
-        "bin": "vendor/magicpoint/demo.gif"
-      },
-      "/usr/share/mgp/text.mgp": {
-        "bin": "vendor/magicpoint/decks/text.mgp"
-      },
-      "/usr/share/mgp/colors.mgp": {
-        "bin": "vendor/magicpoint/decks/colors.mgp"
-      },
-      "/usr/share/mgp/align.mgp": {
-        "bin": "vendor/magicpoint/decks/align.mgp"
-      },
-      "/usr/share/mgp/bullets.mgp": {
-        "bin": "vendor/magicpoint/decks/bullets.mgp"
-      },
-      "/usr/share/mgp/images.mgp": {
-        "bin": "vendor/magicpoint/decks/images.mgp"
-      },
-      "/usr/share/mgp/backgrounds.mgp": {
-        "bin": "vendor/magicpoint/decks/backgrounds.mgp"
-      },
-      "/usr/share/mgp/effects.mgp": {
-        "bin": "vendor/magicpoint/decks/effects.mgp"
-      },
-      "/usr/share/mgp/SYNTAX": {
-        "bin": "vendor/magicpoint/SYNTAX"
-      },
-      "/usr/share/mgp/tutorial/01-welcome.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/01-welcome.mgp"
-      },
-      "/usr/share/mgp/tutorial/02-first-deck.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/02-first-deck.mgp"
-      },
-      "/usr/share/mgp/tutorial/03-text.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/03-text.mgp"
-      },
-      "/usr/share/mgp/tutorial/04-color.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/04-color.mgp"
-      },
-      "/usr/share/mgp/tutorial/05-alignment.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/05-alignment.mgp"
-      },
-      "/usr/share/mgp/tutorial/06-lists.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/06-lists.mgp"
-      },
-      "/usr/share/mgp/tutorial/07-images.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/07-images.mgp"
-      },
-      "/usr/share/mgp/tutorial/08-backgrounds.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/08-backgrounds.mgp"
-      },
-      "/usr/share/mgp/tutorial/09-builds.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/09-builds.mgp"
-      },
-      "/usr/share/mgp/tutorial/10-mastery.mgp": {
-        "bin": "vendor/magicpoint/decks/tutorial/10-mastery.mgp"
-      },
-      "/usr/share/mgp/talks/posix-on-wasm.mgp": {
-        "bin": "vendor/magicpoint/decks/talks/posix-on-wasm.mgp"
-      },
-      "/usr/share/sent/demo.sent": {
-        "bin": "vendor/sent/demo.sent"
-      },
-      "/usr/share/sent/nyan.png": {
-        "bin": "vendor/sent/nyan.png"
-      },
-      "/usr/share/sent/trans.ff": {
-        "bin": "vendor/sent/transparent_test.ff"
-      },
       "/usr/bin/sameboy": {
         "project": "vendor/sameboy/bin.json"
       },
-      "/usr/bin/mgba": {
-        "project": "vendor/mgba/bin.json"
-      },
-      "/usr/bin/quake": {
-        "project": "vendor/quake/bin.json"
-      },
       "/usr/bin/term": {
         "project": "os/term/bin.json"
-      },
-      "/usr/bin/cairodemo": {
-        "project": "vendor/cairo/demo/bin.json"
       },
       "/usr/bin/gdidemo": {
         "project": "os/win32/gdidemo.json"
@@ -189,12 +98,6 @@
       },
       "/usr/bin/k32demo": {
         "project": "os/win32/k32demo.json"
-      },
-      "/usr/bin/winmine": {
-        "project": "vendor/winmine/bin.json"
-      },
-      "/usr/bin/winmine.res": {
-        "bin": "vendor/winmine/winmine.res"
       },
       "/usr/bin/calc": {
         "project": "vendor/calc/bin.json"
@@ -217,20 +120,8 @@
       "/usr/bin/ctlpanel": {
         "project": "os/win32/ctlpanel.json"
       },
-      "/usr/bin/lua": {
-        "project": "vendor/lua/bin.json"
-      },
-      "/usr/bin/micropython": {
-        "project": "vendor/micropython/bin.json"
-      },
-      "/usr/bin/sqlite3": {
-        "project": "vendor/sqlite/bin.json"
-      },
       "/usr/share/menu/Games/doom": {
         "link": "/usr/bin/doom"
-      },
-      "/usr/share/menu/Games/quake": {
-        "link": "/usr/bin/quake"
       },
       "/usr/share/menu/Games/gameboy": {
         "link": "/usr/bin/gameboy"
@@ -238,14 +129,8 @@
       "/usr/share/menu/Games/sameboy": {
         "link": "/usr/bin/sameboy"
       },
-      "/usr/share/menu/Games/mgba": {
-        "link": "/usr/bin/mgba"
-      },
       "/usr/share/menu/Games/snake": {
         "content": "#!/bin/sh\nterm snake\n"
-      },
-      "/usr/share/menu/Games/winmine": {
-        "link": "/usr/bin/winmine"
       },
       "/usr/share/menu/Accessories/term": {
         "link": "/usr/bin/term"
@@ -262,23 +147,11 @@
       "/usr/share/menu/Accessories/paint": {
         "link": "/usr/bin/paint"
       },
-      "/usr/share/menu/Demos/slides": {
-        "content": "#!/bin/sh\nsent /usr/share/sent/demo.sent\n"
-      },
-      "/usr/share/menu/Demos/mgp": {
-        "content": "#!/bin/sh\nmgp /usr/share/mgp/demo.mgp\n"
-      },
-      "/usr/share/menu/Demos/learn-mgp": {
-        "content": "#!/bin/sh\nmgp /usr/share/mgp/tutorial/01-welcome.mgp\n"
-      },
       "/usr/share/menu/Demos/winbox": {
         "link": "/usr/bin/winbox"
       },
       "/usr/share/menu/Demos/gpubox": {
         "link": "/usr/bin/gpubox"
-      },
-      "/usr/share/menu/Demos/cairodemo": {
-        "link": "/usr/bin/cairodemo"
       },
       "/usr/share/menu/Demos/gdidemo": {
         "link": "/usr/bin/gdidemo"
@@ -308,7 +181,7 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\ngba\t/bin/mgba\nbmp\t/bin/paint\nsent\t/bin/sent\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\ngb\t/bin/sameboy\ngbc\t/bin/sameboy\nbmp\t/bin/paint\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"
@@ -564,7 +437,6 @@
       "/root/Desktop/Presentations",
       "/root/Desktop/Presentations/MagicPoint Tutorial",
       "/root/Desktop/Presentations/POSIX on WebAssembly",
-      "/root/id1",
       "/root/roms"
     ],
     "files": {
@@ -576,9 +448,6 @@
       },
       "/root/Desktop/doom": {
         "link": "/usr/bin/doom"
-      },
-      "/root/Desktop/quake": {
-        "link": "/usr/bin/quake"
       },
       "/root/Desktop/gameboy": {
         "link": "/usr/bin/gameboy"
@@ -648,12 +517,6 @@
       },
       "/root/doom1.wad": {
         "bin": "vendor/doom/data/doom1.wad"
-      },
-      "/root/id1/pak0.pak": {
-        "bin": "vendor/quake/data/id1/pak0.pak"
-      },
-      "/root/id1/autoexec.cfg": {
-        "bin": "vendor/quake/data/id1/autoexec.cfg"
       },
       "/root/roms/PokemonBlue.gb": {
         "bin": "vendor/gameboy/roms/PokemonBlue.gb",

@@ -75,7 +75,8 @@ Not in this port
 		%embed, %anim - inline data, MNG movies
 		JPEG and EPS images, Xft/kanji engines
 	here they no-op or warn - decks still render
-	full upstream reference: /usr/share/mgp/SYNTAX
+	full upstream reference: the SYNTAX file
+	in the mgp package's share/ folder
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
@@ -92,8 +93,9 @@ Deck craft
 Where to go next
 
 	worked examples, one feature each:
-		/usr/share/mgp - text, colors, align,
-		bullets, images, backgrounds, effects
+		the mgp package's share/ folder -
+		text, colors, align, bullets,
+		images, backgrounds, effects
 	right-click ANY deck, Edit, and read it
 	then write your own - and present it
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -25,14 +25,9 @@
 // Run: node tests/kernel/test_gucman_e2e.js
 'use strict';
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const cp = require('child_process');
 const { driveBoot, freshImage, section } = require('./lib/drive.js');
-
-const ROOT = path.resolve(__dirname, '../..');
-const { BLOCK_FS } = require(path.join(ROOT, 'host.js'));
-const COMMON = require(path.join(ROOT, 'os', 'os-common.js'));
+const { ROOT, ensureMinimalImage, ensurePackages, startServer } = require('./lib/gucman.js');
 
 let failures = 0;
 function check(name, cond, extra) {
@@ -40,65 +35,8 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-/* ---- the minimal system blob (no packages), baked once + cached ---- */
-function ensureMinimalImage() {
-  const MIN = path.join(ROOT, 'build', 'test-fixtures', 'os-system.min.img');
-  const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'os', 'image.json'), 'utf-8'));
-  let fresh = false;
-  try {
-    const st = fs.statSync(MIN);
-    const store = new COMMON.NodeFileStore(fs, MIN, false);
-    const v = COMMON.bakedVersion(BLOCK_FS, store);
-    const pk = COMMON.bakedPackages(BLOCK_FS, store);
-    store.close();
-    fresh = v === (raw.version | 0) && pk.length === 0 &&
-      st.mtimeMs >= COMMON.newestBakeInput(fs, path, ROOT, raw).mtimeMs;
-  } catch (e) { /* missing -> bake */ }
-  if (!fresh) {
-    console.log('[gucman] baking the minimal (no-packages) system blob…');
-    fs.mkdirSync(path.dirname(MIN), { recursive: true });
-    const r = cp.spawnSync(process.execPath,
-      [path.join(ROOT, 'tools', 'mkimage.js'), `--out=${MIN}`, '--quiet'],
-      { stdio: ['ignore', 'inherit', 'inherit'], timeout: 600000 });
-    if (r.status !== 0) throw new Error('mkimage (minimal) failed');
-  }
-  return MIN;
-}
-
-/* ---- the package repo (mkpkg output), built once + reused when fresh ---- */
-function ensurePackages() {
-  const r = cp.spawnSync(process.execPath, [path.join(ROOT, 'tools', 'mkpkg.js'), '--quiet'],
-    { stdio: ['ignore', 'inherit', 'inherit'], timeout: 600000 });
-  if (r.status !== 0) throw new Error('mkpkg failed');
-  const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'packages', 'index.json'), 'utf-8'));
-  if (!idx.packages.punes) throw new Error('mkpkg produced no punes entry');
-  return idx;
-}
-
-/* ---- spawn serve.js over a static dir, resolve its port ---- */
-const servers = [];
-function startServer(dir) {
-  return new Promise((resolve, reject) => {
-    const child = cp.spawn(process.execPath, [path.join(ROOT, 'serve.js'), dir, '0'],
-      { stdio: ['ignore', 'pipe', 'pipe'] });
-    servers.push(child);
-    let buf = '';
-    const to = setTimeout(() => {
-      reject(new Error('serve.js never announced a port (stale output: ' + buf + ')'));
-    }, 10000);
-    child.stdout.on('data', (d) => {
-      buf += d;
-      const m = /http:\/\/localhost:(\d+)/.exec(buf);
-      if (m) { clearTimeout(to); resolve(parseInt(m[1], 10)); }
-    });
-    child.on('error', (e) => { clearTimeout(to); reject(e); });
-    child.on('exit', (code) => { clearTimeout(to); reject(new Error('serve.js exited ' + code)); });
-  });
-}
-process.on('exit', () => { for (const s of servers) { try { s.kill(); } catch (e) {} } });
-
 async function main() {
-  const idx = ensurePackages();
+  const idx = ensurePackages(['punes']);
   const MIN = ensureMinimalImage();
   const { dir: tmp, image } = freshImage('os-gucman-');
   fs.copyFileSync(MIN, image);   // copy mtime = now -> input-fresh at boot

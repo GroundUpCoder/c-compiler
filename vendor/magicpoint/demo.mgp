@@ -39,7 +39,7 @@ Backgrounds
 Images
 
 %center
-%newimage "/usr/share/mgp/demo.gif"
+%newimage "demo.gif"
 
 %size 3, fore "gray70", center
 static GIF decoded via giflib

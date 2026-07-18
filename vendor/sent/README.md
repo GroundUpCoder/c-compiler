@@ -4,8 +4,10 @@ Upstream: https://git.suckless.org/sent @ `882d54c225b83c762acf5bb3967f4890c3ece
 (2023-01-10, post-1.0). License: ISC (see `LICENSE`).
 
 One paragraph per slide, plain-text decks (`.sent` in the openwith table);
-`@file` first line makes an image slide. Seeded as `/bin/sent` with the demo
-deck at `/usr/share/sent/demo.sent` (Start menu ▸ Demos ▸ slides).
+`@file` first line makes an image slide. Ships as the `sent` gucman package
+(binary + `share/demo.sent`; `/opt/sent` installed, `/usr/opt/sent` on a fat
+`--packages=all` bake) — Start menu ▸ Demos ▸ slides runs the demo from
+`share/` (the deck's image refs are relative to that dir).
 
 ## The port
 

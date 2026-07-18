@@ -2,10 +2,14 @@
 // 0119 acceptance, headless: the presentation tools — suckless sent and
 // MagicPoint (mgp), both display-ported Xlib -> SDL (vendor/sent,
 // vendor/magicpoint) and seeded with demo decks:
-//   - `sent /usr/share/sent/demo.sent` opens an 800x500 window: slide 1 is
+// Both are gucman packages since the deploy-leg split; the fat fixture
+// folds them to /usr/opt/{sent,mgp}, and decks reference their images
+// relative to the package share/ dir, so every launch cd's there first
+// (the seeded menu launchers do the same).
+//   - `sent demo.sent` opens an 800x500 window: slide 1 is
 //     black-on-white text (drw over freetype); space advances (pixels
 //     change), q quits and the window closes
-//   - `mgp /usr/share/mgp/demo.mgp` opens an 800x600 "MagicPoint" window:
+//   - `mgp demo.mgp` opens an 800x600 "MagicPoint" window:
 //     page 1 is white text on the deck's MidnightBlue %default background;
 //     space advances to the bulleted page whose %tab icons are pure-green
 //     boxes (the icon + tab directive path); q quits cleanly
@@ -29,7 +33,7 @@ const keys = (sid, ch) => 'wmctl key ' + sid + ' 0 ' + ch.charCodeAt(0);
 /* ---- session A: drive both apps, leave PPMs on the root volume ---- */
 const script = [
   // sent
-  'sent /usr/share/sent/demo.sent &',
+  'cd /usr/opt/sent/share && sent demo.sent &',
   'wmctl wait win sent',
   'sleep 2',                     // first paint: freetype title render
   'SSID=$(wmctl list | grep "\tsent$" | sed "s/[^0-9].*//")',
@@ -43,7 +47,7 @@ const script = [
   'wmctl list | grep -c "\tsent$" || true',
   'echo ==',
   // mgp
-  'mgp /usr/share/mgp/demo.mgp &',
+  'cd /usr/opt/mgp/share && mgp demo.mgp &',
   'wmctl wait win MagicPoint',
   'sleep 3',                     // page 1 render (freetype at several sizes)
   'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',
@@ -100,7 +104,7 @@ const TALKS = [
 const ALL = DECKS.concat(TUTORIAL, TALKS);
 for (const d of ALL) {
   script.push(
-    `mgp /usr/share/mgp/${d.sub || ''}${d.n}.mgp &`,
+    `cd /usr/opt/mgp/share && mgp ${d.sub || ''}${d.n}.mgp &`,
     'wmctl wait win MagicPoint',
     'sleep 2.5',                   // title page render (freetype at several sizes)
     'MSID=$(wmctl list | grep "MagicPoint" | sed "s/[^0-9].*//")',

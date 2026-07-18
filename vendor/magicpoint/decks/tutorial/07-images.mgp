@@ -1,6 +1,6 @@
 %% 07-images.mgp - learn MagicPoint on gucOS, deck 7 of 10 (todos/0202).
 %% %newimage and its transforms, formats this port decodes, %valign.
-%% The one seeded sample image is /usr/share/mgp/demo.gif.
+%% The one bundled sample image is demo.gif (beside these decks).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "gray20", font "standard"
 %default 2 size 9, vgap 20, prefix " ", center
@@ -22,21 +22,21 @@ deck 7 of 10: newimage and friends
 one directive, the file in quotes:
 
 %size 4, fore "gray70", prefix "   "
-newimage "/usr/share/mgp/demo.gif"
+newimage "demo.gif"
 
 %center
-%newimage "/usr/share/mgp/demo.gif"
+%newimage "demo.gif"
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
 
 Scaling
 
 %center
-%newimage -zoom 60 "/usr/share/mgp/demo.gif"
+%newimage -zoom 60 "demo.gif"
 %size 3, fore "gray70", center
 -zoom 60: both axes to 60% of the original
 %center
-%newimage -xyzoom 150 50 "/usr/share/mgp/demo.gif"
+%newimage -xyzoom 150 50 "demo.gif"
 %size 3, fore "gray70", center
 -xyzoom 150 50: width and height independently;
 -scrzoom 50 scales against the SCREEN instead
@@ -46,7 +46,7 @@ Scaling
 Rotation
 
 %center
-%newimage -rotate 90 -zoom 70 "/usr/share/mgp/demo.gif"
+%newimage -rotate 90 -zoom 70 "demo.gif"
 %size 3, fore "gray70", center
 -rotate takes quarter turns: 90, 180, 270
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -58,7 +58,7 @@ In the text flow
 an image is drawn as a line of its own, so
 alignment applies to it exactly like text:
 %right
-%newimage -zoom 40 "/usr/share/mgp/demo.gif"
+%newimage -zoom 40 "demo.gif"
 %size 4, fore "white", left
 -raise N lifts an image against the baseline;
 \%valign "top", "center" or "bottom" sets how

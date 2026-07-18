@@ -62,7 +62,7 @@ xsize/ysize under 100 (here 25 25) repeat
 the gradient as a tile pattern
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %page
-%bimage "/usr/share/mgp/demo.gif"
+%bimage "demo.gif"
 
 \%bimage
 
