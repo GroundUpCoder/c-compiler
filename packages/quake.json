@@ -7,7 +7,7 @@
     "id1/pak0.pak": { "bin": "vendor/quake/data/id1/pak0.pak" },
     "id1/autoexec.cfg": { "bin": "vendor/quake/data/id1/autoexec.cfg" },
     "quake": {
-      "content": "#!/bin/sh\n# Quake resolves its data (./id1/pak0.pak) and writes config.cfg relative\n# to the CWD (sys_sdl.c basedir \".\"), so run it from wherever this package\n# actually lives — /opt/quake installed, /usr/opt/quake baked (fat image).\n# $0 arrives through symlinks (/usr/local/bin or /usr/bin); chase them with\n# readlink — the libc realpath is logical-only and keeps the link path.\np=\"$0\"\nwhile t=\"$(readlink \"$p\")\"; do\n  case \"$t\" in /*) p=\"$t\" ;; *) p=\"$(dirname \"$p\")/$t\" ;; esac\ndone\ncd \"$(dirname \"$p\")\" && ./quake-bin \"$@\"\n",
+      "content": "#!/bin/sh\n# Quake resolves its data (./id1/pak0.pak) and writes config.cfg relative\n# to the CWD (sys_sdl.c basedir \".\"), so run it from wherever this package\n# actually lives — /opt/quake installed, /usr/opt/quake baked (fat image).\n# $0 arrives through symlinks (/usr/local/bin or /usr/bin); realpath(1)\n# canonicalizes them (todos/0263 — libc realpath resolves symlinks now).\ncd \"$(dirname \"$(realpath \"$0\")\")\" && ./quake-bin \"$@\"\n",
       "mode": 493
     }
   },

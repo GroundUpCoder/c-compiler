@@ -203,7 +203,7 @@ const expectCu2 = [
   '1',                                      // dd bs=1 count=1
   '2',                                      // split -b 2, first part
   'f.txt', 'unlink-ok',                     // readlink, unlink
-  '/tmp',                                   // realpath normalizes
+  '/usr/tmp',                               // realpath resolves PHYSICALLY (todos/0263): /bin is a symlink to /usr/bin, so /bin/../tmp -> /usr/tmp, NOT the lexical /tmp
   'y', 'y',                                 // yes stops on EPIPE
   '2 copy',                                 // tee
   '1',                                      // expr 7 % 3

@@ -3843,6 +3843,50 @@ var BLOCK_FS = (function () {
     return n;
   };
 
+  // realpath(3) — canonical path with EVERY symlink component resolved (POSIX
+  // PHYSICAL resolution; the lexical _resolvePath above is only "realpath -s").
+  // Walks one component at a time against lstat/readlink: a symlink is expanded
+  // in place — an absolute target restarts from root, a relative one splices
+  // against the link's already-resolved parent — while '.'/'..' collapse
+  // PHYSICALLY (a '..' following a symlink refers to the target's parent, not
+  // the link's). Every component INCLUDING the last must exist (glibc realpath /
+  // Node fs.realpathSync semantics — the standalone-host oracle at the top of
+  // this file); a missing one is ENOENT, a symlink cycle ELOOP. Returns the
+  // canonical string, or null with _lastError set. Shared by BlockFS and MountFS
+  // (both expose lstat/readlink/getcwd); RemoteFS routes to the kernel's copy of
+  // this over ONE FS_REALPATH RPC, so a brokered realpath is never a per-
+  // component RPC storm. (todos/0263)
+  function physicalRealpath(fs, input) {
+    fs._lastError = null;
+    if (typeof input !== 'string' || input.length === 0) { fs._lastError = 'ENOENT'; return null; }
+    if (input.charAt(0) !== '/') {
+      var cwd = fs.getcwd();
+      input = (cwd === '/' ? '' : cwd) + '/' + input;
+    }
+    var resolved = [];            // canonical (symlink-free) path components
+    var rest = input.split('/');  // components still to process, front-to-back
+    var idx = 0, links = 0;
+    while (idx < rest.length) {
+      var comp = rest[idx++];
+      if (comp === '' || comp === '.') continue;
+      if (comp === '..') { resolved.pop(); continue; }
+      var candidate = '/' + resolved.concat([comp]).join('/');
+      var st = fs.lstat(candidate);
+      if (st === null) { if (!fs._lastError) fs._lastError = 'ENOENT'; return null; }
+      if ((st.mode & S_IFMT) !== S_IFLNK) { resolved.push(comp); continue; }
+      if (++links > SYMLOOP_MAX) { fs._lastError = 'ELOOP'; return null; }
+      var lbuf = new Uint8Array(4096);
+      var n = fs.readlink(candidate, lbuf, lbuf.length);
+      if (n === null || n < 0) { if (!fs._lastError) fs._lastError = 'EIO'; return null; }
+      var target = decodeStr(lbuf.subarray(0, n));
+      if (target.charAt(0) === '/') resolved = [];   // absolute target: restart at root
+      rest = target.split('/').concat(rest.slice(idx));
+      idx = 0;
+    }
+    return '/' + resolved.join('/');
+  }
+  BlockFS.prototype.realpathPhysical = function (path) { return physicalRealpath(this, path); };
+
   // fcntl F_DUPFD — duplicate fd, allocating >= minfd.
   BlockFS.prototype.fcntl_dupfd = function (oldfd, minfd) {
     if (oldfd < 0 || oldfd >= this._fdTable.length || !this._fdTable[oldfd])
@@ -4537,19 +4581,25 @@ var BLOCK_FS = (function () {
       },
 
       // ---- additional POSIX ops ----
-      realpath: wrap(function (path_ptr, resolved_ptr) {
+      // realpath(3): PHYSICAL resolution — symlinks followed (todos/0263). For
+      // in-process BlockFS this.realpathPhysical walks locally; for brokered
+      // RemoteFS it is ONE FS_REALPATH RPC resolved kernel-side. On failure we
+      // return NULL(0) + errno, matching glibc realpath and the standalone-Node
+      // flavor (both require every component to exist). NB not wrap()ped: a
+      // realpath error is a NULL return, not a -1.
+      realpath: function (path_ptr, resolved_ptr) {
         var path = readString(path_ptr);
-        var resolved = this._resolvePath(path);
+        var resolved = self.realpathPhysical(path);
+        if (resolved === null) { setErrnoName(self._lastError || 'ENOENT'); return 0; }
+        if (resolved_ptr === 0) { setErrnoName('EINVAL'); return 0; } // NULL buf unsupported (standalone parity)
         var encoded = encodeStr(resolved);
-        if (resolved_ptr) {
-          var memory = getMemory();
-          var bytes = new Uint8Array(memory.buffer);
-          for (var ri = 0; ri < encoded.length; ri++)
-            bytes[resolved_ptr + ri] = encoded[ri];
-          bytes[resolved_ptr + encoded.length] = 0;
-        }
+        var memory = getMemory();
+        var bytes = new Uint8Array(memory.buffer);
+        for (var ri = 0; ri < encoded.length; ri++)
+          bytes[resolved_ptr + ri] = encoded[ri];
+        bytes[resolved_ptr + encoded.length] = 0;
         return resolved_ptr;
-      }),
+      },
       ftruncate: wrap(function (fd, size) { return this.ftruncate(fd, Number(size)); }),
       chmod: wrap(function (path_ptr, mode) {
         return this.chmod(readString(path_ptr), mode);
@@ -5184,6 +5234,10 @@ var BLOCK_FS = (function () {
   };
 
   MountFS.prototype.getcwd = function () { return this._cwd; };
+  // Physical realpath over the full mount namespace — each lstat/readlink hop
+  // routes by longest prefix, so a symlink crossing a mount (/bin -> /usr/bin,
+  // /usr/local -> /var/local) resolves correctly. See physicalRealpath. (0263)
+  MountFS.prototype.realpathPhysical = function (path) { return physicalRealpath(this, path); };
   MountFS.prototype.chdir = function (path) {
     var resolved = this._resolvePath(String(path));
     var st = this.stat(resolved);
@@ -10343,6 +10397,7 @@ async function runModule({
     'EINVAL': 22, 'ENFILE': 23, 'EMFILE': 24, 'ENOTTY': 25, 'EFBIG': 27,
     'ENOSPC': 28, 'ESPIPE': 29, 'EROFS': 30, 'EPIPE': 32, 'EDOM': 33,
     'ERANGE': 34, 'ENAMETOOLONG': 36, 'ENOSYS': 38, 'ENOTEMPTY': 39,
+    'ELOOP': 40,   // symlink cycle — realpathPhysical (todos/0263) is the first setter
     // Socket family (todos/0008) — numbers match <errno.h> in the libc.
     'ENOTSOCK': 88, 'EDESTADDRREQ': 89, 'EPROTOTYPE': 91, 'EPROTONOSUPPORT': 93,
     'EOPNOTSUPP': 95, 'EAFNOSUPPORT': 97, 'EADDRINUSE': 98, 'ECONNABORTED': 103,
