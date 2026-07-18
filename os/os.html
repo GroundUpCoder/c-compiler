@@ -475,6 +475,11 @@ screen.addEventListener('touchend', touchEnd, { passive: false });
 screen.addEventListener('touchcancel', touchEnd, { passive: false });
 
 screen.addEventListener('keydown', function (e) {
+  // Paste-chord clipboard refresh (ticket #79): a desktop paste is about to
+  // ask the kernel slot for text — re-read the host clipboard best-effort
+  // (async, so it aims at the next paste; the focus sync below is what
+  // covers this one). Fires alongside the key, never instead of it.
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV') clipFromHost();
   wmSend({ kind: 'key', down: true, code: e.code, key: e.key, repeat: e.repeat, mods: mods(e) });
   e.preventDefault();
 });
@@ -510,6 +515,60 @@ desktopPane.addEventListener('drop', function (e) {
     });
   });
 });
+
+// Host <-> gucOS clipboard bridge (ticket #79). Two directions over the
+// async Clipboard API, both honest about browser policy (secure context +
+// document focus + a grantable permission; there is NO host-clipboard
+// change event a page can subscribe to):
+//   gucOS -> host: the kernel posts {type:'clipboard', text} when a process
+//     COMMITS a text copy (the CLIP_SET choke — event-driven, no poll);
+//     mirror it out with navigator.clipboard.writeText. writeText needs
+//     document focus — a user-driven gucOS copy implies the tab is focused,
+//     so a rejection (revoked permission, non-user-driven copy while
+//     unfocused) is logged and dropped, never retried: by the time focus
+//     returns, the HOST clipboard may be the newer intent (see below).
+//   host -> gucOS: readText on window FOCUS. To paste into gucOS the user
+//     must focus the tab first, and copying in any other app unfocuses it —
+//     so the focus sync lands in the kernel slot long before any humanly
+//     possible paste chord. The paste chords on the desktop canvas
+//     (Ctrl/Cmd+V, Ctrl+Shift+V) re-read as belt-and-braces for anything
+//     that slipped past focus; the refresh is async, so it aims at the NEXT
+//     paste — ordering input behind a clipboard read would be worse.
+//     (VT1 needs none of this: xterm's native DOM paste already feeds the
+//     host clipboard into the tty as input.)
+// clipSynced = the last text both sides agreed on. It de-dups both
+// directions and is the loop guard: our own writeText comes back through
+// the next focus read as an identical no-op, and focus-wins is the policy
+// when the two sides genuinely diverge (entering the tab imports the host
+// clipboard — the "last copy wins" model, with the host copy presumed the
+// fresher intent on arrival).
+var clipSynced = null;
+function clipToHost(text) {
+  if (typeof text !== 'string' || text === clipSynced) return;
+  clipSynced = text;
+  window.__osClipToHost = (window.__osClipToHost || 0) + 1;   // agent probe
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(function (e) {
+      console.warn('clipboard bridge: writeText failed (' + e + ')');
+    });
+  }
+}
+function clipFromHost() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) return;
+  navigator.clipboard.readText().then(function (text) {
+    if (typeof text !== 'string' || !text || text === clipSynced) return;
+    clipSynced = text;
+    window.__osClipFromHost = (window.__osClipFromHost || 0) + 1;   // agent probe
+    kernel.postMessage({ type: 'clipboard', text: text });
+  }, function () {
+    // Unfocused read or permission denied — quiet by design: this fires on
+    // every tab focus, and a user who denied the permission shouldn't be
+    // nagged per focus. The next trigger simply tries again.
+  });
+}
+window.addEventListener('focus', clipFromHost);
+if (document.hasFocus()) clipFromHost();   // the boot-time import
+window.__osClipSync = clipFromHost;   // agent probe (tests/browser/os-clipboard.mjs)
 
 // VTs (todos/0022): Linux-console semantics — VT1 = the xterm tty, VT2 = the
 // desktop; the page shows exactly one (body[data-vt] CSS above). The PRIMARY
@@ -602,6 +661,11 @@ kernel.onmessage = function (e) {
     // On-demand-compositor probe replies (todos/0169) are consumed by the
     // one-shot listeners __osCompositorStats adds; nothing to do here.
     case 'compositor-stats':
+      break;
+    // gucOS -> host clipboard (ticket #79): a process committed a text copy.
+    case 'clipboard':
+      window.__osClipLast = m.text;   // agent probe
+      clipToHost(m.text);
       break;
     case 'boot-log':
       status(m.msg);

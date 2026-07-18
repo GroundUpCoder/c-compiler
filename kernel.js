@@ -1717,6 +1717,12 @@ function Kernel(opts) {
   // transition; pause/resume is SAB-only, so ANY table entry must keep the
   // pump running or an unpause could never be noticed).
   this._onAudioStream = opts.onAudioStream || function () {};
+  // Host-clipboard bridge (ticket #79): fired at every process-side CLIP_SET
+  // COMMIT with the new slot ({fmt, bytes}, null on clear) so an embedder can
+  // mirror gucOS copies out to a host clipboard. Embedder-side writes
+  // (Kernel.clipSet) deliberately do NOT fire it — a bidirectional bridge
+  // would loop on its own echo.
+  this._onClipboard = opts.onClipboard || null;
   this._log = opts.log || function () {};
   this._procs = new Map();   // pid -> PCB
   this._nextPid = 1;
@@ -2082,6 +2088,20 @@ Kernel.prototype.service = function (spec) {
     pgid: 0,
   }).then(function (r) { return r.errno ? 0 : r.pid; });
 };
+
+/* Host-clipboard bridge (ticket #79): the embedder-side twin of CLIP_SET —
+ * set (or clear: fmt 0 / empty bytes) the one system clipboard slot from
+ * outside the process world, so a host clipboard can feed gucOS pastes.
+ * Same one-slot last-write-wins semantics as a process commit (an in-flight
+ * CLIP_SET stage is untouched — it commits over this later, as any second
+ * writer would). Does NOT fire onClipboard: that hook reports process-side
+ * copies TO the embedder; echoing its own write back would loop the bridge. */
+Kernel.prototype.clipSet = function (fmt, bytes) {
+  this._clipboard = ((fmt | 0) && bytes && bytes.length)
+    ? { fmt: fmt | 0, bytes: Uint8Array.from(bytes) } : null;
+};
+/* The current slot ({fmt, bytes} or null) — embedder/test introspection. */
+Kernel.prototype.clipGet = function () { return this._clipboard; };
 
 /* ---- process creation ---- */
 
@@ -2778,6 +2798,9 @@ Kernel.prototype._dispatchRpc = function (pcb) {
         pcb.clipStage = null;
       }
       this._respond(pcb, {});
+      // Host-clipboard bridge (ticket #79): report the commit AFTER the
+      // reply — the copying process is never held hostage by the mirror.
+      if (clast && this._onClipboard) this._onClipboard(this._clipboard);
       break;
     }
     case OP.CLIP_GET: {

@@ -349,6 +349,13 @@ response, sets DONE, bumps the doorbell. Node path identical via
                  createClipboard (__clip_set/__clip_get imports) under
                  SDL_SetClipboardText/SDL_GetClipboardText; no kernel =
                  a process-local slot, the two-transports pattern.
+                 Host bridge (ticket #79/0265): opts.onClipboard fires at
+                 every SET commit (the slot's change signal — the choke IS
+                 the event, no poll) and embedder Kernel.clipSet/clipGet
+                 feed/read the slot from outside the process world WITHOUT
+                 firing the hook (the bidirectional bridge's loop guard);
+                 os.html mirrors fmt-1 text both ways via the async
+                 Clipboard API (focus-triggered host reads).
 0x04xx fs        the brokered filesystem (fd/data-plane amendment below).
                  FS_WATCH_OPEN 0x0422 (ticket #75) is file watching as a
                  new OFD kind: {path, mask, flags} -> a PATH-KEYED watch

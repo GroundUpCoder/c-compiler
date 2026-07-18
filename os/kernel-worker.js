@@ -30,7 +30,18 @@
 //                                                re-read grows the icon ~1s
 //                                                later. bytes is a transferred
 //                                                ArrayBuffer (zero-copy).
+//                   {type:'clipboard', text}     host -> gucOS clipboard
+//                                                (ticket #79): the page read
+//                                                the host clipboard (focus /
+//                                                paste-chord sync); land it
+//                                                in the kernel's one slot so
+//                                                the next gucOS paste sees it
 //   kernel -> page: {type:'out', bytes}          tty output (program + echo)
+//                   {type:'clipboard', text}     gucOS -> host clipboard
+//                                                (ticket #79): a process
+//                                                committed a TEXT copy; the
+//                                                page mirrors it out via
+//                                                navigator.clipboard
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
 //                   {type:'boot-locked'}         two-tab guard (todos/0045):
@@ -115,6 +126,14 @@ self.onmessage = function (e) {
   } else if (m.type === 'drop-file') {
     dropFile(m);
     if (compositor) compositor.scheduleFrame();     // wake table (todos/0169)
+  } else if (m.type === 'clipboard') {
+    // Host -> gucOS (ticket #79): the page's focus/paste-chord sync read the
+    // host clipboard; land it in the kernel slot as fmt 1 (UTF-8 text). An
+    // empty read is ignored — never blank a gucOS copy over "host had
+    // nothing" (the page filters too; this is the belt to its braces).
+    if (typeof m.text === 'string' && m.text) {
+      kernel.clipSet(1, new TextEncoder().encode(m.text));
+    }
   } else if (m.type === 'compositor-stats') {
     // On-demand-compositor probe (todos/0169): frames/submits/skipped/
     // parks/wakes from the compositor + the kernel's cumulative per-pcb
@@ -389,6 +408,14 @@ async function boot() {
     onPointerLock: function (wanted) { post({ type: 'pointer-lock', wanted: wanted }); },
     onCursor: function (shape) { post({ type: 'cursor', shape: shape }); },
     onAudioStream: function () { audioArm(); },   // pump gate, below
+    // gucOS -> host clipboard (ticket #79): a process committed a copy.
+    // Only fmt 1 (UTF-8 text) crosses to the host — fmt 2 file lists carry
+    // OS-absolute paths that mean nothing outside, and clears never blank
+    // the HOST clipboard (an OS-side EmptyClipboard is not host intent).
+    onClipboard: function (clip) {
+      if (!clip || clip.fmt !== 1) return;
+      post({ type: 'clipboard', text: new TextDecoder().decode(clip.bytes) });
+    },
     log: function (m) { post({ type: 'boot-log', msg: '[kernel] ' + m }); },
   });
   tty = kernel.createTty({
