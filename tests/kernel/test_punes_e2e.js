@@ -91,13 +91,19 @@ function sessionFrames() {
 }
 
 /* ---- session C: controller input reaches the emulated CPU ---- */
-// The built-in ROM's NMI handler polls controller 1 each frame and tints the
-// backdrop white ($30) while the A button is held, else blue ($21). Inject the
-// A key (SDL keycode 'z' = 122, which main.c maps to BUT_A) and confirm the
-// frame flips to white, then releases back to blue. This exercises the whole
-// input path — INJECT_KEY → SDL event → set_button → port[0].data.treated[] →
-// standard-controller $4016 read — which is dead unless port[].type is wired to
-// CTRL_STANDARD (the bug this leg guards).
+// The built-in ROM's NMI handler polls controller 1 each frame and reads the
+// shift register in the standard order: it tints the backdrop $2A (green) while
+// Up is held, else $30 (white) while A is held, else $21 (blue). We inject each
+// in turn and confirm the frame reacts:
+//   - A (SDL keycode 'z' = 122 → BUT_A): a non-axis button → white.
+//   - Up (SDLK_UP = 1073741906 → the UP D-pad axis): white/blue → green.
+// This exercises the whole input path — INJECT_KEY → SDL event → set_button →
+// input_data_set_standard_controller → raw[]+treated[] → standard-controller
+// $4016 read. The Up leg is the todos/0213 regression guard: before the fix,
+// set_button poked treated[] with raw[]==0, so the SOCD filter erased the D-pad
+// on every read and Up never registered (only A/B/Start/Select, the non-axis
+// indices, survived). A green Up frame proves the D-pad now sticks; if it stays
+// white/blue the bug is back.
 function sessionInput() {
   const script = [
     'punes &',
@@ -109,9 +115,15 @@ function sessionInput() {
     'sleep 1',                                       // timing subject: NMI polls the pad -> backdrop tints white over the next frames
     'wmctl shot $SID /root/ap.ppm && echo ap-ok',    // A held: white
     'wmctl keyup $SID 0 122 0',
+    'sleep 1',                                       // timing subject: NMI sees the release -> backdrop returns to blue
+    'wmctl shot $SID /root/ar.ppm && echo ar-ok',    // A released: blue again
+    'wmctl keydown $SID 0 1073741906 0',             // hold Up (SDLK_UP; the D-pad axis 0213 fixed)
+    'sleep 1',                                       // timing subject: NMI polls the pad -> backdrop tints green over the next frames
+    'wmctl shot $SID /root/up.ppm && echo up-ok',    // Up held: green
+    'wmctl keyup $SID 0 1073741906 0',
     'kill %1',
     'wmctl wait nowin puNES',                        // window gone (0155)
-    'printf __NI__; cat /root/ni.ppm; printf __AP__; cat /root/ap.ppm; printf __END__',
+    'printf __NI__; cat /root/ni.ppm; printf __AP__; cat /root/ap.ppm; printf __AR__; cat /root/ar.ppm; printf __UP__; cat /root/up.ppm; printf __END__',
     '',
   ].join('\n');
   const c = driveBoot(script, { image, timeout: 120000, maxBuffer: 32 * 1024 * 1024, encoding: null });
@@ -136,17 +148,27 @@ function sessionInput() {
     for (const [k, n] of counts) if (n > bestn) { bestn = n; best = k; }
     return best.toString(16).padStart(6, '0');
   }
-  const niOff = out.indexOf(Buffer.from('__NI__'));
-  const apOff = out.indexOf(Buffer.from('__AP__'));
-  const ni = niOff >= 0 ? domColor(niOff) : null;
-  const ap = apOff >= 0 ? domColor(apOff) : null;
+  const domAt = (marker) => {
+    const off = out.indexOf(Buffer.from(marker));
+    return off >= 0 ? domColor(off) : null;
+  };
+  const ni = domAt('__NI__');
+  const ap = domAt('__AP__');
+  const ar = domAt('__AR__');
+  const up = domAt('__UP__');
 
-  check('both input shots captured',
-    text.includes('ni-ok') && text.includes('ap-ok'), text.slice(0, 120));
+  check('all four input shots captured',
+    ['ni-ok', 'ap-ok', 'ar-ok', 'up-ok'].every(t => text.includes(t)), text.slice(0, 160));
   check('no-input frame is the blue backdrop ($21 = 4c9aec)',
     ni === '4c9aec', ni);
-  check('holding A tints the frame white ($30 = eceeec) — input reached the CPU',
+  check('holding A tints the frame white ($30 = eceeec) — A button reached the CPU',
     ap === 'eceeec', ap);
+  check('releasing A returns the frame to blue ($21 = 4c9aec)',
+    ar === '4c9aec', ar);
+  // The 0213 regression guard: a held D-pad direction must register. Green ($2A
+  // = 4cd020) proves raw[UP] was populated and survived the SOCD $4016 read.
+  check('holding Up (D-pad) tints the frame green ($2A = 4cd020) — todos/0213 D-pad reaches the CPU',
+    up === '4cd020', up);
 }
 
 sessionApps();

@@ -27,6 +27,7 @@
 #include "ppu.h"
 #include "memmap.h"
 #include "input.h"
+#include "standard_controller.h"
 #include "clock.h"
 
 /* ── from our other frontend TUs ─────────────────────────────────────── */
@@ -62,8 +63,16 @@ static SDL_AudioStream *audio_dev;
 static SWORD audio_acc[8192];
 
 /* ── controller state (port 0) ──────────────────────────────────────── */
+/* Route through the core's canonical input entry point rather than poking
+ * port[0].data.treated[] directly: it sets BOTH raw[] and treated[]. The D-pad
+ * axes need raw[] populated — the $4016 read runs the SOCD (opposing-direction)
+ * filter, which mirrors raw[axis] back into treated[axis] on every read; a
+ * directly-poked treated[] with raw[]==0 is erased on the next read (that was
+ * the arrows-ignored bug, todos/0213). Non-axis buttons (A/B/Start/Select) were
+ * unaffected because the filter early-returns for them, but routing all buttons
+ * through the same path keeps the frontend faithful to upstream's input map. */
 static void set_button(int idx, int pressed) {
-	port[0].data.treated[idx] = pressed ? PRESSED : RELEASED;
+	input_data_set_standard_controller(idx, pressed ? PRESSED : RELEASED, &port[0]);
 }
 
 static void handle_input(void) {
@@ -198,24 +207,48 @@ static size_t build_test_rom(void) {
 		EMIT(0x4C); EMIT((self + 0x8000) & 0xFF); EMIT(((self + 0x8000) >> 8) & 0xFF);
 
 		/* ── NMI handler: poll controller 1, tint the backdrop ─────────
-		 * Fires each vblank. Strobes $4016, reads the A-button bit, and
-		 * rewrites palette entry 0 = $30 (white) while A is held, else $21
-		 * (blue). This makes the built-in ROM input-responsive so the e2e
-		 * can inject a button and assert the frame reacts — the coverage the
-		 * port[].type = CTRL_STANDARD controller wiring needs. */
+		 * Fires each vblank. Strobes $4016 then reads the shift register in the
+		 * standard order (A, B, Select, Start, Up, ...), latching the A bit
+		 * (read 1) and the Up bit (read 5). Rewrites palette entry 0 to $2A
+		 * (green) while Up is held, else $30 (white) while A is held, else $21
+		 * (blue). Making the built-in ROM respond to BOTH a face button and a
+		 * D-pad direction lets the e2e inject each and assert the frame reacts.
+		 * The Up leg is the todos/0213 guard: a D-pad axis only survives the
+		 * $4016 read if raw[] was populated (set_button ->
+		 * input_data_set_standard_controller), so the SOCD filter mirrors it
+		 * back into treated[] instead of erasing it; the port[].type =
+		 * CTRL_STANDARD wiring is exercised alongside. */
 		int nmi = pc;
 		LDA_IMM(0x01); EMIT(0x8D); EMIT(0x16); EMIT(0x40);   /* STA $4016 (strobe on) */
 		LDA_IMM(0x00); EMIT(0x8D); EMIT(0x16); EMIT(0x40);   /* STA $4016 (strobe off) */
-		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (A button) */
+		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (read 1: A) */
 		EMIT(0x29); EMIT(0x01);                              /* AND #$01 */
-		int beq = pc; EMIT(0xF0); EMIT(0x00);                /* BEQ notpressed (patched) */
+		EMIT(0x85); EMIT(0x10);                              /* STA $10 (A held) */
+		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (read 2: B, discard) */
+		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (read 3: Select, discard) */
+		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (read 4: Start, discard) */
+		EMIT(0xAD); EMIT(0x16); EMIT(0x40);                  /* LDA $4016 (read 5: Up) */
+		EMIT(0x29); EMIT(0x01);                              /* AND #$01 */
+		EMIT(0x85); EMIT(0x11);                              /* STA $11 (Up held) */
+		/* colour = Up ? green($2A) : A ? white($30) : blue($21) */
+		EMIT(0xA5); EMIT(0x11);                              /* LDA $11 (Up) */
+		int beq_up = pc; EMIT(0xF0); EMIT(0x00);             /* BEQ chk_a (patched) */
+		LDA_IMM(0x2A);                                       /* Up held → green */
+		int jmp_wr1 = pc; EMIT(0x4C); EMIT(0x00); EMIT(0x00);/* JMP writepal (patched) */
+		int chk_a = pc;
+		prg[beq_up + 1] = (uint8_t)(chk_a - (beq_up + 2));
+		EMIT(0xA5); EMIT(0x10);                              /* LDA $10 (A) */
+		int beq_a = pc; EMIT(0xF0); EMIT(0x00);              /* BEQ notpressed (patched) */
 		LDA_IMM(0x30);                                       /* A held → white */
-		int bne = pc; EMIT(0xD0); EMIT(0x00);                /* BNE writepal (patched) */
+		int jmp_wr2 = pc; EMIT(0x4C); EMIT(0x00); EMIT(0x00);/* JMP writepal (patched) */
 		int notpressed = pc;
-		prg[beq + 1] = (uint8_t)(notpressed - (beq + 2));
-		LDA_IMM(0x21);                                       /* not held → blue */
+		prg[beq_a + 1] = (uint8_t)(notpressed - (beq_a + 2));
+		LDA_IMM(0x21);                                       /* nothing held → blue */
 		int writepal = pc;
-		prg[bne + 1] = (uint8_t)(writepal - (bne + 2));
+		prg[jmp_wr1 + 1] = (uint8_t)((writepal + 0x8000) & 0xFF);
+		prg[jmp_wr1 + 2] = (uint8_t)(((writepal + 0x8000) >> 8) & 0xFF);
+		prg[jmp_wr2 + 1] = (uint8_t)((writepal + 0x8000) & 0xFF);
+		prg[jmp_wr2 + 2] = (uint8_t)(((writepal + 0x8000) >> 8) & 0xFF);
 		EMIT(0x48);                                          /* PHA (save colour) */
 		LDA_IMM(0x3F); STA_PPU(0x06);
 		LDA_IMM(0x00); STA_PPU(0x06);
