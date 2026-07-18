@@ -138,8 +138,9 @@ try {
     reFont.font === 18 && reFont.termFont === 18, reFont);
   await context.close();       // release the boot lock for the next context
 
-  // ---- a fresh NARROW context (no touch, no storage): 18px default and
-  // the strip shows via the narrow half of the predicate ----
+  // ---- a fresh NARROW context (no touch, no storage): 26px default (the
+  // ~3-steps-up phone default over the desktop 14: 14->18->22->26) and the
+  // strip shows via the narrow half of the predicate ----
   const ctx2 = await browser.newContext({ viewport: { width: 500, height: 800 } });
   const page2 = await ctx2.newPage();
   await page2.goto(URL);
@@ -150,8 +151,8 @@ try {
     stored: localStorage.getItem('gucos.vt1.fontSize'),
     strip: document.getElementById('keystrip').offsetParent !== null,
   }));
-  check('narrow viewport defaults larger (18px, unpersisted) with the strip shown',
-    narrow.font === 18 && narrow.stored === null && narrow.strip, narrow);
+  check('narrow viewport defaults larger (26px, unpersisted) with the strip shown',
+    narrow.font === 26 && narrow.stored === null && narrow.strip, narrow);
   await ctx2.close();
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
